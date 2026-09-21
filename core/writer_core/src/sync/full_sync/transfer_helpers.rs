@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncPolicy, SyncResult, SyncTarget};
 
@@ -80,11 +81,33 @@ pub(super) fn download_remote_to_staging(
 pub(super) fn delete_all_remote_objects(
     provider: &dyn SyncProvider,
     remote_prefix: &str,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> SyncResult {
+    // Issue #729 评论 5765979275：provider.list 前先检查取消令牌。
+    // 已取消则不开启新的 list 操作。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] delete_all_remote_objects: cancellation requested before list {} — returning success",
+                remote_prefix
+            );
+            return SyncResult::success();
+        }
+    }
     let remote_entries = match provider.list(remote_prefix) {
         Ok(entries) => entries,
         Err(err) => return sync_result_from_provider_error(err),
     };
+    // Issue #729 评论 5765306162 问题5：provider.list 返回后检查取消令牌。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] delete_all_remote_objects: cancellation requested after list {} — returning success",
+                remote_prefix
+            );
+            return SyncResult::success();
+        }
+    }
     let mut remote_deletes: Vec<String> = Vec::new();
     for entry in &remote_entries {
         if super::generation::is_generation_path(&entry.path) {
@@ -101,10 +124,24 @@ pub(super) fn delete_all_remote_objects(
             crate::sync::provider::model::DeletePrecondition::Unconditional,
         ) {
             Ok(()) => {
-                remote_deletes.push(full_remote_path);
+                remote_deletes.push(full_remote_path.clone());
             }
             Err(err) => {
                 let mut result = sync_result_from_provider_error(err);
+                result.remote_deletes = remote_deletes;
+                return result;
+            }
+        }
+        // Issue #729 评论 5765306162 问题5：每次 provider.delete 返回后检查取消令牌。
+        // 取消则 break 并返回已完成的结果（已删除的保留，未完成的不继续）。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] delete_all_remote_objects: cancellation requested after delete {} — breaking with {} deletes done",
+                    full_remote_path,
+                    remote_deletes.len()
+                );
+                let mut result = SyncResult::success();
                 result.remote_deletes = remote_deletes;
                 return result;
             }
@@ -121,13 +158,26 @@ pub(super) fn run_single_target(
     sync_policy: &SyncPolicy,
     target: &SyncTarget,
     force_sync: bool,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> SyncResult {
+    // Issue #729：关键写入操作前检查取消令牌。
+    // 如果已取消，提前返回，不继续写入远端。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!("[sync] run_single_target: cancellation requested — skipping target");
+            return SyncResult::success();
+        }
+    }
+    // Issue #729 评论 5765306162 问题4：把 cancellation_token 传进 perform_lww_sync，
+    // 不再只在入口检查一次。perform_lww_sync 内部会在 debounce 后、重试循环每次
+    // 迭代前、execute_lww_sync_attempt 内部 merge/upload/delete 后各检查一次。
     match crate::sync::SyncService::perform_lww_sync(
         local_root,
         provider,
         sync_policy,
         target,
         force_sync,
+        cancellation_token,
     ) {
         Ok(result) => result,
         Err(err) => sync_result_from_error(err),
@@ -190,6 +240,7 @@ pub(super) fn transfer_live_project(
     planned: &PlannedTarget,
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
     plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
@@ -204,6 +255,18 @@ pub(super) fn transfer_live_project(
     /// 超过后返回 `RecoverableError`（错误文字不含 "retrying"，因为已经不重试了，
     /// 是最终失败）。旧未引用 generation 留给现有 generation GC 清理。
     const MAX_CAS_RETRIES: usize = 5;
+
+    // Issue #729：关键写入操作前检查取消令牌。
+    // 如果已取消，提前返回，不继续写入远端。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_live_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
 
     if planned.live_lww.is_some() {
         let sync_root = planned
@@ -438,6 +501,25 @@ pub(super) fn transfer_live_project(
                 remote_record,
             ) {
                 crate::sync::target_lifecycle::LifecycleCandidateComparison::CandidateWins => {
+                    // Issue #729：publish 前检查取消令牌。
+                    // 如果已取消，不执行远端写入，提前返回已收集的 merge 结果。
+                    if let Some(token) = cancellation_token {
+                        if token.is_cancelled() {
+                            log::info!(
+                                "[sync] transfer_live_project: cancellation requested before publish — skipping {}",
+                                planned.target.remote_prefix
+                            );
+                            let mut r = merge_result.unwrap_or_else(SyncResult::success);
+                            merge_accumulated_local_effects(
+                                &mut r,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
+                            return (r, None, None);
+                        }
+                    }
                     // Issue #716 评论 5743264448 问题 1：CandidateWins 分支在 publish 前必须
                     // 检查 pending_take_remote_failed。如果没有 unresolved conflict 但
                     // pending_take_remote_failed 非空，直接返回 RecoverableError，不 publish。
@@ -505,6 +587,7 @@ pub(super) fn transfer_live_project(
                             &plan.sync_policy,
                             plan.force_sync,
                             Some(outcome),
+                            cancellation_token,
                         ),
                         None => super::generation::publish_generation(
                             provider,
@@ -516,6 +599,7 @@ pub(super) fn transfer_live_project(
                             &plan.sync_policy,
                             plan.force_sync,
                             None,
+                            cancellation_token,
                         ),
                     };
 
@@ -525,6 +609,26 @@ pub(super) fn transfer_live_project(
                     );
                     if !content_ok {
                         return (content_result, None, None);
+                    }
+
+                    // Issue #729：publish_generation 返回后、apply_lifecycle_record 前检查取消令牌。
+                    // 取消则不执行 CAS 写入，返回已收集的 content_result（已上传但未 CAS）。
+                    if let Some(token) = cancellation_token {
+                        if token.is_cancelled() {
+                            log::info!(
+                                "[sync] transfer_live_project: cancellation requested after publish_generation, before apply_lifecycle_record — skipping {}",
+                                planned.target.remote_prefix
+                            );
+                            let mut r = content_result;
+                            merge_accumulated_local_effects(
+                                &mut r,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
+                            return (r, None, None);
+                        }
                     }
 
                     // 4. CAS apply_lifecycle_record。
@@ -615,9 +719,20 @@ pub(super) fn transfer_live_project(
                                         "[sync] run_transfer: LiveProject RemoteWinner(Delete) {} — cleaning remote + deferring to Commit",
                                         planned.target.remote_prefix
                                     );
+                                    // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+                                    if let Some(token) = cancellation_token {
+                                        if token.is_cancelled() {
+                                            log::info!(
+                                                "[sync] transfer_live_project: cancellation requested after apply_lifecycle_record — skipping {}",
+                                                planned.target.remote_prefix
+                                            );
+                                            return (SyncResult::success(), None, None);
+                                        }
+                                    }
                                     let cleanup_result = delete_all_remote_objects(
                                         provider,
                                         &planned.target.remote_prefix,
+                                        cancellation_token,
                                     );
                                     let cleanup_ok = matches!(
                                         cleanup_result.status,
@@ -715,8 +830,21 @@ pub(super) fn transfer_live_project(
                                 planned.target.remote_prefix,
                                 attempt + 1
                             );
-                            let cleanup_result =
-                                delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+                            if let Some(token) = cancellation_token {
+                                if token.is_cancelled() {
+                                    log::info!(
+                                        "[sync] transfer_live_project: cancellation requested after apply_lifecycle_record — skipping {}",
+                                        planned.target.remote_prefix
+                                    );
+                                    return (SyncResult::success(), None, None);
+                                }
+                            }
+                            let cleanup_result = delete_all_remote_objects(
+                                provider,
+                                &planned.target.remote_prefix,
+                                cancellation_token,
+                            );
                             let cleanup_ok = matches!(
                                 cleanup_result.status,
                                 SyncStatus::Success | SyncStatus::NoChanges
@@ -792,14 +920,37 @@ pub(super) fn transfer_restore_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
     plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
     use crate::sync::SyncStatus;
+
+    // Issue #729：关键写/delete 操作前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_restore_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
         Ok(Some(current_rec)) => {
+            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] transfer_restore_project: cancellation requested after CAS — skipping {}",
+                        planned.target.remote_prefix
+                    );
+                    return (SyncResult::success(), None, None);
+                }
+            }
             use crate::sync::types::TargetOp;
             match current_rec.op {
                 TargetOp::Delete => {
@@ -810,8 +961,11 @@ pub(super) fn transfer_restore_project(
                     };
                     if !local_project_exists {
                         log::info!("[sync] run_transfer: RestoreProject {} — CAS: remote changed to Delete, local project absent — cleaning remote residue", planned.target.remote_prefix);
-                        let cleanup_result =
-                            delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                        let cleanup_result = delete_all_remote_objects(
+                            provider,
+                            &planned.target.remote_prefix,
+                            cancellation_token,
+                        );
                         let cleanup_ok = matches!(
                             cleanup_result.status,
                             SyncStatus::Success | SyncStatus::NoChanges
@@ -965,13 +1119,35 @@ pub(super) fn transfer_delete_local_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
     plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
+    // Issue #729：关键写/delete 操作前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_delete_local_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
         Ok(Some(current_rec)) => {
+            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] transfer_delete_local_project: cancellation requested after CAS — skipping {}",
+                        planned.target.remote_prefix
+                    );
+                    return (SyncResult::success(), None, None);
+                }
+            }
             use crate::sync::types::TargetOp;
             match current_rec.op {
                 TargetOp::Upsert => {
@@ -994,8 +1170,11 @@ pub(super) fn transfer_delete_local_project(
                 }
                 TargetOp::Delete => {
                     log::info!("[sync] run_transfer: DeleteLocalProject {} — CAS confirmed remote Delete, cleaning remote residue", planned.target.remote_prefix);
-                    let cleanup_result =
-                        delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                    let cleanup_result = delete_all_remote_objects(
+                        provider,
+                        &planned.target.remote_prefix,
+                        cancellation_token,
+                    );
                     let cleanup_ok = matches!(
                         cleanup_result.status,
                         crate::sync::SyncStatus::Success | crate::sync::SyncStatus::NoChanges
@@ -1073,12 +1252,25 @@ pub(super) fn transfer_delete_remote_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
     use crate::sync::types::TargetLifecycleApplyResult;
+
+    // Issue #729：关键写/delete 操作前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_delete_remote_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     let deleted_at_ms = planned
         .deleted_lww
         .as_ref()
@@ -1102,7 +1294,21 @@ pub(super) fn transfer_delete_remote_project(
     ) {
         TargetLifecycleApplyResult::Applied(persisted) => {
             *catalog_snapshot = persisted;
-            let del_result = delete_all_remote_objects(provider, &planned.target.remote_prefix);
+            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] transfer_delete_remote_project: cancellation requested after apply_lifecycle_record — skipping {}",
+                        planned.target.remote_prefix
+                    );
+                    return (SyncResult::success(), None, None);
+                }
+            }
+            let del_result = delete_all_remote_objects(
+                provider,
+                &planned.target.remote_prefix,
+                cancellation_token,
+            );
             (
                 del_result,
                 Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins),
@@ -1111,8 +1317,22 @@ pub(super) fn transfer_delete_remote_project(
         }
         TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
             *catalog_snapshot = persisted;
+            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] transfer_delete_remote_project: cancellation requested after apply_lifecycle_record — skipping {}",
+                        planned.target.remote_prefix
+                    );
+                    return (SyncResult::success(), None, None);
+                }
+            }
             log::info!("[sync] run_transfer: DeleteRemoteProject AlreadyCurrent(Delete) {} — continuing cleanup", planned.target.remote_prefix);
-            let del_result = delete_all_remote_objects(provider, &planned.target.remote_prefix);
+            let del_result = delete_all_remote_objects(
+                provider,
+                &planned.target.remote_prefix,
+                cancellation_token,
+            );
             (
                 del_result,
                 Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins),
@@ -1127,8 +1347,21 @@ pub(super) fn transfer_delete_remote_project(
             match winner.op {
                 crate::sync::types::TargetOp::Delete => {
                     log::info!("[sync] run_transfer: DeleteRemoteProject RemoteWinner(Delete) {} — continuing cleanup", planned.target.remote_prefix);
-                    let del_result =
-                        delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                    // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+                    if let Some(token) = cancellation_token {
+                        if token.is_cancelled() {
+                            log::info!(
+                                "[sync] transfer_delete_remote_project: cancellation requested after apply_lifecycle_record — skipping {}",
+                                planned.target.remote_prefix
+                            );
+                            return (SyncResult::success(), None, None);
+                        }
+                    }
+                    let del_result = delete_all_remote_objects(
+                        provider,
+                        &planned.target.remote_prefix,
+                        cancellation_token,
+                    );
                     (
                         del_result,
                         Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins),
@@ -1137,6 +1370,16 @@ pub(super) fn transfer_delete_remote_project(
                 }
                 crate::sync::types::TargetOp::Upsert => {
                     log::info!("[sync] run_transfer: DeleteRemoteProject RemoteWinner(Upsert) {} — switching to restore", planned.target.remote_prefix);
+                    // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+                    if let Some(token) = cancellation_token {
+                        if token.is_cancelled() {
+                            log::info!(
+                                "[sync] transfer_delete_remote_project: cancellation requested after apply_lifecycle_record — skipping {}",
+                                planned.target.remote_prefix
+                            );
+                            return (SyncResult::success(), None, None);
+                        }
+                    }
                     let restore_result = download_remote_to_staging(
                         provider,
                         &planned.target.remote_prefix,

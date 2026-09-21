@@ -134,7 +134,14 @@ mod tests {
             std::sync::Arc::new(transport),
         );
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
-        SyncService::perform_lww_sync(sync_root, &provider, &sync_policy, &target, force_sync)
+        SyncService::perform_lww_sync(
+            sync_root,
+            &provider,
+            &sync_policy,
+            &target,
+            force_sync,
+            None,
+        )
     }
     #[test]
     #[cfg(feature = "github-api")]
@@ -3244,7 +3251,7 @@ mod tests {
             sync_interval_seconds: 0,
             has_network_permission: true,
         };
-        SyncService::perform_lww_sync(sync_root, provider, &sync_policy, &target, force_sync)
+        SyncService::perform_lww_sync(sync_root, provider, &sync_policy, &target, force_sync, None)
     }
 
     #[test]

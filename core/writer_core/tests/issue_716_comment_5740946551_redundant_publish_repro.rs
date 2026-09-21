@@ -209,7 +209,7 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
     };
 
     // ── 4. 调用 run_transfer（内部调 transfer_live_project）──
-    let transfer = run_transfer(&provider, &plan);
+    let transfer = run_transfer(&provider, &plan, None);
     assert_eq!(
         transfer.targets.len(),
         1,

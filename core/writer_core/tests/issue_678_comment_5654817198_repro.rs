@@ -125,8 +125,8 @@ fn verify_problem1_backend_sync_thread_uses_layout_snapshot() {
 
 /// 验证问题 2 已修复：handle_sync_outcome 接收 sync_qptr 参数，
 /// 排队 manual sync 时传递 sync_qptr（不再传 None）。
-/// trigger_auto_sync / request_auto_sync / maybe_auto_sync_on_foreground 都接收并传递 sync_qptr。
-/// SyncBackend::request_auto_sync 和 maybe_auto_sync_on_foreground 创建自己的 QPointer<SyncBackend>。
+/// Issue #729 评论 5763441474：自动同步方法(trigger_auto_sync / request_auto_sync /
+/// maybe_auto_sync_on_foreground)已从 Linux_Qt 移除，只保留显式手动同步。
 #[test]
 fn verify_problem2_syncbackend_callback_chain_intact() {
     let sync_ops = read_source("sync_operations.rs");
@@ -140,42 +140,38 @@ fn verify_problem2_syncbackend_callback_chain_intact() {
         "handle_sync_outcome 中排队 manual sync 不应再传 None（问题 2 已修复）"
     );
 
-    // trigger_auto_sync 不应再传 None。
-    let has_none_in_trigger_auto =
-        sync_ops.contains("self.perform_sync_internal(reason, true, None)");
-    assert!(
-        !has_none_in_trigger_auto,
-        "trigger_auto_sync 不应再传 None（问题 2 已修复）"
-    );
-
     // handle_sync_outcome 应接收 sync_qptr 参数。
     assert!(
         sync_ops.contains("fn handle_sync_outcome(\n        &mut self,\n        outcome: SyncTaskOutcome,\n        sync_qptr: Option<QPointer<SyncBackend>>,\n    )"),
         "handle_sync_outcome 应接收 sync_qptr 参数"
     );
 
-    // trigger_auto_sync / request_auto_sync / maybe_auto_sync_on_foreground 应接收 sync_qptr。
+    // Issue #729：自动同步方法应已从 sync_operations.rs 中移除。
     assert!(
-        sync_ops.contains("fn trigger_auto_sync(\n        &mut self,\n        reason: &str,\n        sync_qptr: Option<QPointer<SyncBackend>>,\n    )"),
-        "trigger_auto_sync 应接收 sync_qptr 参数"
+        !sync_ops.contains("fn trigger_auto_sync("),
+        "trigger_auto_sync 应已移除（Issue #729：Linux_Qt 只保留手动同步）"
+    );
+    assert!(
+        !sync_ops.contains("fn request_auto_sync("),
+        "request_auto_sync 应已移除（Issue #729：Linux_Qt 只保留手动同步）"
+    );
+    assert!(
+        !sync_ops.contains("fn maybe_auto_sync_on_foreground("),
+        "maybe_auto_sync_on_foreground 应已移除（Issue #729：Linux_Qt 只保留手动同步）"
+    );
+    assert!(
+        !sync_ops.contains("fn can_start_auto_sync("),
+        "can_start_auto_sync 应已移除（Issue #729：Linux_Qt 只保留手动同步）"
     );
 
-    // SyncBackend::request_auto_sync 应创建自己的 QPointer<SyncBackend>。
-    let request_auto_creates_qptr = sync_backend.contains(
-        "fn request_auto_sync(&mut self, reason: QString) {\n        let qptr = QPointer::from(&*self);",
+    // Issue #729：自动同步方法应已从 sync_backend.rs 中移除。
+    assert!(
+        !sync_backend.contains("fn request_auto_sync("),
+        "SyncBackend::request_auto_sync 应已移除（Issue #729）"
     );
     assert!(
-        request_auto_creates_qptr,
-        "SyncBackend::request_auto_sync 应创建自己的 QPointer<SyncBackend>（问题 2 已修复）"
-    );
-
-    // SyncBackend::maybe_auto_sync_on_foreground 应创建自己的 QPointer<SyncBackend>。
-    let maybe_auto_creates_qptr = sync_backend.contains(
-        "fn maybe_auto_sync_on_foreground(&mut self) {\n        let qptr = QPointer::from(&*self);",
-    );
-    assert!(
-        maybe_auto_creates_qptr,
-        "SyncBackend::maybe_auto_sync_on_foreground 应创建自己的 QPointer<SyncBackend>（问题 2 已修复）"
+        !sync_backend.contains("fn maybe_auto_sync_on_foreground("),
+        "SyncBackend::maybe_auto_sync_on_foreground 应已移除（Issue #729）"
     );
 
     // SyncBackend::handle_outcome 应创建 QPointer 并传给 handle_sync_outcome。
@@ -184,7 +180,7 @@ fn verify_problem2_syncbackend_callback_chain_intact() {
         "SyncBackend::handle_outcome 应传 Some(qptr) 给 handle_sync_outcome"
     );
 
-    eprintln!("[BUGFIX_VERIFY] problem2: sync_qptr 一路传递，回调链不断");
+    eprintln!("[BUGFIX_VERIFY] problem2: sync_qptr 一路传递，回调链不断（自动同步已移除）");
 }
 
 // ===========================================================================

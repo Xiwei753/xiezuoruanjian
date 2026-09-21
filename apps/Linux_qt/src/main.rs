@@ -333,8 +333,16 @@ impl DesktopRuntimeProfile {
     fn collect(qt_version: &str, qml_entry: &str) -> Self {
         let appimage = std::env::var_os("APPIMAGE").is_some();
         let bundled_qt = appimage;
+        // Issue #729 评论 5764768372：区分 linux-rpm 与 linux-debug。
+        // 用 diagnostics::effective_package_type() 判断 rpm（编译期 env!("PACKAGE_TYPE")
+        // 或运行时 AppImage 检测），不读运行时 std::env::var("SUJIAN_PACKAGE_TYPE")
+        // （该变量只在构建阶段导出，运行时没有）。RPM 构建时 build.rs 设
+        // PACKAGE_TYPE=rpm，编译进二进制后常驻。
+        let pkg_type = crate::backend::diagnostics::effective_package_type();
         let runtime_profile = if appimage {
             "linux-appimage"
+        } else if pkg_type == "rpm" {
+            "linux-rpm"
         } else {
             "linux-debug"
         };
@@ -418,6 +426,15 @@ fn install_translator() {
 }
 
 fn main() {
+    // ===== Issue #729 评论 5762596831 第 1 部分：收口到原生 Wayland 运行环境 =====
+    // 在任何 Qt/QML 初始化之前统一设置 QPA 平台和输入法环境变量，
+    // 避免误跑 XWayland/xcb。幂等：不覆盖用户已显式设置的环境变量。
+    let runtime_env_config =
+        sujian_linux_qt::platform::linux_qt::runtime_environment::configure_qpa_and_input_method();
+    // 此时尚未初始化 diagnostics 后端，用 eprintln 输出最早期环境收口信息，
+    // 后续 debug_log_static 会由 diagnostics 后端接管落盘。
+    eprintln!("[RuntimeEnv] {}", runtime_env_config.summary());
+
     // ===== 平台适配层初始化：注入配置存储和同步传输 =====
     writer_platform_linux::init_default_config_store();
     if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services)
@@ -462,6 +479,16 @@ fn main() {
 
     debug_log_static("app", "app_startup", "Sujian application starting...");
     log::info!(target: "app", "app_startup: Sujian application starting...");
+
+    // Issue #729 评论 5762596831 第 1 部分：记录 Wayland/IM 环境收口结果
+    debug_log_static("app", "runtime_env_config", &runtime_env_config.summary());
+    if runtime_env_config.user_forced_non_wayland_on_wayland {
+        debug_warn_static(
+            "app",
+            "runtime_env_config",
+            "Wayland session detected but user explicitly set QT_QPA_PLATFORM to a non-wayland platform (xcb/XWayland); respecting user setting without override",
+        );
+    }
 
     // 注入 Qt 运行时版本到 diagnostics 模块（避免运行时调用 qmake 命令）
     let qt_ver = qt_runtime_version();

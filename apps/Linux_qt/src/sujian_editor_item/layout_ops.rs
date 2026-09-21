@@ -432,7 +432,8 @@ impl SujianEditorItem {
         affinity: CaretAffinity,
     ) -> CursorLayoutRect {
         let snapshot = self.current_render_layout_snapshot();
-        self.editor_layout.caret_rect_doc(&snapshot, cursor_byte, affinity)
+        self.editor_layout
+            .caret_rect_doc(&snapshot, cursor_byte, affinity)
     }
 
     pub(crate) fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {

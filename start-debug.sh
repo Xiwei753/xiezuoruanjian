@@ -256,6 +256,18 @@ echo "QT_INCLUDE_PATH: ${QT_INCLUDE_PATH:-}"
 echo "QT_LIBRARY_PATH: ${QT_LIBRARY_PATH:-}"
 echo "QML2_IMPORT_PATH: ${QML2_IMPORT_PATH:-}"
 echo "QT_PLUGIN_PATH: ${QT_PLUGIN_PATH:-}"
+
+# Issue #729 评论 5762596831 第 1 部分：收口 Wayland/IM 环境设置到共享脚本
+# 统一 QPA 平台和输入法检测，避免误跑 XWayland/xcb。幂等，不覆盖用户显式设置。
+# start-debug.sh 此前缺少 IM 检测，现在与 start.sh 共享同一条逻辑。
+if [ -f "scripts/linux_qt_runtime_env.sh" ]; then
+    # shellcheck source=scripts/linux_qt_runtime_env.sh
+    source scripts/linux_qt_runtime_env.sh
+    sujian_configure_wayland_im_env "start-debug"
+else
+    echo "[start-debug] WARNING: scripts/linux_qt_runtime_env.sh not found; skipping Wayland/IM env configuration" >&2
+fi
+
 print_desktop_runtime_profile "start-debug"
 echo "QtQuick.Window qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing ) )"
 echo "QtQuick Controls qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing ) )"

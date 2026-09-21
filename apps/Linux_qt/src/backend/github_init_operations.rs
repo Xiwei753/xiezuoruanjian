@@ -83,6 +83,25 @@ impl AppBackend {
             });
         });
 
+        // Issue #729：为 github init 同步创建取消令牌并捕获当前 workspace generation。
+        self.current_sync_cancel_token = Some(std::sync::Arc::new(
+            writer_core::sync::SyncCancellationToken::new(),
+        ));
+        let workspace_generation = self.current_workspace_generation;
+        // Issue #729：clone token 传入后台线程，再传入 Core API perform_full_sync。
+        // SyncCancellationToken 是 Clone 的（内部 Arc<AtomicBool>），可廉价克隆。
+        let cancel_token = self
+            .current_sync_cancel_token
+            .as_ref()
+            .map(|arc| (**arc).clone());
+        // Issue #729 评论 5765306162 问题1：捕获 data_root 用于回调身份校验。
+        // data_root 语义是"启动同步时的工作区身份"（origin_data_root），即
+        // self.current_data_root（启动 github init 时当前工作区路径）。
+        // 不是用户选择的目标导入目录 path_str —— 目标目录此时还没成为当前工作区，
+        // 用 path_str 会导致 sync_operations.rs 的 data_root 校验误杀成功结果。
+        // 真正要打开的目标目录继续只走 current_pending_github_init_path（不变）。
+        let data_root_capture = self.current_data_root.clone();
+
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
             let result = Self::do_github_init(
@@ -91,6 +110,9 @@ impl AppBackend {
                 &remote_url_str,
                 &branch_str,
                 &token_str,
+                workspace_generation,
+                data_root_capture,
+                cancel_token,
             );
             callback(result);
         });
@@ -102,6 +124,13 @@ impl AppBackend {
         remote_url: &str,
         branch: &str,
         token: &str,
+        workspace_generation: u64,
+        // Issue #729 评论 5765306162 问题1：启动 github init 时的工作区身份
+        // （origin_data_root = 启动时 self.current_data_root），不是目标导入目录。
+        // 用于回调身份校验：sync_operations.rs 比较 outcome.data_root ==
+        // self.current_data_root，启动时目标目录还没成为当前工作区，故必须传 origin。
+        data_root: String,
+        cancel_token: Option<writer_core::sync::SyncCancellationToken>,
     ) -> SyncTaskOutcome {
         use writer_core::sync::{
             provider::github::config::{GitHubProviderConfig, GitHubTransport},
@@ -186,6 +215,8 @@ impl AppBackend {
                         },
                     )
                     .unwrap_or_default(),
+                    workspace_generation,
+                    data_root: data_root.clone(),
                 };
             }
         };
@@ -214,6 +245,8 @@ impl AppBackend {
                         },
                     )
                     .unwrap_or_default(),
+                    workspace_generation,
+                    data_root: data_root.clone(),
                 };
             }
             Self::run_github_init_sync(
@@ -224,6 +257,9 @@ impl AppBackend {
                 sec_ref,
                 path,
                 "sync.result.clone_init_success",
+                workspace_generation,
+                data_root.clone(),
+                cancel_token.clone(),
             )
         } else if has_directory() {
             Self::run_github_init_sync(
@@ -234,6 +270,9 @@ impl AppBackend {
                 sec_ref,
                 path,
                 "sync.result.remote_configured_sync_success",
+                workspace_generation,
+                data_root.clone(),
+                cancel_token.clone(),
             )
         } else if is_git_repo() {
             SyncTaskOutcome {
@@ -250,6 +289,8 @@ impl AppBackend {
                     raw_error: None,
                 })
                 .unwrap_or_default(),
+                workspace_generation,
+                data_root: data_root.clone(),
             }
         } else {
             SyncTaskOutcome {
@@ -266,6 +307,8 @@ impl AppBackend {
                     raw_error: None,
                 })
                 .unwrap_or_default(),
+                workspace_generation,
+                data_root: data_root.clone(),
             }
         }
     }
@@ -284,8 +327,11 @@ impl AppBackend {
         secrets: &writer_core::sync::SyncSecrets,
         path: &str,
         success_summary_key: &str,
+        workspace_generation: u64,
+        data_root: String,
+        cancel_token: Option<writer_core::sync::SyncCancellationToken>,
     ) -> SyncTaskOutcome {
-        match api.perform_full_sync(config_dto.clone(), true) {
+        match api.perform_full_sync(config_dto.clone(), true, cancel_token) {
             Ok(result) => {
                 let status = result.overall_status.as_str();
                 if matches!(status, "success" | "latest_wins_applied" | "no_changes") {
@@ -307,6 +353,8 @@ impl AppBackend {
                                 },
                             )
                             .unwrap_or_default(),
+                            workspace_generation,
+                            data_root: data_root.clone(),
                         },
                         Err(e) => SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
@@ -324,6 +372,8 @@ impl AppBackend {
                                 },
                             )
                             .unwrap_or_default(),
+                            workspace_generation,
+                            data_root: data_root.clone(),
                         },
                     }
                 } else if matches!(status, "conflict" | "partial_conflict") {
@@ -385,6 +435,8 @@ impl AppBackend {
                             },
                         )
                         .unwrap_or_default(),
+                        workspace_generation,
+                        data_root: data_root.clone(),
                     }
                 } else {
                     let err = result.error.unwrap_or_default();
@@ -418,6 +470,8 @@ impl AppBackend {
                             },
                         )
                         .unwrap_or_default(),
+                        workspace_generation,
+                        data_root: data_root.clone(),
                     }
                 }
             }
@@ -453,6 +507,8 @@ impl AppBackend {
                         },
                     )
                     .unwrap_or_default(),
+                    workspace_generation,
+                    data_root,
                 }
             }
         }

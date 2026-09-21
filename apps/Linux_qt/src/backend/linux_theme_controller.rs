@@ -1,7 +1,7 @@
 use super::*;
+use crate::backend::resolved_theme_snapshot::{ResolvedThemeUiColors, ResolvedThemeUiSnapshot};
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
-use crate::backend::resolved_theme_snapshot::{ResolvedThemeUiColors, ResolvedThemeUiSnapshot};
 
 /// Issue #701 评论 5699565102: 运行时主题状态的唯一事实来源。
 /// Issue #701 评论 5702214893: resolved scheme 现在缓存在 controller 内。
@@ -523,7 +523,6 @@ impl LinuxThemeController {
             _ => sys_dark,
         }
     }
-
 
     /// Issue #710 评论 5731145076: 记录完整 resolved theme 诊断事件。
     ///

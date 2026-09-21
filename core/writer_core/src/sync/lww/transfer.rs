@@ -11,6 +11,7 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePrecondition};
 use crate::sync::provider::SyncProvider;
@@ -247,6 +248,7 @@ pub(super) fn upload_local_files(
     remote_prefix: &str,
     to_upload: &[String],
     remote_tree_files: &HashMap<String, String>,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::Result<()> {
     let caps = provider.capabilities();
     for path in to_upload {
@@ -267,6 +269,17 @@ pub(super) fn upload_local_files(
             WritePrecondition::Unconditional
         };
         provider.write(&remote_path, &content, precondition)?;
+        // Issue #729 评论 5765979275：每次 provider.write 返回后检查取消令牌。
+        // 已取消则立即返回，不再上传下一条文件。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] upload_local_files: cancellation requested after write {} — stopping upload batch",
+                    path
+                );
+                return Ok(());
+            }
+        }
     }
     Ok(())
 }
@@ -280,6 +293,7 @@ pub(super) fn delete_remote_files(
     remote_prefix: &str,
     paths: &[String],
     remote_tree_files: &HashMap<String, String>,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::Result<()> {
     let caps = provider.capabilities();
     for path in paths {
@@ -293,6 +307,17 @@ pub(super) fn delete_remote_files(
             DeletePrecondition::Unconditional
         };
         provider.delete(&remote_path, precondition)?;
+        // Issue #729 评论 5765979275：每次 provider.delete 返回后检查取消令牌。
+        // 已取消则立即返回，不再删除下一条文件。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] delete_remote_files: cancellation requested after delete {} — stopping delete batch",
+                    path
+                );
+                return Ok(());
+            }
+        }
     }
     Ok(())
 }
@@ -306,7 +331,19 @@ pub(super) fn upload_manifest(
     remote_manifest_path: &str,
     manifest_json: &str,
     remote_tree_files: &HashMap<String, String>,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::Result<()> {
+    // Issue #729 评论 5765979275：写 manifest 前先检查取消令牌。
+    // 上一步（upload/delete）取消后不能再开始 manifest 写入。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] upload_manifest: cancellation requested — skipping manifest write {}",
+                remote_manifest_path
+            );
+            return Ok(());
+        }
+    }
     let sync_manifest_path = super::manifest::SYNC_MANIFEST_PATH;
     let caps = provider.capabilities();
     let precondition = if caps.conditional_write {

@@ -131,10 +131,6 @@ pub struct SyncBackend {
     #[allow(dead_code)]
     perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
-    request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
-    #[allow(dead_code)]
-    maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
-    #[allow(dead_code)]
     open_workspace_dir: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
@@ -333,24 +329,6 @@ impl SyncBackend {
             self.sync_action_completed();
         }
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-    fn request_auto_sync(&mut self, reason: QString) {
-        let qptr = QPointer::from(&*self);
-        if self
-            .with_app_mut(|app| app.request_auto_sync(reason, Some(qptr)))
-            .is_ok()
-        {
-            self.sync_status_changed();
-        }
-    }
-    fn maybe_auto_sync_on_foreground(&mut self) {
-        let qptr = QPointer::from(&*self);
-        if self
-            .with_app_mut(|app| app.maybe_auto_sync_on_foreground(Some(qptr)))
-            .is_ok()
-        {
-            self.sync_status_changed();
-        }
     }
     fn open_workspace_dir(&mut self) {
         if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {
@@ -581,6 +559,14 @@ impl AppBackend {
             }
         };
 
+        // Issue #729：为新同步创建取消令牌并捕获当前 workspace generation。
+        self.current_sync_cancel_token = Some(std::sync::Arc::new(
+            writer_core::sync::SyncCancellationToken::new(),
+        ));
+        let workspace_generation = self.current_workspace_generation;
+        // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
+        let data_root_capture = data_root.clone();
+
         let app_qptr = QPointer::from(&*self);
         let callback = sync_operations::make_outcome_callback(app_qptr, sync_qptr);
 
@@ -616,6 +602,8 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
+                            data_root: data_root_capture.clone(),
                         };
                     }
                 };
@@ -646,6 +634,8 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status.to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
+                            data_root: data_root_capture.clone(),
                         }
                     }
                     Err(e) => {
@@ -664,6 +654,8 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
+                            data_root: data_root_capture.clone(),
                         }
                     }
                 }
@@ -695,6 +687,8 @@ impl AppBackend {
                         operation_id: op_id_capture,
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        workspace_generation,
+                        data_root: data_root_capture,
                     });
                 }
             }

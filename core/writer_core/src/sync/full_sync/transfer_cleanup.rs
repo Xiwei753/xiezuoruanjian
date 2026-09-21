@@ -1,3 +1,4 @@
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncResult;
 
@@ -14,17 +15,39 @@ use super::PlannedTarget;
 pub(super) fn transfer_remote_cleanup_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
+    // Issue #729：远端 delete 前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_remote_cleanup_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     log::info!(
         "[sync] run_transfer: RemoteCleanupProject {} — CAS: re-confirming remote lifecycle",
         planned.target.remote_prefix
     );
     match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
         Ok(Some(current_rec)) => {
+            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] transfer_remote_cleanup_project: cancellation requested after CAS — skipping {}",
+                        planned.target.remote_prefix
+                    );
+                    return (SyncResult::success(), None, None);
+                }
+            }
             use crate::sync::types::TargetOp;
             match current_rec.op {
                 TargetOp::Upsert => {
@@ -56,8 +79,11 @@ pub(super) fn transfer_remote_cleanup_project(
                             None,
                         )
                     } else {
-                        let cleanup_result =
-                            delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                        let cleanup_result = delete_all_remote_objects(
+                            provider,
+                            &planned.target.remote_prefix,
+                            cancellation_token,
+                        );
                         let cleanup_ok = matches!(
                             cleanup_result.status,
                             crate::sync::SyncStatus::Success | crate::sync::SyncStatus::NoChanges

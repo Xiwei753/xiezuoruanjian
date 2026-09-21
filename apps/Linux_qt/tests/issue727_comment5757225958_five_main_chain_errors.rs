@@ -48,7 +48,8 @@ fn read_src(rel: &str) -> String {
 #[test]
 fn issue1_scene_graph_cursor_layer_uses_document_transform() {
     let src = read_src("src/editor/scene_graph.rs");
-    let has_doc_transform = src.contains("cursorMatrix.translate(0, -static_cast<qreal>(scroll_y))");
+    let has_doc_transform =
+        src.contains("cursorMatrix.translate(0, -static_cast<qreal>(scroll_y))");
     assert!(
         has_doc_transform,
         "scene_graph.rs::update_cursor_node 应使用 document transform translate(0, -scroll_y)"
@@ -64,10 +65,14 @@ fn issue1_rendering_passes_scroll_y_to_cursor_rect() {
     let src = read_src("src/sujian_editor_item/rendering.rs");
     // 定位 update_cursor_visual_position 中的 editor_layout_cursor_rect 调用
     let marker = "fn update_cursor_visual_position";
-    let pos = src.find(marker).expect("update_cursor_visual_position 必须存在");
+    let pos = src
+        .find(marker)
+        .expect("update_cursor_visual_position 必须存在");
     let window = &src[pos..pos.saturating_add(2000)];
     // 当前缺陷：传 scroll_y 给 editor_layout_cursor_rect
-    let passes_scroll_y = window.contains("editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y)");
+    let passes_scroll_y = window.contains(
+        "editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y)",
+    );
     assert!(
         !passes_scroll_y,
         "rendering.rs::update_cursor_visual_position 仍传 scroll_y 给 editor_layout_cursor_rect，\
@@ -82,11 +87,13 @@ fn issue1_rendering_passes_scroll_y_to_cursor_rect() {
 fn issue1_layout_ops_calls_caret_rect_with_scroll_y() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
     let marker = "fn editor_layout_cursor_rect";
-    let pos = src.find(marker).expect("editor_layout_cursor_rect 必须存在");
+    let pos = src
+        .find(marker)
+        .expect("editor_layout_cursor_rect 必须存在");
     let window = &src[pos..pos.saturating_add(500)];
     // 当前缺陷：调用 caret_rect（带 scroll_y），返回 viewport y
-    let calls_caret_rect_with_scroll = window.contains("self.editor_layout.caret_rect(")
-        && window.contains("scroll_y");
+    let calls_caret_rect_with_scroll =
+        window.contains("self.editor_layout.caret_rect(") && window.contains("scroll_y");
     assert!(
         !calls_caret_rect_with_scroll,
         "layout_ops.rs::editor_layout_cursor_rect 调用 caret_rect(..., scroll_y, ...) 返回 viewport y，\
@@ -214,8 +221,8 @@ fn issue4_design_tokens_uses_qt_color_boundary() {
 #[test]
 fn issue4_no_hex_getter_channel() {
     let src = read_src("src/backend/linux_theme_controller.rs");
-    let has_hex_channel = src.contains("fn scheme_hex_or_fallback")
-        && src.contains("fn on_surface_hex");
+    let has_hex_channel =
+        src.contains("fn scheme_hex_or_fallback") && src.contains("fn on_surface_hex");
     assert!(
         !has_hex_channel,
         "linux_theme_controller.rs 仍保留 scheme_hex_or_fallback 和 *_hex getter，\
@@ -261,7 +268,8 @@ fn issue5_caret_frame_shared_across_all_transactions() {
     let has_shared_caret = src.contains(marker);
     // 当前缺陷：在 for tx 循环中直接用 coordinated_motion_frame.caret，未按 owner key 过滤
     assert!(
-        !has_shared_caret || src.contains("coordinated_motion_frame.owner_key")
+        !has_shared_caret
+            || src.contains("coordinated_motion_frame.owner_key")
             || src.contains("coordinated_motion_frame.tx_key"),
         "build_text_animation_plan_with_sample 把同一份 coordinated_motion_frame.caret \
          喂给所有 active transaction，未按 owner transaction key 过滤，\

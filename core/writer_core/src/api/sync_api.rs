@@ -1,5 +1,6 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
+use crate::sync::cancellation_token::SyncCancellationToken;
 
 /// 同步 API — 全量同步统一入口。
 ///
@@ -289,20 +290,18 @@ impl WriterCoreApi {
     /// 通用 full-sync 入口不再 `#[cfg(feature = "github-api")]`
     /// 门控。具体 Provider 能否创建由 [`crate::facade::WriterCore::create_sync_provider_for_plan`]
     /// 决定（未启用 github-api feature 时 `github_api` 分支返回 `NotImplemented`）。
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
         force_sync: bool,
+        cancellation_token: Option<SyncCancellationToken>,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
-        // sync disabled → 直接返回 no-op，
-        // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
-        // 防止 disabled 状态下仍写远端（LiveProject 会发布只有 generation.meta.json
-        // 没有 正文/manifest 的空 active generation）。
-        if !sync_config.enabled {
-            log::debug!("[sync] perform_full_sync: sync disabled — returning no-op");
+        // 与 sync disabled 相同的 no-op FullSyncResult。
+        // Issue #729：各阶段边界检查取消令牌后复用此闭包返回，避免重复构造。
+        let make_noop_result = || -> ApiResult<FullSyncResultDto> {
             let noop = crate::sync::types::FullSyncResult {
                 overall_status: crate::sync::SyncStatus::Success,
                 targets: Vec::new(),
@@ -317,7 +316,27 @@ impl WriterCoreApi {
                 error_category: None,
                 message_key: None,
             };
-            return Ok(noop.into());
+            Ok(noop.into())
+        };
+
+        // sync disabled → 直接返回 no-op，
+        // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
+        // 防止 disabled 状态下仍写远端（LiveProject 会发布只有 generation.meta.json
+        // 没有 正文/manifest 的空 active generation）。
+        if !sync_config.enabled {
+            log::debug!("[sync] perform_full_sync: sync disabled — returning no-op");
+            return make_noop_result();
+        }
+
+        // Issue #729：取消令牌已标记取消时，直接返回 no-op，与 sync disabled 相同逻辑。
+        // 平台层切工作区时调用 token.cancel()，此处感知后提前终止，不进入网络阶段。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::debug!(
+                    "[sync] perform_full_sync: cancellation token already cancelled — returning no-op"
+                );
+                return make_noop_result();
+            }
         }
 
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
@@ -353,9 +372,29 @@ impl WriterCoreApi {
                 }
             };
 
+        // Issue #729：discover_legacy_remote_catalog 返回后检查取消令牌。
+        // 取消则返回 no-op，不进入 persist_bootstrap_catalog / plan / transfer。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested after discover_legacy_remote_catalog — returning no-op"
+                );
+                return make_noop_result();
+            }
+        }
+
         //   catalog 文件不存在于远端（version == __nonexistent__）
         // → 正式 sync 需要把 discover 合成的 bootstrap catalog 落盘，后续 CAS 写入才有 base version。
         // dry-run 不走本路径（dry-run 用 perform_full_sync_dry_run_with_catalog，不 persist）。
+        // Issue #729：persist_bootstrap_catalog 前检查取消令牌。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested before persist_bootstrap_catalog — returning no-op"
+                );
+                return make_noop_result();
+            }
+        }
         let remote_catalog_snapshot =
             if remote_catalog_snapshot.version.as_str() == "__nonexistent__" {
                 match crate::sync::target_lifecycle::persist_bootstrap_catalog(
@@ -383,6 +422,15 @@ impl WriterCoreApi {
             } else {
                 remote_catalog_snapshot
             };
+        // Issue #729：persist_bootstrap_catalog 返回后检查取消令牌。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested after persist_bootstrap_catalog — returning no-op"
+                );
+                return make_noop_result();
+            }
+        }
         // 1c. 短锁 B：只 persist Syncing + snapshot app_data_root/projects_root。
         //   回退问题：恢复短锁+锁外扫描。
         // 短锁只拿 app_data_root/projects_root/sync_policy/remote snapshot + persist Syncing，
@@ -414,6 +462,19 @@ impl WriterCoreApi {
             }
         };
 
+        // Issue #729：build_full_sync_plan_unlocked 返回后检查取消令牌。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested after build_full_sync_plan_unlocked — returning no-op"
+                );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态，避免 full_state.local.json 停在 Syncing。
+                self.core_write().persist_full_sync_cancelled();
+                return make_noop_result();
+            }
+        }
+
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
         // seed 失败直接终止本次同步，不继续拿半成品。
         // prepare_staging_runs 是纯函数，不依赖 WriterCore，无需持锁。
@@ -421,10 +482,22 @@ impl WriterCoreApi {
         // seed 失败时必须把 FullSyncState 从 Syncing
         // 改为失败终态，否则下次启动/同步会永久看到上一次遗留的 Syncing。
         //
-        // staging 不再按 active_provider 分 Git/GithubApi
+        //   staging 不再按 active_provider 分 Git/GithubApi
         // backend 走不同 seed 路径；统一调 `seed_from_live`（文件级复制）。
         // workspace 级别的 Git layout 迁移仍由 `prepare_staging_runs` 内部完成，
         // 但不作为某个 remote provider 的 staging 模式。
+        // Issue #729：prepare_staging_runs 前检查取消令牌。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested before prepare_staging_runs — returning no-op"
+                );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态。
+                self.core_write().persist_full_sync_cancelled();
+                return make_noop_result();
+            }
+        }
         let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
             Ok(runs) => runs,
             Err(err) => {
@@ -442,8 +515,40 @@ impl WriterCoreApi {
             }
         };
 
+        // Issue #729：prepare_staging_runs 返回后检查取消令牌。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested after prepare_staging_runs — returning no-op"
+                );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态。
+                self.core_write().persist_full_sync_cancelled();
+                return make_noop_result();
+            }
+        }
+
         // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
-        let transfer_result = crate::sync::full_sync::run_transfer(provider.as_ref(), &plan);
+        let transfer_result = crate::sync::full_sync::run_transfer(
+            provider.as_ref(),
+            &plan,
+            cancellation_token.as_ref(),
+        );
+
+        // Issue #729：run_transfer 返回后检查取消令牌。
+        // 取消则跳过 commit_full_sync（不调 commit、不记 history），直接返回 no-op。
+        // 绝不让已取消的同步进入 Commit 阶段写终态。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_full_sync: cancellation requested after run_transfer — skipping commit, returning no-op"
+                );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态。
+                self.core_write().persist_full_sync_cancelled();
+                return make_noop_result();
+            }
+        }
 
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let (result, committed_paths, lifecycle_receipts) = {

@@ -99,9 +99,15 @@ impl WorkspaceBackend {
     fn snap(&self) -> std::cell::Ref<'_, DomainSnapshot> {
         self.app.snapshot().borrow()
     }
-    fn emit_workspace_changed(&mut self) {
+    /// 真正打开/恢复工作区时调用：发全部三个信号让 QML 初始化工作区 UI。
+    fn emit_workspace_opened(&mut self) {
         self.workspace_opened();
         self.workspace_content_changed();
+        self.workspace_state_changed();
+    }
+    /// 关闭/切换工作区时调用：只发 workspace_state_changed，不发 workspace_opened，
+    /// 避免 QML 误认为工作区已打开而触发 workspace-open 自动同步等副作用。
+    fn emit_workspace_closed(&mut self) {
         self.workspace_state_changed();
     }
     fn workspace_path(&self) -> QString {
@@ -121,23 +127,34 @@ impl WorkspaceBackend {
             .unwrap_or(false);
         if restored {
             // 真的恢复成功，发 workspace_opened 等信号
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
         }
         // 无可恢复工作区时，AppBackend 内部已发 workspace_state_changed 等信号，
         // 此处不再发 workspace_opened，避免 QML 去读未初始化的 workspace。
     }
     fn create_new_workspace(&mut self) -> QJsonObject {
+        // Issue #729 评论 5765306162 问题3：用 workspace_generation 变化判断本次
+        // 是否真正打开了新工作区，而非 result.is_ok() && snap().has_workspace。
+        // 若原本就有工作区，用户取消选择器时 AppBackend 返回 CANCELLED，
+        // has_workspace 仍 true，会误发 workspace_opened。generation 只有在
+        // internal_open_data_root 成功时才递增，取消时不变。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.create_new_workspace());
-        if result.is_ok() {
-            self.emit_workspace_changed();
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn open_existing_workspace(&mut self) -> QJsonObject {
+        // Issue #729 评论 5765306162 问题3：同 create_new_workspace，用 generation
+        // 变化判断本次是否真正打开了新工作区。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.open_existing_workspace());
-        if result.is_ok() {
-            self.emit_workspace_changed();
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
@@ -154,9 +171,13 @@ impl WorkspaceBackend {
             "workspace_backend_create_workspace_called",
             &format!("path={}", path_str),
         );
+        // Issue #729 评论 5765306162 问题3：用 generation 变化判断真实打开成功，
+        // 与 create_new_workspace/open_existing_workspace 一致。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
-        if result.is_ok() {
-            self.emit_workspace_changed();
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
@@ -173,21 +194,24 @@ impl WorkspaceBackend {
             "workspace_backend_open_workspace_called",
             &format!("path={}", path_str),
         );
+        // Issue #729 评论 5765306162 问题3：用 generation 变化判断真实打开成功。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
-        if result.is_ok() {
-            self.emit_workspace_changed();
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn close_workspace(&mut self) {
         if self.with_app_mut(|app| app.close_workspace()).is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_closed();
         }
     }
     fn switch_workspace(&mut self) {
         if self.with_app_mut(|app| app.switch_workspace()).is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_closed();
         }
     }
     fn init_workspace_from_github(&mut self) {
@@ -219,7 +243,12 @@ impl WorkspaceBackend {
             .with_app_mut(|app| app.execute_github_init(path, remote_url, branch, token))
             .is_ok()
         {
-            self.emit_workspace_changed();
+            // Issue #729 评论 5765306162 问题2：不在此时发 workspace_opened。
+            // execute_github_init 只是启动后台同步线程，目标目录还没真正打开。
+            // GitHub init 成功后，handle_sync_outcome -> internal_open_data_root
+            // 真正打开目标工作区时才发 opened/content/state（sync_operations.rs
+            // 第 135-139 行已有此逻辑）。此处过早发 opened 会让 QML 误认为工作区
+            // 已打开，触发 workspace-open 自动同步等副作用。
             self.pending_github_init_path_changed();
         }
     }
@@ -276,6 +305,15 @@ impl AppBackend {
     // AppBackend::has_workspace
     pub(crate) fn has_workspace(&self) -> bool {
         self.current_has_data_root
+    }
+
+    // AppBackend::workspace_generation
+    //
+    // Issue #729 评论 5765306162 问题3：暴露 current_workspace_generation 给
+    // WorkspaceBackend wrapper，用 generation 变化判断本次 create/open 是否真正
+    // 打开了新工作区，避免用户取消选择器时误发 workspace_opened。
+    pub(crate) fn workspace_generation(&self) -> u64 {
+        self.current_workspace_generation
     }
 
     // AppBackend::pending_github_init_path
@@ -341,6 +379,12 @@ impl AppBackend {
             &format!("path={}", path),
         );
 
+        // Issue #729 评论 5764768372：开头先重置 current_has_data_root = false，
+        // 成功路径才设 true。调用后读 current_has_data_root 能准确判断本次是否成功。
+        // 本函数不再自己发 workspace_opened/content/state 信号，由调用方根据
+        // current_has_data_root（即 snap().has_workspace）判断真实成功后发一次。
+        self.current_has_data_root = false;
+
         // 确保 projects 子目录存在
         let projects_root = std::path::Path::new(path).join("projects");
         let projects_root_str = projects_root.to_string_lossy().to_string();
@@ -381,6 +425,9 @@ impl AppBackend {
         self.current_data_root = path.to_string();
         self.current_projects_root = projects_root_str.clone();
         self.current_has_data_root = true;
+        // Issue #729：递增 workspace generation，使任何正在运行的旧同步回调失效。
+        // 旧同步回调捕获的是旧 generation，回调时校验不匹配会丢弃结果。
+        self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
         self.current_workspace_git_layout = Some(layout);
         self.current_save_status = "已保存".to_string();
@@ -400,9 +447,9 @@ impl AppBackend {
             self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
         }
 
-        self.workspace_opened();
-        self.workspace_content_changed();
-        self.workspace_state_changed();
+        // Issue #729 评论 5764768372：不再在此发 workspace_opened/content/state 信号。
+        // 由调用方（WorkspaceBackend wrapper 或 sync_operations）根据
+        // current_has_data_root 判断真实成功后发一次，避免重复发射。
 
         self.debug_log(
             "workspace",
@@ -452,6 +499,18 @@ impl AppBackend {
     // 关闭/切换工作区的共享内部逻辑：清数据根状态、清选区、清树、重置同步状态、清编辑器、发信号。
     // 不清 last_workspace_path，由调用方（close_workspace / switch_workspace）决定是否清。
     fn reset_workspace_state(&mut self) {
+        // Issue #729：切工作区/关闭工作区时，先取消正在运行的同步并使其回调失效。
+        // a. 取消当前同步令牌：标记旧同步已取消（平台层持有，core sync 本轮不检查，
+        //    但 cancel 是同步语义的一部分，未来 core sync 可集成 is_cancelled 提前终止）。
+        if let Some(token) = self.current_sync_cancel_token.take() {
+            token.cancel();
+        }
+        // b. 递增 workspace generation：使旧同步回调的 generation 校验不匹配而被丢弃。
+        //    即使旧同步线程仍在运行，其回调进入 handle_sync_outcome 时会被 generation 拦截。
+        self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
+        // c. 清 in_progress：旧同步不再算作进行中，新工作区的 single-flight 不会被旧同步卡住。
+        self.current_sync_in_progress = false;
+
         self.flush_writing_stats();
         self.flush_recent_edits();
         // Clear data root state
