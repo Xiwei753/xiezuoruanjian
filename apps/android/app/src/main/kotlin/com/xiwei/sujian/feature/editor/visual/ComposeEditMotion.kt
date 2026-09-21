@@ -145,6 +145,12 @@ class ComposeEditMotion(
      * @param frameTimeNanos 当前帧时间戳。
      * @param caretDurationNanos 新笔 caret 通道时长。<=0 表示瞬时完成。
      * @param glyphDurationNanos 新笔 glyph 通道时长。<=0 表示瞬时完成。
+     * @param inheritedFractionsByKey Issue #728 评论 5761525795：split/rebase 换 child key 后，
+     *   child 的首帧 fraction 继承信息。key → parent 当前 reveal 投影到 child 局部区间后的 fraction。
+     *   - key 在此 map 中：该 unit 是旧 parent split/rekey 出来的 child，从 inheritedFraction 开始，
+     *     不当作全新 unit 从 0/1 重启（避免闪烁/重影）。
+     *   - key 不在此 map 中（null）：真正本笔新插入/新建 deleted ghost，从 0/1 开始。
+     *   默认空 map：无继承信息，所有 oldChannel==null 的 unit 都按全新 unit 处理（保持向后兼容）。
      */
     @Suppress("LongParameterList")
     fun redirectTo(
@@ -155,6 +161,7 @@ class ComposeEditMotion(
         frameTimeNanos: Long,
         caretDurationNanos: Long,
         glyphDurationNanos: Long,
+        inheritedFractionsByKey: Map<Long, Float> = emptyMap(),
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
@@ -167,15 +174,27 @@ class ComposeEditMotion(
         // inserted 按 targetRange 正文顺序，deleted 按 sourceRange 反序（右往左吞，Backspace 语义）。
         // mixed 沿用 forEdit() 同一规则（inserted 段后接 deleted 反向段）。
         // oldChannel 只提供 currentFraction 和旧 phase，不再提供新 role/to（Issue #728 评论 5760112985 问题1）。
+        // Issue #728 评论 5761525795：spec 携带 inheritedFraction，让 classifyRedirectSpec 能区分
+        // "split/rekey child"（有继承 fraction）和"真正全新 unit"（无继承 fraction）。
         val insertedSpecs =
             newInsertedUnitKeys.map { key ->
-                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], desiredTo = 1f)
+                RedirectUnitSpec(
+                    key = key,
+                    oldChannel = unitChannels[key],
+                    desiredTo = 1f,
+                    inheritedFraction = inheritedFractionsByKey[key],
+                )
             }
         // deleted 按 sourceRange 反序（右往左吞，Backspace 语义）。
         // newDeletedUnitKeys 已由调用方按 sourceRange.start 升序排好，reversed() 得到降序。
         val deletedSpecs =
             newDeletedUnitKeys.reversed().map { key ->
-                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], desiredTo = 0f)
+                RedirectUnitSpec(
+                    key = key,
+                    oldChannel = unitChannels[key],
+                    desiredTo = 0f,
+                    inheritedFraction = inheritedFractionsByKey[key],
+                )
             }
         // 合成一条有序 traversal list：inserted 段（正文顺序）后接 deleted 反向段，
         // 沿用 forEdit() 的同一规则。只调用一次 buildRedirectChannels 统一归一化到一条 [0,1]。
@@ -381,8 +400,21 @@ class ComposeEditMotion(
         val ch = spec.oldChannel
         val desiredTo = spec.desiredTo
         if (ch == null) {
-            // 新 unit：作为 pending。
-            return SpecClassification.NewUnitPending
+            // Issue #728 评论 5761525795：oldChannel == null 不再直接等价于"全新 unit"。
+            // 如果 spec 带了 inheritedFraction，说明该 unit 是旧 parent split/rekey 出来的 child —
+            // parent 当前已画到 inheritedFraction，child 必须从该 fraction 继续，不能从 0/1 重启。
+            // 只有真正本笔新插入/新建 deleted ghost（inheritedFraction == null）才走 NewUnitPending。
+            val inherited = spec.inheritedFraction
+            if (inherited == null) {
+                return SpecClassification.NewUnitPending
+            }
+            // 继承 unit：用 inherited fraction 作为当前 fraction，按与旧 unit 相同的规则分类。
+            // inherited == desiredTo：固定终值（如 surviving child 已完整显示，inherited=1, desiredTo=1）。
+            // inherited != desiredTo：作为 pending 走新剩余动画（如 deleted ghost 从 0.4 吞到 0）。
+            if (abs(inherited - desiredTo) < 1e-5f) {
+                return SpecClassification.FixedTerminal(inherited)
+            }
+            return SpecClassification.Pending(inherited)
         }
         val currentFraction = currentSample.unitClipFractions[spec.key] ?: ch.from
         // 目标已达成（包括 Completed 角色未变、或刚好走到目标）：固定终值，不占区间。
@@ -455,11 +487,15 @@ class ComposeEditMotion(
      * @param oldChannel 旧 motion 中该 unit 的通道；null 表示这是本次新出现的 unit。
      * @param desiredTo 当前角色的目标 fraction（inserted: 1, deleted: 0；
      *   redirectCaretTo 保持 ch.to）。旧 unit 的新目标也由此值决定，不再沿用旧 ch.to。
+     * @param inheritedFraction Issue #728 评论 5761525795：split/rekey child 的继承 fraction。
+     *   oldChannel == null 且 inheritedFraction != null 时，该 unit 是旧 parent split 出来的 child，
+     *   从 inheritedFraction 继续而非从 0/1 重启。null 表示真正全新 unit（无 parent lineage）。
      */
     private data class RedirectUnitSpec(
         val key: Long,
         val oldChannel: UnitChannel?,
         val desiredTo: Float,
+        val inheritedFraction: Float? = null,
     )
 
     /**

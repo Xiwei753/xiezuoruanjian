@@ -78,6 +78,19 @@ class ComposeVisualTimeline {
     private var presentedKeys: MutableSet<Long> = mutableSetOf()
 
     /**
+     * Issue #728 评论 5761525795：最近一次 [applyPatch] 中 split/rekey 产生的 child key → 继承 fraction。
+     *
+     * split 时 parent 的当前 motion fraction 投影到 child 局部区间，得到 child 首帧应继承的 fraction。
+     * [activeEditUnits] 读取此 map 把继承信息填进 [EditUnitDescriptor.inheritedFraction]，
+     * 让 [ComposeEditorVisualState.drainPendingPatchesAtFrame] 能把继承 fraction 传给
+     * [ComposeEditMotion.redirectTo]，避免 child 被当成全新 unit 从 0/1 重启（闪烁/重影）。
+     *
+     * 生命周期：每次 [applyPatch] 开头清空，split 时填充，[activeEditUnits] 读取。
+     * 只在 applyPatch → activeEditUnits 同一帧调用链内有效，不跨帧保留。
+     */
+    private var lastSplitInheritedFractions: Map<Long, Float> = emptyMap()
+
+    /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
      * 再处理新 patch。不能从事务的 progress 反算，也不能先归零。
      *
@@ -91,11 +104,18 @@ class ComposeVisualTimeline {
      *
      * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
+     * @param motionSample Issue #728 评论 5761525795：当前 [ComposeEditMotion] 的 sample 结果 —
+     *   split/rekey 时用它拿 parent 的当前 motion fraction，投影到 child 局部区间，
+     *   得到 child 首帧应继承的 fraction（[lastSplitInheritedFractions]）。
+     *   null 表示无 active motion（如首次编辑），split child 无继承信息，按全新 unit 处理。
      */
     fun applyPatch(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        motionSample: ComposeEditMotion.Sample? = null,
     ) {
+        // Issue #728 评论 5761525795：清空上一次 split 继承记录，本次 applyPatch 重新填充。
+        lastSplitInheritedFractions = emptyMap()
         // #691 评论 5679242735 修改2 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
         val policy = patch.motionPolicy.effective()
@@ -228,6 +248,7 @@ class ComposeVisualTimeline {
                 effectiveProgressByKey,
                 currentPatchGhostedCoverage,
                 currentPatchGhostKeys,
+                motionSample,
             )
 
             // 第三步：处理本 patch 新插入的 unit。
@@ -332,6 +353,7 @@ class ComposeVisualTimeline {
         progressByKey: MutableMap<Long, Boolean>,
         currentPatchGhostedCoverage: MutableList<TextRange>,
         currentPatchGhostKeys: MutableSet<Long>,
+        motionSample: ComposeEditMotion.Sample? = null,
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
@@ -389,6 +411,22 @@ class ComposeVisualTimeline {
                     // #708 评论 5728507555：child 继承父 unit 的 presented 状态，
                     // 让本次 applyPatch 后面的 started/pending 分类读到正确状态。
                     progressByKey[childKey] = parentPresented
+                    // Issue #728 评论 5761525795：split/rekey 时保存 parent → child 的视觉继承关系 —
+                    // 从当前 motion sample 拿 parent 的当前 fraction，投影到 child 局部区间，
+                    // 得到 child 首帧应继承的 fraction。activeEditUnits 读取此值填进 descriptor，
+                    // 让 redirectTo 不把 child 当成全新 unit 从 0/1 重启（避免闪烁/重影）。
+                    // motionSample == null 时 fallback 到 timeline 自己的 reveal 通道（非 coordinated 场景）。
+                    val parentMotionFraction =
+                        motionSample?.unitClipFractions?.get(unit.key)
+                            ?: currentAlpha(unit.reveal, frameTimeNanos)
+                    val childInheritedFraction =
+                        computeRevealFractionForChild(
+                            parentRange = unit.range,
+                            parentRevealFraction = parentMotionFraction,
+                            childRange = slice.oldSubRange,
+                        )
+                    lastSplitInheritedFractions =
+                        lastSplitInheritedFractions + (childKey to childInheritedFraction)
                 }
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
                     val mappedUnit =
@@ -1082,6 +1120,8 @@ class ComposeVisualTimeline {
         val inserted = mutableListOf<EditUnitDescriptor>()
         val deleted = mutableListOf<EditUnitDescriptor>()
         for (unit in units) {
+            // Issue #728 评论 5761525795：读取 split/rekey 时记录的继承 fraction。
+            val inheritedFraction = lastSplitInheritedFractions[unit.key]
             when (unit.role) {
                 VisualUnitRole.Inserted -> {
                     val targetRange = unit.targetRange
@@ -1093,6 +1133,7 @@ class ComposeVisualTimeline {
                                 targetRange = targetRange,
                                 sourceRange = null,
                                 layout = unit.layout,
+                                inheritedFraction = inheritedFraction,
                             ),
                         )
                     }
@@ -1105,6 +1146,7 @@ class ComposeVisualTimeline {
                             targetRange = null,
                             sourceRange = unit.range,
                             layout = unit.layout,
+                            inheritedFraction = inheritedFraction,
                         ),
                     )
                 }
@@ -1497,6 +1539,10 @@ class ComposeVisualTimeline {
  * @param targetRange 对于 Inserted：该 unit 在新正文中的目标区间（光标经过顺序）。
  * @param sourceRange 对于 DeletedGhost：该 ghost 在旧正文中的来源区间（光标回退顺序）。
  * @param layout 该 unit 当前关联的 layout snapshot，可用于取 glyph bounds。
+ * @param inheritedFraction Issue #728 评论 5761525795：split/rekey child 的继承 fraction —
+ *   parent 当前 motion fraction 投影到 child 局部区间后的值。非 null 表示该 unit 是旧 parent
+ *   split/rekey 出来的 child，[ComposeEditMotion.redirectTo] 应从该 fraction 继续而非从 0/1 重启。
+ *   null 表示真正本笔新插入/新建 deleted ghost（无 parent lineage），从 0/1 开始。
  */
 data class EditUnitDescriptor(
     val key: Long,
@@ -1504,6 +1550,7 @@ data class EditUnitDescriptor(
     val targetRange: TextRange?,
     val sourceRange: TextRange?,
     val layout: ComposeLayoutSnapshot,
+    val inheritedFraction: Float? = null,
 )
 
 /**

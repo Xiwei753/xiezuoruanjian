@@ -1247,9 +1247,15 @@ class ComposeEditorVisualState(
         }
         pendingPatches.clear()
         val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
+        // Issue #728 评论 5761525795：applyPatch 之前先 sample 当前 activeEditMotion —
+        // timeline 在 split/rekey 时需要 parent 的当前 motion fraction 投影到 child 局部区间，
+        // 得到 child 首帧应继承的 fraction。不传 motionSample 时 split child 无继承信息，
+        // redirectTo 会把 child 当成全新 unit 从 0/1 重启（闪烁/重影）。
+        val motionSampleForPatch = activeEditMotion?.sample(frameTimeNanos)
         visualTimeline.applyPatch(
             patch = framePatch,
             frameTimeNanos = frameTimeNanos,
+            motionSample = motionSampleForPatch,
         )
         // Issue #728 评论 5754045689：构造/重定向 activeEditMotion —
         // 从 timeline 拿当前 inserted/deleted unit descriptors，用 patch 的 caret rect 构造或重定向 motion。
@@ -1299,6 +1305,15 @@ class ComposeEditorVisualState(
             activeEditMotion =
                 if (existing != null && !existing.isFinished(frameTimeNanos)) {
                     // 快速连续输入：从当前 sample 重定向，不重新起播
+                    // Issue #728 评论 5761525795：把 descriptor 的继承 fraction 传给 redirectTo —
+                    // split/rekey child 从 parent 投影后的 fraction 继续，不从 0/1 重启。
+                    val inheritedFractionsByKey =
+                        (insertedDescriptors.asSequence() + deletedDescriptors.asSequence())
+                            .mapNotNull { d ->
+                                val f = d.inheritedFraction
+                                if (f != null) d.key to f else null
+                            }
+                            .toMap()
                     existing.redirectTo(
                         newOriginCaretRect = framePatch.originCaretRect,
                         newTargetCaretRect = framePatch.targetCaretRect,
@@ -1307,6 +1322,7 @@ class ComposeEditorVisualState(
                         frameTimeNanos = frameTimeNanos,
                         caretDurationNanos = caretDurationNanos,
                         glyphDurationNanos = glyphDurationNanos,
+                        inheritedFractionsByKey = inheritedFractionsByKey,
                     )
                 } else {
                     ComposeEditMotion.forEdit(
