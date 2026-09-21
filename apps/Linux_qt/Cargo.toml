@@ -48,3 +48,16 @@ semver = "1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Issue #707 评论 5724685300 / #727 评论 5757225958: 这两个集成测试依赖
+# `test-helpers` feature 暴露的测试入口（`run_on_qt_thread`、
+# `AppBackend::open_data_root_for_tests`）。声明 required-features 后，
+# 不带 feature 的 `cargo test` 会跳过它们（不编译、不报错），
+# `cargo test --features test-helpers` 才真正运行。
+[[test]]
+name = "qt_runtime_cursor_geometry"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "qt_runtime_theme_cursor"
+required-features = ["test-helpers"]
