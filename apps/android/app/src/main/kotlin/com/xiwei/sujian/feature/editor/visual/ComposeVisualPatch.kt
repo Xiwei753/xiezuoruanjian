@@ -41,6 +41,13 @@ data class RetainedMove(
  * patch 不保存自己的动画进度，进度统一交给 [ComposeEditMotion]。
  * Enter 本身没有 glyph，所以一笔 Enter patch 可以没有 inserted unit，但必须有 old/new caret rect。
  *
+ * Issue #728 评论 5754839786：[originCaretRect] / [targetCaretRect] 改成必填参数（去掉 Rect.Zero 默认值）。
+ * 旧默认值让 [ComposeEditorVisualState.buildLocalInputPatch] 漏传 caret rect 时静默拿到 Rect.Zero，
+ * 本地 patch 的 caret 两端变成 (0,0,0,0)，[ComposeEditMotion] 从原点插值到原点，屏幕 caret 不动。
+ * 现在构造时必须显式提供真实 caret rect，主源码所有构造点（[ComposeVisualFrameCoordinator.tryBuildPatch] /
+ * [ComposeVisualPatchBatch.compose] / [ComposeEditorVisualState.buildLocalInputPatch]）都从
+ * [ComposeLayoutSnapshot.cursorRect] 算出真实几何。
+ *
  * @param id patch ID — 单调递增，overlay 据此判断是否需要推进 timeline。
  * @param coreTransactionIds Core 事务 ID 列表 — 一笔 patch 可能对应多笔 Core 事务。
  * @param oldLayout 旧布局快照 — 上一帧真正呈现过的 [ComposeLayoutSnapshot]。
@@ -55,7 +62,9 @@ data class RetainedMove(
  *   只给真正发生 oldRect → newRect 位移的存活 unit 新建/重定向 position 通道。
  *   删除换行时几何没变的文字就没有 position track，绝对不会跟着抽一下。
  * @param originCaretRect 编辑前 caret rect（old caret rect）— 供 [ComposeEditMotion] 算 caret 插值起点。
+ *   Issue #728 评论 5754839786：必填，由 [ComposeLayoutSnapshot.cursorRect] 从 oldLayout + oldSelection.end 算出。
  * @param targetCaretRect 编辑后 caret rect（new caret rect）— 供 [ComposeEditMotion] 算 caret 插值终点。
+ *   Issue #728 评论 5754839786：必填，由 [ComposeLayoutSnapshot.cursorRect] 从 newLayout + newSelection.end 算出。
  * @param durationMs 动画时长（ms）— Core 建议，timeline 据此设置通道 durationNanos。
  * @param animationMode Core 动画模式 — SYSTEM_SUPPRESSED 时 timeline 不新建文字通道。
  * @param motionPolicy 动画策略 — effective 后的策略，overlay 据此决定 text timeline。
@@ -71,8 +80,8 @@ data class ComposeVisualPatch(
     val insertedUnits: List<TextRange>,
     val deletedUnits: List<TextRange>,
     val retainedMoves: List<RetainedMove>,
-    val originCaretRect: Rect = Rect.Zero,
-    val targetCaretRect: Rect = Rect.Zero,
+    val originCaretRect: Rect,
+    val targetCaretRect: Rect,
     val durationMs: Long,
     val animationMode: AnimationModeDto,
     val motionPolicy: EditorMotionPolicy,

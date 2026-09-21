@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
@@ -12,6 +13,7 @@ import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +69,20 @@ class ComposeEditorVisualState(
      * null 表示无 active motion（首帧/动画完成/policy 切换后）。
      */
     private var activeEditMotion: ComposeEditMotion? = null
+
+    /**
+     * Issue #728 评论 5754839786 缺口2：静止 caret rect —
+     * 无 active motion 时（纯 selection 移动 / 静止 / 动画完成）屏幕 caret 应停留的位置。
+     *
+     * 背景：#725 把系统 caret 设成透明后，"静止光标"和"纯 selection 移动"没有闭环 —
+     * [sampleVisualScene] 在 motion finished 后把 [activeEditMotion] 置 null，
+     * [ComposeEditorDrawSnapshot.caretRect] 随之变 null，draw 层不画 caret，屏幕 caret 消失。
+     * 本字段收成单一状态：onAuthoritativeLayout / onInputSnapshotResolved / publishLocalHandoffScene
+     * 把"当前应停留的 caret 几何"写进 restingCaretRect；sampleVisualScene 在无 active motion 时
+     * 用 restingCaretRect 填 drawSnapshotState.caretRect，保证静止 caret 一直可见。
+     * active motion 期间 restingCaretRect 保存 motion 的 target，motion finished 后无缝接上。
+     */
+    private var restingCaretRect: Rect? = null
 
     /** 最新 layout 快照 — 供 overlay 读取 bounding box。 */
     private val _latestLayout = MutableStateFlow<ComposeLayoutSnapshot?>(null)
@@ -410,6 +426,22 @@ class ComposeEditorVisualState(
                 layoutTextLength = _latestLayout.value?.result?.layoutInput?.text?.text?.length ?: -1,
             )
         }
+        // Issue #728 评论 5754839786 缺口2：纯 selection 移动闭环 —
+        // text 未变、selection 变了（如方向键移动光标、鼠标点击改选区）时没有 patch / motion，
+        // 旧实现只记诊断日志，屏幕 caret 停在旧位置不动。
+        // 这里直接把 restingCaretRect 更新到新 selection.end 对应的 caret rect，并清掉旧 activeEditMotion
+        // （若有未完成 motion 一并被清），让下一帧 sampleVisualScene 用 restingCaretRect 填 drawSnapshot。
+        // 不创建 forSelectionMove motion — onInputSnapshotResolved 没有 frameTimeNanos，
+        // 用 0L 作 startedAt 会让 motion 立即到 target，等效于直接跳，不如直接更新 restingCaretRect。
+        val layoutForSelection = _latestLayout.value
+        if (
+            layoutForSelection != null &&
+            snapshot.selection != lastResolvedSelection &&
+            layoutForSelection.result.layoutInput.text.text == snapshot.text
+        ) {
+            restingCaretRect = layoutForSelection.cursorRect(snapshot.selection.end)
+            activeEditMotion = null
+        }
         lastResolvedSelection = snapshot.selection
         wasCompositionActiveForSnapshot = compositionActive
     }
@@ -569,10 +601,17 @@ class ComposeEditorVisualState(
             )
         }
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
+        // Issue #728 评论 5754839786 收口：首帧 scene + 首帧 caret 来自同一个当前状态 —
+        // handoff 时把 caretRect 直接设成 patch.targetCaretRect（编辑后位置），
+        // 并同步 restingCaretRect = patch.targetCaretRect（handoff 后 resting caret 就是 target）。
+        // 旧实现只 copy scene + layout，caretRect 沿用旧值（可能是上一笔 motion 的中间 sample 或 null），
+        // 导致 handoff 先换文字、下一 VSync 才开始 caret motion，首帧 caret 错位。
+        restingCaretRect = patch.targetCaretRect
         drawSnapshotState =
             drawSnapshotState.copy(
                 scene = _visualScene.value,
                 layout = newLayout,
+                caretRect = patch.targetCaretRect,
             )
     }
 
@@ -788,6 +827,13 @@ class ComposeEditorVisualState(
         val retainedMoves = emptyList<RetainedMove>()
 
         nextLocalPatchId++
+        // Issue #728 评论 5754839786 缺口1：本地 patch 也写真实 caret 两端 —
+        // 从 oldLayout + firstEdit.oldSelection.end 算 origin caret，
+        // 从 newLayout + lastEdit.newSelection.end 算 target caret。
+        // 旧实现漏传，ComposeVisualPatch 的 Rect.Zero 默认值让本地 patch 的 caret 两端变成 (0,0,0,0)，
+        // ComposeEditMotion 从原点插值到原点，本地编辑时屏幕 caret 不动。
+        val originCaretRect = oldLayout.cursorRect(firstEdit.oldSelection.end)
+        val targetCaretRect = newLayout.cursorRect(lastEdit.newSelection.end)
         return ComposeVisualPatch(
             id = nextLocalPatchId,
             coreTransactionIds = emptyList(),
@@ -797,6 +843,8 @@ class ComposeEditorVisualState(
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
+            originCaretRect = originCaretRect,
+            targetCaretRect = targetCaretRect,
             // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
             durationMs = 0L,
             // #694 评论 5692161955 问题2：使用 Core plan 返回的 animationMode，
@@ -853,10 +901,14 @@ class ComposeEditorVisualState(
         val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
         if (fingerprintUnchanged) {
             // 纯 selection/caret 变化：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
-            // Issue #725 评论 5750735497：屏幕 caret 始终由 BasicTextField 自己画，不再更新 restingCursorRect。
+            // Issue #728 评论 5754839786 缺口2：fingerprintUnchanged 时无 active motion（纯 selection），
+            // 直接把 restingCaretRect 更新到当前 selection.end 对应的 caret rect，
+            // 并写进 drawSnapshotState.caretRect，保证静止/selection 移动后屏幕 caret 停在新位置。
+            restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
             drawSnapshotState =
                 drawSnapshotState.copy(
                     layout = snapshot,
+                    caretRect = restingCaretRect,
                 )
             return
         }
@@ -864,6 +916,11 @@ class ComposeEditorVisualState(
 
         // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
         _latestLayout.update { snapshot }
+        // Issue #728 评论 5754839786 缺口2：真实 layout 变化后更新 restingCaretRect —
+        // 后续分支（composition 缓存 / composition active / Core visual path / local patch）会
+        // 在此基础上把 drawSnapshotState.caretRect 同步给 draw 层。active motion 期间 motion sample
+        // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
+        restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
 
         // #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时，
         // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
@@ -889,9 +946,12 @@ class ComposeEditorVisualState(
                     compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
             )
         ) {
+            // Issue #728 评论 5754839786 缺口2：composition 缓存分支也同步 restingCaretRect + drawSnapshot caret。
+            // 此分支无 active motion（composition 还没收口），直接用 restingCaretRect 填 drawSnapshot。
             drawSnapshotState =
                 drawSnapshotState.copy(
                     layout = snapshot,
+                    caretRect = restingCaretRect,
                 )
             compositionVisualPhase = CompositionVisualPhase.AwaitingBridgeResolution
             return
@@ -962,9 +1022,12 @@ class ComposeEditorVisualState(
             }
             lastPresentedLayout = snapshot
             wasCompositionActive = true
+            // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
+            // composition 期间无 active motion（preedit 不播放吞吐），用 restingCaretRect 填 drawSnapshot。
             drawSnapshotState =
                 drawSnapshotState.copy(
                     layout = snapshot,
+                    caretRect = restingCaretRect,
                 )
             return
         }
@@ -984,10 +1047,13 @@ class ComposeEditorVisualState(
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot
         // 同步 draw snapshot — Core visual path 也要让 draw 层读到最新 layout/scene
+        // Issue #728 评论 5754839786 缺口2：Core visual path 无 active motion 时用 restingCaretRect 填 caret；
+        // 有 active motion 时保留 motion sample 给的 caretRect（由 sampleVisualScene 每帧覆盖）。
         drawSnapshotState =
             drawSnapshotState.copy(
                 scene = _visualScene.value,
                 layout = snapshot,
+                caretRect = activeEditMotion?.let { drawSnapshotState.caretRect } ?: restingCaretRect,
             )
     }
 
@@ -1171,14 +1237,19 @@ class ComposeEditorVisualState(
         _visualScene.update { scene }
         // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene + caretRect —
         // draw 层下一帧 drawWithContent 直接读，不在 Composable 主体读 visualScene StateFlow。
-        // Issue #728：caretRect 由 activeEditMotion 统一产生，写进 draw snapshot 供 draw 层画 caret。
+        // Issue #728 评论 5754839786 缺口2：caretRect 由 activeEditMotion 统一产生；
+        // 无 active motion 时用 restingCaretRect 填，保证静止/selection 移动后屏幕 caret 不消失。
         drawSnapshotState =
             drawSnapshotState.copy(
                 scene = scene,
-                caretRect = motionSample?.caretRect,
+                caretRect = motionSample?.caretRect ?: restingCaretRect,
             )
         // motion 完成后清掉，避免持续 sample 已结束的 motion
         if (motionSample != null && motionSample.finished) {
+            // Issue #728 评论 5754839786 缺口2：motion finished 后把 target caret 落到 restingCaretRect，
+            // 再清 activeEditMotion — 下一帧 sampleVisualScene 用 restingCaretRect 填 drawSnapshot，
+            // 屏幕 caret 停在 motion 终点，不跳回原点也不消失。
+            restingCaretRect = motionSample.caretRect
             activeEditMotion = null
         }
         return scene
@@ -1209,6 +1280,8 @@ class ComposeEditorVisualState(
         currentMotionPolicy = null
         // Issue #728：清空统一编辑 motion
         activeEditMotion = null
+        // Issue #728 评论 5754839786 缺口2：清空静止 caret rect
+        restingCaretRect = null
         // #694 评论第 3 步：清空本地输入配对状态
         localInputTracker.clear()
         lastPresentedLayout = null
@@ -1251,6 +1324,9 @@ class ComposeEditorVisualState(
         _visualScene.update { ComposeVisualScene.Empty }
         // Issue #728：清掉旧 activeEditMotion
         activeEditMotion = null
+        // Issue #728 评论 5754839786 缺口2：policy 切换时清掉旧 restingCaretRect —
+        // 旧 motion 的 target caret 不再适用，等下一份 layout / selection 更新。
+        restingCaretRect = null
         // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene + caretRect
         drawSnapshotState =
             drawSnapshotState.copy(

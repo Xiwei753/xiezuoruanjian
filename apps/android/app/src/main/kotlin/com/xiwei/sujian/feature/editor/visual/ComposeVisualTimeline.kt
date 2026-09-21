@@ -884,6 +884,12 @@ class ComposeVisualTimeline {
      * 收口要修改 timeline 内部的 units 列表（移除已稳定的 unit），不只是过滤返回值。
      * 否则 units 里残留的 unit 会在下次 applyPatch 时被处理，可能导致问题。
      *
+     * Issue #728 评论 5754839786 缺口3：coordinated 模式下 unit 生命周期统一到 [ComposeEditMotion] —
+     * 存活/ghost unit 的可见 fraction 和"什么时候释放所有权"以当前 motion sample 为准，
+     * 不再让 alpha/reveal 的旧 duration 提前删除 motion 仍接管的 unit。
+     * rapid redirect 后，旧 unit 的 alpha/reveal 旧时钟可能已结束，但 motion 里这个字还没走到
+     * fraction=1（或 ghost 还没走到 0），此时不能移除 — 由 [motionFractionReachedTarget] 判断。
+     *
      * @param frameTimeNanos 当前帧时间戳。
      * @param motionSample Issue #728：统一编辑 motion 的 sample 结果 —
      *   unitClipFractions 直接用 motion sample 给的值，不再独立维护 clip fraction 时间。
@@ -904,14 +910,26 @@ class ComposeVisualTimeline {
             val positionFinished = isPositionFinished(sampled.position, frameTimeNanos)
             if (target != null) {
                 // 存活 unit：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
-                if (alphaFinished && positionFinished && sampled.alpha.to >= 1f) {
+                // Issue #728 评论 5754839786 缺口3：coordinated 模式下还要 motion fraction 到达 1 才允许移除 —
+                // rapid redirect 后旧 unit 的 alpha 旧时钟可能已结束，但 motion 里这个字还没走到 fraction=1，
+                // 此时不能移除，否则旧字提前消失。
+                // 提取 reachedFullAlpha 局部变量降低条件复杂度（detekt ComplexCondition 阈值 4）。
+                val reachedFullAlpha = alphaFinished && positionFinished && sampled.alpha.to >= 1f
+                if (reachedFullAlpha &&
+                    motionFractionReachedTarget(motionSample, unit.key, inserted = true)
+                ) {
                     // #691 评论 5684993243 / 评论 5685940102：收口移除时同步清理 presentedKeys
                     presentedKeys.remove(unit.key)
                     continue
                 }
             } else {
                 // ghost unit：alpha==0 -> 删除
-                if (alphaFinished && sampled.alpha.to <= 0f) {
+                // Issue #728 评论 5754839786 缺口3：coordinated 模式下还要 motion fraction 到达 0 才允许移除 —
+                // rapid redirect 后旧 ghost 的 alpha 旧时钟可能已淡到 0，但 motion 里这个字还没走到 fraction=0，
+                // 此时不能移除，否则旧 ghost 提前消失（应继续吞字动画）。
+                if (alphaFinished && sampled.alpha.to <= 0f &&
+                    motionFractionReachedTarget(motionSample, unit.key, inserted = false)
+                ) {
                     // #691 评论 5684993243 / 评论 5685940102：ghost 收口移除时同步清理 presentedKeys
                     presentedKeys.remove(unit.key)
                     continue
@@ -990,14 +1008,53 @@ class ComposeVisualTimeline {
     }
 
     /**
+     * Issue #728 评论 5754839786 缺口3：coordinated 模式下 unit 移除门控 —
+     * 从 [motionSample] 的 unitClipFractions 取 [key] 对应 fraction，判断是否到达目标：
+     * - [inserted] == true（存活 unit）：fraction >= 1f 表示吐字完成，允许移除；
+     * - [inserted] == false（ghost unit）：fraction <= 0f 表示吞字完成，允许移除。
+     *
+     * [motionSample] == null 或不包含 [key] 时返回 true —
+     * motion 不接管此 unit（如非 coordinated 模式 / unit 已被 motion 丢弃），
+     * 沿用旧 alpha/reveal 逻辑决定移除。
+     *
+     * 关键：rapid redirect 后，旧 unit 的 alpha/reveal 旧时钟可能已结束，
+     * 但 motion 里这个字还没走到 fraction=1/0，此时返回 false 阻止移除，
+     * 保证旧 unit 一直保留到 motion fraction 到终点。
+     */
+    private fun motionFractionReachedTarget(
+        motionSample: ComposeEditMotion.Sample?,
+        key: Long,
+        inserted: Boolean,
+    ): Boolean {
+        if (motionSample == null) return true
+        val fraction = motionSample.unitClipFractions[key] ?: return true
+        return if (inserted) {
+            fraction >= 1f
+        } else {
+            fraction <= 0f
+        }
+    }
+
+    /**
      * 是否还有活动动画 — overlay 据此决定是否继续推进帧时钟。
      *
      * #691：同时检查文字 units 和光标 cursorChannel 的活动状态。
+     *
+     * Issue #728 评论 5754839786 缺口3：coordinated 模式下 alpha/reveal 通道不再独立决定 timeline active —
+     * coordinated 时 alpha/reveal 由 [ComposeEditMotion] 驱动（motion sample 决定 fraction），
+     * timeline 只看 position 通道（retained/reflow 可独立于 motion）。
+     * [ComposeEditorVisualState.hasActiveVisuals] 已单独检查 [activeEditMotion]，
+     * 所以 coordinated 时 timeline 不重复检查 alpha/reveal 不会漏。
+     * 非 coordinated 时沿用旧逻辑（检查 alpha/position/reveal）。
      *
      * @param frameTimeNanos 当前帧时间戳。
      * @return true 表示还有 unit 的 alpha、position 或 reveal 通道未完成，或光标动画未完成。
      */
     fun hasActiveAnimation(frameTimeNanos: Long): Boolean {
+        if (coordinatedSpatialClip) {
+            // coordinated: alpha/reveal 由 motion 驱动，timeline 只看 position（retained/reflow）
+            return units.any { unit -> !isPositionFinished(unit.position, frameTimeNanos) }
+        }
         return units.any { unit ->
             !isAlphaFinished(unit.alpha, frameTimeNanos) ||
                 !isPositionFinished(unit.position, frameTimeNanos) ||
