@@ -192,17 +192,6 @@ class ComposeEditorVisualState(
     private var lastPresentedLayout: ComposeLayoutSnapshot? = null
 
     /**
-     * #694 评论 5692161955 问题3：上一次 composition 是否活跃 —
-     * 用于 composition 从 active->false 时的过渡同步。
-     *
-     * composition 活跃期间 [frameCoordinator] 的 lastConsumed 不推进（不调 observePresentedLayout），
-     * composition 结束时把最终已提交 layout 用
-     * [ComposeVisualFrameCoordinator.observePresentedLayout] 同步给 coordinator，
-     * 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与 lastConsumed.text 对不上。
-     */
-    private var wasCompositionActive: Boolean = false
-
-    /**
      * #708 评论 5723410606 第一节：draw 阶段原子快照 —
      * 由 [drawSnapshot] 在 drawWithContent 里一次性取走。
      * 关键：这个 State 只能在 drawWithContent 里读。
@@ -214,7 +203,7 @@ class ComposeEditorVisualState(
      * #708 评论 5723410606 第三节：layout fingerprint 持久状态 —
      * 把 fingerprint 做成明确 data class，不再 List<Any>。
      * onAuthoritativeLayout 最前面先算 fingerprint，相同正文+相同几何时直接返回，
-     * 不更新 layout epoch、不调用 frameCoordinator.onLayout/observePresentedLayout、不重新发布相同 TextLayoutResult。
+     * 不更新 layout epoch、不调用 frameCoordinator.onLayout、不重新发布相同 TextLayoutResult。
      */
     private var lastObservedLayoutFingerprint: LayoutFingerprint? = null
 
@@ -231,8 +220,6 @@ class ComposeEditorVisualState(
      *
      * Issue #735 评论 5773604666 问题1：删除双视觉入口后，所有正文编辑统一走 [onEditFact]。
      * 本方法不再生成 local patch，只负责：
-     * - composition 结束/取消/拒绝时重置 [wasCompositionActive]，让 [onAuthoritativeLayout] 的
-     *   coordinator baseline 同步正常接管。
      * - 纯 selection 移动检测（text 不变、只有 selection 变了）。
      * - selection 变化诊断事件。
      *
@@ -244,24 +231,24 @@ class ComposeEditorVisualState(
         outcome: InputSnapshotOutcome,
     ) {
         val compositionActive = snapshot.composition != null
-        // Issue #735 评论 5773604666 问题1：composition 结束/取消/拒绝时重置 wasCompositionActive —
-        // 不再生成 local patch，只让 onAuthoritativeLayout 的 coordinator baseline 同步正常接管。
+        // Issue #735 评论 5774895427：删除 wasCompositionActive 后，composition 结束/取消/拒绝
+        // 不再需要提前推进 coordinator baseline。所有正文 layout 统一走 onAuthoritativeLayout ->
+        // frameCoordinator.onLayout，由 onEditFact/onLayout 双向合流配对生成 patch。
+        // when 块保留以文档化各 outcome 的处理归属。
         when (outcome) {
             InputSnapshotOutcome.Composing -> {
-                // composition 仍活跃：onAuthoritativeLayout 的 compositionActive 分支会设 wasCompositionActive=true。
+                // composition 仍活跃：onAuthoritativeLayout 的 compositionActive 分支只缓存 preedit layout，
+                // 不碰 coordinator 的 committed baseline。
             }
             InputSnapshotOutcome.LocalCommitAccepted -> {
                 // Core 已接受本地 commit，会通过 onEditFact 发送 EditorEditFact 驱动视觉 patch。
-                // 此处只需重置 wasCompositionActive，让后续 onAuthoritativeLayout 走 Core visual path。
-                wasCompositionActive = false
+                // 后续 onAuthoritativeLayout(compositionActive=false) 走 frameCoordinator.onLayout 配对。
             }
             InputSnapshotOutcome.NoTextChange,
             InputSnapshotOutcome.AuthoritativeApplied,
             InputSnapshotOutcome.LocalCommitRejected,
             -> {
-                // composition 取消/无变化/Core 拒绝：重置 wasCompositionActive，
-                // 后续让权威 layout / external intent 正常接管。
-                wasCompositionActive = false
+                // composition 取消/无变化/Core 拒绝：后续权威 layout / external intent 正常接管。
             }
         }
         // #713 评论 5740279418：selection 真正变化时记一次诊断事件
@@ -324,13 +311,14 @@ class ComposeEditorVisualState(
     * （bridge.state.composition != null）。composition 活跃时只推进布局基线，
     * 不播放 preedit 的吞吐；composition 结束后由 Core 通过 [onEditFact] 驱动视觉 patch。
     *
-    * Issue #735 评论 5773604666 问题1：删除双视觉入口后，本方法不再配对 local input 生成 local patch。
-    * 所有正文编辑统一走 [onEditFact] → [ComposeVisualFrameCoordinator.onEditFact] → [applyFrameUpdate]。
-    * 本方法只负责：
-    * - fingerprint 去重（纯 selection/scroll 不触发布局 epoch）。
-    * - composition 活跃时缓存 layout + 设 wasCompositionActive（不调 frameCoordinator）。
-    * - composition 结束后 wasCompositionActive 过渡同步 coordinator baseline。
-    * - 非 composition 的 Core visual path（Undo/Redo/Programmatic/Load/Format）。
+     * Issue #735 评论 5773604666 问题1：删除双视觉入口后，本方法不再配对 local input 生成 local patch。
+     * 所有正文编辑统一走 [onEditFact] → [ComposeVisualFrameCoordinator.onEditFact] → [applyFrameUpdate]。
+     * 本方法只负责：
+     * - fingerprint 去重（纯 selection/scroll 不触发布局 epoch）。
+     * - composition 活跃时只缓存 preedit layout（不调 frameCoordinator，不碰 committed baseline）。
+     * - composition 结束后一律把真实 layout 交给 [ComposeVisualFrameCoordinator.onLayout]，
+     *   由 onEditFact/onLayout 双向合流配对生成 patch（Issue #735 评论 5774895427）。
+     * - 非 composition 的 Core visual path（Undo/Redo/Programmatic/Load/Format）。
     *
     * @param result 系统 [BasicTextField] 的 onTextLayout 给出的最终布局结果。
     * @param selection 当前选区（UTF-16）。
@@ -349,8 +337,8 @@ class ComposeEditorVisualState(
        // onAuthoritativeLayout 最前面先算 fingerprint。
        // 相同正文+相同几何时：
        // - 可以更新纯 selection/caret 的 draw 数据；
-       // - 不更新 layout epoch；
-       // - 不调用 frameCoordinator.onLayout/observePresentedLayout；
+        // - 不更新 layout epoch；
+        // - 不调用 frameCoordinator.onLayout；
        // - 不重新发布相同 TextLayoutResult；
        // - 直接返回。
        // 只有真实 text/line geometry 变化才把新 layout 写进 draw snapshot。
@@ -380,35 +368,25 @@ class ComposeEditorVisualState(
        // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
         restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
 
-        // composition 活跃时只推进布局基线，不生成 patch（不播放 preedit 的吞吐）
-        if (compositionActive) {
-            // #694 评论 5692161955 问题3：composition 活跃分支只更新 lastPresentedLayout，
-            // 不调 frameCoordinator.observePresentedLayout(snapshot)。
-            // 原因：frameCoordinator.lastConsumed 是 Core/external coordinator 的基线，
-            // 必须只跟 Core 已提交正文，不能推到未提交给 Core 的 preedit。
-            // 否则 Undo 时 pending.baseText(Core 已提交) != lastConsumed(preedit)，external patch 卡死。
-            lastPresentedLayout = snapshot
-            wasCompositionActive = true
-            // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
-            // composition 期间无 active motion（preedit 不播放吞吐），用 restingCaretRect 填 drawSnapshot。
-            drawSnapshotState =
-                drawSnapshotState.copy(
-                    layout = snapshot,
-                    caretRect = restingCaretRect,
-                )
-            return
-        }
+         // composition 活跃时只缓存 preedit layout，不生成 patch（不播放 preedit 的吞吐）
+         if (compositionActive) {
+             // #694 评论 5692161955 问题3 / Issue #735 评论 5774895427：
+             // composition 活跃分支只更新 lastPresentedLayout，不调 frameCoordinator。
+             // 原因：frameCoordinator.lastConsumed 是 committed baseline，
+             // 必须只跟 Core 已提交正文，不能推到未提交给 Core 的 preedit。
+             // composition 结束后由 onLayout 统一接管，onEditFact/onLayout 双向合流配对。
+             lastPresentedLayout = snapshot
+             // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
+             // composition 期间无 active motion（preedit 不播放吞吐），用 restingCaretRect 填 drawSnapshot。
+             drawSnapshotState =
+                 drawSnapshotState.copy(
+                     layout = snapshot,
+                     caretRect = restingCaretRect,
+                 )
+             return
+         }
 
-        // #694 评论 5692161955 问题3：composition 从 active->false 过渡同步。
-        // composition 活跃期间 frameCoordinator.lastConsumed 没有推进，
-        // composition 结束时把最终已提交 layout 用 observePresentedLayout 同步给 coordinator，
-        // 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与 lastConsumed.text 对不上。
-        if (wasCompositionActive) {
-            frameCoordinator.observePresentedLayout(snapshot)
-            wasCompositionActive = false
-        }
-
-        // Core visual path（Undo/Redo/Programmatic/Load/Format 等真正需要 Core 驱动的修改）
+         // Core visual path（Undo/Redo/Programmatic/Load/Format 等真正需要 Core 驱动的修改）
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot
@@ -762,8 +740,6 @@ class ComposeEditorVisualState(
         // Issue #728 评论 5755336403 缺口2：清空 pending 纯 selection caret 移动
         pendingSelectionCaretTarget = null
         lastPresentedLayout = null
-        // #694 评论 5692161955 问题3：重置 composition 过渡同步状态
-        wasCompositionActive = false
         // #708 评论 5723410606 第一节/第二节/第三节：重置 draw snapshot / fingerprint
         drawSnapshotState = ComposeEditorDrawSnapshot()
         lastObservedLayoutFingerprint = null

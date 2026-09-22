@@ -107,27 +107,6 @@ class ComposeVisualFrameCoordinator(
     }
 
     /**
-     * #694 评论 5691696678 问题2：屏幕基线推进入口 —
-     * 本地输入命中或 IME composition 活跃时，真实 layout 已经呈现但不应走 Core visual path
-     * 生成 patch。
-     */
-    fun observePresentedLayout(snapshot: ComposeLayoutSnapshot) {
-        val presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
-        latest = presented
-
-        EditorDiagnosticsEvents.editorLayoutPresented(
-            targetId = targetId,
-            layoutTextLength = snapshot.result.layoutInput.text.text.length,
-        )
-
-        when {
-            lastConsumed == null -> lastConsumed = presented
-            pending == null -> lastConsumed = presented
-            pending?.baseText == presented.text -> lastConsumed = presented
-        }
-    }
-
-    /**
      * 双向合流：当 pending chain 与两份 layout 概念同时满足匹配条件时生成 patch。
      */
     private fun tryBuildPatch(): FrameUpdate {
