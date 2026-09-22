@@ -47,7 +47,6 @@ class ComposeVisualRebaseOffsetMapTest {
             EditorEditFact(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
                 operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
@@ -90,7 +89,6 @@ class ComposeVisualRebaseOffsetMapTest {
             EditorEditFact(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
                 operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
@@ -166,7 +164,6 @@ class ComposeVisualRebaseOffsetMapTest {
             EditorEditFact(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
                 operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,

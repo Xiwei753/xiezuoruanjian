@@ -218,7 +218,6 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
             EditorEditFact(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
                 operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
                 coreTransactionId = 2L,
                 baseRevision = 0L,
                 newRevision = 0L,
@@ -340,7 +339,6 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         EditorEditFact(
             cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
             operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
             coreTransactionId = coreTransactionId,
             baseRevision = 0L,
             newRevision = 0L,

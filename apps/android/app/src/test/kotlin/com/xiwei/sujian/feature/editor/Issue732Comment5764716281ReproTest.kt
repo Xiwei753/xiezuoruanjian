@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import com.xiwei.sujian.feature.editor.visual.AnimationMode
 import com.xiwei.sujian.feature.editor.visual.ComposeVisualPatch
 import com.xiwei.sujian.feature.editor.visual.ComposeVisualTimeline
 import com.xiwei.sujian.feature.editor.visual.VisualOffsetMapEntry
@@ -22,7 +23,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
-import com.xiwei.sujian.feature.editor.visual.AnimationMode
 
 /**
  * Issue #732 评论 5764716281 复现测试 —

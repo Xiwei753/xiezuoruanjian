@@ -237,8 +237,8 @@ class ComposeEditorVisualState(
         // when 块保留以文档化各 outcome 的处理归属。
         when (outcome) {
             InputSnapshotOutcome.Composing -> {
-                // composition 仍活跃：onAuthoritativeLayout 的 compositionActive 分支只缓存 preedit layout，
-                // 不碰 coordinator 的 committed baseline。
+                // composition 仍活跃：onAuthoritativeLayout 的 compositionActive 分支把 preedit layout
+                // 当候选几何交给 frameCoordinator.onProvisionalLayout（只缓存 latest，不碰 committed baseline）。
             }
             InputSnapshotOutcome.LocalCommitAccepted -> {
                 // Core 已接受本地 commit，会通过 onEditFact 发送 EditorEditFact 驱动视觉 patch。
@@ -303,90 +303,103 @@ class ComposeEditorVisualState(
     }
 
     /**
-    * 系统给出权威布局 — 只记录，不修改输入几何。
-    *
-    * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
-    *
-    * #694 评论第 2/3 步：[compositionActive] 表示当前 IME composition 是否活跃
-    * （bridge.state.composition != null）。composition 活跃时只推进布局基线，
-    * 不播放 preedit 的吞吐；composition 结束后由 Core 通过 [onEditFact] 驱动视觉 patch。
-    *
+     * 系统给出权威布局 — 只记录，不修改输入几何。
+     *
+     * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
+     *
+     * #694 评论第 2/3 步：[compositionActive] 表示当前 IME composition 是否活跃
+     * （bridge.state.composition != null）。composition 活跃时只推进布局基线，
+     * 不播放 preedit 的吞吐；composition 结束后由 Core 通过 [onEditFact] 驱动视觉 patch。
+     *
      * Issue #735 评论 5773604666 问题1：删除双视觉入口后，本方法不再配对 local input 生成 local patch。
      * 所有正文编辑统一走 [onEditFact] → [ComposeVisualFrameCoordinator.onEditFact] → [applyFrameUpdate]。
      * 本方法只负责：
      * - fingerprint 去重（纯 selection/scroll 不触发布局 epoch）。
-     * - composition 活跃时只缓存 preedit layout（不调 frameCoordinator，不碰 committed baseline）。
+     * - composition 活跃时把 preedit layout 当候选几何交给
+     *   [ComposeVisualFrameCoordinator.onProvisionalLayout]（不推进 committed baseline）。
      * - composition 结束后一律把真实 layout 交给 [ComposeVisualFrameCoordinator.onLayout]，
      *   由 onEditFact/onLayout 双向合流配对生成 patch（Issue #735 评论 5774895427）。
+     *   即使 commit 后没有新的 onTextLayout 回调，preedit 阶段缓存的候选几何也够用
+     *   （Issue #735 评论 5775326365）。
      * - 非 composition 的 Core visual path（Undo/Redo/Programmatic/Load/Format）。
-    *
-    * @param result 系统 [BasicTextField] 的 onTextLayout 给出的最终布局结果。
-    * @param selection 当前选区（UTF-16）。
-    * @param scrollY 当前滚动位置（px）。
-    * @param compositionActive 当前 IME composition 是否活跃。
-    */
+     *
+     * @param result 系统 [BasicTextField] 的 onTextLayout 给出的最终布局结果。
+     * @param selection 当前选区（UTF-16）。
+     * @param scrollY 当前滚动位置（px）。
+     * @param compositionActive 当前 IME composition 是否活跃。
+     */
     fun onAuthoritativeLayout(
-       result: TextLayoutResult,
-       selection: TextRange,
-       scrollY: Int,
-       compositionActive: Boolean = false,
+        result: TextLayoutResult,
+        selection: TextRange,
+        scrollY: Int,
+        compositionActive: Boolean = false,
     ) {
-       val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
+        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
 
-       // #708 评论 5723410606 第三节：layout 回路真正断开 —
-       // onAuthoritativeLayout 最前面先算 fingerprint。
-       // 相同正文+相同几何时：
-       // - 可以更新纯 selection/caret 的 draw 数据；
+        // #708 评论 5723410606 第三节：layout 回路真正断开 —
+        // onAuthoritativeLayout 最前面先算 fingerprint。
+        // 相同正文+相同几何时：
+        // - 可以更新纯 selection/caret 的 draw 数据；
         // - 不更新 layout epoch；
         // - 不调用 frameCoordinator.onLayout；
-       // - 不重新发布相同 TextLayoutResult；
-       // - 直接返回。
-       // 只有真实 text/line geometry 变化才把新 layout 写进 draw snapshot。
-       // 旧实现先 _latestLayout.update 再 hasSameTextAndGeometry 去重，顺序反了。
-       val fingerprint = layoutFingerprint(snapshot)
-       val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
-       if (fingerprintUnchanged) {
-           // 纯 selection/caret 变化：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
-           // Issue #728 评论 5754839786 缺口2：fingerprintUnchanged 时无 active motion（纯 selection），
-           // 直接把 restingCaretRect 更新到当前 selection.end 对应的 caret rect，
-           // 并写进 drawSnapshotState.caretRect，保证静止/selection 移动后屏幕 caret 停在新位置。
-           restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
-           drawSnapshotState =
-               drawSnapshotState.copy(
-                   layout = snapshot,
-                   caretRect = restingCaretRect,
-               )
-           return
-       }
-       lastObservedLayoutFingerprint = fingerprint
+        // - 不重新发布相同 TextLayoutResult；
+        // - 直接返回。
+        // 只有真实 text/line geometry 变化才把新 layout 写进 draw snapshot。
+        // 旧实现先 _latestLayout.update 再 hasSameTextAndGeometry 去重，顺序反了。
+        val fingerprint = layoutFingerprint(snapshot)
+        val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
+        if (fingerprintUnchanged) {
+            // 纯 selection/caret 变化：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
+            // Issue #728 评论 5754839786 缺口2：fingerprintUnchanged 时无 active motion（纯 selection），
+            // 直接把 restingCaretRect 更新到当前 selection.end 对应的 caret rect，
+            // 并写进 drawSnapshotState.caretRect，保证静止/selection 移动后屏幕 caret 停在新位置。
+            restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    layout = snapshot,
+                    caretRect = restingCaretRect,
+                )
+            return
+        }
+        lastObservedLayoutFingerprint = fingerprint
 
-       // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
-       _latestLayout.update { snapshot }
-       // Issue #728 评论 5754839786 缺口2：真实 layout 变化后更新 restingCaretRect —
-       // 后续分支（composition active / Core visual path）会
-       // 在此基础上把 drawSnapshotState.caretRect 同步给 draw 层。active motion 期间 motion sample
-       // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
+        // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
+        _latestLayout.update { snapshot }
+        // Issue #728 评论 5754839786 缺口2：真实 layout 变化后更新 restingCaretRect —
+        // 后续分支（composition active / Core visual path）会
+        // 在此基础上把 drawSnapshotState.caretRect 同步给 draw 层。active motion 期间 motion sample
+        // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
         restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
 
-         // composition 活跃时只缓存 preedit layout，不生成 patch（不播放 preedit 的吞吐）
-         if (compositionActive) {
-             // #694 评论 5692161955 问题3 / Issue #735 评论 5774895427：
-             // composition 活跃分支只更新 lastPresentedLayout，不调 frameCoordinator。
-             // 原因：frameCoordinator.lastConsumed 是 committed baseline，
-             // 必须只跟 Core 已提交正文，不能推到未提交给 Core 的 preedit。
-             // composition 结束后由 onLayout 统一接管，onEditFact/onLayout 双向合流配对。
-             lastPresentedLayout = snapshot
-             // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
-             // composition 期间无 active motion（preedit 不播放吞吐），用 restingCaretRect 填 drawSnapshot。
-             drawSnapshotState =
-                 drawSnapshotState.copy(
-                     layout = snapshot,
-                     caretRect = restingCaretRect,
-                 )
-             return
-         }
+        // composition 活跃时只缓存 preedit layout，不生成 patch（不播放 preedit 的吞吐）
+        if (compositionActive) {
+            // #694 评论 5692161955 问题3 / Issue #735 评论 5774895427：
+            // composition 活跃分支不调 frameCoordinator.onLayout（那会推进 committed baseline）。
+            //
+            // Issue #735 评论 5775326365：但要把 preedit layout 当候选几何交给
+            // frameCoordinator.onProvisionalLayout — coordinator 只缓存 latest（平台已经有 B 的真实几何），
+            // 不推进 committed baseline（仍保持 A）。
+            //
+            // 这样 commit 时无论后面还有没有新的 onTextLayout(B)：
+            // - fact 先到：onEditFact(A->B) 可以直接拿 coordinator 已缓存的 latest=B，生成 patch；
+            // - final layout 先到：普通 onLayout(B) 不会把 A baseline 提前推进，fact 后到照样配；
+            // - 根本没有 final layout 回调：preedit 阶段缓存的 B layout 已经够用了。
+            //
+            // lastObservedLayoutFingerprint 继续服务 VisualState 的重复布局去重，
+            // 但不决定 coordinator 是否"知道"某个真实平台 layout。
+            frameCoordinator.onProvisionalLayout(snapshot)
+            lastPresentedLayout = snapshot
+            // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
+            // composition 期间无 active motion（preedit 不播放吞吐），用 restingCaretRect 填 drawSnapshot。
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    layout = snapshot,
+                    caretRect = restingCaretRect,
+                )
+            return
+        }
 
-         // Core visual path（Undo/Redo/Programmatic/Load/Format 等真正需要 Core 驱动的修改）
+        // Core visual path（Undo/Redo/Programmatic/Load/Format 等真正需要 Core 驱动的修改）
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot

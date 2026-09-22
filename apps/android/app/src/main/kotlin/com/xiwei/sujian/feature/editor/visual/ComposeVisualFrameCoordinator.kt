@@ -85,7 +85,38 @@ class ComposeVisualFrameCoordinator(
     }
 
     /**
+     * 候选几何到达 — 平台已经算出某个真实 layout（例如 IME preedit 期间的最终文字 B），
+     * 但这份 layout 不允许推进 committed baseline。
+     *
+     * 只缓存 [latest]，不初始化/推进 [lastConsumed]，不生成 patch，直接返回 [FrameUpdate.Empty]。
+     *
+     * Issue #735 评论 5775326365：IME preedit 已经是最终文字 B 时，composition 活跃分支把 preedit
+     * layout 交给本方法缓存。commit 时无论后面还有没有新的 onTextLayout(B)：
+     * - fact 先到：[onEditFact]`(A->B)` 可以直接拿 coordinator 已缓存的 latest=B，生成 patch；
+     * - final layout 先到：普通 [onLayout]`(B)` 不会把 A baseline 提前推进，fact 后到照样配；
+     * - 根本没有 final layout 回调：preedit 阶段缓存的 B layout 已经够用了。
+     *
+     * 与已删除的 `observePresentedLayout` 的关键区别：本方法**绝不**碰 [lastConsumed]，
+     * 不会偷偷推进 committed baseline。
+     */
+    fun onProvisionalLayout(snapshot: ComposeLayoutSnapshot): FrameUpdate {
+        latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+
+        EditorDiagnosticsEvents.editorLayoutPresented(
+            targetId = targetId,
+            layoutTextLength = snapshot.result.layoutInput.text.text.length,
+        )
+
+        // 只缓存 latest，不初始化/推进 lastConsumed，不生成 patch。
+        return FrameUpdate.Empty
+    }
+
+    /**
      * 真实屏幕布局到达 — 更新最新 layout，然后尝试合流生成 patch。
+     *
+     * 本方法处理可推进 committed baseline 的普通 layout（composition 结束后的最终 layout、
+     * Core visual path 的 Undo/Redo/Programmatic/Load/Format 等）。
+     * IME composition 活跃期间的 preedit layout 应走 [onProvisionalLayout]。
      */
     fun onLayout(snapshot: ComposeLayoutSnapshot): FrameUpdate {
         latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
@@ -185,7 +216,8 @@ class ComposeVisualFrameCoordinator(
                 -> emptyList()
             }
 
-        val oldSelectionEnd = chain.first().oldSelectionEndUtf16.let { if (it >= 0) it else consumed.layout.selection.end }
+        val oldSelectionEnd =
+            chain.first().oldSelectionEndUtf16.let { if (it >= 0) it else consumed.layout.selection.end }
         val newSelectionEnd = chain.last().newSelectionEndUtf16.let { if (it >= 0) it else newest.layout.selection.end }
         val originCaretRect = consumed.layout.cursorRect(oldSelectionEnd)
         val targetCaretRect = newest.layout.cursorRect(newSelectionEnd)

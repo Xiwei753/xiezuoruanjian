@@ -498,8 +498,7 @@ class ComposeEditMotion(
      *
      * Issue #735 评论 5773604666 问题2：只用单一 [durationNanos]。
      */
-    fun isFinished(frameTimeNanos: Long): Boolean =
-        computeProgress(frameTimeNanos, durationNanos).finished
+    fun isFinished(frameTimeNanos: Long): Boolean = computeProgress(frameTimeNanos, durationNanos).finished
 
     /**
      * 算单个通道的 progress 和 finished 状态。

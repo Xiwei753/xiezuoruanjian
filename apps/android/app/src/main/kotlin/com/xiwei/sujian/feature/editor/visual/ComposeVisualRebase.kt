@@ -989,7 +989,7 @@ internal object ComposeVisualRebase {
         return result
     }
 
- /**
+    /**
      * #689 评论 5676120929 问题3：获取 fact 的 entries — 优先用 offsetMap，没有则根据
      * replaceBounds + expectedOldText/expectedNewText 生成 fallback survival map。
      *
@@ -997,10 +997,14 @@ internal object ComposeVisualRebase {
      */
     fun entriesForFact(fact: EditorEditFact): List<VisualOffsetMapEntry> {
         fact.offsetMap?.entries?.let { return it }
-        return buildFallbackEntriesFromReplaceBounds(fact.replaceBounds, fact.expectedOldText.length, fact.expectedNewText.length)
+        return buildFallbackEntriesFromReplaceBounds(
+            fact.replaceBounds,
+            fact.expectedOldText.length,
+            fact.expectedNewText.length,
+        )
     }
 
-/**
+    /**
      * 根据 replaceBounds + oldLen + newLen
      * 生成 fallback survival map：
      * - replace 前面的前缀：old [0, oldStart) -> new [0, newStart)
@@ -1053,7 +1057,7 @@ internal object ComposeVisualRebase {
         return entries
     }
 
- /**
+    /**
      * #644 评论 #684：合成整条 offset map chain。
      *
      * #689 评论 5676120929 问题3：不再因某一笔 offsetMap == null 就返回 null，

@@ -341,6 +341,9 @@ class ComposeVisualTimelineComment5675270164ReproTest {
         )
 
         // Step 2: 删除中间换行 [2,3)，"ab\nc" → "abc"
+        // Issue #720 评论 5746323050：本地输入 + 跨行 reflow → 'c' 释放给 BasicTextField。
+        // coreTransactionIds 为空表示本地 patch（无 Core 事务），timeline 的 shouldRelease
+        // 据此判断本地输入 + naturalGeometryChanged → 释放幸存文字给 BasicTextField。
         val frameTimeB = 30L * 1_000_000L
         val deletePatch =
             makePatch(
@@ -356,6 +359,8 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                     ),
                 // 删除 "\n"
                 deletedUnits = listOf(TextRange(2, 3)),
+                // 本地输入 patch：无 Core 事务 ID，让 shouldRelease 判定为本地编辑
+                coreTransactionIds = emptyList(),
             )
         timeline.applyPatch(
             deletePatch,
@@ -521,10 +526,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
         durationMs: Long = 100L,
+        coreTransactionIds: List<Long> = listOf(id),
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
-            coreTransactionIds = listOf(id),
+            coreTransactionIds = coreTransactionIds,
             oldLayout = oldLayout,
             newLayout = newLayout,
             offsetMap = offsetMap,

@@ -130,7 +130,6 @@ class ComposeVisualTransactionRestartReproTest {
             EditorEditFact(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
                 operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
                 coreTransactionId = 2L,
                 baseRevision = 1L,
                 newRevision = 2L,
@@ -263,7 +262,6 @@ class ComposeVisualTransactionRestartReproTest {
         EditorEditFact(
             cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
             operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-
             coreTransactionId = coreTxnId,
             baseRevision = baseRev,
             newRevision = newRev,

@@ -195,42 +195,7 @@ fun mapCoreEditFactToEditorEditFact(event: CoreEditFactEvent): EditorEditFact {
             emptyList()
         }
 
-    val visualOffsetMap =
-        event.offsetMap?.let { coreOffsetMap ->
-            VisualOffsetMap(
-                entries =
-                    coreOffsetMap.entries.map { entry ->
-                        val oldStartUtf16 =
-                            TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
-                        val newStartUtf16 =
-                            TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
-                        val oldEndByte = entry.oldByteOffset + entry.length
-                        val newEndByte = entry.newByteOffset + entry.length
-                        val oldEndUtf16 =
-                            TextOffsetUtils.utf16OffsetForUtf8Byte(
-                                event.oldText,
-                                oldEndByte.coerceAtMost(event.oldText.toByteArray(Charsets.UTF_8).size),
-                            )
-                        val newEndUtf16 =
-                            TextOffsetUtils.utf16OffsetForUtf8Byte(
-                                event.newText,
-                                newEndByte.coerceAtMost(event.newText.toByteArray(Charsets.UTF_8).size),
-                            )
-                        VisualOffsetMapEntry(
-                            oldStart = oldStartUtf16,
-                            newStart = newStartUtf16,
-                            length = newEndUtf16 - newStartUtf16,
-                            kind =
-                                when (entry.kind) {
-                                    OffsetMapKind.IDENTITY ->
-                                        VisualOffsetMapKind.IDENTITY
-                                    OffsetMapKind.SHIFTED ->
-                                        VisualOffsetMapKind.SHIFTED
-                                },
-                        )
-                    },
-            )
-        }
+    val visualOffsetMap = mapCoreOffsetMapToVisual(event)
 
     val oldSelectionEndUtf16 =
         TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(event.oldText, event.oldSelectionHeadUtf8) ?: -1
@@ -256,6 +221,50 @@ fun mapCoreEditFactToEditorEditFact(event: CoreEditFactEvent): EditorEditFact {
         newSelectionEndUtf16 = newSelectionEndUtf16,
     )
 }
+
+/**
+ * Issue #735 评论 5775326365：从 [mapCoreEditFactToEditorEditFact] 提取的 offsetMap 映射辅助函数 —
+ * 把 Core UTF-8 byte offset map 转成 Compose UTF-16 offset map。
+ *
+ * 提取目的：降低 [mapCoreEditFactToEditorEditFact] 的 LongMethod/CyclomaticComplexMethod 度量，
+ * 不改变任何逻辑。
+ */
+private fun mapCoreOffsetMapToVisual(event: CoreEditFactEvent): VisualOffsetMap? =
+    event.offsetMap?.let { coreOffsetMap ->
+        VisualOffsetMap(
+            entries =
+                coreOffsetMap.entries.map { entry ->
+                    val oldStartUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
+                    val newStartUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
+                    val oldEndByte = entry.oldByteOffset + entry.length
+                    val newEndByte = entry.newByteOffset + entry.length
+                    val oldEndUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(
+                            event.oldText,
+                            oldEndByte.coerceAtMost(event.oldText.toByteArray(Charsets.UTF_8).size),
+                        )
+                    val newEndUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(
+                            event.newText,
+                            newEndByte.coerceAtMost(event.newText.toByteArray(Charsets.UTF_8).size),
+                        )
+                    VisualOffsetMapEntry(
+                        oldStart = oldStartUtf16,
+                        newStart = newStartUtf16,
+                        length = newEndUtf16 - newStartUtf16,
+                        kind =
+                            when (entry.kind) {
+                                OffsetMapKind.IDENTITY ->
+                                    VisualOffsetMapKind.IDENTITY
+                                OffsetMapKind.SHIFTED ->
+                                    VisualOffsetMapKind.SHIFTED
+                            },
+                    )
+                },
+        )
+    }
 
 /**
  * #641 评论 5458880786 问题2b：用 oldText/newText 做 code-point-safe diff 算 [VisualReplaceBounds] —
