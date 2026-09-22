@@ -19,6 +19,11 @@ import com.xiwei.sujian.feature.editor.layout.cursorRect
  * 本协调器只负责把 [EditorEditFact] + old/new [ComposeLayoutSnapshot]
  * 变成 Android 平台自己的 visual patch。
  *
+ * Issue #737：本协调器只整理 motion 输入 — 生成 [ComposeVisualPatch] 后交给
+ * [ComposeEditorVisualState.drainPendingPatchesAtFrame] 直接构造 [CoordinatedEditMotion]。
+ * 不再"把文字 unit 提前交给 timeline"（timeline 已删除），
+ * 也不直接决定文字动画启动（由 VisualState 在 drain 时根据 motionPolicy 决定）。
+ *
  * `onEditFact()` 和 `onLayout()` 最终只返回 [ComposeVisualPatch]。
  */
 class ComposeVisualFrameCoordinator(

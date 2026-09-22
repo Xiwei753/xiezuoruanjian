@@ -224,7 +224,7 @@ class ComposeVisualIssue694ReproTest {
         // 期望：batch 合成后只 applyPatch 一次（applied.size == 1），retained text/cursor 只重定向一次。
         assertEquals(
             "同一 VSync 应只 applyPatch 一次（batch 合成），不应逐笔重定向 retained text/cursor。\n" +
-                "当前 applyPatch 调用次数=${applied.size}，unit 数量=${scene.units.size}\n" +
+                "当前 applyPatch 调用次数=${applied.size}，glyph overlay 数量=${scene?.glyphOverlays?.size ?: 0}\n" +
                 "Issue #694 评论第 7 步：'同一 VSync 不能逐笔重定向几何'",
             1,
             applied.size,

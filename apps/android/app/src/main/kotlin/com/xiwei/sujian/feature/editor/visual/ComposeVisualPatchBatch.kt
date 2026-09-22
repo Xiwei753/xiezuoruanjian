@@ -104,7 +104,7 @@ internal object ComposeVisualPatchBatch {
 
         // Issue #728 评论 5754045689：batch 合成 caret rect —
         // origin 取第一笔的 origin，target 取最后一笔的 target。
-        // 文字吞吐和 caret 移动统一由 ComposeEditMotion 驱动。
+        // 文字吞吐和 caret 移动统一由 CoordinatedEditMotion 驱动（Issue #737）。
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }

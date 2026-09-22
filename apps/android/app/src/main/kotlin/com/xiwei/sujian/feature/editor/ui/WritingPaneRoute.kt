@@ -35,6 +35,9 @@ import com.xiwei.sujian.feature.editor.window.EditableTextTarget
  *
  * #641：正文 UI 由 state-based [BasicTextField] 接管 —
  * 编辑器只在 WorkspaceLocation.Editor 真正存在，离开 Composition 自动收起 IME。
+ *
+ * Issue #737：保留平台自动换行 — 不引入软换行占位字符（U+200B）或 projection。
+ * [rememberEditorTextStyle] 只负责产品需要的 line break / CJK 规则。
  */
 @Composable
 @Suppress("LongParameterList")

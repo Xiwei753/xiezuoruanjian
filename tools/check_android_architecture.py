@@ -458,7 +458,9 @@ def rule_visual_motion_pure() -> list[Finding]:
             # 做显示数据，与旧 ComposeVisualFrame/ComposeVisualTransaction 同类，
             # 不写正文持久状态，加入豁免。
             "feature/editor/visual/ComposeVisualPatch.kt",
-            "feature/editor/visual/ComposeVisualTimeline.kt",
+            # Issue #737：ComposeVisualTimeline 已删除，由 CoordinatedEditMotion 取代。
+            "feature/editor/visual/CoordinatedEditMotion.kt",
+            "feature/editor/visual/CaretTraversal.kt",
             # #644 评论 5467821839 第5节：从 ComposeEditorVisualState 拆出的纯计算/
             # 数据类，引用 androidx.compose.ui.geometry.Rect / TextLayoutResult 做显示，
             # 与 ComposeVisualFrame 同类，不写正文持久状态。
@@ -489,7 +491,7 @@ def rule_visual_motion_pure() -> list[Finding]:
             "feature/editor/visual/ComposeVisualClip.kt",
             # Issue #728 评论 5754045689：统一编辑 motion 纯数据类，
             # 引用 Rect 做 caret 几何数据，与 ComposeVisualPatch 同类，不写正文持久状态。
-            "feature/editor/visual/ComposeEditMotion.kt",
+            # Issue #737：ComposeEditMotion 已删除，由 CoordinatedEditMotion 取代。
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

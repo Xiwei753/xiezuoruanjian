@@ -26,51 +26,29 @@ import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.pathForRawRange
 
 /**
- * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
- * 统一 draw 层，断开"动画 hiddenRanges -> OutputTransformation 改正文显示 ->
- * BasicTextField 再 layout -> VisualState 再消费 layout"回路。
+ * Issue #737：编辑器绘制链根 — 重写为只接收一份 motion sample。
  *
- * #698 评论 5699401353 修复1：本 draw 层真正包住 [BasicTextField]（[content]），
- * 用 `Modifier.drawWithContent` 在绘制阶段对 [ComposeVisualScene.hiddenRanges] 做
- * `ClipOp.Difference` 裁切，使 `drawContent()`（BasicTextField 的完整绘制）只在
- * 非 hidden 区域可见（只在绘制阶段排除动画接管区域，不改 BasicTextField 输出表示），
- * 然后画动画字（[drawVisualScene]）。
+ * 删除旧架构的两条分支：
+ * - 旧 `drawCurrentEditorFrame` 接收 `scene + layout + caretRect`
+ * - 旧 `drawVisualScene` 消费 [ComposeVisualScene]（已删除）
  *
- * 不再用"拿主题背景色盖正文"（旧 `clipSystemTextForHiddenRanges` + `drawPath(backgroundColor)`）—
- * 那会把 selection/search highlight 一起盖掉，背景非纯 surface 时会画出错误底色。
- * 现在用 `ClipOp.Difference` 只裁切绘制区域，不引入任何颜色，selection/search highlight
- * 由 BasicTextField 自己画，裁切后自然只在非 hidden 区域可见。
+ * 新架构：
+ * - [drawCurrentEditorFrame] 接收 `motionSample + layout + restingCaretRect`。
+ * - motionSample != null 且 [CoordinatedEditMotion.Sample.isValid]：
+ *   画 BasicTextField 内容（裁掉 hiddenRanges）+ glyph overlays + animated caret。
+ * - 否则：画 BasicTextField 内容 + resting caret。
  *
- * 本 draw 层只做两件事，全部使用同一个 [TextLayoutResult]（latestLayout）、
- * 同一个 scrollY 和同一个 frame clock（由 [LaunchedEffect] 的 [withFrameNanos] 提供）：
- *
- * 1. **正文裁切**：对 `scene.hiddenRanges` 合并成单个 [Path] 后用
- *    `clipPath(path, clipOp = ClipOp.Difference)` 包住 `drawContent()`，
- *    使 BasicTextField 的完整绘制只在非 hidden 区域可见。
- *    hiddenRanges 为空时直接 `drawContent()` 画完整原正文。
- *    **语义收死（#711 评论 5738906634）**：hiddenRanges 只能表示
- *    "这一帧确实由动画层接管的字符"（新插入正在吐字、被删除的旧字 ghost），
- *    不能表示"位置变了所以想自己重画的幸存正文"。
- *    没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges，
- *    直接让 BasicTextField 画最终位置。
- * 2. **动画字重画**：[drawVisualScene] — 从原 [ComposeTextAnimationOverlay] 搬来，逻辑不变。
+ * 一笔编辑只有一个 motion — 不再分别维护"文字动画是否 active"和"光标动画是否 active"。
  *
  * BasicTextField 始终画完整真实正文，本 draw 层只在绘制阶段裁切动画接管区域，
- * onTextLayout 只因真实正文/几何变化触发，不再因 hiddenRanges 变化触发二次 layout，断开回路。
- *
- * #708 评论 5723410606 第一节：删除整屏旧帧缓存（stableFrameLayer + ComposeLocalFrameBarrier）—
- * 真正的画面状态改成只在 `drawWithContent` 内取 [ComposeEditorVisualState.drawSnapshot]，
- * 不再在 Composable 主体读 visualScene/restingCursorRect/latestLayout StateFlow，
- * 动画每帧只重跑 Draw，不重新执行 BasicTextField 的 Composition/Layout。
- * 每一帧都先画当前 BasicTextField，只对真正由动画接管的 range 做 Difference clip，
- * 再画局部动画层；不再有"本地输入时整块不 drawContent，只把上一整屏重放"的分支。
+ * onTextLayout 只因真实正文/几何变化触发，不再因 hiddenRanges 变化触发二次 layout。
  *
  * @param visualState 编辑器视觉状态。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
  * @param textColor 文字颜色 — 从主题 role 注入。
  * @param cursorColor 光标颜色 — 从主题 role 注入。
  *   Issue #728 评论 5754045689：系统 caret 已透明（cursorBrush = Color.Transparent），
- *   draw 层用统一 motion 的 caretRect 画 caret。
+ *   draw 层用 motion sample 的 caretRect 画 caret。
  * @param modifier Compose modifier。
  * @param content 被包住的正文 composable — 通常是 [BasicTextField]。
  *   本 draw 层用 `drawWithContent` 在绘制阶段裁切 hiddenRanges，使 content 只在非 hidden 区域可见。
@@ -88,19 +66,20 @@ fun EditorTextFieldDrawLayer(
     val density = LocalDensity.current
 
     // #708 评论 5723410606 第一节：每帧状态不在 Composable 主体读取 —
-    // visualScene / latestLayout 改成只在 drawWithContent 内取 drawSnapshot()。
+    // motionSample / latestLayout 改成只在 drawWithContent 内取 drawSnapshot()。
     // frameRequestVersion 继续作为启动帧循环的低频信号。
     // Issue #732 评论 5763493968 第3节：policy 改变、selection-only caret target、patch 入队
     // 都会唤醒同一个帧循环 — 所有引用 frameRequestVersion 的地方同步改名。
     val frameRequestVersion by visualState.frameRequestVersion.collectAsStateWithLifecycle()
 
-    // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
+    // #689 评论 5674631257 步骤8：只在有活动 motion 时用 Compose 的帧时钟推进。
     // #689 评论 5676120929 问题1：用 frameRequestVersion 唤醒帧循环，真正数据从队列 drain。
     // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos。
     // Issue #732 评论 5763493968 第3节：单一 withFrameNanos 循环 —
-    // 每帧顺序固定为：应用 pending policy → 合并/消费 patch → 创建或 redirect 同一笔
-    // ComposeEditMotion → sample motion → sample timeline → draw。
-    // 不再让设置同步 effect 和 draw loop 分别拿自己的 frame。
+    // 每帧顺序固定为：应用 pending policy → 合并/消费 patch → 创建同一笔
+    // CoordinatedEditMotion → sample motion → draw。
+    // Issue #737：sampleVisualScene 返回 motion sample（不再返回 ComposeVisualScene），
+    // 但方法名保留以减少调用点改动。
     LaunchedEffect(frameRequestVersion) {
         if (frameRequestVersion <= 0L) return@LaunchedEffect
         while (true) {
@@ -122,9 +101,9 @@ fun EditorTextFieldDrawLayer(
                     // 动画每帧只重跑 Draw，不重新执行 BasicTextField 的 Composition/Layout。
                     val snapshot = visualState.drawSnapshot()
                     drawCurrentEditorFrame(
-                        scene = snapshot.scene,
-                        latestLayout = snapshot.layout,
-                        caretRect = snapshot.caretRect,
+                        motionSample = snapshot.motionSample,
+                        layout = snapshot.layout,
+                        restingCaretRect = snapshot.restingCaretRect,
                         scrollY = scrollY,
                         textColor = textColor,
                         cursorColor = cursorColor,
@@ -138,7 +117,7 @@ fun EditorTextFieldDrawLayer(
 }
 
 /**
- * #698 评论 5699401353 修复1：把 [hiddenRanges] 合并成单个 [Path] —
+ * Issue #728 评论 5754045689：把 [hiddenRanges] 合并成单个 [Path] —
  * 对每个 hiddenRange 用 [TextLayoutResult.getPathForRange] 取 path，
  * 用 [Path.addPath] 拼接成合并 path，供 `clipPath(clipOp = ClipOp.Difference)` 一次裁切。
  *
@@ -146,16 +125,11 @@ fun EditorTextFieldDrawLayer(
  * layout 为 null 时返回 null（首帧或章节切换中）。hiddenRanges 为空或全部无效时返回 null。
  *
  * #698 评论 5700812160：[scrollY] 把 [TextLayoutResult.getPathForRange] 得到的正文坐标 path
- * 换算到当前编辑器视口坐标。同一 draw 层里 [drawTranslatedRangeText] 用 `translate.y - scrollY`、
- * [drawVisualCursorRect] 用 `rect.top/bottom - scrollY`，唯独裁掉 BasicTextField 原字的
- * hidden path 之前没减 `scrollY`，编辑器向下滚过一段距离后裁切位置（layoutY）与动画字位置
- * （layoutY - scrollY）错开，会出现重影、缺字或局部空白。这里给 [Path.addPath] 传视口偏移
- * `Offset(0f, -scrollY)` 统一三者坐标系，不改 BasicTextField 自己的滚动。
+ * 换算到当前编辑器视口坐标。
  *
  * @param hiddenRanges 需要裁切的正文 range 列表。
  *   **语义收死（#711 评论 5738906634）**：只能表示"这一帧确实由动画层接管的字符"
  *   （新插入正在吐字、被删除的旧字 ghost），不能表示"位置变了所以想自己重画的幸存正文"。
- *   没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges。
  * @param layout 当前正文 layout 快照；null 时返回 null。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value，
  *   用于把正文坐标 path 换算到视口坐标。
@@ -189,138 +163,54 @@ private fun DrawScope.buildHiddenPath(
 }
 
 /**
- * #689 评论 5674631257 步骤8：绘制持续视觉场景 —
- * 直接读 [ComposeVisualScene.units]，每个 unit 的 alpha、屏幕位置已经由 timeline 算好。
+ * Issue #737：绘制单个 glyph overlay —
+ * 从 [CoordinatedEditMotion.GlyphOverlay] 读取 range / layout / role / clipFraction，
+ * 在所属 layout 的真实位置画一段 range 文字，按 clipFraction 裁切可见区域。
  *
- * #703 评论 B：空间进度驱动吞吐字 —
- * 用 [ComposeVisualScene.unitClipFractions] 裁切 glyph 可见区域。
- * 不再纯靠 alpha 决定文字整体出现/消失。
- * - 吐字（inserted unit）：cursor 从 glyph 左侧向右侧移动，
- *   glyph 可见区域 = [glyph.left, glyph.left + width * fraction]。
- * - 吞字（deleted ghost）：#703 评论 A 缺陷2 统一边界模型 —
- *   glyph 可见区域 = [glyph.left, glyph.left + width * fraction]（与 inserted 一致）。
- *   fraction = (cursor.left - glyph.left) / glyph.width，
- *   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
- * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
+ * - [GlyphRole.Inserted]（吐字）：clipRect = [left, left + width * fraction]
+ * - [GlyphRole.Deleted]（吞字）：clipRect = [left, left + width * fraction]
+ *   （统一边界模型，fraction 从 1→0 表示完全可见→完全被吞掉）
+ *
+ * @param overlay glyph overlay。
+ * @param scrollY 当前滚动位置（px）。
+ * @param textColor 文字颜色。
  */
-private fun DrawScope.drawVisualScene(
-    scene: ComposeVisualScene,
+private fun DrawScope.drawGlyphOverlay(
+    overlay: CoordinatedEditMotion.GlyphOverlay,
     scrollY: Int,
     textColor: Color,
 ) {
-    for (unit in scene.units) {
-        val range = unit.range
-        if (range.start >= range.end) continue
-        // Issue #717 评论 5742273757 修复3：unit.range 是 raw 坐标，
-        // 通过 snapshot 做 raw→display 映射后再访问 TextLayoutResult。
-        val snapshot = unit.layout
-        val result = snapshot.result
-        // Issue #717 评论 5742904417 修复1：unit.range 是 raw 坐标，边界检查用 rawText 长度。
-        if (range.end > snapshot.result.layoutInput.text.text.length) continue
-        // alpha 已由 timeline 算好，直接读 unit.alpha.from（sample 后 from == 当前值）
-        val rawAlpha = unit.alpha.from.coerceIn(0f, 1f)
-        // #703 评论 5709208101 问题2：coordinated + spatial clip 模式下 alpha 固定 1 —
-        // 整字亮度由空间裁切（clipFraction）控制，alpha 通道不再独立控制整字出现/消失。
-        // alpha 通道仍保持 0->1 / 1->0 供非 coordinated 场景和现有测试使用，
-        // 这里只在 draw 层覆盖 effective alpha，不改 timeline 的 alpha 通道语义。
-        val alpha = if (scene.coordinatedSpatialClip) 1f else rawAlpha
-        if (alpha <= 0f) continue
-        // position 已由 timeline 算好，直接读 unit.position.from（sample 后 from == 当前值）
-        val currentPosition = unit.position.from
-        val targetRange = unit.targetRange
-        // Issue #732 评论 5763493968 第4节：coordinated 模式的 glyph fraction 只能来自当前
-        // ComposeEditMotion.Sample — 删除"找不到 unit fraction 就自己用 0/1 fallback"的后门。
-        // coordinated 模式下没有 motion sample fraction 时不画此 unit（直接收口到最终正文，
-        // 由 BasicTextField 画），释放对应 hiddenRanges。
-        // 非 coordinated 模式沿用 1（alpha 主导显隐）。
-        val clipFraction =
-            scene.unitClipFractions[unit.key] ?: if (scene.coordinatedSpatialClip) {
-                continue
-            } else {
-                1f
-            }
-        if (clipFraction <= 0f) continue
-        if (targetRange != null) {
-            // 存活 unit：在新 layout 的真实位置 + timeline 算好的偏移
-            // Issue #717 评论 5742273757 修复3：targetRange 是 raw 坐标，通过 snapshot 做 raw→display。
-            val targetBounds = unit.layout.boundsForRawRange(targetRange) ?: continue
-            val translate =
-                Offset(
-                    currentPosition.x - targetBounds.left,
-                    currentPosition.y - targetBounds.top,
-                )
-            // #703 评论 B：吐字 — clipRect = [left, left + width * fraction]
-            val clipRect =
-                if (clipFraction < 1f) {
-                    Rect(
-                        left = targetBounds.left,
-                        top = targetBounds.top,
-                        right = targetBounds.left + targetBounds.width * clipFraction,
-                        bottom = targetBounds.bottom,
-                    )
-                } else {
-                    null
-                }
-            drawTranslatedRangeText(
-                snapshot = unit.layout,
-                range = targetRange,
-                translate = translate,
-                alpha = alpha,
-                scrollY = scrollY,
-                textColor = textColor,
-                clipRect = clipRect,
+    val range = overlay.range
+    if (range.start >= range.end) return
+    val snapshot = overlay.layout
+    // Issue #717 评论 5742904417 修复1：range 是 raw 坐标，边界检查用 rawText 长度。
+    if (range.end > snapshot.result.layoutInput.text.text.length) return
+    // Issue=717 评论 5742273757 修复3：range 是 raw 坐标，通过 snapshot 做 raw→display。
+    val bounds = snapshot.boundsForRawRange(range) ?: return
+    val clipFraction = overlay.clipFraction.coerceIn(0f, 1f)
+    if (clipFraction <= 0f) return
+    // glyph overlay 在 layout 真实位置画（translate = Zero），只按 clipFraction 裁切可见区域
+    val translate = Offset.Zero
+    val clipRect =
+        if (clipFraction < 1f) {
+            Rect(
+                left = bounds.left,
+                top = bounds.top,
+                right = bounds.left + bounds.width * clipFraction,
+                bottom = bounds.bottom,
             )
         } else {
-            // ghost unit：在旧 layout 的真实位置淡出
-            // Issue #717 评论 5742273757 修复3：range 是 raw 坐标，通过 snapshot 做 raw→display。
-            val sourceBounds = unit.layout.boundsForRawRange(range) ?: continue
-            val translate =
-                Offset(
-                    currentPosition.x - sourceBounds.left,
-                    currentPosition.y - sourceBounds.top,
-                )
-            // #703 评论 A 缺陷2：统一边界模型 — ghost clipRect 和 inserted unit 一致，
-            // 都是 [left, left + width * fraction]。
-            // 旧实现用 [right - width * fraction, right] 配合旧 fraction=(glyphRight-cursorLeft)/width，
-            // 方向写反导致开始空、结束满（反向吐字）。
-            // 新 fraction=(cursorLeft-glyphLeft)/width：开始 fraction=1（完全可见），
-            // 结束 fraction=0（完全被吞掉），clipRect=[left, left+width*fraction] 正确吞字。
-            val clipRect =
-                if (clipFraction < 1f) {
-                    Rect(
-                        left = sourceBounds.left,
-                        top = sourceBounds.top,
-                        right = sourceBounds.left + sourceBounds.width * clipFraction,
-                        bottom = sourceBounds.bottom,
-                    )
-                } else {
-                    null
-                }
-            drawTranslatedRangeText(
-                snapshot = unit.layout,
-                range = range,
-                translate = translate,
-                alpha = alpha,
-                scrollY = scrollY,
-                textColor = textColor,
-                clipRect = clipRect,
-            )
+            null
         }
-    }
-}
-
-/**
- * 安全获取 path bounds — snapshot 为 null 或 range 无效时返回 null。
- *
- * Issue #717 评论 5742273757 修复3：改为接收 [ComposeLayoutSnapshot]，
- * 通过 [boundsForRawRange] 做 raw→display 映射。
- */
-private fun safePathBounds(
-    snapshot: ComposeLayoutSnapshot?,
-    range: TextRange,
-): Rect? {
-    if (snapshot == null) return null
-    return snapshot.boundsForRawRange(range)
+    drawTranslatedRangeText(
+        snapshot = snapshot,
+        range = range,
+        translate = translate,
+        alpha = 1f,
+        scrollY = scrollY,
+        textColor = textColor,
+        clipRect = clipRect,
+    )
 }
 
 /**
@@ -380,20 +270,20 @@ private fun DrawScope.drawTranslatedRangeText(
 }
 
 /**
- * #708 评论 5723410606 第一节：绘制完整编辑器当前帧 —
- * 把 drawWithContent 里的两段逻辑抽成独立函数，直接在 drawWithContent 里调用
- * （不再经过 stableFrameLayer.record() — 整屏旧帧缓存已删除）。
+ * Issue #737：绘制完整编辑器当前帧 — 只接收一份 motion sample。
  *
- * 1. 对 BasicTextField 做 hiddenRanges 裁切并 drawContent()
- * 2. 画 drawVisualScene()
- * 3. Issue #728 评论 5754045689：画统一 motion caret —
- *    caretRect 非 null 时画一条竖线（caretRect.width 或默认 2dp），
- *    系统 caret 已透明，由本层统一画。
+ * 删除旧架构的 `drawVisualScene`（不再消费 [ComposeVisualScene]）。
  *
- * @param scene 当前视觉场景。
- * @param latestLayout 当前 layout 快照。
- * @param caretRect 当前帧的 caret rect — 由 [ComposeEditMotion.Sample.caretRect] 产生。
- *   null 表示无 active motion，不画 caret。
+ * - motionSample != null 且 [CoordinatedEditMotion.Sample.isValid]：
+ *   1. 画 BasicTextField 内容（裁掉 hiddenRanges）
+ *   2. 画 glyph overlays（插入/删除的文字）
+ *   3. 画 animated caret
+ * - 否则：画 BasicTextField 内容 + resting caret
+ *
+ * @param motionSample 当前帧的 motion 采样结果 — 由 [CoordinatedEditMotion.sample] 产生。
+ *   null 或无效时画平台最终正文 + [restingCaretRect]。
+ * @param layout 当前 layout 快照。
+ * @param restingCaretRect 静止 caret rect — 无 active motion 时画这个 caret。
  * @param scrollY 当前滚动位置。
  * @param textColor 文字颜色。
  * @param cursorColor 光标颜色。
@@ -402,57 +292,68 @@ private fun DrawScope.drawTranslatedRangeText(
  */
 @Suppress("LongParameterList")
 internal fun DrawScope.drawCurrentEditorFrame(
-    scene: ComposeVisualScene,
-    latestLayout: ComposeLayoutSnapshot?,
-    caretRect: Rect?,
+    motionSample: CoordinatedEditMotion.Sample?,
+    layout: ComposeLayoutSnapshot?,
+    restingCaretRect: Rect?,
     scrollY: Int,
     textColor: Color,
     cursorColor: Color,
     density: androidx.compose.ui.unit.Density,
     drawContent: () -> Unit,
 ) {
-    // 1. 正文裁切：对 hiddenRanges 做 ClipOp.Difference 裁切
-    val hiddenPath =
-        buildHiddenPath(
-            hiddenRanges = scene.hiddenRanges,
-            layout = latestLayout,
-            scrollY = scrollY,
-        )
-    if (hiddenPath != null) {
-        clipPath(
-            path = hiddenPath,
-            clipOp = ClipOp.Difference,
-        ) {
+    if (motionSample != null && motionSample.isValid) {
+        // sample 有效：同时画 animated caret + glyph overlay
+        // 1. 先画 BasicTextField 内容，但裁掉 hiddenRanges
+        val hiddenPath =
+            buildHiddenPath(
+                hiddenRanges = motionSample.hiddenRanges,
+                layout = layout,
+                scrollY = scrollY,
+            )
+        if (hiddenPath != null) {
+            clipPath(
+                path = hiddenPath,
+                clipOp = ClipOp.Difference,
+            ) {
+                drawContent()
+            }
+        } else {
             drawContent()
         }
+        // 2. 画 glyph overlays（插入/删除的文字）
+        for (overlay in motionSample.glyphOverlays) {
+            drawGlyphOverlay(
+                overlay = overlay,
+                scrollY = scrollY,
+                textColor = textColor,
+            )
+        }
+        // 3. 画 animated caret
+        if (cursorColor != Color.Transparent) {
+            drawVisualCaretRect(
+                caretRect = motionSample.caretRect,
+                scrollY = scrollY,
+                cursorColor = cursorColor,
+                density = density,
+            )
+        }
     } else {
+        // sample 不存在或无效：画平台最终正文 + resting caret
         drawContent()
-    }
-
-    // 2. 动画帧
-    if (scene.units.isNotEmpty()) {
-        drawVisualScene(
-            scene = scene,
-            scrollY = scrollY,
-            textColor = textColor,
-        )
-    }
-
-    // 3. Issue #728 评论 5754045689：画统一 motion caret —
-    // caretRect 非 null 时画一条竖线，系统 caret 已透明。
-    if (caretRect != null && cursorColor != Color.Transparent) {
-        drawVisualCaretRect(
-            caretRect = caretRect,
-            scrollY = scrollY,
-            cursorColor = cursorColor,
-            density = density,
-        )
+        if (restingCaretRect != null && cursorColor != Color.Transparent) {
+            drawVisualCaretRect(
+                caretRect = restingCaretRect,
+                scrollY = scrollY,
+                cursorColor = cursorColor,
+                density = density,
+            )
+        }
     }
 }
 
 /**
  * Issue #728 评论 5754045689：画统一 motion caret —
- * 用 [ComposeEditMotion.Sample.caretRect] 给的 rect 画一条竖线。
+ * 用 [CoordinatedEditMotion.Sample.caretRect] 给的 rect 画一条竖线。
  *
  * rect.width > 0 时直接用 rect 的宽度（来自 TextLayoutResult 的 cursor rect）；
  * rect.width == 0 时用 2dp 默认宽度（系统 cursor 的标准宽度）。

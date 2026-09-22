@@ -153,7 +153,9 @@ internal object ComposeVisualRebase {
 
     /**
      * #708 评论 5725706551：把旧 unit 的 targetRange 切成 SURVIVING/GHOST slice —
-     * [ComposeVisualTimeline.mapSurvivingUnits] 和 [ComposeLocalHandoffRebase.rebase] 共用的切片逻辑。
+     * Issue #737：旧 [ComposeVisualTimeline.mapSurvivingUnits] 已删除，本切片逻辑
+     * 仍供 [ComposeVisualFrameCoordinator] 算 retained moves / offset map 合成使用。
+     * [ComposeLocalHandoffRebase.rebase] 共用此切片逻辑。
      *
      * 优先用 [offsetMap]；没有则从 [intent] 用 [entriesForIntent] 生成 fallback survival map；
      * 都没有则检查 target 是否仍在新正文范围内（[target.end] <= [newTextLength]）：
@@ -365,8 +367,9 @@ internal object ComposeVisualRebase {
      * - 旧/新任一侧取不到有效 bounds（null），也按"几何变化"返回 true
      *   （不能继续由 survivor overlay 持有，交给 BasicTextField）。
      *
-     * timeline（[ComposeVisualTimeline]）和 handoff（[ComposeLocalHandoffRebase]）都用此 helper
-     * 判定是否释放 surviving unit。
+     * Issue #737：旧 timeline（[ComposeVisualTimeline]）已删除，本 helper 仍供
+     * [ComposeVisualFrameCoordinator] 算 retained moves 时判定自然几何变化使用；
+     * handoff（[ComposeLocalHandoffRebase]）也用此 helper 判定是否释放 surviving unit。
      *
      * @param oldLayout 旧布局快照。
      * @param oldRange 旧正文中的 raw range。
@@ -399,9 +402,9 @@ internal object ComposeVisualRebase {
      * 当一个 active unit 被切开只删一部分时，ghost 的屏幕位置不能直接用父 unit 左上角，
      * 要用"slice 自然位置 + 父 unit 当前位移"。
      *
-     * timeline 的 [ComposeVisualTimeline.toGhost] 和 handoff 的
-     * [ComposeLocalHandoffRebase.toHandoffGhost] 共用此 helper，
-     * 避免两套算法不一致导致 handoff 首帧旧字跳位。
+     * Issue #737：旧 timeline 的 [ComposeVisualTimeline.toGhost] 已删除，本 helper 仍供
+     * handoff 的 [ComposeLocalHandoffRebase.toHandoffGhost] 共用，避免两套算法不一致
+     * 导致 handoff 首帧旧字跳位。
      *
      * @param layout 父 unit 的 layout snapshot。
      * @param parentRange 父 unit 的完整 range。
