@@ -276,25 +276,28 @@ class ComposeEditorVisualState(
             // cursor 动画关闭时直接跳到 target（写 restingCaretRect + drawSnapshotState.restingCaretRect）。
             // isPureSelectionMove 已保证 layoutForSelection != null，这里断言一次拿到非空引用。
             val layout = layoutForSelection!!
-            val targetCaret = layout.cursorRect(snapshot.selection.end)
-            val originCaret =
-                restingCaretRect
-                    ?: layout.cursorRect(lastResolvedSelection?.end ?: snapshot.selection.start)
+            // Issue #737 评论 5782447373：纯 selection move 的 origin/target offset 和 rect 必须在
+            // 同一份平台 layout 上一起生成，不再用 restingCaretRect 代替 originRect。
+            // restingCaretRect 可能在 onAuthoritativeLayout 的 fingerprintUnchanged 分支里被更新成
+            // 当前新 selection 的 caret rect（target），用它当 originRect 会让 originRect == targetRect，
+            // CaretTraversal 直接判无效（oldCaretRect == newCaretRect），光标动画消失。
+            // 上一笔 motion 还没结束时，lastResolvedSelection.end 是上一笔的逻辑 target，
+            // 从它开新 motion 等同于"明确结束上一笔后从其 target 开新 motion"。
+            val originCaretOffset = lastResolvedSelection?.end ?: snapshot.selection.start
+            val targetCaretOffset = snapshot.selection.end
+            val originCaret = layout.cursorRect(originCaretOffset)
+            val targetCaret = layout.cursorRect(targetCaretOffset)
             val policy = currentMotionPolicy.effective()
             if (policy.cursorAnimationEnabledForEdit && policy.selectionCursorDurationMillis > 0L) {
                 // 有平滑光标：记录 pending target，等真实 frameTime 创建 motion
                 // Issue #737 评论 5782106370：同时缓存 origin/target caret offset，保证
-                // forSelectionMove 拿到的 rect/offset/line 同源。originCaretOffset 与 originCaret
-                // 的 fallback 对齐：restingCaretRect 非空时其 offset 就是上次 target offset =
-                // 当前的 lastResolvedSelection?.end；restingCaretRect 为空时退到
-                // lastResolvedSelection?.end ?: snapshot.selection.start。
-                val originCaretOffset = lastResolvedSelection?.end ?: snapshot.selection.start
+                // forSelectionMove 拿到的 rect/offset/line 同源。
                 pendingSelectionCaretTarget =
                     PendingSelectionCaretMove(
                         originCaretRect = originCaret,
                         targetCaretRect = targetCaret,
                         originCaretOffset = originCaretOffset,
-                        targetCaretOffset = snapshot.selection.end,
+                        targetCaretOffset = targetCaretOffset,
                     )
                 _frameRequestVersion.update { it + 1L }
             } else {
@@ -354,11 +357,29 @@ class ComposeEditorVisualState(
         val fingerprint = layoutFingerprint(snapshot)
         val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
         if (fingerprintUnchanged) {
-            // 纯 selection/caret 变化：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
-            // Issue #728 评论 5754839786 缺口2：fingerprintUnchanged 时无 active motion（纯 selection），
-            // 直接把 restingCaretRect 更新到当前 selection.end 对应的 caret rect，
-            // 并写进 drawSnapshotState.restingCaretRect，保证静止/selection 移动后屏幕 caret 停在新位置。
-            restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
+            // 纯 selection/caret 或纯滚动：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
+            // Issue #737 评论 5782447373：selection 变化时不要抢先把 restingCaretRect 落到 target —
+            // selection 的可见运动统一交给 selection motion（onInputSnapshotResolved 记录 pending，
+            // drainPendingPatchesAtFrame 创建 forSelectionMove）。若这里先把可见 resting caret 跳到 target，
+            // draw 层会先把自定义 caret 画到目标位置，之后 motion 再从旧 origin 动画到同一 target，
+            // 出现"瞬间跳到终点"；且 onInputSnapshotResolved 会拿到 restingCaretRect=target 当 originRect，
+            // 让 traversal 判无效。只有明确不播放 cursor animation 时才静态落 target。
+            val previousSelection = drawSnapshotState.layout?.selection
+            val selectionChanged = snapshot.selection != previousSelection
+            if (selectionChanged) {
+                val policy = currentMotionPolicy.effective()
+                val willAnimateSelection =
+                    policy.cursorAnimationEnabledForEdit && policy.selectionCursorDurationMillis > 0L
+                if (!willAnimateSelection) {
+                    // 不播放光标动画：静态落 target，draw 层直接画到新 selection 位置
+                    restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
+                }
+                // 播放光标动画时：不更新 restingCaretRect，交给 selection motion；
+                // motion 期间 motionSample 覆盖 resting caret，motion finished 后 sampleVisualScene 落 target。
+            } else {
+                // 纯滚动（selection 没变）：caret offset 没变，restingCaretRect 跟着 layout 更新到新位置。
+                restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
+            }
             drawSnapshotState =
                 drawSnapshotState.copy(
                     layout = snapshot,

@@ -391,9 +391,13 @@ class CoordinatedEditMotion(
                 )
             // Issue #737 评论 5781084709 修复点 6：从 traversal.oldLine / traversal.newLine
             // 取真实行号传入 motion 构造，不再固定传 -1。
+            // Issue #737 评论 5782447373：oldSelection/newSelection 用真实 old/new caret offset 构造，
+            // 不再从 oldLayout.selection / newLayout.selection 读取 — 纯 selection move 调用方传入的
+            // oldLayout/newLayout 可能是同一个 snapshot，从 layout.selection 读会让 old/new selection 相同，
+            // 与"一笔 motion 保存完整 old/new 状态"不一致。oldLayout/newLayout 仍用于 traversal 行几何。
             return CoordinatedEditMotion(
-                oldSelection = oldLayout.selection,
-                newSelection = newLayout.selection,
+                oldSelection = TextRange(originCaretOffset, originCaretOffset),
+                newSelection = TextRange(targetCaretOffset, targetCaretOffset),
                 oldCaretRect = originCaretRect,
                 newCaretRect = targetCaretRect,
                 oldLine = traversal.oldLine,
