@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.ResolvedTextDirection
 import kotlin.math.abs
 
 /**
@@ -242,26 +243,63 @@ class CaretTraversal(
          * Issue #737 评论 5781084709 修复点 2：行尾 caret rect —
          * 取该行实际 end offset 的 [TextLayoutResult.getCursorRect]，
          * 不再用 getLineRight + 行高×0.6 估算 caret 几何。
+         *
+         * Issue #737 评论 5781634285 修复点 1：行边界几何改用 line 身份 —
+         * 不再把有歧义的 shared offset 丢回 [TextLayoutResult.getCursorRect]。
+         * [TextLayoutResult.getLineEnd] 返回该行最后一个字符**之后**的 exclusive offset；
+         * 软换行时它等于下一行的 [TextLayoutResult.getLineStart]，[TextLayoutResult.getCursorRect]
+         * 对"正好等于下一行 start 的 offset"会归到下一行，导致"上一行行尾 rect"实际拿到
+         * "下一行行首 rect"，跨软换行没有真正闭环。
+         *
+         * 新实现直接用 line + 平台几何决定行边界：
+         * - top/bottom：[TextLayoutResult.getLineTop] / [TextLayoutResult.getLineBottom]
+         * - LTR 行尾 x：[TextLayoutResult.getLineRight]（平台该行的 right 边界）
+         * - RTL 行尾 x：[TextLayoutResult.getLineLeft]（平台该行的 left 边界）
+         * - rect 保持零宽（left == right == x），不再估 caret 宽度
          */
         private fun lineEndRect(
             layout: TextLayoutResult,
             line: Int,
         ): Rect {
-            val offset = layout.getLineEnd(line)
-            return layout.getCursorRect(offset)
+            val top = layout.getLineTop(line)
+            val bottom = layout.getLineBottom(line)
+            val isRtl = isLineRtl(layout, line)
+            val x = if (isRtl) layout.getLineLeft(line) else layout.getLineRight(line)
+            return Rect(left = x, top = top, right = x, bottom = bottom)
         }
 
         /**
          * Issue #737 评论 5781084709 修复点 2：行首 caret rect —
          * 取该行实际 start offset 的 [TextLayoutResult.getCursorRect]，
          * 不再用 getLineLeft + 行高×0.6 估算 caret 几何。
+         *
+         * Issue #737 评论 5781634285 修复点 1：行边界几何改用 line 身份 —
+         * 与 [lineEndRect] 同理，行首也用 line + 平台几何决定，不再把 shared offset 丢回
+         * [TextLayoutResult.getCursorRect]。LTR 行首 x = [TextLayoutResult.getLineLeft]，
+         * RTL 行首 x = [TextLayoutResult.getLineRight]。
          */
         private fun lineStartRect(
             layout: TextLayoutResult,
             line: Int,
         ): Rect {
-            val offset = layout.getLineStart(line)
-            return layout.getCursorRect(offset)
+            val top = layout.getLineTop(line)
+            val bottom = layout.getLineBottom(line)
+            val isRtl = isLineRtl(layout, line)
+            val x = if (isRtl) layout.getLineRight(line) else layout.getLineLeft(line)
+            return Rect(left = x, top = top, right = x, bottom = bottom)
+        }
+
+        /**
+         * Issue #737 评论 5781634285 修复点 1：判断行方向 —
+         * 用 [TextLayoutResult.getParagraphDirection] 取该行起始 offset 的段落方向，
+         * [ResolvedTextDirection.Rtl] 表示 RTL 行。
+         */
+        private fun isLineRtl(
+            layout: TextLayoutResult,
+            line: Int,
+        ): Boolean {
+            val startOffset = layout.getLineStart(line)
+            return layout.getParagraphDirection(startOffset) == ResolvedTextDirection.Rtl
         }
     }
 

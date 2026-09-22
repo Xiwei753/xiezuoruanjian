@@ -633,22 +633,39 @@ class ComposeEditorVisualState(
      */
     fun sampleVisualScene(frameTimeNanos: Long): CoordinatedEditMotion.Sample? {
         val motionSample = activeMotion?.sample(frameTimeNanos)
-        // #708 评论 5723410606 第一节：同步 draw snapshot 的 motionSample + restingCaretRect —
-        // draw 层下一帧 drawWithContent 直接读。
-        // Issue #728 评论 5754839786 缺口2：无 active motion 时用 restingCaretRect 填，
-        // 保证静止/selection 移动后屏幕 caret 不消失。
-        drawSnapshotState =
-            drawSnapshotState.copy(
-                motionSample = motionSample,
-                restingCaretRect = restingCaretRect,
-            )
         // motion 完成后清掉，避免持续 sample 已结束的 motion
         if (motionSample != null && motionSample.finished) {
             // Issue #728 评论 5754839786 缺口2：motion finished 后把 target caret 落到 restingCaretRect，
             // 再清 activeMotion — 下一帧 sampleVisualScene 用 restingCaretRect 填 drawSnapshot，
             // 屏幕 caret 停在 motion 终点，不跳回原点也不消失。
+            //
+            // Issue #737 评论 5781634285 修复点 2：finished 时直接收口 —
+            // 把 caret target 写入 restingCaretRect，清 activeMotion，
+            // 同一帧把 drawSnapshotState.motionSample 清成 null。
+            // 最终画面直接回到 BasicTextField + resting caret，不保留 completed overlay。
+            // 旧实现先把 finished sample 写进 drawSnapshotState.motionSample 再清 activeMotion，
+            // 但没把 drawSnapshotState.motionSample 清成 null — 对插入动画，finished sample 此时
+            // hiddenRanges 已空、inserted overlay 的 clipFraction=1，draw 层会同时画 BasicTextField
+            // 里的完整最终新字 + 一遍完整 inserted overlay，表现为最终字符重复绘制/发粗；
+            // 帧循环结束后这份 finished sample 可能一直留到下一次事件。
+            // 不需要为了"最后 100% 那一帧"继续留 overlay，因为 BasicTextField 本来就是最终正文。
             restingCaretRect = motionSample.caretRect
             activeMotion = null
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    motionSample = null,
+                    restingCaretRect = restingCaretRect,
+                )
+        } else {
+            // #708 评论 5723410606 第一节：同步 draw snapshot 的 motionSample + restingCaretRect —
+            // draw 层下一帧 drawWithContent 直接读。
+            // Issue #728 评论 5754839786 缺口2：无 active motion 时用 restingCaretRect 填，
+            // 保证静止/selection 移动后屏幕 caret 不消失。
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    motionSample = motionSample,
+                    restingCaretRect = restingCaretRect,
+                )
         }
         return motionSample
     }

@@ -235,8 +235,18 @@ class CoordinatedEditMotion(
                 CaretTraversal.fromLayouts(
                     oldLayout = oldLayout.result,
                     newLayout = newLayout.result,
-                    oldCaretOffset = oldSelection.end,
-                    newCaretOffset = newSelection.end,
+                    // Issue #737 评论 5781634285 修复点 3：traversal 只使用 patch 里的
+                    // originCaretOffset / targetCaretOffset — 这两个 offset 是生成
+                    // originCaretRect / targetCaretRect 时用的同一份 fact selection end。
+                    // 不再重新读 oldLayout.selection.end / newLayout.selection.end —
+                    // 快速输入、同帧 batch、layout/selection 到达次序变化时，这两个 selection
+                    // 不保证就是生成那两个 caret rect 时用的 offset，可能出现
+                    // "rect 是 fact 的 caret，line 却是 snapshot selection 的 line"，
+                    // 让 traversal 在软换行附近判错"同行/跨行"。
+                    // oldSelection / newSelection 仍保留用于构造 CoordinatedEditMotion 的
+                    // oldSelection/newSelection 参数（下方两处 return）。
+                    oldCaretOffset = patch.originCaretOffset,
+                    newCaretOffset = patch.targetCaretOffset,
                     oldCaretRect = oldCaretRect,
                     newCaretRect = newCaretRect,
                 )

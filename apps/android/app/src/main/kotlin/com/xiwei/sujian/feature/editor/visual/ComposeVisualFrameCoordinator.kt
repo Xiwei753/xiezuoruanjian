@@ -242,6 +242,11 @@ class ComposeVisualFrameCoordinator(
                 retainedMoves = retainedMoves,
                 originCaretRect = originCaretRect,
                 targetCaretRect = targetCaretRect,
+                // Issue #737 评论 5781634285 修复点 3：把生成 caret rect 时用的同一份
+                // fact selection end 也收进 patch，供 CoordinatedEditMotion.fromPatch
+                // 构造 CaretTraversal 时取行号，保证 offset 与 rect 同源。
+                originCaretOffset = oldSelectionEnd,
+                targetCaretOffset = newSelectionEnd,
                 durationMs = effectiveDurationMs,
                 animationMode =
                     if (screenSuppressed) {
