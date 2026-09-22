@@ -63,8 +63,8 @@ class ComposeVisualIssue735Comment5775326365ReproTest {
         val provisional =
             coordinator.onProvisionalLayout(ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0))
         assertTrue(
-            "provisional layout 只缓存 latest，不生成 patch，应返回 Empty。实际=$provisional",
-            provisional is FrameUpdate.Empty,
+            "provisional layout 只缓存 latest，不生成 patch，应返回 LayoutOnly。实际=$provisional",
+            provisional is FrameUpdate.LayoutOnly,
         )
 
         // 3. IME commit — Compose 不保证 commit 后一定重新算 layout，fact(A->B) 可能是唯一驱动
@@ -112,8 +112,8 @@ class ComposeVisualIssue735Comment5775326365ReproTest {
         // 3. commit 后又回调了一次 B（onTextLayout）— 不应提前推进 A baseline
         val layoutAfterCommit = coordinator.onLayout(ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0))
         assertTrue(
-            "commit 后的 onLayout(\"你好\") 在 fact 到达前应返回 Empty（pending 为空）。实际=$layoutAfterCommit",
-            layoutAfterCommit is FrameUpdate.Empty,
+            "commit 后的 onLayout(\"你好\") 在 fact 到达前应返回 AwaitingFact（pending 为空）。实际=$layoutAfterCommit",
+            layoutAfterCommit is FrameUpdate.AwaitingFact,
         )
 
         // 4. fact 后到 — 应与 latest=B 配对
@@ -159,7 +159,7 @@ class ComposeVisualIssue735Comment5775326365ReproTest {
                 coordinator.onProvisionalLayout(ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0))
             assertTrue(
                 "provisional layout 不应生成 patch。实际=$provisional",
-                provisional is FrameUpdate.Empty,
+                provisional is FrameUpdate.LayoutOnly,
             )
         }
 

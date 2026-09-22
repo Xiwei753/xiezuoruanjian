@@ -472,30 +472,42 @@ class ComposeEditorVisualState(
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot
-        // Issue #737 评论 5782769758：不再单独发布 drawSnapshotState.layout —
-        // applyFrameUpdate 收到 NewPatch 时已原子切到"new layout + prepared motion sample"，
-        // 收到 Empty 时（fact 还没到）保持旧 presentation，不让 BasicTextField 最终态先裸画一帧。
-        // 只有 update 为 Empty 时才需要同步 layout（无 patch 产生，无 motion，纯 layout 推进）。
-        if (update is FrameUpdate.Empty) {
-            // Issue #737 评论 5784705864 缺口1：layout 到达但 fact 还没到 —
-            // 建立 pending presentation ownership，防止 BasicTextField 新正文裸画一帧。
-            // 旧实现只"不更新 drawSnapshotState.layout"想用旧 layout 当屏障，但 drawContent()
-            // 画的是 BasicTextField 本身（已是新正文），屏障无效。pending presentation 真正接管屏幕：
-            // 裁掉新字、画旧字 ghost、caret 停 origin。fact 到达后原子升级成 prepared motion。
-            val previousLayout = drawSnapshotState.layout
-            if (previousLayout != null) {
-                val pending = buildPendingPresentation(previousLayout, snapshot)
-                if (pending != null) {
-                    pendingPresentation = pending
-                    presentationGeneration++
-                    drawSnapshotState =
-                        drawSnapshotState.copy(
-                            layout = snapshot,
-                            motionSample = pending.sample,
-                            restingCaretRect = pending.sample.caretRect,
-                            presentationGeneration = presentationGeneration,
-                        )
+        // Issue #737 评论 5785295971：按明确状态处理 —
+        // LayoutOnly：applyFrameUpdate 已静态发布新 layout + resting caret，无需额外处理。
+        // AwaitingFact：text 变了但 fact 还没到 — 建立 pending presentation ownership，
+        //   防止 BasicTextField 新正文裸画一帧。关键：先 settle running motion
+        //   （互斥规则：不能同时有 running motion 和 pending presentation）。
+        // NewPatch：applyFrameUpdate 已处理（包括 prepared motion）。
+        when (update) {
+            is FrameUpdate.LayoutOnly -> {
+                // 初始 baseline 或纯几何变化 — applyFrameUpdate 已静态发布新 layout + resting caret
+            }
+            is FrameUpdate.AwaitingFact -> {
+                // text 变了但 fact 还没到 — 建立 pending presentation ownership
+                // 关键：先 settle running motion（互斥规则：不能同时有 running motion 和 pending presentation）
+                if (activeMotion != null) {
+                    // 把 P1 running motion settle 到 target
+                    restingCaretRect = activeMotion!!.newCaretRect
+                    activeMotion = null
                 }
+                val previousLayout = drawSnapshotState.layout
+                if (previousLayout != null) {
+                    val pending = buildPendingPresentation(previousLayout, snapshot)
+                    if (pending != null) {
+                        pendingPresentation = pending
+                        presentationGeneration++
+                        drawSnapshotState =
+                            drawSnapshotState.copy(
+                                layout = snapshot,
+                                motionSample = pending.sample,
+                                restingCaretRect = pending.sample.caretRect,
+                                presentationGeneration = presentationGeneration,
+                            )
+                    }
+                }
+            }
+            is FrameUpdate.NewPatch -> {
+                // patch 已生成 — applyFrameUpdate 已处理（包括 prepared motion）
             }
         }
     }
@@ -560,8 +572,21 @@ class ComposeEditorVisualState(
      */
     private fun applyFrameUpdate(update: FrameUpdate) {
         when (update) {
-            is FrameUpdate.Empty -> {
-                // 无新 patch — 首帧、无 pending、或 pending 与 layout 尚未匹配。
+            is FrameUpdate.LayoutOnly -> {
+                // Issue #737 评论 5785295971：初始 baseline 或纯几何变化（text 不变）—
+                // 可以直接静态发布新 layout + resting caret。
+                presentationGeneration++
+                drawSnapshotState =
+                    drawSnapshotState.copy(
+                        layout = update.snapshot,
+                        motionSample = null,
+                        restingCaretRect = update.snapshot.cursorRect(update.snapshot.selection.end),
+                        presentationGeneration = presentationGeneration,
+                    )
+            }
+            is FrameUpdate.AwaitingFact -> {
+                // Issue #737 评论 5785295971：text 变了但 fact 还没配对 —
+                // 不在这里处理，由 onAuthoritativeLayout 处理（建立 pending presentation ownership）。
             }
             is FrameUpdate.NewPatch -> {
                 val patchSequence = nextPendingSequence++
@@ -712,11 +737,12 @@ class ComposeEditorVisualState(
                 ),
             )
         }
-        // caret origin：上一份已呈现 layout 的 caret 位置。
-        // lastResolvedSelection 是最近一次 onInputSnapshotResolved 记录的 selection end；
-        // 没有则用 oldLayout.selection.end。
-        val originOffset = lastResolvedSelection?.end ?: oldLayout.selection.end
-        val originCaret = oldLayout.cursorRect(originOffset)
+        // Issue #737 评论 5785295971：caret origin 从上一份 presentation owner 拿，
+        // 不从 lastResolvedSelection 猜 — snapshotFlow 可能已经先把它更新成当前新 selection。
+        // 上一份 presentation 的 caret 位置就是 restingCaretRect
+        // （running motion 被 settle 后 restingCaretRect = motion.newCaretRect；
+        //  resting 状态下 restingCaretRect 就是当前 caret 位置）。
+        val originCaret = restingCaretRect ?: oldLayout.cursorRect(oldLayout.selection.end)
         val sample =
             CoordinatedEditMotion.Sample(
                 caretRect = originCaret,
@@ -957,45 +983,61 @@ class ComposeEditorVisualState(
      * @return 当前帧的 motion sample（null 表示无 active motion）。
      */
     fun sampleVisualScene(frameTimeNanos: Long): CoordinatedEditMotion.Sample? {
-        val motionSample = activeMotion?.sample(frameTimeNanos)
-        // motion 完成后清掉，避免持续 sample 已结束的 motion
-        if (motionSample != null && motionSample.finished) {
-            // Issue #728 评论 5754839786 缺口2：motion finished 后把 target caret 落到 restingCaretRect，
-            // 再清 activeMotion — 下一帧 sampleVisualScene 用 restingCaretRect 填 drawSnapshot，
-            // 屏幕 caret 停在 motion 终点，不跳回原点也不消失。
-            //
-            // Issue #737 评论 5781634285 修复点 2：finished 时直接收口 —
-            // 把 caret target 写入 restingCaretRect，清 activeMotion，
-            // 同一帧把 drawSnapshotState.motionSample 清成 null。
-            // 最终画面直接回到 BasicTextField + resting caret，不保留 completed overlay。
-            // 旧实现先把 finished sample 写进 drawSnapshotState.motionSample 再清 activeMotion，
-            // 但没把 drawSnapshotState.motionSample 清成 null — 对插入动画，finished sample 此时
-            // hiddenRanges 已空、inserted overlay 的 clipFraction=1，draw 层会同时画 BasicTextField
-            // 里的完整最终新字 + 一遍完整 inserted overlay，表现为最终字符重复绘制/发粗；
-            // 帧循环结束后这份 finished sample 可能一直留到下一次事件。
-            // 不需要为了"最后 100% 那一帧"继续留 overlay，因为 BasicTextField 本来就是最终正文。
-            restingCaretRect = motionSample.caretRect
-            activeMotion = null
-            drawSnapshotState =
-                drawSnapshotState.copy(
-                    motionSample = null,
-                    restingCaretRect = restingCaretRect,
-                )
-        } else {
-            // #708 评论 5723410606 第一节：同步 draw snapshot 的 motionSample + restingCaretRect —
-            // draw 层下一帧 drawWithContent 直接读。
-            // Issue #728 评论 5754839786 缺口2：无 active motion 时用 restingCaretRect 填，
-            // 保证静止/selection 移动后屏幕 caret 不消失。
-            // Issue #737 评论 5784705864 缺口1：无 active motion 但有 pending presentation 时，
-            // 保留 pending sample — 不清成 null（否则 pending ownership 丢失，BasicTextField 裸画）。
-            val effectiveSample = motionSample ?: pendingPresentation?.sample
-            drawSnapshotState =
-                drawSnapshotState.copy(
-                    motionSample = effectiveSample,
-                    restingCaretRect = restingCaretRect,
-                )
+        // Issue #737 评论 5785295971：presentation owner 互斥 —
+        // 同一时刻只能有一个状态源：running motion 或 pending presentation，不能同时有。
+        // onAuthoritativeLayout 建立 pending presentation 时已 settle running motion，
+        // 但这里仍做互斥保护：activeMotion 优先，pendingPresentation 次之。
+        val motion = activeMotion
+        if (motion != null) {
+            val motionSample = motion.sample(frameTimeNanos)
+            if (motionSample.finished) {
+                // Issue #728 评论 5754839786 缺口2：motion finished 后把 target caret 落到 restingCaretRect，
+                // 再清 activeMotion — 下一帧 sampleVisualScene 用 restingCaretRect 填 drawSnapshot，
+                // 屏幕 caret 停在 motion 终点，不跳回原点也不消失。
+                //
+                // Issue #737 评论 5781634285 修复点 2：finished 时直接收口 —
+                // 把 caret target 写入 restingCaretRect，清 activeMotion，
+                // 同一帧把 drawSnapshotState.motionSample 清成 null。
+                // 最终画面直接回到 BasicTextField + resting caret，不保留 completed overlay。
+                restingCaretRect = motionSample.caretRect
+                activeMotion = null
+                drawSnapshotState =
+                    drawSnapshotState.copy(
+                        motionSample = null,
+                        restingCaretRect = restingCaretRect,
+                    )
+            } else {
+                // #708 评论 5723410606 第一节：同步 draw snapshot 的 motionSample + restingCaretRect —
+                // draw 层下一帧 drawWithContent 直接读。
+                drawSnapshotState =
+                    drawSnapshotState.copy(
+                        motionSample = motionSample,
+                        restingCaretRect = restingCaretRect,
+                    )
+            }
+            return motionSample
         }
-        return motionSample
+        // 无 active motion — 如果有 pending presentation，用它的 sample
+        // Issue #737 评论 5784705864 缺口1：pending presentation 的 sample 保持 ownership，
+        // 不清成 null（否则 pending ownership 丢失，BasicTextField 裸画）。
+        val pending = pendingPresentation
+        if (pending != null) {
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    motionSample = pending.sample,
+                    restingCaretRect = restingCaretRect,
+                )
+            return pending.sample
+        }
+        // 无 active motion、无 pending presentation — resting
+        // Issue #728 评论 5754839786 缺口2：无 active motion 时用 restingCaretRect 填，
+        // 保证静止/selection 移动后屏幕 caret 不消失。
+        drawSnapshotState =
+            drawSnapshotState.copy(
+                motionSample = null,
+                restingCaretRect = restingCaretRect,
+            )
+        return null
     }
 
     /**
