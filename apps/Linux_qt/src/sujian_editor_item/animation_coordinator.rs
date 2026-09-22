@@ -2272,6 +2272,24 @@ impl LinuxEditorAnimationCoordinator {
         self.prepared_queue.complete(key)
     }
 
+    /// Issue #736 评论 5786231506: 返回当前所有 active transaction 实际还引用的
+    /// 去重 LineSnapshotId。事务完成、cancel、rebase 后，队列是"哪些视觉资源
+    /// 仍有人用"的唯一事实源。
+    pub(crate) fn collect_active_snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        let mut ids: Vec<LineSnapshotId> = Vec::new();
+        for tx in self.prepared_queue.active_transactions() {
+            if !matches!(
+                tx.state,
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+            ) {
+                ids.extend(tx.snapshot_ids());
+            }
+        }
+        ids.sort_by_key(|id| (id.layout_revision, id.paragraph_id, id.visual_line_ordinal));
+        ids.dedup();
+        ids
+    }
+
     pub fn cancel_by_key(&mut self, key: VisualTransactionKey, reason: &str) -> bool {
         self.prepared_queue.cancel(key, reason)
     }
@@ -2929,6 +2947,7 @@ impl LinuxEditorAnimationCoordinator {
                                 y: doc_rect.y,
                                 w: doc_rect.w,
                                 h: doc_rect.h,
+                                snapshot_id: unit.slice.snapshot_id,
                             });
                         }
                     }

@@ -253,14 +253,14 @@ impl QQuickItem for SujianEditorItem {
             }
 
             for key in &render_plan.frame_context.keys_to_complete {
-                if let Some(ids) = self
+                // Issue #736 评论 5786231506: 不再 remove_for_transaction，统一在
+                // transaction set 变化后用 retain_active_snapshot_ids。
+                if let Some(_ids) = self
                     .pipeline
                     .animation_coordinator_mut()
                     .finish_by_key(*key)
                 {
-                    self.pipeline
-                        .texture_cache_mut()
-                        .remove_for_transaction(&ids);
+                    // 不再在这里释放纹理，统一在下面 retain。
                     // Issue #658 评论 5630650436: GPU texture cache 现在由 AnimationLayerNode
                     // 自身持有，不再需要手动 release。sweep 在每帧 update_animation_layer 时运行。
                 }
@@ -283,6 +283,16 @@ impl QQuickItem for SujianEditorItem {
 
             if !render_plan.frame_context.keys_to_complete.is_empty() || transaction_set_changed {
                 self.scene_dirty = true;
+                // Issue #736 评论 5786231506: transaction set 变化后，从 coordinator 取
+                // 当前全部 active snapshot ids，只释放已经没有任何 active transaction
+                // 引用的纹理。rebase/cancel/complete 都不会误删下一笔仍在用的旧快照纹理。
+                let active_ids = self
+                    .pipeline
+                    .animation_coordinator_mut()
+                    .collect_active_snapshot_ids();
+                self.pipeline
+                    .texture_cache_mut()
+                    .retain_active_snapshot_ids(&active_ids);
             }
 
             // Issue #701 评论 5699573227 第三阶段 (F6): 有 active transaction 或光标动画

@@ -21,7 +21,7 @@ pub(crate) fn render_frame(
     item_ptr: *mut std::ffi::c_void,
     static_text: &StaticTextParams<'_>,
     plan: &RenderPlan,
-    _texture_cache: &TextureCache,
+    texture_cache: &TextureCache,
 ) -> bool {
     if root_raw.is_null() || item_ptr.is_null() {
         return false;
@@ -104,7 +104,18 @@ pub(crate) fn render_frame(
 
             // Issue #727 评论 5755858583 问题2: 直接从 plan.clip_rects 读取裁剪区域，
             // 不再通过 StaticLinePatch 中间结构换算。
-            let clip_rects = &plan.clip_rects;
+            // Issue #736 评论 5786231506: 静态层开始裁剪之前先检查本帧动画所需的
+            // snapshot texture。缺纹理的 snapshot 对应 clip 不进入 static text clip，
+            // canonical 正文直接显示。不能等静态层挖完以后到了 render_text_animation_layer()
+            // 才 continue。overlay 可画 -> static 被接管；overlay 不可画 -> static 同帧
+            // 恢复 canonical。两边是一条原子规则。
+            let available_clip_rects: Vec<qt_text_node::AnimationClipRect> = plan
+                .clip_rects
+                .iter()
+                .filter(|cr| texture_cache.contains_line(&cr.snapshot_id))
+                .cloned()
+                .collect();
+            let clip_rects = &available_clip_rects;
 
             // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
             // origin_x = snapshot.padding，与 VisualLine.x = padding + x_off 一致。
@@ -142,7 +153,7 @@ pub(crate) fn render_frame(
         root_raw,
         item_ptr,
         plan,
-        _texture_cache,
+        texture_cache,
         static_text.scroll_y,
     );
     // Layer 2: 选区/预输入背景

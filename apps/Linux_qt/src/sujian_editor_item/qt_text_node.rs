@@ -418,6 +418,10 @@ pub(crate) struct AnimationClipRect {
     pub w: f64,
     /// 高度
     pub h: f64,
+    /// Issue #736 评论 5786231506: 这个 clip 属于哪个 snapshot_id，
+    /// 渲染前用于判断该 overlay 纹理是否真的存在。Rust 侧 ownership 元数据，
+    /// 不交给 Qt 绘制接口本身（C++ 侧 rebuild_text_node_from_paragraphs 不消费此字段）。
+    pub snapshot_id: super::layout_snapshot::LineSnapshotId,
 }
 
 /// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。

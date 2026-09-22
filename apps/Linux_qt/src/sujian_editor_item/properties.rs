@@ -410,7 +410,15 @@ impl SujianEditorItem {
             let freed_snapshot_ids = self.pipeline.animation_coordinator_mut().pause_all();
             // 完成的事务释放了 texture，需要清理对应的 texture cache。
             if !freed_snapshot_ids.is_empty() {
-                self.pipeline.texture_cache_mut().clear();
+                // Issue #736 评论 5786231506: 不再 clear()，改成 retain，避免清掉
+                // pause 的 Timed 事务（Reflow）还在用的纹理。
+                let active_ids = self
+                    .pipeline
+                    .animation_coordinator_mut()
+                    .collect_active_snapshot_ids();
+                self.pipeline
+                    .texture_cache_mut()
+                    .retain_active_snapshot_ids(&active_ids);
                 self.pipeline.set_current_layout_snapshot(None);
                 self.pipeline.set_previous_layout_snapshot(None);
                 self.pipeline.set_previous_canonical_snapshot(None);
