@@ -205,11 +205,11 @@ impl SujianEditorItem {
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
+                &self.buffer.text,
             );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
-        snapshot.virtual_text = self.buffer.text.clone();
 
         if promote {
             // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
@@ -377,11 +377,11 @@ impl SujianEditorItem {
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
+                virtual_text,
             );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
-        snapshot.virtual_text = virtual_text.to_string();
 
         // Issue #658 评论 5621512329 问题 1: 临时 generation 的 QTextLayout 已在
         // prepare_document_visual_snapshot 内部提取完 canonical line/image/cursor

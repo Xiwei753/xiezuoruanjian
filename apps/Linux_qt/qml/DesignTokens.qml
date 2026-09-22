@@ -3,6 +3,11 @@ import QtQuick
 QtObject {
     id: dt
 
+    // Issue #736 评论 5777408243 问题2: themeApplied 信号。
+    // applyThemeState() 完成 resolvedTheme 整体替换后发出，携带这份已发布的最终 token snapshot。
+    // 外部（main.qml 诊断）监听此信号而非原始 themeStateJson 变化。
+    signal themeApplied
+
     // Issue #724 评论 5751573705 问题3: DesignTokens 真正原子替换。
     //
     // 旧实现让每个颜色属性独立 binding 到 themeControllerRef.*_hex，
@@ -63,6 +68,12 @@ QtObject {
         outline: "#8C9198",
         outline_variant: "#42474E",
         scrim: "#000000",
+        // Issue #736 评论 5777408243 问题2: 初始 fallback 也带语义色字段，
+        // 与 applyThemeState 构造的 next 结构一致。
+        text_primary: "#E2E3E7",
+        text_secondary: "#C1C6CF",
+        editor_text: "#E2E3E7",
+        editor_background: "#1F2225",
     })
 
     /// 从 theme_state_json 一次性构建 resolved theme 对象。
@@ -97,6 +108,10 @@ QtObject {
         // Rust 侧已保证 colors 包含所有字段的最终值，直接读取即可。
         // 字段缺失/非法（undefined 或非 string）由 qcolor() 报成洋红，
         // 不再悄悄继承上一套主题颜色。
+        //
+        // Issue #736 评论 5777408243 问题2: 一次构造完整的"最终 QML token 快照"再整体替换。
+        // 在 next 里直接确定基础色 + 语义色（text_primary/text_secondary/editor_text/editor_background），
+        // 公开属性只读这一个 next，不再一级套一级计算（不再 textPrimary: onSurface → onSurface: qcolor(...)）。
         var next = {
             is_dark: dark,
             colors: colors,
@@ -136,8 +151,17 @@ QtObject {
             outline: colors.outline,
             outline_variant: colors.outline_variant,
             scrim: colors.scrim,
+            // Issue #736 评论 5777408243 问题2: 语义色在构造 next 时一次确定，
+            // 不再让属性链 textPrimary → onSurface → qcolor(resolvedTheme.on_surface) 多层派生。
+            text_primary: colors.on_surface,
+            text_secondary: colors.on_surface_variant,
+            editor_text: colors.on_surface,
+            editor_background: colors.surface_container_low,
         }
         resolvedTheme = next
+        // Issue #736 评论 5777408243 问题2: resolvedTheme 替换后发 themeApplied 信号，
+        // 让外部（main.qml 诊断）监听这份已发布的最终 token snapshot，不再监听原始 JSON 变化。
+        themeApplied()
     }
 
     // Issue #724 评论 5751573705 问题3: 所有派生 token 只读 resolvedTheme，
@@ -217,8 +241,10 @@ QtObject {
     property color cardHover: surfaceContainer
     property color selected: primaryContainer
     property color selectedText: onPrimaryContainer
-    property color textPrimary: onSurface
-    property color textSecondary: onSurfaceVariant
+    // Issue #736 评论 5777408243 问题2: textPrimary/textSecondary/editorText/editorBackground
+    // 直接读 resolvedTheme 里的语义色字段，不再 textPrimary: onSurface → onSurface: qcolor(...) 多层派生。
+    property color textPrimary: qcolor(resolvedTheme.text_primary)
+    property color textSecondary: qcolor(resolvedTheme.text_secondary)
     property color textMuted: outline
     property color textDisabled: isDark ? Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38) : Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38)
     property color defaultAccent: primary
@@ -232,8 +258,20 @@ QtObject {
     property color dangerContainer: errorContainer
     property color onDangerContainer: onErrorContainer
 
-    property color editorBackground: surfaceContainerLow
-    property color editorText: textPrimary
+    property color editorBackground: qcolor(resolvedTheme.editor_background)
+    property color editorText: qcolor(resolvedTheme.editor_text)
+
+    // Issue #736 评论 5777408243 问题2: 原始 hex 字符串属性，给 Rust/Q_PROPERTY 字符串消费者直接用，
+    // 避免 QString -> QML color -> toString() -> QString 绕一圈。
+    // 值直接从 resolvedTheme（最终 token snapshot）读取，不再经多层 color 属性派生。
+    property string onSurfaceHex: resolvedTheme.on_surface || ""
+    property string onSurfaceVariantHex: resolvedTheme.on_surface_variant || ""
+    property string textPrimaryHex: resolvedTheme.text_primary || resolvedTheme.on_surface || ""
+    property string textSecondaryHex: resolvedTheme.text_secondary || resolvedTheme.on_surface_variant || ""
+    property string editorTextHex: resolvedTheme.editor_text || resolvedTheme.on_surface || ""
+    property string editorBackgroundHex: resolvedTheme.editor_background || resolvedTheme.surface_container_low || ""
+    property string primaryHex: resolvedTheme.primary || ""
+    property string selectedTextHex: resolvedTheme.on_primary_container || ""
 
     property color surfaceFallback: isDark ? "#1A1D23" : "#FCFCFF"
     property color surfaceContainerLowFallback: isDark ? "#1F2229" : "#F6F8FC"

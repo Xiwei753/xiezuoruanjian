@@ -53,6 +53,14 @@ pub enum ImModuleVar {
 }
 
 /// 运行环境配置结果，供 main.rs 记日志。
+///
+/// Issue #736 评论 5777408243 问题3: 字段语义明确区分 requested/configured/actual：
+/// - `requested_qpa`：用户显式设置的环境变量值（inputs.user_qpa_platform）
+/// - `configured_qpa`：本函数设置的值（decide_qpa_platform 的结果）
+/// - actual_qpa：不在这个模块设置（只能在 GUI application 建立以后从 Qt 读取），
+///   留给 main.rs 的 DesktopRuntimeProfile。
+///
+/// 这个模块只负责"启动前环境决策"，不让任何字段冒充 Qt 最终实际平台。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeEnvConfig {
     /// 是否检测到 Wayland 会话
@@ -61,8 +69,10 @@ pub struct RuntimeEnvConfig {
     pub detected_im_framework: InputMethodFramework,
     /// 是否由本函数设置了 `QT_QPA_PLATFORM`（true=本次设置，false=用户已设或未设）
     pub set_qpa_platform: bool,
-    /// 最终生效的 `QT_QPA_PLATFORM` 值（用户设置或本次设置）
-    pub qpa_platform_value: Option<String>,
+    /// 用户显式设置的环境变量值（inputs.user_qpa_platform）
+    pub requested_qpa: Option<String>,
+    /// 本函数设置的值（decide_qpa_platform 的结果）
+    pub configured_qpa: Option<String>,
     /// 是否由本函数设置了 IM module
     pub set_im_module: bool,
     /// 写入的 IM 环境变量
@@ -77,11 +87,12 @@ impl RuntimeEnvConfig {
     /// 简短摘要，供 `debug_log_static` 记一行日志。
     pub fn summary(&self) -> String {
         format!(
-            "wayland={} imFramework={:?} setQpa={} qpa={:?} setIm={} imVar={:?} im={:?} userForcedNonWayland={}",
+            "wayland={} imFramework={:?} setQpa={} requestedQpa={:?} configuredQpa={:?} setIm={} imVar={:?} im={:?} userForcedNonWayland={}",
             self.wayland_session,
             self.detected_im_framework,
             self.set_qpa_platform,
-            self.qpa_platform_value,
+            self.requested_qpa,
+            self.configured_qpa,
             self.set_im_module,
             self.im_module_var,
             self.im_module_value,
@@ -219,6 +230,8 @@ pub fn configure_qpa_and_input_method() -> RuntimeEnvConfig {
         wayland_session: wayland,
         detected_im_framework: framework,
         user_forced_non_wayland_on_wayland: forced_non_wayland,
+        // Issue #736 评论 5777408243 问题3: requested_qpa 记录用户显式设置值
+        requested_qpa: inputs.user_qpa_platform.clone(),
         ..Default::default()
     };
 
@@ -227,11 +240,10 @@ pub fn configure_qpa_and_input_method() -> RuntimeEnvConfig {
         // SAFETY: 在 main 最早期、单线程、Qt 初始化前调用，无并发读 env 风险。
         std::env::set_var("QT_QPA_PLATFORM", platform);
         config.set_qpa_platform = true;
-        config.qpa_platform_value = Some(platform.to_string());
-    } else if let Some(user) = &inputs.user_qpa_platform {
-        // 用户显式设置，记录但不覆盖
-        config.qpa_platform_value = Some(user.clone());
+        config.configured_qpa = Some(platform.to_string());
     }
+    // Issue #736 评论 5777408243 问题3: requested_qpa 已在构造时记录用户显式设置值，
+    // 不再把用户值混进 configured_qpa。configured_qpa 只记本函数设置的值。
 
     // IM module
     if let Some(setting) = decide_im_module(&inputs, wayland, framework) {
@@ -452,7 +464,8 @@ mod tests {
             wayland_session: true,
             detected_im_framework: InputMethodFramework::Fcitx5,
             set_qpa_platform: true,
-            qpa_platform_value: Some("wayland".to_string()),
+            requested_qpa: None,
+            configured_qpa: Some("wayland".to_string()),
             set_im_module: true,
             im_module_var: ImModuleVar::Modules,
             im_module_value: Some("wayland;fcitx;ibus".to_string()),
@@ -471,5 +484,25 @@ mod tests {
         let s = config.summary();
         assert!(s.contains("wayland=false"), "summary: {s}");
         assert!(s.contains("imFramework=None"), "summary: {s}");
+    }
+
+    // Issue #736 评论 5777408243 问题3: requested_qpa / configured_qpa 语义区分测试
+    #[test]
+    fn summary_distinguishes_requested_and_configured_qpa() {
+        let config = RuntimeEnvConfig {
+            wayland_session: true,
+            detected_im_framework: InputMethodFramework::None,
+            set_qpa_platform: false,
+            requested_qpa: Some("xcb".to_string()),
+            configured_qpa: None,
+            set_im_module: false,
+            im_module_var: ImModuleVar::None,
+            im_module_value: None,
+            user_forced_non_wayland_on_wayland: true,
+        };
+        let s = config.summary();
+        assert!(s.contains("requestedQpa=Some(\"xcb\")"), "summary: {s}");
+        assert!(s.contains("configuredQpa=None"), "summary: {s}");
+        assert!(s.contains("userForcedNonWayland=true"), "summary: {s}");
     }
 }

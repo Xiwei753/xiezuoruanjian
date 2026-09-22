@@ -254,7 +254,7 @@ ApplicationWindow {
         // QQmlContext 注入对象。若属性名也叫 themeController，QML 绑定作用域（接收对象自身）
         // 会让右侧裸 themeController 遮蔽 QQmlContext 注入对象，自绑定保持 null，颜色链全走
         // fallback。属性名与注入名不同名后右侧明确拿外部注入对象。
-        // themeStateJson 保留做诊断（onThemeStateJsonChanged 打日志），不参与颜色计算。
+        // themeStateJson 保留做 DesignTokens 输入，诊断改监听 themeApplied 信号，不参与颜色计算。
         themeControllerRef: themeController
         // Issue #702: 根 DesignTokens 只绑定 themeStateJson 这一份完整主题状态。
         // themeController 把 is_dark 和最终 ThemeColorScheme 打包成
@@ -277,10 +277,12 @@ ApplicationWindow {
                 appBackend.apply_window_dark_mode(designTokens.isDark);
             }
         }
-        // Issue #715: 主题诊断改为监听 themeStateJson 变化，
-        // 在完整快照更新后记录一次最终状态，不再挂在 isDark 中间字段上。
-        function onThemeStateJsonChanged() {
-            window.logThemeDiagnostics("theme_state_json_changed");
+        // Issue #736 评论 5777408243 问题2: 主题诊断改为监听 DesignTokens 的 themeApplied 信号。
+        // themeApplied 在 applyThemeState() 完成 resolvedTheme 整体替换后发出，
+        // 此时 designTokens 的最终 color token 已是这份已发布的 snapshot，
+        // 日志直接记录这份最终状态，不再监听原始 themeStateJson 变化（那时尚未解析/应用）。
+        function onThemeApplied() {
+            window.logThemeDiagnostics("theme_applied");
         }
     }
 

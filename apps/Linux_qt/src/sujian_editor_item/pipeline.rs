@@ -1207,6 +1207,11 @@ impl LinuxEditorPipeline {
                 new_revision,
                 ctx.scroll_y,
                 ctx.viewport_height,
+                // Issue #736 评论 5777408243 问题1: cluster 的 document byte range
+                // 和 snapshot 的 virtual_text 必须属于同一 revision，否则
+                // animation_coordinator 取 cluster 文本会得到空串，InsertReveal 全被跳过。
+                &motion.old_text,
+                &motion.new_text,
             );
 
             let key = self.animation_coordinator.process_transaction(

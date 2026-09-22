@@ -32,6 +32,7 @@ impl LineSnapshotBuilder {
         doc_snapshot: &CanonicalDocumentVisualSnapshot,
         scroll_y: f64,
         viewport_h: f64,
+        virtual_text: &str,
     ) -> EditorLayoutSnapshot {
         let mut line_snapshots = Vec::new();
         let mut paragraph_id: u64 = 0;
@@ -137,7 +138,9 @@ impl LineSnapshotBuilder {
             caret_rect: None,
             caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
-            virtual_text: String::new(),
+            // Issue #736 评论 5777408243 问题1: canonical snapshot 必须携带正文事实，
+            // 不再允许"有全文 byte offset 但 virtual_text 为空"的半截快照。
+            virtual_text: virtual_text.to_owned(),
         }
     }
 
@@ -148,11 +151,23 @@ impl LineSnapshotBuilder {
         new_revision: LayoutRevision,
         scroll_y: f64,
         viewport_h: f64,
+        old_text: &str,
+        new_text: &str,
     ) -> (EditorLayoutSnapshot, EditorLayoutSnapshot) {
-        let old_layout =
-            Self::build_from_canonical_document(old_revision, old_doc, scroll_y, viewport_h);
-        let new_layout =
-            Self::build_from_canonical_document(new_revision, new_doc, scroll_y, viewport_h);
+        let old_layout = Self::build_from_canonical_document(
+            old_revision,
+            old_doc,
+            scroll_y,
+            viewport_h,
+            old_text,
+        );
+        let new_layout = Self::build_from_canonical_document(
+            new_revision,
+            new_doc,
+            scroll_y,
+            viewport_h,
+            new_text,
+        );
         (old_layout, new_layout)
     }
 

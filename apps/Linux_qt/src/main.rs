@@ -511,7 +511,6 @@ fn main() {
     );
 
     let qml_path = "qrc:/main.qml";
-    log_desktop_runtime_profile(&qt_ver, qml_path);
     debug_log_static(
         "app",
         "qml_loading",
@@ -522,6 +521,27 @@ fn main() {
     remember_qml_load_error("");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
+    // Issue #736 评论 5777408243 问题3: 运行时 profile 的 Qt/QPA 采样必须在
+    // QmlEngine::new()（建立 QGuiApplication）之后才能读到真实的 platformName。
+    // 之前在 QmlEngine::new() 之前调用，QGuiApplication 尚未建立，
+    // qt_platform_name() 拿不到实际 QPA 平台。环境变量配置仍在最前面（configure_qpa_and_input_method）。
+    log_desktop_runtime_profile(&qt_ver, qml_path);
+    // Issue #736 评论 5777408243 问题3: Wayland 会话下，若期望值是 wayland
+    // 但 GUI application 建立后的实际 platformName 不是 wayland，记录明确错误。
+    let actual_platform_name = app_main_cpp::qt_platform_name();
+    if runtime_env_config.configured_qpa.as_deref() == Some("wayland")
+        && actual_platform_name != "wayland"
+    {
+        debug_error_static(
+            "app",
+            "qpa_platform_mismatch",
+            &format!(
+                "Wayland session expected QT_QPA_PLATFORM=wayland but actual QGuiApplication platformName is \"{}\"; \
+                 the GUI application did not pick up the configured Wayland QPA",
+                actual_platform_name,
+            ),
+        );
+    }
     log_input_method_diagnostics();
     set_application_icon();
 

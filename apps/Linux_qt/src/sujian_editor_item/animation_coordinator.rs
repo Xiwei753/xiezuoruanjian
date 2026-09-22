@@ -605,10 +605,32 @@ fn build_insert_reveal_slices(
             // 这些非可见字符不应创建 InsertReveal 和 static patch，
             // 避免文字前插空格闪一下/手动换行闪一下。
             // 已有文字位移交给 ReflowMove，caret 走 canonical track。
-            let cluster_text = new_snapshot
+            //
+            // Issue #736 评论 5777408243 问题1: 不再把 range 取不到正文静默解释成空字符串。
+            // cluster 的 document byte range 必须属于 snapshot.virtual_text（同一 revision），
+            // 否则属于快照不变量被破坏，记明确的 invariant diagnostic 后跳过该 cluster。
+            let cluster_text = match new_snapshot
                 .virtual_text
                 .get(new_cluster.byte_start..new_cluster.byte_end)
-                .unwrap_or("");
+            {
+                Some(text) => text,
+                None => {
+                    crate::backend::app_backend::debug_warn_static(
+                        "animation_coordinator",
+                        "insert_reveal_cluster_text_range_out_of_virtual_text",
+                        &format!(
+                            "snapshot revision={} cluster byte_start={} byte_end={} \
+                             virtual_text.len={} — cluster byte range not in virtual_text, \
+                             skip InsertReveal for this cluster (snapshot invariant broken)",
+                            new_snapshot.revision.0,
+                            new_cluster.byte_start,
+                            new_cluster.byte_end,
+                            new_snapshot.virtual_text.len(),
+                        ),
+                    );
+                    continue;
+                }
+            };
             if cluster_text
                 .chars()
                 .all(|c| c.is_whitespace() || c.is_control())

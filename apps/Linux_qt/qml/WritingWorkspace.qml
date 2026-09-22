@@ -928,15 +928,13 @@ Rectangle {
                         // 不再有 fallback 到 dt.textPrimaryHex 的第二套逻辑（已删除）。
                         // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
                         // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
-                        // Issue #714: 颜色绑定改为 dt.xxx.toString()，
-                        // 不再经过 editorController.colorToHex() 转换。
-                        // DesignTokens 的 color 属性现在直接从 themeController.*_hex
-                        // (QString) 绑定，toString() 得到 "#RRGGBB" 字符串，
-                        // 形成 QString → QML color 单一链。
-                        text_color: dt.editorText.toString()
-                        selection_color: dt.primary.toString()
-                        selected_text_color: dt.selectedText.toString()
-                        cursor_color: dt.primary.toString()
+                        // Issue #736 评论 5777408243 问题2: 直接绑定 DesignTokens 的 hex 字符串属性，
+                        // 不再经 QML color → toString() 转换，避免 QString → QML color → toString() → QString 绕一圈。
+                        // 写作区和普通 QML 控件共用同一份最终 color token。
+                        text_color: dt.editorTextHex
+                        selection_color: dt.primaryHex
+                        selected_text_color: dt.selectedTextHex
+                        cursor_color: dt.primaryHex
                         smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
                         cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
