@@ -155,6 +155,8 @@ class Issue728Comment5760741452ReproTest {
                         ),
                     ),
                 isValid = true,
+                oldLine = 0,
+                newLine = 0,
             )
         val channels = mutableMapOf<Long, CoordinatedEditMotion.GlyphChannel>()
         val deletedCount = deletedKeys.size

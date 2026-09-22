@@ -17,6 +17,11 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * 改成单一 [motionSample]（[CoordinatedEditMotion.Sample]）+ [restingCaretRect]。
  * 一笔编辑只有一个 motion — 不再分别维护"文字动画是否 active"和"光标动画是否 active"。
  *
+ * Issue #737 评论 5781084709 修复点 4：[motionSample] 只暴露 current-layout hidden ranges
+ * （[CoordinatedEditMotion.Sample.hiddenRanges] 只含 Inserted 角色的 newLayout ranges）。
+ * Deleted ghost 自己携带 old layout（通过 [CoordinatedEditMotion.Sample.glyphOverlays]），
+ * draw 层用 overlay 自带的 layout 画 ghost，不裁 BasicTextField 当前正文。
+ *
  * @param layout 当前 layout 快照 — 供 buildHiddenPath 使用。
  * @param motionSample 当前帧的 motion 采样结果 — 由 [CoordinatedEditMotion.sample] 产生。
  *   非 null 且 [CoordinatedEditMotion.Sample.isValid] 时 draw 层画 animated caret + glyph overlay；

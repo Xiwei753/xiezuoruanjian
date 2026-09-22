@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
+import kotlin.math.abs
 
 /**
  * Issue #737：光标遍历路径 — 根据 old/new [TextLayoutResult] 生成光标运动 segments。
@@ -11,20 +12,26 @@ import androidx.compose.ui.text.TextLayoutResult
  * 否则光标会斜穿过两行之间的空白区域。
  *
  * 所有坐标必须直接来自平台 layout（[TextLayoutResult.getCursorRect] /
- * [TextLayoutResult.getLineLeft] / [TextLayoutResult.getLineRight] 等），
- * 不由动画层自行猜位置。
+ * [TextLayoutResult.getLineForOffset] 等），不由动画层自行猜位置。
  *
  * - [isValid] = false 时表示无运动（old/new caret rect 相同），
  *   对应的 [CoordinatedEditMotion] 也无效，直接显示最终静态正文。
  * - [segments] 按行有序，每个 segment 属于同一行；
  *   master progress [0,1] 跨 segment 时按 [Segment.startProgress]/[Segment.endProgress] 区间映射。
  *
+ * Issue #737 评论 5781084709 修复点 6：暴露 [oldLine] / [newLine]，
+ * 供 [CoordinatedEditMotion] 取真实行号，不再固定传 -1。
+ *
  * @param segments 有序光标运动段列表（按行）。
  * @param isValid 是否存在有效运动。old/new caret rect 相同时为 false。
+ * @param oldLine 编辑前 caret 所在行（-1 表示未确定/无运动）。
+ * @param newLine 编辑后 caret 所在行（-1 表示未确定/无运动）。
  */
 class CaretTraversal(
     val segments: List<Segment>,
     val isValid: Boolean,
+    val oldLine: Int,
+    val newLine: Int,
 ) {
     /**
      * 一个光标运动段：起点 rect → 终点 rect，属于同一行。
@@ -71,7 +78,12 @@ class CaretTraversal(
         ): CaretTraversal {
             // 无运动：old/new caret rect 相同
             if (oldCaretRect == newCaretRect) {
-                return CaretTraversal(segments = emptyList(), isValid = false)
+                return CaretTraversal(
+                    segments = emptyList(),
+                    isValid = false,
+                    oldLine = -1,
+                    newLine = -1,
+                )
             }
             val oldLine = lineForOffset(oldLayout, oldCaretOffset)
             val newLine = lineForOffset(newLayout, newCaretOffset)
@@ -89,6 +101,8 @@ class CaretTraversal(
                             ),
                         ),
                     isValid = true,
+                    oldLine = oldLine,
+                    newLine = newLine,
                 )
             }
             // 跨行：分段 traversal
@@ -103,12 +117,26 @@ class CaretTraversal(
                         newCaretRect,
                     ),
                 isValid = true,
+                oldLine = oldLine,
+                newLine = newLine,
             )
         }
 
         /**
-         * 跨行分段 traversal — 上一行 oldCaretRect → 行尾；下一行行首 → newCaretRect；
-         * 跨多行时中间行各一个 segment（行首→行尾）。
+         * Issue #737 评论 5781084709 修复点 1：跨行分段 traversal —
+         * segments 永远按"old caret → new caret"的实际时间顺序构造，
+         * 不按 minLine/maxLine 先排序再决定起终点。
+         *
+         * - 向下移动（oldLine < newLine）：
+         *   - 段 0 (oldLine): oldCaretRect → oldLine 行尾 caretRect
+         *   - 中间行 (oldLine+1 .. newLine-1): 行首 caretRect → 行尾 caretRect
+         *   - 最后段 (newLine): newLine 行首 caretRect → newCaretRect
+         * - 向上移动（oldLine > newLine）：
+         *   - 段 0 (oldLine): oldCaretRect → oldLine 行首 caretRect（向左到行首）
+         *   - 中间行 (oldLine-1 .. newLine+1, 递减): 行尾 caretRect → 行首 caretRect（从右到左）
+         *   - 最后段 (newLine): newLine 行尾 caretRect → newCaretRect
+         *
+         * progress 区间均分：每段占 1f / totalLines。
          */
         private fun buildCrossLineSegments(
             oldLayout: TextLayoutResult,
@@ -119,143 +147,121 @@ class CaretTraversal(
             newCaretRect: Rect,
         ): List<Segment> {
             val segments = mutableListOf<Segment>()
-            val minLine = minOf(oldLine, newLine)
-            val maxLine = maxOf(oldLine, newLine)
-            val totalLines = maxLine - minLine + 1
+            val totalLines = abs(oldLine - newLine) + 1
             val progressPerLine = 1f / totalLines.toFloat()
-            val oldIsFirst = oldLine < newLine
-            // 第一段：从 oldCaretRect 到行尾
-            addFirstSegment(
-                segments, oldIsFirst, oldLayout, newLayout,
-                oldLine, newLine, oldCaretRect, newCaretRect, progressPerLine,
-            )
-            // 中间行
-            addMiddleSegments(segments, minLine, oldLine, oldLayout, newLayout, totalLines, progressPerLine)
-            // 最后一段：从行首到 newCaretRect
-            addLastSegment(
-                segments, oldIsFirst, oldLayout, newLayout,
-                oldLine, newLine, oldCaretRect, newCaretRect, totalLines, progressPerLine,
-            )
-            return segments
-        }
 
-        @Suppress("LongParameterList")
-        private fun addFirstSegment(
-            segments: MutableList<Segment>,
-            oldIsFirst: Boolean,
-            oldLayout: TextLayoutResult,
-            newLayout: TextLayoutResult,
-            oldLine: Int,
-            newLine: Int,
-            oldCaretRect: Rect,
-            newCaretRect: Rect,
-            progressPerLine: Float,
-        ) {
-            val firstLayout = if (oldIsFirst) oldLayout else newLayout
-            val firstLine = if (oldIsFirst) oldLine else newLine
-            val firstStartRect = if (oldIsFirst) oldCaretRect else newCaretRect
-            segments.add(
-                Segment(
-                    startRect = firstStartRect,
-                    endRect = lineEndRect(firstLayout, firstLine),
-                    lineIndex = firstLine,
-                    startProgress = 0f,
-                    endProgress = progressPerLine,
-                ),
-            )
-        }
-
-        @Suppress("LongParameterList")
-        private fun addMiddleSegments(
-            segments: MutableList<Segment>,
-            minLine: Int,
-            oldLine: Int,
-            oldLayout: TextLayoutResult,
-            newLayout: TextLayoutResult,
-            totalLines: Int,
-            progressPerLine: Float,
-        ) {
-            for (i in 1 until totalLines - 1) {
-                val line = minLine + i
-                val layout = if (line <= oldLine) oldLayout else newLayout
+            if (oldLine < newLine) {
+                // 向下移动：oldLine → newLine
+                // 段 0 (oldLine): oldCaretRect → oldLine 行尾
                 segments.add(
                     Segment(
-                        startRect = lineStartRect(layout, line),
-                        endRect = lineEndRect(layout, line),
-                        lineIndex = line,
-                        startProgress = i * progressPerLine,
-                        endProgress = (i + 1) * progressPerLine,
+                        startRect = oldCaretRect,
+                        endRect = lineEndRect(oldLayout, oldLine),
+                        lineIndex = oldLine,
+                        startProgress = 0f,
+                        endProgress = progressPerLine,
+                    ),
+                )
+                // 中间行 (oldLine+1 .. newLine-1): 行首 → 行尾
+                for (i in 1 until totalLines - 1) {
+                    val line = oldLine + i
+                    segments.add(
+                        Segment(
+                            startRect = lineStartRect(newLayout, line),
+                            endRect = lineEndRect(newLayout, line),
+                            lineIndex = line,
+                            startProgress = i * progressPerLine,
+                            endProgress = (i + 1) * progressPerLine,
+                        ),
+                    )
+                }
+                // 最后段 (newLine): newLine 行首 → newCaretRect
+                segments.add(
+                    Segment(
+                        startRect = lineStartRect(newLayout, newLine),
+                        endRect = newCaretRect,
+                        lineIndex = newLine,
+                        startProgress = (totalLines - 1) * progressPerLine,
+                        endProgress = 1f,
+                    ),
+                )
+            } else {
+                // 向上移动：oldLine → newLine (oldLine > newLine)
+                // 段 0 (oldLine): oldCaretRect → oldLine 行首（向左到行首）
+                segments.add(
+                    Segment(
+                        startRect = oldCaretRect,
+                        endRect = lineStartRect(oldLayout, oldLine),
+                        lineIndex = oldLine,
+                        startProgress = 0f,
+                        endProgress = progressPerLine,
+                    ),
+                )
+                // 中间行 (oldLine-1 .. newLine+1, 递减): 行尾 → 行首（从右到左）
+                for (i in 1 until totalLines - 1) {
+                    val line = oldLine - i
+                    segments.add(
+                        Segment(
+                            startRect = lineEndRect(oldLayout, line),
+                            endRect = lineStartRect(oldLayout, line),
+                            lineIndex = line,
+                            startProgress = i * progressPerLine,
+                            endProgress = (i + 1) * progressPerLine,
+                        ),
+                    )
+                }
+                // 最后段 (newLine): newLine 行尾 → newCaretRect
+                segments.add(
+                    Segment(
+                        startRect = lineEndRect(newLayout, newLine),
+                        endRect = newCaretRect,
+                        lineIndex = newLine,
+                        startProgress = (totalLines - 1) * progressPerLine,
+                        endProgress = 1f,
                     ),
                 )
             }
-        }
-
-        @Suppress("LongParameterList")
-        private fun addLastSegment(
-            segments: MutableList<Segment>,
-            oldIsFirst: Boolean,
-            oldLayout: TextLayoutResult,
-            newLayout: TextLayoutResult,
-            oldLine: Int,
-            newLine: Int,
-            oldCaretRect: Rect,
-            newCaretRect: Rect,
-            totalLines: Int,
-            progressPerLine: Float,
-        ) {
-            val lastLayout = if (oldIsFirst) newLayout else oldLayout
-            val lastLine = if (oldIsFirst) newLine else oldLine
-            segments.add(
-                Segment(
-                    startRect = lineStartRect(lastLayout, lastLine),
-                    endRect = if (oldIsFirst) newCaretRect else oldCaretRect,
-                    lineIndex = lastLine,
-                    startProgress = (totalLines - 1) * progressPerLine,
-                    endProgress = 1f,
-                ),
-            )
+            return segments
         }
 
         /**
-         * 找出 offset 所在行号；offset 越界时返回 -1。
+         * Issue #737 评论 5781084709 修复点 2：用平台 API [TextLayoutResult.getLineForOffset]
+         * 找出 offset 所在行号，不要自己用 offset <= getLineEnd(i) 扫描
+         * （软换行边界 offset 容易判到上一行）。offset 越界时返回 -1。
          */
         private fun lineForOffset(
             layout: TextLayoutResult,
             offset: Int,
         ): Int {
-            if (offset < 0 || offset > layout.layoutInput.text.text.length) return -1
-            for (i in 0 until layout.lineCount) {
-                if (offset >= layout.getLineStart(i) && offset <= layout.getLineEnd(i)) return i
-            }
-            return layout.lineCount - 1
+            val textLength = layout.layoutInput.text.text.length
+            if (offset < 0 || offset > textLength) return -1
+            return layout.getLineForOffset(offset)
         }
 
         /**
-         * 行尾 caret rect — 用行右边界构造一个 caret 大小的 rect。
+         * Issue #737 评论 5781084709 修复点 2：行尾 caret rect —
+         * 取该行实际 end offset 的 [TextLayoutResult.getCursorRect]，
+         * 不再用 getLineRight + 行高×0.6 估算 caret 几何。
          */
         private fun lineEndRect(
             layout: TextLayoutResult,
             line: Int,
         ): Rect {
-            val top = layout.getLineTop(line)
-            val bottom = layout.getLineBottom(line)
-            val right = layout.getLineRight(line)
-            val left = layout.getLineLeft(line)
-            // 行尾 caret rect：用行高 * 0.6 作为 caret 宽度估计
-            return Rect(left = right, top = top, right = right + (bottom - top) * 0.6f, bottom = bottom)
+            val offset = layout.getLineEnd(line)
+            return layout.getCursorRect(offset)
         }
 
         /**
-         * 行首 caret rect — 用行左边界构造一个 caret 大小的 rect。
+         * Issue #737 评论 5781084709 修复点 2：行首 caret rect —
+         * 取该行实际 start offset 的 [TextLayoutResult.getCursorRect]，
+         * 不再用 getLineLeft + 行高×0.6 估算 caret 几何。
          */
         private fun lineStartRect(
             layout: TextLayoutResult,
             line: Int,
         ): Rect {
-            val top = layout.getLineTop(line)
-            val bottom = layout.getLineBottom(line)
-            val left = layout.getLineLeft(line)
-            return Rect(left = left, top = top, right = left + (bottom - top) * 0.6f, bottom = bottom)
+            val offset = layout.getLineStart(line)
+            return layout.getCursorRect(offset)
         }
     }
 

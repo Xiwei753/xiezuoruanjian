@@ -475,6 +475,8 @@ class ComposeEditMotionTest {
                         ),
                     ),
                 isValid = true,
+                oldLine = 0,
+                newLine = 0,
             )
         val channels = mutableMapOf<Long, CoordinatedEditMotion.GlyphChannel>()
         val insertedCount = insertedKeys.size

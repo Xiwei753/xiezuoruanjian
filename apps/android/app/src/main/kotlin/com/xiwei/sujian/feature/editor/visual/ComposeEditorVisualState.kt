@@ -552,6 +552,23 @@ class ComposeEditorVisualState(
         pendingPatches.clear()
         val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
 
+        // Issue #737 评论 5781084709 修复点 5：SYSTEM_SUPPRESSED 直接静态落最终画面，不创建 active motion。
+        // ComposeVisualFrameCoordinator 仍会把 AnimationMode.SYSTEM_SUPPRESSED 写进 patch，
+        // 但本方法必须读取 framePatch.animationMode 并收口 — 否则仍会正常创建 CoordinatedEditMotion。
+        // 这个检查在 isSelectionOnly 判断之前，因为 SYSTEM_SUPPRESSED 优先级最高 —
+        // 无论是否 selection-only，系统抑制都应该静态完成。
+        if (framePatch.animationMode == AnimationMode.SYSTEM_SUPPRESSED) {
+            activeMotion = null
+            restingCaretRect = framePatch.targetCaretRect
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    motionSample = null,
+                    layout = framePatch.newLayout,
+                    restingCaretRect = framePatch.targetCaretRect,
+                )
+            return listOf(framePatch)
+        }
+
         // Issue #737：从 patch 直接构造 CoordinatedEditMotion — 一次性构造，
         // 不再先 timeline.applyPatch 接管文字再创建 motion。
         // - traversal 有效时 motion 携带 caret + glyph channels

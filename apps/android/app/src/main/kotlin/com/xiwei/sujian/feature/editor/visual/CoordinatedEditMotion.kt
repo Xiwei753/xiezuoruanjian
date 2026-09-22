@@ -69,8 +69,13 @@ class CoordinatedEditMotion(
      * 一帧的采样结果 — 同时包含 caret 和文字。
      *
      * @param caretRect 当前帧 caret rect。
-     * @param glyphOverlays 当前帧应绘制的 glyph overlay 列表。
+     * @param glyphOverlays 当前帧应绘制的 glyph overlay 列表
+     *   （inserted 和 deleted 都进；deleted ghost 携带自己的 oldLayout）。
      * @param hiddenRanges 当前帧应被动画层接管（裁掉 BasicTextField 原字）的 range 列表。
+     *   **Issue #737 评论 5781084709 修复点 4**：只包含 Inserted 角色的 current-layout ranges
+     *   （这些 range 属于 newLayout，裁掉 BasicTextField 里的对应正文是正确的）。
+     *   Deleted 不进入此列表 — deleted ghost 通过 [glyphOverlays] 用自己的 oldLayout 绘制，
+     *   不裁 BasicTextField 当前正文。
      * @param finished motion 是否已完成。
      * @param isValid motion 是否有效（traversal 是否建出来）。
      */
@@ -85,9 +90,14 @@ class CoordinatedEditMotion(
     /**
      * 单个 glyph 的绘制 overlay。
      *
+     * Issue #737 评论 5781084709 修复点 4：overlay 携带自己的 [layout] —
+     * inserted overlay 用 newLayout，deleted overlay 用 oldLayout。
+     * [EditorTextFieldDrawLayer.drawGlyphOverlay] 用 overlay 自带的 layout 画 ghost，
+     * 不用当前 BasicTextField 的 layout。
+     *
      * @param key 唯一标识。
      * @param range UTF-16 range。
-     * @param layout 所属 layout 快照。
+     * @param layout 所属 layout 快照（inserted=newLayout，deleted=oldLayout）。
      * @param role [GlyphRole]。
      * @param clipFraction 可见区域裁切 fraction（0..1）。
      */
@@ -108,7 +118,15 @@ class CoordinatedEditMotion(
      * - traversal 无效时 caret 直接落在 [newCaretRect]，glyph overlays 为空。
      * - traversal 有效时 caret 由 [CaretTraversal.sampleCaret] 算，
      *   每个 glyph channel 按 master progress 经区间映射后线性插值 fraction。
-     * - fraction > 0 的 glyph 进入 [Sample.glyphOverlays] 和 [Sample.hiddenRanges]。
+     * - fraction > 0 的 glyph 进入 [Sample.glyphOverlays]（inserted 和 deleted 都进）。
+     *
+     * Issue #737 评论 5781084709 修复点 3：Inserted range 从 motion 开始到结束前都必须隐藏，
+     * 即使当前 fraction=0。否则 BasicTextField 在 progress=0 时先完整显示新字，
+     * 下一帧才被裁掉，表现为"新字先闪出来一下再重新吐字"。
+     *
+     * Issue #737 评论 5781084709 修复点 4：[Sample.hiddenRanges] 只包含 Inserted 角色的 range
+     * （current-layout ranges）。Deleted 不加入 hiddenRanges — deleted ghost 用自己的 oldLayout
+     * 通过 [Sample.glyphOverlays] 绘制，不裁 BasicTextField 当前正文。
      *
      * @param frameTimeNanos 当前帧时间戳（Compose frame clock）。
      */
@@ -131,6 +149,10 @@ class CoordinatedEditMotion(
                         clipFraction = fraction,
                     ),
                 )
+            }
+            // 修复点 3+4：Inserted range 从 motion 开始到结束前都必须隐藏（即使 fraction=0）。
+            // Deleted 不加入 hiddenRanges（deleted ghost 用自己的 oldLayout 画，不裁 BasicTextField）。
+            if (ch.role == GlyphRole.Inserted && !progress.finished) {
                 hiddenRanges.add(ch.range)
             }
         }
@@ -237,13 +259,15 @@ class CoordinatedEditMotion(
 
             val channels = buildGlyphChannels(patch)
 
+            // Issue #737 评论 5781084709 修复点 6：从 traversal.oldLine / traversal.newLine
+            // 取真实行号传入 motion 构造，不再固定传 -1。
             return CoordinatedEditMotion(
                 oldSelection = oldSelection,
                 newSelection = newSelection,
                 oldCaretRect = oldCaretRect,
                 newCaretRect = newCaretRect,
-                oldLine = -1,
-                newLine = -1,
+                oldLine = traversal.oldLine,
+                newLine = traversal.newLine,
                 traversal = traversal,
                 glyphChannels = channels,
                 startedAtNanos = frameTimeNanos,
@@ -343,13 +367,15 @@ class CoordinatedEditMotion(
                     oldCaretRect = originCaretRect,
                     newCaretRect = targetCaretRect,
                 )
+            // Issue #737 评论 5781084709 修复点 6：从 traversal.oldLine / traversal.newLine
+            // 取真实行号传入 motion 构造，不再固定传 -1。
             return CoordinatedEditMotion(
                 oldSelection = oldLayout.selection,
                 newSelection = newLayout.selection,
                 oldCaretRect = originCaretRect,
                 newCaretRect = targetCaretRect,
-                oldLine = -1,
-                newLine = -1,
+                oldLine = traversal.oldLine,
+                newLine = traversal.newLine,
                 traversal = traversal,
                 glyphChannels = emptyMap(),
                 startedAtNanos = frameTimeNanos,

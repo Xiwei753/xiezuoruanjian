@@ -127,9 +127,15 @@ fun EditorTextFieldDrawLayer(
  * #698 评论 5700812160：[scrollY] 把 [TextLayoutResult.getPathForRange] 得到的正文坐标 path
  * 换算到当前编辑器视口坐标。
  *
+ * Issue #737 评论 5781084709 修复点 4：[hiddenRanges] 只含 Inserted 角色的 current-layout ranges
+ * （属于 newLayout，裁掉 BasicTextField 里的对应正文是正确的）。
+ * Deleted ghost 不进入此列表 — deleted 通过 [drawGlyphOverlay] 用自己的 oldLayout 绘制。
+ *
  * @param hiddenRanges 需要裁切的正文 range 列表。
- *   **语义收死（#711 评论 5738906634）**：只能表示"这一帧确实由动画层接管的字符"
- *   （新插入正在吐字、被删除的旧字 ghost），不能表示"位置变了所以想自己重画的幸存正文"。
+ *   **语义收死（#711 评论 5738906634 + #737 评论 5781084709 修复点 4）**：只表示
+ *   "这一帧由动画层接管的 inserted 字符"（current-layout ranges），
+ *   不表示"被删除的旧字 ghost"（deleted 用 overlay 自带 oldLayout 画），
+ *   也不表示"位置变了所以想自己重画的幸存正文"。
  * @param layout 当前正文 layout 快照；null 时返回 null。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value，
  *   用于把正文坐标 path 换算到视口坐标。
@@ -166,6 +172,10 @@ private fun DrawScope.buildHiddenPath(
  * Issue #737：绘制单个 glyph overlay —
  * 从 [CoordinatedEditMotion.GlyphOverlay] 读取 range / layout / role / clipFraction，
  * 在所属 layout 的真实位置画一段 range 文字，按 clipFraction 裁切可见区域。
+ *
+ * Issue #737 评论 5781084709 修复点 4：用 overlay 自带的 [CoordinatedEditMotion.GlyphOverlay.layout]
+ * 画 ghost — inserted overlay 用 newLayout，deleted overlay 用 oldLayout。
+ * 不用当前 BasicTextField 的 layout，避免 deleted range 拿旧 offset 裁新正文。
  *
  * - [GlyphRole.Inserted]（吐字）：clipRect = [left, left + width * fraction]
  * - [GlyphRole.Deleted]（吞字）：clipRect = [left, left + width * fraction]
@@ -279,6 +289,10 @@ private fun DrawScope.drawTranslatedRangeText(
  *   2. 画 glyph overlays（插入/删除的文字）
  *   3. 画 animated caret
  * - 否则：画 BasicTextField 内容 + resting caret
+ *
+ * Issue #737 评论 5781084709 修复点 4：[buildHiddenPath] 只用
+ * [CoordinatedEditMotion.Sample.hiddenRanges]（只含 inserted current-layout ranges）裁 BasicTextField。
+ * Deleted ghost 通过 [drawGlyphOverlay] 用 overlay 自带的 oldLayout 绘制，不裁 BasicTextField。
  *
  * @param motionSample 当前帧的 motion 采样结果 — 由 [CoordinatedEditMotion.sample] 产生。
  *   null 或无效时画平台最终正文 + [restingCaretRect]。

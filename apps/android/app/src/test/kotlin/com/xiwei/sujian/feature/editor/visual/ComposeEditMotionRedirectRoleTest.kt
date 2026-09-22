@@ -258,6 +258,8 @@ class ComposeEditMotionRedirectRoleTest {
                         CaretTraversal.Segment(rect2, rect2, lineIndex = 2, startProgress = 2f / 3f, endProgress = 1f),
                     ),
                 isValid = true,
+                oldLine = 0,
+                newLine = 2,
             )
 
         // progress=1/6：在 segment 0 中点，caret 在 rect0→rect1 中点
@@ -374,6 +376,8 @@ class ComposeEditMotionRedirectRoleTest {
                         ),
                     ),
                 isValid = true,
+                oldLine = 0,
+                newLine = 0,
             )
         val channels = mutableMapOf<Long, CoordinatedEditMotion.GlyphChannel>()
         val insertedCount = insertedKeys.size
