@@ -25,6 +25,15 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * @param glyphChannels 文字 glyph 运动通道（traversal 无效时为空）。
  * @param startedAtNanos motion 开始时间戳（Compose frame clock）。
  * @param durationNanos motion 时长（<=0 表示瞬时完成）。
+ * @param prepared Issue #737 评论 5782769758：是否处于 prepared 状态 —
+ *   true 表示已构造（有 traversal、glyph ownership、progress=0）但还没开始计时；
+ *   false 表示已开始计时（running）或瞬时完成。
+ *   prepared motion 的 [sample] 永远返回 progress=0 的结果：
+ *   - caretRect = traversal.sampleCaret(0f) = origin caret
+ *   - inserted glyph fraction=0 → 不进 glyphOverlays，但进 hiddenRanges（Inserted && !finished）
+ *     → 新字被 hidden ownership 接管
+ *   - deleted glyph fraction=1 → 进 glyphOverlays（完整可见）
+ *   这正是"新字第一次画出来时就已经处于 hidden ownership，caret 也还在 origin"。
  */
 @Suppress("LongParameterList")
 class CoordinatedEditMotion(
@@ -38,7 +47,39 @@ class CoordinatedEditMotion(
     val glyphChannels: Map<Long, GlyphChannel>,
     private val startedAtNanos: Long,
     private val durationNanos: Long,
+    private val prepared: Boolean = false,
 ) {
+    /**
+     * Issue #737 评论 5782769758：是否处于 prepared 状态（已构造但未开始计时）。
+     * 供 [ComposeEditorVisualState] 判断是否需要在 drainPendingPatchesAtFrame 里 start。
+     */
+    val isPrepared: Boolean get() = prepared
+
+    /**
+     * Issue #737 评论 5782769758：把 prepared motion 转成 running motion —
+     * 返回一个 prepared=false、startedAtNanos=[startedAtNanos] 的新实例，
+     * 所有其他字段（traversal、glyphChannels、durationNanos、old/new selection/caret/line）不变。
+     *
+     * 调用时机：[ComposeEditorVisualState.drainPendingPatchesAtFrame] 的真实 frameTimeNanos 到达时，
+     * 把 applyFrameUpdate 构造的 prepared motion start 成 running motion。
+     *
+     * @param startedAtNanos 真实帧时间戳（Compose frame clock）。
+     */
+    fun start(startedAtNanos: Long): CoordinatedEditMotion =
+        CoordinatedEditMotion(
+            oldSelection = oldSelection,
+            newSelection = newSelection,
+            oldCaretRect = oldCaretRect,
+            newCaretRect = newCaretRect,
+            oldLine = oldLine,
+            newLine = newLine,
+            traversal = traversal,
+            glyphChannels = glyphChannels,
+            startedAtNanos = startedAtNanos,
+            durationNanos = durationNanos,
+            prepared = false,
+        )
+
     /** 文字 glyph 角色。 */
     enum class GlyphRole { Inserted, Deleted }
 
@@ -168,14 +209,20 @@ class CoordinatedEditMotion(
     /**
      * motion 是否已完成（progress >= 1 或 durationNanos <= 0）。
      *
+     * Issue #737 评论 5782769758：prepared motion 永远未完成（progress 固定 0）。
+     *
      * @param frameTimeNanos 当前帧时间戳。
      */
-    fun isFinished(frameTimeNanos: Long): Boolean = computeProgress(frameTimeNanos).finished
+    fun isFinished(frameTimeNanos: Long): Boolean = !prepared && computeProgress(frameTimeNanos).finished
 
     /**
      * 算 master progress [0,1] 和 finished 状态。
+     *
+     * Issue #737 评论 5782769758：prepared motion 直接返回 progress=0、未完成 —
+     * 让 [sample] 产出"origin caret + 新字 hidden ownership"的初始 presentation。
      */
     private fun computeProgress(frameTimeNanos: Long): ProgressResult {
+        if (prepared) return ProgressResult(0f, false)
         if (durationNanos <= 0L) return ProgressResult(1f, true)
         val elapsed = frameTimeNanos - startedAtNanos
         return when {
@@ -218,11 +265,13 @@ class CoordinatedEditMotion(
          * @param patch 屏幕帧差异描述。
          * @param frameTimeNanos motion 开始时间戳。
          * @param durationNanos motion 时长（<=0 表示瞬时完成）。
+         * @param prepared Issue #737 评论 5782769758：是否构造为 prepared motion（未开始计时）。
          */
         fun fromPatch(
             patch: ComposeVisualPatch,
             frameTimeNanos: Long,
             durationNanos: Long,
+            prepared: Boolean = false,
         ): CoordinatedEditMotion {
             val oldLayout = patch.oldLayout
             val newLayout = patch.newLayout
@@ -264,6 +313,7 @@ class CoordinatedEditMotion(
                     glyphChannels = emptyMap(),
                     startedAtNanos = frameTimeNanos,
                     durationNanos = durationNanos,
+                    prepared = prepared,
                 )
             }
 
@@ -282,6 +332,7 @@ class CoordinatedEditMotion(
                 glyphChannels = channels,
                 startedAtNanos = frameTimeNanos,
                 durationNanos = durationNanos,
+                prepared = prepared,
             )
         }
 
@@ -369,6 +420,7 @@ class CoordinatedEditMotion(
          *     必须与 rect 来自同一次实际移动，不从 layout.selection 读。
          * @param frameTimeNanos motion 开始时间戳。
          * @param durationNanos motion 时长（<=0 表示瞬时完成）。
+         * @param prepared Issue #737 评论 5782769758：是否构造为 prepared motion（未开始计时）。
          */
         fun forSelectionMove(
             oldLayout: ComposeLayoutSnapshot,
@@ -379,6 +431,7 @@ class CoordinatedEditMotion(
             targetCaretOffset: Int,
             frameTimeNanos: Long,
             durationNanos: Long,
+            prepared: Boolean = false,
         ): CoordinatedEditMotion {
             val traversal =
                 CaretTraversal.fromLayouts(
@@ -406,6 +459,7 @@ class CoordinatedEditMotion(
                 glyphChannels = emptyMap(),
                 startedAtNanos = frameTimeNanos,
                 durationNanos = durationNanos,
+                prepared = prepared,
             )
         }
     }

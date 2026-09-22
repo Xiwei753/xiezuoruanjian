@@ -28,9 +28,15 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  *   null 或无效时 draw 层画平台最终正文 + [restingCaretRect]。
  * @param restingCaretRect 静止 caret rect — 无 active motion 时 draw 层画这个 caret。
  *   null 表示无 active motion 且无已知 caret 位置，draw 层不画 caret。
+ * @param presentationGeneration Issue #737 评论 5782769758：presentation generation 计数器 —
+ *   [layout] 和 [motionSample] 必须来自同一 presentation generation。
+ *   [ComposeEditorVisualState] 在原子切换 draw snapshot 时递增 generation，
+ *   单独更新 layout 时用 generation 检测并清掉过期 motionSample，
+ *   防止"old motionSample + new layout"混搭配裁错字。
  */
 internal data class ComposeEditorDrawSnapshot(
     val layout: ComposeLayoutSnapshot? = null,
     val motionSample: CoordinatedEditMotion.Sample? = null,
     val restingCaretRect: Rect? = null,
+    val presentationGeneration: Long = 0L,
 )

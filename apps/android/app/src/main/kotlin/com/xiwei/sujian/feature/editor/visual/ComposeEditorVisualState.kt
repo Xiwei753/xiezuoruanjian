@@ -198,6 +198,14 @@ class ComposeEditorVisualState(
     private var drawSnapshotState: ComposeEditorDrawSnapshot by mutableStateOf(ComposeEditorDrawSnapshot())
 
     /**
+     * Issue #737 评论 5782769758：presentation generation 计数器 —
+     * 每次 [applyFrameUpdate] 原子切换 draw snapshot 时递增。
+     * layout 和 motionSample 带同一 generation，防止 old sample + new layout 混搭配
+     * （buildHiddenPath 拿旧 sample 的 hiddenRanges 裁新 layout → 裁错字或闪一下）。
+     */
+    private var presentationGeneration: Long = 0L
+
+    /**
      * #708 评论 5723410606 第三节：layout fingerprint 持久状态 —
      * 把 fingerprint 做成明确 data class，不再 List<Any>。
      * onAuthoritativeLayout 最前面先算 fingerprint，相同正文+相同几何时直接返回，
@@ -385,6 +393,9 @@ class ComposeEditorVisualState(
                     layout = snapshot,
                     restingCaretRect = restingCaretRect,
                 )
+            // Issue #737 评论 5782769758：fingerprintUnchanged 时 text/行几何完全一样，
+            // 保留现有 motionSample（上面 copy 没碰 motionSample）是安全的 —
+            // old sample 的 hiddenRanges 对新 layout 仍有效，不会裁错。
             return
         }
         lastObservedLayoutFingerprint = fingerprint
@@ -407,12 +418,19 @@ class ComposeEditorVisualState(
             // 不推进 committed baseline（仍保持 A）。
             frameCoordinator.onProvisionalLayout(snapshot)
             lastPresentedLayout = snapshot
-            // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
-            // composition 期间无 active motion（preedit 不播放吞吐），用 restingCaretRect 填 drawSnapshot。
+            // Issue #737 评论 5782769758：composition layout 可能和上一笔 motion 的 text 不同，
+            // 清掉过期 motionSample 防止 old sample + new layout 裁错。
+            // composition 期间不播放吞吐，activeMotion 清空后由 restingCaretRect 填 drawSnapshot caret。
+            if (activeMotion != null) {
+                activeMotion = null
+            }
+            presentationGeneration++
             drawSnapshotState =
                 drawSnapshotState.copy(
                     layout = snapshot,
+                    motionSample = null,
                     restingCaretRect = restingCaretRect,
+                    presentationGeneration = presentationGeneration,
                 )
             return
         }
@@ -421,14 +439,15 @@ class ComposeEditorVisualState(
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot
-        // 同步 draw snapshot — Core visual path 也要让 draw 层读到最新 layout
-        // Issue #728 评论 5754839786 缺口2：Core visual path 无 active motion 时用 restingCaretRect 填 caret；
-        // 有 active motion 时保留 motion sample 给的 caretRect（由 sampleVisualScene 每帧覆盖）。
-        drawSnapshotState =
-            drawSnapshotState.copy(
-                layout = snapshot,
-                restingCaretRect = restingCaretRect,
-            )
+        // Issue #737 评论 5782769758：不再单独发布 drawSnapshotState.layout —
+        // applyFrameUpdate 收到 NewPatch 时已原子切到"new layout + prepared motion sample"，
+        // 收到 Empty 时（fact 还没到）保持旧 presentation，不让 BasicTextField 最终态先裸画一帧。
+        // 只有 update 为 Empty 时才需要同步 layout（无 patch 产生，无 motion，纯 layout 推进）。
+        if (update is FrameUpdate.Empty) {
+            // layout 到达但 fact 还没到：保持旧 presentation（不更新 drawSnapshotState.layout），
+            // 等 fact 到达后 applyFrameUpdate 原子切换。
+            // restingCaretRect 已在前面更新（snapshot.cursorRect），但 draw snapshot 保持旧值。
+        }
     }
 
     /**
@@ -503,6 +522,116 @@ class ComposeEditorVisualState(
                     "patch_published: id=${update.patch.id} " +
                         "coreTxnIds=${update.patch.coreTransactionIds}",
                 )
+                // Issue #737 评论 5782769758：patch 配对成功后立刻建立 prepared motion，
+                // draw snapshot 一次性切到"new layout + prepared progress=0 sample"，
+                // 新字第一次被画出来时就已经处于 hidden ownership，caret 也还在 origin。
+                // 不再等下一帧 drainPendingPatchesAtFrame 才创建 motion — 消除"先闪最终态"窗口。
+                applyPreparedMotionFromPatch(update.patch)
+            }
+        }
+    }
+
+    /**
+     * Issue #737 评论 5782769758：patch 配对成功后立刻建立 prepared motion 的构造结果。
+     */
+    private sealed interface PreparedMotionResult {
+        /** SYSTEM_SUPPRESSED：静态落最终画面，不创建 motion。 */
+        data class Static(
+            val layout: ComposeLayoutSnapshot,
+            val caretRect: Rect,
+        ) : PreparedMotionResult
+
+        /** 创建了 prepared motion。 */
+        data class Motion(
+            val motion: CoordinatedEditMotion,
+            val newLayout: ComposeLayoutSnapshot,
+            val targetCaretRect: Rect,
+        ) : PreparedMotionResult
+    }
+
+    /**
+     * Issue #737 评论 5782769758：从 patch 构造 prepared motion（未开始计时）。
+     *
+     * 把当前 [drainPendingPatchesAtFrame] 里的 motion 构造逻辑（SYSTEM_SUPPRESSED、
+     * isSelectionOnly、policy duration）提取出来，构造 prepared=true 的 motion。
+     * prepared motion 的 [CoordinatedEditMotion.sample] 永远返回 progress=0 的结果。
+     */
+    private fun buildPreparedMotion(patch: ComposeVisualPatch): PreparedMotionResult {
+        val policy = currentMotionPolicy.effective()
+        // SYSTEM_SUPPRESSED：直接静态落最终画面
+        if (patch.animationMode == AnimationMode.SYSTEM_SUPPRESSED) {
+            return PreparedMotionResult.Static(
+                layout = patch.newLayout,
+                caretRect = patch.targetCaretRect,
+            )
+        }
+        val oldText = patch.oldLayout.result.layoutInput.text.text
+        val newText = patch.newLayout.result.layoutInput.text.text
+        val isSelectionOnly =
+            oldText == newText &&
+                patch.insertedUnits.isEmpty() &&
+                patch.deletedUnits.isEmpty()
+        val motion =
+            if (isSelectionOnly) {
+                val selectionCursorDurationNanos =
+                    policy.selectionCursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+                CoordinatedEditMotion.forSelectionMove(
+                    oldLayout = patch.oldLayout,
+                    newLayout = patch.newLayout,
+                    originCaretRect = patch.originCaretRect,
+                    targetCaretRect = patch.targetCaretRect,
+                    originCaretOffset = patch.originCaretOffset,
+                    targetCaretOffset = patch.targetCaretOffset,
+                    frameTimeNanos = 0L,
+                    durationNanos = if (policy.cursorAnimationEnabledForEdit) selectionCursorDurationNanos else 0L,
+                    prepared = true,
+                )
+            } else {
+                val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+                val editDurationNanos = if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
+                CoordinatedEditMotion.fromPatch(
+                    patch = patch,
+                    frameTimeNanos = 0L,
+                    durationNanos = editDurationNanos,
+                    prepared = true,
+                )
+            }
+        return PreparedMotionResult.Motion(
+            motion = motion,
+            newLayout = patch.newLayout,
+            targetCaretRect = patch.targetCaretRect,
+        )
+    }
+
+    /**
+     * Issue #737 评论 5782769758：从 patch 构造 prepared motion 并原子更新 draw snapshot。
+     * layout 和 motionSample 带同一 presentation generation，防止 old sample + new layout。
+     */
+    private fun applyPreparedMotionFromPatch(patch: ComposeVisualPatch) {
+        presentationGeneration++
+        when (val result = buildPreparedMotion(patch)) {
+            is PreparedMotionResult.Static -> {
+                activeMotion = null
+                restingCaretRect = result.caretRect
+                drawSnapshotState =
+                    drawSnapshotState.copy(
+                        layout = result.layout,
+                        motionSample = null,
+                        restingCaretRect = result.caretRect,
+                        presentationGeneration = presentationGeneration,
+                    )
+            }
+            is PreparedMotionResult.Motion -> {
+                activeMotion = result.motion
+                restingCaretRect = result.targetCaretRect
+                val preparedSample = result.motion.sample(0L)
+                drawSnapshotState =
+                    drawSnapshotState.copy(
+                        layout = result.newLayout,
+                        motionSample = preparedSample,
+                        restingCaretRect = result.targetCaretRect,
+                        presentationGeneration = presentationGeneration,
+                    )
             }
         }
     }
@@ -525,6 +654,11 @@ class ComposeEditorVisualState(
      *
      * Issue #732 评论 5763493968 第3节：policy 切换、patch 消费、motion 创建
      * 全部进同一只 frame clock。
+     *
+     * Issue #737 评论 5782769758：[applyFrameUpdate] 收到 NewPatch 时已构造 prepared motion
+     * （未开始计时），本方法负责给 prepared motion 盖开始时间（start）。
+     * 只有在"没有 prepared motion"（policy 切换清了，或多笔 batch 需要合成）时
+     * 才从 batch 重新构造 running motion（保持 batch 合并语义）。
      *
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 本次帧实际应用的 patch 列表。
@@ -577,17 +711,34 @@ class ComposeEditorVisualState(
             // restingCaretRect 落到 target（motion 完成后无缝接上）
             restingCaretRect = pendingSelection.targetCaretRect
         }
+
         if (pendingPatches.isEmpty()) {
+            // Issue #737 评论 5782769758：无 pending patch 但可能有 prepared motion 需要启动。
+            // applyFrameUpdate 构造 prepared motion 后，如果没有 pending patch，
+            // 说明 prepared motion 已构造但还没 start — 在这里 start。
+            val motion = activeMotion
+            if (motion != null && motion.isPrepared) {
+                activeMotion = motion.start(frameTimeNanos)
+            }
             return emptyList()
         }
-        val batch = mutableListOf<ComposeVisualPatch>()
-        for (raw in pendingPatches) {
-            // Issue #732 评论 5763493968 第2节：patch 不再有 motionPolicy 字段 —
-            // 直接用 raw.patch，是否播放由当前 currentMotionPolicy 在 motion 创建时决定。
-            batch.add(raw.patch)
-        }
+
+        // 收集 consumed patches 用于返回
+        val consumed = pendingPatches.map { it.patch }.toList()
         pendingPatches.clear()
-        val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
+
+        // Issue #737 评论 5782769758：如果有 prepared motion（patch 到达时构造的），
+        // 直接 start 它，不再重新构造 ownership。
+        // 第一只 withFrameNanos 只负责给 prepared motion 盖开始时间。
+        val existingMotion = activeMotion
+        if (existingMotion != null && existingMotion.isPrepared) {
+            activeMotion = existingMotion.start(frameTimeNanos)
+            return consumed
+        }
+
+        // 没有 prepared motion（policy 切换清了，或多笔 batch 需要合成）—
+        // 从 batch 重新构造 running motion（保持 batch 合并语义）。
+        val framePatch = ComposeVisualPatchBatch.compose(consumed) ?: return consumed
 
         // Issue #737 评论 5781084709 修复点 5：SYSTEM_SUPPRESSED 直接静态落最终画面，不创建 active motion。
         // ComposeVisualFrameCoordinator 仍会把 AnimationMode.SYSTEM_SUPPRESSED 写进 patch，
@@ -597,11 +748,13 @@ class ComposeEditorVisualState(
         if (framePatch.animationMode == AnimationMode.SYSTEM_SUPPRESSED) {
             activeMotion = null
             restingCaretRect = framePatch.targetCaretRect
+            presentationGeneration++
             drawSnapshotState =
                 drawSnapshotState.copy(
                     motionSample = null,
                     layout = framePatch.newLayout,
                     restingCaretRect = framePatch.targetCaretRect,
+                    presentationGeneration = presentationGeneration,
                 )
             return listOf(framePatch)
         }
@@ -743,6 +896,8 @@ class ComposeEditorVisualState(
         // #708 评论 5723410606 第一节/第二节/第三节：重置 draw snapshot / fingerprint
         drawSnapshotState = ComposeEditorDrawSnapshot()
         lastObservedLayoutFingerprint = null
+        // Issue #737 评论 5782769758：重置 presentation generation 计数器
+        presentationGeneration = 0L
         // #713 评论 5739986801：重置 selection 追踪
         lastResolvedSelection = null
         // Issue #728 评论 5755336403 缺口1：重置 resolved text 追踪

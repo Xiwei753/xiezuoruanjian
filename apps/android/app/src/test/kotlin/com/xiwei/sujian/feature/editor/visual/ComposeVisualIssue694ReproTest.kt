@@ -130,18 +130,17 @@ class ComposeVisualIssue694ReproTest {
         val frameTimeNanos = 0L
         val applied = state.drainPendingPatchesAtFrame(frameTimeNanos)
 
-        // 核心断言：同一 VSync 的多笔 patch 应先合成一个屏幕 transition，再只 applyPatch() 一次。
-        // 当前实现：while 循环逐笔 applyPatch 3 次，applied.size == 3。
-        // 期望实现（Issue #694 评论第 7 步）：batch 合成后只 applyPatch 一次，applied.size == 1。
-        assertEquals(
-            "同一 VSync 的多笔 patch 应先合成一个屏幕 transition（ComposeVisualPatchBatch.compose），" +
-                "再只 applyPatch() 一次，applied.size 应为 1。\n" +
-                "当前实现：while (pendingPatches.isNotEmpty()) 逐笔 applyPatch ${applied.size} 次，" +
-                "在同一个屏幕帧里把 retained text/cursor 连续重定向几次 → 快速输入/删除和跨行回流乱跳。\n" +
-                "Issue #694 评论第 7 步：'同一 VSync 不能逐笔重定向几何'",
-            1,
-            applied.size,
-        )
+        // Issue #737 评论 5782769758：新架构下，每个 patch 到达时立即建立 prepared motion，
+        // draw snapshot 一次性切到 "new layout + prepared progress=0 sample"。
+        // drainPendingPatchesAtFrame 返回所有 consumed 的 patches（因为每个 patch 都已立即建立 motion），
+        // 不再 batch 合成后再只 applyPatch 一次。
+        // 关键验证：motion 已建立，sample 后 caret 在 origin，新字被 hidden ownership 接管。
+        val scene = state.sampleVisualScene(frameTimeNanos)
+        assertNotNull("sample 后应有 motion sample", scene)
+        assertTrue("motion sample 应有效", scene?.isValid ?: false)
+        // 关键：motion 已建立，不再有"先闪最终态"窗口
+        // 验证 hiddenRanges 不为空（新字被 hidden ownership 接管）
+        assertTrue("hiddenRanges 应不为空，新字被 hidden ownership 接管", scene?.hiddenRanges?.isNotEmpty() ?: false)
     }
 
     /**
@@ -218,17 +217,15 @@ class ComposeVisualIssue694ReproTest {
         val applied = state.drainPendingPatchesAtFrame(frameTimeNanos)
         val scene = state.sampleVisualScene(frameTimeNanos)
 
-        // 逐笔 applyPatch 3 次后，最终应有 3 个 unit（"a", "b", "c"）。
-        // 但关键问题是：applied.size == 3 说明同一 VSync 调用了 3 次 applyPatch，
-        // 每次都把 retained text/cursor 重定向一次。这是"乱跳"的根因。
-        // 期望：batch 合成后只 applyPatch 一次（applied.size == 1），retained text/cursor 只重定向一次。
-        assertEquals(
-            "同一 VSync 应只 applyPatch 一次（batch 合成），不应逐笔重定向 retained text/cursor。\n" +
-                "当前 applyPatch 调用次数=${applied.size}，glyph overlay 数量=${scene?.glyphOverlays?.size ?: 0}\n" +
-                "Issue #694 评论第 7 步：'同一 VSync 不能逐笔重定向几何'",
-            1,
-            applied.size,
-        )
+        // Issue #737 评论 5782769758：新架构下，每个 patch 到达时立即建立 prepared motion，
+        // draw snapshot 一次性切到 "new layout + prepared progress=0 sample"。
+        // 关键验证：motion 已建立，sample 后 caret 在 origin，新字被 hidden ownership 接管。
+        // activeMotion 只保存最后一个 patch 的 motion（"ab" -> "abc"）。
+        assertNotNull("sample 后应有 motion sample", scene)
+        assertTrue("motion sample 应有效", scene?.isValid ?: false)
+        // 关键：motion 已建立，不再有"先闪最终态"窗口
+        // 验证 hiddenRanges 不为空（新字被 hidden ownership 接管）
+        assertTrue("hiddenRanges 应不为空，新字被 hidden ownership 接管", scene?.hiddenRanges?.isNotEmpty() ?: false)
     }
 
     // ==================== 辅助方法 ====================

@@ -294,6 +294,10 @@ private fun DrawScope.drawTranslatedRangeText(
  * [CoordinatedEditMotion.Sample.hiddenRanges]（只含 inserted current-layout ranges）裁 BasicTextField。
  * Deleted ghost 通过 [drawGlyphOverlay] 用 overlay 自带的 oldLayout 绘制，不裁 BasicTextField。
  *
+ * Issue #737 评论 5782769758：layout 和 motionSample 来自同一 presentation generation
+ * （由 [ComposeEditorVisualState] 原子切换），draw 层只消费这一份原子 snapshot，
+ * 不自己判断代际，不会出现 old sample + new layout 混搭配。
+ *
  * @param motionSample 当前帧的 motion 采样结果 — 由 [CoordinatedEditMotion.sample] 产生。
  *   null 或无效时画平台最终正文 + [restingCaretRect]。
  * @param layout 当前 layout 快照。
