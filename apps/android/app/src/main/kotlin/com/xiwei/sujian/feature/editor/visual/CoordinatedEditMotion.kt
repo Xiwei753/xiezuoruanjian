@@ -353,10 +353,20 @@ class CoordinatedEditMotion(
          * caret 从 [originCaretRect] 移动到 [targetCaretRect]，glyph channels 为空。
          * traversal 由 old/new layout + caret rect 构造（可能跨行）。
          *
+         * Issue #737 评论 5782106370：[originCaretOffset] / [targetCaretOffset] 是生成
+         * [originCaretRect] / [targetCaretRect] 时用的同一份 caret offset，不再从
+         * [ComposeLayoutSnapshot.selection] 读取。调用方传入的 oldLayout/newLayout 可能是
+         * 同一个 snapshot（纯 selection 移动场景），从 layout.selection 读会让 old/new offset
+         * 相同，[CaretTraversal] 误判为同行，光标斜穿两行。与 [fromPatch] 修复点 3 同理。
+         *
          * @param oldLayout 编辑前 layout。
          * @param newLayout 编辑后 layout。
          * @param originCaretRect 编辑前 caret rect。
          * @param targetCaretRect 编辑后 caret rect。
+         * @param originCaretOffset 生成 [originCaretRect] 时用的 caret offset（UTF-16）—
+         *     必须与 rect 来自同一次实际移动，不从 layout.selection 读。
+         * @param targetCaretOffset 生成 [targetCaretRect] 时用的 caret offset（UTF-16）—
+         *     必须与 rect 来自同一次实际移动，不从 layout.selection 读。
          * @param frameTimeNanos motion 开始时间戳。
          * @param durationNanos motion 时长（<=0 表示瞬时完成）。
          */
@@ -365,6 +375,8 @@ class CoordinatedEditMotion(
             newLayout: ComposeLayoutSnapshot,
             originCaretRect: Rect,
             targetCaretRect: Rect,
+            originCaretOffset: Int,
+            targetCaretOffset: Int,
             frameTimeNanos: Long,
             durationNanos: Long,
         ): CoordinatedEditMotion {
@@ -372,8 +384,8 @@ class CoordinatedEditMotion(
                 CaretTraversal.fromLayouts(
                     oldLayout = oldLayout.result,
                     newLayout = newLayout.result,
-                    oldCaretOffset = oldLayout.selection.end,
-                    newCaretOffset = newLayout.selection.end,
+                    oldCaretOffset = originCaretOffset,
+                    newCaretOffset = targetCaretOffset,
                     oldCaretRect = originCaretRect,
                     newCaretRect = targetCaretRect,
                 )

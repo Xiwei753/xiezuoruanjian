@@ -88,10 +88,16 @@ class ComposeEditorVisualState(
      * onInputSnapshotResolved 没有 frameTimeNanos，不能直接创建 forSelectionMove motion
      * （用 0L 会让 motion 立即到 target）。先记录 old/new caret target，
      * 到 drainPendingPatchesAtFrame 的真实 frameTime 再创建 forSelectionMove。
+     *
+     * Issue #737 评论 5782106370：同时保存 caret rect 和 offset，保证 caret rect / offset / line
+     * 同源。forSelectionMove 不再从 layout.selection 读 offset（oldLayout/newLayout 可能是同一个
+     * snapshot，从 selection 读会让 old/new offset 相同，CaretTraversal 误判同行）。
      */
     private data class PendingSelectionCaretMove(
         val originCaretRect: Rect,
         val targetCaretRect: Rect,
+        val originCaretOffset: Int,
+        val targetCaretOffset: Int,
     )
 
     private var pendingSelectionCaretTarget: PendingSelectionCaretMove? = null
@@ -277,10 +283,18 @@ class ComposeEditorVisualState(
             val policy = currentMotionPolicy.effective()
             if (policy.cursorAnimationEnabledForEdit && policy.selectionCursorDurationMillis > 0L) {
                 // 有平滑光标：记录 pending target，等真实 frameTime 创建 motion
+                // Issue #737 评论 5782106370：同时缓存 origin/target caret offset，保证
+                // forSelectionMove 拿到的 rect/offset/line 同源。originCaretOffset 与 originCaret
+                // 的 fallback 对齐：restingCaretRect 非空时其 offset 就是上次 target offset =
+                // 当前的 lastResolvedSelection?.end；restingCaretRect 为空时退到
+                // lastResolvedSelection?.end ?: snapshot.selection.start。
+                val originCaretOffset = lastResolvedSelection?.end ?: snapshot.selection.start
                 pendingSelectionCaretTarget =
                     PendingSelectionCaretMove(
                         originCaretRect = originCaret,
                         targetCaretRect = targetCaret,
+                        originCaretOffset = originCaretOffset,
+                        targetCaretOffset = snapshot.selection.end,
                     )
                 _frameRequestVersion.update { it + 1L }
             } else {
@@ -533,6 +547,8 @@ class ComposeEditorVisualState(
                         newLayout = layoutForMove,
                         originCaretRect = pendingSelection.originCaretRect,
                         targetCaretRect = pendingSelection.targetCaretRect,
+                        originCaretOffset = pendingSelection.originCaretOffset,
+                        targetCaretOffset = pendingSelection.targetCaretOffset,
                         frameTimeNanos = frameTimeNanos,
                         durationNanos = caretDuration,
                     )
@@ -596,6 +612,8 @@ class ComposeEditorVisualState(
                     newLayout = framePatch.newLayout,
                     originCaretRect = framePatch.originCaretRect,
                     targetCaretRect = framePatch.targetCaretRect,
+                    originCaretOffset = framePatch.originCaretOffset,
+                    targetCaretOffset = framePatch.targetCaretOffset,
                     frameTimeNanos = frameTimeNanos,
                     durationNanos =
                         if (policy.cursorAnimationEnabledForEdit) selectionCursorDurationNanos else 0L,

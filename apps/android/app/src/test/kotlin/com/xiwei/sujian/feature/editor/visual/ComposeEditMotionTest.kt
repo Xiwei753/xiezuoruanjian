@@ -241,6 +241,8 @@ class ComposeEditMotionTest {
                 newLayout = dummyLayout,
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
+                originCaretOffset = 0,
+                targetCaretOffset = 1,
                 frameTimeNanos = startTime,
                 durationNanos = duration,
             )
@@ -331,6 +333,8 @@ class ComposeEditMotionTest {
                 newLayout = dummyLayout,
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
+                originCaretOffset = 0,
+                targetCaretOffset = 1,
                 frameTimeNanos = startTime,
                 durationNanos = duration,
             )
