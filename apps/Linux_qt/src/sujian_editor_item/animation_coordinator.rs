@@ -3183,6 +3183,15 @@ impl LinuxEditorAnimationCoordinator {
             //   造成 caret 回跳/旧吞吐状态重新接管。
             let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
 
+            // Issue #736 评论 5778543593 修改1: 把"本事务的 CaretDriven unit 本帧是否
+            // 真的进入动画层"收成一个明确状态 caret_driven_active。其值为
+            // owns_caret && coordinated_motion_frame.caret.is_some()。
+            // DeleteConceal 和 InsertReveal 共用同一个 caret_driven_active 判断，
+            // 不分别判断 ownership，也不在多个 if/continue 里隐式决定。
+            // - caret_driven_active == true: 必须生成 glyph frame（active 时 caret 一定存在）
+            // - caret_driven_active == false: 整笔 CaretDriven motion 直接 canonical 收口
+            let caret_driven_active = owns_caret && coordinated_motion_frame.caret.is_some();
+
             // Issue #722 评论 5748596920 问题4: InsertReveal/DeleteConceal 的完成条件
             // 必须跟视觉边界一致：caret-driven boundary 到目标后才能释放对应 overlay/static patch。
             // ReflowMove/ReflowCrossFade 才继续按自己的 unit progress 完成。
@@ -3194,7 +3203,7 @@ impl LinuxEditorAnimationCoordinator {
                 )
             });
             // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
-            // 发现 has_caret_driven_units && !owns_caret 时，永久退休此事务的
+            // 发现 has_caret_driven_units && !caret_driven_active 时，永久退休此事务的
             // caret motion，并收口 CaretDriven units——把 start_fraction 设为
             // target_fraction（终态）。之后 active_text_transaction_key_with_epoch
             // 永远跳过此事务，不会再给它 owner_key，已 Snap 回 canonical 的旧 caret /
@@ -3202,7 +3211,9 @@ impl LinuxEditorAnimationCoordinator {
             // reflow track 继续播完。
             // 只在确实有 CaretDriven units 时才置位——纯 Reflow 事务本来就不驱动 caret，
             // 不需要退休标记。
-            if has_caret_driven_units && !owns_caret {
+            // Issue #736 评论 5778543593 修改1: 用 caret_driven_active 代替 owns_caret，
+            // 这样"无 caret frame"和"失去 owner"两种情况都统一收口为 canonical。
+            if has_caret_driven_units && !caret_driven_active {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
             }
@@ -3266,22 +3277,22 @@ impl LinuxEditorAnimationCoordinator {
                 // 不消费此 caret（直接回 canonical），只允许 Timed Reflow 继续。
                 let frame = match unit.slice.kind {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                        // Issue #736 评论 5778543593 修改1: 用统一的 caret_driven_active
+                        // 判断是否进入动画层。active 时生成 glyph，否则 continue
+                        // （已 retire，canonical 收口）。DeleteConceal 和 InsertReveal
+                        // 共用同一个 caret_driven_active 判断，不分别判断 ownership，
+                        // 也不在多个 if/continue 里隐式决定"是否进入动画层"。
+                        if !caret_driven_active {
+                            continue;
+                        }
                         // Issue #727 约束 3: 从统一的 CoordinatedMotionFrame 获取 caret geometry。
                         // 约束 4: 不再自己采样 caret（删除 sample_caret_geometry_for_caret_driven_clip
                         // 及内联采样路径）。
+                        // caret_driven_active 为 true 意味着 coordinated_motion_frame.caret.is_some()，
+                        // 但仍用 match 而非 expect，避免用 expect 代替错误处理。
                         let Some(caret_frame) = coordinated_motion_frame.caret else {
-                            // 无有效 caret motion track：不生成 reveal/conceal glyph。
-                            // static canonical text 直接完整显示。
                             continue;
                         };
-                        // Issue #727 评论 5757225958 问题5: owner_key 不匹配时，
-                        // 此 CaretDriven unit 不消费 caret frame，直接回 canonical。
-                        // Issue #727 评论 5760431554 问题1: 复用上方统一算出的 owns_caret，
-                        // 不再单独写 coordinated_motion_frame.owner_key != Some(tx.key)，
-                        // 避免完成条件、clip 收集、glyph 三处 ownership 判断分叉。
-                        if !owns_caret {
-                            continue;
-                        }
                         // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
                         // progress 推导，不再由 unit 自己的时间线驱动。
                         // visible = start_fraction + (target - start) * ease_out_quad(progress)

@@ -528,10 +528,21 @@ fn main() {
     log_desktop_runtime_profile(&qt_ver, qml_path);
     // Issue #736 评论 5777408243 问题3: Wayland 会话下，若期望值是 wayland
     // 但 GUI application 建立后的实际 platformName 不是 wayland，记录明确错误。
+    // Issue #736 评论 5778543593 修改3: 之前只判断 configured_qpa == Some("wayland")，
+    // 但 runtime_environment.rs 规定用户原本设置的 QT_QPA_PLATFORM 放进 requested_qpa，
+    // 只有程序自己补的值才放进 configured_qpa。如果用户环境本来就是
+    // QT_QPA_PLATFORM=wayland，则 requested_qpa = Some("wayland")，configured_qpa = None，
+    // 即使 Qt 最后跑成 xcb 也不报 mismatch。现在同时检查 configured_qpa 和 requested_qpa。
     let actual_platform_name = app_main_cpp::qt_platform_name();
-    if runtime_env_config.configured_qpa.as_deref() == Some("wayland")
-        && actual_platform_name != "wayland"
-    {
+    // 本次是否要求 Wayland：程序自动配置为 wayland，或用户 requested_qpa 明确要求 wayland
+    let configured_wayland = runtime_env_config.configured_qpa.as_deref() == Some("wayland");
+    let requested_wayland = runtime_env_config
+        .requested_qpa
+        .as_deref()
+        .map(|v| v.split(';').any(|p| p.trim() == "wayland"))
+        .unwrap_or(false);
+    let expects_wayland = configured_wayland || requested_wayland;
+    if expects_wayland && actual_platform_name != "wayland" {
         debug_error_static(
             "app",
             "qpa_platform_mismatch",

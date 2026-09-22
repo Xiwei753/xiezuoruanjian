@@ -3,10 +3,13 @@ import QtQuick
 QtObject {
     id: dt
 
-    // Issue #736 评论 5777408243 问题2: themeApplied 信号。
+    // Issue #736 评论 5777408243 问题2 / 5778543593 修改2: themeApplied 信号。
     // applyThemeState() 完成 resolvedTheme 整体替换后发出，携带这份已发布的最终 token snapshot。
     // 外部（main.qml 诊断）监听此信号而非原始 themeStateJson 变化。
-    signal themeApplied
+    // Issue #736 评论 5778543593 修改2: 信号带 snapshot 参数，让 onThemeApplied(snapshot)
+    // 直接用这份已发布的快照记录诊断，不经过第二轮 QML binding（Qt 不保证 binding 求值顺序，
+    // 诊断可能读到上一份值）。
+    signal themeApplied(var snapshot)
 
     // Issue #724 评论 5751573705 问题3: DesignTokens 真正原子替换。
     //
@@ -161,7 +164,9 @@ QtObject {
         resolvedTheme = next
         // Issue #736 评论 5777408243 问题2: resolvedTheme 替换后发 themeApplied 信号，
         // 让外部（main.qml 诊断）监听这份已发布的最终 token snapshot，不再监听原始 JSON 变化。
-        themeApplied()
+        // Issue #736 评论 5778543593 修改2: 信号携带 next 快照，onThemeApplied(snapshot)
+        // 直接用 snapshot 记录诊断，不经过第二轮 QML binding。
+        themeApplied(next)
     }
 
     // Issue #724 评论 5751573705 问题3: 所有派生 token 只读 resolvedTheme，
@@ -264,14 +269,16 @@ QtObject {
     // Issue #736 评论 5777408243 问题2: 原始 hex 字符串属性，给 Rust/Q_PROPERTY 字符串消费者直接用，
     // 避免 QString -> QML color -> toString() -> QString 绕一圈。
     // 值直接从 resolvedTheme（最终 token snapshot）读取，不再经多层 color 属性派生。
-    property string onSurfaceHex: resolvedTheme.on_surface || ""
-    property string onSurfaceVariantHex: resolvedTheme.on_surface_variant || ""
-    property string textPrimaryHex: resolvedTheme.text_primary || resolvedTheme.on_surface || ""
-    property string textSecondaryHex: resolvedTheme.text_secondary || resolvedTheme.on_surface_variant || ""
-    property string editorTextHex: resolvedTheme.editor_text || resolvedTheme.on_surface || ""
-    property string editorBackgroundHex: resolvedTheme.editor_background || resolvedTheme.surface_container_low || ""
-    property string primaryHex: resolvedTheme.primary || ""
-    property string selectedTextHex: resolvedTheme.on_primary_container || ""
+    // Issue #736 评论 5778543593 修改2: 去掉字符串属性的静默 fallback（|| "" 或 || other_field）。
+    // 字段坏了就明确暴露（undefined），不偷偷继承另一字段。Rust 侧已保证 colors 包含所有字段的最终值。
+    property string onSurfaceHex: resolvedTheme.on_surface
+    property string onSurfaceVariantHex: resolvedTheme.on_surface_variant
+    property string textPrimaryHex: resolvedTheme.text_primary
+    property string textSecondaryHex: resolvedTheme.text_secondary
+    property string editorTextHex: resolvedTheme.editor_text
+    property string editorBackgroundHex: resolvedTheme.editor_background
+    property string primaryHex: resolvedTheme.primary
+    property string selectedTextHex: resolvedTheme.on_primary_container
 
     property color surfaceFallback: isDark ? "#1A1D23" : "#FCFCFF"
     property color surfaceContainerLowFallback: isDark ? "#1F2229" : "#F6F8FC"

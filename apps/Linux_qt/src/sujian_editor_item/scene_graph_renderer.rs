@@ -181,6 +181,16 @@ fn render_text_animation_layer(
     let mut snapshot_ids: Vec<u64> = Vec::new();
 
     for glyph in &plan.text_animation.glyphs {
+        // Issue #736 评论 5778543593 修改1: 缺该 snapshot_id 的纹理时，这个
+        // CaretDriven frame 不进入 glyph_data。缺纹理直接 continue 跳过整个
+        // glyph，不再塞 1×1 空图把"DeleteConceal 已生成但纹理没拿到"伪装成
+        // "动画层正常执行只是什么也看不到"。有纹理时才 push 四个 vec，这样
+        // 四个 vec 长度始终一致，glyph_count == glyph_images.len() 自然通过。
+        let texture = match texture_cache.get_line(&glyph.snapshot_id) {
+            Some(texture) => texture,
+            None => continue,
+        };
+
         glyph_data.extend_from_slice(&[glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity]);
 
         source_rects.extend_from_slice(&[
@@ -192,21 +202,7 @@ fn render_text_animation_layer(
 
         let cache_key = glyph.snapshot_id.to_cache_key();
         snapshot_ids.push(cache_key);
-
-        match texture_cache.get_line(&glyph.snapshot_id) {
-            Some(texture) => {
-                glyph_images.push(texture.clone());
-            }
-            None => {
-                glyph_images.push(qmetaobject::QImage::new(
-                    qmetaobject::QSize {
-                        width: 1,
-                        height: 1,
-                    },
-                    qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                ));
-            }
-        }
+        glyph_images.push(texture.clone());
     }
 
     let glyph_count = glyph_data.len() / 5;

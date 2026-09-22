@@ -225,25 +225,43 @@ ApplicationWindow {
         return systemPaletteIsDark();
     }
 
-    function logThemeDiagnostics(event) {
+    function logThemeDiagnostics(event, snapshot) {
         // Issue #709 评论 issue-body-709: 主题诊断只读 ThemeController runtime state
         // 和 designTokens，不再读旧 appState.settings.themeMode、Qt.styleHints.colorScheme、
         // systemPaletteIsDark()。这些不再是主题诊断的权威来源。同一条诊断写出
         // appearance_mode/is_dark/color_source/选中 theme/palette id/最终
         // primary/surface/on_surface/on_surface_variant/editorText。
+        // Issue #736 评论 5778543593 修改2: 当传入 snapshot 时（onThemeApplied 调用），
+        // 直接用 snapshot 的字段记录诊断，不经过第二轮 QML binding（Qt 不保证 binding
+        // 求值顺序，诊断可能读到上一份值）。未传入 snapshot 时（其他调用点如
+        // "system_color_scheme_changed"/"startup"），继续用 designTokens 派生 property。
         if (backend === null || !backend.log_qml) return;
         var tc = themeController;
+        var primaryVal, surfaceVal, onSurfaceVal, onSurfaceVariantVal, editorTextVal;
+        if (snapshot) {
+            primaryVal = snapshot.primary;
+            surfaceVal = snapshot.surface;
+            onSurfaceVal = snapshot.on_surface;
+            onSurfaceVariantVal = snapshot.on_surface_variant;
+            editorTextVal = snapshot.editor_text;
+        } else {
+            primaryVal = designTokens.primary;
+            surfaceVal = designTokens.surface;
+            onSurfaceVal = designTokens.onSurface;
+            onSurfaceVariantVal = designTokens.onSurfaceVariant;
+            editorTextVal = designTokens.editorText;
+        }
         backend.log_qml("info", "theme", event,
                         "appearance_mode=" + (tc ? tc.appearance_mode : "<null>")
                         + " is_dark=" + (tc ? tc.is_dark : "<null>")
                         + " color_source=" + (tc ? tc.color_source : "<null>")
                         + " builtin_theme_id=" + (tc ? tc.selected_builtin_theme_id : "<null>")
                         + " palette_id=" + (tc ? tc.selected_palette_id : "<null>")
-                        + " primary=" + designTokens.primary
-                        + " surface=" + designTokens.surface
-                        + " on_surface=" + designTokens.onSurface
-                        + " on_surface_variant=" + designTokens.onSurfaceVariant
-                        + " editorText=" + designTokens.editorText);
+                        + " primary=" + primaryVal
+                        + " surface=" + surfaceVal
+                        + " on_surface=" + onSurfaceVal
+                        + " on_surface_variant=" + onSurfaceVariantVal
+                        + " editorText=" + editorTextVal);
     }
 
     // Design tokens
@@ -277,12 +295,14 @@ ApplicationWindow {
                 appBackend.apply_window_dark_mode(designTokens.isDark);
             }
         }
-        // Issue #736 评论 5777408243 问题2: 主题诊断改为监听 DesignTokens 的 themeApplied 信号。
-        // themeApplied 在 applyThemeState() 完成 resolvedTheme 整体替换后发出，
-        // 此时 designTokens 的最终 color token 已是这份已发布的 snapshot，
-        // 日志直接记录这份最终状态，不再监听原始 themeStateJson 变化（那时尚未解析/应用）。
-        function onThemeApplied() {
-            window.logThemeDiagnostics("theme_applied");
+        // Issue #736 评论 5777408243 问题2 / 5778543593 修改2: 主题诊断改为监听
+        // DesignTokens 的 themeApplied 信号。themeApplied 在 applyThemeState() 完成
+        // resolvedTheme 整体替换后发出，携带这份已发布的最终 token snapshot。
+        // Issue #736 评论 5778543593 修改2: onThemeApplied(snapshot) 直接用 snapshot
+        // 记录诊断，不经过第二轮 QML binding（Qt 不保证 binding 求值顺序，诊断可能
+        // 读到上一份值）。
+        function onThemeApplied(snapshot) {
+            window.logThemeDiagnostics("theme_applied", snapshot);
         }
     }
 
