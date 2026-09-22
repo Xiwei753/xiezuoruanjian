@@ -244,6 +244,9 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModel.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue694ReproTest.kt"
+      # --- Issue #737 评论 5784705864：pending presentation / batch prepared 测试多参数构造 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualStateLayoutFirstPendingPresentationTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualStateMultiPatchBatchPreparedTest.kt"
       # --- 工作台组件：多面板布局参数 ---
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       # --- 手机端 ---

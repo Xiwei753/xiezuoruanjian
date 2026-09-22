@@ -206,6 +206,39 @@ class ComposeEditorVisualState(
     private var presentationGeneration: Long = 0L
 
     /**
+     * Issue #737 评论 5784705864 缺口1：layout 先到、fact 后到时的 pending presentation ownership。
+     *
+     * 当 onAuthoritativeLayout 收到新 text/几何但 fact 还没配对（FrameUpdate.Empty）时，
+     * BasicTextField 已是新正文，drawContent() 会裸画最终态。旧实现只"不更新 drawSnapshotState.layout"
+     * 想用旧 layout 当屏障，但 drawContent() 画的是 BasicTextField 本身，不是 drawSnapshotState.layout，
+     * 屏障无效。
+     *
+     * pending presentation 用"上一份已呈现 layout + 当前新 layout"立即建立屏幕 ownership：
+     * - new layout 新增/替换的 range 从 BasicTextField drawContent 裁掉（hiddenRanges）
+     * - old layout 被删/替换的 range 用 old layout 静态画 ghost（glyphOverlays，Deleted，clipFraction=1）
+     * - caret 停在旧 presentation 的 origin
+     * fact 到达后由 [applyPreparedMotionFromPatch] 原子升级成 prepared motion（视觉一致，无缝）。
+     */
+    private data class PendingPresentation(
+        val oldLayout: ComposeLayoutSnapshot,
+        val newLayout: ComposeLayoutSnapshot,
+        val sample: CoordinatedEditMotion.Sample,
+    )
+
+    private var pendingPresentation: PendingPresentation? = null
+
+    /** pending presentation ghost key 计数器（负值，与 CoordinatedEditMotion.nextGlyphKey 正值解耦）。 */
+    private var nextPendingGlyphKey: Long = -1L
+
+    /**
+     * Issue #737 评论 5784705864 缺口2：当前 prepared motion（[activeMotion].isPrepared）覆盖的
+     * pending queue 最大 sequence。drain 时用它判断 prepared motion 是否就是整个 pending queue
+     * 的合成结果 — 是则直接 start，否则重新 compose。
+     * -1L 表示无 prepared motion 或已 start。
+     */
+    private var preparedMotionSequence: Long = -1L
+
+    /**
      * #708 评论 5723410606 第三节：layout fingerprint 持久状态 —
      * 把 fingerprint 做成明确 data class，不再 List<Any>。
      * onAuthoritativeLayout 最前面先算 fingerprint，相同正文+相同几何时直接返回，
@@ -444,9 +477,26 @@ class ComposeEditorVisualState(
         // 收到 Empty 时（fact 还没到）保持旧 presentation，不让 BasicTextField 最终态先裸画一帧。
         // 只有 update 为 Empty 时才需要同步 layout（无 patch 产生，无 motion，纯 layout 推进）。
         if (update is FrameUpdate.Empty) {
-            // layout 到达但 fact 还没到：保持旧 presentation（不更新 drawSnapshotState.layout），
-            // 等 fact 到达后 applyFrameUpdate 原子切换。
-            // restingCaretRect 已在前面更新（snapshot.cursorRect），但 draw snapshot 保持旧值。
+            // Issue #737 评论 5784705864 缺口1：layout 到达但 fact 还没到 —
+            // 建立 pending presentation ownership，防止 BasicTextField 新正文裸画一帧。
+            // 旧实现只"不更新 drawSnapshotState.layout"想用旧 layout 当屏障，但 drawContent()
+            // 画的是 BasicTextField 本身（已是新正文），屏障无效。pending presentation 真正接管屏幕：
+            // 裁掉新字、画旧字 ghost、caret 停 origin。fact 到达后原子升级成 prepared motion。
+            val previousLayout = drawSnapshotState.layout
+            if (previousLayout != null) {
+                val pending = buildPendingPresentation(previousLayout, snapshot)
+                if (pending != null) {
+                    pendingPresentation = pending
+                    presentationGeneration++
+                    drawSnapshotState =
+                        drawSnapshotState.copy(
+                            layout = snapshot,
+                            motionSample = pending.sample,
+                            restingCaretRect = pending.sample.caretRect,
+                            presentationGeneration = presentationGeneration,
+                        )
+                }
+            }
         }
     }
 
@@ -514,7 +564,8 @@ class ComposeEditorVisualState(
                 // 无新 patch — 首帧、无 pending、或 pending 与 layout 尚未匹配。
             }
             is FrameUpdate.NewPatch -> {
-                pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = update.patch))
+                val patchSequence = nextPendingSequence++
+                pendingPatches.addLast(PendingPatch(sequence = patchSequence, patch = update.patch))
                 _frameRequestVersion.update { it + 1L }
                 _latestPatch.update { update.patch }
                 Log.d(
@@ -522,11 +573,15 @@ class ComposeEditorVisualState(
                     "patch_published: id=${update.patch.id} " +
                         "coreTxnIds=${update.patch.coreTransactionIds}",
                 )
-                // Issue #737 评论 5782769758：patch 配对成功后立刻建立 prepared motion，
-                // draw snapshot 一次性切到"new layout + prepared progress=0 sample"，
-                // 新字第一次被画出来时就已经处于 hidden ownership，caret 也还在 origin。
-                // 不再等下一帧 drainPendingPatchesAtFrame 才创建 motion — 消除"先闪最终态"窗口。
-                applyPreparedMotionFromPatch(update.patch)
+                // Issue #737 评论 5782769758：patch 配对成功后立刻建立 prepared motion。
+                // Issue #737 评论 5784705864 缺口2：对整个 pending queue 合成，用合成 patch 构造唯一
+                // prepared motion — 不只 prepare 当前 patch。这样多笔 patch 时 prepared motion 总是
+                // 合成结果，drain 时 sequence 对上直接 start 合成 motion，不会"最后一笔绕过 batch 合成"。
+                val composedPatch = ComposeVisualPatchBatch.compose(pendingPatches.map { it.patch })
+                if (composedPatch != null) {
+                    applyPreparedMotionFromPatch(composedPatch)
+                    preparedMotionSequence = patchSequence
+                }
             }
         }
     }
@@ -604,10 +659,84 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * Issue #737 评论 5784705864 缺口1：算 oldText→newText 的公共前后缀，返回被改变的 raw range。
+     * oldRange 非 null 表示 oldText 中被删/替换的区间；newRange 非 null 表示 newText 中新增/替换的区间。
+     * 纯 selection（text 不变）返回 (null, null)。
+     */
+    private fun computeChangedRawRanges(
+        oldText: String,
+        newText: String,
+    ): Pair<TextRange?, TextRange?> {
+        if (oldText == newText) return null to null
+        val oldLen = oldText.length
+        val newLen = newText.length
+        var prefix = 0
+        val minLen = minOf(oldLen, newLen)
+        while (prefix < minLen && oldText[prefix] == newText[prefix]) prefix++
+        var suffix = 0
+        while (
+            suffix < (minLen - prefix) &&
+            oldText[oldLen - 1 - suffix] == newText[newLen - 1 - suffix]
+        ) {
+            suffix++
+        }
+        val oldRange = if (prefix < oldLen - suffix) TextRange(prefix, oldLen - suffix) else null
+        val newRange = if (prefix < newLen - suffix) TextRange(prefix, newLen - suffix) else null
+        return oldRange to newRange
+    }
+
+    /**
+     * Issue #737 评论 5784705864 缺口1：从 oldLayout/newLayout 构造 pending presentation。
+     * 不依赖 fact — 只用文本 diff 算粗粒度 ownership（整个变化区域裁掉/画 ghost）。
+     * fact 到达后 prepared motion 的精确 per-glyph ownership 会原子替换，视觉一致。
+     * @return null 表示纯 selection（text 未变），不需要 pending ownership。
+     */
+    private fun buildPendingPresentation(
+        oldLayout: ComposeLayoutSnapshot,
+        newLayout: ComposeLayoutSnapshot,
+    ): PendingPresentation? {
+        val oldText = oldLayout.result.layoutInput.text.text
+        val newText = newLayout.result.layoutInput.text.text
+        if (oldText == newText) return null
+        val (oldChanged, newChanged) = computeChangedRawRanges(oldText, newText)
+        val hiddenRanges = if (newChanged != null) listOf(newChanged) else emptyList()
+        val glyphOverlays = mutableListOf<CoordinatedEditMotion.GlyphOverlay>()
+        if (oldChanged != null) {
+            glyphOverlays.add(
+                CoordinatedEditMotion.GlyphOverlay(
+                    key = nextPendingGlyphKey--,
+                    range = oldChanged,
+                    layout = oldLayout,
+                    role = CoordinatedEditMotion.GlyphRole.Deleted,
+                    clipFraction = 1f,
+                ),
+            )
+        }
+        // caret origin：上一份已呈现 layout 的 caret 位置。
+        // lastResolvedSelection 是最近一次 onInputSnapshotResolved 记录的 selection end；
+        // 没有则用 oldLayout.selection.end。
+        val originOffset = lastResolvedSelection?.end ?: oldLayout.selection.end
+        val originCaret = oldLayout.cursorRect(originOffset)
+        val sample =
+            CoordinatedEditMotion.Sample(
+                caretRect = originCaret,
+                glyphOverlays = glyphOverlays,
+                hiddenRanges = hiddenRanges,
+                finished = false,
+                isValid = true,
+            )
+        return PendingPresentation(oldLayout, newLayout, sample)
+    }
+
+    /**
      * Issue #737 评论 5782769758：从 patch 构造 prepared motion 并原子更新 draw snapshot。
      * layout 和 motionSample 带同一 presentation generation，防止 old sample + new layout。
      */
     private fun applyPreparedMotionFromPatch(patch: ComposeVisualPatch) {
+        // Issue #737 评论 5784705864 缺口1：fact 到达，pending presentation 原子升级成 prepared motion。
+        // prepared motion 的 progress=0 sample 视觉与 pending presentation 一致（都是 ownership 状态），
+        // drawSnapshotState 原子覆盖，无"先释放再创建"空隙。
+        pendingPresentation = null
         presentationGeneration++
         when (val result = buildPreparedMotion(patch)) {
             is PreparedMotionResult.Static -> {
@@ -674,8 +803,7 @@ class ComposeEditorVisualState(
             // policy 真正变化时清掉旧 motion — 让后续 drain 用新 policy 重新决定是否创建 motion。
             if (previousPolicy != currentMotionPolicy) {
                 activeMotion = null
-                // 保留 restingCaretRect / drawSnapshotState.restingCaretRect —
-                // policy 切换不必然产生新 text layout，静止 caret 应保留当前屏幕位置。
+                preparedMotionSequence = -1L
                 drawSnapshotState =
                     drawSnapshotState.copy(
                         motionSample = null,
@@ -719,25 +847,30 @@ class ComposeEditorVisualState(
             val motion = activeMotion
             if (motion != null && motion.isPrepared) {
                 activeMotion = motion.start(frameTimeNanos)
+                preparedMotionSequence = -1L
             }
             return emptyList()
         }
 
         // 收集 consumed patches 用于返回
         val consumed = pendingPatches.map { it.patch }.toList()
+        val consumedMaxSequence = pendingPatches.last().sequence
         pendingPatches.clear()
 
-        // Issue #737 评论 5782769758：如果有 prepared motion（patch 到达时构造的），
-        // 直接 start 它，不再重新构造 ownership。
-        // 第一只 withFrameNanos 只负责给 prepared motion 盖开始时间。
+        // Issue #737 评论 5784705864 缺口2：prepared motion 只有在覆盖整个 pending queue
+        // （preparedMotionSequence == consumedMaxSequence）时才能直接 start；
+        // 否则（policy 切换清了，或 prepared motion 没覆盖整个 queue）重新 compose 构造。
         val existingMotion = activeMotion
-        if (existingMotion != null && existingMotion.isPrepared) {
+        if (existingMotion != null && existingMotion.isPrepared &&
+            preparedMotionSequence == consumedMaxSequence
+        ) {
             activeMotion = existingMotion.start(frameTimeNanos)
+            preparedMotionSequence = -1L
             return consumed
         }
 
-        // 没有 prepared motion（policy 切换清了，或多笔 batch 需要合成）—
-        // 从 batch 重新构造 running motion（保持 batch 合并语义）。
+        // 没有 prepared motion 或 prepared motion 没覆盖整个 queue — 重新 compose 构造。
+        preparedMotionSequence = -1L
         val framePatch = ComposeVisualPatchBatch.compose(consumed) ?: return consumed
 
         // Issue #737 评论 5781084709 修复点 5：SYSTEM_SUPPRESSED 直接静态落最终画面，不创建 active motion。
@@ -853,9 +986,12 @@ class ComposeEditorVisualState(
             // draw 层下一帧 drawWithContent 直接读。
             // Issue #728 评论 5754839786 缺口2：无 active motion 时用 restingCaretRect 填，
             // 保证静止/selection 移动后屏幕 caret 不消失。
+            // Issue #737 评论 5784705864 缺口1：无 active motion 但有 pending presentation 时，
+            // 保留 pending sample — 不清成 null（否则 pending ownership 丢失，BasicTextField 裸画）。
+            val effectiveSample = motionSample ?: pendingPresentation?.sample
             drawSnapshotState =
                 drawSnapshotState.copy(
-                    motionSample = motionSample,
+                    motionSample = effectiveSample,
                     restingCaretRect = restingCaretRect,
                 )
         }
@@ -888,6 +1024,10 @@ class ComposeEditorVisualState(
         pendingMotionPolicy = null
         // Issue #737：清空唯一协调 motion
         activeMotion = null
+        // Issue #737 评论 5784705864 缺口1：清空 pending presentation
+        pendingPresentation = null
+        // Issue #737 评论 5784705864 缺口2：清空 prepared motion sequence
+        preparedMotionSequence = -1L
         // Issue #728 评论 5754839786 缺口2：清空静止 caret rect
         restingCaretRect = null
         // Issue #728 评论 5755336403 缺口2：清空 pending 纯 selection caret 移动
