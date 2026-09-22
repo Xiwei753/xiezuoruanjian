@@ -11,8 +11,11 @@ import kotlin.math.abs
  * Issue #728 评论 5755928697：三个确定问题的收口 —
  * 1. 文字动画还没结束时移动光标，会把正在运行的 glyph channel 全丢掉：
  *    新增 [redirectCaretTo]，保留现有 unit channel 的 fraction，只换 caret 目标。
- * 2. coordinated=false 时独立 smooth cursor 设置对正文编辑不生效：
- *    caret 和 glyph 各自持有 duration（双 duration），不再强制共用一只钟。
+ * 2. ~~coordinated=false 时独立 smooth cursor 设置对正文编辑不生效~~
+ *    Issue #735 评论 5773604666 问题2：删除双 duration —
+ *    caret 和 glyph 不再各自持有 duration，统一用单一 [durationNanos]。
+ *    正文 edit motion（Insert/Delete/Replace/CompositionCommit）一律一只钟，
+ *    caret 和 glyph 共用同一个 progress。
  * 3. 一笔里有多个 glyph unit 时所有字同时吐/吞，不是真正跟着光标：
  *    [UnitChannel] 增加 startProgress/endProgress 区间，sample 按区间映射，
  *    光标经过哪个 unit 的区间，那个 unit 才在吞吐。
@@ -40,18 +43,17 @@ import kotlin.math.abs
  *   startProgress/endProgress 是该 unit 在 master glyph progress 里的区间（0..1），
  *   光标经过该区间时该 unit 才在吞吐（Issue #728 评论 5755928697 问题3）。
  * @param startedAtNanos 通道开始时间戳（来自 Compose frame clock），caret 和 glyph 共用。
- * @param caretDurationNanos caret 通道时长。<=0 表示瞬时完成。
- * @param glyphDurationNanos glyph 通道时长。<=0 表示瞬时完成。
- *   coordinated=true 时 caretDurationNanos == glyphDurationNanos（一只钟）；
- *   coordinated=false 时两者独立（Issue #728 评论 5755928697 问题2）。
+ * @param durationNanos 共享通道时长。<=0 表示瞬时完成。
+ *   Issue #735 评论 5773604666 问题2：caret 和 glyph 共用同一个 duration/progress，
+ *   不再有独立的 caretDurationNanos/glyphDurationNanos。
+ *   [forSelectionMove] 仍用独立 caret-only motion（纯 selection/cursor move 没有文字吞吐）。
  */
 class ComposeEditMotion(
     private val originCaretRect: Rect,
     private val targetCaretRect: Rect,
     private val unitChannels: Map<Long, UnitChannel>,
     private val startedAtNanos: Long,
-    private val caretDurationNanos: Long,
-    private val glyphDurationNanos: Long,
+    private val durationNanos: Long,
 ) {
     /**
      * 单个 unit 的 fraction 通道 — from→to，由 master glyph progress 经区间映射驱动。
@@ -76,7 +78,7 @@ class ComposeEditMotion(
      *
      * @param caretRect 当前帧的 caret rect（由 origin→target 插值）。
      * @param unitClipFractions 按 unit key → 可见 fraction（0..1）。
-     * @param finished motion 是否已完成（caret 和 glyph 都 finished）。
+     * @param finished motion 是否已完成。
      */
     data class Sample(
         val caretRect: Rect,
@@ -85,28 +87,26 @@ class ComposeEditMotion(
     )
 
     /**
-     * 采样当前帧 — caret 用 [caretDurationNanos] 算 progress，glyph 用 [glyphDurationNanos] 算 progress，
-     * 每个 unit 的 fraction 按 master glyph progress 经 [UnitChannel] 区间映射后线性插值。
+     * 采样当前帧 — caret 和 glyph 都从同一个 [durationNanos] 算 progress，
+     * 每个 unit 的 fraction 按 master progress 经 [UnitChannel] 区间映射后线性插值。
      *
-     * - durationNanos <= 0：该通道瞬时完成。
+     * - durationNanos <= 0：瞬时完成。
      * - elapsed <= 0：progress=0。
-     * - elapsed >= duration：progress=1，该通道 finished。
+     * - elapsed >= duration：progress=1，finished。
      * - 中间：progress = elapsed/duration，线性插值。
      *
-     * finished = caret finished 且 glyph finished（Issue #728 评论 5755928697 问题2）。
+     * Issue #735 评论 5773604666 问题2：caret 和 glyph 共用同一只钟，finished = progress finished。
      */
     fun sample(frameTimeNanos: Long): Sample {
-        val caretProgress = computeProgress(frameTimeNanos, caretDurationNanos)
-        val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos)
-        val caretRect = lerpRect(originCaretRect, targetCaretRect, caretProgress.value)
+        val progress = computeProgress(frameTimeNanos, durationNanos)
+        val caretRect = lerpRect(originCaretRect, targetCaretRect, progress.value)
         val fractions =
             unitChannels.mapValues { (_, ch) ->
                 val localProgress =
-                    mapGlyphProgressToLocal(glyphProgress.value, ch.startProgress, ch.endProgress)
+                    mapGlyphProgressToLocal(progress.value, ch.startProgress, ch.endProgress)
                 (ch.from + (ch.to - ch.from) * localProgress).coerceIn(0f, 1f)
             }
-        val finished = caretProgress.finished && glyphProgress.finished
-        return Sample(caretRect, fractions, finished)
+        return Sample(caretRect, fractions, progress.finished)
     }
 
     /**
@@ -143,8 +143,8 @@ class ComposeEditMotion(
      * @param newInsertedUnitKeys 新笔的 inserted unit keys（按 targetRange 正文顺序排好）。
      * @param newDeletedUnitKeys 新笔的 deleted unit keys（按 sourceRange.start 升序排好，内部会反序成右往左吞）。
      * @param frameTimeNanos 当前帧时间戳。
-     * @param caretDurationNanos 新笔 caret 通道时长。<=0 表示瞬时完成。
-     * @param glyphDurationNanos 新笔 glyph 通道时长。<=0 表示瞬时完成。
+     * @param durationNanos 新笔共享通道时长。<=0 表示瞬时完成。
+     *   Issue #735 评论 5773604666 问题2：单一 duration，caret 和 glyph 共用。
      * @param inheritedFractionsByKey Issue #728 评论 5761525795：split/rebase 换 child key 后，
      *   child 的首帧 fraction 继承信息。key → parent 当前 reveal 投影到 child 局部区间后的 fraction。
      *   - key 在此 map 中：该 unit 是旧 parent split/rekey 出来的 child，从 inheritedFraction 开始，
@@ -159,16 +159,15 @@ class ComposeEditMotion(
         newInsertedUnitKeys: List<Long>,
         newDeletedUnitKeys: List<Long>,
         frameTimeNanos: Long,
-        caretDurationNanos: Long,
-        glyphDurationNanos: Long,
+        durationNanos: Long,
         inheritedFractionsByKey: Map<Long, Float> = emptyMap(),
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
-        // 旧 motion 当前的 master glyph progress：必须用旧 motion 的 glyphDurationNanos 算，
+        // 旧 motion 当前的 master progress：必须用旧 motion 的 durationNanos 算，
         // 不能用新 duration，否则相位分类（已完成/进行中/未开始）会失真，
         // 连续编辑时改了 motion 设置就会出现"先冻结再继续"。
-        val oldGlyphProgress = computeProgress(frameTimeNanos, this.glyphDurationNanos).value
+        val oldProgress = computeProgress(frameTimeNanos, this.durationNanos).value
         // Issue #728 评论 5760112985 问题2：把 redirect 的剩余 unit 合成一条有序 traversal list，
         // 只调用一次 buildRedirectChannels 统一归一化到一条 [0,1]，不再分别建 inserted/deleted 两条 schedule。
         // inserted 按 targetRange 正文顺序，deleted 按 sourceRange 反序（右往左吞，Backspace 语义）。
@@ -199,14 +198,13 @@ class ComposeEditMotion(
         // 合成一条有序 traversal list：inserted 段（正文顺序）后接 deleted 反向段，
         // 沿用 forEdit() 的同一规则。只调用一次 buildRedirectChannels 统一归一化到一条 [0,1]。
         val mergedSpecs = insertedSpecs + deletedSpecs
-        val newChannels = buildRedirectChannels(mergedSpecs, oldGlyphProgress, currentSample)
+        val newChannels = buildRedirectChannels(mergedSpecs, oldProgress, currentSample)
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
             unitChannels = newChannels,
             startedAtNanos = frameTimeNanos,
-            caretDurationNanos = caretDurationNanos,
-            glyphDurationNanos = glyphDurationNanos,
+            durationNanos = durationNanos,
         )
     }
 
@@ -233,21 +231,19 @@ class ComposeEditMotion(
      * @param newOriginCaretRect 新 caret rect（用于 fallback，当前 motion 已 finished 时用）。
      * @param newTargetCaretRect 新 caret rect。
      * @param frameTimeNanos 当前帧时间戳。
-     * @param caretDurationNanos 新 caret 通道时长。<=0 表示瞬时完成。
-     * @param glyphDurationNanos glyph 通道时长，文字继续从当前 fraction 走到 to。<=0 表示瞬时完成。
+     * @param durationNanos 新共享通道时长，文字继续从当前 fraction 走到 to。<=0 表示瞬时完成。
+     *   Issue #735 评论 5773604666 问题2：单一 duration，caret 和 glyph 共用。
      */
-    @Suppress("LongParameterList")
     fun redirectCaretTo(
         newOriginCaretRect: Rect,
         newTargetCaretRect: Rect,
         frameTimeNanos: Long,
-        caretDurationNanos: Long,
-        glyphDurationNanos: Long,
+        durationNanos: Long,
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
-        // 旧 motion 当前的 master glyph progress：用旧 motion 的 glyphDurationNanos 算。
-        val oldGlyphProgress = computeProgress(frameTimeNanos, this.glyphDurationNanos).value
+        // 旧 motion 当前的 master progress：用旧 motion 的 durationNanos 算。
+        val oldProgress = computeProgress(frameTimeNanos, this.durationNanos).value
         // 纯换 caret 目标：现有 unit 按"当前相位之后的剩余部分"重新归一，立即继续，
         // 不重新从整条旧 schedule 的 0 开始（Issue #728 评论 5756468643 问题1）。
         // 纯 caret 移动不改变文字目标，desiredTo = ch.to 保持原行为（Issue #728 评论 5760112985 问题1）。
@@ -261,14 +257,13 @@ class ComposeEditMotion(
                 .map { (key, ch) ->
                     RedirectUnitSpec(key = key, oldChannel = ch, desiredTo = ch.to)
                 }
-        val newChannels = buildRedirectChannels(specs, oldGlyphProgress, currentSample)
+        val newChannels = buildRedirectChannels(specs, oldProgress, currentSample)
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
             unitChannels = newChannels,
             startedAtNanos = frameTimeNanos,
-            caretDurationNanos = caretDurationNanos,
-            glyphDurationNanos = glyphDurationNanos,
+            durationNanos = durationNanos,
         )
     }
 
@@ -284,12 +279,12 @@ class ComposeEditMotion(
      * Issue #728 评论 5760112985 问题1：oldChannel 只提供 currentFraction 和旧 phase 分类，
      * 新目标方向由 [RedirectUnitSpec.desiredTo] 决定，不再沿用旧 ch.to。
      *
-     * 分类（基于旧 motion 的 master glyph progress [oldGlyphProgress]）：
+     * 分类（基于旧 motion 的 master progress [oldProgress]）：
      * - 新 unit（oldChannel == null）：from = 1 - desiredTo，to = desiredTo，作为 pending。
      * - 旧 unit 目标已达成（abs(currentFraction - desiredTo) < 1e-5，包括 Completed 角色未变、
      *   或刚好走到目标）：固定终值 from=to=currentFraction，不占区间。
      * - 旧 unit 需要动画（currentFraction != desiredTo）：
-     *   - 进行中（startProgress < oldGlyphProgress < endProgress）：from=currentFraction,
+     *   - 进行中（startProgress < oldProgress < endProgress）：from=currentFraction,
      *     to=desiredTo，startProgress=0 立即继续，endProgress=remaining。
      *   - 未开始 / Completed（含角色变化）：from=currentFraction, to=desiredTo，作为 pending。
      *     **关键：Completed 且角色变化不再固定旧终值，而是作为 pending 走新剩余动画。**
@@ -311,13 +306,13 @@ class ComposeEditMotion(
      * 不会冻结；pending unit 在 master 达到其 startProgress 后才开始，各自有独立区间。
      *
      * @param specs 带顺序的 unit 描述（旧 unit 含 oldChannel，新 unit oldChannel=null；都带 desiredTo）。
-     * @param oldGlyphProgress 旧 motion 中的 master glyph progress（0..1，必须用旧 duration 算）。
+     * @param oldProgress 旧 motion 中的 master progress（0..1，必须用旧 duration 算）。
      * @param currentSample 当前 sample（含每个 unit 的当前 fraction）。
      * @return 归一化后的新 channels。
      */
     private fun buildRedirectChannels(
         specs: List<RedirectUnitSpec>,
-        oldGlyphProgress: Float,
+        oldProgress: Float,
         currentSample: Sample,
     ): Map<Long, UnitChannel> {
         val result = mutableMapOf<Long, UnitChannel>()
@@ -332,7 +327,7 @@ class ComposeEditMotion(
         val reversedInProgress = mutableListOf<Pair<Long, UnitChannel>>()
         for (spec in specs) {
             val desiredTo = spec.desiredTo
-            when (val c = classifyRedirectSpec(spec, oldGlyphProgress, currentSample)) {
+            when (val c = classifyRedirectSpec(spec, oldProgress, currentSample)) {
                 is SpecClassification.NewUnitPending ->
                     pending.add(spec.key to UnitChannel(1f - desiredTo, desiredTo, 0f, 1f))
                 is SpecClassification.FixedTerminal ->
@@ -394,7 +389,7 @@ class ComposeEditMotion(
      */
     private fun classifyRedirectSpec(
         spec: RedirectUnitSpec,
-        oldGlyphProgress: Float,
+        oldProgress: Float,
         currentSample: Sample,
     ): SpecClassification {
         val ch = spec.oldChannel
@@ -422,7 +417,7 @@ class ComposeEditMotion(
             return SpecClassification.FixedTerminal(currentFraction)
         }
         // 需要动画：按旧 phase 分类决定区间分配。
-        val classification = classifyRedirectUnit(oldGlyphProgress, ch)
+        val classification = classifyRedirectUnit(oldProgress, ch)
         // Issue #728 评论 5760741452 问题1：检测角色是否反转。
         // directionChanged=true 时旧方向的 remaining 不再适用，必须重新进入新 traversal schedule。
         val directionChanged = abs(desiredTo - ch.to) >= 1e-5f
@@ -458,17 +453,17 @@ class ComposeEditMotion(
     }
 
     private fun classifyRedirectUnit(
-        oldGlyphProgress: Float,
+        oldProgress: Float,
         ch: UnitChannel,
     ): RedirectUnitClass =
         when {
-            oldGlyphProgress >= ch.endProgress -> RedirectUnitClass.Completed
-            oldGlyphProgress <= ch.startProgress -> RedirectUnitClass.NotStarted
+            oldProgress >= ch.endProgress -> RedirectUnitClass.Completed
+            oldProgress <= ch.startProgress -> RedirectUnitClass.NotStarted
             else -> {
                 val channelSpan = ch.endProgress - ch.startProgress
                 val localProgress =
                     if (channelSpan > 0f) {
-                        (oldGlyphProgress - ch.startProgress) / channelSpan
+                        (oldProgress - ch.startProgress) / channelSpan
                     } else {
                         1f
                     }
@@ -499,11 +494,12 @@ class ComposeEditMotion(
     )
 
     /**
-     * motion 是否已完成 — caret 和 glyph 都 finished，与 sample().finished 语义一致，但不产生 Sample。
+     * motion 是否已完成 — 与 sample().finished 语义一致，但不产生 Sample。
+     *
+     * Issue #735 评论 5773604666 问题2：只用单一 [durationNanos]。
      */
     fun isFinished(frameTimeNanos: Long): Boolean =
-        computeProgress(frameTimeNanos, caretDurationNanos).finished &&
-            computeProgress(frameTimeNanos, glyphDurationNanos).finished
+        computeProgress(frameTimeNanos, durationNanos).finished
 
     /**
      * 算单个通道的 progress 和 finished 状态。
@@ -527,7 +523,7 @@ class ComposeEditMotion(
         /**
          * 为一笔插入编辑创建 motion — caret 从 origin 向 target 移动，文字 0→1 吐字。
          *
-         * 多个 inserted unit 时，按 [insertedUnitKeys] sorted 顺序分配 master glyph progress 区间：
+         * 多个 inserted unit 时，按 [insertedUnitKeys] sorted 顺序分配 master progress 区间：
          * n 个 unit，第 i 个 startProgress = i/n, endProgress = (i+1)/n。
          * 光标从左到右依次吐字（Issue #728 评论 5755928697 问题3）。
          *
@@ -535,8 +531,8 @@ class ComposeEditMotion(
          * @param targetCaretRect 编辑后 caret rect。
          * @param insertedUnitKeys 新插入的 unit keys。
          * @param frameTimeNanos 当前帧时间戳。
-         * @param caretDurationNanos caret 通道时长。<=0 表示瞬时完成。
-         * @param glyphDurationNanos glyph 通道时长。<=0 表示瞬时完成。
+         * @param durationNanos 共享通道时长。<=0 表示瞬时完成。
+         *   Issue #735 评论 5773604666 问题2：caret 和 glyph 共用同一只钟。
          */
         @Suppress("LongParameterList")
         fun forInsert(
@@ -544,8 +540,7 @@ class ComposeEditMotion(
             targetCaretRect: Rect,
             insertedUnitKeys: List<Long>,
             frameTimeNanos: Long,
-            caretDurationNanos: Long,
-            glyphDurationNanos: Long,
+            durationNanos: Long,
         ): ComposeEditMotion {
             val ranges = allocateEditRanges(insertedUnitKeys, emptyList())
             val channels =
@@ -563,8 +558,7 @@ class ComposeEditMotion(
                 targetCaretRect = targetCaretRect,
                 unitChannels = channels,
                 startedAtNanos = frameTimeNanos,
-                caretDurationNanos = caretDurationNanos,
-                glyphDurationNanos = glyphDurationNanos,
+                durationNanos = durationNanos,
             )
         }
 
@@ -579,8 +573,8 @@ class ComposeEditMotion(
          * @param targetCaretRect 编辑后 caret rect（被删文字左侧）。
          * @param deletedUnitKeys 被删除的 unit keys。
          * @param frameTimeNanos 当前帧时间戳。
-         * @param caretDurationNanos caret 通道时长。<=0 表示瞬时完成。
-         * @param glyphDurationNanos glyph 通道时长。<=0 表示瞬时完成。
+         * @param durationNanos 共享通道时长。<=0 表示瞬时完成。
+         *   Issue #735 评论 5773604666 问题2：caret 和 glyph 共用同一只钟。
          */
         @Suppress("LongParameterList")
         fun forDelete(
@@ -588,8 +582,7 @@ class ComposeEditMotion(
             targetCaretRect: Rect,
             deletedUnitKeys: List<Long>,
             frameTimeNanos: Long,
-            caretDurationNanos: Long,
-            glyphDurationNanos: Long,
+            durationNanos: Long,
         ): ComposeEditMotion {
             val ranges = allocateEditRanges(emptyList(), deletedUnitKeys)
             val channels =
@@ -607,8 +600,7 @@ class ComposeEditMotion(
                 targetCaretRect = targetCaretRect,
                 unitChannels = channels,
                 startedAtNanos = frameTimeNanos,
-                caretDurationNanos = caretDurationNanos,
-                glyphDurationNanos = glyphDurationNanos,
+                durationNanos = durationNanos,
             )
         }
 
@@ -625,8 +617,8 @@ class ComposeEditMotion(
          * @param insertedUnitKeys 新插入的 unit keys。
          * @param deletedUnitKeys 被删除的 unit keys。
          * @param frameTimeNanos 当前帧时间戳。
-         * @param caretDurationNanos caret 通道时长。<=0 表示瞬时完成。
-         * @param glyphDurationNanos glyph 通道时长。<=0 表示瞬时完成。
+         * @param durationNanos 共享通道时长。<=0 表示瞬时完成。
+         *   Issue #735 评论 5773604666 问题2：caret 和 glyph 共用同一只钟。
          */
         @Suppress("LongParameterList")
         fun forEdit(
@@ -635,8 +627,7 @@ class ComposeEditMotion(
             insertedUnitKeys: List<Long>,
             deletedUnitKeys: List<Long>,
             frameTimeNanos: Long,
-            caretDurationNanos: Long,
-            glyphDurationNanos: Long,
+            durationNanos: Long,
         ): ComposeEditMotion {
             val ranges = allocateEditRanges(insertedUnitKeys, deletedUnitKeys)
             val channels = mutableMapOf<Long, UnitChannel>()
@@ -665,20 +656,20 @@ class ComposeEditMotion(
                 targetCaretRect = targetCaretRect,
                 unitChannels = channels,
                 startedAtNanos = frameTimeNanos,
-                caretDurationNanos = caretDurationNanos,
-                glyphDurationNanos = glyphDurationNanos,
+                durationNanos = durationNanos,
             )
         }
 
         /**
          * selection-only 移动 — caret 从 origin 向 target 移动，无文字 units。
          *
-         * glyph 通道无 unit，glyphDurationNanos 内部设为 0（瞬时完成），isFinished 只看 caret。
+         * 纯 selection/cursor move 没有文字吞吐，可以继续用独立的 caret-only motion。
+         * unit channels 为空，isFinished 只看 [durationNanos]。
          *
          * @param originCaretRect 编辑前 caret rect。
          * @param targetCaretRect 编辑后 caret rect。
          * @param frameTimeNanos 当前帧时间戳。
-         * @param caretDurationNanos caret 通道时长。<=0 表示瞬时完成。
+         * @param durationNanos caret 通道时长。<=0 表示瞬时完成。
          */
         fun forSelectionMove(
             originCaretRect: Rect,
@@ -691,8 +682,7 @@ class ComposeEditMotion(
                 targetCaretRect = targetCaretRect,
                 unitChannels = emptyMap(),
                 startedAtNanos = frameTimeNanos,
-                caretDurationNanos = caretDurationNanos,
-                glyphDurationNanos = 0L,
+                durationNanos = caretDurationNanos,
             )
     }
 }

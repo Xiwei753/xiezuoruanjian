@@ -184,24 +184,4 @@ data class CoreEditFactEvent(
     val offsetMap: com.xiwei.sujian.feature.editor.projection.OffsetMap?,
     val oldSelectionHeadUtf8: Int,
     val newSelectionHeadUtf8: Int,
-) {
-    /**
-     * #694 评论第 5 步：判断本 fact 的 cause 是否为本地输入
-     * （已由 Android InputTransformation 提供 visual edit，Core 回声只当 ACK）。
-     */
-    fun isLocalInputCause(): Boolean =
-        when (cause) {
-            EditorTransactionCauseDto.TYPING,
-            EditorTransactionCauseDto.TYPING_COMMIT,
-            EditorTransactionCauseDto.IME_COMPOSITION,
-            EditorTransactionCauseDto.PASTE,
-            EditorTransactionCauseDto.DELETE,
-            -> true
-            EditorTransactionCauseDto.UNDO,
-            EditorTransactionCauseDto.REDO,
-            EditorTransactionCauseDto.PROGRAMMATIC,
-            EditorTransactionCauseDto.LOAD,
-            EditorTransactionCauseDto.FORMAT,
-            -> false
-        }
-}
+)

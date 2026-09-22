@@ -73,8 +73,7 @@ class Issue728Comment5762435453ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. 让 motion finished：finishedTime = startTime + duration + 1
         val finishedTime = startTime + duration + 1L
@@ -107,8 +106,7 @@ class Issue728Comment5762435453ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = finishedTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to expectedSurvivingFraction,
@@ -159,8 +157,7 @@ class Issue728Comment5762435453ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val finishedTime = startTime + duration + 1L
         assertTrue("parent motion 在 finishedTime 应已 finished", parentMotion.isFinished(finishedTime))
@@ -173,8 +170,7 @@ class Issue728Comment5762435453ReproTest {
                 insertedUnitKeys = listOf(11L),
                 deletedUnitKeys = listOf(12L),
                 frameTimeNanos = finishedTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val bugFrame = bugMotion.sample(finishedTime)
         val bugSurviving = bugFrame.unitClipFractions[11L]!!
@@ -209,8 +205,7 @@ class Issue728Comment5762435453ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val finishedTime = startTime + duration + 1L
         assertTrue(parentMotion.isFinished(finishedTime))
@@ -225,8 +220,7 @@ class Issue728Comment5762435453ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = finishedTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey = inheritedFractionsByKey,
             )
         // bug 路径：forEdit（motion finished 时错误走的分支）
@@ -237,8 +231,7 @@ class Issue728Comment5762435453ReproTest {
                 insertedUnitKeys = listOf(11L),
                 deletedUnitKeys = listOf(12L),
                 frameTimeNanos = finishedTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         val fixedSurviving = fixedMotion.sample(finishedTime).unitClipFractions[11L]!!
@@ -274,8 +267,7 @@ class Issue728Comment5762435453ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val finishedTime = startTime + duration + 1L
         assertTrue(parentMotion.isFinished(finishedTime))
@@ -288,8 +280,7 @@ class Issue728Comment5762435453ReproTest {
                 insertedUnitKeys = listOf(11L),
                 deletedUnitKeys = listOf(12L),
                 frameTimeNanos = finishedTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val frame = motion.sample(finishedTime)
         val survivingFraction = frame.unitClipFractions[11L]!!
@@ -329,8 +320,7 @@ class Issue728Comment5762435453ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 90ms：parent fraction=0.9，motion 未 finished
         val midTime = startTime + duration * 9 / 10
@@ -360,8 +350,7 @@ class Issue728Comment5762435453ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to expectedSurvivingFraction,

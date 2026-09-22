@@ -702,18 +702,29 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// 这笔正文事务只在该 epoch 下拥有 coordinated caret。之后任何非正文事务
     /// 导致的逻辑 cursor 移动（鼠标点击、方向键、Home/End、拖选等）会 bump
     /// `CursorController::cursor_owner_epoch`，使本事务的 `cursor_owner_epoch`
-    /// 不再等于当前 epoch，`animation_coordinator` 在驱动 coordinated caret
-    /// 前检查到不一致时跳过 caret 驱动（文字事务继续播自己的 glyph/reflow，
-    /// 但不再驱动 caret）。
+    /// 不再等于当前 epoch。
+    ///
+    /// Issue #735 评论 5773604666 问题3: 失去 caret ownership 时，CaretDriven units
+    /// （InsertReveal/DeleteConceal）立即落到 canonical final state
+    /// （`start_fraction` 设为 `target_fraction`），caret motion 同时结束。
+    /// ReflowMove/ReflowCrossFade 作为独立 passive reflow track 继续。
+    /// 不再存在"同一笔正文吞吐 transaction 还活着，但 caret_owner 已经不是它"
+    /// 的状态。
     pub cursor_owner_epoch: u64,
-    /// Issue #727 评论 5760650874: 该事务是否已永久失去 caret motion ownership。
+    /// Issue #727 评论 5760650874 / Issue #735 评论 5773604666 问题3:
+    /// 该事务是否已永久失去 caret motion ownership。
     ///
     /// 一旦在 `build_text_animation_plan_with_sample` 中发现 `has_caret_driven_units
-    /// && !owns_caret`（本帧有 CaretDriven units 但不是 owner），此字段置 true，
+    /// && !owns_caret`（本帧有 CaretDriven units 但不是 owner），或在
+    /// `find_cursor_transaction_for_target` 中发现 epoch 不一致时，此字段置 true，
+    /// 同时调用 `retire_caret_driven_units` 把 CaretDriven units 的 `start_fraction`
+    /// 设为 `target_fraction`（终态）。
+    ///
     /// 之后 `active_text_transaction_key_with_epoch` 永远跳过此事务，
     /// `sample_coordinated_motion_frame` 不会再给它 `owner_key`，
     /// 已 Snap 回 canonical 的旧 caret / 吞吐字轨迹不会重新接管。
-    /// Timed Reflow (ReflowMove/ReflowCrossFade) 继续播完，事务只等剩余 Timed unit 完成。
+    /// ReflowMove/ReflowCrossFade 作为独立 passive reflow track 继续播完，
+    /// 事务只等剩余 Timed unit 完成。
     pub caret_motion_retired: bool,
     /// Issue #710 评论 5731145076 症状五/六 / 评论 5732160521 问题 3:
     /// 事务的视觉 affected byte range，分 old/new 两侧保存。
@@ -763,6 +774,67 @@ impl PreparedTextVisualTransaction {
 
     pub fn progress(&self, now: Instant) -> f64 {
         self.timeline.progress(now)
+    }
+
+    /// Issue #735 评论 5773604666 问题3: 收口本事务的 CaretDriven units。
+    ///
+    /// 当正文 edit motion 失去 caret ownership（`cursor_owner_epoch` 不再等于
+    /// 当前 epoch）时调用。把所有 CaretDriven unit（InsertReveal/DeleteConceal）
+    /// 的 `start_fraction` 设为 `target_fraction`（终态）：
+    /// - InsertReveal: `start_fraction = 1.0`（完全可见）
+    /// - DeleteConceal: `start_fraction = 0.0`（完全消失）
+    ///
+    /// ReflowMove/ReflowCrossFade（Timed unit）保留不动，它们作为独立
+    /// passive reflow track 继续播完自己的几何插值。
+    ///
+    /// 调用后 CaretDriven units 立即落到 canonical final state，不再继续播。
+    /// 如果事务中还有 Timed unit，事务不立即 Completed（等 Reflow 播完）；
+    /// 如果没有 Timed unit，事务可在下一帧 Completed。
+    pub(crate) fn retire_caret_driven_units(&mut self) {
+        for unit in &mut self.units {
+            match unit.slice.kind {
+                AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                    // CaretDriven unit: 把 start_fraction 设为 target_fraction（终态）。
+                    if let VisualUnitTiming::CaretDriven {
+                        start_fraction,
+                        target_fraction,
+                    } = &mut unit.timing
+                    {
+                        *start_fraction = *target_fraction;
+                    }
+                }
+                AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                    // Timed unit: 保留不动，作为独立 passive reflow track 继续。
+                }
+            }
+        }
+    }
+
+    /// Issue #735 评论 5773604666 问题3: 判断本事务是否还有未播完的 Timed unit
+    /// （ReflowMove/ReflowCrossFade）。
+    ///
+    /// 供测试验证收口语义：`retire_caret_driven_units` 后，
+    /// - 返回 `false`：没有 Timed unit 或 Timed unit 已全部播完，事务可立即 Completed。
+    /// - 返回 `true`：还有 Timed unit 在播，事务需等它们播完再 Completed。
+    #[cfg(test)]
+    pub(crate) fn has_active_timed_units(&self, now: Instant) -> bool {
+        self.units.iter().any(|u| match u.slice.kind {
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                u.timing.progress(now) < 1.0
+            }
+            _ => false,
+        })
+    }
+
+    /// Issue #735 评论 5773604666 问题3: 判断本事务是否含 CaretDriven units
+    /// （InsertReveal/DeleteConceal）。
+    pub(crate) fn has_caret_driven_units(&self) -> bool {
+        self.units.iter().any(|u| {
+            matches!(
+                u.slice.kind,
+                AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+            )
+        })
     }
 
     /// 采集本事务中尚未播完的视觉单元当前帧，交棒给下一个事务。

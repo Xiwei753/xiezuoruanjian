@@ -54,8 +54,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         // 25% 时：glyphProgress=0.25，key=1 区间 [0, 0.5] local=0.5 fraction=0.5，
         // key=2 区间 [0.5, 1] 还没开始 fraction=0
@@ -71,8 +70,7 @@ class Issue728Comment5755928697ReproTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // redirect 后立即 sample：unit channel 仍然存在，fraction 保持当前值（不丢字）
@@ -107,8 +105,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         val midTime = startTime + glyphDuration / 2
         val midSample = motion1.sample(midTime)
@@ -124,8 +121,7 @@ class Issue728Comment5755928697ReproTest {
                 newInsertedUnitKeys = emptyList(),
                 newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         val droppedSample = redirectedDropMotion.sample(midTime)
         assertTrue(
@@ -139,8 +135,7 @@ class Issue728Comment5755928697ReproTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         val preservedSample = preservedMotion.sample(midTime)
         assertNotNull(
@@ -156,85 +151,15 @@ class Issue728Comment5755928697ReproTest {
     }
 
     // ==================== 问题2：coordinated=false 独立 duration ====================
+    // Issue #735 评论 5773604666 问题2：删除双 duration —
+    // coordinatedFalse_caretUsesCursorDuration_glyphUsesTextDuration 测试已删除，
+    // 正文 edit motion 一律一只钟，不再有 caret/glyph 独立时长。
+    // coordinatedTrue_caretAndGlyphShareTextDuration 仍保留，验证单一 duration 语义。
 
     /**
-     * 问题2：coordinated=false 时 caret 和 glyph 各自持有 duration，独立计时。
+     * 问题2 对比：单一 duration 时 caret 和 glyph 共用同一 duration，sample 到中间时两者都未 finished。
      *
-     * coordinated=false 在 ComposeEditMotion 层面体现为 caretDurationNanos != glyphDurationNanos。
-     *
-     * 场景1：caretDuration=200ms, glyphDuration=100ms。sample 到 100ms 时
-     * glyph finished（100ms >= 100ms）但 caret 未 finished（100ms < 200ms）。
-     * 验证 caret 不跟 glyphDuration（textDuration）走，caret 用自己的 cursorDuration。
-     *
-     * 场景2：caretDuration=100ms, glyphDuration=200ms。sample 到 100ms 时
-     * caret finished 但 glyph 未 finished。验证 glyph 不跟 caretDuration 走。
-     */
-    @Test
-    fun coordinatedFalse_caretUsesCursorDuration_glyphUsesTextDuration() {
-        val caretDurationLong = 200_000_000L // 200ms
-        val glyphDurationShort = 100_000_000L // 100ms
-
-        // 场景1：caret 200ms, glyph 100ms — glyph 先 finished，caret 还在跑
-        val motionCaretLonger =
-            ComposeEditMotion.forEdit(
-                originCaretRect = originRect,
-                targetCaretRect = targetRect,
-                insertedUnitKeys = listOf(1L),
-                deletedUnitKeys = emptyList(),
-                frameTimeNanos = startTime,
-                caretDurationNanos = caretDurationLong,
-                glyphDurationNanos = glyphDurationShort,
-            )
-        // sample 到 100ms：glyph finished，caret 未 finished
-        val sampleGlyphDone = motionCaretLonger.sample(startTime + glyphDurationShort)
-        assertEquals(
-            "glyph 应 finished（100ms >= glyphDuration 100ms）— fraction=1",
-            1f,
-            sampleGlyphDone.unitClipFractions[1L]!!,
-            0.001f,
-        )
-        assertFalse(
-            "caret 不应 finished（100ms < caretDuration 200ms）— 整体 finished=false",
-            sampleGlyphDone.finished,
-        )
-        // caret 还在中间（100ms/200ms=0.5），left=10+(30-10)*0.5=20，没到 target
-        assertEquals("caret 在中间（用 caretDuration 200ms 算 progress=0.5）", 20f, sampleGlyphDone.caretRect.left, 0.001f)
-
-        // 场景2：caret 100ms, glyph 200ms — caret 先 finished，glyph 还在跑
-        val motionGlyphLonger =
-            ComposeEditMotion.forEdit(
-                originCaretRect = originRect,
-                targetCaretRect = targetRect,
-                insertedUnitKeys = listOf(1L),
-                deletedUnitKeys = emptyList(),
-                frameTimeNanos = startTime,
-                caretDurationNanos = glyphDurationShort,
-                glyphDurationNanos = caretDurationLong,
-            )
-        // sample 到 100ms：caret finished，glyph 未 finished
-        val sampleCaretDone = motionGlyphLonger.sample(startTime + glyphDurationShort)
-        assertEquals(
-            "caret 应到 target（100ms >= caretDuration 100ms）",
-            targetRect,
-            sampleCaretDone.caretRect,
-        )
-        assertFalse(
-            "glyph 不应 finished（100ms < glyphDuration 200ms）— 整体 finished=false",
-            sampleCaretDone.finished,
-        )
-        // glyph 还在中间（100ms/200ms=0.5），fraction=0.5
-        assertEquals(
-            "glyph 在中间（用 glyphDuration 200ms 算 progress=0.5）— fraction=0.5",
-            0.5f,
-            sampleCaretDone.unitClipFractions[1L]!!,
-            0.001f,
-        )
-    }
-
-    /**
-     * 问题2 对比：coordinated=true 时 caret 和 glyph 共用同一 duration，sample 到中间时两者都未 finished。
-     *
-     * coordinated=true 在 ComposeEditMotion 层面体现为 caretDurationNanos == glyphDurationNanos。
+     * Issue #735 评论 5773604666 问题2：删除双 duration 后，caret 和 glyph 永远共用同一个 progress，
      * sample 到中间时 caret 和 glyph 都 progress=0.5，都未 finished；到终点时都 finished。
      */
     @Test
@@ -247,20 +172,19 @@ class Issue728Comment5755928697ReproTest {
                 insertedUnitKeys = listOf(1L),
                 deletedUnitKeys = emptyList(),
                 frameTimeNanos = startTime,
-                caretDurationNanos = sharedDuration,
-                glyphDurationNanos = sharedDuration,
+                durationNanos = sharedDuration,
             )
         // sample 到 100ms（中间）：caret 和 glyph 都 progress=0.5，都未 finished
         val midSample = motion.sample(startTime + sharedDuration / 2)
         assertEquals("caret 在中间（progress=0.5）", 20f, midSample.caretRect.left, 0.001f)
         assertEquals("glyph 在中间（fraction=0.5）", 0.5f, midSample.unitClipFractions[1L]!!, 0.001f)
-        assertFalse("coordinated=true 中间时两者都未 finished", midSample.finished)
+        assertFalse("中间时两者都未 finished", midSample.finished)
 
         // sample 到 200ms（终点）：两者都 finished
         val endSample = motion.sample(startTime + sharedDuration)
         assertEquals(targetRect, endSample.caretRect)
         assertEquals(1f, endSample.unitClipFractions[1L]!!, 0.001f)
-        assertTrue("coordinated=true 终点时两者都 finished", endSample.finished)
+        assertTrue("终点时两者都 finished", endSample.finished)
     }
 
     // ==================== 问题3：多 unit 区间映射跟着光标 ====================
@@ -296,8 +220,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // glyphProgress=1/6：unit1 区间 [0, 1/3] 中点 local=0.5 fraction=0.5；
@@ -352,8 +275,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // glyphProgress=1/6：unit3 区间 [0, 1/3] 中点 local=0.5 fraction=1+(0-1)*0.5=0.5（正在吞）；
@@ -406,8 +328,7 @@ class Issue728Comment5755928697ReproTest {
                 insertedUnitKeys = listOf(1L),
                 deletedUnitKeys = listOf(2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // glyphProgress=0.25：inserted 正在吐，deleted 还没吞
@@ -445,8 +366,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         // 3 个 unit：key=1 [0, 1/3], key=2 [1/3, 2/3], key=3 [2/3, 1]
         // sample 到 glyphProgress=0.4（第二个 unit 中途）
@@ -463,8 +383,7 @@ class Issue728Comment5755928697ReproTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // redirect 后立即 sample：key=2 的 fraction 应该从当前值继续
@@ -499,8 +418,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         // 2 个 unit：key=1 [0, 0.5], key=2 [0.5, 1]
         // sample 到 glyphProgress=0.75（第二个 unit 中途，local=0.5，fraction=0.5）
@@ -516,8 +434,7 @@ class Issue728Comment5755928697ReproTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // redirect 后 1% 进度时：fraction 应该已经开始增长（不是冻结在 0.5）
@@ -549,8 +466,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         // sample 到 glyphProgress=0.15（第一个 unit 中途）
         val midTime = startTime + (glyphDuration * 0.15f).toLong()
@@ -567,8 +483,7 @@ class Issue728Comment5755928697ReproTest {
                 newInsertedUnitKeys = listOf(1L, 2L, 3L),
                 newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // redirect 后立即 sample：key=1 从 0.45 继续
@@ -610,8 +525,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L, 11L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         // 顺序 2：key=11 在前，key=10 在后（逆序）
         val motion2 =
@@ -620,8 +534,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(11L, 10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // 在 25% 进度时：
@@ -663,8 +576,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = oldGlyphDuration,
-                glyphDurationNanos = oldGlyphDuration,
+                durationNanos = oldGlyphDuration,
             )
         // glyphProgress=0.4：key=2 区间 [1/3, 2/3]，local=(0.4-1/3)/(1/3)≈0.2，fraction≈0.2
         val midTime = startTime + 40_000_000L
@@ -672,15 +584,14 @@ class Issue728Comment5755928697ReproTest {
         val key2Fraction = midSample.unitClipFractions[2L]!!
         assertTrue("key=2 应在进行中", key2Fraction > 0f && key2Fraction < 1f)
 
-        // redirect 到新目标，但用不同的 glyph 时长（200ms）
+        // redirect 到新目标，但用不同的时长（200ms）
         val newCaretTarget = Rect(left = 0f, top = 0f, right = 2f, bottom = 20f)
         val motion2 =
             motion1.redirectCaretTo(
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = 200_000_000L,
-                glyphDurationNanos = 200_000_000L,
+                durationNanos = 200_000_000L,
             )
 
         // redirect 后立即 sample：key=2 的 fraction 应该从当前值继续（不是从 0 重播）
@@ -722,8 +633,7 @@ class Issue728Comment5755928697ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
         // 旧 unit key=10 进行中：glyphProgress=0.5，fraction=0.5
         val midTime = startTime + glyphDuration / 2
@@ -739,8 +649,7 @@ class Issue728Comment5755928697ReproTest {
                 newInsertedUnitKeys = listOf(11L, 10L),
                 newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = midTime,
-                caretDurationNanos = glyphDuration,
-                glyphDurationNanos = glyphDuration,
+                durationNanos = glyphDuration,
             )
 
         // 立即 sample：key=10 从当前 0.5 继续，key=11 从 0 开始

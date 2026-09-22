@@ -53,8 +53,7 @@ class Issue728Comment5760741452ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 40% 时间：unit 1 fraction=0.4
         val midTime = startTime + duration * 2 / 5 // 40ms
@@ -69,8 +68,7 @@ class Issue728Comment5760741452ReproTest {
                 newInsertedUnitKeys = emptyList(),
                 newDeletedUnitKeys = listOf(1L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. 新 motion 60% 时间：修复后 glyph fraction≈0.16（与 caret 同步，不是提前吞完到 0）
@@ -131,8 +129,7 @@ class Issue728Comment5760741452ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val midTime = startTime + duration * 2 / 5
         val motion2 =
@@ -142,8 +139,7 @@ class Issue728Comment5760741452ReproTest {
                 newInsertedUnitKeys = emptyList(),
                 newDeletedUnitKeys = listOf(1L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val atSixtyPercent = motion2.sample(midTime + duration * 3 / 5)
         val fractionAtSixty = atSixtyPercent.unitClipFractions[1L]!!
@@ -192,8 +188,7 @@ class Issue728Comment5760741452ReproTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(10L, 11L, 12L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 duration/6（glyphProgress=1/6，key=12 区间 [0,1/3] 中段）
         val midTime = startTime + duration / 6
@@ -208,8 +203,7 @@ class Issue728Comment5760741452ReproTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = originRect,
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. sample 到新 motion 60% 时间（glyphProgress=0.6）
@@ -261,8 +255,7 @@ class Issue728Comment5760741452ReproTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(10L, 11L, 12L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val midTime = startTime + duration / 6
         val motion2 =
@@ -270,8 +263,7 @@ class Issue728Comment5760741452ReproTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = originRect,
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 通过 sample 推断区间边界（不依赖内部字段，纯 API 验证）

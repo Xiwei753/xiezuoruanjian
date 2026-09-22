@@ -70,76 +70,6 @@ class Issue728Comment5755336403ReproTest {
 
     // ==================== 缺口1：纯 selection 判断用 lastResolvedText ====================
 
-    /**
-     * 缺口1：onInputSnapshotResolved 的纯 selection 判断用 lastResolvedText（不是 layout text）。
-     *
-     * 场景：正常打字 "" -> "a"，先 onAuthoritativeLayout 让 layout 先到，
-     * 再 onInputSnapshotResolved(snapshot text="a", selection=(1,1), outcome=NoTextChange)。
-     *
-     * 旧实现：layout.text("a") == snapshot.text("a") 成立，误判为纯 selection，清掉 activeEditMotion。
-     * 修复后：lastResolvedText 初始为 null，snapshot.text("a") != lastResolvedText(null)，
-     *   不进入纯 selection 分支，不清 activeEditMotion。
-     *
-     * 验证：先建立 activeEditMotion（drainPendingPatchesAtFrame），再调 onInputSnapshotResolved，
-     *   activeEditMotion 应保持非 null。同时验证 lastResolvedText 字段存在且被更新。
-     */
-    @Test
-    fun gap1_pureSelectionCheck_usesLastResolvedText_notLayoutText() {
-        // 反射验证 lastResolvedText 字段存在且类型为 String（nullable 在 JVM 映射为 String）
-        val lastResolvedTextField =
-            ComposeEditorVisualState::class.java.declaredFields.firstOrNull { it.name == "lastResolvedText" }
-        assertNotNull("ComposeEditorVisualState 应有 lastResolvedText 字段（缺口1 修复）", lastResolvedTextField)
-        assertEquals(
-            "lastResolvedText 字段类型应是 String",
-            String::class.java,
-            lastResolvedTextField!!.type,
-        )
-
-        val layouts = captureLayouts("", "a")
-        val state =
-            ComposeEditorVisualState(
-                targetId = "issue728-5755336403-gap1",
-            )
-        // 建立基线：空文本，caret 在 offset 0
-        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        // 插入 "a"
-        state.recordLocalInput(
-            oldText = "",
-            newText = "a",
-            oldSelection = TextRange(0, 0),
-            newSelection = TextRange(1, 1),
-            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
-        )
-        // onAuthoritativeLayout 配对生成 local patch 并发布 handoff scene，patch 入队
-        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0, compositionActive = false)
-        // drain 创建 activeEditMotion（forEdit，因为 oldText("") != newText("a")）
-        state.drainPendingPatchesAtFrame(0L)
-        val motionBefore = stateField(state, "activeEditMotion")
-        assertNotNull("drain 后 activeEditMotion 应非 null（forEdit 已创建）", motionBefore)
-
-        // 调 onInputSnapshotResolved：text="a"，selection=(1,1)，outcome=NoTextChange。
-        // 此时 layout.text("a") == snapshot.text("a")，但 lastResolvedText 初始为 null。
-        // 旧实现：layout.text == snapshot.text → 误判纯 selection → 清 activeEditMotion。
-        // 修复后：snapshot.text("a") != lastResolvedText(null) → 不进入纯 selection 分支。
-        state.onInputSnapshotResolved(
-            snapshot = EditorInputSnapshot(text = "a", selection = TextRange(1, 1), composition = null),
-            outcome = InputSnapshotOutcome.NoTextChange,
-        )
-        val motionAfter = stateField(state, "activeEditMotion")
-        assertNotNull(
-            "onInputSnapshotResolved 后 activeEditMotion 不应被清空（lastResolvedText null 不误判纯 selection）",
-            motionAfter,
-        )
-
-        // 验证 lastResolvedText 在 onInputSnapshotResolved 后被更新为 snapshot.text
-        val lastResolvedTextAfter = stateField(state, "lastResolvedText")
-        assertEquals(
-            "lastResolvedText 应在 onInputSnapshotResolved 后更新为 snapshot.text",
-            "a",
-            lastResolvedTextAfter,
-        )
-    }
-
     // ==================== 缺口2：纯 selection 走 pending caret target + 真实 frameTime ====================
 
     /**
@@ -227,119 +157,7 @@ class Issue728Comment5755336403ReproTest {
 
     // ==================== 缺口3：handoff 不提前画 target caret ====================
 
-    /**
-     * 缺口3：publishLocalHandoffScene 不提前把 caret 推到 target。
-     *
-     * 场景：
-     * 1. onAuthoritativeLayout("", selection=(0,0)) 设置基线
-     * 2. recordLocalInput("" -> "a", oldSelection=(0,0), newSelection=(1,1))
-     * 3. onAuthoritativeLayout("a", selection=(1,1)) 触发 publishLocalHandoffScene
-     *
-     * 修复后 handoffCaretRect = activeEditMotion?.let { drawSnapshotState.caretRect } ?: patch.originCaretRect。
-     * 此时无 active motion，用 patch.originCaretRect（编辑前位置 = oldLayout.cursorRect(0)）。
-     *
-     * 验证：drawSnapshot().caretRect == oldLayout.cursorRect(0)（origin），!= newLayout.cursorRect(1)（target）。
-     */
-    @Test
-    fun gap3_handoff_doesNotPreDrawTargetCaret() {
-        val layouts = captureLayouts("", "a")
-        val state =
-            ComposeEditorVisualState(
-                targetId = "issue728-5755336403-gap3",
-            )
-        // 基线：空文本
-        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        // 插入 "a"
-        state.recordLocalInput(
-            oldText = "",
-            newText = "a",
-            oldSelection = TextRange(0, 0),
-            newSelection = TextRange(1, 1),
-            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
-        )
-        // onAuthoritativeLayout 触发 publishLocalHandoffScene
-        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0, compositionActive = false)
-
-        val oldLayoutSnapshot = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
-        val newLayoutSnapshot = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0)
-        val originCaret = oldLayoutSnapshot.cursorRect(0)
-        val targetCaret = newLayoutSnapshot.cursorRect(1)
-        assertNotEquals("origin/target caret 应不同", originCaret, targetCaret)
-
-        val caretRect = state.drawSnapshot().caretRect
-        assertNotNull("handoff 后 drawSnapshot().caretRect 应非 null", caretRect)
-        assertEquals(
-            "handoff 不应提前把 caret 推到 target，应保持 origin（patch.originCaretRect）",
-            originCaret,
-            caretRect,
-        )
-        assertFalse(
-            "handoff caret 不应是 target（不应提前画编辑后位置）",
-            targetCaret == caretRect,
-        )
-    }
-
     // ==================== 缺口4：Enter 按 text edit 处理 ====================
-
-    /**
-     * 缺口4：Enter（oldText != newText）走 text edit 分支，用 textDurationMillis 而非 cursorDurationMillis。
-     *
-     * 场景："a" -> "a\n"（Enter），oldText != newText。
-     * 修复后 isSelectionOnly = (oldText == newText) && insertedKeys.isEmpty() && deletedKeys.isEmpty()，
-     * Enter 的 oldText != newText → isSelectionOnly=false → 走 forEdit 分支，durationNanos = textDurationNanos。
-     *
-     * 旧实现用 insertedKeys.isEmpty() && deletedKeys.isEmpty() 判断 selection-only，
-     * Enter 无 glyph unit 时误判为 selection-only，用 cursorDurationMillis。
-     *
-     * 验证：设置 textDurationMillis=200ms, cursorDurationMillis=50ms，
-     *   motion 的 durationNanos == 200ms * NANOS_PER_MS（text edit 分支）。
-     */
-    @Test
-    fun gap4_enterKey_treatedAsTextEdit_notSelectionOnly() {
-        val layouts = captureLayouts("a", "a\n")
-        val state =
-            ComposeEditorVisualState(
-                targetId = "issue728-5755336403-gap4",
-            )
-        val textDurationMs = 200L
-        val cursorDurationMs = 50L
-        // 设置 textDuration != cursorDuration 以区分 forEdit / forSelectionMove 分支
-        state.updateMotionPolicy(
-            EditorMotionPolicy(
-                textEnabled = true,
-                textDurationMillis = textDurationMs,
-                cursorEnabled = true,
-                cursorDurationMillis = cursorDurationMs,
-                coordinated = true,
-            ),
-        )
-        // 基线："a"，caret 在 offset 1
-        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
-        // Enter：插入 "\n"
-        state.recordLocalInput(
-            oldText = "a",
-            newText = "a\n",
-            oldSelection = TextRange(1, 1),
-            newSelection = TextRange(2, 2),
-            changes = listOf(LocalInputChange(newRange = TextRange(1, 2), oldRange = TextRange(1, 1))),
-        )
-        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0, compositionActive = false)
-        // drain 创建 activeEditMotion
-        state.drainPendingPatchesAtFrame(0L)
-
-        val motion = stateField(state, "activeEditMotion")
-        assertNotNull("Enter 编辑后 activeEditMotion 应非 null", motion)
-        val durationNanos = motionDurationNanos(motion as ComposeEditMotion)
-        assertEquals(
-            "Enter（oldText != newText）应走 text edit 分支，durationNanos == textDurationMillis * NANOS_PER_MS",
-            textDurationMs * NANOS_PER_MS,
-            durationNanos,
-        )
-        assertFalse(
-            "Enter 不应走 selection-only 分支（durationNanos 不应是 cursorDurationMillis * NANOS_PER_MS）",
-            cursorDurationMs * NANOS_PER_MS == durationNanos,
-        )
-    }
 
     // ==================== 缺口5a：smooth cursor 读真实独立设置字段 ====================
 
@@ -454,15 +272,14 @@ class Issue728Comment5755336403ReproTest {
     }
 
     /**
-     * 反射读取 [ComposeEditMotion] 的私有 glyphDurationNanos 字段。
+     * 反射读取 [ComposeEditMotion] 的私有 durationNanos 字段。
      *
-     * 用于区分 text edit 分支（glyphDurationNanos = textDurationNanos）与
-     * forSelectionMove 分支（glyphDurationNanos = 0）。
-     * 注释 5754045689 重写后统一 motion 把单 duration 拆成 caretDurationNanos / glyphDurationNanos，
-     * 文字吞吐走 glyphDurationNanos，所以这里读 glyphDurationNanos。
+     * Issue #735 评论 5773604666 问题2：删除双 duration 后，ComposeEditMotion 只有单一 durationNanos，
+     * caret 和 glyph 共用同一只钟。text edit 分支 durationNanos = textDurationNanos，
+     * forSelectionMove 分支 durationNanos = caretDurationNanos（selection cursor duration）。
      */
     private fun motionDurationNanos(motion: ComposeEditMotion): Long {
-        val field = ComposeEditMotion::class.java.getDeclaredField("glyphDurationNanos")
+        val field = ComposeEditMotion::class.java.getDeclaredField("durationNanos")
         field.isAccessible = true
         return field.get(motion) as Long
     }

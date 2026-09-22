@@ -53,60 +53,6 @@ class Issue728Comment5754839786ReproTest {
     // ==================== 缺口1：buildLocalInputPatch 写真实 caret 两端 ====================
 
     /**
-     * 缺口1：本地输入生成的 patch 的 originCaretRect/targetCaretRect 应等于真实 cursor rect，
-     * 不是 Rect.Zero。
-     *
-     * 场景：空文本 "" -> "a"，caret 从 offset 0 移到 offset 1。
-     * - originCaretRect 应等于 oldLayout(空文本).cursorRect(0)（有 lineHeight > 0，非 Rect.Zero）
-     * - targetCaretRect 应等于 newLayout("a").cursorRect(1)（有 lineHeight > 0，非 Rect.Zero）
-     *
-     * 旧实现：buildLocalInputPatch 漏传 caret rect，ComposeVisualPatch 的 Rect.Zero 默认值
-     * 让本地 patch 的 caret 两端变成 (0,0,0,0)，ComposeEditMotion 从原点插值到原点，屏幕 caret 不动。
-     */
-    @Test
-    fun gap1_buildLocalInputPatch_writesRealCaretRects() {
-        val layouts = captureLayouts("", "a")
-        val state =
-            ComposeEditorVisualState(
-                targetId = "issue728-5754839786-gap1",
-            )
-        // 基线：空文本，caret 在 offset 0
-        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        // 插入 "a"
-        state.recordLocalInput(
-            oldText = "",
-            newText = "a",
-            oldSelection = TextRange(0, 0),
-            newSelection = TextRange(1, 1),
-            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
-        )
-        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0, compositionActive = false)
-
-        val patch = state.latestPatch.value
-        assertNotNull("本地输入应生成 patch", patch)
-        val expectedOrigin = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0).cursorRect(0)
-        val expectedTarget = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0).cursorRect(1)
-        assertEquals(
-            "originCaretRect 应等于 oldLayout.cursorRect(oldSelection.end)",
-            expectedOrigin,
-            patch!!.originCaretRect,
-        )
-        assertEquals(
-            "targetCaretRect 应等于 newLayout.cursorRect(newSelection.end)",
-            expectedTarget,
-            patch.targetCaretRect,
-        )
-        assertTrue(
-            "originCaretRect 不应是 Rect.Zero（空文本 caret 有 lineHeight > 0）",
-            patch.originCaretRect != Rect.Zero,
-        )
-        assertTrue(
-            "targetCaretRect 不应是 Rect.Zero（'a' 后 caret 有 lineHeight > 0）",
-            patch.targetCaretRect != Rect.Zero,
-        )
-    }
-
-    /**
      * 缺口1补充：ComposeVisualPatch 的 originCaretRect/targetCaretRect 字段存在且类型为 Rect —
      * 反射验证主源码去掉了 Rect.Zero 默认值后，两个字段是必填的非 nullable Rect。
      */

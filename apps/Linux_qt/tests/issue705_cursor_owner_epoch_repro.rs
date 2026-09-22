@@ -110,10 +110,13 @@ fn has_cursor_owner_epoch_guard(window: &str) -> bool {
 /// 当前代码:函数体窗口内 `if let Some(key) = self.active_text_transaction_key()`
 /// 后直接 return,且窗口内没有任何 cursor owner epoch / 所有权失效检查。
 /// 断言"抢回前应有所有权检查"在当前代码上 FAIL → 复现成功。
+///
+/// Issue #735 评论 5773604666 问题3: 函数体增长（新增收口逻辑），窗口大小
+/// 从 1600 增到 2400 以覆盖 `return Some((` 和 epoch 检查。
 #[test]
 fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(&src, "fn find_cursor_transaction_for_target", 1600);
+    let window = function_window(&src, "fn find_cursor_transaction_for_target", 2400);
     // 前提:函数确实有"活动正文事务直接返回"的抢回路径
     let has_active_key_branch = window.contains("self.active_text_transaction_key()");
     let has_direct_return = window.contains("return Some((");

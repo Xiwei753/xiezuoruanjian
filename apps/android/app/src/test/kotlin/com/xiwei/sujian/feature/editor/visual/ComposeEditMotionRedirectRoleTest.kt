@@ -40,8 +40,7 @@ class ComposeEditMotionRedirectRoleTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 40% 时间：unit 1 fraction≈0.4（InProgress，旧 ch.to=1）
         val midTime = startTime + duration * 2 / 5 // 40ms
@@ -56,8 +55,7 @@ class ComposeEditMotionRedirectRoleTest {
                 newInsertedUnitKeys = emptyList(),
                 newDeletedUnitKeys = listOf(1L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. redirect 后立即 sample：key=1 fraction≈0.4（从当前继续，不是从 1 开始）
@@ -125,8 +123,7 @@ class ComposeEditMotionRedirectRoleTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 100% 时间（Completed，fraction=1.0）
         val finishTime = startTime + duration
@@ -142,8 +139,7 @@ class ComposeEditMotionRedirectRoleTest {
                 newInsertedUnitKeys = emptyList(),
                 newDeletedUnitKeys = listOf(1L),
                 frameTimeNanos = finishTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. redirect 后立即 sample：key=1 fraction=1.0（从当前开始）
@@ -178,8 +174,7 @@ class ComposeEditMotionRedirectRoleTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(10L, 11L, 12L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // sample 到 duration/6 时间（glyphProgress=1/6，在 key=12 区间 [0, 1/3] 中段）：
         // key=12 localProgress=0.5 fraction=0.5，key=10/11 fraction=1（未开始）
@@ -197,8 +192,7 @@ class ComposeEditMotionRedirectRoleTest {
                 newInsertedUnitKeys = emptyList(),
                 newDeletedUnitKeys = listOf(10L, 11L, 12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. redirect 后 sample 到新 motion duration/6 时间：
@@ -226,8 +220,7 @@ class ComposeEditMotionRedirectRoleTest {
                 insertedUnitKeys = listOf(1L),
                 deletedUnitKeys = listOf(2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 25% 时间（glyphProgress=0.25）：
         // key=1 在 [0, 0.5] 中点 fraction=0.5，key=2 还没开始 fraction=1
@@ -244,8 +237,7 @@ class ComposeEditMotionRedirectRoleTest {
                 newInsertedUnitKeys = listOf(1L),
                 newDeletedUnitKeys = listOf(2L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. redirect 后两条 unit 在一条 schedule 上：
@@ -290,8 +282,7 @@ class ComposeEditMotionRedirectRoleTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(10L, 11L, 12L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 duration/6（glyphProgress=1/6，key=12 区间 [0,1/3] 中段）
         //    key=12 fraction=0.5（in-progress），key=10/11 fraction=1（未开始）
@@ -307,8 +298,7 @@ class ComposeEditMotionRedirectRoleTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = originRect,
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
 
         // 4. sample 到新 motion 60% 时间（glyphProgress=0.6）

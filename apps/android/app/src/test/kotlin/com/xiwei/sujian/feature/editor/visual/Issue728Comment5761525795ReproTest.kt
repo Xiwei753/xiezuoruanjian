@@ -66,8 +66,7 @@ class Issue728Comment5761525795ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 2. sample 到 40% 时间：parent key=10 fraction=0.4
         val midTime = startTime + duration * 2 / 5 // 40ms
@@ -85,8 +84,7 @@ class Issue728Comment5761525795ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to computeRevealFractionForChild(parentRange, 0.4f, survivingChildRange),
@@ -144,8 +142,7 @@ class Issue728Comment5761525795ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val midTime = startTime + duration * 2 / 5
         val midSample = parentMotion.sample(midTime)
@@ -158,8 +155,7 @@ class Issue728Comment5761525795ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to computeRevealFractionForChild(parentRange, 0.4f, survivingChildRange),
@@ -215,8 +211,7 @@ class Issue728Comment5761525795ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 80% 时间：parent fraction=0.8
         val midTime = startTime + duration * 4 / 5 // 80ms
@@ -230,8 +225,7 @@ class Issue728Comment5761525795ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to computeRevealFractionForChild(parentRange, 0.8f, survivingChildRange),
@@ -293,8 +287,7 @@ class Issue728Comment5761525795ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val midTime = startTime + duration * 4 / 5
         val midSample = parentMotion.sample(midTime)
@@ -307,8 +300,7 @@ class Issue728Comment5761525795ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to computeRevealFractionForChild(parentRange, 0.8f, survivingChildRange),
@@ -360,8 +352,7 @@ class Issue728Comment5761525795ReproTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(10L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val midTime = startTime + duration * 2 / 5
         val midSample = parentMotion.sample(midTime)
@@ -385,8 +376,7 @@ class Issue728Comment5761525795ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val bugFrame = bugMotion.sample(midTime)
         val bugSurviving = bugFrame.unitClipFractions[11L]!!
@@ -415,8 +405,7 @@ class Issue728Comment5761525795ReproTest {
                 newInsertedUnitKeys = listOf(11L),
                 newDeletedUnitKeys = listOf(12L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
                 inheritedFractionsByKey =
                     mapOf(
                         11L to expectedSurviving,

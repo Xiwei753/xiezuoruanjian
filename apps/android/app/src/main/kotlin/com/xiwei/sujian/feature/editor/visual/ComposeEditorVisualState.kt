@@ -4,7 +4,6 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -12,7 +11,6 @@ import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -189,14 +187,7 @@ class ComposeEditorVisualState(
     )
 
     /**
-     * #694 评论第 1/3 步：本地输入视觉事实 tracker —
-     * 普通 [ArrayDeque]，不是 Compose State。记录 InputTransformation 拿到的本地输入，
-     * 等 onAuthoritativeLayout 的新 layout 到达时配对生成 ComposeVisualPatch(intent=null)。
-     */
-    private val localInputTracker = LocalInputVisualEditTracker()
-
-    /**
-     * #694 评论第 3 步：上一次真正呈现的 layout — 本地输入配对时的 oldLayout（T0）。
+     * #694 评论第 3 步：上一次真正呈现的 layout。
      */
     private var lastPresentedLayout: ComposeLayoutSnapshot? = null
 
@@ -205,79 +196,11 @@ class ComposeEditorVisualState(
      * 用于 composition 从 active->false 时的过渡同步。
      *
      * composition 活跃期间 [frameCoordinator] 的 lastConsumed 不推进（不调 observePresentedLayout），
-     * composition 结束时若最终没有生成 local patch，也要把最终已提交 layout 用
+     * composition 结束时把最终已提交 layout 用
      * [ComposeVisualFrameCoordinator.observePresentedLayout] 同步给 coordinator，
      * 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与 lastConsumed.text 对不上。
      */
     private var wasCompositionActive: Boolean = false
-
-    /**
-     * #694 评论 5693864609 问题2：composition 独立生命周期入口 —
-     * composition 开始时保存的已提交布局（base），composition 结束后用 base -> final 生成 patch。
-     */
-    private var compositionBaseLayout: ComposeLayoutSnapshot? = null
-
-    /**
-     * #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时暂存，
-     * 等下一份 onAuthoritativeLayout 到达时收口。
-     */
-    private var pendingCompositionCommitText: String? = null
-
-    /**
-     * #694 评论 5693864609 问题2：上一次 snapshot 观察时 composition 是否活跃 —
-     * 用于检测 composition active->inactive 边沿。
-     */
-    private var wasCompositionActiveForSnapshot: Boolean = false
-
-    /**
-     * #694 评论 5695660885 问题1：composition 视觉生命周期状态机 —
-     * 拦截 [onAuthoritativeLayout] 在 bridge outcome 到达前提前发布候选 local patch。
-     *
-     * 真实运行时 [onAuthoritativeLayout]（BasicTextField onTextLayout 回调）和
-     * [onInputSnapshotResolved]（snapshotFlow collector）是两条独立流，
-     * onTextLayout 可能先于 bridge outcome 到达。此时若 [localInputTracker] 非空
-     * （InputTransformation 无条件 recordLocalInput），旧逻辑会 drainMatchingChain
-     * 命中并提前发布候选 local patch。本状态机在 composition 期间/结束后等待 bridge
-     * outcome 期间，阻止 onAuthoritativeLayout 走普通 local-input 分支。
-     *
-     * - [Idle]：无 composition 活动，onAuthoritativeLayout 走正常路径。
-     * - [Composing]：snapshot 看到 composition active，保存了 compositionBaseLayout。
-     *   onAuthoritativeLayout 在此 phase 只缓存 layout/cursor，不发布 patch。
-     * - [AwaitingBridgeResolution]：composition 结束（compositionActive=false）但 bridge
-     *   outcome 尚未到达。onAuthoritativeLayout 在此 phase 只缓存 layout/cursor，不发布 patch。
-     * - [AcceptedAwaitingFinalLayout]：bridge 已 LocalCommitAccepted 但 final layout 还没到，
-     *   等下一份 matching layout 收口。
-     */
-    private enum class CompositionVisualPhase {
-        Idle,
-        Composing,
-        AwaitingBridgeResolution,
-        AcceptedAwaitingFinalLayout,
-    }
-
-    private var compositionVisualPhase: CompositionVisualPhase = CompositionVisualPhase.Idle
-
-    /**
-     * #694 评论第 3 步：本地输入 patch ID 计数器 —
-     * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
-     */
-    private var nextLocalPatchId: Long = 1_000_000L
-
-    /**
-     * #708 评论 5723410606 第二节：首帧 ghost unit key 计数器 —
-     * 从 2_000_000L 起避免与 [ComposeVisualTimeline] 内部 nextUnitKey（从 1L 起）
-     * 和 [nextLocalPatchId]（从 1_000_000L 起）冲突。
-     * 首帧 ghost 是 onAuthoritativeLayout 建立的临时 unit，
-     * 下一帧 drainPendingPatchesAtFrame 后由 timeline 的正式 scene 取代。
-     */
-    private var nextHandoffUnitKey: Long = 2_000_000L
-
-    /**
-     * #708 评论 5729482707 修复3：handoff 临时 unit key 唯一 allocator —
-     * 所有 handoff 临时 unit（split child、remaining delete ghost）统一走此入口，
-     * 不再手写 ++，避免两种自增写法混用导致连续 handoff 撞 key。
-     */
-    private fun allocateHandoffUnitKey(): Long = nextHandoffUnitKey++
 
     /**
      * #708 评论 5723410606 第一节：draw 阶段原子快照 —
@@ -296,28 +219,6 @@ class ComposeEditorVisualState(
     private var lastObservedLayoutFingerprint: LayoutFingerprint? = null
 
     /**
-     * #694 评论第 1/3 步：本地输入入口 — 只写普通 pending queue（[LocalInputVisualEditTracker]）。
-     *
-     * 由 [WritingEditorSurface] 的 InputTransformation 调用，不等 Core，不启动动画。
-     * 等下一份真实 TextLayoutResult 到达时由 [onAuthoritativeLayout] 配对生成
-     * ComposeVisualPatch(intent=null) 入队。
-     *
-     * #708 评论 5723410606 第二节：不再在 InputTransformation 阶段武装整屏 barrier —
-     * 那一刻还没有本次新文字的 TextLayoutResult，冻结画面会把上一整屏当成 baseScene/baseLayout，
-     * 是"整行闪、全工作区闪、旧字残留"的来源。只记录 edit，由 onAuthoritativeLayout 在 layout 阶段
-     * 配对出 local patch 后建立局部 handoff scene。
-     */
-    fun recordLocalInput(
-        oldText: String,
-        newText: String,
-        oldSelection: TextRange,
-        newSelection: TextRange,
-        changes: List<LocalInputChange>,
-    ) {
-        localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
-    }
-
-    /**
      * #708 评论 5723410606 第一节：draw 层在 drawWithContent 里一次性取走 draw 阶段原子快照。
      * 关键：这个 State 只能在 drawWithContent 里读。
      */
@@ -326,16 +227,14 @@ class ComposeEditorVisualState(
     /**
      * #694 评论 5694645209 问题1：根据 bridge 的 [InputSnapshotOutcome] 收口 —
      * 由 [WritingPaneRoute] 的 `SetupInputSnapshotCollector` 在 `snapshotFlow.collect` 中调用，
-     * **在 bridge.onInputSnapshot 之后**，用 bridge 的真实决定收口本地视觉状态。
+     * **在 bridge.onInputSnapshot 之后**，用 bridge 的真实决定收口视觉状态。
      *
-     * - [InputSnapshotOutcome.Composing]：只记录 composition start/base（保存 compositionBaseLayout = lastPresentedLayout）。
-     * - [InputSnapshotOutcome.LocalCommitAccepted]：才允许 [finishCompositionCommit]、发布 local patch、
-     *   推进 local/Core 对齐后的屏幕 baseline。
-     * - [InputSnapshotOutcome.AuthoritativeApplied] / [InputSnapshotOutcome.LocalCommitRejected]：
-     *   取消本次 composition local visual state，清掉本次 preedit 留下的 local tracker/pending commit，
-     *   **不要**发布候选 local patch，也不要把 coordinator 推到候选文本；后续让权威 layout / external intent 正常接管。
-     * - [InputSnapshotOutcome.NoTextChange]：composition 生命周期边沿仍需记录（如 composition 开始时保存 base），
-     *   但不生成 patch。
+     * Issue #735 评论 5773604666 问题1：删除双视觉入口后，所有正文编辑统一走 [onEditFact]。
+     * 本方法不再生成 local patch，只负责：
+     * - composition 结束/取消/拒绝时重置 [wasCompositionActive]，让 [onAuthoritativeLayout] 的
+     *   coordinator baseline 同步正常接管。
+     * - 纯 selection 移动检测（text 不变、只有 selection 变了）。
+     * - selection 变化诊断事件。
      *
      * @param snapshot 当前 IME 输入快照（text + selection + composition）。
      * @param outcome bridge 对本次 snapshot 的处理结果。
@@ -345,83 +244,24 @@ class ComposeEditorVisualState(
         outcome: InputSnapshotOutcome,
     ) {
         val compositionActive = snapshot.composition != null
-        // composition 生命周期边沿：composition 刚开始时保存 base
-        // #694 评论 5696786245：只有 phase == Idle 时才允许初始化 compositionBaseLayout。
-        // layout 路径（onAuthoritativeLayout）可能已经把 phase 武装成 Composing，
-        // 此时晚到的 snapshotFlow active emission 只能更新 wasCompositionActiveForSnapshot，
-        // 不能用已变成 preedit 的 lastPresentedLayout 覆盖 layout 路径保存的正确 base。
-        if (compositionActive && compositionVisualPhase == CompositionVisualPhase.Idle) {
-            compositionBaseLayout = lastPresentedLayout
-            // #694 评论 5695660885 问题1：进入 Composing phase，
-            // 拦截 onAuthoritativeLayout 在 bridge outcome 到达前提前发布候选 local patch。
-            compositionVisualPhase = CompositionVisualPhase.Composing
-        }
+        // Issue #735 评论 5773604666 问题1：composition 结束/取消/拒绝时重置 wasCompositionActive —
+        // 不再生成 local patch，只让 onAuthoritativeLayout 的 coordinator baseline 同步正常接管。
         when (outcome) {
             InputSnapshotOutcome.Composing -> {
-                // composition 仍活跃：只记录 composition start/base（上面已保存），不生成 patch。
-                // phase 已在 composition active 边沿设为 Composing。
-            }
-            InputSnapshotOutcome.NoTextChange -> {
-                // composition 结束但无变化：不生成 patch。
-                // 若 final layout 还没到，不暂存 pendingCompositionCommitText（无变化无需收口）。
-                // #694 评论 5695660885 问题1：NoTextChange 如果上一状态是 composition
-                // （Composing/AwaitingBridgeResolution），这就是 composition 取消/回到原文。
-                // 必须清 compositionBaseLayout / pendingCompositionCommitText /
-                // localInputTracker / wasCompositionActive。
-                // 如果已经缓存了与 snapshot.text 相同的 final layout，只把它设成
-                // lastPresentedLayout / 同步 coordinator baseline，不要生成 local patch。
-                if (compositionVisualPhase == CompositionVisualPhase.Composing ||
-                    compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
-                ) {
-                    val latest = _latestLayout.value
-                    // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
-                        // 同步 coordinator baseline，不生成 local patch
-                        frameCoordinator.observePresentedLayout(latest)
-                        lastPresentedLayout = latest
-                    }
-                    cancelCompositionLocalVisualState()
-                }
+                // composition 仍活跃：onAuthoritativeLayout 的 compositionActive 分支会设 wasCompositionActive=true。
             }
             InputSnapshotOutcome.LocalCommitAccepted -> {
-                // bridge 已接受本地 commit：视觉层可以 finishCompositionCommit。
-                // #694 评论 5696394554：不要把 wasCompositionActiveForSnapshot 当唯一前提。
-                // 只要 phase 是 Composing / AwaitingBridgeResolution，就说明 composition 事实
-                // 已经可能由 layout 路径确认过；Core 接受后应正常 finishCompositionCommit 或
-                // 进入 AcceptedAwaitingFinalLayout。
-                val compositionPhaseActive =
-                    compositionVisualPhase == CompositionVisualPhase.Composing ||
-                        compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
-                if (!compositionActive && (wasCompositionActiveForSnapshot || compositionPhaseActive)) {
-                    val latest = _latestLayout.value
-                    // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
-                        finishCompositionCommit(snapshot.text, latest)
-                    } else {
-                        // final text 对应的新 layout 还没到，记 pending
-                        // #694 评论 5694645209 问题1：只在 LocalCommitAccepted 路径下才设置 pendingCompositionCommitText。
-                        pendingCompositionCommitText = snapshot.text
-                        // #694 评论 5695660885 问题1：进入 AcceptedAwaitingFinalLayout phase，
-                        // 等下一份 matching layout 收口。
-                        compositionVisualPhase = CompositionVisualPhase.AcceptedAwaitingFinalLayout
-                    }
-                }
+                // Core 已接受本地 commit，会通过 onEditFact 发送 EditorEditFact 驱动视觉 patch。
+                // 此处只需重置 wasCompositionActive，让后续 onAuthoritativeLayout 走 Core visual path。
+                wasCompositionActive = false
             }
+            InputSnapshotOutcome.NoTextChange,
             InputSnapshotOutcome.AuthoritativeApplied,
             InputSnapshotOutcome.LocalCommitRejected,
             -> {
-                // bridge 消费了 pending authoritative 或 Core 拒绝了本地 commit：
-                // 取消本次 composition local visual state，不发布候选 local patch，
-                // 也不把 coordinator 推到候选文本；后续让权威 layout / external intent 正常接管。
-                // #694 评论 5696394554：以 compositionVisualPhase 作为视觉事务是否存在的真值来收口/清理。
-                // wasCompositionActiveForSnapshot 最多保留成辅助状态，不要决定能不能收口。
-                // 只有 phase 处于 composition 相关状态时才 cancel，避免在 Idle 时不必要地重置。
-                if (compositionVisualPhase == CompositionVisualPhase.Composing ||
-                    compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution ||
-                    compositionVisualPhase == CompositionVisualPhase.AcceptedAwaitingFinalLayout
-                ) {
-                    cancelCompositionLocalVisualState()
-                }
+                // composition 取消/无变化/Core 拒绝：重置 wasCompositionActive，
+                // 后续让权威 layout / external intent 正常接管。
+                wasCompositionActive = false
             }
         }
         // #713 评论 5740279418：selection 真正变化时记一次诊断事件
@@ -473,540 +313,72 @@ class ComposeEditorVisualState(
         }
         lastResolvedSelection = snapshot.selection
         lastResolvedText = snapshot.text
-        wasCompositionActiveForSnapshot = compositionActive
     }
 
     /**
-     * #708 评论 5724568261 缺口1/缺口2：本地编辑首帧 scene 统一发布入口 —
-     *
-     * 取代已删除的 [ComposeLocalEditHandoff] 死状态 + [bindLocalPatchHandoff] 空绑定。
-     * 两条路径（[onAuthoritativeLayout] 普通本地输入 / [finishCompositionCommit] composition 最终提交）
-     * 都调用本方法，把"这一笔编辑哪些局部区域暂时由 overlay 接管"直接写进 [_visualScene] 和
-     * [drawSnapshotState]，不再经过一个从未被真正建立的中间 handoff 字段。
-     *
-     * #708 评论 5725706551：scene rebase — 不再直接复制旧 hiddenRanges/units（旧坐标系），
-     * 而是调用 [ComposeLocalHandoffRebase.rebase] 把旧 visible scene 映射到新正文坐标系：
-     *
-     * 1. **Scene rebase**：旧 active unit（targetRange != null）通过 offsetMap 映射到新正文坐标；
-     *    存活 slice 改 newRange/newLayout，保持当前屏幕位置；被删除 slice 从当前可见 alpha/position
-     *    转 handoff ghost（不新建 alpha=1 的完整 ghost）。已有 ghost 保持当前状态。
-     * 2. **hiddenRanges 重新推导**：从 rebase 后所有 targetRange != null 的 unit 重新推导
-     *    （不再从旧 hiddenRanges 复制），再加 [patch.insertedUnits] 的 newRange。
-     *    这确保 hiddenRanges 和 newLayout 属于同一个坐标系。
-     * 3. **deletedUnits 只补差集**：先收集 rebase 阶段已经转成 ghost 的旧正文范围（ghostedCoverage），
-     *    只给"没有被旧 active unit 接管"的 deletedUnits 新建 alpha=1 的完整 ghost。
-     *    这避免同一 glyph 同时出现 Inserted + DeletedGhost 的重影。
-     * 4. **Cursor**：保持现有首帧光标处理逻辑。
-     *
-     * @param patch 本笔 local patch（含 insertedUnits/deletedUnits/retainedMoves）。
-     * @param oldLayout T0 布局（建 ghost 来源）。
-     * @param newLayout Tn 布局（unit 所属 layout）。
-     */
-    private fun publishLocalHandoffScene(
-        patch: ComposeVisualPatch,
-        oldLayout: ComposeLayoutSnapshot,
-        newLayout: ComposeLayoutSnapshot,
-    ) {
-        _visualScene.update { scene ->
-            // #708 评论 5725706551 步骤1：调用 ComposeLocalHandoffRebase.rebase 做 scene rebase —
-            // 把旧 visible scene（旧正文坐标）映射到新正文坐标系。
-            // 旧 active unit 通过 splitMappedRangeForward 映射到新正文坐标：
-            //   - 存活 slice：targetRange/range 改成 newRange，layout 改成 newLayout，alpha/position 固定在当前可见值；
-            //   - 被删除 slice：从当前可见 alpha/position 转 handoff ghost（不新建 alpha=1 的完整 ghost）；
-            //   - 已有 ghost：保持当前状态不变。
-            // ghostedCoverage 记录 rebase 阶段已经转成 ghost 的旧正文范围。
-            // #708 评论 5727808906：传入 key allocator — split 时为每个子 unit 分配独立新 key，
-            // 不再共用父 key，避免 unitClipFractions 同 key 互相覆盖。
-            val rebased = ComposeLocalHandoffRebase.rebase(scene, patch) { allocateHandoffUnitKey() }
-            val rebasedUnits = rebased.units.toMutableList()
-
-            // #708 评论 5725706551 步骤2：hiddenRanges 从 rebase 后所有 targetRange != null 的 unit 重新推导 —
-            // 不再从旧 hiddenRanges 复制（旧坐标系），确保 hiddenRanges 和 newLayout 属于同一个坐标系。
-            //
-            // Issue #720 评论 5746323050：不再补第二套 reflow。
-            // handoff rebase 仍保留 surviving slice（rebase 到新坐标 + alpha 动画），
-            // ComposeVisualTimeline.mapSurvivingUnits() 在本地 patch + 跨行 reflow 时释放它（不产生 position tween）。
-            // handoff scene 是 patch drain 前的瞬态，survivor 已 rebase 到新位置；
-            // drain 后 timeline 不持有它，BasicTextField 直接画最终位置。
-            // hiddenRanges 从 rebasedUnits.targetRange 重建，与 handoff 保持一致。
-            val mergedHidden = mutableListOf<TextRange>()
-            for (unit in rebasedUnits) {
-                val tr = unit.targetRange
-                if (tr != null && tr.start < tr.end) {
-                    val alreadyHidden = mergedHidden.any { it.start == tr.start && it.end == tr.end }
-                    if (!alreadyHidden) {
-                        mergedHidden.add(tr)
-                    }
-                }
-            }
-            // 加 patch.insertedUnits — BasicTextField 先不画新字，由 overlay 吐字
-            for (ins in patch.insertedUnits) {
-                if (ins.start < ins.end &&
-                    mergedHidden.none { it.start == ins.start && it.end == ins.end }
-                ) {
-                    mergedHidden.add(ins)
-                }
-            }
-
-            // #708 评论 5726837636：用 subtractRanges 算真正差集 —
-            // ghostedCoverage 是 rebase 阶段已经转成 ghost 的旧正文范围（旧坐标系）。
-            // 只给"deletedUnits - ghostedCoverage"的剩余部分新建 alpha=1 的完整 ghost，
-            // 部分覆盖时只补未被接管的 slice，不把已由旧 active unit 接管的部分重画一遍。
-            // 旧实现用 ghostedCoverage.any{整段覆盖} 判断，部分覆盖（如 del=[0,2) 而
-            // ghostedCoverage=[1,2)）时 alreadyGhosted=false，会为整个 [0,2) 新建 alpha=1 ghost，
-            // 导致 [1,2) 被画两次（旧 active unit 转 ghost 画一次 + 新建 ghost 画一次）。
-            val remainingDeleted =
-                ComposeVisualRebase.subtractRanges(
-                    candidates = patch.deletedUnits,
-                    blockers = rebased.ghostedCoverage,
-                )
-            // #708 评论 5731952690 修复1a：不查所有历史 rebasedUnits 做去重 —
-            // 旧实现 `rebasedUnits.any { it.targetRange == null && it.range == del }` 查所有历史
-            // rebasedUnits，连续 Forward Delete 时历史 a ghost（range=[0,1) layout="ab"）会挡住
-            // 本次 b ghost（range=[0,1) layout="b"）的创建。remainingDeleted 已做过
-            // deletedUnits - ghostedCoverage，防御性去重只查本次 handoff 新建 ghost 的 range 集合，
-            // 不查历史 rebasedUnits。
-            // #708 评论 5731952690 修复3：记录本次 handoff 新建 remaining delete ghost 的 key —
-            // 这些 ghost 从 oldLayout 新建（alpha=1），上一帧在 BasicTextField 完整可见，
-            // T0 fraction 应为 1（完整可见），不闪没。
-            val handoffNewGhostRanges = mutableSetOf<TextRange>()
-            val remainingGhostKeys = mutableSetOf<Long>()
-            for (del in remainingDeleted) {
-                if (del.start >= del.end) continue
-                // 防御性去重：只查本次 handoff 新建的 ghost range，不查历史 rebasedUnits
-                if (del in handoffNewGhostRanges) continue
-                // 从 oldLayout 取旧位置建立静态 ghost
-                // Issue #717 评论 5742273757 修复3：del 是 raw 坐标，通过 snapshot 做 raw→display。
-                val oldBounds =
-                    oldLayout.boundsForRawRange(del) ?: continue
-                val oldPosition = Offset(oldBounds.left, oldBounds.top)
-                val ghostKey = allocateHandoffUnitKey()
-                rebasedUnits +=
-                    VisualTextUnit(
-                        key = ghostKey,
-                        layout = oldLayout,
-                        range = del,
-                        targetRange = null,
-                        // 完整可见：alpha=1，reveal=1，不动画
-                        alpha = TimedFloat(1f, 1f, 0L, 0L),
-                        position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
-                        reveal = TimedFloat(1f, 1f, 0L, 0L),
-                        role = VisualUnitRole.DeletedGhost,
-                    )
-                handoffNewGhostRanges.add(del)
-                remainingGhostKeys.add(ghostKey)
-            }
-
-            // Issue #728 评论 5754045689：系统 caret 已透明，可见 caret 由 EditorTextFieldDrawLayer 画 —
-            // 不再计算 handoffCursorRect / handoffCursor，clipFraction 改由 alpha 通道直接驱动。
-            // rebasedClipFractions 只继承 rebase 阶段记录的真实首帧 fraction 和 remaining delete ghost 的 fraction=1。
-            val rebasedClipFractions =
-                run {
-                    val clipMap = mutableMapOf<Long, Float>()
-                    for (child in rebasedUnits) {
-                        if (child.key in remainingGhostKeys) {
-                            clipMap[child.key] = 1f
-                            continue
-                        }
-                        val initialFraction =
-                            rebased.initialClipFractionsByKey[child.key]
-                                ?: scene.unitClipFractions[child.key]
-                        if (child.targetRange == null && initialFraction != null) {
-                            // ghost slice：继承真实首帧 fraction
-                            clipMap[child.key] = initialFraction
-                        }
-                        // initialFraction == null：不写入 map，draw 层用默认 fraction=1，由 alpha 主导
-                        // surviving slice：不加 map，timeline 重算
-                    }
-                    clipMap
-                }
-            scene.copy(
-                hiddenRanges = mergedHidden,
-                units = rebasedUnits,
-                unitClipFractions = rebasedClipFractions,
-                // Issue #732 评论 5763493968 第4节：coordinatedSpatialClip 不再从旧 patch policy
-                // 保存成 timeline 状态，而是由当前 effective policy + 当前 motion sample 导出。
-                // handoff scene 用当前 currentMotionPolicy 导出（drain 时会用最新 policy 覆盖）。
-                coordinatedSpatialClip =
-                    currentMotionPolicy.effective().let { it.textAnimationEnabledForEdit && it.coordinated },
-            )
-        }
-        // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
-        // Issue #728 评论 5755336403 缺口3：handoff 不提前把 caret 推到 target —
-        // handoff 只换文字 scene，caret 保持当前屏幕真实位置：
-        // - 无旧 motion 时用 patch.originCaretRect（编辑前位置）
-        // - 有旧 motion 时保持上一帧 draw caret（motion 中间 sample）
-        // 到真实 frameTime 时 drainPendingPatchesAtFrame 创建/重定向 motion，一次把 caret 和文字推进到同一帧。
-        // restingCaretRect 不在 motion 开始前先写 target；只在 motion 完成/瞬时完成后落到 target。
-        val handoffCaretRect = activeEditMotion?.let { drawSnapshotState.caretRect } ?: patch.originCaretRect
-        drawSnapshotState =
-            drawSnapshotState.copy(
-                scene = _visualScene.value,
-                layout = newLayout,
-                caretRect = handoffCaretRect,
-            )
-    }
-
-    /**
-     * #694 评论 5694645209 问题1：取消本次 composition local visual state —
-     * 清空 [compositionBaseLayout]、[pendingCompositionCommitText]，
-     * 重置 [wasCompositionActive]/[wasCompositionActiveForSnapshot]，
-     * 清掉本次 preedit 留下的 local tracker（[localInputTracker].clear()）。
-     *
-     * 不发布候选 local patch，也不把 coordinator 推到候选文本。
-     * 后续让权威 layout / external intent 正常接管。
-     */
-    private fun cancelCompositionLocalVisualState() {
-        compositionBaseLayout = null
-        pendingCompositionCommitText = null
-        wasCompositionActive = false
-        wasCompositionActiveForSnapshot = false
-        // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase。
-        compositionVisualPhase = CompositionVisualPhase.Idle
-        // 清掉本次 preedit 留下的 local tracker — 后续权威 layout 到达时不会配对出 a->an 的 local patch。
-        localInputTracker.clear()
-    }
-
-    /**
-     * #694 评论 5693864609 问题2：composition 结束后用 base -> final 生成 patch 并入队。
-     *
-     * @param commitText composition 结束后的最终正文。
-     * @param finalLayout commitText 对应的最终布局。
-     */
-    private fun finishCompositionCommit(
-        commitText: String,
-        finalLayout: ComposeLayoutSnapshot,
-    ) {
-        val baseLayout = compositionBaseLayout
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        if (baseLayout != null && baseLayout.result.layoutInput.text.text != commitText) {
-            // 用 compositionBaseLayout -> finalLayout 生成 patch
-            val baseOldText = baseLayout.result.layoutInput.text.text
-            val localChain = localInputTracker.drainMatchingChain(baseOldText, commitText)
-            if (localChain != null) {
-                val localPatch = buildLocalInputPatch(localChain, baseLayout, finalLayout)
-                if (localPatch != null) {
-                    // #708 评论 5724568261 缺口1：composition 最终提交路径也发布局部首帧 scene —
-                    // 不再只做 addLast + frameRequestVersion + bindLocalPatchHandoff（旧 bindLocalPatchHandoff
-                    // 因 pendingLocalEditHandoff 从未被建立只走 Log.w，首帧 scene 从未发布）。
-                    // 现在统一调 publishLocalHandoffScene，让中文 composition commit 后 local timeline
-                    // 立即接管，不出现"最终字先裸画一帧 -> 动画再接手"的窗口。
-                    publishLocalHandoffScene(
-                        patch = localPatch,
-                        oldLayout = baseLayout,
-                        newLayout = finalLayout,
-                    )
-                    pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = localPatch))
-                    _frameRequestVersion.update { it + 1L }
-                    _latestPatch.update { localPatch }
-                }
-            }
-        }
-        // 同步 Core/external baseline
-        frameCoordinator.observePresentedLayout(finalLayout)
-        lastPresentedLayout = finalLayout
-        // 清掉本次 composition 状态
-        compositionBaseLayout = null
-        pendingCompositionCommitText = null
-        wasCompositionActive = false
-        // #694 评论 5695660885 问题1：composition commit 收口后回到 Idle phase。
-        compositionVisualPhase = CompositionVisualPhase.Idle
-    }
-
-    /**
-     * #694 评论第 3/4 步 + 评论 5691696678 问题1：从配对的连续 [LocalInputVisualEdit] chain
-     * + old/new layout 构造 ComposeVisualPatch(coreTransactionIds = emptyList(), intent = null)。
-     *
-     * 不为了本地输入伪造 Core transaction — [ComposeVisualPatch.intent] 本来就是 nullable。
-     *
-     * #694 评论 5691696678 问题1：接收 chain 而非单笔 edit。
-     * - T0 = chain.first().oldText / oldSelection
-     * - Tn = chain.last().newText / newSelection
-     * - offset map 用 [ComposeLocalVisualRebase.composeLocalChainOffsetMap] 逐 stage 合成
-     *   （不同坐标系的 changes 不能直接摊平）。
-     * - 防御性检查：chain.first().oldText == oldLayout.text && chain.last().newText == newLayout.text。
-     */
-    private fun buildLocalInputPatch(
-        chain: List<LocalInputVisualEdit>,
-        oldLayout: ComposeLayoutSnapshot,
-        newLayout: ComposeLayoutSnapshot,
-    ): ComposeVisualPatch? {
-        if (chain.isEmpty()) return null
-        val firstEdit = chain.first()
-        val lastEdit = chain.last()
-        val oldText = firstEdit.oldText
-        val newText = lastEdit.newText
-        // 防御性：配对的 chain 首笔 oldText / 末笔 newText 必须与 layout 一致
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        if (oldText != oldLayout.result.layoutInput.text.text) return null
-        if (newText != newLayout.result.layoutInput.text.text) return null
-        val oldLength = oldText.length
-        val newLength = newText.length
-
-        // 从 chain 各笔的 changes 逐 stage 合成 T0→Tn 的 unchanged offset map
-        val offsetMap = ComposeLocalVisualRebase.composeLocalChainOffsetMap(chain)
-        // 从最终 composed map 的补集算净变化（用于 transactionTextKind 判定）
-        val changedRanges =
-            ComposeLocalVisualRebase.changedRangesFromOffsetMap(offsetMap, oldLength, newLength)
-        val transactionTextKind =
-            when {
-                changedRanges.oldRanges.isEmpty() && changedRanges.newRanges.isEmpty() ->
-                    TextVisualKind.None
-                changedRanges.oldRanges.isEmpty() -> TextVisualKind.Insert
-                changedRanges.newRanges.isEmpty() -> TextVisualKind.Delete
-                else -> TextVisualKind.Move
-            }
-
-        // Issue #732 评论 5763493968 第2节：buildLocalInputPatch 不再读 currentMotionPolicy —
-        // 本地输入和 Core/external 输入都生成同一种事实 patch（inserted/deleted units 总是合成），
-        // 是否播放由 [drainPendingPatchesAtFrame] 的当前 effective policy 决定。
-        // #694 评论 5691696678 问题3：insertedUnits/deletedUnits 用通用 stage-map 版本合成，
-        // 保留多字符吐字顺序（a/b/c 三个 unit 而非单个 [0,3)）。
-        // 每笔 edit 的 insertedUnits/deletedUnits 从该笔 stage offset map 补集算，
-        // 然后沿后续 stage offset map 映射到最终 Tn / 最初 T0。
-        val composedInserted = ComposeLocalVisualRebase.composeLocalChainInsertedUnits(chain)
-        val composedDeleted = ComposeLocalVisualRebase.composeLocalChainDeletedUnits(chain)
-
-        // Issue #735 评论 5771063665：调用 Android 自己的纯计算分类器 —
-        // 不再通过 FFI 问 Core，用 BreakIterator 做 grapheme cluster 拆分。
-        val corePlan =
-            ComposeLocalVisualRebase.classifyLocalVisualPlan(
-                oldText = oldText,
-                newText = newText,
-                oldAffectedRanges = changedRanges.oldRanges,
-                newAffectedRanges = changedRanges.newRanges,
-                animationEnabled = true,
-            )
-        val planAnimationMode = corePlan.animationMode
-        val planInsertedUnits = corePlan.newAnimationUnits
-        val planDeletedUnits = corePlan.oldAnimationUnits
-
-        val insertedUnits =
-            when (transactionTextKind) {
-                TextVisualKind.Insert, TextVisualKind.Move -> {
-                    // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
-                    // orderedStageRanges = composedInserted（local chain 的时间顺序）。
-                    val orderedStageRanges = composedInserted
-                    if (planInsertedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
-                        ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planInsertedUnits, orderedStageRanges)
-                    } else if (planInsertedUnits.isNotEmpty()) {
-                        planInsertedUnits
-                    } else if (orderedStageRanges.isNotEmpty()) {
-                        orderedStageRanges
-                    } else {
-                        changedRanges.newRanges
-                    }
-                }
-                TextVisualKind.Delete, TextVisualKind.None -> emptyList()
-            }
-
-        val deletedUnits =
-            when (transactionTextKind) {
-                TextVisualKind.Delete, TextVisualKind.Move -> {
-                    // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
-                    // orderedStageRanges = composedDeleted（local chain 的时间顺序）。
-                    val orderedStageRanges = composedDeleted
-                    if (planDeletedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
-                        ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planDeletedUnits, orderedStageRanges)
-                    } else if (planDeletedUnits.isNotEmpty()) {
-                        planDeletedUnits
-                    } else if (orderedStageRanges.isNotEmpty()) {
-                        orderedStageRanges
-                    } else {
-                        changedRanges.oldRanges
-                    }
-                }
-                TextVisualKind.Insert, TextVisualKind.None -> emptyList()
-            }
-
-        // retained reflow 只比较 oldLayout -> newLayout 的真实几何
-        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
-        // chainSize > 1 时只从最后一份真实 oldLayout（= lastPresentedLayout，即 oldLayout 参数）
-        // 到当前真实 newLayout（= snapshot，即 newLayout 参数）做一次 reflow。
-        // offsetMap 用 chain 各笔 changes 合成保留输入顺序（composeLocalChainOffsetMap），
-        // 但不为 chain 中间笔虚构中间 layout 对象 — 中间笔可能从未真正 layout 过
-        // （快速输入中间 layout 被跳过），虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
-        // #703 评论 C：本地删除先取消整行 retainedMoves 接管 —
-        // 被删除的 glyph 可以由 visual layer 接管（ghost）；
-        // 后续普通排版回流先交给 BasicTextField 自己；
-        // 不要因为一次 Backspace 就把整行幸存文字全部切到 overlay。
-        // #711 评论 5738906634：删除 ReflowMove 路线 —
-        // 软换行几何已由 BasicTextField + TextLayoutResult 给出，不再自建第二套幸存文字位移系统。
-        // 没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges，
-        // 直接让 BasicTextField 画最终位置。
-        val retainedMoves = emptyList<RetainedMove>()
-
-        nextLocalPatchId++
-        // Issue #728 评论 5754839786 缺口1：本地 patch 也写真实 caret 两端 —
-        // 从 oldLayout + firstEdit.oldSelection.end 算 origin caret，
-        // 从 newLayout + lastEdit.newSelection.end 算 target caret。
-        // 旧实现漏传，ComposeVisualPatch 的 Rect.Zero 默认值让本地 patch 的 caret 两端变成 (0,0,0,0)，
-        // ComposeEditMotion 从原点插值到原点，本地编辑时屏幕 caret 不动。
-        val originCaretRect = oldLayout.cursorRect(firstEdit.oldSelection.end)
-        val targetCaretRect = newLayout.cursorRect(lastEdit.newSelection.end)
-        return ComposeVisualPatch(
-            id = nextLocalPatchId,
-            coreTransactionIds = emptyList(),
-            oldLayout = oldLayout,
-            newLayout = newLayout,
-            offsetMap = offsetMap,
-            insertedUnits = insertedUnits,
-            deletedUnits = deletedUnits,
-            retainedMoves = retainedMoves,
-            originCaretRect = originCaretRect,
-            targetCaretRect = targetCaretRect,
-            // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
-            durationMs = 0L,
-            // Issue #735 评论 5771063665：使用 Android 自己推导的 animationMode。
-            animationMode = planAnimationMode,
-        )
-    }
-
-    /**
-     * 系统给出权威布局 — 只记录，不修改输入几何。
-     *
-     * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
-     *
-     * #694 评论第 2/3 步：[compositionActive] 表示当前 IME composition 是否活跃
-     * （bridge.state.composition != null）。composition 活跃时只推进布局基线，
-     * 不播放 preedit 的吞吐；composition 结束后的最终输入再配对 [LocalInputVisualEdit]
-     * 生成 ComposeVisualPatch(intent=null) 入队，不等 Core 回声。
-     *
-     * @param result 系统 [BasicTextField] 的 onTextLayout 给出的最终布局结果。
-     * @param selection 当前选区（UTF-16）。
-     * @param scrollY 当前滚动位置（px）。
-     * @param compositionActive 当前 IME composition 是否活跃。
-     * @param projection Issue #717 评论 5741910919：西文软断行显示投影，
-     *     把 raw offset 映射到含 U+200B 的 display offset。
-     * @param rawText Issue #717 评论 5742904417 修复1 / 评论 5743443030 修复1：原始正文（不含 U+200B），
-     *     用于文本身份/diff/intent 匹配。visual pipeline 的文本身份判断必须用 rawText。
-     *     `null` 表示"没传"（测试/旧调用方 fallback 到 result.layoutInput.text.text），
-     *     非 `null` 表示显式传入真实 raw 正文（含 `""` 真实空正文）。
-     */
+    * 系统给出权威布局 — 只记录，不修改输入几何。
+    *
+    * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
+    *
+    * #694 评论第 2/3 步：[compositionActive] 表示当前 IME composition 是否活跃
+    * （bridge.state.composition != null）。composition 活跃时只推进布局基线，
+    * 不播放 preedit 的吞吐；composition 结束后由 Core 通过 [onEditFact] 驱动视觉 patch。
+    *
+    * Issue #735 评论 5773604666 问题1：删除双视觉入口后，本方法不再配对 local input 生成 local patch。
+    * 所有正文编辑统一走 [onEditFact] → [ComposeVisualFrameCoordinator.onEditFact] → [applyFrameUpdate]。
+    * 本方法只负责：
+    * - fingerprint 去重（纯 selection/scroll 不触发布局 epoch）。
+    * - composition 活跃时缓存 layout + 设 wasCompositionActive（不调 frameCoordinator）。
+    * - composition 结束后 wasCompositionActive 过渡同步 coordinator baseline。
+    * - 非 composition 的 Core visual path（Undo/Redo/Programmatic/Load/Format）。
+    *
+    * @param result 系统 [BasicTextField] 的 onTextLayout 给出的最终布局结果。
+    * @param selection 当前选区（UTF-16）。
+    * @param scrollY 当前滚动位置（px）。
+    * @param compositionActive 当前 IME composition 是否活跃。
+    */
     fun onAuthoritativeLayout(
-        result: TextLayoutResult,
-        selection: TextRange,
-        scrollY: Int,
-        compositionActive: Boolean = false,
+       result: TextLayoutResult,
+       selection: TextRange,
+       scrollY: Int,
+       compositionActive: Boolean = false,
     ) {
-        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
+       val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
 
-        // #708 评论 5723410606 第三节：layout 回路真正断开 —
-        // onAuthoritativeLayout 最前面先算 fingerprint。
-        // 相同正文+相同几何时：
-        // - 可以更新纯 selection/caret 的 draw 数据；
-        // - 不更新 layout epoch；
-        // - 不调用 frameCoordinator.onLayout/observePresentedLayout；
-        // - 不重新发布相同 TextLayoutResult；
-        // - 直接返回。
-        // 只有真实 text/line geometry 变化才把新 layout 写进 draw snapshot。
-        // 旧实现先 _latestLayout.update 再 hasSameTextAndGeometry 去重，顺序反了。
-        val fingerprint = layoutFingerprint(snapshot)
-        val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
-        if (fingerprintUnchanged) {
-            // 纯 selection/caret 变化：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
-            // Issue #728 评论 5754839786 缺口2：fingerprintUnchanged 时无 active motion（纯 selection），
-            // 直接把 restingCaretRect 更新到当前 selection.end 对应的 caret rect，
-            // 并写进 drawSnapshotState.caretRect，保证静止/selection 移动后屏幕 caret 停在新位置。
-            restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
-            drawSnapshotState =
-                drawSnapshotState.copy(
-                    layout = snapshot,
-                    caretRect = restingCaretRect,
-                )
-            return
-        }
-        lastObservedLayoutFingerprint = fingerprint
+       // #708 评论 5723410606 第三节：layout 回路真正断开 —
+       // onAuthoritativeLayout 最前面先算 fingerprint。
+       // 相同正文+相同几何时：
+       // - 可以更新纯 selection/caret 的 draw 数据；
+       // - 不更新 layout epoch；
+       // - 不调用 frameCoordinator.onLayout/observePresentedLayout；
+       // - 不重新发布相同 TextLayoutResult；
+       // - 直接返回。
+       // 只有真实 text/line geometry 变化才把新 layout 写进 draw snapshot。
+       // 旧实现先 _latestLayout.update 再 hasSameTextAndGeometry 去重，顺序反了。
+       val fingerprint = layoutFingerprint(snapshot)
+       val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
+       if (fingerprintUnchanged) {
+           // 纯 selection/caret 变化：不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
+           // Issue #728 评论 5754839786 缺口2：fingerprintUnchanged 时无 active motion（纯 selection），
+           // 直接把 restingCaretRect 更新到当前 selection.end 对应的 caret rect，
+           // 并写进 drawSnapshotState.caretRect，保证静止/selection 移动后屏幕 caret 停在新位置。
+           restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
+           drawSnapshotState =
+               drawSnapshotState.copy(
+                   layout = snapshot,
+                   caretRect = restingCaretRect,
+               )
+           return
+       }
+       lastObservedLayoutFingerprint = fingerprint
 
-        // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
-        _latestLayout.update { snapshot }
-        // Issue #728 评论 5754839786 缺口2：真实 layout 变化后更新 restingCaretRect —
-        // 后续分支（composition 缓存 / composition active / Core visual path / local patch）会
-        // 在此基础上把 drawSnapshotState.caretRect 同步给 draw 层。active motion 期间 motion sample
-        // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
+       // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
+       _latestLayout.update { snapshot }
+       // Issue #728 评论 5754839786 缺口2：真实 layout 变化后更新 restingCaretRect —
+       // 后续分支（composition active / Core visual path）会
+       // 在此基础上把 drawSnapshotState.caretRect 同步给 draw 层。active motion 期间 motion sample
+       // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
         restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
-
-        // #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时，
-        // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
-        val pending = pendingCompositionCommitText
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val newTextForPending = snapshot.result.layoutInput.text.text
-        if (pending != null && newTextForPending == pending && !compositionActive) {
-            pendingCompositionCommitText = null
-            finishCompositionCommit(pending, snapshot)
-            return
-        }
-
-        // #694 评论 5695660885 问题1：composition 视觉生命周期拦截 —
-        // onTextLayout（onAuthoritativeLayout）可能先于 snapshotFlow collector
-        // （onInputSnapshotResolved）到达。若 phase 还是 Composing/AwaitingBridgeResolution，
-        // 说明 bridge outcome 还没到，此时只缓存 latest layout / resting cursor，直接 return；
-        // 不要 drain localInputTracker，不要发布 patch，不要推进 frameCoordinator。
-        // 等 bridge outcome 到达后由 onInputSnapshotResolved 收口（LocalCommitAccepted 调
-        // finishCompositionCommit / AuthoritativeApplied/Rejected/NoTextChange 清 state）。
-        if (!compositionActive &&
-            (
-                compositionVisualPhase == CompositionVisualPhase.Composing ||
-                    compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
-            )
-        ) {
-            // Issue #728 评论 5754839786 缺口2：composition 缓存分支也同步 restingCaretRect + drawSnapshot caret。
-            // 此分支无 active motion（composition 还没收口），直接用 restingCaretRect 填 drawSnapshot。
-            drawSnapshotState =
-                drawSnapshotState.copy(
-                    layout = snapshot,
-                    caretRect = restingCaretRect,
-                )
-            compositionVisualPhase = CompositionVisualPhase.AwaitingBridgeResolution
-            return
-        }
-
-        // #694 评论第 3 步 + 评论 5691696678 问题1：配对 pending local edit chain 生成 ComposeVisualPatch(intent=null)。
-        // composition 活跃时只推进布局基线，不播放 preedit 的吞吐。
-        // 用 drainMatchingChain 按 lastPresentedLayout.text -> newText 找连续 chain，
-        // 修复快速输入中间 layout 被跳过时旧 drainMatching 只返回最后一笔导致 patch 被丢的问题。
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val newText = snapshot.result.layoutInput.text.text
-        val presentedOldText = lastPresentedLayout?.result?.layoutInput?.text?.text ?: ""
-        val localChain =
-            if (!compositionActive) {
-                localInputTracker.drainMatchingChain(presentedOldText, newText)
-            } else {
-                null
-            }
-        if (localChain != null) {
-            val oldLayout = lastPresentedLayout
-            if (oldLayout != null) {
-                val localPatch = buildLocalInputPatch(localChain, oldLayout, snapshot)
-                if (localPatch != null) {
-                    // #708 评论 5724568261 缺口1/缺口2：统一调 publishLocalHandoffScene 发布首帧 scene —
-                    // 不再用从未被建立的 pendingLocalEditHandoff + bindLocalPatchHandoff。
-                    publishLocalHandoffScene(
-                        patch = localPatch,
-                        oldLayout = oldLayout,
-                        newLayout = snapshot,
-                    )
-                    pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = localPatch))
-                    _frameRequestVersion.update { it + 1L }
-                    _latestPatch.update { localPatch }
-                    Log.d(
-                        TAG,
-                        "local_patch_published: id=${localPatch.id} " +
-                            "oldLen=${oldLayout.result.layoutInput.text.text.length} " +
-                            "newLen=${newText.length} chainSize=${localChain.size}",
-                    )
-                }
-            }
-            // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，
-            // 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与
-            // coordinator.lastConsumed.text 对不上，tryBuildPatch 一直返回 Empty。
-            frameCoordinator.observePresentedLayout(snapshot)
-            lastPresentedLayout = snapshot
-            // #694 评论 5692161955 问题3：本地 commit 成功生成 local patch 后，
-            // composition 已结束，重置 wasCompositionActive。
-            wasCompositionActive = false
-            return
-        }
 
         // composition 活跃时只推进布局基线，不生成 patch（不播放 preedit 的吞吐）
         if (compositionActive) {
@@ -1015,15 +387,6 @@ class ComposeEditorVisualState(
             // 原因：frameCoordinator.lastConsumed 是 Core/external coordinator 的基线，
             // 必须只跟 Core 已提交正文，不能推到未提交给 Core 的 preedit。
             // 否则 Undo 时 pending.baseText(Core 已提交) != lastConsumed(preedit)，external patch 卡死。
-            // lastPresentedLayout 可跟 preedit（供本地输入配对），但 coordinator 基线不动。
-            // #694 评论 5696394554：onAuthoritativeLayout 自己也必须能独立武装 composition phase，
-            // 不能依赖 snapshotFlow — snapshotFlow 会 conflate 中间状态，可能跳过 active emission。
-            // 当 compositionActive == true 且 phase 还是 Idle 时，在覆盖 lastPresentedLayout 之前，
-            // 把当前已提交的 lastPresentedLayout 保存到 compositionBaseLayout，直接进入 Composing phase。
-            if (compositionVisualPhase == CompositionVisualPhase.Idle) {
-                compositionBaseLayout = lastPresentedLayout
-                compositionVisualPhase = CompositionVisualPhase.Composing
-            }
             lastPresentedLayout = snapshot
             wasCompositionActive = true
             // Issue #728 评论 5754839786 缺口2：composition active 分支同步 restingCaretRect + drawSnapshot caret。
@@ -1038,8 +401,7 @@ class ComposeEditorVisualState(
 
         // #694 评论 5692161955 问题3：composition 从 active->false 过渡同步。
         // composition 活跃期间 frameCoordinator.lastConsumed 没有推进，
-        // composition 结束时若最终没有生成 local patch（localChain == null 分支），
-        // 也要把最终已提交 layout 用 observePresentedLayout 同步给 coordinator，
+        // composition 结束时把最终已提交 layout 用 observePresentedLayout 同步给 coordinator，
         // 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与 lastConsumed.text 对不上。
         if (wasCompositionActive) {
             frameCoordinator.observePresentedLayout(snapshot)
@@ -1204,13 +566,13 @@ class ComposeEditorVisualState(
                 if (existing != null && !existing.isFinished(frameTimeNanos)) {
                     // Issue #728 评论 5755928697 问题1：文字动画还没结束时移动光标，
                     // 用 redirectCaretTo 保留现有 glyph channel，不丢正在吐的字。
-                    // caret 用 cursorDurationNanos；glyph 继续用 textDurationNanos 让文字吐完。
+                    // Issue #735 评论 5773604666 问题2：单一 duration —
+                    // caret 和 glyph 共用同一只钟；文字继续用 textDurationNanos 让文字吐完。
                     existing.redirectCaretTo(
                         newOriginCaretRect = pendingSelection.originCaretRect,
                         newTargetCaretRect = pendingSelection.targetCaretRect,
                         frameTimeNanos = frameTimeNanos,
-                        caretDurationNanos = caretDuration,
-                        glyphDurationNanos =
+                        durationNanos =
                             if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L,
                     )
                 } else {
@@ -1259,7 +621,6 @@ class ComposeEditorVisualState(
         // 用当前 currentMotionPolicy（drain 开头已应用 pending policy）。
         val policy = currentMotionPolicy.effective()
         val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
-        val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
         // Issue #728 评论 5755336403 缺口4：selection-only 必须用 oldText == newText 判断 —
         // Enter / 删除 Enter 是正文编辑，只是换行符没有 glyph，允许没有 inserted/deleted visual unit。
         // 不能用 "unit key 为空" 推断 "没有文本编辑"。
@@ -1282,26 +643,12 @@ class ComposeEditorVisualState(
                 )
         } else {
             // text edit（包括 Enter / 删除 Enter 无 glyph unit 的情况）—
-            // caret old→new 按 edit policy 运行，文字按 glyph policy 运行。
-            // insertedKeys/deletedKeys 可能为空（Enter 无 glyph unit），创建无 unit channel 的 edit motion。
-            val existing = activeEditMotion
-            // Issue #728 评论 5755928697 问题2：coordinated=false 时 caret 和 glyph 独立时长。
-            // coordinated=true：一只钟，caret 和 glyph 共用 textDurationMillis。
-            // coordinated=false：caret 用 cursorDurationMillis，glyph 用 textDurationMillis。
-            // Issue #732 评论 5764716281 硬问题1：用派生值，coordinated 模式下不被隐藏开关关掉。
-            val caretDurationNanos: Long
-            val glyphDurationNanos: Long
-            if (policy.coordinated) {
-                val sharedDuration =
-                    if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
-                caretDurationNanos = sharedDuration
-                glyphDurationNanos = sharedDuration
-            } else {
-                caretDurationNanos =
-                    if (policy.cursorAnimationEnabledForEdit) cursorDurationNanos else 0L
-                glyphDurationNanos =
-                    if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
-            }
+            // Issue #735 评论 5773604666 问题2：正文 edit motion 一律一只钟 —
+            // caret 和 glyph 共用同一个 durationNanos/progress，不再根据 coordinated 分两只钟。
+            // - textAnimationEnabledForEdit=true：durationNanos = textDurationNanos
+            // - 否则：durationNanos = 0L（瞬时完成）
+            val editDurationNanos =
+                if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
             // 快速连续输入：从当前 sample 重定向，不重新起播
             // Issue #728 评论 5761525795：把 descriptor 的继承 fraction 传给 redirectTo —
             // split/rekey child 从 parent 投影后的 fraction 继续，不从 0/1 重启。
@@ -1316,6 +663,7 @@ class ComposeEditorVisualState(
             // 只要 timeline 本帧从旧 parent split/rekey 出 child（inheritedFractionsByKey 非空），
             // 就必须继续走 redirectTo 保留 lineage，不能因 motion.finished 走 forEdit 丢弃继承 fraction。
             // 否则 surviving inserted child 会从 0 重吐、deleted child 会从 1 重吞。
+            val existing = activeEditMotion
             val shouldRedirect =
                 existing != null &&
                     (!existing.isFinished(frameTimeNanos) || inheritedFractionsByKey.isNotEmpty())
@@ -1327,8 +675,7 @@ class ComposeEditorVisualState(
                         newInsertedUnitKeys = insertedKeys,
                         newDeletedUnitKeys = deletedKeys,
                         frameTimeNanos = frameTimeNanos,
-                        caretDurationNanos = caretDurationNanos,
-                        glyphDurationNanos = glyphDurationNanos,
+                        durationNanos = editDurationNanos,
                         inheritedFractionsByKey = inheritedFractionsByKey,
                     )
                 } else {
@@ -1338,8 +685,7 @@ class ComposeEditorVisualState(
                         insertedUnitKeys = insertedKeys,
                         deletedUnitKeys = deletedKeys,
                         frameTimeNanos = frameTimeNanos,
-                        caretDurationNanos = caretDurationNanos,
-                        glyphDurationNanos = glyphDurationNanos,
+                        durationNanos = editDurationNanos,
                     )
                 }
         }
@@ -1388,12 +734,9 @@ class ComposeEditorVisualState(
      * @param frameTimeNanos 当前帧时间戳。
      */
     fun hasActiveVisuals(frameTimeNanos: Long): Boolean {
-        // Issue #732 评论 5764716281 硬问题2：coordinated 模式下 timeline 必须跟 activeEditMotion
-        // 同生共死 — 如果 activeEditMotion==null，timeline 不应继续维持动画（文字应已静态收口）。
-        val policy = currentMotionPolicy.effective()
-        if (policy.coordinated && policy.textAnimationEnabledForEdit && activeEditMotion == null) {
-            return false
-        }
+        // Issue #735 评论 5773604666 问题2：删除 coordinated 特殊判断 —
+        // 正文 edit motion 一律一只钟，timeline 和 activeEditMotion 自然同生共死，
+        // 不再需要 coordinated 模式下额外判断 activeEditMotion==null 时 timeline 不应维持动画。
         return visualTimeline.hasActiveAnimation(frameTimeNanos) ||
             (activeEditMotion != null && !activeEditMotion!!.isFinished(frameTimeNanos))
     }
@@ -1418,21 +761,12 @@ class ComposeEditorVisualState(
         restingCaretRect = null
         // Issue #728 评论 5755336403 缺口2：清空 pending 纯 selection caret 移动
         pendingSelectionCaretTarget = null
-        // #694 评论第 3 步：清空本地输入配对状态
-        localInputTracker.clear()
         lastPresentedLayout = null
         // #694 评论 5692161955 问题3：重置 composition 过渡同步状态
         wasCompositionActive = false
-        // #694 评论 5693864609 问题2：重置 composition 独立生命周期状态
-        compositionBaseLayout = null
-        pendingCompositionCommitText = null
-        wasCompositionActiveForSnapshot = false
-        // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase
-        compositionVisualPhase = CompositionVisualPhase.Idle
         // #708 评论 5723410606 第一节/第二节/第三节：重置 draw snapshot / fingerprint
         drawSnapshotState = ComposeEditorDrawSnapshot()
         lastObservedLayoutFingerprint = null
-        nextHandoffUnitKey = 2_000_000L
         // #713 评论 5739986801：重置 selection 追踪
         lastResolvedSelection = null
         // Issue #728 评论 5755336403 缺口1：重置 resolved text 追踪

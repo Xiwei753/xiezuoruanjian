@@ -817,13 +817,80 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             epoch_after_move
         );
 
-        // 同一个仍活动的正文事务 build 下一帧
-        let still_active = item
+        // 同一个正文事务应仍在队列中（move 不取消事务），但因 epoch 不一致
+        // 已被 `find_cursor_transaction_for_target` 触发收口（caret_motion_retired = true）。
+        // Issue #735 评论 5773604666 问题3: 新行为——epoch 不一致时 CaretDriven units
+        // 立即落到终态，事务 retired，active_text_transaction_key() 不再返回它。
+        let tx_still_in_queue = item
             .pipeline
             .animation_coordinator_mut()
-            .active_text_transaction_key()
-            .is_some();
-        assert!(still_active, "move 后正文事务应仍在队列（move 不取消事务）");
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .any(|t| t.key == tx_key);
+        assert!(
+            tx_still_in_queue,
+            "move 后正文事务应仍在队列（move 不取消事务，只是 retired）"
+        );
+        // 验证新行为：事务已被 retired
+        let tx_ref = item
+            .pipeline
+            .animation_coordinator_mut()
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == tx_key)
+            .expect("事务应仍在队列中");
+        assert!(
+            tx_ref.caret_motion_retired,
+            "Issue #735 评论 5773604666 问题3: epoch 不一致后事务应被 retired\
+             （CaretDriven units 已落到终态）"
+        );
+        // 验证新行为：CaretDriven units 的 start_fraction 已设为 target_fraction（终态）
+        for unit in &tx_ref.units {
+            use super::animated_slice::AnimatedSliceKind;
+            use super::text_visual_transaction::VisualUnitTiming;
+            if matches!(
+                unit.slice.kind,
+                AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+            ) {
+                if let VisualUnitTiming::CaretDriven {
+                    start_fraction,
+                    target_fraction,
+                } = &unit.timing
+                {
+                    assert!(
+                        (start_fraction - target_fraction).abs() < 1e-9,
+                        "Issue #735 评论 5773604666 问题3: CaretDriven unit 的 \
+                         start_fraction 应已设为 target_fraction（终态）: \
+                         start={:.4}, target={:.4}",
+                        start_fraction,
+                        target_fraction
+                    );
+                }
+            }
+        }
+        println!(
+            "[BEHAVIOR_VERIFY] 阶段4: 事务 {:?} 已 retired，CaretDriven units 已落到终态",
+            tx_key
+        );
+        // 验证 has_active_timed_units 语义：收口后事务是否还有活跃 Timed unit
+        // （ReflowMove/ReflowCrossFade）。Insert 事务通常没有 Timed unit，应返回 false。
+        let has_timed = tx_ref.has_active_timed_units(Instant::now());
+        println!(
+            "[BEHAVIOR_VERIFY] 阶段4: 事务 {:?} has_active_timed_units={}",
+            tx_key, has_timed
+        );
+        // active_text_transaction_key() 不再返回 retired 事务
+        let active_key_after_retire = item
+            .pipeline
+            .animation_coordinator_mut()
+            .active_text_transaction_key();
+        assert!(
+            active_key_after_retire.is_none()
+                || active_key_after_retire != Some(tx_key),
+            "retired 事务不应被 active_text_transaction_key() 返回"
+        );
 
         let cursor_render_state_2 = item.build_cursor_render_state_for_frame();
         let selection_preedit_2 = item

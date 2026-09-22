@@ -452,10 +452,11 @@ internal fun rememberChapterSwitchSync(
  * Core 已不再返回视觉意图。Android 从 [CoreEditFactEvent] 的 cause/operationKind/offsetMap
  * 推导动画策略。
  *
- * #694 评论第 5 步：按 Core cause 分流 —
- * - TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE：本地 InputTransformation 已提供
- *   visual edit，Core 回来的事实只当 ACK，不再第二次送进 ComposeVisualFrameCoordinator。
- * - UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT：仍映射成 [EditorEditFact]，走现有 Core visual path。
+ * Issue #735 评论 5773604666 问题1：删除本地输入分流 —
+ * 所有正文编辑（包括 TYPING/TYPING_COMMIT/IME_COMPOSITION/PASTE/DELETE）都从同一个
+ * [EditorEditFact] 入口进平台 motion，不再跳过 Core visual path。
+ * 目标链路：平台输入 -> EditorCommand -> EditorKernel -> EditorEditResult -> 平台 layout
+ * -> 平台 motion -> 平台 render。
  */
 @Composable
 internal fun CollectEditFactEvents(
@@ -468,9 +469,8 @@ internal fun CollectEditFactEvents(
         viewModel.editFactEvents
             .collect { event ->
                 if (event.targetId != targetId) return@collect
-                // #694 评论第 5 步：本地输入 cause 只当 ACK，不再送进 ComposeVisualFrameCoordinator。
-                if (event.isLocalInputCause()) return@collect
-                // UNDO/REDO/PROGRAMMATIC/LOAD/FORMAT 仍走 Core visual path
+                // Issue #735 评论 5773604666 问题1：所有 cause 都走同一个 EditorEditFact 入口 —
+                // 不再用 isLocalInputCause() 跳过本地输入 cause，统一送进 ComposeVisualFrameCoordinator。
                 val editFact = mapCoreEditFactToEditorEditFact(event)
                 visualState.onEditFact(editFact)
             }

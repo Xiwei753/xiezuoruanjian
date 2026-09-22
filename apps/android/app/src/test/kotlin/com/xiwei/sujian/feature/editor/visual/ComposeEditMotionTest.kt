@@ -13,8 +13,13 @@ import org.junit.Test
  *
  * Issue #728 评论 5755928697：三个确定问题的收口测试 —
  * 1. [redirectCaretTo] 保留现有 glyph channel fraction。
- * 2. 双 duration（caret/glyph 独立）支持 coordinated=false。
  * 3. 多 unit 区间映射，光标跟着吞吐。
+ *
+ * Issue #735 评论 5773604666 问题2：删除双 duration —
+ * caret 和 glyph 共用同一个 durationNanos/progress，不再有独立的 caret/glyph 时长。
+ * 删除 `sample_coordinatedFalse_caretAndGlyphIndependent`、
+ * `sample_caretInstantGlyphRunning_notFinished`、`sample_glyphInstantCaretRunning_notFinished`、
+ * `isFinished_requiresBothCaretAndGlyphFinished` 等依赖双 duration 的测试。
  *
  * 一笔编辑一只钟：caret 移动和文字吞吐共用同一个 progress。
  */
@@ -33,8 +38,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // At start (progress=0): fraction should be 0 (invisible)
         val startSample = motion.sample(startTime)
@@ -57,8 +61,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // At start (progress=0): fraction should be 1 (fully visible)
         val startSample = motion.sample(startTime)
@@ -83,22 +86,21 @@ class ComposeEditMotionTest {
                 insertedUnitKeys = listOf(1L),
                 deletedUnitKeys = listOf(2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
-        // glyphProgress=0.25：inserted key=1 在区间 [0, 0.5] 中点，local=0.5，fraction=0.5
+        // progress=0.25：inserted key=1 在区间 [0, 0.5] 中点，local=0.5，fraction=0.5
         val quarterSample = motion.sample(startTime + duration / 4)
         assertEquals(0.5f, quarterSample.unitClipFractions[1L]!!, 0.001f)
         // deleted key=2 还没开始它的区间 [0.5, 1]，fraction=1（完全可见）
         assertEquals(1f, quarterSample.unitClipFractions[2L]!!, 0.001f)
 
-        // glyphProgress=0.5：inserted key=1 已走完 [0, 0.5]，fraction=1（完全吐出）
+        // progress=0.5：inserted key=1 已走完 [0, 0.5]，fraction=1（完全吐出）
         val midSample = motion.sample(startTime + duration / 2)
         assertEquals(1f, midSample.unitClipFractions[1L]!!, 0.001f)
         // deleted key=2 刚到区间起点 [0.5, 1]，还没开始吞，fraction=1
         assertEquals(1f, midSample.unitClipFractions[2L]!!, 0.001f)
 
-        // glyphProgress=0.75：inserted key=1 已走完，fraction=1
+        // progress=0.75：inserted key=1 已走完，fraction=1
         val threeQuarterSample = motion.sample(startTime + 3 * duration / 4)
         assertEquals(1f, threeQuarterSample.unitClipFractions[1L]!!, 0.001f)
         // deleted key=2 在区间 [0.5, 1] 中点，local=0.5，fraction=1+(0-1)*0.5=0.5
@@ -117,21 +119,20 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
-        // glyphProgress=0.25：key=1 在 [0, 0.5] 中点 local=0.5 fraction=0.5；
+        // progress=0.25：key=1 在 [0, 0.5] 中点 local=0.5 fraction=0.5；
         // key=2 还没开始 [0.5, 1] fraction=0
         val quarterSample = motion.sample(startTime + duration / 4)
         assertEquals(0.5f, quarterSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0f, quarterSample.unitClipFractions[2L]!!, 0.001f)
 
-        // glyphProgress=0.5：key=1 已走完 fraction=1；key=2 刚开始 fraction=0
+        // progress=0.5：key=1 已走完 fraction=1；key=2 刚开始 fraction=0
         val midSample = motion.sample(startTime + duration / 2)
         assertEquals(1f, midSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0f, midSample.unitClipFractions[2L]!!, 0.001f)
 
-        // glyphProgress=0.75：key=1 已走完 fraction=1；key=2 在 [0.5, 1] 中点 fraction=0.5
+        // progress=0.75：key=1 已走完 fraction=1；key=2 在 [0.5, 1] 中点 fraction=0.5
         val threeQuarterSample = motion.sample(startTime + 3 * duration / 4)
         assertEquals(1f, threeQuarterSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0.5f, threeQuarterSample.unitClipFractions[2L]!!, 0.001f)
@@ -150,21 +151,20 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 deletedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
-        // glyphProgress=0.25：key=2 在 [0, 0.5] 中点 local=0.5 fraction=1+(0-1)*0.5=0.5；
+        // progress=0.25：key=2 在 [0, 0.5] 中点 local=0.5 fraction=1+(0-1)*0.5=0.5；
         // key=1 还没开始 [0.5, 1] fraction=1
         val quarterSample = motion.sample(startTime + duration / 4)
         assertEquals(1f, quarterSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0.5f, quarterSample.unitClipFractions[2L]!!, 0.001f)
 
-        // glyphProgress=0.5：key=2 已走完 fraction=0；key=1 刚开始 fraction=1
+        // progress=0.5：key=2 已走完 fraction=0；key=1 刚开始 fraction=1
         val midSample = motion.sample(startTime + duration / 2)
         assertEquals(1f, midSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0f, midSample.unitClipFractions[2L]!!, 0.001f)
 
-        // glyphProgress=0.75：key=2 已走完 fraction=0；key=1 在 [0.5, 1] 中点 fraction=0.5
+        // progress=0.75：key=2 已走完 fraction=0；key=1 在 [0.5, 1] 中点 fraction=0.5
         val threeQuarterSample = motion.sample(startTime + 3 * duration / 4)
         assertEquals(0.5f, threeQuarterSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0f, threeQuarterSample.unitClipFractions[2L]!!, 0.001f)
@@ -181,8 +181,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // mid progress → fraction=0.5（退化为原行为）
         val midSample = motion.sample(startTime + duration / 2)
@@ -219,91 +218,12 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = 0L,
-                glyphDurationNanos = 0L,
+                durationNanos = 0L,
             )
         val sample = motion.sample(startTime)
         assertTrue(sample.finished)
         assertEquals(targetRect, sample.caretRect)
         assertEquals(1f, sample.unitClipFractions[1L]!!, 0.001f)
-    }
-
-    /**
-     * Issue #728 评论 5755928697 问题2：双 duration — caret 瞬时但 glyph 还在跑时，
-     * finished=false，caret 已到 target，fraction 还在中间。
-     */
-    @Test
-    fun sample_caretInstantGlyphRunning_notFinished() {
-        val motion =
-            ComposeEditMotion.forInsert(
-                originCaretRect = originRect,
-                targetCaretRect = targetRect,
-                insertedUnitKeys = listOf(1L),
-                frameTimeNanos = startTime,
-                caretDurationNanos = 0L,
-                glyphDurationNanos = duration,
-            )
-        val midSample = motion.sample(startTime + duration / 2)
-        // caret 瞬时到 target
-        assertEquals(targetRect, midSample.caretRect)
-        // glyph 还在跑，fraction=0.5
-        assertEquals(0.5f, midSample.unitClipFractions[1L]!!, 0.001f)
-        // caret finished 但 glyph 没 finished → 整体没 finished
-        assertFalse(midSample.finished)
-    }
-
-    /**
-     * Issue #728 评论 5755928697 问题2：双 duration — glyph 瞬时但 caret 还在跑时，
-     * finished=false，fraction 已到 to，caret 还在中间。
-     */
-    @Test
-    fun sample_glyphInstantCaretRunning_notFinished() {
-        val motion =
-            ComposeEditMotion.forInsert(
-                originCaretRect = originRect,
-                targetCaretRect = targetRect,
-                insertedUnitKeys = listOf(1L),
-                frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = 0L,
-            )
-        val midSample = motion.sample(startTime + duration / 2)
-        // caret 还在中间
-        assertEquals(20f, midSample.caretRect.left, 0.001f)
-        // glyph 瞬时到 to=1
-        assertEquals(1f, midSample.unitClipFractions[1L]!!, 0.001f)
-        // glyph finished 但 caret 没 finished → 整体没 finished
-        assertFalse(midSample.finished)
-    }
-
-    /**
-     * Issue #728 评论 5755928697 问题2：coordinated=false 时 caret 和 glyph 不同时长。
-     * caret 50ms，glyph 100ms。50ms 时 caret 到 target，glyph 才走一半。
-     */
-    @Test
-    fun sample_coordinatedFalse_caretAndGlyphIndependent() {
-        val caretDuration = 50_000_000L
-        val glyphDuration = 100_000_000L
-        val motion =
-            ComposeEditMotion.forInsert(
-                originCaretRect = originRect,
-                targetCaretRect = targetRect,
-                insertedUnitKeys = listOf(1L),
-                frameTimeNanos = startTime,
-                caretDurationNanos = caretDuration,
-                glyphDurationNanos = glyphDuration,
-            )
-        // 50ms：caret 到 target，glyph 才走一半
-        val halfCaretSample = motion.sample(startTime + caretDuration)
-        assertEquals(targetRect, halfCaretSample.caretRect)
-        assertEquals(0.5f, halfCaretSample.unitClipFractions[1L]!!, 0.001f)
-        assertFalse(halfCaretSample.finished)
-
-        // 100ms：caret 和 glyph 都到终点
-        val endSample = motion.sample(startTime + glyphDuration)
-        assertEquals(targetRect, endSample.caretRect)
-        assertEquals(1f, endSample.unitClipFractions[1L]!!, 0.001f)
-        assertTrue(endSample.finished)
     }
 
     @Test
@@ -314,8 +234,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         assertFalse(motion.isFinished(startTime))
         assertFalse(motion.isFinished(startTime + duration / 2))
@@ -330,30 +249,9 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = 0L,
-                glyphDurationNanos = 0L,
+                durationNanos = 0L,
             )
         assertTrue(motion.isFinished(startTime))
-    }
-
-    /**
-     * Issue #728 评论 5755928697 问题2：isFinished 需要 caret 和 glyph 都 finished。
-     */
-    @Test
-    fun isFinished_requiresBothCaretAndGlyphFinished() {
-        val motion =
-            ComposeEditMotion.forInsert(
-                originCaretRect = originRect,
-                targetCaretRect = targetRect,
-                insertedUnitKeys = listOf(1L),
-                frameTimeNanos = startTime,
-                caretDurationNanos = 50_000_000L,
-                glyphDurationNanos = 100_000_000L,
-            )
-        // 50ms：caret finished，glyph 没 finished → false
-        assertFalse(motion.isFinished(startTime + 50_000_000L))
-        // 100ms：都 finished → true
-        assertTrue(motion.isFinished(startTime + 100_000_000L))
     }
 
     @Test
@@ -365,8 +263,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // Sample at 50% — unit 1 fraction = 0.5
         val midTime = startTime + duration / 2
@@ -381,8 +278,7 @@ class ComposeEditMotionTest {
                 newInsertedUnitKeys = listOf(1L, 2L),
                 newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // Unit 1 should continue from 0.5 (not restart from 0)
         val redirectedSample = motion2.sample(midTime)
@@ -399,8 +295,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val midTime = startTime + duration / 2
 
@@ -412,8 +307,7 @@ class ComposeEditMotionTest {
                 newInsertedUnitKeys = listOf(1L),
                 newDeletedUnitKeys = listOf(3L),
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val redirectedSample = motion2.sample(midTime)
         // New deleted unit 3 starts from 1 (fully visible, will be swallowed)
@@ -429,8 +323,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // Let motion1 finish
         val finishTime = startTime + duration
@@ -445,8 +338,7 @@ class ComposeEditMotionTest {
                 newInsertedUnitKeys = listOf(2L),
                 newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = finishTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // At start of redirected motion: caret should be at newOrigin (targetRect)
         val startSample = motion2.sample(finishTime)
@@ -466,10 +358,9 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
-        // 25ms 时：glyphProgress=0.25
+        // 25ms 时：progress=0.25
         // key=1 区间 [0, 0.5]，local=0.5，fraction=0.5
         // key=2 区间 [0.5, 1]，还没开始，fraction=0
         val midTime = startTime + duration / 4
@@ -484,15 +375,14 @@ class ComposeEditMotionTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // redirect 后立即 sample：unit fraction 应该保持当前值（不丢字）
         val redirectedSample = motion2.sample(midTime)
         assertEquals(0.5f, redirectedSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(0f, redirectedSample.unitClipFractions[2L]!!, 0.001f)
 
-        // 继续跑到 glyph 终点：两个 unit 都应该到 1（文字继续吐完，没被丢弃）
+        // 继续跑到终点：两个 unit 都应该到 1（文字继续吐完，没被丢弃）
         val endSample = motion2.sample(midTime + duration)
         assertEquals(1f, endSample.unitClipFractions[1L]!!, 0.001f)
         assertEquals(1f, endSample.unitClipFractions[2L]!!, 0.001f)
@@ -509,8 +399,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val finishTime = startTime + duration
         assertTrue(motion1.isFinished(finishTime))
@@ -521,8 +410,7 @@ class ComposeEditMotionTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newTarget,
                 frameTimeNanos = finishTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         val startSample = motion2.sample(finishTime)
         assertEquals(targetRect, startSample.caretRect)
@@ -539,8 +427,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // 50ms：caret 在 midpoint (left=20)
         val midTime = startTime + duration / 2
@@ -553,8 +440,7 @@ class ComposeEditMotionTest {
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newTarget,
                 frameTimeNanos = midTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // redirect 后立即 sample：caret 在当前 rect（midpoint left=20）
         val startSample = motion2.sample(midTime)
@@ -587,8 +473,7 @@ class ComposeEditMotionTest {
                 targetCaretRect = targetRect,
                 insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
-                caretDurationNanos = duration,
-                glyphDurationNanos = duration,
+                durationNanos = duration,
             )
         // Sample before start time — should return origin values
         val beforeSample = motion.sample(startTime - 1000L)

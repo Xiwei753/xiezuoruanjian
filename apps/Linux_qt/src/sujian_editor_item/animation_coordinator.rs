@@ -2324,10 +2324,11 @@ impl LinuxEditorAnimationCoordinator {
             ) {
                 continue;
             }
-            // Issue #727 评论 5760650874 方案 A: 永久退休 caret motion 的事务
-            // 不再被选为 active caret owner。find_cursor_transaction_for_target /
-            // compute_coordinated_cursor_position 都通过本方法取事务后驱动 caret，
-            // retired 事务不应再驱动 caret（已 Snap 回 canonical）。
+            // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
+            // 永久退休 caret motion 的事务不再被选为 active caret owner。
+            // find_cursor_transaction_for_target / compute_coordinated_cursor_position
+            // 都通过本方法取事务后驱动 caret，retired 事务不应再驱动 caret
+            // （CaretDriven units 已落到终态，已 Snap 回 canonical）。
             if tx.caret_motion_retired {
                 continue;
             }
@@ -2339,8 +2340,10 @@ impl LinuxEditorAnimationCoordinator {
     /// Issue #705 评论 5717380886: 返回当前活动的正文编辑事务的 key，
     /// 且其 `cursor_owner_epoch == current_cursor_epoch`。
     ///
-    /// Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
-    /// InsertReveal/DeleteConceal 结束到 canonical 最终状态（不再继续播放）。
+    /// Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
+    /// 事务立刻失去 caret motion ownership，CaretDriven units（InsertReveal/DeleteConceal）
+    /// 立即落到 canonical final state（`start_fraction = target_fraction`），
+    /// 不再继续播放。ReflowMove/ReflowCrossFade 作为独立 passive reflow track 继续。
     ///
     /// 本方法供 `build_cursor_plan` 内部判断"正文协同是否活跃（epoch 一致）"用。
     /// `find_cursor_transaction_for_target` / `compute_coordinated_cursor_position`
@@ -2360,11 +2363,12 @@ impl LinuxEditorAnimationCoordinator {
             if tx.cursor_owner_epoch != current_cursor_epoch {
                 continue;
             }
-            // Issue #727 评论 5760650874 方案 A: 永久退休 caret motion 的事务
-            // 永远跳过——之后本方法不会再返回此事务的 key，
+            // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
+            // 永久退休 caret motion 的事务永远跳过——之后本方法不会再返回此事务的 key，
             // sample_coordinated_motion_frame 不会再给它 owner_key，
             // 已 Snap 回 canonical 的旧 caret / 吞吐字轨迹不会重新接管。
-            // Timed Reflow 继续播完，事务只等剩余 Timed unit 完成。
+            // ReflowMove/ReflowCrossFade 作为独立 passive reflow track 继续播完，
+            // 事务只等剩余 Timed unit 完成。
             if tx.caret_motion_retired {
                 continue;
             }
@@ -2381,10 +2385,17 @@ impl LinuxEditorAnimationCoordinator {
     ///
     /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。
     /// 调 `active_text_transaction_key()` 取活动事务后，检查其 `cursor_owner_epoch`
-    /// 是否等于 `current_cursor_epoch`。epoch 不一致时不返回该事务（文字事务继续
-    /// 播自己的 glyph/reflow，但不再驱动 caret）。
+    /// 是否等于 `current_cursor_epoch`。
+    ///
+    /// Issue #735 评论 5773604666 问题3: epoch 不一致时不再只是 fall through，
+    /// 而是触发收口逻辑——调用 `retire_caret_driven_units_for_transaction` 把
+    /// CaretDriven units（InsertReveal/DeleteConceal）的 `start_fraction` 设为
+    /// `target_fraction`（终态），并置 `caret_motion_retired = true`。
+    /// ReflowMove/ReflowCrossFade 保留不动，作为独立 passive reflow track 继续。
+    /// 不再存在"同一笔正文吞吐 transaction 还活着，但 caret_owner 已经不是它"
+    /// 的状态。
     pub(crate) fn find_cursor_transaction_for_target(
-        &self,
+        &mut self,
         target_x: f64,
         target_y: f64,
         _target_h: f64,
@@ -2398,11 +2409,18 @@ impl LinuxEditorAnimationCoordinator {
                 .iter()
                 .find(|t| t.key == key)
             {
-                // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
-                // epoch 不一致时跳过——文字事务继续播自己的 glyph/reflow，
-                // 但不再驱动 caret。
+                // Issue #705 评论 5717380886 / Issue #735 评论 5773604666 问题3:
+                // cursor_owner_epoch 检查。epoch 不一致时触发收口——CaretDriven units
+                // 立即落到终态，不再继续播自己的 glyph。ReflowMove/ReflowCrossFade
+                // 作为独立 passive reflow track 继续。
                 if tx.cursor_owner_epoch != current_cursor_epoch {
-                    // epoch 不一致，fall through 到 CursorOnly 查找逻辑。
+                    // Issue #735 评论 5773604666 问题3: 收口这笔事务的 CaretDriven units。
+                    // retire_caret_driven_units_for_transaction 会:
+                    // - 把 CaretDriven units 的 start_fraction 设为 target_fraction（终态）
+                    // - 置 caret_motion_retired = true
+                    // ReflowMove/ReflowCrossFade 保留不动。
+                    self.retire_caret_driven_units_for_transaction(key);
+                    // 收口后 fall through 到 CursorOnly 查找逻辑。
                 } else {
                     return Some((
                         tx.key,
@@ -2413,7 +2431,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        // 没有正文事务（或 epoch 不一致）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
+        // 没有正文事务（或 epoch 不一致已收口）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
         // Issue #705 评论 5717380886: CursorOnly 查找也跳过 epoch 不一致的事务，
         // 因为这些事务的 new_cursor_rect 已不再代表当前 caret 目标。
         for tx in self.prepared_queue.active_transactions().iter().rev() {
@@ -2438,6 +2456,51 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
         None
+    }
+
+    /// Issue #735 评论 5773604666 问题3: 收口指定事务的 CaretDriven units。
+    ///
+    /// 当正文 edit motion 失去 caret ownership 时调用。把指定事务的
+    /// CaretDriven units（InsertReveal/DeleteConceal）的 `start_fraction` 设为
+    /// `target_fraction`（终态），并置 `caret_motion_retired = true`。
+    /// ReflowMove/ReflowCrossFade 保留不动，作为独立 passive reflow track 继续。
+    ///
+    /// 调用后：
+    /// - CaretDriven units 立即落到 canonical final state，不再继续播。
+    /// - `active_text_transaction_key_with_epoch` / `active_text_transaction_key`
+    ///   永远跳过此事务（`caret_motion_retired == true`）。
+    /// - 如果事务中还有 Timed unit（Reflow），事务不立即 Completed，等它们播完。
+    /// - 如果没有 Timed unit，事务可在下一帧 Completed。
+    ///
+    /// 幂等：对已 retired 的事务再次调用是 no-op（start_fraction 已是 target_fraction）。
+    fn retire_caret_driven_units_for_transaction(&mut self, key: VisualTransactionKey) {
+        let tx = match self
+            .prepared_queue
+            .active_transactions_mut()
+            .iter_mut()
+            .find(|t| t.key == key)
+        {
+            Some(t) => t,
+            None => return,
+        };
+        // 已 retired 的事务无需重复收口。
+        if tx.caret_motion_retired {
+            return;
+        }
+        // 只有含 CaretDriven units 的事务才需要收口。
+        if !tx.has_caret_driven_units() {
+            // 纯 Reflow 事务本来就不驱动 caret，只置 retired 标记防止重新被选为 owner。
+            tx.caret_motion_retired = true;
+            return;
+        }
+        tx.retire_caret_driven_units();
+        tx.caret_motion_retired = true;
+        editor_animation_debug_log(&format!(
+            "retire_caret_driven: key={:?} op={:?} units={} — CaretDriven units 已落到终态",
+            tx.key,
+            tx.operation_kind,
+            tx.units.len(),
+        ));
     }
 
     pub fn has_prepared_or_rendering(&self) -> bool {
@@ -2489,8 +2552,12 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #705 评论 5717380886: 区分两种"有活动正文事务"的判断：
         // - `has_active_for_blink`：不看 epoch，只要文字动画还在播就 suppress blink。
         // - `has_active_for_coordinated`：看 epoch，只有 epoch 一致的事务才驱动
-        //   coordinated caret。epoch 不一致时文字事务继续播自己的 glyph/reflow，
-        //   但不再驱动 caret，纯光标移动可走 Tween。
+        //   coordinated caret。
+        // Issue #735 评论 5773604666 问题3: epoch 不一致时 CaretDriven units 已在
+        //   `find_cursor_transaction_for_target` / `build_text_animation_plan_with_sample`
+        //   中收口（start_fraction 设为 target_fraction，caret_motion_retired = true），
+        //   不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
+        //   reflow track 继续。纯光标移动可走 Tween。
         let has_active_for_coordinated = self
             .active_text_transaction_key_with_epoch(cursor_owner_epoch)
             .is_some();
@@ -2769,8 +2836,9 @@ impl LinuxEditorAnimationCoordinator {
         // 有 SampledCaretFrame 才让 InsertReveal / DeleteConceal 用它的 x/y/visual_line_id 裁文字。
         // 没有 caret frame 就不生成 reveal/conceal glyph。
         //
-        // 约束 1: epoch 不一致时事务立刻失去 caret motion ownership，
-        // caret 为 None，InsertReveal/DeleteConceal 结束到 canonical 状态。
+        // 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时事务立刻失去
+        // caret motion ownership，caret 为 None，CaretDriven units 已落到 canonical
+        // final state（不再继续播放）。
         let coordinated_motion_frame =
             self.sample_coordinated_motion_frame(&frame_sample, cursor_owner_epoch);
 
@@ -2858,9 +2926,10 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
         // 是否有吞吐字直接由 compute_coordinated_cursor_position 是否返回 Some 决定。
         // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
-        // Issue #727 约束 1: epoch 不一致时 compute_coordinated_cursor_position 返回 None，
-        // 事务立刻失去 caret motion ownership，InsertReveal/DeleteConceal 结束到 canonical
-        // 最终状态（不再继续播放）。改走 CursorOnly/点击位置。
+        // Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时
+        // compute_coordinated_cursor_position 返回 None，事务立刻失去 caret motion
+        // ownership，CaretDriven units 已落到 canonical final state（不再继续播放）。
+        // 改走 CursorOnly/点击位置。
         if let Some((cx, cy_doc, ch)) =
             self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
         {
@@ -2949,8 +3018,9 @@ impl LinuxEditorAnimationCoordinator {
     /// 在 `build_render_plan_full` 入口处调用，先采样 caret motion 得到一份
     /// `SampledCaretFrame`，供 cursor layer 和文字 reveal/conceal 共享。
     ///
-    /// Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
-    /// InsertReveal/DeleteConceal 结束到 canonical 状态。
+    /// Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
+    /// 事务立刻失去 caret motion ownership，CaretDriven units（InsertReveal/DeleteConceal）
+    /// 已落到 canonical final state（不再继续播放）。
     fn sample_coordinated_motion_frame(
         &self,
         sample: &AnimationFrameSample,
@@ -3101,13 +3171,17 @@ impl LinuxEditorAnimationCoordinator {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
                 )
             });
-            // Issue #727 评论 5760650874 方案 A: 发现 has_caret_driven_units && !owns_caret 时，
-            // 永久退休此事务的 caret motion。之后 active_text_transaction_key_with_epoch
-            // 永远跳过此事务，不会再给它 owner_key，已 Snap 回 canonical 的旧 caret / 吞吐字
-            // 轨迹不会重新接管。Timed Reflow 继续播完。
+            // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
+            // 发现 has_caret_driven_units && !owns_caret 时，永久退休此事务的
+            // caret motion，并收口 CaretDriven units——把 start_fraction 设为
+            // target_fraction（终态）。之后 active_text_transaction_key_with_epoch
+            // 永远跳过此事务，不会再给它 owner_key，已 Snap 回 canonical 的旧 caret /
+            // 吞吐字轨迹不会重新接管。ReflowMove/ReflowCrossFade 作为独立 passive
+            // reflow track 继续播完。
             // 只在确实有 CaretDriven units 时才置位——纯 Reflow 事务本来就不驱动 caret，
             // 不需要退休标记。
             if has_caret_driven_units && !owns_caret {
+                tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
             }
             let caret_track_done = if has_caret_driven_units {
@@ -3135,9 +3209,11 @@ impl LinuxEditorAnimationCoordinator {
                 })
             };
             // caret-driven 文字事务必须 caret track 也完成才能释放。
-            // Issue #727 评论 5760431554 问题1: 已失去 owner 的 CaretDriven 事务
-            // （owns_caret == false）本帧已 Snap 到 canonical，caret 部分立刻视为完成，
-            // 不再等自己那条旧 caret track 跑完。仍需等剩余 Timed unit（Reflow）播完。
+            // Issue #727 评论 5760431554 问题1 / Issue #735 评论 5773604666 问题3:
+            // 已失去 owner 的 CaretDriven 事务（owns_caret == false）本帧已收口——
+            // CaretDriven units 的 start_fraction 已设为 target_fraction（终态），
+            // caret 部分立刻视为完成，不再等自己那条旧 caret track 跑完。
+            // 仍需等剩余 Timed unit（Reflow）播完。
             // Issue #727 评论 5760650874 方案 A: 用 tx.caret_motion_retired 代替 !owns_caret。
             // 一旦退休，此事务永远视为 caret 部分完成——下一帧即使 new tx 完成移除，
             // 本事务也不会重新成为 owner（active_text_transaction_key_with_epoch 跳过 retired），
@@ -3240,8 +3316,9 @@ impl LinuxEditorAnimationCoordinator {
     /// `x` 是水平坐标，不受 scroll_y 影响。
     ///
     /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。
-    /// Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
-    /// InsertReveal/DeleteConceal 结束到 canonical 最终状态（不再继续播放）。
+    /// Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
+    /// 事务立刻失去 caret motion ownership，CaretDriven units 已落到 canonical
+    /// final state（不再继续播放）。
     fn compute_coordinated_cursor_position(
         &self,
         sample: &AnimationFrameSample,
@@ -3249,8 +3326,10 @@ impl LinuxEditorAnimationCoordinator {
     ) -> Option<(f64, f64, f64)> {
         // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
         // 调 active_text_transaction_key() 取活动事务后，检查其 cursor_owner_epoch
-        // 是否等于 current_cursor_epoch。epoch 不一致时返回 None，
-        // 文字事务继续播自己的 glyph/reflow，但不再驱动 caret。
+        // 是否等于 current_cursor_epoch。epoch 不一致时返回 None。
+        // Issue #735 评论 5773604666 问题3: epoch 不一致时 CaretDriven units 已在
+        // find_cursor_transaction_for_target / build_text_animation_plan_with_sample
+        // 中收口（落到终态），不再继续播自己的 glyph。
         let key = self.active_text_transaction_key()?;
         let tx = self
             .prepared_queue
@@ -3259,8 +3338,9 @@ impl LinuxEditorAnimationCoordinator {
             .find(|t| t.key == key)?;
 
         // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
-        // Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
-        // InsertReveal/DeleteConceal 结束到 canonical 最终状态（不再继续播放）。
+        // Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
+        // 事务立刻失去 caret motion ownership，CaretDriven units 已落到 canonical
+        // final state（不再继续播放）。
         if tx.cursor_owner_epoch != current_cursor_epoch {
             return None;
         }

@@ -12,9 +12,8 @@ import com.xiwei.sujian.feature.editor.layout.cursorRect
  * 现在只回答"旧屏幕帧到新屏幕帧改了什么"，不回答"上一笔动画现在跑到哪了"。
  *
  * #694 评论第 6 步：职责收窄成 Core/external visual coordinator。
- * 本地输入（TYPING/TYPING_COMMIT/IME_COMPOSITION/PASTE/DELETE）不再从这里进入 —
- * 它由 [WritingEditorSurface] 的 InputTransformation → [ComposeEditorVisualState.recordLocalInput]
- * 直接记录，等 [TextLayoutResult] 到达时配对生成 [ComposeVisualPatch]。
+ * Issue #735 评论 5773604666 问题1：删除双视觉入口后，所有正文编辑统一走 [onEditFact]。
+ * 不再有本地输入旁路 — [ComposeEditorVisualState.onEditFact] 是唯一视觉 patch 来源。
  *
  * Issue #735 评论 5771063665：删除 Core VisualIntent 专用分支。
  * 本协调器只负责把 [EditorEditFact] + old/new [ComposeLayoutSnapshot]

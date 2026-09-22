@@ -132,14 +132,16 @@ impl SujianEditorItem {
         // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
         // 是否已经有对应的正文/预输入视觉事务。
         // Issue #705 评论 5717380886: 传入当前 cursor_owner_epoch。
-        // epoch 不一致时 find_cursor_transaction_for_target 不返回该事务，
-        // 文字事务继续播自己的 glyph/reflow，但不再驱动 caret。
+        // Issue #735 评论 5773604666 问题3: epoch 不一致时 find_cursor_transaction_for_target
+        // 触发收口——CaretDriven units（InsertReveal/DeleteConceal）立即落到终态，
+        // 不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
+        // reflow track 继续。然后不返回该事务，走 CursorOnly / 纯光标 Tween。
         // Issue #709 评论 issue-body-709: found_tx 决定走哪条时间线：
         // - Some：正文协同光标接管（Insert/Delete），不创建独立 CursorOnly 动画
         // - None：纯光标 Tween（鼠标点击/方向键/Home/End），CursorAnimationState 自己的 timeline
         let found_tx = self
             .pipeline
-            .animation_coordinator()
+            .animation_coordinator_mut()
             .find_cursor_transaction_for_target(
                 cursor_x,
                 cursor_y,

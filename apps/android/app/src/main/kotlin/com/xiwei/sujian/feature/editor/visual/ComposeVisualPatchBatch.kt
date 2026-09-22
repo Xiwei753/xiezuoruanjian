@@ -140,8 +140,8 @@ internal object ComposeVisualPatchBatch {
      * #703 评论 5712256296 缺口1：batch 不再凭几何重算 retainedMoves —
      * 只合成各 stage patch 已明确携带的显式 retainedMoves。
      *
-     * - 各 stage 的 retainedMoves 都为空时，结果为空（常见本地输入路径：
-     *   [ComposeEditorVisualState.buildLocalInputPatch] 已把本地输入的 retainedMoves 清空）。
+     * - 各 stage 的 retainedMoves 都为空时，结果为空（常见路径：
+     *   本地输入的 retainedMoves 已清空）。
      * - 某些 stage 有非空 retainedMoves（未来 Core/external 路径）时，把各 stage 的显式
      *   [RetainedMove] 按 stage offset map 映射：oldRange 沿前置 stage offset map 映射回 T0，
      *   newRange 沿后续 stage offset map 映射到 Tn，再按原配对顺序合成。

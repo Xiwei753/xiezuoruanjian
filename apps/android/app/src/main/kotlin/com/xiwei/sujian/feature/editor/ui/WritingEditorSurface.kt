@@ -3,10 +3,8 @@ package com.xiwei.sujian.feature.editor.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
-import androidx.compose.foundation.text.input.forEachChange
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -25,7 +23,6 @@ import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.EditorTextFieldDrawLayer
-import com.xiwei.sujian.feature.editor.visual.LocalInputChange
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -188,30 +185,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             }
         }
 
-    // #694 评论第 2 步：给 BasicTextField 加稳定的 InputTransformation —
-    // 只把输入事实塞进 visualState 的普通 tracker，不等 Core，不直接开始动画。
-    // 它不是 Compose State，不在 InputTransformation 里改 StateFlow/mutableStateOf。
-    val visualInputTransformation =
-        remember(visualState, bridge) {
-            InputTransformation {
-                val changesSnapshot =
-                    buildList {
-                        changes.forEachChange { range, originalRange ->
-                            add(LocalInputChange(newRange = range, oldRange = originalRange))
-                        }
-                    }
-                if (changesSnapshot.isNotEmpty()) {
-                    visualState.recordLocalInput(
-                        oldText = originalText.toString(),
-                        newText = asCharSequence().toString(),
-                        oldSelection = originalSelection,
-                        newSelection = selection,
-                        changes = changesSnapshot,
-                    )
-                }
-            }
-        }
-
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
     // 用 drawWithContent 对 hiddenRanges 做 ClipOp.Difference 裁切后画动画字和 caret。
@@ -235,7 +208,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             scrollState = viewportState.scrollState,
             textStyle = textStyle.copy(color = textColor),
             outputTransformation = outputTransformation,
-            inputTransformation = visualInputTransformation,
             // Issue #728 评论 5754045689：系统 caret 透明 —
             // caret 由 EditorTextFieldDrawLayer 用统一 motion 的 caretRect 画，
             // 不再由 BasicTextField 自己画。
