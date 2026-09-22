@@ -163,17 +163,17 @@ internal object ComposeVisualRebase {
      * @param target 旧正文中的 UTF-16 range（T0 坐标）。
      * @param offsetMap 整条 chain 合成后的 T0→Tn offset map；null 表示没有。
      * @param newTextLength 新正文长度 — fallback 判断 target 是否仍存活。
-     * @param intent 原始 Core intent — offsetMap==null 时用 replaceBounds 生成 fallback。
+     * @param editFact 编辑事实 — offsetMap==null 时用 replaceBounds 生成 fallback。
      * @return 切片列表。
      */
     internal fun computeSlices(
         target: TextRange,
         offsetMap: List<VisualOffsetMapEntry>?,
         newTextLength: Int,
-        intent: EditorVisualIntent? = null,
+        editFact: EditorEditFact? = null,
     ): List<MappedRangeSlice> {
         val effectiveMap =
-            offsetMap ?: intent?.let { entriesForIntent(it) }
+            offsetMap ?: editFact?.let { entriesForFact(it) }
         if (effectiveMap != null) {
             return splitMappedRangeForward(target, effectiveMap)
         }
@@ -437,17 +437,20 @@ internal object ComposeVisualRebase {
 
     /**
      * 从当前/上一份 [TextLayoutResult] 取真实 cursor rect 构建插值快照。
+     *
+     * Issue #735 评论 5771063665：不再接收 [EditorVisualIntent]，改为直接接收
+     * old/new selection end（UTF-16）。
      */
     fun buildCursorSnapshot(
         previousSnapshot: ComposeLayoutSnapshot?,
         currentSnapshot: ComposeLayoutSnapshot?,
-        intent: EditorVisualIntent?,
+        oldSelectionEndUtf16: Int = -1,
+        newSelectionEndUtf16: Int = -1,
     ): VisualCursorSnapshot? {
         val prev = previousSnapshot ?: return null
         val curr = currentSnapshot ?: return null
-        val cursor = intent?.cursor
-        val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
-        val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
+        val oldSelectionEnd = if (oldSelectionEndUtf16 >= 0) oldSelectionEndUtf16 else prev.selection.end
+        val newSelectionEnd = if (newSelectionEndUtf16 >= 0) newSelectionEndUtf16 else curr.selection.end
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
         val oldText = prev.result.layoutInput.text.text
         val newText = curr.result.layoutInput.text.text
@@ -467,21 +470,25 @@ internal object ComposeVisualRebase {
      * #641 评论 问题3 + 评论 5457777142 问题2 + 评论 5458283021 问题2b：retained move 计算 —
      * 自动折行/手动换行的 retained move 用 old/new [TextLayoutResult]
      * 比较同一逻辑文本范围的位置变化生成。
+     *
+     * Issue #735 评论 5771063665：不再接收 [EditorVisualIntent]，改为接收纯数据。
      */
     fun computeRetainedMoves(
-        intent: EditorVisualIntent,
+        textKind: TextVisualKind,
+        replaceBounds: VisualReplaceBounds?,
+        oldRanges: List<TextRange>,
+        newRanges: List<TextRange>,
         previousSnapshot: ComposeLayoutSnapshot?,
         currentSnapshot: ComposeLayoutSnapshot?,
     ): List<RetainedMove> {
-        if (intent.textKind == TextVisualKind.None) return emptyList()
+        if (textKind == TextVisualKind.None) return emptyList()
         val prev = previousSnapshot ?: return emptyList()
         val curr = currentSnapshot ?: return emptyList()
 
-        val replaceBounds = intent.replaceBounds
         val oldSuffixStart =
-            replaceBounds?.oldEnd ?: (intent.oldRanges.maxOfOrNull { it.end } ?: 0)
+            replaceBounds?.oldEnd ?: (oldRanges.maxOfOrNull { it.end } ?: 0)
         val newSuffixStart =
-            replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
+            replaceBounds?.newEnd ?: (newRanges.maxOfOrNull { it.end } ?: 0)
 
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
         // 类型从 AnnotatedString 变 String，String 也是 CharSequence。
@@ -508,11 +515,13 @@ internal object ComposeVisualRebase {
 
     /**
      * #644 评论 #684：按 offset map chain 合并整条事务链的 retained moves。
+     *
+     * Issue #735 评论 5771063665：chain 类型从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
     fun computeRetainedMoves(
         oldLayout: ComposeLayoutSnapshot?,
         newLayout: ComposeLayoutSnapshot?,
-        chain: List<EditorVisualIntent>,
+        chain: List<EditorEditFact>,
     ): List<RetainedMove> {
         val prev = oldLayout ?: return emptyList()
         val curr = newLayout ?: return emptyList()
@@ -688,11 +697,13 @@ internal object ComposeVisualRebase {
 
     /**
      * #644 评论 #684：回退路径 — 取最后一个 replaceBounds / 所有 ranges 摊平做线性平移。
+     *
+     * Issue #735 评论 5771063665：chain 类型从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
     private fun computeRetainedMovesLegacy(
         prev: ComposeLayoutSnapshot,
         curr: ComposeLayoutSnapshot,
-        chain: List<EditorVisualIntent>,
+        chain: List<EditorEditFact>,
     ): List<RetainedMove> {
         val lastWithBounds = chain.lastOrNull { it.replaceBounds != null }
         val replaceBounds = lastWithBounds?.replaceBounds
@@ -805,43 +816,43 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 newAnimationUnits
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 fact 的 newAnimationUnits
      * 合成到最终 Tn 坐标。
      *
-     * #694 评论 5691696678 问题3：改成调用通用 stage-map 版本 [composeNewUnitsToFinalStages]，
-     * 保持向后兼容。
+     * Issue #735 评论 5771063665：chain 类型从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
-    fun composeNewAnimationUnitsToFinal(chain: List<EditorVisualIntent>): List<TextRange> =
+    fun composeNewAnimationUnitsToFinal(chain: List<EditorEditFact>): List<TextRange> =
         composeNewUnitsToFinalStages(
             perStageNewUnits = chain.map { it.newAnimationUnits },
             perStageOffsetMaps = chain.map { it.offsetMap?.entries },
         )
 
     /**
-     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 oldAnimationUnits
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 fact 的 oldAnimationUnits
      * 合成回最初 T0 坐标。
      *
-     * #694 评论 5691696678 问题3：改成调用通用 stage-map 版本 [composeOldUnitsToBaseStages]，
-     * 保持向后兼容。
+     * Issue #735 评论 5771063665：chain 类型从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
-    fun composeOldAnimationUnitsToBase(chain: List<EditorVisualIntent>): List<TextRange> =
+    fun composeOldAnimationUnitsToBase(chain: List<EditorEditFact>): List<TextRange> =
         composeOldUnitsToBaseStages(
             perStageOldUnits = chain.map { it.oldAnimationUnits },
             perStageOffsetMaps = chain.map { it.offsetMap?.entries },
         )
 
     /**
-     * #684 评论 5673811415：把某笔 intent 的 cursor offset 沿后续 offset maps 映射到最终 Tn 坐标。
+     * #684 评论 5673811415：把某笔 fact 的 cursor offset 沿后续 offset maps 映射到最终 Tn 坐标。
+     *
+     * Issue #735 评论 5771063665：chain 类型从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
     fun mapCursorOffsetThroughChain(
-        chain: List<EditorVisualIntent>,
-        intentIndex: Int,
+        chain: List<EditorEditFact>,
+        factIndex: Int,
         offset: Int,
     ): Int? {
         var currentOffset = offset
-        for (j in (intentIndex + 1) until chain.size) {
-            val intent = chain[j]
-            val mapped = mapCaretThroughIntent(intent, currentOffset)
+        for (j in (factIndex + 1) until chain.size) {
+            val fact = chain[j]
+            val mapped = mapCaretThroughFact(fact, currentOffset)
             if (mapped == null) {
                 return null
             }
@@ -850,16 +861,16 @@ internal object ComposeVisualRebase {
         return currentOffset
     }
 
-    private fun mapCaretThroughIntent(
-        intent: EditorVisualIntent,
+    private fun mapCaretThroughFact(
+        fact: EditorEditFact,
         offset: Int,
     ): Int? {
-        val replaceBounds = intent.replaceBounds
+        val replaceBounds = fact.replaceBounds
         if (replaceBounds != null) {
             return mapCaretThroughReplaceBounds(replaceBounds, offset)
         }
 
-        val entries = intent.offsetMap?.entries
+        val entries = fact.offsetMap?.entries
         if (entries == null) return offset
         if (entries.isEmpty()) {
             return null
@@ -978,31 +989,31 @@ internal object ComposeVisualRebase {
         return result
     }
 
-/**
-     * #689 评论 5676120929 问题3：获取 intent 的 entries — 优先用 offsetMap，没有则根据
+ /**
+     * #689 评论 5676120929 问题3：获取 fact 的 entries — 优先用 offsetMap，没有则根据
      * replaceBounds + expectedOldText/expectedNewText 生成 fallback survival map。
      *
-     * 等长替换（oldText.length == newText.length）时，如果 Core 没返回 offsetMap，
-     * 旧实现会直接把整段旧文本当存活（"target.end <= newTextLength → SURVIVING"），
-     * 把旧 unit 错认成新 unit，导致同一 range 两个 overlay unit。
-     * 现在用 replaceBounds 显式区分前缀/后缀（存活）和被替换区域（没有 entry = 删除）。
+     * Issue #735 评论 5771063665：参数从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
-    fun entriesForIntent(intent: EditorVisualIntent): List<VisualOffsetMapEntry> {
-        intent.offsetMap?.entries?.let { return it }
-        return buildFallbackEntriesFromReplaceBounds(intent)
+    fun entriesForFact(fact: EditorEditFact): List<VisualOffsetMapEntry> {
+        fact.offsetMap?.entries?.let { return it }
+        return buildFallbackEntriesFromReplaceBounds(fact.replaceBounds, fact.expectedOldText.length, fact.expectedNewText.length)
     }
 
 /**
-     * 根据 replaceBounds + expectedOldText.length + expectedNewText.length
+     * 根据 replaceBounds + oldLen + newLen
      * 生成 fallback survival map：
      * - replace 前面的前缀：old [0, oldStart) -> new [0, newStart)
      * - replace 后面的后缀：old [oldEnd, oldLen) -> new [newEnd, newLen)
      * - 被替换的中间区域没有 entry（被编辑/删除，不存活）。
+     *
+     * Issue #735 评论 5771063665：不再接收 [EditorVisualIntent]，改为接收纯数据。
      */
-    private fun buildFallbackEntriesFromReplaceBounds(intent: EditorVisualIntent): List<VisualOffsetMapEntry> {
-        val replaceBounds = intent.replaceBounds
-        val oldLen = intent.expectedOldText.length
-        val newLen = intent.expectedNewText.length
+    private fun buildFallbackEntriesFromReplaceBounds(
+        replaceBounds: VisualReplaceBounds?,
+        oldLen: Int,
+        newLen: Int,
+    ): List<VisualOffsetMapEntry> {
         if (replaceBounds == null || oldLen == 0 || newLen == 0) return emptyList()
 
         val entries = mutableListOf<VisualOffsetMapEntry>()
@@ -1042,14 +1053,16 @@ internal object ComposeVisualRebase {
         return entries
     }
 
-/**
+ /**
      * #644 评论 #684：合成整条 offset map chain。
      *
      * #689 评论 5676120929 问题3：不再因某一笔 offsetMap == null 就返回 null，
-     * 而是每笔都用 [entriesForIntent] 拿 entries（优先 offsetMap，没有则从 replaceBounds 生成 fallback），
+     * 而是每笔都用 [entriesForFact] 拿 entries（优先 offsetMap，没有则从 replaceBounds 生成 fallback），
      * 保证等长替换时被替换区域不会被错当成存活。
+     *
+     * Issue #735 评论 5771063665：chain 类型从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
-    fun composeOffsetMapChain(chain: List<EditorVisualIntent>): List<VisualOffsetMapEntry>? {
+    fun composeOffsetMapChain(chain: List<EditorEditFact>): List<VisualOffsetMapEntry>? {
         if (chain.isEmpty()) return null
 
         val initialOldLen = chain.first().expectedOldText.length
@@ -1063,8 +1076,8 @@ internal object ComposeVisualRebase {
                 ),
             )
 
-        for (intent in chain) {
-            val entries = entriesForIntent(intent)
+        for (fact in chain) {
+            val entries = entriesForFact(fact)
             val stage = buildStageSegments(entries)
             acc = composeStage(acc, stage)
         }

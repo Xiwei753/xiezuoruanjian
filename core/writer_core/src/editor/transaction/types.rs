@@ -113,22 +113,3 @@ pub struct EditorTransaction {
     pub cause: EditorTransactionCause,
     pub should_animate: bool,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum EditorAnimationKind {
-    Insert,
-    Delete,
-    Cursor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AnimationMode {
-    GlyphAnimation,
-    ClusterAnimation,
-    RunAnimation,
-    LineReflowAnimation,
-    SnapshotAnimation,
-    SystemSuppressed,
-}

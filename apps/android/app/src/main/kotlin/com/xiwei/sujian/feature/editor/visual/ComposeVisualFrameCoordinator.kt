@@ -4,7 +4,6 @@ import android.util.Log
 import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.cursorRect
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #644 评论 #684：帧协调器 — 解决"Core 一笔事务不等于屏幕一帧"的问题。
@@ -15,24 +14,13 @@ import uniffi.writer_core.AnimationModeDto
  * #694 评论第 6 步：职责收窄成 Core/external visual coordinator。
  * 本地输入（TYPING/TYPING_COMMIT/IME_COMPOSITION/PASTE/DELETE）不再从这里进入 —
  * 它由 [WritingEditorSurface] 的 InputTransformation → [ComposeEditorVisualState.recordLocalInput]
- * 直接记录，等 [TextLayoutResult] 到达时配对生成 [ComposeVisualPatch]（intent=null）。
- * 现有 [PendingVisualChain]、[lastConsumed]/[latest]、Core revision、transactionId 保留给
- * Undo/Redo/Programmatic/Load/Format 这些真正需要 Core 驱动的修改；
- * 不要再拿它给普通打字和 Backspace 配 TextLayoutResult。
+ * 直接记录，等 [TextLayoutResult] 到达时配对生成 [ComposeVisualPatch]。
  *
- * 保留：
- * - [PendingVisualChain]、[lastConsumed]/[latest]、Core intent 与真实 [TextLayoutResult]
- *   的双向汇合、offset map chain、[computeRetainedMoves]。
+ * Issue #735 评论 5771063665：删除 Core VisualIntent 专用分支。
+ * 本协调器只负责把 [EditorEditFact] + old/new [ComposeLayoutSnapshot]
+ * 变成 Android 平台自己的 visual patch。
  *
- * 删除：
- * - active: ComposeVisualTransaction?
- * - masterProgress 参数
- * - materializeStartFrame(...)
- * - mappedPrevSuppressedRanges
- * - hiddenRanges 继承
- * - completeTransaction()
- *
- * `onVisualIntent()` 和 `onLayout()` 最终只返回 [ComposeVisualPatch]。
+ * `onEditFact()` 和 `onLayout()` 最终只返回 [ComposeVisualPatch]。
  */
 class ComposeVisualFrameCoordinator(
     private val targetId: String,
@@ -47,53 +35,51 @@ class ComposeVisualFrameCoordinator(
     /** 最新真实 layout — 每一次 onLayout 都更新。 */
     private var latest: PresentedLayout? = null
 
-    /** 中间积累的 Core intent chain — 等匹配的真实 layout 到达后一起合成 patch。 */
-    private var pending: PendingVisualChain? = null
+    /** 中间积累的编辑事实 chain — 等匹配的真实 layout 到达后一起合成 patch。 */
+    private var pending: PendingEditChain? = null
 
     /** 单调递增的 patch ID。 */
     private var nextPatchId: Long = 0L
 
     /**
-     * Core intent 到达 — 只串进 pending chain（连续才拼接，不连续不开硬拼），
+     * 编辑事实到达 — 只串进 pending chain（连续才拼接，不连续不开硬拼），
      * 然后尝试合流生成 patch。
      *
-     * Issue #732 评论 5763493968 第2节：删除 motionPolicy 参数 —
-     * 本方法只负责"编辑事实 + old/new layout → patch"，不再决定当前该不该播放动画。
-     * 是否播放由 [ComposeEditorVisualState.drainPendingPatchesAtFrame] 的当前 effective policy 决定。
+     * Issue #735 评论 5771063665：参数从 [EditorVisualIntent] 改为 [EditorEditFact]。
      */
-    fun onVisualIntent(intent: EditorVisualIntent): FrameUpdate {
+    fun onEditFact(fact: EditorEditFact): FrameUpdate {
         val existing = pending
         if (existing == null) {
             pending =
-                PendingVisualChain(
-                    baseText = intent.expectedOldText,
-                    targetText = intent.expectedNewText,
-                    intents = listOf(intent),
+                PendingEditChain(
+                    baseText = fact.expectedOldText,
+                    targetText = fact.expectedNewText,
+                    facts = listOf(fact),
                 )
         } else {
-            val lastExpectedNew = existing.intents.last().expectedNewText
-            if (lastExpectedNew == intent.expectedOldText) {
+            val lastExpectedNew = existing.facts.last().expectedNewText
+            if (lastExpectedNew == fact.expectedOldText) {
                 pending =
                     existing.copy(
-                        intents = existing.intents + intent,
-                        targetText = intent.expectedNewText,
+                        facts = existing.facts + fact,
+                        targetText = fact.expectedNewText,
                     )
             } else {
                 pending =
-                    PendingVisualChain(
-                        baseText = intent.expectedOldText,
-                        targetText = intent.expectedNewText,
-                        intents = listOf(intent),
+                    PendingEditChain(
+                        baseText = fact.expectedOldText,
+                        targetText = fact.expectedNewText,
+                        facts = listOf(fact),
                     )
             }
         }
 
-        EditorDiagnosticsEvents.editorVisualIntentQueued(
+        EditorDiagnosticsEvents.editorEditFactQueued(
             targetId = targetId,
-            coreTransactionId = intent.coreTransactionId,
-            baseRevision = intent.baseRevision,
-            newRevision = intent.newRevision,
-            pendingChainSize = pending?.intents?.size ?: 0,
+            coreTransactionId = fact.coreTransactionId,
+            baseRevision = fact.baseRevision,
+            newRevision = fact.newRevision,
+            pendingChainSize = pending?.facts?.size ?: 0,
         )
 
         return tryBuildPatch()
@@ -103,7 +89,6 @@ class ComposeVisualFrameCoordinator(
      * 真实屏幕布局到达 — 更新最新 layout，然后尝试合流生成 patch。
      */
     fun onLayout(snapshot: ComposeLayoutSnapshot): FrameUpdate {
-        // Issue #728 评论 5754045689：result 就是 raw 正文布局，直接读 text。
         latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
 
         EditorDiagnosticsEvents.editorLayoutPresented(
@@ -115,7 +100,6 @@ class ComposeVisualFrameCoordinator(
             lastConsumed = latest
         }
 
-        // #684 评论 5665907509 问题2：没有 pending 文本事务的真实重新排版也要推进 lastConsumed。
         if (pending == null && lastConsumed?.text == latest?.text) {
             lastConsumed = latest
         }
@@ -126,21 +110,9 @@ class ComposeVisualFrameCoordinator(
     /**
      * #694 评论 5691696678 问题2：屏幕基线推进入口 —
      * 本地输入命中或 IME composition 活跃时，真实 layout 已经呈现但不应走 Core visual path
-     * 生成 patch（本地输入有自己的 patch，composition 只推进基线不播放吞吐）。
-     *
-     * 但 [ComposeVisualFrameCoordinator] 的 [lastConsumed] 基线必须跟随真实 layout 推进，
-     * 否则后续 Undo/Redo/Programmatic intent 的 `pending.baseText` 与 `lastConsumed.text`
-     * 对不上，[tryBuildPatch] 一直返回 [FrameUpdate.Empty]。
-     *
-     * 职责：只更新 [latest]/[lastConsumed]，**不**调用 [tryBuildPatch]，**不**生成 Core patch。
-     * - 首次（lastConsumed == null）：设为基线。
-     * - 没有 Core pending（pending == null）：屏幕基线直接跟随真实 layout。
-     * - 有 Core pending：不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest。
-     *
-     * 诊断事件与 [onLayout] 一致 — overlay/诊断仍能观察到 layout 已呈现。
+     * 生成 patch。
      */
     fun observePresentedLayout(snapshot: ComposeLayoutSnapshot) {
-        // Issue #728 评论 5754045689：result 就是 raw 正文布局，直接读 text。
         val presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
         latest = presented
 
@@ -149,30 +121,15 @@ class ComposeVisualFrameCoordinator(
             layoutTextLength = snapshot.result.layoutInput.text.text.length,
         )
 
-        // #694 评论 5692161955 问题3：补并发顺序条件。
-        // 原实现只要 pending != null 就不推进 lastConsumed，导致
-        // "本地输入完成 -> external intent 先到 -> 本地 layout 后到"顺序下卡住。
-        // pending.baseText == presented.text 时推进 lastConsumed 是安全的——
-        // presented 就是 pending 期望的 baseText，推进后 tryBuildPatch 的 baseText 匹配条件仍成立，
-        // 后续 target layout 到达时 patch 能生成。
         when {
             lastConsumed == null -> lastConsumed = presented
             pending == null -> lastConsumed = presented
             pending?.baseText == presented.text -> lastConsumed = presented
-            // 其他情况（pending != null 且 pending.baseText != presented.text）：
-            // 不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest
         }
     }
 
     /**
      * 双向合流：当 pending chain 与两份 layout 概念同时满足匹配条件时生成 patch。
-     *
-     * 匹配条件：
-     * - pending != null
-     * - lastConsumed != null && latest != null
-     * - latest 不是 lastConsumed 本身（确有新 layout）
-     * - pending.baseText == lastConsumed.text
-     * - pending.targetText == latest.text
      */
     private fun tryBuildPatch(): FrameUpdate {
         val pendingChain = pending
@@ -186,11 +143,9 @@ class ComposeVisualFrameCoordinator(
         if (pendingChain.baseText != consumed.text) return FrameUpdate.Empty
         if (pendingChain.targetText != newest.text) return FrameUpdate.Empty
 
-        // 合流生成 patch。
-        val chain = pendingChain.intents
+        val chain = pendingChain.facts
         val coreTransactionIds = chain.map { it.coreTransactionId }
         val composedOffsetMap = ComposeVisualRebase.composeOffsetMapChain(chain)
-        // Issue #728 评论 5754045689：result 就是 raw 正文布局，长度直接读 text。
         val oldLength = consumed.layout.result.layoutInput.text.text.length
         val newLength = newest.layout.result.layoutInput.text.text.length
         val mergedOldRanges: List<androidx.compose.ui.text.TextRange>
@@ -209,12 +164,11 @@ class ComposeVisualFrameCoordinator(
             mergedNewRanges = chain.flatMap { it.newRanges }
         }
 
-        val lastIntent = chain.last()
+        val lastFact = chain.last()
 
         val screenSuppressed =
-            chain.any { it.animationMode == AnimationModeDto.SYSTEM_SUPPRESSED }
+            chain.any { it.animationMode == AnimationMode.SYSTEM_SUPPRESSED }
 
-        // 计算 retained moves — 用 offset map chain 合成。
         val retainedMoves =
             ComposeVisualRebase.computeRetainedMoves(
                 oldLayout = consumed.layout,
@@ -222,7 +176,6 @@ class ComposeVisualFrameCoordinator(
                 chain = chain,
             )
 
-        // 屏幕 patch 的 textKind 按最终净变化决定。
         val transactionTextKind =
             when {
                 mergedOldRanges.isEmpty() && mergedNewRanges.isEmpty() -> TextVisualKind.None
@@ -231,10 +184,6 @@ class ComposeVisualFrameCoordinator(
                 else -> TextVisualKind.Move
             }
 
-        // Issue #732 评论 5763493968 第2节：coordinator 不再用 policy 筛 inserted/deleted units —
-        // 只负责"编辑事实 + old/new layout → patch"，是否播放由消费帧的 effective policy 决定。
-        // insertedUnits / deletedUnits — Core 给出的 animation units 在 coordinator 构建 patch 时
-        // 直接变成 insertedUnits / deletedUnits；真正运行到哪由 timeline 的每个 unit 自己保存时间。
         val composedOldAnimationUnits = ComposeVisualRebase.composeOldAnimationUnitsToBase(chain)
         val newAnimationUnits = ComposeVisualRebase.composeNewAnimationUnitsToFinal(chain)
 
@@ -258,17 +207,12 @@ class ComposeVisualFrameCoordinator(
                 -> emptyList()
             }
 
-        // Issue #728 评论 5754045689：一次性交出 caret rect + 文字 units —
-        // 从 old/new raw layout + old/new selection 直接计算两端 caret rect。
-        // old/new selection 从 intent.cursor 或 snapshot.selection 取。
-        val oldSelectionEnd = chain.first().cursor?.oldEndUtf16 ?: consumed.layout.selection.end
-        val newSelectionEnd = chain.last().cursor?.newEndUtf16 ?: newest.layout.selection.end
+        val oldSelectionEnd = chain.first().oldSelectionEndUtf16.let { if (it >= 0) it else consumed.layout.selection.end }
+        val newSelectionEnd = chain.last().newSelectionEndUtf16.let { if (it >= 0) it else newest.layout.selection.end }
         val originCaretRect = consumed.layout.cursorRect(oldSelectionEnd)
         val targetCaretRect = newest.layout.cursorRect(newSelectionEnd)
 
-        // Issue #732 评论 5763493968 第2节：durationMs 不再根据 textAnimationActive 设 0 —
-        // 是否播放由消费帧决定，coordinator 只保留 Core 建议时长。
-        val effectiveDurationMs = lastIntent.durationMs
+        val effectiveDurationMs = lastFact.durationMs
 
         nextPatchId++
         val patch =
@@ -286,14 +230,12 @@ class ComposeVisualFrameCoordinator(
                 durationMs = effectiveDurationMs,
                 animationMode =
                     if (screenSuppressed) {
-                        AnimationModeDto.SYSTEM_SUPPRESSED
+                        AnimationMode.SYSTEM_SUPPRESSED
                     } else {
-                        lastIntent.animationMode
+                        lastFact.animationMode
                     },
-                intent = lastIntent,
             )
 
-        // patch 生成后照常推进基线、清 pending，但不要保存一个 active transaction 等待结束。
         lastConsumed = newest
         pending = null
 
@@ -338,18 +280,16 @@ private data class PresentedLayout(
 )
 
 /**
- * 中间积累的 Core intent chain — 等 onLayout 到达后一起合成 patch。
+ * Issue #735 评论 5771063665：中间积累的编辑事实 chain — 等 onLayout 到达后一起合成 patch。
  */
-private data class PendingVisualChain(
+private data class PendingEditChain(
     val baseText: String,
     val targetText: String,
-    val intents: List<EditorVisualIntent>,
+    val facts: List<EditorEditFact>,
 )
 
 /**
- * 帧更新结果 — onLayout / onVisualIntent 返回。
- *
- * #689：从返回 [ComposeVisualTransaction] 改为返回 [ComposeVisualPatch]。
+ * 帧更新结果 — onLayout / onEditFact 返回。
  */
 sealed interface FrameUpdate {
     /** 无新 patch（无 pending / 无匹配 layout）。 */

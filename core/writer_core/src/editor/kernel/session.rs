@@ -1,15 +1,14 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     #[allow(clippy::cast_possible_truncation)]
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
         let base_revision = self.revision;
-        let old_cursor = self.cursor;
         let old_selection_anchor = self.selection_anchor.value();
         let old_selection_head = self.cursor.value();
 
@@ -48,32 +47,6 @@ impl EditorKernel {
             resulting_selection_byte_range: Utf8ByteRange::point(resolved_cursor),
         }];
 
-        let visual_intent = EditorVisualIntent {
-            cause: EditorTransactionCause::Load,
-            operation_kind: EditorOperationKind::Load,
-            old_affected_byte_ranges: if old_len == 0 {
-                vec![]
-            } else {
-                vec![Utf8ByteRange::from_start_len(0, old_len)]
-            },
-            new_affected_byte_ranges: if new_len == 0 {
-                vec![]
-            } else {
-                vec![Utf8ByteRange::from_start_len(0, new_len)]
-            },
-            animation_mode: AnimationMode::SystemSuppressed,
-            duration_ms: 0,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(resolved_cursor),
-                should_animate: false,
-            },
-            offset_map: Some(OffsetMap::from_single_edit(old_len, (0, old_len), new_len)),
-            // load 的 animation_mode 永远是 SystemSuppressed，无动画单元。
-            old_animation_units: vec![],
-            new_animation_units: vec![],
-        };
-
         let result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -81,7 +54,9 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause: EditorTransactionCause::Load,
+            operation_kind: EditorOperationKind::Load,
+            offset_map: Some(OffsetMap::from_single_edit(old_len, (0, old_len), new_len)),
             content_delta: EditorContentDelta {
                 inserted_chars: new_chars,
                 deleted_chars: old_chars,
@@ -108,22 +83,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: current_selection,
             new_selection: current_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::Programmatic,
-                operation_kind: EditorOperationKind::CursorOnly,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: self.cursor,
-                    new_offset: self.cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::Programmatic,
+            operation_kind: EditorOperationKind::CursorOnly,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         }
     }
@@ -131,7 +93,7 @@ impl EditorKernel {
     pub(crate) fn noop_result(
         &mut self,
         base_revision: EditorRevision,
-        old_cursor: Utf8ByteOffset,
+        _old_cursor: Utf8ByteOffset,
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditResult {
@@ -143,22 +105,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection,
             new_selection: old_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::Programmatic,
-                operation_kind: EditorOperationKind::CursorOnly,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: old_cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::Programmatic,
+            operation_kind: EditorOperationKind::CursorOnly,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         }
     }

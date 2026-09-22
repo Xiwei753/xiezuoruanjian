@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use super::types::{DisplayPatch, EditorVisualIntent};
+use super::types::{DisplayPatch, EditorOperationKind};
 use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
-use crate::editor::transaction::{EditorCursor, EditorSelection};
+use crate::editor::transaction::{
+    EditorCursor, EditorSelection, EditorTransactionCause, OffsetMap,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +141,19 @@ pub struct EditorEditResult {
     pub old_selection: EditorSelection,
     /// 编辑后选区（保留 anchor/head 方向）。
     pub new_selection: EditorSelection,
-    pub visual_intent: EditorVisualIntent,
+    /// 编辑事实：本次事务的原因（Typing/Delete/Paste/Undo/Redo/Load/Format/ImeComposition/TypingCommit/Programmatic）。
+    ///
+    /// Issue #735：动画下沉平台后，Core 只保留编辑事实。
+    /// 平台要做动画时从 cause 推导动画策略，不再拿 Core 的 Visual DTO。
+    pub cause: EditorTransactionCause,
+    /// 编辑事实：本次操作的语义类别（Insert/Delete/Replace/CursorOnly/Composition*/Load/Format）。
+    pub operation_kind: EditorOperationKind,
+    /// 编辑事实：old 正文 → new 正文的字符身份映射。
+    ///
+    /// 正文变更时由 `OffsetMap::build(&old_text, &new_text)` 填充；
+    /// 纯选区/光标操作（不修改正文）为 `None`。平台端 AffectedLayoutPlanner
+    /// 直接消费此字段，不再独立推导 offset mapping。
+    pub offset_map: Option<OffsetMap>,
     /// 本次编辑的字符增量（正文无变化时为全 0）。
     pub content_delta: EditorContentDelta,
 }

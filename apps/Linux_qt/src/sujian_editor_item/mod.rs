@@ -27,6 +27,7 @@ pub(crate) mod buffer;
 pub(crate) mod cursor_animation;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
 pub mod cursor_controller;
+pub(crate) mod edit_motion;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
 pub(crate) mod input_host;
@@ -71,10 +72,10 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use std::cell::Cell;
 use transaction_key::VisualTransactionKey;
 
-use writer_core::editor::{
-    CompositionSession, CursorRect, EditorCursor, EditorSelection, EditorTransactionCause,
-    EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
-};
+use writer_core::editor::EditorTransactionCause;
+
+// Issue #735: 重新导出 Linux 私有视觉类型，供 `use super::*` 的子模块使用。
+pub(crate) use edit_motion::{CompositionSession, CursorRect};
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreeditAttribute {

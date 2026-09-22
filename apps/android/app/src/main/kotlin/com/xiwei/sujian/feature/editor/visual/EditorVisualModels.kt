@@ -2,61 +2,107 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
-import uniffi.writer_core.AnimationModeDto
+import uniffi.writer_core.EditorOperationKindDto
+import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
- * #641 评论1 第4/5节：Core 返回的视觉意图 — 受影响的 UTF-16 range 和动画类型。
- * 从 Core display patch / VisualIntent 映射，offset 是 UTF-16（已由调用方从
- * UTF-8 byte 转换），不再用 byte 作为 Compose offset。
+ * Issue #735 评论 5771063665：Android 平台自己的动画模式 —
+ * Core 已删除 `AnimationModeDto`，Android 自己决定动画策略。
  *
- * #644 评论 #684：Core 事务身份不再丢失 —
- * [coreTransactionId]、[baseRevision]、[newRevision]、[animationMode]、[durationMs]
- * 原样从 Core EditResult 传入，Android 视觉层不再自行生成伪事务 ID。
+ * - [CLUSTER_ANIMATION]：按 grapheme cluster 吐字/吞字。
+ * - [GLYPH_ANIMATION]：按 glyph 吐字/吞字。
+ * - [RUN_ANIMATION]：按 run 吐字/吞字。
+ * - [LINE_REFLOW_ANIMATION]：行回流动画。
+ * - [SNAPSHOT_ANIMATION]：快照动画。
+ * - [SYSTEM_SUPPRESSED]：系统抑制动画（reduce-motion 等）。
+ */
+enum class AnimationMode {
+    CLUSTER_ANIMATION,
+    GLYPH_ANIMATION,
+    RUN_ANIMATION,
+    LINE_REFLOW_ANIMATION,
+    SNAPSHOT_ANIMATION,
+    SYSTEM_SUPPRESSED,
+}
+
+/**
+ * Issue #735 评论 5771063665：编辑事实 —
+ * 取代已删除的 [EditorVisualIntent]（Core 已不再返回视觉意图）。
+ *
+ * 所有正文编辑都以已经接受的 `EditorEditResult` 为编辑事实。
+ * Android 从 `cause`、`operationKind`、`offsetMap` 推导动画策略，
+ * 不再拿 Core 的 Visual DTO。
  *
  * @param coreTransactionId Core 事务 ID — 来自 Rust EditResult，单调递增。
  * @param baseRevision 编辑前正文版本号。
  * @param newRevision 编辑后正文版本号。
- * @param animationMode Core 动画模式 — CLUSTER_ANIMATION / SYSTEM_SUPPRESSED 等。
- * @param durationMs Core 建议动画时长。
+ * @param cause 编辑事实：本次事务的原因。
+ * @param operationKind 编辑事实：本次操作的语义类别。
  * @param offsetMap Core UTF-8 offset map — 已由调用方转成 UTF-16 [VisualOffsetMap]。
- * @param oldRanges 旧受影响 UTF-16 ranges — 删除动画用（来自 Core oldAffectedByteRanges）。
- * @param newRanges 新受影响 UTF-16 ranges — 插入/移动动画用（来自 Core newAffectedByteRanges）。
- * @param textKind 文字动画类型。
- * @param cursor 光标视觉意图 — null 表示不画视觉光标。
+ * @param oldRanges 旧受影响 UTF-16 ranges — 从 offsetMap 补集或 replaceBounds 推导。
+ * @param newRanges 新受影响 UTF-16 ranges。
+ * @param textKind 文字动画类型 — 从 operationKind 推导。
  * @param replaceBounds 明确的 replace 边界（UTF-16）。
- * @param oldAnimationUnits #684 评论 5668108597 问题2：Core 计算好的旧动画单元 UTF-16 ranges —
- *   平台端按单元做吞字动画（Delete/Move）。每个 unit 在原位按 master progress 依次消失。
- *   空列表回退到整段 alpha 行为（向后兼容）。
- * @param newAnimationUnits #684 评论 5668108597 问题2：Core 计算好的新动画单元 UTF-16 ranges —
- *   平台端按单元做吐字动画（Insert/Move）。每个 unit 在原位按 master progress 依次显现。
- *   空列表回退到整段 alpha 行为（向后兼容）。
+ * @param expectedOldText 旧正文（UTF-16）。
+ * @param expectedNewText 新正文（UTF-16）。
+ * @param oldAnimationUnits 旧动画单元 UTF-16 ranges — Android 自己按 grapheme cluster 拆分。
+ * @param newAnimationUnits 新动画单元 UTF-16 ranges — Android 自己按 grapheme cluster 拆分。
+ * @param oldSelectionEndUtf16 旧光标位置（UTF-16 offset）。
+ * @param newSelectionEndUtf16 新光标位置（UTF-16 offset）。
+ * @param durationMs Core 建议动画时长。
+ * @param animationMode Android 自己推导的动画模式。
  */
-data class EditorVisualIntent(
+data class EditorEditFact(
     val coreTransactionId: Long,
     val baseRevision: Long,
     val newRevision: Long,
-    val animationMode: AnimationModeDto,
-    val durationMs: Long,
+    val cause: EditorTransactionCauseDto,
+    val operationKind: EditorOperationKindDto,
     val offsetMap: VisualOffsetMap?,
     val oldRanges: List<TextRange>,
     val newRanges: List<TextRange>,
     val textKind: TextVisualKind,
-    val cursor: CursorVisualIntent?,
     val replaceBounds: VisualReplaceBounds? = null,
     val expectedOldText: String = "",
     val expectedNewText: String = "",
     val oldAnimationUnits: List<TextRange> = emptyList(),
     val newAnimationUnits: List<TextRange> = emptyList(),
-)
+    val oldSelectionEndUtf16: Int = -1,
+    val newSelectionEndUtf16: Int = -1,
+    val durationMs: Long = 0L,
+    val animationMode: AnimationMode = AnimationMode.CLUSTER_ANIMATION,
+) {
+    /**
+     * #694 评论第 5 步：判断本 fact 的 cause 是否为本地输入
+     * （已由 Android InputTransformation 提供 visual edit，Core 回声只当 ACK）。
+     *
+     * TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE → true。
+     * UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT → false（仍走 Core visual path）。
+     */
+    fun isLocalInputCause(): Boolean =
+        when (cause) {
+            EditorTransactionCauseDto.TYPING,
+            EditorTransactionCauseDto.TYPING_COMMIT,
+            EditorTransactionCauseDto.IME_COMPOSITION,
+            EditorTransactionCauseDto.PASTE,
+            EditorTransactionCauseDto.DELETE,
+            -> true
+            EditorTransactionCauseDto.UNDO,
+            EditorTransactionCauseDto.REDO,
+            EditorTransactionCauseDto.PROGRAMMATIC,
+            EditorTransactionCauseDto.LOAD,
+            EditorTransactionCauseDto.FORMAT,
+            -> false
+        }
+}
 
 /**
  * #641 评论 5458880786 问题2a：明确的 replace 边界（UTF-16）—
- * 供 [ComposeEditorVisualState.computeRetainedMoves] 算共同前缀/后缀。
+ * 供 [ComposeEditorVisualState] 算共同前缀/后缀。
  *
  * 一次 replace 把 oldText[oldStart..oldEnd) 替换成 newText[newStart..newEnd)，
  * 共同前缀 0..oldStart ↔ 0..newStart，共同后缀 oldEnd..oldText.length ↔ newEnd..newText.length。
- * retained reflow 用确定边界算 suffix 起点，不再从空 oldRanges/newRanges 猜（oldRanges 为空时
- * 旧实现 oldSuffixStart=0 错把整段当前缀）。
+ * retained reflow 用确定边界算 suffix 起点，不再从空 oldRanges/newRanges 猜。
  *
  * @param oldStart 旧正文 replace 起点（UTF-16）。
  * @param oldEnd 旧正文 replace 终点（exclusive，UTF-16）。
@@ -80,22 +126,6 @@ data class VisualReplaceBounds(
  * - [None]：没有文字动画（如 CURSOR_ONLY 事务）。
  */
 enum class TextVisualKind { Insert, Delete, Move, None }
-
-/**
- * #641 评论 问题2：光标视觉意图 — 与文字动画并列。
- *
- * 只要 [animate] 为 true，不管 [TextVisualKind] 是什么，
- * 都隐藏系统光标、创建 [VisualCursorSnapshot]、overlay 插值画光标。
- *
- * @param oldEndUtf16 旧光标位置（UTF-16 offset）。
- * @param newEndUtf16 新光标位置（UTF-16 offset）。
- * @param animate 是否动画光标 — 来自 Core [com.xiwei.sujian.feature.editor.projection.CoordinatedCursor.shouldAnimate]。
- */
-data class CursorVisualIntent(
-    val oldEndUtf16: Int,
-    val newEndUtf16: Int,
-    val animate: Boolean,
-)
 
 /**
  * #641 评论1 第5节：视觉光标插值快照 — 保存 old/new cursor rect 和 selection，

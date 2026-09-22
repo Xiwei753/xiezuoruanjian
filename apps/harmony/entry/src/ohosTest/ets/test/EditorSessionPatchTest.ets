@@ -30,8 +30,8 @@ import {
   CompositionSession,
   EditorCompositionState,
   EditorContentDelta,
-  EditorVisualIntent,
-  EditorTransactionCause
+  EditorTransactionCause,
+  EditorOperationKind
 } from '../../../main/ets/corebridge/dto/EditorDtos'
 import { ResultEnvelope } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 
@@ -166,7 +166,9 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
       displayPatches: [],
       oldSelectionAnchor: 0, oldSelectionHead: 0,
       newSelectionAnchor: 0, newSelectionHead: 0,
-      visualIntent: {} as EditorVisualIntent,
+      cause: EditorTransactionCause.Programmatic,
+      operationKind: EditorOperationKind.Insert,
+      offsetMap: null,
       compositionSession: null,
       contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta,
       composition: null
@@ -183,7 +185,9 @@ export default function editorSessionPatchTest() {
         displayPatches: [],
         oldSelectionAnchor: 0, oldSelectionHead: 0,
         newSelectionAnchor: 0, newSelectionHead: 0,
-        visualIntent: {} as EditorVisualIntent,
+        cause: EditorTransactionCause.Programmatic,
+        operationKind: EditorOperationKind.Insert,
+        offsetMap: null,
         compositionSession: null,
         contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta,
         composition: null

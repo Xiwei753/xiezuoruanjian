@@ -1,5 +1,5 @@
 import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridge'
-import { EditorVisualTransaction, EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
+import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
 import { WindowCapabilities, LayoutContract, ScreenPolicy, ActionSlot, ScreenRole, ActionRole, ActionRegion, ActionTarget, PointerClass, ShellMode, WorkspacePaneMode } from '../../../main/ets/corebridge/dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
@@ -906,19 +906,5 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {
     return this.success(false)
-  }
-
-  // Editor Animation — mock 返回 null（不需要动画）
-  async editorVisualTransaction(
-    oldText: string,
-    newText: string,
-    oldCursorIndex: number,
-    newCursorIndex: number,
-    cause: EditorTransactionCause,
-    maxAnimatedChars: number,
-    animationDurationMs: number
-  ): Promise<ResultEnvelope<EditorVisualTransaction | null>> {
-    await this.delay(10)
-    return this.success(null)
   }
 }

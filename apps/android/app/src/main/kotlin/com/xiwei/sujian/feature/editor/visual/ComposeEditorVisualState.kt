@@ -43,12 +43,9 @@ import kotlin.collections.ArrayDeque
  * [sampleVisualScene] 时传入），不在这里用 `System.nanoTime()` 猜当前帧。
  *
  * @param targetId 当前编辑目标 ID — 用于结构化诊断事件。
- * @param classifier 本地视觉 plan 分类器 — 生产环境默认 [CoreLocalVisualPlanClassifier] 直接调 Core，
- *   测试环境（Robolectric）注入 fake 绕过原生库加载。
  */
 class ComposeEditorVisualState(
     private val targetId: String,
-    private val classifier: LocalVisualPlanClassifier = CoreLocalVisualPlanClassifier,
 ) {
     companion object {
         private const val TAG = "EditorVisualState"
@@ -151,18 +148,17 @@ class ComposeEditorVisualState(
     private var pendingMotionPolicy: EditorMotionPolicy? = null
 
     /**
-     * Issue #720 评论 5747339452：测试用 override — 非 null 时 [buildLocalInputPatch] 生成的
-     * patch 使用此 intent 而非 null，绕过本地 reflow 释放门控
-     * （[ComposeLocalHandoffRebase.rebase] / [ComposeVisualTimeline.mapSurvivingUnits]
-     * 中 `patch.intent == null && naturalGeometryChanged` 判定）。
+     * Issue #735 评论 5771063665：编辑事实到达 — 只把 fact 交给 frameCoordinator，不启动动画、不改 layout。
      *
-     * Robolectric 下 [TextLayoutResult.getPathForRange] 跨文本 bounds 不稳定
-     * （同 range 在不同文本中 left/right 不同），导致 [ComposeVisualRebase.naturalGeometryChanged]
-     * 误判为几何变化、survivor 被误释放。#708 系列测试验证的是 rebase/split 机制
-     * （非 #720 释放），用非 null intent 绕过释放门控。生产环境保持 null。
+     * 取代已删除的 onVisualIntent — Core 已不再返回视觉意图，
+     * Android 从 [EditorEditFact] 的 cause/operationKind/offsetMap 推导动画策略。
+     *
+     * @param fact 编辑事实（从 Core EditorEditResult 映射）。
      */
-    @androidx.annotation.VisibleForTesting
-    internal var localInputIntentOverride: EditorVisualIntent? = null
+    fun onEditFact(fact: EditorEditFact) {
+        val update = frameCoordinator.onEditFact(fact)
+        applyFrameUpdate(update)
+    }
 
     /**
      * #713 评论 5739986801：上一次 resolved 的 selection —
@@ -298,20 +294,6 @@ class ComposeEditorVisualState(
      * 不更新 layout epoch、不调用 frameCoordinator.onLayout/observePresentedLayout、不重新发布相同 TextLayoutResult。
      */
     private var lastObservedLayoutFingerprint: LayoutFingerprint? = null
-
-    /**
-     * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
-     *
-     * Issue #732 评论 5763493968 第2节：删除 motionPolicy 参数 —
-     * policy 由 [BindMotionPolicyToVisualState] 统一绑定到 [updateMotionPolicy]，
-     * [drainPendingPatchesAtFrame] 在帧开头应用 pending policy 后才消费 patch。
-     *
-     * @param intent Core 视觉意图。
-     */
-    fun onVisualIntent(intent: EditorVisualIntent) {
-        val update = frameCoordinator.onVisualIntent(intent)
-        applyFrameUpdate(update)
-    }
 
     /**
      * #694 评论第 1/3 步：本地输入入口 — 只写普通 pending queue（[LocalInputVisualEditTracker]）。
@@ -785,15 +767,10 @@ class ComposeEditorVisualState(
         val composedInserted = ComposeLocalVisualRebase.composeLocalChainInsertedUnits(chain)
         val composedDeleted = ComposeLocalVisualRebase.composeLocalChainDeletedUnits(chain)
 
-        // #694 评论 5692161955 问题1/2：调用注入的 classifier 做视觉分类，
-        // 得到 animationMode 和按 grapheme cluster 拆分的 animation units。
-        // 不再硬编码 CLUSTER_ANIMATION，不再按 UTF-16 +1 硬切。
-        // #694 评论 5693864609 问题3：通过注入的 [LocalVisualPlanClassifier] 调用，
-        // 生产用 Core，测试用 fake（绕过 Robolectric 原生库加载）。
-        // Issue #732 评论 5763493968 第2节：animationEnabled 传 true —
-        // classifier 总是切分 units，是否播放由消费帧决定。
+        // Issue #735 评论 5771063665：调用 Android 自己的纯计算分类器 —
+        // 不再通过 FFI 问 Core，用 BreakIterator 做 grapheme cluster 拆分。
         val corePlan =
-            classifier.classify(
+            ComposeLocalVisualRebase.classifyLocalVisualPlan(
                 oldText = oldText,
                 newText = newText,
                 oldAffectedRanges = changedRanges.oldRanges,
@@ -801,10 +778,8 @@ class ComposeEditorVisualState(
                 animationEnabled = true,
             )
         val planAnimationMode = corePlan.animationMode
-        val planInsertedUnits =
-            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(newText, corePlan.newAnimationUnits)
-        val planDeletedUnits =
-            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(oldText, corePlan.oldAnimationUnits)
+        val planInsertedUnits = corePlan.newAnimationUnits
+        val planDeletedUnits = corePlan.oldAnimationUnits
 
         val insertedUnits =
             when (transactionTextKind) {
@@ -882,13 +857,8 @@ class ComposeEditorVisualState(
             targetCaretRect = targetCaretRect,
             // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
             durationMs = 0L,
-            // #694 评论 5692161955 问题2：使用 Core plan 返回的 animationMode，
-            // 不再硬编码 CLUSTER_ANIMATION。
+            // Issue #735 评论 5771063665：使用 Android 自己推导的 animationMode。
             animationMode = planAnimationMode,
-            // Issue #720 评论 5747339452：默认 null（本地输入 → reflow 释放门控生效）；
-            // 测试可通过 [localInputIntentOverride] 注入非 null intent 绕过门控，
-            // 以验证 rebase/split 机制（#708 系列）。
-            intent = localInputIntentOverride,
         )
     }
 

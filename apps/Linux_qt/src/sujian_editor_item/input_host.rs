@@ -110,8 +110,8 @@ impl SujianEditorItem {
         // 在 update_preedit 之前取 old virtualText 坐标系的 preedit range。
         let (old_preedit_byte_start, old_preedit_byte_end) =
             session.preedit_byte_range_in_virtual_text();
-        session.update_preedit(text, cursor);
-        let generation = session.last_submitted_generation.value();
+        session.update_preedit(&text, cursor);
+        let generation = session.last_submitted_generation_value();
         // 更新之后取 new virtualText 坐标系的 preedit range。
         let (new_preedit_byte_start, new_preedit_byte_end) =
             session.preedit_byte_range_in_virtual_text();

@@ -91,9 +91,9 @@ internal object ComposeLocalHandoffRebase {
                 // Issue #720 评论 5747339452：本地 patch + surviving slice 自然几何变化 →
                 // handoff 首帧就释放给 BasicTextField，不加入 rebasedUnits、不写 fraction/cursor map、不进入 mergedHidden。
                 // 这样 BasicTextField 从 handoff 首帧直接画最终位置，不是等 timeline 下一帧才释放。
-                // 真正需要 retained/reflow ownership 的非本地/Core 路径不受 patch.intent == null 这层门控影响。
+                // 真正需要 retained/reflow ownership 的非本地/Core 路径不受 coreTransactionIds.isEmpty() 这层门控影响。
                 val isLocalSurvivorWithGeometryChange =
-                    patch.intent == null &&
+                    patch.coreTransactionIds.isEmpty() &&
                         slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING &&
                         slice.newSubRange != null &&
                         ComposeVisualRebase.naturalGeometryChanged(
@@ -212,7 +212,7 @@ internal object ComposeLocalHandoffRebase {
         patch: ComposeVisualPatch,
         newTextLength: Int,
     ): List<ComposeVisualRebase.MappedRangeSlice> =
-        ComposeVisualRebase.computeSlices(target, patch.offsetMap, newTextLength, patch.intent)
+        ComposeVisualRebase.computeSlices(target, patch.offsetMap, newTextLength, null)
 
     /**
      * 存活 slice → handoff unit —

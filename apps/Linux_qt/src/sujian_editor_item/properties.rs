@@ -30,7 +30,15 @@ impl SujianEditorItem {
         self.buffer.redo_stack.clear();
         // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
-        self.record_transaction(old, new, EditorTransactionCause::Load, false);
+        let result = super::edit_motion::synthetic_edit_result(
+            &old.text,
+            &new.text,
+            old.cursor,
+            new.cursor,
+            EditorTransactionCause::Load,
+            writer_core::editor::EditorOperationKind::Load,
+        );
+        self.record_transaction(old, new, &result, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
         // Issue #715: 章节 Load 的完整视觉状态边界。
@@ -63,7 +71,15 @@ impl SujianEditorItem {
         self.sync_buffer_from_pipeline();
         // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
-        self.record_transaction(old, new, EditorTransactionCause::Load, false);
+        let result = super::edit_motion::synthetic_edit_result(
+            &old.text,
+            &new.text,
+            old_cursor,
+            new.cursor,
+            EditorTransactionCause::Load,
+            writer_core::editor::EditorOperationKind::Load,
+        );
+        self.record_transaction(old, new, &result, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
         // Issue #715: 章节 Load 的完整视觉状态边界。

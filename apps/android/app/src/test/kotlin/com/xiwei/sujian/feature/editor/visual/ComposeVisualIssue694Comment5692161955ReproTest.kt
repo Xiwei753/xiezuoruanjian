@@ -18,7 +18,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #694 评论 5692161955 复现测试 — 上一轮提交 ab91aaffb 修了 3 个问题后还剩的 3 个
@@ -30,7 +29,7 @@ import uniffi.writer_core.AnimationModeDto
  *   不能处理"一笔里多个 grapheme"。例如 "" -> "我们" 得到 1 个 [0,2) unit，timeline 整体吐出。
  *
  * 问题2：buildLocalInputPatch() 把所有本地输入硬编码成 CLUSTER_ANIMATION。
- *   ComposeEditorVisualState.kt 中 animationMode = AnimationModeDto.CLUSTER_ANIMATION，
+ *   ComposeEditorVisualState.kt 中 animationMode = AnimationMode.CLUSTER_ANIMATION，
  *   丢弃 Core 已做好的视觉分类。Core 规则：0 cluster -> SYSTEM_SUPPRESSED；
  *   含换行 -> LINE_REFLOW_ANIMATION；复杂 grapheme -> CLUSTER_ANIMATION；
  *   <= 8 cluster -> GLYPH_ANIMATION；> 8 cluster -> RUN_ANIMATION。
@@ -68,7 +67,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5692161955-p1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = ""
@@ -116,7 +114,7 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
      * 问题2 核心复现 a：单笔 "" -> "abc" 应使用 GLYPH_ANIMATION（3 cluster <= 8），
      * 不是硬编码 CLUSTER_ANIMATION。
      *
-     * 当前实现：buildLocalInputPatch 中 animationMode = AnimationModeDto.CLUSTER_ANIMATION 硬编码，
+     * 当前实现：buildLocalInputPatch 中 animationMode = AnimationMode.CLUSTER_ANIMATION 硬编码，
      * 丢弃 Core 视觉分类。FAIL。
      */
     @Test
@@ -125,7 +123,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5692161955-p2a",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -146,7 +143,7 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
                 "当前实现：buildLocalInputPatch 硬编码 animationMode = CLUSTER_ANIMATION，" +
                 "丢弃 Core 已做好的视觉分类。\n" +
                 "Issue #694 评论 5692161955 问题2：应使用 Core plan 返回的 animationMode",
-            AnimationModeDto.GLYPH_ANIMATION,
+            AnimationMode.GLYPH_ANIMATION,
             patch.animationMode,
         )
     }
@@ -162,7 +159,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5692161955-p2b",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -197,7 +193,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5692161955-p2c",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -251,7 +246,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5692161955-p2d-emoji",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -297,7 +291,7 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         // 含复杂 grapheme（ZWJ + emoji）-> CLUSTER_ANIMATION
         assertEquals(
             "问题2 回归：emoji family 含复杂 grapheme（ZWJ）应使用 CLUSTER_ANIMATION",
-            AnimationModeDto.CLUSTER_ANIMATION,
+            AnimationMode.CLUSTER_ANIMATION,
             patch.animationMode,
         )
     }
@@ -324,7 +318,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5692161955-p3a",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. 基线 ""
@@ -346,18 +339,20 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0, compositionActive = true)
 
         // 4. Undo: "a" -> ""（Core 驱动，Core 已提交正文 = "a"）
-        state.onVisualIntent(
-            EditorVisualIntent(
+        state.onEditFact(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 200L,
                 baseRevision = 1L,
                 newRevision = 0L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap = null,
                 oldRanges = listOf(TextRange(0, 1)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = null,
                 replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 1, newStart = 0, newEnd = 0),
                 expectedOldText = "a",
                 expectedNewText = "",
@@ -400,7 +395,7 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
      *
      * 场景（直接测 ComposeVisualFrameCoordinator）：
      * 1. onLayout("A") — lastConsumed = "A"
-     * 2. onVisualIntent(baseText="AB", targetText="ABC") — pending != null
+     * 2. onEditFact(baseText="AB", targetText="ABC") — pending != null
      * 3. observePresentedLayout("AB") — pending.baseText="AB" == presented.text="AB"
      *    当前实现：pending != null 时不推进，lastConsumed 保持 "A"
      * 4. onLayout("ABC") — tryBuildPatch
@@ -419,18 +414,20 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         coordinator.onLayout(ComposeLayoutSnapshot(layouts[0], TextRange(1, 1), 0))
 
         // 2. external intent 先到: "AB" -> "ABC"（pending != null）
-        coordinator.onVisualIntent(
-            EditorVisualIntent(
+        coordinator.onEditFact(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 300L,
                 baseRevision = 1L,
                 newRevision = 2L,
-                animationMode = AnimationModeDto.GLYPH_ANIMATION,
+                animationMode = AnimationMode.GLYPH_ANIMATION,
                 durationMs = 100L,
                 offsetMap = null,
                 oldRanges = listOf(TextRange(1, 2)),
                 newRanges = listOf(TextRange(1, 3)),
                 textKind = TextVisualKind.Insert,
-                cursor = null,
                 replaceBounds = VisualReplaceBounds(oldStart = 1, oldEnd = 2, newStart = 1, newEnd = 3),
                 expectedOldText = "AB",
                 expectedNewText = "ABC",

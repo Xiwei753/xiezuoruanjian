@@ -19,7 +19,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #725 评论 5752459178 — `reconcileDeletedGhosts()` 删除 reveal schedule 修复的验证测试。
@@ -282,8 +281,7 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
-            animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            intent = null,
+            animationMode = AnimationMode.GLYPH_ANIMATION,
         )
     }
 
@@ -308,8 +306,7 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
-            animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            intent = null,
+            animationMode = AnimationMode.GLYPH_ANIMATION,
         )
     }
 }

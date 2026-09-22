@@ -16,7 +16,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #689 回归测试 — "连续输入和删除换行仍会抽搐，把视觉动画从'事务重启'改成持续时间线"。
@@ -111,7 +110,7 @@ class ComposeVisualTransactionRestartReproTest {
 
         // === 生成 patch A（Insert "" → "ab\nc"）===
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 1L,
                 baseRev = 0L,
@@ -127,12 +126,15 @@ class ComposeVisualTransactionRestartReproTest {
         assertNotNull("patch A 应生成", patchA)
 
         // === 生成 patch B（Delete "ab\nc" → "abc"）===
-        state.onVisualIntent(
-            EditorVisualIntent(
+        state.onEditFact(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 2L,
                 baseRevision = 1L,
                 newRevision = 2L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -148,7 +150,6 @@ class ComposeVisualTransactionRestartReproTest {
                 oldRanges = listOf(TextRange(2, 3)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = null,
                 replaceBounds = VisualReplaceBounds(2, 3, 2, 2),
                 expectedOldText = "ab\nc",
                 expectedNewText = "abc",
@@ -187,7 +188,7 @@ class ComposeVisualTransactionRestartReproTest {
         val state = ComposeEditorVisualState(targetId = "test-target-issue689-patch-fields")
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 1L,
                 baseRev = 0L,
@@ -258,18 +259,20 @@ class ComposeVisualTransactionRestartReproTest {
         newRange: TextRange,
         replaceBounds: VisualReplaceBounds,
         offsetMap: VisualOffsetMap? = null,
-    ): EditorVisualIntent =
-        EditorVisualIntent(
+    ): EditorEditFact =
+        EditorEditFact(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
             coreTransactionId = coreTxnId,
             baseRevision = baseRev,
             newRevision = newRev,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
             durationMs = 100L,
             offsetMap = offsetMap,
             oldRanges = emptyList(),
             newRanges = listOf(newRange),
             textKind = TextVisualKind.Insert,
-            cursor = null,
             replaceBounds = replaceBounds,
             expectedOldText = oldText,
             expectedNewText = newText,

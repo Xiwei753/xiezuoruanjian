@@ -1,5 +1,6 @@
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
 use super::buffer::{clamp_to_char_boundary, normalize_plain_text, EditorSnapshot};
+use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
 use super::line_snapshot_builder::LineSnapshotBuilder;
@@ -8,11 +9,9 @@ use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
-use writer_core::editor::CompositionSession;
 use writer_core::editor::{
-    CursorRect, DisplayPatch, EditorAnimationKind, EditorCommand, EditorCursor, EditorEditOutcome,
-    EditorEditResult, EditorKernel, EditorRevision, EditorSelection, EditorTransactionCause,
-    EditorVisualTransaction, PreeditVisualTransaction, Utf8ByteOffset, Utf8ByteRange,
+    DisplayPatch, EditorChange, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
+    EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
 };
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
@@ -176,7 +175,6 @@ pub(crate) struct CompositionState {
     pub preedit_attributes: Vec<PreeditAttribute>,
     pub preedit_old_text: String,
     pub composition_session: Option<CompositionSession>,
-    pub preedit_visual_transaction: Option<PreeditVisualTransaction>,
     pub preedit_cursor_rect: Option<CursorRect>,
     pub pending_preedit_cursor_rect: Option<CursorRect>,
     /// Issue #704: "刚刚取消过一个真实 composition，允许忽略它可能迟到的一次
@@ -217,7 +215,6 @@ impl CompositionState {
             preedit_attributes: Vec::new(),
             preedit_old_text: String::new(),
             composition_session: None,
-            preedit_visual_transaction: None,
             preedit_cursor_rect: None,
             pending_preedit_cursor_rect: None,
             suppress_next_ime_commit: false,
@@ -234,7 +231,6 @@ impl CompositionState {
         self.preedit_attributes.clear();
         self.preedit_old_text.clear();
         self.composition_session = None;
-        self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
         self.suppress_next_ime_commit = false;
@@ -255,14 +251,13 @@ impl CompositionState {
         self.preedit_cursor = 0;
         self.preedit_attributes.clear();
         self.preedit_old_text.clear();
-        self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
     }
 
     pub fn session_replace_range(&self, fallback_cursor: usize) -> (usize, usize) {
         self.composition_session
             .as_ref()
-            .map(|s| (s.replace_start.value(), s.replace_end_exclusive.value()))
+            .map(|s| (s.replace_start, s.replace_end_exclusive))
             .unwrap_or((fallback_cursor, fallback_cursor))
     }
 
@@ -336,8 +331,6 @@ pub(crate) struct LinuxEditorPipeline {
     mirror: CommittedTextMirror,
     /// IME 组合输入状态——跟踪 preedit 到 commit/cancel 的完整生命周期
     composition: CompositionState,
-    /// 编辑引擎工厂——创建 EditorTransaction 和 EditorVisualTransaction
-    engine: writer_core::editor::EditorEngine,
     /// 动画协调器——管理视觉事务队列和 Timeline
     animation_coordinator: LinuxEditorAnimationCoordinator,
     /// 纹理缓存——行快照到 QSGTexture 的映射
@@ -370,7 +363,6 @@ impl LinuxEditorPipeline {
             kernel: EditorKernel::new(),
             mirror: CommittedTextMirror::new(),
             composition: CompositionState::new(),
-            engine: writer_core::editor::EditorEngine::new(),
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
             texture_cache: TextureCache::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
@@ -411,14 +403,6 @@ impl LinuxEditorPipeline {
         &mut self.composition
     }
 
-    pub fn engine(&self) -> &writer_core::editor::EditorEngine {
-        &self.engine
-    }
-
-    pub fn engine_mut(&mut self) -> &mut writer_core::editor::EditorEngine {
-        &mut self.engine
-    }
-
     pub fn animation_coordinator(&self) -> &LinuxEditorAnimationCoordinator {
         &self.animation_coordinator
     }
@@ -457,8 +441,6 @@ impl LinuxEditorPipeline {
 
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
         self.typing_animation_duration_ms = ms;
-        self.engine.set_animation_duration_ms(u64::from(ms));
-        self.kernel.set_animation_duration_ms(u64::from(ms));
         self.animation_coordinator
             .set_typing_animation_duration_ms(ms);
     }
@@ -847,151 +829,305 @@ impl LinuxEditorPipeline {
         }
     }
 
-    pub fn record_visual_transaction(
+    pub fn prepare_edit_motion(
         &mut self,
         ctx: &VisualTransactionContext,
+        result: &EditorEditResult,
         old: &EditorSnapshot,
         new: &EditorSnapshot,
-        cause: EditorTransactionCause,
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
-    ) -> Option<EditorVisualTransaction> {
-        let transaction = self.engine.create_transaction(
+    ) -> Option<PreparedEditMotion> {
+        let mut motion = PreparedEditMotion::from_edit_result(
+            result,
             &old.text,
             &new.text,
-            EditorSelection {
-                anchor: EditorCursor::new(&old.text, old.selection_anchor),
-                head: EditorCursor::new(&old.text, old.cursor),
-            },
-            EditorSelection {
-                anchor: EditorCursor::new(&new.text, new.selection_anchor),
-                head: EditorCursor::new(&new.text, new.cursor),
-            },
-            cause,
+            u64::from(self.typing_animation_duration_ms),
         );
-        let mut vt = self.engine.visual_transaction(&transaction);
 
         // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
-        if ctx.typing_animation_enabled
-            && ctx.smooth_cursor_enabled
-            && vt.is_some()
-            && !ctx.is_scrolling
+        if !ctx.typing_animation_enabled || !ctx.smooth_cursor_enabled || ctx.is_scrolling {
+            return None;
+        }
         {
-            if let Some(ref mut vt) = vt {
-                let (raw_byte_start, raw_byte_end) = vt
-                    .inserted_range
-                    .or(vt.deleted_range)
-                    .map(|r| (r.start().value(), r.end().value()))
-                    .unwrap_or_else(|| {
-                        let changes =
-                            writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
-                        let mut min_b = usize::MAX;
-                        let mut max_b = 0usize;
-                        for change in &changes {
-                            match change {
-                                writer_core::editor::EditorChange::Insert { index, text } => {
-                                    min_b = min_b.min(index.value());
-                                    max_b = (index.value() + text.len()).max(max_b);
-                                }
-                                writer_core::editor::EditorChange::Delete { index, text } => {
-                                    min_b = min_b.min(index.value());
-                                    max_b = (index.value() + text.len()).max(max_b);
-                                }
-                                _ => {}
+            let (raw_byte_start, raw_byte_end) = motion
+                .inserted_range
+                .or(motion.deleted_range)
+                .map(|r| (r.start().value(), r.end().value()))
+                .unwrap_or_else(|| {
+                    let changes =
+                        super::edit_motion::diff_plain_text(&motion.old_text, &motion.new_text);
+                    let mut min_b = usize::MAX;
+                    let mut max_b = 0usize;
+                    for change in &changes {
+                        match change {
+                            EditorChange::Insert { index, text } => {
+                                min_b = min_b.min(index.value());
+                                max_b = (index.value() + text.len()).max(max_b);
                             }
+                            EditorChange::Delete { index, text } => {
+                                min_b = min_b.min(index.value());
+                                max_b = (index.value() + text.len()).max(max_b);
+                            }
+                            _ => {}
                         }
-                        (min_b.min(max_b), max_b)
-                    });
+                    }
+                    (min_b.min(max_b), max_b)
+                });
 
-                // Issue #710 评论 5731145076 症状四/五: 当事务包含 newline（插入 "\n"
-                // 或删除 "\n"）时，affected_byte range 不能只覆盖 "\n" 的 1 byte，
-                // 必须扩展到换行后所有受重排影响的段落边界。
-                // 之前只取 "\n" 的 1 byte range，导致 prepare_affected_paragraphs_visual_snapshot
-                // 只排版 "\n" 所在段落，换行后的行重排依赖 reflow 但 reflow 只处理
-                // unchanged material，文字闪烁/光标乱闪。
-                // 现在用 compute_affected_paragraph_ranges 按 old/new text 段落边界扩展，
-                // 确保拆开/合并段落的两边 visual lines 都进入 diff。
-                //
-                // Issue #710 评论 5732160521 问题 1: 不能把同一组 byte 坐标同时套给
-                // old/new text。inserted_range 是新文本坐标、deleted_range 是旧文本坐标，
-                // 不能互换。这里按事务类型分别传 old/new 坐标系：
-                // - Insert: old 侧是插入点 (raw_byte_start, raw_byte_start)，
-                //   new 侧是 inserted_range (raw_byte_start, raw_byte_end)。
-                // - Delete: old 侧是 deleted_range (raw_byte_start, raw_byte_end)，
-                //   new 侧是删除后落点 (raw_byte_start, raw_byte_start)。
-                // - Replace/Cursor: 保守地两侧都用 (raw_byte_start, raw_byte_end)，
-                //   expand_to_paragraph_boundaries 内部会做 char boundary 调整。
-                let (old_edit_range, new_edit_range) = match vt.kind {
-                    writer_core::editor::EditorAnimationKind::Insert => (
-                        (raw_byte_start, raw_byte_start),
-                        (raw_byte_start, raw_byte_end),
-                    ),
-                    writer_core::editor::EditorAnimationKind::Delete => (
-                        (raw_byte_start, raw_byte_end),
-                        (raw_byte_start, raw_byte_start),
-                    ),
-                    writer_core::editor::EditorAnimationKind::Cursor => (
-                        (raw_byte_start, raw_byte_end),
-                        (raw_byte_start, raw_byte_end),
-                    ),
+            // Issue #710 评论 5731145076 症状四/五: 当事务包含 newline（插入 "\n"
+            // 或删除 "\n"）时，affected_byte range 不能只覆盖 "\n" 的 1 byte，
+            // 必须扩展到换行后所有受重排影响的段落边界。
+            // 之前只取 "\n" 的 1 byte range，导致 prepare_affected_paragraphs_visual_snapshot
+            // 只排版 "\n" 所在段落，换行后的行重排依赖 reflow 但 reflow 只处理
+            // unchanged material，文字闪烁/光标乱闪。
+            // 现在用 compute_affected_paragraph_ranges 按 old/new text 段落边界扩展，
+            // 确保拆开/合并段落的两边 visual lines 都进入 diff。
+            //
+            // Issue #710 评论 5732160521 问题 1: 不能把同一组 byte 坐标同时套给
+            // old/new text。inserted_range 是新文本坐标、deleted_range 是旧文本坐标，
+            // 不能互换。这里按事务类型分别传 old/new 坐标系：
+            // - Insert: old 侧是插入点 (raw_byte_start, raw_byte_start)，
+            //   new 侧是 inserted_range (raw_byte_start, raw_byte_end)。
+            // - Delete: old 侧是 deleted_range (raw_byte_start, raw_byte_end)，
+            //   new 侧是删除后落点 (raw_byte_start, raw_byte_start)。
+            // - Replace/Cursor: 保守地两侧都用 (raw_byte_start, raw_byte_end)，
+            //   expand_to_paragraph_boundaries 内部会做 char boundary 调整。
+            let (old_edit_range, new_edit_range) = match motion.kind {
+                EditorAnimationKind::Insert => (
+                    (raw_byte_start, raw_byte_start),
+                    (raw_byte_start, raw_byte_end),
+                ),
+                EditorAnimationKind::Delete => (
+                    (raw_byte_start, raw_byte_end),
+                    (raw_byte_start, raw_byte_start),
+                ),
+                EditorAnimationKind::Cursor => (
+                    (raw_byte_start, raw_byte_end),
+                    (raw_byte_start, raw_byte_end),
+                ),
+            };
+            let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
+                layout::compute_affected_paragraph_ranges(
+                    &motion.old_text,
+                    &motion.new_text,
+                    old_edit_range,
+                    new_edit_range,
+                );
+            // affected_byte_start/end 用于 prepare_document_visual_snapshot_scoped
+            // 和 prepare_affected_paragraphs_visual_snapshot，它们排版 new text，
+            // 所以用 new 侧的段落边界。old 侧的段落边界由 compare_old_new_visual_lines
+            // 和 fallback 路径自行处理（compare_old_new_visual_lines 用 inserted_range/
+            // deleted_range 分别在 old/new 坐标系找受影响行）。
+            // 但为了确保 old snapshot 也覆盖完整段落，fallback 路径用 old 侧边界。
+            // 这里取 new 侧边界作为 affected_byte_start/end（用于 new_doc_snapshot 排版），
+            // old 侧边界单独传给 fallback 路径。
+            let affected_byte_start = new_affected_start;
+            let affected_byte_end = new_affected_end;
+            let old_affected_byte_start = old_affected_start;
+            let old_affected_byte_end = old_affected_end;
+
+            // Issue #658 评论 5624570557 问题 1: 从 pipeline 获取 old current prepared layout 句柄，
+            // 不再重新排版 old text。
+            let old_prepared_handle = editor_layout.current_prepared_layout();
+            let old_generation = old_prepared_handle
+                .as_ref()
+                .map(|h| h.generation)
+                .unwrap_or(0);
+
+            // Issue #658 评论 5626002895 问题 1: old caret 从当前 cache 的真实 QTextLine 取 x，
+            // 不用 assemble_document_visual_snapshot_from_lines 产生的空 cursor_x_map
+            // （cursor_x_from_canonical 在 cursor_x_map 为空时退化为 line.x 行首，
+            // 导致正文光标在行中间时打一字后协同光标动画起点从行首开始）。
+            // 只有有 old_prepared_handle 的路径才从 cache 算；fallback 路径仍用
+            // old_doc_snapshot.cursor_rect_doc()（fallback 的 prepare_affected_paragraphs_visual_snapshot
+            // 会真正排版并生成 cursor_x_map）。
+            let old_cursor_byte = motion.old_selection.head.index.value();
+            let old_caret_from_cache: Option<layout::CaretRect> = if old_prepared_handle.is_some() {
+                editor_layout.cache().map(|snap| {
+                    editor_layout.caret_rect_doc(
+                        snap,
+                        old_cursor_byte,
+                        layout::CaretAffinity::Downstream,
+                    )
+                })
+            } else {
+                None
+            };
+
+            // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
+            // 而是分配独立 generation，与静态正文路径互不干扰。
+            let new_generation = layout::begin_layout_generation();
+
+            // Issue #658 评论 5624570557 问题 2: 先做 new 基础排版，得到 new_lines 用于比较
+            // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
+            let mut new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
+                &new.text,
+                0,
+                ctx.font_pixel_size,
+                &ctx.font_family,
+                ctx.line_spacing,
+                ctx.padding,
+                ctx.text_indent,
+                ctx.bounding_width,
+                ctx.dpr,
+                Some(&ctx.text_color),
+                new_generation,
+                affected_byte_start,
+                affected_byte_end,
+            );
+
+            // Issue #658 评论 5624570557 问题 1+2: 比较 old/new VisualLine，计算受影响 line_ids
+            // Issue #658 评论 5626002895 问题 3: fallback 路径分配真实 generation 构造 old snapshot，
+            // 用完 clear_layout_generation 释放。generation 0 只作为"无 generation"哨兵值，
+            // 不能拿去实际存 QTextLayout（promote_prepared_layout 跳过 old_generation==0 不释放）。
+            let mut fallback_old_generation_opt: Option<u64> = None;
+            let old_doc_snapshot = if let Some(ref handle) = old_prepared_handle {
+                // 比较 old/new lines 获取受影响的 line_ids（old 侧和 new 侧）
+                // Issue #658 评论 5626628570: compare_old_new_visual_lines 返回 VisualLineDiff，
+                // 把行分成需要重新栅格化的 raster 行和可复用纹理的 reusable_move_pairs。
+                // Issue #710 评论 5731145076 症状四/五: 传扩展后的段落边界，
+                // 确保换行前后的行都被标记为 raster。之前只传原始 byte range，
+                // 对于 "\n" 插入/删除，只覆盖 1 byte，换行前后的行可能被漏掉。
+                let diff = layout::compare_old_new_visual_lines(
+                    handle.lines,
+                    &new_doc_snapshot.visual_lines,
+                    motion
+                        .inserted_range
+                        .map(|_| (new_affected_start, new_affected_end)),
+                    motion
+                        .deleted_range
+                        .map(|_| (old_affected_start, old_affected_end)),
+                );
+
+                // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）
+                // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
+                // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
+                let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
+                    handle,
+                    &diff.old_raster_line_ids,
+                    ctx.dpr,
+                    &ctx.text_color,
+                );
+
+                // 构建最小化的 old_doc_snapshot，仅用于 cursor_rect 计算
+                // Issue #658 评论 5625515748 问题 2: 不再调 prepare_document_visual_snapshot
+                // 重新排版整篇 old text（false 只跳过 QImage/glyph 生成，不跳过
+                // QTextLayout beginLayout/createLine）。改为从已有 VisualLine 组装
+                // CanonicalDocumentVisualSnapshot（只填 Rust 几何数据，不调 QTextLayout），
+                // 再由 inject_animation_visuals_into_snapshot 注入动画视觉。
+                let mut doc_snap = layout::assemble_document_visual_snapshot_from_lines(
+                    handle.lines,
+                    0,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.text_indent,
+                    ctx.padding,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                );
+
+                // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
+                // （QImage/clusters）注入到 old_doc_snapshot，使动画纹理可用。
+                layout::inject_animation_visuals_into_snapshot(&mut doc_snap, old_line_snapshots);
+
+                // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
+                // new_doc_snapshot 已完成基础排版（QTextLayout 存入 new_generation），
+                // 从已有 QTextLine 只提取受影响行的 QImage/glyph/cluster。
+                let new_handle = layout::PreparedLayoutHandle {
+                    generation: new_generation,
+                    lines: &new_doc_snapshot.visual_lines,
                 };
-                let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
-                    layout::compute_affected_paragraph_ranges(
-                        &vt.old_text,
-                        &vt.new_text,
-                        old_edit_range,
-                        new_edit_range,
-                    );
-                // affected_byte_start/end 用于 prepare_document_visual_snapshot_scoped
-                // 和 prepare_affected_paragraphs_visual_snapshot，它们排版 new text，
-                // 所以用 new 侧的段落边界。old 侧的段落边界由 compare_old_new_visual_lines
-                // 和 fallback 路径自行处理（compare_old_new_visual_lines 用 inserted_range/
-                // deleted_range 分别在 old/new 坐标系找受影响行）。
-                // 但为了确保 old snapshot 也覆盖完整段落，fallback 路径用 old 侧边界。
-                // 这里取 new 侧边界作为 affected_byte_start/end（用于 new_doc_snapshot 排版），
-                // old 侧边界单独传给 fallback 路径。
-                let affected_byte_start = new_affected_start;
-                let affected_byte_end = new_affected_end;
-                let old_affected_byte_start = old_affected_start;
-                let old_affected_byte_end = old_affected_end;
+                let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
+                    &new_handle,
+                    &diff.new_raster_line_ids,
+                    ctx.dpr,
+                    &ctx.text_color,
+                );
+                layout::inject_animation_visuals_into_snapshot(
+                    &mut new_doc_snapshot,
+                    new_line_snapshots,
+                );
 
-                // Issue #658 评论 5624570557 问题 1: 从 pipeline 获取 old current prepared layout 句柄，
-                // 不再重新排版 old text。
-                let old_prepared_handle = editor_layout.current_prepared_layout();
-                let old_generation = old_prepared_handle
-                    .as_ref()
-                    .map(|h| h.generation)
-                    .unwrap_or(0);
+                // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
+                // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
+                // 用 new VisualLine 的 x/y 生成 reflow_move 终点。
+                //
+                // 修复点 1 (Issue #658 评论 5627327573): 之前只把旧纹理改 byte range 后
+                // 注入 new_doc_snapshot，old snapshot 这一侧没有 image/clusters，导致
+                // animation_coordinator 生成 reflow_move 时 old 侧
+                // source_rect_for_byte_range 返回 None，reflow_move 建不出来。
+                //
+                // 改法：对每个 reusable_move_pair(old_idx, new_idx) 只从 old prepared layout
+                // 提取一次视觉资源（prepare_animation_visuals_from_layout），然后分成两份：
+                // - 第一份：保持原始 byte range / old VisualLine 几何（不改 document_byte_start/end、
+                //   不改 cluster byte range），注入 doc_snap（old snapshot）。
+                // - 第二份：复用同一张 QImage 和同一套 cluster source rect，只把 document byte range
+                //   映射到 new（document_byte_start=new_line.byte_start, document_byte_end=new_line.byte_end，
+                //   cluster 按 byte_delta 偏移），注入 new_doc_snapshot。
+                // QImage clone 是浅拷贝（引用计数），不会重画。完成后 old/new 两边都有 source rect。
+                if !diff.reusable_move_pairs.is_empty() {
+                    let mut old_move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
+                    let mut move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
+                    for &(old_idx, new_idx) in &diff.reusable_move_pairs {
+                        if old_idx >= handle.lines.len()
+                            || new_idx >= new_doc_snapshot.visual_lines.len()
+                        {
+                            continue;
+                        }
+                        let old_snaps = layout::prepare_animation_visuals_from_layout(
+                            handle,
+                            std::slice::from_ref(&old_idx),
+                            ctx.dpr,
+                            &ctx.text_color,
+                        );
+                        if let Some(snap) = old_snaps.into_iter().next() {
+                            // 第一份：保持原始 old byte range，注入 old snapshot (doc_snap)
+                            old_move_visuals.push(snap.clone());
 
-                // Issue #658 评论 5626002895 问题 1: old caret 从当前 cache 的真实 QTextLine 取 x，
-                // 不用 assemble_document_visual_snapshot_from_lines 产生的空 cursor_x_map
-                // （cursor_x_from_canonical 在 cursor_x_map 为空时退化为 line.x 行首，
-                // 导致正文光标在行中间时打一字后协同光标动画起点从行首开始）。
-                // 只有有 old_prepared_handle 的路径才从 cache 算；fallback 路径仍用
-                // old_doc_snapshot.cursor_rect_doc()（fallback 的 prepare_affected_paragraphs_visual_snapshot
-                // 会真正排版并生成 cursor_x_map）。
-                let old_cursor_byte = vt.old_selection.head.index.value();
-                let old_caret_from_cache: Option<layout::CaretRect> =
-                    if old_prepared_handle.is_some() {
-                        editor_layout.cache().map(|snap| {
-                            editor_layout.caret_rect_doc(
-                                snap,
-                                old_cursor_byte,
-                                layout::CaretAffinity::Downstream,
-                            )
-                        })
-                    } else {
-                        None
-                    };
+                            // 第二份：复用同一张 QImage 和 cluster source rect，
+                            // 只把 document byte range 映射到 new 行
+                            let new_line = &new_doc_snapshot.visual_lines[new_idx];
+                            let byte_delta: isize =
+                                new_line.byte_start as isize - snap.document_byte_start as isize;
+                            let mut new_snap = snap.clone();
+                            new_snap.document_byte_start = new_line.byte_start;
+                            new_snap.document_byte_end = new_line.byte_end;
+                            for cluster in &mut new_snap.clusters {
+                                cluster.document_byte_start = cluster
+                                    .document_byte_start
+                                    .saturating_add_signed(byte_delta);
+                                cluster.document_byte_end =
+                                    cluster.document_byte_end.saturating_add_signed(byte_delta);
+                            }
+                            move_visuals.push(new_snap);
+                        }
+                    }
+                    if !old_move_visuals.is_empty() {
+                        layout::inject_animation_visuals_into_snapshot(
+                            &mut doc_snap,
+                            old_move_visuals,
+                        );
+                    }
+                    if !move_visuals.is_empty() {
+                        layout::inject_animation_visuals_into_snapshot(
+                            &mut new_doc_snapshot,
+                            move_visuals,
+                        );
+                    }
+                }
 
-                // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
-                // 而是分配独立 generation，与静态正文路径互不干扰。
-                let new_generation = layout::begin_layout_generation();
-
-                // Issue #658 评论 5624570557 问题 2: 先做 new 基础排版，得到 new_lines 用于比较
-                // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
-                let mut new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
-                    &new.text,
+                doc_snap
+            } else {
+                // fallback: 没有 prepared layout，用受影响段落排版
+                // Issue #658 评论 5626002895 问题 3: 分配真实 generation 构造 fallback old snapshot，
+                // 不再用 0（generation 0 是哨兵值，promote_prepared_layout 跳过 0 不释放会导致泄漏）。
+                let fallback_old_generation = layout::begin_layout_generation();
+                fallback_old_generation_opt = Some(fallback_old_generation);
+                let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
+                layout::prepare_affected_paragraphs_visual_snapshot(
+                    &motion.old_text,
                     0,
                     ctx.font_pixel_size,
                     &ctx.font_family,
@@ -1000,317 +1136,143 @@ impl LinuxEditorPipeline {
                     ctx.text_indent,
                     ctx.bounding_width,
                     ctx.dpr,
-                    Some(&ctx.text_color),
-                    new_generation,
-                    affected_byte_start,
-                    affected_byte_end,
-                );
+                    &ctx.text_color,
+                    // Issue #710 评论 5731145076 症状四/五: fallback 路径排版
+                    // old text，用 old 侧段落边界，确保换行前段落完整排版。
+                    old_affected_byte_start,
+                    old_affected_byte_end,
+                    prev_new_snapshot,
+                    fallback_old_generation,
+                    true,
+                )
+            };
 
-                // Issue #658 评论 5624570557 问题 1+2: 比较 old/new VisualLine，计算受影响 line_ids
-                // Issue #658 评论 5626002895 问题 3: fallback 路径分配真实 generation 构造 old snapshot，
-                // 用完 clear_layout_generation 释放。generation 0 只作为"无 generation"哨兵值，
-                // 不能拿去实际存 QTextLayout（promote_prepared_layout 跳过 old_generation==0 不释放）。
-                let mut fallback_old_generation_opt: Option<u64> = None;
-                let old_doc_snapshot = if let Some(ref handle) = old_prepared_handle {
-                    // 比较 old/new lines 获取受影响的 line_ids（old 侧和 new 侧）
-                    // Issue #658 评论 5626628570: compare_old_new_visual_lines 返回 VisualLineDiff，
-                    // 把行分成需要重新栅格化的 raster 行和可复用纹理的 reusable_move_pairs。
-                    // Issue #710 评论 5731145076 症状四/五: 传扩展后的段落边界，
-                    // 确保换行前后的行都被标记为 raster。之前只传原始 byte range，
-                    // 对于 "\n" 插入/删除，只覆盖 1 byte，换行前后的行可能被漏掉。
-                    let diff = layout::compare_old_new_visual_lines(
-                        handle.lines,
-                        &new_doc_snapshot.visual_lines,
-                        vt.inserted_range
-                            .map(|_| (new_affected_start, new_affected_end)),
-                        vt.deleted_range
-                            .map(|_| (old_affected_start, old_affected_end)),
-                    );
+            let old_caret = old_caret_from_cache.unwrap_or_else(|| {
+                old_doc_snapshot.cursor_rect_doc(
+                    motion.old_selection.head.index.value(),
+                    layout::CaretAffinity::Downstream,
+                )
+            });
+            let new_caret = new_doc_snapshot.cursor_rect_doc(
+                motion.new_selection.head.index.value(),
+                layout::CaretAffinity::Downstream,
+            );
 
-                    // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）
-                    // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
-                    // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
-                    let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
-                        handle,
-                        &diff.old_raster_line_ids,
-                        ctx.dpr,
-                        &ctx.text_color,
-                    );
+            motion.old_cursor_rect = Some(make_cursor_rect_from_caret_doc(
+                &old_caret,
+                &old_doc_snapshot,
+                &ctx.font_family,
+            ));
+            motion.new_cursor_rect = Some(make_cursor_rect_from_caret_doc(
+                &new_caret,
+                &new_doc_snapshot,
+                &ctx.font_family,
+            ));
 
-                    // 构建最小化的 old_doc_snapshot，仅用于 cursor_rect 计算
-                    // Issue #658 评论 5625515748 问题 2: 不再调 prepare_document_visual_snapshot
-                    // 重新排版整篇 old text（false 只跳过 QImage/glyph 生成，不跳过
-                    // QTextLayout beginLayout/createLine）。改为从已有 VisualLine 组装
-                    // CanonicalDocumentVisualSnapshot（只填 Rust 几何数据，不调 QTextLayout），
-                    // 再由 inject_animation_visuals_into_snapshot 注入动画视觉。
-                    let mut doc_snap = layout::assemble_document_visual_snapshot_from_lines(
-                        handle.lines,
-                        0,
-                        ctx.font_pixel_size,
-                        &ctx.font_family,
-                        ctx.line_spacing,
-                        ctx.text_indent,
-                        ctx.padding,
-                        ctx.bounding_width,
-                        ctx.dpr,
-                    );
+            // Issue #722 评论 5749791161: 获取 from/to 端真实视觉行的 top/bottom。
+            // 行几何来自 VisualLine.y 和 VisualLine.y + VisualLine.height，
+            // 不是 caret 自己的 CursorRect.top/bottom（光标细矩形边界）。
+            let (old_line_top, old_line_bottom) = old_doc_snapshot
+                .visual_lines
+                .iter()
+                .find(|l| l.id == old_caret.visual_line_id)
+                .map(|l| (l.y, l.y + l.height))
+                .unwrap_or((0.0, 0.0));
+            let (new_line_top, new_line_bottom) = new_doc_snapshot
+                .visual_lines
+                .iter()
+                .find(|l| l.id == new_caret.visual_line_id)
+                .map(|l| (l.y, l.y + l.height))
+                .unwrap_or((0.0, 0.0));
 
-                    // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
-                    // （QImage/clusters）注入到 old_doc_snapshot，使动画纹理可用。
-                    layout::inject_animation_visuals_into_snapshot(
-                        &mut doc_snap,
-                        old_line_snapshots,
-                    );
+            // Issue #658 评论 5626002895 问题 3: fallback old snapshot 的图片/cluster/cursor map
+            // 已复制进 Rust snapshot（old_doc_snapshot），fallback_old_generation 的 QTextLayout
+            // 不再需要，立即释放避免生命周期泄漏。old_doc_snapshot 后续 build_old_new_from_canonical
+            // 和 previous_layout_snapshot 只消费 Rust 数据，不依赖 QTextLayout。
+            if let Some(gen) = fallback_old_generation_opt {
+                layout::clear_layout_generation(gen);
+            }
 
-                    // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
-                    // new_doc_snapshot 已完成基础排版（QTextLayout 存入 new_generation），
-                    // 从已有 QTextLine 只提取受影响行的 QImage/glyph/cluster。
-                    let new_handle = layout::PreparedLayoutHandle {
-                        generation: new_generation,
-                        lines: &new_doc_snapshot.visual_lines,
-                    };
-                    let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
-                        &new_handle,
-                        &diff.new_raster_line_ids,
-                        ctx.dpr,
-                        &ctx.text_color,
-                    );
-                    layout::inject_animation_visuals_into_snapshot(
-                        &mut new_doc_snapshot,
-                        new_line_snapshots,
-                    );
+            // Issue #735: PreparedEditMotion 不携带 insert_glyph_rects /
+            // reflog_glyph_rects / deleted_glyph_rects（Core 已删除这些视觉类型）。
+            // 动画纹理由 animation_coordinator 从 old/new layout snapshot 直接构建。
 
-                    // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
-                    // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
-                    // 用 new VisualLine 的 x/y 生成 reflow_move 终点。
-                    //
-                    // 修复点 1 (Issue #658 评论 5627327573): 之前只把旧纹理改 byte range 后
-                    // 注入 new_doc_snapshot，old snapshot 这一侧没有 image/clusters，导致
-                    // animation_coordinator 生成 reflow_move 时 old 侧
-                    // source_rect_for_byte_range 返回 None，reflow_move 建不出来。
-                    //
-                    // 改法：对每个 reusable_move_pair(old_idx, new_idx) 只从 old prepared layout
-                    // 提取一次视觉资源（prepare_animation_visuals_from_layout），然后分成两份：
-                    // - 第一份：保持原始 byte range / old VisualLine 几何（不改 document_byte_start/end、
-                    //   不改 cluster byte range），注入 doc_snap（old snapshot）。
-                    // - 第二份：复用同一张 QImage 和同一套 cluster source rect，只把 document byte range
-                    //   映射到 new（document_byte_start=new_line.byte_start, document_byte_end=new_line.byte_end，
-                    //   cluster 按 byte_delta 偏移），注入 new_doc_snapshot。
-                    // QImage clone 是浅拷贝（引用计数），不会重画。完成后 old/new 两边都有 source rect。
-                    if !diff.reusable_move_pairs.is_empty() {
-                        let mut old_move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
-                        let mut move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
-                        for &(old_idx, new_idx) in &diff.reusable_move_pairs {
-                            if old_idx >= handle.lines.len()
-                                || new_idx >= new_doc_snapshot.visual_lines.len()
-                            {
-                                continue;
-                            }
-                            let old_snaps = layout::prepare_animation_visuals_from_layout(
-                                handle,
-                                std::slice::from_ref(&old_idx),
-                                ctx.dpr,
-                                &ctx.text_color,
-                            );
-                            if let Some(snap) = old_snaps.into_iter().next() {
-                                // 第一份：保持原始 old byte range，注入 old snapshot (doc_snap)
-                                old_move_visuals.push(snap.clone());
+            let old_revision = self.layout_revision;
+            let new_revision = LayoutRevision::next();
 
-                                // 第二份：复用同一张 QImage 和 cluster source rect，
-                                // 只把 document byte range 映射到 new 行
-                                let new_line = &new_doc_snapshot.visual_lines[new_idx];
-                                let byte_delta: isize = new_line.byte_start as isize
-                                    - snap.document_byte_start as isize;
-                                let mut new_snap = snap.clone();
-                                new_snap.document_byte_start = new_line.byte_start;
-                                new_snap.document_byte_end = new_line.byte_end;
-                                for cluster in &mut new_snap.clusters {
-                                    cluster.document_byte_start = cluster
-                                        .document_byte_start
-                                        .saturating_add_signed(byte_delta);
-                                    cluster.document_byte_end =
-                                        cluster.document_byte_end.saturating_add_signed(byte_delta);
-                                }
-                                move_visuals.push(new_snap);
-                            }
-                        }
-                        if !old_move_visuals.is_empty() {
-                            layout::inject_animation_visuals_into_snapshot(
-                                &mut doc_snap,
-                                old_move_visuals,
-                            );
-                        }
-                        if !move_visuals.is_empty() {
-                            layout::inject_animation_visuals_into_snapshot(
-                                &mut new_doc_snapshot,
-                                move_visuals,
-                            );
-                        }
-                    }
+            let (old_snap, new_snap) = LineSnapshotBuilder::build_old_new_from_canonical(
+                &old_doc_snapshot,
+                &new_doc_snapshot,
+                old_revision,
+                new_revision,
+                ctx.scroll_y,
+                ctx.viewport_height,
+            );
 
-                    doc_snap
-                } else {
-                    // fallback: 没有 prepared layout，用受影响段落排版
-                    // Issue #658 评论 5626002895 问题 3: 分配真实 generation 构造 fallback old snapshot，
-                    // 不再用 0（generation 0 是哨兵值，promote_prepared_layout 跳过 0 不释放会导致泄漏）。
-                    let fallback_old_generation = layout::begin_layout_generation();
-                    fallback_old_generation_opt = Some(fallback_old_generation);
-                    let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
-                    layout::prepare_affected_paragraphs_visual_snapshot(
-                        &vt.old_text,
-                        0,
-                        ctx.font_pixel_size,
-                        &ctx.font_family,
-                        ctx.line_spacing,
-                        ctx.padding,
-                        ctx.text_indent,
-                        ctx.bounding_width,
-                        ctx.dpr,
-                        &ctx.text_color,
-                        // Issue #710 评论 5731145076 症状四/五: fallback 路径排版
-                        // old text，用 old 侧段落边界，确保换行前段落完整排版。
-                        old_affected_byte_start,
-                        old_affected_byte_end,
-                        prev_new_snapshot,
-                        fallback_old_generation,
-                        true,
-                    )
-                };
+            let key = self.animation_coordinator.process_transaction(
+                &motion,
+                ctx.typing_animation_enabled,
+                ctx.smooth_cursor_enabled,
+                ctx.is_scrolling,
+                ctx.is_loading,
+                ctx.is_applying_format,
+                motion.old_cursor_rect.clone(),
+                motion.new_cursor_rect.clone(),
+                Some(old_caret.visual_line_id),
+                Some(new_caret.visual_line_id),
+                old_line_top,
+                old_line_bottom,
+                new_line_top,
+                new_line_bottom,
+                &old_snap,
+                &new_snap,
+                cursor_owner_epoch,
+            );
+            if let Some(key) = key {
+                self.prepare_transaction_textures(key);
+                self.layout_revision = new_revision;
+            }
 
-                let old_caret = old_caret_from_cache.unwrap_or_else(|| {
-                    old_doc_snapshot.cursor_rect_doc(
-                        vt.old_selection.head.index.value(),
+            self.previous_layout_snapshot =
+                Some(self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    EditorLayoutSnapshot::new(
+                        old_doc_snapshot.to_layout_snapshot(),
+                        Vec::new(),
+                        None,
+                        None,
                         layout::CaretAffinity::Downstream,
                     )
-                });
-                let new_caret = new_doc_snapshot.cursor_rect_doc(
-                    vt.new_selection.head.index.value(),
-                    layout::CaretAffinity::Downstream,
-                );
+                }));
+            self.current_layout_snapshot = Some(new_snap);
 
-                vt.old_cursor_rect = Some(make_cursor_rect_from_caret_doc(
-                    &old_caret,
-                    &old_doc_snapshot,
-                    &ctx.font_family,
-                ));
-                vt.new_cursor_rect = Some(make_cursor_rect_from_caret_doc(
-                    &new_caret,
-                    &new_doc_snapshot,
-                    &ctx.font_family,
-                ));
+            // Issue #658 评论 5624570557 问题 1: old generation 不在此处释放，
+            // 而是存入 PromotedLayout.old_generation，在 promote 时随 new generation 一起释放。
+            // 这样保证 old 动画纹理在 new prepared layout 成为 current 之前一直有效。
 
-                // Issue #722 评论 5749791161: 获取 from/to 端真实视觉行的 top/bottom。
-                // 行几何来自 VisualLine.y 和 VisualLine.y + VisualLine.height，
-                // 不是 caret 自己的 CursorRect.top/bottom（光标细矩形边界）。
-                let (old_line_top, old_line_bottom) = old_doc_snapshot
-                    .visual_lines
-                    .iter()
-                    .find(|l| l.id == old_caret.visual_line_id)
-                    .map(|l| (l.y, l.y + l.height))
-                    .unwrap_or((0.0, 0.0));
-                let (new_line_top, new_line_bottom) = new_doc_snapshot
-                    .visual_lines
-                    .iter()
-                    .find(|l| l.id == new_caret.visual_line_id)
-                    .map(|l| (l.y, l.y + l.height))
-                    .unwrap_or((0.0, 0.0));
+            // 先 clone visual_lines 用于 PromotedLayout，再 move new_doc_snapshot 到 previous_canonical_snapshot。
+            let promoted_visual_lines = new_doc_snapshot.visual_lines.clone();
+            self.previous_canonical_snapshot = Some(new_doc_snapshot);
 
-                // Issue #658 评论 5626002895 问题 3: fallback old snapshot 的图片/cluster/cursor map
-                // 已复制进 Rust snapshot（old_doc_snapshot），fallback_old_generation 的 QTextLayout
-                // 不再需要，立即释放避免生命周期泄漏。old_doc_snapshot 后续 build_old_new_from_canonical
-                // 和 previous_layout_snapshot 只消费 Rust 数据，不依赖 QTextLayout。
-                if let Some(gen) = fallback_old_generation_opt {
-                    layout::clear_layout_generation(gen);
-                }
+            self.pending_promoted_layout = Some(layout::PromotedLayout {
+                generation: new_generation,
+                visual_lines: promoted_visual_lines,
+                width: ctx.bounding_width,
+                font_size: ctx.font_pixel_size as f32,
+                font_family: ctx.font_family.clone(),
+                line_spacing: ctx.line_spacing as f32,
+                text_indent: ctx.text_indent as f32,
+                padding: ctx.padding as f32,
+                old_generation,
+            });
 
-                match vt.kind {
-                    EditorAnimationKind::Insert => {
-                        vt.insert_glyph_rects = Some(Vec::new());
-                        vt.reflow_glyph_rects = None;
-                    }
-                    EditorAnimationKind::Delete => {
-                        vt.deleted_glyph_rects = None;
-                    }
-                    EditorAnimationKind::Cursor => {}
-                }
-
-                let old_revision = self.layout_revision;
-                let new_revision = LayoutRevision::next();
-
-                let (old_snap, new_snap) = LineSnapshotBuilder::build_old_new_from_canonical(
-                    &old_doc_snapshot,
-                    &new_doc_snapshot,
-                    old_revision,
-                    new_revision,
-                    ctx.scroll_y,
-                    ctx.viewport_height,
-                );
-
-                let key = self.animation_coordinator.process_transaction(
-                    vt,
-                    ctx.typing_animation_enabled,
-                    ctx.smooth_cursor_enabled,
-                    ctx.is_scrolling,
-                    ctx.is_loading,
-                    ctx.is_applying_format,
-                    vt.old_cursor_rect.clone(),
-                    vt.new_cursor_rect.clone(),
-                    Some(old_caret.visual_line_id),
-                    Some(new_caret.visual_line_id),
-                    old_line_top,
-                    old_line_bottom,
-                    new_line_top,
-                    new_line_bottom,
-                    &old_snap,
-                    &new_snap,
-                    cursor_owner_epoch,
-                );
-                if let Some(key) = key {
-                    self.prepare_transaction_textures(key);
-                    self.layout_revision = new_revision;
-                }
-
-                self.previous_layout_snapshot =
-                    Some(self.current_layout_snapshot.clone().unwrap_or_else(|| {
-                        EditorLayoutSnapshot::new(
-                            old_doc_snapshot.to_layout_snapshot(),
-                            Vec::new(),
-                            None,
-                            None,
-                            layout::CaretAffinity::Downstream,
-                        )
-                    }));
-                self.current_layout_snapshot = Some(new_snap);
-
-                // Issue #658 评论 5624570557 问题 1: old generation 不在此处释放，
-                // 而是存入 PromotedLayout.old_generation，在 promote 时随 new generation 一起释放。
-                // 这样保证 old 动画纹理在 new prepared layout 成为 current 之前一直有效。
-
-                // 先 clone visual_lines 用于 PromotedLayout，再 move new_doc_snapshot 到 previous_canonical_snapshot。
-                let promoted_visual_lines = new_doc_snapshot.visual_lines.clone();
-                self.previous_canonical_snapshot = Some(new_doc_snapshot);
-
-                self.pending_promoted_layout = Some(layout::PromotedLayout {
-                    generation: new_generation,
-                    visual_lines: promoted_visual_lines,
-                    width: ctx.bounding_width,
-                    font_size: ctx.font_pixel_size as f32,
-                    font_family: ctx.font_family.clone(),
-                    line_spacing: ctx.line_spacing as f32,
-                    text_indent: ctx.text_indent as f32,
-                    padding: ctx.padding as f32,
-                    old_generation,
-                });
-
-                super::editor_animation_debug_log(&format!(
-                    "record_visual_transaction: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",
-                    vt.kind,
+            super::editor_animation_debug_log(&format!(
+                    "prepare_edit_motion: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",
+                    motion.kind,
                     self.animation_coordinator.has_active_insert()
                 ));
-            }
         }
 
-        vt
+        Some(motion)
     }
 }
 

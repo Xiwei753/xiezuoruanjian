@@ -99,7 +99,6 @@ class Issue728Comment5755336403ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5755336403-gap1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // 建立基线：空文本，caret 在 offset 0
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -166,7 +165,6 @@ class Issue728Comment5755336403ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5755336403-gap2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         val cursorDurationMs = 100L
         val cursorDurationNanos = cursorDurationMs * NANOS_PER_MS
@@ -248,7 +246,6 @@ class Issue728Comment5755336403ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5755336403-gap3",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // 基线：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -303,7 +300,6 @@ class Issue728Comment5755336403ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5755336403-gap4",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         val textDurationMs = 200L
         val cursorDurationMs = 50L
@@ -405,7 +401,6 @@ class Issue728Comment5755336403ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5755336403-gap5b",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // 基线："ab"，selection=(1,1)，设置 restingCaretRect = cursorRect(1)
         state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)

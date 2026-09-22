@@ -1,13 +1,20 @@
+use super::edit_motion::PreparedEditMotion;
 use super::*;
+use writer_core::editor::EditorEditResult;
 
 impl SujianEditorItem {
+    /// Issue #735: `record_transaction` 接收 `EditorEditResult` 而非从 `EditorEngine` 构造事务。
+    ///
+    /// Core 已删除 `EditorEngine`、`EditorVisualTransaction`。平台端从
+    /// `EditorEditResult`（含 `cause`、`operation_kind`、`offset_map`、`content_delta`）
+    /// 直接派生动画策略，不再经过 Core 的视觉事务工厂。
     pub(crate) fn record_transaction(
         &mut self,
         old: EditorSnapshot,
         new: EditorSnapshot,
-        cause: EditorTransactionCause,
+        result: &EditorEditResult,
         emit: bool,
-    ) -> Option<EditorVisualTransaction> {
+    ) -> Option<PreparedEditMotion> {
         let ctx = pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
             smooth_cursor_enabled: self.current_smooth_cursor_enabled,
@@ -33,32 +40,17 @@ impl SujianEditorItem {
             },
         };
 
-        let transaction = self.pipeline.engine().create_transaction(
-            &old.text,
-            &new.text,
-            EditorSelection {
-                anchor: EditorCursor::new(&old.text, old.selection_anchor),
-                head: EditorCursor::new(&old.text, old.cursor),
-            },
-            EditorSelection {
-                anchor: EditorCursor::new(&new.text, new.selection_anchor),
-                head: EditorCursor::new(&new.text, new.cursor),
-            },
-            cause,
-        );
-        let mut vt = self.pipeline.engine_mut().visual_transaction(&transaction);
-
         // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
+        let mut motion: Option<PreparedEditMotion> = None;
         if self.current_typing_animation_enabled
             && self.current_smooth_cursor_enabled
-            && vt.is_some()
             && !self.current_is_scrolling
         {
-            vt = self.pipeline.record_visual_transaction(
+            motion = self.pipeline.prepare_edit_motion(
                 &ctx,
+                result,
                 &old,
                 &new,
-                cause,
                 &self.editor_layout,
                 self.cursor_ctrl.cursor_owner_epoch,
             );
@@ -67,33 +59,34 @@ impl SujianEditorItem {
         // fill_visual_transaction_coords_legacy 生成 old/new 动画坐标。
         // 该 legacy 路径通过 layout_snapshot_for_text 复用同一 EditorLayout，
         // 连续 snapshot 会互相清 generation，导致 caret_rect 取已失效的 generation
-        // 返回 0.0，光标 x 塌缩到行首。删除 legacy 路径后，vt 的
+        // 返回 0.0，光标 x 塌缩到行首。删除 legacy 路径后，motion 的
         // old_cursor_rect/new_cursor_rect 保持 None（事务元数据仍保留，
         // 动画坐标不生成）。正常光标位置由 cursor controller / 当前正文 snapshot
         // 处理，不依赖 legacy 坐标。
 
-        self.last_event_count = if vt.is_some() { 1 } else { 0 };
+        let has_motion = motion.is_some();
+        self.last_event_count = if has_motion { 1 } else { 0 };
         self.last_summary = format!(
-            "cause={:?};changes={};vt={};animate={}",
-            transaction.cause,
-            transaction.changes.len(),
-            vt.is_some(),
-            transaction.should_animate
+            "cause={:?};op={:?};motion={};delta_inserted={};delta_deleted={}",
+            result.cause,
+            result.operation_kind,
+            has_motion,
+            result.content_delta.inserted_chars,
+            result.content_delta.deleted_chars,
         )
         .into();
         editor_animation_debug_log(&format!(
-            "record_transaction: cause={:?}, changes={}, vt={}, animate={}, typing_anim_enabled={}, is_scrolling={}",
-            transaction.cause,
-            transaction.changes.len(),
-            vt.is_some(),
-            transaction.should_animate,
+            "record_transaction: cause={:?}, op={:?}, motion={}, typing_anim_enabled={}, is_scrolling={}",
+            result.cause,
+            result.operation_kind,
+            has_motion,
             self.current_typing_animation_enabled,
             self.current_is_scrolling,
         ));
         if emit {
             self.transaction_created();
         }
-        vt
+        motion
     }
 
     pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {

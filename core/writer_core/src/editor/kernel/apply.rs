@@ -1,14 +1,10 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::EditorCommand;
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{
-    choose_animation_mode, compute_animation_units_from_slices, count_grapheme_clusters,
-    text_contains_complex_grapheme, AnimationMode, AnimationTextSlice, EditorTransactionCause,
-    OffsetMap,
-};
+use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     #[allow(
@@ -387,7 +383,6 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_affected = vec![Utf8ByteRange::from_start_len(byte_offset, text.len())];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -397,62 +392,6 @@ impl EditorKernel {
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
-        let is_loading = cause == EditorTransactionCause::Load;
-        let is_format = cause == EditorTransactionCause::Format;
-
-        let animation_mode = if !self.animation_enabled || is_loading || is_format {
-            AnimationMode::SystemSuppressed
-        } else {
-            let cluster_count = count_grapheme_clusters(text);
-            let contains_newline = text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(text);
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                is_loading,
-                is_format,
-                self.animation_enabled,
-            )
-        };
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[],
-            &[AnimationTextSlice {
-                absolute_start: byte_offset,
-                text,
-            }],
-            &[],
-            &new_affected,
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind: EditorOperationKind::Insert,
-            old_affected_byte_ranges: vec![],
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: self.animation_enabled
-                    && old_cursor.value() != new_cursor_val
-                    && !is_loading
-                    && !is_format,
-            },
-            // 单次编辑从 delta 直接构造 offset map，不再扫全文。
-            offset_map: Some(OffsetMap::from_single_edit(
-                self.text.byte_len() - text.len(),
-                (byte_offset, byte_offset),
-                text.len(),
-            )),
-            old_animation_units,
-            new_animation_units,
-        };
-
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -460,7 +399,14 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind: EditorOperationKind::Insert,
+            // 单次编辑从 delta 直接构造 offset map，不再扫全文。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - text.len(),
+                (byte_offset, byte_offset),
+                text.len(),
+            )),
             content_delta: EditorContentDelta::from_inserted_text(text),
         })
     }
@@ -534,7 +480,6 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -544,62 +489,6 @@ impl EditorKernel {
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
-        let is_loading = cause == EditorTransactionCause::Load;
-        let is_format = cause == EditorTransactionCause::Format;
-
-        let animation_mode = if !self.animation_enabled || is_loading || is_format {
-            AnimationMode::SystemSuppressed
-        } else {
-            let cluster_count = count_grapheme_clusters(&deleted_text);
-            let contains_newline = deleted_text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(&deleted_text);
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                is_loading,
-                is_format,
-                self.animation_enabled,
-            )
-        };
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[AnimationTextSlice {
-                absolute_start: byte_start,
-                text: &deleted_text,
-            }],
-            &[],
-            &old_affected,
-            &[],
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind: EditorOperationKind::Delete,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: vec![],
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(byte_start),
-                should_animate: self.animation_enabled
-                    && old_cursor.value() != byte_start
-                    && !is_loading
-                    && !is_format,
-            },
-            // 单次删除从 delta 直接构造 offset map。
-            offset_map: Some(OffsetMap::from_single_edit(
-                self.text.byte_len() + (byte_end_exclusive - byte_start),
-                (byte_start, byte_end_exclusive),
-                0,
-            )),
-            old_animation_units,
-            new_animation_units,
-        };
-
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -607,7 +496,14 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind: EditorOperationKind::Delete,
+            // 单次删除从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() + (byte_end_exclusive - byte_start),
+                (byte_start, byte_end_exclusive),
+                0,
+            )),
             content_delta: EditorContentDelta::from_deleted_text(&deleted_text),
         })
     }
@@ -682,11 +578,6 @@ impl EditorKernel {
 
         let new_revision = self.revision;
         let new_selection = make_selection(new_cursor_val, new_cursor_val);
-        let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
-        let new_affected = vec![Utf8ByteRange::from_start_len(
-            byte_start,
-            replacement_text.len(),
-        )];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -696,76 +587,12 @@ impl EditorKernel {
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
-        let is_loading = cause == EditorTransactionCause::Load;
-        let is_format = cause == EditorTransactionCause::Format;
-
-        let animation_mode = if !self.animation_enabled || is_loading || is_format {
-            AnimationMode::SystemSuppressed
-        } else {
-            let diff_text = if !replacement_text.is_empty() {
-                replacement_text
-            } else {
-                &deleted_text
-            };
-            let cluster_count = count_grapheme_clusters(diff_text);
-            let contains_newline = diff_text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(diff_text);
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                is_loading,
-                is_format,
-                self.animation_enabled,
-            )
-        };
-
         let operation_kind = if byte_start == byte_end_exclusive {
             EditorOperationKind::Insert
         } else if replacement_text.is_empty() {
             EditorOperationKind::Delete
         } else {
             EditorOperationKind::Replace
-        };
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[AnimationTextSlice {
-                absolute_start: byte_start,
-                text: &deleted_text,
-            }],
-            &[AnimationTextSlice {
-                absolute_start: byte_start,
-                text: replacement_text,
-            }],
-            &old_affected,
-            &new_affected,
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: self.animation_enabled
-                    && old_cursor.value() != new_cursor_val
-                    && !is_loading
-                    && !is_format,
-            },
-            // 单次替换从 delta 直接构造 offset map。
-            offset_map: Some(OffsetMap::from_single_edit(
-                self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
-                (byte_start, byte_end_exclusive),
-                replacement_text.len(),
-            )),
-            old_animation_units,
-            new_animation_units,
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -775,7 +602,14 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind,
+            // 单次替换从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
+                (byte_start, byte_end_exclusive),
+                replacement_text.len(),
+            )),
             content_delta: EditorContentDelta::from_texts(replacement_text, &deleted_text),
         })
     }
@@ -843,7 +677,6 @@ impl EditorKernel {
 
         let new_revision = self.revision;
         let new_selection = make_selection(new_cursor_val, new_cursor_val);
-        let new_affected = vec![Utf8ByteRange::from_start_len(byte_offset, text.len())];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -853,56 +686,6 @@ impl EditorKernel {
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
-        let animation_mode = if !self.animation_enabled {
-            AnimationMode::SystemSuppressed
-        } else {
-            let cluster_count = count_grapheme_clusters(&text);
-            let contains_newline = text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(&text);
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                false,
-                false,
-                self.animation_enabled,
-            )
-        };
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[],
-            &[AnimationTextSlice {
-                absolute_start: byte_offset,
-                text: &text,
-            }],
-            &[],
-            &new_affected,
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind: EditorOperationKind::Insert,
-            old_affected_byte_ranges: vec![],
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
-            },
-            // 单次换行插入从 delta 直接构造 offset map。
-            offset_map: Some(OffsetMap::from_single_edit(
-                self.text.byte_len() - text.len(),
-                (byte_offset, byte_offset),
-                text.len(),
-            )),
-            old_animation_units,
-            new_animation_units,
-        };
-
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -910,7 +693,14 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind: EditorOperationKind::Insert,
+            // 单次换行插入从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - text.len(),
+                (byte_offset, byte_offset),
+                text.len(),
+            )),
             content_delta: EditorContentDelta::from_inserted_text(&text),
         })
     }
@@ -1062,27 +852,10 @@ impl EditorKernel {
             new_selection,
         });
         self.redo_stack.clear();
-        // #684 评论 5668108597：保存 preedit_text 用于生成 old_animation_units。
-        // composition commit 时 old_affected 是 preedit_text 的范围，old_text 应为 preedit_text。
-        let preedit_text: String = self
-            .composition_session
-            .as_ref()
-            .map(|s| s.preedit_text.clone())
-            .unwrap_or_default();
-        let preedit_byte_len = preedit_text.len();
         let is_composition_commit = self.composition_session.is_some();
         self.composition_session = None;
 
         let new_revision = self.revision;
-        let old_affected = if preedit_byte_len > 0 {
-            vec![Utf8ByteRange::from_start_len(byte_start, preedit_byte_len)]
-        } else {
-            vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)]
-        };
-        let new_affected = vec![Utf8ByteRange::from_start_len(
-            byte_start,
-            replacement_text.len(),
-        )];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -1092,72 +865,14 @@ impl EditorKernel {
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
-        let cluster_count = count_grapheme_clusters(replacement_text);
-        let contains_newline = replacement_text.contains('\n');
-        let contains_complex = text_contains_complex_grapheme(replacement_text);
-        let animation_mode = if !self.animation_enabled {
-            AnimationMode::SystemSuppressed
+        let operation_kind = if is_composition_commit {
+            EditorOperationKind::CompositionCommit
+        } else if byte_start == byte_end_exclusive {
+            EditorOperationKind::Insert
+        } else if replacement_text.is_empty() {
+            EditorOperationKind::Delete
         } else {
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                false,
-                false,
-                self.animation_enabled,
-            )
-        };
-
-        // #684: composition commit 时 old 侧视觉文本是 preedit_text，
-        // 普通 commit 时 old 侧是 deleted_text。
-        let old_text_for_units = if preedit_byte_len > 0 {
-            &preedit_text
-        } else {
-            &deleted_text
-        };
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[AnimationTextSlice {
-                absolute_start: byte_start,
-                text: old_text_for_units,
-            }],
-            &[AnimationTextSlice {
-                absolute_start: byte_start,
-                text: replacement_text,
-            }],
-            &old_affected,
-            &new_affected,
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind: if is_composition_commit {
-                EditorOperationKind::CompositionCommit
-            } else if byte_start == byte_end_exclusive {
-                EditorOperationKind::Insert
-            } else if replacement_text.is_empty() {
-                EditorOperationKind::Delete
-            } else {
-                EditorOperationKind::Replace
-            },
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(sel_head),
-                should_animate: self.animation_enabled && old_cursor.value() != sel_head,
-            },
-            // 单次 commit 从 delta 直接构造 offset map。
-            offset_map: Some(OffsetMap::from_single_edit(
-                self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
-                (byte_start, byte_end_exclusive),
-                replacement_text.len(),
-            )),
-            old_animation_units,
-            new_animation_units,
+            EditorOperationKind::Replace
         };
 
         let edit_result = EditorEditResult {
@@ -1167,7 +882,14 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind,
+            // 单次 commit 从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
+                (byte_start, byte_end_exclusive),
+                replacement_text.len(),
+            )),
             content_delta: EditorContentDelta::from_texts(replacement_text, &deleted_text),
         };
 
@@ -1322,7 +1044,7 @@ impl EditorKernel {
         let new_selection = make_selection(new_sel_anchor, new_sel_head);
 
         // content delta / offset map / affected ranges 全部从 delta 构造，
-        // 计算完成后才把 edits 移入 Undo 栈。
+        // 计算完成后才把 edits 积入 Undo 栈。
         let mut content_delta = EditorContentDelta::default();
         let mut offset_pairs: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(edits.len());
         for delta in &edits {
@@ -1337,7 +1059,6 @@ impl EditorKernel {
                 delta.new_range.end().value(),
             ));
         }
-        let old_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.old_range).collect();
         let new_revision = self.revision;
 
         // 原子 patch batch — 每条 delta 一条局部 DisplayPatch
@@ -1364,24 +1085,6 @@ impl EditorKernel {
         });
         self.redo_stack.clear();
 
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind: EditorOperationKind::Delete,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: vec![],
-            animation_mode: AnimationMode::SystemSuppressed,
-            duration_ms: 0,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(new_sel_head),
-                should_animate: false,
-            },
-            offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
-            // delete-surrounding 的 animation_mode 永远是 SystemSuppressed，无动画单元。
-            old_animation_units: vec![],
-            new_animation_units: vec![],
-        };
-
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -1389,7 +1092,9 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind: EditorOperationKind::Delete,
+            offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
             content_delta,
         })
     }
@@ -1520,7 +1225,7 @@ impl EditorKernel {
 
         let deleted_replacement_left_text: String;
         let deleted_replacement_right_text: String;
-        let deleted_replacement_text: String;
+        let _deleted_replacement_text: String;
         if has_rep {
             if crosses_gap {
                 // 左段：base_text[rep_min..sel_min) 对应原始 [rep_min, sel_min)。
@@ -1537,7 +1242,7 @@ impl EditorKernel {
                 );
                 combined.push_str(&deleted_replacement_left_text);
                 combined.push_str(&deleted_replacement_right_text);
-                deleted_replacement_text = combined;
+                _deleted_replacement_text = combined;
             } else {
                 // 单段：不横跨 gap，整个 replacement range 在 selection 同侧。
                 let (rep_min_orig, rep_max_orig) = if rep_max <= sel_min {
@@ -1549,12 +1254,12 @@ impl EditorKernel {
                 deleted_replacement_left_text = String::new();
                 deleted_replacement_right_text =
                     self.text.byte_slice(rep_min_orig..rep_max_orig).to_string();
-                deleted_replacement_text = deleted_replacement_right_text.clone();
+                _deleted_replacement_text = deleted_replacement_right_text.clone();
             }
         } else {
             deleted_replacement_left_text = String::new();
             deleted_replacement_right_text = String::new();
-            deleted_replacement_text = String::new();
+            _deleted_replacement_text = String::new();
         }
 
         // 一次性修改 self.text：先 delete selection，再 delete replacement，再 insert。
@@ -1698,18 +1403,6 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        // old_affected：非零长度的 old_range（删除段）。
-        let old_affected: Vec<Utf8ByteRange> = edits
-            .iter()
-            .filter(|d| !d.old_range.is_empty())
-            .map(|d| d.old_range)
-            .collect();
-        // new_affected：非零长度的 new_range（插入段）。
-        let new_affected: Vec<Utf8ByteRange> = edits
-            .iter()
-            .filter(|d| !d.new_range.is_empty())
-            .map(|d| d.new_range)
-            .collect();
 
         // DisplayPatch：每条 delta 一条局部 DisplayPatch（base 文档坐标）。
         // 所有 patch 共享同一个 base_revision/new_revision（原子 batch）。
@@ -1725,9 +1418,6 @@ impl EditorKernel {
                 ),
             })
             .collect();
-
-        let is_loading = cause == EditorTransactionCause::Load;
-        let is_format = cause == EditorTransactionCause::Format;
 
         // content_delta / offset_pairs 从 delta 构造。
         let mut content_delta = EditorContentDelta::default();
@@ -1745,104 +1435,6 @@ impl EditorKernel {
             ));
         }
 
-        // animation_mode：IME commit 与普通 typing 相同逻辑。
-        // diff_text 优先用 inserted_text，否则用删除文本（selection 优先于 replacement）。
-        let deleted_for_anim = if !deleted_selection_text.is_empty() {
-            &deleted_selection_text
-        } else {
-            &deleted_replacement_text
-        };
-        let animation_mode = if !self.animation_enabled || is_loading || is_format {
-            AnimationMode::SystemSuppressed
-        } else {
-            let diff_text = if has_ins {
-                inserted_text
-            } else {
-                deleted_for_anim
-            };
-            let cluster_count = count_grapheme_clusters(diff_text);
-            let contains_newline = diff_text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(diff_text);
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                is_loading,
-                is_format,
-                self.animation_enabled,
-            )
-        };
-
-        let (old_animation_units, new_animation_units) = {
-            // old_slice：各 delta 的删除文本（按原始坐标 absolute_start）。
-            let mut old_slice: Vec<AnimationTextSlice> = Vec::new();
-            if !deleted_selection_text.is_empty() {
-                old_slice.push(AnimationTextSlice {
-                    absolute_start: sel_min,
-                    text: &deleted_selection_text,
-                });
-            }
-            if has_rep && crosses_gap {
-                if !deleted_replacement_left_text.is_empty() {
-                    old_slice.push(AnimationTextSlice {
-                        absolute_start: rep_min,
-                        text: &deleted_replacement_left_text,
-                    });
-                }
-                if !deleted_replacement_right_text.is_empty() {
-                    old_slice.push(AnimationTextSlice {
-                        absolute_start: sel_max,
-                        text: &deleted_replacement_right_text,
-                    });
-                }
-            } else if !deleted_replacement_text.is_empty() {
-                // 单段 replacement：absolute_start 是 old_range.start。
-                let rep_start_orig = if rep_max <= sel_min {
-                    rep_min
-                } else {
-                    rep_min + sel_len
-                };
-                old_slice.push(AnimationTextSlice {
-                    absolute_start: rep_start_orig,
-                    text: &deleted_replacement_text,
-                });
-            }
-            let new_slice = if has_ins {
-                vec![AnimationTextSlice {
-                    absolute_start: rep_min,
-                    text: inserted_text,
-                }]
-            } else {
-                vec![]
-            };
-            compute_animation_units_from_slices(
-                animation_mode,
-                &old_slice,
-                &new_slice,
-                &old_affected,
-                &new_affected,
-            )
-        };
-
-        let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind: EditorOperationKind::CompositionCommit,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
-            },
-            // 原子 IME commit 从 delta 构造 offset map。
-            offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
-            old_animation_units,
-            new_animation_units,
-        };
-
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -1850,7 +1442,10 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause,
+            operation_kind: EditorOperationKind::CompositionCommit,
+            // 原子 IME commit 从 delta 构造 offset map。
+            offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
             content_delta,
         })
     }

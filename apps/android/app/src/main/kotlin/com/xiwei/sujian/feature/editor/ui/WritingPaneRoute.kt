@@ -195,7 +195,7 @@ private fun WritingPaneEditorContent(
                 bridge = bridge,
             )
 
-            CollectVisualIntentEvents(
+            CollectEditFactEvents(
                 viewModel = viewModel,
                 targetId = targetId,
                 visualState = visualState,

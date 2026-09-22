@@ -124,10 +124,10 @@ object EditorDiagnosticsEvents {
     // ── 视觉动画帧协调链（#684 评论 #5660899405 第 6 项）──────────────
 
     /**
-     * Core 视觉意图进入帧协调器待合流链 —
+     * Core 编辑事实进入帧协调器待合流链 —
      * 不记录正文，只记录事务身份、版本与待合流链长度。
      */
-    fun editorVisualIntentQueued(
+    fun editorEditFactQueued(
         targetId: String,
         coreTransactionId: Long,
         baseRevision: Long,
@@ -135,7 +135,7 @@ object EditorDiagnosticsEvents {
         pendingChainSize: Int,
     ) = DiagnosticsEventsInterop.record(
         DiagnosticOriginDto.USER,
-        "editor.visual.intent_queued",
+        "editor.edit_fact_queued",
         "targetId" to targetId,
         "coreTransactionId" to coreTransactionId,
         "baseRevision" to baseRevision,

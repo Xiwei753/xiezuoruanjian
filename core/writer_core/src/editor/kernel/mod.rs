@@ -55,8 +55,6 @@ pub struct EditorKernel {
     cursor: Utf8ByteOffset,
     selection_anchor: Utf8ByteOffset,
     next_transaction_id: u64,
-    animation_duration_ms: u64,
-    animation_enabled: bool,
     undo_stack: Vec<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
     composition_session: Option<CompositionSessionState>,
@@ -88,8 +86,6 @@ impl EditorKernel {
             cursor: Utf8ByteOffset::unchecked(0),
             selection_anchor: Utf8ByteOffset::unchecked(0),
             next_transaction_id: 1,
-            animation_duration_ms: 80,
-            animation_enabled: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             composition_session: None,
@@ -110,21 +106,11 @@ impl EditorKernel {
             cursor: Utf8ByteOffset::unchecked(cursor),
             selection_anchor: Utf8ByteOffset::unchecked(cursor),
             next_transaction_id: 1,
-            animation_duration_ms: 80,
-            animation_enabled: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             composition_session: None,
             next_composition_session_id: EditorSessionId::new(1),
         })
-    }
-
-    pub fn set_animation_duration_ms(&mut self, duration_ms: u64) {
-        self.animation_duration_ms = duration_ms;
-    }
-
-    pub fn set_animation_enabled(&mut self, enabled: bool) {
-        self.animation_enabled = enabled;
     }
 
     ///   — 热路径访问器：UTF-8 byte 长度，O(1)。

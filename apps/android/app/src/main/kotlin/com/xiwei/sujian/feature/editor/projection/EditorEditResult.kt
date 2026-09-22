@@ -1,13 +1,11 @@
 package com.xiwei.sujian.feature.editor.projection
 
-import uniffi.writer_core.AnimationModeDto
-import uniffi.writer_core.CoordinatedCursorDto
 import uniffi.writer_core.DisplayPatchDto
 import uniffi.writer_core.EditorContentDeltaDto
+import uniffi.writer_core.EditorEditOutcomeDto
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
-import uniffi.writer_core.EditorVisualIntentDto
 import uniffi.writer_core.OffsetMapDto
 import uniffi.writer_core.OffsetMapEntryDto
 import uniffi.writer_core.OffsetMapKindDto
@@ -39,108 +37,6 @@ data class DisplayPatch(
 
         fun fromDtoList(dtos: List<DisplayPatchDto>): List<DisplayPatch> = dtos.map { fromDto(it) }
     }
-}
-
-data class VisualIntent(
-    val cause: EditorTransactionCauseDto,
-    val operationKind: EditorOperationKindDto,
-    val oldAffectedByteRanges: List<Pair<Int, Int>>,
-    val newAffectedByteRanges: List<Pair<Int, Int>>,
-    val animationMode: AnimationModeDto,
-    val durationMs: Long,
-    val coordinatedCursor: CoordinatedCursor,
-    val offsetMap: OffsetMap? = null,
-    // #684 评论 5668108597 问题2：Core 计算好的动画单元范围（UTF-8 byte ranges）—
-    // 平台端按单元做吐字/吞字动画。每个 Pair = (startByte, endExclusiveByte)。
-    val oldAnimationUnitRanges: List<Pair<Int, Int>> = emptyList(),
-    val newAnimationUnitRanges: List<Pair<Int, Int>> = emptyList(),
-) {
-    /**
-     * #694 评论第 5 步：判断本 intent 的 cause 是否为本地输入
-     * （已由 Android InputTransformation 提供 visual edit，Core 回声只当 ACK）。
-     *
-     * TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE → true。
-     * UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT → false（仍走 Core visual path）。
-     */
-    fun isLocalInputCause(): Boolean =
-        when (cause) {
-            EditorTransactionCauseDto.TYPING,
-            EditorTransactionCauseDto.TYPING_COMMIT,
-            EditorTransactionCauseDto.IME_COMPOSITION,
-            EditorTransactionCauseDto.PASTE,
-            EditorTransactionCauseDto.DELETE,
-            -> true
-            EditorTransactionCauseDto.UNDO,
-            EditorTransactionCauseDto.REDO,
-            EditorTransactionCauseDto.PROGRAMMATIC,
-            EditorTransactionCauseDto.LOAD,
-            EditorTransactionCauseDto.FORMAT,
-            -> false
-        }
-
-    companion object {
-        fun fromDto(dto: EditorVisualIntentDto): VisualIntent =
-            VisualIntent(
-                cause = dto.cause,
-                operationKind = dto.operationKind,
-                oldAffectedByteRanges =
-                    dto.oldAffectedByteRanges.map {
-                        Pair(
-                            it.start.toInt(),
-                            it.endExclusive.toInt(),
-                        )
-                    },
-                newAffectedByteRanges =
-                    dto.newAffectedByteRanges.map {
-                        Pair(
-                            it.start.toInt(),
-                            it.endExclusive.toInt(),
-                        )
-                    },
-                animationMode = dto.animationMode,
-                durationMs = dto.durationMs.toLong(),
-                coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor),
-                offsetMap = dto.offsetMap?.let { OffsetMap.fromDto(it) },
-                oldAnimationUnitRanges =
-                    dto.oldAnimationUnits.map {
-                        Pair(
-                            it.start.toInt(),
-                            it.endExclusive.toInt(),
-                        )
-                    },
-                newAnimationUnitRanges =
-                    dto.newAnimationUnits.map {
-                        Pair(
-                            it.start.toInt(),
-                            it.endExclusive.toInt(),
-                        )
-                    },
-            )
-    }
-
-    fun isInsert(): Boolean = operationKind == EditorOperationKindDto.INSERT
-
-    fun isDelete(): Boolean = operationKind == EditorOperationKindDto.DELETE
-
-    fun isReplace(): Boolean = operationKind == EditorOperationKindDto.REPLACE
-
-    fun isCompositionUpdate(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_UPDATE
-
-    fun isCompositionCommit(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_COMMIT
-
-    fun isCompositionCancel(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_CANCEL
-
-    fun isCursorOnly(): Boolean = operationKind == EditorOperationKindDto.CURSOR_ONLY
-
-    fun isInsertRenderRole(): Boolean = isInsert()
-
-    fun isDeleteRenderRole(): Boolean = isDelete() || isCompositionCancel()
-
-    fun isReplaceRenderRole(): Boolean = isReplace() || isCompositionCommit() || isCompositionUpdate()
-
-    fun isDeleteOrReplaceRenderRole(): Boolean =
-        isDelete() || isReplace() || isCompositionCancel() || isCompositionCommit() ||
-            isCompositionUpdate()
 }
 
 data class OffsetMap(
@@ -185,23 +81,15 @@ enum class OffsetMapKind {
     }
 }
 
-data class CoordinatedCursor(
-    val oldByteOffset: Int,
-    val newByteOffset: Int,
-    val shouldAnimate: Boolean,
-) {
-    companion object {
-        fun fromDto(dto: CoordinatedCursorDto): CoordinatedCursor =
-            CoordinatedCursor(
-                oldByteOffset = dto.oldByteOffset.toInt(),
-                newByteOffset = dto.newByteOffset.toInt(),
-                shouldAnimate = dto.shouldAnimate,
-            )
-    }
-}
-
+/**
+ * Issue #735 评论 5771063665：编辑结果 —
+ * Core 已删除 `EditorVisualIntentDto` / `CoordinatedCursorDto` / `AnimationModeDto`，
+ * `EditorEditResultDto` 直接暴露 `cause`、`operationKind`、`offsetMap`。
+ *
+ * Android 从这三个字段推导动画策略，不再拿 Core 的 Visual DTO。
+ */
 data class EditResult(
-    val outcome: uniffi.writer_core.EditorEditOutcomeDto,
+    val outcome: EditorEditOutcomeDto,
     val transactionId: Long,
     val baseRevision: Long,
     val newRevision: Long,
@@ -210,7 +98,9 @@ data class EditResult(
     val oldSelectionHead: Int,
     val newSelectionAnchor: Int,
     val newSelectionHead: Int,
-    val visualIntent: VisualIntent,
+    val cause: EditorTransactionCauseDto,
+    val operationKind: EditorOperationKindDto,
+    val offsetMap: OffsetMap?,
     val contentDelta: EditorContentDeltaDto = EditorContentDeltaDto(0u, 0u, 0u, 0u),
 ) {
     companion object {
@@ -225,20 +115,22 @@ data class EditResult(
                 oldSelectionHead = dto.oldSelectionHead.toInt(),
                 newSelectionAnchor = dto.newSelectionAnchor.toInt(),
                 newSelectionHead = dto.newSelectionHead.toInt(),
-                visualIntent = VisualIntent.fromDto(dto.visualIntent),
+                cause = dto.cause,
+                operationKind = dto.operationKind,
+                offsetMap = dto.offsetMap?.let { OffsetMap.fromDto(it) },
                 contentDelta = dto.contentDelta,
             )
     }
 
     fun isApplied(): Boolean =
-        outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED ||
-            outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED_WITH_ADJUSTED_SELECTION
+        outcome == EditorEditOutcomeDto.APPLIED ||
+            outcome == EditorEditOutcomeDto.APPLIED_WITH_ADJUSTED_SELECTION
 
-    fun isStale(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.STALE_REVISION
+    fun isStale(): Boolean = outcome == EditorEditOutcomeDto.STALE_REVISION
 
     fun isInvalid(): Boolean =
-        outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_OFFSET ||
-            outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_RANGE
+        outcome == EditorEditOutcomeDto.INVALID_OFFSET ||
+            outcome == EditorEditOutcomeDto.INVALID_RANGE
 
-    fun isNoChange(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.NO_CHANGE
+    fun isNoChange(): Boolean = outcome == EditorEditOutcomeDto.NO_CHANGE
 }

@@ -21,8 +21,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 import java.io.File
+import com.xiwei.sujian.feature.editor.visual.AnimationMode
 
 /**
  * Issue #732 评论 5764716281 复现测试 —
@@ -397,7 +397,7 @@ class Issue732Comment5764716281ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> {

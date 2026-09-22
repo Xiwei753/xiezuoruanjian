@@ -1,12 +1,9 @@
 package com.xiwei.sujian.feature.editor.ui
 
-import com.xiwei.sujian.feature.editor.projection.CoordinatedCursor
 import com.xiwei.sujian.feature.editor.projection.DisplayPatch
 import com.xiwei.sujian.feature.editor.projection.EditResult
-import com.xiwei.sujian.feature.editor.projection.VisualIntent
 import com.xiwei.sujian.feature.editor.session.toSessionDelta
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -31,26 +28,6 @@ class EditResultTest {
     }
 
     @Test
-    fun visualIntentHoldsCorrectFields() {
-        val intent =
-            VisualIntent(
-                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-                operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-                oldAffectedByteRanges = listOf(Pair(2, 2)),
-                newAffectedByteRanges = listOf(Pair(2, 3)),
-                animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
-                durationMs = 160,
-                coordinatedCursor = CoordinatedCursor(2, 3, true),
-            )
-        assertEquals(uniffi.writer_core.EditorTransactionCauseDto.TYPING, intent.cause)
-        assertEquals(uniffi.writer_core.EditorOperationKindDto.INSERT, intent.operationKind)
-        assertEquals(1, intent.oldAffectedByteRanges.size)
-        assertEquals(1, intent.newAffectedByteRanges.size)
-        assertEquals(160, intent.durationMs)
-        assertTrue(intent.coordinatedCursor.shouldAnimate)
-    }
-
-    @Test
     fun editResultHoldsCorrectFields() {
         val result =
             EditResult(
@@ -66,35 +43,25 @@ class EditResultTest {
                 oldSelectionHead = 2,
                 newSelectionAnchor = 3,
                 newSelectionHead = 3,
-                visualIntent =
-                    VisualIntent(
-                        cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-                        operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-                        oldAffectedByteRanges = listOf(Pair(2, 2)),
-                        newAffectedByteRanges = listOf(Pair(2, 3)),
-                        animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
-                        durationMs = 160,
-                        coordinatedCursor = CoordinatedCursor(2, 3, true),
-                    ),
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+                offsetMap = null,
             )
         assertEquals(1, result.transactionId)
         assertEquals(1, result.displayPatches.size)
         assertEquals(3, result.newSelectionHead)
+        assertEquals(uniffi.writer_core.EditorTransactionCauseDto.TYPING, result.cause)
+        assertEquals(uniffi.writer_core.EditorOperationKindDto.INSERT, result.operationKind)
         assertTrue(result.isApplied())
-    }
-
-    @Test
-    fun coordinatedCursorDefaults() {
-        val cursor = CoordinatedCursor(0, 5, false)
-        assertEquals(0, cursor.oldByteOffset)
-        assertEquals(5, cursor.newByteOffset)
-        assertFalse(cursor.shouldAnimate)
     }
 }
 
 /**
  * #624 评论8/9：Android 直接消费 Core EditorContentDeltaDto 真值 —
  * 不允许用 UTF-8 byte 长度冒充 deletedChars。验证 fromDto 映射 + toSessionDelta 转换。
+ *
+ * Issue #735 评论 5771063665：Core 已删除 `EditorVisualIntentDto` / `CoordinatedCursorDto`，
+ * `EditorEditResultDto` 直接暴露 `cause`、`operationKind`、`offsetMap`。
  */
 class EditorContentDeltaConsumptionTest {
     @Test
@@ -113,19 +80,9 @@ class EditorContentDeltaConsumptionTest {
                 oldSelectionHead = 12u,
                 newSelectionAnchor = 6u,
                 newSelectionHead = 10u,
-                visualIntent =
-                    uniffi.writer_core.EditorVisualIntentDto(
-                        cause = uniffi.writer_core.EditorTransactionCauseDto.DELETE,
-                        operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
-                        oldAffectedByteRanges = emptyList(),
-                        newAffectedByteRanges = emptyList(),
-                        animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
-                        durationMs = 0u,
-                        coordinatedCursor = uniffi.writer_core.CoordinatedCursorDto(6u, 6u, false),
-                        offsetMap = null,
-                        oldAnimationUnits = emptyList(),
-                        newAnimationUnits = emptyList(),
-                    ),
+                cause = uniffi.writer_core.EditorTransactionCauseDto.DELETE,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+                offsetMap = null,
                 compositionSession = null,
                 contentDelta =
                     uniffi.writer_core.EditorContentDeltaDto(

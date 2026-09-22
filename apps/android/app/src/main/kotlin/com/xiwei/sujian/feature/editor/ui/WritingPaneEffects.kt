@@ -19,7 +19,7 @@ import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.notifySyncMergeConflict
 import com.xiwei.sujian.feature.editor.presentation.reloadSettings
 import com.xiwei.sujian.feature.editor.presentation.shouldConsumePendingAfterFact
-import com.xiwei.sujian.feature.editor.session.CoreVisualIntentEvent
+import com.xiwei.sujian.feature.editor.session.CoreEditFactEvent
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
@@ -28,8 +28,7 @@ import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
 import com.xiwei.sujian.feature.editor.session.shouldApplyExternalContent
 import com.xiwei.sujian.feature.editor.session.storePendingExternalFact
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
-import com.xiwei.sujian.feature.editor.visual.CursorVisualIntent
-import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
+import com.xiwei.sujian.feature.editor.visual.EditorEditFact
 import com.xiwei.sujian.feature.editor.visual.TextVisualKind
 import com.xiwei.sujian.feature.editor.visual.VisualOffsetMap
 import com.xiwei.sujian.feature.editor.visual.VisualOffsetMapEntry
@@ -452,111 +451,76 @@ internal fun rememberChapterSwitchSync(
 // ── 视觉意图收集 ──────────────────────────────────────────────
 
 /**
- * #641：收集 Core 视觉意图事件，映射为 [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
- * 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
+ * Issue #735 评论 5771063665：收集 Core 编辑事实事件，映射为 [EditorEditFact] 喂给 [ComposeEditorVisualState]。
  *
- * Issue #732 评论 5763493968 第1节：不再在这里 collect [EditorMotionPolicy] —
- * policy 由 [BindMotionPolicyToVisualState] 统一绑定到 visualState，
- * [ComposeEditorVisualState.onVisualIntent] 不再接受 policy 参数。
+ * Core 已不再返回视觉意图。Android 从 [CoreEditFactEvent] 的 cause/operationKind/offsetMap
+ * 推导动画策略。
  *
  * #694 评论第 5 步：按 Core cause 分流 —
  * - TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE：本地 InputTransformation 已提供
- *   visual edit，Core 回来的 visual intent 只当 ACK，不再第二次送进 ComposeVisualFrameCoordinator
- *   （否则同一笔输入播放两次）。
- * - UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT：仍映射成 [EditorVisualIntent]，走现有 Core visual path。
- * Core 仍然是文档事务真值，但本地键盘/退格的动画不再等 Core 回声。
+ *   visual edit，Core 回来的事实只当 ACK，不再第二次送进 ComposeVisualFrameCoordinator。
+ * - UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT：仍映射成 [EditorEditFact]，走现有 Core visual path。
  */
 @Composable
-internal fun CollectVisualIntentEvents(
+internal fun CollectEditFactEvents(
     viewModel: EditorViewModel,
     targetId: String,
     visualState: ComposeEditorVisualState,
     coordinator: EditorWindowHost,
 ) {
     LaunchedEffect(viewModel, targetId) {
-        viewModel.visualIntentEvents
+        viewModel.editFactEvents
             .collect { event ->
                 if (event.targetId != targetId) return@collect
                 // #694 评论第 5 步：本地输入 cause 只当 ACK，不再送进 ComposeVisualFrameCoordinator。
-                if (event.visualIntent.isLocalInputCause()) return@collect
+                if (event.isLocalInputCause()) return@collect
                 // UNDO/REDO/PROGRAMMATIC/LOAD/FORMAT 仍走 Core visual path
-                val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
-                visualState.onVisualIntent(editorVisualIntent)
+                val editFact = mapCoreEditFactToEditorEditFact(event)
+                visualState.onEditFact(editFact)
             }
     }
 }
 
 /**
- * #641 评论 问题2：把 Core [VisualIntent]（UTF-8 byte ranges）转成 Compose [EditorVisualIntent]（UTF-16 ranges）。
+ * Issue #735 评论 5771063665：把 Core [CoreEditFactEvent]（UTF-8 byte ranges）转成
+ * Compose [EditorEditFact]（UTF-16 ranges）。
  *
- * #644 评论 #684：在 UI 映射边界一次性把 UTF-8 转成 UTF-16，
- * [animationMode]、[durationMs]、[transactionId]、[baseRevision]、[newRevision] 原样传入，
- * 不要再到 ComposeVisualRebase 或 overlay 里碰 UTF-8。
+ * Android 从 cause/operationKind/offsetMap 推导动画策略，
+ * 用 oldText/newText 做 code-point-safe diff 算 affected ranges 和 replaceBounds。
  */
-private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent): EditorVisualIntent {
+private fun mapCoreEditFactToEditorEditFact(event: CoreEditFactEvent): EditorEditFact {
     val textKind =
-        when {
-            event.visualIntent.isDelete() -> TextVisualKind.Delete
-            event.visualIntent.isInsert() -> TextVisualKind.Insert
-            event.visualIntent.isReplace() || event.visualIntent.isCompositionCommit() ||
-                event.visualIntent.isCompositionUpdate() -> TextVisualKind.Move
-            event.visualIntent.isCursorOnly() -> TextVisualKind.None
-            event.visualIntent.isCompositionCancel() -> TextVisualKind.Delete
+        when (event.operationKind) {
+            uniffi.writer_core.EditorOperationKindDto.DELETE -> TextVisualKind.Delete
+            uniffi.writer_core.EditorOperationKindDto.INSERT -> TextVisualKind.Insert
+            uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
+            uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
+            -> TextVisualKind.Move
+            uniffi.writer_core.EditorOperationKindDto.CURSOR_ONLY -> TextVisualKind.None
+            uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL -> TextVisualKind.Delete
             else -> TextVisualKind.Move
-        }
-
-    val oldRanges =
-        event.visualIntent.oldAffectedByteRanges.map { (start: Int, end: Int) ->
-            TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
-        }
-
-    val newRanges =
-        event.visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
-            TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
-        }
-
-    // #684 评论 5668108597 问题2：Core 计算好的动画单元 UTF-8 byte ranges → UTF-16 ranges。
-    // 与 oldRanges/newRanges 的转换方式一致，overlay 按单元做吐字/吞字动画。
-    val oldAnimationUnits =
-        event.visualIntent.oldAnimationUnitRanges.map { (start: Int, end: Int) ->
-            TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
-        }
-    val newAnimationUnits =
-        event.visualIntent.newAnimationUnitRanges.map { (start: Int, end: Int) ->
-            TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
-        }
-
-    val coordinatedCursor = event.visualIntent.coordinatedCursor
-    val cursor =
-        if (coordinatedCursor.shouldAnimate) {
-            val oldEndUtf16 =
-                TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(
-                    text = event.oldText,
-                    utf8ByteOffset = coordinatedCursor.oldByteOffset,
-                )
-            val newEndUtf16 =
-                TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(
-                    text = event.newText,
-                    utf8ByteOffset = coordinatedCursor.newByteOffset,
-                )
-            if (oldEndUtf16 != null && newEndUtf16 != null) {
-                CursorVisualIntent(
-                    oldEndUtf16 = oldEndUtf16,
-                    newEndUtf16 = newEndUtf16,
-                    animate = true,
-                )
-            } else {
-                null
-            }
-        } else {
-            null
         }
 
     val replaceBounds = computeVisualReplaceBounds(event.oldText, event.newText)
 
+    // 从 replaceBounds 推导 old/new affected ranges（UTF-16）
+    val oldRanges =
+        if (replaceBounds != null && replaceBounds.oldStart < replaceBounds.oldEnd) {
+            listOf(androidx.compose.ui.text.TextRange(replaceBounds.oldStart, replaceBounds.oldEnd))
+        } else {
+            emptyList()
+        }
+    val newRanges =
+        if (replaceBounds != null && replaceBounds.newStart < replaceBounds.newEnd) {
+            listOf(androidx.compose.ui.text.TextRange(replaceBounds.newStart, replaceBounds.newEnd))
+        } else {
+            emptyList()
+        }
+
     // #644 评论 #684：在 UI 映射边界一次性把 Core UTF-8 offset map 转成 UTF-16。
     val visualOffsetMap =
-        event.visualIntent.offsetMap?.let { coreOffsetMap ->
+        event.offsetMap?.let { coreOffsetMap ->
             VisualOffsetMap(
                 entries =
                     coreOffsetMap.entries.map { entry ->
@@ -564,8 +528,6 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
                             TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
                         val newStartUtf16 =
                             TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
-                        val lengthUtf16 = entry.length // Core length is in bytes, need to convert
-                        // 简化处理：用 newText 从 newStartUtf16 开始计算实际 UTF-16 长度
                         val oldEndByte = entry.oldByteOffset + entry.length
                         val newEndByte = entry.newByteOffset + entry.length
                         val oldEndUtf16 =
@@ -594,22 +556,28 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
             )
         }
 
-    return EditorVisualIntent(
+    val oldSelectionEndUtf16 =
+        TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(event.oldText, event.oldSelectionHeadUtf8) ?: -1
+    val newSelectionEndUtf16 =
+        TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(event.newText, event.newSelectionHeadUtf8) ?: -1
+
+    return EditorEditFact(
         coreTransactionId = event.transactionId,
         baseRevision = event.baseRevision,
         newRevision = event.newRevision,
-        animationMode = event.visualIntent.animationMode,
-        durationMs = event.visualIntent.durationMs,
+        cause = event.cause,
+        operationKind = event.operationKind,
         offsetMap = visualOffsetMap,
         oldRanges = oldRanges,
         newRanges = newRanges,
         textKind = textKind,
-        cursor = cursor,
         replaceBounds = replaceBounds,
         expectedOldText = event.oldText,
         expectedNewText = event.newText,
-        oldAnimationUnits = oldAnimationUnits,
-        newAnimationUnits = newAnimationUnits,
+        oldAnimationUnits = oldRanges,
+        newAnimationUnits = newRanges,
+        oldSelectionEndUtf16 = oldSelectionEndUtf16,
+        newSelectionEndUtf16 = newSelectionEndUtf16,
     )
 }
 

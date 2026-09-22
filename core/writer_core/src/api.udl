@@ -38,18 +38,6 @@ namespace writer_core {
     [Throws=WriterError]
     string redact_diagnostic_text(string text);
 
-    // #694 评论 5693077441：本地输入视觉计划纯计算入口 —
-    // Core 对 (old_slices, new_slices) 做视觉分类，
-    // 返回 animation_mode 和 old/new animation units（按 grapheme cluster / run / reflow 粒度）。
-    // Android ComposeLocalVisualRebase / buildLocalInputPatch 复用此 API，
-    // 不再按 UTF-16 +1 硬切或硬编码 CLUSTER_ANIMATION。
-    // 不再把整章正文送过 FFI 做视觉分类，只传本次输入的 affected substring + 绝对 UTF-8 byte 起点。
-    // 无 session/revision/事务副作用，纯函数。
-    LocalVisualPlanDto classify_local_visual_plan(
-        sequence<LocalVisualSliceDto> old_slices,
-        sequence<LocalVisualSliceDto> new_slices,
-        boolean animation_enabled
-    );
 };
 
 dictionary AiActionResponse {
@@ -1503,24 +1491,11 @@ interface WriterAppService {
     EditorEditResultDto text_edit_session_update_composition(u64 session_id, u64 composition_session_id, u64 composition_generation, string new_preedit_text, u32 new_preedit_cursor_offset, u64 expected_revision);
     EditorEditResultDto text_edit_session_finish_composition(u64 session_id, u64 composition_session_id, u64 composition_generation, u64 expected_revision);
     EditorEditResultDto text_edit_session_cancel_composition(u64 session_id, u64 composition_session_id, u64 composition_generation, u64 expected_revision);
-    void text_edit_session_set_animation_enabled(u64 session_id, u8 enabled);
-    void text_edit_session_set_animation_duration_ms(u64 session_id, u64 duration_ms);
     // grapheme cluster 边界由 Core 唯一计算（session-scoped 版本）。
     // 平台端 TextEditSessionBridge 通过这两个方法调用 Core 的 unicode_segmentation，
     // 不再依赖 ICU BreakIterator。
     u32 text_edit_session_previous_grapheme_boundary(u64 session_id, u32 byte_offset);
     u32 text_edit_session_next_grapheme_boundary(u64 session_id, u32 byte_offset);
-    // rebase slice 逻辑对应关系由 Core 唯一计算（session-scoped 版本）。
-    // offset_map 为本次事务的旧正文 → 新正文偏移映射（EditorVisualIntentDto.offset_map），
-    // 用于旧/新 slice range 坐标不同时的 OffsetMapMatched 匹配。
-    sequence<RebaseSliceMappingDto> text_edit_session_compute_rebase_slice_mappings(
-        u64 session_id,
-        sequence<AnimatedSliceRoleDto> old_slice_roles,
-        sequence<EditorByteRangeDto> old_slice_byte_ranges,
-        sequence<AnimatedSliceRoleDto> new_slice_roles,
-        sequence<EditorByteRangeDto> new_slice_byte_ranges,
-        OffsetMapDto? offset_map
-    );
     string text_edit_session_get_text(u64 session_id);
     u64 text_edit_session_get_revision(u64 session_id);
     EditorSessionSnapshotDto text_edit_session_snapshot(u64 session_id);
@@ -1721,15 +1696,6 @@ dictionary ScreenPolicyDto {
 
 // ── Editor Animation DTOs ──
 
-enum AnimationModeDto {
-    "GlyphAnimation",
-    "ClusterAnimation",
-    "RunAnimation",
-    "LineReflowAnimation",
-    "SnapshotAnimation",
-    "SystemSuppressed",
-};
-
 enum EditorTransactionCauseDto {
     "Typing",
     "Delete",
@@ -1757,12 +1723,6 @@ enum EditorOperationKindDto {
     "Format",
 };
 
-dictionary CoordinatedCursorDto {
-    u32 old_byte_offset;
-    u32 new_byte_offset;
-    boolean should_animate;
-};
-
 dictionary OffsetMapEntryDto {
     u32 old_byte_offset;
     u32 new_byte_offset;
@@ -1779,71 +1739,9 @@ dictionary OffsetMapDto {
     sequence<OffsetMapEntryDto> entries;
 };
 
-dictionary EditorVisualIntentDto {
-    EditorTransactionCauseDto cause;
-    EditorOperationKindDto operation_kind;
-    sequence<EditorByteRangeDto> old_affected_byte_ranges;
-    sequence<EditorByteRangeDto> new_affected_byte_ranges;
-    AnimationModeDto animation_mode;
-    u64 duration_ms;
-    CoordinatedCursorDto coordinated_cursor;
-    // Core 计算的 old/new 正文偏移映射，平台端 AffectedLayoutPlanner 不再独立推导
-    OffsetMapDto? offset_map;
-    // #684 评论 5668108597：Core 计算好的动画单元范围，平台端按单元做吐字/吞字动画
-    sequence<EditorByteRangeDto> old_animation_units;
-    sequence<EditorByteRangeDto> new_animation_units;
-};
-
 dictionary EditorByteRangeDto {
     u32 start;
     u32 end_exclusive;
-};
-
-// #694 评论 5693077441：本地输入视觉计划 DTO —
-// Core 对 (old_slices, new_slices) 的纯计算视觉分类结果。
-// 供 Android ComposeLocalVisualRebase / buildLocalInputPatch 复用，不再硬编码 CLUSTER_ANIMATION
-// 或按 UTF-16 +1 硬切。
-dictionary LocalVisualPlanDto {
-    AnimationModeDto animation_mode;
-    sequence<EditorByteRangeDto> old_animation_units;
-    sequence<EditorByteRangeDto> new_animation_units;
-};
-
-// #694 评论 5693077441：affected slice DTO — 只传本次输入的 affected substring + 绝对 UTF-8 byte 起点，
-// 不再把整章正文送过 FFI 做视觉分类。
-dictionary LocalVisualSliceDto {
-    u32 absolute_start;
-    string text;
-};
-
-// 动画切片角色 — 与 Core `AnimatedSliceRole` 一一对应。
-enum AnimatedSliceRoleDto {
-    "Insert",
-    "Delete",
-    "Move",
-    "CrossfadeOld",
-    "CrossfadeNew"
-};
-
-// Rebase slice 继续/结束语义 — 与 Core `RebaseContinuation` 一一对应。
-enum RebaseContinuationDto {
-    "Continue",
-    "End"
-};
-
-// Rebase 匹配依据 — 与 Core `RebaseReason` 一一对应。
-enum RebaseReasonDto {
-    "SameByteRange",
-    "OffsetMapMatched",
-    "NoMapping"
-};
-
-// 旧→新逻辑 slice 对应关系 — 与 Core `RebaseSliceMapping` 一一对应。
-dictionary RebaseSliceMappingDto {
-    u32 old_slice_index;
-    u32 new_slice_index;
-    RebaseContinuationDto continuation;
-    RebaseReasonDto reason;
 };
 
 dictionary DisplayPatchDto {
@@ -1883,7 +1781,9 @@ dictionary EditorEditResultDto {
     u32 old_selection_head;
     u32 new_selection_anchor;
     u32 new_selection_head;
-    EditorVisualIntentDto visual_intent;
+    EditorTransactionCauseDto cause;
+    EditorOperationKindDto operation_kind;
+    OffsetMapDto? offset_map;
     CompositionSessionDto? composition_session;
     // 本次编辑的字符增量（正文无变化时为全 0）。
     EditorContentDeltaDto content_delta;

@@ -19,14 +19,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #689 评论 5676120929 复现+验证测试 — 修复后的断言。
  *
  * 问题1：latestPatch 改为 pendingPatches 队列，快速输入时 patch 不丢。
  * 问题2：ghost 绘制使用 currentPosition，删除过程中不跳。
- * 问题3：offsetMap==null 时用 entriesForIntent fallback，等长替换不错认。
+ * 问题3：offsetMap==null 时用 entriesForFact fallback，等长替换不错认。
  */
 @Suppress("StringLiteralDuplication", "MaxLineLength", "FunctionNaming")
 @RunWith(RobolectricTestRunner::class)
@@ -60,20 +59,20 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
 
         // "" -> "a"
         visualState.onAuthoritativeLayout(aLayout.result, aLayout.selection, aLayout.scrollY)
-        visualState.onVisualIntent(
-            intent = makeIntent(1L, "", "a", insertedRanges = listOf(TextRange(0, 1))),
+        visualState.onEditFact(
+            fact = makeIntent(1L, "", "a", insertedRanges = listOf(TextRange(0, 1))),
         )
 
         // "a" -> "ab"
         visualState.onAuthoritativeLayout(abLayout.result, abLayout.selection, abLayout.scrollY)
-        visualState.onVisualIntent(
-            intent = makeIntent(2L, "a", "ab", insertedRanges = listOf(TextRange(1, 2))),
+        visualState.onEditFact(
+            fact = makeIntent(2L, "a", "ab", insertedRanges = listOf(TextRange(1, 2))),
         )
 
         // "ab" -> "abc"
         visualState.onAuthoritativeLayout(abcLayout.result, abcLayout.selection, abcLayout.scrollY)
-        visualState.onVisualIntent(
-            intent = makeIntent(3L, "ab", "abc", insertedRanges = listOf(TextRange(2, 3))),
+        visualState.onEditFact(
+            fact = makeIntent(3L, "ab", "abc", insertedRanges = listOf(TextRange(2, 3))),
         )
 
         // 验证：有三笔 patch 待消费
@@ -216,24 +215,26 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
 
         // Step 2: 创建 replace intent，offsetMap=null，replaceBounds=(0,1,0,1)
         val replaceIntent =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 2L,
                 baseRevision = 0L,
                 newRevision = 0L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap = null,
                 oldRanges = listOf(TextRange(0, 1)),
                 newRanges = listOf(TextRange(0, 1)),
                 textKind = TextVisualKind.Move,
-                cursor = null,
                 expectedOldText = "a",
                 expectedNewText = "b",
                 replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 1, newStart = 0, newEnd = 1),
             )
 
-        // 验证：entriesForIntent 应该生成 fallback entries（空，因为整个文本被替换）
-        val entries = ComposeVisualRebase.entriesForIntent(replaceIntent)
+        // 验证：entriesForFact 应该生成 fallback entries（空，因为整个文本被替换）
+        val entries = ComposeVisualRebase.entriesForFact(replaceIntent)
         // replaceBounds=(0,1,0,1) 时没有前缀和后缀，entries 为空 — 表示没有存活映射
         assertEquals(
             "问题3: 等长全替换的 fallback entries 应为空（无存活映射）",
@@ -312,7 +313,7 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
         durationMs: Long = 100L,
-        intent: EditorVisualIntent? = null,
+        intent: EditorEditFact? = null,
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
@@ -326,8 +327,7 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-            intent = intent,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
         )
 
     private fun makeIntent(
@@ -336,18 +336,20 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         newText: String,
         insertedRanges: List<TextRange> = emptyList(),
         deletedRanges: List<TextRange> = emptyList(),
-    ): EditorVisualIntent =
-        EditorVisualIntent(
+    ): EditorEditFact =
+        EditorEditFact(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
             coreTransactionId = coreTransactionId,
             baseRevision = 0L,
             newRevision = 0L,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
             durationMs = 100L,
             offsetMap = null,
             oldRanges = deletedRanges,
             newRanges = insertedRanges,
             textKind = TextVisualKind.Insert,
-            cursor = null,
             expectedOldText = oldText,
             expectedNewText = newText,
         )

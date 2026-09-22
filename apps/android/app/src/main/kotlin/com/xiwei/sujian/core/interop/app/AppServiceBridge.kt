@@ -734,22 +734,6 @@ open class AppServiceBridge(
             )
         }
 
-    fun textEditSessionSetAnimationEnabled(
-        sessionId: ULong,
-        enabled: Boolean,
-    ): BridgeResult<Unit> =
-        holder.wrapResult {
-            holder.service.textEditSessionSetAnimationEnabled(sessionId, if (enabled) 1u else 0u)
-        }
-
-    fun textEditSessionSetAnimationDurationMs(
-        sessionId: ULong,
-        durationMs: ULong,
-    ): BridgeResult<Unit> =
-        holder.wrapResult {
-            holder.service.textEditSessionSetAnimationDurationMs(sessionId, durationMs)
-        }
-
     // #606: session-scoped grapheme 边界由 Core 唯一计算（unicode_segmentation）。
     fun textEditSessionPreviousGraphemeBoundary(
         sessionId: ULong,
@@ -765,29 +749,6 @@ open class AppServiceBridge(
     ): BridgeResult<UInt> =
         holder.wrapResult {
             holder.service.textEditSessionNextGraphemeBoundary(sessionId, byteOffset)
-        }
-
-    /**
-     * #606: 旧→新逻辑 slice 对应关系由 Core 唯一计算（session-scoped）。
-     * 平台端 RebasePlanner 不再自己匹配，直接消费此结果。
-     */
-    fun textEditSessionComputeRebaseSliceMappings(
-        sessionId: ULong,
-        oldSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
-        oldSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
-        newSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
-        newSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
-        offsetMap: uniffi.writer_core.OffsetMapDto?,
-    ): BridgeResult<List<uniffi.writer_core.RebaseSliceMappingDto>> =
-        holder.wrapResult {
-            holder.service.textEditSessionComputeRebaseSliceMappings(
-                sessionId,
-                oldSliceRoles,
-                oldSliceByteRanges,
-                newSliceRoles,
-                newSliceByteRanges,
-                offsetMap,
-            )
         }
 
     fun textEditSessionGetText(sessionId: ULong): BridgeResult<String> =

@@ -1,9 +1,9 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{CoordinatedCursor, EditorOperationKind, EditorVisualIntent};
+use super::types::EditorOperationKind;
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
-use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
+use crate::editor::transaction::EditorTransactionCause;
 
 impl EditorKernel {
     pub(crate) fn apply_set_selection(
@@ -45,29 +45,6 @@ impl EditorKernel {
 
         let new_selection = make_selection(anchor, head);
 
-        let visual_intent = EditorVisualIntent {
-            cause: EditorTransactionCause::Programmatic,
-            operation_kind: EditorOperationKind::CursorOnly,
-            old_affected_byte_ranges: vec![],
-            new_affected_byte_ranges: vec![],
-            animation_mode: if self.animation_enabled && old_cursor.value() != head {
-                AnimationMode::GlyphAnimation
-            } else {
-                AnimationMode::SystemSuppressed
-            },
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(head),
-                should_animate: self.animation_enabled && old_cursor.value() != head,
-            },
-            // 选区操作不变更正文，无 offset_map
-            offset_map: None,
-            // cursor-only 无 affected ranges，无动画单元。
-            old_animation_units: vec![],
-            new_animation_units: vec![],
-        };
-
         let result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -75,7 +52,10 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause: EditorTransactionCause::Programmatic,
+            operation_kind: EditorOperationKind::CursorOnly,
+            // 选区操作不变更正文，无 offset_map
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         };
 

@@ -61,7 +61,7 @@ internal object ComposeVisualPatchBatch {
         // Issue #732 评论 5763493968 第2节：batch 不再用"最后一个 patch 的 policy"筛掉
         // inserted/deleted units — batch 只合并事实 diff。是否播放在真正消费这一帧时
         // （[ComposeEditorVisualState.drainPendingPatchesAtFrame]）由当前 effective policy 决定。
-        val screenSuppressed = batch.any { it.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED }
+        val screenSuppressed = batch.any { it.animationMode == AnimationMode.SYSTEM_SUPPRESSED }
 
         // #694 评论 5691696678 问题3：insertedUnits/deletedUnits 用通用 stage-map 版本合成，
         // 保留多字符吐字顺序（a/b/c 三个 unit 而非单个 [0,3)）。
@@ -115,7 +115,7 @@ internal object ComposeVisualPatchBatch {
 
         val animationMode =
             if (screenSuppressed) {
-                uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
+                AnimationMode.SYSTEM_SUPPRESSED
             } else {
                 last.animationMode
             }
@@ -133,7 +133,6 @@ internal object ComposeVisualPatchBatch {
             targetCaretRect = last.targetCaretRect,
             durationMs = effectiveDurationMs,
             animationMode = animationMode,
-            intent = last.intent,
         )
     }
 

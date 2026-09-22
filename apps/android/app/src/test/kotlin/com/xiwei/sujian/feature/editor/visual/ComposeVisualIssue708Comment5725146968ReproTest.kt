@@ -15,7 +15,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #708 评论 5725146968 修复1 的验证测试 —
@@ -63,7 +62,6 @@ class ComposeVisualIssue708Comment5725146968ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-711-5725146968-backspace",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout："abc"，caret 在 offset 2
@@ -143,7 +141,7 @@ class ComposeVisualIssue708Comment5725146968ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)

@@ -1,9 +1,9 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     /// replace-all 是冷路径（明确需要全文的边界），允许 materialize
@@ -84,8 +84,8 @@ impl EditorKernel {
         self.composition_session = None;
 
         let new_selection = make_selection(new_cursor_val, new_cursor_val);
-        // content delta / offset map / affected ranges 从 delta 构造，
-        // 计算完成后才把 edits 移入 Undo 栈。
+        // content delta / offset map 从 delta 构造，
+        // 计算完成后才把 edits 积入 Undo 栈。
         let mut content_delta = EditorContentDelta::default();
         let mut offset_pairs: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(edits.len());
         for delta in &edits {
@@ -100,8 +100,6 @@ impl EditorKernel {
                 delta.new_range.end().value(),
             ));
         }
-        let old_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.old_range).collect();
-        let new_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.new_range).collect();
         let new_revision = self.revision;
 
         // 一个 EditorEditResult 是一个原子 patch batch — 每条 delta 一条
@@ -130,25 +128,6 @@ impl EditorKernel {
         });
         self.redo_stack.clear();
 
-        let visual_intent = EditorVisualIntent {
-            cause: EditorTransactionCause::Format,
-            operation_kind: EditorOperationKind::Format,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: new_affected,
-            animation_mode: AnimationMode::SystemSuppressed,
-            duration_ms: 0,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: false,
-            },
-            // 从 delta 直接构造 offset map，不再全文 diff。
-            offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),
-            // replace-all 的 animation_mode 永远是 SystemSuppressed，无动画单元。
-            old_animation_units: vec![],
-            new_animation_units: vec![],
-        };
-
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -156,7 +135,10 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause: EditorTransactionCause::Format,
+            operation_kind: EditorOperationKind::Format,
+            // 从 delta 直接构造 offset map，不再全文 diff。
+            offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),
             content_delta,
         })
     }

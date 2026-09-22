@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use writer_core::editor::CursorRect;
+use super::edit_motion::CursorRect;
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity};

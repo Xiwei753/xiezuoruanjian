@@ -1,4 +1,4 @@
-import { EditorVisualTransaction, EditorTransactionCause } from './dto/EditorDtos'
+import { EditorTransactionCause } from './dto/EditorDtos'
 import { ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
@@ -91,15 +91,4 @@ export interface IWriterCoreBridge {
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>
   isAiAvailable(): Promise<ResultEnvelope<boolean>>
-
-  // Editor Animation
-  editorVisualTransaction(
-    oldText: string,
-    newText: string,
-    oldCursorIndex: number,
-    newCursorIndex: number,
-    cause: EditorTransactionCause,
-    maxAnimatedChars: number,
-    animationDurationMs: number
-  ): Promise<ResultEnvelope<EditorVisualTransaction | null>>
 }

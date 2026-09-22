@@ -174,19 +174,10 @@ impl SujianEditorItem {
                     })
             });
 
-        let transaction = self.pipeline.engine().create_transaction(
-            &old.text,
-            &new.text,
-            EditorSelection {
-                anchor: EditorCursor::new(&old.text, old.selection_anchor),
-                head: EditorCursor::new(&old.text, old.cursor),
-            },
-            EditorSelection {
-                anchor: EditorCursor::new(&new.text, new.selection_anchor),
-                head: EditorCursor::new(&new.text, new.cursor),
-            },
-            cause,
-        );
+        // Issue #735: EditorEngine 已删除，不再调用 create_transaction。
+        // composition commit 的动画由 handle_composition_commit_or_cancel 直接处理，
+        // 不需要 EditorTransaction 中间结构。
+        let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
         self.pipeline
             .animation_coordinator_mut()
             .cancel_active_composition(cancel_reason);
@@ -269,16 +260,12 @@ impl SujianEditorItem {
         self.last_event_count = 1;
         self.last_summary = format!(
             "cause={:?};changes={};vt={};animate=true",
-            transaction.cause,
-            transaction.changes.len(),
-            summary_tag,
+            cause, change_count, summary_tag,
         )
         .into();
         editor_animation_debug_log(&format!(
             "record_composition_commit_transaction: cancel_reason={}, cause={:?}, changes={}",
-            cancel_reason,
-            transaction.cause,
-            transaction.changes.len(),
+            cancel_reason, cause, change_count,
         ));
 
         self.transaction_created();
@@ -319,15 +306,12 @@ impl SujianEditorItem {
     ) -> bool {
         let old = self.buffer.snapshot();
 
-        let applied = match op {
+        let edit_result: Option<writer_core::editor::EditorEditResult> = match op {
             EditOp::Insert {
                 cursor,
                 text,
                 pipeline_cause,
-            } => self
-                .pipeline
-                .insert_text(cursor, &text, pipeline_cause)
-                .is_some(),
+            } => self.pipeline.insert_text(cursor, &text, pipeline_cause),
             EditOp::Replace {
                 start,
                 end,
@@ -335,16 +319,12 @@ impl SujianEditorItem {
                 pipeline_cause,
             } => self
                 .pipeline
-                .replace_range(start, end, &text, pipeline_cause)
-                .is_some(),
+                .replace_range(start, end, &text, pipeline_cause),
             EditOp::Delete {
                 start,
                 end,
                 pipeline_cause,
-            } => self
-                .pipeline
-                .delete_range(start, end, pipeline_cause)
-                .is_some(),
+            } => self.pipeline.delete_range(start, end, pipeline_cause),
             EditOp::ImeCommit {
                 selection_byte_range,
                 replacement_byte_range,
@@ -358,18 +338,17 @@ impl SujianEditorItem {
                 // Core 不会删除）。
                 let (sel_start, sel_end) = selection_byte_range.unwrap_or((0, 0));
                 let (rep_start, rep_end) = replacement_byte_range;
-                self.pipeline
-                    .ime_commit(
-                        sel_start,
-                        sel_end,
-                        rep_start,
-                        rep_end,
-                        &inserted_text,
-                        pipeline_cause,
-                    )
-                    .is_some()
+                self.pipeline.ime_commit(
+                    sel_start,
+                    sel_end,
+                    rep_start,
+                    rep_end,
+                    &inserted_text,
+                    pipeline_cause,
+                )
             }
         };
+        let applied = edit_result.is_some();
         if !applied {
             return false;
         }
@@ -397,7 +376,10 @@ impl SujianEditorItem {
                 params.summary_tag,
             );
         } else {
-            let _vt = self.record_transaction(old, new, visual_cause, true);
+            let result = edit_result
+                .as_ref()
+                .expect("edit_result is Some when applied is true");
+            let _vt = self.record_transaction(old, new, result, true);
         }
         true
     }
@@ -697,22 +679,22 @@ impl SujianEditorItem {
 
     pub(crate) fn undo(&mut self) {
         let old = self.buffer.snapshot();
-        if self.pipeline.perform_undo().is_some() {
+        if let Some(result) = self.pipeline.perform_undo() {
             self.sync_buffer_from_pipeline();
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
-            self.record_transaction(old, new, EditorTransactionCause::Undo, true);
+            self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
         }
     }
 
     pub(crate) fn redo(&mut self) {
         let old = self.buffer.snapshot();
-        if self.pipeline.perform_redo().is_some() {
+        if let Some(result) = self.pipeline.perform_redo() {
             self.sync_buffer_from_pipeline();
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
-            self.record_transaction(old, new, EditorTransactionCause::Redo, true);
+            self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
         }
     }

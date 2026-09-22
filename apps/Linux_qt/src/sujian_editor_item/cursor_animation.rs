@@ -1,4 +1,4 @@
-use writer_core::editor::CursorRect;
+use super::edit_motion::CursorRect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum CursorBlinkMode {

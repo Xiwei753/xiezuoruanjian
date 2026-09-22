@@ -8,7 +8,7 @@ mod tests {
         EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset,
         Utf8ByteOffset, Utf8ByteRange,
     };
-    use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
+    use crate::editor::transaction::EditorTransactionCause;
 
     #[test]
     fn insert_command_produces_display_patch() {
@@ -27,11 +27,8 @@ mod tests {
         assert_eq!(result.base_revision.value(), 0);
         assert_eq!(result.new_revision.value(), 1);
         assert!(!result.display_patches.is_empty());
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Insert
-        );
-        assert_eq!(result.visual_intent.cause, EditorTransactionCause::Typing);
+        assert_eq!(result.operation_kind, EditorOperationKind::Insert);
+        assert_eq!(result.cause, EditorTransactionCause::Typing);
     }
 
     #[test]
@@ -48,10 +45,7 @@ mod tests {
 
         assert_eq!(kernel.snapshot_text(), "你好");
         assert_eq!(kernel.cursor(), 6);
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Delete
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Delete);
     }
 
     #[test]
@@ -69,10 +63,7 @@ mod tests {
 
         assert_eq!(kernel.snapshot_text(), "你好朋友");
         assert_eq!(kernel.cursor(), 12);
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Replace
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Replace);
     }
 
     #[test]
@@ -88,10 +79,7 @@ mod tests {
         assert_eq!(kernel.snapshot_text(), "hello");
         assert_eq!(kernel.cursor(), 3);
         assert_eq!(result.display_patches.len(), 0);
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::CursorOnly
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::CursorOnly);
     }
 
     #[test]
@@ -114,7 +102,7 @@ mod tests {
             .into_result();
         assert_eq!(kernel.snapshot_text(), "ab");
         assert_eq!(kernel.cursor(), 2);
-        assert_eq!(result.visual_intent.cause, EditorTransactionCause::Undo);
+        assert_eq!(result.cause, EditorTransactionCause::Undo);
     }
 
     #[test]
@@ -141,7 +129,7 @@ mod tests {
             })
             .into_result();
         assert_eq!(kernel.snapshot_text(), "abc");
-        assert_eq!(result.visual_intent.cause, EditorTransactionCause::Redo);
+        assert_eq!(result.cause, EditorTransactionCause::Redo);
     }
 
     #[test]
@@ -159,14 +147,7 @@ mod tests {
         let result = kernel.load_text("new content".to_string(), 0).into_result();
         assert_eq!(kernel.snapshot_text(), "new content");
         assert_eq!(kernel.cursor(), 0);
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Load
-        );
-        assert_eq!(
-            result.visual_intent.animation_mode,
-            AnimationMode::SystemSuppressed
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Load);
     }
 
     #[test]
@@ -217,48 +198,6 @@ mod tests {
     }
 
     #[test]
-    fn coordinated_cursor_tracks_movement() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
-        let result = kernel
-            .apply(EditorCommand::SetSelection {
-                anchor: Utf8ByteOffset::unchecked(0),
-                head: Utf8ByteOffset::unchecked(0),
-                expected_revision: EditorRevision::new(0),
-            })
-            .into_result();
-        assert_eq!(
-            result.visual_intent.coordinated_cursor.old_offset.value(),
-            3
-        );
-        assert_eq!(
-            result.visual_intent.coordinated_cursor.new_offset.value(),
-            0
-        );
-        assert!(result.visual_intent.coordinated_cursor.should_animate);
-    }
-
-    #[test]
-    fn animation_disabled_suppresses_animation() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
-        kernel.set_animation_enabled(false);
-
-        let result = kernel
-            .apply(EditorCommand::Insert {
-                byte_offset: Utf8ByteOffset::unchecked(2),
-                text: "c".to_string(),
-                cause: EditorTransactionCause::Typing,
-                expected_revision: EditorRevision::new(0),
-            })
-            .into_result();
-
-        assert_eq!(
-            result.visual_intent.animation_mode,
-            AnimationMode::SystemSuppressed
-        );
-        assert!(!result.visual_intent.coordinated_cursor.should_animate);
-    }
-
-    #[test]
     fn undo_then_new_edit_clears_redo() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let r1 = kernel
@@ -291,10 +230,7 @@ mod tests {
             })
             .into_result();
         assert_eq!(kernel.snapshot_text(), "abd");
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::CursorOnly
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::CursorOnly);
     }
 
     #[test]
@@ -331,8 +267,8 @@ mod tests {
             json
         );
         assert!(
-            json.contains("\"visualIntent\":"),
-            "JSON should use camelCase for visualIntent, got: {}",
+            json.contains("\"cause\":"),
+            "JSON should use camelCase for cause, got: {}",
             json
         );
         assert!(
@@ -341,33 +277,8 @@ mod tests {
             json
         );
         assert!(
-            json.contains("\"animationMode\":"),
-            "JSON should use camelCase for animationMode, got: {}",
-            json
-        );
-        assert!(
-            json.contains("\"durationMs\":"),
-            "JSON should use camelCase for durationMs, got: {}",
-            json
-        );
-        assert!(
-            json.contains("\"coordinatedCursor\":"),
-            "JSON should use camelCase for coordinatedCursor, got: {}",
-            json
-        );
-        assert!(
-            json.contains("\"oldOffset\":"),
-            "JSON should use camelCase for oldOffset, got: {}",
-            json
-        );
-        assert!(
-            json.contains("\"newOffset\":"),
-            "JSON should use camelCase for newOffset, got: {}",
-            json
-        );
-        assert!(
-            json.contains("\"shouldAnimate\":"),
-            "JSON should use camelCase for shouldAnimate, got: {}",
+            json.contains("\"offsetMap\":"),
+            "JSON should use camelCase for offsetMap, got: {}",
             json
         );
         assert!(
@@ -427,14 +338,8 @@ mod tests {
             })
             .into_result();
         assert_eq!(kernel.snapshot_text(), "你好你好");
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Insert
-        );
-        assert_eq!(
-            result.visual_intent.cause,
-            EditorTransactionCause::TypingCommit
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Insert);
+        assert_eq!(result.cause, EditorTransactionCause::TypingCommit);
     }
 
     #[test]
@@ -554,23 +459,19 @@ mod tests {
             .into_result();
         assert_eq!(kernel.snapshot_text(), "你好");
         assert_eq!(kernel.cursor(), 6);
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Delete
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Delete);
     }
 
     #[test]
     fn set_selection_with_same_position_no_cursor_animation() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 1).unwrap();
-        let result = kernel
+        let _result = kernel
             .apply(EditorCommand::SetSelection {
                 anchor: Utf8ByteOffset::unchecked(1),
                 head: Utf8ByteOffset::unchecked(1),
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert!(!result.visual_intent.coordinated_cursor.should_animate);
     }
 
     #[test]
@@ -680,7 +581,7 @@ mod tests {
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
             before_byte_range: Utf8ByteRange::from_ordered(0, 2),
-            after_byte_range: Utf8ByteRange::zero(),
+            after_byte_range: Utf8ByteRange::point(0),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });
@@ -702,7 +603,7 @@ mod tests {
             .into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
-            before_byte_range: Utf8ByteRange::zero(),
+            before_byte_range: Utf8ByteRange::point(0),
             after_byte_range: Utf8ByteRange::from_ordered(4, 5),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
@@ -1069,7 +970,7 @@ mod tests {
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
             before_byte_range: Utf8ByteRange::from_ordered(0, 2),
-            after_byte_range: Utf8ByteRange::zero(),
+            after_byte_range: Utf8ByteRange::point(0),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });
@@ -1094,10 +995,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         let result = outcome.into_result();
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Insert
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Insert);
         assert_eq!(kernel.snapshot_text(), "Hello");
     }
 
@@ -1116,10 +1014,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         let result = outcome.into_result();
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Delete
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Delete);
         assert_eq!(kernel.snapshot_text(), "AE");
     }
 
@@ -1146,7 +1041,7 @@ mod tests {
         });
         let result = outcome.into_result();
         assert_eq!(
-            result.visual_intent.operation_kind,
+            result.operation_kind,
             EditorOperationKind::CompositionCommit
         );
         assert_eq!(kernel.snapshot_text(), "你好");
@@ -1208,7 +1103,7 @@ mod tests {
         });
         let result = commit.into_result();
         assert_eq!(
-            result.visual_intent.operation_kind,
+            result.operation_kind,
             EditorOperationKind::CompositionCommit
         );
         assert_eq!(kernel.snapshot_text(), "abyc");
@@ -1228,10 +1123,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Insert
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Insert);
         assert_eq!(kernel.snapshot_text(), "ABCXDE");
     }
 
@@ -1247,10 +1139,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Delete
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Delete);
         assert_eq!(kernel.snapshot_text(), "AE");
     }
 
@@ -1266,10 +1155,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Replace
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Replace);
         assert_eq!(kernel.snapshot_text(), "AXYE");
     }
 
@@ -1288,10 +1174,7 @@ mod tests {
             .into_result();
         assert_eq!(kernel.snapshot_text(), "    hello\n    ");
         assert_eq!(kernel.cursor(), 14);
-        assert_eq!(
-            result.visual_intent.operation_kind,
-            EditorOperationKind::Insert
-        );
+        assert_eq!(result.operation_kind, EditorOperationKind::Insert);
     }
 
     #[test]
@@ -1454,14 +1337,9 @@ mod tests {
             })
             .into_result();
         assert_eq!(
-            result.visual_intent.operation_kind,
+            result.operation_kind,
             EditorOperationKind::CompositionUpdate
         );
-        assert_eq!(
-            result.visual_intent.animation_mode,
-            AnimationMode::GlyphAnimation
-        );
-        assert!(!result.visual_intent.new_affected_byte_ranges.is_empty());
     }
 
     #[test]
@@ -1488,11 +1366,9 @@ mod tests {
             })
             .into_result();
         assert_eq!(
-            result.visual_intent.operation_kind,
+            result.operation_kind,
             EditorOperationKind::CompositionCancel
         );
-        assert!(!result.visual_intent.old_affected_byte_ranges.is_empty());
-        assert!(result.visual_intent.new_affected_byte_ranges.is_empty());
     }
 
     #[test]
@@ -1519,7 +1395,7 @@ mod tests {
             })
             .into_result();
         assert_eq!(
-            result.visual_intent.operation_kind,
+            result.operation_kind,
             EditorOperationKind::CompositionCommit
         );
         assert_eq!(kernel.snapshot_text(), "hello world");
@@ -1619,10 +1495,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        let map = result
-            .visual_intent
-            .offset_map
-            .expect("insert 应产生 offset_map");
+        let map = result.offset_map.expect("insert 应产生 offset_map");
         // old="ab", new="aXb"：前缀 "a" identity (0->0, len=1)，后缀 "b" shifted (1->2, len=1)
         assert_eq!(map.entries.len(), 2);
         // 前缀 identity
@@ -1652,10 +1525,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        let map = result
-            .visual_intent
-            .offset_map
-            .expect("delete 应产生 offset_map");
+        let map = result.offset_map.expect("delete 应产生 offset_map");
         // old="aXb", new="ab"：前缀 "a" identity (0->0, len=1)，后缀 "b" shifted (2->1, len=1)
         assert_eq!(map.entries.len(), 2);
         assert_eq!(map.entries[0].old_byte_offset.value(), 0);
@@ -1682,10 +1552,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        let map = result
-            .visual_intent
-            .offset_map
-            .expect("replace 应产生 offset_map");
+        let map = result.offset_map.expect("replace 应产生 offset_map");
         // old="hello", new="heLLo"：前缀 "he" identity (0->0, len=2)，后缀 "o" shifted (4->4, len=1)
         assert_eq!(map.entries.len(), 2);
         assert_eq!(map.entries[0].old_byte_offset.value(), 0);
@@ -1709,10 +1576,7 @@ mod tests {
                 expected_revision: EditorRevision::new(0),
             })
             .into_result();
-        assert!(
-            result.visual_intent.offset_map.is_none(),
-            "选区操作 offset_map 应为 None"
-        );
+        assert!(result.offset_map.is_none(), "选区操作 offset_map 应为 None");
     }
 
     // ──  R8: composition grapheme semantic operation tests ──

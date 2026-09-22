@@ -355,7 +355,7 @@ impl SujianEditorItem {
 
         let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session
         {
-            session.replace_start.value() + session.preedit_cursor_offset.value()
+            session.replace_start + session.preedit_cursor
         } else {
             self.buffer.cursor + virtual_text.len().saturating_sub(self.buffer.text.len())
         };

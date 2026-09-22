@@ -19,7 +19,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #708 评论 5725706551 — `publishLocalHandoffScene()` scene rebase 修复的验证测试。
@@ -86,7 +85,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5725706551-A",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -213,7 +211,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5725706551-B",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -351,7 +348,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5726837636-C",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -555,7 +551,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5726837636-D",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -715,11 +710,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5727440517-E",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
         // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
-        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -927,11 +920,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5727808906-F",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
         // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
-        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -1208,7 +1199,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5728951138-G",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -1342,7 +1332,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5729482707-H1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -1455,7 +1444,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5729482707-H2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -1606,7 +1594,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5729482707-H3",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -1705,7 +1692,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5730173947-H4",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 初始 layout：空文本
@@ -1814,7 +1800,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5731952690-I1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -1931,7 +1916,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5731952690-I3-1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -1986,7 +1970,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5731952690-I3-2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -2049,7 +2032,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5731952690-I3-3",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -2115,7 +2097,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5731952690-I3-4",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -2217,11 +2198,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5733321056-I4",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
         // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
-        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -2366,7 +2345,6 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5733321056-I6",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置 motionPolicy: textEnabled=true, coordinated=true
@@ -2499,18 +2477,20 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
      * 误判为几何变化、survivor 被误释放。本测试验证的是 rebase/split 机制（非 #720 释放），
      * 用非 null intent 绕过释放门控。
      */
-    private fun nonLocalIntent(id: Long): EditorVisualIntent =
-        EditorVisualIntent(
+    private fun nonLocalIntent(id: Long): EditorEditFact =
+        EditorEditFact(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
             coreTransactionId = id,
             baseRevision = 0L,
             newRevision = id,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
             durationMs = 100L,
             offsetMap = null,
             oldRanges = emptyList(),
             newRanges = emptyList(),
             textKind = TextVisualKind.None,
-            cursor = null,
         )
 
     private companion object {

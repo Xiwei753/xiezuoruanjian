@@ -15,7 +15,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #708 评论 5724568261 缺口1 的暴露测试 —
@@ -67,7 +66,6 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-708-5724568261-gap1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 确认 "ab" 一行，"a\nb" 跨两行（确保几何位移场景成立）
@@ -157,7 +155,6 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "test-711-5724568261-reflow",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 确认 "ab" 一行，"a\nb" 跨两行（确保软换行场景成立）
@@ -241,7 +238,7 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)

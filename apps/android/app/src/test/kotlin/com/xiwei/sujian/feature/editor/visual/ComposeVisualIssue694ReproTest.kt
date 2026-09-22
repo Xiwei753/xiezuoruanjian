@@ -15,7 +15,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #694 复现测试 — "Android：动画事务拿得太晚，快速输入/删除和跨行回流仍会乱跳"。
@@ -64,7 +63,7 @@ class ComposeVisualIssue694ReproTest {
 
         // === 第 1 笔："" -> "a" ===
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 1L,
                 baseRev = 0L,
@@ -80,7 +79,7 @@ class ComposeVisualIssue694ReproTest {
         assertNotNull("patch A（空串 -> a）应生成", patchA)
 
         // === 第 2 笔："a" -> "ab" ===
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 2L,
                 baseRev = 1L,
@@ -100,7 +99,7 @@ class ComposeVisualIssue694ReproTest {
         assertNotNull("patch B（a -> ab）应生成", patchB)
 
         // === 第 3 笔："ab" -> "abc" ===
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 3L,
                 baseRev = 2L,
@@ -166,7 +165,7 @@ class ComposeVisualIssue694ReproTest {
 
         // 连续 3 笔快速输入，在同一 VSync 到达
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 1L,
                 baseRev = 0L,
@@ -178,7 +177,7 @@ class ComposeVisualIssue694ReproTest {
             ),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 2L,
                 baseRev = 1L,
@@ -194,7 +193,7 @@ class ComposeVisualIssue694ReproTest {
             ),
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
-        state.onVisualIntent(
+        state.onEditFact(
             makeInsertIntent(
                 coreTxnId = 3L,
                 baseRev = 2L,
@@ -243,18 +242,20 @@ class ComposeVisualIssue694ReproTest {
         newRange: TextRange,
         replaceBounds: VisualReplaceBounds,
         offsetMap: VisualOffsetMap? = null,
-    ): EditorVisualIntent =
-        EditorVisualIntent(
+    ): EditorEditFact =
+        EditorEditFact(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
             coreTransactionId = coreTxnId,
             baseRevision = baseRev,
             newRevision = newRev,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
             durationMs = 100L,
             offsetMap = offsetMap,
             oldRanges = emptyList(),
             newRanges = listOf(newRange),
             textKind = TextVisualKind.Insert,
-            cursor = null,
             replaceBounds = replaceBounds,
             expectedOldText = oldText,
             expectedNewText = newText,

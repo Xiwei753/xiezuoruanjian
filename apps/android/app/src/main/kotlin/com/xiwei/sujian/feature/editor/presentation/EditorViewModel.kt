@@ -67,7 +67,7 @@ import com.xiwei.sujian.feature.editor.input.CommittedTextEdit
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
-import com.xiwei.sujian.feature.editor.session.CoreVisualIntentEvent
+import com.xiwei.sujian.feature.editor.session.CoreEditFactEvent
 import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
@@ -242,12 +242,11 @@ class EditorViewModel(
     internal val _events = Channel<EditorEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    // #641：Core 视觉意图事件通道 — presentation/session 层发布的纯数据事件，
-    // 不含 Compose/visual 依赖。UI 层（WritingPaneEditorContent）收集后，
-    // 用 TextOffsetUtils 把 Core old/new UTF-8 ranges 转成 UTF-16 EditorVisualIntent，
-    // 调用 ComposeEditorVisualState.onVisualIntent。
-    internal val _visualIntentEvents = Channel<CoreVisualIntentEvent>(Channel.BUFFERED)
-    val visualIntentEvents = _visualIntentEvents.receiveAsFlow()
+    // #735 评论 5771063665：Core 编辑事实事件通道 — presentation/session 层发布的纯数据事件，
+    // 不含 Compose/visual 依赖。UI 层（WritingPaneEditorContent）收集后
+    // 映射为 EditorEditFact 调用 ComposeEditorVisualState.onEditFact。
+    internal val _editFactEvents = Channel<CoreEditFactEvent>(Channel.BUFFERED)
+    val editFactEvents = _editFactEvents.receiveAsFlow()
 
     // #595 二：Repository 真实来源的正文文档事实流 — 按 target 分区的最新事实
     // 总线（带 replay 语义：新 collector 立即拿到该 target 的当前文档事实）。
@@ -438,9 +437,9 @@ class EditorViewModel(
      * 依赖由初始化保证；调用方必须等待真实注入。
      *
      * #641 架构门禁：移除 visualState 参数 — presentation 层不得依赖
-     * feature.editor.visual。Core 返回的视觉意图改由 [CoreVisualIntentEvent]
+     * feature.editor.visual。Core 返回的编辑事实改由 [CoreEditFactEvent]
      * 发布到事件通道，UI 层（WritingPaneEditorContent）收集后映射为
-     * [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
+     * [EditorEditFact] 喂给 [ComposeEditorVisualState.onEditFact]。
      */
     fun bridgeForTarget(
         targetId: String,
@@ -549,8 +548,9 @@ class EditorViewModel(
                     contentChanged = result.displayPatches.isNotEmpty(),
                 ),
             )
-            // #641：Core 返回视觉意图 — 发布纯数据事件到通道，UI 层（WritingPaneEditorContent）
-            // 收集后映射为 EditorVisualIntent 喂给 ComposeEditorVisualState。
+            // #735 评论 5771063665：Core 返回编辑事实 — 发布纯数据事件到通道，UI 层
+            // （WritingPaneEditorContent）收集后映射为 EditorEditFact 喂给
+            // ComposeEditorVisualState.onEditFact。
             // 必须用完整 old/new 文本：删除范围用完整 oldText，插入/移动范围用完整 newText。
             val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
             val fullNewText =
@@ -560,15 +560,17 @@ class EditorViewModel(
                     append(edit.oldText.substring(edit.replaceEndExclusive))
                 }
             viewModelScope.launch {
-                _visualIntentEvents.send(
-                    CoreVisualIntentEvent(
+                _editFactEvents.send(
+                    CoreEditFactEvent(
                         targetId = targetId,
                         transactionId = editResult.transactionId,
                         baseRevision = editResult.baseRevision,
                         newRevision = editResult.newRevision,
                         oldText = edit.oldText,
                         newText = fullNewText,
-                        visualIntent = editResult.visualIntent,
+                        cause = editResult.cause,
+                        operationKind = editResult.operationKind,
+                        offsetMap = editResult.offsetMap,
                         oldSelectionHeadUtf8 = result.oldSelectionHead.toInt(),
                         newSelectionHeadUtf8 = result.newSelectionHead.toInt(),
                     ),

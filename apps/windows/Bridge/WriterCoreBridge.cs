@@ -117,11 +117,6 @@ public sealed class WriterCoreBridge
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr writer_core_create_starmap(IntPtr projectId, IntPtr name);
 
-    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr writer_core_editor_visual_transaction(
-        IntPtr oldText, IntPtr newText, uint oldCursorIndex, uint newCursorIndex,
-        IntPtr cause, uint maxAnimatedChars, uint animationDurationMs);
-
     private static IntPtr ToUtf8(string? s)
     {
         if (s is null) return IntPtr.Zero;
@@ -775,28 +770,6 @@ public sealed class WriterCoreBridge
         {
             Marshal.FreeHGlobal(pidPtr);
             Marshal.FreeHGlobal(namePtr);
-        }
-    }
-
-    public string? GetEditorVisualTransaction(
-        string oldText, string newText, uint oldCursorIndex, uint newCursorIndex,
-        string cause, uint maxAnimatedChars, uint animationDurationMs)
-    {
-        var oldTextPtr = ToUtf8(oldText);
-        var newTextPtr = ToUtf8(newText);
-        var causePtr = ToUtf8(cause);
-        try
-        {
-            var resultPtr = writer_core_editor_visual_transaction(
-                oldTextPtr, newTextPtr, oldCursorIndex, newCursorIndex,
-                causePtr, maxAnimatedChars, animationDurationMs);
-            return PtrToStringAndFree(resultPtr);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(oldTextPtr);
-            Marshal.FreeHGlobal(newTextPtr);
-            Marshal.FreeHGlobal(causePtr);
         }
     }
 }

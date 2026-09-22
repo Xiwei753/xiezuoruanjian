@@ -290,7 +290,7 @@ mod rope_tests {
         // undo 实际删除 1 个字符
         assert_eq!(undid.content_delta.deleted_chars, 1);
         assert_eq!(undid.content_delta.inserted_chars, 0);
-        assert_eq!(undid.visual_intent.cause, EditorTransactionCause::Undo);
+        assert_eq!(undid.cause, EditorTransactionCause::Undo);
 
         let redid = redo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "abc");
@@ -337,7 +337,7 @@ mod rope_tests {
         assert_eq!(kernel.snapshot_text(), "abc");
         // undo 恢复编辑前选区（anchor=0, head=2）
         assert_eq!(kernel.selection(), (0, 2));
-        assert_eq!(undid.visual_intent.cause, EditorTransactionCause::Undo);
+        assert_eq!(undid.cause, EditorTransactionCause::Undo);
     }
 
     // ── deleteSurrounding：两个 delta ──
@@ -403,7 +403,7 @@ mod rope_tests {
         let r1 = kernel
             .apply(EditorCommand::DeleteSurrounding {
                 before_byte_range: Utf8ByteRange::from_ordered(2, 3),
-                after_byte_range: Utf8ByteRange::zero(),
+                after_byte_range: Utf8ByteRange::point(0),
                 cause: EditorTransactionCause::Delete,
                 expected_revision: EditorRevision::new(kernel.revision()),
             })
@@ -532,10 +532,7 @@ mod rope_tests {
 
         let undid = undo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "abcd");
-        let map = undid
-            .visual_intent
-            .offset_map
-            .expect("undo 必须携带 OffsetMap");
+        let map = undid.offset_map.expect("undo 必须携带 OffsetMap");
         // old = undo 前文本 "ad"：头部 [0,1) 恒等；'d' 在 old 1，undo 后 "abcd" 中在 new 3。
         assert_eq!(map.map_old_to_new(0), Some(0));
         assert_eq!(map.map_old_to_new(1), Some(3));
@@ -557,7 +554,7 @@ mod rope_tests {
         // 替换 2 处：删除 2 chars、插入 4 chars
         assert_eq!(r1.content_delta.deleted_chars, 2);
         assert_eq!(r1.content_delta.inserted_chars, 4);
-        assert_eq!(r1.visual_intent.operation_kind, EditorOperationKind::Format);
+        assert_eq!(r1.operation_kind, EditorOperationKind::Format);
 
         let undid = undo(&mut kernel).into_result();
         assert_eq!(kernel.snapshot_text(), "aXbXc");

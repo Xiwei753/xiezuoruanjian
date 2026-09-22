@@ -1,18 +1,16 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::EditorKernel;
 
-use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{
-    compute_animation_units_from_slices, AnimationMode, EditorTransactionCause, OffsetMap,
-};
+use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
+use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     /// Undo 通过 inverse delta 局部应用。
     ///
     /// 当前正文是编辑后的 new 文本；对 entry.edits 按 new_range 逆序应用
     /// inverse delta（把 new_range 处的内容替换回 deleted_text），光标/选区恢复
-    /// 为 old_selection。DisplayPatch、VisualIntent、OffsetMap、content delta
+    /// 为 old_selection。DisplayPatch、OffsetMap、content delta
     /// 全部从 delta 生成，不再 clone 全文、不再 diff_plain_text、不再全文 build。
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn apply_undo(
@@ -70,7 +68,6 @@ impl EditorKernel {
         self.revision = self.revision.next();
         self.composition_session = None;
 
-        let new_cursor_val = self.cursor;
         let new_revision = self.revision;
         let new_selection = entry.old_selection;
 
@@ -105,9 +102,6 @@ impl EditorKernel {
             .collect();
         let offset_map = OffsetMap::from_edits(old_len_before_undo, &inverse_pairs);
 
-        let old_affected: Vec<Utf8ByteRange> = entry.edits.iter().map(|d| d.new_range).collect();
-        let new_affected: Vec<Utf8ByteRange> = entry.edits.iter().map(|d| d.old_range).collect();
-
         let mut content_delta = EditorContentDelta::default();
         for d in &entry.edits {
             // inverse：undo 时插入的是原 deleted_text，删除的是原 inserted_text。
@@ -116,39 +110,6 @@ impl EditorKernel {
                 &d.inserted_text,
             ));
         }
-
-        let animation_mode = if !self.animation_enabled {
-            AnimationMode::SystemSuppressed
-        } else {
-            AnimationMode::SnapshotAnimation
-        };
-
-        // undo/redo 的 animation_mode 只会是 SnapshotAnimation 或 SystemSuppressed，
-        // 两者都不访问 slice 参数，传空 slice 即可。
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[],
-            &[],
-            &old_affected,
-            &new_affected,
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause: EditorTransactionCause::Undo,
-            operation_kind: EditorOperationKind::Replace,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: new_cursor_val,
-                should_animate: self.animation_enabled && old_cursor != new_cursor_val,
-            },
-            offset_map: Some(offset_map),
-            old_animation_units,
-            new_animation_units,
-        };
 
         self.redo_stack.push(entry);
 
@@ -159,7 +120,9 @@ impl EditorKernel {
             display_patches: patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause: EditorTransactionCause::Undo,
+            operation_kind: EditorOperationKind::Replace,
+            offset_map: Some(offset_map),
             content_delta,
         })
     }
@@ -168,7 +131,7 @@ impl EditorKernel {
     ///
     /// 当前正文是 undo 后的 old 文本；对 entry.edits 按 old_range 正序应用
     /// forward delta（把 old_range 处的内容替换回 inserted_text），光标/选区恢复
-    /// 为 new_selection。DisplayPatch、VisualIntent、OffsetMap、content delta
+    /// 为 new_selection。DisplayPatch、OffsetMap、content delta
     /// 全部从 delta 生成。
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn apply_redo(
@@ -211,7 +174,6 @@ impl EditorKernel {
         self.revision = self.revision.next();
         self.composition_session = None;
 
-        let new_cursor_val = self.cursor;
         let new_revision = self.revision;
         let new_selection = entry.new_selection;
 
@@ -246,9 +208,6 @@ impl EditorKernel {
             .collect();
         let offset_map = OffsetMap::from_edits(old_len_before_redo, &forward_pairs);
 
-        let old_affected: Vec<Utf8ByteRange> = entry.edits.iter().map(|d| d.old_range).collect();
-        let new_affected: Vec<Utf8ByteRange> = entry.edits.iter().map(|d| d.new_range).collect();
-
         let mut content_delta = EditorContentDelta::default();
         for d in &entry.edits {
             content_delta.accumulate(&EditorContentDelta::from_texts(
@@ -256,39 +215,6 @@ impl EditorKernel {
                 &d.deleted_text,
             ));
         }
-
-        let animation_mode = if !self.animation_enabled {
-            AnimationMode::SystemSuppressed
-        } else {
-            AnimationMode::SnapshotAnimation
-        };
-
-        // undo/redo 的 animation_mode 只会是 SnapshotAnimation 或 SystemSuppressed，
-        // 两者都不访问 slice 参数，传空 slice 即可。
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            animation_mode,
-            &[],
-            &[],
-            &old_affected,
-            &new_affected,
-        );
-
-        let visual_intent = EditorVisualIntent {
-            cause: EditorTransactionCause::Redo,
-            operation_kind: EditorOperationKind::Replace,
-            old_affected_byte_ranges: old_affected,
-            new_affected_byte_ranges: new_affected,
-            animation_mode,
-            duration_ms: self.animation_duration_ms,
-            coordinated_cursor: CoordinatedCursor {
-                old_offset: old_cursor,
-                new_offset: new_cursor_val,
-                should_animate: self.animation_enabled && old_cursor != new_cursor_val,
-            },
-            offset_map: Some(offset_map),
-            old_animation_units,
-            new_animation_units,
-        };
 
         self.undo_stack.push(entry);
 
@@ -299,7 +225,9 @@ impl EditorKernel {
             display_patches: patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent,
+            cause: EditorTransactionCause::Redo,
+            operation_kind: EditorOperationKind::Replace,
+            offset_map: Some(offset_map),
             content_delta,
         })
     }

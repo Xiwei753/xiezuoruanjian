@@ -15,7 +15,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #694 评论 5693077441 复现测试 — 上一轮修完 5692161955 后还剩的两个问题：
@@ -61,7 +60,6 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5693077441-p1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(oldText.length, oldText.length), 0)
@@ -85,7 +83,7 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         assertEquals(
             "问题1：长正文含换行，末尾输入\"我们\"应按 affected text 判定为 GlyphAnimation，" +
                 "不应因整章含换行被判成 LineReflowAnimation 或因整章 > 8 cluster 被判成 RunAnimation",
-            AnimationModeDto.GLYPH_ANIMATION,
+            AnimationMode.GLYPH_ANIMATION,
             patch!!.animationMode,
         )
         assertTrue(
@@ -106,7 +104,6 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5693077441-p2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(oldText.length, oldText.length), 0)
@@ -129,7 +126,7 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         assertNotNull("本地输入 patch 应生成", patch)
         assertEquals(
             "长正文含换行，末尾输入单个\"我\"应按 affected text 判定为 GlyphAnimation",
-            AnimationModeDto.GLYPH_ANIMATION,
+            AnimationMode.GLYPH_ANIMATION,
             patch!!.animationMode,
         )
         assertTrue(
@@ -160,7 +157,6 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5693077441-p3",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)

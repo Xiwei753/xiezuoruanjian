@@ -16,7 +16,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #684 评论 5662132136 第1项：offset map chain 语义验证。
@@ -45,11 +44,14 @@ class ComposeVisualRebaseOffsetMapTest {
     fun deletedRegionHasNoMappingEntry_noGapFill() {
         val layouts = captureLayouts("abc", "ac")
         val intent =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -62,7 +64,6 @@ class ComposeVisualRebaseOffsetMapTest {
                 oldRanges = emptyList(),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = null,
                 expectedOldText = "abc",
                 expectedNewText = "ac",
             )
@@ -86,11 +87,14 @@ class ComposeVisualRebaseOffsetMapTest {
     fun deleteLineBreak_reflowsSuffixAsShiftedMove() {
         val layouts = captureLayouts("ab\ncd", "abcd")
         val intent =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -105,7 +109,6 @@ class ComposeVisualRebaseOffsetMapTest {
                 oldRanges = emptyList(),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = null,
                 expectedOldText = "ab\ncd",
                 expectedNewText = "abcd",
             )
@@ -160,11 +163,14 @@ class ComposeVisualRebaseOffsetMapTest {
 
         // offset map：删除 old[2]='\n'，"aa"/"\n"/"bb" 都前移 1。
         val intent =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -183,7 +189,6 @@ class ComposeVisualRebaseOffsetMapTest {
                 oldRanges = emptyList(),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = null,
                 expectedOldText = "xx\naa\nbb",
                 expectedNewText = "xxaa\nbb",
             )

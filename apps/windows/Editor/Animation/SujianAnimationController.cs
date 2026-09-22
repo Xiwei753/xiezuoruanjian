@@ -1,7 +1,82 @@
+// SujianAnimationController — Windows 原生编辑动画控制器
+//
+// Issue #735：Core 不再提供 EditorVisualTransaction / AnimationMode / GlyphRect 等视觉类型。
+// Windows 从 EditorEditResult（cause / operationKind）+ 自己的 DirectWrite text layout
+// 推导动画策略并生成 ghost glyph 几何。
+//
+// 本文件只定义 Windows 自己的动画几何类型，不从 Core 获取。
+
 using System;
 using System.Collections.Generic;
 
 namespace Sujian.Windows.Editor.Animation;
+
+/// <summary>
+/// Windows 原生 glyph 几何 — 由 DirectWrite text layout 计算得出。
+/// 不从 Core 获取，Core 只提供编辑事实（cause / operationKind / offsetMap）。
+/// </summary>
+public sealed class WindowsGlyphRect
+{
+    public string Char { get; set; } = "";
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Width { get; set; }
+    public float Height { get; set; }
+    public float BaselineY { get; set; }
+}
+
+/// <summary>
+/// Windows 原生 reflow glyph 几何 — 表示一个字符从旧位置移动到新位置。
+/// </summary>
+public sealed class WindowsReflowGlyphRect
+{
+    public string Char { get; set; } = "";
+    public float OldX { get; set; }
+    public float OldY { get; set; }
+    public float OldBaselineY { get; set; }
+    public float NewX { get; set; }
+    public float NewY { get; set; }
+    public float NewBaselineY { get; set; }
+    public float Width { get; set; }
+    public float Height { get; set; }
+}
+
+/// <summary>
+/// Windows 原生光标几何 — 由 DirectWrite caret position 计算得出。
+/// </summary>
+public sealed class WindowsCursorRect
+{
+    public float X { get; set; }
+    public float Top { get; set; }
+    public float Bottom { get; set; }
+    public float BaselineY { get; set; }
+}
+
+/// <summary>
+/// 动画语义类别 — 由 EditorEditResult.operationKind 推导。
+/// 不再使用 Core 的 AnimationMode。
+/// </summary>
+public enum WindowsAnimationKind
+{
+    Insert,
+    Delete,
+    Cursor
+}
+
+/// <summary>
+/// Windows 原生编辑动画输入 — 由 SujianEditorHost 从 EditorEditResult + DirectWrite layout 构造。
+/// </summary>
+public sealed class WindowsAnimationInput
+{
+    public ulong TransactionId { get; set; }
+    public WindowsAnimationKind Kind { get; set; }
+    public ulong DurationMs { get; set; }
+    public WindowsCursorRect? OldCursorRect { get; set; }
+    public WindowsCursorRect? NewCursorRect { get; set; }
+    public List<WindowsGlyphRect> InsertGlyphRects { get; set; } = new();
+    public List<WindowsGlyphRect> DeletedGlyphRects { get; set; } = new();
+    public List<WindowsReflowGlyphRect> ReflowGlyphRects { get; set; } = new();
+}
 
 public enum GhostAnimKind
 {
@@ -13,9 +88,7 @@ public enum GhostAnimKind
 public sealed class ActiveAnimation
 {
     public ulong TransactionId { get; set; }
-    public ulong? RangeId { get; set; }
-    public EditorAnimationKind Kind { get; set; }
-    public AnimationMode Mode { get; set; }
+    public WindowsAnimationKind Kind { get; set; }
     public DateTime StartTime { get; set; }
     public ulong DurationMs { get; set; }
     public List<GhostGlyph> Ghosts { get; } = new();
@@ -62,33 +135,32 @@ public sealed class SujianAnimationController
     public event EventHandler<AnimationFinishedEventArgs>? AnimationFinished;
     public event EventHandler? AnimationsChanged;
 
-    public void ProcessTransaction(EditorVisualTransaction vt)
+    /// <summary>
+    /// 处理一次编辑动画。输入由 SujianEditorHost 从 EditorEditResult + Windows DirectWrite layout 构造。
+    /// 不再接收 Core 的 EditorVisualTransaction。
+    /// </summary>
+    public void ProcessAnimation(WindowsAnimationInput input)
     {
-        if (!_animationEnabled || vt.ParsedAnimationMode == AnimationMode.SystemSuppressed)
+        if (!_animationEnabled || input == null)
         {
-            NotifySkipped(vt);
             return;
         }
 
         var animation = new ActiveAnimation
         {
-            TransactionId = vt.Id,
-            Kind = vt.ParsedKind,
-            Mode = vt.ParsedAnimationMode,
+            TransactionId = input.TransactionId,
+            Kind = input.Kind,
             StartTime = DateTime.Now,
-            DurationMs = vt.DurationMs
+            DurationMs = input.DurationMs
         };
 
-        if (vt.HiddenVisualRanges.Count > 0)
-            animation.RangeId = vt.HiddenVisualRanges[0].Id;
-
-        switch (vt.ParsedKind)
+        switch (input.Kind)
         {
-            case EditorAnimationKind.Insert:
-                CreateInsertAnimation(animation, vt);
+            case WindowsAnimationKind.Insert:
+                CreateInsertAnimation(animation, input);
                 break;
-            case EditorAnimationKind.Delete:
-                CreateDeleteAnimation(animation, vt);
+            case WindowsAnimationKind.Delete:
+                CreateDeleteAnimation(animation, input);
                 break;
         }
 
@@ -97,31 +169,27 @@ public sealed class SujianAnimationController
             _activeAnimations.Add(animation);
             AnimationsChanged?.Invoke(this, EventArgs.Empty);
         }
-        else
-        {
-            NotifySkipped(vt);
-        }
     }
 
-    private void CreateInsertAnimation(ActiveAnimation animation, EditorVisualTransaction vt)
+    private static void CreateInsertAnimation(ActiveAnimation animation, WindowsAnimationInput input)
     {
-        if (vt.InsertGlyphRects == null || vt.InsertGlyphRects.Count == 0) return;
+        if (input.InsertGlyphRects.Count == 0) return;
 
-        float startX = (float)(vt.OldCursorRect?.X ?? 0);
-        float startY = (float)(vt.OldCursorRect?.BaselineY ?? 0);
+        float startX = input.OldCursorRect?.X ?? 0f;
+        float startY = input.OldCursorRect?.BaselineY ?? 0f;
 
-        foreach (var glyph in vt.InsertGlyphRects)
+        foreach (var glyph in input.InsertGlyphRects)
         {
             animation.Ghosts.Add(new GhostGlyph
             {
                 Char = glyph.Char,
                 OriginStartX = startX,
                 OriginStartY = startY,
-                EndX = (float)glyph.X,
-                EndY = (float)glyph.BaselineY,
-                Width = (float)glyph.W,
-                Height = (float)glyph.H,
-                BaselineY = (float)glyph.BaselineY,
+                EndX = glyph.X,
+                EndY = glyph.BaselineY,
+                Width = glyph.Width,
+                Height = glyph.Height,
+                BaselineY = glyph.BaselineY,
                 AnimKind = GhostAnimKind.Insert,
                 CurrentX = startX,
                 CurrentY = startY,
@@ -130,56 +198,53 @@ public sealed class SujianAnimationController
             });
         }
 
-        if (vt.ReflowGlyphRects != null)
+        foreach (var rr in input.ReflowGlyphRects)
         {
-            foreach (var rr in vt.ReflowGlyphRects)
-            {
-                var dx = Math.Abs(rr.NewX - rr.OldX);
-                var dy = Math.Abs(rr.NewY - rr.OldY);
-                if (dx < 0.5 && dy < 0.5) continue;
+            var dx = Math.Abs(rr.NewX - rr.OldX);
+            var dy = Math.Abs(rr.NewY - rr.OldY);
+            if (dx < 0.5 && dy < 0.5) continue;
 
-                animation.Ghosts.Add(new GhostGlyph
-                {
-                    Char = rr.Char,
-                    OriginStartX = (float)rr.OldX,
-                    OriginStartY = (float)(rr.OldBaselineY ?? rr.OldY),
-                    EndX = (float)rr.NewX,
-                    EndY = (float)(rr.NewBaselineY ?? rr.NewY),
-                    Width = (float)rr.W,
-                    Height = (float)rr.H,
-                    BaselineY = (float)(rr.NewBaselineY ?? 0),
-                    AnimKind = GhostAnimKind.Reflow,
-                    CurrentX = (float)rr.OldX,
-                    CurrentY = (float)(rr.OldBaselineY ?? rr.OldY),
-                    CurrentOpacity = 1.0f,
-                    CurrentScale = 1.0f
-                });
-            }
+            animation.Ghosts.Add(new GhostGlyph
+            {
+                Char = rr.Char,
+                OriginStartX = rr.OldX,
+                OriginStartY = rr.OldBaselineY,
+                EndX = rr.NewX,
+                EndY = rr.NewBaselineY,
+                Width = rr.Width,
+                Height = rr.Height,
+                BaselineY = rr.NewBaselineY,
+                AnimKind = GhostAnimKind.Reflow,
+                CurrentX = rr.OldX,
+                CurrentY = rr.OldBaselineY,
+                CurrentOpacity = 1.0f,
+                CurrentScale = 1.0f
+            });
         }
     }
 
-    private void CreateDeleteAnimation(ActiveAnimation animation, EditorVisualTransaction vt)
+    private static void CreateDeleteAnimation(ActiveAnimation animation, WindowsAnimationInput input)
     {
-        if (vt.DeletedGlyphRects == null || vt.DeletedGlyphRects.Count == 0) return;
+        if (input.DeletedGlyphRects.Count == 0) return;
 
-        float endX = (float)(vt.NewCursorRect?.X ?? 0);
-        float endY = (float)(vt.NewCursorRect?.BaselineY ?? 0);
+        float endX = input.NewCursorRect?.X ?? 0f;
+        float endY = input.NewCursorRect?.BaselineY ?? 0f;
 
-        foreach (var glyph in vt.DeletedGlyphRects)
+        foreach (var glyph in input.DeletedGlyphRects)
         {
             animation.Ghosts.Add(new GhostGlyph
             {
                 Char = glyph.Char,
-                OriginStartX = (float)glyph.X,
-                OriginStartY = (float)glyph.BaselineY,
+                OriginStartX = glyph.X,
+                OriginStartY = glyph.BaselineY,
                 EndX = endX,
                 EndY = endY,
-                Width = (float)glyph.W,
-                Height = (float)glyph.H,
-                BaselineY = (float)glyph.BaselineY,
+                Width = glyph.Width,
+                Height = glyph.Height,
+                BaselineY = glyph.BaselineY,
                 AnimKind = GhostAnimKind.Delete,
-                CurrentX = (float)glyph.X,
-                CurrentY = (float)glyph.BaselineY,
+                CurrentX = glyph.X,
+                CurrentY = glyph.BaselineY,
                 CurrentOpacity = 1.0f,
                 CurrentScale = 1.0f
             });
@@ -258,8 +323,7 @@ public sealed class SujianAnimationController
             _activeAnimations.Remove(anim);
             AnimationFinished?.Invoke(this, new AnimationFinishedEventArgs
             {
-                TransactionId = anim.TransactionId,
-                RangeId = anim.RangeId
+                TransactionId = anim.TransactionId
             });
         }
 
@@ -273,24 +337,11 @@ public sealed class SujianAnimationController
         {
             AnimationFinished?.Invoke(this, new AnimationFinishedEventArgs
             {
-                TransactionId = anim.TransactionId,
-                RangeId = anim.RangeId
+                TransactionId = anim.TransactionId
             });
         }
         _activeAnimations.Clear();
         AnimationsChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void NotifySkipped(EditorVisualTransaction vt)
-    {
-        foreach (var range in vt.HiddenVisualRanges)
-        {
-            AnimationFinished?.Invoke(this, new AnimationFinishedEventArgs
-            {
-                TransactionId = vt.Id,
-                RangeId = range.Id
-            });
-        }
     }
 
     private static float EaseOutCubic(float t) => 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
@@ -300,5 +351,4 @@ public sealed class SujianAnimationController
 public sealed class AnimationFinishedEventArgs : EventArgs
 {
     public ulong TransactionId { get; set; }
-    public ulong? RangeId { get; set; }
 }

@@ -1,21 +1,6 @@
-// ─── Editor Animation DTOs ─── 与 Core api/types/editor.rs 对齐
-// EditorTransactionCause 已被 NativeEditorSessionBridge 使用；动画 DTO 供 motion 层消费，
-// 符合 Issue #629 评论第5节「以后做动画时新增 motion 层」规划。
-
-export enum EditorAnimationKind {
-  Insert = 'Insert',
-  Delete = 'Delete',
-  Cursor = 'Cursor'
-}
-
-export enum AnimationMode {
-  GlyphAnimation = 'GlyphAnimation',
-  ClusterAnimation = 'ClusterAnimation',
-  RunAnimation = 'RunAnimation',
-  LineReflowAnimation = 'LineReflowAnimation',
-  SnapshotAnimation = 'SnapshotAnimation',
-  SystemSuppressed = 'SystemSuppressed'
-}
+// ─── Editor DTOs ─── 与 Core api/types/editor.rs 对齐
+// Issue #735：视觉类型（EditorVisualIntent/EditorVisualTransaction/AnimationMode 等）已从 Core 删除。
+// EditorEditResult 直接暴露编辑事实（cause/operationKind/offsetMap），平台要做动画时从 cause 推导。
 
 export enum EditorTransactionCause {
   Typing = 'Typing',
@@ -28,45 +13,6 @@ export enum EditorTransactionCause {
   Load = 'Load',
   Format = 'Format',
   Programmatic = 'Programmatic'
-}
-
-export enum VisualCoordinateMode {
-  Baseline = 'Baseline'
-}
-
-export interface CursorRect {
-  x: number
-  top: number
-  bottom: number
-  baselineY: number
-}
-
-export interface GlyphRect {
-  x: number
-  y: number
-  w: number
-  h: number
-  char: string
-  baselineY: number
-  byteStart: number
-  byteEnd: number
-}
-
-export interface EditorVisualTransaction {
-  id: number
-  kind: EditorAnimationKind
-  cause: EditorTransactionCause
-  oldText: string
-  newText: string
-  oldSelectionAnchor: number
-  oldSelectionHead: number
-  newSelectionAnchor: number
-  newSelectionHead: number
-  insertedRangeStart: number
-  insertedRangeEnd: number
-  animationMode: AnimationMode
-  durationMs: number
-  coordinateMode: VisualCoordinateMode
 }
 
 // ─── Editor Core DTOs ─── 与 Core api/types/editor.rs 真实契约对齐
@@ -82,6 +28,40 @@ export enum EditorEditOutcome {
   StaleRevision = 'staleRevision',
   InvalidOffset = 'invalidOffset',
   InvalidRange = 'invalidRange'
+}
+
+// 操作类型 — 区分不同编辑操作的语义类别。与 Core EditorOperationKind 对齐。
+export enum EditorOperationKind {
+  Insert = 'Insert',
+  Delete = 'Delete',
+  Replace = 'Replace',
+  CursorOnly = 'CursorOnly',
+  CompositionUpdate = 'CompositionUpdate',
+  CompositionCommit = 'CompositionCommit',
+  CompositionCancel = 'CompositionCancel',
+  Load = 'Load',
+  Format = 'Format'
+}
+
+// 偏移映射类型 — 与 Core OffsetMapKind 对齐。
+export enum OffsetMapKind {
+  Identity = 'Identity',
+  Shifted = 'Shifted'
+}
+
+// 单个偏移映射条目 — 与 Core OffsetMapEntry 对齐。
+// oldByteOffset / newByteOffset 均为 UTF-8 byte offset。
+export interface OffsetMapEntry {
+  oldByteOffset: number
+  newByteOffset: number
+  length: number
+  kind: OffsetMapKind
+}
+
+// 偏移映射 — 与 Core OffsetMap 对齐。
+// 记录 old 正文 → new 正文的字符身份映射。
+export interface OffsetMap {
+  entries: OffsetMapEntry[]
 }
 
 // 显示增量补丁。replaceByteStart/replaceByteEndExclusive 是 UTF-8 byte offset。
@@ -125,13 +105,8 @@ export interface EditorContentDelta {
   deletedNonWhitespaceChars: number
 }
 
-// 视觉意图（动画时间线）。Issue #629 评论 3：只静态编辑器，visualIntent 浅处理，
-// 定义接口但不消费动画时间线。后续 motion 层新增时再结构化。
-export interface EditorVisualIntent {
-  [key: string]: Object | undefined
-}
-
 // 编辑命令结果。Core 编辑命令统一返回本结构。
+// Issue #735：直接暴露编辑事实（cause/operationKind/offsetMap），不再带 visualIntent。
 export interface EditorEditResult {
   outcome: EditorEditOutcome
   transactionId: number
@@ -142,7 +117,9 @@ export interface EditorEditResult {
   oldSelectionHead: number
   newSelectionAnchor: number
   newSelectionHead: number
-  visualIntent: EditorVisualIntent
+  cause: EditorTransactionCause
+  operationKind: EditorOperationKind
+  offsetMap: OffsetMap | null
   compositionSession: CompositionSession | null
   contentDelta: EditorContentDelta
   // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 null，

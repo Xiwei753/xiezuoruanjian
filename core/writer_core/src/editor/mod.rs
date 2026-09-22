@@ -4,10 +4,10 @@
 //! - `autocorrect`: 基于 Aho-Corasick 的自动纠错引擎
 //! - `kernel`: 正文和业务唯一真相（EditorKernel）及命令/结果类型
 //! - `text_edit_session`: 多目标编辑会话注册表
-//! - `transaction`: 编辑事务、选区、变更、动画语义和视觉契约
+//! - `transaction`: 编辑事务、选区、变更和 offset map
 //!
-//! 边界：Core 只输出编辑语义、byte range、cause、animation mode 和 cursor 语义；
-//! 平台视觉快照、glyph shaping、纹理、RenderNode/QImage 均不属于 Core。
+//! 边界：Core 只输出编辑事实（cause / operation_kind / offset_map）；
+//! 平台视觉快照、glyph shaping、纹理、动画时间线、RenderNode/QImage 均不属于 Core。
 
 pub mod autocorrect;
 pub mod kernel;
@@ -17,9 +17,7 @@ pub mod transaction;
 
 pub use kernel::{
     result::{EditorContentDelta, EditorEditOutcome, EditorEditResult, EditorInputError},
-    types::{
-        CoordinatedCursor, DisplayPatch, EditorCommand, EditorOperationKind, EditorVisualIntent,
-    },
+    types::{DisplayPatch, EditorCommand, EditorOperationKind},
     EditorKernel,
 };
 
@@ -30,20 +28,6 @@ pub use strong_types::{
 pub use text_edit_session::{TextEditSession, TextEditSessionId, TextEditSessionRegistry};
 
 pub use transaction::{
-    build_virtual_text, choose_animation_mode, classify_composition_visual, classify_visual_diff,
-    compute_animation_units, compute_animation_units_from_slices, compute_rebase,
-    compute_rebase_slice_mappings, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
-    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
-    split_text_into_runs, text_contains_complex_grapheme, transactions_overlap, AnimatedSliceRole,
-    AnimationMode, AnimationTextSlice, CaretAffinity, ClusterRect, ClusterRun,
-    CompositionOperationKind, CompositionSession, CompositionVisualClassification,
-    CompositionVisualRevision, CursorPath, CursorRect, DecorationSlice, DecorationSliceKind,
-    EditorAnimationKind, EditorChange, EditorCursor, EditorEngine, EditorSelection,
-    EditorTransaction, EditorTransactionCause, EditorVisualTransaction, GlyphRect,
-    HiddenVisualRange, OffsetMap, OffsetMapEntry, OffsetMapKind, PlatformVisualTransaction,
-    PlatformVisualTransactionState, PreeditTextFormat, PreeditVisualTransaction,
-    RebaseContinuation, RebaseFrameSnapshot, RebaseReason, RebaseSliceMapping, Rect,
-    ReflowGlyphRect, SliceMatchInput, SnapshotOwner, StaticLinePatch, Timeline,
-    TransactionCancelReason, TransactionRebase, UnifiedTransactionKind, VisualClassKind,
-    VisualCoordinateMode, VisualLayoutRevision, VisualRevision,
+    EditorChange, EditorCursor, EditorSelection, EditorTransaction, EditorTransactionCause,
+    OffsetMap, OffsetMapEntry, OffsetMapKind,
 };

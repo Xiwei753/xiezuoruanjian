@@ -20,7 +20,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * Issue #728 评论 5754839786 三个缺口的回归测试。
@@ -70,7 +69,6 @@ class Issue728Comment5754839786ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5754839786-gap1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // 基线：空文本，caret 在 offset 0
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -172,7 +170,6 @@ class Issue728Comment5754839786ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue728-5754839786-gap2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
         // 第一次 onAuthoritativeLayout：设置 lastObservedLayoutFingerprint
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -378,7 +375,7 @@ class Issue728Comment5754839786ReproTest {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
-            animationMode = AnimationModeDto.GLYPH_ANIMATION,
+            animationMode = AnimationMode.GLYPH_ANIMATION,
         )
     }
 

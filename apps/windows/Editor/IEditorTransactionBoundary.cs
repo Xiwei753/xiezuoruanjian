@@ -1,17 +1,21 @@
 // IEditorTransactionBoundary — Windows 正文编辑语义收口
 //
 // Windows SujianEditor 不能继续自己维护正文编辑语义。
-// 正文变更要接入 Core EditorEngine / EditorTransaction / EditorVisualTransaction。
+// 正文变更要接入 Core 编辑事务（EditorEditResult：cause / operationKind / offsetMap）。
 // Windows 只做 CoreTextEditContext、DirectWrite/Direct2D 布局绘制、hit test、候选框锚点和动画显示。
 //
 // 此接口定义 Core editor transaction 的调用边界。
 // SujianEditor 通过此接口委托正文变更，不再自己直接操作 _lines。
 //
+// Issue #735：Core 不再提供 EditorVisualTransaction / AnimationMode 等视觉类型。
+// Windows 从 EditorEditResult 的 cause / operationKind 推导动画策略，
+// 用自己的 DirectWrite text layout 生成 ghost glyph 几何。
+//
 // ⚠️ 当前唯一实现 LocalStandaloneTransactionBoundary 是本地独立实现，
-//    未接入 Core EditorEngine（UsesCoreEngine == false）。
-//    它做基本字符串操作，功能正确但不含 Core 语义（undo stack、visual transaction 等）。
+//    未接入 Core 编辑事务（UsesCoreEngine == false）。
+//    它做基本字符串操作，功能正确但不含 Core 语义（undo stack、offset map 等）。
 //    新增编辑路径必须通过 IEditorTransactionBoundary，不允许绕过。
-//    接入 Core EditorEngine 后应替换为 CoreEditorTransactionBoundary 实现。
+//    接入 Core 编辑事务后应替换为 CoreEditorTransactionBoundary 实现。
 
 using System;
 
@@ -37,13 +41,15 @@ namespace Sujian.Windows.Editor
 
     /// <summary>
     /// 编辑事务结果
+    ///
+    /// Issue #735：Core 不再返回 visual transaction JSON。
+    /// Windows 从 cause 推导动画策略，用自己的 text layout 生成几何。
     /// </summary>
     public sealed class EditorTransactionResult
     {
         public string NewText { get; init; } = string.Empty;
         public int NewCursorOffset { get; init; }
         public int NewAnchorOffset { get; init; }
-        public string? VisualTransactionJson { get; init; }
         public bool ShouldAnimate { get; init; }
     }
 
@@ -82,12 +88,12 @@ namespace Sujian.Windows.Editor
     }
 
     /// <summary>
-    /// 本地独立实现 — 未接入 Core EditorEngine
+    /// 本地独立实现 — 未接入 Core 编辑事务
     ///
     /// ⚠️ 此实现做基本字符串操作，功能正确但不包含 Core 语义：
     /// - 无 Core undo/redo stack
-    /// - 无 Core visual transaction 生成
-    /// - 无 Core animation mode 决策
+    /// - 无 Core offset map 生成
+    /// - 无 Core animation cause 决策
     ///
     /// UsesCoreEngine == false 明确标识此实现不走 Core 引擎。
     /// 接入 Core 后应替换为 CoreEditorTransactionBoundary。

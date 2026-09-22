@@ -66,7 +66,6 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5695660885-p1-rejected",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"：设置基线 lastPresentedLayout = "a"
@@ -123,7 +122,7 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
             latestPatch != null &&
                 latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
-                latestPatch.intent == null
+                latestPatch.offsetMap == null
         assertTrue(
             "outcome 为 Reject 后也不应出现 a->an local patch，" +
                 "pendingPatches=$pendingAfterReject isAnLocalPatch=$isAnLocalPatch\n" +
@@ -146,7 +145,6 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5695660885-p1-authoritative",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"
@@ -196,7 +194,7 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
             latestPatch != null &&
                 latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
-                latestPatch.intent == null
+                latestPatch.offsetMap == null
         assertTrue(
             "outcome 为 AuthoritativeApplied 后也不应出现 a->an local patch，" +
                 "pendingPatches=$pendingAfterAuth isAnLocalPatch=$isAnLocalPatch\n" +
@@ -226,7 +224,6 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5695660885-p1-cancel",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"
@@ -335,7 +332,6 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5695660885-p2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // base = ""

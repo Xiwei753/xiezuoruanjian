@@ -1,5 +1,5 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
-import { EditorVisualTransaction, EditorTransactionCause } from './dto/EditorDtos'
+import { EditorTransactionCause } from './dto/EditorDtos'
 import { WindowCapabilities, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity } from './dto/ResultEnvelope'
@@ -379,31 +379,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return this.core.parseEnvelope<ScreenPolicy>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-  }
-
-  // ── Editor Animation ──
-  // 按 Issue #629 要求，静态编辑链路有意不做动画；动画后续以 motion 层新增，
-  // 消费同一份 snapshot/transaction，不改输入层和 session 层。
-  // 本接口返回 NOT_IMPLEMENTED，待 motion 层接入后替换为真实调用。
-
-  async editorVisualTransaction(
-    oldText: string,
-    newText: string,
-    oldCursorIndex: number,
-    newCursorIndex: number,
-    cause: EditorTransactionCause,
-    maxAnimatedChars: number,
-    animationDurationMs: number
-  ): Promise<ResultEnvelope<EditorVisualTransaction | null>> {
-    return {
-      success: false,
-      errorCode: 'NOT_IMPLEMENTED',
-      messageKey: 'error.not_implemented',
-      messageArgs: { 'feature': 'editor_visual_transaction' } as Record<string, string>,
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
     }
   }
 }

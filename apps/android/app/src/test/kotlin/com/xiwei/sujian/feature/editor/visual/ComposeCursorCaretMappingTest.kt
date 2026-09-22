@@ -4,7 +4,6 @@ import androidx.compose.ui.text.TextRange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #684 评论 5673811415：caret 边界映射纯函数测试。
@@ -38,11 +37,14 @@ class ComposeCursorCaretMappingTest {
     fun consecutiveBackspace_cursorAtDeleteBoundary_mapsCorrectly() {
         // T1: "abcde" -> "abcd"（删除 old[4,5)="e"）
         val intent1 =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -55,7 +57,7 @@ class ComposeCursorCaretMappingTest {
                 oldRanges = listOf(TextRange(4, 5)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 5, newEndUtf16 = 4, animate = true),
+                oldSelectionEndUtf16 = 5, newSelectionEndUtf16 = 4,
                 replaceBounds = VisualReplaceBounds(oldStart = 4, oldEnd = 5, newStart = 4, newEnd = 4),
                 expectedOldText = "abcde",
                 expectedNewText = "abcd",
@@ -63,11 +65,14 @@ class ComposeCursorCaretMappingTest {
 
         // T2: "abcd" -> "abc"（删除 T1[3,4)="d"）
         val intent2 =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 2L,
                 baseRevision = 1L,
                 newRevision = 2L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -80,7 +85,7 @@ class ComposeCursorCaretMappingTest {
                 oldRanges = listOf(TextRange(3, 4)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 4, newEndUtf16 = 3, animate = true),
+                oldSelectionEndUtf16 = 4, newSelectionEndUtf16 = 3,
                 replaceBounds = VisualReplaceBounds(oldStart = 3, oldEnd = 4, newStart = 3, newEnd = 3),
                 expectedOldText = "abcd",
                 expectedNewText = "abc",
@@ -119,11 +124,14 @@ class ComposeCursorCaretMappingTest {
     fun consecutiveInsert_cursorAtInsertBoundary_mapsToNewStart() {
         // T1: "abc" -> "abcd"（在 offset=3 插入 'd'）
         val intent1 =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -136,7 +144,7 @@ class ComposeCursorCaretMappingTest {
                 oldRanges = emptyList(),
                 newRanges = listOf(TextRange(3, 4)),
                 textKind = TextVisualKind.Insert,
-                cursor = CursorVisualIntent(oldEndUtf16 = 3, newEndUtf16 = 4, animate = true),
+                oldSelectionEndUtf16 = 3, newSelectionEndUtf16 = 4,
                 replaceBounds = VisualReplaceBounds(oldStart = 3, oldEnd = 3, newStart = 3, newEnd = 4),
                 expectedOldText = "abc",
                 expectedNewText = "abcd",
@@ -144,11 +152,14 @@ class ComposeCursorCaretMappingTest {
 
         // T2: "abcd" -> "abcde"（在 offset=4 插入 'e'）
         val intent2 =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 2L,
                 baseRevision = 1L,
                 newRevision = 2L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -161,7 +172,7 @@ class ComposeCursorCaretMappingTest {
                 oldRanges = emptyList(),
                 newRanges = listOf(TextRange(4, 5)),
                 textKind = TextVisualKind.Insert,
-                cursor = CursorVisualIntent(oldEndUtf16 = 4, newEndUtf16 = 5, animate = true),
+                oldSelectionEndUtf16 = 4, newSelectionEndUtf16 = 5,
                 replaceBounds = VisualReplaceBounds(oldStart = 4, oldEnd = 4, newStart = 4, newEnd = 5),
                 expectedOldText = "abcd",
                 expectedNewText = "abcde",
@@ -204,11 +215,14 @@ class ComposeCursorCaretMappingTest {
     fun consecutiveBackspace_offsetMapFallback_suffixShift() {
         // T1: "abcde" -> "abcd"（删除 old[4,5)="e"），有 replaceBounds
         val intent1 =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 1L,
                 baseRevision = 0L,
                 newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -220,7 +234,7 @@ class ComposeCursorCaretMappingTest {
                 oldRanges = listOf(TextRange(4, 5)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 5, newEndUtf16 = 4, animate = true),
+                oldSelectionEndUtf16 = 5, newSelectionEndUtf16 = 4,
                 replaceBounds = VisualReplaceBounds(oldStart = 4, oldEnd = 5, newStart = 4, newEnd = 4),
                 expectedOldText = "abcde",
                 expectedNewText = "abcd",
@@ -228,11 +242,14 @@ class ComposeCursorCaretMappingTest {
 
         // T2: "abcd" -> "abc"（删除 T1[3,4)="d"），无 replaceBounds，只有 offsetMap
         val intent2 =
-            EditorVisualIntent(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 2L,
                 baseRevision = 1L,
                 newRevision = 2L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap =
                     VisualOffsetMap(
@@ -245,7 +262,7 @@ class ComposeCursorCaretMappingTest {
                 oldRanges = listOf(TextRange(3, 4)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 4, newEndUtf16 = 3, animate = true),
+                oldSelectionEndUtf16 = 4, newSelectionEndUtf16 = 3,
                 // 无 replaceBounds，走 offsetMap 回退路径
                 replaceBounds = null,
                 expectedOldText = "abcd",

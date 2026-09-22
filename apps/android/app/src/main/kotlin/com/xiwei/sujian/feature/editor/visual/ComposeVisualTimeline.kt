@@ -106,7 +106,7 @@ class ComposeVisualTimeline {
      * 由调用方（[ComposeEditorVisualState.drainPendingPatchesAtFrame]）传入当前 effective policy。
      * coordinatedSpatialClip 由当前 policy + 当前 motion sample 导出（第4节）。
      *
-     * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
+     * @param patch 这一帧的屏幕 diff — 本地 patch 用 coreTransactionIds.isEmpty() 判断释放门控。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
      * @param motionPolicy 当前 effective 动画策略 — 由 [ComposeEditorVisualState] 在帧开头应用 pending policy 后传入。
      * @param motionSample Issue #728 评论 5761525795：当前 [ComposeEditMotion] 的 sample 结果 —
@@ -375,7 +375,7 @@ class ComposeVisualTimeline {
                 }
                 continue
             }
-            val slices = computeSlices(target, offsetMap, newTextLength, patch.intent)
+            val slices = computeSlices(target, offsetMap, newTextLength, null)
             // #708 评论 5727808906：split 时分配独立新 key —
             // 只有一个 slice 且代表整个父 unit（slice.oldSubRange == unit.range）时保留 parent key；
             // 2 个及以上子 unit 时每个子 unit 分配独立新 key。
@@ -397,7 +397,7 @@ class ComposeVisualTimeline {
                 // 本地编辑不能再从这里偷偷产生 survivor 位移动画。
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
                     val shouldRelease =
-                        patch.intent == null &&
+                        patch.coreTransactionIds.isEmpty() &&
                             ComposeVisualRebase.naturalGeometryChanged(
                                 oldLayout = unit.layout,
                                 oldRange = slice.oldSubRange,
@@ -494,9 +494,9 @@ class ComposeVisualTimeline {
         target: TextRange,
         offsetMap: List<VisualOffsetMapEntry>?,
         newTextLength: Int,
-        intent: EditorVisualIntent? = null,
+        editFact: EditorEditFact? = null,
     ): List<ComposeVisualRebase.MappedRangeSlice> =
-        ComposeVisualRebase.computeSlices(target, offsetMap, newTextLength, intent)
+        ComposeVisualRebase.computeSlices(target, offsetMap, newTextLength, editFact)
 
     // #708 评论 5725706551：与 ComposeLocalHandoffRebase.mapSurvivingSliceToHandoff 对应。
     // timeline 版本：alpha 通道不变（继续原动画），position 在新位置变化时创建动画通道。

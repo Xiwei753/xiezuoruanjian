@@ -2,7 +2,7 @@
 //!
 //! 主链：
 //! ```text
-//! Core EditorVisualTransaction
+//! PreparedEditMotion (Linux 私有, 从 EditorEditResult 派生)
 //! → 捕获 old/new layout snapshot
 //! → 生成 AnimatedSlice + StaticLinePatch
 //! → 准备平台视觉资源
@@ -27,7 +27,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use writer_core::editor::{CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap};
+use writer_core::editor::OffsetMap;
+
+use super::edit_motion::{diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion};
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 pub(crate) use super::animation_mode::AnimationMode;
@@ -1101,9 +1103,9 @@ pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
     pub(crate) prepared_queue: PreparedTransactionQueue,
     layout_revision: LayoutRevision,
-    /// 打字/预输入动画时长（毫秒）。本地生成的事务不来自 core 的
-    /// `EditorVisualTransaction`，因此在此持有该视觉配置，与 core 把
-    /// `duration_ms` 放进 visual transaction 结构体的设计方向一致。
+    /// 打字/预输入动画时长（毫秒）。本地生成的事务不来自 Core 的
+    /// `EditorVisualTransaction`（已删除），因此在此持有该视觉配置，
+    /// 与 `PreparedEditMotion` 把 `duration_ms` 放进结构体的设计方向一致。
     typing_animation_duration_ms: u32,
     /// 光标平滑移动动画时长（毫秒）。
     cursor_animation_duration_ms: u32,
@@ -1353,7 +1355,7 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn process_transaction(
         &mut self,
-        vt: &EditorVisualTransaction,
+        vt: &PreparedEditMotion,
         typing_animation_enabled: bool,
         smooth_cursor_enabled: bool,
         is_scrolling: bool,
@@ -1388,7 +1390,7 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        let mode = AnimationMode::from_core(vt.animation_mode);
+        let mode = AnimationMode::from_context(is_scrolling, is_loading, is_applying_format);
         if !mode.should_create_transaction() {
             return None;
         }
@@ -1522,7 +1524,7 @@ impl LinuxEditorAnimationCoordinator {
                 let deleted_ranges: Vec<(usize, usize)> = if let Some(range) = vt.deleted_range {
                     vec![(range.start().value(), range.end().value())]
                 } else {
-                    let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                    let changes = diff_plain_text(&vt.old_text, &vt.new_text);
                     let mut ranges = Vec::new();
                     for change in &changes {
                         if let writer_core::editor::EditorChange::Delete { index, text } = change {
@@ -1716,10 +1718,7 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #687: IME 组合更新也显式拥有 changed range。
         // 用 diff_plain_text 找到 inserted/deleted range，显式生成 InsertReveal/DeleteConceal，
         // reflow 只处理 unchanged material。
-        let comp_changes = writer_core::editor::diff_plain_text(
-            &old_snapshot.virtual_text,
-            &new_snapshot.virtual_text,
-        );
+        let comp_changes = diff_plain_text(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
         let mut comp_inserted_ranges: Vec<(usize, usize)> = Vec::new();
         let mut comp_deleted_ranges: Vec<(usize, usize)> = Vec::new();
         for change in &comp_changes {

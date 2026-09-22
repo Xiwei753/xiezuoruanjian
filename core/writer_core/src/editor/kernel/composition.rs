@@ -1,15 +1,12 @@
 use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
+use super::types::{DisplayPatch, EditorOperationKind};
 use super::{CompositionSessionState, EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
     Utf8ByteRange,
 };
-use crate::editor::transaction::{
-    classify_composition_visual, compute_animation_units_from_slices, AnimationMode,
-    AnimationTextSlice, CompositionOperationKind, EditorTransactionCause, OffsetMap,
-};
+use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     pub(crate) fn apply_begin_composition(
@@ -77,22 +74,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }
@@ -105,7 +89,7 @@ impl EditorKernel {
         new_preedit_text: &str,
         new_preedit_cursor_utf16: Utf16CodeUnitOffset,
         base_revision: EditorRevision,
-        old_cursor: Utf8ByteOffset,
+        _old_cursor: Utf8ByteOffset,
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditOutcome {
@@ -120,35 +104,9 @@ impl EditorKernel {
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
-        let old_preedit_text = session.preedit_text.clone();
-        let replace_start = session.replace_start.value();
-
         session.preedit_text = new_preedit_text.to_string();
         session.preedit_cursor_utf16 = new_preedit_cursor_utf16;
         session.generation = session.generation.next();
-
-        let classification = classify_composition_visual(
-            &old_preedit_text,
-            new_preedit_text,
-            replace_start,
-            replace_start,
-            CompositionOperationKind::Update,
-            self.animation_enabled,
-        );
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            classification.animation_mode,
-            &[AnimationTextSlice {
-                absolute_start: replace_start,
-                text: &old_preedit_text,
-            }],
-            &[AnimationTextSlice {
-                absolute_start: replace_start,
-                text: new_preedit_text,
-            }],
-            &classification.old_affected_byte_ranges,
-            &classification.new_affected_byte_ranges,
-        );
 
         let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
@@ -158,22 +116,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: classification.old_affected_byte_ranges,
-                new_affected_byte_ranges: classification.new_affected_byte_ranges,
-                animation_mode: classification.animation_mode,
-                duration_ms: self.animation_duration_ms,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: self.animation_enabled && old_cursor != self.cursor,
-                },
-                offset_map: None,
-                old_animation_units,
-                new_animation_units,
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }
@@ -215,22 +160,9 @@ impl EditorKernel {
                 display_patches: vec![],
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
-                visual_intent: EditorVisualIntent {
-                    cause: EditorTransactionCause::TypingCommit,
-                    operation_kind: EditorOperationKind::CompositionCommit,
-                    old_affected_byte_ranges: vec![],
-                    new_affected_byte_ranges: vec![],
-                    animation_mode: AnimationMode::SystemSuppressed,
-                    duration_ms: 0,
-                    coordinated_cursor: CoordinatedCursor {
-                        old_offset: old_cursor,
-                        new_offset: self.cursor,
-                        should_animate: false,
-                    },
-                    offset_map: None,
-                    old_animation_units: vec![],
-                    new_animation_units: vec![],
-                },
+                cause: EditorTransactionCause::TypingCommit,
+                operation_kind: EditorOperationKind::CompositionCommit,
+                offset_map: None,
                 content_delta: EditorContentDelta::default(),
             });
         }
@@ -306,29 +238,6 @@ impl EditorKernel {
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
-        let classification = classify_composition_visual(
-            &committed_text,
-            &committed_text,
-            replace_start,
-            replace_start,
-            CompositionOperationKind::Commit,
-            self.animation_enabled,
-        );
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            classification.animation_mode,
-            &[AnimationTextSlice {
-                absolute_start: replace_start,
-                text: &committed_text,
-            }],
-            &[AnimationTextSlice {
-                absolute_start: replace_start,
-                text: &committed_text,
-            }],
-            &classification.old_affected_byte_ranges,
-            &classification.new_affected_byte_ranges,
-        );
-
         let edit_result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -336,28 +245,14 @@ impl EditorKernel {
             display_patches,
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::TypingCommit,
-                operation_kind: EditorOperationKind::CompositionCommit,
-                old_affected_byte_ranges: classification.old_affected_byte_ranges,
-                new_affected_byte_ranges: classification.new_affected_byte_ranges,
-                animation_mode: classification.animation_mode,
-                duration_ms: self.animation_duration_ms,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: Utf8ByteOffset::unchecked(resulting_cursor),
-                    should_animate: self.animation_enabled
-                        && old_cursor.value() != resulting_cursor,
-                },
-                // 单次 composition commit 从 delta 直接构造 offset map。
-                offset_map: Some(OffsetMap::from_single_edit(
-                    self.text.byte_len() - committed_text.len() + (replace_end - replace_start),
-                    (replace_start, replace_end),
-                    committed_text.len(),
-                )),
-                old_animation_units,
-                new_animation_units,
-            },
+            cause: EditorTransactionCause::TypingCommit,
+            operation_kind: EditorOperationKind::CompositionCommit,
+            // 单次 composition commit 从 delta 直接构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - committed_text.len() + (replace_end - replace_start),
+                (replace_start, replace_end),
+                committed_text.len(),
+            )),
             content_delta: EditorContentDelta::from_texts(&committed_text, &deleted_text),
         };
 
@@ -405,26 +300,6 @@ impl EditorKernel {
 
         self.composition_session = None;
 
-        let classification = classify_composition_visual(
-            &session.preedit_text,
-            "",
-            replace_start,
-            replace_end,
-            CompositionOperationKind::Cancel,
-            self.animation_enabled,
-        );
-
-        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
-            classification.animation_mode,
-            &[AnimationTextSlice {
-                absolute_start: replace_start,
-                text: &session.preedit_text,
-            }],
-            &[],
-            &classification.old_affected_byte_ranges,
-            &classification.new_affected_byte_ranges,
-        );
-
         let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -433,22 +308,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionCancel,
-                old_affected_byte_ranges: classification.old_affected_byte_ranges,
-                new_affected_byte_ranges: classification.new_affected_byte_ranges,
-                animation_mode: classification.animation_mode,
-                duration_ms: self.animation_duration_ms,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: self.animation_enabled && old_cursor != self.cursor,
-                },
-                offset_map: None,
-                old_animation_units,
-                new_animation_units,
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionCancel,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }
@@ -473,7 +335,7 @@ impl EditorKernel {
         composition_session_id: u64,
         composition_generation: u64,
         base_revision: EditorRevision,
-        old_cursor: Utf8ByteOffset,
+        _old_cursor: Utf8ByteOffset,
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditOutcome {
@@ -504,22 +366,9 @@ impl EditorKernel {
                 display_patches: vec![],
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
-                visual_intent: EditorVisualIntent {
-                    cause: EditorTransactionCause::ImeComposition,
-                    operation_kind: EditorOperationKind::CompositionUpdate,
-                    old_affected_byte_ranges: vec![],
-                    new_affected_byte_ranges: vec![],
-                    animation_mode: AnimationMode::SystemSuppressed,
-                    duration_ms: 0,
-                    coordinated_cursor: CoordinatedCursor {
-                        old_offset: old_cursor,
-                        new_offset: self.cursor,
-                        should_animate: false,
-                    },
-                    offset_map: None,
-                    old_animation_units: vec![],
-                    new_animation_units: vec![],
-                },
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                offset_map: None,
                 content_delta: EditorContentDelta::default(),
             });
         }
@@ -539,22 +388,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }
@@ -564,7 +400,7 @@ impl EditorKernel {
         composition_session_id: u64,
         composition_generation: u64,
         base_revision: EditorRevision,
-        old_cursor: Utf8ByteOffset,
+        _old_cursor: Utf8ByteOffset,
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditOutcome {
@@ -593,22 +429,9 @@ impl EditorKernel {
                 display_patches: vec![],
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
-                visual_intent: EditorVisualIntent {
-                    cause: EditorTransactionCause::ImeComposition,
-                    operation_kind: EditorOperationKind::CompositionUpdate,
-                    old_affected_byte_ranges: vec![],
-                    new_affected_byte_ranges: vec![],
-                    animation_mode: AnimationMode::SystemSuppressed,
-                    duration_ms: 0,
-                    coordinated_cursor: CoordinatedCursor {
-                        old_offset: old_cursor,
-                        new_offset: self.cursor,
-                        should_animate: false,
-                    },
-                    offset_map: None,
-                    old_animation_units: vec![],
-                    new_animation_units: vec![],
-                },
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                offset_map: None,
                 content_delta: EditorContentDelta::default(),
             });
         }
@@ -628,22 +451,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }
@@ -653,7 +463,7 @@ impl EditorKernel {
         composition_session_id: u64,
         composition_generation: u64,
         base_revision: EditorRevision,
-        old_cursor: Utf8ByteOffset,
+        _old_cursor: Utf8ByteOffset,
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditOutcome {
@@ -682,22 +492,9 @@ impl EditorKernel {
                 display_patches: vec![],
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
-                visual_intent: EditorVisualIntent {
-                    cause: EditorTransactionCause::ImeComposition,
-                    operation_kind: EditorOperationKind::CompositionUpdate,
-                    old_affected_byte_ranges: vec![],
-                    new_affected_byte_ranges: vec![],
-                    animation_mode: AnimationMode::SystemSuppressed,
-                    duration_ms: 0,
-                    coordinated_cursor: CoordinatedCursor {
-                        old_offset: old_cursor,
-                        new_offset: self.cursor,
-                        should_animate: false,
-                    },
-                    offset_map: None,
-                    old_animation_units: vec![],
-                    new_animation_units: vec![],
-                },
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                offset_map: None,
                 content_delta: EditorContentDelta::default(),
             });
         }
@@ -722,22 +519,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }
@@ -747,7 +531,7 @@ impl EditorKernel {
         composition_session_id: u64,
         composition_generation: u64,
         base_revision: EditorRevision,
-        old_cursor: Utf8ByteOffset,
+        _old_cursor: Utf8ByteOffset,
         old_selection_anchor: usize,
         old_selection_head: usize,
     ) -> EditorEditOutcome {
@@ -776,22 +560,9 @@ impl EditorKernel {
                 display_patches: vec![],
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
-                visual_intent: EditorVisualIntent {
-                    cause: EditorTransactionCause::ImeComposition,
-                    operation_kind: EditorOperationKind::CompositionUpdate,
-                    old_affected_byte_ranges: vec![],
-                    new_affected_byte_ranges: vec![],
-                    animation_mode: AnimationMode::SystemSuppressed,
-                    duration_ms: 0,
-                    coordinated_cursor: CoordinatedCursor {
-                        old_offset: old_cursor,
-                        new_offset: self.cursor,
-                        should_animate: false,
-                    },
-                    offset_map: None,
-                    old_animation_units: vec![],
-                    new_animation_units: vec![],
-                },
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                offset_map: None,
                 content_delta: EditorContentDelta::default(),
             });
         }
@@ -817,22 +588,9 @@ impl EditorKernel {
             display_patches: vec![],
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
-            visual_intent: EditorVisualIntent {
-                cause: EditorTransactionCause::ImeComposition,
-                operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_offset: old_cursor,
-                    new_offset: self.cursor,
-                    should_animate: false,
-                },
-                offset_map: None,
-                old_animation_units: vec![],
-                new_animation_units: vec![],
-            },
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            offset_map: None,
             content_delta: EditorContentDelta::default(),
         })
     }

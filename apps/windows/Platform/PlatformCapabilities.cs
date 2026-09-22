@@ -3,7 +3,9 @@
 // 将 CoreTextEditContext / TSF / WinRT Clipboard / 焦点 / 候选框等系统交互
 // 收敛到此命名空间，SujianEditor 只调用统一接口，不直接知道 WinRT 细节。
 //
-// Windows 不复用 Linux Qt 平台逻辑，只复用 Core 的 EditorVisualTransaction 语义。
+// Windows 不复用 Linux Qt 平台逻辑。
+// Issue #735：Core 不再提供 EditorVisualTransaction 等视觉类型。
+// Windows 从 EditorEditResult（cause / operationKind）+ 自己的 DirectWrite text layout 生成动画。
 //
 // 能力声明必须与 core/writer_core/src/platform_interaction/capabilities.rs 的 windows() 工厂方法对齐。
 // 未真实接入的能力必须为 false，不允许吹牛。
@@ -17,9 +19,9 @@ namespace Sujian.Platform
     /// - IME preedit: CoreTextEditContext composition/commit ✓
     /// - cursor anchor: CoreTextEditContext + candidate window anchoring ✓
     /// - replacement commit: CoreTextEditContext 未实现 replacement range commit ✗
-    /// - text animation: SujianAnimationOverlay 未接入 Core visual transaction ✗
+    /// - text animation: SujianAnimationOverlay 未接入 EditorEditResult 驱动的动画 ✗
     /// - smooth cursor: cursor blink 仅有闪烁，无平滑移动动画 ✗
-    /// - reflow animation: 未接入 Core reflow visual transaction ✗
+    /// - reflow animation: 未接入 Windows DirectWrite reflow 动画 ✗
     /// - clipboard: Windows.ApplicationModel.DataTransfer.Clipboard ✓
     /// - context menu: WinUI 3 context menu 未通过适配器接入 ✗
     /// - IEditorTransactionBoundary: LocalStandaloneTransactionBoundary (UsesCoreEngine == false)

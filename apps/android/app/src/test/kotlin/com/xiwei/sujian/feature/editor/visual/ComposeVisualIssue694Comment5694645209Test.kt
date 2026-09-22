@@ -23,7 +23,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #694 评论 5694645209 回归测试 — 覆盖评论指出的 3 个功能问题的修复。
@@ -73,7 +72,6 @@ class ComposeVisualIssue694Comment5694645209Test {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5694645209-p1",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = "a"
@@ -189,7 +187,6 @@ class ComposeVisualIssue694Comment5694645209Test {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5694645209-p1-rejected",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = "a"
@@ -323,7 +320,6 @@ class ComposeVisualIssue694Comment5694645209Test {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5694645209-p2",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = "abc"
@@ -589,8 +585,7 @@ class ComposeVisualIssue694Comment5694645209Test {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
-            animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            intent = null,
+            animationMode = AnimationMode.GLYPH_ANIMATION,
         )
     }
 
@@ -615,8 +610,7 @@ class ComposeVisualIssue694Comment5694645209Test {
             originCaretRect = Rect.Zero,
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
-            animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            intent = null,
+            animationMode = AnimationMode.GLYPH_ANIMATION,
         )
     }
 }

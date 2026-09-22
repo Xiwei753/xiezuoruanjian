@@ -15,12 +15,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #694 评论 5691696678 回归测试 — 覆盖新路由 `recordLocalInput() -> onAuthoritativeLayout()`。
  *
- * 现有 [ComposeVisualIssue694ReproTest] 主要通过 `onVisualIntent()` 构造 Core patch 测 same-VSync batch，
+ * 现有 [ComposeVisualIssue694ReproTest] 主要通过 `onEditFact()` 构造 Core patch 测 same-VSync batch，
  * 没有真正覆盖新路由。本测试直接覆盖评论 5691696678 指出的 3 个问题：
  *
  * 1. 中间 layout 被跳过的快速输入（问题1：drainMatchingChain 合并连续链，patch 不被丢掉）
@@ -51,7 +50,6 @@ class ComposeVisualIssue694LocalRouteTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-local-skip",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = ""
@@ -113,7 +111,6 @@ class ComposeVisualIssue694LocalRouteTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-local-backspace",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = "abc"
@@ -171,7 +168,6 @@ class ComposeVisualIssue694LocalRouteTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-local-undo",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线：lastPresentedLayout = ""
@@ -191,18 +187,20 @@ class ComposeVisualIssue694LocalRouteTest {
         assertNotNull("本地输入 patch 应生成", localPatch)
 
         // Undo: "a" -> ""（Core 驱动）
-        state.onVisualIntent(
-            EditorVisualIntent(
+        state.onEditFact(
+            EditorEditFact(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+
                 coreTransactionId = 100L,
                 baseRevision = 1L,
                 newRevision = 0L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                animationMode = AnimationMode.CLUSTER_ANIMATION,
                 durationMs = 100L,
                 offsetMap = null,
                 oldRanges = listOf(TextRange(0, 1)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
-                cursor = null,
                 replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 1, newStart = 0, newEnd = 0),
                 expectedOldText = "a",
                 expectedNewText = "",
@@ -239,7 +237,6 @@ class ComposeVisualIssue694LocalRouteTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-local-batch",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 设置基线

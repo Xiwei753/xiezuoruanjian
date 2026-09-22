@@ -72,7 +72,6 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5696394554-rejected",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"：设置基线 lastPresentedLayout = "a"，frameCoordinator.lastConsumed = "a"
@@ -131,7 +130,7 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
             latestPatch != null &&
                 latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
-                latestPatch.intent == null
+                latestPatch.offsetMap == null
         assertTrue(
             "outcome 为 Reject 后也不应出现 a->an local patch，" +
                 "pendingPatches=$pendingAfterReject isAnLocalPatch=$isAnLocalPatch\n" +
@@ -152,7 +151,6 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5696394554-authoritative",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"
@@ -206,7 +204,7 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
             latestPatch != null &&
                 latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
-                latestPatch.intent == null
+                latestPatch.offsetMap == null
         assertTrue(
             "outcome 为 AuthoritativeApplied 后也不应出现 a->an local patch，" +
                 "pendingPatches=$pendingAfterAuth isAnLocalPatch=$isAnLocalPatch\n" +
@@ -230,7 +228,6 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5696394554-accepted",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"
@@ -285,7 +282,7 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
             latestPatch != null &&
                 latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
-                latestPatch.intent == null
+                latestPatch.offsetMap == null
         assertTrue(
             "latestPatch 应为 a->an 且 intent == null，" +
                 "latestPatch=$latestPatch isAnLocalPatch=$isAnLocalPatch\n" +
@@ -319,7 +316,6 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
         val state =
             ComposeEditorVisualState(
                 targetId = "issue694-c5696786245-late-active",
-                classifier = FakeLocalVisualPlanClassifier,
             )
 
         // 1. base = "a"：设置基线 lastPresentedLayout = "a"，frameCoordinator.lastConsumed = "a"
@@ -394,7 +390,7 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
             latestPatch != null &&
                 latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
-                latestPatch.intent == null
+                latestPatch.offsetMap == null
         assertTrue(
             "latestPatch 应为 a->an 且 intent == null，" +
                 "latestPatch=$latestPatch isAnLocalPatch=$isAnLocalPatch\n" +

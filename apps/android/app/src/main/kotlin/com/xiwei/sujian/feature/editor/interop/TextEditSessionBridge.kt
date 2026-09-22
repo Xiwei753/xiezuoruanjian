@@ -268,14 +268,6 @@ class TextEditSessionBridge(
         }
     }
 
-    override fun setAnimationEnabled(enabled: Boolean) {
-        appServiceBridge.textEditSessionSetAnimationEnabled(sessionId, enabled)
-    }
-
-    override fun setAnimationDurationMs(durationMs: Long) {
-        appServiceBridge.textEditSessionSetAnimationDurationMs(sessionId, durationMs.toULong())
-    }
-
     override fun sessionSnapshot(): EditorSessionSnapshotDto? {
         return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
             is BridgeResult.Success -> result.data
@@ -347,30 +339,6 @@ class TextEditSessionBridge(
         ) {
             is BridgeResult.Success -> result.data.toInt()
             else -> byteOffset
-        }
-    }
-
-    // #606: 旧→新逻辑 slice 对应关系由 Core 唯一计算，平台端不再自己匹配。
-    override fun computeRebaseSliceMappings(
-        oldSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
-        oldSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
-        newSliceRoles: List<uniffi.writer_core.AnimatedSliceRoleDto>,
-        newSliceByteRanges: List<uniffi.writer_core.EditorByteRangeDto>,
-        offsetMap: uniffi.writer_core.OffsetMapDto?,
-    ): List<uniffi.writer_core.RebaseSliceMappingDto>? {
-        return when (
-            val result =
-                appServiceBridge.textEditSessionComputeRebaseSliceMappings(
-                    sessionId,
-                    oldSliceRoles,
-                    oldSliceByteRanges,
-                    newSliceRoles,
-                    newSliceByteRanges,
-                    offsetMap,
-                )
-        ) {
-            is BridgeResult.Success -> result.data
-            else -> null
         }
     }
 }
