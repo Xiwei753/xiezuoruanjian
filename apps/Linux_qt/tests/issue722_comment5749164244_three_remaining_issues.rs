@@ -111,7 +111,7 @@ fn issue1_y_fallback_uses_half_open_interval() {
 #[test]
 fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 8000);
+    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 10000);
     // Issue #727 约束 3: 不应有 `(r.x, r.top, 0usize)` 或 `(x, y, 0usize)` 等硬编码
     let has_hardcoded_zero = window.contains("(r.x, r.top, 0usize)")
         || window.contains("(x, y, 0usize)")

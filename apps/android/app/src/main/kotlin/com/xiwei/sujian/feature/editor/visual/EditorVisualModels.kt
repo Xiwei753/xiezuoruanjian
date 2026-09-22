@@ -2,6 +2,9 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
+import com.xiwei.sujian.feature.editor.projection.OffsetMapKind
+import com.xiwei.sujian.feature.editor.session.CoreEditFactEvent
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -175,4 +178,140 @@ enum class VisualOffsetMapKind {
 
     /** 文本相同但 offset 改变（被前后增删平移）；内容变化/删除区域没有 mapping。 */
     SHIFTED,
+}
+
+// ── Core → Visual 映射 ──────────────────────────────────────────
+
+/**
+ * Issue #735 评论 5771063665：把 Core [CoreEditFactEvent]（UTF-8 byte ranges）转成
+ * Compose [EditorEditFact]（UTF-16 ranges）。
+ *
+ * 此函数在 visual 层完成 UniFFI DTO → 平台类型的映射，
+ * UI 层只需调用，不直接引用 UniFFI 生成类。
+ */
+fun mapCoreEditFactToEditorEditFact(event: CoreEditFactEvent): EditorEditFact {
+    val textKind =
+        when (event.operationKind) {
+            EditorOperationKindDto.DELETE -> TextVisualKind.Delete
+            EditorOperationKindDto.INSERT -> TextVisualKind.Insert
+            EditorOperationKindDto.REPLACE,
+            EditorOperationKindDto.COMPOSITION_COMMIT,
+            EditorOperationKindDto.COMPOSITION_UPDATE,
+            -> TextVisualKind.Move
+            EditorOperationKindDto.CURSOR_ONLY -> TextVisualKind.None
+            EditorOperationKindDto.COMPOSITION_CANCEL -> TextVisualKind.Delete
+            else -> TextVisualKind.Move
+        }
+
+    val replaceBounds = computeVisualReplaceBounds(event.oldText, event.newText)
+
+    val oldRanges =
+        if (replaceBounds != null && replaceBounds.oldStart < replaceBounds.oldEnd) {
+            listOf(TextRange(replaceBounds.oldStart, replaceBounds.oldEnd))
+        } else {
+            emptyList()
+        }
+    val newRanges =
+        if (replaceBounds != null && replaceBounds.newStart < replaceBounds.newEnd) {
+            listOf(TextRange(replaceBounds.newStart, replaceBounds.newEnd))
+        } else {
+            emptyList()
+        }
+
+    val visualOffsetMap =
+        event.offsetMap?.let { coreOffsetMap ->
+            VisualOffsetMap(
+                entries =
+                    coreOffsetMap.entries.map { entry ->
+                        val oldStartUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
+                        val newStartUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
+                        val oldEndByte = entry.oldByteOffset + entry.length
+                        val newEndByte = entry.newByteOffset + entry.length
+                        val oldEndUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(
+                                event.oldText,
+                                oldEndByte.coerceAtMost(event.oldText.toByteArray(Charsets.UTF_8).size),
+                            )
+                        val newEndUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(
+                                event.newText,
+                                newEndByte.coerceAtMost(event.newText.toByteArray(Charsets.UTF_8).size),
+                            )
+                        VisualOffsetMapEntry(
+                            oldStart = oldStartUtf16,
+                            newStart = newStartUtf16,
+                            length = newEndUtf16 - newStartUtf16,
+                            kind =
+                                when (entry.kind) {
+                                    OffsetMapKind.IDENTITY ->
+                                        VisualOffsetMapKind.IDENTITY
+                                    OffsetMapKind.SHIFTED ->
+                                        VisualOffsetMapKind.SHIFTED
+                                },
+                        )
+                    },
+            )
+        }
+
+    val oldSelectionEndUtf16 =
+        TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(event.oldText, event.oldSelectionHeadUtf8) ?: -1
+    val newSelectionEndUtf16 =
+        TextOffsetUtils.utf16OffsetForUtf8ByteOrNull(event.newText, event.newSelectionHeadUtf8) ?: -1
+
+    return EditorEditFact(
+        coreTransactionId = event.transactionId,
+        baseRevision = event.baseRevision,
+        newRevision = event.newRevision,
+        cause = event.cause,
+        operationKind = event.operationKind,
+        offsetMap = visualOffsetMap,
+        oldRanges = oldRanges,
+        newRanges = newRanges,
+        textKind = textKind,
+        replaceBounds = replaceBounds,
+        expectedOldText = event.oldText,
+        expectedNewText = event.newText,
+        oldAnimationUnits = oldRanges,
+        newAnimationUnits = newRanges,
+        oldSelectionEndUtf16 = oldSelectionEndUtf16,
+        newSelectionEndUtf16 = newSelectionEndUtf16,
+    )
+}
+
+/**
+ * #641 评论 5458880786 问题2b：用 oldText/newText 做 code-point-safe diff 算 [VisualReplaceBounds] —
+ * 共同前缀 + 共同后缀算出最小 replace 边界，offset 是 UTF-16。
+ */
+fun computeVisualReplaceBounds(
+    oldText: String,
+    newText: String,
+): VisualReplaceBounds {
+    var oldStart = 0
+    var newStart = 0
+    while (oldStart < oldText.length && newStart < newText.length) {
+        val oldCp = Character.codePointAt(oldText, oldStart)
+        val newCp = Character.codePointAt(newText, newStart)
+        if (oldCp != newCp) break
+        oldStart += Character.charCount(oldCp)
+        newStart += Character.charCount(newCp)
+    }
+
+    var oldEnd = oldText.length
+    var newEnd = newText.length
+    while (oldEnd > oldStart && newEnd > newStart) {
+        val oldCp = Character.codePointBefore(oldText, oldEnd)
+        val newCp = Character.codePointBefore(newText, newEnd)
+        if (oldCp != newCp) break
+        oldEnd -= Character.charCount(oldCp)
+        newEnd -= Character.charCount(newCp)
+    }
+
+    return VisualReplaceBounds(
+        oldStart = oldStart,
+        oldEnd = oldEnd,
+        newStart = newStart,
+        newEnd = newEnd,
+    )
 }
