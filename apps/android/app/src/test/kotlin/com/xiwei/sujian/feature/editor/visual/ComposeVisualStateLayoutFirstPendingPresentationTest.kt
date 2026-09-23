@@ -255,6 +255,147 @@ class ComposeVisualStateLayoutFirstPendingPresentationTest {
         )
     }
 
+    /**
+     * Issue #737 评论 5786405265 漏洞1测试 — P1 prepared motion 未 drain 时 P2 layout-first 到达，
+     * AwaitingFact 分支应 settle prepared motion 并一并结算其 pending patch + 重置 preparedMotionSequence。
+     *
+     * 场景（按评论顺序 1～6）：
+     * 1. P1 patch 已生成（"" -> "a"）
+     * 2. pendingPatches = [P1]
+     * 3. activeMotion = prepared(P1)
+     * 4. 第一只 frame 还没来（不调 drainPendingPatchesAtFrame）
+     * 5. P2 的 layout 先到（"a" -> "ab" 的 layout）、P2 fact 还没到
+     * 6. onAuthoritativeLayout 进入 AwaitingFact
+     *
+     * 旧实现（漏洞1）：AwaitingFact 只清 activeMotion，没结算 prepared motion 对应的 pending patch，
+     * 也没重置 preparedMotionSequence。P1 唤醒的 frame 先执行 drainPendingPatchesAtFrame 时取出 P1 patch，
+     * 因 activeMotion == null 重新从 P1 构造 running motion，sampleVisualScene 把 P1 sample 写回 →
+     * layout=P2, motionSample=P1。
+     *
+     * 期望（修复后）：AwaitingFact 分支 settle prepared motion 时一并清掉 P1 patch +
+     * 重置 preparedMotionSequence。之后 drainPendingPatchesAtFrame 不会取出 P1 patch
+     * 重新构造 running motion，sampleVisualScene 保持 P2 pending sample。
+     */
+    @Test
+    fun p1Prepared_notDrained_p2LayoutFirst_p1PatchSettledNotRevived() {
+        val layouts = captureLayouts("", "a", "ab")
+        val state = ComposeEditorVisualState(targetId = "737-prepared-settle")
+
+        // === 第一笔："" -> "a"（正常完成，建立 baseline + prepared motion）===
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onEditFact(
+            makeInsertIntent(
+                coreTxnId = 1L,
+                baseRev = 0L,
+                newRev = 1L,
+                oldText = "",
+                newText = "a",
+                newRange = TextRange(0, 1),
+                replaceBounds = VisualReplaceBounds(0, 0, 0, 1),
+            ),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        // 此时：pendingPatches = [P1], activeMotion = prepared(P1), preparedMotionSequence = 0
+        // 关键：不调 drainPendingPatchesAtFrame，prepared motion 还没 start
+        assertEquals("P1 patch 应在队列中", 1, readPendingPatchesSize(state))
+        assertNotNull("P1 prepared motion 应存在", readActiveMotion(state))
+        assertEquals("preparedMotionSequence 应为 0", 0L, readPreparedMotionSequence(state))
+
+        // === 第二笔 layout-first："a" -> "ab" 的 layout 先到，fact 未到 ===
+        // onAuthoritativeLayout 进入 AwaitingFact 分支，应 settle prepared motion +
+        // 一并结算 P1 patch + 重置 preparedMotionSequence
+        state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
+
+        // 关键断言：P1 patch 已被一并结算（不会复活）
+        assertEquals("P1 patch 应已结算（pendingPatches 空）", 0, readPendingPatchesSize(state))
+        assertNull("P1 prepared motion 应已 settle（activeMotion null）", readActiveMotion(state))
+        assertEquals("preparedMotionSequence 应已重置为 -1L", -1L, readPreparedMotionSequence(state))
+
+        // 关键断言：P2 pending presentation 已建立
+        assertNotNull("P2 pending presentation 应已建立", readPendingPresentation(state))
+
+        // === 调一次 drainPendingPatchesAtFrame + sampleVisualScene ===
+        // drainPendingPatchesAtFrame：pendingPatches 空，不会取出 P1 patch 重新构造 running motion
+        state.drainPendingPatchesAtFrame(0L)
+        val scene = state.sampleVisualScene(0L)
+
+        // 关键断言：P2 pending sample 仍然是当前 owner
+        val snap = state.drawSnapshot()
+        assertNotNull("sampleVisualScene 应返回非 null sample（P2 pending）", scene)
+        assertNotNull("drawSnapshot.motionSample 应非 null（P2 pending sample）", snap.motionSample)
+        assertTrue("P2 pending hiddenRanges 应非空", snap.motionSample!!.hiddenRanges.isNotEmpty())
+        assertEquals(
+            "P2 pending hiddenRanges 应覆盖新字 'b' 的 range [1,2)",
+            TextRange(1, 2),
+            snap.motionSample!!.hiddenRanges.first(),
+        )
+
+        // P1 不会复活
+        assertEquals("drain 后 pendingPatches 仍应空（P1 不复活）", 0, readPendingPatchesSize(state))
+        assertNull("drain 后 activeMotion 仍应 null（P1 不复活）", readActiveMotion(state))
+        assertEquals("drain 后 preparedMotionSequence 仍应 -1L", -1L, readPreparedMotionSequence(state))
+    }
+
+    /**
+     * Issue #737 评论 5786405265 漏洞2测试 — LayoutOnly 分支应统一结算旧 owner 状态。
+     *
+     * 场景：
+     * 1. "" -> "ab"（第一笔完成，建立 prepared motion + pendingPatches = [P1]）
+     * 2. "ab" 纯几何变化（窄容器，text 不变、fingerprint 变化）→ LayoutOnly
+     * 3. LayoutOnly 分支调用 settleToStaticOwner() 清掉 prepared motion + pendingPatches + pendingPresentation
+     *
+     * 旧实现（漏洞2）：LayoutOnly 只改 drawSnapshot，没清 activeMotion / pendingPresentation /
+     * preparedMotionSequence / pending patch。旧 prepared motion 的 patch 会在下一帧
+     * drainPendingPatchesAtFrame 重新激活，旧 pendingPresentation 会在 sampleVisualScene 复活。
+     *
+     * 期望（修复后）：pendingPresentation == null、activeMotion == null、
+     * preparedMotionSequence == -1L、pendingPatches 空。sampleVisualScene 后 motionSample == null。
+     */
+    @Test
+    fun layoutOnly_clearsPendingPresentation() {
+        val layouts = captureLayouts("", "a")
+        val state = ComposeEditorVisualState(targetId = "737-layout-only-settle")
+
+        // === 第一笔："" -> "a"（正常完成，建立 prepared motion + pendingPatches）===
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onEditFact(
+            makeInsertIntent(
+                coreTxnId = 1L,
+                baseRev = 0L,
+                newRev = 1L,
+                oldText = "",
+                newText = "a",
+                newRange = TextRange(0, 1),
+                replaceBounds = VisualReplaceBounds(0, 0, 0, 1),
+            ),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        // 此时：pendingPatches = [P1], activeMotion = prepared(P1), preparedMotionSequence = 0
+        assertEquals("P1 patch 应在队列中", 1, readPendingPatchesSize(state))
+        assertNotNull("P1 prepared motion 应存在", readActiveMotion(state))
+        assertEquals("preparedMotionSequence 应为 0", 0L, readPreparedMotionSequence(state))
+
+        // === 触发 applyFrameUpdate(LayoutOnly) ===
+        // Robolectric 的 TextMeasurer 不真正按 maxWidth 换行，无法通过 onAuthoritativeLayout
+        // 的纯几何变化触发 LayoutOnly。直接反射调用 applyFrameUpdate(LayoutOnly) 验证
+        // LayoutOnly 分支调用 settleToStaticOwner() 清掉所有旧 owner 状态。
+        val snapshot = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0)
+        val layoutOnlyUpdate = FrameUpdate.LayoutOnly(snapshot)
+        invokeApplyFrameUpdate(state, layoutOnlyUpdate)
+
+        // 关键断言：settleToStaticOwner() 已清掉所有旧 owner 状态
+        assertNull("LayoutOnly 后 pendingPresentation 应为 null", readPendingPresentation(state))
+        assertNull("LayoutOnly 后 activeMotion 应为 null", readActiveMotion(state))
+        assertEquals("LayoutOnly 后 preparedMotionSequence 应为 -1L", -1L, readPreparedMotionSequence(state))
+        assertEquals("LayoutOnly 后 pendingPatches 应空", 0, readPendingPatchesSize(state))
+
+        // === 再调一次 sampleVisualScene，motionSample 应为 null（旧 pending 不复活）===
+        val scene = state.sampleVisualScene(0L)
+        val snap = state.drawSnapshot()
+        assertNull("sampleVisualScene 应返回 null（无 active motion / pending presentation）", scene)
+        assertNull("drawSnapshot.motionSample 应为 null（旧 pending 不复活）", snap.motionSample)
+    }
+
     // ==================== 辅助方法 ====================
 
     /** 反射读取 ComposeEditorVisualState 的 private activeMotion 字段。 */
@@ -335,5 +476,31 @@ class ComposeVisualStateLayoutFirstPendingPresentationTest {
         val field = ComposeEditorVisualState::class.java.getDeclaredField("pendingPresentation")
         field.isAccessible = true
         return field.get(state)
+    }
+
+    /** 反射读取 ComposeEditorVisualState 的 private pendingPatches 字段大小。 */
+    private fun readPendingPatchesSize(state: ComposeEditorVisualState): Int {
+        val field = ComposeEditorVisualState::class.java.getDeclaredField("pendingPatches")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val deque = field.get(state) as kotlin.collections.ArrayDeque<*>
+        return deque.size
+    }
+
+    /** 反射读取 ComposeEditorVisualState 的 private preparedMotionSequence 字段。 */
+    private fun readPreparedMotionSequence(state: ComposeEditorVisualState): Long {
+        val field = ComposeEditorVisualState::class.java.getDeclaredField("preparedMotionSequence")
+        field.isAccessible = true
+        return field.getLong(state)
+    }
+
+    /** 反射调用 ComposeEditorVisualState 的 private applyFrameUpdate 方法。 */
+    private fun invokeApplyFrameUpdate(
+        state: ComposeEditorVisualState,
+        update: FrameUpdate,
+    ) {
+        val method = ComposeEditorVisualState::class.java.getDeclaredMethod("applyFrameUpdate", FrameUpdate::class.java)
+        method.isAccessible = true
+        method.invoke(state, update)
     }
 }

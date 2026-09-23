@@ -454,9 +454,11 @@ class ComposeEditorVisualState(
             // Issue #737 评论 5782769758：composition layout 可能和上一笔 motion 的 text 不同，
             // 清掉过期 motionSample 防止 old sample + new layout 裁错。
             // composition 期间不播放吞吐，activeMotion 清空后由 restingCaretRect 填 drawSnapshot caret。
-            if (activeMotion != null) {
-                activeMotion = null
-            }
+            // Issue #737 评论 5786405265 漏洞2：静态 owner 接管时必须统一结算旧 owner —
+            // 不能只清 activeMotion，还要清 pendingPresentation / preparedMotionSequence / pending patch，
+            // 否则旧 pendingPresentation 会在 sampleVisualScene 里复活，旧 prepared motion 的 patch
+            // 会在 drainPendingPatchesAtFrame 里重新启动。
+            settleToStaticOwner()
             presentationGeneration++
             drawSnapshotState =
                 drawSnapshotState.copy(
@@ -485,11 +487,14 @@ class ComposeEditorVisualState(
             is FrameUpdate.AwaitingFact -> {
                 // text 变了但 fact 还没到 — 建立 pending presentation ownership
                 // 关键：先 settle running motion（互斥规则：不能同时有 running motion 和 pending presentation）
-                if (activeMotion != null) {
-                    // 把 P1 running motion settle 到 target
-                    restingCaretRect = activeMotion!!.newCaretRect
-                    activeMotion = null
-                }
+                // Issue #737 评论 5786405265 漏洞1：prepared motion 被 settle 时必须一并结算其
+                // 对应的 pending patch + 重置 preparedMotionSequence。否则 P1 唤醒的 frame 先执行
+                // drainPendingPatchesAtFrame 时会取出 P1 patch，因 activeMotion == null 重新从 P1
+                // 构造 running motion，sampleVisualScene 把 P1 sample 写回 → layout=P2, motionSample=P1。
+                // 核心规则：某个 presentation owner 被 settle 掉后，它对应的未启动 patch 也必须
+                // 一起结算，不能下一帧重新启动。running motion（非 prepared）的 patch 已在 drain
+                // 时消费过，pendingPatches 已空，无需额外清理。
+                settleMotionForPendingPresentation()
                 val previousLayout = drawSnapshotState.layout
                 if (previousLayout != null) {
                     val pending = buildPendingPresentation(previousLayout, snapshot)
@@ -575,6 +580,11 @@ class ComposeEditorVisualState(
             is FrameUpdate.LayoutOnly -> {
                 // Issue #737 评论 5785295971：初始 baseline 或纯几何变化（text 不变）—
                 // 可以直接静态发布新 layout + resting caret。
+                // Issue #737 评论 5786405265 漏洞2：静态 owner 接管时必须统一结算旧 owner —
+                // 此入口由 onAuthoritativeLayout 的 Core visual path 调用，若有 prepared motion /
+                // pending patch，说明上一笔的 prepared motion 被 layout 变化打断，必须一并结算，
+                // 否则下一帧 drainPendingPatchesAtFrame 会取出旧 patch 重新激活旧 motion。
+                settleToStaticOwner()
                 presentationGeneration++
                 drawSnapshotState =
                     drawSnapshotState.copy(
@@ -605,7 +615,12 @@ class ComposeEditorVisualState(
                 val composedPatch = ComposeVisualPatchBatch.compose(pendingPatches.map { it.patch })
                 if (composedPatch != null) {
                     applyPreparedMotionFromPatch(composedPatch)
-                    preparedMotionSequence = patchSequence
+                    // Issue #737 评论 5786405265：只有创建 prepared motion 时才记录 sequence。
+                    // Static 分支已清 pendingPatches + preparedMotionSequence = -1L，
+                    // 不能在这里覆盖回 patchSequence，否则状态不一致。
+                    if (activeMotion != null && activeMotion!!.isPrepared) {
+                        preparedMotionSequence = patchSequence
+                    }
                 }
             }
         }
@@ -755,6 +770,46 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * Issue #737 评论 5786405265 漏洞1：settle 当前 motion 为 pending presentation 接管做准备。
+     *
+     * 如果当前有 prepared motion，一并结算其对应的 pending patch + 重置 preparedMotionSequence，
+     * 防止下一帧 drainPendingPatchesAtFrame 取出旧 patch 重新构造 running motion。
+     * running motion（非 prepared）的 patch 已在 drain 时消费过，pendingPatches 已空，无需额外清理。
+     */
+    private fun settleMotionForPendingPresentation() {
+        val existingMotion = activeMotion ?: return
+        restingCaretRect = existingMotion.newCaretRect
+        if (existingMotion.isPrepared) {
+            val preparedSeq = preparedMotionSequence
+            if (preparedSeq >= 0L) {
+                pendingPatches.removeAll { it.sequence <= preparedSeq }
+            }
+            preparedMotionSequence = -1L
+        }
+        activeMotion = null
+    }
+
+    /**
+     * Issue #737 评论 5786405265：统一结算旧 presentation owner —
+     * 静态状态成为当前唯一 owner 时，必须把旧 owner 的所有状态字段一起清掉，
+     * 不能只改 drawSnapshot。否则旧 pendingPresentation / prepared motion / pending patch
+     * 会在下一帧被 sampleVisualScene / drainPendingPatchesAtFrame 重新激活，
+     * 造成 "old sample + new layout" 或旧 prepared motion 复活。
+     *
+     * 调用时机：所有"静态状态成为当前唯一 owner"的入口（LayoutOnly / composition active /
+     * SYSTEM_SUPPRESSED / PreparedMotionResult.Static）在原子写新静态 draw snapshot 之前调用。
+     */
+    private fun settleToStaticOwner() {
+        activeMotion = null
+        pendingPresentation = null
+        preparedMotionSequence = -1L
+        // prepared motion 对应的 pending patch 也一并结算（running motion 的 patch 已在 drain 时消费）
+        if (pendingPatches.isNotEmpty()) {
+            pendingPatches.clear()
+        }
+    }
+
+    /**
      * Issue #737 评论 5782769758：从 patch 构造 prepared motion 并原子更新 draw snapshot。
      * layout 和 motionSample 带同一 presentation generation，防止 old sample + new layout。
      */
@@ -766,7 +821,16 @@ class ComposeEditorVisualState(
         presentationGeneration++
         when (val result = buildPreparedMotion(patch)) {
             is PreparedMotionResult.Static -> {
+                // Issue #737 评论 5786405265 漏洞2：静态 owner 接管时统一结算旧 owner —
+                // pendingPresentation 已在方法开头清，但 preparedMotionSequence / pending patch
+                // 仍需清，否则旧 prepared motion 的 patch 会在 drainPendingPatchesAtFrame 里
+                // 重新启动，覆盖 Static 的静态画面。
                 activeMotion = null
+                pendingPresentation = null
+                preparedMotionSequence = -1L
+                if (pendingPatches.isNotEmpty()) {
+                    pendingPatches.clear()
+                }
                 restingCaretRect = result.caretRect
                 drawSnapshotState =
                     drawSnapshotState.copy(
@@ -905,7 +969,13 @@ class ComposeEditorVisualState(
         // 这个检查在 isSelectionOnly 判断之前，因为 SYSTEM_SUPPRESSED 优先级最高 —
         // 无论是否 selection-only，系统抑制都应该静态完成。
         if (framePatch.animationMode == AnimationMode.SYSTEM_SUPPRESSED) {
+            // Issue #737 评论 5786405265 漏洞2：静态 owner 接管时统一结算旧 owner —
+            // activeMotion 已在此设 null，pendingPatches 已在前面 clear（第 884 行），
+            // 但 pendingPresentation / preparedMotionSequence 仍需清，否则旧 pendingPresentation
+            // 会在 sampleVisualScene 里复活，覆盖 SYSTEM_SUPPRESSED 的静态画面。
             activeMotion = null
+            pendingPresentation = null
+            preparedMotionSequence = -1L
             restingCaretRect = framePatch.targetCaretRect
             presentationGeneration++
             drawSnapshotState =
