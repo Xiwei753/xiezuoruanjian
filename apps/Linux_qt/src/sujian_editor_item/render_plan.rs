@@ -1,3 +1,4 @@
+use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::qt_text_node::AnimationClipRect;
 use super::transaction_key::VisualTransactionKey;
@@ -77,6 +78,13 @@ pub(crate) struct FrameContext {
     pub active_transaction_keys: Vec<VisualTransactionKey>,
     pub keys_to_complete: Vec<VisualTransactionKey>,
     pub keys_to_cancel: Vec<VisualTransactionKey>,
+    /// Issue #738 评论 5787277777: 当前 canonical layout basis revision。
+    ///
+    /// `build_render_plan_full` 构建 glyph / clip 时只接受已经 reconcile 到这个
+    /// revision 的 unit（`tx.layout_basis_revision >= frame_context.layout_basis_revision`）。
+    /// 这个守卫放在计划层，避免以后又新增一条入口忘了先做 reconcile，旧绝对坐标
+    /// 重新混进 scene graph。
+    pub layout_basis_revision: LayoutRevision,
 }
 
 #[derive(Clone, Debug)]

@@ -19,6 +19,12 @@ impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
         // 宽度变化需要重新排版 QSGTextNode
         self.invalidate_layout_cache();
+        // Issue #738 评论 5787277777: 宽度变化后也走 layout-basis 更新入口，
+        // 和 layout_property_changed（字号/字体/行距/缩进/padding）共用同一条路径。
+        // bump_layout_revision 使旧活动事务的 basis revision 过期，不让仍在播放的 Reflow
+        // 保留 resize 前的 document rect。build_render_plan_full 的守卫跳过旧 basis 的 unit，
+        // canonical 正文立即接管。下一次 record_visual_transaction 的 reconcile 会处理重绑/移除。
+        self.pipeline.bump_layout_revision();
         self.recalculate_content_height_and_emit();
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
@@ -168,6 +174,7 @@ impl QQuickItem for SujianEditorItem {
                 active_transaction_keys: Vec::new(),
                 keys_to_complete: Vec::new(),
                 keys_to_cancel: Vec::new(),
+                layout_basis_revision: self.pipeline.layout_revision(),
             };
             let cursor_style = CursorStyle {
                 color: self.current_cursor_color.to_string(),

@@ -9,6 +9,7 @@ use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
+use std::time::Instant;
 use writer_core::editor::{
     DisplayPatch, EditorChange, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
     EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
@@ -376,6 +377,22 @@ impl LinuxEditorPipeline {
             layout_revision: LayoutRevision::initial(),
             pending_promoted_layout: None,
         }
+    }
+
+    /// Issue #738 评论 5787277777: 获取 Pipeline 当前的 layout revision，
+    /// 供 FrameContext 和 reconcile 入口作为 canonical basis revision 使用。
+    pub fn layout_revision(&self) -> LayoutRevision {
+        self.layout_revision
+    }
+
+    /// Issue #738 评论 5787277777: 推进 layout revision，使旧活动事务的 basis revision
+    /// 过期。geometry_changed（宽度变化）和 layout_property_changed（字号/字体/行距/缩进/
+    /// padding 变化）后调此方法，让 build_render_plan_full 的 basis revision 守卫跳过
+    /// 仍绑定旧 canonical 几何的 unit，canonical 正文立即接管。旧事务最终因 is_expired
+    /// 超时或下一次 record_visual_transaction 的 reconcile 被移除。
+    pub fn bump_layout_revision(&mut self) -> LayoutRevision {
+        self.layout_revision = LayoutRevision::next();
+        self.layout_revision
     }
 
     pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {
@@ -1214,6 +1231,18 @@ impl LinuxEditorPipeline {
                 &motion.new_text,
             );
 
+            // Issue #738 评论 5787277777: 在 new_doc_snapshot 已完成、创建本次新事务之前，
+            // 先把所有旧活动事务从"上一份 canonical 几何"重绑到这份新 canonical，
+            // 再处理本次新事务自己的 conflict/rebase。Pipeline 的 new_revision 即将成为
+            // 新 canonical basis revision，直接传给 coordinator。
+            self.animation_coordinator
+                .reconcile_active_transactions_with_canonical(
+                    &motion.new_text,
+                    &new_doc_snapshot,
+                    new_revision,
+                    Instant::now(),
+                );
+
             let key = self.animation_coordinator.process_transaction(
                 &motion,
                 ctx.typing_animation_enabled,
@@ -1232,6 +1261,7 @@ impl LinuxEditorPipeline {
                 &old_snap,
                 &new_snap,
                 cursor_owner_epoch,
+                new_revision,
             );
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);

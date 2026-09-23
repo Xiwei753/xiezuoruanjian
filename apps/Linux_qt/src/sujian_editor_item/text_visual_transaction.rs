@@ -3,8 +3,10 @@ use std::time::Instant;
 use super::edit_motion::CursorRect;
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity};
+use super::layout_revision::LayoutRevision;
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect};
 use super::transaction_key::VisualTransactionKey;
+use crate::editor::layout::CanonicalDocumentVisualSnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextVisualTransactionState {
@@ -750,6 +752,17 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// `None` 表示事务没有视觉 affected region（如 CursorOnly）。
     pub visual_affected_byte_range_old: Option<(usize, usize)>,
     pub visual_affected_byte_range_new: Option<(usize, usize)>,
+    /// Issue #738 评论 5787277777: 活动事务绑定的 canonical layout basis revision。
+    ///
+    /// 事务创建时记录当时的 canonical layout revision。当 canonical layout 推进
+    ///（换行导致后面整段 y 下移、宽度变化、字号变化等）时，`rebind_timed_units_to_canonical`
+    /// 把仍存活的 Timed Reflow unit 从旧 basis 几何重绑到新 canonical 几何，并把这个
+    /// 字段推进到当前 revision。`build_render_plan_full` 只接受 basis revision 不旧于
+    /// 当前 canonical revision 的 unit，避免过期绝对坐标混进 scene graph。
+    ///
+    /// byte range + shaping identity 仍保留在 `PreparedVisualUnit` / `AnimatedSlice`，
+    /// 作为到下一份 canonical layout 里重新找目标几何的锚点。
+    pub layout_basis_revision: LayoutRevision,
 }
 
 impl PreparedTextVisualTransaction {
@@ -1024,6 +1037,233 @@ impl PreparedTextVisualTransaction {
         ids.dedup();
         ids
     }
+
+    /// Issue #738 评论 5787277777: 把活动事务的 Timed Reflow unit 从旧 canonical
+    /// layout basis 重绑到当前 canonical layout。
+    ///
+    /// 只处理 `ReflowMove / ReflowCrossFade`（Timed unit）。CaretDriven unit
+    ///（InsertReveal / DeleteConceal）由 caret owner/epoch 规则单独管理，不在此重绑。
+    ///
+    /// 流程：
+    /// 1. 按本事务 `new_snapshot.virtual_text -> current_text` 建 `OffsetMap`。
+    /// 2. 把 unit 的 `byte_start/byte_end` 映射到当前正文坐标系。
+    /// 3. 在当前 canonical snapshot 里按映射后的 byte range 找对应 cluster，
+    ///    再用 shaping identity 确认还是同一份可复用字形。
+    /// 4. 几何没变：只把 `layout_basis_revision` 推进到当前 revision。
+    /// 5. 几何变了：按同一个 `now` 采样 unit 当前屏幕帧作为新的 `from_document_rect`；
+    ///    目标改成当前 canonical cluster 的 document rect；`static_hidden_document_rects`
+    ///    同步改成当前 target rect；剩余时长继续用原 unit 的 remaining duration，不从 0 重播。
+    /// 6. byte 映射失败或 shaping 已经变了：该 unit 不再拥有 overlay/static clip，
+    ///    直接从活动 unit 集合移除，让当前 canonical 正文接管。
+    ///
+    /// `find_conflicting_transaction()` 仍负责"文字内容相互覆盖"的冲突；
+    /// 不再让它同时承担"几何是否过期"这个职责。
+    pub(crate) fn rebind_timed_units_to_canonical(
+        &mut self,
+        current_text: &str,
+        canonical_snapshot: &CanonicalDocumentVisualSnapshot,
+        current_layout_revision: LayoutRevision,
+        now: Instant,
+    ) {
+        // 取本事务 new_snapshot 的 virtual_text 作为源坐标系。
+        let new_snap_text = match self.new_snapshot.as_ref() {
+            Some(s) => s.virtual_text.as_str(),
+            None => {
+                // 没有 new_snapshot 无法建 OffsetMap：移除全部 Timed unit，让 canonical 接管。
+                self.units.retain(|u| !is_timed_reflow_kind(u.slice.kind));
+                self.layout_basis_revision = current_layout_revision;
+                return;
+            }
+        };
+
+        // OffsetMap: 本事务 new 坐标系（old） -> 当前正文坐标系（new）。
+        let offset_map = writer_core::editor::OffsetMap::build(new_snap_text, current_text);
+
+        // 先收集每个 Timed unit 的重绑结果，避免在 retain 闭包里修改 unit。
+        // (unit_index, outcome)
+        enum RebindOutcome {
+            Keep,
+            Rebind(SourceRect),
+            Remove,
+        }
+
+        let mut outcomes: Vec<RebindOutcome> = Vec::with_capacity(self.units.len());
+        for unit in &self.units {
+            if !is_timed_reflow_kind(unit.slice.kind) {
+                outcomes.push(RebindOutcome::Keep);
+                continue;
+            }
+            // 映射 unit 的 byte range（本事务 new 坐标系）到当前正文坐标系。
+            let (mapped_start, mapped_end) =
+                match offset_map.map_old_range_to_new(unit.slice.byte_start, unit.slice.byte_end) {
+                    Some(r) => r,
+                    None => {
+                        outcomes.push(RebindOutcome::Remove);
+                        continue;
+                    }
+                };
+            // 在当前 canonical snapshot 找对应 cluster + shaping identity。
+            let (cluster_rect, cluster_shaping) =
+                match find_cluster_in_canonical(canonical_snapshot, mapped_start, mapped_end) {
+                    Some(c) => c,
+                    None => {
+                        outcomes.push(RebindOutcome::Remove);
+                        continue;
+                    }
+                };
+            // 用 shaping identity 确认还是同一份可复用字形。
+            let shaping_ok = match unit.slice.shaping_identity.as_ref() {
+                Some(sid) => sid.is_same_shaping(&cluster_shaping),
+                None => false,
+            };
+            if !shaping_ok {
+                outcomes.push(RebindOutcome::Remove);
+                continue;
+            }
+            // 几何是否变化（容差比较）。
+            if rects_approx_equal(&unit.slice.to_document_rect, &cluster_rect) {
+                outcomes.push(RebindOutcome::Keep);
+            } else {
+                outcomes.push(RebindOutcome::Rebind(cluster_rect));
+            }
+        }
+
+        // 先处理 Rebind：采样当前帧作为 from，更新 to/static_hidden/timing。
+        // 索引此时未变（尚未 remove），可安全用 outcomes 的索引对应 self.units。
+        for (i, outcome) in outcomes.iter().enumerate() {
+            if let RebindOutcome::Rebind(ref new_to) = outcome {
+                let unit = &mut self.units[i];
+                // 按同一个 now 采样 unit 当前屏幕帧作为新的 from_document_rect。
+                let visible = unit.current_visible_fraction(now);
+                let frame = unit.slice.compute_frame(visible);
+                unit.slice.from_document_rect = SourceRect {
+                    x: frame.x,
+                    y: frame.y,
+                    w: frame.w,
+                    h: frame.h,
+                };
+                unit.slice.to_document_rect = new_to.clone();
+                unit.slice.static_hidden_document_rects = vec![new_to.clone()];
+                // 剩余时长继续用原 unit 的 remaining duration，不从 0 重播。
+                // from 已被改写为采样帧，start_fraction 重置为 0（与 rebase_from_frame
+                // 对 Reflow 的处理一致），started_at = now 立即从当前帧继续。
+                if let VisualUnitTiming::Timed {
+                    start_fraction,
+                    started_at,
+                    duration_ms,
+                    ..
+                } = &mut unit.timing
+                {
+                    let remaining = match *started_at {
+                        Some(start) => {
+                            duration_ms.saturating_sub(now.duration_since(start).as_millis() as u64)
+                        }
+                        None => *duration_ms,
+                    };
+                    *start_fraction = 0.0;
+                    *started_at = Some(now);
+                    *duration_ms = remaining.max(1);
+                }
+            }
+        }
+
+        // 再移除标记为 Remove 的 unit（倒序 remove 保持索引稳定）。
+        for i in (0..self.units.len()).rev() {
+            if matches!(outcomes.get(i), Some(RebindOutcome::Remove)) {
+                self.units.remove(i);
+            }
+        }
+
+        // 推进 basis revision 到当前 canonical revision。
+        self.layout_basis_revision = current_layout_revision;
+    }
+}
+
+/// Issue #738 评论 5787277777: 判断 AnimatedSliceKind 是否为 Timed Reflow
+///（ReflowMove / ReflowCrossFade），即需要 rebind 到 canonical 的 unit 类型。
+fn is_timed_reflow_kind(kind: AnimatedSliceKind) -> bool {
+    matches!(
+        kind,
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade
+    )
+}
+
+/// Issue #738 评论 5787277777: 在 canonical snapshot 里按 byte range 找对应 cluster，
+/// 返回其 document rect 和 shaping identity。
+///
+/// 遍历 paragraphs -> lines -> clusters，找 `cluster.document_byte_start <= byte_start
+/// && cluster.document_byte_end >= byte_end` 的 cluster（cluster 完全包含查询 range）。
+/// document rect 从 cluster 的 source_rect（行局部物理像素）+ 所属 VisualLine 的
+/// 文档坐标 + dpr 换算得到。shaping identity 用与 line_snapshot_builder 一致的
+/// 哈希方式构造，便于和 AnimatedSlice.shaping_identity 比较。
+fn find_cluster_in_canonical(
+    snapshot: &CanonicalDocumentVisualSnapshot,
+    byte_start: usize,
+    byte_end: usize,
+) -> Option<(SourceRect, ShapingIdentity)> {
+    let dpr = snapshot.dpr.max(0.001);
+    for para in &snapshot.paragraphs {
+        for line in &para.lines {
+            for cluster in &line.clusters {
+                if cluster.document_byte_start <= byte_start
+                    && cluster.document_byte_end >= byte_end
+                {
+                    // 找包含该 cluster 的 VisualLine 以取文档 y。
+                    let vline = snapshot.visual_lines.iter().find(|vl| {
+                        vl.byte_start <= cluster.document_byte_start
+                            && vl.byte_end >= cluster.document_byte_end
+                    });
+                    let (line_y, line_x) = match vline {
+                        Some(vl) => (vl.y, vl.x),
+                        None => (0.0, line.x_pos),
+                    };
+                    let doc_rect = SourceRect {
+                        x: cluster.source_rect_x / dpr + line_x,
+                        y: line_y + cluster.source_rect_y / dpr,
+                        w: cluster.source_rect_w / dpr,
+                        h: cluster.source_rect_h / dpr,
+                    };
+                    let shaping = ShapingIdentity {
+                        text_content_hash: hash_str_for_shaping(&cluster.cluster_text),
+                        raw_font_fingerprint: cluster.raw_font_fingerprint.clone(),
+                        glyph_indexes_hash: hash_u32_for_shaping(&[cluster.first_glyph_index]),
+                        cluster_glyph_count: cluster.glyph_count,
+                        direction_rtl: cluster.is_rtl,
+                        format_fingerprint: 0,
+                    };
+                    return Some((doc_rect, shaping));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Issue #738 评论 5787277777: 两个 SourceRect 是否在容差内相等（几何没变判断）。
+fn rects_approx_equal(a: &SourceRect, b: &SourceRect) -> bool {
+    const EPS: f64 = 0.5;
+    (a.x - b.x).abs() < EPS
+        && (a.y - b.y).abs() < EPS
+        && (a.w - b.w).abs() < EPS
+        && (a.h - b.h).abs() < EPS
+}
+
+/// Issue #738 评论 5787277777: 与 line_snapshot_builder 一致的哈希函数，
+/// 用于从 CanonicalClusterSnapshot 构造 ShapingIdentity 做比较。
+fn hash_str_for_shaping(data: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    data.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn hash_u32_for_shaping(data: &[u32]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    data.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Linux 当前唯一事务队列。
@@ -1228,6 +1468,7 @@ mod issue_710_comment_5732160521_repro {
             caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
+            layout_basis_revision: LayoutRevision::initial(),
         }
     }
 
@@ -1418,6 +1659,7 @@ mod issue_710_comment_5733109905_repro {
             caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
+            layout_basis_revision: LayoutRevision::initial(),
         }
     }
 
@@ -1463,6 +1705,7 @@ mod issue_710_comment_5733109905_repro {
             caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
+            layout_basis_revision: LayoutRevision::initial(),
         }
     }
 

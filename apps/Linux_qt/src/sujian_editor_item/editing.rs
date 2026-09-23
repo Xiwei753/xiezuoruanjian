@@ -224,6 +224,7 @@ impl SujianEditorItem {
         let visual_text_unchanged =
             !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
 
+        let layout_basis_revision = self.pipeline.layout_revision();
         let key = self
             .pipeline
             .animation_coordinator_mut()
@@ -247,6 +248,7 @@ impl SujianEditorItem {
                 new_line_top,
                 new_line_bottom,
                 self.cursor_ctrl.cursor_owner_epoch,
+                layout_basis_revision,
             );
 
         if let Some(key) = key {
