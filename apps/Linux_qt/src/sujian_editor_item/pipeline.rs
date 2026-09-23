@@ -435,30 +435,113 @@ impl LinuxEditorPipeline {
         new_revision
     }
 
-    /// Issue #738 评论 5789470425 问题1: 用当前排版参数构造一份新的
-    /// `CanonicalDocumentVisualSnapshot`（全篇，affected range (0,0)）。
+    /// Issue #738 评论 5789470425 问题1 / 评论 5792244119 问题 1: 用当前排版参数
+    /// 构造一份新的 `CanonicalDocumentVisualSnapshot`，**并提取动画视觉资源
+    ///（QImage/glyphRuns/clusters）注入**，使 rebind 路径 `find_clusters_in_canonical`
+    /// 能找到 cluster，布局变化后 Timed Reflow 能继续播放而非全部 Snap 回 canonical。
+    ///
     /// 供 `geometry_changed` / `layout_property_changed` 在新排版完成后调
     /// `reconcile_active_transactions_with_new_canonical` 使用。
+    ///
+    /// 实现要点（评论 5792244119 问题 1 修复）：
+    /// - **复用** `editor_layout.current_prepared_layout()` 的当前 generation 做基础
+    ///   snapshot，不再 `begin_layout_generation()` 分配临时 generation。调用方
+    ///   `reconcile_after_layout_change` 之前已 `ensure_layout_cached` 完成新排版，
+    ///   该 generation 由 `EditorLayout` 自身生命周期管理，本函数不持有也不释放，
+    ///   不会泄漏。
+    /// - 用 `prepare_animation_visuals_from_layout` 从该 generation 提取**所有行**
+    ///   的 QImage/clusters（布局变化后任意行位置都可能改变，不能只提取受影响行），
+    ///   再 `inject_animation_visuals_into_snapshot` 注入到同一份新 canonical。
+    /// - 若 `editor_layout` 无当前 prepared layout（首帧/invalidate 后尚未排版），
+    ///   fallback 到 `begin_layout_generation` 临时 generation 并在提取完成后
+    ///   `clear_layout_generation` 释放，保持原语义不泄漏。
     pub fn build_canonical_snapshot_for_current_layout(
         &self,
         ctx: &VisualTransactionContext,
+        editor_layout: &crate::editor::layout::EditorLayout,
     ) -> crate::editor::layout::CanonicalDocumentVisualSnapshot {
-        let generation = layout::begin_layout_generation();
-        layout::prepare_document_visual_snapshot_scoped(
-            self.mirror.text(),
-            self.text_revision,
-            ctx.font_pixel_size,
-            &ctx.font_family,
-            ctx.line_spacing,
-            ctx.padding,
-            ctx.text_indent,
-            ctx.bounding_width,
-            ctx.dpr,
-            Some(&ctx.text_color),
-            generation,
-            0,
-            0,
-        )
+        // Issue #738 评论 5792244119 问题 1: 优先复用 EditorLayout 当前 prepared layout
+        // 的 generation，不再分配临时 generation（避免泄漏）。
+        let prepared_handle = editor_layout.current_prepared_layout();
+        let (snapshot, fallback_gen): (
+            crate::editor::layout::CanonicalDocumentVisualSnapshot,
+            Option<u64>,
+        ) = match prepared_handle.as_ref() {
+            Some(handle) => {
+                // 复用当前 generation 做基础 snapshot（不持有 generation，不释放）。
+                let snap = layout::prepare_document_visual_snapshot_scoped(
+                    self.mirror.text(),
+                    self.text_revision,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.padding,
+                    ctx.text_indent,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                    Some(&ctx.text_color),
+                    handle.generation,
+                    0,
+                    0,
+                );
+                (snap, None)
+            }
+            None => {
+                // fallback: EditorLayout 无当前 prepared layout（首帧/invalidate 后尚未排版）。
+                // 分配临时 generation，提取完成后释放，不泄漏。
+                let gen = layout::begin_layout_generation();
+                let snap = layout::prepare_document_visual_snapshot_scoped(
+                    self.mirror.text(),
+                    self.text_revision,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.padding,
+                    ctx.text_indent,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                    Some(&ctx.text_color),
+                    gen,
+                    0,
+                    0,
+                );
+                (snap, Some(gen))
+            }
+        };
+
+        // Issue #738 评论 5792244119 问题 1: 从已有 layout 提取所有行的动画视觉
+        //（QImage/glyphRuns/clusters）注入到新 canonical，使 rebind 路径
+        // find_clusters_in_canonical 能找到 cluster。
+        let mut doc_snap = snapshot;
+        let visuals_gen = prepared_handle
+            .as_ref()
+            .map(|h| h.generation)
+            .unwrap_or_else(|| fallback_gen.unwrap_or(0));
+        let visuals_lines: &[crate::editor::layout::VisualLine] = prepared_handle
+            .as_ref()
+            .map(|h| h.lines)
+            .unwrap_or(&[]);
+        if !visuals_lines.is_empty() {
+            let visuals_handle = layout::PreparedLayoutHandle {
+                generation: visuals_gen,
+                lines: visuals_lines,
+            };
+            // 布局变化后任意行位置都可能改变，提取所有行，不漏 anchor 覆盖的行。
+            let all_line_ids: Vec<usize> = (0..visuals_lines.len()).collect();
+            let animation_visuals = layout::prepare_animation_visuals_from_layout(
+                &visuals_handle,
+                &all_line_ids,
+                ctx.dpr,
+                &ctx.text_color,
+            );
+            layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
+        }
+
+        // fallback 路径释放临时 generation，不泄漏。
+        if let Some(gen) = fallback_gen {
+            layout::clear_layout_generation(gen);
+        }
+        doc_snap
     }
 
     pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {

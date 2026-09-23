@@ -967,12 +967,13 @@ fn build_cluster_reflow_slices(
 
     // 只有同时存在未配对的 old 和 new 时才生成 CrossFade
     if !unmatched_old.is_empty() && !unmatched_new.is_empty() {
-        // Issue #738 评论 5789470425 问题3: 多对多 CrossFade 也分配 group_id。
-        // 每对 old/new 共享一个 group_id（这里 old 和 new 分别独立 fade，
-        // 但仍按 group 配对以便 reconcile 成对重绑）。
+        // Issue #738 评论 5792244119 问题 3: 多对多 CrossFade old/new 共享同一个
+        // group_id，rebind 按 group_id 配对时能真正成组（一组包含多 old + 多 new）。
+        // 不再给 old/new 各自独立发 group_id（那会导致 crossfade_pairs 永远配不上，
+        // 所有 CrossFade units 掉进"未配对独立处理"路径，出现只续一边/只删一边）。
+        let group_id = next_crossfade_group_id;
+        next_crossfade_group_id += 1;
         for &oi in &unmatched_old {
-            let group_id = next_crossfade_group_id;
-            next_crossfade_group_id += 1;
             let oref = &old_refs[oi];
             let old_line = &old_snapshot.line_snapshots[oref.line_idx];
             let old_cluster = &old_line.clusters[oref.cluster_idx];
@@ -993,8 +994,6 @@ fn build_cluster_reflow_slices(
         }
 
         for &ni in &unmatched_new {
-            let group_id = next_crossfade_group_id;
-            next_crossfade_group_id += 1;
             let nref = &new_refs[ni];
             let new_line = &new_snapshot.line_snapshots[nref.line_idx];
             let new_cluster = &new_line.clusters[nref.cluster_idx];
@@ -1004,7 +1003,7 @@ fn build_cluster_reflow_slices(
 
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
             // Issue #738 评论 5788513592 问题3: 写入真实 shaping identity。
-            // Issue #738 评论 5789470425 问题3: 写入 group_id。
+            // Issue #738 评论 5792244119 问题3: 写入共享的 group_id（old/new 同组）。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,

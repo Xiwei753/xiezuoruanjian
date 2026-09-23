@@ -201,7 +201,7 @@ fn issue2_find_cluster_in_canonical_requires_single_cluster_containment() {
 #[test]
 fn issue2_rebind_removes_unit_when_cluster_not_found() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 4000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 8000);
     assert!(
         window.contains("find_clusters_in_canonical"),
         "rebind_timed_units_to_canonical 应调用 find_clusters_in_canonical 逐 cluster 重绑。"

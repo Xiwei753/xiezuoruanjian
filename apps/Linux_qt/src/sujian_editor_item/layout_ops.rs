@@ -525,9 +525,12 @@ impl SujianEditorItem {
     ///（确保新排版完成），再调此方法。
     pub(crate) fn reconcile_after_layout_change(&mut self) {
         let ctx = self.build_visual_transaction_context();
+        // Issue #738 评论 5792244119 问题 1: 传入 &self.editor_layout，
+        // build_canonical_snapshot_for_current_layout 复用当前 EditorLayout generation
+        // 提取 active anchor cluster，不再分配临时 generation 泄漏。
         let new_snapshot = self
             .pipeline
-            .build_canonical_snapshot_for_current_layout(&ctx);
+            .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
         self.pipeline
             .reconcile_active_transactions_with_new_canonical(new_snapshot);
     }
