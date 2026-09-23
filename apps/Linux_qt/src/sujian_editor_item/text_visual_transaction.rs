@@ -1066,7 +1066,12 @@ impl PreparedTextVisualTransaction {
             Some(s) => s.virtual_text.as_str(),
             None => {
                 self.units.retain(|u| !is_timed_reflow_kind(u.slice.kind));
-                self.layout_basis_revision = current_layout_revision;
+                // Issue #738 评论 5795950264 问题1: 仅当 CaretDriven 已 retire 或
+                // 无 CaretDriven units 时才提升 layout_basis_revision，否则保持旧值
+                // 让 basis 守卫继续 retire 旧 CaretDriven。
+                if self.caret_motion_retired || !self.has_caret_driven_units() {
+                    self.layout_basis_revision = current_layout_revision;
+                }
                 return;
             }
         };
@@ -1182,13 +1187,16 @@ impl PreparedTextVisualTransaction {
                     }
                 };
                 // current_rect: anchor 旧 from→to 按 visible 采样（与 compute_frame 一致）。
+                // Issue #738 评论 5795950264 问题2: w/h 按 visible 插值。
                 let current_rect = SourceRect {
                     x: anchor.from_document_rect.x
                         + (anchor.to_document_rect.x - anchor.from_document_rect.x) * visible,
                     y: anchor.from_document_rect.y
                         + (anchor.to_document_rect.y - anchor.from_document_rect.y) * visible,
-                    w: anchor.to_document_rect.w,
-                    h: anchor.to_document_rect.h,
+                    w: anchor.from_document_rect.w
+                        + (anchor.to_document_rect.w - anchor.from_document_rect.w) * visible,
+                    h: anchor.from_document_rect.h
+                        + (anchor.to_document_rect.h - anchor.from_document_rect.h) * visible,
                 };
                 let target_rect = target_hit.doc_rect.clone();
                 // (current_rect, target_rect)
@@ -1296,6 +1304,7 @@ impl PreparedTextVisualTransaction {
                         break;
                     }
                     let target_rect = union_of_hits(&all_hits, &new_unit.slice.to_document_rect);
+                    // Issue #738 评论 5795950264 问题2: w/h 按 visible 插值。
                     let current_rect = SourceRect {
                         x: new_unit.slice.from_document_rect.x
                             + (new_unit.slice.to_document_rect.x
@@ -1305,8 +1314,14 @@ impl PreparedTextVisualTransaction {
                             + (new_unit.slice.to_document_rect.y
                                 - new_unit.slice.from_document_rect.y)
                                 * visible,
-                        w: new_unit.slice.to_document_rect.w,
-                        h: new_unit.slice.to_document_rect.h,
+                        w: new_unit.slice.from_document_rect.w
+                            + (new_unit.slice.to_document_rect.w
+                                - new_unit.slice.from_document_rect.w)
+                                * visible,
+                        h: new_unit.slice.from_document_rect.h
+                            + (new_unit.slice.to_document_rect.h
+                                - new_unit.slice.from_document_rect.h)
+                                * visible,
                     };
                     unit_anchor_rebinds.push((current_rect, target_rect));
                 } else {
@@ -1355,6 +1370,7 @@ impl PreparedTextVisualTransaction {
                         // Issue #738 评论 5795183758 问题3: 逐 anchor 算 current_rect（旧
                         // from→to 按 visible 采样）和 target_rect（新 canonical cluster
                         // doc_rect），不再合并成 union 抹平逐 cluster 几何。
+                        // Issue #738 评论 5795950264 问题2: w/h 按 visible 插值。
                         let current_rect = SourceRect {
                             x: anchor.from_document_rect.x
                                 + (anchor.to_document_rect.x - anchor.from_document_rect.x)
@@ -1362,8 +1378,12 @@ impl PreparedTextVisualTransaction {
                             y: anchor.from_document_rect.y
                                 + (anchor.to_document_rect.y - anchor.from_document_rect.y)
                                 * visible,
-                            w: anchor.to_document_rect.w,
-                            h: anchor.to_document_rect.h,
+                            w: anchor.from_document_rect.w
+                                + (anchor.to_document_rect.w - anchor.from_document_rect.w)
+                                * visible,
+                            h: anchor.from_document_rect.h
+                                + (anchor.to_document_rect.h - anchor.from_document_rect.h)
+                                * visible,
                         };
                         let target_rect = target_hit.doc_rect.clone();
                         unit_anchor_rebinds.push((current_rect, target_rect));
@@ -1391,6 +1411,8 @@ impl PreparedTextVisualTransaction {
                 continue;
             }
             // 全部有效：每个 unit 用自己的 anchor_rebinds 重绑或拆分。
+            // Issue #738 评论 5795950264 问题3: 记录 group 是否 Split，Split 时 old side 原位 fade-out。
+            let mut group_has_split = false;
             for (ni, anchor_rebinds, target_union) in &new_side_rebinds {
                 // Issue #738 评论 5795183758 问题3: 算各 anchor 的 movement vector，
                 // 不一致时拆成多个 CrossFade units（保留 crossfade_group_id/crossfade_side）。
@@ -1419,20 +1441,28 @@ impl PreparedTextVisualTransaction {
                 } else {
                     // movement vector 不一致 → Split 拆成多个 CrossFade units，
                     // 保留 crossfade_group_id 和 crossfade_side，group 生命周期仍一起管理。
+                    // Issue #738 评论 5795950264 问题2: 接住当前帧 opacity 避免拆分闪烁。
+                    let split_unit = &self.units[*ni];
+                    let split_visible = split_unit.current_visible_fraction(now);
+                    let current_opacity = split_unit.slice.compute_frame(split_visible).opacity;
                     let replacement_units = build_crossfade_split_replacement_units(
-                        &self.units[*ni],
+                        split_unit,
                         anchor_rebinds,
                         now,
+                        current_opacity,
                     );
                     if replacement_units.is_empty() {
                         decisions[*ni] = RebindDecision::Remove;
                     } else {
                         decisions[*ni] = RebindDecision::Split(replacement_units);
+                        // Issue #738 评论 5795950264 问题3: 标记 Split。
+                        group_has_split = true;
                     }
                 }
             }
-            // old side: 一对一跟随 new target；多对多原位 fade-out。
-            if group.old_indices.len() == 1 && group.new_indices.len() == 1 {
+            // old side: 一对一跟随 new target；多对多/Split 原位 fade-out。
+            // Issue #738 评论 5795950264 问题3: Split 时 old side 原位 fade-out。
+            if !group_has_split && group.old_indices.len() == 1 && group.new_indices.len() == 1 {
                 let target = &new_side_rebinds[0].2;
                 for &oi in &group.old_indices {
                     if !rects_approx_equal(&self.units[oi].slice.to_document_rect, target) {
@@ -1532,7 +1562,18 @@ impl PreparedTextVisualTransaction {
             }
         }
 
-        self.layout_basis_revision = current_layout_revision;
+        // Issue #738 评论 5795950264 问题1: 只有当 CaretDriven 已 retire
+        //（caret_motion_retired == true）或本事务没有 CaretDriven units 时才提升
+        // layout_basis_revision。否则保持旧值，让 basis 守卫
+        //（build_text_animation_plan_with_sample / find_cursor_transaction_for_target）
+        // 继续 retire 旧 CaretDriven，防止旧 caret track 重新拿到 ownership 在新
+        // canonical 上继续用旧布局几何。reconcile_active_transactions_with_canonical
+        // 已在 rebind 之前先调 retire_caret_driven_units_for_transaction，所以含
+        // CaretDriven 的事务进到这里时 caret_motion_retired 通常已是 true；此条件
+        // 主要防御 retire 未覆盖的路径（如直接调 rebind 的测试/迁移代码）。
+        if self.caret_motion_retired || !self.has_caret_driven_units() {
+            self.layout_basis_revision = current_layout_revision;
+        }
     }
 }
 
@@ -1631,14 +1672,17 @@ fn build_split_replacement_units(
 ///
 /// 与 `build_split_replacement_units` 对称，但保留 `ReflowCrossFade` kind 和原 unit 的
 /// `crossfade_group_id`/`crossfade_side`，使拆分后的多个 new side units 仍属于同一
-/// CrossFade group，group 生命周期一起管理。`opacity_from`/`opacity_to` 保留原值
-///（New side: 0→1 淡入），拆分不改变透明度语义。
+/// CrossFade group，group 生命周期一起管理。`opacity_to` 保留原值（New side: 1 淡入终态），
+/// `opacity_from` 用 `current_opacity`（当前帧透明度）接住当前屏幕透明度，避免拆分第一帧闪烁。
 ///
 /// `anchor_rebinds[i]` = (current_rect, target_rect)，与 reflow_anchors[i] 一一对应。
+/// Issue #738 评论 5795950264 问题2: `current_opacity` 由外层用同一 visible/now 采样
+/// `unit.slice.compute_frame(visible).opacity` 算出传入。
 fn build_crossfade_split_replacement_units(
     unit: &PreparedVisualUnit,
     anchor_rebinds: &[(SourceRect, SourceRect)],
     now: Instant,
+    current_opacity: f64,
 ) -> Vec<PreparedVisualUnit> {
     if unit.slice.reflow_anchors.is_empty() || anchor_rebinds.is_empty() {
         return Vec::new();
@@ -1676,7 +1720,9 @@ fn build_crossfade_split_replacement_units(
             source_rect: anchor.source_rect.clone(),
             from_document_rect: current_rect.clone(),
             to_document_rect: target_rect.clone(),
-            opacity_from: unit.slice.opacity_from,
+            // Issue #738 评论 5795950264 问题2: opacity_from 用当前帧透明度接住，
+            // 不再用 unit.slice.opacity_from（New side 原值 0.0），避免拆分第一帧闪。
+            opacity_from: current_opacity,
             opacity_to: unit.slice.opacity_to,
             scale_from: unit.slice.scale_from,
             scale_to: unit.slice.scale_to,

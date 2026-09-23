@@ -1782,12 +1782,37 @@ impl LinuxEditorAnimationCoordinator {
         now: Instant,
     ) {
         let mut keys_to_complete: Vec<VisualTransactionKey> = Vec::new();
-        for tx in self.prepared_queue.active_transactions_mut() {
-            if tx.state == TextVisualTransactionState::Cancelled
-                || tx.state == TextVisualTransactionState::Completed
+        // Issue #738 评论 5795950264 问题1: 先收集需要处理的事务 key，再逐个
+        // retire + rebind。retire_caret_driven_units_for_transaction 需要 &mut self，
+        // 不能在 active_transactions_mut() 的循环里直接调。
+        let keys: Vec<VisualTransactionKey> = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
+            .map(|t| t.key)
+            .collect();
+        for key in keys {
+            // Issue #738 评论 5795950264 问题1: 先 retire CaretDriven units，让旧 caret
+            // track 永久失去 ownership，再 rebind Timed Reflow。如果先 rebind 会把
+            // layout_basis_revision 提升到当前 canonical，导致 basis 守卫
+            //（build_text_animation_plan_with_sample / find_cursor_transaction_for_target）
+            // 不再 retire 旧 CaretDriven，旧 caret track 重新拿到 ownership 在新 canonical
+            // 上继续用旧布局几何。retire 把 CaretDriven 落到终态并置 caret_motion_retired=true，
+            // ReflowMove/ReflowCrossFade 保留不动继续播。
+            self.retire_caret_driven_units_for_transaction(key);
+            let tx = match self
+                .prepared_queue
+                .active_transactions_mut()
+                .iter_mut()
+                .find(|t| t.key == key)
             {
-                continue;
-            }
+                Some(t) => t,
+                None => continue,
+            };
             // 把 Timed Reflow unit 重绑到当前 canonical。
             tx.rebind_timed_units_to_canonical(current_text, canonical_snapshot, layout_revision, now);
             // rebind 后已经没有 unit 的事务直接完成。

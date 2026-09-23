@@ -57,7 +57,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 #[test]
 fn fix1a_crossfade_no_group_union_to_all_members() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 24000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 RebindNewSide 变体。
     assert!(
@@ -125,7 +125,7 @@ fn fix1b_crossfade_new_side_uses_own_target() {
 #[test]
 fn fix1c_crossfade_old_side_inplace_for_many_to_many() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 24000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 RebindOldSideInPlace 变体。
     assert!(
@@ -159,7 +159,7 @@ fn fix1c_crossfade_old_side_inplace_for_many_to_many() {
 #[test]
 fn fix2a_reflow_anchor_current_rect_from_old_basis() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 24000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 current_rect 变量。
     assert!(
@@ -198,7 +198,7 @@ fn fix2a_reflow_anchor_current_rect_from_old_basis() {
 #[test]
 fn fix2b_rebind_merged_preserves_per_anchor_geometry() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 24000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 RebindMerged 变体。
     assert!(
