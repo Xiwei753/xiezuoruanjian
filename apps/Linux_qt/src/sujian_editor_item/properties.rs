@@ -663,14 +663,15 @@ impl SujianEditorItem {
     pub(crate) fn layout_property_changed(&mut self) {
         self.invalidate_layout_cache();
         self.bump_visual_revision();
-        // Issue #738 评论 5787277777: 不再全清动画（clear_active_text_animations），
-        // 改成和 width 变化共用同一条 layout-basis 更新入口。bump_layout_revision 使
-        // 旧活动事务的 basis revision 过期，build_render_plan_full 的守卫跳过仍绑定旧
-        // canonical 几何的 unit，canonical 正文立即接管。能按 byte/shaping 重绑的 Timed
-        // Reflow 在下一次 record_visual_transaction 的 reconcile 里继续，无法重绑的回 canonical。
+        // Issue #738 评论 5788513592 问题1: 字号/字体/行距变化现在真正 reconcile 旧事务，
+        // 不再仅 bump_layout_revision 后等下一次正文编辑。和 geometry_changed 共用同一个
+        // canonical snapshot 构造/保存入口（Pipeline.
+        // reconcile_active_transactions_with_canonical_on_layout_change）：bump_layout_revision
+        // 后立即用当前 canonical snapshot 调 reconcile_active_transactions_with_canonical，
+        // 把旧活动事务重绑到当前 canonical，并同步收 texture cache。
         // 不再一边 resize 走"保留旧事务"、一边字号变化走"全清"，两套语义分叉。
-        self.pipeline.bump_layout_revision();
-        self.pipeline.set_previous_canonical_snapshot(None);
+        self.pipeline
+            .reconcile_active_transactions_with_canonical_on_layout_change();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;

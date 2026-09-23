@@ -211,6 +211,10 @@ impl AnimatedSlice {
         }
     }
 
+    /// Issue #738 评论 5788513592 问题3: CrossFade old/new 必须写入真实的 shaping identity，
+    /// 不能继续用 None。rebind_timed_units_to_canonical 用 shaping identity 判断能否按新布局
+    /// 继续复用旧视觉；None 会导致 is_same_shaping 恒为 false → 必然 Remove。
+    /// `shaping_identity` 传 old/new 侧各自真实的 cluster shaping identity。
     pub fn reflow_crossfade_old(
         _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
@@ -219,6 +223,7 @@ impl AnimatedSlice {
         to_document_rect: SourceRect,
         byte_start: usize,
         byte_end: usize,
+        shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::ReflowCrossFade,
@@ -232,7 +237,7 @@ impl AnimatedSlice {
             scale_to: 1.0,
             byte_start,
             byte_end,
-            shaping_identity: None,
+            shaping_identity,
             conceal_to_left_edge: false,
             visual_line_id: None,
             start_fraction: 0.0,
@@ -248,6 +253,7 @@ impl AnimatedSlice {
         to_document_rect: SourceRect,
         byte_start: usize,
         byte_end: usize,
+        shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::ReflowCrossFade,
@@ -261,7 +267,7 @@ impl AnimatedSlice {
             scale_to: 1.0,
             byte_start,
             byte_end,
-            shaping_identity: None,
+            shaping_identity,
             conceal_to_left_edge: false,
             visual_line_id: None,
             start_fraction: 0.0,

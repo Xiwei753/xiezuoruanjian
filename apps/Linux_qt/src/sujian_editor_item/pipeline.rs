@@ -395,6 +395,38 @@ impl LinuxEditorPipeline {
         self.layout_revision
     }
 
+    /// Issue #738 评论 5788513592 问题1: 纯布局变化（resize/字号/字体/行距）的 canonical
+    /// snapshot 构造/保存入口收口到 Pipeline。布局变化和正文编辑都从同一个入口推进 layout basis：
+    /// bump_layout_revision 后立即用当前可用的 canonical snapshot 调
+    /// reconcile_active_transactions_with_canonical，把旧活动事务从旧 canonical 几何重绑到
+    /// 当前 canonical，而非仅 bump revision 后等下一次正文编辑。
+    ///
+    /// 如果当前没有可用的 canonical snapshot（previous_canonical_snapshot 为 None，例如首次
+    /// 排版前），只 bump revision 不 reconcile——此时没有旧事务需要重绑。
+    ///
+    /// reconcile 删除 unit / 完成事务后同步按剩余 active snapshot ids 收一次 texture cache，
+    /// 不让已经失去 owner 的纹理一直挂到后续别的完成路径才释放。
+    pub fn reconcile_active_transactions_with_canonical_on_layout_change(
+        &mut self,
+    ) -> LayoutRevision {
+        let new_revision = self.bump_layout_revision();
+        let snapshot = self.previous_canonical_snapshot.clone();
+        let current_text = self.mirror.text().to_string();
+        if let Some(snapshot) = snapshot.as_ref() {
+            self.animation_coordinator
+                .reconcile_active_transactions_with_canonical(
+                    &current_text,
+                    snapshot,
+                    new_revision,
+                    std::time::Instant::now(),
+                );
+            // 额外要求: reconcile 删除 unit / 完成事务后同步收 texture cache。
+            let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+            self.texture_cache.retain_active_snapshot_ids(&active_ids);
+        }
+        new_revision
+    }
+
     pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {
         let old = std::mem::replace(&mut self.kernel, new_kernel);
         let text = self.kernel.snapshot_text();
@@ -1242,6 +1274,11 @@ impl LinuxEditorPipeline {
                     new_revision,
                     Instant::now(),
                 );
+            // Issue #738 评论 5788513592 额外要求: reconcile 删除 unit / 完成事务后同步按
+            // 剩余 active snapshot ids 收一次 texture cache，不让已经失去 owner 的纹理一直
+            // 挂到后续别的完成路径才释放。
+            let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+            self.texture_cache.retain_active_snapshot_ids(&active_ids);
 
             let key = self.animation_coordinator.process_transaction(
                 &motion,

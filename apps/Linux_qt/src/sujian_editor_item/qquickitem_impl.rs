@@ -16,15 +16,23 @@ impl QQuickItem for SujianEditorItem {
         self.pipeline.clipboard_adapter_mut().set_item_ptr(obj_ptr);
     }
 
-    fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
+    fn geometry_changed(&mut self, new_geometry: QRectF, old_geometry: QRectF) {
         // 宽度变化需要重新排版 QSGTextNode
         self.invalidate_layout_cache();
-        // Issue #738 评论 5787277777: 宽度变化后也走 layout-basis 更新入口，
-        // 和 layout_property_changed（字号/字体/行距/缩进/padding）共用同一条路径。
-        // bump_layout_revision 使旧活动事务的 basis revision 过期，不让仍在播放的 Reflow
-        // 保留 resize 前的 document rect。build_render_plan_full 的守卫跳过旧 basis 的 unit，
-        // canonical 正文立即接管。下一次 record_visual_transaction 的 reconcile 会处理重绑/移除。
-        self.pipeline.bump_layout_revision();
+        // Issue #738 评论 5788513592 问题1: 纯布局变化（resize）现在真正 reconcile 旧事务，
+        // 不再仅 bump_layout_revision 后等下一次正文编辑。canonical snapshot 的构造/保存入口
+        // 收口到 Pipeline.reconcile_active_transactions_with_canonical_on_layout_change：
+        // bump_layout_revision 后立即用当前 canonical snapshot 调
+        // reconcile_active_transactions_with_canonical，把旧活动事务重绑到当前 canonical，
+        // 并同步收 texture cache。
+        //
+        // 只变高度不推进 layout revision：排版只依赖宽度，高度变化不影响文字布局，
+        // 不把正在播的事务全部判旧。只变宽度真正影响排版时才推进并 reconcile。
+        let width_changed = (new_geometry.width - old_geometry.width).abs() > 0.5;
+        if width_changed {
+            self.pipeline
+                .reconcile_active_transactions_with_canonical_on_layout_change();
+        }
         self.recalculate_content_height_and_emit();
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;

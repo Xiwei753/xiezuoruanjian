@@ -916,6 +916,8 @@ fn build_cluster_reflow_slices(
             // 几何没变：不生成任何动画（关键改进——消除普通输入/删除/Enter 的错误 CrossFade）
         } else {
             // byte identity 对得上但 shaping 真变了：生成一对 ReflowCrossFade
+            // Issue #738 评论 5788513592 问题3: old/new 两侧写入各自真实 shaping identity，
+            // rebind 时 is_same_shaping 能返回 true，CrossFade 可按新布局继续而非必然 Remove。
             slices.push(AnimatedSlice::reflow_crossfade_old(
                 key,
                 old_line.id,
@@ -924,6 +926,7 @@ fn build_cluster_reflow_slices(
                 new_doc.clone(),
                 new_cluster.byte_start,
                 new_cluster.byte_end,
+                Some(old_cluster.shaping_identity.clone()),
             ));
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
@@ -934,6 +937,7 @@ fn build_cluster_reflow_slices(
                 new_doc.clone(),
                 new_cluster.byte_start,
                 new_cluster.byte_end,
+                Some(new_cluster.shaping_identity.clone()),
             );
             new_slice.static_hidden_document_rects = vec![new_doc];
             slices.push(new_slice);
@@ -969,6 +973,7 @@ fn build_cluster_reflow_slices(
                 old_doc,
                 old_cluster.byte_start,
                 old_cluster.byte_end,
+                Some(old_cluster.shaping_identity.clone()),
             ));
         }
 
@@ -981,6 +986,7 @@ fn build_cluster_reflow_slices(
             let new_doc_for_hide = new_doc.clone();
 
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
+            // Issue #738 评论 5788513592 问题3: 写入真实 shaping identity。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,
@@ -989,6 +995,7 @@ fn build_cluster_reflow_slices(
                 new_doc,
                 new_cluster.byte_start,
                 new_cluster.byte_end,
+                Some(new_cluster.shaping_identity.clone()),
             );
             new_slice.static_hidden_document_rects = vec![new_doc_for_hide];
             slices.push(new_slice);
@@ -1073,8 +1080,18 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
     }
 }
 
+/// Issue #738 评论 5788513592 问题2: 合并两个相邻 slice 的 byte range。
+/// 合并后 range 覆盖多个原始 cluster，find_cluster_in_canonical 已改为支持
+/// 跨多 cluster 的 range 匹配（按相交 cluster 合成 bounding rect），因此 merged
+/// unit 能在 canonical 中重绑，不再被误删。
+fn merged_byte_range(a: (usize, usize), b: (usize, usize)) -> (usize, usize) {
+    (a.0.min(b.0), a.1.max(b.1))
+}
+
 /// 合并两个 slice 为一个 run。
 fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
+    let (byte_start, byte_end) =
+        merged_byte_range((a.byte_start, a.byte_end), (b.byte_start, b.byte_end));
     AnimatedSlice {
         kind: a.kind,
         snapshot_id: a.snapshot_id,
@@ -1085,8 +1102,8 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         opacity_to: a.opacity_to,
         scale_from: a.scale_from,
         scale_to: a.scale_to,
-        byte_start: a.byte_start.min(b.byte_start),
-        byte_end: a.byte_end.max(b.byte_end),
+        byte_start,
+        byte_end,
         shaping_identity: a.shaping_identity.clone(),
         conceal_to_left_edge: a.conceal_to_left_edge,
         visual_line_id: a.visual_line_id,
@@ -2066,6 +2083,7 @@ impl LinuxEditorAnimationCoordinator {
                                                 new_doc,
                                                 old_cluster.byte_start,
                                                 old_cluster.byte_end,
+                                                Some(old_cluster.shaping_identity.clone()),
                                             ));
                                         }
                                     }
@@ -2155,6 +2173,7 @@ impl LinuxEditorAnimationCoordinator {
                                             new_doc,
                                             new_cluster.byte_start,
                                             new_cluster.byte_end,
+                                            Some(new_cluster.shaping_identity.clone()),
                                         );
                                         new_slice.static_hidden_document_rects =
                                             vec![new_doc_for_hide];
@@ -2429,6 +2448,7 @@ impl LinuxEditorAnimationCoordinator {
     fn active_text_transaction_key_with_epoch(
         &self,
         current_cursor_epoch: u64,
+        current_layout_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
@@ -2438,6 +2458,12 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             if tx.cursor_owner_epoch != current_cursor_epoch {
+                continue;
+            }
+            // Issue #738 评论 5788513592 问题1: caret owner 选择必须看 layout_basis_revision。
+            // 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
+            // coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
+            if tx.layout_basis_revision < current_layout_revision {
                 continue;
             }
             // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
@@ -2613,6 +2639,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         cursor_move_source: super::cursor_controller::CursorMoveSource,
         cursor_baseline_y: f64,
+        layout_basis_revision: LayoutRevision,
     ) -> CursorAnimationPlan {
         // Issue #727 评论 5757225958 问题1: cursor_y 现在是文档坐标（caller 改用
         // editor_layout_cursor_rect_doc），in_viewport 判断需要视口坐标 screen_y =
@@ -2636,7 +2663,10 @@ impl LinuxEditorAnimationCoordinator {
         //   不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
         //   reflow track 继续。纯光标移动可走 Tween。
         let has_active_for_coordinated = self
-            .active_text_transaction_key_with_epoch(cursor_owner_epoch)
+            .active_text_transaction_key_with_epoch(
+                cursor_owner_epoch,
+                layout_basis_revision,
+            )
             .is_some();
         // Issue #710 评论 5731145076 症状二: 统一 blink 决策。
         // blink_mode 不再在 build_cursor_plan 里计算（之前的 _blink_mode 计算后未使用，
@@ -2891,13 +2921,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         _current_scroll_y: f64,
     ) -> RenderPlan {
-        // Issue #727 评论 5760020833 问题2: 先把本帧 Prepared 事务切到 Rendering 并启动
-        // timeline/units/cursor track，再采样 caret motion。否则刚进入 Prepared 的新事务
-        // 第一帧 sample 时状态仍为 Prepared → caret=None → 闪出 canonical 最终正文。
         self.begin_rendering_transactions(frame_now);
-
-        // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
-        // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
         let mut frame_sample = AnimationFrameSample::new(frame_now);
         for tx in self.prepared_queue.active_transactions() {
             if !matches!(
@@ -2907,21 +2931,16 @@ impl LinuxEditorAnimationCoordinator {
                 frame_sample.set_progress(tx.key, tx.progress(frame_now));
             }
         }
-
-        // Issue #727 约束 3: 先采样 caret motion 得到一份统一的 CoordinatedMotionFrame，
-        // 供 cursor layer 和文字 reveal/conceal 共享同一份 caret geometry。
-        // 有 SampledCaretFrame 才让 InsertReveal / DeleteConceal 用它的 x/y/visual_line_id 裁文字。
-        // 没有 caret frame 就不生成 reveal/conceal glyph。
-        //
-        // 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时事务立刻失去
-        // caret motion ownership，caret 为 None，CaretDriven units 已落到 canonical
-        // final state（不再继续播放）。
-        let coordinated_motion_frame =
-            self.sample_coordinated_motion_frame(&frame_sample, cursor_owner_epoch);
-
-        let (text_animation, keys_to_complete) = self.build_text_animation_plan_with_sample(
+        // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务再采样 caret motion。
+        let (text_animation, keys_to_complete, coordinated_motion_frame) = self
+            .build_text_animation_plan_with_sample(
+                &frame_sample,
+                cursor_owner_epoch,
+                frame_context.layout_basis_revision,
+            );
+        let coordinated_motion_frame = self.sample_coordinated_motion_frame(
             &frame_sample,
-            &coordinated_motion_frame,
+            cursor_owner_epoch,
             frame_context.layout_basis_revision,
         );
         // Issue #727 评论 5757225958 问题3: 先构建 keys_to_complete_set，
@@ -3107,9 +3126,13 @@ impl LinuxEditorAnimationCoordinator {
         &self,
         sample: &AnimationFrameSample,
         cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
     ) -> super::render_plan::CoordinatedMotionFrame {
-        // 取当前 epoch 一致的活动正文事务。
-        let key = match self.active_text_transaction_key_with_epoch(cursor_owner_epoch) {
+        // 取当前 epoch 一致且 layout basis 未过期的活动正文事务。
+        let key = match self.active_text_transaction_key_with_epoch(
+            cursor_owner_epoch,
+            layout_basis_revision,
+        ) {
             Some(k) => k,
             None => {
                 return super::render_plan::CoordinatedMotionFrame {
@@ -3211,9 +3234,35 @@ impl LinuxEditorAnimationCoordinator {
     fn build_text_animation_plan_with_sample(
         &mut self,
         sample: &AnimationFrameSample,
-        coordinated_motion_frame: &super::render_plan::CoordinatedMotionFrame,
+        cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
-    ) -> (TextAnimationPlan, Vec<VisualTransactionKey>) {
+    ) -> (
+        TextAnimationPlan,
+        Vec<VisualTransactionKey>,
+        super::render_plan::CoordinatedMotionFrame,
+    ) {
+        // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务的 caret motion，
+        // 再采样 caret motion。旧 basis 事务的 caret_motion_retired 置 true 后，
+        // active_text_transaction_key_with_epoch 跳过它，sample_coordinated_motion_frame
+        // 不会给它 owner_key，旧 caret track 不会被采样喂给 cursor layer。
+        for tx in self.prepared_queue.active_transactions_mut() {
+            if tx.state == TextVisualTransactionState::Cancelled
+                || tx.state == TextVisualTransactionState::Completed
+            {
+                continue;
+            }
+            if tx.layout_basis_revision < layout_basis_revision && !tx.caret_motion_retired {
+                tx.retire_caret_driven_units();
+                tx.caret_motion_retired = true;
+            }
+        }
+        // 再采样 caret motion（旧 basis 事务已 retire，不会被选为 caret owner）。
+        let coordinated_motion_frame = self.sample_coordinated_motion_frame(
+            sample,
+            cursor_owner_epoch,
+            layout_basis_revision,
+        );
+
         let mut glyphs = Vec::new();
         let mut keys_to_complete = Vec::new();
 
@@ -3340,7 +3389,11 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        (TextAnimationPlan { glyphs }, keys_to_complete)
+        (
+            TextAnimationPlan { glyphs },
+            keys_to_complete,
+            coordinated_motion_frame,
+        )
     }
 
     /// Issue #690 评论 5675007226 步骤 2 + 5681206040: 协同光标直接计算最终屏幕位置。
@@ -6455,8 +6508,8 @@ mod tests {
         coord.begin_rendering_transactions(frame_now_0);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(key, 0.0);
-        let (plan_0, _) = coord
-            .build_text_animation_plan_with_sample(&sample_0, &CoordinatedMotionFrame::default(), LayoutRevision::initial());
+        let (plan_0, _, _) = coord
+            .build_text_animation_plan_with_sample(&sample_0, 0, LayoutRevision::initial());
 
         // 断言 3: 同一个 frame_now_0 下 progress 都 == 0。
         {
@@ -6503,8 +6556,8 @@ mod tests {
         let frame_now_1 = frame_now_0 + Duration::from_millis(50);
         let mut sample_1 = AnimationFrameSample::new(frame_now_1);
         sample_1.set_progress(key, 0.25);
-        let (plan_1, _) = coord
-            .build_text_animation_plan_with_sample(&sample_1, &CoordinatedMotionFrame::default(), LayoutRevision::initial());
+        let (plan_1, _, _) = coord
+            .build_text_animation_plan_with_sample(&sample_1, 0, LayoutRevision::initial());
 
         {
             let tx_ref = coord
@@ -6745,8 +6798,8 @@ mod tests {
             }),
             owner_key: Some(new_key),
         };
-        let (plan_0, _) =
-            coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0, LayoutRevision::initial());
+        let (plan_0, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_0, 0, LayoutRevision::initial());
 
         // ── 9. 断言第一帧 Rendering：二者 progress == 0（同帧起跑，没有错拍） ──
         {
@@ -6827,8 +6880,8 @@ mod tests {
             }),
             owner_key: Some(new_key),
         };
-        let (_plan_mid, _) =
-            coord.build_text_animation_plan_with_sample(&sample_mid, &coordinated_frame_mid, LayoutRevision::initial());
+        let (_plan_mid, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_mid, 0, LayoutRevision::initial());
         {
             let tx_ref = coord
                 .prepared_queue
@@ -6878,8 +6931,8 @@ mod tests {
             }),
             owner_key: Some(new_key),
         };
-        let (_plan_1, _) =
-            coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1, LayoutRevision::initial());
+        let (_plan_1, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_1, 0, LayoutRevision::initial());
         {
             let tx_ref = coord
                 .prepared_queue
@@ -7664,7 +7717,7 @@ mod tests {
         sample_0.set_progress(new_key, 0.0);
 
         // 采样 coordinated motion frame → owner_key 应为 new_key（倒序选最后一个）
-        let coordinated_frame_0 = coord.sample_coordinated_motion_frame(&sample_0, epoch);
+        let coordinated_frame_0 = coord.sample_coordinated_motion_frame(&sample_0, epoch, LayoutRevision::initial());
         assert_eq!(
             coordinated_frame_0.owner_key,
             Some(new_key),
@@ -7672,8 +7725,8 @@ mod tests {
         );
 
         // 调用 build_text_animation_plan_with_sample —— 此处应把 old tx 的 caret_motion_retired 置 true
-        let (_plan_0, keys_to_complete_0) =
-            coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0, LayoutRevision::initial());
+        let (_plan_0, keys_to_complete_0, _) =
+            coord.build_text_animation_plan_with_sample(&sample_0, epoch, LayoutRevision::initial());
 
         // 验证 old tx 不在 keys_to_complete（因为 ReflowMove 未完成，all_units_done == false）
         assert!(
@@ -7720,15 +7773,15 @@ mod tests {
         sample_1.set_progress(old_key, 0.5);
 
         // 修复后：active_text_transaction_key_with_epoch 跳过 retired 事务，返回 None
-        let active_key_1 = coord.active_text_transaction_key_with_epoch(epoch);
+        let active_key_1 = coord.active_text_transaction_key_with_epoch(epoch, LayoutRevision::initial());
         assert_eq!(
             active_key_1, None,
-            "修复后：new tx 完成后，active_text_transaction_key_with_epoch 不应重新返回 old tx\
+            "修复后：*不应重新返回 old tx\
              （caret_motion_retired == true，被跳过）"
         );
 
         // 修复后：sample_coordinated_motion_frame 的 owner_key 为 None（不重新变成 old_key）
-        let coordinated_frame_1 = coord.sample_coordinated_motion_frame(&sample_1, epoch);
+        let coordinated_frame_1 = coord.sample_coordinated_motion_frame(&sample_1, epoch, LayoutRevision::initial());
         assert_eq!(
             coordinated_frame_1.owner_key, None,
             "修复后：第 2 帧 owner_key 不应重新变成 old tx\
@@ -7772,8 +7825,8 @@ mod tests {
 
         // 额外验证：再调一次 build_text_animation_plan_with_sample，
         // old tx 的 caret_motion_retired 不会被重置（已经是 true 就保持 true）
-        let (_plan_1, _keys_to_complete_1) =
-            coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1, LayoutRevision::initial());
+        let (_plan_1, _keys_to_complete_1, _) =
+            coord.build_text_animation_plan_with_sample(&sample_1, epoch, LayoutRevision::initial());
         {
             let old_tx_ref = coord
                 .prepared_queue

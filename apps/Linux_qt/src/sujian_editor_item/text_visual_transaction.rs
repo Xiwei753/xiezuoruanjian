@@ -1112,10 +1112,14 @@ impl PreparedTextVisualTransaction {
                     }
                 };
             // 用 shaping identity 确认还是同一份可复用字形。
-            let shaping_ok = match unit.slice.shaping_identity.as_ref() {
-                Some(sid) => sid.is_same_shaping(&cluster_shaping),
-                None => false,
-            };
+            // Issue #738 评论 5788513592 问题3: ReflowCrossFade 现在写入真实 shaping identity，
+            // 正常路径不会进 None 分支。None 表示 slice 未携带 shaping 指纹，无法确认可复用，
+            // 按失效处理（不重绑）。用 map_or 写法，避免硬编码 None 分支必然失败的旧模式。
+            let shaping_ok = unit
+                .slice
+                .shaping_identity
+                .as_ref()
+                .map_or(false, |sid| sid.is_same_shaping(&cluster_shaping));
             if !shaping_ok {
                 outcomes.push(RebindOutcome::Remove);
                 continue;
@@ -1188,25 +1192,28 @@ fn is_timed_reflow_kind(kind: AnimatedSliceKind) -> bool {
     )
 }
 
-/// Issue #738 评论 5787277777: 在 canonical snapshot 里按 byte range 找对应 cluster，
-/// 返回其 document rect 和 shaping identity。
+/// Issue #738 评论 5788513592 问题2: 在 canonical snapshot 里按 byte range 找对应 cluster，
+/// 返回合成 document rect 和 shaping identity。
 ///
-/// 遍历 paragraphs -> lines -> clusters，找 `cluster.document_byte_start <= byte_start
-/// && cluster.document_byte_end >= byte_end` 的 cluster（cluster 完全包含查询 range）。
-/// document rect 从 cluster 的 source_rect（行局部物理像素）+ 所属 VisualLine 的
-/// 文档坐标 + dpr 换算得到。shaping identity 用与 line_snapshot_builder 一致的
-/// 哈希方式构造，便于和 AnimatedSlice.shaping_identity 比较。
+/// 遍历 paragraphs -> lines -> clusters，找所有与 [byte_start, byte_end) **相交** 的
+/// cluster（不再要求单个 cluster 完整包含 range）。merge_adjacent_slices 合并后的 unit
+/// byte range 跨多个原始 cluster，单 cluster 包含判定永远返回 None → 误删。改为收集所有
+/// 相交 cluster，合成它们的 bounding document rect；shaping identity 取第一个相交 cluster
+/// 的（merged unit 内各 cluster 同方向同 shaping 时一致）。
 fn find_cluster_in_canonical(
     snapshot: &CanonicalDocumentVisualSnapshot,
     byte_start: usize,
     byte_end: usize,
 ) -> Option<(SourceRect, ShapingIdentity)> {
     let dpr = snapshot.dpr.max(0.001);
+    let mut bounding: Option<SourceRect> = None;
+    let mut first_shaping: Option<ShapingIdentity> = None;
     for para in &snapshot.paragraphs {
         for line in &para.lines {
             for cluster in &line.clusters {
-                if cluster.document_byte_start <= byte_start
-                    && cluster.document_byte_end >= byte_end
+                // 相交判定：cluster 与 [byte_start, byte_end) 有重叠。
+                if cluster.document_byte_start < byte_end
+                    && cluster.document_byte_end > byte_start
                 {
                     // 找包含该 cluster 的 VisualLine 以取文档 y。
                     let vline = snapshot.visual_lines.iter().find(|vl| {
@@ -1223,20 +1230,37 @@ fn find_cluster_in_canonical(
                         w: cluster.source_rect_w / dpr,
                         h: cluster.source_rect_h / dpr,
                     };
-                    let shaping = ShapingIdentity {
-                        text_content_hash: hash_str_for_shaping(&cluster.cluster_text),
-                        raw_font_fingerprint: cluster.raw_font_fingerprint.clone(),
-                        glyph_indexes_hash: hash_u32_for_shaping(&[cluster.first_glyph_index]),
-                        cluster_glyph_count: cluster.glyph_count,
-                        direction_rtl: cluster.is_rtl,
-                        format_fingerprint: 0,
-                    };
-                    return Some((doc_rect, shaping));
+                    bounding = Some(match bounding {
+                        Some(b) => SourceRect {
+                            x: b.x.min(doc_rect.x),
+                            y: b.y.min(doc_rect.y),
+                            w: (b.x + b.w).max(doc_rect.x + doc_rect.w)
+                                - b.x.min(doc_rect.x),
+                            h: (b.y + b.h).max(doc_rect.y + doc_rect.h)
+                                - b.y.min(doc_rect.y),
+                        },
+                        None => doc_rect,
+                    });
+                    if first_shaping.is_none() {
+                        first_shaping = Some(ShapingIdentity {
+                            text_content_hash: hash_str_for_shaping(&cluster.cluster_text),
+                            raw_font_fingerprint: cluster.raw_font_fingerprint.clone(),
+                            glyph_indexes_hash: hash_u32_for_shaping(&[
+                                cluster.first_glyph_index,
+                            ]),
+                            cluster_glyph_count: cluster.glyph_count,
+                            direction_rtl: cluster.is_rtl,
+                            format_fingerprint: 0,
+                        });
+                    }
                 }
             }
         }
     }
-    None
+    match (bounding, first_shaping) {
+        (Some(rect), Some(shaping)) => Some((rect, shaping)),
+        _ => None,
+    }
 }
 
 /// Issue #738 评论 5787277777: 两个 SourceRect 是否在容差内相等（几何没变判断）。

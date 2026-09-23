@@ -186,6 +186,7 @@ impl SujianEditorItem {
             self.cursor_ctrl.cursor_owner_epoch,
             self.cursor_ctrl.last_move_source,
             layout_res.baseline_y,
+            self.pipeline.layout_revision(),
         );
 
         // Issue #679 评论 5657313927 (步骤 5): apply_plan。
