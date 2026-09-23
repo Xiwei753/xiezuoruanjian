@@ -52,6 +52,8 @@ export class GripPostureService {
   // 启动系统握姿感知监听。
   // 经 GripPostureApi20 facade 注册 motion.on('holdingHandChanged')，
   // 系统事件映射成 unknown/notHeld/left/right/both。
+  // 只有 facade.startListening() 返回 true 才置 listening=true；
+  // 不因 canIUse/isSupported 为 true 就把"注册成功"当成既定事实。
   async startListening(): Promise<void> {
     if (this.listening) {
       return
@@ -62,9 +64,14 @@ export class GripPostureService {
       // 系统不支持；不监听，不伪造状态。
       return
     }
-    api.startListening((posture: GripPosture) => {
+    // 以 startListening() 的真实返回值为准，不因 isSupported 就伪造已启动。
+    const ok: boolean = api.startListening((posture: GripPosture) => {
       this.notifyPostureChanged(posture)
     })
+    if (!ok) {
+      // 注册失败；listening 保持 false，不伪造已启动。
+      return
+    }
     this.listening = true
   }
 

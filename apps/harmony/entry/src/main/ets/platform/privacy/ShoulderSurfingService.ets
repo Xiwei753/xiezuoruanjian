@@ -47,14 +47,13 @@ export class ShoulderSurfingService {
     return this.supported
   }
 
-  // 防窥开关是否启用。异步查询系统并缓存到 this.enabled。
+  // 防窥开关是否启用。永远查系统真实开关，不返回本地缓存 this.enabled。
+  // 不支持时返回 false，不伪造。
   async isEnabled(): Promise<boolean> {
     if (!this.isSupported()) {
-      this.enabled = false
       return false
     }
-    this.enabled = await DlpAntiPeepApi20.getInstance().isSwitchOn()
-    return this.enabled
+    return await DlpAntiPeepApi20.getInstance().isSwitchOn()
   }
 
   // 当前是否安全。安全 = 已解析且无窥视。
@@ -80,37 +79,35 @@ export class ShoulderSurfingService {
     return this.peeping
   }
 
-  // 打开/关闭防窥保护。
-  // API>=23 且有 context 时，调 DlpAntiPeepApi23.requestAntiPeepOptions(context) 打开系统设置页；
-  // 不支持时不伪造 enabled 状态。
-  async setEnabled(enabled: boolean): Promise<void> {
-    if (!enabled) {
-      // 关闭：无系统 disable API，仅清本地缓存。
-      this.enabled = false
-      return
-    }
+  // 请求打开防窥保护（打开系统设置页）。
+  // API>=23 且有 context 时调 DlpAntiPeepApi23.requestAntiPeepOptions(context) 打开系统设置页；
+  // 请求完成后重新调 DlpAntiPeepApi20.isSwitchOn() 确认真实开关（不只靠 AntiPeepOptionsResult 推断缓存），
+  // 把真实开关写入 this.enabled 并返回。
+  // 不支持/无 context 时返回当前真实开关状态，不伪造。
+  async requestEnable(): Promise<boolean> {
     if (!this.isSupported()) {
-      // 系统不支持时不假装已启用。
+      // 系统不支持时不假装已启用；返回真实开关（必然为 false）。
       this.enabled = false
-      return
+      return false
     }
     const context: common.UIAbilityContext | null = this.abilityContext
-    if (context === null) {
-      // 未注入 context；不伪造。
-      return
-    }
-    if (!PlatformApiResolver.getInstance().isApiAtLeast(23)) {
-      // API<23 无设置页入口；不伪造。
-      return
+    if (context === null || !PlatformApiResolver.getInstance().isApiAtLeast(23)) {
+      // 未注入 context 或 API<23 无设置页入口；不伪造，返回当前真实开关。
+      this.enabled = await DlpAntiPeepApi20.getInstance().isSwitchOn()
+      return this.enabled
     }
     try {
       // requestAntiPeepOptions 返回 dlpAntiPeep.AntiPeepOptionsResult（枚举）。
-      // Service 不 import @kit.DeviceSecurityKit，用 number 接收并比较数值。
-      // SUCCESS=0 或 ALREADY_ON=2 视为已启用；FAIL=1 视为未启用。
-      const result: number = await DlpAntiPeepApi23.getInstance().requestAntiPeepOptions(context) as number
-      this.enabled = result !== 1
+      // Service 不 import @kit.DeviceSecurityKit，用 number 接收。
+      // 请求完成后必须重新调 isDlpAntiPeepSwitchOn() 确认真实开关，
+      // 而不是只靠 AntiPeepOptionsResult 推断缓存。
+      await DlpAntiPeepApi23.getInstance().requestAntiPeepOptions(context)
+      this.enabled = await DlpAntiPeepApi20.getInstance().isSwitchOn()
+      return this.enabled
     } catch (e) {
-      // 系统调用失败；保持当前状态不伪造。
+      // 系统调用失败；重新查真实开关，不伪造。
+      this.enabled = await DlpAntiPeepApi20.getInstance().isSwitchOn()
+      return this.enabled
     }
   }
 
@@ -127,22 +124,40 @@ export class ShoulderSurfingService {
   }
 
   // 启动系统防窥状态监听。
-  // 经 DlpAntiPeepApi20 facade 注册 dlpAntiPeep.on('dlpAntiPeep')，系统事件回填 peeping。
+  // 官方推荐流程：先查 SystemCapability（isSupported），再查 isDlpAntiPeepSwitchOn()（开关是否打开），
+  // 开关打开后再注册监听（facade.startListening，返回真实注册结果）并取初始状态（getPeepingStatus，三态）。
+  // - 开关未打开时不伪装 resolved。
+  // - facade.startListening 返回 false 时 listening 保持 false，不伪造已启动。
+  // - getPeepingStatus 返回 null（失败）时 resolved 保持 false（unknown），不伪装 safe。
   async startListening(): Promise<void> {
     if (this.listening) {
       return
     }
     if (!this.isSupported()) {
-      // 系统不支持；不监听，peeping 保持 false。
+      // 系统不支持；不监听，peeping 保持 false，resolved 保持 false。
       return
     }
-    DlpAntiPeepApi20.getInstance().startListening((peeping: boolean) => {
+    // 查防窥开关是否打开。开关未打开时不监听、不伪装 resolved。
+    const switchOn: boolean = await DlpAntiPeepApi20.getInstance().isSwitchOn()
+    if (!switchOn) {
+      return
+    }
+    // 注册监听；只有 facade.startListening 返回 true 才置 listening=true。
+    const ok: boolean = DlpAntiPeepApi20.getInstance().startListening((peeping: boolean) => {
       this.notifyPeeping(peeping)
     })
+    if (!ok) {
+      // 注册失败；listening 保持 false，不伪造已启动。
+      return
+    }
     this.listening = true
-    // 首次监听时主动查询一次当前状态，标记已解析。
-    this.peeping = DlpAntiPeepApi20.getInstance().getPeepingStatus()
-    this.resolved = true
+    // 取初始状态（三态 boolean|null）。只有拿到真实 boolean（非 null）才置 resolved=true。
+    const initial: boolean | null = DlpAntiPeepApi20.getInstance().getPeepingStatus()
+    if (initial !== null) {
+      this.peeping = initial
+      this.resolved = true
+    }
+    // initial === null 时 resolved 保持 false（unknown），不伪装 safe。
   }
 
   // 停止系统监听。

@@ -26,20 +26,24 @@ export class GripPostureApi20 {
   }
 
   // 查询系统能力是否支持握姿感知。
-  // 用 canIUse('SystemCapability.MultimodalAwareness.Motion') 判断，经 PlatformApiResolver 统一。
+  // 需同时满足 API>=20 和 SystemCapability.MultimodalAwareness.Motion，经 PlatformApiResolver 统一。
   isSupported(): boolean {
-    return PlatformApiResolver.getInstance().hasSystemCapability('SystemCapability.MultimodalAwareness.Motion')
+    const r: PlatformApiResolver = PlatformApiResolver.getInstance()
+    return r.isApiAtLeast(20) && r.hasSystemCapability('SystemCapability.MultimodalAwareness.Motion')
   }
 
   // 启动 motion.on('holdingHandChanged') 监听，系统枚举映射成 GripPosture。
-  // 801 或失败则不伪造状态（回调不触发，调用方据 isSupported() 判断）。
-  startListening(onChanged: (posture: GripPosture) => void): void {
+  // 返回真实注册结果：只有 motion.on 真正注册成功才返回 true，失败返回 false。
+  // 801 或失败则不伪造状态（回调不触发，调用方据 startListening() 返回值判断）。
+  startListening(onChanged: (posture: GripPosture) => void): boolean {
     try {
       motion.on('holdingHandChanged', (status: motion.HoldingHandStatus) => {
         onChanged(this.mapHoldingHand(status))
       })
+      return true
     } catch (e) {
-      // 系统不支持（错误码 801）或注册失败；不伪造状态。
+      // 系统不支持（错误码 801）或注册失败；不伪造状态，返回 false。
+      return false
     }
   }
 

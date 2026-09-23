@@ -22,9 +22,10 @@ export class DlpAntiPeepApi20 {
   }
 
   // 查询系统能力是否支持防窥。
-  // 用 canIUse('SystemCapability.Security.DlpAntiPeep') 判断，经 PlatformApiResolver 统一。
+  // 需同时满足 API>=20 和 SystemCapability.Security.DlpAntiPeep，经 PlatformApiResolver 统一。
   isSupported(): boolean {
-    return PlatformApiResolver.getInstance().hasSystemCapability('SystemCapability.Security.DlpAntiPeep')
+    const r: PlatformApiResolver = PlatformApiResolver.getInstance()
+    return r.isApiAtLeast(20) && r.hasSystemCapability('SystemCapability.Security.DlpAntiPeep')
   }
 
   // 防窥开关是否启用。
@@ -37,27 +38,30 @@ export class DlpAntiPeepApi20 {
     }
   }
 
-  // 当前是否被窥视。HIDE=1→true（被窥视），PASS=0→false（安全）；失败返回 false。
-  getPeepingStatus(): boolean {
+  // 当前是否被窥视。HIDE=1→true（被窥视），PASS=0→false（安全）；
+  // 失败/catch 返回 null（unknown），绝不返回 false 伪装安全。
+  getPeepingStatus(): boolean | null {
     try {
       const status: dlpAntiPeep.DlpAntiPeepStatus = dlpAntiPeep.getDlpAntiPeepInfo()
       const n: number = status as number
       return n === ANTI_PEEP_HIDE
     } catch (e) {
-      // 系统调用失败；保守返回 false（无窥视）。
-      return false
+      // 系统调用失败；返回 null（unknown），不伪装 safe。
+      return null
     }
   }
 
   // 启动 dlpAntiPeep.on('dlpAntiPeep') 监听，DlpAntiPeepStatus 映射成 boolean。
-  // 失败则不伪造状态（回调不触发）。
-  startListening(onPeeping: (peeping: boolean) => void): void {
+  // 返回真实注册结果：只有 dlpAntiPeep.on 真正注册成功才返回 true，失败返回 false。
+  startListening(onPeeping: (peeping: boolean) => void): boolean {
     try {
       dlpAntiPeep.on('dlpAntiPeep', (status: dlpAntiPeep.DlpAntiPeepStatus) => {
         onPeeping(this.mapPeepStatus(status))
       })
+      return true
     } catch (e) {
-      // 注册失败；不伪造状态。
+      // 注册失败；不伪造状态，返回 false。
+      return false
     }
   }
 
