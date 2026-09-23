@@ -5,14 +5,14 @@
         name: 'default',
         type: 'HarmonyOS',
         material: {
-          certpath: '/home/xiwei/.ohos/config/default_harmony_1mJ3Dtjr2gGj5xDmnSO1ahSHqjbdr1ZRxaftVoykJrI=.cer',
-          keyAlias: 'debugKey',
-          keyPassword: '0000001a3cbc67eff3465228d971b6c509725d15aba1f86821ecd9a61856cef388751c42a41cdcd6cac3',
-          profile: '/home/xiwei/.ohos/config/default_harmony_1mJ3Dtjr2gGj5xDmnSO1ahSHqjbdr1ZRxaftVoykJrI=.p7b',
+          storeFile: '',
+          storePassword: '',
+          keyAlias: '',
+          keyPassword: '',
           signAlg: 'SHA256withECDSA',
-          storeFile: '/home/xiwei/.ohos/config/default_harmony_1mJ3Dtjr2gGj5xDmnSO1ahSHqjbdr1ZRxaftVoykJrI=.p12',
-          storePassword: '0000001a3cbc67eff3465228d971b6c509725d15aba1f86821ecd9a61856cef388751c42a41cdcd6cac3',
-        },
+          profile: '',
+          certpath: ''
+        }
       },
     ],
     products: [

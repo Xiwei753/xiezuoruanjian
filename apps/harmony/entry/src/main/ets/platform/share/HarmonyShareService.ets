@@ -129,8 +129,9 @@ export class HarmonyShareService {
     }
     try {
       const win: window.Window = await window.getLastWindow(this.abilityContext)
-      // HarmonyOS window.Window.getProperties().id 返回窗口 id（WindowProperties.id）。
-      const props: window.WindowProperties = await win.getProperties()
+      // HarmonyOS window.Window.getWindowProperties().id 返回窗口 id（WindowProperties.id）。
+      // getProperties() 已弃用（since 9），使用 getWindowProperties() 同步获取。
+      const props: window.WindowProperties = win.getWindowProperties()
       return props.id
     } catch (e) {
       return null

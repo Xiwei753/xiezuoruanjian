@@ -54,8 +54,11 @@ export class HarmonyDeviceIdentity {
       )
       try {
         const textEncoder = new util.TextEncoder('utf-8')
-        const encoded: Uint8Array = textEncoder.encodeInto(newId)
-        fs.writeSync(fd.fd, encoded.buffer)
+        // 使用 encodeIntoUint8Array 显式写入 Uint8Array buffer，符合 API26 d.ts 签名
+        const maxBytes = newId.length * 4 // UTF-8 最多 4 字节/字符
+        const dest = new Uint8Array(maxBytes)
+        const result = textEncoder.encodeIntoUint8Array(newId, dest)
+        fs.writeSync(fd.fd, dest.buffer.slice(0, result.written))
       } finally {
         fs.closeSync(fd)
       }
