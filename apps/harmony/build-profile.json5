@@ -7,7 +7,7 @@
         material: {
           storeFile: '',
           storePassword: '',
-          keyAlias: 'debugKey',
+          keyAlias: '',
           keyPassword: '',
           signAlg: 'SHA256withECDSA',
           profile: '',
