@@ -391,6 +391,18 @@ impl LinuxEditorPipeline {
         self.layout_revision
     }
 
+    /// Issue #738 评论 5797637204: 无条件提交新 layout revision 的 setter。
+    /// 供 `editing.rs::record_composition_commit_transaction` 在 pipeline 外部
+    /// 把 composition commit 产生的新 canonical basis revision 提交到 Pipeline，
+    /// 与普通正文路径 `prepare_edit_motion`（pipeline.rs:1452 `self.layout_revision = new_revision;`）
+    /// 保持同一语义：新 canonical 一旦确定，layout_revision 必须无条件一起提交，
+    /// 否则 basis 守卫（==/!=）会把"事务 revision 比 Pipeline 当前 revision 更新"
+    /// 误当合法事务继续画。不用 `bump_layout_revision`（它会再调一次 next() 生成
+    /// 另一个 revision，与已采的 new_revision 不一致）。
+    pub fn set_layout_revision(&mut self, rev: LayoutRevision) {
+        self.layout_revision = rev;
+    }
+
     /// Issue #738 评论 5787277777: 推进 layout revision，使旧活动事务的 basis revision
     /// 过期。geometry_changed（宽度变化）和 layout_property_changed（字号/字体/行距/缩进/
     /// padding 变化）后调此方法，让 build_render_plan_full 的 basis revision 守卫跳过

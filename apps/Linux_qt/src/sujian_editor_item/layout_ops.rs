@@ -83,12 +83,38 @@ impl SujianEditorItem {
     /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围
     /// 提取动画视觉。`None` 表示全篇（fallback 语义），`Some((start, end))` 表示只提取
     /// 与该 byte range 相交的行。
+    ///
+    /// Issue #738 评论 5797637204: 原 `build_editor_layout_snapshot` 只返回
+    /// `EditorLayoutSnapshot`，内部构造的 `CanonicalDocumentVisualSnapshot` 被消耗，
+    /// 调用方（composition commit 路径）拿不到新 canonical，无法走 canonical basis
+    /// 闭环。抽共用 helper 同时返回 `(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)`，
+    /// 让 composition commit 路径能把新 canonical 提交到 Pipeline.current_canonical_snapshot
+    /// 并 reconcile 旧活动事务。原 `build_editor_layout_snapshot` 保留签名，内部调本 helper 取 `.0`。
     pub(crate) fn build_editor_layout_snapshot(
         &mut self,
         width: f64,
         promote: bool,
         composition_range: Option<(usize, usize)>,
     ) -> EditorLayoutSnapshot {
+        self.build_editor_layout_snapshot_with_canonical(width, promote, composition_range)
+            .0
+    }
+
+    /// Issue #738 评论 5797637204: 共用 helper，返回
+    /// `(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)`。
+    /// `EditorLayoutSnapshot` 供动画/纹理使用，`CanonicalDocumentVisualSnapshot` 供
+    /// composition commit 路径提交到 `Pipeline.current_canonical_snapshot` 并作为
+    /// `reconcile_active_transactions_with_canonical` 的新 canonical 几何。
+    /// 一次排版同时产出两份视图，避免 composition commit 再单独排一次 canonical。
+    pub(crate) fn build_editor_layout_snapshot_with_canonical(
+        &mut self,
+        width: f64,
+        promote: bool,
+        composition_range: Option<(usize, usize)>,
+    ) -> (
+        EditorLayoutSnapshot,
+        crate::editor::layout::CanonicalDocumentVisualSnapshot,
+    ) {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -241,7 +267,10 @@ impl SujianEditorItem {
             crate::editor::layout::clear_layout_generation(generation);
         }
 
-        snapshot
+        // Issue #738 评论 5797637204: 同时返回 doc_snapshot，供 composition commit 路径
+        // 提交到 Pipeline.current_canonical_snapshot 并 reconcile 旧活动事务。
+        // build_from_canonical_document 接收 &doc_snapshot（借用），此处 doc_snapshot 仍有效。
+        (snapshot, doc_snapshot)
     }
 
     /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围

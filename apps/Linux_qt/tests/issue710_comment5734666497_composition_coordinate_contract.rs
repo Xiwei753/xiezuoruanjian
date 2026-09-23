@@ -82,8 +82,10 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
         "commit: new_composition_range 必须用扩展后的 new_affected range"
     );
     // new_snapshot 用 new_composition_range
+    // Issue #738 评论 5797637204: composition commit 改用 build_editor_layout_snapshot_with_canonical
+    // 同时拿 (EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)，函数名变了但坐标契约不变。
     assert!(
-        body.contains("build_editor_layout_snapshot(width, true, new_composition_range)"),
+        body.contains("build_editor_layout_snapshot_with_canonical(width, true, new_composition_range)"),
         "commit: new_snapshot 必须用 new_composition_range（candidate 坐标系扩展），不能用 old preedit range"
     );
     // old_snapshot fallback 用 old_composition_range；new_snapshot 不能用 old_composition_range
@@ -93,6 +95,10 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
     );
     assert!(
         !body.contains("build_editor_layout_snapshot(width, true, old_composition_range)"),
+        "commit: new_snapshot 不能用 old_composition_range（那会是 old preedit 坐标系）"
+    );
+    assert!(
+        !body.contains("build_editor_layout_snapshot_with_canonical(width, true, old_composition_range)"),
         "commit: new_snapshot 不能用 old_composition_range（那会是 old preedit 坐标系）"
     );
     // raw range 不能直接作为 composition_range 传给 build_editor_layout_snapshot
