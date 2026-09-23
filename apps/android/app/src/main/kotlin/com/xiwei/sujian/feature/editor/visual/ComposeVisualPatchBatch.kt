@@ -104,7 +104,7 @@ internal object ComposeVisualPatchBatch {
 
         // Issue #728 评论 5754045689：batch 合成 caret rect —
         // origin 取第一笔的 origin，target 取最后一笔的 target。
-        // 文字吞吐和 caret 移动统一由 ComposeEditMotion 驱动。
+        // 文字吞吐和 caret 移动统一由 CoordinatedEditMotion 驱动（Issue #737）。
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }
@@ -131,6 +131,11 @@ internal object ComposeVisualPatchBatch {
             retainedMoves = retainedMoves,
             originCaretRect = first.originCaretRect,
             targetCaretRect = last.targetCaretRect,
+            // Issue #737 评论 5781634285 修复点 3：batch 合成 caret offset —
+            // 与 caret rect 同策略：origin 取第一笔的 origin，target 取最后一笔的 target，
+            // 保证 batch 合成后的 offset 与 rect 仍同源。
+            originCaretOffset = first.originCaretOffset,
+            targetCaretOffset = last.targetCaretOffset,
             durationMs = effectiveDurationMs,
             animationMode = animationMode,
         )

@@ -71,8 +71,8 @@ class ComposeVisualIssue735Comment5774895427ReproTest {
                 ),
             )
         assertTrue(
-            "fact 先到时 pending 尚无匹配 layout，应返回 Empty。实际=$factFirst",
-            factFirst is FrameUpdate.Empty,
+            "fact 先到时 pending 尚无匹配 layout，应返回 AwaitingFact。实际=$factFirst",
+            factFirst is FrameUpdate.AwaitingFact,
         )
 
         // 3. 最终 layout 后到
@@ -103,8 +103,8 @@ class ComposeVisualIssue735Comment5774895427ReproTest {
         // 2. 最终 layout 先到（IME commit 后 onTextLayout 先于 CoreEditFactEvent）
         val layoutFirst = coordinator.onLayout(ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0))
         assertTrue(
-            "layout 先到时 pending 为空，应返回 Empty（不提前推进 committed baseline）。实际=$layoutFirst",
-            layoutFirst is FrameUpdate.Empty,
+            "layout 先到时 pending 为空，应返回 AwaitingFact（不提前推进 committed baseline）。实际=$layoutFirst",
+            layoutFirst is FrameUpdate.AwaitingFact,
         )
 
         // 3. fact 后到
@@ -147,7 +147,7 @@ class ComposeVisualIssue735Comment5774895427ReproTest {
         val update = coordinator.onLayout(ComposeLayoutSnapshot(layouts[0], TextRange(1, 1), 0))
         assertTrue(
             "composition cancel（layout 回到基线）不应生成 patch。实际=$update",
-            update is FrameUpdate.Empty,
+            update is FrameUpdate.LayoutOnly,
         )
     }
 
