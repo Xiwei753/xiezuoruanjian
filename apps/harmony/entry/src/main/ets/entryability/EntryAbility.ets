@@ -12,6 +12,12 @@ import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentit
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
 
+// Issue #670 评论 5652500781：构建身份（命名 interface，避免对象字面量类型）。
+interface BuildIdentity {
+  appVersion: string
+  buildKey: string
+}
+
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private continuationService: AppContinuationService = AppContinuationService.getInstance()
@@ -65,20 +71,22 @@ export default class EntryAbility extends UIAbility {
   // buildKey 用于 writer_diagnostics 日志文件名 sujian-current-{build_key}.log 和导出 manifest 的 build_identity，
   // 不能留空，否则不同版本的日志无法按构建身份区分。失败返回 'unknown' / 'harmony-unknown'。
   // 以后有 git SHA/正式构建号时再拼进同一个 buildKey。
-  private getBuildIdentity(): { appVersion: string, buildKey: string } {
+  private getBuildIdentity(): BuildIdentity {
     try {
       const info = bundleManager.getBundleInfoForSelfSync(
         bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT
       )
-      return {
+      const identity: BuildIdentity = {
         appVersion: info.versionName,
         buildKey: `harmony-v${info.versionCode}-${info.versionName}`
       }
+      return identity
     } catch (_) {
-      return {
+      const fallback: BuildIdentity = {
         appVersion: 'unknown',
         buildKey: 'harmony-unknown'
       }
+      return fallback
     }
   }
 

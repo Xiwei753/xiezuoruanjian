@@ -173,3 +173,21 @@ export class SyncLifecycleObserver implements LifecycleObserver {
     }
   }
 }
+
+export class ShareLifecycleObserver implements LifecycleObserver {
+  private foregroundCallback: () => void
+  private backgroundCallback: () => void
+
+  constructor(foregroundCallback: () => void, backgroundCallback: () => void) {
+    this.foregroundCallback = foregroundCallback
+    this.backgroundCallback = backgroundCallback
+  }
+
+  onForeground(): void {
+    this.foregroundCallback()
+  }
+
+  onBackground(): void {
+    this.backgroundCallback()
+  }
+}

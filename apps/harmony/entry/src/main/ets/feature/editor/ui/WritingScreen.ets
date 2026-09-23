@@ -4,7 +4,7 @@ import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
 import { LocalSettings } from '../../../corebridge/dto/SettingsDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
-import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
+import { HarmonyLifecycle, AutoSaveLifecycleObserver, ShareLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { EditorSessionCoordinator, EditorStateUpdate } from '../session/EditorSessionCoordinator'
@@ -27,6 +27,12 @@ import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 
+// Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
+interface ActiveSaveTask {
+  text: string
+  task: Promise<boolean>
+}
+
 @Component
 export struct WritingScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
@@ -44,6 +50,11 @@ export struct WritingScreen {
     editorFontSize: 16,
     editorLineSpacingMultiplier: 1.8,
     themeMode: 'system',
+    appearanceMode: 'system',
+    colorSource: 'built_in',
+    dynamicColorEnabled: false,
+    selectedBuiltinThemeId: '',
+    selectedPaletteId: '',
     autoSaveEnabled: true,
     autoSaveDelayMs: 30000,
     autoIndentEnabled: true,
@@ -114,7 +125,7 @@ export struct WritingScreen {
   // 后续 ensureSnapshotSaved 调用先 await 旧任务；若旧任务保存的正是目标 text 且成功，直接 true；
   // 若目标不同，旧任务结束后再启动一次精确保存 targetText 的新事务。
   // 不设固定重试次数，不靠 retry 次数保证落盘。
-  private activeSave: { text: string; task: Promise<boolean> } | null = null
+  private activeSave: ActiveSaveTask | null = null
   // Issue #629 评论 5308748920 问题2：离开事务（close + pop）整体幂等。
   // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
   // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
@@ -185,10 +196,11 @@ export struct WritingScreen {
     // 进入前台（aboutToAppear）注册 startTapSharing/startAirTransferSharing；
     // onForeground 重新注册，onBackground stop（成对，不全局乱开）。
     this.startShareLifecycle()
-    this.shareLifecycleObserver = {
-      onForeground: (): void => { this.startShareLifecycle() },
-      onBackground: (): void => { this.stopShareLifecycle() }
-    }
+    const shareObserver: ShareLifecycleObserver = new ShareLifecycleObserver(
+      (): void => { this.startShareLifecycle() },
+      (): void => { this.stopShareLifecycle() }
+    )
+    this.shareLifecycleObserver = shareObserver
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
 
     // Issue #629 评论14 第2项：注册当前 WritingScreen 的离开守卫，获取唯一 token。
@@ -595,14 +607,15 @@ export struct WritingScreen {
     const host = AppNavigationHost.getInstance()
     const targetKey = `writing:${this.projectId}:${volumeId}:${chapterId}`
     await host.safeReplacePath(targetKey, () => {
+      const replaceParam: WritingRouteParams = {
+        chapterId: chapterId,
+        chapterTitle: chapterTitle,
+        projectId: this.projectId,
+        volumeId: volumeId
+      }
       this.navPathStack.replacePath({
         name: Routes.Writing,
-        param: {
-          chapterId: chapterId,
-          chapterTitle: chapterTitle,
-          projectId: this.projectId,
-          volumeId: volumeId
-        }
+        param: replaceParam
       })
     })
   }
@@ -754,7 +767,8 @@ export struct WritingScreen {
     }
     // 启动一次精确保存 targetText 的新事务
     const task: Promise<boolean> = this.doSaveChapter(targetText, isAutoSave)
-    this.activeSave = { text: targetText, task: task }
+    const saveEntry: ActiveSaveTask = { text: targetText, task: task }
+    this.activeSave = saveEntry
     task.then(
       () => {
         if (this.activeSave !== null && this.activeSave.task === task) {

@@ -50,7 +50,8 @@ import { PointerInputService, PlatformPointerEvent } from '../../../platform/inp
 import { StylusInputService } from '../../../platform/input/StylusInputService'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
-import { KeyEvent, MouseEvent } from '@kit.InputKit'
+// ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
+// .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
 
 @Component
 export struct SujianEditor {
@@ -554,7 +555,7 @@ export struct SujianEditor {
           // 1. selection background（最底层）
           ForEach(this.selectionRects, (rect: SelectionRect, index: number) => {
             Rect()
-              .position(rect.x, rect.y)
+              .position({ x: rect.x, y: rect.y })
               .width(rect.width)
               .height(rect.height)
               .fill(this.selectionBackgroundColor)
@@ -622,7 +623,7 @@ export struct SujianEditor {
           // 3. composition underline（在 text 上面）
           ForEach(this.compositionUnderlineRects, (rect: CompositionUnderlineRect, index: number) => {
             Rect()
-              .position(rect.x, rect.y)
+              .position({ x: rect.x, y: rect.y })
               .width(rect.width)
               .height(rect.height)
               .fill(this.compositionUnderlineColor)
@@ -631,7 +632,7 @@ export struct SujianEditor {
           // 4. static caret（最上层，不闪烁/不平滑移动）
           if (this.caretRect) {
             Rect()
-              .position(this.caretRect.x, this.caretRect.y)
+              .position({ x: this.caretRect.x, y: this.caretRect.y })
               .width(this.caretRect.width)
               .height(this.caretRect.height)
               .fill(this.caretColor)

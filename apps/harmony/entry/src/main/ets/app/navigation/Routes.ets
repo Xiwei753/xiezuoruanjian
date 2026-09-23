@@ -38,3 +38,7 @@ export interface StarMapRouteParams {
   starmapId: string
   starmapTitle: string
 }
+
+export interface SettingsRouteParams {
+  projectId: string
+}

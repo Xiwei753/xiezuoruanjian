@@ -3,7 +3,7 @@
 // ShoulderSurfing 管身后有人窥视。
 //
 // 真实事件源：@kit.ArkUI 的 window 模块。
-// setScreenshotProtection(enabled) 调用 win.setSnapshotSkip(enabled)。
+// setScreenshotProtection(enabled) 调用 win.setWindowPrivacyMode(enabled)。
 // 需要传入 UIAbilityContext 来获取 window 实例。
 
 import { window } from '@kit.ArkUI'
@@ -38,14 +38,14 @@ export class WindowPrivacyService {
     return this.screenRecordingProtection
   }
 
-  // 查询系统是否支持窗口隐私保护（setSnapshotSkip API）。
+  // 查询系统是否支持窗口隐私保护（setWindowPrivacyMode API）。
   // 通过尝试获取窗口并检查 API 存在性判断。
   isSupported(): boolean {
     return this.abilityContext !== null
   }
 
   // 设置截屏保护：开启后系统截屏/分享会得到黑屏或隐私遮罩。
-  // 调用 win.setSnapshotSkip(enabled)。
+  // 调用 win.setWindowPrivacyMode(enabled)。
   async setScreenshotProtection(enabled: boolean): Promise<void> {
     const win: window.Window | null = await this.getWindow()
     if (win === null) {
@@ -53,22 +53,22 @@ export class WindowPrivacyService {
       return
     }
     try {
-      await win.setSnapshotSkip(enabled)
+      await win.setWindowPrivacyMode(enabled)
       this.screenshotProtection = enabled
     } catch (e) {
       // 系统调用失败；保持当前状态不伪造。
     }
   }
 
-  // 设置录屏保护：录屏时同样通过 setSnapshotSkip 跳过窗口内容。
-  // HarmonyOS 中 setSnapshotSkip 同时影响截屏和录屏。
+  // 设置录屏保护：录屏时同样通过 setWindowPrivacyMode 跳过窗口内容。
+  // HarmonyOS 中 setWindowPrivacyMode 同时影响截屏和录屏。
   async setScreenRecordingProtection(enabled: boolean): Promise<void> {
     const win: window.Window | null = await this.getWindow()
     if (win === null) {
       return
     }
     try {
-      await win.setSnapshotSkip(enabled)
+      await win.setWindowPrivacyMode(enabled)
       this.screenRecordingProtection = enabled
     } catch (e) {
       // 系统调用失败；保持当前状态不伪造。

@@ -1,34 +1,37 @@
 // PointerInputService — 接 HarmonyOS 原始 MouseEvent/TouchEvent，转出平台状态。
 // 不把 MouseEvent/deviceId 传进 Core。
 //
-// 真实事件源：@kit.InputKit 的 MouseEvent / TouchEvent。
+// 真实事件源：ArkUI 组件 .onMouse / .onTouch 回调给的 MouseEvent / TouchEvent
+// （component/common.d.ts 全局声明，非 @kit.InputKit）。
 // normalize 从真实事件提取 x / y / button / action / wheelDelta。
 //
 // Issue #629 评论 5 第 5 节：SujianEditor 接 onMouse → normalizeMouseEvent →
 // 点击命中/drag selection 走 SelectionController；滚轮只改 viewport。
 //
 // Issue #629 评论6 第6部分：删除手写 button/action 魔法数字（0/1/2/3/4），
-// 直接引用 Harmony Input Kit 官方 MouseButton / MouseAction 枚举。
-
-import { MouseEvent, TouchEvent, Action, MouseButton, MouseAction } from '@kit.InputKit'
+// 直接引用 ArkUI 官方 MouseButton / MouseAction 枚举。
+//
+// Issue #744 评论 5794965395 第 4 节：用 ArkUI MouseEvent/TouchEvent（非 InputKit），
+// 删除 Record/cast/typeof 反射式读字段，删除 normalize(raw: Record) 兼容入口，
+// 滚轮按 API26 d.ts 明确字段（ArkUI MouseEvent 无滚轮增量字段，固定返回 0）。
 
 export interface PlatformPointerEvent {
   x: number
   y: number
-  button: number  // MouseButton 枚举值：BUTTON_LEFT=0, BUTTON_RIGHT=1, BUTTON_MIDDLE=2
+  button: number  // MouseButton 枚举值：Left=0, Right=1, Middle=2
   action: 'down' | 'up' | 'move' | 'wheel'
   // 滚轮偏移（仅 action==='wheel' 有意义）。向下/向右为正（与 scrollTop/scrollLeft 增量方向一致）。
-  // HarmonyOS MouseEvent 滚轮事件的增量由 ArkUI 框架消费（Scroll 组件自动滚动），
-  // 此字段供 SujianEditor 在需要手动改 viewport 时使用；normalize 从 MouseEvent 提取（缺失时 0）。
+  // ArkUI MouseEvent 无滚轮增量字段，滚轮由 Scroll 组件自动消费；
+  // 此字段供 SujianEditor 在需要手动改 viewport 时使用，extractWheelDelta* 固定返回 0。
   wheelDeltaX: number
   wheelDeltaY: number
   timestamp: number
 }
 
-// HarmonyOS 官方 MouseButton / MouseAction 枚举由 @kit.InputKit 提供
-// （@ohos.multimodalInput.MouseButton / MouseAction）。
-// MouseButton: BUTTON_LEFT=0, BUTTON_RIGHT=1, BUTTON_MIDDLE=2, ...
-// MouseAction: HOVER=0, PRESS=1, RELEASE=2, MOVE=3, WHEEL=4
+// ArkUI 官方 MouseButton / MouseAction / TouchType 枚举由 component/enums.d.ts 全局声明。
+// MouseButton: Left=0, Right=1, Middle=2, Back=3, Forward=4, None=5
+// MouseAction: Press=0, Release=1, Move=2, Hover=3, ENTER_WINDOW=4, LEAVE_WINDOW=5, CANCEL=13（无 WHEEL）
+// TouchType: Down=0, Up=1, Move=2, Cancel=3
 // 直接引用官方枚举，不在本地复制数值表（Issue #629 评论6 第6部分）。
 
 export class PointerInputService {
@@ -41,106 +44,82 @@ export class PointerInputService {
     return PointerInputService.instance
   }
 
-  // 接 HarmonyOS 原始 MouseEvent，归一化为 PlatformPointerEvent。
-  // 滚轮增量从 MouseEvent 的 scroll/axis 字段提取（HarmonyOS MouseEvent 在 wheel action 时
-  // 通过 ArkUI Scroll 组件自动消费；此处提取供手动 viewport 调整用，缺失时 0）。
+  // 接 ArkUI 原始 MouseEvent，归一化为 PlatformPointerEvent。
+  // ArkUI MouseEvent 无滚轮增量字段，滚轮由 Scroll 组件自动消费；
+  // extractWheelDelta* 固定返回 0，供手动 viewport 调整时占位用。
   normalizeMouseEvent(raw: MouseEvent): PlatformPointerEvent {
-    const action: 'down' | 'up' | 'move' | 'wheel' = this.mapMouseAction(raw.action ?? MouseAction.MOVE)
+    const action: 'down' | 'up' | 'move' | 'wheel' = this.mapMouseAction(raw.action)
     return {
-      x: raw.x ?? 0,
-      y: raw.y ?? 0,
-      button: this.mapMouseButton(raw.button ?? MouseButton.BUTTON_LEFT),
+      x: raw.x,
+      y: raw.y,
+      button: this.mapMouseButton(raw.button),
       action: action,
       wheelDeltaX: this.extractWheelDeltaX(raw),
       wheelDeltaY: this.extractWheelDeltaY(raw),
-      timestamp: Date.now()
+      timestamp: raw.timestamp
     }
   }
 
-  // 接 HarmonyOS 原始 TouchEvent（手指/触控），归一化为 PlatformPointerEvent。
-  // 取第一个 touch point；button=MouseButton.BUTTON_LEFT 表示触控即"左键"。
+  // 接 ArkUI 原始 TouchEvent（手指/触控），归一化为 PlatformPointerEvent。
+  // 取第一个 touch point；button=MouseButton.Left 表示触控即"左键"。
   normalizeTouchEvent(raw: TouchEvent): PlatformPointerEvent {
-    const touches: Touch[] = raw.touches ?? []
-    const primary: Touch | undefined = touches.length > 0 ? touches[0] : undefined
+    const touches: TouchObject[] = raw.touches
+    const primary: TouchObject | undefined = touches.length > 0 ? touches[0] : undefined
     const x: number = primary ? primary.x : 0
     const y: number = primary ? primary.y : 0
     return {
       x: x,
       y: y,
-      button: MouseButton.BUTTON_LEFT,
-      action: this.mapTouchAction(raw.action ?? Action.DOWN),
+      button: MouseButton.Left,
+      action: this.mapTouchAction(raw.type),
       wheelDeltaX: 0,
       wheelDeltaY: 0,
-      timestamp: Date.now()
-    }
-  }
-
-  // 兼容旧入口：Record<string, Object> 形式（保留给未类型化调用方）。
-  normalize(rawMouseEvent: Record<string, Object>): PlatformPointerEvent {
-    return {
-      x: (rawMouseEvent['x'] ?? 0) as number,
-      y: (rawMouseEvent['y'] ?? 0) as number,
-      button: this.mapMouseButton((rawMouseEvent['button'] ?? MouseButton.BUTTON_LEFT) as number),
-      action: this.mapMouseAction((rawMouseEvent['action'] ?? MouseAction.MOVE) as number),
-      wheelDeltaX: (rawMouseEvent['wheelDeltaX'] ?? 0) as number,
-      wheelDeltaY: (rawMouseEvent['wheelDeltaY'] ?? 0) as number,
-      timestamp: Date.now()
+      timestamp: raw.timestamp
     }
   }
 
   // —— private ——
   // 用官方 MouseButton 枚举值比较，不硬编码数字。
-  private mapMouseButton(rawButton: number): number {
-    if (rawButton === MouseButton.BUTTON_LEFT || rawButton === MouseButton.BUTTON_RIGHT || rawButton === MouseButton.BUTTON_MIDDLE) {
+  private mapMouseButton(rawButton: MouseButton): number {
+    if (rawButton === MouseButton.Left || rawButton === MouseButton.Right || rawButton === MouseButton.Middle) {
       return rawButton
     }
-    return MouseButton.BUTTON_LEFT
+    return MouseButton.Left
   }
 
   // 用官方 MouseAction 枚举值比较，不硬编码数字。
-  private mapMouseAction(rawAction: number): 'down' | 'up' | 'move' | 'wheel' {
-    if (rawAction === MouseAction.PRESS) {
+  // ArkUI MouseAction 无 WHEEL 值（滚轮由 Scroll 组件自动消费），故不返回 'wheel'。
+  private mapMouseAction(rawAction: MouseAction): 'down' | 'up' | 'move' {
+    if (rawAction === MouseAction.Press) {
       return 'down'
     }
-    if (rawAction === MouseAction.RELEASE) {
+    if (rawAction === MouseAction.Release) {
       return 'up'
     }
-    if (rawAction === MouseAction.WHEEL) {
-      return 'wheel'
-    }
-    // HOVER / MOVE / 未知都归 move。
+    // Hover / Move / ENTER_WINDOW / LEAVE_WINDOW / CANCEL / 未知都归 move。
     return 'move'
   }
 
-  private mapTouchAction(rawAction: Action): 'down' | 'up' | 'move' | 'wheel' {
-    if (rawAction === Action.DOWN) {
+  private mapTouchAction(rawAction: TouchType): 'down' | 'up' | 'move' {
+    if (rawAction === TouchType.Down) {
       return 'down'
     }
-    if (rawAction === Action.UP) {
+    if (rawAction === TouchType.Up) {
       return 'up'
     }
-    if (rawAction === Action.MOVE) {
+    if (rawAction === TouchType.Move) {
       return 'move'
     }
-    // CANCEL / UNKNOWN 等归 move（保守不丢位置）。
+    // Cancel 归 move（保守不丢位置）。
     return 'move'
   }
 
-  // 从 MouseEvent 提取滚轮 X 增量。HarmonyOS MouseEvent 滚轮增量字段名因 SDK 版本而异，
-  // 此处保守提取：若 raw 含 scrollX/axisX 则用，否则 0（Scroll 组件已自动消费滚轮）。
-  private extractWheelDeltaX(raw: MouseEvent): number {
-    const v: Object | undefined = (raw as Record<string, Object>)['scrollX']
-    if (v !== undefined && typeof v === 'number') {
-      return v as number
-    }
+  // ArkUI MouseEvent 无滚轮增量字段；滚轮由 Scroll 组件自动消费。
+  private extractWheelDeltaX(_raw: MouseEvent): number {
     return 0
   }
 
-  private extractWheelDeltaY(raw: MouseEvent): number {
-    const v: Object | undefined = (raw as Record<string, Object>)['scrollY']
-    if (v !== undefined && typeof v === 'number') {
-      return v as number
-    }
+  private extractWheelDeltaY(_raw: MouseEvent): number {
     return 0
   }
 }

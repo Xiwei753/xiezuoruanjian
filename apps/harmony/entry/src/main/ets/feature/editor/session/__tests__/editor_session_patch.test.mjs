@@ -62,7 +62,6 @@ function makeResult(overrides) {
     oldSelectionHead: 0,
     newSelectionAnchor: 0,
     newSelectionHead: 0,
-    visualIntent: {},
     compositionSession: null,
     contentDelta: {
       insertedChars: 0,
@@ -534,7 +533,6 @@ test('DTO 形状: EditorEditResult 所有字段可访问', () => {
     }],
     oldSelectionAnchor: 0, oldSelectionHead: 0,
     newSelectionAnchor: 0, newSelectionHead: 1,
-    visualIntent: { kind: 'Insert' },
     compositionSession: { sessionId: 7, baseRevision: 1, generation: 3 },
     contentDelta: { insertedChars: 1, deletedChars: 0, insertedNonWhitespaceChars: 1, deletedNonWhitespaceChars: 0 },
   })
@@ -544,7 +542,6 @@ test('DTO 形状: EditorEditResult 所有字段可访问', () => {
   assert.equal(result.newRevision, 2)
   assert.equal(Array.isArray(result.displayPatches), true)
   assert.equal(result.displayPatches.length, 1)
-  assert.equal(result.visualIntent.kind, 'Insert')
   assert.equal(result.compositionSession.sessionId, 7)
   assert.equal(result.compositionSession.generation, 3)
   assert.equal(result.contentDelta.insertedChars, 1)

@@ -44,7 +44,6 @@ function makeEditResult(overrides) {
     oldSelectionHead: 0,
     newSelectionAnchor: 0,
     newSelectionHead: 0,
-    visualIntent: {},
     compositionSession: null,
     contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 },
     composition: null,

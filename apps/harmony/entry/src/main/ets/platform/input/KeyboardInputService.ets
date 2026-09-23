@@ -13,7 +13,7 @@
 // Issue #629 评论6 第6部分：删除手写 KeyCode 魔法数字（2001/2052/2057...），
 // 直接引用 Harmony Input Kit 官方 KeyCode 枚举（@kit.InputKit KeyCode）。
 
-import { KeyEvent, KeyCode } from '@kit.InputKit'
+import { KeyCode } from '@kit.InputKit'
 
 export interface PlatformKeyEvent {
   keyCode: number
@@ -35,20 +35,34 @@ export interface PlatformKeyEvent {
 // - tab: 制表符（这轮当字符插入，不做焦点切换）
 // - escape: ESC（这轮忽略，不做取消/退出）
 // - ignore: 修饰键单独按下、Ctrl/Alt 组合、无法识别的键 — SujianEditor 不转发
+interface CharacterKeyCommand { kind: 'character'; text: string }
+interface EnterKeyCommand { kind: 'enter' }
+interface BackspaceKeyCommand { kind: 'backspace' }
+interface DeleteKeyCommand { kind: 'delete' }
+interface ArrowLeftKeyCommand { kind: 'arrowLeft'; extend: boolean }
+interface ArrowRightKeyCommand { kind: 'arrowRight'; extend: boolean }
+interface ArrowUpKeyCommand { kind: 'arrowUp'; extend: boolean }
+interface ArrowDownKeyCommand { kind: 'arrowDown'; extend: boolean }
+interface HomeKeyCommand { kind: 'home'; extend: boolean }
+interface EndKeyCommand { kind: 'end'; extend: boolean }
+interface TabKeyCommand { kind: 'tab' }
+interface EscapeKeyCommand { kind: 'escape' }
+interface IgnoreKeyCommand { kind: 'ignore' }
+
 export type SemanticKeyCommand =
-  | { kind: 'character'; text: string }
-  | { kind: 'enter' }
-  | { kind: 'backspace' }
-  | { kind: 'delete' }
-  | { kind: 'arrowLeft'; extend: boolean }
-  | { kind: 'arrowRight'; extend: boolean }
-  | { kind: 'arrowUp'; extend: boolean }
-  | { kind: 'arrowDown'; extend: boolean }
-  | { kind: 'home'; extend: boolean }
-  | { kind: 'end'; extend: boolean }
-  | { kind: 'tab' }
-  | { kind: 'escape' }
-  | { kind: 'ignore' }
+  | CharacterKeyCommand
+  | EnterKeyCommand
+  | BackspaceKeyCommand
+  | DeleteKeyCommand
+  | ArrowLeftKeyCommand
+  | ArrowRightKeyCommand
+  | ArrowUpKeyCommand
+  | ArrowDownKeyCommand
+  | HomeKeyCommand
+  | EndKeyCommand
+  | TabKeyCommand
+  | EscapeKeyCommand
+  | IgnoreKeyCommand
 
 // HarmonyOS 官方 KeyCode 枚举由 @kit.InputKit 提供（@ohos.multimodalInput.keyCode.KeyCode）。
 // 成员名形如 KEYCODE_ENTER / KEYCODE_BACKSPACE / KEYCODE_DPAD_LEFT 等，
@@ -70,7 +84,7 @@ export class KeyboardInputService {
   translateKeyCode(keyCode: number): string {
     switch (keyCode) {
       case KeyCode.KEYCODE_ENTER: return 'Enter'
-      case KeyCode.KEYCODE_BACKSPACE: return 'Backspace'
+      case KeyCode.KEYCODE_DEL: return 'Backspace'
       case KeyCode.KEYCODE_TAB: return 'Tab'
       case KeyCode.KEYCODE_SPACE: return ' '
       case KeyCode.KEYCODE_DPAD_LEFT: return 'ArrowLeft'
@@ -78,9 +92,9 @@ export class KeyboardInputService {
       case KeyCode.KEYCODE_DPAD_UP: return 'ArrowUp'
       case KeyCode.KEYCODE_DPAD_DOWN: return 'ArrowDown'
       case KeyCode.KEYCODE_ESCAPE: return 'Escape'
-      case KeyCode.KEYCODE_DELETE: return 'Delete'
-      case KeyCode.KEYCODE_HOME: return 'Home'
-      case KeyCode.KEYCODE_END: return 'End'
+      case KeyCode.KEYCODE_FORWARD_DEL: return 'Delete'
+      case KeyCode.KEYCODE_MOVE_HOME: return 'Home'
+      case KeyCode.KEYCODE_MOVE_END: return 'End'
       case KeyCode.KEYCODE_SHIFT_LEFT:
       case KeyCode.KEYCODE_SHIFT_RIGHT: return 'Shift'
       case KeyCode.KEYCODE_CTRL_LEFT:
@@ -98,13 +112,16 @@ export class KeyboardInputService {
     // keyText 优先用系统给的 keyText（字符键有值），否则回退到 translateKeyCode（控制键）。
     const sysText: string = rawKeyEvent.keyText ?? ''
     const keyText: string = sysText.length > 0 ? sysText : this.translateKeyCode(keyCode)
+    const shiftPressed: boolean = rawKeyEvent.getModifierKeyState ? rawKeyEvent.getModifierKeyState(['Shift']) : false
+    const ctrlPressed: boolean = rawKeyEvent.getModifierKeyState ? rawKeyEvent.getModifierKeyState(['Ctrl']) : false
+    const altPressed: boolean = rawKeyEvent.getModifierKeyState ? rawKeyEvent.getModifierKeyState(['Alt']) : false
     return {
       keyCode: keyCode,
       keyText: keyText,
-      isShiftPressed: rawKeyEvent.isShiftPressed ?? false,
-      isCtrlPressed: rawKeyEvent.isCtrlPressed ?? false,
-      isAltPressed: rawKeyEvent.isAltPressed ?? false,
-      timestamp: Date.now()
+      isShiftPressed: shiftPressed,
+      isCtrlPressed: ctrlPressed,
+      isAltPressed: altPressed,
+      timestamp: rawKeyEvent.timestamp
     }
   }
 
@@ -123,9 +140,9 @@ export class KeyboardInputService {
     switch (ev.keyCode) {
       case KeyCode.KEYCODE_ENTER:
         return { kind: 'enter' }
-      case KeyCode.KEYCODE_BACKSPACE:
+      case KeyCode.KEYCODE_DEL:
         return { kind: 'backspace' }
-      case KeyCode.KEYCODE_DELETE:
+      case KeyCode.KEYCODE_FORWARD_DEL:
         return { kind: 'delete' }
       case KeyCode.KEYCODE_TAB:
         return { kind: 'tab' }
@@ -139,9 +156,9 @@ export class KeyboardInputService {
         return { kind: 'arrowUp', extend: extend }
       case KeyCode.KEYCODE_DPAD_DOWN:
         return { kind: 'arrowDown', extend: extend }
-      case KeyCode.KEYCODE_HOME:
+      case KeyCode.KEYCODE_MOVE_HOME:
         return { kind: 'home', extend: extend }
-      case KeyCode.KEYCODE_END:
+      case KeyCode.KEYCODE_MOVE_END:
         return { kind: 'end', extend: extend }
       case KeyCode.KEYCODE_SHIFT_LEFT:
       case KeyCode.KEYCODE_SHIFT_RIGHT:

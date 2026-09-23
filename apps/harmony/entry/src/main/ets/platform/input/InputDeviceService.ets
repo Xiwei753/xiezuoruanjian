@@ -76,7 +76,7 @@ export class InputDeviceService {
     // 1. 拉取当前在线设备 id 列表，逐 id 查询详情并上线。
     // SDK 类型声明可能把 getDeviceList 标为 InputDeviceData[]，但实际返回 number[]，
     // 这里按评论契约强制成 Array<number>。
-    const ids: Array<number> = (await inputDevice.getDeviceList()) as unknown as Array<number>
+    const ids: Array<number> = (await inputDevice.getDeviceList()) as Object as Array<number>
     for (const id of ids) {
       try {
         const raw: inputDevice.InputDeviceData = await inputDevice.getDeviceInfo(id)

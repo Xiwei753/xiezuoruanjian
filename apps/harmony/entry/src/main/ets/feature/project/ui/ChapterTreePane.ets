@@ -5,7 +5,7 @@
 // 由 WritingScreen 在宽屏模式下持有并展示。
 
 import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 @Component
@@ -31,7 +31,7 @@ export struct ChapterTreePane {
 
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
-  private themeObserver: ReturnType<typeof ThemeObserverImpl> | null = null
+  private themeObserver: ThemeObserver | null = null
 
   aboutToAppear() {
     const self = this
@@ -185,7 +185,7 @@ export struct ChapterTreePane {
             .width('100%')
             .padding({ left: 28, right: 12, top: 8, bottom: 8 })
             .backgroundColor(this.selectedChapterId === chapter.id
-              ? this.themeConfig.colors.primaryLight
+              ? this.themeConfig.colors.primaryContainer
               : 'transparent')
             .onClick(() => {
               if (this.onSelectChapter) {

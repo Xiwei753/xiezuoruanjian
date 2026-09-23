@@ -16,6 +16,16 @@
 // Issue #629 评论7 第6项：软键盘删除统一 Core grapheme。
 // - onDeleteText 派发 graphemeBackspace/graphemeDelete（不再派发 {kind:'delete',direction}）。
 // - 删除边界由 Core previousGraphemeBoundary/nextGraphemeBoundary 决定，不手算 UTF-16 surrogate pair。
+//
+// Issue #744 评论 5794965395 第 5 节：按 API26 IMEKit d.ts 重写事件监听。
+// - API26 InputMethodController 真实事件：insertText / deleteLeft(length) / deleteRight(length) /
+//   setPreviewText(text, range) / finishTextPreview / selectByRange(Range)。
+// - 删除不存在的旧事件：deleteText / DeleteDirection / sendEnterKey / setSelection /
+//   unsetPreviewText / inputMethod.Selection。回车通过 insertText('\n') 处理。
+// - IME 删除带 length，派发 imeDeleteLeft/imeDeleteRight（带长度），在 dispatcher 唯一队列里
+//   按 Core grapheme boundary 连续求边界后一次完成，不退回 UTF-16 ±1。
+// - notifySelection/notifyCursor 改 no-op：API26 InputMethodController 没有 setSelection 方法，
+//   IME 通过 selectByRange 事件主动查询选区，编辑器不主动推送。
 
 import { inputMethod } from '@kit.IMEKit'
 import { EditorSemanticDispatcher } from './EditorSemanticDispatcher'
@@ -32,7 +42,15 @@ export class HarmonyImeConnection {
       await this.detach()
     }
     this.dispatcher = dispatcher
-    await this.controller.attach(true)
+    // API26 InputMethodController.attach 需要 TextConfig；素笺是多行文本编辑框，
+    // 用 MULTILINE + UNSPECIFIED 回车键类型。IME 通过 selectByRange 事件主动查询选区。
+    const textConfig: inputMethod.TextConfig = {
+      inputAttribute: {
+        textInputType: inputMethod.TextInputType.MULTILINE,
+        enterKeyType: inputMethod.EnterKeyType.UNSPECIFIED,
+      },
+    }
+    await this.controller.attach(true, textConfig)
     this.registerListeners()
     this.attached = true
   }
@@ -57,20 +75,23 @@ export class HarmonyImeConnection {
   }
 
   // 通知 IME 当前选区（UTF-16 code unit offset，ArkUI 事件坐标）。
-  async notifySelection(utf16Start: number, utf16End: number): Promise<void> {
+  // Issue #744 评论 5794965395 第 5 节：API26 InputMethodController 没有 setSelection 方法
+  // （只有 changeSelection(text, start, end)，需要传完整 text，不适合这里主动推送）。
+  // API26 IME 通过 selectByRange 事件主动查询选区，编辑器不主动推送，这里保留 no-op。
+  async notifySelection(_utf16Start: number, _utf16End: number): Promise<void> {
     if (!this.attached) {
       return
     }
-    try {
-      await this.controller.setSelection(utf16Start, utf16End)
-    } catch (_e) {
-      // IME 通知失败不影响编辑器内部状态
-    }
+    // no-op：API26 IME 通过 selectByRange 事件主动查询选区。
   }
 
   // 通知 IME 当前光标位置（UTF-16 code unit offset）。
-  async notifyCursor(utf16Offset: number): Promise<void> {
-    await this.notifySelection(utf16Offset, utf16Offset)
+  // Issue #744 评论 5794965395 第 5 节：同 notifySelection，API26 改 no-op。
+  async notifyCursor(_utf16Offset: number): Promise<void> {
+    if (!this.attached) {
+      return
+    }
+    // no-op：API26 IME 通过 selectByRange 事件主动查询选区。
   }
 
   // Issue #629 R11 评论5329310563 第2项：从 dispatcher 读当前 display selection 并通知 IME。
@@ -86,27 +107,32 @@ export class HarmonyImeConnection {
     }
   }
 
+  // Issue #744 评论 5794965395 第 5 节：按 API26 InputMethodController d.ts 注册事件。
+  // - insertText(text) / deleteLeft(length) / deleteRight(length) /
+  //   setPreviewText(text, range) / finishTextPreview() / selectByRange(Range)。
+  // - 删除不存在的旧事件 deleteText/sendEnterKey/setSelection/unsetPreviewText。
   private registerListeners(): void {
     this.controller.on('insertText', (text: string): void => { this.onInsertText(text) })
-    this.controller.on('deleteText', (direction: inputMethod.DeleteDirection): void => { this.onDeleteText(direction) })
-    this.controller.on('sendEnterKey', (enterKey: inputMethod.EnterKeyType): void => { this.onSendEnterKey(enterKey) })
-    this.controller.on('setSelection', (selection: inputMethod.Selection): void => { this.onSetSelection(selection) })
-    this.controller.on('setPreviewText', (text: string): void => { this.onSetPreviewText(text) })
-    this.controller.on('unsetPreviewText', (): void => { this.onUnsetPreviewText() })
+    this.controller.on('deleteLeft', (length: number): void => { this.onDeleteLeft(length) })
+    this.controller.on('deleteRight', (length: number): void => { this.onDeleteRight(length) })
+    this.controller.on('selectByRange', (range: inputMethod.Range): void => { this.onSelectByRange(range) })
+    this.controller.on('setPreviewText', (text: string, range: inputMethod.Range): void => { this.onSetPreviewText(text, range) })
+    this.controller.on('finishTextPreview', (): void => { this.onFinishTextPreview() })
   }
 
   private unregisterListeners(): void {
     this.controller.off('insertText')
-    this.controller.off('deleteText')
-    this.controller.off('sendEnterKey')
-    this.controller.off('setSelection')
+    this.controller.off('deleteLeft')
+    this.controller.off('deleteRight')
+    this.controller.off('selectByRange')
     this.controller.off('setPreviewText')
-    this.controller.off('unsetPreviewText')
+    this.controller.off('finishTextPreview')
   }
 
   // IME 插入文本：纯翻译器，派发 imeCommitText。
   // composition commit 还是普通插入由 EditorSemanticDispatcher 出队时查 isComposing() 决定，
   // 不在本类队列外判断。dispatcher 串行队列保证 IME 事件按到达顺序执行。
+  // Issue #744 评论 5794965395 第 5 节：回车也走 insertText('\n')，不再有单独的 sendEnterKey 事件。
   private onInsertText(text: string): void {
     if (!this.dispatcher) {
       return
@@ -114,48 +140,48 @@ export class HarmonyImeConnection {
     this.dispatcher.dispatchFireAndForget({ kind: 'imeCommitText', text })
   }
 
-  // IME 删除：派发 graphemeBackspace/graphemeDelete（Issue #629 评论7 第6项）。
-  // 删除边界由 Core previousGraphemeBoundary/nextGraphemeBoundary 决定，
-  // 不手算 UTF-16 surrogate pair（EditorSemanticDispatcher.executeGraphemeBackspace/Delete 已实现）。
-  private onDeleteText(direction: inputMethod.DeleteDirection): void {
+  // IME 向左删除（退格）：派发 imeDeleteLeft（带长度）。
+  // Issue #744 评论 5794965395 第 5 节：API26 事件是 deleteLeft(length)，
+  // 删除边界由 Core grapheme boundary 决定，不退回 UTF-16 ±1。
+  // length 是 IME 要求删除的字符数；dispatcher 在唯一队列里逐个 grapheme 边界连续删除。
+  private onDeleteLeft(length: number): void {
     if (!this.dispatcher) {
       return
     }
-    if (direction === inputMethod.DeleteDirection.BACKWARD) {
-      this.dispatcher.dispatchFireAndForget({ kind: 'graphemeBackspace' })
-    } else {
-      this.dispatcher.dispatchFireAndForget({ kind: 'graphemeDelete' })
-    }
+    this.dispatcher.dispatchFireAndForget({ kind: 'imeDeleteLeft', length: length })
   }
 
-  // IME 回车：经 dispatcher 派发 insertText('\n')，由 EditorInputAdapter 处理（尊重当前选区）。
-  private onSendEnterKey(_enterKey: inputMethod.EnterKeyType): void {
+  // IME 向右删除（向前删除）：派发 imeDeleteRight（带长度）。
+  // Issue #744 评论 5794965395 第 5 节：API26 事件是 deleteRight(length)，
+  // 删除边界由 Core grapheme boundary 决定，不退回 UTF-16 ±1。
+  private onDeleteRight(length: number): void {
     if (!this.dispatcher) {
       return
     }
-    this.dispatcher.dispatchFireAndForget({ kind: 'insertText', text: '\n' })
+    this.dispatcher.dispatchFireAndForget({ kind: 'imeDeleteRight', length: length })
   }
 
   // IME 选区变化：翻译成 imeSetSelection 语义命令，经 dispatcher 派发。
+  // Issue #744 评论 5794965395 第 5 节：API26 用 selectByRange 事件，Range = { start, end }。
   // Issue #629 评论8 第4项：IME 来源的 selection 不再复用普通 setSelection/dragSelect
   // （那会走 committed selection，把 Core/UI composition 状态拆开）；
   // composition 内外判断由 EditorSemanticDispatcher 在唯一队列出队时做，
   // 本连接只负责传 start/end UTF-16 显示坐标。
-  private onSetSelection(selection: inputMethod.Selection): void {
+  private onSelectByRange(range: inputMethod.Range): void {
     if (!this.dispatcher) {
       return
     }
-    const start = selection.start
-    const end = selection.end
-    this.dispatcher.dispatchFireAndForget({ kind: 'imeSetSelection', utf16Start: start, utf16End: end })
+    this.dispatcher.dispatchFireAndForget({ kind: 'imeSetSelection', utf16Start: range.start, utf16End: range.end })
   }
 
   // IME composition preedit：纯翻译器，派发 imePreviewText。
+  // Issue #744 评论 5794965395 第 5 节：API26 setPreviewText 回调签名是 (text: string, range: Range) => void。
   // begin 还是 update 由 EditorSemanticDispatcher 出队时查 isComposing() 决定：
   //   - 未开始 composition → onCompositionBegin 成功后紧接 onCompositionUpdate
   //   - 已开始 composition → 只 onCompositionUpdate
   // 不在本类队列外判断 composing 状态。dispatcher 串行队列保证 begin→update→update→finish/cancel 顺序。
-  private onSetPreviewText(text: string): void {
+  // range 参数目前不参与语义命令（preedit cursor 由 Core snapshot 驱动），保留以匹配 API26 签名。
+  private onSetPreviewText(text: string, _range: inputMethod.Range): void {
     if (!this.dispatcher) {
       return
     }
@@ -163,8 +189,9 @@ export class HarmonyImeConnection {
   }
 
   // IME 取消 composition preedit：纯翻译器，派发 imeCancelPreview。
+  // Issue #744 评论 5794965395 第 5 节：API26 用 finishTextPreview 事件（不是 unsetPreviewText）。
   // 是否真的 cancel 由 EditorSemanticDispatcher 出队时查 isComposing() 决定（无 composition 时 no-op）。
-  private onUnsetPreviewText(): void {
+  private onFinishTextPreview(): void {
     if (!this.dispatcher) {
       return
     }

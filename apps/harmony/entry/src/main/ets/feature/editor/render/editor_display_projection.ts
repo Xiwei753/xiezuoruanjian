@@ -11,7 +11,7 @@
 //
 // AGENTS.md 边界：Core 保存业务真相；本文件是纯投影，不含业务逻辑、不调 Core、不持有状态。
 
-import { utf8ToUtf16, utf16ToUtf8 } from '../input/text_offset_mapper.ts'
+import { utf8ToUtf16, utf16ToUtf8, utf8ByteLength } from '../input/text_offset_mapper.ts'
 
 /** Composition 状态输入（不依赖 EditorDtos.ets 的类型，纯结构契约）。 */
 export interface EditorCompositionStateInput {
@@ -89,7 +89,7 @@ export function projectEditorDisplay(snap: EditorSessionSnapshotInput): EditorDi
   // compositionStart/End 是 preedit 在显示文本中的 UTF-8 byte 范围。
   // before 部分的 UTF-8 byte 长度 = replaceByteStart（committed text 的前缀不变）。
   const compositionStart: number = composition.replaceByteStart
-  const preeditUtf8Len: number = new TextEncoder().encode(composition.preeditText).length
+  const preeditUtf8Len: number = utf8ByteLength(composition.preeditText)
   const compositionEnd: number = composition.replaceByteStart + preeditUtf8Len
   // preeditCursorUtf16（IME 协议要求的 preedit 内 UTF-16 cursor）转成 preedit 内 UTF-8 byte offset，
   // 再加 replaceByteStart 得 displayCaretByte（displayText 中的 byte offset）。

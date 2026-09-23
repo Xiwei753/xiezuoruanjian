@@ -2,12 +2,16 @@ import { ChapterMeta, ChapterContent, ChapterSaveReceipt } from '../dto/ProjectD
 import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 
-function nativeError<T>(e: unknown): ResultEnvelope<T> {
+function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
 }
 
 export class NativeChapterBridge {
-  constructor(private core: NativeCoreModule) {}
+  private core: NativeCoreModule
+
+  constructor(core: NativeCoreModule) {
+    this.core = core
+  }
 
   async listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>> {
     const projectId = await this.core.resolveVolumeProjectId(volumeId)

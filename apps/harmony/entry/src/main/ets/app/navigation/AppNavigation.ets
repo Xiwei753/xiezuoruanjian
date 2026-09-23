@@ -23,6 +23,26 @@ interface NavigationIntent {
   readonly dedupeKey: string
 }
 
+// Issue #629 评论14 第2项：离开守卫 lease（命名 interface，避免对象字面量类型）。
+interface GuardLease {
+  token: number
+  guard: () => Promise<boolean>
+}
+
+// Issue #629 评论14 第2项：导航事务队列条目（命名 interface，避免对象字面量类型）。
+interface NavigationTaskEntry {
+  intent: NavigationIntent
+  task: Promise<boolean>
+  resolve: (v: boolean) => void
+  execute: () => void
+}
+
+// Issue #629 评论14 第2项：正在执行的导航事务（命名 interface，避免对象字面量类型）。
+interface ActiveNavigationTask {
+  intent: NavigationIntent
+  task: Promise<boolean>
+}
+
 // AppNavigationHost — AppNavigation 的可外部访问入口。
 // EntryAbility（非 UI 上下文）无法直接持有 @Component struct 实例，
 // 通过此单例间接触发接续恢复：AppNavigation 在 aboutToAppear 注册 navPathStack 与恢复回调，
@@ -54,14 +74,14 @@ export class AppNavigationHost {
   // Issue #629 评论14 第2项：当前活跃守卫 lease。
   // 新 Writing 注册时替换 active lease；unregisterLeaveGuard(token) 只有 token 等于当前 lease 才清掉。
   // 这样旧实例迟到的 disappear 不会删新 guard，也不会在一次 pop 时把底下页面的 session 一起 close。
-  private activeGuardLease: { token: number; guard: () => Promise<boolean> } | null = null
+  private activeGuardLease: GuardLease | null = null
   // Issue #629 评论14 第2项：导航事务串行队列。
   // 去重同时检查 pendingTasks + activeTask（正在执行的任务不能从"可去重集合"里消失）。
-  private pendingTasks: Array<{ intent: NavigationIntent; task: Promise<boolean>; resolve: (v: boolean) => void; execute: () => void }> = []
+  private pendingTasks: Array<NavigationTaskEntry> = []
   // Issue #629 评论14 第2项：正在执行的任务。
   // processQueue 中 shift() 后执行期间，该 entry 仍在 activeTask 里，
   // 新的相同 dedupeKey 的请求可以直接复用 activeTask 的 Promise。
-  private activeTask: { intent: NavigationIntent; task: Promise<boolean> } | null = null
+  private activeTask: ActiveNavigationTask | null = null
   private isProcessingQueue: boolean = false
 
   static getInstance(): AppNavigationHost {
@@ -111,7 +131,8 @@ export class AppNavigationHost {
     const token: number = this.nextGuardToken++
     // Issue #629 评论14 第2项：新 Writing 注册时替换 active lease。
     // host 只持有当前 active guard；旧实例迟到的 disappear 不会删新 guard。
-    this.activeGuardLease = { token, guard }
+    const lease: GuardLease = { token, guard }
+    this.activeGuardLease = lease
     return token
   }
 
@@ -147,7 +168,8 @@ export class AppNavigationHost {
       resolveTask = resolve
     })
 
-    this.pendingTasks.push({ intent, task, resolve: resolveTask!, execute })
+    const taskEntry: NavigationTaskEntry = { intent, task, resolve: resolveTask!, execute }
+    this.pendingTasks.push(taskEntry)
     this.processQueue()
     return task
   }
@@ -162,7 +184,8 @@ export class AppNavigationHost {
       const entry = this.pendingTasks.shift()!
       // Issue #629 评论14 第2项：shift 后立即设置 activeTask，
       // 使得新入队的相同 dedupeKey 请求可以复用正在执行的 Promise。
-      this.activeTask = { intent: entry.intent, task: entry.task }
+      const active: ActiveNavigationTask = { intent: entry.intent, task: entry.task }
+      this.activeTask = active
       try {
         // Issue #629 评论14 第2项：只执行当前 active guard（不是遍历所有历史 guard）。
         let canLeave: boolean = true

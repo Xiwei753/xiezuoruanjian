@@ -9,6 +9,15 @@
 // viewportWidth/viewportHeight 是视口可见区域尺寸。
 // contentWidth/contentHeight 是内容总尺寸（正文+选区+composition+caret 在同一滚动坐标系里）。
 
+interface EditorViewportStateDto {
+  scrollTop: number
+  scrollLeft: number
+  viewportWidth: number
+  viewportHeight: number
+  contentWidth: number
+  contentHeight: number
+}
+
 export class EditorViewportState {
   readonly scrollTop: number       // 垂直滚动偏移（px，内容坐标系，向下为正）
   readonly scrollLeft: number      // 水平滚动偏移（px，内容坐标系，向右为正）
@@ -78,15 +87,16 @@ export class EditorViewportState {
     )
   }
 
-  toObject(): Record<string, Object> {
-    return {
-      scrollTop: this.scrollTop as Object,
-      scrollLeft: this.scrollLeft as Object,
-      viewportWidth: this.viewportWidth as Object,
-      viewportHeight: this.viewportHeight as Object,
-      contentWidth: this.contentWidth as Object,
-      contentHeight: this.contentHeight as Object
+  toObject(): EditorViewportStateDto {
+    const obj: EditorViewportStateDto = {
+      scrollTop: this.scrollTop,
+      scrollLeft: this.scrollLeft,
+      viewportWidth: this.viewportWidth,
+      viewportHeight: this.viewportHeight,
+      contentWidth: this.contentWidth,
+      contentHeight: this.contentHeight
     }
+    return obj
   }
 
   equals(other: EditorViewportState): boolean {

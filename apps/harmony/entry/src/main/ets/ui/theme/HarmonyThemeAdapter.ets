@@ -423,49 +423,86 @@ export class HarmonyThemeAdapter {
 
 function schemeToThemeColors(scheme: ThemeColorSchemeDto, isDark: boolean): ThemeColors {
   const base = isDark ? DarkTheme : LightTheme
-  const result: ThemeColors = { ...base }
-
-  const merge = (key: keyof ThemeColors, value: string | undefined) => {
-    if (value && value.length > 0) {
-      (result as Record<string, string>)[key] = value
-    }
+  // ArkTS 禁止对象展开（arkts-no-spread），逐字段显式复制 base 作为可变起点。
+  const result: ThemeColors = {
+    primary: base.primary,
+    onPrimary: base.onPrimary,
+    primaryContainer: base.primaryContainer,
+    onPrimaryContainer: base.onPrimaryContainer,
+    secondary: base.secondary,
+    onSecondary: base.onSecondary,
+    secondaryContainer: base.secondaryContainer,
+    onSecondaryContainer: base.onSecondaryContainer,
+    tertiary: base.tertiary,
+    onTertiary: base.onTertiary,
+    tertiaryContainer: base.tertiaryContainer,
+    onTertiaryContainer: base.onTertiaryContainer,
+    error: base.error,
+    onError: base.onError,
+    errorContainer: base.errorContainer,
+    onErrorContainer: base.onErrorContainer,
+    background: base.background,
+    onBackground: base.onBackground,
+    surface: base.surface,
+    onSurface: base.onSurface,
+    surfaceVariant: base.surfaceVariant,
+    onSurfaceVariant: base.onSurfaceVariant,
+    surfaceContainerLowest: base.surfaceContainerLowest,
+    surfaceContainerLow: base.surfaceContainerLow,
+    surfaceContainer: base.surfaceContainer,
+    surfaceContainerHigh: base.surfaceContainerHigh,
+    surfaceContainerHighest: base.surfaceContainerHighest,
+    surfaceDim: base.surfaceDim,
+    surfaceBright: base.surfaceBright,
+    outline: base.outline,
+    outlineVariant: base.outlineVariant,
+    inverseSurface: base.inverseSurface,
+    inverseOnSurface: base.inverseOnSurface,
+    inversePrimary: base.inversePrimary,
+    scrim: base.scrim,
+    textPrimary: base.textPrimary,
+    textSecondary: base.textSecondary,
+    textHint: base.textHint,
+    success: base.success,
+    divider: base.divider,
+    overlay: base.overlay,
   }
 
-  merge('primary', scheme.primary)
-  merge('onPrimary', scheme.on_primary)
-  merge('primaryContainer', scheme.primary_container)
-  merge('onPrimaryContainer', scheme.on_primary_container)
-  merge('secondary', scheme.secondary)
-  merge('onSecondary', scheme.on_secondary)
-  merge('secondaryContainer', scheme.secondary_container)
-  merge('onSecondaryContainer', scheme.on_secondary_container)
-  merge('tertiary', scheme.tertiary)
-  merge('onTertiary', scheme.on_tertiary)
-  merge('tertiaryContainer', scheme.tertiary_container)
-  merge('onTertiaryContainer', scheme.on_tertiary_container)
-  merge('error', scheme.error)
-  merge('onError', scheme.on_error)
-  merge('errorContainer', scheme.error_container)
-  merge('onErrorContainer', scheme.on_error_container)
-  merge('background', scheme.background)
-  merge('onBackground', scheme.on_background)
-  merge('surface', scheme.surface)
-  merge('onSurface', scheme.on_surface)
-  merge('surfaceVariant', scheme.surface_variant)
-  merge('onSurfaceVariant', scheme.on_surface_variant)
-  merge('surfaceContainerLowest', scheme.surface_container_lowest)
-  merge('surfaceContainerLow', scheme.surface_container_low)
-  merge('surfaceContainer', scheme.surface_container)
-  merge('surfaceContainerHigh', scheme.surface_container_high)
-  merge('surfaceContainerHighest', scheme.surface_container_highest)
-  merge('surfaceDim', scheme.surface_dim)
-  merge('surfaceBright', scheme.surface_bright)
-  merge('outline', scheme.outline)
-  merge('outlineVariant', scheme.outline_variant)
-  merge('inverseSurface', scheme.inverse_surface)
-  merge('inverseOnSurface', scheme.inverse_on_surface)
-  merge('inversePrimary', scheme.inverse_primary)
-  merge('scrim', scheme.scrim)
+  if (scheme.primary && scheme.primary.length > 0) { result.primary = scheme.primary }
+  if (scheme.on_primary && scheme.on_primary.length > 0) { result.onPrimary = scheme.on_primary }
+  if (scheme.primary_container && scheme.primary_container.length > 0) { result.primaryContainer = scheme.primary_container }
+  if (scheme.on_primary_container && scheme.on_primary_container.length > 0) { result.onPrimaryContainer = scheme.on_primary_container }
+  if (scheme.secondary && scheme.secondary.length > 0) { result.secondary = scheme.secondary }
+  if (scheme.on_secondary && scheme.on_secondary.length > 0) { result.onSecondary = scheme.on_secondary }
+  if (scheme.secondary_container && scheme.secondary_container.length > 0) { result.secondaryContainer = scheme.secondary_container }
+  if (scheme.on_secondary_container && scheme.on_secondary_container.length > 0) { result.onSecondaryContainer = scheme.on_secondary_container }
+  if (scheme.tertiary && scheme.tertiary.length > 0) { result.tertiary = scheme.tertiary }
+  if (scheme.on_tertiary && scheme.on_tertiary.length > 0) { result.onTertiary = scheme.on_tertiary }
+  if (scheme.tertiary_container && scheme.tertiary_container.length > 0) { result.tertiaryContainer = scheme.tertiary_container }
+  if (scheme.on_tertiary_container && scheme.on_tertiary_container.length > 0) { result.onTertiaryContainer = scheme.on_tertiary_container }
+  if (scheme.error && scheme.error.length > 0) { result.error = scheme.error }
+  if (scheme.on_error && scheme.on_error.length > 0) { result.onError = scheme.on_error }
+  if (scheme.error_container && scheme.error_container.length > 0) { result.errorContainer = scheme.error_container }
+  if (scheme.on_error_container && scheme.on_error_container.length > 0) { result.onErrorContainer = scheme.on_error_container }
+  if (scheme.background && scheme.background.length > 0) { result.background = scheme.background }
+  if (scheme.on_background && scheme.on_background.length > 0) { result.onBackground = scheme.on_background }
+  if (scheme.surface && scheme.surface.length > 0) { result.surface = scheme.surface }
+  if (scheme.on_surface && scheme.on_surface.length > 0) { result.onSurface = scheme.on_surface }
+  if (scheme.surface_variant && scheme.surface_variant.length > 0) { result.surfaceVariant = scheme.surface_variant }
+  if (scheme.on_surface_variant && scheme.on_surface_variant.length > 0) { result.onSurfaceVariant = scheme.on_surface_variant }
+  if (scheme.surface_container_lowest && scheme.surface_container_lowest.length > 0) { result.surfaceContainerLowest = scheme.surface_container_lowest }
+  if (scheme.surface_container_low && scheme.surface_container_low.length > 0) { result.surfaceContainerLow = scheme.surface_container_low }
+  if (scheme.surface_container && scheme.surface_container.length > 0) { result.surfaceContainer = scheme.surface_container }
+  if (scheme.surface_container_high && scheme.surface_container_high.length > 0) { result.surfaceContainerHigh = scheme.surface_container_high }
+  if (scheme.surface_container_highest && scheme.surface_container_highest.length > 0) { result.surfaceContainerHighest = scheme.surface_container_highest }
+  if (scheme.surface_dim && scheme.surface_dim.length > 0) { result.surfaceDim = scheme.surface_dim }
+  if (scheme.surface_bright && scheme.surface_bright.length > 0) { result.surfaceBright = scheme.surface_bright }
+  if (scheme.outline && scheme.outline.length > 0) { result.outline = scheme.outline }
+  if (scheme.outline_variant && scheme.outline_variant.length > 0) { result.outlineVariant = scheme.outline_variant }
+  if (scheme.inverse_surface && scheme.inverse_surface.length > 0) { result.inverseSurface = scheme.inverse_surface }
+  if (scheme.inverse_on_surface && scheme.inverse_on_surface.length > 0) { result.inverseOnSurface = scheme.inverse_on_surface }
+  if (scheme.inverse_primary && scheme.inverse_primary.length > 0) { result.inversePrimary = scheme.inverse_primary }
+  if (scheme.scrim && scheme.scrim.length > 0) { result.scrim = scheme.scrim }
 
   result.textPrimary = result.onSurface
   result.textSecondary = result.onSurfaceVariant

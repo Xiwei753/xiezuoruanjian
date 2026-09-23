@@ -77,7 +77,7 @@ export class LineNavigationResolver {
     if (state.lines.length === 0) {
       return -1
     }
-    const lineRanges = state.lines.map(l => ({
+    const lineRanges: LineRange[] = state.lines.map((l: NavigationLine): LineRange => ({
       start: l.startUtf16,
       end: l.endUtf16,
       breakKind: l.breakKind,
@@ -87,7 +87,7 @@ export class LineNavigationResolver {
 
   /** 上一行行号。已在第一行时返回 -1。 */
   static getPreviousLineIndex(state: LineLayoutState, position: VisualCaretPosition): number {
-    const currentIdx = this.getCurrentLineIndex(state, position)
+    const currentIdx = LineNavigationResolver.getCurrentLineIndex(state, position)
     if (currentIdx <= 0) {
       return -1
     }
@@ -96,7 +96,7 @@ export class LineNavigationResolver {
 
   /** 下一行行号。已在最后一行时返回 -1。 */
   static getNextLineIndex(state: LineLayoutState, position: VisualCaretPosition): number {
-    const currentIdx = this.getCurrentLineIndex(state, position)
+    const currentIdx = LineNavigationResolver.getCurrentLineIndex(state, position)
     if (currentIdx < 0 || currentIdx >= state.lines.length - 1) {
       return -1
     }
@@ -140,7 +140,7 @@ export class LineNavigationResolver {
    * 调用 horizontalForOffset（统一算法），不再各自实现二分。
    */
   static getCaretX(state: LineLayoutState, position: VisualCaretPosition): number {
-    const lineIdx = this.getCurrentLineIndex(state, position)
+    const lineIdx = LineNavigationResolver.getCurrentLineIndex(state, position)
     if (lineIdx < 0 || lineIdx >= state.lines.length) {
       return 0
     }
