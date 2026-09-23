@@ -19,6 +19,11 @@ import com.xiwei.sujian.feature.editor.layout.cursorRect
  * 本协调器只负责把 [EditorEditFact] + old/new [ComposeLayoutSnapshot]
  * 变成 Android 平台自己的 visual patch。
  *
+ * Issue #737：本协调器只整理 motion 输入 — 生成 [ComposeVisualPatch] 后交给
+ * [ComposeEditorVisualState.drainPendingPatchesAtFrame] 直接构造 [CoordinatedEditMotion]。
+ * 不再"把文字 unit 提前交给 timeline"（timeline 已删除），
+ * 也不直接决定文字动画启动（由 VisualState 在 drain 时根据 motionPolicy 决定）。
+ *
  * `onEditFact()` 和 `onLayout()` 最终只返回 [ComposeVisualPatch]。
  */
 class ComposeVisualFrameCoordinator(
@@ -88,7 +93,7 @@ class ComposeVisualFrameCoordinator(
      * 候选几何到达 — 平台已经算出某个真实 layout（例如 IME preedit 期间的最终文字 B），
      * 但这份 layout 不允许推进 committed baseline。
      *
-     * 只缓存 [latest]，不初始化/推进 [lastConsumed]，不生成 patch，直接返回 [FrameUpdate.Empty]。
+     * 只缓存 [latest]，不初始化/推进 [lastConsumed]，不生成 patch，返回 [FrameUpdate.LayoutOnly]。
      *
      * Issue #735 评论 5775326365：IME preedit 已经是最终文字 B 时，composition 活跃分支把 preedit
      * layout 交给本方法缓存。commit 时无论后面还有没有新的 onTextLayout(B)：
@@ -108,7 +113,8 @@ class ComposeVisualFrameCoordinator(
         )
 
         // 只缓存 latest，不初始化/推进 lastConsumed，不生成 patch。
-        return FrameUpdate.Empty
+        // 返回 LayoutOnly 表示这是一份可静态发布的候选几何（调用方 composition active 分支忽略返回值）。
+        return FrameUpdate.LayoutOnly(snapshot)
     }
 
     /**
@@ -139,18 +145,38 @@ class ComposeVisualFrameCoordinator(
 
     /**
      * 双向合流：当 pending chain 与两份 layout 概念同时满足匹配条件时生成 patch。
+     *
+     * Issue #737 评论 5785295971：返回值按明确语义区分：
+     * - [FrameUpdate.LayoutOnly]：无 pending 且 text 不变（初始 baseline / 纯几何变化）— 可直接静态发布。
+     * - [FrameUpdate.AwaitingFact]：text 变了但 fact 还没配对 — 建立 pending presentation ownership。
+     * - [FrameUpdate.NewPatch]：pending chain 与 old/new layout 匹配成功 — 生成 patch。
      */
     private fun tryBuildPatch(): FrameUpdate {
         val pendingChain = pending
-        if (pendingChain == null) {
-            return FrameUpdate.Empty
-        }
         val consumed = lastConsumed
         val newest = latest
-        if (consumed == null || newest == null) return FrameUpdate.Empty
-        if (newest === consumed) return FrameUpdate.Empty
-        if (pendingChain.baseText != consumed.text) return FrameUpdate.Empty
-        if (pendingChain.targetText != newest.text) return FrameUpdate.Empty
+        // layout 还没到 — 等 layout
+        if (newest == null) return FrameUpdate.AwaitingFact
+
+        if (pendingChain == null) {
+            // 没有 pending edit chain
+            if (consumed == null) {
+                // 首次 layout — 初始 baseline
+                return FrameUpdate.LayoutOnly(newest.layout)
+            }
+            if (consumed.text == newest.text) {
+                // text 不变 — 纯几何变化或相同 layout
+                return FrameUpdate.LayoutOnly(newest.layout)
+            }
+            // text 变了但没 pending fact — layout 先到、fact 后到
+            return FrameUpdate.AwaitingFact
+        }
+
+        // 有 pending chain
+        if (consumed == null) return FrameUpdate.AwaitingFact
+        if (newest === consumed) return FrameUpdate.AwaitingFact // layout 没变，fact 的 target 还没到
+        if (pendingChain.baseText != consumed.text) return FrameUpdate.AwaitingFact
+        if (pendingChain.targetText != newest.text) return FrameUpdate.AwaitingFact
 
         val chain = pendingChain.facts
         val coreTransactionIds = chain.map { it.coreTransactionId }
@@ -237,6 +263,11 @@ class ComposeVisualFrameCoordinator(
                 retainedMoves = retainedMoves,
                 originCaretRect = originCaretRect,
                 targetCaretRect = targetCaretRect,
+                // Issue #737 评论 5781634285 修复点 3：把生成 caret rect 时用的同一份
+                // fact selection end 也收进 patch，供 CoordinatedEditMotion.fromPatch
+                // 构造 CaretTraversal 时取行号，保证 offset 与 rect 同源。
+                originCaretOffset = oldSelectionEnd,
+                targetCaretOffset = newSelectionEnd,
                 durationMs = effectiveDurationMs,
                 animationMode =
                     if (screenSuppressed) {
@@ -299,13 +330,22 @@ private data class PendingEditChain(
 )
 
 /**
- * 帧更新结果 — onLayout / onEditFact 返回。
+ * 帧更新结果 — onLayout / onEditFact / onProvisionalLayout 返回。
+ *
+ * Issue #737 评论 5785295971：拆分原 [Empty] 为两个明确状态。
+ * 旧 [Empty] 把"初始 baseline / 纯几何变化 / 等 fact"三种语义混在一起，
+ * 导致首帧无自定义 caret、几何变化 caret 旧坐标。
  */
 sealed interface FrameUpdate {
-    /** 无新 patch（无 pending / 无匹配 layout）。 */
-    data object Empty : FrameUpdate
+    /** 初始 baseline 或纯 layout-only（text 不变、几何变化或首次 layout）— 可以直接静态发布新 layout。 */
+    data class LayoutOnly(
+        val snapshot: ComposeLayoutSnapshot,
+    ) : FrameUpdate
 
-    /** 新 patch 生成 — overlay 读取 patch 并推进 timeline。 */
+    /** text 改了，但正在等匹配 fact — 建立 pending presentation ownership。 */
+    data object AwaitingFact : FrameUpdate
+
+    /** 新 patch 生成 — overlay 读取 patch 并推进 motion。 */
     data class NewPatch(
         val patch: ComposeVisualPatch,
     ) : FrameUpdate

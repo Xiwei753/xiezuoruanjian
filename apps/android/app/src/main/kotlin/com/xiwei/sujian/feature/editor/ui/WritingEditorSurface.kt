@@ -92,6 +92,11 @@ fun editorSurfaceMode(
  * 素笺自己的文字/光标动画只消费系统最终 [TextLayoutResult] 做显示，
  * 不再拥有或修改编辑器几何。
  *
+ * Issue #737：保留平台自动换行 — BasicTextField 直接消费 [TextLayoutResult]，
+ * 不引入软换行占位字符（U+200B）或正文投影（projection）。
+ * 动画层（[EditorTextFieldDrawLayer] + [CoordinatedEditMotion]）只叠加本次编辑涉及的
+ * glyph 和 caret，不复制整段正文布局。
+ *
  * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
  * 不再通过 [OutputTransformation] 把动画 range 设 `Color.Transparent` 改变 BasicTextField 输出表示。
  * BasicTextField 始终画完整真实正文，[EditorTextFieldDrawLayer] 真正包住 BasicTextField
