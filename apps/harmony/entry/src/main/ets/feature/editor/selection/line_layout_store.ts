@@ -4,10 +4,8 @@
 // cancelWait/resolveWaiters 搬到独立 .ts，供生产 .ets 和 Node 测试共同使用。
 // 不依赖 ArkUI，只依赖 EditorLayoutIdentity + matchesEditorLayoutIdentity。
 
-import {
-  matchesEditorLayoutIdentity,
-  EditorLayoutIdentity,
-} from './editor_layout_identity.ts'
+import { matchesEditorLayoutIdentity } from './editor_layout_identity.ts'
+import type { EditorLayoutIdentity } from './editor_layout_identity.ts'
 
 /** 等待条目。 */
 interface Waiter<TState> {

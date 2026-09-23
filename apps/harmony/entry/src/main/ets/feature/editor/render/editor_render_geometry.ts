@@ -2,14 +2,15 @@
 //
 // Issue #629 评论18：统一 layout source + soft-wrap affinity。
 // 选区矩形 / 光标矩形 / composition 下划线矩形 / 行布局的计算。
-// 类型从 editor_layout_math.ts 导入。
+// 类型从 editor_layout_math.ts 导入（interface 用 import type，解决 Node ESM 运行时解析）。
 // 函数（buildLineCaretStops / resolveVisualLineIndex）在本文件直接定义，
 // 保证测试和生产代码走同一条路径。
 //
 // 所有 offset 是 UTF-16 code unit offset（ArkTS string.length 语义）。
 // 坐标单位 px，相对组件左上角。
 
-import { LineRange, VisualCaretPosition, CaretStop, LineBreakKind, CaretAffinity, nextCodePointBoundary, buildLineCaretStops, horizontalForOffset, offsetForHorizontal, resolveVisualLineIndex } from './editor_layout_math.ts'
+import type { LineRange, VisualCaretPosition, CaretStop } from './editor_layout_math.ts'
+import { LineBreakKind, CaretAffinity, nextCodePointBoundary, buildLineCaretStops, horizontalForOffset, offsetForHorizontal, resolveVisualLineIndex } from './editor_layout_math.ts'
 
 /** 选区矩形（px，相对组件左上）。 */
 export interface SelectionRect {
