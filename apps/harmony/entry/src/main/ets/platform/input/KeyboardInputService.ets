@@ -1,8 +1,9 @@
 // KeyboardInputService — 接 HarmonyOS 原始 KeyEvent，转出平台状态。
 // 不把 KeyEvent/deviceId 传进 Core；转成编辑命令后由 EditorInputAdapter 委托 Coordinator。
 //
-// 真实事件源：@kit.InputKit 的 KeyEvent。normalize 从真实 KeyEvent 提取
-// keyCode / keyText / isShiftPressed / isCtrlPressed / isAltPressed。
+// Issue #744 评论 5794965395 第 3 节：KeyEvent 用 ArkUI 组件事件类型（.onKeyEvent 回调），
+// 不从 @kit.InputKit 导入。normalize 从 ArkUI KeyEvent 提取 keyCode / keyText / timestamp，
+// 修饰键用 getModifierKeyState(['Shift']/['Ctrl']/['Alt'])。
 // translateKeyCode 用真实 keyCode 映射成可读 keyText，不是 String(keyCode)。
 //
 // Issue #629 评论 5 第 5 节：toSemanticCommand 把归一化后的 PlatformKeyEvent 翻译成
@@ -12,6 +13,8 @@
 //
 // Issue #629 评论6 第6部分：删除手写 KeyCode 魔法数字（2001/2052/2057...），
 // 直接引用 Harmony Input Kit 官方 KeyCode 枚举（@kit.InputKit KeyCode）。
+// Issue #744 评论 5794965395 第 3 节：枚举名按 API26 SDK 改名，
+// KEYCODE_DEL/KEYCODE_FORWARD_DEL/KEYCODE_MOVE_HOME/KEYCODE_MOVE_END。
 
 import { KeyCode } from '@kit.InputKit'
 
