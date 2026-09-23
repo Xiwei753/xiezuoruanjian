@@ -1384,12 +1384,38 @@ impl LinuxEditorPipeline {
             // 先把所有旧活动事务从"上一份 canonical 几何"重绑到这份新 canonical，
             // 再处理本次新事务自己的 conflict/rebase。Pipeline 的 new_revision 即将成为
             // 新 canonical basis revision，直接传给 coordinator。
+            //
+            // Issue #738 评论 5796693007 问题1: 正文编辑路径必须先采 rebase frame/handoff
+            // 再 retire CaretDriven。prepare_rebase_handoff_for_edit 在旧事务还活着时
+            // 采样 rebase frame + caret handoff（采到的是真实当前帧，不是终态），
+            // 取消真正被覆盖的冲突事务。reconcile 之后再 create 新事务。
+            // 顺序：prepare → reconcile → create。
+            // - prepare 采到的是旧事务真实当前帧（CaretDriven 还没被推到终态）。
+            // - reconcile retire 旧事务 CaretDriven + rebind Timed Reflow。rebase frame 已采好，
+            //   此时 retire 不影响已采的 frame。
+            // - create 用保存的 handoff 创建新事务。
+            // 用一个统一的 edit_now，保证 prepare 和 reconcile 用同一时刻采样。
+            let edit_now = Instant::now();
+            let prepared_handoff = self
+                .animation_coordinator
+                .prepare_rebase_handoff_for_edit(
+                    &motion,
+                    ctx.typing_animation_enabled,
+                    ctx.smooth_cursor_enabled,
+                    ctx.is_scrolling,
+                    ctx.is_loading,
+                    ctx.is_applying_format,
+                    motion.old_cursor_rect.clone(),
+                    motion.new_cursor_rect.clone(),
+                    cursor_owner_epoch,
+                    edit_now,
+                );
             self.animation_coordinator
                 .reconcile_active_transactions_with_canonical(
                     &motion.new_text,
                     &new_doc_snapshot,
                     new_revision,
-                    Instant::now(),
+                    edit_now,
                 );
             // Issue #738 评论 5788513592 额外要求: reconcile 删除 unit / 完成事务后同步按
             // 剩余 active snapshot ids 收一次 texture cache，不让已经失去 owner 的纹理一直
@@ -1397,26 +1423,25 @@ impl LinuxEditorPipeline {
             let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
             self.texture_cache.retain_active_snapshot_ids(&active_ids);
 
-            let key = self.animation_coordinator.process_transaction(
-                &motion,
-                ctx.typing_animation_enabled,
-                ctx.smooth_cursor_enabled,
-                ctx.is_scrolling,
-                ctx.is_loading,
-                ctx.is_applying_format,
-                motion.old_cursor_rect.clone(),
-                motion.new_cursor_rect.clone(),
-                Some(old_caret.visual_line_id),
-                Some(new_caret.visual_line_id),
-                old_line_top,
-                old_line_bottom,
-                new_line_top,
-                new_line_bottom,
-                &old_snap,
-                &new_snap,
-                cursor_owner_epoch,
-                new_revision,
-            );
+            let key = self
+                .animation_coordinator
+                .create_transaction_from_prepared_handoff(
+                    prepared_handoff,
+                    &motion,
+                    ctx.smooth_cursor_enabled,
+                    motion.old_cursor_rect.clone(),
+                    motion.new_cursor_rect.clone(),
+                    Some(old_caret.visual_line_id),
+                    Some(new_caret.visual_line_id),
+                    old_line_top,
+                    old_line_bottom,
+                    new_line_top,
+                    new_line_bottom,
+                    &old_snap,
+                    &new_snap,
+                    cursor_owner_epoch,
+                    new_revision,
+                );
             // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
             // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
             // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 None，

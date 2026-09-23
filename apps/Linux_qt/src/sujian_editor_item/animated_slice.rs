@@ -516,6 +516,46 @@ impl AnimatedSlice {
         }
     }
 
+    /// Issue #738 评论 5796693007 问题2: 按 `kind` 采 ReflowAnchor 当前帧 document rect
+    /// 的共用 helper，与 `AnimatedSlice::compute_frame` 对 ReflowMove/ReflowCrossFade 的
+    /// document rect 语义保持完全一致。
+    ///
+    /// - `ReflowMove`: x/y 按 `visible` 插值，**w/h 直接使用 `to.w`/`to.h`**
+    ///   （对应 `compute_frame` 第 481-494 行 `w: self.to_document_rect.w, h: self.to_document_rect.h`）。
+    /// - `ReflowCrossFade`: x/y/w/h 四项全部按 `visible` 从 from→to 插值
+    ///   （对应 `compute_frame` 第 496-514 行）。
+    /// - `InsertReveal`/`DeleteConceal`: 不走 reflow anchor 路径，防御性返回 `to.clone()`。
+    ///
+    /// `rebind_timed_units_to_canonical` 采 ReflowMove anchor current_rect 时必须用这个
+    /// helper，不能把 ReflowCrossFade 的四项插值规则误套给 ReflowMove。否则 from/to 尺寸
+    /// 不同时，rebind/split 的第一帧仍可能尺寸跳变（用户这一帧真正看到的 rect 与采出来的
+    /// current_rect 不一致）。
+    pub(crate) fn sample_current_document_rect(
+        kind: AnimatedSliceKind,
+        from: &SourceRect,
+        to: &SourceRect,
+        visible: f64,
+    ) -> SourceRect {
+        let visible = visible.clamp(0.0, 1.0);
+        match kind {
+            AnimatedSliceKind::ReflowMove => SourceRect {
+                x: from.x + (to.x - from.x) * visible,
+                y: from.y + (to.y - from.y) * visible,
+                // 与 compute_frame(ReflowMove) 一致：w/h 直接用 to，不插值。
+                w: to.w,
+                h: to.h,
+            },
+            AnimatedSliceKind::ReflowCrossFade => SourceRect {
+                x: from.x + (to.x - from.x) * visible,
+                y: from.y + (to.y - from.y) * visible,
+                w: from.w + (to.w - from.w) * visible,
+                h: from.h + (to.h - from.h) * visible,
+            },
+            // InsertReveal/DeleteConceal 不走 reflow anchor 路径，防御性返回 to。
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => to.clone(),
+        }
+    }
+
     /// Issue #722 评论 5747719529 核心语义：caret 驱动裁切边界。
     ///
     /// 光标本身就是吞字/吐字的视觉边界。InsertReveal/DeleteConceal 的裁切边界直接

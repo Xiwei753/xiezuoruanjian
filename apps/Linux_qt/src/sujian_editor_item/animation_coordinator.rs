@@ -306,12 +306,48 @@ fn conflicting_units_are_untouched(
 /// 真实 top/bottom（来自 `VisualLine.y` 和 `VisualLine.y + VisualLine.height`）。
 /// 新 track 的 from 端行几何用这些值，不用 caret 自己的细矩形边界。
 #[derive(Clone, Debug)]
-struct RebaseCaretHandoff {
+pub(crate) struct RebaseCaretHandoff {
     sampled: CursorRect,
     remaining_duration_ms: u64,
     sampled_visual_line_id: Option<usize>,
     sampled_line_top: f64,
     sampled_line_bottom: f64,
+}
+
+/// Issue #738 评论 5796693007 问题1: 正文编辑路径先采 rebase frame/handoff 再 retire
+/// CaretDriven 的中间状态。
+///
+/// `prepare_rebase_handoff_for_edit` 在旧事务还活着时采样 rebase frame + caret handoff，
+/// 取消真正被覆盖的冲突事务，但还不创建新事务。reconcile 完成（retire + rebind）后，
+/// 再用这个状态调 `create_transaction_from_prepared_handoff` 创建新事务。
+///
+/// 顺序约束：prepare → reconcile → create。
+/// - prepare 采到的是旧事务真实当前帧（CaretDriven 还没被推到终态）。
+/// - reconcile retire 旧事务 CaretDriven + rebind Timed Reflow。prepare 已采好 rebase frame，
+///   此时 retire 不影响已采的 frame。
+/// - create 用保存的 handoff 创建新事务。
+///
+/// `take_rebase_frames` 内部会 cancel 冲突事务，所以 prepare 阶段取消的旧事务在
+/// reconcile 阶段已经不在 active_transactions 里了，reconcile 只处理未被 cancel 的
+/// 旧事务（untouched 的 + 保留的 passive），符合"untouched transaction 继续自己的时间线"语义。
+pub(crate) enum PreparedRebaseHandoff {
+    Insert {
+        rebase_frames: Vec<RebaseFrame>,
+        caret_handoff: Option<RebaseCaretHandoff>,
+        range_start: usize,
+        range_end: usize,
+        insert_offset_map: OffsetMap,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+    },
+    Delete {
+        rebase_frames: Vec<RebaseFrame>,
+        caret_handoff: Option<RebaseCaretHandoff>,
+        deleted_ranges: Vec<(usize, usize)>,
+        delete_offset_map: OffsetMap,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+    },
 }
 
 /// Issue #690 评论 5681206040 + 5682867529: 构建新事务的 caret track，四个正文入口共用。
@@ -1443,6 +1479,398 @@ impl LinuxEditorAnimationCoordinator {
         (all_rebase_frames, selected_caret_handoff)
     }
 
+    /// Issue #738 评论 5796693007 问题1: 正文编辑路径 prepare 阶段——采 rebase frame +
+    /// caret handoff，取消真正被覆盖的冲突事务，但还不创建新事务。
+    ///
+    /// 在旧事务还活着时调用（CaretDriven 还没被推到终态），采到的是旧事务真实当前帧。
+    /// 返回 `PreparedRebaseHandoff` 供后续 `create_transaction_from_prepared_handoff` 使用。
+    /// 返回 `None` 表示不创建新事务（early return 条件命中或 Cursor 分支）。
+    ///
+    /// `take_rebase_frames` 内部会 cancel 冲突事务，所以 prepare 阶段取消的旧事务在
+    /// 后续 reconcile 阶段已经不在 active_transactions 里了。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_rebase_handoff_for_edit(
+        &mut self,
+        vt: &PreparedEditMotion,
+        typing_animation_enabled: bool,
+        smooth_cursor_enabled: bool,
+        is_scrolling: bool,
+        is_loading: bool,
+        is_applying_format: bool,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        cursor_owner_epoch: u64,
+        now: Instant,
+    ) -> Option<PreparedRebaseHandoff> {
+        // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
+        // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
+        // typing_animation_enabled 决定，不要把两类动画重新绑死。
+        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
+            return None;
+        }
+
+        // Issue #727 约束 5: valid_caret_motion_track 检查。
+        // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
+        // Issue #727 评论 5755858583 问题5: 仅在 smooth_cursor_enabled 时才要求
+        // valid_caret_motion_track——!smooth_cursor_enabled 时不创建 CaretDriven units，
+        // 只创建 Reflow，不需要 caret motion track。
+        let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
+        if smooth_cursor_enabled && !valid_caret_motion_track {
+            return None;
+        }
+
+        let mode = AnimationMode::from_context(is_scrolling, is_loading, is_applying_format);
+        if !mode.should_create_transaction() {
+            return None;
+        }
+
+        // Issue #738 评论 5796693007 问题1: 用 if-else 链而不是 match `EditorAnimationKind::Insert =>`，
+        // 避免与 `process_transaction` 的测试锚点（`EditorAnimationKind::Insert/Delete/Cursor =>`）
+        // 冲突。`process_transaction` 保留原内联 match 结构供 issue687/issue702 白盒测试定位。
+        if vt.kind == EditorAnimationKind::Insert {
+            if let Some(range) = vt.inserted_range {
+                let range_start = range.start().value();
+                let range_end = range.end().value();
+                let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
+                // 先计算 visual_affected_byte_range 得到 old-side range (old_s, old_e)，
+                // 再用 old_s/old_e 查冲突。insert_offset_map 仍保留用于 rebase。
+                let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                    let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                        &vt.old_text,
+                        &vt.new_text,
+                        (range_start, range_start),
+                        (range_start, range_end),
+                    );
+                    (Some((old_s, old_e)), Some((new_s, new_e)))
+                };
+                let (conflict_old_start, conflict_old_end) =
+                    visual_affected_byte_range_old.unwrap_or((range_start, range_start));
+                let conflicting = self.prepared_queue.find_conflicting_transaction(
+                    &vt.old_text,
+                    conflict_old_start,
+                    conflict_old_end,
+                );
+                // 纯插入在 old 文档里就是 range_start 这一个位置点。
+                // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样，
+                // 旧事务还活着，采到的是真实当前帧（CaretDriven 还没被推到终态）。
+                let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                    &conflicting,
+                    "rebased_by_insert",
+                    now,
+                    Some((&[(range_start, range_start)], &insert_offset_map)),
+                    &vt.old_text,
+                    cursor_owner_epoch,
+                );
+                return Some(PreparedRebaseHandoff::Insert {
+                    rebase_frames,
+                    caret_handoff,
+                    range_start,
+                    range_end,
+                    insert_offset_map,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                });
+            }
+            None
+        } else if vt.kind == EditorAnimationKind::Delete {
+            let deleted_ranges: Vec<(usize, usize)> = if let Some(range) = vt.deleted_range {
+                vec![(range.start().value(), range.end().value())]
+            } else {
+                let changes = diff_plain_text(&vt.old_text, &vt.new_text);
+                let mut ranges = Vec::new();
+                for change in &changes {
+                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                        let range_start = index.value();
+                        let range_end = range_start + text.len();
+                        ranges.push((range_start, range_end));
+                    }
+                }
+                ranges
+            };
+
+            let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
+            let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
+            let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+            // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
+            // 先计算 visual_affected_byte_range 得到 old-side range (old_s, old_e)，
+            // 再用 old_s/old_e 查冲突。delete_offset_map 仍保留用于 rebase。
+            let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                    &vt.old_text,
+                    &vt.new_text,
+                    (rebase_byte_start, rebase_byte_end),
+                    (rebase_byte_start, rebase_byte_start),
+                );
+                (Some((old_s, old_e)), Some((new_s, new_e)))
+            };
+            let (conflict_old_start, conflict_old_end) =
+                visual_affected_byte_range_old.unwrap_or((rebase_byte_start, rebase_byte_end));
+            let conflicting = self.prepared_queue.find_conflicting_transaction(
+                &vt.old_text,
+                conflict_old_start,
+                conflict_old_end,
+            );
+            // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样。
+            let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                &conflicting,
+                "rebased_by_delete",
+                now,
+                Some((&deleted_ranges, &delete_offset_map)),
+                &vt.old_text,
+                cursor_owner_epoch,
+            );
+            Some(PreparedRebaseHandoff::Delete {
+                rebase_frames,
+                caret_handoff,
+                deleted_ranges,
+                delete_offset_map,
+                visual_affected_byte_range_old,
+                visual_affected_byte_range_new,
+            })
+        } else {
+            // Issue #702: 纯光标移动不创建文字事务（Cursor 分支）。
+            // 纯光标移动直接维护 CursorAnimationState（由 rendering.rs
+            // update_cursor_visual_position → build_cursor_plan → apply_plan
+            // 构造），用 Scene Graph 当前帧 frame_now 推进 from→to 动画，
+            // 不再伪装成文字事务（units=空）。
+            // 此分支不创建任何事务，返回 None。
+            None
+        }
+    }
+
+    /// Issue #738 评论 5796693007 问题1: 正文编辑路径 create 阶段——用 prepare 阶段
+    /// 采好的 rebase frame + caret handoff 创建新事务。
+    ///
+    /// 必须在 `prepare_rebase_handoff_for_edit` 之后、`reconcile_active_transactions_with_canonical`
+    /// 之后调用。`prepared` 为 None 时直接返回 None（prepare 阶段 early return 或 Cursor 分支）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_transaction_from_prepared_handoff(
+        &mut self,
+        prepared: Option<PreparedRebaseHandoff>,
+        vt: &PreparedEditMotion,
+        smooth_cursor_enabled: bool,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        old_cursor_visual_line_id: Option<usize>,
+        new_cursor_visual_line_id: Option<usize>,
+        old_cursor_line_top: f64,
+        old_cursor_line_bottom: f64,
+        new_cursor_line_top: f64,
+        new_cursor_line_bottom: f64,
+        old_snapshot: &EditorLayoutSnapshot,
+        new_snapshot: &EditorLayoutSnapshot,
+        cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
+    ) -> Option<VisualTransactionKey> {
+        let prepared = prepared?;
+        match prepared {
+            PreparedRebaseHandoff::Insert {
+                rebase_frames,
+                caret_handoff,
+                range_start,
+                range_end,
+                insert_offset_map,
+                visual_affected_byte_range_old,
+                visual_affected_byte_range_new,
+            } => {
+                let key = self.alloc_key();
+                let mut slices = Vec::new();
+
+                // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
+                // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
+                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
+                // InsertReveal（CaretDriven unit），只保留 Reflow。
+                let inserted_range_tuple = (range_start, range_end);
+                if smooth_cursor_enabled {
+                    let reveal_slices =
+                        build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
+                    slices.extend(reveal_slices);
+                }
+
+                let reflow_slices = build_cluster_reflow_slices(
+                    key,
+                    old_snapshot,
+                    new_snapshot,
+                    &insert_offset_map,
+                    &[],
+                    &[inserted_range_tuple],
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                );
+                slices.extend(reflow_slices);
+
+                let mut units: Vec<PreparedVisualUnit> = slices
+                    .into_iter()
+                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                    .collect();
+                match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
+
+                // Issue #690 评论 5681206040: 构建 caret track。
+                // 有 handoff 时 from = sampled caret, duration = 旧 track 剩余时长；
+                // 无 handoff 时 from = old_cursor_rect, duration = 事务时长。
+                // Issue #690 评论 5682867529: 不再传 now，started_at 留 None，等 Rendering 再启动。
+                let cursor_visual_track = build_cursor_visual_track(
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                    old_cursor_visual_line_id,
+                    new_cursor_visual_line_id,
+                    old_cursor_line_top,
+                    old_cursor_line_bottom,
+                    new_cursor_line_top,
+                    new_cursor_line_bottom,
+                    caret_handoff,
+                    vt.duration_ms,
+                );
+                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
+                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
+                // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
+                // (range_start, range_start)，new 侧是 inserted_range。
+                let prepared_tx = PreparedTextVisualTransaction {
+                    key,
+                    state: TextVisualTransactionState::Pending,
+                    operation_kind: TextVisualOperationKind::Insert,
+                    timeline: TransactionTimeline::new(vt.duration_ms),
+                    units,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                    cursor_visual_track,
+                    cancel_reason: None,
+                    texture_prepared: false,
+                    old_snapshot: Some(old_snapshot.clone()),
+                    new_snapshot: Some(new_snapshot.clone()),
+                    cursor_owner_epoch,
+                    caret_motion_retired: false,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                    layout_basis_revision,
+                };
+
+                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+                emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
+                editor_animation_debug_log(&format!(
+                    "anim_event: key={:?} op=Insert inserted={:?} unit_kinds={:?} carried_rebase={}",
+                    key,
+                    inserted_range_tuple,
+                    unit_kind_labels(&prepared_tx.units),
+                    rebase_frames.len(),
+                ));
+
+                self.prepared_queue.enqueue(prepared_tx);
+
+                Some(key)
+            }
+            PreparedRebaseHandoff::Delete {
+                rebase_frames,
+                caret_handoff,
+                deleted_ranges,
+                delete_offset_map,
+                visual_affected_byte_range_old,
+                visual_affected_byte_range_new,
+            } => {
+                let key = self.alloc_key();
+
+                let mut slices = Vec::new();
+
+                // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
+                // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
+                // 对每个 deleted range 生成显式 DeleteConceal 切片。
+                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
+                // DeleteConceal（CaretDriven unit），只保留 Reflow。
+                if smooth_cursor_enabled {
+                    for &(d_start, d_end) in &deleted_ranges {
+                        let conceal_slices = build_delete_conceal_slices(
+                            key,
+                            old_snapshot,
+                            (d_start, d_end),
+                            old_cursor_rect.as_ref(),
+                        );
+                        slices.extend(conceal_slices);
+                    }
+                }
+
+                let reflow_slices = build_cluster_reflow_slices(
+                    key,
+                    old_snapshot,
+                    new_snapshot,
+                    &delete_offset_map,
+                    &deleted_ranges,
+                    &[],
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                );
+                slices.extend(reflow_slices);
+
+                let mut units: Vec<PreparedVisualUnit> = slices
+                    .into_iter()
+                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                    .collect();
+                match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
+
+                // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
+                let cursor_visual_track = build_cursor_visual_track(
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                    old_cursor_visual_line_id,
+                    new_cursor_visual_line_id,
+                    old_cursor_line_top,
+                    old_cursor_line_bottom,
+                    new_cursor_line_top,
+                    new_cursor_line_bottom,
+                    caret_handoff,
+                    vt.duration_ms,
+                );
+                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
+                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
+                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
+                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
+                let prepared_tx = PreparedTextVisualTransaction {
+                    key,
+                    state: TextVisualTransactionState::Pending,
+                    operation_kind: TextVisualOperationKind::Delete,
+                    timeline: TransactionTimeline::new(vt.duration_ms),
+                    units,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                    cursor_visual_track,
+                    cancel_reason: None,
+                    texture_prepared: false,
+                    old_snapshot: Some(old_snapshot.clone()),
+                    new_snapshot: Some(new_snapshot.clone()),
+                    cursor_owner_epoch,
+                    caret_motion_retired: false,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                    layout_basis_revision,
+                };
+
+                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+                emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
+                editor_animation_debug_log(&format!(
+                    "anim_event: key={:?} op=Delete deleted={:?} unit_kinds={:?} carried_rebase={}",
+                    key,
+                    deleted_ranges,
+                    unit_kind_labels(&prepared_tx.units),
+                    rebase_frames.len(),
+                ));
+
+                self.prepared_queue.enqueue(prepared_tx);
+
+                Some(key)
+            }
+        }
+    }
+
+    /// Issue #738 评论 5796693007 问题1: `process_transaction` 保留原内联 match 结构
+    /// 作为 issue687/issue702 白盒测试的锚点（`EditorAnimationKind::Insert/Delete/Cursor =>`
+    /// + `build_cluster_reflow_slices` 调用）。
+    ///
+    /// 正文编辑主路径 `prepare_edit_motion` 已改为显式调
+    /// `prepare_rebase_handoff_for_edit` → `reconcile_active_transactions_with_canonical` →
+    /// `create_transaction_from_prepared_handoff`，保证旧事务 CaretDriven 在 rebase frame
+    /// 采好之后才 retire。此方法保留供测试锚点和潜在的未来直接调用，语义与
+    /// prepare → create（中间不插 reconcile）等价。
+    #[allow(clippy::too_many_arguments)]
     pub fn process_transaction(
         &mut self,
         vt: &PreparedEditMotion,

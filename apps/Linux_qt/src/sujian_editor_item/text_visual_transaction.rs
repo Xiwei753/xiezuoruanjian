@@ -1187,17 +1187,17 @@ impl PreparedTextVisualTransaction {
                     }
                 };
                 // current_rect: anchor 旧 from→to 按 visible 采样（与 compute_frame 一致）。
-                // Issue #738 评论 5795950264 问题2: w/h 按 visible 插值。
-                let current_rect = SourceRect {
-                    x: anchor.from_document_rect.x
-                        + (anchor.to_document_rect.x - anchor.from_document_rect.x) * visible,
-                    y: anchor.from_document_rect.y
-                        + (anchor.to_document_rect.y - anchor.from_document_rect.y) * visible,
-                    w: anchor.from_document_rect.w
-                        + (anchor.to_document_rect.w - anchor.from_document_rect.w) * visible,
-                    h: anchor.from_document_rect.h
-                        + (anchor.to_document_rect.h - anchor.from_document_rect.h) * visible,
-                };
+                // Issue #738 评论 5796693007 问题2: ReflowMove 的 w/h 直接用
+                // to_document_rect.w/h（与 compute_frame(ReflowMove) 第 481-494 行一致），
+                // 不再误套 ReflowCrossFade 的四项插值。此处已跳过 ReflowCrossFade
+                //（上方 `if unit.slice.kind == AnimatedSliceKind::ReflowCrossFade { continue; }`），
+                // 一定是 ReflowMove，用共用 helper 按 kind 采 current rect。
+                let current_rect = AnimatedSlice::sample_current_document_rect(
+                    unit.slice.kind,
+                    &anchor.from_document_rect,
+                    &anchor.to_document_rect,
+                    visible,
+                );
                 let target_rect = target_hit.doc_rect.clone();
                 // (current_rect, target_rect)
                 anchor_rebinds.push((current_rect, target_rect));
