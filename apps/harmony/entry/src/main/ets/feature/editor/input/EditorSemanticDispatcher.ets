@@ -62,7 +62,7 @@ import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dt
 import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { CaretAffinity, LineBreakKind, VisualCaretPosition } from '../render/editor_layout_math'
-import type { EditorLayoutIdentity } from '../selection/editor_layout_identity'
+import { EditorLayoutIdentity } from '../selection/editor_layout_identity'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。

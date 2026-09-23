@@ -11,7 +11,7 @@
 import { EditorLayoutSnapshot } from './EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { layoutLines, hitTestPoint, CaretAffinity } from './editor_layout_math'
-import type { VisualCaretPosition } from './editor_layout_math'
+import { VisualCaretPosition } from './editor_layout_math'
 import {
   toLineLayouts,
   computeSelectionRects,
