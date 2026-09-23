@@ -1374,16 +1374,16 @@ impl PreparedTextVisualTransaction {
                         let current_rect = SourceRect {
                             x: anchor.from_document_rect.x
                                 + (anchor.to_document_rect.x - anchor.from_document_rect.x)
-                                * visible,
+                                    * visible,
                             y: anchor.from_document_rect.y
                                 + (anchor.to_document_rect.y - anchor.from_document_rect.y)
-                                * visible,
+                                    * visible,
                             w: anchor.from_document_rect.w
                                 + (anchor.to_document_rect.w - anchor.from_document_rect.w)
-                                * visible,
+                                    * visible,
                             h: anchor.from_document_rect.h
                                 + (anchor.to_document_rect.h - anchor.from_document_rect.h)
-                                * visible,
+                                    * visible,
                         };
                         let target_rect = target_hit.doc_rect.clone();
                         unit_anchor_rebinds.push((current_rect, target_rect));

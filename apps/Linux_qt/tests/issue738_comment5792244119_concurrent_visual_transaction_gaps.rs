@@ -59,11 +59,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 #[test]
 fn issue1_fix_build_canonical_reuses_editor_layout_generation() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(
-        &src,
-        "fn build_canonical_snapshot_for_current_layout",
-        4800,
-    );
+    let window = function_window(&src, "fn build_canonical_snapshot_for_current_layout", 4800);
     assert!(
         window.contains("editor_layout: &crate::editor::layout::EditorLayout"),
         "修复后 build_canonical_snapshot_for_current_layout 应接收 editor_layout 参数，\
@@ -90,11 +86,7 @@ fn issue1_fix_build_canonical_reuses_editor_layout_generation() {
 #[test]
 fn issue1_fix_fallback_path_clears_layout_generation() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(
-        &src,
-        "fn build_canonical_snapshot_for_current_layout",
-        4800,
-    );
+    let window = function_window(&src, "fn build_canonical_snapshot_for_current_layout", 4800);
     assert!(
         window.contains("begin_layout_generation"),
         "fallback 路径（无 prepared layout）应 begin_layout_generation 分配临时 generation。"
@@ -150,11 +142,7 @@ fn issue2_fix_rebind_decision_has_split_variant() {
 #[test]
 fn issue2_fix_rebind_uses_split_for_inconsistent_vectors() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(
-        &src,
-        "fn rebind_timed_units_to_canonical",
-        12000,
-    );
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 12000);
     assert!(
         window.contains("anchor_vectors"),
         "修复后 rebind 应计算各 anchor 的 movement vector (anchor_vectors)。"
@@ -197,11 +185,7 @@ fn issue2_fix_build_split_replacement_units_exists() {
 #[test]
 fn issue2_fix_apply_decision_handles_split() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(
-        &src,
-        "fn rebind_timed_units_to_canonical",
-        32000,
-    );
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 32000);
     assert!(
         window.contains("Some(RebindDecision::Split(replacement_units))"),
         "修复后应用决策时应处理 Split 变体。"
@@ -340,11 +324,7 @@ fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
 #[test]
 fn issue3_fix_unpaired_crossfade_group_remove() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(
-        &src,
-        "fn rebind_timed_units_to_canonical",
-        16000,
-    );
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 16000);
     assert!(
         window.contains("缺 side 的 group"),
         "修复后未配对 CrossFade 应有 '缺 side 的 group' 注释说明整组失效处理。"

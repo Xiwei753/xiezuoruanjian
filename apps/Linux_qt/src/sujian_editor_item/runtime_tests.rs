@@ -899,8 +899,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             .animation_coordinator_mut()
             .active_text_transaction_key();
         assert!(
-            active_key_after_retire.is_none()
-                || active_key_after_retire != Some(tx_key),
+            active_key_after_retire.is_none() || active_key_after_retire != Some(tx_key),
             "retired 事务不应被 active_text_transaction_key() 返回"
         );
 

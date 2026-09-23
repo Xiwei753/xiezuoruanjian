@@ -341,6 +341,8 @@ impl EditorInputHost for SujianEditorItem {
                         new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
                         layout_basis_revision,
+                        std::time::Instant::now(),
+                        None,
                     );
             }
         }

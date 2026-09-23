@@ -117,7 +117,9 @@ fn issue710_comment5735006606_commit_expands_candidate_range_before_new_snapshot
     // Issue #738 评论 5797637204: composition commit 改用 build_editor_layout_snapshot_with_canonical
     // 同时拿 (EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)，函数名变了但坐标契约不变。
     assert!(
-        body.contains("build_editor_layout_snapshot_with_canonical(width, true, new_composition_range)"),
+        body.contains(
+            "build_editor_layout_snapshot_with_canonical(width, true, new_composition_range)"
+        ),
         "record_composition_commit_transaction 必须把 new_composition_range 传给 new_snapshot"
     );
     // raw candidate range 不能直接作为 composition_range

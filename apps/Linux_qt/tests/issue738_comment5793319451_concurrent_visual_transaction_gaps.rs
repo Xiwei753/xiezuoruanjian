@@ -57,7 +57,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 #[test]
 fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(&src, "fn prepare_edit_motion", 26000);
+    let window = function_window(&src, "fn prepare_edit_motion", 28000);
 
     // 修复后：layout_revision = new_revision 存在。
     assert!(
@@ -75,8 +75,10 @@ fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     assert!(
         rev_pos < iflet_pos,
         "修复后 self.layout_revision = new_revision; 应在 if let Some(key) = key 之前，\
-         实际 rev_pos={} > iflet_pos={}。"
-    , rev_pos, iflet_pos);
+         实际 rev_pos={} > iflet_pos={}。",
+        rev_pos,
+        iflet_pos
+    );
 
     // 修复后：if let Some(key) = key 块内不再包含 layout_revision 赋值。
     // 取 if let 块之后 400 字符窗口检查不含 layout_revision = new_revision。

@@ -145,11 +145,7 @@ fn fix1f_record_composition_commit_uses_helper_with_canonical() {
 #[test]
 fn fix2a_helper_build_editor_layout_snapshot_with_canonical_exists() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let window = function_window(
-        &src,
-        "fn build_editor_layout_snapshot_with_canonical",
-        8000,
-    );
+    let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
     assert!(
         window.contains("-> ("),
         "修复后 build_editor_layout_snapshot_with_canonical 应返回 tuple。"
@@ -252,9 +248,7 @@ fn fix4b_set_layout_revision_after_handle_composition_commit() {
     let set_rev_marker = ".set_layout_revision(";
     let set_canonical_marker = ".set_current_canonical_snapshot(";
 
-    let handle_pos = window
-        .find(HANDLE_CALL)
-        .expect("handle 调用已确认存在");
+    let handle_pos = window.find(HANDLE_CALL).expect("handle 调用已确认存在");
     let set_rev_pos = window
         .find(set_rev_marker)
         .expect("set_layout_revision 调用已确认存在");

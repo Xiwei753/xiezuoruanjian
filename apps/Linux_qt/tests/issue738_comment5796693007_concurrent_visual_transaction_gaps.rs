@@ -154,15 +154,11 @@ fn fix1d_prepare_called_before_reconcile_in_prepare_edit_motion() {
         "修复后 prepare_edit_motion 应调 .create_transaction_from_prepared_handoff( 创建新事务。"
     );
 
-    let prepare_pos = window
-        .find(prepare_call)
-        .expect("prepare 调用已确认存在");
+    let prepare_pos = window.find(prepare_call).expect("prepare 调用已确认存在");
     let reconcile_pos = window
         .find(reconcile_marker)
         .expect("reconcile 调用已确认存在");
-    let create_pos = window
-        .find(create_call)
-        .expect("create 调用已确认存在");
+    let create_pos = window.find(create_call).expect("create 调用已确认存在");
 
     assert!(
         prepare_pos < reconcile_pos,
@@ -193,7 +189,7 @@ fn fix1e_unified_edit_now_passed_to_prepare_and_reconcile() {
     );
     // edit_now 传给 prepare_rebase_handoff_for_edit。
     assert!(
-        window.contains("cursor_owner_epoch,\n                    edit_now,\n                );"),
+        window.contains("cursor_owner_epoch,\n                edit_now,\n            );"),
         "修复后 edit_now 应传给 prepare_rebase_handoff_for_edit。"
     );
     // edit_now 传给 reconcile_active_transactions_with_canonical。
@@ -312,9 +308,7 @@ fn fix2e_reflow_move_current_rect_no_manual_wh_interpolation() {
 
     // 定位 helper 调用处，检查调用处前后 200 字符不含手写 w 插值。
     let helper_call = "AnimatedSlice::sample_current_document_rect";
-    let call_pos = window
-        .find(helper_call)
-        .expect("helper 调用已确认存在");
+    let call_pos = window.find(helper_call).expect("helper 调用已确认存在");
     let region_start = call_pos.saturating_sub(200);
     let region_end = (call_pos + 400).min(window.len());
     let region = &window[region_start..region_end];

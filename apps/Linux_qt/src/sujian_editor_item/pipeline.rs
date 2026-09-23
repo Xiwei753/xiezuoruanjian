@@ -529,10 +529,8 @@ impl LinuxEditorPipeline {
             .as_ref()
             .map(|h| h.generation)
             .unwrap_or_else(|| fallback_gen.unwrap_or(0));
-        let visuals_lines: &[crate::editor::layout::VisualLine] = prepared_handle
-            .as_ref()
-            .map(|h| h.lines)
-            .unwrap_or(&[]);
+        let visuals_lines: &[crate::editor::layout::VisualLine] =
+            prepared_handle.as_ref().map(|h| h.lines).unwrap_or(&[]);
         if !visuals_lines.is_empty() {
             let visuals_handle = layout::PreparedLayoutHandle {
                 generation: visuals_gen,
@@ -1217,9 +1215,20 @@ impl LinuxEditorPipeline {
                     generation: new_generation,
                     lines: &new_doc_snapshot.visual_lines,
                 };
+                let mut new_raster_ids = diff.new_raster_line_ids.clone();
+                for (rs, re) in self
+                    .animation_coordinator
+                    .collect_active_rebind_ranges(&motion.new_text)
+                {
+                    for (i, l) in new_doc_snapshot.visual_lines.iter().enumerate() {
+                        if l.byte_start < re && l.byte_end > rs && !new_raster_ids.contains(&i) {
+                            new_raster_ids.push(i);
+                        }
+                    }
+                }
                 let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
                     &new_handle,
-                    &diff.new_raster_line_ids,
+                    &new_raster_ids,
                     ctx.dpr,
                     &ctx.text_color,
                 );
@@ -1408,20 +1417,18 @@ impl LinuxEditorPipeline {
             // - create 用保存的 handoff 创建新事务。
             // 用一个统一的 edit_now，保证 prepare 和 reconcile 用同一时刻采样。
             let edit_now = Instant::now();
-            let prepared_handoff = self
-                .animation_coordinator
-                .prepare_rebase_handoff_for_edit(
-                    &motion,
-                    ctx.typing_animation_enabled,
-                    ctx.smooth_cursor_enabled,
-                    ctx.is_scrolling,
-                    ctx.is_loading,
-                    ctx.is_applying_format,
-                    motion.old_cursor_rect.clone(),
-                    motion.new_cursor_rect.clone(),
-                    cursor_owner_epoch,
-                    edit_now,
-                );
+            let prepared_handoff = self.animation_coordinator.prepare_rebase_handoff_for_edit(
+                &motion,
+                ctx.typing_animation_enabled,
+                ctx.smooth_cursor_enabled,
+                ctx.is_scrolling,
+                ctx.is_loading,
+                ctx.is_applying_format,
+                motion.old_cursor_rect.clone(),
+                motion.new_cursor_rect.clone(),
+                cursor_owner_epoch,
+                edit_now,
+            );
             self.animation_coordinator
                 .reconcile_active_transactions_with_canonical(
                     &motion.new_text,

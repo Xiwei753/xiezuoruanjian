@@ -119,8 +119,7 @@ fn issue1_build_render_plan_full_samples_caret_before_basis_check() {
          之后才调用 build_text_animation_plan_with_sample（位置 {}）检查 \
          layout_basis_revision。caret motion 在 basis 检查之前采样，旧事务的 caret \
          track 已被采样喂给 cursor layer，basis 守卫只挡 glyph/clip 不挡 caret。",
-        sample_pos,
-        build_anim_pos
+        sample_pos, build_anim_pos
     );
 }
 
@@ -130,11 +129,7 @@ fn issue1_build_render_plan_full_samples_caret_before_basis_check() {
 #[test]
 fn issue1_caret_owner_selection_ignores_layout_basis() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(
-        &src,
-        "fn active_text_transaction_key_with_epoch",
-        800,
-    );
+    let window = function_window(&src, "fn active_text_transaction_key_with_epoch", 800);
     // 当前缺陷：函数体里只检查 cursor_owner_epoch 和 caret_motion_retired，
     // 不检查 tx.layout_basis_revision
     let checks_layout_basis = window.contains("layout_basis_revision");
@@ -160,9 +155,9 @@ fn issue2_merge_two_spans_multiple_clusters_byte_range() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
     let window = function_window(&src, "fn merge_two", 800);
     // 当前缺陷：合并后 byte range 取 min/max，覆盖多个原始 cluster
-    let merges_byte_range_across_clusters =
-        window.contains("byte_start: a.byte_start.min(b.byte_start)")
-            && window.contains("byte_end: a.byte_end.max(b.byte_end)");
+    let merges_byte_range_across_clusters = window
+        .contains("byte_start: a.byte_start.min(b.byte_start)")
+        && window.contains("byte_end: a.byte_end.max(b.byte_end)");
     assert!(
         !merges_byte_range_across_clusters,
         "merge_two 把相邻 slice 合并为 byte_start = a.byte_start.min(b.byte_start)、\

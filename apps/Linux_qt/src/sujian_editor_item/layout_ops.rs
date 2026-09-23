@@ -168,6 +168,11 @@ impl SujianEditorItem {
         // 再并入 composition range 直接覆盖的行，确保 IME commit 后 downstream reflow 行
         // 也提取动画视觉（handle_composition_commit_or_cancel 会遍历 candidate_byte_end
         // 之后的行做 reflow，这些行没有动画视觉会导致 source_rect 缺失甚至 texture_failed）。
+        // Issue #738 评论 5798704669 问题2: 合并 active rebind ranges coverage。
+        // 远处仍存活的 Timed Reflow 的目标行也需要 clusters，否则
+        // reconcile_active_transactions_with_canonical 遍历远处 Reflow 时
+        // find_clusters_in_canonical 返回空 → RebindDecision::Remove 误删。
+        // 只合并 coverage，不改成"每次全文 QImage 栅格化"。
         if affected_start < affected_end {
             let line_ids: Vec<usize> = {
                 let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
@@ -197,6 +202,22 @@ impl SujianEditorItem {
                         && !ids.contains(&i)
                     {
                         ids.push(i);
+                    }
+                }
+                // Issue #738 评论 5798704669 问题2: 合并 active rebind ranges 对应的
+                // 新 canonical line ids。collect_active_rebind_ranges 返回 current text
+                // 中的 byte ranges（远处 Reflow 的目标行），把这些 range 对应的
+                // doc_snapshot.visual_lines 行 id 并入 line_ids，确保远处 Reflow 的
+                // 目标行在 canonical 里有 clusters。
+                let active_rebind_ranges = self
+                    .pipeline
+                    .animation_coordinator()
+                    .collect_active_rebind_ranges(&self.buffer.text);
+                for (rs, re) in &active_rebind_ranges {
+                    for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
+                        if l.byte_start < *re && l.byte_end > *rs && !ids.contains(&i) {
+                            ids.push(i);
+                        }
                     }
                 }
                 ids

@@ -61,7 +61,11 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 #[test]
 fn fix1a_reconcile_retires_caret_driven_before_rebind() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(&src, "fn reconcile_active_transactions_with_canonical", 6000);
+    let window = function_window(
+        &src,
+        "fn reconcile_active_transactions_with_canonical",
+        6000,
+    );
 
     let retire_marker = "retire_caret_driven_units_for_transaction(key)";
     let rebind_marker = "rebind_timed_units_to_canonical";
@@ -75,8 +79,12 @@ fn fix1a_reconcile_retires_caret_driven_before_rebind() {
         "修复后 reconcile 应调 rebind_timed_units_to_canonical 重绑 Timed Reflow。"
     );
 
-    let retire_pos = window.find(retire_marker).expect("retire marker 已确认存在");
-    let rebind_pos = window.find(rebind_marker).expect("rebind marker 已确认存在");
+    let retire_pos = window
+        .find(retire_marker)
+        .expect("retire marker 已确认存在");
+    let rebind_pos = window
+        .find(rebind_marker)
+        .expect("rebind marker 已确认存在");
     assert!(
         retire_pos < rebind_pos,
         "修复后 retire 调用必须在 rebind 调用之前，否则 rebind 会先提升 layout_basis_revision \

@@ -178,10 +178,12 @@ impl SujianEditorItem {
         // Issue #735: EditorEngine 已删除，不再调用 create_transaction。
         // composition commit 的动画由 handle_composition_commit_or_cancel 直接处理，
         // 不需要 EditorTransaction 中间结构。
+        // Issue #738 评论 5798704669 问题1: 不再在 commit 路径前置 cancel_active_composition。
+        // 旧 CompositionUpdate transaction 留在队列，prepare_composition_commit_handoff
+        // 在旧事务仍活着时采样 rebase frame + caret handoff（采到真实当前帧），
+        // take_rebase_frames 自己 cancel 被覆盖的旧 composition transaction。
+        // 顺序：prepare → reconcile → handle(create) → commit。
         let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
-        self.pipeline
-            .animation_coordinator_mut()
-            .cancel_active_composition(cancel_reason);
 
         // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
         // 走 Promote=true，generation 直接成为 current，不再用完即删。
@@ -189,8 +191,8 @@ impl SujianEditorItem {
         // 让 composition commit 路径能把新 canonical 提交到 Pipeline.current_canonical_snapshot
         // 并作为 reconcile_active_transactions_with_canonical 的新 canonical 几何。
         // 一次排版同时产出两份视图，不再单独排一次 canonical。
-        let (new_snapshot, new_canonical) = self
-            .build_editor_layout_snapshot_with_canonical(width, true, new_composition_range);
+        let (new_snapshot, new_canonical) =
+            self.build_editor_layout_snapshot_with_canonical(width, true, new_composition_range);
         // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
         // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
         let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
@@ -242,10 +244,29 @@ impl SujianEditorItem {
         //   5. 无条件提交 Pipeline.layout_revision + current_canonical_snapshot
         //      （与普通路径 pipeline.rs:1452/1478 一致），basis 守卫（==/!=）才能正确
         //      识别旧事务过期，canonical 正文立即接管。
-        // 顺序：cancel 旧 composition → reconcile passive reflow → 提升 canonical →
+        // 顺序：prepare handoff → reconcile passive reflow → 提升 canonical →
         //       创建新 revision 的事务。
         let new_revision = LayoutRevision::next();
         let edit_now = std::time::Instant::now();
+        // Issue #738 评论 5798704669 问题1: prepare 阶段——在旧 CompositionUpdate
+        // 仍活着时采 rebase frames + caret handoff，用外层统一 edit_now 采样。
+        // take_rebase_frames 自己 cancel 被覆盖的旧 composition transaction。
+        let prepared_handoff = self
+            .pipeline
+            .animation_coordinator_mut()
+            .prepare_composition_commit_handoff(
+                &old_snapshot,
+                &new_snapshot,
+                preedit_byte_start,
+                preedit_byte_end,
+                true,
+                candidate_byte_start,
+                candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
+                self.cursor_ctrl.cursor_owner_epoch,
+                edit_now,
+            );
         self.pipeline
             .animation_coordinator_mut()
             .reconcile_active_transactions_with_canonical(
@@ -288,6 +309,8 @@ impl SujianEditorItem {
                 new_line_bottom,
                 self.cursor_ctrl.cursor_owner_epoch,
                 new_revision,
+                edit_now,
+                Some(prepared_handoff),
             );
 
         // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
