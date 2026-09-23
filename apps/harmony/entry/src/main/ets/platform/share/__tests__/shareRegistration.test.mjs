@@ -3,25 +3,56 @@
 //
 // Issue #629 comment5 part7: start returns real registration success/failure, not always true.
 
-// TapShareService.start spec
-function makeTapShare(harmonyShare) {
+// TapShareService.start spec — 委托 KnockShareApi12 facade。
+// Service 不直接调 harmonyShare；经 impl facade 的 isSupported + startListening。
+// 边界：稳定 Service 不 import @kit.ShareKit，系统调用收在 impl/api12。
+// knockImpl: { isSupported(): boolean, startListening(getPayload): boolean, stopListening(): void }
+function makeTapShare(knockImpl) {
   return {
     listening: false,
     supported: false,
+    currentPayload: null,
     start() {
       if (this.listening) return true
-      try {
-        harmonyShare.on('knockShare', () => {})
-        this.listening = true
-        this.supported = true
-        return true
-      } catch (e) {
+      if (!knockImpl.isSupported()) {
         this.listening = false
         this.supported = false
         return false
       }
+      const ok = knockImpl.startListening(() => this.currentPayload)
+      if (ok) {
+        this.listening = true
+        this.supported = true
+        return true
+      }
+      this.listening = false
+      this.supported = false
+      return false
     },
-    isSupported() { return this.supported }
+    isSupported() {
+      if (!this.listening) this.supported = knockImpl.isSupported()
+      return this.supported
+    }
+  }
+}
+
+// 默认 KnockShareApi12 stub：isSupported=true，startListening 调 harmonyShare.on 返回真实结果。
+// harmonyShare.on('knockShare', cb) 是无 capability 基础重载（since 5.0.0(12)）。
+function makeKnockImpl(harmonyShare, opts) {
+  const supported = opts && opts.supported !== undefined ? opts.supported : true
+  return {
+    isSupported() { return supported },
+    startListening(getPayload) {
+      try {
+        harmonyShare.on('knockShare', () => {})
+        return true
+      } catch (e) {
+        return false
+      }
+    },
+    stopListening() {
+      try { harmonyShare.off('knockShare') } catch (e) {}
+    }
   }
 }
 
@@ -97,7 +128,7 @@ console.log('AirTransfer/TapShare real registration result test')
 console.log('1. TapShareService.start success returns true')
 {
   const hs = makeHarmonyShare(false)
-  const tap = makeTapShare(hs)
+  const tap = makeTapShare(makeKnockImpl(hs))
   const ok = tap.start()
   assert(ok === true, 'start returns true')
   assert(tap.listening === true, 'listening=true')
@@ -107,21 +138,33 @@ console.log('1. TapShareService.start success returns true')
 console.log('2. TapShareService.start failure returns false (not always true)')
 {
   const hs = makeHarmonyShare(true)
-  const tap = makeTapShare(hs)
+  const tap = makeTapShare(makeKnockImpl(hs))
   const ok = tap.start()
   assert(ok === false, 'start returns false on failure')
   assert(tap.listening === false, 'listening=false')
-  assert(tap.isSupported() === false, 'isSupported=false')
+  // isSupported() 未监听时查询 facade 真实能力（默认 true）；不因注册失败伪造为 false。
+  // 注册失败由 start 返回 false 和 listening=false 体现，不污染能力查询。
+  assert(tap.isSupported() === true, 'isSupported reflects facade capability, not registration result')
 }
 
 console.log('3. TapShareService.start idempotent: already listening returns true')
 {
   const hs = makeHarmonyShare(false)
-  const tap = makeTapShare(hs)
+  const tap = makeTapShare(makeKnockImpl(hs))
   tap.start()
   const ok = tap.start()
   assert(ok === true, 'second start returns true')
   assert(hs.calls.on === 1, 'harmonyShare.on called once')
+}
+
+console.log('3b. TapShareService.start unsupported: isSupported=false -> false, no registration')
+{
+  const hs = makeHarmonyShare(false)
+  const tap = makeTapShare(makeKnockImpl(hs, { supported: false }))
+  const ok = tap.start()
+  assert(ok === false, 'unsupported -> start returns false')
+  assert(tap.listening === false, 'listening=false')
+  assert(hs.calls.on === 0, 'harmonyShare.on not called when unsupported')
 }
 
 console.log('4. AirTransferService.start success returns true')

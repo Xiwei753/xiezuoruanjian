@@ -22,7 +22,7 @@
   - `Service`（稳定 facade，对外暴露同步语义）→ `impl/apiXX`（实际 `@kit.*` 调用）→ `PlatformApiResolver`（按运行时 API Level 分流到具体 impl）。
   - 版本敏感/高版本能力（如 `motion` 握姿、`dlpAntiPeep` 防窥等随 API Level 分流的接口）必须收进 `impl/apiXX` 子目录，由 `PlatformApiResolver` 按运行时 API Level 分流；稳定 facade（`Service`）不暴露平台枚举和版本判断。
   - `CapabilityRegistry` 不 `import @kit.*`（只读各 `Service.isSupported()` 布尔结果）。`PlatformApiResolver` 负责版本解析，允许 `import @kit.BasicServicesKit` 读系统版本。
-  - Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型、以及尚未拆分版本边界的既有平台 Service（如 `WindowPrivacyService`、`HarmonyShareService`/`SystemShareService`/`TapShareService`/`AirTransferService`、`StylusInputService`、`HarmonyDeviceIdentity`）不在此限制内，不要一刀切禁止它们 `import @kit.*`。
+  - Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型、以及尚未拆分版本边界的既有平台 Service（如 `WindowPrivacyService`、`StylusInputService`、`HarmonyDeviceIdentity`）不在此限制内，不要一刀切禁止它们 `import @kit.*`。
   - impl 层不向上抛平台类型；与 Service 之间用平台无关的 DTO/枚举（见 `GripPostureTypes` 等）。
 
 ## 工具链与构建

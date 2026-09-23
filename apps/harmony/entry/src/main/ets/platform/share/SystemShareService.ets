@@ -1,20 +1,20 @@
-// SystemShareService — 普通系统分享后端。
+// SystemShareService — 普通系统分享后端（稳定 facade）。
 // 独立类，独立后端：只走 @kit.ShareKit 的 systemShare.SharedData + systemShare.ShareController.show。
 // 不负责碰一碰 / 隔空传送；那两个有各自独立的 service，不落本类。
 // 失败返回 false，不假装成功。
 //
-// 官方接口（Issue #629 评论 5306513458 问题 3）：
-//   import { systemShare } from '@kit.ShareKit'
-//   const data = new systemShare.SharedData()
-//   data.addText(...) / data.addURI(...)
-//   const controller = new systemShare.ShareController(data)
-//   await controller.show(uiAbilityContext)
+// 真实接口经 SystemShareApi11 facade 调 @kit.ShareKit 的 systemShare：
+//   systemShare.SharedData          since 4.1.0(11)
+//   systemShare.ShareController     since 4.1.0(11)
+//   ShareController.show(context)   since 4.1.0(11)
+// Service 不直接 import @kit.ShareKit，系统调用和数据构造都在 impl/api11 facade。
+// 只有 impl/api11 文件可以 import @kit.*；本稳定层仅保留 @kit.AbilityKit 的 common（基础平台类型）。
 //
 // UIAbilityContext 由 AppContext.setAbilityContext() 注入本 service，
 // feature/page 不直接 import Share Kit。
 
-import { systemShare } from '@kit.ShareKit'
 import { common } from '@kit.AbilityKit'
+import { SystemShareApi11 } from './impl/api11/SystemShareApi11'
 import { SharePayload } from './SharePayload'
 
 export class SystemShareService {
@@ -38,12 +38,13 @@ export class SystemShareService {
     this.abilityContext = context
   }
 
-  // 系统分享能力：share() 成功过即 true。CapabilityRegistry 汇总时读此方法。
+  // 系统分享能力：share() 成功过即 true；否则委托 impl 按 API Level + SystemCapability 判断。
+  // CapabilityRegistry 汇总时读此方法。systemShare since API11 < compatibleSdkVersion 12，始终可用。
   isSupported(): boolean {
-    return this.supported
+    return this.supported || SystemShareApi11.getInstance().isSupported()
   }
 
-  // 系统分享入口：构造 SharedData → 创建 ShareController → controller.show(context)。
+  // 系统分享入口：委托 SystemShareApi11 完成实际系统调用。
   // 成功返回 true，失败返回 false（系统 API 抛错或无 context/无内容时返回 false）。
   async share(payload: SharePayload): Promise<boolean> {
     if (this.abilityContext === null) {
@@ -51,58 +52,10 @@ export class SystemShareService {
       return false
     }
 
-    const sharedData: systemShare.SharedData | null = this.buildSharedData(payload)
-    if (sharedData === null) {
-      // payload 无非空内容；不触发系统分享面板。
-      return false
-    }
-
-    try {
-      const controller: systemShare.ShareController = new systemShare.ShareController(sharedData)
-      await controller.show(this.abilityContext)
+    const ok: boolean = await SystemShareApi11.getInstance().share(this.abilityContext, payload)
+    if (ok) {
       this.supported = true
-      return true
-    } catch (e) {
-      // 系统分享失败；返回真实失败。
-      return false
     }
-  }
-
-  // —— private ——
-  // 把业务 SharePayload 构造成 systemShare.SharedData。
-  // 无非空内容时返回 null（调用方返回 false，不假装成功）。
-  // 该映射仅服务于普通系统分享后端；碰一碰 / 隔空传送各自独立处理，不走本方法。
-  private buildSharedData(payload: SharePayload): systemShare.SharedData | null {
-    const hasText: boolean = payload !== undefined && payload !== null &&
-      payload.text !== undefined && payload.text !== null && payload.text.length > 0
-    const hasUris: boolean = payload !== undefined && payload !== null &&
-      payload.uris !== undefined && payload.uris !== null && payload.uris.length > 0
-    if (!hasText && !hasUris) {
-      return null
-    }
-
-    const data: systemShare.SharedData = new systemShare.SharedData()
-
-    // 标题（可选）。Share Kit 的 SharedData 支持通过 addText 携带标题摘要，
-    // 这里把 title 作为独立文本项加入（若 API 有专用 setTitle，可在此替换）。
-    if (payload.title !== undefined && payload.title !== null && payload.title.length > 0) {
-      data.addText(payload.title)
-    }
-
-    // 正文文本。
-    if (hasText) {
-      data.addText(payload.text)
-    }
-
-    // URI 列表（文件/图片）。过滤空串。
-    if (payload.uris !== undefined && payload.uris !== null) {
-      for (const uri of payload.uris) {
-        if (uri !== undefined && uri !== null && uri.length > 0) {
-          data.addURI(uri)
-        }
-      }
-    }
-
-    return data
+    return ok
   }
 }

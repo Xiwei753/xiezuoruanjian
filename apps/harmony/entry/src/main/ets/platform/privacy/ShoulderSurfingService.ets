@@ -11,7 +11,6 @@
 import { common } from '@kit.AbilityKit'
 import { DlpAntiPeepApi20 } from './impl/api20/DlpAntiPeepApi20'
 import { DlpAntiPeepApi23 } from './impl/api23/DlpAntiPeepApi23'
-import { PlatformApiResolver } from '../version/PlatformApiResolver'
 
 export interface ShoulderSurfingObserver {
   onShoulderSurfingChanged?(detected: boolean): void
@@ -84,6 +83,7 @@ export class ShoulderSurfingService {
   // 请求完成后重新调 DlpAntiPeepApi20.isSwitchOn() 确认真实开关（不只靠 AntiPeepOptionsResult 推断缓存），
   // 把真实开关写入 this.enabled 并返回。
   // 不支持/无 context 时返回当前真实开关状态，不伪造。
+  // 是否能请求开启由 DlpAntiPeepApi23.isSupported() 判断（封装 API23+ 能力），Service 不认识 23 这个数字。
   async requestEnable(): Promise<boolean> {
     if (!this.isSupported()) {
       // 系统不支持时不假装已启用；返回真实开关（必然为 false）。
@@ -91,8 +91,8 @@ export class ShoulderSurfingService {
       return false
     }
     const context: common.UIAbilityContext | null = this.abilityContext
-    if (context === null || !PlatformApiResolver.getInstance().isApiAtLeast(23)) {
-      // 未注入 context 或 API<23 无设置页入口；不伪造，返回当前真实开关。
+    if (context === null || !DlpAntiPeepApi23.getInstance().isSupported()) {
+      // 未注入 context 或 API23 防窥设置页能力不可用；不伪造，返回当前真实开关。
       this.enabled = await DlpAntiPeepApi20.getInstance().isSwitchOn()
       return this.enabled
     }

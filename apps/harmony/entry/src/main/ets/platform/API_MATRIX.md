@@ -12,7 +12,9 @@
 | 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是 | privacy/impl/api20/DlpAntiPeepApi20.ets, privacy/impl/api23/DlpAntiPeepApi23.ets |
 | 窗口隐私 | @kit.ArkUI (window) | 未限定独立 API（随 @kit.ArkUI window 模块） | 未限定独立 SystemCapability（随 @kit.ArkUI window 模块） | 无 | 否 | privacy/WindowPrivacyService.ets |
 | 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/AppContinuationService.ets |
-| 分享 | @kit.ShareKit (systemShare / harmonyShare) | 未限定独立 API（随 @kit.ShareKit） | 未限定独立 SystemCapability | 无独立权限（systemShare/harmonyShare 无 ohos.permission.* 声明） | 否 | share/SystemShareService.ets, share/TapShareService.ets, share/AirTransferService.ets |
+| 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
+| 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
+| 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
 | 手写笔 | @kit.InputKit (TouchEvent / ToolType) | 未限定独立 API（基础输入事件，随 ArkUI） | 无独立 SystemCapability（基础输入事件） | 无独立权限（基础输入事件） | 否 | input/StylusInputService.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
@@ -71,9 +73,11 @@
 
 ### fallback
 
-- API < 20 或能力不支持时，防窥状态固定为 `false`（安全侧默认），不伪造状态。
-- `requestEnable()` 在 API < 23 时无法打开系统设置页（`requestAntiPeepOptions` 不可用），应提示用户手动设置；`isEnabled()` 永远查询系统真实开关，不读本地缓存假装启用。
-- 对外 facade：`privacy/ShoulderSurfingService.ets`（通过 `PlatformApiResolver` 分流，不直接 import `@kit.DeviceSecurityKit`；仅 import `@kit.AbilityKit` 的 `common` 用于 context 类型）
+- API < 20 或能力不支持时，防窥状态为 `unknown`（未解析），不伪造为 `false`（安全侧默认）也不伪造为 `true`。`ShoulderSurfingService.isUnknown()` 返回 true，`isSafe()`/`isPeeping()` 均不成立。
+- 状态语义：`PASS` → safe（无窥视）；`HIDE` → peeping（被窥视）；API 调用失败 / 未解析 / 不支持 → unknown。
+- `requestEnable()` 在 API < 23 时无法打开系统设置页（`requestAntiPeepOptions` 不可用），返回当前真实开关状态，不伪造；`isEnabled()` 永远查询系统真实开关，不读本地缓存假装启用。
+- 官方当前限制：DlpAntiPeep 目前只支持 Phone 设备。官方 2026-09-04 最新最佳实践：https://developer.huawei.com/consumer/en/doc/best-practices/bpta-antipeep-protection
+- 对外 facade：`privacy/ShoulderSurfingService.ets`（不直接 import `@kit.DeviceSecurityKit`；仅 import `@kit.AbilityKit` 的 `common` 用于 context 类型；不认识 API Level 数字，版本判断在 `impl/apiXX` facade）
 
 ## 窗口隐私
 
@@ -102,19 +106,43 @@
 
 ## 分享
 
-- Kit：`@kit.ShareKit`（`systemShare` 模块用于普通系统分享；`harmonyShare` 模块用于碰一碰 `knockShare` 与隔空传送 `gesturesShare`）
-- 接口：
-  - `systemShare.SharedData` / `systemShare.ShareController.show(context)`（普通系统分享）
-  - `harmonyShare.on('knockShare', callback)` / `harmonyShare.off('knockShare', callback)`（碰一碰分享）
-  - `harmonyShare.on('gesturesShare', { windowId }, callback)` / `harmonyShare.off('gesturesShare', { windowId }, callback)`（隔空传送）
-- 最低 API：未限定独立 API（随 `@kit.ShareKit`，官方未为 systemShare/harmonyShare 模块单独声明起始 API Level）
-- SystemCapability：未限定独立 SystemCapability
-- 权限：无独立权限（`systemShare` / `harmonyShare` 模块无 `ohos.permission.*` 声明，由系统分享面板承载）
+三个分享 channel 各自独立后端，按本机 SDK d.ts（`@hms.collaboration.systemShare.d.ts` / `@hms.collaboration.harmonyShare.d.ts`）的 `@since` 标注分别确定起始 API Level，不合并成一个版本结论。稳定 facade（`SystemShareService`/`TapShareService`/`AirTransferService`）不 import `@kit.ShareKit`，系统调用和数据构造在各 `impl/apiXX` facade。官方 API 变更：https://developer.huawei.com/consumer/en/doc/harmonyos-releases/js-apidiff-sharekit-6001
+
+### 普通系统分享（systemShare）
+
+- Kit：`@kit.ShareKit`（`systemShare` 模块）
+- 接口：`systemShare.SharedData` / `systemShare.ShareController.show(context)`
+- 最低 API：11（`@since 4.1.0(11)`，经 d.ts 确认）
+- SystemCapability：`SystemCapability.Collaboration.SystemShare`
+- 权限：无
 - ACL：否
-- 实现文件：
-  - `share/SystemShareService.ets`（系统分享）
-  - `share/TapShareService.ets`（碰一碰分享）
-  - `share/AirTransferService.ets`（隔空投送）
+- fallback：API < 11 不支持（低于 compatibleSdkVersion 12，实际始终可用）
+- 实现文件：`share/impl/api11/SystemShareApi11.ets`（impl facade）
+- 对外 facade：`share/SystemShareService.ets`（不 import `@kit.ShareKit`，委托 impl）
+
+### 碰一碰分享（knockShare）
+
+- Kit：`@kit.ShareKit`（`harmonyShare` 模块）
+- 接口：`harmonyShare.on('knockShare', callback)` / `harmonyShare.off('knockShare', callback)`（无 capability 参数的基础重载）
+- 最低 API：12（`@since 5.0.0(12)`，经 d.ts 确认；带 `SendCapabilityRegistry` 参数的重载 since 6.0.0(20)）
+- SystemCapability：`SystemCapability.Collaboration.HarmonyShare`
+- 权限：无
+- ACL：否
+- fallback：API < 12 不支持（等于 compatibleSdkVersion，实际始终可用）
+- 实现文件：`share/impl/api12/KnockShareApi12.ets`（impl facade）
+- 对外 facade：`share/TapShareService.ets`（不 import `@kit.ShareKit`，委托 impl）
+
+### 隔空传送（gesturesShare）
+
+- Kit：`@kit.ShareKit`（`harmonyShare` 模块）
+- 接口：`harmonyShare.on('gesturesShare', { windowId }, callback)` / `harmonyShare.off('gesturesShare', { windowId }, callback)`
+- 最低 API：20（`@since 6.0.0(20)`，经 d.ts 确认）
+- SystemCapability：`SystemCapability.Collaboration.HarmonyShare`
+- 权限：无
+- ACL：否
+- fallback：API 12~19 不支持，`isSupported()` 返回 false，`start()` 返回 false，不伪造状态
+- 实现文件：`share/impl/api20/GesturesShareApi20.ets`（impl facade）
+- 对外 facade：`share/AirTransferService.ets`（不 import `@kit.ShareKit`，委托 impl）
 
 ## 手写笔
 

@@ -1,13 +1,13 @@
 // shareDataConfig.test.mjs — SharePayload -> SharedData 规范化纯逻辑测试。
 // 纯 JS（.mjs），不依赖 @kit.ShareKit / ArkUI，Node 直接运行：node shareDataConfig.test.mjs
 //
-// 本测试验证 payloadToSharedDataConfig 的逻辑规格。该规格与以下 service 内联实现严格一致：
-//   - SystemShareService.buildSharedData （普通系统分享）
-//   - TapShareService.buildSharedData    （碰一碰）
-//   - AirTransferService.buildSharedData （隔空传送）
-// 三个 service 的 buildSharedData 都遵循同一规格：text 非空进 textContents，uris 非空进 uris（过滤空串），
+// 本测试验证 payloadToSharedDataConfig 的逻辑规格。该规格与以下实现严格一致：
+//   - SystemShareApi11.buildSharedData (impl/api11)   （普通系统分享；原 SystemShareService 内联实现已收进 impl facade）
+//   - KnockShareApi12.buildSharedData (impl/api12) （碰一碰；原 TapShareService 内联实现已收进 impl facade）
+//   - GesturesShareApi20.buildSharedData (impl/api20) （隔空传送；原 AirTransferService 内联实现已收进 impl facade）
+// 三处 buildSharedData 都遵循同一规格：text 非空进 textContents，uris 非空进 uris（过滤空串），
 // title 非空单独存，两者都空则 hasContent=false（调用方返回 false，不假装成功）。
-// 本测试通过验证规格，间接验证三个 service 的数据构造正确性。
+// 本测试通过验证规格，间接验证三处数据构造的正确性。
 // 真正构造 systemShare.SharedData 的调用需 HarmonyOS SDK 编译（见 ShareLifecycleTest.ets）。
 
 // —— 被测规格（与 service 内联实现同规格）——
