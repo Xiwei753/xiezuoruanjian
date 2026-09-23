@@ -23,11 +23,18 @@ import org.robolectric.annotation.Config
 
 /**
  * Issue #739 评论 5787769674：retained reflow 接入 [CoordinatedEditMotion] 的测试 —
- * 验证自动换行时保留文字的位置平移和 destination hidden ownership 语义。
+ * 验证跨行 retained motion 的位置平移和 destination hidden ownership 语义。
  *
  * 用真实 [TextLayoutResult]（通过 [rememberTextMeasurer]）+ 硬换行 `\n` 制造多行布局
  * （Robolectric 下 [rememberTextMeasurer] 忽略 maxWidth 软换行约束，每字符 1px 单行，
  * 但 `\n` 硬换行可以产生真实多行 layout）。
+ *
+ * 注意：本测试用硬换行 `\n` 制造多行布局，验证 retained move channel 的纯运动语义
+ * （位置平移、destination hidden、全程可见）。硬换行不等同于软自动换行（soft wrap）—
+ * Robolectric 下 [rememberTextMeasurer] 忽略 maxWidth 软换行约束，无法用窄宽度产生真实软换行。
+ * 软自动换行的 layout-first pending ownership 由
+ * [ComposeVisualStateLayoutFirstPendingPresentationTest] 覆盖。
+ * 本文件只做 retained channel 的纯运动测试。
  *
  * 两类场景：
  * 1. 行尾插入字符把后面原有文字挤到下一行（"abcde" → "abX\ncde"，"cde" 被挤到第二行）。
@@ -58,7 +65,7 @@ class ComposeVisualRetainedWrapMotionTest {
     }
 
     /**
-     * 场景1：行尾插入字符挤换行。
+     * 场景1：行尾插入字符挤换行（跨行 retained motion）。
      *
      * - oldText = "abcde"（一行）
      * - newText = "abX\ncde"（两行，插入 "X\n" 在 offset 2，"cde" 被挤到第二行）
@@ -148,7 +155,7 @@ class ComposeVisualRetainedWrapMotionTest {
     }
 
     /**
-     * 场景2：删除字符让下一行原有文字回流到上一行。
+     * 场景2：删除字符让下一行原有文字回流到上一行（跨行 retained motion）。
      *
      * - oldText = "abX\ncde"（两行，"cde" 在第二行）
      * - newText = "abcde"（一行，删除 "X\n" 后 "cde" 回流到第一行）

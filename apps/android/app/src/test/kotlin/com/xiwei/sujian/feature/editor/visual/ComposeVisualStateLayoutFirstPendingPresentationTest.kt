@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -32,7 +33,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-@Suppress("StringLiteralDuplication", "MaxLineLength")
+@Suppress("StringLiteralDuplication", "MaxLineLength", "LongMethod", "LargeClass")
 class ComposeVisualStateLayoutFirstPendingPresentationTest {
     @get:Rule
     val composeRule = createComposeRule()
@@ -510,6 +511,176 @@ class ComposeVisualStateLayoutFirstPendingPresentationTest {
         )
     }
 
+    /**
+     * Issue #739 评论 5788490497 测试 — retained reflow 的 layout-first pending ownership。
+     *
+     * 场景：
+     * - oldText = "abcde"（一行，baseline）
+     * - newText = "abX\ncde"（两行，在 offset 2 插入 "X\n"，"cde" 被挤到第二行）
+     * - "cde" 是 retained move：oldRange=[2,5)（old 第0行），newRange=[4,7)（new 第1行）
+     * - newChanged = [2,4)（"X\n" 新插入）
+     *
+     * 期望（修复后）：
+     * 1. layout 先到、fact 未到时，buildPendingPresentation 用 common prefix/suffix 算 retained moves，
+     *    pending sample 的 hiddenRanges 包含 retained move 的 newRange [4,7)，
+     *    retainedOverlays 非空且 translate=Offset.Zero（在 old position）。
+     * 2. fact 到达后升级成 prepared motion，progress=0 的 retained overlay 与 pending 同位置（不回跳）。
+     * 3. drain + sample 中间帧后 retained overlay translate 非 Zero（开始 old→new 平移）。
+     */
+    @Test
+    fun layoutFirst_retainedReflow_pendingHasRetainedOwnership() {
+        val layouts = captureLayouts("", "abcde", "abX\ncde")
+        val state = ComposeEditorVisualState(targetId = "739-retained-reflow")
+
+        // === 第一笔："" -> "abcde"（正常完成，建立 baseline presentation）===
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onEditFact(
+            makeInsertIntent(
+                coreTxnId = 1L,
+                baseRev = 0L,
+                newRev = 1L,
+                oldText = "",
+                newText = "abcde",
+                newRange = TextRange(0, 5),
+                replaceBounds = VisualReplaceBounds(0, 0, 0, 5),
+            ),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(5, 5), 0)
+        // 第一笔完成后 drawSnapshotState.layout = "abcde" layout
+        val snapAfterFirst = state.drawSnapshot()
+        assertNotNull("第一笔完成后 drawSnapshot.layout 应非 null", snapAfterFirst.layout)
+
+        // === 第二笔 layout-first："abcde" -> "abX\ncde" 的 layout 先到，fact 未到 ===
+        // onAuthoritativeLayout 进入 AwaitingFact 分支，buildPendingPresentation 用
+        // common prefix/suffix 算 retained moves，把 "cde" 纳入 pending ownership。
+        state.onAuthoritativeLayout(layouts[2], TextRange(4, 4), 0)
+
+        // 关键断言1：pending presentation 已建立，motionSample 非 null
+        val snapPending = state.drawSnapshot()
+        assertNotNull(
+            "layout-first 时 motionSample 应非 null（pending presentation 接管）",
+            snapPending.motionSample,
+        )
+        assertTrue("pending sample 应有效", snapPending.motionSample!!.isValid)
+
+        // 关键断言2：retainedOverlays 非空（"cde" 被纳入 pending retained ownership）
+        assertTrue(
+            "pending retainedOverlays 应非空（'cde' 被挤到第二行，是 retained move）",
+            snapPending.motionSample!!.retainedOverlays.isNotEmpty(),
+        )
+        val pendingRetained = snapPending.motionSample!!.retainedOverlays.first()
+
+        // 关键断言3：retained overlay 在 old position（translate=Offset.Zero）
+        assertEquals(
+            "pending retained overlay translate 应为 Offset.Zero（在 old position）",
+            Offset.Zero,
+            pendingRetained.translate,
+        )
+
+        // 关键断言4：retained overlay 的 oldRange == "cde" 在 old 布局的 range [2,5)
+        assertEquals(
+            "pending retained overlay oldRange 应为 'cde' 在 old 布局的 range [2,5)",
+            TextRange(2, 5),
+            pendingRetained.oldRange,
+        )
+
+        // 关键断言5：hiddenRanges 包含 retained move 的 newRange [4,7)
+        // （"cde" 在新布局第二行的位置，BasicTextField 不裸画）
+        assertTrue(
+            "pending hiddenRanges 应包含 retained move 的 newRange [4,7)（'cde' 在新布局第二行）",
+            snapPending.motionSample!!.hiddenRanges.contains(TextRange(4, 7)),
+        )
+
+        // 反射断言 pendingPresentation != null
+        val pendingBeforeFact = readPendingPresentation(state)
+        assertNotNull("fact 到达前 pendingPresentation 应非 null", pendingBeforeFact)
+
+        // === fact 到达："abcde" -> "abX\ncde" 配对生成 NewPatch，原子升级成 prepared motion ===
+        state.onEditFact(
+            makeReplaceFact(
+                coreTxnId = 2L,
+                baseRev = 1L,
+                newRev = 2L,
+                oldText = "abcde",
+                newText = "abX\ncde",
+                oldRanges = listOf(TextRange(2, 5)),
+                newRanges = listOf(TextRange(2, 4)),
+                replaceBounds = VisualReplaceBounds(2, 5, 2, 4),
+                offsetMap =
+                    VisualOffsetMap(
+                        entries =
+                            listOf(
+                                // "ab" 保持（IDENTITY）
+                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
+                                // "cde" 平移（SHIFTED）：old [2,5) -> new [4,7)
+                                VisualOffsetMapEntry(2, 4, 3, VisualOffsetMapKind.SHIFTED),
+                            ),
+                    ),
+                oldSelectionEnd = 2,
+                newSelectionEnd = 4,
+            ),
+        )
+
+        // 关键断言6：fact 到达后 pendingPresentation 清空（升级成 prepared motion）
+        val pendingAfterFact = readPendingPresentation(state)
+        assertNull("fact 到达后 pendingPresentation 应清空（升级成 prepared motion）", pendingAfterFact)
+
+        // 关键断言7：prepared motion progress=0 的 retainedOverlays 非空
+        val snapPrepared = state.drawSnapshot()
+        assertNotNull(
+            "fact 到达后 motionSample 应非 null（prepared motion 接管）",
+            snapPrepared.motionSample,
+        )
+        assertTrue(
+            "prepared motion progress=0 的 retainedOverlays 应非空",
+            snapPrepared.motionSample!!.retainedOverlays.isNotEmpty(),
+        )
+        val preparedRetained = snapPrepared.motionSample!!.retainedOverlays.first()
+
+        // 关键断言8：prepared retained overlay 的 translate ≈ Zero（与 pending 同位置，不回跳）。
+        // 用浮点数比较而非 Offset 对象 equals — prepared motion 的 translate 由 0f * 负差值算出，
+        // IEEE 754 下 0f * 负数 = -0.0f，与 Offset.Zero 的 packedValue 不同（符号位差异），
+        // 但视觉上是同一位置。
+        assertEquals(
+            "prepared retained overlay translate.x 应为 0（与 pending 同位置，不回跳）",
+            0f,
+            preparedRetained.translate.x,
+            0.001f,
+        )
+        assertEquals(
+            "prepared retained overlay translate.y 应为 0（与 pending 同位置，不回跳）",
+            0f,
+            preparedRetained.translate.y,
+            0.001f,
+        )
+
+        // 关键断言9：prepared retained overlay 的 oldRange 与 pending 的 oldRange 相同
+        // （都是 "cde" 在 old 的 range [2,5)）
+        assertEquals(
+            "prepared retained overlay oldRange 应与 pending 相同（都是 'cde' 在 old 的 range [2,5)）",
+            pendingRetained.oldRange,
+            preparedRetained.oldRange,
+        )
+
+        // === drain + sample 中间帧：retained overlay 开始 old→new 平移 ===
+        state.drainPendingPatchesAtFrame(0L)
+        val midScene = state.sampleVisualScene(50L * 1_000_000L) // 50ms，中间帧
+        assertNotNull("drain + sample 后应有 motion sample", midScene)
+        val snapMid = state.drawSnapshot()
+        assertNotNull("中间帧 motionSample 应非 null", snapMid.motionSample)
+        assertTrue(
+            "中间帧 retainedOverlays 应非空",
+            snapMid.motionSample!!.retainedOverlays.isNotEmpty(),
+        )
+        val midRetained = snapMid.motionSample!!.retainedOverlays.first()
+        // 关键断言10：中间帧 retained overlay translate 非 Zero（开始 old→new 平移）
+        assertNotEquals(
+            "中间帧 retained overlay translate 应非 Offset.Zero（开始 old→new 平移）",
+            Offset.Zero,
+            midRetained.translate,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     /** 反射读取 ComposeEditorVisualState 的 private activeMotion 字段。 */
@@ -544,6 +715,44 @@ class ComposeVisualStateLayoutFirstPendingPresentationTest {
             replaceBounds = replaceBounds,
             expectedOldText = oldText,
             expectedNewText = newText,
+        )
+
+    /**
+     * Issue #739 评论 5788490497 测试辅助 — 构造 replace 语义的 [EditorEditFact]。
+     *
+     * 与 [makeInsertIntent] 区别：oldRanges 非空、textKind=Move、携带 old/new selection end。
+     * 用于 retained reflow 场景（"abcde" → "abX\ncde"，"cde" 被替换位置）。
+     */
+    private fun makeReplaceFact(
+        coreTxnId: Long,
+        baseRev: Long,
+        newRev: Long,
+        oldText: String,
+        newText: String,
+        oldRanges: List<TextRange>,
+        newRanges: List<TextRange>,
+        replaceBounds: VisualReplaceBounds,
+        offsetMap: VisualOffsetMap,
+        oldSelectionEnd: Int,
+        newSelectionEnd: Int,
+    ): EditorEditFact =
+        EditorEditFact(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            coreTransactionId = coreTxnId,
+            baseRevision = baseRev,
+            newRevision = newRev,
+            animationMode = AnimationMode.CLUSTER_ANIMATION,
+            durationMs = 100L,
+            offsetMap = offsetMap,
+            oldRanges = oldRanges,
+            newRanges = newRanges,
+            textKind = TextVisualKind.Move,
+            replaceBounds = replaceBounds,
+            expectedOldText = oldText,
+            expectedNewText = newText,
+            oldSelectionEndUtf16 = oldSelectionEnd,
+            newSelectionEndUtf16 = newSelectionEnd,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> {

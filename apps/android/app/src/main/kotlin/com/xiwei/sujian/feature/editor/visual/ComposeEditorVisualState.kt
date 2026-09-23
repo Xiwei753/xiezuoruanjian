@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -218,6 +219,13 @@ class ComposeEditorVisualState(
      * - old layout 被删/替换的 range 用 old layout 静态画 ghost（glyphOverlays，Deleted，clipFraction=1）
      * - caret 停在旧 presentation 的 origin
      * fact 到达后由 [applyPreparedMotionFromPatch] 原子升级成 prepared motion（视觉一致，无缝）。
+     *
+     * Issue #739 评论 5788490497 新增 pending retained reflow ownership：
+     * pending 阶段用 common prefix/suffix 算 retained moves，把被挤到新行的"保留文字"
+     * 也纳入 ownership — retained overlay 画在 old position（translate=Offset.Zero），
+     * destination newRange 加进 hiddenRanges。fact 到达后 prepared motion progress=0 的
+     * retained overlay 也在 old position，pending → prepared(0) → running 三段连续，
+     * 不发生 new position → old position 回跳。
      */
     private data class PendingPresentation(
         val oldLayout: ComposeLayoutSnapshot,
@@ -709,15 +717,29 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * Issue #739 评论 5788490497：oldText→newText 的公共前后缀 + 改变区间。
+     * 供 [buildPendingPresentation] 构造临时 [VisualOffsetMapEntry] 算 pending retained moves。
+     */
+    internal data class ChangedRawRanges(
+        val commonPrefix: Int,
+        val commonSuffix: Int,
+        val oldChanged: TextRange?,
+        val newChanged: TextRange?,
+    )
+
+    /**
      * Issue #737 评论 5784705864 缺口1：算 oldText→newText 的公共前后缀，返回被改变的 raw range。
      * oldRange 非 null 表示 oldText 中被删/替换的区间；newRange 非 null 表示 newText 中新增/替换的区间。
-     * 纯 selection（text 不变）返回 (null, null)。
+     * 纯 selection（text 不变）返回 commonPrefix=commonSuffix=0、oldChanged=newChanged=null。
+     *
+     * Issue #739 评论 5788490497：返回 [ChangedRawRanges] 同时带 commonPrefix/commonSuffix，
+     * 供 [buildPendingPresentation] 构造临时 [VisualOffsetMapEntry] 算 pending retained moves。
      */
     private fun computeChangedRawRanges(
         oldText: String,
         newText: String,
-    ): Pair<TextRange?, TextRange?> {
-        if (oldText == newText) return null to null
+    ): ChangedRawRanges {
+        if (oldText == newText) return ChangedRawRanges(0, 0, null, null)
         val oldLen = oldText.length
         val newLen = newText.length
         var prefix = 0
@@ -732,13 +754,25 @@ class ComposeEditorVisualState(
         }
         val oldRange = if (prefix < oldLen - suffix) TextRange(prefix, oldLen - suffix) else null
         val newRange = if (prefix < newLen - suffix) TextRange(prefix, newLen - suffix) else null
-        return oldRange to newRange
+        return ChangedRawRanges(prefix, suffix, oldRange, newRange)
     }
 
     /**
      * Issue #737 评论 5784705864 缺口1：从 oldLayout/newLayout 构造 pending presentation。
      * 不依赖 fact — 只用文本 diff 算粗粒度 ownership（整个变化区域裁掉/画 ghost）。
      * fact 到达后 prepared motion 的精确 per-glyph ownership 会原子替换，视觉一致。
+     *
+     * Issue #739 评论 5788490497：pending retained reflow ownership。
+     * layout-first 时虽然没有 fact，但已有 old/new 两份真实 TextLayoutResult。
+     * 用 common prefix/suffix 构造临时 [VisualOffsetMapEntry]，复用
+     * [ComposeVisualRebase.computeRetainedMovesFromComposedMap] 按 old/new 真实视觉行切 retained move，
+     * 不在 VisualState 里自己重新猜换行。pending 阶段不开始 reflow 动画，只把画面保持在 old presentation：
+     * - retained overlay 画在 old position（translate=[Offset.Zero]）
+     * - destination newRange 加进 [CoordinatedEditMotion.Sample.hiddenRanges]
+     *   （BasicTextField 不裸画换行后的文字）
+     * fact 到达后 prepared motion progress=0 的 retained overlay 也在 old position，
+     * pending → prepared(0) → running 三段连续，不发生 new position → old position 回跳。
+     *
      * @return null 表示纯 selection（text 未变），不需要 pending ownership。
      */
     private fun buildPendingPresentation(
@@ -748,19 +782,66 @@ class ComposeEditorVisualState(
         val oldText = oldLayout.result.layoutInput.text.text
         val newText = newLayout.result.layoutInput.text.text
         if (oldText == newText) return null
-        val (oldChanged, newChanged) = computeChangedRawRanges(oldText, newText)
-        val hiddenRanges = if (newChanged != null) listOf(newChanged) else emptyList()
+        val changed = computeChangedRawRanges(oldText, newText)
+        val hiddenRanges = mutableListOf<TextRange>()
+        if (changed.newChanged != null) hiddenRanges.add(changed.newChanged)
         val glyphOverlays = mutableListOf<CoordinatedEditMotion.GlyphOverlay>()
-        if (oldChanged != null) {
+        if (changed.oldChanged != null) {
             glyphOverlays.add(
                 CoordinatedEditMotion.GlyphOverlay(
                     key = nextPendingGlyphKey--,
-                    range = oldChanged,
+                    range = changed.oldChanged,
                     layout = oldLayout,
                     role = CoordinatedEditMotion.GlyphRole.Deleted,
                     clipFraction = 1f,
                 ),
             )
+        }
+        // Issue #739 评论 5788490497：pending retained reflow ownership。
+        // layout-first 时虽然没有 fact，但已有 old/new 两份真实 TextLayoutResult。
+        // 用 common prefix/suffix 构造临时 VisualOffsetMapEntry，复用
+        // ComposeVisualRebase.computeRetainedMovesFromComposedMap 按 old/new 真实视觉行切 retained move，
+        // 不在 VisualState 里自己重新猜换行。pending 阶段不开始 reflow 动画，只把画面保持在 old presentation：
+        // - retained overlay 画在 old position（translate=Offset.Zero）
+        // - destination newRange 加进 hiddenRanges（BasicTextField 不裸画换行后的文字）
+        // fact 到达后 prepared motion progress=0 的 retained overlay 也在 old position，
+        // pending → prepared(0) → running 三段连续，不发生 new position → old position 回跳。
+        val retainedOverlays = mutableListOf<CoordinatedEditMotion.RetainedOverlay>()
+        if (changed.commonPrefix > 0 || changed.commonSuffix > 0) {
+            val entries = mutableListOf<VisualOffsetMapEntry>()
+            if (changed.commonPrefix > 0) {
+                entries.add(
+                    VisualOffsetMapEntry(
+                        oldStart = 0,
+                        newStart = 0,
+                        length = changed.commonPrefix,
+                        kind = VisualOffsetMapKind.IDENTITY,
+                    ),
+                )
+            }
+            if (changed.commonSuffix > 0) {
+                entries.add(
+                    VisualOffsetMapEntry(
+                        oldStart = oldText.length - changed.commonSuffix,
+                        newStart = newText.length - changed.commonSuffix,
+                        length = changed.commonSuffix,
+                        kind = VisualOffsetMapKind.SHIFTED,
+                    ),
+                )
+            }
+            val pendingRetainedMoves =
+                ComposeVisualRebase.computeRetainedMovesFromComposedMap(oldLayout, newLayout, entries)
+            for (move in pendingRetainedMoves) {
+                retainedOverlays.add(
+                    CoordinatedEditMotion.RetainedOverlay(
+                        key = nextPendingGlyphKey--,
+                        oldLayout = oldLayout,
+                        oldRange = move.oldRange,
+                        translate = Offset.Zero,
+                    ),
+                )
+                hiddenRanges.add(move.newRange)
+            }
         }
         // Issue #737 评论 5785295971：caret origin 从上一份 presentation owner 拿，
         // 不从 lastResolvedSelection 猜 — snapshotFlow 可能已经先把它更新成当前新 selection。
@@ -772,7 +853,7 @@ class ComposeEditorVisualState(
             CoordinatedEditMotion.Sample(
                 caretRect = originCaret,
                 glyphOverlays = glyphOverlays,
-                retainedOverlays = emptyList(),
+                retainedOverlays = retainedOverlays,
                 hiddenRanges = hiddenRanges,
                 finished = false,
                 isValid = true,
