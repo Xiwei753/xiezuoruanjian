@@ -2524,7 +2524,11 @@ impl LinuxEditorAnimationCoordinator {
             // Issue #738 评论 5788513592 问题1: caret owner 选择必须看 layout_basis_revision。
             // 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
             // coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
-            if tx.layout_basis_revision < current_layout_revision {
+            // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`。canonical 已推进到
+            // new_revision 但 Pipeline.layout_revision 可能停在旧值时，future revision 的事务
+            // 也不属于当前 canonical，不能继续拥有 caret ownership。只有 basis 完全一致的
+            // 事务才能继续驱动 coordinated caret。
+            if tx.layout_basis_revision != current_layout_revision {
                 continue;
             }
             // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
@@ -2607,6 +2611,8 @@ impl LinuxEditorAnimationCoordinator {
 
         // 没有正文事务（或 epoch/basis 不一致已收口）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
         // Issue #738 评论 5789470425 问题1: CursorOnly 查找也跳过 basis 不一致的事务。
+        // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`，future revision 的事务
+        // 也不属于当前 canonical，不能按其 new_cursor_rect 反查当作 CursorOnly 命中。
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
                 tx.state,
@@ -2617,7 +2623,7 @@ impl LinuxEditorAnimationCoordinator {
             if tx.cursor_owner_epoch != current_cursor_epoch {
                 continue;
             }
-            if tx.layout_basis_revision < current_layout_revision {
+            if tx.layout_basis_revision != current_layout_revision {
                 continue;
             }
             if let Some(ref new_rect) = tx.new_cursor_rect {
@@ -3049,10 +3055,14 @@ impl LinuxEditorAnimationCoordinator {
         // ownership），避免空洞。
         let mut clip_rects: Vec<super::qt_text_node::AnimationClipRect> = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
+            // Issue #738 评论 5793319451 问题1: 守卫从 `>=` 改成 `==`。clip rects 用于
+            // 裁切 canonical 正文以露出动画 overlay，只有 basis 与当前 frame_context 完全
+            // 一致的事务的 static_hidden_document_rects 才属于当前 canonical 几何。
+            // future revision 的事务其 hidden rects 对应另一份 canonical，不能裁当前正文。
             if tx.texture_prepared
                 && tx.state.is_clip_eligible()
                 && !keys_to_complete_set.contains(&tx.key)
-                && tx.layout_basis_revision >= frame_context.layout_basis_revision
+                && tx.layout_basis_revision == frame_context.layout_basis_revision
             {
                 let has_caret_frame = coordinated_motion_frame.caret.is_some();
                 // Issue #727 评论 5760020833 问题1: 还要判断本事务是否是 caret motion 的
@@ -3318,13 +3328,15 @@ impl LinuxEditorAnimationCoordinator {
         // 再采样 caret motion。旧 basis 事务的 caret_motion_retired 置 true 后，
         // active_text_transaction_key_with_epoch 跳过它，sample_coordinated_motion_frame
         // 不会给它 owner_key，旧 caret track 不会被采样喂给 cursor layer。
+        // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`。basis 不一致（无论是旧
+        // 还是 future）的事务都不应继续驱动 caret motion，统一收口 retire。
         for tx in self.prepared_queue.active_transactions_mut() {
             if tx.state == TextVisualTransactionState::Cancelled
                 || tx.state == TextVisualTransactionState::Completed
             {
                 continue;
             }
-            if tx.layout_basis_revision < layout_basis_revision && !tx.caret_motion_retired {
+            if tx.layout_basis_revision != layout_basis_revision && !tx.caret_motion_retired {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
             }
@@ -3350,8 +3362,10 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            // Issue #738: basis 旧于 canonical revision 的 unit 不进 glyph 计划。
-            if tx.layout_basis_revision < layout_basis_revision {
+            // Issue #738: basis 与 canonical revision 不一致的 unit 不进 glyph 计划。
+            // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`，future revision 的
+            // 事务也不属于当前 canonical，不能画 glyph（其纹理/几何对应另一份 canonical）。
+            if tx.layout_basis_revision != layout_basis_revision {
                 continue;
             }
 

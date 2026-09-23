@@ -1417,9 +1417,16 @@ impl LinuxEditorPipeline {
                 cursor_owner_epoch,
                 new_revision,
             );
+            // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
+            // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
+            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 None，
+            // 但此时 canonical 已推进到 new_revision、旧事务已 reconcile 到 new_revision。
+            // 若 layout_revision 停在旧值，basis 守卫（已改为 ==/!=）会把"事务 revision
+            // 比 Pipeline 当前 revision 更新"误当合法事务继续画。new_doc_snapshot 一旦成为
+            // 当前 canonical，layout_revision 就必须无条件一起提交。
+            self.layout_revision = new_revision;
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);
-                self.layout_revision = new_revision;
             }
 
             self.previous_layout_snapshot =

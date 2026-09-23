@@ -200,7 +200,7 @@ fn issue2_fix_apply_decision_handles_split() {
     let window = function_window(
         &src,
         "fn rebind_timed_units_to_canonical",
-        16000,
+        20000,
     );
     assert!(
         window.contains("Some(RebindDecision::Split(replacement_units))"),
@@ -282,18 +282,29 @@ fn issue3_fix_many_to_many_old_new_share_group_id() {
     );
 }
 
-/// 修复后守卫 9: CrossFade pair 的 new side 校验包含 shaping identity 校验
+/// 修复后守卫 9: CrossFade 多对多 group 的 new side 校验包含 shaping identity 校验
 ///（is_same_shaping + anchor_shaping_match），与 ReflowMove 对称。
+/// Issue #738 评论 5793319451 问题2: CrossFade 从一对一 crossfade_pairs 改成多对多
+/// crossfade_groups（CrossFadeGroup { old_indices, new_indices }），整组一起处理。
 #[test]
 fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    // 定位 CrossFade pair 处理循环
-    let pair_marker = "for &(old_idx, new_idx) in &crossfade_pairs";
-    let pair_pos = src
-        .find(pair_marker)
-        .expect("rebind 中 crossfade_pairs 处理循环必须存在");
-    // 取该循环到未配对处理注释的窗口
-    let window_end = pair_pos + 2400;
+    // 修复后：多对多 group 结构存在。
+    assert!(
+        src.contains("struct CrossFadeGroup"),
+        "修复后应有 CrossFadeGroup 多对多 group 结构。"
+    );
+    assert!(
+        src.contains("old_indices") && src.contains("new_indices"),
+        "修复后 CrossFadeGroup 应有 old_indices 和 new_indices 收集整组所有成员。"
+    );
+    // 定位多对多 group 处理循环
+    let group_marker = "for (_gid, group) in &crossfade_groups";
+    let group_pos = src
+        .find(group_marker)
+        .expect("rebind 中 crossfade_groups 多对多处理循环必须存在");
+    // 取该循环到结束的窗口（足够覆盖 new side 校验逻辑）
+    let window_end = group_pos + 4200;
     let window_end = src
         .char_indices()
         .take_while(|(i, _)| *i < window_end)
@@ -301,40 +312,72 @@ fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(src.len())
         .min(src.len());
-    let pair_window = &src[pair_pos..window_end];
+    let group_window = &src[group_pos..window_end];
 
     // 修复后：new side 校验包含 shaping identity 校验。
     assert!(
-        pair_window.contains("is_same_shaping"),
-        "修复后 CrossFade pair 的 new side 校验应包含 is_same_shaping，\
+        group_window.contains("is_same_shaping"),
+        "修复后 CrossFade group 的 new side 校验应包含 is_same_shaping，\
          检查 anchor.shaping_identity == 当前 canonical hit.shaping。"
     );
     assert!(
-        pair_window.contains("anchor_shaping_match"),
-        "修复后 CrossFade pair 的 new side 应有 anchor_shaping_match 逻辑，\
+        group_window.contains("anchor_shaping_match"),
+        "修复后 CrossFade group 的 new side 应有 anchor_shaping_match 逻辑，\
          与 ReflowMove 的 shaping identity 校验对称。"
+    );
+    // 修复后：逐个检查所有 new side（多对多），任一失效整组 Remove。
+    assert!(
+        group_window.contains("all_new_side_ok"),
+        "修复后应逐个检查所有 new side（all_new_side_ok），任一失效整组 Remove。"
     );
 }
 
-/// 修复后守卫 10: 未配对的 CrossFade units（缺 side 的 group）直接整组 Remove，
-/// 不再走独立 Rebind。
+/// 修复后守卫 10: CrossFade 多对多 group 缺 side（old 或 new 任一侧为空）时
+/// 整组所有成员一起 Remove，不再走独立 Rebind。
+/// Issue #738 评论 5793319451 问题2: 旧实现用一对一 crossfade_pairs，缺 side 的 group
+/// 成员走单独循环 Remove；新实现用多对多 crossfade_groups，在 group 处理循环内
+/// 检查 old_indices/new_indices 是否为空，整组一起 Remove。
 #[test]
 fn issue3_fix_unpaired_crossfade_group_remove() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
     let window = function_window(
         &src,
         "fn rebind_timed_units_to_canonical",
-        14000,
+        16000,
     );
     assert!(
         window.contains("缺 side 的 group"),
         "修复后未配对 CrossFade 应有 '缺 side 的 group' 注释说明整组失效处理。"
     );
-    // 修复后：未配对 CrossFade 直接 Remove，不再有 union_of_hits 独立 Rebind。
-    // 定位未配对处理块
-    let unpaired_marker = "if crossfade_pairs.iter().any(|&(o, n)| o == i || n == i)";
+    // 修复后：多对多 group 在循环内检查 old/new 任一侧为空 → 整组 Remove。
     assert!(
-        src.contains(unpaired_marker),
-        "未配对 CrossFade 处理块应存在。"
+        window.contains("group.old_indices.is_empty() || group.new_indices.is_empty()"),
+        "修复后应在 group 循环内检查 old_indices/new_indices 任一侧为空。"
+    );
+    // 修复后：缺 side 时整组所有成员一起 Remove（遍历 old_indices 和 new_indices 设 Remove）。
+    let group_marker = "for (_gid, group) in &crossfade_groups";
+    let group_pos = src
+        .find(group_marker)
+        .expect("rebind 中 crossfade_groups 多对多处理循环必须存在");
+    let window_end = group_pos + 1200;
+    let window_end = src
+        .char_indices()
+        .take_while(|(i, _)| *i < window_end)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(src.len())
+        .min(src.len());
+    let group_head = &src[group_pos..window_end];
+    assert!(
+        group_head.contains("group.old_indices.is_empty() || group.new_indices.is_empty()"),
+        "修复后缺 side 检查应在 group 处理循环开头。"
+    );
+    assert!(
+        group_head.contains("for &oi in &group.old_indices"),
+        "修复后缺 side 时应遍历 group.old_indices 整组 Remove。"
+    );
+    assert!(
+        group_head.contains("for &ni in &group.new_indices"),
+        "修复后缺 side 时应遍历 group.new_indices 整组 Remove。"
     );
 }
