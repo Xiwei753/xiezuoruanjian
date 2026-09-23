@@ -302,27 +302,29 @@ fn issue738_comment5793319451_fix3b_split_frame_direction_matches_compute_frame(
 // =========================================================================
 
 /// 修复后守卫 3c: Rebind 应用循环中同步更新 reflow_anchors 的 from/to_document_rect。
+/// Issue #738 评论 5795183758 把 RebindNewSide 从统一 frame_rect/new_to 改为逐 anchor
+/// current_rect/target_rect（与 RebindMerged 对称），语义仍是同步更新 reflow_anchors。
 #[test]
 fn issue738_comment5793319451_fix3c_rebind_updates_reflow_anchors() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 20000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 32000);
 
-    // 修复后：Rebind 应用循环中有 reflow_anchors 同步更新。
+    // 修复后：Rebind 应用循环中有 reflow_anchors 同步更新（逐 anchor enumerate）。
     assert!(
-        window.contains("for anchor in &mut unit.slice.reflow_anchors"),
-        "修复后 Rebind 应用循环应遍历 for anchor in &mut unit.slice.reflow_anchors 同步更新。"
+        window.contains("unit.slice.reflow_anchors.iter_mut().enumerate()"),
+        "修复后 Rebind 应用循环应遍历 unit.slice.reflow_anchors.iter_mut().enumerate() 同步更新。"
     );
 
-    // 修复后：anchor.from_document_rect 更新为当前帧位置（frame.x/y/w/h）。
+    // 修复后：anchor.from_document_rect 更新为 current_rect.clone()（逐 anchor 当前帧）。
     assert!(
-        window.contains("anchor.from_document_rect = SourceRect"),
-        "修复后应更新 anchor.from_document_rect = SourceRect 结构体。"
+        window.contains("anchor.from_document_rect = current_rect.clone();"),
+        "修复后应更新 anchor.from_document_rect = current_rect.clone();（逐 anchor 当前帧）。"
     );
 
-    // 修复后：anchor.to_document_rect 更新为 new_to。
+    // 修复后：anchor.to_document_rect 更新为 target_rect.clone()（逐 anchor 目标）。
     assert!(
-        window.contains("anchor.to_document_rect = new_to.clone();"),
-        "修复后应更新 anchor.to_document_rect = new_to.clone();。"
+        window.contains("anchor.to_document_rect = target_rect.clone();"),
+        "修复后应更新 anchor.to_document_rect = target_rect.clone();（逐 anchor 目标）。"
     );
 
     // 修复后：注释中标记了 5793319451 问题3C。

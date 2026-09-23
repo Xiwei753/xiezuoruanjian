@@ -182,14 +182,14 @@ fn issue2_fix_build_split_replacement_units_exists() {
         src.contains("fn build_split_replacement_units"),
         "修复后应有 build_split_replacement_units 函数。"
     );
-    let window = function_window(&src, "fn build_split_replacement_units", 2400);
+    let window = function_window(&src, "fn build_split_replacement_units", 5000);
     assert!(
         window.contains("anchor.snapshot_id") && window.contains("anchor.source_rect"),
         "修复后 build_split_replacement_units 应逐 anchor 保留自己的 snapshot_id/source_rect。"
     );
     assert!(
-        window.contains("reflow_anchors: vec![anchor.clone()]"),
-        "修复后每个 replacement unit 应只包含自己的单个 ReflowAnchor。"
+        window.contains("reflow_anchors: vec![new_anchor]"),
+        "修复后每个 replacement unit 应只包含自己的单个 ReflowAnchor（与 slice 同 basis）。"
     );
 }
 
@@ -200,7 +200,7 @@ fn issue2_fix_apply_decision_handles_split() {
     let window = function_window(
         &src,
         "fn rebind_timed_units_to_canonical",
-        20000,
+        32000,
     );
     assert!(
         window.contains("Some(RebindDecision::Split(replacement_units))"),
@@ -304,7 +304,7 @@ fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
         .find(group_marker)
         .expect("rebind 中 crossfade_groups 多对多处理循环必须存在");
     // 取该循环到结束的窗口（足够覆盖 new side 校验逻辑）
-    let window_end = group_pos + 4200;
+    let window_end = group_pos + 8000;
     let window_end = src
         .char_indices()
         .take_while(|(i, _)| *i < window_end)

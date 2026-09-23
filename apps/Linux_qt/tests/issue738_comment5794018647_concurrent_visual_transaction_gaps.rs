@@ -90,27 +90,29 @@ fn fix1a_crossfade_no_group_union_to_all_members() {
 // 修复 1b 守卫: CrossFade new side 逐 unit 算自己的 target
 // =========================================================================
 
-/// 修复后守卫 1b: 存在 RebindNewSide { target } 结构，且 new side 逐 unit 算自己的
-/// target（存在 new_side_targets 变量收集每个 unit 自己的 target）。
+/// 修复后守卫 1b: 存在 RebindNewSide { ... } 结构，且 new side 逐 unit 算自己的
+/// target（存在 new_side_rebinds 变量收集每个 unit 自己的 anchor_rebinds + target_union）。
+/// Issue #738 评论 5795183758 把 new_side_targets 演进为 new_side_rebinds（逐 anchor
+/// 保留 current_rect/target_rect），target_union 仍由 anchor_rebinds 归约得到。
 #[test]
 fn fix1b_crossfade_new_side_uses_own_target() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 24000);
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 32000);
 
-    // 修复后：存在 new_side_targets 变量（逐 unit 收集自己的 target）。
+    // 修复后：存在 new_side_rebinds 变量（逐 unit 收集自己的 anchor_rebinds + target_union）。
     assert!(
-        window.contains("new_side_targets"),
-        "修复后应有 new_side_targets 变量收集每个 new side unit 自己的 target。"
+        window.contains("new_side_rebinds"),
+        "修复后应有 new_side_rebinds 变量收集每个 new side unit 自己的 anchor_rebinds。"
     );
-    // 修复后：存在 RebindNewSide { target 结构（带字段的花括号变体）。
+    // 修复后：存在 RebindNewSide { 结构（带字段的花括号变体）。
     assert!(
         window.contains("RebindNewSide {"),
-        "修复后应有 RebindNewSide {{ target }} 结构变体。"
+        "修复后应有 RebindNewSide {{ ... }} 结构变体。"
     );
-    // 修复后：逐 new unit 算 unit_target（该 unit 所有 anchor hits 的 union）。
+    // 修复后：逐 new unit 算 target_union（该 unit 所有 anchor target 的 union）。
     assert!(
-        window.contains("unit_target"),
-        "修复后应逐 new unit 算 unit_target（该 unit 所有 anchor hits 的 union）。"
+        window.contains("target_union"),
+        "修复后应逐 new unit 算 target_union（该 unit 所有 anchor target 的 union）。"
     );
 }
 
