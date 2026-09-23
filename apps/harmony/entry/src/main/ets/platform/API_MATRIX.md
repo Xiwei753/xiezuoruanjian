@@ -15,7 +15,7 @@
 | 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
 | 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
 | 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
-| 手写笔 | @kit.InputKit (TouchEvent / ToolType) | 未限定独立 API（基础输入事件，随 ArkUI） | 无独立 SystemCapability（基础输入事件） | 无独立权限（基础输入事件） | 否 | input/StylusInputService.ets |
+| 手写笔 | @kit.ArkUI (组件 TouchEvent) | 未限定独立 API（基础输入事件，随 ArkUI） | 无独立 SystemCapability（基础输入事件） | 无独立权限（基础输入事件） | 否 | input/StylusInputService.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -146,12 +146,16 @@
 
 ## 手写笔
 
-- Kit：`@kit.InputKit`（`TouchEvent` / `ToolType`）
+- Kit：`@kit.ArkUI`（组件 `TouchEvent`，即 `.onTouch` 回调传入的事件）
 - 接口：
-  - `TouchEvent`（`touches[].force` 压力 / `tiltX` / `tiltY` 倾斜 / `toolType` 工具类型）
-  - `ToolType.TIP` / `ToolType.ERASER`（识别笔尖/橡皮擦）
-- 最低 API：未限定独立 API（`TouchEvent` / `ToolType` 是基础输入事件，随 ArkUI 触摸事件分发，无独立起始 API Level 声明）
+  - ArkUI 组件 `TouchEvent`（`extends BaseEvent`）
+  - `event.sourceTool` / `SourceTool` 枚举识别笔类工具（`SourceTool.Pen`）
+  - 坐标来自 `event.touches[0].x / y`
+  - 压力和倾斜来自事件级 `event.pressure / event.tiltX / event.tiltY`（BaseEvent 字段）
+  - 时间戳 `event.timestamp`
+- 最低 API：未限定独立 API（ArkUI 组件触摸事件，随 ArkUI 整体可用，无独立起始 API Level 声明）
 - SystemCapability：无独立 SystemCapability（基础输入事件）
 - 权限：无独立权限（基础输入事件）
 - ACL：否
 - 实现文件：`input/StylusInputService.ets`
+- 说明：ArkUI 原始输入只在 `platform/input` 归一化，不把平台事件类型传进 Core。`StylusInputService` 消费 ArkUI 组件 `.onTouch` 传进来的全局 `TouchEvent`，不再依赖 `@kit.InputKit` 的 `TouchEvent / ToolType`。

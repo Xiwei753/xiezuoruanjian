@@ -1,14 +1,13 @@
 // StylusInputService — 接 HarmonyOS Stylus 事件，转出平台状态。
 // 笔压、倾斜、笔键等。不把原始事件传进 Core。
 //
-// 真实事件源：@kit.InputKit 的 TouchEvent（stylus/touchpen 设备来源）。
-// normalize 从真实事件提取 pressure / tiltX / tiltY / isEraser。
-// HarmonyOS 触摸事件中 TouchPoint 含 force（压力，0..1）、tiltX、tiltY 字段。
+// 真实事件源：ArkUI 组件 TouchEvent（.onTouch 回调传入的全局 TouchEvent）。
+// normalizeStylusEvent 从真实事件提取 pressure / tiltX / tiltY / isEraser。
+// ArkUI TouchEvent 继承 BaseEvent，事件级含 pressure（0..1）、tiltX、tiltY、sourceTool、timestamp；
+// touches[0].x / y 是组件坐标系坐标。
 // 笔能力由本 service 统一负责（Issue #629 评论6 第6部分）：
 // 三态 unknown/supported/unsupported，不再依赖 InputDeviceService.hasDeviceOfKind('stylus')，
 // 也不再从 InputDevice.sources 查 'stylus'（'stylus' 不是真实 SourceType）。
-
-import { TouchEvent, ToolType } from '@kit.InputKit'
 
 export interface PlatformStylusEvent {
   x: number
@@ -22,7 +21,7 @@ export interface PlatformStylusEvent {
 
 // 笔能力三态（Issue #629 评论6 第6部分）：
 // - unknown：未探测过，或系统只能在真实笔事件到来后确认（HarmonyOS 无主动 Pen 能力查询 API）
-// - supported：收到过真实笔事件（TouchEvent.toolType === ToolType.TIP / ToolType.ERASER）
+// - supported：收到过真实笔事件（event.sourceTool === SourceTool.Pen）
 // - unsupported：明确确认不支持（这轮无可靠主动 API 设此态，保留给未来 Pen Kit 探测）
 //
 // 不再从 InputDevice.sources 查 'stylus'——'stylus' 不是真实 SourceType
@@ -67,8 +66,8 @@ export class StylusInputService {
   // 异步探测笔能力。
   // 不查 sources.includes('stylus')——'stylus' 不是真实 SourceType（真实的是
   // keyboard/mouse/touchpad/touchscreen/joystick/trackball）。
-  // HarmonyOS 没有可靠的主动 API 查询"是否支持笔输入"：Pen 能力从真实 TouchEvent 的
-  // toolType 字段识别（toolType === ToolType.TIP / ToolType.ERASER）。
+  // HarmonyOS 没有可靠的主动 API 查询"是否支持笔输入"：Pen 能力从真实 ArkUI TouchEvent 的
+  // sourceTool 字段识别（event.sourceTool === SourceTool.Pen）。
   // 系统只能在真实笔事件到来后确认，所以 detectSupport 不主动置 'supported'，
   // 也不主动置 'unsupported'（没有可靠 API 证明"不支持"）。
   // 若已通过 normalizeStylusEvent 收到过真实笔事件，保持 'supported'；否则保持 'unknown'。
@@ -79,48 +78,41 @@ export class StylusInputService {
     return this.capabilityState
   }
 
-  // 接 HarmonyOS 原始 TouchEvent（stylus 来源），归一化为 PlatformStylusEvent。
-  // 取第一个 touch point；提取 force / tiltX / tiltY / toolType。
-  // 收到真实笔事件时置 capabilityState = 'supported'（设备必然支持笔输入）。
-  normalizeStylusEvent(raw: TouchEvent): PlatformStylusEvent {
-    const touches: Touch[] = raw.touches ?? []
-    const primary: Touch | undefined = touches.length > 0 ? touches[0] : undefined
-    const x: number = primary ? primary.x : 0
-    const y: number = primary ? primary.y : 0
-    // force 字段范围 0..1；缺失时按"无压感"处理为 0。
-    const pressure: number = primary && primary.force !== undefined ? primary.force : 0
-    // tiltX / tiltY 字段（弧度或角度，按系统定义直传）。
-    const tiltX: number = primary && primary.tiltX !== undefined ? primary.tiltX : 0
-    const tiltY: number = primary && primary.tiltY !== undefined ? primary.tiltY : 0
-    // isEraser 通过官方 ToolType 枚举判断（ToolType.ERASER）。
-    const toolType: number = primary && primary.toolType !== undefined ? primary.toolType : 0
-    const isEraser: boolean = toolType === ToolType.ERASER
+  // 唯一的笔工具判断入口。统一按 ArkUI event.sourceTool 判断，不再读 touches[0].toolType，也不写魔法数字。
+  // ArkUI SourceTool 枚举当前只有 Pen 是笔类值（Unknown/Finger/MOUSE/TOUCHPAD/JOYSTICK 都不是笔）。
+  // 手指等其他来源返回 false。
+  isStylusEvent(event: TouchEvent): boolean {
+    return event.sourceTool === SourceTool.Pen
+  }
+
+  // 接 ArkUI 组件 TouchEvent（.onTouch 传来），归一化为 PlatformStylusEvent。
+  // 非笔事件（isStylusEvent false）或没有 touch point 时返回 null。
+  // 坐标取 event.touches[0].x/y；压力、倾斜从事件级 event.pressure / event.tiltX / event.tiltY 读取；
+  // 时间戳用 event.timestamp（ns）。
+  // 只有收到真实笔事件后才把 capabilityState 置为 'supported'。
+  normalizeStylusEvent(event: TouchEvent): PlatformStylusEvent | null {
+    if (!this.isStylusEvent(event)) {
+      return null
+    }
+    const touches: TouchObject[] = event.touches ?? []
+    if (touches.length === 0) {
+      return null
+    }
+    const primary: TouchObject = touches[0]
+    // 橡皮擦：当前 ArkUI SourceTool 只有 Pen，不区分橡皮擦。
+    // Rubber/Brush/Pencil/Airbrush 是 @kit.InputKit ToolType 的概念，本轮按 Issue #743 删除 @kit.InputKit 依赖，
+    // 统一用 ArkUI SourceTool；当前 SourceTool 不区分橡皮擦，isEraser 暂为 false。
+    const isEraser: boolean = false
     // 实际收到笔事件，设备必然支持笔输入。
     this.capabilityState = 'supported'
     return {
-      x: x,
-      y: y,
-      pressure: pressure,
-      tiltX: tiltX,
-      tiltY: tiltY,
+      x: primary.x,
+      y: primary.y,
+      pressure: event.pressure,
+      tiltX: event.tiltX,
+      tiltY: event.tiltY,
       isEraser: isEraser,
-      timestamp: Date.now()
-    }
-  }
-
-  // 兼容旧入口：Record<string, Object> 形式。
-  // 实际收到笔事件时也标记 capabilityState = 'supported'。
-  normalize(rawStylusEvent: Record<string, Object>): PlatformStylusEvent {
-    const toolType: number = (rawStylusEvent['toolType'] ?? 0) as number
-    this.capabilityState = 'supported'
-    return {
-      x: (rawStylusEvent['x'] ?? 0) as number,
-      y: (rawStylusEvent['y'] ?? 0) as number,
-      pressure: (rawStylusEvent['force'] ?? rawStylusEvent['pressure'] ?? 0) as number,
-      tiltX: (rawStylusEvent['tiltX'] ?? 0) as number,
-      tiltY: (rawStylusEvent['tiltY'] ?? 0) as number,
-      isEraser: toolType === ToolType.ERASER,
-      timestamp: Date.now()
+      timestamp: event.timestamp
     }
   }
 }

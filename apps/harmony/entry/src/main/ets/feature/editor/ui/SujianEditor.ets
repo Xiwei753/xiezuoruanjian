@@ -448,7 +448,7 @@ export struct SujianEditor {
 
   // ── 触摸事件处理 ──
   // 复用现有 hit test，补真实 drag selection（TouchDown 记 anchor, TouchMove drag, TouchUp 结束）。
-  // 笔事件（toolType != 0）由 StylusInputService 识别后按触控选择/书写区交互处理。
+  // 笔事件（sourceTool === Pen）由 StylusInputService 识别后按触控选择/书写区交互处理。
   // Issue #629 评论6 Part A+D：所有输入经 dispatcher 统一排队；删除重复 onSelectionTap prop（双 owner）。
   // Issue #629 R11 评论5329310563 第2项：TouchUp/TouchMove drag 走 dispatchSelectionAndSyncIme，
   // 成功后查询最终 selection 再通知 IME，不再 fire-and-forget 后立即用原 hitPos 通知。
@@ -462,10 +462,9 @@ export struct SujianEditor {
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
     const hitPos: VisualCaretPosition = this.hitTestContent(contentCoord[0], contentCoord[1])
 
-    // 笔事件识别：toolType 非 0（TIP=0 是手指，ERASER=1 是橡皮擦，其他是笔尖）。
+    // 笔事件识别：统一由 StylusInputService.isStylusEvent 按 ArkUI event.sourceTool 判断。
     // 由 StylusInputService 归一化后按触控选择/书写区交互处理，原始 stylus event 不进 Core。
-    const isStylus: boolean = touch.toolType !== undefined && touch.toolType !== 0
-    if (isStylus) {
+    if (this.stylusService.isStylusEvent(event)) {
       this.stylusService.normalizeStylusEvent(event)
       // 笔事件按触控选择/书写区交互处理（与触控同一套 hit test + selection）。
     }

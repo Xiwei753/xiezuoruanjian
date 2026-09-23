@@ -9,7 +9,7 @@
 //   5. 'change' 回调只处理 add/remove
 //   6. KeyboardInputService.toSemanticCommand: 字符/Enter/Backspace/Delete/方向/Home/End → 语义命令
 //   7. PointerInputService.normalizeMouseEvent: 点击/drag/滚轮 action 映射
-//   8. StylusInputService.normalizeStylusEvent: toolType/pressure/tilt 提取
+//   8. StylusInputService.normalizeStylusEvent: sourceTool/pressure/tilt 事件级提取
 //   9. drag selection: down → move → up 序列
 //
 // 注：本测试需在真实 HarmonyOS 环境运行（依赖 @kit.InputKit）。
