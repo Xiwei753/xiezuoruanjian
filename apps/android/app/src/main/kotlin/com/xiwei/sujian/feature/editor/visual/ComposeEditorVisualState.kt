@@ -772,6 +772,7 @@ class ComposeEditorVisualState(
             CoordinatedEditMotion.Sample(
                 caretRect = originCaret,
                 glyphOverlays = glyphOverlays,
+                retainedOverlays = emptyList(),
                 hiddenRanges = hiddenRanges,
                 finished = false,
                 isValid = true,

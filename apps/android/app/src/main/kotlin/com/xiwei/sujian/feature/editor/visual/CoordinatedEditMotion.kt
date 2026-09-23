@@ -1,8 +1,11 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
+import kotlin.math.abs
 
 /**
  * Issue #737：一笔编辑的完整协调运动状态。
@@ -23,6 +26,10 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * @param newLine 编辑后 caret 所在行（-1 表示未确定）。
  * @param traversal 光标遍历路径 — 唯一主运动。
  * @param glyphChannels 文字 glyph 运动通道（traversal 无效时为空）。
+ * @param retainedMoveChannels Issue #739 评论 5787769674：retained reflow 运动通道 —
+ *   自动换行时被挤到下一行的"保留文字"的位置平移通道。每个通道占整个 master progress [0,1]，
+ *   多个 retained move 各占全区间并行平移。和 [glyphChannels] 共用同一个 master progress，
+ *   不另开 timer。traversal 无效时为空。
  * @param startedAtNanos motion 开始时间戳（Compose frame clock）。
  * @param durationNanos motion 时长（<=0 表示瞬时完成）。
  * @param prepared Issue #737 评论 5782769758：是否处于 prepared 状态 —
@@ -45,6 +52,7 @@ class CoordinatedEditMotion(
     val newLine: Int,
     val traversal: CaretTraversal,
     val glyphChannels: Map<Long, GlyphChannel>,
+    val retainedMoveChannels: List<RetainedMoveChannel> = emptyList(),
     private val startedAtNanos: Long,
     private val durationNanos: Long,
     private val prepared: Boolean = false,
@@ -75,6 +83,7 @@ class CoordinatedEditMotion(
             newLine = newLine,
             traversal = traversal,
             glyphChannels = glyphChannels,
+            retainedMoveChannels = retainedMoveChannels,
             startedAtNanos = startedAtNanos,
             durationNanos = durationNanos,
             prepared = false,
@@ -107,14 +116,50 @@ class CoordinatedEditMotion(
     )
 
     /**
+     * Issue #739 评论 5787769674：retained reflow 运动通道 —
+     * 自动换行时被挤到下一行的"保留文字"的位置平移通道。
+     *
+     * 保留文字不是吞字/吐字：不套 clipFraction，只做从 [oldTopLeft] 到 [newTopLeft] 的位置平移。
+     * 和 [GlyphChannel] 共用同一个 master progress，不另开 timer。
+     *
+     * [oldRange]/[newRange] 来自 [ComposeVisualPatch.retainedMoves]（由
+     * [ComposeVisualRebase.computeRetainedMoves] 用 old/new TextLayoutResult 算好），
+     * 这里只把这份现成数据接入 motion，不重新推导哪些字发生了换行。
+     *
+     * @param oldRange 旧布局中的 UTF-16 range。
+     * @param newRange 新布局中的 UTF-16 range。
+     * @param oldLayout 旧布局快照 — 用来画原文字（retained overlay 用 oldLayout + oldRange）。
+     * @param newLayout 新布局快照 — 用来取 destination 几何。
+     * @param oldTopLeft old range 的起点位置（从 oldLayout.boundsForRawRange(oldRange) 的 left/top 取）。
+     * @param newTopLeft new range 的终点位置（从 newLayout.boundsForRawRange(newRange) 的 left/top 取）。
+     * @param startProgress 在 master progress 中的区间起点（retained move 占整个 [0,1]）。
+     * @param endProgress 在 master progress 中的区间终点。
+     */
+    data class RetainedMoveChannel(
+        val oldRange: TextRange,
+        val newRange: TextRange,
+        val oldLayout: ComposeLayoutSnapshot,
+        val newLayout: ComposeLayoutSnapshot,
+        val oldTopLeft: Offset,
+        val newTopLeft: Offset,
+        val startProgress: Float,
+        val endProgress: Float,
+    )
+
+    /**
      * 一帧的采样结果 — 同时包含 caret 和文字。
      *
      * @param caretRect 当前帧 caret rect。
      * @param glyphOverlays 当前帧应绘制的 glyph overlay 列表
      *   （inserted 和 deleted 都进；deleted ghost 携带自己的 oldLayout）。
+     * @param retainedOverlays Issue #739 评论 5787769674：当前帧应绘制的 retained reflow overlay 列表。
+     *   保留文字全程可见（不做 reveal clip，不套 clipFraction，不改变 alpha），
+     *   只从 old position 平移到 new position。即使 progress=0 也加入（translate=Zero，文字在 old position）。
      * @param hiddenRanges 当前帧应被动画层接管（裁掉 BasicTextField 原字）的 range 列表。
-     *   **Issue #737 评论 5781084709 修复点 4**：只包含 Inserted 角色的 current-layout ranges
+     *   **Issue #737 评论 5781084709 修复点 4**：包含 Inserted 角色的 current-layout ranges
      *   （这些 range 属于 newLayout，裁掉 BasicTextField 里的对应正文是正确的）。
+     *   **Issue #739 评论 5787769674**：还包含 retained move 的 destination newRange
+     *   （motion 未结束时由动画层接管，完成后释放交还 BasicTextField）。
      *   Deleted 不进入此列表 — deleted ghost 通过 [glyphOverlays] 用自己的 oldLayout 绘制，
      *   不裁 BasicTextField 当前正文。
      * @param finished motion 是否已完成。
@@ -123,6 +168,7 @@ class CoordinatedEditMotion(
     data class Sample(
         val caretRect: Rect,
         val glyphOverlays: List<GlyphOverlay>,
+        val retainedOverlays: List<RetainedOverlay>,
         val hiddenRanges: List<TextRange>,
         val finished: Boolean,
         val isValid: Boolean,
@@ -150,6 +196,25 @@ class CoordinatedEditMotion(
         val clipFraction: Float,
     )
 
+    /**
+     * Issue #739 评论 5787769674：retained reflow 绘制 overlay —
+     * 自动换行时被挤到下一行的"保留文字"的一帧采样结果。
+     *
+     * 用 [oldLayout] + [oldRange] 画原文字，按 [translate]（从 Zero 插值到 newTopLeft - oldTopLeft）平移。
+     * 不做 reveal clip，不改变 alpha（保留文字全程可见）。
+     *
+     * @param key 唯一标识（与 glyph overlay key 区分，从 [RETAINED_OVERLAY_KEY_BASE] 起算）。
+     * @param oldLayout 旧布局快照 — 用来画原文字。
+     * @param oldRange 旧布局中的 UTF-16 range — 用 oldLayout 和 oldRange 画原文字。
+     * @param translate 当前帧的平移量（从 Offset.Zero 插值到 newTopLeft - oldTopLeft）。
+     */
+    data class RetainedOverlay(
+        val key: Long,
+        val oldLayout: ComposeLayoutSnapshot,
+        val oldRange: TextRange,
+        val translate: Offset,
+    )
+
     /** motion 是否有效 — traversal 建出来才有效。 */
     val isValid: Boolean get() = traversal.isValid
 
@@ -169,12 +234,20 @@ class CoordinatedEditMotion(
      * （current-layout ranges）。Deleted 不加入 hiddenRanges — deleted ghost 用自己的 oldLayout
      * 通过 [Sample.glyphOverlays] 绘制，不裁 BasicTextField 当前正文。
      *
+     * Issue #739 评论 5787769674：遍历 [retainedMoveChannels] 产出 [Sample.retainedOverlays]。
+     * 保留文字全程可见（不做 reveal clip，不套 clipFraction，不改变 alpha），只做位置平移。
+     * 即使 progress=0 也加入（translate=Zero，文字在 old position）。
+     * motion 未结束时（!progress.finished）把每个 retained move 的 newRange 加进 hiddenRanges
+     * （和 Inserted range 一起，由动画层接管）；完成后释放 newRange，由 BasicTextField 最终正文接管。
+     * retained overlay 和 caret/insert/delete glyph 用同一个 master progress，不另开 timer。
+     *
      * @param frameTimeNanos 当前帧时间戳（Compose frame clock）。
      */
     fun sample(frameTimeNanos: Long): Sample {
         val progress = computeProgress(frameTimeNanos)
         val caretRect = if (isValid) traversal.sampleCaret(progress.value) else newCaretRect
         val glyphOverlays = mutableListOf<GlyphOverlay>()
+        val retainedOverlays = mutableListOf<RetainedOverlay>()
         val hiddenRanges = mutableListOf<TextRange>()
         for ((key, ch) in glyphChannels) {
             val localProgress = mapProgressToChannel(progress.value, ch.startProgress, ch.endProgress)
@@ -197,9 +270,32 @@ class CoordinatedEditMotion(
                 hiddenRanges.add(ch.range)
             }
         }
+        // Issue #739 评论 5787769674：retained reflow overlay。
+        // 保留文字全程可见（不做 reveal clip，不套 clipFraction，不改变 alpha），只做位置平移。
+        // 即使 progress=0 也加入（translate=Zero，文字在 old position）。
+        for ((index, ch) in retainedMoveChannels.withIndex()) {
+            val localProgress = mapProgressToChannel(progress.value, ch.startProgress, ch.endProgress)
+            val dx = (ch.newTopLeft.x - ch.oldTopLeft.x) * localProgress
+            val dy = (ch.newTopLeft.y - ch.oldTopLeft.y) * localProgress
+            val translate = Offset(dx, dy)
+            retainedOverlays.add(
+                RetainedOverlay(
+                    key = RETAINED_OVERLAY_KEY_BASE + index.toLong(),
+                    oldLayout = ch.oldLayout,
+                    oldRange = ch.oldRange,
+                    translate = translate,
+                ),
+            )
+            // motion 未结束时把每个 retained move 的 newRange 加进 hiddenRanges
+            // （和 Inserted range 一起，由动画层接管）；完成后释放 newRange。
+            if (!progress.finished) {
+                hiddenRanges.add(ch.newRange)
+            }
+        }
         return Sample(
             caretRect = caretRect,
             glyphOverlays = glyphOverlays,
+            retainedOverlays = retainedOverlays,
             hiddenRanges = hiddenRanges,
             finished = progress.finished,
             isValid = isValid,
@@ -252,6 +348,12 @@ class CoordinatedEditMotion(
     companion object {
         /** glyph key 单调递增计数器 — 进程级唯一。 */
         private var nextGlyphKey = 1L
+
+        /**
+         * Issue #739 评论 5787769674：retained overlay key 基数 —
+         * 与 glyph key（从 1 起算）区分，retained overlay key 从此基数起算。
+         */
+        private const val RETAINED_OVERLAY_KEY_BASE = 1_000_000L
 
         /**
          * 从 [ComposeVisualPatch] 构造一笔协调运动。
@@ -311,6 +413,7 @@ class CoordinatedEditMotion(
                     newLine = -1,
                     traversal = traversal,
                     glyphChannels = emptyMap(),
+                    retainedMoveChannels = emptyList(),
                     startedAtNanos = frameTimeNanos,
                     durationNanos = durationNanos,
                     prepared = prepared,
@@ -318,6 +421,7 @@ class CoordinatedEditMotion(
             }
 
             val channels = buildGlyphChannels(patch)
+            val retainedChannels = buildRetainedMoveChannels(patch)
 
             // Issue #737 评论 5781084709 修复点 6：从 traversal.oldLine / traversal.newLine
             // 取真实行号传入 motion 构造，不再固定传 -1。
@@ -330,6 +434,7 @@ class CoordinatedEditMotion(
                 newLine = traversal.newLine,
                 traversal = traversal,
                 glyphChannels = channels,
+                retainedMoveChannels = retainedChannels,
                 startedAtNanos = frameTimeNanos,
                 durationNanos = durationNanos,
                 prepared = prepared,
@@ -399,6 +504,53 @@ class CoordinatedEditMotion(
         }
 
         /**
+         * Issue #739 评论 5787769674：为 retained reflow move 构造位置平移通道。
+         *
+         * 直接消费 [ComposeVisualPatch.retainedMoves]（由 [ComposeVisualRebase.computeRetainedMoves]
+         * 用 old/new TextLayoutResult 算好），不重新推导哪些字发生了换行。
+         *
+         * 对每个 move：
+         * - 用 patch.oldLayout.boundsForRawRange(move.oldRange) 和
+         *   patch.newLayout.boundsForRawRange(move.newRange) 取真实 path bounds。
+         * - 拿不到 bounds（null）的那一条就不建立 channel。
+         * - 位置没有变化的（|dx|<=0.5f 且 |dy|<=0.5f）也不建立。
+         * - startProgress=0f, endProgress=1f（retained move 是位置平移，占整个 master progress [0,1]；
+         *   多个 retained move 各占全区间，并行平移）。
+         * - oldTopLeft = Offset(oldBounds.left, oldBounds.top)，
+         *   newTopLeft = Offset(newBounds.left, newBounds.top)。
+         */
+        private fun buildRetainedMoveChannels(patch: ComposeVisualPatch): List<RetainedMoveChannel> {
+            val retainedMoves = patch.retainedMoves
+            if (retainedMoves.isEmpty()) return emptyList()
+            val oldLayout = patch.oldLayout
+            val newLayout = patch.newLayout
+            val channels = mutableListOf<RetainedMoveChannel>()
+            for (move in retainedMoves) {
+                val oldBounds = oldLayout.boundsForRawRange(move.oldRange) ?: continue
+                val newBounds = newLayout.boundsForRawRange(move.newRange) ?: continue
+                val oldTopLeft = Offset(oldBounds.left, oldBounds.top)
+                val newTopLeft = Offset(newBounds.left, newBounds.top)
+                val dx = newTopLeft.x - oldTopLeft.x
+                val dy = newTopLeft.y - oldTopLeft.y
+                // 位置没有变化的不建立 channel（|dx|<=0.5f 且 |dy|<=0.5f）。
+                if (abs(dx) <= 0.5f && abs(dy) <= 0.5f) continue
+                channels.add(
+                    RetainedMoveChannel(
+                        oldRange = move.oldRange,
+                        newRange = move.newRange,
+                        oldLayout = oldLayout,
+                        newLayout = newLayout,
+                        oldTopLeft = oldTopLeft,
+                        newTopLeft = newTopLeft,
+                        startProgress = 0f,
+                        endProgress = 1f,
+                    ),
+                )
+            }
+            return channels
+        }
+
+        /**
          * Issue #737：纯 selection/caret 移动构造的 motion — 无文字吞吐。
          *
          * caret 从 [originCaretRect] 移动到 [targetCaretRect]，glyph channels 为空。
@@ -457,6 +609,7 @@ class CoordinatedEditMotion(
                 newLine = traversal.newLine,
                 traversal = traversal,
                 glyphChannels = emptyMap(),
+                retainedMoveChannels = emptyList(),
                 startedAtNanos = frameTimeNanos,
                 durationNanos = durationNanos,
                 prepared = prepared,

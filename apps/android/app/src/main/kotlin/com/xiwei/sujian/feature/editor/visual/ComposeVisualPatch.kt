@@ -12,7 +12,8 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * 位置只从 [androidx.compose.ui.text.TextLayoutResult] 读，动画只负责画。
  *
  * #689：从 [ComposeVisualTransaction]（已删除）搬到这里。
- * 持续 timeline 下 retained move 只描述"几何位移"，不再携带事务身份。
+ * Issue #739 评论 5787769674：由 [CoordinatedEditMotion] 消费，表示同一逻辑正文在
+ * old/new 平台 layout 之间发生的重排位移。不再携带事务身份。
  */
 data class RetainedMove(
     val oldRange: TextRange,
@@ -60,6 +61,10 @@ data class RetainedMove(
  * @param deletedUnits 被删除的 UTF-16 ranges（Delete/Move 的 oldRanges）—
  *   timeline 把对应 unit 转成 ghost，alpha 从当前值继续到 0。
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range。
+ *   Issue #739 评论 5787769674：由 [CoordinatedEditMotion.fromPatch] 消费
+ *   （[CoordinatedEditMotion.buildRetainedMoveChannels]），
+ *   表示同一逻辑正文在 old/new 平台 layout 之间发生的重排位移。
+ *   字段本身保留，只改消费方注释。
  * @param originCaretRect 编辑前 caret rect（old caret rect）— 供 [CoordinatedEditMotion] 算 caret 插值起点。
  * @param targetCaretRect 编辑后 caret rect（new caret rect）— 供 [CoordinatedEditMotion] 算 caret 插值终点。
  * @param originCaretOffset 生成 [originCaretRect] 时用的 caret offset（fact selection end，UTF-16）—

@@ -22,6 +22,13 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * Deleted ghost 自己携带 old layout（通过 [CoordinatedEditMotion.Sample.glyphOverlays]），
  * draw 层用 overlay 自带的 layout 画 ghost，不裁 BasicTextField 当前正文。
  *
+ * Issue #739 评论 5787769674：hidden current-layout ranges 不再只有 inserted，
+ * 也包括 motion 正在接管的 retained destination ranges（retained move 的 newRange）。
+ * [CoordinatedEditMotion.Sample.hiddenRanges] 现在含 inserted range + retained destination newRange，
+ * [CoordinatedEditMotion.Sample.retainedOverlays] 携带保留文字的 oldLayout/oldRange/translate。
+ * 状态结构仍然保持一份原子 snapshot（layout + motionSample + restingCaretRect），
+ * 不另加第二套 reflow 状态。
+ *
  * @param layout 当前 layout 快照 — 供 buildHiddenPath 使用。
  * @param motionSample 当前帧的 motion 采样结果 — 由 [CoordinatedEditMotion.sample] 产生。
  *   非 null 且 [CoordinatedEditMotion.Sample.isValid] 时 draw 层画 animated caret + glyph overlay；

@@ -131,11 +131,17 @@ fun EditorTextFieldDrawLayer(
  * （属于 newLayout，裁掉 BasicTextField 里的对应正文是正确的）。
  * Deleted ghost 不进入此列表 — deleted 通过 [drawGlyphOverlay] 用自己的 oldLayout 绘制。
  *
+ * Issue #739 评论 5787769674：[hiddenRanges] 语义扩展为"当前 motion 接管的 current-layout ranges" —
+ * 包含 inserted range + retained move 的 destination newRange。
+ * retained move 的 destination newRange 在 motion 未结束时由动画层接管（裁掉 BasicTextField 里
+ * 对应的最终位置正文），完成后释放交还 BasicTextField。实际 hiddenRanges 内容由
+ * [CoordinatedEditMotion.sample] 产出，draw 层只消费 [CoordinatedEditMotion.Sample.hiddenRanges]，
+ * 所以 buildHiddenPath 的裁切逻辑不用改，只更新注释说明语义扩展。
+ *
  * @param hiddenRanges 需要裁切的正文 range 列表。
- *   **语义收死（#711 评论 5738906634 + #737 评论 5781084709 修复点 4）**：只表示
- *   "这一帧由动画层接管的 inserted 字符"（current-layout ranges），
- *   不表示"被删除的旧字 ghost"（deleted 用 overlay 自带 oldLayout 画），
- *   也不表示"位置变了所以想自己重画的幸存正文"。
+ *   **语义（#711 评论 5738906634 + #737 评论 5781084709 修复点 4 + #739 评论 5787769674）**：
+ *   表示"这一帧由动画层接管的 current-layout ranges"（inserted range + retained destination newRange），
+ *   不表示"被删除的旧字 ghost"（deleted 用 overlay 自带 oldLayout 画）。
  * @param layout 当前正文 layout 快照；null 时返回 null。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value，
  *   用于把正文坐标 path 换算到视口坐标。
@@ -224,6 +230,34 @@ private fun DrawScope.drawGlyphOverlay(
 }
 
 /**
+ * Issue #739 评论 5787769674：绘制单个 retained reflow overlay —
+ * 自动换行时被挤到下一行的"保留文字"的一帧绘制。
+ *
+ * 用 [CoordinatedEditMotion.RetainedOverlay.oldLayout] + [oldRange] 画原文字，
+ * 按 [CoordinatedEditMotion.RetainedOverlay.translate]（从 Zero 插值到 newTopLeft - oldTopLeft）平移。
+ * 不做 reveal clip（clipRect = null），不改变 alpha（alpha = 1f）— 保留文字全程可见，只做位置平移。
+ *
+ * @param overlay retained reflow overlay。
+ * @param scrollY 当前滚动位置（px）。
+ * @param textColor 文字颜色。
+ */
+private fun DrawScope.drawRetainedOverlay(
+    overlay: CoordinatedEditMotion.RetainedOverlay,
+    scrollY: Int,
+    textColor: Color,
+) {
+    drawTranslatedRangeText(
+        snapshot = overlay.oldLayout,
+        range = overlay.oldRange,
+        translate = overlay.translate,
+        alpha = 1f,
+        scrollY = scrollY,
+        textColor = textColor,
+        clipRect = null,
+    )
+}
+
+/**
  * 按 translate 偏移绘制一段 range 文字。
  *
  * #703 评论 B：[clipRect] 用于空间进度驱动吞吐字 —
@@ -286,13 +320,20 @@ private fun DrawScope.drawTranslatedRangeText(
  *
  * - motionSample != null 且 [CoordinatedEditMotion.Sample.isValid]：
  *   1. 画 BasicTextField 内容（裁掉 hiddenRanges）
- *   2. 画 glyph overlays（插入/删除的文字）
- *   3. 画 animated caret
+ *   2. 画 retained move overlays（Issue #739 评论 5787769674：自动换行保留文字的位置平移）
+ *   3. 画 glyph overlays（插入/删除的文字）
+ *   4. 画 animated caret
  * - 否则：画 BasicTextField 内容 + resting caret
  *
  * Issue #737 评论 5781084709 修复点 4：[buildHiddenPath] 只用
- * [CoordinatedEditMotion.Sample.hiddenRanges]（只含 inserted current-layout ranges）裁 BasicTextField。
+ * [CoordinatedEditMotion.Sample.hiddenRanges]（含 inserted current-layout ranges
+ * + retained destination newRange）裁 BasicTextField。
  * Deleted ghost 通过 [drawGlyphOverlay] 用 overlay 自带的 oldLayout 绘制，不裁 BasicTextField。
+ *
+ * Issue #739 评论 5787769674：retained overlay 画在 BasicTextField 之后、glyph overlay 之前。
+ * 保留文字用 oldLayout + oldRange 画原文字，按 translate 平移，不做 reveal clip 不改 alpha。
+ * hiddenRanges 语义现在是"当前 motion 接管的 current-layout ranges"
+ * （inserted + retained destination newRange）。
  *
  * Issue #737 评论 5782769758：layout 和 motionSample 来自同一 presentation generation
  * （由 [ComposeEditorVisualState] 原子切换），draw 层只消费这一份原子 snapshot，
@@ -338,7 +379,15 @@ internal fun DrawScope.drawCurrentEditorFrame(
         } else {
             drawContent()
         }
-        // 2. 画 glyph overlays（插入/删除的文字）
+        // 2. 画 retained move overlays（Issue #739 评论 5787769674：自动换行保留文字的位置平移）
+        for (overlay in motionSample.retainedOverlays) {
+            drawRetainedOverlay(
+                overlay = overlay,
+                scrollY = scrollY,
+                textColor = textColor,
+            )
+        }
+        // 3. 画 glyph overlays（插入/删除的文字）
         for (overlay in motionSample.glyphOverlays) {
             drawGlyphOverlay(
                 overlay = overlay,
@@ -346,7 +395,7 @@ internal fun DrawScope.drawCurrentEditorFrame(
                 textColor = textColor,
             )
         }
-        // 3. 画 animated caret
+        // 4. 画 animated caret
         if (cursorColor != Color.Transparent) {
             drawVisualCaretRect(
                 caretRect = motionSample.caretRect,
