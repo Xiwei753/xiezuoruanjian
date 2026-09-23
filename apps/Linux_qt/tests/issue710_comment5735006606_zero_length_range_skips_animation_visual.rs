@@ -44,28 +44,30 @@ fn method_body(src: &str, signature: &str) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 测试 1: build_editor_layout_snapshot 用 `if affected_start < affected_end`
+// 测试 1: build_editor_layout_snapshot_with_canonical 用 `if affected_start < affected_end`
 //        作为动画视觉提取开关（开关逻辑不变，修复在调用方扩展 range）
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn issue710_comment5735006606_build_snapshot_skips_visual_when_zero_length_range() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let body = method_body(&src, "fn build_editor_layout_snapshot(");
+    // Issue #738 评论 5797637204: 解包逻辑移到 build_editor_layout_snapshot_with_canonical，
+    // 原 build_editor_layout_snapshot 变成 wrapper。在此检查新 helper 的解包逻辑。
+    let body = method_body(&src, "fn build_editor_layout_snapshot_with_canonical(");
 
     // composition_range 解包为 (affected_start, affected_end)
     assert!(
         body.contains("let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));"),
-        "build_editor_layout_snapshot 必须把 composition_range 解包为 affected_start/affected_end"
+        "build_editor_layout_snapshot_with_canonical 必须把 composition_range 解包为 affected_start/affected_end"
     );
     // 动画视觉提取用 `if affected_start < affected_end` 作为开关
     // 修复后调用方不再传零长度 range（先扩展到段落边界），此开关为 true
     assert!(
         body.contains("if affected_start < affected_end {"),
-        "build_editor_layout_snapshot 必须用 `if affected_start < affected_end` 作为动画视觉提取开关"
+        "build_editor_layout_snapshot_with_canonical 必须用 `if affected_start < affected_end` 作为动画视觉提取开关"
     );
     println!(
-        "[ISSUE710_COMMENT5735006606] build_editor_layout_snapshot 动画视觉提取开关保留 (GUARDED)"
+        "[ISSUE710_COMMENT5735006606] build_editor_layout_snapshot_with_canonical 动画视觉提取开关保留 (GUARDED)"
     );
 }
 
@@ -112,8 +114,12 @@ fn issue710_comment5735006606_commit_expands_candidate_range_before_new_snapshot
         "record_composition_commit_transaction 必须把扩展后的 new_affected range 作为 new_composition_range (FIXED)"
     );
     // new_snapshot 用 new_composition_range
+    // Issue #738 评论 5797637204: composition commit 改用 build_editor_layout_snapshot_with_canonical
+    // 同时拿 (EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)，函数名变了但坐标契约不变。
     assert!(
-        body.contains("build_editor_layout_snapshot(width, true, new_composition_range)"),
+        body.contains(
+            "build_editor_layout_snapshot_with_canonical(width, true, new_composition_range)"
+        ),
         "record_composition_commit_transaction 必须把 new_composition_range 传给 new_snapshot"
     );
     // raw candidate range 不能直接作为 composition_range

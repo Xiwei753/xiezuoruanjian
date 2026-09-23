@@ -317,6 +317,7 @@ impl EditorInputHost for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .cancel_active_composition("clear_preedit");
+                let layout_basis_revision = self.pipeline.layout_revision();
                 self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_commit_or_cancel(
@@ -339,6 +340,9 @@ impl EditorInputHost for SujianEditorItem {
                         new_line_top,
                         new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
+                        layout_basis_revision,
+                        std::time::Instant::now(),
+                        None,
                     );
             }
         }
@@ -453,6 +457,7 @@ impl EditorInputHost for SujianEditorItem {
                 let (new_line_top, new_line_bottom) =
                     find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
+                let layout_basis_revision = self.pipeline.layout_revision();
                 self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
@@ -471,6 +476,7 @@ impl EditorInputHost for SujianEditorItem {
                         new_line_top,
                         new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
+                        layout_basis_revision,
                     );
             } else {
                 self.update_preedit_visual_state();
@@ -583,6 +589,7 @@ impl EditorInputHost for SujianEditorItem {
                 let (new_line_top, new_line_bottom) =
                     find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
+                let layout_basis_revision = self.pipeline.layout_revision();
                 self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
@@ -601,6 +608,7 @@ impl EditorInputHost for SujianEditorItem {
                         new_line_top,
                         new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
+                        layout_basis_revision,
                     );
             } else {
                 self.update_preedit_visual_state();

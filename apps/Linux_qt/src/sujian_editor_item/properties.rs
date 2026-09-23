@@ -421,7 +421,7 @@ impl SujianEditorItem {
                     .retain_active_snapshot_ids(&active_ids);
                 self.pipeline.set_current_layout_snapshot(None);
                 self.pipeline.set_previous_layout_snapshot(None);
-                self.pipeline.set_previous_canonical_snapshot(None);
+                self.pipeline.set_current_canonical_snapshot(None);
                 self.request_scene_rebuild();
             }
             self.cursor_ctrl.animation = None;
@@ -663,12 +663,16 @@ impl SujianEditorItem {
     pub(crate) fn layout_property_changed(&mut self) {
         self.invalidate_layout_cache();
         self.bump_visual_revision();
-        self.clear_active_text_animations();
-        self.pipeline.set_previous_canonical_snapshot(None);
+        // Issue #738 评论 5789470425 问题1: layout_property_changed 只负责标记 layout dirty。
+        // 真正 reconcile 推迟到新排版完成后（recalculate_content_height_and_emit 内部
+        // ensure_layout_cached 真正按新字号/字体/行距排版），再用新 canonical reconcile。
+        // 不再"先 bump，再拿 previous_canonical_snapshot reconcile"——那是用旧 canonical。
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.recalculate_content_height_and_emit();
+        // 新 canonical 已按新字号/字体/行距算完，用新 canonical reconcile 旧活动事务。
+        self.reconcile_after_layout_change();
         self.visual_settings_changed();
         self.request_static_repaint();
     }

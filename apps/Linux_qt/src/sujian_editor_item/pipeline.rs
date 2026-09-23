@@ -9,6 +9,7 @@ use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
+use std::time::Instant;
 use writer_core::editor::{
     DisplayPatch, EditorChange, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
     EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
@@ -347,7 +348,13 @@ pub(crate) struct LinuxEditorPipeline {
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
     /// 前一次布局快照——用于动画 old/new 对比
     previous_layout_snapshot: Option<EditorLayoutSnapshot>,
-    previous_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
+    /// Issue #738 评论 5789470425 问题1: 当前 canonical document visual snapshot。
+    /// 语义明确为"当前 canonical"——纯布局变化和正文编辑都通过
+    /// `reconcile_active_transactions_with_new_canonical` 入口更新此字段：
+    /// 先用新 canonical reconcile 旧活动事务，再把它保存为当前 canonical。
+    /// 不再用名字和语义都混乱的 `previous_canonical_snapshot` 充当布局变化后的
+    /// current canonical。
+    current_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
     /// 布局修订——宽度/字号/字体/行距等变化时递增
     layout_revision: LayoutRevision,
     /// Issue #658 评论 5622829886 问题 1: record_visual_transaction 全篇排版 new text
@@ -372,10 +379,179 @@ impl LinuxEditorPipeline {
             cursor_animation_duration_ms: 120,
             current_layout_snapshot: None,
             previous_layout_snapshot: None,
-            previous_canonical_snapshot: None,
+            current_canonical_snapshot: None,
             layout_revision: LayoutRevision::initial(),
             pending_promoted_layout: None,
         }
+    }
+
+    /// Issue #738 评论 5787277777: 获取 Pipeline 当前的 layout revision，
+    /// 供 FrameContext 和 reconcile 入口作为 canonical basis revision 使用。
+    pub fn layout_revision(&self) -> LayoutRevision {
+        self.layout_revision
+    }
+
+    /// Issue #738 评论 5797637204: 无条件提交新 layout revision 的 setter。
+    /// 供 `editing.rs::record_composition_commit_transaction` 在 pipeline 外部
+    /// 把 composition commit 产生的新 canonical basis revision 提交到 Pipeline，
+    /// 与普通正文路径 `prepare_edit_motion`（pipeline.rs:1452 `self.layout_revision = new_revision;`）
+    /// 保持同一语义：新 canonical 一旦确定，layout_revision 必须无条件一起提交，
+    /// 否则 basis 守卫（==/!=）会把"事务 revision 比 Pipeline 当前 revision 更新"
+    /// 误当合法事务继续画。不用 `bump_layout_revision`（它会再调一次 next() 生成
+    /// 另一个 revision，与已采的 new_revision 不一致）。
+    pub fn set_layout_revision(&mut self, rev: LayoutRevision) {
+        self.layout_revision = rev;
+    }
+
+    /// Issue #738 评论 5787277777: 推进 layout revision，使旧活动事务的 basis revision
+    /// 过期。geometry_changed（宽度变化）和 layout_property_changed（字号/字体/行距/缩进/
+    /// padding 变化）后调此方法，让 build_render_plan_full 的 basis revision 守卫跳过
+    /// 仍绑定旧 canonical 几何的 unit，canonical 正文立即接管。旧事务最终因 is_expired
+    /// 超时或下一次 record_visual_transaction 的 reconcile 被移除。
+    pub fn bump_layout_revision(&mut self) -> LayoutRevision {
+        self.layout_revision = LayoutRevision::next();
+        self.layout_revision
+    }
+
+    /// Issue #738 评论 5789470425 问题1: 纯布局变化（resize/字号/字体/行距）的 canonical
+    /// snapshot 构造/保存入口收口到 Pipeline。此入口接收**已经完成的新
+    /// `CanonicalDocumentVisualSnapshot`**（按新 width/font/line_spacing/padding 算完），
+    /// 先 bump_layout_revision 得到 new revision，再用这份 snapshot 调
+    /// `reconcile_active_transactions_with_canonical` 把旧活动事务从旧 canonical 几何
+    /// 重绑到这份新 canonical，最后把它保存为当前 canonical（`current_canonical_snapshot`）。
+    ///
+    /// 不再用名字和语义都混乱的 `previous_canonical_snapshot` 充当布局变化后的 current
+    /// canonical。reconcile 发生在新 canonical 已构造完成之后，而非"先 bump 再拿旧
+    /// canonical reconcile"。
+    ///
+    /// reconcile 删除 unit / 完成事务后同步按剩余 active snapshot ids 收一次 texture cache，
+    /// 不让已经失去 owner 的纹理一直挂到后续别的完成路径才释放。
+    pub fn reconcile_active_transactions_with_new_canonical(
+        &mut self,
+        new_snapshot: crate::editor::layout::CanonicalDocumentVisualSnapshot,
+    ) -> LayoutRevision {
+        let new_revision = self.bump_layout_revision();
+        let current_text = self.mirror.text().to_string();
+        self.animation_coordinator
+            .reconcile_active_transactions_with_canonical(
+                &current_text,
+                &new_snapshot,
+                new_revision,
+                std::time::Instant::now(),
+            );
+        // 把新 canonical 保存为当前 canonical。
+        self.current_canonical_snapshot = Some(new_snapshot);
+        // reconcile 删除 unit / 完成事务后同步收 texture cache。
+        let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+        self.texture_cache.retain_active_snapshot_ids(&active_ids);
+        new_revision
+    }
+
+    /// Issue #738 评论 5789470425 问题1 / 评论 5792244119 问题 1: 用当前排版参数
+    /// 构造一份新的 `CanonicalDocumentVisualSnapshot`，**并提取动画视觉资源
+    ///（QImage/glyphRuns/clusters）注入**，使 rebind 路径 `find_clusters_in_canonical`
+    /// 能找到 cluster，布局变化后 Timed Reflow 能继续播放而非全部 Snap 回 canonical。
+    ///
+    /// 供 `geometry_changed` / `layout_property_changed` 在新排版完成后调
+    /// `reconcile_active_transactions_with_new_canonical` 使用。
+    ///
+    /// 实现要点（评论 5792244119 问题 1 修复）：
+    /// - **复用** `editor_layout.current_prepared_layout()` 的当前 generation 做基础
+    ///   snapshot，不再 `begin_layout_generation()` 分配临时 generation。调用方
+    ///   `reconcile_after_layout_change` 之前已 `ensure_layout_cached` 完成新排版，
+    ///   该 generation 由 `EditorLayout` 自身生命周期管理，本函数不持有也不释放，
+    ///   不会泄漏。
+    /// - 用 `prepare_animation_visuals_from_layout` 从该 generation 提取**所有行**
+    ///   的 QImage/clusters（布局变化后任意行位置都可能改变，不能只提取受影响行），
+    ///   再 `inject_animation_visuals_into_snapshot` 注入到同一份新 canonical。
+    /// - 若 `editor_layout` 无当前 prepared layout（首帧/invalidate 后尚未排版），
+    ///   fallback 到 `begin_layout_generation` 临时 generation 并在提取完成后
+    ///   `clear_layout_generation` 释放，保持原语义不泄漏。
+    pub fn build_canonical_snapshot_for_current_layout(
+        &self,
+        ctx: &VisualTransactionContext,
+        editor_layout: &crate::editor::layout::EditorLayout,
+    ) -> crate::editor::layout::CanonicalDocumentVisualSnapshot {
+        // Issue #738 评论 5792244119 问题 1: 优先复用 EditorLayout 当前 prepared layout
+        // 的 generation，不再分配临时 generation（避免泄漏）。
+        let prepared_handle = editor_layout.current_prepared_layout();
+        let (snapshot, fallback_gen): (
+            crate::editor::layout::CanonicalDocumentVisualSnapshot,
+            Option<u64>,
+        ) = match prepared_handle.as_ref() {
+            Some(handle) => {
+                // 复用当前 generation 做基础 snapshot（不持有 generation，不释放）。
+                let snap = layout::prepare_document_visual_snapshot_scoped(
+                    self.mirror.text(),
+                    self.text_revision,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.padding,
+                    ctx.text_indent,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                    Some(&ctx.text_color),
+                    handle.generation,
+                    0,
+                    0,
+                );
+                (snap, None)
+            }
+            None => {
+                // fallback: EditorLayout 无当前 prepared layout（首帧/invalidate 后尚未排版）。
+                // 分配临时 generation，提取完成后释放，不泄漏。
+                let gen = layout::begin_layout_generation();
+                let snap = layout::prepare_document_visual_snapshot_scoped(
+                    self.mirror.text(),
+                    self.text_revision,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.padding,
+                    ctx.text_indent,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                    Some(&ctx.text_color),
+                    gen,
+                    0,
+                    0,
+                );
+                (snap, Some(gen))
+            }
+        };
+
+        // Issue #738 评论 5792244119 问题 1: 从已有 layout 提取所有行的动画视觉
+        //（QImage/glyphRuns/clusters）注入到新 canonical，使 rebind 路径
+        // find_clusters_in_canonical 能找到 cluster。
+        let mut doc_snap = snapshot;
+        let visuals_gen = prepared_handle
+            .as_ref()
+            .map(|h| h.generation)
+            .unwrap_or_else(|| fallback_gen.unwrap_or(0));
+        let visuals_lines: &[crate::editor::layout::VisualLine] =
+            prepared_handle.as_ref().map(|h| h.lines).unwrap_or(&[]);
+        if !visuals_lines.is_empty() {
+            let visuals_handle = layout::PreparedLayoutHandle {
+                generation: visuals_gen,
+                lines: visuals_lines,
+            };
+            // 布局变化后任意行位置都可能改变，提取所有行，不漏 anchor 覆盖的行。
+            let all_line_ids: Vec<usize> = (0..visuals_lines.len()).collect();
+            let animation_visuals = layout::prepare_animation_visuals_from_layout(
+                &visuals_handle,
+                &all_line_ids,
+                ctx.dpr,
+                &ctx.text_color,
+            );
+            layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
+        }
+
+        // fallback 路径释放临时 generation，不泄漏。
+        if let Some(gen) = fallback_gen {
+            layout::clear_layout_generation(gen);
+        }
+        doc_snap
     }
 
     pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {
@@ -738,11 +914,11 @@ impl LinuxEditorPipeline {
         self.previous_layout_snapshot = snapshot;
     }
 
-    pub fn set_previous_canonical_snapshot(
+    pub fn set_current_canonical_snapshot(
         &mut self,
         snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
     ) {
-        self.previous_canonical_snapshot = snapshot;
+        self.current_canonical_snapshot = snapshot;
     }
 
     /// Issue #658 评论 5622829886 问题 1: 取出 record_visual_transaction 产生的
@@ -1039,9 +1215,20 @@ impl LinuxEditorPipeline {
                     generation: new_generation,
                     lines: &new_doc_snapshot.visual_lines,
                 };
+                let mut new_raster_ids = diff.new_raster_line_ids.clone();
+                for (rs, re) in self
+                    .animation_coordinator
+                    .collect_active_rebind_ranges(&motion.new_text)
+                {
+                    for (i, l) in new_doc_snapshot.visual_lines.iter().enumerate() {
+                        if l.byte_start < re && l.byte_end > rs && !new_raster_ids.contains(&i) {
+                            new_raster_ids.push(i);
+                        }
+                    }
+                }
                 let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
                     &new_handle,
-                    &diff.new_raster_line_ids,
+                    &new_raster_ids,
                     ctx.dpr,
                     &ctx.text_color,
                 );
@@ -1125,7 +1312,7 @@ impl LinuxEditorPipeline {
                 // 不再用 0（generation 0 是哨兵值，promote_prepared_layout 跳过 0 不释放会导致泄漏）。
                 let fallback_old_generation = layout::begin_layout_generation();
                 fallback_old_generation_opt = Some(fallback_old_generation);
-                let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
+                let prev_new_snapshot = self.current_canonical_snapshot.as_ref();
                 layout::prepare_affected_paragraphs_visual_snapshot(
                     &motion.old_text,
                     0,
@@ -1214,7 +1401,23 @@ impl LinuxEditorPipeline {
                 &motion.new_text,
             );
 
-            let key = self.animation_coordinator.process_transaction(
+            // Issue #738 评论 5787277777: 在 new_doc_snapshot 已完成、创建本次新事务之前，
+            // 先把所有旧活动事务从"上一份 canonical 几何"重绑到这份新 canonical，
+            // 再处理本次新事务自己的 conflict/rebase。Pipeline 的 new_revision 即将成为
+            // 新 canonical basis revision，直接传给 coordinator。
+            //
+            // Issue #738 评论 5796693007 问题1: 正文编辑路径必须先采 rebase frame/handoff
+            // 再 retire CaretDriven。prepare_rebase_handoff_for_edit 在旧事务还活着时
+            // 采样 rebase frame + caret handoff（采到的是真实当前帧，不是终态），
+            // 取消真正被覆盖的冲突事务。reconcile 之后再 create 新事务。
+            // 顺序：prepare → reconcile → create。
+            // - prepare 采到的是旧事务真实当前帧（CaretDriven 还没被推到终态）。
+            // - reconcile retire 旧事务 CaretDriven + rebind Timed Reflow。rebase frame 已采好，
+            //   此时 retire 不影响已采的 frame。
+            // - create 用保存的 handoff 创建新事务。
+            // 用一个统一的 edit_now，保证 prepare 和 reconcile 用同一时刻采样。
+            let edit_now = Instant::now();
+            let prepared_handoff = self.animation_coordinator.prepare_rebase_handoff_for_edit(
                 &motion,
                 ctx.typing_animation_enabled,
                 ctx.smooth_cursor_enabled,
@@ -1223,19 +1426,51 @@ impl LinuxEditorPipeline {
                 ctx.is_applying_format,
                 motion.old_cursor_rect.clone(),
                 motion.new_cursor_rect.clone(),
-                Some(old_caret.visual_line_id),
-                Some(new_caret.visual_line_id),
-                old_line_top,
-                old_line_bottom,
-                new_line_top,
-                new_line_bottom,
-                &old_snap,
-                &new_snap,
                 cursor_owner_epoch,
+                edit_now,
             );
+            self.animation_coordinator
+                .reconcile_active_transactions_with_canonical(
+                    &motion.new_text,
+                    &new_doc_snapshot,
+                    new_revision,
+                    edit_now,
+                );
+            // Issue #738 评论 5788513592 额外要求: reconcile 删除 unit / 完成事务后同步按
+            // 剩余 active snapshot ids 收一次 texture cache，不让已经失去 owner 的纹理一直
+            // 挂到后续别的完成路径才释放。
+            let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+            self.texture_cache.retain_active_snapshot_ids(&active_ids);
+
+            let key = self
+                .animation_coordinator
+                .create_transaction_from_prepared_handoff(
+                    prepared_handoff,
+                    &motion,
+                    ctx.smooth_cursor_enabled,
+                    motion.old_cursor_rect.clone(),
+                    motion.new_cursor_rect.clone(),
+                    Some(old_caret.visual_line_id),
+                    Some(new_caret.visual_line_id),
+                    old_line_top,
+                    old_line_bottom,
+                    new_line_top,
+                    new_line_bottom,
+                    &old_snap,
+                    &new_snap,
+                    cursor_owner_epoch,
+                    new_revision,
+                );
+            // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
+            // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
+            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 None，
+            // 但此时 canonical 已推进到 new_revision、旧事务已 reconcile 到 new_revision。
+            // 若 layout_revision 停在旧值，basis 守卫（已改为 ==/!=）会把"事务 revision
+            // 比 Pipeline 当前 revision 更新"误当合法事务继续画。new_doc_snapshot 一旦成为
+            // 当前 canonical，layout_revision 就必须无条件一起提交。
+            self.layout_revision = new_revision;
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);
-                self.layout_revision = new_revision;
             }
 
             self.previous_layout_snapshot =
@@ -1254,9 +1489,12 @@ impl LinuxEditorPipeline {
             // 而是存入 PromotedLayout.old_generation，在 promote 时随 new generation 一起释放。
             // 这样保证 old 动画纹理在 new prepared layout 成为 current 之前一直有效。
 
-            // 先 clone visual_lines 用于 PromotedLayout，再 move new_doc_snapshot 到 previous_canonical_snapshot。
+            // 先 clone visual_lines 用于 PromotedLayout，再 move new_doc_snapshot 到 current_canonical_snapshot。
             let promoted_visual_lines = new_doc_snapshot.visual_lines.clone();
-            self.previous_canonical_snapshot = Some(new_doc_snapshot);
+            // Issue #738 评论 5789470425 问题1: 新 canonical 保存为 current_canonical_snapshot。
+            // prepare_edit_motion 在生成新事务前已用上一份 current_canonical reconcile 旧事务，
+            // 再把这份新 canonical 提升为 current。
+            self.current_canonical_snapshot = Some(new_doc_snapshot);
 
             self.pending_promoted_layout = Some(layout::PromotedLayout {
                 generation: new_generation,

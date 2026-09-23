@@ -589,6 +589,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             .map(|f| f.selection_preedit.clone())
             .unwrap_or_default();
         let frame_now = Instant::now();
+        let frame_basis_rev = item.pipeline.layout_revision();
 
         let plan = item
             .pipeline
@@ -596,7 +597,12 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             .build_render_plan_full(
                 cursor_render_state,
                 selection_preedit,
-                FrameContext::default(),
+                FrameContext {
+                    active_transaction_keys: Vec::new(),
+                    keys_to_complete: Vec::new(),
+                    keys_to_cancel: Vec::new(),
+                    layout_basis_revision: frame_basis_rev,
+                },
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
                 frame_now,
@@ -699,13 +705,19 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                 .map(|f| f.selection_preedit.clone())
                 .unwrap_or_default();
             let frame_now_noop = Instant::now();
+            let frame_basis_rev_noop = item.pipeline.layout_revision();
             let plan_noop = item
                 .pipeline
                 .animation_coordinator_mut()
                 .build_render_plan_full(
                     cursor_render_state_noop,
                     selection_preedit_noop,
-                    FrameContext::default(),
+                    FrameContext {
+                        active_transaction_keys: Vec::new(),
+                        keys_to_complete: Vec::new(),
+                        keys_to_cancel: Vec::new(),
+                        layout_basis_revision: frame_basis_rev_noop,
+                    },
                     CursorStyle::default(),
                     SelectionPreeditStyle::default(),
                     frame_now_noop,
@@ -887,8 +899,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             .animation_coordinator_mut()
             .active_text_transaction_key();
         assert!(
-            active_key_after_retire.is_none()
-                || active_key_after_retire != Some(tx_key),
+            active_key_after_retire.is_none() || active_key_after_retire != Some(tx_key),
             "retired 事务不应被 active_text_transaction_key() 返回"
         );
 
@@ -899,13 +910,19 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             .map(|f| f.selection_preedit.clone())
             .unwrap_or_default();
         let frame_now_2 = Instant::now();
+        let frame_basis_rev_2 = item.pipeline.layout_revision();
         let plan2 = item
             .pipeline
             .animation_coordinator_mut()
             .build_render_plan_full(
                 cursor_render_state_2,
                 selection_preedit_2,
-                FrameContext::default(),
+                FrameContext {
+                    active_transaction_keys: Vec::new(),
+                    keys_to_complete: Vec::new(),
+                    keys_to_cancel: Vec::new(),
+                    layout_basis_revision: frame_basis_rev_2,
+                },
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
                 frame_now_2,

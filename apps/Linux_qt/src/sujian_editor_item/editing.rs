@@ -1,4 +1,5 @@
 use super::animation_coordinator::find_line_geometry_in_snapshot;
+use super::layout_revision::LayoutRevision;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
 
@@ -177,14 +178,21 @@ impl SujianEditorItem {
         // Issue #735: EditorEngine 已删除，不再调用 create_transaction。
         // composition commit 的动画由 handle_composition_commit_or_cancel 直接处理，
         // 不需要 EditorTransaction 中间结构。
+        // Issue #738 评论 5798704669 问题1: 不再在 commit 路径前置 cancel_active_composition。
+        // 旧 CompositionUpdate transaction 留在队列，prepare_composition_commit_handoff
+        // 在旧事务仍活着时采样 rebase frame + caret handoff（采到真实当前帧），
+        // take_rebase_frames 自己 cancel 被覆盖的旧 composition transaction。
+        // 顺序：prepare → reconcile → handle(create) → commit。
         let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
-        self.pipeline
-            .animation_coordinator_mut()
-            .cancel_active_composition(cancel_reason);
 
         // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
         // 走 Promote=true，generation 直接成为 current，不再用完即删。
-        let new_snapshot = self.build_editor_layout_snapshot(width, true, new_composition_range);
+        // Issue #738 评论 5797637204: 用共用 helper 同时拿 new_snapshot 和 new_canonical，
+        // 让 composition commit 路径能把新 canonical 提交到 Pipeline.current_canonical_snapshot
+        // 并作为 reconcile_active_transactions_with_canonical 的新 canonical 几何。
+        // 一次排版同时产出两份视图，不再单独排一次 canonical。
+        let (new_snapshot, new_canonical) =
+            self.build_editor_layout_snapshot_with_canonical(width, true, new_composition_range);
         // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
         // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
         let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
@@ -224,6 +232,59 @@ impl SujianEditorItem {
         let visual_text_unchanged =
             !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
 
+        // Issue #738 评论 5797637204: composition commit 路径走 canonical basis 闭环，
+        // 与普通正文路径 pipeline.rs::prepare_edit_motion 保持同一结构：
+        //   1. 生成新 LayoutRevision（不再用旧 self.pipeline.layout_revision() 当 basis）；
+        //   2. 用统一 edit_now 采样（与普通路径 prepare_edit_motion 行 1398 一致）；
+        //   3. cancel_active_composition 已在前面结束旧 composition transaction，
+        //      这里对队列里其余旧活动事务 reconcile 到新 canonical（retire CaretDriven
+        //      + rebind Timed Reflow），让 passive ReflowMove/ReflowCrossFade 全部绑定
+        //      committed new canonical；
+        //   4. handle_composition_commit_or_cancel 用 new_revision 当新事务 basis；
+        //   5. 无条件提交 Pipeline.layout_revision + current_canonical_snapshot
+        //      （与普通路径 pipeline.rs:1452/1478 一致），basis 守卫（==/!=）才能正确
+        //      识别旧事务过期，canonical 正文立即接管。
+        // 顺序：prepare handoff → reconcile passive reflow → 提升 canonical →
+        //       创建新 revision 的事务。
+        let new_revision = LayoutRevision::next();
+        let edit_now = std::time::Instant::now();
+        // Issue #738 评论 5798704669 问题1: prepare 阶段——在旧 CompositionUpdate
+        // 仍活着时采 rebase frames + caret handoff，用外层统一 edit_now 采样。
+        // take_rebase_frames 自己 cancel 被覆盖的旧 composition transaction。
+        let prepared_handoff = self
+            .pipeline
+            .animation_coordinator_mut()
+            .prepare_composition_commit_handoff(
+                &old_snapshot,
+                &new_snapshot,
+                preedit_byte_start,
+                preedit_byte_end,
+                true,
+                candidate_byte_start,
+                candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
+                self.cursor_ctrl.cursor_owner_epoch,
+                edit_now,
+            );
+        self.pipeline
+            .animation_coordinator_mut()
+            .reconcile_active_transactions_with_canonical(
+                &new.text,
+                &new_canonical,
+                new_revision,
+                edit_now,
+            );
+        // Issue #738 评论 5788513592: reconcile 删除 unit / 完成事务后同步按剩余
+        // active snapshot ids 收一次 texture cache，不让失去 owner 的纹理一直挂着。
+        let active_ids = self
+            .pipeline
+            .animation_coordinator()
+            .collect_active_snapshot_ids();
+        self.pipeline
+            .texture_cache_mut()
+            .retain_active_snapshot_ids(&active_ids);
+
         let key = self
             .pipeline
             .animation_coordinator_mut()
@@ -247,7 +308,18 @@ impl SujianEditorItem {
                 new_line_top,
                 new_line_bottom,
                 self.cursor_ctrl.cursor_owner_epoch,
+                new_revision,
+                edit_now,
+                Some(prepared_handoff),
             );
+
+        // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
+        // current_canonical_snapshot，与普通正文路径 pipeline.rs:1452/1478 一致。
+        // new_canonical 一旦成为当前 canonical，layout_revision 就必须无条件一起提交，
+        // 否则 basis 守卫会把"事务 revision 比 Pipeline 当前 revision 更新"误当合法事务。
+        self.pipeline.set_layout_revision(new_revision);
+        self.pipeline
+            .set_current_canonical_snapshot(Some(new_canonical));
 
         if let Some(key) = key {
             self.prepare_transaction_textures(key);

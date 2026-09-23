@@ -139,6 +139,10 @@ impl SujianEditorItem {
         // Issue #709 评论 issue-body-709: found_tx 决定走哪条时间线：
         // - Some：正文协同光标接管（Insert/Delete），不创建独立 CursorOnly 动画
         // - None：纯光标 Tween（鼠标点击/方向键/Home/End），CursorAnimationState 自己的 timeline
+        // Issue #738 评论 5789470425 问题1: 传当前 layout_revision，跳过 basis 不一致事务。
+        // 先取 layout_revision（不可变借用），再调 animation_coordinator_mut（可变借用），
+        // 避免 self.pipeline 同时被可变和不可变借用。
+        let current_layout_revision = self.pipeline.layout_revision();
         let found_tx = self
             .pipeline
             .animation_coordinator_mut()
@@ -147,6 +151,7 @@ impl SujianEditorItem {
                 cursor_y,
                 cursor_h,
                 self.cursor_ctrl.cursor_owner_epoch,
+                current_layout_revision,
             );
 
         // Issue #686 评论 5664857575 领域2：存在活动正文事务时，光标位置由最新正文事务
@@ -186,6 +191,7 @@ impl SujianEditorItem {
             self.cursor_ctrl.cursor_owner_epoch,
             self.cursor_ctrl.last_move_source,
             layout_res.baseline_y,
+            self.pipeline.layout_revision(),
         );
 
         // Issue #679 评论 5657313927 (步骤 5): apply_plan。

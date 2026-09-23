@@ -856,7 +856,7 @@ impl SujianEditorItem {
             self.pipeline.texture_cache_mut().clear();
             self.pipeline.set_current_layout_snapshot(None);
             self.pipeline.set_previous_layout_snapshot(None);
-            self.pipeline.set_previous_canonical_snapshot(None);
+            self.pipeline.set_current_canonical_snapshot(None);
             self.request_scene_rebuild();
             self.cursor_rect_changed();
         }
@@ -872,7 +872,7 @@ impl SujianEditorItem {
     /// - suppress_all()：停止所有活动动画
     /// - 清 texture_cache：丢弃旧章行纹理
     /// - 清 current/previous layout snapshot：丢弃旧章排版快照
-    /// - 清 previous_canonical_snapshot：丢弃旧章 canonical 快照
+    /// - 清 current_canonical_snapshot：丢弃旧章 canonical 快照
     /// - 清 pending_promoted_layout：丢弃未消费的 promoted layout
     /// - 清 prepared_frame：丢弃旧帧数据
     /// - invalidate editor_layout：清旧排版 generation
@@ -882,7 +882,7 @@ impl SujianEditorItem {
         self.pipeline.texture_cache_mut().clear();
         self.pipeline.set_current_layout_snapshot(None);
         self.pipeline.set_previous_layout_snapshot(None);
-        self.pipeline.set_previous_canonical_snapshot(None);
+        self.pipeline.set_current_canonical_snapshot(None);
         let _ = self.pipeline.take_pending_promoted_layout();
         self.prepared_frame = None;
         self.editor_layout.invalidate();

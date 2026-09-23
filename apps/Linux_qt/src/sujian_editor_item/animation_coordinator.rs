@@ -306,12 +306,70 @@ fn conflicting_units_are_untouched(
 /// 真实 top/bottom（来自 `VisualLine.y` 和 `VisualLine.y + VisualLine.height`）。
 /// 新 track 的 from 端行几何用这些值，不用 caret 自己的细矩形边界。
 #[derive(Clone, Debug)]
-struct RebaseCaretHandoff {
+pub(crate) struct RebaseCaretHandoff {
     sampled: CursorRect,
     remaining_duration_ms: u64,
     sampled_visual_line_id: Option<usize>,
     sampled_line_top: f64,
     sampled_line_bottom: f64,
+}
+
+/// Issue #738 评论 5796693007 问题1: 正文编辑路径先采 rebase frame/handoff 再 retire
+/// CaretDriven 的中间状态。
+///
+/// `prepare_rebase_handoff_for_edit` 在旧事务还活着时采样 rebase frame + caret handoff，
+/// 取消真正被覆盖的冲突事务，但还不创建新事务。reconcile 完成（retire + rebind）后，
+/// 再用这个状态调 `create_transaction_from_prepared_handoff` 创建新事务。
+///
+/// 顺序约束：prepare → reconcile → create。
+/// - prepare 采到的是旧事务真实当前帧（CaretDriven 还没被推到终态）。
+/// - reconcile retire 旧事务 CaretDriven + rebind Timed Reflow。prepare 已采好 rebase frame，
+///   此时 retire 不影响已采的 frame。
+/// - create 用保存的 handoff 创建新事务。
+///
+/// `take_rebase_frames` 内部会 cancel 冲突事务，所以 prepare 阶段取消的旧事务在
+/// reconcile 阶段已经不在 active_transactions 里了，reconcile 只处理未被 cancel 的
+/// 旧事务（untouched 的 + 保留的 passive），符合"untouched transaction 继续自己的时间线"语义。
+pub(crate) enum PreparedRebaseHandoff {
+    Insert {
+        rebase_frames: Vec<RebaseFrame>,
+        caret_handoff: Option<RebaseCaretHandoff>,
+        range_start: usize,
+        range_end: usize,
+        insert_offset_map: OffsetMap,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+    },
+    Delete {
+        rebase_frames: Vec<RebaseFrame>,
+        caret_handoff: Option<RebaseCaretHandoff>,
+        deleted_ranges: Vec<(usize, usize)>,
+        delete_offset_map: OffsetMap,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+    },
+}
+
+/// Issue #738 评论 5798704669 问题1: IME composition commit 路径的 prepared handoff。
+///
+/// 与 `PreparedRebaseHandoff` 类似，但专用于 composition commit/cancel。
+/// `prepare_composition_commit_handoff` 在旧 CompositionUpdate 仍活着时采样
+/// rebase frames + caret handoff（用外层传入的统一 `edit_now`），
+/// `take_rebase_frames` 自己 cancel 被覆盖的旧 composition transaction。
+/// reconcile 完成（retire + rebind）后，再用保存的 handoff 调
+/// `handle_composition_commit_or_cancel` 创建新事务。
+///
+/// 顺序约束：prepare → reconcile → handle。
+/// - prepare 采到的是旧事务真实当前帧（CaretDriven 还没被推到终态）。
+/// - reconcile retire 旧事务 CaretDriven + rebind Timed Reflow。prepare 已采好 rebase frame，
+///   此时 retire 不影响已采的 frame。
+/// - create 用保存的 handoff 创建新事务。
+pub(crate) struct PreparedCompositionCommitHandoff {
+    pub rebase_frames: Vec<RebaseFrame>,
+    pub caret_handoff: Option<RebaseCaretHandoff>,
+    pub offset_map: OffsetMap,
+    pub visual_affected_byte_range_old: Option<(usize, usize)>,
+    pub visual_affected_byte_range_new: Option<(usize, usize)>,
 }
 
 /// Issue #690 评论 5681206040 + 5682867529: 构建新事务的 caret track，四个正文入口共用。
@@ -795,6 +853,9 @@ fn build_cluster_reflow_slices(
     new_cursor_rect: Option<&CursorRect>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
+    // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
+    // 每对 ReflowCrossFadeOld/New 共享同一 group_id，reconcile 以 group 为单位成对重绑。
+    let mut next_crossfade_group_id: u64 = 1;
 
     // Issue #687: old_cx/old_cy/new_cx/new_cy 不再需要——changed range 由
     // build_insert_reveal_slices / build_delete_conceal_slices 显式拥有，
@@ -916,6 +977,12 @@ fn build_cluster_reflow_slices(
             // 几何没变：不生成任何动画（关键改进——消除普通输入/删除/Enter 的错误 CrossFade）
         } else {
             // byte identity 对得上但 shaping 真变了：生成一对 ReflowCrossFade
+            // Issue #738 评论 5788513592 问题3: old/new 两侧写入各自真实 shaping identity，
+            // rebind 时 is_same_shaping 能返回 true，CrossFade 可按新布局继续而非必然 Remove。
+            // Issue #738 评论 5789470425 问题3: old/new 两侧共享同一 crossfade_group_id，
+            // reconcile 以 group 为单位成对重绑，不再把 old/new 各自独立判死。
+            let group_id = next_crossfade_group_id;
+            next_crossfade_group_id += 1;
             slices.push(AnimatedSlice::reflow_crossfade_old(
                 key,
                 old_line.id,
@@ -924,6 +991,8 @@ fn build_cluster_reflow_slices(
                 new_doc.clone(),
                 new_cluster.byte_start,
                 new_cluster.byte_end,
+                Some(old_cluster.shaping_identity.clone()),
+                Some(group_id),
             ));
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
@@ -934,6 +1003,8 @@ fn build_cluster_reflow_slices(
                 new_doc.clone(),
                 new_cluster.byte_start,
                 new_cluster.byte_end,
+                Some(new_cluster.shaping_identity.clone()),
+                Some(group_id),
             );
             new_slice.static_hidden_document_rects = vec![new_doc];
             slices.push(new_slice);
@@ -954,6 +1025,12 @@ fn build_cluster_reflow_slices(
 
     // 只有同时存在未配对的 old 和 new 时才生成 CrossFade
     if !unmatched_old.is_empty() && !unmatched_new.is_empty() {
+        // Issue #738 评论 5792244119 问题 3: 多对多 CrossFade old/new 共享同一个
+        // group_id，rebind 按 group_id 配对时能真正成组（一组包含多 old + 多 new）。
+        // 不再给 old/new 各自独立发 group_id（那会导致 crossfade_pairs 永远配不上，
+        // 所有 CrossFade units 掉进"未配对独立处理"路径，出现只续一边/只删一边）。
+        let group_id = next_crossfade_group_id;
+        next_crossfade_group_id += 1;
         for &oi in &unmatched_old {
             let oref = &old_refs[oi];
             let old_line = &old_snapshot.line_snapshots[oref.line_idx];
@@ -969,6 +1046,8 @@ fn build_cluster_reflow_slices(
                 old_doc,
                 old_cluster.byte_start,
                 old_cluster.byte_end,
+                Some(old_cluster.shaping_identity.clone()),
+                Some(group_id),
             ));
         }
 
@@ -981,6 +1060,8 @@ fn build_cluster_reflow_slices(
             let new_doc_for_hide = new_doc.clone();
 
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
+            // Issue #738 评论 5788513592 问题3: 写入真实 shaping identity。
+            // Issue #738 评论 5792244119 问题3: 写入共享的 group_id（old/new 同组）。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,
@@ -989,6 +1070,8 @@ fn build_cluster_reflow_slices(
                 new_doc,
                 new_cluster.byte_start,
                 new_cluster.byte_end,
+                Some(new_cluster.shaping_identity.clone()),
+                Some(group_id),
             );
             new_slice.static_hidden_document_rects = vec![new_doc_for_hide];
             slices.push(new_slice);
@@ -1068,26 +1151,66 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
             let a_dy = a.to_document_rect.y - a.from_document_rect.y;
             let b_dx = b.to_document_rect.x - b.from_document_rect.x;
             let b_dy = b.to_document_rect.y - b.from_document_rect.y;
-            (a_dx - b_dx).abs() < 0.5 && (a_dy - b_dy).abs() < 0.5
+            let same_vector = (a_dx - b_dx).abs() < 0.5 && (a_dy - b_dy).abs() < 0.5;
+            // Issue #738 评论 5789470425 问题3: CrossFade 只能合并同 group 同 side。
+            // old 侧和 new 侧不能互相合并；不同 group 不能合并。
+            let same_crossfade_group = a.crossfade_group_id == b.crossfade_group_id
+                && a.crossfade_side == b.crossfade_side;
+            same_vector && same_crossfade_group
         }
     }
 }
 
-/// 合并两个 slice 为一个 run。
+/// Issue #738 评论 5788513592 问题2: 合并两个相邻 slice 的 byte range。
+/// 合并后 range 覆盖多个原始 cluster，find_cluster_in_canonical 已改为支持
+/// 跨多 cluster 的 range 匹配（按相交 cluster 合成 bounding rect），因此 merged
+/// unit 能在 canonical 中重绑，不再被误删。
+fn merged_byte_range(a: (usize, usize), b: (usize, usize)) -> (usize, usize) {
+    (a.0.min(b.0), a.1.max(b.1))
+}
+
+/// Issue #738 评论 5789470425 问题2: 合并两个相邻 slice 为一个 run。
+///
+/// 关键改动：不再把多个 cluster 框成一个大矩形就完事——`reflow_anchors` 列表
+/// 保留每个原始 cluster 的完整身份（byte range、shaping identity、from/to document
+/// rect、source_rect、snapshot_id、visual_line_id）。rebind 时逐 anchor 做 OffsetMap、
+/// 找新 canonical cluster、校验 shaping；拆行或各 anchor 新移动向量不同时拆回多个
+/// Timed unit，而不是做一个跨行 bounding rect。
+///
+/// merged unit 的 `from_document_rect` / `to_document_rect` / `source_rect` 仍取
+/// 各 anchor 的 union（merged unit 渲染需要连续矩形做整体插值），但 `reflow_anchors`
+/// 才是逐 cluster 真相。`shaping_identity` 取首个 anchor 的代表值，仅用于兼容旧
+/// shaping 比较路径；逐 cluster 的真实 shaping 在 `reflow_anchors` 里。
 fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
+    let (byte_start, byte_end) =
+        merged_byte_range((a.byte_start, a.byte_end), (b.byte_start, b.byte_end));
+    // Issue #738 评论 5789470425 问题2: 合并 reflow_anchors 列表，不丢子 cluster 身份。
+    let merged_anchors: Vec<super::animated_slice::ReflowAnchor> = a
+        .reflow_anchors
+        .iter()
+        .chain(&b.reflow_anchors)
+        .cloned()
+        .collect();
+    // merged unit 的 from/to/source 取各 anchor 的 union（连续矩形做整体插值）。
+    // 用 inline min/max 计算而非 bounding_box helper，强调 reflow_anchors 才是逐 cluster 真相。
+    let merged_from = union_source_rect(&a.from_document_rect, &b.from_document_rect);
+    let merged_to = union_source_rect(&a.to_document_rect, &b.to_document_rect);
+    let merged_source = union_source_rect(&a.source_rect, &b.source_rect);
+    // shaping_identity 取首个 anchor 的代表值；逐 cluster 真实 shaping 在 reflow_anchors。
+    let head_shaping = a.shaping_identity.clone();
     AnimatedSlice {
         kind: a.kind,
         snapshot_id: a.snapshot_id,
-        source_rect: bounding_box(&a.source_rect, &b.source_rect),
-        from_document_rect: bounding_box(&a.from_document_rect, &b.from_document_rect),
-        to_document_rect: bounding_box(&a.to_document_rect, &b.to_document_rect),
+        source_rect: merged_source,
+        from_document_rect: merged_from,
+        to_document_rect: merged_to,
         opacity_from: a.opacity_from,
         opacity_to: a.opacity_to,
         scale_from: a.scale_from,
         scale_to: a.scale_to,
-        byte_start: a.byte_start.min(b.byte_start),
-        byte_end: a.byte_end.max(b.byte_end),
-        shaping_identity: a.shaping_identity.clone(),
+        byte_start,
+        byte_end,
+        shaping_identity: head_shaping,
         conceal_to_left_edge: a.conceal_to_left_edge,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
@@ -1097,11 +1220,16 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
             .chain(&b.static_hidden_document_rects)
             .cloned()
             .collect(),
+        crossfade_group_id: a.crossfade_group_id,
+        crossfade_side: a.crossfade_side,
+        reflow_anchors: merged_anchors,
     }
 }
 
-/// 计算两个 SourceRect 的 bounding box（取最小 x/y 和最大 right/bottom）。
-fn bounding_box(a: &SourceRect, b: &SourceRect) -> SourceRect {
+/// Issue #738 评论 5789470425 问题2: 两个 SourceRect 的 union（连续矩形）。
+/// 与 `bounding_box` 语义相同，独立命名以表明 merged unit 的代表几何，
+/// 逐 cluster 真相在 `reflow_anchors`。
+fn union_source_rect(a: &SourceRect, b: &SourceRect) -> SourceRect {
     let min_x = a.x.min(b.x);
     let min_y = a.y.min(b.y);
     let max_right = (a.x + a.w).max(b.x + b.w);
@@ -1124,7 +1252,6 @@ fn bounding_box(a: &SourceRect, b: &SourceRect) -> SourceRect {
 pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
     pub(crate) prepared_queue: PreparedTransactionQueue,
-    layout_revision: LayoutRevision,
     /// 打字/预输入动画时长（毫秒）。本地生成的事务不来自 Core 的
     /// `EditorVisualTransaction`（已删除），因此在此持有该视觉配置，
     /// 与 `PreparedEditMotion` 把 `duration_ms` 放进结构体的设计方向一致。
@@ -1138,7 +1265,6 @@ impl LinuxEditorAnimationCoordinator {
         Self {
             next_key_id: 1,
             prepared_queue: PreparedTransactionQueue::new(),
-            layout_revision: LayoutRevision::initial(),
             typing_animation_duration_ms: 160,
             cursor_animation_duration_ms: 120,
         }
@@ -1375,7 +1501,17 @@ impl LinuxEditorAnimationCoordinator {
         (all_rebase_frames, selected_caret_handoff)
     }
 
-    pub fn process_transaction(
+    /// Issue #738 评论 5796693007 问题1: 正文编辑路径 prepare 阶段——采 rebase frame +
+    /// caret handoff，取消真正被覆盖的冲突事务，但还不创建新事务。
+    ///
+    /// 在旧事务还活着时调用（CaretDriven 还没被推到终态），采到的是旧事务真实当前帧。
+    /// 返回 `PreparedRebaseHandoff` 供后续 `create_transaction_from_prepared_handoff` 使用。
+    /// 返回 `None` 表示不创建新事务（early return 条件命中或 Cursor 分支）。
+    ///
+    /// `take_rebase_frames` 内部会 cancel 冲突事务，所以 prepare 阶段取消的旧事务在
+    /// 后续 reconcile 阶段已经不在 active_transactions 里了。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_rebase_handoff_for_edit(
         &mut self,
         vt: &PreparedEditMotion,
         typing_animation_enabled: bool,
@@ -1385,16 +1521,9 @@ impl LinuxEditorAnimationCoordinator {
         is_applying_format: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
-        old_cursor_visual_line_id: Option<usize>,
-        new_cursor_visual_line_id: Option<usize>,
-        old_cursor_line_top: f64,
-        old_cursor_line_bottom: f64,
-        new_cursor_line_top: f64,
-        new_cursor_line_bottom: f64,
-        old_snapshot: &EditorLayoutSnapshot,
-        new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
-    ) -> Option<VisualTransactionKey> {
+        now: Instant,
+    ) -> Option<PreparedRebaseHandoff> {
         // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
         // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
         // typing_animation_enabled 决定，不要把两类动画重新绑死。
@@ -1417,7 +1546,395 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        let new_revision = LayoutRevision::next();
+        // Issue #738 评论 5796693007 问题1: 用 if-else 链而不是 match `EditorAnimationKind::Insert =>`，
+        // 避免与 `process_transaction` 的测试锚点（`EditorAnimationKind::Insert/Delete/Cursor =>`）
+        // 冲突。`process_transaction` 保留原内联 match 结构供 issue687/issue702 白盒测试定位。
+        if vt.kind == EditorAnimationKind::Insert {
+            if let Some(range) = vt.inserted_range {
+                let range_start = range.start().value();
+                let range_end = range.end().value();
+                let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
+                // 先计算 visual_affected_byte_range 得到 old-side range (old_s, old_e)，
+                // 再用 old_s/old_e 查冲突。insert_offset_map 仍保留用于 rebase。
+                let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                    let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                        &vt.old_text,
+                        &vt.new_text,
+                        (range_start, range_start),
+                        (range_start, range_end),
+                    );
+                    (Some((old_s, old_e)), Some((new_s, new_e)))
+                };
+                let (conflict_old_start, conflict_old_end) =
+                    visual_affected_byte_range_old.unwrap_or((range_start, range_start));
+                let conflicting = self.prepared_queue.find_conflicting_transaction(
+                    &vt.old_text,
+                    conflict_old_start,
+                    conflict_old_end,
+                );
+                // 纯插入在 old 文档里就是 range_start 这一个位置点。
+                // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样，
+                // 旧事务还活着，采到的是真实当前帧（CaretDriven 还没被推到终态）。
+                let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                    &conflicting,
+                    "rebased_by_insert",
+                    now,
+                    Some((&[(range_start, range_start)], &insert_offset_map)),
+                    &vt.old_text,
+                    cursor_owner_epoch,
+                );
+                return Some(PreparedRebaseHandoff::Insert {
+                    rebase_frames,
+                    caret_handoff,
+                    range_start,
+                    range_end,
+                    insert_offset_map,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                });
+            }
+            None
+        } else if vt.kind == EditorAnimationKind::Delete {
+            let deleted_ranges: Vec<(usize, usize)> = if let Some(range) = vt.deleted_range {
+                vec![(range.start().value(), range.end().value())]
+            } else {
+                let changes = diff_plain_text(&vt.old_text, &vt.new_text);
+                let mut ranges = Vec::new();
+                for change in &changes {
+                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                        let range_start = index.value();
+                        let range_end = range_start + text.len();
+                        ranges.push((range_start, range_end));
+                    }
+                }
+                ranges
+            };
+
+            let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
+            let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
+            let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+            // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
+            // 先计算 visual_affected_byte_range 得到 old-side range (old_s, old_e)，
+            // 再用 old_s/old_e 查冲突。delete_offset_map 仍保留用于 rebase。
+            let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                    &vt.old_text,
+                    &vt.new_text,
+                    (rebase_byte_start, rebase_byte_end),
+                    (rebase_byte_start, rebase_byte_start),
+                );
+                (Some((old_s, old_e)), Some((new_s, new_e)))
+            };
+            let (conflict_old_start, conflict_old_end) =
+                visual_affected_byte_range_old.unwrap_or((rebase_byte_start, rebase_byte_end));
+            let conflicting = self.prepared_queue.find_conflicting_transaction(
+                &vt.old_text,
+                conflict_old_start,
+                conflict_old_end,
+            );
+            // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样。
+            let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                &conflicting,
+                "rebased_by_delete",
+                now,
+                Some((&deleted_ranges, &delete_offset_map)),
+                &vt.old_text,
+                cursor_owner_epoch,
+            );
+            Some(PreparedRebaseHandoff::Delete {
+                rebase_frames,
+                caret_handoff,
+                deleted_ranges,
+                delete_offset_map,
+                visual_affected_byte_range_old,
+                visual_affected_byte_range_new,
+            })
+        } else {
+            // Issue #702: 纯光标移动不创建文字事务（Cursor 分支）。
+            // 纯光标移动直接维护 CursorAnimationState（由 rendering.rs
+            // update_cursor_visual_position → build_cursor_plan → apply_plan
+            // 构造），用 Scene Graph 当前帧 frame_now 推进 from→to 动画，
+            // 不再伪装成文字事务（units=空）。
+            // 此分支不创建任何事务，返回 None。
+            None
+        }
+    }
+
+    /// Issue #738 评论 5796693007 问题1: 正文编辑路径 create 阶段——用 prepare 阶段
+    /// 采好的 rebase frame + caret handoff 创建新事务。
+    ///
+    /// 必须在 `prepare_rebase_handoff_for_edit` 之后、`reconcile_active_transactions_with_canonical`
+    /// 之后调用。`prepared` 为 None 时直接返回 None（prepare 阶段 early return 或 Cursor 分支）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_transaction_from_prepared_handoff(
+        &mut self,
+        prepared: Option<PreparedRebaseHandoff>,
+        vt: &PreparedEditMotion,
+        smooth_cursor_enabled: bool,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        old_cursor_visual_line_id: Option<usize>,
+        new_cursor_visual_line_id: Option<usize>,
+        old_cursor_line_top: f64,
+        old_cursor_line_bottom: f64,
+        new_cursor_line_top: f64,
+        new_cursor_line_bottom: f64,
+        old_snapshot: &EditorLayoutSnapshot,
+        new_snapshot: &EditorLayoutSnapshot,
+        cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
+    ) -> Option<VisualTransactionKey> {
+        let prepared = prepared?;
+        match prepared {
+            PreparedRebaseHandoff::Insert {
+                rebase_frames,
+                caret_handoff,
+                range_start,
+                range_end,
+                insert_offset_map,
+                visual_affected_byte_range_old,
+                visual_affected_byte_range_new,
+            } => {
+                let key = self.alloc_key();
+                let mut slices = Vec::new();
+
+                // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
+                // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
+                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
+                // InsertReveal（CaretDriven unit），只保留 Reflow。
+                let inserted_range_tuple = (range_start, range_end);
+                if smooth_cursor_enabled {
+                    let reveal_slices =
+                        build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
+                    slices.extend(reveal_slices);
+                }
+
+                let reflow_slices = build_cluster_reflow_slices(
+                    key,
+                    old_snapshot,
+                    new_snapshot,
+                    &insert_offset_map,
+                    &[],
+                    &[inserted_range_tuple],
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                );
+                slices.extend(reflow_slices);
+
+                let mut units: Vec<PreparedVisualUnit> = slices
+                    .into_iter()
+                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                    .collect();
+                match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
+
+                // Issue #690 评论 5681206040: 构建 caret track。
+                // 有 handoff 时 from = sampled caret, duration = 旧 track 剩余时长；
+                // 无 handoff 时 from = old_cursor_rect, duration = 事务时长。
+                // Issue #690 评论 5682867529: 不再传 now，started_at 留 None，等 Rendering 再启动。
+                let cursor_visual_track = build_cursor_visual_track(
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                    old_cursor_visual_line_id,
+                    new_cursor_visual_line_id,
+                    old_cursor_line_top,
+                    old_cursor_line_bottom,
+                    new_cursor_line_top,
+                    new_cursor_line_bottom,
+                    caret_handoff,
+                    vt.duration_ms,
+                );
+                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
+                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
+                // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
+                // (range_start, range_start)，new 侧是 inserted_range。
+                let prepared_tx = PreparedTextVisualTransaction {
+                    key,
+                    state: TextVisualTransactionState::Pending,
+                    operation_kind: TextVisualOperationKind::Insert,
+                    timeline: TransactionTimeline::new(vt.duration_ms),
+                    units,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                    cursor_visual_track,
+                    cancel_reason: None,
+                    texture_prepared: false,
+                    old_snapshot: Some(old_snapshot.clone()),
+                    new_snapshot: Some(new_snapshot.clone()),
+                    cursor_owner_epoch,
+                    caret_motion_retired: false,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                    layout_basis_revision,
+                };
+
+                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+                emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
+                editor_animation_debug_log(&format!(
+                    "anim_event: key={:?} op=Insert inserted={:?} unit_kinds={:?} carried_rebase={}",
+                    key,
+                    inserted_range_tuple,
+                    unit_kind_labels(&prepared_tx.units),
+                    rebase_frames.len(),
+                ));
+
+                self.prepared_queue.enqueue(prepared_tx);
+
+                Some(key)
+            }
+            PreparedRebaseHandoff::Delete {
+                rebase_frames,
+                caret_handoff,
+                deleted_ranges,
+                delete_offset_map,
+                visual_affected_byte_range_old,
+                visual_affected_byte_range_new,
+            } => {
+                let key = self.alloc_key();
+
+                let mut slices = Vec::new();
+
+                // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
+                // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
+                // 对每个 deleted range 生成显式 DeleteConceal 切片。
+                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
+                // DeleteConceal（CaretDriven unit），只保留 Reflow。
+                if smooth_cursor_enabled {
+                    for &(d_start, d_end) in &deleted_ranges {
+                        let conceal_slices = build_delete_conceal_slices(
+                            key,
+                            old_snapshot,
+                            (d_start, d_end),
+                            old_cursor_rect.as_ref(),
+                        );
+                        slices.extend(conceal_slices);
+                    }
+                }
+
+                let reflow_slices = build_cluster_reflow_slices(
+                    key,
+                    old_snapshot,
+                    new_snapshot,
+                    &delete_offset_map,
+                    &deleted_ranges,
+                    &[],
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                );
+                slices.extend(reflow_slices);
+
+                let mut units: Vec<PreparedVisualUnit> = slices
+                    .into_iter()
+                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                    .collect();
+                match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
+
+                // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
+                let cursor_visual_track = build_cursor_visual_track(
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                    old_cursor_visual_line_id,
+                    new_cursor_visual_line_id,
+                    old_cursor_line_top,
+                    old_cursor_line_bottom,
+                    new_cursor_line_top,
+                    new_cursor_line_bottom,
+                    caret_handoff,
+                    vt.duration_ms,
+                );
+                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
+                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
+                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
+                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
+                let prepared_tx = PreparedTextVisualTransaction {
+                    key,
+                    state: TextVisualTransactionState::Pending,
+                    operation_kind: TextVisualOperationKind::Delete,
+                    timeline: TransactionTimeline::new(vt.duration_ms),
+                    units,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                    cursor_visual_track,
+                    cancel_reason: None,
+                    texture_prepared: false,
+                    old_snapshot: Some(old_snapshot.clone()),
+                    new_snapshot: Some(new_snapshot.clone()),
+                    cursor_owner_epoch,
+                    caret_motion_retired: false,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                    layout_basis_revision,
+                };
+
+                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+                emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
+                editor_animation_debug_log(&format!(
+                    "anim_event: key={:?} op=Delete deleted={:?} unit_kinds={:?} carried_rebase={}",
+                    key,
+                    deleted_ranges,
+                    unit_kind_labels(&prepared_tx.units),
+                    rebase_frames.len(),
+                ));
+
+                self.prepared_queue.enqueue(prepared_tx);
+
+                Some(key)
+            }
+        }
+    }
+
+    /// Issue #738 评论 5796693007 问题1: `process_transaction` 保留原内联 match 结构
+    /// 作为 issue687/issue702 白盒测试的锚点（`EditorAnimationKind::Insert/Delete/Cursor =>`
+    /// + `build_cluster_reflow_slices` 调用）。
+    ///
+    /// 正文编辑主路径 `prepare_edit_motion` 已改为显式调
+    /// `prepare_rebase_handoff_for_edit` → `reconcile_active_transactions_with_canonical` →
+    /// `create_transaction_from_prepared_handoff`，保证旧事务 CaretDriven 在 rebase frame
+    /// 采好之后才 retire。此方法保留供测试锚点和潜在的未来直接调用，语义与
+    /// prepare → create（中间不插 reconcile）等价。
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_transaction(
+        &mut self,
+        vt: &PreparedEditMotion,
+        typing_animation_enabled: bool,
+        smooth_cursor_enabled: bool,
+        is_scrolling: bool,
+        is_loading: bool,
+        is_applying_format: bool,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        old_cursor_visual_line_id: Option<usize>,
+        new_cursor_visual_line_id: Option<usize>,
+        old_cursor_line_top: f64,
+        old_cursor_line_bottom: f64,
+        new_cursor_line_top: f64,
+        new_cursor_line_bottom: f64,
+        old_snapshot: &EditorLayoutSnapshot,
+        new_snapshot: &EditorLayoutSnapshot,
+        cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
+    ) -> Option<VisualTransactionKey> {
+        // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
+        // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
+        // typing_animation_enabled 决定，不要把两类动画重新绑死。
+        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
+            return None;
+        }
+
+        // Issue #727 约束 5: valid_caret_motion_track 检查。
+        // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
+        // Issue #727 评论 5755858583 问题5: 仅在 smooth_cursor_enabled 时才要求
+        // valid_caret_motion_track——!smooth_cursor_enabled 时不创建 CaretDriven units，
+        // 只创建 Reflow，不需要 caret motion track。
+        let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
+        if smooth_cursor_enabled && !valid_caret_motion_track {
+            return None;
+        }
+
+        let mode = AnimationMode::from_context(is_scrolling, is_loading, is_applying_format);
+        if !mode.should_create_transaction() {
+            return None;
+        }
 
         match vt.kind {
             EditorAnimationKind::Insert => {
@@ -1524,6 +2041,7 @@ impl LinuxEditorAnimationCoordinator {
                         caret_motion_retired: false,
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
+                        layout_basis_revision,
                     };
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1536,7 +2054,6 @@ impl LinuxEditorAnimationCoordinator {
                         rebase_frames.len(),
                     ));
 
-                    self.layout_revision = new_revision;
                     self.prepared_queue.enqueue(prepared);
 
                     return Some(key);
@@ -1591,7 +2108,6 @@ impl LinuxEditorAnimationCoordinator {
                 );
 
                 let key = self.alloc_key();
-                let new_revision = LayoutRevision::next();
 
                 let mut slices = Vec::new();
 
@@ -1664,6 +2180,7 @@ impl LinuxEditorAnimationCoordinator {
                     caret_motion_retired: false,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
+                    layout_basis_revision,
                 };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1676,7 +2193,6 @@ impl LinuxEditorAnimationCoordinator {
                     rebase_frames.len(),
                 ));
 
-                self.layout_revision = new_revision;
                 self.prepared_queue.enqueue(prepared);
 
                 return Some(key);
@@ -1692,6 +2208,77 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
         None
+    }
+
+    /// Issue #738 评论 5787277777: 把全部活动事务从上一份 canonical 几何重绑到这份新 canonical。
+    ///
+    /// 在 `record_visual_transaction` 里 `new_doc_snapshot` 已完成后、创建本次新事务之前调：
+    /// 先把所有旧活动事务的 Timed Reflow unit 从"上一份 canonical 几何"重绑到这份新 canonical，
+    /// 再处理本次新事务自己的 conflict/rebase。
+    ///
+    /// 流程：
+    /// 1. 遍历全部 active transactions（不只遍历和新 edit byte range 相交的事务）。
+    /// 2. CaretDriven 仍按现在的 owner/epoch 规则处理；旧事务失去 caret owner 后继续 retire
+    ///    到 canonical（由 `build_text_animation_plan_with_sample` 每帧采样时处理）。
+    /// 3. 对仍存活的 Timed Reflow unit 调 `rebind_timed_units_to_canonical`。
+    /// 4. rebind 后已经没有 unit 的事务直接完成；还有 Timed unit 的继续播放。
+    /// 5. 收集完后再生成本帧 clip rect / glyph plan（由 `build_render_plan_full` 完成）。
+    ///    禁止 basis revision 旧于当前 canonical revision 的 unit 进入 `build_render_plan_full()`。
+    pub(crate) fn reconcile_active_transactions_with_canonical(
+        &mut self,
+        current_text: &str,
+        canonical_snapshot: &crate::editor::layout::CanonicalDocumentVisualSnapshot,
+        layout_revision: LayoutRevision,
+        now: Instant,
+    ) {
+        let mut keys_to_complete: Vec<VisualTransactionKey> = Vec::new();
+        // Issue #738 评论 5795950264 问题1: 先收集需要处理的事务 key，再逐个
+        // retire + rebind。retire_caret_driven_units_for_transaction 需要 &mut self，
+        // 不能在 active_transactions_mut() 的循环里直接调。
+        let keys: Vec<VisualTransactionKey> = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
+            .map(|t| t.key)
+            .collect();
+        for key in keys {
+            // Issue #738 评论 5795950264 问题1: 先 retire CaretDriven units，让旧 caret
+            // track 永久失去 ownership，再 rebind Timed Reflow。如果先 rebind 会把
+            // layout_basis_revision 提升到当前 canonical，导致 basis 守卫
+            //（build_text_animation_plan_with_sample / find_cursor_transaction_for_target）
+            // 不再 retire 旧 CaretDriven，旧 caret track 重新拿到 ownership 在新 canonical
+            // 上继续用旧布局几何。retire 把 CaretDriven 落到终态并置 caret_motion_retired=true，
+            // ReflowMove/ReflowCrossFade 保留不动继续播。
+            self.retire_caret_driven_units_for_transaction(key);
+            let tx = match self
+                .prepared_queue
+                .active_transactions_mut()
+                .iter_mut()
+                .find(|t| t.key == key)
+            {
+                Some(t) => t,
+                None => continue,
+            };
+            // 把 Timed Reflow unit 重绑到当前 canonical。
+            tx.rebind_timed_units_to_canonical(
+                current_text,
+                canonical_snapshot,
+                layout_revision,
+                now,
+            );
+            // rebind 后已经没有 unit 的事务直接完成。
+            if tx.units.is_empty() {
+                keys_to_complete.push(tx.key);
+            }
+        }
+        // 完成空事务（rebind 移除了全部 unit，让 canonical 正文接管）。
+        for key in keys_to_complete {
+            self.prepared_queue.complete(key);
+        }
     }
 
     pub fn handle_composition_update(
@@ -1711,6 +2298,7 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_line_top: f64,
         new_cursor_line_bottom: f64,
         cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
         // Issue #710 评论 5734282079: 冲突检测用 current-old 坐标系。
@@ -1733,7 +2321,6 @@ impl LinuxEditorAnimationCoordinator {
         );
 
         let key = self.alloc_key();
-        let new_revision = LayoutRevision::next();
 
         let mut slices = Vec::new();
 
@@ -1831,6 +2418,7 @@ impl LinuxEditorAnimationCoordinator {
             caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
+            layout_basis_revision,
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1842,9 +2430,73 @@ impl LinuxEditorAnimationCoordinator {
             rebase_frames.len(),
         ));
 
-        self.layout_revision = new_revision;
         self.prepared_queue.enqueue(prepared);
         Some(key)
+    }
+
+    /// Issue #738 评论 5798704669 问题1: composition commit prepare 阶段——
+    /// 在旧 CompositionUpdate 仍活着时采样 rebase frames + caret handoff。
+    ///
+    /// 用外层传入的统一 `now` 采样，旧事务还活着，采到的是真实当前帧
+    ///（CaretDriven 还没被推到终态）。`take_rebase_frames` 自己 cancel
+    /// 被覆盖的旧 composition transaction。
+    ///
+    /// 返回 `PreparedCompositionCommitHandoff` 供后续
+    /// `handle_composition_commit_or_cancel`
+    /// 创建新事务使用。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_composition_commit_handoff(
+        &mut self,
+        old_snapshot: &EditorLayoutSnapshot,
+        new_snapshot: &EditorLayoutSnapshot,
+        preedit_byte_start: usize,
+        preedit_byte_end: usize,
+        is_commit: bool,
+        candidate_byte_start: usize,
+        candidate_byte_end: usize,
+        committed_replace_start: usize,
+        committed_replace_end: usize,
+        cursor_owner_epoch: u64,
+        now: Instant,
+    ) -> PreparedCompositionCommitHandoff {
+        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+        // Issue #710 评论 5734282079: 不再把 committed_replace 坐标和 preedit virtualText 坐标 min/max。
+        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+            let new_edit_range = if is_commit {
+                (candidate_byte_start, candidate_byte_end)
+            } else {
+                (committed_replace_start, committed_replace_end)
+            };
+            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                &old_snapshot.virtual_text,
+                &new_snapshot.virtual_text,
+                (preedit_byte_start, preedit_byte_end),
+                new_edit_range,
+            );
+            (Some((old_s, old_e)), Some((new_s, new_e)))
+        };
+        let (conflict_old_start, conflict_old_end) =
+            visual_affected_byte_range_old.unwrap_or((preedit_byte_start, preedit_byte_end));
+        let conflicting = self.prepared_queue.find_conflicting_transaction(
+            &old_snapshot.virtual_text,
+            conflict_old_start,
+            conflict_old_end,
+        );
+        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+            &conflicting,
+            "rebased_by_composition_commit",
+            now,
+            None,
+            &old_snapshot.virtual_text,
+            cursor_owner_epoch,
+        );
+        PreparedCompositionCommitHandoff {
+            rebase_frames,
+            caret_handoff,
+            offset_map,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        }
     }
 
     pub fn handle_composition_commit_or_cancel(
@@ -1868,51 +2520,41 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_line_top: f64,
         new_cursor_line_bottom: f64,
         cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
+        now: Instant,
+        prepared_handoff: Option<PreparedCompositionCommitHandoff>,
     ) -> Option<VisualTransactionKey> {
-        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-        // Issue #710 评论 5734282079: 不再把 committed_replace 坐标和 preedit virtualText 坐标 min/max。
-        // old-side affected range 从 old preedit range（old virtualText 坐标）得到；
-        // new-side: commit 用 candidate_byte_range（new snapshot 坐标），
-        //           cancel 用 committed_replace_range（cancel 后 new = committed，坐标一致）。
-        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
-            let new_edit_range = if is_commit {
-                (candidate_byte_start, candidate_byte_end)
-            } else {
-                (committed_replace_start, committed_replace_end)
-            };
-            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
-                &old_snapshot.virtual_text,
-                &new_snapshot.virtual_text,
-                (preedit_byte_start, preedit_byte_end),
-                new_edit_range,
-            );
-            (Some((old_s, old_e)), Some((new_s, new_e)))
+        // Issue #738 评论 5798704669 问题1: 若外层已调 prepare_composition_commit_handoff
+        // 采好 handoff（commit 路径），直接用；否则内部 prepare（cancel 路径 / 旧调用方）。
+        let handoff = match prepared_handoff {
+            Some(h) => h,
+            None => self.prepare_composition_commit_handoff(
+                old_snapshot,
+                new_snapshot,
+                preedit_byte_start,
+                preedit_byte_end,
+                is_commit,
+                candidate_byte_start,
+                candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
+                cursor_owner_epoch,
+                now,
+            ),
         };
-        let (conflict_old_start, conflict_old_end) =
-            visual_affected_byte_range_old.unwrap_or((preedit_byte_start, preedit_byte_end));
-        // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
-        // conflict_old_start/end 是 old 坐标系，传 &old_snapshot.virtual_text
-        // 作为 current_old_text。offset_map 仍保留用于 rebase。
-        let conflicting = self.prepared_queue.find_conflicting_transaction(
-            &old_snapshot.virtual_text,
-            conflict_old_start,
-            conflict_old_end,
-        );
-        // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
-        let now = Instant::now();
-        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
-            &conflicting,
-            "rebased_by_composition_commit",
-            now,
-            None,
-            &old_snapshot.virtual_text,
-            cursor_owner_epoch,
-        );
+        let PreparedCompositionCommitHandoff {
+            rebase_frames,
+            caret_handoff,
+            offset_map,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        } = handoff;
 
         let key = self.alloc_key();
-        let new_revision = LayoutRevision::next();
 
         let mut slices = Vec::new();
+        // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
+        let mut next_crossfade_group_id: u64 = 1;
 
         if !is_commit {
             // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
@@ -2021,6 +2663,8 @@ impl LinuxEditorAnimationCoordinator {
                                         ) {
                                             let new_doc =
                                                 new_line.source_rect_to_document_rect(&new_sr);
+                                            let group_id = next_crossfade_group_id;
+                                            next_crossfade_group_id += 1;
                                             slices.push(AnimatedSlice::reflow_crossfade_old(
                                                 key,
                                                 old_line.id,
@@ -2029,6 +2673,8 @@ impl LinuxEditorAnimationCoordinator {
                                                 new_doc,
                                                 old_cluster.byte_start,
                                                 old_cluster.byte_end,
+                                                Some(old_cluster.shaping_identity.clone()),
+                                                Some(group_id),
                                             ));
                                         }
                                     }
@@ -2110,6 +2756,8 @@ impl LinuxEditorAnimationCoordinator {
                                         let new_doc =
                                             new_line.source_rect_to_document_rect(&new_sr);
                                         let new_doc_for_hide = new_doc.clone();
+                                        let group_id = next_crossfade_group_id;
+                                        next_crossfade_group_id += 1;
                                         let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                                             key,
                                             new_line.id,
@@ -2118,6 +2766,8 @@ impl LinuxEditorAnimationCoordinator {
                                             new_doc,
                                             new_cluster.byte_start,
                                             new_cluster.byte_end,
+                                            Some(new_cluster.shaping_identity.clone()),
+                                            Some(group_id),
                                         );
                                         new_slice.static_hidden_document_rects =
                                             vec![new_doc_for_hide];
@@ -2222,6 +2872,7 @@ impl LinuxEditorAnimationCoordinator {
             // 扩段落得到。
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
+            layout_basis_revision,
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -2233,7 +2884,6 @@ impl LinuxEditorAnimationCoordinator {
             rebase_frames.len(),
         ));
 
-        self.layout_revision = new_revision;
         self.prepared_queue.enqueue(prepared);
         Some(key)
     }
@@ -2266,6 +2916,73 @@ impl LinuxEditorAnimationCoordinator {
         for key in keys {
             self.prepared_queue.cancel(key, reason);
         }
+    }
+
+    /// Issue #738 评论 5798704669 问题2: 只读入口，收集所有未完成 Timed Reflow
+    ///（ReflowMove / ReflowCrossFade）在 current text 中的目标 byte ranges。
+    ///
+    /// 遍历所有活动 transaction（非 Cancelled / Completed），对每笔 transaction
+    /// 用 `OffsetMap::build(tx.new_snapshot.virtual_text, current_text)` 把每个
+    /// `reflow_anchor.byte_start/end` 映射到 current text。没有 anchors 的 fallback
+    /// unit 用 slice 的 byte range。返回去重后的 current-text byte ranges。
+    ///
+    /// `build_editor_layout_snapshot_with_canonical` 把这些 ranges 对应的新 canonical
+    /// line ids 并入 clusters 注入覆盖，确保远处 Reflow 的目标行在 canonical 里有 clusters，
+    /// `find_clusters_in_canonical` 不再返回空，`rebind_timed_units_to_canonical`
+    /// 不再误判 `RebindDecision::Remove`。
+    pub(crate) fn collect_active_rebind_ranges(&self, current_text: &str) -> Vec<(usize, usize)> {
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for tx in self.prepared_queue.active_transactions() {
+            if tx.state == TextVisualTransactionState::Cancelled
+                || tx.state == TextVisualTransactionState::Completed
+            {
+                continue;
+            }
+            let tx_new_text = match tx.new_snapshot.as_ref() {
+                Some(s) => s.virtual_text.as_str(),
+                None => continue,
+            };
+            let per_tx_map = OffsetMap::build(tx_new_text, current_text);
+            for unit in &tx.units {
+                if !matches!(
+                    unit.slice.kind,
+                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade
+                ) {
+                    continue;
+                }
+                if unit.slice.reflow_anchors.is_empty() {
+                    // fallback: 用 slice 整体 byte range
+                    if unit.slice.byte_start < unit.slice.byte_end {
+                        if let Some((ms, me)) = per_tx_map
+                            .map_old_range_to_new(unit.slice.byte_start, unit.slice.byte_end)
+                        {
+                            ranges.push((ms, me));
+                        }
+                    }
+                    continue;
+                }
+                for anchor in &unit.slice.reflow_anchors {
+                    if let Some((ms, me)) =
+                        per_tx_map.map_old_range_to_new(anchor.byte_start, anchor.byte_end)
+                    {
+                        ranges.push((ms, me));
+                    }
+                }
+            }
+        }
+        // 去重 + 合并重叠 ranges
+        ranges.sort_by_key(|r| r.0);
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for r in ranges {
+            if let Some(last) = merged.last_mut() {
+                if r.0 <= last.1 {
+                    last.1 = last.1.max(r.1);
+                    continue;
+                }
+            }
+            merged.push(r);
+        }
+        merged
     }
 
     pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> Option<Vec<LineSnapshotId>> {
@@ -2392,6 +3109,7 @@ impl LinuxEditorAnimationCoordinator {
     fn active_text_transaction_key_with_epoch(
         &self,
         current_cursor_epoch: u64,
+        current_layout_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
@@ -2401,6 +3119,16 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             if tx.cursor_owner_epoch != current_cursor_epoch {
+                continue;
+            }
+            // Issue #738 评论 5788513592 问题1: caret owner 选择必须看 layout_basis_revision。
+            // 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
+            // coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
+            // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`。canonical 已推进到
+            // new_revision 但 Pipeline.layout_revision 可能停在旧值时，future revision 的事务
+            // 也不属于当前 canonical，不能继续拥有 caret ownership。只有 basis 完全一致的
+            // 事务才能继续驱动 coordinated caret。
+            if tx.layout_basis_revision != current_layout_revision {
                 continue;
             }
             // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
@@ -2434,14 +3162,38 @@ impl LinuxEditorAnimationCoordinator {
     /// ReflowMove/ReflowCrossFade 保留不动，作为独立 passive reflow track 继续。
     /// 不再存在"同一笔正文吞吐 transaction 还活着，但 caret_owner 已经不是它"
     /// 的状态。
+    /// Issue #738 评论 5789470425 问题1: 增加 `current_layout_revision` 参数，
+    /// 和 `active_text_transaction_key_with_epoch` 一样跳过 basis 不一致的事务。
+    /// 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
+    /// coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
     pub(crate) fn find_cursor_transaction_for_target(
         &mut self,
         target_x: f64,
         target_y: f64,
         _target_h: f64,
         current_cursor_epoch: u64,
+        current_layout_revision: LayoutRevision,
     ) -> Option<(VisualTransactionKey, Option<CursorRect>, Option<CursorRect>)> {
         // 领域2：优先按事务身份绑定——存在活动正文事务时直接返回。
+        // Issue #738 评论 5789470425 问题1: 用 active_text_transaction_key_with_epoch
+        // 同时检查 epoch 和 layout_basis_revision，跳过 basis 不一致的事务。
+        if let Some(key) = self
+            .active_text_transaction_key_with_epoch(current_cursor_epoch, current_layout_revision)
+        {
+            if let Some(tx) = self
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+            {
+                return Some((
+                    tx.key,
+                    tx.old_cursor_rect.clone(),
+                    tx.new_cursor_rect.clone(),
+                ));
+            }
+        }
+        // epoch 不一致但 basis 一致的事务可能需要收口。检查是否存在 epoch 不一致的事务。
         if let Some(key) = self.active_text_transaction_key() {
             if let Some(tx) = self
                 .prepared_queue
@@ -2449,31 +3201,17 @@ impl LinuxEditorAnimationCoordinator {
                 .iter()
                 .find(|t| t.key == key)
             {
-                // Issue #705 评论 5717380886 / Issue #735 评论 5773604666 问题3:
-                // cursor_owner_epoch 检查。epoch 不一致时触发收口——CaretDriven units
-                // 立即落到终态，不再继续播自己的 glyph。ReflowMove/ReflowCrossFade
-                // 作为独立 passive reflow track 继续。
                 if tx.cursor_owner_epoch != current_cursor_epoch {
                     // Issue #735 评论 5773604666 问题3: 收口这笔事务的 CaretDriven units。
-                    // retire_caret_driven_units_for_transaction 会:
-                    // - 把 CaretDriven units 的 start_fraction 设为 target_fraction（终态）
-                    // - 置 caret_motion_retired = true
-                    // ReflowMove/ReflowCrossFade 保留不动。
                     self.retire_caret_driven_units_for_transaction(key);
-                    // 收口后 fall through 到 CursorOnly 查找逻辑。
-                } else {
-                    return Some((
-                        tx.key,
-                        tx.old_cursor_rect.clone(),
-                        tx.new_cursor_rect.clone(),
-                    ));
                 }
             }
         }
 
-        // 没有正文事务（或 epoch 不一致已收口）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
-        // Issue #705 评论 5717380886: CursorOnly 查找也跳过 epoch 不一致的事务，
-        // 因为这些事务的 new_cursor_rect 已不再代表当前 caret 目标。
+        // 没有正文事务（或 epoch/basis 不一致已收口）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
+        // Issue #738 评论 5789470425 问题1: CursorOnly 查找也跳过 basis 不一致的事务。
+        // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`，future revision 的事务
+        // 也不属于当前 canonical，不能按其 new_cursor_rect 反查当作 CursorOnly 命中。
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
                 tx.state,
@@ -2482,6 +3220,9 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             if tx.cursor_owner_epoch != current_cursor_epoch {
+                continue;
+            }
+            if tx.layout_basis_revision != current_layout_revision {
                 continue;
             }
             if let Some(ref new_rect) = tx.new_cursor_rect {
@@ -2576,6 +3317,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         cursor_move_source: super::cursor_controller::CursorMoveSource,
         cursor_baseline_y: f64,
+        layout_basis_revision: LayoutRevision,
     ) -> CursorAnimationPlan {
         // Issue #727 评论 5757225958 问题1: cursor_y 现在是文档坐标（caller 改用
         // editor_layout_cursor_rect_doc），in_viewport 判断需要视口坐标 screen_y =
@@ -2599,7 +3341,7 @@ impl LinuxEditorAnimationCoordinator {
         //   不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
         //   reflow track 继续。纯光标移动可走 Tween。
         let has_active_for_coordinated = self
-            .active_text_transaction_key_with_epoch(cursor_owner_epoch)
+            .active_text_transaction_key_with_epoch(cursor_owner_epoch, layout_basis_revision)
             .is_some();
         // Issue #710 评论 5731145076 症状二: 统一 blink 决策。
         // blink_mode 不再在 build_cursor_plan 里计算（之前的 _blink_mode 计算后未使用，
@@ -2854,13 +3596,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         _current_scroll_y: f64,
     ) -> RenderPlan {
-        // Issue #727 评论 5760020833 问题2: 先把本帧 Prepared 事务切到 Rendering 并启动
-        // timeline/units/cursor track，再采样 caret motion。否则刚进入 Prepared 的新事务
-        // 第一帧 sample 时状态仍为 Prepared → caret=None → 闪出 canonical 最终正文。
         self.begin_rendering_transactions(frame_now);
-
-        // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
-        // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
         let mut frame_sample = AnimationFrameSample::new(frame_now);
         for tx in self.prepared_queue.active_transactions() {
             if !matches!(
@@ -2870,20 +3606,18 @@ impl LinuxEditorAnimationCoordinator {
                 frame_sample.set_progress(tx.key, tx.progress(frame_now));
             }
         }
-
-        // Issue #727 约束 3: 先采样 caret motion 得到一份统一的 CoordinatedMotionFrame，
-        // 供 cursor layer 和文字 reveal/conceal 共享同一份 caret geometry。
-        // 有 SampledCaretFrame 才让 InsertReveal / DeleteConceal 用它的 x/y/visual_line_id 裁文字。
-        // 没有 caret frame 就不生成 reveal/conceal glyph。
-        //
-        // 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时事务立刻失去
-        // caret motion ownership，caret 为 None，CaretDriven units 已落到 canonical
-        // final state（不再继续播放）。
-        let coordinated_motion_frame =
-            self.sample_coordinated_motion_frame(&frame_sample, cursor_owner_epoch);
-
-        let (text_animation, keys_to_complete) =
-            self.build_text_animation_plan_with_sample(&frame_sample, &coordinated_motion_frame);
+        // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务再采样 caret motion。
+        let (text_animation, keys_to_complete, coordinated_motion_frame) = self
+            .build_text_animation_plan_with_sample(
+                &frame_sample,
+                cursor_owner_epoch,
+                frame_context.layout_basis_revision,
+            );
+        let coordinated_motion_frame = self.sample_coordinated_motion_frame(
+            &frame_sample,
+            cursor_owner_epoch,
+            frame_context.layout_basis_revision,
+        );
         // Issue #727 评论 5757225958 问题3: 先构建 keys_to_complete_set，
         // 供 clip_rects 收集时跳过本帧即将完成的事务，避免"glyph 无、clip 有"
         // 的一帧文字消失/闪烁。
@@ -2917,9 +3651,14 @@ impl LinuxEditorAnimationCoordinator {
         // ownership），避免空洞。
         let mut clip_rects: Vec<super::qt_text_node::AnimationClipRect> = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
+            // Issue #738 评论 5793319451 问题1: 守卫从 `>=` 改成 `==`。clip rects 用于
+            // 裁切 canonical 正文以露出动画 overlay，只有 basis 与当前 frame_context 完全
+            // 一致的事务的 static_hidden_document_rects 才属于当前 canonical 几何。
+            // future revision 的事务其 hidden rects 对应另一份 canonical，不能裁当前正文。
             if tx.texture_prepared
                 && tx.state.is_clip_eligible()
                 && !keys_to_complete_set.contains(&tx.key)
+                && tx.layout_basis_revision == frame_context.layout_basis_revision
             {
                 let has_caret_frame = coordinated_motion_frame.caret.is_some();
                 // Issue #727 评论 5760020833 问题1: 还要判断本事务是否是 caret motion 的
@@ -3066,9 +3805,12 @@ impl LinuxEditorAnimationCoordinator {
         &self,
         sample: &AnimationFrameSample,
         cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
     ) -> super::render_plan::CoordinatedMotionFrame {
-        // 取当前 epoch 一致的活动正文事务。
-        let key = match self.active_text_transaction_key_with_epoch(cursor_owner_epoch) {
+        // 取当前 epoch 一致且 layout basis 未过期的活动正文事务。
+        let key = match self
+            .active_text_transaction_key_with_epoch(cursor_owner_epoch, layout_basis_revision)
+        {
             Some(k) => k,
             None => {
                 return super::render_plan::CoordinatedMotionFrame {
@@ -3170,8 +3912,34 @@ impl LinuxEditorAnimationCoordinator {
     fn build_text_animation_plan_with_sample(
         &mut self,
         sample: &AnimationFrameSample,
-        coordinated_motion_frame: &super::render_plan::CoordinatedMotionFrame,
-    ) -> (TextAnimationPlan, Vec<VisualTransactionKey>) {
+        cursor_owner_epoch: u64,
+        layout_basis_revision: LayoutRevision,
+    ) -> (
+        TextAnimationPlan,
+        Vec<VisualTransactionKey>,
+        super::render_plan::CoordinatedMotionFrame,
+    ) {
+        // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务的 caret motion，
+        // 再采样 caret motion。旧 basis 事务的 caret_motion_retired 置 true 后，
+        // active_text_transaction_key_with_epoch 跳过它，sample_coordinated_motion_frame
+        // 不会给它 owner_key，旧 caret track 不会被采样喂给 cursor layer。
+        // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`。basis 不一致（无论是旧
+        // 还是 future）的事务都不应继续驱动 caret motion，统一收口 retire。
+        for tx in self.prepared_queue.active_transactions_mut() {
+            if tx.state == TextVisualTransactionState::Cancelled
+                || tx.state == TextVisualTransactionState::Completed
+            {
+                continue;
+            }
+            if tx.layout_basis_revision != layout_basis_revision && !tx.caret_motion_retired {
+                tx.retire_caret_driven_units();
+                tx.caret_motion_retired = true;
+            }
+        }
+        // 再采样 caret motion（旧 basis 事务已 retire，不会被选为 caret owner）。
+        let coordinated_motion_frame =
+            self.sample_coordinated_motion_frame(sample, cursor_owner_epoch, layout_basis_revision);
+
         let mut glyphs = Vec::new();
         let mut keys_to_complete = Vec::new();
 
@@ -3186,52 +3954,32 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            // Issue #727 评论 5760020833 问题2: Prepared→Rendering 的状态切换及
-            // timeline/units/cursor track 启动已由 `begin_rendering_transactions`
-            // 在 `build_render_plan_full` 采样 caret motion 之前完成。到这里时
-            // 本帧 Prepared 事务已全部切到 Rendering，不再重复执行。
+            // Issue #738: basis 与 canonical revision 不一致的 unit 不进 glyph 计划。
+            // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`，future revision 的
+            // 事务也不属于当前 canonical，不能画 glyph（其纹理/几何对应另一份 canonical）。
+            if tx.layout_basis_revision != layout_basis_revision {
+                continue;
+            }
 
-            // Issue #727 评论 5760431554 问题1: 每笔 tx 开头统一算 owns_caret，
-            // 完成条件与 glyph 收集共用同一处 ownership 判断，避免三处分叉。
-            // 含义：
-            // - 当前 owner 的 CaretDriven：继续等同一条 caret track 到终点；
-            // - 已失去 owner 的 CaretDriven：本帧已 Snap 到 canonical，caret 部分
-            //   立刻视为完成（不再等旧 caret track 跑完），事务只等剩余 Timed unit；
-            // - 这样旧事务被新事务抢走 caret ownership 后不会继续留在 active queue
-            //   等旧 caret track，避免新事务先完成时旧事务重新成为 active caret owner
-            //   造成 caret 回跳/旧吞吐状态重新接管。
+            // Prepared→Rendering 状态切换已由 begin_rendering_transactions 完成。
+
+            // owns_caret: 本事务是否拥有 caret ownership。失去 owner 时 caret 部分
+            // 立刻视为完成，避免旧事务回跳。
             let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
 
-            // Issue #736 评论 5778543593 修改1: 把"本事务的 CaretDriven unit 本帧是否
-            // 真的进入动画层"收成一个明确状态 caret_driven_active。其值为
-            // owns_caret && coordinated_motion_frame.caret.is_some()。
-            // DeleteConceal 和 InsertReveal 共用同一个 caret_driven_active 判断，
-            // 不分别判断 ownership，也不在多个 if/continue 里隐式决定。
-            // - caret_driven_active == true: 必须生成 glyph frame（active 时 caret 一定存在）
-            // - caret_driven_active == false: 整笔 CaretDriven motion 直接 canonical 收口
+            // caret_driven_active = owns_caret && caret.is_some()。false 时整笔
+            // CaretDriven motion 直接 canonical 收口。
             let caret_driven_active = owns_caret && coordinated_motion_frame.caret.is_some();
 
-            // Issue #722 评论 5748596920 问题4: InsertReveal/DeleteConceal 的完成条件
-            // 必须跟视觉边界一致：caret-driven boundary 到目标后才能释放对应 overlay/static patch。
-            // ReflowMove/ReflowCrossFade 才继续按自己的 unit progress 完成。
-            // 不能一边说文字由 caret 决定，一边还让 unit timeline 决定文字什么时候被销毁。
+            // InsertReveal/DeleteConceal 完成条件跟视觉边界一致。
             let has_caret_driven_units = tx.units.iter().any(|u| {
                 matches!(
                     u.slice.kind,
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
                 )
             });
-            // Issue #727 评论 5760650874 方案 A / Issue #735 评论 5773604666 问题3:
-            // 发现 has_caret_driven_units && !caret_driven_active 时，永久退休此事务的
-            // caret motion，并收口 CaretDriven units——把 start_fraction 设为
-            // target_fraction（终态）。之后 active_text_transaction_key_with_epoch
-            // 永远跳过此事务，不会再给它 owner_key，已 Snap 回 canonical 的旧 caret /
-            // 吞吐字轨迹不会重新接管。ReflowMove/ReflowCrossFade 作为独立 passive
-            // reflow track 继续播完。
-            // 只在确实有 CaretDriven units 时才置位——纯 Reflow 事务本来就不驱动 caret，
-            // 不需要退休标记。
-            // Issue #736 评论 5778543593 修改1: 用 caret_driven_active 代替 owns_caret，
-            // 这样"无 caret frame"和"失去 owner"两种情况都统一收口为 canonical。
+            // has_caret_driven_units && !caret_driven_active 时退休 caret motion，
+            // 收口 CaretDriven units 到终态。之后永远跳过此事务不再给 owner_key。
             if has_caret_driven_units && !caret_driven_active {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
@@ -3244,12 +3992,8 @@ impl LinuxEditorAnimationCoordinator {
             } else {
                 true
             };
-            // Issue #727 评论 5755858583 问题4: 完成判断按 kind 分开。
-            // CaretDriven unit（InsertReveal/DeleteConceal）的 progress() 固定返回 0.0
-            // （无独立时间线），不能用 u.progress() >= 1.0 判断完成——否则含吞吐字的事务
-            // 永远完不了。CaretDriven unit 的完成由 caret_track_done 决定（见下方
-            // caret_track_complete），这里视为 done；只有 Timed unit（ReflowMove/
-            // ReflowCrossFade）才看自己的 progress >= 1.0。
+            // 完成判断按 kind 分开: CaretDriven unit 的完成由 caret_track_done 决定，
+            // Timed unit 看 progress >= 1.0。
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
@@ -3260,16 +4004,8 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 })
             };
-            // caret-driven 文字事务必须 caret track 也完成才能释放。
-            // Issue #727 评论 5760431554 问题1 / Issue #735 评论 5773604666 问题3:
-            // 已失去 owner 的 CaretDriven 事务（owns_caret == false）本帧已收口——
-            // CaretDriven units 的 start_fraction 已设为 target_fraction（终态），
-            // caret 部分立刻视为完成，不再等自己那条旧 caret track 跑完。
-            // 仍需等剩余 Timed unit（Reflow）播完。
-            // Issue #727 评论 5760650874 方案 A: 用 tx.caret_motion_retired 代替 !owns_caret。
-            // 一旦退休，此事务永远视为 caret 部分完成——下一帧即使 new tx 完成移除，
-            // 本事务也不会重新成为 owner（active_text_transaction_key_with_epoch 跳过 retired），
-            // 不会重新接管旧 caret / 吞吐字轨迹造成回跳。
+            // caret_track_complete: CaretDriven 事务必须 caret track 也完成。
+            // 退休后永远视为完成，不会重新接管旧 caret 轨迹。
             let caret_track_complete =
                 !has_caret_driven_units || tx.caret_motion_retired || caret_track_done;
 
@@ -3287,28 +4023,16 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // Issue #727 约束 3+4: InsertReveal/DeleteConceal 的裁切边界直接消费
-                // 本帧统一的 CoordinatedMotionFrame.caret，不再由文字层自己采样 caret。
-                // 没有 caret frame 就不生成 reveal/conceal glyph（static canonical text
-                // 直接完整显示）。
-                // Issue #727 评论 5757225958 问题5: 按 owner_key 过滤——只有同 key 的
-                // CaretDriven unit 能消费此 caret frame。其它事务的 CaretDriven unit
-                // 不消费此 caret（直接回 canonical），只允许 Timed Reflow 继续。
+                // InsertReveal/DeleteConceal 从统一 CoordinatedMotionFrame.caret 消费。
+                // 按 owner_key 过滤，只有同 key 的 unit 能消费此 caret frame。
                 let frame = match unit.slice.kind {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                        // Issue #736 评论 5778543593 修改1: 用统一的 caret_driven_active
-                        // 判断是否进入动画层。active 时生成 glyph，否则 continue
-                        // （已 retire，canonical 收口）。DeleteConceal 和 InsertReveal
-                        // 共用同一个 caret_driven_active 判断，不分别判断 ownership，
-                        // 也不在多个 if/continue 里隐式决定"是否进入动画层"。
+                        // active 时生成 glyph，否则 continue（已 retire）。
                         if !caret_driven_active {
                             continue;
                         }
-                        // Issue #727 约束 3: 从统一的 CoordinatedMotionFrame 获取 caret geometry。
-                        // 约束 4: 不再自己采样 caret（删除 sample_caret_geometry_for_caret_driven_clip
-                        // 及内联采样路径）。
-                        // caret_driven_active 为 true 意味着 coordinated_motion_frame.caret.is_some()，
-                        // 但仍用 match 而非 expect，避免用 expect 代替错误处理。
+                        // 从统一 CoordinatedMotionFrame 获取 caret geometry。
+                        // 用 match 而非 expect，避免用 expect 代替错误处理。
                         let Some(caret_frame) = coordinated_motion_frame.caret else {
                             continue;
                         };
@@ -3344,7 +4068,11 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        (TextAnimationPlan { glyphs }, keys_to_complete)
+        (
+            TextAnimationPlan { glyphs },
+            keys_to_complete,
+            coordinated_motion_frame,
+        )
     }
 
     /// Issue #690 评论 5675007226 步骤 2 + 5681206040: 协同光标直接计算最终屏幕位置。
@@ -4358,6 +5086,9 @@ mod tests {
             0.0,
             0.0,
             0,
+            LayoutRevision::initial(),
+            Instant::now(),
+            None,
         );
         assert!(key.is_some());
         let tx = coord
@@ -4455,6 +5186,9 @@ mod tests {
             0.0,
             0.0,
             0,
+            LayoutRevision::initial(),
+            Instant::now(),
+            None,
         );
         assert!(key.is_some());
         let tx = coord
@@ -4546,6 +5280,9 @@ mod tests {
             0.0,
             0.0,
             0,
+            LayoutRevision::initial(),
+            Instant::now(),
+            None,
         );
         assert!(key.is_some());
         let tx = coord
@@ -4638,6 +5375,9 @@ mod tests {
             0.0,
             0.0,
             0,
+            LayoutRevision::initial(),
+            Instant::now(),
+            None,
         );
         assert!(key.is_some());
         let tx = coord
@@ -4722,6 +5462,9 @@ mod tests {
             0.0,
             0.0,
             0,
+            LayoutRevision::initial(),
+            Instant::now(),
+            None,
         );
         assert!(key.is_some());
         let tx = coord
@@ -4808,6 +5551,7 @@ mod tests {
             0.0,
             0.0,
             0,
+            LayoutRevision::initial(),
         );
         assert!(key.is_some());
         let tx = coord
@@ -5127,6 +5871,7 @@ mod tests {
             caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
+            layout_basis_revision: LayoutRevision::initial(),
         }
     }
 
@@ -6370,6 +7115,7 @@ mod tests {
             caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
+            layout_basis_revision: LayoutRevision::initial(),
         };
         coord.prepared_queue.enqueue(tx);
 
@@ -6451,8 +7197,8 @@ mod tests {
         coord.begin_rendering_transactions(frame_now_0);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(key, 0.0);
-        let (plan_0, _) = coord
-            .build_text_animation_plan_with_sample(&sample_0, &CoordinatedMotionFrame::default());
+        let (plan_0, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_0, 0, LayoutRevision::initial());
 
         // 断言 3: 同一个 frame_now_0 下 progress 都 == 0。
         {
@@ -6499,8 +7245,8 @@ mod tests {
         let frame_now_1 = frame_now_0 + Duration::from_millis(50);
         let mut sample_1 = AnimationFrameSample::new(frame_now_1);
         sample_1.set_progress(key, 0.25);
-        let (plan_1, _) = coord
-            .build_text_animation_plan_with_sample(&sample_1, &CoordinatedMotionFrame::default());
+        let (plan_1, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_1, 0, LayoutRevision::initial());
 
         {
             let tx_ref = coord
@@ -6670,6 +7416,7 @@ mod tests {
             caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
+            layout_basis_revision: LayoutRevision::initial(),
         };
         coord.prepared_queue.enqueue(new_tx);
 
@@ -6740,8 +7487,8 @@ mod tests {
             }),
             owner_key: Some(new_key),
         };
-        let (plan_0, _) =
-            coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
+        let (plan_0, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_0, 0, LayoutRevision::initial());
 
         // ── 9. 断言第一帧 Rendering：二者 progress == 0（同帧起跑，没有错拍） ──
         {
@@ -6822,8 +7569,8 @@ mod tests {
             }),
             owner_key: Some(new_key),
         };
-        let (_plan_mid, _) =
-            coord.build_text_animation_plan_with_sample(&sample_mid, &coordinated_frame_mid);
+        let (_plan_mid, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_mid, 0, LayoutRevision::initial());
         {
             let tx_ref = coord
                 .prepared_queue
@@ -6873,8 +7620,8 @@ mod tests {
             }),
             owner_key: Some(new_key),
         };
-        let (_plan_1, _) =
-            coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);
+        let (_plan_1, _, _) =
+            coord.build_text_animation_plan_with_sample(&sample_1, 0, LayoutRevision::initial());
         {
             let tx_ref = coord
                 .prepared_queue
@@ -6943,6 +7690,7 @@ mod tests {
             caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
+            layout_basis_revision: LayoutRevision::initial(),
         }
     }
 
@@ -7605,6 +8353,7 @@ mod tests {
             caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
+            layout_basis_revision: LayoutRevision::initial(),
         };
         coord.prepared_queue.enqueue(old_tx);
 
@@ -7639,6 +8388,7 @@ mod tests {
             caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
+            layout_basis_revision: LayoutRevision::initial(),
         };
         coord.prepared_queue.enqueue(new_tx);
 
@@ -7656,7 +8406,8 @@ mod tests {
         sample_0.set_progress(new_key, 0.0);
 
         // 采样 coordinated motion frame → owner_key 应为 new_key（倒序选最后一个）
-        let coordinated_frame_0 = coord.sample_coordinated_motion_frame(&sample_0, epoch);
+        let coordinated_frame_0 =
+            coord.sample_coordinated_motion_frame(&sample_0, epoch, LayoutRevision::initial());
         assert_eq!(
             coordinated_frame_0.owner_key,
             Some(new_key),
@@ -7664,8 +8415,11 @@ mod tests {
         );
 
         // 调用 build_text_animation_plan_with_sample —— 此处应把 old tx 的 caret_motion_retired 置 true
-        let (_plan_0, keys_to_complete_0) =
-            coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
+        let (_plan_0, keys_to_complete_0, _) = coord.build_text_animation_plan_with_sample(
+            &sample_0,
+            epoch,
+            LayoutRevision::initial(),
+        );
 
         // 验证 old tx 不在 keys_to_complete（因为 ReflowMove 未完成，all_units_done == false）
         assert!(
@@ -7712,15 +8466,17 @@ mod tests {
         sample_1.set_progress(old_key, 0.5);
 
         // 修复后：active_text_transaction_key_with_epoch 跳过 retired 事务，返回 None
-        let active_key_1 = coord.active_text_transaction_key_with_epoch(epoch);
+        let active_key_1 =
+            coord.active_text_transaction_key_with_epoch(epoch, LayoutRevision::initial());
         assert_eq!(
             active_key_1, None,
-            "修复后：new tx 完成后，active_text_transaction_key_with_epoch 不应重新返回 old tx\
+            "修复后：*不应重新返回 old tx\
              （caret_motion_retired == true，被跳过）"
         );
 
         // 修复后：sample_coordinated_motion_frame 的 owner_key 为 None（不重新变成 old_key）
-        let coordinated_frame_1 = coord.sample_coordinated_motion_frame(&sample_1, epoch);
+        let coordinated_frame_1 =
+            coord.sample_coordinated_motion_frame(&sample_1, epoch, LayoutRevision::initial());
         assert_eq!(
             coordinated_frame_1.owner_key, None,
             "修复后：第 2 帧 owner_key 不应重新变成 old tx\
@@ -7764,8 +8520,11 @@ mod tests {
 
         // 额外验证：再调一次 build_text_animation_plan_with_sample，
         // old tx 的 caret_motion_retired 不会被重置（已经是 true 就保持 true）
-        let (_plan_1, _keys_to_complete_1) =
-            coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);
+        let (_plan_1, _keys_to_complete_1, _) = coord.build_text_animation_plan_with_sample(
+            &sample_1,
+            epoch,
+            LayoutRevision::initial(),
+        );
         {
             let old_tx_ref = coord
                 .prepared_queue
