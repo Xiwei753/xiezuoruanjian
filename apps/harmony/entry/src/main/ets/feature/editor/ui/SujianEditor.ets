@@ -456,7 +456,19 @@ export struct SujianEditor {
     if (!this.snapshot || !this.renderResult || !this.dispatcher) {
       return
     }
-    const touch = event.touches[0]
+    // Issue #743 评论5792119958：空触点边界检查必须先于 touches[0] 解引用。
+    // ArkUI TouchEvent.touches 在 Cancel 等场景可能为空；StylusInputService.normalizeStylusEvent
+    // 虽已处理空 touches，但编辑器在调用 service 前先解引用 touches[0] 会让 service 的 null 防护走不到。
+    // 华为 ArkUI 文档明确：使用 touches 前需先检查是否为空。
+    // Cancel 场景顺手清掉 isDragging / dragAnchor，避免留下上一轮拖选状态；其余空触点直接 return。
+    if (event.touches.length === 0) {
+      if (event.type === TouchType.Cancel) {
+        this.isDragging = false
+        this.dragAnchor = null
+      }
+      return
+    }
+    const touch: TouchObject = event.touches[0]
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
