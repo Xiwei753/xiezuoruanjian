@@ -1,6 +1,6 @@
 # HarmonyOS 客户端
 
-本目录是素笺写作的 HarmonyOS 原生客户端。
+本目录是素笺写作的 HarmonyOS 原生客户端。当前只做 HarmonyOS（不做 OpenHarmony）。
 
 ## 职责
 
@@ -11,7 +11,7 @@
 
 ## 开发
 
-使用 DevEco Studio 打开本目录。构建原生客户端前，需要准备与目标架构匹配的 Rust Core 动态库。
+使用 DevEco Studio 打开本目录。构建原生客户端前，需要准备与目标架构匹配的 Rust Core 动态库。Rust Core 动态库实际生成位置是 `entry/src/main/prebuilt/arm64-v8a/libwriter_core_ffi.so`（由 tools/build_harmony.sh 产出）。
 
 签名证书、密码、令牌和本机路径不得提交到仓库。
 

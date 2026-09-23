@@ -49,6 +49,11 @@ export class AppContext {
     // 把 UIAbilityContext 注入 WindowPrivacyService，使其能获取 window 实例。
     WindowPrivacyService.getInstance().setAbilityContext(context)
 
+    // 把 UIAbilityContext 注入 ShoulderSurfingService，使其在 API>=23 时能调
+    // DlpAntiPeepApi23.requestAntiPeepOptions 打开防窥设置页。
+    // AppContext 只调稳定 facade，不出现 API Level 判断（判断在 facade/PlatformApiResolver 内）。
+    ShoulderSurfingService.getInstance().setAbilityContext(context)
+
     // 把 UIAbilityContext 注入 HarmonyShareService（进而注入 SystemShareService），
     // 使其能调 systemShare.ShareController.show 和获取 windowId（隔空传送）。
     // feature/page 不直接 import Share Kit，统一通过 HarmonyShareService。

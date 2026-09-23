@@ -7,6 +7,9 @@
 #   - Rust toolchain + rustup target add aarch64-unknown-linux-ohos
 #   - DevEco Studio NEXT (includes OHOS NDK)
 #
+# 注：OHOS NDK / aarch64-unknown-linux-ohos / SDK 目录命名 openharmony/native
+# 都是工具链命名事实，不代表产品兼容 OpenHarmony。本客户端只做 HarmonyOS。
+#
 # Usage:
 #   .\tools\build_harmony.ps1
 #   .\tools\build_harmony.ps1 -Release

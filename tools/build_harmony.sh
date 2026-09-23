@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# HarmonyOS / OHOS 构建脚本
+# HarmonyOS 构建脚本
 # =============================================================================
 #
 # 交叉编译 Rust writer_core 的 HarmonyOS C-ABI FFI 库，并复制到 HarmonyOS
@@ -10,10 +10,13 @@
 # 使用方法：
 #   ./tools/build_harmony.sh
 #
-# OHOS Native SDK 探测顺序：
-#   1. $OHOS_NDK_HOME（用户覆盖项；指向 OpenHarmony SDK 的 native 目录）
+# HarmonyOS Native SDK 探测顺序：
+#   1. $OHOS_NDK_HOME（用户覆盖项；指向 HarmonyOS Native SDK 目录）
 #   2. /opt/devecostudio/sdk/default/openharmony/native（DevEco Studio 默认安装）
 #   3. ~/DevEcoStudio*/sdk/default/openharmony/native 等常见位置
+#
+# 注：SDK 目录命名 openharmony/native 是工具链事实（HarmonyOS Native 构建链
+# 使用的目录命名），不代表产品兼容 OpenHarmony。本客户端只做 HarmonyOS。
 #
 # 脚本会基于探测到的 SDK 自动注入 linker / ar / sysroot / C 编译器参数，
 # 不依赖系统 PATH 中存在 ohos-clang。
@@ -34,7 +37,7 @@ echo "=== 素笺写作 HarmonyOS FFI 构建脚本 ==="
 echo ""
 
 # -----------------------------------------------------------------------------
-# 1. 定位 OHOS Native SDK 目录
+# 1. 定位 HarmonyOS Native SDK 目录
 # -----------------------------------------------------------------------------
 detect_native_dir() {
     local -a cands=()
@@ -60,10 +63,12 @@ detect_native_dir() {
 }
 
 NATIVE_DIR="$(detect_native_dir)" || {
-    echo "错误：未找到 OHOS Native SDK（clang）。" >&2
+    echo "错误：未找到 HarmonyOS Native SDK（clang）。" >&2
     echo "" >&2
-    echo "请设置环境变量指向 OpenHarmony SDK 的 native 目录后重试：" >&2
+    echo "请设置环境变量指向 HarmonyOS Native SDK 目录后重试：" >&2
     echo "  export OHOS_NDK_HOME=/opt/devecostudio/sdk/default/openharmony/native" >&2
+    echo "" >&2
+    echo "注：路径中的 openharmony/native 是工具链目录命名，不代表产品兼容 OpenHarmony。" >&2
     exit 1
 }
 
@@ -86,7 +91,7 @@ if [ ! -x "$CLANG" ] || [ ! -x "$LLVM_AR" ]; then
     exit 1
 fi
 
-echo "OHOS Native SDK : $NATIVE_DIR"
+echo "HarmonyOS Native SDK : $NATIVE_DIR"
 echo "clang           : $CLANG"
 echo "llvm-ar         : $LLVM_AR"
 echo "sysroot         : $SYSROOT"

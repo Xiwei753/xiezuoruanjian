@@ -2,24 +2,13 @@
 // UI 订阅调整高频操作区（如单手握持时把工具栏移到握持侧）。
 // 只暴露平台状态，不写业务规则，不调 Core。
 //
-// 真实事件源：@kit.MultimodalAwarenessKit 的 multimodalAwareness.on('gripPostureChange')。
-// notifyPostureChanged 改成 private 分发方法，仅由系统回调调用。
+// 真实事件源经 GripPostureApi20 facade 调 @kit.MultimodalAwarenessKit 的 motion。
+// Service 不直接 import @kit.*，系统调用和枚举映射都在 impl/api20 facade。
+// notifyPostureChanged 是 private 分发方法，仅由系统回调触发。
 // 不允许页面伪造平台状态。
 
-import { multimodalAwareness, GripPostureData, GripPostureType } from '@kit.MultimodalAwarenessKit'
-
-export type GripPosture = 'unknown' | 'notHeld' | 'left' | 'right' | 'both'
-
-export interface GripPostureObserver {
-  onGripPostureChanged?(posture: GripPosture): void
-}
-
-// HarmonyOS GripPostureType 常量（@kit.MultimodalAwarenessKit）。
-// 0=unknown, 1=notHeld, 2=left, 3=right, 4=both。
-const GRIP_POSTURE_NOT_HELD: number = 1
-const GRIP_POSTURE_LEFT: number = 2
-const GRIP_POSTURE_RIGHT: number = 3
-const GRIP_POSTURE_BOTH: number = 4
+import { GripPosture, GripPostureObserver } from './GripPostureTypes'
+import { GripPostureApi20 } from './impl/api20/GripPostureApi20'
 
 export class GripPostureService {
   private static instance: GripPostureService
@@ -40,8 +29,11 @@ export class GripPostureService {
   }
 
   // 查询系统能力是否支持握姿感知。
-  // 在 startListening() 调用后由系统回填；未启动时保守返回 false。
+  // 未监听时查询 facade 真实能力；监听后返回缓存。
   isSupported(): boolean {
+    if (!this.listening) {
+      this.supported = GripPostureApi20.getInstance().isSupported()
+    }
     return this.supported
   }
 
@@ -58,23 +50,22 @@ export class GripPostureService {
   }
 
   // 启动系统握姿感知监听。
-  // 注册 multimodalAwareness.on('gripPostureChange')，系统事件映射成 unknown/notHeld/left/right/both。
+  // 经 GripPostureApi20 facade 注册 motion.on('holdingHandChanged')，
+  // 系统事件映射成 unknown/notHeld/left/right/both。
   async startListening(): Promise<void> {
     if (this.listening) {
       return
     }
-    try {
-      multimodalAwareness.on('gripPostureChange', (data: GripPostureData) => {
-        const posture: GripPosture = this.mapPosture(data.posture)
-        this.notifyPostureChanged(posture)
-      })
-      this.listening = true
-      this.supported = true
-    } catch (e) {
-      // 系统不支持握姿感知；不伪造状态。
-      this.listening = false
-      this.supported = false
+    const api: GripPostureApi20 = GripPostureApi20.getInstance()
+    this.supported = api.isSupported()
+    if (!this.supported) {
+      // 系统不支持；不监听，不伪造状态。
+      return
     }
+    api.startListening((posture: GripPosture) => {
+      this.notifyPostureChanged(posture)
+    })
+    this.listening = true
   }
 
   // 停止系统监听。
@@ -82,33 +73,11 @@ export class GripPostureService {
     if (!this.listening) {
       return
     }
-    try {
-      multimodalAwareness.off('gripPostureChange')
-    } catch (e) {
-      // off 失败不阻塞；标记为已停止即可。
-    }
+    GripPostureApi20.getInstance().stopListening()
     this.listening = false
   }
 
   // —— private ——
-  private mapPosture(raw: GripPostureType): GripPosture {
-    const n: number = raw as number
-    if (n === GRIP_POSTURE_NOT_HELD) {
-      return 'notHeld'
-    }
-    if (n === GRIP_POSTURE_LEFT) {
-      return 'left'
-    }
-    if (n === GRIP_POSTURE_RIGHT) {
-      return 'right'
-    }
-    if (n === GRIP_POSTURE_BOTH) {
-      return 'both'
-    }
-    // 0/unknown/未知都归 unknown。
-    return 'unknown'
-  }
-
   // private 分发：仅由系统回调触发，外部不得直接调用。
   private notifyPostureChanged(posture: GripPosture): void {
     this.posture = posture
