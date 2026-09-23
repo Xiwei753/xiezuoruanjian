@@ -6,8 +6,8 @@
 
 import {
   matchesEditorLayoutIdentity,
+  EditorLayoutIdentity,
 } from './editor_layout_identity.ts'
-import type { EditorLayoutIdentity } from './editor_layout_identity.ts'
 
 /** 等待条目。 */
 interface Waiter<TState> {
