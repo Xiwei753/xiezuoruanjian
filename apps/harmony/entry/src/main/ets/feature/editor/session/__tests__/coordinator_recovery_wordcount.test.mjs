@@ -46,7 +46,6 @@ const base = {
     oldSelectionHead: 0,
     newSelectionAnchor: 0,
     newSelectionHead: 0,
-    visualIntent: {},
     compositionSession: null,
     contentDelta: {
       insertedChars: 0,

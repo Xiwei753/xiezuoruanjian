@@ -5,13 +5,33 @@
 // Core 用 byte offset，ArkTS string 是 UTF-16，必须显式转换。
 // 不调 Core，纯函数。
 
+/** 计算 UTF-8 byte length（纯函数，不依赖平台 TextEncoder）。 */
+export function utf8ByteLength(text: string): number {
+  let len = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code < 0x80) {
+      len += 1
+    } else if (code < 0x800) {
+      len += 2
+    } else if (code >= 0xD800 && code <= 0xDBFF) {
+      // 高代理项：surrogate pair 对应 4 字节 UTF-8
+      len += 4
+      i += 1  // 跳过低代理项
+    } else {
+      len += 3
+    }
+  }
+  return len
+}
+
 /** UTF-16 code unit offset → UTF-8 byte offset。 */
 export function utf16ToUtf8(text: string, utf16Offset: number): number {
   if (utf16Offset <= 0) return 0
   const limited = utf16Offset > text.length ? text.length : utf16Offset
   const sub = text.substring(0, limited)
   // JS/ArkTS string 按 UTF-16 编码；转成 UTF-8 byte length。
-  return new TextEncoder().encode(sub).length
+  return utf8ByteLength(sub)
 }
 
 /** UTF-8 byte offset → UTF-16 code unit offset。 */

@@ -1,5 +1,5 @@
 import { EditorTransactionCause } from './dto/EditorDtos'
-import { ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
+import { WindowCapabilities, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'

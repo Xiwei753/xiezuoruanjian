@@ -61,40 +61,80 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { LineNavigationResolver, LineLayoutState } from '../selection/LineNavigationResolver'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { CaretAffinity, LineBreakKind } from '../render/editor_layout_math'
-import type { VisualCaretPosition } from '../render/editor_layout_math'
+import { CaretAffinity, LineBreakKind, VisualCaretPosition } from '../render/editor_layout_math'
+import type { EditorLayoutIdentity } from '../selection/editor_layout_identity'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。
 // Issue #629 评论7 第2项：composition 命令改为 imePreviewText/imeCommitText/imeCancelPreview，
 // 出队时查 isComposing() 决定 begin/update/finish/cancel（不在 HarmonyImeConnection 队列外判断）。
 // Issue #629 评论7 第6项：删除 {kind:'delete',direction}，软键盘删除统一 graphemeBackspace/graphemeDelete。
+interface InsertTextCommand { kind: 'insertText'; text: string }
+// Issue #629 评论18：setSelection/dragSelect 接受 VisualCaretPosition（含 affinity），
+// 不丢弃命中测试的 soft-wrap 亲和性。
+interface SetSelectionCommand { kind: 'setSelection'; position: VisualCaretPosition }
+interface DragSelectCommand { kind: 'dragSelect'; anchor: VisualCaretPosition; head: VisualCaretPosition }
+interface SelectAllCommand { kind: 'selectAll' }
+interface ImePreviewTextCommand { kind: 'imePreviewText'; text: string }
+interface ImeCommitTextCommand { kind: 'imeCommitText'; text: string }
+interface ImeCancelPreviewCommand { kind: 'imeCancelPreview' }
+interface PasteCommand { kind: 'paste'; text: string }
+// grapheme-based navigation (Part E)
+interface GraphemeBackspaceCommand { kind: 'graphemeBackspace' }
+interface GraphemeDeleteCommand { kind: 'graphemeDelete' }
+interface GraphemeLeftCommand { kind: 'graphemeLeft'; extend: boolean }
+interface GraphemeRightCommand { kind: 'graphemeRight'; extend: boolean }
+// Issue #744 评论 5794965395 第 5 节：IME 删除语义（left/right + length）。
+// API26 InputMethodController 事件是 deleteLeft(length)/deleteRight(length)，
+// 不再退回 UTF-16 ±1；length 是 IME 要求删除的字符数，出队后逐个 grapheme 边界连续删除，
+// Core 决定字符边界。
+interface ImeDeleteLeftCommand { kind: 'imeDeleteLeft'; length: number }
+interface ImeDeleteRightCommand { kind: 'imeDeleteRight'; length: number }
+// Issue #629 评论8 第4项：IME 来源的 selection 语义命令（start/end 是 UTF-16 code unit offset，
+// 显示文本坐标）。composition 内外判断由本 Dispatcher 在唯一队列出队时做。
+interface ImeSetSelectionCommand { kind: 'imeSetSelection'; utf16Start: number; utf16End: number }
+// Issue #629 评论11 第1项：清空整篇文档的语义命令。
+interface ClearDocumentCommand { kind: 'clearDocument' }
+// Issue #629 评论11 第2项：行级导航语义命令。
+interface LineUpCommand { kind: 'lineUp'; extend: boolean }
+interface LineDownCommand { kind: 'lineDown'; extend: boolean }
+interface LineHomeCommand { kind: 'lineHome'; extend: boolean }
+interface LineEndCommand { kind: 'lineEnd'; extend: boolean }
+
 export type SemanticEditCommand =
-  | { kind: 'insertText'; text: string }
-  // Issue #629 评论18：setSelection/dragSelect 接受 VisualCaretPosition（含 affinity），
-  // 不丢弃命中测试的 soft-wrap 亲和性。
-  | { kind: 'setSelection'; position: VisualCaretPosition }
-  | { kind: 'dragSelect'; anchor: VisualCaretPosition; head: VisualCaretPosition }
-  | { kind: 'selectAll' }
-  | { kind: 'imePreviewText'; text: string }
-  | { kind: 'imeCommitText'; text: string }
-  | { kind: 'imeCancelPreview' }
-  | { kind: 'paste'; text: string }
-  // grapheme-based navigation (Part E)
-  | { kind: 'graphemeBackspace' }
-  | { kind: 'graphemeDelete' }
-  | { kind: 'graphemeLeft'; extend: boolean }
-  | { kind: 'graphemeRight'; extend: boolean }
-  // Issue #629 评论8 第4项：IME 来源的 selection 语义命令（start/end 是 UTF-16 code unit offset，
-  // 显示文本坐标）。composition 内外判断由本 Dispatcher 在唯一队列出队时做。
-  | { kind: 'imeSetSelection'; utf16Start: number; utf16End: number }
-  // Issue #629 评论11 第1项：清空整篇文档的语义命令。
-  | { kind: 'clearDocument' }
-  // Issue #629 评论11 第2项：行级导航语义命令。
-  | { kind: 'lineUp'; extend: boolean }
-  | { kind: 'lineDown'; extend: boolean }
-  | { kind: 'lineHome'; extend: boolean }
-  | { kind: 'lineEnd'; extend: boolean }
+  | InsertTextCommand
+  | SetSelectionCommand
+  | DragSelectCommand
+  | SelectAllCommand
+  | ImePreviewTextCommand
+  | ImeCommitTextCommand
+  | ImeCancelPreviewCommand
+  | PasteCommand
+  | GraphemeBackspaceCommand
+  | GraphemeDeleteCommand
+  | GraphemeLeftCommand
+  | GraphemeRightCommand
+  | ImeDeleteLeftCommand
+  | ImeDeleteRightCommand
+  | ImeSetSelectionCommand
+  | ClearDocumentCommand
+  | LineUpCommand
+  | LineDownCommand
+  | LineHomeCommand
+  | LineEndCommand
+
+interface DisplaySelectionUtf16 {
+  start: number
+  end: number
+}
+
+// Issue #744 评论 5794965395 第 12 节：trySoftWrapAffinitySwitch 的返回类型。
+// 用命名 interface 替代对象字面量类型声明（arkts-no-obj-literals-as-types）。
+interface SoftWrapAffinitySwitchResult {
+  handled: boolean
+  result: ResultEnvelope<EditorEditResult> | null
+  layoutState: LineLayoutState | null
+}
 
 export class EditorSemanticDispatcher {
   private inputAdapter: EditorInputAdapter
@@ -124,7 +164,7 @@ export class EditorSemanticDispatcher {
    */
   dispatch(cmd: SemanticEditCommand): Promise<ResultEnvelope<EditorEditResult>> {
     if (this.sealed) {
-      return Promise.resolve({
+      return Promise.resolve<ResultEnvelope<EditorEditResult>>({
         success: false,
         errorCode: 'SEALED',
         warnings: [],
@@ -153,7 +193,7 @@ export class EditorSemanticDispatcher {
   // （selectionAnchor/Head === displayCaretByte），自然得到 preedit display 选区；无第二份 selection 状态。
   // 鼠标/触摸 selection 命令在 dispatch Promise resolve（命令已应用、snapshot 已更新）后调用本方法，
   // 再经 HarmonyImeConnection.syncSelectionFromEditor 通知 IME，避免拿原 hitPos 猜未来状态。
-  getCurrentDisplaySelectionUtf16(): { start: number; end: number } | null {
+  getCurrentDisplaySelectionUtf16(): DisplaySelectionUtf16 | null {
     const snap = this.coordinator.getSnapshot()
     if (!snap) {
       return null
@@ -226,6 +266,12 @@ export class EditorSemanticDispatcher {
       case 'graphemeDelete':
         this.navTargetX = -1
         return this.executeGraphemeDelete()
+      case 'imeDeleteLeft':
+        this.navTargetX = -1
+        return this.executeImeDeleteLeft(cmd.length)
+      case 'imeDeleteRight':
+        this.navTargetX = -1
+        return this.executeImeDeleteRight(cmd.length)
       case 'graphemeLeft':
         this.navTargetX = -1
         return this.executeGraphemeLeft(cmd.extend)
@@ -396,7 +442,7 @@ export class EditorSemanticDispatcher {
     }
     const prevBoundaryResult = await this.coordinator.previousGraphemeBoundary(sel.start)
     if (!prevBoundaryResult.success || prevBoundaryResult.data === undefined || prevBoundaryResult.data === null) {
-      return prevBoundaryResult as ResultEnvelope<EditorEditResult>
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
     }
     const prevByte = prevBoundaryResult.data
     return this.coordinator.delete(prevByte, sel.start, EditorTransactionCause.Delete)
@@ -423,10 +469,48 @@ export class EditorSemanticDispatcher {
     }
     const nextBoundaryResult = await this.coordinator.nextGraphemeBoundary(sel.start)
     if (!nextBoundaryResult.success || nextBoundaryResult.data === undefined || nextBoundaryResult.data === null) {
-      return nextBoundaryResult as ResultEnvelope<EditorEditResult>
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
     }
     const nextByte = nextBoundaryResult.data
     return this.coordinator.delete(sel.start, nextByte, EditorTransactionCause.Delete)
+  }
+
+  // ── Issue #744 评论 5794965395 第 5 节：IME 删除语义（left/right + length）──
+  // 在唯一队列里按 Core grapheme boundary 连续求边界后一次完成，不退回 UTF-16 ±1。
+  // length 是 IME 要求删除的字符数；逐个 grapheme 边界连续删除，Core 决定字符边界。
+  // composition 活跃时先 finish 再走 committed grapheme 删除（与 insertText/paste 一致）。
+  private async executeImeDeleteLeft(length: number): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      const finish = await this.inputAdapter.finishActiveComposition()
+      if (!finish.success) {
+        return finish
+      }
+    }
+    let result: ResultEnvelope<EditorEditResult> = { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    for (let i = 0; i < length; i++) {
+      result = await this.executeGraphemeBackspace()
+      if (!result.success) {
+        return result
+      }
+    }
+    return result
+  }
+
+  private async executeImeDeleteRight(length: number): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      const finish = await this.inputAdapter.finishActiveComposition()
+      if (!finish.success) {
+        return finish
+      }
+    }
+    let result: ResultEnvelope<EditorEditResult> = { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    for (let i = 0; i < length; i++) {
+      result = await this.executeGraphemeDelete()
+      if (!result.success) {
+        return result
+      }
+    }
+    return result
   }
 
   // Issue #629 R11 评论5329310563 第1项：抽出"等待当前 snapshot 对应的 layout state"，
@@ -443,7 +527,7 @@ export class EditorSemanticDispatcher {
       return null
     }
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
-    const identity = {
+    const identity: EditorLayoutIdentity = {
       revision: displaySnapshot.revision,
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
@@ -493,7 +577,7 @@ export class EditorSemanticDispatcher {
   // 避免同一按键再等第二次布局。handled=true（纯 affinity 切换）时 layoutState=null（不需要）。
   private async trySoftWrapAffinitySwitch(
     direction: 'left' | 'right',
-  ): Promise<{ handled: boolean; result: ResultEnvelope<EditorEditResult> | null; layoutState: LineLayoutState | null }> {
+  ): Promise<SoftWrapAffinitySwitchResult> {
     const resolver = this.lineResolver
     if (!resolver) {
       return { handled: false, result: null, layoutState: null }
@@ -503,7 +587,7 @@ export class EditorSemanticDispatcher {
       return { handled: false, result: null, layoutState: null }
     }
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
-    const identity = {
+    const identity: EditorLayoutIdentity = {
       revision: displaySnapshot.revision,
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
@@ -570,7 +654,7 @@ export class EditorSemanticDispatcher {
       const layoutState = await this.waitForCurrentLayoutState()
       const prevResult = await this.coordinator.previousGraphemeBoundary(headByte)
       if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
-        return prevResult as ResultEnvelope<EditorEditResult>
+        return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
       }
       const setResult = await this.coordinator.setSelection(anchorByte, prevResult.data)
       if (setResult.success) {
@@ -597,7 +681,7 @@ export class EditorSemanticDispatcher {
     }
     const prevResult = await this.coordinator.previousGraphemeBoundary(cursorByte)
     if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
-      return prevResult as ResultEnvelope<EditorEditResult>
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
     }
     const setResult = await this.coordinator.setSelection(prevResult.data, prevResult.data)
     if (setResult.success) {
@@ -633,7 +717,7 @@ export class EditorSemanticDispatcher {
       const layoutState = await this.waitForCurrentLayoutState()
       const nextResult = await this.coordinator.nextGraphemeBoundary(headByte)
       if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
-        return nextResult as ResultEnvelope<EditorEditResult>
+        return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
       }
       const setResult = await this.coordinator.setSelection(anchorByte, nextResult.data)
       if (setResult.success) {
@@ -660,7 +744,7 @@ export class EditorSemanticDispatcher {
     }
     const nextResult = await this.coordinator.nextGraphemeBoundary(cursorByte)
     if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
-      return nextResult as ResultEnvelope<EditorEditResult>
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
     }
     const setResult = await this.coordinator.setSelection(nextResult.data, nextResult.data)
     if (setResult.success) {
@@ -817,7 +901,7 @@ export class EditorSemanticDispatcher {
       return this.noSession()
     }
     const displaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap)
-    const identity = {
+    const identity: EditorLayoutIdentity = {
       revision: displaySnapshot.revision,
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
@@ -833,10 +917,11 @@ export class EditorSemanticDispatcher {
       return this.noSession()
     }
     const latestDisplaySnapshot = EditorLayoutSnapshot.fromEditorSnapshot(latestSnap)
-    const latestIdentity = {
+    const latestIdentity: EditorLayoutIdentity = {
       revision: latestDisplaySnapshot.revision,
       generation: latestDisplaySnapshot.generation,
       compositionGeneration: latestDisplaySnapshot.compositionGeneration,
+      compositionSessionId: latestDisplaySnapshot.compositionSessionId,
       displayText: latestDisplaySnapshot.text
     }
     let finalState: LineLayoutState = layoutState
@@ -859,7 +944,7 @@ export class EditorSemanticDispatcher {
       const finalAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(finalDisplaySnapshot.text, finalDisplaySnapshot.selectionAnchor)
       const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(finalCursorUtf16)
       if (finalSnap.composition !== null && finalSnap.composition !== undefined) {
-        return this.executeImeLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16, finalDisplaySnapshot)
+        return await this.executeImeLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16, finalDisplaySnapshot)
       }
       return this.executeCommittedLineNavigation(direction, extend, finalState, currentPosition, finalAnchorUtf16)
     }
@@ -867,7 +952,7 @@ export class EditorSemanticDispatcher {
     const latestAnchorUtf16: number = TextOffsetMapper.utf8ToUtf16(latestDisplaySnapshot.text, latestDisplaySnapshot.selectionAnchor)
     const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(latestCursorUtf16)
     if (latestSnap.composition !== null && latestSnap.composition !== undefined) {
-      return this.executeImeLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16, latestDisplaySnapshot)
+      return await this.executeImeLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16, latestDisplaySnapshot)
     }
     return this.executeCommittedLineNavigation(direction, extend, finalState, currentPosition, latestAnchorUtf16)
   }
@@ -885,7 +970,7 @@ export class EditorSemanticDispatcher {
       case 'up': {
         const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -901,7 +986,7 @@ export class EditorSemanticDispatcher {
       case 'down': {
         const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -941,7 +1026,7 @@ export class EditorSemanticDispatcher {
   // 行内移动：复用 executeDisplaySelection 统一入口（preedit 内更新 preedit cursor；
   // 移出 composition 区域：先 finish）。Up/Down 同样保持横向位置。
   // 不提前 rememberVisualCaret；成功出口统一更新 owner。
-  private executeImeLineNavigation(
+  private async executeImeLineNavigation(
     direction: 'up' | 'down' | 'home' | 'end',
     extend: boolean,
     state: LineLayoutState,
@@ -955,7 +1040,7 @@ export class EditorSemanticDispatcher {
       case 'up': {
         targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -966,7 +1051,7 @@ export class EditorSemanticDispatcher {
       case 'down': {
         targetLineIdx = LineNavigationResolver.getNextLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -987,7 +1072,7 @@ export class EditorSemanticDispatcher {
         break
       }
     }
-    const targetPosition = targetLineIdx >= 0
+    const targetPosition: VisualCaretPosition = targetLineIdx >= 0
       ? LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
       : { utf16Offset: targetOffset, affinity: CaretAffinity.Downstream }
     // 评论5324447292 第3项：不提前 rememberVisualCaret；复用 executeDisplaySelection 统一入口，

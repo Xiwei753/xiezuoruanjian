@@ -273,7 +273,8 @@ export function hitTestPoint(
 
   // Issue #629 R7-C item4: touchY 已选定 lineIndex，命中该行 soft-wrap 末尾恒为 Upstream；
   // 下一行 start 自然保持 Downstream。不再按同一行上/下半区分。
-  let affinity = CaretAffinity.Downstream
+  // 显式标注 CaretAffinity 类型，避免推导成字面量 'downstream' 导致后续赋值 'upstream' 报错。
+  let affinity: CaretAffinity = CaretAffinity.Downstream
   if (offset === line.end && line.breakKind === LineBreakKind.SoftWrap) {
     affinity = CaretAffinity.Upstream
   }

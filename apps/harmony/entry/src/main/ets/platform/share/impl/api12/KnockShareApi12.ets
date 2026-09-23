@@ -81,6 +81,10 @@ export class KnockShareApi12 {
   // 把业务 SharePayload 构造成 systemShare.SharedData。
   // 无非空内容时返回 null。与 SystemShareService.buildSharedData 同规格
   // （数据构造是共享工具，分享触发 API 不同：本类走 SharableTarget.share）。
+  //
+  // SDK 真实接口（@hms.collaboration.systemShare d.ts，since 4.1.0(11)）：
+  //   SharedData 构造函数必传首个 SharedRecord；后续记录用 addRecord 追加。
+  //   无 addText/addURI 方法；文本记录 utd='general.text' + content，URI 记录 utd='general.file-uri' + uri。
   private buildSharedData(payload: SharePayload): systemShare.SharedData | null {
     const hasText: boolean = payload !== undefined && payload !== null &&
       payload.text !== undefined && payload.text !== null && payload.text.length > 0
@@ -90,20 +94,27 @@ export class KnockShareApi12 {
       return null
     }
 
-    const data: systemShare.SharedData = new systemShare.SharedData()
+    // 收集所有 SharedRecord；首个传 SharedData 构造函数，其余 addRecord 追加。
+    const records: systemShare.SharedRecord[] = []
 
     if (payload.title !== undefined && payload.title !== null && payload.title.length > 0) {
-      data.addText(payload.title)
+      records.push({ utd: 'general.text', content: payload.title })
     }
     if (hasText) {
-      data.addText(payload.text)
+      records.push({ utd: 'general.text', content: payload.text })
     }
     if (payload.uris !== undefined && payload.uris !== null) {
       for (const uri of payload.uris) {
         if (uri !== undefined && uri !== null && uri.length > 0) {
-          data.addURI(uri)
+          records.push({ utd: 'general.file-uri', uri: uri })
         }
       }
+    }
+
+    // records 非空由 hasText/hasUris 守卫保证；SharedData 构造函数要求至少一条记录。
+    const data: systemShare.SharedData = new systemShare.SharedData(records[0])
+    for (let i = 1; i < records.length; i++) {
+      data.addRecord(records[i])
     }
     return data
   }

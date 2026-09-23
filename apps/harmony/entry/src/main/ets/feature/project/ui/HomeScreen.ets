@@ -1,4 +1,4 @@
-import { Routes } from '../../../app/navigation/Routes'
+import { Routes, WritingRouteParams, WorkspaceRouteParams, StarMapRouteParams, SettingsRouteParams } from '../../../app/navigation/Routes'
 // router 已由 AppNavigation 统一接管；HomeScreen 通过 navPathStack 跳转。
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { Project, WritingStats } from '../../../corebridge/dto/ProjectDtos'
@@ -371,7 +371,13 @@ export struct HomeScreen {
         .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
-          this.navPathStack.pushPath({ name: Routes.Writing, param: { chapterId: this.recentEdit!.chapterId, chapterTitle: `Chapter ${this.recentEdit!.chapterId}` } })
+          const writingParam: WritingRouteParams = {
+            chapterId: this.recentEdit!.chapterId,
+            chapterTitle: `Chapter ${this.recentEdit!.chapterId}`,
+            projectId: this.recentEdit!.projectId,
+            volumeId: this.recentEdit!.volumeId
+          }
+          this.navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
         })
       }
     }
@@ -441,8 +447,8 @@ export struct HomeScreen {
         .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
-          this.navPathStack.pushPath({ name: Routes.Workspace, param: { projectId: project.id, projectName: project.title
-             } })
+          const workspaceParam: WorkspaceRouteParams = { projectId: project.id, projectName: project.title }
+          this.navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
         })
       }, (project: Project) => project.id)
     }
@@ -501,8 +507,8 @@ export struct HomeScreen {
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
-          this.navPathStack.pushPath({ name: Routes.StarMap, param: { starmapId: 'starmap-001', starmapTitle: 'Character Relations'
-             } })
+          const starMapParam: StarMapRouteParams = { starmapId: 'starmap-001', starmapTitle: 'Character Relations' }
+          this.navPathStack.pushPath({ name: Routes.StarMap, param: starMapParam })
         })
 
         GridCol({ span: 1 }) {
@@ -524,7 +530,8 @@ export struct HomeScreen {
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
-          this.navPathStack.pushPath({ name: Routes.Settings, param: {  projectId: this.projects.length > 0 ? this.projects[0].id : ''  } })
+          const settingsParam: SettingsRouteParams = { projectId: this.projects.length > 0 ? this.projects[0].id : '' }
+          this.navPathStack.pushPath({ name: Routes.Settings, param: settingsParam })
         })
 
         GridCol({ span: 1 }) {
@@ -546,7 +553,8 @@ export struct HomeScreen {
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
-          this.navPathStack.pushPath({ name: Routes.Settings, param: {  projectId: this.projects.length > 0 ? this.projects[0].id : ''  } })
+          const settingsParam: SettingsRouteParams = { projectId: this.projects.length > 0 ? this.projects[0].id : '' }
+          this.navPathStack.pushPath({ name: Routes.Settings, param: settingsParam })
         })
       }
       .width('100%')

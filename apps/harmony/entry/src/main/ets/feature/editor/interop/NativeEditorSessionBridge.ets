@@ -223,7 +223,7 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
     }
   }
 
-  private nativeError<T>(e: unknown): ResultEnvelope<T> {
+  private nativeError<T>(e: Object): ResultEnvelope<T> {
     return {
       success: false,
       errorCode: 'NATIVE_ERROR',

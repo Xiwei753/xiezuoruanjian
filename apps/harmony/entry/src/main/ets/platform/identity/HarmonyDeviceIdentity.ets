@@ -54,7 +54,7 @@ export class HarmonyDeviceIdentity {
       )
       try {
         const textEncoder = new util.TextEncoder('utf-8')
-        const encoded = textEncoder.encodeIntoUint8Array(newId)
+        const encoded: Uint8Array = textEncoder.encodeInto(newId)
         fs.writeSync(fd.fd, encoded.buffer)
       } finally {
         fs.closeSync(fd)

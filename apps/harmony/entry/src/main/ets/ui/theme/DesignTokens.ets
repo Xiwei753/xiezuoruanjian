@@ -6,6 +6,12 @@
 // 禁止组件继续硬编码圆角、阴影、颜色。
 // =============================================================================
 
+export interface ShadowToken {
+  radius: number
+  color: string
+  offsetY: number
+}
+
 export class DesignTokens {
   // --- Radius ---
   static readonly radiusXs: number = 4
@@ -29,9 +35,9 @@ export class DesignTokens {
   static readonly elevation3: number = 6
 
   // --- Shadow presets (radius, color, offsetY) ---
-  static readonly shadowLight = { radius: 4, color: '#1A000000', offsetY: 2 }
-  static readonly shadowMedium = { radius: 8, color: '#33000000', offsetY: 4 }
-  static readonly shadowStrong = { radius: 12, color: '#40000000', offsetY: 6 }
+  static readonly shadowLight: ShadowToken = { radius: 4, color: '#1A000000', offsetY: 2 }
+  static readonly shadowMedium: ShadowToken = { radius: 8, color: '#33000000', offsetY: 4 }
+  static readonly shadowStrong: ShadowToken = { radius: 12, color: '#40000000', offsetY: 6 }
 
   // --- Surface tokens ---
   static readonly surfaceContainerLowest: string = 'surfaceContainerLowest'

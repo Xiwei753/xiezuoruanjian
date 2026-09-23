@@ -19,9 +19,17 @@ import { applyEditResultToSnapshot, ApplyEditResultOutcome } from './editor_patc
  * - ok=false：reason 说明失败原因（与 ApplyEditResultOutcome.reason 一致）
  *   调用方（Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state。
  */
-export type EditStateOutcome =
-  | { readonly ok: true; readonly state: EditorSessionState }
-  | { readonly ok: false; readonly reason: string }
+interface EditStateSuccess {
+  readonly ok: true
+  readonly state: EditorSessionState
+}
+
+interface EditStateFailure {
+  readonly ok: false
+  readonly reason: string
+}
+
+export type EditStateOutcome = EditStateSuccess | EditStateFailure
 
 export class EditorSessionState {
   readonly sessionId: number
@@ -40,11 +48,15 @@ export class EditorSessionState {
   // 成功返回 { ok: true, state }；失败返回 { ok: false, reason }。
   // 调用方（Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，不吞失败。
   withEditResult(result: EditorEditResult): EditStateOutcome {
-    const outcome: ApplyEditResultOutcome = applyEditResultToSnapshot(this.snapshot, result)
-    if (outcome.ok) {
-      return { ok: true, state: new EditorSessionState(this.sessionId, outcome.snapshot) }
+    const outcome: ApplyEditResultOutcome = applyEditResultToSnapshot(this.snapshot, result as Object)
+    if (outcome.ok === true) {
+      return { ok: true, state: new EditorSessionState(this.sessionId, outcome.snapshot as EditorSessionSnapshot) }
     }
-    return { ok: false, reason: outcome.reason }
+    if (outcome.ok === false) {
+      return { ok: false, reason: outcome.reason }
+    }
+    // ApplyEditResultOutcome 是 ok:true | ok:false union，不会到这里；兜底保证返回类型完备。
+    return { ok: false, reason: 'unknown outcome' }
   }
 
   get revision(): number {

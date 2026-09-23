@@ -31,6 +31,9 @@ export class AppContext {
   private capabilityRegistry: CapabilityRegistry
   private isInitialized: boolean = false
   private abilityContext: common.UIAbilityContext | null = null
+  // 生产上下文只装配 NativeWriterCoreBridge，native 环境恒为 true；
+  // nativeInitFailed 记录 Native Core 初始化失败，供 HomeScreen fail-fast 分支使用。
+  private nativeInitFailed: boolean = false
 
   private constructor(config: AppContextConfig) {
     this.config = config
@@ -146,6 +149,21 @@ export class AppContext {
 
   isReady(): boolean {
     return this.isInitialized
+  }
+
+  // 生产上下文只装配 NativeWriterCoreBridge，故 native 环境恒为 true。
+  isNativeEnvironment(): boolean {
+    return true
+  }
+
+  // 标记 Native Core 初始化失败；HomeScreen 在 init 失败时调用以记录状态。
+  markNativeInitFailed(): void {
+    this.nativeInitFailed = true
+  }
+
+  // 查询 Native Core 初始化是否失败。
+  isNativeInitFailed(): boolean {
+    return this.nativeInitFailed
   }
 
   dispose(): void {

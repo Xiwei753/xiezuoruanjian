@@ -9,7 +9,11 @@ import { NativeCoreModule } from './NativeCoreModule'
  * 此 Bridge 仅保留查询类入口（list/get state）。
  */
 export class NativeAppStateBridge {
-  constructor(private core: NativeCoreModule) {}
+  private core: NativeCoreModule
+
+  constructor(core: NativeCoreModule) {
+    this.core = core
+  }
 
   async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
     try {

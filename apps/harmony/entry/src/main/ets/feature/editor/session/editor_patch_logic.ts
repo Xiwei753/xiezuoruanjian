@@ -53,7 +53,8 @@ export interface EditorContentDelta {
   readonly deletedNonWhitespaceChars: number
 }
 
-/** EditorEditResult 形状（与 Core DTO 对齐，camelCase）。 */
+/** EditorEditResult 形状（与 Core DTO 对齐，camelCase）。
+ * Issue #735：visualIntent 已从 Core 删除，此处同步移除，与 EditorDtos.ets 对齐。 */
 export interface EditorEditResult {
   readonly outcome: string
   readonly transactionId: number
@@ -64,7 +65,6 @@ export interface EditorEditResult {
   readonly oldSelectionHead: number
   readonly newSelectionAnchor: number
   readonly newSelectionHead: number
-  readonly visualIntent: Record<string, unknown>
   readonly compositionSession: CompositionSession | null
   readonly contentDelta: EditorContentDelta
   // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 null。
@@ -99,7 +99,7 @@ export const INVALID_RANGE = 'invalidRange'
  *   不能吞失败让 UI 停在旧文本。
  */
 export type ApplyEditResultOutcome =
-  | { readonly ok: true; readonly snapshot: EditorSessionSnapshot }
+  | { readonly ok: true; readonly snapshot: Object }
   | { readonly ok: false; readonly reason: string }
 
 /**
@@ -207,27 +207,28 @@ export function applyPatchStrict(
  */
 export function applyEditResultToSnapshot(
   snapshot: EditorSessionSnapshot,
-  result: EditorEditResult
+  result: Object
 ): ApplyEditResultOutcome {
-  if (result.outcome === STALE_REVISION) {
+  const r: EditorEditResult = result as EditorEditResult
+  if (r.outcome === STALE_REVISION) {
     return { ok: false, reason: STALE_REVISION }
   }
-  if (result.outcome === INVALID_OFFSET) {
+  if (r.outcome === INVALID_OFFSET) {
     return { ok: false, reason: INVALID_OFFSET }
   }
-  if (result.outcome === INVALID_RANGE) {
+  if (r.outcome === INVALID_RANGE) {
     return { ok: false, reason: INVALID_RANGE }
   }
-  if (result.outcome !== APPLIED
-    && result.outcome !== APPLIED_WITH_ADJUSTED_SELECTION
-    && result.outcome !== NO_CHANGE) {
-    return { ok: false, reason: `unknownOutcome:${result.outcome}` }
+  if (r.outcome !== APPLIED
+    && r.outcome !== APPLIED_WITH_ADJUSTED_SELECTION
+    && r.outcome !== NO_CHANGE) {
+    return { ok: false, reason: `unknownOutcome:${r.outcome}` }
   }
   let newText: string = snapshot.text
-  const patches: DisplayPatch[] = result.displayPatches ?? []
+  const patches: DisplayPatch[] = r.displayPatches ?? []
   for (let i = 0; i < patches.length; i++) {
     const applied = applyPatchStrict(newText, patches[i])
-    if (!applied.ok) {
+    if (applied.ok === false) {
       return { ok: false, reason: `patchFailed:${applied.reason}` }
     }
     newText = applied.text
@@ -236,15 +237,15 @@ export function applyEditResultToSnapshot(
     ok: true,
     snapshot: {
       text: newText,
-      revision: result.newRevision,
-      cursor: result.newSelectionHead,
-      selectionAnchor: result.newSelectionAnchor,
-      generation: result.compositionSession ? result.compositionSession.generation : snapshot.generation,
+      revision: r.newRevision,
+      cursor: r.newSelectionHead,
+      selectionAnchor: r.newSelectionAnchor,
+      generation: r.compositionSession ? r.compositionSession.generation : snapshot.generation,
       chapterId: snapshot.chapterId,
       // #629 评论6 Part B：把 Core 返回的 composition 完整状态透传到新 snapshot，
       // EditorLayoutSnapshot.fromEditorSnapshot 据此构造临时显示文本和下划线。
-      // finish/cancel/普通编辑后 result.composition 为 null，snapshot.composition 也为 null。
-      composition: result.composition
+      // finish/cancel/普通编辑后 r.composition 为 null，snapshot.composition 也为 null。
+      composition: r.composition
     }
   }
 }

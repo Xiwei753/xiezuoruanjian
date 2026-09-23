@@ -1,4 +1,4 @@
-import { Routes, WorkspaceRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ProjectTree, VolumeTree, ChapterMeta, Project } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -167,14 +167,15 @@ export struct WorkspaceScreen {
   // Issue #629 评论14 第1项：章节点击统一进入 Routes.Writing，不再内联编辑。
   // 窄屏和宽屏都走同一条导航路径，屏幕宽度变化只改布局，不换 TextEditSession owner。
   private navigateToWriting(chapterId: string, chapterTitle: string, volumeId: string): void {
+    const writingParam: WritingRouteParams = {
+      chapterId: chapterId,
+      chapterTitle: chapterTitle,
+      projectId: this.projectId,
+      volumeId: volumeId
+    }
     this.navPathStack.pushPath({
       name: Routes.Writing,
-      param: {
-        chapterId: chapterId,
-        chapterTitle: chapterTitle,
-        projectId: this.projectId,
-        volumeId: volumeId
-      }
+      param: writingParam
     })
   }
 

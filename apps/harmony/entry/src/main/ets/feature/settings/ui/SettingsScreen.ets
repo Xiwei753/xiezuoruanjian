@@ -368,11 +368,7 @@ export struct SettingsScreen {
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
-        Select([
-          { value: getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id), icon: '' },
-          { value: getContext(this).resourceManager.getStringSync($r('app.string.light_mode').id), icon: '' },
-          { value: getContext(this).resourceManager.getStringSync($r('app.string.dark_mode').id), icon: '' }
-        ] as SettingsSelectOption[])
+        Select(this.getAppearanceOptions())
           .selected(this.getThemeIndex())
           .value(this.getThemeName())
           .onSelect((index: number) => {
@@ -394,10 +390,7 @@ export struct SettingsScreen {
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
-        Select([
-          { value: '素笺默认', icon: '' },
-          { value: '已保存的设备配色', icon: '' }
-        ] as SettingsSelectOption[])
+        Select(this.getColorSourceOptions())
           .selected(this.getColorSourceIndex())
           .value(this.getColorSourceName())
           .onSelect((index: number) => {
@@ -419,7 +412,7 @@ export struct SettingsScreen {
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-          Select(this.builtinThemes.map(t => ({ value: t.name, icon: '' }) as SettingsSelectOption[]))
+          Select(this.getBuiltinThemeOptions())
             .selected(this.getSelectedBuiltinThemeIndex())
             .value(this.getSelectedBuiltinThemeName())
             .onSelect((index: number) => {
@@ -560,7 +553,8 @@ export struct SettingsScreen {
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textSecondary)
           .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false, enabled: false })
+        Toggle({ type: ToggleType.Switch, isOn: false })
+          .enabled(false)
       }
       .width('100%')
       .margin({ bottom: 16 })
@@ -574,7 +568,8 @@ export struct SettingsScreen {
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textSecondary)
           .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false, enabled: false })
+        Toggle({ type: ToggleType.Switch, isOn: false })
+          .enabled(false)
       }
       .width('100%')
       .margin({ bottom: 16 })
@@ -957,7 +952,7 @@ export struct SettingsScreen {
       // 镜像说明
       Text($r('app.string.about_mirror_note'))
         .fontSize(13)
-        .fontColor(this.themeConfig.colors.textMuted)
+        .fontColor(this.themeConfig.colors.textHint)
         .margin({ bottom: 8 })
 
       // 版本信息
@@ -1008,6 +1003,30 @@ export struct SettingsScreen {
       }
     }
     .alignItems(HorizontalAlign.Center)
+  }
+
+  // 主题模式选项（跟随系统→浅色→深色），显式 SettingsSelectOption[] 类型
+  getAppearanceOptions(): SettingsSelectOption[] {
+    return [
+      { value: getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id), icon: '' },
+      { value: getContext(this).resourceManager.getStringSync($r('app.string.light_mode').id), icon: '' },
+      { value: getContext(this).resourceManager.getStringSync($r('app.string.dark_mode').id), icon: '' }
+    ]
+  }
+
+  // 颜色主题来源选项（素笺默认→已保存的设备配色），显式 SettingsSelectOption[] 类型
+  getColorSourceOptions(): SettingsSelectOption[] {
+    return [
+      { value: '素笺默认', icon: '' },
+      { value: '已保存的设备配色', icon: '' }
+    ]
+  }
+
+  // 内置主题选项，显式 SettingsSelectOption[] 类型
+  getBuiltinThemeOptions(): SettingsSelectOption[] {
+    return this.builtinThemes.map((theme: BuiltinThemeDto): SettingsSelectOption => {
+      return { value: theme.name, icon: '' }
+    })
   }
 
   // 主题选项顺序：system→light→dark

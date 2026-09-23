@@ -2,12 +2,16 @@ import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
 import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncState } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 
-function nativeError<T>(e: unknown): ResultEnvelope<T> {
+function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
 }
 
 export class NativeSyncBridge {
-  constructor(private core: NativeCoreModule) {}
+  private core: NativeCoreModule
+
+  constructor(core: NativeCoreModule) {
+    this.core = core
+  }
 
   // ── 全量同步统一入口（Issue #630） ──
   // 一个全局 SyncConfig + 一份全局凭据，App target + 所有 Project target 一次同步。
