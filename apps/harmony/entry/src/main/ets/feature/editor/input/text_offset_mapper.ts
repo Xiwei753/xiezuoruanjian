@@ -15,9 +15,15 @@ export function utf8ByteLength(text: string): number {
     } else if (code < 0x800) {
       len += 2
     } else if (code >= 0xD800 && code <= 0xDBFF) {
-      // 高代理项：surrogate pair 对应 4 字节 UTF-8
-      len += 4
-      i += 1  // 跳过低代理项
+      // 高代理项：需检查后续是否为低代理项，避免 substring 截断代理对时误算
+      if (i + 1 < text.length && text.charCodeAt(i + 1) >= 0xDC00 && text.charCodeAt(i + 1) <= 0xDFFF) {
+        // 完整 surrogate pair → 4 字节 UTF-8
+        len += 4
+        i += 1  // 跳过低代理项
+      } else {
+        // 孤立高代理项 → 3 字节（BMP 范围 U+D800-U+DFFF 的 UTF-8 编码）
+        len += 3
+      }
     } else {
       len += 3
     }
@@ -48,9 +54,15 @@ export function utf8ToUtf16(text: string, utf8Offset: number): number {
     } else if (code < 0x800) {
       charByteLen = 2
     } else if (code >= 0xD800 && code <= 0xDBFF) {
-      // 高代理项：UTF-16 surrogate pair 对应 4 字节 UTF-8。
-      charByteLen = 4
-      i += 1  // 跳过低代理项
+      // 高代理项：需检查后续是否为低代理项
+      if (i + 1 < text.length && text.charCodeAt(i + 1) >= 0xDC00 && text.charCodeAt(i + 1) <= 0xDFFF) {
+        // 完整 surrogate pair → 4 字节 UTF-8
+        charByteLen = 4
+        i += 1  // 跳过低代理项
+      } else {
+        // 孤立高代理项 → 3 字节
+        charByteLen = 3
+      }
     } else {
       charByteLen = 3
     }
