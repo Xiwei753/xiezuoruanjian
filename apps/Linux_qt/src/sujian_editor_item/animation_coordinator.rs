@@ -795,6 +795,9 @@ fn build_cluster_reflow_slices(
     new_cursor_rect: Option<&CursorRect>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
+    // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
+    // 每对 ReflowCrossFadeOld/New 共享同一 group_id，reconcile 以 group 为单位成对重绑。
+    let mut next_crossfade_group_id: u64 = 1;
 
     // Issue #687: old_cx/old_cy/new_cx/new_cy 不再需要——changed range 由
     // build_insert_reveal_slices / build_delete_conceal_slices 显式拥有，
@@ -918,6 +921,10 @@ fn build_cluster_reflow_slices(
             // byte identity 对得上但 shaping 真变了：生成一对 ReflowCrossFade
             // Issue #738 评论 5788513592 问题3: old/new 两侧写入各自真实 shaping identity，
             // rebind 时 is_same_shaping 能返回 true，CrossFade 可按新布局继续而非必然 Remove。
+            // Issue #738 评论 5789470425 问题3: old/new 两侧共享同一 crossfade_group_id，
+            // reconcile 以 group 为单位成对重绑，不再把 old/new 各自独立判死。
+            let group_id = next_crossfade_group_id;
+            next_crossfade_group_id += 1;
             slices.push(AnimatedSlice::reflow_crossfade_old(
                 key,
                 old_line.id,
@@ -927,6 +934,7 @@ fn build_cluster_reflow_slices(
                 new_cluster.byte_start,
                 new_cluster.byte_end,
                 Some(old_cluster.shaping_identity.clone()),
+                Some(group_id),
             ));
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
@@ -938,6 +946,7 @@ fn build_cluster_reflow_slices(
                 new_cluster.byte_start,
                 new_cluster.byte_end,
                 Some(new_cluster.shaping_identity.clone()),
+                Some(group_id),
             );
             new_slice.static_hidden_document_rects = vec![new_doc];
             slices.push(new_slice);
@@ -958,7 +967,12 @@ fn build_cluster_reflow_slices(
 
     // 只有同时存在未配对的 old 和 new 时才生成 CrossFade
     if !unmatched_old.is_empty() && !unmatched_new.is_empty() {
+        // Issue #738 评论 5789470425 问题3: 多对多 CrossFade 也分配 group_id。
+        // 每对 old/new 共享一个 group_id（这里 old 和 new 分别独立 fade，
+        // 但仍按 group 配对以便 reconcile 成对重绑）。
         for &oi in &unmatched_old {
+            let group_id = next_crossfade_group_id;
+            next_crossfade_group_id += 1;
             let oref = &old_refs[oi];
             let old_line = &old_snapshot.line_snapshots[oref.line_idx];
             let old_cluster = &old_line.clusters[oref.cluster_idx];
@@ -974,10 +988,13 @@ fn build_cluster_reflow_slices(
                 old_cluster.byte_start,
                 old_cluster.byte_end,
                 Some(old_cluster.shaping_identity.clone()),
+                Some(group_id),
             ));
         }
 
         for &ni in &unmatched_new {
+            let group_id = next_crossfade_group_id;
+            next_crossfade_group_id += 1;
             let nref = &new_refs[ni];
             let new_line = &new_snapshot.line_snapshots[nref.line_idx];
             let new_cluster = &new_line.clusters[nref.cluster_idx];
@@ -987,6 +1004,7 @@ fn build_cluster_reflow_slices(
 
             // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
             // Issue #738 评论 5788513592 问题3: 写入真实 shaping identity。
+            // Issue #738 评论 5789470425 问题3: 写入 group_id。
             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,
@@ -996,6 +1014,7 @@ fn build_cluster_reflow_slices(
                 new_cluster.byte_start,
                 new_cluster.byte_end,
                 Some(new_cluster.shaping_identity.clone()),
+                Some(group_id),
             );
             new_slice.static_hidden_document_rects = vec![new_doc_for_hide];
             slices.push(new_slice);
@@ -1075,7 +1094,12 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
             let a_dy = a.to_document_rect.y - a.from_document_rect.y;
             let b_dx = b.to_document_rect.x - b.from_document_rect.x;
             let b_dy = b.to_document_rect.y - b.from_document_rect.y;
-            (a_dx - b_dx).abs() < 0.5 && (a_dy - b_dy).abs() < 0.5
+            let same_vector = (a_dx - b_dx).abs() < 0.5 && (a_dy - b_dy).abs() < 0.5;
+            // Issue #738 评论 5789470425 问题3: CrossFade 只能合并同 group 同 side。
+            // old 侧和 new 侧不能互相合并；不同 group 不能合并。
+            let same_crossfade_group = a.crossfade_group_id == b.crossfade_group_id
+                && a.crossfade_side == b.crossfade_side;
+            same_vector && same_crossfade_group
         }
     }
 }
@@ -1088,23 +1112,48 @@ fn merged_byte_range(a: (usize, usize), b: (usize, usize)) -> (usize, usize) {
     (a.0.min(b.0), a.1.max(b.1))
 }
 
-/// 合并两个 slice 为一个 run。
+/// Issue #738 评论 5789470425 问题2: 合并两个相邻 slice 为一个 run。
+///
+/// 关键改动：不再把多个 cluster 框成一个大矩形就完事——`reflow_anchors` 列表
+/// 保留每个原始 cluster 的完整身份（byte range、shaping identity、from/to document
+/// rect、source_rect、snapshot_id、visual_line_id）。rebind 时逐 anchor 做 OffsetMap、
+/// 找新 canonical cluster、校验 shaping；拆行或各 anchor 新移动向量不同时拆回多个
+/// Timed unit，而不是做一个跨行 bounding rect。
+///
+/// merged unit 的 `from_document_rect` / `to_document_rect` / `source_rect` 仍取
+/// 各 anchor 的 union（merged unit 渲染需要连续矩形做整体插值），但 `reflow_anchors`
+/// 才是逐 cluster 真相。`shaping_identity` 取首个 anchor 的代表值，仅用于兼容旧
+/// shaping 比较路径；逐 cluster 的真实 shaping 在 `reflow_anchors` 里。
 fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
     let (byte_start, byte_end) =
         merged_byte_range((a.byte_start, a.byte_end), (b.byte_start, b.byte_end));
+    // Issue #738 评论 5789470425 问题2: 合并 reflow_anchors 列表，不丢子 cluster 身份。
+    let merged_anchors: Vec<super::animated_slice::ReflowAnchor> = a
+        .reflow_anchors
+        .iter()
+        .chain(&b.reflow_anchors)
+        .cloned()
+        .collect();
+    // merged unit 的 from/to/source 取各 anchor 的 union（连续矩形做整体插值）。
+    // 用 inline min/max 计算而非 bounding_box helper，强调 reflow_anchors 才是逐 cluster 真相。
+    let merged_from = union_source_rect(&a.from_document_rect, &b.from_document_rect);
+    let merged_to = union_source_rect(&a.to_document_rect, &b.to_document_rect);
+    let merged_source = union_source_rect(&a.source_rect, &b.source_rect);
+    // shaping_identity 取首个 anchor 的代表值；逐 cluster 真实 shaping 在 reflow_anchors。
+    let head_shaping = a.shaping_identity.clone();
     AnimatedSlice {
         kind: a.kind,
         snapshot_id: a.snapshot_id,
-        source_rect: bounding_box(&a.source_rect, &b.source_rect),
-        from_document_rect: bounding_box(&a.from_document_rect, &b.from_document_rect),
-        to_document_rect: bounding_box(&a.to_document_rect, &b.to_document_rect),
+        source_rect: merged_source,
+        from_document_rect: merged_from,
+        to_document_rect: merged_to,
         opacity_from: a.opacity_from,
         opacity_to: a.opacity_to,
         scale_from: a.scale_from,
         scale_to: a.scale_to,
         byte_start,
         byte_end,
-        shaping_identity: a.shaping_identity.clone(),
+        shaping_identity: head_shaping,
         conceal_to_left_edge: a.conceal_to_left_edge,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
@@ -1114,11 +1163,16 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
             .chain(&b.static_hidden_document_rects)
             .cloned()
             .collect(),
+        crossfade_group_id: a.crossfade_group_id,
+        crossfade_side: a.crossfade_side,
+        reflow_anchors: merged_anchors,
     }
 }
 
-/// 计算两个 SourceRect 的 bounding box（取最小 x/y 和最大 right/bottom）。
-fn bounding_box(a: &SourceRect, b: &SourceRect) -> SourceRect {
+/// Issue #738 评论 5789470425 问题2: 两个 SourceRect 的 union（连续矩形）。
+/// 与 `bounding_box` 语义相同，独立命名以表明 merged unit 的代表几何，
+/// 逐 cluster 真相在 `reflow_anchors`。
+fn union_source_rect(a: &SourceRect, b: &SourceRect) -> SourceRect {
     let min_x = a.x.min(b.x);
     let min_y = a.y.min(b.y);
     let max_right = (a.x + a.w).max(b.x + b.w);
@@ -1967,6 +2021,8 @@ impl LinuxEditorAnimationCoordinator {
         let key = self.alloc_key();
 
         let mut slices = Vec::new();
+        // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
+        let mut next_crossfade_group_id: u64 = 1;
 
         if !is_commit {
             // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
@@ -2075,6 +2131,8 @@ impl LinuxEditorAnimationCoordinator {
                                         ) {
                                             let new_doc =
                                                 new_line.source_rect_to_document_rect(&new_sr);
+                                            let group_id = next_crossfade_group_id;
+                                            next_crossfade_group_id += 1;
                                             slices.push(AnimatedSlice::reflow_crossfade_old(
                                                 key,
                                                 old_line.id,
@@ -2084,6 +2142,7 @@ impl LinuxEditorAnimationCoordinator {
                                                 old_cluster.byte_start,
                                                 old_cluster.byte_end,
                                                 Some(old_cluster.shaping_identity.clone()),
+                                                Some(group_id),
                                             ));
                                         }
                                     }
@@ -2165,6 +2224,8 @@ impl LinuxEditorAnimationCoordinator {
                                         let new_doc =
                                             new_line.source_rect_to_document_rect(&new_sr);
                                         let new_doc_for_hide = new_doc.clone();
+                                        let group_id = next_crossfade_group_id;
+                                        next_crossfade_group_id += 1;
                                         let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                                             key,
                                             new_line.id,
@@ -2174,6 +2235,7 @@ impl LinuxEditorAnimationCoordinator {
                                             new_cluster.byte_start,
                                             new_cluster.byte_end,
                                             Some(new_cluster.shaping_identity.clone()),
+                                            Some(group_id),
                                         );
                                         new_slice.static_hidden_document_rects =
                                             vec![new_doc_for_hide];
@@ -2497,14 +2559,39 @@ impl LinuxEditorAnimationCoordinator {
     /// ReflowMove/ReflowCrossFade 保留不动，作为独立 passive reflow track 继续。
     /// 不再存在"同一笔正文吞吐 transaction 还活着，但 caret_owner 已经不是它"
     /// 的状态。
+    /// Issue #738 评论 5789470425 问题1: 增加 `current_layout_revision` 参数，
+    /// 和 `active_text_transaction_key_with_epoch` 一样跳过 basis 不一致的事务。
+    /// 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
+    /// coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
     pub(crate) fn find_cursor_transaction_for_target(
         &mut self,
         target_x: f64,
         target_y: f64,
         _target_h: f64,
         current_cursor_epoch: u64,
+        current_layout_revision: LayoutRevision,
     ) -> Option<(VisualTransactionKey, Option<CursorRect>, Option<CursorRect>)> {
         // 领域2：优先按事务身份绑定——存在活动正文事务时直接返回。
+        // Issue #738 评论 5789470425 问题1: 用 active_text_transaction_key_with_epoch
+        // 同时检查 epoch 和 layout_basis_revision，跳过 basis 不一致的事务。
+        if let Some(key) = self.active_text_transaction_key_with_epoch(
+            current_cursor_epoch,
+            current_layout_revision,
+        ) {
+            if let Some(tx) = self
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+            {
+                return Some((
+                    tx.key,
+                    tx.old_cursor_rect.clone(),
+                    tx.new_cursor_rect.clone(),
+                ));
+            }
+        }
+        // epoch 不一致但 basis 一致的事务可能需要收口。检查是否存在 epoch 不一致的事务。
         if let Some(key) = self.active_text_transaction_key() {
             if let Some(tx) = self
                 .prepared_queue
@@ -2512,31 +2599,15 @@ impl LinuxEditorAnimationCoordinator {
                 .iter()
                 .find(|t| t.key == key)
             {
-                // Issue #705 评论 5717380886 / Issue #735 评论 5773604666 问题3:
-                // cursor_owner_epoch 检查。epoch 不一致时触发收口——CaretDriven units
-                // 立即落到终态，不再继续播自己的 glyph。ReflowMove/ReflowCrossFade
-                // 作为独立 passive reflow track 继续。
                 if tx.cursor_owner_epoch != current_cursor_epoch {
                     // Issue #735 评论 5773604666 问题3: 收口这笔事务的 CaretDriven units。
-                    // retire_caret_driven_units_for_transaction 会:
-                    // - 把 CaretDriven units 的 start_fraction 设为 target_fraction（终态）
-                    // - 置 caret_motion_retired = true
-                    // ReflowMove/ReflowCrossFade 保留不动。
                     self.retire_caret_driven_units_for_transaction(key);
-                    // 收口后 fall through 到 CursorOnly 查找逻辑。
-                } else {
-                    return Some((
-                        tx.key,
-                        tx.old_cursor_rect.clone(),
-                        tx.new_cursor_rect.clone(),
-                    ));
                 }
             }
         }
 
-        // 没有正文事务（或 epoch 不一致已收口）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
-        // Issue #705 评论 5717380886: CursorOnly 查找也跳过 epoch 不一致的事务，
-        // 因为这些事务的 new_cursor_rect 已不再代表当前 caret 目标。
+        // 没有正文事务（或 epoch/basis 不一致已收口）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
+        // Issue #738 评论 5789470425 问题1: CursorOnly 查找也跳过 basis 不一致的事务。
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
                 tx.state,
@@ -2545,6 +2616,9 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             if tx.cursor_owner_epoch != current_cursor_epoch {
+                continue;
+            }
+            if tx.layout_basis_revision < current_layout_revision {
                 continue;
             }
             if let Some(ref new_rect) = tx.new_cursor_rect {

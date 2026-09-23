@@ -421,7 +421,7 @@ impl SujianEditorItem {
                     .retain_active_snapshot_ids(&active_ids);
                 self.pipeline.set_current_layout_snapshot(None);
                 self.pipeline.set_previous_layout_snapshot(None);
-                self.pipeline.set_previous_canonical_snapshot(None);
+                self.pipeline.set_current_canonical_snapshot(None);
                 self.request_scene_rebuild();
             }
             self.cursor_ctrl.animation = None;
@@ -663,19 +663,16 @@ impl SujianEditorItem {
     pub(crate) fn layout_property_changed(&mut self) {
         self.invalidate_layout_cache();
         self.bump_visual_revision();
-        // Issue #738 评论 5788513592 问题1: 字号/字体/行距变化现在真正 reconcile 旧事务，
-        // 不再仅 bump_layout_revision 后等下一次正文编辑。和 geometry_changed 共用同一个
-        // canonical snapshot 构造/保存入口（Pipeline.
-        // reconcile_active_transactions_with_canonical_on_layout_change）：bump_layout_revision
-        // 后立即用当前 canonical snapshot 调 reconcile_active_transactions_with_canonical，
-        // 把旧活动事务重绑到当前 canonical，并同步收 texture cache。
-        // 不再一边 resize 走"保留旧事务"、一边字号变化走"全清"，两套语义分叉。
-        self.pipeline
-            .reconcile_active_transactions_with_canonical_on_layout_change();
+        // Issue #738 评论 5789470425 问题1: layout_property_changed 只负责标记 layout dirty。
+        // 真正 reconcile 推迟到新排版完成后（recalculate_content_height_and_emit 内部
+        // ensure_layout_cached 真正按新字号/字体/行距排版），再用新 canonical reconcile。
+        // 不再"先 bump，再拿 previous_canonical_snapshot reconcile"——那是用旧 canonical。
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.recalculate_content_height_and_emit();
+        // 新 canonical 已按新字号/字体/行距算完，用新 canonical reconcile 旧活动事务。
+        self.reconcile_after_layout_change();
         self.visual_settings_changed();
         self.request_static_repaint();
     }

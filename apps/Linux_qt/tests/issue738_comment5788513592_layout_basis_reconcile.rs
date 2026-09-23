@@ -61,35 +61,31 @@ fn function_window<'a>(src: &'a str, fn_marker: &str, window_size: usize) -> &'a
 // 问题1: resize/字号/字体/行距等纯布局变化没有真正 reconcile
 // =========================================================================
 
-/// 问题1 守卫1: qquickitem_impl.rs::geometry_changed 仅 bump_layout_revision，
-/// 未调用 reconcile_active_transactions_with_canonical。修复后应在纯布局变化时
-/// 真正 reconcile 旧事务（更新 layout basis、释放或更新旧 coordinated caret）。
+/// 问题1 守卫1: qquickitem_impl.rs::geometry_changed 应在纯布局变化时真正 reconcile
+/// 旧事务。Issue #738 评论 5789470425 后 reconcile 入口收口为
+/// reconcile_after_layout_change（新排版完成后用新 canonical reconcile）。
 #[test]
 fn issue1_geometry_changed_must_reconcile_not_just_bump() {
     let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
-    let window = function_window(&src, "fn geometry_changed", 1200);
-    let has_reconcile = window.contains("reconcile_active_transactions_with_canonical");
+    let window = function_window(&src, "fn geometry_changed", 1600);
+    let has_reconcile = window.contains("reconcile_after_layout_change");
     assert!(
         has_reconcile,
-        "qquickitem_impl.rs::geometry_changed 仅 bump_layout_revision()，未调用 \
-         reconcile_active_transactions_with_canonical。旧事务被 glyph/clip 的 revision \
-         守卫挡住但仍留在 active queue，直到下一次正文编辑或超时。结果：旧事务仍可能 \
-         继续拥有 coordinated caret，用旧 caret track 驱动光标，与 canonical 新布局分叉。"
+        "qquickitem_impl.rs::geometry_changed 应调用 reconcile_after_layout_change，\
+         在新排版完成后用新 canonical reconcile 旧事务。"
     );
 }
 
-/// 问题1 守卫2: properties.rs::layout_property_changed 仅 bump_layout_revision，
-/// 未调用 reconcile_active_transactions_with_canonical。
+/// 问题1 守卫2: properties.rs::layout_property_changed 应真正 reconcile。
 #[test]
 fn issue1_layout_property_changed_must_reconcile_not_just_bump() {
     let src = read_src("src/sujian_editor_item/properties.rs");
-    let window = function_window(&src, "fn layout_property_changed", 1200);
-    let has_reconcile = window.contains("reconcile_active_transactions_with_canonical");
+    let window = function_window(&src, "fn layout_property_changed", 1600);
+    let has_reconcile = window.contains("reconcile_after_layout_change");
     assert!(
         has_reconcile,
-        "properties.rs::layout_property_changed 仅 bump_layout_revision()，未调用 \
-         reconcile_active_transactions_with_canonical。字号/字体/行距变化后旧事务仍留在 \
-         active queue，与 geometry_changed 同一类缺陷。"
+        "properties.rs::layout_property_changed 应调用 reconcile_after_layout_change，\
+         在新排版完成后用新 canonical reconcile 旧事务。"
     );
 }
 
@@ -177,55 +173,38 @@ fn issue2_merge_two_spans_multiple_clusters_byte_range() {
     );
 }
 
-/// 问题2 守卫2: find_cluster_in_canonical 要求单个 canonical cluster 完整包含
-/// unit 的 mapped byte range（cluster.document_byte_start <= byte_start
-/// && cluster.document_byte_end >= byte_end）。修复后应支持跨多 cluster 的
-/// range 匹配（如把 range 拆分到各 cluster 分别重绑，或返回覆盖该 range 的
-/// cluster 列表）。
+/// 问题2 守卫2: Issue #738 评论 5789470425 后 find_cluster_in_canonical 已替换为
+/// find_clusters_in_canonical（逐 cluster 返回列表，不再要求单 cluster 完整包含）。
+/// 此守卫确认新函数存在且不要求单 cluster 包含判定。
 #[test]
 fn issue2_find_cluster_in_canonical_requires_single_cluster_containment() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn find_cluster_in_canonical", 1200);
-    // 当前缺陷：要求单个 cluster 完整包含 byte range
+    assert!(
+        src.contains("fn find_clusters_in_canonical"),
+        "应存在 find_clusters_in_canonical（逐 cluster 返回列表），替代旧的\
+         find_cluster_in_canonical（要求单 cluster 完整包含）。"
+    );
+    let window = function_window(&src, "fn find_clusters_in_canonical", 2000);
+    // 修复后：不再要求单 cluster 完整包含，改为相交判定 + 逐 cluster push。
     let requires_single_cluster_containment = window
         .contains("cluster.document_byte_start <= byte_start")
         && window.contains("cluster.document_byte_end >= byte_end");
     assert!(
         !requires_single_cluster_containment,
-        "find_cluster_in_canonical 要求单个 canonical cluster 完整包含 unit 的 \
-         mapped byte range（cluster.document_byte_start <= byte_start \
-         && cluster.document_byte_end >= byte_end）。merge_adjacent_slices 合并后 \
-         unit byte range 跨多 cluster，没有任何单个 cluster 能完整包含它，永远返回 \
-         None → rebind_timed_units_to_canonical 进入 RebindOutcome::Remove。"
+        "find_clusters_in_canonical 不应要求单个 cluster 完整包含 byte range，\
+         应改为相交判定并逐 cluster 收集。"
     );
 }
 
-/// 问题2 守卫3: rebind_timed_units_to_canonical 在 find_cluster_in_canonical
-/// 返回 None 时进入 RebindOutcome::Remove。这条守卫确认 Remove 路径存在，
-/// 与守卫1/守卫2 组合证明 merged unit 必然被误删。
+/// 问题2 守卫3: rebind_timed_units_to_canonical 应通过 find_clusters_in_canonical
+/// 逐 cluster 重绑。此守卫确认新函数调用存在。
 #[test]
 fn issue2_rebind_removes_unit_when_cluster_not_found() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 3000);
-    // 确认 find_cluster_in_canonical 返回 None 时 push RebindOutcome::Remove
-    let find_marker = "find_cluster_in_canonical";
-    let find_pos = window
-        .find(find_marker)
-        .expect("rebind 中 find_cluster_in_canonical 调用必须存在");
-    // 取 find_cluster_in_canonical 调用后 400 字符窗口，确认 None => Remove
-    // Issue #738 评论 5788513592: 回退到 char boundary 避免 UTF-8 切片 panic。
-    let mut after_end = find_pos.saturating_add(400).min(window.len());
-    while after_end > find_pos && !window.is_char_boundary(after_end) {
-        after_end -= 1;
-    }
-    let after_find = &window[find_pos..after_end];
-    let none_leads_to_remove =
-        after_find.contains("None") && after_find.contains("RebindOutcome::Remove");
+    let window = function_window(&src, "fn rebind_timed_units_to_canonical", 4000);
     assert!(
-        none_leads_to_remove,
-        "rebind_timed_units_to_canonical 在 find_cluster_in_canonical 返回 None 时 \
-         进入 RebindOutcome::Remove。与 merge_adjacent_slices 合并后跨多 cluster \
-         永远找不到组合，merged Reflow unit 必然被误删，动画 Snap 回 canonical。"
+        window.contains("find_clusters_in_canonical"),
+        "rebind_timed_units_to_canonical 应调用 find_clusters_in_canonical 逐 cluster 重绑。"
     );
 }
 

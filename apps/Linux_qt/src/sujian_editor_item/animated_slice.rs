@@ -17,6 +17,34 @@ use super::transaction_key::VisualTransactionKey;
 // 线程安全：AnimatedSlice 仅在 Qt GUI 线程中使用，
 // 不跨线程传递——动画帧计算和渲染都在 GUI 线程完成。
 
+/// Issue #738 评论 5789470425 问题3: CrossFade old/new 两侧的共同组身份。
+/// 一对 ReflowCrossFadeOld/New 共享同一个 `crossfade_group_id`，reconcile 时
+/// 以 group 为单位成对重绑，不再把 old/new 两侧各自独立判死。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CrossFadeSide {
+    Old,
+    New,
+}
+
+/// Issue #738 评论 5789470425 问题2: merged Reflow 的逐 cluster anchor。
+///
+/// `merge_two` 合并相邻同方向 slice 时，不再把多个 cluster 框成一个大矩形，
+/// 而是把每个原始 cluster 的身份（byte range、shaping identity、from/to document
+/// rect、source_rect、snapshot_id、visual_line_id）保存为 `ReflowAnchor`。
+/// reconcile 时逐 anchor 做 OffsetMap、找新 canonical cluster、校验 shaping；
+/// 拆行或各 anchor 新移动向量不同时拆回多个 Timed unit。
+#[derive(Clone, Debug)]
+pub(crate) struct ReflowAnchor {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub shaping_identity: Option<ShapingIdentity>,
+    pub from_document_rect: SourceRect,
+    pub to_document_rect: SourceRect,
+    pub source_rect: SourceRect,
+    pub snapshot_id: LineSnapshotId,
+    pub visual_line_id: Option<usize>,
+}
+
 /// 动画切片类型，决定视觉语义和插值行为。
 ///
 /// 与 Core `AnimatedSliceRole` 一一对应（见模块文档映射表）。
@@ -86,6 +114,17 @@ pub(crate) struct AnimatedSlice {
     /// canonical 独占区域。RenderPlan 从 active units 收集这些 rect 作为裁剪区域，
     /// 不再从 StaticLinePatch 二次换算。AnimatedSlice 成为唯一事实源。
     pub static_hidden_document_rects: Vec<SourceRect>,
+    /// Issue #738 评论 5789470425 问题3: CrossFade old/new 两侧的共同组身份。
+    /// `None` 表示非 CrossFade 或未分组；`Some(id)` 表示属于该 group 的一侧。
+    /// reconcile 以 group 为单位成对重绑 old/new。
+    pub crossfade_group_id: Option<u64>,
+    /// Issue #738 评论 5789470425 问题3: CrossFade 的 old/new 侧标记。
+    /// `None` 表示非 CrossFade；`Some(Old/New)` 表示该 slice 是 group 的哪一侧。
+    pub crossfade_side: Option<CrossFadeSide>,
+    /// Issue #738 评论 5789470425 问题2: merged Reflow 的逐 cluster anchor 列表。
+    /// 非 ReflowMove/ReflowCrossFade 时为空。merge_two 合并 anchors 列表，
+    /// 不丢子 cluster 身份；rebind 逐 anchor 找新 canonical cluster。
+    pub reflow_anchors: Vec<ReflowAnchor>,
 }
 
 impl AnimatedSlice {
@@ -133,6 +172,9 @@ impl AnimatedSlice {
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
+            crossfade_group_id: None,
+            crossfade_side: None,
+            reflow_anchors: Vec::new(),
         }
     }
 
@@ -172,6 +214,9 @@ impl AnimatedSlice {
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
+            crossfade_group_id: None,
+            crossfade_side: None,
+            reflow_anchors: Vec::new(),
         }
     }
 
@@ -179,6 +224,8 @@ impl AnimatedSlice {
     ///
     /// `_new_snapshot_id`/`_new_source_rect` 当前未使用（Move 复用旧纹理），
     /// 保留参数签名与 ReflowCrossFade 对称，未来可能用于纹理缓存优化。
+    /// Issue #738 评论 5789470425 问题2: 同时构造单个 ReflowAnchor 保存该 cluster
+    /// 的完整身份，merge_two 合并后 anchors 列表保留所有子 cluster 身份。
     pub fn reflow_move(
         _key: VisualTransactionKey,
         old_snapshot_id: LineSnapshotId,
@@ -191,6 +238,16 @@ impl AnimatedSlice {
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
+        let anchor = ReflowAnchor {
+            byte_start,
+            byte_end,
+            shaping_identity: shaping_identity.clone(),
+            from_document_rect: from_document_rect.clone(),
+            to_document_rect: to_document_rect.clone(),
+            source_rect: old_source_rect.clone(),
+            snapshot_id: old_snapshot_id,
+            visual_line_id: None,
+        };
         Self {
             kind: AnimatedSliceKind::ReflowMove,
             snapshot_id: old_snapshot_id,
@@ -208,6 +265,9 @@ impl AnimatedSlice {
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
+            crossfade_group_id: None,
+            crossfade_side: None,
+            reflow_anchors: vec![anchor],
         }
     }
 
@@ -215,6 +275,9 @@ impl AnimatedSlice {
     /// 不能继续用 None。rebind_timed_units_to_canonical 用 shaping identity 判断能否按新布局
     /// 继续复用旧视觉；None 会导致 is_same_shaping 恒为 false → 必然 Remove。
     /// `shaping_identity` 传 old/new 侧各自真实的 cluster shaping identity。
+    /// Issue #738 评论 5789470425 问题3: 增加 `crossfade_group_id` 参数，old/new 两侧
+    /// 共享同一 group_id，reconcile 以 group 为单位成对重绑。
+    /// Issue #738 评论 5789470425 问题2: 同时构造单个 ReflowAnchor 保存该 cluster 身份。
     pub fn reflow_crossfade_old(
         _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
@@ -224,7 +287,18 @@ impl AnimatedSlice {
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
+        crossfade_group_id: Option<u64>,
     ) -> Self {
+        let anchor = ReflowAnchor {
+            byte_start,
+            byte_end,
+            shaping_identity: shaping_identity.clone(),
+            from_document_rect: from_document_rect.clone(),
+            to_document_rect: to_document_rect.clone(),
+            source_rect: source_rect.clone(),
+            snapshot_id,
+            visual_line_id: None,
+        };
         Self {
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
@@ -242,6 +316,9 @@ impl AnimatedSlice {
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
+            crossfade_group_id,
+            crossfade_side: Some(CrossFadeSide::Old),
+            reflow_anchors: vec![anchor],
         }
     }
 
@@ -254,7 +331,18 @@ impl AnimatedSlice {
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
+        crossfade_group_id: Option<u64>,
     ) -> Self {
+        let anchor = ReflowAnchor {
+            byte_start,
+            byte_end,
+            shaping_identity: shaping_identity.clone(),
+            from_document_rect: from_document_rect.clone(),
+            to_document_rect: to_document_rect.clone(),
+            source_rect: source_rect.clone(),
+            snapshot_id,
+            visual_line_id: None,
+        };
         Self {
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
@@ -272,6 +360,9 @@ impl AnimatedSlice {
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
+            crossfade_group_id,
+            crossfade_side: Some(CrossFadeSide::New),
+            reflow_anchors: vec![anchor],
         }
     }
 

@@ -485,4 +485,50 @@ impl SujianEditorItem {
             .map(|pf| pf.layout_snapshot.clone())
             .unwrap_or_else(|| self.layout_snapshot(width))
     }
+
+    /// Issue #738 评论 5789470425 问题1: 构造当前排版参数的 VisualTransactionContext。
+    /// 供 `reconcile_after_layout_change` 构造新 canonical snapshot 使用。
+    fn build_visual_transaction_context(&self) -> super::pipeline::VisualTransactionContext {
+        super::pipeline::VisualTransactionContext {
+            typing_animation_enabled: self.current_typing_animation_enabled,
+            smooth_cursor_enabled: self.current_smooth_cursor_enabled,
+            is_scrolling: self.current_is_scrolling,
+            is_loading: self.current_is_loading,
+            is_applying_format: self.current_is_applying_format,
+            bounding_width: self.bounding_width(),
+            font_pixel_size: f64::from(self.current_font_pixel_size),
+            font_family: self.current_font_family.to_string(),
+            scroll_y: f64::from(self.current_scroll_y),
+            viewport_height: f64::from(self.current_viewport_height.max(1.0)),
+            text_indent: f64::from(self.current_text_indent),
+            line_spacing: f64::from(self.current_line_spacing),
+            padding: f64::from(self.current_padding),
+            text_color: self.current_text_color.to_string(),
+            dpr: {
+                let item_ptr = self.get_cpp_object();
+                if !item_ptr.is_null() {
+                    crate::editor::renderer::sujian_item_dpr(item_ptr)
+                } else {
+                    1.0
+                }
+            },
+        }
+    }
+
+    /// Issue #738 评论 5789470425 问题1: 纯布局变化（resize/字号/字体/行距）后，
+    /// 在**新排版已经按新 width/font/line_spacing/padding 算完之后**调此方法。
+    /// 构造新 canonical snapshot，再通过 Pipeline 入口
+    /// `reconcile_active_transactions_with_new_canonical` 把旧活动事务重绑到这份新 canonical，
+    /// 并把它保存为当前 canonical。
+    ///
+    /// 调用方必须先 `invalidate_layout_cache` + `recalculate_content_height_and_emit`
+    ///（确保新排版完成），再调此方法。
+    pub(crate) fn reconcile_after_layout_change(&mut self) {
+        let ctx = self.build_visual_transaction_context();
+        let new_snapshot = self
+            .pipeline
+            .build_canonical_snapshot_for_current_layout(&ctx);
+        self.pipeline
+            .reconcile_active_transactions_with_new_canonical(new_snapshot);
+    }
 }

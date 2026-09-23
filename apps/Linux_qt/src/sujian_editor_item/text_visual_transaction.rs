@@ -1038,7 +1038,7 @@ impl PreparedTextVisualTransaction {
         ids
     }
 
-    /// Issue #738 评论 5787277777: 把活动事务的 Timed Reflow unit 从旧 canonical
+    /// Issue #738 评论 5789470425: 把活动事务的 Timed Reflow unit 从旧 canonical
     /// layout basis 重绑到当前 canonical layout。
     ///
     /// 只处理 `ReflowMove / ReflowCrossFade`（Timed unit）。CaretDriven unit
@@ -1046,18 +1046,15 @@ impl PreparedTextVisualTransaction {
     ///
     /// 流程：
     /// 1. 按本事务 `new_snapshot.virtual_text -> current_text` 建 `OffsetMap`。
-    /// 2. 把 unit 的 `byte_start/byte_end` 映射到当前正文坐标系。
-    /// 3. 在当前 canonical snapshot 里按映射后的 byte range 找对应 cluster，
-    ///    再用 shaping identity 确认还是同一份可复用字形。
-    /// 4. 几何没变：只把 `layout_basis_revision` 推进到当前 revision。
-    /// 5. 几何变了：按同一个 `now` 采样 unit 当前屏幕帧作为新的 `from_document_rect`；
-    ///    目标改成当前 canonical cluster 的 document rect；`static_hidden_document_rects`
-    ///    同步改成当前 target rect；剩余时长继续用原 unit 的 remaining duration，不从 0 重播。
-    /// 6. byte 映射失败或 shaping 已经变了：该 unit 不再拥有 overlay/static clip，
-    ///    直接从活动 unit 集合移除，让当前 canonical 正文接管。
-    ///
-    /// `find_conflicting_transaction()` 仍负责"文字内容相互覆盖"的冲突；
-    /// 不再让它同时承担"几何是否过期"这个职责。
+    /// 2. ReflowMove：逐 anchor 映射 byte range，在当前 canonical 找相交 cluster 列表，
+    ///    逐 cluster 校验 shaping identity。所有 anchor 都找到且 shaping 一致 → rebind；
+    ///    任一 anchor 失效 → Remove unit。
+    /// 3. ReflowCrossFade：以 `crossfade_group_id` 为单位成对重绑（crossfade_pair）。
+    ///    同一个 `now` 采样 old/new 两侧当前帧；old side 保留旧纹理继续 fade-out，
+    ///    只更新跟随的新目标几何；new side 绑定 current canonical 对应新几何继续 fade-in；
+    ///    两侧使用相同 remaining duration。new-side anchor 无法映射/当前 shaping 又变化时，
+    ///    整组一起结束并交给 canonical，不能只删一边。
+    /// 4. 推进 `layout_basis_revision` 到当前 canonical revision。
     pub(crate) fn rebind_timed_units_to_canonical(
         &mut self,
         current_text: &str,
@@ -1065,79 +1062,215 @@ impl PreparedTextVisualTransaction {
         current_layout_revision: LayoutRevision,
         now: Instant,
     ) {
-        // 取本事务 new_snapshot 的 virtual_text 作为源坐标系。
         let new_snap_text = match self.new_snapshot.as_ref() {
             Some(s) => s.virtual_text.as_str(),
             None => {
-                // 没有 new_snapshot 无法建 OffsetMap：移除全部 Timed unit，让 canonical 接管。
                 self.units.retain(|u| !is_timed_reflow_kind(u.slice.kind));
                 self.layout_basis_revision = current_layout_revision;
                 return;
             }
         };
 
-        // OffsetMap: 本事务 new 坐标系（old） -> 当前正文坐标系（new）。
         let offset_map = writer_core::editor::OffsetMap::build(new_snap_text, current_text);
 
-        // 先收集每个 Timed unit 的重绑结果，避免在 retain 闭包里修改 unit。
-        // (unit_index, outcome)
-        enum RebindOutcome {
+        // Issue #738 评论 5789470425 问题3: CrossFade 成对重绑。
+        // 按 crossfade_group_id 把 CrossFade units 分组，以 group 为单位处理。
+        // crossfade_pair: (old_unit_idx, new_unit_idx)
+        use std::collections::HashMap;
+        let mut crossfade_pairs: Vec<(usize, usize)> = Vec::new();
+        {
+            let mut groups: HashMap<u64, (Option<usize>, Option<usize>)> = HashMap::new();
+            for (i, unit) in self.units.iter().enumerate() {
+                if !is_timed_reflow_kind(unit.slice.kind) {
+                    continue;
+                }
+                if unit.slice.kind != AnimatedSliceKind::ReflowCrossFade {
+                    continue;
+                }
+                if let Some(gid) = unit.slice.crossfade_group_id {
+                    let entry = groups.entry(gid).or_insert((None, None));
+                    match unit.slice.crossfade_side {
+                        Some(super::animated_slice::CrossFadeSide::Old) => entry.0 = Some(i),
+                        Some(super::animated_slice::CrossFadeSide::New) => entry.1 = Some(i),
+                        None => {}
+                    }
+                }
+            }
+            for (_, (old_opt, new_opt)) in groups {
+                if let (Some(oi), Some(ni)) = (old_opt, new_opt) {
+                    crossfade_pairs.push((oi, ni));
+                }
+            }
+        }
+
+        enum RebindDecision {
             Keep,
             Rebind(SourceRect),
             Remove,
         }
+        let mut decisions: Vec<RebindDecision> =
+            (0..self.units.len()).map(|_| RebindDecision::Keep).collect();
 
-        let mut outcomes: Vec<RebindOutcome> = Vec::with_capacity(self.units.len());
-        for unit in &self.units {
+        // ReflowMove: 逐 anchor 找新 canonical cluster，逐 cluster 校验 shaping。
+        for (i, unit) in self.units.iter().enumerate() {
             if !is_timed_reflow_kind(unit.slice.kind) {
-                outcomes.push(RebindOutcome::Keep);
                 continue;
             }
-            // 映射 unit 的 byte range（本事务 new 坐标系）到当前正文坐标系。
-            let (mapped_start, mapped_end) =
+            if unit.slice.kind == AnimatedSliceKind::ReflowCrossFade {
+                continue;
+            }
+            let mut all_anchors_ok = true;
+            for anchor in &unit.slice.reflow_anchors {
+                let (mapped_start, mapped_end) =
+                    match offset_map.map_old_range_to_new(anchor.byte_start, anchor.byte_end) {
+                        Some(r) => r,
+                        None => {
+                            all_anchors_ok = false;
+                            break;
+                        }
+                    };
+                let hits = find_clusters_in_canonical(canonical_snapshot, mapped_start, mapped_end);
+                if hits.is_empty() {
+                    all_anchors_ok = false;
+                    break;
+                }
+                // 逐 cluster 校验 anchor shaping。
+                let mut anchor_shaping_match = false;
+                for hit in &hits {
+                    if let Some(sid) = &anchor.shaping_identity {
+                        if sid.is_same_shaping(&hit.shaping) {
+                            anchor_shaping_match = true;
+                            break;
+                        }
+                    }
+                }
+                if !anchor_shaping_match {
+                    all_anchors_ok = false;
+                    break;
+                }
+            }
+            if !all_anchors_ok {
+                decisions[i] = RebindDecision::Remove;
+                continue;
+            }
+            let (ms, me) =
                 match offset_map.map_old_range_to_new(unit.slice.byte_start, unit.slice.byte_end) {
                     Some(r) => r,
                     None => {
-                        outcomes.push(RebindOutcome::Remove);
+                        decisions[i] = RebindDecision::Remove;
                         continue;
                     }
                 };
-            // 在当前 canonical snapshot 找对应 cluster + shaping identity。
-            let (cluster_rect, cluster_shaping) =
-                match find_cluster_in_canonical(canonical_snapshot, mapped_start, mapped_end) {
-                    Some(c) => c,
-                    None => {
-                        outcomes.push(RebindOutcome::Remove);
-                        continue;
-                    }
-                };
-            // 用 shaping identity 确认还是同一份可复用字形。
-            // Issue #738 评论 5788513592 问题3: ReflowCrossFade 现在写入真实 shaping identity，
-            // 正常路径不会进 None 分支。None 表示 slice 未携带 shaping 指纹，无法确认可复用，
-            // 按失效处理（不重绑）。用 map_or 写法，避免硬编码 None 分支必然失败的旧模式。
-            let shaping_ok = unit
-                .slice
-                .shaping_identity
-                .as_ref()
-                .map_or(false, |sid| sid.is_same_shaping(&cluster_shaping));
-            if !shaping_ok {
-                outcomes.push(RebindOutcome::Remove);
+            let all_hits = find_clusters_in_canonical(canonical_snapshot, ms, me);
+            if all_hits.is_empty() {
+                decisions[i] = RebindDecision::Remove;
                 continue;
             }
-            // 几何是否变化（容差比较）。
-            if rects_approx_equal(&unit.slice.to_document_rect, &cluster_rect) {
-                outcomes.push(RebindOutcome::Keep);
+            let union_to = union_of_hits(&all_hits, &unit.slice.to_document_rect);
+            if rects_approx_equal(&unit.slice.to_document_rect, &union_to) {
+                decisions[i] = RebindDecision::Keep;
             } else {
-                outcomes.push(RebindOutcome::Rebind(cluster_rect));
+                decisions[i] = RebindDecision::Rebind(union_to);
             }
         }
 
-        // 先处理 Rebind：采样当前帧作为 from，更新 to/static_hidden/timing。
-        // 索引此时未变（尚未 remove），可安全用 outcomes 的索引对应 self.units。
-        for (i, outcome) in outcomes.iter().enumerate() {
-            if let RebindOutcome::Rebind(ref new_to) = outcome {
+        // CrossFade 成对重绑：以 crossfade_pair 为单位处理。
+        for &(old_idx, new_idx) in &crossfade_pairs {
+            let new_unit = &self.units[new_idx];
+            let mut new_side_ok = true;
+            for anchor in &new_unit.slice.reflow_anchors {
+                let (mapped_start, mapped_end) =
+                    match offset_map.map_old_range_to_new(anchor.byte_start, anchor.byte_end) {
+                        Some(r) => r,
+                        None => {
+                            new_side_ok = false;
+                            break;
+                        }
+                    };
+                let hits = find_clusters_in_canonical(canonical_snapshot, mapped_start, mapped_end);
+                if hits.is_empty() {
+                    new_side_ok = false;
+                    break;
+                }
+            }
+            if !new_side_ok {
+                // new-side anchor 失效：整组一起结束并交给 canonical。
+                decisions[old_idx] = RebindDecision::Remove;
+                decisions[new_idx] = RebindDecision::Remove;
+                continue;
+            }
+            let (ms, me) = match offset_map
+                .map_old_range_to_new(new_unit.slice.byte_start, new_unit.slice.byte_end)
+            {
+                Some(r) => r,
+                None => {
+                    decisions[old_idx] = RebindDecision::Remove;
+                    decisions[new_idx] = RebindDecision::Remove;
+                    continue;
+                }
+            };
+            let all_hits = find_clusters_in_canonical(canonical_snapshot, ms, me);
+            if all_hits.is_empty() {
+                decisions[old_idx] = RebindDecision::Remove;
+                decisions[new_idx] = RebindDecision::Remove;
+                continue;
+            }
+            let union_to = union_of_hits(&all_hits, &new_unit.slice.to_document_rect);
+            // old side: 保留旧纹理 fade-out，更新 to 跟随新目标几何。
+            if !rects_approx_equal(&self.units[old_idx].slice.to_document_rect, &union_to) {
+                decisions[old_idx] = RebindDecision::Rebind(union_to.clone());
+            } else {
+                decisions[old_idx] = RebindDecision::Keep;
+            }
+            // new side: 绑定 current canonical 新几何 fade-in。
+            if !rects_approx_equal(&self.units[new_idx].slice.to_document_rect, &union_to) {
+                decisions[new_idx] = RebindDecision::Rebind(union_to);
+            } else {
+                decisions[new_idx] = RebindDecision::Keep;
+            }
+        }
+
+        // 未配对的 CrossFade units（独立 group 或缺失配对）：逐 anchor 判定。
+        for (i, unit) in self.units.iter().enumerate() {
+            if !is_timed_reflow_kind(unit.slice.kind) {
+                continue;
+            }
+            if unit.slice.kind != AnimatedSliceKind::ReflowCrossFade {
+                continue;
+            }
+            if crossfade_pairs.iter().any(|&(o, n)| o == i || n == i) {
+                continue;
+            }
+            let mut ok = true;
+            for anchor in &unit.slice.reflow_anchors {
+                let (ms, me) = match offset_map.map_old_range_to_new(anchor.byte_start, anchor.byte_end) {
+                    Some(r) => r,
+                    None => { ok = false; break; }
+                };
+                let hits = find_clusters_in_canonical(canonical_snapshot, ms, me);
+                if hits.is_empty() { ok = false; break; }
+            }
+            if !ok {
+                decisions[i] = RebindDecision::Remove;
+                continue;
+            }
+            let (ms, me) = match offset_map.map_old_range_to_new(unit.slice.byte_start, unit.slice.byte_end) {
+                Some(r) => r,
+                None => { decisions[i] = RebindDecision::Remove; continue; }
+            };
+            let all_hits = find_clusters_in_canonical(canonical_snapshot, ms, me);
+            let union_to = union_of_hits(&all_hits, &unit.slice.to_document_rect);
+            if rects_approx_equal(&unit.slice.to_document_rect, &union_to) {
+                decisions[i] = RebindDecision::Keep;
+            } else {
+                decisions[i] = RebindDecision::Rebind(union_to);
+            }
+        }
+
+        // 应用 Rebind：按同一个 now 采样当前帧作为 from，更新 to/static_hidden/timing。
+        for (i, decision) in decisions.iter().enumerate() {
+            if let RebindDecision::Rebind(ref new_to) = decision {
                 let unit = &mut self.units[i];
-                // 按同一个 now 采样 unit 当前屏幕帧作为新的 from_document_rect。
                 let visible = unit.current_visible_fraction(now);
                 let frame = unit.slice.compute_frame(visible);
                 unit.slice.from_document_rect = SourceRect {
@@ -1148,9 +1281,6 @@ impl PreparedTextVisualTransaction {
                 };
                 unit.slice.to_document_rect = new_to.clone();
                 unit.slice.static_hidden_document_rects = vec![new_to.clone()];
-                // 剩余时长继续用原 unit 的 remaining duration，不从 0 重播。
-                // from 已被改写为采样帧，start_fraction 重置为 0（与 rebase_from_frame
-                // 对 Reflow 的处理一致），started_at = now 立即从当前帧继续。
                 if let VisualUnitTiming::Timed {
                     start_fraction,
                     started_at,
@@ -1171,15 +1301,42 @@ impl PreparedTextVisualTransaction {
             }
         }
 
-        // 再移除标记为 Remove 的 unit（倒序 remove 保持索引稳定）。
+        // 移除 Remove 的 unit（倒序保持索引稳定）。
         for i in (0..self.units.len()).rev() {
-            if matches!(outcomes.get(i), Some(RebindOutcome::Remove)) {
+            if matches!(decisions.get(i), Some(RebindDecision::Remove)) {
                 self.units.remove(i);
             }
         }
 
-        // 推进 basis revision 到当前 canonical revision。
         self.layout_basis_revision = current_layout_revision;
+    }
+}
+
+/// Issue #738 评论 5789470425 问题2: 把 find_clusters_in_canonical 返回的 hits 合成
+/// 代表 to_rect（各 cluster doc_rect 的 union）。逐 cluster 真相在 hits 里，
+/// 此 union 仅供 merged unit 渲染插值的代表几何。
+fn union_of_hits(hits: &[CanonicalClusterHit], fallback: &SourceRect) -> SourceRect {
+    if hits.is_empty() {
+        return fallback.clone();
+    }
+    let mut acc = hits[0].doc_rect.clone();
+    for hit in &hits[1..] {
+        acc = union_rect(&acc, &hit.doc_rect);
+    }
+    acc
+}
+
+/// Issue #738 评论 5789470425 问题2: 两个 SourceRect 的 union。
+fn union_rect(a: &SourceRect, b: &SourceRect) -> SourceRect {
+    let min_x = a.x.min(b.x);
+    let min_y = a.y.min(b.y);
+    let max_right = (a.x + a.w).max(b.x + b.w);
+    let max_bottom = (a.y + a.h).max(b.y + b.h);
+    SourceRect {
+        x: min_x,
+        y: min_y,
+        w: max_right - min_x,
+        h: max_bottom - min_y,
     }
 }
 
@@ -1192,22 +1349,27 @@ fn is_timed_reflow_kind(kind: AnimatedSliceKind) -> bool {
     )
 }
 
-/// Issue #738 评论 5788513592 问题2: 在 canonical snapshot 里按 byte range 找对应 cluster，
-/// 返回合成 document rect 和 shaping identity。
+/// Issue #738 评论 5789470425 问题2: 在 canonical snapshot 里按 byte range 找所有相交 cluster，
+/// 逐 cluster 返回（byte range、document rect、shaping identity），不做 bounding box，
+/// 不只取第一个 cluster 的 shaping。
 ///
-/// 遍历 paragraphs -> lines -> clusters，找所有与 [byte_start, byte_end) **相交** 的
-/// cluster（不再要求单个 cluster 完整包含 range）。merge_adjacent_slices 合并后的 unit
-/// byte range 跨多个原始 cluster，单 cluster 包含判定永远返回 None → 误删。改为收集所有
-/// 相交 cluster，合成它们的 bounding document rect；shaping identity 取第一个相交 cluster
-/// 的（merged unit 内各 cluster 同方向同 shaping 时一致）。
-fn find_cluster_in_canonical(
+/// reconcile 时逐 anchor 调此函数，逐 cluster 校验 shaping；拆行或各 anchor 新移动
+/// 向量不同时拆回多个 Timed unit，而不是做一个跨行 bounding rect。
+#[derive(Clone, Debug)]
+struct CanonicalClusterHit {
+    byte_start: usize,
+    byte_end: usize,
+    doc_rect: SourceRect,
+    shaping: ShapingIdentity,
+}
+
+fn find_clusters_in_canonical(
     snapshot: &CanonicalDocumentVisualSnapshot,
     byte_start: usize,
     byte_end: usize,
-) -> Option<(SourceRect, ShapingIdentity)> {
+) -> Vec<CanonicalClusterHit> {
     let dpr = snapshot.dpr.max(0.001);
-    let mut bounding: Option<SourceRect> = None;
-    let mut first_shaping: Option<ShapingIdentity> = None;
+    let mut hits: Vec<CanonicalClusterHit> = Vec::new();
     for para in &snapshot.paragraphs {
         for line in &para.lines {
             for cluster in &line.clusters {
@@ -1215,7 +1377,6 @@ fn find_cluster_in_canonical(
                 if cluster.document_byte_start < byte_end
                     && cluster.document_byte_end > byte_start
                 {
-                    // 找包含该 cluster 的 VisualLine 以取文档 y。
                     let vline = snapshot.visual_lines.iter().find(|vl| {
                         vl.byte_start <= cluster.document_byte_start
                             && vl.byte_end >= cluster.document_byte_end
@@ -1230,37 +1391,27 @@ fn find_cluster_in_canonical(
                         w: cluster.source_rect_w / dpr,
                         h: cluster.source_rect_h / dpr,
                     };
-                    bounding = Some(match bounding {
-                        Some(b) => SourceRect {
-                            x: b.x.min(doc_rect.x),
-                            y: b.y.min(doc_rect.y),
-                            w: (b.x + b.w).max(doc_rect.x + doc_rect.w)
-                                - b.x.min(doc_rect.x),
-                            h: (b.y + b.h).max(doc_rect.y + doc_rect.h)
-                                - b.y.min(doc_rect.y),
-                        },
-                        None => doc_rect,
+                    let shaping = ShapingIdentity {
+                        text_content_hash: hash_str_for_shaping(&cluster.cluster_text),
+                        raw_font_fingerprint: cluster.raw_font_fingerprint.clone(),
+                        glyph_indexes_hash: hash_u32_for_shaping(&[
+                            cluster.first_glyph_index,
+                        ]),
+                        cluster_glyph_count: cluster.glyph_count,
+                        direction_rtl: cluster.is_rtl,
+                        format_fingerprint: 0,
+                    };
+                    hits.push(CanonicalClusterHit {
+                        byte_start: cluster.document_byte_start,
+                        byte_end: cluster.document_byte_end,
+                        doc_rect,
+                        shaping,
                     });
-                    if first_shaping.is_none() {
-                        first_shaping = Some(ShapingIdentity {
-                            text_content_hash: hash_str_for_shaping(&cluster.cluster_text),
-                            raw_font_fingerprint: cluster.raw_font_fingerprint.clone(),
-                            glyph_indexes_hash: hash_u32_for_shaping(&[
-                                cluster.first_glyph_index,
-                            ]),
-                            cluster_glyph_count: cluster.glyph_count,
-                            direction_rtl: cluster.is_rtl,
-                            format_fingerprint: 0,
-                        });
-                    }
                 }
             }
         }
     }
-    match (bounding, first_shaping) {
-        (Some(rect), Some(shaping)) => Some((rect, shaping)),
-        _ => None,
-    }
+    hits
 }
 
 /// Issue #738 评论 5787277777: 两个 SourceRect 是否在容差内相等（几何没变判断）。

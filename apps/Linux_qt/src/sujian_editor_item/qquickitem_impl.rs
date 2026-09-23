@@ -19,21 +19,21 @@ impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, new_geometry: QRectF, old_geometry: QRectF) {
         // 宽度变化需要重新排版 QSGTextNode
         self.invalidate_layout_cache();
-        // Issue #738 评论 5788513592 问题1: 纯布局变化（resize）现在真正 reconcile 旧事务，
-        // 不再仅 bump_layout_revision 后等下一次正文编辑。canonical snapshot 的构造/保存入口
-        // 收口到 Pipeline.reconcile_active_transactions_with_canonical_on_layout_change：
-        // bump_layout_revision 后立即用当前 canonical snapshot 调
-        // reconcile_active_transactions_with_canonical，把旧活动事务重绑到当前 canonical，
-        // 并同步收 texture cache。
+        // Issue #738 评论 5789470425 问题1: geometry_changed / layout_property_changed
+        // 只负责标记 layout dirty（invalidate_layout_cache）。真正 reconcile 必须放到
+        // **新 canonical layout 已经按新 width/font/line_spacing/padding 算完之后**。
+        // 不再"先 bump，再拿 previous_canonical_snapshot reconcile"——那是用旧 canonical。
         //
         // 只变高度不推进 layout revision：排版只依赖宽度，高度变化不影响文字布局，
         // 不把正在播的事务全部判旧。只变宽度真正影响排版时才推进并 reconcile。
         let width_changed = (new_geometry.width - old_geometry.width).abs() > 0.5;
-        if width_changed {
-            self.pipeline
-                .reconcile_active_transactions_with_canonical_on_layout_change();
-        }
+        // 先完成新排版（recalculate_content_height_and_emit 内部 ensure_layout_cached
+        // 真正按新 width 排版），reconcile 发生在新排版完成之后。
         self.recalculate_content_height_and_emit();
+        if width_changed {
+            // 新 canonical 已按新 width 算完，用新 canonical reconcile 旧活动事务。
+            self.reconcile_after_layout_change();
+        }
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         let _ = self.update_cursor_visual_position();
