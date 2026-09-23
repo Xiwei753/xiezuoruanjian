@@ -435,11 +435,14 @@ class ComposeEditorVisualState(
 
         // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
         _latestLayout.update { snapshot }
-        // Issue #728 评论 5754839786 缺口2：真实 layout 变化后更新 restingCaretRect —
-        // 后续分支（composition active / Core visual path）会
-        // 在此基础上把 drawSnapshotState.restingCaretRect 同步给 draw 层。active motion 期间 motion sample
-        // 覆盖此值；motion finished 后 sampleVisualScene 用此值无缝接上。
-        restingCaretRect = snapshot.cursorRect(snapshot.selection.end)
+        // Issue #728 评论 5754839786 缺口2：真实 layout 变化后算新 target caret —
+        // Issue #737 评论 5787285321：target 先存局部变量，按 owner 决策再写字段。
+        // 旧实现无条件 `restingCaretRect = target` 会把字段提前写成新 target，
+        // 导致 AwaitingFact 分支 buildPendingPresentation 的 originCaret 拿到新 target
+        // （settleMotionForPendingPresentation 在 activeMotion == null 时直接 return 不改字段），
+        // pending sample caret 瞬间跳到终点；fact 到达升级 prepared motion 后 caret 再从 target 跳回
+        // origin 再动画，表现"先跳终点 → 跳回 → 再动画"。现在由各 owner 分支显式决定何时写字段。
+        val targetCaretRect = snapshot.cursorRect(snapshot.selection.end)
 
         // composition 活跃时只缓存 preedit layout，不生成 patch（不播放 preedit 的吞吐）
         if (compositionActive) {
@@ -459,6 +462,9 @@ class ComposeEditorVisualState(
             // 否则旧 pendingPresentation 会在 sampleVisualScene 里复活，旧 prepared motion 的 patch
             // 会在 drainPendingPatchesAtFrame 里重新启动。
             settleToStaticOwner()
+            // Issue #737 评论 5787285321：composition 静态状态接管时把 target 落到字段 —
+            // 修改1移除无条件赋值后，由各 owner 分支显式决定何时写字段。
+            restingCaretRect = targetCaretRect
             presentationGeneration++
             drawSnapshotState =
                 drawSnapshotState.copy(
@@ -585,6 +591,10 @@ class ComposeEditorVisualState(
                 // pending patch，说明上一笔的 prepared motion 被 layout 变化打断，必须一并结算，
                 // 否则下一帧 drainPendingPatchesAtFrame 会取出旧 patch 重新激活旧 motion。
                 settleToStaticOwner()
+                // Issue #737 评论 5787285321：LayoutOnly 静态发布新 layout 时同步更新字段本身 —
+                // 修改1移除 onAuthoritativeLayout 的无条件赋值后，字段不再被提前写成 target，
+                // 由本分支静态发布时显式写。drawSnapshotState.copy 的 restingCaretRect 用同值保持一致。
+                restingCaretRect = update.snapshot.cursorRect(update.snapshot.selection.end)
                 presentationGeneration++
                 drawSnapshotState =
                     drawSnapshotState.copy(

@@ -396,6 +396,120 @@ class ComposeVisualStateLayoutFirstPendingPresentationTest {
         assertNull("drawSnapshot.motionSample 应为 null（旧 pending 不复活）", snap.motionSample)
     }
 
+    /**
+     * Issue #737 评论 5787285321 测试 — 上一笔动画已结束（activeMotion == null）后，
+     * 下一笔 layout-first 的 pending presentation caret origin 必须停在旧 layout 的 caret，
+     * 不能瞬间跳到新 layout 的 target caret。
+     *
+     * 场景：
+     * 1. 第一笔 "" -> "a" 正常完成，drain + sample 推进超过 motion duration 使 motion finished、
+     *    activeMotion 归 null（restingCaretRect 落到 "a" layout offset=1 的 caret）。
+     * 2. 第二笔 "a" -> "ab" 的 layout 先到、fact 未到 — onAuthoritativeLayout 进入 AwaitingFact 分支。
+     *
+     * 旧实现（评论 5787285321 根因）：onAuthoritativeLayout 在真实 layout 变化分支里无条件
+     * `restingCaretRect = snapshot.cursorRect(snapshot.selection.end)` 把字段提前写成新 target。
+     * settleMotionForPendingPresentation 在 activeMotion == null 时直接 return（不改字段），
+     * buildPendingPresentation 的 `originCaret = restingCaretRect ?: oldLayout.cursorRect(...)`
+     * 拿到新 target caret → pending sample caret 瞬间跳到终点。等 fact 到达升级 prepared motion 后，
+     * prepared motion 的 originCaretRect 来自真正 old offset，caret 再从 target 跳回 origin 再动画。
+     * 表现：先跳终点 → 跳回旧位置 → 再动画过去。
+     *
+     * 期望（修复后）：pending sample 的 caretRect == 旧 layout offset=1 的 caret，
+     * 而非新 layout offset=2 的 caret。fact 到达升级 prepared 后，prepared progress=0 的 caret
+     * 也必须和 pending caret 完全相同，不发生 target→origin 回跳。
+     */
+    @Test
+    fun layoutFirst_caretOrigin_staysOldNotTarget_whenActiveMotionNull() {
+        val layouts = captureLayouts("", "a", "ab")
+        val state = ComposeEditorVisualState(targetId = "737-caret-origin")
+
+        // === 第一笔："" -> "a"（正常完成，建立 baseline）===
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onEditFact(
+            makeInsertIntent(
+                coreTxnId = 1L,
+                baseRev = 0L,
+                newRev = 1L,
+                oldText = "",
+                newText = "a",
+                newRange = TextRange(0, 1),
+                replaceBounds = VisualReplaceBounds(0, 0, 0, 1),
+            ),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        // drain + sample 推进超过 motion duration（默认 100ms = 100_000_000 ns）使 motion finished、
+        // activeMotion 归 null。sampleVisualScene 在 motion finished 时把 restingCaretRect 落到 target
+        // （"a" layout offset=1 的 caret），清 activeMotion。
+        state.drainPendingPatchesAtFrame(0L)
+        state.sampleVisualScene(100L * 1_000_000L) // 100ms，elapsed == duration → finished
+        // 再 sample 一帧确认 activeMotion 已清、restingCaretRect 已落 target
+        state.sampleVisualScene(101L * 1_000_000L)
+        assertNull("第一笔 motion 应已 finished，activeMotion 应为 null", readActiveMotion(state))
+
+        // 旧 layout offset=1 的 caret（第一笔结束位置）— 这是 pending presentation 的期望 originCaret
+        val oldLayoutCaretAt1 = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0).cursorRect(1)
+        // 新 layout offset=2 的 caret — 这是 bug 表现（origin 错跳到 target）
+        val newLayoutCaretAt2 = ComposeLayoutSnapshot(layouts[2], TextRange(2, 2), 0).cursorRect(2)
+        assertNotEquals("旧/新 layout caret 应不同（否则测试无意义）", oldLayoutCaretAt1, newLayoutCaretAt2)
+
+        // === 第二笔 layout-first："a" -> "ab" 的 layout 先到，fact 未到 ===
+        state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
+
+        // 关键断言1：pending presentation 已建立
+        val pending = readPendingPresentation(state)
+        assertNotNull("P2 pending presentation 应已建立", pending)
+
+        // 关键断言2：pending sample 的 caretRect == 旧 layout offset=1 的 caret，
+        // 而非新 layout offset=2 的 caret
+        val snapPending = state.drawSnapshot()
+        assertNotNull(
+            "layout-first 时 motionSample 应非 null（pending presentation）",
+            snapPending.motionSample,
+        )
+        assertEquals(
+            "pending sample caretRect 应停在旧 layout offset=1 的 caret（origin），" +
+                "不能瞬间跳到新 layout offset=2 的 target caret",
+            oldLayoutCaretAt1,
+            snapPending.motionSample!!.caretRect,
+        )
+        assertNotEquals(
+            "pending sample caretRect 不应是新 layout offset=2 的 target caret（bug 表现）",
+            newLayoutCaretAt2,
+            snapPending.motionSample!!.caretRect,
+        )
+
+        // === fact 到达："a" -> "ab" 配对生成 NewPatch，原子升级成 prepared motion ===
+        state.onEditFact(
+            makeInsertIntent(
+                coreTxnId = 2L,
+                baseRev = 1L,
+                newRev = 2L,
+                oldText = "a",
+                newText = "ab",
+                newRange = TextRange(1, 2),
+                replaceBounds = VisualReplaceBounds(1, 1, 1, 2),
+                offsetMap =
+                    VisualOffsetMap(
+                        entries = listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY)),
+                    ),
+            ),
+        )
+        // 关键断言3：fact 到达后 pendingPresentation 清空（升级成 prepared motion）
+        assertNull("fact 到达后 pendingPresentation 应清空（升级成 prepared motion）", readPendingPresentation(state))
+        // 关键断言4：prepared motion progress=0 的 caret 必须和 pending caret 完全相同（不回跳）
+        val snapPrepared = state.drawSnapshot()
+        assertNotNull(
+            "fact 到达后 motionSample 应非 null（prepared motion 接管）",
+            snapPrepared.motionSample,
+        )
+        assertEquals(
+            "prepared motion progress=0 的 caret 必须和 pending caret 完全相同" +
+                "（不发生 target→origin 回跳）",
+            oldLayoutCaretAt1,
+            snapPrepared.motionSample!!.caretRect,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     /** 反射读取 ComposeEditorVisualState 的 private activeMotion 字段。 */
