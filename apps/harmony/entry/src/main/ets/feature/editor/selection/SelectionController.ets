@@ -7,7 +7,7 @@ import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { CaretAffinity } from '../render/editor_layout_math'
-import type { VisualCaretPosition } from '../render/editor_layout_math'
+import { VisualCaretPosition } from '../render/editor_layout_math'
 
 // Issue #629 R10 评论5327548809 第1项：visual hint 绑定完整文本身份。
 // EditorSessionSnapshot 无顶层 compositionGeneration 字段，真实路径是 composition?.generation；

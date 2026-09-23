@@ -15,10 +15,10 @@ import {
   positionForOffsetInLine,
   resolveVisualLineIndex,
 } from '../render/editor_layout_math'
-import type { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
+import { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
 
 import { LineLayoutStore } from './line_layout_store'
-import type { EditorLayoutIdentity } from './editor_layout_identity'
+import { EditorLayoutIdentity } from './editor_layout_identity'
 
 // Issue #629 评论18：NavigationLine 直接复用 LineLayout（已含 breakKind + caretStops）。
 export type NavigationLine = LineLayout

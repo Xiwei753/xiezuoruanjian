@@ -226,7 +226,7 @@ export struct SettingsScreen {
       if (result.success && result.data && result.data.diagnostics) {
         this.syncDiagnostics = result.data.diagnostics
       } else {
-        this.syncDiagnostics = {
+        const diagResult: SyncDiagnosticsResult = {
           success: false,
           backendType: '',
           androidHasInternetPermission: false,
@@ -250,10 +250,11 @@ export struct SettingsScreen {
           transport: '',
           errorCategory: 'unknown',
           userMessage: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error').id)
-        } as SyncDiagnosticsResult
+        }
+        this.syncDiagnostics = diagResult
       }
     } catch (err) {
-      this.syncDiagnostics = {
+      const diagResult: SyncDiagnosticsResult = {
         success: false,
         backendType: '',
         androidHasInternetPermission: false,
@@ -277,7 +278,8 @@ export struct SettingsScreen {
         transport: '',
         errorCategory: 'unknown',
         userMessage: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error_detail').id)
-      } as SyncDiagnosticsResult
+      }
+      this.syncDiagnostics = diagResult
     } finally {
       this.isDiagnosing = false
     }
@@ -436,10 +438,10 @@ export struct SettingsScreen {
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-          Select(this.paletteRecords.map(r => {
+          Select(this.paletteRecords.map((r: ThemePaletteRecordDto): SettingsSelectOption => {
             const date = new Date(r.captured_at_ms)
             const dateStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
-            return { value: `${r.source_device_class} · ${dateStr}`, icon: '' } as SettingsSelectOption
+            return { value: `${r.source_device_class} · ${dateStr}`, icon: '' }
           }))
             .selected(this.getSelectedPaletteIndex())
             .value(this.getSelectedPaletteName())
@@ -684,12 +686,7 @@ export struct SettingsScreen {
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-           Select([
-            { value: 'GitHub', icon: '' },
-            { value: 'GitLab', icon: '' },
-            { value: 'Gitea', icon: '' },
-            { value: getContext(this).resourceManager.getStringSync($r('app.string.custom').id), icon: '' }
-          ] as SettingsSelectOption[])
+           Select(this.getSyncProviderOptions())
             .selected(this.getSyncProviderIndex())
             .value(this.getSyncProviderName())
             .onSelect((index: number) => {
@@ -1027,6 +1024,16 @@ export struct SettingsScreen {
     return this.builtinThemes.map((theme: BuiltinThemeDto): SettingsSelectOption => {
       return { value: theme.name, icon: '' }
     })
+  }
+
+  // 同步方式选项（GitHub→GitLab→Gitea→自定义），显式 SettingsSelectOption[] 类型
+  getSyncProviderOptions(): SettingsSelectOption[] {
+    return [
+      { value: 'GitHub', icon: '' },
+      { value: 'GitLab', icon: '' },
+      { value: 'Gitea', icon: '' },
+      { value: getContext(this).resourceManager.getStringSync($r('app.string.custom').id), icon: '' }
+    ]
   }
 
   // 主题选项顺序：system→light→dark
