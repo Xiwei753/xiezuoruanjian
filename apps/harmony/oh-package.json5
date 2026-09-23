@@ -7,7 +7,6 @@
   "author": "",
   "license": "Apache-2.0",
   "devDependencies": {
-    "@ohos/hvigor-ohos-plugin": "6.26.2",
     "@ohos/hypium": "1.0.18"
   }
 }

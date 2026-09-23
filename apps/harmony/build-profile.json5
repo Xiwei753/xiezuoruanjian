@@ -1,55 +1,55 @@
 {
-  "app": {
-    "signingConfigs": [
+  app: {
+    signingConfigs: [
       {
-        "name": "default",
-        "type": "HarmonyOS",
-        "material": {
-          "storeFile": "",
-          "storePassword": "",
-          "keyAlias": "debugKey",
-          "keyPassword": "",
-          "signAlg": "SHA256withECDSA",
-          "profile": "",
-          "certpath": ""
-        }
-      }
-    ],
-    "products": [
-      {
-        "name": "default",
-        "signingConfig": "default",
-        "compatibleSdkVersion": "5.0.0(12)",
-        "runtimeOS": "HarmonyOS",
-        "buildOption": {
-          "strictMode": {
-            "caseSensitiveCheck": true
-          }
+        name: 'default',
+        type: 'HarmonyOS',
+        material: {
+          certpath: '/home/xiwei/.ohos/config/default_harmony_1mJ3Dtjr2gGj5xDmnSO1ahSHqjbdr1ZRxaftVoykJrI=.cer',
+          keyAlias: 'debugKey',
+          keyPassword: '0000001a3cbc67eff3465228d971b6c509725d15aba1f86821ecd9a61856cef388751c42a41cdcd6cac3',
+          profile: '/home/xiwei/.ohos/config/default_harmony_1mJ3Dtjr2gGj5xDmnSO1ahSHqjbdr1ZRxaftVoykJrI=.p7b',
+          signAlg: 'SHA256withECDSA',
+          storeFile: '/home/xiwei/.ohos/config/default_harmony_1mJ3Dtjr2gGj5xDmnSO1ahSHqjbdr1ZRxaftVoykJrI=.p12',
+          storePassword: '0000001a3cbc67eff3465228d971b6c509725d15aba1f86821ecd9a61856cef388751c42a41cdcd6cac3',
         },
-        "targetSdkVersion": "26.0.0"
-      }
+      },
     ],
-    "buildModeSet": [
+    products: [
       {
-        "name": "debug"
+        name: 'default',
+        signingConfig: 'default',
+        compatibleSdkVersion: '5.0.0(12)',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          strictMode: {
+            caseSensitiveCheck: true,
+          },
+        },
+        targetSdkVersion: '26.0.0',
+      },
+    ],
+    buildModeSet: [
+      {
+        name: 'debug',
       },
       {
-        "name": "release"
-      }
-    ]
+        name: 'release',
+      },
+    ],
   },
-  "modules": [
+  modules: [
     {
-      "name": "entry",
-      "srcPath": "./entry",
-      "targets": [
+      name: 'entry',
+      srcPath: './entry',
+      targets: [
         {
-          "name": "default",
-          "applyToProducts": [
-            "default"
-          ]
-        }
-      ]
-    }
-  ]
+          name: 'default',
+          applyToProducts: [
+            'default',
+          ],
+        },
+      ],
+    },
+  ],
 }

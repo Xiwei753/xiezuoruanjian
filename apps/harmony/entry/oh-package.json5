@@ -4,8 +4,5 @@
   "description": "entry module",
   "main": "",
   "author": "",
-  "license": "Apache-2.0",
-  "devDependencies": {
-    "@ohos/hvigor-ohos-plugin": "6.26.2"
-  }
+  "license": "Apache-2.0"
 }
