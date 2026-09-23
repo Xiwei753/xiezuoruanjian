@@ -149,7 +149,7 @@
 - Kit：`@kit.ArkUI`（组件 `TouchEvent`，即 `.onTouch` 回调传入的事件）
 - 接口：
   - ArkUI 组件 `TouchEvent`（`extends BaseEvent`）
-  - `event.sourceTool` / `SourceTool` 枚举识别笔类工具（`SourceTool.Pen`）
+  - `event.sourceTool` / `SourceTool` 枚举识别笔类工具（当前 SDK 只有 `SourceTool.Pen`；`Rubber/Brush/Pencil/Airbrush` 尚未在 `SourceTool` 中定义）
   - 坐标来自 `event.touches[0].x / y`
   - 压力和倾斜来自事件级 `event.pressure / event.tiltX / event.tiltY`（BaseEvent 字段）
   - 时间戳 `event.timestamp`

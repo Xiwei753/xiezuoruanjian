@@ -21,7 +21,7 @@ export interface PlatformStylusEvent {
 
 // 笔能力三态（Issue #629 评论6 第6部分）：
 // - unknown：未探测过，或系统只能在真实笔事件到来后确认（HarmonyOS 无主动 Pen 能力查询 API）
-// - supported：收到过真实笔事件（event.sourceTool === SourceTool.Pen）
+// - supported：收到过真实笔事件（event.sourceTool === SourceTool.Pen；当前 SDK SourceTool 只有 Pen 是笔类值）
 // - unsupported：明确确认不支持（这轮无可靠主动 API 设此态，保留给未来 Pen Kit 探测）
 //
 // 不再从 InputDevice.sources 查 'stylus'——'stylus' 不是真实 SourceType
@@ -67,7 +67,7 @@ export class StylusInputService {
   // 不查 sources.includes('stylus')——'stylus' 不是真实 SourceType（真实的是
   // keyboard/mouse/touchpad/touchscreen/joystick/trackball）。
   // HarmonyOS 没有可靠的主动 API 查询"是否支持笔输入"：Pen 能力从真实 ArkUI TouchEvent 的
-  // sourceTool 字段识别（event.sourceTool === SourceTool.Pen）。
+  // sourceTool 字段识别（event.sourceTool === SourceTool.Pen；当前 SDK SourceTool 只有 Pen 是笔类值）。
   // 系统只能在真实笔事件到来后确认，所以 detectSupport 不主动置 'supported'，
   // 也不主动置 'unsupported'（没有可靠 API 证明"不支持"）。
   // 若已通过 normalizeStylusEvent 收到过真实笔事件，保持 'supported'；否则保持 'unknown'。
@@ -79,7 +79,10 @@ export class StylusInputService {
   }
 
   // 唯一的笔工具判断入口。统一按 ArkUI event.sourceTool 判断，不再读 touches[0].toolType，也不写魔法数字。
-  // ArkUI SourceTool 枚举当前只有 Pen 是笔类值（Unknown/Finger/MOUSE/TOUCHPAD/JOYSTICK 都不是笔）。
+  // Issue #743 要求使用 ArkUI SourceTool 枚举识别笔类工具：Pen / Rubber / Brush / Pencil / Airbrush。
+  // 当前 SDK 的 SourceTool 枚举只有 Pen 是笔类值（Unknown/Finger/MOUSE/TOUCHPAD/JOYSTICK 都不是笔）；
+  // Rubber/Brush/Pencil/Airbrush 尚未在 SourceTool 中定义（它们是 @kit.InputKit ToolType 的值，
+  // 但本轮已删除 @kit.InputKit 依赖）。若未来 SDK 扩展 SourceTool，需在此扩展判断。
   // 手指等其他来源返回 false。
   isStylusEvent(event: TouchEvent): boolean {
     return event.sourceTool === SourceTool.Pen
@@ -99,9 +102,9 @@ export class StylusInputService {
       return null
     }
     const primary: TouchObject = touches[0]
-    // 橡皮擦：当前 ArkUI SourceTool 只有 Pen，不区分橡皮擦。
-    // Rubber/Brush/Pencil/Airbrush 是 @kit.InputKit ToolType 的概念，本轮按 Issue #743 删除 @kit.InputKit 依赖，
-    // 统一用 ArkUI SourceTool；当前 SourceTool 不区分橡皮擦，isEraser 暂为 false。
+    // 橡皮擦：Issue #743 要求按 event.sourceTool === SourceTool.Rubber 判断。
+    // 当前 SDK 的 SourceTool 枚举没有 Rubber 值（只有 Unknown/Finger/Pen/MOUSE/TOUCHPAD/JOYSTICK），
+    // 因此当前无法通过 sourceTool 区分橡皮擦。isEraser 暂为 false，待 SDK 扩展 SourceTool 后补充。
     const isEraser: boolean = false
     // 实际收到笔事件，设备必然支持笔输入。
     this.capabilityState = 'supported'
