@@ -52,7 +52,18 @@ pub(crate) fn render_frame(
     // 表达的是"静态正文不能画的区域"（被动画层接管的文档区域）。clip_count > 0 时
     // qt_text_node 不再创建完整正文节点，只按 complement 区间生成 clip+text 节点，
     // 静态层与动画层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
-    if static_text.needs_relayout {
+    //
+    // Issue #736 评论 5786531280: 如果 plan.clip_rects 中存在 snapshot texture miss，
+    // 本帧必须强制重建 static layer。重建时使用已过滤掉 miss clip 的
+    // available_clip_rects，使 canonical 正文同帧恢复。这保证原子关系：
+    // overlay 能画 → static clip 生效；overlay 不能画 → 同帧 static canonical 恢复。
+    let has_unavailable_clip_texture = plan
+        .clip_rects
+        .iter()
+        .any(|cr| !texture_cache.contains_line(&cr.snapshot_id));
+    let should_rebuild_static = static_text.needs_relayout || has_unavailable_clip_texture;
+
+    if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
         if let Some(snapshot) = static_text.layout_snapshot {
             // Issue #658: 按段落分组 VisualLine，每个段落对应一个 cache_idx。

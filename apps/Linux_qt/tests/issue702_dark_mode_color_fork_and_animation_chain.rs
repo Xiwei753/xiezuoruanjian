@@ -202,9 +202,16 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
         !src.contains("needs_relayout || has_animation_clip"),
         "Issue #714 评论 5740007764: 不应再保留 needs_relayout || has_animation_clip 旧条件"
     );
+    // Issue #736 评论 5786531280: 静态层重建条件从单纯的 needs_relayout 改为
+    // should_rebuild_static = needs_relayout || has_unavailable_clip_texture。
+    // texture miss 时也必须同帧重建，使 canonical 正文同帧恢复。
     assert!(
-        src.contains("if static_text.needs_relayout {"),
-        "应只在 needs_relayout 时重建静态节点"
+        src.contains("should_rebuild_static"),
+        "应使用 should_rebuild_static 作为重建条件"
+    );
+    assert!(
+        src.contains("has_unavailable_clip_texture"),
+        "应检查 has_unavailable_clip_texture 以保证 texture miss 同帧恢复 canonical"
     );
     assert!(
         src.contains("plan.clip_rects"),

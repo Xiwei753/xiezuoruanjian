@@ -104,7 +104,10 @@ impl QQuickItem for SujianEditorItem {
         // needs_relayout 由 layout_dirty 控制：正文/字体/宽度变更时为 true，
         // 滚动时为 false（只更新位移矩阵，不重新排版）。
         // scene_dirty 为 true 时强制重建 Scene Graph 节点（如动画裁剪变化）。
-        let needs_relayout = self.layout_dirty || self.scene_dirty;
+        // Issue #736 评论 5786531280: base_needs_relayout 只是基础值，最终传给
+        // static renderer 的 frame_needs_relayout 还需要等 render_plan 构造后
+        // 加入 keys_to_complete / keys_to_cancel 条件，保证完成帧同帧回 canonical。
+        let base_needs_relayout = self.layout_dirty || self.scene_dirty;
         if self.layout_dirty {
             self.layout_dirty = false;
         }
@@ -193,6 +196,16 @@ impl QQuickItem for SujianEditorItem {
                     scroll_y,
                 );
 
+            // Issue #736 评论 5786531280: 在 render_plan 构造之后才计算最终传给
+            // static renderer 的 frame_needs_relayout。完成帧（keys_to_complete 非空）
+            // 或 cancel 帧（keys_to_cancel 非空）必须同帧重建 static layer，按已经
+            // 去掉完成/cancel 事务 clip 的 plan.clip_rects 恢复 canonical 正文，
+            // 不等下一帧 scene_dirty。否则完成帧会出现"glyph 已没了、旧 static clip
+            // 还在"的一帧空洞。
+            let frame_needs_relayout = base_needs_relayout
+                || !render_plan.frame_context.keys_to_complete.is_empty()
+                || !render_plan.frame_context.keys_to_cancel.is_empty();
+
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。
@@ -203,7 +216,7 @@ impl QQuickItem for SujianEditorItem {
                 scroll_y,
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
-                needs_relayout,
+                needs_relayout: frame_needs_relayout,
             };
 
             // Issue #668 评论 5646458592 问题 1: 接住静态正文 rebuild 的成功/失败结果。
@@ -233,7 +246,7 @@ impl QQuickItem for SujianEditorItem {
             // 之后，看到的仍是回写后的状态。
             self.apply_render_plan_cursor_state(&render_plan, frame_now, scroll_y);
 
-            if !static_rebuild_ok && needs_relayout {
+            if !static_rebuild_ok && frame_needs_relayout {
                 self.layout_dirty = true;
                 self.scene_dirty = true;
                 // Issue #677 评论 5653790560: render thread 不再反向排 GUI 线程补建。
@@ -248,7 +261,7 @@ impl QQuickItem for SujianEditorItem {
 
             // 没有准备好的 frame 时，跳过静态正文渲染并请求下一次 GUI 帧准备。
             // 放在 render_frame 之后，避免与 static_text 的不可变借用冲突。
-            if !has_snapshot && needs_relayout {
+            if !has_snapshot && frame_needs_relayout {
                 self.request_frame_update();
             }
 
@@ -312,9 +325,9 @@ impl QQuickItem for SujianEditorItem {
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {
             editor_debug_log(&format!(
-                "sujian_update_paint_node: total_ms={}, needs_relayout={}, dpr={:.2}",
+                "sujian_update_paint_node: total_ms={}, base_needs_relayout={}, dpr={:.2}",
                 total_elapsed.as_millis(),
-                needs_relayout,
+                base_needs_relayout,
                 dpr,
             ));
         }
