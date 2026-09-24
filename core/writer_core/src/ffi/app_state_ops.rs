@@ -1,6 +1,21 @@
 use std::os::raw::c_char;
 
+use serde::Serialize;
+
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
+use crate::api::types::{ProjectSummaryDto, RecentEditDto};
+
+/// 首页/应用态聚合 DTO。
+///
+/// 只组合已有的 canonical DTO（`ProjectSummaryDto` / `RecentEditDto`），
+/// 不在 FFI 手写字段映射。Issue #753：凡是 Core 已有 Serialize DTO 的地方，
+/// 直接序列化 DTO，避免手写 `serde_json::json!` 字段漂移。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppStateSummaryDto {
+    projects: Vec<ProjectSummaryDto>,
+    recent_edit: Option<RecentEditDto>,
+}
 
 /// List all known projects with stats and recent edits.
 ///
@@ -9,37 +24,18 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
     match with_app_service(|svc| {
-        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
+        let projects = svc
+            .list_project_summaries()
+            .map_err(|e| format!("{}", e))?;
         let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
-        let project_jsons: Vec<serde_json::Value> = projects
-            .iter()
-            .map(|p| {
-                let stats = svc.get_project_stats(p.id.clone()).ok();
-                serde_json::json!({
-                    "id": p.id,
-                    "title": p.title,
-                    "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
-                    "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
-                    "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
-                    "createdAt": p.created_at,
-                    "updatedAt": p.updated_at
-                })
-            })
-            .collect();
         // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
         // Core 的 recent_edits.json 仍保留历史/去重能力；get_recent_edits() 通用 API 不变。
-        let recent_json: Option<serde_json::Value> = recent_edits.first().map(|e| {
-            serde_json::json!({
-                "projectId": e.project_id,
-                "volumeId": e.volume_id,
-                "chapterId": e.chapter_id,
-                "timestamp": e.timestamp
-            })
-        });
-        let summary = serde_json::json!({
-            "projects": project_jsons,
-            "recentEdit": recent_json
-        });
+        let recent_edit: Option<RecentEditDto> =
+            recent_edits.into_iter().next().map(RecentEditDto::from);
+        let summary = AppStateSummaryDto {
+            projects,
+            recent_edit,
+        };
         Ok(vec![summary])
     }) {
         Ok(data) => ok_json(data),
@@ -90,36 +86,18 @@ pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_app_state() -> *mut c_char {
     match with_app_service(|svc| {
-        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
+        let projects = svc
+            .list_project_summaries()
+            .map_err(|e| format!("{}", e))?;
         let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
-        let project_jsons: Vec<serde_json::Value> = projects
-            .iter()
-            .map(|p| {
-                let stats = svc.get_project_stats(p.id.clone()).ok();
-                serde_json::json!({
-                    "id": p.id,
-                    "title": p.title,
-                    "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
-                    "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
-                    "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
-                    "createdAt": p.created_at,
-                    "updatedAt": p.updated_at
-                })
-            })
-            .collect();
         // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
-        let recent_json: Option<serde_json::Value> = recent_edits.first().map(|e| {
-            serde_json::json!({
-                "projectId": e.project_id,
-                "volumeId": e.volume_id,
-                "chapterId": e.chapter_id,
-                "timestamp": e.timestamp
-            })
-        });
-        Ok(serde_json::json!({
-            "projects": project_jsons,
-            "recentEdit": recent_json
-        }))
+        let recent_edit: Option<RecentEditDto> =
+            recent_edits.into_iter().next().map(RecentEditDto::from);
+        let summary = AppStateSummaryDto {
+            projects,
+            recent_edit,
+        };
+        Ok(summary)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("APP_STATE_ERROR", &e),
@@ -224,18 +202,8 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
 pub unsafe extern "C" fn writer_core_get_recent_edits() -> *mut c_char {
     match with_app_service(|svc| {
         let edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
-        let json_arr: Vec<serde_json::Value> = edits
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "projectId": e.project_id,
-                    "volumeId": e.volume_id,
-                    "chapterId": e.chapter_id,
-                    "timestamp": e.timestamp
-                })
-            })
-            .collect();
-        Ok(json_arr)
+        let dtos: Vec<RecentEditDto> = edits.into_iter().map(RecentEditDto::from).collect();
+        Ok(dtos)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("IO_READ_ERROR", &e),
