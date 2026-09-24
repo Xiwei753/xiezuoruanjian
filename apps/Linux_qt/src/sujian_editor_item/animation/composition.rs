@@ -15,16 +15,15 @@ use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, SourceRec
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use crate::sujian_editor_item::animation::PreparedVisualUnit;
 use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, TextVisualOperationKind,
-    TextVisualTransactionState, TransactionTimeline,
+    TextVisualOperationKind, TextVisualTransactionState,
 };
 use crate::sujian_editor_item::animation::rebase::{
     match_rebase_frames, PreparedCompositionCommitHandoff,
 };
 use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
 use crate::sujian_editor_item::animation::transaction_builder::{
-    build_cluster_reflow_slices, build_delete_conceal_slices, build_insert_reveal_slices,
-    emit_transaction_diagnostic, unit_kind_labels,
+    assemble_prepared_transaction, build_cluster_reflow_slices, build_delete_conceal_slices,
+    build_insert_reveal_slices, emit_transaction_diagnostic, unit_kind_labels, VisualEditSpec,
 };
 use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::editor_animation_debug_log;
@@ -137,7 +136,7 @@ impl LinuxEditorAnimationCoordinator {
             old_cursor_line_bottom,
             new_cursor_line_top,
             new_cursor_line_bottom,
-            caret_handoff,
+            caret_handoff.clone(),
             unit_duration_ms,
         );
         // Issue #710 评论 5734282079: composition update 的 visual affected range。
@@ -152,25 +151,27 @@ impl LinuxEditorAnimationCoordinator {
             );
             (Some((old_s, old_e)), Some((new_s, new_e)))
         };
-        let prepared = PreparedTextVisualTransaction {
+        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+        let carried_rebase = rebase_frames.len();
+        let prepared = assemble_prepared_transaction(VisualEditSpec {
             key,
-            state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
-            timeline: TransactionTimeline::new(unit_duration_ms),
-            units,
+            old_snapshot: old_snapshot.clone(),
+            new_snapshot: new_snapshot.clone(),
+            inserted_ranges: comp_inserted_ranges,
+            deleted_ranges: comp_deleted_ranges,
             old_cursor_rect,
             new_cursor_rect,
-            cursor_visual_track,
-            cancel_reason: None,
-            texture_prepared: false,
-            old_snapshot: Some(old_snapshot.clone()),
-            new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
-            caret_motion_retired: false,
+            layout_basis_revision,
+            rebase_frames,
+            caret_handoff,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            layout_basis_revision,
-        };
+            units,
+            cursor_visual_track,
+            unit_duration_ms,
+        });
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -178,7 +179,7 @@ impl LinuxEditorAnimationCoordinator {
             "anim_event: key={:?} op=CompositionUpdate unit_kinds={:?} carried_rebase={}",
             key,
             unit_kind_labels(&prepared.units),
-            rebase_frames.len(),
+            carried_rebase,
         ));
 
         self.prepared_queue.enqueue(prepared);
@@ -599,32 +600,34 @@ impl LinuxEditorAnimationCoordinator {
             old_cursor_line_bottom,
             new_cursor_line_top,
             new_cursor_line_bottom,
-            caret_handoff,
+            caret_handoff.clone(),
             unit_duration_ms,
         );
-        let prepared = PreparedTextVisualTransaction {
+        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+        let carried_rebase = rebase_frames.len();
+        let prepared = assemble_prepared_transaction(VisualEditSpec {
             key,
-            state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
-            timeline: TransactionTimeline::new(unit_duration_ms),
-            units,
+            old_snapshot: old_snapshot.clone(),
+            new_snapshot: new_snapshot.clone(),
+            inserted_ranges: vec![(candidate_byte_start, candidate_byte_end)],
+            deleted_ranges: vec![(preedit_byte_start, preedit_byte_end)],
             old_cursor_rect,
             new_cursor_rect,
-            cursor_visual_track,
-            cancel_reason: None,
-            texture_prepared: false,
-            old_snapshot: Some(old_snapshot.clone()),
-            new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
-            caret_motion_retired: false,
+            layout_basis_revision,
+            rebase_frames,
+            caret_handoff,
             // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
             // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
             // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
             // 扩段落得到。
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            layout_basis_revision,
-        };
+            units,
+            cursor_visual_track,
+            unit_duration_ms,
+        });
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -632,7 +635,7 @@ impl LinuxEditorAnimationCoordinator {
             "anim_event: key={:?} op=CompositionCommitOrCancel unit_kinds={:?} carried_rebase={}",
             key,
             unit_kind_labels(&prepared.units),
-            rebase_frames.len(),
+            carried_rebase,
         ));
 
         self.prepared_queue.enqueue(prepared);
