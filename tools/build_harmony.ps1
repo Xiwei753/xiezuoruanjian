@@ -86,45 +86,38 @@ if (Test-Path $oldSo) {
 }
 
 # Configure linker environment variables
+# Issue #750 评论 5805353840：与 tools/build_harmony.sh 对齐。
+# linker 用 clang（不是 ld.lld），RUSTFLAGS 加 --target 和 SONAME，
+# 构建改到 workspace root 用 -p writer-platform-harmony，产物 libwriter_platform_harmony.so。
 $ClangPath = Join-Path $NdkHome "llvm\bin\clang.exe"
 $ArPath = Join-Path $NdkHome "llvm\bin\llvm-ar.exe"
-$LdPath = Join-Path $NdkHome "llvm\bin\ld.lld.exe"
+$ClangTarget = "aarch64-linux-ohos"
 
-$env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER = $LdPath
+$env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER = $ClangPath
 $env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR = $ArPath
-
-# ring and other C deps need CC for cross-compilation
 $env:CC_aarch64_unknown_linux_ohos = $ClangPath
 $env:AR_aarch64_unknown_linux_ohos = $ArPath
 $env:CXX_aarch64_unknown_linux_ohos = (Join-Path $NdkHome "llvm\bin\clang++.exe")
-
-Write-Host "Linker: $LdPath"
-Write-Host "CC: $ClangPath"
-Write-Host "AR: $ArPath"
-Write-Host ""
-
-# Build
-$buildArgs = @("build", "--target", "aarch64-unknown-linux-ohos", "--no-default-features", "--features", "harmony-ffi")
-if ($Release) {
-    $buildArgs += "--release"
-    $profileDir = "release"
-} else {
-    $profileDir = "debug"
-}
 
 # Add sysroot and library search paths for OHOS system libs
 # Use junction path (no spaces) so RUSTFLAGS don't need quoting
 $SysrootDir = Join-Path $NdkHome "sysroot"
 $SysrootLibDir = Join-Path $SysrootDir "usr\lib\aarch64-linux-ohos"
 $LlvmLibDir = Join-Path $NdkHome "llvm\lib\aarch64-linux-ohos"
-$env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS = "-C link-arg=--sysroot=$SysrootDir -C link-arg=-L$SysrootLibDir -C link-arg=-L$LlvmLibDir"
+$env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS = "-C link-arg=--target=$ClangTarget -C link-arg=--sysroot=$SysrootDir -C link-arg=-L$SysrootLibDir -C link-arg=-L$LlvmLibDir -C link-arg=-Wl,-soname,libwriter_core_ffi.so"
 
-Write-Host "cargo $($buildArgs -join ' ')" -ForegroundColor Yellow
+Write-Host "Linker: $ClangPath"
+Write-Host "CC: $ClangPath"
+Write-Host "AR: $ArPath"
 Write-Host ""
 
-Push-Location (Join-Path $WorkspaceRoot "core\writer_core")
+# Build
+Write-Host "cargo build --release --target aarch64-unknown-linux-ohos -p writer-platform-harmony" -ForegroundColor Yellow
+Write-Host ""
+
+Push-Location $WorkspaceRoot
 try {
-    & cargo @buildArgs
+    & cargo build --release --target aarch64-unknown-linux-ohos -p writer-platform-harmony
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Rust FFI build failed" -ForegroundColor Red
         exit 1
@@ -134,7 +127,7 @@ try {
 }
 
 # Copy .so to prebuilt
-$soSource = Join-Path $WorkspaceRoot "target\aarch64-unknown-linux-ohos\$profileDir\libwriter_core.so"
+$soSource = Join-Path $WorkspaceRoot "target\aarch64-unknown-linux-ohos\release\libwriter_platform_harmony.so"
 if (-not (Test-Path $soSource)) {
     Write-Host "ERROR: Build artifact not found: $soSource" -ForegroundColor Red
     exit 1

@@ -26,6 +26,15 @@ import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
+import {
+  EditableLeftIconTypeV2,
+  EditableLeftIconV2,
+  EditableTitleBarV2,
+  EditableTitleV2,
+  EditableTitleBarMenuItemV2,
+  EditableSaveButtonV2,
+  EditableTitleBarStyleV2
+} from '@kit.ArkUI'
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -970,56 +979,39 @@ export struct WritingScreen {
   @Builder
   EditorPane() {
     Column() {
-      // Header
-      Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .fillColor(this.themeConfig.colors.textPrimary)
-          .onClick(() => {
+      // Issue #750 评论 5805353840：改用 API 26 系统编辑标题栏 EditableTitleBarV2，
+      // 不再自绘 Header。返回走 requestLeave() -> safePop() -> leaveGuard，
+      // 与 NavDestination.onBackPressed 保持同一条离开链。
+      EditableTitleBarV2({
+        leftIcon: new EditableLeftIconV2({
+          iconType: EditableLeftIconTypeV2.Back,
+          onAction: () => {
             this.requestLeave()
+          }
+        }),
+        title: new EditableTitleV2({
+          mainTitle: this.chapterTitle,
+          subTitle: getContext(this).resourceManager
+            .getStringSync($r('app.string.word_count_format').id)
+            .replace('%s', String(this.wordCount))
+        }),
+        menuItems: [
+          new EditableTitleBarMenuItemV2({
+            value: $r('sys.symbol.share'),
+            label: $r('app.string.share'),
+            action: () => {
+              this.shareToSystem()
+            }
           })
-
-        Text(this.chapterTitle)
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .margin({ left: 12 })
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-        if (this.saveMessage) {
-          Text(this.saveMessage)
-            .fontSize(12)
-            .fontColor(this.getSaveStatusColor())
-            .margin({ right: 8 })
-        }
-
-        Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${this.wordCount}`))
-          .fontSize(12)
-          .fontColor(this.themeConfig.colors.textSecondary)
-          .margin({ right: 8 })
-
-        Button($r('app.string.save'))
-          .fontSize(14)
-          .height(32)
-          .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
-          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
-          .enabled(!this.isSaving && this.hasUnsavedChanges)
-          .onClick(() => this.saveChapter())
-
-        Button($r('app.string.share'))
-          .fontSize(14)
-          .height(32)
-          .margin({ left: 8 })
-          .backgroundColor(this.themeConfig.colors.secondary)
-          .fontColor(this.themeConfig.colors.onPrimary)
-          .onClick(() => this.shareToSystem())
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 14 })
+        ],
+        saveButton: new EditableSaveButtonV2({
+          isRequired: true,
+          onAction: () => {
+            this.saveChapter()
+          }
+        }),
+        options: new EditableTitleBarStyleV2()
+      })
 
       if (this.isLoading) {
         Column() {
