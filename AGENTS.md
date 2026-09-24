@@ -46,3 +46,10 @@ Rust workspace 以根目录 `Cargo.toml` 为准，不要自行猜 crate 关系�
 python3 tools/check_rust_safety_patterns.py .
 python3 tools/test_check_rust_safety_patterns.py
 ```
+
+仓库级 Harmony 数据契约守卫（Core serde DTO ↔ ArkTS DTO/decoder 字段、可空性、契约层 import）：
+
+```bash
+python3 tools/check_harmony_dto_contract.py .
+python3 tools/test_check_harmony_dto_contract.py
+```
