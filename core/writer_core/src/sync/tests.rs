@@ -2344,6 +2344,73 @@ mod tests {
         );
     }
 
+    /// Issue #757 评论 5819894306：RemoteDeleted + take_remote 后 known_files 必须移除，
+    /// 不能继续 insert —— 否则下一轮 snapshot_local_records_read_only 会把已删除文件
+    /// 当成"known file missing without tombstone"损坏。纯本地 resolve 逻辑，不需要网络。
+    #[test]
+    fn test_resolve_conflict_take_remote_deleted_removes_from_known_files() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        // 先在磁盘创建正文文件，move_to_trash 会把它移到 trash 目录。
+        std::fs::write(&chapter_abs, "local content to be trashed").unwrap();
+
+        let base_hash = "hash_base_A".to_string();
+        let remote_hash = "hash_remote_deleted".to_string();
+
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "remote deleted".to_string(),
+            kind: SyncConflictKind::RemoteDeleted,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // Resolve by taking remote: RemoteDeleted → move local file to trash +
+        // remove from known_files (NOT insert remote_hash).
+        SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "conflicts must be cleared after resolution"
+        );
+        assert!(
+            !state_after.known_files.contains_key(chapter_rel),
+            "known_files must NOT contain the path after RemoteDeleted take_remote \
+             — leaving it would make the next snapshot_local_records_read_only treat \
+             the deleted file as corruption (known file missing without tombstone)"
+        );
+        assert!(
+            !state_after.known_files_updated_at.contains_key(chapter_rel),
+            "known_files_updated_at must NOT contain the path after RemoteDeleted take_remote"
+        );
+        assert!(
+            !chapter_abs.exists(),
+            "local content file must have been moved to trash by move_to_trash"
+        );
+    }
+
     /// P0-1: Test that resolve_conflict_mark_merged properly clears the conflict
     /// and sets known_files to the remote hash so the next sync uploads the merged version.
     #[test]

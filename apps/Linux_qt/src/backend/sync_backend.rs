@@ -470,6 +470,13 @@ impl SyncBackend {
         if envelope.success {
             self.sync_status_changed();
             self.sync_action_completed();
+            // Issue #757 评论 5819894306 第 2 点：take_remote 的 BothChanged 原子替换
+            // 正文、RemoteDeleted 移走正文，当前编辑器仍持有旧正文，需触发
+            // onSync_content_applied 走现有 refreshStateImmediate + reconcileActiveChapter
+            // 链路重载。keep_local / mark_merged 不替换/删除 live 正文，不需要此信号。
+            if action == "take_remote" {
+                self.sync_content_applied();
+            }
         }
         json
     }

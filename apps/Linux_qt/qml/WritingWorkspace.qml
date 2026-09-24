@@ -1223,6 +1223,14 @@ Rectangle {
         } else {
             root.hasConflicts = false;
         }
+        // Issue #757 评论 5819894306 第 3 点：最后一个冲突解决后自动退出冲突 tab。
+        // hasConflicts 为 false 且 drawer 停在冲突 tab 时，切回 tab 0 并关闭 drawer，
+        // 避免落到没有内容的 tab 状态。仍由 WritingWorkspace 统一持有 drawer 状态，
+        // 不让 RightDrawer 自己猜外部 drawer 状态。
+        if (!root.hasConflicts && root.drawerTab === rightDrawerRect.conflictTabIdx) {
+            root.drawerTab = 0;
+            root.drawerOpen = false;
+        }
     }
 
     function checkConflictsAfterSync() {

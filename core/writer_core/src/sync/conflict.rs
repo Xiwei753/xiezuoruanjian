@@ -339,7 +339,7 @@ impl crate::sync::SyncService {
     ///   更新到 `conflict.remote_hash`。**不再放进 `pending_take_remote`**，不再等
     ///   下一次联网后重新下载一个可能已经变掉的"最新远端"。
     /// - **RemoteDeleted**：接受删除，复用同步引擎 trash 语义把本地文件移入回收区，
-    ///   并把同步基线更新为远端 delete record（known_files 设为 remote_hash）。
+    ///   并从 known_files 移除该路径（manifest 里的远端 delete record 作为同步基线保留）。
     ///   **不放进 `pending_take_remote`**。
     /// - **兼容老数据**：旧冲突记录没有 `kind` 字段（反序列化默认 `BothChanged`）时，
     ///   如果有 `remote_snapshot_path` 就走 BothChanged snapshot 替换；没有 snapshot path
@@ -392,18 +392,19 @@ impl crate::sync::SyncService {
         };
         match conflict.kind {
             SyncConflictKind::RemoteDeleted => {
-                // RemoteDeleted：把本地文件移入 trash，基线更新为远端 delete record。
+                // RemoteDeleted：把本地文件移入 trash，并从 known_files 移除。
+                // 不能继续把已删除路径留在 known_files —— 否则下一轮
+                // snapshot_local_records_read_only 会看到"known file missing
+                // without tombstone"直接返回 Err，把已删除文件当成损坏。
+                // manifest 里的远端 delete record 作为同步基线保留，不在这里动。
+                // conflict / conflicted_files 的清理由外层 resolve_conflict_take_remote
+                // 统一完成（conflicted_files.remove + conflicts.retain）。
                 crate::sync::lww::move_to_trash(
                     sync_root,
                     std::slice::from_ref(&path.to_string()),
                 )?;
-                state
-                    .known_files
-                    .insert(path.to_string(), conflict.remote_hash.clone());
-                let now_ts = chrono::Utc::now().timestamp_millis();
-                state
-                    .known_files_updated_at
-                    .insert(path.to_string(), now_ts);
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
                 Ok(false)
             }
             SyncConflictKind::BothChanged => match &conflict.remote_snapshot_path {
