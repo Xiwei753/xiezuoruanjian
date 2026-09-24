@@ -138,9 +138,8 @@ export class HarmonyDiagnosticsExporter {
   private async collectAttachments(): Promise<AttachmentItem[]> {
     const attachments: AttachmentItem[] = []
 
-    // hilog — 使用 writer_diagnostics 的日志文件作为 hilog.txt 附件。
-    // HarmonyOS @ohos.hilog 没有 getHilogBuffer() API，无法直接获取系统日志缓冲区。
-    // 退而求其次：把 writer_diagnostics 已落盘的日志文件内容作为 hilog.txt 附件。
+    // hilog — 优先使用真实 HiLog snapshot（C++ 层 OH_LOG_SetCallback 环形缓冲），
+    // fallback 到 writer_diagnostics 已落盘的日志文件。
     this.addHilogAttachment(attachments)
 
     // app_settings_sanitized.json
@@ -158,10 +157,17 @@ export class HarmonyDiagnosticsExporter {
     return attachments
   }
 
-  // hilog.txt — writer_diagnostics 日志文件内容。
-  // HarmonyOS @ohos.hilog 没有 getHilogBuffer() API；使用应用自己的诊断日志文件。
+  // hilog.txt — 优先使用真实 HiLog snapshot（通过 NAPI 获取 C++ 层环形缓冲内容）。
+  // 如果 snapshot 为空（callback 未注册或无日志），fallback 到 writer_diagnostics 日志文件。
   private addHilogAttachment(attachments: AttachmentItem[]): void {
     try {
+      // 优先使用真实 HiLog snapshot
+      const hilogContent = this.diagnosticsBridge.getHilogSnapshot()
+      if (hilogContent && hilogContent.length > 0) {
+        attachments.push(this.makeAttachment(ATTACHMENT_HILOG, hilogContent))
+        return
+      }
+      // Fallback: writer_diagnostics 日志文件
       if (this.abilityContext === null) {
         attachments.push(this.errorAttachment(ATTACHMENT_HILOG, 'abilityContext is null'))
         return

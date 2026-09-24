@@ -131,6 +131,10 @@ export class AppContext {
     return this.config.appDataRoot
   }
 
+  getAbilityContext(): common.UIAbilityContext | null {
+    return this.abilityContext
+  }
+
   getBridge(): IWriterCoreBridge {
     return this.bridge
   }

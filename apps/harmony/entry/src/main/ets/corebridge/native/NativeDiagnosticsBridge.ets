@@ -47,4 +47,10 @@ export class NativeDiagnosticsBridge {
   exportDiagnostics(outputDir: string, attachmentsJson: string): string {
     return this.core.getNativeModule().nativeExportDiagnostics(outputDir, attachmentsJson) as string
   }
+
+  // 获取 HiLog 系统日志快照。
+  // 返回当前环形缓冲中的 HiLog 内容字符串；如果 callback 未注册或无日志，返回空字符串。
+  getHilogSnapshot(): string {
+    return this.core.getNativeModule().nativeGetHilogSnapshot() as string
+  }
 }

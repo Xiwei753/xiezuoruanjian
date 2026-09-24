@@ -6,19 +6,7 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
-import { SettingsViewModel } from '../presentation/SettingsViewModel'
-
-// ── 设置分类标识 ──
-type SettingsSectionId =
-  | 'appearance'
-  | 'editor'
-  | 'save'
-  | 'sync'
-  | 'recovery'
-  | 'ai'
-  | 'diagnostics'
-  | 'laboratory'
-  | 'about'
+import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 
 // ── 设置分组标识 ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -118,14 +106,8 @@ export struct SettingsScreen {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
-    // 初始化展开状态 — 默认全部收起
-    const allSections: SettingsSectionId[] = [
-      'appearance', 'editor', 'save', 'sync', 'recovery',
-      'ai', 'diagnostics', 'laboratory', 'about'
-    ]
-    for (const section of allSections) {
-      this.expandedSections.set(section, false)
-    }
+    // 从 ViewModel 恢复展开状态（ViewModel 持久保留，重新进入设置页时不重置）
+    this.expandedSections = new Map<SettingsSectionId, boolean>(this.viewModel.getExpandedSections())
 
     // 加载数据
     this.loadData()
@@ -223,11 +205,10 @@ export struct SettingsScreen {
   }
 
   // ── 切换分类展开/收起 ──
-  // ArkUI V2 @Local 观察赋值，Map.set() 不触发更新，需创建新 Map 引用。
+  // 状态持久保留在 ViewModel 中；@Local Map 创建新引用以触发 V2 观察更新。
   toggleSection(section: SettingsSectionId): void {
-    const newMap = new Map<SettingsSectionId, boolean>(this.expandedSections)
-    newMap.set(section, !newMap.get(section))
-    this.expandedSections = newMap
+    this.viewModel.toggleSection(section)
+    this.expandedSections = new Map<SettingsSectionId, boolean>(this.viewModel.getExpandedSections())
   }
 
   isSectionExpanded(section: SettingsSectionId): boolean {

@@ -1,10 +1,13 @@
 // ProjectWorkspaceViewModel — 作品工作区 ViewModel。
-// 从 WorkspaceScreen.ets 抽离的 Core/NAPI 调用、async 加载、CRUD 操作和状态管理。
-// ViewModel 是纯逻辑类，不绑定 ArkUI 装饰器；页面状态对象使用 V2 状态管理（@ObservedV2 + @Trace）。
-// Core DTO / NAPI DTO 不绑定 ArkUI 装饰器，由 ViewModel 转成页面状态对象供 UI 消费。
+// Issue #760 评论 5821290182 问题5+7：
+// - ViewModel 改为 @ObservedV2，所有页面观察的状态字段加 @Trace
+// - 加载 ScreenPolicy，暴露排序后的 Context actions 供 UI 渲染菜单
+// - Rename 接 bridge.renameVolume/renameChapter，Delete 按 requiresConfirmation 决定是否弹确认框
+// - 页面不再维护 @State 副本，直接观察 ViewModel 的 @Trace 字段
 
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { Project, VolumeTree, ChapterMeta, ProjectTree } from '../../../corebridge/dto/ProjectDtos'
+import { Project, VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
+import { ScreenPolicy, ScreenRole, ActionSlot, ActionTarget, ActionRegion } from '../../../corebridge/dto/PlatformDtos'
 import { getBridge } from '../../../app/AppContext'
 
 // ─── 页面状态对象（V2 状态管理） ───
@@ -31,31 +34,65 @@ export class VolumeCardState {
   @Trace chapters: ChapterRowState[] = []
 }
 
-// ─── ViewModel（纯逻辑类，不绑定 ArkUI 装饰器） ───
+/** 重命名目标类型 */
+export type RenameTargetType = 'volume' | 'chapter'
+
+/** 重命名目标 — 包含类型、ID 和当前名称 */
+@ObservedV2
+export class RenameTarget {
+  @Trace type: RenameTargetType = 'volume'
+  @Trace id: string = ''
+  @Trace currentName: string = ''
+}
+
+/** 删除目标 — 包含类型、ID、名称和是否需要确认 */
+@ObservedV2
+export class DeleteTarget {
+  @Trace type: RenameTargetType = 'volume'
+  @Trace id: string = ''
+  @Trace name: string = ''
+  @Trace requiresConfirmation: boolean = true
+}
+
+// ─── ViewModel（@ObservedV2，页面直接观察 @Trace 字段） ───
 
 /**
  * ProjectWorkspaceViewModel — 作品工作区状态与业务逻辑管理器。
  *
  * 职责：
- * - 加载项目树（getProjectTree）
- * - 创建/删除卷和章节（createVolume / createChapter / deleteVolume / deleteChapter）
+ * - 加载项目树（getProjectTree）和页面策略（resolveScreenPolicy）
+ * - 创建/删除/重命名卷和章节
  * - 管理 expandedVolumes 展开状态
  * - 将 Core DTO（VolumeTree / ChapterMeta）转换为页面状态对象（VolumeCardState / ChapterRowState）
- * - 管理 loading / error 状态
+ * - 管理 loading / error / rename / delete / sync 状态
+ * - 暴露排序后的 Context actions 供 UI 按 action slot 渲染菜单
  *
  * 不负责：
  * - UI 渲染、导航、AlertDialog、Menu 组件
  * - 资源字符串本地化（由 UI 层处理）
  */
+@ObservedV2
 export class ProjectWorkspaceViewModel {
   private bridge: IWriterCoreBridge = getBridge()
-  private projectId: string = ''
-  private project: Project | null = null
-  private volumeTrees: VolumeTree[] = []
-  private volumeCardStates: VolumeCardState[] = []
-  private isLoadingState: boolean = true
-  private errorMessageState: string = ''
-  private expandedVolumes: Set<string> = new Set()
+
+  // ─── 页面观察的状态字段（@Trace） ───
+  @Trace project: Project | null = null
+  @Trace volumeTrees: VolumeTree[] = []
+  @Trace volumeCardStates: VolumeCardState[] = []
+  @Trace isLoadingState: boolean = true
+  @Trace errorMessageState: string = ''
+  @Trace expandedVolumes: Set<string> = new Set()
+  @Trace screenPolicy: ScreenPolicy | null = null
+  @Trace renameTarget: RenameTarget | null = null
+  @Trace renameInput: string = ''
+  @Trace deleteTarget: DeleteTarget | null = null
+  @Trace isSyncing: boolean = false
+  @Trace syncMessage: string = ''
+  @Trace projectId: string = ''
+  @Trace projectName: string = ''
+  // 当前更多菜单上下文 — 用于 @Builder 无参数方法访问正确的 volumeId/chapterId
+  @Trace currentMenuVolumeId: string = ''
+  @Trace currentMenuChapterId: string = ''
 
   // ─── 数据加载 ───
 
@@ -72,10 +109,18 @@ export class ProjectWorkspaceViewModel {
         this.volumeCardStates = this.convertToCardStates(this.volumeTrees)
         // 默认展开第一个卷
         if (this.volumeCardStates.length > 0) {
-          this.expandedVolumes.add(this.volumeCardStates[0].volumeId)
+          const newSet = new Set<string>()
+          newSet.add(this.volumeCardStates[0].volumeId)
+          this.expandedVolumes = newSet
         }
       } else {
         this.errorMessageState = '加载项目失败'
+      }
+
+      // 加载页面策略（ScreenPolicy）
+      const policyResult = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectWorkspace)
+      if (policyResult.success && policyResult.data) {
+        this.screenPolicy = policyResult.data
       }
     } catch (_err) {
       this.errorMessageState = '加载项目时发生错误'
@@ -88,30 +133,32 @@ export class ProjectWorkspaceViewModel {
     await this.loadData(this.projectId)
   }
 
-  // ─── 数据访问 ───
+  // ─── ScreenPolicy / Context Actions ───
 
-  getProject(): Project | null {
-    return this.project
+  /** 获取指定目标的排序后 Context actions（供 UI 按 action slot 渲染菜单） */
+  getContextActions(target: ActionTarget): ActionSlot[] {
+    if (!this.screenPolicy) {
+      return []
+    }
+    const actions: ActionSlot[] = []
+    for (const slot of this.screenPolicy.actionSlots) {
+      if (slot.region === ActionRegion.Context && slot.target === target) {
+        actions.push(slot)
+      }
+    }
+    actions.sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+    return actions
   }
 
-  getVolumeTrees(): VolumeTree[] {
-    return this.volumeTrees
-  }
-
-  getVolumeCardStates(): VolumeCardState[] {
-    return this.volumeCardStates
-  }
-
-  isLoading(): boolean {
-    return this.isLoadingState
-  }
-
-  getErrorMessage(): string {
-    return this.errorMessageState
-  }
-
-  getProjectId(): string {
-    return this.projectId
+  /** 查找指定目标和角色的 ActionSlot（用于获取 requiresConfirmation 等属性） */
+  findContextAction(target: ActionTarget, role: string): ActionSlot | null {
+    const actions = this.getContextActions(target)
+    for (const slot of actions) {
+      if (slot.role === role) {
+        return slot
+      }
+    }
+    return null
   }
 
   // ─── 展开状态管理 ───
@@ -121,15 +168,13 @@ export class ProjectWorkspaceViewModel {
   }
 
   toggleVolume(volumeId: string): void {
-    if (this.expandedVolumes.has(volumeId)) {
-      this.expandedVolumes.delete(volumeId)
+    const newSet = new Set<string>(this.expandedVolumes)
+    if (newSet.has(volumeId)) {
+      newSet.delete(volumeId)
     } else {
-      this.expandedVolumes.add(volumeId)
+      newSet.add(volumeId)
     }
-  }
-
-  getExpandedVolumes(): Set<string> {
-    return this.expandedVolumes
+    this.expandedVolumes = newSet
   }
 
   // ─── CRUD 操作 ───
@@ -184,6 +229,175 @@ export class ProjectWorkspaceViewModel {
       console.error('Failed to delete chapter:', _err)
     }
     return false
+  }
+
+  async renameVolume(volumeId: string, newName: string): Promise<boolean> {
+    try {
+      const result = await this.bridge.renameVolume(this.projectId, volumeId, newName)
+      if (result.success) {
+        await this.loadData(this.projectId)
+        return true
+      }
+    } catch (_err) {
+      console.error('Failed to rename volume:', _err)
+    }
+    return false
+  }
+
+  async renameChapter(chapterId: string, newName: string): Promise<boolean> {
+    try {
+      const result = await this.bridge.renameChapter(chapterId, newName)
+      if (result.success) {
+        await this.loadData(this.projectId)
+        return true
+      }
+    } catch (_err) {
+      console.error('Failed to rename chapter:', _err)
+    }
+    return false
+  }
+
+  // ─── 重命名对话框状态管理 ───
+
+  /** 开始重命名卷 — 设置 renameTarget 和 renameInput */
+  startRenameVolume(volumeId: string): void {
+    let currentName = ''
+    for (const card of this.volumeCardStates) {
+      if (card.volumeId === volumeId) {
+        currentName = card.volumeTitle
+        break
+      }
+    }
+    const target = new RenameTarget()
+    target.type = 'volume'
+    target.id = volumeId
+    target.currentName = currentName
+    this.renameTarget = target
+    this.renameInput = currentName
+  }
+
+  /** 开始重命名章节 — 设置 renameTarget 和 renameInput */
+  startRenameChapter(chapterId: string): void {
+    let currentName = ''
+    for (const card of this.volumeCardStates) {
+      for (const ch of card.chapters) {
+        if (ch.chapterId === chapterId) {
+          currentName = ch.chapterTitle
+          break
+        }
+      }
+    }
+    const target = new RenameTarget()
+    target.type = 'chapter'
+    target.id = chapterId
+    target.currentName = currentName
+    this.renameTarget = target
+    this.renameInput = currentName
+  }
+
+  /** 确认重命名 — 调用 bridge 方法并清除对话框状态 */
+  async confirmRename(): Promise<void> {
+    if (this.renameTarget && this.renameInput.trim().length > 0) {
+      if (this.renameTarget.type === 'volume') {
+        await this.renameVolume(this.renameTarget.id, this.renameInput.trim())
+      } else {
+        await this.renameChapter(this.renameTarget.id, this.renameInput.trim())
+      }
+    }
+    this.renameTarget = null
+    this.renameInput = ''
+  }
+
+  /** 取消重命名 — 清除对话框状态 */
+  cancelRename(): void {
+    this.renameTarget = null
+    this.renameInput = ''
+  }
+
+  // ─── 删除确认状态管理 ───
+
+  /** 开始删除卷 — 根据 requiresConfirmation 决定是否弹确认框 */
+  startDeleteVolume(volumeId: string, requiresConfirmation: boolean): void {
+    if (!requiresConfirmation) {
+      // 不需要确认，直接删除
+      this.deleteVolume(volumeId)
+      return
+    }
+    // 需要确认，设置 deleteTarget 触发确认对话框
+    let name = ''
+    for (const card of this.volumeCardStates) {
+      if (card.volumeId === volumeId) {
+        name = card.volumeTitle
+        break
+      }
+    }
+    const target = new DeleteTarget()
+    target.type = 'volume'
+    target.id = volumeId
+    target.name = name
+    target.requiresConfirmation = true
+    this.deleteTarget = target
+  }
+
+  /** 开始删除章节 — 根据 requiresConfirmation 决定是否弹确认框 */
+  startDeleteChapter(chapterId: string, requiresConfirmation: boolean): void {
+    if (!requiresConfirmation) {
+      // 不需要确认，直接删除
+      this.deleteChapter(chapterId)
+      return
+    }
+    // 需要确认，设置 deleteTarget 触发确认对话框
+    let name = ''
+    for (const card of this.volumeCardStates) {
+      for (const ch of card.chapters) {
+        if (ch.chapterId === chapterId) {
+          name = ch.chapterTitle
+          break
+        }
+      }
+    }
+    const target = new DeleteTarget()
+    target.type = 'chapter'
+    target.id = chapterId
+    target.name = name
+    target.requiresConfirmation = true
+    this.deleteTarget = target
+  }
+
+  /** 确认删除 — 调用 bridge 方法并清除对话框状态 */
+  async confirmDelete(): Promise<void> {
+    if (this.deleteTarget) {
+      if (this.deleteTarget.type === 'volume') {
+        await this.deleteVolume(this.deleteTarget.id)
+      } else {
+        await this.deleteChapter(this.deleteTarget.id)
+      }
+    }
+    this.deleteTarget = null
+  }
+
+  /** 取消删除 — 清除对话框状态 */
+  cancelDelete(): void {
+    this.deleteTarget = null
+  }
+
+  // ─── 同步 ───
+
+  async performSync(): Promise<void> {
+    this.isSyncing = true
+    this.syncMessage = ''
+    try {
+      const result = await this.bridge.performSync()
+      if (result.success) {
+        this.syncMessage = '同步完成'
+      } else {
+        this.syncMessage = '同步失败'
+      }
+    } catch (_err) {
+      this.syncMessage = '同步时发生错误'
+    } finally {
+      this.isSyncing = false
+    }
   }
 
   // ─── Core DTO → 页面状态对象转换 ───

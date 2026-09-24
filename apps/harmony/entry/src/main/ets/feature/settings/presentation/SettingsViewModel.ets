@@ -3,19 +3,35 @@
 // 页面只调 ViewModel 暴露的接口，不直接接触 bridge/native。
 
 import hilog from '@ohos.hilog'
+import deviceInfo from '@ohos.deviceInfo'
+import i18n from '@ohos.i18n'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeMode, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
-import { getBridge } from '../../../app/AppContext'
+import { getAppContext } from '../../../app/AppContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
+import { HarmonyDiagnosticsExporter } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
 
+// 设置分类标识 — 从 SettingsScreen 移入 ViewModel，供折叠状态管理使用。
+export type SettingsSectionId =
+  | 'appearance'
+  | 'editor'
+  | 'save'
+  | 'sync'
+  | 'recovery'
+  | 'ai'
+  | 'diagnostics'
+  | 'laboratory'
+  | 'about'
+
 export class SettingsViewModel {
-  private bridge: IWriterCoreBridge = getBridge()
+  private bridge: IWriterCoreBridge = getAppContext().getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+  private diagnosticsExporter: HarmonyDiagnosticsExporter | null = null
 
   // 状态字段
   private settings: LocalSettings = {
@@ -56,6 +72,23 @@ export class SettingsViewModel {
   private saveMessage: string = ''
   private syncMessage: string = ''
   private syncDiagnostics: SyncDiagnosticsResult | null = null
+
+  // 诊断配置同步追踪 — 记录上一次同步到 runtime 的值，用于判断是否有变化。
+  private lastSyncedDiagnosticsEnabled: boolean = false
+  private lastSyncedDiagnosticsVerbose: boolean = false
+
+  // 折叠展开状态 — 持久保留在 ViewModel 中，重新进入设置页时恢复。
+  private expandedSections: Map<SettingsSectionId, boolean> = new Map()
+
+  constructor() {
+    const allSections: SettingsSectionId[] = [
+      'appearance', 'editor', 'save', 'sync', 'recovery',
+      'ai', 'diagnostics', 'laboratory', 'about'
+    ]
+    for (const section of allSections) {
+      this.expandedSections.set(section, false)
+    }
+  }
 
   // ── 公共查询接口 ──
 
@@ -101,6 +134,20 @@ export class SettingsViewModel {
 
   getSyncDiagnostics(): SyncDiagnosticsResult | null {
     return this.syncDiagnostics
+  }
+
+  // ── 折叠展开状态管理 ──
+
+  getExpandedSections(): Map<SettingsSectionId, boolean> {
+    return this.expandedSections
+  }
+
+  setSectionExpanded(section: SettingsSectionId, expanded: boolean): void {
+    this.expandedSections.set(section, expanded)
+  }
+
+  toggleSection(section: SettingsSectionId): void {
+    this.expandedSections.set(section, !this.expandedSections.get(section))
   }
 
   // ── 加载数据 ──
@@ -153,6 +200,18 @@ export class SettingsViewModel {
       if (syncConfigResult.success && syncConfigResult.data) {
         this.syncConfig = syncConfigResult.data
       }
+
+      // 加载设置后，把当前诊断配置同步一次到底层 runtime。
+      try {
+        await this.bridge.setDiagnosticsConfig(
+          this.settings.diagnosticsEnabled,
+          this.settings.diagnosticsVerbose
+        )
+        this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
+        this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
+      } catch (_e) {
+        hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on load')
+      }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to load settings: ${err}`)
     } finally {
@@ -183,6 +242,21 @@ export class SettingsViewModel {
           fontFamily: 'HarmonyOS Sans',
           lineHeight: this.settings.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
+
+        // 如果诊断配置有变化，同步到 runtime。
+        if (this.settings.diagnosticsEnabled !== this.lastSyncedDiagnosticsEnabled ||
+          this.settings.diagnosticsVerbose !== this.lastSyncedDiagnosticsVerbose) {
+          try {
+            await this.bridge.setDiagnosticsConfig(
+              this.settings.diagnosticsEnabled,
+              this.settings.diagnosticsVerbose
+            )
+            this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
+            this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
+          } catch (_e) {
+            hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on save')
+          }
+        }
       } else {
         // envelope 只有 errorCode / userMessage（Core 不发明 messageKey / messageArgs）。
         this.saveMessage = `error:${result.errorCode || 'unknown'}`
@@ -302,23 +376,61 @@ export class SettingsViewModel {
     this.settings = updater(this.settings)
   }
 
-  // ── 诊断导出占位方法（Task #7 会补齐具体 bridge 实现） ──
+  // ── 诊断导出 ──
 
   async exportDiagnostics(): Promise<boolean> {
-    // 占位：Task #7 会在此处调用 bridge 的 diagnostics 导出相关方法。
-    hilog.info(DOMAIN, TAG, 'exportDiagnostics placeholder — Task #7 will implement')
-    return false
+    try {
+      if (this.diagnosticsExporter === null) {
+        this.diagnosticsExporter = new HarmonyDiagnosticsExporter()
+        const context = getAppContext().getAbilityContext()
+        if (context !== null) {
+          this.diagnosticsExporter.setAbilityContext(context)
+        }
+      }
+      return await this.diagnosticsExporter.exportAndShare()
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `exportDiagnostics failed: ${err}`)
+      return false
+    }
   }
+
+  // ── 清空诊断日志 ──
 
   async clearLogs(): Promise<boolean> {
-    // 占位：Task #7 会在此处调用 bridge 的 diagnostics 清空日志相关方法。
-    hilog.info(DOMAIN, TAG, 'clearLogs placeholder — Task #7 will implement')
-    return false
+    try {
+      const result = await this.bridge.clearDiagnostics()
+      return result.success
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `clearLogs failed: ${err}`)
+      return false
+    }
   }
 
+  // ── 获取设备信息 JSON ──
+  // 参考 HarmonyDiagnosticsExporter.addCurrentDeviceAttachment() 的设备信息收集逻辑。
+
   getDeviceInfoJson(): string {
-    // 占位：Task #7 会在此处调用 bridge 的 diagnostics 设备信息相关方法。
-    hilog.info(DOMAIN, TAG, 'getDeviceInfoJson placeholder — Task #7 will implement')
-    return '{}'
+    try {
+      const info: Record<string, Object> = {
+        'platform': 'harmony',
+        'deviceType': deviceInfo.deviceType,
+        'manufacture': deviceInfo.manufacture,
+        'brand': deviceInfo.brand,
+        'productModel': deviceInfo.productModel,
+        'productSeries': deviceInfo.productSeries,
+        'softwareVersion': deviceInfo.softwareVersion,
+        'apiVersion': deviceInfo.apiVersion,
+        'buildType': deviceInfo.buildType,
+        'buildVersion': deviceInfo.buildVersion,
+        'securityPatchTag': deviceInfo.securityPatchTag,
+        'abiList': deviceInfo.abiList,
+        'locale': i18n.System.getSystemLanguage(),
+        'timezone': i18n.getTimeZone().getID()
+      }
+      return JSON.stringify(info, null, 2)
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `getDeviceInfoJson failed: ${err}`)
+      return '{}'
+    }
   }
 }

@@ -2,6 +2,7 @@
 // 用 HarmonyOS Navigation 组件 + NavDestination，按 Routes 装载对应 feature/*/ui Screen。
 // 不再用 router 跳转。
 // 导航事务逻辑（意图队列、离开守卫、安全 pop/replace/rebuild）已分离到 NavigationTransactionCoordinator。
+// 窄屏一级壳层（作品/星图/统计底部 Tab Bar）在 compact/single-pane 模式下显示。
 
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from './Routes'
 import hilog from '@ohos.hilog'
@@ -13,12 +14,29 @@ import { SettingsScreen } from '../../feature/settings/ui/SettingsScreen'
 import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
+
+// 一级导航 Tab 索引常量
+const TAB_HOME: number = 0    // 作品
+const TAB_STARMAP: number = 1 // 星图
+const TAB_STATS: number = 2   // 统计
 
 @Component
 export struct AppNavigation {
   @Provide('navPathStack') navPathStack: NavPathStack = new NavPathStack()
   // 当前接续恢复的编辑器状态（selection/cursor/viewport/contentHash），供页面层主动读取。
   @State continuationPayload: ContinuationPayload | null = null
+  // 一级导航当前选中 Tab（0=作品, 1=星图, 2=统计）
+  @State currentTab: number = TAB_HOME
+  // 响应式布局状态（用于判断是否显示底部 Tab Bar）
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
+  // 主题配置（底部 Tab Bar 配色）
+  @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+
+  private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+  private themeObserver: ThemeObserver | null = null
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear(): void {
     // 默认显示 Home。
@@ -29,10 +47,31 @@ export struct AppNavigation {
     NavigationTransactionCoordinator.getInstance().register(this.navPathStack, (payload: ContinuationPayload) => {
       this.applyContinuation(payload)
     })
+
+    // 注册主题观察者，底部 Tab Bar 配色随主题变化。
+    const self = this
+    this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
+      self.themeConfig = theme
+    })
+    this.themeAdapter.addObserver(this.themeObserver!)
+
+    // 注册响应式布局观察者，窗口尺寸变化时更新 adaptiveState（控制 Tab Bar 显隐）。
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
+    // 初始化时同步一次状态。
+    this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
   }
 
   aboutToDisappear(): void {
     NavigationTransactionCoordinator.getInstance().unregister()
+    if (this.themeObserver) {
+      this.themeAdapter.removeObserver(this.themeObserver)
+    }
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
+    }
   }
 
   // 根据接续 payload 重建 NavPathStack 并恢复 selection/cursor/viewport。
@@ -45,6 +84,8 @@ export struct AppNavigation {
       // 清栈到根后按 payload 重建。clear() 清空全部路由，再 push Home 作为根。
       this.navPathStack.clear()
       this.navPathStack.pushPath({ name: Routes.Home })
+      // 接续恢复始终回到 Home tab。
+      this.currentTab = TAB_HOME
 
       const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
       const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
@@ -87,6 +128,24 @@ export struct AppNavigation {
     })
   }
 
+  // 切换一级导航 Tab：清空 navPathStack 并 push 对应根页面。
+  // 这样 StarMap/Stats 就有了一级壳层，不再是 pushPath 进入的二级页面。
+  // 从 StarMap/Stats 页面可以 pushPath 进入其他页面（如 Settings），返回时回到对应的 tab 根页面。
+  private switchToTab(tab: number): void {
+    if (this.currentTab === tab) {
+      return // 已在当前 Tab，不做导航
+    }
+    this.currentTab = tab
+    this.navPathStack.clear()
+    if (tab === TAB_HOME) {
+      this.navPathStack.pushPath({ name: Routes.Home })
+    } else if (tab === TAB_STARMAP) {
+      this.navPathStack.pushPath({ name: Routes.StarMap })
+    } else if (tab === TAB_STATS) {
+      this.navPathStack.pushPath({ name: Routes.Stats })
+    }
+  }
+
   @Builder
   PageMap(name: string) {
     if (name === Routes.Home) {
@@ -105,11 +164,85 @@ export struct AppNavigation {
   }
 
   build() {
-    Navigation(this.navPathStack) {
-      // 内容由 navPathStack 驱动。
+    Column() {
+      // 主内容区 — Navigation（占据剩余空间）
+      Navigation(this.navPathStack) {
+        // 内容由 navPathStack 驱动。
+      }
+      .navDestination(this.PageMap)
+      .mode(NavigationMode.Stack)
+      .hideTitleBar(true)
+      .layoutWeight(1)
+
+      // 底部 Tab Bar — 仅窄屏（!isTwoPane）显示
+      if (!this.adaptiveState.isTwoPane) {
+        this.BottomTabBar()
+      }
     }
-    .navDestination(this.PageMap)
-    .mode(NavigationMode.Stack)
-    .hideTitleBar(true)
+    .width('100%')
+    .height('100%')
+  }
+
+  // ── 底部一级壳层：作品/星图/统计 ──
+  // 三个 tab 共享同一个底部导航栏，点击 tab 切换根页面（不是 pushPath）。
+  // 当前选中 tab 高亮（primary 色），未选中 tab 用 textSecondary 色。
+  @Builder
+  BottomTabBar() {
+    Row() {
+      // 作品 tab
+      Column() {
+        Image($r('app.media.ic_star'))
+          .width(22)
+          .height(22)
+          .fillColor(this.currentTab === TAB_HOME ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+        Text('作品')
+          .fontSize(12)
+          .fontColor(this.currentTab === TAB_HOME ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+          .margin({ top: 4 })
+      }
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        this.switchToTab(TAB_HOME)
+      })
+
+      // 星图 tab
+      Column() {
+        Image($r('app.media.ic_star'))
+          .width(22)
+          .height(22)
+          .fillColor(this.currentTab === TAB_STARMAP ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+        Text('星图')
+          .fontSize(12)
+          .fontColor(this.currentTab === TAB_STARMAP ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+          .margin({ top: 4 })
+      }
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        this.switchToTab(TAB_STARMAP)
+      })
+
+      // 统计 tab
+      Column() {
+        Image($r('sys.media.ohos_ic_public_more'))
+          .width(22)
+          .height(22)
+          .fillColor(this.currentTab === TAB_STATS ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+        Text('统计')
+          .fontSize(12)
+          .fontColor(this.currentTab === TAB_STATS ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+          .margin({ top: 4 })
+      }
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        this.switchToTab(TAB_STATS)
+      })
+    }
+    .width('100%')
+    .height(56)
+    .backgroundColor(this.themeConfig.colors.surface)
+    .shadow({ radius: 4, color: '#1A000000', offsetY: -2 })
   }
 }
