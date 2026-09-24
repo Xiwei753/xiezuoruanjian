@@ -1,4 +1,5 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
+import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -64,6 +65,7 @@ export struct StarMapScreen {
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
 
   aboutToAppear() {
+    hilog.info(0x0000, 'StarMapScreen', 'route name=StarMap')
     const paramsArr = this.navPathStack.getParamByName(Routes.StarMap) as StarMapRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {

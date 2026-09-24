@@ -32,6 +32,7 @@ export struct HomeScreen {
   private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
+    hilog.info(0x0000, 'HomeScreen', 'route name=Home')
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme

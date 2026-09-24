@@ -242,24 +242,6 @@ export class AppNavigationHost {
   }
 }
 
-// Issue #752：RouteLogger — 首帧路标日志组件。
-// ArkTS @Builder 体内不允许直接调用普通函数（hilog.info），
-// 用此组件在 aboutToAppear 里记录 PageMap 实际收到的 route name。
-// build() 渲染零尺寸不可见 Blank，不影响 NavDestination 布局。
-@Component
-struct RouteLogger {
-  @Prop routeName: string
-  aboutToAppear(): void {
-    hilog.info(0x0000, 'AppNavigation', 'PageMap route name=%{public}s', this.routeName)
-  }
-  build() {
-    Blank()
-      .width(0)
-      .height(0)
-      .visibility(Visibility.None)
-  }
-}
-
 @Component
 export struct AppNavigation {
   @Provide('navPathStack') navPathStack: NavPathStack = new NavPathStack()
@@ -335,10 +317,6 @@ export struct AppNavigation {
 
   @Builder
   PageMap(name: string) {
-    // Issue #752：首帧路标日志，记录 PageMap 实际收到的 route name。
-    // ArkTS @Builder 体内不允许直接调用普通函数（hilog.info），
-    // 用 RouteLogger 组件在 aboutToAppear 里记录，build() 渲染零尺寸不可见组件不影响布局。
-    RouteLogger({ routeName: name })
     if (name === Routes.Home) {
       HomeScreen()
     } else if (name === Routes.Workspace) {

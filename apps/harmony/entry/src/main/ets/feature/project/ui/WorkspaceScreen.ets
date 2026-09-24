@@ -1,4 +1,5 @@
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ProjectTree, VolumeTree, ChapterMeta, Project } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -37,6 +38,7 @@ export struct WorkspaceScreen {
   private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
+    hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {

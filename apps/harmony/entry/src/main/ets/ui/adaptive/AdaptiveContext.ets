@@ -91,6 +91,11 @@ export class AdaptiveContext {
       this.readKeyboardVisible()
       this.readFoldPosture()
 
+      // Issue #752 评论 5808818396：先注册窗口尺寸变化监听，再读取当前 windowRect。
+      // 监听先挂上，保证后续尺寸变化不会漏；当前 windowRect 若仍是 0x0 则什么都不提交，
+      // 等已经注册好的监听收到第一组有效尺寸。
+      this.registerWindowSizeChange()
+
       // 读取初始尺寸
       const properties = this.mainWindow.getWindowProperties()
       const rect = properties.windowRect
@@ -107,8 +112,6 @@ export class AdaptiveContext {
         hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp}`)
       }
 
-      // 注册窗口尺寸变化监听
-      this.registerWindowSizeChange()
       // 注册避让区域变化监听（安全区域 + 键盘）
       this.registerAvoidAreaChange()
       // 注册折叠状态变化监听

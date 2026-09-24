@@ -1,3 +1,4 @@
+import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, SyncableSettings, ThemeMode, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
@@ -58,6 +59,7 @@ export struct SettingsScreen {
   private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
+    hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme

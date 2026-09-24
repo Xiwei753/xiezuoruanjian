@@ -1,4 +1,5 @@
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
+import hilog from '@ohos.hilog'
 import { AppNavigationHost } from '../../../app/navigation/AppNavigation'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
@@ -139,6 +140,7 @@ export struct WritingScreen {
   private leaveGuardToken: number = -1
 
   aboutToAppear() {
+    hilog.info(0x0000, 'WritingScreen', 'route name=Writing')
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {

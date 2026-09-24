@@ -2,6 +2,7 @@
 // 数据来自 Core 的 NativeStatsBridge（getWritingStats），仅做 UI 展示，
 // 不复制业务状态机（遵守根 AGENTS.md 平台端边界）。
 
+import hilog from '@ohos.hilog'
 import { NativeStatsBridge } from '../../../corebridge/native/NativeStatsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { WritingStats } from '../../../corebridge/dto/ProjectDtos'
@@ -17,6 +18,7 @@ export struct StatsScreen {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
   aboutToAppear() {
+    hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
     this.loadStats()
   }
 
