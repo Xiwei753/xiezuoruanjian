@@ -53,4 +53,10 @@ export class NativeDiagnosticsBridge {
   getHilogSnapshot(): string {
     return this.core.getNativeModule().nativeGetHilogSnapshot() as string
   }
+
+  // 清空 HiLog 环形缓冲区。
+  // 返回 0 表示成功。
+  clearHilogSnapshot(): number {
+    return this.core.getNativeModule().nativeClearHilogSnapshot() as number
+  }
 }

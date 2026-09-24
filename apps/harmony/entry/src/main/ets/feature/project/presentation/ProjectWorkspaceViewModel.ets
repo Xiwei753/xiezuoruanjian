@@ -257,6 +257,128 @@ export class ProjectWorkspaceViewModel {
     return false
   }
 
+  // ─── 卷/章节排序（MoveEarlier / MoveLater） ───
+
+  /** 将指定卷上移一位（与前一个卷交换顺序） */
+  async moveVolumeEarlier(volumeId: string): Promise<boolean> {
+    const ids: string[] = []
+    for (const card of this.volumeCardStates) {
+      ids.push(card.volumeId)
+    }
+    const index = ids.indexOf(volumeId)
+    if (index <= 0) {
+      return false
+    }
+    // 交换 index 和 index-1
+    const tmp = ids[index]
+    ids[index] = ids[index - 1]
+    ids[index - 1] = tmp
+    try {
+      const result = await this.bridge.reorderVolumes(this.projectId, ids)
+      if (result.success) {
+        await this.loadData(this.projectId)
+        return true
+      }
+    } catch (_err) {
+      console.error('Failed to move volume earlier:', _err)
+    }
+    return false
+  }
+
+  /** 将指定卷下移一位（与后一个卷交换顺序） */
+  async moveVolumeLater(volumeId: string): Promise<boolean> {
+    const ids: string[] = []
+    for (const card of this.volumeCardStates) {
+      ids.push(card.volumeId)
+    }
+    const index = ids.indexOf(volumeId)
+    if (index < 0 || index >= ids.length - 1) {
+      return false
+    }
+    // 交换 index 和 index+1
+    const tmp = ids[index]
+    ids[index] = ids[index + 1]
+    ids[index + 1] = tmp
+    try {
+      const result = await this.bridge.reorderVolumes(this.projectId, ids)
+      if (result.success) {
+        await this.loadData(this.projectId)
+        return true
+      }
+    } catch (_err) {
+      console.error('Failed to move volume later:', _err)
+    }
+    return false
+  }
+
+  /** 将指定章节上移一位（在同一卷内与前一个章节交换顺序） */
+  async moveChapterEarlier(chapterId: string): Promise<boolean> {
+    // 找到 chapterId 所在的 volume 及其在 chapters 中的位置
+    let volumeId: string = ''
+    let chapterIds: string[] = []
+    let chapterIndex: number = -1
+    for (const card of this.volumeCardStates) {
+      const idx = card.chapters.findIndex((ch: ChapterRowState) => ch.chapterId === chapterId)
+      if (idx >= 0) {
+        volumeId = card.volumeId
+        chapterIds = card.chapters.map((ch: ChapterRowState) => ch.chapterId)
+        chapterIndex = idx
+        break
+      }
+    }
+    if (chapterIndex <= 0) {
+      return false
+    }
+    // 交换 chapterIndex 和 chapterIndex-1
+    const tmp = chapterIds[chapterIndex]
+    chapterIds[chapterIndex] = chapterIds[chapterIndex - 1]
+    chapterIds[chapterIndex - 1] = tmp
+    try {
+      const result = await this.bridge.reorderChapters(volumeId, chapterIds)
+      if (result.success) {
+        await this.loadData(this.projectId)
+        return true
+      }
+    } catch (_err) {
+      console.error('Failed to move chapter earlier:', _err)
+    }
+    return false
+  }
+
+  /** 将指定章节下移一位（在同一卷内与后一个章节交换顺序） */
+  async moveChapterLater(chapterId: string): Promise<boolean> {
+    // 找到 chapterId 所在的 volume 及其在 chapters 中的位置
+    let volumeId: string = ''
+    let chapterIds: string[] = []
+    let chapterIndex: number = -1
+    for (const card of this.volumeCardStates) {
+      const idx = card.chapters.findIndex((ch: ChapterRowState) => ch.chapterId === chapterId)
+      if (idx >= 0) {
+        volumeId = card.volumeId
+        chapterIds = card.chapters.map((ch: ChapterRowState) => ch.chapterId)
+        chapterIndex = idx
+        break
+      }
+    }
+    if (chapterIndex < 0 || chapterIndex >= chapterIds.length - 1) {
+      return false
+    }
+    // 交换 chapterIndex 和 chapterIndex+1
+    const tmp = chapterIds[chapterIndex]
+    chapterIds[chapterIndex] = chapterIds[chapterIndex + 1]
+    chapterIds[chapterIndex + 1] = tmp
+    try {
+      const result = await this.bridge.reorderChapters(volumeId, chapterIds)
+      if (result.success) {
+        await this.loadData(this.projectId)
+        return true
+      }
+    } catch (_err) {
+      console.error('Failed to move chapter later:', _err)
+    }
+    return false
+  }
+
   // ─── 重命名对话框状态管理 ───
 
   /** 开始重命名卷 — 设置 renameTarget 和 renameInput */

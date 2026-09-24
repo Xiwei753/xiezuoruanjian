@@ -51,7 +51,7 @@ static void HilogCallback(const LogType type, const LogLevel level, const unsign
     if (len <= 0) {
         return;
     }
-    size_t write_len = static_cast<size_t>(len);
+    size_t write_len = std::min(static_cast<size_t>(len), sizeof(line) - 1);
     if (write_len > HILOG_BUFFER_SIZE) {
         write_len = HILOG_BUFFER_SIZE;  // 单行超长截断
     }
@@ -216,6 +216,9 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
     int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: writer_core_init_diagnostics returned %{public}d", result);
+
+    // 注册 HiLog callback（幂等），确保 onCreate 阶段就开始收集系统日志
+    RegisterHilogCallback();
 
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: FAILED with code %{public}d", result);
@@ -388,6 +391,18 @@ static napi_value NativeGetHilogSnapshot(napi_env env, napi_callback_info info) 
     return result;
 }
 
+// NativeClearHilogSnapshot: 清空 HiLog 环形缓冲区。返回 int32 状态码：
+//   0 = 成功
+static napi_value NativeClearHilogSnapshot(napi_env env, napi_callback_info info) {
+    std::lock_guard<std::mutex> lock(hilog_mutex);
+    hilog_buffer_pos = 0;
+    hilog_buffer_used = 0;
+
+    napi_value ret;
+    napi_create_int32(env, 0, &ret);
+    return ret;
+}
+
 // ── Layout Policy ──
 // NativeResolveLayout: Takes metrics JSON, returns ResultEnvelope<LayoutPolicyDto> JSON.
 static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
@@ -474,6 +489,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetHilogSnapshot", nullptr, NativeGetHilogSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeClearHilogSnapshot", nullptr, NativeClearHilogSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveLayout", nullptr, NativeResolveLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveScreenPolicy", nullptr, NativeResolveScreenPolicy, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeIsAiAvailable", nullptr, NativeIsAiAvailable, nullptr, nullptr, nullptr, napi_default, nullptr},

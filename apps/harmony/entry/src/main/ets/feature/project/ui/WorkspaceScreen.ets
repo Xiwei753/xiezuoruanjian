@@ -149,6 +149,10 @@ export struct WorkspaceScreen {
       this.viewModel.startRenameVolume(volumeId)
     } else if (slot.role === ActionRole.Delete) {
       this.viewModel.startDeleteVolume(volumeId, slot.requiresConfirmation)
+    } else if (slot.role === ActionRole.MoveEarlier) {
+      this.viewModel.moveVolumeEarlier(volumeId)
+    } else if (slot.role === ActionRole.MoveLater) {
+      this.viewModel.moveVolumeLater(volumeId)
     }
   }
 
@@ -159,6 +163,10 @@ export struct WorkspaceScreen {
       this.viewModel.startRenameChapter(chapterId)
     } else if (slot.role === ActionRole.Delete) {
       this.viewModel.startDeleteChapter(chapterId, slot.requiresConfirmation)
+    } else if (slot.role === ActionRole.MoveEarlier) {
+      this.viewModel.moveChapterEarlier(chapterId)
+    } else if (slot.role === ActionRole.MoveLater) {
+      this.viewModel.moveChapterLater(chapterId)
     }
   }
 

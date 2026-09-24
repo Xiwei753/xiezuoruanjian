@@ -3,6 +3,11 @@
 // 不再用 router 跳转。
 // 导航事务逻辑（意图队列、离开守卫、安全 pop/replace/rebuild）已分离到 NavigationTransactionCoordinator。
 // 窄屏一级壳层（作品/星图/统计底部 Tab Bar）在 compact/single-pane 模式下显示。
+//
+// Issue #760 评论 5822350374 问题2：
+// - 底栏根据当前 route 对应的 ScreenRole showPrimaryNavigation 控制显隐
+//   （Home/StarMap/Stats=true，Writing/Settings=false）
+// - Tab 切换统一走 NavigationTransactionCoordinator.safeClearAndRebuild()
 
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from './Routes'
 import hilog from '@ohos.hilog'
@@ -22,6 +27,10 @@ const TAB_HOME: number = 0    // 作品
 const TAB_STARMAP: number = 1 // 星图
 const TAB_STATS: number = 2   // 统计
 
+// Issue #760 评论 5822350374 问题2：根级页面（showPrimaryNavigation=true）集合。
+// 只有这些 route 在窄屏时显示底部一级导航栏；Writing/Settings 等二级页面不显示。
+const ROOT_LEVEL_ROUTES: Set<string> = new Set([Routes.Home, Routes.StarMap, Routes.Stats])
+
 @Component
 export struct AppNavigation {
   @Provide('navPathStack') navPathStack: NavPathStack = new NavPathStack()
@@ -33,6 +42,9 @@ export struct AppNavigation {
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   // 主题配置（底部 Tab Bar 配色）
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  // Issue #760 评论 5822350374 问题2：是否显示底部一级导航栏。
+  // 根级页面（Home/StarMap/Stats）=true，二级页面（Writing/Settings/Workspace）=false。
+  @State showBottomBar: boolean = true
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -86,10 +98,11 @@ export struct AppNavigation {
       this.navPathStack.pushPath({ name: Routes.Home })
       // 接续恢复始终回到 Home tab。
       this.currentTab = TAB_HOME
-
+      // Issue #760 评论 5822350374 问题2：接续恢复后如果导航到了二级页面，隐藏底栏。
       const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
       const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
       const hasVolume: boolean = payload.volumeId !== undefined && payload.volumeId !== ''
+      this.showBottomBar = !hasProject // 只有 Home 根页面时显示底栏
 
       if (hasProject) {
         const wsParam: WorkspaceRouteParams = {
@@ -131,19 +144,22 @@ export struct AppNavigation {
   // 切换一级导航 Tab：清空 navPathStack 并 push 对应根页面。
   // 这样 StarMap/Stats 就有了一级壳层，不再是 pushPath 进入的二级页面。
   // 从 StarMap/Stats 页面可以 pushPath 进入其他页面（如 Settings），返回时回到对应的 tab 根页面。
+  // Issue #760 评论 5822350374 问题2：改用 safeClearAndRebuild，先调 leaveGuard（保存+关闭事务），
+  // guard 成功才 clear + rebuild；失败保持当前页面，不清栈。
   private switchToTab(tab: number): void {
     if (this.currentTab === tab) {
       return // 已在当前 Tab，不做导航
     }
-    this.currentTab = tab
-    this.navPathStack.clear()
-    if (tab === TAB_HOME) {
-      this.navPathStack.pushPath({ name: Routes.Home })
-    } else if (tab === TAB_STARMAP) {
-      this.navPathStack.pushPath({ name: Routes.StarMap })
-    } else if (tab === TAB_STATS) {
-      this.navPathStack.pushPath({ name: Routes.Stats })
-    }
+    const targetRoute: string = tab === TAB_HOME ? Routes.Home
+      : tab === TAB_STARMAP ? Routes.StarMap
+      : Routes.Stats
+    const dedupeKey = `tabSwitch:${targetRoute}`
+    NavigationTransactionCoordinator.getInstance().safeClearAndRebuild(dedupeKey, (): void => {
+      this.currentTab = tab
+      this.showBottomBar = true // 根级页面始终显示底栏
+      this.navPathStack.clear()
+      this.navPathStack.pushPath({ name: targetRoute })
+    })
   }
 
   @Builder
@@ -174,8 +190,9 @@ export struct AppNavigation {
       .hideTitleBar(true)
       .layoutWeight(1)
 
-      // 底部 Tab Bar — 仅窄屏（!isTwoPane）显示
-      if (!this.adaptiveState.isTwoPane) {
+      // 底部 Tab Bar — 仅窄屏（!isTwoPane）且当前页面 showPrimaryNavigation=true 时显示
+      // Issue #760 评论 5822350374 问题2：Writing/Settings 等二级页面不显示底栏
+      if (!this.adaptiveState.isTwoPane && this.showBottomBar) {
         this.BottomTabBar()
       }
     }

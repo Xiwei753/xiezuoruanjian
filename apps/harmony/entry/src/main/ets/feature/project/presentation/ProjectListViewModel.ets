@@ -11,7 +11,7 @@ import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { getBridge, getAppDataRoot, getAppContext } from '../../../app/AppContext'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
 import { HarmonyThemeAdapter } from '../../../ui/theme/HarmonyThemeAdapter'
-import { ScreenPolicy, ScreenRole, ActionSlot, ActionRegion } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenPolicy, ScreenRole, ActionSlot, ActionRegion, ActionTarget } from '../../../corebridge/dto/PlatformDtos'
 
 const TAG = 'ProjectListViewModel'
 const DOMAIN = 0x0000
@@ -30,14 +30,16 @@ export class ProjectListViewModel {
   @Trace isSyncing: boolean = false
   @Trace contextActions: ActionSlot[] = []
   @Trace selectedProjectId: string = ''
+  // 宽屏布局所需字段（Issue #760 评论 5822350374 问题3）
+  @Trace writingStats: WritingStats | null = null
+  @Trace recentEdit: RecentEdit | null = null
+  @Trace nativeStatus: string = ''
+  @Trace appDataRoot: string = ''
+  @Trace currentMenuProjectId: string = ''
 
   // ── 非观察私有字段 ──
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
-  private recentEdit: RecentEdit | null = null
-  private writingStats: WritingStats | null = null
-  private nativeStatus: string = ''
-  private appDataRoot: string = ''
   private screenPolicy: ScreenPolicy | null = null
 
   // ── 初始化+加载 ──
@@ -258,5 +260,78 @@ export class ProjectListViewModel {
 
   async retry(): Promise<void> {
     await this.loadData()
+  }
+
+  // ─── ScreenPolicy / Context Actions ───
+
+  /** 获取指定目标的排序后 Context actions（供 UI 按 action slot 渲染菜单） */
+  getContextActions(target: ActionTarget): ActionSlot[] {
+    if (!this.screenPolicy) {
+      return []
+    }
+    const actions: ActionSlot[] = []
+    for (const slot of this.screenPolicy.actionSlots) {
+      if (slot.region === ActionRegion.Context && slot.target === target) {
+        actions.push(slot)
+      }
+    }
+    actions.sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+    return actions
+  }
+
+  /** 查找指定目标和角色的 ActionSlot（用于获取 requiresConfirmation 等属性） */
+  findContextAction(target: ActionTarget, role: string): ActionSlot | null {
+    const actions = this.getContextActions(target)
+    for (const slot of actions) {
+      if (slot.role === role) {
+        return slot
+      }
+    }
+    return null
+  }
+
+  // ─── 项目 Context Action 处理 ───
+
+  /** 开始重命名项目 */
+  startRenameProject(projectId: string): void {
+    const project = this.projects.find((p: ProjectSummary) => p.id === projectId)
+    if (project) {
+      this.renameTarget = project
+      this.renameInput = project.title
+    }
+  }
+
+  /** 开始删除项目（按 requiresConfirmation 决定是否需要确认对话框） */
+  startDeleteProject(projectId: string, requiresConfirmation: boolean): void {
+    const project = this.projects.find((p: ProjectSummary) => p.id === projectId)
+    if (project) {
+      if (requiresConfirmation) {
+        this.deleteTarget = project
+      } else {
+        // 不需要确认，直接删除
+        this.deleteProject(projectId)
+      }
+    }
+  }
+
+  /** 取消重命名 */
+  cancelRename(): void {
+    this.renameTarget = null
+    this.renameInput = ''
+  }
+
+  /** 确认重命名 */
+  confirmRename(): void {
+    this.onRenameProject()
+  }
+
+  /** 取消删除 */
+  cancelDelete(): void {
+    this.deleteTarget = null
+  }
+
+  /** 确认删除 */
+  confirmDelete(): void {
+    this.onDeleteProject()
   }
 }
