@@ -18,7 +18,7 @@ QtObject {
     id: controller
 
     property var workspaceBackendRef: null
-    property var stateBackendRef: null
+    property var projectBackendRef: null
     property var appBackendRef: null
     property var appState: ({
         hasWorkspace: false,
@@ -46,7 +46,7 @@ QtObject {
         interval: 100
         repeat: false
         onTriggered: {
-            var projectApi = stateBackendRef || appBackendRef;
+            var projectApi = projectBackendRef;
             if (!projectApi) return;
             var state = projectApi.refresh_app_state();
             if (state) applyState(state);
@@ -106,7 +106,7 @@ QtObject {
     }
 
     function refreshStateImmediate(fallbackMessage) {
-        var projectApi = stateBackendRef || appBackendRef;
+        var projectApi = projectBackendRef;
         if (!projectApi) return;
         var state = projectApi.refresh_app_state();
         if (state) applyState(state);
@@ -143,10 +143,9 @@ QtObject {
                         starmapTitle = "";
                         controller.route = "writing";
                         // 如果有章节信息，设置选中章节
-                        if (navState.volumeId && navState.chapterId && editorBackend) {
-                            editorBackend.selected_project_id = navState.projectId;
-                            editorBackend.selected_volume_id = navState.volumeId;
-                            editorBackend.selected_chapter_id = navState.chapterId;
+                        if (navState.volumeId && navState.chapterId && projectBackendRef) {
+                            projectBackendRef.select_chapter(navState.projectId, navState.volumeId, navState.chapterId);
+                            refreshStateImmediate(qsTr("恢复章节状态失败"));
                         }
                     } else {
                         // 章节不存在，退回 hub
@@ -169,8 +168,9 @@ QtObject {
         var workspaceApi = workspaceBackendRef;
         if (!workspaceApi) return;
         var projectId = writingProjectId || "";
-        var volumeId = (editorBackend && editorBackend.selected_volume_id) ? editorBackend.selected_volume_id : "";
-        var chapterId = (editorBackend && editorBackend.selected_chapter_id) ? editorBackend.selected_chapter_id : "";
+        var sel = (appState && appState.selected) ? appState.selected : {};
+        var volumeId = sel.volumeId || "";
+        var chapterId = sel.chapterId || "";
         var smId = starmapId || "";
         workspaceApi.save_last_navigation_state(route, projectId, volumeId, chapterId, smId);
     }

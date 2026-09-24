@@ -360,7 +360,6 @@ impl AppBackend {
         self.current_sync_status = "no_workspace".to_string();
         // Load app-level theme mode even without data root
         self.load_app_theme_mode();
-        self.ai_available_changed();
         false
     }
 

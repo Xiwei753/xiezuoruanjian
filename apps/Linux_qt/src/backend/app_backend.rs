@@ -312,16 +312,6 @@ pub struct AppBackend {
     system_color_scheme_changed: qt_signal!(),
 
     #[allow(dead_code)]
-    ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
-    #[allow(dead_code)] // SAFETY: qmetaobject macro field used by Qt meta-object system
-    #[allow(dead_code)]
-    ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
-    #[allow(dead_code)]
-    ai_enabled_changed: qt_signal!(),
-    #[allow(dead_code)]
-    ai_available_changed: qt_signal!(),
-
-    #[allow(dead_code)]
     query_system_color_scheme: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     apply_window_dark_mode: qt_method!(fn(&mut self, is_dark: bool)),
@@ -669,17 +659,8 @@ impl AppBackend {
         self.current_system_color_scheme.clone().into()
     }
 
-    fn ai_available(&self) -> bool {
-        cfg!(feature = "ai")
-    }
-
-    fn ai_enabled(&self) -> bool {
-        self.current_ai_enabled
-    }
-
     fn set_ai_enabled(&mut self, val: bool) {
         self.current_ai_enabled = val;
-        self.ai_enabled_changed();
     }
 
     // ── Layout Contract ──

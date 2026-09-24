@@ -159,11 +159,12 @@ Rectangle {
     onTreeChanged: populateTreeModel()
     Component.onCompleted: {
         populateTreeModel();
-        if (root.editorBackendRef && root.editorBackendRef.selected_chapter_id) {
+        var sel = (root.appState && root.appState.selected) ? root.appState.selected : null;
+        if (sel && sel.chapterId) {
             root.openChapter(
-                root.editorBackendRef.selected_project_id,
-                root.editorBackendRef.selected_volume_id,
-                root.editorBackendRef.selected_chapter_id,
+                sel.projectId || "",
+                sel.volumeId || "",
+                sel.chapterId,
                 ""
             );
         }

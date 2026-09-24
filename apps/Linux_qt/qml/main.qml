@@ -333,7 +333,7 @@ ApplicationWindow {
     AppController {
         id: appController
         workspaceBackendRef: workspaceBackend
-        stateBackendRef: projectBackend
+        projectBackendRef: projectBackend
         appBackendRef: appBackend
         onErrorRaised: function(message) {
             errorDialog.message = message;
