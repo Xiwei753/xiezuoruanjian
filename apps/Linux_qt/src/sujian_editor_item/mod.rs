@@ -23,11 +23,11 @@
 pub(crate) mod animated_slice;
 pub(crate) mod animation_coordinator;
 pub(crate) mod animation_mode;
-pub(crate) mod buffer;
 pub(crate) mod cursor_animation;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
 pub mod cursor_controller;
 pub(crate) mod edit_motion;
+pub(crate) mod edit_snapshot;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
 pub(crate) mod input_host;
@@ -50,6 +50,7 @@ pub(crate) mod rendering;
 mod runtime_tests;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
+pub(crate) mod text_utils;
 pub(crate) mod text_visual_transaction;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
@@ -62,14 +63,15 @@ use crate::editor::layout::{
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
-use buffer::{
-    byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
-    prev_char_boundary, EditorBuffer, EditorSnapshot,
-};
 use cpp::cpp;
+use edit_snapshot::EditorSnapshot;
 use qmetaobject::prelude::*;
 use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use std::cell::Cell;
+use text_utils::{
+    byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
+    prev_char_boundary,
+};
 use transaction_key::VisualTransactionKey;
 
 use writer_core::editor::EditorTransactionCause;
@@ -434,7 +436,6 @@ pub struct SujianEditorItem {
     pipeline: pipeline::LinuxEditorPipeline,
     coordinator: linux_coordinator::LinuxTextEditorCoordinator,
     saved_body_kernel: Option<writer_core::editor::EditorKernel>,
-    buffer: EditorBuffer,
     current_content_height: f32,
     content_height_dirty: Cell<bool>,
     current_editor_enabled: bool,
@@ -587,7 +588,6 @@ impl Default for SujianEditorItem {
             pipeline: pipeline::LinuxEditorPipeline::new(),
             coordinator: linux_coordinator::LinuxTextEditorCoordinator::new(),
             saved_body_kernel: None,
-            buffer: EditorBuffer::default(),
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
             current_editor_enabled: true,
@@ -665,7 +665,6 @@ impl SujianEditorItem {
         }
         if let Some(session_kernel) = self.coordinator.take_active_session_kernel() {
             self.saved_body_kernel = Some(self.pipeline.swap_kernel(session_kernel));
-            self.sync_buffer_from_pipeline();
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
@@ -678,7 +677,6 @@ impl SujianEditorItem {
         }
         if let Some(body_kernel) = self.saved_body_kernel.take() {
             self.pipeline.swap_kernel(body_kernel);
-            self.sync_buffer_from_pipeline();
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
@@ -688,7 +686,6 @@ impl SujianEditorItem {
     pub fn cancel_text_edit(&mut self) -> bool {
         if let Some(body_kernel) = self.saved_body_kernel.take() {
             self.pipeline.swap_kernel(body_kernel);
-            self.sync_buffer_from_pipeline();
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
@@ -772,15 +769,6 @@ impl SujianEditorItem {
         QString::from(self.active_target_id().unwrap_or_default())
     }
 
-    pub(crate) fn sync_buffer_from_pipeline(&mut self) {
-        let mirror = self.pipeline.mirror();
-        if self.buffer.text != mirror.text() {
-            self.buffer.text = mirror.text().to_string();
-        }
-        self.buffer.cursor = mirror.cursor();
-        self.buffer.selection_anchor = mirror.selection_anchor();
-    }
-
     /// GUI 线程上准备不可变静态正文快照，然后请求 Scene Graph 更新。
     ///
     /// Issue #658: 在 GUI/input/layout 阶段先准备好 snapshot，
@@ -833,7 +821,11 @@ impl SujianEditorItem {
         let params = self.layout_params(width);
         let snapshot = self
             .editor_layout
-            .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
+            .snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            )
             .clone();
         let selection_preedit = self.build_selection_preedit_plan_from_snapshot(&snapshot);
         self.prepared_frame = Some(render_plan::PreparedEditorFrame {
@@ -890,8 +882,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {
-        let text = &self.buffer.text;
-        let cursor_char = byte_to_char_index(text, self.buffer.cursor);
+        let text = self.pipeline.committed_text();
+        let cursor_char = byte_to_char_index(text, self.pipeline.cursor());
         let before_char_len = cursor_char.min(max_chars);
         text.chars()
             .skip(cursor_char - before_char_len)
@@ -900,8 +892,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn ime_query_text_after_cursor(&self, max_chars: usize) -> String {
-        let text = &self.buffer.text;
-        let cursor_char = byte_to_char_index(text, self.buffer.cursor);
+        let text = self.pipeline.committed_text();
+        let cursor_char = byte_to_char_index(text, self.pipeline.cursor());
         let total_chars = text.chars().count();
         let after_char_len = total_chars.saturating_sub(cursor_char).min(max_chars);
         text.chars()
@@ -911,7 +903,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn ime_query_selected_text(&self) -> String {
-        self.buffer.selected_text()
+        self.pipeline.selected_text()
     }
 
     /// Issue #677 评论 5653944889: 从已有的 `LayoutSnapshot` 派生选区/preedit 几何。
@@ -937,11 +929,11 @@ impl SujianEditorItem {
 
         let mut plan = animation_coordinator::SelectionPreeditPlan::default();
 
-        if self.buffer.has_selection() {
+        if self.pipeline.has_selection() {
             plan.has_selection = true;
 
-            let anchor = self.buffer.selection_anchor.min(self.buffer.cursor);
-            let head = self.buffer.selection_anchor.max(self.buffer.cursor);
+            let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
+            let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
 
             for line in &snapshot.lines {
                 if line.para_text.is_empty() {
@@ -986,7 +978,7 @@ impl SujianEditorItem {
             if let Some(ref _preedit_rect) = self.pipeline.composition().preedit_cursor_rect {
                 let font_size = f64::from(self.current_font_pixel_size);
                 let font_family = &self.current_font_family.to_string();
-                let cursor_byte = self.buffer.cursor;
+                let cursor_byte = self.pipeline.cursor();
 
                 if let Some(line) = snapshot
                     .lines

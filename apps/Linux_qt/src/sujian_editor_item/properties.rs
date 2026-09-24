@@ -11,7 +11,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn plain_text(&self) -> QString {
-        self.buffer.text.clone().into()
+        self.pipeline.committed_text().to_string().into()
     }
 
     pub(crate) fn set_plain_text(&mut self, text: QString) {
@@ -20,16 +20,13 @@ impl SujianEditorItem {
 
     pub(crate) fn set_plain_text_from_qml(&mut self, text: QString) {
         let normalized = normalize_plain_text(&text.to_string());
-        if self.buffer.text == normalized {
+        if self.pipeline.committed_text() == normalized {
             return;
         }
-        let old = self.buffer.snapshot();
+        let old = self.pipeline.snapshot();
         self.pipeline.load_text(normalized.clone(), 0);
-        self.sync_buffer_from_pipeline();
-        self.buffer.undo_stack.clear();
-        self.buffer.redo_stack.clear();
         // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-        let new = self.buffer.snapshot();
+        let new = self.pipeline.snapshot();
         let result = super::edit_motion::synthetic_edit_result(
             &old.text,
             &new.text,
@@ -53,12 +50,12 @@ impl SujianEditorItem {
 
     pub(crate) fn reload_plain_text(&mut self, text: QString) {
         let normalized = normalize_plain_text(&text.to_string());
-        if self.buffer.text == normalized {
+        if self.pipeline.committed_text() == normalized {
             return;
         }
-        let old = self.buffer.snapshot();
-        let old_cursor = self.buffer.cursor;
-        let old_anchor = self.buffer.selection_anchor;
+        let old = self.pipeline.snapshot();
+        let old_cursor = self.pipeline.cursor();
+        let old_anchor = self.pipeline.selection_anchor();
         self.pipeline.load_text(normalized.clone(), old_cursor);
         if self.pipeline.mirror().cursor()
             != clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor)
@@ -68,9 +65,8 @@ impl SujianEditorItem {
                 clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor),
             );
         }
-        self.sync_buffer_from_pipeline();
         // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-        let new = self.buffer.snapshot();
+        let new = self.pipeline.snapshot();
         let result = super::edit_motion::synthetic_edit_result(
             &old.text,
             &new.text,
@@ -93,7 +89,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn get_plain_text(&self) -> QString {
-        self.buffer.text.clone().into()
+        self.pipeline.committed_text().to_string().into()
     }
 
     pub(crate) fn content_height(&self) -> f32 {
@@ -101,7 +97,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn cursor_position(&self) -> u32 {
-        byte_to_char_index(&self.buffer.text, self.buffer.cursor) as u32
+        byte_to_char_index(self.pipeline.committed_text(), self.pipeline.cursor()) as u32
     }
 
     /// Issue #668: 光标的 UTF-16 code unit 绝对位置（Qt QChar 位置）。
@@ -114,13 +110,13 @@ impl SujianEditorItem {
     /// 供 QML `cursor_position` property 使用），只给 IME query 路径单独调用。
     pub(crate) fn cursor_position_utf16(&self) -> u32 {
         crate::editor::paragraph_index_map::utf8_byte_to_utf16_code_unit(
-            &self.buffer.text,
-            self.buffer.cursor,
+            self.pipeline.committed_text(),
+            self.pipeline.cursor(),
         ) as u32
     }
 
     pub(crate) fn has_selection(&self) -> bool {
-        self.buffer.has_selection()
+        self.pipeline.has_selection()
     }
 
     pub(crate) fn editor_enabled(&self) -> bool {
@@ -547,7 +543,7 @@ impl SujianEditorItem {
     // set_auto_follow_anchor_with_target），无消费者。
 
     pub(crate) fn anchor_rect_x(&self) -> f32 {
-        if !self.buffer.has_selection() {
+        if !self.pipeline.has_selection() {
             return self.cursor_rect_x();
         }
         self.cursor_ctrl
@@ -556,7 +552,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn anchor_rect_y(&self) -> f32 {
-        if !self.buffer.has_selection() {
+        if !self.pipeline.has_selection() {
             return self.cursor_rect_y();
         }
         // Issue #727 评论 5757225958 问题1: anchor_visual_y 现在保存文档坐标，
@@ -577,7 +573,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn anchor_position(&self) -> u32 {
-        byte_to_char_index(&self.buffer.text, self.buffer.selection_anchor) as u32
+        byte_to_char_index(
+            self.pipeline.committed_text(),
+            self.pipeline.selection_anchor(),
+        ) as u32
     }
 
     /// Issue #668: 选区 anchor 的 UTF-16 code unit 绝对位置（Qt QChar 位置）。
@@ -587,8 +586,8 @@ impl SujianEditorItem {
     /// 的语义（仍返回 Rust char count，供 QML property 使用）。
     pub(crate) fn anchor_position_utf16(&self) -> u32 {
         crate::editor::paragraph_index_map::utf8_byte_to_utf16_code_unit(
-            &self.buffer.text,
-            self.buffer.selection_anchor,
+            self.pipeline.committed_text(),
+            self.pipeline.selection_anchor(),
         ) as u32
     }
 
@@ -642,7 +641,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn current_selection_text(&self) -> QString {
-        self.buffer.selected_text().into()
+        self.pipeline.selected_text().into()
     }
 
     pub(crate) fn request_text_input_focus(&mut self) {
@@ -720,7 +719,7 @@ impl SujianEditorItem {
         if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
             self.editor_layout.promote_prepared_layout(
                 promoted,
-                &self.buffer.text,
+                self.pipeline.committed_text(),
                 self.pipeline.text_revision(),
             );
         }

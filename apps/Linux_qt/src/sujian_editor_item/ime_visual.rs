@@ -39,7 +39,7 @@ impl SujianEditorItem {
         let font_family = &self.current_font_family.to_string();
         let scroll_y = f64::from(self.current_scroll_y);
 
-        let cursor_byte = self.buffer.cursor;
+        let cursor_byte = self.pipeline.cursor();
         let snapshot = self.layout_snapshot(width);
 
         let cursor_line = snapshot

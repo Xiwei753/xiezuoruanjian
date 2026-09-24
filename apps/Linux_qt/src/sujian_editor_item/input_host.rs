@@ -22,23 +22,22 @@ pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
 }
 
 impl SujianEditorItem {
-    /// 确保 composition session 存在。使用 `self.buffer.cursor` 而非
-    /// `self.pipeline.cursor()`，因为 buffer 是当前已提交文本的光标位置，
-    /// pipeline 可能包含未提交的 preedit 状态。
+    /// 确保 composition session 存在。使用 `self.pipeline.cursor()` 读取
+    /// 当前已提交文本的光标位置（CommittedTextMirror 只读投影）。
     ///
-    /// Issue #701 评论 5702214893: 若开始 composition 时 buffer 已有选区
+    /// Issue #701 评论 5702214893: 若开始 composition 时已有选区
     /// （`has_selection()`），用选区范围 `(start, end)` 作为 session 的
     /// replace range（`new_with_replace_range`），对应 Qt 官方
     /// `QInputMethodEvent` 语义"先删除当前 selection，再处理 replacement"。
     /// 无选区时退化为零长度插入 `(cursor, cursor)`（`new`）。
     fn ensure_composition_session(&mut self) {
         if self.pipeline.composition().composition_session.is_none() {
-            let cursor = self.buffer.cursor;
+            let cursor = self.pipeline.cursor();
             let text_rev = self.pipeline.text_revision();
             let vis_rev = self.pipeline.visual_revision();
-            let text = self.buffer.text.clone();
-            let session = if self.buffer.has_selection() {
-                let (start, end) = self.buffer.selection_range();
+            let text = self.pipeline.committed_text().to_string();
+            let session = if self.pipeline.has_selection() {
+                let (start, end) = self.pipeline.selection_range();
                 CompositionSession::new_with_replace_range(text_rev, vis_rev, text, start, end)
             } else {
                 CompositionSession::new(text_rev, vis_rev, text, cursor)
@@ -51,7 +50,7 @@ impl SujianEditorItem {
         if let Some(ref session) = self.pipeline.composition().composition_session {
             session.preedit_byte_range_in_virtual_text()
         } else {
-            (self.buffer.cursor, self.buffer.cursor)
+            (self.pipeline.cursor(), self.pipeline.cursor())
         }
     }
 
@@ -63,7 +62,7 @@ impl SujianEditorItem {
     /// - `session_replace_start`/`session_replace_end`：composition session 记录的
     ///   preedit 在 committed text 中的 byte range（半开区间，UTF-8）。
     ///   无活跃 session 时退化为 `(cursor, cursor)`。
-    /// - `committed_text`：当前 committed 正文（= `self.buffer.text`，不含 preedit）。
+    /// - `committed_text`：当前 committed 正文（= `self.pipeline.committed_text()`，不含 preedit）。
     ///
     /// 所有 UTF-16→UTF-8 坐标换算只在 `platform_ime` 调用此方法后做一次，
     /// `editing.rs` 不再二次换算。
@@ -75,21 +74,21 @@ impl SujianEditorItem {
     /// - `session_replace_start`/`session_replace_end`：composition session 记录的
     ///   preedit 在 committed text 中的 byte range（半开区间，UTF-8）。
     ///   有活跃 session 时用 session 的 replace range；
-    ///   无 session 但有选区时直接返回 `buffer.selection_range()`（Qt 规则：直接
+    ///   无 session 但有选区时直接返回 `pipeline.selection_range()`（Qt 规则：直接
     ///   commit 也应先删除当前 selection）；
     ///   无 session 无选区时退化为 `(cursor, cursor)`。
-    /// - `committed_text`：当前 committed 正文（= `self.buffer.text`，不含 preedit）。
+    /// - `committed_text`：当前 committed 正文（= `self.pipeline.committed_text()`，不含 preedit）。
     pub(crate) fn ime_replacement_context(&self) -> (usize, usize, String) {
         let (rs, re) = if self.pipeline.composition().composition_session.is_some() {
             self.pipeline
                 .composition()
-                .session_replace_range(self.buffer.cursor)
-        } else if self.buffer.has_selection() {
-            self.buffer.selection_range()
+                .session_replace_range(self.pipeline.cursor())
+        } else if self.pipeline.has_selection() {
+            self.pipeline.selection_range()
         } else {
-            (self.buffer.cursor, self.buffer.cursor)
+            (self.pipeline.cursor(), self.pipeline.cursor())
         };
-        (rs, re, self.buffer.text.clone())
+        (rs, re, self.pipeline.committed_text().to_string())
     }
 
     /// 准备 composition 更新数据。`cursor` 为 preedit 内部 UTF-8 byte offset，
@@ -233,24 +232,25 @@ impl EditorInputHost for SujianEditorItem {
                 let (committed_replace_start, committed_replace_end) = self
                     .pipeline
                     .composition()
-                    .session_replace_range(self.buffer.cursor);
+                    .session_replace_range(self.pipeline.cursor());
                 // Issue #710 评论 5735006606: snapshot 的视觉提取范围不能直接等于 raw edit range。
                 // cancel 的 session_replace_range 可以是零长度 (cursor, cursor)（无 selection 的
                 // 普通 composition ESC），零长度时 build_editor_layout_snapshot 的
                 // `if affected_start < affected_end` 为 false，不生成任何动画视觉资源。
                 // 用 compute_affected_paragraph_ranges 把 raw edit range 扩展到所在段落边界。
-                // old 文本 = session 的 virtual_text（清 session 前取），new 文本 = buffer.text（cancel 恢复原文）。
+                // old 文本 = session 的 virtual_text（清 session 前取），new 文本 = committed text（cancel 恢复原文）。
+                let committed_text = self.pipeline.committed_text().to_string();
                 let old_virtual_text = self
                     .pipeline
                     .composition()
                     .composition_session
                     .as_ref()
                     .map(|s| s.virtual_text())
-                    .unwrap_or_else(|| self.buffer.text.clone());
+                    .unwrap_or_else(|| committed_text.clone());
                 let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
                     crate::editor::layout::compute_affected_paragraph_ranges(
                         &old_virtual_text,
-                        &self.buffer.text,
+                        &committed_text,
                         (composition_byte_start, composition_byte_end),
                         (committed_replace_start, committed_replace_end),
                     );

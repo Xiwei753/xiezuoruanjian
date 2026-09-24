@@ -118,7 +118,7 @@ impl SujianEditorItem {
         // 获取文档坐标 caret。QML/IME 边界方法在返回前减 current_scroll_y 转视口坐标。
         let scroll_y = f64::from(self.current_scroll_y);
         let layout_res =
-            self.editor_layout_cursor_rect_doc(self.buffer.cursor, self.cursor_ctrl.affinity);
+            self.editor_layout_cursor_rect_doc(self.pipeline.cursor(), self.cursor_ctrl.affinity);
 
         let cursor_x = layout_res.x;
         let cursor_y = layout_res.y;
@@ -126,7 +126,7 @@ impl SujianEditorItem {
         let visual_line_id = layout_res.visual_line_id;
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
-        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let is_selecting = self.pipeline.selection_anchor() != self.pipeline.cursor();
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
         // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
@@ -174,7 +174,7 @@ impl SujianEditorItem {
             cursor_y,
             cursor_h,
             self.current_editor_enabled,
-            self.buffer.has_selection(),
+            self.pipeline.has_selection(),
             vp_h,
             self.current_is_scrolling,
             is_selecting,
@@ -253,7 +253,7 @@ impl SujianEditorItem {
             }
             crate::sujian_editor_item::editor_debug_log(&format!(
                 "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}{}",
-                self.buffer.cursor, self.cursor_ctrl.target_x, self.cursor_ctrl.target_y, self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y, self.cursor_ctrl.animation.is_some(), scroll_y, line_info
+                self.pipeline.cursor(), self.cursor_ctrl.target_x, self.cursor_ctrl.target_y, self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y, self.cursor_ctrl.animation.is_some(), scroll_y, line_info
             ));
         }
 
@@ -262,11 +262,11 @@ impl SujianEditorItem {
             self.request_frame_update();
         }
 
-        if self.buffer.has_selection() {
+        if self.pipeline.has_selection() {
             // Issue #727 评论 5757225958 问题1: anchor_visual_y 统一保存文档坐标，
             // properties.rs::anchor_rect_y 在边界返回 doc_y - current_scroll_y。
             let anchor_layout = self.editor_layout_cursor_rect_doc(
-                self.buffer.selection_anchor,
+                self.pipeline.selection_anchor(),
                 CaretAffinity::Downstream,
             );
             self.cursor_ctrl.anchor_visual_x = Some(anchor_layout.x);

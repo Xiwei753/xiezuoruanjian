@@ -108,7 +108,6 @@ impl SujianEditorItem {
 
     pub(crate) fn clear_undo_stack(&mut self) {
         self.pipeline.clear_undo_redo();
-        self.sync_buffer_from_pipeline();
     }
 
     /// Issue #701 评论 5699573227 第三阶段: 统一 composition commit 事务创建入口。
@@ -348,9 +347,9 @@ impl SujianEditorItem {
     /// `insert_text_with_cause` / `delete_backward` / `delete_forward` /
     /// `ime_replace_and_insert` / `delete_selection` 全部收口到这一个 helper。
     /// 固定做：
-    /// 1. 保存 old text/selection/caret（`self.buffer.snapshot()`）；
+    /// 1. 保存 old text/selection/caret（`self.pipeline.snapshot()`）；
     /// 2. 调一次 pipeline edit command（由 `op` 描述，不再由调用者各自直调）；
-    /// 3. `sync_buffer_from_pipeline` 后读取 new text/selection/caret；
+    /// 3. 读取 new text/selection/caret（通过 pipeline 只读投影 API）；
     /// 4. 生成一对 old/new layout snapshot 并创建一次视觉事务。
     ///
     /// - `op$` 不带 composition commit 参数（`composition == None`）时走
@@ -376,7 +375,7 @@ impl SujianEditorItem {
         visual_cause: EditorTransactionCause,
         composition: Option<CompositionCommitParams>,
     ) -> bool {
-        let old = self.buffer.snapshot();
+        let old = self.pipeline.snapshot();
 
         let edit_result: Option<writer_core::editor::EditorEditResult> = match op {
             EditOp::Insert {
@@ -424,12 +423,11 @@ impl SujianEditorItem {
         if !applied {
             return false;
         }
-        self.sync_buffer_from_pipeline();
         // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
         // adjust_affinity_at_wrap_boundary（会触发 ensure_layout_cached 排版 A，
         // 与 record_visual_transaction 排版 B 重复）。affinity 调整移到
         // emit_content_changed 内部 promote 之后（cache hit 不排版）。
-        let new = self.buffer.snapshot();
+        let new = self.pipeline.snapshot();
 
         if let Some(params) = composition {
             self.record_composition_commit_transaction(
@@ -476,7 +474,7 @@ impl SujianEditorItem {
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
         let commit = self.pipeline.prepare_composition_commit(
             &inserted,
-            self.buffer.cursor,
+            self.pipeline.cursor(),
             preedit_byte_start,
             preedit_byte_end,
         );
@@ -517,8 +515,8 @@ impl SujianEditorItem {
             commit.was_composing && commit.session_replace_start != commit.session_replace_end;
         let session_replace_start = commit.session_replace_start;
         let session_replace_end = commit.session_replace_end;
-        let cursor = self.buffer.cursor;
-        let (sel_start, sel_end) = self.buffer.selection_range();
+        let cursor = self.pipeline.cursor();
+        let (sel_start, sel_end) = self.pipeline.selection_range();
 
         let op = if was_composing_replace {
             EditOp::Replace {
@@ -571,7 +569,7 @@ impl SujianEditorItem {
     ///
     /// `EditOp::ImeCommit` 调用一次 Core `ImeCommit` 原子命令（三段语义），
     /// Core 内部顺序执行两步正文修改，只产生一个 revision 推进和一个 UndoEntry，
-    /// 只在 `record_edit_transaction` 末尾做一次 `sync_buffer_from_pipeline`
+    /// 只在 `record_edit_transaction` 末尾做一次 pipeline 只读投影读取
     /// + 一次 snapshot + 一次视觉事务。
     pub(crate) fn ime_replace_and_insert(&mut self, event: ImeReplaceEvent) {
         if !self.current_editor_enabled {
@@ -587,7 +585,7 @@ impl SujianEditorItem {
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
         let commit = self.pipeline.prepare_composition_commit(
             &inserted,
-            self.buffer.cursor,
+            self.pipeline.cursor(),
             preedit_byte_start,
             preedit_byte_end,
         );
@@ -666,15 +664,16 @@ impl SujianEditorItem {
         if !self.current_editor_enabled {
             return;
         }
-        let cursor = self.buffer.cursor;
-        let (start, end) = if self.buffer.has_selection() {
-            self.buffer.selection_range()
+        let cursor = self.pipeline.cursor();
+        let (start, end) = if self.pipeline.has_selection() {
+            self.pipeline.selection_range()
         } else {
-            // 无选区时删除前一个字符；行首时 prev_char_boundary 返回 None，直接返回。
-            match prev_char_boundary(&self.buffer.text, cursor) {
-                Some(prev) => (prev, cursor),
-                None => return,
+            // 无选区时删除前一个字符；行首时 previous_grapheme_boundary 返回 cursor，直接返回。
+            let prev = self.pipeline.previous_grapheme_boundary(cursor);
+            if prev == cursor {
+                return;
             }
+            (prev, cursor)
         };
 
         // Issue #701 评论 5699573227 第三阶段: 普通删除与普通输入/IME commit
@@ -695,15 +694,16 @@ impl SujianEditorItem {
         if !self.current_editor_enabled {
             return;
         }
-        let cursor = self.buffer.cursor;
-        let (start, end) = if self.buffer.has_selection() {
-            self.buffer.selection_range()
+        let cursor = self.pipeline.cursor();
+        let (start, end) = if self.pipeline.has_selection() {
+            self.pipeline.selection_range()
         } else {
-            // 无选区时删除后一个字符；行末时 next_char_boundary 返回 None，直接返回。
-            match next_char_boundary(&self.buffer.text, cursor) {
-                Some(next) => (cursor, next),
-                None => return,
+            // 无选区时删除后一个字符；行末时 next_grapheme_boundary 返回 cursor，直接返回。
+            let next = self.pipeline.next_grapheme_boundary(cursor);
+            if next == cursor {
+                return;
             }
+            (cursor, next)
         };
 
         let op = EditOp::Delete {
@@ -717,10 +717,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn delete_selection(&mut self) {
-        if !self.current_editor_enabled || !self.buffer.has_selection() {
+        if !self.current_editor_enabled || !self.pipeline.has_selection() {
             return;
         }
-        let (start, end) = self.buffer.selection_range();
+        let (start, end) = self.pipeline.selection_range();
 
         let op = EditOp::Delete {
             start,
@@ -735,9 +735,8 @@ impl SujianEditorItem {
     pub(crate) fn select_all(&mut self) {
         // Issue #705 评论 5717380886: 全选是非正文事务导致的逻辑 cursor 移动。
         self.begin_manual_cursor_move();
-        let text_len = self.buffer.text.len();
+        let text_len = self.pipeline.committed_text().len();
         let _ = self.pipeline.set_selection(0, text_len);
-        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.adjust_affinity_at_wrap_boundary();
         self.cursor_position_changed();
@@ -746,26 +745,24 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn selected_text(&self) -> QString {
-        self.buffer.selected_text().into()
+        self.pipeline.selected_text().into()
     }
 
     pub(crate) fn undo(&mut self) {
-        let old = self.buffer.snapshot();
+        let old = self.pipeline.snapshot();
         if let Some(result) = self.pipeline.perform_undo() {
-            self.sync_buffer_from_pipeline();
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.buffer.snapshot();
+            let new = self.pipeline.snapshot();
             self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
         }
     }
 
     pub(crate) fn redo(&mut self) {
-        let old = self.buffer.snapshot();
+        let old = self.pipeline.snapshot();
         if let Some(result) = self.pipeline.perform_redo() {
-            self.sync_buffer_from_pipeline();
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.buffer.snapshot();
+            let new = self.pipeline.snapshot();
             self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
         }
@@ -780,17 +777,15 @@ impl SujianEditorItem {
         // 真的改变当前 caret/selection 后再 bump epoch。点击当前逻辑 caret 的同一
         // 位置不应把正在播放的正文协同 caret 所有权白白失效。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
-        let new_anchor = if extend {
-            self.buffer.selection_anchor
-        } else {
-            index
-        };
+        let current_anchor = self.pipeline.selection_anchor();
+        let current_cursor = self.pipeline.cursor();
+        let new_anchor = if extend { current_anchor } else { index };
         let new_head = index;
         // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
         // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
         // Issue #705 评论 5718299909: 仅在 anchor/head/affinity 真的改变时 bump。
-        if new_anchor != self.buffer.selection_anchor
-            || new_head != self.buffer.cursor
+        if new_anchor != current_anchor
+            || new_head != current_cursor
             || self.cursor_ctrl.affinity != affinity
         {
             self.begin_manual_cursor_move();
@@ -810,13 +805,12 @@ impl SujianEditorItem {
         ));
         let _ = self.pipeline.set_selection(
             if extend {
-                self.buffer.selection_anchor
+                self.pipeline.selection_anchor()
             } else {
                 index
             },
             index,
         );
-        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.pipeline.composition_mut().clear();
         self.cursor_position_changed();
@@ -832,19 +826,17 @@ impl SujianEditorItem {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         // Issue #705 评论 5717380886: 拖选是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在 head 或 affinity 真的改变时 bump。
-        if index != self.buffer.cursor || self.cursor_ctrl.affinity != affinity {
+        if index != self.pipeline.cursor() || self.cursor_ctrl.affinity != affinity {
             self.begin_manual_cursor_move();
         }
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 拖选设置 CursorMoveSource::DragSelection，跨行走 Snap。
-        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
         // 是否 Tween 由统一的光标移动规则决定。drag_select 走统一 snap 辅助方法。
         self.snap_cursor_for_pointer_action();
         let _ = self
             .pipeline
-            .set_selection(self.buffer.selection_anchor, index);
-        self.sync_buffer_from_pipeline();
+            .set_selection(self.pipeline.selection_anchor(), index);
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -860,13 +852,16 @@ impl SujianEditorItem {
         // Issue #705 评论 5718299909: 预判最终 selection 是否改变：
         //  - 若已有 selection：不选词，selection 不变，只有 affinity 变才算改变。
         //  - 若无 selection：将选词，算 word bounds 与当前 (anchor, cursor) 比较。
-        let caret_will_change = if self.buffer.has_selection() {
+        let current_anchor = self.pipeline.selection_anchor();
+        let current_cursor = self.pipeline.cursor();
+        let committed_text = self.pipeline.committed_text().to_string();
+        let caret_will_change = if self.pipeline.has_selection() {
             self.cursor_ctrl.affinity != affinity
         } else {
-            match compute_word_bounds(&self.buffer.text, index) {
+            match compute_word_bounds(&committed_text, index) {
                 Some((byte_start, byte_end)) => {
-                    byte_start != self.buffer.selection_anchor
-                        || byte_end != self.buffer.cursor
+                    byte_start != current_anchor
+                        || byte_end != current_cursor
                         || self.cursor_ctrl.affinity != affinity
                 }
                 None => self.cursor_ctrl.affinity != affinity,
@@ -880,7 +875,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
         self.snap_cursor_for_pointer_action();
-        if !self.buffer.has_selection() {
+        if !self.pipeline.has_selection() {
             self.select_word_at_impl(index);
         }
         self.bump_visual_revision();
@@ -897,10 +892,13 @@ impl SujianEditorItem {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         // Issue #705 评论 5717380886: 选词是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 预判 word bounds 是否改变 selection 或 affinity。
-        let caret_will_change = match compute_word_bounds(&self.buffer.text, index) {
+        let current_anchor = self.pipeline.selection_anchor();
+        let current_cursor = self.pipeline.cursor();
+        let committed_text = self.pipeline.committed_text().to_string();
+        let caret_will_change = match compute_word_bounds(&committed_text, index) {
             Some((byte_start, byte_end)) => {
-                byte_start != self.buffer.selection_anchor
-                    || byte_end != self.buffer.cursor
+                byte_start != current_anchor
+                    || byte_end != current_cursor
                     || self.cursor_ctrl.affinity != affinity
             }
             None => self.cursor_ctrl.affinity != affinity,
@@ -949,18 +947,18 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at_impl(&mut self, index: usize) {
-        let Some((byte_start, byte_end)) = compute_word_bounds(&self.buffer.text, index) else {
+        let committed_text = self.pipeline.committed_text().to_string();
+        let Some((byte_start, byte_end)) = compute_word_bounds(&committed_text, index) else {
             return;
         };
         let _ = self.pipeline.set_selection(byte_start, byte_end);
-        self.sync_buffer_from_pipeline();
     }
 
     pub(crate) fn clipboard_copy(&mut self) -> bool {
-        if !self.buffer.has_selection() {
+        if !self.pipeline.has_selection() {
             return false;
         }
-        let text = self.buffer.selected_text();
+        let text = self.pipeline.selected_text();
         if text.is_empty() {
             return false;
         }
@@ -1010,18 +1008,20 @@ impl SujianEditorItem {
         // 再 bump epoch。no-op（已在行首/文末且 !extend）不 bump，避免切断活动
         // 正文事务 caret 所有权。epoch 的定义是"用户手动改变了当前 caret 所有权/
         // 逻辑位置"，不是"用户按过一次键"。
+        let current_cursor = self.pipeline.cursor();
+        let committed_text = self.pipeline.committed_text();
         let next = if forward {
-            next_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
+            next_char_boundary(committed_text, current_cursor).unwrap_or(current_cursor)
         } else {
-            prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
+            prev_char_boundary(committed_text, current_cursor).unwrap_or(current_cursor)
         };
-        if next == self.buffer.cursor && !extend {
+        if next == current_cursor && !extend {
             return;
         }
         // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在确认 next != cursor 后 bump。
         // extend 且 next == cursor 时 head/anchor 不变（no-op），不 bump。
-        if next != self.buffer.cursor {
+        if next != current_cursor {
             self.begin_manual_cursor_move();
         }
         // Issue #712: 方向键水平移动设置 CursorMoveSource::KeyboardNavigation，
@@ -1033,12 +1033,11 @@ impl SujianEditorItem {
             CaretAffinity::Upstream
         };
         if extend {
-            let anchor = self.buffer.selection_anchor;
+            let anchor = self.pipeline.selection_anchor();
             let _ = self.pipeline.set_selection(anchor, next);
         } else {
             let _ = self.pipeline.set_selection(next, next);
         }
-        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -1078,12 +1077,11 @@ impl SujianEditorItem {
             .editor_layout
             .affinity_for_index_on_line(&lines[target_idx], index);
         if extend {
-            let anchor = self.buffer.selection_anchor;
+            let anchor = self.pipeline.selection_anchor();
             let _ = self.pipeline.set_selection(anchor, index);
         } else {
             let _ = self.pipeline.set_selection(index, index);
         }
-        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -1112,7 +1110,7 @@ impl SujianEditorItem {
         };
         // Issue #705 评论 5717380886: Home/End 是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在目标 index 或 affinity 与当前不同时 bump。
-        if index != self.buffer.cursor || self.cursor_ctrl.affinity != affinity {
+        if index != self.pipeline.cursor() || self.cursor_ctrl.affinity != affinity {
             self.begin_manual_cursor_move();
         }
         // Issue #712: Home/End 设置 CursorMoveSource::KeyboardNavigation，
@@ -1120,12 +1118,11 @@ impl SujianEditorItem {
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
         self.cursor_ctrl.affinity = affinity;
         if extend {
-            let anchor = self.buffer.selection_anchor;
+            let anchor = self.pipeline.selection_anchor();
             let _ = self.pipeline.set_selection(anchor, index);
         } else {
             let _ = self.pipeline.set_selection(index, index);
         }
-        self.sync_buffer_from_pipeline();
         self.cursor_position_changed();
         self.selection_changed();
         // Issue #679 评论 5657313927 (7a): CursorOnly 的创建统一放到

@@ -1,9 +1,10 @@
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
-use super::buffer::{clamp_to_char_boundary, normalize_plain_text, EditorSnapshot};
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
+use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
 use super::line_snapshot_builder::LineSnapshotBuilder;
+use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::TextureCache;
 use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
@@ -58,6 +59,42 @@ impl CommittedTextMirror {
 
     pub fn selection_anchor(&self) -> usize {
         self.selection_anchor
+    }
+
+    /// 是否有非空选区（cursor != selection_anchor）。
+    pub fn has_selection(&self) -> bool {
+        self.cursor != self.selection_anchor
+    }
+
+    /// 返回选区的半开区间 [start, end)（UTF-8 byte offset）。
+    /// start ≤ end，无论光标和锚点的相对位置。
+    pub fn selection_range(&self) -> (usize, usize) {
+        if self.cursor <= self.selection_anchor {
+            (self.cursor, self.selection_anchor)
+        } else {
+            (self.selection_anchor, self.cursor)
+        }
+    }
+
+    /// 返回选区文本。无选区时返回空字符串。
+    pub fn selected_text(&self) -> String {
+        if !self.has_selection() {
+            return String::new();
+        }
+        let (start, end) = self.selection_range();
+        self.text[start..end].to_string()
+    }
+
+    /// 返回当前 text/cursor/selection_anchor 的不可变快照。
+    ///
+    /// 供动画/事务记录 old/new 状态使用。正文真相仍在 EditorKernel，
+    /// 此快照仅用于动画对比，不维护 undo/redo 栈。
+    pub fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            selection_anchor: self.selection_anchor,
+        }
     }
 
     pub fn load_from_snapshot(
@@ -569,6 +606,53 @@ impl LinuxEditorPipeline {
 
     pub fn mirror(&self) -> &CommittedTextMirror {
         &self.mirror
+    }
+
+    /// Issue #745: 只读投影 API — 把正文状态收口为 Core EditorKernel（业务真相）
+    /// 以及 CommittedTextMirror（Qt 只读/增量平台投影）。平台端不再持有第三份正文镜像。
+    /// 所有读取都委托到 mirror 或 kernel，保证单一真相来源。
+    pub fn committed_text(&self) -> &str {
+        self.mirror.text()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.mirror.cursor()
+    }
+
+    pub fn selection_anchor(&self) -> usize {
+        self.mirror.selection_anchor()
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.mirror.has_selection()
+    }
+
+    pub fn selection_range(&self) -> (usize, usize) {
+        self.mirror.selection_range()
+    }
+
+    pub fn selected_text(&self) -> String {
+        self.mirror.selected_text()
+    }
+
+    pub fn snapshot(&self) -> EditorSnapshot {
+        self.mirror.snapshot()
+    }
+
+    /// 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// 委托到 Core EditorKernel，保证 grapheme 边界由 Core 唯一决定。
+    /// `byte_offset == 0` 时返回 0（无法后退）。
+    pub fn previous_grapheme_boundary(&self, byte_offset: usize) -> usize {
+        self.kernel.previous_grapheme_boundary(byte_offset as u32) as usize
+    }
+
+    /// 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    ///
+    /// 委托到 Core EditorKernel，保证 grapheme 边界由 Core 唯一决定。
+    /// `byte_offset >= len` 时返回 len（无法前进）。
+    pub fn next_grapheme_boundary(&self, byte_offset: usize) -> usize {
+        self.kernel.next_grapheme_boundary(byte_offset as u32) as usize
     }
 
     pub fn composition(&self) -> &CompositionState {

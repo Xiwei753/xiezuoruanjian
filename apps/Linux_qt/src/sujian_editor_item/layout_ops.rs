@@ -53,7 +53,11 @@ impl SujianEditorItem {
     pub(crate) fn layout_snapshot(&mut self, width: f64) -> LayoutSnapshot {
         let params = self.layout_params(width);
         self.editor_layout
-            .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
+            .snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            )
             .clone()
     }
 
@@ -143,8 +147,9 @@ impl SujianEditorItem {
         // 改为按 composition_range 提取相关行的动画视觉。
         let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
         // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
+        let committed_text = self.pipeline.committed_text();
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
-            &self.buffer.text,
+            committed_text,
             self.pipeline.text_revision(),
             font_size,
             font_family,
@@ -212,7 +217,7 @@ impl SujianEditorItem {
                 let active_rebind_ranges = self
                     .pipeline
                     .animation_coordinator()
-                    .collect_active_rebind_ranges(&self.buffer.text);
+                    .collect_active_rebind_ranges(committed_text);
                 for (rs, re) in &active_rebind_ranges {
                     for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
                         if l.byte_start < *re && l.byte_end > *rs && !ids.contains(&i) {
@@ -237,14 +242,11 @@ impl SujianEditorItem {
             }
         }
 
-        let caret = doc_snapshot.cursor_rect(
-            self.buffer.cursor,
-            self.cursor_ctrl.affinity,
-            scroll_y,
-            viewport_h,
-        );
+        let cursor_byte = self.pipeline.cursor();
+        let caret =
+            doc_snapshot.cursor_rect(cursor_byte, self.cursor_ctrl.affinity, scroll_y, viewport_h);
         // Issue #722 评论 5749791161: 同时生成文档坐标的 caret，供 VisualTransaction / caret track 使用。
-        let caret_doc = doc_snapshot.cursor_rect_doc(self.buffer.cursor, self.cursor_ctrl.affinity);
+        let caret_doc = doc_snapshot.cursor_rect_doc(cursor_byte, self.cursor_ctrl.affinity);
 
         let mut snapshot =
             super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
@@ -252,7 +254,7 @@ impl SujianEditorItem {
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
-                &self.buffer.text,
+                committed_text,
             );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
@@ -407,7 +409,10 @@ impl SujianEditorItem {
         {
             session.replace_start + session.preedit_cursor
         } else {
-            self.buffer.cursor + virtual_text.len().saturating_sub(self.buffer.text.len())
+            self.pipeline.cursor()
+                + virtual_text
+                    .len()
+                    .saturating_sub(self.pipeline.committed_text().len())
         };
         let caret = doc_snapshot.cursor_rect(
             cursor_byte.min(virtual_text.len()),
@@ -447,14 +452,18 @@ impl SujianEditorItem {
         let params = self.layout_params(width);
         &self
             .editor_layout
-            .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
+            .snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            )
             .lines
     }
 
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {
         let width = self.bounding_width();
         let lines = self.ensure_layout_cached(width).clone();
-        let cursor = self.buffer.cursor;
+        let cursor = self.pipeline.cursor();
 
         let is_wrap_boundary = lines.iter().enumerate().any(|(idx, line)| {
             idx + 1 < lines.len() && line.byte_end == cursor && lines[idx + 1].byte_start == cursor
@@ -513,7 +522,7 @@ impl SujianEditorItem {
         let snapshot = self.current_render_layout_snapshot();
         self.editor_layout.cursor_line_and_x(
             &snapshot,
-            self.buffer.cursor,
+            self.pipeline.cursor(),
             self.cursor_ctrl.affinity,
         )
     }

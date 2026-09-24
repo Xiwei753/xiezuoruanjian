@@ -48,7 +48,7 @@ fn emit_content_changed_invalidates_old_prepared_frame() {
         item.set_plain_text(QString::from("Hello世界"));
 
         // 构造一个 PreparedEditorFrame 并设置，模拟 GUI 线程已 prepare 好一帧。
-        let text = item.buffer.text.clone();
+        let text = item.pipeline.committed_text().to_string();
         let revision = item.pipeline.text_revision();
         let params = default_layout_params();
         let snapshot = item.editor_layout.snapshot(&text, params, revision).clone();
@@ -266,13 +266,13 @@ fn move_cursor_horizontal_bumps_epoch_on_change() {
         let mut item = SujianEditorItem::default();
         item.insert_text(QString::from("Hello"));
         // insert_text 后 cursor 在文末
-        let cursor_before = item.buffer.cursor;
+        let cursor_before = item.pipeline.cursor();
         assert!(cursor_before > 0, "insert_text 后 cursor 应在文末");
 
         let epoch_before = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(false, false); // backward
         let epoch_after = item.cursor_ctrl.cursor_owner_epoch;
-        let cursor_after = item.buffer.cursor;
+        let cursor_after = item.pipeline.cursor();
 
         assert!(
             cursor_after < cursor_before,
@@ -300,12 +300,12 @@ fn move_cursor_horizontal_noop_does_not_bump_epoch() {
         let mut item = SujianEditorItem::default();
         item.insert_text(QString::from("Hello"));
         // cursor 在文末，继续 forward 是 no-op
-        let cursor_before = item.buffer.cursor;
+        let cursor_before = item.pipeline.cursor();
 
         let epoch_before = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(true, false); // forward — no-op at end
         let epoch_after = item.cursor_ctrl.cursor_owner_epoch;
-        let cursor_after = item.buffer.cursor;
+        let cursor_after = item.pipeline.cursor();
 
         assert_eq!(
             cursor_after, cursor_before,
@@ -333,13 +333,13 @@ fn move_cursor_backward_at_start_does_not_bump_epoch() {
         for _ in 0..10 {
             item.move_cursor_horizontal(false, false);
         }
-        assert_eq!(item.buffer.cursor, 0, "应移到行首");
+        assert_eq!(item.pipeline.cursor(), 0, "应移到行首");
 
         let epoch_before = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(false, false); // backward — no-op at start
         let epoch_after = item.cursor_ctrl.cursor_owner_epoch;
 
-        assert_eq!(item.buffer.cursor, 0, "行首 backward 应是 no-op");
+        assert_eq!(item.pipeline.cursor(), 0, "行首 backward 应是 no-op");
         assert_eq!(
             epoch_after, epoch_before,
             "行首 no-op backward 不应 bump epoch"
@@ -358,14 +358,14 @@ fn click_at_different_position_bumps_epoch() {
         let mut item = SujianEditorItem::default();
         item.insert_text(QString::from("Hello"));
         // cursor 在文末（5）
-        let cursor_before = item.buffer.cursor;
+        let cursor_before = item.pipeline.cursor();
         assert!(cursor_before > 0, "insert_text 后 cursor 应在文末");
 
         let epoch_before = item.cursor_ctrl.cursor_owner_epoch;
         // 点击文档起点 (0, 0) — 应改变 cursor
         item.click_at(0.0, 0.0, false);
         let epoch_after = item.cursor_ctrl.cursor_owner_epoch;
-        let cursor_after = item.buffer.cursor;
+        let cursor_after = item.pipeline.cursor();
 
         assert!(
             cursor_after < cursor_before,
@@ -394,14 +394,18 @@ fn click_at_same_position_does_not_bump_epoch() {
         item.insert_text(QString::from("Hello"));
         // 先点击文档起点
         item.click_at(0.0, 0.0, false);
-        assert_eq!(item.buffer.cursor, 0, "click_at(0,0) 后 cursor 应在 0");
+        assert_eq!(item.pipeline.cursor(), 0, "click_at(0,0) 后 cursor 应在 0");
 
         // 再点击同一位置 — 不应 bump epoch
         let epoch_before = item.cursor_ctrl.cursor_owner_epoch;
         item.click_at(0.0, 0.0, false);
         let epoch_after = item.cursor_ctrl.cursor_owner_epoch;
 
-        assert_eq!(item.buffer.cursor, 0, "再次 click_at(0,0) cursor 仍为 0");
+        assert_eq!(
+            item.pipeline.cursor(),
+            0,
+            "再次 click_at(0,0) cursor 仍为 0"
+        );
         assert_eq!(
             epoch_after, epoch_before,
             "click_at 同一位置不应 bump epoch: {} -> {}",
@@ -424,7 +428,7 @@ fn delete_forward_does_not_bump_epoch() {
         for _ in 0..10 {
             item.move_cursor_horizontal(false, false);
         }
-        assert_eq!(item.buffer.cursor, 0, "应移到行首");
+        assert_eq!(item.pipeline.cursor(), 0, "应移到行首");
 
         let epoch_before = item.cursor_ctrl.cursor_owner_epoch;
         item.delete_forward();
@@ -671,18 +675,14 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         let visual_after_noop_frame;
         {
             let epoch_before_noop = item.cursor_ctrl.cursor_owner_epoch;
-            let cursor_before_noop = item.buffer.cursor;
+            let cursor_before_noop = item.pipeline.cursor();
             // cursor 当前在文末（"HelloWorld" 位置 10），forward 是确定的 no-op。
             // move_cursor_horizontal 内部先算 next，确认 next == cursor 后直接 return，
             // 不 bump epoch、不调 update_cursor_visual_position，visual 不变。
+            assert_eq!(item.pipeline.cursor(), item.pipeline.committed_text().len(),);
             assert_eq!(
-                item.buffer.cursor,
-                item.buffer.text.len(),
-                "no-op 前 cursor 应在文末（setup 已移到文末再 insert）"
-            );
-            item.move_cursor_horizontal(true, false); // forward no-op at end of text
-            assert_eq!(
-                item.buffer.cursor, cursor_before_noop,
+                item.pipeline.cursor(),
+                cursor_before_noop,
                 "文末 forward 应是 no-op，cursor 不变"
             );
             assert_eq!(
@@ -954,7 +954,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         for _ in 0..20 {
             item.move_cursor_horizontal(false, false);
         }
-        assert_eq!(item.buffer.cursor, 0, "应移到行首");
+        assert_eq!(item.pipeline.cursor(), 0, "应移到行首");
         let epoch_at_start = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(false, false);
         assert_eq!(
@@ -963,7 +963,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         );
 
         item.click_at(0.0, 0.0, false);
-        assert_eq!(item.buffer.cursor, 0, "click_at(0,0) 后 cursor 应在 0");
+        assert_eq!(item.pipeline.cursor(), 0, "click_at(0,0) 后 cursor 应在 0");
         let epoch_before_same_click = item.cursor_ctrl.cursor_owner_epoch;
         item.click_at(0.0, 0.0, false);
         assert_eq!(
