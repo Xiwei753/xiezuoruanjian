@@ -14,8 +14,8 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_projects() -> *mut c_char {
     match with_app_service(|svc| {
-        let summaries = svc.list_project_summaries().map_err(|e| format!("{}", e))?;
-        Ok(summaries)
+        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
+        Ok(projects)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("PROJECT_NOT_FOUND", &e),

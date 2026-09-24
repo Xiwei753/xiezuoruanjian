@@ -95,12 +95,15 @@ export struct StatsScreen {
       } else if (this.stats) {
         Scroll() {
           Column() {
+            // Issue #753 评论 5814008597 问题2：WritingStats 已换成 Core 的 WritingStatsSummaryDto（最近 30 天汇总）。
+            // 旧字段 totalChars/totalWords/totalChapters/todayChars/todayDuration/averageSpeed 全部不存在，
+            // 改为展示新 DTO 的全部字段，并在首行展示统计范围。
             Row() {
-              Text('总字数')
+              Text('统计范围')
                 .fontSize(16)
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
-              Text(`${this.stats.totalChars}`)
+              Text(`${this.stats.range.startDate} ~ ${this.stats.range.endDate}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.themeConfig.colors.textPrimary)
@@ -109,11 +112,11 @@ export struct StatsScreen {
             .padding({ top: 12, bottom: 12 })
 
             Row() {
-              Text('总词数')
+              Text('手写字数')
                 .fontSize(16)
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
-              Text(`${this.stats.totalWords}`)
+              Text(`${this.stats.totalHumanTypedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.themeConfig.colors.textPrimary)
@@ -122,11 +125,11 @@ export struct StatsScreen {
             .padding({ top: 12, bottom: 12 })
 
             Row() {
-              Text('总章节')
+              Text('粘贴字数')
                 .fontSize(16)
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
-              Text(`${this.stats.totalChapters}`)
+              Text(`${this.stats.totalPastedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.themeConfig.colors.textPrimary)
@@ -135,11 +138,11 @@ export struct StatsScreen {
             .padding({ top: 12, bottom: 12 })
 
             Row() {
-              Text('今日字数')
+              Text('删除字数')
                 .fontSize(16)
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
-              Text(`${this.stats.todayChars}`)
+              Text(`${this.stats.totalDeletedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.themeConfig.colors.textPrimary)
@@ -148,11 +151,11 @@ export struct StatsScreen {
             .padding({ top: 12, bottom: 12 })
 
             Row() {
-              Text('今日时长(秒)')
+              Text('AI插入字数')
                 .fontSize(16)
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
-              Text(`${this.stats.todayDuration}`)
+              Text(`${this.stats.totalAiInsertedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.themeConfig.colors.textPrimary)
@@ -161,11 +164,50 @@ export struct StatsScreen {
             .padding({ top: 12, bottom: 12 })
 
             Row() {
-              Text('平均速度')
+              Text('净增字数')
                 .fontSize(16)
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
-              Text(`${this.stats.averageSpeed}`)
+              Text(`${this.stats.totalNetDeltaChars}`)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.themeConfig.colors.textPrimary)
+            }
+            .width('100%')
+            .padding({ top: 12, bottom: 12 })
+
+            Row() {
+              Text('活跃时长(秒)')
+                .fontSize(16)
+                .fontColor(this.themeConfig.colors.textPrimary)
+                .layoutWeight(1)
+              Text(`${this.stats.totalActiveSeconds}`)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.themeConfig.colors.textPrimary)
+            }
+            .width('100%')
+            .padding({ top: 12, bottom: 12 })
+
+            Row() {
+              Text('写作会话数')
+                .fontSize(16)
+                .fontColor(this.themeConfig.colors.textPrimary)
+                .layoutWeight(1)
+              Text(`${this.stats.totalSessions}`)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(this.themeConfig.colors.textPrimary)
+            }
+            .width('100%')
+            .padding({ top: 12, bottom: 12 })
+
+            Row() {
+              Text('写作天数')
+                .fontSize(16)
+                .fontColor(this.themeConfig.colors.textPrimary)
+                .layoutWeight(1)
+              Text(`${this.stats.daysCount}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.themeConfig.colors.textPrimary)

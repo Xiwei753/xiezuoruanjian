@@ -1,7 +1,7 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause } from './dto/EditorDtos'
 import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from './dto/StarMapDtos'
@@ -131,7 +131,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.projectBridge.deleteProject(projectId)
   }
 
-  async getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>> {
+  async getProjectStats(projectId: string): Promise<ResultEnvelope<ProjectStats>> {
     return this.projectBridge.getProjectStats(projectId)
   }
 

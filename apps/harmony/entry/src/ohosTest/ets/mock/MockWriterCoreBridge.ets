@@ -66,23 +66,23 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     editorTypingAnimationDurationMs: 100,
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
-    statsDeviceId: undefined,
+    statsDeviceId: null,
     desktopSidebarWidth: 280,
     desktopEditorWidth: 820,
     editorCoordinatedTextCursorAnimationEnabled: false,
     diagnosticsEnabled: false,
     diagnosticsVerbose: false
-  } as LocalSettings
+  }
 
   private mockSyncConfig: SyncConfig = {
     enabled: false,
     activeProvider: 'github',
-    providerConfig: undefined,
+    providerConfig: null,
     autoSync: false,
     syncIntervalSeconds: 300,
     hasNetworkPermission: false,
     hasNetworkStatePermission: false
-  } as SyncConfig
+  }
 
   private delay(ms: number): Promise<void> {
     return new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -98,7 +98,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   private error<T>(errorCode: ErrorCode, userMessage: string): ResultEnvelope<T> {
     const result: ResultEnvelope<T> = {
       success: false,
-      errorCode: errorCode
+      errorCode: errorCode,
       userMessage: userMessage }
     return result
   }
@@ -183,15 +183,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
-  async getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>> {
+  async getProjectStats(projectId: string): Promise<ResultEnvelope<ProjectStats>> {
     await this.delay(100)
-    const stats: WritingStats = {
-      totalChars: 25600,
-      totalWords: 18200,
-      totalChapters: 8,
-      todayChars: 1200,
-      todayDuration: 45,
-      averageSpeed: 800
+    const stats: ProjectStats = {
+      totalWordCount: 25600,
+      volumeCount: 3,
+      chapterCount: 8
     }
     return this.success(stats)
   }
@@ -271,7 +268,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
         order: 1,
         wordCount: content.replace(/\s/g, '').length,
         hash: 'mock-hash-' + chapterId,
-        note: undefined
+        note: null
       }
       const data: ChapterContent = {
         meta,
@@ -303,7 +300,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     if (!text || text.trim().length === 0) {
       const result: ResultEnvelope<ChapterSaveReceipt> = {
         success: false,
-        errorCode: 'EMPTY_OVERWRITE_BLOCKED'
+        errorCode: 'EMPTY_OVERWRITE_BLOCKED',
         userMessage: 'Cannot save empty content' }
       return result
     }
@@ -345,7 +342,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       hash: 'mock-hash-new',
-      note: undefined
+      note: null
     }
     chapters.push(newChapter)
     this.mockChapters.set(volumeId, chapters)
@@ -431,8 +428,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       starmapId: `starmap-${Date.now()}`,
       title,
       description,
-      projectId: undefined,
-      parentStarmapId: undefined,
+      projectId: null,
+      parentStarmapId: null,
       isMainForProject: false,
       accentColor: '#4A90D9',
       nodeCount: 0,

@@ -174,7 +174,9 @@ export struct HomeScreen {
                .fontColor(this.themeConfig.colors.textSecondary)
 
             if (this.writingStats) {
-               Text(getContext(this).resourceManager.getStringSync($r('app.string.today_chars_format').id).replace('%s', `${this.writingStats.todayChars}`))
+               // Issue #753 评论 5814008597 问题2：WritingStats 已换成 Core 的 WritingStatsSummaryDto，
+               // 返回最近 30 天汇总，不再有 todayChars。改用 totalHumanTypedChars，文案用字面量避免引入新资源字符串依赖。
+               Text(`近期手写: ${this.writingStats.totalHumanTypedChars}`)
                .fontSize(13)
                .fontColor(this.themeConfig.colors.textHint)
             }
@@ -260,14 +262,17 @@ export struct HomeScreen {
 
   @Builder
   WritingStatsCard() {
+    // Issue #753 评论 5814008597 问题2：WritingStats 已换成 Core 的 WritingStatsSummaryDto（最近 30 天汇总）。
+    // 旧字段 todayChars/todayDuration/totalWords 不存在，改用 totalHumanTypedChars/totalActiveSeconds/totalNetDeltaChars。
+    // 文案从"今日"改成"近期"，避免对 30 天汇总误标"今日"。
     Row() {
       Column() {
-        Text($r('app.string.today_writing'))
+        Text('近期手写')
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
-        Text(`${this.writingStats?.todayChars || 0}`)
+        Text(`${this.writingStats?.totalHumanTypedChars || 0}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.primary)
@@ -285,12 +290,12 @@ export struct HomeScreen {
         .color(this.themeConfig.colors.divider)
 
       Column() {
-        Text($r('app.string.today_duration'))
+        Text('活跃时长')
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
-        Text(`${Math.floor((this.writingStats?.todayDuration || 0) / 60)}`)
+        Text(`${Math.floor((this.writingStats?.totalActiveSeconds || 0) / 60)}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.secondary)
@@ -308,12 +313,12 @@ export struct HomeScreen {
         .color(this.themeConfig.colors.divider)
 
       Column() {
-        Text($r('app.string.total_words'))
+        Text('净增字数')
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
-        Text(`${this.writingStats?.totalWords || 0}`)
+        Text(`${this.writingStats?.totalNetDeltaChars || 0}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.success)

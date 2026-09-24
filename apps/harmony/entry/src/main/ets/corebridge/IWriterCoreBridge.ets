@@ -1,6 +1,6 @@
 import { EditorTransactionCause } from './dto/EditorDtos'
 import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from './dto/StarMapDtos'
@@ -16,7 +16,7 @@ export interface IWriterCoreBridge {
   createProject(name: string): Promise<ResultEnvelope<Project>>
   renameProject(projectId: string, newName: string): Promise<ResultEnvelope<boolean>>
   deleteProject(projectId: string): Promise<ResultEnvelope<boolean>>
-  getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>>
+  getProjectStats(projectId: string): Promise<ResultEnvelope<ProjectStats>>
 
   // Volume
   listVolumes(projectId: string): Promise<ResultEnvelope<Volume[]>>

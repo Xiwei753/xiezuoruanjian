@@ -1,7 +1,7 @@
-import { Project, ProjectTree, Volume, WritingStats } from '../dto/ProjectDtos'
+import { Project, ProjectTree, Volume, ProjectStats } from '../dto/ProjectDtos'
 import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeProject, decodeProjectTree, decodeVolume, decodeWritingStats, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeProject, decodeProjectTree, decodeVolume, decodeProjectStats, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
@@ -50,11 +50,11 @@ export class NativeProjectBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
-  async getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>> {
+  async getProjectStats(projectId: string): Promise<ResultEnvelope<ProjectStats>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetProjectStats(projectId)
-      return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
-    } catch (e) { return nativeError<WritingStats>(e) }
+      return this.core.decodeEnvelope<ProjectStats>(jsonStr, decodeProjectStats)
+    } catch (e) { return nativeError<ProjectStats>(e) }
   }
 
   async listVolumes(projectId: string): Promise<ResultEnvelope<Volume[]>> {
