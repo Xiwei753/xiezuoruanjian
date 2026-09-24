@@ -1,6 +1,6 @@
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
-import { AppNavigationHost } from '../../../app/navigation/AppNavigation'
+import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
 import { LocalSettings, ThemeMode } from '../../../corebridge/dto/SettingsDtos'
@@ -215,9 +215,9 @@ export struct WritingScreen {
     this.lifecycle.addObserver(this.shareLifecycleObserver!)
 
     // Issue #629 评论14 第2项：注册当前 WritingScreen 的离开守卫，获取唯一 token。
-    // AppNavigationHost.safePop/safeClearAndRebuild/safeReplacePath 会 await 此 guard（performGracefulClose），
+    // NavigationTransactionCoordinator.safePop/safeClearAndRebuild/safeReplacePath 会 await 此 guard（performGracefulClose），
     // 只有保存成功且 Core close 成功才允许改栈，未保存正文不被程序化 clear/pop 绕过。
-    this.leaveGuardToken = AppNavigationHost.getInstance().registerLeaveGuard((): Promise<boolean> => this.performGracefulClose())
+    this.leaveGuardToken = NavigationTransactionCoordinator.getInstance().registerLeaveGuard((): Promise<boolean> => this.performGracefulClose())
   }
 
   // Issue #629 评论6 Part G + 评论7 第5项 + 评论8 第2/3项：统一幂等关闭事务。
@@ -342,7 +342,7 @@ export struct WritingScreen {
   // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
   // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
   // 左上角按钮和 onBackPressed 都只调用此入口，禁止多套关闭/离开流程。
-  // Issue #629 评论11 第3项：requestLeave 改用 AppNavigationHost.safePop()。
+  // Issue #629 评论11 第3项：requestLeave 改用 NavigationTransactionCoordinator.safePop()。
   // safePop 内部 runGuardedNavigation 先 await leaveGuard（performGracefulClose），
   // 成功才 navPathStack.pop()，且两个并发 safePop 合并成一次事务（guard 一次、pop 一次）。
   // leaveTask 仍保留作为 requestLeave 自身重入防护（safePop 内部 navigationTask 也幂等，双保险）。
@@ -351,7 +351,7 @@ export struct WritingScreen {
       return this.leaveTask
     }
     const task: Promise<void> = (async () => {
-      await AppNavigationHost.getInstance().safePop()
+      await NavigationTransactionCoordinator.getInstance().safePop()
     })()
     this.leaveTask = task
     task.then(
@@ -378,7 +378,7 @@ export struct WritingScreen {
     // Issue #629 评论14 第2项：用唯一 token 注销自己的离开守卫，
     // 不影响其他 WritingScreen 实例（如宽屏切章节时新旧实例生命周期重叠）。
     if (this.leaveGuardToken >= 0) {
-      AppNavigationHost.getInstance().unregisterLeaveGuard(this.leaveGuardToken)
+      NavigationTransactionCoordinator.getInstance().unregisterLeaveGuard(this.leaveGuardToken)
       this.leaveGuardToken = -1
     }
     // 清除监听器（避免 close 后回调）
@@ -615,7 +615,7 @@ export struct WritingScreen {
     if (chapterId === this.chapterId) {
       return // 已是当前章节
     }
-    const host = AppNavigationHost.getInstance()
+    const host = NavigationTransactionCoordinator.getInstance()
     const targetKey = `writing:${this.projectId}:${volumeId}:${chapterId}`
     await host.safeReplacePath(targetKey, () => {
       const replaceParam: WritingRouteParams = {

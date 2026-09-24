@@ -156,6 +156,99 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     return ret;
 }
 
+// NativeSetDiagnosticsConfig: Update diagnostics config at runtime. Returns int32 status code:
+//   0 = success
+// Arguments: enabled (int32, non-zero = true), verbose (int32, non-zero = true).
+static napi_value NativeSetDiagnosticsConfig(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    if (argc < 2) {
+        OH_LOG_ERROR(LOG_APP, "NativeSetDiagnosticsConfig: expected 2 arguments, got %{public}zu", argc);
+        napi_throw_error(env, nullptr, "Expected 2 arguments: enabled, verbose");
+        return nullptr;
+    }
+
+    int32_t enabled = 0;
+    int32_t verbose = 0;
+    napi_get_value_int32(env, args[0], &enabled);
+    napi_get_value_int32(env, args[1], &verbose);
+
+    int32_t result = writer_core_set_diagnostics_config(enabled, verbose);
+
+    napi_value ret;
+    napi_create_int32(env, result, &ret);
+    return ret;
+}
+
+// NativeFlushDiagnostics: Flush diagnostics logs to disk. Returns int32 status code:
+//   0 = success, -1 = flush failed.
+static napi_value NativeFlushDiagnostics(napi_env env, napi_callback_info info) {
+    int32_t result = writer_core_flush_diagnostics();
+
+    napi_value ret;
+    napi_create_int32(env, result, &ret);
+    return ret;
+}
+
+// NativeClearDiagnostics: Clear diagnostics log files. Returns int32 status code:
+//   0 = success, -1 = clear failed.
+static napi_value NativeClearDiagnostics(napi_env env, napi_callback_info info) {
+    int32_t result = writer_core_clear_diagnostics();
+
+    napi_value ret;
+    napi_create_int32(env, result, &ret);
+    return ret;
+}
+
+// NativeExportDiagnostics: Export diagnostics to a zip file. Returns string:
+//   - On success: the zip file path
+//   - On failure: a JSON error envelope string
+// Arguments: output_dir (string), attachments_json (string, JSON array of
+//   { relative_path: string, content: string (base64) }).
+static napi_value NativeExportDiagnostics(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    if (argc < 2) {
+        OH_LOG_ERROR(LOG_APP, "NativeExportDiagnostics: expected 2 arguments, got %{public}zu", argc);
+        napi_throw_error(env, nullptr, "Expected 2 arguments: output_dir, attachments_json");
+        return nullptr;
+    }
+
+    // Extract output_dir
+    size_t output_dir_len = 0;
+    napi_get_value_string_utf8(env, args[0], nullptr, 0, &output_dir_len);
+    char* output_dir = new char[output_dir_len + 1];
+    napi_get_value_string_utf8(env, args[0], output_dir, output_dir_len + 1, &output_dir_len);
+
+    // Extract attachments_json
+    size_t attachments_len = 0;
+    napi_get_value_string_utf8(env, args[1], nullptr, 0, &attachments_len);
+    char* attachments_json = new char[attachments_len + 1];
+    napi_get_value_string_utf8(env, args[1], attachments_json, attachments_len + 1, &attachments_len);
+
+    char* zip_path = writer_core_export_diagnostics(output_dir, attachments_json);
+
+    delete[] output_dir;
+    delete[] attachments_json;
+
+    if (zip_path == nullptr) {
+        // Return error JSON envelope
+        napi_value err;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"EXPORT_FAILED\"}", 44, &err);
+        return err;
+    }
+
+    // Return zip path string, then free the core-allocated char*
+    napi_value result;
+    napi_create_string_utf8(env, zip_path, strlen(zip_path), &result);
+    writer_core_free_string(zip_path);
+    return result;
+}
+
 // NativeGetLastError: Returns last error message, or empty string if none.
 static napi_value NativeGetLastError(napi_env env, napi_callback_info info) {
     char* err = writer_core_get_last_error();
@@ -273,6 +366,10 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor core_desc[] = {
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeInitDiagnostics", nullptr, NativeInitDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeSetDiagnosticsConfig", nullptr, NativeSetDiagnosticsConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeFlushDiagnostics", nullptr, NativeFlushDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeClearDiagnostics", nullptr, NativeClearDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeExportDiagnostics", nullptr, NativeExportDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLoadStatus", nullptr, NativeGetLoadStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},

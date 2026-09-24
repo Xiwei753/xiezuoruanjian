@@ -90,4 +90,10 @@ export interface IWriterCoreBridge {
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>
   isAiAvailable(): Promise<ResultEnvelope<boolean>>
+
+  // Diagnostics
+  setDiagnosticsConfig(enabled: boolean, verbose: boolean): Promise<ResultEnvelope<boolean>>
+  flushDiagnostics(): Promise<ResultEnvelope<boolean>>
+  clearDiagnostics(): Promise<ResultEnvelope<boolean>>
+  exportDiagnostics(outputDir: string): Promise<ResultEnvelope<string>>
 }

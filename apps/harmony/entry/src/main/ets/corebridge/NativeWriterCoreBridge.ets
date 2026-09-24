@@ -14,6 +14,7 @@ import { NativeSettingsBridge } from './native/NativeSettingsBridge'
 import { NativeSyncBridge } from './native/NativeSyncBridge'
 import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
+import { NativeDiagnosticsBridge } from './native/NativeDiagnosticsBridge'
 import { decodeLayoutContract, decodeScreenPolicy } from './codec/CoreWireDecoders'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
@@ -31,6 +32,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private syncBridge = new NativeSyncBridge(this.core)
   private statsBridge = new NativeStatsBridge(this.core)
   private starMapBridge = new NativeStarMapBridge(this.core)
+  private diagnosticsBridge = new NativeDiagnosticsBridge(this.core)
 
   static getInstance(): NativeWriterCoreBridge {
     if (!NativeWriterCoreBridge.instance) {
@@ -366,6 +368,66 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeResolveScreenPolicy(JSON.stringify(screenRole))
       return this.core.decodeEnvelope<ScreenPolicy>(jsonStr, decodeScreenPolicy)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+    }
+  }
+
+  // ── Diagnostics ──
+
+  async setDiagnosticsConfig(enabled: boolean, verbose: boolean): Promise<ResultEnvelope<boolean>> {
+    try {
+      const result: number = this.diagnosticsBridge.setDiagnosticsConfig(enabled, verbose)
+      const envelope: ResultEnvelope<boolean> = {
+        success: result === 0,
+        data: result === 0
+      }
+      return envelope
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+    }
+  }
+
+  async flushDiagnostics(): Promise<ResultEnvelope<boolean>> {
+    try {
+      const result: number = this.diagnosticsBridge.flushDiagnostics()
+      const envelope: ResultEnvelope<boolean> = {
+        success: result === 0,
+        data: result === 0
+      }
+      return envelope
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+    }
+  }
+
+  async clearDiagnostics(): Promise<ResultEnvelope<boolean>> {
+    try {
+      const result: number = this.diagnosticsBridge.clearDiagnostics()
+      const envelope: ResultEnvelope<boolean> = {
+        success: result === 0,
+        data: result === 0
+      }
+      return envelope
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+    }
+  }
+
+  async exportDiagnostics(outputDir: string): Promise<ResultEnvelope<string>> {
+    try {
+      // 不带平台附件的基础导出 — 平台附件收集由 HarmonyDiagnosticsExporter 负责。
+      const result: string = this.diagnosticsBridge.exportDiagnostics(outputDir, '[]')
+      // 检查返回值：成功是 zip 文件路径，失败是 JSON 错误 envelope（以 { 开头）
+      if (result.startsWith('{')) {
+        const errorEnvelope: ResultEnvelope<string> = JSON.parse(result) as ResultEnvelope<string>
+        return errorEnvelope
+      }
+      const envelope: ResultEnvelope<string> = {
+        success: true,
+        data: result
+      }
+      return envelope
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }

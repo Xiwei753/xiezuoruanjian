@@ -135,20 +135,62 @@ Rust Core 先编再编 HAP：
 ./tools/build_harmony.sh
 ```
 
-## 签名注意
+## 签名配置
 
-- 仓库**不提交** `.p12`、私钥密码、AGC Client Secret、OAuth/access token。
+### 仓库提交结构
+
+`apps/harmony/build-profile.json5` 中 `products[name=default]` 包含 `signingConfig: 'default'` 引用，指向 `signingConfigs[name=default]` 的空 material 占位：
+
+```json5
+{
+  app: {
+    signingConfigs: [
+      {
+        name: 'default',
+        type: 'HarmonyOS',
+        material: {
+          storeFile: '',
+          storePassword: '',
+          keyAlias: '',
+          keyPassword: '',
+          signAlg: 'SHA256withECDSA',
+          profile: '',
+          certpath: ''
+        }
+      },
+    ],
+    products: [
+      {
+        name: 'default',
+        signingConfig: 'default',
+        // ...
+      },
+    ],
+  },
+}
+```
+
+### 开发者本机操作
+
+- 仓库**不提交** `.p12`、`.cer`、`.p7b`、私钥密码、AGC Client Secret、OAuth/access token、本机绝对路径。
+- 开发者只在本机填自己的 material（`storeFile`/`storePassword`/`keyAlias`/`keyPassword`/`profile`/`certpath`）。
 - 本机生成签名（需已 `devecocli auth login`）：
 
 ```bash
 cd apps/harmony
-devecocli signature generate                 # 写入本机 build-profile.json5 signingConfig
+devecocli signature generate                 # 写入本机 build-profile.json5 signingConfig material
 devecocli signature generate --force         # 强制重生成
 devecocli auth status
 ```
 
 - 签名 material 变更后安装失败：`devecocli run --uninstall` 或重新 `signature generate --force`。
 - 自动化只建议注入环境变量名（如 `HARMONY_SIGN_P12_PATH`、`HARMONY_SIGN_P12_PASSWORD`、`AGC_CLIENT_SECRET`、`AGC_ACCESS_TOKEN`），路径与值放本机 secrets，不进 git。
+
+### 不要删除 product → signingConfig 引用
+
+- `signingConfig: 'default'` 引用必须保留在仓库中。
+- 不再通过删除 product 引用来生成 unsigned HAP。
+- 空 material 占位（所有字段为空字符串）是仓库的默认状态，开发者本机填入真实值后即可签名构建。
 
 ## 真机 / 模拟器
 

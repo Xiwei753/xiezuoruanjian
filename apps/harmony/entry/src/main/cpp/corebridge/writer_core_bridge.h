@@ -26,6 +26,12 @@ void    writer_core_free_string(char* ptr);
 //   Idempotent: repeated calls have no side effect.
 int32_t writer_core_init_diagnostics(const char* log_dir, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
 
+// ── Diagnostics operations ──
+int32_t writer_core_set_diagnostics_config(int32_t enabled, int32_t verbose);
+int32_t writer_core_flush_diagnostics(void);
+int32_t writer_core_clear_diagnostics(void);
+char*  writer_core_export_diagnostics(const char* output_dir, const char* attachments_json);
+
 // ── Layout Contract（#610 / #753） ──
 // writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutContract>).
 // Input is WindowViewportDto: { widthDp, heightDp, occlusions }. 平台只上报测量到的

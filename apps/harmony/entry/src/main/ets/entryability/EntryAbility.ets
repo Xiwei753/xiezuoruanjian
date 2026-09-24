@@ -6,7 +6,7 @@ import { getAppContext } from '../app/AppContext'
 import { getAdaptiveContext } from '../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../platform/continuity/ContinuationPayload'
-import { AppNavigationHost } from '../app/navigation/AppNavigation'
+import { NavigationTransactionCoordinator } from '../app/navigation/NavigationTransactionCoordinator'
 import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
 import i18n from '@ohos.i18n'
@@ -116,8 +116,8 @@ export default class EntryAbility extends UIAbility {
 
   // 接续恢复阶段的目标设备窗口初始化：与 onWindowStageCreate 等价的根页面装载。
   // SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移，这里只装载根页 pages/Index，
-  // AppNavigation 首帧 aboutToAppear 时从 AppNavigationHost 消费已交付的接续 payload，
-  // 由 AppNavigationHost.restoreFromContinuation 手动重建 NavPathStack。
+  // AppNavigation 首帧 aboutToAppear 时从 NavigationTransactionCoordinator 消费已交付的接续 payload，
+  // 由 NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
   onWindowStageRestore(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
 
@@ -178,7 +178,7 @@ export default class EntryAbility extends UIAbility {
 
   // —— private ——
   // 从 want.parameters 读取接续 payload，交给 AppContinuationService.restoreFromWant() 还原，
-  // 再交 AppNavigationHost.restoreFromContinuation() 手动重建 NavPathStack
+  // 再交 NavigationTransactionCoordinator.restoreFromContinuation() 手动重建 NavPathStack
   // （SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移）。
   private restoreContinuationFromWant(want: Want): void {
     const parameters: Record<string, Object> | undefined = want.parameters
@@ -188,7 +188,7 @@ export default class EntryAbility extends UIAbility {
     const restored: ContinuationPayload | null = this.continuationService.restoreFromWant(parameters)
     if (restored !== null) {
       hilog.info(0x0000, 'EntryAbility', 'Continuation restored: projectId=%{public}s', restored.projectId ?? '')
-      AppNavigationHost.getInstance().restoreFromContinuation(restored)
+      NavigationTransactionCoordinator.getInstance().restoreFromContinuation(restored)
     }
   }
 }

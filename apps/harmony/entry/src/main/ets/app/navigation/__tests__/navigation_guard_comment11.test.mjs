@@ -1,5 +1,5 @@
 // navigation_guard_comment11.test.mjs — Issue #629 评论11 第3项 + 评论14 第2项 + 评论15 第6项
-// AppNavigationHost LeaveGuard + safePop/safeClearAndRebuild/safeReplacePath 幂等导航事务纯逻辑单测。
+// NavigationTransactionCoordinator LeaveGuard + safePop/safeClearAndRebuild/safeReplacePath 幂等导航事务纯逻辑单测。
 //
 // 验证（评论15 第6项 恢复强断言）：
 //   1. 两个并发 safePop() → guardCalls===1 且 popCalls.length===1
@@ -44,13 +44,13 @@ class MockNavPathStack {
   }
 }
 
-// AppNavigationHost 纯逻辑镜像（与 AppNavigation.ets AppNavigationHost 对齐）。
+// NavigationTransactionCoordinator 纯逻辑镜像（与 NavigationTransactionCoordinator.ets 对齐）。
 // Issue #629 评论14 第2项 + 评论15 第6项：
 // - activeGuardLease: 只持有当前 active guard，旧实例迟到的 disappear 不会删新 guard
 // - NavigationIntent dedupeKey: Pop='pop', ReplacePath='replace:<targetKey>', ClearAndRebuild 由调用方提供
 // - activeTask: 正在执行的任务仍在"可去重集合"里（shift 后不消失）
 // - 不同 intent 严格串行执行，不同 dedupeKey 不合并
-class AppNavigationHost {
+class NavigationTransactionCoordinator {
   constructor() {
     this.navPathStack = null
     this.activeGuardLease = null
@@ -145,7 +145,7 @@ console.log('navigation_guard_comment11 纯逻辑单测（Issue #629 评论15 �
 console.log('---')
 
 await testAsync('safePop: 无 guard 时 pop 一次，返回 true', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   const ok = await host.safePop()
@@ -154,7 +154,7 @@ await testAsync('safePop: 无 guard 时 pop 一次，返回 true', async () => {
 })
 
 await testAsync('safePop: guard 返回 true 时 pop 一次，返回 true', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   let guardCalls = 0
@@ -166,7 +166,7 @@ await testAsync('safePop: guard 返回 true 时 pop 一次，返回 true', async
 })
 
 await testAsync('safePop: guard 返回 false 时不 pop，返回 false', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => false)
@@ -176,7 +176,7 @@ await testAsync('safePop: guard 返回 false 时不 pop，返回 false', async (
 })
 
 await testAsync('safePop: 两个并发 safePop → guardCalls===1 且 popCalls.length===1（强断言）', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   let guardCalls = 0
@@ -194,7 +194,7 @@ await testAsync('safePop: 两个并发 safePop → guardCalls===1 且 popCalls.l
 })
 
 await testAsync('activeGuardLease: 旧 Writing token 注销后新 guard 仍在', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   const tokenA = host.registerLeaveGuard(async () => false)
@@ -206,7 +206,7 @@ await testAsync('activeGuardLease: 旧 Writing token 注销后新 guard 仍在',
 })
 
 await testAsync('不同 intent 不合并: safePop 和 safeClearAndRebuild 都执行且按顺序', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => true)
@@ -223,7 +223,7 @@ await testAsync('不同 intent 不合并: safePop 和 safeClearAndRebuild 都执
 })
 
 await testAsync('safeClearAndRebuild: guard 失败时不 clear', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => false)
@@ -235,7 +235,7 @@ await testAsync('safeClearAndRebuild: guard 失败时不 clear', async () => {
 })
 
 await testAsync('safeReplacePath: 相同 targetKey 复用同一 task', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => true)
@@ -248,7 +248,7 @@ await testAsync('safeReplacePath: 相同 targetKey 复用同一 task', async () 
 })
 
 await testAsync('safeReplacePath: 不同 targetKey 串行执行两次，不互吞', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => true)
@@ -261,7 +261,7 @@ await testAsync('safeReplacePath: 不同 targetKey 串行执行两次，不互�
 })
 
 await testAsync('Pop 正在执行时 ClearAndRebuild 入队 → 两个都按顺序执行', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   let guardResolve = null
@@ -286,7 +286,7 @@ await testAsync('Pop 正在执行时 ClearAndRebuild 入队 → 两个都按顺�
 })
 
 await testAsync('guard 抛异常 → task resolve false', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   host.registerLeaveGuard(async () => { throw new Error('guard crashed') })
@@ -296,7 +296,7 @@ await testAsync('guard 抛异常 → task resolve false', async () => {
 })
 
 await testAsync('unregisterLeaveGuard 后 safePop: 无 guard，直接 pop', async () => {
-  const host = new AppNavigationHost()
+  const host = new NavigationTransactionCoordinator()
   const stack = new MockNavPathStack()
   host.register(stack)
   const token = host.registerLeaveGuard(async () => false)
