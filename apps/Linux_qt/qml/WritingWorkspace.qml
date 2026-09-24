@@ -39,6 +39,7 @@ Rectangle {
     id: root
     required property var dt
     property var editorBackendRef: null
+    property var projectBackendRef: null
     property var starMapController: null
     // Issue #709 评论 issue-body-709: 传入 themeController 给 EditorController，
     // 使 logRenderColorProbe 能读取 ThemeController runtime state。
@@ -159,16 +160,24 @@ Rectangle {
     onTreeChanged: populateTreeModel()
     Component.onCompleted: {
         populateTreeModel();
-        var sel = (root.appState && root.appState.selected) ? root.appState.selected : null;
-        if (sel && sel.chapterId) {
+
+        var sel = (root.appState && root.appState.selected)
+                ? root.appState.selected : null
+
+        if (sel
+                && sel.projectId === root.workspaceProjectId
+                && sel.chapterId) {
             root.openChapter(
-                sel.projectId || "",
+                sel.projectId,
                 sel.volumeId || "",
                 sel.chapterId,
                 ""
-            );
+            )
+        } else {
+            editorController.clearActiveChapter()
         }
-        root.requestEditorFocus();
+
+        root.requestEditorFocus()
     }
 
     function openChapter(pId, vId, cId, cTitle) {
@@ -198,6 +207,8 @@ Rectangle {
             if (editorScroll.contentItem) {
                 editorScroll.contentItem.contentY = 0;
             }
+            if (root.projectBackendRef)
+                root.projectBackendRef.select_chapter(pId, vId, cId)
             root.requestEditorFocus();
         }
     }

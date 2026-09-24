@@ -176,12 +176,17 @@ QtObject {
     }
 
     function openWriting(projectId, projectTitle) {
-        writingProjectId = projectId || "";
-        writingProjectTitle = projectTitle || qsTr("作品");
-        starmapId = "";
-        starmapTitle = "";
-        route = "writing";
-        saveNavigationState();
+        if (!projectId || !projectBackendRef) return
+
+        projectBackendRef.select_project(projectId)
+        refreshStateImmediate(qsTr("切换作品失败"))
+
+        writingProjectId = projectId
+        writingProjectTitle = projectTitle || qsTr("作品")
+        starmapId = ""
+        starmapTitle = ""
+        route = "writing"
+        saveNavigationState()
     }
 
     function openStarmap(id, title) {

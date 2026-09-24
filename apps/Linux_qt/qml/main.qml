@@ -440,6 +440,11 @@ ApplicationWindow {
         function onProjects_reloaded() {
             appController.refreshState(qsTr("刷新作品列表失败"));
         }
+        function onSelected_item_changed() {
+            appController.refreshStateImmediate(qsTr("刷新当前选择失败"))
+            if (appController.inWriting)
+                appController.saveNavigationState()
+        }
     }
 
     Connections {
@@ -579,6 +584,7 @@ ApplicationWindow {
             active: rootHasWorkspace && appController.inWriting
             sourceComponent: WritingWorkspace {
                 dt: designTokens
+                projectBackendRef: projectBackend
                 editorBackendRef: editorBackend
                 starMapController: globalStarMapController
                 // Issue #709 评论 issue-body-709: 传入 themeController 使
@@ -790,7 +796,7 @@ ApplicationWindow {
         active: false
         sourceComponent: SettingsDialog {
             theme: designTokens
-            settingsBackend: settingsBackend
+            settingsBackendRef: settingsBackend
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend

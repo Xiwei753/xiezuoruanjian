@@ -103,10 +103,6 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match writing_bridge::open_chapter(&core, &p, &v, &c) {
                 Ok(data) => {
-                    self.selected_project_id = Some(p.clone());
-                    self.selected_volume_id = Some(v.clone());
-                    self.selected_chapter_id = Some(c.clone());
-
                     self.debug_log("chapter", "open_chapter_success", "len_loaded");
 
                     return bridge_success_object(serde_json::to_value(data).unwrap_or_default());
