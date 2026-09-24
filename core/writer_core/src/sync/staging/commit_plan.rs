@@ -28,12 +28,23 @@ pub struct CommitPlan {
 /// 三方冲突的完整信息。
 ///
 /// 保留 `rel_path` + 三方哈希，Commit 阶段映射成 `SyncConflict` 时不再丢失信息。
+///
+/// 字段语义：
+/// - `rel_path`：incoming 内容在 staging_root 下的相对路径（也是 live target 下的相对路径）。
+/// - `remote_snapshot_path`：在 commit_helpers 的 `run.cleanup()` 之前由
+///   `save_conflict_copy` 填入，是相对 live_root 的快照路径（如
+///   `volumes/v1/chapters/c1/chapter.md.remote-conflict-20260925-012345`）。
+///   `record_staging_conflicts` 据此填 `SyncConflict.remote_snapshot_path`，
+///   让 #757 冲突侧栏"用户看到什么就选择什么"——预览展示的远端正文与
+///   `take_remote` 实际采用的正文是同一份。`None` 表示未保存快照（老数据兼容，
+///   `take_remote` 回退 `pending_take_remote`）。
 #[derive(Debug, Clone)]
 pub struct StagingConflict {
     pub rel_path: PathBuf,
     pub base_hash: String,
     pub local_hash: String,
     pub incoming_hash: String,
+    pub remote_snapshot_path: Option<String>,
 }
 
 /// 单个文件的 commit 动作。

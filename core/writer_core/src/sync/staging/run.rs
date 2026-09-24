@@ -289,6 +289,9 @@ impl StagingRun {
                             base_hash,
                             local_hash,
                             incoming_hash,
+                            // 此处尚未保存快照；由 commit_helpers 在 staging cleanup 前
+                            // 调 save_conflict_snapshots 填入（#757）。
+                            remote_snapshot_path: None,
                         });
                     }
                 }

@@ -180,7 +180,7 @@ pub fn record_staging_conflicts(
                 sc.rel_path.display()
             ),
             kind: crate::sync::types::SyncConflictKind::BothChanged,
-            remote_snapshot_path: None,
+            remote_snapshot_path: sc.remote_snapshot_path.clone(),
         };
 
         upsert_conflict(
@@ -344,7 +344,13 @@ impl crate::sync::SyncService {
     /// - **兼容老数据**：旧冲突记录没有 `kind` 字段（反序列化默认 `BothChanged`）时，
     ///   如果有 `remote_snapshot_path` 就走 BothChanged snapshot 替换；没有 snapshot path
     ///   则回退到旧的 `pending_take_remote` 行为（保持兼容）。
-    pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<()> {
+    ///
+    /// 返回值 `applied_live`：
+    /// - `Ok(true)`：已立即修改 live 正文（BothChanged snapshot 替换 / RemoteDeleted 移入 trash）。
+    ///   平台层据此触发编辑器重载（`sync_content_applied`）。
+    /// - `Ok(false)`：仅排队 `pending_take_remote`（老数据兼容，live 正文未变），
+    ///   平台层不应触发编辑器重载。
+    pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
         let mut state = Self::load_sync_state(sync_root)?;
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
@@ -376,7 +382,10 @@ impl crate::sync::SyncService {
         let mut conflicts_json = load_conflicts_json(sync_root)?;
         conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
-        Ok(())
+        // applied_live = !use_pending_fallback：
+        // - use_pending_fallback=false → 已立即应用 live 正文（snapshot 替换/移入 trash）。
+        // - use_pending_fallback=true → 仅排队 pending_take_remote，live 正文未变。
+        Ok(!use_pending_fallback)
     }
 
     /// 根据 conflict kind 决定 take_remote 的具体动作，返回是否需要回退到 pending_take_remote。

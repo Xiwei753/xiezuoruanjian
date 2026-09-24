@@ -68,7 +68,7 @@ impl super::WriterCore {
         &self,
         project_id: &str,
         path: &str,
-    ) -> crate::error::Result<()> {
+    ) -> crate::error::Result<bool> {
         crate::sync::SyncService::resolve_conflict_take_remote(&self.project_root(project_id), path)
     }
 

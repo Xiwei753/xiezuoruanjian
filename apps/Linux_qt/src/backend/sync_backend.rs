@@ -454,15 +454,24 @@ impl SyncBackend {
                 _ => api.resolve_conflict_mark_merged(&pid, &conflict_path),
             })
         });
-        let envelope = match result {
-            Ok(Some(Ok(ok))) => {
-                writer_core::api::ResultEnvelope::success(serde_json::json!({ "resolved": ok }))
-            }
-            Ok(Some(Err(error))) => {
-                writer_core::api::ResultEnvelope::<serde_json::Value>::error(error)
-            }
-            Ok(None) => writer_core::api::ResultEnvelope::<serde_json::Value>::error(
-                writer_core::api::WriterError::Other("workspace not initialized".to_string()),
+        // Issue #757 评论 5820327136 第 1 点：take_remote 的 applied_live bool 透传到
+        // 此处。只在 take_remote 且 Core 确实立即修改了 live 正文时触发编辑器重载
+        // （sync_content_applied）。老数据 fallback（pending_take_remote）此时 live 正文
+        // 未变，不应触发。keep_local / mark_merged 不修改 live 正文，applied_live 固定 false。
+        let (envelope, applied_live) = match result {
+            Ok(Some(Ok(ok))) => (
+                writer_core::api::ResultEnvelope::success(serde_json::json!({ "resolved": ok })),
+                ok,
+            ),
+            Ok(Some(Err(error))) => (
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(error),
+                false,
+            ),
+            Ok(None) => (
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(
+                    writer_core::api::WriterError::Other("workspace not initialized".to_string()),
+                ),
+                false,
             ),
             Err(_) => return crate::backend::json_utils::borrow_conflict_error_json().into(),
         };
@@ -474,7 +483,8 @@ impl SyncBackend {
             // 正文、RemoteDeleted 移走正文，当前编辑器仍持有旧正文，需触发
             // onSync_content_applied 走现有 refreshStateImmediate + reconcileActiveChapter
             // 链路重载。keep_local / mark_merged 不替换/删除 live 正文，不需要此信号。
-            if action == "take_remote" {
+            // 只在 take_remote 且 applied_live=true 时发（#757 评论 5820327136 第 1 点）。
+            if action == "take_remote" && applied_live {
                 self.sync_content_applied();
             }
         }

@@ -50,7 +50,7 @@ pub(super) fn sync_download_pool(
 /// 返回相对 `sync_root` 的完整 snapshot 路径（如
 /// `volumes/v1/chapters/c1/chapter.md.remote-conflict-20260925-012345`），
 /// 供 [`SyncConflict::remote_snapshot_path`] 记录，预览 API 据此读取远端内容。
-pub(super) fn save_conflict_copy(
+pub(crate) fn save_conflict_copy(
     sync_root: &Path,
     path: &str,
     remote_content: &[u8],

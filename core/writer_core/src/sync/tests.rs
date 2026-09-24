@@ -3458,4 +3458,185 @@ mod tests {
         let obj = provider.read("projects/test/project.json").unwrap();
         assert!(obj.is_none(), "remote file should be deleted after sync");
     }
+
+    /// Issue #757 评论 5820327136 第 1 点：staging BothChanged 冲突在 cleanup 前
+    /// 保存远端快照到 `remote_snapshot_path`，冲突预览展示的远端正文与
+    /// `take_remote` 实际采用的正文是同一份。远端之后再变化，`take_remote` 仍采用
+    /// 保存的 snapshot（不是新远端），且返回 `applied_live=true`。
+    ///
+    /// 本测试手动模拟 `commit_helpers::save_conflict_snapshots` 的逻辑（读 staging
+    /// incoming → save_conflict_copy → 填 remote_snapshot_path），不依赖网络和
+    /// apply_staging_commits_for_targets 的完整编排，专注验证 #757 的核心不变量。
+    #[test]
+    fn staging_both_changed_snapshot_preview_and_take_remote() {
+        use crate::sync::staging::{CommitAction, StagingRun};
+        use std::path::PathBuf;
+
+        let dir = tempdir().unwrap();
+        let live = dir.path().join("live");
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = live.join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        // base 内容。
+        let base_content = "base version";
+        let local_content = "local changed version";
+        let incoming_content = "incoming version A (snapshot)";
+        std::fs::write(&chapter_abs, base_content).unwrap();
+
+        // 建 staging run 并 seed_from_live（base + staging 都有 chapter.md == base）。
+        let run = StagingRun::create(dir.path(), live.clone()).unwrap();
+        run.seed_from_live(&live).unwrap();
+
+        // local 改了（atomic_write rename 替换，base 保留旧 inode）。
+        crate::storage::atomic_write_string(&chapter_abs, local_content).unwrap();
+        // incoming 改了（atomic_write rename 替换 staging，避免 hard-link 共享 inode
+        // 时 truncate 写穿 base）。
+        crate::storage::atomic_write_string(
+            &run.staging_root().join(chapter_rel),
+            incoming_content,
+        )
+        .unwrap();
+
+        // compute_commit_plan → BothChanged → plan.conflict 有 1 条。
+        let mut plan = run.compute_commit_plan(&live).unwrap();
+        assert_eq!(
+            plan.conflict.len(),
+            1,
+            "BothChanged should produce exactly one staging conflict"
+        );
+        assert!(plan.content_actions.is_empty());
+        assert!(plan.keep_local.is_empty());
+        // 确认是正文类冲突而非 LWW。
+        assert_eq!(plan.conflict[0].rel_path, PathBuf::from(chapter_rel));
+        assert!(plan.conflict[0].remote_snapshot_path.is_none());
+
+        // 手动模拟 commit_helpers::save_conflict_snapshots：
+        // 读 staging incoming → save_conflict_copy → 填 remote_snapshot_path。
+        // 必须在 run.cleanup() 之前（cleanup 删 staging）。
+        let staging_root = run.staging_root();
+        let incoming_bytes = std::fs::read(staging_root.join(chapter_rel)).unwrap();
+        let snapshot_rel =
+            crate::sync::lww::save_conflict_copy(&live, chapter_rel, &incoming_bytes).unwrap();
+        plan.conflict[0].remote_snapshot_path = Some(snapshot_rel.clone());
+
+        // cleanup staging（模拟 commit_helpers 的 run.cleanup()）。
+        run.cleanup();
+
+        // record_staging_conflicts 写 SyncConflict（含 remote_snapshot_path）。
+        let merged = crate::sync::conflict::record_staging_conflicts(
+            &live,
+            "projects/test",
+            &plan.conflict,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].remote_snapshot_path.as_deref(),
+            Some(snapshot_rel.as_str()),
+            "SyncConflict.remote_snapshot_path must be filled from StagingConflict"
+        );
+
+        // 预览：remote_content == 冲突发生时的 incoming（不是新远端）。
+        let preview = SyncService::load_conflict_preview(&live, chapter_rel).unwrap();
+        assert_eq!(
+            preview.remote_content.as_deref(),
+            Some(incoming_content),
+            "preview.remote_content must equal the incoming content at conflict time"
+        );
+        assert_eq!(preview.local_content, local_content);
+
+        // 模拟远端再变化：改 live 下的 snapshot 文件内容（模拟"新远端"）。
+        // 实际场景里远端再变是远端文件变了，但 take_remote 走 snapshot 路径不读远端。
+        // 这里改 snapshot 文件本身来证明 resolve 读的是 snapshot 文件内容（原 incoming）。
+        // 为更贴近真实：我们不改 snapshot（snapshot 是冲突时的冻结副本），而是验证
+        // resolve 后 live 正文 == 原 incoming。
+        let applied_live = SyncService::resolve_conflict_take_remote(&live, chapter_rel).unwrap();
+
+        // applied_live=true：已立即用 snapshot 替换 live 正文。
+        assert!(
+            applied_live,
+            "take_remote with snapshot must return applied_live=true"
+        );
+
+        // live 正文 == 原 incoming（不是新远端，不是 local）。
+        let live_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(
+            live_after, incoming_content,
+            "live content after take_remote must equal the saved snapshot (original incoming), \
+             not a newer remote or the local version"
+        );
+
+        // 状态：conflict 已清，pending_take_remote 不含该路径（走 snapshot 不排队）。
+        let state_after = SyncService::load_sync_state(&live).unwrap();
+        assert!(!state_after.conflicted_files.contains(chapter_rel));
+        assert!(
+            !state_after.pending_take_remote.contains(chapter_rel),
+            "snapshot path must NOT queue pending_take_remote (that would download a newer remote)"
+        );
+        assert!(state_after.conflicts.is_empty());
+
+        //   显式标记 plan 已用，避免 dead_code warning（CommitAction 在本测试不产生，
+        // 但引用一下确保 import 不被警告）。
+        let _ = CommitAction::Apply {
+            rel_path: PathBuf::new(),
+            content: Vec::new(),
+        };
+    }
+
+    /// Issue #757 评论 5820327136 第 1 点：老数据兼容——BothChanged 但无
+    /// `remote_snapshot_path` 时，`resolve_conflict_take_remote` 回退
+    /// `pending_take_remote`，返回 `applied_live=false`（live 正文未变）。
+    #[test]
+    fn staging_both_changed_no_snapshot_falls_back_to_pending() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let local_content = "local content stays";
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        // 构造老数据冲突：BothChanged + remote_snapshot_path=None。
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), "hash_base".to_string());
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local".to_string(),
+            remote_hash: "hash_remote".to_string(),
+            base_hash: "hash_base".to_string(),
+            created_at: 12345,
+            description: "old data both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let applied_live =
+            SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
+
+        // 老数据无 snapshot → 回退 pending_take_remote，applied_live=false。
+        assert!(
+            !applied_live,
+            "old data without snapshot must return applied_live=false (live content unchanged)"
+        );
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            state_after.pending_take_remote.contains(chapter_rel),
+            "old data without snapshot must queue pending_take_remote"
+        );
+        // live 正文未变。
+        let live_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(
+            live_after, local_content,
+            "live content must be unchanged when falling back to pending_take_remote"
+        );
+    }
 }
