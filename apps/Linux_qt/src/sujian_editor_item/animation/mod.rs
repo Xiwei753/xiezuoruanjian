@@ -6,7 +6,9 @@ pub(crate) mod render_plan_builder;
 pub(crate) mod transaction;
 pub(crate) mod transaction_builder;
 
-pub(crate) use coordinator::{find_line_geometry_in_snapshot, LinuxEditorAnimationCoordinator};
+pub(crate) use coordinator::{
+    find_line_geometry_in_snapshot, LinuxEditorAnimationCoordinator,
+};
 pub(crate) use transaction::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedTransactionQueue,
     PreparedVisualUnit, RebaseFrame, TextVisualOperationKind, TextVisualTransactionState,

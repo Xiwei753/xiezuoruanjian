@@ -8,18 +8,20 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
-use crate::editor::layout::compute_affected_paragraph_ranges;
-use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
-use crate::sujian_editor_item::animation::transaction_builder::{
-    build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels,
-    CompositionCommitCrossfadeSpec, VisualEditSpec,
-};
-use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
 use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect};
-use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
+use crate::sujian_editor_item::animation::{
+    TextVisualOperationKind, TextVisualTransactionState,
+};
+use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
+use crate::sujian_editor_item::animation::transaction_builder::{
+    build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels, VisualEditSpec,
+    CompositionCommitCrossfadeSpec,
+};
+use crate::editor::layout::compute_affected_paragraph_ranges;
+use crate::sujian_editor_item::editor_animation_debug_log;
 
 use super::coordinator::LinuxEditorAnimationCoordinator;
 
@@ -365,3 +367,4 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 }
+
