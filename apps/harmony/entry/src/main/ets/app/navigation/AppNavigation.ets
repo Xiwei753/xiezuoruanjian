@@ -4,9 +4,12 @@
 // 导航事务逻辑（意图队列、离开守卫、安全 pop/replace/rebuild）已分离到 NavigationTransactionCoordinator。
 // 窄屏一级壳层（作品/星图/统计底部 Tab Bar）在 compact/single-pane 模式下显示。
 //
-// Issue #760 评论 5822350374 问题2：
-// - 底栏根据当前 route 对应的 ScreenRole showPrimaryNavigation 控制显隐
-//   （Home/StarMap/Stats=true，Writing/Settings=false）
+// Issue #760 评论 5823355851 问题1：
+// - 底栏显隐绑定 Core ScreenPolicy.showPrimaryNavigation，不再用手工布尔值
+// - 路由到 ScreenRole 映射：Home→Home, Workspace→ProjectWorkspace, Writing→Writing,
+//   Settings→Settings, StarMap→StarMap, Stats→Stats
+// - NavDestination.onShown 回调中根据当前路由的 ScreenRole 调 resolveScreenPolicy
+// - Core 规则：Writing/Settings=false，Home/ProjectWorkspace/StarMap/Stats=true
 // - Tab 切换统一走 NavigationTransactionCoordinator.safeClearAndRebuild()
 
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from './Routes'
@@ -21,15 +24,13 @@ import { ContinuationPayload } from '../../platform/continuity/ContinuationPaylo
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
+import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
 const TAB_STARMAP: number = 1 // 星图
 const TAB_STATS: number = 2   // 统计
-
-// Issue #760 评论 5822350374 问题2：根级页面（showPrimaryNavigation=true）集合。
-// 只有这些 route 在窄屏时显示底部一级导航栏；Writing/Settings 等二级页面不显示。
-const ROOT_LEVEL_ROUTES: Set<string> = new Set([Routes.Home, Routes.StarMap, Routes.Stats])
 
 @Component
 export struct AppNavigation {
@@ -42,9 +43,10 @@ export struct AppNavigation {
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   // 主题配置（底部 Tab Bar 配色）
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
-  // Issue #760 评论 5822350374 问题2：是否显示底部一级导航栏。
-  // 根级页面（Home/StarMap/Stats）=true，二级页面（Writing/Settings/Workspace）=false。
-  @State showBottomBar: boolean = true
+  // Issue #760 评论 5823355851 问题1：当前页面对应的 ScreenRole
+  @State currentScreenRole: ScreenRole = ScreenRole.Home
+  // Issue #760 评论 5823355851 问题1：是否显示底部一级导航栏，由 Core ScreenPolicy.showPrimaryNavigation 决定
+  @State currentShowPrimaryNav: boolean = true
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -86,6 +88,46 @@ export struct AppNavigation {
     }
   }
 
+  // Issue #760 评论 5823355851 问题1：路由名到 ScreenRole 的映射。
+  // Workspace 路由对应 ProjectWorkspace（showPrimaryNavigation=true），不是二级页面。
+  private routeToScreenRole(route: string): ScreenRole {
+    switch (route) {
+      case Routes.Home:
+        return ScreenRole.Home
+      case Routes.Workspace:
+        return ScreenRole.ProjectWorkspace
+      case Routes.Writing:
+        return ScreenRole.Writing
+      case Routes.Settings:
+        return ScreenRole.Settings
+      case Routes.StarMap:
+        return ScreenRole.StarMap
+      case Routes.Stats:
+        return ScreenRole.Stats
+      default:
+        return ScreenRole.Home
+    }
+  }
+
+  // Issue #760 评论 5823355851 问题1：页面显示时根据路由名映射 ScreenRole 并查询 ScreenPolicy。
+  private onPageShown(routeName: string): void {
+    const screenRole = this.routeToScreenRole(routeName)
+    this.currentScreenRole = screenRole
+    this.updateShowPrimaryNav(screenRole)
+  }
+
+  // Issue #760 评论 5823355851 问题1：通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。
+  // Core 规则：Writing/Settings=false，Home/ProjectWorkspace/StarMap/Stats/Sync=true。
+  private async updateShowPrimaryNav(screenRole: ScreenRole): Promise<void> {
+    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(screenRole)
+    if (policy) {
+      this.currentShowPrimaryNav = policy.showPrimaryNavigation
+    } else {
+      // Core 不可用时 fallback：显示底栏（大部分页面 showPrimaryNavigation=true）
+      this.currentShowPrimaryNav = true
+    }
+  }
+
   // 根据接续 payload 重建 NavPathStack 并恢复 selection/cursor/viewport。
   // NavPathStack 不能自动迁移（SUPPORT_CONTINUE_PAGE_STACK_KEY=false），这里手动重建。
   // Issue #629 评论14 第2项：改用 safeClearAndRebuild，先调 leaveGuard（保存+关闭事务），
@@ -98,11 +140,12 @@ export struct AppNavigation {
       this.navPathStack.pushPath({ name: Routes.Home })
       // 接续恢复始终回到 Home tab。
       this.currentTab = TAB_HOME
-      // Issue #760 评论 5822350374 问题2：接续恢复后如果导航到了二级页面，隐藏底栏。
+      // Issue #760 评论 5823355851 问题1：底栏显隐由 ScreenPolicy 决定，不再手工设置。
+      // continuation 导航到 Workspace 时 showPrimaryNavigation=true（底栏显示），
+      // 导航到 Writing 时 showPrimaryNavigation=false（底栏隐藏），与普通进入一致。
       const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
       const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
       const hasVolume: boolean = payload.volumeId !== undefined && payload.volumeId !== ''
-      this.showBottomBar = !hasProject // 只有 Home 根页面时显示底栏
 
       if (hasProject) {
         const wsParam: WorkspaceRouteParams = {
@@ -156,7 +199,8 @@ export struct AppNavigation {
     const dedupeKey = `tabSwitch:${targetRoute}`
     NavigationTransactionCoordinator.getInstance().safeClearAndRebuild(dedupeKey, (): void => {
       this.currentTab = tab
-      this.showBottomBar = true // 根级页面始终显示底栏
+      // Issue #760 评论 5823355851 问题1：底栏显隐由 ScreenPolicy 决定，不再手工设置。
+      // Tab 切换到的都是根级页面（Home/StarMap/Stats），它们的 showPrimaryNavigation 都是 true。
       this.navPathStack.clear()
       this.navPathStack.pushPath({ name: targetRoute })
     })
@@ -164,19 +208,26 @@ export struct AppNavigation {
 
   @Builder
   PageMap(name: string) {
-    if (name === Routes.Home) {
-      HomeScreen()
-    } else if (name === Routes.Workspace) {
-      WorkspaceScreen()
-    } else if (name === Routes.Writing) {
-      WritingScreen()
-    } else if (name === Routes.StarMap) {
-      StarMapScreen()
-    } else if (name === Routes.Settings) {
-      SettingsScreen()
-    } else if (name === Routes.Stats) {
-      StatsScreen()
+    // Issue #760 评论 5823355851 问题1：用 NavDestination 包裹以获取 onShown 回调，
+    // 在页面显示时根据路由名映射 ScreenRole 并查询 ScreenPolicy.showPrimaryNavigation。
+    NavDestination() {
+      if (name === Routes.Home) {
+        HomeScreen()
+      } else if (name === Routes.Workspace) {
+        WorkspaceScreen()
+      } else if (name === Routes.Writing) {
+        WritingScreen()
+      } else if (name === Routes.StarMap) {
+        StarMapScreen()
+      } else if (name === Routes.Settings) {
+        SettingsScreen()
+      } else if (name === Routes.Stats) {
+        StatsScreen()
+      }
     }
+    .onShown(() => {
+      this.onPageShown(name)
+    })
   }
 
   build() {
@@ -190,9 +241,9 @@ export struct AppNavigation {
       .hideTitleBar(true)
       .layoutWeight(1)
 
-      // 底部 Tab Bar — 仅窄屏（!isTwoPane）且当前页面 showPrimaryNavigation=true 时显示
-      // Issue #760 评论 5822350374 问题2：Writing/Settings 等二级页面不显示底栏
-      if (!this.adaptiveState.isTwoPane && this.showBottomBar) {
+      // 底部 Tab Bar — 仅窄屏（!isTwoPane）且当前页面 ScreenPolicy.showPrimaryNavigation=true 时显示
+      // Issue #760 评论 5823355851 问题1：底栏显隐由 Core ScreenPolicy 决定，不再手工布尔值控制
+      if (!this.adaptiveState.isTwoPane && this.currentShowPrimaryNav) {
         this.BottomTabBar()
       }
     }

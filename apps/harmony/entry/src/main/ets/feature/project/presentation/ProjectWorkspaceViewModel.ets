@@ -83,6 +83,9 @@ export class ProjectWorkspaceViewModel {
   @Trace errorMessageState: string = ''
   @Trace expandedVolumes: Set<string> = new Set()
   @Trace screenPolicy: ScreenPolicy | null = null
+  // Issue #760 评论 5823355851 问题3：暴露 HeaderTrailing 和 PrimaryAction 供 UI 渲染顶栏
+  @Trace headerTrailingActions: ActionSlot[] = []
+  @Trace primaryActions: ActionSlot[] = []
   @Trace renameTarget: RenameTarget | null = null
   @Trace renameInput: string = ''
   @Trace deleteTarget: DeleteTarget | null = null
@@ -121,6 +124,13 @@ export class ProjectWorkspaceViewModel {
       const policyResult = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectWorkspace)
       if (policyResult.success && policyResult.data) {
         this.screenPolicy = policyResult.data
+        // Issue #760 评论 5823355851 问题3：提取 HeaderTrailing 和 PrimaryAction（按 order 排序）
+        this.headerTrailingActions = policyResult.data.actionSlots
+          .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
+          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+        this.primaryActions = policyResult.data.actionSlots
+          .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
+          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
       }
     } catch (_err) {
       this.errorMessageState = '加载项目时发生错误'

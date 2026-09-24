@@ -515,7 +515,8 @@ export struct WorkspaceScreen {
     .alignItems(HorizontalAlign.Center)
   }
 
-  // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
+  // ── 顶栏：左 返回+作品名 / 右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Search→Settings ──
+  // Issue #760 评论 5823355851 问题3：顶栏搜索入口丢失，改为按 headerTrailingActions 顺序渲染
   @Builder
   SinglePaneHeader() {
     Row() {
@@ -535,24 +536,38 @@ export struct WorkspaceScreen {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      // 右：同步、设置
-      // 同步按钮 — 执行真正的同步动作（通过 ViewModel），不再跳设置页
-      Button($r('app.string.sync'))
-        .fontSize(13)
-        .height(28)
-        .backgroundColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.surfaceContainerHigh)
-        .fontColor(this.viewModel.isSyncing ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
-        .margin({ right: 8 })
-        .enabled(!this.viewModel.isSyncing)
-        .onClick(() => this.handleSync())
-
-      // 设置按钮
-      Button($r('app.string.settings'))
-        .fontSize(13)
-        .height(28)
-        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
-        .fontColor(this.themeConfig.colors.textSecondary)
-        .onClick(() => this.navigateToSettings())
+      // 右：按 ScreenPolicy HeaderTrailing 顺序渲染（Sync → Search → Settings）
+      ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
+        if (slot.role === ActionRole.Sync) {
+          // 同步按钮 — 执行真正的同步动作（通过 ViewModel）
+          Button($r('app.string.sync'))
+            .fontSize(13)
+            .height(28)
+            .backgroundColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.surfaceContainerHigh)
+            .fontColor(this.viewModel.isSyncing ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
+            .margin({ right: 8 })
+            .enabled(!this.viewModel.isSyncing)
+            .onClick(() => this.handleSync())
+        } else if (slot.role === ActionRole.Search) {
+          // 搜索按钮 — 搜索功能暂未实现，保留入口图标
+          Image($r('sys.media.ohos_ic_public_search'))
+            .width(24)
+            .height(24)
+            .fillColor(this.themeConfig.colors.textSecondary)
+            .margin({ left: 8, right: 8 })
+            .onClick(() => {
+              // 搜索功能即将上线，暂保留入口
+            })
+        } else if (slot.role === ActionRole.Settings) {
+          // 设置按钮
+          Button($r('app.string.settings'))
+            .fontSize(13)
+            .height(28)
+            .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .onClick(() => this.navigateToSettings())
+        }
+      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

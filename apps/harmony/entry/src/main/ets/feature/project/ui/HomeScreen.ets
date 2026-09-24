@@ -147,6 +147,42 @@ export struct HomeScreen {
 
   // ─── 格式化工具 ───
 
+  /** 宽屏删除作品 — AlertDialog 确认后调用 ViewModel 删除（恢复 #760 之前宽屏布局） */
+  private deleteProjectWithConfirm(projectId: string): void {
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确定要删除这个作品吗？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '删除',
+        action: () => { this.viewModel.deleteProject(projectId) }
+      }
+    })
+  }
+
+  /** 宽屏新建作品 — AlertDialog 确认后调用 ViewModel 创建（恢复 #760 之前宽屏布局） */
+  private createProjectWithConfirm(): void {
+    AlertDialog.show({
+      title: '新建作品',
+      message: '是否创建新作品？',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '创建',
+        action: () => { this.viewModel.createProject('新建作品') }
+      }
+    })
+  }
+
+  /** 检查 PrimaryAction 中是否有 CreateProject（决定 FAB 是否显示） */
+  private hasCreateProjectPrimaryAction(): boolean {
+    for (const slot of this.viewModel.primaryActions) {
+      if (slot.role === ActionRole.CreateProject) {
+        return true
+      }
+    }
+    return false
+  }
+
   private formatWordCount(count: number): string {
     if (count < 10000) {
       return `${count} 字`
@@ -469,8 +505,7 @@ export struct HomeScreen {
           .height(32)
           .backgroundColor(this.themeConfig.colors.primary)
           .onClick(() => {
-            this.viewModel.showCreateDialog = true
-            this.viewModel.newProjectName = ''
+            this.createProjectWithConfirm()
           })
       }
       .width('100%')
@@ -484,30 +519,28 @@ export struct HomeScreen {
               .fontWeight(FontWeight.Medium)
               .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 6 })
-
-            Text(this.formatWordCount(project.totalWordCount))
-              .fontSize(13)
-              .fontColor(this.themeConfig.colors.textSecondary)
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
-          // 更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
-          Image($r('sys.media.ohos_ic_public_more'))
-            .width(24)
-            .height(24)
-            .fillColor(this.themeConfig.colors.textSecondary)
-            .margin({ left: 8 })
+          // 删除按钮（红色 ×）— 恢复 #760 之前的宽屏布局
+          Text('×')
+            .fontSize(18)
+            .fontColor(this.themeConfig.colors.onError)
+            .width(28)
+            .height(28)
+            .textAlign(TextAlign.Center)
+            .borderRadius(DesignTokens.radiusLg)
+            .backgroundColor(this.themeConfig.colors.error)
+            .margin({ right: 12 })
             .onClick(() => {
-              this.viewModel.currentMenuProjectId = project.id
+              this.deleteProjectWithConfirm(project.id)
             })
-            .bindMenu(this.ProjectMoreMenu)
 
           Image($r('sys.media.ohos_ic_public_arrow_right'))
             .width(18)
             .height(18)
             .fillColor(this.themeConfig.colors.textHint)
-            .margin({ left: 8 })
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 16, bottom: 16 })
@@ -541,7 +574,7 @@ export struct HomeScreen {
               .fillColor(this.themeConfig.colors.primary)
               .margin({ bottom: 10 })
 
-            Text('新建作品')
+            Text('新章节')
               .fontSize(14)
               .fontColor(this.themeConfig.colors.textPrimary)
           }
@@ -552,8 +585,7 @@ export struct HomeScreen {
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
-          this.viewModel.showCreateDialog = true
-          this.viewModel.newProjectName = ''
+          // 新章节 — 空操作（#760 之前宽屏布局原样恢复）
         })
 
         GridCol({ span: 1 }) {
@@ -614,7 +646,7 @@ export struct HomeScreen {
           .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(DesignTokens.cardRadius)
         }
-        .onClick(() => this.handleSync())
+        .onClick(() => this.navigateToSettings())
       }
       .width('100%')
     }
@@ -645,8 +677,8 @@ export struct HomeScreen {
       .height('100%')
       .backgroundColor(this.themeConfig.colors.background)
 
-      // ── FAB 层：新建作品浮动按钮 ──
-      if (!this.viewModel.isLoading && !this.viewModel.errorMessage) {
+      // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
+      if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
         Row() {
           Stack() {
             Circle({ width: 56, height: 56 })
@@ -675,7 +707,7 @@ export struct HomeScreen {
     .height('100%')
   }
 
-  // ── 窄屏顶栏：素笺 + 同步/设置按钮 ──
+  // ── 窄屏顶栏：素笺 + 按 ScreenPolicy HeaderTrailing 顺序渲染按钮 ──
   @Builder
   SinglePaneTopBar() {
     Row() {
@@ -686,20 +718,32 @@ export struct HomeScreen {
 
       Blank()
 
-      // 同步按钮 — 执行真正的同步动作（通过 ViewModel），不再跳设置页
-      Image($r('app.media.ic_refresh'))
-        .width(24)
-        .height(24)
-        .fillColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
-        .margin({ right: 16 })
-        .onClick(() => this.handleSync())
-
-      // 设置按钮
-      Image($r('sys.media.ohos_ic_public_more'))
-        .width(24)
-        .height(24)
-        .fillColor(this.themeConfig.colors.textSecondary)
-        .onClick(() => this.navigateToSettings())
+      // 按 HeaderTrailing order 顺序渲染：Sync(10) → Search(20) → Settings(30)
+      ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
+        if (slot.role === ActionRole.Sync) {
+          Image($r('app.media.ic_refresh'))
+            .width(24)
+            .height(24)
+            .fillColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
+            .margin({ right: 16 })
+            .onClick(() => this.handleSync())
+        } else if (slot.role === ActionRole.Search) {
+          Image($r('sys.media.ohos_ic_public_search'))
+            .width(24)
+            .height(24)
+            .fillColor(this.themeConfig.colors.textSecondary)
+            .margin({ right: 16 })
+            .onClick(() => {
+              // 搜索功能暂未接入，保留图标入口
+            })
+        } else if (slot.role === ActionRole.Settings) {
+          Image($r('sys.media.ohos_ic_public_more'))
+            .width(24)
+            .height(24)
+            .fillColor(this.themeConfig.colors.textSecondary)
+            .onClick(() => this.navigateToSettings())
+        }
+      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

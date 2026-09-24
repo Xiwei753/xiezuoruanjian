@@ -130,8 +130,12 @@ export struct SettingsScreen {
     // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
     NavDestination() {
       Column() {
-        // ── 顶部：返回按钮 + 搜索框 ──
-        this.SettingsHeader()
+        // ── 顶部 Header：宽屏无搜索框，窄屏有搜索框 ──
+        if (this.adaptiveState.isTwoPane) {
+          this.WideSettingsHeader()
+        } else {
+          this.CompactSettingsHeader()
+        }
 
         if (this.viewModel.isLoading) {
           Column() {
@@ -178,7 +182,6 @@ export struct SettingsScreen {
         this.WideSaveSection()
         this.WideSyncSection()
         this.WideAiSection()
-        this.WideDiagnosticsSection()
         this.WideAboutSection()
       }
       .width('100%')
@@ -190,9 +193,48 @@ export struct SettingsScreen {
     .align(Alignment.Top)
   }
 
-  // ── 顶部 Header：返回按钮 + 搜索框 ──
+  // ── 宽屏 Header：返回按钮 + 标题 + 保存状态提示（无搜索框，恢复 #760 之前样式） ──
   @Builder
-  SettingsHeader() {
+  WideSettingsHeader() {
+    Row() {
+      Image($r('sys.media.ohos_ic_public_arrow_left'))
+        .width(24)
+        .height(24)
+        .fillColor(this.themeConfig.colors.textPrimary)
+        .onClick(() => this.goBack())
+
+      Text($r('app.string.settings'))
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ left: 12 })
+
+      Blank()
+
+      // 保存状态提示
+      if (this.viewModel.saveMessage) {
+        Text(this.resolveSaveMessage())
+          .fontSize(12)
+          .fontColor(this.viewModel.saveMessage === 'saved'
+            ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+      }
+
+      // 复制设备信息结果提示
+      if (this.copyMessage) {
+        Text(this.copyMessage)
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.success)
+          .margin({ left: 8 })
+      }
+    }
+    .width('100%')
+    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 8 })
+    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+  }
+
+  // ── 窄屏 Header：返回按钮 + 标题 + 搜索框 ──
+  @Builder
+  CompactSettingsHeader() {
     Column() {
       // 返回按钮行
       Row() {
@@ -229,7 +271,7 @@ export struct SettingsScreen {
       .width('100%')
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 8 })
 
-      // 搜索框（仅 UI，不实现搜索逻辑）
+      // 搜索框（仅窄屏，不实现搜索逻辑）
       Row() {
         Image($r('sys.media.ohos_ic_public_search'))
           .width(20)

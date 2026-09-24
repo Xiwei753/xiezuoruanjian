@@ -29,6 +29,8 @@ export class ProjectListViewModel {
   @Trace deleteTarget: ProjectSummary | null = null
   @Trace isSyncing: boolean = false
   @Trace contextActions: ActionSlot[] = []
+  @Trace headerTrailingActions: ActionSlot[] = []
+  @Trace primaryActions: ActionSlot[] = []
   @Trace selectedProjectId: string = ''
   // 宽屏布局所需字段（Issue #760 评论 5822350374 问题3）
   @Trace writingStats: WritingStats | null = null
@@ -119,6 +121,12 @@ export class ProjectListViewModel {
         this.screenPolicy = result.data
         this.contextActions = result.data.actionSlots
           .filter((slot: ActionSlot) => slot.region === ActionRegion.Context)
+          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+        this.headerTrailingActions = result.data.actionSlots
+          .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
+          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+        this.primaryActions = result.data.actionSlots
+          .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
           .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
       }
     } catch (_e) {
