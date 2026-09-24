@@ -66,12 +66,16 @@ function reqObj(obj: Object, key: string): Object | null {
   return null
 }
 
+// 可选对象字段。对应 Core 侧 `#[serde(default, skip_serializing_if = "Option::is_none")]`：
+// canonical wire 只有两种合法情况——键不存在（合法缺省 → undefined）或键存在且为对象。
+// 键存在但值为 null / 字符串 / 数字 / 数组都属于契约错误，返回 err 让 Bridge 层报
+// SCHEMA_MISMATCH，不再把显式 null 静默吞成 undefined（Issue #753 评论 5815903726）。
 function optObj(obj: Object, key: string): DecodeResult<Object | undefined> {
   const rec = obj as Record<string, Object>
   const v: Object | undefined = rec[key]
-  if (v === undefined || v === null) { return ok<Object | undefined>(undefined) }
-  if (typeof v === 'object' && !Array.isArray(v)) { return ok<Object | undefined>(v) }
-  return err<Object | undefined>(`${key}: expected object, got ${typeof v}`)
+  if (v === undefined) { return ok<Object | undefined>(undefined) }
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) { return ok<Object | undefined>(v) }
+  return err<Object | undefined>(`${key}: expected object or absent, got ${v === null ? 'null' : typeof v}`)
 }
 
 function reqArray(obj: Object, key: string): Array<Object> | null {
