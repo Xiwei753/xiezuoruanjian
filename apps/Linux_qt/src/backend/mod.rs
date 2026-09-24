@@ -44,6 +44,9 @@ pub(crate) struct DomainSnapshot {
     pub setting_typing_animation_enabled: bool,
     pub setting_smooth_cursor_duration_ms: u32,
     pub setting_typing_animation_duration_ms: u32,
+    /// Issue #756: 协同动画（吞字/吐字）显式模式开关。
+    /// 默认值与 Core `LocalSettings.editor_coordinated_text_cursor_animation_enabled` 一致（true）。
+    pub setting_coordinated_text_cursor_animation_enabled: bool,
     pub has_workspace: bool,
     pub sync_enabled: bool,
     pub sync_auto_sync: bool,
@@ -84,6 +87,8 @@ impl Default for DomainSnapshot {
             setting_typing_animation_enabled: true,
             setting_smooth_cursor_duration_ms: 80,
             setting_typing_animation_duration_ms: 100,
+            // Issue #756: 与 Core default_editor_coordinated_text_cursor_animation_enabled() 一致。
+            setting_coordinated_text_cursor_animation_enabled: true,
             has_workspace: false,
             sync_enabled: false,
             sync_auto_sync: false,
@@ -235,6 +240,12 @@ pub struct BackendRuntime {
     app: std::rc::Rc<std::cell::RefCell<AppBackend>>,
 }
 
+impl Default for BackendRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BackendRuntime {
     pub fn new() -> Self {
         let app = std::rc::Rc::new(std::cell::RefCell::new(AppBackend::default()));
@@ -242,6 +253,10 @@ impl BackendRuntime {
             let mut r = app.borrow_mut();
             r.current_setting_diagnostics_enabled = true;
             r.current_setting_diagnostics_verbose = true;
+            // Issue #756: 协同动画默认 true，与 Core
+            // default_editor_coordinated_text_cursor_animation_enabled() 一致。
+            // #[derive(Default)] 给 bool 设 false，这里手动校正。
+            r.current_setting_coordinated_text_cursor_animation_enabled = true;
         }
         let app_ref = AppRef::new(app.clone());
         app_ref.init_snapshot();

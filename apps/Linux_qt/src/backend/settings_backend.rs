@@ -66,6 +66,12 @@ pub struct SettingsBackend {
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
     #[allow(dead_code)]
     setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
+    /// Issue #756: 协同动画（吞字/吐字）显式模式开关。
+    /// true 时文字与光标绑死，共用 setting_typing_animation_duration_ms 作为 timeline 时长，
+    /// 要求有效 caret motion 否则文字动画也不启动；
+    /// false 时 typing_animation_enabled 只决定文字动画，smooth_cursor_enabled 只决定光标动画。
+    #[allow(dead_code)]
+    setting_coordinated_text_cursor_animation_enabled: qt_property!(bool; READ setting_coordinated_text_cursor_animation_enabled WRITE set_setting_coordinated_text_cursor_animation_enabled NOTIFY settings_changed),
     #[allow(dead_code)]
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
     #[allow(dead_code)]
@@ -459,6 +465,19 @@ impl SettingsBackend {
     fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) {
         if self
             .with_app_mut(|app| app.set_setting_smooth_cursor_duration_ms(val))
+            .is_ok()
+        {
+            self.settings_changed();
+        }
+    }
+    // Issue #756: 协同动画显式模式开关 getter/setter。
+    fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
+        self.snap()
+            .setting_coordinated_text_cursor_animation_enabled
+    }
+    fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
+        if self
+            .with_app_mut(|app| app.set_setting_coordinated_text_cursor_animation_enabled(val))
             .is_ok()
         {
             self.settings_changed();
@@ -876,6 +895,11 @@ impl AppBackend {
         self.current_setting_smooth_cursor_duration_ms = val;
     }
 
+    // Issue #756: AppBackend::set_setting_coordinated_text_cursor_animation_enabled
+    pub(crate) fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
+        self.current_setting_coordinated_text_cursor_animation_enabled = val;
+    }
+
     // AppBackend::set_setting_diagnostics_enabled
     pub(crate) fn set_setting_diagnostics_enabled(&mut self, val: bool) {
         self.current_setting_diagnostics_enabled = val;
@@ -931,6 +955,9 @@ impl AppBackend {
                     settings.editor_typing_animation_duration_ms as u32;
                 self.current_setting_smooth_cursor_duration_ms =
                     settings.editor_smooth_cursor_duration_ms as u32;
+                // Issue #756: 从 Core 读入协同动画显式模式开关。
+                self.current_setting_coordinated_text_cursor_animation_enabled =
+                    settings.editor_coordinated_text_cursor_animation_enabled;
                 self.current_ai_enabled = settings.ai_enabled;
                 if let Some(ref device_id) = settings.stats_device_id {
                     if !device_id.is_empty() {
@@ -1041,6 +1068,9 @@ impl AppBackend {
                 u64::from(self.current_setting_typing_animation_duration_ms);
             local.editor_smooth_cursor_duration_ms =
                 u64::from(self.current_setting_smooth_cursor_duration_ms);
+            // Issue #756: 把协同动画显式模式开关写回 Core。
+            local.editor_coordinated_text_cursor_animation_enabled =
+                self.current_setting_coordinated_text_cursor_animation_enabled;
             local.ai_enabled = self.current_ai_enabled;
             local.desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
             local.desktop_editor_width = self.current_setting_desktop_editor_width;

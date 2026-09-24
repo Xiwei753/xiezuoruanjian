@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::editor::layout::CanonicalDocumentVisualSnapshot;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{ShapingIdentity, SourceRect};
-use crate::editor::layout::CanonicalDocumentVisualSnapshot;
 
 use super::timeline::VisualUnitTiming;
 use super::types::{PreparedTextVisualTransaction, PreparedVisualUnit};
@@ -239,7 +239,7 @@ impl PreparedTextVisualTransaction {
         // 所有 new 绑定各自当前 canonical target fade-in。
         // Issue #738 评论 5792244119 问题 3 + 5794018647: group 管"活不活"，unit 管"画到哪"。
         // 缺 side 的 group 意味着 group 不完整，整组交给 canonical 接管。
-        for (_gid, group) in &crossfade_groups {
+        for group in crossfade_groups.values() {
             // old 或 new 任一侧为空 → 整组所有成员一起 Remove。
             if group.old_indices.is_empty() || group.new_indices.is_empty() {
                 for &oi in &group.old_indices {

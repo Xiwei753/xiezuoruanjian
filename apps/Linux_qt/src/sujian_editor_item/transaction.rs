@@ -18,6 +18,7 @@ impl SujianEditorItem {
         let ctx = pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
             smooth_cursor_enabled: self.current_smooth_cursor_enabled,
+            coordinated_animation_enabled: self.current_coordinated_animation_enabled,
             is_scrolling: self.current_is_scrolling,
             is_loading: self.current_is_loading,
             is_applying_format: self.current_is_applying_format,
@@ -40,10 +41,17 @@ impl SujianEditorItem {
             },
         };
 
-        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
+        // Issue #756: 删除"两个独立开关同时开启才走协同"的判断
+        // （typing_animation_enabled && smooth_cursor_enabled）。
+        // 新逻辑：
+        // - coordinated=true 时：走 prepare_edit_motion 协同路径（文字与光标绑死，
+        //   要求有效 caret motion，caret motion 建不起来时文字动画也不启动——
+        //   在 pipeline/transaction_builder 内部检查）。
+        // - coordinated=false 时：也要走 prepare_edit_motion，但内部按 typing/smooth
+        //   分离处理文字动画和光标动画。typing 动画也需要 motion（排版 old/new）。
+        // - 即 coordinated=true 或 typing_animation_enabled 时才调用 prepare_edit_motion。
         let mut motion: Option<PreparedEditMotion> = None;
-        if self.current_typing_animation_enabled
-            && self.current_smooth_cursor_enabled
+        if (self.current_coordinated_animation_enabled || self.current_typing_animation_enabled)
             && !self.current_is_scrolling
         {
             motion = self.pipeline.prepare_edit_motion(

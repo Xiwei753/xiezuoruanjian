@@ -160,9 +160,7 @@ impl SyncBackend {
         // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
         // 不能拿来表示基础设施失败。这与 main 原行为一致（仅 is_ok() 才发信号），
         // 避免把"handle_sync_outcome 根本没执行 / DomainSnapshot 没刷新"伪装成同步完成。
-        let effect = match self
-            .with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr)))
-        {
+        let effect = match self.with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr))) {
             Ok(effect) => effect,
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(

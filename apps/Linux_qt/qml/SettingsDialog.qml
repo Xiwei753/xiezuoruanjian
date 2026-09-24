@@ -75,7 +75,8 @@ Dialog {
         autoSave.checked = settingsBackendRef.setting_auto_save_enabled
         typingAnim.checked = settingsBackendRef.setting_typing_animation_enabled
         smoothCursor.checked = settingsBackendRef.setting_smooth_cursor_enabled
-        // 协同光标动画已删除（Issue #727 约束 6）：吞吐字由 caret motion 唯一驱动
+        // Issue #756: 恢复协同动画显式模式开关。
+        coordinatedAnim.checked = settingsBackendRef.setting_coordinated_text_cursor_animation_enabled
         aiSwitch.checked = settingsBackendRef.ai_enabled
         autoSaveDelay.value = settingsBackendRef.setting_auto_save_delay_ms / 1000.0
         fontSizeSlider.value = settingsBackendRef.setting_font_size || 16.0
@@ -84,6 +85,8 @@ Dialog {
         autoIndentWidth.value = settingsBackendRef.setting_auto_indent_width || 2.0
         typingAnimDuration.value = settingsBackendRef.setting_typing_animation_duration_ms || 100
         smoothCursorDuration.value = settingsBackendRef.setting_smooth_cursor_duration_ms || 80
+        // Issue #756: 协同模式 duration 滑块复用 typing_animation_duration_ms 作为共享 timeline 时长。
+        coordinatedAnimDuration.value = settingsBackendRef.setting_typing_animation_duration_ms || 100
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         // Issue #701 评论 5702675971: colorSourceCombo / builtinThemeCombo /
@@ -113,10 +116,7 @@ Dialog {
         // Issue #701 评论 5699565102: useAndroidTheme 开关已删除
         // （依赖已删除的 hasThemePalette，且与颜色来源下拉功能重复）。
         updatingValues = false
-        if (coordinatedFixed) {
-            root.settingsDirty = true
-            root.debouncedSave()
-        }
+        // Issue #756: 删除对不存在的 coordinatedFixed 的悬空访问（Issue #727 遗留）。
     }
     onOpened: {
         // Issue #696 评论 5696993601: 删除 load_local_settings()。
@@ -133,8 +133,16 @@ Dialog {
             settingsBackendRef.setting_line_spacing = lineSpacingSlider.value
             settingsBackendRef.setting_auto_indent_width = autoIndentWidth.value
         settingsBackendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
-        settingsBackendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
-        settingsBackendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+        // Issue #756: 协同模式下文字与光标共用 typing_animation_duration_ms 作为共享 timeline 时长，
+        // 不再写 smooth_cursor_duration_ms（避免覆盖用户保留的独立 duration）。
+        // 非协同模式继续分别写两个独立 duration。
+        var coordinated = settingsBackendRef.setting_coordinated_text_cursor_animation_enabled
+        if (coordinated) {
+            settingsBackendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+        } else {
+            settingsBackendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+            settingsBackendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+        }
         root.settingsDirty = true
         }
         flushSave()
@@ -332,11 +340,41 @@ Dialog {
                     onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value }
                     onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value; root.debouncedSave() }
                 }
+                // Issue #756: 协同动画（吞字/吐字）显式模式开关。
+                // true 时文字与光标绑死，共用一个 timeline duration（setting_typing_animation_duration_ms），
+                // 要求有效 caret motion 否则文字动画也不启动；
+                // false 时 typing/smooth 两个独立开关各自决定文字/光标动画。
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("协同动画（吞字/吐字）")
+                    description: qsTr("文字与光标绑死共用一条时间线")
+                    clickable: true
+                    onClicked: root.setSwitchValue(coordinatedAnim, "setting_coordinated_text_cursor_animation_enabled", !coordinatedAnim.checked)
+                    ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(coordinatedAnim, "setting_coordinated_text_cursor_animation_enabled", v) } }
+                }
+                // 协同模式：显示一个"协同动画持续时间"滑块，复用 setting_typing_animation_duration_ms。
+                AppSlider {
+                    id: coordinatedAnimDuration
+                    Layout.fillWidth: true
+                    dt: root.dt
+                    label: qsTr("协同动画持续时间")
+                    valueText: Math.round(value) + " ms"
+                    // range from Core settings_presentation: min=30, max=1000, step=10
+                    from: 30
+                    to: 1000
+                    stepSize: 10
+                    // Issue #756: 仅协同模式显示；非协同模式隐藏（用独立 duration）。
+                    visible: coordinatedAnim.checked
+                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value }
+                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
+                }
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("打字动画")
                     description: qsTr("输入时字符从光标处吐出")
                     clickable: true
+                    // Issue #756: 协同模式开启时隐藏独立开关（文字由协同模式统一控制）。
+                    visible: !coordinatedAnim.checked
                     onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
                     ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
                 }
@@ -350,6 +388,8 @@ Dialog {
                     from: 30
                     to: 1000
                     stepSize: 10
+                    // Issue #756: 协同模式隐藏独立 duration（由协同 duration 滑块代替）。
+                    visible: !coordinatedAnim.checked
                     onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value }
                     onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
@@ -358,6 +398,8 @@ Dialog {
                     title: qsTr("平滑光标")
                     description: qsTr("光标移动更顺滑")
                     clickable: true
+                    // Issue #756: 协同模式开启时隐藏独立开关（光标由协同模式统一控制）。
+                    visible: !coordinatedAnim.checked
                     onClicked: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", !smoothCursor.checked)
                     ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", v) } }
                 }
@@ -371,10 +413,11 @@ Dialog {
                     from: 30
                     to: 1000
                     stepSize: 10
+                    // Issue #756: 协同模式隐藏独立 duration（由协同 duration 滑块代替）。
+                    visible: !coordinatedAnim.checked
                     onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_smooth_cursor_duration_ms = value }
                     onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
                 }
-                // 协同光标动画开关已删除（Issue #727 约束 6）：吞吐字由 caret motion 唯一驱动，不再有独立开关
             }
 
             // ── 3. 保存和同步 (save + sync) ──

@@ -2,20 +2,20 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
+use super::coordinator::LinuxEditorAnimationCoordinator;
+use super::cursor_motion::sample_coordinated_cursor_rect_at;
+use super::transaction_builder::emit_transaction_diagnostic;
+use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animation::{
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, VisualUnitTiming,
+};
 use crate::sujian_editor_item::animation_mode::AnimationMode;
 use crate::sujian_editor_item::edit_motion::{
     diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion,
 };
-use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, VisualUnitTiming,
-};
-use super::coordinator::LinuxEditorAnimationCoordinator;
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::editor_animation_debug_log;
-use super::transaction_builder::emit_transaction_diagnostic;
-use super::cursor_motion::sample_coordinated_cursor_rect_at;
+use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 pub(crate) fn match_rebase_frames(
     rebase_frames: &[RebaseFrame],
@@ -272,7 +272,6 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
     })
 }
 
-
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn take_rebase_frames(
         &mut self,
@@ -469,6 +468,7 @@ impl LinuxEditorAnimationCoordinator {
         vt: &PreparedEditMotion,
         typing_animation_enabled: bool,
         smooth_cursor_enabled: bool,
+        coordinated_animation_enabled: bool,
         is_scrolling: bool,
         is_loading: bool,
         is_applying_format: bool,
@@ -477,20 +477,25 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         now: Instant,
     ) -> Option<PreparedRebaseHandoff> {
-        // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
-        // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
-        // typing_animation_enabled 决定，不要把两类动画重新绑死。
-        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
+        // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
+        // - coordinated=true 时：走协同路径，文字与光标绑死，要求有效 caret motion。
+        // - coordinated=false 时：typing_animation_enabled 只决定文字动画，
+        //   smooth_cursor_enabled 只决定光标动画，两者独立。
+        if (!coordinated_animation_enabled && !typing_animation_enabled)
+            || is_scrolling
+            || is_loading
+            || is_applying_format
+        {
             return None;
         }
 
-        // Issue #727 约束 5: valid_caret_motion_track 检查。
-        // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
-        // Issue #727 评论 5755858583 问题5: 仅在 smooth_cursor_enabled 时才要求
-        // valid_caret_motion_track——!smooth_cursor_enabled 时不创建 CaretDriven units，
-        // 只创建 Reflow，不需要 caret motion track。
+        // Issue #756: valid_caret_motion_track 检查。
+        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务。
+        // - coordinated=false 时：仅在 smooth_cursor_enabled 时才要求 valid_caret_motion_track
+        //   （!smooth_cursor_enabled 时不创建 CaretDriven units，只创建 Reflow）。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
-        if smooth_cursor_enabled && !valid_caret_motion_track {
+        let require_caret_track = coordinated_animation_enabled || smooth_cursor_enabled;
+        if require_caret_track && !valid_caret_motion_track {
             return None;
         }
 

@@ -295,8 +295,6 @@ pub(crate) fn record_struct_event(
     });
 }
 
-use sync_bridge::SyncTaskOutcome;
-
 #[path = "system_utils.rs"]
 mod system_utils;
 
@@ -402,6 +400,8 @@ pub struct AppBackend {
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,
     current_setting_smooth_cursor_duration_ms: u32,
+    /// Issue #756: 协同动画显式模式开关。默认与 Core 一致（true）。
+    pub(crate) current_setting_coordinated_text_cursor_animation_enabled: bool,
     pub(crate) current_system_is_dark: bool,
     // alpha 阶段 diagnostics 默认 true（与 core settings 和 diagnostics 全局 AtomicBool 对齐）
     pub(crate) current_setting_diagnostics_enabled: bool,
@@ -439,6 +439,9 @@ impl AppBackend {
         s.setting_typing_animation_enabled = self.current_setting_typing_animation_enabled;
         s.setting_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms;
         s.setting_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms;
+        // Issue #756: 同步协同动画显式模式开关到 snapshot。
+        s.setting_coordinated_text_cursor_animation_enabled =
+            self.current_setting_coordinated_text_cursor_animation_enabled;
         s.has_workspace = self.current_has_data_root;
         s.sync_enabled = self.current_sync_enabled;
         s.sync_auto_sync = self.current_sync_auto_sync;
@@ -753,6 +756,7 @@ pub use workspace_backend::WorkspaceBackend;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sync_bridge::SyncTaskOutcome;
     use tempfile::tempdir;
 
     #[test]

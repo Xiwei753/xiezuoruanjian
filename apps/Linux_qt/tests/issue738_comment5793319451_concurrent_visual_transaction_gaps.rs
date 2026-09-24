@@ -216,8 +216,8 @@ fn issue738_comment5793319451_fix2b_crossfade_group_processing_logic() {
 
     // 修复后：多对多 group 处理循环存在。
     assert!(
-        window.contains("for (_gid, group) in &crossfade_groups"),
-        "修复后应有 for (_gid, group) in &crossfade_groups 多对多处理循环。"
+        window.contains("for group in crossfade_groups.values()"),
+        "修复后应有 for group in crossfade_groups.values() 多对多处理循环。"
     );
 
     // 修复后：缺 side 整组 Remove。

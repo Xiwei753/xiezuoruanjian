@@ -551,6 +551,7 @@ impl SujianEditorItem {
         super::pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
             smooth_cursor_enabled: self.current_smooth_cursor_enabled,
+            coordinated_animation_enabled: self.current_coordinated_animation_enabled,
             is_scrolling: self.current_is_scrolling,
             is_loading: self.current_is_loading,
             is_applying_format: self.current_is_applying_format,

@@ -333,6 +333,10 @@ impl CompositionState {
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub smooth_cursor_enabled: bool,
+    /// Issue #756: 协同动画显式模式开关。
+    /// true 时文字与光标绑死，要求有效 caret motion 否则文字动画也不启动；
+    /// false 时 typing/smooth 两个独立开关各自决定文字/光标动画。
+    pub coordinated_animation_enabled: bool,
     pub is_scrolling: bool,
     pub is_loading: bool,
     pub is_applying_format: bool,
@@ -1092,8 +1096,16 @@ impl LinuxEditorPipeline {
             u64::from(self.typing_animation_duration_ms),
         );
 
-        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
-        if !ctx.typing_animation_enabled || !ctx.smooth_cursor_enabled || ctx.is_scrolling {
+        // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
+        // 新逻辑：
+        // - coordinated=true 时：走协同路径，要求有效 caret motion（在 transaction_builder
+        //   内部检查），文字与光标一起动。
+        // - coordinated=false 时：typing_animation_enabled 只决定文字动画，
+        //   smooth_cursor_enabled 只决定光标动画，不再要求两者同时为 true。
+        // - 两种模式都需要 prepare_edit_motion 来排版 old/new 并构造 motion；
+        //   是否真正创建事务由 transaction_builder 内部按 coordinated 语义决定。
+        if (!ctx.coordinated_animation_enabled && !ctx.typing_animation_enabled) || ctx.is_scrolling
+        {
             return None;
         }
         {
@@ -1492,6 +1504,7 @@ impl LinuxEditorPipeline {
                 &motion,
                 ctx.typing_animation_enabled,
                 ctx.smooth_cursor_enabled,
+                ctx.coordinated_animation_enabled,
                 ctx.is_scrolling,
                 ctx.is_loading,
                 ctx.is_applying_format,
@@ -1518,7 +1531,10 @@ impl LinuxEditorPipeline {
                 .create_transaction_from_prepared_handoff(
                     prepared_handoff,
                     &motion,
-                    ctx.smooth_cursor_enabled,
+                    // Issue #756: 协同模式下文字与光标绑死，光标动画必须生成
+                    //（相当于 smooth_cursor_enabled=true）。
+                    // 非协同模式下由 smooth_cursor_enabled 独立决定。
+                    ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled,
                     motion.old_cursor_rect.clone(),
                     motion.new_cursor_rect.clone(),
                     Some(old_caret.visual_line_id),

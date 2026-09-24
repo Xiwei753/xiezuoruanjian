@@ -188,10 +188,11 @@ fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
     );
     // cursor_sample_outcome 初始化为 Idle
     // Issue #747: 拆分后路径从 super:: 改为 crate::sujian_editor_item::
-    let init_marker =
-        "let mut cursor_sample_outcome = crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;";
+    // Issue #756: cargo fmt 把单行拆成两行（超过 100 字符），改为分别检查两个片段。
+    let init_marker_a = "let mut cursor_sample_outcome =";
+    let init_marker_b = "crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;";
     assert!(
-        src.contains(init_marker),
+        src.contains(init_marker_a) && src.contains(init_marker_b),
         "修复点4: build_render_plan_full 应初始化 cursor_sample_outcome = Idle"
     );
     // Issue #727 约束 6: compute_coordinated_cursor_position 现在接收 cursor_owner_epoch 参数
@@ -275,7 +276,11 @@ fn dual_timeline_fork_is_eliminated() {
     );
     // 分叉消除条件 3：build_cursor_plan 在 has_active_for_coordinated 时返回 Snap
     // → apply_plan 收到 Snap 执行 self.animation = None，不创建 CursorAnimationState
-    let ctx2 = window_after(&render_plan_builder, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
+    let ctx2 = window_after(
+        &render_plan_builder,
+        "(anim.target_x - cursor_x).abs() > 0.01",
+        1500,
+    );
     assert!(
         ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
         "分叉消除: build_cursor_plan 在 has_active_for_coordinated 时返回 Snap"

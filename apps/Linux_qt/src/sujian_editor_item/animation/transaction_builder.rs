@@ -2,25 +2,27 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
+use super::coordinator::LinuxEditorAnimationCoordinator;
+use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion};
+use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
+use crate::sujian_editor_item::animation::rebase::{
+    match_rebase_frames, PreparedRebaseHandoff, RebaseCaretHandoff,
+};
+use crate::sujian_editor_item::animation::{
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
+    TextVisualTransactionState, TransactionTimeline,
+};
 use crate::sujian_editor_item::animation_mode::AnimationMode;
+use crate::sujian_editor_item::edit_motion::{
+    diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion,
+};
+use crate::sujian_editor_item::editor_animation_debug_log;
+use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{
     ClusterInsertRelation, EditorLayoutSnapshot, SourceRect,
 };
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
-use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit,
-    RebaseFrame, TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline,
-};
-use crate::sujian_editor_item::animation::rebase::{
-    PreparedRebaseHandoff, RebaseCaretHandoff, match_rebase_frames,
-};
-use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
-use super::coordinator::LinuxEditorAnimationCoordinator;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use crate::editor::layout::compute_affected_paragraph_ranges;
-use crate::sujian_editor_item::editor_animation_debug_log;
 
 pub(crate) fn operation_kind_label(kind: TextVisualOperationKind) -> &'static str {
     match kind {
@@ -38,7 +40,11 @@ pub(crate) fn unit_kind_labels(units: &[PreparedVisualUnit]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn emit_transaction_diagnostic(tx: &PreparedTextVisualTransaction, event: &str, reason: &str) {
+pub(crate) fn emit_transaction_diagnostic(
+    tx: &PreparedTextVisualTransaction,
+    event: &str,
+    reason: &str,
+) {
     crate::sujian_editor_item::editor_animation_diagnostic_event(
         event,
         &tx.key,
@@ -103,9 +109,7 @@ pub(crate) struct VisualEditSpec {
 /// 接收归一化后的 [`VisualEditSpec`]，内部统一完成 slice 构造、unit wrap、rebase 匹配、
 /// cursor track 构建、timeline 初始化。其它模块（含 `composition.rs` 与普通 Insert/Delete
 /// 路径）都经由本函数创建事务，从而保证「只允许这里创建 `PreparedTextVisualTransaction`」。
-pub(crate) fn build_prepared_transaction(
-    spec: VisualEditSpec,
-) -> PreparedTextVisualTransaction {
+pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVisualTransaction {
     let mut slices: Vec<AnimatedSlice> = Vec::new();
 
     // 1a. InsertReveal / DeleteConceal（受 smooth_cursor_enabled 控制）
@@ -233,8 +237,8 @@ pub(crate) fn build_insert_reveal_slices(
     let mut slices = Vec::new();
     let (range_start, range_end) = inserted_range;
 
-    for (_line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
-        for (_cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
+    for new_line in new_snapshot.line_snapshots.iter() {
+        for new_cluster in new_line.clusters.iter() {
             // Issue #724 评论 5751268664 缺口1: 用 Inside/Partial 分类替代 overlap 整块消费。
             // - Inside：cluster 完全在 inserted 范围内，整个 cluster 进入 InsertReveal + static hide。
             // - Partial：cluster 部分在 inserted 范围内（ligature/cluster 跨越 inserted 边界），
@@ -673,21 +677,19 @@ pub(crate) fn build_composition_commit_crossfade_slices(
         for old_cluster in old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end) {
             let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
             let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
-            let matched_in_new =
-                if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
-                    new_snapshot.line_snapshots.iter().any(|nl| {
-                        nl.clusters
-                            .iter()
-                            .any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
-                    })
-                } else {
-                    false
-                };
+            let matched_in_new = if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
+                new_snapshot.line_snapshots.iter().any(|nl| {
+                    nl.clusters
+                        .iter()
+                        .any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                })
+            } else {
+                false
+            };
             if !matched_in_new {
-                if let Some(old_sr) = old_line.source_rect_for_byte_range(
-                    old_cluster.byte_start,
-                    old_cluster.byte_end,
-                ) {
+                if let Some(old_sr) = old_line
+                    .source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end)
+                {
                     let from_doc = old_line.source_rect_to_document_rect(&old_sr);
                     // Issue #686 评论 5666452462：cancel 时 preedit 文字
                     // 走 delete_conceal，按 old rect 两侧与旧光标距离
@@ -695,8 +697,7 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     // 靠近左端 → Delete 键 → conceal_to_left_edge=false。
                     let left = from_doc.x;
                     let right = from_doc.x + from_doc.w;
-                    let conceal_to_left_edge =
-                        (shrink_x - right).abs() <= (shrink_x - left).abs();
+                    let conceal_to_left_edge = (shrink_x - right).abs() <= (shrink_x - left).abs();
                     slices.push(AnimatedSlice::delete_conceal(
                         key,
                         old_line.id,
@@ -760,26 +761,23 @@ pub(crate) fn build_composition_commit_crossfade_slices(
     }
 
     for new_line in new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end) {
-        for new_cluster in
-            new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end)
+        for new_cluster in new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end)
         {
             let mapped_old_bs = offset_map.map_new_to_old(new_cluster.byte_start);
             let mapped_old_be = offset_map.map_new_to_old(new_cluster.byte_end);
-            let found_in_old =
-                if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
-                    old_snapshot.line_snapshots.iter().any(|ol| {
-                        ol.clusters
-                            .iter()
-                            .any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
-                    })
-                } else {
-                    false
-                };
+            let found_in_old = if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
+                old_snapshot.line_snapshots.iter().any(|ol| {
+                    ol.clusters
+                        .iter()
+                        .any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                })
+            } else {
+                false
+            };
             if !found_in_old {
-                if let Some(new_sr) = new_line.source_rect_for_byte_range(
-                    new_cluster.byte_start,
-                    new_cluster.byte_end,
-                ) {
+                if let Some(new_sr) = new_line
+                    .source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end)
+                {
                     let to_doc = new_line.source_rect_to_document_rect(&new_sr);
                     let to_doc_for_hide = to_doc.clone();
                     let mut reveal_slice = AnimatedSlice::insert_reveal(
@@ -1010,7 +1008,6 @@ fn union_source_rect(a: &SourceRect, b: &SourceRect) -> SourceRect {
     }
 }
 
-
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn create_transaction_from_prepared_handoff(
         &mut self,
@@ -1162,6 +1159,7 @@ impl LinuxEditorAnimationCoordinator {
         vt: &PreparedEditMotion,
         typing_animation_enabled: bool,
         smooth_cursor_enabled: bool,
+        coordinated_animation_enabled: bool,
         is_scrolling: bool,
         is_loading: bool,
         is_applying_format: bool,
@@ -1178,20 +1176,27 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
-        // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
-        // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
-        // typing_animation_enabled 决定，不要把两类动画重新绑死。
-        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
+        // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
+        // - coordinated=true 时：文字与光标绑死，要求有效 caret motion，否则不创建事务。
+        // - coordinated=false 时：typing_animation_enabled 只决定文字动画（Reflow），
+        //   smooth_cursor_enabled 只决定光标动画（CaretDriven/InsertReveal/DeleteConceal），
+        //   两者独立，同时为 true 不等于协同。
+        if (!coordinated_animation_enabled && !typing_animation_enabled)
+            || is_scrolling
+            || is_loading
+            || is_applying_format
+        {
             return None;
         }
 
-        // Issue #727 约束 5: valid_caret_motion_track 检查。
-        // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
-        // Issue #727 评论 5755858583 问题5: 仅在 smooth_cursor_enabled 时才要求
-        // valid_caret_motion_track——!smooth_cursor_enabled 时不创建 CaretDriven units，
-        // 只创建 Reflow，不需要 caret motion track。
+        // Issue #756: valid_caret_motion_track 检查。
+        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务
+        //   （文字动画也不启动）。
+        // - coordinated=false 时：仅在 smooth_cursor_enabled 时才要求 valid_caret_motion_track
+        //   （!smooth_cursor_enabled 时不创建 CaretDriven units，只创建 Reflow）。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
-        if smooth_cursor_enabled && !valid_caret_motion_track {
+        let require_caret_track = coordinated_animation_enabled || smooth_cursor_enabled;
+        if require_caret_track && !valid_caret_motion_track {
             return None;
         }
 
