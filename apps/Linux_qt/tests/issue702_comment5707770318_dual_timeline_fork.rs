@@ -275,11 +275,7 @@ fn dual_timeline_fork_is_eliminated() {
     );
     // 分叉消除条件 3：build_cursor_plan 在 has_active_for_coordinated 时返回 Snap
     // → apply_plan 收到 Snap 执行 self.animation = None，不创建 CursorAnimationState
-    let ctx2 = window_after(
-        &render_plan_builder,
-        "(anim.target_x - cursor_x).abs() > 0.01",
-        1500,
-    );
+    let ctx2 = window_after(&render_plan_builder, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
     assert!(
         ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
         "分叉消除: build_cursor_plan 在 has_active_for_coordinated 时返回 Snap"

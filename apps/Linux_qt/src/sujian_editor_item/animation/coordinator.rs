@@ -9,13 +9,16 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
+use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use crate::sujian_editor_item::layout_snapshot::{
+    EditorLayoutSnapshot, LineSnapshotId,
+};
+use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use crate::sujian_editor_item::animation::{
-    PreparedTransactionQueue, TextVisualOperationKind, TextVisualTransactionState,
+    PreparedTransactionQueue, TextVisualOperationKind,
+    TextVisualTransactionState,
 };
 use crate::sujian_editor_item::editor_animation_debug_log;
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
-use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 /// Issue #722 评论 5750218208: 从 `EditorLayoutSnapshot` 的 `line_snapshots` 中
 /// 按 `visual_line_id` 查找行几何（文档坐标的 top/bottom）。
@@ -637,6 +640,7 @@ impl LinuxEditorAnimationCoordinator {
             })
             .map(|t| t.operation_kind)
     }
+
 }
 
 #[cfg(test)]

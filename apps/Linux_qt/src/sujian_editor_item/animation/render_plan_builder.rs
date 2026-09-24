@@ -1,19 +1,21 @@
 use std::time::Instant;
 
-use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
-use super::transaction_builder::emit_transaction_diagnostic;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
-use crate::sujian_editor_item::cursor_animation::{
-    CursorAnimationPlan, CursorBlinkMode, CursorTransition,
-};
 use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
-use crate::sujian_editor_item::render_plan::{
-    CursorRenderState, RenderPlan, SelectionPreeditPlan, TextAnimationGlyphInfo, TextAnimationPlan,
+use crate::sujian_editor_item::animation::{
+    TextVisualOperationKind, TextVisualTransactionState,
 };
+use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
+use crate::sujian_editor_item::render_plan::{
+    CursorRenderState, RenderPlan, SelectionPreeditPlan,
+    TextAnimationGlyphInfo, TextAnimationPlan,
+};
+use crate::sujian_editor_item::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
+use super::transaction_builder::emit_transaction_diagnostic;
+use crate::sujian_editor_item::editor_animation_debug_log;
+
 
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn build_cursor_plan(
@@ -95,9 +97,7 @@ impl LinuxEditorAnimationCoordinator {
             crate::sujian_editor_item::cursor_controller::CursorMoveSource::DragSelection
             | crate::sujian_editor_item::cursor_controller::CursorMoveSource::LayoutChange
             | crate::sujian_editor_item::cursor_controller::CursorMoveSource::Scroll => false,
-            crate::sujian_editor_item::cursor_controller::CursorMoveSource::TextTransaction => {
-                false
-            }
+            crate::sujian_editor_item::cursor_controller::CursorMoveSource::TextTransaction => false,
         };
 
         // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
@@ -320,8 +320,7 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集 CaretDriven units
         // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
         // ownership），避免空洞。
-        let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> =
-            Vec::new();
+        let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
             // Issue #738 评论 5793319451 问题1: 守卫从 `>=` 改成 `==`。clip rects 用于
             // 裁切 canonical 正文以露出动画 overlay，只有 basis 与当前 frame_context 完全
@@ -353,15 +352,13 @@ impl LinuxEditorAnimationCoordinator {
                     }
                     for doc_rect in &unit.slice.static_hidden_document_rects {
                         if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
-                            clip_rects.push(
-                                crate::sujian_editor_item::qt_text_node::AnimationClipRect {
-                                    x: doc_rect.x,
-                                    y: doc_rect.y,
-                                    w: doc_rect.w,
-                                    h: doc_rect.h,
-                                    snapshot_id: unit.slice.snapshot_id,
-                                },
-                            );
+                            clip_rects.push(crate::sujian_editor_item::qt_text_node::AnimationClipRect {
+                                x: doc_rect.x,
+                                y: doc_rect.y,
+                                w: doc_rect.w,
+                                h: doc_rect.h,
+                                snapshot_id: unit.slice.snapshot_id,
+                            });
                         }
                     }
                 }
@@ -376,8 +373,7 @@ impl LinuxEditorAnimationCoordinator {
         // 文字层和光标层都使用同一份 `AnimationFrameSample`。无活跃文字事务时，
         // CursorOnly 光标位置也从 frame_sample 采样，不再在 build_render_plan_full
         // 之外用 cursor_timeline_sample_with_time 单独推进 cursor_ctrl.visual_x/y。
-        let mut cursor_sample_outcome =
-            crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;
+        let mut cursor_sample_outcome = crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;
         // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
         // 是否有吞吐字直接由 compute_coordinated_cursor_position 是否返回 Some 决定。
         // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
@@ -396,12 +392,11 @@ impl LinuxEditorAnimationCoordinator {
             // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
             // 屏幕真正画出的位置，但不启动 CursorAnimationState.started_at，
             // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
-            cursor_sample_outcome =
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
-                    x: cx,
-                    y: cy_doc,
-                    h: ch,
-                };
+            cursor_sample_outcome = crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
+                x: cx,
+                y: cy_doc,
+                h: ch,
+            };
             let suppressed = matches!(
                 self.active_operation_kind(),
                 Some(TextVisualOperationKind::Insert)
@@ -439,9 +434,7 @@ impl LinuxEditorAnimationCoordinator {
                 crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle => {}
                 // Issue #702 评论 5707770318: sample_cursor_only_position 不会返回
                 // Coordinated（它只服务纯光标 CursorOnly 动画），此分支不可达。
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
-                    ..
-                } => {}
+                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated { .. } => {}
             }
         }
 

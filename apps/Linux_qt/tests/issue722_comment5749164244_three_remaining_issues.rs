@@ -281,11 +281,7 @@ fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
         "应有 sample_coordinated_motion_frame 采样统一 CoordinatedMotionFrame"
     );
     // build_text_animation_plan_with_sample 从 coordinated_motion_frame.caret 消费
-    let btap_window = function_window(
-        &render_plan,
-        "fn build_text_animation_plan_with_sample",
-        8000,
-    );
+    let btap_window = function_window(&render_plan, "fn build_text_animation_plan_with_sample", 8000);
     assert!(
         btap_window.contains("caret_frame"),
         "build_text_animation_plan_with_sample 应从 CoordinatedMotionFrame.caret 消费"

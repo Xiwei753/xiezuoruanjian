@@ -168,10 +168,10 @@ impl PreparedTransactionQueue {
 //   通过 OffsetMap 映射到同一坐标系比较，不再跨 revision 误判/漏判冲突。
 #[cfg(test)]
 mod issue_710_comment_5732160521_repro {
-    use super::super::timeline::TransactionTimeline;
     use super::*;
-    use crate::sujian_editor_item::layout_revision::LayoutRevision;
     use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
+    use crate::sujian_editor_item::layout_revision::LayoutRevision;
+    use super::super::timeline::TransactionTimeline;
 
     /// 构造只含 virtual_text 的测试用 EditorLayoutSnapshot。
     fn make_test_snapshot(virtual_text: &str) -> EditorLayoutSnapshot {
@@ -361,14 +361,12 @@ mod issue_710_comment_5732160521_repro {
 // 修复后（Phase B）应把这些测试改为断言"正确行为"。
 #[cfg(test)]
 mod issue_710_comment_5733109905_repro {
-    use super::super::timeline::TransactionTimeline;
-    use super::super::types::PreparedVisualUnit;
     use super::*;
     use crate::sujian_editor_item::animated_slice::AnimatedSlice;
+    use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
     use crate::sujian_editor_item::layout_revision::LayoutRevision;
-    use crate::sujian_editor_item::layout_snapshot::{
-        EditorLayoutSnapshot, LineSnapshotId, SourceRect,
-    };
+    use super::super::timeline::TransactionTimeline;
+    use super::super::types::PreparedVisualUnit;
 
     /// 构造只含 virtual_text 的测试用 EditorLayoutSnapshot。
     fn make_test_snapshot(virtual_text: &str) -> EditorLayoutSnapshot {

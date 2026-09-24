@@ -2,20 +2,20 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
-use super::coordinator::LinuxEditorAnimationCoordinator;
-use super::cursor_motion::sample_coordinated_cursor_rect_at;
-use super::transaction_builder::emit_transaction_diagnostic;
-use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, VisualUnitTiming,
-};
 use crate::sujian_editor_item::animation_mode::AnimationMode;
 use crate::sujian_editor_item::edit_motion::{
     diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion,
 };
-use crate::sujian_editor_item::editor_animation_debug_log;
+use crate::sujian_editor_item::animation::{
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, VisualUnitTiming,
+};
+use super::coordinator::LinuxEditorAnimationCoordinator;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
+use crate::editor::layout::compute_affected_paragraph_ranges;
+use crate::sujian_editor_item::editor_animation_debug_log;
+use super::transaction_builder::emit_transaction_diagnostic;
+use super::cursor_motion::sample_coordinated_cursor_rect_at;
 
 pub(crate) fn match_rebase_frames(
     rebase_frames: &[RebaseFrame],
@@ -271,6 +271,7 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
         remaining_duration_ms,
     })
 }
+
 
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn take_rebase_frames(
