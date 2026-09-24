@@ -9,7 +9,7 @@
 //
 // 干什么的：
 // - 实现 AppBackend 上的同步执行方法：perform_sync、perform_sync_dry_run、perform_sync_internal。
-// - 实现同步结果处理：handle_sync_outcome、handle_successful_sync_refresh。
+// - 实现同步结果处理：handle_sync_outcome、handle_sync_content_refresh。
 // - 所有同步操作通过 UUID operation_id 机制保证并发安全，通过 QPointer + queued_callback 实现线程安全回调。
 //
 // 被什么引用：
@@ -139,17 +139,20 @@ impl AppBackend {
         // 由 SyncBackend::handle_outcome 据此决定是否发 sync_content_applied。
         // 改动3: github init 旧路径已删除，不再有 pending_github_init_path 特判。
         let sync_success = matches!(status_str, "success" | "branch_missing_recovered");
-        let effect = if sync_success && self.has_workspace() {
-            self.handle_successful_sync_refresh();
-            SyncOutcomeEffect::ContentChanged
-        } else if (status_str == "conflict"
-            || status_str == "partial_conflict"
-            || status_str == "unrelated_histories")
-            && self.has_workspace()
-        {
-            // Issue #754 评论 5815901258: trigger_projects_reloaded 已删除，
-            // 领域通知由 ProjectBackend::emit_changed() 负责。
-            self.reload_tree();
+        // Issue #754 评论 5816573119: 所有"内容已变化"的同步结果统一走同一个刷新入口，
+        // 确保 reload_tree + reconcile_selection_after_tree_reload 成对执行。
+        // conflict/partial_conflict/unrelated_histories 也会真实修改本地工作区内容
+        // （Core issue_644: PartialConflict 时安全完成的非冲突文件继续提交到 live），
+        // 若包含远端删除/结构变化，selection 必须同步 reconcile，否则
+        // selected_project_id/selected_volume_id/selected_chapter_id 可能指向已删除对象。
+        let content_changed = self.has_workspace()
+            && (sync_success
+                || status_str == "conflict"
+                || status_str == "partial_conflict"
+                || status_str == "unrelated_histories");
+
+        let effect = if content_changed {
+            self.handle_sync_content_refresh();
             SyncOutcomeEffect::ContentChanged
         } else {
             SyncOutcomeEffect::StatusOnly
@@ -170,7 +173,7 @@ impl AppBackend {
         effect
     }
 
-    pub(crate) fn handle_successful_sync_refresh(&mut self) {
+    pub(crate) fn handle_sync_content_refresh(&mut self) {
         self.reload_tree();
         let chapter_deleted = self.reconcile_selection_after_tree_reload();
         // Issue #754 评论 5815901258: trigger_projects_reloaded 已删除，

@@ -429,48 +429,6 @@ impl AppBackend {
         s.save_status = self.current_save_status.clone();
         s.word_count = self.current_word_count;
         s.error_message = self.current_error_message.clone();
-        s.selected_item_id = {
-            if let Some(ref id) = self.selected_chapter_id {
-                id.clone()
-            } else if let Some(ref id) = self.selected_volume_id {
-                id.clone()
-            } else if let Some(ref id) = self.selected_project_id {
-                id.clone()
-            } else {
-                String::new()
-            }
-        };
-        s.has_selected_chapter_prop = self.selected_chapter_id.is_some();
-        s.chapter_path = {
-            if let (Some(api), Some(p), Some(v), Some(c)) = (
-                self.core_api(),
-                &self.selected_project_id,
-                &self.selected_volume_id,
-                &self.selected_chapter_id,
-            ) {
-                let mut path = String::new();
-                if let Ok(projects) = api.list_projects() {
-                    if let Some(proj) = projects.iter().find(|x| x.id == *p) {
-                        path.push_str(&proj.title);
-                    }
-                }
-                if let Ok(volumes) = api.list_volumes(p) {
-                    if let Some(vol) = volumes.iter().find(|x| x.id == *v) {
-                        path.push_str(" > ");
-                        path.push_str(&vol.title);
-                    }
-                }
-                if let Ok(chapters) = api.list_chapters(p, v) {
-                    if let Some(chap) = chapters.iter().find(|x| x.id == *c) {
-                        path.push_str(" > ");
-                        path.push_str(&chap.title);
-                    }
-                }
-                path
-            } else {
-                String::new()
-            }
-        };
         s.setting_font_size = self.current_setting_font_size;
         s.setting_line_spacing = self.current_setting_line_spacing;
         s.setting_auto_save_enabled = self.current_setting_auto_save_enabled;
