@@ -482,7 +482,7 @@ impl EditorInputHost for SujianEditorItem {
                 let text_anim = coordinated_anim || self.current_typing_animation_enabled;
                 let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 let layout_basis_revision = self.pipeline.layout_revision();
-                self.pipeline
+                let anim_key = self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
                         &old_snapshot,
@@ -505,6 +505,11 @@ impl EditorInputHost for SujianEditorItem {
                         caret_anim,
                         coordinated_anim,
                     );
+                if anim_key.is_none() {
+                    // Issue #756 评论 5822051193: coordinated 模式下无法建立 cursor track，
+                    // 本轮不做动画，走静态 fallback，不影响 IME 正文/候选框正常显示。
+                    self.update_preedit_visual_state();
+                }
             } else {
                 self.update_preedit_visual_state();
             }
@@ -628,7 +633,7 @@ impl EditorInputHost for SujianEditorItem {
                 let text_anim = coordinated_anim || self.current_typing_animation_enabled;
                 let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 let layout_basis_revision = self.pipeline.layout_revision();
-                self.pipeline
+                let anim_key = self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
                         &old_snapshot,
@@ -651,6 +656,11 @@ impl EditorInputHost for SujianEditorItem {
                         caret_anim,
                         coordinated_anim,
                     );
+                if anim_key.is_none() {
+                    // Issue #756 评论 5822051193: coordinated 模式下无法建立 cursor track，
+                    // 本轮不做动画，走静态 fallback，不影响 IME 正文/候选框正常显示。
+                    self.update_preedit_visual_state();
+                }
             } else {
                 self.update_preedit_visual_state();
             }

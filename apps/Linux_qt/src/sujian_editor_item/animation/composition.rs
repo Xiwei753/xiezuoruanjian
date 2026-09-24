@@ -139,6 +139,20 @@ impl LinuxEditorAnimationCoordinator {
         };
         let prepared = build_prepared_transaction(spec);
 
+        // Issue #756 评论 5822051193: coordinated 模式下，IME composition update 路径
+        // 也必须有有效 caret motion。普通 Insert/Delete 在 process_transaction 里用
+        // old/new rect.is_some() 做门禁，但 IME 不走 process_transaction，且 composition
+        // commit 可能通过 caret_handoff 仍构造出有效 track。最稳妥的收口是构造完 prepared
+        // 后按最终结果判断：coordinated=true 但 cursor_visual_track 为 None → 不 enqueue，
+        // 直接返回 None，不允许任何文字 unit 单独留下继续播放。
+        if coordinated_animation_enabled && prepared.cursor_visual_track.is_none() {
+            editor_animation_debug_log(&format!(
+                "anim_event: key={:?} op=CompositionUpdate skipped: coordinated=true but cursor_visual_track is None",
+                key,
+            ));
+            return None;
+        }
+
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
         editor_animation_debug_log(&format!(
@@ -345,6 +359,16 @@ impl LinuxEditorAnimationCoordinator {
             composition_commit_crossfade,
         };
         let prepared = build_prepared_transaction(spec);
+
+        // Issue #756 评论 5822051193: coordinated 模式下，IME composition commit/cancel 路径
+        // 也必须有有效 caret motion，与 handle_composition_update 收口一致。
+        if coordinated_animation_enabled && prepared.cursor_visual_track.is_none() {
+            editor_animation_debug_log(&format!(
+                "anim_event: key={:?} op=CompositionCommitOrCancel skipped: coordinated=true but cursor_visual_track is None",
+                key,
+            ));
+            return None;
+        }
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");

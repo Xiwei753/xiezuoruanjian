@@ -175,14 +175,24 @@ fn test_commit_same_shaping_different_geometry_creates_move() {
         12,
         0,
         12,
-        None,
-        None,
-        None,
-        None,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
         0.0,
+        20.0,
         0.0,
-        0.0,
-        0.0,
+        20.0,
         0,
         LayoutRevision::initial(),
         Instant::now(),
@@ -278,14 +288,24 @@ fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
         12,
         0,
         12,
-        None,
-        None,
-        None,
-        None,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
         0.0,
+        20.0,
         0.0,
-        0.0,
-        0.0,
+        20.0,
         0,
         LayoutRevision::initial(),
         Instant::now(),
@@ -375,14 +395,24 @@ fn test_commit_same_shaping_same_geometry_is_static() {
         12,
         0,
         12,
-        None,
-        None,
-        None,
-        None,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
         0.0,
+        20.0,
         0.0,
-        0.0,
-        0.0,
+        20.0,
         0,
         LayoutRevision::initial(),
         Instant::now(),
@@ -473,14 +503,24 @@ fn test_commit_separate_preedit_and_committed_replace_ranges() {
         12,
         0,
         12,
-        None,
-        None,
-        None,
-        None,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
         0.0,
+        20.0,
         0.0,
-        0.0,
-        0.0,
+        20.0,
         0,
         LayoutRevision::initial(),
         Instant::now(),
@@ -563,14 +603,24 @@ fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
         3,
         3,
         3,
-        None,
-        None,
-        None,
-        None,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
         0.0,
+        20.0,
         0.0,
-        0.0,
-        0.0,
+        20.0,
         0,
         LayoutRevision::initial(),
         Instant::now(),
@@ -655,14 +705,24 @@ fn test_many_to_one_reflow_one_old_splits_to_two_new() {
         3,
         0,
         3,
-        None,
-        None,
-        None,
-        None,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
         0.0,
+        20.0,
         0.0,
-        0.0,
-        0.0,
+        20.0,
         0,
         LayoutRevision::initial(),
         true,
@@ -1784,5 +1844,322 @@ fn issue756_comment5821793349_composition_commit_typing_enabled_keeps_crossfade_
     assert!(
         !tx.coordinated,
         "typing-enabled composition commit: coordinated 必须为 false"
+    );
+}
+
+/// Issue #756 评论 5822051193: coordinated=true 的 composition update，
+/// 最终无法建立 cursor_visual_track（new_cursor_rect=None）时，
+/// 必须返回 None 且不 enqueue 任何文字 transaction。
+#[test]
+fn issue756_comment5822051193_composition_update_coordinated_no_cursor_track_returns_none() {
+    let sid = issue756_shaping_identity();
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "axb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // coordinated=true, text=true, caret=true
+    // new_cursor_rect=None → build_cursor_visual_track 第 26 行 `let to = new_cursor_rect?;`
+    // 直接返回 None → cursor_visual_track 为 None → 门禁触发 → 返回 None
+    let key = coord.handle_composition_update(
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        1,
+        1,
+        2,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        None,
+        Some(0),
+        None,
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        1,
+        LayoutRevision::initial(),
+        // text=true, caret=true, coordinated=true
+        true,
+        true,
+        true,
+    );
+    assert!(
+        key.is_none(),
+        "coordinated=true 且 cursor_visual_track 为 None 时必须返回 None（不允许文字 unit 单独留下继续播放）"
+    );
+    assert!(
+        coord.prepared_queue.active_transactions().is_empty(),
+        "coordinated=true 且 cursor_visual_track 为 None 时不应 enqueue 任何事务"
+    );
+}
+
+/// Issue #756 评论 5822051193: coordinated=true 的 composition commit/cancel，
+/// 最终无法建立 cursor_visual_track（new_cursor_rect=None）时，
+/// 必须返回 None 且不 enqueue 任何 crossfade/Reflow 文字 transaction。
+#[test]
+fn issue756_comment5822051193_composition_commit_coordinated_no_cursor_track_returns_none() {
+    let sid_preedit = ShapingIdentity {
+        text_content_hash: 99,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 99,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let sid_after = ShapingIdentity {
+        text_content_hash: 42,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 100,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let old_snapshot = make_test_snapshot(
+        "abc_preedit_after",
+        vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 10, 50.0, 0.0, sid_preedit.clone()),
+            (10, 15, 120.0, 0.0, sid_after.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "abc_QQ_after",
+        vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 5, 50.0, 0.0, sid_after.clone()),
+            (5, 10, 80.0, 0.0, sid_after),
+        ],
+    );
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // coordinated=true, text=true, caret=true
+    // new_cursor_rect=None, prepared_handoff=None
+    // 队列为空 → take_rebase_frames 返回 (vec![], None) → caret_handoff=None
+    // build_cursor_visual_track(new_cursor_rect=None) → 返回 None
+    // → cursor_visual_track 为 None → 门禁触发 → 返回 None
+    let key = coord.handle_composition_commit_or_cancel(
+        &old_snapshot,
+        &new_snapshot,
+        3,
+        10,
+        true,
+        false,
+        3,
+        5,
+        3,
+        10,
+        Some(CursorRect {
+            x: 50.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        None,
+        Some(0),
+        None,
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        1,
+        LayoutRevision::initial(),
+        Instant::now(),
+        None,
+        // text=true, caret=true, coordinated=true
+        true,
+        true,
+        true,
+    );
+    assert!(
+        key.is_none(),
+        "coordinated=true 且 cursor_visual_track 为 None 时必须返回 None（commit/cancel 路径同样收口）"
+    );
+    assert!(
+        coord.prepared_queue.active_transactions().is_empty(),
+        "coordinated=true 且 cursor_visual_track 为 None 时不应 enqueue 任何事务"
+    );
+}
+
+/// Issue #756 评论 5822051193: coordinated=true 的 composition commit，
+/// 有 caret_handoff 且 new_cursor_rect 存在时，能成功建立 cursor_visual_track，
+/// 必须返回 Some，避免把合法 rebase 场景误杀。
+#[test]
+fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_creates_transaction() {
+    let sid = issue756_shaping_identity();
+    let sid_preedit = ShapingIdentity {
+        text_content_hash: 99,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 99,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let sid_commit = ShapingIdentity {
+        text_content_hash: 200,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 300,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+
+    // 步骤 1: 先创建活跃的 composition update 事务（coordinated=true，有 old/new cursor rect）
+    // update: "ab" → "axb"（在 1 处插入 preedit "x"）
+    let update_old = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let update_new = make_test_snapshot(
+        "axb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid_preedit.clone()),
+            (2, 3, 20.0, 0.0, sid.clone()),
+        ],
+    );
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let cursor_owner_epoch = 1u64;
+    let update_key = coord.handle_composition_update(
+        &update_old,
+        &update_new,
+        1,
+        1,
+        1,
+        2,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        cursor_owner_epoch,
+        LayoutRevision::initial(),
+        // text=true, caret=true, coordinated=true
+        true,
+        true,
+        true,
+    );
+    assert!(
+        update_key.is_some(),
+        "前置条件: coordinated=true 且有 old/new cursor rect 的 composition update 必须创建事务"
+    );
+
+    // 步骤 2: 调 prepare_composition_commit_handoff 产生 handoff
+    // commit: "axb" → "aYb"（preedit "x" commit 成 "Y"）
+    let commit_old = update_new.clone();
+    let commit_new = make_test_snapshot(
+        "aYb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid_commit.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let now = Instant::now();
+    let prepared_handoff = coord.prepare_composition_commit_handoff(
+        &commit_old,
+        &commit_new,
+        1,
+        2,
+        true,
+        1,
+        2,
+        1,
+        2,
+        cursor_owner_epoch,
+        now,
+    );
+    // 旧 composition update 事务在队列里，is_composition() 为 true → conflicting 非空
+    // 旧事务有 old/new cursor rect → sample_coordinated_cursor_rect_at 返回 Some
+    // cursor_owner_epoch 一致 → caret_handoff 被选中 → Some
+    assert!(
+        prepared_handoff.caret_handoff.is_some(),
+        "前置条件: 有活跃 composition update 事务且 cursor_owner_epoch 一致时必须采到 caret_handoff"
+    );
+
+    // 步骤 3: 调 handle_composition_commit_or_cancel（is_commit=true, prepared_handoff=Some）
+    // new_cursor_rect=Some → build_cursor_visual_track 用 handoff 分支返回 Some
+    // → cursor_visual_track 为 Some → 门禁不触发 → 返回 Some
+    let key = coord.handle_composition_commit_or_cancel(
+        &commit_old,
+        &commit_new,
+        1,
+        2,
+        true,
+        false,
+        1,
+        2,
+        1,
+        2,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        cursor_owner_epoch,
+        LayoutRevision::initial(),
+        now,
+        Some(prepared_handoff),
+        // text=true, caret=true, coordinated=true
+        true,
+        true,
+        true,
+    );
+    assert!(
+        key.is_some(),
+        "coordinated=true 且有 caret_handoff 且 new_cursor_rect=Some 时必须返回 Some（合法 rebase 场景不能误杀）"
+    );
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key.unwrap())
+        .unwrap();
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "有 handoff 且 new_cursor_rect=Some 时必须成功建立 cursor_visual_track"
     );
 }
