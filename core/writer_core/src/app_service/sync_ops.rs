@@ -1,7 +1,7 @@
 use crate::api::{
     FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto, FullSyncStateDto,
-    LegacyMigrationOutcomeDto, LegacyProfileMetadataDto, SyncConfigDto, SyncSecretsDto,
-    SyncStateDto, WriterError,
+    LegacyMigrationOutcomeDto, LegacyProfileMetadataDto, SyncConfigDto, SyncConflictDto,
+    SyncConflictPreviewDto, SyncSecretsDto, SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -127,6 +127,23 @@ impl super::WriterAppService {
         path: String,
     ) -> Result<bool, WriterError> {
         self.api.resolve_conflict_mark_merged(&project_id, &path)
+    }
+
+    /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
+    pub fn load_sync_conflict_preview(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<SyncConflictPreviewDto, WriterError> {
+        self.api.load_sync_conflict_preview(&project_id, &path)
+    }
+
+    /// 列出当前项目的所有冲突记录。
+    pub fn list_sync_conflicts(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<SyncConflictDto>, WriterError> {
+        self.api.list_sync_conflicts(&project_id)
     }
 
     pub fn load_sync_token_from_secure_storage(&self) -> Option<String> {

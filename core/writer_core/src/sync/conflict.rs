@@ -7,7 +7,7 @@
 //! - `resolve_conflict_take_remote`：接受远端版本，丢弃本地变更
 //! - `resolve_conflict_mark_merged`：标记为已合并（用户手动解决后调用）
 
-use crate::sync::types::SyncConflict;
+use crate::sync::types::{SyncConflict, SyncConflictKind};
 use std::path::Path;
 
 /// 读取 `app-meta/sync/conflicts.json`。
@@ -168,6 +168,16 @@ pub fn record_staging_conflicts(
     for sc in staging_conflicts {
         let rel_str = sc.rel_path.to_string_lossy().to_string();
         let rel_unix = rel_str.replace('\\', "/");
+        let description = match sc.kind {
+            crate::sync::types::SyncConflictKind::BothChanged => format!(
+                "three-way conflict: both local and remote changed {}",
+                sc.rel_path.display()
+            ),
+            crate::sync::types::SyncConflictKind::RemoteDeleted => format!(
+                "conflict: remote deleted {} but local modified",
+                sc.rel_path.display()
+            ),
+        };
         let sync_conflict = SyncConflict {
             local_path: rel_str.clone(),
             remote_path: format!("{}/{}", remote_prefix, rel_unix),
@@ -175,10 +185,10 @@ pub fn record_staging_conflicts(
             remote_hash: sc.incoming_hash.clone(),
             base_hash: sc.base_hash.clone(),
             created_at: now_ts,
-            description: format!(
-                "three-way conflict: both local and remote changed {}",
-                sc.rel_path.display()
-            ),
+            description,
+            kind: sc.kind,
+            // RemoteDeleted 的 remote_snapshot_path 必须是 None。
+            remote_snapshot_path: sc.remote_snapshot_path.clone(),
         };
 
         upsert_conflict(
@@ -301,17 +311,54 @@ impl crate::sync::SyncService {
         Ok(())
     }
 
+    /// 用保存的远端 snapshot 原子替换本地正文。
+    ///
+    /// 读取 `sync_root/snapshot_rel` 的内容，atomic_write 到 `sync_root/path`。
+    /// 返回 `Ok(true)` 表示成功替换；`Ok(false)` 表示无 snapshot path（老数据兼容）。
+    fn apply_remote_snapshot(
+        sync_root: &Path,
+        path: &str,
+        snapshot_rel: &str,
+    ) -> crate::Result<()> {
+        let snapshot_path = sync_root.join(snapshot_rel);
+        let remote_content = std::fs::read(&snapshot_path).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "resolve_conflict_take_remote: read remote snapshot {}: {}",
+                snapshot_rel, e
+            )))
+        })?;
+        let local_full_path = sync_root.join(path);
+        crate::storage::transaction::atomic_write_bytes(&local_full_path, &remote_content)
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "resolve_conflict_take_remote: write local {}: {}",
+                    path, e
+                )))
+            })?;
+        Ok(())
+    }
+
     /// Resolve a conflict by taking the remote version.
     ///
-    /// Removes the path from `conflicted_files` and `conflicts`, and adds it
-    /// to `pending_take_remote`. On the next `perform_sync`, the engine will
-    /// force-download the remote content to the local file, then update
-    /// `known_files` to the final local hash.
+    /// 根据 [`SyncConflictKind`] 区分两种语义：
     ///
-    /// 不变量：不直接下载远端内容（可能在本函数调用时网络不可用），
-    /// 而是标记为 pending_take_remote，下次 perform_sync 时在正常三路比较之前
-    /// 强制下载。这保证"采用远端"意图不会因网络临时故障而丢失。
-    pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<()> {
+    /// - **BothChanged**：使用冲突记录对应的 `remote_snapshot_path` 原子替换本地正文
+    ///   （读 snapshot 文件内容，atomic_write 到本地正文路径），然后把 base/known hash
+    ///   更新到 `conflict.remote_hash`。**不再放进 `pending_take_remote`**，不再等
+    ///   下一次联网后重新下载一个可能已经变掉的"最新远端"。
+    /// - **RemoteDeleted**：接受删除，复用同步引擎 trash 语义把本地文件移入回收区，
+    ///   并从 known_files 移除该路径（manifest 里的远端 delete record 作为同步基线保留）。
+    ///   **不放进 `pending_take_remote`**。
+    /// - **兼容老数据**：旧冲突记录没有 `kind` 字段（反序列化默认 `BothChanged`）时，
+    ///   如果有 `remote_snapshot_path` 就走 BothChanged snapshot 替换；没有 snapshot path
+    ///   则回退到旧的 `pending_take_remote` 行为（保持兼容）。
+    ///
+    /// 返回值 `applied_live`：
+    /// - `Ok(true)`：已立即修改 live 正文（BothChanged snapshot 替换 / RemoteDeleted 移入 trash）。
+    ///   平台层据此触发编辑器重载（`sync_content_applied`）。
+    /// - `Ok(false)`：仅排队 `pending_take_remote`（老数据兼容，live 正文未变），
+    ///   平台层不应触发编辑器重载。
+    pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
         let mut state = Self::load_sync_state(sync_root)?;
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
@@ -319,9 +366,22 @@ impl crate::sync::SyncService {
                 path
             )));
         }
-        // Mark as pending_take_remote so the next perform_sync force-downloads
-        // the remote content to the local file.
-        state.pending_take_remote.insert(path.to_string());
+
+        // 取出该路径的冲突记录，按 kind 决策。
+        let conflict_opt = state
+            .conflicts
+            .iter()
+            .find(|c| c.local_path == path)
+            .cloned();
+
+        let use_pending_fallback =
+            Self::decide_take_remote(sync_root, path, &mut state, conflict_opt)?;
+
+        if use_pending_fallback {
+            // 兼容路径：标记为 pending_take_remote，下次 perform_sync 强制下载远端内容。
+            state.pending_take_remote.insert(path.to_string());
+        }
+
         // Remove the conflict record from state.conflicts
         state
             .conflicts
@@ -330,7 +390,60 @@ impl crate::sync::SyncService {
         let mut conflicts_json = load_conflicts_json(sync_root)?;
         conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
-        Ok(())
+        // applied_live = !use_pending_fallback：
+        // - use_pending_fallback=false → 已立即应用 live 正文（snapshot 替换/移入 trash）。
+        // - use_pending_fallback=true → 仅排队 pending_take_remote，live 正文未变。
+        Ok(!use_pending_fallback)
+    }
+
+    /// 根据 conflict kind 决定 take_remote 的具体动作，返回是否需要回退到 pending_take_remote。
+    fn decide_take_remote(
+        sync_root: &Path,
+        path: &str,
+        state: &mut crate::sync::types::SyncState,
+        conflict_opt: Option<SyncConflict>,
+    ) -> crate::Result<bool> {
+        let Some(conflict) = conflict_opt else {
+            // 无冲突记录：回退 pending_take_remote 行为。
+            return Ok(true);
+        };
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                // RemoteDeleted：把本地文件移入 trash，并从 known_files 移除。
+                // 不能继续把已删除路径留在 known_files —— 否则下一轮
+                // snapshot_local_records_read_only 会看到"known file missing
+                // without tombstone"直接返回 Err，把已删除文件当成损坏。
+                // manifest 里的远端 delete record 作为同步基线保留，不在这里动。
+                // conflict / conflicted_files 的清理由外层 resolve_conflict_take_remote
+                // 统一完成（conflicted_files.remove + conflicts.retain）。
+                crate::sync::lww::move_to_trash(
+                    sync_root,
+                    std::slice::from_ref(&path.to_string()),
+                )?;
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
+                Ok(false)
+            }
+            SyncConflictKind::BothChanged => match &conflict.remote_snapshot_path {
+                Some(snapshot_rel) => {
+                    // BothChanged + snapshot：用保存的远端副本原子替换本地正文。
+                    Self::apply_remote_snapshot(sync_root, path, snapshot_rel)?;
+                    // 基线更新为被选择的远端 snapshot 的 hash（即 conflict.remote_hash）。
+                    state
+                        .known_files
+                        .insert(path.to_string(), conflict.remote_hash.clone());
+                    let now_ts = chrono::Utc::now().timestamp_millis();
+                    state
+                        .known_files_updated_at
+                        .insert(path.to_string(), now_ts);
+                    Ok(false)
+                }
+                None => {
+                    // 老数据兼容：BothChanged 但无 snapshot path → 回退 pending_take_remote。
+                    Ok(true)
+                }
+            },
+        }
     }
 
     /// Resolve a conflict by marking it as manually merged.
@@ -379,5 +492,72 @@ impl crate::sync::SyncService {
         conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
+    }
+
+    /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
+    ///
+    /// 从 `conflicts.json` 找到对应 path 的冲突记录，读取本地正文和远端 snapshot
+    /// （`BothChanged` 时）。平台层只拿返回的 [`SyncConflictPreview`]，不直接读
+    /// `conflicts.json` 或拼磁盘路径。
+    pub fn load_conflict_preview(
+        sync_root: &Path,
+        path: &str,
+    ) -> crate::Result<crate::sync::types::SyncConflictPreview> {
+        let conflicts = load_conflicts_json(sync_root)?;
+        let conflict = conflicts
+            .iter()
+            .find(|c| c.local_path == path)
+            .ok_or_else(|| {
+                crate::Error::Other(format!(
+                    "load_conflict_preview: no conflict record for path '{}'",
+                    path
+                ))
+            })?;
+
+        // 读取本地正文。
+        let local_full_path = sync_root.join(path);
+        let local_content = if local_full_path.exists() {
+            std::fs::read_to_string(&local_full_path).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "load_conflict_preview: read local {}: {}",
+                    path, e
+                )))
+            })?
+        } else {
+            String::new()
+        };
+
+        let (remote_content, remote_deleted) = match conflict.kind {
+            SyncConflictKind::RemoteDeleted => (None, true),
+            SyncConflictKind::BothChanged => match &conflict.remote_snapshot_path {
+                Some(snapshot_rel) => {
+                    let snapshot_path = sync_root.join(snapshot_rel);
+                    let content = std::fs::read_to_string(&snapshot_path).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "load_conflict_preview: read remote snapshot {}: {}",
+                            snapshot_rel, e
+                        )))
+                    })?;
+                    (Some(content), false)
+                }
+                None => (None, false),
+            },
+        };
+
+        Ok(crate::sync::types::SyncConflictPreview {
+            path: path.to_string(),
+            kind: conflict.kind,
+            created_at: conflict.created_at,
+            local_content,
+            remote_content,
+            remote_deleted,
+        })
+    }
+
+    /// 列出当前项目的所有冲突记录。
+    ///
+    /// 从 `conflicts.json` 读取，供平台层展示冲突列表。
+    pub fn list_conflicts(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
+        load_conflicts_json(sync_root)
     }
 }

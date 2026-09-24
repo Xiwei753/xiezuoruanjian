@@ -46,7 +46,11 @@ pub(super) fn sync_download_pool(
 /// 此备份供用户手动对比本地与远端内容，不参与自动合并逻辑。
 ///
 /// `path` 必须通过 [`ValidatedSyncPath`] 验证（调用方已在上层校验）。
-pub(super) fn save_conflict_copy(
+///
+/// 返回相对 `sync_root` 的完整 snapshot 路径（如
+/// `volumes/v1/chapters/c1/chapter.md.remote-conflict-20260925-012345`），
+/// 供 [`SyncConflict::remote_snapshot_path`] 记录，预览 API 据此读取远端内容。
+pub(crate) fn save_conflict_copy(
     sync_root: &Path,
     path: &str,
     remote_content: &[u8],
@@ -76,7 +80,18 @@ pub(super) fn save_conflict_copy(
         },
     )?;
 
-    Ok(conflict_filename)
+    // 返回相对 sync_root 的路径，供 remote_snapshot_path 记录。
+    let relative = conflict_path
+        .strip_prefix(sync_root)
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "save_conflict_copy: conflict_path not under sync_root: {}",
+                e
+            )))
+        })?
+        .to_string_lossy()
+        .to_string();
+    Ok(relative)
 }
 
 /// 通过 Provider 拉取远端 tree，返回以本地相对路径为 key、远端版本为 value 的 map。
@@ -168,7 +183,7 @@ pub(super) fn download_pending_take_remote(
 /// trash 文件名格式：`{timestamp}_{uuid}_{original_filename}`。
 /// 返回 `Result`——rename 失败必须显式报错；远端 tombstone 要删除本地文件时，
 /// 如果移动失败，这一轮 merge 就失败；真实文件还在时不能先把 manifest 当成"已经删除"。
-pub(super) fn move_to_trash(sync_root: &Path, paths: &[String]) -> crate::Result<()> {
+pub(crate) fn move_to_trash(sync_root: &Path, paths: &[String]) -> crate::Result<()> {
     for path in paths {
         let validated = ValidatedSyncPath::new(path)?;
         let full_path = validated.join_under(sync_root);

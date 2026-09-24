@@ -34,7 +34,8 @@ use crate::sync::content_class::is_document_content_path;
 use crate::sync::provider::SyncProvider;
 use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
-    ManifestFileRecord, SyncConflict, SyncKind, SyncManifest, SyncScope, SyncState,
+    ManifestFileRecord, SyncConflict, SyncConflictKind, SyncKind, SyncManifest, SyncScope,
+    SyncState,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -295,6 +296,8 @@ pub(crate) fn merge_remote_into_local_snapshot(
                             created_at: chrono::Utc::now().timestamp(),
                             description: "正文文件冲突：本地已修改，远端已删除。保留本地文件。"
                                 .to_string(),
+                            kind: SyncConflictKind::RemoteDeleted,
+                            remote_snapshot_path: None,
                         };
                         doc_conflicts.push(conflict.clone());
                         state.conflicted_files.insert(path.clone());
@@ -313,7 +316,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
                             let remote_path = format!("{}/{}", source_remote_prefix, path);
                             if let Some(remote_obj) = provider.read(&remote_path)? {
                                 let remote_content = remote_obj.content;
-                                let conflict_filename =
+                                let remote_snapshot_path =
                                     save_conflict_copy(sync_root, &path, &remote_content)?;
 
                                 Some(SyncConflict {
@@ -323,10 +326,10 @@ pub(crate) fn merge_remote_into_local_snapshot(
                                     remote_hash: remote_hash.clone(),
                                     base_hash: base_hash.to_string(),
                                     created_at: chrono::Utc::now().timestamp(),
-                                    description: format!(
-                                        "正文文件双端修改冲突。本地修改和远端修改均保留。远端副本: {}",
-                                        conflict_filename
-                                    ),
+                                    description: "正文文件双端修改冲突。本地修改和远端修改均保留。"
+                                        .to_string(),
+                                    kind: SyncConflictKind::BothChanged,
+                                    remote_snapshot_path: Some(remote_snapshot_path),
                                 })
                             } else {
                                 None

@@ -45,6 +45,14 @@ pub(crate) use crate::sync::content_class::{
 // 把入口函数留在 lww 模块根的对外接口上，调用方仍用 `crate::sync::lww::perform_lww_sync`。
 pub(crate) use engine::perform_lww_sync;
 
+// re-export move_to_trash 供 conflict.rs 的 resolve_conflict_take_remote
+// （RemoteDeleted 语义）复用同一 trash 移动逻辑，不重复实现第二套删除路径。
+pub(crate) use transfer::move_to_trash;
+
+// re-export save_conflict_copy 供 commit_helpers 在 staging cleanup 前保存远端快照，
+// 让 staging BothChanged 冲突也能像 LWW 冲突一样保留远端 snapshot。
+pub(crate) use transfer::save_conflict_copy;
+
 //   re-export 只读 local record 投影 helper，
 // 供 `build_sync_plan`（plan/dry-run 路径）复用，保持 plan 与 LWW execute attempt
 // 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。

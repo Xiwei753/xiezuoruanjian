@@ -285,3 +285,99 @@ fn classify_staging_commit_path_skips_git_sujian_migrate_source() {
         StagingCommitClass::Content
     );
 }
+
+/// Issue #757：staging "远端删除 + 本地修改" 必须记成 RemoteDeleted，
+/// 不再被 three_way_resolve 的 BothChanged 笼统覆盖。
+///
+/// 真实 staging 流程：base 有 note.md=A，live 改成 B，staging 删除 note.md
+/// （incoming=None）。compute_commit_plan → conflict[0].kind == RemoteDeleted。
+/// record_staging_conflicts 持久化后 load_conflict_preview 必须 remote_deleted=true。
+/// resolve_conflict_take_remote 必须立即把 live 移入 trash、返回 applied_live=true，
+/// 且 pending_take_remote 不含此 path（不排队下载）。
+#[test]
+fn staging_remote_deleted_local_modified_records_remote_deleted_kind() {
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("live");
+    fs::create_dir_all(&live).unwrap();
+    // 用 note.md（正文类路径，走 three_way_resolve）。
+    let note_rel = "note.md";
+    let note_abs = live.join(note_rel);
+    // base 有正文 A。
+    fs::write(&note_abs, "base-A").unwrap();
+
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+    run.build_base_snapshot_from_live(&live, &[PathBuf::from(note_rel)])
+        .unwrap();
+    // live 改成 B（atomic_write rename 替换，base 保留旧 inode）。
+    crate::storage::atomic_write_string(&note_abs, "local-B").unwrap();
+    // staging 不放 note.md（模拟远端删除，incoming=None）。
+
+    // 1. compute_commit_plan → conflict[0].kind == RemoteDeleted。
+    let plan = run.compute_commit_plan(&live).unwrap();
+    assert_eq!(
+        plan.conflict.len(),
+        1,
+        "remote-deleted + local-modified should produce exactly one conflict"
+    );
+    assert_eq!(
+        plan.conflict[0].kind,
+        crate::sync::types::SyncConflictKind::RemoteDeleted,
+        "conflict kind must be RemoteDeleted, not BothChanged"
+    );
+    assert_eq!(plan.conflict[0].rel_path, PathBuf::from(note_rel));
+    // RemoteDeleted 不保存快照。
+    assert!(plan.conflict[0].remote_snapshot_path.is_none());
+
+    // cleanup staging（模拟 commit_helpers 的 run.cleanup()）。
+    run.cleanup();
+
+    // 2. record_staging_conflicts 持久化（sync_root = live 目录）。
+    let merged = crate::sync::conflict::record_staging_conflicts(
+        &live,
+        "projects/test",
+        &plan.conflict,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(merged.len(), 1);
+    assert_eq!(
+        merged[0].kind,
+        crate::sync::types::SyncConflictKind::RemoteDeleted
+    );
+    assert!(merged[0].remote_snapshot_path.is_none());
+
+    // 3. load_conflict_preview 必须 remote_deleted=true。
+    let preview = crate::sync::SyncService::load_conflict_preview(&live, note_rel).unwrap();
+    assert!(
+        preview.remote_deleted,
+        "preview.remote_deleted must be true for RemoteDeleted conflict"
+    );
+    assert_eq!(
+        preview.kind,
+        crate::sync::types::SyncConflictKind::RemoteDeleted
+    );
+    assert!(preview.remote_content.is_none());
+    assert_eq!(preview.local_content, "local-B");
+
+    // 4. resolve_conflict_take_remote 必须立即把 live 移入 trash、返回 applied_live=true。
+    let applied_live =
+        crate::sync::SyncService::resolve_conflict_take_remote(&live, note_rel).unwrap();
+    assert!(
+        applied_live,
+        "take_remote for RemoteDeleted must return applied_live=true (move to trash immediately)"
+    );
+    // live 正文已被移入 trash，note.md 不再存在于 live。
+    assert!(
+        !note_abs.exists(),
+        "live note.md must be moved to trash after take_remote"
+    );
+
+    // 5. SyncState.pending_take_remote 不含此 path。
+    let state_after = crate::sync::SyncService::load_sync_state(&live).unwrap();
+    assert!(
+        !state_after.pending_take_remote.contains(note_rel),
+        "pending_take_remote must NOT contain the path for RemoteDeleted take_remote"
+    );
+    assert!(!state_after.conflicted_files.contains(note_rel));
+    assert!(state_after.conflicts.is_empty());
+}

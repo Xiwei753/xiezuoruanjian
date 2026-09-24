@@ -308,6 +308,17 @@ dictionary SyncConflictDto {
     string base_hash;
     i64 created_at;
     string description;
+    string kind;
+    string? remote_snapshot_path;
+};
+
+dictionary SyncConflictPreviewDto {
+    string path;
+    string kind;
+    i64 created_at;
+    string local_content;
+    string? remote_content;
+    boolean remote_deleted;
 };
 
 dictionary SyncStateDto {
@@ -1285,6 +1296,12 @@ interface WriterAppService {
 
     [Throws=WriterError]
     boolean resolve_conflict_mark_merged(string project_id, string path);
+
+    [Throws=WriterError]
+    sequence<SyncConflictDto> list_sync_conflicts(string project_id);
+
+    [Throws=WriterError]
+    SyncConflictPreviewDto load_sync_conflict_preview(string project_id, string path);
 
     [Throws=WriterError]
     WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);

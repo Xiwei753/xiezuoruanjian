@@ -135,6 +135,23 @@ pub struct SyncBackend {
     open_workspace_dir: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
+    // Issue #757 评论 5818193510 第 4 点：冲突列表/预览/解决动作暴露给 QML。
+    // 全部返回结构化 JSON envelope（ResultEnvelope<serde_json::Value>），
+    // QML 端 JSON.parse 后按 success 分支取 data.conflicts / data.preview / data.resolved。
+    #[allow(dead_code)]
+    list_sync_conflicts: qt_method!(fn(&mut self, project_id: QString) -> QString),
+    #[allow(dead_code)]
+    load_sync_conflict_preview:
+        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    #[allow(dead_code)]
+    resolve_conflict_keep_local:
+        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    #[allow(dead_code)]
+    resolve_conflict_take_remote:
+        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    #[allow(dead_code)]
+    resolve_conflict_mark_merged:
+        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
     app: AppRef,
 }
 
@@ -160,9 +177,7 @@ impl SyncBackend {
         // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
         // 不能拿来表示基础设施失败。这与 main 原行为一致（仅 is_ok() 才发信号），
         // 避免把"handle_sync_outcome 根本没执行 / DomainSnapshot 没刷新"伪装成同步完成。
-        let effect = match self
-            .with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr)))
-        {
+        let effect = match self.with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr))) {
             Ok(effect) => effect,
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
@@ -356,6 +371,136 @@ impl SyncBackend {
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         self.with_app_mut(|app| app.copy_text_to_clipboard(text))
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+
+    // ── Issue #757 评论 5818193510 第 4 点：冲突列表/预览/解决动作 ──
+    //
+    // 平台层只做 Core API 调用 + JSON envelope 序列化，不复制同步状态机。
+    // QML 端不自己拼磁盘路径读 conflicts.json，全部通过这些方法拿数据。
+    // envelope 线格式：{ success, data: { conflicts | preview | resolved }, errorCode, ... }。
+
+    /// 列出当前项目的所有未解决冲突。
+    ///
+    /// 返回 `ResultEnvelope<{ conflicts: SyncConflictDto[] }>` JSON 字符串。
+    fn list_sync_conflicts(&mut self, project_id: QString) -> QString {
+        let pid = project_id.to_string();
+        let result = self.with_app(|app| app.core_api().map(|api| api.list_sync_conflicts(&pid)));
+        match result {
+            Ok(Some(Ok(conflicts))) => {
+                let data = serde_json::json!({ "conflicts": conflicts });
+                writer_core::api::ResultEnvelope::success(data)
+                    .to_json_string()
+                    .into()
+            }
+            Ok(Some(Err(error))) => {
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(error)
+                    .to_json_string()
+                    .into()
+            }
+            Ok(None) => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("workspace not initialized".to_string()),
+            )
+            .into(),
+            Err(_) => crate::backend::json_utils::borrow_conflict_error_json().into(),
+        }
+    }
+
+    /// 加载单个冲突的本地/远端预览。
+    ///
+    /// 返回 `ResultEnvelope<{ preview: SyncConflictPreviewDto }>` JSON 字符串。
+    fn load_sync_conflict_preview(&mut self, project_id: QString, path: QString) -> QString {
+        let pid = project_id.to_string();
+        let conflict_path = path.to_string();
+        let result = self.with_app(|app| {
+            app.core_api()
+                .map(|api| api.load_sync_conflict_preview(&pid, &conflict_path))
+        });
+        match result {
+            Ok(Some(Ok(preview))) => {
+                let data = serde_json::json!({ "preview": preview });
+                writer_core::api::ResultEnvelope::success(data)
+                    .to_json_string()
+                    .into()
+            }
+            Ok(Some(Err(error))) => {
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(error)
+                    .to_json_string()
+                    .into()
+            }
+            Ok(None) => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("workspace not initialized".to_string()),
+            )
+            .into(),
+            Err(_) => crate::backend::json_utils::borrow_conflict_error_json().into(),
+        }
+    }
+
+    /// 冲突解决动作分派 — 三个公开 resolve 方法共用此实现。
+    ///
+    /// 成功后发 `sync_status_changed` + `sync_action_completed`，通知 QML 刷新冲突列表。
+    /// `action`：`"keep_local"` / `"take_remote"` / `"mark_merged"`。
+    fn resolve_conflict_dispatch(
+        &mut self,
+        project_id: QString,
+        path: QString,
+        action: &str,
+    ) -> QString {
+        let pid = project_id.to_string();
+        let conflict_path = path.to_string();
+        let result = self.with_app(|app| {
+            app.core_api().map(|api| match action {
+                "keep_local" => api.resolve_conflict_keep_local(&pid, &conflict_path),
+                "take_remote" => api.resolve_conflict_take_remote(&pid, &conflict_path),
+                _ => api.resolve_conflict_mark_merged(&pid, &conflict_path),
+            })
+        });
+        // Issue #757 评论 5820327136 第 1 点：take_remote 的 applied_live bool 透传到
+        // 此处。只在 take_remote 且 Core 确实立即修改了 live 正文时触发编辑器重载
+        // （sync_content_applied）。老数据 fallback（pending_take_remote）此时 live 正文
+        // 未变，不应触发。keep_local / mark_merged 不修改 live 正文，applied_live 固定 false。
+        let (envelope, applied_live) = match result {
+            Ok(Some(Ok(ok))) => (
+                writer_core::api::ResultEnvelope::success(serde_json::json!({ "resolved": ok })),
+                ok,
+            ),
+            Ok(Some(Err(error))) => (
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(error),
+                false,
+            ),
+            Ok(None) => (
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(
+                    writer_core::api::WriterError::Other("workspace not initialized".to_string()),
+                ),
+                false,
+            ),
+            Err(_) => return crate::backend::json_utils::borrow_conflict_error_json().into(),
+        };
+        let json: QString = envelope.to_json_string().into();
+        if envelope.success {
+            self.sync_status_changed();
+            self.sync_action_completed();
+            // Issue #757 评论 5819894306 第 2 点：take_remote 的 BothChanged 原子替换
+            // 正文、RemoteDeleted 移走正文，当前编辑器仍持有旧正文，需触发
+            // onSync_content_applied 走现有 refreshStateImmediate + reconcileActiveChapter
+            // 链路重载。keep_local / mark_merged 不替换/删除 live 正文，不需要此信号。
+            // 只在 take_remote 且 applied_live=true 时发（#757 评论 5820327136 第 1 点）。
+            if action == "take_remote" && applied_live {
+                self.sync_content_applied();
+            }
+        }
+        json
+    }
+
+    fn resolve_conflict_keep_local(&mut self, project_id: QString, path: QString) -> QString {
+        self.resolve_conflict_dispatch(project_id, path, "keep_local")
+    }
+
+    fn resolve_conflict_take_remote(&mut self, project_id: QString, path: QString) -> QString {
+        self.resolve_conflict_dispatch(project_id, path, "take_remote")
+    }
+
+    fn resolve_conflict_mark_merged(&mut self, project_id: QString, path: QString) -> QString {
+        self.resolve_conflict_dispatch(project_id, path, "mark_merged")
     }
 }
 

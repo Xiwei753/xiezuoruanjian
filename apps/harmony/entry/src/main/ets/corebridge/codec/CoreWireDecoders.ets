@@ -1504,9 +1504,16 @@ function decodeSyncConflict(data: Object): DecodeResult<SyncConflict> {
   if (createdAt === null) { return err<SyncConflict>('createdAt missing') }
   const description: string | null = reqStr(data, 'description')
   if (description === null) { return err<SyncConflict>('description missing') }
+  // kind: Core 侧 #[serde(default = "both_changed")]，老数据可能缺失 → 默认 "both_changed"
+  const kindRaw: string | null = reqStr(data, 'kind')
+  const kind: string = kindRaw !== null ? kindRaw : 'both_changed'
+  // remoteSnapshotPath: Core 侧 Option<String>，恒发该键（string 或 null）
+  const remoteSnapshotPathR: DecodeResult<string | null> = nullStr(data, 'remoteSnapshotPath')
+  if (!remoteSnapshotPathR.ok || remoteSnapshotPathR.value === undefined) { return err<SyncConflict>(`SyncConflict.${remoteSnapshotPathR.error ?? 'decode failed'}`) }
   return ok<SyncConflict>({
     localPath: localPath, remotePath: remotePath, localHash: localHash, remoteHash: remoteHash,
-    baseHash: baseHash, createdAt: createdAt, description: description
+    baseHash: baseHash, createdAt: createdAt, description: description,
+    kind: kind, remoteSnapshotPath: remoteSnapshotPathR.value
   })
 }
 

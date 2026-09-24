@@ -617,10 +617,12 @@ impl WriterCoreApi {
     }
 
     /// 冲突解决：采用远端版本。
+    ///
+    /// 返回 `applied_live` bool：`true` 表示已立即修改 live 正文（snapshot 替换/移入 trash），
+    /// 平台层据此触发编辑器重载；`false` 表示仅排队 pending_take_remote（老数据兼容）。
     pub fn resolve_conflict_take_remote(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core_write()
             .resolve_conflict_take_remote(project_id, path)
-            .map(|_| true)
             .map_err(Into::into)
     }
 
@@ -629,6 +631,36 @@ impl WriterCoreApi {
         self.core_write()
             .resolve_conflict_mark_merged(project_id, path)
             .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
+    ///
+    /// 平台层只拿此 DTO，不直接读 `conflicts.json`，QML 更不能自己拼磁盘路径。
+    pub fn load_sync_conflict_preview(
+        &self,
+        project_id: &str,
+        path: &str,
+    ) -> ApiResult<SyncConflictPreviewDto> {
+        let preview = self
+            .core_read()
+            .load_sync_conflict_preview(project_id, path)
+            .map_err(crate::api::error::WriterError::from)?;
+        Ok(SyncConflictPreviewDto {
+            path: preview.path,
+            kind: sync_conflict_kind_to_wire(&preview.kind),
+            created_at: preview.created_at,
+            local_content: preview.local_content,
+            remote_content: preview.remote_content,
+            remote_deleted: preview.remote_deleted,
+        })
+    }
+
+    /// 列出当前项目的所有冲突记录。
+    pub fn list_sync_conflicts(&self, project_id: &str) -> ApiResult<Vec<SyncConflictDto>> {
+        self.core_read()
+            .list_sync_conflicts(project_id)
+            .map(|conflicts| conflicts.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 

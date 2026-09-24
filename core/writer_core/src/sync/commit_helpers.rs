@@ -92,6 +92,41 @@ pub(crate) enum TargetCommitResult {
     Failed(String),
 }
 
+/// 在 staging cleanup 前，对 plan.conflict 的每个 StagingConflict 读取 incoming
+/// 正文（staging_root/rel_path），用 save_conflict_copy 保存到 live target 的冲突快照，
+/// 填入 StagingConflict.remote_snapshot_path。这样 record_staging_conflicts 映射成
+/// SyncConflict 时能带上远端 snapshot，#757 冲突侧栏"用户看到什么就选择什么"。
+///
+/// 必须在 `run.cleanup()` 之前调用——cleanup 会删除 staging_root，之后读不到 incoming。
+/// 已填快照（`remote_snapshot_path.is_some()`）的条目跳过，避免重复保存。
+fn save_conflict_snapshots(
+    live_root: &Path,
+    staging_root: &Path,
+    conflicts: &mut [crate::sync::staging::StagingConflict],
+) -> crate::error::Result<()> {
+    for sc in conflicts.iter_mut() {
+        if sc.remote_snapshot_path.is_some() {
+            continue;
+        }
+        // 只有 BothChanged 才保存 incoming snapshot。
+        // RemoteDeleted 远端已删除，无 incoming 正文，不保存快照，
+        // remote_snapshot_path 保持 None。
+        if sc.kind != crate::sync::types::SyncConflictKind::BothChanged {
+            continue;
+        }
+        let rel_str = sc.rel_path.to_string_lossy().to_string();
+        let incoming_path = staging_root.join(&sc.rel_path);
+        if !incoming_path.exists() {
+            // incoming 不存在（理论上 BothChanged 应有 incoming），跳过，保留 None 兜底。
+            continue;
+        }
+        let incoming = std::fs::read(&incoming_path)?;
+        let snapshot_rel = crate::sync::lww::save_conflict_copy(live_root, &rel_str, &incoming)?;
+        sc.remote_snapshot_path = Some(snapshot_rel);
+    }
+    Ok(())
+}
+
 pub(crate) struct StagingCommitOutcome {
     pub(crate) target_results: Vec<TargetCommitResult>,
     pub(crate) target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
@@ -193,7 +228,7 @@ pub(crate) fn apply_staging_commits_for_targets(
             }
             TargetCommitMode::Full => {
                 let live_root = run.target_live_root();
-                let plan = match run.compute_commit_plan(live_root) {
+                let mut plan = match run.compute_commit_plan(live_root) {
                     Ok(plan) => plan,
                     Err(e) => {
                         let msg = format!("compute_commit_plan failed: {}", e);
@@ -240,6 +275,20 @@ pub(crate) fn apply_staging_commits_for_targets(
                             &plan.content_actions,
                             &mut committed_paths,
                         );
+                        // #757：在 cleanup 前保存远端快照到 plan.conflict，
+                        // 让 record_staging_conflicts 映射成 SyncConflict 时带上
+                        // remote_snapshot_path。cleanup 后 staging_root 已删，无法再读。
+                        let staging_root = run.staging_root();
+                        if let Err(e) =
+                            save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict)
+                        {
+                            let msg = format!("save_conflict_snapshots failed: {}", e);
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg));
+                            target_conflicts.push(Vec::new());
+                            run.cleanup();
+                            continue;
+                        }
                         target_conflicts.push(plan.conflict);
                         target_results.push(TargetCommitResult::Ok);
                         run.cleanup();
@@ -254,7 +303,7 @@ pub(crate) fn apply_staging_commits_for_targets(
             }
             TargetCommitMode::ConflictMetadataOnly => {
                 let live_root = run.target_live_root();
-                let plan = match run.compute_commit_plan(live_root) {
+                let mut plan = match run.compute_commit_plan(live_root) {
                     Ok(plan) => plan,
                     Err(e) => {
                         let msg = format!("compute_commit_plan failed: {}", e);
@@ -315,6 +364,18 @@ pub(crate) fn apply_staging_commits_for_targets(
                     .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                     .unwrap_or(("", None));
                 collect_action_paths(kind, pid, &safe_content_actions, &mut committed_paths);
+                // #757：在 cleanup 前保存远端快照到 plan.conflict（同 Full 模式）。
+                let staging_root = run.staging_root();
+                if let Err(e) =
+                    save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict)
+                {
+                    let msg = format!("save_conflict_snapshots failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    target_results.push(TargetCommitResult::Failed(msg));
+                    target_conflicts.push(Vec::new());
+                    run.cleanup();
+                    continue;
+                }
                 target_conflicts.push(plan.conflict);
                 target_results.push(TargetCommitResult::Ok);
                 run.cleanup();
@@ -389,7 +450,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                 }
 
                 // 2. 构建 replace plan（staging 有 → Apply；live 有但 staging 没有 → Delete）。
-                let plan = match crate::sync::staging::replace::build_replace_project_plan(
+                let mut plan = match crate::sync::staging::replace::build_replace_project_plan(
                     live_root,
                     &staging_root,
                 ) {
@@ -434,6 +495,18 @@ pub(crate) fn apply_staging_commits_for_targets(
                             &plan.content_actions,
                             &mut committed_paths,
                         );
+                        // #757：在 cleanup 前保存远端快照（防御性——ReplaceProject
+                        // 通常无冲突，但保持与其他分支一致）。
+                        if let Err(e) =
+                            save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict)
+                        {
+                            let msg = format!("save_conflict_snapshots failed: {}", e);
+                            log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                            target_results.push(TargetCommitResult::Failed(msg));
+                            target_conflicts.push(Vec::new());
+                            run.cleanup();
+                            continue;
+                        }
                         target_conflicts.push(plan.conflict);
                         target_results.push(TargetCommitResult::Ok);
                         run.cleanup();

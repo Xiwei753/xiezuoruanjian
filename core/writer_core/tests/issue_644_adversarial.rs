@@ -534,6 +534,8 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
         base_hash: "base-hash".to_string(),
         created_at: 0,
         description: "both changed".to_string(),
+        kind: writer_core::sync::types::SyncConflictKind::BothChanged,
+        remote_snapshot_path: None,
     }];
     let transfer_result = FullSyncTransferResult {
         targets: vec![TargetSyncResult {

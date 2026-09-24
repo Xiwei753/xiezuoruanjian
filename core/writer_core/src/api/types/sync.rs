@@ -206,6 +206,27 @@ pub struct SyncStateDto {
     pub conflicts: Option<Vec<SyncConflictDto>>,
 }
 
+/// `SyncConflictKind` → 线格式字符串。
+pub(crate) fn sync_conflict_kind_to_wire(kind: &crate::sync::SyncConflictKind) -> String {
+    match kind {
+        crate::sync::SyncConflictKind::BothChanged => "both_changed".to_string(),
+        crate::sync::SyncConflictKind::RemoteDeleted => "remote_deleted".to_string(),
+    }
+}
+
+/// 线格式字符串 → `SyncConflictKind`。未知值默认 `BothChanged`。
+fn sync_conflict_kind_from_wire(s: &str) -> crate::sync::SyncConflictKind {
+    match s {
+        "remote_deleted" => crate::sync::SyncConflictKind::RemoteDeleted,
+        _ => crate::sync::SyncConflictKind::BothChanged,
+    }
+}
+
+/// SyncConflictDto.kind 的 serde 默认值函数。
+fn default_conflict_kind() -> String {
+    "both_changed".to_string()
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConflictDto {
@@ -216,6 +237,14 @@ pub struct SyncConflictDto {
     pub base_hash: String,
     pub created_at: i64,
     pub description: String,
+    /// 冲突类型线格式（`"both_changed"` / `"remote_deleted"`）。
+    /// 旧数据缺少此字段时默认 `"both_changed"`。
+    #[serde(default = "default_conflict_kind")]
+    pub kind: String,
+    /// 远端副本快照相对 sync_root 的路径（`BothChanged` 时有值）。
+    /// 旧数据缺少此字段时默认 `None`。
+    #[serde(default)]
+    pub remote_snapshot_path: Option<String>,
 }
 
 impl From<crate::sync::SyncConflict> for SyncConflictDto {
@@ -228,6 +257,8 @@ impl From<crate::sync::SyncConflict> for SyncConflictDto {
             base_hash: c.base_hash,
             created_at: c.created_at,
             description: c.description,
+            kind: sync_conflict_kind_to_wire(&c.kind),
+            remote_snapshot_path: c.remote_snapshot_path,
         }
     }
 }
@@ -253,6 +284,8 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
             base_hash: c.base_hash,
             created_at: c.created_at,
             description: c.description,
+            kind: sync_conflict_kind_from_wire(&c.kind),
+            remote_snapshot_path: c.remote_snapshot_path,
         }
     }
 }
@@ -271,6 +304,23 @@ impl From<SyncStateDto> for crate::sync::SyncState {
             ..Default::default()
         }
     }
+}
+
+/// 同步冲突预览 DTO — 供平台层展示本地/远端内容并让用户选择。
+///
+/// 平台层只拿此 DTO，不直接读 `conflicts.json`，QML 更不能自己拼磁盘路径。
+/// - `local_content`：当前本地正文。
+/// - `remote_content`：`BothChanged` 时返回保存的远端 snapshot 正文；`RemoteDeleted` 时为 `None`。
+/// - `remote_deleted`：`RemoteDeleted` 时为 `true`，不伪造空字符串为远端正文。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConflictPreviewDto {
+    pub path: String,
+    pub kind: String,
+    pub created_at: i64,
+    pub local_content: String,
+    pub remote_content: Option<String>,
+    pub remote_deleted: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

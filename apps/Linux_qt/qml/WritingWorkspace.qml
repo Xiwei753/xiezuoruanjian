@@ -60,6 +60,13 @@ Rectangle {
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
 
+    // Issue #757 评论 5818193510 第 5 点：同步冲突侧栏支持。
+    // syncBackendRef 由 main.qml 传入（全局 syncBackend），用于监听同步完成信号
+    // 并在冲突产生时刷新冲突列表、打开临时侧栏。
+    property var syncBackendRef: null
+    // 是否有未解决冲突 — 透传给 RightDrawer 控制冲突 tab 显隐。
+    property bool hasConflicts: false
+
     signal backToProjects()
     signal openSettings()
 
@@ -1150,9 +1157,19 @@ Rectangle {
             currentTab: root.drawerTab
             aiCapable: root.aiCapable
             aiEnabled: root.aiEnabled
+            // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
+            syncBackendRef: root.syncBackendRef
+            workspaceProjectId: root.workspaceProjectId
+            hasConflicts: root.hasConflicts
             onCloseRequested: root.drawerOpen = false
             onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
             onOpenSettings: root.openSettings()
+            onConflictTabRequested: {
+                // 冲突刚产生或解决后刷新 — 打开 drawer 并切到冲突 tab。
+                root.drawerOpen = true;
+                root.drawerTab = rightDrawerRect.conflictTabIdx;
+                root.refreshConflictList();
+            }
         }
     }
 
@@ -1185,6 +1202,58 @@ Rectangle {
                     );
                 }
             }
+        }
+    }
+
+    // Issue #757 评论 5818193510 第 5 点：同步完成后检查冲突状态。
+    // 监听 syncBackend.sync_action_completed，若 sync_operation_state 中
+    // status 为 conflict/partial_conflict，刷新冲突列表并打开临时侧栏。
+    // 不在 QML 维护第二份可编辑正文，只通过 SyncBackend QML 方法拿冲突列表。
+    function refreshConflictList() {
+        var sb = root.syncBackendRef;
+        if (!sb || !root.workspaceProjectId) {
+            root.hasConflicts = false;
+            return;
+        }
+        var raw = sb.list_sync_conflicts(root.workspaceProjectId);
+        var resp;
+        try { resp = JSON.parse(raw); } catch (e) { resp = null; }
+        if (resp && resp.success && resp.data && resp.data.conflicts) {
+            root.hasConflicts = resp.data.conflicts.length > 0;
+        } else {
+            root.hasConflicts = false;
+        }
+        // Issue #757 评论 5819894306 第 3 点：最后一个冲突解决后自动退出冲突 tab。
+        // hasConflicts 为 false 且 drawer 停在冲突 tab 时，切回 tab 0 并关闭 drawer，
+        // 避免落到没有内容的 tab 状态。仍由 WritingWorkspace 统一持有 drawer 状态，
+        // 不让 RightDrawer 自己猜外部 drawer 状态。
+        if (!root.hasConflicts && root.drawerTab === rightDrawerRect.conflictTabIdx) {
+            root.drawerTab = 0;
+            root.drawerOpen = false;
+        }
+    }
+
+    function checkConflictsAfterSync() {
+        var sb = root.syncBackendRef;
+        if (!sb || !root.workspaceProjectId) return;
+        var stateRaw = sb.sync_operation_state;
+        var state;
+        try { state = JSON.parse(stateRaw); } catch (e) { state = null; }
+        if (!state) return;
+        // 同步结果为 conflict / partial_conflict 时刷新冲突列表并打开侧栏。
+        if (state.statusCode === "conflict" || state.statusCode === "partial_conflict") {
+            root.refreshConflictList();
+            if (root.hasConflicts) {
+                root.drawerOpen = true;
+                root.drawerTab = rightDrawerRect.conflictTabIdx;
+            }
+        }
+    }
+
+    Connections {
+        target: root.syncBackendRef
+        function onSync_action_completed() {
+            root.checkConflictsAfterSync();
         }
     }
 

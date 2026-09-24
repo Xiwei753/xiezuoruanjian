@@ -68,7 +68,7 @@ impl super::WriterCore {
         &self,
         project_id: &str,
         path: &str,
-    ) -> crate::error::Result<()> {
+    ) -> crate::error::Result<bool> {
         crate::sync::SyncService::resolve_conflict_take_remote(&self.project_root(project_id), path)
     }
 
@@ -78,6 +78,23 @@ impl super::WriterCore {
         path: &str,
     ) -> crate::error::Result<()> {
         crate::sync::SyncService::resolve_conflict_mark_merged(&self.project_root(project_id), path)
+    }
+
+    /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
+    pub fn load_sync_conflict_preview(
+        &self,
+        project_id: &str,
+        path: &str,
+    ) -> crate::error::Result<crate::sync::types::SyncConflictPreview> {
+        crate::sync::SyncService::load_conflict_preview(&self.project_root(project_id), path)
+    }
+
+    /// 列出当前项目的所有冲突记录。
+    pub fn list_sync_conflicts(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<Vec<crate::sync::SyncConflict>> {
+        crate::sync::SyncService::list_conflicts(&self.project_root(project_id))
     }
 
     pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {
