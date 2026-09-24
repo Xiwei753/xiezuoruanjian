@@ -1,4 +1,4 @@
-use super::animation_coordinator::LinuxEditorAnimationCoordinator;
+use super::animation::LinuxEditorAnimationCoordinator;
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;

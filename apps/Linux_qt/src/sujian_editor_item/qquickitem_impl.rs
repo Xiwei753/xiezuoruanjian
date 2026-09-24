@@ -175,7 +175,7 @@ impl QQuickItem for SujianEditorItem {
             let prepared_frame = self.prepared_frame.as_ref();
             let selection_preedit = match prepared_frame {
                 Some(frame) => frame.selection_preedit.clone(),
-                None => animation_coordinator::SelectionPreeditPlan::default(),
+                None => render_plan::SelectionPreeditPlan::default(),
             };
 
             let frame_context = FrameContext {

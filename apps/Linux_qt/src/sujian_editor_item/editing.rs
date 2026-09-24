@@ -1,4 +1,4 @@
-use super::animation_coordinator::find_line_geometry_in_snapshot;
+use super::animation::find_line_geometry_in_snapshot;
 use super::layout_revision::LayoutRevision;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;

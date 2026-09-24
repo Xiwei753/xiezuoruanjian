@@ -20,7 +20,7 @@
 //! 编辑操作触发 `blink_reset_requested`，使光标重新可见并重置闪烁计时器。
 //! 滚动和动画期间闪烁暂停。
 
-use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
+use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
 use std::time::{Duration, Instant};

@@ -861,7 +861,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         // 验证新行为：CaretDriven units 的 start_fraction 已设为 target_fraction（终态）
         for unit in &tx_ref.units {
             use super::animated_slice::AnimatedSliceKind;
-            use super::text_visual_transaction::VisualUnitTiming;
+            use super::animation::VisualUnitTiming;
             if matches!(
                 unit.slice.kind,
                 AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
