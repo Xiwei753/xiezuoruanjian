@@ -155,12 +155,24 @@ impl SyncBackend {
     ///    QML 监听的 SyncBackend signal 能正确触发。
     pub(crate) fn handle_outcome(&mut self, outcome: SyncTaskOutcome) {
         let qptr = QPointer::from(&*self);
-        // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，
-        // ContentChanged 时发 sync_content_applied 让 QML 刷新正文/树。
-        // borrow conflict 时 unwrap_or 给 StatusOnly，不发 content applied。
-        let effect = self
+        // Issue #754 评论 5816335613: 明确区分成功与 AppBackend 借用失败。
+        // 借用失败直接 return，不发任何"已完成"类 signal——
+        // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
+        // 不能拿来表示基础设施失败。这与 main 原行为一致（仅 is_ok() 才发信号），
+        // 避免把"handle_sync_outcome 根本没执行 / DomainSnapshot 没刷新"伪装成同步完成。
+        let effect = match self
             .with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr)))
-            .unwrap_or(sync_operations::SyncOutcomeEffect::StatusOnly);
+        {
+            Ok(effect) => effect,
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "sync_backend",
+                    "BORROW_CONFLICT",
+                    "sync outcome skipped due to AppBackend borrow conflict",
+                );
+                return;
+            }
+        };
         self.sync_status_changed();
         self.sync_action_completed();
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
