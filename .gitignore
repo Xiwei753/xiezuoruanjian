@@ -1,6 +1,9 @@
 # Node / Harmony build tooling
 node_modules/
 
+# Local DevEco CLI skill installs (reinstall with devecocli skills add)
+.opencode/skills/
+
 # Python
 __pycache__/
 *.pyc

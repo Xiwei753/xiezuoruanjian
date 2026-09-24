@@ -1,0 +1,16 @@
+{
+  "mcp": {
+    "deveco-mcp": {
+      "type": "local",
+      "command": [
+        "devecocli",
+        "serve",
+        "mcp"
+      ],
+      "environment": {
+        "PROJECT_PATH": "/home/xiwei/xiezuoruanjian"
+      },
+      "enabled": true
+    }
+  }
+}
