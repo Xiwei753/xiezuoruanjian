@@ -11,7 +11,7 @@
 // 调用方（Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，不吞失败。
 
 import { EditorSessionSnapshot, EditorEditResult, EditorCompositionState } from '../../../corebridge/dto/EditorDtos'
-import { applyEditResultToSnapshot, ApplyEditResultOutcome } from './editor_patch_logic'
+import { applyEditResultToSnapshot, ApplyEditResultOutcome, EditorSessionSnapshot as PatchSnapshot } from './editor_patch_logic'
 
 /**
  * withEditResult 的结果：明确区分成功与失败，不吞失败。
@@ -48,7 +48,19 @@ export class EditorSessionState {
   // 成功返回 { ok: true, state }；失败返回 { ok: false, reason }。
   // 调用方（Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，不吞失败。
   withEditResult(result: EditorEditResult): EditStateOutcome {
-    const outcome: ApplyEditResultOutcome = applyEditResultToSnapshot(this.snapshot, result as Object)
+    // Issue #753：editor_patch_logic.EditorSessionSnapshot 与 EditorDtos.EditorSessionSnapshot
+    // 字段一致，区别仅在 composition 可选性（DTO 可选 vs 纯逻辑 | null）。
+    // 构造符合纯逻辑类型的桥接对象传入，把可选 composition 归一为 | null。
+    const patchInput: PatchSnapshot = {
+      text: this.snapshot.text,
+      revision: this.snapshot.revision,
+      cursor: this.snapshot.cursor,
+      selectionAnchor: this.snapshot.selectionAnchor,
+      generation: this.snapshot.generation,
+      chapterId: this.snapshot.chapterId,
+      composition: this.snapshot.composition ?? null
+    }
+    const outcome: ApplyEditResultOutcome = applyEditResultToSnapshot(patchInput, result as Object)
     if (outcome.ok === true) {
       return { ok: true, state: new EditorSessionState(this.sessionId, outcome.snapshot as EditorSessionSnapshot) }
     }
@@ -68,6 +80,7 @@ export class EditorSessionState {
   // finish/cancel/普通编辑后为 null。状态由 withEditResult → applyEditResultToSnapshot
   // 透传 Core 返回的 result.composition，不在此处复制 composition 状态机。
   get composition(): EditorCompositionState | null {
-    return this.snapshot.composition
+    // Issue #753：DTO composition 是可选属性（undefined），归一为 null。
+    return this.snapshot.composition ?? null
   }
 }

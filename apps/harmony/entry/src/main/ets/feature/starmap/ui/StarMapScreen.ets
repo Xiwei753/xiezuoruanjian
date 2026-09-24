@@ -127,29 +127,25 @@ export struct StarMapScreen {
       const result = await this.bridge.getStarMapGraph(this.starmapId)
       if (result.success && result.data) {
         this.graph = result.data
-        // 从 graph.layout.nodes 提取布局坐标
-        if (result.data.layout && result.data.layout.nodes) {
-          this.layoutNodes = result.data.layout.nodes
-        } else {
-          // 兼容：如果 layout.nodes 为空，从旧数据降级
-          this.layoutNodes = result.data.nodes.map((node: StarMapNode): StarMapLayoutNode => {
-            const layoutNode: StarMapLayoutNode = {
-              nodeId: node.id,
-              x: 0,
-              y: 0,
-              width: 160,
-              height: 80,
-              radius: 16,
-              collapsed: false,
-              zIndex: 0,
-              scale: 1,
-              depth: 0,
-              focusWeight: 0,
-              orbitGroup: undefined
-            }
-            return layoutNode
-          })
-        }
+        // Issue #753：StarMapGraph DTO 无 layout 字段。
+        // 从 nodes 生成默认布局坐标（Core 未下发布局时 UI 自行排布）。
+        this.layoutNodes = result.data.nodes.map((node: StarMapNode): StarMapLayoutNode => {
+          const layoutNode: StarMapLayoutNode = {
+            nodeId: node.id,
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 80,
+            radius: 16,
+            collapsed: false,
+            zIndex: 0,
+            scale: 1,
+            depth: 0,
+            focusWeight: 0,
+            orbitGroup: null
+          }
+          return layoutNode
+        })
         // 获取 edgeRenders（Core 计算连线几何）
         const edgeResult = await this.bridge.computeStarMapEdgeRenders(result.data)
         if (edgeResult.success && edgeResult.data) {
@@ -198,7 +194,7 @@ export struct StarMapScreen {
   }
 
   getNodeColor(node: StarMapNode): string {
-    if (node.color) return node.color
+    // Issue #753：StarMapNode DTO 无 color 字段，按 kind 映射颜色。
     const kindColors: Record<string, string> = {
       'Character': '#4A90D9',
       'Location': '#F39C12',
@@ -680,9 +676,9 @@ export struct StarMapScreen {
           .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 8 })
 
-        // Node description
-        if (this.selectedNode!.description) {
-          Text(this.selectedNode!.description!)
+        // Node summary — Issue #753：StarMapNode DTO 无 description，用 content.summary 作为节点摘要。
+        if (this.selectedNode!.content.summary) {
+          Text(this.selectedNode!.content.summary)
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ bottom: 12 })

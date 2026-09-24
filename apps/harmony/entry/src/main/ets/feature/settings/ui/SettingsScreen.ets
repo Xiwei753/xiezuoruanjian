@@ -233,58 +233,40 @@ export struct SettingsScreen {
       if (result.success && result.data && result.data.diagnostics) {
         this.syncDiagnostics = result.data.diagnostics
       } else {
+        // 字段与 SyncDiagnosticsResult DTO 一字不差对齐（Issue #753）。
         const diagResult: SyncDiagnosticsResult = {
           success: false,
-          backendType: '',
-          androidHasInternetPermission: false,
-          androidHasAccessNetworkStatePermission: false,
-          androidNetworkState: '',
-          tcpProbeOk: false,
-          tcpProbeStatus: '',
-          httpConnectProbeOk: false,
-          httpConnectProbeStatus: '',
-          libgit2ProbeOk: false,
-          libgit2ProbeStatus: '',
+          providerType: '',
+          hasNetworkPermission: false,
+          hasNetworkStatePermission: false,
+          networkState: '',
           networkOk: false,
           authOk: false,
-          repoOk: false,
-          branchOk: false,
+          remoteOk: false,
           networkStatus: '',
           authStatus: '',
-          repoStatus: '',
-          branchStatus: '',
-          remoteUrlSanitized: '',
-          transport: '',
           errorCategory: 'unknown',
-          userMessage: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error').id)
+          rawError: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error').id),
+          providerDetails: null
         }
         this.syncDiagnostics = diagResult
       }
     } catch (err) {
+      // 字段与 SyncDiagnosticsResult DTO 一字不差对齐（Issue #753）。
       const diagResult: SyncDiagnosticsResult = {
         success: false,
-        backendType: '',
-        androidHasInternetPermission: false,
-        androidHasAccessNetworkStatePermission: false,
-        androidNetworkState: '',
-        tcpProbeOk: false,
-        tcpProbeStatus: '',
-        httpConnectProbeOk: false,
-        httpConnectProbeStatus: '',
-        libgit2ProbeOk: false,
-        libgit2ProbeStatus: '',
+        providerType: '',
+        hasNetworkPermission: false,
+        hasNetworkStatePermission: false,
+        networkState: '',
         networkOk: false,
         authOk: false,
-        repoOk: false,
-        branchOk: false,
+        remoteOk: false,
         networkStatus: '',
         authStatus: '',
-        repoStatus: '',
-        branchStatus: '',
-        remoteUrlSanitized: '',
-        transport: '',
         errorCategory: 'unknown',
-        userMessage: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error_detail').id)
+        rawError: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error_detail').id),
+        providerDetails: null
       }
       this.syncDiagnostics = diagResult
     } finally {
@@ -787,20 +769,23 @@ export struct SettingsScreen {
               .margin({ bottom: 12 })
 
             // Four check items
+            // Issue #753：DTO 无 repoOk/repoStatus/branchOk/branchStatus。
+            // 仓库连接 = remote 连接 → 用 remoteOk + networkStatus；
+            // 分支状态 DTO 无对应字段，删除 branch 诊断项。
             Row() {
               this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.network').id), this.syncDiagnostics.networkOk, this.syncDiagnostics.networkStatus)
               this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.auth').id), this.syncDiagnostics.authOk, this.syncDiagnostics.authStatus)
-              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.repository').id), this.syncDiagnostics.repoOk, this.syncDiagnostics.repoStatus)
-              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.branch').id), this.syncDiagnostics.branchOk, this.syncDiagnostics.branchStatus)
+              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.repository').id), this.syncDiagnostics.remoteOk, this.syncDiagnostics.networkStatus)
             }
             .width('100%')
             .justifyContent(FlexAlign.SpaceAround)
             .margin({ bottom: 12 })
 
-            // User message — 优先用 errorCategory 走 MessageKeyMapper，否则直接显示 userMessage
+            // User message — 优先用 errorCategory 走 MessageKeyMapper，
+            // 否则用 DTO 现有字段 rawError / providerDetails 兜底（Issue #753：DTO 无 userMessage）。
             Text(this.syncDiagnostics.errorCategory && this.syncDiagnostics.errorCategory.length > 0
               ? MessageKeyMapper.resolveMessage(getContext(this), `error.${this.syncDiagnostics.errorCategory}`, undefined, undefined)
-              : (this.syncDiagnostics.userMessage ?? ''))
+              : (this.syncDiagnostics.rawError ?? this.syncDiagnostics.providerDetails ?? ''))
               .fontSize(14)
               .fontColor(this.syncDiagnostics.success ? this.themeConfig.colors.success : this.themeConfig.colors.error)
               .margin({ bottom: 8 })
@@ -819,32 +804,8 @@ export struct SettingsScreen {
               .margin({ bottom: 4 })
             }
 
-            // Remote URL
-            if (this.syncDiagnostics.remoteUrlSanitized) {
-              Row() {
-                Text(getContext(this).resourceManager.getStringSync($r('app.string.remote_address').id) + ': ')
-                  .fontSize(12)
-                  .fontColor(this.themeConfig.colors.textSecondary)
-                Text(this.syncDiagnostics.remoteUrlSanitized)
-                  .fontSize(12)
-                  .fontColor(this.themeConfig.colors.textSecondary)
-              }
-              .width('100%')
-              .margin({ bottom: 4 })
-            }
-
-            // Transport
-            if (this.syncDiagnostics.transport) {
-              Row() {
-                Text(getContext(this).resourceManager.getStringSync($r('app.string.transport_protocol').id) + ': ')
-                  .fontSize(12)
-                  .fontColor(this.themeConfig.colors.textSecondary)
-                Text(this.syncDiagnostics.transport)
-                  .fontSize(12)
-                  .fontColor(this.themeConfig.colors.textSecondary)
-              }
-              .width('100%')
-            }
+            // Issue #753：DTO 无 remoteUrlSanitized / transport 字段，
+            // 远端地址与传输协议不属于 SyncDiagnosticsResult，删除这两块显示。
           }
           .width('100%')
           .padding(12)

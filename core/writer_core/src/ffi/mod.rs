@@ -195,6 +195,88 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
 }
 
 /// # Safety
+/// All arguments must be valid null-terminated UTF-8 C strings.
+///
+/// Return codes:
+///   0  = success
+///  -1  = null pointer in any argument
+///  -2  = invalid UTF-8 in any argument
+///  -3  = diagnostics init failed
+///
+/// `platform` 字段由本 FFI 填 `"harmony"`：此 ABI 仅供 HarmonyOS NAPI 桥接调用，
+/// NAPI 不传 platform（见 napi_init.cpp NativeInitDiagnostics）。`session_id` 由
+/// Rust 内部生成，`enabled` / `verbose` 默认 true（见 diagnostics_api::init_diagnostics）。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_init_diagnostics(
+    log_dir: *const c_char,
+    device_id: *const c_char,
+    app_version: *const c_char,
+    build_key: *const c_char,
+    locale: *const c_char,
+    timezone: *const c_char,
+) -> i32 {
+    let _ = LAST_ERROR.get_or_init(|| Mutex::new(String::new()));
+    let log_dir = match c_str_to_rust(log_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("log_dir is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let device_id = match c_str_to_rust(device_id) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("device_id is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let app_version = match c_str_to_rust(app_version) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("app_version is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let build_key = match c_str_to_rust(build_key) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("build_key is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let locale = match c_str_to_rust(locale) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("locale is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let timezone = match c_str_to_rust(timezone) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("timezone is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let init = crate::api::types::DiagnosticsInitDto {
+        log_dir,
+        platform: "harmony".to_string(),
+        device_id,
+        app_version,
+        build_key,
+        locale,
+        timezone,
+    };
+    match crate::api::diagnostics_api::init_diagnostics(init) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(&format!("diagnostics init failed: {e}"));
+            -3
+        }
+    }
+}
+
+/// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 /// Thread-safe: acquires the global Mutex; must not be called from a thread
 /// already holding the Mutex (non-recursive lock, will deadlock).

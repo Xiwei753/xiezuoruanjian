@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics } from '../dto/PlatformDtos'
@@ -66,12 +66,12 @@ function reqObj(obj: Object, key: string): Object | null {
   return null
 }
 
-function optObj(obj: Object, key: string): Object | undefined {
+function optObj(obj: Object, key: string): DecodeResult<Object | undefined> {
   const rec = obj as Record<string, Object>
   const v: Object | undefined = rec[key]
-  if (v === undefined || v === null) { return undefined }
-  if (typeof v === 'object' && !Array.isArray(v)) { return v }
-  return undefined
+  if (v === undefined || v === null) { return ok<Object | undefined>(undefined) }
+  if (typeof v === 'object' && !Array.isArray(v)) { return ok<Object | undefined>(v) }
+  return err<Object | undefined>(`${key}: expected object, got ${typeof v}`)
 }
 
 function reqArray(obj: Object, key: string): Array<Object> | null {
@@ -163,7 +163,7 @@ export function decodeArray<T>(data: Object, decodeItem: (item: Object) => Decod
 
 export function decodeOptional<T>(data: Object, key: string, decodeItem: (item: Object) => DecodeResult<T>): DecodeResult<T | null> {
   const innerR: DecodeResult<Object | null> = nullObj(data, key)
-  if (!innerR.ok) { return err<T | null>(`${key}: ${innerR.error}`) }
+  if (!innerR.ok || innerR.value === undefined) { return err<T | null>(`${key}: ${innerR.error ?? 'decode failed'}`) }
   if (innerR.value === null) { return ok<T | null>(null) }
   const decoded: DecodeResult<T> = decodeItem(innerR.value)
   if (!decoded.ok || decoded.value === undefined) {
@@ -226,11 +226,11 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
   if (diagnosticsVerbose === null) { return err<LocalSettings>('LocalSettings.diagnosticsVerbose missing or not boolean') }
 
   const themeModeR: DecodeResult<string | null> = nullStr(data, 'themeMode')
-  if (!themeModeR.ok) { return err<LocalSettings>(`LocalSettings.${themeModeR.error}`) }
+  if (!themeModeR.ok || themeModeR.value === undefined) { return err<LocalSettings>(`LocalSettings.${themeModeR.error ?? 'themeMode decode failed'}`) }
   const localeR: DecodeResult<string | null> = nullStr(data, 'locale')
-  if (!localeR.ok) { return err<LocalSettings>(`LocalSettings.${localeR.error}`) }
+  if (!localeR.ok || localeR.value === undefined) { return err<LocalSettings>(`LocalSettings.${localeR.error ?? 'locale decode failed'}`) }
   const statsDeviceIdR: DecodeResult<string | null> = nullStr(data, 'statsDeviceId')
-  if (!statsDeviceIdR.ok) { return err<LocalSettings>(`LocalSettings.${statsDeviceIdR.error}`) }
+  if (!statsDeviceIdR.ok || statsDeviceIdR.value === undefined) { return err<LocalSettings>(`LocalSettings.${statsDeviceIdR.error ?? 'statsDeviceId decode failed'}`) }
 
   const value: LocalSettings = {
     themeMode: themeModeR.value,
@@ -305,13 +305,14 @@ function decodeThemeColorScheme(data: Object): DecodeResult<ThemeColorSchemeDto>
     'secondary_fixed', 'secondary_fixed_dim', 'on_secondary_fixed', 'on_secondary_fixed_variant',
     'tertiary_fixed', 'tertiary_fixed_dim', 'on_tertiary_fixed', 'on_tertiary_fixed_variant'
   ]
-  const value: ThemeColorSchemeDto = {} as ThemeColorSchemeDto
+  const rec: Record<string, string> = {} as Record<string, string>
   for (let i = 0; i < required.length; i++) {
     const key: string = required[i]
     const v: string | null = reqStr(data, key)
     if (v === null) { return err<ThemeColorSchemeDto>(`ThemeColorScheme.${key} missing or not string`) }
-    (value as Record<string, string>)[key] = v
+    rec[key] = v
   }
+  const value: ThemeColorSchemeDto = rec as Object as ThemeColorSchemeDto
   return ok<ThemeColorSchemeDto>(value)
 }
 
@@ -468,7 +469,7 @@ export function decodeChapterMeta(data: Object): DecodeResult<ChapterMeta> {
   const hash: string | null = reqStr(data, 'hash')
   if (hash === null) { return err<ChapterMeta>('ChapterMeta.hash missing or not string') }
   const noteR: DecodeResult<string | null> = nullStr(data, 'note')
-  if (!noteR.ok) { return err<ChapterMeta>(`ChapterMeta.${noteR.error}`) }
+  if (!noteR.ok || noteR.value === undefined) { return err<ChapterMeta>(`ChapterMeta.${noteR.error ?? 'decode failed'}`) }
   const value: ChapterMeta = {
     id: id,
     title: title,
@@ -598,7 +599,7 @@ export function decodeProjectTree(data: Object): DecodeResult<ProjectTree> {
     const chArr: Array<Object> | null = reqArray(vtObj, 'chapters')
     if (chArr === null) { return err<ProjectTree>(`volumes[${i}].chapters missing or not array`) }
     const chR: DecodeResult<ChapterMeta[]> = decodeArray<ChapterMeta>(chArr as Object, decodeChapterMeta, `volumes[${i}].chapters`)
-    if (!chR.ok || chR.value === undefined) { return err<ProjectTree>(chR.error) }
+    if (!chR.ok || chR.value === undefined) { return err<ProjectTree>(chR.error ?? 'decode failed') }
     volumes.push({ volume: volR.value, chapters: chR.value })
   }
   const statsObj: Object | null = reqObj(data, 'stats')
@@ -626,9 +627,9 @@ export function decodeStarMapMeta(data: Object): DecodeResult<StarMapMeta> {
   const description: string | null = reqStr(data, 'description')
   if (description === null) { return err<StarMapMeta>('description missing or not string') }
   const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
-  if (!projectIdR.ok) { return err<StarMapMeta>(`StarMapMeta.${projectIdR.error}`) }
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err<StarMapMeta>(`StarMapMeta.${projectIdR.error ?? 'decode failed'}`) }
   const parentStarmapIdR: DecodeResult<string | null> = nullStr(data, 'parentStarmapId')
-  if (!parentStarmapIdR.ok) { return err<StarMapMeta>(`StarMapMeta.${parentStarmapIdR.error}`) }
+  if (!parentStarmapIdR.ok || parentStarmapIdR.value === undefined) { return err<StarMapMeta>(`StarMapMeta.${parentStarmapIdR.error ?? 'decode failed'}`) }
   const isMainForProject: boolean | null = reqBool(data, 'isMainForProject')
   if (isMainForProject === null) { return err<StarMapMeta>('isMainForProject missing or not boolean') }
   const accentColor: string | null = reqStr(data, 'accentColor')
@@ -670,28 +671,28 @@ function decodeStarMapNodeContent(data: Object): DecodeResult<import('../dto/Sta
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const summaryR = nullStr(data, 'summary')
-  if (!summaryR.ok) { return err(`StarMapNodeContent.${summaryR.error}`) }
+  if (!summaryR.ok || summaryR.value === undefined) { return err(`StarMapNodeContent.${summaryR.error ?? 'decode failed'}`) }
   const bodyR = nullStr(data, 'body')
-  if (!bodyR.ok) { return err(`StarMapNodeContent.${bodyR.error}`) }
+  if (!bodyR.ok || bodyR.value === undefined) { return err(`StarMapNodeContent.${bodyR.error ?? 'decode failed'}`) }
   const projectIdR = nullStr(data, 'projectId')
-  if (!projectIdR.ok) { return err(`StarMapNodeContent.${projectIdR.error}`) }
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err(`StarMapNodeContent.${projectIdR.error ?? 'decode failed'}`) }
   const volumeIdR = nullStr(data, 'volumeId')
-  if (!volumeIdR.ok) { return err(`StarMapNodeContent.${volumeIdR.error}`) }
+  if (!volumeIdR.ok || volumeIdR.value === undefined) { return err(`StarMapNodeContent.${volumeIdR.error ?? 'decode failed'}`) }
   const chapterIdR = nullStr(data, 'chapterId')
-  if (!chapterIdR.ok) { return err(`StarMapNodeContent.${chapterIdR.error}`) }
+  if (!chapterIdR.ok || chapterIdR.value === undefined) { return err(`StarMapNodeContent.${chapterIdR.error ?? 'decode failed'}`) }
   const rangeStartR = nullNum(data, 'rangeStart')
-  if (!rangeStartR.ok) { return err(`StarMapNodeContent.${rangeStartR.error}`) }
+  if (!rangeStartR.ok || rangeStartR.value === undefined) { return err(`StarMapNodeContent.${rangeStartR.error ?? 'decode failed'}`) }
   const rangeEndR = nullNum(data, 'rangeEnd')
-  if (!rangeEndR.ok) { return err(`StarMapNodeContent.${rangeEndR.error}`) }
+  if (!rangeEndR.ok || rangeEndR.value === undefined) { return err(`StarMapNodeContent.${rangeEndR.error ?? 'decode failed'}`) }
   const entityTypeR = nullStr(data, 'entityType')
-  if (!entityTypeR.ok) { return err(`StarMapNodeContent.${entityTypeR.error}`) }
+  if (!entityTypeR.ok || entityTypeR.value === undefined) { return err(`StarMapNodeContent.${entityTypeR.error ?? 'decode failed'}`) }
   const entityIdR = nullStr(data, 'entityId')
-  if (!entityIdR.ok) { return err(`StarMapNodeContent.${entityIdR.error}`) }
+  if (!entityIdR.ok || entityIdR.value === undefined) { return err(`StarMapNodeContent.${entityIdR.error ?? 'decode failed'}`) }
   const uriR = nullStr(data, 'uri')
-  if (!uriR.ok) { return err(`StarMapNodeContent.${uriR.error}`) }
+  if (!uriR.ok || uriR.value === undefined) { return err(`StarMapNodeContent.${uriR.error ?? 'decode failed'}`) }
   const labelR = nullStr(data, 'label')
-  if (!labelR.ok) { return err(`StarMapNodeContent.${labelR.error}`) }
-  return ok({
+  if (!labelR.ok || labelR.value === undefined) { return err(`StarMapNodeContent.${labelR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapNodeContent = {
     type: type,
     summary: summaryR.value,
     body: bodyR.value,
@@ -704,7 +705,7 @@ function decodeStarMapNodeContent(data: Object): DecodeResult<import('../dto/Sta
     entityId: entityIdR.value,
     uri: uriR.value,
     label: labelR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapAnchorTarget(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapAnchorTarget> {
@@ -714,26 +715,26 @@ function decodeStarMapAnchorTarget(data: Object): DecodeResult<import('../dto/St
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const projectIdR = nullStr(data, 'projectId')
-  if (!projectIdR.ok) { return err(`StarMapAnchorTarget.${projectIdR.error}`) }
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err(`StarMapAnchorTarget.${projectIdR.error ?? 'decode failed'}`) }
   const volumeIdR = nullStr(data, 'volumeId')
-  if (!volumeIdR.ok) { return err(`StarMapAnchorTarget.${volumeIdR.error}`) }
+  if (!volumeIdR.ok || volumeIdR.value === undefined) { return err(`StarMapAnchorTarget.${volumeIdR.error ?? 'decode failed'}`) }
   const chapterIdR = nullStr(data, 'chapterId')
-  if (!chapterIdR.ok) { return err(`StarMapAnchorTarget.${chapterIdR.error}`) }
+  if (!chapterIdR.ok || chapterIdR.value === undefined) { return err(`StarMapAnchorTarget.${chapterIdR.error ?? 'decode failed'}`) }
   const rangeStartR = nullNum(data, 'rangeStart')
-  if (!rangeStartR.ok) { return err(`StarMapAnchorTarget.${rangeStartR.error}`) }
+  if (!rangeStartR.ok || rangeStartR.value === undefined) { return err(`StarMapAnchorTarget.${rangeStartR.error ?? 'decode failed'}`) }
   const rangeEndR = nullNum(data, 'rangeEnd')
-  if (!rangeEndR.ok) { return err(`StarMapAnchorTarget.${rangeEndR.error}`) }
+  if (!rangeEndR.ok || rangeEndR.value === undefined) { return err(`StarMapAnchorTarget.${rangeEndR.error ?? 'decode failed'}`) }
   const entityIdR = nullStr(data, 'entityId')
-  if (!entityIdR.ok) { return err(`StarMapAnchorTarget.${entityIdR.error}`) }
+  if (!entityIdR.ok || entityIdR.value === undefined) { return err(`StarMapAnchorTarget.${entityIdR.error ?? 'decode failed'}`) }
   const entityTypeR = nullStr(data, 'entityType')
-  if (!entityTypeR.ok) { return err(`StarMapAnchorTarget.${entityTypeR.error}`) }
+  if (!entityTypeR.ok || entityTypeR.value === undefined) { return err(`StarMapAnchorTarget.${entityTypeR.error ?? 'decode failed'}`) }
   const starmapIdR = nullStr(data, 'starmapId')
-  if (!starmapIdR.ok) { return err(`StarMapAnchorTarget.${starmapIdR.error}`) }
+  if (!starmapIdR.ok || starmapIdR.value === undefined) { return err(`StarMapAnchorTarget.${starmapIdR.error ?? 'decode failed'}`) }
   const uriR = nullStr(data, 'uri')
-  if (!uriR.ok) { return err(`StarMapAnchorTarget.${uriR.error}`) }
+  if (!uriR.ok || uriR.value === undefined) { return err(`StarMapAnchorTarget.${uriR.error ?? 'decode failed'}`) }
   const payloadR = nullStr(data, 'payload')
-  if (!payloadR.ok) { return err(`StarMapAnchorTarget.${payloadR.error}`) }
-  return ok({
+  if (!payloadR.ok || payloadR.value === undefined) { return err(`StarMapAnchorTarget.${payloadR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapAnchorTarget = {
     type: type,
     projectId: projectIdR.value,
     volumeId: volumeIdR.value,
@@ -745,7 +746,7 @@ function decodeStarMapAnchorTarget(data: Object): DecodeResult<import('../dto/St
     starmapId: starmapIdR.value,
     uri: uriR.value,
     payload: payloadR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapAnchor(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapAnchor> {
@@ -761,13 +762,13 @@ function decodeStarMapAnchor(data: Object): DecodeResult<import('../dto/StarMapD
   const role: string | null = reqStr(data, 'role')
   if (role === null) { return err('role missing') }
   const labelR = nullStr(data, 'label')
-  if (!labelR.ok) { return err(`StarMapAnchor.${labelR.error}`) }
-  return ok({
+  if (!labelR.ok || labelR.value === undefined) { return err(`StarMapAnchor.${labelR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapAnchor = {
     anchorId: anchorId,
     target: targetR.value,
     label: labelR.value,
     role: role as import('../dto/StarMapDtos').AnchorRole
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapPortal(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapPortal> {
@@ -781,19 +782,19 @@ function decodeStarMapPortal(data: Object): DecodeResult<import('../dto/StarMapD
   const previewPolicy: string | null = reqStr(data, 'previewPolicy')
   if (previewPolicy === null) { return err('previewPolicy missing') }
   const deepTargetObjR: DecodeResult<Object | null> = nullObj(data, 'deepTarget')
-  if (!deepTargetObjR.ok) { return err(`StarMapPortal.${deepTargetObjR.error}`) }
+  if (!deepTargetObjR.ok || deepTargetObjR.value === undefined) { return err(`StarMapPortal.${deepTargetObjR.error ?? 'decode failed'}`) }
   let deepTarget: import('../dto/StarMapDtos').StarMapDeepTarget | null = null
   if (deepTargetObjR.value !== null) {
     const deepTargetR = decodeStarMapDeepTarget(deepTargetObjR.value)
     if (!deepTargetR.ok || deepTargetR.value === undefined) { return err(`deepTarget: ${deepTargetR.error}`) }
     deepTarget = deepTargetR.value
   }
-  return ok({
+  const value: import('../dto/StarMapDtos').StarMapPortal = {
     targetStarmapId: targetStarmapId,
     deepTarget: deepTarget,
     mode: mode as import('../dto/StarMapDtos').PortalMode,
     previewPolicy: previewPolicy as import('../dto/StarMapDtos').PortalPreviewPolicy
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapDisplayPolicy(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapDisplayPolicy> {
@@ -814,11 +815,11 @@ function decodeStarMapDisplayPolicy(data: Object): DecodeResult<import('../dto/S
   if (maxPreviewChars === null) { return err('maxPreviewChars missing') }
   const minReadablePx: number | null = reqNum(data, 'minReadablePx')
   if (minReadablePx === null) { return err('minReadablePx missing') }
-  return ok({
+  const value: import('../dto/StarMapDtos').StarMapDisplayPolicy = {
     importance: importance, minVisibleScale: minVisibleScale, titleScale: titleScale,
     summaryScale: summaryScale, detailScale: detailScale, maxPreviewChars: maxPreviewChars,
     minReadablePx: minReadablePx
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapProvenance(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapProvenance> {
@@ -830,21 +831,21 @@ function decodeStarMapProvenance(data: Object): DecodeResult<import('../dto/Star
   const reviewStatus: string | null = reqStr(data, 'reviewStatus')
   if (reviewStatus === null) { return err('reviewStatus missing') }
   const sourceIdR = nullStr(data, 'sourceId')
-  if (!sourceIdR.ok) { return err(`StarMapProvenance.${sourceIdR.error}`) }
+  if (!sourceIdR.ok || sourceIdR.value === undefined) { return err(`StarMapProvenance.${sourceIdR.error ?? 'decode failed'}`) }
   const generatedByR = nullStr(data, 'generatedBy')
-  if (!generatedByR.ok) { return err(`StarMapProvenance.${generatedByR.error}`) }
+  if (!generatedByR.ok || generatedByR.value === undefined) { return err(`StarMapProvenance.${generatedByR.error ?? 'decode failed'}`) }
   const promptIdR = nullStr(data, 'promptId')
-  if (!promptIdR.ok) { return err(`StarMapProvenance.${promptIdR.error}`) }
+  if (!promptIdR.ok || promptIdR.value === undefined) { return err(`StarMapProvenance.${promptIdR.error ?? 'decode failed'}`) }
   const createdFromAnchorR = nullStr(data, 'createdFromAnchor')
-  if (!createdFromAnchorR.ok) { return err(`StarMapProvenance.${createdFromAnchorR.error}`) }
-  return ok({
+  if (!createdFromAnchorR.ok || createdFromAnchorR.value === undefined) { return err(`StarMapProvenance.${createdFromAnchorR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapProvenance = {
     source: source as import('../dto/StarMapDtos').SourceKind,
     sourceId: sourceIdR.value,
     generatedBy: generatedByR.value,
     promptId: promptIdR.value,
     reviewStatus: reviewStatus as import('../dto/StarMapDtos').ReviewStatus,
     createdFromAnchor: createdFromAnchorR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
@@ -886,7 +887,7 @@ function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
   const tags: string[] | null = reqStrArray(data, 'tags')
   if (tags === null) { return err<StarMapNode>('tags missing or not string[]') }
   const portalObjR: DecodeResult<Object | null> = nullObj(data, 'portal')
-  if (!portalObjR.ok) { return err<StarMapNode>(`StarMapNode.${portalObjR.error}`) }
+  if (!portalObjR.ok || portalObjR.value === undefined) { return err<StarMapNode>(`StarMapNode.${portalObjR.error ?? 'decode failed'}`) }
   let portal: import('../dto/StarMapDtos').StarMapPortal | null = null
   if (portalObjR.value !== null) {
     const portalR = decodeStarMapPortal(portalObjR.value)
@@ -894,7 +895,7 @@ function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
     portal = portalR.value
   }
   const payloadR: DecodeResult<string | null> = nullStr(data, 'payload')
-  if (!payloadR.ok) { return err<StarMapNode>(`StarMapNode.${payloadR.error}`) }
+  if (!payloadR.ok || payloadR.value === undefined) { return err<StarMapNode>(`StarMapNode.${payloadR.error ?? 'decode failed'}`) }
   const value: StarMapNode = {
     id: id,
     title: title,
@@ -926,25 +927,25 @@ function decodeStarMapEdge(data: Object): DecodeResult<StarMapEdge> {
   const updatedAt: number | null = reqNum(data, 'updatedAt')
   if (updatedAt === null) { return err<StarMapEdge>('updatedAt missing or not number') }
   const fromTarget: DecodeResult<import('../dto/StarMapDtos').StarMapDeepTarget | null> = decodeOptional(data, 'fromTarget', decodeStarMapDeepTarget)
-  if (!fromTarget.ok) { return err<StarMapEdge>(`fromTarget: ${fromTarget.error}`) }
+  if (!fromTarget.ok || fromTarget.value === undefined) { return err<StarMapEdge>(`fromTarget: ${fromTarget.error ?? 'decode failed'}`) }
   const toTarget: DecodeResult<import('../dto/StarMapDtos').StarMapDeepTarget | null> = decodeOptional(data, 'toTarget', decodeStarMapDeepTarget)
-  if (!toTarget.ok) { return err<StarMapEdge>(`toTarget: ${toTarget.error}`) }
+  if (!toTarget.ok || toTarget.value === undefined) { return err<StarMapEdge>(`toTarget: ${toTarget.error ?? 'decode failed'}`) }
   const fromEndpoint = decodeOptional(data, 'fromEndpoint', decodeStarMapEdgeEndpoint)
-  if (!fromEndpoint.ok) { return err<StarMapEdge>(`fromEndpoint: ${fromEndpoint.error}`) }
+  if (!fromEndpoint.ok || fromEndpoint.value === undefined) { return err<StarMapEdge>(`fromEndpoint: ${fromEndpoint.error ?? 'decode failed'}`) }
   const toEndpoint = decodeOptional(data, 'toEndpoint', decodeStarMapEdgeEndpoint)
-  if (!toEndpoint.ok) { return err<StarMapEdge>(`toEndpoint: ${toEndpoint.error}`) }
+  if (!toEndpoint.ok || toEndpoint.value === undefined) { return err<StarMapEdge>(`toEndpoint: ${toEndpoint.error ?? 'decode failed'}`) }
   const fromEndpointPath = decodeOptional(data, 'fromEndpointPath', decodeStarMapEndpointPath)
-  if (!fromEndpointPath.ok) { return err<StarMapEdge>(`fromEndpointPath: ${fromEndpointPath.error}`) }
+  if (!fromEndpointPath.ok || fromEndpointPath.value === undefined) { return err<StarMapEdge>(`fromEndpointPath: ${fromEndpointPath.error ?? 'decode failed'}`) }
   const toEndpointPath = decodeOptional(data, 'toEndpointPath', decodeStarMapEndpointPath)
-  if (!toEndpointPath.ok) { return err<StarMapEdge>(`toEndpointPath: ${toEndpointPath.error}`) }
+  if (!toEndpointPath.ok || toEndpointPath.value === undefined) { return err<StarMapEdge>(`toEndpointPath: ${toEndpointPath.error ?? 'decode failed'}`) }
   const fromR: DecodeResult<string | null> = nullStr(data, 'from')
-  if (!fromR.ok) { return err<StarMapEdge>(`StarMapEdge.${fromR.error}`) }
+  if (!fromR.ok || fromR.value === undefined) { return err<StarMapEdge>(`StarMapEdge.${fromR.error ?? 'decode failed'}`) }
   const toR: DecodeResult<string | null> = nullStr(data, 'to')
-  if (!toR.ok) { return err<StarMapEdge>(`StarMapEdge.${toR.error}`) }
+  if (!toR.ok || toR.value === undefined) { return err<StarMapEdge>(`StarMapEdge.${toR.error ?? 'decode failed'}`) }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
-  if (!labelR.ok) { return err<StarMapEdge>(`StarMapEdge.${labelR.error}`) }
+  if (!labelR.ok || labelR.value === undefined) { return err<StarMapEdge>(`StarMapEdge.${labelR.error ?? 'decode failed'}`) }
   const payloadR: DecodeResult<string | null> = nullStr(data, 'payload')
-  if (!payloadR.ok) { return err<StarMapEdge>(`StarMapEdge.${payloadR.error}`) }
+  if (!payloadR.ok || payloadR.value === undefined) { return err<StarMapEdge>(`StarMapEdge.${payloadR.error ?? 'decode failed'}`) }
   const value: StarMapEdge = {
     id: id,
     from: fromR.value,
@@ -991,31 +992,53 @@ function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
   const provenanceR = decodeStarMapProvenance(provenanceObj)
   if (!provenanceR.ok || provenanceR.value === undefined) { return err<StarMapEmbed>(`provenance: ${provenanceR.error}`) }
   const hostEndpoint = decodeOptional(data, 'hostEndpoint', decodeStarMapEndpoint)
-  if (!hostEndpoint.ok) { return err<StarMapEmbed>(`hostEndpoint: ${hostEndpoint.error}`) }
+  if (!hostEndpoint.ok || hostEndpoint.value === undefined) { return err<StarMapEmbed>(`hostEndpoint: ${hostEndpoint.error ?? 'decode failed'}`) }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
-  if (!labelR.ok) { return err<StarMapEmbed>(`StarMapEmbed.${labelR.error}`) }
+  if (!labelR.ok || labelR.value === undefined) { return err<StarMapEmbed>(`StarMapEmbed.${labelR.error ?? 'decode failed'}`) }
   const sourceNodeIdR: DecodeResult<string | null> = nullStr(data, 'sourceNodeId')
-  if (!sourceNodeIdR.ok) { return err<StarMapEmbed>(`StarMapEmbed.${sourceNodeIdR.error}`) }
+  if (!sourceNodeIdR.ok || sourceNodeIdR.value === undefined) { return err<StarMapEmbed>(`StarMapEmbed.${sourceNodeIdR.error ?? 'decode failed'}`) }
+  const pX: number | null = reqNum(placementObj, 'x')
+  if (pX === null) { return err<StarMapEmbed>('StarMapEmbed.placement.x missing or not number') }
+  const pY: number | null = reqNum(placementObj, 'y')
+  if (pY === null) { return err<StarMapEmbed>('StarMapEmbed.placement.y missing or not number') }
+  const pWidth: number | null = reqNum(placementObj, 'width')
+  if (pWidth === null) { return err<StarMapEmbed>('StarMapEmbed.placement.width missing or not number') }
+  const pHeight: number | null = reqNum(placementObj, 'height')
+  if (pHeight === null) { return err<StarMapEmbed>('StarMapEmbed.placement.height missing or not number') }
+  const pScale: number | null = reqNum(placementObj, 'scale')
+  if (pScale === null) { return err<StarMapEmbed>('StarMapEmbed.placement.scale missing or not number') }
+  const pZIndex: number | null = reqNum(placementObj, 'zIndex')
+  if (pZIndex === null) { return err<StarMapEmbed>('StarMapEmbed.placement.zIndex missing or not number') }
+  const pCollapsed: boolean | null = reqBool(placementObj, 'collapsed')
+  if (pCollapsed === null) { return err<StarMapEmbed>('StarMapEmbed.placement.collapsed missing or not boolean') }
+  const tvScale: number | null = reqNum(targetViewportObj, 'scale')
+  if (tvScale === null) { return err<StarMapEmbed>('StarMapEmbed.targetViewport.scale missing or not number') }
+  const tvOffsetX: number | null = reqNum(targetViewportObj, 'offsetX')
+  if (tvOffsetX === null) { return err<StarMapEmbed>('StarMapEmbed.targetViewport.offsetX missing or not number') }
+  const tvOffsetY: number | null = reqNum(targetViewportObj, 'offsetY')
+  if (tvOffsetY === null) { return err<StarMapEmbed>('StarMapEmbed.targetViewport.offsetY missing or not number') }
+  const placement: import('../dto/StarMapDtos').StarMapEmbedPlacement = {
+    x: pX,
+    y: pY,
+    width: pWidth,
+    height: pHeight,
+    scale: pScale,
+    zIndex: pZIndex,
+    collapsed: pCollapsed
+  }
+  const targetViewport: import('../dto/StarMapDtos').StarMapEmbedViewport = {
+    scale: tvScale,
+    offsetX: tvOffsetX,
+    offsetY: tvOffsetY
+  }
   const value: StarMapEmbed = {
     instanceId: instanceId,
     targetStarmapId: targetStarmapId,
     label: labelR.value,
     displayPolicy: displayPolicyR.value,
     openBehavior: openBehavior as import('../dto/StarMapDtos').OpenBehavior,
-    placement: {
-      x: reqNum(placementObj, 'x') ?? 0,
-      y: reqNum(placementObj, 'y') ?? 0,
-      width: reqNum(placementObj, 'width') ?? 0,
-      height: reqNum(placementObj, 'height') ?? 0,
-      scale: reqNum(placementObj, 'scale') ?? 1,
-      zIndex: reqNum(placementObj, 'zIndex') ?? 0,
-      collapsed: reqBool(placementObj, 'collapsed') ?? false
-    },
-    targetViewport: {
-      scale: reqNum(targetViewportObj, 'scale') ?? 1,
-      offsetX: reqNum(targetViewportObj, 'offsetX') ?? 0,
-      offsetY: reqNum(targetViewportObj, 'offsetY') ?? 0
-    },
+    placement: placement,
+    targetViewport: targetViewport,
     sourceNodeId: sourceNodeIdR.value,
     hostEndpoint: hostEndpoint.value ?? null,
     provenance: provenanceR.value,
@@ -1032,14 +1055,14 @@ function decodeStarMapEndpoint(data: Object): DecodeResult<import('../dto/StarMa
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const nodeIdR = nullStr(data, 'nodeId')
-  if (!nodeIdR.ok) { return err(`StarMapEndpoint.${nodeIdR.error}`) }
+  if (!nodeIdR.ok || nodeIdR.value === undefined) { return err(`StarMapEndpoint.${nodeIdR.error ?? 'decode failed'}`) }
   const anchorIdR = nullStr(data, 'anchorId')
-  if (!anchorIdR.ok) { return err(`StarMapEndpoint.${anchorIdR.error}`) }
-  return ok({
+  if (!anchorIdR.ok || anchorIdR.value === undefined) { return err(`StarMapEndpoint.${anchorIdR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapEndpoint = {
     type: type,
     nodeId: nodeIdR.value,
     anchorId: anchorIdR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapEdgeEndpoint(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapEdgeEndpoint> {
@@ -1049,17 +1072,17 @@ function decodeStarMapEdgeEndpoint(data: Object): DecodeResult<import('../dto/St
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const target = decodeOptional(data, 'target', decodeStarMapDeepTarget)
-  if (!target.ok) { return err(`target: ${target.error}`) }
+  if (!target.ok || target.value === undefined) { return err(`target: ${target.error ?? 'decode failed'}`) }
   const nodeIdR = nullStr(data, 'nodeId')
-  if (!nodeIdR.ok) { return err(`StarMapEdgeEndpoint.${nodeIdR.error}`) }
+  if (!nodeIdR.ok || nodeIdR.value === undefined) { return err(`StarMapEdgeEndpoint.${nodeIdR.error ?? 'decode failed'}`) }
   const anchorIdR = nullStr(data, 'anchorId')
-  if (!anchorIdR.ok) { return err(`StarMapEdgeEndpoint.${anchorIdR.error}`) }
-  return ok({
+  if (!anchorIdR.ok || anchorIdR.value === undefined) { return err(`StarMapEdgeEndpoint.${anchorIdR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapEdgeEndpoint = {
     type: type,
     nodeId: nodeIdR.value,
     anchorId: anchorIdR.value,
     target: target.value ?? null
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapEndpointPathSegment(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapEndpointPathSegment> {
@@ -1069,11 +1092,11 @@ function decodeStarMapEndpointPathSegment(data: Object): DecodeResult<import('..
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const starmapIdR = nullStr(data, 'starmapId')
-  if (!starmapIdR.ok) { return err(`StarMapEndpointPathSegment.${starmapIdR.error}`) }
-  return ok({
+  if (!starmapIdR.ok || starmapIdR.value === undefined) { return err(`StarMapEndpointPathSegment.${starmapIdR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapEndpointPathSegment = {
     type: type,
     starmapId: starmapIdR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapEndpointPath(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapEndpointPath> {
@@ -1089,10 +1112,10 @@ function decodeStarMapEndpointPath(data: Object): DecodeResult<import('../dto/St
   if (endpointObj === null) { return err('endpoint missing or not object') }
   const endpointR = decodeStarMapEdgeEndpoint(endpointObj)
   if (!endpointR.ok || endpointR.value === undefined) { return err(`endpoint: ${endpointR.error}`) }
-  return ok({
+  const value: import('../dto/StarMapDtos').StarMapEndpointPath = {
     segments: segmentsR.value,
     endpoint: endpointR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapPathSegment(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapPathSegment> {
@@ -1102,11 +1125,11 @@ function decodeStarMapPathSegment(data: Object): DecodeResult<import('../dto/Sta
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const starmapIdR = nullStr(data, 'starmapId')
-  if (!starmapIdR.ok) { return err(`StarMapPathSegment.${starmapIdR.error}`) }
-  return ok({
+  if (!starmapIdR.ok || starmapIdR.value === undefined) { return err(`StarMapPathSegment.${starmapIdR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapPathSegment = {
     type: type,
     starmapId: starmapIdR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapTargetDetail> {
@@ -1116,26 +1139,26 @@ function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/St
   const type: string | null = reqStr(data, 'type')
   if (type === null) { return err('type missing') }
   const nodeIdR = nullStr(data, 'nodeId')
-  if (!nodeIdR.ok) { return err(`StarMapTargetDetail.${nodeIdR.error}`) }
+  if (!nodeIdR.ok || nodeIdR.value === undefined) { return err(`StarMapTargetDetail.${nodeIdR.error ?? 'decode failed'}`) }
   const anchorIdR = nullStr(data, 'anchorId')
-  if (!anchorIdR.ok) { return err(`StarMapTargetDetail.${anchorIdR.error}`) }
+  if (!anchorIdR.ok || anchorIdR.value === undefined) { return err(`StarMapTargetDetail.${anchorIdR.error ?? 'decode failed'}`) }
   const projectIdR = nullStr(data, 'projectId')
-  if (!projectIdR.ok) { return err(`StarMapTargetDetail.${projectIdR.error}`) }
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err(`StarMapTargetDetail.${projectIdR.error ?? 'decode failed'}`) }
   const volumeIdR = nullStr(data, 'volumeId')
-  if (!volumeIdR.ok) { return err(`StarMapTargetDetail.${volumeIdR.error}`) }
+  if (!volumeIdR.ok || volumeIdR.value === undefined) { return err(`StarMapTargetDetail.${volumeIdR.error ?? 'decode failed'}`) }
   const chapterIdR = nullStr(data, 'chapterId')
-  if (!chapterIdR.ok) { return err(`StarMapTargetDetail.${chapterIdR.error}`) }
+  if (!chapterIdR.ok || chapterIdR.value === undefined) { return err(`StarMapTargetDetail.${chapterIdR.error ?? 'decode failed'}`) }
   const rangeStartR = nullNum(data, 'rangeStart')
-  if (!rangeStartR.ok) { return err(`StarMapTargetDetail.${rangeStartR.error}`) }
+  if (!rangeStartR.ok || rangeStartR.value === undefined) { return err(`StarMapTargetDetail.${rangeStartR.error ?? 'decode failed'}`) }
   const rangeEndR = nullNum(data, 'rangeEnd')
-  if (!rangeEndR.ok) { return err(`StarMapTargetDetail.${rangeEndR.error}`) }
+  if (!rangeEndR.ok || rangeEndR.value === undefined) { return err(`StarMapTargetDetail.${rangeEndR.error ?? 'decode failed'}`) }
   const entityTypeR = nullStr(data, 'entityType')
-  if (!entityTypeR.ok) { return err(`StarMapTargetDetail.${entityTypeR.error}`) }
+  if (!entityTypeR.ok || entityTypeR.value === undefined) { return err(`StarMapTargetDetail.${entityTypeR.error ?? 'decode failed'}`) }
   const entityIdR = nullStr(data, 'entityId')
-  if (!entityIdR.ok) { return err(`StarMapTargetDetail.${entityIdR.error}`) }
+  if (!entityIdR.ok || entityIdR.value === undefined) { return err(`StarMapTargetDetail.${entityIdR.error ?? 'decode failed'}`) }
   const uriR = nullStr(data, 'uri')
-  if (!uriR.ok) { return err(`StarMapTargetDetail.${uriR.error}`) }
-  return ok({
+  if (!uriR.ok || uriR.value === undefined) { return err(`StarMapTargetDetail.${uriR.error ?? 'decode failed'}`) }
+  const value: import('../dto/StarMapDtos').StarMapTargetDetail = {
     type: type,
     nodeId: nodeIdR.value,
     anchorId: anchorIdR.value,
@@ -1147,7 +1170,7 @@ function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/St
     entityType: entityTypeR.value,
     entityId: entityIdR.value,
     uri: uriR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapDeepTarget(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapDeepTarget> {
@@ -1168,11 +1191,11 @@ function decodeStarMapDeepTarget(data: Object): DecodeResult<import('../dto/Star
   if (targetObj === null) { return err('target missing or not object') }
   const targetR = decodeStarMapTargetDetail(targetObj)
   if (!targetR.ok || targetR.value === undefined) { return err(`target: ${targetR.error}`) }
-  return ok({
+  const value: import('../dto/StarMapDtos').StarMapDeepTarget = {
     starmapId: starmapId,
     path: path,
     target: targetR.value
-  })
+  }; return ok(value)
 }
 
 function decodeStarMapLink(data: Object): DecodeResult<StarMapLink> {
@@ -1194,7 +1217,7 @@ function decodeStarMapLink(data: Object): DecodeResult<StarMapLink> {
   const updatedAt: number | null = reqNum(data, 'updatedAt')
   if (updatedAt === null) { return err<StarMapLink>('updatedAt missing') }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
-  if (!labelR.ok) { return err<StarMapLink>(`StarMapLink.${labelR.error}`) }
+  if (!labelR.ok || labelR.value === undefined) { return err<StarMapLink>(`StarMapLink.${labelR.error ?? 'decode failed'}`) }
   const value: StarMapLink = {
     linkId: linkId,
     source: sourceR.value,
@@ -1223,9 +1246,9 @@ function decodeStarMapHyperlink(data: Object): DecodeResult<StarMapHyperlink> {
   const updatedAt: number | null = reqNum(data, 'updatedAt')
   if (updatedAt === null) { return err<StarMapHyperlink>('updatedAt missing') }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
-  if (!labelR.ok) { return err<StarMapHyperlink>(`StarMapHyperlink.${labelR.error}`) }
+  if (!labelR.ok || labelR.value === undefined) { return err<StarMapHyperlink>(`StarMapHyperlink.${labelR.error ?? 'decode failed'}`) }
   const targetStarmapIdR: DecodeResult<string | null> = nullStr(data, 'targetStarmapId')
-  if (!targetStarmapIdR.ok) { return err<StarMapHyperlink>(`StarMapHyperlink.${targetStarmapIdR.error}`) }
+  if (!targetStarmapIdR.ok || targetStarmapIdR.value === undefined) { return err<StarMapHyperlink>(`StarMapHyperlink.${targetStarmapIdR.error ?? 'decode failed'}`) }
   const value: StarMapHyperlink = {
     hyperlinkId: hyperlinkId,
     source: sourceR.value,
@@ -1245,19 +1268,39 @@ function decodeStarMapLayoutNode(data: Object): DecodeResult<StarMapLayoutNode> 
   const nodeId: string | null = reqStr(data, 'nodeId')
   if (nodeId === null) { return err<StarMapLayoutNode>('nodeId missing') }
   const orbitGroupR: DecodeResult<string | null> = nullStr(data, 'orbitGroup')
-  if (!orbitGroupR.ok) { return err<StarMapLayoutNode>(`StarMapLayoutNode.${orbitGroupR.error}`) }
+  if (!orbitGroupR.ok || orbitGroupR.value === undefined) { return err<StarMapLayoutNode>(`StarMapLayoutNode.${orbitGroupR.error ?? 'decode failed'}`) }
+  const x: number | null = reqNum(data, 'x')
+  if (x === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.x missing or not number') }
+  const y: number | null = reqNum(data, 'y')
+  if (y === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.y missing or not number') }
+  const width: number | null = reqNum(data, 'width')
+  if (width === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.width missing or not number') }
+  const height: number | null = reqNum(data, 'height')
+  if (height === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.height missing or not number') }
+  const radius: number | null = reqNum(data, 'radius')
+  if (radius === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.radius missing or not number') }
+  const collapsed: boolean | null = reqBool(data, 'collapsed')
+  if (collapsed === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.collapsed missing or not boolean') }
+  const zIndex: number | null = reqNum(data, 'zIndex')
+  if (zIndex === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.zIndex missing or not number') }
+  const scale: number | null = reqNum(data, 'scale')
+  if (scale === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.scale missing or not number') }
+  const depth: number | null = reqNum(data, 'depth')
+  if (depth === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.depth missing or not number') }
+  const focusWeight: number | null = reqNum(data, 'focusWeight')
+  if (focusWeight === null) { return err<StarMapLayoutNode>('StarMapLayoutNode.focusWeight missing or not number') }
   const value: StarMapLayoutNode = {
     nodeId: nodeId,
-    x: reqNum(data, 'x') ?? 0,
-    y: reqNum(data, 'y') ?? 0,
-    width: reqNum(data, 'width') ?? 0,
-    height: reqNum(data, 'height') ?? 0,
-    radius: reqNum(data, 'radius') ?? 0,
-    collapsed: reqBool(data, 'collapsed') ?? false,
-    zIndex: reqNum(data, 'zIndex') ?? 0,
-    scale: reqNum(data, 'scale') ?? 1,
-    depth: reqNum(data, 'depth') ?? 0,
-    focusWeight: reqNum(data, 'focusWeight') ?? 0,
+    x: x,
+    y: y,
+    width: width,
+    height: height,
+    radius: radius,
+    collapsed: collapsed,
+    zIndex: zIndex,
+    scale: scale,
+    depth: depth,
+    focusWeight: focusWeight,
     orbitGroup: orbitGroupR.value
   }
   return ok<StarMapLayoutNode>(value)
@@ -1272,7 +1315,7 @@ export function decodeStarMapLayout(data: Object): DecodeResult<StarMapLayout> {
   const nodesArr: Array<Object> | null = reqArray(data, 'nodes')
   if (nodesArr === null) { return err<StarMapLayout>('nodes missing or not array') }
   const nodesR: DecodeResult<StarMapLayoutNode[]> = decodeArray<StarMapLayoutNode>(nodesArr as Object, decodeStarMapLayoutNode, 'nodes')
-  if (!nodesR.ok || nodesR.value === undefined) { return err<StarMapLayout>(nodesR.error) }
+  if (!nodesR.ok || nodesR.value === undefined) { return err<StarMapLayout>(nodesR.error ?? 'decode failed') }
   const value: StarMapLayout = {
     kind: kind as 'Freeform' | 'AutoRadial' | 'Custom',
     nodes: nodesR.value
@@ -1295,23 +1338,23 @@ export function decodeStarMapGraph(data: Object): DecodeResult<StarMapGraph> {
   const nodesArr: Array<Object> | null = reqArray(data, 'nodes')
   if (nodesArr === null) { return err<StarMapGraph>('nodes missing or not array') }
   const nodesR: DecodeResult<StarMapNode[]> = decodeArray<StarMapNode>(nodesArr as Object, decodeStarMapNode, 'nodes')
-  if (!nodesR.ok || nodesR.value === undefined) { return err<StarMapGraph>(nodesR.error) }
+  if (!nodesR.ok || nodesR.value === undefined) { return err<StarMapGraph>(nodesR.error ?? 'decode failed') }
   const edgesArr: Array<Object> | null = reqArray(data, 'edges')
   if (edgesArr === null) { return err<StarMapGraph>('edges missing or not array') }
   const edgesR: DecodeResult<StarMapEdge[]> = decodeArray<StarMapEdge>(edgesArr as Object, decodeStarMapEdge, 'edges')
-  if (!edgesR.ok || edgesR.value === undefined) { return err<StarMapGraph>(edgesR.error) }
+  if (!edgesR.ok || edgesR.value === undefined) { return err<StarMapGraph>(edgesR.error ?? 'decode failed') }
   const embedsArr: Array<Object> | null = reqArray(data, 'embeds')
   if (embedsArr === null) { return err<StarMapGraph>('embeds missing or not array') }
   const embedsR: DecodeResult<StarMapEmbed[]> = decodeArray<StarMapEmbed>(embedsArr as Object, decodeStarMapEmbed, 'embeds')
-  if (!embedsR.ok || embedsR.value === undefined) { return err<StarMapGraph>(embedsR.error) }
+  if (!embedsR.ok || embedsR.value === undefined) { return err<StarMapGraph>(embedsR.error ?? 'decode failed') }
   const linksArr: Array<Object> | null = reqArray(data, 'links')
   if (linksArr === null) { return err<StarMapGraph>('links missing or not array') }
   const linksR: DecodeResult<StarMapLink[]> = decodeArray<StarMapLink>(linksArr as Object, decodeStarMapLink, 'links')
-  if (!linksR.ok || linksR.value === undefined) { return err<StarMapGraph>(linksR.error) }
+  if (!linksR.ok || linksR.value === undefined) { return err<StarMapGraph>(linksR.error ?? 'decode failed') }
   const hyperlinksArr: Array<Object> | null = reqArray(data, 'hyperlinks')
   if (hyperlinksArr === null) { return err<StarMapGraph>('hyperlinks missing or not array') }
   const hyperlinksR: DecodeResult<StarMapHyperlink[]> = decodeArray<StarMapHyperlink>(hyperlinksArr as Object, decodeStarMapHyperlink, 'hyperlinks')
-  if (!hyperlinksR.ok || hyperlinksR.value === undefined) { return err<StarMapGraph>(hyperlinksR.error) }
+  if (!hyperlinksR.ok || hyperlinksR.value === undefined) { return err<StarMapGraph>(hyperlinksR.error ?? 'decode failed') }
   const createdAt: number | null = reqNum(data, 'createdAt')
   if (createdAt === null) { return err<StarMapGraph>('createdAt missing') }
   const updatedAt: number | null = reqNum(data, 'updatedAt')
@@ -1339,29 +1382,67 @@ export function decodeStarMapEdgeRender(data: Object): DecodeResult<StarMapEdgeR
   const edgeId: string | null = reqStr(data, 'edgeId')
   if (edgeId === null) { return err<StarMapEdgeRender>('edgeId missing') }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
-  if (!labelR.ok) { return err<StarMapEdgeRender>(`StarMapEdgeRender.${labelR.error}`) }
+  if (!labelR.ok || labelR.value === undefined) { return err<StarMapEdgeRender>(`StarMapEdgeRender.${labelR.error ?? 'decode failed'}`) }
+  const fromCx: number | null = reqNum(data, 'fromCx')
+  if (fromCx === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.fromCx missing or not number') }
+  const fromCy: number | null = reqNum(data, 'fromCy')
+  if (fromCy === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.fromCy missing or not number') }
+  const toCx: number | null = reqNum(data, 'toCx')
+  if (toCx === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.toCx missing or not number') }
+  const toCy: number | null = reqNum(data, 'toCy')
+  if (toCy === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.toCy missing or not number') }
+  const startX: number | null = reqNum(data, 'startX')
+  if (startX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.startX missing or not number') }
+  const startY: number | null = reqNum(data, 'startY')
+  if (startY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.startY missing or not number') }
+  const endX: number | null = reqNum(data, 'endX')
+  if (endX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.endX missing or not number') }
+  const endY: number | null = reqNum(data, 'endY')
+  if (endY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.endY missing or not number') }
+  const offsetX: number | null = reqNum(data, 'offsetX')
+  if (offsetX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.offsetX missing or not number') }
+  const offsetY: number | null = reqNum(data, 'offsetY')
+  if (offsetY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.offsetY missing or not number') }
+  const arrowTipX: number | null = reqNum(data, 'arrowTipX')
+  if (arrowTipX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.arrowTipX missing or not number') }
+  const arrowTipY: number | null = reqNum(data, 'arrowTipY')
+  if (arrowTipY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.arrowTipY missing or not number') }
+  const arrowLeftX: number | null = reqNum(data, 'arrowLeftX')
+  if (arrowLeftX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.arrowLeftX missing or not number') }
+  const arrowLeftY: number | null = reqNum(data, 'arrowLeftY')
+  if (arrowLeftY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.arrowLeftY missing or not number') }
+  const arrowRightX: number | null = reqNum(data, 'arrowRightX')
+  if (arrowRightX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.arrowRightX missing or not number') }
+  const arrowRightY: number | null = reqNum(data, 'arrowRightY')
+  if (arrowRightY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.arrowRightY missing or not number') }
+  const labelX: number | null = reqNum(data, 'labelX')
+  if (labelX === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.labelX missing or not number') }
+  const labelY: number | null = reqNum(data, 'labelY')
+  if (labelY === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.labelY missing or not number') }
+  const hasBidirectional: boolean | null = reqBool(data, 'hasBidirectional')
+  if (hasBidirectional === null) { return err<StarMapEdgeRender>('StarMapEdgeRender.hasBidirectional missing or not boolean') }
   const value: StarMapEdgeRender = {
     edgeId: edgeId,
-    fromCx: reqNum(data, 'fromCx') ?? 0,
-    fromCy: reqNum(data, 'fromCy') ?? 0,
-    toCx: reqNum(data, 'toCx') ?? 0,
-    toCy: reqNum(data, 'toCy') ?? 0,
-    startX: reqNum(data, 'startX') ?? 0,
-    startY: reqNum(data, 'startY') ?? 0,
-    endX: reqNum(data, 'endX') ?? 0,
-    endY: reqNum(data, 'endY') ?? 0,
-    offsetX: reqNum(data, 'offsetX') ?? 0,
-    offsetY: reqNum(data, 'offsetY') ?? 0,
-    arrowTipX: reqNum(data, 'arrowTipX') ?? 0,
-    arrowTipY: reqNum(data, 'arrowTipY') ?? 0,
-    arrowLeftX: reqNum(data, 'arrowLeftX') ?? 0,
-    arrowLeftY: reqNum(data, 'arrowLeftY') ?? 0,
-    arrowRightX: reqNum(data, 'arrowRightX') ?? 0,
-    arrowRightY: reqNum(data, 'arrowRightY') ?? 0,
-    labelX: reqNum(data, 'labelX') ?? 0,
-    labelY: reqNum(data, 'labelY') ?? 0,
+    fromCx: fromCx,
+    fromCy: fromCy,
+    toCx: toCx,
+    toCy: toCy,
+    startX: startX,
+    startY: startY,
+    endX: endX,
+    endY: endY,
+    offsetX: offsetX,
+    offsetY: offsetY,
+    arrowTipX: arrowTipX,
+    arrowTipY: arrowTipY,
+    arrowLeftX: arrowLeftX,
+    arrowLeftY: arrowLeftY,
+    arrowRightX: arrowRightX,
+    arrowRightY: arrowRightY,
+    labelX: labelX,
+    labelY: labelY,
     label: labelR.value,
-    hasBidirectional: reqBool(data, 'hasBidirectional') ?? false
+    hasBidirectional: hasBidirectional
   }
   return ok<StarMapEdgeRender>(value)
 }
@@ -1370,15 +1451,31 @@ export function decodeStarMapMotionPolicy(data: Object): DecodeResult<StarMapMot
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<StarMapMotionPolicy>('StarMapMotionPolicy: expected object')
   }
+  const enabled: boolean | null = reqBool(data, 'enabled')
+  if (enabled === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.enabled missing or not boolean') }
+  const idleWobbleEnabled: boolean | null = reqBool(data, 'idleWobbleEnabled')
+  if (idleWobbleEnabled === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.idleWobbleEnabled missing or not boolean') }
+  const idleAmplitudeVp: number | null = reqNum(data, 'idleAmplitudeVp')
+  if (idleAmplitudeVp === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.idleAmplitudeVp missing or not number') }
+  const idlePeriodMs: number | null = reqNum(data, 'idlePeriodMs')
+  if (idlePeriodMs === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.idlePeriodMs missing or not number') }
+  const dragLiftScale: number | null = reqNum(data, 'dragLiftScale')
+  if (dragLiftScale === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.dragLiftScale missing or not number') }
+  const dragShadowBoost: number | null = reqNum(data, 'dragShadowBoost')
+  if (dragShadowBoost === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.dragShadowBoost missing or not number') }
+  const settleDurationMs: number | null = reqNum(data, 'settleDurationMs')
+  if (settleDurationMs === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.settleDurationMs missing or not number') }
+  const reduceMotion: boolean | null = reqBool(data, 'reduceMotion')
+  if (reduceMotion === null) { return err<StarMapMotionPolicy>('StarMapMotionPolicy.reduceMotion missing or not boolean') }
   const value: StarMapMotionPolicy = {
-    enabled: reqBool(data, 'enabled') ?? false,
-    idleWobbleEnabled: reqBool(data, 'idleWobbleEnabled') ?? false,
-    idleAmplitudeVp: reqNum(data, 'idleAmplitudeVp') ?? 0,
-    idlePeriodMs: reqNum(data, 'idlePeriodMs') ?? 0,
-    dragLiftScale: reqNum(data, 'dragLiftScale') ?? 1,
-    dragShadowBoost: reqNum(data, 'dragShadowBoost') ?? 1,
-    settleDurationMs: reqNum(data, 'settleDurationMs') ?? 0,
-    reduceMotion: reqBool(data, 'reduceMotion') ?? false
+    enabled: enabled,
+    idleWobbleEnabled: idleWobbleEnabled,
+    idleAmplitudeVp: idleAmplitudeVp,
+    idlePeriodMs: idlePeriodMs,
+    dragLiftScale: dragLiftScale,
+    dragShadowBoost: dragShadowBoost,
+    settleDurationMs: settleDurationMs,
+    reduceMotion: reduceMotion
   }
   return ok<StarMapMotionPolicy>(value)
 }
@@ -1444,7 +1541,7 @@ export function decodeSyncConfig(data: Object): DecodeResult<SyncConfig> {
   if (hasNetworkStatePermission === null) { return err<SyncConfig>('SyncConfig.hasNetworkStatePermission missing or not boolean') }
 
   const providerConfig = decodeOptional(data, 'providerConfig', decodeProviderConfig)
-  if (!providerConfig.ok) { return err<SyncConfig>(`providerConfig: ${providerConfig.error}`) }
+  if (!providerConfig.ok || providerConfig.value === undefined) { return err<SyncConfig>(`providerConfig: ${providerConfig.error ?? 'decode failed'}`) }
 
   const value: SyncConfig = {
     enabled: enabled,
@@ -1465,17 +1562,17 @@ export function decodeSyncState(data: Object): DecodeResult<SyncState> {
   const status: string | null = reqStr(data, 'status')
   if (status === null) { return err<SyncState>('status missing') }
   const conflictsArrR: DecodeResult<Array<Object> | null> = nullArray(data, 'conflicts')
-  if (!conflictsArrR.ok) { return err<SyncState>(`SyncState.${conflictsArrR.error}`) }
+  if (!conflictsArrR.ok || conflictsArrR.value === undefined) { return err<SyncState>(`SyncState.${conflictsArrR.error ?? 'decode failed'}`) }
   let conflicts: SyncConflict[] | null = null
   if (conflictsArrR.value !== null) {
     const cR: DecodeResult<SyncConflict[]> = decodeArray<SyncConflict>(conflictsArrR.value as Object, decodeSyncConflict, 'conflicts')
-    if (!cR.ok || cR.value === undefined) { return err<SyncState>(cR.error) }
+    if (!cR.ok || cR.value === undefined) { return err<SyncState>(cR.error ?? 'decode failed') }
     conflicts = cR.value
   }
   const lastSyncTimeR: DecodeResult<number | null> = nullNum(data, 'lastSyncTime')
-  if (!lastSyncTimeR.ok) { return err<SyncState>(`SyncState.${lastSyncTimeR.error}`) }
+  if (!lastSyncTimeR.ok || lastSyncTimeR.value === undefined) { return err<SyncState>(`SyncState.${lastSyncTimeR.error ?? 'decode failed'}`) }
   const lastErrorR: DecodeResult<string | null> = nullStr(data, 'lastError')
-  if (!lastErrorR.ok) { return err<SyncState>(`SyncState.${lastErrorR.error}`) }
+  if (!lastErrorR.ok || lastErrorR.value === undefined) { return err<SyncState>(`SyncState.${lastErrorR.error ?? 'decode failed'}`) }
   const value: SyncState = {
     status: status,
     lastSyncTime: lastSyncTimeR.value,
@@ -1494,7 +1591,7 @@ function decodeSyncResult(data: Object): DecodeResult<SyncResult> {
   const conflictsArr: Array<Object> | null = reqArray(data, 'conflicts')
   if (conflictsArr === null) { return err<SyncResult>('conflicts missing or not array') }
   const conflictsR: DecodeResult<SyncConflict[]> = decodeArray<SyncConflict>(conflictsArr as Object, decodeSyncConflict, 'conflicts')
-  if (!conflictsR.ok || conflictsR.value === undefined) { return err<SyncResult>(conflictsR.error) }
+  if (!conflictsR.ok || conflictsR.value === undefined) { return err<SyncResult>(conflictsR.error ?? 'decode failed') }
   const uploadedFiles: string[] | null = reqStrArray(data, 'uploadedFiles')
   if (uploadedFiles === null) { return err<SyncResult>('uploadedFiles missing or not string[]') }
   const downloadedFiles: string[] | null = reqStrArray(data, 'downloadedFiles')
@@ -1508,13 +1605,13 @@ function decodeSyncResult(data: Object): DecodeResult<SyncResult> {
   const ignoredFiles: string[] | null = reqStrArray(data, 'ignoredFiles')
   if (ignoredFiles === null) { return err<SyncResult>('ignoredFiles missing or not string[]') }
   const errorR: DecodeResult<string | null> = nullStr(data, 'error')
-  if (!errorR.ok) { return err<SyncResult>(`SyncResult.${errorR.error}`) }
+  if (!errorR.ok || errorR.value === undefined) { return err<SyncResult>(`SyncResult.${errorR.error ?? 'decode failed'}`) }
   const errorCategoryR: DecodeResult<string | null> = nullStr(data, 'errorCategory')
-  if (!errorCategoryR.ok) { return err<SyncResult>(`SyncResult.${errorCategoryR.error}`) }
+  if (!errorCategoryR.ok || errorCategoryR.value === undefined) { return err<SyncResult>(`SyncResult.${errorCategoryR.error ?? 'decode failed'}`) }
   const messageKeyR: DecodeResult<string | null> = nullStr(data, 'messageKey')
-  if (!messageKeyR.ok) { return err<SyncResult>(`SyncResult.${messageKeyR.error}`) }
+  if (!messageKeyR.ok || messageKeyR.value === undefined) { return err<SyncResult>(`SyncResult.${messageKeyR.error ?? 'decode failed'}`) }
   const searchIndexRebuildErrorR: DecodeResult<string | null> = nullStr(data, 'searchIndexRebuildError')
-  if (!searchIndexRebuildErrorR.ok) { return err<SyncResult>(`SyncResult.${searchIndexRebuildErrorR.error}`) }
+  if (!searchIndexRebuildErrorR.ok || searchIndexRebuildErrorR.value === undefined) { return err<SyncResult>(`SyncResult.${searchIndexRebuildErrorR.error ?? 'decode failed'}`) }
   const value: SyncResult = {
     status: status,
     uploadedFiles: uploadedFiles,
@@ -1572,7 +1669,7 @@ function decodeFullSyncTargetResult(data: Object): DecodeResult<FullSyncTargetRe
   const resultR: DecodeResult<SyncResult> = decodeSyncResult(resultObj)
   if (!resultR.ok || resultR.value === undefined) { return err<FullSyncTargetResult>(`result: ${resultR.error}`) }
   const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
-  if (!projectIdR.ok) { return err<FullSyncTargetResult>(`FullSyncTargetResult.${projectIdR.error}`) }
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err<FullSyncTargetResult>(`FullSyncTargetResult.${projectIdR.error ?? 'decode failed'}`) }
   const value: FullSyncTargetResult = {
     targetKind: targetKind,
     projectId: projectIdR.value,
@@ -1595,7 +1692,7 @@ function decodeFullSyncTargetPlan(data: Object): DecodeResult<FullSyncTargetPlan
   const planR: DecodeResult<SyncPlan> = decodeSyncPlan(planObj)
   if (!planR.ok || planR.value === undefined) { return err<FullSyncTargetPlan>(`plan: ${planR.error}`) }
   const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
-  if (!projectIdR.ok) { return err<FullSyncTargetPlan>(`FullSyncTargetPlan.${projectIdR.error}`) }
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err<FullSyncTargetPlan>(`FullSyncTargetPlan.${projectIdR.error ?? 'decode failed'}`) }
   const value: FullSyncTargetPlan = {
     targetKind: targetKind,
     projectId: projectIdR.value,
@@ -1614,23 +1711,37 @@ export function decodeFullSyncResult(data: Object): DecodeResult<FullSyncResult>
   const targetsArr: Array<Object> | null = reqArray(data, 'targets')
   if (targetsArr === null) { return err<FullSyncResult>('targets missing or not array') }
   const targetsR: DecodeResult<FullSyncTargetResult[]> = decodeArray<FullSyncTargetResult>(targetsArr as Object, decodeFullSyncTargetResult, 'targets')
-  if (!targetsR.ok || targetsR.value === undefined) { return err<FullSyncResult>(targetsR.error) }
+  if (!targetsR.ok || targetsR.value === undefined) { return err<FullSyncResult>(targetsR.error ?? 'decode failed') }
   const errorR: DecodeResult<string | null> = nullStr(data, 'error')
-  if (!errorR.ok) { return err<FullSyncResult>(`FullSyncResult.${errorR.error}`) }
+  if (!errorR.ok || errorR.value === undefined) { return err<FullSyncResult>(`FullSyncResult.${errorR.error ?? 'decode failed'}`) }
   const errorCategoryR: DecodeResult<string | null> = nullStr(data, 'errorCategory')
-  if (!errorCategoryR.ok) { return err<FullSyncResult>(`FullSyncResult.${errorCategoryR.error}`) }
+  if (!errorCategoryR.ok || errorCategoryR.value === undefined) { return err<FullSyncResult>(`FullSyncResult.${errorCategoryR.error ?? 'decode failed'}`) }
   const messageKeyR: DecodeResult<string | null> = nullStr(data, 'messageKey')
-  if (!messageKeyR.ok) { return err<FullSyncResult>(`FullSyncResult.${messageKeyR.error}`) }
+  if (!messageKeyR.ok || messageKeyR.value === undefined) { return err<FullSyncResult>(`FullSyncResult.${messageKeyR.error ?? 'decode failed'}`) }
+  const totalUploaded: number | null = reqNum(data, 'totalUploaded')
+  if (totalUploaded === null) { return err<FullSyncResult>('FullSyncResult.totalUploaded missing or not number') }
+  const totalDownloaded: number | null = reqNum(data, 'totalDownloaded')
+  if (totalDownloaded === null) { return err<FullSyncResult>('FullSyncResult.totalDownloaded missing or not number') }
+  const totalLocalDeletes: number | null = reqNum(data, 'totalLocalDeletes')
+  if (totalLocalDeletes === null) { return err<FullSyncResult>('FullSyncResult.totalLocalDeletes missing or not number') }
+  const totalRemoteDeletes: number | null = reqNum(data, 'totalRemoteDeletes')
+  if (totalRemoteDeletes === null) { return err<FullSyncResult>('FullSyncResult.totalRemoteDeletes missing or not number') }
+  const totalOverwritten: number | null = reqNum(data, 'totalOverwritten')
+  if (totalOverwritten === null) { return err<FullSyncResult>('FullSyncResult.totalOverwritten missing or not number') }
+  const totalIgnored: number | null = reqNum(data, 'totalIgnored')
+  if (totalIgnored === null) { return err<FullSyncResult>('FullSyncResult.totalIgnored missing or not number') }
+  const totalConflicts: number | null = reqNum(data, 'totalConflicts')
+  if (totalConflicts === null) { return err<FullSyncResult>('FullSyncResult.totalConflicts missing or not number') }
   const value: FullSyncResult = {
     overallStatus: overallStatus,
     targets: targetsR.value,
-    totalUploaded: reqNum(data, 'totalUploaded') ?? 0,
-    totalDownloaded: reqNum(data, 'totalDownloaded') ?? 0,
-    totalLocalDeletes: reqNum(data, 'totalLocalDeletes') ?? 0,
-    totalRemoteDeletes: reqNum(data, 'totalRemoteDeletes') ?? 0,
-    totalOverwritten: reqNum(data, 'totalOverwritten') ?? 0,
-    totalIgnored: reqNum(data, 'totalIgnored') ?? 0,
-    totalConflicts: reqNum(data, 'totalConflicts') ?? 0,
+    totalUploaded: totalUploaded,
+    totalDownloaded: totalDownloaded,
+    totalLocalDeletes: totalLocalDeletes,
+    totalRemoteDeletes: totalRemoteDeletes,
+    totalOverwritten: totalOverwritten,
+    totalIgnored: totalIgnored,
+    totalConflicts: totalConflicts,
     error: errorR.value,
     errorCategory: errorCategoryR.value,
     messageKey: messageKeyR.value
@@ -1645,15 +1756,27 @@ export function decodeFullSyncDryRunResult(data: Object): DecodeResult<FullSyncD
   const targetsArr: Array<Object> | null = reqArray(data, 'targets')
   if (targetsArr === null) { return err<FullSyncDryRunResult>('targets missing or not array') }
   const targetsR: DecodeResult<FullSyncTargetPlan[]> = decodeArray<FullSyncTargetPlan>(targetsArr as Object, decodeFullSyncTargetPlan, 'targets')
-  if (!targetsR.ok || targetsR.value === undefined) { return err<FullSyncDryRunResult>(targetsR.error) }
+  if (!targetsR.ok || targetsR.value === undefined) { return err<FullSyncDryRunResult>(targetsR.error ?? 'decode failed') }
+  const totalToUpload: number | null = reqNum(data, 'totalToUpload')
+  if (totalToUpload === null) { return err<FullSyncDryRunResult>('FullSyncDryRunResult.totalToUpload missing or not number') }
+  const totalToDownload: number | null = reqNum(data, 'totalToDownload')
+  if (totalToDownload === null) { return err<FullSyncDryRunResult>('FullSyncDryRunResult.totalToDownload missing or not number') }
+  const totalToDeleteLocal: number | null = reqNum(data, 'totalToDeleteLocal')
+  if (totalToDeleteLocal === null) { return err<FullSyncDryRunResult>('FullSyncDryRunResult.totalToDeleteLocal missing or not number') }
+  const totalToDeleteRemote: number | null = reqNum(data, 'totalToDeleteRemote')
+  if (totalToDeleteRemote === null) { return err<FullSyncDryRunResult>('FullSyncDryRunResult.totalToDeleteRemote missing or not number') }
+  const totalIgnored: number | null = reqNum(data, 'totalIgnored')
+  if (totalIgnored === null) { return err<FullSyncDryRunResult>('FullSyncDryRunResult.totalIgnored missing or not number') }
+  const totalConflicts: number | null = reqNum(data, 'totalConflicts')
+  if (totalConflicts === null) { return err<FullSyncDryRunResult>('FullSyncDryRunResult.totalConflicts missing or not number') }
   const value: FullSyncDryRunResult = {
     targets: targetsR.value,
-    totalToUpload: reqNum(data, 'totalToUpload') ?? 0,
-    totalToDownload: reqNum(data, 'totalToDownload') ?? 0,
-    totalToDeleteLocal: reqNum(data, 'totalToDeleteLocal') ?? 0,
-    totalToDeleteRemote: reqNum(data, 'totalToDeleteRemote') ?? 0,
-    totalIgnored: reqNum(data, 'totalIgnored') ?? 0,
-    totalConflicts: reqNum(data, 'totalConflicts') ?? 0
+    totalToUpload: totalToUpload,
+    totalToDownload: totalToDownload,
+    totalToDeleteLocal: totalToDeleteLocal,
+    totalToDeleteRemote: totalToDeleteRemote,
+    totalIgnored: totalIgnored,
+    totalConflicts: totalConflicts
   }
   return ok<FullSyncDryRunResult>(value)
 }
@@ -1685,9 +1808,9 @@ function decodeSyncDiagnosticsResult(data: Object): DecodeResult<SyncDiagnostics
   const errorCategory: string | null = reqStr(data, 'errorCategory')
   if (errorCategory === null) { return err<SyncDiagnosticsResult>('errorCategory missing or not string') }
   const rawErrorR: DecodeResult<string | null> = nullStr(data, 'rawError')
-  if (!rawErrorR.ok) { return err<SyncDiagnosticsResult>(`SyncDiagnosticsResult.${rawErrorR.error}`) }
+  if (!rawErrorR.ok || rawErrorR.value === undefined) { return err<SyncDiagnosticsResult>(`SyncDiagnosticsResult.${rawErrorR.error ?? 'decode failed'}`) }
   const providerDetailsR: DecodeResult<string | null> = nullStr(data, 'providerDetails')
-  if (!providerDetailsR.ok) { return err<SyncDiagnosticsResult>(`SyncDiagnosticsResult.${providerDetailsR.error}`) }
+  if (!providerDetailsR.ok || providerDetailsR.value === undefined) { return err<SyncDiagnosticsResult>(`SyncDiagnosticsResult.${providerDetailsR.error ?? 'decode failed'}`) }
   const value: SyncDiagnosticsResult = {
     success: success,
     providerType: providerType,
@@ -1741,9 +1864,9 @@ export function decodeAppSummary(data: Object): DecodeResult<AppSummary> {
   const projectsArr: Array<Object> | null = reqArray(data, 'projects')
   if (projectsArr === null) { return err<AppSummary>('projects missing or not array') }
   const projectsR: DecodeResult<ProjectSummary[]> = decodeArray<ProjectSummary>(projectsArr as Object, decodeProjectSummary, 'projects')
-  if (!projectsR.ok || projectsR.value === undefined) { return err<AppSummary>(projectsR.error) }
+  if (!projectsR.ok || projectsR.value === undefined) { return err<AppSummary>(projectsR.error ?? 'decode failed') }
   const recentEditObjR: DecodeResult<Object | null> = nullObj(data, 'recentEdit')
-  if (!recentEditObjR.ok) { return err<AppSummary>(`AppSummary.${recentEditObjR.error}`) }
+  if (!recentEditObjR.ok || recentEditObjR.value === undefined) { return err<AppSummary>(`AppSummary.${recentEditObjR.error ?? 'decode failed'}`) }
   if (recentEditObjR.value === null) {
     return ok<AppSummary>({ projects: projectsR.value, recentEdit: null })
   }
@@ -1769,12 +1892,12 @@ function decodeEditorContentDelta(data: Object): DecodeResult<import('../dto/Edi
   if (insertedNonWhitespaceChars === null) { return err('EditorContentDelta.insertedNonWhitespaceChars missing') }
   const deletedNonWhitespaceChars: number | null = reqNum(data, 'deletedNonWhitespaceChars')
   if (deletedNonWhitespaceChars === null) { return err('EditorContentDelta.deletedNonWhitespaceChars missing') }
-  return ok({
+  const value: import('../dto/EditorDtos').EditorContentDelta = {
     insertedChars: insertedChars,
     deletedChars: deletedChars,
     insertedNonWhitespaceChars: insertedNonWhitespaceChars,
     deletedNonWhitespaceChars: deletedNonWhitespaceChars
-  })
+  }; return ok(value)
 }
 
 function decodeDisplayPatch(data: Object): DecodeResult<import('../dto/EditorDtos').DisplayPatch> {
@@ -1795,7 +1918,7 @@ function decodeDisplayPatch(data: Object): DecodeResult<import('../dto/EditorDto
   if (resultingSelectionStart === null) { return err('DisplayPatch.resultingSelectionStart missing') }
   const resultingSelectionEnd: number | null = reqNum(data, 'resultingSelectionEnd')
   if (resultingSelectionEnd === null) { return err('DisplayPatch.resultingSelectionEnd missing') }
-  return ok({
+  const value: import('../dto/EditorDtos').DisplayPatch = {
     baseRevision: baseRevision,
     newRevision: newRevision,
     replaceByteStart: replaceByteStart,
@@ -1803,7 +1926,7 @@ function decodeDisplayPatch(data: Object): DecodeResult<import('../dto/EditorDto
     insertedText: insertedText,
     resultingSelectionStart: resultingSelectionStart,
     resultingSelectionEnd: resultingSelectionEnd
-  })
+  }; return ok(value)
 }
 
 function decodeCompositionSession(data: Object): DecodeResult<import('../dto/EditorDtos').CompositionSession> {
@@ -1816,7 +1939,8 @@ function decodeCompositionSession(data: Object): DecodeResult<import('../dto/Edi
   if (baseRevision === null) { return err('CompositionSession.baseRevision missing') }
   const generation: number | null = reqNum(data, 'generation')
   if (generation === null) { return err('CompositionSession.generation missing') }
-  return ok({ sessionId: sessionId, baseRevision: baseRevision, generation: generation })
+  const value: import('../dto/EditorDtos').CompositionSession = { sessionId: sessionId, baseRevision: baseRevision, generation: generation }
+  return ok(value)
 }
 
 function decodeEditorCompositionState(data: Object): DecodeResult<import('../dto/EditorDtos').EditorCompositionState> {
@@ -1837,7 +1961,7 @@ function decodeEditorCompositionState(data: Object): DecodeResult<import('../dto
   if (preeditText === null) { return err('EditorCompositionState.preeditText missing') }
   const preeditCursorUtf16: number | null = reqNum(data, 'preeditCursorUtf16')
   if (preeditCursorUtf16 === null) { return err('EditorCompositionState.preeditCursorUtf16 missing') }
-  return ok({
+  const value: import('../dto/EditorDtos').EditorCompositionState = {
     sessionId: sessionId,
     baseRevision: baseRevision,
     generation: generation,
@@ -1845,7 +1969,7 @@ function decodeEditorCompositionState(data: Object): DecodeResult<import('../dto
     replaceByteEndExclusive: replaceByteEndExclusive,
     preeditText: preeditText,
     preeditCursorUtf16: preeditCursorUtf16
-  })
+  }; return ok(value)
 }
 
 function decodeOffsetMapEntry(data: Object): DecodeResult<import('../dto/EditorDtos').OffsetMapEntry> {
@@ -1860,12 +1984,12 @@ function decodeOffsetMapEntry(data: Object): DecodeResult<import('../dto/EditorD
   if (length === null) { return err('OffsetMapEntry.length missing') }
   const kind: string | null = reqStr(data, 'kind')
   if (kind === null) { return err('OffsetMapEntry.kind missing') }
-  return ok({
+  const value: import('../dto/EditorDtos').OffsetMapEntry = {
     oldByteOffset: oldByteOffset,
     newByteOffset: newByteOffset,
     length: length,
     kind: kind as import('../dto/EditorDtos').OffsetMapKind
-  })
+  }; return ok(value)
 }
 
 function decodeOffsetMap(data: Object): DecodeResult<import('../dto/EditorDtos').OffsetMap> {
@@ -1876,7 +2000,8 @@ function decodeOffsetMap(data: Object): DecodeResult<import('../dto/EditorDtos')
   if (entriesArr === null) { return err('OffsetMap.entries missing or not array') }
   const entriesR = decodeArray<import('../dto/EditorDtos').OffsetMapEntry>(entriesArr as Object, decodeOffsetMapEntry, 'entries')
   if (!entriesR.ok || entriesR.value === undefined) { return err(`entries: ${entriesR.error}`) }
-  return ok({ entries: entriesR.value })
+  const value: import('../dto/EditorDtos').OffsetMap = { entries: entriesR.value }
+  return ok(value)
 }
 
 export function decodeEditorSessionSnapshot(data: Object): DecodeResult<import('../dto/EditorDtos').EditorSessionSnapshot> {
@@ -1896,13 +2021,14 @@ export function decodeEditorSessionSnapshot(data: Object): DecodeResult<import('
   const chapterId: string | null = reqStr(data, 'chapterId')
   if (chapterId === null) { return err('chapterId missing') }
   let composition: import('../dto/EditorDtos').EditorCompositionState | undefined = undefined
-  const compositionObj: Object | undefined = optObj(data, 'composition')
-  if (compositionObj !== undefined) {
-    const compositionR = decodeEditorCompositionState(compositionObj)
+  const compositionObjR: DecodeResult<Object | undefined> = optObj(data, 'composition')
+  if (!compositionObjR.ok) { return err(`composition: ${compositionObjR.error ?? 'decode failed'}`) }
+  if (compositionObjR.value !== undefined) {
+    const compositionR = decodeEditorCompositionState(compositionObjR.value)
     if (!compositionR.ok || compositionR.value === undefined) { return err(`composition: ${compositionR.error}`) }
     composition = compositionR.value
   }
-  return ok({
+  const value: import('../dto/EditorDtos').EditorSessionSnapshot = {
     text: text,
     revision: revision,
     cursor: cursor,
@@ -1910,7 +2036,7 @@ export function decodeEditorSessionSnapshot(data: Object): DecodeResult<import('
     generation: generation,
     chapterId: chapterId,
     composition: composition
-  })
+  }; return ok(value)
 }
 
 export function decodeEditorEditResult(data: Object): DecodeResult<import('../dto/EditorDtos').EditorEditResult> {
@@ -1928,7 +2054,7 @@ export function decodeEditorEditResult(data: Object): DecodeResult<import('../dt
   const patchesArr: Array<Object> | null = reqArray(data, 'displayPatches')
   if (patchesArr === null) { return err('displayPatches missing or not array') }
   const patchesR = decodeArray<import('../dto/EditorDtos').DisplayPatch>(patchesArr as Object, decodeDisplayPatch, 'displayPatches')
-  if (!patchesR.ok || patchesR.value === undefined) { return err(patchesR.error) }
+  if (!patchesR.ok || patchesR.value === undefined) { return err(patchesR.error ?? 'decode failed') }
   const oldSelectionAnchor: number | null = reqNum(data, 'oldSelectionAnchor')
   if (oldSelectionAnchor === null) { return err('oldSelectionAnchor missing') }
   const oldSelectionHead: number | null = reqNum(data, 'oldSelectionHead')
@@ -1947,28 +2073,31 @@ export function decodeEditorEditResult(data: Object): DecodeResult<import('../dt
   if (!contentDeltaR.ok || contentDeltaR.value === undefined) { return err(`contentDelta: ${contentDeltaR.error}`) }
 
   let offsetMap: import('../dto/EditorDtos').OffsetMap | undefined = undefined
-  const offsetMapObj: Object | undefined = optObj(data, 'offsetMap')
-  if (offsetMapObj !== undefined) {
-    const offsetMapR = decodeOffsetMap(offsetMapObj)
+  const offsetMapObjR: DecodeResult<Object | undefined> = optObj(data, 'offsetMap')
+  if (!offsetMapObjR.ok) { return err(`offsetMap: ${offsetMapObjR.error ?? 'decode failed'}`) }
+  if (offsetMapObjR.value !== undefined) {
+    const offsetMapR = decodeOffsetMap(offsetMapObjR.value)
     if (!offsetMapR.ok || offsetMapR.value === undefined) { return err(`offsetMap: ${offsetMapR.error}`) }
     offsetMap = offsetMapR.value
   }
   let compositionSession: import('../dto/EditorDtos').CompositionSession | undefined = undefined
-  const compositionSessionObj: Object | undefined = optObj(data, 'compositionSession')
-  if (compositionSessionObj !== undefined) {
-    const compositionSessionR = decodeCompositionSession(compositionSessionObj)
+  const compositionSessionObjR: DecodeResult<Object | undefined> = optObj(data, 'compositionSession')
+  if (!compositionSessionObjR.ok) { return err(`compositionSession: ${compositionSessionObjR.error ?? 'decode failed'}`) }
+  if (compositionSessionObjR.value !== undefined) {
+    const compositionSessionR = decodeCompositionSession(compositionSessionObjR.value)
     if (!compositionSessionR.ok || compositionSessionR.value === undefined) { return err(`compositionSession: ${compositionSessionR.error}`) }
     compositionSession = compositionSessionR.value
   }
   let composition: import('../dto/EditorDtos').EditorCompositionState | undefined = undefined
-  const compositionObj: Object | undefined = optObj(data, 'composition')
-  if (compositionObj !== undefined) {
-    const compositionR = decodeEditorCompositionState(compositionObj)
+  const compositionObjR: DecodeResult<Object | undefined> = optObj(data, 'composition')
+  if (!compositionObjR.ok) { return err(`composition: ${compositionObjR.error ?? 'decode failed'}`) }
+  if (compositionObjR.value !== undefined) {
+    const compositionR = decodeEditorCompositionState(compositionObjR.value)
     if (!compositionR.ok || compositionR.value === undefined) { return err(`composition: ${compositionR.error}`) }
     composition = compositionR.value
   }
 
-  return ok({
+  const value: import('../dto/EditorDtos').EditorEditResult = {
     outcome: outcome as import('../dto/EditorDtos').EditorEditOutcome,
     transactionId: transactionId,
     baseRevision: baseRevision,
@@ -1984,7 +2113,7 @@ export function decodeEditorEditResult(data: Object): DecodeResult<import('../dt
     compositionSession: compositionSession,
     contentDelta: contentDeltaR.value,
     composition: composition
-  })
+  }; return ok(value)
 }
 
 // ─── Layout / Screen Policy Decoders ───
@@ -2085,7 +2214,7 @@ export function decodeScreenPolicy(data: Object): DecodeResult<ScreenPolicy> {
   const slotsArr: Array<Object> | null = reqArray(data, 'actionSlots')
   if (slotsArr === null) { return err<ScreenPolicy>('actionSlots missing or not array') }
   const slotsR: DecodeResult<ActionSlot[]> = decodeArray<ActionSlot>(slotsArr as Object, decodeActionSlot, 'actionSlots')
-  if (!slotsR.ok || slotsR.value === undefined) { return err<ScreenPolicy>(slotsR.error) }
+  if (!slotsR.ok || slotsR.value === undefined) { return err<ScreenPolicy>(slotsR.error ?? 'decode failed') }
   const value: ScreenPolicy = {
     screenRole: screenRole as ScreenRole,
     showPrimaryNavigation: showPrimaryNavigation,

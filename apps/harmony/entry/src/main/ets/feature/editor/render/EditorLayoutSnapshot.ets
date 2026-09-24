@@ -15,7 +15,7 @@
 // 测试也直接 import projectEditorDisplay，保证生产/测试走同一份算法。
 
 import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
-import { projectEditorDisplay } from './editor_display_projection'
+import { projectEditorDisplay, EditorSessionSnapshotInput } from './editor_display_projection'
 
 export class EditorLayoutSnapshot {
   readonly text: string
@@ -76,7 +76,18 @@ export class EditorLayoutSnapshot {
   // Issue #629 评论15 第2项：不再接受 contentWidth 参数；用 generation/compositionGeneration 标识编辑状态。
   // Issue #629 评论5358224312 第1项：display projection 由 projectEditorDisplay 统一计算，此处只做字段映射。
   static fromEditorSnapshot(snap: EditorSessionSnapshot, fontSize?: number): EditorLayoutSnapshot {
-    const projection = projectEditorDisplay(snap)
+    // Issue #753：editor_display_projection.EditorSessionSnapshotInput 与
+    // EditorDtos.EditorSessionSnapshot 字段一致，区别仅在 composition 可选性
+    //（DTO 可选 vs 纯逻辑 | null）。构造符合纯逻辑类型的桥接对象传入。
+    const projectionInput: EditorSessionSnapshotInput = {
+      text: snap.text,
+      cursor: snap.cursor,
+      selectionAnchor: snap.selectionAnchor,
+      revision: snap.revision,
+      generation: snap.generation,
+      composition: snap.composition ?? null
+    }
+    const projection = projectEditorDisplay(projectionInput)
     const hasComposition: boolean = snap.composition !== null && snap.composition !== undefined
     return new EditorLayoutSnapshot(
       projection.text,
