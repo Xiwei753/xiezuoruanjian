@@ -26,15 +26,10 @@ import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
-import {
-  EditableLeftIconTypeV2,
-  EditableLeftIconV2,
-  EditableTitleBarV2,
-  EditableTitleV2,
-  EditableTitleBarMenuItemV2,
-  EditableSaveButtonV2,
-  EditableTitleBarStyleV2
-} from '@kit.ArkUI'
+// Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
+// EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
+// Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
+// NavDestination 原生标题栏（hideTitleBar(false) + title）承载。
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -966,7 +961,13 @@ export struct WritingScreen {
         this.EditorPane()
       }
     }
-    .hideTitleBar(true)
+    // Issue #750 评论 5805761237：真正使用 NavDestination 原生标题栏承载返回入口和标题栏材质。
+    // 通用 systemMaterial 沉浸光感材质只在 Navigation/NavDestination 标题栏等规定区域生效
+    //（module.json5 已配置 ohos.arkui.UIMaterial.state = enable）。
+    // NavigationMode.Stack 模式下（AppNavigation.ets 已配置），非根 NavDestination 自动显示返回按钮；
+    // 返回按钮点击触发 onBackPressed，仍走 requestLeave() -> safePop() -> leaveGuard，不绕开离开守卫。
+    .hideTitleBar(false)
+    .title(this.chapterTitle)
     .onBackPressed(() => {
       // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
       // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
@@ -979,39 +980,39 @@ export struct WritingScreen {
   @Builder
   EditorPane() {
     Column() {
-      // Issue #750 评论 5805353840：改用 API 26 系统编辑标题栏 EditableTitleBarV2，
-      // 不再自绘 Header。返回走 requestLeave() -> safePop() -> leaveGuard，
-      // 与 NavDestination.onBackPressed 保持同一条离开链。
-      EditableTitleBarV2({
-        leftIcon: new EditableLeftIconV2({
-          iconType: EditableLeftIconTypeV2.Back,
-          onAction: () => {
-            this.requestLeave()
-          }
-        }),
-        title: new EditableTitleV2({
-          mainTitle: this.chapterTitle,
-          subTitle: getContext(this).resourceManager
-            .getStringSync($r('app.string.word_count_format').id)
-            .replace('%s', String(this.wordCount))
-        }),
-        menuItems: [
-          new EditableTitleBarMenuItemV2({
-            value: $r('sys.symbol.share'),
-            label: $r('app.string.share'),
-            action: () => {
-              this.shareToSystem()
-            }
-          })
-        ],
-        saveButton: new EditableSaveButtonV2({
-          isRequired: true,
-          onAction: () => {
-            this.saveChapter()
-          }
-        }),
-        options: new EditableTitleBarStyleV2()
-      })
+      // Issue #750 评论 5805761237：返回入口和标题已由 NavDestination 原生标题栏承载
+      //（hideTitleBar(false) + title(this.chapterTitle)，沉浸光感 systemMaterial 在标题栏区域生效）。
+      // 此处只保留一个轻量编辑操作栏（非标题栏）：字数显示 + 分享 + 手动保存。
+      // share/save 不再放进 EditableTitleBarV2（该组件自身无 systemMaterial 配置项，
+      // 且塞在内容区无法获得 Navigation/NavDestination 标题栏的沉浸光感材质）。
+      Row() {
+        // 字数显示
+        Text(getContext(this).resourceManager
+          .getStringSync($r('app.string.word_count_format').id)
+          .replace('%s', String(this.wordCount)))
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textHint)
+
+        Blank()
+
+        // 分享按钮
+        Button($r('app.string.share'))
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .onClick(() => { this.shareToSystem() })
+          .margin({ right: 8 })
+
+        // 保存按钮
+        Button($r('app.string.save'))
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .backgroundColor(this.themeConfig.colors.primary)
+          .fontColor(this.themeConfig.colors.background)
+          .onClick(() => { this.saveChapter() })
+      }
+      .width('100%')
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 8 })
 
       if (this.isLoading) {
         Column() {

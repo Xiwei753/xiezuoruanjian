@@ -12,11 +12,6 @@
 #
 # Usage:
 #   .\tools\build_harmony.ps1
-#   .\tools\build_harmony.ps1 -Release
-
-param(
-    [switch]$Release
-)
 
 $ErrorActionPreference = "Stop"
 
@@ -104,6 +99,8 @@ $env:CXX_aarch64_unknown_linux_ohos = (Join-Path $NdkHome "llvm\bin\clang++.exe"
 $SysrootDir = Join-Path $NdkHome "sysroot"
 $SysrootLibDir = Join-Path $SysrootDir "usr\lib\aarch64-linux-ohos"
 $LlvmLibDir = Join-Path $NdkHome "llvm\lib\aarch64-linux-ohos"
+$env:CFLAGS_aarch64_unknown_linux_ohos = "--target=$ClangTarget --sysroot=$SysrootDir -D__MUSL__"
+$env:CXXFLAGS_aarch64_unknown_linux_ohos = "--target=$ClangTarget --sysroot=$SysrootDir -D__MUSL__"
 $env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS = "-C link-arg=--target=$ClangTarget -C link-arg=--sysroot=$SysrootDir -C link-arg=-L$SysrootLibDir -C link-arg=-L$LlvmLibDir -C link-arg=-Wl,-soname,libwriter_core_ffi.so"
 
 Write-Host "Linker: $ClangPath"
