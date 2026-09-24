@@ -377,7 +377,7 @@ fn repro_e_sample_coordinated_cursor_rect_at_uses_glyph_inference() {
 /// 文字已经进入下一行，光标却会落到下一行靠右/行尾）。
 #[test]
 fn repro_f_cursor_x_from_canonical_uses_inclusive_find_for_soft_wrap_boundary() {
-    let src = read_src("src/editor/layout.rs");
+    let src = read_src("src/editor/layout/canonical_snapshot.rs");
     let window = function_window(&src, "fn cursor_x_from_canonical", 1800);
     // 前提：函数确实用包含区间 find 取 canonical line
     let has_find = window.contains(".find(|cl| cl.qchar_start <= cursor_qchar");
@@ -591,7 +591,7 @@ fn repro_i_rendering_still_passes_last_scroll_y_to_build_cursor_plan() {
 fn caret_is_not_visual_boundary_of_insert_reveal_delete_conceal() {
     let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
     let slice = read_src("src/sujian_editor_item/animated_slice.rs");
-    let layout = read_src("src/editor/layout.rs");
+    let layout = read_src("src/editor/layout/canonical_snapshot.rs");
     let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
     let rendering = read_src("src/sujian_editor_item/rendering.rs");
 

@@ -321,7 +321,8 @@ fn issue690_qml_uses_low_frequency_blink_timer_not_frame_animation() {
 
 #[test]
 fn issue690_empty_document_uses_layout_fallback_not_fake_glyph() {
-    let src = read_src("src/editor/layout.rs");
+    // Issue #748: layout.rs 拆分为 layout/ 子目录，caret_rect 在 hit_test.rs。
+    let src = read_src("src/editor/layout/hit_test.rs");
     // `EditorLayout::caret_rect` 是薄封装转发；要断言的是自由函数实现。
     let start = src
         .find("pub fn caret_rect(\n    snapshot")
