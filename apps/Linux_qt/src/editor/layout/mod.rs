@@ -6,22 +6,24 @@
 // - 转换入口：`sujian_editor_item` 中的 `utf8_to_utf16` / `utf16_to_utf8`
 //   在调用本模块函数前完成坐标转换
 //
-// 线程安全：`g_editor_layout_buf` 和 `g_glyph_buf` 为 thread_local，
+// 线程安全：`g_editor_layout_buf` 为 thread_local，
 // 仅在 GUI 线程中使用，不跨线程共享。
 //
-// 模块拆分（Issue #748 评论 5805325152）：
+// 模块拆分（Issue #748 评论 5805325152 / 5810761209）：
 // - types: 纯数据类型
 // - qt_cache: QTextLayout/QTextLine generation cache
-// - engine: 段落排版核心、几何 helper、坐标转换、run_on_qt_thread
+// - engine: 段落排版核心、几何 helper、坐标转换
 // - hit_test: hit test / caret / cursor 定位
 // - canonical_snapshot: Canonical document visual snapshot
 // - diff: VisualLine diff / affected paragraph ranges
+// - test_support: 测试线程 helper (run_on_qt_thread)，仅 test/test-helpers feature 下编译
 
 mod canonical_snapshot;
 mod diff;
 mod engine;
 mod hit_test;
 mod qt_cache;
+mod test_support;
 mod types;
 
 // ── re-export：外部公开类型 ──
@@ -40,7 +42,7 @@ pub use engine::{
     qchar_offset_to_byte_offset, text_baseline_y,
 };
 #[cfg(any(test, feature = "test-helpers"))]
-pub use engine::run_on_qt_thread;
+pub use test_support::run_on_qt_thread;
 pub use hit_test::{
     affinity_for_index_on_line, calculate_cursor_x_for_line, caret_rect, caret_rect_doc,
     cursor_line_and_x, hit_test, index_at_line_x, line_contains_cursor_with_affinity,

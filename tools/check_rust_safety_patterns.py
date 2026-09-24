@@ -202,6 +202,7 @@ _CPP_UNSAFE_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/editor/input/qt_surface.rs"),
     Path("apps/Linux_qt/src/editor/layout/qt_cache.rs"),
     Path("apps/Linux_qt/src/editor/layout/engine.rs"),
+    Path("apps/Linux_qt/src/editor/layout/test_support.rs"),
     Path("apps/Linux_qt/src/editor/layout/canonical_snapshot.rs"),
     Path("apps/Linux_qt/src/editor/renderer.rs"),
     Path("apps/Linux_qt/src/editor/scene_graph.rs"),
@@ -235,8 +236,8 @@ _ASSERT_UNWIND_SAFE_WHITELIST_ENTRIES = {
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_reprepare_static_snapshot"),
     (Path("core/writer_core/src/sync/provider/github_backend.rs"), "sync"),
     # Qt 线程测试辅助：catch_unwind 捕获 panic 防止终止专用线程，是标准用法。
-    (Path("apps/Linux_qt/src/editor/layout/engine.rs"), "qt_thread"),
-    (Path("apps/Linux_qt/src/editor/layout/engine.rs"), "run_on_qt_thread"),
+    (Path("apps/Linux_qt/src/editor/layout/test_support.rs"), "qt_thread"),
+    (Path("apps/Linux_qt/src/editor/layout/test_support.rs"), "run_on_qt_thread"),
 }
 
 
