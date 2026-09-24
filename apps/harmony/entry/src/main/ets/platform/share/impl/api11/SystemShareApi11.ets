@@ -1,7 +1,7 @@
 // SystemShareApi11 — 普通系统分享 API11 基础 facade（单例）。
 // 直接 import @kit.ShareKit 的 systemShare，完成 API11+ 基础能力：
 // SharedData 构造、ShareController.show 调起系统分享面板。
-// 只有 impl/apiXX 文件可以 import @kit.*；Service 不直接 import @kit.*。
+// 版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
 //
 // 真实接口（@hms.collaboration.systemShare d.ts）：
 //   systemShare.SharedData          since 4.1.0(11)

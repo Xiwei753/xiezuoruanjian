@@ -1,6 +1,6 @@
 // DlpAntiPeepApi23 — 防窥 API23 facade（单例）。
 // 只放 API23（since 6.1.0(23)）方法：requestAntiPeepOptions / publishAntiPeepInformation。
-// 不把 API23 方法塞进 api20 文件。只有 impl/apiXX 文件可以 import @kit.*。
+// 不把 API23 方法塞进 api20 文件。版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
 import { dlpAntiPeep } from '@kit.DeviceSecurityKit'
 import { common } from '@kit.AbilityKit'
 import { PlatformApiResolver } from '../../../version/PlatformApiResolver'

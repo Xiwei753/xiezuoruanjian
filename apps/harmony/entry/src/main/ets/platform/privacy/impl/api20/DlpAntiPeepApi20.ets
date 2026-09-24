@@ -1,7 +1,7 @@
 // DlpAntiPeepApi20 — 防窥 API20 基础 facade（单例）。
 // 直接 import @kit.DeviceSecurityKit 的 dlpAntiPeep，完成 API20+ 基础能力：
 // 支持状态、窥屏状态、监听启停、错误映射。
-// 只有 impl/apiXX 文件可以 import @kit.*；Service 不直接 import @kit.*。
+// 版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
 //
 // 真实事件源：dlpAntiPeep.on('dlpAntiPeep')（since 6.0.0(20)）。
 import { dlpAntiPeep } from '@kit.DeviceSecurityKit'

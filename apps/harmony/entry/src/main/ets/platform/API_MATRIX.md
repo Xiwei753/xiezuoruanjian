@@ -15,7 +15,7 @@
   - `impl/api23`：防窥扩展（requestAntiPeepOptions，since 23）
   - API26 新能力继续单独使用
 - **降级语义**：旧系统缺少某个高版本能力时，只降级该能力（`isSupported()` 返回 false、对应入口返回 false，不伪造状态），**不导致整个应用无法安装**。API12～25 的设备可以正常安装运行，只是按运行时版本禁用对应高版本能力。
-- 稳定 facade（`*Service.ets`）不 `import @kit.*`、不认识 API Level 数字；版本判断集中在 `PlatformApiResolver`，系统调用在各 `impl/apiXX` facade。
+- 稳定 facade（`*Service.ets`）不直接 import 版本敏感的高版本能力 Kit、不自行判断具体 API Level；Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型可以保留。具体高版本系统调用和版本判断收进 `impl/apiXX`，由 `PlatformApiResolver` 按运行时 API Level 分流。
 
 ## 能力总览
 

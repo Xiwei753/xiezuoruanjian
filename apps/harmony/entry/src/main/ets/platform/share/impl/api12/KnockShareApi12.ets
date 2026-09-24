@@ -1,10 +1,10 @@
 // KnockShareApi12 — 碰一碰分享 API12 facade（单例）。
 // 直接 import @kit.ShareKit 的 harmonyShare/systemShare，把系统调用收进 impl/api12。
-// 只有 impl/apiXX 文件可以 import @kit.*；Service 不直接 import @kit.*。
+// 版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
 //
 // 真实事件源：harmonyShare.on('knockShare', callback)（无 capability 参数的基础重载，since 5.0.0(12)）。
 // 工程 compatibleSdkVersion=12，knockShare 基础重载在 API12 即可用，不是高版本能力；
-// 收进 impl/api12 是为满足"稳定层不 import @kit.*、不认识 API Level"的边界一致性。
+// 收进 impl/api12 是为满足"稳定层不直接 import 版本敏感的高版本能力 Kit、不自行判断 API Level"的边界一致性。
 // 注册失败返回 false，不伪造状态（callback 不触发）。
 import { harmonyShare, systemShare } from '@kit.ShareKit'
 import { PlatformApiResolver } from '../../../version/PlatformApiResolver'

@@ -1,6 +1,6 @@
 // GesturesShareApi20 — 隔空传送 gesturesShare API20 facade（单例）。
 // 直接 import @kit.ShareKit 的 harmonyShare / systemShare，承接 harmonyShare.on/off('gesturesShare')。
-// 只有 impl/apiXX 文件可以 import @kit.*；Service 不直接 import @kit.*。
+// 版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
 //
 // 真实事件源：harmonyShare.on('gesturesShare', { windowId }, callback)（since 6.0.0(20)）。
 // API12~19 设备上 isSupported() 返回 false、startListening() 返回 false（真实 unsupported，不假装）。
