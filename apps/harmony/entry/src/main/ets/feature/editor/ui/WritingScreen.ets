@@ -26,6 +26,10 @@ import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
+// Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
+// EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
+// Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
+// NavDestination 原生标题栏（hideTitleBar(false) + title）承载。
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -957,7 +961,13 @@ export struct WritingScreen {
         this.EditorPane()
       }
     }
-    .hideTitleBar(true)
+    // Issue #750 评论 5805761237：真正使用 NavDestination 原生标题栏承载返回入口和标题栏材质。
+    // 通用 systemMaterial 沉浸光感材质只在 Navigation/NavDestination 标题栏等规定区域生效
+    //（module.json5 已配置 ohos.arkui.UIMaterial.state = enable）。
+    // NavigationMode.Stack 模式下（AppNavigation.ets 已配置），非根 NavDestination 自动显示返回按钮；
+    // 返回按钮点击触发 onBackPressed，仍走 requestLeave() -> safePop() -> leaveGuard，不绕开离开守卫。
+    .hideTitleBar(false)
+    .title(this.chapterTitle)
     .onBackPressed(() => {
       // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
       // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
@@ -970,56 +980,39 @@ export struct WritingScreen {
   @Builder
   EditorPane() {
     Column() {
-      // Header
+      // Issue #750 评论 5805761237：返回入口和标题已由 NavDestination 原生标题栏承载
+      //（hideTitleBar(false) + title(this.chapterTitle)，沉浸光感 systemMaterial 在标题栏区域生效）。
+      // 此处只保留一个轻量编辑操作栏（非标题栏）：字数显示 + 分享 + 手动保存。
+      // share/save 不再放进 EditableTitleBarV2（该组件自身无 systemMaterial 配置项，
+      // 且塞在内容区无法获得 Navigation/NavDestination 标题栏的沉浸光感材质）。
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .fillColor(this.themeConfig.colors.textPrimary)
-          .onClick(() => {
-            this.requestLeave()
-          })
-
-        Text(this.chapterTitle)
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .margin({ left: 12 })
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-        if (this.saveMessage) {
-          Text(this.saveMessage)
-            .fontSize(12)
-            .fontColor(this.getSaveStatusColor())
-            .margin({ right: 8 })
-        }
-
-        Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${this.wordCount}`))
+        // 字数显示
+        Text(getContext(this).resourceManager
+          .getStringSync($r('app.string.word_count_format').id)
+          .replace('%s', String(this.wordCount)))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textSecondary)
+          .fontColor(this.themeConfig.colors.textHint)
+
+        Blank()
+
+        // 分享按钮
+        Button($r('app.string.share'))
+          .type(ButtonType.Normal)
+          .fontSize(14)
+          .onClick(() => { this.shareToSystem() })
           .margin({ right: 8 })
 
+        // 保存按钮
         Button($r('app.string.save'))
+          .type(ButtonType.Normal)
           .fontSize(14)
-          .height(32)
-          .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
-          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
-          .enabled(!this.isSaving && this.hasUnsavedChanges)
-          .onClick(() => this.saveChapter())
-
-        Button($r('app.string.share'))
-          .fontSize(14)
-          .height(32)
-          .margin({ left: 8 })
-          .backgroundColor(this.themeConfig.colors.secondary)
-          .fontColor(this.themeConfig.colors.onPrimary)
-          .onClick(() => this.shareToSystem())
+          .backgroundColor(this.themeConfig.colors.primary)
+          .fontColor(this.themeConfig.colors.background)
+          .onClick(() => { this.saveChapter() })
       }
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 14 })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 8 })
 
       if (this.isLoading) {
         Column() {
