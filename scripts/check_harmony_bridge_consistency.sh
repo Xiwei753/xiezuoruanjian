@@ -59,13 +59,21 @@ echo "  Found ${#header_declared[@]} declared C functions"
 
 # ── Step 3: Extract #[no_mangle] Rust FFI functions ──
 echo "Step 3: Extracting #[no_mangle] Rust FFI functions..."
+# Harmony 平台专用 C-ABI 入口（如 writer_core_init_diagnostics）定义在
+# platform/rust/harmony/src/，不在 core ffi；只扫 core 会把它误报为缺失
+# （与 tools/check_harmony_native_bridge.py 的扫描范围保持一致）。
 rust_exported=()
-for rs_file in "$FFI_DIR"/*.rs; do
-    while IFS= read -r line; do
-        if [[ "$line" =~ fn\ (writer_core_[a-z_]+)\( ]]; then
-            rust_exported+=("${BASH_REMATCH[1]}")
-        fi
-    done < "$rs_file"
+RUST_FFI_DIRS=("$FFI_DIR" "$PROJECT_ROOT/platform/rust/harmony/src")
+for rs_dir in "${RUST_FFI_DIRS[@]}"; do
+    [[ -d "$rs_dir" ]] || continue
+    for rs_file in "$rs_dir"/*.rs; do
+        [[ -f "$rs_file" ]] || continue
+        while IFS= read -r line; do
+            if [[ "$line" =~ fn\ (writer_core_[a-z_]+)\( ]]; then
+                rust_exported+=("${BASH_REMATCH[1]}")
+            fi
+        done < "$rs_file"
+    done
 done
 
 echo "  Found ${#rust_exported[@]} exported Rust FFI functions"
