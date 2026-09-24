@@ -87,8 +87,8 @@ pub(crate) fn decode_utf16_ptr(text: *const u16, text_len: i32) -> String {
 /// 旧实现把这两步硬合成一个连续 committed byte range，在 selection 与
 /// replacement 不相邻时会误删中间正文。本结构改成两步分开的事件模型，
 /// `editing.rs` 的 `EditOp::ImeCommit` 顺序执行两步 pipeline edit，
-/// 但只在 `record_edit_transaction` 末尾做一次 `sync_buffer_from_pipeline`
-/// + 一次 snapshot + 一次视觉事务。
+/// 但只在 `record_edit_transaction` 末尾做一次 committed 投影同步 + 一次 snapshot +
+/// 一次视觉事务。
 ///
 /// 坐标空间（全部 UTF-8 byte offset，半开区间）：
 /// - `selection_byte_range`：第一步删除的 committed text byte range。

@@ -699,7 +699,7 @@ impl SujianEditorItem {
         // pending promoted layout 提升为 EditorLayout current，避免后续
         // recalculate_content_height_and_emit / request_static_repaint 中的
         // EditorLayout::snapshot 对同一 new text 重新排版。
-        // text_revision / text_ptr / text_len 从当前 buffer.text 和
+        // text_revision / text_ptr / text_len 从当前 committed 正文和
         // pipeline.text_revision() 获取，确保与 snapshot() 的 cache 有效性检查一致。
         // Issue #668 评论 5646458592 问题 1: promote_prepared_layout 会
         // clear_layout_generation 释放旧 generation。在 promote 之前清除

@@ -509,7 +509,7 @@ impl SujianEditorItem {
             None
         };
 
-        // 构造 EditOp。先读出 buffer 状态和 commit 的 session replace range，
+        // 构造 EditOp。先读出 committed 投影状态和 commit 的 session replace range，
         // 避免 commit 被 composition 消耗后无法访问。
         let was_composing_replace =
             commit.was_composing && commit.session_replace_start != commit.session_replace_end;

@@ -990,3 +990,96 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
 // Issue #727 评论 5755858583 问题1: CaretViewportAnchor 已删除，
 // auto-follow anchor 相关测试一并删除。cursor layer 现在和正文层统一用
 // QSGTransformNode 做 scroll_y 变换，不再需要 viewport anchor 机制。
+
+// =========================================================================
+// 测试: Issue #745 评论 5805323459 — 正文状态单一平台投影 + Core grapheme 边界
+// =========================================================================
+
+/// 单个 grapheme cluster 的家庭 emoji: 👨 ZWJ 👩 ZWJ 👧。
+/// 18 byte / 5 个 Unicode scalar —— Qt 端若还按 scalar 自己算编辑边界，
+/// 一次删除只会去掉 4 或 3 个 byte，留下残缺的半个簇。
+const FAMILY_EMOJI: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+
+/// 退格的编辑边界必须来自 Core `EditorKernel::previous_grapheme_boundary`：
+/// 一次 `delete_backward` 整簇删除。
+#[test]
+fn delete_backward_removes_whole_grapheme_cluster_via_kernel_boundary() {
+    assert_eq!(FAMILY_EMOJI.len(), 18);
+    assert_eq!(FAMILY_EMOJI.chars().count(), 5);
+
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("ab"));
+        // set_plain_text 把光标放在 0，先移到文末再插入，退格才有目标簇。
+        let _ = item.pipeline.set_selection(2, 2);
+        item.insert_text(QString::from(FAMILY_EMOJI));
+        assert_eq!(
+            item.pipeline.committed_text(),
+            format!("ab{FAMILY_EMOJI}"),
+            "插入后 committed 投影必须包含完整簇"
+        );
+        assert_eq!(item.pipeline.cursor(), 2 + FAMILY_EMOJI.len());
+
+        item.delete_backward();
+
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "ab",
+            "一次退格必须删掉整个 grapheme cluster，不能残留半个簇"
+        );
+        assert_eq!(item.pipeline.cursor(), 2, "退格后 cursor 落在簇起点");
+        assert!(!item.pipeline.has_selection());
+    });
+}
+
+/// 前删的编辑边界必须来自 Core `EditorKernel::next_grapheme_boundary`。
+#[test]
+fn delete_forward_removes_whole_grapheme_cluster_via_kernel_boundary() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from(format!("{FAMILY_EMOJI}cd")));
+        // set_plain_text 把 cursor 放在 0，簇正好在光标之后。
+        assert_eq!(item.pipeline.cursor(), 0);
+
+        item.delete_forward();
+
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "cd",
+            "一次前删必须删掉整个 grapheme cluster，不能残留半个簇"
+        );
+        assert_eq!(item.pipeline.cursor(), 0);
+    });
+}
+
+/// 选区/文本读取全部走 pipeline 只读投影：镜像的 cursor/anchor 与
+/// `selection_range`/`selected_text`/`snapshot` 必须自洽，不存在第二份可比对的正文。
+#[test]
+fn selection_projection_is_self_consistent_with_mirror() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("Hello世界"));
+        assert_eq!(item.pipeline.committed_text(), "Hello世界");
+        assert!(!item.pipeline.has_selection());
+        assert!(item.pipeline.selected_text().is_empty());
+
+        // "ell" = byte [1, 4)
+        let _ = item.pipeline.set_selection(1, 4);
+        assert!(item.pipeline.has_selection());
+        assert_eq!(item.pipeline.selection_range(), (1, 4));
+        assert_eq!(item.pipeline.selected_text(), "ell");
+        // IME 路径与 QML 属性路径读的是同一个投影，不再各自持有副本。
+        assert_eq!(item.ime_query_selected_text(), "ell");
+        assert_eq!(item.selected_text(), QString::from("ell"));
+
+        // anchor > head 时 range 仍归一化为 [min, max)
+        let _ = item.pipeline.set_selection(11, 8);
+        assert_eq!(item.pipeline.selection_range(), (8, 11));
+        assert_eq!(item.pipeline.selected_text(), "界");
+
+        let snap = item.pipeline.snapshot();
+        assert_eq!(snap.text, item.pipeline.committed_text());
+        assert_eq!(snap.cursor, item.pipeline.cursor());
+        assert_eq!(snap.selection_anchor, item.pipeline.selection_anchor());
+    });
+}
