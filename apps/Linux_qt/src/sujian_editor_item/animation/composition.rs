@@ -122,7 +122,10 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             unit_duration_ms: u64::from(self.typing_animation_duration_ms),
-            smooth_cursor_enabled: true,
+            // Issue #756: composition 路径由调用方（typing_animation_enabled / 协同模式）
+            // 决定是否进入，这里保持"文字 + 光标都要播"的原有语义。
+            text_animation_enabled: true,
+            caret_animation_enabled: true,
             composition_commit_crossfade: None,
         };
         let prepared = build_prepared_transaction(spec);
@@ -317,7 +320,10 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             unit_duration_ms: u64::from(self.typing_animation_duration_ms),
-            smooth_cursor_enabled: true,
+            // Issue #756: composition 路径由调用方（typing_animation_enabled / 协同模式）
+            // 决定是否进入，这里保持"文字 + 光标都要播"的原有语义。
+            text_animation_enabled: true,
+            caret_animation_enabled: true,
             composition_commit_crossfade,
         };
         let prepared = build_prepared_transaction(spec);

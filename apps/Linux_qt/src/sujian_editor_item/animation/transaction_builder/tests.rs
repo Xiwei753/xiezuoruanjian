@@ -749,3 +749,370 @@ fn test_delete_conceal_direction_cursor_near_left_is_delete() {
         "cursor near left (x=11, left=10) should be Delete → conceal_to_left_edge=false"
     );
 }
+
+// ── Issue #756: 文字动画与光标动画互相独立 ─────────────────────────────────────
+//
+// 设置页的"协同动画"是显式模式（coordinated_animation_enabled），不再由
+// typing_animation_enabled && smooth_cursor_enabled 隐式组成：
+// - text_animation_enabled  = coordinated || typing_animation_enabled  → Reflow + 吞吐字
+// - caret_animation_enabled = coordinated || smooth_cursor_enabled    → caret motion track
+//
+// 下面四组用例锁定两个开关的独立性，以及"两个开关同时开启 ≠ 协同"。
+
+fn issue756_shaping_identity() -> ShapingIdentity {
+    ShapingIdentity {
+        text_content_hash: 756,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 756,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    }
+}
+
+/// 构造"在 ab 的 1 处插入 x"的一笔编辑 spec。
+/// `cursor_rects=false` 模拟建不出有效 caret motion（无 old/new caret rect）的一笔。
+fn issue756_insert_spec(
+    key: VisualTransactionKey,
+    text_animation_enabled: bool,
+    caret_animation_enabled: bool,
+    cursor_rects: bool,
+) -> VisualEditSpec {
+    let sid = issue756_shaping_identity();
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "axb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    let (old_cursor_rect, new_cursor_rect) = if cursor_rects {
+        (
+            Some(CursorRect {
+                x: 10.0,
+                top: 0.0,
+                bottom: 20.0,
+                baseline_y: 16.0,
+            }),
+            Some(CursorRect {
+                x: 20.0,
+                top: 0.0,
+                bottom: 20.0,
+                baseline_y: 16.0,
+            }),
+        )
+    } else {
+        (None, None)
+    };
+    VisualEditSpec {
+        key,
+        operation_kind: TextVisualOperationKind::Insert,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: vec![(1, 2)],
+        deleted_ranges: vec![],
+        offset_map,
+        old_cursor_rect,
+        new_cursor_rect,
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        rebase_frames: Vec::new(),
+        caret_handoff: None,
+        visual_affected_byte_range_old: Some((0, 2)),
+        visual_affected_byte_range_new: Some((0, 3)),
+        unit_duration_ms: 100,
+        text_animation_enabled,
+        caret_animation_enabled,
+        composition_commit_crossfade: None,
+    }
+}
+
+fn issue756_count_kind(tx: &PreparedTextVisualTransaction, kind: AnimatedSliceKind) -> usize {
+    tx.units.iter().filter(|u| u.slice.kind == kind).count()
+}
+
+/// 协同模式：文字与光标都开 → 吞吐字（InsertReveal）与 caret track 同时建立。
+#[test]
+fn issue756_coordinated_creates_caret_track_and_reveal_together() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, true, true));
+    assert_eq!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
+        1,
+        "coordinated=true: 必须建立 InsertReveal（文字与光标绑死）"
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "coordinated=true: 必须建立 caret motion track"
+    );
+}
+
+/// 只开打字动画（coordinated=false, smooth=false）：文字动画照播，光标不沿 track 滑动。
+#[test]
+fn issue756_typing_only_creates_text_without_caret_track() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, true));
+    assert_eq!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
+        0,
+        "smooth cursor 关闭时没有 caret motion，不生成吞吐字（Issue #727 约束 5）"
+    );
+    assert!(
+        tx.cursor_visual_track.is_none(),
+        "smooth cursor 关闭且非协同：不建立 caret track，光标不得沿 track 滑动"
+    );
+    assert!(
+        !tx.units.is_empty(),
+        "打字动画开启：文字动画（Reflow）必须照播，不被 smooth_cursor_enabled 关掉"
+    );
+}
+
+/// 只开平滑光标（coordinated=false, typing=false）：caret track 照建，没有文字动画。
+#[test]
+fn issue756_smooth_only_creates_caret_track_without_text_animation() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true));
+    assert!(
+        tx.units.is_empty(),
+        "打字动画关闭且非协同：不得生成任何文字动画 unit，实际 {:?}",
+        unit_kind_labels(&tx.units)
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "平滑光标开启：caret track 必须照建，不被 typing_animation_enabled 关掉"
+    );
+}
+
+/// 两个独立开关同时开启 ≠ 协同：建不出 caret motion 时只影响光标动画，文字动画照建。
+///
+/// coordinated=true 的"缺 caret motion 就整笔不创建"由 coordinator 层强制
+///（见 `issue756_process_transaction_requires_caret_motion_only_when_coordinated`）；
+/// builder 层只按 spec 的两个开关产出 slice/track。
+#[test]
+fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=false，但建不出 caret motion（无 old/new caret rect）。
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, true, false));
+    assert!(
+        tx.cursor_visual_track.is_none(),
+        "没有 caret rect 时自然没有 caret track"
+    );
+    assert!(
+        !tx.units.is_empty(),
+        "coordinated=false: 缺 caret motion 不能把整笔文字动画一起关掉（旧逻辑的隐式协同）"
+    );
+}
+
+/// 两个独立开关都关闭且非协同：没有任何动画。
+#[test]
+fn issue756_all_disabled_produces_no_units_and_no_track() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true));
+    assert!(tx.units.is_empty(), "两个开关都关闭且非协同：没有文字动画");
+    assert!(
+        tx.cursor_visual_track.is_none(),
+        "两个开关都关闭且非协同：没有光标动画"
+    );
+}
+
+/// Issue #756: 事务创建条件不再把"两个独立开关同时开启"当协同。
+///
+/// - coordinated=true：文字与光标绑死，必须有有效 caret motion，否则整笔（含文字动画）不创建。
+/// - coordinated=false：typing/smooth 各自决定文字/光标动画，缺 caret motion 只影响光标动画。
+#[test]
+fn issue756_process_transaction_requires_caret_motion_only_when_coordinated() {
+    use crate::sujian_editor_item::edit_motion::{EditorAnimationKind, PreparedEditMotion};
+    use writer_core::editor::{EditorCursor, EditorSelection, Utf8ByteRange};
+
+    let sid = issue756_shaping_identity();
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "axb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    // 建不出有效 caret motion：无 old/new caret rect。
+    let vt = PreparedEditMotion {
+        kind: EditorAnimationKind::Insert,
+        inserted_range: Some(Utf8ByteRange::from_ordered(1, 2)),
+        deleted_range: None,
+        old_text: "ab".to_string(),
+        new_text: "axb".to_string(),
+        duration_ms: 100,
+        old_selection: EditorSelection {
+            anchor: EditorCursor::new("ab", 1),
+            head: EditorCursor::new("ab", 1),
+        },
+        new_selection: EditorSelection {
+            anchor: EditorCursor::new("axb", 2),
+            head: EditorCursor::new("axb", 2),
+        },
+        old_cursor_rect: None,
+        new_cursor_rect: None,
+    };
+
+    let mut coordinated_coord = LinuxEditorAnimationCoordinator::new();
+    let coordinated_key = coordinated_coord.process_transaction(
+        &vt,
+        true,
+        true,
+        true,
+        false,
+        false,
+        false,
+        None,
+        None,
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        LayoutRevision::initial(),
+    );
+    assert!(
+        coordinated_key.is_none(),
+        "coordinated=true 且 caret motion 建不起来：整笔文字动画也不启动"
+    );
+
+    let mut independent_coord = LinuxEditorAnimationCoordinator::new();
+    let independent_key = independent_coord.process_transaction(
+        &vt,
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        LayoutRevision::initial(),
+    );
+    assert!(
+        independent_key.is_some(),
+        "coordinated=false 且 typing/smooth 同时开启：不能被当成协同，"
+    );
+    assert!(
+        independent_key.is_some(),
+        "typing_animation_enabled 决定文字动画：缺 caret motion 不能把文字动画一起关掉"
+    );
+}
+
+/// Issue #756: coordinated=false 时 smooth 关闭不影响文字动画创建事务。
+#[test]
+fn issue756_process_transaction_typing_only_still_creates_transaction() {
+    use crate::sujian_editor_item::edit_motion::{EditorAnimationKind, PreparedEditMotion};
+    use writer_core::editor::{EditorCursor, EditorSelection, Utf8ByteRange};
+
+    let sid = issue756_shaping_identity();
+    let old_snapshot = make_test_snapshot("ab", vec![(0, 2, 0.0, 0.0, sid.clone())]);
+    let new_snapshot = make_test_snapshot("axb", vec![(0, 3, 0.0, 0.0, sid)]);
+    let vt = PreparedEditMotion {
+        kind: EditorAnimationKind::Insert,
+        inserted_range: Some(Utf8ByteRange::from_ordered(1, 2)),
+        deleted_range: None,
+        old_text: "ab".to_string(),
+        new_text: "axb".to_string(),
+        duration_ms: 100,
+        old_selection: EditorSelection {
+            anchor: EditorCursor::new("ab", 1),
+            head: EditorCursor::new("ab", 1),
+        },
+        new_selection: EditorSelection {
+            anchor: EditorCursor::new("axb", 2),
+            head: EditorCursor::new("axb", 2),
+        },
+        old_cursor_rect: None,
+        new_cursor_rect: None,
+    };
+
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let key = coord.process_transaction(
+        &vt,
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        LayoutRevision::initial(),
+    );
+    assert!(
+        key.is_some(),
+        "coordinated=false + typing=true + smooth=false：旧逻辑要求两个开关同时开启，"
+    );
+
+    let mut none_coord = LinuxEditorAnimationCoordinator::new();
+    let none_key = none_coord.process_transaction(
+        &vt,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        LayoutRevision::initial(),
+    );
+    assert!(
+        none_key.is_none(),
+        "coordinated=false 且 typing/smooth 都关闭：不创建任何事务"
+    );
+}

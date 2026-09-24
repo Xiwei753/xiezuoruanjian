@@ -69,6 +69,20 @@ Dialog {
         root.settingsDirty = true
         debouncedSave()
     }
+    // Issue #756: 协同动画开关。协同模式下"协同动画持续时间"复用
+    // setting_typing_animation_duration_ms 作为共享 timeline 时长，因此两个 duration
+    // 滑块（协同 / 打字）必须同时刷新到共享值，否则关闭协同时 onClosed 会把陈旧的
+    // typingAnimDuration.value 写回去，覆盖用户刚设的共享时长。
+    function setCoordinatedAnimation(value) {
+        coordinatedAnim.checked = value
+        if (!settingsBackendRef || updatingValues) return
+        settingsBackendRef.setting_coordinated_text_cursor_animation_enabled = value
+        var shared = settingsBackendRef.setting_typing_animation_duration_ms || 100
+        typingAnimDuration.value = shared
+        coordinatedAnimDuration.value = shared
+        root.settingsDirty = true
+        debouncedSave()
+    }
     function updateValues() {
         if (!settingsBackendRef) return
         updatingValues = true
@@ -133,12 +147,12 @@ Dialog {
             settingsBackendRef.setting_line_spacing = lineSpacingSlider.value
             settingsBackendRef.setting_auto_indent_width = autoIndentWidth.value
         settingsBackendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
-        // Issue #756: 协同模式下文字与光标共用 typing_animation_duration_ms 作为共享 timeline 时长，
-        // 不再写 smooth_cursor_duration_ms（避免覆盖用户保留的独立 duration）。
-        // 非协同模式继续分别写两个独立 duration。
+        // Issue #756: 协同模式下文字与光标共用 typing_animation_duration_ms 作为共享
+        // timeline 时长，此时权威控件是"协同动画持续时间"滑块，必须写它的值；
+        // 非协同模式继续分别写两个独立 duration（不覆盖用户保留的独立设置）。
         var coordinated = settingsBackendRef.setting_coordinated_text_cursor_animation_enabled
         if (coordinated) {
-            settingsBackendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+            settingsBackendRef.setting_typing_animation_duration_ms = coordinatedAnimDuration.value
         } else {
             settingsBackendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
             settingsBackendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
@@ -349,8 +363,8 @@ Dialog {
                     title: qsTr("协同动画（吞字/吐字）")
                     description: qsTr("文字与光标绑死共用一条时间线")
                     clickable: true
-                    onClicked: root.setSwitchValue(coordinatedAnim, "setting_coordinated_text_cursor_animation_enabled", !coordinatedAnim.checked)
-                    ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(coordinatedAnim, "setting_coordinated_text_cursor_animation_enabled", v) } }
+                    onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
+                    ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }
                 }
                 // 协同模式：显示一个"协同动画持续时间"滑块，复用 setting_typing_animation_duration_ms。
                 AppSlider {

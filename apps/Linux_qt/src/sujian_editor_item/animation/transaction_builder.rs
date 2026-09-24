@@ -74,9 +74,9 @@ pub(crate) struct CompositionCommitCrossfadeSpec {
 /// `VisualEditSpec` 并调用同一个事务构造器，不再维护第二套事务创建算法。
 ///
 /// Issue #747 评论 5813540976: spec 只携带归一化输入（`offset_map`、cursor line info、
-/// `smooth_cursor_enabled`、`composition_commit_crossfade`），不再携带 `units` 与
-/// `cursor_visual_track`——它们是 builder 的输出，由 [`build_prepared_transaction`]
-/// 内部统一构造。
+/// `text_animation_enabled` / `caret_animation_enabled`、`composition_commit_crossfade`），
+/// 不再携带 `units` 与 `cursor_visual_track`——它们是 builder 的输出，
+/// 由 [`build_prepared_transaction`] 内部统一构造。
 pub(crate) struct VisualEditSpec {
     pub(crate) key: VisualTransactionKey,
     pub(crate) operation_kind: TextVisualOperationKind,
@@ -100,7 +100,12 @@ pub(crate) struct VisualEditSpec {
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
     pub(crate) unit_duration_ms: u64,
-    pub(crate) smooth_cursor_enabled: bool,
+    /// Issue #756: 文字动画开关（ReflowMove/ReflowCrossFade + InsertReveal/DeleteConceal）。
+    /// coordinated=true 或 typing_animation_enabled=true 时为 true。
+    pub(crate) text_animation_enabled: bool,
+    /// Issue #756: 光标动画开关（caret motion track）。
+    /// coordinated=true 或 smooth_cursor_enabled=true 时为 true。
+    pub(crate) caret_animation_enabled: bool,
     pub(crate) composition_commit_crossfade: Option<CompositionCommitCrossfadeSpec>,
 }
 
@@ -112,8 +117,14 @@ pub(crate) struct VisualEditSpec {
 pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVisualTransaction {
     let mut slices: Vec<AnimatedSlice> = Vec::new();
 
-    // 1a. InsertReveal / DeleteConceal（受 smooth_cursor_enabled 控制）
-    if spec.smooth_cursor_enabled {
+    // 1a. InsertReveal / DeleteConceal（文字动画 + caret 驱动：两者都要开）
+    //
+    // Issue #756: 吞吐字既是文字动画又是 caret 驱动的裁切边界。
+    // - coordinated=true：文字与光标绑死，两者都是 true，吞吐字恒有。
+    // - coordinated=false：文字由 typing_animation_enabled 决定，光标由
+    //   smooth_cursor_enabled 决定；smooth 关闭时没有 caret motion，就没有吞吐字
+    //   （Issue #727 约束 5），此时只保留 Reflow。
+    if spec.text_animation_enabled && spec.caret_animation_enabled {
         for &(i_start, i_end) in &spec.inserted_ranges {
             slices.extend(build_insert_reveal_slices(
                 spec.key,
@@ -148,22 +159,28 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     }
 
     // 1c. Reflow（unchanged material）
+    //
+    // Issue #756: Reflow 是文字动画的一部分，由 text_animation_enabled 决定
+    //（coordinated=true 或 typing_animation_enabled=true）。typing 关闭且非协同时
+    // 只有光标动画，不生成文字 unit。
     let mut excluded_old: Vec<(usize, usize)> = spec.deleted_ranges.clone();
     let mut excluded_new: Vec<(usize, usize)> = spec.inserted_ranges.clone();
     if let Some(crossfade) = &spec.composition_commit_crossfade {
         excluded_old.push((crossfade.preedit_byte_start, crossfade.preedit_byte_end));
         excluded_new.push((crossfade.candidate_byte_start, crossfade.candidate_byte_end));
     }
-    slices.extend(build_cluster_reflow_slices(
-        spec.key,
-        &spec.old_snapshot,
-        &spec.new_snapshot,
-        &spec.offset_map,
-        &excluded_old,
-        &excluded_new,
-        spec.old_cursor_rect.as_ref(),
-        spec.new_cursor_rect.as_ref(),
-    ));
+    if spec.text_animation_enabled {
+        slices.extend(build_cluster_reflow_slices(
+            spec.key,
+            &spec.old_snapshot,
+            &spec.new_snapshot,
+            &spec.offset_map,
+            &excluded_old,
+            &excluded_new,
+            spec.old_cursor_rect.as_ref(),
+            spec.new_cursor_rect.as_ref(),
+        ));
+    }
 
     // 2. Wrap units
     let mut units: Vec<PreparedVisualUnit> = slices
@@ -175,22 +192,32 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     match_rebase_frames(&spec.rebase_frames, &mut units, &spec.offset_map);
 
     // 4. Cursor visual track
-    let cursor_visual_track = build_cursor_visual_track(
-        spec.old_cursor_rect.as_ref(),
-        spec.new_cursor_rect.as_ref(),
-        spec.old_cursor_visual_line_id,
-        spec.new_cursor_visual_line_id,
-        spec.old_cursor_line_top,
-        spec.old_cursor_line_bottom,
-        spec.new_cursor_line_top,
-        spec.new_cursor_line_bottom,
-        spec.caret_handoff.clone(),
-        spec.unit_duration_ms,
-    );
+    //
+    // Issue #756: caret motion track 就是正文编辑期间的光标动画，由
+    // caret_animation_enabled 决定（coordinated=true 或 smooth_cursor_enabled=true）。
+    // 关闭时本事务不拥有 caret motion，光标位置由 canonical caret 接管（Snap），
+    // 不会在用户关掉"平滑光标"后仍然沿 track 滑动。
+    let cursor_visual_track = if spec.caret_animation_enabled {
+        build_cursor_visual_track(
+            spec.old_cursor_rect.as_ref(),
+            spec.new_cursor_rect.as_ref(),
+            spec.old_cursor_visual_line_id,
+            spec.new_cursor_visual_line_id,
+            spec.old_cursor_line_top,
+            spec.old_cursor_line_bottom,
+            spec.new_cursor_line_top,
+            spec.new_cursor_line_bottom,
+            spec.caret_handoff.clone(),
+            spec.unit_duration_ms,
+        )
+    } else {
+        None
+    };
 
     // 5. 诊断日志
     editor_animation_debug_log(&format!(
-        "anim_spec: op={:?} units={} inserted={} deleted={} rebased={} handoff={} epoch={}",
+        "anim_spec: op={:?} units={} inserted={} deleted={} rebased={} handoff={} epoch={} \
+         text_anim={} caret_anim={}",
         spec.operation_kind,
         units.len(),
         spec.inserted_ranges.len(),
@@ -198,6 +225,8 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         spec.rebase_frames.len(),
         spec.caret_handoff.is_some(),
         spec.cursor_owner_epoch,
+        spec.text_animation_enabled,
+        spec.caret_animation_enabled,
     ));
 
     // 6. 唯一 PreparedTextVisualTransaction struct literal
@@ -1013,7 +1042,10 @@ impl LinuxEditorAnimationCoordinator {
         &mut self,
         prepared: Option<PreparedRebaseHandoff>,
         vt: &PreparedEditMotion,
-        smooth_cursor_enabled: bool,
+        // Issue #756: 文字动画开关（coordinated || typing）与光标动画开关
+        // （coordinated || smooth）由调用方按同一份设置算出，两者互相独立。
+        text_animation_enabled: bool,
+        caret_animation_enabled: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
         old_cursor_visual_line_id: Option<usize>,
@@ -1044,7 +1076,8 @@ impl LinuxEditorAnimationCoordinator {
                 // build_prepared_transaction 内部调 build_insert_reveal_slices / build_cluster_reflow_slices
                 // / match_rebase_frames / build_cursor_visual_track 完成全部 slice/unit/track 构造。
                 // Issue #687: Insert 事务 changed range 由 Core 显式拥有，reflow 排除 inserted_range。
-                // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 InsertReveal 是否生成。
+                // Issue #756: InsertReveal 生成由 text_animation_enabled + caret_animation_enabled 决定，
+                // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
                 // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
                 // (range_start, range_start)，new 侧是 inserted_range。
                 let carried_rebase = rebase_frames.len();
@@ -1071,7 +1104,8 @@ impl LinuxEditorAnimationCoordinator {
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                     unit_duration_ms: vt.duration_ms,
-                    smooth_cursor_enabled,
+                    text_animation_enabled,
+                    caret_animation_enabled,
                     composition_commit_crossfade: None,
                 };
                 let prepared_tx = build_prepared_transaction(spec);
@@ -1104,7 +1138,8 @@ impl LinuxEditorAnimationCoordinator {
                 // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
                 // offset_map, &deleted_ranges, &[], ...) 排除 deleted_range，
                 // Issue #687: changed range 由 Core 显式拥有。
-                // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 DeleteConceal 是否生成。
+                // Issue #756: DeleteConceal 生成由 text_animation_enabled + caret_animation_enabled 决定，
+                // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
                 // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
                 // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
                 let carried_rebase = rebase_frames.len();
@@ -1132,7 +1167,8 @@ impl LinuxEditorAnimationCoordinator {
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                     unit_duration_ms: vt.duration_ms,
-                    smooth_cursor_enabled,
+                    text_animation_enabled,
+                    caret_animation_enabled,
                     composition_commit_crossfade: None,
                 };
                 let prepared_tx = build_prepared_transaction(spec);
@@ -1177,11 +1213,15 @@ impl LinuxEditorAnimationCoordinator {
         layout_basis_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
         // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
-        // - coordinated=true 时：文字与光标绑死，要求有效 caret motion，否则不创建事务。
-        // - coordinated=false 时：typing_animation_enabled 只决定文字动画（Reflow），
-        //   smooth_cursor_enabled 只决定光标动画（CaretDriven/InsertReveal/DeleteConceal），
-        //   两者独立，同时为 true 不等于协同。
-        if (!coordinated_animation_enabled && !typing_animation_enabled)
+        // - coordinated=true 时：文字与光标绑死，要求有效 caret motion，否则不创建事务
+        //   （文字动画也不启动）。
+        // - coordinated=false 时：typing_animation_enabled 只决定文字动画
+        //   （Reflow + InsertReveal/DeleteConceal），smooth_cursor_enabled 只决定光标动画
+        //   （caret motion track）。两者互相独立，同时为 true 不等于协同：
+        //   只有 coordinated_animation_enabled 才走协同路径。
+        let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
+        let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
+        if (!text_animation_enabled && !caret_animation_enabled)
             || is_scrolling
             || is_loading
             || is_applying_format
@@ -1190,13 +1230,12 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         // Issue #756: valid_caret_motion_track 检查。
-        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务
-        //   （文字动画也不启动）。
-        // - coordinated=false 时：仅在 smooth_cursor_enabled 时才要求 valid_caret_motion_track
-        //   （!smooth_cursor_enabled 时不创建 CaretDriven units，只创建 Reflow）。
+        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务。
+        // - coordinated=false 时：不把缺少 caret motion 当成"整笔不播"——文字动画（Reflow）
+        //   与 cursor track 各自按自己的开关决定（无 caret motion 时只是没有 CaretDriven
+        //   units 与 cursor track，与 Issue #727 约束 5 一致）。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
-        let require_caret_track = coordinated_animation_enabled || smooth_cursor_enabled;
-        if require_caret_track && !valid_caret_motion_track {
+        if coordinated_animation_enabled && !valid_caret_motion_track {
             return None;
         }
 
@@ -1247,7 +1286,8 @@ impl LinuxEditorAnimationCoordinator {
                     // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
                     // offset_map, &[], &[inserted_range_tuple], ...) 排除 inserted_range，
                     // Issue #687: changed range 由 Core 显式拥有。
-                    // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 InsertReveal 是否生成。
+                    // Issue #756: InsertReveal 生成由 text_animation_enabled + caret_animation_enabled 决定，
+                    // 不再把 typing && smooth 当成协同。
                     // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
                     // (range_start, range_start)，new 侧是 inserted_range。
                     let carried_rebase = rebase_frames.len();
@@ -1274,7 +1314,8 @@ impl LinuxEditorAnimationCoordinator {
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
                         unit_duration_ms: vt.duration_ms,
-                        smooth_cursor_enabled,
+                        text_animation_enabled,
+                        caret_animation_enabled,
                         composition_commit_crossfade: None,
                     };
                     let prepared = build_prepared_transaction(spec);
@@ -1348,7 +1389,8 @@ impl LinuxEditorAnimationCoordinator {
                 // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
                 // offset_map, &deleted_ranges, &[], ...) 排除 deleted_range，
                 // Issue #687: changed range 由 Core 显式拥有。
-                // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 DeleteConceal 是否生成。
+                // Issue #756: DeleteConceal 生成由 text_animation_enabled + caret_animation_enabled 决定，
+                // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
                 // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
                 // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
                 let carried_rebase = rebase_frames.len();
@@ -1375,7 +1417,8 @@ impl LinuxEditorAnimationCoordinator {
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                     unit_duration_ms: vt.duration_ms,
-                    smooth_cursor_enabled,
+                    text_animation_enabled,
+                    caret_animation_enabled,
                     composition_commit_crossfade: None,
                 };
                 let prepared = build_prepared_transaction(spec);

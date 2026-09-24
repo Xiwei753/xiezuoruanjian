@@ -295,6 +295,8 @@ pub(crate) fn record_struct_event(
     });
 }
 
+use sync_bridge::SyncTaskOutcome;
+
 #[path = "system_utils.rs"]
 mod system_utils;
 
@@ -756,7 +758,6 @@ pub use workspace_backend::WorkspaceBackend;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sync_bridge::SyncTaskOutcome;
     use tempfile::tempdir;
 
     #[test]

@@ -26,6 +26,19 @@ fn read_src(rel: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
 }
 
+/// 从 `start` 起取最多 `len` 字节的窗口，结束位置回退到最近的 UTF-8 字符边界。
+///
+/// 源码里中文字符占 3 字节，固定字节窗口可能落在字符中间；此函数只做边界回退，
+/// 不改变窗口语义（仍是同一段源码窗口）。
+fn slice_window(src: &str, start: usize, len: usize) -> &str {
+    let target = (start + len).min(src.len());
+    let end = (start..=target)
+        .rev()
+        .find(|i| src.is_char_boundary(*i))
+        .unwrap_or(start);
+    &src[start..end]
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 问题 1 修复验证：Insert/Delete 分支显式排除 changed range，
 //         build_cluster_reflow_slices 不再推断 InsertReveal/DeleteConceal。
@@ -47,7 +60,7 @@ fn issue687_p1_insert_branch_excludes_inserted_range() {
     let build_call_idx = after_insert
         .find("build_cluster_reflow_slices(")
         .expect("build_cluster_reflow_slices call must exist in Insert branch");
-    let call_window = &after_insert[build_call_idx..build_call_idx + 500];
+    let call_window = slice_window(after_insert, build_call_idx, 500);
     // 应包含 inserted_range_tuple 作为 excluded_new_ranges（不再是 &[]）
     assert!(
         call_window.contains("inserted_range_tuple"),
@@ -74,7 +87,7 @@ fn issue687_p1_delete_branch_excludes_deleted_range() {
     let build_call_idx = after_delete
         .find("build_cluster_reflow_slices(")
         .expect("build_cluster_reflow_slices call must exist in Delete branch");
-    let call_window = &after_delete[build_call_idx..build_call_idx + 500];
+    let call_window = slice_window(after_delete, build_call_idx, 500);
     // 应包含 deleted_ranges 作为 excluded_old_ranges（不再是 &[]）
     assert!(
         call_window.contains("&deleted_ranges"),

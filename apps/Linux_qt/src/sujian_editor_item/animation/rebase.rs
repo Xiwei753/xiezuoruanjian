@@ -479,9 +479,12 @@ impl LinuxEditorAnimationCoordinator {
     ) -> Option<PreparedRebaseHandoff> {
         // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
         // - coordinated=true 时：走协同路径，文字与光标绑死，要求有效 caret motion。
-        // - coordinated=false 时：typing_animation_enabled 只决定文字动画，
-        //   smooth_cursor_enabled 只决定光标动画，两者独立。
-        if (!coordinated_animation_enabled && !typing_animation_enabled)
+        // - coordinated=false 时：typing_animation_enabled 只决定文字动画
+        //   （Reflow + InsertReveal/DeleteConceal），smooth_cursor_enabled 只决定光标动画
+        //   （caret motion track）。两者互相独立，同时为 true 不等于协同。
+        let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
+        let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
+        if (!text_animation_enabled && !caret_animation_enabled)
             || is_scrolling
             || is_loading
             || is_applying_format
@@ -490,12 +493,12 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         // Issue #756: valid_caret_motion_track 检查。
-        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务。
-        // - coordinated=false 时：仅在 smooth_cursor_enabled 时才要求 valid_caret_motion_track
-        //   （!smooth_cursor_enabled 时不创建 CaretDriven units，只创建 Reflow）。
+        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务
+        //   （文字动画也不启动）。
+        // - coordinated=false 时：缺少 caret motion 只意味着没有 caret track / 没有
+        //   CaretDriven units（Issue #727 约束 5），文字动画（Reflow）照常播放。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
-        let require_caret_track = coordinated_animation_enabled || smooth_cursor_enabled;
-        if require_caret_track && !valid_caret_motion_track {
+        if coordinated_animation_enabled && !valid_caret_motion_track {
             return None;
         }
 
