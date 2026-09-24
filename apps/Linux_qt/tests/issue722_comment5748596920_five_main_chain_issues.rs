@@ -515,7 +515,8 @@ fn all_five_main_chain_issues_exist() {
     let pipeline = read_src("src/sujian_editor_item/pipeline.rs");
     let coord_render_plan = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     let coord_cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let coord_transaction_builder = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    let coord_transaction_builder =
+        read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let slice = read_src("src/sujian_editor_item/animated_slice.rs");
 
     // 问题1: pipeline.rs::record_visual_transaction 仍传 ctx.scroll_y
@@ -553,7 +554,8 @@ fn all_five_main_chain_issues_exist() {
     // Issue #722 评论 5748596920 修复后：增加了 caret_track_complete 条件，
     // InsertReveal/DeleteConceal 事务必须 caret track 也完成才能释放。
     let issue4_violation = coord_render_plan.contains("fn build_text_animation_plan_with_sample(")
-        && (coord_render_plan.contains("tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)")
+        && (coord_render_plan
+            .contains("tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)")
             || coord_render_plan.contains("tx.units.iter().all(|u| u.progress(frame_now) >= 1.0)"))
         && coord_render_plan.contains("keys_to_complete.push(tx.key)")
         && !coord_render_plan.contains("caret_track_complete");

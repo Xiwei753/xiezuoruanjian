@@ -31,19 +31,26 @@ pub struct CommitPlan {
 ///
 /// 字段语义：
 /// - `rel_path`：incoming 内容在 staging_root 下的相对路径（也是 live target 下的相对路径）。
+/// - `kind`：冲突语义（`BothChanged` 双端修改 / `RemoteDeleted` 远端删除+本地修改）。
+///   `compute_commit_plan` 在 `ThreeWayResult::BothChanged` 分支按 `incoming.is_some()`
+///   显式区分，不再靠 `remote_snapshot_path` 是否存在猜语义（#757）。
 /// - `remote_snapshot_path`：在 commit_helpers 的 `run.cleanup()` 之前由
 ///   `save_conflict_copy` 填入，是相对 live_root 的快照路径（如
 ///   `volumes/v1/chapters/c1/chapter.md.remote-conflict-20260925-012345`）。
 ///   `record_staging_conflicts` 据此填 `SyncConflict.remote_snapshot_path`，
 ///   让 #757 冲突侧栏"用户看到什么就选择什么"——预览展示的远端正文与
 ///   `take_remote` 实际采用的正文是同一份。`None` 表示未保存快照（老数据兼容，
-///   `take_remote` 回退 `pending_take_remote`）。
+///   `take_remote` 回退 `pending_take_remote`）。`RemoteDeleted` 时恒为 `None`
+///   （远端已删除，无 incoming 正文可保存）。
 #[derive(Debug, Clone)]
 pub struct StagingConflict {
     pub rel_path: PathBuf,
     pub base_hash: String,
     pub local_hash: String,
     pub incoming_hash: String,
+    /// 冲突语义：BothChanged（双端修改）或 RemoteDeleted（远端删除+本地修改）。
+    /// 不再靠 remote_snapshot_path 是否存在猜语义。
+    pub kind: crate::sync::types::SyncConflictKind,
     pub remote_snapshot_path: Option<String>,
 }
 

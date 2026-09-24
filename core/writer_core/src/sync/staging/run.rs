@@ -284,13 +284,22 @@ impl StagingRun {
                         apply_incoming(&mut plan, rel, incoming, StagingCommitClass::Content);
                     }
                     ThreeWayResult::BothChanged => {
+                        // incoming.is_some() → 双端都改了 → BothChanged
+                        // incoming.is_none() → 远端删除 + 本地修改 → RemoteDeleted
+                        let kind = if incoming.is_some() {
+                            crate::sync::types::SyncConflictKind::BothChanged
+                        } else {
+                            crate::sync::types::SyncConflictKind::RemoteDeleted
+                        };
                         plan.conflict.push(StagingConflict {
                             rel_path: rel,
                             base_hash,
                             local_hash,
                             incoming_hash,
+                            kind,
                             // 此处尚未保存快照；由 commit_helpers 在 staging cleanup 前
                             // 调 save_conflict_snapshots 填入（#757）。
+                            // RemoteDeleted 不保存快照（远端已删除，无 incoming 正文）。
                             remote_snapshot_path: None,
                         });
                     }

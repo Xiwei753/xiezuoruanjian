@@ -168,6 +168,16 @@ pub fn record_staging_conflicts(
     for sc in staging_conflicts {
         let rel_str = sc.rel_path.to_string_lossy().to_string();
         let rel_unix = rel_str.replace('\\', "/");
+        let description = match sc.kind {
+            crate::sync::types::SyncConflictKind::BothChanged => format!(
+                "three-way conflict: both local and remote changed {}",
+                sc.rel_path.display()
+            ),
+            crate::sync::types::SyncConflictKind::RemoteDeleted => format!(
+                "conflict: remote deleted {} but local modified",
+                sc.rel_path.display()
+            ),
+        };
         let sync_conflict = SyncConflict {
             local_path: rel_str.clone(),
             remote_path: format!("{}/{}", remote_prefix, rel_unix),
@@ -175,11 +185,9 @@ pub fn record_staging_conflicts(
             remote_hash: sc.incoming_hash.clone(),
             base_hash: sc.base_hash.clone(),
             created_at: now_ts,
-            description: format!(
-                "three-way conflict: both local and remote changed {}",
-                sc.rel_path.display()
-            ),
-            kind: crate::sync::types::SyncConflictKind::BothChanged,
+            description,
+            kind: sc.kind,
+            // RemoteDeleted 的 remote_snapshot_path 必须是 None。
             remote_snapshot_path: sc.remote_snapshot_path.clone(),
         };
 

@@ -108,6 +108,12 @@ fn save_conflict_snapshots(
         if sc.remote_snapshot_path.is_some() {
             continue;
         }
+        // 只有 BothChanged 才保存 incoming snapshot。
+        // RemoteDeleted 远端已删除，无 incoming 正文，不保存快照，
+        // remote_snapshot_path 保持 None。
+        if sc.kind != crate::sync::types::SyncConflictKind::BothChanged {
+            continue;
+        }
         let rel_str = sc.rel_path.to_string_lossy().to_string();
         let incoming_path = staging_root.join(&sc.rel_path);
         if !incoming_path.exists() {
