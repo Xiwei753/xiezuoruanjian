@@ -55,11 +55,6 @@ impl AppBackend {
         had_chapter_deleted
     }
 
-    pub(crate) fn trigger_projects_reloaded(&mut self) {
-        // AppBackend 不再对 QML 暴露 projects_reloaded / projectsReloaded signals。
-        // 领域 ProjectBackend 在自己的方法中触发自己的 signals。
-    }
-
     pub(crate) fn reload_tree(&mut self) {
         let before_count = self.cached_tree.len();
         let mut list = QJsonArray::default();
@@ -326,7 +321,6 @@ impl AppBackend {
                 }
 
                 app.reload_tree();
-                app.trigger_projects_reloaded();
             })
         } else {
             self.mutation_error_json(
@@ -372,7 +366,6 @@ impl AppBackend {
                 app.selected_volume_id = Some(data.id.clone());
                 app.selected_chapter_id = None;
                 app.reload_tree();
-                app.trigger_projects_reloaded();
                 app.debug_log(
                     "volume",
                     "create_volume_success",
@@ -428,7 +421,6 @@ impl AppBackend {
                 app.selected_volume_id = Some(volume_id.to_string());
                 app.selected_chapter_id = Some(data.id.clone());
                 app.reload_tree();
-                app.trigger_projects_reloaded();
                 app.debug_log(
                     "chapter",
                     "create_chapter_success",
@@ -475,7 +467,6 @@ impl AppBackend {
                     app.clear_editor_state();
                 }
                 app.reload_tree();
-                app.trigger_projects_reloaded();
                 app.debug_log(
                     "project",
                     "delete_project_success",
@@ -526,7 +517,6 @@ impl AppBackend {
                     app.clear_editor_state();
                 }
                 app.reload_tree();
-                app.trigger_projects_reloaded();
                 app.debug_log(
                     "volume",
                     "delete_volume_success",
@@ -578,7 +568,6 @@ impl AppBackend {
                     app.clear_editor_state();
                 }
                 app.reload_tree();
-                app.trigger_projects_reloaded();
                 app.debug_log(
                     "chapter",
                     "delete_chapter_success",
@@ -631,7 +620,6 @@ impl AppBackend {
         self.selected_volume_id = Some(vol.id.clone());
         self.selected_chapter_id = None;
         self.reload_tree();
-        self.trigger_projects_reloaded();
         Ok(vol)
     }
 
@@ -651,7 +639,6 @@ impl AppBackend {
         self.selected_volume_id = Some(volume_id_str);
         self.selected_chapter_id = Some(chap.id.clone());
         self.reload_tree();
-        self.trigger_projects_reloaded();
         Ok(chap)
     }
 
@@ -675,7 +662,6 @@ impl AppBackend {
             };
             self.typed_envelope_to_result(envelope, |app, _data| {
                 app.reload_tree();
-                app.trigger_projects_reloaded();
             })
         } else {
             let raw_error = WriterError::Other("core api not available".to_string()).to_string();
@@ -695,7 +681,6 @@ impl AppBackend {
             self.clear_editor_state();
         }
         self.reload_tree();
-        self.trigger_projects_reloaded();
         Ok(true)
     }
 
@@ -711,7 +696,6 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重排作品失败: {}", e)),
             }
@@ -743,7 +727,6 @@ impl AppBackend {
             };
             self.typed_envelope_to_result(envelope, |app, _data| {
                 app.reload_tree();
-                app.trigger_projects_reloaded();
             })
         } else {
             let raw_error = WriterError::Other("core api not available".to_string()).to_string();
@@ -767,7 +750,6 @@ impl AppBackend {
             self.clear_editor_state();
         }
         self.reload_tree();
-        self.trigger_projects_reloaded();
         Ok(true)
     }
 
@@ -783,7 +765,6 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重排分卷失败: {}", e)),
             }
@@ -817,7 +798,6 @@ impl AppBackend {
             };
             self.typed_envelope_to_result(envelope, |app, _data| {
                 app.reload_tree();
-                app.trigger_projects_reloaded();
             })
         } else {
             let raw_error = WriterError::Other("core api not available".to_string()).to_string();
@@ -842,7 +822,6 @@ impl AppBackend {
             self.clear_editor_state();
         }
         self.reload_tree();
-        self.trigger_projects_reloaded();
         Ok(true)
     }
 
@@ -864,7 +843,6 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重排章节失败: {}", e)),
             }

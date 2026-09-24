@@ -147,7 +147,8 @@ impl AppBackend {
             || status_str == "unrelated_histories")
             && self.has_workspace()
         {
-            // 改动2: trigger_projects_reloaded 是空函数，已删除调用。
+            // Issue #754 评论 5815901258: trigger_projects_reloaded 已删除，
+            // 领域通知由 ProjectBackend::emit_changed() 负责。
             self.reload_tree();
             SyncOutcomeEffect::ContentChanged
         } else {
@@ -172,7 +173,8 @@ impl AppBackend {
     pub(crate) fn handle_successful_sync_refresh(&mut self) {
         self.reload_tree();
         let chapter_deleted = self.reconcile_selection_after_tree_reload();
-        // 改动2: trigger_projects_reloaded 是空函数，已删除调用。
+        // Issue #754 评论 5815901258: trigger_projects_reloaded 已删除，
+        // 领域通知由 ProjectBackend::emit_changed() 负责。
         if chapter_deleted {
             self.current_save_status = "chapter.deleted_remotely_refreshed".to_string();
         }

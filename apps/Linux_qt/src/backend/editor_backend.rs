@@ -49,8 +49,6 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     error_occurred: qt_signal!(),
     #[allow(dead_code)]
-    selected_item_changed: qt_signal!(),
-    #[allow(dead_code)]
     clear_editor: qt_signal!(),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
@@ -216,11 +214,6 @@ impl EditorBackend {
     ) -> QString {
         let result =
             self.with_app_mut(|app| app.open_chapter_json(project_id, volume_id, chapter_id));
-        if result.is_ok() {
-            // Issue #754 评论 5814866116 改动4: chapter_path_changed 已从 surface 删除，
-            // 只发 selected_item_changed。
-            self.selected_item_changed();
-        }
         result.unwrap_or_else(|_| {
             QString::from(crate::backend::json_utils::borrow_conflict_error_json())
         })
@@ -232,9 +225,6 @@ impl EditorBackend {
         chapter_id: QString,
     ) -> QJsonObject {
         let result = self.with_app_mut(|app| app.open_chapter(project_id, volume_id, chapter_id));
-        if result.is_ok() {
-            self.selected_item_changed();
-        }
         result.unwrap_or_else(|_| {
             qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
         })

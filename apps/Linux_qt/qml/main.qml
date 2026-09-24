@@ -317,10 +317,18 @@ ApplicationWindow {
         // Issue #754 评论 5814866116 改动1: 同步真正修改/重新加载了当前工作区内容时，
         // 由 SyncBackend::sync_content_applied 触发正文/树刷新。
         // onSync_action_completed 只处理同步状态/主题相关刷新，不无条件重载正文。
+        // Issue #754 评论 5815901258: 用 refreshStateImmediate 立即拿到最新 appState，
+        // 再用 reconcileActiveChapter 以权威 appState.selected 收口编辑器——同步删除当前
+        // 章节/分卷/作品时编辑器退回"请选择或新建章节"，不再残留已删除正文。
         function onSync_content_applied() {
-            appController.refreshState(qsTr("刷新工作区内容失败"));
+            appController.refreshStateImmediate(qsTr("刷新工作区内容失败"));
+
             if (appController.inWriting && writingWorkspaceLoader.item) {
-                writingWorkspaceLoader.item.reloadActiveChapter();
+                writingWorkspaceLoader.item.reconcileActiveChapter(
+                    appController.appState && appController.appState.selected
+                        ? appController.appState.selected
+                        : null
+                );
             }
         }
     }

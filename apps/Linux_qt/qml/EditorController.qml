@@ -356,6 +356,29 @@ QtObject {
         return result;
     }
 
+    // Issue #754 评论 5815901258: 清空当前章节编辑器状态。
+    // 用 isLoadingChapter 包住清理，避免清空正文被当成用户编辑触发保存。
+    // 同步删除当前章节/分卷/作品后调用，使编辑器退回"请选择或新建章节"。
+    function clearActiveChapter() {
+        isLoadingChapter = true;
+        try {
+            if (targetEditorItem) {
+                targetEditorItem.set_plain_text("");
+                targetEditorItem.clear_undo_stack();
+            }
+            projectId = "";
+            volumeId = "";
+            chapterId = "";
+            chapterTitle = "";
+            previousEditorText = "";
+            lastSavedEditorText = "";
+            explicitEmptySavePending = false;
+            lastPotentialExplicitClearAtMs = 0;
+        } finally {
+            isLoadingChapter = false;
+        }
+    }
+
     function reportStatsIfChanged(currentText) {
         if (isLoadingChapter || !chapterId || !editorBackendRef) return;
         var newText = currentText === undefined ? getEditorPlainText() : currentText;

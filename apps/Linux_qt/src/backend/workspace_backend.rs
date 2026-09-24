@@ -467,7 +467,6 @@ impl AppBackend {
         self.current_save_status = "未打开工作区".to_string();
         // Clear editor
         // Emit signals
-        self.trigger_projects_reloaded();
     }
 
     // AppBackend::close_workspace

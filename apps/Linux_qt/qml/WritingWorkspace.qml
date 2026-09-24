@@ -213,6 +213,30 @@ Rectangle {
         }
     }
 
+    // Issue #754 评论 5815901258: 外部内容变更（如同步）后的编辑器收口。
+    // 以权威 appState.selected 为准：选中章节存在则 reload/打开，不存在则清空编辑器，
+    // 避免同步删除当前章节/分卷/作品后编辑器仍残留已删除正文。
+    function reconcileActiveChapter(selected) {
+        if (!selected || !selected.chapterId) {
+            editorController.clearActiveChapter();
+            return;
+        }
+
+        if (editorController.projectId !== selected.projectId
+                || editorController.volumeId !== selected.volumeId
+                || editorController.chapterId !== selected.chapterId) {
+            openChapter(
+                selected.projectId || "",
+                selected.volumeId || "",
+                selected.chapterId || "",
+                ""
+            );
+            return;
+        }
+
+        reloadActiveChapter();
+    }
+
     color: dt.bg
 
     SplitView {
