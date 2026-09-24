@@ -1102,8 +1102,10 @@ impl LinuxEditorPipeline {
         if (!text_animation_enabled && !caret_animation_enabled) || ctx.is_scrolling {
             return None;
         }
-        // Issue #756: timeline 时长按本笔真正要播的内容选：只有光标动画时用平滑光标时长。
-        let animation_duration_ms = if text_animation_enabled {
+        // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
+        // 协同时两者都用 typing duration（共享 timeline）；非协同时文字用 typing、光标用 smooth。
+        let text_duration_ms = self.typing_animation_duration_ms;
+        let caret_duration_ms = if ctx.coordinated_animation_enabled {
             self.typing_animation_duration_ms
         } else {
             self.cursor_animation_duration_ms
@@ -1112,7 +1114,8 @@ impl LinuxEditorPipeline {
             result,
             &old.text,
             &new.text,
-            u64::from(animation_duration_ms),
+            u64::from(text_duration_ms),
+            u64::from(caret_duration_ms),
         );
         {
             let (raw_byte_start, raw_byte_end) = motion

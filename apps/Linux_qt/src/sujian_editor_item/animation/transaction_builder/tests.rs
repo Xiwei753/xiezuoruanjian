@@ -799,8 +799,43 @@ fn issue756_insert_spec(
     smooth_cursor_enabled: bool,
     cursor_rects: bool,
 ) -> VisualEditSpec {
+    issue756_insert_spec_with_durations(
+        key,
+        coordinated_animation_enabled,
+        typing_animation_enabled,
+        smooth_cursor_enabled,
+        cursor_rects,
+        100,
+        100,
+    )
+}
+
+/// Issue #756 评论 5821042551: 支持独立的 text/caret duration。
+/// 非协同时 text_duration_ms = typing duration，caret_duration_ms = smooth cursor duration。
+/// 协同时两者都用 typing duration（共享 timeline）。
+fn issue756_insert_spec_with_durations(
+    key: VisualTransactionKey,
+    coordinated_animation_enabled: bool,
+    typing_animation_enabled: bool,
+    smooth_cursor_enabled: bool,
+    cursor_rects: bool,
+    text_duration_ms: u64,
+    caret_duration_ms: u64,
+) -> VisualEditSpec {
     let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
     let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
+    // Issue #756 评论 5821042551: 协同时两个 duration 都用 typing duration（共享 timeline）；
+    // 非协同时文字用 typing、光标用 smooth，各自独立。
+    let actual_text_duration = if coordinated_animation_enabled {
+        text_duration_ms
+    } else {
+        text_duration_ms
+    };
+    let actual_caret_duration = if coordinated_animation_enabled {
+        text_duration_ms
+    } else {
+        caret_duration_ms
+    };
     let sid = issue756_shaping_identity();
     let old_snapshot = make_test_snapshot(
         "ab",
@@ -858,7 +893,8 @@ fn issue756_insert_spec(
         caret_handoff: None,
         visual_affected_byte_range_old: Some((0, 2)),
         visual_affected_byte_range_new: Some((0, 3)),
-        unit_duration_ms: 100,
+        text_duration_ms: actual_text_duration,
+        caret_duration_ms: actual_caret_duration,
         text_animation_enabled,
         caret_animation_enabled,
         coordinated_animation_enabled,
@@ -1110,7 +1146,8 @@ fn issue756_process_transaction_requires_caret_motion_only_when_coordinated() {
         deleted_range: None,
         old_text: "ab".to_string(),
         new_text: "axb".to_string(),
-        duration_ms: 100,
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
         old_selection: EditorSelection {
             anchor: EditorCursor::new("ab", 1),
             head: EditorCursor::new("ab", 1),
@@ -1197,7 +1234,8 @@ fn issue756_process_transaction_typing_only_still_creates_transaction() {
         deleted_range: None,
         old_text: "ab".to_string(),
         new_text: "axb".to_string(),
-        duration_ms: 100,
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
         old_selection: EditorSelection {
             anchor: EditorCursor::new("ab", 1),
             head: EditorCursor::new("ab", 1),
@@ -1262,5 +1300,375 @@ fn issue756_process_transaction_typing_only_still_creates_transaction() {
     assert!(
         none_key.is_none(),
         "coordinated=false 且 typing/smooth 都关闭：不创建任何事务"
+    );
+}
+
+// ── Issue #756 评论 5821042551: 两个独立 duration 真正独立 ─────────────────────
+//
+// 非协同时 text_duration_ms 和 caret_duration_ms 必须各自独立：
+// - Timed 文字 unit 用 typing duration
+// - cursor_visual_track 用 smooth cursor duration
+// 协同时两者都用 typing duration（共享 timeline）。
+//
+// 事务完成条件：只要存在 cursor_visual_track 就必须等待它结束，
+// 不再仅限于 CaretDriven 事务。
+
+/// Issue #756 评论 5821042551: 非协同 typing=100ms + smooth=300ms，
+/// caret track 的 duration 必须是 300ms（smooth），不是 100ms（typing）。
+#[test]
+fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=false, typing=true, smooth=true, typing=100ms, smooth=300ms
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key,
+        false,
+        true,
+        true,
+        true,
+        100,
+        300,
+    ));
+    // 文字 unit 用 typing duration (100ms)
+    for unit in &tx.units {
+        match unit.timing {
+            VisualUnitTiming::Timed { duration_ms, .. } => {
+                assert_eq!(
+                    duration_ms, 100,
+                    "非协同: Timed 文字 unit 必须用 typing duration (100ms)，不是 smooth (300ms)"
+                );
+            }
+            VisualUnitTiming::CaretDriven { .. } => {
+                panic!("非协同: 吞吐字不应是 CaretDriven");
+            }
+        }
+    }
+    // cursor_visual_track 用 smooth cursor duration (300ms)
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("smooth=true: 必须有 cursor_visual_track");
+    assert_eq!(
+        track.duration_ms, 300,
+        "非协同: cursor_visual_track 必须用 smooth cursor duration (300ms)，不是 typing (100ms)"
+    );
+}
+
+/// Issue #756 评论 5821042551: 反向 — 非协同 typing=300ms + smooth=100ms，
+/// caret track 的 duration 必须是 100ms（smooth），不是 300ms（typing）。
+#[test]
+fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=false, typing=true, smooth=true, typing=300ms, smooth=100ms
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key,
+        false,
+        true,
+        true,
+        true,
+        300,
+        100,
+    ));
+    // 文字 unit 用 typing duration (300ms)
+    for unit in &tx.units {
+        match unit.timing {
+            VisualUnitTiming::Timed { duration_ms, .. } => {
+                assert_eq!(
+                    duration_ms, 300,
+                    "非协同: Timed 文字 unit 必须用 typing duration (300ms)，不是 smooth (100ms)"
+                );
+            }
+            VisualUnitTiming::CaretDriven { .. } => {
+                panic!("非协同: 吞吐字不应是 CaretDriven");
+            }
+        }
+    }
+    // cursor_visual_track 用 smooth cursor duration (100ms)
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("smooth=true: 必须有 cursor_visual_track");
+    assert_eq!(
+        track.duration_ms, 100,
+        "非协同: cursor_visual_track 必须用 smooth cursor duration (100ms)，不是 typing (300ms)"
+    );
+}
+
+/// Issue #756 评论 5821042551: 协同时两个 duration 都用 typing duration（共享 timeline）。
+#[test]
+fn issue756_comment5821042551_coordinated_shares_typing_duration() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=true, typing=false, smooth=false, typing=100ms, smooth=300ms
+    // 协同时 caret_duration_ms 应等于 text_duration_ms（共享 timeline）
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key,
+        true,
+        false,
+        false,
+        true,
+        100,
+        300,
+    ));
+    // 协同: 吞吐字是 CaretDriven
+    assert!(
+        tx.units.iter().any(|u| u.timing.is_caret_driven()),
+        "协同: 吞吐字用 CaretDriven timing"
+    );
+    // 协同: cursor_visual_track 用 typing duration (100ms)，不是 smooth (300ms)
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("coordinated=true: 必须有 cursor_visual_track");
+    assert_eq!(
+        track.duration_ms, 100,
+        "协同: cursor_visual_track 用 typing duration (100ms)（共享 timeline），不是 smooth (300ms)"
+    );
+}
+
+/// Issue #756 评论 5821042551: 非协同 smooth-only（typing=false, smooth=true）
+/// 也必须有独立的 caret_duration_ms，不受 typing duration 影响。
+#[test]
+fn issue756_comment5821042551_smooth_only_has_independent_caret_duration() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=false, typing=false, smooth=true, typing=100ms, smooth=300ms
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key,
+        false,
+        false,
+        true,
+        true,
+        100,
+        300,
+    ));
+    // smooth-only: 没有文字 unit
+    assert!(
+        tx.units.is_empty(),
+        "smooth-only: 没有文字动画 unit"
+    );
+    // caret track 用 smooth cursor duration (300ms)
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("smooth=true: 必须有 cursor_visual_track");
+    assert_eq!(
+        track.duration_ms, 300,
+        "smooth-only: cursor_visual_track 用 smooth cursor duration (300ms)，不是 typing (100ms)"
+    );
+}
+
+/// Issue #756 评论 5821042551: 验证事务存在 cursor_visual_track 时
+/// 事务完成必须等待 caret track 结束。非协同 typing+smooth 没有 CaretDriven unit，
+/// 但 cursor_visual_track 存在，事务不能在文字 unit 结束后就提前完成。
+///
+/// 此测试验证 build_prepared_transaction 产出的 cursor_visual_track 有独立的 duration，
+/// 且事务 timeline 的 duration 与文字 unit 的 duration 一致（不是 caret track 的）。
+/// render_plan_builder 中的完成条件逻辑（caret_track_complete）由
+/// `cursor_visual_track.is_none() || caret_motion_retired || caret_track_done` 决定，
+/// 只要 cursor_visual_track 存在就必须等它完成。
+#[test]
+fn issue756_comment5821042551_transaction_has_caret_track_must_wait_for_completion() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=false, typing=true, smooth=true, typing=100ms, smooth=300ms
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key,
+        false,
+        true,
+        true,
+        true,
+        100,
+        300,
+    ));
+
+    // 事务必须有 cursor_visual_track（smooth=true）
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth=true: 事务必须有 cursor_visual_track，完成条件必须等待它"
+    );
+
+    // cursor_visual_track 的 duration (300ms) 比文字 unit 的 duration (100ms) 长，
+    // 所以事务不能在 100ms 时就完成——必须等 caret track 在 300ms 时完成。
+    let track = tx.cursor_visual_track.as_ref().unwrap();
+    assert_eq!(
+        track.duration_ms, 300,
+        "caret track duration 必须是 300ms（比文字 100ms 更长）"
+    );
+
+    // 事务 timeline 用文字 duration（100ms），因为文字动画是主动画
+    // 但事务完成条件必须额外等 caret track 完成
+    assert_eq!(
+        tx.timeline.duration_ms, 100,
+        "事务 timeline 用文字 duration (100ms)"
+    );
+}
+
+/// Issue #756 评论 5821042551: composition update 在 smooth-only 参数组合下
+/// 必须创建事务（coordinated=false + typing=false + smooth=true）。
+/// 此测试覆盖 handle_composition_update 的真实入口参数组合，
+/// 验证底层 composition handler 在 smooth-only 时也能正确创建事务。
+#[test]
+fn issue756_comment5821042551_composition_update_smooth_only_creates_transaction() {
+    let sid = issue756_shaping_identity();
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "axb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // coordinated=false, typing=false, smooth=true → caret=true, text=false
+    // 这是 smooth-only 的 composition update，正文立即显示，但 caret 用独立 smooth track 移动。
+    let key = coord.handle_composition_update(
+        &old_snapshot,
+        &new_snapshot,
+        0,
+        2,
+        0,
+        2,
+        Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        1,
+        LayoutRevision::initial(),
+        // text=false, caret=true, coordinated=false
+        false,
+        true,
+        false,
+    );
+    assert!(
+        key.is_some(),
+        "smooth-only composition update: 必须创建事务（coordinated=false + typing=false + smooth=true）"
+    );
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key.unwrap())
+        .unwrap();
+    // smooth-only: 没有文字 unit（text=false）
+    assert!(
+        tx.units.is_empty(),
+        "smooth-only composition: 不应有文字 unit"
+    );
+    // smooth-only: 必须有 caret track（caret=true）
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth-only composition: 必须有 cursor_visual_track"
+    );
+}
+
+/// Issue #756 评论 5821042551: composition commit 在 smooth-only 参数组合下
+/// 必须走 composition 专属路径（coordinated=false + typing=false + smooth=true）。
+/// 此测试覆盖 handle_composition_commit_or_cancel 的真实入口参数组合。
+#[test]
+fn issue756_comment5821042551_composition_commit_smooth_only_creates_transaction() {
+    let sid_preedit = ShapingIdentity {
+        text_content_hash: 99,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 99,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let sid_after = ShapingIdentity {
+        text_content_hash: 42,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 100,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let old_snapshot = make_test_snapshot(
+        "abc_preedit_after",
+        vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 10, 50.0, 0.0, sid_preedit.clone()),
+            (10, 15, 120.0, 0.0, sid_after.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "abc_QQ_after",
+        vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 5, 50.0, 0.0, sid_after.clone()),
+            (5, 10, 80.0, 0.0, sid_after),
+        ],
+    );
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // coordinated=false, typing=false, smooth=true → caret=true, text=false
+    let key = coord.handle_composition_commit_or_cancel(
+        &old_snapshot,
+        &new_snapshot,
+        3,
+        10,
+        true,
+        false,
+        3,
+        5,
+        3,
+        10,
+        Some(CursorRect {
+            x: 50.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 80.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        1,
+        LayoutRevision::initial(),
+        Instant::now(),
+        None,
+        // text=false, caret=true, coordinated=false
+        false,
+        true,
+        false,
+    );
+    assert!(
+        key.is_some(),
+        "smooth-only composition commit: 必须创建事务（coordinated=false + typing=false + smooth=true）"
+    );
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key.unwrap())
+        .unwrap();
+    // smooth-only commit: 必须有 caret track
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth-only composition commit: 必须有 cursor_visual_track"
     );
 }

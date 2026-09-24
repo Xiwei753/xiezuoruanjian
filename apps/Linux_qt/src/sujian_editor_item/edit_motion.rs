@@ -154,7 +154,8 @@ impl EditorAnimationKind {
 /// - `inserted_range`：新文本坐标系中的插入范围，从 `display_patches` 派生
 /// - `deleted_range`：旧文本坐标系中的删除范围，从 `display_patches` 派生
 /// - `old_text` / `new_text`：编辑前后的纯文本快照
-/// - `duration_ms`：动画时长，由 pipeline 从 Qt 设置传入
+/// - `text_duration_ms` / `caret_duration_ms`：文字 unit 与 cursor track 的动画时长，
+///   由 pipeline 从 Qt 设置传入（Issue #756 评论 5821042551 拆分独立 duration）
 /// - `old_selection` / `new_selection`：编辑前后的选区，从 `EditorEditResult` 直接取
 /// - `old_cursor_rect` / `new_cursor_rect`：由 pipeline 从布局快照计算后填入
 #[derive(Clone, Debug)]
@@ -164,7 +165,8 @@ pub(crate) struct PreparedEditMotion {
     pub deleted_range: Option<Utf8ByteRange>,
     pub old_text: String,
     pub new_text: String,
-    pub duration_ms: u64,
+    pub text_duration_ms: u64,
+    pub caret_duration_ms: u64,
     pub old_selection: EditorSelection,
     pub new_selection: EditorSelection,
     pub old_cursor_rect: Option<CursorRect>,
@@ -174,14 +176,16 @@ pub(crate) struct PreparedEditMotion {
 impl PreparedEditMotion {
     /// 从 `EditorEditResult` + old/new 文本快照构造 `PreparedEditMotion`。
     ///
-    /// `duration_ms` 由 pipeline 的 `typing_animation_duration_ms` 传入。
+    /// `text_duration_ms` / `caret_duration_ms` 由 pipeline 传入
+    ///（Issue #756 评论 5821042551：文字与光标各自独立的时长）。
     /// `old_cursor_rect` / `new_cursor_rect` 初始为 `None`，由 pipeline 在布局
     /// 计算后直接赋值到返回的结构体字段。
     pub fn from_edit_result(
         result: &EditorEditResult,
         old_text: &str,
         new_text: &str,
-        duration_ms: u64,
+        text_duration_ms: u64,
+        caret_duration_ms: u64,
     ) -> Self {
         let kind = EditorAnimationKind::from_operation_kind(result.operation_kind);
         let (inserted_range, deleted_range) =
@@ -192,7 +196,8 @@ impl PreparedEditMotion {
             deleted_range,
             old_text: old_text.to_string(),
             new_text: new_text.to_string(),
-            duration_ms,
+            text_duration_ms,
+            caret_duration_ms,
             old_selection: result.old_selection.clone(),
             new_selection: result.new_selection.clone(),
             old_cursor_rect: None,

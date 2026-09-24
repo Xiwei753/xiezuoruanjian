@@ -499,9 +499,11 @@ impl SujianEditorItem {
 
         // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
         // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
-        // Issue #756: composition commit 动画进入条件 = coordinated || typing。
+        // Issue #756 评论 5821042551: composition commit 动画进入条件 = coordinated || typing || smooth。
         let composition = if commit.was_composing
-            && (self.current_coordinated_animation_enabled || self.current_typing_animation_enabled)
+            && (self.current_coordinated_animation_enabled
+                || self.current_typing_animation_enabled
+                || self.current_smooth_cursor_enabled)
         {
             Some(CompositionCommitParams {
                 pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
@@ -628,9 +630,11 @@ impl SujianEditorItem {
             EditorTransactionCause::TypingCommit
         };
 
-        // Issue #756: composition commit 动画进入条件 = coordinated || typing。
+        // Issue #756 评论 5821042551: composition commit 动画进入条件 = coordinated || typing || smooth。
         let composition = if commit.was_composing
-            && (self.current_coordinated_animation_enabled || self.current_typing_animation_enabled)
+            && (self.current_coordinated_animation_enabled
+                || self.current_typing_animation_enabled
+                || self.current_smooth_cursor_enabled)
         {
             Some(CompositionCommitParams {
                 pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),

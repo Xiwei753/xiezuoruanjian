@@ -538,13 +538,12 @@ impl LinuxEditorAnimationCoordinator {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
             }
-            let caret_track_done = if has_caret_driven_units {
-                match tx.cursor_visual_track.as_ref() {
-                    Some(track) => track.progress(sample.frame_now) >= 1.0,
-                    None => true,
-                }
-            } else {
-                true
+            // Issue #756 评论 5821042551: 只要本事务存在需要播放的 cursor_visual_track，
+            // 事务完成就必须同时等待它结束；协同与非协同只决定文字是否消费这个 track，
+            // 不决定 track 是否属于事务生命周期。
+            let caret_track_done = match tx.cursor_visual_track.as_ref() {
+                Some(track) => track.progress(sample.frame_now) >= 1.0,
+                None => true,
             };
             // 完成判断按 kind 分开: CaretDriven unit 的完成由 caret_track_done 决定，
             // Timed unit（Reflow + typing-driven 吞吐字）看 progress >= 1.0。
@@ -559,10 +558,11 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 })
             };
-            // caret_track_complete: CaretDriven 事务必须 caret track 也完成。
-            // 退休后永远视为完成，不会重新接管旧 caret 轨迹。
+            // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成，
+            // 不再仅限于 CaretDriven 事务。非协同 typing+smooth 没有 CaretDriven unit，
+            // 但 smooth cursor duration 可能比 typing 更长，caret track 不能被提前丢弃。
             let caret_track_complete =
-                !has_caret_driven_units || tx.caret_motion_retired || caret_track_done;
+                tx.cursor_visual_track.is_none() || tx.caret_motion_retired || caret_track_done;
 
             if all_units_done && caret_track_complete {
                 // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。

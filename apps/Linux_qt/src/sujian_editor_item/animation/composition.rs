@@ -125,7 +125,12 @@ impl LinuxEditorAnimationCoordinator {
             caret_handoff,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            unit_duration_ms: u64::from(self.typing_animation_duration_ms),
+            text_duration_ms: u64::from(self.typing_animation_duration_ms),
+            caret_duration_ms: u64::from(if coordinated_animation_enabled {
+                self.typing_animation_duration_ms
+            } else {
+                self.cursor_animation_duration_ms
+            }),
             // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
             text_animation_enabled,
             caret_animation_enabled,
@@ -327,7 +332,12 @@ impl LinuxEditorAnimationCoordinator {
             caret_handoff,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            unit_duration_ms: u64::from(self.typing_animation_duration_ms),
+            text_duration_ms: u64::from(self.typing_animation_duration_ms),
+            caret_duration_ms: u64::from(if coordinated_animation_enabled {
+                self.typing_animation_duration_ms
+            } else {
+                self.cursor_animation_duration_ms
+            }),
             // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
             text_animation_enabled,
             caret_animation_enabled,

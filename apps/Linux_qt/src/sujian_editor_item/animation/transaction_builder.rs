@@ -99,7 +99,12 @@ pub(crate) struct VisualEditSpec {
     pub(crate) caret_handoff: Option<RebaseCaretHandoff>,
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
-    pub(crate) unit_duration_ms: u64,
+    /// Issue #756 评论 5821042551: 文字 unit（InsertReveal/DeleteConceal/Reflow）的时长。
+    /// 非协同时 = typing_animation_duration_ms；协同时 = typing_animation_duration_ms（共享 timeline）。
+    pub(crate) text_duration_ms: u64,
+    /// Issue #756 评论 5821042551: cursor visual track 的时长。
+    /// 非协同时 = cursor_animation_duration_ms；协同时 = typing_animation_duration_ms（共享 timeline）。
+    pub(crate) caret_duration_ms: u64,
     /// Issue #756: 文字动画开关（ReflowMove/ReflowCrossFade + InsertReveal/DeleteConceal）。
     /// coordinated=true 或 typing_animation_enabled=true 时为 true。
     pub(crate) text_animation_enabled: bool,
@@ -200,12 +205,12 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
             AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
                 PreparedVisualUnit::wrap_with_coordinated(
                     s,
-                    spec.unit_duration_ms,
+                    spec.text_duration_ms,
                     spec.coordinated_animation_enabled,
                 )
             }
             AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                PreparedVisualUnit::wrap(s, spec.unit_duration_ms)
+                PreparedVisualUnit::wrap(s, spec.text_duration_ms)
             }
         })
         .collect();
@@ -230,7 +235,7 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
             spec.new_cursor_line_top,
             spec.new_cursor_line_bottom,
             spec.caret_handoff.clone(),
-            spec.unit_duration_ms,
+            spec.caret_duration_ms,
         )
     } else {
         None
@@ -257,7 +262,11 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         key: spec.key,
         state: TextVisualTransactionState::Pending,
         operation_kind: spec.operation_kind,
-        timeline: TransactionTimeline::new(spec.unit_duration_ms),
+        timeline: TransactionTimeline::new(if spec.text_animation_enabled {
+            spec.text_duration_ms
+        } else {
+            spec.caret_duration_ms
+        }),
         units,
         old_cursor_rect: spec.old_cursor_rect,
         new_cursor_rect: spec.new_cursor_rect,
@@ -1129,7 +1138,8 @@ impl LinuxEditorAnimationCoordinator {
                     caret_handoff,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
-                    unit_duration_ms: vt.duration_ms,
+                    text_duration_ms: vt.text_duration_ms,
+                    caret_duration_ms: vt.caret_duration_ms,
                     text_animation_enabled,
                     caret_animation_enabled,
                     coordinated_animation_enabled,
@@ -1193,7 +1203,8 @@ impl LinuxEditorAnimationCoordinator {
                     caret_handoff,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
-                    unit_duration_ms: vt.duration_ms,
+                    text_duration_ms: vt.text_duration_ms,
+                    caret_duration_ms: vt.caret_duration_ms,
                     text_animation_enabled,
                     caret_animation_enabled,
                     coordinated_animation_enabled,
@@ -1341,7 +1352,8 @@ impl LinuxEditorAnimationCoordinator {
                         caret_handoff,
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
-                        unit_duration_ms: vt.duration_ms,
+                        text_duration_ms: vt.text_duration_ms,
+                    caret_duration_ms: vt.caret_duration_ms,
                         text_animation_enabled,
                         caret_animation_enabled,
                         coordinated_animation_enabled,
@@ -1445,7 +1457,8 @@ impl LinuxEditorAnimationCoordinator {
                     caret_handoff,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
-                    unit_duration_ms: vt.duration_ms,
+                    text_duration_ms: vt.text_duration_ms,
+                    caret_duration_ms: vt.caret_duration_ms,
                     text_animation_enabled,
                     caret_animation_enabled,
                     coordinated_animation_enabled,
