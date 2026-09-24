@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalSettingsDto {
     pub theme_mode: Option<String>,
     pub appearance_mode: String,
@@ -552,6 +553,7 @@ impl From<crate::settings::BuiltinTheme> for BuiltinThemeDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct DeviceInfoDto {
     pub device_id: String,
     pub device_class: String,

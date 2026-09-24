@@ -14,23 +14,8 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_projects() -> *mut c_char {
     match with_app_service(|svc| {
-        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
-        let json_arr: Vec<serde_json::Value> = projects
-            .iter()
-            .map(|p| {
-                let stats = svc.get_project_stats(p.id.clone()).ok();
-                serde_json::json!({
-                    "id": p.id,
-                    "title": p.title,
-                    "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
-                    "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
-                    "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
-                    "createdAt": p.created_at,
-                    "updatedAt": p.updated_at
-                })
-            })
-            .collect();
-        Ok(json_arr)
+        let summaries = svc.list_project_summaries().map_err(|e| format!("{}", e))?;
+        Ok(summaries)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("PROJECT_NOT_FOUND", &e),
@@ -52,65 +37,10 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
         }
     };
     match with_app_service(|svc| {
-        let project = svc
-            .list_projects()
-            .map_err(|e| format!("{}", e))?
-            .into_iter()
-            .find(|p| p.id == pid)
-            .ok_or_else(|| "project not found".to_string())?;
-
-        let stats = svc.get_project_stats(pid.clone()).ok();
-        let project_json = serde_json::json!({
-            "id": project.id,
-            "title": project.title,
-            "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
-            "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
-            "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
-            "createdAt": project.created_at,
-            "updatedAt": project.updated_at
-        });
-
-        let volumes = svc
-            .list_volumes(pid.clone())
+        let snapshot = svc
+            .get_project_workspace_snapshot(pid)
             .map_err(|e| format!("{}", e))?;
-        let mut volume_trees = Vec::new();
-        for vol in volumes {
-            let chapters = svc
-                .list_chapters(pid.clone(), vol.id.clone())
-                .unwrap_or_default();
-            let vol_json = serde_json::json!({
-                "id": vol.id,
-                "projectId": pid,
-                "title": vol.title,
-                "order": vol.order,
-                "chapterCount": chapters.len(),
-                "createdAt": vol.created_at,
-                "updatedAt": vol.updated_at
-            });
-            let chapters_json: Vec<serde_json::Value> = chapters
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "id": c.id,
-                        "volumeId": vol.id,
-                        "title": c.title,
-                        "wordCount": c.word_count,
-                        "order": c.order,
-                        "updatedAt": c.updated_at,
-                        "createdAt": c.created_at
-                    })
-                })
-                .collect();
-            volume_trees.push(serde_json::json!({
-                "volume": vol_json,
-                "chapters": chapters_json
-            }));
-        }
-
-        Ok(serde_json::json!({
-            "project": project_json,
-            "volumes": volume_trees
-        }))
+        Ok(snapshot)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("PROJECT_NOT_FOUND", &e),
@@ -131,15 +61,7 @@ pub unsafe extern "C" fn writer_core_create_project(name: *const c_char) -> *mut
     // 不再绕过 workspace history 协议。
     match with_app_service(|svc| {
         let project = svc.create_project(title).map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": project.id,
-            "title": project.title,
-            "volumeCount": 0,
-            "chapterCount": 0,
-            "totalWordCount": 0,
-            "createdAt": project.created_at,
-            "updatedAt": project.updated_at
-        }))
+        Ok(project)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("PROJECT_ALREADY_EXISTS", &e),
@@ -164,24 +86,7 @@ pub unsafe extern "C" fn writer_core_list_volumes(project_id: *const c_char) -> 
         let volumes = svc
             .list_volumes(pid.clone())
             .map_err(|e| format!("{}", e))?;
-        let json_arr: Vec<serde_json::Value> = volumes
-            .iter()
-            .map(|v| {
-                let chapters = svc
-                    .list_chapters(pid.clone(), v.id.clone())
-                    .unwrap_or_default();
-                serde_json::json!({
-                    "id": v.id,
-                    "projectId": pid,
-                    "title": v.title,
-                    "order": v.order,
-                    "chapterCount": chapters.len(),
-                    "createdAt": v.created_at,
-                    "updatedAt": v.updated_at
-                })
-            })
-            .collect();
-        Ok(json_arr)
+        Ok(volumes)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("VOLUME_NOT_FOUND", &e),
@@ -213,15 +118,7 @@ pub unsafe extern "C" fn writer_core_create_volume(
         let vol = svc
             .create_volume(pid.clone(), title)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": vol.id,
-            "projectId": pid,
-            "title": vol.title,
-            "order": vol.order,
-            "chapterCount": 0,
-            "createdAt": vol.created_at,
-            "updatedAt": vol.updated_at
-        }))
+        Ok(vol)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("VOLUME_ALREADY_EXISTS", &e),
@@ -258,21 +155,7 @@ pub unsafe extern "C" fn writer_core_list_chapters(
         let chapters = svc
             .list_chapters(pid.clone(), vid.clone())
             .map_err(|e| format!("{}", e))?;
-        let json_arr: Vec<serde_json::Value> = chapters
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "id": c.id,
-                    "volumeId": vid,
-                    "title": c.title,
-                    "wordCount": c.word_count,
-                    "order": c.order,
-                    "updatedAt": c.updated_at,
-                    "createdAt": c.created_at
-                })
-            })
-            .collect();
-        Ok(json_arr)
+        Ok(chapters)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("CHAPTER_NOT_FOUND", &e),
@@ -314,15 +197,7 @@ pub unsafe extern "C" fn writer_core_create_chapter(
         let chapter = svc
             .create_chapter(pid.clone(), vid.clone(), title)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": chapter.id,
-            "volumeId": vid,
-            "title": chapter.title,
-            "wordCount": chapter.word_count,
-            "order": chapter.order,
-            "updatedAt": chapter.updated_at,
-            "createdAt": chapter.created_at
-        }))
+        Ok(chapter)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("CHAPTER_ALREADY_EXISTS", &e),
@@ -369,16 +244,7 @@ pub unsafe extern "C" fn writer_core_open_chapter(
         let result = svc
             .open_chapter(pid.clone(), vid.clone(), cid)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": result.meta.id,
-            "title": result.meta.title,
-            "content": result.content,
-            "wordCount": result.meta.word_count,
-            "volumeId": vid,
-            "projectId": pid,
-            "updatedAt": result.meta.updated_at,
-            "createdAt": result.meta.created_at
-        }))
+        Ok(result)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("CHAPTER_NOT_FOUND", &e),
@@ -430,11 +296,7 @@ pub unsafe extern "C" fn writer_core_save_chapter(
         let receipt = svc
             .save_chapter_content_with_options(pid, vid, cid, text, false)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "success": true,
-            "wordCount": receipt.word_count,
-            "savedAt": receipt.updated_at,
-        }))
+        Ok(receipt)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => {
@@ -528,11 +390,7 @@ pub unsafe extern "C" fn writer_core_get_project_stats(project_id: *const c_char
         let stats = svc
             .get_project_stats(pid.clone())
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "totalWordCount": stats.total_word_count,
-            "volumeCount": stats.volume_count,
-            "chapterCount": stats.chapter_count
-        }))
+        Ok(stats)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("PROJECT_NOT_FOUND", &e),
@@ -850,11 +708,7 @@ pub unsafe extern "C" fn writer_core_clear_chapter(
         let receipt = svc
             .clear_chapter_content(pid, vid, cid)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "success": true,
-            "wordCount": receipt.word_count,
-            "savedAt": receipt.updated_at
-        }))
+        Ok(receipt)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("CHAPTER_NOT_FOUND", &e),

@@ -37,8 +37,11 @@ export struct SettingsScreen {
     editorTypingAnimationDurationMs: 100,
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
-    linuxQtSidebarWidth: 0,
-    linuxQtEditorWidth: 0
+    desktopSidebarWidth: 0,
+    desktopEditorWidth: 0,
+    editorCoordinatedTextCursorAnimationEnabled: false,
+    diagnosticsEnabled: false,
+    diagnosticsVerbose: false
   }
   @State paletteRecords: ThemePaletteRecordDto[] = []
   @State builtinThemes: BuiltinThemeDto[] = []

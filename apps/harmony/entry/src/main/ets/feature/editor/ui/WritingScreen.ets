@@ -71,8 +71,11 @@ export struct WritingScreen {
     editorTypingAnimationDurationMs: 100,
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
-    linuxQtSidebarWidth: 0,
-    linuxQtEditorWidth: 0
+    desktopSidebarWidth: 0,
+    desktopEditorWidth: 0,
+    editorCoordinatedTextCursorAnimationEnabled: false,
+    diagnosticsEnabled: false,
+    diagnosticsVerbose: false
   }
   @State lastSavedContent: string = ''
   // 跨设备稳定内容身份（Issue #629 评论 5 第 8 节）。

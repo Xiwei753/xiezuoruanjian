@@ -1,6 +1,7 @@
 import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRender, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
@@ -16,35 +17,37 @@ export class NativeStarMapBridge {
   async listStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListStarMaps()
-      return this.core.parseEnvelope<StarMapMeta[]>(jsonStr)
+      return this.core.decodeEnvelope<StarMapMeta[]>(jsonStr,
+        (d: Object) => decodeArray<StarMapMeta>(d, decodeStarMapMeta, 'StarMapMeta'))
     } catch (e) { return nativeError<StarMapMeta[]>(e) }
   }
 
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListStarMapsForProject(projectId)
-      return this.core.parseEnvelope<StarMapMeta[]>(jsonStr)
+      return this.core.decodeEnvelope<StarMapMeta[]>(jsonStr,
+        (d: Object) => decodeArray<StarMapMeta>(d, decodeStarMapMeta, 'StarMapMeta'))
     } catch (e) { return nativeError<StarMapMeta[]>(e) }
   }
 
   async getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetStarMap(starmapId)
-      return this.core.parseEnvelope<StarMapMeta>(jsonStr)
+      return this.core.decodeEnvelope<StarMapMeta>(jsonStr, decodeStarMapMeta)
     } catch (e) { return nativeError<StarMapMeta>(e) }
   }
 
   async getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetStarMapGraph(starmapId)
-      return this.core.parseEnvelope<StarMapGraph>(jsonStr)
+      return this.core.decodeEnvelope<StarMapGraph>(jsonStr, decodeStarMapGraph)
     } catch (e) { return nativeError<StarMapGraph>(e) }
   }
 
   async createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeCreateStarMap(title, description)
-      return this.core.parseEnvelope<StarMapMeta>(jsonStr)
+      return this.core.decodeEnvelope<StarMapMeta>(jsonStr, decodeStarMapMeta)
     } catch (e) { return nativeError<StarMapMeta>(e) }
   }
 
@@ -72,21 +75,22 @@ export class NativeStarMapBridge {
   async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetStarMapLayout(starmapId)
-      return this.core.parseEnvelope<StarMapLayout>(jsonStr)
+      return this.core.decodeEnvelope<StarMapLayout>(jsonStr, decodeStarMapLayout)
     } catch (e) { return nativeError<StarMapLayout>(e) }
   }
 
   async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetStarMapMotionPolicy()
-      return this.core.parseEnvelope<StarMapMotionPolicy>(jsonStr)
+      return this.core.decodeEnvelope<StarMapMotionPolicy>(jsonStr, decodeStarMapMotionPolicy)
     } catch (e) { return nativeError<StarMapMotionPolicy>(e) }
   }
 
   async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
-      return this.core.parseEnvelope<StarMapEdgeRender[]>(jsonStr)
+      return this.core.decodeEnvelope<StarMapEdgeRender[]>(jsonStr,
+        (d: Object) => decodeArray<StarMapEdgeRender>(d, decodeStarMapEdgeRender, 'StarMapEdgeRender'))
     } catch (e) { return nativeError<StarMapEdgeRender[]>(e) }
   }
 }

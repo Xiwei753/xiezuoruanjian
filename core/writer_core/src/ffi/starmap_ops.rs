@@ -1,6 +1,7 @@
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
+use crate::api::StarMapMetaDto;
 
 #[no_mangle]
 /// # Safety
@@ -10,23 +11,7 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 pub unsafe extern "C" fn writer_core_list_starmaps() -> *mut c_char {
     match with_app_service(|svc| {
         let starmaps = svc.list_starmaps().map_err(|e| format!("{}", e))?;
-        let json_arr: Vec<serde_json::Value> = starmaps
-            .iter()
-            .map(|sm| {
-                serde_json::json!({
-                    "id": sm.starmap_id,
-                    "title": sm.title,
-                    "description": sm.description,
-                    "nodeCount": sm.node_count,
-                    "edgeCount": sm.edge_count,
-                    "projectId": sm.project_id,
-                    "createdAt": sm.created_at,
-                    "updatedAt": sm.updated_at,
-                    "accentColor": sm.accent_color
-                })
-            })
-            .collect();
-        Ok(json_arr)
+        Ok(starmaps)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
@@ -54,23 +39,8 @@ pub unsafe extern "C" fn writer_core_list_starmaps_for_project(
         let starmaps = svc
             .list_starmaps_for_project(&pid)
             .map_err(|e| format!("{}", e))?;
-        let json_arr: Vec<serde_json::Value> = starmaps
-            .iter()
-            .map(|sm| {
-                serde_json::json!({
-                    "id": sm.starmap_id,
-                    "title": sm.title,
-                    "description": sm.description,
-                    "nodeCount": sm.node_count,
-                    "edgeCount": sm.edge_count,
-                    "projectId": sm.project_id,
-                    "createdAt": sm.created_at,
-                    "updatedAt": sm.updated_at,
-                    "accentColor": sm.accent_color
-                })
-            })
-            .collect();
-        Ok(json_arr)
+        let dtos: Vec<StarMapMetaDto> = starmaps.into_iter().map(StarMapMetaDto::from).collect();
+        Ok(dtos)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
@@ -94,17 +64,7 @@ pub unsafe extern "C" fn writer_core_get_starmap(starmap_id: *const c_char) -> *
     };
     match with_app_service(|svc| {
         let sm = svc.get_starmap(&sid).map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": sm.starmap_id,
-            "title": sm.title,
-            "description": sm.description,
-            "nodeCount": sm.node_count,
-            "edgeCount": sm.edge_count,
-            "projectId": sm.project_id,
-            "createdAt": sm.created_at,
-            "updatedAt": sm.updated_at,
-            "accentColor": sm.accent_color
-        }))
+        Ok(StarMapMetaDto::from(sm))
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
@@ -159,17 +119,7 @@ pub unsafe extern "C" fn writer_core_create_starmap(
     };
     match with_app_service(|svc| {
         let sm = svc.create_starmap(t, d).map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": sm.starmap_id,
-            "title": sm.title,
-            "description": sm.description,
-            "nodeCount": sm.node_count,
-            "edgeCount": sm.edge_count,
-            "projectId": sm.project_id,
-            "createdAt": sm.created_at,
-            "updatedAt": sm.updated_at,
-            "accentColor": sm.accent_color
-        }))
+        Ok(sm)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_ALREADY_EXISTS", &e),
@@ -231,17 +181,7 @@ pub unsafe extern "C" fn writer_core_rename_starmap(
         let sm = svc
             .rename_starmap_raw(&sid, &t)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "id": sm.starmap_id,
-            "title": sm.title,
-            "description": sm.description,
-            "nodeCount": sm.node_count,
-            "edgeCount": sm.edge_count,
-            "projectId": sm.project_id,
-            "createdAt": sm.created_at,
-            "updatedAt": sm.updated_at,
-            "accentColor": sm.accent_color
-        }))
+        Ok(StarMapMetaDto::from(sm))
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),

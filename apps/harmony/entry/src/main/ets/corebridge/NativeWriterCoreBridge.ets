@@ -14,6 +14,7 @@ import { NativeSettingsBridge } from './native/NativeSettingsBridge'
 import { NativeSyncBridge } from './native/NativeSyncBridge'
 import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
+import { decodeLayoutContract, decodeScreenPolicy } from './codec/CoreWireDecoders'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
@@ -365,7 +366,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(capabilities))
-      return this.core.parseEnvelope<LayoutContract>(jsonStr)
+      return this.core.decodeEnvelope<LayoutContract>(jsonStr, decodeLayoutContract)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
@@ -376,7 +377,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeResolveScreenPolicy(JSON.stringify(screenRole))
-      return this.core.parseEnvelope<ScreenPolicy>(jsonStr)
+      return this.core.decodeEnvelope<ScreenPolicy>(jsonStr, decodeScreenPolicy)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }

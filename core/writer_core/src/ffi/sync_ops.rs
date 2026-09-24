@@ -246,11 +246,7 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_ch
 pub unsafe extern "C" fn writer_core_load_device_info() -> *mut c_char {
     match with_app_service(|svc| {
         let info = svc.load_device_info().map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "deviceId": info.device_id,
-            "deviceClass": info.device_class,
-            "platform": info.platform,
-        }))
+        Ok(info)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("DEVICE_INFO_ERROR", &e),
@@ -341,11 +337,7 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
         svc.ensure_device_info(platform_str, device_class_str)
             .map_err(|e| format!("{}", e))?;
         let info = svc.load_device_info().map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "deviceId": info.device_id,
-            "deviceClass": info.device_class,
-            "platform": info.platform,
-        }))
+        Ok(info)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("DEVICE_INFO_ERROR", &e),

@@ -47,6 +47,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   private mockSettings: LocalSettings = {
     themeMode: 'system',
+    appearanceMode: 'system',
+    colorSource: 'built_in',
+    dynamicColorEnabled: false,
+    selectedBuiltinThemeId: '',
+    selectedPaletteId: '',
     locale: 'zh-CN',
     autoSaveEnabled: true,
     editorFontSize: 16,
@@ -62,8 +67,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
     statsDeviceId: undefined,
-    linuxQtSidebarWidth: 280,
-    linuxQtEditorWidth: 820
+    desktopSidebarWidth: 280,
+    desktopEditorWidth: 820,
+    editorCoordinatedTextCursorAnimationEnabled: false,
+    diagnosticsEnabled: false,
+    diagnosticsVerbose: false
   } as LocalSettings
 
   private mockSyncConfig: SyncConfig = {
@@ -429,7 +437,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>> {
     await this.delay(100)
-    const starmap = this.mockStarMaps.find(sm => sm.id === starmapId)
+    const starmap = this.mockStarMaps.find(sm => sm.starmapId === starmapId)
     if (!starmap) {
       return this.error('STARMAP_NOT_FOUND', '星图不存在')
     }
@@ -447,13 +455,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>> {
     await this.delay(200)
     const newStarMap: StarMapMeta = {
-      id: `starmap-${Date.now()}`,
+      starmapId: `starmap-${Date.now()}`,
       title,
       description,
+      projectId: undefined,
+      parentStarmapId: undefined,
+      isMainForProject: false,
+      accentColor: '#4A90D9',
       nodeCount: 0,
       edgeCount: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      linkedChapterCount: 0,
+      childStarmapCount: 0
     }
     this.mockStarMaps.push(newStarMap)
     return this.success(newStarMap)
@@ -461,7 +475,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteStarMap(starmapId: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const index = this.mockStarMaps.findIndex(sm => sm.id === starmapId)
+    const index = this.mockStarMaps.findIndex(sm => sm.starmapId === starmapId)
     if (index === -1) {
       return this.error('STARMAP_NOT_FOUND', '星图不存在')
     }
@@ -471,18 +485,18 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const starmap = this.mockStarMaps.find(sm => sm.id === starmapId)
+    const starmap = this.mockStarMaps.find(sm => sm.starmapId === starmapId)
     if (!starmap) {
       return this.error('STARMAP_NOT_FOUND', '星图不存在')
     }
     starmap.title = newTitle
-    starmap.updatedAt = new Date().toISOString()
+    starmap.updatedAt = Date.now()
     return this.success(true)
   }
 
   async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const starmap = this.mockStarMaps.find(sm => sm.id === starmapId)
+    const starmap = this.mockStarMaps.find(sm => sm.starmapId === starmapId)
     if (!starmap) {
       return this.error('STARMAP_NOT_FOUND', '星图不存在')
     }
@@ -492,7 +506,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
     await this.delay(100)
-    const starmap = this.mockStarMaps.find(sm => sm.id === starmapId)
+    const starmap = this.mockStarMaps.find(sm => sm.starmapId === starmapId)
     if (!starmap) {
       return this.error('STARMAP_NOT_FOUND', '星图不存在')
     }
@@ -524,6 +538,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(100)
     const copy: LocalSettings = {
       themeMode: this.mockSettings.themeMode,
+      appearanceMode: this.mockSettings.appearanceMode,
+      colorSource: this.mockSettings.colorSource,
+      dynamicColorEnabled: this.mockSettings.dynamicColorEnabled,
+      selectedBuiltinThemeId: this.mockSettings.selectedBuiltinThemeId,
+      selectedPaletteId: this.mockSettings.selectedPaletteId,
       locale: this.mockSettings.locale,
       autoSaveEnabled: this.mockSettings.autoSaveEnabled,
       editorFontSize: this.mockSettings.editorFontSize,
@@ -539,8 +558,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       editorSmoothCursorDurationMs: this.mockSettings.editorSmoothCursorDurationMs,
       aiEnabled: this.mockSettings.aiEnabled,
       statsDeviceId: this.mockSettings.statsDeviceId,
-      linuxQtSidebarWidth: this.mockSettings.linuxQtSidebarWidth,
-      linuxQtEditorWidth: this.mockSettings.linuxQtEditorWidth
+      desktopSidebarWidth: this.mockSettings.desktopSidebarWidth,
+      desktopEditorWidth: this.mockSettings.desktopEditorWidth,
+      editorCoordinatedTextCursorAnimationEnabled: this.mockSettings.editorCoordinatedTextCursorAnimationEnabled,
+      diagnosticsEnabled: this.mockSettings.diagnosticsEnabled,
+      diagnosticsVerbose: this.mockSettings.diagnosticsVerbose
     }
     return this.success(copy)
   }
@@ -549,6 +571,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(200)
     this.mockSettings = {
       themeMode: settings.themeMode,
+      appearanceMode: settings.appearanceMode,
+      colorSource: settings.colorSource,
+      dynamicColorEnabled: settings.dynamicColorEnabled,
+      selectedBuiltinThemeId: settings.selectedBuiltinThemeId,
+      selectedPaletteId: settings.selectedPaletteId,
       locale: settings.locale,
       autoSaveEnabled: settings.autoSaveEnabled,
       editorFontSize: settings.editorFontSize,
@@ -564,8 +591,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       editorSmoothCursorDurationMs: settings.editorSmoothCursorDurationMs,
       aiEnabled: settings.aiEnabled,
       statsDeviceId: settings.statsDeviceId,
-      linuxQtSidebarWidth: settings.linuxQtSidebarWidth,
-      linuxQtEditorWidth: settings.linuxQtEditorWidth
+      desktopSidebarWidth: settings.desktopSidebarWidth,
+      desktopEditorWidth: settings.desktopEditorWidth,
+      editorCoordinatedTextCursorAnimationEnabled: settings.editorCoordinatedTextCursorAnimationEnabled,
+      diagnosticsEnabled: settings.diagnosticsEnabled,
+      diagnosticsVerbose: settings.diagnosticsVerbose
     }
     return this.success(true)
   }

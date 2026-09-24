@@ -18,24 +18,7 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
     match with_app_service(|svc| {
         let settings = svc.load_local_settings().map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "fontSize": settings.editor_font_size,
-            "lineHeight": settings.editor_line_spacing_multiplier,
-            "fontFamily": "HarmonyOS Sans",
-            "theme": settings.appearance_mode.as_str(),
-            "appearanceMode": settings.appearance_mode,
-            "colorSource": settings.color_source,
-            "dynamicColorEnabled": settings.dynamic_color_enabled,
-            "selectedBuiltinThemeId": settings.selected_builtin_theme_id,
-            "selectedPaletteId": settings.selected_palette_id,
-            "autoSave": settings.auto_save_enabled,
-            "autoSaveInterval": settings.auto_save_delay_ms as f64 / 1000.0,
-            "autoIndent": settings.auto_indent_enabled,
-            "showWordCount": true,
-            "showLineNumbers": false,
-            "wordWrap": true,
-            "spellCheck": false
-        }))
+        Ok(settings)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
@@ -75,23 +58,30 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
         let mut settings = svc.load_local_settings().map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        if let Some(v) = val.get("fontSize").and_then(|v| v.as_f64()) {
+        // 字段名与 LocalSettingsDto 的 camelCase 序列化契约一致。
+        if let Some(v) = val.get("editorFontSize").and_then(|v| v.as_f64()) {
             settings.editor_font_size = v as f32;
         }
-        if let Some(v) = val.get("lineHeight").and_then(|v| v.as_f64()) {
+        if let Some(v) = val
+            .get("editorLineSpacingMultiplier")
+            .and_then(|v| v.as_f64())
+        {
             settings.editor_line_spacing_multiplier = v as f32;
         }
-        if let Some(v) = val.get("autoSave").and_then(|v| v.as_bool()) {
+        if let Some(v) = val.get("autoSaveEnabled").and_then(|v| v.as_bool()) {
             settings.auto_save_enabled = v;
         }
-        if let Some(v) = val.get("autoSaveInterval").and_then(|v| v.as_f64()) {
-            settings.auto_save_delay_ms = (v * 1000.0) as u64;
+        if let Some(v) = val.get("autoSaveDelayMs").and_then(|v| v.as_u64()) {
+            settings.auto_save_delay_ms = v;
         }
-        if let Some(v) = val.get("autoIndent").and_then(|v| v.as_bool()) {
+        if let Some(v) = val.get("autoIndentEnabled").and_then(|v| v.as_bool()) {
             settings.auto_indent_enabled = v;
         }
-        if let Some(v) = val.get("theme").and_then(|v| v.as_str()) {
-            // Issue #705: LocalSettings 已删除 theme_mode 字段,只写 appearance_mode。
+        if let Some(v) = val.get("autoIndentWidth").and_then(|v| v.as_f64()) {
+            settings.auto_indent_width = v as f32;
+        }
+        // themeMode 兼容别名：写入 appearanceMode。
+        if let Some(v) = val.get("themeMode").and_then(|v| v.as_str()) {
             settings.appearance_mode = v.to_string();
         }
         if let Some(v) = val.get("appearanceMode").and_then(|v| v.as_str()) {
@@ -108,6 +98,63 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
         }
         if let Some(v) = val.get("selectedPaletteId").and_then(|v| v.as_str()) {
             settings.selected_palette_id = v.to_string();
+        }
+        if let Some(v) = val.get("locale").and_then(|v| v.as_str()) {
+            settings.locale = Some(v.to_string());
+        }
+        if let Some(v) = val.get("windowWidth").and_then(|v| v.as_f64()) {
+            settings.window_width = v as f32;
+        }
+        if let Some(v) = val.get("windowHeight").and_then(|v| v.as_f64()) {
+            settings.window_height = v as f32;
+        }
+        if let Some(v) = val.get("desktopSidebarWidth").and_then(|v| v.as_f64()) {
+            settings.desktop_sidebar_width = v;
+        }
+        if let Some(v) = val.get("desktopEditorWidth").and_then(|v| v.as_f64()) {
+            settings.desktop_editor_width = v;
+        }
+        if let Some(v) = val
+            .get("editorTypingAnimationEnabled")
+            .and_then(|v| v.as_bool())
+        {
+            settings.editor_typing_animation_enabled = v;
+        }
+        if let Some(v) = val
+            .get("editorSmoothCursorEnabled")
+            .and_then(|v| v.as_bool())
+        {
+            settings.editor_smooth_cursor_enabled = v;
+        }
+        if let Some(v) = val
+            .get("editorTypingAnimationDurationMs")
+            .and_then(|v| v.as_u64())
+        {
+            settings.editor_typing_animation_duration_ms = v;
+        }
+        if let Some(v) = val
+            .get("editorSmoothCursorDurationMs")
+            .and_then(|v| v.as_u64())
+        {
+            settings.editor_smooth_cursor_duration_ms = v;
+        }
+        if let Some(v) = val.get("aiEnabled").and_then(|v| v.as_bool()) {
+            settings.ai_enabled = v;
+        }
+        if let Some(v) = val.get("statsDeviceId").and_then(|v| v.as_str()) {
+            settings.stats_device_id = Some(v.to_string());
+        }
+        if let Some(v) = val
+            .get("editorCoordinatedTextCursorAnimationEnabled")
+            .and_then(|v| v.as_bool())
+        {
+            settings.editor_coordinated_text_cursor_animation_enabled = v;
+        }
+        if let Some(v) = val.get("diagnosticsEnabled").and_then(|v| v.as_bool()) {
+            settings.diagnostics_enabled = v;
+        }
+        if let Some(v) = val.get("diagnosticsVerbose").and_then(|v| v.as_bool()) {
+            settings.diagnostics_verbose = v;
         }
         svc.save_local_settings(settings)
             .map_err(|e| format!("{}", e))?;

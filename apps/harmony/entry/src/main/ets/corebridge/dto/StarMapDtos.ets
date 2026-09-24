@@ -3,13 +3,19 @@
 // sourceId/targetId → EndpointPath；parentId/childIds → ChildMapPlacement。
 
 export interface StarMapMeta {
-  id: string
+  starmapId: string
   title: string
   description: string
+  projectId?: string
+  parentStarmapId?: string
+  isMainForProject: boolean
+  accentColor: string
+  createdAt: number
+  updatedAt: number
   nodeCount: number
   edgeCount: number
-  createdAt: string
-  updatedAt: string
+  linkedChapterCount: number
+  childStarmapCount: number
 }
 
 export interface StarMapGraph {

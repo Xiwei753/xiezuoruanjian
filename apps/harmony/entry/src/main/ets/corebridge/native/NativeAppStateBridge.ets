@@ -1,5 +1,6 @@
 import { ChangedEntity, ResultEnvelope, AppSummary } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
+import { decodeAppSummary, decodeArray } from '../codec/CoreWireDecoders'
 
 /**
  * App State 查询 Bridge。
@@ -18,7 +19,8 @@ export class NativeAppStateBridge {
   async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListAppSummaries()
-      return this.core.parseEnvelope<AppSummary[]>(jsonStr)
+      return this.core.decodeEnvelope<AppSummary[]>(jsonStr,
+        (d: Object) => decodeArray<AppSummary>(d, decodeAppSummary, 'AppSummary'))
     } catch (e) {
       return this.core.notImplemented<AppSummary[]>()
     }
@@ -27,7 +29,7 @@ export class NativeAppStateBridge {
   async getAppState(): Promise<ResultEnvelope<AppSummary>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetAppState()
-      return this.core.parseEnvelope<AppSummary>(jsonStr)
+      return this.core.decodeEnvelope<AppSummary>(jsonStr, decodeAppSummary)
     } catch (e) {
       return this.core.notImplemented<AppSummary>()
     }

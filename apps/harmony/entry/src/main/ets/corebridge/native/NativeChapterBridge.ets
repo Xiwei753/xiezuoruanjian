@@ -1,6 +1,7 @@
 import { ChapterMeta, ChapterContent, ChapterSaveReceipt } from '../dto/ProjectDtos'
 import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
+import { decodeChapterMeta, decodeChapterContent, decodeChapterSaveReceipt, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
@@ -20,7 +21,8 @@ export class NativeChapterBridge {
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListChapters(projectId, volumeId)
-      return this.core.parseEnvelope<ChapterMeta[]>(jsonStr)
+      return this.core.decodeEnvelope<ChapterMeta[]>(jsonStr,
+        (d: Object) => decodeArray<ChapterMeta>(d, decodeChapterMeta, 'ChapterMeta'))
     } catch (e) { return nativeError<ChapterMeta[]>(e) }
   }
 
@@ -31,7 +33,7 @@ export class NativeChapterBridge {
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeOpenChapter(loc.projectId, loc.volumeId, chapterId)
-      return this.core.parseEnvelope<ChapterContent>(jsonStr)
+      return this.core.decodeEnvelope<ChapterContent>(jsonStr, decodeChapterContent)
     } catch (e) { return nativeError<ChapterContent>(e) }
   }
 
@@ -42,7 +44,7 @@ export class NativeChapterBridge {
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, text)
-      return this.core.parseEnvelope<ChapterSaveReceipt>(jsonStr)
+      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }
 
@@ -53,7 +55,7 @@ export class NativeChapterBridge {
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
-      return this.core.parseEnvelope<ChapterSaveReceipt>(jsonStr)
+      return this.core.decodeEnvelope<ChapterSaveReceipt>(jsonStr, decodeChapterSaveReceipt)
     } catch (e) { return nativeError<ChapterSaveReceipt>(e) }
   }
 
@@ -64,7 +66,7 @@ export class NativeChapterBridge {
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeCreateChapter(projectId, volumeId, name)
-      return this.core.parseEnvelope<ChapterMeta>(jsonStr)
+      return this.core.decodeEnvelope<ChapterMeta>(jsonStr, decodeChapterMeta)
     } catch (e) { return nativeError<ChapterMeta>(e) }
   }
 

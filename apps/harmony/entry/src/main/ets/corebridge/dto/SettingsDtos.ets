@@ -1,4 +1,7 @@
 // ─── Settings DTOs ───
+// Issue #753：字段与 Core api/types/settings.rs LocalSettingsDto 的 camelCase
+// 序列化一字不差对齐。Core 是唯一数据结构，Harmony FFI 只负责搬运。
+// 如需新增字段，必须先在 Core LocalSettingsDto 中定义，不得自行发明。
 
 export interface LocalSettings {
   themeMode?: string
@@ -22,8 +25,11 @@ export interface LocalSettings {
   editorSmoothCursorDurationMs: number
   aiEnabled: boolean
   statsDeviceId?: string
-  linuxQtSidebarWidth: number
-  linuxQtEditorWidth: number
+  desktopSidebarWidth: number
+  desktopEditorWidth: number
+  editorCoordinatedTextCursorAnimationEnabled: boolean
+  diagnosticsEnabled: boolean
+  diagnosticsVerbose: boolean
 }
 
 export interface SyncableSettings {

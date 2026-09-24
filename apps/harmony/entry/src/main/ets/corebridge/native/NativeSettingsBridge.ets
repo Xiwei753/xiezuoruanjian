@@ -1,6 +1,7 @@
 import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { NativeCoreModule } from './NativeCoreModule'
+import { decodeLocalSettings, decodeSyncableSettings, decodeThemePaletteRecord, decodeBuiltinTheme, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
@@ -16,7 +17,7 @@ export class NativeSettingsBridge {
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeLoadLocalSettings()
-      return this.core.parseEnvelope<LocalSettings>(jsonStr)
+      return this.core.decodeEnvelope<LocalSettings>(jsonStr, decodeLocalSettings)
     } catch (e) { return nativeError<LocalSettings>(e) }
   }
 
@@ -30,7 +31,7 @@ export class NativeSettingsBridge {
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeLoadSyncableSettings()
-      return this.core.parseEnvelope<SyncableSettings>(jsonStr)
+      return this.core.decodeEnvelope<SyncableSettings>(jsonStr, decodeSyncableSettings)
     } catch (e) { return nativeError<SyncableSettings>(e) }
   }
 
@@ -44,14 +45,15 @@ export class NativeSettingsBridge {
   async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListPaletteRecords()
-      return this.core.parseEnvelope<ThemePaletteRecordDto[]>(jsonStr)
+      return this.core.decodeEnvelope<ThemePaletteRecordDto[]>(jsonStr,
+        (d: Object) => decodeArray<ThemePaletteRecordDto>(d, decodeThemePaletteRecord, 'ThemePaletteRecord'))
     } catch (e) { return nativeError<ThemePaletteRecordDto[]>(e) }
   }
 
   async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeLoadPaletteRecord(deviceId, fingerprint)
-      return this.core.parseEnvelope<ThemePaletteRecordDto>(jsonStr)
+      return this.core.decodeEnvelope<ThemePaletteRecordDto>(jsonStr, decodeThemePaletteRecord)
     } catch (e) { return nativeError<ThemePaletteRecordDto>(e) }
   }
 
@@ -65,7 +67,8 @@ export class NativeSettingsBridge {
   async listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListBuiltinThemes()
-      return this.core.parseEnvelope<BuiltinThemeDto[]>(jsonStr)
+      return this.core.decodeEnvelope<BuiltinThemeDto[]>(jsonStr,
+        (d: Object) => decodeArray<BuiltinThemeDto>(d, decodeBuiltinTheme, 'BuiltinTheme'))
     } catch (e) { return nativeError<BuiltinThemeDto[]>(e) }
   }
 }

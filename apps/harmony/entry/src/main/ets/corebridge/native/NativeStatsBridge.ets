@@ -1,6 +1,7 @@
 import { WritingStats } from '../dto/ProjectDtos'
 import { ChangedEntity, ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
+import { decodeWritingStats, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
 
 interface WritingEventDto {
   deviceId: string
@@ -31,7 +32,7 @@ export class NativeStatsBridge {
   async getWritingStats(): Promise<ResultEnvelope<WritingStats>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetWritingStats()
-      return this.core.parseEnvelope<WritingStats>(jsonStr)
+      return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
     } catch (e) { return nativeError<WritingStats>(e) }
   }
 
@@ -65,7 +66,8 @@ export class NativeStatsBridge {
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetRecentEdits()
-      return this.core.parseEnvelope<RecentEdit[]>(jsonStr)
+      return this.core.decodeEnvelope<RecentEdit[]>(jsonStr,
+        (d: Object) => decodeArray<RecentEdit>(d, decodeRecentEdit, 'RecentEdit'))
     } catch (e) { return nativeError<RecentEdit[]>(e) }
   }
 }

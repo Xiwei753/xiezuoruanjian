@@ -426,13 +426,13 @@ export struct StarMapScreen {
         // Star map selector
         if (this.allStarMaps.length > 1) {
           Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => ({ value: sm.title, icon: '' })))
-            .selected(this.allStarMaps.findIndex(sm => sm.id === this.starmapId))
+            .selected(this.allStarMaps.findIndex(sm => sm.starmapId === this.starmapId))
             .value(this.starmapTitle)
             .width(150)
             .onSelect((index: number) => {
               const sm = this.allStarMaps[index]
               if (sm) {
-                this.starmapId = sm.id
+                this.starmapId = sm.starmapId
                 this.starmapTitle = sm.title
                 this.loadStarMap()
               }
