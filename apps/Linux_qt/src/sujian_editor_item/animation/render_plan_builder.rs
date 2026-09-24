@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
 use super::transaction_builder::emit_transaction_diagnostic;
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
 use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
@@ -340,14 +340,9 @@ impl LinuxEditorAnimationCoordinator {
                 // 再藏 canonical 会挖出文字空洞。
                 let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
                 for unit in &tx.units {
-                    let is_caret_driven = matches!(
-                        unit.slice.kind,
-                        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
-                    );
-                    // CaretDriven unit 只在本事务拥有 caret frame（has_caret_frame 且
-                    // owns_caret）时才收集；Timed unit（Reflow）始终收集。
-                    // !owns_caret 时也不收集：非 owner 的 CaretDriven 已 Snap 到 canonical，
-                    // 不能再藏 canonical 正文。
+                    // Issue #756: 按 timing 判断 caret-driven（coordinated=true 吞吐字）。
+                    let is_caret_driven = unit.timing.is_caret_driven();
+                    // CaretDriven unit 只在拥有 caret frame 时收集；Timed 始终收集。
                     if is_caret_driven && (!has_caret_frame || !owns_caret) {
                         continue;
                     }
@@ -534,12 +529,9 @@ impl LinuxEditorAnimationCoordinator {
             let caret_driven_active = owns_caret && coordinated_motion_frame.caret.is_some();
 
             // InsertReveal/DeleteConceal 完成条件跟视觉边界一致。
-            let has_caret_driven_units = tx.units.iter().any(|u| {
-                matches!(
-                    u.slice.kind,
-                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
-                )
-            });
+            // Issue #756: 按 timing 判断是否 caret-driven。coordinated=false 的吞吐字
+            // 是 Timed（typing-driven），不参与 caret motion retire 逻辑。
+            let has_caret_driven_units = tx.units.iter().any(|u| u.timing.is_caret_driven());
             // has_caret_driven_units && !caret_driven_active 时退休 caret motion，
             // 收口 CaretDriven units 到终态。之后永远跳过此事务不再给 owner_key。
             if has_caret_driven_units && !caret_driven_active {
@@ -555,13 +547,14 @@ impl LinuxEditorAnimationCoordinator {
                 true
             };
             // 完成判断按 kind 分开: CaretDriven unit 的完成由 caret_track_done 决定，
-            // Timed unit 看 progress >= 1.0。
+            // Timed unit（Reflow + typing-driven 吞吐字）看 progress >= 1.0。
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units.iter().all(|u| match u.slice.kind {
-                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => true,
-                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                tx.units.iter().all(|u| {
+                    if u.timing.is_caret_driven() {
+                        true
+                    } else {
                         u.progress(sample.frame_now) >= 1.0
                     }
                 })
@@ -585,38 +578,38 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // InsertReveal/DeleteConceal 从统一 CoordinatedMotionFrame.caret 消费。
-                // 按 owner_key 过滤，只有同 key 的 unit 能消费此 caret frame。
-                let frame = match unit.slice.kind {
-                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                        // active 时生成 glyph，否则 continue（已 retire）。
-                        if !caret_driven_active {
-                            continue;
-                        }
-                        // 从统一 CoordinatedMotionFrame 获取 caret geometry。
-                        // 用 match 而非 expect，避免用 expect 代替错误处理。
-                        let Some(caret_frame) = coordinated_motion_frame.caret else {
-                            continue;
-                        };
-                        // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
-                        // progress 推导，不再由 unit 自己的时间线驱动。
-                        // visible = start_fraction + (target - start) * ease_out_quad(progress)
-                        let eased = AnimatedSlice::ease_out_quad(caret_frame.progress);
-                        let start = unit.timing.start_fraction();
-                        let target = unit.timing.target_fraction();
-                        let visible = start + (target - start) * eased;
-                        unit.slice.compute_frame_caret_driven(
-                            caret_frame.x,
-                            caret_frame.y,
-                            caret_frame.visual_line_id,
-                            visible,
-                        )
+                // Issue #756: 按 timing 区分 caret-driven 和 timed 吞吐字。
+                // - CaretDriven（coordinated=true 的 InsertReveal/DeleteConceal）：从统一
+                //   CoordinatedMotionFrame.caret 消费，按 owner_key 过滤。
+                // - Timed（Reflow + coordinated=false 的 typing-driven 吞吐字）：用自己
+                //   的时间线算 visible，走 compute_frame(visible)，不消费 caret frame。
+                let frame = if unit.timing.is_caret_driven() {
+                    // active 时生成 glyph，否则 continue（已 retire）。
+                    if !caret_driven_active {
+                        continue;
                     }
-                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                        // Reflow 不消费 caret 边界，用纯几何插值。
-                        let visible = unit.current_visible_fraction(sample.frame_now);
-                        unit.slice.compute_frame(visible)
-                    }
+                    // 从统一 CoordinatedMotionFrame 获取 caret geometry。
+                    // 用 match 而非 expect，避免用 expect 代替错误处理。
+                    let Some(caret_frame) = coordinated_motion_frame.caret else {
+                        continue;
+                    };
+                    // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
+                    // progress 推导，不再由 unit 自己的时间线驱动。
+                    // visible = start_fraction + (target - start) * ease_out_quad(progress)
+                    let eased = AnimatedSlice::ease_out_quad(caret_frame.progress);
+                    let start = unit.timing.start_fraction();
+                    let target = unit.timing.target_fraction();
+                    let visible = start + (target - start) * eased;
+                    unit.slice.compute_frame_caret_driven(
+                        caret_frame.x,
+                        caret_frame.y,
+                        caret_frame.visual_line_id,
+                        visible,
+                    )
+                } else {
+                    // Timed unit（Reflow / typing-driven 吞吐字）：用自己的时间线算 visible。
+                    let visible = unit.current_visible_fraction(sample.frame_now);
+                    unit.slice.compute_frame(visible)
                 };
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,

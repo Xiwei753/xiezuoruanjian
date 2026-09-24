@@ -1542,6 +1542,7 @@ impl LinuxEditorPipeline {
                     // smooth 单独决定（这就是"平滑光标"在正文编辑期间的光标动画）。
                     text_animation_enabled,
                     caret_animation_enabled,
+                    ctx.coordinated_animation_enabled,
                     motion.old_cursor_rect.clone(),
                     motion.new_cursor_rect.clone(),
                     Some(old_caret.visual_line_id),

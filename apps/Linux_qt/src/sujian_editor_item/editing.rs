@@ -284,6 +284,10 @@ impl SujianEditorItem {
             .texture_cache_mut()
             .retain_active_snapshot_ids(&active_ids);
 
+        // Issue #756: 算出 text/caret/coordinated 三个开关传入 composition 路径。
+        let coordinated_anim = self.current_coordinated_animation_enabled;
+        let text_anim = coordinated_anim || self.current_typing_animation_enabled;
+        let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
         let key = self
             .pipeline
             .animation_coordinator_mut()
@@ -310,6 +314,9 @@ impl SujianEditorItem {
                 new_revision,
                 edit_now,
                 Some(prepared_handoff),
+                text_anim,
+                caret_anim,
+                coordinated_anim,
             );
 
         // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
@@ -492,7 +499,10 @@ impl SujianEditorItem {
 
         // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
         // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
-        let composition = if commit.was_composing && self.current_typing_animation_enabled {
+        // Issue #756: composition commit 动画进入条件 = coordinated || typing。
+        let composition = if commit.was_composing
+            && (self.current_coordinated_animation_enabled || self.current_typing_animation_enabled)
+        {
             Some(CompositionCommitParams {
                 pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
                 preedit_byte_start: commit.preedit_byte_start,
@@ -618,7 +628,10 @@ impl SujianEditorItem {
             EditorTransactionCause::TypingCommit
         };
 
-        let composition = if commit.was_composing && self.current_typing_animation_enabled {
+        // Issue #756: composition commit 动画进入条件 = coordinated || typing。
+        let composition = if commit.was_composing
+            && (self.current_coordinated_animation_enabled || self.current_typing_animation_enabled)
+        {
             Some(CompositionCommitParams {
                 pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
                 preedit_byte_start: commit.preedit_byte_start,

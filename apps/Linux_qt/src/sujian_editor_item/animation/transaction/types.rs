@@ -78,6 +78,24 @@ impl PreparedVisualUnit {
         Self { slice, timing }
     }
 
+    /// Issue #756: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
+    ///
+    /// `coordinated=true` 时吞吐字用 `CaretDriven`（caret frame 驱动裁切），
+    /// `coordinated=false` 时吞吐字用 `Timed`（typing timeline 自己推进裁切）。
+    /// ReflowMove/ReflowCrossFade 永远 `Timed`，与 coordinated 无关。
+    pub fn wrap_with_coordinated(
+        slice: AnimatedSlice,
+        duration_ms: u64,
+        coordinated: bool,
+    ) -> Self {
+        let timing = VisualUnitTiming::default_for_kind_with_coordinated(
+            slice.kind,
+            duration_ms,
+            coordinated,
+        );
+        Self { slice, timing }
+    }
+
     /// 从自己的时间线计算当前 progress（0..1）。
     /// Issue #727 约束 2: CaretDriven unit 返回 0.0（无独立时间线）。
     pub fn progress(&self, now: Instant) -> f64 {
@@ -489,6 +507,13 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// ReflowMove/ReflowCrossFade 作为独立 passive reflow track 继续播完，
     /// 事务只等剩余 Timed unit 完成。
     pub caret_motion_retired: bool,
+    /// Issue #756: 本事务的吞吐字（InsertReveal/DeleteConceal）是否由 caret 驱动。
+    ///
+    /// `coordinated=true`：吞吐字用 `CaretDriven` timing，裁切边界消费本帧
+    /// coordinated caret 位置（`compute_frame_caret_driven`），文字与光标绑死。
+    /// `coordinated=false`：吞吐字用 `Timed` timing，用 typing timeline 自己推进
+    /// 裁切（`compute_frame(visible)`），不消费 caret frame，与光标动画各自独立。
+    pub coordinated: bool,
     /// Issue #710 评论 5731145076 症状五/六 / 评论 5732160521 问题 3:
     /// 事务的视觉 affected byte range，分 old/new 两侧保存。
     ///

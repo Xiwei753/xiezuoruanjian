@@ -279,6 +279,7 @@ fn rendering_tx(
         new_snapshot: None,
         cursor_owner_epoch: 0,
         caret_motion_retired: false,
+        coordinated: false,
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         layout_basis_revision: LayoutRevision::initial(),

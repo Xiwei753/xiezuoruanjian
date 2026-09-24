@@ -106,6 +106,11 @@ pub(crate) struct VisualEditSpec {
     /// Issue #756: 光标动画开关（caret motion track）。
     /// coordinated=true 或 smooth_cursor_enabled=true 时为 true。
     pub(crate) caret_animation_enabled: bool,
+    /// Issue #756: 协同动画显式模式。决定吞吐字（InsertReveal/DeleteConceal）是否由
+    /// caret 驱动。coordinated=true 时吞吐字走 caret-driven（消费
+    /// CoordinatedMotionFrame.caret），coordinated=false 时吞吐字用 typing timeline
+    /// 自己推进（不消费 caret frame）。
+    pub(crate) coordinated_animation_enabled: bool,
     pub(crate) composition_commit_crossfade: Option<CompositionCommitCrossfadeSpec>,
 }
 
@@ -117,14 +122,16 @@ pub(crate) struct VisualEditSpec {
 pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVisualTransaction {
     let mut slices: Vec<AnimatedSlice> = Vec::new();
 
-    // 1a. InsertReveal / DeleteConceal（文字动画 + caret 驱动：两者都要开）
+    // 1a. InsertReveal / DeleteConceal（文字动画）
     //
-    // Issue #756: 吞吐字既是文字动画又是 caret 驱动的裁切边界。
-    // - coordinated=true：文字与光标绑死，两者都是 true，吞吐字恒有。
-    // - coordinated=false：文字由 typing_animation_enabled 决定，光标由
-    //   smooth_cursor_enabled 决定；smooth 关闭时没有 caret motion，就没有吞吐字
-    //   （Issue #727 约束 5），此时只保留 Reflow。
-    if spec.text_animation_enabled && spec.caret_animation_enabled {
+    // Issue #756: 吞吐字是否存在由 text_animation_enabled 决定（coordinated || typing）。
+    // 吞吐字是否由 caret 驱动由 coordinated_animation_enabled 决定：
+    // - coordinated=true：吞吐字走 caret-driven（CaretDriven timing，消费
+    //   CoordinatedMotionFrame.caret），文字与光标绑死。
+    // - coordinated=false：吞吐字用 typing timeline 自己推进（Timed timing，
+    //   compute_frame(visible)），不消费 caret frame。这样 coordinated=false +
+    //   typing=true + smooth=false 时仍有吐字（Issue #756 问题 2）。
+    if spec.text_animation_enabled {
         for &(i_start, i_end) in &spec.inserted_ranges {
             slices.extend(build_insert_reveal_slices(
                 spec.key,
@@ -183,9 +190,24 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     }
 
     // 2. Wrap units
+    //
+    // Issue #756: InsertReveal/DeleteConceal 的 timing 由 coordinated_animation_enabled
+    // 决定（coordinated=true → CaretDriven，coordinated=false → Timed）。
+    // ReflowMove/ReflowCrossFade 永远 Timed，与 coordinated 无关。
     let mut units: Vec<PreparedVisualUnit> = slices
         .into_iter()
-        .map(|s| PreparedVisualUnit::wrap(s, spec.unit_duration_ms))
+        .map(|s| match s.kind {
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                PreparedVisualUnit::wrap_with_coordinated(
+                    s,
+                    spec.unit_duration_ms,
+                    spec.coordinated_animation_enabled,
+                )
+            }
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                PreparedVisualUnit::wrap(s, spec.unit_duration_ms)
+            }
+        })
         .collect();
 
     // 3. Rebase frame 匹配
@@ -217,7 +239,7 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     // 5. 诊断日志
     editor_animation_debug_log(&format!(
         "anim_spec: op={:?} units={} inserted={} deleted={} rebased={} handoff={} epoch={} \
-         text_anim={} caret_anim={}",
+         text_anim={} caret_anim={} coordinated_anim={}",
         spec.operation_kind,
         units.len(),
         spec.inserted_ranges.len(),
@@ -227,6 +249,7 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         spec.cursor_owner_epoch,
         spec.text_animation_enabled,
         spec.caret_animation_enabled,
+        spec.coordinated_animation_enabled,
     ));
 
     // 6. 唯一 PreparedTextVisualTransaction struct literal
@@ -245,6 +268,7 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         new_snapshot: Some(spec.new_snapshot),
         cursor_owner_epoch: spec.cursor_owner_epoch,
         caret_motion_retired: false,
+        coordinated: spec.coordinated_animation_enabled,
         visual_affected_byte_range_old: spec.visual_affected_byte_range_old,
         visual_affected_byte_range_new: spec.visual_affected_byte_range_new,
         layout_basis_revision: spec.layout_basis_revision,
@@ -1046,6 +1070,8 @@ impl LinuxEditorAnimationCoordinator {
         // （coordinated || smooth）由调用方按同一份设置算出，两者互相独立。
         text_animation_enabled: bool,
         caret_animation_enabled: bool,
+        // Issue #756: 协同动画显式模式。决定吞吐字是否由 caret 驱动。
+        coordinated_animation_enabled: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
         old_cursor_visual_line_id: Option<usize>,
@@ -1106,6 +1132,7 @@ impl LinuxEditorAnimationCoordinator {
                     unit_duration_ms: vt.duration_ms,
                     text_animation_enabled,
                     caret_animation_enabled,
+                    coordinated_animation_enabled,
                     composition_commit_crossfade: None,
                 };
                 let prepared_tx = build_prepared_transaction(spec);
@@ -1169,6 +1196,7 @@ impl LinuxEditorAnimationCoordinator {
                     unit_duration_ms: vt.duration_ms,
                     text_animation_enabled,
                     caret_animation_enabled,
+                    coordinated_animation_enabled,
                     composition_commit_crossfade: None,
                 };
                 let prepared_tx = build_prepared_transaction(spec);
@@ -1316,6 +1344,7 @@ impl LinuxEditorAnimationCoordinator {
                         unit_duration_ms: vt.duration_ms,
                         text_animation_enabled,
                         caret_animation_enabled,
+                        coordinated_animation_enabled,
                         composition_commit_crossfade: None,
                     };
                     let prepared = build_prepared_transaction(spec);
@@ -1419,6 +1448,7 @@ impl LinuxEditorAnimationCoordinator {
                     unit_duration_ms: vt.duration_ms,
                     text_animation_enabled,
                     caret_animation_enabled,
+                    coordinated_animation_enabled,
                     composition_commit_crossfade: None,
                 };
                 let prepared = build_prepared_transaction(spec);

@@ -100,25 +100,24 @@ pub(crate) fn conflicting_units_are_untouched(
         .as_ref()
         .map(|track| track.progress(now));
     for unit in &tx.units {
-        // Issue #722 评论 5749572808 问题3: 按 kind 分支判断是否已到终态。
-        let still_playing = match unit.slice.kind {
-            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
-                let progress = caret_track_progress.unwrap_or(0.0);
-                let eased = AnimatedSlice::ease_out_quad(progress);
-                let start = unit.timing.start_fraction();
-                let target = unit.timing.target_fraction();
-                let visible_fraction = start + (target - start) * eased;
-                match unit.slice.kind {
-                    AnimatedSliceKind::InsertReveal => visible_fraction < 1.0 - 1e-3,
-                    AnimatedSliceKind::DeleteConceal => visible_fraction > 1e-3,
-                    _ => unreachable!(),
-                }
+        // Issue #756: 按 timing 判断是否 caret-driven。
+        // - CaretDriven（coordinated=true 吞吐字）：visible 从 caret track progress 推导。
+        // - Timed（Reflow + coordinated=false typing-driven 吞吐字）：看 unit progress。
+        let still_playing = if unit.timing.is_caret_driven() {
+            // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
+            let progress = caret_track_progress.unwrap_or(0.0);
+            let eased = AnimatedSlice::ease_out_quad(progress);
+            let start = unit.timing.start_fraction();
+            let target = unit.timing.target_fraction();
+            let visible_fraction = start + (target - start) * eased;
+            match unit.slice.kind {
+                AnimatedSliceKind::InsertReveal => visible_fraction < 1.0 - 1e-3,
+                AnimatedSliceKind::DeleteConceal => visible_fraction > 1e-3,
+                _ => unreachable!(),
             }
-            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                // Reflow 仍看 unit progress。
-                unit.progress(now) < 1.0
-            }
+        } else {
+            // Timed unit（Reflow / typing-driven 吞吐字）看 unit progress。
+            unit.progress(now) < 1.0
         };
         if !still_playing {
             continue;
@@ -199,19 +198,19 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
     caret_remaining_ms: u64,
     now: Instant,
 ) -> Option<RebaseFrame> {
-    let visible_fraction = match unit.slice.kind {
-        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-            // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
-            // visible = start_fraction + (target - start) * ease_out_quad(progress)
-            let progress = caret_track_progress.unwrap_or(0.0);
-            let eased = AnimatedSlice::ease_out_quad(progress);
-            let start = unit.timing.start_fraction();
-            let target = unit.timing.target_fraction();
-            start + (target - start) * eased
-        }
-        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-            unit.current_visible_fraction(now)
-        }
+    // Issue #756: 按 timing 判断 visible_fraction 推导方式。
+    // - CaretDriven（coordinated=true 吞吐字）：从 caret track progress 推导。
+    // - Timed（Reflow + coordinated=false typing-driven 吞吐字）：从自己的时间线算。
+    let visible_fraction = if unit.timing.is_caret_driven() {
+        // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
+        // visible = start_fraction + (target - start) * ease_out_quad(progress)
+        let progress = caret_track_progress.unwrap_or(0.0);
+        let eased = AnimatedSlice::ease_out_quad(progress);
+        let start = unit.timing.start_fraction();
+        let target = unit.timing.target_fraction();
+        start + (target - start) * eased
+    } else {
+        unit.current_visible_fraction(now)
     };
     // Issue #727 约束 4: 不依赖 caret geometry，统一用 compute_frame。
     let frame = unit.slice.compute_frame(visible_fraction);

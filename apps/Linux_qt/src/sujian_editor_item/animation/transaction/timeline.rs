@@ -143,9 +143,59 @@ impl VisualUnitTiming {
         }
     }
 
-    /// 是否为 CaretDriven（InsertReveal / DeleteConceal）。
-    #[cfg(test)]
-    pub fn is_caret_driven(&self) -> bool {
+    /// Issue #756: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
+    ///
+    /// - `coordinated=true`：吞吐字由 caret 驱动 → `CaretDriven`（裁切边界消费本帧
+    ///   coordinated caret 位置，无独立时间线）。与 `default_for_kind` 一致。
+    /// - `coordinated=false`：吞吐字用 typing timeline 自己推进 → `Timed`（独立时间线，
+    ///   `compute_frame(visible)` 推进裁切，不消费 caret frame）。ReflowMove/ReflowCrossFade
+    ///   永远 `Timed`，与 coordinated 无关。
+    pub(crate) fn default_for_kind_with_coordinated(
+        kind: AnimatedSliceKind,
+        duration_ms: u64,
+        coordinated: bool,
+    ) -> Self {
+        let target_fraction = match kind {
+            AnimatedSliceKind::DeleteConceal => 0.0,
+            _ => 1.0,
+        };
+        let start_fraction = match kind {
+            AnimatedSliceKind::DeleteConceal => 1.0,
+            _ => 0.0,
+        };
+        match kind {
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                if coordinated {
+                    VisualUnitTiming::CaretDriven {
+                        start_fraction,
+                        target_fraction,
+                    }
+                } else {
+                    VisualUnitTiming::Timed {
+                        started_at: None,
+                        duration_ms,
+                        start_fraction,
+                        target_fraction,
+                    }
+                }
+            }
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                VisualUnitTiming::Timed {
+                    started_at: None,
+                    duration_ms,
+                    start_fraction,
+                    target_fraction,
+                }
+            }
+        }
+    }
+
+    /// Issue #756: 是否为 CaretDriven（由 caret frame 驱动裁切的吞吐字）。
+    ///
+    /// coordinated=true 的 InsertReveal/DeleteConceal → true；
+    /// coordinated=false 的 InsertReveal/DeleteConceal（typing-driven）→ false；
+    /// ReflowMove/ReflowCrossFade → false。
+    pub(crate) fn is_caret_driven(&self) -> bool {
         matches!(self, VisualUnitTiming::CaretDriven { .. })
     }
 

@@ -187,6 +187,9 @@ fn test_commit_same_shaping_different_geometry_creates_move() {
         LayoutRevision::initial(),
         Instant::now(),
         None,
+        true,
+        true,
+        true,
     );
     assert!(key.is_some());
     let tx = coord
@@ -287,6 +290,9 @@ fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
         LayoutRevision::initial(),
         Instant::now(),
         None,
+        true,
+        true,
+        true,
     );
     assert!(key.is_some());
     let tx = coord
@@ -381,6 +387,9 @@ fn test_commit_same_shaping_same_geometry_is_static() {
         LayoutRevision::initial(),
         Instant::now(),
         None,
+        true,
+        true,
+        true,
     );
     assert!(key.is_some());
     let tx = coord
@@ -476,6 +485,9 @@ fn test_commit_separate_preedit_and_committed_replace_ranges() {
         LayoutRevision::initial(),
         Instant::now(),
         None,
+        true,
+        true,
+        true,
     );
     assert!(key.is_some());
     let tx = coord
@@ -563,6 +575,9 @@ fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
         LayoutRevision::initial(),
         Instant::now(),
         None,
+        true,
+        true,
+        true,
     );
     assert!(key.is_some());
     let tx = coord
@@ -650,6 +665,9 @@ fn test_many_to_one_reflow_one_old_splits_to_two_new() {
         0.0,
         0,
         LayoutRevision::initial(),
+        true,
+        true,
+        true,
     );
     assert!(key.is_some());
     let tx = coord
@@ -772,12 +790,17 @@ fn issue756_shaping_identity() -> ShapingIdentity {
 
 /// 构造"在 ab 的 1 处插入 x"的一笔编辑 spec。
 /// `cursor_rects=false` 模拟建不出有效 caret motion（无 old/new caret rect）的一笔。
+/// Issue #756: 接收 coordinated/typing/smooth 三个独立开关，内部算出
+/// text = coordinated || typing，caret = coordinated || smooth。
 fn issue756_insert_spec(
     key: VisualTransactionKey,
-    text_animation_enabled: bool,
-    caret_animation_enabled: bool,
+    coordinated_animation_enabled: bool,
+    typing_animation_enabled: bool,
+    smooth_cursor_enabled: bool,
     cursor_rects: bool,
 ) -> VisualEditSpec {
+    let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
+    let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
     let sid = issue756_shaping_identity();
     let old_snapshot = make_test_snapshot(
         "ab",
@@ -838,6 +861,7 @@ fn issue756_insert_spec(
         unit_duration_ms: 100,
         text_animation_enabled,
         caret_animation_enabled,
+        coordinated_animation_enabled,
         composition_commit_crossfade: None,
     }
 }
@@ -850,7 +874,7 @@ fn issue756_count_kind(tx: &PreparedTextVisualTransaction, kind: AnimatedSliceKi
 #[test]
 fn issue756_coordinated_creates_caret_track_and_reveal_together() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, true, true, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true));
     assert_eq!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
         1,
@@ -862,23 +886,31 @@ fn issue756_coordinated_creates_caret_track_and_reveal_together() {
     );
 }
 
-/// 只开打字动画（coordinated=false, smooth=false）：文字动画照播，光标不沿 track 滑动。
+/// 只开打字动画（coordinated=false, typing=true, smooth=false）：文字动画照播，
+/// 吞吐字用 typing timeline 推进（不消费 caret frame），光标不沿 track 滑动。
 #[test]
 fn issue756_typing_only_creates_text_without_caret_track() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, true));
-    assert_eq!(
-        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
-        0,
-        "smooth cursor 关闭时没有 caret motion，不生成吞吐字（Issue #727 约束 5）"
+    // coordinated=false, typing=true, smooth=false：只有文字动画。
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true));
+    // Issue #756 问题 2: 打字动画开启时必须有吐字（用 typing timeline 推进，不消费 caret frame）。
+    assert!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
+        "打字动画开启：必须有 InsertReveal 吞吐字（typing timeline 推进）"
     );
     assert!(
         tx.cursor_visual_track.is_none(),
         "smooth cursor 关闭且非协同：不建立 caret track，光标不得沿 track 滑动"
     );
+    assert!(!tx.units.is_empty(), "打字动画开启：文字动画照播");
+    // Issue #756: coordinated=false 时吞吐字是 Timed（typing-driven），不是 CaretDriven。
     assert!(
-        !tx.units.is_empty(),
-        "打字动画开启：文字动画（Reflow）必须照播，不被 smooth_cursor_enabled 关掉"
+        !tx.coordinated,
+        "coordinated=false: 事务不进入 coordinated ownership"
+    );
+    assert!(
+        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
+        "coordinated=false: 吞吐字用 Timed timing，不消费 caret frame"
     );
 }
 
@@ -886,7 +918,7 @@ fn issue756_typing_only_creates_text_without_caret_track() {
 #[test]
 fn issue756_smooth_only_creates_caret_track_without_text_animation() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true));
     assert!(
         tx.units.is_empty(),
         "打字动画关闭且非协同：不得生成任何文字动画 unit，实际 {:?}",
@@ -907,7 +939,7 @@ fn issue756_smooth_only_creates_caret_track_without_text_animation() {
 fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false，但建不出 caret motion（无 old/new caret rect）。
-    let tx = build_prepared_transaction(issue756_insert_spec(key, true, true, false));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, false));
     assert!(
         tx.cursor_visual_track.is_none(),
         "没有 caret rect 时自然没有 caret track"
@@ -922,11 +954,127 @@ fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
 #[test]
 fn issue756_all_disabled_produces_no_units_and_no_track() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, false, true));
     assert!(tx.units.is_empty(), "两个开关都关闭且非协同：没有文字动画");
     assert!(
         tx.cursor_visual_track.is_none(),
         "两个开关都关闭且非协同：没有光标动画"
+    );
+}
+
+/// Issue #756: 有 old/new caret rect 时两个独立开关同时开 ≠ 协同。
+///
+/// coordinated=false + typing=true + smooth=true + 有 caret rect：
+/// - 有 InsertReveal（文字动画）
+/// - 有 cursor_visual_track（光标动画）
+/// - 不进入 coordinated ownership（吞吐字用 Timed timing，不消费 caret frame）
+#[test]
+fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
+    let key = VisualTransactionKey::new(1, 756);
+    // coordinated=false, typing=true, smooth=true, 有 caret rect。
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true));
+    assert!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
+        "typing=true: 必须有 InsertReveal（文字动画）"
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth=true 且有 caret rect: 必须有 cursor_visual_track（光标动画）"
+    );
+    assert!(
+        !tx.coordinated,
+        "coordinated=false: 不进入 coordinated ownership"
+    );
+    assert!(
+        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
+        "coordinated=false: 吞吐字用 Timed timing，不消费 caret frame（两个动画并行但不绑死）"
+    );
+}
+
+/// Issue #756 IME 四组组合测试：验证 text=coordinated||typing, caret=coordinated||smooth,
+/// coordinated 决定吞吐字是否由 caret 驱动。用 build_prepared_transaction 直接测
+/// composition 的 VisualEditSpec 构造，传入不同的 coordinated/typing/smooth 组合。
+
+/// coordinated=true + typing=false + smooth=false：协同仍正常
+///（text=true, caret=true, coordinated=true，吞吐字 CaretDriven）。
+#[test]
+fn issue756_ime_coordinated_only() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true));
+    assert!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
+        "coordinated=true: 必须有 InsertReveal"
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "coordinated=true: 必须有 caret track"
+    );
+    assert!(tx.coordinated, "coordinated=true: 事务标记 coordinated");
+    assert!(
+        tx.units.iter().any(|u| u.timing.is_caret_driven()),
+        "coordinated=true: 吞吐字用 CaretDriven timing（消费 caret frame）"
+    );
+}
+
+/// coordinated=false + typing=true + smooth=false：只有文字动画
+///（text=true, caret=false, coordinated=false，吞吐字 Timed）。
+#[test]
+fn issue756_ime_typing_only() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true));
+    assert!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
+        "typing=true: 必须有 InsertReveal"
+    );
+    assert!(
+        tx.cursor_visual_track.is_none(),
+        "smooth=false 且非协同: 没有 caret track"
+    );
+    assert!(!tx.coordinated, "coordinated=false: 事务不标记 coordinated");
+    assert!(
+        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
+        "coordinated=false: 吞吐字用 Timed timing"
+    );
+}
+
+/// coordinated=false + typing=false + smooth=true：只有光标动画
+///（text=false, caret=true, coordinated=false，无吞吐字）。
+#[test]
+fn issue756_ime_smooth_only() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true));
+    assert!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) == 0,
+        "typing=false 且非协同: 没有 InsertReveal"
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth=true: 必须有 caret track"
+    );
+    assert!(!tx.coordinated, "coordinated=false: 事务不标记 coordinated");
+}
+
+/// coordinated=false + typing=true + smooth=true：两个动画并行但不进入 coordinated ownership
+///（text=true, caret=true, coordinated=false，吞吐字 Timed）。
+#[test]
+fn issue756_ime_typing_and_smooth_not_coordinated() {
+    let key = VisualTransactionKey::new(1, 756);
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true));
+    assert!(
+        issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
+        "typing=true: 必须有 InsertReveal"
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth=true: 必须有 caret track"
+    );
+    assert!(
+        !tx.coordinated,
+        "coordinated=false: 两个开关同时开不等于协同"
+    );
+    assert!(
+        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
+        "coordinated=false: 吞吐字用 Timed timing，不消费 caret frame"
     );
 }
 

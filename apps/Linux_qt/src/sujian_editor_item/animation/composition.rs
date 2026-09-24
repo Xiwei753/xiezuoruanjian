@@ -42,6 +42,10 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_line_bottom: f64,
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
+        // Issue #756: 动画开关由调用方按同一份设置算出传入。
+        text_animation_enabled: bool,
+        caret_animation_enabled: bool,
+        coordinated_animation_enabled: bool,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
         // Issue #710 评论 5734282079: 冲突检测用 current-old 坐标系。
@@ -122,10 +126,10 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             unit_duration_ms: u64::from(self.typing_animation_duration_ms),
-            // Issue #756: composition 路径由调用方（typing_animation_enabled / 协同模式）
-            // 决定是否进入，这里保持"文字 + 光标都要播"的原有语义。
-            text_animation_enabled: true,
-            caret_animation_enabled: true,
+            // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
+            text_animation_enabled,
+            caret_animation_enabled,
+            coordinated_animation_enabled,
             composition_commit_crossfade: None,
         };
         let prepared = build_prepared_transaction(spec);
@@ -232,6 +236,10 @@ impl LinuxEditorAnimationCoordinator {
         layout_basis_revision: LayoutRevision,
         now: Instant,
         prepared_handoff: Option<PreparedCompositionCommitHandoff>,
+        // Issue #756: 动画开关由调用方按同一份设置算出传入。
+        text_animation_enabled: bool,
+        caret_animation_enabled: bool,
+        coordinated_animation_enabled: bool,
     ) -> Option<VisualTransactionKey> {
         // Issue #738 评论 5798704669 问题1: 若外层已调 prepare_composition_commit_handoff
         // 采好 handoff（commit 路径），直接用；否则内部 prepare（cancel 路径 / 旧调用方）。
@@ -320,10 +328,10 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             unit_duration_ms: u64::from(self.typing_animation_duration_ms),
-            // Issue #756: composition 路径由调用方（typing_animation_enabled / 协同模式）
-            // 决定是否进入，这里保持"文字 + 光标都要播"的原有语义。
-            text_animation_enabled: true,
-            caret_animation_enabled: true,
+            // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
+            text_animation_enabled,
+            caret_animation_enabled,
+            coordinated_animation_enabled,
             composition_commit_crossfade,
         };
         let prepared = build_prepared_transaction(spec);
