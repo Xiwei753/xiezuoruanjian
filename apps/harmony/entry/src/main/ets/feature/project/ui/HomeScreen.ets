@@ -1,5 +1,6 @@
 import { Routes, WritingRouteParams, WorkspaceRouteParams, StarMapRouteParams, SettingsRouteParams } from '../../../app/navigation/Routes'
 // router 已由 AppNavigation 统一接管；HomeScreen 通过 navPathStack 跳转。
+import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { Project, WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { RecentEdit, AppSummary } from '../../../corebridge/dto/ResultEnvelope'
@@ -152,98 +153,108 @@ export struct HomeScreen {
   }
 
   build() {
-    Column() {
-      // Header — 受内容最大宽度约束，居中显示
-      Row() {
-        Text($r('app.string.app_title'))
-          .fontSize(28)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点。
+    // HarmonyOS Navigation 子页面要求目标页根节点用 NavDestination，否则实机白屏
+    //（Touch test result is empty）。HomeScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
+    NavDestination() {
+      Column() {
+        // Header — 受内容最大宽度约束，居中显示
+        Row() {
+          Text($r('app.string.app_title'))
+            .fontSize(28)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.themeConfig.colors.textPrimary)
 
-        Blank()
+          Blank()
 
-        Column() {
-           Text(this.appDataRoot ? this.extractWorkspaceName(this.appDataRoot) : $r('app.string.my_writing_space'))
-             .fontSize(15)
-             .fontColor(this.themeConfig.colors.textSecondary)
-
-          if (this.writingStats) {
-             Text(getContext(this).resourceManager.getStringSync($r('app.string.today_chars_format').id).replace('%s', `${this.writingStats.todayChars}`))
-              .fontSize(13)
-              .fontColor(this.themeConfig.colors.textHint)
-          }
-
-          if (this.nativeStatus) {
-            Text(`Native: ${this.nativeStatus}`)
-              .fontSize(10)
-              .fontColor(this.themeConfig.colors.textHint)
-          }
-        }
-        .alignItems(HorizontalAlign.End)
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 16 })
-
-      if (this.isLoading) {
-        Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-            .color(this.themeConfig.colors.primary)
-          Text($r('app.string.loading'))
-            .fontSize(14)
-            .fontColor(this.themeConfig.colors.textHint)
-            .margin({ top: 12 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.errorMessage) {
-        Column() {
-          Text(this.errorMessage)
-            .fontSize(16)
-            .fontColor(this.themeConfig.colors.error)
-            .margin({ bottom: 16 })
-
-          Button($r('app.string.retry'))
-            .onClick(() => this.initAndLoad())
-            .backgroundColor(this.themeConfig.colors.primary)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
           Column() {
-            // Writing stats card
+             Text(this.appDataRoot ? this.extractWorkspaceName(this.appDataRoot) : $r('app.string.my_writing_space'))
+               .fontSize(15)
+               .fontColor(this.themeConfig.colors.textSecondary)
+
             if (this.writingStats) {
-              this.WritingStatsCard()
+               Text(getContext(this).resourceManager.getStringSync($r('app.string.today_chars_format').id).replace('%s', `${this.writingStats.todayChars}`))
+               .fontSize(13)
+               .fontColor(this.themeConfig.colors.textHint)
             }
 
-            // Recent edits section
-            if (this.recentEdit != null) {
-              this.RecentEditsSection()
+            if (this.nativeStatus) {
+              Text(`Native: ${this.nativeStatus}`)
+                .fontSize(10)
+                .fontColor(this.themeConfig.colors.textHint)
             }
+          }
+          .alignItems(HorizontalAlign.End)
+        }
+        .width('100%')
+        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+        .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 16 })
 
-            // Projects section
-            this.ProjectsSection()
-
-            // Quick actions
-            this.QuickActions()
+        if (this.isLoading) {
+          Column() {
+            LoadingProgress()
+              .width(48)
+              .height(48)
+              .color(this.themeConfig.colors.primary)
+            Text($r('app.string.loading'))
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textHint)
+              .margin({ top: 12 })
           }
           .width('100%')
-          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 32 })
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.errorMessage) {
+          Column() {
+            Text(this.errorMessage)
+              .fontSize(16)
+              .fontColor(this.themeConfig.colors.error)
+              .margin({ bottom: 16 })
+
+            Button($r('app.string.retry'))
+              .onClick(() => this.initAndLoad())
+              .backgroundColor(this.themeConfig.colors.primary)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column() {
+              // Writing stats card
+              if (this.writingStats) {
+                this.WritingStatsCard()
+              }
+
+              // Recent edits section
+              if (this.recentEdit != null) {
+                this.RecentEditsSection()
+              }
+
+              // Projects section
+              this.ProjectsSection()
+
+              // Quick actions
+              this.QuickActions()
+            }
+            .width('100%')
+            .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 32 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .align(Alignment.Top)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .align(Alignment.Top)
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(this.themeConfig.colors.background)
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
+    .hideTitleBar(true)
+    // Issue #752：首帧路标日志，确认 Home NavDestination 已显示。
+    .onShown((_reason: VisibilityChangeReason) => {
+      hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
+    })
   }
 
   @Builder

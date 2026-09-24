@@ -39,6 +39,9 @@ export struct StatsScreen {
   }
 
   build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // StatsScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
+    NavDestination() {
     Column() {
       Row() {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
@@ -178,5 +181,7 @@ export struct StatsScreen {
     .width('100%')
     .height('100%')
     .backgroundColor(this.themeConfig.colors.background)
+    }
+    .hideTitleBar(true)
   }
 }

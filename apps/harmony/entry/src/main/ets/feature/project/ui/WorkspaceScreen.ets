@@ -182,18 +182,23 @@ export struct WorkspaceScreen {
   // ========== 构建 UI ==========
 
   build() {
-    Column() {
-      if (this.adaptiveState.isTwoPane) {
-        // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
-        this.TwoPaneLayout()
-      } else {
-        // ── 单栏模式 ──
-        this.SinglePaneLayout()
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // WorkspaceScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
+    NavDestination() {
+      Column() {
+        if (this.adaptiveState.isTwoPane) {
+          // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
+          this.TwoPaneLayout()
+        } else {
+          // ── 单栏模式 ──
+          this.SinglePaneLayout()
+        }
       }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(this.themeConfig.colors.background)
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
+    .hideTitleBar(true)
   }
 
   // ────────────────────────────────────────

@@ -98,7 +98,14 @@ export class AdaptiveContext {
       const density = displayInfo.densityPixels
       const widthVp = rect.width / density
       const heightVp = rect.height / density
-      await this.updateState(widthVp, heightVp)
+      // Issue #752：实机冷启动首帧 windowRect 可能是 0x0，不当作有效尺寸写入布局状态。
+      // 只注册监听，等 windowSizeChange 回调带来真实尺寸，避免 "Initialized: Compact 0x0"。
+      if (widthVp <= 0 || heightVp <= 0) {
+        hilog.info(DOMAIN, TAG, 'Window rect not ready: %{public}sx%{public}s, deferring until first valid size', `${widthVp}`, `${heightVp}`)
+      } else {
+        await this.updateState(widthVp, heightVp)
+        hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp}`)
+      }
 
       // 注册窗口尺寸变化监听
       this.registerWindowSizeChange()
@@ -106,7 +113,6 @@ export class AdaptiveContext {
       this.registerAvoidAreaChange()
       // 注册折叠状态变化监听
       this.registerFoldStatusChange()
-      hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp}`)
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to initialize: ${JSON.stringify(err)}`)
     }
@@ -183,7 +189,11 @@ export class AdaptiveContext {
         if (!this.mainWindow) {
           return
         }
-        const properties = this.mainWindow.getWindowProperties()
+        // Issue #752：忽略 0x0 尺寸回调，不写入布局状态。
+        if (data.width <= 0 || data.height <= 0) {
+          hilog.info(DOMAIN, TAG, 'windowSizeChange ignored: %{public}sx%{public}s (zero size)', `${data.width}`, `${data.height}`)
+          return
+        }
         const displayInfo = display.getDefaultDisplaySync()
         const density = displayInfo.densityPixels
         const widthVp = data.width / density
@@ -211,6 +221,12 @@ export class AdaptiveContext {
   }
 
   private async updateState(widthVp: number, heightVp: number): Promise<void> {
+    // Issue #752：防御性判断，0x0 尺寸不写入布局状态。
+    if (widthVp <= 0 || heightVp <= 0) {
+      return
+    }
+    // Issue #752：首次拿到非 0 有效尺寸时记录首帧路标日志。
+    const isFirstValidSize: boolean = this.state.widthVp <= 0 || this.state.heightVp <= 0
     const bridge = getBridge()
     // #610：平台端先把窗口能力判断好（Harmony 断点/折叠/指针/键盘），再调 Core 契约。
     const capabilities: WindowCapabilities = {
@@ -235,6 +251,10 @@ export class AdaptiveContext {
           contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
           pagePadding: plan.pagePaddingVp,
           gridColumns: plan.gridColumns
+        }
+        // Issue #752：第一次拿到非 0 有效尺寸的首帧路标日志。
+        if (isFirstValidSize) {
+          hilog.info(DOMAIN, TAG, 'First valid window size: %{public}sx%{public}s vp', `${this.state.widthVp}`, `${this.state.heightVp}`)
         }
         this.notifyObservers()
       }
@@ -397,7 +417,10 @@ export class AdaptiveContext {
           const rect = properties.windowRect
           const widthVp = rect.width / density
           const heightVp = rect.height / density
-          this.updateState(widthVp, heightVp)
+          // Issue #752：忽略 0x0 尺寸，不写入布局状态。
+          if (widthVp > 0 && heightVp > 0) {
+            this.updateState(widthVp, heightVp)
+          }
         }
       })
       this.isAvoidAreaListening = true
@@ -449,7 +472,10 @@ export class AdaptiveContext {
             const density = displayInfo.densityPixels
             const widthVp = rect.width / density
             const heightVp = rect.height / density
-            this.updateState(widthVp, heightVp)
+            // Issue #752：忽略 0x0 尺寸，不写入布局状态。
+            if (widthVp > 0 && heightVp > 0) {
+              this.updateState(widthVp, heightVp)
+            }
           }
         }
       })

@@ -401,6 +401,9 @@ export struct StarMapScreen {
   }
 
   build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // StarMapScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
+    NavDestination() {
     Column() {
       // Header
       Row() {
@@ -566,6 +569,8 @@ export struct StarMapScreen {
     .width('100%')
     .height('100%')
     .backgroundColor(this.themeConfig.colors.background)
+    }
+    .hideTitleBar(true)
   }
 
   @Builder

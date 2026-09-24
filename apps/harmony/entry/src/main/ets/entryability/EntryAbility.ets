@@ -98,15 +98,17 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageCreate')
 
-    // 初始化响应式断点系统
-    getAdaptiveContext().initialize(windowStage)
-
-    windowStage.loadContent('pages/Index', (err, data) => {
+    // Issue #752：先 loadContent 成功再 initialize AdaptiveContext。
+    // 实机冷启动 loadContent 完成前 windowRect 可能是 0x0，提前 initialize 会把 0x0 写入布局状态导致白屏。
+    windowStage.loadContent('pages/Index', async (err, data) => {
       if (err.code) {
         hilog.error(0x0000, 'EntryAbility', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err))
         return
       }
       hilog.info(0x0000, 'EntryAbility', 'Succeeded in loading the content. Data: %{public}s', JSON.stringify(data))
+      // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
+      hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded')
+      getAdaptiveContext().initialize(windowStage)
     })
 
     this.lifecycle.notifyForeground()
@@ -119,15 +121,16 @@ export default class EntryAbility extends UIAbility {
   onWindowStageRestore(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
 
-    // 初始化响应式断点系统（与 onWindowStageCreate 等价）。
-    getAdaptiveContext().initialize(windowStage)
-
-    windowStage.loadContent('pages/Index', (err, data) => {
+    // Issue #752：与 onWindowStageCreate 等价，先 loadContent 成功再 initialize AdaptiveContext。
+    windowStage.loadContent('pages/Index', async (err, data) => {
       if (err.code) {
         hilog.error(0x0000, 'EntryAbility', 'Failed to load the content on restore. Cause: %{public}s', JSON.stringify(err))
         return
       }
       hilog.info(0x0000, 'EntryAbility', 'Succeeded in loading the content on restore. Data: %{public}s', JSON.stringify(data))
+      // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
+      hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded on restore')
+      getAdaptiveContext().initialize(windowStage)
     })
 
     this.lifecycle.notifyForeground()

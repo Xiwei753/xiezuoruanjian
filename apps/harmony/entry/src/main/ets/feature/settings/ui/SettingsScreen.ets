@@ -286,6 +286,9 @@ export struct SettingsScreen {
   }
 
   build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // SettingsScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
+    NavDestination() {
     Column() {
       // Header — 无保存按钮，仅返回+标题+保存状态提示
       Row() {
@@ -351,6 +354,8 @@ export struct SettingsScreen {
     .width('100%')
     .height('100%')
     .backgroundColor(this.themeConfig.colors.background)
+    }
+    .hideTitleBar(true)
   }
 
   // ── 外观 (appearance) ── 主题模式、字体大小、行距
