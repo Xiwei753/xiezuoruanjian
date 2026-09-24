@@ -450,6 +450,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/TopWritingToolbar.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
+    // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
+    println!("cargo:rerun-if-changed=qml/SyncConflictPanel.qml");
     println!("cargo:rerun-if-changed=qml/HubPageFrame.qml");
     println!("cargo:rerun-if-changed=qml/HubPageHeader.qml");
     println!("cargo:rerun-if-changed=qml/HubContentGrid.qml");

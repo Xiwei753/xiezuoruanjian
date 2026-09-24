@@ -149,6 +149,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
+    // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
+    "qml/SyncConflictPanel.qml" as "SyncConflictPanel.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
     "qml/SettingsSection.qml" as "SettingsSection.qml",
     "qml/SettingCard.qml" as "SettingCard.qml",

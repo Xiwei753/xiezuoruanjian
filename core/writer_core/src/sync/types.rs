@@ -457,10 +457,31 @@ pub struct SyncFileEntry {
     pub sync_kind: SyncKind,
 }
 
-/// 同步冲突记录 — 描述一个 BothChanged 路径的双方版本信息。
+/// 同步冲突类型 — 区分双端修改与远端删除两种语义。
+///
+/// `BothChanged`：本地和远端都修改了同一文件，需用户选择保留哪一份。
+/// `RemoteDeleted`：远端已删除但本地有修改，需用户决定是否接受删除。
+///
+/// 线格式使用 `snake_case`（`both_changed` / `remote_deleted`），
+/// 旧 `conflicts.json` 缺少此字段时反序列化默认为 `BothChanged`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum SyncConflictKind {
+    #[default]
+    BothChanged,
+    RemoteDeleted,
+}
+
+/// 同步冲突记录 — 描述一个冲突路径的双方版本信息。
 ///
 /// `base_hash` 为三路比较的基准哈希（上次同步后的共识版本）。
 /// 冲突解决前，该路径在 `SyncState.conflicted_files` 中，同步引擎跳过自动处理。
+///
+/// `kind` 明确区分冲突语义（双端修改 / 远端删除），不再靠 `description` 字符串
+/// 隐式传递机器可解析信息。`remote_snapshot_path` 指向本地保存的远端副本
+/// （相对 `sync_root` 的路径），供预览 API 读取远端内容；`RemoteDeleted` 时为 `None`。
+/// `description` 只做展示文字，不再承担机器可解析字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConflict {
     pub local_path: String,
@@ -470,6 +491,29 @@ pub struct SyncConflict {
     pub base_hash: String,
     pub created_at: i64,
     pub description: String,
+    /// 冲突类型。旧数据缺少此字段时默认 `BothChanged`。
+    #[serde(default)]
+    pub kind: SyncConflictKind,
+    /// 远端副本快照相对 `sync_root` 的路径（`BothChanged` 时有值）。
+    /// 旧数据缺少此字段时默认 `None`。
+    #[serde(default)]
+    pub remote_snapshot_path: Option<String>,
+}
+
+/// 同步冲突预览 — 供平台层展示本地/远端内容的内部结构。
+///
+/// 平台层通过 DTO（[`crate::api::SyncConflictPreviewDto`]）消费，不直接读
+/// `conflicts.json`。`local_content` 为当前本地正文；`remote_content` 在
+/// `BothChanged` 时为保存的远端 snapshot 正文；`remote_deleted` 在
+/// `RemoteDeleted` 时为 `true`，不伪造空字符串为远端正文。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncConflictPreview {
+    pub path: String,
+    pub kind: SyncConflictKind,
+    pub created_at: i64,
+    pub local_content: String,
+    pub remote_content: Option<String>,
+    pub remote_deleted: bool,
 }
 
 /// 同步诊断结果 — provider-neutral，逐步检查网络、认证、远端可达性。

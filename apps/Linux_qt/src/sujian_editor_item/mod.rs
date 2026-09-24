@@ -21,6 +21,7 @@
 // =============================================================================
 
 pub(crate) mod animated_slice;
+pub(crate) mod animation;
 pub(crate) mod animation_mode;
 pub(crate) mod cursor_animation;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
@@ -49,7 +50,6 @@ mod runtime_tests;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
 pub(crate) mod text_utils;
-pub(crate) mod animation;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
 pub(crate) mod transaction_key;

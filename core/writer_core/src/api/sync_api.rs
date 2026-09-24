@@ -632,6 +632,36 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
+    ///
+    /// 平台层只拿此 DTO，不直接读 `conflicts.json`，QML 更不能自己拼磁盘路径。
+    pub fn load_sync_conflict_preview(
+        &self,
+        project_id: &str,
+        path: &str,
+    ) -> ApiResult<SyncConflictPreviewDto> {
+        let preview = self
+            .core_read()
+            .load_sync_conflict_preview(project_id, path)
+            .map_err(crate::api::error::WriterError::from)?;
+        Ok(SyncConflictPreviewDto {
+            path: preview.path,
+            kind: sync_conflict_kind_to_wire(&preview.kind),
+            created_at: preview.created_at,
+            local_content: preview.local_content,
+            remote_content: preview.remote_content,
+            remote_deleted: preview.remote_deleted,
+        })
+    }
+
+    /// 列出当前项目的所有冲突记录。
+    pub fn list_sync_conflicts(&self, project_id: &str) -> ApiResult<Vec<SyncConflictDto>> {
+        self.core_read()
+            .list_sync_conflicts(project_id)
+            .map(|conflicts| conflicts.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
     /// 检查同步能力——综合 config 和 secrets 判断是否可执行全量同步。
     pub fn get_sync_capability(&self) -> ApiResult<SyncCapabilityDto> {
         let config = self.load_sync_config()?;

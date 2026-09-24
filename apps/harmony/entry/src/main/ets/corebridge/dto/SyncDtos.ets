@@ -42,6 +42,8 @@ export interface SyncConflict {
   baseHash: string
   createdAt: number
   description: string
+  kind: string
+  remoteSnapshotPath: string | null
 }
 
 export interface SyncResult {

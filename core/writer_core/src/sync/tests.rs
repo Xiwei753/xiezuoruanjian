@@ -10,6 +10,7 @@ mod tests {
     use crate::sync::types::SyncConfig;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncConflict;
+    use crate::sync::types::SyncConflictKind;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
     #[cfg(feature = "github-api")]
@@ -293,6 +294,8 @@ mod tests {
             base_hash: "ccc".to_string(),
             created_at: 123456789,
             description: "conflict test".to_string(),
+            kind: crate::sync::types::SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
         };
 
         // Pass a non-existent parent directory to force an error
@@ -336,6 +339,8 @@ mod tests {
             base_hash: "".to_string(),
             description: "".to_string(),
             created_at: 0,
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
         };
         assert_ne!(conflict.local_path, "unknown");
         assert_ne!(conflict.remote_path, "unknown");
@@ -635,6 +640,8 @@ mod tests {
             base_hash: "ccc".to_string(),
             created_at: 123456789,
             description: "conflict test".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
         };
 
         SyncService::record_sync_conflict(dir.path(), conflict, Some("my local conflict")).unwrap();
@@ -2257,6 +2264,8 @@ mod tests {
             base_hash: base_hash.clone(),
             created_at: 12345,
             description: "test conflict".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
@@ -2306,6 +2315,8 @@ mod tests {
             base_hash: base_hash.clone(),
             created_at: 12345,
             description: "test conflict".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
@@ -2363,6 +2374,8 @@ mod tests {
             base_hash: base_hash.clone(),
             created_at: 12345,
             description: "test conflict".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 

@@ -42,10 +42,20 @@ Rectangle {
     property int currentTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
+    // Issue #757 评论 5818193510 第 5 点：冲突侧栏支持。
+    // syncBackendRef + workspaceProjectId 透传给 SyncConflictPanel。
+    // hasConflicts 控制冲突 tab 显隐；变 true 时自动切到冲突 tab。
+    property var syncBackendRef: null
+    property string workspaceProjectId: ""
+    property bool hasConflicts: false
+    // 冲突 tab 固定 idx=3，不偏移现有星图(0)/AI(1)/统计(2)，保持兼容。
+    readonly property int conflictTabIdx: 3
 
     signal closeRequested()
     signal openStarMap()
     signal openSettings()
+    // 冲突 tab 被请求时发出（hasConflicts 从 false 变 true），外部据此打开 drawer。
+    signal conflictTabRequested()
 
     color: "transparent"
     clip: true
@@ -94,6 +104,11 @@ Rectangle {
                                 tabs.push({ label: qsTr("AI"), idx: 1 });
                             }
                             tabs.push({ label: qsTr("统计"), idx: 2 });
+                            // Issue #757 评论 5818193510 第 5 点：有未解决冲突时增加"冲突"tab。
+                            // idx=3 固定，不偏移现有 tab，保持 WritingWorkspace drawerTab 绑定兼容。
+                            if (root.hasConflicts) {
+                                tabs.push({ label: qsTr("冲突"), idx: root.conflictTabIdx });
+                            }
                             // Settings tab removed — main entry is now in TopWritingToolbar
                             return tabs;
                         }
@@ -239,7 +254,33 @@ Rectangle {
                         }
                     }
                 }
+
+                // Issue #757 评论 5818193510 第 5 点：冲突 tab — 直接复用现有 RightDrawer 做临时冲突侧栏。
+                // SyncConflictPanel 负责调 SyncBackend 拿冲突列表/预览/解决动作，
+                // 不在 QML 维护第二份可编辑正文，不自己拼磁盘路径读 conflicts.json。
+                SyncConflictPanel {
+                    visible: root.currentTab === root.conflictTabIdx && root.hasConflicts
+                    anchors.fill: parent
+                    dt: root.dt
+                    syncBackendRef: root.syncBackendRef
+                    projectId: root.workspaceProjectId
+                    onCloseRequested: root.closeRequested()
+                    onConflictsResolved: {
+                        // 解决一个冲突后刷新列表；若全部解决，外部应把 hasConflicts 置 false。
+                        root.conflictTabRequested();
+                    }
+                }
             }
+        }
+    }
+
+    // Issue #757 评论 5818193510 第 5 点：冲突刚产生时自动切到冲突 tab。
+    // 打开 drawer 由外部（WritingWorkspace）监听 conflictTabRequested 完成，
+    // RightDrawer 不自己控制 isOpen（单向属性，由外部绑定）。
+    onHasConflictsChanged: {
+        if (root.hasConflicts) {
+            root.currentTab = root.conflictTabIdx;
+            root.conflictTabRequested();
         }
     }
 }

@@ -1,15 +1,15 @@
 use std::time::Instant;
 
+use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
+use super::rebase::RebaseCaretHandoff;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::animation::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, TextVisualOperationKind,
     TextVisualTransactionState,
 };
-use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
+use crate::sujian_editor_item::edit_motion::CursorRect;
+use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use super::rebase::RebaseCaretHandoff;
 
 pub(crate) fn build_cursor_visual_track(
     old_cursor_rect: Option<&CursorRect>,
@@ -111,7 +111,6 @@ pub(crate) fn sample_coordinated_cursor_rect_at(
         baseline_y: new_rect.baseline_y,
     })
 }
-
 
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn active_text_transaction_key_with_epoch(

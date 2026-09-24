@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::editor::layout::CanonicalDocumentVisualSnapshot;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{ShapingIdentity, SourceRect};
-use crate::editor::layout::CanonicalDocumentVisualSnapshot;
 
 use super::timeline::VisualUnitTiming;
 use super::types::{PreparedTextVisualTransaction, PreparedVisualUnit};
