@@ -117,7 +117,7 @@ export CC_aarch64_unknown_linux_ohos="$CLANG"
 export AR_aarch64_unknown_linux_ohos="$LLVM_AR"
 export CFLAGS_aarch64_unknown_linux_ohos="--target=$CLANG_TARGET --sysroot=$SYSROOT -D__MUSL__"
 export CXXFLAGS_aarch64_unknown_linux_ohos="--target=$CLANG_TARGET --sysroot=$SYSROOT -D__MUSL__"
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS="-C link-arg=--target=$CLANG_TARGET -C link-arg=--sysroot=$SYSROOT"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS="-C link-arg=--target=$CLANG_TARGET -C link-arg=--sysroot=$SYSROOT -C link-arg=-Wl,-soname,libwriter_core_ffi.so"
 
 # -----------------------------------------------------------------------------
 # 4. 构建 cdylib 并复制到 prebuilt 目录

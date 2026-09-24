@@ -33,6 +33,5 @@ target_link_libraries(writer_core_napi PUBLIC
 )
 
 set_target_properties(writer_core_napi PROPERTIES
-    PREFIX ""
     OUTPUT_NAME "writer_core"
 )
