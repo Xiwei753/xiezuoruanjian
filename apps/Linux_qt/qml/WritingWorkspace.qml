@@ -38,7 +38,7 @@ import Sujian 1.0
 Rectangle {
     id: root
     required property var dt
-    property var backendRef: null
+    property var editorBackendRef: null
     property var starMapController: null
     // Issue #709 评论 issue-body-709: 传入 themeController 给 EditorController，
     // 使 logRenderColorProbe 能读取 ThemeController runtime state。
@@ -104,7 +104,7 @@ Rectangle {
     EditorController {
         id: editorController
         targetEditorItem: sujianEditor
-        backendRef: root.backendRef
+        editorBackendRef: root.editorBackendRef
         dt: root.dt
         // Issue #709 评论 issue-body-709: 传入 themeController 使
         // logRenderColorProbe 能读取 runtime state。
@@ -159,11 +159,11 @@ Rectangle {
     onTreeChanged: populateTreeModel()
     Component.onCompleted: {
         populateTreeModel();
-        if (root.backendRef && root.backendRef.selected_chapter_id) {
+        if (root.editorBackendRef && root.editorBackendRef.selected_chapter_id) {
             root.openChapter(
-                root.backendRef.selected_project_id,
-                root.backendRef.selected_volume_id,
-                root.backendRef.selected_chapter_id,
+                root.editorBackendRef.selected_project_id,
+                root.editorBackendRef.selected_volume_id,
+                root.editorBackendRef.selected_chapter_id,
                 ""
             );
         }
@@ -1108,7 +1108,7 @@ Rectangle {
             SplitView.maximumWidth: 480
             visible: root.drawerOpen
             dt: root.dt
-            backendRef: root.backendRef
+            editorBackendRef: root.editorBackendRef
             starMapController: root.starMapController
             isOpen: root.drawerOpen
             currentTab: root.drawerTab
@@ -1121,7 +1121,7 @@ Rectangle {
     }
 
     Connections {
-        target: root.backendRef
+        target: root.editorBackendRef
         function onChapter_path_changed() {
             // Path changed visually, do NOT load chapter content to avoid infinite loop.
             // Just update title if needed

@@ -41,7 +41,7 @@ Item {
     readonly property int _radiusSm: dt.radiusSm
     readonly property int _dialogRadius: dt.dialogRadius
 
-    property var backendRef: null
+    property var starmapBackendRef: null
     property string errorMessage: graphController.errorMessage
 
     // View transform properties
@@ -77,7 +77,7 @@ Item {
     StarMapGraphController {
         id: graphController
         starmapId: canvasArea.starmapId
-        backendRef: canvasArea.backendRef
+        starmapBackendRef: canvasArea.starmapBackendRef
         onGraphChanged: {
             canvasArea.nodesModel = graphController.nodesModel
             canvasArea.edgesModel = graphController.edgesModel

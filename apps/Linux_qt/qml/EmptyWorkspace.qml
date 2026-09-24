@@ -32,7 +32,7 @@ Item {
     readonly property real _body: dt.bodyPt
     readonly property string _fontFamily: dt.fontFamily
 
-    property var backendRef: null
+    property var workspaceBackendRef: null
 
     signal createWorkspaceWithPath(string path)
     signal openWorkspaceWithPath(string path)

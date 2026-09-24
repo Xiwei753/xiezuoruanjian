@@ -21,7 +21,7 @@ Item {
     // Issue #701 评论 5699565102: 删除内部 fallbackDt。组件必须消费调用方
     // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
     readonly property var resolvedDt: dt
-    property var backendRef: null
+    property var syncBackendRef: null
     property var beforeSyncHook: null
     signal settingsChanged()
 
@@ -109,7 +109,7 @@ Item {
     }
 
     function updateSyncResultText() {
-        if (root.backendRef) {
+        if (root.syncBackendRef) {
             try {
                 var obj = JSON.parse(root.currentSyncOperationState);
                 if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
@@ -163,12 +163,12 @@ Item {
     }
 
     function refreshLocalSyncState() {
-        if (root.backendRef) {
-            root.currentSyncStatus = root.backendRef.sync_status || "not_configured";
-            root.currentSyncInProgress = root.backendRef.sync_in_progress || false;
-            root.currentSyncOperationState = root.backendRef.sync_operation_state || "";
-            autoSyncSwitch.checked = root.backendRef.sync_auto_sync || false;
-            syncIntervalSlider.value = (root.backendRef.sync_interval || 300) / 60;
+        if (root.syncBackendRef) {
+            root.currentSyncStatus = root.syncBackendRef.sync_status || "not_configured";
+            root.currentSyncInProgress = root.syncBackendRef.sync_in_progress || false;
+            root.currentSyncOperationState = root.syncBackendRef.sync_operation_state || "";
+            autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false;
+            syncIntervalSlider.value = (root.syncBackendRef.sync_interval || 300) / 60;
             root.updateSyncResultText();
             // 同步失败时，如果结果区为空，则显示错误信息
             if (root.isFailureStatus(root.currentSyncStatus) && syncResultArea.text.trim() === "") {
@@ -227,21 +227,21 @@ Item {
         if (s === "not_configured") return qsTr("未配置")
         if (s === "no_workspace") return qsTr("未打开工作区")
         if (s === "configured_not_tested") return qsTr("已配置")
-        if (root.backendRef && root.backendRef.sync_enabled) return qsTr("同步")
+        if (root.syncBackendRef && root.syncBackendRef.sync_enabled) return qsTr("同步")
         return qsTr("配置同步")
     }
 
     Connections {
-        target: root.backendRef
+        target: root.syncBackendRef
         function onSync_action_completed() {
-            var stateStr = (root.backendRef && root.backendRef.sync_operation_state) || "";
+            var stateStr = (root.syncBackendRef && root.syncBackendRef.sync_operation_state) || "";
             if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                 window.debugLog("sync", "action_completed_callback", "resultLength=" + stateStr.length)
             }
             root.refreshLocalSyncState();
         }
         function onSync_status_changed() {
-            var stateStr = (root.backendRef && root.backendRef.sync_operation_state) || "";
+            var stateStr = (root.syncBackendRef && root.syncBackendRef.sync_operation_state) || "";
             var resLen = stateStr.length
             var now = Date.now()
             var shouldLog = true
@@ -310,7 +310,7 @@ Item {
                 Layout.fillWidth: true
                 dt: root.resolvedDt
                 label: qsTr("远程仓库地址")
-                text: (root.backendRef ? root.backendRef.sync_remote_url : "")
+                text: (root.syncBackendRef ? root.syncBackendRef.sync_remote_url : "")
                 placeholderText: "https://github.com/user/repo"
             }
 
@@ -319,7 +319,7 @@ Item {
                 Layout.fillWidth: true
                 dt: root.resolvedDt
                 label: qsTr("分支名")
-                text: (root.backendRef ? root.backendRef.sync_branch : "")
+                text: (root.syncBackendRef ? root.syncBackendRef.sync_branch : "")
                 placeholderText: "main"
             }
 
@@ -328,7 +328,7 @@ Item {
                 Layout.fillWidth: true
                 dt: root.resolvedDt
                 label: qsTr("访问 Token")
-                placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
+                placeholderText: (root.syncBackendRef ? root.syncBackendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
                 echoMode: TextInput.Password
             }
 
@@ -358,8 +358,8 @@ Item {
                 Switch {
                     id: autoSyncSwitch
                     onToggled: {
-                        if (root.backendRef) {
-                            root.backendRef.sync_auto_sync = autoSyncSwitch.checked
+                        if (root.syncBackendRef) {
+                            root.syncBackendRef.sync_auto_sync = autoSyncSwitch.checked
                         }
                     }
                 }
@@ -396,8 +396,8 @@ Item {
                     to: 60
                     stepSize: 1
                     onMoved: {
-                        if (root.backendRef) {
-                            root.backendRef.sync_interval = Math.round(value) * 60
+                        if (root.syncBackendRef) {
+                            root.syncBackendRef.sync_interval = Math.round(value) * 60
                         }
                     }
                 }
@@ -417,28 +417,28 @@ Item {
                         var hasNewToken = tokenField.text.trim().length > 0
                         window.debugLog("sync", "save_config_clicked", "url=" + urlField.text + ", branch=" + branchField.text + ", hasNewToken=" + hasNewToken)
                     }
-                    if (!root.backendRef) return
-                    root.backendRef.sync_remote_url = urlField.text
-                    root.backendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
+                    if (!root.syncBackendRef) return
+                    root.syncBackendRef.sync_remote_url = urlField.text
+                    root.syncBackendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
                     if (tokenField.text.trim().length > 0) {
-                        root.backendRef.set_sync_token(tokenField.text.trim())
+                        root.syncBackendRef.set_sync_token(tokenField.text.trim())
                         tokenField.text = ""
                     }
-                    root.backendRef.sync_enabled = true
-                    root.backendRef.sync_backend_type = "github_api"
+                    root.syncBackendRef.sync_enabled = true
+                    root.syncBackendRef.sync_backend_type = "github_api"
 
-                    var success = root.backendRef.save_sync_config()
+                    var success = root.syncBackendRef.save_sync_config()
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                         window.debugLog("sync", "save_config_finished", "success=" + success)
                     }
                     if (success) {
-                        root.backendRef.load_sync_config()
+                        root.syncBackendRef.load_sync_config()
                         root.refreshLocalSyncState()
                         tokenField.text = ""
                         root.settingsChanged()
                         root.showConfigFeedback(qsTr("配置已保存"), false)
                     } else {
-                        syncResultArea.text = root.backendRef.sync_operation_state || qsTr("保存配置失败")
+                        syncResultArea.text = root.syncBackendRef.sync_operation_state || qsTr("保存配置失败")
                         root.showConfigFeedback(qsTr("保存配置失败"), true)
                     }
                 }
@@ -448,19 +448,19 @@ Item {
                 text: qsTr("执行同步")
                 dt: root.resolvedDt
                 variant: "secondary"
-                enabled: root.backendRef && root.backendRef.sync_can_run
+                enabled: root.syncBackendRef && root.syncBackendRef.sync_can_run
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                     // 先保存当前 UI 配置
-                    if (root.backendRef) {
-                        root.backendRef.sync_remote_url = urlField.text
-                        root.backendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
+                    if (root.syncBackendRef) {
+                        root.syncBackendRef.sync_remote_url = urlField.text
+                        root.syncBackendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
                         if (tokenField.text.trim().length > 0) {
-                            root.backendRef.set_sync_token(tokenField.text.trim())
+                            root.syncBackendRef.set_sync_token(tokenField.text.trim())
                             tokenField.text = ""
                         }
-                        root.backendRef.save_sync_config()
-                        root.backendRef.load_sync_config()
+                        root.syncBackendRef.save_sync_config()
+                        root.syncBackendRef.load_sync_config()
                     }
                     // 再执行同步
                     if (typeof root.beforeSyncHook === "function") {
@@ -470,14 +470,14 @@ Item {
                         }
                     }
                     syncResultArea.text = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
-                    if (root.backendRef) {
-                        var opId = root.backendRef.perform_sync()
+                    if (root.syncBackendRef) {
+                        var opId = root.syncBackendRef.perform_sync()
                         root.activeOperationId = opId
                         root.activeOperationKind = "sync"
                         root.refreshLocalSyncState()
                         // 如果 opId 为空，显示即时错误
                         if (!opId || opId.length === 0) {
-                            syncResultArea.text = root.backendRef.sync_operation_state || qsTr("同步启动失败")
+                            syncResultArea.text = root.syncBackendRef.sync_operation_state || qsTr("同步启动失败")
                         }
                     }
                 }
@@ -487,17 +487,17 @@ Item {
                 text: qsTr("运行诊断")
                 dt: root.resolvedDt
                 variant: "secondary"
-                enabled: root.backendRef && root.backendRef.has_workspace && !(root.backendRef.sync_in_progress || false)
+                enabled: root.syncBackendRef && root.syncBackendRef.has_workspace && !(root.syncBackendRef.sync_in_progress || false)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
-                    if (root.backendRef) {
-                        var opId = root.backendRef.perform_sync_diagnostics()
+                    if (root.syncBackendRef) {
+                        var opId = root.syncBackendRef.perform_sync_diagnostics()
                         root.activeOperationId = opId
                         root.activeOperationKind = "dry_run"
                         // 如果 opId 为空，显示即时错误
                         if (!opId || opId.length === 0) {
-                            syncResultArea.text = root.backendRef.sync_operation_state || qsTr("诊断启动失败")
+                            syncResultArea.text = root.syncBackendRef.sync_operation_state || qsTr("诊断启动失败")
                         }
                     }
                 }
@@ -507,24 +507,24 @@ Item {
                 text: qsTr("打开工作区目录")
                 dt: root.resolvedDt
                 variant: "text"
-                visible: root.backendRef && root.backendRef.has_workspace
-                onClicked: if (root.backendRef) root.backendRef.open_workspace_dir()
+                visible: root.syncBackendRef && root.syncBackendRef.has_workspace
+                onClicked: if (root.syncBackendRef) root.syncBackendRef.open_workspace_dir()
             }
 
             AppButton {
                 text: qsTr("复制冲突信息")
                 dt: root.resolvedDt
                 variant: "danger"
-                visible: root.backendRef && root.isConflictStatus(root.currentSyncStatus)
-                onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncResultArea.text)
+                visible: root.syncBackendRef && root.isConflictStatus(root.currentSyncStatus)
+                onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(syncResultArea.text)
             }
         }
 
         AppText {
             id: syncBlockReason
             dt: root.resolvedDt
-            visible: root.backendRef && !root.backendRef.sync_can_run && root.backendRef.sync_block_reason.length > 0
-            text: root.backendRef ? root.backendRef.sync_block_reason : ""
+            visible: root.syncBackendRef && !root.syncBackendRef.sync_can_run && root.syncBackendRef.sync_block_reason.length > 0
+            text: root.syncBackendRef ? root.syncBackendRef.sync_block_reason : ""
             color: resolvedDt.onSurfaceVariant
             font.pointSize: resolvedDt.captionPt
             font.family: resolvedDt.fontFamily
@@ -535,7 +535,7 @@ Item {
         AppText {
             id: manualSyncPendingHint
             dt: root.resolvedDt
-            visible: root.backendRef && root.backendRef.manual_sync_pending
+            visible: root.syncBackendRef && root.syncBackendRef.manual_sync_pending
             text: qsTr("当前同步完成后将再次同步")
             color: resolvedDt.onSurfaceVariant
             font.pointSize: resolvedDt.captionPt
@@ -613,16 +613,16 @@ Item {
                 text: qsTr("复制")
                 dt: root.resolvedDt
                 variant: "text"
-                onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncRawErrorArea.text)
+                onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(syncRawErrorArea.text)
             }
         }
     }
 
     Component.onCompleted: {
-        if (root.backendRef) {
-            root.backendRef.load_sync_config()
-            autoSyncSwitch.checked = root.backendRef.sync_auto_sync || false
-            syncIntervalSlider.value = (root.backendRef.sync_interval || 300) / 60
+        if (root.syncBackendRef) {
+            root.syncBackendRef.load_sync_config()
+            autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false
+            syncIntervalSlider.value = (root.syncBackendRef.sync_interval || 300) / 60
         }
         root.refreshLocalSyncState();
         }

@@ -406,7 +406,7 @@ Dialog {
                 SyncPage {
                     Layout.fillWidth: true
                     dt: root.dt
-                    backendRef: root.syncBackendRef
+                    syncBackendRef: root.syncBackendRef
                     beforeSyncHook: function() {
                         if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
                         return true;

@@ -16,7 +16,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     required property var dt
-    property var backendRef: null
+    property var editorBackendRef: null
     property var projectBackendRef: null
     property var appState: ({})
     property var tree: []
@@ -45,8 +45,8 @@ Rectangle {
             var jsonStr = projectBackendRef.get_project_summaries_json()
             var arr = JSON.parse(jsonStr)
             if (!arr || !Array.isArray(arr)) {
-                if (backendRef && backendRef.log_qml) {
-                    backendRef.log_qml("error", "project", "project_summary_parse_failed", "summaries JSON is not an array")
+                if (editorBackendRef && editorBackendRef.log_qml) {
+                    editorBackendRef.log_qml("error", "project", "project_summary_parse_failed", "summaries JSON is not an array")
                 }
                 return
             }
@@ -56,8 +56,8 @@ Rectangle {
             }
             root._cachedSummaries = map
         } catch (e) {
-            if (backendRef && backendRef.log_qml) {
-                backendRef.log_qml("error", "project", "project_summary_parse_failed", String(e))
+            if (editorBackendRef && editorBackendRef.log_qml) {
+                editorBackendRef.log_qml("error", "project", "project_summary_parse_failed", String(e))
             }
         }
     }
@@ -68,11 +68,11 @@ Rectangle {
     }
 
     function getTodayInput(projectId) {
-        if (!backendRef) return 0
+        if (!editorBackendRef) return 0
         try {
             var today = new Date()
             var dateStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0")
-            var summary = backendRef.get_writing_stats_summary_object(dateStr, dateStr)
+            var summary = editorBackendRef.get_writing_stats_summary_object(dateStr, dateStr)
             if (summary && summary.per_project && summary.per_project[projectId]) return summary.per_project[projectId].human_typed_chars || 0
         } catch (e) {}
         return 0

@@ -36,7 +36,7 @@ Rectangle {
     readonly property real _fontSm: dt.fontSmPt
     readonly property real _fontLg: dt.fontLgPt
 
-    property var backendRef: null
+    property var editorBackendRef: null
     property var starMapController: null
     property bool isOpen: false
     property int currentTab: 0
@@ -201,7 +201,7 @@ Rectangle {
                 // Stats tab
                 StatsPreviewPage {
                     dt: root.dt
-                    backendRef: root.backendRef
+                    editorBackendRef: root.editorBackendRef
                     visible: root.currentTab === 2
                     anchors.fill: parent
                 }

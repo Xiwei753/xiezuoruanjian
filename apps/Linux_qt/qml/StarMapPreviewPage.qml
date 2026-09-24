@@ -5,7 +5,7 @@
 // 层级：Linux_qt UI 层（QML 页面）
 // 职责：在右侧抽屉中展示星图的缩略预览
 // 约束：
-//   - 纯展示组件，数据通过 backendRef 获取
+//   - 纯展示组件，数据通过 starmapBackendRef 获取
 //   - 点击后跳转到完整的星图编辑页面
 // =============================================================================
 
@@ -16,7 +16,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     required property var dt
-    property var backendRef: null
+    property var starmapBackendRef: null
     property var appState: ({})
 
     color: dt.bg

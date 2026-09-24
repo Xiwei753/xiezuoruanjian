@@ -5,7 +5,7 @@
 // 层级：Linux_qt UI 层（QML 页面）
 // 职责：展示今日/本周/月度写作统计、项目/章节/设备统计、速度曲线
 // 约束：
-//   - 纯展示层，数据通过 backendRef 从 AppBackend 获取
+//   - 纯展示层，数据通过 editorBackendRef 从 AppBackend 获取
 //   - 不直接操作文件系统或 Core 层
 // =============================================================================
 
@@ -16,7 +16,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     required property var dt
-    property var backendRef: null
+    property var editorBackendRef: null
     property var appState: ({})
     property var todayStats: ({})
     property var weekStats: ({})
@@ -42,23 +42,23 @@ Rectangle {
     }
 
     function loadStats() {
-        if (!backendRef) return
+        if (!editorBackendRef) return
         statsError = ""
         try {
-            backendRef.flush_writing_stats()
+            editorBackendRef.flush_writing_stats()
             var t = new Date()
             var td = t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0")
             var ws = new Date(t); ws.setDate(t.getDate() - t.getDay())
             var wd = ws.getFullYear() + "-" + String(ws.getMonth() + 1).padStart(2, "0") + "-" + String(ws.getDate()).padStart(2, "0")
             var ms = new Date(t.getFullYear(), t.getMonth(), 1)
             var md = ms.getFullYear() + "-" + String(ms.getMonth() + 1).padStart(2, "0") + "-" + String(ms.getDate()).padStart(2, "0")
-            todayStats = parseStatsJson(backendRef.get_writing_stats_summary(td, td)) || {}
-            weekStats = parseStatsJson(backendRef.get_writing_stats_summary(wd, td)) || {}
-            monthStats = parseStatsJson(backendRef.get_writing_stats_summary(md, td)) || {}
-            projectStats = (parseStatsJson(backendRef.get_writing_stats_by_project(wd, td)) || {}).projects || []
-            chapterStats = (parseStatsJson(backendRef.get_writing_stats_by_chapter(wd, td)) || {}).chapters || []
-            deviceStats = (parseStatsJson(backendRef.get_writing_stats_by_device(wd, td)) || {}).devices || []
-            speedCurve = (parseStatsJson(backendRef.get_writing_speed_curve(wd, td, 60)) || {}).buckets || []
+            todayStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(td, td)) || {}
+            weekStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(wd, td)) || {}
+            monthStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(md, td)) || {}
+            projectStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_project(wd, td)) || {}).projects || []
+            chapterStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_chapter(wd, td)) || {}).chapters || []
+            deviceStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_device(wd, td)) || {}).devices || []
+            speedCurve = (parseStatsJson(editorBackendRef.get_writing_speed_curve(wd, td, 60)) || {}).buckets || []
         } catch (e) {
             statsError = qsTr("统计读取失败：") + e
             todayStats = {}; weekStats = {}; monthStats = {}; projectStats = []; chapterStats = []; deviceStats = []; speedCurve = []

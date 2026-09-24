@@ -6,7 +6,7 @@
 // 职责：章节打开/保存、自动保存、格式应用、保存守卫（防误触）
 // 约束：
 //   - 不包含 UI 渲染，只管理编辑器状态
-//   - 通过 backendRef 调用 AppBackend (Rust QObject)
+//   - 通过 editorBackendRef 调用 AppBackend (Rust QObject)
 //   - 唯一编辑器路径：SujianEditorItem + QTextLayout + Rust Coordinator → Scene Graph
 //
 // 关键流程：
@@ -27,7 +27,7 @@ QtObject {
 
     // Target UI bindings
     property var targetEditorItem: null
-    property var backendRef: null
+    property var editorBackendRef: null
     required property var dt
     // Issue #709 评论 issue-body-709: 主题诊断需要读取 ThemeController runtime state
     //（appearance_mode/is_dark/color_source），由 WritingWorkspace 注入。
@@ -38,7 +38,7 @@ QtObject {
     property string volumeId: ""
     property string chapterId: ""
     property string chapterTitle: ""
-    property string saveStatus: backendRef ? backendRef.save_status : ""
+    property string saveStatus: editorBackendRef ? editorBackendRef.save_status : ""
 
     // Internal state
     property bool isLoadingChapter: false
@@ -57,7 +57,7 @@ QtObject {
         interval: settingsBackend ? settingsBackend.setting_auto_save_delay_ms : 1500
         repeat: false
         onTriggered: {
-            if (!backendRef || !controller.chapterId || !controller.projectId || !controller.volumeId) return;
+            if (!editorBackendRef || !controller.chapterId || !controller.projectId || !controller.volumeId) return;
             if (!settingsBackend || !settingsBackend.setting_auto_save_enabled) return;
             if (controller.saveGuardActive()) {
                 controller.pendingAutoSaveAfterGuard = true;
@@ -105,7 +105,7 @@ QtObject {
         // 只读 ThemeController runtime state 和 designTokens。同一条诊断写出
         // appearance_mode/is_dark/color_source/primary/surface/on_surface/
         // on_surface_variant，便于定位深色模式文字仍为黑色的问题。
-        if (!backendRef || !backendRef.log_qml) return;
+        if (!editorBackendRef || !editorBackendRef.log_qml) return;
         var tc = themeControllerRef ? themeControllerRef : null;
         var appearanceMode = tc ? tc.appearance_mode : "<null>";
         var isDark = dt ? dt.isDark : "<no-dt>";
@@ -116,7 +116,7 @@ QtObject {
         var surface = dt ? String(dt.surface) : "<no-dt>";
         var onSurface = dt ? String(dt.onSurface) : "<no-dt>";
         var onSurfaceVariant = dt ? String(dt.onSurfaceVariant) : "<no-dt>";
-        backendRef.log_qml("info", "editor", "theme_color_probe",
+        editorBackendRef.log_qml("info", "editor", "theme_color_probe",
                            "reason=" + reason
                            + " appearance_mode=" + appearanceMode
                            + " isDark=" + isDark
@@ -136,10 +136,10 @@ QtObject {
         interval: 300
         repeat: false
         onTriggered: {
-            if (!controller.chapterId || !controller.backendRef) return;
+            if (!controller.chapterId || !controller.editorBackendRef) return;
             var plainText = controller.getEditorPlainText();
             controller.reportStatsIfChanged(plainText);
-            controller.backendRef.calculate_word_count(plainText);
+            controller.editorBackendRef.calculate_word_count(plainText);
         }
     }
 
@@ -215,8 +215,8 @@ QtObject {
 
     function logWriterWarning(event, message) {
         var msg = message || "";
-        if (backendRef && backendRef.log_qml) {
-            backendRef.log_qml("warn", "editor", event, msg);
+        if (editorBackendRef && editorBackendRef.log_qml) {
+            editorBackendRef.log_qml("warn", "editor", event, msg);
         }
     }
 
@@ -226,8 +226,8 @@ QtObject {
                 + ", lastSavedLen=" + lastSavedEditorText.length
                 + ", editorItemLen=" + (read ? read.editorItemLength : -1);
         logWriterWarning("empty_save_blocked", details);
-        if (backendRef) {
-            backendRef.save_status = qsTr("已阻止空内容保存");
+        if (editorBackendRef) {
+            editorBackendRef.save_status = qsTr("已阻止空内容保存");
         }
         autoSaveTimer.stop();
         pendingAutoSaveAfterGuard = false;
@@ -249,7 +249,7 @@ QtObject {
         }
         // Debounce stats + word count — batch into 300ms timer instead of per-keystroke FFI
         controller.statsTimer.restart();
-        if (controller.chapterId && controller.backendRef) {
+        if (controller.chapterId && controller.editorBackendRef) {
             if (settingsBackend && settingsBackend.setting_auto_save_enabled) {
                 controller.autoSaveTimer.restart();
             }
@@ -257,7 +257,7 @@ QtObject {
     }
 
     function flushActiveEditorBeforeSync() {
-        if (!backendRef || !chapterId || !projectId || !volumeId) return true;
+        if (!editorBackendRef || !chapterId || !projectId || !volumeId) return true;
         if (saveGuardActive()) {
             pendingAutoSaveAfterGuard = false;
             return true;
@@ -270,7 +270,7 @@ QtObject {
         var plainText = read.text;
         if (plainText === lastSavedEditorText) return true;
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
-        var result = backendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
+        var result = editorBackendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
         if (result && result.success) {
             lastSavedEditorText = plainText;
             previousEditorText = plainText;
@@ -286,7 +286,7 @@ QtObject {
 
     // Unified save entry — always writes normalized plain text via backend.
     function saveCurrentChapter() {
-        if (!backendRef || !chapterId || !projectId || !volumeId) return;
+        if (!editorBackendRef || !chapterId || !projectId || !volumeId) return;
         if (saveGuardActive()) {
             pendingAutoSaveAfterGuard = true;
             return false;
@@ -301,7 +301,7 @@ QtObject {
         if (plainText === lastSavedEditorText) return true;
         var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
 
-        var result = backendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
+        var result = editorBackendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
         if (result && result.success) {
             lastSavedEditorText = plainText;
             previousEditorText = plainText;
@@ -322,13 +322,13 @@ QtObject {
     // Load chapter: content comes from Rust core as plain text.
     // Returns the full result object so caller can update state.
     function loadChapterContentWithIds(pId, vId, cId) {
-        if (!cId || !pId || !vId || !backendRef) return null;
+        if (!cId || !pId || !vId || !editorBackendRef) return null;
         if (!targetEditorItem) return null;
         if (isLoadingChapter) return null;
 
         isLoadingChapter = true;
 
-        var result = backendRef.open_chapter(pId, vId, cId);
+        var result = editorBackendRef.open_chapter(pId, vId, cId);
 
         if (!result.success) {
             console.error("[SujianDebug] Failed to open chapter:", result.errorCode || result.rawError);
@@ -357,11 +357,11 @@ QtObject {
     }
 
     function reportStatsIfChanged(currentText) {
-        if (isLoadingChapter || !chapterId || !backendRef) return;
+        if (isLoadingChapter || !chapterId || !editorBackendRef) return;
         var newText = currentText === undefined ? getEditorPlainText() : currentText;
         if (previousEditorText === newText) return;
 
-        backendRef.process_writing_event_from_text(projectId, volumeId, chapterId, previousEditorText, newText);
+        editorBackendRef.process_writing_event_from_text(projectId, volumeId, chapterId, previousEditorText, newText);
 
         previousEditorText = newText;
     }

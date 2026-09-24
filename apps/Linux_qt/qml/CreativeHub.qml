@@ -250,7 +250,7 @@ Rectangle {
                 active: root.currentTab === 0
                 sourceComponent: ProjectHomePage {
                     dt: root.dt
-                    backendRef: root.editorBackendRef
+                    editorBackendRef: root.editorBackendRef
                     projectBackendRef: root.projectBackendRef
                     appState: root.appState
                     tree: root.tree
@@ -291,7 +291,7 @@ Rectangle {
                 active: root.currentTab === 2
                 sourceComponent: StatsPreviewPage {
                     dt: root.dt
-                    backendRef: root.editorBackendRef
+                    editorBackendRef: root.editorBackendRef
                     appState: root.appState
                 }
             }

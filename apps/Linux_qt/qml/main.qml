@@ -496,7 +496,7 @@ ApplicationWindow {
             active: rootHasWorkspace && appController.inStarmap
             sourceComponent: StarMapWorkspace {
                 dt: designTokens
-                backendRef: starmapBackend
+                starmapBackendRef: starmapBackend
                 starmapId: appController.starmapId
                 starmapTitle: appController.starmapTitle
                 onBackClicked: {
@@ -575,7 +575,7 @@ ApplicationWindow {
             active: rootHasWorkspace && appController.inWriting
             sourceComponent: WritingWorkspace {
                 dt: designTokens
-                backendRef: editorBackend
+                editorBackendRef: editorBackend
                 starMapController: globalStarMapController
                 // Issue #709 评论 issue-body-709: 传入 themeController 使
                 // EditorController.logRenderColorProbe 能读取 runtime state。
@@ -656,7 +656,7 @@ ApplicationWindow {
                 window.debugLog("app", "empty_workspace_loader_active_changed", "active=" + active);
             }
             sourceComponent: EmptyWorkspace {
-                backendRef: workspaceBackend
+                workspaceBackendRef: workspaceBackend
                 dt: designTokens
                 onCreateWorkspaceWithPath: (path) => {
                     appController.createWorkspaceWithPath(path, false);

@@ -6,10 +6,10 @@
 // 职责：加载/保存星图图数据+布局、节点/边增删改、选区管理
 // 约束：
 //   - 纯状态管理，不包含 UI 渲染
-//   - 通过 backendRef 调用 AppBackend (Rust QObject)
+//   - 通过 starmapBackendRef 调用 AppBackend (Rust QObject)
 //   - 图数据通过 AppBackend 暴露的对象/数组 DTO 与 Core 层交互
 //
-// 数据流：backendRef (DTO) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
+// 数据流：starmapBackendRef (DTO) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
 // =============================================================================
 
 import QtQuick
@@ -18,7 +18,7 @@ QtObject {
     id: controller
 
     property string starmapId: ""
-    property var backendRef: null
+    property var starmapBackendRef: null
     property string errorMessage: ""
     property var graphData: null
     property var layoutData: null
@@ -47,7 +47,7 @@ QtObject {
     }
 
     function ensureBackend() {
-        if (!backendRef) {
+        if (!starmapBackendRef) {
             setError(qsTr("星图后端未初始化"));
             return false;
         }
@@ -58,7 +58,7 @@ QtObject {
         if (starmapId === "") return;
         if (!ensureBackend()) return;
 
-        var res = normalizeBackendResult(backendRef.get_starmap_graph(starmapId), qsTr("加载星图数据失败"));
+        var res = normalizeBackendResult(starmapBackendRef.get_starmap_graph(starmapId), qsTr("加载星图数据失败"));
         if (res.success) {
             clearError();
             graphData = res.data.graph;
@@ -107,7 +107,7 @@ QtObject {
         var nodeIds = [];
         for (var i = 0; i < nodesModel.length; i++) nodeIds.push(nodesModel[i].id);
         var existingJson = layoutData ? JSON.stringify(layoutData) : "{}";
-        var res = normalizeBackendResult(backendRef.calculate_grid_layout_json(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
+        var res = normalizeBackendResult(starmapBackendRef.calculate_grid_layout_json(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
         if (res.success && res.data && res.data.nodes) {
             var layoutNodes = res.data.nodes;
             for (var j = 0; j < nodesModel.length; j++) {
@@ -157,7 +157,7 @@ QtObject {
             var n = nodesModel[i];
             layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
         }
-        var res = normalizeBackendResult(backendRef.hit_test_nodes_json(JSON.stringify(layoutNodes), wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes_json(JSON.stringify(layoutNodes), wx, wy), "");
         if (res.success && res.data) {
             return getNode(res.data);
         }
@@ -203,7 +203,7 @@ QtObject {
 
     function createNode(wx, wy) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(backendRef.create_starmap_node(starmapId, qsTr("新节点"), "Note", wx, wy), qsTr("创建节点失败"));
+        var res = normalizeBackendResult(starmapBackendRef.create_starmap_node(starmapId, qsTr("新节点"), "Note", wx, wy), qsTr("创建节点失败"));
         if (res.success) {
             clearError();
             loadGraph();
@@ -215,7 +215,7 @@ QtObject {
 
     function createEdge(fromId, toId) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(backendRef.create_starmap_edge(starmapId, fromId, toId, "RelatedTo", ""), qsTr("创建连线失败"));
+        var res = normalizeBackendResult(starmapBackendRef.create_starmap_edge(starmapId, fromId, toId, "RelatedTo", ""), qsTr("创建连线失败"));
         if (res.success) {
             clearError();
             loadGraph();
@@ -231,14 +231,14 @@ QtObject {
             var n = nodesModel[i];
             layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0 });
         }
-        var res = normalizeBackendResult(backendRef.save_starmap_layout(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), qsTr("保存布局失败"));
+        var res = normalizeBackendResult(starmapBackendRef.save_starmap_layout(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), qsTr("保存布局失败"));
         if (res.success) clearError();
         else setError(qsTr("保存布局失败"));
     }
 
     function updateNode(nodeId, patch) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(backendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
+        var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
             for (var i = 0; i < nodesModel.length; i++) {
@@ -257,7 +257,7 @@ QtObject {
 
     function deleteNode(nodeId) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(backendRef.delete_starmap_node(starmapId, nodeId), qsTr("删除节点失败"));
+        var res = normalizeBackendResult(starmapBackendRef.delete_starmap_node(starmapId, nodeId), qsTr("删除节点失败"));
         if (res.success) {
             clearError();
             loadGraph();
@@ -269,7 +269,7 @@ QtObject {
 
     function updateEdge(edgeId, patch) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(backendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(patch)), qsTr("更新连线失败"));
+        var res = normalizeBackendResult(starmapBackendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(patch)), qsTr("更新连线失败"));
         if (res.success) {
             clearError();
             for (var i = 0; i < edgesModel.length; i++) {
@@ -288,7 +288,7 @@ QtObject {
 
     function deleteEdge(edgeId) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(backendRef.delete_starmap_edge(starmapId, edgeId), qsTr("删除连线失败"));
+        var res = normalizeBackendResult(starmapBackendRef.delete_starmap_edge(starmapId, edgeId), qsTr("删除连线失败"));
         if (res.success) {
             clearError();
             loadGraph();
@@ -310,7 +310,7 @@ QtObject {
             var n = nodesModel[j];
             nodePos.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
         }
-        var res = normalizeBackendResult(backendRef.compute_edge_renders_json(JSON.stringify(edgeInputs), JSON.stringify(nodePos)), "");
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders_json(JSON.stringify(edgeInputs), JSON.stringify(nodePos)), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }
@@ -320,7 +320,7 @@ QtObject {
         if (!ensureBackend()) return null;
         if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders();
         if (!edgeRenders || edgeRenders.length === 0) return null;
-        var res = normalizeBackendResult(backendRef.hit_test_edge_renders_json(JSON.stringify(edgeRenders), wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders_json(JSON.stringify(edgeRenders), wx, wy), "");
         if (res.success && res.data) {
             for (var i = 0; i < edgesModel.length; i++) {
                 if (edgesModel[i].id === res.data) return edgesModel[i];

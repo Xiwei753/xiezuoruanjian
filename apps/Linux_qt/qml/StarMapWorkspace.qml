@@ -21,7 +21,7 @@ Item {
     property string starmapId: ""
     property string starmapTitle: qsTr("星图")
     required property var dt
-    property var backendRef: null
+    property var starmapBackendRef: null
 
     signal backClicked()
 

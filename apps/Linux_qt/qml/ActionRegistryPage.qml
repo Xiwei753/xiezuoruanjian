@@ -6,7 +6,7 @@
 // 职责：列出所有注册的 Action，支持执行 Query/Mutation 类型操作
 // 约束：
 //   - 调试用途，不面向普通用户
-//   - 通过 backendRef 调用 AppBackend (Rust QObject) 执行 Action
+//   - 通过 editorBackendRef 调用 AppBackend (Rust QObject) 执行 Action
 // =============================================================================
 
 import QtQuick
@@ -17,7 +17,7 @@ ScrollView {
     id: root
     clip: true
 
-    property var backendRef: null
+    property var editorBackendRef: null
     property var appTheme: null
     property real fontSizeSpinValue: 16
     property bool autoSaveCheckChecked: false
@@ -58,7 +58,7 @@ ScrollView {
                 text: qsTr("列出所有 Action")
                 implicitHeight: 32; implicitWidth: 130
                 onClicked: {
-                    var result = root.backendRef.list_registered_actions()
+                    var result = root.editorBackendRef.list_registered_actions()
                     try {
                         var actions = JSON.parse(result)
                         actionListRepeater.model = actions
@@ -179,7 +179,7 @@ ScrollView {
                             implicitHeight: 28; implicitWidth: 60
                             onClicked: {
                                 var actionId = modelData.id
-                                var result = root.backendRef.execute_action(actionId, "", "")
+                                var result = root.editorBackendRef.execute_action(actionId, "", "")
                                 try {
                                     var r = JSON.parse(result)
                                     if (r.success) {
@@ -229,7 +229,7 @@ ScrollView {
                                 } else if (actionId === "settings.editor.smooth_cursor.set") {
                                     args = JSON.stringify({enabled: root.smoothCursorCheckChecked})
                                 }
-                                var result = root.backendRef.execute_action(actionId, args, "")
+                                var result = root.editorBackendRef.execute_action(actionId, args, "")
                                 try {
                                     var r = JSON.parse(result)
                                     if (r.success) {
