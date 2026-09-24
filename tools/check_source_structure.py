@@ -205,8 +205,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "既有段落索引映射测试，验证段落/偏移转换；待拆分到独立 _tests.rs",
     (Path("apps/Linux_qt/src/sujian_editor_item/animation_coordinator.rs"), "production-test-bloat"):
         "既有动画协调器测试，验证多轨道时序；待拆分到独立 _tests.rs",
-    (Path("apps/Linux_qt/src/sujian_editor_item/linux_coordinator.rs"), "production-test-bloat"):
-        "既有 Linux 协调器测试，验证平台事件路由；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/app_service/mod.rs"), "production-test-bloat"):
         "既有应用服务模块测试，验证生命周期/初始化契约；待拆分到独立 _tests.rs",
 

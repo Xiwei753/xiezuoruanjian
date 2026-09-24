@@ -36,7 +36,6 @@ pub(crate) mod layout_revision;
 pub(crate) mod layout_snapshot;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
-pub(crate) mod linux_coordinator;
 pub(crate) mod pipeline;
 #[allow(clippy::misnamed_getters)]
 pub(crate) mod properties;
@@ -409,33 +408,8 @@ pub struct SujianEditorItem {
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
-    #[allow(dead_code)]
-    register_text_target_qml:
-        qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
-    #[allow(dead_code)]
-    register_secret_target_qml:
-        qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
-    #[allow(dead_code)]
-    register_search_target_qml:
-        qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
-    #[allow(dead_code)]
-    register_url_target_qml: qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
-    #[allow(dead_code)]
-    unregister_text_target_qml: qt_method!(fn(&mut self, target_id: QString)),
-    #[allow(dead_code)]
-    begin_text_edit_qml: qt_method!(fn(&mut self, target_id: QString) -> bool),
-    #[allow(dead_code)]
-    commit_text_edit_qml: qt_method!(fn(&mut self) -> bool),
-    #[allow(dead_code)]
-    cancel_text_edit_qml: qt_method!(fn(&mut self) -> bool),
-    #[allow(dead_code)]
-    update_target_text_qml: qt_method!(fn(&mut self, target_id: QString, text: QString)),
-    #[allow(dead_code)]
-    active_target_id_qml: qt_method!(fn(&self) -> QString),
 
     pipeline: pipeline::LinuxEditorPipeline,
-    coordinator: linux_coordinator::LinuxTextEditorCoordinator,
-    saved_body_kernel: Option<writer_core::editor::EditorKernel>,
     current_content_height: f32,
     content_height_dirty: Cell<bool>,
     current_editor_enabled: bool,
@@ -574,20 +548,8 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
-            register_text_target_qml: Default::default(),
-            register_secret_target_qml: Default::default(),
-            register_search_target_qml: Default::default(),
-            register_url_target_qml: Default::default(),
-            unregister_text_target_qml: Default::default(),
-            begin_text_edit_qml: Default::default(),
-            commit_text_edit_qml: Default::default(),
-            cancel_text_edit_qml: Default::default(),
-            update_target_text_qml: Default::default(),
-            active_target_id_qml: Default::default(),
 
             pipeline: pipeline::LinuxEditorPipeline::new(),
-            coordinator: linux_coordinator::LinuxTextEditorCoordinator::new(),
-            saved_body_kernel: None,
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
             current_editor_enabled: true,
@@ -624,151 +586,6 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    pub fn register_text_target(
-        &mut self,
-        target_id: String,
-        is_persistent: bool,
-        initial_text: String,
-    ) {
-        let target = linux_coordinator::EditableTextTarget {
-            target_id: target_id.clone(),
-            is_persistent,
-            current_text: initial_text,
-            profile: linux_coordinator::TextEditorProfile::default(),
-        };
-        self.coordinator.register_target(target);
-    }
-
-    pub fn register_text_target_with_profile(
-        &mut self,
-        target_id: String,
-        is_persistent: bool,
-        initial_text: String,
-        profile: linux_coordinator::TextEditorProfile,
-    ) {
-        let target = linux_coordinator::EditableTextTarget {
-            target_id: target_id.clone(),
-            is_persistent,
-            current_text: initial_text,
-            profile,
-        };
-        self.coordinator.register_target(target);
-    }
-
-    pub fn unregister_text_target(&mut self, target_id: String) {
-        self.coordinator.unregister_target(&target_id);
-    }
-
-    pub fn begin_text_edit(&mut self, target_id: String) -> bool {
-        if !self.coordinator.begin_edit(&target_id) {
-            return false;
-        }
-        if let Some(session_kernel) = self.coordinator.take_active_session_kernel() {
-            self.saved_body_kernel = Some(self.pipeline.swap_kernel(session_kernel));
-            self.clear_active_text_animations();
-            self.request_static_repaint();
-        }
-        true
-    }
-
-    pub fn commit_text_edit(&mut self) -> bool {
-        if let Some(session_kernel) = self.coordinator.take_active_session_kernel() {
-            let _ = self.pipeline.swap_kernel(session_kernel);
-        }
-        if let Some(body_kernel) = self.saved_body_kernel.take() {
-            self.pipeline.swap_kernel(body_kernel);
-            self.clear_active_text_animations();
-            self.request_static_repaint();
-        }
-        self.coordinator.commit_active_edit()
-    }
-
-    pub fn cancel_text_edit(&mut self) -> bool {
-        if let Some(body_kernel) = self.saved_body_kernel.take() {
-            self.pipeline.swap_kernel(body_kernel);
-            self.clear_active_text_animations();
-            self.request_static_repaint();
-        }
-        self.coordinator.cancel_active_edit()
-    }
-
-    pub fn update_target_text(&mut self, target_id: String, text: String) {
-        self.coordinator.update_target_text(&target_id, text);
-    }
-
-    pub fn active_target_id(&self) -> Option<String> {
-        self.coordinator.active_target_id().map(|s| s.to_string())
-    }
-
-    pub fn register_text_target_qml(
-        &mut self,
-        target_id: QString,
-        is_persistent: bool,
-        initial_text: QString,
-    ) {
-        self.register_text_target(
-            target_id.to_string(),
-            is_persistent,
-            initial_text.to_string(),
-        );
-    }
-
-    pub fn register_secret_target_qml(
-        &mut self,
-        target_id: QString,
-        is_persistent: bool,
-        initial_text: QString,
-    ) {
-        self.register_text_target_with_profile(
-            target_id.to_string(),
-            is_persistent,
-            initial_text.to_string(),
-            linux_coordinator::TextEditorProfile::secret_token(),
-        );
-    }
-
-    pub fn register_search_target_qml(&mut self, target_id: QString, initial_text: QString) {
-        self.register_text_target_with_profile(
-            target_id.to_string(),
-            false,
-            initial_text.to_string(),
-            linux_coordinator::TextEditorProfile::search_query(),
-        );
-    }
-
-    pub fn register_url_target_qml(&mut self, target_id: QString, initial_text: QString) {
-        self.register_text_target_with_profile(
-            target_id.to_string(),
-            false,
-            initial_text.to_string(),
-            linux_coordinator::TextEditorProfile::repository_url(),
-        );
-    }
-
-    pub fn unregister_text_target_qml(&mut self, target_id: QString) {
-        self.unregister_text_target(target_id.to_string());
-    }
-
-    pub fn begin_text_edit_qml(&mut self, target_id: QString) -> bool {
-        self.begin_text_edit(target_id.to_string())
-    }
-
-    pub fn commit_text_edit_qml(&mut self) -> bool {
-        self.commit_text_edit()
-    }
-
-    pub fn cancel_text_edit_qml(&mut self) -> bool {
-        self.cancel_text_edit()
-    }
-
-    pub fn update_target_text_qml(&mut self, target_id: QString, text: QString) {
-        self.update_target_text(target_id.to_string(), text.to_string());
-    }
-
-    pub fn active_target_id_qml(&self) -> QString {
-        QString::from(self.active_target_id().unwrap_or_default())
-    }
-
     /// GUI 线程上准备不可变静态正文快照，然后请求 Scene Graph 更新。
     ///
     /// Issue #658: 在 GUI/input/layout 阶段先准备好 snapshot，
