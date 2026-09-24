@@ -45,6 +45,9 @@ LEGACY_BITMAP_DENSITIES = {
     "mipmap-xxxhdpi": 192,
 }
 
+HARMONY_APP_ICON = REPO_ROOT / "apps" / "harmony" / "AppScope" / "resources" / "base" / "media" / "app_icon.png"
+HARMONY_ENTRY_MEDIA = REPO_ROOT / "apps" / "harmony" / "entry" / "src" / "main" / "resources" / "base" / "media"
+
 
 def _content_bbox(image: Image.Image):
     """不透明内容（alpha > 24）的包围盒，与生成器内部判定一致。"""
@@ -216,6 +219,160 @@ class CommittedAndroidIconResourceGuardTests(unittest.TestCase):
             (RES_ROOT / "drawable" / "ic_launcher_background.xml").exists(),
             "自适应图标背景层 ic_launcher_background.xml 必须存在",
         )
+
+
+class GenerateHarmonyIconStructureTests(unittest.TestCase):
+    """generate_harmony 输出结构测试（写入临时目录，不触碰已提交资源）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix="sujian_icons_test_")
+        tmp_root = Path(self._tmp)
+        tmp_source = tmp_root / "assets" / "brand" / "icon" / "source"
+        tmp_source.mkdir(parents=True)
+        for f in SOURCE_DIR.iterdir():
+            shutil.copyfile(f, tmp_source / f.name)
+        self._orig = {
+            "ROOT": MODULE.ROOT,
+            "SOURCE": MODULE.SOURCE,
+            "FULL_SVG": MODULE.FULL_SVG,
+            "FOREGROUND_PNG": MODULE.FOREGROUND_PNG,
+            "FULL_1024": MODULE.FULL_1024,
+            "FULL_512": MODULE.FULL_512,
+        }
+        MODULE.ROOT = tmp_root
+        MODULE.SOURCE = tmp_source
+        MODULE.FULL_SVG = tmp_source / "sujian_icon.svg"
+        MODULE.FOREGROUND_PNG = tmp_source / "sujian_icon_foreground_1024.png"
+        MODULE.FULL_1024 = tmp_source / "sujian_icon_1024.png"
+        MODULE.FULL_512 = tmp_source / "sujian_icon_512.png"
+        self.tmp_app_scope_media = tmp_root / "apps" / "harmony" / "AppScope" / "resources" / "base" / "media"
+        self.tmp_entry_media = tmp_root / "apps" / "harmony" / "entry" / "src" / "main" / "resources" / "base" / "media"
+
+    def tearDown(self):
+        for key, value in self._orig.items():
+            setattr(MODULE, key, value)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_app_icon_generated_at_512(self):
+        MODULE.generate_harmony()
+        path = self.tmp_app_scope_media / "app_icon.png"
+        self.assertTrue(path.exists(), "缺少 app_icon.png")
+        with Image.open(path) as im:
+            self.assertEqual((512, 512), im.size, "app_icon.png 应为 512×512")
+
+    def test_start_icon_generated_at_512(self):
+        MODULE.generate_harmony()
+        path = self.tmp_entry_media / "startIcon.png"
+        self.assertTrue(path.exists(), "缺少 startIcon.png")
+        with Image.open(path) as im:
+            self.assertEqual((512, 512), im.size, "startIcon.png 应为 512×512")
+
+    def test_layered_foreground_generated_at_216_with_alpha(self):
+        MODULE.generate_harmony()
+        path = self.tmp_entry_media / "layered_image_foreground.png"
+        self.assertTrue(path.exists(), "缺少 layered_image_foreground.png")
+        with Image.open(path) as im:
+            self.assertEqual((216, 216), im.size, "前景应为 216×216")
+            self.assertEqual("RGBA", im.mode, "前景应保留 RGBA 透明通道")
+            # 存在透明像素（alpha < 255）
+            a_min = im.getchannel("A").getextrema()[0]
+            self.assertLess(a_min, 255, "前景应存在透明像素")
+
+    def test_layered_foreground_not_solid_color(self):
+        MODULE.generate_harmony()
+        path = self.tmp_entry_media / "layered_image_foreground.png"
+        with Image.open(path) as im:
+            self.assertGreater(
+                len(set(im.convert("RGBA").getdata())),
+                1,
+                "前景不得为占位纯色块",
+            )
+
+    def test_layered_background_generated_at_216_white(self):
+        MODULE.generate_harmony()
+        path = self.tmp_entry_media / "layered_image_background.png"
+        self.assertTrue(path.exists(), "缺少 layered_image_background.png")
+        with Image.open(path) as im:
+            self.assertEqual((216, 216), im.size, "背景应为 216×216")
+            self.assertEqual(
+                {(255, 255, 255)},
+                set(im.getdata()),
+                "背景应为纯白 #FFFFFF",
+            )
+
+    def test_app_icon_not_solid_color(self):
+        MODULE.generate_harmony()
+        path = self.tmp_app_scope_media / "app_icon.png"
+        with Image.open(path) as im:
+            self.assertGreater(
+                len(set(im.convert("RGBA").getdata())),
+                1,
+                "app_icon 不得为占位纯色块",
+            )
+
+
+class CommittedHarmonyIconResourceGuardTests(unittest.TestCase):
+    """已提交 Harmony 图标资源守卫（防回归到 48×48 占位纯色块，Issue #752）。"""
+
+    def test_committed_app_icon_exists_at_512_not_solid(self):
+        self.assertTrue(HARMONY_APP_ICON.exists(), "已提交 app_icon.png 缺失")
+        with Image.open(HARMONY_APP_ICON) as im:
+            self.assertEqual((512, 512), im.size, "app_icon.png 应为 512×512")
+            self.assertGreater(
+                len(set(im.convert("RGBA").getdata())),
+                1,
+                "app_icon.png 不得为占位纯色块",
+            )
+
+    def test_committed_start_icon_exists_at_512_not_solid(self):
+        path = HARMONY_ENTRY_MEDIA / "startIcon.png"
+        self.assertTrue(path.exists(), "已提交 startIcon.png 缺失")
+        with Image.open(path) as im:
+            self.assertEqual((512, 512), im.size, "startIcon.png 应为 512×512")
+            self.assertGreater(
+                len(set(im.convert("RGBA").getdata())),
+                1,
+                "startIcon.png 不得为占位纯色块",
+            )
+
+    def test_committed_layered_foreground_exists_at_216_with_alpha_not_solid(self):
+        path = HARMONY_ENTRY_MEDIA / "layered_image_foreground.png"
+        self.assertTrue(path.exists(), "已提交 layered_image_foreground.png 缺失")
+        with Image.open(path) as im:
+            self.assertEqual((216, 216), im.size, "前景应为 216×216")
+            self.assertEqual("RGBA", im.mode, "前景应保留 RGBA 透明通道")
+            a_min = im.getchannel("A").getextrema()[0]
+            self.assertLess(a_min, 255, "前景应存在透明像素")
+            self.assertGreater(
+                len(set(im.convert("RGBA").getdata())),
+                1,
+                "前景不得为占位纯色块",
+            )
+
+    def test_committed_layered_background_exists_at_216_white(self):
+        path = HARMONY_ENTRY_MEDIA / "layered_image_background.png"
+        self.assertTrue(path.exists(), "已提交 layered_image_background.png 缺失")
+        with Image.open(path) as im:
+            self.assertEqual((216, 216), im.size, "背景应为 216×216")
+            self.assertEqual(
+                {(255, 255, 255)},
+                set(im.getdata()),
+                "背景应为纯白 #FFFFFF",
+            )
+
+    def test_layered_image_json_references_correct_resources(self):
+        content = (HARMONY_ENTRY_MEDIA / "layered_image.json").read_text()
+        self.assertIn("$media:layered_image_background", content)
+        self.assertIn("$media:layered_image_foreground", content)
+
+    def test_app_json5_icon_reference_unchanged(self):
+        content = (REPO_ROOT / "apps" / "harmony" / "AppScope" / "app.json5").read_text()
+        self.assertIn("$media:app_icon", content)
+
+    def test_module_json5_icon_references_unchanged(self):
+        content = (REPO_ROOT / "apps" / "harmony" / "entry" / "src" / "main" / "module.json5").read_text()
+        self.assertIn("$media:layered_image", content)
+        self.assertIn("$media:startIcon", content)
 
 
 if __name__ == "__main__":

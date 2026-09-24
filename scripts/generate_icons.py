@@ -122,11 +122,36 @@ def generate_packaging() -> None:
     copy_file(FULL_512, ROOT / "packaging" / "web" / "icon-512.png")
     resize_png(FULL_1024, ROOT / "packaging" / "web" / "icon-192.png", 192)
 
+def generate_harmony() -> None:
+    """生成 HarmonyOS 图标资源（Issue #752）。
+
+    只生成 PNG 资源，不修改 .json5/.json 配置（引用已正确，与 generate_android
+    不生成 XML 引用一致）。尺寸为 DevEco Studio 标准：应用图标与启动图标
+    512×512，分层图标前景/背景 216×216。
+    """
+    app_scope_media = ROOT / "apps" / "harmony" / "AppScope" / "resources" / "base" / "media"
+    entry_media = ROOT / "apps" / "harmony" / "entry" / "src" / "main" / "resources" / "base" / "media"
+
+    # 应用图标 app_icon.png 与启动图标 startIcon.png：512×512（DevEco Studio 应用图标标准尺寸）
+    resize_png(FULL_1024, app_scope_media / "app_icon.png", 512)
+    resize_png(FULL_1024, entry_media / "startIcon.png", 512)
+
+    # 分层图标前景：216×216，保留 RGBA 透明通道并缩进安全区居中。
+    # 复用 Android 的 fit_foreground_to_safe_zone，防止内容被 HarmonyOS 圆形/圆角裁切。
+    resize_foreground_png(FOREGROUND_PNG, entry_media / "layered_image_foreground.png", 216)
+
+    # 分层图标背景：216×216 纯白 #FFFFFF（与 sujian_icon_background_white.svg 一致）
+    background = entry_media / "layered_image_background.png"
+    background.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (216, 216), (255, 255, 255)).save(background, "PNG")
+
+
 def main() -> None:
     ensure_sources()
     generate_android()
     generate_linux()
     generate_packaging()
+    generate_harmony()
 
 
 if __name__ == "__main__":
