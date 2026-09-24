@@ -17,66 +17,21 @@ struct AppStateSummaryDto {
     recent_edit: Option<RecentEditDto>,
 }
 
-/// List all known projects with stats and recent edits.
-///
-/// # Safety
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
-    match with_app_service(|svc| {
-        let projects = svc
-            .list_project_summaries()
-            .map_err(|e| format!("{}", e))?;
-        let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
-        // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
-        // Core 的 recent_edits.json 仍保留历史/去重能力；get_recent_edits() 通用 API 不变。
-        let recent_edit: Option<RecentEditDto> =
-            recent_edits.into_iter().next().map(RecentEditDto::from);
-        let summary = AppStateSummaryDto {
-            projects,
-            recent_edit,
-        };
-        Ok(vec![summary])
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("APP_STATE_ERROR", &e),
-    }
+/// 章节所在位置（project / volume）解析结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterLocationDto {
+    project_id: String,
+    volume_id: String,
+    chapter_id: String,
 }
 
-/// Open (re-initialize) the core at the given path.
-///
-/// ## 全局状态替换
-///
-/// TODO: This function previously swapped the global `CORE` singleton directly.
-/// With the migration to `APP_SERVICE` (OnceLock-based, init-once), full
-/// re-initialization is not yet supported. For now it returns a success
-/// response with the path but does not re-bootstrap the app service.
-///
-/// # Safety
-///
-/// The caller must ensure `path` points to a valid, null-terminated C string.
-/// Passing a null pointer or an invalid pointer is undefined behavior.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut c_char {
-    let path_str = match c_str_to_rust(path) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_INPUT",
-                &format!("path is null or invalid UTF-8: {}", e),
-            )
-        }
-    };
-
-    // TODO: re-bootstrap APP_SERVICE with the new path once OnceLock supports
-    // replacement, or move to a mutable static for the global service handle.
-    // For now, acknowledge the path change and return a minimal response.
-    let summary = serde_json::json!({
-        "path": path_str,
-        "projects": [],
-        "recentEdit": null
-    });
-    ok_json(summary)
+/// 卷所在作品解析结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VolumeLocationDto {
+    project_id: String,
+    volume_id: String,
 }
 
 /// Get the current app state (projects, recent edits).
@@ -92,7 +47,7 @@ pub unsafe extern "C" fn writer_core_get_app_state() -> *mut c_char {
         let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
         // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
         let recent_edit: Option<RecentEditDto> =
-            recent_edits.into_iter().next().map(RecentEditDto::from);
+            recent_edits.into_iter().next();
         let summary = AppStateSummaryDto {
             projects,
             recent_edit,
@@ -144,11 +99,11 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(
                     .join("chapters")
                     .join(&cid);
                 if target_chap_dir.exists() {
-                    return Ok(serde_json::json!({
-                        "projectId": p.id,
-                        "volumeId": v.id,
-                        "chapterId": cid
-                    }));
+                    return Ok(ChapterLocationDto {
+                        project_id: p.id.clone(),
+                        volume_id: v.id.clone(),
+                        chapter_id: cid.clone(),
+                    });
                 }
             }
         }
@@ -183,10 +138,10 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
         for p in &projects {
             let target_vol_dir = svc.project_root(&p.id).join("volumes").join(&vid);
             if target_vol_dir.exists() {
-                return Ok(serde_json::json!({
-                    "projectId": p.id,
-                    "volumeId": vid
-                }));
+                return Ok(VolumeLocationDto {
+                    project_id: p.id.clone(),
+                    volume_id: vid.clone(),
+                });
             }
         }
         Err(format!("volume {} not found in any project", vid))
@@ -202,8 +157,7 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
 pub unsafe extern "C" fn writer_core_get_recent_edits() -> *mut c_char {
     match with_app_service(|svc| {
         let edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
-        let dtos: Vec<RecentEditDto> = edits.into_iter().map(RecentEditDto::from).collect();
-        Ok(dtos)
+        Ok(edits)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("IO_READ_ERROR", &e),

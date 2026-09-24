@@ -1,10 +1,10 @@
 import { ChapterMeta, ChapterContent, ChapterSaveReceipt } from '../dto/ProjectDtos'
-import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
+import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeChapterMeta, decodeChapterContent, decodeChapterSaveReceipt, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
 export class NativeChapterBridge {
@@ -17,7 +17,7 @@ export class NativeChapterBridge {
   async listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>> {
     const projectId = await this.core.resolveVolumeProjectId(volumeId)
     if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'VOLUME_NOT_FOUND', userMessage: `Volume ${volumeId} not found in any project`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListChapters(projectId, volumeId)
@@ -29,7 +29,7 @@ export class NativeChapterBridge {
   async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeOpenChapter(loc.projectId, loc.volumeId, chapterId)
@@ -40,7 +40,7 @@ export class NativeChapterBridge {
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, text)
@@ -51,7 +51,7 @@ export class NativeChapterBridge {
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
@@ -62,7 +62,7 @@ export class NativeChapterBridge {
   async createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>> {
     const projectId = await this.core.resolveVolumeProjectId(volumeId)
     if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'VOLUME_NOT_FOUND', userMessage: `Volume ${volumeId} not found in any project`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeCreateChapter(projectId, volumeId, name)
@@ -73,7 +73,7 @@ export class NativeChapterBridge {
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeRenameChapter(loc.projectId, loc.volumeId, chapterId, newName)
@@ -84,7 +84,7 @@ export class NativeChapterBridge {
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
     const loc = await this.core.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `Chapter ${chapterId} not found`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
@@ -95,7 +95,7 @@ export class NativeChapterBridge {
   async reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>> {
     const projectId = await this.core.resolveVolumeProjectId(volumeId)
     if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'VOLUME_NOT_FOUND', userMessage: `Volume ${volumeId} not found in any project`}
     }
     try {
       const jsonStr: string = this.core.getNativeModule().nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))

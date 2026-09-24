@@ -226,13 +226,6 @@ export class NativeEditorSessionBridge implements IEditorSessionBridge {
   private nativeError<T>(e: Object): ResultEnvelope<T> {
     return {
       success: false,
-      errorCode: 'NATIVE_ERROR',
-      messageKey: 'error.native_error',
-      messageArgs: { 'detail': String(e) } as Record<string, string>,
-      rawError: String(e),
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
-    }
+      errorCode: 'NATIVE_ERROR', userMessage: String(e) }
   }
 }

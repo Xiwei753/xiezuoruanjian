@@ -57,8 +57,7 @@ export class EditorInputAdapter {
     const cursor = snap.cursor
     return {
       start: Math.min(anchor, cursor),
-      end: Math.max(anchor, cursor),
-    }
+      end: Math.max(anchor, cursor) }
   }
 
   /** 当前是否有非空选区（end > start）。 */
@@ -120,7 +119,7 @@ export class EditorInputAdapter {
   async onCompositionUpdate(preedit: string, preeditCursorUtf16?: number): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap || snap.composition === null || snap.composition === undefined) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     const cursorUtf16: number = preeditCursorUtf16 === undefined ? preedit.length : preeditCursorUtf16
@@ -136,7 +135,7 @@ export class EditorInputAdapter {
   async onCompositionFinish(committed: string): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap || snap.composition === null || snap.composition === undefined) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     if (committed === comp.preeditText) {
@@ -155,11 +154,7 @@ export class EditorInputAdapter {
     if (newComp === null || newComp === undefined) {
       return {
         success: false,
-        errorCode: 'NO_COMPOSITION_SESSION',
-        warnings: updateResult.warnings,
-        changedPaths: updateResult.changedPaths,
-        changedEntities: updateResult.changedEntities
-      }
+        errorCode: 'NO_COMPOSITION_SESSION' }
     }
     return this.coordinator.finishComposition(newComp.sessionId, newComp.generation)
   }
@@ -167,7 +162,7 @@ export class EditorInputAdapter {
   async onCompositionCancel(): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap || snap.composition === null || snap.composition === undefined) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     return this.coordinator.cancelComposition(comp.sessionId, comp.generation)
@@ -185,7 +180,7 @@ export class EditorInputAdapter {
   async finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
     const snap = this.coordinator.getSnapshot()
     if (!snap || snap.composition === null || snap.composition === undefined) {
-      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: true}
     }
     return this.onCompositionFinish(snap.composition.preeditText)
   }

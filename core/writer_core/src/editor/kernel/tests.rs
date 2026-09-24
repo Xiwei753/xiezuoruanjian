@@ -615,6 +615,46 @@ mod tests {
     }
 
     #[test]
+    fn delete_surrounding_invalid_before_leaves_text_intact() {
+        // after 区间合法、before 区间与选区重叠时，旧实现已经删掉 after 才判出
+        // InvalidRange：正文被改而 revision 和 undo 栈都没动，下一次 undo 拿着
+        // 过期坐标恢复直接 byte offset 越界 panic，在 C ABI 边界上 abort 掉宿主。
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
+        let replaced = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(0, 3),
+                replacement_text: "yz".to_string(),
+                original_text: "abc".to_string(),
+                cause: EditorTransactionCause::Paste,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let rev = replaced.new_revision;
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(0),
+                head: Utf8ByteOffset::unchecked(1),
+                expected_revision: rev,
+            })
+            .into_result();
+
+        let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
+            before_byte_range: Utf8ByteRange::from_ordered(0, 1),
+            after_byte_range: Utf8ByteRange::from_ordered(1, 2),
+            cause: EditorTransactionCause::Delete,
+            expected_revision: rev,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::InvalidRange(_)));
+        assert_eq!(kernel.snapshot_text(), "yz", "被拒的调用不得改动正文");
+
+        let undone = kernel.apply(EditorCommand::Undo {
+            expected_revision: rev,
+        });
+        assert!(matches!(undone, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.snapshot_text(), "abc");
+    }
+
+    #[test]
     fn commit_text_with_session_validation() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel

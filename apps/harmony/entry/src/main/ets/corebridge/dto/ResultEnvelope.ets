@@ -1,50 +1,65 @@
-// 本文件定义鸿蒙端 DTO，字段与 Core api/types/ 真实 DTO 对齐。
-// Core struct 字段使用 serde(rename_all = "camelCase")，JSON 输出为 camelCase。
-// Core enum 变体使用 PascalCase（如 "Back"、"TopLeading"、"SinglePane"），与 Rust 枚举名一致。
-// 如需新增字段，必须先在 Core api/types/ 中定义，不得自行发明。
-
-import { Project } from './ProjectDtos'
-
 // ─── Envelope DTOs ───
+// Issue #753：envelope 的唯一来源是 Core `ffi/mod.rs` 的 `ok_json` / `err_json`：
+//   成功 → {"success":true,"data":<Core DTO>}
+//   失败 → {"success":false,"errorCode":<string>,"userMessage":<string>}
+// 平台端不得再发明 Core 从不发出的字段（原先的 messageKey / messageArgs /
+// warnings / changedPaths / changedEntities / rawError 全部删除——它们运行时
+// 恒为 undefined，UI 读出来的就是空提示）。
+// `data` 只在成功时出现，且必须是各域 decoder 校验过的强类型；
+// decoder 不通过时 Bridge 返回 SCHEMA_MISMATCH，绝不让 undefined 流到 UI。
+
+import { ProjectSummary } from './ProjectDtos'
 
 export interface ResultEnvelope<T> {
   success: boolean
   data?: T
   errorCode?: string
-  messageKey?: string
-  messageArgs?: Record<string, string>
   userMessage?: string
-  rawError?: string
-  warnings: string[]
-  changedPaths: string[]
-  changedEntities: ChangedEntity[]
-}
-
-export interface ChangedEntity {
-  entityType: string
-  entityId?: string
 }
 
 // ─── Error Codes ───
-// 与 Core WriterError 错误码对齐
+// 前四个是 ArkTS Bridge 自己构造的（JSON 解析失败 / decoder 契约不符 /
+// native 调用抛异常 / 未实现），其余必须与 Core ffi/*.rs 里 err_json 的错误码一致。
 
 export type ErrorCode =
-  | 'IO_ERROR'
-  | 'JSON_ERROR'
-  | 'PROJECT_NOT_FOUND'
-  | 'VOLUME_NOT_FOUND'
-  | 'CHAPTER_NOT_FOUND'
-  | 'STARMAP_NOT_FOUND'
-  | 'EMPTY_OVERWRITE_BLOCKED'
+  // ArkTS bridge 层
+  | 'PARSE_ERROR'
+  | 'SCHEMA_MISMATCH'
+  | 'NATIVE_ERROR'
   | 'NOT_IMPLEMENTED'
-  | 'REFUSE_DELETE_ROOT'
-  | 'INVALID_DELETE_TARGET'
-  | 'SYNC_CONFLICT'
-  | 'SYNC_FAILED'
-  | 'OTHER'
+  // Core ffi
+  | 'APP_STATE_ERROR'
+  | 'BUILTIN_THEMES_ERROR'
+  | 'CHAPTER_ALREADY_EXISTS'
+  | 'CHAPTER_NOT_FOUND'
+  | 'DEVICE_INFO_ERROR'
+  | 'EDITOR_SESSION_CLOSE_FAILED'
+  | 'EDITOR_SESSION_ERROR'
+  | 'EMPTY_OVERWRITE_BLOCKED'
+  | 'INVALID_ARG'
+  | 'INVALID_ARGUMENT'
+  | 'IO_READ_ERROR'
+  | 'IO_WRITE_ERROR'
+  | 'PALETTE_DELETE_ERROR'
+  | 'PALETTE_LIST_ERROR'
+  | 'PALETTE_LOAD_ERROR'
+  | 'PROJECT_ALREADY_EXISTS'
+  | 'PROJECT_NOT_FOUND'
+  | 'SEARCH_ERROR'
+  | 'SETTINGS_INVALID'
+  | 'SETTINGS_NOT_FOUND'
+  | 'STARMAP_ALREADY_EXISTS'
+  | 'STARMAP_ERROR'
+  | 'STARMAP_NOT_FOUND'
+  | 'SYNC_NETWORK_ERROR'
+  | 'SYNC_STATE_ERROR'
+  | 'UNKNOWN_ERROR'
+  | 'VOLUME_ALREADY_EXISTS'
+  | 'VOLUME_NOT_FOUND'
 
 // ─── App State DTOs ───
 
+// RecentEditDto
 export interface RecentEdit {
   projectId: string
   volumeId: string
@@ -52,9 +67,9 @@ export interface RecentEdit {
   timestamp: string
 }
 
+// AppStateSummaryDto（writer_core_get_app_state）
 export interface AppSummary {
-  projects: Project[]
-  // #732 评论第5节：首页契约 singular — 最近一次编辑（nullable）。
-  // Core 的 recent_edits.json 仍保留历史；getRecentEdits() 通用 API 不变。
+  projects: ProjectSummary[]
+  // #732 评论第5节：首页契约 singular — 最近一次编辑（Core 恒发出该键，可为 null）。
   recentEdit: RecentEdit | null
 }

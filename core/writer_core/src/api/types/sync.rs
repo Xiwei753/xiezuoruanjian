@@ -508,7 +508,11 @@ pub(crate) fn sync_status_from_wire(s: &str) -> crate::sync::SyncStatus {
 }
 
 /// 单个 target 的同步结果 DTO。
+///
+/// 线格式 camelCase：这些 DTO 只经 Harmony FFI 的 JSON 通道消费，
+/// 与仓库其它 DTO 同一命名约定，平台端不得自行发明字段名。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TargetSyncResultDto {
     pub target_kind: String,
     pub project_id: Option<String>,
@@ -518,6 +522,7 @@ pub struct TargetSyncResultDto {
 
 /// 单个 target 的 dry-run 计划 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TargetSyncPlanDto {
     pub target_kind: String,
     pub project_id: Option<String>,
@@ -527,6 +532,7 @@ pub struct TargetSyncPlanDto {
 
 /// 全量同步聚合结果 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct FullSyncResultDto {
     pub overall_status: String,
     pub targets: Vec<TargetSyncResultDto>,
@@ -574,6 +580,7 @@ impl From<crate::sync::types::TargetSyncResult> for TargetSyncResultDto {
 
 /// 全量同步 dry-run 聚合结果 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct FullSyncDryRunResultDto {
     pub targets: Vec<TargetSyncPlanDto>,
     pub total_to_upload: u32,

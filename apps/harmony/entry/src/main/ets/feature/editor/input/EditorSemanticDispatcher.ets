@@ -166,11 +166,7 @@ export class EditorSemanticDispatcher {
     if (this.sealed) {
       return Promise.resolve<ResultEnvelope<EditorEditResult>>({
         success: false,
-        errorCode: 'SEALED',
-        warnings: [],
-        changedPaths: [],
-        changedEntities: []
-      })
+        errorCode: 'SEALED' })
     }
     return this.queue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
       return this.executeCommand(cmd)
@@ -223,7 +219,7 @@ export class EditorSemanticDispatcher {
   finishActiveComposition(): Promise<ResultEnvelope<EditorEditResult>> {
     return this.queue.enqueue<ResultEnvelope<EditorEditResult>>(async () => {
       if (!this.inputAdapter.isComposing()) {
-        return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+        return { success: true}
       }
       return this.inputAdapter.finishActiveComposition()
     })
@@ -406,7 +402,7 @@ export class EditorSemanticDispatcher {
     if (this.inputAdapter.isComposing()) {
       return this.inputAdapter.onCompositionCancel()
     }
-    return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true}
   }
 
   // ── imeSetSelection ──
@@ -438,11 +434,11 @@ export class EditorSemanticDispatcher {
       return this.coordinator.delete(sel.start, sel.end, EditorTransactionCause.Delete)
     }
     if (sel.start <= 0) {
-      return { success: false, errorCode: 'NO_CHAR_TO_DELETE', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_CHAR_TO_DELETE'}
     }
     const prevBoundaryResult = await this.coordinator.previousGraphemeBoundary(sel.start)
     if (!prevBoundaryResult.success || prevBoundaryResult.data === undefined || prevBoundaryResult.data === null) {
-      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED'}
     }
     const prevByte = prevBoundaryResult.data
     return this.coordinator.delete(prevByte, sel.start, EditorTransactionCause.Delete)
@@ -465,11 +461,11 @@ export class EditorSemanticDispatcher {
     const text = snap.text
     const textByteLen = TextOffsetMapper.utf16ToUtf8(text, text.length)
     if (sel.start >= textByteLen) {
-      return { success: false, errorCode: 'NO_CHAR_TO_DELETE', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_CHAR_TO_DELETE'}
     }
     const nextBoundaryResult = await this.coordinator.nextGraphemeBoundary(sel.start)
     if (!nextBoundaryResult.success || nextBoundaryResult.data === undefined || nextBoundaryResult.data === null) {
-      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED'}
     }
     const nextByte = nextBoundaryResult.data
     return this.coordinator.delete(sel.start, nextByte, EditorTransactionCause.Delete)
@@ -486,7 +482,7 @@ export class EditorSemanticDispatcher {
         return finish
       }
     }
-    let result: ResultEnvelope<EditorEditResult> = { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    let result: ResultEnvelope<EditorEditResult> = { success: true}
     for (let i = 0; i < length; i++) {
       result = await this.executeGraphemeBackspace()
       if (!result.success) {
@@ -503,7 +499,7 @@ export class EditorSemanticDispatcher {
         return finish
       }
     }
-    let result: ResultEnvelope<EditorEditResult> = { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+    let result: ResultEnvelope<EditorEditResult> = { success: true}
     for (let i = 0; i < length; i++) {
       result = await this.executeGraphemeDelete()
       if (!result.success) {
@@ -532,8 +528,7 @@ export class EditorSemanticDispatcher {
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
       compositionSessionId: displaySnapshot.compositionSessionId,
-      displayText: displaySnapshot.text,
-    }
+      displayText: displaySnapshot.text }
     return resolver.waitForLayout(identity)
   }
 
@@ -592,11 +587,10 @@ export class EditorSemanticDispatcher {
       generation: displaySnapshot.generation,
       compositionGeneration: displaySnapshot.compositionGeneration,
       compositionSessionId: displaySnapshot.compositionSessionId,
-      displayText: displaySnapshot.text,
-    }
+      displayText: displaySnapshot.text }
     const layoutState = await resolver.waitForLayout(identity)
     if (layoutState === null) {
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
+      return { handled: true, result: { success: true}, layoutState: null }
     }
     const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(displaySnapshot.text, displaySnapshot.cursorByteOffset)
     const currentPosition: VisualCaretPosition = this.selectionController.getVisualCaret(cursorUtf16)
@@ -613,11 +607,11 @@ export class EditorSemanticDispatcher {
     }
     if (direction === 'left' && currentPosition.affinity === CaretAffinity.Downstream) {
       this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Upstream })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
+      return { handled: true, result: { success: true}, layoutState: null }
     }
     if (direction === 'right' && currentPosition.affinity === CaretAffinity.Upstream) {
       this.selectionController.rememberVisualCaret({ utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream })
-      return { handled: true, result: { success: true, warnings: [], changedPaths: [], changedEntities: [] }, layoutState: null }
+      return { handled: true, result: { success: true}, layoutState: null }
     }
     return { handled: false, result: null, layoutState }
   }
@@ -654,7 +648,7 @@ export class EditorSemanticDispatcher {
       const layoutState = await this.waitForCurrentLayoutState()
       const prevResult = await this.coordinator.previousGraphemeBoundary(headByte)
       if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
-        return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
+        return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED'}
       }
       const setResult = await this.coordinator.setSelection(anchorByte, prevResult.data)
       if (setResult.success) {
@@ -681,7 +675,7 @@ export class EditorSemanticDispatcher {
     }
     const prevResult = await this.coordinator.previousGraphemeBoundary(cursorByte)
     if (!prevResult.success || prevResult.data === undefined || prevResult.data === null) {
-      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED'}
     }
     const setResult = await this.coordinator.setSelection(prevResult.data, prevResult.data)
     if (setResult.success) {
@@ -717,7 +711,7 @@ export class EditorSemanticDispatcher {
       const layoutState = await this.waitForCurrentLayoutState()
       const nextResult = await this.coordinator.nextGraphemeBoundary(headByte)
       if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
-        return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
+        return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED'}
       }
       const setResult = await this.coordinator.setSelection(anchorByte, nextResult.data)
       if (setResult.success) {
@@ -744,7 +738,7 @@ export class EditorSemanticDispatcher {
     }
     const nextResult = await this.coordinator.nextGraphemeBoundary(cursorByte)
     if (!nextResult.success || nextResult.data === undefined || nextResult.data === null) {
-      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'BOUNDARY_LOOKUP_FAILED'}
     }
     const setResult = await this.coordinator.setSelection(nextResult.data, nextResult.data)
     if (setResult.success) {
@@ -884,7 +878,7 @@ export class EditorSemanticDispatcher {
     }
     const afterClear = this.coordinator.getSnapshot()
     if (afterClear === null || afterClear.text !== '') {
-      return { success: false, errorCode: 'CLEAR_NOT_EMPTY', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'CLEAR_NOT_EMPTY'}
     }
     return replaceResult
   }
@@ -910,7 +904,7 @@ export class EditorSemanticDispatcher {
     }
     const layoutState = await resolver.waitForLayout(identity)
     if (layoutState === null) {
-      return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: true}
     }
     const latestSnap = this.coordinator.getSnapshot()
     if (!latestSnap) {
@@ -932,7 +926,7 @@ export class EditorSemanticDispatcher {
       || latestIdentity.displayText !== identity.displayText) {
       const refreshedState = await resolver.waitForLayout(latestIdentity)
       if (refreshedState === null) {
-        return { success: true, warnings: [], changedPaths: [], changedEntities: [] }
+        return { success: true}
       }
       finalState = refreshedState
       const finalSnap = this.coordinator.getSnapshot()
@@ -970,7 +964,7 @@ export class EditorSemanticDispatcher {
       case 'up': {
         const targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -986,7 +980,7 @@ export class EditorSemanticDispatcher {
       case 'down': {
         const targetLineIdx = LineNavigationResolver.getNextLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -1040,7 +1034,7 @@ export class EditorSemanticDispatcher {
       case 'up': {
         targetLineIdx = LineNavigationResolver.getPreviousLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -1051,7 +1045,7 @@ export class EditorSemanticDispatcher {
       case 'down': {
         targetLineIdx = LineNavigationResolver.getNextLineIndex(state, currentPosition)
         if (targetLineIdx < 0) {
-          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true, warnings: [], changedPaths: [], changedEntities: [] })
+          return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -1112,6 +1106,6 @@ export class EditorSemanticDispatcher {
   }
 
   private noSession(): ResultEnvelope<EditorEditResult> {
-    return { success: false, errorCode: 'NO_SESSION', warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: false, errorCode: 'NO_SESSION'}
   }
 }

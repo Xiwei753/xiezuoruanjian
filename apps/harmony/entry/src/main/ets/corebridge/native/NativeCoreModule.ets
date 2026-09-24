@@ -1,5 +1,5 @@
 import nativeModule from 'libwriter_core.so'
-import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
+import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { DecodeResult } from '../codec/CoreWireDecoders'
 
 interface NativeJsonEnvelope {
@@ -66,25 +66,14 @@ export class NativeCoreModule {
         success: obj.success,
         data: obj.data,
         errorCode: obj.errorCode as string | undefined,
-        messageKey: obj.messageKey,
-        messageArgs: obj.messageArgs,
-        userMessage: obj.userMessage,
-        rawError: obj.rawError,
-        warnings: obj.warnings ?? [] as string[],
-        changedPaths: obj.changedPaths ?? [] as string[],
-        changedEntities: obj.changedEntities ?? [] as ChangedEntity[]
+        userMessage: obj.userMessage
       }
       return result
     } catch (e) {
       const errResult: ResultEnvelope<Object> = {
         success: false,
         errorCode: 'PARSE_ERROR',
-        messageKey: 'error.parse_error',
-        messageArgs: { 'detail': `${e}` } as Record<string, string>,
-        rawError: `JSON parse error: ${e}`,
-        warnings: [] as string[],
-        changedPaths: [] as string[],
-        changedEntities: [] as ChangedEntity[]
+        userMessage: `JSON parse error: ${e}`
       }
       return errResult
     }
@@ -106,13 +95,7 @@ export class NativeCoreModule {
       success: raw.success,
       data: raw.data as T | undefined,
       errorCode: raw.errorCode,
-      messageKey: raw.messageKey,
-      messageArgs: raw.messageArgs,
-      userMessage: raw.userMessage,
-      rawError: raw.rawError,
-      warnings: raw.warnings,
-      changedPaths: raw.changedPaths,
-      changedEntities: raw.changedEntities
+      userMessage: raw.userMessage
     }
     return result
   }
@@ -127,12 +110,7 @@ export class NativeCoreModule {
     const result: ResultEnvelope<T> = {
       success: false,
       errorCode: 'SCHEMA_MISMATCH',
-      messageKey: 'error.schema_mismatch',
-      messageArgs: { 'detail': message } as Record<string, string>,
-      rawError: `SCHEMA_MISMATCH: ${message}`,
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
+      userMessage: `SCHEMA_MISMATCH: ${message}`
     }
     return result
   }
@@ -151,13 +129,7 @@ export class NativeCoreModule {
       const errResult: ResultEnvelope<T> = {
         success: false,
         errorCode: raw.errorCode,
-        messageKey: raw.messageKey,
-        messageArgs: raw.messageArgs,
-        userMessage: raw.userMessage,
-        rawError: raw.rawError,
-        warnings: raw.warnings,
-        changedPaths: raw.changedPaths,
-        changedEntities: raw.changedEntities
+        userMessage: raw.userMessage
       }
       return errResult
     }
@@ -170,11 +142,7 @@ export class NativeCoreModule {
     }
     const result: ResultEnvelope<T> = {
       success: true,
-      data: decoded.value,
-      warnings: raw.warnings,
-      changedPaths: raw.changedPaths,
-      changedEntities: raw.changedEntities
-    }
+      data: decoded.value }
     return result
   }
 
@@ -182,11 +150,7 @@ export class NativeCoreModule {
     const result: ResultEnvelope<T> = {
       success: false,
       errorCode: 'NOT_IMPLEMENTED',
-      messageKey: 'error.not_implemented_bridge',
-      rawError: 'Native bridge not implemented yet',
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
+      userMessage: 'Native bridge not implemented yet'
     }
     return result
   }

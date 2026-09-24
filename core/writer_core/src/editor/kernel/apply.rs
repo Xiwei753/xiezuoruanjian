@@ -945,9 +945,13 @@ impl EditorKernel {
         // 纯几何计算，不依赖正文状态，可提前求值。
         let before_deleted_len: usize = before_range.map_or(0, |(bs, be)| be.saturating_sub(bs));
 
+        // 两个区间全部校验通过之后才开始改正文。旧写法是「删 after → 再校验 before」，
+        // before 判成 InvalidRange/InvalidOffset 时 after 已经删掉、edits 被丢弃、
+        // revision 不推进也不入 undo 栈 —— 正文与 history 分裂，下一次 undo 拿着过期
+        // 坐标 replace，越界 panic 直接 abort 在 C ABI 边界上（#753 线路契约测试复现）。
         if let Some((as_, ae)) = after_range {
-            if as_ > self.text.byte_len()
-                || ae > self.text.byte_len()
+            if as_ > old_len
+                || ae > old_len
                 || !self.text.is_char_boundary(as_)
                 || !self.text.is_char_boundary(ae)
             {
@@ -966,6 +970,31 @@ impl EditorKernel {
                     old_selection_head,
                 ));
             }
+        }
+        if let Some((bs, be)) = before_range {
+            if bs > old_len
+                || be > old_len
+                || !self.text.is_char_boundary(bs)
+                || !self.text.is_char_boundary(be)
+            {
+                return EditorEditOutcome::InvalidOffset(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection_anchor,
+                    old_selection_head,
+                ));
+            }
+            if bs >= be || be > sel_min {
+                return EditorEditOutcome::InvalidRange(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection_anchor,
+                    old_selection_head,
+                ));
+            }
+        }
+
+        if let Some((as_, ae)) = after_range {
             // 局部 Rope delete 记录 delta。
             let deleted = self.text.byte_slice(as_..ae).to_string();
             self.text.delete(as_..ae);
@@ -985,26 +1014,6 @@ impl EditorKernel {
         }
 
         if let Some((bs, be)) = before_range {
-            if bs > self.text.byte_len()
-                || be > self.text.byte_len()
-                || !self.text.is_char_boundary(bs)
-                || !self.text.is_char_boundary(be)
-            {
-                return EditorEditOutcome::InvalidOffset(self.noop_result(
-                    base_revision,
-                    old_cursor,
-                    old_selection_anchor,
-                    old_selection_head,
-                ));
-            }
-            if bs >= be || be > sel_min {
-                return EditorEditOutcome::InvalidRange(self.noop_result(
-                    base_revision,
-                    old_cursor,
-                    old_selection_anchor,
-                    old_selection_head,
-                ));
-            }
             // 局部 Rope delete 记录 delta。
             let deleted = self.text.byte_slice(bs..be).to_string();
             self.text.delete(bs..be);

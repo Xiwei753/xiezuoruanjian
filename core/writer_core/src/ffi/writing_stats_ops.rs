@@ -26,19 +26,6 @@ pub unsafe extern "C" fn writer_core_get_writing_stats() -> *mut c_char {
 /// `event_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless,
-    deprecated
-)]
 pub unsafe extern "C" fn writer_core_process_writing_event(
     event_json: *const c_char,
 ) -> *mut c_char {
@@ -52,34 +39,18 @@ pub unsafe extern "C" fn writer_core_process_writing_event(
         }
     };
     match with_app_service(|svc| {
-        let val: serde_json::Value =
+        let event: crate::api::WritingEventInputDto =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        let device_id = val.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
-        let platform = val
-            .get("platform")
-            .and_then(|v| v.as_str())
-            .unwrap_or("desktop");
-        let project_id = val.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
-        let volume_id = val.get("volumeId").and_then(|v| v.as_str()).unwrap_or("");
-        let chapter_id = val.get("chapterId").and_then(|v| v.as_str()).unwrap_or("");
-        let old_text = val.get("oldText").and_then(|v| v.as_str()).unwrap_or("");
-        let new_text = val.get("newText").and_then(|v| v.as_str()).unwrap_or("");
-        let duration_seconds = val
-            .get("durationSeconds")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as u32;
-        let session_id = val.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
-
         svc.process_writing_event(
-            device_id.to_string(),
-            platform.to_string(),
-            project_id.to_string(),
-            volume_id.to_string(),
-            chapter_id.to_string(),
-            old_text.to_string(),
-            new_text.to_string(),
-            duration_seconds,
-            session_id.to_string(),
+            event.device_id,
+            event.platform,
+            event.project_id,
+            event.volume_id,
+            event.chapter_id,
+            event.old_text,
+            event.new_text,
+            event.duration_seconds,
+            event.session_id,
         )
         .map_err(|e| format!("{}", e))?;
         Ok(true)

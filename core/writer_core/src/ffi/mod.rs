@@ -77,6 +77,31 @@ where
     f(&guard)
 }
 
+/// load-then-patch：把入参里出现的顶层键覆盖到当前 DTO 上，再反序列化回同一个
+/// DTO 落盘。字段名只由 DTO 的 serde 契约决定，FFI 不维护第二张读写映射表
+/// （Issue #753 评论 5809590165 第 2、7 条）。
+pub(crate) fn patch_dto<T, L, S>(load: L, save: S, payload_json: &str) -> Result<(), String>
+where
+    T: serde::de::DeserializeOwned + serde::Serialize,
+    L: FnOnce() -> Result<T, String>,
+    S: FnOnce(T) -> Result<bool, String>,
+{
+    let patch: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("JSON parse error: {e}"))?;
+    let patch_obj = patch
+        .as_object()
+        .ok_or_else(|| "payload must be a JSON object".to_string())?;
+    let mut merged = serde_json::to_value(load()?).map_err(|e| format!("{e}"))?;
+    let target = merged
+        .as_object_mut()
+        .ok_or_else(|| "current DTO is not a JSON object".to_string())?;
+    for (key, value) in patch_obj {
+        target.insert(key.clone(), value.clone());
+    }
+    let next: T = serde_json::from_value(merged).map_err(|e| format!("wire contract error: {e}"))?;
+    save(next).map(|_| ())
+}
+
 /// 将成功数据包装为 JSON ResultEnvelope 并返回 C string。
 ///
 /// ## 所有权

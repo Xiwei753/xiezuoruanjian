@@ -1,6 +1,13 @@
 // ─── Editor DTOs ─── 与 Core api/types/editor.rs 对齐
 // Issue #735：视觉类型（EditorVisualIntent/EditorVisualTransaction/AnimationMode 等）已从 Core 删除。
 // EditorEditResult 直接暴露编辑事实（cause/operationKind/offsetMap），平台要做动画时从 cause 推导。
+//
+// Issue #753 线格式约定：
+// - 所有 struct/enum 都是 `#[serde(rename_all = "camelCase")]`，除 `EditorTransactionCauseDto`
+//   没有 rename_all（线格式 PascalCase 变体名）。
+// - `offsetMap` / `compositionSession` / `composition` 带 `skip_serializing_if = "Option::is_none"`，
+//   即 Core 在不适用时**整个键省略** → ArkTS 必须是可选属性，不能写成 `| null`。
+// - `EditorContentDeltaDto` 是 `#[serde(default)]` 的非 Option 字段，一定出现。
 
 export enum EditorTransactionCause {
   Typing = 'Typing',
@@ -30,23 +37,24 @@ export enum EditorEditOutcome {
   InvalidRange = 'invalidRange'
 }
 
-// 操作类型 — 区分不同编辑操作的语义类别。与 Core EditorOperationKind 对齐。
+// 操作类型 — 区分不同编辑操作的语义类别。与 Core EditorOperationKindDto 对齐。
+// Core 侧 `#[serde(rename_all = "camelCase")]`，线格式是小写开头的 camelCase。
 export enum EditorOperationKind {
-  Insert = 'Insert',
-  Delete = 'Delete',
-  Replace = 'Replace',
-  CursorOnly = 'CursorOnly',
-  CompositionUpdate = 'CompositionUpdate',
-  CompositionCommit = 'CompositionCommit',
-  CompositionCancel = 'CompositionCancel',
-  Load = 'Load',
-  Format = 'Format'
+  Insert = 'insert',
+  Delete = 'delete',
+  Replace = 'replace',
+  CursorOnly = 'cursorOnly',
+  CompositionUpdate = 'compositionUpdate',
+  CompositionCommit = 'compositionCommit',
+  CompositionCancel = 'compositionCancel',
+  Load = 'load',
+  Format = 'format'
 }
 
-// 偏移映射类型 — 与 Core OffsetMapKind 对齐。
+// 偏移映射类型 — 与 Core OffsetMapKindDto 对齐（同样 camelCase）。
 export enum OffsetMapKind {
-  Identity = 'Identity',
-  Shifted = 'Shifted'
+  Identity = 'identity',
+  Shifted = 'shifted'
 }
 
 // 单个偏移映射条目 — 与 Core OffsetMapEntry 对齐。
@@ -119,12 +127,13 @@ export interface EditorEditResult {
   newSelectionHead: number
   cause: EditorTransactionCause
   operationKind: EditorOperationKind
-  offsetMap: OffsetMap | null
-  compositionSession: CompositionSession | null
+  // Core 侧 skip_serializing_if：不适用时整个键省略。
+  offsetMap?: OffsetMap
+  compositionSession?: CompositionSession
   contentDelta: EditorContentDelta
-  // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 null，
-  // 平台端据此构造临时显示文本和下划线范围。无 composition 时为 null。
-  composition: EditorCompositionState | null
+  // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时 Core 才发出该键，
+  // 平台端据此构造临时显示文本和下划线范围。无 composition 时键省略。
+  composition?: EditorCompositionState
 }
 
 // 编辑会话快照。Core snapshot() 返回。cursor 是 UTF-8 byte offset（光标位置）。
@@ -135,6 +144,6 @@ export interface EditorSessionSnapshot {
   selectionAnchor: number
   generation: number
   chapterId: string
-  // #629 评论6 Part B：composition 活跃时非 null，平台端据此构造临时显示文本和下划线。
-  composition: EditorCompositionState | null
+  // #629 评论6 Part B：Core 只在 composition 活跃时发出该键（skip_serializing_if）。
+  composition?: EditorCompositionState
 }

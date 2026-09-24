@@ -6,10 +6,10 @@ namespace Sujian.Windows.Bridge;
 public sealed record ProjectSummary(string Id, string Name);
 public sealed record VolumeSummary(string Id, string Name);
 public sealed record ChapterSummary(string Id, string Title);
-public sealed record SyncConfigDto(string RemoteUrl, string AccessToken, bool AutoSync, int IntervalMinutes);
-public sealed record WritingStatsDto(int TotalWords, int TodayWords, int SessionWords, int StreakDays, string SessionStartTime);
+public sealed record SyncConfigDto(bool Enabled, string ActiveProvider, bool AutoSync, uint SyncIntervalSeconds, bool HasNetworkPermission, bool HasNetworkStatePermission, string RemoteUrl);
+public sealed record WritingStatsDto(string StartDate, string EndDate, ulong TotalHumanTypedChars, ulong TotalPastedChars, ulong TotalDeletedChars, ulong TotalAiInsertedChars, long TotalNetDeltaChars, ulong TotalActiveSeconds, uint TotalSessions, uint DaysCount);
 public sealed record StarmapSummaryDto(string Id, string Name, int NodeCount, int EdgeCount);
-public sealed record ProjectStatsDto(int TotalWords, int TotalChapters, string LastEditedAt);
+public sealed record ProjectStatsDto(uint TotalWordCount, uint VolumeCount, uint ChapterCount);
 
 internal sealed class EnvelopeResult
 {
@@ -338,15 +338,14 @@ public sealed class WriterCoreBridge
             var json = PtrToStringAndFree(resultPtr);
             var env = ParseEnvelope(json);
             ThrowIfFailed(env);
-            int totalWords = 0, totalChapters = 0;
-            string lastEditedAt = "";
+            uint totalWordCount = 0, volumeCount = 0, chapterCount = 0;
             if (env.Data?.ValueKind == JsonValueKind.Object)
             {
-                if (env.Data.Value.TryGetProperty("totalWords", out var tw)) totalWords = tw.GetInt32();
-                if (env.Data.Value.TryGetProperty("totalChapters", out var tc)) totalChapters = tc.GetInt32();
-                if (env.Data.Value.TryGetProperty("lastEditedAt", out var lea)) lastEditedAt = lea.GetString() ?? "";
+                if (env.Data.Value.TryGetProperty("totalWordCount", out var twc)) totalWordCount = twc.GetUInt32();
+                if (env.Data.Value.TryGetProperty("volumeCount", out var vc)) volumeCount = vc.GetUInt32();
+                if (env.Data.Value.TryGetProperty("chapterCount", out var cc)) chapterCount = cc.GetUInt32();
             }
-            return Task.FromResult(new ProjectStatsDto(totalWords, totalChapters, lastEditedAt));
+            return Task.FromResult(new ProjectStatsDto(totalWordCount, volumeCount, chapterCount));
         }
         finally { Marshal.FreeHGlobal(pidPtr); }
     }
@@ -360,18 +359,18 @@ public sealed class WriterCoreBridge
         var s = new LocalSettings();
         if (env.Data?.ValueKind == JsonValueKind.Object)
         {
-            if (env.Data.Value.TryGetProperty("fontSize", out var fs)) s.FontSize = (float)fs.GetDouble();
-            if (env.Data.Value.TryGetProperty("lineHeight", out var lh)) s.LineHeight = (float)lh.GetDouble();
-            if (env.Data.Value.TryGetProperty("theme", out var th)) s.Theme = th.GetString() ?? "system";
-            if (env.Data.Value.TryGetProperty("autoSave", out var asv)) s.AutoSave = asv.GetBoolean();
-            if (env.Data.Value.TryGetProperty("autoIndent", out var ai)) s.AutoIndent = ai.GetBoolean();
+            if (env.Data.Value.TryGetProperty("editorFontSize", out var fs)) s.FontSize = (float)fs.GetDouble();
+            if (env.Data.Value.TryGetProperty("editorLineSpacingMultiplier", out var lh)) s.LineHeight = (float)lh.GetDouble();
+            if (env.Data.Value.TryGetProperty("appearanceMode", out var am)) s.AppearanceMode = am.GetString() ?? "system";
+            if (env.Data.Value.TryGetProperty("autoSaveEnabled", out var asv)) s.AutoSave = asv.GetBoolean();
+            if (env.Data.Value.TryGetProperty("autoIndentEnabled", out var ai)) s.AutoIndent = ai.GetBoolean();
         }
         return Task.FromResult(s);
     }
 
     public Task SaveSettingsAsync(LocalSettings settings)
     {
-        var json = JsonSerializer.Serialize(new { fontSize = settings.FontSize, lineHeight = settings.LineHeight, theme = settings.Theme, autoSave = settings.AutoSave, autoIndent = settings.AutoIndent });
+        var json = JsonSerializer.Serialize(new { editorFontSize = settings.FontSize, editorLineSpacingMultiplier = settings.LineHeight, appearanceMode = settings.AppearanceMode, autoSaveEnabled = settings.AutoSave, autoIndentEnabled = settings.AutoIndent });
         var jsonPtr = ToUtf8(json);
         try
         {
@@ -397,21 +396,29 @@ public sealed class WriterCoreBridge
         var json = PtrToStringAndFree(resultPtr);
         var env = ParseEnvelope(json);
         ThrowIfFailed(env);
-        var cfg = new SyncConfigDto("", "", false, 5);
+        var cfg = new SyncConfigDto(false, "", false, 0, false, false, "");
         if (env.Data?.ValueKind == JsonValueKind.Object)
         {
-            var remoteUrl = env.Data.Value.TryGetProperty("remoteUrl", out var ru) ? ru.GetString() ?? "" : "";
-            var accessToken = env.Data.Value.TryGetProperty("accessToken", out var at) ? at.GetString() ?? "" : "";
+            var enabled = env.Data.Value.TryGetProperty("enabled", out var en) && en.GetBoolean();
+            var activeProvider = env.Data.Value.TryGetProperty("activeProvider", out var ap) ? ap.GetString() ?? "" : "";
             var autoSync = env.Data.Value.TryGetProperty("autoSync", out var asv) && asv.GetBoolean();
-            var interval = env.Data.Value.TryGetProperty("intervalMinutes", out var im) ? im.GetInt32() : 5;
-            cfg = new SyncConfigDto(remoteUrl, accessToken, autoSync, interval);
+            var syncIntervalSeconds = env.Data.Value.TryGetProperty("syncIntervalSeconds", out var sis) ? sis.GetUInt32() : 0u;
+            var hasNetworkPermission = env.Data.Value.TryGetProperty("hasNetworkPermission", out var hnp) && hnp.GetBoolean();
+            var hasNetworkStatePermission = env.Data.Value.TryGetProperty("hasNetworkStatePermission", out var hns) && hns.GetBoolean();
+            var remoteUrl = "";
+            if (env.Data.Value.TryGetProperty("providerConfig", out var pc) && pc.ValueKind == JsonValueKind.Object
+                && pc.TryGetProperty("remote_url", out var ru))
+            {
+                remoteUrl = ru.GetString() ?? "";
+            }
+            cfg = new SyncConfigDto(enabled, activeProvider, autoSync, syncIntervalSeconds, hasNetworkPermission, hasNetworkStatePermission, remoteUrl);
         }
         return Task.FromResult(cfg);
     }
 
     public Task SaveSyncConfigAsync(SyncConfigDto config)
     {
-        var json = JsonSerializer.Serialize(new { remoteUrl = config.RemoteUrl, accessToken = config.AccessToken, autoSync = config.AutoSync, intervalMinutes = config.IntervalMinutes });
+        var json = JsonSerializer.Serialize(new { enabled = config.Enabled, activeProvider = config.ActiveProvider, autoSync = config.AutoSync, syncIntervalSeconds = config.SyncIntervalSeconds, hasNetworkPermission = config.HasNetworkPermission, hasNetworkStatePermission = config.HasNetworkStatePermission });
         var jsonPtr = ToUtf8(json);
         try
         {
@@ -448,17 +455,30 @@ public sealed class WriterCoreBridge
         var json = PtrToStringAndFree(resultPtr);
         var env = ParseEnvelope(json);
         ThrowIfFailed(env);
-        var stats = new WritingStatsDto(0, 0, 0, 0, "");
+        var stats = new WritingStatsDto("", "", 0, 0, 0, 0, 0, 0, 0, 0);
         if (env.Data?.ValueKind == JsonValueKind.Object)
         {
-            int totalWords = 0, todayWords = 0, sessionWords = 0, streakDays = 0;
-            string sessionStart = "";
-            if (env.Data.Value.TryGetProperty("totalWords", out var tw)) totalWords = tw.GetInt32();
-            if (env.Data.Value.TryGetProperty("todayWords", out var tdw)) todayWords = tdw.GetInt32();
-            if (env.Data.Value.TryGetProperty("sessionWords", out var sw)) sessionWords = sw.GetInt32();
-            if (env.Data.Value.TryGetProperty("streakDays", out var sd)) streakDays = sd.GetInt32();
-            if (env.Data.Value.TryGetProperty("sessionStartTime", out var ss)) sessionStart = ss.GetString() ?? "";
-            stats = new WritingStatsDto(totalWords, todayWords, sessionWords, streakDays, sessionStart);
+            var startDate = "";
+            var endDate = "";
+            if (env.Data.Value.TryGetProperty("range", out var range) && range.ValueKind == JsonValueKind.Object)
+            {
+                if (range.TryGetProperty("startDate", out var sd)) startDate = sd.GetString() ?? "";
+                if (range.TryGetProperty("endDate", out var ed)) endDate = ed.GetString() ?? "";
+            }
+            ulong humanTypedChars = 0, pastedChars = 0, deletedChars = 0, aiInsertedChars = 0, activeSeconds = 0;
+            long netDeltaChars = 0;
+            uint sessions = 0, daysCount = 0;
+            if (env.Data.Value.TryGetProperty("totalHumanTypedChars", out var th)) humanTypedChars = th.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalPastedChars", out var tp)) pastedChars = tp.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalDeletedChars", out var td)) deletedChars = td.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalAiInsertedChars", out var tai)) aiInsertedChars = tai.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalNetDeltaChars", out var tnd)) netDeltaChars = tnd.GetInt64();
+            if (env.Data.Value.TryGetProperty("totalActiveSeconds", out var tas)) activeSeconds = tas.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalSessions", out var ts)) sessions = ts.GetUInt32();
+            if (env.Data.Value.TryGetProperty("daysCount", out var dc)) daysCount = dc.GetUInt32();
+            stats = new WritingStatsDto(
+                startDate, endDate, humanTypedChars, pastedChars, deletedChars,
+                aiInsertedChars, netDeltaChars, activeSeconds, sessions, daysCount);
         }
         return Task.FromResult(stats);
     }
@@ -542,7 +562,7 @@ public sealed class LocalSettings
 {
     public float FontSize { get; set; } = 16f;
     public float LineHeight { get; set; } = 1.5f;
-    public string Theme { get; set; } = "system";
+    public string AppearanceMode { get; set; } = "system";
     public bool AutoSave { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
 }

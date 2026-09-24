@@ -1,0 +1,3533 @@
+{
+  "clearChapter": {
+    "kind": "object",
+    "fields": {
+      "chapterRelativePath": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentHash": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentLen": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "metaHash": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "wordCount": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "computeStarMapEdgeRenders": {
+    "kind": "array",
+    "element": {
+      "kind": "object",
+      "fields": {
+        "arrowLeftX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "arrowLeftY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "arrowRightX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "arrowRightY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "arrowTipX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "arrowTipY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "edgeId": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "endX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "endY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "fromCx": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "fromCy": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "hasBidirectional": {
+          "kind": "scalar",
+          "ty": "boolean"
+        },
+        "label": {
+          "kind": "scalar",
+          "ty": "null"
+        },
+        "labelX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "labelY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "offsetX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "offsetY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "startX": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "startY": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "toCx": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "toCy": {
+          "kind": "scalar",
+          "ty": "number"
+        }
+      }
+    }
+  },
+  "createChapter": {
+    "kind": "object",
+    "fields": {
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "hash": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "id": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "note": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "order": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "wordCount": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "createProject": {
+    "kind": "object",
+    "fields": {
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "id": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "createStarMap": {
+    "kind": "object",
+    "fields": {
+      "accentColor": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "childStarmapCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "description": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "edgeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "isMainForProject": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "linkedChapterCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "nodeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "parentStarmapId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "projectId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "starmapId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "createVolume": {
+    "kind": "object",
+    "fields": {
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "id": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "order": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "editorSessionBeginComposition": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "composition": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditCursorUtf16": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditText": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "replaceByteEndExclusive": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "replaceByteStart": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "compositionSession": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": null
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionClose": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "editorSessionCommitText": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": null
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionCompositionMoveGraphemeLeft": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "composition": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditCursorUtf16": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditText": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "replaceByteEndExclusive": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "replaceByteStart": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "compositionSession": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": null
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionCompositionMoveGraphemeRight": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "composition": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditCursorUtf16": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditText": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "replaceByteEndExclusive": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "replaceByteStart": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "compositionSession": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": null
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionCreate": {
+    "kind": "scalar",
+    "ty": "number"
+  },
+  "editorSessionDelete": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedText": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "newRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionEnd": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionStart": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "offsetMap": {
+        "kind": "object",
+        "fields": {
+          "entries": {
+            "kind": "array",
+            "element": {
+              "kind": "object",
+              "fields": {
+                "kind": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "length": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "newByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "oldByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionDeleteSurrounding": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedText": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "newRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionEnd": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionStart": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "offsetMap": {
+        "kind": "object",
+        "fields": {
+          "entries": {
+            "kind": "array",
+            "element": {
+              "kind": "object",
+              "fields": {
+                "kind": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "length": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "newByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "oldByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionGetRevision": {
+    "kind": "scalar",
+    "ty": "number"
+  },
+  "editorSessionGetText": {
+    "kind": "scalar",
+    "ty": "string"
+  },
+  "editorSessionInsert": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedText": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "newRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionEnd": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionStart": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "offsetMap": {
+        "kind": "object",
+        "fields": {
+          "entries": {
+            "kind": "array",
+            "element": {
+              "kind": "object",
+              "fields": {
+                "kind": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "length": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "newByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "oldByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionNextGraphemeBoundary": {
+    "kind": "scalar",
+    "ty": "number"
+  },
+  "editorSessionPreviousGraphemeBoundary": {
+    "kind": "scalar",
+    "ty": "number"
+  },
+  "editorSessionRedo": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedText": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "newRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionEnd": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionStart": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "offsetMap": {
+        "kind": "object",
+        "fields": {
+          "entries": {
+            "kind": "array",
+            "element": {
+              "kind": "object",
+              "fields": {
+                "kind": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "length": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "newByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "oldByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionReplace": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedText": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "newRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionEnd": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionStart": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "offsetMap": {
+        "kind": "object",
+        "fields": {
+          "entries": {
+            "kind": "array",
+            "element": null
+          }
+        }
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionSetSelection": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": null
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionSnapshot": {
+    "kind": "object",
+    "fields": {
+      "chapterId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "cursor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "generation": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "revision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "selectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "text": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "editorSessionUndo": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedText": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "newRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "replaceByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionEnd": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "resultingSelectionStart": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "offsetMap": {
+        "kind": "object",
+        "fields": {
+          "entries": {
+            "kind": "array",
+            "element": {
+              "kind": "object",
+              "fields": {
+                "kind": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "length": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "newByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "oldByteOffset": {
+                  "kind": "scalar",
+                  "ty": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "editorSessionUpdateComposition": {
+    "kind": "object",
+    "fields": {
+      "baseRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "cause": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "composition": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditCursorUtf16": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "preeditText": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "replaceByteEndExclusive": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "replaceByteStart": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "compositionSession": {
+        "kind": "object",
+        "fields": {
+          "baseRevision": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "generation": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "sessionId": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "contentDelta": {
+        "kind": "object",
+        "fields": {
+          "deletedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "deletedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedChars": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "insertedNonWhitespaceChars": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "displayPatches": {
+        "kind": "array",
+        "element": null
+      },
+      "newRevision": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "newSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionAnchor": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "oldSelectionHead": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "operationKind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "outcome": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "transactionId": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "ensureDeviceInfo": {
+    "kind": "object",
+    "fields": {
+      "deviceClass": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "deviceId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "platform": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "getAppState": {
+    "kind": "object",
+    "fields": {
+      "projects": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "chapterCount": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "createdAt": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "id": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "title": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "totalWordCount": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "updatedAt": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "volumeCount": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "recentEdit": {
+        "kind": "scalar",
+        "ty": "null"
+      }
+    }
+  },
+  "getProjectStats": {
+    "kind": "object",
+    "fields": {
+      "chapterCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalWordCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "volumeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "getProjectTree": {
+    "kind": "object",
+    "fields": {
+      "project": {
+        "kind": "object",
+        "fields": {
+          "createdAt": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "id": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "title": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "updatedAt": {
+            "kind": "scalar",
+            "ty": "string"
+          }
+        }
+      },
+      "stats": {
+        "kind": "object",
+        "fields": {
+          "chapterCount": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "totalWordCount": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "volumeCount": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "volumes": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "chapters": {
+              "kind": "array",
+              "element": {
+                "kind": "object",
+                "fields": {
+                  "createdAt": {
+                    "kind": "scalar",
+                    "ty": "string"
+                  },
+                  "hash": {
+                    "kind": "scalar",
+                    "ty": "string"
+                  },
+                  "id": {
+                    "kind": "scalar",
+                    "ty": "string"
+                  },
+                  "note": {
+                    "kind": "scalar",
+                    "ty": "null"
+                  },
+                  "order": {
+                    "kind": "scalar",
+                    "ty": "number"
+                  },
+                  "title": {
+                    "kind": "scalar",
+                    "ty": "string"
+                  },
+                  "updatedAt": {
+                    "kind": "scalar",
+                    "ty": "string"
+                  },
+                  "wordCount": {
+                    "kind": "scalar",
+                    "ty": "number"
+                  }
+                }
+              }
+            },
+            "volume": {
+              "kind": "object",
+              "fields": {
+                "createdAt": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "id": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "order": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "title": {
+                  "kind": "scalar",
+                  "ty": "string"
+                },
+                "updatedAt": {
+                  "kind": "scalar",
+                  "ty": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "getRecentEdits": {
+    "kind": "array",
+    "element": null
+  },
+  "getStarMap": {
+    "kind": "object",
+    "fields": {
+      "accentColor": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "childStarmapCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "description": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "edgeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "isMainForProject": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "linkedChapterCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "nodeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "parentStarmapId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "projectId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "starmapId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "getStarMapGraph": {
+    "kind": "object",
+    "fields": {
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "edges": {
+        "kind": "array",
+        "element": null
+      },
+      "embeds": {
+        "kind": "array",
+        "element": null
+      },
+      "hyperlinks": {
+        "kind": "array",
+        "element": null
+      },
+      "id": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "links": {
+        "kind": "array",
+        "element": null
+      },
+      "nodes": {
+        "kind": "array",
+        "element": null
+      },
+      "schemaVersion": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "starmapId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "getStarMapLayout": {
+    "kind": "object",
+    "fields": {
+      "kind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "nodes": {
+        "kind": "array",
+        "element": null
+      }
+    }
+  },
+  "getStarMapLayoutAfterSeed": {
+    "kind": "object",
+    "fields": {
+      "kind": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "nodes": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "collapsed": {
+              "kind": "scalar",
+              "ty": "boolean"
+            },
+            "depth": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "focusWeight": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "height": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "nodeId": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "orbitGroup": {
+              "kind": "scalar",
+              "ty": "null"
+            },
+            "radius": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "scale": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "width": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "x": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "y": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "zIndex": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      }
+    }
+  },
+  "getStarMapMotionPolicy": {
+    "kind": "object",
+    "fields": {
+      "dragLiftScale": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "dragShadowBoost": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "enabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "idleAmplitudeVp": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "idlePeriodMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "idleWobbleEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "reduceMotion": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "settleDurationMs": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "getWritingStats": {
+    "kind": "object",
+    "fields": {
+      "daysCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "range": {
+        "kind": "object",
+        "fields": {
+          "endDate": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "startDate": {
+            "kind": "scalar",
+            "ty": "string"
+          }
+        }
+      },
+      "totalActiveSeconds": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalAiInsertedChars": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalDeletedChars": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalHumanTypedChars": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalNetDeltaChars": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalPastedChars": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "totalSessions": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "listBuiltinThemes": {
+    "kind": "array",
+    "element": {
+      "kind": "object",
+      "fields": {
+        "dark_scheme": {
+          "kind": "object",
+          "fields": {
+            "background": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "error": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "error_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "inverse_on_surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "inverse_primary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "inverse_surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_background": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_error": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_error_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary_fixed_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary_fixed_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_surface_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary_fixed_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "outline": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "outline_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary_fixed_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "scrim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary_fixed_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_bright": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_high": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_highest": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_low": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_lowest": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_tint": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary_fixed_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        },
+        "light_scheme": {
+          "kind": "object",
+          "fields": {
+            "background": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "error": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "error_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "inverse_on_surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "inverse_primary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "inverse_surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_background": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_error": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_error_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_primary_fixed_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_secondary_fixed_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_surface_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "on_tertiary_fixed_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "outline": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "outline_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "primary_fixed_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "scrim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "secondary_fixed_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_bright": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_high": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_highest": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_low": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_container_lowest": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_tint": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "surface_variant": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary_container": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary_fixed": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "tertiary_fixed_dim": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        },
+        "name": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "theme_id": {
+          "kind": "scalar",
+          "ty": "string"
+        }
+      }
+    }
+  },
+  "listChapters": {
+    "kind": "array",
+    "element": {
+      "kind": "object",
+      "fields": {
+        "createdAt": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "hash": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "id": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "note": {
+          "kind": "scalar",
+          "ty": "null"
+        },
+        "order": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "title": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "updatedAt": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "wordCount": {
+          "kind": "scalar",
+          "ty": "number"
+        }
+      }
+    }
+  },
+  "listPaletteRecords": {
+    "kind": "array",
+    "element": null
+  },
+  "listProjects": {
+    "kind": "array",
+    "element": {
+      "kind": "object",
+      "fields": {
+        "chapterCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "createdAt": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "id": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "title": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "totalWordCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "updatedAt": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "volumeCount": {
+          "kind": "scalar",
+          "ty": "number"
+        }
+      }
+    }
+  },
+  "listStarMaps": {
+    "kind": "array",
+    "element": {
+      "kind": "object",
+      "fields": {
+        "accentColor": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "childStarmapCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "createdAt": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "description": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "edgeCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "isMainForProject": {
+          "kind": "scalar",
+          "ty": "boolean"
+        },
+        "linkedChapterCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "nodeCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "parentStarmapId": {
+          "kind": "scalar",
+          "ty": "null"
+        },
+        "projectId": {
+          "kind": "scalar",
+          "ty": "null"
+        },
+        "starmapId": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "title": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "updatedAt": {
+          "kind": "scalar",
+          "ty": "number"
+        }
+      }
+    }
+  },
+  "listStarMapsForProject": {
+    "kind": "array",
+    "element": null
+  },
+  "listVolumes": {
+    "kind": "array",
+    "element": {
+      "kind": "object",
+      "fields": {
+        "createdAt": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "id": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "order": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "title": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "updatedAt": {
+          "kind": "scalar",
+          "ty": "string"
+        }
+      }
+    }
+  },
+  "loadAppSyncState": {
+    "kind": "object",
+    "fields": {
+      "conflicts": {
+        "kind": "array",
+        "element": null
+      },
+      "lastError": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "lastSyncTime": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "status": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "loadDeviceInfo": {
+    "kind": "object",
+    "fields": {
+      "deviceClass": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "deviceId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "platform": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "loadLocalSettings": {
+    "kind": "object",
+    "fields": {
+      "aiEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "appearanceMode": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "autoIndentEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "autoIndentWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "autoSaveDelayMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "autoSaveEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "colorSource": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "desktopEditorWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "desktopSidebarWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "diagnosticsEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "diagnosticsVerbose": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "dynamicColorEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "editorCoordinatedTextCursorAnimationEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "editorFontSize": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorLineSpacingMultiplier": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorSmoothCursorDurationMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorSmoothCursorEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "editorTypingAnimationDurationMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorTypingAnimationEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "locale": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "selectedBuiltinThemeId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "selectedPaletteId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "statsDeviceId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "themeMode": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "windowHeight": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "windowWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "loadLocalSettingsAfterPatch": {
+    "kind": "object",
+    "fields": {
+      "aiEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "appearanceMode": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "autoIndentEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "autoIndentWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "autoSaveDelayMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "autoSaveEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "colorSource": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "desktopEditorWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "desktopSidebarWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "diagnosticsEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "diagnosticsVerbose": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "dynamicColorEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "editorCoordinatedTextCursorAnimationEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "editorFontSize": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorLineSpacingMultiplier": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorSmoothCursorDurationMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorSmoothCursorEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "editorTypingAnimationDurationMs": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "editorTypingAnimationEnabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "locale": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "selectedBuiltinThemeId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "selectedPaletteId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "statsDeviceId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "themeMode": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "windowHeight": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "windowWidth": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "loadSyncConfig": {
+    "kind": "object",
+    "fields": {
+      "activeProvider": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "autoSync": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "enabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "hasNetworkPermission": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "hasNetworkStatePermission": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "providerConfig": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "syncIntervalSeconds": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "loadSyncConfigAfterPatch": {
+    "kind": "object",
+    "fields": {
+      "activeProvider": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "autoSync": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "enabled": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "hasNetworkPermission": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "hasNetworkStatePermission": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "providerConfig": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "syncIntervalSeconds": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "loadSyncableSettings": {
+    "kind": "object",
+    "fields": {
+      "fontSize": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "monetColor": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "themeMode": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "themePaletteJson": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "openChapter": {
+    "kind": "object",
+    "fields": {
+      "content": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "meta": {
+        "kind": "object",
+        "fields": {
+          "createdAt": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "hash": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "id": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "note": {
+            "kind": "scalar",
+            "ty": "null"
+          },
+          "order": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "title": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "updatedAt": {
+            "kind": "scalar",
+            "ty": "string"
+          },
+          "wordCount": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      }
+    }
+  },
+  "processWritingEvent": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "renameChapter": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "renameProject": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "renameStarMap": {
+    "kind": "object",
+    "fields": {
+      "accentColor": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "childStarmapCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "description": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "edgeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "isMainForProject": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "linkedChapterCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "nodeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "parentStarmapId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "projectId": {
+        "kind": "scalar",
+        "ty": "null"
+      },
+      "starmapId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "title": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "renameVolume": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "reorderChapters": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "reorderVolumes": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "resolveChapterLocation": {
+    "kind": "object",
+    "fields": {
+      "chapterId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "projectId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "volumeId": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "resolveLayout": {
+    "kind": "object",
+    "fields": {
+      "metrics": {
+        "kind": "object",
+        "fields": {
+          "editorMinWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "listPaneMinWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "listPaneWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "projectCardMinWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "toolPaneMinWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "toolPaneWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "toolRailWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "toolbarHeightDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "toolbarLeadingWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          },
+          "toolbarTrailingWidthDp": {
+            "kind": "scalar",
+            "ty": "number"
+          }
+        }
+      },
+      "primaryNavigationPlacement": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "shellMode": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "workspaceLayoutMode": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "resolveScreenPolicy.Home": {
+    "kind": "object",
+    "fields": {
+      "actionSlots": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "order": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "region": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "requiresConfirmation": {
+              "kind": "scalar",
+              "ty": "boolean"
+            },
+            "role": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "target": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        }
+      },
+      "screenRole": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "showPrimaryNavigation": {
+        "kind": "scalar",
+        "ty": "boolean"
+      }
+    }
+  },
+  "resolveScreenPolicy.ProjectWorkspace": {
+    "kind": "object",
+    "fields": {
+      "actionSlots": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "order": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "region": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "requiresConfirmation": {
+              "kind": "scalar",
+              "ty": "boolean"
+            },
+            "role": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "target": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        }
+      },
+      "screenRole": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "showPrimaryNavigation": {
+        "kind": "scalar",
+        "ty": "boolean"
+      }
+    }
+  },
+  "resolveScreenPolicy.Settings": {
+    "kind": "object",
+    "fields": {
+      "actionSlots": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "order": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "region": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "requiresConfirmation": {
+              "kind": "scalar",
+              "ty": "boolean"
+            },
+            "role": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "target": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        }
+      },
+      "screenRole": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "showPrimaryNavigation": {
+        "kind": "scalar",
+        "ty": "boolean"
+      }
+    }
+  },
+  "resolveScreenPolicy.Writing": {
+    "kind": "object",
+    "fields": {
+      "actionSlots": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "order": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "region": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "requiresConfirmation": {
+              "kind": "scalar",
+              "ty": "boolean"
+            },
+            "role": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "target": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        }
+      },
+      "screenRole": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "showPrimaryNavigation": {
+        "kind": "scalar",
+        "ty": "boolean"
+      }
+    }
+  },
+  "resolveVolumeLocation": {
+    "kind": "object",
+    "fields": {
+      "projectId": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "volumeId": {
+        "kind": "scalar",
+        "ty": "string"
+      }
+    }
+  },
+  "saveAppSyncState": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "saveChapter": {
+    "kind": "object",
+    "fields": {
+      "chapterRelativePath": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentHash": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "contentLen": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "metaHash": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "updatedAt": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "wordCount": {
+        "kind": "scalar",
+        "ty": "number"
+      }
+    }
+  },
+  "saveLocalSettings": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "saveStarMapLayout": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "saveStarMapViewport": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "saveSyncConfig": {
+    "kind": "scalar",
+    "ty": "boolean"
+  },
+  "saveSyncableSettings": {
+    "kind": "scalar",
+    "ty": "boolean"
+  }
+}

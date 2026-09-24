@@ -72,37 +72,25 @@ export class EditorSessionCoordinator {
     if (!createResult.success || createResult.data === undefined || createResult.data === null) {
       return {
         success: false,
-        errorCode: createResult.errorCode ?? 'CREATE_FAILED',
-        warnings: createResult.warnings,
-        changedPaths: createResult.changedPaths,
-        changedEntities: createResult.changedEntities
-      }
+        errorCode: createResult.errorCode ?? 'CREATE_FAILED' }
     }
     const sessionId: number = createResult.data
     const snapResult = await this.bridge.snapshot(sessionId)
     if (!snapResult.success || !snapResult.data) {
       return {
         success: false,
-        errorCode: snapResult.errorCode ?? 'SNAPSHOT_FAILED',
-        warnings: snapResult.warnings,
-        changedPaths: snapResult.changedPaths,
-        changedEntities: snapResult.changedEntities
-      }
+        errorCode: snapResult.errorCode ?? 'SNAPSHOT_FAILED' }
     }
     this.state = EditorSessionState.fromCreate(sessionId, snapResult.data)
     this.notifyListener(null)
     return {
       success: true,
-      data: snapResult.data,
-      warnings: snapResult.warnings,
-      changedPaths: snapResult.changedPaths,
-      changedEntities: snapResult.changedEntities
-    }
+      data: snapResult.data }
   }
 
   async close(): Promise<ResultEnvelope<boolean>> {
     if (!this.state) {
-      return { success: false, errorCode: 'NO_SESSION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_SESSION'}
     }
     const sid = this.state.sessionId
     const result = await this.bridge.close(sid)
@@ -298,7 +286,7 @@ export class EditorSessionCoordinator {
     }
     const snap = this.state.snapshot
     if (!snap.composition) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     return this.enqueueEdit((sid, rev) => this.bridge.compositionMoveGraphemeLeft(sid, comp.sessionId, comp.generation, rev))
@@ -310,7 +298,7 @@ export class EditorSessionCoordinator {
     }
     const snap = this.state.snapshot
     if (!snap.composition) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     return this.enqueueEdit((sid, rev) => this.bridge.compositionMoveGraphemeRight(sid, comp.sessionId, comp.generation, rev))
@@ -322,7 +310,7 @@ export class EditorSessionCoordinator {
     }
     const snap = this.state.snapshot
     if (!snap.composition) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     return this.enqueueEdit((sid, rev) => this.bridge.compositionDeleteGraphemeBackward(sid, comp.sessionId, comp.generation, rev))
@@ -334,7 +322,7 @@ export class EditorSessionCoordinator {
     }
     const snap = this.state.snapshot
     if (!snap.composition) {
-      return { success: false, errorCode: 'NO_COMPOSITION', warnings: [], changedPaths: [], changedEntities: [] }
+      return { success: false, errorCode: 'NO_COMPOSITION'}
     }
     const comp = snap.composition
     return this.enqueueEdit((sid, rev) => this.bridge.compositionDeleteGraphemeForward(sid, comp.sessionId, comp.generation, rev))
@@ -350,6 +338,6 @@ export class EditorSessionCoordinator {
   }
 
   private noSession<T>(): ResultEnvelope<T> {
-    return { success: false, errorCode: 'NO_SESSION', warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: false, errorCode: 'NO_SESSION'}
   }
 }

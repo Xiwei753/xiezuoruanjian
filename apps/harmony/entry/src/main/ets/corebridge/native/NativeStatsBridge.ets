@@ -1,5 +1,5 @@
 import { WritingStats } from '../dto/ProjectDtos'
-import { ChangedEntity, ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
+import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeWritingStats, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
 
@@ -16,7 +16,7 @@ interface WritingEventDto {
 }
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
 export class NativeStatsBridge {

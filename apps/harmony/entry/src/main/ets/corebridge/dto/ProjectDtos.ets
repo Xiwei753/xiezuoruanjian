@@ -1,5 +1,7 @@
 // Project / Volume / Chapter / Tree / WritingStats DTOs.
-// 字段与 Core api/types/ 真实 DTO 对齐（camelCase）。
+// Issue #753：字段与 Core api/types/ 真实 DTO 一字不差对齐（camelCase）。
+// Rust `Option<T>` 且未标 skip_serializing_if 的字段一定以 null 出现
+// （如 ChapterMetaDto.note）→ 写成 `T | null`，不写成可选属性。
 
 // ─── Project DTOs ───
 
@@ -8,6 +10,17 @@ export interface Project {
   title: string
   createdAt: string
   updatedAt: string
+}
+
+// 作品列表元素 — Core ProjectSummaryDto（元数据 + 统计一次返回）。
+export interface ProjectSummary {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  totalWordCount: number
+  volumeCount: number
+  chapterCount: number
 }
 
 export interface ProjectStats {
@@ -36,7 +49,7 @@ export interface ChapterMeta {
   order: number
   wordCount: number
   hash: string
-  note?: string
+  note: string | null
 }
 
 export interface ChapterContent {
@@ -53,12 +66,12 @@ export interface ChapterSaveReceipt {
   wordCount: number
 }
 
-// ─── Tree Composition (客户端组合结构，非 Core DTO) ───
+// ─── 作品树（Core ProjectWorkspaceSnapshotDto / VolumeWithChaptersDto） ───
 
 export interface ProjectTree {
   project: Project
   volumes: VolumeTree[]
-  stats?: ProjectStats
+  stats: ProjectStats
 }
 
 export interface VolumeTree {
@@ -66,13 +79,22 @@ export interface VolumeTree {
   chapters: ChapterMeta[]
 }
 
-// ─── Writing Stats (待 Core stats 模块稳定后对齐) ───
+// ─── Writing Stats（Core api/types/stats.rs，camelCase） ───
 
+export interface DateRange {
+  startDate: string
+  endDate: string
+}
+
+// WritingStatsSummaryDto
 export interface WritingStats {
-  totalChars: number
-  totalWords: number
-  totalChapters: number
-  todayChars: number
-  todayDuration: number
-  averageSpeed: number
+  range: DateRange
+  totalHumanTypedChars: number
+  totalPastedChars: number
+  totalDeletedChars: number
+  totalAiInsertedChars: number
+  totalNetDeltaChars: number
+  totalActiveSeconds: number
+  totalSessions: number
+  daysCount: number
 }

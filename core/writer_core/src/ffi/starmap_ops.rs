@@ -88,7 +88,7 @@ pub unsafe extern "C" fn writer_core_get_starmap_graph(starmap_id: *const c_char
     };
     match with_app_service(|svc| {
         let graph = svc.get_starmap_graph(sid).map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&graph).unwrap_or_default())
+        Ok(graph)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn writer_core_get_starmap_motion_policy() -> *mut c_char 
         let policy = svc
             .get_starmap_motion_policy_raw()
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&policy).unwrap_or_default())
+        Ok(crate::api::types::StarMapMotionPolicyDto::from(policy))
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_ERROR", &e),
@@ -221,7 +221,7 @@ pub unsafe extern "C" fn writer_core_get_starmap_layout(starmap_id: *const c_cha
         let layout = svc
             .get_starmap_layout_raw(&sid)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&layout).unwrap_or_default())
+        Ok(crate::api::types::StarMapLayoutDto::from(layout))
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
@@ -255,17 +255,17 @@ pub unsafe extern "C" fn writer_core_save_starmap_layout(
             )
         }
     };
-    let layout: crate::starmap::types::StarMapLayout = match serde_json::from_str(&layout_str) {
+    let layout: crate::api::types::StarMapLayoutDto = match serde_json::from_str(&layout_str) {
         Ok(l) => l,
         Err(e) => {
             return err_json(
                 "INVALID_ARGUMENT",
-                &format!("Failed to parse layout_json: {}", e),
+                &format!("Failed to parse layout_json: {e}"),
             )
         }
     };
     match with_app_service(|svc| {
-        svc.save_starmap_layout(sid, layout.into())
+        svc.save_starmap_layout(sid, layout)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -301,18 +301,18 @@ pub unsafe extern "C" fn writer_core_save_starmap_viewport(
             )
         }
     };
-    let viewport: crate::starmap::types::StarMapViewport = match serde_json::from_str(&viewport_str)
-    {
-        Ok(v) => v,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Failed to parse viewport_json: {}", e),
-            )
-        }
-    };
+    let viewport: crate::api::types::StarMapViewportDto =
+        match serde_json::from_str(&viewport_str) {
+            Ok(v) => v,
+            Err(e) => {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    &format!("Failed to parse viewport_json: {e}"),
+                )
+            }
+        };
     match with_app_service(|svc| {
-        svc.save_starmap_viewport(sid, viewport.into())
+        svc.save_starmap_viewport(sid, viewport)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -350,12 +350,12 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
             )
         }
     };
-    let graph: crate::starmap::types::StarMapGraph = match serde_json::from_str(&graph_str) {
+    let graph: crate::api::types::StarMapGraphDto = match serde_json::from_str(&graph_str) {
         Ok(g) => g,
         Err(e) => {
             return err_json(
                 "INVALID_ARGUMENT",
-                &format!("Failed to parse graph_json: {}", e),
+                &format!("Failed to parse graph_json: {e}"),
             )
         }
     };

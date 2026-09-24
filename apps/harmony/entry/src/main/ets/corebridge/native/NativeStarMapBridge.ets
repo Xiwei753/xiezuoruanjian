@@ -1,10 +1,10 @@
-import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
+import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRender, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
 export class NativeStarMapBridge {

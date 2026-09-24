@@ -91,38 +91,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   private success<T>(data: T): ResultEnvelope<T> {
     const result: ResultEnvelope<T> = {
       success: true,
-      data,
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
-    }
+      data }
     return result
   }
 
   private error<T>(errorCode: ErrorCode, userMessage: string): ResultEnvelope<T> {
     const result: ResultEnvelope<T> = {
       success: false,
-      errorCode: errorCode,
-      messageKey: 'error.other',
-      rawError: userMessage,
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
-    }
+      errorCode: errorCode
+      userMessage: userMessage }
     return result
   }
 
   // App State 查询方法
-  async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
-    await this.delay(100)
-    return this.success([
-      {
-        projects: this.mockProjects,
-        recentEdit: null
-      } as AppSummary
-    ] as AppSummary[])
-  }
-
   async getAppState(): Promise<ResultEnvelope<AppSummary>> {
     await this.delay(200)
     const summary: AppSummary = {
@@ -322,13 +303,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     if (!text || text.trim().length === 0) {
       const result: ResultEnvelope<ChapterSaveReceipt> = {
         success: false,
-        errorCode: 'EMPTY_OVERWRITE_BLOCKED',
-        messageKey: 'error.empty_overwrite_blocked',
-        rawError: 'Cannot save empty content',
-        warnings: [] as string[],
-        changedPaths: [] as string[],
-        changedEntities: [] as ChangedEntity[]
-      }
+        errorCode: 'EMPTY_OVERWRITE_BLOCKED'
+        userMessage: 'Cannot save empty content' }
       return result
     }
 
@@ -741,7 +717,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       transport: 'https',
       errorCategory: '',
       userMessage: undefined,
-      rawError: undefined,
+      userMessage: undefined,
       chosenNetworkMode: undefined,
       networkProbeSummary: undefined
     }
@@ -803,11 +779,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const contract = this.mockResolveLayoutFromCapabilities(capabilities)
     return Promise.resolve({
       success: true,
-      data: contract,
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
-    } as ResultEnvelope<LayoutContract>)
+      data: contract } as ResultEnvelope<LayoutContract>)
   }
 
   // 与 Core resolve_layout() 等价的纯函数，仅 mock 测试源码使用。

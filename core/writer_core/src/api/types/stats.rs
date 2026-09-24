@@ -97,3 +97,38 @@ pub struct SpeedCurveSummaryDto {
     pub bucket_minutes: u32,
     pub buckets: Vec<SpeedCurvePointDto>,
 }
+
+/// 平台端上报一次写作事件的入参 DTO。
+///
+/// `writer_core_process_writing_event` 直接反序列化本类型，不再手写字段表，
+/// 于是入参形状和 `WritingStatsSummaryDto` 一样只由 Core 单侧定义。
+/// 缺字段沿用历史默认值：platform 缺省 `desktop`，其余空串/0。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WritingEventInputDto {
+    pub device_id: String,
+    pub platform: String,
+    pub project_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    pub old_text: String,
+    pub new_text: String,
+    pub duration_seconds: u32,
+    pub session_id: String,
+}
+
+impl Default for WritingEventInputDto {
+    fn default() -> Self {
+        Self {
+            device_id: String::new(),
+            platform: "desktop".to_string(),
+            project_id: String::new(),
+            volume_id: String::new(),
+            chapter_id: String::new(),
+            old_text: String::new(),
+            new_text: String::new(),
+            duration_seconds: 0,
+            session_id: String::new(),
+        }
+    }
+}

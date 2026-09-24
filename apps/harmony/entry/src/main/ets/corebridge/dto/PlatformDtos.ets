@@ -22,42 +22,53 @@ export enum ShellMode {
   ThreePane = 'ThreePane'
 }
 
-export enum WorkspacePaneMode {
+export enum WorkspaceLayoutMode {
   SinglePane = 'SinglePane',
-  ListDetail = 'ListDetail',
-  ThreePane = 'ThreePane'
+  Workbench = 'Workbench'
 }
 
-export enum PointerClass {
-  Unknown = 'Unknown',
-  Touch = 'Touch',
-  Stylus = 'Stylus',
-  Mouse = 'Mouse'
+export enum PrimaryNavigationPlacement {
+  Bottom = 'Bottom',
+  Side = 'Side'
 }
 
-// 窗口能力 — 平台端已经根据本平台窗口系统判断好的输入（#610）。
-export interface WindowCapabilities {
-  availablePaneCount: number
-  hasSeparatingFold: boolean
-  pointerClass: PointerClass
-  keyboardVisible: boolean
+// 共用布局尺寸 — Core LayoutMetricsDto（dp，唯一来源，平台端不得各自硬编码）。
+export interface LayoutMetrics {
+  listPaneWidthDp: number
+  projectCardMinWidthDp: number
+  toolPaneWidthDp: number
+  toolRailWidthDp: number
+  editorMinWidthDp: number
+  toolbarHeightDp: number
+  toolbarLeadingWidthDp: number
+  toolbarTrailingWidthDp: number
+  listPaneMinWidthDp: number
+  toolPaneMinWidthDp: number
 }
 
-// 布局契约 — Core resolve_layout 输出（不含 Material 断点 / dp / 导航控件名）。
+// 窗口遮挡 — Core WindowOcclusionDto。
+export interface WindowOcclusion {
+  leftDp: number
+  topDp: number
+  rightDp: number
+  bottomDp: number
+  separating: boolean
+}
+
+// resolveLayout 的入参 — Core WindowViewportDto（#753 评论 5809590165）。
+// 平台只上报原始窗口尺寸与遮挡，paneCount / 折叠 / 指针类型都是 Core 的决策输出。
+export interface WindowViewport {
+  widthDp: number
+  heightDp: number
+  occlusions: WindowOcclusion[]
+}
+
+// 布局契约 — Core LayoutContractDto。
 export interface LayoutContract {
   shellMode: ShellMode
-  workspacePaneMode: WorkspacePaneMode
-  showPrimaryNavigation: boolean
-}
-
-// Harmony 平台在 Core 契约之上叠加自己的平台值后供页面消费。
-export interface LayoutPlan {
-  shellMode: ShellMode
-  workspacePaneMode: WorkspacePaneMode
-  showPrimaryNavigation: boolean
-  contentMaxWidthVp: number
-  pagePaddingVp: number
-  gridColumns: number
+  workspaceLayoutMode: WorkspaceLayoutMode
+  primaryNavigationPlacement: PrimaryNavigationPlacement
+  metrics: LayoutMetrics
 }
 
 // ========== 页面策略类型（Core presentation screen_contract，#610） ==========
@@ -125,7 +136,9 @@ export interface ActionSlot {
   requiresConfirmation: boolean
 }
 
+// 页面策略 — Core ScreenPolicyDto。
 export interface ScreenPolicy {
   screenRole: ScreenRole
+  showPrimaryNavigation: boolean
   actionSlots: ActionSlot[]
 }

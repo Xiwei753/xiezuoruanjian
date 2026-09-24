@@ -4,13 +4,14 @@
 // 如需新增字段，必须先在 Core LocalSettingsDto 中定义，不得自行发明。
 
 export interface LocalSettings {
-  themeMode?: string
+  // Core 侧是 Option<String>：wire 上一定是字符串或 null（themeMode 只有 Android 会写）。
+  themeMode: string | null
   appearanceMode: string
   colorSource: string
   dynamicColorEnabled: boolean
   selectedBuiltinThemeId: string
   selectedPaletteId: string
-  locale?: string
+  locale: string | null
   autoSaveEnabled: boolean
   editorFontSize: number
   editorLineSpacingMultiplier: number
@@ -24,7 +25,7 @@ export interface LocalSettings {
   editorTypingAnimationDurationMs: number
   editorSmoothCursorDurationMs: number
   aiEnabled: boolean
-  statsDeviceId?: string
+  statsDeviceId: string | null
   desktopSidebarWidth: number
   desktopEditorWidth: number
   editorCoordinatedTextCursorAnimationEnabled: boolean
@@ -80,6 +81,18 @@ export interface ThemeColorSchemeDto {
   outline: string
   outline_variant: string
   scrim: string
+  primary_fixed: string
+  primary_fixed_dim: string
+  on_primary_fixed: string
+  on_primary_fixed_variant: string
+  secondary_fixed: string
+  secondary_fixed_dim: string
+  on_secondary_fixed: string
+  on_secondary_fixed_variant: string
+  tertiary_fixed: string
+  tertiary_fixed_dim: string
+  on_tertiary_fixed: string
+  on_tertiary_fixed_variant: string
 }
 
 export interface ThemePaletteRecordDto {

@@ -15,7 +15,7 @@
 
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_app_service};
+use super::{c_str_to_rust, err_json, ok_json, patch_dto, with_app_service};
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -46,35 +46,13 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         }
     };
     match with_app_service(|svc| {
-        let mut config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
-        let val: serde_json::Value =
-            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        // 字段名与 SyncConfigDto 的 camelCase 序列化契约一致。
-        if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
-            config.enabled = v;
-        }
-        if let Some(v) = val.get("activeProvider").and_then(|v| v.as_str()) {
-            config.active_provider = v.to_string();
-        }
-        if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
-            config.auto_sync = v;
-        }
-        if let Some(v) = val.get("syncIntervalSeconds").and_then(|v| v.as_u64()) {
-            config.sync_interval_seconds = u32::try_from(v).unwrap_or(0);
-        }
-        // providerConfig 是嵌套的 ProviderConfigDto，如果存在则反序列化替换。
-        #[cfg(feature = "github-api")]
-        if let Some(pc) = val.get("providerConfig") {
-            if !pc.is_null() {
-                let dto: crate::api::ProviderConfigDto = serde_json::from_value(pc.clone())
-                    .map_err(|e| format!("providerConfig parse error: {}", e))?;
-                config.provider_config = dto.into();
-            }
-        }
-        svc.save_sync_config(config).map_err(|e| format!("{}", e))?;
-        Ok(true)
+        patch_dto(
+            || svc.load_sync_config().map_err(|e| format!("{e}")),
+            |next| svc.save_sync_config(next).map_err(|e| format!("{e}")),
+            &json_str,
+        )
     }) {
-        Ok(data) => ok_json(data),
+        Ok(()) => ok_json(true),
         Err(e) => err_json("SETTINGS_INVALID", &e),
     }
 }
@@ -92,12 +70,11 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
     match with_app_service(|svc| {
-        let config = svc.load_sync_config_core().map_err(|e| format!("{}", e))?;
-        let dto: crate::api::SyncConfigDto = config.into();
+        let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
         let plan = svc
-            .perform_full_sync_dry_run(dto)
+            .perform_full_sync_dry_run(config)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&plan).unwrap_or_default())
+        Ok(plan)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
@@ -113,12 +90,11 @@ pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
     match with_app_service(|svc| {
-        let config = svc.load_sync_config_core().map_err(|e| format!("{}", e))?;
-        let dto: crate::api::SyncConfigDto = config.into();
+        let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
         let diag = svc
-            .perform_full_sync_diagnostics(dto)
+            .perform_full_sync_diagnostics(config)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&diag).unwrap_or_default())
+        Ok(diag)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
@@ -139,12 +115,11 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
     match with_app_service(|svc| {
-        let config = svc.load_sync_config_core().map_err(|e| format!("{}", e))?;
-        let dto: crate::api::SyncConfigDto = config.into();
+        let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
         let result = svc
-            .perform_full_sync(dto, false)
+            .perform_full_sync(config, false)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&result).unwrap_or_default())
+        Ok(result)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
@@ -159,7 +134,7 @@ pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
 pub unsafe extern "C" fn writer_core_load_app_sync_state() -> *mut c_char {
     match with_app_service(|svc| {
         let state = svc.load_app_sync_state().map_err(|e| format!("{}", e))?;
-        Ok(serde_json::to_value(&state).unwrap_or_default())
+        Ok(state)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SYNC_STATE_ERROR", &e),
@@ -183,10 +158,9 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_ch
         }
     };
     match with_app_service(|svc| {
-        let state: crate::sync::SyncState =
+        let state: crate::api::SyncStateDto =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        svc.save_app_sync_state(state.into())
-            .map_err(|e| format!("{}", e))?;
+        svc.save_app_sync_state(state).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -223,21 +197,15 @@ pub unsafe extern "C" fn writer_core_save_device_info(
         }
     };
     match with_app_service(|svc| {
-        let val: serde_json::Value =
-            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        let mut info = svc.load_device_info().map_err(|e| format!("{}", e))?;
-        if let Some(v) = val.get("deviceId").and_then(|v| v.as_str()) {
-            info.device_id = v.to_string();
-        }
-        if let Some(v) = val.get("deviceClass").and_then(|v| v.as_str()) {
-            info.device_class = v.to_string();
-        }
-        if let Some(v) = val.get("platform").and_then(|v| v.as_str()) {
-            info.platform = v.to_string();
-        }
-        svc.save_device_info_raw(&info)
-            .map_err(|e| format!("{}", e))?;
-        Ok(true)
+        patch_dto(
+            || svc.load_device_info().map_err(|e| format!("{e}")),
+            |next| {
+                svc.save_device_info_raw(&next)
+                    .map(|()| true)
+                    .map_err(|e| format!("{e}"))
+            },
+            &json_str,
+        )
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("DEVICE_INFO_ERROR", &e),

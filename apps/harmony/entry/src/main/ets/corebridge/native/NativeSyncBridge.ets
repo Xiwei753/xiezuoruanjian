@@ -1,10 +1,10 @@
-import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
+import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncState } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
 export class NativeSyncBridge {
@@ -51,7 +51,7 @@ export class NativeSyncBridge {
       const jsonStr: string = this.core.getNativeModule().nativeSyncDiagnostics()
       return this.core.decodeEnvelope<FullSyncDiagnosticsResult>(jsonStr, decodeFullSyncDiagnosticsResult)
     } catch (err) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.sync_failed', messageArgs: { 'detail': String(err) } as Record<string, string>, rawError: `syncDiagnostics failed: ${err}`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}`}
     }
   }
 

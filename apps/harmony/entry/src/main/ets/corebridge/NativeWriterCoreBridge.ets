@@ -105,10 +105,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   // ── App State ──
 
-  async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
-    return this.appStateBridge.listAppSummaries()
-  }
-
   async getAppState(): Promise<ResultEnvelope<AppSummary>> {
     return this.appStateBridge.getAppState()
   }
@@ -334,14 +330,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const status: string = this.core.getNativeModule().nativeGetLoadStatus() as string
       const result: ResultEnvelope<string> = {
         success: true,
-        data: status,
-        warnings: [] as string[],
-        changedPaths: [] as string[],
-        changedEntities: [] as ChangedEntity[]
-      }
+        data: status }
       return result
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }
   }
 
@@ -350,14 +342,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const available: number = this.core.getNativeModule().nativeIsAiAvailable() as number
       const result: ResultEnvelope<boolean> = {
         success: true,
-        data: available === 1,
-        warnings: [] as string[],
-        changedPaths: [] as string[],
-        changedEntities: [] as ChangedEntity[]
-      }
+        data: available === 1 }
       return result
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }
   }
 
@@ -368,7 +356,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(capabilities))
       return this.core.decodeEnvelope<LayoutContract>(jsonStr, decodeLayoutContract)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }
   }
 
@@ -379,7 +367,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.core.getNativeModule().nativeResolveScreenPolicy(JSON.stringify(screenRole))
       return this.core.decodeEnvelope<ScreenPolicy>(jsonStr, decodeScreenPolicy)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }
   }
 }

@@ -1,10 +1,10 @@
 import { Project, ProjectTree, Volume, WritingStats } from '../dto/ProjectDtos'
-import { ChangedEntity, ResultEnvelope } from '../dto/ResultEnvelope'
+import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeProject, decodeProjectTree, decodeVolume, decodeWritingStats, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
 export class NativeProjectBridge {

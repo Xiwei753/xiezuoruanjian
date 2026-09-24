@@ -8,7 +8,6 @@ import { SyncConfig, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsRe
 
 export interface IWriterCoreBridge {
   // App State 查询
-  listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>>
   getAppState(): Promise<ResultEnvelope<AppSummary>>
 
   // Project

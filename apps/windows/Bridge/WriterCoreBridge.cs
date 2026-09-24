@@ -6,10 +6,10 @@ namespace Sujian.Windows.Bridge;
 public sealed record ProjectSummary(string Id, string Name);
 public sealed record VolumeSummary(string Id, string Name);
 public sealed record ChapterSummary(string Id, string Title);
-public sealed record SyncConfigDto(string RemoteUrl, string AccessToken, bool AutoSync, int IntervalMinutes);
-public sealed record WritingStatsDto(int TotalWords, int TodayWords, int SessionWords, int StreakDays, string SessionStartTime);
+public sealed record SyncConfigDto(bool Enabled, string ActiveProvider, bool AutoSync, uint SyncIntervalSeconds, bool HasNetworkPermission, bool HasNetworkStatePermission, string RemoteUrl);
+public sealed record WritingStatsDto(string StartDate, string EndDate, ulong TotalHumanTypedChars, ulong TotalPastedChars, ulong TotalDeletedChars, ulong TotalAiInsertedChars, long TotalNetDeltaChars, ulong TotalActiveSeconds, uint TotalSessions, uint DaysCount);
 public sealed record StarmapSummaryDto(string Id, string Name, int NodeCount, int EdgeCount);
-public sealed record ProjectStatsDto(int TotalWords, int TotalChapters, string LastEditedAt);
+public sealed record ProjectStatsDto(uint TotalWordCount, uint VolumeCount, uint ChapterCount);
 
 /// Bridge 信封结果 — 与 Core ResultEnvelope 对齐的统一响应结构。
 /// ErrorCode 与 Core Error.code() 返回的字符串一致，是跨端 API 契约。
@@ -420,15 +420,14 @@ public sealed class WriterCoreBridge
             var env = ParseEnvelope(json);
             ThrowIfFailed(env);
 
-            int totalWords = 0, totalChapters = 0;
-            string lastEditedAt = "";
+            uint totalWordCount = 0, volumeCount = 0, chapterCount = 0;
             if (env.Data?.ValueKind == JsonValueKind.Object)
             {
-                if (env.Data.Value.TryGetProperty("totalWords", out var tw)) totalWords = tw.GetInt32();
-                if (env.Data.Value.TryGetProperty("totalChapters", out var tc)) totalChapters = tc.GetInt32();
-                if (env.Data.Value.TryGetProperty("lastEditedAt", out var lea)) lastEditedAt = lea.GetString() ?? "";
+                if (env.Data.Value.TryGetProperty("totalWordCount", out var twc)) totalWordCount = twc.GetUInt32();
+                if (env.Data.Value.TryGetProperty("volumeCount", out var vc)) volumeCount = vc.GetUInt32();
+                if (env.Data.Value.TryGetProperty("chapterCount", out var cc)) chapterCount = cc.GetUInt32();
             }
-            return Task.FromResult(new ProjectStatsDto(totalWords, totalChapters, lastEditedAt));
+            return Task.FromResult(new ProjectStatsDto(totalWordCount, volumeCount, chapterCount));
         }
         finally
         {
@@ -446,21 +445,20 @@ public sealed class WriterCoreBridge
         var s = new LocalSettings();
         if (env.Data?.ValueKind == JsonValueKind.Object)
         {
-            if (env.Data.Value.TryGetProperty("fontSize", out var fs)) s.FontSize = (float)fs.GetDouble();
-            if (env.Data.Value.TryGetProperty("lineHeight", out var lh)) s.LineHeight = (float)lh.GetDouble();
-            if (env.Data.Value.TryGetProperty("theme", out var th)) s.Theme = th.GetString() ?? "system";
+            if (env.Data.Value.TryGetProperty("editorFontSize", out var fs)) s.FontSize = (float)fs.GetDouble();
+            if (env.Data.Value.TryGetProperty("editorLineSpacingMultiplier", out var lh)) s.LineHeight = (float)lh.GetDouble();
             if (env.Data.Value.TryGetProperty("appearanceMode", out var am)) s.AppearanceMode = am.GetString() ?? "system";
             if (env.Data.Value.TryGetProperty("colorSource", out var cs)) s.ColorSource = cs.GetString() ?? "built_in";
             if (env.Data.Value.TryGetProperty("dynamicColorEnabled", out var dce)) s.DynamicColorEnabled = dce.GetBoolean();
             if (env.Data.Value.TryGetProperty("selectedBuiltinThemeId", out var sbti)) s.SelectedBuiltinThemeId = sbti.GetString() ?? "";
             if (env.Data.Value.TryGetProperty("selectedPaletteId", out var spi)) s.SelectedPaletteId = spi.GetString() ?? "";
-            if (env.Data.Value.TryGetProperty("autoSave", out var asv)) s.AutoSave = asv.GetBoolean();
-            if (env.Data.Value.TryGetProperty("autoIndent", out var ai)) s.AutoIndent = ai.GetBoolean();
-            if (env.Data.Value.TryGetProperty("typingAnimationEnabled", out var tae)) s.TypingAnimationEnabled = tae.GetBoolean();
-            if (env.Data.Value.TryGetProperty("typingAnimationDurationMs", out var tadm)) s.TypingAnimationDurationMs = tadm.GetInt32();
-            if (env.Data.Value.TryGetProperty("coordinatedTextCursorAnimationEnabled", out var cca)) s.CoordinatedTextCursorAnimationEnabled = cca.GetBoolean();
-            if (env.Data.Value.TryGetProperty("smoothCursorEnabled", out var sce)) s.SmoothCursorEnabled = sce.GetBoolean();
-            if (env.Data.Value.TryGetProperty("smoothCursorDurationMs", out var scdm)) s.SmoothCursorDurationMs = scdm.GetInt32();
+            if (env.Data.Value.TryGetProperty("autoSaveEnabled", out var asv)) s.AutoSave = asv.GetBoolean();
+            if (env.Data.Value.TryGetProperty("autoIndentEnabled", out var ai)) s.AutoIndent = ai.GetBoolean();
+            if (env.Data.Value.TryGetProperty("editorTypingAnimationEnabled", out var tae)) s.TypingAnimationEnabled = tae.GetBoolean();
+            if (env.Data.Value.TryGetProperty("editorTypingAnimationDurationMs", out var tadm)) s.TypingAnimationDurationMs = tadm.GetInt32();
+            if (env.Data.Value.TryGetProperty("editorCoordinatedTextCursorAnimationEnabled", out var cca)) s.CoordinatedTextCursorAnimationEnabled = cca.GetBoolean();
+            if (env.Data.Value.TryGetProperty("editorSmoothCursorEnabled", out var sce)) s.SmoothCursorEnabled = sce.GetBoolean();
+            if (env.Data.Value.TryGetProperty("editorSmoothCursorDurationMs", out var scdm)) s.SmoothCursorDurationMs = scdm.GetInt32();
         }
         return Task.FromResult(s);
     }
@@ -469,21 +467,20 @@ public sealed class WriterCoreBridge
     {
         var json = JsonSerializer.Serialize(new
         {
-            fontSize = settings.FontSize,
-            lineHeight = settings.LineHeight,
-            theme = settings.Theme,
+            editorFontSize = settings.FontSize,
+            editorLineSpacingMultiplier = settings.LineHeight,
             appearanceMode = settings.AppearanceMode,
             colorSource = settings.ColorSource,
             dynamicColorEnabled = settings.DynamicColorEnabled,
             selectedBuiltinThemeId = settings.SelectedBuiltinThemeId,
             selectedPaletteId = settings.SelectedPaletteId,
-            autoSave = settings.AutoSave,
-            autoIndent = settings.AutoIndent,
-            typingAnimationEnabled = settings.TypingAnimationEnabled,
-            typingAnimationDurationMs = settings.TypingAnimationDurationMs,
-            coordinatedTextCursorAnimationEnabled = settings.CoordinatedTextCursorAnimationEnabled,
-            smoothCursorEnabled = settings.SmoothCursorEnabled,
-            smoothCursorDurationMs = settings.SmoothCursorDurationMs
+            autoSaveEnabled = settings.AutoSave,
+            autoIndentEnabled = settings.AutoIndent,
+            editorTypingAnimationEnabled = settings.TypingAnimationEnabled,
+            editorTypingAnimationDurationMs = settings.TypingAnimationDurationMs,
+            editorCoordinatedTextCursorAnimationEnabled = settings.CoordinatedTextCursorAnimationEnabled,
+            editorSmoothCursorEnabled = settings.SmoothCursorEnabled,
+            editorSmoothCursorDurationMs = settings.SmoothCursorDurationMs
         });
         var jsonPtr = ToUtf8(json);
         try
@@ -628,14 +625,22 @@ public sealed class WriterCoreBridge
         var env = ParseEnvelope(json);
         ThrowIfFailed(env);
 
-        var cfg = new SyncConfigDto("", "", false, 5);
+        var cfg = new SyncConfigDto(false, "", false, 0, false, false, "");
         if (env.Data?.ValueKind == JsonValueKind.Object)
         {
-            var remoteUrl = env.Data.Value.TryGetProperty("remoteUrl", out var ru) ? ru.GetString() ?? "" : "";
-            var accessToken = env.Data.Value.TryGetProperty("accessToken", out var at) ? at.GetString() ?? "" : "";
+            var enabled = env.Data.Value.TryGetProperty("enabled", out var en) && en.GetBoolean();
+            var activeProvider = env.Data.Value.TryGetProperty("activeProvider", out var ap) ? ap.GetString() ?? "" : "";
             var autoSync = env.Data.Value.TryGetProperty("autoSync", out var asv) && asv.GetBoolean();
-            var interval = env.Data.Value.TryGetProperty("intervalMinutes", out var im) ? im.GetInt32() : 5;
-            cfg = new SyncConfigDto(remoteUrl, accessToken, autoSync, interval);
+            var syncIntervalSeconds = env.Data.Value.TryGetProperty("syncIntervalSeconds", out var sis) ? sis.GetUInt32() : 0u;
+            var hasNetworkPermission = env.Data.Value.TryGetProperty("hasNetworkPermission", out var hnp) && hnp.GetBoolean();
+            var hasNetworkStatePermission = env.Data.Value.TryGetProperty("hasNetworkStatePermission", out var hns) && hns.GetBoolean();
+            var remoteUrl = "";
+            if (env.Data.Value.TryGetProperty("providerConfig", out var pc) && pc.ValueKind == JsonValueKind.Object
+                && pc.TryGetProperty("remote_url", out var ru))
+            {
+                remoteUrl = ru.GetString() ?? "";
+            }
+            cfg = new SyncConfigDto(enabled, activeProvider, autoSync, syncIntervalSeconds, hasNetworkPermission, hasNetworkStatePermission, remoteUrl);
         }
         return Task.FromResult(cfg);
     }
@@ -644,10 +649,12 @@ public sealed class WriterCoreBridge
     {
         var json = JsonSerializer.Serialize(new
         {
-            remoteUrl = config.RemoteUrl,
-            accessToken = config.AccessToken,
+            enabled = config.Enabled,
+            activeProvider = config.ActiveProvider,
             autoSync = config.AutoSync,
-            intervalMinutes = config.IntervalMinutes
+            syncIntervalSeconds = config.SyncIntervalSeconds,
+            hasNetworkPermission = config.HasNetworkPermission,
+            hasNetworkStatePermission = config.HasNetworkStatePermission
         });
         var jsonPtr = ToUtf8(json);
         try
@@ -689,17 +696,30 @@ public sealed class WriterCoreBridge
         var env = ParseEnvelope(json);
         ThrowIfFailed(env);
 
-        var stats = new WritingStatsDto(0, 0, 0, 0, "");
+        var stats = new WritingStatsDto("", "", 0, 0, 0, 0, 0, 0, 0, 0);
         if (env.Data?.ValueKind == JsonValueKind.Object)
         {
-            int totalWords = 0, todayWords = 0, sessionWords = 0, streakDays = 0;
-            string sessionStart = "";
-            if (env.Data.Value.TryGetProperty("totalWords", out var tw)) totalWords = tw.GetInt32();
-            if (env.Data.Value.TryGetProperty("todayWords", out var tdw)) todayWords = tdw.GetInt32();
-            if (env.Data.Value.TryGetProperty("sessionWords", out var sw)) sessionWords = sw.GetInt32();
-            if (env.Data.Value.TryGetProperty("streakDays", out var sd)) streakDays = sd.GetInt32();
-            if (env.Data.Value.TryGetProperty("sessionStartTime", out var ss)) sessionStart = ss.GetString() ?? "";
-            stats = new WritingStatsDto(totalWords, todayWords, sessionWords, streakDays, sessionStart);
+            var startDate = "";
+            var endDate = "";
+            if (env.Data.Value.TryGetProperty("range", out var range) && range.ValueKind == JsonValueKind.Object)
+            {
+                if (range.TryGetProperty("startDate", out var sd)) startDate = sd.GetString() ?? "";
+                if (range.TryGetProperty("endDate", out var ed)) endDate = ed.GetString() ?? "";
+            }
+            ulong humanTypedChars = 0, pastedChars = 0, deletedChars = 0, aiInsertedChars = 0, activeSeconds = 0;
+            long netDeltaChars = 0;
+            uint sessions = 0, daysCount = 0;
+            if (env.Data.Value.TryGetProperty("totalHumanTypedChars", out var th)) humanTypedChars = th.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalPastedChars", out var tp)) pastedChars = tp.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalDeletedChars", out var td)) deletedChars = td.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalAiInsertedChars", out var tai)) aiInsertedChars = tai.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalNetDeltaChars", out var tnd)) netDeltaChars = tnd.GetInt64();
+            if (env.Data.Value.TryGetProperty("totalActiveSeconds", out var tas)) activeSeconds = tas.GetUInt64();
+            if (env.Data.Value.TryGetProperty("totalSessions", out var ts)) sessions = ts.GetUInt32();
+            if (env.Data.Value.TryGetProperty("daysCount", out var dc)) daysCount = dc.GetUInt32();
+            stats = new WritingStatsDto(
+                startDate, endDate, humanTypedChars, pastedChars, deletedChars,
+                aiInsertedChars, netDeltaChars, activeSeconds, sessions, daysCount);
         }
         return Task.FromResult(stats);
     }
@@ -778,7 +798,6 @@ public sealed class LocalSettings
 {
     public float FontSize { get; set; } = 16f;
     public float LineHeight { get; set; } = 1.5f;
-    public string Theme { get; set; } = "system";
     public string AppearanceMode { get; set; } = "system";
     public string ColorSource { get; set; } = "built_in";
     public bool DynamicColorEnabled { get; set; } = false;

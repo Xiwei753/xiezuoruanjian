@@ -52,53 +52,53 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
 
   async create(targetId: string, initialText: string, initialCursorByteOffset: number): Promise<ResultEnvelope<number>> {
     this.createCalls.push({ targetId, initialCursorByteOffset })
-    return { success: true, data: 1, warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: 1}
   }
   async close(sessionId: number): Promise<ResultEnvelope<boolean>> {
-    return { success: true, data: true, warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: true}
   }
   async snapshot(sessionId: number): Promise<ResultEnvelope<EditorSessionSnapshot>> {
-    return { success: true, data: this.mockSnapshot, warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.mockSnapshot}
   }
   async insert(sessionId: number, byteOffset: number, text: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
     this.insertCalls.push({ byteOffset, text, cause })
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async delete(sessionId: number, byteOffsetStart: number, byteOffsetEnd: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
     this.deleteCalls.push({ start: byteOffsetStart, end: byteOffsetEnd, cause })
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async replace(sessionId: number, byteOffsetStart: number, byteOffsetEnd: number, text: string, originalText: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
     this.replaceCalls.push({ start: byteOffsetStart, end: byteOffsetEnd, text, originalText, cause })
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async setSelection(sessionId: number, anchorByteOffset: number, headByteOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async undo(sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async redo(sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async commitText(sessionId: number, byteStart: number, byteEndExclusive: number, replacementText: string, resultingSelectionAnchor: number, resultingSelectionHead: number, compositionSessionId: number, compositionBaseRevision: number, compositionGeneration: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async deleteSurrounding(sessionId: number, beforeByteStart: number, beforeByteEndExclusive: number, afterByteStart: number, afterByteEndExclusive: number, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async beginComposition(sessionId: number, replaceStart: number, replaceEndExclusive: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
     this.beginCompositionCalls.push({ start: replaceStart, end: replaceEndExclusive })
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async updateComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, newPreeditText: string, newPreeditCursorOffset: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async finishComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   async cancelComposition(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
-    return { success: true, data: this.makeAppliedResult(), warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.makeAppliedResult()}
   }
   // #629 R8: composition 专用 grapheme 语义操作。
   // mock 记录参数并模拟 Core 回填（generation+1、composition 状态透传）；
@@ -123,9 +123,7 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
       return Promise.resolve({
         success: false,
         errorCode: 'CORE_COMPOSITION_OP_FAILED',
-        userMessage: 'mock composition op failure',
-        warnings: [], changedPaths: [], changedEntities: []
-      })
+        userMessage: 'mock composition op failure'})
     }
     // 模拟 Core 回填：generation 递增、composition 状态透传（ArkTS 不复制状态机，只透传）。
     const nextGen: number = compositionGeneration + 1
@@ -135,7 +133,7 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
     const result: EditorEditResult = this.makeAppliedResult()
     result.compositionSession = { sessionId: compositionSessionId, baseRevision: expectedRevision, generation: nextGen } as CompositionSession
     result.composition = this.mockComposition
-    return Promise.resolve({ success: true, data: result, warnings: [], changedPaths: [], changedEntities: [] })
+    return Promise.resolve({ success: true, data: result})
   }
 
   async compositionMoveGraphemeLeft(sessionId: number, compositionSessionId: number, compositionGeneration: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> {
@@ -151,10 +149,10 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
     return this.recordCompositionOp(this.compositionDeleteForwardCalls, sessionId, compositionSessionId, compositionGeneration, expectedRevision)
   }
   async getText(sessionId: number): Promise<ResultEnvelope<string>> {
-    return { success: true, data: this.mockSnapshot.text, warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.mockSnapshot.text}
   }
   async getRevision(sessionId: number): Promise<ResultEnvelope<number>> {
-    return { success: true, data: this.mockSnapshot.revision, warnings: [], changedPaths: [], changedEntities: [] }
+    return { success: true, data: this.mockSnapshot.revision}
   }
 
   private makeAppliedResult(): EditorEditResult {

@@ -7,10 +7,6 @@
 
 // ── App State 查询 ──
 
-static napi_value NativeListAppSummaries(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_list_app_summaries());
-}
-
 static napi_value NativeGetAppState(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_get_app_state());
 }
@@ -45,7 +41,6 @@ static napi_value NativeResolveVolumeLocation(napi_env env, napi_callback_info i
 
 napi_property_descriptor* getAppStateDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
-        {"nativeListAppSummaries", nullptr, NativeListAppSummaries, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetAppState", nullptr, NativeGetAppState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveChapterLocation", nullptr, NativeResolveChapterLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveVolumeLocation", nullptr, NativeResolveVolumeLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
