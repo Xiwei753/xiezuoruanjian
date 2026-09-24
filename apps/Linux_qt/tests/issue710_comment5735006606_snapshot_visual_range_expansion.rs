@@ -140,8 +140,8 @@ fn issue710_cancel_snapshot_visual_range_expanded_with_correct_texts() {
         "cancel: 必须用 session.virtual_text() 取 old virtualText"
     );
     assert!(
-        body.contains(".unwrap_or_else(|| self.buffer.text.clone())"),
-        "cancel: old_virtual_text 的 fallback 必须是 self.buffer.text.clone()"
+        body.contains(".unwrap_or_else(|| committed_text.clone())"),
+        "cancel: old_virtual_text 的 fallback 必须是 committed_text.clone()"
     );
 
     // 取出 compute_affected_paragraph_ranges 调用块，验证文本参数
@@ -159,10 +159,10 @@ fn issue710_cancel_snapshot_visual_range_expanded_with_correct_texts() {
         call_block.contains("&old_virtual_text,"),
         "cancel: compute_affected_paragraph_ranges 的 old_text 必须是 &old_virtual_text（session virtual_text）"
     );
-    // new_text 参数 = &self.buffer.text（cancel 恢复原文）
+    // new_text 参数 = &committed_text（cancel 恢复原文）
     assert!(
-        call_block.contains("&self.buffer.text,"),
-        "cancel: compute_affected_paragraph_ranges 的 new_text 必须是 &self.buffer.text（cancel 恢复原文）"
+        call_block.contains("&committed_text,"),
+        "cancel: compute_affected_paragraph_ranges 的 new_text 必须是 &committed_text（cancel 恢复原文）"
     );
 
     // old/new snapshot 用扩展后的 affected range

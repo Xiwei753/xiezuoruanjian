@@ -398,7 +398,7 @@ fn issue705_repro_f_move_cursor_horizontal_bumps_before_noop_check() {
         "move_cursor_horizontal",
         &window,
         "self.begin_manual_cursor_move()",
-        "if next == self.buffer.cursor && !extend",
+        "if next == current_cursor && !extend",
         "在入口无条件 begin_manual_cursor_move(),no-op(已在行首/文末,next == cursor \
          且 !extend)也会 bump epoch,切断活动正文事务 caret 所有权。修复:先算 next,\
          确认 next != cursor 或 extend 后再 bump。",
@@ -539,7 +539,7 @@ fn issue705_behavior_noop_does_not_bump_epoch() {
     let cases: &[(&str, &str, usize)] = &[
         (
             "fn move_cursor_horizontal(&mut self",
-            "if next == self.buffer.cursor && !extend",
+            "if next == current_cursor && !extend",
             2500,
         ),
         (

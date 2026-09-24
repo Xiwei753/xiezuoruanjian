@@ -126,7 +126,7 @@ fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
 
     // 必须在清 session 之前取 session_replace_range
     assert!(
-        body.contains("session_replace_range(self.buffer.cursor)"),
+        body.contains("session_replace_range(self.pipeline.cursor())"),
         "cancel: 必须在清 session 之前调 session_replace_range 取 committed replace range"
     );
     assert!(

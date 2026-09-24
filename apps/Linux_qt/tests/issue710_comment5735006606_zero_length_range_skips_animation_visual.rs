@@ -142,7 +142,7 @@ fn issue710_comment5735006606_cancel_expands_session_replace_range_before_new_sn
 
     // 取 session_replace_range
     assert!(
-        body.contains("session_replace_range(self.buffer.cursor)"),
+        body.contains("session_replace_range(self.pipeline.cursor())"),
         "input_clear_preedit 必须取 session_replace_range 作为 committed_replace_start/end"
     );
     // 必须引入 compute_affected_paragraph_ranges 段落扩展
