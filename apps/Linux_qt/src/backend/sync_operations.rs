@@ -20,6 +20,20 @@ use super::SyncBackend;
 use super::*;
 use crate::sync_bridge::{mask_sync_error, sync_error_category_from_code, SyncTaskOutcome};
 
+/// 同步结果对当前工作区内容的影响。
+///
+/// `handle_sync_outcome` 返回此枚举，调用方（SyncBackend::handle_outcome）
+/// 据此决定是否发 `sync_content_applied` signal。
+/// - `ContentChanged`：同步确实修改/重新加载了工作区内容（success、
+///   branch_missing_recovered、冲突后 tree reload），QML 需刷新正文/树。
+/// - `StatusOnly`：只更新同步状态，不刷新工作区内容（过期回调、diagnostics、
+///   dry_run、配置保存、error 等）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SyncOutcomeEffect {
+    StatusOnly,
+    ContentChanged,
+}
+
 /// 构造异步同步结果的 callback。
 ///
 /// 如果提供 `sync_qptr`（来自 SyncBackend），callback 通过 SyncBackend::handle_outcome
@@ -43,7 +57,8 @@ pub(super) fn make_outcome_callback(
             move |outcome: SyncTaskOutcome| {
                 app_qptr.as_pinned().map(|this| {
                     let mut this = this.borrow_mut();
-                    this.handle_sync_outcome(outcome, None);
+                    // 测试回退路径：无 SyncBackend，effect 无消费者，忽略返回值。
+                    let _ = this.handle_sync_outcome(outcome, None);
                 });
             },
         ))
@@ -55,7 +70,7 @@ impl AppBackend {
         &mut self,
         outcome: SyncTaskOutcome,
         sync_qptr: Option<QPointer<SyncBackend>>,
-    ) {
+    ) -> SyncOutcomeEffect {
         if outcome.operation_id != self.current_sync_operation_id {
             self.debug_log(
                 "sync",
@@ -65,7 +80,7 @@ impl AppBackend {
                     self.current_sync_operation_id, outcome.operation_id
                 ),
             );
-            return;
+            return SyncOutcomeEffect::StatusOnly;
         }
 
         // Issue #729：workspace generation 身份校验。
@@ -82,7 +97,7 @@ impl AppBackend {
                 ),
             );
             // 旧工作区的回调不应清新工作区的 in_progress（reset_workspace_state 已清）。
-            return;
+            return SyncOutcomeEffect::StatusOnly;
         }
 
         // Issue #729 评论 5763441474：data_root 身份校验。
@@ -98,7 +113,7 @@ impl AppBackend {
                     self.current_data_root, outcome.data_root
                 ),
             );
-            return;
+            return SyncOutcomeEffect::StatusOnly;
         }
 
         let status = outcome.sync_status.clone();
@@ -120,35 +135,28 @@ impl AppBackend {
         self.current_sync_operation_state = outcome.action_result.clone();
         let status_str = outcome.sync_status.as_str();
 
-        if status_str == "success" {
-            let pending_path = self.current_pending_github_init_path.clone();
-            if !pending_path.is_empty() {
-                self.current_pending_github_init_path.clear();
-                self.internal_open_data_root(&pending_path);
-                // Issue #729 评论 5764768372：internal_open_data_root 不再自己发
-                // workspace_opened/content/state 信号，此处根据 current_has_data_root
-                // 判断真实成功后补发 AppBackend 信号。
-                if self.current_has_data_root {
-                }
-                self.load_sync_config();
-                return;
-            }
-        }
-
+        // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，
+        // 由 SyncBackend::handle_outcome 据此决定是否发 sync_content_applied。
+        // 改动3: github init 旧路径已删除，不再有 pending_github_init_path 特判。
         let sync_success = matches!(status_str, "success" | "branch_missing_recovered");
-        if sync_success && self.has_workspace() {
+        let effect = if sync_success && self.has_workspace() {
             self.handle_successful_sync_refresh();
+            SyncOutcomeEffect::ContentChanged
         } else if (status_str == "conflict"
             || status_str == "partial_conflict"
             || status_str == "unrelated_histories")
             && self.has_workspace()
         {
+            // 改动2: trigger_projects_reloaded 是空函数，已删除调用。
             self.reload_tree();
-            self.trigger_projects_reloaded();
-        }
+            SyncOutcomeEffect::ContentChanged
+        } else {
+            SyncOutcomeEffect::StatusOnly
+        };
 
         // 当前同步任务真正结束并把 busy 清掉后，检查 manual_sync_pending。
         // 为 true 时先清 flag，再启动一次 manual sync。
+        // 排队的同步还没执行，当前 outcome 的 effect 才是返回值。
         if self.manual_sync_pending {
             self.manual_sync_pending = false;
             self.debug_log(
@@ -158,12 +166,13 @@ impl AppBackend {
             );
             self.perform_sync_internal("manual", false, sync_qptr);
         }
+        effect
     }
 
     pub(crate) fn handle_successful_sync_refresh(&mut self) {
         self.reload_tree();
         let chapter_deleted = self.reconcile_selection_after_tree_reload();
-        self.trigger_projects_reloaded();
+        // 改动2: trigger_projects_reloaded 是空函数，已删除调用。
         if chapter_deleted {
             self.current_save_status = "chapter.deleted_remotely_refreshed".to_string();
         }

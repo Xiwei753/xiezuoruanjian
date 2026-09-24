@@ -43,14 +43,6 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     error_message: qt_property!(QString; READ error_message NOTIFY error_occurred),
     #[allow(dead_code)]
-    selected_item_id: qt_property!(QString; READ selected_item_id NOTIFY selected_item_changed),
-    #[allow(dead_code)]
-    has_selected_chapter_prop: qt_property!(bool; READ has_selected_chapter_prop NOTIFY selected_item_changed),
-    #[allow(dead_code)]
-    chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
-    #[allow(dead_code)]
-    has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
-    #[allow(dead_code)]
     save_status_changed: qt_signal!(),
     #[allow(dead_code)]
     word_count_changed: qt_signal!(),
@@ -59,11 +51,7 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     selected_item_changed: qt_signal!(),
     #[allow(dead_code)]
-    chapter_path_changed: qt_signal!(),
-    #[allow(dead_code)]
     clear_editor: qt_signal!(),
-    #[allow(dead_code)]
-    workspace_state_changed: qt_signal!(),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
     #[allow(dead_code)]
@@ -212,18 +200,6 @@ impl EditorBackend {
     fn error_message(&self) -> QString {
         self.snap().error_message.clone().into()
     }
-    fn selected_item_id(&self) -> QString {
-        self.snap().selected_item_id.clone().into()
-    }
-    fn has_selected_chapter_prop(&self) -> bool {
-        self.snap().has_selected_chapter_prop
-    }
-    fn chapter_path(&self) -> QString {
-        self.snap().chapter_path.clone().into()
-    }
-    fn has_workspace(&self) -> bool {
-        self.snap().has_workspace
-    }
     fn calculate_word_count(&mut self, text: QString) {
         if self
             .with_app_mut(|app| app.calculate_word_count(text))
@@ -241,8 +217,9 @@ impl EditorBackend {
         let result =
             self.with_app_mut(|app| app.open_chapter_json(project_id, volume_id, chapter_id));
         if result.is_ok() {
+            // Issue #754 评论 5814866116 改动4: chapter_path_changed 已从 surface 删除，
+            // 只发 selected_item_changed。
             self.selected_item_changed();
-            self.chapter_path_changed();
         }
         result.unwrap_or_else(|_| {
             QString::from(crate::backend::json_utils::borrow_conflict_error_json())
@@ -257,7 +234,6 @@ impl EditorBackend {
         let result = self.with_app_mut(|app| app.open_chapter(project_id, volume_id, chapter_id));
         if result.is_ok() {
             self.selected_item_changed();
-            self.chapter_path_changed();
         }
         result.unwrap_or_else(|_| {
             qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())

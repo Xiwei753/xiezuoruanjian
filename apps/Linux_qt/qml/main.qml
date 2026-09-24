@@ -314,6 +314,15 @@ ApplicationWindow {
             // 避免重复 resolve。同步完成后主题输入可能未变，跳过 resolve。
             if (themeController) themeController.reload_from_backend_if_changed()
         }
+        // Issue #754 评论 5814866116 改动1: 同步真正修改/重新加载了当前工作区内容时，
+        // 由 SyncBackend::sync_content_applied 触发正文/树刷新。
+        // onSync_action_completed 只处理同步状态/主题相关刷新，不无条件重载正文。
+        function onSync_content_applied() {
+            appController.refreshState(qsTr("刷新工作区内容失败"));
+            if (appController.inWriting && writingWorkspaceLoader.item) {
+                writingWorkspaceLoader.item.reloadActiveChapter();
+            }
+        }
     }
 
     // Issue #668 评论 5646458592 问题 2: 真实系统 colorScheme 变化时把
@@ -441,19 +450,6 @@ ApplicationWindow {
         }
         function onWorkspace_content_changed() {
             appController.refreshState(qsTr("刷新工作区内容失败"));
-        }
-    }
-
-    Connections {
-        target: appBackend
-        function onWorkspace_content_changed() {
-            appController.refreshState(qsTr("刷新工作区内容失败"));
-            if (appController.inWriting && writingWorkspaceLoader.item) {
-                writingWorkspaceLoader.item.reloadActiveChapter();
-            }
-        }
-        function onWorkspace_state_changed() {
-            appController.refreshState(qsTr("刷新工作区状态失败"));
         }
     }
 

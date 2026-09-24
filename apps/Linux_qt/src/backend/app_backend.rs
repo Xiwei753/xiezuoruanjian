@@ -380,7 +380,6 @@ pub struct AppBackend {
     current_last_sync_time: i64,
 
     current_system_color_scheme: String,
-    current_pending_github_init_path: String,
     pub current_ai_enabled: bool,
     pub current_setting_desktop_sidebar_width: f64,
     pub current_setting_desktop_editor_width: f64,
@@ -865,34 +864,6 @@ mod tests {
         assert_eq!(res["messageKey"], "error.empty_title");
 
         Ok(())
-    }
-
-    #[test]
-    fn test_handle_sync_outcome_success_pending_path() {
-        use tempfile::tempdir;
-        let dir = tempdir().expect("tempdir creation failed");
-        let path_str = dir.path().to_string_lossy().to_string();
-
-        let mut backend = AppBackend::default();
-        backend.current_pending_github_init_path = path_str.clone();
-        backend.current_has_data_root = false;
-
-        let outcome = SyncTaskOutcome {
-            operation_id: "".to_string(),
-            sync_status: "success".to_string(),
-            action_result: "OK".to_string(),
-            workspace_generation: 0,
-            data_root: "".to_string(),
-        };
-        backend.handle_sync_outcome(outcome, None);
-
-        // After sync success with pending path, internal_open_data_root is called.
-        // The data root is opened successfully; pending path is cleared.
-        // 工作区成功打开后，load_sync_config 走全局配置路径，没有同步配置时
-        // refresh_sync_status_from_config 得到 "not_configured"。
-        assert_eq!(backend.current_sync_status, "not_configured");
-        assert_eq!(backend.current_pending_github_init_path, "");
-        assert!(backend.current_has_data_root);
     }
 
     #[test]

@@ -591,19 +591,6 @@ impl LinuxEditorPipeline {
         doc_snap
     }
 
-    pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {
-        let old = std::mem::replace(&mut self.kernel, new_kernel);
-        let text = self.kernel.snapshot_text();
-        let cursor = self.kernel.cursor();
-        let revision = self.kernel.revision();
-        let anchor = self.kernel.selection_anchor();
-        self.mirror
-            .load_from_snapshot(text, cursor, revision, anchor);
-        self.text_revision = self.text_revision.wrapping_add(1);
-        self.visual_revision = self.visual_revision.wrapping_add(1);
-        old
-    }
-
     pub fn mirror(&self) -> &CommittedTextMirror {
         &self.mirror
     }

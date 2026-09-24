@@ -1122,14 +1122,6 @@ Rectangle {
     }
 
     Connections {
-        target: root.editorBackendRef
-        function onChapter_path_changed() {
-            // Path changed visually, do NOT load chapter content to avoid infinite loop.
-            // Just update title if needed
-        }
-    }
-
-    Connections {
         target: settingsBackend
         function onSettings_changed() {
             editorController.applyCurrentSettings();

@@ -22,6 +22,9 @@ Item {
     // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
     readonly property var resolvedDt: dt
     property var syncBackendRef: null
+    // Issue #754 评论 5814866116 改动4: has_workspace 改读 workspaceBackendRef，
+    // SyncBackend 不再暴露 has_workspace property。
+    property var workspaceBackendRef: null
     property var beforeSyncHook: null
     signal settingsChanged()
 
@@ -487,7 +490,7 @@ Item {
                 text: qsTr("运行诊断")
                 dt: root.resolvedDt
                 variant: "secondary"
-                enabled: root.syncBackendRef && root.syncBackendRef.has_workspace && !(root.syncBackendRef.sync_in_progress || false)
+                enabled: root.syncBackendRef && root.workspaceBackendRef && root.workspaceBackendRef.has_workspace && !(root.syncBackendRef.sync_in_progress || false)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
@@ -507,7 +510,7 @@ Item {
                 text: qsTr("打开工作区目录")
                 dt: root.resolvedDt
                 variant: "text"
-                visible: root.syncBackendRef && root.syncBackendRef.has_workspace
+                visible: root.syncBackendRef && root.workspaceBackendRef && root.workspaceBackendRef.has_workspace
                 onClicked: if (root.syncBackendRef) root.syncBackendRef.open_workspace_dir()
             }
 

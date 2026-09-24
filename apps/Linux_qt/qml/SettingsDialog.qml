@@ -407,6 +407,7 @@ Dialog {
                     Layout.fillWidth: true
                     dt: root.dt
                     syncBackendRef: root.syncBackendRef
+                    workspaceBackendRef: root.workspaceBackendRef
                     beforeSyncHook: function() {
                         if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
                         return true;

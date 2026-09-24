@@ -11,7 +11,6 @@
 // - 平台数据目录管理：Linux 允许用户自己选择素笺数据根目录；选择结果由 Linux 平台层保存，
 //   然后把目录信息注入 Core 的两路径 API (app_data_root, projects_root)。
 // - 作品目录打开/发现：基于数据根目录发现并打开作品。
-// - 支持从 GitHub 克隆（init_workspace_from_github & execute_github_init）拉取已有数据至本地。
 // - 负责向上层 QML 主页提供当前数据根路径（workspace_path）和是否已加载（has_workspace）属性。
 //   QML 仍把作品首页叫"工作区"，这只是 UI 命名；底层不再调用 Core workspace API。
 //
@@ -25,9 +24,6 @@ use crate::backend::DomainSnapshot;
 
 use crate::backend::json_utils::qjson_object_from_json;
 use qmetaobject::QJsonObject;
-
-#[path = "github_init_operations.rs"]
-mod github_init_operations;
 
 fn backend_link_broken_json() -> QString {
     QString::from(crate::backend::json_utils::borrow_conflict_error_json())
@@ -45,11 +41,9 @@ pub struct WorkspaceBackend {
     base: qt_base_class!(trait QObject),
     workspace_path: qt_property!(QString; READ workspace_path NOTIFY workspace_opened),
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
-    pending_github_init_path: qt_property!(QString; READ pending_github_init_path NOTIFY pending_github_init_path_changed),
     workspace_opened: qt_signal!(),
     workspace_content_changed: qt_signal!(),
     workspace_state_changed: qt_signal!(),
-    pending_github_init_path_changed: qt_signal!(),
     try_restore_last_workspace: qt_method!(fn(&mut self)),
     create_new_workspace: qt_method!(fn(&mut self) -> QJsonObject),
     open_existing_workspace: qt_method!(fn(&mut self) -> QJsonObject),
@@ -57,10 +51,6 @@ pub struct WorkspaceBackend {
     open_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject),
     close_workspace: qt_method!(fn(&mut self)),
     switch_workspace: qt_method!(fn(&mut self)),
-    init_workspace_from_github: qt_method!(fn(&mut self)),
-    execute_github_init: qt_method!(
-        fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString)
-    ),
     open_workspace_dir: qt_method!(fn(&mut self)),
     save_last_navigation_state: qt_method!(
         fn(
@@ -116,10 +106,6 @@ impl WorkspaceBackend {
     }
     fn has_workspace(&self) -> bool {
         self.snap().has_workspace
-    }
-    fn pending_github_init_path(&self) -> QString {
-        self.with_app(|app| app.pending_github_init_path())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn try_restore_last_workspace(&mut self) {
         let restored = self
@@ -214,44 +200,6 @@ impl WorkspaceBackend {
             self.emit_workspace_closed();
         }
     }
-    fn init_workspace_from_github(&mut self) {
-        if self
-            .with_app_mut(|app| app.init_workspace_from_github())
-            .is_ok()
-        {
-            self.pending_github_init_path_changed();
-        }
-    }
-    fn execute_github_init(
-        &mut self,
-        path: QString,
-        remote_url: QString,
-        branch: QString,
-        token: QString,
-    ) {
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "qml_click_import_workspace",
-            &format!("path={}, url={}", path, remote_url),
-        );
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "workspace_backend_import_workspace_called",
-            &format!("path={}", path),
-        );
-        if self
-            .with_app_mut(|app| app.execute_github_init(path, remote_url, branch, token))
-            .is_ok()
-        {
-            // Issue #729 评论 5765306162 问题2：不在此时发 workspace_opened。
-            // execute_github_init 只是启动后台同步线程，目标目录还没真正打开。
-            // GitHub init 成功后，handle_sync_outcome -> internal_open_data_root
-            // 真正打开目标工作区时才发 opened/content/state（sync_operations.rs
-            // 第 135-139 行已有此逻辑）。此处过早发 opened 会让 QML 误认为工作区
-            // 已打开，触发 workspace-open 自动同步等副作用。
-            self.pending_github_init_path_changed();
-        }
-    }
     fn open_workspace_dir(&mut self) {
         if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {
             crate::backend::app_backend::debug_error_static(
@@ -314,11 +262,6 @@ impl AppBackend {
     // 打开了新工作区，避免用户取消选择器时误发 workspace_opened。
     pub(crate) fn workspace_generation(&self) -> u64 {
         self.current_workspace_generation
-    }
-
-    // AppBackend::pending_github_init_path
-    pub(crate) fn pending_github_init_path(&self) -> QString {
-        self.current_pending_github_init_path.clone().into()
     }
 
     // AppBackend::try_restore_last_workspace
@@ -548,13 +491,6 @@ impl AppBackend {
         self.debug_log("workspace", "switch_workspace_start", "");
         self.reset_workspace_state();
         self.debug_log("workspace", "switch_workspace_success", "");
-    }
-
-    // AppBackend::init_workspace_from_github
-    pub(crate) fn init_workspace_from_github(&mut self) {
-        if let Some(path) = FileDialog::new().pick_folder() {
-            self.current_pending_github_init_path = path.to_string_lossy().to_string();
-        }
     }
 
     // AppBackend::open_workspace_dir

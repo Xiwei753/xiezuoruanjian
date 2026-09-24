@@ -104,8 +104,6 @@ pub struct SyncBackend {
     #[allow(dead_code)]
     sync_in_progress: qt_property!(bool; READ sync_in_progress NOTIFY sync_status_changed),
     #[allow(dead_code)]
-    has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
-    #[allow(dead_code)]
     sync_can_run: qt_property!(bool; READ sync_can_run NOTIFY sync_status_changed),
     manual_sync_pending: qt_property!(bool; READ manual_sync_pending NOTIFY sync_status_changed),
     #[allow(dead_code)]
@@ -116,8 +114,11 @@ pub struct SyncBackend {
     sync_action_completed: qt_signal!(),
     #[allow(dead_code)]
     sync_status_changed: qt_signal!(),
+    // Issue #754 评论 5814866116 改动2: 同步真正应用到当前工作区内容时发出，
+    // 由 QML onSync_content_applied 刷新正文/树。只表示"真实同步已应用"，
+    // 不承载 workspace 状态属性。
     #[allow(dead_code)]
-    workspace_state_changed: qt_signal!(),
+    sync_content_applied: qt_signal!(),
     #[allow(dead_code)]
     set_sync_token: qt_method!(fn(&mut self, token: QString)),
     #[allow(dead_code)]
@@ -154,12 +155,16 @@ impl SyncBackend {
     ///    QML 监听的 SyncBackend signal 能正确触发。
     pub(crate) fn handle_outcome(&mut self, outcome: SyncTaskOutcome) {
         let qptr = QPointer::from(&*self);
-        if self
+        // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，
+        // ContentChanged 时发 sync_content_applied 让 QML 刷新正文/树。
+        // borrow conflict 时 unwrap_or 给 StatusOnly，不发 content applied。
+        let effect = self
             .with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr)))
-            .is_ok()
-        {
-            self.sync_status_changed();
-            self.sync_action_completed();
+            .unwrap_or(sync_operations::SyncOutcomeEffect::StatusOnly);
+        self.sync_status_changed();
+        self.sync_action_completed();
+        if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
+            self.sync_content_applied();
         }
     }
 
@@ -262,9 +267,6 @@ impl SyncBackend {
         if self.with_app_mut(|app| app.set_sync_status(val)).is_ok() {
             self.sync_status_changed();
         }
-    }
-    fn has_workspace(&self) -> bool {
-        self.snap().has_workspace
     }
     fn sync_can_run(&self) -> bool {
         self.snap().sync_can_run
