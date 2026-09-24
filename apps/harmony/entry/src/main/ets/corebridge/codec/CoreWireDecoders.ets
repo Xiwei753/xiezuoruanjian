@@ -13,7 +13,7 @@
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
+import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -348,6 +348,35 @@ export function decodeProject(data: Object): DecodeResult<Project> {
   const updatedAt: string | null = reqStr(data, 'updatedAt')
   if (updatedAt === null) { return err<Project>('Project.updatedAt missing or not string') }
   return ok<Project>({ id: id, title: title, createdAt: createdAt, updatedAt: updatedAt })
+}
+
+export function decodeProjectSummary(data: Object): DecodeResult<ProjectSummary> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<ProjectSummary>('ProjectSummary: expected object')
+  }
+  const id: string | null = reqStr(data, 'id')
+  if (id === null) { return err<ProjectSummary>('ProjectSummary.id missing or not string') }
+  const title: string | null = reqStr(data, 'title')
+  if (title === null) { return err<ProjectSummary>('ProjectSummary.title missing or not string') }
+  const createdAt: string | null = reqStr(data, 'createdAt')
+  if (createdAt === null) { return err<ProjectSummary>('ProjectSummary.createdAt missing or not string') }
+  const updatedAt: string | null = reqStr(data, 'updatedAt')
+  if (updatedAt === null) { return err<ProjectSummary>('ProjectSummary.updatedAt missing or not string') }
+  const totalWordCount: number | null = reqNum(data, 'totalWordCount')
+  if (totalWordCount === null) { return err<ProjectSummary>('ProjectSummary.totalWordCount missing or not number') }
+  const volumeCount: number | null = reqNum(data, 'volumeCount')
+  if (volumeCount === null) { return err<ProjectSummary>('ProjectSummary.volumeCount missing or not number') }
+  const chapterCount: number | null = reqNum(data, 'chapterCount')
+  if (chapterCount === null) { return err<ProjectSummary>('ProjectSummary.chapterCount missing or not number') }
+  return ok<ProjectSummary>({
+    id: id,
+    title: title,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    totalWordCount: totalWordCount,
+    volumeCount: volumeCount,
+    chapterCount: chapterCount
+  })
 }
 
 export function decodeVolume(data: Object): DecodeResult<Volume> {
@@ -1394,7 +1423,7 @@ export function decodeAppSummary(data: Object): DecodeResult<AppSummary> {
   }
   const projectsArr: Array<Object> | null = reqArray(data, 'projects')
   if (projectsArr === null) { return err<AppSummary>('projects missing or not array') }
-  const projectsR: DecodeResult<Project[]> = decodeArray<Project>(projectsArr as Object, decodeProject, 'projects')
+  const projectsR: DecodeResult<ProjectSummary[]> = decodeArray<ProjectSummary>(projectsArr as Object, decodeProjectSummary, 'projects')
   if (!projectsR.ok || projectsR.value === undefined) { return err<AppSummary>(projectsR.error) }
   const recentEditObj: Object | undefined = optObj(data, 'recentEdit')
   let recentEdit: RecentEdit | null = null
