@@ -227,7 +227,7 @@ Rectangle {
         // Left sidebar: volume/chapter tree
         Rectangle {
             id: sidebarRect
-            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_linux_qt_sidebar_width > 0 ? root.backendRef.setting_linux_qt_sidebar_width : 240
+            SplitView.preferredWidth: settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
             color: dt.sidebar
@@ -239,9 +239,9 @@ Rectangle {
                 interval: 300
                 repeat: false
                 onTriggered: {
-                    if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_linux_qt_sidebar_width - sidebarRect.width) >= 1.0) {
-                        root.backendRef.setting_linux_qt_sidebar_width = sidebarRect.width;
-                        if (settingsBackend) settingsBackend.debounced_save_local_settings();
+                    if (settingsBackend && sidebarRect.width > 0 && Math.abs(settingsBackend.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
+                        settingsBackend.setting_desktop_sidebar_width = sidebarRect.width;
+                        settingsBackend.debounced_save_local_settings();
                     }
                 }
             }
@@ -615,7 +615,6 @@ Rectangle {
             TopWritingToolbar {
                 Layout.fillWidth: true
                 dt: root.dt
-                backendRef: root.backendRef
                 currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
                 currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                 firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
@@ -669,9 +668,9 @@ Rectangle {
                             var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
                                     ? root.layoutPlan.contentMaxWidthVp
                                     : 820
-                            // Issue #687: 统一走 backendRef.setting_desktop_editor_width
-                            var userW = root.backendRef && root.backendRef.setting_desktop_editor_width > 0
-                                    ? root.backendRef.setting_desktop_editor_width
+                            // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                            var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
+                                    ? settingsBackend.setting_desktop_editor_width
                                     : 0
                             var targetW = userW > 0 ? userW : planW
                             return Math.max(480, Math.min(parent.width, targetW))
@@ -713,12 +712,12 @@ Rectangle {
                         }
 
                         onPositionChanged: function(mouse) {
-                            if (pressed && root.backendRef) {
+                            if (pressed && settingsBackend) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
-                                // Issue #687: 统一走 backendRef.setting_desktop_editor_width
-                                root.backendRef.setting_desktop_editor_width = newWidth;
-                                if (settingsBackend) settingsBackend.debounced_save_local_settings();
+                                // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                                settingsBackend.setting_desktop_editor_width = newWidth;
+                                settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }
@@ -752,12 +751,12 @@ Rectangle {
                         }
 
                         onPositionChanged: function(mouse) {
-                            if (pressed && root.backendRef) {
+                            if (pressed && settingsBackend) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
-                                // Issue #687: 统一走 backendRef.setting_desktop_editor_width
-                                root.backendRef.setting_desktop_editor_width = newWidth;
-                                if (settingsBackend) settingsBackend.debounced_save_local_settings();
+                                // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                                settingsBackend.setting_desktop_editor_width = newWidth;
+                                settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }
@@ -917,7 +916,7 @@ Rectangle {
                         visible: true
                         focus: true
                         editor_enabled: editorController.chapterId !== ""
-                        font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
+                        font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : 16
                         font_family: "serif"
                         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled)

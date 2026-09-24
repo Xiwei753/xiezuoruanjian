@@ -17,7 +17,6 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     required property var dt
-    property var backendRef: null
     property real currentFontSize: 16
     property real currentLineSpacing: 1.5
     property bool firstLineIndent: false
@@ -670,12 +669,12 @@ Rectangle {
                         from: 480
                         to: 3840
                         stepSize: 10
-                        // Issue #687: 统一走 backendRef.setting_desktop_editor_width
-                        value: root.backendRef && root.backendRef.setting_desktop_editor_width > 0 ? root.backendRef.setting_desktop_editor_width : 820
+                        // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                        value: settingsBackend && settingsBackend.setting_desktop_editor_width > 0 ? settingsBackend.setting_desktop_editor_width : 820
                         onMoved: {
-                            if (root.backendRef) {
-                                root.backendRef.setting_desktop_editor_width = value;
-                                if (settingsBackend) settingsBackend.debounced_save_local_settings();
+                            if (settingsBackend) {
+                                settingsBackend.setting_desktop_editor_width = value;
+                                settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }

@@ -20,8 +20,6 @@ impl AppBackend {
                 self.selected_project_id = None;
                 self.selected_volume_id = None;
                 self.clear_editor_state();
-                self.selected_item_changed();
-                self.chapter_path_changed();
                 return false;
             }
         }
@@ -35,8 +33,6 @@ impl AppBackend {
             if !volume_exists {
                 self.selected_volume_id = None;
                 self.clear_editor_state();
-                self.selected_item_changed();
-                self.chapter_path_changed();
                 return false;
             }
         }
@@ -56,14 +52,12 @@ impl AppBackend {
             }
         }
 
-        self.selected_item_changed();
-        self.chapter_path_changed();
         had_chapter_deleted
     }
 
     pub(crate) fn trigger_projects_reloaded(&mut self) {
-        self.projects_reloaded();
-        self.projectsReloaded();
+        // AppBackend 不再对 QML 暴露 projects_reloaded / projectsReloaded signals。
+        // 领域 ProjectBackend 在自己的方法中触发自己的 signals。
     }
 
     pub(crate) fn reload_tree(&mut self) {
@@ -317,7 +311,6 @@ impl AppBackend {
             self.typed_envelope_to_result(envelope, |app, data| {
                 let proj_id = &data.id;
                 app.selected_project_id = Some(proj_id.clone());
-                app.selected_item_changed();
                 app.selected_volume_id = None;
                 app.selected_chapter_id = None;
 
@@ -377,7 +370,6 @@ impl AppBackend {
             self.typed_envelope_to_result(envelope, |app, data| {
                 app.selected_project_id = Some(project_id.to_string());
                 app.selected_volume_id = Some(data.id.clone());
-                app.selected_item_changed();
                 app.selected_chapter_id = None;
                 app.reload_tree();
                 app.trigger_projects_reloaded();
@@ -435,7 +427,6 @@ impl AppBackend {
                 app.selected_project_id = Some(project_id.to_string());
                 app.selected_volume_id = Some(volume_id.to_string());
                 app.selected_chapter_id = Some(data.id.clone());
-                app.selected_item_changed();
                 app.reload_tree();
                 app.trigger_projects_reloaded();
                 app.debug_log(
@@ -638,7 +629,6 @@ impl AppBackend {
         let vol = api.create_volume(&project_id_str, &title.to_string())?;
         self.selected_project_id = Some(project_id_str);
         self.selected_volume_id = Some(vol.id.clone());
-        self.selected_item_changed();
         self.selected_chapter_id = None;
         self.reload_tree();
         self.trigger_projects_reloaded();
@@ -660,7 +650,6 @@ impl AppBackend {
         self.selected_project_id = Some(project_id_str);
         self.selected_volume_id = Some(volume_id_str);
         self.selected_chapter_id = Some(chap.id.clone());
-        self.selected_item_changed();
         self.reload_tree();
         self.trigger_projects_reloaded();
         Ok(chap)
@@ -886,16 +875,12 @@ impl AppBackend {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = None;
         self.selected_chapter_id = None;
-        self.selected_item_changed();
-        self.chapter_path_changed();
     }
 
     pub(crate) fn select_volume(&mut self, project_id: QString, volume_id: QString) {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = Some(volume_id.to_string());
         self.selected_chapter_id = None;
-        self.selected_item_changed();
-        self.chapter_path_changed();
     }
 
     pub(crate) fn select_chapter(
@@ -907,7 +892,5 @@ impl AppBackend {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = Some(volume_id.to_string());
         self.selected_chapter_id = Some(chapter_id.to_string());
-        self.selected_item_changed();
-        self.chapter_path_changed();
     }
 }

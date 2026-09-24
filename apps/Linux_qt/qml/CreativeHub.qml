@@ -17,10 +17,9 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     required property var dt
-    property var backendRef: null
     property var projectBackendRef: null
-    property var editorBackendRef: backendRef
-    property var starmapBackendRef: backendRef
+    property var editorBackendRef: null
+    property var starmapBackendRef: null
     property var starMapController: null
     property var appState: ({})
     property var tree: []

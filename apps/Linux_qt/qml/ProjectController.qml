@@ -7,12 +7,11 @@ import QtQuick
 QtObject {
     id: controller
 
-    property var backendRef: null
     property var projectBackendRef: null
     property var appController: null
 
     function projectApi() {
-        return projectBackendRef || backendRef;
+        return projectBackendRef;
     }
 
     function createProject(title) {

@@ -6,16 +6,16 @@
 // 职责：编辑器设置展示与保存（字号、行距、自动保存、主题、AI 开关）
 // 约束：
 //   - 通过 settingsBackend 兼容入口读写设置属性
-//   - 不直接操作文件系统，通过 backendRef.save_local_settings() 持久化
+//   - 不直接操作文件系统，通过 settingsBackend.save_local_settings() 持久化
 //   - 使用 DesignTokens 统一样式
 //   - Section 顺序按 Core settings_presentation 契约：
 //     外观 → 编辑器和动画 → 保存和同步 → AI → 诊断与日志 → 关于
 //   - Issue #701 评论 5702214893: 主题设置（appearance_mode、color_source、
 //     selected_builtin_theme_id、selected_palette_id）的读写统一收口到
-//     themeControllerRef（LinuxThemeController），不再走 backendRef.setting_*
+//     themeControllerRef（LinuxThemeController），不再走 settingsBackend.setting_*
 //     fallback。themeControllerRef 是必需依赖。主题列表数据
 //     （list_builtin_themes_json / list_palette_records_json）仍由
-//     backendRef 提供。字号、行距、动画、保存等非主题设置仍走 backendRef。
+//     settingsBackend 提供。字号、行距、动画、保存等非主题设置仍走 settingsBackend。
 // =============================================================================
 
 import QtQuick
@@ -31,7 +31,7 @@ Dialog {
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)
     property var theme: null
-    property var backendRef: null
+    property var settingsBackend: null
     property var workspaceBackendRef: null
     property var syncBackendRef: null
     property var editorBackendRef: null
@@ -46,44 +46,44 @@ Dialog {
     background: Rectangle { color: dt.surface; border.color: dt.border; border.width: 1; radius: dt.radiusXl }
     header: null
 
-    function saveAndNotify() { if (!backendRef || !root.settingsDirty) return; backendRef.save_local_settings(); root.settingsDirty = false; root.settingsChanged() }
+    function saveAndNotify() { if (!settingsBackend || !root.settingsDirty) return; settingsBackend.save_local_settings(); root.settingsDirty = false; root.settingsChanged() }
     // Debounced save: 使用 SettingsBackend 统一的 debounced_save_local_settings
     // 所有设置入口共用同一个保存事务
     function debouncedSave() {
-        if (!backendRef) return
+        if (!settingsBackend) return
         root.settingsDirty = true
-        backendRef.debounced_save_local_settings()
+        settingsBackend.debounced_save_local_settings()
     }
     // Force-save: called when dialog closes.
     // Only saves if settingsDirty is true.
     function flushSave() {
         if (!root.settingsDirty) return
-        if (backendRef) backendRef.flush_pending_settings_save()
+        if (settingsBackend) settingsBackend.flush_pending_settings_save()
         root.settingsDirty = false
         root.settingsChanged()
     }
     function setSwitchValue(control, key, value) {
         control.checked = value
-        if (!backendRef || updatingValues) return
-        backendRef[key] = value
+        if (!settingsBackend || updatingValues) return
+        settingsBackend[key] = value
         root.settingsDirty = true
         debouncedSave()
     }
     function updateValues() {
-        if (!backendRef) return
+        if (!settingsBackend) return
         updatingValues = true
-        autoSave.checked = backendRef.setting_auto_save_enabled
-        typingAnim.checked = backendRef.setting_typing_animation_enabled
-        smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
+        autoSave.checked = settingsBackend.setting_auto_save_enabled
+        typingAnim.checked = settingsBackend.setting_typing_animation_enabled
+        smoothCursor.checked = settingsBackend.setting_smooth_cursor_enabled
         // 协同光标动画已删除（Issue #727 约束 6）：吞吐字由 caret motion 唯一驱动
-        aiSwitch.checked = backendRef.ai_enabled
-        autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
-        fontSizeSlider.value = backendRef.setting_font_size || 16.0
-        lineSpacingSlider.value = backendRef.setting_line_spacing || 1.5
-        autoIndent.checked = backendRef.setting_auto_indent_enabled
-        autoIndentWidth.value = backendRef.setting_auto_indent_width || 2.0
-        typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms || 100
-        smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms || 80
+        aiSwitch.checked = settingsBackend.ai_enabled
+        autoSaveDelay.value = settingsBackend.setting_auto_save_delay_ms / 1000.0
+        fontSizeSlider.value = settingsBackend.setting_font_size || 16.0
+        lineSpacingSlider.value = settingsBackend.setting_line_spacing || 1.5
+        autoIndent.checked = settingsBackend.setting_auto_indent_enabled
+        autoIndentWidth.value = settingsBackend.setting_auto_indent_width || 2.0
+        typingAnimDuration.value = settingsBackend.setting_typing_animation_duration_ms || 100
+        smoothCursorDuration.value = settingsBackend.setting_smooth_cursor_duration_ms || 80
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         // Issue #701 评论 5702675971: colorSourceCombo / builtinThemeCombo /
@@ -107,9 +107,9 @@ Dialog {
             if (paletteRecords[pi].palette_id === paletteSelId) { paletteFound = pi; break }
         }
         paletteRecordCombo.currentIndex = paletteFound >= 0 ? paletteFound : 0
-        diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
-        diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
-        diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
+        diagnosticsEnabled.checked = settingsBackend.setting_diagnostics_enabled
+        diagnosticsVerbose.checked = settingsBackend.setting_diagnostics_verbose
+        diagnosticsVerbose.enabled = settingsBackend.setting_diagnostics_enabled
         // Issue #701 评论 5699565102: useAndroidTheme 开关已删除
         // （依赖已删除的 hasThemePalette，且与颜色来源下拉功能重复）。
         updatingValues = false
@@ -127,14 +127,14 @@ Dialog {
         updateValues()
     }
     onClosed: {
-        // Force-write all slider current values back to backendRef before saving
-        if (backendRef && !root.updatingValues) {
-            backendRef.setting_font_size = fontSizeSlider.value
-            backendRef.setting_line_spacing = lineSpacingSlider.value
-            backendRef.setting_auto_indent_width = autoIndentWidth.value
-        backendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
-        backendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
-        backendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+        // Force-write all slider current values back to settingsBackend before saving
+        if (settingsBackend && !root.updatingValues) {
+            settingsBackend.setting_font_size = fontSizeSlider.value
+            settingsBackend.setting_line_spacing = lineSpacingSlider.value
+            settingsBackend.setting_auto_indent_width = autoIndentWidth.value
+        settingsBackend.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
+        settingsBackend.setting_typing_animation_duration_ms = typingAnimDuration.value
+        settingsBackend.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
         root.settingsDirty = true
         }
         flushSave()
@@ -189,10 +189,10 @@ Dialog {
                         dt: root.dt
                         model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
                         onActivated: function(index) {
-                            if (!backendRef || !themeControllerRef || root.updatingValues) return
+                            if (!settingsBackend || !themeControllerRef || root.updatingValues) return
                             // Issue #696 评论 5696993601 / #701 评论 5702214893:
                             // 用户切换主题只走 ThemeController 这一条入口，
-                            // 不再直接写 backendRef.setting_appearance_mode。
+                            // 不再直接写 settingsBackend.setting_appearance_mode。
                             // set_appearance_mode 内部写 AppBackend、重建缓存并
                             // 发 scheme_changed，然后沿现有保存入口落盘。
                             themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
@@ -211,8 +211,8 @@ Dialog {
                     from: 12.0
                     to: 72.0
                     stepSize: 1.0
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value }
-                    onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.debouncedSave() }
+                    onMoved: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_font_size = value }
+                    onCommitted: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_font_size = value; root.debouncedSave() }
                 }
                 AppSlider {
                     id: lineSpacingSlider
@@ -224,8 +224,8 @@ Dialog {
                     from: 1.0
                     to: 3.0
                     stepSize: 0.1
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value }
-                    onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.debouncedSave() }
+                    onMoved: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_line_spacing = value }
+                    onCommitted: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_line_spacing = value; root.debouncedSave() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -236,10 +236,10 @@ Dialog {
                         dt: root.dt
                         model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
                         onActivated: function(index) {
-                            if (!backendRef || !themeControllerRef || root.updatingValues) return
+                            if (!settingsBackend || !themeControllerRef || root.updatingValues) return
                             // Issue #701 评论 5702214893: 颜色来源统一走
                             // ThemeController，不再直接写
-                            // backendRef.setting_color_source。
+                            // settingsBackend.setting_color_source。
                             var source = ["built_in", "saved_palette"][index]
                             themeControllerRef.set_color_source(source)
                             root.settingsDirty = true
@@ -256,12 +256,12 @@ Dialog {
                         id: builtinThemeCombo
                         dt: root.dt
                         property var _themes: {
-                            if (!backendRef) return []
-                            try { return JSON.parse(backendRef.list_builtin_themes_json()) } catch(e) { return [] }
+                            if (!settingsBackend) return []
+                            try { return JSON.parse(settingsBackend.list_builtin_themes_json()) } catch(e) { return [] }
                         }
                         model: _themes.map(function(t) { return t.name || t.theme_id })
                         onActivated: function(index) {
-                            if (!backendRef || !themeControllerRef || root.updatingValues) return
+                            if (!settingsBackend || !themeControllerRef || root.updatingValues) return
                             var themeId = _themes[index] ? _themes[index].theme_id : ""
                             if (themeId.length > 0) {
                                 // Issue #701 评论 5702214893: 内置主题统一走
@@ -283,15 +283,15 @@ Dialog {
                         id: paletteRecordCombo
                         dt: root.dt
                         property var _records: {
-                            if (!backendRef) return []
-                            try { return JSON.parse(backendRef.list_palette_records_json()) } catch(e) { return [] }
+                            if (!settingsBackend) return []
+                            try { return JSON.parse(settingsBackend.list_palette_records_json()) } catch(e) { return [] }
                         }
                         model: _records.map(function(r) {
                             var d = new Date(r.captured_at_ms)
                             return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
                         })
                         onActivated: function(index) {
-                            if (!backendRef || !themeControllerRef || root.updatingValues) return
+                            if (!settingsBackend || !themeControllerRef || root.updatingValues) return
                             var paletteId = _records[index] ? _records[index].palette_id : ""
                             if (paletteId.length > 0) {
                                 // Issue #701 评论 5702214893: 已保存 palette 统一走
@@ -329,8 +329,8 @@ Dialog {
                     from: 0.0
                     to: 8.0
                     stepSize: 0.5
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value }
-                    onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.debouncedSave() }
+                    onMoved: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_auto_indent_width = value }
+                    onCommitted: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_auto_indent_width = value; root.debouncedSave() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -350,8 +350,8 @@ Dialog {
                     from: 30
                     to: 1000
                     stepSize: 10
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value }
-                    onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
+                    onMoved: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_typing_animation_duration_ms = value }
+                    onCommitted: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -371,8 +371,8 @@ Dialog {
                     from: 30
                     to: 1000
                     stepSize: 10
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value }
-                    onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
+                    onMoved: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_smooth_cursor_duration_ms = value }
+                    onCommitted: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
                 }
                 // 协同光标动画开关已删除（Issue #727 约束 6）：吞吐字由 caret motion 唯一驱动，不再有独立开关
             }
@@ -400,8 +400,8 @@ Dialog {
                     from: 1
                     to: 10
                     stepSize: 1
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000 }
-                    onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.debouncedSave() }
+                    onMoved: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_auto_save_delay_ms = value * 1000 }
+                    onCommitted: function() { if (!settingsBackend || root.updatingValues) return; settingsBackend.setting_auto_save_delay_ms = value * 1000; root.debouncedSave() }
                 }
                 SyncPage {
                     Layout.fillWidth: true
@@ -420,7 +420,7 @@ Dialog {
                 dt: root.dt
                 title: qsTr("AI")
                 Layout.fillWidth: true
-                visible: root.backendRef ? root.backendRef.ai_available : false
+                visible: root.settingsBackend ? root.settingsBackend.ai_available : false
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("启用 AI 功能")
@@ -465,8 +465,8 @@ Dialog {
                     description: qsTr("删除所有日志文件")
                     clickable: true
                     onClicked: {
-                        if (!root.backendRef) return
-                        root.backendRef.clear_logs()
+                        if (!root.settingsBackend) return
+                        root.settingsBackend.clear_logs()
                     }
                 }
                 // 导出诊断包：独立行，明确按钮
@@ -487,8 +487,8 @@ Dialog {
                         variant: "secondary"
                         small: true
                         onClicked: {
-                            if (!root.backendRef) return
-                            var result = root.backendRef.export_diagnostics_pack()
+                            if (!root.settingsBackend) return
+                            var result = root.settingsBackend.export_diagnostics_pack()
                             // parse JSON envelope
                             try {
                                 var obj = JSON.parse(result)
@@ -538,10 +538,10 @@ Dialog {
                     description: qsTr("将设备信息复制到剪贴板")
                     clickable: true
                     onClicked: {
-                        if (!root.backendRef) return
-                        var info = root.backendRef.copy_device_info()
+                        if (!root.settingsBackend) return
+                        var info = root.settingsBackend.copy_device_info()
                         if (info && info.length > 0) {
-                            var result = root.backendRef.copy_text_to_clipboard(info)
+                            var result = root.settingsBackend.copy_text_to_clipboard(info)
                             // result 是 JSON envelope：success=true 表示成功
                             try {
                                 var obj = JSON.parse(result)
@@ -578,8 +578,8 @@ Dialog {
                     description: qsTr("在文件管理器中打开日志目录")
                     clickable: true
                     onClicked: {
-                        if (!root.backendRef) return
-                        root.backendRef.open_log_directory()
+                        if (!root.settingsBackend) return
+                        root.settingsBackend.open_log_directory()
                     }
                 }
             }

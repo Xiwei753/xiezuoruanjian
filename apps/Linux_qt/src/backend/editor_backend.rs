@@ -49,33 +49,7 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
     #[allow(dead_code)]
-    setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_auto_save_enabled: qt_property!(bool; READ setting_auto_save_enabled WRITE set_setting_auto_save_enabled NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms NOTIFY settings_changed),
-    /// Issue #687: 编辑器宽度属性委托，使 QML 可通过 backendRef 统一访问
-    /// setting_desktop_editor_width，不再偷读全局 settingsBackend。
-    #[allow(dead_code)]
-    setting_desktop_editor_width: qt_property!(f64; READ setting_desktop_editor_width WRITE set_setting_desktop_editor_width NOTIFY settings_changed),
-    #[allow(dead_code)]
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
-    #[allow(dead_code)]
-    sync_enabled: qt_property!(bool; READ sync_enabled NOTIFY sync_config_changed),
-    #[allow(dead_code)]
-    sync_auto_sync: qt_property!(bool; READ sync_auto_sync NOTIFY sync_config_changed),
     #[allow(dead_code)]
     save_status_changed: qt_signal!(),
     #[allow(dead_code)]
@@ -89,11 +63,7 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     clear_editor: qt_signal!(),
     #[allow(dead_code)]
-    settings_changed: qt_signal!(),
-    #[allow(dead_code)]
     workspace_state_changed: qt_signal!(),
-    #[allow(dead_code)]
-    sync_config_changed: qt_signal!(),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
     #[allow(dead_code)]
@@ -251,93 +221,8 @@ impl EditorBackend {
     fn chapter_path(&self) -> QString {
         self.snap().chapter_path.clone().into()
     }
-    fn setting_font_size(&self) -> f32 {
-        self.snap().setting_font_size
-    }
-    fn set_setting_font_size(&mut self, val: f32) {
-        if self
-            .with_app_mut(|app| app.set_setting_font_size(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_line_spacing(&self) -> f32 {
-        self.snap().setting_line_spacing
-    }
-    fn set_setting_line_spacing(&mut self, val: f32) {
-        if self
-            .with_app_mut(|app| app.set_setting_line_spacing(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_auto_save_enabled(&self) -> bool {
-        self.snap().setting_auto_save_enabled
-    }
-    fn set_setting_auto_save_enabled(&mut self, val: bool) {
-        if self
-            .with_app_mut(|app| app.set_setting_auto_save_enabled(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_auto_save_delay_ms(&self) -> u32 {
-        self.snap().setting_auto_save_delay_ms
-    }
-    fn set_setting_auto_save_delay_ms(&mut self, val: u32) {
-        if self
-            .with_app_mut(|app| app.set_setting_auto_save_delay_ms(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_auto_indent_enabled(&self) -> bool {
-        self.snap().setting_auto_indent_enabled
-    }
-    fn set_setting_auto_indent_enabled(&mut self, val: bool) {
-        if self
-            .with_app_mut(|app| app.set_setting_auto_indent_enabled(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_smooth_cursor_enabled(&self) -> bool {
-        self.snap().setting_smooth_cursor_enabled
-    }
-    fn setting_typing_animation_enabled(&self) -> bool {
-        self.snap().setting_typing_animation_enabled
-    }
-    fn setting_smooth_cursor_duration_ms(&self) -> u32 {
-        self.snap().setting_smooth_cursor_duration_ms
-    }
-    fn setting_typing_animation_duration_ms(&self) -> u32 {
-        self.snap().setting_typing_animation_duration_ms
-    }
-    /// Issue #687: 编辑器宽度属性委托给 AppBackend，使 QML 通过 backendRef 统一访问。
-    fn setting_desktop_editor_width(&self) -> f64 {
-        self.snap().setting_desktop_editor_width
-    }
-    fn set_setting_desktop_editor_width(&mut self, val: f64) {
-        if self
-            .with_app_mut(|app| app.set_setting_desktop_editor_width(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
     fn has_workspace(&self) -> bool {
         self.snap().has_workspace
-    }
-    fn sync_enabled(&self) -> bool {
-        self.snap().sync_enabled
-    }
-    fn sync_auto_sync(&self) -> bool {
-        self.snap().sync_auto_sync
     }
     fn calculate_word_count(&mut self, text: QString) {
         if self
@@ -619,13 +504,11 @@ impl AppBackend {
     // AppBackend::set_save_status
     pub(crate) fn set_save_status(&mut self, status: QString) {
         self.current_save_status = status.to_string();
-        self.save_status_changed();
     }
 
     // AppBackend::set_word_count
     pub(crate) fn set_word_count(&mut self, count: i32) {
         self.current_word_count = count;
-        self.word_count_changed();
     }
 
     // AppBackend::list_registered_actions
@@ -678,15 +561,11 @@ impl AppBackend {
     // AppBackend::clear_editor_state
     pub(crate) fn clear_editor_state(&mut self) {
         self.selected_chapter_id = None;
-        self.selected_item_changed();
-        self.chapter_path_changed();
-        self.clear_editor();
     }
 
     // AppBackend::set_error
     pub(crate) fn set_error(&mut self, msg: &str) {
         self.current_error_message = msg.to_string();
-        self.error_occurred();
     }
 
     // AppBackend::calculate_word_count

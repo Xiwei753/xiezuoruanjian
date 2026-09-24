@@ -106,8 +106,6 @@ impl AppBackend {
                     self.selected_project_id = Some(p.clone());
                     self.selected_volume_id = Some(v.clone());
                     self.selected_chapter_id = Some(c.clone());
-                    self.selected_item_changed();
-                    self.chapter_path_changed();
 
                     self.debug_log("chapter", "open_chapter_success", "len_loaded");
 
@@ -169,7 +167,6 @@ impl AppBackend {
                     self.current_save_status = "已保存".to_string();
                     // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
                     // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
-                    self.save_status_changed();
                     self.flush_writing_stats();
                     serde_to_qjson_object(serde_json::json!({
                         "success": true,
@@ -216,7 +213,6 @@ impl AppBackend {
             bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
         };
 
-        self.save_status_changed();
         result_obj
     }
 
@@ -267,8 +263,6 @@ impl AppBackend {
                 self.current_save_status = "清空失败".to_string();
                 self.set_error(message_key);
             }
-            self.save_status_changed();
-            self.workspace_content_changed();
             let value = serde_json::to_value(envelope.into_value_envelope()).unwrap_or_else(
                 |_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}),
             );
@@ -280,7 +274,6 @@ impl AppBackend {
                 "core_not_initialized",
             );
             self.current_save_status = "清空失败".to_string();
-            self.save_status_changed();
             self.set_error("error.core_error");
             bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
         }

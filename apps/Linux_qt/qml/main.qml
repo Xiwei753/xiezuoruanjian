@@ -99,8 +99,8 @@ ApplicationWindow {
     function reportNullBackend(name) {
         var message = "Required QML context property is null: " + name;
         console.error(message);
-        if (backend !== null && backend.debug_qml_enabled) {
-            backend.log_qml("error", "app", "null_context_property", message);
+        if (appBackend !== null && appBackend.debug_qml_enabled) {
+            appBackend.log_qml("error", "app", "null_context_property", message);
         }
     }
 
@@ -115,20 +115,20 @@ ApplicationWindow {
     }
 
     function debugLog(module, event, message) {
-        if (backend !== null && backend.debug_qml_enabled) {
-            backend.log_qml("info", module, event, message);
+        if (appBackend !== null && appBackend.debug_qml_enabled) {
+            appBackend.log_qml("info", module, event, message);
         }
     }
 
     function debugWarn(module, event, message) {
-        if (backend !== null && backend.debug_qml_enabled) {
-            backend.log_qml("warn", module, event, message);
+        if (appBackend !== null && appBackend.debug_qml_enabled) {
+            appBackend.log_qml("warn", module, event, message);
         }
     }
 
     function debugError(module, event, message) {
-        if (backend !== null && backend.debug_qml_enabled) {
-            backend.log_qml("error", module, event, message);
+        if (appBackend !== null && appBackend.debug_qml_enabled) {
+            appBackend.log_qml("error", module, event, message);
         }
     }
 
@@ -235,7 +235,7 @@ ApplicationWindow {
         // 直接用 snapshot 的字段记录诊断，不经过第二轮 QML binding（Qt 不保证 binding
         // 求值顺序，诊断可能读到上一份值）。未传入 snapshot 时（其他调用点如
         // "system_color_scheme_changed"/"startup"），继续用 designTokens 派生 property。
-        if (backend === null || !backend.log_qml) return;
+        if (appBackend === null || !appBackend.log_qml) return;
         var tc = themeController;
         var primaryVal, surfaceVal, onSurfaceVal, onSurfaceVariantVal, editorTextVal;
         if (snapshot) {
@@ -251,7 +251,7 @@ ApplicationWindow {
             onSurfaceVariantVal = designTokens.onSurfaceVariant;
             editorTextVal = designTokens.editorText;
         }
-        backend.log_qml("info", "theme", event,
+        appBackend.log_qml("info", "theme", event,
                         "appearance_mode=" + (tc ? tc.appearance_mode : "<null>")
                         + " is_dark=" + (tc ? tc.is_dark : "<null>")
                         + " color_source=" + (tc ? tc.color_source : "<null>")
@@ -332,10 +332,9 @@ ApplicationWindow {
 
     AppController {
         id: appController
-        backendRef: backend
         workspaceBackendRef: workspaceBackend
         stateBackendRef: projectBackend
-        appBackendRef: backend
+        appBackendRef: appBackend
         onErrorRaised: function(message) {
             errorDialog.message = message;
             errorDialog.open();
@@ -344,14 +343,12 @@ ApplicationWindow {
 
     ProjectController {
         id: projectController
-        backendRef: backend
         projectBackendRef: projectBackend
         appController: appController
     }
 
     StarMapController {
         id: globalStarMapController
-        backendRef: backend
         starmapBackendRef: starmapBackend
         appController: appController
     }
@@ -515,7 +512,6 @@ ApplicationWindow {
             active: rootHasWorkspace && appController.route === "hub"
             sourceComponent: CreativeHub {
                 dt: designTokens
-                backendRef: projectBackend
                 projectBackendRef: projectBackend
             editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
@@ -557,8 +553,8 @@ ApplicationWindow {
 
                 onRequestSync: {
                     if (!window.preSyncBarrier()) return;
-                    // 顶栏手动同步入口：基础配置可用时直接把请求交给 backend。
-                    // 不再用 !syncBackend.sync_in_progress 拦截——backend 自己排队
+                    // 顶栏手动同步入口：基础配置可用时直接把请求交给 syncBackend。
+                    // 不再用 !syncBackend.sync_in_progress 拦截——syncBackend 自己排队
                     // （manual_sync_pending）。
                     if (syncBackend) {
                         syncBackend.perform_sync();
@@ -790,7 +786,7 @@ ApplicationWindow {
         active: false
         sourceComponent: SettingsDialog {
             theme: designTokens
-            backendRef: settingsBackend
+            settingsBackend: settingsBackend
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend

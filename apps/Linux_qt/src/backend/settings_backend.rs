@@ -773,37 +773,31 @@ impl AppBackend {
     // Saving is debounced at the QML layer (debouncedSave/flushSave).
     pub(crate) fn set_setting_font_size(&mut self, val: f32) {
         self.current_setting_font_size = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_line_spacing
     pub(crate) fn set_setting_line_spacing(&mut self, val: f32) {
         self.current_setting_line_spacing = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_auto_save_enabled
     pub(crate) fn set_setting_auto_save_enabled(&mut self, val: bool) {
         self.current_setting_auto_save_enabled = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_auto_save_delay_ms
     pub(crate) fn set_setting_auto_save_delay_ms(&mut self, val: u32) {
         self.current_setting_auto_save_delay_ms = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_auto_indent_enabled
     pub(crate) fn set_setting_auto_indent_enabled(&mut self, val: bool) {
         self.current_setting_auto_indent_enabled = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_auto_indent_width
     pub(crate) fn set_setting_auto_indent_width(&mut self, val: f32) {
         self.current_setting_auto_indent_width = val;
-        self.settings_changed();
     }
 
     // Issue #705: AppBackend::setting_theme_mode 已删除。运行时只认
@@ -824,7 +818,6 @@ impl AppBackend {
 
     pub(crate) fn set_setting_color_source(&mut self, val: QString) {
         self.current_setting_color_source = val.to_string();
-        self.settings_changed();
     }
 
     pub(crate) fn setting_appearance_mode(&self) -> QString {
@@ -839,12 +832,10 @@ impl AppBackend {
             "system" | "light" | "dark" => s,
             _ => "system".to_string(),
         };
-        self.settings_changed();
     }
 
     pub(crate) fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
         self.current_setting_dynamic_color_enabled = val;
-        self.settings_changed();
     }
 
     pub(crate) fn setting_selected_palette_id(&self) -> QString {
@@ -853,7 +844,6 @@ impl AppBackend {
 
     pub(crate) fn set_setting_selected_palette_id(&mut self, val: QString) {
         self.current_setting_selected_palette_id = val.to_string();
-        self.settings_changed();
     }
 
     pub(crate) fn setting_selected_builtin_theme_id(&self) -> QString {
@@ -864,55 +854,46 @@ impl AppBackend {
 
     pub(crate) fn set_setting_selected_builtin_theme_id(&mut self, val: QString) {
         self.current_setting_selected_builtin_theme_id = val.to_string();
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_typing_animation_enabled
     pub(crate) fn set_setting_typing_animation_enabled(&mut self, val: bool) {
         self.current_setting_typing_animation_enabled = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_smooth_cursor_enabled
     pub(crate) fn set_setting_smooth_cursor_enabled(&mut self, val: bool) {
         self.current_setting_smooth_cursor_enabled = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_typing_animation_duration_ms
     pub(crate) fn set_setting_typing_animation_duration_ms(&mut self, val: u32) {
         self.current_setting_typing_animation_duration_ms = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_smooth_cursor_duration_ms
     pub(crate) fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) {
         self.current_setting_smooth_cursor_duration_ms = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_diagnostics_enabled
     pub(crate) fn set_setting_diagnostics_enabled(&mut self, val: bool) {
         self.current_setting_diagnostics_enabled = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_diagnostics_verbose
     pub(crate) fn set_setting_diagnostics_verbose(&mut self, val: bool) {
         self.current_setting_diagnostics_verbose = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_desktop_sidebar_width
     pub(crate) fn set_setting_desktop_sidebar_width(&mut self, val: f64) {
         self.current_setting_desktop_sidebar_width = val;
-        self.settings_changed();
     }
 
     // AppBackend::set_setting_desktop_editor_width
     pub(crate) fn set_setting_desktop_editor_width(&mut self, val: f64) {
         self.current_setting_desktop_editor_width = val;
-        self.settings_changed();
     }
 
     // AppBackend::load_app_theme_mode
@@ -925,7 +906,6 @@ impl AppBackend {
         self.current_setting_color_source = "built_in".to_string();
         self.current_setting_appearance_mode = "system".to_string();
         self.current_setting_dynamic_color_enabled = false;
-        self.settings_changed();
     }
 
     // AppBackend::load_local_settings
@@ -1022,7 +1002,6 @@ impl AppBackend {
                 // Issue #705: current_setting_theme_mode 已删除。
             }
 
-            self.settings_changed();
             self.debug_log(
                 "settings",
                 "load_local_settings_success",

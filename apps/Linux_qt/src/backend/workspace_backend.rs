@@ -358,8 +358,6 @@ impl AppBackend {
         // 无可恢复工作区：回到未选择工作区状态
         self.current_has_data_root = false;
         self.current_sync_status = "no_workspace".to_string();
-        self.sync_status_changed();
-        self.workspace_state_changed();
         // Load app-level theme mode even without data root
         self.load_app_theme_mode();
         self.ai_available_changed();
@@ -431,7 +429,6 @@ impl AppBackend {
         // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
         self.current_workspace_git_layout = Some(layout);
         self.current_save_status = "已保存".to_string();
-        self.save_status_changed();
         self.reload_tree();
         self.load_sync_config();
         self.load_local_settings();
@@ -526,13 +523,9 @@ impl AppBackend {
         // Reset sync status
         self.current_sync_status = "no_workspace".to_string();
         self.current_save_status = "未打开工作区".to_string();
-        self.save_status_changed();
         // Clear editor
-        self.clear_editor();
         // Emit signals
-        self.workspace_state_changed();
         self.trigger_projects_reloaded();
-        self.sync_status_changed();
     }
 
     // AppBackend::close_workspace
@@ -562,7 +555,6 @@ impl AppBackend {
     pub(crate) fn init_workspace_from_github(&mut self) {
         if let Some(path) = FileDialog::new().pick_folder() {
             self.current_pending_github_init_path = path.to_string_lossy().to_string();
-            self.pending_github_init_path_changed();
         }
     }
 

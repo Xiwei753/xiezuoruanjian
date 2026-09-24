@@ -6,10 +6,10 @@
 // 职责：管理全局路由状态、工作区状态、JSON 解析、错误处理
 // 约束：
 //   - 纯状态管理，不包含 UI 渲染
-//   - 不直接调用 Core 层，通过 backendRef 委托
+//   - 不直接调用 Core 层，通过领域 backendRef 委托
 //   - route 状态驱动页面切换（hub / writing / starmap）
 //
-// 状态流：backendRef → appState → 各页面绑定
+// 状态流：领域 backendRef → appState → 各页面绑定
 // =============================================================================
 
 import QtQuick
@@ -17,7 +17,6 @@ import QtQuick
 QtObject {
     id: controller
 
-    property var backendRef: null
     property var workspaceBackendRef: null
     property var stateBackendRef: null
     property var appBackendRef: null
@@ -47,7 +46,7 @@ QtObject {
         interval: 100
         repeat: false
         onTriggered: {
-            var projectApi = stateBackendRef || appBackendRef || backendRef;
+            var projectApi = stateBackendRef || appBackendRef;
             if (!projectApi) return;
             var state = projectApi.refresh_app_state();
             if (state) applyState(state);
@@ -107,15 +106,15 @@ QtObject {
     }
 
     function refreshStateImmediate(fallbackMessage) {
-        var projectApi = stateBackendRef || appBackendRef || backendRef;
+        var projectApi = stateBackendRef || appBackendRef;
         if (!projectApi) return;
         var state = projectApi.refresh_app_state();
         if (state) applyState(state);
     }
 
     function restoreWorkspace() {
-        var workspaceApi = workspaceBackendRef || backendRef;
-        var appApi = appBackendRef || backendRef;
+        var workspaceApi = workspaceBackendRef;
+        var appApi = appBackendRef;
         if (!workspaceApi) return;
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
@@ -167,7 +166,7 @@ QtObject {
     }
 
     function saveNavigationState() {
-        var workspaceApi = workspaceBackendRef || backendRef;
+        var workspaceApi = workspaceBackendRef;
         if (!workspaceApi) return;
         var projectId = writingProjectId || "";
         var volumeId = (editorBackend && editorBackend.selected_volume_id) ? editorBackend.selected_volume_id : "";
@@ -205,7 +204,7 @@ QtObject {
     }
 
     function switchWorkspace() {
-        var workspaceApi = workspaceBackendRef || backendRef;
+        var workspaceApi = workspaceBackendRef;
         if (!workspaceApi) return;
         workspaceApi.switch_workspace();
         route = "hub";
@@ -214,7 +213,7 @@ QtObject {
     }
 
     function createWorkspace(openExisting) {
-        var workspaceApi = workspaceBackendRef || backendRef;
+        var workspaceApi = workspaceBackendRef;
         if (!workspaceApi) return;
         var res = null;
         if (openExisting) {
@@ -235,7 +234,7 @@ QtObject {
     }
 
     function createWorkspaceWithPath(path, openExisting) {
-        var workspaceApi = workspaceBackendRef || backendRef;
+        var workspaceApi = workspaceBackendRef;
         if (!workspaceApi) return;
         var res = null;
         if (openExisting) {

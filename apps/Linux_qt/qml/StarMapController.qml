@@ -7,12 +7,11 @@ import QtQuick
 QtObject {
     id: controller
 
-    property var backendRef: null
     property var starmapBackendRef: null
     property var appController: null
 
     function starmapApi() {
-        return starmapBackendRef || backendRef;
+        return starmapBackendRef;
     }
 
     function listStarmaps() {

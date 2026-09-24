@@ -28,7 +28,6 @@ impl AppBackend {
             };
             self.set_error("sync.block.invalid_directory");
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             return;
         }
 
@@ -46,7 +45,6 @@ impl AppBackend {
             };
             self.set_error("sync.block.remote_url_missing");
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             return;
         }
 
@@ -62,7 +60,6 @@ impl AppBackend {
         self.current_sync_operation_kind = "sync".to_string();
 
         self.current_sync_status = "syncing".to_string();
-        self.sync_status_changed();
         let state = writer_core::api::SyncOperationStateDto {
             operation_id: op_id.clone(),
             operation_kind: "github_init".to_string(),

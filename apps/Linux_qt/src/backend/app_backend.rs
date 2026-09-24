@@ -307,40 +307,6 @@ pub struct AppBackend {
     base: qt_base_class!(trait QObject),
 
     #[allow(dead_code)]
-    workspace_opened: qt_signal!(),
-    #[allow(dead_code)]
-    workspace_content_changed: qt_signal!(),
-    #[allow(dead_code)]
-    workspace_state_changed: qt_signal!(),
-    #[allow(dead_code)]
-    projects_reloaded: qt_signal!(),
-    #[allow(non_snake_case)]
-    #[allow(dead_code)]
-    projectsReloaded: qt_signal!(),
-    #[allow(dead_code)]
-    save_status_changed: qt_signal!(),
-    #[allow(dead_code)]
-    word_count_changed: qt_signal!(),
-    #[allow(dead_code)]
-    error_occurred: qt_signal!(),
-    #[allow(dead_code)]
-    selected_item_changed: qt_signal!(),
-    #[allow(dead_code)]
-    chapter_path_changed: qt_signal!(),
-    #[allow(dead_code)]
-    clear_editor: qt_signal!(),
-
-    #[allow(dead_code)]
-    sync_config_changed: qt_signal!(),
-    #[allow(dead_code)]
-    sync_action_completed: qt_signal!(),
-    #[allow(dead_code)]
-    sync_status_changed: qt_signal!(),
-
-    #[allow(dead_code)]
-    settings_changed: qt_signal!(),
-
-    #[allow(dead_code)]
     system_color_scheme: qt_property!(QString; READ system_color_scheme NOTIFY system_color_scheme_changed),
     #[allow(dead_code)]
     system_color_scheme_changed: qt_signal!(),
@@ -355,8 +321,6 @@ pub struct AppBackend {
     #[allow(dead_code)]
     ai_available_changed: qt_signal!(),
 
-    #[allow(dead_code)]
-    pending_github_init_path_changed: qt_signal!(),
     #[allow(dead_code)]
     query_system_color_scheme: qt_method!(fn(&mut self)),
     #[allow(dead_code)]

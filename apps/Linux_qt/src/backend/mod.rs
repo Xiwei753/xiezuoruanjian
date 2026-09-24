@@ -270,7 +270,6 @@ impl BackendRuntime {
         // QObjectPinned::new borrows the RefCell only for set_object_property.
         let pinned: qmetaobject::QObjectPinned<AppBackend> =
             unsafe { qmetaobject::QObjectPinned::new(&self.app) };
-        engine.set_object_property("backend".into(), pinned);
         engine.set_object_property("appBackend".into(), pinned);
         engine.set_object_property("workspaceBackend".into(), self.workspace_backend.pinned());
         engine.set_object_property("projectBackend".into(), self.project_backend.pinned());

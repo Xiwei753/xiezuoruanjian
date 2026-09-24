@@ -118,24 +118,17 @@ impl AppBackend {
         self.current_sync_in_progress = false;
         self.current_last_sync_time = Self::now_epoch_seconds();
         self.current_sync_operation_state = outcome.action_result.clone();
-        self.sync_status_changed();
-        self.sync_action_completed();
-
         let status_str = outcome.sync_status.as_str();
 
         if status_str == "success" {
             let pending_path = self.current_pending_github_init_path.clone();
             if !pending_path.is_empty() {
                 self.current_pending_github_init_path.clear();
-                self.pending_github_init_path_changed();
                 self.internal_open_data_root(&pending_path);
                 // Issue #729 评论 5764768372：internal_open_data_root 不再自己发
                 // workspace_opened/content/state 信号，此处根据 current_has_data_root
                 // 判断真实成功后补发 AppBackend 信号。
                 if self.current_has_data_root {
-                    self.workspace_opened();
-                    self.workspace_content_changed();
-                    self.workspace_state_changed();
                 }
                 self.load_sync_config();
                 return;
@@ -171,12 +164,8 @@ impl AppBackend {
         self.reload_tree();
         let chapter_deleted = self.reconcile_selection_after_tree_reload();
         self.trigger_projects_reloaded();
-        self.workspace_content_changed();
-        self.workspace_state_changed();
-
         if chapter_deleted {
             self.current_save_status = "chapter.deleted_remotely_refreshed".to_string();
-            self.save_status_changed();
         }
 
         self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");
@@ -203,7 +192,6 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             return op_id.into();
         }
         self.current_sync_operation_id = op_id.clone();
@@ -221,7 +209,6 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             return op_id.into();
         }
 
@@ -238,8 +225,6 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_status_changed();
-            self.sync_action_completed();
             return op_id.into();
         }
 
@@ -256,20 +241,15 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_status_changed();
-            self.sync_action_completed();
             return op_id.into();
         }
 
         if self.current_sync_branch.is_empty() {
             self.current_sync_branch = "main".to_string();
-            self.sync_config_changed();
         }
 
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
-        self.sync_status_changed();
-
         let state = writer_core::api::SyncOperationStateDto {
             operation_id: op_id.clone(),
             operation_kind: "dry_run".to_string(),
@@ -302,8 +282,6 @@ impl AppBackend {
                 };
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
-                self.sync_status_changed();
-                self.sync_action_completed();
                 self.debug_error(
                     "sync",
                     "perform_sync_dry_run_failed",
@@ -499,7 +477,6 @@ impl AppBackend {
                 };
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
-                self.sync_action_completed();
             } else {
                 self.debug_log(
                     "sync",
@@ -533,7 +510,6 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
             return op_id.into();
         }
@@ -551,8 +527,6 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_status_changed();
-            self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
             return op_id.into();
         }
@@ -570,15 +544,12 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_status_changed();
-            self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
             return op_id.into();
         }
 
         if self.current_sync_branch.is_empty() {
             self.current_sync_branch = "main".to_string();
-            self.sync_config_changed();
         }
 
         self.current_sync_operation_id = op_id.clone();
@@ -604,8 +575,6 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
-        self.sync_status_changed();
-
         // 获取 workspace git layout 快照，供后台线程用 with_layout_core_api 构造 API。
         // 不在线程里重新 bootstrap（ensure .git + recover_storage_transactions）。
         // 无 layout 说明 workspace 未正确打开，直接返回状态错误。
@@ -626,8 +595,6 @@ impl AppBackend {
                 };
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
-                self.sync_status_changed();
-                self.sync_action_completed();
                 self.debug_error("sync", "perform_sync_failed", "no_workspace_git_layout");
                 return op_id.into();
             }

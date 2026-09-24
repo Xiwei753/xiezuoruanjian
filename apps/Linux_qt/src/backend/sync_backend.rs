@@ -354,14 +354,12 @@ impl AppBackend {
     // AppBackend::set_sync_status
     pub(crate) fn set_sync_status(&mut self, val: QString) {
         self.current_sync_status = val.to_string();
-        self.sync_status_changed();
     }
 
     // AppBackend::refresh_sync_status_from_config
     pub(crate) fn refresh_sync_status_from_config(&mut self) {
         if !self.current_has_data_root {
             self.current_sync_status = "no_workspace".to_string();
-            self.sync_status_changed();
             return;
         }
         let has_remote = !self.current_sync_remote_url.is_empty();
@@ -370,13 +368,11 @@ impl AppBackend {
         } else {
             self.current_sync_status = "configured_not_tested".to_string();
         }
-        self.sync_status_changed();
     }
 
     // AppBackend::set_sync_enabled
     pub(crate) fn set_sync_enabled(&mut self, val: bool) {
         self.current_sync_enabled = val;
-        self.sync_config_changed();
     }
 
     // AppBackend::sync_backend_type
@@ -387,7 +383,6 @@ impl AppBackend {
     // AppBackend::set_sync_backend_type
     pub(crate) fn set_sync_backend_type(&mut self, val: QString) {
         self.current_sync_backend_type = val.to_string();
-        self.sync_config_changed();
     }
 
     // AppBackend::sync_remote_url
@@ -398,7 +393,6 @@ impl AppBackend {
     // AppBackend::set_sync_remote_url
     pub(crate) fn set_sync_remote_url(&mut self, val: QString) {
         self.current_sync_remote_url = val.to_string();
-        self.sync_config_changed();
     }
 
     // AppBackend::sync_branch
@@ -409,19 +403,16 @@ impl AppBackend {
     // AppBackend::set_sync_branch
     pub(crate) fn set_sync_branch(&mut self, val: QString) {
         self.current_sync_branch = val.to_string();
-        self.sync_config_changed();
     }
 
     // AppBackend::set_sync_auto_sync
     pub(crate) fn set_sync_auto_sync(&mut self, val: bool) {
         self.current_sync_auto_sync = val;
-        self.sync_config_changed();
     }
 
     // AppBackend::set_sync_interval
     pub(crate) fn set_sync_interval(&mut self, val: u32) {
         self.current_sync_interval = val;
-        self.sync_config_changed();
     }
 
     // AppBackend::sync_username
@@ -432,7 +423,6 @@ impl AppBackend {
     // AppBackend::set_sync_username
     pub(crate) fn set_sync_username(&mut self, val: QString) {
         self.current_sync_username = val.to_string();
-        self.sync_config_changed();
     }
 
     // AppBackend::sync_block_reason
@@ -458,7 +448,6 @@ impl AppBackend {
     // AppBackend::set_sync_token
     pub(crate) fn set_sync_token(&mut self, val: QString) {
         self.current_sync_token = val.to_string();
-        self.sync_config_changed();
     }
 
     // AppBackend::sync_action_result
@@ -489,7 +478,6 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             return op_id.into();
         }
         self.current_sync_operation_id = op_id.clone();
@@ -507,14 +495,12 @@ impl AppBackend {
                 raw_error: Some("workspace_empty".to_string()),
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
             return op_id.into();
         }
 
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
-        self.sync_status_changed();
 
         let state = writer_core::api::SyncOperationStateDto {
             operation_id: op_id.clone(),
@@ -548,8 +534,6 @@ impl AppBackend {
                 };
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
-                self.sync_status_changed();
-                self.sync_action_completed();
                 self.debug_error(
                     "sync",
                     "perform_sync_diagnostics_failed",
@@ -744,7 +728,6 @@ impl AppBackend {
                 self.current_sync_token = "".to_string();
             }
             self.refresh_sync_status_from_config();
-            self.sync_config_changed();
             let token_present = !self.current_sync_token.is_empty();
             let masked_url = mask_sync_error(&self.current_sync_remote_url);
             self.debug_log(
@@ -758,8 +741,6 @@ impl AppBackend {
         } else {
             self.current_sync_branch = "main".to_string();
             self.current_sync_status = "no_workspace".to_string();
-            self.sync_status_changed();
-            self.sync_config_changed();
             self.debug_warn("sync", "load_sync_config_failed", "core_not_initialized");
         }
     }
@@ -921,7 +902,6 @@ impl AppBackend {
             );
             self.set_error(&msg);
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
             self.debug_error("sync", "save_sync_config_failed", &msg);
             return false;
         }
@@ -938,7 +918,6 @@ impl AppBackend {
             raw_error: None,
         };
         self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-        self.sync_action_completed();
         let token_present = !self.current_sync_token.is_empty();
         let masked_url = mask_sync_error(&self.current_sync_remote_url);
         self.debug_log(
