@@ -10,7 +10,7 @@ use crate::sujian_editor_item::layout_snapshot::{
 };
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::animation::{
-    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit,
+    PreparedTextVisualTransaction, PreparedVisualUnit,
     RebaseFrame, TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline,
 };
 use crate::sujian_editor_item::animation::rebase::{
@@ -51,15 +51,26 @@ pub(crate) fn emit_transaction_diagnostic(tx: &PreparedTextVisualTransaction, ev
     );
 }
 
-/// Issue #747 评论 5805324575: 统一视觉事务构造的「归一化编辑事件」。
+/// Issue #747 评论 5813540976: Composition commit 特殊 crossfade 规格（preedit→candidate 形变动画）。
+/// 仅在 operation_kind == CompositionCommitOrCancel 且 is_commit 且 !visual_text_unchanged 时有值。
+pub(crate) struct CompositionCommitCrossfadeSpec {
+    pub(crate) preedit_byte_start: usize,
+    pub(crate) preedit_byte_end: usize,
+    pub(crate) candidate_byte_start: usize,
+    pub(crate) candidate_byte_end: usize,
+}
+
+/// Issue #747 评论 5805324575 / 5813540976: 统一视觉事务构造的「归一化编辑事件」。
 ///
 /// 所有编辑来源（普通 Insert/Delete、IME composition update/commit）先把原始编辑
-/// 状态归一化成 `VisualEditSpec`，再交给 [`assemble_prepared_transaction`] 这唯一一处
+/// 状态归一化成 `VisualEditSpec`，再交给 [`build_prepared_transaction`] 这唯一一处
 /// 创建 `PreparedTextVisualTransaction`。`composition.rs` 只负责把 IME 状态归一化成
 /// `VisualEditSpec` 并调用同一个事务构造器，不再维护第二套事务创建算法。
 ///
-/// 注释：cursor geometry 与 `OffsetMap` 在归一化阶段已被消费（用于构建
-/// `units` 与 `cursor_visual_track`），不重复存放到 spec 中。
+/// Issue #747 评论 5813540976: spec 只携带归一化输入（`offset_map`、cursor line info、
+/// `smooth_cursor_enabled`、`composition_commit_crossfade`），不再携带 `units` 与
+/// `cursor_visual_track`——它们是 builder 的输出，由 [`build_prepared_transaction`]
+/// 内部统一构造。
 pub(crate) struct VisualEditSpec {
     pub(crate) key: VisualTransactionKey,
     pub(crate) operation_kind: TextVisualOperationKind,
@@ -67,46 +78,134 @@ pub(crate) struct VisualEditSpec {
     pub(crate) new_snapshot: EditorLayoutSnapshot,
     pub(crate) inserted_ranges: Vec<(usize, usize)>,
     pub(crate) deleted_ranges: Vec<(usize, usize)>,
+    pub(crate) offset_map: OffsetMap,
     pub(crate) old_cursor_rect: Option<CursorRect>,
     pub(crate) new_cursor_rect: Option<CursorRect>,
+    pub(crate) old_cursor_visual_line_id: Option<usize>,
+    pub(crate) new_cursor_visual_line_id: Option<usize>,
+    pub(crate) old_cursor_line_top: f64,
+    pub(crate) old_cursor_line_bottom: f64,
+    pub(crate) new_cursor_line_top: f64,
+    pub(crate) new_cursor_line_bottom: f64,
     pub(crate) cursor_owner_epoch: u64,
     pub(crate) layout_basis_revision: LayoutRevision,
     pub(crate) rebase_frames: Vec<RebaseFrame>,
     pub(crate) caret_handoff: Option<RebaseCaretHandoff>,
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
-    pub(crate) units: Vec<PreparedVisualUnit>,
-    pub(crate) cursor_visual_track: Option<PreparedCursorVisualTrack>,
     pub(crate) unit_duration_ms: u64,
+    pub(crate) smooth_cursor_enabled: bool,
+    pub(crate) composition_commit_crossfade: Option<CompositionCommitCrossfadeSpec>,
 }
 
-/// Issue #747 评论 5805324575: 全仓库唯一创建 `PreparedTextVisualTransaction` 的入口。
+/// Issue #747 评论 5813540976: 全仓库唯一创建 `PreparedTextVisualTransaction` 的完整入口。
 ///
-/// 接收归一化后的 [`VisualEditSpec`]，执行统一的字段封装、`timeline` 初始化与诊断发射。
-/// 其它模块（含 `composition.rs` 与普通 Insert/Delete 路径）都经由本函数创建事务，
-/// 从而保证「只允许这里创建 `PreparedTextVisualTransaction`」。
-pub(crate) fn assemble_prepared_transaction(
+/// 接收归一化后的 [`VisualEditSpec`]，内部统一完成 slice 构造、unit wrap、rebase 匹配、
+/// cursor track 构建、timeline 初始化。其它模块（含 `composition.rs` 与普通 Insert/Delete
+/// 路径）都经由本函数创建事务，从而保证「只允许这里创建 `PreparedTextVisualTransaction`」。
+pub(crate) fn build_prepared_transaction(
     spec: VisualEditSpec,
 ) -> PreparedTextVisualTransaction {
+    let mut slices: Vec<AnimatedSlice> = Vec::new();
+
+    // 1a. InsertReveal / DeleteConceal（受 smooth_cursor_enabled 控制）
+    if spec.smooth_cursor_enabled {
+        for &(i_start, i_end) in &spec.inserted_ranges {
+            slices.extend(build_insert_reveal_slices(
+                spec.key,
+                &spec.new_snapshot,
+                (i_start, i_end),
+            ));
+        }
+        for &(d_start, d_end) in &spec.deleted_ranges {
+            slices.extend(build_delete_conceal_slices(
+                spec.key,
+                &spec.old_snapshot,
+                (d_start, d_end),
+                spec.old_cursor_rect.as_ref(),
+            ));
+        }
+    }
+
+    // 1b. Composition commit 特殊 crossfade（preedit→candidate 形变）
+    if let Some(crossfade) = &spec.composition_commit_crossfade {
+        slices.extend(build_composition_commit_crossfade_slices(
+            spec.key,
+            &spec.old_snapshot,
+            &spec.new_snapshot,
+            &spec.offset_map,
+            crossfade.preedit_byte_start,
+            crossfade.preedit_byte_end,
+            crossfade.candidate_byte_start,
+            crossfade.candidate_byte_end,
+            spec.old_cursor_rect.as_ref(),
+            spec.new_cursor_rect.as_ref(),
+        ));
+    }
+
+    // 1c. Reflow（unchanged material）
+    let mut excluded_old: Vec<(usize, usize)> = spec.deleted_ranges.clone();
+    let mut excluded_new: Vec<(usize, usize)> = spec.inserted_ranges.clone();
+    if let Some(crossfade) = &spec.composition_commit_crossfade {
+        excluded_old.push((crossfade.preedit_byte_start, crossfade.preedit_byte_end));
+        excluded_new.push((crossfade.candidate_byte_start, crossfade.candidate_byte_end));
+    }
+    slices.extend(build_cluster_reflow_slices(
+        spec.key,
+        &spec.old_snapshot,
+        &spec.new_snapshot,
+        &spec.offset_map,
+        &excluded_old,
+        &excluded_new,
+        spec.old_cursor_rect.as_ref(),
+        spec.new_cursor_rect.as_ref(),
+    ));
+
+    // 2. Wrap units
+    let mut units: Vec<PreparedVisualUnit> = slices
+        .into_iter()
+        .map(|s| PreparedVisualUnit::wrap(s, spec.unit_duration_ms))
+        .collect();
+
+    // 3. Rebase frame 匹配
+    match_rebase_frames(&spec.rebase_frames, &mut units, &spec.offset_map);
+
+    // 4. Cursor visual track
+    let cursor_visual_track = build_cursor_visual_track(
+        spec.old_cursor_rect.as_ref(),
+        spec.new_cursor_rect.as_ref(),
+        spec.old_cursor_visual_line_id,
+        spec.new_cursor_visual_line_id,
+        spec.old_cursor_line_top,
+        spec.old_cursor_line_bottom,
+        spec.new_cursor_line_top,
+        spec.new_cursor_line_bottom,
+        spec.caret_handoff.clone(),
+        spec.unit_duration_ms,
+    );
+
+    // 5. 诊断日志
     editor_animation_debug_log(&format!(
         "anim_spec: op={:?} units={} inserted={} deleted={} rebased={} handoff={} epoch={}",
         spec.operation_kind,
-        spec.units.len(),
+        units.len(),
         spec.inserted_ranges.len(),
         spec.deleted_ranges.len(),
         spec.rebase_frames.len(),
         spec.caret_handoff.is_some(),
         spec.cursor_owner_epoch,
     ));
+
+    // 6. 唯一 PreparedTextVisualTransaction struct literal
     PreparedTextVisualTransaction {
         key: spec.key,
         state: TextVisualTransactionState::Pending,
         operation_kind: spec.operation_kind,
         timeline: TransactionTimeline::new(spec.unit_duration_ms),
-        units: spec.units,
+        units,
         old_cursor_rect: spec.old_cursor_rect,
         new_cursor_rect: spec.new_cursor_rect,
-        cursor_visual_track: spec.cursor_visual_track,
+        cursor_visual_track,
         cancel_reason: None,
         texture_prepared: false,
         old_snapshot: Some(spec.old_snapshot),
@@ -540,6 +639,255 @@ pub(crate) fn build_cluster_reflow_slices(
     slices
 }
 
+/// Issue #747 评论 5813540976: Composition commit 的 preedit→candidate 形变 slice 构造。
+/// 从 composition.rs 移入，保证 composition 只归一化 spec 不自建 slice。
+///
+/// 仅在 `is_commit && !visual_text_unchanged` 时由 [`build_prepared_transaction`] 调用。
+/// 扫描 old preedit clusters 与 new candidate clusters，按 offset_map 配对：
+/// - old 未匹配 → DeleteConceal（按 new cursor 收进方向）
+/// - old 匹配但 shaping 不同 → ReflowCrossFadeOld
+/// - new 未匹配 → InsertReveal（从 old cursor 位置吐出）
+/// - new 匹配但 shaping 不同 → ReflowCrossFadeNew
+/// - new 匹配且同 shaping 但几何不同 → ReflowMove
+pub(crate) fn build_composition_commit_crossfade_slices(
+    key: VisualTransactionKey,
+    old_snapshot: &EditorLayoutSnapshot,
+    new_snapshot: &EditorLayoutSnapshot,
+    offset_map: &OffsetMap,
+    preedit_byte_start: usize,
+    preedit_byte_end: usize,
+    candidate_byte_start: usize,
+    candidate_byte_end: usize,
+    old_cursor_rect: Option<&CursorRect>,
+    new_cursor_rect: Option<&CursorRect>,
+) -> Vec<AnimatedSlice> {
+    let mut slices = Vec::new();
+    // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
+    let mut next_crossfade_group_id: u64 = 1;
+    let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+
+    for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
+        for old_cluster in old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end) {
+            let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
+            let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
+            let matched_in_new =
+                if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
+                    new_snapshot.line_snapshots.iter().any(|nl| {
+                        nl.clusters
+                            .iter()
+                            .any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                    })
+                } else {
+                    false
+                };
+            if !matched_in_new {
+                if let Some(old_sr) = old_line.source_rect_for_byte_range(
+                    old_cluster.byte_start,
+                    old_cluster.byte_end,
+                ) {
+                    let from_doc = old_line.source_rect_to_document_rect(&old_sr);
+                    // Issue #686 评论 5666452462：cancel 时 preedit 文字
+                    // 走 delete_conceal，按 old rect 两侧与旧光标距离
+                    // 决定收进方向：靠近右端 → Backspace → conceal_to_left_edge=true，
+                    // 靠近左端 → Delete 键 → conceal_to_left_edge=false。
+                    let left = from_doc.x;
+                    let right = from_doc.x + from_doc.w;
+                    let conceal_to_left_edge =
+                        (shrink_x - right).abs() <= (shrink_x - left).abs();
+                    slices.push(AnimatedSlice::delete_conceal(
+                        key,
+                        old_line.id,
+                        old_sr,
+                        from_doc,
+                        shrink_x,
+                        shrink_y,
+                        old_cluster.byte_start,
+                        old_cluster.byte_end,
+                        Some(old_cluster.shaping_identity.clone()),
+                        conceal_to_left_edge,
+                        // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
+                        Some(old_line.visual_line_id),
+                    ));
+                }
+            } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
+                if let Some((new_line, new_cluster)) = new_snapshot
+                    .line_snapshots
+                    .iter()
+                    .filter_map(|nl| {
+                        nl.clusters
+                            .iter()
+                            .find(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                            .map(|nc| (nl, nc))
+                    })
+                    .next()
+                {
+                    if !old_cluster
+                        .shaping_identity
+                        .is_same_shaping(&new_cluster.shaping_identity)
+                    {
+                        if let Some(old_sr) = old_line.source_rect_for_byte_range(
+                            old_cluster.byte_start,
+                            old_cluster.byte_end,
+                        ) {
+                            let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                            if let Some(new_sr) = new_line.source_rect_for_byte_range(
+                                new_cluster.byte_start,
+                                new_cluster.byte_end,
+                            ) {
+                                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                let group_id = next_crossfade_group_id;
+                                next_crossfade_group_id += 1;
+                                slices.push(AnimatedSlice::reflow_crossfade_old(
+                                    key,
+                                    old_line.id,
+                                    old_sr,
+                                    old_doc,
+                                    new_doc,
+                                    old_cluster.byte_start,
+                                    old_cluster.byte_end,
+                                    Some(old_cluster.shaping_identity.clone()),
+                                    Some(group_id),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for new_line in new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end) {
+        for new_cluster in
+            new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end)
+        {
+            let mapped_old_bs = offset_map.map_new_to_old(new_cluster.byte_start);
+            let mapped_old_be = offset_map.map_new_to_old(new_cluster.byte_end);
+            let found_in_old =
+                if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
+                    old_snapshot.line_snapshots.iter().any(|ol| {
+                        ol.clusters
+                            .iter()
+                            .any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                    })
+                } else {
+                    false
+                };
+            if !found_in_old {
+                if let Some(new_sr) = new_line.source_rect_for_byte_range(
+                    new_cluster.byte_start,
+                    new_cluster.byte_end,
+                ) {
+                    let to_doc = new_line.source_rect_to_document_rect(&new_sr);
+                    let to_doc_for_hide = to_doc.clone();
+                    let mut reveal_slice = AnimatedSlice::insert_reveal(
+                        key,
+                        new_line.id,
+                        new_sr.clone(),
+                        to_doc,
+                        insert_cx,
+                        insert_cy,
+                        new_cluster.byte_start,
+                        new_cluster.byte_end,
+                        Some(new_cluster.shaping_identity.clone()),
+                        // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
+                        Some(new_line.visual_line_id),
+                    );
+                    reveal_slice.static_hidden_document_rects = vec![to_doc_for_hide];
+                    slices.push(reveal_slice);
+                }
+            } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
+                if let Some((old_line, old_cluster)) = old_snapshot
+                    .line_snapshots
+                    .iter()
+                    .filter_map(|ol| {
+                        ol.clusters
+                            .iter()
+                            .find(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                            .map(|oc| (ol, oc))
+                    })
+                    .next()
+                {
+                    let same_shaping = old_cluster
+                        .shaping_identity
+                        .is_same_shaping(&new_cluster.shaping_identity);
+                    if !same_shaping {
+                        if let Some(new_sr) = new_line.source_rect_for_byte_range(
+                            new_cluster.byte_start,
+                            new_cluster.byte_end,
+                        ) {
+                            let old_doc = old_line.source_rect_to_document_rect(
+                                &old_line
+                                    .source_rect_for_byte_range(
+                                        old_cluster.byte_start,
+                                        old_cluster.byte_end,
+                                    )
+                                    .unwrap_or(SourceRect::zero()),
+                            );
+                            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                            let new_doc_for_hide = new_doc.clone();
+                            let group_id = next_crossfade_group_id;
+                            next_crossfade_group_id += 1;
+                            let mut new_slice = AnimatedSlice::reflow_crossfade_new(
+                                key,
+                                new_line.id,
+                                new_sr.clone(),
+                                old_doc,
+                                new_doc,
+                                new_cluster.byte_start,
+                                new_cluster.byte_end,
+                                Some(new_cluster.shaping_identity.clone()),
+                                Some(group_id),
+                            );
+                            new_slice.static_hidden_document_rects = vec![new_doc_for_hide];
+                            slices.push(new_slice);
+                        }
+                    } else {
+                        if let (Some(old_sr), Some(new_sr)) = (
+                            old_line.source_rect_for_byte_range(
+                                old_cluster.byte_start,
+                                old_cluster.byte_end,
+                            ),
+                            new_line.source_rect_for_byte_range(
+                                new_cluster.byte_start,
+                                new_cluster.byte_end,
+                            ),
+                        ) {
+                            let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                            let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
+                                && (old_doc.y - new_doc.y).abs() < 0.5
+                                && (old_doc.w - new_doc.w).abs() < 0.5
+                                && (old_doc.h - new_doc.h).abs() < 0.5;
+                            if !geometry_same {
+                                let new_doc_for_hide = new_doc.clone();
+                                let mut move_slice = AnimatedSlice::reflow_move(
+                                    key,
+                                    old_line.id,
+                                    old_sr,
+                                    old_doc,
+                                    new_line.id,
+                                    new_sr.clone(),
+                                    new_doc,
+                                    new_cluster.byte_start,
+                                    new_cluster.byte_end,
+                                    Some(new_cluster.shaping_identity.clone()),
+                                );
+                                move_slice.static_hidden_document_rects = vec![new_doc_for_hide];
+                                slices.push(move_slice);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    slices
+}
+
 pub(crate) fn merge_adjacent_slices(slices: Vec<AnimatedSlice>) -> Vec<AnimatedSlice> {
     if slices.len() <= 1 {
         return slices;
@@ -694,76 +1042,42 @@ impl LinuxEditorAnimationCoordinator {
                 visual_affected_byte_range_new,
             } => {
                 let key = self.alloc_key();
-                let mut slices = Vec::new();
-
-                // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
-                // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
-                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
-                // InsertReveal（CaretDriven unit），只保留 Reflow。
                 let inserted_range_tuple = (range_start, range_end);
-                if smooth_cursor_enabled {
-                    let reveal_slices =
-                        build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
-                    slices.extend(reveal_slices);
-                }
-
-                let reflow_slices = build_cluster_reflow_slices(
+                // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+                // build_prepared_transaction 内部调 build_insert_reveal_slices / build_cluster_reflow_slices
+                // / match_rebase_frames / build_cursor_visual_track 完成全部 slice/unit/track 构造。
+                // Issue #687: Insert 事务 changed range 由 Core 显式拥有，reflow 排除 inserted_range。
+                // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 InsertReveal 是否生成。
+                // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
+                // (range_start, range_start)，new 侧是 inserted_range。
+                let carried_rebase = rebase_frames.len();
+                let spec = VisualEditSpec {
                     key,
-                    old_snapshot,
-                    new_snapshot,
-                    &insert_offset_map,
-                    &[],
-                    &[inserted_range_tuple],
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
-                );
-                slices.extend(reflow_slices);
-
-                let mut units: Vec<PreparedVisualUnit> = slices
-                    .into_iter()
-                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
-                    .collect();
-                match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
-
-                // Issue #690 评论 5681206040: 构建 caret track。
-                // 有 handoff 时 from = sampled caret, duration = 旧 track 剩余时长；
-                // 无 handoff 时 from = old_cursor_rect, duration = 事务时长。
-                // Issue #690 评论 5682867529: 不再传 now，started_at 留 None，等 Rendering 再启动。
-                let cursor_visual_track = build_cursor_visual_track(
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
+                    operation_kind: TextVisualOperationKind::Insert,
+                    old_snapshot: old_snapshot.clone(),
+                    new_snapshot: new_snapshot.clone(),
+                    inserted_ranges: vec![inserted_range_tuple],
+                    deleted_ranges: vec![],
+                    offset_map: insert_offset_map,
+                    old_cursor_rect,
+                    new_cursor_rect,
                     old_cursor_visual_line_id,
                     new_cursor_visual_line_id,
                     old_cursor_line_top,
                     old_cursor_line_bottom,
                     new_cursor_line_top,
                     new_cursor_line_bottom,
-                    caret_handoff,
-                    vt.duration_ms,
-                );
-                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
-                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
-                // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
-                // (range_start, range_start)，new 侧是 inserted_range。
-                let prepared_tx = PreparedTextVisualTransaction {
-                    key,
-                    state: TextVisualTransactionState::Pending,
-                    operation_kind: TextVisualOperationKind::Insert,
-                    timeline: TransactionTimeline::new(vt.duration_ms),
-                    units,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                    cursor_visual_track,
-                    cancel_reason: None,
-                    texture_prepared: false,
-                    old_snapshot: Some(old_snapshot.clone()),
-                    new_snapshot: Some(new_snapshot.clone()),
                     cursor_owner_epoch,
-                    caret_motion_retired: false,
+                    layout_basis_revision,
+                    rebase_frames,
+                    caret_handoff,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
-                    layout_basis_revision,
+                    unit_duration_ms: vt.duration_ms,
+                    smooth_cursor_enabled,
+                    composition_commit_crossfade: None,
                 };
+                let prepared_tx = build_prepared_transaction(spec);
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
@@ -772,7 +1086,7 @@ impl LinuxEditorAnimationCoordinator {
                     key,
                     inserted_range_tuple,
                     unit_kind_labels(&prepared_tx.units),
-                    rebase_frames.len(),
+                    carried_rebase,
                 ));
 
                 self.prepared_queue.enqueue(prepared_tx);
@@ -789,88 +1103,51 @@ impl LinuxEditorAnimationCoordinator {
             } => {
                 let key = self.alloc_key();
 
-                let mut slices = Vec::new();
-
-                // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
-                // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
-                // 对每个 deleted range 生成显式 DeleteConceal 切片。
-                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
-                // DeleteConceal（CaretDriven unit），只保留 Reflow。
-                if smooth_cursor_enabled {
-                    for &(d_start, d_end) in &deleted_ranges {
-                        let conceal_slices = build_delete_conceal_slices(
-                            key,
-                            old_snapshot,
-                            (d_start, d_end),
-                            old_cursor_rect.as_ref(),
-                        );
-                        slices.extend(conceal_slices);
-                    }
-                }
-
-                let reflow_slices = build_cluster_reflow_slices(
+                // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+                // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
+                // offset_map, &deleted_ranges, &[], ...) 排除 deleted_range，
+                // Issue #687: changed range 由 Core 显式拥有。
+                // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 DeleteConceal 是否生成。
+                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
+                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
+                let carried_rebase = rebase_frames.len();
+                let deleted_ranges_log = deleted_ranges.clone();
+                let spec = VisualEditSpec {
                     key,
-                    old_snapshot,
-                    new_snapshot,
-                    &delete_offset_map,
-                    &deleted_ranges,
-                    &[],
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
-                );
-                slices.extend(reflow_slices);
-
-                let mut units: Vec<PreparedVisualUnit> = slices
-                    .into_iter()
-                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
-                    .collect();
-                match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
-
-                // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
-                let cursor_visual_track = build_cursor_visual_track(
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
+                    operation_kind: TextVisualOperationKind::Delete,
+                    old_snapshot: old_snapshot.clone(),
+                    new_snapshot: new_snapshot.clone(),
+                    inserted_ranges: vec![],
+                    deleted_ranges,
+                    offset_map: delete_offset_map,
+                    old_cursor_rect,
+                    new_cursor_rect,
                     old_cursor_visual_line_id,
                     new_cursor_visual_line_id,
                     old_cursor_line_top,
                     old_cursor_line_bottom,
                     new_cursor_line_top,
                     new_cursor_line_bottom,
-                    caret_handoff,
-                    vt.duration_ms,
-                );
-                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
-                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
-                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
-                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
-                let prepared_tx = PreparedTextVisualTransaction {
-                    key,
-                    state: TextVisualTransactionState::Pending,
-                    operation_kind: TextVisualOperationKind::Delete,
-                    timeline: TransactionTimeline::new(vt.duration_ms),
-                    units,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                    cursor_visual_track,
-                    cancel_reason: None,
-                    texture_prepared: false,
-                    old_snapshot: Some(old_snapshot.clone()),
-                    new_snapshot: Some(new_snapshot.clone()),
                     cursor_owner_epoch,
-                    caret_motion_retired: false,
+                    layout_basis_revision,
+                    rebase_frames,
+                    caret_handoff,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
-                    layout_basis_revision,
+                    unit_duration_ms: vt.duration_ms,
+                    smooth_cursor_enabled,
+                    composition_commit_crossfade: None,
                 };
+                let prepared_tx = build_prepared_transaction(spec);
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
                 editor_animation_debug_log(&format!(
                     "anim_event: key={:?} op=Delete deleted={:?} unit_kinds={:?} carried_rebase={}",
                     key,
-                    deleted_ranges,
+                    deleted_ranges_log,
                     unit_kind_labels(&prepared_tx.units),
-                    rebase_frames.len(),
+                    carried_rebase,
                 ));
 
                 self.prepared_queue.enqueue(prepared_tx);
@@ -960,76 +1237,42 @@ impl LinuxEditorAnimationCoordinator {
                     );
 
                     let key = self.alloc_key();
-                    let mut slices = Vec::new();
-
-                    // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
-                    // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
-                    // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
-                    // InsertReveal（CaretDriven unit），只保留 Reflow。
                     let inserted_range_tuple = (range_start, range_end);
-                    if smooth_cursor_enabled {
-                        let reveal_slices =
-                            build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
-                        slices.extend(reveal_slices);
-                    }
-
-                    let reflow_slices = build_cluster_reflow_slices(
+                    // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+                    // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
+                    // offset_map, &[], &[inserted_range_tuple], ...) 排除 inserted_range，
+                    // Issue #687: changed range 由 Core 显式拥有。
+                    // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 InsertReveal 是否生成。
+                    // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
+                    // (range_start, range_start)，new 侧是 inserted_range。
+                    let carried_rebase = rebase_frames.len();
+                    let spec = VisualEditSpec {
                         key,
-                        old_snapshot,
-                        new_snapshot,
-                        &insert_offset_map,
-                        &[],
-                        &[inserted_range_tuple],
-                        old_cursor_rect.as_ref(),
-                        new_cursor_rect.as_ref(),
-                    );
-                    slices.extend(reflow_slices);
-
-                    let mut units: Vec<PreparedVisualUnit> = slices
-                        .into_iter()
-                        .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
-                        .collect();
-                    match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
-
-                    // Issue #690 评论 5681206040: 构建 caret track。
-                    // 有 handoff 时 from = sampled caret, duration = 旧 track 剩余时长；
-                    // 无 handoff 时 from = old_cursor_rect, duration = 事务时长。
-                    // Issue #690 评论 5682867529: 不再传 now，started_at 留 None，等 Rendering 再启动。
-                    let cursor_visual_track = build_cursor_visual_track(
-                        old_cursor_rect.as_ref(),
-                        new_cursor_rect.as_ref(),
+                        operation_kind: TextVisualOperationKind::Insert,
+                        old_snapshot: old_snapshot.clone(),
+                        new_snapshot: new_snapshot.clone(),
+                        inserted_ranges: vec![inserted_range_tuple],
+                        deleted_ranges: vec![],
+                        offset_map: insert_offset_map,
+                        old_cursor_rect,
+                        new_cursor_rect,
                         old_cursor_visual_line_id,
                         new_cursor_visual_line_id,
                         old_cursor_line_top,
                         old_cursor_line_bottom,
                         new_cursor_line_top,
                         new_cursor_line_bottom,
-                        caret_handoff,
-                        vt.duration_ms,
-                    );
-                    // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
-                    // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
-                    // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
-                    // (range_start, range_start)，new 侧是 inserted_range。
-                    let prepared = PreparedTextVisualTransaction {
-                        key,
-                        state: TextVisualTransactionState::Pending,
-                        operation_kind: TextVisualOperationKind::Insert,
-                        timeline: TransactionTimeline::new(vt.duration_ms),
-                        units,
-                        old_cursor_rect,
-                        new_cursor_rect,
-                        cursor_visual_track,
-                        cancel_reason: None,
-                        texture_prepared: false,
-                        old_snapshot: Some(old_snapshot.clone()),
-                        new_snapshot: Some(new_snapshot.clone()),
                         cursor_owner_epoch,
-                        caret_motion_retired: false,
+                        layout_basis_revision,
+                        rebase_frames,
+                        caret_handoff,
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
-                        layout_basis_revision,
+                        unit_duration_ms: vt.duration_ms,
+                        smooth_cursor_enabled,
+                        composition_commit_crossfade: None,
                     };
+                    let prepared = build_prepared_transaction(spec);
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                     emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -1038,7 +1281,7 @@ impl LinuxEditorAnimationCoordinator {
                         key,
                         inserted_range_tuple,
                         unit_kind_labels(&prepared.units),
-                        rebase_frames.len(),
+                        carried_rebase,
                     ));
 
                     self.prepared_queue.enqueue(prepared);
@@ -1096,79 +1339,41 @@ impl LinuxEditorAnimationCoordinator {
 
                 let key = self.alloc_key();
 
-                let mut slices = Vec::new();
-
-                // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
-                // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
-                // 对每个 deleted range 生成显式 DeleteConceal 切片。
-                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
-                // DeleteConceal（CaretDriven unit），只保留 Reflow。
-                if smooth_cursor_enabled {
-                    for &(d_start, d_end) in &deleted_ranges {
-                        let conceal_slices = build_delete_conceal_slices(
-                            key,
-                            old_snapshot,
-                            (d_start, d_end),
-                            old_cursor_rect.as_ref(),
-                        );
-                        slices.extend(conceal_slices);
-                    }
-                }
-
-                let reflow_slices = build_cluster_reflow_slices(
+                // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+                // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
+                // offset_map, &deleted_ranges, &[], ...) 排除 deleted_range，
+                // Issue #687: changed range 由 Core 显式拥有。
+                // Issue #727 评论 5755858583 问题5: smooth_cursor_enabled 控制 DeleteConceal 是否生成。
+                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
+                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
+                let carried_rebase = rebase_frames.len();
+                let spec = VisualEditSpec {
                     key,
-                    old_snapshot,
-                    new_snapshot,
-                    &delete_offset_map,
-                    &deleted_ranges,
-                    &[],
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
-                );
-                slices.extend(reflow_slices);
-
-                let mut units: Vec<PreparedVisualUnit> = slices
-                    .into_iter()
-                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
-                    .collect();
-                match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
-
-                // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
-                let cursor_visual_track = build_cursor_visual_track(
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
+                    operation_kind: TextVisualOperationKind::Delete,
+                    old_snapshot: old_snapshot.clone(),
+                    new_snapshot: new_snapshot.clone(),
+                    inserted_ranges: vec![],
+                    deleted_ranges: deleted_ranges.clone(),
+                    offset_map: delete_offset_map,
+                    old_cursor_rect,
+                    new_cursor_rect,
                     old_cursor_visual_line_id,
                     new_cursor_visual_line_id,
                     old_cursor_line_top,
                     old_cursor_line_bottom,
                     new_cursor_line_top,
                     new_cursor_line_bottom,
-                    caret_handoff,
-                    vt.duration_ms,
-                );
-                // Issue #710 评论 5731145076 症状六: visual_affected_byte_range 已在
-                // 查冲突之前提前计算（current-old 坐标系逐事务映射需要 old-side range）。
-                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
-                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
-                let prepared = PreparedTextVisualTransaction {
-                    key,
-                    state: TextVisualTransactionState::Pending,
-                    operation_kind: TextVisualOperationKind::Delete,
-                    timeline: TransactionTimeline::new(vt.duration_ms),
-                    units,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                    cursor_visual_track,
-                    cancel_reason: None,
-                    texture_prepared: false,
-                    old_snapshot: Some(old_snapshot.clone()),
-                    new_snapshot: Some(new_snapshot.clone()),
                     cursor_owner_epoch,
-                    caret_motion_retired: false,
+                    layout_basis_revision,
+                    rebase_frames,
+                    caret_handoff,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
-                    layout_basis_revision,
+                    unit_duration_ms: vt.duration_ms,
+                    smooth_cursor_enabled,
+                    composition_commit_crossfade: None,
                 };
+                let prepared = build_prepared_transaction(spec);
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -1177,7 +1382,7 @@ impl LinuxEditorAnimationCoordinator {
                     key,
                     deleted_ranges,
                     unit_kind_labels(&prepared.units),
-                    rebase_frames.len(),
+                    carried_rebase,
                 ));
 
                 self.prepared_queue.enqueue(prepared);

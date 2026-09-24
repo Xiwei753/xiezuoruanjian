@@ -8,22 +8,17 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
-use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
-use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, SourceRect};
+use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use crate::sujian_editor_item::animation::PreparedVisualUnit;
 use crate::sujian_editor_item::animation::{
     TextVisualOperationKind, TextVisualTransactionState,
 };
-use crate::sujian_editor_item::animation::rebase::{
-    match_rebase_frames, PreparedCompositionCommitHandoff,
-};
-use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
+use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
 use crate::sujian_editor_item::animation::transaction_builder::{
-    assemble_prepared_transaction, build_cluster_reflow_slices, build_delete_conceal_slices,
-    build_insert_reveal_slices, emit_transaction_diagnostic, unit_kind_labels, VisualEditSpec,
+    build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels, VisualEditSpec,
+    CompositionCommitCrossfadeSpec,
 };
 use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::editor_animation_debug_log;
@@ -72,8 +67,6 @@ impl LinuxEditorAnimationCoordinator {
 
         let key = self.alloc_key();
 
-        let mut slices = Vec::new();
-
         // Issue #687: IME 组合更新也显式拥有 changed range。
         // 用 diff_plain_text 找到 inserted/deleted range，显式生成 InsertReveal/DeleteConceal，
         // reflow 只处理 unchanged material。
@@ -93,52 +86,6 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for &(i_start, i_end) in &comp_inserted_ranges {
-            let reveal_slices = build_insert_reveal_slices(key, new_snapshot, (i_start, i_end));
-            slices.extend(reveal_slices);
-        }
-        for &(d_start, d_end) in &comp_deleted_ranges {
-            let conceal_slices = build_delete_conceal_slices(
-                key,
-                old_snapshot,
-                (d_start, d_end),
-                old_cursor_rect.as_ref(),
-            );
-            slices.extend(conceal_slices);
-        }
-
-        let reflow_slices = build_cluster_reflow_slices(
-            key,
-            old_snapshot,
-            new_snapshot,
-            &offset_map,
-            &comp_deleted_ranges,
-            &comp_inserted_ranges,
-            old_cursor_rect.as_ref(),
-            new_cursor_rect.as_ref(),
-        );
-        slices.extend(reflow_slices);
-
-        let unit_duration_ms = u64::from(self.typing_animation_duration_ms);
-        let mut units: Vec<PreparedVisualUnit> = slices
-            .into_iter()
-            .map(|s| PreparedVisualUnit::wrap(s, unit_duration_ms))
-            .collect();
-        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
-
-        // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
-        let cursor_visual_track = build_cursor_visual_track(
-            old_cursor_rect.as_ref(),
-            new_cursor_rect.as_ref(),
-            old_cursor_visual_line_id,
-            new_cursor_visual_line_id,
-            old_cursor_line_top,
-            old_cursor_line_bottom,
-            new_cursor_line_top,
-            new_cursor_line_bottom,
-            caret_handoff.clone(),
-            unit_duration_ms,
-        );
         // Issue #710 评论 5734282079: composition update 的 visual affected range。
         // old_preedit_byte_start/end 是 old virtualText 坐标，new_preedit_byte_start/end
         // 是 new virtualText 坐标。分别从对应 snapshot 扩段落得到 affected range。
@@ -151,27 +98,36 @@ impl LinuxEditorAnimationCoordinator {
             );
             (Some((old_s, old_e)), Some((new_s, new_e)))
         };
-        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+
+        // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
         let carried_rebase = rebase_frames.len();
-        let prepared = assemble_prepared_transaction(VisualEditSpec {
+        let spec = VisualEditSpec {
             key,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
             old_snapshot: old_snapshot.clone(),
             new_snapshot: new_snapshot.clone(),
             inserted_ranges: comp_inserted_ranges,
             deleted_ranges: comp_deleted_ranges,
+            offset_map,
             old_cursor_rect,
             new_cursor_rect,
+            old_cursor_visual_line_id,
+            new_cursor_visual_line_id,
+            old_cursor_line_top,
+            old_cursor_line_bottom,
+            new_cursor_line_top,
+            new_cursor_line_bottom,
             cursor_owner_epoch,
             layout_basis_revision,
             rebase_frames,
             caret_handoff,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            units,
-            cursor_visual_track,
-            unit_duration_ms,
-        });
+            unit_duration_ms: u64::from(self.typing_animation_duration_ms),
+            smooth_cursor_enabled: true,
+            composition_commit_crossfade: None,
+        };
+        let prepared = build_prepared_transaction(spec);
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -304,330 +260,69 @@ impl LinuxEditorAnimationCoordinator {
 
         let key = self.alloc_key();
 
-        let mut slices = Vec::new();
-        // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
-        let mut next_crossfade_group_id: u64 = 1;
-
-        if !is_commit {
+        // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+        // composition commit/cancel 的 slice 构造（DeleteConceal/InsertReveal/ReflowCrossFade/
+        // ReflowMove/reflow）全部由 build_prepared_transaction 内部统一完成。
+        //
+        // 三种情况：
+        // - cancel（!is_commit）：deleted_ranges = preedit range，DeleteConceal 由 1a 生成，
+        //   reflow 排除 preedit（old 侧）。
+        // - commit 且 visual_text_unchanged：无 changed range，无 crossfade，reflow 处理全部。
+        // - commit 且 !visual_text_unchanged：crossfade slice builder 统一构造 preedit→candidate
+        //   形变（DeleteConceal/InsertReveal/ReflowCrossFade/ReflowMove），reflow 排除
+        //   preedit（old）和 candidate（new）。inserted/deleted ranges 留空以避免 1a 与
+        //   crossfade builder 重复生成 Reveal/Conceal。
+        let (inserted_ranges, deleted_ranges, composition_commit_crossfade) = if !is_commit {
             // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
             // reflow 只处理 unchanged material。changed range 由显式函数拥有。
-            let cancel_deleted_range = (preedit_byte_start, preedit_byte_end);
-            let conceal_slices = build_delete_conceal_slices(
-                key,
-                old_snapshot,
-                cancel_deleted_range,
-                old_cursor_rect.as_ref(),
-            );
-            slices.extend(conceal_slices);
-
-            let cancel_excluded_old: [(usize, usize); 1] = [cancel_deleted_range];
-            let reflow_slices = build_cluster_reflow_slices(
-                key,
-                old_snapshot,
-                new_snapshot,
-                &offset_map,
-                &cancel_excluded_old,
-                &[],
-                old_cursor_rect.as_ref(),
-                new_cursor_rect.as_ref(),
-            );
-            slices.extend(reflow_slices);
+            (vec![], vec![(preedit_byte_start, preedit_byte_end)], None)
+        } else if visual_text_unchanged {
+            (vec![], vec![], None)
         } else {
-            if visual_text_unchanged {
-            } else {
-                let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-                let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-                let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-                let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+            (
+                vec![],
+                vec![],
+                Some(CompositionCommitCrossfadeSpec {
+                    preedit_byte_start,
+                    preedit_byte_end,
+                    candidate_byte_start,
+                    candidate_byte_end,
+                }),
+            )
+        };
 
-                for old_line in
-                    old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end)
-                {
-                    for old_cluster in
-                        old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end)
-                    {
-                        let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
-                        let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
-                        let matched_in_new =
-                            if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
-                                new_snapshot.line_snapshots.iter().any(|nl| {
-                                    nl.clusters
-                                        .iter()
-                                        .any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
-                                })
-                            } else {
-                                false
-                            };
-                        if !matched_in_new {
-                            if let Some(old_sr) = old_line.source_rect_for_byte_range(
-                                old_cluster.byte_start,
-                                old_cluster.byte_end,
-                            ) {
-                                let from_doc = old_line.source_rect_to_document_rect(&old_sr);
-                                // Issue #686 评论 5666452462：cancel 时 preedit 文字
-                                // 走 delete_conceal，按 old rect 两侧与旧光标距离
-                                // 决定收进方向：靠近右端 → Backspace → conceal_to_left_edge=true，
-                                // 靠近左端 → Delete 键 → conceal_to_left_edge=false。
-                                let left = from_doc.x;
-                                let right = from_doc.x + from_doc.w;
-                                let conceal_to_left_edge =
-                                    (shrink_x - right).abs() <= (shrink_x - left).abs();
-                                slices.push(AnimatedSlice::delete_conceal(
-                                    key,
-                                    old_line.id,
-                                    old_sr,
-                                    from_doc,
-                                    shrink_x,
-                                    shrink_y,
-                                    old_cluster.byte_start,
-                                    old_cluster.byte_end,
-                                    Some(old_cluster.shaping_identity.clone()),
-                                    conceal_to_left_edge,
-                                    // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
-                                    Some(old_line.visual_line_id),
-                                ));
-                            }
-                        } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
-                            if let Some((new_line, new_cluster)) = new_snapshot
-                                .line_snapshots
-                                .iter()
-                                .filter_map(|nl| {
-                                    nl.clusters
-                                        .iter()
-                                        .find(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
-                                        .map(|nc| (nl, nc))
-                                })
-                                .next()
-                            {
-                                if !old_cluster
-                                    .shaping_identity
-                                    .is_same_shaping(&new_cluster.shaping_identity)
-                                {
-                                    if let Some(old_sr) = old_line.source_rect_for_byte_range(
-                                        old_cluster.byte_start,
-                                        old_cluster.byte_end,
-                                    ) {
-                                        let old_doc =
-                                            old_line.source_rect_to_document_rect(&old_sr);
-                                        if let Some(new_sr) = new_line.source_rect_for_byte_range(
-                                            new_cluster.byte_start,
-                                            new_cluster.byte_end,
-                                        ) {
-                                            let new_doc =
-                                                new_line.source_rect_to_document_rect(&new_sr);
-                                            let group_id = next_crossfade_group_id;
-                                            next_crossfade_group_id += 1;
-                                            slices.push(AnimatedSlice::reflow_crossfade_old(
-                                                key,
-                                                old_line.id,
-                                                old_sr,
-                                                old_doc,
-                                                new_doc,
-                                                old_cluster.byte_start,
-                                                old_cluster.byte_end,
-                                                Some(old_cluster.shaping_identity.clone()),
-                                                Some(group_id),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                for new_line in
-                    new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end)
-                {
-                    for new_cluster in
-                        new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end)
-                    {
-                        let mapped_old_bs = offset_map.map_new_to_old(new_cluster.byte_start);
-                        let mapped_old_be = offset_map.map_new_to_old(new_cluster.byte_end);
-                        let found_in_old =
-                            if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
-                                old_snapshot.line_snapshots.iter().any(|ol| {
-                                    ol.clusters
-                                        .iter()
-                                        .any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
-                                })
-                            } else {
-                                false
-                            };
-                        if !found_in_old {
-                            if let Some(new_sr) = new_line.source_rect_for_byte_range(
-                                new_cluster.byte_start,
-                                new_cluster.byte_end,
-                            ) {
-                                let to_doc = new_line.source_rect_to_document_rect(&new_sr);
-                                let to_doc_for_hide = to_doc.clone();
-                                let mut reveal_slice = AnimatedSlice::insert_reveal(
-                                    key,
-                                    new_line.id,
-                                    new_sr.clone(),
-                                    to_doc,
-                                    insert_cx,
-                                    insert_cy,
-                                    new_cluster.byte_start,
-                                    new_cluster.byte_end,
-                                    Some(new_cluster.shaping_identity.clone()),
-                                    // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
-                                    Some(new_line.visual_line_id),
-                                );
-                                reveal_slice.static_hidden_document_rects = vec![to_doc_for_hide];
-                                slices.push(reveal_slice);
-                            }
-                        } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
-                            if let Some((old_line, old_cluster)) = old_snapshot
-                                .line_snapshots
-                                .iter()
-                                .filter_map(|ol| {
-                                    ol.clusters
-                                        .iter()
-                                        .find(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
-                                        .map(|oc| (ol, oc))
-                                })
-                                .next()
-                            {
-                                let same_shaping = old_cluster
-                                    .shaping_identity
-                                    .is_same_shaping(&new_cluster.shaping_identity);
-                                if !same_shaping {
-                                    if let Some(new_sr) = new_line.source_rect_for_byte_range(
-                                        new_cluster.byte_start,
-                                        new_cluster.byte_end,
-                                    ) {
-                                        let old_doc = old_line.source_rect_to_document_rect(
-                                            &old_line
-                                                .source_rect_for_byte_range(
-                                                    old_cluster.byte_start,
-                                                    old_cluster.byte_end,
-                                                )
-                                                .unwrap_or(SourceRect::zero()),
-                                        );
-                                        let new_doc =
-                                            new_line.source_rect_to_document_rect(&new_sr);
-                                        let new_doc_for_hide = new_doc.clone();
-                                        let group_id = next_crossfade_group_id;
-                                        next_crossfade_group_id += 1;
-                                        let mut new_slice = AnimatedSlice::reflow_crossfade_new(
-                                            key,
-                                            new_line.id,
-                                            new_sr.clone(),
-                                            old_doc,
-                                            new_doc,
-                                            new_cluster.byte_start,
-                                            new_cluster.byte_end,
-                                            Some(new_cluster.shaping_identity.clone()),
-                                            Some(group_id),
-                                        );
-                                        new_slice.static_hidden_document_rects =
-                                            vec![new_doc_for_hide];
-                                        slices.push(new_slice);
-                                    }
-                                } else {
-                                    if let (Some(old_sr), Some(new_sr)) = (
-                                        old_line.source_rect_for_byte_range(
-                                            old_cluster.byte_start,
-                                            old_cluster.byte_end,
-                                        ),
-                                        new_line.source_rect_for_byte_range(
-                                            new_cluster.byte_start,
-                                            new_cluster.byte_end,
-                                        ),
-                                    ) {
-                                        let old_doc =
-                                            old_line.source_rect_to_document_rect(&old_sr);
-                                        let new_doc =
-                                            new_line.source_rect_to_document_rect(&new_sr);
-                                        let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
-                                            && (old_doc.y - new_doc.y).abs() < 0.5
-                                            && (old_doc.w - new_doc.w).abs() < 0.5
-                                            && (old_doc.h - new_doc.h).abs() < 0.5;
-                                        if !geometry_same {
-                                            let new_doc_for_hide = new_doc.clone();
-                                            let mut move_slice = AnimatedSlice::reflow_move(
-                                                key,
-                                                old_line.id,
-                                                old_sr,
-                                                old_doc,
-                                                new_line.id,
-                                                new_sr.clone(),
-                                                new_doc,
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                                Some(new_cluster.shaping_identity.clone()),
-                                            );
-                                            move_slice.static_hidden_document_rects =
-                                                vec![new_doc_for_hide];
-                                            slices.push(move_slice);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let reflow_slices = build_cluster_reflow_slices(
-                    key,
-                    old_snapshot,
-                    new_snapshot,
-                    &offset_map,
-                    &[(preedit_byte_start, preedit_byte_end)],
-                    &[(candidate_byte_start, candidate_byte_end)],
-                    old_cursor_rect.as_ref(),
-                    new_cursor_rect.as_ref(),
-                );
-                slices.extend(reflow_slices);
-            }
-        }
-
-        let unit_duration_ms = u64::from(self.typing_animation_duration_ms);
-        let mut units: Vec<PreparedVisualUnit> = slices
-            .into_iter()
-            .map(|s| PreparedVisualUnit::wrap(s, unit_duration_ms))
-            .collect();
-        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
-
-        // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
-        let cursor_visual_track = build_cursor_visual_track(
-            old_cursor_rect.as_ref(),
-            new_cursor_rect.as_ref(),
+        // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
+        // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
+        // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
+        // 扩段落得到。
+        let carried_rebase = rebase_frames.len();
+        let spec = VisualEditSpec {
+            key,
+            operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
+            old_snapshot: old_snapshot.clone(),
+            new_snapshot: new_snapshot.clone(),
+            inserted_ranges,
+            deleted_ranges,
+            offset_map,
+            old_cursor_rect,
+            new_cursor_rect,
             old_cursor_visual_line_id,
             new_cursor_visual_line_id,
             old_cursor_line_top,
             old_cursor_line_bottom,
             new_cursor_line_top,
             new_cursor_line_bottom,
-            caret_handoff.clone(),
-            unit_duration_ms,
-        );
-        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
-        let carried_rebase = rebase_frames.len();
-        let prepared = assemble_prepared_transaction(VisualEditSpec {
-            key,
-            operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
-            old_snapshot: old_snapshot.clone(),
-            new_snapshot: new_snapshot.clone(),
-            inserted_ranges: vec![(candidate_byte_start, candidate_byte_end)],
-            deleted_ranges: vec![(preedit_byte_start, preedit_byte_end)],
-            old_cursor_rect,
-            new_cursor_rect,
             cursor_owner_epoch,
             layout_basis_revision,
             rebase_frames,
             caret_handoff,
-            // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
-            // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
-            // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
-            // 扩段落得到。
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            units,
-            cursor_visual_track,
-            unit_duration_ms,
-        });
+            unit_duration_ms: u64::from(self.typing_animation_duration_ms),
+            smooth_cursor_enabled: true,
+            composition_commit_crossfade,
+        };
+        let prepared = build_prepared_transaction(spec);
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
