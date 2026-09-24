@@ -98,7 +98,8 @@ where
     for (key, value) in patch_obj {
         target.insert(key.clone(), value.clone());
     }
-    let next: T = serde_json::from_value(merged).map_err(|e| format!("wire contract error: {e}"))?;
+    let next: T =
+        serde_json::from_value(merged).map_err(|e| format!("wire contract error: {e}"))?;
     save(next).map(|_| ())
 }
 

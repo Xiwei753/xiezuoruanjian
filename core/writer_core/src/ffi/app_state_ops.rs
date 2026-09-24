@@ -41,13 +41,10 @@ struct VolumeLocationDto {
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_app_state() -> *mut c_char {
     match with_app_service(|svc| {
-        let projects = svc
-            .list_project_summaries()
-            .map_err(|e| format!("{}", e))?;
+        let projects = svc.list_project_summaries().map_err(|e| format!("{}", e))?;
         let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
         // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
-        let recent_edit: Option<RecentEditDto> =
-            recent_edits.into_iter().next();
+        let recent_edit: Option<RecentEditDto> = recent_edits.into_iter().next();
         let summary = AppStateSummaryDto {
             projects,
             recent_edit,

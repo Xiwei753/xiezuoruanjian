@@ -2,7 +2,8 @@ use cpp::cpp;
 use qmetaobject::QString;
 
 use super::engine::{
-    get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot, qchar_offset_to_byte_offset,
+    get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot,
+    qchar_offset_to_byte_offset,
 };
 use super::types::{CaretAffinity, CaretRect, VisualLine};
 
@@ -130,7 +131,8 @@ impl CanonicalDocumentVisualSnapshot {
         let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
         // Issue #712: baseline_y 从 QTextLine 的真实 ascent/descent 计算。
-        let baseline_y_doc = super::engine::text_baseline_y(line, self.font_size, &self.font_family);
+        let baseline_y_doc =
+            super::engine::text_baseline_y(line, self.font_size, &self.font_family);
         let baseline_y = baseline_y_doc - scroll_y;
 
         CaretRect {
@@ -199,7 +201,8 @@ impl CanonicalDocumentVisualSnapshot {
         let cursor_x = self.cursor_x_from_canonical(line, cursor_byte, affinity);
         let (cursor_y_doc, cursor_h) =
             super::engine::cursor_rect_for_line(line, self.font_size, &self.font_family);
-        let baseline_y_doc = super::engine::text_baseline_y(line, self.font_size, &self.font_family);
+        let baseline_y_doc =
+            super::engine::text_baseline_y(line, self.font_size, &self.font_family);
 
         CaretRect {
             x: cursor_x,
@@ -233,7 +236,8 @@ impl CanonicalDocumentVisualSnapshot {
             None => return line.x,
         };
 
-        let cursor_qchar = super::engine::byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);
+        let cursor_qchar =
+            super::engine::byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);
 
         // Issue #722 评论 5747719529 改法 3: 软换行边界必须使用已经选中的那条
         // QTextLine，不要用包含区间 find。软换行边界同时等于上一行 end 和下一行

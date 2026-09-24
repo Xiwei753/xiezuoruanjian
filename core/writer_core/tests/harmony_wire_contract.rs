@@ -27,21 +27,11 @@ use writer_core::ffi;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Node {
-    Object {
-        fields: BTreeMap<String, Node>,
-    },
-    Array {
-        element: Option<Box<Node>>,
-    },
-    Scalar {
-        ty: String,
-    },
-    Optional {
-        inner: Box<Node>,
-    },
-    Mixed {
-        variants: Vec<Node>,
-    },
+    Object { fields: BTreeMap<String, Node> },
+    Array { element: Option<Box<Node>> },
+    Scalar { ty: String },
+    Optional { inner: Box<Node> },
+    Mixed { variants: Vec<Node> },
 }
 
 fn shape_of(value: &Value) -> Node {
@@ -191,7 +181,10 @@ fn cstr(s: &str) -> CString {
 fn note(out: &mut Baseline, endpoint: &str, json: &str) -> Value {
     let parsed: Value = serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("{endpoint} 返回非法 JSON: {e}; raw={json}"));
-    let ok = parsed.get("success").and_then(Value::as_bool).unwrap_or(false);
+    let ok = parsed
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     assert!(
         ok,
         "{endpoint} 期望成功，实际返回: {json}\n\
@@ -273,7 +266,8 @@ fn num_at(env: &Value, pointer: &str) -> u64 {
     for seg in pointer.split('.') {
         cur = &cur[seg];
     }
-    cur.as_u64().unwrap_or_else(|| panic!("{pointer} 不是无符号整数: {cur}"))
+    cur.as_u64()
+        .unwrap_or_else(|| panic!("{pointer} 不是无符号整数: {cur}"))
 }
 
 /// 部分 C ABI 直接返回标量（会话 id、revision、grapheme 边界），没有对象壳。
@@ -295,10 +289,7 @@ fn first_num(env: &Value, pointers: &[&str]) -> u64 {
             return n;
         }
     }
-    panic!(
-        "{pointers:?} 中没有无符号整数字段: {}",
-        env["data"]
-    );
+    panic!("{pointers:?} 中没有无符号整数字段: {}", env["data"]);
 }
 
 fn ids_of(env: &Value) -> Vec<String> {
@@ -358,7 +349,11 @@ fn harmony_wire_contract_matches_fixture() {
 
     // ── settings ──
     use ffi::settings_ops as settings;
-    let _ = note(&mut out, "loadLocalSettings", &call0(settings::writer_core_load_local_settings));
+    let _ = note(
+        &mut out,
+        "loadLocalSettings",
+        &call0(settings::writer_core_load_local_settings),
+    );
     let patch = cstr(
         r#"{"editorFontSize":17.5,"editorLineSpacingMultiplier":1.75,"autoSaveEnabled":false,
             "autoSaveDelayMs":1500,"autoIndentEnabled":true,"autoIndentWidth":2,
@@ -405,7 +400,10 @@ fn harmony_wire_contract_matches_fixture() {
     let _ = note(
         &mut out,
         "saveSyncableSettings",
-        &call1(settings::writer_core_save_syncable_settings, &syncable_patch),
+        &call1(
+            settings::writer_core_save_syncable_settings,
+            &syncable_patch,
+        ),
     );
     let _ = note(
         &mut out,
@@ -442,12 +440,21 @@ fn harmony_wire_contract_matches_fixture() {
     let created_chapter = note(
         &mut out,
         "createChapter",
-        &call3(project::writer_core_create_chapter, &project_c, &volume_c, &chapter_c),
+        &call3(
+            project::writer_core_create_chapter,
+            &project_c,
+            &volume_c,
+            &chapter_c,
+        ),
     );
     let chapter_id = str_at(&created_chapter, "id");
     let chapter_c = cstr(&chapter_id);
 
-    let _ = note(&mut out, "listProjects", &call0(project::writer_core_list_projects));
+    let _ = note(
+        &mut out,
+        "listProjects",
+        &call0(project::writer_core_list_projects),
+    );
     let _ = note(
         &mut out,
         "getProjectTree",
@@ -485,15 +492,27 @@ fn harmony_wire_contract_matches_fixture() {
     let opened = note(
         &mut out,
         "openChapter",
-        &call3(project::writer_core_open_chapter, &project_c, &volume_c, &chapter_c),
+        &call3(
+            project::writer_core_open_chapter,
+            &project_c,
+            &volume_c,
+            &chapter_c,
+        ),
     );
     // 评论 4：open_chapter 必须是 { meta, content }，不再是扁平结构。
-    assert!(opened["data"].get("meta").is_some(), "openChapter 缺少 meta 包裹");
+    assert!(
+        opened["data"].get("meta").is_some(),
+        "openChapter 缺少 meta 包裹"
+    );
     assert_eq!(str_at(&opened, "content"), "你好 world");
     let _ = note(
         &mut out,
         "renameProject",
-        &call2(project::writer_core_rename_project, &project_c, &cstr("改名作品")),
+        &call2(
+            project::writer_core_rename_project,
+            &project_c,
+            &cstr("改名作品"),
+        ),
     );
     let _ = note(
         &mut out,
@@ -518,7 +537,8 @@ fn harmony_wire_contract_matches_fixture() {
             )
         }),
     );
-    let all_volume_ids = cstr(&serde_json::to_string(&ids_of(&volumes_env)).expect("序列化卷 id 列表"));
+    let all_volume_ids =
+        cstr(&serde_json::to_string(&ids_of(&volumes_env)).expect("序列化卷 id 列表"));
     let _ = note(
         &mut out,
         "reorderVolumes",
@@ -559,12 +579,21 @@ fn harmony_wire_contract_matches_fixture() {
     let _ = note(
         &mut out,
         "clearChapter",
-        &call3(project::writer_core_clear_chapter, &project_c, &volume_c, &chapter_c),
+        &call3(
+            project::writer_core_clear_chapter,
+            &project_c,
+            &volume_c,
+            &chapter_c,
+        ),
     );
 
     // ── app state ──
     use ffi::app_state_ops as app_state;
-    let _ = note(&mut out, "getAppState", &call0(app_state::writer_core_get_app_state));
+    let _ = note(
+        &mut out,
+        "getAppState",
+        &call0(app_state::writer_core_get_app_state),
+    );
     let _ = note(
         &mut out,
         "getRecentEdits",
@@ -654,7 +683,11 @@ fn harmony_wire_contract_matches_fixture() {
     let _ = note(
         &mut out,
         "renameStarMap",
-        &call2(starmap::writer_core_rename_starmap, &starmap_c, &cstr("人物图2")),
+        &call2(
+            starmap::writer_core_rename_starmap,
+            &starmap_c,
+            &cstr("人物图2"),
+        ),
     );
     // 两个节点 + 一条边：让边渲染输出带上真实元素形状，同时校验 StarMapGraphDto 入参契约。
     let seeded_layout = cstr(
@@ -663,7 +696,11 @@ fn harmony_wire_contract_matches_fixture() {
     let _ = note(
         &mut out,
         "saveStarMapLayout",
-        &call2(starmap::writer_core_save_starmap_layout, &starmap_c, &seeded_layout),
+        &call2(
+            starmap::writer_core_save_starmap_layout,
+            &starmap_c,
+            &seeded_layout,
+        ),
     );
     let layout_after_save = note(
         &mut out,
@@ -696,25 +733,33 @@ fn harmony_wire_contract_matches_fixture() {
         &call2(
             starmap::writer_core_save_starmap_viewport,
             &starmap_c,
-            &cstr(
-                r#"{"scale":1.25,"offsetX":-30.0,"offsetY":12.0,"width":384.0,"height":640.0}"#
-            ),
+            &cstr(r#"{"scale":1.25,"offsetX":-30.0,"offsetY":12.0,"width":384.0,"height":640.0}"#),
         ),
     );
 
     // ── sync ──
     use ffi::sync_ops as sync;
-    let _ = note(&mut out, "loadSyncConfig", &call0(sync::writer_core_load_sync_config));
+    let _ = note(
+        &mut out,
+        "loadSyncConfig",
+        &call0(sync::writer_core_load_sync_config),
+    );
     let _ = note(
         &mut out,
         "saveSyncConfig",
         &call1(
             sync::writer_core_save_sync_config,
-            &cstr(r#"{"enabled":true,"autoSync":false,"syncIntervalSeconds":600,"activeProvider":"github"}"#),
+            &cstr(
+                r#"{"enabled":true,"autoSync":false,"syncIntervalSeconds":600,"activeProvider":"github"}"#,
+            ),
         ),
     );
     // patch 之后再整份回写，字段必须原样读回。
-    let sync_config = note(&mut out, "loadSyncConfigAfterPatch", &call0(sync::writer_core_load_sync_config));
+    let sync_config = note(
+        &mut out,
+        "loadSyncConfigAfterPatch",
+        &call0(sync::writer_core_load_sync_config),
+    );
     assert_eq!(sync_config["data"]["enabled"], Value::Bool(true));
     assert_eq!(sync_config["data"]["syncIntervalSeconds"], Value::from(600));
     assert_eq!(sync_config["data"]["activeProvider"], Value::from("github"));
@@ -734,17 +779,29 @@ fn harmony_wire_contract_matches_fixture() {
     );
     // 同步需要平台网络能力，纯 Rust 测试环境里可能直接失败：形状能记就记，
     // 未落地部分由 tools/check_harmony_dto_contract.py 按 Core DTO 静态校验。
-    let _ = note_ok(&mut out, "fullSyncDryRun", &call0(sync::writer_core_full_sync_dry_run));
+    let _ = note_ok(
+        &mut out,
+        "fullSyncDryRun",
+        &call0(sync::writer_core_full_sync_dry_run),
+    );
     let _ = note_ok(
         &mut out,
         "fullSyncDiagnostics",
         &call0(sync::writer_core_full_sync_diagnostics),
     );
-    let _ = note(&mut out, "loadDeviceInfo", &call0(sync::writer_core_load_device_info));
+    let _ = note(
+        &mut out,
+        "loadDeviceInfo",
+        &call0(sync::writer_core_load_device_info),
+    );
     let _ = note(
         &mut out,
         "ensureDeviceInfo",
-        &call2(sync::writer_core_ensure_device_info, &cstr("harmony"), &cstr("phone")),
+        &call2(
+            sync::writer_core_ensure_device_info,
+            &cstr("harmony"),
+            &cstr("phone"),
+        ),
     );
 
     // ── editor session ──
@@ -881,9 +938,7 @@ fn harmony_wire_contract_matches_fixture() {
         &mut out,
         "editorSessionNextGraphemeBoundary",
         // SAFETY: sid 是合法会话 id，返回值由 take_string 立即复制并释放。
-        &take_string(unsafe {
-            session::writer_core_editor_session_next_grapheme_boundary(sid, 2)
-        }),
+        &take_string(unsafe { session::writer_core_editor_session_next_grapheme_boundary(sid, 2) }),
     );
     let composed = note(
         &mut out,
@@ -893,12 +948,21 @@ fn harmony_wire_contract_matches_fixture() {
             session::writer_core_editor_session_begin_composition(sid, 0, 0, revision)
         }),
     );
-    let cid = first_num(&composed, &["compositionSession.sessionId", "composition.sessionId"]);
+    let cid = first_num(
+        &composed,
+        &["compositionSession.sessionId", "composition.sessionId"],
+    );
     let cbase = first_num(
         &composed,
-        &["compositionSession.baseRevision", "composition.baseRevision"],
+        &[
+            "compositionSession.baseRevision",
+            "composition.baseRevision",
+        ],
     );
-    let mut cgen = first_num(&composed, &["compositionSession.generation", "composition.generation"]);
+    let mut cgen = first_num(
+        &composed,
+        &["compositionSession.generation", "composition.generation"],
+    );
     revision = num_at(&composed, "newRevision");
     let updated = note(
         &mut out,
@@ -916,7 +980,10 @@ fn harmony_wire_contract_matches_fixture() {
         }),
     );
     // update 会推进 composition generation，后续调用必须用最新的。
-    cgen = first_num(&updated, &["composition.generation", "compositionSession.generation"]);
+    cgen = first_num(
+        &updated,
+        &["composition.generation", "compositionSession.generation"],
+    );
     let _ = note(
         &mut out,
         "editorSessionCompositionMoveGraphemeRight",
@@ -932,7 +999,9 @@ fn harmony_wire_contract_matches_fixture() {
         "editorSessionCompositionMoveGraphemeLeft",
         // SAFETY: sid/cid/cgen 是合法会话/composition 参数，返回值由 take_string 立即复制并释放。
         &take_string(unsafe {
-            session::writer_core_editor_session_composition_move_grapheme_left(sid, cid, cgen, revision)
+            session::writer_core_editor_session_composition_move_grapheme_left(
+                sid, cid, cgen, revision,
+            )
         }),
     );
     let _ = note(
@@ -979,7 +1048,10 @@ fn harmony_wire_contract_matches_fixture() {
     let rendered = serde_json::to_string_pretty(&out).expect("序列化基线") + "\n";
     if std::env::var("WRITE_HARMONY_WIRE_CONTRACT").is_ok() {
         std::fs::write(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/harmony_wire_contract.json"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/harmony_wire_contract.json"
+            ),
             &rendered,
         )
         .expect("写基线失败");

@@ -301,16 +301,16 @@ pub unsafe extern "C" fn writer_core_save_starmap_viewport(
             )
         }
     };
-    let viewport: crate::api::types::StarMapViewportDto =
-        match serde_json::from_str(&viewport_str) {
-            Ok(v) => v,
-            Err(e) => {
-                return err_json(
-                    "INVALID_ARGUMENT",
-                    &format!("Failed to parse viewport_json: {e}"),
-                )
-            }
-        };
+    let viewport: crate::api::types::StarMapViewportDto = match serde_json::from_str(&viewport_str)
+    {
+        Ok(v) => v,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Failed to parse viewport_json: {e}"),
+            )
+        }
+    };
     match with_app_service(|svc| {
         svc.save_starmap_viewport(sid, viewport)
             .map_err(|e| format!("{}", e))?;

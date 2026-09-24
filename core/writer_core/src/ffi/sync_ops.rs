@@ -160,7 +160,8 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_ch
     match with_app_service(|svc| {
         let state: crate::api::SyncStateDto =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        svc.save_app_sync_state(state).map_err(|e| format!("{}", e))?;
+        svc.save_app_sync_state(state)
+            .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
