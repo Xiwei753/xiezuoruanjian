@@ -31,7 +31,8 @@ export struct StatsScreen {
       if (result.success && result.data) {
         this.stats = result.data
       } else {
-        this.errorMessage = result.messageKey || result.errorCode || '加载统计失败'
+        // envelope 只有 errorCode / userMessage（Core 不发明 messageKey）。
+        this.errorMessage = result.userMessage || result.errorCode || '加载统计失败'
       }
     } catch (err) {
       this.errorMessage = `加载统计失败: ${err}`

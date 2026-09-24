@@ -2,7 +2,7 @@ import window from '@ohos.window'
 import display from '@ohos.display'
 import hilog from '@ohos.hilog'
 import { getBridge } from '../../app/AppContext'
-import { WindowCapabilities, LayoutPlan, LayoutContract, FoldPosture, PointerClass, WidthClass, ShellMode, WorkspacePaneMode } from '../../corebridge/dto/PlatformDtos'
+import { WindowViewport, LayoutPlan, LayoutContract, FoldPosture, WidthClass, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan } from './LayoutPolicyHelper'
 
 /**
@@ -231,25 +231,25 @@ export class AdaptiveContext {
     // Issue #752：首次拿到非 0 有效尺寸时记录首帧路标日志。
     const isFirstValidSize: boolean = this.state.widthVp <= 0 || this.state.heightVp <= 0
     const bridge = getBridge()
-    // #610：平台端先把窗口能力判断好（Harmony 断点/折叠/指针/键盘），再调 Core 契约。
-    const capabilities: WindowCapabilities = {
-      availablePaneCount: harmonyAvailablePaneCount(Math.round(widthVp * 100) / 100),
-      hasSeparatingFold: this.cachedFoldPosture === FoldPosture.HalfOpened,
-      pointerClass: PointerClass.Touch,
-      keyboardVisible: this.cachedKeyboardVisible
+    // #610/#753：平台端只上报测量到的原始窗口尺寸（dp），
+    // paneCount / 折叠 / 指针 / 键盘都不再是 Core 的输入，由 Core 自己从尺寸推导。
+    const viewport: WindowViewport = {
+      widthDp: Math.round(widthVp * 100) / 100,
+      heightDp: Math.round(heightVp * 100) / 100,
+      occlusions: []
     }
 
     try {
-      const result = await bridge.resolveLayout(capabilities)
-      if (result.success && result.data) {
-        const contract = result.data as LayoutContract
+      const result = await bridge.resolveLayout(viewport)
+      const contract: LayoutContract | undefined = result.data
+      if (result.success && contract !== undefined) {
         // Harmony 平台值（纸面宽度/内边距/网格列数）在平台层叠加，不在 Core。
         const plan: LayoutPlan = buildHarmonyLayoutPlan(contract, widthVp)
         this.state = {
           widthVp: Math.round(widthVp * 100) / 100,
           heightVp: Math.round(heightVp * 100) / 100,
           layoutPlan: plan,
-          sizeClass: this.harmonySizeClass(contract.workspacePaneMode),
+          sizeClass: this.harmonySizeClass(widthVp),
           isTwoPane: contract.shellMode === ShellMode.TwoPane,
           contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
           pagePadding: plan.pagePaddingVp,
@@ -266,16 +266,16 @@ export class AdaptiveContext {
     }
   }
 
-  /** Harmony 自身的大小分类（平台决策，不在 Core）。 */
-  private harmonySizeClass(paneMode: WorkspacePaneMode): WidthClass {
-    switch (paneMode) {
-      case WorkspacePaneMode.SinglePane:
-        return WidthClass.Compact
-      case WorkspacePaneMode.ListDetail:
-        return WidthClass.Medium
-      default:
-        return WidthClass.Expanded
+  /** Harmony 自身的大小分类（平台决策，不在 Core），与 harmonyAvailablePaneCount 同一断点。 */
+  private harmonySizeClass(widthVp: number): WidthClass {
+    const paneCount = harmonyAvailablePaneCount(widthVp)
+    if (paneCount <= 1) {
+      return WidthClass.Compact
     }
+    if (paneCount === 2) {
+      return WidthClass.Medium
+    }
+    return WidthClass.Expanded
   }
 
   private notifyObservers(): void {
@@ -292,8 +292,8 @@ export class AdaptiveContext {
   private static createDefaultState(): AdaptiveState {
     const defaultPlan: LayoutPlan = {
       shellMode: ShellMode.SinglePane,
-      workspacePaneMode: WorkspacePaneMode.SinglePane,
-      showPrimaryNavigation: true,
+      workspaceLayoutMode: WorkspaceLayoutMode.SinglePane,
+      primaryNavigationPlacement: PrimaryNavigationPlacement.Bottom,
       contentMaxWidthVp: 0,
       pagePaddingVp: 16,
       gridColumns: 2

@@ -3,7 +3,7 @@ import hilog from '@ohos.hilog'
 import { AppNavigationHost } from '../../../app/navigation/AppNavigation'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { ChapterContent, ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
-import { LocalSettings } from '../../../corebridge/dto/SettingsDtos'
+import { LocalSettings, ThemeMode } from '../../../corebridge/dto/SettingsDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver, ShareLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { getBridge } from '../../../app/AppContext'
@@ -717,8 +717,11 @@ export struct WritingScreen {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
         this.settings = result.data
+        // Issue #705：Core 的 themeMode 已废弃，运行时恒为 null；
+        // 主题真相是 appearanceMode（与 SettingsScreen 同一读法）。
+        const appearanceMode = result.data.appearanceMode || result.data.themeMode || 'system'
         this.themeAdapter.updateFromSettings({
-          theme: result.data.themeMode,
+          theme: appearanceMode as ThemeMode,
           fontSize: result.data.editorFontSize,
           fontFamily: 'HarmonyOS Sans',
           lineHeight: result.data.editorLineSpacingMultiplier

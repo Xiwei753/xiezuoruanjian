@@ -2,17 +2,14 @@ import nativeModule from 'libwriter_core.so'
 import { ResultEnvelope } from '../dto/ResultEnvelope'
 import { DecodeResult } from '../codec/CoreWireDecoders'
 
+// Core `ffi/mod.rs` ok_json / err_json 实际发出的 envelope 字段。
+// messageKey / messageArgs / rawError / warnings / changedPaths / changedEntities
+// 都是平台端自己发明的字段，Core 从不下发，读它们等于读空 —— 已删除。
 interface NativeJsonEnvelope {
   success: boolean
   data?: Object
   errorCode?: string
-  messageKey?: string
-  messageArgs?: Record<string, string>
   userMessage?: string
-  rawError?: string
-  warnings?: string[]
-  changedPaths?: string[]
-  changedEntities?: ChangedEntity[]
 }
 
 interface ChapterLocationResult {

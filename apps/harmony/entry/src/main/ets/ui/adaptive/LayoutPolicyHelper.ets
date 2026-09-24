@@ -6,14 +6,14 @@
  *   - buildHarmonyLayoutPlan：在 Core 契约之上叠加纸面宽度/内边距/网格列数
  * 这些是 Harmony 平台决策，不出现在 Core 契约里。
  *
- * Core 布局契约（shellMode/workspacePaneMode/showPrimaryNavigation）的解析
- * 由 AdaptiveContext 通过 bridge.resolveLayout() 调用 Core FFI 完成，不在本文件。
+ * Core 布局契约（shellMode/workspaceLayoutMode/primaryNavigationPlacement/metrics）
+ * 的解析由 AdaptiveContext 通过 bridge.resolveLayout() 调用 Core FFI 完成，不在本文件。
  *
  * #610：Harmony 平台值（断点、纸面宽度、内边距、网格列数）是平台决策，
  * 在 buildHarmonyLayoutPlan 中计算，不出现在 Core 契约里。
  */
 
-import { LayoutContract, LayoutPlan, ShellMode, WorkspacePaneMode } from '../../corebridge/dto/PlatformDtos'
+import { LayoutContract, LayoutPlan, WorkspaceLayoutMode } from '../../corebridge/dto/PlatformDtos'
 
 // ========== Harmony 平台值（不在 Core） ==========
 
@@ -33,30 +33,18 @@ export function harmonyAvailablePaneCount(widthVp: number): number {
  * 在 Core 契约之上叠加 Harmony 平台值，合成页面消费的 LayoutPlan。
  */
 export function buildHarmonyLayoutPlan(contract: LayoutContract, widthVp: number): LayoutPlan {
-  let contentMaxWidthVp: number
-  let pagePaddingVp: number
-  let gridColumns: number
-  switch (contract.workspacePaneMode) {
-    case WorkspacePaneMode.SinglePane:
-      contentMaxWidthVp = 0
-      pagePaddingVp = 16
-      gridColumns = 2
-      break
-    case WorkspacePaneMode.ListDetail:
-      contentMaxWidthVp = 840
-      pagePaddingVp = 24
-      gridColumns = 3
-      break
-    default:
-      contentMaxWidthVp = 840
-      pagePaddingVp = 32
-      gridColumns = 4
-      break
+  let contentMaxWidthVp: number = 0
+  let pagePaddingVp: number = 16
+  let gridColumns: number = 2
+  if (contract.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) {
+    contentMaxWidthVp = 840
+    pagePaddingVp = 32
+    gridColumns = harmonyAvailablePaneCount(widthVp) >= 3 ? 4 : 3
   }
   return {
     shellMode: contract.shellMode,
-    workspacePaneMode: contract.workspacePaneMode,
-    showPrimaryNavigation: contract.showPrimaryNavigation,
+    workspaceLayoutMode: contract.workspaceLayoutMode,
+    primaryNavigationPlacement: contract.primaryNavigationPlacement,
     contentMaxWidthVp: contentMaxWidthVp,
     pagePaddingVp: pagePaddingVp,
     gridColumns: gridColumns

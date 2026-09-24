@@ -1,5 +1,5 @@
 import { EditorTransactionCause } from './dto/EditorDtos'
-import { WindowCapabilities, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
+import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
@@ -81,8 +81,8 @@ export interface IWriterCoreBridge {
     chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 
-  // Layout Contract（#610：输入为平台已判断好的窗口能力）
-  resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>>
+  // Layout Contract（#610/#753：输入为平台测量到的原始窗口尺寸 + 遮挡几何）
+  resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>>
 
   // Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化）
   resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>>

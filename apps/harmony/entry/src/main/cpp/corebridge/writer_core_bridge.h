@@ -26,10 +26,11 @@ void    writer_core_free_string(char* ptr);
 //   Idempotent: repeated calls have no side effect.
 int32_t writer_core_init_diagnostics(const char* log_dir, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
 
-// ── Layout Contract（#610） ──
+// ── Layout Contract（#610 / #753） ──
 // writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutContract>).
-// Input is WindowCapabilities: { availablePaneCount, hasSeparatingFold, pointerClass, keyboardVisible }.
-char*  writer_core_resolve_layout(const char* capabilities_json);
+// Input is WindowViewportDto: { widthDp, heightDp, occlusions }. 平台只上报测量到的
+// 原始窗口尺寸与遮挡几何，pane 数/折叠/指针/键盘由 Core 自己推导。
+char*  writer_core_resolve_layout(const char* viewport_json);
 
 // ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
 // writer_core_resolve_screen_policy: Input/output are JSON strings (ResultEnvelope<ScreenPolicyDto>).

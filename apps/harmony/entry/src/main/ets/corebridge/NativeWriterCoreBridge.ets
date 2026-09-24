@@ -1,8 +1,8 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause } from './dto/EditorDtos'
-import { WindowCapabilities, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
+import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, WritingStats } from './dto/ProjectDtos'
-import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity } from './dto/ResultEnvelope'
+import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from './dto/StarMapDtos'
 import { SyncConfig, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
@@ -351,9 +351,9 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   // ── Layout Contract（#610） ──
 
-  async resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
+  async resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(capabilities))
+      const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(viewport))
       return this.core.decodeEnvelope<LayoutContract>(jsonStr, decodeLayoutContract)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}

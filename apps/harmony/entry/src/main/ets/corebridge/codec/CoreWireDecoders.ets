@@ -66,30 +66,6 @@ function reqObj(obj: Object, key: string): Object | null {
   return null
 }
 
-function optStr(obj: Object, key: string): string | undefined {
-  const rec = obj as Record<string, Object>
-  const v: Object | undefined = rec[key]
-  if (v === undefined || v === null) { return undefined }
-  if (typeof v === 'string') { return v }
-  return undefined
-}
-
-function optNum(obj: Object, key: string): number | undefined {
-  const rec = obj as Record<string, Object>
-  const v: Object | undefined = rec[key]
-  if (v === undefined || v === null) { return undefined }
-  if (typeof v === 'number') { return v }
-  return undefined
-}
-
-function optBool(obj: Object, key: string): boolean | undefined {
-  const rec = obj as Record<string, Object>
-  const v: Object | undefined = rec[key]
-  if (v === undefined || v === null) { return undefined }
-  if (typeof v === 'boolean') { return v }
-  return undefined
-}
-
 function optObj(obj: Object, key: string): Object | undefined {
   const rec = obj as Record<string, Object>
   const v: Object | undefined = rec[key]
@@ -105,12 +81,54 @@ function reqArray(obj: Object, key: string): Array<Object> | null {
   return null
 }
 
-function optArray(obj: Object, key: string): Array<Object> | undefined {
+// ─── Nullable Field Helpers ───
+// Core 侧 `Option<T>` 未标 `skip_serializing_if` 时，该键一定出现，值是 `T` 或 `null`。
+// 这类字段在 ArkTS interface 上写 `T | null`，必须用 null* 取值：
+// 用 opt* 会得到 undefined，赋给 `T | null` 就丢失了 null 语义，UI 读出来是空。
+
+function nullStr(obj: Object, key: string): string | null {
   const rec = obj as Record<string, Object>
   const v: Object | undefined = rec[key]
-  if (v === undefined || v === null) { return undefined }
+  if (v === undefined || v === null) { return null }
+  if (typeof v === 'string') { return v }
+  return null
+}
+
+function nullNum(obj: Object, key: string): number | null {
+  const rec = obj as Record<string, Object>
+  const v: Object | undefined = rec[key]
+  if (v === undefined || v === null) { return null }
+  if (typeof v === 'number') { return v }
+  return null
+}
+
+function nullObj(obj: Object, key: string): Object | null {
+  const rec = obj as Record<string, Object>
+  const v: Object | undefined = rec[key]
+  if (v === undefined || v === null) { return null }
+  if (typeof v === 'object' && !Array.isArray(v)) { return v }
+  return null
+}
+
+function nullArray(obj: Object, key: string): Array<Object> | null {
+  const rec = obj as Record<string, Object>
+  const v: Object | undefined = rec[key]
+  if (v === undefined || v === null) { return null }
   if (Array.isArray(v)) { return v as Array<Object> }
-  return undefined
+  return null
+}
+
+// 非空 `string[]` 字段：Core 恒发该键，任一元素不是字符串都算契约不一致。
+function reqStrArray(obj: Object, key: string): string[] | null {
+  const arr: Array<Object> | null = reqArray(obj, key)
+  if (arr === null) { return null }
+  const out: string[] = []
+  for (let i = 0; i < arr.length; i++) {
+    const v: Object = arr[i]
+    if (typeof v !== 'string') { return null }
+    out.push(v as string)
+  }
+  return out
 }
 
 // ─── Generic Array Decoder ───
@@ -127,6 +145,20 @@ export function decodeArray<T>(data: Object, decodeItem: (item: Object) => Decod
     arr.push(itemR.value)
   }
   return ok<T[]>(arr)
+}
+
+// ─── Nullable Nested DTO Decoder ───
+// Core 侧 `Option<Dto>` 未标 skip_serializing_if 时，键一定出现：值为对象或 null。
+// 值为 null 时直接返回 null，不调用子 decoder —— 这样嵌套 DTO 也不会把 undefined 漏给 UI。
+
+export function decodeOptional<T>(data: Object, key: string, decodeItem: (item: Object) => DecodeResult<T>): DecodeResult<T | null> {
+  const inner: Object | null = nullObj(data, key)
+  if (inner === null) { return ok<T | null>(null) }
+  const decoded: DecodeResult<T> = decodeItem(inner)
+  if (!decoded.ok || decoded.value === undefined) {
+    return err<T | null>(decoded.error ?? 'decode failed')
+  }
+  return ok<T | null>(decoded.value)
 }
 
 // ─── Settings Decoders ───
@@ -183,13 +215,13 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
   if (diagnosticsVerbose === null) { return err<LocalSettings>('LocalSettings.diagnosticsVerbose missing or not boolean') }
 
   const value: LocalSettings = {
-    themeMode: optStr(data, 'themeMode'),
+    themeMode: nullStr(data, 'themeMode'),
     appearanceMode: appearanceMode,
     colorSource: colorSource,
     dynamicColorEnabled: dynamicColorEnabled,
     selectedBuiltinThemeId: selectedBuiltinThemeId,
     selectedPaletteId: selectedPaletteId,
-    locale: optStr(data, 'locale'),
+    locale: nullStr(data, 'locale'),
     autoSaveEnabled: autoSaveEnabled,
     editorFontSize: editorFontSize,
     editorLineSpacingMultiplier: editorLineSpacingMultiplier,
@@ -203,7 +235,7 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
     editorTypingAnimationDurationMs: editorTypingAnimationDurationMs,
     editorSmoothCursorDurationMs: editorSmoothCursorDurationMs,
     aiEnabled: aiEnabled,
-    statsDeviceId: optStr(data, 'statsDeviceId'),
+    statsDeviceId: nullStr(data, 'statsDeviceId'),
     desktopSidebarWidth: desktopSidebarWidth,
     desktopEditorWidth: desktopEditorWidth,
     editorCoordinatedTextCursorAnimationEnabled: editorCoordinatedTextCursorAnimationEnabled,
@@ -250,7 +282,10 @@ function decodeThemeColorScheme(data: Object): DecodeResult<ThemeColorSchemeDto>
     'surface_container_high', 'surface_container_highest',
     'inverse_surface', 'inverse_on_surface',
     'error', 'on_error', 'error_container', 'on_error_container',
-    'outline', 'outline_variant', 'scrim'
+    'outline', 'outline_variant', 'scrim',
+    'primary_fixed', 'primary_fixed_dim', 'on_primary_fixed', 'on_primary_fixed_variant',
+    'secondary_fixed', 'secondary_fixed_dim', 'on_secondary_fixed', 'on_secondary_fixed_variant',
+    'tertiary_fixed', 'tertiary_fixed_dim', 'on_tertiary_fixed', 'on_tertiary_fixed_variant'
   ]
   const value: ThemeColorSchemeDto = {} as ThemeColorSchemeDto
   for (let i = 0; i < required.length; i++) {
@@ -422,7 +457,7 @@ export function decodeChapterMeta(data: Object): DecodeResult<ChapterMeta> {
     order: order,
     wordCount: wordCount,
     hash: hash,
-    note: optStr(data, 'note')
+    note: nullStr(data, 'note')
   }
   return ok<ChapterMeta>(value)
 }
@@ -546,17 +581,14 @@ export function decodeProjectTree(data: Object): DecodeResult<ProjectTree> {
     if (!chR.ok || chR.value === undefined) { return err<ProjectTree>(chR.error) }
     volumes.push({ volume: volR.value, chapters: chR.value })
   }
-  const statsObj: Object | undefined = optObj(data, 'stats')
-  let stats: ProjectStats | undefined = undefined
-  if (statsObj !== undefined) {
-    const statsR: DecodeResult<ProjectStats> = decodeProjectStats(statsObj)
-    if (!statsR.ok || statsR.value === undefined) { return err<ProjectTree>(`stats: ${statsR.error}`) }
-    stats = statsR.value
-  }
+  const statsObj: Object | null = reqObj(data, 'stats')
+  if (statsObj === null) { return err<ProjectTree>('stats missing or not object') }
+  const statsR: DecodeResult<ProjectStats> = decodeProjectStats(statsObj)
+  if (!statsR.ok || statsR.value === undefined) { return err<ProjectTree>(`stats: ${statsR.error}`) }
   const value: ProjectTree = {
     project: projectR.value,
     volumes: volumes,
-    stats: stats
+    stats: statsR.value
   }
   return ok<ProjectTree>(value)
 }
@@ -573,8 +605,8 @@ export function decodeStarMapMeta(data: Object): DecodeResult<StarMapMeta> {
   if (title === null) { return err<StarMapMeta>('title missing or not string') }
   const description: string | null = reqStr(data, 'description')
   if (description === null) { return err<StarMapMeta>('description missing or not string') }
-  const projectId: string | null = optStr(data, 'projectId') ?? null
-  const parentStarmapId: string | null = optStr(data, 'parentStarmapId') ?? null
+  const projectId: string | null = nullStr(data, 'projectId')
+  const parentStarmapId: string | null = nullStr(data, 'parentStarmapId')
   const isMainForProject: boolean | null = reqBool(data, 'isMainForProject')
   if (isMainForProject === null) { return err<StarMapMeta>('isMainForProject missing or not boolean') }
   const accentColor: string | null = reqStr(data, 'accentColor')
@@ -617,17 +649,17 @@ function decodeStarMapNodeContent(data: Object): DecodeResult<import('../dto/Sta
   if (type === null) { return err('type missing') }
   return ok({
     type: type,
-    summary: optStr(data, 'summary'),
-    body: optStr(data, 'body'),
-    projectId: optStr(data, 'projectId'),
-    volumeId: optStr(data, 'volumeId'),
-    chapterId: optStr(data, 'chapterId'),
-    rangeStart: optNum(data, 'rangeStart'),
-    rangeEnd: optNum(data, 'rangeEnd'),
-    entityType: optStr(data, 'entityType'),
-    entityId: optStr(data, 'entityId'),
-    uri: optStr(data, 'uri'),
-    label: optStr(data, 'label')
+    summary: nullStr(data, 'summary'),
+    body: nullStr(data, 'body'),
+    projectId: nullStr(data, 'projectId'),
+    volumeId: nullStr(data, 'volumeId'),
+    chapterId: nullStr(data, 'chapterId'),
+    rangeStart: nullNum(data, 'rangeStart'),
+    rangeEnd: nullNum(data, 'rangeEnd'),
+    entityType: nullStr(data, 'entityType'),
+    entityId: nullStr(data, 'entityId'),
+    uri: nullStr(data, 'uri'),
+    label: nullStr(data, 'label')
   })
 }
 
@@ -639,16 +671,16 @@ function decodeStarMapAnchorTarget(data: Object): DecodeResult<import('../dto/St
   if (type === null) { return err('type missing') }
   return ok({
     type: type,
-    projectId: optStr(data, 'projectId'),
-    volumeId: optStr(data, 'volumeId'),
-    chapterId: optStr(data, 'chapterId'),
-    rangeStart: optNum(data, 'rangeStart'),
-    rangeEnd: optNum(data, 'rangeEnd'),
-    entityId: optStr(data, 'entityId'),
-    entityType: optStr(data, 'entityType'),
-    starmapId: optStr(data, 'starmapId'),
-    uri: optStr(data, 'uri'),
-    payload: optStr(data, 'payload')
+    projectId: nullStr(data, 'projectId'),
+    volumeId: nullStr(data, 'volumeId'),
+    chapterId: nullStr(data, 'chapterId'),
+    rangeStart: nullNum(data, 'rangeStart'),
+    rangeEnd: nullNum(data, 'rangeEnd'),
+    entityId: nullStr(data, 'entityId'),
+    entityType: nullStr(data, 'entityType'),
+    starmapId: nullStr(data, 'starmapId'),
+    uri: nullStr(data, 'uri'),
+    payload: nullStr(data, 'payload')
   })
 }
 
@@ -667,7 +699,7 @@ function decodeStarMapAnchor(data: Object): DecodeResult<import('../dto/StarMapD
   return ok({
     anchorId: anchorId,
     target: targetR.value,
-    label: optStr(data, 'label'),
+    label: nullStr(data, 'label'),
     role: role as import('../dto/StarMapDtos').AnchorRole
   })
 }
@@ -682,9 +714,16 @@ function decodeStarMapPortal(data: Object): DecodeResult<import('../dto/StarMapD
   if (mode === null) { return err('mode missing') }
   const previewPolicy: string | null = reqStr(data, 'previewPolicy')
   if (previewPolicy === null) { return err('previewPolicy missing') }
+  const deepTargetObj: Object | null = nullObj(data, 'deepTarget')
+  let deepTarget: import('../dto/StarMapDtos').StarMapDeepTarget | null = null
+  if (deepTargetObj !== null) {
+    const deepTargetR = decodeStarMapDeepTarget(deepTargetObj)
+    if (!deepTargetR.ok || deepTargetR.value === undefined) { return err(`deepTarget: ${deepTargetR.error}`) }
+    deepTarget = deepTargetR.value
+  }
   return ok({
     targetStarmapId: targetStarmapId,
-    deepTarget: null,
+    deepTarget: deepTarget,
     mode: mode as import('../dto/StarMapDtos').PortalMode,
     previewPolicy: previewPolicy as import('../dto/StarMapDtos').PortalPreviewPolicy
   })
@@ -725,11 +764,11 @@ function decodeStarMapProvenance(data: Object): DecodeResult<import('../dto/Star
   if (reviewStatus === null) { return err('reviewStatus missing') }
   return ok({
     source: source as import('../dto/StarMapDtos').SourceKind,
-    sourceId: optStr(data, 'sourceId'),
-    generatedBy: optStr(data, 'generatedBy'),
-    promptId: optStr(data, 'promptId'),
+    sourceId: nullStr(data, 'sourceId'),
+    generatedBy: nullStr(data, 'generatedBy'),
+    promptId: nullStr(data, 'promptId'),
     reviewStatus: reviewStatus as import('../dto/StarMapDtos').ReviewStatus,
-    createdFromAnchor: optStr(data, 'createdFromAnchor')
+    createdFromAnchor: nullStr(data, 'createdFromAnchor')
   })
 }
 
@@ -769,15 +808,24 @@ function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
   if (provenanceObj === null) { return err<StarMapNode>('provenance missing or not object') }
   const provenanceR = decodeStarMapProvenance(provenanceObj)
   if (!provenanceR.ok || provenanceR.value === undefined) { return err<StarMapNode>(`provenance: ${provenanceR.error}`) }
+  const tags: string[] | null = reqStrArray(data, 'tags')
+  if (tags === null) { return err<StarMapNode>('tags missing or not string[]') }
+  const portalObj: Object | null = nullObj(data, 'portal')
+  let portal: import('../dto/StarMapDtos').StarMapPortal | null = null
+  if (portalObj !== null) {
+    const portalR = decodeStarMapPortal(portalObj)
+    if (!portalR.ok || portalR.value === undefined) { return err<StarMapNode>(`portal: ${portalR.error}`) }
+    portal = portalR.value
+  }
   const value: StarMapNode = {
     id: id,
     title: title,
     kind: kind as NodeType,
-    payload: optStr(data, 'payload'),
-    tags: (optArray(data, 'tags') ?? []) as string[],
+    payload: nullStr(data, 'payload'),
+    tags: tags,
     content: contentR.value,
     anchors: anchors,
-    portal: null,
+    portal: portal,
     displayPolicy: displayPolicyR.value,
     openBehavior: openBehavior as import('../dto/StarMapDtos').OpenBehavior,
     provenance: provenanceR.value,
@@ -799,19 +847,31 @@ function decodeStarMapEdge(data: Object): DecodeResult<StarMapEdge> {
   if (createdAt === null) { return err<StarMapEdge>('createdAt missing or not number') }
   const updatedAt: number | null = reqNum(data, 'updatedAt')
   if (updatedAt === null) { return err<StarMapEdge>('updatedAt missing or not number') }
+  const fromTarget: DecodeResult<import('../dto/StarMapDtos').StarMapDeepTarget | null> = decodeOptional(data, 'fromTarget', decodeStarMapDeepTarget)
+  if (!fromTarget.ok) { return err<StarMapEdge>(`fromTarget: ${fromTarget.error}`) }
+  const toTarget: DecodeResult<import('../dto/StarMapDtos').StarMapDeepTarget | null> = decodeOptional(data, 'toTarget', decodeStarMapDeepTarget)
+  if (!toTarget.ok) { return err<StarMapEdge>(`toTarget: ${toTarget.error}`) }
+  const fromEndpoint = decodeOptional(data, 'fromEndpoint', decodeStarMapEdgeEndpoint)
+  if (!fromEndpoint.ok) { return err<StarMapEdge>(`fromEndpoint: ${fromEndpoint.error}`) }
+  const toEndpoint = decodeOptional(data, 'toEndpoint', decodeStarMapEdgeEndpoint)
+  if (!toEndpoint.ok) { return err<StarMapEdge>(`toEndpoint: ${toEndpoint.error}`) }
+  const fromEndpointPath = decodeOptional(data, 'fromEndpointPath', decodeStarMapEndpointPath)
+  if (!fromEndpointPath.ok) { return err<StarMapEdge>(`fromEndpointPath: ${fromEndpointPath.error}`) }
+  const toEndpointPath = decodeOptional(data, 'toEndpointPath', decodeStarMapEndpointPath)
+  if (!toEndpointPath.ok) { return err<StarMapEdge>(`toEndpointPath: ${toEndpointPath.error}`) }
   const value: StarMapEdge = {
     id: id,
-    from: optStr(data, 'from'),
-    to: optStr(data, 'to'),
+    from: nullStr(data, 'from'),
+    to: nullStr(data, 'to'),
     kind: kind as EdgeKind,
-    label: optStr(data, 'label'),
-    payload: optStr(data, 'payload'),
-    fromTarget: null,
-    toTarget: null,
-    fromEndpoint: null,
-    toEndpoint: null,
-    fromEndpointPath: null,
-    toEndpointPath: null,
+    label: nullStr(data, 'label'),
+    payload: nullStr(data, 'payload'),
+    fromTarget: fromTarget.value ?? null,
+    toTarget: toTarget.value ?? null,
+    fromEndpoint: fromEndpoint.value ?? null,
+    toEndpoint: toEndpoint.value ?? null,
+    fromEndpointPath: fromEndpointPath.value ?? null,
+    toEndpointPath: toEndpointPath.value ?? null,
     createdAt: createdAt,
     updatedAt: updatedAt
   }
@@ -844,10 +904,12 @@ function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
   if (provenanceObj === null) { return err<StarMapEmbed>('provenance missing or not object') }
   const provenanceR = decodeStarMapProvenance(provenanceObj)
   if (!provenanceR.ok || provenanceR.value === undefined) { return err<StarMapEmbed>(`provenance: ${provenanceR.error}`) }
+  const hostEndpoint = decodeOptional(data, 'hostEndpoint', decodeStarMapEndpoint)
+  if (!hostEndpoint.ok) { return err<StarMapEmbed>(`hostEndpoint: ${hostEndpoint.error}`) }
   const value: StarMapEmbed = {
     instanceId: instanceId,
     targetStarmapId: targetStarmapId,
-    label: optStr(data, 'label'),
+    label: nullStr(data, 'label'),
     displayPolicy: displayPolicyR.value,
     openBehavior: openBehavior as import('../dto/StarMapDtos').OpenBehavior,
     placement: {
@@ -864,8 +926,8 @@ function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
       offsetX: reqNum(targetViewportObj, 'offsetX') ?? 0,
       offsetY: reqNum(targetViewportObj, 'offsetY') ?? 0
     },
-    sourceNodeId: optStr(data, 'sourceNodeId'),
-    hostEndpoint: null,
+    sourceNodeId: nullStr(data, 'sourceNodeId'),
+    hostEndpoint: hostEndpoint.value ?? null,
     provenance: provenanceR.value,
     createdAt: createdAt,
     updatedAt: updatedAt
@@ -881,8 +943,55 @@ function decodeStarMapEndpoint(data: Object): DecodeResult<import('../dto/StarMa
   if (type === null) { return err('type missing') }
   return ok({
     type: type,
-    nodeId: optStr(data, 'nodeId'),
-    anchorId: optStr(data, 'anchorId')
+    nodeId: nullStr(data, 'nodeId'),
+    anchorId: nullStr(data, 'anchorId')
+  })
+}
+
+function decodeStarMapEdgeEndpoint(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapEdgeEndpoint> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('StarMapEdgeEndpoint: expected object')
+  }
+  const type: string | null = reqStr(data, 'type')
+  if (type === null) { return err('type missing') }
+  const target = decodeOptional(data, 'target', decodeStarMapDeepTarget)
+  if (!target.ok) { return err(`target: ${target.error}`) }
+  return ok({
+    type: type,
+    nodeId: nullStr(data, 'nodeId'),
+    anchorId: nullStr(data, 'anchorId'),
+    target: target.value ?? null
+  })
+}
+
+function decodeStarMapEndpointPathSegment(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapEndpointPathSegment> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('StarMapEndpointPathSegment: expected object')
+  }
+  const type: string | null = reqStr(data, 'type')
+  if (type === null) { return err('type missing') }
+  return ok({
+    type: type,
+    starmapId: nullStr(data, 'starmapId')
+  })
+}
+
+function decodeStarMapEndpointPath(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapEndpointPath> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('StarMapEndpointPath: expected object')
+  }
+  const segmentsArr: Array<Object> | null = reqArray(data, 'segments')
+  if (segmentsArr === null) { return err('segments missing or not array') }
+  const segmentsR: DecodeResult<import('../dto/StarMapDtos').StarMapEndpointPathSegment[]> =
+    decodeArray<import('../dto/StarMapDtos').StarMapEndpointPathSegment>(segmentsArr as Object, decodeStarMapEndpointPathSegment, 'segments')
+  if (!segmentsR.ok || segmentsR.value === undefined) { return err(`segments: ${segmentsR.error}`) }
+  const endpointObj: Object | null = reqObj(data, 'endpoint')
+  if (endpointObj === null) { return err('endpoint missing or not object') }
+  const endpointR = decodeStarMapEdgeEndpoint(endpointObj)
+  if (!endpointR.ok || endpointR.value === undefined) { return err(`endpoint: ${endpointR.error}`) }
+  return ok({
+    segments: segmentsR.value,
+    endpoint: endpointR.value
   })
 }
 
@@ -894,7 +1003,7 @@ function decodeStarMapPathSegment(data: Object): DecodeResult<import('../dto/Sta
   if (type === null) { return err('type missing') }
   return ok({
     type: type,
-    starmapId: optStr(data, 'starmapId')
+    starmapId: nullStr(data, 'starmapId')
   })
 }
 
@@ -906,16 +1015,16 @@ function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/St
   if (type === null) { return err('type missing') }
   return ok({
     type: type,
-    nodeId: optStr(data, 'nodeId'),
-    anchorId: optStr(data, 'anchorId'),
-    projectId: optStr(data, 'projectId'),
-    volumeId: optStr(data, 'volumeId'),
-    chapterId: optStr(data, 'chapterId'),
-    rangeStart: optNum(data, 'rangeStart'),
-    rangeEnd: optNum(data, 'rangeEnd'),
-    entityType: optStr(data, 'entityType'),
-    entityId: optStr(data, 'entityId'),
-    uri: optStr(data, 'uri')
+    nodeId: nullStr(data, 'nodeId'),
+    anchorId: nullStr(data, 'anchorId'),
+    projectId: nullStr(data, 'projectId'),
+    volumeId: nullStr(data, 'volumeId'),
+    chapterId: nullStr(data, 'chapterId'),
+    rangeStart: nullNum(data, 'rangeStart'),
+    rangeEnd: nullNum(data, 'rangeEnd'),
+    entityType: nullStr(data, 'entityType'),
+    entityId: nullStr(data, 'entityId'),
+    uri: nullStr(data, 'uri')
   })
 }
 
@@ -966,11 +1075,39 @@ function decodeStarMapLink(data: Object): DecodeResult<StarMapLink> {
     linkId: linkId,
     source: sourceR.value,
     target: targetR.value,
-    label: optStr(data, 'label'),
+    label: nullStr(data, 'label'),
     createdAt: createdAt,
     updatedAt: updatedAt
   }
   return ok<StarMapLink>(value)
+}
+
+function decodeStarMapHyperlink(data: Object): DecodeResult<StarMapHyperlink> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<StarMapHyperlink>('StarMapHyperlink: expected object')
+  }
+  const hyperlinkId: string | null = reqStr(data, 'hyperlinkId')
+  if (hyperlinkId === null) { return err<StarMapHyperlink>('hyperlinkId missing') }
+  const sourceObj: Object | null = reqObj(data, 'source')
+  if (sourceObj === null) { return err<StarMapHyperlink>('source missing or not object') }
+  const sourceR = decodeStarMapEndpointPath(sourceObj)
+  if (!sourceR.ok || sourceR.value === undefined) { return err<StarMapHyperlink>(`source: ${sourceR.error}`) }
+  const targetUri: string | null = reqStr(data, 'targetUri')
+  if (targetUri === null) { return err<StarMapHyperlink>('targetUri missing') }
+  const createdAt: number | null = reqNum(data, 'createdAt')
+  if (createdAt === null) { return err<StarMapHyperlink>('createdAt missing') }
+  const updatedAt: number | null = reqNum(data, 'updatedAt')
+  if (updatedAt === null) { return err<StarMapHyperlink>('updatedAt missing') }
+  const value: StarMapHyperlink = {
+    hyperlinkId: hyperlinkId,
+    source: sourceR.value,
+    targetUri: targetUri,
+    label: nullStr(data, 'label'),
+    targetStarmapId: nullStr(data, 'targetStarmapId'),
+    createdAt: createdAt,
+    updatedAt: updatedAt
+  }
+  return ok<StarMapHyperlink>(value)
 }
 
 function decodeStarMapLayoutNode(data: Object): DecodeResult<StarMapLayoutNode> {
@@ -991,7 +1128,7 @@ function decodeStarMapLayoutNode(data: Object): DecodeResult<StarMapLayoutNode> 
     scale: reqNum(data, 'scale') ?? 1,
     depth: reqNum(data, 'depth') ?? 0,
     focusWeight: reqNum(data, 'focusWeight') ?? 0,
-    orbitGroup: optStr(data, 'orbitGroup')
+    orbitGroup: nullStr(data, 'orbitGroup')
   }
   return ok<StarMapLayoutNode>(value)
 }
@@ -1043,6 +1180,8 @@ export function decodeStarMapGraph(data: Object): DecodeResult<StarMapGraph> {
   if (!linksR.ok || linksR.value === undefined) { return err<StarMapGraph>(linksR.error) }
   const hyperlinksArr: Array<Object> | null = reqArray(data, 'hyperlinks')
   if (hyperlinksArr === null) { return err<StarMapGraph>('hyperlinks missing or not array') }
+  const hyperlinksR: DecodeResult<StarMapHyperlink[]> = decodeArray<StarMapHyperlink>(hyperlinksArr as Object, decodeStarMapHyperlink, 'hyperlinks')
+  if (!hyperlinksR.ok || hyperlinksR.value === undefined) { return err<StarMapGraph>(hyperlinksR.error) }
   const createdAt: number | null = reqNum(data, 'createdAt')
   if (createdAt === null) { return err<StarMapGraph>('createdAt missing') }
   const updatedAt: number | null = reqNum(data, 'updatedAt')
@@ -1056,7 +1195,7 @@ export function decodeStarMapGraph(data: Object): DecodeResult<StarMapGraph> {
     edges: edgesR.value,
     embeds: embedsR.value,
     links: linksR.value,
-    hyperlinks: [],
+    hyperlinks: hyperlinksR.value,
     createdAt: createdAt,
     updatedAt: updatedAt
   }
@@ -1089,7 +1228,7 @@ export function decodeStarMapEdgeRender(data: Object): DecodeResult<StarMapEdgeR
     arrowRightY: reqNum(data, 'arrowRightY') ?? 0,
     labelX: reqNum(data, 'labelX') ?? 0,
     labelY: reqNum(data, 'labelY') ?? 0,
-    label: optStr(data, 'label'),
+    label: nullStr(data, 'label'),
     hasBidirectional: reqBool(data, 'hasBidirectional') ?? false
   }
   return ok<StarMapEdgeRender>(value)
@@ -1172,18 +1311,13 @@ export function decodeSyncConfig(data: Object): DecodeResult<SyncConfig> {
   const hasNetworkStatePermission: boolean | null = reqBool(data, 'hasNetworkStatePermission')
   if (hasNetworkStatePermission === null) { return err<SyncConfig>('SyncConfig.hasNetworkStatePermission missing or not boolean') }
 
-  let providerConfig: ProviderConfig | undefined = undefined
-  const pcObj: Object | undefined = optObj(data, 'providerConfig')
-  if (pcObj !== undefined) {
-    const pcR: DecodeResult<ProviderConfig> = decodeProviderConfig(pcObj)
-    if (!pcR.ok || pcR.value === undefined) { return err<SyncConfig>(`providerConfig: ${pcR.error}`) }
-    providerConfig = pcR.value
-  }
+  const providerConfig = decodeOptional(data, 'providerConfig', decodeProviderConfig)
+  if (!providerConfig.ok) { return err<SyncConfig>(`providerConfig: ${providerConfig.error}`) }
 
   const value: SyncConfig = {
     enabled: enabled,
     activeProvider: activeProvider,
-    providerConfig: providerConfig,
+    providerConfig: providerConfig.value ?? null,
     autoSync: autoSync,
     syncIntervalSeconds: syncIntervalSeconds,
     hasNetworkPermission: hasNetworkPermission,
@@ -1198,17 +1332,17 @@ export function decodeSyncState(data: Object): DecodeResult<SyncState> {
   }
   const status: string | null = reqStr(data, 'status')
   if (status === null) { return err<SyncState>('status missing') }
-  const conflictsArr: Array<Object> | undefined = optArray(data, 'conflicts')
-  let conflicts: SyncConflict[] | undefined = undefined
-  if (conflictsArr !== undefined) {
+  const conflictsArr: Array<Object> | null = nullArray(data, 'conflicts')
+  let conflicts: SyncConflict[] | null = null
+  if (conflictsArr !== null) {
     const cR: DecodeResult<SyncConflict[]> = decodeArray<SyncConflict>(conflictsArr as Object, decodeSyncConflict, 'conflicts')
     if (!cR.ok || cR.value === undefined) { return err<SyncState>(cR.error) }
     conflicts = cR.value
   }
   const value: SyncState = {
     status: status,
-    lastSyncTime: optNum(data, 'lastSyncTime'),
-    lastError: optStr(data, 'lastError'),
+    lastSyncTime: nullNum(data, 'lastSyncTime'),
+    lastError: nullStr(data, 'lastError'),
     conflicts: conflicts
   }
   return ok<SyncState>(value)
@@ -1224,19 +1358,31 @@ function decodeSyncResult(data: Object): DecodeResult<SyncResult> {
   if (conflictsArr === null) { return err<SyncResult>('conflicts missing or not array') }
   const conflictsR: DecodeResult<SyncConflict[]> = decodeArray<SyncConflict>(conflictsArr as Object, decodeSyncConflict, 'conflicts')
   if (!conflictsR.ok || conflictsR.value === undefined) { return err<SyncResult>(conflictsR.error) }
+  const uploadedFiles: string[] | null = reqStrArray(data, 'uploadedFiles')
+  if (uploadedFiles === null) { return err<SyncResult>('uploadedFiles missing or not string[]') }
+  const downloadedFiles: string[] | null = reqStrArray(data, 'downloadedFiles')
+  if (downloadedFiles === null) { return err<SyncResult>('downloadedFiles missing or not string[]') }
+  const localDeletes: string[] | null = reqStrArray(data, 'localDeletes')
+  if (localDeletes === null) { return err<SyncResult>('localDeletes missing or not string[]') }
+  const remoteDeletes: string[] | null = reqStrArray(data, 'remoteDeletes')
+  if (remoteDeletes === null) { return err<SyncResult>('remoteDeletes missing or not string[]') }
+  const overwrittenFiles: string[] | null = reqStrArray(data, 'overwrittenFiles')
+  if (overwrittenFiles === null) { return err<SyncResult>('overwrittenFiles missing or not string[]') }
+  const ignoredFiles: string[] | null = reqStrArray(data, 'ignoredFiles')
+  if (ignoredFiles === null) { return err<SyncResult>('ignoredFiles missing or not string[]') }
   const value: SyncResult = {
     status: status,
-    uploadedFiles: (optArray(data, 'uploadedFiles') ?? []) as string[],
-    downloadedFiles: (optArray(data, 'downloadedFiles') ?? []) as string[],
-    localDeletes: (optArray(data, 'localDeletes') ?? []) as string[],
-    remoteDeletes: (optArray(data, 'remoteDeletes') ?? []) as string[],
-    overwrittenFiles: (optArray(data, 'overwrittenFiles') ?? []) as string[],
-    ignoredFiles: (optArray(data, 'ignoredFiles') ?? []) as string[],
+    uploadedFiles: uploadedFiles,
+    downloadedFiles: downloadedFiles,
+    localDeletes: localDeletes,
+    remoteDeletes: remoteDeletes,
+    overwrittenFiles: overwrittenFiles,
+    ignoredFiles: ignoredFiles,
     conflicts: conflictsR.value,
-    error: optStr(data, 'error'),
-    errorCategory: optStr(data, 'errorCategory'),
-    messageKey: optStr(data, 'messageKey'),
-    searchIndexRebuildError: optStr(data, 'searchIndexRebuildError')
+    error: nullStr(data, 'error'),
+    errorCategory: nullStr(data, 'errorCategory'),
+    messageKey: nullStr(data, 'messageKey'),
+    searchIndexRebuildError: nullStr(data, 'searchIndexRebuildError')
   }
   return ok<SyncResult>(value)
 }
@@ -1245,13 +1391,25 @@ function decodeSyncPlan(data: Object): DecodeResult<SyncPlan> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<SyncPlan>('SyncPlan: expected object')
   }
+  const filesToUpload: string[] | null = reqStrArray(data, 'filesToUpload')
+  if (filesToUpload === null) { return err<SyncPlan>('filesToUpload missing or not string[]') }
+  const filesToDownload: string[] | null = reqStrArray(data, 'filesToDownload')
+  if (filesToDownload === null) { return err<SyncPlan>('filesToDownload missing or not string[]') }
+  const filesToDeleteLocal: string[] | null = reqStrArray(data, 'filesToDeleteLocal')
+  if (filesToDeleteLocal === null) { return err<SyncPlan>('filesToDeleteLocal missing or not string[]') }
+  const filesToDeleteRemote: string[] | null = reqStrArray(data, 'filesToDeleteRemote')
+  if (filesToDeleteRemote === null) { return err<SyncPlan>('filesToDeleteRemote missing or not string[]') }
+  const ignoredFiles: string[] | null = reqStrArray(data, 'ignoredFiles')
+  if (ignoredFiles === null) { return err<SyncPlan>('ignoredFiles missing or not string[]') }
+  const conflicts: string[] | null = reqStrArray(data, 'conflicts')
+  if (conflicts === null) { return err<SyncPlan>('conflicts missing or not string[]') }
   const value: SyncPlan = {
-    filesToUpload: (optArray(data, 'filesToUpload') ?? []) as string[],
-    filesToDownload: (optArray(data, 'filesToDownload') ?? []) as string[],
-    filesToDeleteLocal: (optArray(data, 'filesToDeleteLocal') ?? []) as string[],
-    filesToDeleteRemote: (optArray(data, 'filesToDeleteRemote') ?? []) as string[],
-    ignoredFiles: (optArray(data, 'ignoredFiles') ?? []) as string[],
-    conflicts: (optArray(data, 'conflicts') ?? []) as string[]
+    filesToUpload: filesToUpload,
+    filesToDownload: filesToDownload,
+    filesToDeleteLocal: filesToDeleteLocal,
+    filesToDeleteRemote: filesToDeleteRemote,
+    ignoredFiles: ignoredFiles,
+    conflicts: conflicts
   }
   return ok<SyncPlan>(value)
 }
@@ -1270,7 +1428,7 @@ function decodeFullSyncTargetResult(data: Object): DecodeResult<FullSyncTargetRe
   if (!resultR.ok || resultR.value === undefined) { return err<FullSyncTargetResult>(`result: ${resultR.error}`) }
   const value: FullSyncTargetResult = {
     targetKind: targetKind,
-    projectId: optStr(data, 'projectId'),
+    projectId: nullStr(data, 'projectId'),
     remotePrefix: remotePrefix,
     result: resultR.value
   }
@@ -1291,7 +1449,7 @@ function decodeFullSyncTargetPlan(data: Object): DecodeResult<FullSyncTargetPlan
   if (!planR.ok || planR.value === undefined) { return err<FullSyncTargetPlan>(`plan: ${planR.error}`) }
   const value: FullSyncTargetPlan = {
     targetKind: targetKind,
-    projectId: optStr(data, 'projectId'),
+    projectId: nullStr(data, 'projectId'),
     remotePrefix: remotePrefix,
     plan: planR.value
   }
@@ -1318,9 +1476,9 @@ export function decodeFullSyncResult(data: Object): DecodeResult<FullSyncResult>
     totalOverwritten: reqNum(data, 'totalOverwritten') ?? 0,
     totalIgnored: reqNum(data, 'totalIgnored') ?? 0,
     totalConflicts: reqNum(data, 'totalConflicts') ?? 0,
-    error: optStr(data, 'error'),
-    errorCategory: optStr(data, 'errorCategory'),
-    messageKey: optStr(data, 'messageKey')
+    error: nullStr(data, 'error'),
+    errorCategory: nullStr(data, 'errorCategory'),
+    messageKey: nullStr(data, 'messageKey')
   }
   return ok<FullSyncResult>(value)
 }
@@ -1383,8 +1541,8 @@ function decodeSyncDiagnosticsResult(data: Object): DecodeResult<SyncDiagnostics
     networkStatus: networkStatus,
     authStatus: authStatus,
     errorCategory: errorCategory,
-    rawError: optStr(data, 'rawError'),
-    providerDetails: optStr(data, 'providerDetails')
+    rawError: nullStr(data, 'rawError'),
+    providerDetails: nullStr(data, 'providerDetails')
   }
   return ok<SyncDiagnosticsResult>(value)
 }
@@ -1425,14 +1583,248 @@ export function decodeAppSummary(data: Object): DecodeResult<AppSummary> {
   if (projectsArr === null) { return err<AppSummary>('projects missing or not array') }
   const projectsR: DecodeResult<ProjectSummary[]> = decodeArray<ProjectSummary>(projectsArr as Object, decodeProjectSummary, 'projects')
   if (!projectsR.ok || projectsR.value === undefined) { return err<AppSummary>(projectsR.error) }
-  const recentEditObj: Object | undefined = optObj(data, 'recentEdit')
-  let recentEdit: RecentEdit | null = null
-  if (recentEditObj !== undefined) {
-    const reR: DecodeResult<RecentEdit> = decodeRecentEdit(recentEditObj)
-    if (!reR.ok || reR.value === undefined) { return err<AppSummary>(`recentEdit: ${reR.error}`) }
-    recentEdit = reR.value
+  const recentEditObj: Object | null = nullObj(data, 'recentEdit')
+  if (recentEditObj === null) {
+    return ok<AppSummary>({ projects: projectsR.value, recentEdit: null })
   }
-  return ok<AppSummary>({ projects: projectsR.value, recentEdit: recentEdit })
+  const reR: DecodeResult<RecentEdit> = decodeRecentEdit(recentEditObj)
+  if (!reR.ok || reR.value === undefined) { return err<AppSummary>(`recentEdit: ${reR.error}`) }
+  return ok<AppSummary>({ projects: projectsR.value, recentEdit: reR.value })
+}
+
+// ─── Editor Session Decoders ───
+// Core api/types/editor.rs 的编辑 DTO（EditorEditResultDto / EditorSessionSnapshotDto）。
+// skip_serializing_if 的可选子结构（offsetMap / compositionSession / composition）
+// 用 opt* 取值：Core 省略该键时 ArkTS 侧保持 undefined，与 interface 的 `?` 一致。
+
+function decodeEditorContentDelta(data: Object): DecodeResult<import('../dto/EditorDtos').EditorContentDelta> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('EditorContentDelta: expected object')
+  }
+  const insertedChars: number | null = reqNum(data, 'insertedChars')
+  if (insertedChars === null) { return err('EditorContentDelta.insertedChars missing') }
+  const deletedChars: number | null = reqNum(data, 'deletedChars')
+  if (deletedChars === null) { return err('EditorContentDelta.deletedChars missing') }
+  const insertedNonWhitespaceChars: number | null = reqNum(data, 'insertedNonWhitespaceChars')
+  if (insertedNonWhitespaceChars === null) { return err('EditorContentDelta.insertedNonWhitespaceChars missing') }
+  const deletedNonWhitespaceChars: number | null = reqNum(data, 'deletedNonWhitespaceChars')
+  if (deletedNonWhitespaceChars === null) { return err('EditorContentDelta.deletedNonWhitespaceChars missing') }
+  return ok({
+    insertedChars: insertedChars,
+    deletedChars: deletedChars,
+    insertedNonWhitespaceChars: insertedNonWhitespaceChars,
+    deletedNonWhitespaceChars: deletedNonWhitespaceChars
+  })
+}
+
+function decodeDisplayPatch(data: Object): DecodeResult<import('../dto/EditorDtos').DisplayPatch> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('DisplayPatch: expected object')
+  }
+  const baseRevision: number | null = reqNum(data, 'baseRevision')
+  if (baseRevision === null) { return err('DisplayPatch.baseRevision missing') }
+  const newRevision: number | null = reqNum(data, 'newRevision')
+  if (newRevision === null) { return err('DisplayPatch.newRevision missing') }
+  const replaceByteStart: number | null = reqNum(data, 'replaceByteStart')
+  if (replaceByteStart === null) { return err('DisplayPatch.replaceByteStart missing') }
+  const replaceByteEndExclusive: number | null = reqNum(data, 'replaceByteEndExclusive')
+  if (replaceByteEndExclusive === null) { return err('DisplayPatch.replaceByteEndExclusive missing') }
+  const insertedText: string | null = reqStr(data, 'insertedText')
+  if (insertedText === null) { return err('DisplayPatch.insertedText missing') }
+  const resultingSelectionStart: number | null = reqNum(data, 'resultingSelectionStart')
+  if (resultingSelectionStart === null) { return err('DisplayPatch.resultingSelectionStart missing') }
+  const resultingSelectionEnd: number | null = reqNum(data, 'resultingSelectionEnd')
+  if (resultingSelectionEnd === null) { return err('DisplayPatch.resultingSelectionEnd missing') }
+  return ok({
+    baseRevision: baseRevision,
+    newRevision: newRevision,
+    replaceByteStart: replaceByteStart,
+    replaceByteEndExclusive: replaceByteEndExclusive,
+    insertedText: insertedText,
+    resultingSelectionStart: resultingSelectionStart,
+    resultingSelectionEnd: resultingSelectionEnd
+  })
+}
+
+function decodeCompositionSession(data: Object): DecodeResult<import('../dto/EditorDtos').CompositionSession> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('CompositionSession: expected object')
+  }
+  const sessionId: number | null = reqNum(data, 'sessionId')
+  if (sessionId === null) { return err('CompositionSession.sessionId missing') }
+  const baseRevision: number | null = reqNum(data, 'baseRevision')
+  if (baseRevision === null) { return err('CompositionSession.baseRevision missing') }
+  const generation: number | null = reqNum(data, 'generation')
+  if (generation === null) { return err('CompositionSession.generation missing') }
+  return ok({ sessionId: sessionId, baseRevision: baseRevision, generation: generation })
+}
+
+function decodeEditorCompositionState(data: Object): DecodeResult<import('../dto/EditorDtos').EditorCompositionState> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('EditorCompositionState: expected object')
+  }
+  const sessionId: number | null = reqNum(data, 'sessionId')
+  if (sessionId === null) { return err('EditorCompositionState.sessionId missing') }
+  const baseRevision: number | null = reqNum(data, 'baseRevision')
+  if (baseRevision === null) { return err('EditorCompositionState.baseRevision missing') }
+  const generation: number | null = reqNum(data, 'generation')
+  if (generation === null) { return err('EditorCompositionState.generation missing') }
+  const replaceByteStart: number | null = reqNum(data, 'replaceByteStart')
+  if (replaceByteStart === null) { return err('EditorCompositionState.replaceByteStart missing') }
+  const replaceByteEndExclusive: number | null = reqNum(data, 'replaceByteEndExclusive')
+  if (replaceByteEndExclusive === null) { return err('EditorCompositionState.replaceByteEndExclusive missing') }
+  const preeditText: string | null = reqStr(data, 'preeditText')
+  if (preeditText === null) { return err('EditorCompositionState.preeditText missing') }
+  const preeditCursorUtf16: number | null = reqNum(data, 'preeditCursorUtf16')
+  if (preeditCursorUtf16 === null) { return err('EditorCompositionState.preeditCursorUtf16 missing') }
+  return ok({
+    sessionId: sessionId,
+    baseRevision: baseRevision,
+    generation: generation,
+    replaceByteStart: replaceByteStart,
+    replaceByteEndExclusive: replaceByteEndExclusive,
+    preeditText: preeditText,
+    preeditCursorUtf16: preeditCursorUtf16
+  })
+}
+
+function decodeOffsetMapEntry(data: Object): DecodeResult<import('../dto/EditorDtos').OffsetMapEntry> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('OffsetMapEntry: expected object')
+  }
+  const oldByteOffset: number | null = reqNum(data, 'oldByteOffset')
+  if (oldByteOffset === null) { return err('OffsetMapEntry.oldByteOffset missing') }
+  const newByteOffset: number | null = reqNum(data, 'newByteOffset')
+  if (newByteOffset === null) { return err('OffsetMapEntry.newByteOffset missing') }
+  const length: number | null = reqNum(data, 'length')
+  if (length === null) { return err('OffsetMapEntry.length missing') }
+  const kind: string | null = reqStr(data, 'kind')
+  if (kind === null) { return err('OffsetMapEntry.kind missing') }
+  return ok({
+    oldByteOffset: oldByteOffset,
+    newByteOffset: newByteOffset,
+    length: length,
+    kind: kind as import('../dto/EditorDtos').OffsetMapKind
+  })
+}
+
+function decodeOffsetMap(data: Object): DecodeResult<import('../dto/EditorDtos').OffsetMap> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('OffsetMap: expected object')
+  }
+  const entriesArr: Array<Object> | null = reqArray(data, 'entries')
+  if (entriesArr === null) { return err('OffsetMap.entries missing or not array') }
+  const entriesR = decodeArray<import('../dto/EditorDtos').OffsetMapEntry>(entriesArr as Object, decodeOffsetMapEntry, 'entries')
+  if (!entriesR.ok || entriesR.value === undefined) { return err(`entries: ${entriesR.error}`) }
+  return ok({ entries: entriesR.value })
+}
+
+export function decodeEditorSessionSnapshot(data: Object): DecodeResult<import('../dto/EditorDtos').EditorSessionSnapshot> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('EditorSessionSnapshot: expected object')
+  }
+  const text: string | null = reqStr(data, 'text')
+  if (text === null) { return err('text missing') }
+  const revision: number | null = reqNum(data, 'revision')
+  if (revision === null) { return err('revision missing') }
+  const cursor: number | null = reqNum(data, 'cursor')
+  if (cursor === null) { return err('cursor missing') }
+  const selectionAnchor: number | null = reqNum(data, 'selectionAnchor')
+  if (selectionAnchor === null) { return err('selectionAnchor missing') }
+  const generation: number | null = reqNum(data, 'generation')
+  if (generation === null) { return err('generation missing') }
+  const chapterId: string | null = reqStr(data, 'chapterId')
+  if (chapterId === null) { return err('chapterId missing') }
+  let composition: import('../dto/EditorDtos').EditorCompositionState | undefined = undefined
+  const compositionObj: Object | undefined = optObj(data, 'composition')
+  if (compositionObj !== undefined) {
+    const compositionR = decodeEditorCompositionState(compositionObj)
+    if (!compositionR.ok || compositionR.value === undefined) { return err(`composition: ${compositionR.error}`) }
+    composition = compositionR.value
+  }
+  return ok({
+    text: text,
+    revision: revision,
+    cursor: cursor,
+    selectionAnchor: selectionAnchor,
+    generation: generation,
+    chapterId: chapterId,
+    composition: composition
+  })
+}
+
+export function decodeEditorEditResult(data: Object): DecodeResult<import('../dto/EditorDtos').EditorEditResult> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err('EditorEditResult: expected object')
+  }
+  const outcome: string | null = reqStr(data, 'outcome')
+  if (outcome === null) { return err('outcome missing') }
+  const transactionId: number | null = reqNum(data, 'transactionId')
+  if (transactionId === null) { return err('transactionId missing') }
+  const baseRevision: number | null = reqNum(data, 'baseRevision')
+  if (baseRevision === null) { return err('baseRevision missing') }
+  const newRevision: number | null = reqNum(data, 'newRevision')
+  if (newRevision === null) { return err('newRevision missing') }
+  const patchesArr: Array<Object> | null = reqArray(data, 'displayPatches')
+  if (patchesArr === null) { return err('displayPatches missing or not array') }
+  const patchesR = decodeArray<import('../dto/EditorDtos').DisplayPatch>(patchesArr as Object, decodeDisplayPatch, 'displayPatches')
+  if (!patchesR.ok || patchesR.value === undefined) { return err(patchesR.error) }
+  const oldSelectionAnchor: number | null = reqNum(data, 'oldSelectionAnchor')
+  if (oldSelectionAnchor === null) { return err('oldSelectionAnchor missing') }
+  const oldSelectionHead: number | null = reqNum(data, 'oldSelectionHead')
+  if (oldSelectionHead === null) { return err('oldSelectionHead missing') }
+  const newSelectionAnchor: number | null = reqNum(data, 'newSelectionAnchor')
+  if (newSelectionAnchor === null) { return err('newSelectionAnchor missing') }
+  const newSelectionHead: number | null = reqNum(data, 'newSelectionHead')
+  if (newSelectionHead === null) { return err('newSelectionHead missing') }
+  const cause: string | null = reqStr(data, 'cause')
+  if (cause === null) { return err('cause missing') }
+  const operationKind: string | null = reqStr(data, 'operationKind')
+  if (operationKind === null) { return err('operationKind missing') }
+  const contentDeltaObj: Object | null = reqObj(data, 'contentDelta')
+  if (contentDeltaObj === null) { return err('contentDelta missing or not object') }
+  const contentDeltaR = decodeEditorContentDelta(contentDeltaObj)
+  if (!contentDeltaR.ok || contentDeltaR.value === undefined) { return err(`contentDelta: ${contentDeltaR.error}`) }
+
+  let offsetMap: import('../dto/EditorDtos').OffsetMap | undefined = undefined
+  const offsetMapObj: Object | undefined = optObj(data, 'offsetMap')
+  if (offsetMapObj !== undefined) {
+    const offsetMapR = decodeOffsetMap(offsetMapObj)
+    if (!offsetMapR.ok || offsetMapR.value === undefined) { return err(`offsetMap: ${offsetMapR.error}`) }
+    offsetMap = offsetMapR.value
+  }
+  let compositionSession: import('../dto/EditorDtos').CompositionSession | undefined = undefined
+  const compositionSessionObj: Object | undefined = optObj(data, 'compositionSession')
+  if (compositionSessionObj !== undefined) {
+    const compositionSessionR = decodeCompositionSession(compositionSessionObj)
+    if (!compositionSessionR.ok || compositionSessionR.value === undefined) { return err(`compositionSession: ${compositionSessionR.error}`) }
+    compositionSession = compositionSessionR.value
+  }
+  let composition: import('../dto/EditorDtos').EditorCompositionState | undefined = undefined
+  const compositionObj: Object | undefined = optObj(data, 'composition')
+  if (compositionObj !== undefined) {
+    const compositionR = decodeEditorCompositionState(compositionObj)
+    if (!compositionR.ok || compositionR.value === undefined) { return err(`composition: ${compositionR.error}`) }
+    composition = compositionR.value
+  }
+
+  return ok({
+    outcome: outcome as import('../dto/EditorDtos').EditorEditOutcome,
+    transactionId: transactionId,
+    baseRevision: baseRevision,
+    newRevision: newRevision,
+    displayPatches: patchesR.value,
+    oldSelectionAnchor: oldSelectionAnchor,
+    oldSelectionHead: oldSelectionHead,
+    newSelectionAnchor: newSelectionAnchor,
+    newSelectionHead: newSelectionHead,
+    cause: cause as import('../dto/EditorDtos').EditorTransactionCause,
+    operationKind: operationKind as import('../dto/EditorDtos').EditorOperationKind,
+    offsetMap: offsetMap,
+    compositionSession: compositionSession,
+    contentDelta: contentDeltaR.value,
+    composition: composition
+  })
 }
 
 // ─── Layout / Screen Policy Decoders ───

@@ -165,7 +165,8 @@ export struct SettingsScreen {
           this.saveMessage = ''
         }, 2000)
       } else {
-        this.saveMessage = MessageKeyMapper.resolveMessage(getContext(this), result.messageKey, result.messageArgs, result.errorCode)
+        // envelope 只有 errorCode / userMessage（Core 不发明 messageKey / messageArgs）。
+        this.saveMessage = MessageKeyMapper.resolveMessage(getContext(this), undefined, undefined, result.errorCode)
       }
     } catch (err) {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
@@ -205,14 +206,13 @@ export struct SettingsScreen {
           setTimeout(() => { this.syncMessage = '' }, 3000)
         }
       } else {
-        // 优先用 FullSyncResult.errorCategory，其次用 ResultEnvelope.messageKey
+        // envelope 只有 errorCode / userMessage：先按 errorCategory 分类映射，
+        // 其余落到按 errorCode 的本地化兜底文案。
         const errorCategory = result.data?.errorCategory
         if (errorCategory && errorCategory.length > 0) {
           this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), `error.${errorCategory}`, undefined, undefined)
-        } else if (result.messageKey && result.messageKey.length > 0) {
-          this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), result.messageKey, result.messageArgs, result.errorCode)
         } else {
-          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
+          this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), undefined, undefined, result.errorCode)
         }
       }
     } catch (err) {

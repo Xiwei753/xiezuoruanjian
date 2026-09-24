@@ -71,6 +71,17 @@ export interface LayoutContract {
   metrics: LayoutMetrics
 }
 
+// 布局计划 — Harmony 平台值，在 Core LayoutContractDto 之上叠加纸面宽度/内边距/网格列数。
+// 这不是 Core 契约（Core 只发 LayoutContract），平台值由 LayoutPolicyHelper 计算。
+export interface LayoutPlan {
+  shellMode: ShellMode
+  workspaceLayoutMode: WorkspaceLayoutMode
+  primaryNavigationPlacement: PrimaryNavigationPlacement
+  contentMaxWidthVp: number
+  pagePaddingVp: number
+  gridColumns: number
+}
+
 // ========== 页面策略类型（Core presentation screen_contract，#610） ==========
 
 export enum ScreenRole {

@@ -1,8 +1,8 @@
 import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridge'
 import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
-import { WindowCapabilities, LayoutContract, ScreenPolicy, ActionSlot, ScreenRole, ActionRole, ActionRegion, ActionTarget, PointerClass, ShellMode, WorkspacePaneMode } from '../../../main/ets/corebridge/dto/PlatformDtos'
+import { WindowViewport, LayoutContract, LayoutMetrics, ScreenPolicy, ActionSlot, ScreenRole, ActionRole, ActionRegion, ActionTarget, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../../main/ets/corebridge/dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
-import { AppSummary, ResultEnvelope, RecentEdit, ChangedEntity, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
+import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapViewport, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
@@ -775,8 +775,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // Layout Contract methods — mock 内联实现（与 Core resolve_layout 等价，仅用于测试源码）
-  resolveLayout(capabilities: WindowCapabilities): Promise<ResultEnvelope<LayoutContract>> {
-    const contract = this.mockResolveLayoutFromCapabilities(capabilities)
+  resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>> {
+    const contract = this.mockResolveLayoutFromViewport(viewport)
     return Promise.resolve({
       success: true,
       data: contract } as ResultEnvelope<LayoutContract>)
@@ -784,36 +784,46 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   // 与 Core resolve_layout() 等价的纯函数，仅 mock 测试源码使用。
   // 生产代码走 NativeWriterCoreBridge.resolveLayout() → Core FFI，不经过此处。
-  private mockResolveLayoutFromCapabilities(capabilities: WindowCapabilities): LayoutContract {
-    let shellMode: ShellMode
-    let workspacePaneMode: WorkspacePaneMode
+  // 断点表见 core/writer_core/src/presentation/layout/breakpoints.rs；
+  // 决策表见同目录 resolver.rs 模块注释。
+  private mockResolveLayoutFromViewport(viewport: WindowViewport): LayoutContract {
+    const width = viewport.widthDp
+    const height = viewport.heightDp
 
-    const paneCount = capabilities.availablePaneCount
-    if (paneCount <= 1) {
-      shellMode = ShellMode.SinglePane
-      workspacePaneMode = WorkspacePaneMode.SinglePane
-    } else if (paneCount === 2) {
+    let shellMode: ShellMode = ShellMode.SinglePane
+    let workspaceLayoutMode: WorkspaceLayoutMode = WorkspaceLayoutMode.SinglePane
+    let placement: PrimaryNavigationPlacement = PrimaryNavigationPlacement.Bottom
+
+    if (width >= 840) {
+      shellMode = width >= 1200 ? ShellMode.ThreePane : ShellMode.TwoPane
+      workspaceLayoutMode = WorkspaceLayoutMode.Workbench
+      placement = PrimaryNavigationPlacement.Side
+    } else if (width >= 600 && height >= 480) {
       shellMode = ShellMode.TwoPane
-      workspacePaneMode = WorkspacePaneMode.ListDetail
-    } else {
-      shellMode = ShellMode.ThreePane
-      workspacePaneMode = WorkspacePaneMode.ThreePane
+      workspaceLayoutMode = WorkspaceLayoutMode.Workbench
     }
-
-    if (capabilities.hasSeparatingFold) {
-      shellMode = ShellMode.SupportingPane
-    }
-
-    const touchInput =
-      capabilities.pointerClass === PointerClass.Touch ||
-      capabilities.pointerClass === PointerClass.Stylus
-    const showPrimaryNavigation = !(capabilities.keyboardVisible && touchInput &&
-      (shellMode === ShellMode.SinglePane || shellMode === ShellMode.SupportingPane))
 
     return {
       shellMode: shellMode,
-      workspacePaneMode: workspacePaneMode,
-      showPrimaryNavigation: showPrimaryNavigation
+      workspaceLayoutMode: workspaceLayoutMode,
+      primaryNavigationPlacement: placement,
+      metrics: this.mockLayoutMetrics()
+    }
+  }
+
+  // Core LayoutMetrics::default()（core/writer_core/src/presentation/layout/metrics.rs）。
+  private mockLayoutMetrics(): LayoutMetrics {
+    return {
+      listPaneWidthDp: 320,
+      projectCardMinWidthDp: 180,
+      toolPaneWidthDp: 240,
+      toolRailWidthDp: 56,
+      editorMinWidthDp: 240,
+      toolbarHeightDp: 64,
+      toolbarLeadingWidthDp: 200,
+      toolbarTrailingWidthDp: 200,
+      listPaneMinWidthDp: 200,
+      toolPaneMinWidthDp: 200
     }
   }
 
