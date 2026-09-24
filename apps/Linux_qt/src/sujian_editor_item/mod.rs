@@ -21,6 +21,7 @@
 // =============================================================================
 
 pub(crate) mod animated_slice;
+pub(crate) mod animation;
 pub(crate) mod animation_mode;
 pub(crate) mod cursor_animation;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
@@ -49,7 +50,6 @@ mod runtime_tests;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
 pub(crate) mod text_utils;
-pub(crate) mod animation;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
 pub(crate) mod transaction_key;
@@ -283,6 +283,13 @@ pub struct SujianEditorItem {
     typing_animation_enabled: qt_property!(bool; READ typing_animation_enabled WRITE set_typing_animation_enabled NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
+    /// Issue #756: 协同动画显式模式开关。
+    /// true 时文字与光标绑死，共用 typing_animation_duration_ms 作为 timeline 时长，
+    /// 要求有效 caret motion 否则文字动画也不启动；
+    /// false 时 typing_animation_enabled 只决定文字动画，smooth_cursor_enabled 只决定光标动画，
+    /// 两者独立，同时为 true 不等于协同。
+    #[allow(dead_code)]
+    coordinated_animation_enabled: qt_property!(bool; READ coordinated_animation_enabled WRITE set_coordinated_animation_enabled NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     #[allow(dead_code)]
@@ -428,6 +435,8 @@ pub struct SujianEditorItem {
     current_cursor_animation_duration_ms: u32,
     current_typing_animation_enabled: bool,
     current_typing_animation_duration_ms: u32,
+    /// Issue #756: 协同动画显式模式开关内部状态。默认 true（与 Core 一致）。
+    current_coordinated_animation_enabled: bool,
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
@@ -485,6 +494,7 @@ impl Default for SujianEditorItem {
             cursor_animation_duration_ms: Default::default(),
             typing_animation_enabled: Default::default(),
             typing_animation_duration_ms: Default::default(),
+            coordinated_animation_enabled: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
             scroll_y: Default::default(),
@@ -566,6 +576,8 @@ impl Default for SujianEditorItem {
             current_cursor_animation_duration_ms: 120,
             current_typing_animation_enabled: true,
             current_typing_animation_duration_ms: 160,
+            // Issue #756: 协同动画默认 true（与 Core default_editor_coordinated_text_cursor_animation_enabled 一致）。
+            current_coordinated_animation_enabled: true,
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,

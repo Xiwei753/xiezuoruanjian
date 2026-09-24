@@ -223,7 +223,12 @@ impl EditorInputHost for SujianEditorItem {
             self.pipeline.composition_mut().pending_preedit_cursor_rect =
                 self.pipeline.composition().preedit_cursor_rect.clone();
 
-            if self.typing_animation_enabled {
+            // Issue #756 评论 5821042551: composition 动画进入条件 = coordinated || typing || smooth
+            //（任意一种动画需要这笔 composition 事务时即进入）。
+            if self.current_coordinated_animation_enabled
+                || self.current_typing_animation_enabled
+                || self.current_smooth_cursor_enabled
+            {
                 let (composition_byte_start, composition_byte_end) =
                     self.preedit_byte_range_in_virtual_text();
                 // Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range
@@ -314,6 +319,11 @@ impl EditorInputHost for SujianEditorItem {
                 let (new_line_top, new_line_bottom) =
                     find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
+                // Issue #756 评论 5821042551: 算出 text/caret/coordinated 三个开关传入 composition 路径。
+                // text = coordinated || typing；caret = coordinated || smooth。
+                let coordinated_anim = self.current_coordinated_animation_enabled;
+                let text_anim = coordinated_anim || self.current_typing_animation_enabled;
+                let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 self.pipeline
                     .animation_coordinator_mut()
                     .cancel_active_composition("clear_preedit");
@@ -343,6 +353,9 @@ impl EditorInputHost for SujianEditorItem {
                         layout_basis_revision,
                         std::time::Instant::now(),
                         None,
+                        text_anim,
+                        caret_anim,
+                        coordinated_anim,
                     );
             }
         }
@@ -382,7 +395,13 @@ impl EditorInputHost for SujianEditorItem {
         self.pipeline.composition_mut().preedit_cursor = cursor;
         self.pipeline.composition_mut().preedit_attributes.clear();
 
-        if self.typing_animation_enabled && !text.is_empty() {
+        // Issue #756 评论 5821042551: composition 动画进入条件 = coordinated || typing || smooth
+        //（任意一种动画需要这笔 composition 事务时即进入）。
+        if (self.current_coordinated_animation_enabled
+            || self.current_typing_animation_enabled
+            || self.current_smooth_cursor_enabled)
+            && !text.is_empty()
+        {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();
                 // Issue #710 评论 5734282079: old/new preedit range 分属不同坐标系，
@@ -457,8 +476,13 @@ impl EditorInputHost for SujianEditorItem {
                 let (new_line_top, new_line_bottom) =
                     find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
+                // Issue #756 评论 5821042551: 算出 text/caret/coordinated 三个开关传入 composition 路径。
+                // text = coordinated || typing；caret = coordinated || smooth。
+                let coordinated_anim = self.current_coordinated_animation_enabled;
+                let text_anim = coordinated_anim || self.current_typing_animation_enabled;
+                let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 let layout_basis_revision = self.pipeline.layout_revision();
-                self.pipeline
+                let anim_key = self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
                         &old_snapshot,
@@ -477,7 +501,15 @@ impl EditorInputHost for SujianEditorItem {
                         new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
                         layout_basis_revision,
+                        text_anim,
+                        caret_anim,
+                        coordinated_anim,
                     );
+                if anim_key.is_none() {
+                    // Issue #756 评论 5822051193: coordinated 模式下无法建立 cursor track，
+                    // 本轮不做动画，走静态 fallback，不影响 IME 正文/候选框正常显示。
+                    self.update_preedit_visual_state();
+                }
             } else {
                 self.update_preedit_visual_state();
             }
@@ -514,7 +546,13 @@ impl EditorInputHost for SujianEditorItem {
             }
         }
 
-        if self.typing_animation_enabled && !text.is_empty() {
+        // Issue #756 评论 5821042551: composition 动画进入条件 = coordinated || typing || smooth
+        //（任意一种动画需要这笔 composition 事务时即进入）。
+        if (self.current_coordinated_animation_enabled
+            || self.current_typing_animation_enabled
+            || self.current_smooth_cursor_enabled)
+            && !text.is_empty()
+        {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();
                 // Issue #710 评论 5734282079: old/new preedit range 分属不同坐标系，
@@ -589,8 +627,13 @@ impl EditorInputHost for SujianEditorItem {
                 let (new_line_top, new_line_bottom) =
                     find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
+                // Issue #756 评论 5821042551: 算出 text/caret/coordinated 三个开关传入 composition 路径。
+                // text = coordinated || typing；caret = coordinated || smooth。
+                let coordinated_anim = self.current_coordinated_animation_enabled;
+                let text_anim = coordinated_anim || self.current_typing_animation_enabled;
+                let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 let layout_basis_revision = self.pipeline.layout_revision();
-                self.pipeline
+                let anim_key = self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
                         &old_snapshot,
@@ -609,7 +652,15 @@ impl EditorInputHost for SujianEditorItem {
                         new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
                         layout_basis_revision,
+                        text_anim,
+                        caret_anim,
+                        coordinated_anim,
                     );
+                if anim_key.is_none() {
+                    // Issue #756 评论 5822051193: coordinated 模式下无法建立 cursor track，
+                    // 本轮不做动画，走静态 fallback，不影响 IME 正文/候选框正常显示。
+                    self.update_preedit_visual_state();
+                }
             } else {
                 self.update_preedit_visual_state();
             }

@@ -378,7 +378,7 @@ fn assert_bump_after_check(
     );
     // Issue #705 评论 5718299909: 修复后不变量 —— 若 bump 存在则必须在 check 之后;
     // 若 bump 不存在(no-op 路径不调 begin_manual_cursor_move)也视为 PASS。
-    let bump_after_check = bump_pos.map_or(true, |b| b > check_pos.unwrap());
+    let bump_after_check = bump_pos.is_none_or(|b| b > check_pos.unwrap());
     assert!(
         bump_after_check,
         "Issue #705 评论 5718299909 守卫 {}: {} {}",
@@ -575,7 +575,7 @@ fn issue705_behavior_noop_does_not_bump_epoch() {
         );
         // 不变量 1: 若 bump 存在则必须在 check 之后(先算后 bump)。
         assert!(
-            bump_pos.map_or(true, |b| b > check_pos.unwrap()),
+            bump_pos.is_none_or(|b| b > check_pos.unwrap()),
             "Issue #705 评论 5718299909 行为守卫: {} 中 begin_manual_cursor_move() \
              必须在 {} 之后(先算最终 caret/selection 再 bump),no-op 不 bump epoch",
             method,

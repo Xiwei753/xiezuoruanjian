@@ -283,7 +283,7 @@ fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
         "修复后 CrossFadeGroup 应有 old_indices 和 new_indices 收集整组所有成员。"
     );
     // 定位多对多 group 处理循环
-    let group_marker = "for (_gid, group) in &crossfade_groups";
+    let group_marker = "for group in crossfade_groups.values()";
     let group_pos = src
         .find(group_marker)
         .expect("rebind 中 crossfade_groups 多对多处理循环必须存在");
@@ -335,7 +335,7 @@ fn issue3_fix_unpaired_crossfade_group_remove() {
         "修复后应在 group 循环内检查 old_indices/new_indices 任一侧为空。"
     );
     // 修复后：缺 side 时整组所有成员一起 Remove（遍历 old_indices 和 new_indices 设 Remove）。
-    let group_marker = "for (_gid, group) in &crossfade_groups";
+    let group_marker = "for group in crossfade_groups.values()";
     let group_pos = src
         .find(group_marker)
         .expect("rebind 中 crossfade_groups 多对多处理循环必须存在");

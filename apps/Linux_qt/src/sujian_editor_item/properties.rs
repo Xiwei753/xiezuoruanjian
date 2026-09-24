@@ -347,6 +347,27 @@ impl SujianEditorItem {
         self.visual_settings_changed();
     }
 
+    // Issue #756: 协同动画显式模式开关 getter/setter。
+    pub(crate) fn coordinated_animation_enabled(&self) -> bool {
+        self.current_coordinated_animation_enabled
+    }
+
+    pub(crate) fn set_coordinated_animation_enabled(&mut self, value: bool) {
+        if self.current_coordinated_animation_enabled == value {
+            return;
+        }
+        self.current_coordinated_animation_enabled = value;
+        // Issue #756: 协同模式切换时清活动动画，避免旧事务按旧模式继续播放。
+        // 关闭协同后恢复两个独立开关，开启协同后文字与光标绑死。
+        self.clear_active_text_animations();
+        self.cursor_ctrl.animation = None;
+        self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+        self.request_static_repaint();
+        editor_animation_debug_log(&format!("coordinated_animation_enabled_changed: {}", value));
+        self.visual_settings_changed();
+    }
+
     pub(crate) fn scroll_y(&self) -> f32 {
         self.current_scroll_y
     }

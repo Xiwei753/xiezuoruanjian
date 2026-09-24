@@ -2,20 +2,20 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
+use super::coordinator::LinuxEditorAnimationCoordinator;
+use super::cursor_motion::sample_coordinated_cursor_rect_at;
+use super::transaction_builder::emit_transaction_diagnostic;
+use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animation::{
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, VisualUnitTiming,
+};
 use crate::sujian_editor_item::animation_mode::AnimationMode;
 use crate::sujian_editor_item::edit_motion::{
     diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion,
 };
-use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, VisualUnitTiming,
-};
-use super::coordinator::LinuxEditorAnimationCoordinator;
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::editor_animation_debug_log;
-use super::transaction_builder::emit_transaction_diagnostic;
-use super::cursor_motion::sample_coordinated_cursor_rect_at;
+use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 pub(crate) fn match_rebase_frames(
     rebase_frames: &[RebaseFrame],
@@ -100,25 +100,24 @@ pub(crate) fn conflicting_units_are_untouched(
         .as_ref()
         .map(|track| track.progress(now));
     for unit in &tx.units {
-        // Issue #722 评论 5749572808 问题3: 按 kind 分支判断是否已到终态。
-        let still_playing = match unit.slice.kind {
-            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
-                let progress = caret_track_progress.unwrap_or(0.0);
-                let eased = AnimatedSlice::ease_out_quad(progress);
-                let start = unit.timing.start_fraction();
-                let target = unit.timing.target_fraction();
-                let visible_fraction = start + (target - start) * eased;
-                match unit.slice.kind {
-                    AnimatedSliceKind::InsertReveal => visible_fraction < 1.0 - 1e-3,
-                    AnimatedSliceKind::DeleteConceal => visible_fraction > 1e-3,
-                    _ => unreachable!(),
-                }
+        // Issue #756: 按 timing 判断是否 caret-driven。
+        // - CaretDriven（coordinated=true 吞吐字）：visible 从 caret track progress 推导。
+        // - Timed（Reflow + coordinated=false typing-driven 吞吐字）：看 unit progress。
+        let still_playing = if unit.timing.is_caret_driven() {
+            // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
+            let progress = caret_track_progress.unwrap_or(0.0);
+            let eased = AnimatedSlice::ease_out_quad(progress);
+            let start = unit.timing.start_fraction();
+            let target = unit.timing.target_fraction();
+            let visible_fraction = start + (target - start) * eased;
+            match unit.slice.kind {
+                AnimatedSliceKind::InsertReveal => visible_fraction < 1.0 - 1e-3,
+                AnimatedSliceKind::DeleteConceal => visible_fraction > 1e-3,
+                _ => unreachable!(),
             }
-            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                // Reflow 仍看 unit progress。
-                unit.progress(now) < 1.0
-            }
+        } else {
+            // Timed unit（Reflow / typing-driven 吞吐字）看 unit progress。
+            unit.progress(now) < 1.0
         };
         if !still_playing {
             continue;
@@ -199,19 +198,19 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
     caret_remaining_ms: u64,
     now: Instant,
 ) -> Option<RebaseFrame> {
-    let visible_fraction = match unit.slice.kind {
-        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-            // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
-            // visible = start_fraction + (target - start) * ease_out_quad(progress)
-            let progress = caret_track_progress.unwrap_or(0.0);
-            let eased = AnimatedSlice::ease_out_quad(progress);
-            let start = unit.timing.start_fraction();
-            let target = unit.timing.target_fraction();
-            start + (target - start) * eased
-        }
-        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-            unit.current_visible_fraction(now)
-        }
+    // Issue #756: 按 timing 判断 visible_fraction 推导方式。
+    // - CaretDriven（coordinated=true 吞吐字）：从 caret track progress 推导。
+    // - Timed（Reflow + coordinated=false typing-driven 吞吐字）：从自己的时间线算。
+    let visible_fraction = if unit.timing.is_caret_driven() {
+        // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
+        // visible = start_fraction + (target - start) * ease_out_quad(progress)
+        let progress = caret_track_progress.unwrap_or(0.0);
+        let eased = AnimatedSlice::ease_out_quad(progress);
+        let start = unit.timing.start_fraction();
+        let target = unit.timing.target_fraction();
+        start + (target - start) * eased
+    } else {
+        unit.current_visible_fraction(now)
     };
     // Issue #727 约束 4: 不依赖 caret geometry，统一用 compute_frame。
     let frame = unit.slice.compute_frame(visible_fraction);
@@ -271,7 +270,6 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
         remaining_duration_ms,
     })
 }
-
 
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn take_rebase_frames(
@@ -469,6 +467,7 @@ impl LinuxEditorAnimationCoordinator {
         vt: &PreparedEditMotion,
         typing_animation_enabled: bool,
         smooth_cursor_enabled: bool,
+        coordinated_animation_enabled: bool,
         is_scrolling: bool,
         is_loading: bool,
         is_applying_format: bool,
@@ -477,20 +476,28 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         now: Instant,
     ) -> Option<PreparedRebaseHandoff> {
-        // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
-        // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
-        // typing_animation_enabled 决定，不要把两类动画重新绑死。
-        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
+        // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
+        // - coordinated=true 时：走协同路径，文字与光标绑死，要求有效 caret motion。
+        // - coordinated=false 时：typing_animation_enabled 只决定文字动画
+        //   （Reflow + InsertReveal/DeleteConceal），smooth_cursor_enabled 只决定光标动画
+        //   （caret motion track）。两者互相独立，同时为 true 不等于协同。
+        let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
+        let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
+        if (!text_animation_enabled && !caret_animation_enabled)
+            || is_scrolling
+            || is_loading
+            || is_applying_format
+        {
             return None;
         }
 
-        // Issue #727 约束 5: valid_caret_motion_track 检查。
-        // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
-        // Issue #727 评论 5755858583 问题5: 仅在 smooth_cursor_enabled 时才要求
-        // valid_caret_motion_track——!smooth_cursor_enabled 时不创建 CaretDriven units，
-        // 只创建 Reflow，不需要 caret motion track。
+        // Issue #756: valid_caret_motion_track 检查。
+        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务
+        //   （文字动画也不启动）。
+        // - coordinated=false 时：缺少 caret motion 只意味着没有 caret track / 没有
+        //   CaretDriven units（Issue #727 约束 5），文字动画（Reflow）照常播放。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
-        if smooth_cursor_enabled && !valid_caret_motion_track {
+        if coordinated_animation_enabled && !valid_caret_motion_track {
             return None;
         }
 

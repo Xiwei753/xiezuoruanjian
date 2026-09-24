@@ -8,20 +8,18 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
+use crate::editor::layout::compute_affected_paragraph_ranges;
+use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
+use crate::sujian_editor_item::animation::transaction_builder::{
+    build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels,
+    CompositionCommitCrossfadeSpec, VisualEditSpec,
+};
+use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
 use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect};
+use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use crate::sujian_editor_item::animation::{
-    TextVisualOperationKind, TextVisualTransactionState,
-};
-use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
-use crate::sujian_editor_item::animation::transaction_builder::{
-    build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels, VisualEditSpec,
-    CompositionCommitCrossfadeSpec,
-};
-use crate::editor::layout::compute_affected_paragraph_ranges;
-use crate::sujian_editor_item::editor_animation_debug_log;
 
 use super::coordinator::LinuxEditorAnimationCoordinator;
 
@@ -44,6 +42,10 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_line_bottom: f64,
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
+        // Issue #756: 动画开关由调用方按同一份设置算出传入。
+        text_animation_enabled: bool,
+        caret_animation_enabled: bool,
+        coordinated_animation_enabled: bool,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
         // Issue #710 评论 5734282079: 冲突检测用 current-old 坐标系。
@@ -123,11 +125,33 @@ impl LinuxEditorAnimationCoordinator {
             caret_handoff,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            unit_duration_ms: u64::from(self.typing_animation_duration_ms),
-            smooth_cursor_enabled: true,
+            text_duration_ms: u64::from(self.typing_animation_duration_ms),
+            caret_duration_ms: u64::from(if coordinated_animation_enabled {
+                self.typing_animation_duration_ms
+            } else {
+                self.cursor_animation_duration_ms
+            }),
+            // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
+            text_animation_enabled,
+            caret_animation_enabled,
+            coordinated_animation_enabled,
             composition_commit_crossfade: None,
         };
         let prepared = build_prepared_transaction(spec);
+
+        // Issue #756 评论 5822051193: coordinated 模式下，IME composition update 路径
+        // 也必须有有效 caret motion。普通 Insert/Delete 在 process_transaction 里用
+        // old/new rect.is_some() 做门禁，但 IME 不走 process_transaction，且 composition
+        // commit 可能通过 caret_handoff 仍构造出有效 track。最稳妥的收口是构造完 prepared
+        // 后按最终结果判断：coordinated=true 但 cursor_visual_track 为 None → 不 enqueue，
+        // 直接返回 None，不允许任何文字 unit 单独留下继续播放。
+        if coordinated_animation_enabled && prepared.cursor_visual_track.is_none() {
+            editor_animation_debug_log(&format!(
+                "anim_event: key={:?} op=CompositionUpdate skipped: coordinated=true but cursor_visual_track is None",
+                key,
+            ));
+            return None;
+        }
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -231,6 +255,10 @@ impl LinuxEditorAnimationCoordinator {
         layout_basis_revision: LayoutRevision,
         now: Instant,
         prepared_handoff: Option<PreparedCompositionCommitHandoff>,
+        // Issue #756: 动画开关由调用方按同一份设置算出传入。
+        text_animation_enabled: bool,
+        caret_animation_enabled: bool,
+        coordinated_animation_enabled: bool,
     ) -> Option<VisualTransactionKey> {
         // Issue #738 评论 5798704669 问题1: 若外层已调 prepare_composition_commit_handoff
         // 采好 handoff（commit 路径），直接用；否则内部 prepare（cancel 路径 / 旧调用方）。
@@ -318,11 +346,29 @@ impl LinuxEditorAnimationCoordinator {
             caret_handoff,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
-            unit_duration_ms: u64::from(self.typing_animation_duration_ms),
-            smooth_cursor_enabled: true,
+            text_duration_ms: u64::from(self.typing_animation_duration_ms),
+            caret_duration_ms: u64::from(if coordinated_animation_enabled {
+                self.typing_animation_duration_ms
+            } else {
+                self.cursor_animation_duration_ms
+            }),
+            // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
+            text_animation_enabled,
+            caret_animation_enabled,
+            coordinated_animation_enabled,
             composition_commit_crossfade,
         };
         let prepared = build_prepared_transaction(spec);
+
+        // Issue #756 评论 5822051193: coordinated 模式下，IME composition commit/cancel 路径
+        // 也必须有有效 caret motion，与 handle_composition_update 收口一致。
+        if coordinated_animation_enabled && prepared.cursor_visual_track.is_none() {
+            editor_animation_debug_log(&format!(
+                "anim_event: key={:?} op=CompositionCommitOrCancel skipped: coordinated=true but cursor_visual_track is None",
+                key,
+            ));
+            return None;
+        }
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -367,4 +413,3 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 }
-

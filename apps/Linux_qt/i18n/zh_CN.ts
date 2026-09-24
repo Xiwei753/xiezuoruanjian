@@ -763,6 +763,18 @@
         <translation>打字动画持续时间</translation>
     </message>
     <message>
+        <source>协同动画（吞字/吐字）</source>
+        <translation>协同动画（吞字/吐字）</translation>
+    </message>
+    <message>
+        <source>协同动画持续时间</source>
+        <translation>协同动画持续时间</translation>
+    </message>
+    <message>
+        <source>文字与光标绑死共用一条时间线</source>
+        <translation>文字与光标绑死共用一条时间线</translation>
+    </message>
+    <message>
         <source>打开日志目录</source>
         <translation>打开日志目录</translation>
     </message>

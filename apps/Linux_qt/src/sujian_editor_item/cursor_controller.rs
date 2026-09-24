@@ -96,6 +96,12 @@ pub struct CursorController {
     pub last_move_source: CursorMoveSource,
 }
 
+impl Default for CursorController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CursorController {
     pub fn new() -> Self {
         Self {

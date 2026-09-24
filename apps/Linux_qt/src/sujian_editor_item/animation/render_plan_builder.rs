@@ -1,21 +1,19 @@
 use std::time::Instant;
 
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
-use crate::sujian_editor_item::animation::{
-    TextVisualOperationKind, TextVisualTransactionState,
-};
 use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use crate::sujian_editor_item::render_plan::{
-    CursorRenderState, RenderPlan, SelectionPreeditPlan,
-    TextAnimationGlyphInfo, TextAnimationPlan,
-};
-use crate::sujian_editor_item::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::transaction_builder::emit_transaction_diagnostic;
+use crate::sujian_editor_item::animated_slice::AnimatedSlice;
+use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
+use crate::sujian_editor_item::cursor_animation::{
+    CursorAnimationPlan, CursorBlinkMode, CursorTransition,
+};
+use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::editor_animation_debug_log;
-
+use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use crate::sujian_editor_item::render_plan::{
+    CursorRenderState, RenderPlan, SelectionPreeditPlan, TextAnimationGlyphInfo, TextAnimationPlan,
+};
+use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 impl LinuxEditorAnimationCoordinator {
     pub(crate) fn build_cursor_plan(
@@ -97,7 +95,9 @@ impl LinuxEditorAnimationCoordinator {
             crate::sujian_editor_item::cursor_controller::CursorMoveSource::DragSelection
             | crate::sujian_editor_item::cursor_controller::CursorMoveSource::LayoutChange
             | crate::sujian_editor_item::cursor_controller::CursorMoveSource::Scroll => false,
-            crate::sujian_editor_item::cursor_controller::CursorMoveSource::TextTransaction => false,
+            crate::sujian_editor_item::cursor_controller::CursorMoveSource::TextTransaction => {
+                false
+            }
         };
 
         // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
@@ -320,7 +320,8 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集 CaretDriven units
         // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
         // ownership），避免空洞。
-        let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> = Vec::new();
+        let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> =
+            Vec::new();
         for tx in self.prepared_queue.active_transactions() {
             // Issue #738 评论 5793319451 问题1: 守卫从 `>=` 改成 `==`。clip rects 用于
             // 裁切 canonical 正文以露出动画 overlay，只有 basis 与当前 frame_context 完全
@@ -339,26 +340,23 @@ impl LinuxEditorAnimationCoordinator {
                 // 再藏 canonical 会挖出文字空洞。
                 let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
                 for unit in &tx.units {
-                    let is_caret_driven = matches!(
-                        unit.slice.kind,
-                        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
-                    );
-                    // CaretDriven unit 只在本事务拥有 caret frame（has_caret_frame 且
-                    // owns_caret）时才收集；Timed unit（Reflow）始终收集。
-                    // !owns_caret 时也不收集：非 owner 的 CaretDriven 已 Snap 到 canonical，
-                    // 不能再藏 canonical 正文。
+                    // Issue #756: 按 timing 判断 caret-driven（coordinated=true 吞吐字）。
+                    let is_caret_driven = unit.timing.is_caret_driven();
+                    // CaretDriven unit 只在拥有 caret frame 时收集；Timed 始终收集。
                     if is_caret_driven && (!has_caret_frame || !owns_caret) {
                         continue;
                     }
                     for doc_rect in &unit.slice.static_hidden_document_rects {
                         if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
-                            clip_rects.push(crate::sujian_editor_item::qt_text_node::AnimationClipRect {
-                                x: doc_rect.x,
-                                y: doc_rect.y,
-                                w: doc_rect.w,
-                                h: doc_rect.h,
-                                snapshot_id: unit.slice.snapshot_id,
-                            });
+                            clip_rects.push(
+                                crate::sujian_editor_item::qt_text_node::AnimationClipRect {
+                                    x: doc_rect.x,
+                                    y: doc_rect.y,
+                                    w: doc_rect.w,
+                                    h: doc_rect.h,
+                                    snapshot_id: unit.slice.snapshot_id,
+                                },
+                            );
                         }
                     }
                 }
@@ -373,7 +371,8 @@ impl LinuxEditorAnimationCoordinator {
         // 文字层和光标层都使用同一份 `AnimationFrameSample`。无活跃文字事务时，
         // CursorOnly 光标位置也从 frame_sample 采样，不再在 build_render_plan_full
         // 之外用 cursor_timeline_sample_with_time 单独推进 cursor_ctrl.visual_x/y。
-        let mut cursor_sample_outcome = crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;
+        let mut cursor_sample_outcome =
+            crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;
         // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
         // 是否有吞吐字直接由 compute_coordinated_cursor_position 是否返回 Some 决定。
         // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
@@ -392,11 +391,12 @@ impl LinuxEditorAnimationCoordinator {
             // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
             // 屏幕真正画出的位置，但不启动 CursorAnimationState.started_at，
             // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
-            cursor_sample_outcome = crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
-                x: cx,
-                y: cy_doc,
-                h: ch,
-            };
+            cursor_sample_outcome =
+                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
+                    x: cx,
+                    y: cy_doc,
+                    h: ch,
+                };
             let suppressed = matches!(
                 self.active_operation_kind(),
                 Some(TextVisualOperationKind::Insert)
@@ -434,7 +434,9 @@ impl LinuxEditorAnimationCoordinator {
                 crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle => {}
                 // Issue #702 评论 5707770318: sample_cursor_only_position 不会返回
                 // Coordinated（它只服务纯光标 CursorOnly 动画），此分支不可达。
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated { .. } => {}
+                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
+                    ..
+                } => {}
             }
         }
 
@@ -527,42 +529,40 @@ impl LinuxEditorAnimationCoordinator {
             let caret_driven_active = owns_caret && coordinated_motion_frame.caret.is_some();
 
             // InsertReveal/DeleteConceal 完成条件跟视觉边界一致。
-            let has_caret_driven_units = tx.units.iter().any(|u| {
-                matches!(
-                    u.slice.kind,
-                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
-                )
-            });
+            // Issue #756: 按 timing 判断是否 caret-driven。coordinated=false 的吞吐字
+            // 是 Timed（typing-driven），不参与 caret motion retire 逻辑。
+            let has_caret_driven_units = tx.units.iter().any(|u| u.timing.is_caret_driven());
             // has_caret_driven_units && !caret_driven_active 时退休 caret motion，
             // 收口 CaretDriven units 到终态。之后永远跳过此事务不再给 owner_key。
             if has_caret_driven_units && !caret_driven_active {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
             }
-            let caret_track_done = if has_caret_driven_units {
-                match tx.cursor_visual_track.as_ref() {
-                    Some(track) => track.progress(sample.frame_now) >= 1.0,
-                    None => true,
-                }
-            } else {
-                true
+            // Issue #756 评论 5821042551: 只要本事务存在需要播放的 cursor_visual_track，
+            // 事务完成就必须同时等待它结束；协同与非协同只决定文字是否消费这个 track，
+            // 不决定 track 是否属于事务生命周期。
+            let caret_track_done = match tx.cursor_visual_track.as_ref() {
+                Some(track) => track.progress(sample.frame_now) >= 1.0,
+                None => true,
             };
             // 完成判断按 kind 分开: CaretDriven unit 的完成由 caret_track_done 决定，
-            // Timed unit 看 progress >= 1.0。
+            // Timed unit（Reflow + typing-driven 吞吐字）看 progress >= 1.0。
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units.iter().all(|u| match u.slice.kind {
-                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => true,
-                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                tx.units.iter().all(|u| {
+                    if u.timing.is_caret_driven() {
+                        true
+                    } else {
                         u.progress(sample.frame_now) >= 1.0
                     }
                 })
             };
-            // caret_track_complete: CaretDriven 事务必须 caret track 也完成。
-            // 退休后永远视为完成，不会重新接管旧 caret 轨迹。
+            // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成，
+            // 不再仅限于 CaretDriven 事务。非协同 typing+smooth 没有 CaretDriven unit，
+            // 但 smooth cursor duration 可能比 typing 更长，caret track 不能被提前丢弃。
             let caret_track_complete =
-                !has_caret_driven_units || tx.caret_motion_retired || caret_track_done;
+                tx.cursor_visual_track.is_none() || tx.caret_motion_retired || caret_track_done;
 
             if all_units_done && caret_track_complete {
                 // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
@@ -578,38 +578,38 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // InsertReveal/DeleteConceal 从统一 CoordinatedMotionFrame.caret 消费。
-                // 按 owner_key 过滤，只有同 key 的 unit 能消费此 caret frame。
-                let frame = match unit.slice.kind {
-                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                        // active 时生成 glyph，否则 continue（已 retire）。
-                        if !caret_driven_active {
-                            continue;
-                        }
-                        // 从统一 CoordinatedMotionFrame 获取 caret geometry。
-                        // 用 match 而非 expect，避免用 expect 代替错误处理。
-                        let Some(caret_frame) = coordinated_motion_frame.caret else {
-                            continue;
-                        };
-                        // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
-                        // progress 推导，不再由 unit 自己的时间线驱动。
-                        // visible = start_fraction + (target - start) * ease_out_quad(progress)
-                        let eased = AnimatedSlice::ease_out_quad(caret_frame.progress);
-                        let start = unit.timing.start_fraction();
-                        let target = unit.timing.target_fraction();
-                        let visible = start + (target - start) * eased;
-                        unit.slice.compute_frame_caret_driven(
-                            caret_frame.x,
-                            caret_frame.y,
-                            caret_frame.visual_line_id,
-                            visible,
-                        )
+                // Issue #756: 按 timing 区分 caret-driven 和 timed 吞吐字。
+                // - CaretDriven（coordinated=true 的 InsertReveal/DeleteConceal）：从统一
+                //   CoordinatedMotionFrame.caret 消费，按 owner_key 过滤。
+                // - Timed（Reflow + coordinated=false 的 typing-driven 吞吐字）：用自己
+                //   的时间线算 visible，走 compute_frame(visible)，不消费 caret frame。
+                let frame = if unit.timing.is_caret_driven() {
+                    // active 时生成 glyph，否则 continue（已 retire）。
+                    if !caret_driven_active {
+                        continue;
                     }
-                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                        // Reflow 不消费 caret 边界，用纯几何插值。
-                        let visible = unit.current_visible_fraction(sample.frame_now);
-                        unit.slice.compute_frame(visible)
-                    }
+                    // 从统一 CoordinatedMotionFrame 获取 caret geometry。
+                    // 用 match 而非 expect，避免用 expect 代替错误处理。
+                    let Some(caret_frame) = coordinated_motion_frame.caret else {
+                        continue;
+                    };
+                    // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
+                    // progress 推导，不再由 unit 自己的时间线驱动。
+                    // visible = start_fraction + (target - start) * ease_out_quad(progress)
+                    let eased = AnimatedSlice::ease_out_quad(caret_frame.progress);
+                    let start = unit.timing.start_fraction();
+                    let target = unit.timing.target_fraction();
+                    let visible = start + (target - start) * eased;
+                    unit.slice.compute_frame_caret_driven(
+                        caret_frame.x,
+                        caret_frame.y,
+                        caret_frame.visual_line_id,
+                        visible,
+                    )
+                } else {
+                    // Timed unit（Reflow / typing-driven 吞吐字）：用自己的时间线算 visible。
+                    let visible = unit.current_visible_fraction(sample.frame_now);
+                    unit.slice.compute_frame(visible)
                 };
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,

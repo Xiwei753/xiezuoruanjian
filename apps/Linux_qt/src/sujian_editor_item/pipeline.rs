@@ -333,6 +333,10 @@ impl CompositionState {
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub smooth_cursor_enabled: bool,
+    /// Issue #756: 协同动画显式模式开关。
+    /// true 时文字与光标绑死，要求有效 caret motion 否则文字动画也不启动；
+    /// false 时 typing/smooth 两个独立开关各自决定文字/光标动画。
+    pub coordinated_animation_enabled: bool,
     pub is_scrolling: bool,
     pub is_loading: bool,
     pub is_applying_format: bool,
@@ -1085,17 +1089,34 @@ impl LinuxEditorPipeline {
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
     ) -> Option<PreparedEditMotion> {
+        // Issue #756: 文字动画与光标动画互相独立，不再把"两个独立开关同时开启"当协同：
+        // - coordinated=true：文字与光标绑死，要求有效 caret motion（在
+        //   transaction_builder 内部检查），caret motion 建不起来时文字动画也不启动。
+        // - coordinated=false：typing_animation_enabled 只决定文字动画，
+        //   smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
+        //  （文字动画需要排版 old/new，光标动画需要 motion 的 caret track）。
+        let text_animation_enabled =
+            ctx.coordinated_animation_enabled || ctx.typing_animation_enabled;
+        let caret_animation_enabled =
+            ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled;
+        if (!text_animation_enabled && !caret_animation_enabled) || ctx.is_scrolling {
+            return None;
+        }
+        // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
+        // 协同时两者都用 typing duration（共享 timeline）；非协同时文字用 typing、光标用 smooth。
+        let text_duration_ms = self.typing_animation_duration_ms;
+        let caret_duration_ms = if ctx.coordinated_animation_enabled {
+            self.typing_animation_duration_ms
+        } else {
+            self.cursor_animation_duration_ms
+        };
         let mut motion = PreparedEditMotion::from_edit_result(
             result,
             &old.text,
             &new.text,
-            u64::from(self.typing_animation_duration_ms),
+            u64::from(text_duration_ms),
+            u64::from(caret_duration_ms),
         );
-
-        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
-        if !ctx.typing_animation_enabled || !ctx.smooth_cursor_enabled || ctx.is_scrolling {
-            return None;
-        }
         {
             let (raw_byte_start, raw_byte_end) = motion
                 .inserted_range
@@ -1492,6 +1513,7 @@ impl LinuxEditorPipeline {
                 &motion,
                 ctx.typing_animation_enabled,
                 ctx.smooth_cursor_enabled,
+                ctx.coordinated_animation_enabled,
                 ctx.is_scrolling,
                 ctx.is_loading,
                 ctx.is_applying_format,
@@ -1518,7 +1540,12 @@ impl LinuxEditorPipeline {
                 .create_transaction_from_prepared_handoff(
                     prepared_handoff,
                     &motion,
-                    ctx.smooth_cursor_enabled,
+                    // Issue #756: 文字动画 = coordinated || typing，光标动画 = coordinated || smooth。
+                    // 协同模式下文字与光标绑死，caret track 必须生成；coordinated=false 时由
+                    // smooth 单独决定（这就是"平滑光标"在正文编辑期间的光标动画）。
+                    text_animation_enabled,
+                    caret_animation_enabled,
+                    ctx.coordinated_animation_enabled,
                     motion.old_cursor_rect.clone(),
                     motion.new_cursor_rect.clone(),
                     Some(old_caret.visual_line_id),

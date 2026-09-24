@@ -88,7 +88,9 @@ fn fix1a_prepared_rebase_handoff_enum_exists() {
 #[test]
 fn fix1b_prepare_rebase_handoff_for_edit_exists_with_outer_now() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
-    let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 4000);
+    // Issue #756: prepare_rebase_handoff_for_edit 增加 coordinated_animation_enabled 参数，
+    // 函数体变长，窗口从 4000 增到 5000 以覆盖 take_rebase_frames 调用。
+    let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 5000);
     assert!(
         window.contains("now: Instant"),
         "修复后 prepare_rebase_handoff_for_edit 签名应含 now: Instant 参数（用外层统一 now 采样）。"
