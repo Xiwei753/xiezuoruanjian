@@ -2,7 +2,7 @@ use cpp::cpp;
 use qmetaobject::QString;
 
 use super::canonical_snapshot::{
-    CanonicalClusterSnapshot, CanonicalLineSnapshot, CanonicalParagraphSnapshot, CursorXMapEntry,
+    CanonicalLineSnapshot, CanonicalParagraphSnapshot, CanonicalClusterSnapshot, CursorXMapEntry,
 };
 use super::types::VisualLine;
 

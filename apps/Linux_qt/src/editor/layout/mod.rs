@@ -29,16 +29,20 @@ mod types;
 // ── re-export：外部公开类型 ──
 pub use canonical_snapshot::{
     assemble_document_visual_snapshot_from_lines, inject_animation_visuals_into_snapshot,
-    prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
+    prepare_animation_visuals_from_layout, prepare_affected_paragraphs_visual_snapshot,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
     CanonicalClusterSnapshot, CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot,
     CanonicalParagraphSnapshot, CursorXMapEntry,
 };
-pub use diff::{compare_old_new_visual_lines, compute_affected_paragraph_ranges, VisualLineDiff};
+pub use diff::{
+    compare_old_new_visual_lines, compute_affected_paragraph_ranges, VisualLineDiff,
+};
 pub use engine::{
     byte_offset_to_qchar_offset, cursor_rect_for_line, get_font_ascent, get_font_descent,
     qchar_offset_to_byte_offset, text_baseline_y,
 };
+#[cfg(any(test, feature = "test-helpers"))]
+pub use test_support::run_on_qt_thread;
 pub use hit_test::{
     affinity_for_index_on_line, calculate_cursor_x_for_line, caret_rect, caret_rect_doc,
     cursor_line_and_x, hit_test, index_at_line_x, line_contains_cursor_with_affinity,
@@ -47,8 +51,6 @@ pub use qt_cache::{
     begin_layout_generation, clear_layout_generation, get_paragraph_layout_cursor_to_x_on_line,
     get_paragraph_layout_x_to_cursor_on_line,
 };
-#[cfg(any(test, feature = "test-helpers"))]
-pub use test_support::run_on_qt_thread;
 pub use types::{
     CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, PreparedLayoutHandle,
     PromotedLayout, VisualLine,
