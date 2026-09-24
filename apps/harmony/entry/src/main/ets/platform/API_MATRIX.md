@@ -4,6 +4,19 @@
 
 实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。
 
+## 应用最低安装基线与版本分流
+
+- **最低安装基线**：`compatibleSdkVersion = 12`（HarmonyOS NEXT 5.0.0(12)）。这是应用能安装运行的最低系统版本，由 `apps/harmony/build-profile.json5` 的 `compatibleSdkVersion` 表达，只反映真实需要支持的最低版本，不因开发机/测试机使用 API26 SDK 就一起抬到 API26。
+- **编译目标**：`targetSdkVersion = 26`（HarmonyOS 7）。工程使用 API26 SDK 构建，`targetSdkVersion` 保持 API26，与 `compatibleSdkVersion` 不必为同一 API。
+- **能力分流**：API20 / API23 / API26 等高版本能力不抬高安装下限，而是通过 `PlatformApiResolver`（`version/PlatformApiResolver.ets`）按运行时 API Level 分流到各 `impl/apiXX` facade：
+  - `impl/api11`：普通系统分享（systemShare，since 11）
+  - `impl/api12`：碰一碰分享（knockShare 基础重载，since 12）
+  - `impl/api20`：握姿感知、防窥基础、隔空传送（gesturesShare，since 20）
+  - `impl/api23`：防窥扩展（requestAntiPeepOptions，since 23）
+  - API26 新能力继续单独使用
+- **降级语义**：旧系统缺少某个高版本能力时，只降级该能力（`isSupported()` 返回 false、对应入口返回 false，不伪造状态），**不导致整个应用无法安装**。API12～25 的设备可以正常安装运行，只是按运行时版本禁用对应高版本能力。
+- 稳定 facade（`*Service.ets`）不直接 import 版本敏感的高版本能力 Kit、不自行判断具体 API Level；Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型可以保留。具体高版本系统调用和版本判断收进 `impl/apiXX`，由 `PlatformApiResolver` 按运行时 API Level 分流。
+
 ## 能力总览
 
 | 能力 | Kit | 最低 API | SystemCapability | 权限 | ACL | 实现文件 |

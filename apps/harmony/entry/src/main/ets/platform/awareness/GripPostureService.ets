@@ -3,7 +3,7 @@
 // 只暴露平台状态，不写业务规则，不调 Core。
 //
 // 真实事件源经 GripPostureApi20 facade 调 @kit.MultimodalAwarenessKit 的 motion。
-// Service 不直接 import @kit.*，系统调用和枚举映射都在 impl/api20 facade。
+// Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外），系统调用和枚举映射都在 impl/api20 facade。
 // notifyPostureChanged 是 private 分发方法，仅由系统回调触发。
 // 不允许页面伪造平台状态。
 

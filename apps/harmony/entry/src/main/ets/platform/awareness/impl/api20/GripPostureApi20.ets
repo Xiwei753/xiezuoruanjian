@@ -1,6 +1,6 @@
 // GripPostureApi20 — 握持姿态 API20 facade（单例）。
 // 直接 import @kit.MultimodalAwarenessKit 的 motion，把系统枚举映射成稳定 GripPosture。
-// 只有 impl/apiXX 文件可以 import @kit.*；Service 不直接 import @kit.*。
+// 版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
 //
 // 真实事件源：motion.on('holdingHandChanged')（since 20）。
 // 错误码 801 = 能力不支持；失败时不伪造状态（回调不触发）。
