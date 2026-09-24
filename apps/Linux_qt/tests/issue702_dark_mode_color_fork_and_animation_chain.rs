@@ -91,7 +91,7 @@ fn issue702_theme_controller_publishes_unified_theme_state_json() {
 
 #[test]
 fn issue702_text_visual_operation_kind_no_cursor_variant() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
     assert!(src.contains("enum TextVisualOperationKind"), "枚举应存在");
     assert!(
         src.contains("Insert") && src.contains("Delete"),
@@ -105,7 +105,7 @@ fn issue702_text_visual_operation_kind_no_cursor_variant() {
 
 #[test]
 fn issue702_cursor_branch_returns_none() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let cursor_marker = "EditorAnimationKind::Cursor =>";
     let window = function_window(&src, cursor_marker, 800);
     assert!(window.contains("return None"), "Cursor 分支应返回 None");
@@ -132,15 +132,32 @@ fn function_window(src: &str, fn_marker: &str, window_chars: usize) -> String {
 
 #[test]
 fn issue702_handle_cursor_only_deleted() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    assert!(
-        !src.contains("pub fn handle_cursor_only"),
-        "handle_cursor_only 应已彻底删除"
-    );
-    assert!(
-        !src.contains("driver_key: Option<VisualTransactionKey>"),
-        "build_cursor_plan 不应再接受 driver_key 参数"
-    );
+    // Issue #747: animation_coordinator.rs 已拆分为多个子模块，检查所有子模块
+    let animation_files = [
+        "src/sujian_editor_item/animation/coordinator.rs",
+        "src/sujian_editor_item/animation/composition.rs",
+        "src/sujian_editor_item/animation/cursor_motion.rs",
+        "src/sujian_editor_item/animation/rebase.rs",
+        "src/sujian_editor_item/animation/render_plan_builder.rs",
+        "src/sujian_editor_item/animation/transaction_builder.rs",
+        "src/sujian_editor_item/animation/transaction/types.rs",
+        "src/sujian_editor_item/animation/transaction/timeline.rs",
+        "src/sujian_editor_item/animation/transaction/rebind.rs",
+        "src/sujian_editor_item/animation/transaction/queue.rs",
+    ];
+    for file in &animation_files {
+        let src = read_src(file);
+        assert!(
+            !src.contains("pub fn handle_cursor_only"),
+            "{}: handle_cursor_only 应已彻底删除",
+            file
+        );
+        assert!(
+            !src.contains("driver_key: Option<VisualTransactionKey>"),
+            "{}: build_cursor_plan 不应再接受 driver_key 参数",
+            file
+        );
+    }
 }
 
 #[test]
@@ -225,19 +242,20 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
 
 #[test]
 fn issue702_delete_conceal_has_same_frame_progress() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    // Issue #747: AnimatedSliceKind::DeleteConceal/InsertReveal 在 transaction_builder.rs，
+    // sampled_rect 在 cursor_motion.rs
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     assert!(
         src.contains("AnimatedSliceKind::DeleteConceal"),
         "应存在 DeleteConceal"
     );
     assert!(src.contains("InsertReveal"), "应存在 InsertReveal");
-    // Issue #722 评论 5747719529 修正：光标由 caret track 插值决定，不再从文字 glyph
-    // 反推。delete_unit_progress 已删除，改为检查 caret track 插值的存在性。
+    let cursor_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
-        src.contains("sample_caret_driven_clip") || src.contains("sampled_rect"),
+        cursor_src.contains("sample_caret_driven_clip") || cursor_src.contains("sampled_rect"),
         "caret track 应使用 sampled_rect 插值（issue722 评论 5747719529）"
     );
-    let tx_src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let tx_src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
     assert!(
         tx_src.contains("sampled_rect_at_progress"),
         "caret track 应有 sampled_rect_at_progress 方法定义"
@@ -246,7 +264,7 @@ fn issue702_delete_conceal_has_same_frame_progress() {
 
 #[test]
 fn issue702_prepared_cursor_visual_track_has_sampled_rect() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
     assert!(
         src.contains("fn sampled_rect_at_progress"),
         "PreparedCursorVisualTrack 应有 sampled_rect_at_progress 方法"

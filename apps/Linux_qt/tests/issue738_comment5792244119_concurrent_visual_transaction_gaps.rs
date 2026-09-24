@@ -120,7 +120,7 @@ fn issue1_fix_reconcile_after_layout_change_passes_editor_layout() {
 /// 修复后守卫 4: RebindDecision 枚举有 Split 变体，携带 Vec<PreparedVisualUnit>。
 #[test]
 fn issue2_fix_rebind_decision_has_split_variant() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "enum RebindDecision", 600);
     assert!(
         window.contains("Keep") && window.contains("Rebind") && window.contains("Remove"),
@@ -141,7 +141,7 @@ fn issue2_fix_rebind_decision_has_split_variant() {
 /// 不一致时调 build_split_replacement_units 拆分。
 #[test]
 fn issue2_fix_rebind_uses_split_for_inconsistent_vectors() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 12000);
     assert!(
         window.contains("anchor_vectors"),
@@ -165,7 +165,7 @@ fn issue2_fix_rebind_uses_split_for_inconsistent_vectors() {
 /// PreparedVisualUnit，保留自己的 snapshot_id/source_rect/from rect。
 #[test]
 fn issue2_fix_build_split_replacement_units_exists() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     assert!(
         src.contains("fn build_split_replacement_units"),
         "修复后应有 build_split_replacement_units 函数。"
@@ -184,7 +184,7 @@ fn issue2_fix_build_split_replacement_units_exists() {
 /// 修复后守卫 7: 应用决策时处理 Split，把 replacement units 替换原 merged unit。
 #[test]
 fn issue2_fix_apply_decision_handles_split() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 32000);
     assert!(
         window.contains("Some(RebindDecision::Split(replacement_units))"),
@@ -203,7 +203,7 @@ fn issue2_fix_apply_decision_handles_split() {
 /// 修复后守卫 8: 多对多阶段 unmatched_old 和 unmatched_new 共享同一个 group_id。
 #[test]
 fn issue3_fix_many_to_many_old_new_share_group_id() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     // 定位多对多阶段：unmatched_old 循环
     let unmatched_old_pos = src
         .find("for &oi in &unmatched_old")
@@ -272,7 +272,7 @@ fn issue3_fix_many_to_many_old_new_share_group_id() {
 /// crossfade_groups（CrossFadeGroup { old_indices, new_indices }），整组一起处理。
 #[test]
 fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     // 修复后：多对多 group 结构存在。
     assert!(
         src.contains("struct CrossFadeGroup"),
@@ -323,7 +323,7 @@ fn issue3_fix_crossfade_new_side_has_shaping_identity_check() {
 /// 检查 old_indices/new_indices 是否为空，整组一起 Remove。
 #[test]
 fn issue3_fix_unpaired_crossfade_group_remove() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 16000);
     assert!(
         window.contains("缺 side 的 group"),

@@ -59,7 +59,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 /// 每个变体携带 rebase_frames、caret_handoff、offset_map、visual_affected_byte_range。
 #[test]
 fn fix1a_prepared_rebase_handoff_enum_exists() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     assert!(
         src.contains("enum PreparedRebaseHandoff"),
         "修复后应有 PreparedRebaseHandoff 枚举（prepare 阶段中间状态）。"
@@ -87,7 +87,7 @@ fn fix1a_prepared_rebase_handoff_enum_exists() {
 ///（用外层统一 now 采样，不内部 Instant::now()）。
 #[test]
 fn fix1b_prepare_rebase_handoff_for_edit_exists_with_outer_now() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 4000);
     assert!(
         window.contains("now: Instant"),
@@ -110,7 +110,7 @@ fn fix1b_prepare_rebase_handoff_for_edit_exists_with_outer_now() {
 /// `Option<PreparedRebaseHandoff>` 并用保存的 handoff 创建新事务。
 #[test]
 fn fix1c_create_transaction_from_prepared_handoff_exists() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let window = function_window(&src, "fn create_transaction_from_prepared_handoff", 8000);
     assert!(
         window.contains("prepared: Option<PreparedRebaseHandoff>"),
@@ -203,7 +203,7 @@ fn fix1e_unified_edit_now_passed_to_prepare_and_reconcile() {
 /// 新事务由 `create_transaction_from_prepared_handoff` 创建。
 #[test]
 fn fix1f_prepare_does_not_enqueue_new_transaction() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 5000);
 
     // prepare 阶段不应 enqueue 新事务（enqueue 在 create 阶段）。
@@ -287,7 +287,7 @@ fn fix2c_helper_reflow_crossfade_keeps_four_way_interpolation() {
 /// `AnimatedSlice::sample_current_document_rect` helper，不再手写四项插值。
 #[test]
 fn fix2d_rebind_reflow_move_current_rect_uses_helper() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     assert!(
@@ -303,7 +303,7 @@ fn fix2d_rebind_reflow_move_current_rect_uses_helper() {
 /// `(anchor.to_document_rect.w - anchor.from_document_rect.w)`。
 #[test]
 fn fix2e_reflow_move_current_rect_no_manual_wh_interpolation() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     // 定位 helper 调用处，检查调用处前后 200 字符不含手写 w 插值。
@@ -328,7 +328,7 @@ fn fix2e_reflow_move_current_rect_no_manual_wh_interpolation() {
 /// 和 `new_unit.slice.from/to_document_rect`（无 reflow_anchors fallback 路径）。
 #[test]
 fn fix2f_crossfade_current_rect_keeps_four_way_interpolation() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     // 有 reflow_anchors 路径：用 anchor.from/to_document_rect 的 w 插值。

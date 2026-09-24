@@ -60,7 +60,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 /// 必须在 rebind 调用之前。
 #[test]
 fn fix1a_reconcile_retires_caret_driven_before_rebind() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let window = function_window(
         &src,
         "fn reconcile_active_transactions_with_canonical",
@@ -99,7 +99,7 @@ fn fix1a_reconcile_retires_caret_driven_before_rebind() {
 ///（即每次提升都有条件守卫）。
 #[test]
 fn fix1b_rebind_conditionally_promotes_layout_basis_revision() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     let condition = "self.caret_motion_retired || !self.has_caret_driven_units()";
@@ -131,7 +131,7 @@ fn fix1b_rebind_conditionally_promotes_layout_basis_revision() {
 /// replacement 的 opacity_from 用 current_opacity，不再用 unit.slice.opacity_from。
 #[test]
 fn fix2a_crossfade_split_replacement_uses_current_opacity() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn build_crossfade_split_replacement_units", 6000);
 
     assert!(
@@ -153,7 +153,7 @@ fn fix2a_crossfade_split_replacement_uses_current_opacity() {
 /// 检查插值表达式 `(anchor.to_document_rect.w - anchor.from_document_rect.w)` 存在。
 #[test]
 fn fix2b_current_rect_wh_interpolates_by_visible() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     assert!(
@@ -170,7 +170,7 @@ fn fix2b_current_rect_wh_interpolates_by_visible() {
 /// compute_frame(split_visible).opacity 算出当前帧透明度传入。
 #[test]
 fn fix2c_crossfade_split_computes_current_opacity_before_call() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     assert!(
@@ -188,7 +188,7 @@ fn fix2c_crossfade_split_computes_current_opacity_before_call() {
 /// Split 时走 RebindOldSideInPlace 原位 fade-out。
 #[test]
 fn fix3_old_side_inplace_when_new_side_splits() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 30000);
 
     assert!(

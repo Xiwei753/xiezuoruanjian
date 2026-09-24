@@ -110,7 +110,7 @@ fn issue1_y_fallback_uses_half_open_interval() {
 /// 且 InsertReveal/DeleteConceal 从统一的 CoordinatedMotionFrame.caret 消费 visual_line_id。
 #[test]
 fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     let window = function_window(&src, "fn build_text_animation_plan_with_sample", 10000);
     // Issue #727 约束 3: 不应有 `(r.x, r.top, 0usize)` 或 `(x, y, 0usize)` 等硬编码
     let has_hardcoded_zero = window.contains("(r.x, r.top, 0usize)")
@@ -131,7 +131,7 @@ fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
 /// 问题1 守卫5: PreparedCursorVisualTrack 必须保存 from/to visual_line_id。
 #[test]
 fn issue1_prepared_cursor_visual_track_saves_line_ids() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
     // 修复后：PreparedCursorVisualTrack 有 from_visual_line_id 和 to_visual_line_id 字段
     assert!(
         src.contains("pub from_visual_line_id: Option<usize>"),
@@ -149,7 +149,7 @@ fn issue1_prepared_cursor_visual_track_saves_line_ids() {
 /// 视口裁剪后和全文 VisualLine.id 不一致，跨行裁切会判断错。必须用 line.visual_line_id。
 #[test]
 fn issue1_build_slices_pass_some_line_idx() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     // 函数体较大，取 8000 字符确保覆盖完整调用
     let insert_window = function_window(&src, "fn build_insert_reveal_slices", 8000);
     let delete_window = function_window(&src, "fn build_delete_conceal_slices", 8000);
@@ -221,7 +221,7 @@ fn issue2_forward_delete_same_line_frame_x_fixed_at_left() {
 /// 而是用 collect_rebase_frame_for_unit（对 Reveal/Conceal 用 compute_frame_caret_driven）。
 #[test]
 fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     let window = function_window(&src, "fn take_rebase_frames", 4000);
     // 修复后：不应调 tx.collect_rebase_frames(now)
     let has_old_collect = window.contains("tx.collect_rebase_frames(now)");
@@ -247,7 +247,7 @@ fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
 /// caret_track_progress 派生，对 Reflow 从 unit.current_visible_fraction 派生。
 #[test]
 fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     let window = function_window(&src, "fn collect_rebase_frame_for_unit_without_caret", 3000);
     // Issue #727 约束 4: 统一使用 compute_frame(visible_fraction)
     assert!(
@@ -266,21 +266,22 @@ fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
 /// Reveal/Conceal 使用 compute_frame_caret_driven，Reflow 使用 compute_frame(visible_fraction)。
 #[test]
 fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
+    let render_plan = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // Issue #727 约束 4: sample_caret_geometry_for_caret_driven_clip 已删除
-    let has_deleted_fn = src.contains("fn sample_caret_geometry_for_caret_driven_clip");
+    let has_deleted_fn = cursor_motion.contains("fn sample_caret_geometry_for_caret_driven_clip");
     assert!(
         !has_deleted_fn,
         "sample_caret_geometry_for_caret_driven_clip 应已被删除（Issue #727 约束 4）"
     );
     // Issue #727 约束 3: sample_coordinated_motion_frame 采样统一 caret frame
-    let has_sample_fn = src.contains("fn sample_coordinated_motion_frame");
+    let has_sample_fn = cursor_motion.contains("fn sample_coordinated_motion_frame");
     assert!(
         has_sample_fn,
         "应有 sample_coordinated_motion_frame 采样统一 CoordinatedMotionFrame"
     );
     // build_text_animation_plan_with_sample 从 coordinated_motion_frame.caret 消费
-    let btap_window = function_window(&src, "fn build_text_animation_plan_with_sample", 8000);
+    let btap_window = function_window(&render_plan, "fn build_text_animation_plan_with_sample", 8000);
     assert!(
         btap_window.contains("caret_frame"),
         "build_text_animation_plan_with_sample 应从 CoordinatedMotionFrame.caret 消费"
@@ -294,8 +295,8 @@ fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
 #[test]
 fn all_three_remaining_issues_fixed() {
     let animated_slice = read_src("src/sujian_editor_item/animated_slice.rs");
-    let anim_coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let tx = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let anim_coord = read_src("src/sujian_editor_item/animation/rebase.rs");
+    let tx = read_src("src/sujian_editor_item/animation/transaction/types.rs");
 
     // 问题1: visual_line_id 改 Option<usize>，不再用 0 当哨兵
     assert!(animated_slice.contains("pub visual_line_id: Option<usize>"));

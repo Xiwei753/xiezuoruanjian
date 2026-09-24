@@ -65,7 +65,7 @@ fn window_after(src: &str, anchor: &str, window_chars: usize) -> String {
 
 #[test]
 fn fix1_build_cursor_plan_returns_snap_for_insert_delete_with_active_transaction() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // build_cursor_plan 必须存在
     assert!(
         src.contains("pub(crate) fn build_cursor_plan"),
@@ -180,15 +180,16 @@ fn fix3_coordinated_branch_does_not_start_cursor_animation_state_timeline() {
 
 #[test]
 fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // build_render_plan_full 必须存在
     assert!(
         src.contains("pub(crate) fn build_render_plan_full"),
         "修复点4: build_render_plan_full 必须存在"
     );
     // cursor_sample_outcome 初始化为 Idle
+    // Issue #747: 拆分后路径从 super:: 改为 crate::sujian_editor_item::
     let init_marker =
-        "let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;";
+        "let mut cursor_sample_outcome = crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;";
     assert!(
         src.contains(init_marker),
         "修复点4: build_render_plan_full 应初始化 cursor_sample_outcome = Idle"
@@ -228,7 +229,8 @@ fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
 
 #[test]
 fn dual_timeline_fork_is_eliminated() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
+    let render_plan_builder = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     let render_plan = read_src("src/sujian_editor_item/render_plan.rs");
     let qquick = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
@@ -273,7 +275,7 @@ fn dual_timeline_fork_is_eliminated() {
     );
     // 分叉消除条件 3：build_cursor_plan 在 has_active_for_coordinated 时返回 Snap
     // → apply_plan 收到 Snap 执行 self.animation = None，不创建 CursorAnimationState
-    let ctx2 = window_after(&coord, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
+    let ctx2 = window_after(&render_plan_builder, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
     assert!(
         ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
         "分叉消除: build_cursor_plan 在 has_active_for_coordinated 时返回 Snap"
@@ -292,7 +294,8 @@ fn dual_timeline_fork_is_eliminated() {
 
 #[test]
 fn fix5_build_cursor_plan_active_check_covers_all_text_transactions_not_only_insert() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         src.contains("pub(crate) fn build_cursor_plan"),
         "修复点5: build_cursor_plan 必须存在"
@@ -325,8 +328,8 @@ fn fix5_build_cursor_plan_active_check_covers_all_text_transactions_not_only_ins
          或 active_text_transaction_key().is_some()，覆盖 Insert/Delete/IME 全部正文事务类型"
     );
     assert!(
-        src.contains("fn has_active_text_transaction"),
-        "修复点5: animation_coordinator 应定义 has_active_text_transaction 方法"
+        coord_src.contains("fn has_active_text_transaction"),
+        "修复点5: animation coordinator 应定义 has_active_text_transaction 方法"
     );
     println!("[BUGFIX_VERIFY] fix5: build_cursor_plan 正文活跃判断覆盖 Insert/Delete/CompositionUpdate/CompositionCommitOrCancel，不再来自 has_active_insert()");
 }

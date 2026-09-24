@@ -110,7 +110,7 @@ fn defect1b_cancel_before_handle_composition_commit() {
 /// `let now = Instant::now();` 单独采样，应消费外层传入的 `now` 参数。
 #[test]
 fn defect1c_handle_composition_commit_uses_local_instant_now() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/composition.rs");
     let window = function_window(&src, "fn handle_composition_commit_or_cancel", 4000);
     assert!(
         !window.contains("let now = Instant::now();"),
@@ -122,7 +122,7 @@ fn defect1c_handle_composition_commit_uses_local_instant_now() {
 /// `prepare_composition_commit_handoff` / `PreparedCompositionCommitHandoff`。
 #[test]
 fn defect1d_prepared_composition_commit_handoff_not_introduced() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/composition.rs");
     assert!(
         src.contains("prepare_composition_commit_handoff"),
         "修复后 animation_coordinator.rs 应含 prepare_composition_commit_handoff。"
@@ -172,7 +172,7 @@ fn defect2b_helper_does_not_merge_active_rebind_ranges() {
 /// defect2c: 修复后 `animation_coordinator.rs` 应有 `collect_active_rebind_ranges` 只读入口。
 #[test]
 fn defect2c_collect_active_rebind_ranges_not_introduced() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         src.contains("fn collect_active_rebind_ranges"),
         "修复后 animation_coordinator.rs 应有 fn collect_active_rebind_ranges 只读入口。"
@@ -185,7 +185,7 @@ fn defect2c_collect_active_rebind_ranges_not_introduced() {
 /// 这是问题2的下游症状：远处 Reflow 目标行 clusters=[] 时被误删。
 #[test]
 fn defect2d_rebind_judge_remove_when_clusters_empty() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 12000);
     assert!(
         window.contains("find_clusters_in_canonical"),
@@ -210,7 +210,7 @@ fn defect2d_rebind_judge_remove_when_clusters_empty() {
 /// 远处 Reflow 的目标字节虽仍存在但找不到 cluster。
 #[test]
 fn defect2e_find_clusters_only_iterates_line_clusters() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn find_clusters_in_canonical", 3000);
     assert!(
         window.contains("for para in &snapshot.paragraphs"),
@@ -231,7 +231,7 @@ fn defect2e_find_clusters_only_iterates_line_clusters() {
 /// 这是问题2的上游入口：远处 Reflow 也会被 rebind，从而触发 defect2d 的误删。
 #[test]
 fn defect2f_reconcile_iterates_all_active_transactions() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let window = function_window(
         &src,
         "fn reconcile_active_transactions_with_canonical",
@@ -281,7 +281,7 @@ fn fix1a_no_cancel_before_handle_composition_commit() {
 /// 当前未引入，此测试 FAIL。
 #[test]
 fn fix1b_prepared_composition_commit_handoff_introduced() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/composition.rs");
     assert!(
         src.contains("PreparedCompositionCommitHandoff"),
         "修复后 animation_coordinator.rs 应引入 PreparedCompositionCommitHandoff。\
@@ -294,7 +294,7 @@ fn fix1b_prepared_composition_commit_handoff_introduced() {
 /// 仍活着时采 handoff）。当前未引入，此测试 FAIL。
 #[test]
 fn fix1c_prepare_composition_commit_handoff_introduced() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/composition.rs");
     assert!(
         src.contains("fn prepare_composition_commit_handoff"),
         "修复后 animation_coordinator.rs 应有 fn prepare_composition_commit_handoff。\
@@ -310,7 +310,7 @@ fn fix1c_prepare_composition_commit_handoff_introduced() {
 /// 只读入口（评论 5798704669 问题2 建议的修复入口）。当前未引入，此测试 FAIL。
 #[test]
 fn fix2a_collect_active_rebind_ranges_introduced() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         src.contains("fn collect_active_rebind_ranges"),
         "修复后 animation_coordinator.rs 应有 fn collect_active_rebind_ranges 只读入口。\

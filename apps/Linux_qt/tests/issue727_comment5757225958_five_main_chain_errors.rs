@@ -144,7 +144,7 @@ fn issue2_rust_method_already_deleted() {
 /// keys_to_complete_set 排除即将完成的事务。本守卫验证该结构特征存在。
 #[test]
 fn issue3_complete_frame_continue_skips_glyph_generation() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // clip_rects 收集必须排除 keys_to_complete，否则完成帧"glyph 无、clip 有"→ 文字闪烁。
     let clip_marker = "let mut clip_rects";
     let clip_pos = src.find(clip_marker).expect("clip_rects 收集必须存在");
@@ -161,7 +161,7 @@ fn issue3_complete_frame_continue_skips_glyph_generation() {
 /// 修复后应在收集 clip_rects 时排除即将完成的事务（keys_to_complete），或先 finish 再收集。
 #[test]
 fn issue3_clip_rects_collects_rendering_state() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // 定位 build_render_plan_full 中 clip_rects 收集
     let marker = "let mut clip_rects";
     let pos = src.find(marker).expect("clip_rects 收集必须存在");
@@ -262,7 +262,7 @@ fn issue5_coordinated_motion_frame_has_owner_key() {
 /// 喂给所有 active transaction（在 for tx 循环中）。修复后应按 owner key 过滤。
 #[test]
 fn issue5_caret_frame_shared_across_all_transactions() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // 定位 build_text_animation_plan_with_sample 中使用 coordinated_motion_frame 的地方
     let marker = "coordinated_motion_frame.caret";
     let has_shared_caret = src.contains(marker);

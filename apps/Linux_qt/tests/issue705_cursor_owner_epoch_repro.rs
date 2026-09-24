@@ -115,7 +115,7 @@ fn has_cursor_owner_epoch_guard(window: &str) -> bool {
 /// 从 1600 增到 2400 以覆盖 `return Some((` 和 epoch 检查。
 #[test]
 fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn find_cursor_transaction_for_target", 2400);
     // 前提:函数确实有"活动正文事务直接返回"的抢回路径
     let has_active_key_branch = window.contains("self.active_text_transaction_key()");
@@ -161,7 +161,7 @@ fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
 /// FAIL → 复现成功。
 #[test]
 fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn compute_coordinated_cursor_position", 2200);
     // 前提:函数确实基于 active_text_transaction_key 取事务
     let uses_active_key = window.contains("self.active_text_transaction_key()");
@@ -210,7 +210,7 @@ fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
 /// Issue #727 约束 6: coordinated_enabled 独立开关已删除。
 #[test]
 fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // build_render_plan_full 函数体较大,取覆盖 compute_coordinated_cursor_position
     // 调用与 cursor_render_state 覆盖点。
     let window = function_window(&src, "fn build_render_plan_full", 10000);
@@ -305,7 +305,9 @@ fn issue705_repro_d_click_at_does_not_release_text_transaction_cursor_ownership(
 /// 相关标识符。断言"应存在某种所有权机制"在当前代码上 FAIL → 复现成功。
 #[test]
 fn issue705_repro_e_no_cursor_owner_epoch_mechanism_exists_anywhere() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    // Issue #747: animation_coordinator.rs 拆分后，cursor_owner_epoch 机制分布在各子模块。
+    // 检查 animation 模块和 editing.rs 中是否存在 cursor owner epoch 机制。
+    let coord = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let editing = read_src("src/sujian_editor_item/editing.rs");
     let combined = format!("{}\n{}", coord, editing);
     let has_mechanism = has_cursor_owner_epoch_guard(&combined);

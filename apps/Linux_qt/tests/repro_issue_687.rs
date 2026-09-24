@@ -33,7 +33,7 @@ fn read_src(rel: &str) -> String {
 
 #[test]
 fn issue687_p1_insert_branch_excludes_inserted_range() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     // Insert 分支应调用 build_insert_reveal_slices 显式生成 InsertReveal
     assert!(
         src.contains("build_insert_reveal_slices("),
@@ -60,7 +60,7 @@ fn issue687_p1_insert_branch_excludes_inserted_range() {
 
 #[test]
 fn issue687_p1_delete_branch_excludes_deleted_range() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     // Delete 分支应调用 build_delete_conceal_slices 显式生成 DeleteConceal
     assert!(
         src.contains("build_delete_conceal_slices("),
@@ -87,7 +87,7 @@ fn issue687_p1_delete_branch_excludes_deleted_range() {
 
 #[test]
 fn issue687_p1_build_cluster_reflow_slices_no_longer_infers_insert_reveal() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     // build_cluster_reflow_slices 不再包含纯 new → insert_reveal 推断逻辑
     assert!(
         !src.contains("纯 new（无 old 对应）→ insert_reveal"),

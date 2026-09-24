@@ -56,7 +56,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 /// RebindOldSideInPlace 三个变体分别处理。
 #[test]
 fn fix1a_crossfade_no_group_union_to_all_members() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 RebindNewSide 变体。
@@ -96,7 +96,7 @@ fn fix1a_crossfade_no_group_union_to_all_members() {
 /// 保留 current_rect/target_rect），target_union 仍由 anchor_rebinds 归约得到。
 #[test]
 fn fix1b_crossfade_new_side_uses_own_target() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 32000);
 
     // 修复后：存在 new_side_rebinds 变量（逐 unit 收集自己的 anchor_rebinds + target_union）。
@@ -124,7 +124,7 @@ fn fix1b_crossfade_new_side_uses_own_target() {
 ///（不跟随 group union）。
 #[test]
 fn fix1c_crossfade_old_side_inplace_for_many_to_many() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 RebindOldSideInPlace 变体。
@@ -158,7 +158,7 @@ fn fix1c_crossfade_old_side_inplace_for_many_to_many() {
 /// movement vector 用 target - current。
 #[test]
 fn fix2a_reflow_anchor_current_rect_from_old_basis() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 current_rect 变量。
@@ -197,7 +197,7 @@ fn fix2a_reflow_anchor_current_rect_from_old_basis() {
 /// rebind），不把总 frame/总 target 写给所有 anchor。
 #[test]
 fn fix2b_rebind_merged_preserves_per_anchor_geometry() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 28000);
 
     // 修复后：存在 RebindMerged 变体。
@@ -236,7 +236,7 @@ fn fix2b_rebind_merged_preserves_per_anchor_geometry() {
 /// from_rect.x + (to_rect.x - from_rect.x) * current_visible 插值。
 #[test]
 fn fix2c_split_replacement_from_is_current_frame() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn build_split_replacement_units", 5000);
 
     // 修复后：签名参数名为 anchor_rebinds（不是 anchor_targets）。

@@ -207,7 +207,8 @@ fn issue710_caller_snapshot_coordinator_coordinate_contract_documented() {
         "input_host.rs: 必须有 cancel new-side range 的注释说明"
     );
     // 协调器内部已分清 old/new（上一轮已修，这里只做守卫确保不回退）
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    // Issue #747: animation_coordinator.rs 拆分后，composition 逻辑在 composition.rs
+    let coord = read_src("src/sujian_editor_item/animation/composition.rs");
     let commit_cancel_body = method_body(&coord, "pub fn handle_composition_commit_or_cancel(");
     assert!(
         commit_cancel_body.contains("is_commit")

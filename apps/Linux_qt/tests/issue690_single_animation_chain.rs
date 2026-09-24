@@ -75,12 +75,13 @@ fn issue690_update_paint_node_samples_clock_once_per_frame() {
 
 #[test]
 fn issue690_frame_sample_drives_text_and_cursor() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
-        src.contains("pub(crate) struct AnimationFrameSample"),
+        coord_src.contains("pub(crate) struct AnimationFrameSample"),
         "步骤1: 必须存在纯数据的 AnimationFrameSample"
     );
-    let text_plan = method_body(&src, "fn build_text_animation_plan_with_sample(");
+    let render_src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let text_plan = method_body(&render_src, "fn build_text_animation_plan_with_sample(");
     assert!(
         text_plan.contains("sample: &AnimationFrameSample"),
         "步骤1: 文字 plan 由帧采样构造，不再自己取时间"
@@ -93,7 +94,8 @@ fn issue690_frame_sample_drives_text_and_cursor() {
         text_plan.contains("unit.current_visible_fraction(sample.frame_now)"),
         "步骤1: 文字帧的可见比例来自单元时间线 + 本帧采样点"
     );
-    let cursor = method_body(&src, "fn compute_coordinated_cursor_position(");
+    let cursor_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
+    let cursor = method_body(&cursor_src, "fn compute_coordinated_cursor_position(");
     assert!(
         !cursor.contains("Instant::now()"),
         "步骤1: 协同光标不得再独立采样时间（否则仍是两套时钟）"
@@ -102,7 +104,7 @@ fn issue690_frame_sample_drives_text_and_cursor() {
         cursor.contains("sample.frame_now"),
         "步骤1: 协同光标与文字共用同一个采样点"
     );
-    let render_plan = method_body(&src, "fn build_render_plan_full(");
+    let render_plan = method_body(&render_src, "fn build_render_plan_full(");
     // Issue #727 约束 3+6: compute_coordinated_cursor_position 现在接收 cursor_owner_epoch 参数
     assert!(
         render_plan.contains(
@@ -119,7 +121,7 @@ fn issue690_frame_sample_drives_text_and_cursor() {
 
 #[test]
 fn issue690_cursor_sits_on_text_reveal_and_conceal_boundary() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let cursor = method_body(&src, "fn compute_coordinated_cursor_position(");
     // Issue #722 评论 5747719529 修正：光标本身就是吞字/吐字的视觉边界。
     // 不再从文字 glyph 切片反推光标位置（删除 frame.x + frame.w / rightmost_x.max()）。
@@ -156,7 +158,7 @@ fn issue690_single_collaborative_easing_function() {
         !compute_frame.contains("powi(") && !compute_frame.contains("ease_out_quad("),
         "步骤2: compute_frame 只做线性插值，easing 不得重复施加"
     );
-    let coord_src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         !coord_src.contains("1.0 - (1.0 - "),
         "步骤2: 协调器内不得再内联各自的 easing 公式"
@@ -176,7 +178,7 @@ fn issue690_single_collaborative_easing_function() {
 
 #[test]
 fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
     let frame_start = src
         .find("pub(crate) struct RebaseFrame")
         .expect("步骤3: 必须存在 RebaseFrame");
@@ -286,7 +288,7 @@ fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
         apply_body.contains("CursorSampleOutcome::Running"),
         "步骤2: CursorOnly 采样到 Running progress 时推进 visual_x/y (在 apply_render_plan_cursor_state 中)"
     );
-    let coord_src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
         coord_src.contains("sample_cursor_only_position"),
         "步骤2: 协调器内必须有 sample_cursor_only_position 用 frame_sample 采样"
@@ -352,22 +354,37 @@ fn issue690_animation_lifecycle_events_go_to_diagnostics_logger() {
         mod_src.contains("writer_diagnostics::record_event"),
         "步骤5: 动画事件必须写进正式诊断包"
     );
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    for event in [
-        "\"editor.anim.create\"",
-        "\"editor.anim.rebase\"",
-        "\"editor.anim.keep\"",
-        "\"editor.anim.complete\"",
-    ] {
-        assert!(coord.contains(event), "步骤5: 缺少生命周期事件 {}", event);
-    }
+    // Issue #747: animation_coordinator.rs 拆分后，生命周期事件分布在各子模块。
+    // editor.anim.create → transaction_builder.rs / composition.rs
+    // editor.anim.rebase → rebase.rs
+    // editor.anim.keep   → rebase.rs
+    // editor.anim.complete → render_plan_builder.rs
+    let builder_src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     assert!(
-        coord.contains("fn emit_transaction_diagnostic("),
-        "步骤5: 各生命周期点共用一个紧凑事件构造器"
+        builder_src.contains("\"editor.anim.create\""),
+        "步骤5: 缺少生命周期事件 editor.anim.create"
     );
     assert!(
-        coord.contains("fn conflicting_units_are_untouched("),
+        builder_src.contains("fn emit_transaction_diagnostic("),
+        "步骤5: 各生命周期点共用一个紧凑事件构造器"
+    );
+    let rebase_src = read_src("src/sujian_editor_item/animation/rebase.rs");
+    assert!(
+        rebase_src.contains("\"editor.anim.rebase\""),
+        "步骤5: 缺少生命周期事件 editor.anim.rebase"
+    );
+    assert!(
+        rebase_src.contains("\"editor.anim.keep\""),
+        "步骤5: 缺少生命周期事件 editor.anim.keep"
+    );
+    assert!(
+        rebase_src.contains("fn conflicting_units_are_untouched("),
         "步骤3: 只有真正被新编辑覆盖的单元才结束/替换，未覆盖的走 keep 分支"
+    );
+    let render_plan_src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    assert!(
+        render_plan_src.contains("\"editor.anim.complete\""),
+        "步骤5: 缺少生命周期事件 editor.anim.complete"
     );
     println!("[BUGFIX_690_VERIFY] 步骤5 生命周期诊断事件 (FIXED)");
 }
@@ -375,18 +392,35 @@ fn issue690_animation_lifecycle_events_go_to_diagnostics_logger() {
 #[test]
 fn issue690_no_unconditional_stderr_animation_spam() {
     // 逐帧/无条件 eprintln 会淹没诊断包；只允许 env 控制的 debug log。
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let non_test = match coord.find("\n#[cfg(test)]") {
-        Some(idx) => &coord[..idx],
-        None => &coord[..],
-    };
-    assert!(
-        !non_test.contains("eprintln!("),
-        "步骤5: 协调器生产路径不再用 eprintln 刷动画日志"
-    );
-    assert!(
-        !non_test.contains("[BUGFIX_687]"),
-        "步骤5: 历史临时验证输出已清理，诊断改走 editor.anim.* 事件"
-    );
+    // Issue #747: animation_coordinator.rs 拆分后，检查所有 animation 子模块生产路径。
+    let animation_files = [
+        "src/sujian_editor_item/animation/coordinator.rs",
+        "src/sujian_editor_item/animation/composition.rs",
+        "src/sujian_editor_item/animation/cursor_motion.rs",
+        "src/sujian_editor_item/animation/rebase.rs",
+        "src/sujian_editor_item/animation/render_plan_builder.rs",
+        "src/sujian_editor_item/animation/transaction_builder.rs",
+        "src/sujian_editor_item/animation/transaction/types.rs",
+        "src/sujian_editor_item/animation/transaction/timeline.rs",
+        "src/sujian_editor_item/animation/transaction/rebind.rs",
+        "src/sujian_editor_item/animation/transaction/queue.rs",
+    ];
+    for file in &animation_files {
+        let coord = read_src(file);
+        let non_test = match coord.find("\n#[cfg(test)]") {
+            Some(idx) => &coord[..idx],
+            None => &coord[..],
+        };
+        assert!(
+            !non_test.contains("eprintln!("),
+            "步骤5: {} 生产路径不再用 eprintln 刷动画日志",
+            file
+        );
+        assert!(
+            !non_test.contains("[BUGFIX_687]"),
+            "步骤5: {} 历史临时验证输出已清理，诊断改走 editor.anim.* 事件",
+            file
+        );
+    }
     println!("[BUGFIX_690_VERIFY] 步骤5 stderr 残留清理 (FIXED)");
 }

@@ -240,7 +240,7 @@ fn issue2_compute_frame_caret_driven_only_takes_caret_x_not_full_geometry() {
 /// unit 都把同一个 caret_x 塞进去。
 #[test]
 fn issue2_build_text_animation_plan_uses_single_caret_x_for_all_units() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
 
     // 前提：build_text_animation_plan_with_sample 确实存在并调用 compute_frame_caret_driven
     let has_fn = coord.contains("fn build_text_animation_plan_with_sample(");
@@ -301,7 +301,7 @@ fn issue2_build_text_animation_plan_uses_single_caret_x_for_all_units() {
 /// 代码上 FAIL → 复现成功。
 #[test]
 fn issue3_forward_delete_caret_x_fixed_at_new_rect_x() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
 
     // 前提：compute_coordinated_cursor_position 确实存在并有 has_forward_delete 分支
     let has_fn = coord.contains("fn compute_coordinated_cursor_position(");
@@ -397,7 +397,7 @@ fn issue3_compute_frame_caret_driven_forward_delete_uses_from_right_minus_caret_
 /// 在当前代码上 FAIL → 复现成功。
 #[test]
 fn issue4_transaction_completion_uses_unit_timeline_not_caret_track() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
 
     // 前提：build_text_animation_plan_with_sample 确实存在
     let has_fn = coord.contains("fn build_text_animation_plan_with_sample(");
@@ -457,7 +457,7 @@ fn issue4_transaction_completion_uses_unit_timeline_not_caret_track() {
 /// FAIL → 复现成功。
 #[test]
 fn issue5_build_insert_reveal_slices_does_not_filter_whitespace_and_control_chars() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
 
     // 前提：build_insert_reveal_slices 确实存在
     let has_fn = coord.contains("fn build_insert_reveal_slices(");
@@ -513,7 +513,9 @@ fn issue5_build_insert_reveal_slices_does_not_filter_whitespace_and_control_char
 #[test]
 fn all_five_main_chain_issues_exist() {
     let pipeline = read_src("src/sujian_editor_item/pipeline.rs");
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord_render_plan = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let coord_cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
+    let coord_transaction_builder = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let slice = read_src("src/sujian_editor_item/animated_slice.rs");
 
     // 问题1: pipeline.rs::record_visual_transaction 仍传 ctx.scroll_y
@@ -533,15 +535,15 @@ fn all_five_main_chain_issues_exist() {
     let issue2_violation = slice.contains("pub fn compute_frame_caret_driven(")
         && slice.contains("caret_clip_boundary: f64,")
         && !slice.contains("caret_clip_y")
-        && coord.contains("let caret_x = match tx.cursor_visual_track")
-        && coord.contains("unit.slice.compute_frame_caret_driven(caret_x, visible)");
+        && coord_render_plan.contains("let caret_x = match tx.cursor_visual_track")
+        && coord_render_plan.contains("unit.slice.compute_frame_caret_driven(caret_x, visible)");
 
     // 问题3: 前向 Delete caret_x 固定
     // Issue #722 评论 5748596920 修复后：前向 Delete 用 forward_delete_sampled 标记逐帧机制，
     // compute_frame_caret_driven 的前向 Delete 分支用 conceal_progress 随帧变化。
-    let issue3_violation = coord.contains("has_forward_delete")
-        && coord.contains("Some((new_rect.x, new_rect.top, h))")
-        && !coord.contains("forward_delete_sampled")
+    let issue3_violation = coord_cursor_motion.contains("has_forward_delete")
+        && coord_cursor_motion.contains("Some((new_rect.x, new_rect.top, h))")
+        && !coord_cursor_motion.contains("forward_delete_sampled")
         && slice.contains(
             "self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary",
         )
@@ -550,21 +552,21 @@ fn all_five_main_chain_issues_exist() {
     // 问题4: 事务完成条件由 unit timeline 决定
     // Issue #722 评论 5748596920 修复后：增加了 caret_track_complete 条件，
     // InsertReveal/DeleteConceal 事务必须 caret track 也完成才能释放。
-    let issue4_violation = coord.contains("fn build_text_animation_plan_with_sample(")
-        && (coord.contains("tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)")
-            || coord.contains("tx.units.iter().all(|u| u.progress(frame_now) >= 1.0)"))
-        && coord.contains("keys_to_complete.push(tx.key)")
-        && !coord.contains("caret_track_complete");
+    let issue4_violation = coord_render_plan.contains("fn build_text_animation_plan_with_sample(")
+        && (coord_render_plan.contains("tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)")
+            || coord_render_plan.contains("tx.units.iter().all(|u| u.progress(frame_now) >= 1.0)"))
+        && coord_render_plan.contains("keys_to_complete.push(tx.key)")
+        && !coord_render_plan.contains("caret_track_complete");
 
     // 问题5: 空格/换行被当普通 InsertReveal
     // Issue #722 评论 5748596920 修复后：build_insert_reveal_slices 增加了字符过滤，
     // 纯空格/tab/换行/控制字符不创建 InsertReveal 和 static patch。
-    let issue5_violation = coord.contains("fn build_insert_reveal_slices(")
-        && coord.contains("new_cluster.byte_start >= range_start")
-        && coord.contains("new_cluster.byte_end <= range_end")
-        && coord.contains("AnimatedSlice::insert_reveal(")
-        && !coord.contains("is_whitespace")
-        && !coord.contains("is_control");
+    let issue5_violation = coord_transaction_builder.contains("fn build_insert_reveal_slices(")
+        && coord_transaction_builder.contains("new_cluster.byte_start >= range_start")
+        && coord_transaction_builder.contains("new_cluster.byte_end <= range_end")
+        && coord_transaction_builder.contains("AnimatedSlice::insert_reveal(")
+        && !coord_transaction_builder.contains("is_whitespace")
+        && !coord_transaction_builder.contains("is_control");
 
     println!(
         "[BUGFIX_REPRO_TRACE] SUMMARY five_main_chain_issues: issue1={} issue2={} issue3={} issue4={} issue5={}",

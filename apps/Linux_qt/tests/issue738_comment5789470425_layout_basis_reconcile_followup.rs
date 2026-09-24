@@ -127,7 +127,7 @@ fn issue1_layout_property_changed_reconciles_after_new_layout_computed() {
 /// 跳过 basis 不一致的事务。
 #[test]
 fn issue1_find_cursor_transaction_for_target_takes_layout_revision() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn find_cursor_transaction_for_target", 2000);
     assert!(
         window.contains("current_layout_revision: LayoutRevision"),
@@ -163,7 +163,7 @@ fn issue2_animated_slice_has_reflow_anchors() {
 /// 应合并 reflow_anchors 列表。
 #[test]
 fn issue2_merge_two_merges_anchors_not_single_shaping() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let window = function_window(&src, "fn merge_two", 1200);
     assert!(
         !window.contains("shaping_identity: a.shaping_identity.clone()"),
@@ -178,7 +178,7 @@ fn issue2_merge_two_merges_anchors_not_single_shaping() {
 /// 问题2 守卫3: merge_two 不应再用 bounding_box 做 from/to_document_rect。
 #[test]
 fn issue2_merge_two_no_bounding_box_for_document_rects() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let window = function_window(&src, "fn merge_two", 1200);
     assert!(
         !window.contains("from_document_rect: bounding_box("),
@@ -194,7 +194,7 @@ fn issue2_merge_two_no_bounding_box_for_document_rects() {
 /// 不再做 bounding box + first shaping。
 #[test]
 fn issue2_find_clusters_in_canonical_per_cluster() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     assert!(
         src.contains("fn find_clusters_in_canonical"),
         "应存在 find_clusters_in_canonical（逐 cluster 返回列表），替代旧的\
@@ -237,7 +237,7 @@ fn issue3_animated_slice_has_crossfade_group_id_and_side() {
 /// （is_same_shaping(&cluster_shaping)），应以 group 为单位成对重绑。
 #[test]
 fn issue3_rebind_pairwise_not_independent_shaping_compare() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 4000);
     assert!(
         !window.contains("is_same_shaping(&cluster_shaping)"),
@@ -253,7 +253,7 @@ fn issue3_rebind_pairwise_not_independent_shaping_compare() {
 /// 问题3 守卫3: rebind_timed_units_to_canonical 应有成对重绑逻辑（crossfade_pair）。
 #[test]
 fn issue3_rebind_has_pairwise_crossfade_rebind() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 4000);
     assert!(
         window.contains("crossfade_pair"),

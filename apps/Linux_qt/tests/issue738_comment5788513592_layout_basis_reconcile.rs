@@ -95,13 +95,13 @@ fn issue1_layout_property_changed_must_reconcile_not_just_bump() {
 /// 或让 caret owner 选择看 layout basis。
 #[test]
 fn issue1_build_render_plan_full_samples_caret_before_basis_check() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     let plan_marker = "fn build_render_plan_full";
     let plan_pos = src
         .find(plan_marker)
         .expect("build_render_plan_full 必须存在");
-    // 取 build_render_plan_full 函数体前 1500 字符窗口
-    let plan_window = &src[plan_pos..plan_pos.saturating_add(1500).min(src.len())];
+    // 取 build_render_plan_full 函数体前 3000 字符窗口
+    let plan_window = &src[plan_pos..plan_pos.saturating_add(3000).min(src.len())];
 
     let sample_pos = plan_window
         .find("sample_coordinated_motion_frame")
@@ -128,7 +128,7 @@ fn issue1_build_render_plan_full_samples_caret_before_basis_check() {
 /// coordinated caret。
 #[test]
 fn issue1_caret_owner_selection_ignores_layout_basis() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn active_text_transaction_key_with_epoch", 800);
     // 当前缺陷：函数体里只检查 cursor_owner_epoch 和 caret_motion_retired，
     // 不检查 tx.layout_basis_revision
@@ -152,7 +152,7 @@ fn issue1_caret_owner_selection_ignores_layout_basis() {
 /// 或让 find_cluster_in_canonical 支持跨多 cluster 的 range 匹配。
 #[test]
 fn issue2_merge_two_spans_multiple_clusters_byte_range() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let window = function_window(&src, "fn merge_two", 800);
     // 当前缺陷：合并后 byte range 取 min/max，覆盖多个原始 cluster
     let merges_byte_range_across_clusters = window
@@ -173,7 +173,7 @@ fn issue2_merge_two_spans_multiple_clusters_byte_range() {
 /// 此守卫确认新函数存在且不要求单 cluster 包含判定。
 #[test]
 fn issue2_find_cluster_in_canonical_requires_single_cluster_containment() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     assert!(
         src.contains("fn find_clusters_in_canonical"),
         "应存在 find_clusters_in_canonical（逐 cluster 返回列表），替代旧的\
@@ -195,7 +195,7 @@ fn issue2_find_cluster_in_canonical_requires_single_cluster_containment() {
 /// 逐 cluster 重绑。此守卫确认新函数调用存在。
 #[test]
 fn issue2_rebind_removes_unit_when_cluster_not_found() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 8000);
     assert!(
         window.contains("find_clusters_in_canonical"),
@@ -243,7 +243,7 @@ fn issue3_reflow_crossfade_new_has_none_shaping_identity() {
 /// 必然被 Remove。
 #[test]
 fn issue3_rebind_none_shaping_identity_returns_false() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 3000);
     // 当前缺陷：match unit.slice.shaping_identity.as_ref() { Some(sid) => ..., None => false }
     let none_returns_false = window.contains("None => false");

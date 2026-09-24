@@ -198,7 +198,8 @@ fn issue710_cancel_snapshot_visual_range_expanded_with_correct_texts() {
 fn issue710_coordinator_raw_range_params_preserved() {
     // coordinator 里自己计算的 visual_affected_byte_range_old/new 保留不动，
     // 这里解决的是构建 snapshot 时生成哪些动画视觉资源，两者职责不冲突。
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    // Issue #747: animation_coordinator.rs 拆分后，composition 逻辑在 composition.rs
+    let coord = read_src("src/sujian_editor_item/animation/composition.rs");
     let body = method_body(&coord, "pub fn handle_composition_commit_or_cancel(");
 
     // coordinator 仍然接收 raw preedit/candidate/committed_replace 参数

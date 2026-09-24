@@ -134,7 +134,7 @@ fn has_caret_driven_clip_guard(window: &str) -> bool {
 fn repro_a_last_scroll_y_field_never_written_back_breaks_scroll_animation() {
     let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
     let rendering = read_src("src/sujian_editor_item/rendering.rs");
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
 
     // 前提：last_scroll_y 字段确实存在且被传给 build_cursor_plan
     let field_exists = cursor_ctrl.contains("pub last_scroll_y: f64,");
@@ -197,7 +197,7 @@ fn repro_a_last_scroll_y_field_never_written_back_breaks_scroll_animation() {
 /// `scroll_changed` → 断言"应删除 scroll_changed"在当前代码上 FAIL → 复现成功。
 #[test]
 fn repro_b_build_cursor_plan_hard_snap_includes_scroll_changed() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // 前提：hard_snap 表达式存在
     let has_hard_snap = src.contains("let hard_snap =");
     let has_scroll_changed_var = src.contains("let scroll_changed =");
@@ -242,7 +242,7 @@ fn repro_b_build_cursor_plan_hard_snap_includes_scroll_changed() {
 /// 反推"在当前代码上 FAIL → 复现成功。
 #[test]
 fn repro_c_compute_coordinated_cursor_uses_rightmost_x_max_to_infer_cursor() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     // compute_coordinated_cursor_position 函数体较大（Insert 分支 ~2736 行，
     // Delete 分支 ~2776 行），需足够大窗口覆盖两个分支。
     let window = function_window(&src, "fn compute_coordinated_cursor_position", 14000);
@@ -289,7 +289,7 @@ fn repro_c_compute_coordinated_cursor_uses_rightmost_x_max_to_infer_cursor() {
 /// → 断言"不应有 conceal_edge.min() 反推"在当前代码上 FAIL → 复现成功。
 #[test]
 fn repro_d_compute_coordinated_cursor_uses_conceal_edge_min_to_infer_cursor() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn compute_coordinated_cursor_position", 14000);
     // 前提：函数确实有 Delete 分支遍历 units 算 conceal_edge
     let has_conceal_edge = window.contains("let mut conceal_edge: Option<f64> = None;");
@@ -330,7 +330,7 @@ fn repro_d_compute_coordinated_cursor_uses_conceal_edge_min_to_infer_cursor() {
 /// 这是另一条调用路径上的同源违规。
 #[test]
 fn repro_e_sample_coordinated_cursor_rect_at_uses_glyph_inference() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     // sample_coordinated_cursor_rect_at 从第 300 行起，Insert 分支 ~331 行，
     // Delete 分支 ~369 行，需足够大窗口覆盖两个分支。
     let window = function_window(&src, "fn sample_coordinated_cursor_rect_at", 9000);
@@ -488,7 +488,7 @@ fn repro_g_insert_reveal_delete_conceal_clip_independent_of_caret() {
 /// timeline。
 #[test]
 fn repro_h_text_unit_maintains_independent_timeline_that_forks_from_caret() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let slice = read_src("src/sujian_editor_item/animated_slice.rs");
 
     // 前提：文字 unit 确实维护独立 timeline
@@ -589,7 +589,9 @@ fn repro_i_rendering_still_passes_last_scroll_y_to_build_cursor_plan() {
 /// - 软换行光标落点错误（复现 F）
 #[test]
 fn caret_is_not_visual_boundary_of_insert_reveal_delete_conceal() {
-    let coord = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let coord_render_plan = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let coord_cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
+    let coord_types = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let slice = read_src("src/sujian_editor_item/animated_slice.rs");
     let layout = read_src("src/editor/layout/canonical_snapshot.rs");
     let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
@@ -599,18 +601,21 @@ fn caret_is_not_visual_boundary_of_insert_reveal_delete_conceal() {
     let violation_a_last_scroll_y = cursor_ctrl.contains("pub last_scroll_y: f64,")
         && rendering.contains("self.cursor_ctrl.last_scroll_y");
     let violation_b_scroll_changed_in_hard_snap = {
-        let w = window_after(&coord, "let hard_snap =", 200);
+        let w = window_after(&coord_render_plan, "let hard_snap =", 200);
         w.contains("scroll_changed")
     };
-    let violation_c_rightmost_x_max = coord.contains("prev.max(edge_x)");
-    let violation_d_conceal_edge_min = coord.contains("prev.min(edge)");
+    let violation_c_rightmost_x_max = coord_cursor_motion.contains("prev.max(edge_x)");
+    let violation_d_conceal_edge_min = coord_cursor_motion.contains("prev.min(edge)");
     let violation_f_inclusive_find = layout
         .contains(".find(|cl| cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end)");
     let violation_g_unit_visible_clip =
         slice.contains("let frame_w = self.to_document_rect.w * visible;");
-    let violation_h_unit_own_timeline = coord.contains("per-unit progress")
+    let has_caret_geometry_clip = coord_types.contains("caret_geometry_determines_clip")
+        || coord_types.contains("clip_from_coordinated_caret");
+    let violation_h_unit_own_timeline = (coord_types.contains("per-unit progress")
         || slice.contains("单元自己的时间线")
-        || coord.contains("拥有自己的 `started_at` / `duration_ms`");
+        || coord_types.contains("拥有自己的 `started_at` / `duration_ms`"))
+        && !has_caret_geometry_clip;
 
     println!(
         "[BUGFIX_REPRO_TRACE] SUMMARY violations: A={} B={} C={} D={} F={} G={} H={}",

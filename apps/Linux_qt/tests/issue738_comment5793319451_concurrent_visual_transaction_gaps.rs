@@ -102,7 +102,7 @@ fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
 /// 修复后守卫 1b-1: active_text_transaction_key_with_epoch 用 `!=` 而非 `<`。
 #[test]
 fn issue738_comment5793319451_fix1b_caret_owner_guard_uses_neq() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn active_text_transaction_key_with_epoch", 3000);
     assert!(
         window.contains("tx.layout_basis_revision != current_layout_revision"),
@@ -117,7 +117,7 @@ fn issue738_comment5793319451_fix1b_caret_owner_guard_uses_neq() {
 /// 修复后守卫 1b-2: clip rects 收集用 `==` 而非 `>=`。
 #[test]
 fn issue738_comment5793319451_fix1b_clip_rects_guard_uses_eq() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     assert!(
         src.contains("tx.layout_basis_revision == frame_context.layout_basis_revision"),
         "修复后 clip rects 守卫应用 == 而非 >=。"
@@ -131,7 +131,7 @@ fn issue738_comment5793319451_fix1b_clip_rects_guard_uses_eq() {
 /// 修复后守卫 1b-3: build_text_animation_plan_with_sample 用 `!=` 而非 `<`（两处）。
 #[test]
 fn issue738_comment5793319451_fix1b_plan_guards_use_neq() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     let window = function_window(&src, "fn build_text_animation_plan_with_sample", 12000);
     // 修复后：两处 != layout_basis_revision（retire caret motion + glyph 计划）。
     let neq_count = window
@@ -152,7 +152,7 @@ fn issue738_comment5793319451_fix1b_plan_guards_use_neq() {
 /// 修复后守卫 1b-4: CursorOnly 查找也用 `!=` 而非 `<`。
 #[test]
 fn issue738_comment5793319451_fix1b_cursor_only_guard_uses_neq() {
-    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     // CursorOnly 查找在 find_transaction_for_cursor_target 或类似函数中。
     // 检查整个文件中不再有 tx.layout_basis_revision < current_layout_revision。
     assert!(
@@ -168,7 +168,7 @@ fn issue738_comment5793319451_fix1b_cursor_only_guard_uses_neq() {
 /// 修复后守卫 2a: rebind_timed_units_to_canonical 用多对多 CrossFadeGroup 结构。
 #[test]
 fn issue738_comment5793319451_fix2a_crossfade_many_to_many_group_struct() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 12000);
 
     // 修复后：多对多 group 结构存在。
@@ -211,7 +211,7 @@ fn issue738_comment5793319451_fix2a_crossfade_many_to_many_group_struct() {
 /// 修复后守卫 2b: 多对多 group 处理循环 + 缺 side 整组 Remove + 逐 new side 校验。
 #[test]
 fn issue738_comment5793319451_fix2b_crossfade_group_processing_logic() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 20000);
 
     // 修复后：多对多 group 处理循环存在。
@@ -260,7 +260,7 @@ fn issue738_comment5793319451_fix2b_crossfade_group_processing_logic() {
 /// 修复后守卫 3a: build_split_replacement_units 签名有 now: Instant，不再内部 Instant::now()。
 #[test]
 fn issue738_comment5793319451_fix3a_split_replacement_uses_outer_now() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn build_split_replacement_units", 3000);
 
     // 修复后：函数签名包含 now: Instant 参数。
@@ -283,7 +283,7 @@ fn issue738_comment5793319451_fix3a_split_replacement_uses_outer_now() {
 /// 修复后守卫 3b: 用 `* current_visible` 而非 `* (1.0 - current_visible)`。
 #[test]
 fn issue738_comment5793319451_fix3b_split_frame_direction_matches_compute_frame() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn build_split_replacement_units", 4000);
 
     // 修复后：用 * current_visible（正确方向）。
@@ -308,7 +308,7 @@ fn issue738_comment5793319451_fix3b_split_frame_direction_matches_compute_frame(
 /// current_rect/target_rect（与 RebindMerged 对称），语义仍是同步更新 reflow_anchors。
 #[test]
 fn issue738_comment5793319451_fix3c_rebind_updates_reflow_anchors() {
-    let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
+    let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 32000);
 
     // 修复后：Rebind 应用循环中有 reflow_anchors 同步更新（逐 anchor enumerate）。
