@@ -283,6 +283,7 @@ impl From<ThemePaletteDto> for crate::settings::ThemePalette {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncableSettingsDto {
     pub font_size: f64,
     pub theme_mode: String,

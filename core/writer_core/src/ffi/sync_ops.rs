@@ -17,44 +17,14 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
-/// 从 `ProviderConfigDto` 提取已有的 GitHub provider 配置（github-api feature 下）。
-#[cfg(feature = "github-api")]
-fn extract_existing_github_config(
-    provider_config: &Option<crate::api::ProviderConfigDto>,
-) -> Option<crate::sync::provider::github::config::GitHubProviderConfig> {
-    provider_config.as_ref().and_then(|pc| {
-        let internal: Option<crate::sync::provider::ProviderConfig> = pc.clone().into();
-        internal.map(|crate::sync::provider::ProviderConfig::GitHub(gh)| gh)
-    })
-}
-
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
     match with_app_service(|svc| {
-        let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
-        // FFI 暴露的旧字段从 provider_config 读取，
-        // 保持 C ABI 兼容（旧调用方仍读 remoteUrl/branch/provider）。
-        let (remote_url, branch, provider) = match &config.provider_config {
-            #[cfg(feature = "github-api")]
-            Some(crate::api::ProviderConfigDto::GitHub {
-                remote_url, branch, ..
-            }) => (remote_url.clone(), branch.clone(), "github_api".to_string()),
-            _ => (
-                String::new(),
-                "main".to_string(),
-                config.active_provider.clone(),
-            ),
-        };
-        Ok(serde_json::json!({
-            "enabled": config.enabled,
-            "provider": provider,
-            "remoteUrl": remote_url,
-            "branch": branch,
-            "autoSync": config.auto_sync,
-            "conflictStrategy": "manual"
-        }))
+        let dto: crate::api::SyncConfigDto =
+            svc.load_sync_config().map_err(|e| format!("{}", e))?;
+        Ok(dto)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
@@ -79,43 +49,27 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         let mut config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+        // 字段名与 SyncConfigDto 的 camelCase 序列化契约一致。
         if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
             config.enabled = v;
         }
-        // FFI 仍接受旧字段 remoteUrl/branch，
-        // 写入 provider_config: ProviderConfig::GitHub。
-        // provider::github 模块仅在 github-api feature 下编译，整段逻辑需门控；
-        // 无 github-api 时该 block 不编译，FFI 仍保存 enabled/autoSync 等通用字段。
-        #[cfg(feature = "github-api")]
-        {
-            let remote_url = val
-                .get("remoteUrl")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let branch = val
-                .get("branch")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            if remote_url.is_some() || branch.is_some() {
-                let existing_gh = extract_existing_github_config(&config.provider_config);
-                let defaults =
-                    crate::sync::provider::github::config::GitHubProviderConfig::defaults();
-                let prev_remote = existing_gh.as_ref().map(|g| g.remote_url.clone());
-                let prev_branch = existing_gh.as_ref().map(|g| g.branch.clone());
-                let prev_username = existing_gh.as_ref().map(|g| g.username.clone());
-                let prev_transport = existing_gh.as_ref().map(|g| g.transport.clone());
-                let gh = crate::sync::provider::github::config::GitHubProviderConfig {
-                    remote_url: remote_url.or(prev_remote).unwrap_or(defaults.remote_url),
-                    branch: branch.or(prev_branch).unwrap_or(defaults.branch),
-                    username: prev_username.unwrap_or(defaults.username),
-                    transport: prev_transport.unwrap_or(defaults.transport),
-                };
-                config.provider_config =
-                    Some(crate::sync::provider::ProviderConfig::GitHub(gh).into());
-            }
+        if let Some(v) = val.get("activeProvider").and_then(|v| v.as_str()) {
+            config.active_provider = v.to_string();
         }
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;
+        }
+        if let Some(v) = val.get("syncIntervalSeconds").and_then(|v| v.as_u64()) {
+            config.sync_interval_seconds = u32::try_from(v).unwrap_or(0);
+        }
+        // providerConfig 是嵌套的 ProviderConfigDto，如果存在则反序列化替换。
+        #[cfg(feature = "github-api")]
+        if let Some(pc) = val.get("providerConfig") {
+            if !pc.is_null() {
+                let dto: crate::api::ProviderConfigDto = serde_json::from_value(pc.clone())
+                    .map_err(|e| format!("providerConfig parse error: {}", e))?;
+                config.provider_config = dto.into();
+            }
         }
         svc.save_sync_config(config).map_err(|e| format!("{}", e))?;
         Ok(true)

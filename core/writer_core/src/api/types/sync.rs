@@ -66,6 +66,7 @@ impl From<ProviderConfigDto> for Option<crate::sync::provider::ProviderConfig> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncConfigDto {
     pub enabled: bool,
     pub active_provider: String,
@@ -155,6 +156,7 @@ impl From<ProviderSecretsDto> for crate::sync::provider::ProviderSecrets {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncSecretsDto {
     pub provider_secrets: Option<ProviderSecretsDto>,
 }
@@ -196,6 +198,7 @@ impl From<SyncSecretsDto> for crate::sync::SyncSecrets {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncStateDto {
     pub status: String,
     pub last_sync_time: Option<i64>,
@@ -204,6 +207,7 @@ pub struct SyncStateDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncConflictDto {
     pub local_path: String,
     pub remote_path: String,
@@ -270,6 +274,7 @@ impl From<SyncStateDto> for crate::sync::SyncState {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
     pub provider_type: String,
@@ -314,6 +319,7 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
 /// - `block_message_key`：阻塞原因的 i18n key（备选，当 reason_code 不够描述时使用）
 /// - `message_args`：i18n 模板参数（如同步进度百分比）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncCapabilityDto {
     pub can_run: bool,
     pub block_reason_code: Option<String>,
@@ -322,6 +328,7 @@ pub struct SyncCapabilityDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncOperationCountsDto {
     pub uploaded: u32,
     pub downloaded: u32,
@@ -340,6 +347,7 @@ pub struct SyncOperationCountsDto {
 /// - `phase_key`：当前阶段 i18n key（如 `"uploading"` / `"downloading"` / `"resolving_conflicts"`）
 /// - `summary_key`：完成摘要 i18n key（如 `"sync_completed"` / `"sync_completed_with_conflicts"`）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncOperationStateDto {
     pub operation_id: String,
     pub operation_kind: String,
@@ -352,6 +360,7 @@ pub struct SyncOperationStateDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncPlanDto {
     pub files_to_upload: Vec<String>,
     pub files_to_download: Vec<String>,
@@ -375,6 +384,7 @@ impl From<crate::sync::SyncPlan> for SyncPlanDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncResultDto {
     pub status: String,
     pub uploaded_files: Vec<String>,

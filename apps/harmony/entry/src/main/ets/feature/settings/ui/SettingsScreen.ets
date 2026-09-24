@@ -702,7 +702,7 @@ export struct SettingsScreen {
             .onSelect((index: number) => {
               if (this.syncConfig) {
                 const providers = ['github', 'gitlab', 'gitea', 'custom']
-                this.syncConfig.backendType = providers[index]
+                this.syncConfig.activeProvider = providers[index]
               }
             })
         }
@@ -1108,11 +1108,11 @@ export struct SettingsScreen {
 
   getSyncProviderIndex(): number {
     const providers: string[] = ['github', 'gitlab', 'gitea', 'custom']
-    return providers.indexOf(this.syncConfig?.backendType || 'github')
+    return providers.indexOf(this.syncConfig?.activeProvider || 'github')
   }
 
   getSyncProviderName(): string {
-    const p: string = this.syncConfig?.backendType || 'github'
+    const p: string = this.syncConfig?.activeProvider || 'github'
     if (p === 'github') return 'GitHub'
     if (p === 'gitlab') return 'GitLab'
     if (p === 'gitea') return 'Gitea'

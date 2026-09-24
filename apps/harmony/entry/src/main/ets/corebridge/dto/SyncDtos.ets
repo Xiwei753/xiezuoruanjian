@@ -1,16 +1,23 @@
 // ─── Sync DTOs ───
+// Issue #753：字段与 Core api/types/sync.rs 的 DTO 一字不差对齐。
+// Core DTO 是唯一数据结构，Harmony FFI 只负责搬运。
+
+export interface ProviderConfig {
+  type: string  // "github"
+  remoteUrl: string
+  branch: string
+  username: string
+  transport: string
+}
 
 export interface SyncConfig {
   enabled: boolean
-  backendType: string
-  remoteUrl: string
-  transport: string
-  branch: string
+  activeProvider: string
+  providerConfig?: ProviderConfig
   autoSync: boolean
   syncIntervalSeconds: number
-  username: string
-  androidHasInternetPermission: boolean
-  androidHasAccessNetworkStatePermission: boolean
+  hasNetworkPermission: boolean
+  hasNetworkStatePermission: boolean
 }
 
 export interface SyncState {

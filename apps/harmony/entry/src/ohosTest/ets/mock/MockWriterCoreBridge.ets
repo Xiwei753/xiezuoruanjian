@@ -76,15 +76,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   private mockSyncConfig: SyncConfig = {
     enabled: false,
-    backendType: 'github',
-    remoteUrl: '',
-    transport: 'https',
-    branch: 'main',
+    activeProvider: 'github',
+    providerConfig: undefined,
     autoSync: false,
     syncIntervalSeconds: 300,
-    username: '',
-    androidHasInternetPermission: false,
-    androidHasAccessNetworkStatePermission: false
+    hasNetworkPermission: false,
+    hasNetworkStatePermission: false
   } as SyncConfig
 
   private delay(ms: number): Promise<void> {
@@ -649,15 +646,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(100)
     const copy: SyncConfig = {
       enabled: this.mockSyncConfig.enabled,
-      backendType: this.mockSyncConfig.backendType,
-      remoteUrl: this.mockSyncConfig.remoteUrl,
-      transport: this.mockSyncConfig.transport,
-      branch: this.mockSyncConfig.branch,
+      activeProvider: this.mockSyncConfig.activeProvider,
+      providerConfig: this.mockSyncConfig.providerConfig,
       autoSync: this.mockSyncConfig.autoSync,
       syncIntervalSeconds: this.mockSyncConfig.syncIntervalSeconds,
-      username: this.mockSyncConfig.username,
-      androidHasInternetPermission: this.mockSyncConfig.androidHasInternetPermission,
-      androidHasAccessNetworkStatePermission: this.mockSyncConfig.androidHasAccessNetworkStatePermission
+      hasNetworkPermission: this.mockSyncConfig.hasNetworkPermission,
+      hasNetworkStatePermission: this.mockSyncConfig.hasNetworkStatePermission
     }
     return this.success(copy)
   }
@@ -666,15 +660,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(200)
     this.mockSyncConfig = {
       enabled: config.enabled,
-      backendType: config.backendType,
-      remoteUrl: config.remoteUrl,
-      transport: config.transport,
-      branch: config.branch,
+      activeProvider: config.activeProvider,
+      providerConfig: config.providerConfig,
       autoSync: config.autoSync,
       syncIntervalSeconds: config.syncIntervalSeconds,
-      username: config.username,
-      androidHasInternetPermission: config.androidHasInternetPermission,
-      androidHasAccessNetworkStatePermission: config.androidHasAccessNetworkStatePermission
+      hasNetworkPermission: config.hasNetworkPermission,
+      hasNetworkStatePermission: config.hasNetworkStatePermission
     }
     return this.success(true)
   }
@@ -728,7 +719,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(500)
     const diagnostics: SyncDiagnosticsResult = {
       success: true,
-      backendType: this.mockSyncConfig.backendType,
+      backendType: this.mockSyncConfig.activeProvider,
       androidHasInternetPermission: true,
       androidHasAccessNetworkStatePermission: true,
       androidNetworkState: 'connected',
@@ -765,9 +756,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(100)
     const state: SyncState = {
       status: 'idle',
-      remoteUrl: this.mockSyncConfig.remoteUrl,
-      backendType: this.mockSyncConfig.backendType,
-      transport: this.mockSyncConfig.transport,
+      remoteUrl: this.mockSyncConfig.providerConfig?.remoteUrl ?? '',
+      backendType: this.mockSyncConfig.activeProvider,
+      transport: this.mockSyncConfig.providerConfig?.transport ?? '',
       conflicts: [] as SyncConflict[]
     }
     return this.success(state)

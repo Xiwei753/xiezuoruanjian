@@ -15,7 +15,7 @@
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind } from '../dto/StarMapDtos'
-import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult } from '../dto/SyncDtos'
+import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { LayoutContract, ScreenPolicy, ShellMode, WorkspacePaneMode, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion } from '../dto/PlatformDtos'
 
@@ -820,21 +820,56 @@ function decodeSyncConflict(data: Object): DecodeResult<SyncConflict> {
   })
 }
 
+export function decodeProviderConfig(data: Object): DecodeResult<ProviderConfig> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<ProviderConfig>('ProviderConfig: expected object')
+  }
+  const type: string | null = reqStr(data, 'type')
+  if (type === null) { return err<ProviderConfig>('ProviderConfig.type missing or not string') }
+  const remoteUrl: string | null = reqStr(data, 'remoteUrl')
+  if (remoteUrl === null) { return err<ProviderConfig>('ProviderConfig.remoteUrl missing or not string') }
+  const branch: string | null = reqStr(data, 'branch')
+  if (branch === null) { return err<ProviderConfig>('ProviderConfig.branch missing or not string') }
+  const username: string | null = reqStr(data, 'username')
+  if (username === null) { return err<ProviderConfig>('ProviderConfig.username missing or not string') }
+  const transport: string | null = reqStr(data, 'transport')
+  if (transport === null) { return err<ProviderConfig>('ProviderConfig.transport missing or not string') }
+  return ok<ProviderConfig>({ type: type, remoteUrl: remoteUrl, branch: branch, username: username, transport: transport })
+}
+
 export function decodeSyncConfig(data: Object): DecodeResult<SyncConfig> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<SyncConfig>('SyncConfig: expected object')
   }
+  const enabled: boolean | null = reqBool(data, 'enabled')
+  if (enabled === null) { return err<SyncConfig>('SyncConfig.enabled missing or not boolean') }
+  const activeProvider: string | null = reqStr(data, 'activeProvider')
+  if (activeProvider === null) { return err<SyncConfig>('SyncConfig.activeProvider missing or not string') }
+  const autoSync: boolean | null = reqBool(data, 'autoSync')
+  if (autoSync === null) { return err<SyncConfig>('SyncConfig.autoSync missing or not boolean') }
+  const syncIntervalSeconds: number | null = reqNum(data, 'syncIntervalSeconds')
+  if (syncIntervalSeconds === null) { return err<SyncConfig>('SyncConfig.syncIntervalSeconds missing or not number') }
+  const hasNetworkPermission: boolean | null = reqBool(data, 'hasNetworkPermission')
+  if (hasNetworkPermission === null) { return err<SyncConfig>('SyncConfig.hasNetworkPermission missing or not boolean') }
+  const hasNetworkStatePermission: boolean | null = reqBool(data, 'hasNetworkStatePermission')
+  if (hasNetworkStatePermission === null) { return err<SyncConfig>('SyncConfig.hasNetworkStatePermission missing or not boolean') }
+
+  let providerConfig: ProviderConfig | undefined = undefined
+  const pcObj: Object | undefined = optObj(data, 'providerConfig')
+  if (pcObj !== undefined) {
+    const pcR: DecodeResult<ProviderConfig> = decodeProviderConfig(pcObj)
+    if (!pcR.ok || pcR.value === undefined) { return err<SyncConfig>(`providerConfig: ${pcR.error}`) }
+    providerConfig = pcR.value
+  }
+
   const value: SyncConfig = {
-    enabled: reqBool(data, 'enabled') ?? false,
-    backendType: reqStr(data, 'backendType') ?? '',
-    remoteUrl: reqStr(data, 'remoteUrl') ?? '',
-    transport: reqStr(data, 'transport') ?? '',
-    branch: reqStr(data, 'branch') ?? '',
-    autoSync: reqBool(data, 'autoSync') ?? false,
-    syncIntervalSeconds: reqNum(data, 'syncIntervalSeconds') ?? 0,
-    username: reqStr(data, 'username') ?? '',
-    androidHasInternetPermission: reqBool(data, 'androidHasInternetPermission') ?? false,
-    androidHasAccessNetworkStatePermission: reqBool(data, 'androidHasAccessNetworkStatePermission') ?? false
+    enabled: enabled,
+    activeProvider: activeProvider,
+    providerConfig: providerConfig,
+    autoSync: autoSync,
+    syncIntervalSeconds: syncIntervalSeconds,
+    hasNetworkPermission: hasNetworkPermission,
+    hasNetworkStatePermission: hasNetworkStatePermission
   }
   return ok<SyncConfig>(value)
 }
