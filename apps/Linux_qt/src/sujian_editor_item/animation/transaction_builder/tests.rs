@@ -1671,4 +1671,118 @@ fn issue756_comment5821042551_composition_commit_smooth_only_creates_transaction
         tx.cursor_visual_track.is_some(),
         "smooth-only composition commit: 必须有 cursor_visual_track"
     );
+    // Issue #756 评论 5821793349: smooth-only commit 不应有文字 unit
+    assert!(
+        tx.units.is_empty(),
+        "smooth-only composition commit: tx.units 必须为空（text_animation_enabled=false）"
+    );
+    // smooth-only commit: coordinated 必须为 false
+    assert!(
+        !tx.coordinated,
+        "smooth-only composition commit: coordinated 必须为 false"
+    );
+}
+
+/// Issue #756 评论 5821793349: composition commit 在 typing=true 时必须保留
+/// crossfade 文字 unit（DeleteConceal/InsertReveal/ReflowCrossFade/ReflowMove），
+/// 避免把 text_animation_enabled 收口修过头。
+#[test]
+fn issue756_comment5821793349_composition_commit_typing_enabled_keeps_crossfade_units() {
+    let sid_preedit = ShapingIdentity {
+        text_content_hash: 99,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 99,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let sid_after = ShapingIdentity {
+        text_content_hash: 42,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 100,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let old_snapshot = make_test_snapshot(
+        "abc_preedit_after",
+        vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 10, 50.0, 0.0, sid_preedit.clone()),
+            (10, 15, 120.0, 0.0, sid_after.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "abc_QQ_after",
+        vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 5, 50.0, 0.0, sid_after.clone()),
+            (5, 10, 80.0, 0.0, sid_after),
+        ],
+    );
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // coordinated=false, typing=true, smooth=true → text=true, caret=true
+    let key = coord.handle_composition_commit_or_cancel(
+        &old_snapshot,
+        &new_snapshot,
+        3,
+        10,
+        true,
+        false,
+        3,
+        5,
+        3,
+        10,
+        Some(CursorRect {
+            x: 50.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(CursorRect {
+            x: 80.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        1,
+        LayoutRevision::initial(),
+        Instant::now(),
+        None,
+        // text=true, caret=true, coordinated=false
+        true,
+        true,
+        false,
+    );
+    assert!(
+        key.is_some(),
+        "typing-enabled composition commit: 必须创建事务"
+    );
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key.unwrap())
+        .unwrap();
+    // typing-enabled commit: 必须有文字 unit（crossfade）
+    assert!(
+        !tx.units.is_empty(),
+        "typing-enabled composition commit: tx.units 不应为空（text_animation_enabled=true，crossfade 文字动画必须保留）"
+    );
+    // 仍应有 caret track
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "typing-enabled composition commit: 必须有 cursor_visual_track"
+    );
+    // coordinated 仍为 false
+    assert!(
+        !tx.coordinated,
+        "typing-enabled composition commit: coordinated 必须为 false"
+    );
 }

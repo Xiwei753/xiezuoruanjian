@@ -155,19 +155,27 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     }
 
     // 1b. Composition commit 特殊 crossfade（preedit→candidate 形变）
-    if let Some(crossfade) = &spec.composition_commit_crossfade {
-        slices.extend(build_composition_commit_crossfade_slices(
-            spec.key,
-            &spec.old_snapshot,
-            &spec.new_snapshot,
-            &spec.offset_map,
-            crossfade.preedit_byte_start,
-            crossfade.preedit_byte_end,
-            crossfade.candidate_byte_start,
-            crossfade.candidate_byte_end,
-            spec.old_cursor_rect.as_ref(),
-            spec.new_cursor_rect.as_ref(),
-        ));
+    //
+    // Issue #756 评论 5821793349: crossfade 文字 unit（DeleteConceal/InsertReveal/
+    // ReflowCrossFade/ReflowMove）也受 text_animation_enabled 控制。
+    // 非协同 smooth-only commit（coordinated=false + typing=false + smooth=true）只保留
+    // cursor_visual_track，tx.units 必须为空，不再生成文字动画。
+    // typing-only / typing+smooth / coordinated 模式继续保留 composition crossfade 文字动画。
+    if spec.text_animation_enabled {
+        if let Some(crossfade) = &spec.composition_commit_crossfade {
+            slices.extend(build_composition_commit_crossfade_slices(
+                spec.key,
+                &spec.old_snapshot,
+                &spec.new_snapshot,
+                &spec.offset_map,
+                crossfade.preedit_byte_start,
+                crossfade.preedit_byte_end,
+                crossfade.candidate_byte_start,
+                crossfade.candidate_byte_end,
+                spec.old_cursor_rect.as_ref(),
+                spec.new_cursor_rect.as_ref(),
+            ));
+        }
     }
 
     // 1c. Reflow（unchanged material）
