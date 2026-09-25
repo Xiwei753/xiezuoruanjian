@@ -1000,7 +1000,7 @@ export struct WorkspaceScreen {
   VolumeMoreMenu() {
     Menu() {
       ForEach(this.viewModel.getContextActions(ActionTarget.Volume), (slot: ActionSlot) => {
-        MenuItem(this.getActionLabel(slot.role))
+        MenuItem({ content: this.getActionLabel(slot.role) })
           .onClick(() => this.handleVolumeContextAction(slot))
       }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
@@ -1012,7 +1012,7 @@ export struct WorkspaceScreen {
   ChapterMoreMenu() {
     Menu() {
       ForEach(this.viewModel.getContextActions(ActionTarget.Chapter), (slot: ActionSlot) => {
-        MenuItem(this.getActionLabel(slot.role))
+        MenuItem({ content: this.getActionLabel(slot.role) })
           .onClick(() => this.handleChapterContextAction(slot))
       }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }

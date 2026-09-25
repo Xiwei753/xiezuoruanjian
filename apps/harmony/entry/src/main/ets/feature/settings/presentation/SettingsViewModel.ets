@@ -7,9 +7,8 @@
 // 页面只调 ViewModel 暴露的接口，不直接接触 bridge/native。
 
 import hilog from '@ohos.hilog'
-import deviceInfo from '@ohos.deviceInfo'
-import i18n from '@ohos.i18n'
 import pasteboard from '@ohos.pasteboard'
+import { AppStorageV2 } from '@kit.ArkUI'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
@@ -19,6 +18,7 @@ import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { HarmonyDiagnosticsExporter } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
+import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
@@ -417,27 +417,12 @@ export class SettingsViewModel {
   }
 
   // ── 获取设备信息 JSON ──
-  // 参考 HarmonyDiagnosticsExporter.addCurrentDeviceAttachment() 的设备信息收集逻辑。
+  // 使用统一的 DeviceInfoSnapshot 收集设备信息，避免字段名错误和重复代码。
 
   getDeviceInfoJson(): string {
     try {
-      const info: Record<string, Object> = {
-        'platform': 'harmony',
-        'deviceType': deviceInfo.deviceType,
-        'manufacture': deviceInfo.manufacture,
-        'brand': deviceInfo.brand,
-        'productModel': deviceInfo.productModel,
-        'productSeries': deviceInfo.productSeries,
-        'softwareVersion': deviceInfo.softwareVersion,
-        'apiVersion': deviceInfo.apiVersion,
-        'buildType': deviceInfo.buildType,
-        'buildVersion': deviceInfo.buildVersion,
-        'securityPatchTag': deviceInfo.securityPatchTag,
-        'abiList': deviceInfo.abiList,
-        'locale': i18n.System.getSystemLanguage(),
-        'timezone': i18n.getTimeZone().getID()
-      }
-      return JSON.stringify(info, null, 2)
+      const snapshot = getDeviceInfoSnapshot()
+      return JSON.stringify(snapshot, null, 2)
     } catch (err) {
       hilog.error(DOMAIN, TAG, `getDeviceInfoJson failed: ${err}`)
       return '{}'

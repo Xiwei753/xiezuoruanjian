@@ -16,8 +16,6 @@ import hilog from '@ohos.hilog'
 import util from '@ohos.util'
 import fs from '@ohos.file.fs'
 import bundleManager from '@ohos.bundle.bundleManager'
-import i18n from '@ohos.i18n'
-import deviceInfo from '@ohos.deviceInfo'
 
 import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
@@ -25,12 +23,44 @@ import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosti
 import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
 import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
+import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
 interface AttachmentItem {
   relative_path: string
   content: string
+}
+
+// app_settings_sanitized.json 附件 DTO。
+interface AppSettingsAttachment {
+  themeMode: string
+  appearanceMode: string | null
+  editorFontSize: number
+  editorLineSpacingMultiplier: number
+  autoSaveEnabled: boolean
+  autoSaveDelayMs: number
+  autoIndentEnabled: boolean
+  autoIndentWidth: number
+  editorTypingAnimationEnabled: boolean
+  editorTypingAnimationDurationMs: number
+  aiEnabled: boolean
+  diagnosticsEnabled: boolean
+  diagnosticsVerbose: boolean
+}
+
+// sync_state_sanitized.json 附件 DTO。
+interface SyncStateAttachment {
+  status: string | null
+  lastSyncTime: number | null
+  lastError: string | null
+  conflictCount: number
+}
+
+// build_identity.json 附件 DTO。
+interface BuildIdentityAttachment {
+  appVersion: string
+  buildKey: string
 }
 
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
@@ -193,20 +223,20 @@ export class HarmonyDiagnosticsExporter {
       if (result.success && result.data !== undefined && result.data !== null) {
         const settings = result.data
         // 只采集非敏感字段（与 Android 端一致）
-        const sanitized: Record<string, Object> = {
-          'themeMode': settings.themeMode ?? 'system',
-          'appearanceMode': settings.appearanceMode,
-          'editorFontSize': settings.editorFontSize,
-          'editorLineSpacingMultiplier': settings.editorLineSpacingMultiplier,
-          'autoSaveEnabled': settings.autoSaveEnabled,
-          'autoSaveDelayMs': settings.autoSaveDelayMs,
-          'autoIndentEnabled': settings.autoIndentEnabled,
-          'autoIndentWidth': settings.autoIndentWidth,
-          'editorTypingAnimationEnabled': settings.editorTypingAnimationEnabled,
-          'editorTypingAnimationDurationMs': settings.editorTypingAnimationDurationMs,
-          'aiEnabled': settings.aiEnabled,
-          'diagnosticsEnabled': settings.diagnosticsEnabled,
-          'diagnosticsVerbose': settings.diagnosticsVerbose
+        const sanitized: AppSettingsAttachment = {
+          themeMode: settings.themeMode ?? 'system',
+          appearanceMode: settings.appearanceMode ?? null,
+          editorFontSize: settings.editorFontSize,
+          editorLineSpacingMultiplier: settings.editorLineSpacingMultiplier,
+          autoSaveEnabled: settings.autoSaveEnabled,
+          autoSaveDelayMs: settings.autoSaveDelayMs,
+          autoIndentEnabled: settings.autoIndentEnabled,
+          autoIndentWidth: settings.autoIndentWidth,
+          editorTypingAnimationEnabled: settings.editorTypingAnimationEnabled,
+          editorTypingAnimationDurationMs: settings.editorTypingAnimationDurationMs,
+          aiEnabled: settings.aiEnabled,
+          diagnosticsEnabled: settings.diagnosticsEnabled,
+          diagnosticsVerbose: settings.diagnosticsVerbose
         }
         const json = JSON.stringify(sanitized, null, 2)
         attachments.push(this.makeAttachment(ATTACHMENT_APP_SETTINGS, json))
@@ -225,11 +255,11 @@ export class HarmonyDiagnosticsExporter {
       const result = await this.bridge.loadAppSyncState()
       if (result.success && result.data !== undefined && result.data !== null) {
         const state = result.data
-        const sanitized: Record<string, Object> = {
-          'status': state.status,
-          'lastSyncTime': state.lastSyncTime,
-          'lastError': state.lastError,
-          'conflictCount': state.conflicts?.length ?? 0
+        const sanitized: SyncStateAttachment = {
+          status: state.status ?? null,
+          lastSyncTime: state.lastSyncTime ?? null,
+          lastError: state.lastError ?? null,
+          conflictCount: state.conflicts?.length ?? 0
         }
         const json = JSON.stringify(sanitized, null, 2)
         attachments.push(this.makeAttachment(ATTACHMENT_SYNC_STATE, json))
@@ -245,22 +275,7 @@ export class HarmonyDiagnosticsExporter {
   // current_device.json — 当前设备信息。
   private addCurrentDeviceAttachment(attachments: AttachmentItem[]): void {
     try {
-      const info: Record<string, Object> = {
-        'platform': 'harmony',
-        'deviceType': deviceInfo.deviceType,
-        'manufacture': deviceInfo.manufacture,
-        'brand': deviceInfo.brand,
-        'productModel': deviceInfo.productModel,
-        'productSeries': deviceInfo.productSeries,
-        'softwareVersion': deviceInfo.softwareVersion,
-        'apiVersion': deviceInfo.apiVersion,
-        'buildType': deviceInfo.buildType,
-        'buildVersion': deviceInfo.buildVersion,
-        'securityPatchTag': deviceInfo.securityPatchTag,
-        'abiList': deviceInfo.abiList,
-        'locale': i18n.System.getSystemLanguage(),
-        'timezone': i18n.getTimeZone().getID()
-      }
+      const info: DeviceInfoSnapshot = getDeviceInfoSnapshot()
       const json = JSON.stringify(info, null, 2)
       attachments.push(this.makeAttachment(ATTACHMENT_CURRENT_DEVICE, json))
     } catch (e) {
@@ -318,8 +333,9 @@ export class HarmonyDiagnosticsExporter {
   // 构造附件项 — content 为 base64 编码的 UTF-8 字符串。
   private makeAttachment(relativePath: string, textContent: string): AttachmentItem {
     const textEncoder = new util.TextEncoder('utf-8')
-    const encoded = textEncoder.encodeInto(textContent)
-    const base64 = util.encodeBase64Sync(encoded)
+    const encoded: Uint8Array = textEncoder.encodeInto(textContent)
+    const base64Helper = new util.Base64Helper()
+    const base64 = base64Helper.encodeToStringSync(encoded)
     return {
       relative_path: relativePath,
       content: base64
@@ -333,19 +349,19 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // 获取构建身份 — 与 EntryAbility.getBuildIdentity() 逻辑一致。
-  private getBuildIdentity(): Record<string, string> {
+  private getBuildIdentity(): BuildIdentityAttachment {
     try {
       const info = bundleManager.getBundleInfoForSelfSync(
         bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT
       )
       return {
-        'appVersion': info.versionName,
-        'buildKey': `harmony-v${info.versionCode}-${info.versionName}`
+        appVersion: info.versionName,
+        buildKey: `harmony-v${info.versionCode}-${info.versionName}`
       }
     } catch (_) {
       return {
-        'appVersion': 'unknown',
-        'buildKey': 'harmony-unknown'
+        appVersion: 'unknown',
+        buildKey: 'harmony-unknown'
       }
     }
   }
