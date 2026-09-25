@@ -1,6 +1,7 @@
 import window from '@ohos.window'
 import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
+import { HarmonyColorModeController } from './HarmonyColorModeController'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
@@ -260,7 +261,12 @@ export class HarmonyThemeAdapter {
 
   // Issue #767 评论 5831067980：首次启动时由 EntryAbility 注入当前系统 colorMode，
   // 避免一直靠默认值先按亮色启动。使用 ConfigurationConstant.ColorMode 枚举类型。
+  // Issue #767 评论 5831321551：COLOR_MODE_NOT_SET 不当成 light，
+  // 不覆盖上一份有效系统模式。
   initSystemColorMode(colorMode: ConfigurationConstant.ColorMode): void {
+    if (colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+      return
+    }
     this.systemColorMode = colorMode
     this.updateEffectiveColorMode()
     if (this.useSystemTokens) {
@@ -278,34 +284,40 @@ export class HarmonyThemeAdapter {
 
   setMode(mode: ThemeMode): void {
     this.currentTheme.mode = mode
+    // Issue #767 评论 5831321551：把用户选择的 mode 下发给 HarmonyColorModeController，
+    // 由 controller 调用 UIAbilityContext.setColorMode() 真正切换系统颜色模式。
+    HarmonyColorModeController.getInstance().setDesiredMode(mode)
     this.updateColors()
     this.notifyObservers()
   }
 
+  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens，
+  // 不在 setter 里手动设置 useSystemTokens。
   setColorSource(colorSource: ColorSource): void {
     this.currentTheme.colorSource = colorSource
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
 
+  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens。
   setSelectedPaletteId(paletteId: string): void {
     this.currentTheme.selectedPaletteId = paletteId
     if (paletteId.length > 0) {
       this.currentTheme.colorSource = 'saved_palette'
-      // Issue #767：用户显式选择了 saved palette，不再使用系统 token
-      this.useSystemTokens = false
     }
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
 
+  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens。
   setSelectedBuiltinThemeId(themeId: string): void {
     this.currentTheme.selectedBuiltinThemeId = themeId
     if (themeId.length > 0) {
       this.currentTheme.colorSource = 'built_in'
-      // Issue #767：用户显式选择了 builtin theme，不再使用系统 token
-      this.useSystemTokens = false
     }
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
@@ -348,6 +360,9 @@ export class HarmonyThemeAdapter {
 
   updateFromLocalSettings(appearanceMode: string, colorSource: string, selectedPaletteId: string, selectedBuiltinThemeId: string): void {
     this.currentTheme.mode = appearanceMode as ThemeMode
+    // Issue #767 评论 5831321551：把持久化的 appearanceMode 下发给 HarmonyColorModeController，
+    // 确保应用重启后也能把用户选择的深浅色模式真正下发到系统。
+    HarmonyColorModeController.getInstance().setDesiredMode(appearanceMode as ThemeMode)
     this.currentTheme.colorSource = colorSource as ColorSource
     this.currentTheme.selectedPaletteId = selectedPaletteId
     this.currentTheme.selectedBuiltinThemeId = selectedBuiltinThemeId

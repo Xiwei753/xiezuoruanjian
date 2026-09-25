@@ -10,6 +10,7 @@ import { NavigationTransactionCoordinator } from '../app/navigation/NavigationTr
 import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
+import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
 
@@ -26,6 +27,10 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
     getAppContext().setAbilityContext(this.context)
+
+    // Issue #767 评论 5831321551：把 UIAbilityContext 注入 HarmonyColorModeController，
+    // 使其能在页面 loadContent 后调用 setColorMode 下发用户选择的深浅色模式。
+    HarmonyColorModeController.getInstance().bindContext(this.context)
 
     // Issue #767：首次启动注入当前系统 colorMode，避免一直靠默认值 0 先按亮色启动。
     this.initSystemColorMode()
@@ -127,6 +132,9 @@ export default class EntryAbility extends UIAbility {
       // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
       hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded')
       getAdaptiveContext().initialize(windowStage)
+      // Issue #767 评论 5831321551：页面 loadContent 成功后标记 pageLoaded，
+      // 此时 HarmonyColorModeController 把之前缓存的 desiredMode 真正下发给 UIAbility。
+      HarmonyColorModeController.getInstance().markPageLoaded()
     })
 
     this.lifecycle.notifyForeground()
@@ -149,6 +157,9 @@ export default class EntryAbility extends UIAbility {
       // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
       hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded on restore')
       getAdaptiveContext().initialize(windowStage)
+      // Issue #767 评论 5831321551：页面 loadContent 成功后标记 pageLoaded，
+      // 此时 HarmonyColorModeController 把之前缓存的 desiredMode 真正下发给 UIAbility。
+      HarmonyColorModeController.getInstance().markPageLoaded()
     })
 
     this.lifecycle.notifyForeground()
