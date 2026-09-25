@@ -708,7 +708,9 @@ export struct HomeScreen {
 
       Blank()
 
-      // 按 HeaderTrailing order 顺序渲染：Sync(10) → Search(20) → Settings(30)
+      // 按 HeaderTrailing order 顺序渲染：Sync(10) → Settings(30)
+      // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
+      // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
       ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
         if (slot.role === ActionRole.Sync) {
           Image($r('app.media.ic_refresh'))
@@ -717,15 +719,6 @@ export struct HomeScreen {
             .fillColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
             .onClick(() => this.handleSync())
-        } else if (slot.role === ActionRole.Search) {
-          Image($r('sys.media.ohos_ic_public_search'))
-            .width(24)
-            .height(24)
-            .fillColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 16 })
-            .onClick(() => {
-              // 搜索功能暂未接入，保留图标入口
-            })
         } else if (slot.role === ActionRole.Settings) {
           Image($r('sys.media.ohos_ic_public_more'))
             .width(24)

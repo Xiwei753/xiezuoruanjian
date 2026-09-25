@@ -558,8 +558,8 @@ export struct WorkspaceScreen {
     .height('100%')
   }
 
-  // ── 顶栏：左 返回+作品名 / 右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Search→Settings ──
-  // Issue #760 评论 5823355851 问题3：顶栏搜索入口丢失，改为按 headerTrailingActions 顺序渲染
+  // ── 顶栏：左 返回+作品名 / 右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Settings ──
+  // Issue #760 评论 5825003601：窄屏不渲染 Search 图标（避免无动作可点击控件）
   @Builder
   SinglePaneHeader() {
     Row() {
@@ -579,7 +579,9 @@ export struct WorkspaceScreen {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      // 右：按 ScreenPolicy HeaderTrailing 顺序渲染（Sync → Search → Settings）
+      // 右：按 ScreenPolicy HeaderTrailing 顺序渲染（Sync → Settings）
+      // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
+      // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
       ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
         if (slot.role === ActionRole.Sync) {
           // 同步按钮 — 执行真正的同步动作（通过 ViewModel）
@@ -591,16 +593,6 @@ export struct WorkspaceScreen {
             .margin({ right: 8 })
             .enabled(!this.viewModel.isSyncing)
             .onClick(() => this.handleSync())
-        } else if (slot.role === ActionRole.Search) {
-          // 搜索按钮 — 搜索功能暂未实现，保留入口图标
-          Image($r('sys.media.ohos_ic_public_search'))
-            .width(24)
-            .height(24)
-            .fillColor(this.themeConfig.colors.textSecondary)
-            .margin({ left: 8, right: 8 })
-            .onClick(() => {
-              // 搜索功能即将上线，暂保留入口
-            })
         } else if (slot.role === ActionRole.Settings) {
           // 设置按钮
           Button($r('app.string.settings'))
