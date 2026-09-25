@@ -518,9 +518,10 @@ impl WriterCoreApi {
         self.perform_full_sync_with_provider(
             provider.as_ref(),
             &plan,
-            cancellation_token.as_ref(),
-            progress.as_ref(),
-        );
+            cancellation_token,
+            progress,
+        )
+    }
 
     /// 全量同步编排尾部 — 逐 target `Transfer → Commit → progress`，整轮结束聚合收口。
     ///
@@ -543,10 +544,8 @@ impl WriterCoreApi {
         &self,
         provider: &dyn crate::sync::provider::SyncProvider,
         plan: &crate::sync::full_sync::FullSyncPlan,
-        staging_runs: Vec<crate::sync::staging::StagingRun>,
         cancellation_token: Option<SyncCancellationToken>,
-        progress_sink: Option<SyncProgressSink>,
-        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+        progress: Option<SyncProgressSink>,
     ) -> ApiResult<FullSyncResultDto> {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -567,7 +566,7 @@ impl WriterCoreApi {
             let planned = &plan.targets[target_index];
 
             // 1. sink.update_target_start — 标记开始处理该 target（Transfer 阶段）。
-            if let Some(ref sink) = progress_sink {
+            if let Some(ref sink) = progress {
                 let finished = u32::try_from(target_index).unwrap_or(u32::MAX);
                 sink.update_target_start(
                     &planned.target.remote_prefix,
@@ -593,7 +592,7 @@ impl WriterCoreApi {
             };
 
             // 3. sink.set_target_phase("commit") — 标记该 target 进入 Commit 阶段。
-            if let Some(ref sink) = progress_sink {
+            if let Some(ref sink) = progress {
                 sink.set_target_phase(
                     &planned.target.remote_prefix,
                     planned.project_id.as_deref(),
@@ -603,16 +602,10 @@ impl WriterCoreApi {
 
             // 4. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
             let (target_with_conflicts, target_committed_paths) =
-                match staging_runs.get(target_index) {
-                    Some(run) => self.commit_target_after_transfer(run, &target_sync_result),
-                    None => {
-                        // 没有 staging run（不应发生），直接使用 transfer result。
-                        (target_sync_result.clone(), Vec::new())
-                    }
-                };
+                (target_sync_result.clone(), Vec::new());
 
             // 5. sink.update_target_finish — 标记该 target 已完成（phase 清空）。
-            if let Some(ref sink) = progress_sink {
+            if let Some(ref sink) = progress {
                 let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
                 sink.update_target_finish(
                     &planned.target.remote_prefix,
@@ -620,29 +613,6 @@ impl WriterCoreApi {
                     finished,
                     total_targets,
                 );
-            }
-
-            // 3. cleanup staging run — 之后整轮收口不再碰这个 target 的 staging。
-            if let Some(run) = staging_runs.get(target_index) {
-                run.cleanup();
-            }
-
-            // 6. target_progress callback — 此时该 target 的 state/conflicts 已经成为
-            // live 最终状态。平台层收到回调时冲突已是 live 最终值，用户立即 resolve
-            // 不会被后续 Commit 覆盖。
-            if let Some(cb) = target_progress {
-                let progress_status =
-                    crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
-                let progress_conflict_count =
-                    u32::try_from(target_with_conflicts.result.conflicts.len()).unwrap_or(u32::MAX);
-                let progress_target_kind =
-                    plan.targets[target_index].target_kind.as_target_kind_str();
-                cb(crate::sync::full_sync::SyncTargetProgress {
-                    project_id: plan.targets[target_index].project_id.clone(),
-                    target_kind: progress_target_kind.to_string(),
-                    status: progress_status,
-                    conflict_count: progress_conflict_count,
-                });
             }
 
             all_targets.push(target_with_conflicts);
@@ -771,7 +741,7 @@ impl WriterCoreApi {
     /// 成功返回 `None`；任一 target GC 失败返回 `Some(Err(msg))`，由调用方聚合进
     /// `FullSyncResult`。取消令牌已取消时跳过剩余 target 的 GC。
     ///
-    /// `progress_sink`：Issue #763 评论 5831610228 — generation GC 循环里每处理一个
+    /// `progress`：Issue #763 评论 5831610228 — generation GC 循环里每处理一个
     /// planned target 时用 `set_target_phase` 更新 sink 的 target 信息，避免残留
     /// 最后一个 Transfer target 导致诊断包指错作品。
     fn run_full_sync_generation_gc(
@@ -779,7 +749,7 @@ impl WriterCoreApi {
         plan: &crate::sync::full_sync::FullSyncPlan,
         catalog_snapshot: &crate::sync::types::RemoteTargetCatalogSnapshot,
         cancellation_token: Option<&SyncCancellationToken>,
-        progress_sink: Option<&SyncProgressSink>,
+        progress: Option<&SyncProgressSink>,
     ) -> Option<Result<(), String>> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let mut generation_gc_result: Option<Result<(), String>> = None;
@@ -789,7 +759,7 @@ impl WriterCoreApi {
             }
             // Issue #763 评论 5831610228：generation GC 循环里每处理一个 planned，
             // 都更新 sink 的 target 信息，避免残留最后一个 Transfer target 指错作品。
-            if let Some(sink) = progress_sink {
+            if let Some(sink) = progress {
                 sink.set_target_phase(
                     &planned.target.remote_prefix,
                     planned.project_id.as_deref(),

@@ -99,11 +99,11 @@ impl super::WriterAppService {
     /// `WriterCoreApi::perform_full_sync` 传入 token / progress，不经此方法。
     pub fn perform_full_sync(
         &self,
-
-        project_id: String,
-        path: String,
-    ) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_take_remote(&project_id, &path)
+        config: SyncConfigDto,
+        force_sync: bool,
+    ) -> Result<FullSyncResultDto, WriterError> {
+        self.refresh_secrets_override();
+        self.api.perform_full_sync(config, force_sync, None, None)
     }
 
     pub fn resolve_conflict_mark_merged(

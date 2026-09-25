@@ -134,7 +134,6 @@ impl super::WriterCore {
         }
         Ok(entries)
     }
-    }
 
     pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {
         crate::sync::SyncService::get_sync_ignored_paths(

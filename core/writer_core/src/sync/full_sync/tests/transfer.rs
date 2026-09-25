@@ -895,7 +895,7 @@ fn run_transfer_reports_progress_per_target() {
     });
 
     let transfer =
-        crate::sync::full_sync::run_transfer(&provider, &plan, None, None, Some(&progress));
+        crate::sync::full_sync::run_transfer(&provider, &plan, None, None);
 
     assert_eq!(transfer.targets.len(), 2);
     let guard = seen.lock().unwrap();

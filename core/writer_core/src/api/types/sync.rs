@@ -290,27 +290,6 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
     }
 }
 
-/// 跨作品冲突 DTO — 全局冲突查询返回的扁平结构。
-///
-/// 每条记录是一个未解决冲突，附带所属作品的 id 和 title。
-/// QML 端按 projectId 分组展示。与 `crate::sync::types::ProjectSyncConflict` 一一对应。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectSyncConflictDto {
-    pub project_id: String,
-    pub project_title: String,
-    pub conflict: SyncConflictDto,
-}
-
-impl From<crate::sync::types::ProjectSyncConflict> for ProjectSyncConflictDto {
-    fn from(p: crate::sync::types::ProjectSyncConflict) -> Self {
-        Self {
-            project_id: p.project_id,
-            project_title: p.project_title,
-            conflict: p.conflict.into(),
-        }
-    }
-}
 
 impl From<SyncStateDto> for crate::sync::SyncState {
     fn from(s: SyncStateDto) -> Self {

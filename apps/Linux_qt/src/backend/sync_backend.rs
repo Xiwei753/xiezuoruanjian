@@ -431,7 +431,7 @@ impl SyncBackend {
 
     /// 列出所有作品的所有未解决冲突（全局冲突入口）。
     ///
-    /// 返回 `ResultEnvelope<{ conflicts: ProjectSyncConflictDto[] }>` JSON 字符串。
+    /// 返回 `ResultEnvelope<{ conflicts: AllSyncConflictEntryDto[] }>` JSON 字符串。
     /// QML 端 JSON.parse 后按 projectId 分组展示。
     fn list_all_sync_conflicts(&mut self) -> QString {
         let result = self.with_app(|app| app.core_api().map(|api| api.list_all_sync_conflicts()));
@@ -1236,17 +1236,17 @@ impl AppBackend {
 /// 例如作品 A 的冲突刚解决、同一轮同步作品 B 新产生一个冲突，总数一直是 1，
 /// count 不变但 WritingWorkspace / SyncPage 必须刷新。
 ///
-/// 收集每个冲突的 `project_id + local_path + kind + created_at`，排序后拼接：
+/// 收集每个冲突的 `project_id + path + kind + created_at`，排序后拼接：
 /// 内容集合一致（含顺序不同）时 fingerprint 相同，集合一变就不同。
 fn sync_conflict_fingerprint(
-    conflicts: &[writer_core::api::types::ProjectSyncConflictDto],
+    conflicts: &[writer_core::api::types::AllSyncConflictEntryDto],
 ) -> String {
     let mut entries: Vec<String> = conflicts
         .iter()
         .map(|c| {
             format!(
                 "{}|{}|{}|{}",
-                c.project_id, c.conflict.local_path, c.conflict.kind, c.conflict.created_at
+                c.project_id, c.path, c.kind, c.created_at
             )
         })
         .collect();
@@ -1257,23 +1257,15 @@ fn sync_conflict_fingerprint(
 #[cfg(test)]
 mod sync_conflict_fingerprint_tests {
     use super::sync_conflict_fingerprint;
-    use writer_core::api::types::{ProjectSyncConflictDto, SyncConflictDto};
+    use writer_core::api::types::AllSyncConflictEntryDto;
 
-    fn conflict(project_id: &str, local_path: &str, created_at: i64) -> ProjectSyncConflictDto {
-        ProjectSyncConflictDto {
+    fn conflict(project_id: &str, path: &str, created_at: i64) -> AllSyncConflictEntryDto {
+        AllSyncConflictEntryDto {
             project_id: project_id.to_string(),
             project_title: format!("{project_id}-title"),
-            conflict: SyncConflictDto {
-                local_path: local_path.to_string(),
-                remote_path: local_path.to_string(),
-                local_hash: "local".to_string(),
-                remote_hash: "remote".to_string(),
-                base_hash: "base".to_string(),
-                created_at,
-                description: "both changed".to_string(),
-                kind: "both_changed".to_string(),
-                remote_snapshot_path: None,
-            },
+            path: path.to_string(),
+            kind: "both_changed".to_string(),
+            created_at,
         }
     }
 

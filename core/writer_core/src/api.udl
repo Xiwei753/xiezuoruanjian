@@ -312,11 +312,6 @@ dictionary SyncConflictDto {
     string? remote_snapshot_path;
 };
 
-dictionary ProjectSyncConflictDto {
-    string project_id;
-    string project_title;
-    SyncConflictDto conflict;
-};
 
 dictionary SyncConflictPreviewDto {
     string path;
@@ -1329,9 +1324,6 @@ interface WriterAppService {
     // 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。诊断包用。
     [Throws=WriterError]
     sequence<AllSyncConflictEntryDto> list_all_sync_conflicts();
-
-    [Throws=WriterError]
-    sequence<ProjectSyncConflictDto> list_all_sync_conflicts();
 
     [Throws=WriterError]
     SyncConflictPreviewDto load_sync_conflict_preview(string project_id, string path);

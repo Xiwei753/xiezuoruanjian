@@ -160,10 +160,10 @@ fn single_project_query_still_works_alongside_global_query() {
 // 2. UDL / WriterAppService 边界
 // ---------------------------------------------------------------------------
 
-/// `ProjectSyncConflictDto` 必须带 camelCase 的 projectId/projectTitle/conflict，
-/// 平台层（Linux QML）按 projectId 分组、按 conflict.localPath 打开目标冲突。
+/// `AllSyncConflictEntryDto` 必须带 camelCase 的 projectId/projectTitle/path/kind/createdAt，
+/// 平台层（Linux QML）按 projectId 分组、按 path 打开目标冲突。
 #[test]
-fn app_service_exposes_project_sync_conflict_dto() {
+fn app_service_exposes_all_sync_conflict_entry_dto() {
     let (temp_dir, _core) = make_core();
     let app_data_root = temp_dir.path();
     let projects_root = app_data_root.join("projects");
@@ -185,7 +185,8 @@ fn app_service_exposes_project_sync_conflict_dto() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].project_id, project_id);
     assert_eq!(all[0].project_title, "作品甲");
-    assert_eq!(all[0].conflict.local_path, "volumes/v1/chapters/a.md");
+    assert_eq!(all[0].path, "volumes/v1/chapters/a.md");
+    assert_eq!(all[0].kind, "both_changed");
 
     let json = serde_json::to_value(&all[0]).unwrap();
     assert!(json.get("projectId").is_some(), "线格式必须是 projectId");
@@ -193,9 +194,9 @@ fn app_service_exposes_project_sync_conflict_dto() {
         json.get("projectTitle").is_some(),
         "线格式必须是 projectTitle"
     );
-    assert!(json.get("conflict").is_some());
+    assert!(json.get("path").is_some());
     assert_eq!(
-        json["conflict"]["localPath"],
+        json["path"],
         serde_json::Value::String("volumes/v1/chapters/a.md".to_string())
     );
 
