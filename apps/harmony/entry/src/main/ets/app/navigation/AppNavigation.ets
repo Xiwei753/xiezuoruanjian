@@ -31,23 +31,14 @@ export struct AppNavigation {
   aboutToAppear(): void {
     hilog.info(0x0000, 'AppNavigation', 'aboutToAppear: registering with coordinator')
     // 注册到 coordinator，使 EntryAbility 能触发接续恢复。
-    // Issue #767：navPathStack 参数保留兼容性，coordinator 内部使用 activeTabStack。
-    // PrimaryTabShell 在自己的 aboutToAppear 中已调用 setActiveStack(homeStack)，
-    // 这里注册恢复回调即可。
+    // Issue #767：不再创建 tempStack，只注册 restoreListener 回调。
+    // pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 触发。
     const coordinator = NavigationTransactionCoordinator.getInstance()
-    // 获取 PrimaryTabShell 已设置的活动栈（homeStack）。
-    const activeStack = coordinator.getNavPathStack()
-    if (activeStack !== null) {
-      coordinator.register(activeStack, (payload: ContinuationPayload) => {
-        this.applyContinuation(payload)
-      })
-    } else {
-      // PrimaryTabShell 尚未挂载时，用一个临时空栈注册，后续 PrimaryTabShell 会更新活动栈。
-      const tempStack: NavPathStack = new NavPathStack()
-      coordinator.register(tempStack, (payload: ContinuationPayload) => {
-        this.applyContinuation(payload)
-      })
-    }
+    // navPathStack 参数保留兼容性，此处传一个空栈即可（coordinator 内部不再依赖此参数消费 pending）。
+    const placeholderStack: NavPathStack = new NavPathStack()
+    coordinator.register(placeholderStack, (payload: ContinuationPayload) => {
+      this.applyContinuation(payload)
+    })
   }
 
   aboutToDisappear(): void {
@@ -65,11 +56,13 @@ export struct AppNavigation {
       // 接续恢复始终回到 Home tab。
       this.currentTab = TAB_HOME
 
-      // 获取作品 tab 的 NavPathStack（PrimaryTabShell 的 homeStack）。
+      // Issue #767：用 getTabStack(TAB_HOME) 获取作品 tab 的 NavPathStack，
+      // 而不是 getNavPathStack()（可能返回其他 tab 的 stack）。
       const coordinator = NavigationTransactionCoordinator.getInstance()
-      const homeStack = coordinator.getNavPathStack()
+      const homeStack = coordinator.getTabStack(TAB_HOME)
       if (homeStack === null) {
-        hilog.error(0x0000, 'AppNavigation', 'applyContinuation: activeTabStack is null, cannot rebuild')
+        // PrimaryTabShell 还没注册 homeStack，不消费 payload（保留 pending）。
+        hilog.error(0x0000, 'AppNavigation', 'applyContinuation: homeStack not registered yet, cannot rebuild')
         return
       }
 

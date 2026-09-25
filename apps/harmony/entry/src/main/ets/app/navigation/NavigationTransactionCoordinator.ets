@@ -4,11 +4,11 @@
 // EntryAbility / WritingScreen 通过 getInstance() 触发接续恢复和安全导航操作。
 //
 // Issue #767：支持多 tab stack。
-// - 单一 navPathStack 改为 activeTabStack（当前活动 tab 的 stack）
-// - 增加 setActiveStack() 方法，Tabs onChange 切换后更新活动栈
-// - safePop / safeReplacePath / continuation restore 都操作当前活动栈
-// - 接续恢复有 project/chapter 时先切到作品 tab，再重建作品栈
-// - getNavPathStack() 返回当前活动栈
+// - 单一 navPathStack 改为 tabStacks Map（显式登记每个 tab 的 stack）
+// - 增加 registerTabStack / getTabStack / setActiveTab 方法
+// - pendingRestore 延迟到 homeStack 可用时才消费（tryConsumePendingRestore）
+// - safePop / safeReplacePath 仍操作 activeTabStack（兼容）
+// - getNavPathStack() 返回当前活动栈（兼容）
 
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 
@@ -60,16 +60,19 @@ interface ActiveNavigationTask {
 // - 新增 safeReplacePath(path)，宽屏 Writing 左侧切章节统一走它。
 //
 // Issue #767：支持多 tab stack。
-// - activeTabStack 替代单一 navPathStack，表示当前活动 tab 的 NavPathStack。
-// - setActiveStack() 由 Tabs onChange 调用，切换活动栈。
-// - safePop / safeReplacePath 操作 activeTabStack。
-// - getNavPathStack() 返回 activeTabStack。
+// - tabStacks Map 显式登记每个 tab 的 NavPathStack，替代单一 activeTabStack。
+// - setActiveTab() 设置当前活动 tab index，getTabStack() 按 index 取栈。
+// - pendingRestore 延迟到 homeStack 可用时才消费（tryConsumePendingRestore）。
+// - safePop / safeReplacePath 仍操作 activeTabStack（兼容）。
+// - getNavPathStack() 返回当前活动栈（兼容）。
 export class NavigationTransactionCoordinator {
   private static instance: NavigationTransactionCoordinator
-  // Issue #767：当前活动 tab 的 NavPathStack。
-  // Tabs onChange 切换后通过 setActiveStack() 更新。
-  // safePop / safeReplacePath / getNavPathStack 都操作此栈。
+  // Issue #767：当前活动 tab 的 NavPathStack（兼容字段，safePop/safeReplacePath 使用）。
   private activeTabStack: NavPathStack | null = null
+  // Issue #767：当前活动 tab index。
+  private activeTabIndex: number = 0
+  // Issue #767：显式登记的 tab stack Map，key 为 tab index。
+  private tabStacks: Map<number, NavPathStack> = new Map()
   // AppNavigation 注册的恢复回调：能访问 struct @State 进行 selection/cursor/viewport 恢复。
   private restoreListener: ((payload: ContinuationPayload) => void) | null = null
   // AppNavigation 尚未 aboutToAppear 时暂存 payload，待注册后消费。
@@ -100,23 +103,59 @@ export class NavigationTransactionCoordinator {
     return NavigationTransactionCoordinator.instance
   }
 
-  // Issue #767：设置当前活动 tab 的 NavPathStack。
+  // Issue #767：设置当前活动 tab 的 NavPathStack（兼容方法）。
   // Tabs onChange 切换后调用此方法更新活动栈，
   // 使 safePop / safeReplacePath / getNavPathStack 操作正确的栈。
   setActiveStack(stack: NavPathStack): void {
     this.activeTabStack = stack
   }
 
+  // Issue #767：登记指定 tab index 的 NavPathStack。
+  // PrimaryTabShell 在 aboutToAppear 中为三个 tab 分别调用。
+  registerTabStack(tabIndex: number, stack: NavPathStack): void {
+    this.tabStacks.set(tabIndex, stack)
+  }
+
+  // Issue #767：获取指定 tab index 的 NavPathStack。
+  // 返回 null 表示该 tab 的 stack 尚未注册（PrimaryTabShell 还没挂载）。
+  getTabStack(tabIndex: number): NavPathStack | null {
+    const stack: NavPathStack | undefined = this.tabStacks.get(tabIndex)
+    if (stack === undefined) {
+      return null
+    }
+    return stack
+  }
+
+  // Issue #767：设置当前活动 tab index。
+  // 同时更新 activeTabStack 为对应 tab 的 stack（如果已注册）。
+  setActiveTab(tabIndex: number): void {
+    this.activeTabIndex = tabIndex
+    const stack: NavPathStack | null = this.getTabStack(tabIndex)
+    if (stack !== null) {
+      this.activeTabStack = stack
+    }
+  }
+
   // Issue #767：注册恢复回调。
-  // navPathStack 参数保留兼容性，内部只使用 activeTabStack。
-  // 若 EntryAbility 已先交付 payload（pendingRestore），立即消费。
+  // 不再立即消费 pendingRestore——改为只注册 restoreListener。
+  // pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack 后调用 tryConsumePendingRestore()。
   register(navPathStack: NavPathStack, restoreListener: (payload: ContinuationPayload) => void): void {
     this.activeTabStack = navPathStack
     this.restoreListener = restoreListener
-    if (this.pendingRestore !== null) {
-      const pending: ContinuationPayload = this.pendingRestore
-      this.pendingRestore = null
-      restoreListener(pending)
+  }
+
+  // Issue #767：尝试消费待处理的接续恢复。
+  // 当 PrimaryTabShell 注册了 homeStack 后调用此方法。
+  // 如果有 pendingRestore 且 homeStack 可用（getTabStack(TAB_HOME) 返回非 null），才消费。
+  tryConsumePendingRestore(): void {
+    if (this.pendingRestore !== null && this.restoreListener !== null) {
+      // 确认 homeStack 已注册才消费，避免恢复内容写到错误的栈。
+      const homeStack: NavPathStack | null = this.getTabStack(0)
+      if (homeStack !== null) {
+        const pending: ContinuationPayload = this.pendingRestore
+        this.pendingRestore = null
+        this.restoreListener(pending)
+      }
     }
   }
 

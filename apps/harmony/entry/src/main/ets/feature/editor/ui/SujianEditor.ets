@@ -73,10 +73,12 @@ export struct SujianEditor {
   // Issue #629 评论6 Part C：父子 viewport 恢复通道。WritingScreen 持有 controller 实例并注入；
   // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，aboutToDisappear unregister。
   viewportController: EditorViewportController | null = null
-  // 静态渲染颜色（默认值，可由父组件覆盖）。
-  selectionBackgroundColor: string = '#33007AFF'
-  compositionUnderlineColor: string = '#FF007AFF'
-  caretColor: string = '#FF000000'
+  // 静态渲染颜色：由系统主题资源驱动，light/dark 模式自动切换。
+  // Issue #767：旧值硬编码（#33007AFF/#FF007AFF/#FF000000），深色模式下光标不可见、选区/composition 固定蓝色。
+  // 改为 ResourceColor 引用系统颜色资源，随系统 light/dark 自动适配。
+  selectionBackgroundColor: ResourceColor = $r('sys.color.ohos_id_color_text_highlight_bg')
+  compositionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_emphasize')
+  caretColor: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
   @State renderResult: EditorRenderResult | null = null
   // 静态渲染几何（从 renderResult 同步出来，供 build() 直接绑定）。
   @State selectionRects: SelectionRect[] = []

@@ -816,7 +816,7 @@ export struct HomeScreen {
   }
 
   // ────────────────────────────────────────
-  // 对话框（自定义绘制，保留 themeConfig.colors 确保颜色一致性）
+  // 对话框（Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式）
   // ────────────────────────────────────────
 
   // ── 新建作品对话框 ──
@@ -827,14 +827,12 @@ export struct HomeScreen {
         Text('新建作品')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 16 })
 
         TextInput({ placeholder: '请输入作品名称' })
           .width('100%')
           .height(40)
           .fontSize(16)
-          .caretColor(this.themeConfig.colors.primary)
           .onChange((value: string) => {
             this.viewModel.newProjectName = value
           })
@@ -843,8 +841,6 @@ export struct HomeScreen {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.showCreateDialog = false
               this.viewModel.newProjectName = ''
@@ -855,8 +851,6 @@ export struct HomeScreen {
           Button('创建')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
-            .fontColor(this.themeConfig.colors.onPrimary)
             .onClick(() => {
               this.viewModel.onCreateProject()
             })
@@ -866,7 +860,6 @@ export struct HomeScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
     }
     .width('100%')
@@ -883,14 +876,12 @@ export struct HomeScreen {
         Text('重命名作品')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 16 })
 
         TextInput({ text: this.viewModel.renameInput, placeholder: '请输入新名称' })
           .width('100%')
           .height(40)
           .fontSize(16)
-          .caretColor(this.themeConfig.colors.primary)
           .onChange((value: string) => {
             this.viewModel.renameInput = value
           })
@@ -899,8 +890,6 @@ export struct HomeScreen {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.cancelRename()
             })
@@ -910,8 +899,6 @@ export struct HomeScreen {
           Button('确认')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
-            .fontColor(this.themeConfig.colors.onPrimary)
             .onClick(() => {
               this.viewModel.confirmRename()
             })
@@ -921,7 +908,6 @@ export struct HomeScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
     }
     .width('100%')
@@ -938,20 +924,16 @@ export struct HomeScreen {
         Text('确认删除')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 8 })
 
         Text(`确定要删除"${this.viewModel.deleteTarget?.title}"吗？此操作不可撤销。`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 16 })
 
         Row() {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.cancelDelete()
             })
@@ -961,8 +943,6 @@ export struct HomeScreen {
           Button('删除')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.error)
-            .fontColor(this.themeConfig.colors.onError)
             .onClick(() => {
               this.viewModel.confirmDelete()
             })
@@ -971,7 +951,6 @@ export struct HomeScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
     }
     .width('100%')

@@ -506,17 +506,12 @@ export struct WorkspaceScreen {
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
+      // Issue #767：改用原生 Button(ButtonType.Circle)，系统材质处理形状、按压、阴影
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        Row() {
-          Stack() {
-            Circle({ width: 56, height: 56 })
-              .shadow({ radius: 8, color: '#40000000', offsetY: 4 })
-            Image($r('sys.media.ohos_ic_public_add'))
-              .width(24)
-              .height(24)
-          }
-          .width(56)
-          .height(56)
+        Button({ type: ButtonType.Circle }) {
+          Image($r('sys.media.ohos_ic_public_add'))
+            .width(24)
+            .height(24)
         }
         .width(56)
         .height(56)
@@ -941,7 +936,7 @@ export struct WorkspaceScreen {
 
   // ── 重命名对话框 ──
   // 类似 HomeScreen 的 RenameDialog，调用 ViewModel 的 renameVolume/renameChapter
-  // 对话框保留明确颜色（自定义对话框需要明确颜色才能正常显示）
+  // Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式
   @Builder
   RenameDialog() {
     Column() {
@@ -949,14 +944,12 @@ export struct WorkspaceScreen {
         Text(this.viewModel.renameTarget?.type === 'volume' ? '重命名卷' : '重命名章节')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 16 })
 
         TextInput({ text: this.viewModel.renameInput, placeholder: '请输入新名称' })
           .width('100%')
           .height(40)
           .fontSize(16)
-          .caretColor(this.themeConfig.colors.primary)
           .onChange((value: string) => {
             this.viewModel.renameInput = value
           })
@@ -965,8 +958,6 @@ export struct WorkspaceScreen {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.cancelRename()
             })
@@ -976,8 +967,6 @@ export struct WorkspaceScreen {
           Button('确认')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
-            .fontColor(this.themeConfig.colors.onPrimary)
             .onClick(() => {
               this.viewModel.confirmRename()
             })
@@ -987,7 +976,6 @@ export struct WorkspaceScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
     }
     .width('100%')
@@ -998,7 +986,7 @@ export struct WorkspaceScreen {
 
   // ── 删除确认对话框 ──
   // 仅当 ActionSlot.requiresConfirmation === true 时显示
-  // 对话框保留明确颜色（自定义对话框需要明确颜色才能正常显示）
+  // Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式
   @Builder
   DeleteConfirmDialog() {
     Column() {
@@ -1006,20 +994,16 @@ export struct WorkspaceScreen {
         Text('确认删除')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 8 })
 
         Text(`确定要删除"${this.viewModel.deleteTarget?.name}"吗？此操作不可撤销。`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 16 })
 
         Row() {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.cancelDelete()
             })
@@ -1029,8 +1013,6 @@ export struct WorkspaceScreen {
           Button('删除')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.error)
-            .fontColor(this.themeConfig.colors.onError)
             .onClick(() => {
               this.viewModel.confirmDelete()
             })
@@ -1039,7 +1021,6 @@ export struct WorkspaceScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
     }
     .width('100%')

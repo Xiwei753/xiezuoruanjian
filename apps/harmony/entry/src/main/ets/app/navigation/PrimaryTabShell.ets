@@ -81,8 +81,20 @@ export struct PrimaryTabShell {
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
 
-    // 注册到 coordinator，初始活动栈为 homeStack。
-    NavigationTransactionCoordinator.getInstance().setActiveStack(this.homeStack)
+    // Issue #767：向 coordinator 显式登记三个 tab 的 NavPathStack。
+    // 这样 AppNavigation 的接续恢复可以通过 getTabStack(TAB_HOME) 拿到正确的栈，
+    // 而不是依赖可能尚未同步的 activeTabStack。
+    const coordinator = NavigationTransactionCoordinator.getInstance()
+    coordinator.registerTabStack(TAB_HOME, this.homeStack)
+    coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
+    coordinator.registerTabStack(TAB_STATS, this.statsStack)
+
+    // Issue #767：设置初始活动 tab 为 TAB_HOME，同时更新 activeTabStack。
+    coordinator.setActiveTab(TAB_HOME)
+
+    // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
+    // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
+    coordinator.tryConsumePendingRestore()
 
     // 注册主题观察者，Tab 配色随主题变化。
     const self = this
@@ -142,7 +154,10 @@ export struct PrimaryTabShell {
       stack = this.statsStack
     }
     this.activeStack = stack
-    NavigationTransactionCoordinator.getInstance().setActiveStack(stack)
+    // Issue #767：同时调用 setActiveTab 和 setActiveStack，确保 coordinator 状态一致。
+    const coordinator = NavigationTransactionCoordinator.getInstance()
+    coordinator.setActiveTab(index)
+    coordinator.setActiveStack(stack)
     hilog.info(0x0000, 'PrimaryTabShell', 'onTabChange: index=%{public}d, stack updated', index)
   }
 
@@ -186,7 +201,7 @@ export struct PrimaryTabShell {
         .mode(NavigationMode.Stack)
         .hideTitleBar(true)
       }
-      .tabBar(new BottomTabBarStyle($r('app.media.ic_star'), '作品'))
+      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_folder'), '作品'))
 
       // 星图 tab（TAB_STARMAP=1）
       TabContent() {
