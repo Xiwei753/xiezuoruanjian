@@ -16,6 +16,8 @@ import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserve
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
+import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -167,6 +169,9 @@ export struct SettingsScreen {
       .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings)
+    })
   }
 
   // ════════════════════════════════════════════

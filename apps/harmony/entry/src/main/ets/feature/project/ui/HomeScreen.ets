@@ -19,6 +19,8 @@ import { ProjectListViewModel } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
+import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HomeScreen {
@@ -277,6 +279,7 @@ export struct HomeScreen {
     .hideTitleBar(true)
     .onShown((_reason: VisibilityChangeReason) => {
       hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList)
     })
   }
 
@@ -505,7 +508,7 @@ export struct HomeScreen {
           .height(32)
           .backgroundColor(this.themeConfig.colors.primary)
           .onClick(() => {
-            this.createProjectWithConfirm()
+            this.viewModel.createProject('新建作品')
           })
       }
       .width('100%')

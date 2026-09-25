@@ -8,7 +8,8 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
-import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -86,6 +87,16 @@ export struct WorkspaceScreen {
 
   handleCreateVolume() {
     this.viewModel.createVolume()
+  }
+
+  /** 检查 PrimaryAction 中是否有 CreateVolume（决定 FAB 是否显示） */
+  private hasCreateVolumePrimaryAction(): boolean {
+    for (const slot of this.viewModel.primaryActions) {
+      if (slot.role === ActionRole.CreateVolume) {
+        return true
+      }
+    }
+    return false
   }
 
   handleCreateChapter(volumeId: string) {
@@ -239,6 +250,9 @@ export struct WorkspaceScreen {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace)
+    })
   }
 
   // ────────────────────────────────────────
@@ -457,62 +471,91 @@ export struct WorkspaceScreen {
 
   @Builder
   SinglePaneLayout() {
-    Column() {
-      // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
-      this.SinglePaneHeader()
+    Stack() {
+      Column() {
+        // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
+        this.SinglePaneHeader()
 
-      // ── 内容区 ──
-      if (this.viewModel.isLoadingState) {
-        Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-            .color(this.themeConfig.colors.primary)
-          Text($r('app.string.loading'))
-            .fontSize(14)
-            .fontColor(this.themeConfig.colors.textHint)
-            .margin({ top: 12 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.viewModel.errorMessageState) {
-        Column() {
-          Text(this.viewModel.errorMessageState)
-            .fontSize(16)
-            .fontColor(this.themeConfig.colors.error)
-            .margin({ bottom: 16 })
-
-          Button($r('app.string.retry'))
-            .onClick(() => this.handleRetry())
-            .backgroundColor(this.themeConfig.colors.primary)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
+        // ── 内容区 ──
+        if (this.viewModel.isLoadingState) {
           Column() {
-            if (this.viewModel.volumeCardStates.length === 0) {
-              this.EmptyState()
-            } else {
-              ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
-                this.VolumeCard(cardState)
-              }, (cardState: VolumeCardState) => cardState.volumeId)
-            }
+            LoadingProgress()
+              .width(48)
+              .height(48)
+              .color(this.themeConfig.colors.primary)
+            Text($r('app.string.loading'))
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textHint)
+              .margin({ top: 12 })
           }
           .width('100%')
-          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.viewModel.errorMessageState) {
+          Column() {
+            Text(this.viewModel.errorMessageState)
+              .fontSize(16)
+              .fontColor(this.themeConfig.colors.error)
+              .margin({ bottom: 16 })
+
+            Button($r('app.string.retry'))
+              .onClick(() => this.handleRetry())
+              .backgroundColor(this.themeConfig.colors.primary)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column() {
+              if (this.viewModel.volumeCardStates.length === 0) {
+                this.EmptyState()
+              } else {
+                ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
+                  this.VolumeCard(cardState)
+                }, (cardState: VolumeCardState) => cardState.volumeId)
+              }
+            }
+            .width('100%')
+            .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
         }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(this.themeConfig.colors.background)
+      .alignItems(HorizontalAlign.Center)
+
+      // ── FAB 层：新建卷浮动按钮 ──
+      if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
+        Row() {
+          Stack() {
+            Circle({ width: 56, height: 56 })
+              .fill(this.themeConfig.colors.primary)
+              .shadow({ radius: 8, color: '#40000000', offsetY: 4 })
+            Image($r('sys.media.ohos_ic_public_add'))
+              .width(24)
+              .height(24)
+              .fillColor(this.themeConfig.colors.onPrimary)
+          }
+          .width(56)
+          .height(56)
+        }
+        .width(56)
+        .height(56)
+        .position({ x: '100%', y: '100%' })
+        .markAnchor({ x: '100%', y: '100%' })
+        .offset({ x: -this.adaptiveState.pagePadding - 16, y: -56 - 16 })
+        .onClick(() => {
+          this.handleCreateVolume()
+        })
       }
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
-    .alignItems(HorizontalAlign.Center)
   }
 
   // ── 顶栏：左 返回+作品名 / 右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Search→Settings ──

@@ -8,6 +8,9 @@ import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
+import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 
 @Component
 export struct StatsScreen {
@@ -16,10 +19,26 @@ export struct StatsScreen {
   @State isLoading: boolean = true
   @State errorMessage: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
+
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
     this.loadStats()
+
+    const self = this
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
+    this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+  }
+
+  aboutToDisappear() {
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
+    }
   }
 
   async loadStats() {
@@ -47,11 +66,13 @@ export struct StatsScreen {
     NavDestination() {
     Column() {
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .fillColor(this.themeConfig.colors.textPrimary)
-          .onClick(() => this.navPathStack.pop())
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          Image($r('sys.media.ohos_ic_public_arrow_left'))
+            .width(24)
+            .height(24)
+            .fillColor(this.themeConfig.colors.textPrimary)
+            .onClick(() => this.navPathStack.pop())
+        }
 
         Text('统计')
           .fontSize(20)
@@ -228,5 +249,8 @@ export struct StatsScreen {
     .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Stats)
+    })
   }
 }

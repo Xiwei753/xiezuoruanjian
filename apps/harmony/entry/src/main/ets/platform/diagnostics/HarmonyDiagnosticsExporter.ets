@@ -11,6 +11,7 @@
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
 import { common } from '@kit.AbilityKit'
+import { fileUri } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
 import util from '@ohos.util'
 import fs from '@ohos.file.fs'
@@ -118,7 +119,7 @@ export class HarmonyDiagnosticsExporter {
       const payload: SharePayload = {
         kind: 'file',
         title: '素笺诊断包',
-        uris: [`file://${zipPath}`]
+        uris: [fileUri.getUriFromPath(zipPath)]
       }
       const ok = await shareService.share(payload, 'system')
       if (!ok) {

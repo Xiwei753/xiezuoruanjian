@@ -26,6 +26,7 @@ import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserve
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
+import { NavigationChromeStore } from './NavigationChromeStore'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -51,6 +52,7 @@ export struct AppNavigation {
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
+  private navChromeObserver: ((role: ScreenRole) => void) | null = null
 
   aboutToAppear(): void {
     // 默认显示 Home。
@@ -76,6 +78,13 @@ export struct AppNavigation {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     // 初始化时同步一次状态。
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+
+    // 订阅 NavigationChromeStore，根据 ScreenRole 变化更新底栏显隐
+    this.navChromeObserver = (role: ScreenRole) => {
+      self.currentScreenRole = role
+      self.updateShowPrimaryNav(role)
+    }
+    NavigationChromeStore.getInstance().subscribe(this.navChromeObserver!)
   }
 
   aboutToDisappear(): void {
@@ -86,6 +95,9 @@ export struct AppNavigation {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    if (this.navChromeObserver) {
+      NavigationChromeStore.getInstance().unsubscribe(this.navChromeObserver)
+    }
   }
 
   // Issue #760 评论 5823355851 问题1：路由名到 ScreenRole 的映射。
@@ -93,7 +105,7 @@ export struct AppNavigation {
   private routeToScreenRole(route: string): ScreenRole {
     switch (route) {
       case Routes.Home:
-        return ScreenRole.Home
+        return ScreenRole.ProjectList
       case Routes.Workspace:
         return ScreenRole.ProjectWorkspace
       case Routes.Writing:
@@ -107,13 +119,6 @@ export struct AppNavigation {
       default:
         return ScreenRole.Home
     }
-  }
-
-  // Issue #760 评论 5823355851 问题1：页面显示时根据路由名映射 ScreenRole 并查询 ScreenPolicy。
-  private onPageShown(routeName: string): void {
-    const screenRole = this.routeToScreenRole(routeName)
-    this.currentScreenRole = screenRole
-    this.updateShowPrimaryNav(screenRole)
   }
 
   // Issue #760 评论 5823355851 问题1：通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。
@@ -208,26 +213,19 @@ export struct AppNavigation {
 
   @Builder
   PageMap(name: string) {
-    // Issue #760 评论 5823355851 问题1：用 NavDestination 包裹以获取 onShown 回调，
-    // 在页面显示时根据路由名映射 ScreenRole 并查询 ScreenPolicy.showPrimaryNavigation。
-    NavDestination() {
-      if (name === Routes.Home) {
-        HomeScreen()
-      } else if (name === Routes.Workspace) {
-        WorkspaceScreen()
-      } else if (name === Routes.Writing) {
-        WritingScreen()
-      } else if (name === Routes.StarMap) {
-        StarMapScreen()
-      } else if (name === Routes.Settings) {
-        SettingsScreen()
-      } else if (name === Routes.Stats) {
-        StatsScreen()
-      }
+    if (name === Routes.Home) {
+      HomeScreen()
+    } else if (name === Routes.Workspace) {
+      WorkspaceScreen()
+    } else if (name === Routes.Writing) {
+      WritingScreen()
+    } else if (name === Routes.StarMap) {
+      StarMapScreen()
+    } else if (name === Routes.Settings) {
+      SettingsScreen()
+    } else if (name === Routes.Stats) {
+      StatsScreen()
     }
-    .onShown(() => {
-      this.onPageShown(name)
-    })
   }
 
   build() {

@@ -27,6 +27,8 @@ import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
+import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
@@ -983,6 +985,9 @@ export struct WritingScreen {
       // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
       this.requestLeave()
       return true
+    })
+    .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing)
     })
   }
 
