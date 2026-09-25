@@ -3,7 +3,7 @@
 //! 覆盖四件事：
 //! 1. Core 全局冲突查询 `list_all_sync_conflicts()` 枚举所有作品，只返回未解决冲突，
 //!    并带上 `project_id + project_title`——平台层不需要自己扫目录。
-//! 2. 该查询在 UDL/`WriterAppService` 边界暴露为 `ProjectSyncConflictDto`，
+//! 2. 该查询在 UDL/`WriterAppService` 边界暴露为 `AllSyncConflictEntryDto`，
 //!    单个作品的 `list_sync_conflicts(project_id)` 行为保持不变。
 //! 3. full-sync 每个 target 的 `Transfer → Commit` 完成后立即回调 progress，
 //!    且此时该作品的持久冲突状态已经落盘——平台不用等最终 `FullSyncResult`
@@ -109,10 +109,7 @@ fn list_all_sync_conflicts_enumerates_only_unresolved_across_projects() {
     let alpha_entries: Vec<_> = all.iter().filter(|c| c.project_id == alpha.id).collect();
     assert_eq!(alpha_entries.len(), 1);
     assert_eq!(alpha_entries[0].project_title, "作品甲");
-    assert_eq!(
-        alpha_entries[0].conflict.local_path,
-        "volumes/v1/chapters/a.md"
-    );
+    assert_eq!(alpha_entries[0].path, "volumes/v1/chapters/a.md");
 
     let gamma_entries: Vec<_> = all.iter().filter(|c| c.project_id == gamma.id).collect();
     assert_eq!(gamma_entries.len(), 2);

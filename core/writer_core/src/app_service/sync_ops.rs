@@ -103,7 +103,24 @@ impl super::WriterAppService {
         force_sync: bool,
     ) -> Result<FullSyncResultDto, WriterError> {
         self.refresh_secrets_override();
-        self.api.perform_full_sync(config, force_sync, None, None)
+        self.api
+            .perform_full_sync(config, force_sync, None, None, None)
+    }
+
+    pub fn resolve_conflict_keep_local(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_keep_local(&project_id, &path)
+    }
+
+    pub fn resolve_conflict_take_remote(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_take_remote(&project_id, &path)
     }
 
     pub fn resolve_conflict_mark_merged(

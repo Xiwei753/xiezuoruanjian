@@ -296,7 +296,8 @@ impl WriterCoreApi {
         config: SyncConfigDto,
         force_sync: bool,
         cancellation_token: Option<SyncCancellationToken>,
-        progress: Option<SyncProgressSink>,
+        progress_sink: Option<SyncProgressSink>,
+        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
@@ -518,8 +519,10 @@ impl WriterCoreApi {
         self.perform_full_sync_with_provider(
             provider.as_ref(),
             &plan,
+            staging_runs,
             cancellation_token,
-            progress,
+            progress_sink,
+            target_progress,
         )
     }
 
@@ -544,8 +547,10 @@ impl WriterCoreApi {
         &self,
         provider: &dyn crate::sync::provider::SyncProvider,
         plan: &crate::sync::full_sync::FullSyncPlan,
+        staging_runs: Vec<crate::sync::staging::StagingRun>,
         cancellation_token: Option<SyncCancellationToken>,
-        progress: Option<SyncProgressSink>,
+        progress_sink: Option<SyncProgressSink>,
+        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -566,7 +571,7 @@ impl WriterCoreApi {
             let planned = &plan.targets[target_index];
 
             // 1. sink.update_target_start — 标记开始处理该 target（Transfer 阶段）。
-            if let Some(ref sink) = progress {
+            if let Some(ref sink) = progress_sink {
                 let finished = u32::try_from(target_index).unwrap_or(u32::MAX);
                 sink.update_target_start(
                     &planned.target.remote_prefix,
@@ -592,7 +597,7 @@ impl WriterCoreApi {
             };
 
             // 3. sink.set_target_phase("commit") — 标记该 target 进入 Commit 阶段。
-            if let Some(ref sink) = progress {
+            if let Some(ref sink) = progress_sink {
                 sink.set_target_phase(
                     &planned.target.remote_prefix,
                     planned.project_id.as_deref(),
@@ -602,10 +607,16 @@ impl WriterCoreApi {
 
             // 4. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
             let (target_with_conflicts, target_committed_paths) =
-                (target_sync_result.clone(), Vec::new());
+                match staging_runs.get(target_index) {
+                    Some(run) => self.commit_target_after_transfer(run, &target_sync_result),
+                    None => {
+                        // 没有 staging run（不应发生），直接使用 transfer result。
+                        (target_sync_result.clone(), Vec::new())
+                    }
+                };
 
             // 5. sink.update_target_finish — 标记该 target 已完成（phase 清空）。
-            if let Some(ref sink) = progress {
+            if let Some(ref sink) = progress_sink {
                 let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
                 sink.update_target_finish(
                     &planned.target.remote_prefix,
@@ -615,17 +626,60 @@ impl WriterCoreApi {
                 );
             }
 
+            // cleanup staging run — 之后整轮收口不再碰这个 target 的 staging。
+            if let Some(run) = staging_runs.get(target_index) {
+                run.cleanup();
+            }
+
+            // target_progress callback — 此时该 target 的 state/conflicts 已经成为
+            // live 最终状态。平台层收到回调时冲突已是 live 最终值，用户立即 resolve
+            // 不会被后续 Commit 覆盖。
+            if let Some(cb) = target_progress {
+                let progress_status =
+                    crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
+                let progress_conflict_count =
+                    u32::try_from(target_with_conflicts.result.conflicts.len()).unwrap_or(u32::MAX);
+                let progress_target_kind =
+                    plan.targets[target_index].target_kind.as_target_kind_str();
+                cb(crate::sync::full_sync::SyncTargetProgress {
+                    project_id: plan.targets[target_index].project_id.clone(),
+                    target_kind: progress_target_kind.to_string(),
+                    status: progress_status,
+                    conflict_count: progress_conflict_count,
+                });
+            }
+
             all_targets.push(target_with_conflicts);
             all_committed_paths.extend(target_committed_paths);
         }
 
-        // Issue #763 评论 5831610228：Commit 是整轮全局操作，清 current target，
-        // 只写 phase = "commit"，语义是"当前处于全局 commit，没有单一 current target"。
-        if let Some(sink) = progress.as_ref() {
+        // generation GC — 清理未引用 generation（整轮结束后统一执行）。
+        // Issue #763 评论 5831610228：generation GC 循环里每处理一个 planned target
+        // 时用 set_target_phase 更新 sink，避免残留最后一个 Transfer target 指错作品。
+        let generation_gc_result = Self::run_full_sync_generation_gc(
+            provider,
+            plan,
+            &catalog_snapshot,
+            cancellation_token.as_ref(),
+            progress_sink.as_ref(),
+        );
+
+        // Issue #729：整轮结束后检查取消令牌。
+        if Self::sync_cancelled(cancellation_token.as_ref()) {
+            log::info!(
+                "[sync] perform_full_sync: cancellation requested after per-target loop — persisting cancelled state"
+            );
+            self.core_write().persist_full_sync_cancelled();
+            return Ok(Self::full_sync_noop_result());
+        }
+
+        // Issue #763 评论 5831610228：finalize 前用 set_global_phase("commit") 清掉
+        // 单一 current target，表示整轮进入全局 Commit 收口，没有单一 current target。
+        if let Some(ref sink) = progress_sink {
             sink.set_global_phase("commit");
         }
 
-        // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
+        // Phase 5: 聚合 + lifecycle 处理 + FullSyncState 持久化（短写锁）。
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
             core.finalize_full_sync(all_targets, generation_gc_result)

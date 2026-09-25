@@ -393,7 +393,6 @@ impl AppBackend {
                             conflicts: plan.total_conflicts,
                             conflict_count: 0,
                             overwritten: 0,
-                            conflict_count: 0,
                         };
 
                         let state = writer_core::api::SyncOperationStateDto {
@@ -718,7 +717,7 @@ impl AppBackend {
             // SyncProgressSink is `Arc<Mutex<SyncTargetProgressDto>>` where the inner type is
             // plain data — std impls `RefUnwindSafe for Mutex<T>` and `RefUnwindSafe for Arc<T>`
             // when `T: RefUnwindSafe`. No hand-rolled `unsafe impl` is needed.
-            let result = std::panic::catch_unwind(|| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = crate::backend::app_backend::with_layout_core_api(
                     &data_root,
                     &projects_root,
@@ -767,6 +766,7 @@ impl AppBackend {
                     trigger == "manual",
                     cancel_token.clone(),
                     Some(progress_sink.clone()),
+                    progress_callback.as_ref(),
                 ) {
                     Ok(result) => {
                         let status_code = result.overall_status.clone();

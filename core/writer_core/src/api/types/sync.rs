@@ -290,7 +290,6 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
     }
 }
 
-
 impl From<SyncStateDto> for crate::sync::SyncState {
     fn from(s: SyncStateDto) -> Self {
         crate::sync::SyncState {

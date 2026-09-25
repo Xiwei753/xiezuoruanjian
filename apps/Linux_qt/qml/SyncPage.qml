@@ -231,7 +231,7 @@ Item {
         var groups = []
         for (var i = 0; i < flat.length; i++) {
             var entry = flat[i]
-            if (!entry || !entry.conflict) continue
+            if (!entry) continue
             var group = null
             for (var j = 0; j < groups.length; j++) {
                 if (groups[j].projectId === entry.projectId) { group = groups[j]; break }
@@ -240,7 +240,7 @@ Item {
                 group = { projectId: entry.projectId, projectTitle: entry.projectTitle, conflicts: [] }
                 groups.push(group)
             }
-            group.conflicts.push(entry.conflict)
+            group.conflicts.push(entry)
         }
         return groups
     }
@@ -263,7 +263,7 @@ Item {
                     projectId: group.projectId,
                     projectTitle: group.projectTitle,
                     conflictCount: group.conflicts.length,
-                    localPath: group.conflicts[j].localPath || ""
+                    localPath: group.conflicts[j].path || ""
                 })
             }
         }

@@ -1243,12 +1243,7 @@ fn sync_conflict_fingerprint(
 ) -> String {
     let mut entries: Vec<String> = conflicts
         .iter()
-        .map(|c| {
-            format!(
-                "{}|{}|{}|{}",
-                c.project_id, c.path, c.kind, c.created_at
-            )
-        })
+        .map(|c| format!("{}|{}|{}|{}", c.project_id, c.path, c.kind, c.created_at))
         .collect();
     entries.sort();
     entries.join(";")
