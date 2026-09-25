@@ -320,10 +320,13 @@ export struct SujianEditor {
     return this.snapshot.selectionAnchor !== this.snapshot.selectionHead
   }
 
-  // Issue #767 评论 5828448634 第 1 节：focusAndAttachIme 只负责 requestFocus(INPUT_HOST_ID)。
-  // 真正的 IME attach 只在 .onFocus() 回调里调一次，避免点击和 onFocus 两边各 attach 一次的竞态。
-  // requestFocus 抛错时直接 return，不继续 attach。
-  // "focus acquired" 只能在 .onFocus() 里记，不能在调用 requestFocus() 后立刻写"已获焦"。
+  // Issue #767 评论 5829138873 第 1 节：focusAndAttachIme 在 requestFocus 成功后直接 attach IME。
+  // 旧实现只调 requestFocus，attach 仅在 .onFocus() 回调里做——但组件已获焦时 requestFocus
+  // 不会再次触发 onFocus，第一次 attach 失败后用户再点击正文无法重试。
+  // 现在 requestFocus 成功后直接调 harmonyImeConnection.attach(dispatcher)，确保每次点击都有重试入口。
+  // .onFocus() 保留 attach 作为键盘导航/无障碍等非点击获焦路径的兜底。
+  // HarmonyImeConnection.attach() 已是串行幂等（唯一 transitionTask 链），
+  // TouchDown 和 onFocus 都发起 attach 只会排进同一条串行链，不会并发 controller.attach()。
   private focusAndAttachIme(): void {
     if (!this.harmonyImeConnection || !this.dispatcher) {
       hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: no imeConnection or dispatcher')
@@ -336,8 +339,15 @@ export struct SujianEditor {
       hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: requestFocus failed: ${JSON.stringify(e)}`)
       return
     }
-    // 不在这里 attach IME——attach 由 .onFocus() 回调统一负责。
-    // requestFocus 成功后系统会触发 .onFocus()，在那里做唯一 attach。
+    // requestFocus 成功后直接 attach IME——每次点击都有重试入口，
+    // 不依赖 onFocus 是否再次触发（组件已获焦时 requestFocus 不会重复触发 onFocus）。
+    const imeConnection = this.harmonyImeConnection
+    const dispatcher = this.dispatcher
+    imeConnection.attach(dispatcher).then(() => {
+      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: IME attach success')
+    }).catch((e: Object) => {
+      hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: IME attach failure: ${JSON.stringify(e)}`)
+    })
   }
 
   // ── 键盘语义命令分发 ──
@@ -650,9 +660,10 @@ export struct SujianEditor {
       .id(INPUT_HOST_ID)
       .focusable(true)
       .onFocus((): void => {
-        // Issue #767 评论 5828448634 第 1 节：编辑区获得焦点 → 唯一 IME attach 入口。
-        // focusAndAttachIme() 只调 requestFocus，真正的 attach 只在这里做一次。
-        // HarmonyImeConnection 是单一状态源：attach 进行中复用同一 task，已 attached 直接返回。
+        // Issue #767 评论 5829138873 第 1 节：onFocus 作为键盘导航/无障碍等非点击获焦路径的兜底 attach。
+        // 点击获焦路径由 focusAndAttachIme() 直接调 attach（确保第一次失败后再次点击能重试）。
+        // HarmonyImeConnection.attach() 已是串行幂等（唯一 transitionTask 链），
+        // focusAndAttachIme 和 onFocus 都发起 attach 只会排进同一条串行链，不会并发 controller.attach()。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: input host focus acquired')
         if (this.harmonyImeConnection && this.dispatcher) {
           const imeConnection = this.harmonyImeConnection
