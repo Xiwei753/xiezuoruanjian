@@ -9,7 +9,7 @@ use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncPolicy, SyncResult, SyncTarget};
 
-use super::{FullSyncPlan, PlannedTarget};
+use super::{FullSyncPlan, LiveTargetLww, PlannedTarget};
 
 // ── Lifecycle CAS helper ──
 
@@ -307,6 +307,12 @@ pub(super) fn transfer_live_project(
             //
             //    Issue #716 评论 5740946551：merge 仍先做，但 publish 前移到 LWW 判定之后。
             //    candidate 不赢时直接收敛，不 publish，避免明知 winner 没变仍重复 upload。
+            //
+            //    Issue #761 评论 5829270182：远端无 visible source 时不再返回 Ok(None)，
+            //    改为调用 materialize_local_snapshot_for_empty_remote 把当前本地完整快照
+            //    materialize 成 staging 的 manifest + state，返回 Some(LwwMergeOutcome)。
+            //    这样后续 read_post_transfer_lww / candidate / publish_generation_batch
+            //    都沿同一条路径，不需要"首次同步特判一半、generation 再特判另一半"。
             let merge_outcome: crate::error::Result<
                 Option<(
                     crate::sync::lww::LwwMergeOutcome,
@@ -366,7 +372,31 @@ pub(super) fn transfer_live_project(
                         return Ok(Some((outcome, unresolved_conflicts)));
                     }
                 }
-                Ok(None)
+                // 远端无 visible source：materialize 本地完整快照，统一后续路径。
+                log::info!(
+                    "[sync] run_transfer: LiveProject {} (attempt {}) — no visible remote source, materializing local snapshot for empty remote",
+                    planned.target.remote_prefix,
+                    attempt + 1
+                );
+                let preferred_device_id = planned
+                    .live_lww
+                    .as_ref()
+                    .map(|l| l.device_id.as_str())
+                    .unwrap_or("");
+                let outcome = crate::sync::lww::materialize_local_snapshot_for_empty_remote(
+                    sync_root,
+                    planned.target.scope,
+                    preferred_device_id,
+                )?;
+                // materialize 后读当前 staging 的未解决冲突状态（首次同步一般为空）。
+                let merge_state = crate::sync::SyncService::load_sync_state(sync_root)?;
+                let unresolved_conflicts: Vec<crate::sync::types::SyncConflict> = merge_state
+                    .conflicts
+                    .iter()
+                    .filter(|c| merge_state.conflicted_files.contains(&c.local_path))
+                    .cloned()
+                    .collect();
+                Ok(Some((outcome, unresolved_conflicts)))
             })();
 
             // 归一化 merge_outcome：在 lifecycle winner 比较之前统一处理 merge 结果。
@@ -375,7 +405,9 @@ pub(super) fn transfer_live_project(
             // - Ok(Some((outcome, unresolved_conflicts))) 先更新 retained_conflict，
             //   保存 outcome 供 CandidateWins 后续 publish 使用；同时构造 merge_result，
             //   携带 downloaded_files/local_deletes/remote_deletes/overwritten_files/ignored_files。
-            // - Ok(None) 表示无需 merge（远端无 visible source），retained_conflict 清掉。
+            // - Ok(None)：Issue #761 评论 5829270182 后远端无 visible source 也返回
+            //   Some(materialize_local_snapshot_for_empty_remote)，Ok(None) 不再出现，
+            //   保留分支仅作防御性兜底。
             let merge_outcome_opt: Option<crate::sync::lww::LwwMergeOutcome> = match merge_outcome {
                 Err(e) => return (sync_result_from_error(e), None, None),
                 Ok(None) => {
@@ -484,30 +516,69 @@ pub(super) fn transfer_live_project(
                 }
             }
 
-            // 2. read_post_transfer_lww → 构造 candidate（winner 身份只来自 merge 后真实 manifest，
+            // 2. 构造 candidate（winner 身份只来自 merge 后真实 manifest，
             //    不伪造 lww_time+1 / device_id / 新时间戳）。
+            //
+            //    Issue #761 评论 5829270182：candidate 直接从 outcome.merged_manifest 算，
+            //    不必刚写完 manifest 又从磁盘读一遍。merge_outcome_opt 现在始终为 Some
+            //    （远端无 visible source 时由 materialize_local_snapshot_for_empty_remote 产出），
+            //    所以 read_post_transfer_lww 不再是主路径，仅作兜底。
             let post_transfer_root = planned
                 .staging_root
                 .as_deref()
                 .unwrap_or(&planned.local_root);
-            let post_transfer_lww = match super::plan::read_post_transfer_lww(post_transfer_root) {
-                Some(lww) => lww,
+            let candidate = match &merge_outcome_opt {
+                Some(outcome) => {
+                    // 直接从 outcome.merged_manifest 算 LWW，不重读磁盘。
+                    match super::plan::manifest_target_lww(&outcome.merged_manifest) {
+                        Some(lww) => crate::sync::types::TargetLifecycleRecord::upsert(
+                            &planned.target.remote_prefix,
+                            &planned.target.remote_prefix,
+                            lww.lww_time_ms,
+                            &lww.device_id,
+                        )
+                        .with_active_generation(&generation_id),
+                        None => {
+                            // merged_manifest 为空（全新空 project）→ 用 live_lww 兜底。
+                            let lww = planned.live_lww.as_ref().cloned().unwrap_or(LiveTargetLww {
+                                lww_time_ms: 0,
+                                device_id: String::new(),
+                            });
+                            crate::sync::types::TargetLifecycleRecord::upsert(
+                                &planned.target.remote_prefix,
+                                &planned.target.remote_prefix,
+                                lww.lww_time_ms,
+                                &lww.device_id,
+                            )
+                            .with_active_generation(&generation_id)
+                        }
+                    }
+                }
                 None => {
-                    let msg = "post-transfer staging manifest unreadable".to_string();
-                    return (
-                        SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
-                        None,
-                        None,
-                    );
+                    // 兜底：merge_outcome_opt 为 None 时回退到磁盘读（保留原语义）。
+                    match super::plan::read_post_transfer_lww(post_transfer_root) {
+                        Some(lww) => crate::sync::types::TargetLifecycleRecord::upsert(
+                            &planned.target.remote_prefix,
+                            &planned.target.remote_prefix,
+                            lww.lww_time_ms,
+                            &lww.device_id,
+                        )
+                        .with_active_generation(&generation_id),
+                        None => {
+                            let msg = "post-transfer staging manifest unreadable".to_string();
+                            return (
+                                SyncResult::error(
+                                    SyncStatus::RecoverableError(msg.clone()),
+                                    msg,
+                                    None,
+                                ),
+                                None,
+                                None,
+                            );
+                        }
+                    }
                 }
             };
-            let candidate = crate::sync::types::TargetLifecycleRecord::upsert(
-                &planned.target.remote_prefix,
-                &planned.target.remote_prefix,
-                post_transfer_lww.lww_time_ms,
-                &post_transfer_lww.device_id,
-            )
-            .with_active_generation(&generation_id);
 
             // 3. publish 前用复用函数做 LWW 判定。candidate 不赢直接收敛，不 publish。
             let remote_record = crate::sync::target_lifecycle::find_record(
@@ -590,8 +661,14 @@ pub(super) fn transfer_live_project(
                     );
 
                     // publish generation。
-                    //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
-                    //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
+                    //    Issue #761：冲突时仍可 publish + CAS（非冲突文件需同步），
+                    //    但 batch generation builder（publish_generation_batch）对冲突
+                    //    路径使用远端 blob SHA（ReuseVersion），不读本地冲突正文。
+                    //    没有 remote_tree_files[path] 可复用的 unresolved BothChanged
+                    //    时，publish_generation_batch 直接返回 PartialConflict，不
+                    //    生成内容不完整/哈希不一致的 generation。
+                    //    CAS 成功后仍记录 PartialConflict 状态（而非 Success），确保
+                    //    冲突信息不被丢失。
                     //    Issue #716 评论 5741695768：merge_outcome 已在前面归一化，
                     //    这里只负责根据归一化后的 outcome 决定 publish 参数。
                     let content_result = match &merge_outcome_opt {
@@ -620,6 +697,26 @@ pub(super) fn transfer_live_project(
                             cancellation_token,
                         ),
                     };
+
+                    // Issue #761 评论 5828969186 问题 4：batch generation 发布走
+                    // Git branch ref CAS（commit + PATCH ref force=false），409/422 只说明
+                    // 另一台设备刚推进了 branch，是正常的 CAS 竞争，不是 fatal。
+                    // 这里在通用 content_ok 判断之前单独识别 precondition_failed：
+                    // 重读远端 catalog → 更新 snapshot → continue 当前 MAX_CAS_RETRIES 循环，
+                    // 用最新 visible generation 重新 merge 后构造下一次 generation。
+                    // 超过重试上限仍由循环末尾返回 RecoverableError。
+                    if content_result.error_category.as_deref() == Some("precondition_failed") {
+                        log::info!(
+                            "[sync] run_transfer: LiveProject {} (attempt {}) — generation publish hit ref CAS conflict, reloading catalog and retrying",
+                            planned.target.remote_prefix,
+                            attempt + 1
+                        );
+                        match crate::sync::target_lifecycle::load_remote_catalog(provider) {
+                            Ok(snapshot) => *catalog_snapshot = snapshot,
+                            Err(e) => return (sync_result_from_error(e), None, None),
+                        }
+                        continue;
+                    }
 
                     let content_ok = matches!(
                         content_result.status,

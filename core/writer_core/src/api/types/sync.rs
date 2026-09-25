@@ -448,6 +448,18 @@ pub struct SyncOperationStateDto {
     pub raw_error: Option<String>,
 }
 
+/// 全局冲突摘要条目 — 诊断包用，只保留路径语义和类型，不含正文/快照内容。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AllSyncConflictEntryDto {
+    pub project_id: String,
+    pub project_title: String,
+    pub path: String,
+    /// `"both_changed"` / `"remote_deleted"`。
+    pub kind: String,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncPlanDto {

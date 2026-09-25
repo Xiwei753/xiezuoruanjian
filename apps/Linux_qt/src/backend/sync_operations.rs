@@ -391,6 +391,7 @@ impl AppBackend {
                             remote_deleted: plan.total_to_delete_remote,
                             ignored: plan.total_ignored,
                             conflicts: plan.total_conflicts,
+                            conflict_count: 0,
                             overwritten: 0,
                             conflict_count: 0,
                         };
@@ -712,12 +713,12 @@ impl AppBackend {
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure captures
             // owned String data (data_root, projects_root, op_id_capture), a GitRepoLayout
-            // snapshot, progress_sink (SyncProgressSink = Arc<Mutex<..>>, RefUnwindSafe),
-            // and progress_callback (Option<Arc<dyn Fn + Send + Sync>>). Arc<dyn Fn> is not
-            // RefUnwindSafe (dyn Fn lacks RefUnwindSafe bound), so the closure is wrapped in
-            // AssertUnwindSafe to satisfy catch_unwind's UnwindSafe bound. AssertUnwindSafe is
-            // std's safe wrapper (not unsafe impl), no hand-written unsafe.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // snapshot, and a `&SyncProgressSink` (for `.clone()`). All of these auto-implement
+            // UnwindSafe/RefUnwindSafe: String/GitRepoLayout are plain data, and
+            // SyncProgressSink is `Arc<Mutex<SyncTargetProgressDto>>` where the inner type is
+            // plain data — std impls `RefUnwindSafe for Mutex<T>` and `RefUnwindSafe for Arc<T>`
+            // when `T: RefUnwindSafe`. No hand-rolled `unsafe impl` is needed.
+            let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::with_layout_core_api(
                     &data_root,
                     &projects_root,
@@ -761,17 +762,11 @@ impl AppBackend {
                     &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
                 );
 
-                // Issue #762 评论 5826175490 第 5 点：progress callback 在主线程构造，
-                // 闭包用 AssertUnwindSafe 包装，progress_callback.as_ref() 直接传入。
-                // Issue #763：progress_sink.clone() 传入，Core 在各 target 开始/结束更新。
-                // sink + callback 同时传：sink 供诊断导出读 target 进度，callback 供主线程
-                // 每个 target 完成后刷新全局冲突数。
                 match api.perform_full_sync(
                     config,
                     trigger == "manual",
                     cancel_token.clone(),
                     Some(progress_sink.clone()),
-                    progress_callback.as_ref(),
                 ) {
                     Ok(result) => {
                         let status_code = result.overall_status.clone();

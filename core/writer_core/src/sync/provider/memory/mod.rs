@@ -24,7 +24,8 @@ use std::sync::Mutex;
 use super::capabilities::SyncCapabilities;
 use super::error::ProviderError;
 use super::model::{
-    DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+    BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
+    WritePrecondition,
 };
 use super::SyncProvider;
 
@@ -181,6 +182,77 @@ impl SyncProvider for MemoryProvider {
         }
         store.remove(path);
         Ok(())
+    }
+
+    /// MemoryProvider 批量原子提交 — 单锁内事务执行所有 mutation。
+    ///
+    /// 拿到锁后先克隆一份 store，所有 Put / ReuseVersion / Delete 只改副本：
+    /// 任一步失败（如 `ReuseVersion` 引用了不存在的远端版本 → `PreconditionFailed`）
+    /// 直接返回，原 store 完全不动；只有全部成功才一次性 `*store = next` 提交。
+    ///
+    /// 不能直接在真实 store 上顺序 apply：那样失败时前几步已经写入，
+    /// 函数返回后锁一释放就会留下半事务，与 `atomic_write=true` 的声明不一致。
+    ///
+    /// `revision` 为本次事务的 UUID（仅用于诊断/前置条件，不参与业务逻辑）。
+    /// `touched_paths` 列出本次 batch 实际生效的路径。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        let _ = message;
+        let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+        let mut next = store.clone();
+        let mut touched: Vec<String> = Vec::with_capacity(mutations.len());
+        let txn_revision = Self::new_version();
+        for m in mutations {
+            match m {
+                BatchMutation::Put { path, content } => {
+                    next.insert(path.clone(), (content.clone(), Self::new_version()));
+                    touched.push(path.clone());
+                }
+                BatchMutation::ReuseVersion { path, version } => {
+                    // 复用已有远端对象版本：在 MemoryProvider 语义下等价于
+                    // 把已有 (content, version) 复制到目标 path。若 version 不存在
+                    // 于当前 store，返回 PreconditionFailed（远端无此 blob 可复用）。
+                    // 查询 next（含本批次先前 Put 产生的版本），保证同批内自洽。
+                    let content = Self::reuse_content(&next, path, version)?;
+                    next.insert(path.clone(), (content, version.clone()));
+                    touched.push(path.clone());
+                }
+                BatchMutation::Delete { path } => {
+                    next.remove(path);
+                    touched.push(path.clone());
+                }
+            }
+        }
+        // 全部 mutation 成功后才提交，保证 batch 原子性。
+        *store = next;
+        Ok(BatchCommitResult {
+            revision: txn_revision,
+            touched_paths: touched,
+        })
+    }
+}
+
+impl MemoryProvider {
+    /// 在 store 中查找 version 对应的 content，返回复用内容。
+    ///
+    /// 找到 → `Ok(content)`；找不到 → `Err(PreconditionFailed)`。
+    /// 抽出来避免 `commit_batch` 嵌套过深 / 类型过复杂。
+    fn reuse_content(
+        store: &Store,
+        target_path: &str,
+        version: &RemoteVersion,
+    ) -> Result<Vec<u8>, ProviderError> {
+        store
+            .iter()
+            .find(|(_, (_, v))| *v == *version)
+            .map(|(_, (c, _))| c.clone())
+            .ok_or_else(|| ProviderError::PreconditionFailed {
+                path: target_path.to_string(),
+                reason: format!("reuse_version: remote version {version} not found"),
+            })
     }
 }
 

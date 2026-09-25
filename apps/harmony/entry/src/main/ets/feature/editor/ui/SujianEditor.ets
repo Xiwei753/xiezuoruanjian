@@ -50,8 +50,13 @@ import { PointerInputService, PlatformPointerEvent } from '../../../platform/inp
 import { StylusInputService } from '../../../platform/input/StylusInputService'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
+import hilog from '@ohos.hilog'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
+
+const EDITOR_LOG_DOMAIN = 0x0000
+const EDITOR_LOG_TAG = 'SujianEditor'
+const INPUT_HOST_ID = 'sujian-editor-input-host'
 
 @Component
 export struct SujianEditor {
@@ -68,10 +73,12 @@ export struct SujianEditor {
   // Issue #629 评论6 Part C：父子 viewport 恢复通道。WritingScreen 持有 controller 实例并注入；
   // SujianEditor 在 aboutToAppear 注册 scrollTo + getDimensions，aboutToDisappear unregister。
   viewportController: EditorViewportController | null = null
-  // 静态渲染颜色（默认值，可由父组件覆盖）。
-  selectionBackgroundColor: string = '#33007AFF'
-  compositionUnderlineColor: string = '#FF007AFF'
-  caretColor: string = '#FF000000'
+  // 静态渲染颜色：由系统主题资源驱动，light/dark 模式自动切换。
+  // Issue #767：旧值硬编码（#33007AFF/#FF007AFF/#FF000000），深色模式下光标不可见、选区/composition 固定蓝色。
+  // 改为 ResourceColor 引用系统颜色资源，随系统 light/dark 自动适配。
+  selectionBackgroundColor: ResourceColor = $r('sys.color.ohos_id_color_text_highlight_bg')
+  compositionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_emphasize')
+  caretColor: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
   @State renderResult: EditorRenderResult | null = null
   // 静态渲染几何（从 renderResult 同步出来，供 build() 直接绑定）。
   @State selectionRects: SelectionRect[] = []
@@ -106,6 +113,7 @@ export struct SujianEditor {
   private isDragging: boolean = false
 
   aboutToAppear(): void {
+    hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
     this.refreshRender()
     // Issue #629 评论11 第2项：注册行级导航解析器到 Dispatcher。
     // SujianEditor 持有 renderResult；每次渲染更新后同步给 resolver。
@@ -142,6 +150,7 @@ export struct SujianEditor {
   }
 
   aboutToDisappear(): void {
+    hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToDisappear')
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
     this.lineResolver.cancelWait()
     if (this.dispatcher) {
@@ -313,6 +322,36 @@ export struct SujianEditor {
     return this.snapshot.selectionAnchor !== this.snapshot.selectionHead
   }
 
+  // Issue #767 评论 5829138873 第 1 节：focusAndAttachIme 在 requestFocus 成功后直接 attach IME。
+  // 旧实现只调 requestFocus，attach 仅在 .onFocus() 回调里做——但组件已获焦时 requestFocus
+  // 不会再次触发 onFocus，第一次 attach 失败后用户再点击正文无法重试。
+  // 现在 requestFocus 成功后直接调 harmonyImeConnection.attach(dispatcher)，确保每次点击都有重试入口。
+  // .onFocus() 保留 attach 作为键盘导航/无障碍等非点击获焦路径的兜底。
+  // HarmonyImeConnection.attach() 已是串行幂等（唯一 transitionTask 链），
+  // TouchDown 和 onFocus 都发起 attach 只会排进同一条串行链，不会并发 controller.attach()。
+  private focusAndAttachIme(): void {
+    if (!this.harmonyImeConnection || !this.dispatcher) {
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: no imeConnection or dispatcher')
+      return
+    }
+    hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: requesting focus')
+    try {
+      this.getUIContext().getFocusController().requestFocus(INPUT_HOST_ID)
+    } catch (e) {
+      hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: requestFocus failed: ${JSON.stringify(e)}`)
+      return
+    }
+    // requestFocus 成功后直接 attach IME——每次点击都有重试入口，
+    // 不依赖 onFocus 是否再次触发（组件已获焦时 requestFocus 不会重复触发 onFocus）。
+    const imeConnection = this.harmonyImeConnection
+    const dispatcher = this.dispatcher
+    imeConnection.attach(dispatcher).then(() => {
+      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: IME attach success')
+    }).catch((e: Object) => {
+      hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: IME attach failure: ${JSON.stringify(e)}`)
+    })
+  }
+
   // ── 键盘语义命令分发 ──
   // 把 SemanticKeyCommand 转成语义命令经 EditorSemanticDispatcher 派发。
   // 原始 KeyEvent 不进 Rust；这里只派发语义命令。
@@ -418,6 +457,8 @@ export struct SujianEditor {
     switch (ev.action) {
       case 'down':
         if (ev.button === 0) {
+          // Issue #767 评论 5828146609 第 1 节：鼠标点击也先确保 focus/IME。
+          this.focusAndAttachIme()
           // 左键按下：记 anchor position，开始 potential drag。
           this.dragAnchor = hitPos
           this.isDragging = true
@@ -470,6 +511,12 @@ export struct SujianEditor {
       return
     }
     const touch: TouchObject = event.touches[0]
+    // Issue #767 评论 5828146609 第 1 节：首次触摸编辑区时先确保 focus/IME，
+    // 这样空白处点击也能获得焦点和键盘。
+    if (event.type === TouchType.Down) {
+      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `touch down: x=${touch.x}, y=${touch.y}`)
+      this.focusAndAttachIme()
+    }
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
@@ -548,8 +595,10 @@ export struct SujianEditor {
     // 正文+选区+composition+caret 在同一滚动坐标系里（Stack align(TopStart)）。
     // 滚轮由 Scroll 自动消费；onScroll 回调把 viewport 状态回调给 WritingScreen。
     Scroll(this.scroller) {
-      // Stack 层叠组合静态层：selection background → text → composition underline → static caret。
-      // align(TopStart) 让 Text 从左上角开始渲染，与 Rect.position 的坐标系（相对左上）一致。
+      // Issue #767 评论 5828146609 第 1 节：Stack 作为唯一输入宿主（INPUT_HOST_ID）。
+      // 焦点和输入事件挂在整个全尺寸 Stack 上，不再挂在正文 Text 上。
+      // 正文 Text 只负责绘制文字，不再承担"可点击输入框"职责。
+      // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
       Stack() {
         if (this.renderResult && this.snapshot) {
           // 1. selection background（最底层）
@@ -561,40 +610,13 @@ export struct SujianEditor {
               .fill(this.selectionBackgroundColor)
           }, (rect: SelectionRect, index: number) => index.toString())
 
-          // 2. text
+          // 2. text — 只负责绘制文字，不再承担焦点/输入事件职责。
           // wordBreak(BREAK_ALL) 与 EditorRenderBackend.hitTestByPoint 的逐 code point 折行一致。
           Text(this.renderResult.text)
             .fontSize(this.snapshot.fontSize)
             .width('100%')
             .textAlign(TextAlign.Start)
             .wordBreak(WordBreak.BREAK_ALL)
-            .focusable(true)
-            .onFocus((): void => {
-              // 编辑框获得焦点：attach 自绘编辑框到 IME Kit（传 dispatcher，所有输入经 dispatcher 统一排队）
-              if (this.harmonyImeConnection && this.dispatcher) {
-                this.harmonyImeConnection.attach(this.dispatcher).then(() => {})
-              }
-            })
-            .onBlur((): void => {
-              // 编辑框失焦：detach IME Kit
-              if (this.harmonyImeConnection) {
-                this.harmonyImeConnection.detach().then(() => {})
-              }
-            })
-            .onKeyEvent((event: KeyEvent): boolean => {
-              // 物理键盘事件 → KeyboardInputService 归一化 → 语义命令 → dispatcher.dispatch。
-              // 原始 KeyEvent 不进 Rust。所有输入经 dispatcher 统一排队（Part A）。
-              const platformEv: PlatformKeyEvent = this.keyboardService.normalize(event)
-              const cmd: SemanticKeyCommand = this.keyboardService.toSemanticCommand(platformEv)
-              this.dispatchKeyCommand(cmd)
-              // 消费已识别的命令（非 ignore），防止事件冒泡到系统默认处理。
-              return cmd.kind !== 'ignore'
-            })
-            .onMouse((event: MouseEvent): boolean => {
-              // 鼠标/触控板事件 → PointerInputService 归一化 → 点击/drag/滚轮。
-              this.handleMouseEvent(event)
-              return false
-            })
             .onAreaChange((_oldArea: Area, newArea: Area): void => {
               // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
@@ -614,10 +636,6 @@ export struct SujianEditor {
               if (this.viewportController) {
                 this.viewportController.notifyDimensionsChanged()
               }
-            })
-            .onTouch((event: TouchEvent): void => {
-              // 触摸/笔事件 → hit test + drag selection。
-              this.handleTouchEvent(event)
             })
 
           // 3. composition underline（在 text 上面）
@@ -641,6 +659,49 @@ export struct SujianEditor {
           Text('')
         }
       }
+      .id(INPUT_HOST_ID)
+      .focusable(true)
+      .onFocus((): void => {
+        // Issue #767 评论 5829138873 第 1 节：onFocus 作为键盘导航/无障碍等非点击获焦路径的兜底 attach。
+        // 点击获焦路径由 focusAndAttachIme() 直接调 attach（确保第一次失败后再次点击能重试）。
+        // HarmonyImeConnection.attach() 已是串行幂等（唯一 transitionTask 链），
+        // focusAndAttachIme 和 onFocus 都发起 attach 只会排进同一条串行链，不会并发 controller.attach()。
+        hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: input host focus acquired')
+        if (this.harmonyImeConnection && this.dispatcher) {
+          const imeConnection = this.harmonyImeConnection
+          const dispatcher = this.dispatcher
+          imeConnection.attach(dispatcher).then(() => {
+            hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: IME attach success')
+          }).catch((e: Object) => {
+            hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `onFocus: IME attach failure: ${JSON.stringify(e)}`)
+          })
+        }
+      })
+      .onBlur((): void => {
+        // Issue #767 评论 5828448634 第 1 节：编辑区失焦 → detach IME。
+        hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onBlur: input host blur')
+        if (this.harmonyImeConnection) {
+          this.harmonyImeConnection.detach().then(() => {})
+        }
+      })
+      .onKeyEvent((event: KeyEvent): boolean => {
+        // 物理键盘事件 → KeyboardInputService 归一化 → 语义命令 → dispatcher.dispatch。
+        // 原始 KeyEvent 不进 Rust。所有输入经 dispatcher 统一排队（Part A）。
+        const platformEv: PlatformKeyEvent = this.keyboardService.normalize(event)
+        const cmd: SemanticKeyCommand = this.keyboardService.toSemanticCommand(platformEv)
+        this.dispatchKeyCommand(cmd)
+        // 消费已识别的命令（非 ignore），防止事件冒泡到系统默认处理。
+        return cmd.kind !== 'ignore'
+      })
+      .onMouse((event: MouseEvent): boolean => {
+        // 鼠标/触控板事件 → PointerInputService 归一化 → 点击/drag/滚轮。
+        this.handleMouseEvent(event)
+        return false
+      })
+      .onTouch((event: TouchEvent): void => {
+        // 触摸/笔事件 → hit test + drag selection。
+        this.handleTouchEvent(event)
+      })
       .align(Alignment.TopStart)
       .width('100%')
       // Issue #629 评论6 Part C：Stack 高度：至少 viewport 高度，随正文增长。

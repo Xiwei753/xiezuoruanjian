@@ -7,6 +7,7 @@
 // - 删除 Home 内部的 BottomTabBar（全局只有 AppNavigation 一层底栏）
 // - 宽屏布局恢复 #760 之前的实现（WritingStatsCard、RecentEditsSection、ProjectsSection、QuickActions）
 // - 窄屏布局保留当前的新作品卡布局
+// Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
 import { Routes, WorkspaceRouteParams, SettingsRouteParams, WritingRouteParams, StarMapRouteParams } from '../../../app/navigation/Routes'
@@ -247,7 +248,6 @@ export struct HomeScreen {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor(this.themeConfig.colors.background)
 
         // ── 对话框层 ──
         if (this.viewModel.showCreateDialog) {
@@ -282,25 +282,21 @@ export struct HomeScreen {
         Text($r('app.string.app_title'))
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
         Column() {
           Text(this.viewModel.appDataRoot ? this.extractWorkspaceName(this.viewModel.appDataRoot) : '我的写作空间')
             .fontSize(15)
-            .fontColor(this.themeConfig.colors.textSecondary)
 
           if (this.viewModel.writingStats) {
             Text(`近期手写: ${this.viewModel.writingStats!.totalHumanTypedChars}`)
               .fontSize(13)
-              .fontColor(this.themeConfig.colors.textHint)
           }
 
           if (this.viewModel.nativeStatus) {
             Text(`Native: ${this.viewModel.nativeStatus}`)
               .fontSize(10)
-              .fontColor(this.themeConfig.colors.textHint)
           }
         }
         .alignItems(HorizontalAlign.End)
@@ -353,17 +349,14 @@ export struct HomeScreen {
       Column() {
         Text('近期手写')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
         Text(`${this.viewModel.writingStats?.totalHumanTypedChars || 0}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.primary)
 
         Text('字')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
@@ -371,22 +364,18 @@ export struct HomeScreen {
       Divider()
         .vertical(true)
         .height(40)
-        .color(this.themeConfig.colors.divider)
 
       Column() {
         Text('活跃时长')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
         Text(`${Math.floor((this.viewModel.writingStats?.totalActiveSeconds || 0) / 60)}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.secondary)
 
         Text('分钟')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
@@ -394,29 +383,24 @@ export struct HomeScreen {
       Divider()
         .vertical(true)
         .height(40)
-        .color(this.themeConfig.colors.divider)
 
       Column() {
         Text('净增字数')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
         Text(`${this.viewModel.writingStats?.totalNetDeltaChars || 0}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.success)
 
         Text('字')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
     }
     .width('100%')
     .padding({ left: 20, right: 20, top: 20, bottom: 20 })
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.cardRadius)
     .margin({ bottom: 20 })
     .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
@@ -431,13 +415,11 @@ export struct HomeScreen {
         Text('最近编辑')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
         Text('查看全部')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.primary)
           .onClick(() => {
           })
       }
@@ -449,13 +431,11 @@ export struct HomeScreen {
           Column() {
             Text(`Chapter ${this.viewModel.recentEdit!.chapterId}`)
               .fontSize(16)
-              .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 6 })
 
             Row() {
               Text(`Project ${this.viewModel.recentEdit!.projectId}`)
                 .fontSize(13)
-                .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 16 })
             }
           }
@@ -464,11 +444,9 @@ export struct HomeScreen {
 
           Text(this.formatTime(this.viewModel.recentEdit!.timestamp))
             .fontSize(13)
-            .fontColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 14, bottom: 14 })
-        .backgroundColor(this.themeConfig.colors.surface)
         .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => this.navigateToRecentEdit())
@@ -486,14 +464,12 @@ export struct HomeScreen {
         Text('我的作品')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
         Button($r('app.string.new_project'))
           .fontSize(14)
           .height(32)
-          .backgroundColor(this.themeConfig.colors.primary)
           .onClick(() => {
             this.viewModel.createProject(getContext(this).resourceManager.getStringSync($r('app.string.default_new_project_title').id))
           })
@@ -507,7 +483,6 @@ export struct HomeScreen {
             Text(project.title)
               .fontSize(17)
               .fontWeight(FontWeight.Medium)
-              .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 6 })
           }
           .layoutWeight(1)
@@ -516,12 +491,10 @@ export struct HomeScreen {
           // 删除按钮（红色 ×）— 恢复 #760 之前的宽屏布局
           Text('×')
             .fontSize(18)
-            .fontColor(this.themeConfig.colors.onError)
             .width(28)
             .height(28)
             .textAlign(TextAlign.Center)
             .borderRadius(DesignTokens.radiusLg)
-            .backgroundColor(this.themeConfig.colors.error)
             .margin({ right: 12 })
             .onClick(() => {
               this.deleteProjectWithConfirm(project.id)
@@ -530,11 +503,9 @@ export struct HomeScreen {
           Image($r('sys.media.ohos_ic_public_arrow_right'))
             .width(18)
             .height(18)
-            .fillColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-        .backgroundColor(this.themeConfig.colors.surface)
         .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => this.navigateToWorkspace(project.id, project.title))
@@ -551,7 +522,6 @@ export struct HomeScreen {
       Text('快速操作')
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
         .width('100%')
 
@@ -561,17 +531,14 @@ export struct HomeScreen {
             Image($r('sys.media.ohos_ic_public_add'))
               .width(36)
               .height(36)
-              .fillColor(this.themeConfig.colors.primary)
               .margin({ bottom: 10 })
 
             Text('新章节')
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
           .height(90)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
@@ -583,17 +550,14 @@ export struct HomeScreen {
             Image($r('app.media.ic_star'))
               .width(36)
               .height(36)
-              .fillColor(this.themeConfig.colors.secondary)
               .margin({ bottom: 10 })
 
             Text('星图')
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
           .height(90)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => this.navigateToStarMap())
@@ -603,17 +567,14 @@ export struct HomeScreen {
             Image($r('sys.media.ohos_ic_public_more'))
               .width(36)
               .height(36)
-              .fillColor(this.themeConfig.colors.textSecondary)
               .margin({ bottom: 10 })
 
             Text('设置')
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
           .height(90)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => this.navigateToSettings())
@@ -623,17 +584,14 @@ export struct HomeScreen {
             Image($r('app.media.ic_refresh'))
               .width(36)
               .height(36)
-              .fillColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.success)
               .margin({ bottom: 10 })
 
             Text('同步')
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
           .height(90)
           .justifyContent(FlexAlign.Center)
-          .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => this.navigateToSettings())
@@ -665,22 +623,14 @@ export struct HomeScreen {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.themeConfig.colors.background)
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
+      // Issue #767：改用原生 Button(ButtonType.Circle)，系统材质处理形状、按压、阴影
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
-        Row() {
-          Stack() {
-            Circle({ width: 56, height: 56 })
-              .fill(this.themeConfig.colors.primary)
-              .shadow({ radius: 8, color: '#40000000', offsetY: 4 })
-            Image($r('sys.media.ohos_ic_public_add'))
-              .width(24)
-              .height(24)
-              .fillColor(this.themeConfig.colors.onPrimary)
-          }
-          .width(56)
-          .height(56)
+        Button({ type: ButtonType.Circle }) {
+          Image($r('sys.media.ohos_ic_public_add'))
+            .width(24)
+            .height(24)
         }
         .width(56)
         .height(56)
@@ -697,14 +647,13 @@ export struct HomeScreen {
     .height('100%')
   }
 
-  // ── 窄屏顶栏：素笺 + 按 ScreenPolicy HeaderTrailing 顺序渲染按钮 ──
+  // ── 窄屏顶栏：app_title + 按 ScreenPolicy HeaderTrailing 顺序渲染按钮 ──
   @Builder
   SinglePaneTopBar() {
     Row() {
-      Text('素笺')
+      Text($r('app.string.app_title'))
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.themeConfig.colors.textPrimary)
 
       Blank()
 
@@ -716,14 +665,12 @@ export struct HomeScreen {
           Image($r('app.media.ic_refresh'))
             .width(24)
             .height(24)
-            .fillColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
             .onClick(() => this.handleSync())
         } else if (slot.role === ActionRole.Settings) {
           Image($r('sys.media.ohos_ic_public_more'))
             .width(24)
             .height(24)
-            .fillColor(this.themeConfig.colors.textSecondary)
             .onClick(() => this.navigateToSettings())
         }
       }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
@@ -744,10 +691,8 @@ export struct HomeScreen {
       LoadingProgress()
         .width(48)
         .height(48)
-        .color(this.themeConfig.colors.primary)
       Text('加载中...')
         .fontSize(14)
-        .fontColor(this.themeConfig.colors.textHint)
         .margin({ top: 12 })
     }
     .width('100%')
@@ -761,12 +706,10 @@ export struct HomeScreen {
     Column() {
       Text(this.viewModel.errorMessage)
         .fontSize(16)
-        .fontColor(this.themeConfig.colors.error)
         .margin({ bottom: 16 })
 
       Button('重试')
         .onClick(() => this.handleRetry())
-        .backgroundColor(this.themeConfig.colors.primary)
     }
     .width('100%')
     .layoutWeight(1)
@@ -801,12 +744,10 @@ export struct HomeScreen {
     Column() {
       Text('暂无作品')
         .fontSize(18)
-        .fontColor(this.themeConfig.colors.textSecondary)
         .margin({ bottom: 8 })
 
       Text('点击右下角按钮创建第一个作品')
         .fontSize(14)
-        .fontColor(this.themeConfig.colors.textHint)
     }
     .width('100%')
     .height(200)
@@ -822,13 +763,11 @@ export struct HomeScreen {
         Text(project.title)
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         Text(this.formatWordCount(project.totalWordCount))
           .fontSize(13)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ top: 6 })
       }
       .layoutWeight(1)
@@ -841,7 +780,6 @@ export struct HomeScreen {
           Image($r('sys.media.ohos_ic_public_more'))
             .width(20)
             .height(20)
-            .fillColor(this.themeConfig.colors.textHint)
             .onClick(() => {
               this.viewModel.currentMenuProjectId = project.id
             })
@@ -853,7 +791,6 @@ export struct HomeScreen {
         // 右下：最后编辑日期
         Text(this.formatDate(project.updatedAt))
           .fontSize(13)
-          .fontColor(this.themeConfig.colors.textHint)
           .margin({ top: 6 })
       }
       .width(80)
@@ -861,7 +798,6 @@ export struct HomeScreen {
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 10 })
     .onClick(() => this.navigateToWorkspace(project.id, project.title))
@@ -880,7 +816,7 @@ export struct HomeScreen {
   }
 
   // ────────────────────────────────────────
-  // 对话框
+  // 对话框（Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式）
   // ────────────────────────────────────────
 
   // ── 新建作品对话框 ──
@@ -891,14 +827,12 @@ export struct HomeScreen {
         Text('新建作品')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 16 })
 
         TextInput({ placeholder: '请输入作品名称' })
           .width('100%')
           .height(40)
           .fontSize(16)
-          .caretColor(this.themeConfig.colors.primary)
           .onChange((value: string) => {
             this.viewModel.newProjectName = value
           })
@@ -907,8 +841,6 @@ export struct HomeScreen {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.showCreateDialog = false
               this.viewModel.newProjectName = ''
@@ -919,8 +851,6 @@ export struct HomeScreen {
           Button('创建')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
-            .fontColor(this.themeConfig.colors.onPrimary)
             .onClick(() => {
               this.viewModel.onCreateProject()
             })
@@ -930,8 +860,8 @@ export struct HomeScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
@@ -947,14 +877,12 @@ export struct HomeScreen {
         Text('重命名作品')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 16 })
 
         TextInput({ text: this.viewModel.renameInput, placeholder: '请输入新名称' })
           .width('100%')
           .height(40)
           .fontSize(16)
-          .caretColor(this.themeConfig.colors.primary)
           .onChange((value: string) => {
             this.viewModel.renameInput = value
           })
@@ -963,8 +891,6 @@ export struct HomeScreen {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.cancelRename()
             })
@@ -974,8 +900,6 @@ export struct HomeScreen {
           Button('确认')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
-            .fontColor(this.themeConfig.colors.onPrimary)
             .onClick(() => {
               this.viewModel.confirmRename()
             })
@@ -985,8 +909,8 @@ export struct HomeScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
@@ -1002,20 +926,16 @@ export struct HomeScreen {
         Text('确认删除')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 8 })
 
         Text(`确定要删除"${this.viewModel.deleteTarget?.title}"吗？此操作不可撤销。`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 16 })
 
         Row() {
           Button('取消')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surfaceVariant)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.viewModel.cancelDelete()
             })
@@ -1025,8 +945,6 @@ export struct HomeScreen {
           Button('删除')
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.error)
-            .fontColor(this.themeConfig.colors.onError)
             .onClick(() => {
               this.viewModel.confirmDelete()
             })
@@ -1035,8 +953,8 @@ export struct HomeScreen {
       }
       .width('80%')
       .padding(20)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')

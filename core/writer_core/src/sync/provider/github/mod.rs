@@ -20,7 +20,8 @@ use self::error::map_http_error;
 use crate::sync::provider::capabilities::SyncCapabilities;
 use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::model::{
-    DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+    BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
+    WritePrecondition,
 };
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncDiagnosticsResult;
@@ -29,6 +30,7 @@ use crate::sync::url::sanitize_remote_url;
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod git_database;
 
 /// GitHub Provider — 基于 GitHub REST API 的同步后端。
 ///
@@ -264,6 +266,28 @@ impl SyncProvider for GitHubProvider {
                 body,
             )),
         }
+    }
+
+    /// GitHub 批量原子提交 — 走 Git Database API（Issue #761 Part 2）。
+    ///
+    /// 一次 `commit_batch` 在远端产生恰好 1 个新 commit，所有 mutation 在同一
+    /// tree 内原子生效。ref PATCH 用 `force=false`，409 映射成
+    /// `PreconditionFailed` 回到 LWW/CAS 重试。
+    ///
+    /// `message` 直接作为 commit message，调用方可附加业务上下文（如 generation id）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        git_database::commit_batch_via_git_database(
+            self.transport(),
+            &self.config.api_base_url,
+            &self.config.token,
+            &self.config.branch,
+            mutations,
+            message,
+        )
     }
 }
 

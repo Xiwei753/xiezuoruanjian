@@ -57,18 +57,23 @@ impl ProviderSecrets {
 
 /// Provider-neutral 远端同步契约 — 所有同步后端必须满足此接口。
 ///
-/// trait 只描述远端对象的 CRUD 原语，不携带 SyncConfig/SyncSecrets/SyncTransport，
+/// trait 只描述远端对象的 CRUD 原语，不携带 SyncConfig/SyncSecrets/SyncTransport,
 /// 具体后端的认证/传输在构造 Provider 实例时注入（见 `GitHubProvider::new`）。
 ///
 /// ## 方法语义
 ///
 /// - `capabilities()`：返回远端能力集合，engine 据此调整策略。
-/// - `list(prefix)`：枚举远端以 `prefix + "/"` 开头的对象，剥掉前缀返回路径。
+/// - `list(prefix)`：枚举远端以 `prefix + "/"` 开头的对象，剥掉前缀返回。
 ///   `prefix` 为空时返回全部。返回 `RemoteEntry`（path + version，无内容）。
 /// - `read(path)`：读取远端对象完整内容，返回 `Option<RemoteObject>`（None 表示不存在）。
 /// - `write(path, content, precondition)`：写入对象，返回新版本。
 ///   precondition 检查失败返回 `ProviderError::PreconditionFailed`。
 /// - `delete(path, precondition)`：删除对象。
+/// - `commit_batch(mutations, message)`：一次原子提交一组 mutation。
+///   仅在 `capabilities().batch == true` 时保证实现；默认实现返回
+///   `ProviderError::Other { "batch not supported" }`，让不支持 batch 的
+///   Provider 仍能实现 trait 而不破坏现有调用方。调用方必须在 `batch == false`
+///   时降级到逐文件 write/delete 路径，不调用此方法。
 ///
 /// ## 线程安全
 ///
@@ -98,6 +103,25 @@ pub trait SyncProvider: Send + Sync {
         path: &str,
         precondition: model::DeletePrecondition,
     ) -> Result<(), error::ProviderError>;
+
+    /// 一次原子提交一组 mutation。
+    ///
+    /// 默认实现返回 `ProviderError::Other { "batch not supported" }`，
+    /// 不支持 batch 的 Provider 不需重写。支持 batch 的 Provider（GitHub、Memory）
+    /// 各自重写为 Git Database API / 锁内事务。
+    ///
+    /// 调用方必须在 `capabilities().batch == true` 时才调用此方法；
+    /// `batch == false` 时应降级到逐文件 write/delete 路径。
+    fn commit_batch(
+        &self,
+        mutations: &[model::BatchMutation],
+        message: &str,
+    ) -> Result<model::BatchCommitResult, error::ProviderError> {
+        let _ = (mutations, message);
+        Err(error::ProviderError::Other {
+            reason: "batch not supported".to_string(),
+        })
+    }
 }
 
 // ---- Provider-neutral 契约层 re-export ----

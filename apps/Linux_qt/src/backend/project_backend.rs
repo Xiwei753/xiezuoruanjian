@@ -20,6 +20,9 @@ pub struct ProjectBackend {
     selected_item_changed: qt_signal!(),
     workspace_content_changed: qt_signal!(),
     refresh_app_state: qt_method!(fn(&mut self) -> QJsonObject),
+    // Issue #765：只读 snapshot，不触发 reload_tree 全量 Core 扫描。
+    // 供 QML 侧普通 UI 读取 appState（纯路由、debounce、mutation else 分支等）使用。
+    get_app_state: qt_method!(fn(&self) -> QJsonObject),
     refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     get_tree_model_json: qt_method!(fn(&self) -> QString),
     get_tree_model: qt_method!(fn(&self) -> QJsonObject),
@@ -122,6 +125,15 @@ impl ProjectBackend {
     fn refresh_app_state(&mut self) -> QJsonObject {
         let res = self
             .with_app_mut(|app| app.refresh_app_state_json())
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            });
+        qjson_object_from_json(&res.to_string())
+    }
+    // Issue #765：只读 snapshot — 不调用 reload_tree，直接序列化 cached_tree_json。
+    fn get_app_state(&self) -> QJsonObject {
+        let res = self
+            .with_app(|app| app.get_app_state_json())
             .unwrap_or_else(|_| {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             });

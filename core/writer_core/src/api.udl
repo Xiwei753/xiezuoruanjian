@@ -389,6 +389,15 @@ dictionary SyncOperationStateDto {
     string? raw_error;
 };
 
+// 全局冲突摘要条目 — 诊断包用，只保留路径语义和类型，不含正文/快照内容。
+dictionary AllSyncConflictEntryDto {
+    string project_id;
+    string project_title;
+    string path;
+    string kind;
+    i64 created_at;
+};
+
 dictionary SyncPlanDto {
     sequence<string> files_to_upload;
     sequence<string> files_to_download;
@@ -1316,6 +1325,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     sequence<SyncConflictDto> list_sync_conflicts(string project_id);
+
+    // 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。诊断包用。
+    [Throws=WriterError]
+    sequence<AllSyncConflictEntryDto> list_all_sync_conflicts();
 
     [Throws=WriterError]
     sequence<ProjectSyncConflictDto> list_all_sync_conflicts();

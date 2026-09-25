@@ -1,19 +1,22 @@
 //! Provider 能力声明 — 让 LWW engine 根据远端能力调整同步策略。
 //!
 //! 不同 Provider 支持的能力不同：
-//! - GitHub：支持条件写入、服务端时间戳、远端历史，但不支持原子批量/移动。
+//! - GitHub：支持条件写入、服务端时间戳、远端历史，并通过 Git Database API
+//!   （tree+commit+ref PATCH）支持原子批量/原子写入。
 //! - MemoryProvider：支持原子批量、原子移动、目录语义，但无远端历史。
 //!
 //! engine 通过 `capabilities()` 查询后决定：
 //! - `conditional_write` 为真时使用 `IfMatch`/`CreateNew` 前置条件，
 //!   为假时降级为 `Unconditional` 写入。
+//! - `batch` 为真时 generation publisher 走 `commit_batch` 单次原子提交路径，
+//!   为假时降级为逐文件 `write()`/`delete()` 串行上传。
 //! - `max_parallel_downloads` 用于控制并行下载线程数，
 //!   低于 `MAX_PARALLEL_DOWNLOADS` 上限时按此值取较小值。
 //!
-//! 当前实际使用的字段：`conditional_write`、`max_parallel_downloads`。
+//! 当前实际使用的字段：`conditional_write`、`batch`、`atomic_write`、
+//! `max_parallel_downloads`。
 //! 以下字段为后续 Provider（WebDAV、CloudKit 等）预留，当前 engine 暂未使用：
-//! `atomic_write`、`atomic_move`、`batch`、`server_timestamp`、
-//! `directory_semantics`、`remote_history`。
+//! `atomic_move`、`server_timestamp`、`directory_semantics`、`remote_history`。
 
 /// Provider 能力集合 — 由各 Provider 实现静态返回。
 ///
@@ -43,14 +46,16 @@ impl SyncCapabilities {
     /// GitHub REST API 能力。
     ///
     /// GitHub Contents API 支持条件写入（通过 `sha` 参数实现 If-Match），
-    /// 提供服务端时间戳（commit author/committer date），有远端历史，
-    /// 但不支持原子批量、原子移动（需 delete + create 两步）、目录语义（无空目录）。
+    /// 提供服务端时间戳（commit author/committer date），有远端历史。
+    /// 通过 Git Database API（trees/commits/refs 端点）实现真正的原子批量提交，
+    /// 因此 `batch=true, atomic_write=true`。原子移动仍不支持（需 delete + create
+    /// 两步）；目录语义仍不支持（无空目录）。
     pub fn github() -> Self {
         Self {
             conditional_write: true,
-            atomic_write: false,
+            atomic_write: true,
             atomic_move: false,
-            batch: false,
+            batch: true,
             server_timestamp: true,
             directory_semantics: false,
             remote_history: true,

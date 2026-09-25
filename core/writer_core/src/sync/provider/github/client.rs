@@ -266,3 +266,123 @@ pub(crate) fn get_repo(
     // api_base 形如 https://api.github.com/repos/owner/repo，repo 根即 api_base 本身。
     execute_get(transport, api_base, token)
 }
+
+// ── Git Database API（Issue #761）──
+//
+// 以下函数实现 Git Database API 的原子批量提交流程：
+//   1. get_ref → 拿到 head commit SHA
+//   2. get_commit → 拿到 tree SHA
+//   3. post_blob（每个 Put 一次）→ 拿到文件内容的 blob SHA
+//   4. post_trees（base_tree + tree entries，全部用 sha 引用）→ 新 tree SHA
+//   5. post_commit（parent=head, tree=新 tree）→ 新 commit SHA
+//   6. patch_ref（sha=新 commit, force=false）→ 更新 branch ref
+//
+// 任一步失败向上返回 ProviderError；ref 更新失败（409/422）由调用方映射成
+// PreconditionFailed 回到 LWW/CAS 重试，不允许 force 覆盖别人刚提交的 head。
+
+/// 查询 branch ref，返回原始 HTTP 响应（body 为 JSON：`{object: {sha: "..."}}`）。
+///
+/// 已由 `get_ref` 提供，这里仅文档化其在 batch 流程中的角色（第 1 步）。
+///
+/// 查询 commit 对象，返回原始 HTTP 响应。
+///
+/// body 为 JSON：`{sha, tree: {sha}, parents: [{sha}, ...], ...}`。
+/// 调用方从 `tree.sha` 提取当前 tree SHA 作为 POST /git/trees 的 base_tree。
+pub(crate) fn get_commit(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    commit_sha: &str,
+) -> Result<HttpResponse, ProviderError> {
+    let url = format!("{}/git/commits/{}", api_base, commit_sha);
+    execute_get(transport, &url, token)
+}
+
+/// 创建 blob（`POST /git/blobs`），返回原始 HTTP 响应。
+///
+/// body 为 JSON：`{sha, url}`。调用方从 `sha` 提取 blob SHA，用于 tree entry。
+///
+/// `content` 是原始文件字节；本函数按 GitHub "Create a blob" 契约编码成
+/// `{"content":"<base64>","encoding":"base64"}`。
+/// Create a tree 的 `tree[].content` 是文件内容本身而不是 base64，
+/// 因此 Put 必须先经本函数上传再在 tree entry 里用 `sha` 引用。
+pub(crate) fn post_blob(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    content: &[u8],
+) -> Result<HttpResponse, ProviderError> {
+    let url = format!("{}/git/blobs", api_base);
+    let payload = serde_json::json!({
+        "content": base64::engine::general_purpose::STANDARD.encode(content),
+        "encoding": "base64",
+    });
+    execute_json(transport, "POST", &url, token, &payload)
+}
+
+/// 创建 tree（可带 base_tree 增量修改），返回原始 HTTP 响应。
+///
+/// body 为 JSON：`{sha, tree: [...], ...}`。调用方从 `sha` 提取新 tree SHA。
+///
+/// `base_tree` 为父 tree SHA（来自 GET /git/commits/<head> 的 `tree.sha`），
+/// `tree_entries` 为 JSON 数组，每个元素形如：
+/// - Put：`{path, mode:"100644", type:"blob", sha:"<post_blob 返回的 blob sha>"}`
+/// - ReuseVersion：`{path, mode:"100644", type:"blob", sha:"<已有 blob sha>"}`
+/// - Delete：`{path, sha:null}`（从 tree 中移除）
+///
+/// 所有 entry 统一用 `sha` 引用 blob；tree 接口的 `content` 字段是文件内容本身
+/// （不是 base64），直接塞 base64 文本会把真实文件写坏。
+pub(crate) fn post_trees(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    base_tree: &str,
+    tree_entries: &[serde_json::Value],
+) -> Result<HttpResponse, ProviderError> {
+    let url = format!("{}/git/trees", api_base);
+    let payload = serde_json::json!({
+        "base_tree": base_tree,
+        "tree": tree_entries,
+    });
+    execute_json(transport, "POST", &url, token, &payload)
+}
+
+/// 创建 commit，返回原始 HTTP 响应。
+///
+/// body 为 JSON：`{sha, tree: {sha}, parents: [{sha}, ...], ...}`。
+/// 调用方从 `sha` 提取新 commit SHA。
+pub(crate) fn post_commit(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    message: &str,
+    tree_sha: &str,
+    parent_sha: &str,
+) -> Result<HttpResponse, ProviderError> {
+    let url = format!("{}/git/commits", api_base);
+    let payload = serde_json::json!({
+        "message": message,
+        "tree": tree_sha,
+        "parents": [parent_sha],
+    });
+    execute_json(transport, "POST", &url, token, &payload)
+}
+
+/// 更新 branch ref，返回原始 HTTP 响应。
+///
+/// `force=false` 保证不覆盖别人刚提交的 head；ref 更新失败（409）由调用方
+/// 映射成 `ProviderError::PreconditionFailed`。
+pub(crate) fn patch_ref(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    branch: &str,
+    new_commit_sha: &str,
+) -> Result<HttpResponse, ProviderError> {
+    let url = format!("{}/git/refs/heads/{}", api_base, branch);
+    let payload = serde_json::json!({
+        "sha": new_commit_sha,
+        "force": false,
+    });
+    execute_json(transport, "PATCH", &url, token, &payload)
+}

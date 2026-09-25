@@ -332,6 +332,9 @@ impl AppBackend {
             let err_msg = format!("无法创建作品目录: {}", e);
             self.set_error(&err_msg);
             self.debug_error("workspace", "internal_open_data_root_failed", &err_msg);
+            // Issue #765 评论 5832424693：失败时清旧树快照，避免 hasWorkspace=false
+            // 但 tree 残留旧工作区内容。
+            self.clear_cached_tree_snapshot();
             return crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other(err_msg),
             )
@@ -354,6 +357,9 @@ impl AppBackend {
                     "internal_open_data_root_bootstrap_failed",
                     &err_msg,
                 );
+                // Issue #765 评论 5832424693：失败时清旧树快照，避免 hasWorkspace=false
+                // 但 tree 残留旧工作区内容。
+                self.clear_cached_tree_snapshot();
                 return crate::backend::json_utils::envelope_error_json(
                     writer_core::api::WriterError::Other(err_msg),
                 )
@@ -433,6 +439,15 @@ impl AppBackend {
         }
     }
 
+    /// Issue #765 评论 5832424693：工作区失效时清树缓存的共享方法。
+    /// 同时清 cached_tree 和 cached_tree_json，避免旧工作区树快照残留形成
+    /// 自相矛盾的 appState（hasWorkspace=false 但 tree 还是旧内容）。
+    /// reset_workspace_state 和 internal_open_data_root 失败路径都走此方法。
+    fn clear_cached_tree_snapshot(&mut self) {
+        self.cached_tree = QJsonArray::default();
+        self.cached_tree_json = serde_json::Value::Array(vec![]);
+    }
+
     // AppBackend::reset_workspace_state
     //
     // 关闭/切换工作区的共享内部逻辑：清数据根状态、清选区、清树、重置同步状态、清编辑器、发信号。
@@ -449,7 +464,7 @@ impl AppBackend {
         self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // c. 清 in_progress：旧同步不再算作进行中，新工作区的 single-flight 不会被旧同步卡住。
         self.current_sync_in_progress = false;
-        // Issue #763：丢弃旧工作区的进度 sink，避免诊断导出带上旧工作区 target 进度。
+        // 清进度共享状态：旧同步的进度 sink 不再有意义，丢弃避免诊断导出读到过期进度。
         self.current_sync_progress = None;
 
         self.flush_writing_stats();
@@ -463,7 +478,7 @@ impl AppBackend {
         self.selected_volume_id = None;
         self.selected_chapter_id = None;
         // Clear tree
-        self.cached_tree = QJsonArray::default();
+        self.clear_cached_tree_snapshot();
         // Reset sync status
         self.current_sync_status = "no_workspace".to_string();
         self.current_save_status = "未打开工作区".to_string();

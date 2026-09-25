@@ -97,40 +97,43 @@ impl super::WriterCore {
         crate::sync::SyncService::list_conflicts(&self.project_root(project_id))
     }
 
-    /// 列出所有作品的所有未解决冲突。
+    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
     ///
-    /// 复用 `list_projects()` 枚举作品，对每个 project 调
-    /// `SyncService::list_conflicts()`，返回扁平的 `ProjectSyncConflict`
-    /// （project_id + project_title + SyncConflict），只返回有未解决冲突的条目。
-    /// 平台层按 project_id 分组展示，不需要自己扫目录。
-    ///
-    /// 单个 project 读取冲突失败时跳过该 project（记 warn），不阻断整体查询——
-    /// 一个作品目录损坏不应让全局冲突入口完全不可用。
-    #[allow(clippy::excessive_nesting)]
+    /// 诊断包用（Issue #763）。单项目读取失败不阻断全局聚合，跳过该项目继续。
     pub fn list_all_sync_conflicts(
         &self,
-    ) -> crate::error::Result<Vec<crate::sync::types::ProjectSyncConflict>> {
+    ) -> crate::error::Result<Vec<crate::api::AllSyncConflictEntryDto>> {
         let projects = self.list_projects()?;
-        let mut all = Vec::new();
-        for project in projects {
-            match crate::sync::SyncService::list_conflicts(&self.project_root(&project.id)) {
-                Ok(conflicts) => {
-                    all.extend(conflicts.into_iter().map(|conflict| {
-                        crate::sync::types::ProjectSyncConflict {
-                            project_id: project.id.clone(),
-                            project_title: project.title.clone(),
-                            conflict,
-                        }
-                    }));
+        let mut entries = Vec::new();
+        for project in &projects {
+            let conflicts = match self.list_sync_conflicts(&project.id) {
+                Ok(c) => c,
+                Err(e) => {
+                    // 单项目失败不阻断全局聚合，记录警告后继续下一项目。
+                    log::warn!(
+                        "list_all_sync_conflicts: skip project {} ({}) — {e}",
+                        project.id,
+                        project.title
+                    );
+                    continue;
                 }
-                Err(e) => log::warn!(
-                    "list_all_sync_conflicts: skip project {} — conflict load failed: {}",
-                    project.id,
-                    e
-                ),
+            };
+            for c in conflicts {
+                let kind = match c.kind {
+                    crate::sync::types::SyncConflictKind::BothChanged => "both_changed",
+                    crate::sync::types::SyncConflictKind::RemoteDeleted => "remote_deleted",
+                };
+                entries.push(crate::api::AllSyncConflictEntryDto {
+                    project_id: project.id.clone(),
+                    project_title: project.title.clone(),
+                    path: c.local_path,
+                    kind: kind.to_string(),
+                    created_at: c.created_at,
+                });
             }
         }
-        Ok(all)
+        Ok(entries)
+    }
     }
 
     pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {

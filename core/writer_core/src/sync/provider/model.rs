@@ -83,3 +83,59 @@ pub enum DeletePrecondition {
     IfMatch(RemoteVersion),
     Unconditional,
 }
+
+// ── 批量原子提交语义 ──
+//
+// Issue #761：Provider 增加真正的批量原子提交语义，让 generation 发布
+// 不再逐文件 provider.write()，而是构造一组 BatchMutation 一次 commit_batch()
+// 提交。GitHub 走 Git Database API（tree+commit+ref PATCH），MemoryProvider
+// 在单锁内事务执行。
+
+/// 批量 mutation — 一次原子提交中对单个远端路径的操作。
+///
+/// - [`BatchMutation::Put`]：写新内容（新建/覆盖）。`content` 为 UTF-8 字节。
+/// - [`BatchMutation::ReuseVersion`]：目标路径直接引用已有远端对象版本，
+///   不重新上传正文。GitHub 下 `version` 是 blob SHA，作为 tree entry 的 `sha`
+///   传给 POST /git/trees，复用已有 blob 不重新上传。
+/// - [`BatchMutation::Delete`]：从远端移除该路径。
+///
+/// `path` 始终是相对远端根的完整路径（含 remote_prefix），与 `SyncProvider::write`
+/// 的 path 语义一致。同一 batch 内同一 `path` 不应出现多次（实现可自行决定去重/报错）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchMutation {
+    Put {
+        path: String,
+        content: Vec<u8>,
+    },
+    ReuseVersion {
+        path: String,
+        version: RemoteVersion,
+    },
+    Delete {
+        path: String,
+    },
+}
+
+impl BatchMutation {
+    /// 返回此 mutation 作用的远端路径。
+    pub fn path(&self) -> &str {
+        match self {
+            BatchMutation::Put { path, .. }
+            | BatchMutation::ReuseVersion { path, .. }
+            | BatchMutation::Delete { path } => path,
+        }
+    }
+}
+
+/// 批量提交结果 — 一次 `commit_batch` 返回的远端提交信息。
+///
+/// - `revision`：远端新版本标识。GitHub 为新 commit SHA；MemoryProvider 为
+///   本次事务的 UUID（仅用于诊断/前置条件，不参与业务逻辑）。
+/// - `touched_paths`：本次 batch 实际生效的路径（Put/ReuseVersion/Delete 都算），
+///   供调用方做诊断/日志，不参与 LWW 判定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchCommitResult {
+    pub revision: RemoteVersion,
+    pub touched_paths: Vec<String>,
+}

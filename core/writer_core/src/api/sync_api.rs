@@ -296,8 +296,7 @@ impl WriterCoreApi {
         config: SyncConfigDto,
         force_sync: bool,
         cancellation_token: Option<SyncCancellationToken>,
-        progress_sink: Option<SyncProgressSink>,
-        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+        progress: Option<SyncProgressSink>,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
@@ -519,12 +518,9 @@ impl WriterCoreApi {
         self.perform_full_sync_with_provider(
             provider.as_ref(),
             &plan,
-            staging_runs,
-            cancellation_token,
-            progress_sink,
-            target_progress,
-        )
-    }
+            cancellation_token.as_ref(),
+            progress.as_ref(),
+        );
 
     /// 全量同步编排尾部 — 逐 target `Transfer → Commit → progress`，整轮结束聚合收口。
     ///
@@ -653,33 +649,13 @@ impl WriterCoreApi {
             all_committed_paths.extend(target_committed_paths);
         }
 
-        // generation GC — 清理未引用 generation（整轮结束后统一执行）。
-        // Issue #763 评论 5831610228：generation GC 循环里每处理一个 planned target
-        // 时用 set_target_phase 更新 sink，避免残留最后一个 Transfer target 指错作品。
-        let generation_gc_result = Self::run_full_sync_generation_gc(
-            provider,
-            plan,
-            &catalog_snapshot,
-            cancellation_token.as_ref(),
-            progress_sink.as_ref(),
-        );
-
-        // Issue #729：整轮结束后检查取消令牌。
-        if Self::sync_cancelled(cancellation_token.as_ref()) {
-            log::info!(
-                "[sync] perform_full_sync: cancellation requested after per-target loop — persisting cancelled state"
-            );
-            self.core_write().persist_full_sync_cancelled();
-            return Ok(Self::full_sync_noop_result());
-        }
-
-        // Issue #763 评论 5831610228：finalize 前用 set_global_phase("commit") 清掉
-        // 单一 current target，表示整轮进入全局 Commit 收口，没有单一 current target。
-        if let Some(ref sink) = progress_sink {
+        // Issue #763 评论 5831610228：Commit 是整轮全局操作，清 current target，
+        // 只写 phase = "commit"，语义是"当前处于全局 commit，没有单一 current target"。
+        if let Some(sink) = progress.as_ref() {
             sink.set_global_phase("commit");
         }
 
-        // Phase 5: 聚合 + lifecycle 处理 + FullSyncState 持久化（短写锁）。
+        // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
             core.finalize_full_sync(all_targets, generation_gc_result)
@@ -978,14 +954,12 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 列出所有作品的所有未解决冲突。
+    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
     ///
-    /// 跨作品全局冲突查询，返回扁平的 `ProjectSyncConflictDto`。
-    /// 平台层按 projectId 分组展示。单个 project 读取失败时跳过，不阻断整体查询。
-    pub fn list_all_sync_conflicts(&self) -> ApiResult<Vec<ProjectSyncConflictDto>> {
+    /// 诊断包用（Issue #763）。单项目读取失败不阻断全局聚合，跳过该项目继续。
+    pub fn list_all_sync_conflicts(&self) -> ApiResult<Vec<AllSyncConflictEntryDto>> {
         self.core_read()
             .list_all_sync_conflicts()
-            .map(|all| all.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 

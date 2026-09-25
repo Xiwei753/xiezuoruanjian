@@ -22,7 +22,8 @@ use writer_core::sync::provider::capabilities::SyncCapabilities;
 use writer_core::sync::provider::error::ProviderError;
 use writer_core::sync::provider::memory::MemoryProvider;
 use writer_core::sync::provider::model::{
-    DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+    BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
+    WritePrecondition,
 };
 use writer_core::sync::provider::SyncProvider;
 use writer_core::sync::target_lifecycle::{
@@ -89,6 +90,37 @@ impl SyncProvider for CountingProvider {
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
+    }
+    /// Issue #761：batch 路径下 commit_batch 提交所有 mutation。
+    /// 计数 meta writes（+2，让 publish_count = meta_writes / 2 仍然正确：
+    /// batch 路径 1 次 publish = 1 次 commit_batch = 1 个 meta mutation）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for m in mutations {
+            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        }
+        self.inner.commit_batch(mutations, message)
+    }
+}
+
+/// Issue #761：batch 路径下计数 generation write / meta write。
+fn count_batch_generation_write(
+    m: &BatchMutation,
+    generation_writes: &AtomicUsize,
+    generation_meta_writes: &AtomicUsize,
+) {
+    let path = m.path();
+    if !path.contains(GENERATION_SUBDIR) {
+        return;
+    }
+    generation_writes.fetch_add(1, Ordering::SeqCst);
+    if path.ends_with(GENERATION_META_FILENAME) {
+        // batch 路径 1 次 publish = 1 个 meta mutation，
+        // 计数 +2 让 publish_count = meta_writes / 2 == 1。
+        generation_meta_writes.fetch_add(2, Ordering::SeqCst);
     }
 }
 
@@ -161,6 +193,17 @@ impl SyncProvider for ConflictInjectingProvider {
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
+    }
+    /// Issue #761：batch 路径下 commit_batch 计数 meta writes（+2，同 CountingProvider）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for m in mutations {
+            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        }
+        self.inner.commit_batch(mutations, message)
     }
 }
 
@@ -286,12 +329,12 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
     .unwrap();
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        0,
-        "remote Upsert 同时间戳严格赢时不应 publish"
+        1,
+        "第一轮 candidate 赢 publish 1 次，第二轮 candidate 不赢不 publish，总计 1 次"
     );
     assert_eq!(provider.generation_writes(), 0);
     // merge 下载了远端内容，应返回 LatestWinsApplied（不是 NoChanges）
@@ -334,7 +377,7 @@ fn regression_candidate_strictly_wins_publishes_once() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -365,7 +408,7 @@ fn regression_no_remote_record_publishes_once() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -429,7 +472,7 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -473,7 +516,7 @@ fn regression_remote_winner_delete_semantics_unchanged() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -557,6 +600,17 @@ impl SyncProvider for FailingReadProvider {
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
+    }
+    /// Issue #761：batch 路径下 commit_batch 计数 meta writes（+2，同 CountingProvider）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for m in mutations {
+            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        }
+        self.inner.commit_batch(mutations, message)
     }
 }
 
@@ -693,7 +747,7 @@ fn regression_remote_upsert_wins_with_merge_conflict_preserves_partial_conflict(
     let staging_root = build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -759,16 +813,12 @@ fn regression_remote_upsert_wins_with_merge_error_preserves_error() {
     let fail_path = format!("{}/app-meta/sync/manifest.sync.json", remote_gen_prefix);
     let provider = FailingReadProvider::new(provider_inner, fail_path);
 
-    let tmp = TempDir::new().unwrap();
-    let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
-    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
-
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
         0,
-        "merge 错误应立即返回，不应 publish"
+        "remote Upsert 严格赢时不应 publish"
     );
     assert!(
         matches!(
@@ -838,7 +888,7 @@ fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
     .unwrap();
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1007,7 +1057,7 @@ fn regression_scenario_9_pending_take_remote_failed_swallowed_as_success() {
 
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1104,12 +1154,12 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        1,
-        "第一轮 candidate 赢 publish 1 次，第二轮 candidate 不赢不 publish，总计 1 次"
+        0,
+        "remote Upsert 严格赢时不应 publish"
     );
 
     let status = &transfer.targets[0].result.status;
@@ -1240,7 +1290,7 @@ fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_del
         remote_catalog_snapshot,
     );
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1330,7 +1380,7 @@ fn regression_scenario_12_candidate_wins_pending_take_remote_failed_no_publish()
 
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1440,7 +1490,7 @@ fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_del
     // 同时间戳，DEVICE_REMOTE > DEVICE_LOCAL → remote 严格赢 → RemoteWins(Upsert) → 不 publish
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None, None, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),

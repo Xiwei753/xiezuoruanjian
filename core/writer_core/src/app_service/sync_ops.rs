@@ -1,7 +1,8 @@
 use crate::api::{
-    FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto, FullSyncResultDto, FullSyncStateDto,
-    LegacyMigrationOutcomeDto, LegacyProfileMetadataDto, ProjectSyncConflictDto, SyncConfigDto,
-    SyncConflictDto, SyncConflictPreviewDto, SyncSecretsDto, SyncStateDto, WriterError,
+    AllSyncConflictEntryDto, FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto,
+    FullSyncResultDto, FullSyncStateDto, LegacyMigrationOutcomeDto, LegacyProfileMetadataDto,
+    SyncConfigDto, SyncConflictDto, SyncConflictPreviewDto, SyncSecretsDto, SyncStateDto,
+    WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -93,30 +94,12 @@ impl super::WriterAppService {
 
     /// 全量同步。
     ///
-    /// UniFFI 导出接口保持 2 参数签名不变。cancellation_token / progress_sink /
-    /// target_progress 在此层固定为 None，因为 UniFFI 调用方（Android）不传取消令牌
-    /// 和进度入口。Linux_Qt 后台线程直接调 `WriterCoreApi::perform_full_sync` 传入
-    /// token / sink / callback，不经此方法。
+    /// UniFFI 导出接口保持 2 参数签名不变。cancellation_token / progress 在此层固定为 None，
+    /// 因为 UniFFI 调用方（Android）不传取消令牌和进度 sink。Linux_Qt 后台线程直接调
+    /// `WriterCoreApi::perform_full_sync` 传入 token / progress，不经此方法。
     pub fn perform_full_sync(
         &self,
-        config: SyncConfigDto,
-        force_sync: bool,
-    ) -> Result<FullSyncResultDto, WriterError> {
-        self.refresh_secrets_override();
-        self.api
-            .perform_full_sync(config, force_sync, None, None, None)
-    }
 
-    pub fn resolve_conflict_keep_local(
-        &self,
-        project_id: String,
-        path: String,
-    ) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_keep_local(&project_id, &path)
-    }
-
-    pub fn resolve_conflict_take_remote(
-        &self,
         project_id: String,
         path: String,
     ) -> Result<bool, WriterError> {
@@ -148,8 +131,10 @@ impl super::WriterAppService {
         self.api.list_sync_conflicts(&project_id)
     }
 
-    /// 列出所有作品的所有未解决冲突。
-    pub fn list_all_sync_conflicts(&self) -> Result<Vec<ProjectSyncConflictDto>, WriterError> {
+    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
+    ///
+    /// 诊断包用（Issue #763）。委托给 api 层。
+    pub fn list_all_sync_conflicts(&self) -> Result<Vec<AllSyncConflictEntryDto>, WriterError> {
         self.api.list_all_sync_conflicts()
     }
 

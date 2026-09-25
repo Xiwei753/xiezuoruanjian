@@ -54,15 +54,12 @@ export struct ChapterTreePane {
         Text($r('app.string.chapters'))
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Button('+')
           .fontSize(14)
           .width(28)
           .height(28)
-          .backgroundColor(this.themeConfig.colors.primary)
-          .fontColor(this.themeConfig.colors.onPrimary)
           .onClick(() => {
             if (this.onCreateVolume) {
               this.onCreateVolume()
@@ -79,11 +76,9 @@ export struct ChapterTreePane {
             Column() {
               Text($r('app.string.no_volumes_chapters'))
                 .fontSize(14)
-                .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ bottom: 8 })
               Text($r('app.string.click_new_volume_to_start'))
                 .fontSize(12)
-                .fontColor(this.themeConfig.colors.textHint)
             }
             .width('100%')
             .padding(24)
@@ -101,7 +96,6 @@ export struct ChapterTreePane {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.surface)
   }
 
   @Builder
@@ -114,26 +108,21 @@ export struct ChapterTreePane {
           : $r('sys.media.ohos_ic_public_arrow_right'))
           .width(16)
           .height(16)
-          .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
         Text(volumeTree.volume.title)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Text(`${volumeTree.chapters.length}`)
           .fontSize(11)
-          .fontColor(this.themeConfig.colors.textHint)
           .margin({ right: 8 })
 
         Button('+')
           .fontSize(12)
           .width(24)
           .height(24)
-          .backgroundColor(this.themeConfig.colors.secondary)
-          .fontColor(this.themeConfig.colors.onPrimary)
           .onClick(() => {
             if (this.onCreateChapter) {
               this.onCreateChapter(volumeTree.volume.id)
@@ -153,7 +142,6 @@ export struct ChapterTreePane {
         if (volumeTree.chapters.length === 0) {
           Text($r('app.string.no_chapters'))
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textHint)
             .padding({ left: 28, top: 8, bottom: 8 })
         } else {
           ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
@@ -161,16 +149,12 @@ export struct ChapterTreePane {
               Column() {
                 Text(chapter.title)
                   .fontSize(14)
-                  .fontColor(this.selectedChapterId === chapter.id
-                    ? this.themeConfig.colors.primary
-                    : this.themeConfig.colors.textPrimary)
                   .fontWeight(this.selectedChapterId === chapter.id ? FontWeight.Medium : FontWeight.Normal)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
 
                 Text(`${chapter.wordCount}`)
                   .fontSize(11)
-                  .fontColor(this.themeConfig.colors.textHint)
                   .margin({ top: 2 })
               }
               .layoutWeight(1)
@@ -179,14 +163,10 @@ export struct ChapterTreePane {
               Image($r('sys.media.ohos_ic_public_arrow_right'))
                 .width(16)
                 .height(16)
-                .fillColor(this.themeConfig.colors.textHint)
                 .margin({ left: 8 })
             }
             .width('100%')
             .padding({ left: 28, right: 12, top: 8, bottom: 8 })
-            .backgroundColor(this.selectedChapterId === chapter.id
-              ? this.themeConfig.colors.primaryContainer
-              : 'transparent')
             .onClick(() => {
               if (this.onSelectChapter) {
                 this.onSelectChapter(chapter.id, chapter.title, volumeTree.volume.id)
