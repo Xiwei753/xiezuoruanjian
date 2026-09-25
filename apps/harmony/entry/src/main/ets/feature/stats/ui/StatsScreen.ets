@@ -70,14 +70,12 @@ export struct StatsScreen {
           Image($r('sys.media.ohos_ic_public_arrow_left'))
             .width(24)
             .height(24)
-            .fillColor(this.themeConfig.colors.textPrimary)
             .onClick(() => this.navPathStack.pop())
         }
 
         Text('统计')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ left: 12 })
 
         Blank()
@@ -90,10 +88,8 @@ export struct StatsScreen {
           LoadingProgress()
             .width(48)
             .height(48)
-            .color(this.themeConfig.colors.primary)
           Text('加载中...')
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -103,12 +99,10 @@ export struct StatsScreen {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button('重试')
             .onClick(() => this.loadStats())
-            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -122,12 +116,10 @@ export struct StatsScreen {
             Row() {
               Text('统计范围')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.range.startDate} ~ ${this.stats.range.endDate}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -135,12 +127,10 @@ export struct StatsScreen {
             Row() {
               Text('手写字数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalHumanTypedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -148,12 +138,10 @@ export struct StatsScreen {
             Row() {
               Text('粘贴字数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalPastedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -161,12 +149,10 @@ export struct StatsScreen {
             Row() {
               Text('删除字数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalDeletedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -174,12 +160,10 @@ export struct StatsScreen {
             Row() {
               Text('AI插入字数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalAiInsertedChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -187,12 +171,10 @@ export struct StatsScreen {
             Row() {
               Text('净增字数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalNetDeltaChars}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -200,12 +182,10 @@ export struct StatsScreen {
             Row() {
               Text('活跃时长(秒)')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalActiveSeconds}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -213,12 +193,10 @@ export struct StatsScreen {
             Row() {
               Text('写作会话数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.totalSessions}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -226,12 +204,10 @@ export struct StatsScreen {
             Row() {
               Text('写作天数')
                 .fontSize(16)
-                .fontColor(this.themeConfig.colors.textPrimary)
                 .layoutWeight(1)
               Text(`${this.stats.daysCount}`)
                 .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.themeConfig.colors.textPrimary)
             }
             .width('100%')
             .padding({ top: 12, bottom: 12 })
@@ -246,7 +222,6 @@ export struct StatsScreen {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
     .onShown(() => {

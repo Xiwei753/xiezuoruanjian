@@ -2,6 +2,13 @@
 // 从 AppNavigation.ets 分离出来的导航事务逻辑：导航意图队列、离开守卫、安全 pop/replace/rebuild。
 // AppNavigation struct 通过 getInstance() 注册 navPathStack 和恢复回调，
 // EntryAbility / WritingScreen 通过 getInstance() 触发接续恢复和安全导航操作。
+//
+// Issue #767：支持多 tab stack。
+// - 单一 navPathStack 改为 activeTabStack（当前活动 tab 的 stack）
+// - 增加 setActiveStack() 方法，Tabs onChange 切换后更新活动栈
+// - safePop / safeReplacePath / continuation restore 都操作当前活动栈
+// - 接续恢复有 project/chapter 时先切到作品 tab，再重建作品栈
+// - getNavPathStack() 返回当前活动栈
 
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 
@@ -51,10 +58,18 @@ interface ActiveNavigationTask {
 // - registerLeaveGuard 返回唯一 lease/token（单调递增 number），
 //   unregisterLeaveGuard(token) 只注销这一个实例。
 // - 新增 safeReplacePath(path)，宽屏 Writing 左侧切章节统一走它。
+//
+// Issue #767：支持多 tab stack。
+// - activeTabStack 替代单一 navPathStack，表示当前活动 tab 的 NavPathStack。
+// - setActiveStack() 由 Tabs onChange 调用，切换活动栈。
+// - safePop / safeReplacePath 操作 activeTabStack。
+// - getNavPathStack() 返回 activeTabStack。
 export class NavigationTransactionCoordinator {
   private static instance: NavigationTransactionCoordinator
-  // AppNavigation 注册的 navPathStack；struct 未挂载时为 null。
-  private navPathStack: NavPathStack | null = null
+  // Issue #767：当前活动 tab 的 NavPathStack。
+  // Tabs onChange 切换后通过 setActiveStack() 更新。
+  // safePop / safeReplacePath / getNavPathStack 都操作此栈。
+  private activeTabStack: NavPathStack | null = null
   // AppNavigation 注册的恢复回调：能访问 struct @State 进行 selection/cursor/viewport 恢复。
   private restoreListener: ((payload: ContinuationPayload) => void) | null = null
   // AppNavigation 尚未 aboutToAppear 时暂存 payload，待注册后消费。
@@ -85,10 +100,18 @@ export class NavigationTransactionCoordinator {
     return NavigationTransactionCoordinator.instance
   }
 
-  // AppNavigation.aboutToAppear 注册 navPathStack 与恢复回调。
+  // Issue #767：设置当前活动 tab 的 NavPathStack。
+  // Tabs onChange 切换后调用此方法更新活动栈，
+  // 使 safePop / safeReplacePath / getNavPathStack 操作正确的栈。
+  setActiveStack(stack: NavPathStack): void {
+    this.activeTabStack = stack
+  }
+
+  // Issue #767：注册恢复回调。
+  // navPathStack 参数保留兼容性，内部只使用 activeTabStack。
   // 若 EntryAbility 已先交付 payload（pendingRestore），立即消费。
   register(navPathStack: NavPathStack, restoreListener: (payload: ContinuationPayload) => void): void {
-    this.navPathStack = navPathStack
+    this.activeTabStack = navPathStack
     this.restoreListener = restoreListener
     if (this.pendingRestore !== null) {
       const pending: ContinuationPayload = this.pendingRestore
@@ -99,7 +122,7 @@ export class NavigationTransactionCoordinator {
 
   // AppNavigation.aboutToDisappear 注销，避免悬空回调。
   unregister(): void {
-    this.navPathStack = null
+    this.activeTabStack = null
     this.restoreListener = null
   }
 
@@ -113,9 +136,10 @@ export class NavigationTransactionCoordinator {
     this.pendingRestore = payload
   }
 
-  // 供恢复回调内部使用：直接操作 navPathStack 重建路由栈。
+  // Issue #767：返回当前活动 tab 的 NavPathStack。
+  // safePop / safeReplacePath 内部使用此方法获取操作目标。
   getNavPathStack(): NavPathStack | null {
-    return this.navPathStack
+    return this.activeTabStack
   }
 
   // Issue #629 评论14 第2项：注册离开守卫，返回唯一 token。
@@ -208,12 +232,13 @@ export class NavigationTransactionCoordinator {
   }
 
   // Issue #629 评论14 第2项：安全的 pop。
-  // 串行排队，guard 成功才 navPathStack.pop()；失败留在本页。
+  // 串行排队，guard 成功才 activeTabStack.pop()；失败留在本页。
+  // Issue #767：操作当前活动 tab 的 stack。
   safePop(): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'Pop', dedupeKey: 'pop' }
     return this.enqueueNavigation(intent, (): void => {
-      if (this.navPathStack !== null) {
-        this.navPathStack.pop()
+      if (this.activeTabStack !== null) {
+        this.activeTabStack.pop()
       }
     })
   }
@@ -229,6 +254,7 @@ export class NavigationTransactionCoordinator {
   // Issue #629 评论14 第2项：安全的 replace path。
   // 宽屏 Writing 左侧切章节统一走它：guard 成功才 replace 当前路由为新 Writing route；
   // 失败保持当前页面。
+  // Issue #767：操作当前活动 tab 的 stack。
   safeReplacePath(targetKey: string, replace: () => void): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
     return this.enqueueNavigation(intent, replace)

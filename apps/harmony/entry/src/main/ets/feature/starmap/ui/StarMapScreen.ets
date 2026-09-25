@@ -431,14 +431,12 @@ export struct StarMapScreen {
           Image($r('sys.media.ohos_ic_public_arrow_left'))
             .width(24)
             .height(24)
-            .fillColor(this.themeConfig.colors.textPrimary)
             .onClick(() => this.navPathStack.pop())
         }
 
         Text(this.starmapTitle)
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ left: 12 })
 
         Blank()
@@ -466,15 +464,12 @@ export struct StarMapScreen {
             .fontSize(18)
             .width(36)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surface)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
             })
 
           Text(`${Math.round(this.zoomScale * 100)}%`)
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .width(50)
             .textAlign(TextAlign.Center)
 
@@ -482,8 +477,6 @@ export struct StarMapScreen {
             .fontSize(18)
             .width(36)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surface)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
               this.zoomScale = Math.min(3, this.zoomScale + 0.1)
             })
@@ -491,8 +484,6 @@ export struct StarMapScreen {
           Button($r('app.string.reset'))
             .fontSize(12)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surface)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .margin({ left: 8 })
             .onClick(() => {
               this.zoomScale = 1
@@ -505,8 +496,6 @@ export struct StarMapScreen {
           Button('\u5206\u4eab')
             .fontSize(12)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.surface)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .margin({ left: 8 })
             .onClick(() => {
               const payload: SharePayload = this.buildSharePayload()
@@ -523,10 +512,8 @@ export struct StarMapScreen {
           LoadingProgress()
             .width(48)
             .height(48)
-            .color(this.themeConfig.colors.primary)
           Text($r('app.string.loading'))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -536,12 +523,10 @@ export struct StarMapScreen {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button($r('app.string.retry'))
             .onClick(() => this.loadStarMap())
-            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -552,7 +537,6 @@ export struct StarMapScreen {
           Canvas(this.buildCanvasContext())
             .width('100%')
             .height('100%')
-            .backgroundColor(this.themeConfig.colors.background)
             .onReady(() => {
               this.drawEdges()
             })
@@ -590,7 +574,6 @@ export struct StarMapScreen {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
     .onShown(() => {
@@ -607,7 +590,7 @@ export struct StarMapScreen {
         .strokeWidth(4)
         .shadow({
           radius: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.radius : (this.selectedNodeId === node.id ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
-          color: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.color : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
+          color: this.draggingNodeId === node.id ? '#40000000' : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
           offsetX: 0,
           offsetY: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
         })
@@ -615,7 +598,6 @@ export struct StarMapScreen {
       Text(node.title)
         .fontSize(13)
         .fontWeight(this.selectedNodeId === node.id ? FontWeight.Bold : FontWeight.Normal)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ top: 6 })
         .maxLines(2)
         .textAlign(TextAlign.Center)
@@ -669,13 +651,10 @@ export struct StarMapScreen {
         Text($r('app.string.node_info'))
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
-
         Blank()
 
         Text('✕')
           .fontSize(18)
-          .fontColor(this.themeConfig.colors.textHint)
           .onClick(() => {
             this.deselectNode()
           })
@@ -692,7 +671,6 @@ export struct StarMapScreen {
 
           Text(this.getNodeTypeName(this.selectedNode!.kind))
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textSecondary)
         }
         .margin({ bottom: 12 })
 
@@ -700,14 +678,12 @@ export struct StarMapScreen {
         Text(this.selectedNode!.title)
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 8 })
 
         // Node summary — Issue #753：StarMapNode DTO 无 description，用 content.summary 作为节点摘要。
         if (this.selectedNode!.content.summary) {
           Text(this.selectedNode!.content.summary)
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ bottom: 12 })
         }
 
@@ -715,12 +691,10 @@ export struct StarMapScreen {
         Row() {
           Text(`X: ${Math.round(this.layoutNodes.find(ln => ln.nodeId === this.selectedNodeId)?.x ?? 0)}`)
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ right: 16 })
 
           Text(`Y: ${Math.round(this.layoutNodes.find(ln => ln.nodeId === this.selectedNodeId)?.y ?? 0)}`)
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textHint)
         }
         .margin({ bottom: 16 })
 
@@ -729,7 +703,6 @@ export struct StarMapScreen {
           Text($r('app.string.related_relations'))
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .margin({ bottom: 8 })
 
           ForEach(this.graph.edges.filter(e =>
@@ -737,23 +710,18 @@ export struct StarMapScreen {
           ), (edge: StarMapEdge) => {
             Row() {
               Circle({ width: 8, height: 8 })
-                .fill(this.themeConfig.colors.primary)
                 .margin({ right: 8 })
 
               Column() {
                  Text(edge.label || getContext(this).resourceManager.getStringSync($r('app.string.unnamed_relation').id))
                   .fontSize(13)
-                  .fontColor(this.themeConfig.colors.textPrimary)
-
                 Text(this.getEdgeTypeName(edge.kind))
                   .fontSize(11)
-                  .fontColor(this.themeConfig.colors.textHint)
               }
               .layoutWeight(1)
 
               Text(edge.from === this.selectedNodeId ? '→' : '←')
                 .fontSize(14)
-                .fontColor(this.themeConfig.colors.textSecondary)
             }
             .margin({ bottom: 8 })
           }, (edge: StarMapEdge) => edge.id)
@@ -762,9 +730,8 @@ export struct StarMapScreen {
     }
     .width(300)
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
-    .shadow({ radius: DesignTokens.shadowMedium.radius, color: DesignTokens.shadowMedium.color, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
+    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY  })
     .position({
       x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 300 - 16 : 16,
       y: 16
@@ -776,7 +743,6 @@ export struct StarMapScreen {
     Column() {
       Text($r('app.string.legend'))
         .fontSize(12)
-        .fontColor(this.themeConfig.colors.textHint)
         .margin({ bottom: 8 })
 
       Row() {
@@ -795,9 +761,8 @@ export struct StarMapScreen {
       }
     }
     .padding(12)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusSm)
-    .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: DesignTokens.shadowLight.offsetY })
+    .shadow({ radius: DesignTokens.shadowLight.radius, offsetX: 0, offsetY: DesignTokens.shadowLight.offsetY  })
     .position({
       x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 200 - 16 : 16,
       y: this.stackHeight - 120 - 16
@@ -813,7 +778,6 @@ export struct StarMapScreen {
 
       Text(label)
         .fontSize(11)
-        .fontColor(this.themeConfig.colors.textSecondary)
     }
     .margin({ right: 12 })
   }
@@ -824,13 +788,11 @@ export struct StarMapScreen {
       if (this.graph) {
         Text(getContext(this).resourceManager.getStringSync($r('app.string.nodes_edges_format').id).replace('%s', `${this.graph.nodes.length}`).replace('%s', `${this.graph.edges.length}`))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
       }
     }
     .padding(8)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusXs)
-    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
+    .shadow({ radius: 2, offsetX: 0, offsetY: 1  })
     .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 })
   }
 
@@ -879,7 +841,7 @@ export struct StarMapScreen {
       ctx.beginPath()
       ctx.moveTo(sx, sy)
       ctx.lineTo(ex, ey)
-      ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
+      ctx.strokeStyle = isSelected ? "#007DFF" : "#33000000"
       ctx.lineWidth = isSelected ? 2.5 : 1.5
 
       // 虚线样式
@@ -904,7 +866,7 @@ export struct StarMapScreen {
       ctx.lineTo(alx, aly)
       ctx.moveTo(atx, aty)
       ctx.lineTo(arx, ary)
-      ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
+      ctx.strokeStyle = isSelected ? "#007DFF" : "#33000000"
       ctx.lineWidth = isSelected ? 2.5 : 1.5
       ctx.stroke()
 
@@ -913,7 +875,7 @@ export struct StarMapScreen {
         const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * this.zoomScale + this.offsetX
         const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * this.zoomScale + this.offsetY
         ctx.font = '11px HarmonyOS Sans'
-        ctx.fillStyle = isSelected ? this.themeConfig.colors.textPrimary : this.themeConfig.colors.textHint
+        ctx.fillStyle = isSelected ? "#000000" : "#99000000"
         ctx.textAlign = 'center'
         ctx.textBaseline = 'bottom'
         ctx.fillText(graphEdge.label, lx, ly - 6)

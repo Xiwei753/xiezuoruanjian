@@ -241,8 +241,6 @@ export struct WorkspaceScreen {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor(this.themeConfig.colors.background)
-
         // ── 对话框层 ──
         if (this.viewModel.renameTarget !== null) {
           this.RenameDialog()
@@ -274,8 +272,6 @@ export struct WorkspaceScreen {
       Column() {}
         .width(DIVIDER_WIDTH)
         .height('100%')
-        .backgroundColor(this.themeConfig.colors.divider)
-
       // 右侧面板：提示选择章节（不再内联编辑）
       this.RightPanelPlaceholder()
     }
@@ -291,13 +287,11 @@ export struct WorkspaceScreen {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
           .height(24)
-          .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => this.handleBack())
 
         Text(this.viewModel.projectName)
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ left: 12 })
           .layoutWeight(1)
           .maxLines(1)
@@ -306,7 +300,6 @@ export struct WorkspaceScreen {
         Button($r('app.string.new_volume'))
           .fontSize(12)
           .height(28)
-          .backgroundColor(this.themeConfig.colors.primary)
           .onClick(() => this.handleCreateVolume())
       }
       .width('100%')
@@ -318,10 +311,8 @@ export struct WorkspaceScreen {
           LoadingProgress()
             .width(36)
             .height(36)
-            .color(this.themeConfig.colors.primary)
           Text($r('app.string.loading'))
             .fontSize(13)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 8 })
         }
         .width('100%')
@@ -331,13 +322,11 @@ export struct WorkspaceScreen {
         Column() {
           Text(this.viewModel.errorMessageState)
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 12 })
 
           Button($r('app.string.retry'))
             .fontSize(13)
             .height(32)
-            .backgroundColor(this.themeConfig.colors.primary)
             .onClick(() => this.handleRetry())
         }
         .width('100%')
@@ -347,11 +336,9 @@ export struct WorkspaceScreen {
         Column() {
           Text($r('app.string.no_volumes_chapters'))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ bottom: 8 })
           Text($r('app.string.click_new_volume_to_start'))
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
         .layoutWeight(1)
@@ -371,7 +358,6 @@ export struct WorkspaceScreen {
     }
     .width(LEFT_PANEL_WIDTH)
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.surface)
   }
 
   @Builder
@@ -384,25 +370,21 @@ export struct WorkspaceScreen {
           : $r('sys.media.ohos_ic_public_arrow_right'))
           .width(16)
           .height(16)
-          .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
         Text(volumeTree.volume.title)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
           .fontSize(11)
-          .fontColor(this.themeConfig.colors.textHint)
           .margin({ right: 8 })
 
         Button('+')
           .fontSize(12)
           .width(24)
           .height(24)
-          .backgroundColor(this.themeConfig.colors.secondary)
           .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
       }
       .width('100%')
@@ -414,7 +396,6 @@ export struct WorkspaceScreen {
         if (volumeTree.chapters.length === 0) {
           Text($r('app.string.no_chapters'))
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textHint)
             .padding({ left: 28, top: 8, bottom: 8 })
         } else {
           ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
@@ -422,13 +403,11 @@ export struct WorkspaceScreen {
               Column() {
                 Text(chapter.title)
                   .fontSize(14)
-                  .fontColor(this.themeConfig.colors.textPrimary)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
 
                 Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
                   .fontSize(11)
-                  .fontColor(this.themeConfig.colors.textHint)
                   .margin({ top: 2 })
               }
               .layoutWeight(1)
@@ -437,7 +416,6 @@ export struct WorkspaceScreen {
               Image($r('sys.media.ohos_ic_public_arrow_right'))
                 .width(16)
                 .height(16)
-                .fillColor(this.themeConfig.colors.textHint)
                 .margin({ left: 8 })
             }
             .width('100%')
@@ -458,7 +436,6 @@ export struct WorkspaceScreen {
       Column() {
         Text($r('app.string.select_chapter_to_start'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textHint)
       }
       .width('100%')
       .layoutWeight(1)
@@ -466,7 +443,6 @@ export struct WorkspaceScreen {
     }
     .layoutWeight(1)
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
     .alignItems(HorizontalAlign.Center)
   }
 
@@ -487,10 +463,8 @@ export struct WorkspaceScreen {
             LoadingProgress()
               .width(48)
               .height(48)
-              .color(this.themeConfig.colors.primary)
             Text($r('app.string.loading'))
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textHint)
               .margin({ top: 12 })
           }
           .width('100%')
@@ -500,12 +474,10 @@ export struct WorkspaceScreen {
           Column() {
             Text(this.viewModel.errorMessageState)
               .fontSize(16)
-              .fontColor(this.themeConfig.colors.error)
               .margin({ bottom: 16 })
 
             Button($r('app.string.retry'))
               .onClick(() => this.handleRetry())
-              .backgroundColor(this.themeConfig.colors.primary)
           }
           .width('100%')
           .layoutWeight(1)
@@ -531,7 +503,6 @@ export struct WorkspaceScreen {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.themeConfig.colors.background)
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
@@ -539,12 +510,10 @@ export struct WorkspaceScreen {
         Row() {
           Stack() {
             Circle({ width: 56, height: 56 })
-              .fill(this.themeConfig.colors.primary)
               .shadow({ radius: 8, color: '#40000000', offsetY: 4 })
             Image($r('sys.media.ohos_ic_public_add'))
               .width(24)
               .height(24)
-              .fillColor(this.themeConfig.colors.onPrimary)
           }
           .width(56)
           .height(56)
@@ -572,13 +541,11 @@ export struct WorkspaceScreen {
       Image($r('sys.media.ohos_ic_public_arrow_left'))
         .width(24)
         .height(24)
-        .fillColor(this.themeConfig.colors.textPrimary)
         .onClick(() => this.handleBack())
 
       Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ left: 12 })
         .layoutWeight(1)
         .maxLines(1)
@@ -593,8 +560,6 @@ export struct WorkspaceScreen {
           Button($r('app.string.sync'))
             .fontSize(13)
             .height(28)
-            .backgroundColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.surfaceContainerHigh)
-            .fontColor(this.viewModel.isSyncing ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
             .margin({ right: 8 })
             .enabled(!this.viewModel.isSyncing)
             .onClick(() => this.handleSync())
@@ -603,8 +568,6 @@ export struct WorkspaceScreen {
           Button($r('app.string.settings'))
             .fontSize(13)
             .height(28)
-            .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .onClick(() => this.navigateToSettings())
         }
       }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
@@ -632,10 +595,8 @@ export struct WorkspaceScreen {
           LoadingProgress()
             .width(48)
             .height(48)
-            .color(this.themeConfig.colors.primary)
           Text($r('app.string.loading'))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -645,12 +606,10 @@ export struct WorkspaceScreen {
         Column() {
           Text(this.viewModel.errorMessageState)
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button($r('app.string.retry'))
             .onClick(() => this.handleRetry())
-            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -676,7 +635,6 @@ export struct WorkspaceScreen {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
     .alignItems(HorizontalAlign.Center)
   }
 
@@ -690,13 +648,11 @@ export struct WorkspaceScreen {
       Image($r('sys.media.ohos_ic_public_arrow_left'))
         .width(24)
         .height(24)
-        .fillColor(this.themeConfig.colors.textPrimary)
         .onClick(() => this.handleBack())
 
       Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ left: 12 })
 
       Blank()
@@ -705,14 +661,12 @@ export struct WorkspaceScreen {
       if (this.viewModel.project) {
         Text(getContext(this).resourceManager.getStringSync($r('app.string.volume_count_format').id).replace('%s', `${this.viewModel.volumeTrees.length}`))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 12 })
       }
 
       Button($r('app.string.new_volume'))
         .fontSize(14)
         .height(32)
-        .backgroundColor(this.themeConfig.colors.primary)
         .onClick(() => this.handleCreateVolume())
     }
     .width('100%')
@@ -734,38 +688,32 @@ export struct WorkspaceScreen {
           : $r('sys.media.ohos_ic_public_arrow_right'))
           .width(16)
           .height(16)
-          .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
         Text(volumeTree.volume.title)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
           .margin({ right: 8 })
 
         Button('+')
           .fontSize(14)
           .width(28)
           .height(28)
-          .backgroundColor(this.themeConfig.colors.secondary)
           .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
 
         Button('×')
           .fontSize(14)
           .width(28)
           .height(28)
-          .backgroundColor(this.themeConfig.colors.error)
           .margin({ left: 4 })
           .onClick(() => this.viewModel.startDeleteVolume(volumeTree.volume.id, true))
       }
       .width('100%')
       .padding(12)
-      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius({ topLeft: DesignTokens.radiusSm, topRight: DesignTokens.radiusSm })
       .onClick(() => this.handleToggleVolume(volumeTree.volume.id))
 
@@ -775,29 +723,24 @@ export struct WorkspaceScreen {
           Column() {
             Text($r('app.string.no_chapters'))
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textHint)
               .padding(16)
           }
           .width('100%')
-          .backgroundColor(this.themeConfig.colors.surface)
         } else {
           ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
             Row() {
               Column() {
                 Text(chapter.title)
                   .fontSize(15)
-                  .fontColor(this.themeConfig.colors.textPrimary)
                   .margin({ bottom: 4 })
 
                 Row() {
                   Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
                     .fontSize(12)
-                    .fontColor(this.themeConfig.colors.textSecondary)
                     .margin({ right: 12 })
 
                   Text(this.formatTime(chapter.updatedAt))
                     .fontSize(12)
-                    .fontColor(this.themeConfig.colors.textHint)
                 }
               }
               .layoutWeight(1)
@@ -808,18 +751,15 @@ export struct WorkspaceScreen {
                 .width(24)
                 .height(24)
                 .backgroundColor('transparent')
-                .fontColor(this.themeConfig.colors.textHint)
                 .onClick(() => this.viewModel.startDeleteChapter(chapter.id, true))
 
               Image($r('sys.media.ohos_ic_public_arrow_right'))
                 .width(16)
                 .height(16)
-                .fillColor(this.themeConfig.colors.textHint)
                 .margin({ left: 8 })
             }
             .width('100%')
             .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .backgroundColor(this.themeConfig.colors.surface)
             .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
           }, (chapter: ChapterMeta) => chapter.id)
         }
@@ -829,7 +769,7 @@ export struct WorkspaceScreen {
     .margin({ bottom: 12 })
     .borderRadius(DesignTokens.radiusSm)
     .clip(true)
-    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
+    .shadow({ radius: 2, offsetX: 0, offsetY: 1  })
   }
 
   // ── 空状态 ──
@@ -839,17 +779,14 @@ export struct WorkspaceScreen {
       Image($r('sys.media.ohos_ic_public_add'))
         .width(64)
         .height(64)
-        .fillColor(this.themeConfig.colors.textHint)
         .margin({ bottom: 16 })
 
       Text($r('app.string.no_volumes_chapters'))
         .fontSize(16)
-        .fontColor(this.themeConfig.colors.textSecondary)
         .margin({ bottom: 8 })
 
       Text($r('app.string.click_new_volume_to_start'))
         .fontSize(14)
-        .fontColor(this.themeConfig.colors.textHint)
     }
     .width('100%')
     .padding(48)
@@ -868,7 +805,6 @@ export struct WorkspaceScreen {
         Text(cardState.volumeTitle)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -878,14 +814,12 @@ export struct WorkspaceScreen {
           .fontSize(14)
           .width(28)
           .height(28)
-          .backgroundColor(this.themeConfig.colors.secondary)
           .onClick(() => this.handleCreateChapter(cardState.volumeId))
 
         // 更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
         Image($r('sys.media.ohos_ic_public_more'))
           .width(24)
           .height(24)
-          .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ left: 8 })
           .onClick(() => {
             this.viewModel.currentMenuVolumeId = cardState.volumeId
@@ -901,8 +835,6 @@ export struct WorkspaceScreen {
         // 左下：章节数
         Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${cardState.chapterCount}`))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
-
         // 中下：展开/收起箭头
         Row() {
           Image(this.viewModel.isVolumeExpanded(cardState.volumeId)
@@ -910,7 +842,6 @@ export struct WorkspaceScreen {
             : $r('sys.media.ohos_ic_public_arrow_right'))
             .width(14)
             .height(14)
-            .fillColor(this.themeConfig.colors.textHint)
         }
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
@@ -918,7 +849,6 @@ export struct WorkspaceScreen {
         // 右下：卷总字数
         Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${cardState.totalWordCount}`))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
       }
       .width('100%')
       .padding({ left: 16, right: 12, bottom: 10 })
@@ -930,11 +860,9 @@ export struct WorkspaceScreen {
           Column() {
             Text($r('app.string.no_chapters'))
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textHint)
               .padding(16)
           }
           .width('100%')
-          .backgroundColor(this.themeConfig.colors.surfaceContainerLow)
         } else {
           Column() {
             ForEach(cardState.chapters, (chapterState: ChapterRowState) => {
@@ -942,7 +870,6 @@ export struct WorkspaceScreen {
             }, (chapterState: ChapterRowState) => chapterState.chapterId)
           }
           .width('100%')
-          .backgroundColor(this.themeConfig.colors.surfaceContainerLow)
         }
       }
     }
@@ -950,8 +877,7 @@ export struct WorkspaceScreen {
     .margin({ bottom: 12 })
     .borderRadius(DesignTokens.radiusSm)
     .clip(true)
-    .backgroundColor(this.themeConfig.colors.surface)
-    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
+    .shadow({ radius: 2, offsetX: 0, offsetY: 1  })
   }
 
   // ── 章节行 ──
@@ -962,7 +888,6 @@ export struct WorkspaceScreen {
       // 左：章节名
       Text(chapterState.chapterTitle)
         .fontSize(15)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -970,19 +895,15 @@ export struct WorkspaceScreen {
       // 右侧：最后编辑日期
       Text(this.formatTime(chapterState.lastEditedTime))
         .fontSize(12)
-        .fontColor(this.themeConfig.colors.textHint)
         .margin({ left: 8, right: 8 })
 
       // 最右：章节字数
       Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapterState.wordCount}`))
         .fontSize(12)
-        .fontColor(this.themeConfig.colors.textSecondary)
-
       // 章节更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
       Image($r('sys.media.ohos_ic_public_more'))
         .width(20)
         .height(20)
-        .fillColor(this.themeConfig.colors.textHint)
         .margin({ left: 8 })
         .onClick(() => {
           this.viewModel.currentMenuChapterId = chapterState.chapterId
@@ -1020,6 +941,7 @@ export struct WorkspaceScreen {
 
   // ── 重命名对话框 ──
   // 类似 HomeScreen 的 RenameDialog，调用 ViewModel 的 renameVolume/renameChapter
+  // 对话框保留明确颜色（自定义对话框需要明确颜色才能正常显示）
   @Builder
   RenameDialog() {
     Column() {
@@ -1076,6 +998,7 @@ export struct WorkspaceScreen {
 
   // ── 删除确认对话框 ──
   // 仅当 ActionSlot.requiresConfirmation === true 时显示
+  // 对话框保留明确颜色（自定义对话框需要明确颜色才能正常显示）
   @Builder
   DeleteConfirmDialog() {
     Column() {

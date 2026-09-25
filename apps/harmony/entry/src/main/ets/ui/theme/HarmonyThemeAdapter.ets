@@ -178,6 +178,8 @@ export class HarmonyThemeAdapter {
   private static instance: HarmonyThemeAdapter
   private mainWindow: window.Window | null = null
   private systemColorMode: number = 0 // 0=light, 1=dark (ConfigurationConstant.ColorMode)
+  private useSystemTokens: boolean = true // 默认使用系统 token，用户显式选择主题后切换为 false
+  private effectiveColorMode: string = 'light' // 'light' | 'dark'，根据 mode 和 systemColorMode 计算
   private currentTheme: ThemeConfig = {
     mode: 'system',
     colorSource: 'built_in',
@@ -238,6 +240,31 @@ export class HarmonyThemeAdapter {
     return this.currentTheme.selectedBuiltinThemeId
   }
 
+  // Issue #767：是否使用系统 token（默认启动时为 true，用户显式选择主题后为 false）
+  isUsingSystemTokens(): boolean {
+    return this.useSystemTokens
+  }
+
+  // Issue #767：获取有效颜色模式（'light' | 'dark'），根据 mode 和 systemColorMode 计算
+  getEffectiveColorMode(): string {
+    return this.effectiveColorMode
+  }
+
+  // Issue #767：获取系统当前深浅色模式（0=light, 1=dark）
+  getSystemColorMode(): number {
+    return this.systemColorMode
+  }
+
+  // Issue #767：首次启动时由 EntryAbility 注入当前系统 colorMode，
+  // 避免一直靠 systemColorMode = 0 的默认值先按亮色启动。
+  initSystemColorMode(colorMode: number): void {
+    this.systemColorMode = colorMode
+    this.updateEffectiveColorMode()
+    if (this.useSystemTokens) {
+      this.applySystemColorMode(colorMode)
+    }
+  }
+
   getPaletteRecords(): ThemePaletteRecordDto[] {
     return this.paletteRecords
   }
@@ -262,6 +289,8 @@ export class HarmonyThemeAdapter {
     this.currentTheme.selectedPaletteId = paletteId
     if (paletteId.length > 0) {
       this.currentTheme.colorSource = 'saved_palette'
+      // Issue #767：用户显式选择了 saved palette，不再使用系统 token
+      this.useSystemTokens = false
     }
     this.updateColors()
     this.notifyObservers()
@@ -271,6 +300,8 @@ export class HarmonyThemeAdapter {
     this.currentTheme.selectedBuiltinThemeId = themeId
     if (themeId.length > 0) {
       this.currentTheme.colorSource = 'built_in'
+      // Issue #767：用户显式选择了 builtin theme，不再使用系统 token
+      this.useSystemTokens = false
     }
     this.updateColors()
     this.notifyObservers()
@@ -331,14 +362,32 @@ export class HarmonyThemeAdapter {
 
   onConfigurationUpdate(colorMode: number): void {
     this.systemColorMode = colorMode
-    this.applySystemColorMode(colorMode)
+    this.updateEffectiveColorMode()
+    if (this.useSystemTokens) {
+      this.applySystemColorMode(colorMode)
+    }
     if (this.currentTheme.mode === 'system') {
       this.notifyObservers()
     }
   }
 
   startSystemThemeListener(): void {
-    this.applySystemColorMode(this.systemColorMode)
+    this.updateEffectiveColorMode()
+    if (this.useSystemTokens) {
+      this.applySystemColorMode(this.systemColorMode)
+    }
+  }
+
+  // Issue #767：根据 mode 和 systemColorMode 计算有效颜色模式
+  private updateEffectiveColorMode(): void {
+    if (this.currentTheme.mode === 'dark') {
+      this.effectiveColorMode = 'dark'
+    } else if (this.currentTheme.mode === 'light') {
+      this.effectiveColorMode = 'light'
+    } else {
+      // system mode：跟随系统 colorMode
+      this.effectiveColorMode = this.systemColorMode === 1 ? 'dark' : 'light'
+    }
   }
 
   private applySystemColorMode(colorMode: number): void {
@@ -354,16 +403,31 @@ export class HarmonyThemeAdapter {
   }
 
   isDarkMode(): boolean {
-    return this.currentTheme.colors === DarkTheme
+    // Issue #767：使用 effectiveColorMode 判断，而非直接比较 colors === DarkTheme
+    return this.effectiveColorMode === 'dark'
   }
 
   private isCurrentlyDark(): boolean {
-    if (this.currentTheme.mode === 'dark') return true
-    if (this.currentTheme.mode === 'light') return false
-    return this.systemColorMode === 1
+    // Issue #767：使用 effectiveColorMode 判断
+    return this.effectiveColorMode === 'dark'
   }
 
   private updateColors(): void {
+    this.updateEffectiveColorMode()
+
+    // Issue #767：当 useSystemTokens = true 时，不覆盖 colors，
+    // 页面应使用系统 token 而非 themeConfig.colors。
+    // currentTheme.colors 保持为 LightTheme/DarkTheme 作为 fallback。
+    if (this.useSystemTokens) {
+      // 仅更新 fallback colors 以匹配当前模式，不影响 useSystemTokens 标志
+      if (this.effectiveColorMode === 'dark') {
+        this.currentTheme.colors = DarkTheme
+      } else {
+        this.currentTheme.colors = LightTheme
+      }
+      return
+    }
+
     const isDark = this.isCurrentlyDark()
 
     if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {

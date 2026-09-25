@@ -1,4 +1,4 @@
-import { AbilityConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit'
+import { AbilityConstant, UIAbility, Want, wantConstant, Configuration } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
@@ -9,6 +9,7 @@ import { ContinuationPayload } from '../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../app/navigation/NavigationTransactionCoordinator'
 import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
+import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
 
@@ -26,6 +27,9 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
     getAppContext().setAbilityContext(this.context)
 
+    // Issue #767：首次启动注入当前系统 colorMode，避免一直靠默认值 0 先按亮色启动。
+    this.initSystemColorMode()
+
     // Issue #670 评论 5652500781：共享 Rust diagnostics 必须在应用生命周期通知之前初始化，
     // 否则 lifecycle/observer 链产生的第一批结构化事件会天然漏掉 create。
     // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
@@ -36,6 +40,20 @@ export default class EntryAbility extends UIAbility {
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
       this.restoreContinuationFromWant(want)
+    }
+  }
+
+  // Issue #767：读取当前系统 colorMode 并注入 HarmonyThemeAdapter。
+  // 使用 this.context.config.colorMode 获取系统当前的深浅色模式。
+  private initSystemColorMode(): void {
+    try {
+      const config = this.context.config
+      if (config && config.colorMode !== undefined) {
+        HarmonyThemeAdapter.getInstance().initSystemColorMode(config.colorMode)
+        hilog.info(0x0000, 'EntryAbility', 'initSystemColorMode: colorMode=%{public}d', config.colorMode)
+      }
+    } catch (e) {
+      hilog.error(0x0000, 'EntryAbility', 'initSystemColorMode exception: %{public}s', String(e))
     }
   }
 
@@ -149,6 +167,18 @@ export default class EntryAbility extends UIAbility {
   onBackground() {
     hilog.info(0x0000, 'EntryAbility', 'onBackground')
     this.lifecycle.notifyBackground()
+  }
+
+  // Issue #767：系统配置变更回调（深色模式切换等）。
+  // 读取 newConfig.colorMode 并转给 HarmonyThemeAdapter，
+  // 只在 appearanceMode = system 时跟随系统切换（该逻辑在 HarmonyThemeAdapter.onConfigurationUpdate 中处理）。
+  onConfigurationUpdate(newConfig: Configuration): void {
+    hilog.info(0x0000, 'EntryAbility', 'onConfigurationUpdate: colorMode=%{public}d', newConfig.colorMode)
+    try {
+      HarmonyThemeAdapter.getInstance().onConfigurationUpdate(newConfig.colorMode)
+    } catch (e) {
+      hilog.error(0x0000, 'EntryAbility', 'onConfigurationUpdate exception: %{public}s', String(e))
+    }
   }
 
   // 应用接续：源设备触发接续时调用。

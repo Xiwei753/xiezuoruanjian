@@ -24,6 +24,7 @@ import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
 import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
+import { HarmonyThemeAdapter } from '../../ui/theme/HarmonyThemeAdapter'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
@@ -63,6 +64,18 @@ interface BuildIdentityAttachment {
   buildKey: string
 }
 
+// theme_runtime_sanitized.json 附件 DTO — Issue #767 主题运行时快照。
+interface ThemeRuntimeAttachment {
+  systemColorMode: number
+  appearanceMode: string
+  effectiveColorMode: string
+  useSystemTokens: boolean
+  hasExplicitThemeOverride: boolean
+  selectedBuiltinThemeId: string
+  selectedPaletteId: string
+  colorSource: string
+}
+
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
 const DIAGNOSTICS_DIR = 'diagnostics'
 
@@ -72,6 +85,7 @@ const ATTACHMENT_APP_SETTINGS = 'app_settings_sanitized.json'
 const ATTACHMENT_SYNC_STATE = 'sync_state_sanitized.json'
 const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
 const ATTACHMENT_BUILD_IDENTITY = 'build_identity.json'
+const ATTACHMENT_THEME_RUNTIME = 'theme_runtime_sanitized.json'
 
 export class HarmonyDiagnosticsExporter {
   private bridge: IWriterCoreBridge
@@ -185,6 +199,9 @@ export class HarmonyDiagnosticsExporter {
     // build_identity.json
     this.addBuildIdentityAttachment(attachments)
 
+    // theme_runtime_sanitized.json — Issue #767 主题运行时快照
+    this.addThemeRuntimeAttachment(attachments)
+
     return attachments
   }
 
@@ -291,6 +308,29 @@ export class HarmonyDiagnosticsExporter {
       attachments.push(this.makeAttachment(ATTACHMENT_BUILD_IDENTITY, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_BUILD_IDENTITY, String(e)))
+    }
+  }
+
+  // theme_runtime_sanitized.json — 主题运行时快照（Issue #767）。
+  // 从 HarmonyThemeAdapter 获取当前主题状态，记录深浅色模式、系统 token 使用情况等。
+  private addThemeRuntimeAttachment(attachments: AttachmentItem[]): void {
+    try {
+      const adapter = HarmonyThemeAdapter.getInstance()
+      const useSystemTokens = adapter.isUsingSystemTokens()
+      const snapshot: ThemeRuntimeAttachment = {
+        systemColorMode: adapter.getSystemColorMode(),
+        appearanceMode: adapter.getMode(),
+        effectiveColorMode: adapter.getEffectiveColorMode(),
+        useSystemTokens: useSystemTokens,
+        hasExplicitThemeOverride: !useSystemTokens,
+        selectedBuiltinThemeId: adapter.getSelectedBuiltinThemeId(),
+        selectedPaletteId: adapter.getSelectedPaletteId(),
+        colorSource: adapter.getColorSource()
+      }
+      const json = JSON.stringify(snapshot, null, 2)
+      attachments.push(this.makeAttachment(ATTACHMENT_THEME_RUNTIME, json))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_THEME_RUNTIME, String(e)))
     }
   }
 

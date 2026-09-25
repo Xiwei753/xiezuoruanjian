@@ -45,24 +45,33 @@ class MockNavPathStack {
 }
 
 // NavigationTransactionCoordinator 纯逻辑镜像（与 NavigationTransactionCoordinator.ets 对齐）。
-// Issue #629 评论14 第2项 + 评论15 第6项：
+// Issue #629 评论14 第2项 + 评论15 第6项 + Issue #767 多 tab stack：
 // - activeGuardLease: 只持有当前 active guard，旧实例迟到的 disappear 不会删新 guard
 // - NavigationIntent dedupeKey: Pop='pop', ReplacePath='replace:<targetKey>', ClearAndRebuild 由调用方提供
 // - activeTask: 正在执行的任务仍在"可去重集合"里（shift 后不消失）
 // - 不同 intent 严格串行执行，不同 dedupeKey 不合并
+// - Issue #767：navPathStack 改为 activeTabStack，增加 setActiveStack / getNavPathStack
 class NavigationTransactionCoordinator {
   constructor() {
-    this.navPathStack = null
+    this.activeTabStack = null
     this.activeGuardLease = null
     this.pendingTasks = []
     this.activeTask = null
     this.isProcessingQueue = false
   }
+  // Issue #767：设置当前活动 tab 的 stack
+  setActiveStack(stack) {
+    this.activeTabStack = stack
+  }
+  // Issue #767：获取当前活动 tab 的 stack
+  getNavPathStack() {
+    return this.activeTabStack
+  }
   register(navPathStack) {
-    this.navPathStack = navPathStack
+    this.activeTabStack = navPathStack
   }
   unregister() {
-    this.navPathStack = null
+    this.activeTabStack = null
   }
   registerLeaveGuard(guard) {
     const token = this.nextGuardToken++
@@ -128,7 +137,7 @@ class NavigationTransactionCoordinator {
   safePop() {
     const intent = { kind: 'Pop', dedupeKey: 'pop' }
     return this.enqueueNavigation(intent, () => {
-      if (this.navPathStack !== null) this.navPathStack.pop()
+      if (this.activeTabStack !== null) this.activeTabStack.pop()
     })
   }
   safeClearAndRebuild(dedupeKey, rebuild) {

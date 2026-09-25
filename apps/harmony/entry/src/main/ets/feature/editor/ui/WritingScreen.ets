@@ -864,10 +864,10 @@ export struct WritingScreen {
   }
 
   private getSaveStatusColor(): ResourceColor {
-    if (this.lastSaveFailed) return this.themeConfig.colors.error
-    if (this.isSaving) return this.themeConfig.colors.textSecondary
-    if (this.hasUnsavedChanges) return this.themeConfig.colors.secondary
-    return this.themeConfig.colors.success
+    if (this.lastSaveFailed) return "#E84026"
+    if (this.isSaving) return "#99000000"
+    if (this.hasUnsavedChanges) return "#007DFF"
+    return "#0A59F7"
   }
 
   private getSaveStatusText(): string {
@@ -954,8 +954,6 @@ export struct WritingScreen {
           Column() {}
             .width(0.5)
             .height('100%')
-            .backgroundColor(this.themeConfig.colors.divider)
-
           // 右侧编辑区域（同一个 WritingScreen 编辑会话）
           this.EditorPane()
         }
@@ -1001,10 +999,8 @@ export struct WritingScreen {
           LoadingProgress()
             .width(48)
             .height(48)
-            .color(this.themeConfig.colors.primary)
           Text($r('app.string.loading'))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -1014,12 +1010,10 @@ export struct WritingScreen {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button($r('app.string.retry'))
             .onClick(() => this.loadChapter())
-            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -1049,12 +1043,9 @@ export struct WritingScreen {
           .getStringSync($r('app.string.word_count_format').id)
           .replace('%s', String(this.wordCount)))
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
-
         if (this.settings.autoSaveEnabled) {
           Text($r('app.string.auto_save'))
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textHint)
             .margin({ left: 8 })
         }
 
@@ -1067,11 +1058,9 @@ export struct WritingScreen {
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 10, bottom: 10 })
-      .backgroundColor(this.themeConfig.colors.background)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(this.themeConfig.colors.background)
     .alignItems(HorizontalAlign.Center)
   }
 }
