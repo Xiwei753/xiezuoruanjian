@@ -31,8 +31,15 @@ Item {
     property string activeOperationId: ""
     property string activeOperationKind: ""
 
-    // Issue #762 评论 5826175490: 全局冲突列表
+    // Issue #762 评论 5826175490 第 4 点：跨作品全局冲突入口。
+    // allSyncConflicts 是 Core list_all_sync_conflicts() 的原始扁平列表
+    // （projectId + projectTitle + conflict，只含未解决冲突）；
+    // conflictGroups 按作品分组；conflictRows 把分组展平成
+    // "作品分组头 + 该作品每条冲突"，供单个 Repeater 渲染。
     property var allSyncConflicts: []
+    property var conflictGroups: []
+    property var conflictRows: []
+    readonly property int conflictTotalCount: allSyncConflicts.length
     signal openConflict(string projectId, string path)
 
     // Local reactive sync state
@@ -197,6 +204,72 @@ Item {
         }
     }
 
+    // ── Issue #762 评论 5826175490 第 4 点：跨作品全局冲突 ──
+
+    /// 读取 Core 的全局冲突列表（只含未解决冲突），按作品分组后展平成渲染行。
+    /// 冲突是持久状态，与"当前有没有在跑一轮同步"无关，因此页面打开、
+    /// 状态变化（sync_conflicts_changed）时都调，不依赖同步结束。
+    function refreshAllSyncConflicts() {
+        var sb = root.syncBackendRef
+        if (!sb) {
+            root.allSyncConflicts = []
+            root.conflictGroups = []
+            root.conflictRows = []
+            return
+        }
+        var raw = sb.list_all_sync_conflicts()
+        var resp = null
+        try { resp = JSON.parse(raw) } catch (e) { resp = null }
+        var flat = (resp && resp.success && resp.data && resp.data.conflicts) ? resp.data.conflicts : []
+        root.allSyncConflicts = flat
+        root.conflictGroups = root.groupConflictsByProject(flat)
+        root.conflictRows = root.buildConflictRows(root.conflictGroups)
+    }
+
+    /// 把扁平冲突列表按 projectId 分组，保留 Core 返回的作品标题。
+    function groupConflictsByProject(flat) {
+        var groups = []
+        for (var i = 0; i < flat.length; i++) {
+            var entry = flat[i]
+            if (!entry || !entry.conflict) continue
+            var group = null
+            for (var j = 0; j < groups.length; j++) {
+                if (groups[j].projectId === entry.projectId) { group = groups[j]; break }
+            }
+            if (!group) {
+                group = { projectId: entry.projectId, projectTitle: entry.projectTitle, conflicts: [] }
+                groups.push(group)
+            }
+            group.conflicts.push(entry.conflict)
+        }
+        return groups
+    }
+
+    /// 展平成渲染行：每个作品一行分组头，其下每条冲突一行可点击项。
+    function buildConflictRows(groups) {
+        var rows = []
+        for (var i = 0; i < groups.length; i++) {
+            var group = groups[i]
+            rows.push({
+                kind: "project",
+                projectId: group.projectId,
+                projectTitle: group.projectTitle,
+                conflictCount: group.conflicts.length,
+                localPath: ""
+            })
+            for (var j = 0; j < group.conflicts.length; j++) {
+                rows.push({
+                    kind: "conflict",
+                    projectId: group.projectId,
+                    projectTitle: group.projectTitle,
+                    conflictCount: group.conflicts.length,
+                    localPath: group.conflicts[j].localPath || ""
+                })
+            }
+        }
+        return rows
+    }
+
     // Remove color since root is now an Item
     function statusKind() {
         var s = root.currentSyncStatus
@@ -305,12 +378,13 @@ Item {
                 text: root.statusText()
             }
 
-            // Issue #762 评论 5826175490: 待处理冲突显示
+            // Issue #762 评论 5826175490 第 4 点：同步状态区域显示跨作品待处理冲突数。
+            // 只反映持久冲突状态，不依赖本轮同步是否结束。
             AppText {
                 id: pendingConflictsCount
                 dt: root.resolvedDt
-                visible: root.allSyncConflicts.length > 0
-                text: qsTr("待处理冲突 %1").arg(root.allSyncConflicts.length)
+                visible: root.conflictTotalCount > 0
+                text: qsTr("待处理冲突 %1").arg(root.conflictTotalCount)
                 color: resolvedDt.error
                 font.pointSize: resolvedDt.bodyPt
                 font.family: resolvedDt.fontFamily
@@ -637,14 +711,16 @@ Item {
             }
         }
 
-        // Issue #762 评论 5826175490: 按作品分组显示全局冲突列表
+        // Issue #762 评论 5826175490 第 4 点：跨作品冲突入口。
+        // 按作品分组列出所有未解决冲突，点击直接跳到对应作品的冲突面板，
+        // 不要求这一轮同步先结束。
         AppCard {
             id: conflictsCard
             Layout.fillWidth: true
             dt: root.resolvedDt
             variant: "surface"
             spacing: resolvedDt.sp12
-            visible: root.allSyncConflicts.length > 0
+            visible: root.conflictRows.length > 0
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -652,71 +728,40 @@ Item {
 
                 AppText {
                     dt: root.resolvedDt
-                    text: qsTr("全局同步冲突")
+                    text: qsTr("待处理冲突（%1 个作品 / %2 处）")
+                        .arg(root.conflictGroups.length)
+                        .arg(root.conflictTotalCount)
                     color: resolvedDt.onBackground
                     font.pointSize: resolvedDt.titlePt
                     font.family: resolvedDt.fontFamily
                     font.weight: Font.Bold
                 }
 
-                // 按 project_id 分组显示冲突
+                // 每个作品一个分组头，其下逐条列出该作品的冲突。
                 Repeater {
-                    model: root.allSyncConflicts.length
+                    model: root.conflictRows
                     delegate: ColumnLayout {
                         Layout.fillWidth: true
                         spacing: resolvedDt.sp8
 
-                        Rectangle {
+                        AppText {
                             Layout.fillWidth: true
-                            color: resolvedDt.surfaceContainerLow
-                            border.color: resolvedDt.border
-                            border.width: 1
-                            radius: resolvedDt.radiusMd
-                            Layout.preferredHeight: childrenRect.height
+                            visible: modelData.kind === "project"
+                            dt: root.resolvedDt
+                            text: qsTr("%1（%2 处）").arg(modelData.projectTitle).arg(modelData.conflictCount)
+                            color: resolvedDt.onBackground
+                            font.pointSize: resolvedDt.bodyPt
+                            font.family: resolvedDt.fontFamily
+                            font.weight: Font.Medium
+                        }
 
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Layout.margins: resolvedDt.sp12
-                                spacing: resolvedDt.sp8
-
-                                AppText {
-                                    dt: root.resolvedDt
-                                    text: root.allSyncConflicts[model.index].projectTitle
-                                    color: resolvedDt.onBackground
-                                    font.pointSize: resolvedDt.bodyPt
-                                    font.family: resolvedDt.fontFamily
-                                    font.weight: Font.Medium
-                                }
-
-                                AppText {
-                                    dt: root.resolvedDt
-                                    text: qsTr("冲突数量: %1").arg(root.allSyncConflicts[model.index].conflict ? 1 : 0)
-                                    color: resolvedDt.onSurfaceVariant
-                                    font.pointSize: resolvedDt.captionPt
-                                    font.family: resolvedDt.fontFamily
-                                }
-
-                                AppText {
-                                    dt: root.resolvedDt
-                                    text: qsTr("冲突路径: %1").arg(root.allSyncConflicts[model.index].conflict ? root.allSyncConflicts[model.index].conflict.localPath : "")
-                                    color: resolvedDt.onSurfaceVariant
-                                    font.pointSize: resolvedDt.captionPt
-                                    font.family: resolvedDt.fontFamily
-                                    wrapMode: Text.Wrap
-                                    Layout.fillWidth: true
-                                }
-
-                                AppButton {
-                                    text: qsTr("打开冲突")
-                                    dt: root.resolvedDt
-                                    variant: "secondary"
-                                    onClicked: {
-                                        var projectId = root.allSyncConflicts[model.index].projectId
-                                        var path = root.allSyncConflicts[model.index].conflict ? root.allSyncConflicts[model.index].conflict.localPath : ""
-                                        root.openConflict(projectId, path)
-                                    }
-                                }
-                            }
+                        AppButton {
+                            Layout.fillWidth: true
+                            visible: modelData.kind === "conflict"
+                            dt: root.resolvedDt
+                            variant: "secondary"
+                            text: modelData.localPath
+                            onClicked: root.openConflict(modelData.projectId, modelData.localPath)
                         }
                     }
                 }
@@ -729,13 +774,21 @@ Item {
             root.syncBackendRef.load_sync_config()
             autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false
             syncIntervalSlider.value = (root.syncBackendRef.sync_interval || 300) / 60
-            // Issue #762 评论 5826175490: 获取全局冲突列表
-            var result = root.syncBackendRef.list_all_sync_conflicts()
-            if (result && result.success && result.data && result.data.conflicts) {
-                root.allSyncConflicts = result.data.conflicts
-            }
+            // Issue #762 评论 5826175490 第 4 点：页面打开时立即读取全局冲突，
+            // 已有冲突不需要用户先手动同步一次才看得到。
+            root.refreshAllSyncConflicts()
         }
         root.refreshLocalSyncState();
+    }
+
+    // Issue #762 评论 5826175490 第 2/5 点：SyncBackend 在同步开始前、每个 target
+    // 结束、整轮同步结束、resolve 成功后都会发 sync_conflicts_changed。
+    // 全局冲突入口据此实时刷新，"同步中"和"等待用户解决冲突"可以同时成立。
+    Connections {
+        target: root.syncBackendRef
+        function onSync_conflicts_changed() {
+            root.refreshAllSyncConflicts();
+        }
     }
 
     TextEdit {

@@ -108,6 +108,12 @@ pub fn run_transfer(
             }
         };
 
+        // Issue #762 评论 5826175490 第 5 点：target 的 merge 确认了 unresolved_conflicts
+        // 之后立即写该 project 的持久 conflict state。必须排在 progress 回调之前——
+        // 平台收到 progress 就会去查全局冲突列表，此时冲突必须已经可读。
+        // 权威终态仍由 Commit 阶段的 record_staging_conflicts 写入，这里只是提前让它可见。
+        persist_unresolved_conflicts_early(planned, &result);
+
         // 在 move result 进 TargetSyncResult 之前提取 progress 载荷。
         let progress_status = crate::api::types::sync_status_to_wire(&result.status);
         let progress_conflict_count = u32::try_from(result.conflicts.len()).unwrap_or(u32::MAX);

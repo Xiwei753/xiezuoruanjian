@@ -60,7 +60,10 @@ Rectangle {
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
     onWorkspaceProjectIdChanged: {
-        // Issue #762 评论 5826175490 第 3 点：切换作品时立即刷新冲突
+        // Issue #762 评论 5826175490 第 3 点：切换作品时立即刷新冲突。
+        // 旧的 conflictPath 属于上一个作品，先清掉避免在新作品里误选中；
+        // 外部（SyncPage 全局入口）随后会用 openConflictPath() 给出目标路径。
+        root.conflictPath = ""
         root.refreshConflictList()
     }
 
@@ -1233,9 +1236,9 @@ Rectangle {
         }
     }
 
-    // Issue #757 评论 5818193510 第 5 点：同步完成后检查冲突状态。
-    // 监听 syncBackend.sync_action_completed，若 sync_operation_state 中
-    // status 为 conflict/partial_conflict，刷新冲突列表并打开临时侧栏。
+    // Issue #757 评论 5818193510 第 5 点：刷新当前作品的冲突列表。
+    // Issue #762 评论 5826175490 第 3 点：不再只由 sync_action_completed 触发——打开作品、
+    // 切换作品、sync_conflicts_changed 时都调，已有冲突不需要用户先手动同步一次才看得到。
     // 不在 QML 维护第二份可编辑正文，只通过 SyncBackend QML 方法拿冲突列表。
     function refreshConflictList() {
         var sb = root.syncBackendRef;
@@ -1262,19 +1265,25 @@ Rectangle {
     }
 
     function checkConflictsAfterSync() {
-        var sb = root.syncBackendRef;
-        if (!sb || !root.workspaceProjectId) return;
-        var stateRaw = sb.sync_operation_state;
-        var state;
-        try { state = JSON.parse(stateRaw); } catch (e) { state = null; }
-        if (!state) return;
-        // 同步结果为 conflict / partial_conflict 时刷新冲突列表并打开侧栏。
-        if (state.statusCode === "conflict" || state.statusCode === "partial_conflict") {
-            root.refreshConflictList();
-            if (root.hasConflicts) {
-                root.drawerOpen = true;
-                root.drawerTab = rightDrawerRect.conflictTabIdx;
-            }
+        // Issue #762 评论 5826175490 第 2/3 点：不再依赖 sync_operation_state 的最终 status。
+        // 冲突是持久状态，和"当前有没有正在跑一轮同步"是两回事——只要本地确实有
+        // unresolved conflict 就刷新并打开冲突 tab，status 说什么不影响判断。
+        root.refreshConflictList();
+        if (root.hasConflicts) {
+            root.drawerOpen = true;
+            root.drawerTab = rightDrawerRect.conflictTabIdx;
+        }
+    }
+
+    // Issue #762 评论 5826175490 第 4 点：外部（SyncPage 全局冲突入口）请求选中某条冲突。
+    // 用显式方法而不是只靠 conflictPath 属性变化，保证已打开同一作品、重复请求同一路径时
+    // 也会重新刷新并切到冲突 tab。打开目标作品由 main.qml 负责，不要求同步先结束。
+    function openConflictPath(path) {
+        root.conflictPath = path || "";
+        root.refreshConflictList();
+        if (root.conflictPath && root.hasConflicts) {
+            root.drawerOpen = true;
+            root.drawerTab = rightDrawerRect.conflictTabIdx;
         }
     }
 
@@ -1285,8 +1294,9 @@ Rectangle {
         }
     }
 
-    // Issue #762 评论 5826175490 第 3 点：监听 sync_conflicts_changed 信号
-    // 同步过程中冲突数变化时，冲突列表自动更新
+    // Issue #762 评论 5826175490 第 3 点：监听 sync_conflicts_changed 信号。
+    // SyncBackend 在同步开始前 / 每个 target 结束 / 整轮同步结束 / resolve 成功后都会发，
+    // 同步过程中新产生的冲突立即出现在冲突 tab，不必等 30 秒的全量同步跑完。
     Connections {
         target: root.syncBackendRef
         function onSync_conflicts_changed() {

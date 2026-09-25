@@ -832,3 +832,74 @@ fn test_remote_only_delete_cleanup_executes() {
         "legacy residue projects/P/project.json should be deleted"
     );
 }
+
+/// Issue #762 评论 5826175490 第 5 点：每个 target 完成后立即回调 progress。
+///
+/// 平台同步线程据此在整轮全量同步结束前就知道"哪个作品已经进入 unresolved_conflict"，
+/// 不必等最终 `FullSyncResult`——否则一个 30 秒的全量同步会把用户的处理决定藏到最后。
+#[test]
+fn run_transfer_reports_progress_per_target() {
+    use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+    use std::sync::{Arc, Mutex};
+
+    let provider = MemoryProvider::new();
+    let tmp = TempDir::new().unwrap();
+
+    let make_delete_target = |project_id: &str| {
+        let local_root = tmp.path().join(project_id);
+        crate::sync::full_sync::PlannedTarget {
+            target: SyncTarget::project(project_id),
+            local_root: local_root.clone(),
+            staging_root: None,
+            target_kind: PlannedTargetKind::DeleteRemoteProject,
+            project_id: Some(project_id.to_string()),
+            target_live_root: local_root,
+            deleted_journal_token: Some(format!("token-{project_id}")),
+            deleted_lww: Some(lww(2000, "dev-1")),
+            live_lww: None,
+            expected_delete_lww: None,
+        }
+    };
+
+    let plan = crate::sync::full_sync::FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![make_delete_target("p1"), make_delete_target("p2")],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot: test_empty_catalog_snapshot(),
+    };
+
+    let seen: Arc<Mutex<Vec<super::super::SyncTargetProgress>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let progress: super::super::SyncProgressCallback = Arc::new(move |p| {
+        if let Ok(mut guard) = sink.lock() {
+            guard.push(p);
+        }
+    });
+
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None, Some(&progress));
+
+    assert_eq!(transfer.targets.len(), 2);
+    let guard = seen.lock().unwrap();
+    assert_eq!(
+        guard.len(),
+        transfer.targets.len(),
+        "每个 target 完成后都应回调一次 progress"
+    );
+    assert_eq!(guard[0].project_id.as_deref(), Some("p1"));
+    assert_eq!(guard[1].project_id.as_deref(), Some("p2"));
+    for entry in guard.iter() {
+        assert_eq!(
+            entry.target_kind,
+            PlannedTargetKind::DeleteRemoteProject.as_target_kind_str()
+        );
+        assert!(
+            !entry.status.is_empty(),
+            "progress 必须带线格式 status，实际为空"
+        );
+        assert_eq!(entry.conflict_count, 0, "本场景无冲突");
+    }
+}

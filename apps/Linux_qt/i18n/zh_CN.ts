@@ -1336,6 +1336,18 @@
 <context>
     <name>SyncPage</name>
     <message>
+        <source>待处理冲突 %1</source>
+        <translation>待处理冲突 %1</translation>
+    </message>
+    <message>
+        <source>待处理冲突（%1 个作品 / %2 处）</source>
+        <translation>待处理冲突（%1 个作品 / %2 处）</translation>
+    </message>
+    <message>
+        <source>%1（%2 处）</source>
+        <translation>%1（%2 处）</translation>
+    </message>
+    <message>
         <source>GitHub token 无效或已过期。请检查 token 是否正确。</source>
         <translation>GitHub token 无效或已过期。请检查 token 是否正确。</translation>
     </message>

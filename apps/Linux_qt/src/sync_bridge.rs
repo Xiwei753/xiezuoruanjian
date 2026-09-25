@@ -9,6 +9,8 @@
 //
 // 干什么的：
 // - 封装多线程异步同步/诊断任务结果传输结构体（SyncTaskOutcome），提供 operation_id。
+// - 封装 target 级 progress 回调通道（SyncTargetProgressOutcome），让后台同步线程
+//   每跑完一个 target 就能把冲突状态回主线程，不必等最终 FullSyncResult（Issue #762）。
 // - 负责错误消息脱敏处理（mask_sync_error），剥离 Token 等隐私信息，严守数据防泄露红线。
 // - 将底层网络或 Git 抛出的原始错误分类映射为 UI 状态码（sync_error_category），供 StatusPill 等组件渲染。
 //
@@ -18,7 +20,48 @@
 // =============================================================================
 
 use writer_core::api::types::SyncDiagnosticsResultDto;
+use writer_core::sync::full_sync::{SyncProgressCallback, SyncTargetProgress};
 use writer_core::sync::{SyncConfig, SyncSecrets};
+
+/// Issue #762 评论 5826175490 第 5 点：单个 target 完成后的进度载荷（平台侧 DTO）。
+///
+/// 后台同步线程每跑完一个 target 就把 `project_id/status/conflict_count`
+/// 通过 [`make_target_progress_callback`] 投递回主线程。主线程据此刷新全局冲突状态，
+/// 不必等最终 `FullSyncResult` 落地——"同步中"和"等待用户解决冲突"可以同时成立。
+///
+/// `project_id` 为 `None` 表示 App target（非作品）。
+/// `status` 是线格式状态码（`"success"` / `"partial_conflict"` / `"error"` 等）。
+pub struct SyncTargetProgressOutcome {
+    pub project_id: Option<String>,
+    pub target_kind: String,
+    pub status: String,
+    pub conflict_count: u32,
+}
+
+impl From<SyncTargetProgress> for SyncTargetProgressOutcome {
+    fn from(p: SyncTargetProgress) -> Self {
+        Self {
+            project_id: p.project_id,
+            target_kind: p.target_kind,
+            status: p.status,
+            conflict_count: p.conflict_count,
+        }
+    }
+}
+
+/// 构造 Core → 平台主线程的 target progress 回调通道。
+///
+/// Core 的 [`SyncProgressCallback`] 是 `Arc<dyn Fn(SyncTargetProgress) + Send + Sync>`，
+/// 可 move 进后台同步线程。`dispatch` 由调用方提供"回到主线程做什么"——
+/// 桌面端用 `qmetaobject::queued_callback` 包一个 `QPointer<SyncBackend>`；
+/// 本函数只负责 Core 载荷 → [`SyncTargetProgressOutcome`] 的转换，
+/// 不引入 Qt 类型，便于单测。
+pub fn make_target_progress_callback<F>(dispatch: F) -> SyncProgressCallback
+where
+    F: Fn(SyncTargetProgressOutcome) + Send + Sync + 'static,
+{
+    std::sync::Arc::new(move |progress: SyncTargetProgress| dispatch(progress.into()))
+}
 
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
@@ -54,8 +97,68 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
 
 #[cfg(test)]
 mod tests {
-    use super::{determine_diagnostics_status, sync_error_category_from_code};
+    use super::{
+        determine_diagnostics_status, make_target_progress_callback, sync_error_category_from_code,
+        SyncTargetProgressOutcome,
+    };
     use writer_core::api::types::SyncDiagnosticsResultDto;
+    use writer_core::sync::full_sync::SyncTargetProgress;
+
+    /// Issue #762 评论 5826175490 第 5 点：progress 通道必须把每个 target 的
+    /// project_id/status/conflict_count 原样投递给平台回调，平台才能在任何一轮全量同步
+    /// 结束前刷新该作品的持久冲突状态。
+    #[test]
+    fn progress_callback_forwards_target_payload() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let callback = make_target_progress_callback(move |outcome: SyncTargetProgressOutcome| {
+            if let Ok(mut guard) = sink.lock() {
+                guard.push((
+                    outcome.project_id,
+                    outcome.target_kind,
+                    outcome.status,
+                    outcome.conflict_count,
+                ));
+            }
+        });
+
+        callback(SyncTargetProgress {
+            project_id: Some("p1".to_string()),
+            target_kind: "project".to_string(),
+            status: "partial_conflict".to_string(),
+            conflict_count: 2,
+        });
+        callback(SyncTargetProgress {
+            project_id: None,
+            target_kind: "app".to_string(),
+            status: "success".to_string(),
+            conflict_count: 0,
+        });
+
+        let guard = seen.lock().expect("progress sink lock");
+        assert_eq!(guard.len(), 2);
+        assert_eq!(
+            guard[0],
+            (
+                Some("p1".to_string()),
+                "project".to_string(),
+                "partial_conflict".to_string(),
+                2
+            )
+        );
+        assert_eq!(
+            guard[1],
+            (None, "app".to_string(), "success".to_string(), 0)
+        );
+    }
+
+    /// progress 回调必须满足 `Send + Sync`，才能 move 进后台同步线程。
+    #[test]
+    fn progress_callback_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>(_: &T) {}
+        let callback = make_target_progress_callback(|_| {});
+        assert_send_sync(&callback);
+    }
 
     #[test]
     fn typed_sync_error_category_takes_precedence() {

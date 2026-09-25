@@ -629,27 +629,24 @@ impl AppBackend {
         let data_root_capture = data_root.clone();
 
         let app_qptr = QPointer::from(&*self);
-        // Issue #762 评论 5826175490：progress 回调通道。
-        // 在主线程构造 progress callback（用 queued_callback 包装 QPointer）。
-        // queued_callback 内部把闭包标记为 Send+Sync（qmetaobject 的 UnsafeSendFn），
-        // 返回的 callback 是 Send+Sync，可 move 进后台线程。
-        // 后台线程每个 target 完成后调用 progress callback，通过 queued_callback
-        // 投递回主线程调 SyncBackend::handle_sync_target_progress 刷新全局冲突数。
+        // Issue #762 评论 5826175490 第 5 点：target progress 回调通道。
+        // 通道主体在 sync_bridge（SyncTargetProgressOutcome + make_target_progress_callback），
+        // 这里只提供"回到主线程做什么"：queued_callback 包 QPointer<SyncBackend>，
+        // 每个 target 完成后投递回主线程调 handle_sync_target_progress 刷新全局冲突数。
+        // 平台同步线程不再等最终 FullSyncResult 才刷新冲突。
         let progress_qptr = sync_qptr.clone();
         let progress_callback: Option<writer_core::sync::full_sync::SyncProgressCallback> =
             progress_qptr.as_ref().map(|sq| {
                 let sq = sq.clone();
-                let main_thread_cb = qmetaobject::queued_callback(move |()| {
+                let main_thread_cb = qmetaobject::queued_callback(move |_progress| {
                     sq.as_pinned().map(|this| {
                         let mut this = this.borrow_mut();
                         this.handle_sync_target_progress();
                     });
                 });
-                std::sync::Arc::new(
-                    move |_progress: writer_core::sync::full_sync::SyncTargetProgress| {
-                        main_thread_cb(());
-                    },
-                ) as writer_core::sync::full_sync::SyncProgressCallback
+                crate::sync_bridge::make_target_progress_callback(move |progress| {
+                    main_thread_cb(progress);
+                })
             });
         let callback = make_outcome_callback(app_qptr, sync_qptr);
 

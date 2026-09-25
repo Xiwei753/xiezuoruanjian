@@ -165,7 +165,23 @@ Rectangle {
         loadPreview();
     }
 
-    onConflictPathChanged: loadPreview()
+    onConflictPathChanged: {
+        // Issue #762 评论 5826175490 第 4 点：外部（SyncPage 全局冲突入口）指定路径时，
+        // 把当前索引同步到该路径，避免列表高亮与实际预览错位。
+        for (var i = 0; i < root.conflicts.length; i++) {
+            if (root.conflicts[i].localPath === root.conflictPath) {
+                root.currentIndex = i;
+                break;
+            }
+        }
+        loadPreview()
+    }
+    onProjectIdChanged: {
+        // 切换作品后旧冲突列表属于上一个作品，必须重新加载；否则全局入口带过来的
+        // 路径在旧列表里找不到，会继续显示错作品的冲突。
+        root.conflictPath = ""
+        reloadConflicts()
+    }
     Component.onCompleted: reloadConflicts()
 
     // ── 布局 ──

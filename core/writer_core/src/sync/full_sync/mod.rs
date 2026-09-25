@@ -11,8 +11,10 @@
 //! 3. **Commit**（短写锁）：聚合 [`FullSyncTransferResult`] → [`FullSyncResult`]，
 //!    原子写终态 `FullSyncState`，成功类重建搜索索引。
 //!
-//! 本模块只放纯编排逻辑（无 `&self`、无锁、无磁盘状态读写）；
-//! 持锁、持久化、搜索索引等副作用留在 `facade/sync_ops.rs` 的薄转发方法里。
+//! 本模块只放纯编排逻辑（无 `&self`、无锁、无终态状态机），持锁、搜索索引等副作用留在
+//! `facade/sync_ops.rs` 的薄转发方法里。唯一例外是每个 target 结束时的早期冲突落盘
+//! （Issue #762：`persist_unresolved_conflicts_early`）——它复用 `sync::conflict` 的既有
+//! 写入路径，只让持久冲突状态提前对平台可见；权威终态仍由 Commit 阶段写。
 //!
 //! ## 聚合优先级
 //!

@@ -155,6 +155,39 @@ ApplicationWindow {
         }
     }
 
+    // Issue #762 评论 5826175490 第 4 点：从 SyncPage 全局冲突入口跳到具体作品。
+    // 待选中的冲突路径先记在这里，等 WritingWorkspace 实例化后再交给它——
+    // 用户可能在 hub/设置页触发，此时 writingWorkspaceLoader.item 还不存在。
+    property string pendingConflictPath: ""
+
+    function projectTitleById(projectId) {
+        var treeData = appState ? (appState.tree || []) : []
+        for (var i = 0; i < treeData.length; i++) {
+            if (treeData[i].type === "project" && treeData[i].id === projectId) {
+                return treeData[i].title || ""
+            }
+        }
+        return ""
+    }
+
+    function applyPendingConflictPath() {
+        if (!pendingConflictPath) return
+        var workspace = writingWorkspaceLoader.item
+        if (!workspace) return
+        workspace.openConflictPath(pendingConflictPath)
+        pendingConflictPath = ""
+    }
+
+    function openConflictInProject(projectId, path) {
+        if (!projectId) return
+        // 关闭设置页，让写作工作区可见。
+        if (settingsDialogLoader.item) settingsDialogLoader.item.close()
+        appController.openWriting(projectId, window.projectTitleById(projectId))
+        window.pendingConflictPath = path || ""
+        // 不要求这一轮同步先结束；打开作品与同步是否在跑互不影响。
+        window.applyPendingConflictPath()
+    }
+
     function openSyncDialog() {
         // Issue #696 评论 5698002089: 不在此处 load_local_settings()。
         // 打开设置/同步界面只负责开窗；本地主题设置只能由工作区初始化
@@ -582,6 +615,9 @@ ApplicationWindow {
             id: writingWorkspaceLoader
             anchors.fill: parent
             active: rootHasWorkspace && appController.inWriting
+            // Issue #762 评论 5826175490 第 4 点：作品从全局冲突入口打开时，
+            // Loader 到这里才有 item，补交待选中的冲突路径。
+            onLoaded: window.applyPendingConflictPath()
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 projectBackendRef: projectBackend
@@ -811,14 +847,11 @@ ApplicationWindow {
                 // 避免与 settingsBackend.onSettings_changed 重复 resolve。
                 if (themeController) themeController.reload_from_backend_if_changed();
             }
-            // Issue #762 评论 5826175490 第 4 点：处理 SyncPage 的 openConflict 信号
+            // Issue #762 评论 5826175490 第 4 点：处理 SyncPage 的 openConflict 信号。
+            // 打开对应作品并把目标冲突路径交给 WritingWorkspace/SyncConflictPanel 选中，
+            // 不要求这一轮同步先结束。
             onOpenConflict: function(projectId, path) {
-                // 打开作品
-                appController.openWriting(projectId, "");
-                // 把 conflictPath 传给 WritingWorkspace
-                if (writingWorkspaceLoader.item) {
-                    writingWorkspaceLoader.item.conflictPath = path
-                }
+                window.openConflictInProject(projectId, path)
             }
         }
     }
