@@ -6,7 +6,8 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } fr
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { WidthClass, ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
 import { SharePayload } from '../../../platform/share/SharePayload'
 
@@ -73,6 +74,9 @@ export struct StarMapScreen {
       this.starmapTitle = params.starmapTitle
       this.loadStarMap()
       this.loadAllStarMaps()
+    } else {
+      // 无参数时（一级 Tab 入口）：先列出所有星图，选择第一个后加载
+      this.loadAllStarMapsAndSelectFirst()
     }
 
     const self = this
@@ -172,6 +176,24 @@ export struct StarMapScreen {
       }
     } catch (err) {
       // Ignore
+    }
+  }
+
+  async loadAllStarMapsAndSelectFirst() {
+    try {
+      const result = await this.bridge.listStarMaps()
+      if (result.success && result.data && result.data.length > 0) {
+        this.allStarMaps = result.data
+        const first = result.data[0]
+        this.starmapId = first.starmapId
+        this.starmapTitle = first.title
+        this.loadStarMap()
+      } else {
+        // 没有星图数据，停止 loading
+        this.isLoading = false
+      }
+    } catch (err) {
+      this.isLoading = false
     }
   }
 
@@ -405,11 +427,13 @@ export struct StarMapScreen {
     Column() {
       // Header
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .fillColor(this.themeConfig.colors.textPrimary)
-          .onClick(() => this.navPathStack.pop())
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          Image($r('sys.media.ohos_ic_public_arrow_left'))
+            .width(24)
+            .height(24)
+            .fillColor(this.themeConfig.colors.textPrimary)
+            .onClick(() => this.navPathStack.pop())
+        }
 
         Text(this.starmapTitle)
           .fontSize(20)
@@ -569,6 +593,9 @@ export struct StarMapScreen {
     .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMap)
+    })
   }
 
   @Builder

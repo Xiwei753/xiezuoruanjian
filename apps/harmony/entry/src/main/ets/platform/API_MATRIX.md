@@ -29,6 +29,9 @@
 | 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
 | 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
 | 手写笔 | @kit.ArkUI (组件 TouchEvent) | 未限定独立 API（基础输入事件，随 ArkUI） | 无独立 SystemCapability（基础输入事件） | 无独立权限（基础输入事件） | 否 | input/StylusInputService.ets |
+| Native HiLog | @kit.BasicServicesKit (hilog) — C 接口 | 12 | SystemCapability.HiviewDFX.HiLog | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets（ArkTS 侧调用 getHilogSnapshot），cpp/corebridge/napi/napi_init.cpp（C++ 侧 OH_LOG_SetCallback） |
+| Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
+| 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -172,3 +175,46 @@
 - ACL：否
 - 实现文件：`input/StylusInputService.ets`
 - 说明：ArkUI 原始输入只在 `platform/input` 归一化，不把平台事件类型传进 Core。`StylusInputService` 消费 ArkUI 组件 `.onTouch` 传进来的全局 `TouchEvent`，不再依赖 `@kit.InputKit` 的 `TouchEvent / ToolType`。
+
+## Native HiLog（C 接口）
+
+- Kit：`@kit.BasicServicesKit`（`hilog` 模块，C 接口层）
+- 接口：
+  - `OH_LOG_SetCallback(LogCallback callback)` — 注册 HiLog 回调，接收当前进程内所有 HiLog 日志
+  - `LogCallback` 签名：`void(const LogType, const LogLevel, const unsigned int, const char*, const char*)`
+- 最低 API：12（`OH_LOG_SetCallback` 随 HarmonyOS NEXT 基础日志能力可用）
+- SystemCapability：`SystemCapability.HiviewDFX.HiLog`
+- 权限：无
+- ACL：否
+- fallback：callback 未注册或缓冲为空时，诊断导出 fallback 到 writer_diagnostics 已落盘的日志文件
+- 实现文件：
+  - C++ 层：`cpp/corebridge/napi/napi_init.cpp`（`RegisterHilogCallback()` 注册回调，环形缓冲区收集日志，`NativeGetHilogSnapshot` 返回内容）
+  - ArkTS 层：`diagnostics/HarmonyDiagnosticsExporter.ets`（通过 `NativeDiagnosticsBridge.getHilogSnapshot()` 读取 C++ 层环形缓冲内容）
+- 说明：华为官方 FAQ 确认 `OH_LOG_SetCallback` 会接收当前进程 HiLog：https://developer.huawei.com/consumer/cn/doc/doccenter-tools-faq/faqs-app-debugging-77
+
+## Core File Kit（fileUri）
+
+- Kit：`@kit.CoreFileKit`（`fileUri` 模块）
+- 接口：`fileUri.getUriFromPath(path: string): string` — 将沙箱文件路径转换为 `file://` URI，用于系统分享
+- 最低 API：12（`fileUri.getUriFromPath` 随 `@kit.CoreFileKit` 可用）
+- SystemCapability：`SystemCapability.FileManagement.File.FileUri`
+- 权限：无
+- ACL：否
+- fallback：无（低于 compatibleSdkVersion 12 的设备不存在）
+- 实现文件：`diagnostics/HarmonyDiagnosticsExporter.ets`
+- 说明：Share Kit 官方示例里的沙箱文件 URI 也是 `@kit.CoreFileKit.fileUri.getUriFromPath()`：https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-V5/share-utd-video-V5
+
+## 系统剪贴板
+
+- Kit：`@ohos.pasteboard`
+- 接口：
+  - `pasteboard.createData(mimeType: string, content: string): PasteData` — 创建剪贴板数据
+  - `pasteboard.getSystemPasteboard(): SystemPasteboard` — 获取系统剪贴板实例
+  - `systemPasteboard.setData(data: PasteData): Promise<void>` — 写入剪贴板
+  - `pasteboard.MIMETYPE_TEXT_PLAIN` — 纯文本 MIME 类型常量
+- 最低 API：12（`@ohos.pasteboard` 随 HarmonyOS NEXT 基础剪贴板能力可用）
+- SystemCapability：`SystemCapability.MiscServices.Pasteboard`
+- 权限：无
+- ACL：否
+- fallback：写入失败时返回 false，不伪造成功
+- 实现文件：`feature/settings/presentation/SettingsViewModel.ets`（`copyDeviceInfoToClipboard()` 方法）

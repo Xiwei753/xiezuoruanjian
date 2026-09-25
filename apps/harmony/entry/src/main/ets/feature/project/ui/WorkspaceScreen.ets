@@ -1,15 +1,15 @@
 import { Routes, WorkspaceRouteParams, WritingRouteParams, SettingsRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
-import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { Project, VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
+import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -22,42 +22,39 @@ const DIVIDER_WIDTH: number = 0.5
 // 删除所有 editor session/input/IME/save/wordCount/正文状态和 RightPanel() 内联写作区。
 // 章节点击无论窄屏还是宽屏都进入 Routes.Writing，不要因为 isTwoPane 就换另一套编辑事务。
 //
-// Issue #760：业务逻辑（Core/NAPI 调用、async 加载、CRUD 操作、状态管理）移至 ProjectWorkspaceViewModel。
-// WorkspaceScreen 只保留 UI 和事件派发。窄屏卷卡可展开设计：
-// 收起状态：左上卷名 / 右上新增章节按钮+更多菜单 / 左下章节数 / 中下展开箭头 / 右下卷总字数
-// 展开后：章节行 — 左章节名 / 右侧最后编辑日期 / 最右章节字数
-@Component
+// Issue #760 评论 5821290182 问题5+7：
+// - ScreenPolicy 真正消费：菜单按 action slot 渲染，Rename 接 renameVolume/renameChapter，Delete 按 requiresConfirmation
+// - 事务分层收口：ViewModel 改为 @ObservedV2 + @Trace，页面改为 @ComponentV2 + @Local，不再维护 @State 副本
+// - 页面只派发意图，ViewModel 内部管理 async 和状态
+@ComponentV2
 export struct WorkspaceScreen {
-  @Consume("navPathStack") navPathStack: NavPathStack
-  @State projectId: string = ''
-  @State projectName: string = ''
-  @State project: Project | null = null
-  @State volumeTrees: VolumeTree[] = []
-  @State volumeCardStates: VolumeCardState[] = []
-  @State isLoading: boolean = true
-  @State errorMessage: string = ''
-  @State expandedVolumes: Set<string> = new Set()
-  @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
-  @State adaptiveState: AdaptiveState = getAdaptiveState()
-  // 当前更多菜单上下文 — 用于 @Builder 无参数方法访问正确的 volumeId/chapterId
-  @State currentMenuVolumeId: string = ''
-  @State currentMenuChapterId: string = ''
+  // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器，V2 中不可用）
+  private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
-  private viewModel: ProjectWorkspaceViewModel = new ProjectWorkspaceViewModel()
+  // ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
+  @Local viewModel: ProjectWorkspaceViewModel = new ProjectWorkspaceViewModel()
+
+  // 页面 UI 状态（V2 @Local）
+  @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @Local adaptiveState: AdaptiveState = getAdaptiveState()
+
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
-    const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
-    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
-    if (params) {
-      this.projectId = params.projectId
-      this.projectName = params.projectName
-      this.loadProjectTree()
-      // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
-      AppContinuationService.getInstance().updateCurrentState({ projectId: this.projectId } as ContinuationPayload)
+    const navPathStack = this.navCoordinator.getNavPathStack()
+    if (navPathStack) {
+      const paramsArr = navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
+      const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
+      if (params) {
+        this.viewModel.projectId = params.projectId
+        this.viewModel.projectName = params.projectName
+        this.viewModel.loadData(params.projectId)
+        // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
+        AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
+      }
     }
 
     const self = this
@@ -72,7 +69,7 @@ export struct WorkspaceScreen {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
   }
 
-  async aboutToDisappear() {
+  aboutToDisappear() {
     // 清理观察者
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
@@ -82,87 +79,48 @@ export struct WorkspaceScreen {
     }
   }
 
-  // ─── ViewModel 同步 ───
-  // 每次 ViewModel 操作后，从 ViewModel 同步状态到 @State 变量以触发 UI 更新。
-
-  private syncFromViewModel() {
-    this.project = this.viewModel.getProject()
-    this.volumeTrees = this.viewModel.getVolumeTrees()
-    this.volumeCardStates = this.viewModel.getVolumeCardStates()
-    this.isLoading = this.viewModel.isLoading()
-    this.errorMessage = this.viewModel.getErrorMessage()
-    this.expandedVolumes = this.viewModel.getExpandedVolumes()
-  }
-
-  // ─── 数据加载 ───
-
-  async loadProjectTree() {
-    await this.viewModel.loadData(this.projectId)
-    this.syncFromViewModel()
-  }
-
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
 
   handleToggleVolume(volumeId: string) {
     this.viewModel.toggleVolume(volumeId)
-    this.expandedVolumes = this.viewModel.getExpandedVolumes()
   }
 
-  async handleCreateVolume() {
-    await this.viewModel.createVolume()
-    this.syncFromViewModel()
+  handleCreateVolume() {
+    this.viewModel.createVolume()
   }
 
-  async handleCreateChapter(volumeId: string) {
-    await this.viewModel.createChapter(volumeId)
-    this.syncFromViewModel()
-  }
-
-  handleDeleteVolume(volumeId: string) {
-    AlertDialog.show({
-      title: $r('app.string.confirm_delete'),
-      message: $r('app.string.confirm_delete_volume'),
-      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
-      secondaryButton: {
-        value: $r('app.string.delete'),
-        action: async () => {
-          await this.viewModel.deleteVolume(volumeId)
-          this.syncFromViewModel()
-        }
+  /** 检查 PrimaryAction 中是否有 CreateVolume（决定 FAB 是否显示） */
+  private hasCreateVolumePrimaryAction(): boolean {
+    for (const slot of this.viewModel.primaryActions) {
+      if (slot.role === ActionRole.CreateVolume) {
+        return true
       }
-    })
+    }
+    return false
   }
 
-  handleDeleteChapter(chapterId: string) {
-    AlertDialog.show({
-      title: $r('app.string.confirm_delete'),
-      message: $r('app.string.confirm_delete_chapter'),
-      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
-      secondaryButton: {
-        value: $r('app.string.delete'),
-        action: async () => {
-          await this.viewModel.deleteChapter(chapterId)
-          this.syncFromViewModel()
-        }
-      }
-    })
+  handleCreateChapter(volumeId: string) {
+    this.viewModel.createChapter(volumeId)
   }
 
-  async handleRetry() {
-    await this.viewModel.retry()
-    this.syncFromViewModel()
+  handleRetry() {
+    this.viewModel.retry()
   }
 
   // Issue #629 评论14 第1项：章节点击统一进入 Routes.Writing，不再内联编辑。
   // 窄屏和宽屏都走同一条导航路径，屏幕宽度变化只改布局，不换 TextEditSession owner。
   private navigateToWriting(chapterId: string, chapterTitle: string, volumeId: string): void {
+    const navPathStack = this.navCoordinator.getNavPathStack()
+    if (!navPathStack) {
+      return
+    }
     const writingParam: WritingRouteParams = {
       chapterId: chapterId,
       chapterTitle: chapterTitle,
-      projectId: this.projectId,
+      projectId: this.viewModel.projectId,
       volumeId: volumeId
     }
-    this.navPathStack.pushPath({
+    navPathStack.pushPath({
       name: Routes.Writing,
       param: writingParam
     })
@@ -170,18 +128,71 @@ export struct WorkspaceScreen {
 
   // Issue #760：使用 NavigationTransactionCoordinator.getInstance().safePop() 代替直接 navPathStack.pop()
   private handleBack(): void {
-    NavigationTransactionCoordinator.getInstance().safePop()
+    this.navCoordinator.safePop()
   }
 
   // 导航到设置页
   private navigateToSettings(): void {
-    const settingsParam: SettingsRouteParams = {
-      projectId: this.projectId
+    const navPathStack = this.navCoordinator.getNavPathStack()
+    if (!navPathStack) {
+      return
     }
-    this.navPathStack.pushPath({
+    const settingsParam: SettingsRouteParams = {
+      projectId: this.viewModel.projectId
+    }
+    navPathStack.pushPath({
       name: Routes.Settings,
       param: settingsParam
     })
+  }
+
+  // 执行同步（通过 ViewModel，而不是跳设置页）
+  private handleSync(): void {
+    this.viewModel.performSync()
+  }
+
+  // ─── Context Action 处理 ───
+
+  /** 处理卷的 Context action（按 action slot 渲染的菜单项点击） */
+  private handleVolumeContextAction(slot: ActionSlot): void {
+    const volumeId = this.viewModel.currentMenuVolumeId
+    if (slot.role === ActionRole.Rename) {
+      this.viewModel.startRenameVolume(volumeId)
+    } else if (slot.role === ActionRole.Delete) {
+      this.viewModel.startDeleteVolume(volumeId, slot.requiresConfirmation)
+    } else if (slot.role === ActionRole.MoveEarlier) {
+      this.viewModel.moveVolumeEarlier(volumeId)
+    } else if (slot.role === ActionRole.MoveLater) {
+      this.viewModel.moveVolumeLater(volumeId)
+    }
+  }
+
+  /** 处理章节的 Context action（按 action slot 渲染的菜单项点击） */
+  private handleChapterContextAction(slot: ActionSlot): void {
+    const chapterId = this.viewModel.currentMenuChapterId
+    if (slot.role === ActionRole.Rename) {
+      this.viewModel.startRenameChapter(chapterId)
+    } else if (slot.role === ActionRole.Delete) {
+      this.viewModel.startDeleteChapter(chapterId, slot.requiresConfirmation)
+    } else if (slot.role === ActionRole.MoveEarlier) {
+      this.viewModel.moveChapterEarlier(chapterId)
+    } else if (slot.role === ActionRole.MoveLater) {
+      this.viewModel.moveChapterLater(chapterId)
+    }
+  }
+
+  /** 获取 action 的显示标签 */
+  private getActionLabel(role: ActionRole): string {
+    if (role === ActionRole.Rename) {
+      return '重命名'
+    } else if (role === ActionRole.Delete) {
+      return getContext(this).resourceManager.getStringSync($r('app.string.delete').id)
+    } else if (role === ActionRole.MoveEarlier) {
+      return '上移'
+    } else if (role === ActionRole.MoveLater) {
+      return '下移'
+    }
+    return role
   }
 
   // 格式化时间（UI 层负责，因为需要资源字符串本地化）
@@ -212,21 +223,41 @@ export struct WorkspaceScreen {
     // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
     // WorkspaceScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
     NavDestination() {
-      Column() {
-        if (this.adaptiveState.isTwoPane) {
-          // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
-          // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
-          this.TwoPaneLayout()
-        } else {
-          // ── 单栏模式（窄屏卷卡可展开设计） ──
-          this.SinglePaneLayout()
+      Stack() {
+        Column() {
+          if (this.adaptiveState.sizeClass === WidthClass.Compact) {
+            // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
+            this.CompactWorkspaceLayout()
+          } else if (this.adaptiveState.isTwoPane) {
+            // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
+            // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
+            this.TwoPaneLayout()
+          } else {
+            // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
+            // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
+            // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
+            this.LegacySinglePaneLayout()
+          }
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.themeConfig.colors.background)
+
+        // ── 对话框层 ──
+        if (this.viewModel.renameTarget !== null) {
+          this.RenameDialog()
+        }
+        if (this.viewModel.deleteTarget !== null) {
+          this.DeleteConfirmDialog()
         }
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace)
+    })
   }
 
   // ────────────────────────────────────────
@@ -263,7 +294,7 @@ export struct WorkspaceScreen {
           .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => this.handleBack())
 
-        Text(this.projectName)
+        Text(this.viewModel.projectName)
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -282,7 +313,7 @@ export struct WorkspaceScreen {
       .padding({ left: 12, right: 12, top: 16, bottom: 12 })
 
       // 目录内容
-      if (this.isLoading) {
+      if (this.viewModel.isLoadingState) {
         Column() {
           LoadingProgress()
             .width(36)
@@ -296,9 +327,9 @@ export struct WorkspaceScreen {
         .width('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
-      } else if (this.errorMessage) {
+      } else if (this.viewModel.errorMessageState) {
         Column() {
-          Text(this.errorMessage)
+          Text(this.viewModel.errorMessageState)
             .fontSize(14)
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 12 })
@@ -312,7 +343,7 @@ export struct WorkspaceScreen {
         .width('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
-      } else if (this.volumeTrees.length === 0) {
+      } else if (this.viewModel.volumeTrees.length === 0) {
         Column() {
           Text($r('app.string.no_volumes_chapters'))
             .fontSize(14)
@@ -328,7 +359,7 @@ export struct WorkspaceScreen {
       } else {
         Scroll() {
           Column() {
-            ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
+            ForEach(this.viewModel.volumeTrees, (volumeTree: VolumeTree) => {
               this.VolumeSection(volumeTree)
             }, (volumeTree: VolumeTree) => volumeTree.volume.id)
           }
@@ -348,7 +379,7 @@ export struct WorkspaceScreen {
     Column() {
       // 卷头
       Row() {
-        Image(this.expandedVolumes.has(volumeTree.volume.id)
+        Image(this.viewModel.isVolumeExpanded(volumeTree.volume.id)
           ? $r('sys.media.ohos_ic_public_arrow_down')
           : $r('sys.media.ohos_ic_public_arrow_right'))
           .width(16)
@@ -379,7 +410,7 @@ export struct WorkspaceScreen {
       .onClick(() => this.handleToggleVolume(volumeTree.volume.id))
 
       // 章节列表
-      if (this.expandedVolumes.has(volumeTree.volume.id)) {
+      if (this.viewModel.isVolumeExpanded(volumeTree.volume.id)) {
         if (volumeTree.chapters.length === 0) {
           Text($r('app.string.no_chapters'))
             .fontSize(12)
@@ -440,17 +471,163 @@ export struct WorkspaceScreen {
   }
 
   // ────────────────────────────────────────
-  // 单栏布局（窄屏卷卡可展开设计 — Issue #760）
+  // 窄屏布局（Compact — Issue #760 卷卡可展开设计）
   // ────────────────────────────────────────
 
   @Builder
-  SinglePaneLayout() {
+  CompactWorkspaceLayout() {
+    Stack() {
+      Column() {
+        // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
+        this.SinglePaneHeader()
+
+        // ── 内容区 ──
+        if (this.viewModel.isLoadingState) {
+          Column() {
+            LoadingProgress()
+              .width(48)
+              .height(48)
+              .color(this.themeConfig.colors.primary)
+            Text($r('app.string.loading'))
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textHint)
+              .margin({ top: 12 })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.viewModel.errorMessageState) {
+          Column() {
+            Text(this.viewModel.errorMessageState)
+              .fontSize(16)
+              .fontColor(this.themeConfig.colors.error)
+              .margin({ bottom: 16 })
+
+            Button($r('app.string.retry'))
+              .onClick(() => this.handleRetry())
+              .backgroundColor(this.themeConfig.colors.primary)
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll() {
+            Column() {
+              if (this.viewModel.volumeCardStates.length === 0) {
+                this.EmptyState()
+              } else {
+                ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
+                  this.VolumeCard(cardState)
+                }, (cardState: VolumeCardState) => cardState.volumeId)
+              }
+            }
+            .width('100%')
+            .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(this.themeConfig.colors.background)
+      .alignItems(HorizontalAlign.Center)
+
+      // ── FAB 层：新建卷浮动按钮 ──
+      if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
+        Row() {
+          Stack() {
+            Circle({ width: 56, height: 56 })
+              .fill(this.themeConfig.colors.primary)
+              .shadow({ radius: 8, color: '#40000000', offsetY: 4 })
+            Image($r('sys.media.ohos_ic_public_add'))
+              .width(24)
+              .height(24)
+              .fillColor(this.themeConfig.colors.onPrimary)
+          }
+          .width(56)
+          .height(56)
+        }
+        .width(56)
+        .height(56)
+        .position({ x: '100%', y: '100%' })
+        .markAnchor({ x: '100%', y: '100%' })
+        .offset({ x: -this.adaptiveState.pagePadding - 16, y: -56 - 16 })
+        .onClick(() => {
+          this.handleCreateVolume()
+        })
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  // ── 顶栏：左 返回+作品名 / 右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Settings ──
+  // Issue #760 评论 5825003601：窄屏不渲染 Search 图标（避免无动作可点击控件）
+  @Builder
+  SinglePaneHeader() {
+    Row() {
+      // 左：返回 + 作品名
+      Image($r('sys.media.ohos_ic_public_arrow_left'))
+        .width(24)
+        .height(24)
+        .fillColor(this.themeConfig.colors.textPrimary)
+        .onClick(() => this.handleBack())
+
+      Text(this.viewModel.projectName)
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ left: 12 })
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+      // 右：按 ScreenPolicy HeaderTrailing 顺序渲染（Sync → Settings）
+      // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
+      // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
+      ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
+        if (slot.role === ActionRole.Sync) {
+          // 同步按钮 — 执行真正的同步动作（通过 ViewModel）
+          Button($r('app.string.sync'))
+            .fontSize(13)
+            .height(28)
+            .backgroundColor(this.viewModel.isSyncing ? this.themeConfig.colors.primary : this.themeConfig.colors.surfaceContainerHigh)
+            .fontColor(this.viewModel.isSyncing ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
+            .margin({ right: 8 })
+            .enabled(!this.viewModel.isSyncing)
+            .onClick(() => this.handleSync())
+        } else if (slot.role === ActionRole.Settings) {
+          // 设置按钮
+          Button($r('app.string.settings'))
+            .fontSize(13)
+            .height(28)
+            .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .onClick(() => this.navigateToSettings())
+        }
+      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
+    }
+    .width('100%')
+    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
+  }
+
+  // ────────────────────────────────────────
+  // 旧单栏布局（LegacySinglePane — #760 前的非窄屏单栏布局）
+  // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
+  // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
+  // ────────────────────────────────────────
+
+  @Builder
+  LegacySinglePaneLayout() {
     Column() {
-      // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
-      this.SinglePaneHeader()
+      // ── 顶栏：左 返回+作品名 / 右 卷数量+新建卷 ──
+      this.LegacySinglePaneHeader()
 
       // ── 内容区 ──
-      if (this.isLoading) {
+      if (this.viewModel.isLoadingState) {
         Column() {
           LoadingProgress()
             .width(48)
@@ -464,9 +641,9 @@ export struct WorkspaceScreen {
         .width('100%')
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
-      } else if (this.errorMessage) {
+      } else if (this.viewModel.errorMessageState) {
         Column() {
-          Text(this.errorMessage)
+          Text(this.viewModel.errorMessageState)
             .fontSize(16)
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
@@ -481,12 +658,12 @@ export struct WorkspaceScreen {
       } else {
         Scroll() {
           Column() {
-            if (this.volumeCardStates.length === 0) {
+            if (this.viewModel.volumeTrees.length === 0) {
               this.EmptyState()
             } else {
-              ForEach(this.volumeCardStates, (cardState: VolumeCardState) => {
-                this.VolumeCard(cardState)
-              }, (cardState: VolumeCardState) => cardState.volumeId)
+              ForEach(this.viewModel.volumeTrees, (volumeTree: VolumeTree) => {
+                this.LegacySinglePaneVolumeSection(volumeTree)
+              }, (volumeTree: VolumeTree) => volumeTree.volume.id)
             }
           }
           .width('100%')
@@ -503,9 +680,11 @@ export struct WorkspaceScreen {
     .alignItems(HorizontalAlign.Center)
   }
 
-  // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
+  // ── 旧顶栏：左 返回+作品名 / 右 卷数量+新建卷 ──
+  // Issue #760 评论 5825309208：恢复 #760 前的旧单栏顶栏交互。
+  // 旧版顶栏是：返回、作品名、卷数量、新建卷（不是同步+设置）。
   @Builder
-  SinglePaneHeader() {
+  LegacySinglePaneHeader() {
     Row() {
       // 左：返回 + 作品名
       Image($r('sys.media.ohos_ic_public_arrow_left'))
@@ -514,36 +693,143 @@ export struct WorkspaceScreen {
         .fillColor(this.themeConfig.colors.textPrimary)
         .onClick(() => this.handleBack())
 
-      Text(this.projectName)
+      Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ left: 12 })
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      // 右：同步、设置
-      // 同步按钮 — 导航到设置页（同步配置在设置页内）
-      Button($r('app.string.sync'))
-        .fontSize(13)
-        .height(28)
-        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
-        .fontColor(this.themeConfig.colors.textSecondary)
-        .margin({ right: 8 })
-        .onClick(() => this.navigateToSettings())
+      Blank()
 
-      // 设置按钮
-      Button($r('app.string.settings'))
-        .fontSize(13)
-        .height(28)
-        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
-        .fontColor(this.themeConfig.colors.textSecondary)
-        .onClick(() => this.navigateToSettings())
+      // 右：卷数量 + 新建卷
+      if (this.viewModel.project) {
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.volume_count_format').id).replace('%s', `${this.viewModel.volumeTrees.length}`))
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 12 })
+      }
+
+      Button($r('app.string.new_volume'))
+        .fontSize(14)
+        .height(32)
+        .backgroundColor(this.themeConfig.colors.primary)
+        .onClick(() => this.handleCreateVolume())
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
     .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
+  }
+
+  // ── 旧单栏卷章节列表 ──
+  // Issue #760 评论 5825309208：恢复 #760 前的旧单栏卷章节列表结构。
+  // 保持原来的展开箭头 / 卷名 / 章节数 / + / × / 章节标题 / 字数 / 最后编辑时间 / × / 右箭头结构。
+  // CRUD 调用现有 ViewModel/handler，不恢复旧 Core 直连代码。
+  @Builder
+  LegacySinglePaneVolumeSection(volumeTree: VolumeTree) {
+    Column() {
+      // 卷头：展开箭头 / 卷名 / 章节数 / +（新增章节）/ ×（删除卷）
+      Row() {
+        Image(this.viewModel.isVolumeExpanded(volumeTree.volume.id)
+          ? $r('sys.media.ohos_ic_public_arrow_down')
+          : $r('sys.media.ohos_ic_public_arrow_right'))
+          .width(16)
+          .height(16)
+          .fillColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 8 })
+
+        Text(volumeTree.volume.title)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textHint)
+          .margin({ right: 8 })
+
+        Button('+')
+          .fontSize(14)
+          .width(28)
+          .height(28)
+          .backgroundColor(this.themeConfig.colors.secondary)
+          .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
+
+        Button('×')
+          .fontSize(14)
+          .width(28)
+          .height(28)
+          .backgroundColor(this.themeConfig.colors.error)
+          .margin({ left: 4 })
+          .onClick(() => this.viewModel.startDeleteVolume(volumeTree.volume.id, true))
+      }
+      .width('100%')
+      .padding(12)
+      .backgroundColor(this.themeConfig.colors.surface)
+      .borderRadius({ topLeft: DesignTokens.radiusSm, topRight: DesignTokens.radiusSm })
+      .onClick(() => this.handleToggleVolume(volumeTree.volume.id))
+
+      // 章节列表（展开后显示）
+      if (this.viewModel.isVolumeExpanded(volumeTree.volume.id)) {
+        if (volumeTree.chapters.length === 0) {
+          Column() {
+            Text($r('app.string.no_chapters'))
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textHint)
+              .padding(16)
+          }
+          .width('100%')
+          .backgroundColor(this.themeConfig.colors.surface)
+        } else {
+          ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
+            Row() {
+              Column() {
+                Text(chapter.title)
+                  .fontSize(15)
+                  .fontColor(this.themeConfig.colors.textPrimary)
+                  .margin({ bottom: 4 })
+
+                Row() {
+                  Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
+                    .fontSize(12)
+                    .fontColor(this.themeConfig.colors.textSecondary)
+                    .margin({ right: 12 })
+
+                  Text(this.formatTime(chapter.updatedAt))
+                    .fontSize(12)
+                    .fontColor(this.themeConfig.colors.textHint)
+                }
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Button('×')
+                .fontSize(14)
+                .width(24)
+                .height(24)
+                .backgroundColor('transparent')
+                .fontColor(this.themeConfig.colors.textHint)
+                .onClick(() => this.viewModel.startDeleteChapter(chapter.id, true))
+
+              Image($r('sys.media.ohos_ic_public_arrow_right'))
+                .width(16)
+                .height(16)
+                .fillColor(this.themeConfig.colors.textHint)
+                .margin({ left: 8 })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .backgroundColor(this.themeConfig.colors.surface)
+            .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
+          }, (chapter: ChapterMeta) => chapter.id)
+        }
+      }
+    }
+    .width('100%')
+    .margin({ bottom: 12 })
+    .borderRadius(DesignTokens.radiusSm)
+    .clip(true)
+    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
   }
 
   // ── 空状态 ──
@@ -595,14 +881,14 @@ export struct WorkspaceScreen {
           .backgroundColor(this.themeConfig.colors.secondary)
           .onClick(() => this.handleCreateChapter(cardState.volumeId))
 
-        // 更多菜单（重命名、删除）— 使用 HarmonyOS 原生 Menu 组件
+        // 更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
         Image($r('sys.media.ohos_ic_public_more'))
           .width(24)
           .height(24)
           .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ left: 8 })
           .onClick(() => {
-            this.currentMenuVolumeId = cardState.volumeId
+            this.viewModel.currentMenuVolumeId = cardState.volumeId
           })
           .bindMenu(this.VolumeMoreMenu)
       }
@@ -619,7 +905,7 @@ export struct WorkspaceScreen {
 
         // 中下：展开/收起箭头
         Row() {
-          Image(this.expandedVolumes.has(cardState.volumeId)
+          Image(this.viewModel.isVolumeExpanded(cardState.volumeId)
             ? $r('sys.media.ohos_ic_public_arrow_down')
             : $r('sys.media.ohos_ic_public_arrow_right'))
             .width(14)
@@ -639,7 +925,7 @@ export struct WorkspaceScreen {
       .onClick(() => this.handleToggleVolume(cardState.volumeId))
 
       // ── 章节列表（展开后显示） ──
-      if (this.expandedVolumes.has(cardState.volumeId)) {
+      if (this.viewModel.isVolumeExpanded(cardState.volumeId)) {
         if (cardState.chapters.length === 0) {
           Column() {
             Text($r('app.string.no_chapters'))
@@ -692,14 +978,14 @@ export struct WorkspaceScreen {
         .fontSize(12)
         .fontColor(this.themeConfig.colors.textSecondary)
 
-      // 章节更多菜单
+      // 章节更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
       Image($r('sys.media.ohos_ic_public_more'))
         .width(20)
         .height(20)
         .fillColor(this.themeConfig.colors.textHint)
         .margin({ left: 8 })
         .onClick(() => {
-          this.currentMenuChapterId = chapterState.chapterId
+          this.viewModel.currentMenuChapterId = chapterState.chapterId
         })
         .bindMenu(this.ChapterMoreMenu)
     }
@@ -708,33 +994,134 @@ export struct WorkspaceScreen {
     .onClick(() => this.navigateToWriting(chapterState.chapterId, chapterState.chapterTitle, chapterState.volumeId))
   }
 
-  // ── 卷更多菜单（重命名、删除） ──
-  // 使用 HarmonyOS 原生 Menu 组件，消费 Core 的 Context actions
-  // bindMenu 要求 CustomBuilder 无参数，通过 @State currentMenuVolumeId 传递上下文
+  // ── 卷更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染 ──
+  // bindMenu 要求 CustomBuilder 无参数，通过 viewModel.currentMenuVolumeId 传递上下文
   @Builder
   VolumeMoreMenu() {
     Menu() {
-      MenuItem('重命名')
-        .onClick(() => {
-          // 重命名功能暂未实现
-        })
-      MenuItem($r('app.string.delete'))
-        .onClick(() => this.handleDeleteVolume(this.currentMenuVolumeId))
+      ForEach(this.viewModel.getContextActions(ActionTarget.Volume), (slot: ActionSlot) => {
+        MenuItem(this.getActionLabel(slot.role))
+          .onClick(() => this.handleVolumeContextAction(slot))
+      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
   }
 
-  // ── 章节更多菜单（重命名、删除） ──
-  // 使用 HarmonyOS 原生 Menu 组件，消费 Core 的 Context actions
-  // bindMenu 要求 CustomBuilder 无参数，通过 @State currentMenuChapterId 传递上下文
+  // ── 章节更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染 ──
+  // bindMenu 要求 CustomBuilder 无参数，通过 viewModel.currentMenuChapterId 传递上下文
   @Builder
   ChapterMoreMenu() {
     Menu() {
-      MenuItem('重命名')
-        .onClick(() => {
-          // 重命名功能暂未实现
-        })
-      MenuItem($r('app.string.delete'))
-        .onClick(() => this.handleDeleteChapter(this.currentMenuChapterId))
+      ForEach(this.viewModel.getContextActions(ActionTarget.Chapter), (slot: ActionSlot) => {
+        MenuItem(this.getActionLabel(slot.role))
+          .onClick(() => this.handleChapterContextAction(slot))
+      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
+  }
+
+  // ── 重命名对话框 ──
+  // 类似 HomeScreen 的 RenameDialog，调用 ViewModel 的 renameVolume/renameChapter
+  @Builder
+  RenameDialog() {
+    Column() {
+      Column() {
+        Text(this.viewModel.renameTarget?.type === 'volume' ? '重命名卷' : '重命名章节')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .margin({ bottom: 16 })
+
+        TextInput({ text: this.viewModel.renameInput, placeholder: '请输入新名称' })
+          .width('100%')
+          .height(40)
+          .fontSize(16)
+          .caretColor(this.themeConfig.colors.primary)
+          .onChange((value: string) => {
+            this.viewModel.renameInput = value
+          })
+
+        Row() {
+          Button('取消')
+            .fontSize(14)
+            .height(36)
+            .backgroundColor(this.themeConfig.colors.surfaceVariant)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .onClick(() => {
+              this.viewModel.cancelRename()
+            })
+
+          Blank()
+
+          Button('确认')
+            .fontSize(14)
+            .height(36)
+            .backgroundColor(this.themeConfig.colors.primary)
+            .fontColor(this.themeConfig.colors.onPrimary)
+            .onClick(() => {
+              this.viewModel.confirmRename()
+            })
+        }
+        .width('100%')
+        .margin({ top: 16 })
+      }
+      .width('80%')
+      .padding(20)
+      .backgroundColor(this.themeConfig.colors.surface)
+      .borderRadius(DesignTokens.radiusLg)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#80000000')
+    .justifyContent(FlexAlign.Center)
+  }
+
+  // ── 删除确认对话框 ──
+  // 仅当 ActionSlot.requiresConfirmation === true 时显示
+  @Builder
+  DeleteConfirmDialog() {
+    Column() {
+      Column() {
+        Text('确认删除')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .margin({ bottom: 8 })
+
+        Text(`确定要删除"${this.viewModel.deleteTarget?.name}"吗？此操作不可撤销。`)
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ bottom: 16 })
+
+        Row() {
+          Button('取消')
+            .fontSize(14)
+            .height(36)
+            .backgroundColor(this.themeConfig.colors.surfaceVariant)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .onClick(() => {
+              this.viewModel.cancelDelete()
+            })
+
+          Blank()
+
+          Button('删除')
+            .fontSize(14)
+            .height(36)
+            .backgroundColor(this.themeConfig.colors.error)
+            .fontColor(this.themeConfig.colors.onError)
+            .onClick(() => {
+              this.viewModel.confirmDelete()
+            })
+        }
+        .width('100%')
+      }
+      .width('80%')
+      .padding(20)
+      .backgroundColor(this.themeConfig.colors.surface)
+      .borderRadius(DesignTokens.radiusLg)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#80000000')
+    .justifyContent(FlexAlign.Center)
   }
 }

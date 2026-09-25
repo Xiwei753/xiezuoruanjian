@@ -1,4 +1,6 @@
 #include <cstring>
+#include <mutex>
+#include <algorithm>
 #include <napi/native_api.h>
 #include <hilog/log.h>
 #include "writer_core_bridge.h"
@@ -14,6 +16,71 @@
 //   保证无内存泄漏。
 // - dup_napi_string 将 NAPI string 复制到调用方提供的缓冲区，
 //   缓冲区生命周期由调用方管理。
+
+// ── HiLog 环形缓冲 + Callback ──
+//
+// 通过 OH_LOG_SetCallback 注册回调，将进程内所有 HiLog 日志写入环形缓冲区。
+// NativeGetHilogSnapshot 返回缓冲区内容，供诊断导出使用。
+// 环形缓冲上限 256KB，防止内存无限增长。
+
+static constexpr size_t HILOG_BUFFER_SIZE = 256 * 1024;
+static char hilog_buffer[HILOG_BUFFER_SIZE];
+static size_t hilog_buffer_pos = 0;
+static size_t hilog_buffer_used = 0;  // 已写入的总字节数（用于区分是否发生过回绕）
+static bool hilog_callback_registered = false;
+static std::mutex hilog_mutex;
+
+// HiLog callback — 接收进程内所有 HiLog 日志，格式化后写入环形缓冲区。
+// LogCallback 签名: void(const LogType, const LogLevel, const unsigned int, const char*, const char*)
+static void HilogCallback(const LogType type, const LogLevel level, const unsigned int domain,
+                          const char *tag, const char *msg) {
+    std::lock_guard<std::mutex> lock(hilog_mutex);
+    // 格式化日志行：[level/domain/tag] message
+    char line[1024];
+    const char *level_str;
+    switch (level) {
+        case LOG_DEBUG: level_str = "D"; break;
+        case LOG_INFO:  level_str = "I"; break;
+        case LOG_WARN:  level_str = "W"; break;
+        case LOG_ERROR: level_str = "E"; break;
+        case LOG_FATAL: level_str = "F"; break;
+        default:        level_str = "U"; break;
+    }
+    int len = snprintf(line, sizeof(line), "[%s/0x%04X/%s] %s\n",
+                       level_str, domain, tag ? tag : "", msg ? msg : "");
+    if (len <= 0) {
+        return;
+    }
+    size_t write_len = std::min(static_cast<size_t>(len), sizeof(line) - 1);
+    if (write_len > HILOG_BUFFER_SIZE) {
+        write_len = HILOG_BUFFER_SIZE;  // 单行超长截断
+    }
+    // 环形写入：可能需要两段拷贝
+    size_t first_copy = std::min(write_len, HILOG_BUFFER_SIZE - hilog_buffer_pos);
+    memcpy(hilog_buffer + hilog_buffer_pos, line, first_copy);
+    hilog_buffer_pos += first_copy;
+    if (hilog_buffer_pos >= HILOG_BUFFER_SIZE) {
+        hilog_buffer_pos = 0;  // 环形回绕
+    }
+    size_t remaining = write_len - first_copy;
+    if (remaining > 0) {
+        memcpy(hilog_buffer, line + first_copy, remaining);
+        hilog_buffer_pos = remaining;
+    }
+    hilog_buffer_used += write_len;
+    if (hilog_buffer_used > HILOG_BUFFER_SIZE) {
+        hilog_buffer_used = HILOG_BUFFER_SIZE;  // 缓冲已满，后续覆盖旧数据
+    }
+}
+
+// 注册 HiLog callback — 幂等，多次调用不重复注册。
+static void RegisterHilogCallback() {
+    if (hilog_callback_registered) {
+        return;
+    }
+    OH_LOG_SetCallback(HilogCallback);
+    hilog_callback_registered = true;
+}
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
@@ -142,6 +209,9 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     napi_get_value_string_utf8(env, args[3], build_key, sizeof(build_key), &len);
     napi_get_value_string_utf8(env, args[4], locale, sizeof(locale), &len);
     napi_get_value_string_utf8(env, args[5], timezone, sizeof(timezone), &len);
+
+    // Issue #760 评论 5824787641：RegisterHilogCallback() 已移至 NAPI Init() 开头，
+    // 在模块加载时（比 EntryAbility.onCreate 更早）完成注册，此处不再重复调用。
 
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
     int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
@@ -288,6 +358,48 @@ static napi_value NativeCalculateWordCount(napi_env env, napi_callback_info info
     return result;
 }
 
+// NativeGetHilogSnapshot: 返回当前环形缓冲中的 HiLog 内容字符串。
+//   如果 callback 未注册或缓冲为空，返回空字符串。
+static napi_value NativeGetHilogSnapshot(napi_env env, napi_callback_info info) {
+    std::lock_guard<std::mutex> lock(hilog_mutex);
+
+    napi_value result;
+    if (hilog_buffer_used == 0) {
+        napi_create_string_utf8(env, "", 0, &result);
+        return result;
+    }
+
+    // 如果缓冲区未满（未回绕），直接返回 [0, pos) 范围的内容
+    if (hilog_buffer_used < HILOG_BUFFER_SIZE) {
+        napi_create_string_utf8(env, hilog_buffer, hilog_buffer_pos, &result);
+        return result;
+    }
+
+    // 缓冲区已满（发生过回绕），需要拼接 [pos, end) + [0, pos) 两段
+    // 分配临时缓冲区存放完整内容
+    char *snapshot = new char[HILOG_BUFFER_SIZE + 1];
+    size_t tail_len = HILOG_BUFFER_SIZE - hilog_buffer_pos;
+    memcpy(snapshot, hilog_buffer + hilog_buffer_pos, tail_len);
+    memcpy(snapshot + tail_len, hilog_buffer, hilog_buffer_pos);
+    snapshot[HILOG_BUFFER_SIZE] = '\0';
+
+    napi_create_string_utf8(env, snapshot, HILOG_BUFFER_SIZE, &result);
+    delete[] snapshot;
+    return result;
+}
+
+// NativeClearHilogSnapshot: 清空 HiLog 环形缓冲区。返回 int32 状态码：
+//   0 = 成功
+static napi_value NativeClearHilogSnapshot(napi_env env, napi_callback_info info) {
+    std::lock_guard<std::mutex> lock(hilog_mutex);
+    hilog_buffer_pos = 0;
+    hilog_buffer_used = 0;
+
+    napi_value ret;
+    napi_create_int32(env, 0, &ret);
+    return ret;
+}
+
 // ── Layout Policy ──
 // NativeResolveLayout: Takes metrics JSON, returns ResultEnvelope<LayoutPolicyDto> JSON.
 static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
@@ -349,6 +461,11 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
 //   Domain descriptor arrays are allocated by each get*Descriptors() function
 //   and must remain valid for the lifetime of the module.
 static napi_value Init(napi_env env, napi_value exports) {
+    // Issue #760 评论 5824787641：在 NAPI 模块 Init 开头注册 HiLog callback。
+    // NAPI 模块在 ArkTS import native module 时初始化，比 EntryAbility.onCreate 更早，
+    // 确保 EntryAbility.onCreate 的第一条启动日志也能被环形缓冲捕获。
+    RegisterHilogCallback();
+
     // Collect descriptors from all domains
     size_t app_state_count = 0, proj_count = 0, chap_count = 0, set_count = 0;
     size_t sync_count = 0, stats_count = 0, sm_count = 0, editor_count = 0;
@@ -373,6 +490,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"nativeGetLoadStatus", nullptr, NativeGetLoadStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetHilogSnapshot", nullptr, NativeGetHilogSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeClearHilogSnapshot", nullptr, NativeClearHilogSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveLayout", nullptr, NativeResolveLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveScreenPolicy", nullptr, NativeResolveScreenPolicy, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeIsAiAvailable", nullptr, NativeIsAiAvailable, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -1,24 +1,93 @@
 // SettingsViewModel — 设置页 ViewModel。
-// 从 SettingsScreen.ets 移出的所有 Core/NAPI 调用、async 加载/保存、sync/diagnostics 操作。
+// Issue #760 评论 5822350374：
+// - 问题9：改为 @ObservedV2 + @Trace，页面直接观察 ViewModel 状态字段
+// - 问题4：折叠状态用 AppStorageV2 持久化，跨页面实例保留
+// - 问题5：复制设备信息接 @ohos.pasteboard，真正写入系统剪贴板
+// - 问题6：clearLogs 同时清 Rust diagnostics 和 HiLog buffer
 // 页面只调 ViewModel 暴露的接口，不直接接触 bridge/native。
 
 import hilog from '@ohos.hilog'
+import deviceInfo from '@ohos.deviceInfo'
+import i18n from '@ohos.i18n'
+import pasteboard from '@ohos.pasteboard'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeMode, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
-import { getBridge } from '../../../app/AppContext'
+import { getAppContext } from '../../../app/AppContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
+import { HarmonyDiagnosticsExporter } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
+import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
+import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
 
-export class SettingsViewModel {
-  private bridge: IWriterCoreBridge = getBridge()
-  private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+// 设置分类标识 — 供折叠状态管理使用。
+export type SettingsSectionId =
+  | 'appearance'
+  | 'editor'
+  | 'save'
+  | 'sync'
+  | 'recovery'
+  | 'ai'
+  | 'diagnostics'
+  | 'laboratory'
+  | 'about'
 
-  // 状态字段
-  private settings: LocalSettings = {
+// 问题4：折叠状态持久化 — 使用 AppStorageV2 跨页面实例保留展开状态。
+// AppStorageV2 连接的 key，所有 SettingsScreen 实例共享同一份展开状态。
+const EXPANDED_SECTIONS_KEY = 'settings_expanded_sections'
+
+/**
+ * SettingsPresentationStore — 设置页展示状态持久化存储。
+ * 使用 AppStorageV2 在 AppStorage 层面持久化 expandedSections，
+ * 页面 pop 后再进入时恢复之前的展开/收起状态。
+ */
+@ObservedV2
+class SettingsPresentationStore {
+  // 每个分类的展开状态，默认全部收起。
+  @Trace expandedSections: Map<SettingsSectionId, boolean> = new Map()
+
+  constructor() {
+    const allSections: SettingsSectionId[] = [
+      'appearance', 'editor', 'save', 'sync', 'recovery',
+      'ai', 'diagnostics', 'laboratory', 'about'
+    ]
+    for (const section of allSections) {
+      this.expandedSections.set(section, false)
+    }
+  }
+
+  toggleSection(section: SettingsSectionId): void {
+    const current = this.expandedSections.get(section) ?? false
+    // 创建新 Map 引用以触发 V2 观察更新
+    const newMap = new Map<SettingsSectionId, boolean>(this.expandedSections)
+    newMap.set(section, !current)
+    this.expandedSections = newMap
+  }
+
+  isSectionExpanded(section: SettingsSectionId): boolean {
+    return this.expandedSections.get(section) ?? false
+  }
+}
+
+@ObservedV2
+export class SettingsViewModel {
+  private bridge: IWriterCoreBridge = getAppContext().getBridge()
+  private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+  private diagnosticsExporter: HarmonyDiagnosticsExporter | null = null
+  // 问题6：持有 NativeDiagnosticsBridge 实例，用于 clearHilogSnapshot
+  private diagnosticsBridge: NativeDiagnosticsBridge = new NativeDiagnosticsBridge(new NativeCoreModule())
+
+  // 问题4：折叠展开状态 — 通过 AppStorageV2 持久化，跨页面实例保留
+  private presentationStore: SettingsPresentationStore = AppStorageV2.connect(
+    SettingsPresentationStore, EXPANDED_SECTIONS_KEY, () => new SettingsPresentationStore()
+  )!
+
+  // ── 可观察状态字段（@Trace，UI 直接观察） ──
+  // 问题9：所有页面需要观察的状态字段加 @Trace，页面不再维护副本
+  @Trace settings: LocalSettings = {
     themeMode: 'system',
     appearanceMode: 'system',
     colorSource: 'built_in',
@@ -46,61 +115,29 @@ export class SettingsViewModel {
     diagnosticsEnabled: false,
     diagnosticsVerbose: false
   }
-  private paletteRecords: ThemePaletteRecordDto[] = []
-  private builtinThemes: BuiltinThemeDto[] = []
-  private syncConfig: SyncConfig | null = null
-  private isLoading: boolean = true
-  private isSaving: boolean = false
-  private isSyncing: boolean = false
-  private isDiagnosing: boolean = false
-  private saveMessage: string = ''
-  private syncMessage: string = ''
-  private syncDiagnostics: SyncDiagnosticsResult | null = null
+  @Trace paletteRecords: ThemePaletteRecordDto[] = []
+  @Trace builtinThemes: BuiltinThemeDto[] = []
+  @Trace syncConfig: SyncConfig | null = null
+  @Trace isLoading: boolean = true
+  @Trace isSaving: boolean = false
+  @Trace isSyncing: boolean = false
+  @Trace isDiagnosing: boolean = false
+  @Trace saveMessage: string = ''
+  @Trace syncMessage: string = ''
+  @Trace syncDiagnostics: SyncDiagnosticsResult | null = null
 
-  // ── 公共查询接口 ──
+  // 诊断配置同步追踪 — 记录上一次同步到 runtime 的值，用于判断是否有变化。
+  private lastSyncedDiagnosticsEnabled: boolean = false
+  private lastSyncedDiagnosticsVerbose: boolean = false
 
-  getSettings(): LocalSettings {
-    return this.settings
+  // ── 折叠展开状态管理（问题4：通过 AppStorageV2 持久化） ──
+
+  toggleSection(section: SettingsSectionId): void {
+    this.presentationStore.toggleSection(section)
   }
 
-  getSyncConfig(): SyncConfig | null {
-    return this.syncConfig
-  }
-
-  getPaletteRecords(): ThemePaletteRecordDto[] {
-    return this.paletteRecords
-  }
-
-  getBuiltinThemes(): BuiltinThemeDto[] {
-    return this.builtinThemes
-  }
-
-  isLoadingData(): boolean {
-    return this.isLoading
-  }
-
-  isSavingData(): boolean {
-    return this.isSaving
-  }
-
-  isSyncingData(): boolean {
-    return this.isSyncing
-  }
-
-  isDiagnosingData(): boolean {
-    return this.isDiagnosing
-  }
-
-  getSaveMessage(): string {
-    return this.saveMessage
-  }
-
-  getSyncMessage(): string {
-    return this.syncMessage
-  }
-
-  getSyncDiagnostics(): SyncDiagnosticsResult | null {
-    return this.syncDiagnostics
+  isSectionExpanded(section: SettingsSectionId): boolean {
+    return this.presentationStore.isSectionExpanded(section)
   }
 
   // ── 加载数据 ──
@@ -110,7 +147,6 @@ export class SettingsViewModel {
 
     try {
       const settingsResult = await this.bridge.getLocalSettings()
-      // 全量同步（Issue #630）：一个全局 SyncConfig，不依赖选中作品。
       const syncConfigResult = await this.bridge.loadSyncConfig()
 
       try {
@@ -153,6 +189,18 @@ export class SettingsViewModel {
       if (syncConfigResult.success && syncConfigResult.data) {
         this.syncConfig = syncConfigResult.data
       }
+
+      // 加载设置后，把当前诊断配置同步一次到底层 runtime。
+      try {
+        await this.bridge.setDiagnosticsConfig(
+          this.settings.diagnosticsEnabled,
+          this.settings.diagnosticsVerbose
+        )
+        this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
+        this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
+      } catch (_e) {
+        hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on load')
+      }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to load settings: ${err}`)
     } finally {
@@ -183,8 +231,22 @@ export class SettingsViewModel {
           fontFamily: 'HarmonyOS Sans',
           lineHeight: this.settings.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
+
+        // 如果诊断配置有变化，同步到 runtime。
+        if (this.settings.diagnosticsEnabled !== this.lastSyncedDiagnosticsEnabled ||
+          this.settings.diagnosticsVerbose !== this.lastSyncedDiagnosticsVerbose) {
+          try {
+            await this.bridge.setDiagnosticsConfig(
+              this.settings.diagnosticsEnabled,
+              this.settings.diagnosticsVerbose
+            )
+            this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
+            this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
+          } catch (_e) {
+            hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on save')
+          }
+        }
       } else {
-        // envelope 只有 errorCode / userMessage（Core 不发明 messageKey / messageArgs）。
         this.saveMessage = `error:${result.errorCode || 'unknown'}`
       }
     } catch (err) {
@@ -215,7 +277,6 @@ export class SettingsViewModel {
           syncResult.overallStatus === 'fatal_error' ||
           syncResult.overallStatus === 'error' ||
           syncResult.overallStatus === 'syncing') {
-          // 失败/未完成：需要用户处理或可重试，展示错误分类文案
           const errorCategory = syncResult.errorCategory
           if (errorCategory && errorCategory.length > 0) {
             this.syncMessage = `error:${errorCategory}`
@@ -226,8 +287,6 @@ export class SettingsViewModel {
           this.syncMessage = `sync_complete:${syncResult.totalDownloaded}`
         }
       } else {
-        // envelope 只有 errorCode / userMessage：先按 errorCategory 分类映射，
-        // 其余落到按 errorCode 的本地化兜底文案。
         const errorCategory = result.data?.errorCategory
         if (errorCategory && errorCategory.length > 0) {
           this.syncMessage = `error:${errorCategory}`
@@ -254,7 +313,6 @@ export class SettingsViewModel {
       if (result.success && result.data && result.data.diagnostics) {
         this.syncDiagnostics = result.data.diagnostics
       } else {
-        // 字段与 SyncDiagnosticsResult DTO 一字不差对齐（Issue #753）。
         const diagResult: SyncDiagnosticsResult = {
           success: false,
           providerType: '',
@@ -274,7 +332,6 @@ export class SettingsViewModel {
       }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to run sync diagnostics: ${err}`)
-      // 字段与 SyncDiagnosticsResult DTO 一字不差对齐（Issue #753）。
       const diagResult: SyncDiagnosticsResult = {
         success: false,
         providerType: '',
@@ -302,23 +359,88 @@ export class SettingsViewModel {
     this.settings = updater(this.settings)
   }
 
-  // ── 诊断导出占位方法（Task #7 会补齐具体 bridge 实现） ──
+  // ── 诊断导出 ──
 
   async exportDiagnostics(): Promise<boolean> {
-    // 占位：Task #7 会在此处调用 bridge 的 diagnostics 导出相关方法。
-    hilog.info(DOMAIN, TAG, 'exportDiagnostics placeholder — Task #7 will implement')
-    return false
+    try {
+      if (this.diagnosticsExporter === null) {
+        this.diagnosticsExporter = new HarmonyDiagnosticsExporter()
+        const context = getAppContext().getAbilityContext()
+        if (context !== null) {
+          this.diagnosticsExporter.setAbilityContext(context)
+        }
+      }
+      return await this.diagnosticsExporter.exportAndShare()
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `exportDiagnostics failed: ${err}`)
+      return false
+    }
   }
+
+  // ── 清空诊断日志（问题6：同时清 Rust diagnostics 和 HiLog buffer） ──
 
   async clearLogs(): Promise<boolean> {
-    // 占位：Task #7 会在此处调用 bridge 的 diagnostics 清空日志相关方法。
-    hilog.info(DOMAIN, TAG, 'clearLogs placeholder — Task #7 will implement')
-    return false
+    try {
+      // 1. 清空 Rust writer_diagnostics 日志
+      const result = await this.bridge.clearDiagnostics()
+      if (!result.success) {
+        hilog.warn(DOMAIN, TAG, 'clearDiagnostics returned failure')
+      }
+
+      // 2. 清空 HiLog 环形缓冲区
+      const hilogResult = this.diagnosticsBridge.clearHilogSnapshot()
+      if (hilogResult !== 0) {
+        hilog.warn(DOMAIN, TAG, `clearHilogSnapshot returned ${hilogResult}`)
+      }
+
+      return result.success && hilogResult === 0
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `clearLogs failed: ${err}`)
+      return false
+    }
   }
 
+  // ── 复制设备信息到剪贴板（问题5：真正写入系统剪贴板） ──
+
+  async copyDeviceInfoToClipboard(): Promise<boolean> {
+    try {
+      const json = this.getDeviceInfoJson()
+      const pasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, json)
+      const systemPasteboard = pasteboard.getSystemPasteboard()
+      await systemPasteboard.setData(pasteData)
+      hilog.info(DOMAIN, TAG, 'Device info copied to clipboard')
+      return true
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `copyDeviceInfoToClipboard failed: ${err}`)
+      return false
+    }
+  }
+
+  // ── 获取设备信息 JSON ──
+  // 参考 HarmonyDiagnosticsExporter.addCurrentDeviceAttachment() 的设备信息收集逻辑。
+
   getDeviceInfoJson(): string {
-    // 占位：Task #7 会在此处调用 bridge 的 diagnostics 设备信息相关方法。
-    hilog.info(DOMAIN, TAG, 'getDeviceInfoJson placeholder — Task #7 will implement')
-    return '{}'
+    try {
+      const info: Record<string, Object> = {
+        'platform': 'harmony',
+        'deviceType': deviceInfo.deviceType,
+        'manufacture': deviceInfo.manufacture,
+        'brand': deviceInfo.brand,
+        'productModel': deviceInfo.productModel,
+        'productSeries': deviceInfo.productSeries,
+        'softwareVersion': deviceInfo.softwareVersion,
+        'apiVersion': deviceInfo.apiVersion,
+        'buildType': deviceInfo.buildType,
+        'buildVersion': deviceInfo.buildVersion,
+        'securityPatchTag': deviceInfo.securityPatchTag,
+        'abiList': deviceInfo.abiList,
+        'locale': i18n.System.getSystemLanguage(),
+        'timezone': i18n.getTimeZone().getID()
+      }
+      return JSON.stringify(info, null, 2)
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `getDeviceInfoJson failed: ${err}`)
+      return '{}'
+    }
   }
 }

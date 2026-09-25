@@ -54,6 +54,7 @@ export class ScreenPolicyBridge {
 
     return {
       screenRole: this.parseScreenRole((data['screenRole'] ?? data['screen_role'] ?? 'Home') as string),
+      showPrimaryNavigation: (data['showPrimaryNavigation'] ?? data['show_primary_navigation'] ?? true) as boolean,
       actionSlots: actionSlots
     }
   }
