@@ -40,7 +40,7 @@ export interface DeviceInfoSnapshot {
   osFullName: string
   sdkApiVersion: number
   buildType: string
-  buildVersion: string
+  buildVersion: number
   securityPatchTag: string
   abiList: string
   locale: string

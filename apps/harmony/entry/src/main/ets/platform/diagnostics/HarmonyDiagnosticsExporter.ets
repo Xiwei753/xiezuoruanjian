@@ -52,7 +52,7 @@ interface AppSettingsAttachment {
 // sync_state_sanitized.json 附件 DTO。
 interface SyncStateAttachment {
   status: string | null
-  lastSyncTime: string | null
+  lastSyncTime: number | null
   lastError: string | null
   conflictCount: number
 }
