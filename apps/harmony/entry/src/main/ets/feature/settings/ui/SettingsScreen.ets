@@ -20,7 +20,7 @@ import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsVi
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
-import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
+import { HdsSettingsDestinationApi23 } from '../../../app/navigation/impl/api23/HdsSettingsDestinationApi23'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -243,17 +243,11 @@ export struct SettingsScreen {
     // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
     // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
     if (this.useHdsNav) {
-      HdsNavDestination() {
-        this.NavContent()
-      }
-      .hideTitleBar(false)
-      .titleBar({ content: { title: { mainTitle: $r('app.string.settings') } } } as HdsNavigationTitleBarOptions)
-      .onBackPressed(() => {
-        this.goBack()
-        return true
-      })
-      .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0)
+      HdsSettingsDestinationApi23({
+        contentBuilder: this.NavContent,
+        title: $r('app.string.settings'),
+        onBack: () => { this.goBack() },
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0) }
       })
     } else {
       NavDestination() {

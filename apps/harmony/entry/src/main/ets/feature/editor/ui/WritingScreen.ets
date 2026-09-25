@@ -30,7 +30,7 @@ import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
-import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
+import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
@@ -984,17 +984,11 @@ export struct WritingScreen {
     // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
     // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
     if (this.useHdsNav) {
-      HdsNavDestination() {
-        this.NavContent()
-      }
-      .hideTitleBar(false)
-      .titleBar({ content: { title: { mainTitle: this.chapterTitle } } } as HdsNavigationTitleBarOptions)
-      .onBackPressed(() => {
-        this.requestLeave()
-        return true
-      })
-      .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
+      HdsWritingDestinationApi23({
+        contentBuilder: this.NavContent,
+        title: this.chapterTitle,
+        onBack: () => { this.requestLeave() },
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0) }
       })
     } else {
       NavDestination() {

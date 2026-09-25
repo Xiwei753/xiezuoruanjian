@@ -16,7 +16,12 @@ import { WritingScreen } from '../../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../../feature/starmap/ui/StarMapScreen'
 import { SettingsScreen } from '../../../feature/settings/ui/SettingsScreen'
 import { StatsScreen } from '../../../feature/stats/ui/StatsScreen'
-import { HdsTabsFloatingStyle, hdsMaterial } from '@kit.UIDesignKit'
+import {
+  HdsTabs,
+  HdsNavigation,
+  HdsTabsFloatingStyle,
+  hdsMaterial,
+} from '@kit.UIDesignKit'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品

@@ -11,7 +11,7 @@ import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../
 import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
-import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
+import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -272,17 +272,11 @@ export struct WorkspaceScreen {
     // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
     // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
     if (this.useHdsNav) {
-      HdsNavDestination() {
-        this.NavContent()
-      }
-      .hideTitleBar(false)
-      .titleBar({ content: { title: { mainTitle: this.viewModel.projectName } } } as HdsNavigationTitleBarOptions)
-      .onBackPressed(() => {
-        this.handleBack()
-        return true
-      })
-      .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0)
+      HdsWorkspaceDestinationApi23({
+        contentBuilder: this.NavContent,
+        title: this.viewModel.projectName,
+        onBack: () => { this.handleBack() },
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) }
       })
     } else {
       NavDestination() {

@@ -176,14 +176,29 @@ export class LineNavigationResolver {
 
   /**
    * 从系统 LayoutManager 获取当前光标的 x 坐标。
-   * 用 getRectsForRange(offset, offset+1) 取 rect，返回 rect.x。
-   * 失败时返回 0（回退到行首）。
+   * Issue #768 评论5835958606：修正 API 签名和文末光标处理。
+   * - cursor < textLength：取当前字符 box 的 left
+   * - cursor === textLength 且 cursor > 0：取前一个字符 box 的 right
+   * - 空文本（cursor === 0 且 textLength === 0）：返回 0
+   * 与 EditorRenderBackend.buildCaretRectFromSystem() 保持同一语义。
    */
-  static getCaretXFromSystem(layout: LayoutManager, cursorUtf16: number): number {
+  static getCaretXFromSystem(layout: LayoutManager, cursorUtf16: number, textLength: number): number {
     try {
-      const rects = layout.getRectsForRange(cursorUtf16, cursorUtf16 + 1)
-      if (rects.length > 0) {
-        return rects[0].x
+      let range: TextRange
+      if (cursorUtf16 < textLength) {
+        range = { start: cursorUtf16, end: cursorUtf16 + 1 }
+      } else if (cursorUtf16 > 0) {
+        range = { start: cursorUtf16 - 1, end: cursorUtf16 }
+      } else {
+        return 0 // 空文本
+      }
+      const boxes = layout.getRectsForRange(range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT)
+      if (boxes.length > 0) {
+        if (cursorUtf16 < textLength) {
+          return boxes[0].rect.left
+        } else {
+          return boxes[boxes.length - 1].rect.right
+        }
       }
     } catch (_e) {
       // getRectsForRange 失败时回退到 0
@@ -193,12 +208,12 @@ export class LineNavigationResolver {
 
   /**
    * 从系统 LayoutManager 获取目标行最接近 targetX 的 offset。
-   * 用 getGlyphPositionAtCoordinate(targetX, targetLineY) 取 offset。
-   * 失败时返回目标行 startUtf16（回退到行首）。
+   * Issue #768 评论5835958606：修正 API 签名，返回 PositionWithAffinity.position。
    */
   static getNearestOffsetFromSystem(layout: LayoutManager, targetX: number, targetLineY: number): number {
     try {
-      return layout.getGlyphPositionAtCoordinate(targetX, targetLineY)
+      const pos = layout.getGlyphPositionAtCoordinate(targetX, targetLineY)
+      return pos.position
     } catch (_e) {
       // getGlyphPositionAtCoordinate 失败时回退到行首
     }

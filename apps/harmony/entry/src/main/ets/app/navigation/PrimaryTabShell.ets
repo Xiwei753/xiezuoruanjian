@@ -190,9 +190,8 @@ export struct PrimaryTabShell {
     const coordinator = NavigationTransactionCoordinator.getInstance()
     coordinator.setActiveTab(index)
     coordinator.setActiveStack(stack)
-    // Issue #768 评论5835171266 第2项：切 tab 时同步该 tab 的 role 到 NavigationChromeStore，
-    // 确保底栏显隐状态与当前 tab 内容一致。
-    NavigationChromeStore.getInstance().syncTabRole(index)
+    // Issue #768 评论5835958606：切 tab 时设置 activeTab，由 NavigationChromeStore 发布该 tab 的 role。
+    NavigationChromeStore.getInstance().setActiveTab(index)
     hilog.info(0x0000, 'PrimaryTabShell', 'syncActiveTab: index=%{public}d, stack updated', index)
   }
 

@@ -5,6 +5,8 @@
 //
 // Issue #768：按 tab 保存最后一个可见 role，切 tab 时同步发布该 tab 当前 role。
 // 修复全局 currentRole 在多 tab 间错乱的问题。
+// Issue #768 评论5835958606：后台 tab 的 onShown 只更新缓存，不污染全局 currentRole；
+// 只有 activeTab 的 role 变化才发布给观察者。
 
 import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
 
@@ -16,6 +18,8 @@ export class NavigationChromeStore {
   private observers: ScreenRoleObserver[] = []
   // Issue #768：按 tab 保存最后一个可见 role。
   private tabRoles: Map<number, ScreenRole> = new Map()
+  // Issue #768 评论5835958606：当前激活 tab 索引，只有激活 tab 的 role 变化才发布。
+  private activeTab: number = 0
 
   private constructor() {}
 
@@ -26,26 +30,28 @@ export class NavigationChromeStore {
     return NavigationChromeStore.instance
   }
 
+  // Issue #768 评论5835958606：切 tab 时调用，设置 activeTab 并发布该 tab 的 role。
+  // 替代旧的 syncTabRole 方法。
+  setActiveTab(tabIndex: number): void {
+    this.activeTab = tabIndex
+    const role = this.tabRoles.get(tabIndex) ?? ScreenRole.ProjectList
+    this.publish(role)
+  }
+
   // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole。
-  // tabIndex 可选：传入则同时更新 tabRoles，使切 tab 时能恢复该 tab 的 role。
-  reportScreenRole(role: ScreenRole, tabIndex?: number): void {
-    this.currentRole = role
-    if (tabIndex !== undefined) {
-      this.tabRoles.set(tabIndex, role)
-    }
-    for (const observer of this.observers) {
-      observer(role)
+  // Issue #768 评论5835958606：tabIndex 必选；后台 tab 只更新缓存，不发布全局 role。
+  reportScreenRole(role: ScreenRole, tabIndex: number): void {
+    this.tabRoles.set(tabIndex, role)
+    if (tabIndex === this.activeTab) {
+      this.publish(role)
     }
   }
 
-  // Issue #768：切 tab 时从 tabRoles 取该 tab 的 role，设为 currentRole 并通知观察者。
-  // PrimaryTabShell.syncActiveTab 调用此方法，确保切回某 tab 时底栏状态与该 tab 内容一致。
-  syncTabRole(tabIndex: number): void {
-    const role: ScreenRole | undefined = this.tabRoles.get(tabIndex)
-    const resolvedRole: ScreenRole = role !== undefined ? role : ScreenRole.ProjectList
-    this.currentRole = resolvedRole
+  // Issue #768 评论5835958606：抽取发布逻辑，更新 currentRole 并通知所有观察者。
+  private publish(role: ScreenRole): void {
+    this.currentRole = role
     for (const observer of this.observers) {
-      observer(resolvedRole)
+      observer(role)
     }
   }
 
