@@ -36,6 +36,7 @@
 | HDS Tabs（悬浮页签） | @kit.UIDesignKit (HdsTabs) | 23 | SystemCapability.UIDesign.HDSComponent.Core | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
 | TextController + LayoutManager | @kit.ArkUI (TextController / LayoutManager) | 12（getLayoutManager/getLineCount/getGlyphPositionAtCoordinate/getLineMetrics）/ 14（getRectsForRange） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets, feature/editor/render/EditorRenderBackend.ets |
 | StyledString / MutableStyledString | @kit.ArkUI (StyledString / MutableStyledString) | 12 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/render/EditorTextStyleProjector.ets |
+| ComponentObserver (inspector) | @kit.ArkUI (inspector) | 12（on('layout') 回调） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -312,3 +313,18 @@
 - fallback：无（等于 compatibleSdkVersion 12，实际始终可用）
 - 实现文件：`feature/editor/render/EditorTextStyleProjector.ets`
 - 说明：华为官方文档 https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/arkts-styled-string
+
+## ComponentObserver（inspector）
+
+- Kit：`@kit.ArkUI`（`inspector` 模块）
+- 接口：
+  - `getUIContext().getUIInspector().createComponentObserver(id: string): ComponentObserver` — 创建组件观察者
+  - `ComponentObserver.on('layout', callback: () => void): void` — 注册布局完成回调
+  - `ComponentObserver.off('layout', callback: () => void): void` — 注销布局完成回调
+- 最低 API：12（`on('layout', callback)` 从 API12 起支持；`ComponentObserver` 从 API10 起可用）
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：无（等于 compatibleSdkVersion 12，实际始终可用）
+- 实现文件：`feature/editor/ui/SujianEditor.ets`
+- 说明：用于解决 setStyledString 后同步读取 LayoutManager 拿到上一版布局的时序问题。华为官方文档明确"文本内容变更后，需等待布局完成才可获取到最新的布局信息"，ComponentObserver 的 `layout` 回调是系统布局完成的官方通知入口。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/ts-text-common

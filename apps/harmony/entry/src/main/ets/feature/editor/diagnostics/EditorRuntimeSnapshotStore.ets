@@ -24,12 +24,15 @@ export interface CaretRectSnapshot {
 }
 
 // 当前行度量快照。startIndex/endIndex 为 UTF-16 code unit offset。
-// baseline 为 0 时表示不可用（LineLayout 不含 baseline，仅 LayoutManager.LineMetrics 有）。
+// Issue #768 评论5837824666：从真实 LayoutManager.LineMetrics 记录完整字段，
+// 不再从 renderResult.lines 拼残缺的 currentLineMetrics。
 export interface CurrentLineMetricsSnapshot {
   startIndex: number
   endIndex: number
   height: number
   baseline: number
+  left: number
+  topHeight: number
 }
 
 // 编辑器运行时快照 — 全部脱敏，不含正文内容。
@@ -90,6 +93,14 @@ export interface EditorRuntimeSnapshot {
   apiLevel: number                      // 当前 API Level
   lastLayoutError: string | null        // 最后一次布局错误信息
   fallbackCount: number                 // fallback 次数累计
+
+  // Issue #768 评论5837824666：布局身份字段。
+  // 记录当前已发布的布局对应的 snapshot 身份，供诊断方判断是否出现"新 revision + 旧 layout"。
+  // 若 revision !== layoutRevision，说明布局还没跟上 snapshot 变化。
+  layoutRevision: number                // 布局对应的 snapshot revision
+  layoutGeneration: number              // 布局对应的 snapshot generation
+  layoutCompositionGeneration: number   // 布局对应的 snapshot compositionGeneration
+  visualCaretAffinity: string           // 布局对应的 visual caret affinity ('upstream' | 'downstream')
 
   // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
   isEditorMounted: boolean              // 编辑器是否仍挂载（aboutToDisappear 时设 false）
@@ -164,6 +175,10 @@ export class EditorRuntimeSnapshotStore {
         apiLevel: old.apiLevel,
         lastLayoutError: old.lastLayoutError,
         fallbackCount: old.fallbackCount,
+        layoutRevision: old.layoutRevision,
+        layoutGeneration: old.layoutGeneration,
+        layoutCompositionGeneration: old.layoutCompositionGeneration,
+        visualCaretAffinity: old.visualCaretAffinity,
         isEditorMounted: false,
         capturedAtMs: old.capturedAtMs,
       }

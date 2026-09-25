@@ -53,6 +53,7 @@ import { EditorViewportController, ViewportDimensions } from '../render/EditorVi
 import { EditorTextStyleProjector, EditorStyleConfig } from '../render/EditorTextStyleProjector'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../diagnostics/EditorRuntimeSnapshotStore'
+import { inspector } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
@@ -60,6 +61,8 @@ import hilog from '@ohos.hilog'
 const EDITOR_LOG_DOMAIN = 0x0000
 const EDITOR_LOG_TAG = 'SujianEditor'
 const INPUT_HOST_ID = 'sujian-editor-input-host'
+// Issue #768 评论5837824666：正文 Text 的固定 id，用于 ComponentObserver 监听布局完成回调。
+const EDITOR_TEXT_ID = 'sujian-editor-text'
 
 @Component
 export struct SujianEditor {
@@ -130,6 +133,21 @@ export struct SujianEditor {
   // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
   // 因为组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
   private textMounted: boolean = false
+  // Issue #768 评论5837824666：系统布局完成回调观察者。
+  // setStyledString 后不能同步读 LayoutManager（可能拿到上一版布局）。
+  // 用 ComponentObserver 'layout' 回调确保只在系统布局完成后才读取 LayoutManager。
+  private textLayoutObserver: inspector.ComponentObserver | null = null
+  private textLayoutCallback: (() => void) | null = null
+  // Issue #768 评论5837824666：布局身份字段。
+  // 记录当前已发布的布局对应的 snapshot 身份，供诊断快照判断是否出现"新 revision + 旧 layout"。
+  private layoutRevision: number = 0
+  private layoutGeneration: number = 0
+  private layoutCompositionGeneration: number = 0
+  private visualCaretAffinity: string = 'downstream'
+  // Issue #768 评论5837824666：缓存上一次布局完成后的行度量和行数，
+  // 供 pushDiagnosticsSnapshot 在布局未完成时使用（避免读到旧 LayoutManager）。
+  private lastSystemLayoutLineCount: number = 0
+  private lastCurrentLineMetrics: CurrentLineMetricsSnapshot | null = null
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
@@ -174,6 +192,8 @@ export struct SujianEditor {
 
   aboutToDisappear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToDisappear')
+    // Issue #768 评论5837824666：兜底注销布局观察者（onDisAppear 可能未触发）。
+    this.detachTextLayoutObserver()
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
     this.lineResolver.cancelWait()
     if (this.dispatcher) {
@@ -190,6 +210,37 @@ export struct SujianEditor {
     // Issue #768 评论5835171266 第5项：不清空快照，标记编辑器已卸载。
     // 保留最后快照供离页后导出诊断；下次打开编辑器时 updateSnapshot 会覆盖。
     EditorRuntimeSnapshotStore.getInstance().markEditorUnmounted()
+  }
+
+  // Issue #768 评论5837824666：用 ArkUI ComponentObserver 的 layout 回调
+  // 作为系统几何刷新入口，确保 setStyledString 后等待布局完成才读取 LayoutManager。
+  // 华为官方文档明确：文本内容变更后，需等待布局完成才可获取到最新的布局信息。
+  // ComponentObserver 从 API10 起可用，项目 compatibleSdk=12 可以直接用。
+  private attachTextLayoutObserver(): void {
+    if (this.textLayoutObserver !== null) {
+      return
+    }
+    const observer = this.getUIContext()
+      .getUIInspector()
+      .createComponentObserver(EDITOR_TEXT_ID)
+    const callback = (): void => {
+      if (!this.textMounted || this.snapshot === null) {
+        return
+      }
+      // 到这里 Text 已完成本轮 layout，才读取 LayoutManager。
+      this.refreshRenderLayout()
+    }
+    observer.on('layout', callback)
+    this.textLayoutObserver = observer
+    this.textLayoutCallback = callback
+  }
+
+  private detachTextLayoutObserver(): void {
+    if (this.textLayoutObserver !== null && this.textLayoutCallback !== null) {
+      this.textLayoutObserver.off('layout', this.textLayoutCallback)
+    }
+    this.textLayoutObserver = null
+    this.textLayoutCallback = null
   }
 
   // Issue #768：把当前编辑器运行时状态推送到诊断快照存储。
@@ -251,6 +302,10 @@ export struct SujianEditor {
         apiLevel: apiLevel,
         lastLayoutError: this.lastLayoutError,
         fallbackCount: this.fallbackCount,
+        layoutRevision: 0,
+        layoutGeneration: 0,
+        layoutCompositionGeneration: 0,
+        visualCaretAffinity: 'downstream',
         // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
         isEditorMounted: true,
         capturedAtMs: Date.now(),
@@ -276,13 +331,11 @@ export struct SujianEditor {
     const firstLineIndentChars: number = snap.autoIndentWidth
     const effectiveFirstLineIndentVp: number = firstLineIndentEnabled ? firstLineIndentChars * fontSizeVp : 0
 
-    // 布局来源/行数
-    const layout = this.textController.getLayoutManager()
-    const usingLayoutManager: boolean = layout !== null && layout !== undefined
-    let systemLayoutLineCount: number = 0
-    if (usingLayoutManager && layout !== null) {
-      systemLayoutLineCount = layout.getLineCount()
-    }
+    // 布局来源/行数 — Issue #768 评论5837824666：
+    // 不再直接读 getLayoutManager()（可能拿到上一版布局），改为从缓存字段读取。
+    // 缓存字段在 refreshRenderLayoutFromSystem/Fallback 成功后更新。
+    const usingLayoutManager: boolean = this.lastLayoutSource === 'system'
+    const systemLayoutLineCount: number = this.lastSystemLayoutLineCount
 
     // 光标矩形
     let caretRect: CaretRectSnapshot | null = null
@@ -295,23 +348,10 @@ export struct SujianEditor {
       }
     }
 
-    // 当前行度量：从 renderResult.lines 找光标所在行
-    let currentLineMetrics: CurrentLineMetricsSnapshot | null = null
-    if (this.renderResult !== null) {
-      const lines = this.renderResult.lines
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]
-        if (cursorUtf16Offset >= line.startUtf16 && cursorUtf16Offset <= line.endUtf16) {
-          currentLineMetrics = {
-            startIndex: line.startUtf16,
-            endIndex: line.endUtf16,
-            height: line.height,
-            baseline: 0, // LineLayout 不含 baseline，填 0 表示不可用
-          }
-          break
-        }
-      }
-    }
+    // 当前行度量 — Issue #768 评论5837824666：
+    // 不再从 renderResult.lines 拼（baseline 固定 0、无 left/topHeight），
+    // 改为从缓存字段读取（在 refreshRenderLayoutFromSystem 中从真实 layout.getLineMetrics 获取）。
+    const currentLineMetrics: CurrentLineMetricsSnapshot | null = this.lastCurrentLineMetrics
 
     // 段落前导空白
     const leadingWhitespaceCount: number = this.computeLeadingWhitespaceCount(text, cursorUtf16Offset)
@@ -353,6 +393,11 @@ export struct SujianEditor {
       apiLevel: apiLevel,
       lastLayoutError: this.lastLayoutError,
       fallbackCount: this.fallbackCount,
+      // Issue #768 评论5837824666：布局身份字段。
+      layoutRevision: this.layoutRevision,
+      layoutGeneration: this.layoutGeneration,
+      layoutCompositionGeneration: this.layoutCompositionGeneration,
+      visualCaretAffinity: this.visualCaretAffinity,
       // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
       isEditorMounted: true,
       capturedAtMs: Date.now(),
@@ -385,10 +430,10 @@ export struct SujianEditor {
 
   // Issue #629 评论16 第1项：用 @Watch 监听 snapshot 变化替代 aboutToUpdate。
   // aboutToUpdate 不是 OpenHarmony 官方生命周期回调（官方 V1 监听机制是 @Watch）。
-  // snapshot 前进时先 refreshRender（无几何 fallback），再 refreshRenderLayout
-  // （contentWidth > 0 时用已有宽度计算真实 lines + 更新 lineResolver 带身份）。
-  // 这样打完字后按 Up/Down/Home/End 不需要等 onAreaChange 才更新 lineResolver，
-  // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
+  // Issue #768 评论5837824666：snapshot 前进时只提交新的文字/样式（setStyledString），
+  // 不再同步调 refreshRenderLayout() — 系统布局可能还没完成，会拿到上一版 LayoutManager。
+  // 布局结果等系统 layout 完成回调（ComponentObserver 'layout'）后才更新。
+  // 这样才真正做到：StyledString N → ArkUI layout N 完成 → LayoutManager N → caret/selection N。
   private onSnapshotChanged(): void {
     if (this.snapshot === null) {
       // Issue #768 评论5837229456：通过 applyStyledText 清空 StyledString（受 textMounted 守卫）
@@ -403,9 +448,10 @@ export struct SujianEditor {
       this.pushDiagnosticsSnapshot()
       return
     }
+    // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
     this.refreshRender()
-    this.refreshRenderLayout()
-    // Issue #768：snapshot 前进后推送诊断快照（含光标/选区/composition 变化）。
+    // Issue #768 评论5837824666：推送诊断快照（布局相关字段从缓存读取）。
+    // 诊断方可通过 revision !== layoutRevision 判断布局是否已跟上 snapshot。
     this.pushDiagnosticsSnapshot()
   }
 
@@ -547,6 +593,14 @@ export struct SujianEditor {
       this.lastLayoutSource = 'system'
       // Issue #768 评论5835171266 第5项：系统路径成功时清除错误。
       this.lastLayoutError = null
+      // Issue #768 评论5837824666：更新布局身份字段，标记当前布局对应的 snapshot 身份。
+      this.layoutRevision = snap.revision
+      this.layoutGeneration = snap.generation
+      this.layoutCompositionGeneration = snap.compositionGeneration
+      this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
+      // Issue #768 评论5837824666：缓存系统布局行数和当前行度量，供 pushDiagnosticsSnapshot 使用。
+      this.lastSystemLayoutLineCount = systemLineCount
+      this.lastCurrentLineMetrics = this.extractCurrentLineMetrics(layout, systemLineCount, cursorUtf16)
       this.pushDiagnosticsSnapshot()
     } catch (e) {
       // Issue #768 评论5835171266 第5项：记录系统布局错误，回退到 fallback。
@@ -595,7 +649,68 @@ export struct SujianEditor {
     this.lineResolver.updateLayout(layoutState)
     // Issue #768：标记布局来源为 fallback 并推送诊断快照（布局更新时）。
     this.lastLayoutSource = 'fallback'
+    // Issue #768 评论5837824666：更新布局身份字段。
+    this.layoutRevision = snap.revision
+    this.layoutGeneration = snap.generation
+    this.layoutCompositionGeneration = snap.compositionGeneration
+    this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
+    // Issue #768 评论5837824666：缓存系统布局行数（fallback 路径无 LayoutManager，行数为 0）
+    // 和当前行度量（从 renderResult.lines 获取，但 baseline/left/topHeight 不可用）。
+    this.lastSystemLayoutLineCount = 0
+    this.lastCurrentLineMetrics = this.extractCurrentLineMetricsFromRenderResult(result, cursorUtf16)
     this.pushDiagnosticsSnapshot()
+  }
+
+  // Issue #768 评论5837824666：从真实 LayoutManager.LineMetrics 提取当前行度量。
+  // 直接从 layout.getLineMetrics(index) 记录 left/topHeight/height/baseline/startIndex/endIndex，
+  // 不再拿 renderResult.lines 拼一个残缺的 currentLineMetrics。
+  private extractCurrentLineMetrics(
+    layout: LayoutManager,
+    systemLineCount: number,
+    cursorUtf16: number,
+  ): CurrentLineMetricsSnapshot | null {
+    try {
+      for (let i = 0; i < systemLineCount; i++) {
+        const metrics = layout.getLineMetrics(i)
+        if (cursorUtf16 >= metrics.startIndex && cursorUtf16 <= metrics.endIndex) {
+          return {
+            startIndex: metrics.startIndex,
+            endIndex: metrics.endIndex,
+            height: metrics.height,
+            baseline: metrics.baseline,
+            left: metrics.left,
+            topHeight: metrics.topHeight,
+          }
+        }
+      }
+    } catch (e) {
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
+        `extractCurrentLineMetrics: getLineMetrics failed: ${JSON.stringify(e)}`)
+    }
+    return null
+  }
+
+  // Issue #768 评论5837824666：Fallback 路径从 renderResult.lines 提取当前行度量。
+  // LineLayout 不含 baseline/left/topHeight，这些字段填 0 表示不可用。
+  private extractCurrentLineMetricsFromRenderResult(
+    result: EditorRenderResult,
+    cursorUtf16: number,
+  ): CurrentLineMetricsSnapshot | null {
+    const lines = result.lines
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
+        return {
+          startIndex: line.startUtf16,
+          endIndex: line.endUtf16,
+          height: line.height,
+          baseline: 0,
+          left: 0,
+          topHeight: 0,
+        }
+      }
+    }
+    return null
   }
 
   // Issue #629 评论18：命中测试返回 VisualCaretPosition（含 CaretAffinity）。
@@ -964,18 +1079,24 @@ export struct SujianEditor {
           // 字号、行高、首行缩进通过 StyledString 的 TextStyle/LineHeightStyle/ParagraphStyle 下发，
           // 不再在 Text 属性上设置 fontSize。
           Text(undefined, { controller: this.textController })
+            .id(EDITOR_TEXT_ID)
             .width('100%')
             .textAlign(TextAlign.Start)
             .wordBreak(WordBreak.BREAK_ALL)
             .onAppear(() => {
               // Issue #768 评论5837229456：API15 之前，在 aboutToAppear 里通过
               // TextController.setStyledString() 设置内容无法显示，因为组件还未创建。
-              // 在 Text.onAppear 后才标记挂载并下发 StyledString + 计算布局。
+              // 在 Text.onAppear 后才标记挂载并下发 StyledString。
+              // Issue #768 评论5837824666：在 onAppear 中注册布局观察者，
+              // 确保后续 setStyledString 后通过 layout 回调（而非同步读取）获取 LayoutManager。
               this.textMounted = true
+              this.attachTextLayoutObserver()
               this.applyStyledText()
-              this.refreshRenderLayout()
+              // 不再同步调 refreshRenderLayout() — 等 ComponentObserver 'layout' 回调触发。
             })
             .onDisAppear(() => {
+              // Issue #768 评论5837824666：注销布局观察者。
+              this.detachTextLayoutObserver()
               this.textMounted = false
             })
             .onAreaChange((_oldArea: Area, newArea: Area): void => {

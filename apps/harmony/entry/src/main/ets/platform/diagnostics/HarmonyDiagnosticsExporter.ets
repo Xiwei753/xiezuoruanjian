@@ -155,6 +155,11 @@ interface EditorRuntimeAttachment {
   // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
   isEditorMounted: boolean
   capturedAtMs: number
+  // Issue #768 评论5837824666：布局身份字段。
+  layoutRevision: number
+  layoutGeneration: number
+  layoutCompositionGeneration: number
+  visualCaretAffinity: string
 }
 
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
@@ -529,6 +534,10 @@ export class HarmonyDiagnosticsExporter {
         fallbackCount: snapshot.fallbackCount,
         isEditorMounted: snapshot.isEditorMounted,
         capturedAtMs: snapshot.capturedAtMs,
+        layoutRevision: snapshot.layoutRevision,
+        layoutGeneration: snapshot.layoutGeneration,
+        layoutCompositionGeneration: snapshot.layoutCompositionGeneration,
+        visualCaretAffinity: snapshot.visualCaretAffinity,
       }
       const json = JSON.stringify(attachment, null, 2)
       attachments.push(this.makeAttachment(ATTACHMENT_EDITOR_RUNTIME, json))
