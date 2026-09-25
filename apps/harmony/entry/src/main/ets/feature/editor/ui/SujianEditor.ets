@@ -126,6 +126,10 @@ export struct SujianEditor {
   // Issue #768 评论5835171266 第5项：真实记录布局错误和 fallback 次数。
   private lastLayoutError: string | null = null
   private fallbackCount: number = 0
+  // Issue #768 评论5837229456：Text 组件挂载状态标记。
+  // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
+  // 因为组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
+  private textMounted: boolean = false
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
@@ -387,8 +391,8 @@ export struct SujianEditor {
   // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
   private onSnapshotChanged(): void {
     if (this.snapshot === null) {
-      // Issue #768 任务9：snapshot 为 null 时也清空 StyledString
-      this.textController.setStyledString(new MutableStyledString(''))
+      // Issue #768 评论5837229456：通过 applyStyledText 清空 StyledString（受 textMounted 守卫）
+      this.applyStyledText()
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
       this.renderResult = null
@@ -405,25 +409,36 @@ export struct SujianEditor {
     this.pushDiagnosticsSnapshot()
   }
 
+  // Issue #768 评论5837229456：把"生成 StyledString"和"写进 TextController"分开。
+  // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
+  // 因为 Text 组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
+  private applyStyledText(): void {
+    if (!this.textMounted) {
+      return
+    }
+    if (this.snapshot === null) {
+      this.textController.setStyledString(new MutableStyledString(''))
+      return
+    }
+    const config: EditorStyleConfig = {
+      fontSize: this.snapshot.fontSize,
+      lineSpacingMultiplier: this.snapshot.lineSpacingMultiplier,
+      autoIndentEnabled: this.snapshot.autoIndentEnabled,
+      autoIndentWidth: this.snapshot.autoIndentWidth,
+    }
+    const styled = EditorTextStyleProjector.projectToStyledString(this.snapshot.text, config)
+    this.textController.setStyledString(styled)
+  }
+
   // 基础渲染：用 render() 转 offset，不含几何（lines/rects 为空）。
   // aboutToAppear/aboutToUpdate 调用；onAreaChange 触发后改用 refreshRenderLayout 补几何。
   // Issue #629 评论11 第2项：refreshRender 不再用 render() 的空 lines 覆盖 lineResolver。
   // render() 不计算几何（lines: []），用它覆盖会把 resolver 清空。lineResolver 只在
   // refreshRenderLayout（contentWidth > 0，有真实几何）时更新（带身份）。
-  // Issue #768 任务9：通过 TextController.setStyledString 下发内容和样式（字号/行高/首行缩进），
-  // 让系统 Text 的 LayoutManager 成为唯一布局真源。
+  // Issue #768 评论5837229456：不再在 refreshRender 里直接调 setStyledString，
+  // 改为通过 applyStyledText()（受 textMounted 守卫）下发 StyledString。
   private refreshRender(): void {
     if (this.snapshot) {
-      // 通过 StyledString 下发内容和样式
-      const config: EditorStyleConfig = {
-        fontSize: this.snapshot.fontSize,
-        lineSpacingMultiplier: this.snapshot.lineSpacingMultiplier,
-        autoIndentEnabled: this.snapshot.autoIndentEnabled,
-        autoIndentWidth: this.snapshot.autoIndentWidth,
-      }
-      const styledString = EditorTextStyleProjector.projectToStyledString(this.snapshot.text, config)
-      this.textController.setStyledString(styledString)
-
       // 仍然用 EditorRenderBackend.render() 转 offset（不含几何）
       const result = EditorRenderBackend.render(this.snapshot)
       this.renderResult = result
@@ -431,8 +446,6 @@ export struct SujianEditor {
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
     } else {
-      // 清空 StyledString
-      this.textController.setStyledString(new MutableStyledString(''))
       this.renderResult = null
       this.selectionRects = []
       this.caretRect = null
@@ -441,6 +454,8 @@ export struct SujianEditor {
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
     }
+    // 通过 applyStyledText 下发 StyledString（受 textMounted 守卫）
+    this.applyStyledText()
   }
 
   // 完整静态渲染：用 renderLayout() 计算行布局/选区/光标/composition 下划线几何。
@@ -952,6 +967,17 @@ export struct SujianEditor {
             .width('100%')
             .textAlign(TextAlign.Start)
             .wordBreak(WordBreak.BREAK_ALL)
+            .onAppear(() => {
+              // Issue #768 评论5837229456：API15 之前，在 aboutToAppear 里通过
+              // TextController.setStyledString() 设置内容无法显示，因为组件还未创建。
+              // 在 Text.onAppear 后才标记挂载并下发 StyledString + 计算布局。
+              this.textMounted = true
+              this.applyStyledText()
+              this.refreshRenderLayout()
+            })
+            .onDisAppear(() => {
+              this.textMounted = false
+            })
             .onAreaChange((_oldArea: Area, newArea: Area): void => {
               // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
