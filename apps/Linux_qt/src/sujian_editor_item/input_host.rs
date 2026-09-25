@@ -482,7 +482,8 @@ impl EditorInputHost for SujianEditorItem {
                 let text_anim = coordinated_anim || self.current_typing_animation_enabled;
                 let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 let layout_basis_revision = self.pipeline.layout_revision();
-                let anim_key = self.pipeline
+                let anim_key = self
+                    .pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
                         &old_snapshot,
@@ -633,7 +634,8 @@ impl EditorInputHost for SujianEditorItem {
                 let text_anim = coordinated_anim || self.current_typing_animation_enabled;
                 let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
                 let layout_basis_revision = self.pipeline.layout_revision();
-                let anim_key = self.pipeline
+                let anim_key = self
+                    .pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
                         &old_snapshot,

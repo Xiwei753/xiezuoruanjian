@@ -1380,13 +1380,7 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=true, typing=100ms, smooth=300ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
-        key,
-        false,
-        true,
-        true,
-        true,
-        100,
-        300,
+        key, false, true, true, true, 100, 300,
     ));
     // 文字 unit 用 typing duration (100ms)
     for unit in &tx.units {
@@ -1420,13 +1414,7 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=true, typing=300ms, smooth=100ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
-        key,
-        false,
-        true,
-        true,
-        true,
-        300,
-        100,
+        key, false, true, true, true, 300, 100,
     ));
     // 文字 unit 用 typing duration (300ms)
     for unit in &tx.units {
@@ -1460,13 +1448,7 @@ fn issue756_comment5821042551_coordinated_shares_typing_duration() {
     // coordinated=true, typing=false, smooth=false, typing=100ms, smooth=300ms
     // 协同时 caret_duration_ms 应等于 text_duration_ms（共享 timeline）
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
-        key,
-        true,
-        false,
-        false,
-        true,
-        100,
-        300,
+        key, true, false, false, true, 100, 300,
     ));
     // 协同: 吞吐字是 CaretDriven
     assert!(
@@ -1491,19 +1473,10 @@ fn issue756_comment5821042551_smooth_only_has_independent_caret_duration() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=false, smooth=true, typing=100ms, smooth=300ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
-        key,
-        false,
-        false,
-        true,
-        true,
-        100,
-        300,
+        key, false, false, true, true, 100, 300,
     ));
     // smooth-only: 没有文字 unit
-    assert!(
-        tx.units.is_empty(),
-        "smooth-only: 没有文字动画 unit"
-    );
+    assert!(tx.units.is_empty(), "smooth-only: 没有文字动画 unit");
     // caret track 用 smooth cursor duration (300ms)
     let track = tx
         .cursor_visual_track
@@ -1529,13 +1502,7 @@ fn issue756_comment5821042551_transaction_has_caret_track_must_wait_for_completi
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=true, typing=100ms, smooth=300ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
-        key,
-        false,
-        true,
-        true,
-        true,
-        100,
-        300,
+        key, false, true, true, true, 100, 300,
     ));
 
     // 事务必须有 cursor_visual_track（smooth=true）

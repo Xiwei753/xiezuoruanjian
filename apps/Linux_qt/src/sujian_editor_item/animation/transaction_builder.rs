@@ -1361,7 +1361,7 @@ impl LinuxEditorAnimationCoordinator {
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
                         text_duration_ms: vt.text_duration_ms,
-                    caret_duration_ms: vt.caret_duration_ms,
+                        caret_duration_ms: vt.caret_duration_ms,
                         text_animation_enabled,
                         caret_animation_enabled,
                         coordinated_animation_enabled,
