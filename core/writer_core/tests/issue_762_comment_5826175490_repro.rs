@@ -1,32 +1,36 @@
-//! Issue #762 评论 5826175490 — 已有冲突被藏到整轮同步结束的回归测试。
+//! Issue #762 评论 5826175490 / 5828791004 — 同步冲突状态回归测试。
 //!
-//! 覆盖三件事：
+//! 覆盖四件事：
 //! 1. Core 全局冲突查询 `list_all_sync_conflicts()` 枚举所有作品，只返回未解决冲突，
 //!    并带上 `project_id + project_title`——平台层不需要自己扫目录。
 //! 2. 该查询在 UDL/`WriterAppService` 边界暴露为 `ProjectSyncConflictDto`，
 //!    单个作品的 `list_sync_conflicts(project_id)` 行为保持不变。
-//! 3. full-sync 每个 target 结束时立即回调 progress，且此时该作品的持久冲突状态
-//!    已经落盘——平台不用等最终 `FullSyncResult` 才能让用户处理冲突。
+//! 3. full-sync 每个 target 的 `Transfer → Commit` 完成后立即回调 progress，
+//!    且此时该作品的持久冲突状态已经落盘——平台不用等最终 `FullSyncResult`
+//!    才能让用户处理冲突。
+//! 4. 用户在同步运行期间（收到 progress 后）解决的冲突不会被整轮收口重新写回：
+//!    每个 target 的 Commit 只在自己 progress 之前做一次，之后不再提交它的 staging。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::{Arc, Mutex};
 
 use tempfile::TempDir;
+use writer_core::api::WriterCoreApi;
 use writer_core::facade::WriterCore;
 use writer_core::sync::full_sync::{
-    run_transfer, FullSyncPlan, LiveTargetLww, PlannedTarget, SyncProgressCallback,
-    SyncTargetProgress,
+    FullSyncPlan, LiveTargetLww, PlannedTarget, SyncProgressCallback, SyncTargetProgress,
 };
 use writer_core::sync::provider::memory::MemoryProvider;
 use writer_core::sync::provider::model::{RemoteVersion, WritePrecondition};
 use writer_core::sync::provider::SyncProvider;
+use writer_core::sync::staging::prepare_staging_runs;
 use writer_core::sync::target_lifecycle::{
     load_remote_catalog, upsert_record, write_remote_catalog,
 };
 use writer_core::sync::types::{
     ManifestFileRecord, PlannedTargetKind, RemoteTargetCatalogSnapshot, SyncManifest, SyncPolicy,
-    SyncStatus, SyncTarget, TargetLifecycleCatalog, TargetLifecycleRecord,
+    SyncTarget, TargetLifecycleCatalog, TargetLifecycleRecord,
 };
 use writer_core::sync::{SyncConflict, SyncConflictKind, SyncService};
 
@@ -202,20 +206,24 @@ fn app_service_exposes_project_sync_conflict_dto() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. full-sync target progress
+// 3. full-sync target progress + 同步中解决冲突不被整轮收口覆盖
 // ---------------------------------------------------------------------------
 
-/// 构造本地 staging：manifest LWW = (lww_time, device_id)，一个 chapter 文件。
-fn build_staging_doc_conflict(
-    tmp: &TempDir,
+/// 构造真实 live 作品目录（本机已有作品）：本地正文 + manifest LWW。
+///
+/// `prepare_staging_runs` 从这里 seed `base/` 与 `staging/`（与生产 Phase 2 一致），
+/// 测试不手写 staging。
+fn build_live_project(
+    projects_root: &std::path::Path,
+    project_id: &str,
+    chapter_content: &[u8],
     lww_time: i64,
     device_id: &str,
-    chapter_content: &[u8],
 ) -> std::path::PathBuf {
-    let staging_root = tmp.path().join("staging-p1");
-    std::fs::create_dir_all(staging_root.join("volumes").join("v1").join("chapters")).unwrap();
+    let live_root = projects_root.join(project_id);
+    std::fs::create_dir_all(live_root.join("volumes").join("v1").join("chapters")).unwrap();
     std::fs::write(
-        staging_root
+        live_root
             .join("volumes")
             .join("v1")
             .join("chapters")
@@ -223,8 +231,7 @@ fn build_staging_doc_conflict(
         chapter_content,
     )
     .unwrap();
-    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
-    let staging_manifest = SyncManifest {
+    let manifest = SyncManifest {
         files: vec![ManifestFileRecord {
             path: "volumes/v1/chapters/chapter.md".to_string(),
             content_hash: format!("{:x}", md5::compute(chapter_content)),
@@ -235,26 +242,29 @@ fn build_staging_doc_conflict(
             schema_version: 1,
         }],
     };
+    std::fs::create_dir_all(live_root.join("app-meta").join("sync")).unwrap();
     std::fs::write(
-        staging_root
+        live_root
             .join("app-meta")
             .join("sync")
             .join("manifest.sync.json"),
-        serde_json::to_vec(&staging_manifest).unwrap(),
+        serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
-    staging_root
+    live_root
 }
 
-/// 远端 generation 里放一份与本地不同的 chapter，触发 BothChanged 冲突。
-fn write_remote_generation(
+/// 远端 generation：chapter 正文 + manifest（内容与本地不同 → BothChanged 冲突）。
+fn write_remote_generation_for(
     provider: &MemoryProvider,
-    gen_prefix: &str,
+    project_id: &str,
+    generation_id: &str,
     chapter_content: &[u8],
     lww_time: i64,
     device_id: &str,
 ) {
-    let chapter_path = format!("{}/volumes/v1/chapters/chapter.md", gen_prefix);
+    let gen_prefix = format!("projects/{project_id}/__generations__/{generation_id}");
+    let chapter_path = format!("{gen_prefix}/volumes/v1/chapters/chapter.md");
     provider
         .write(
             &chapter_path,
@@ -273,7 +283,7 @@ fn write_remote_generation(
             schema_version: 1,
         }],
     };
-    let manifest_path = format!("{}/app-meta/sync/manifest.sync.json", gen_prefix);
+    let manifest_path = format!("{gen_prefix}/app-meta/sync/manifest.sync.json");
     provider
         .write(
             &manifest_path,
@@ -281,6 +291,55 @@ fn write_remote_generation(
             WritePrecondition::Unconditional,
         )
         .unwrap();
+}
+
+/// 远端 catalog：每个作品一条 `Upsert(lww_time, device_id)` + active_generation。
+///
+/// 入参 `(project_id, generation_id, lww_time, device_id)` 中 device_id 必须大于本地
+/// device_id，让 remote record 严格赢，走 `RemoteWins` 分支。
+fn write_remote_catalog_for_projects(
+    provider: &MemoryProvider,
+    projects: &[(&str, &str, i64, &str)],
+) -> RemoteTargetCatalogSnapshot {
+    let mut catalog = TargetLifecycleCatalog::default();
+    for (project_id, generation_id, lww_time, device_id) in projects {
+        let prefix = format!("projects/{project_id}");
+        upsert_record(
+            &mut catalog,
+            TargetLifecycleRecord::upsert(&prefix, &prefix, *lww_time, device_id)
+                .with_active_generation(*generation_id),
+        );
+    }
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(provider, &snapshot).unwrap();
+    load_remote_catalog(provider).unwrap()
+}
+
+/// 单个 LiveProject `PlannedTarget`：`live_lww` 与 live manifest 一致。
+fn planned_live_project(
+    project_id: &str,
+    live_root: std::path::PathBuf,
+    lww_time: i64,
+    device_id: &str,
+) -> PlannedTarget {
+    PlannedTarget {
+        target: SyncTarget::project(project_id),
+        local_root: live_root.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::LiveProject,
+        project_id: Some(project_id.to_string()),
+        target_live_root: live_root,
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: Some(LiveTargetLww {
+            lww_time_ms: lww_time,
+            device_id: device_id.to_string(),
+        }),
+        expected_delete_lww: None,
+    }
 }
 
 /// 记录每次 progress 回调时该作品磁盘上的 conflicts.json 快照。
@@ -320,8 +379,12 @@ impl ProgressRecorder {
     }
 }
 
-/// target 完成 merge、确认 unresolved_conflicts 后必须立即回调 progress，
-/// 且此时持久冲突状态已落盘——"同步中"和"等待用户解决冲突"可以同时成立。
+/// target Commit 完成后必须立即回调 progress，且此时持久冲突状态已落盘可读——
+/// "同步中"和"等待用户解决冲突"可以同时成立。
+///
+/// Issue #762 评论 5828791004 起顺序是 `Transfer → Commit（写 live 终态）→ progress`：
+/// 冲突不再由 Transfer 提前落盘，但"progress 回调时冲突已可读"这条不变量必须保持，
+/// 否则平台收到 progress 立刻让用户处理时会读到空列表。
 #[test]
 fn target_progress_exposes_conflict_before_full_sync_finishes() {
     const T: i64 = 10_000;
@@ -330,78 +393,58 @@ fn target_progress_exposes_conflict_before_full_sync_finishes() {
     const GEN_EXISTING: &str = "gen_existing";
     assert!(DEVICE_LOCAL < DEVICE_REMOTE);
 
-    let provider_inner = MemoryProvider::new();
-    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
-    write_remote_generation(
-        &provider_inner,
-        &remote_gen_prefix,
+    let provider = MemoryProvider::new();
+    let tmp = TempDir::new().unwrap();
+    let app_data_root = tmp.path().to_path_buf();
+    let projects_root = app_data_root.join("projects");
+    std::fs::create_dir_all(&projects_root).unwrap();
+
+    let live_root = build_live_project(
+        &projects_root,
+        "p1",
+        b"local chapter content",
+        T,
+        DEVICE_LOCAL,
+    );
+    write_remote_generation_for(
+        &provider,
+        "p1",
+        GEN_EXISTING,
         b"remote chapter content",
         T,
         DEVICE_REMOTE,
     );
+    let remote_catalog_snapshot =
+        write_remote_catalog_for_projects(&provider, &[("p1", GEN_EXISTING, T, DEVICE_REMOTE)]);
 
-    let remote_record =
-        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
-            .with_active_generation(GEN_EXISTING);
-    let mut catalog = TargetLifecycleCatalog::default();
-    upsert_record(&mut catalog, remote_record);
-    let snapshot = RemoteTargetCatalogSnapshot {
-        catalog,
-        version: RemoteVersion::new("v1"),
-    };
-    write_remote_catalog(&provider_inner, &snapshot).unwrap();
-    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
-
-    let tmp = TempDir::new().unwrap();
-    let staging_root = build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
-    let local_root = tmp.path().join("projects").join("p1");
-    std::fs::create_dir_all(&local_root).unwrap();
-    let plan = FullSyncPlan {
+    let mut plan = FullSyncPlan {
         sync_policy: SyncPolicy {
             enabled: true,
             ..Default::default()
         },
-        force_sync: false,
-        targets: vec![PlannedTarget {
-            target: SyncTarget::project("p1"),
-            local_root: local_root.clone(),
-            staging_root: Some(staging_root),
-            target_kind: PlannedTargetKind::LiveProject,
-            project_id: Some("p1".to_string()),
-            target_live_root: local_root.clone(),
-            deleted_journal_token: None,
-            deleted_lww: None,
-            live_lww: Some(LiveTargetLww {
-                lww_time_ms: T,
-                device_id: DEVICE_LOCAL.to_string(),
-            }),
-            expected_delete_lww: None,
-        }],
-        app_data_root: tmp.path().to_path_buf(),
+        force_sync: true,
+        targets: vec![planned_live_project(
+            "p1",
+            live_root.clone(),
+            T,
+            DEVICE_LOCAL,
+        )],
+        app_data_root: app_data_root.clone(),
         remote_catalog_snapshot,
     };
+    // 与生产 Phase 2 一致：从 live seed staging（base + staging 克隆）。
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(staging_runs.len(), 1);
 
-    let recorder = ProgressRecorder::new(local_root);
+    let recorder = ProgressRecorder::new(live_root);
     let progress = recorder.callback();
+    let api = WriterCoreApi::new(&app_data_root, &projects_root);
 
-    let transfer = run_transfer(&provider_inner, &plan, None, Some(&progress));
-
-    // 冲突确实产生了。
-    assert!(
-        matches!(
-            transfer.targets[0].result.status,
-            SyncStatus::PartialConflict
-        ),
-        "应进入 PartialConflict，实际 {:?}",
-        transfer.targets[0].result.status
-    );
-    assert!(
-        !transfer.targets[0].result.conflicts.is_empty(),
-        "target 结果里应有未解决冲突"
-    );
+    let result = api
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, Some(&progress))
+        .unwrap();
 
     let events = recorder.events.lock().unwrap();
-    let persisted = recorder.conflicts_on_callback.lock().unwrap();
     assert_eq!(events.len(), 1, "每个 target 结束回调一次 progress");
     assert_eq!(
         events[0].project_id.as_deref(),
@@ -413,13 +456,222 @@ fn target_progress_exposes_conflict_before_full_sync_finishes() {
         events[0].status, "partial_conflict",
         "progress 的 status 必须是线格式状态码，平台据此判断 target 终态"
     );
+
+    let persisted = recorder.conflicts_on_callback.lock().unwrap();
     assert_eq!(
-        events[0].conflict_count as usize,
-        transfer.targets[0].result.conflicts.len(),
-        "progress 的 conflict_count 必须等于该 target 的未解决冲突数"
+        persisted[0], 1,
+        "progress 回调发生时，该作品的持久冲突状态必须已经落盘可读"
     );
     assert_eq!(
         persisted[0], events[0].conflict_count as usize,
-        "progress 回调发生时，该作品的持久冲突状态必须已经落盘可读"
+        "progress 的 conflict_count 必须等于已落盘的未解决冲突数"
     );
+    drop(events);
+    assert_eq!(
+        result.overall_status, "partial_conflict",
+        "整轮聚合状态必须保留该 target 的未解决冲突"
+    );
+}
+
+/// 两个作品（p1/p2）在同一轮同步里都产生 `BothChanged` 冲突的完整 fixture。
+///
+/// live：本地已改正文 + manifest；remote：同路径远端也改了 + catalog record。
+/// `prepare_staging_runs` 已按生产 Phase 2 建好 staging。
+struct TwoConflictFixture {
+    tmp: TempDir,
+    provider: MemoryProvider,
+    plan: FullSyncPlan,
+    staging_runs: Vec<writer_core::sync::staging::StagingRun>,
+    /// 每个 target 的 staging run 根目录（断言 target commit 后已清理）。
+    staging_run_roots: Vec<std::path::PathBuf>,
+    /// target1（p1）的 live 根目录。
+    p1_root: std::path::PathBuf,
+}
+
+fn two_conflicting_projects_fixture() -> TwoConflictFixture {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider = MemoryProvider::new();
+    let tmp = TempDir::new().unwrap();
+    let app_data_root = tmp.path().to_path_buf();
+    let projects_root = app_data_root.join("projects");
+    std::fs::create_dir_all(&projects_root).unwrap();
+
+    let p1_root = build_live_project(
+        &projects_root,
+        "p1",
+        b"local chapter content p1",
+        T,
+        DEVICE_LOCAL,
+    );
+    let p2_root = build_live_project(
+        &projects_root,
+        "p2",
+        b"local chapter content p2",
+        T,
+        DEVICE_LOCAL,
+    );
+    write_remote_generation_for(
+        &provider,
+        "p1",
+        GEN_EXISTING,
+        b"remote chapter content p1",
+        T,
+        DEVICE_REMOTE,
+    );
+    write_remote_generation_for(
+        &provider,
+        "p2",
+        GEN_EXISTING,
+        b"remote chapter content p2",
+        T,
+        DEVICE_REMOTE,
+    );
+    let remote_catalog_snapshot = write_remote_catalog_for_projects(
+        &provider,
+        &[
+            ("p1", GEN_EXISTING, T, DEVICE_REMOTE),
+            ("p2", GEN_EXISTING, T, DEVICE_REMOTE),
+        ],
+    );
+
+    let mut plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: true,
+        targets: vec![
+            planned_live_project("p1", p1_root.clone(), T, DEVICE_LOCAL),
+            planned_live_project("p2", p2_root, T, DEVICE_LOCAL),
+        ],
+        app_data_root,
+        remote_catalog_snapshot,
+    };
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(staging_runs.len(), 2, "两个 target 各有一个 staging run");
+    let staging_run_roots = staging_runs
+        .iter()
+        .map(|run| run.run_root().to_path_buf())
+        .collect();
+
+    TwoConflictFixture {
+        tmp,
+        provider,
+        plan,
+        staging_runs,
+        staging_run_roots,
+        p1_root,
+    }
+}
+
+/// Issue #762 评论 5828791004 第 1 点：同步过程中解决的冲突不能被整轮收口写回。
+///
+/// 真实并发顺序（走生产编排 `perform_full_sync_with_provider`）：
+/// `target1 Transfer → target1 Commit（冲突写进 live）→ progress`
+/// `→ 用户在回调里 resolve_conflict_keep_local("p1")`
+/// `→ target2 Transfer + Commit → 整轮聚合收口`。
+///
+/// 修复前：Transfer 提前写 live，用户 resolve 后整轮结束的 Commit 又把 staging 里
+/// 旧的 `state.local.json / conflicts.json` 覆盖回 live，冲突"复活"，
+/// 连 keep_local 调整过的 known_files 基线也被覆盖。修复后：每个 target 的 Commit
+/// 在它自己的 progress 之前完成，之后不再碰它的 staging。
+#[test]
+fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
+    const CONFLICT_PATH: &str = "volumes/v1/chapters/chapter.md";
+
+    let fixture = two_conflicting_projects_fixture();
+    let app_data_root = fixture.tmp.path().to_path_buf();
+    let projects_root = app_data_root.join("projects");
+    let p1_root = fixture.p1_root.clone();
+    let api = Arc::new(WriterCoreApi::new(&app_data_root, &projects_root));
+
+    // progress 回调 = 平台主线程。这里的顺序与平台一致：
+    // 收到 progress → 刷新冲突列表 → 用户在同步运行期间立刻处理冲突。
+    // resolve 走 API 写锁（`resolve_conflict_keep_local`），因此 progress 必须在
+    // 该 target 的 Commit 释放写锁之后发出，否则这里会自锁。
+    let observed_at_progress = Arc::new(Mutex::new(Vec::<(String, usize)>::new()));
+    let observed = observed_at_progress.clone();
+    let api_for_callback = Arc::clone(&api);
+    let progress: SyncProgressCallback = Arc::new(move |p: SyncTargetProgress| {
+        let Some(project_id) = p.project_id.clone() else {
+            return;
+        };
+        let conflicts = api_for_callback.list_sync_conflicts(&project_id).unwrap();
+        observed
+            .lock()
+            .unwrap()
+            .push((project_id.clone(), conflicts.len()));
+        if project_id == "p1" {
+            assert!(
+                api_for_callback
+                    .resolve_conflict_keep_local("p1", CONFLICT_PATH)
+                    .unwrap(),
+                "progress 回调时冲突必须已经可处理"
+            );
+        }
+    });
+
+    let result = api
+        .perform_full_sync_with_provider(
+            &fixture.provider,
+            &fixture.plan,
+            fixture.staging_runs,
+            None,
+            Some(&progress),
+        )
+        .unwrap();
+
+    // 1) 两个 target 的 progress 发出时，各自的冲突都已经落盘可读。
+    let observed_rows = observed_at_progress
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        observed_rows,
+        vec![("p1".to_string(), 1), ("p2".to_string(), 1)],
+        "每个 target 的 progress 必须在它的 Commit 写进 live 之后才发"
+    );
+
+    // 2) 整轮结束（target2 跑完 + 聚合收口）后，target1 仍是用户 keep_local 后的状态。
+    assert!(
+        api.list_sync_conflicts("p1").unwrap().is_empty(),
+        "同步运行期间已解决的冲突不能被整轮收口重新写回"
+    );
+    let p1_state = SyncService::load_sync_state(&p1_root).unwrap();
+    assert!(
+        p1_state.conflicted_files.is_empty(),
+        "conflicted_files 不能复活为 target1 的旧路径"
+    );
+    assert_eq!(
+        p1_state.known_files.get(CONFLICT_PATH).map(String::as_str),
+        Some(format!("{:x}", md5::compute(b"remote chapter content p1")).as_str()),
+        "keep_local 调整的 known_files 基线不能被旧 staging state 覆盖"
+    );
+
+    // 3) 对照：同一轮里 target2 的冲突仍然在（证明整轮真的跑到了后面，
+    //    且 target2 的结果没有被 target1 的 resolve 影响）。
+    assert_eq!(
+        api.list_sync_conflicts("p2").unwrap().len(),
+        1,
+        "target2 自己的冲突必须仍然存在"
+    );
+    assert_eq!(
+        result.overall_status, "partial_conflict",
+        "整轮聚合状态反映仍存在的 target2 冲突"
+    );
+
+    // 4) 结构保证：每个 target commit 后 staging run 已立即清理，
+    //    整轮收口没有任何可以"再提交一次"的 staging 残留。
+    for run_root in &fixture.staging_run_roots {
+        assert!(
+            !run_root.exists(),
+            "target commit 后 staging run 必须立即清理，整轮结束不能再提交它: {}",
+            run_root.display()
+        );
+    }
 }

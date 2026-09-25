@@ -2673,8 +2673,8 @@ mod tests {
     }
 
     /// End-to-end test: BothChanged conflict → resolve_conflict_take_remote →
-    /// next sync downloads remote content to local, and subsequent sync does
-    /// NOT re-upload the old local version.
+    /// 远端版本在 resolve 当刻落到 live 正文与同步基线；之后的同步既不上传旧本地
+    /// 版本，也不再重复下载同一路径。
     #[test]
     #[cfg(not(windows))]
     #[cfg(feature = "github-api")]
@@ -2754,16 +2754,36 @@ mod tests {
         let _ = server_thread.join();
 
         // === Step 2: Resolve by taking remote ===
+        //
+        // Issue #757（1a3c75345）起 BothChanged + snapshot 的 take_remote **立即**把远端
+        // snapshot 应用到 live 正文，不再排队 pending_take_remote——断言必须跟着改成
+        // "resolve 当刻就生效"，不能继续断言旧的"下次同步才下载"。
         SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
 
         let state_after_resolve = SyncService::load_sync_state(dir.path()).unwrap();
         assert!(!state_after_resolve.conflicted_files.contains(chapter_rel));
-        assert!(state_after_resolve
-            .pending_take_remote
-            .contains(chapter_rel));
+        assert!(
+            !state_after_resolve
+                .pending_take_remote
+                .contains(chapter_rel),
+            "BothChanged + snapshot 必须立即应用，不再排队 pending_take_remote"
+        );
         assert!(state_after_resolve.conflicts.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&chapter_abs).unwrap(),
+            remote_content,
+            "take_remote 当刻 live 正文就必须是远端版本"
+        );
+        assert_eq!(
+            state_after_resolve
+                .known_files
+                .get(chapter_rel)
+                .map(String::as_str),
+            Some(remote_hash.as_str()),
+            "take_remote 后基线必须是远端 hash，下一轮才不会把旧本地版本传上去"
+        );
 
-        // === Step 3: Next sync should download remote content to local ===
+        // === Step 3: Next sync must NOT re-upload the old local version ===
         let mut state_before_3 = SyncService::load_sync_state(dir.path()).unwrap();
         state_before_3.last_sync_time = None;
         SyncService::save_sync_state(dir.path(), &state_before_3).unwrap();
@@ -2794,28 +2814,29 @@ mod tests {
 
         let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
 
-        // After take_remote resolution, sync must download the remote content
-        assert!(
-            res3.downloaded_files.contains(&chapter_rel.to_string()),
-            "After take_remote resolution, sync must download the remote version"
-        );
+        // resolve 当刻已经应用远端版本并更新基线，下一轮既不能上传旧本地版本，
+        // 也不应再下载一个已经与基线一致的路径。
         assert!(
             !res3.uploaded_files.contains(&chapter_rel.to_string()),
             "After take_remote resolution, sync must NOT upload the old local version"
         );
+        assert!(
+            !res3.downloaded_files.contains(&chapter_rel.to_string()),
+            "远端版本已在 resolve 当刻落到 live 与基线，下一轮不应重复下载"
+        );
 
-        // Local file must now be the remote version
+        // Local file must still be the remote version
         let local_after_3 = std::fs::read_to_string(&chapter_abs).unwrap();
         assert_eq!(
             local_after_3, remote_content,
             "Local file must be the remote version after take_remote + sync"
         );
 
-        // pending_take_remote must be cleared
+        // pending_take_remote 必须保持为空
         let state_after_3 = SyncService::load_sync_state(dir.path()).unwrap();
         assert!(
             !state_after_3.pending_take_remote.contains(chapter_rel),
-            "pending_take_remote must be cleared after sync"
+            "pending_take_remote must stay empty after sync"
         );
         assert!(
             !state_after_3.conflicted_files.contains(chapter_rel),

@@ -279,7 +279,7 @@ impl WriterCoreApi {
         .map_err(Into::into)
     }
 
-    /// 全量同步 — 四段式：Prepare（短写锁）→ Seed staging（不持锁）→ Transfer（不持锁）→ Commit（短写锁）。
+    /// 全量同步 — Prepare（短写锁）→ Seed staging（不持锁）→ Per-target Transfer+Commit → 聚合收口。
     ///
     /// 网络阶段完全不持 Core 锁，
     /// 避免全量同步期间阻塞所有读操作。
@@ -302,23 +302,8 @@ impl WriterCoreApi {
 
         // 与 sync disabled 相同的 no-op FullSyncResult。
         // Issue #729：各阶段边界检查取消令牌后复用此闭包返回，避免重复构造。
-        let make_noop_result = || -> ApiResult<FullSyncResultDto> {
-            let noop = crate::sync::types::FullSyncResult {
-                overall_status: crate::sync::SyncStatus::Success,
-                targets: Vec::new(),
-                total_uploaded: 0,
-                total_downloaded: 0,
-                total_local_deletes: 0,
-                total_remote_deletes: 0,
-                total_overwritten: 0,
-                total_ignored: 0,
-                total_conflicts: 0,
-                error: None,
-                error_category: None,
-                message_key: None,
-            };
-            Ok(noop.into())
-        };
+        let make_noop_result =
+            || -> ApiResult<FullSyncResultDto> { Ok(Self::full_sync_noop_result()) };
 
         // sync disabled → 直接返回 no-op，
         // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
@@ -529,43 +514,136 @@ impl WriterCoreApi {
             }
         }
 
-        // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
-        let transfer_result = crate::sync::full_sync::run_transfer(
+        // Phase 3+4+5：逐 target Transfer → Commit → progress，整轮结束聚合收口。
+        self.perform_full_sync_with_provider(
             provider.as_ref(),
             &plan,
-            cancellation_token.as_ref(),
+            staging_runs,
+            cancellation_token,
             progress,
-        );
+        )
+    }
 
-        // Issue #729：run_transfer 返回后检查取消令牌。
-        // 取消则跳过 commit_full_sync（不调 commit、不记 history），直接返回 no-op。
-        // 绝不让已取消的同步进入 Commit 阶段写终态。
-        if let Some(ref token) = cancellation_token {
-            if token.is_cancelled() {
+    /// 全量同步编排尾部 — 逐 target `Transfer → Commit → progress`，整轮结束聚合收口。
+    ///
+    /// Issue #762 评论 5828791004：不能同时存在"Transfer 提前写 live"和
+    /// "整轮结束后统一 Commit staging"两套权威。每个 target 的顺序固定为
+    /// `Transfer（不持锁）→ Commit（短写锁，写 live 终态）→ progress`：
+    /// progress 发出时该 target 的 `state.local.json / conflicts.json` 已经是 live
+    /// 最终状态，用户在同步进行中立即 resolve，后面其他 target 继续同步也不会再碰
+    /// 这个 target 的 staging（commit 后立即 cleanup）。
+    ///
+    /// 整轮结束只做全局收口：generation GC、aggregate、`FullSyncState`、
+    /// search index、lifecycle deletes、workspace history；
+    /// **不再第二次提交任何已完成 target 的 staging**。
+    ///
+    /// 生产路径由 [`Self::perform_full_sync`] 在 Prepare / Seed 之后调用；
+    /// 集成测试用 `MemoryProvider` + 手工 `FullSyncPlan` + `prepare_staging_runs`
+    /// 驱动同一条编排。
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+    pub fn perform_full_sync_with_provider(
+        &self,
+        provider: &dyn crate::sync::provider::SyncProvider,
+        plan: &crate::sync::full_sync::FullSyncPlan,
+        staging_runs: Vec<crate::sync::staging::StagingRun>,
+        cancellation_token: Option<SyncCancellationToken>,
+        progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+    ) -> ApiResult<FullSyncResultDto> {
+        let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
+        let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
+
+        for target_index in 0..plan.targets.len() {
+            // Issue #729：每个 target 前检查取消令牌。
+            if Self::sync_cancelled(cancellation_token.as_ref()) {
                 log::info!(
-                    "[sync] perform_full_sync: cancellation requested after run_transfer — skipping commit, returning no-op"
+                    "[sync] perform_full_sync: cancellation requested — breaking after {} targets",
+                    all_targets.len()
                 );
-                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
-                // Syncing，取消前持久化取消终态。
-                self.core_write().persist_full_sync_cancelled();
-                return make_noop_result();
+                break;
             }
+
+            // 1. Transfer（不持锁）。
+            let Some((target_sync_result, _resolution, _action)) =
+                crate::sync::full_sync::run_single_target_transfer(
+                    provider,
+                    plan,
+                    target_index,
+                    &mut catalog_snapshot,
+                    cancellation_token.as_ref(),
+                )
+            else {
+                // target 未执行（取消或索引越界），跳过。
+                continue;
+            };
+
+            // 2. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
+            let (target_with_conflicts, target_committed_paths) =
+                match staging_runs.get(target_index) {
+                    Some(run) => self.commit_target_after_transfer(run, &target_sync_result),
+                    None => {
+                        // 没有 staging run（不应发生），直接使用 transfer result。
+                        (target_sync_result.clone(), Vec::new())
+                    }
+                };
+
+            // 3. cleanup staging run — 之后整轮收口不再碰这个 target 的 staging。
+            if let Some(run) = staging_runs.get(target_index) {
+                run.cleanup();
+            }
+
+            // 4. progress — 此时该 target 的 state/conflicts 已经成为 live 最终状态。
+            if let Some(cb) = progress {
+                let progress_status =
+                    crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
+                let progress_conflict_count =
+                    u32::try_from(target_with_conflicts.result.conflicts.len()).unwrap_or(u32::MAX);
+                let progress_target_kind =
+                    plan.targets[target_index].target_kind.as_target_kind_str();
+                cb(crate::sync::full_sync::SyncTargetProgress {
+                    project_id: plan.targets[target_index].project_id.clone(),
+                    target_kind: progress_target_kind.to_string(),
+                    status: progress_status,
+                    conflict_count: progress_conflict_count,
+                });
+            }
+
+            all_targets.push(target_with_conflicts);
+            all_committed_paths.extend(target_committed_paths);
         }
 
-        // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
+        // generation GC — 清理未引用 generation（整轮结束后统一执行）。
+        let generation_gc_result = Self::run_full_sync_generation_gc(
+            provider,
+            plan,
+            &catalog_snapshot,
+            cancellation_token.as_ref(),
+        );
+
+        // Issue #729：整轮结束后检查取消令牌。
+        if Self::sync_cancelled(cancellation_token.as_ref()) {
+            log::info!(
+                "[sync] perform_full_sync: cancellation requested after per-target loop — persisting cancelled state"
+            );
+            self.core_write().persist_full_sync_cancelled();
+            return Ok(Self::full_sync_noop_result());
+        }
+
+        // Phase 5: 聚合 + lifecycle 处理 + FullSyncState 持久化（短写锁）。
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
-            core.commit_full_sync(transfer_result, staging_runs)
+            core.finalize_full_sync(all_targets, generation_gc_result)
         };
+
+        // 合并 per-target committed_paths 与 finalize 阶段返回的 committed_paths。
+        let mut all_paths = all_committed_paths;
+        all_paths.extend(committed_paths);
 
         // 用 commit 阶段返回的 committed_paths
         // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
         // 空 committed_paths 不触发全量扫描（record_workspace_paths_history
         // 空 paths 直接返回空结果）。
-        // committed_paths 不再包含 RemoteLifecycle 删除
-        // 的 paths（apply_local_lifecycle_deletes 已改为走 receipt.change_set 单一路径），
-        // 避免同一删除记两次 history。
-        self.record_workspace_paths_history(&committed_paths, "full_sync_commit");
+        self.record_workspace_paths_history(&all_paths, "full_sync_commit");
 
         // 处理 RemoteLifecycle 删除事务的 receipts。
         // 恢复单一 durable 路线 —
@@ -577,6 +655,130 @@ impl WriterCoreApi {
         }
 
         Ok(result.into())
+    }
+
+    /// 取消令牌是否已请求取消。`None`（未提供令牌）永远不取消。
+    fn sync_cancelled(token: Option<&SyncCancellationToken>) -> bool {
+        token.is_some_and(SyncCancellationToken::is_cancelled)
+    }
+
+    /// 单个 target 的 Commit（短写锁）— 把 staging 的三方结果写进 live 终态，
+    /// 并把该 target 的未解决冲突写进 live 的 `state.local.json / conflicts.json`。
+    ///
+    /// progress 必须在**本函数返回之后**才发：返回时该 target 的冲突状态已经是 live
+    /// 最终值，用户收到 progress 立刻 resolve 不会被后续 Commit 覆盖。
+    ///
+    /// 返回 `(冲突已合并进结果的 target 结果, workspace-relative committed paths)`。
+    fn commit_target_after_transfer(
+        &self,
+        run: &crate::sync::staging::StagingRun,
+        target_sync_result: &crate::sync::types::TargetSyncResult,
+    ) -> (
+        crate::sync::types::TargetSyncResult,
+        Vec<std::path::PathBuf>,
+    ) {
+        let _core = self.core_write();
+        let (commit_result, conflicts, committed_paths) =
+            crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
+        let mut target_with_conflicts = target_sync_result.clone();
+
+        if !conflicts.is_empty() {
+            let existing_conflicts = target_sync_result.result.conflicts.clone();
+            match crate::sync::conflict::record_staging_conflicts(
+                run.target_live_root(),
+                &target_sync_result.remote_prefix,
+                &conflicts,
+                &existing_conflicts,
+            ) {
+                Ok(merged) => {
+                    target_with_conflicts.result.conflicts = merged;
+                    target_with_conflicts.result.status = crate::sync::SyncStatus::Conflict;
+                }
+                Err(e) => {
+                    target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                        format!("staging_conflict_persist_failed: {}", e),
+                    );
+                    target_with_conflicts.result.error =
+                        Some(format!("failed to persist staging conflicts: {}", e));
+                }
+            }
+        }
+
+        // commit 失败注入错误状态。
+        if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = &commit_result {
+            target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                format!("staging_commit_failed: {}", msg),
+            );
+            target_with_conflicts.result.error = Some(format!("staging commit failed: {}", msg));
+        }
+
+        (target_with_conflicts, committed_paths)
+    }
+
+    /// 整轮结束后的 generation GC — 清理未引用 generation。
+    ///
+    /// 成功返回 `None`；任一 target GC 失败返回 `Some(Err(msg))`，由调用方聚合进
+    /// `FullSyncResult`。取消令牌已取消时跳过剩余 target 的 GC。
+    fn run_full_sync_generation_gc(
+        provider: &dyn crate::sync::provider::SyncProvider,
+        plan: &crate::sync::full_sync::FullSyncPlan,
+        catalog_snapshot: &crate::sync::types::RemoteTargetCatalogSnapshot,
+        cancellation_token: Option<&SyncCancellationToken>,
+    ) -> Option<Result<(), String>> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut generation_gc_result: Option<Result<(), String>> = None;
+        for planned in &plan.targets {
+            if Self::sync_cancelled(cancellation_token) {
+                break;
+            }
+            if !planned.target.remote_prefix.starts_with("projects/") {
+                continue;
+            }
+            let active_generation = crate::sync::target_lifecycle::find_record(
+                &catalog_snapshot.catalog,
+                &planned.target.remote_prefix,
+            )
+            .and_then(|r| r.active_generation.as_deref());
+            match crate::sync::generation_gc::run_generation_gc(
+                provider,
+                &planned.target.remote_prefix,
+                active_generation,
+                now_ms,
+                crate::sync::generation_gc::GENERATION_RETENTION_MS,
+                cancellation_token,
+            ) {
+                Ok(()) => {}
+                Err(e) => {
+                    log::warn!(
+                        "[sync] perform_full_sync: generation GC failed for {}: {e}",
+                        planned.target.remote_prefix
+                    );
+                    generation_gc_result = Some(Err(e.to_string()));
+                }
+            }
+        }
+        generation_gc_result
+    }
+
+    /// 与 sync disabled 相同的 no-op `FullSyncResult`。
+    ///
+    /// Issue #729：Prepare / Seed / 编排各阶段边界检查取消令牌后复用，避免重复构造。
+    fn full_sync_noop_result() -> FullSyncResultDto {
+        crate::sync::types::FullSyncResult {
+            overall_status: crate::sync::SyncStatus::Success,
+            targets: Vec::new(),
+            total_uploaded: 0,
+            total_downloaded: 0,
+            total_local_deletes: 0,
+            total_remote_deletes: 0,
+            total_overwritten: 0,
+            total_ignored: 0,
+            total_conflicts: 0,
+            error: None,
+            error_category: None,
+            message_key: None,
+        }
+        .into()
     }
 
     ///   处理单个 lifecycle receipt — history ack。

@@ -13,47 +13,6 @@ use super::{FullSyncPlan, PlannedTarget};
 
 // ── Lifecycle CAS helper ──
 
-/// Issue #762 评论 5826175490 第 5 点：target 完成 merge、确认 unresolved_conflicts 后，
-/// 立即把该 target 的未解决冲突写入 project 的持久 conflict state。
-///
-/// Commit 阶段（`facade::sync_ops::commit`）本来也会写一次，那次是权威终态；但 Commit 要等
-/// 所有 target 跑完，一个 30 秒甚至更久的全量同步会把"这个作品正在等用户解决冲突"藏到最后。
-/// 冲突是持久状态，和"当前有没有在跑一轮同步"是两回事——Transfer 阶段每个 target 一结束就
-/// 先落盘一次，平台端收到该 target 的 progress 后立刻就能让用户处理。
-///
-/// 复用 [`crate::sync::conflict::record_staging_conflicts`] 这条既有写入路径
-/// （按 `local_path` upsert，state + conflicts.json 一次事务提交），不新增第二套落盘逻辑。
-/// 这里传空 staging 冲突、只带 Transfer 阶段已确认的 `result.conflicts`，
-/// 与 Commit 阶段传入的 `existing_conflicts` 是同一批数据，重复写是幂等的。
-///
-/// 写失败不改 target 终态，只记 warn：Commit 阶段会再写一次并按既有语义把失败传播成
-/// `RecoverableError`，Transfer 阶段不引入新的错误路径。
-pub(super) fn persist_unresolved_conflicts_early(planned: &PlannedTarget, result: &SyncResult) {
-    if result.conflicts.is_empty() {
-        return;
-    }
-    // App target 没有作品目录；只有作品 target 需要写 project 的持久冲突状态。
-    if planned.project_id.is_none() {
-        return;
-    }
-    match crate::sync::conflict::record_staging_conflicts(
-        &planned.target_live_root,
-        &planned.target.remote_prefix,
-        &[],
-        &result.conflicts,
-    ) {
-        Ok(persisted) => log::info!(
-            "[sync] persist_unresolved_conflicts_early: {} -> {} unresolved conflict(s)",
-            planned.target.remote_prefix,
-            persisted.len()
-        ),
-        Err(e) => log::warn!(
-            "[sync] persist_unresolved_conflicts_early failed for {}: {e}",
-            planned.target.remote_prefix
-        ),
-    }
-}
-
 pub(super) fn resolve_current_target_lifecycle(
     provider: &dyn SyncProvider,
     target_id: &str,

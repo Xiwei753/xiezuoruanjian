@@ -164,6 +164,9 @@ pub struct SyncBackend {
         qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
     // Issue #762 评论 5826175490：全局冲突数缓存，u32 Default 为 0，符合 #[derive(Default)]。
     current_sync_conflict_count: u32,
+    // Issue #762 评论 5828791004：冲突列表 fingerprint 缓存。
+    // count 不变但列表内容变了（如 A 冲突解决、B 新产生冲突）时也能检测到变化并通知 UI。
+    current_sync_conflict_fingerprint: String,
     app: AppRef,
 }
 
@@ -205,9 +208,9 @@ impl SyncBackend {
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
             self.sync_content_applied();
         }
-        // Issue #762 评论 5826175490：同步结束后刷新全局冲突数。
+        // Issue #762 评论 5826175490 / 5828791004：同步结束后刷新全局冲突状态。
         // 冲突是持久状态，无论同步成功还是冲突都需刷新。
-        self.refresh_sync_conflict_count();
+        self.refresh_sync_conflict_state();
     }
 
     fn with_app<R>(
@@ -330,6 +333,9 @@ impl SyncBackend {
             self.sync_config_changed();
             self.sync_status_changed();
         }
+        // Issue #762 评论 5828791004：工作区打开 / load sync config 后也刷新一次冲突状态，
+        // 不能让应用刚启动时 sync_conflict_count 永远先是 0，直到用户手动同步或 resolve 才更新。
+        self.refresh_sync_conflict_state();
     }
     fn save_sync_config(&mut self) -> bool {
         let result = self.with_app_mut(|app| app.save_sync_config());
@@ -358,9 +364,9 @@ impl SyncBackend {
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync(&mut self) -> QString {
-        // Issue #762 评论 5826175490：同步开始前刷新全局冲突数，
+        // Issue #762 评论 5826175490 / 5828791004：同步开始前刷新全局冲突状态，
         // 让 QML 在同步运行期间就显示当前持久冲突状态。
-        self.refresh_sync_conflict_count();
+        self.refresh_sync_conflict_state();
         let qptr = QPointer::from(&*self);
         let result = self.with_app_mut(|app| app.perform_sync(Some(qptr)));
         if result.is_ok() {
@@ -523,8 +529,8 @@ impl SyncBackend {
         if envelope.success {
             self.sync_status_changed();
             self.sync_action_completed();
-            // Issue #762 评论 5826175490：resolve 成功后冲突数变化，刷新全局冲突数。
-            self.refresh_sync_conflict_count();
+            // Issue #762 评论 5826175490 / 5828791004：resolve 成功后冲突状态变化，刷新全局冲突状态。
+            self.refresh_sync_conflict_state();
             // Issue #757 评论 5819894306 第 2 点：take_remote 的 BothChanged 原子替换
             // 正文、RemoteDeleted 移走正文，当前编辑器仍持有旧正文，需触发
             // onSync_content_applied 走现有 refreshStateImmediate + reconcileActiveChapter
@@ -549,23 +555,40 @@ impl SyncBackend {
         self.resolve_conflict_dispatch(project_id, path, "mark_merged")
     }
 
-    // ── Issue #762 评论 5826175490：全局冲突数刷新 ──
+    // ── Issue #762 评论 5826175490 / 5828791004：全局冲突状态刷新 ──
 
-    /// 刷新全局冲突数。调 Core API list_all_sync_conflicts，更新 count，变化时发 signal。
+    /// 刷新全局冲突状态。一次调用 `list_all_sync_conflicts()`，同时算 count 和 fingerprint。
+    ///
+    /// - count 变化 → 更新 `current_sync_conflict_count`
+    /// - fingerprint 变化 → 发 `sync_conflicts_changed()` signal（哪怕 count 一样）
+    /// - count 和 fingerprint 都没变 → 不发 signal
+    ///
+    /// 查询失败（core 未就绪 / borrow conflict）时不更新缓存、不发 signal：
+    /// 保留上一份已知状态，避免把"暂时读不到"误报成"冲突已清空"。
     ///
     /// 冲突是持久状态，与同步运行状态无关。同步开始前/结束后/resolve 后/target progress 时都调。
-    fn refresh_sync_conflict_count(&mut self) {
-        let new_count = self
+    fn refresh_sync_conflict_state(&mut self) {
+        let Some(conflicts) = self
             .with_app(|app| {
                 app.core_api()
                     .and_then(|api| api.list_all_sync_conflicts().ok())
             })
             .ok()
             .flatten()
-            .map(|all| u32::try_from(all.len()).unwrap_or(u32::MAX))
-            .unwrap_or(0);
-        if new_count != self.current_sync_conflict_count {
+        else {
+            return;
+        };
+        let new_count = u32::try_from(conflicts.len()).unwrap_or(u32::MAX);
+        let new_fingerprint = sync_conflict_fingerprint(&conflicts);
+        let count_changed = new_count != self.current_sync_conflict_count;
+        let fingerprint_changed = new_fingerprint != self.current_sync_conflict_fingerprint;
+        if count_changed {
             self.current_sync_conflict_count = new_count;
+        }
+        if fingerprint_changed {
+            self.current_sync_conflict_fingerprint = new_fingerprint;
+        }
+        if count_changed || fingerprint_changed {
             self.sync_conflicts_changed();
         }
     }
@@ -575,9 +598,9 @@ impl SyncBackend {
     }
 
     /// progress 回调入口 — 后台线程 target 完成后通过 queued_callback 回主线程调此方法。
-    /// 只刷新冲突数，不传 progress 数据到 QML（QML 端收到 sync_conflicts_changed 后自己刷新）。
+    /// 只刷新冲突状态，不传 progress 数据到 QML（QML 端收到 sync_conflicts_changed 后自己刷新）。
     pub(crate) fn handle_sync_target_progress(&mut self) {
-        self.refresh_sync_conflict_count();
+        self.refresh_sync_conflict_state();
     }
 }
 
@@ -1170,3 +1193,85 @@ impl AppBackend {
 
 // Sync execution methods (perform_sync, auto_sync, handle_sync_outcome, etc.)
 // are defined in sync_operations.rs (submodule of sync_backend).
+
+/// 冲突列表 fingerprint —— 检测"列表内容变了但总数没变"。
+///
+/// Issue #762 评论 5828791004 第 2 点：只比较 `sync_conflict_count` 不够。
+/// 例如作品 A 的冲突刚解决、同一轮同步作品 B 新产生一个冲突，总数一直是 1，
+/// count 不变但 WritingWorkspace / SyncPage 必须刷新。
+///
+/// 收集每个冲突的 `project_id + local_path + kind + created_at`，排序后拼接：
+/// 内容集合一致（含顺序不同）时 fingerprint 相同，集合一变就不同。
+fn sync_conflict_fingerprint(
+    conflicts: &[writer_core::api::types::ProjectSyncConflictDto],
+) -> String {
+    let mut entries: Vec<String> = conflicts
+        .iter()
+        .map(|c| {
+            format!(
+                "{}|{}|{}|{}",
+                c.project_id, c.conflict.local_path, c.conflict.kind, c.conflict.created_at
+            )
+        })
+        .collect();
+    entries.sort();
+    entries.join(";")
+}
+
+#[cfg(test)]
+mod sync_conflict_fingerprint_tests {
+    use super::sync_conflict_fingerprint;
+    use writer_core::api::types::{ProjectSyncConflictDto, SyncConflictDto};
+
+    fn conflict(project_id: &str, local_path: &str, created_at: i64) -> ProjectSyncConflictDto {
+        ProjectSyncConflictDto {
+            project_id: project_id.to_string(),
+            project_title: format!("{project_id}-title"),
+            conflict: SyncConflictDto {
+                local_path: local_path.to_string(),
+                remote_path: local_path.to_string(),
+                local_hash: "local".to_string(),
+                remote_hash: "remote".to_string(),
+                base_hash: "base".to_string(),
+                created_at,
+                description: "both changed".to_string(),
+                kind: "both_changed".to_string(),
+                remote_snapshot_path: None,
+            },
+        }
+    }
+
+    /// A 的冲突解决、B 新产生冲突：总数都是 1，fingerprint 必须变化。
+    #[test]
+    fn fingerprint_changes_when_list_changes_with_same_count() {
+        let before = vec![conflict("A", "volumes/v1/chapters/a.md", 1_000)];
+        let after = vec![conflict("B", "volumes/v1/chapters/b.md", 2_000)];
+        assert_eq!(before.len(), after.len());
+        assert_ne!(
+            sync_conflict_fingerprint(&before),
+            sync_conflict_fingerprint(&after),
+            "总数相同但冲突列表换了，fingerprint 必须变化"
+        );
+    }
+
+    /// 同一集合、顺序不同：fingerprint 必须相同（先排序再拼接）。
+    #[test]
+    fn fingerprint_is_stable_across_ordering() {
+        let a = conflict("A", "volumes/v1/chapters/a.md", 1_000);
+        let b = conflict("B", "volumes/v1/chapters/b.md", 2_000);
+        assert_eq!(
+            sync_conflict_fingerprint(&[a.clone(), b.clone()]),
+            sync_conflict_fingerprint(&[b, a])
+        );
+    }
+
+    /// 冲突被解决（列表变空）必须与"初始为空"区分：空列表 fingerprint 为空串。
+    #[test]
+    fn fingerprint_distinguishes_empty_from_non_empty() {
+        assert_eq!(sync_conflict_fingerprint(&[]), "");
+        assert_ne!(
+            sync_conflict_fingerprint(&[conflict("A", "volumes/v1/chapters/a.md", 1_000)]),
+            ""
+        );
+    }
+}

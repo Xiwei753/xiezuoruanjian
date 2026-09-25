@@ -1,7 +1,83 @@
 use crate::sync::full_sync_utils::now_epoch_seconds;
 
 impl crate::facade::WriterCore {
+    /// 聚合收口 — 新编排入口（Issue #762 评论 5828791004）。
+    ///
+    /// 每个 target 的 Transfer + Commit 已在 `perform_full_sync` 中逐 target 完成，
+    /// 此函数只负责整轮结束后的聚合收口：
+    /// - `apply_local_lifecycle_deletes`：处理 DeleteProject action
+    /// - `aggregate_full_sync_result`：聚合总体状态
+    /// - generation GC 失败传播
+    /// - `cleanup_completed_deleted_targets`：清理 pending deleted
+    /// - `FullSyncState` 持久化
+    /// - `rebuild_search_index`
+    ///
+    /// 返回 `(FullSyncResult, committed_paths, lifecycle_receipts)`。
+    /// `committed_paths` 只包含 lifecycle 删除产生的 paths（staging commit 的 paths
+    /// 已在 `perform_full_sync` 中逐 target 收集）。
+    pub fn finalize_full_sync(
+        &self,
+        mut targets: Vec<crate::sync::types::TargetSyncResult>,
+        generation_gc_result: Option<Result<(), String>>,
+    ) -> (
+        crate::sync::types::FullSyncResult,
+        Vec<std::path::PathBuf>,
+        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
+    ) {
+        // 处理 local_lifecycle_action（DeleteProject）。
+        let (lifecycle_committed_paths, lifecycle_receipts) =
+            self.apply_local_lifecycle_deletes(&mut targets);
+
+        let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
+
+        // generation GC 失败 → 聚合进 FullSyncResult。
+        if let Some(Err(gc_err)) = &generation_gc_result {
+            let gc_msg = format!("generation_gc failed: {gc_err}");
+            log::warn!("[sync] finalize_full_sync: {gc_msg}");
+            if matches!(
+                result.overall_status,
+                crate::sync::SyncStatus::Success
+                    | crate::sync::SyncStatus::NoChanges
+                    | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                result.overall_status =
+                    crate::sync::SyncStatus::RecoverableError("generation_gc_failed".to_string());
+                result.error = Some(gc_msg);
+            }
+        }
+
+        // deleted target 远端清理成功后，从 pending_deleted_targets.json 移除该条目。
+        self.cleanup_completed_deleted_targets(&result);
+
+        let previous_state = self.load_full_sync_state().unwrap_or(None);
+        let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
+            &result,
+            previous_state.as_ref(),
+            now_epoch_seconds(),
+        );
+        if let Err(e) = self.save_full_sync_state(&new_state) {
+            log::warn!("Failed to persist full sync state: {e}");
+        }
+
+        if matches!(
+            result.overall_status,
+            crate::sync::SyncStatus::Success | crate::sync::SyncStatus::LatestWinsApplied
+        ) {
+            if let Err(e) = self.rebuild_search_index(None) {
+                log::warn!("Failed to rebuild search index after full sync: {e}");
+            }
+        }
+
+        (result, lifecycle_committed_paths, lifecycle_receipts)
+    }
+
     /// 三段式全量同步 — Commit 阶段（短写锁内调用）。
+    ///
+    /// Issue #762 评论 5828791004 后**生产编排不再调用本方法**：`perform_full_sync`
+    /// 改成逐 target `Transfer → Commit → progress`（见
+    /// [`crate::api::WriterCoreApi::perform_full_sync_with_provider`]），整轮结束只做
+    /// 聚合收口（[`Self::finalize_full_sync`]），不会再统一提交一次 staging。
+    /// 本方法保留给 #644 的 staging commit 语义测试（`tests/issue_644_*.rs`）使用。
     ///
     /// 聚合 [`crate::sync::full_sync::FullSyncTransferResult`] → `FullSyncResult`，
     /// 原子写终态 `FullSyncState`，成功类重建搜索索引。

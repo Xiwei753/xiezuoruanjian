@@ -528,3 +528,263 @@ pub(crate) fn apply_staging_commits_for_targets(
         committed_paths,
     }
 }
+
+/// 单 target staging commit — 新编排入口。
+///
+/// 与 `apply_staging_commits_for_targets` 中对单个 target 的处理逻辑一致，
+/// 但有以下区别：
+/// - **不调用 `run.cleanup()`**：由调用方负责 cleanup，便于在 commit 后、cleanup 前
+///   插入 `record_staging_conflicts` 等操作。
+/// - **输入是单个 `&StagingRun` 和 `&TargetSyncResult`**，不是批量切片。
+/// - **输出是 `(TargetCommitResult, Vec<StagingConflict>, Vec<PathBuf>)`**：
+///   commit result, conflicts, committed_paths。
+///
+/// 复用现有 Full / ConflictMetadataOnly / ReplaceProject / Skip 规则。
+#[allow(
+    clippy::excessive_nesting,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity
+)]
+pub(crate) fn commit_single_target_staging(
+    run: &crate::sync::staging::StagingRun,
+    target: &crate::sync::types::TargetSyncResult,
+) -> (
+    TargetCommitResult,
+    Vec<crate::sync::staging::StagingConflict>,
+    Vec<PathBuf>,
+) {
+    let has_delete_action = matches!(
+        target.local_lifecycle_action,
+        crate::sync::types::LocalLifecycleCommitAction::DeleteProject { .. }
+    );
+    let has_replace_action = matches!(
+        target.local_lifecycle_action,
+        crate::sync::types::LocalLifecycleCommitAction::ReplaceProject { .. }
+    );
+    let mode = if has_delete_action {
+        TargetCommitMode::Skip
+    } else if has_replace_action {
+        TargetCommitMode::ReplaceProject
+    } else {
+        target_commit_mode(&target.result.status)
+    };
+
+    match mode {
+        TargetCommitMode::Skip => {
+            log::warn!("Staging commit: skipping target (run_id={})", run.run_id());
+            (TargetCommitResult::Skipped, Vec::new(), Vec::new())
+        }
+        TargetCommitMode::Full => {
+            let live_root = run.target_live_root();
+            let mut plan = match run.compute_commit_plan(live_root) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    let msg = format!("compute_commit_plan failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+
+            let mut tx = match apply_commit_plan_to_live(
+                live_root,
+                &plan.content_actions,
+                &plan.engine_state_actions,
+                false,
+            ) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+
+            match tx.finish() {
+                Ok(()) => {
+                    let mut committed_paths = Vec::new();
+                    collect_action_paths(
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &mut committed_paths,
+                    );
+                    let staging_root = run.staging_root();
+                    if let Err(e) =
+                        save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict)
+                    {
+                        let msg = format!("save_conflict_snapshots failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+                    }
+                    (TargetCommitResult::Ok, plan.conflict, committed_paths)
+                }
+                Err(e) => {
+                    let msg = format!("tx.finish() failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    (TargetCommitResult::Failed(msg), Vec::new(), Vec::new())
+                }
+            }
+        }
+        TargetCommitMode::ConflictMetadataOnly => {
+            let live_root = run.target_live_root();
+            let mut plan = match run.compute_commit_plan(live_root) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    let msg = format!("compute_commit_plan failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+            let transfer_conflict_paths: std::collections::HashSet<String> = target
+                .result
+                .conflicts
+                .iter()
+                .map(|c| c.local_path.clone())
+                .collect();
+            let safe_content_actions: Vec<_> = plan
+                .content_actions
+                .iter()
+                .filter(|action| {
+                    let rel = match action {
+                        crate::sync::staging::CommitAction::Apply { rel_path, .. } => {
+                            rel_path.to_string_lossy().to_string()
+                        }
+                        crate::sync::staging::CommitAction::Delete { rel_path } => {
+                            rel_path.to_string_lossy().to_string()
+                        }
+                    };
+                    !transfer_conflict_paths.contains(&rel)
+                })
+                .cloned()
+                .collect();
+            if let Err(e) = apply_commit_plan_to_live(
+                live_root,
+                &safe_content_actions,
+                &plan.engine_state_actions,
+                false,
+            )
+            .map(|_tx| ())
+            {
+                let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+            }
+            let mut committed_paths = Vec::new();
+            collect_action_paths(
+                target.target_kind.as_str(),
+                target.project_id.as_deref(),
+                &safe_content_actions,
+                &mut committed_paths,
+            );
+            let staging_root = run.staging_root();
+            if let Err(e) = save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict) {
+                let msg = format!("save_conflict_snapshots failed: {}", e);
+                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+            }
+            (TargetCommitResult::Ok, plan.conflict, committed_paths)
+        }
+        TargetCommitMode::ReplaceProject => {
+            let live_root = run.target_live_root();
+            let staging_root = run.staging_root();
+
+            let expected_lww = match &target.local_lifecycle_action {
+                crate::sync::types::LocalLifecycleCommitAction::ReplaceProject {
+                    expected_local_lww,
+                    ..
+                } => Some(crate::sync::full_sync::LiveTargetLww {
+                    lww_time_ms: expected_local_lww.lww_time_ms,
+                    device_id: expected_local_lww.device_id.clone(),
+                }),
+                _ => None,
+            };
+            let expected_lww = match expected_lww {
+                Some(lww) => lww,
+                None => {
+                    let msg = "ReplaceProject commit mode but no ReplaceProject action with guard"
+                        .to_string();
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+            match crate::sync::staging::replace::check_replace_project_guard(
+                live_root,
+                &expected_lww,
+            ) {
+                crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {}
+                crate::sync::staging::replace::ReplaceProjectGuardResult::Err(e) => {
+                    let msg = match e {
+                        crate::sync::staging::replace::ReplaceProjectGuardError::LocalAdvanced {
+                            expected,
+                            current,
+                        } => format!(
+                            "ReplaceProject guard failed: local advanced \
+                             (expected lww_time={} device_id={}, current lww_time={} device_id={}) \
+                             — not touching live",
+                            expected.lww_time_ms,
+                            expected.device_id,
+                            current.lww_time_ms,
+                            current.device_id
+                        ),
+                        crate::sync::staging::replace::ReplaceProjectGuardError::SnapshotFailed(err) => {
+                            format!("ReplaceProject guard snapshot failed: {err}")
+                        }
+                    };
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            }
+
+            let mut plan = match crate::sync::staging::replace::build_replace_project_plan(
+                live_root,
+                &staging_root,
+            ) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    let msg = format!("build_replace_project_plan failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+
+            let mut tx = match apply_commit_plan_to_live(
+                live_root,
+                &plan.content_actions,
+                &plan.engine_state_actions,
+                false,
+            ) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
+
+            match tx.finish() {
+                Ok(()) => {
+                    let mut committed_paths = Vec::new();
+                    collect_action_paths(
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &mut committed_paths,
+                    );
+                    if let Err(e) =
+                        save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict)
+                    {
+                        let msg = format!("save_conflict_snapshots failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        return (TargetCommitResult::Failed(msg), Vec::new(), committed_paths);
+                    }
+                    (TargetCommitResult::Ok, plan.conflict, committed_paths)
+                }
+                Err(e) => {
+                    let msg = format!("tx.finish() failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    (TargetCommitResult::Failed(msg), Vec::new(), Vec::new())
+                }
+            }
+        }
+    }
+}
