@@ -269,14 +269,15 @@ pub(crate) fn get_repo(
 
 // ── Git Database API（Issue #761）──
 //
-// 以下函数实现 Git Database API 的 5 步原子批量提交流程：
+// 以下函数实现 Git Database API 的原子批量提交流程：
 //   1. get_ref → 拿到 head commit SHA
 //   2. get_commit → 拿到 tree SHA
-//   3. post_trees（base_tree + tree entries）→ 新 tree SHA
-//   4. post_commit（parent=head, tree=新 tree）→ 新 commit SHA
-//   5. patch_ref（sha=新 commit, force=false）→ 更新 branch ref
+//   3. post_blob（每个 Put 一次）→ 拿到文件内容的 blob SHA
+//   4. post_trees（base_tree + tree entries，全部用 sha 引用）→ 新 tree SHA
+//   5. post_commit（parent=head, tree=新 tree）→ 新 commit SHA
+//   6. patch_ref（sha=新 commit, force=false）→ 更新 branch ref
 //
-// 任一步失败向上返回 ProviderError；ref 更新失败（409）由调用方映射成
+// 任一步失败向上返回 ProviderError；ref 更新失败（409/422）由调用方映射成
 // PreconditionFailed 回到 LWW/CAS 重试，不允许 force 覆盖别人刚提交的 head。
 
 /// 查询 branch ref，返回原始 HTTP 响应（body 为 JSON：`{object: {sha: "..."}}`）。
@@ -297,15 +298,40 @@ pub(crate) fn get_commit(
     execute_get(transport, &url, token)
 }
 
+/// 创建 blob（`POST /git/blobs`），返回原始 HTTP 响应。
+///
+/// body 为 JSON：`{sha, url}`。调用方从 `sha` 提取 blob SHA，用于 tree entry。
+///
+/// `content` 是原始文件字节；本函数按 GitHub "Create a blob" 契约编码成
+/// `{"content":"<base64>","encoding":"base64"}`。
+/// Create a tree 的 `tree[].content` 是文件内容本身而不是 base64，
+/// 因此 Put 必须先经本函数上传再在 tree entry 里用 `sha` 引用。
+pub(crate) fn post_blob(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    content: &[u8],
+) -> Result<HttpResponse, ProviderError> {
+    let url = format!("{}/git/blobs", api_base);
+    let payload = serde_json::json!({
+        "content": base64::engine::general_purpose::STANDARD.encode(content),
+        "encoding": "base64",
+    });
+    execute_json(transport, "POST", &url, token, &payload)
+}
+
 /// 创建 tree（可带 base_tree 增量修改），返回原始 HTTP 响应。
 ///
 /// body 为 JSON：`{sha, tree: [...], ...}`。调用方从 `sha` 提取新 tree SHA。
 ///
 /// `base_tree` 为父 tree SHA（来自 GET /git/commits/<head> 的 `tree.sha`），
 /// `tree_entries` 为 JSON 数组，每个元素形如：
-/// - Put：`{path, mode:"100644", type:"blob", content:"<base64>"}`
-/// - ReuseVersion：`{path, mode:"100644", type:"blob", sha:"<blob sha>"}`
+/// - Put：`{path, mode:"100644", type:"blob", sha:"<post_blob 返回的 blob sha>"}`
+/// - ReuseVersion：`{path, mode:"100644", type:"blob", sha:"<已有 blob sha>"}`
 /// - Delete：`{path, sha:null}`（从 tree 中移除）
+///
+/// 所有 entry 统一用 `sha` 引用 blob；tree 接口的 `content` 字段是文件内容本身
+/// （不是 base64），直接塞 base64 文本会把真实文件写坏。
 pub(crate) fn post_trees(
     transport: &dyn SyncTransport,
     api_base: &str,

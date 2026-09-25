@@ -609,6 +609,26 @@ pub(super) fn transfer_live_project(
                         ),
                     };
 
+                    // Issue #761 评论 5828969186 问题 4：batch generation 发布走
+                    // Git branch ref CAS（commit + PATCH ref force=false），409/422 只说明
+                    // 另一台设备刚推进了 branch，是正常的 CAS 竞争，不是 fatal。
+                    // 这里在通用 content_ok 判断之前单独识别 precondition_failed：
+                    // 重读远端 catalog → 更新 snapshot → continue 当前 MAX_CAS_RETRIES 循环，
+                    // 用最新 visible generation 重新 merge 后构造下一次 generation。
+                    // 超过重试上限仍由循环末尾返回 RecoverableError。
+                    if content_result.error_category.as_deref() == Some("precondition_failed") {
+                        log::info!(
+                            "[sync] run_transfer: LiveProject {} (attempt {}) — generation publish hit ref CAS conflict, reloading catalog and retrying",
+                            planned.target.remote_prefix,
+                            attempt + 1
+                        );
+                        match crate::sync::target_lifecycle::load_remote_catalog(provider) {
+                            Ok(snapshot) => *catalog_snapshot = snapshot,
+                            Err(e) => return (sync_result_from_error(e), None, None),
+                        }
+                        continue;
+                    }
+
                     let content_ok = matches!(
                         content_result.status,
                         SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied

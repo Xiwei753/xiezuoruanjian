@@ -186,9 +186,12 @@ impl SyncProvider for MemoryProvider {
 
     /// MemoryProvider 批量原子提交 — 单锁内事务执行所有 mutation。
     ///
-    /// 在同一锁内顺序应用 Put / ReuseVersion / Delete，任一 ReuseVersion
-    /// 引用了不存在的远端版本则返回 `PreconditionFailed`，整个 batch 不生效
-    /// （未提交的 mutation 不写入 store，已应用的 mutation 因锁尚未释放也不可见）。
+    /// 拿到锁后先克隆一份 store，所有 Put / ReuseVersion / Delete 只改副本：
+    /// 任一步失败（如 `ReuseVersion` 引用了不存在的远端版本 → `PreconditionFailed`）
+    /// 直接返回，原 store 完全不动；只有全部成功才一次性 `*store = next` 提交。
+    ///
+    /// 不能直接在真实 store 上顺序 apply：那样失败时前几步已经写入，
+    /// 函数返回后锁一释放就会留下半事务，与 `atomic_write=true` 的声明不一致。
     ///
     /// `revision` 为本次事务的 UUID（仅用于诊断/前置条件，不参与业务逻辑）。
     /// `touched_paths` 列出本次 batch 实际生效的路径。
@@ -199,28 +202,32 @@ impl SyncProvider for MemoryProvider {
     ) -> Result<BatchCommitResult, ProviderError> {
         let _ = message;
         let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+        let mut next = store.clone();
         let mut touched: Vec<String> = Vec::with_capacity(mutations.len());
         let txn_revision = Self::new_version();
         for m in mutations {
             match m {
                 BatchMutation::Put { path, content } => {
-                    store.insert(path.clone(), (content.clone(), Self::new_version()));
+                    next.insert(path.clone(), (content.clone(), Self::new_version()));
                     touched.push(path.clone());
                 }
                 BatchMutation::ReuseVersion { path, version } => {
                     // 复用已有远端对象版本：在 MemoryProvider 语义下等价于
                     // 把已有 (content, version) 复制到目标 path。若 version 不存在
                     // 于当前 store，返回 PreconditionFailed（远端无此 blob 可复用）。
-                    let content = Self::reuse_content(&store, path, version)?;
-                    store.insert(path.clone(), (content, version.clone()));
+                    // 查询 next（含本批次先前 Put 产生的版本），保证同批内自洽。
+                    let content = Self::reuse_content(&next, path, version)?;
+                    next.insert(path.clone(), (content, version.clone()));
                     touched.push(path.clone());
                 }
                 BatchMutation::Delete { path } => {
-                    store.remove(path);
+                    next.remove(path);
                     touched.push(path.clone());
                 }
             }
         }
+        // 全部 mutation 成功后才提交，保证 batch 原子性。
+        *store = next;
         Ok(BatchCommitResult {
             revision: txn_revision,
             touched_paths: touched,

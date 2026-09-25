@@ -1,15 +1,20 @@
 //! Issue #761 回归测试 — GitHub 同步改走 Git tree/commit/ref 原子发布。
 //!
-//! 覆盖两个核心契约（行为级，不是字符串常量断言）：
+//! 覆盖四个核心契约（行为级，不是字符串常量断言）：
 //!
 //! 1. **批量原子发布**：`capabilities().batch == true` 时，一个 target 的一次
 //!    generation 发布 = 恰好一次 `commit_batch`；manifest、内容 mutation 与
 //!    `generation.meta.json`（直接 `complete=true`）在同一批提交里，
-//!    不再逐文件 `provider.write()`。
+//!    不再逐文件 `provider.write()`。空远端首次同步（`merge_outcome == None`）同样
+//!    走 batch 路径（评论 5828969186 问题 2）。
 //! 2. **冲突路径复用远端 blob**：unresolved conflict 的路径必须用
 //!    `RemoteVersion`（旧 visible generation 的 blob）生成 `ReuseVersion`，
 //!    绝不读本地冲突正文冒充 merged remote record；没有远端 blob 可复用时
 //!    整个 target 返回 `PartialConflict`，不发布内容不完整的 generation。
+//! 3. **MemoryProvider batch 原子性**：中途失败（如 `ReuseVersion` 引用不存在的版本）
+//!    时整个 batch 不生效，不留半事务（评论 5828969186 问题 3）。
+//! 4. **ref CAS 冲突重试**：Git branch ref 被别的设备推进（409/422）时重读 catalog
+//!    并进入下一轮 CAS 重试，不直接打成 fatal（评论 5828969186 问题 4）。
 //!
 //! 这些断言驱动真实的 `run_transfer` → `transfer_live_project` →
 //! `publish_generation` 路径（`MemoryProvider` 声明 `batch=true`）。
@@ -67,6 +72,11 @@ struct RecordingProvider {
     inner: MemoryProvider,
     batches: Mutex<Vec<RecordedBatch>>,
     generation_file_writes: AtomicUsize,
+    /// 第一次 `commit_batch` 时模拟另一台设备推进 branch：
+    /// `(target_id, lww_time_ms, device_id)` 是并发设备写入的 upsert record。
+    /// 写入后返回 ref CAS 冲突（GitHub `PATCH /git/refs` force=false 的 409/422），
+    /// 用于验证 transfer 会重读 catalog 并进入下一轮重试（评论 5828969186 问题 4）。
+    concurrent_advance_on_first_batch: Option<(String, i64, String)>,
 }
 
 /// 一次 `commit_batch` 的调用记录。
@@ -82,6 +92,26 @@ impl RecordingProvider {
             inner,
             batches: Mutex::new(Vec::new()),
             generation_file_writes: AtomicUsize::new(0),
+            concurrent_advance_on_first_batch: None,
+        }
+    }
+
+    /// 构造"第一次 commit_batch 被并发设备推进 branch"的 provider。
+    fn with_concurrent_ref_advance(
+        inner: MemoryProvider,
+        target_id: &str,
+        lww_time_ms: i64,
+        device_id: &str,
+    ) -> Self {
+        Self {
+            inner,
+            batches: Mutex::new(Vec::new()),
+            generation_file_writes: AtomicUsize::new(0),
+            concurrent_advance_on_first_batch: Some((
+                target_id.to_string(),
+                lww_time_ms,
+                device_id.to_string(),
+            )),
         }
     }
 
@@ -95,6 +125,24 @@ impl RecordingProvider {
     /// 逐文件 `write()` 命中 `__generations__` 的次数（应为 0）。
     fn generation_file_writes(&self) -> usize {
         self.generation_file_writes.load(Ordering::SeqCst)
+    }
+
+    /// 模拟另一台设备在 ref CAS 期间推进 branch：写入更新的远端 catalog record。
+    fn simulate_concurrent_ref_advance(&self, target_id: &str, lww_time_ms: i64, device_id: &str) {
+        let existing = load_remote_catalog(&self.inner).expect("catalog loadable");
+        let mut catalog = existing.catalog.clone();
+        upsert_record(
+            &mut catalog,
+            TargetLifecycleRecord::upsert(target_id, target_id, lww_time_ms, device_id),
+        );
+        write_remote_catalog(
+            &self.inner,
+            &RemoteTargetCatalogSnapshot {
+                catalog,
+                version: existing.version.clone(),
+            },
+        )
+        .expect("concurrent catalog write");
     }
 }
 
@@ -132,13 +180,28 @@ impl SyncProvider for RecordingProvider {
         mutations: &[BatchMutation],
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
-        self.batches
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(RecordedBatch {
+        let first_attempt = {
+            let mut batches = self.batches.lock().unwrap_or_else(|e| e.into_inner());
+            let first = batches.is_empty();
+            batches.push(RecordedBatch {
                 message: message.to_string(),
                 mutations: mutations.to_vec(),
             });
+            first
+        };
+        if first_attempt {
+            if let Some((target_id, lww_time_ms, device_id)) =
+                &self.concurrent_advance_on_first_batch
+            {
+                self.simulate_concurrent_ref_advance(target_id, *lww_time_ms, device_id);
+                // GitHub ref PATCH 用 force=false：别人刚推进 head 时返回 409/422，
+                // provider 映射成 PreconditionFailed。
+                return Err(ProviderError::PreconditionFailed {
+                    path: "refs/heads/main".to_string(),
+                    reason: "ref moved by another device".to_string(),
+                });
+            }
+        }
         self.inner.commit_batch(mutations, message)
     }
 }
@@ -585,9 +648,12 @@ fn regression_issue_761_unresolved_conflict_without_remote_blob_returns_partial_
 /// Put / ReuseVersion / Delete 三种 mutation 一次提交全部生效，
 /// `touched_paths` 覆盖所有 mutation。
 #[test]
+#[allow(clippy::too_many_lines)]
 fn regression_issue_761_memory_commit_batch_is_single_transaction() {
-    let provider =
-        MemoryProvider::with_entries(vec![("source/a.txt".to_string(), b"hello".to_vec())]);
+    let provider = MemoryProvider::with_entries(vec![
+        ("source/a.txt".to_string(), b"hello".to_vec()),
+        ("half/old-b.txt".to_string(), b"old-b".to_vec()),
+    ]);
     assert!(provider.capabilities().batch);
     assert!(provider.capabilities().atomic_write);
     let source_version = provider.read("source/a.txt").unwrap().unwrap().version;
@@ -621,21 +687,43 @@ fn regression_issue_761_memory_commit_batch_is_single_transaction() {
     );
     assert!(provider.read("source/a.txt").unwrap().is_none());
 
-    // ReuseVersion 引用不存在的版本 → PreconditionFailed（远端无此 blob）。
+    // 半事务回归（评论 5828969186 问题 3）：batch 中途失败时不得留下任何已应用 mutation。
+    // 序列 Put(new-a) -> Delete(old-b) -> ReuseVersion(不存在的版本)：
+    // 第三步失败返回 Err 后，前两步必须一起回滚。
     let err = provider
         .commit_batch(
-            &[BatchMutation::ReuseVersion {
-                path: "target/c.txt".to_string(),
-                version: RemoteVersion::new("missing-version"),
-            }],
-            "missing blob",
+            &[
+                BatchMutation::Put {
+                    path: "half/new-a.txt".to_string(),
+                    content: b"new-a".to_vec(),
+                },
+                BatchMutation::Delete {
+                    path: "half/old-b.txt".to_string(),
+                },
+                BatchMutation::ReuseVersion {
+                    path: "half/c.txt".to_string(),
+                    version: RemoteVersion::new("missing-version"),
+                },
+            ],
+            "half transaction",
         )
         .unwrap_err();
     assert!(matches!(err, ProviderError::PreconditionFailed { .. }));
     assert!(
-        provider.read("target/c.txt").unwrap().is_none(),
+        provider.read("half/new-a.txt").unwrap().is_none(),
+        "失败 batch 里已应用的 Put 不得留在 store（半事务）"
+    );
+    assert_eq!(
+        provider.read("half/old-b.txt").unwrap().unwrap().content,
+        b"old-b",
+        "失败 batch 里已应用的 Delete 不得生效（半事务）"
+    );
+    assert!(
+        provider.read("half/c.txt").unwrap().is_none(),
         "失败的 ReuseVersion 不应写入半个对象"
     );
+    // 失败 batch 不影响此前成功 batch 的结果。
+    assert!(provider.read("target/b.txt").unwrap().is_some());
 }
 
 /// 场景 4（Issue #761 Part 1）：能力声明。
@@ -660,5 +748,207 @@ fn regression_issue_761_batch_capabilities_declared() {
     assert!(
         memory.atomic_write,
         "MemoryProvider 应声明 atomic_write=true"
+    );
+}
+
+/// 空远端（无 catalog / 无 visible generation）的首次同步场景。
+fn empty_remote_catalog_snapshot() -> RemoteTargetCatalogSnapshot {
+    RemoteTargetCatalogSnapshot {
+        catalog: TargetLifecycleCatalog::default(),
+        version: RemoteVersion::new("__nonexistent__"),
+    }
+}
+
+/// 场景 5（Issue #761 评论 5828969186 问题 2）：空远端首次同步必须走 batch 路径。
+///
+/// 首次同步没有 merge_outcome（远端没有 visible generation 可 merge），
+/// 但 generation 发布仍必须是一次 `commit_batch`：
+/// - `caps.batch == true` 时不得退回 `run_single_target()` 的逐文件 Contents API；
+/// - staging 的本地 manifest 里所有 upsert 都是 Put（含 UTF-8 正文原字节）；
+/// - manifest + `generation.meta.json`（complete=true）在同一批提交；
+/// - CAS 成功，catalog 指向这次 batch 发布的 generation，正文按原字节可读回。
+#[test]
+#[allow(clippy::too_many_lines)]
+fn regression_issue_761_first_sync_empty_remote_uses_batch_without_file_writes() {
+    let tmp = TempDir::new().unwrap();
+    let provider = RecordingProvider::new(MemoryProvider::new());
+
+    let utf8_path = "volumes/v1/chapters/c1/chapter.md";
+    let utf8_content = "你好，世界".as_bytes();
+    let staging_root = build_staging(
+        &tmp,
+        &[(utf8_path, utf8_content), (SAFE_PATH, SAFE_CONTENT)],
+        T,
+        DEVICE_LOCAL,
+    );
+    let plan = build_plan(
+        &tmp,
+        staging_root,
+        T,
+        DEVICE_LOCAL,
+        empty_remote_catalog_snapshot(),
+    );
+    let transfer = run_transfer(&provider, &plan, None);
+    assert_eq!(transfer.targets.len(), 1);
+
+    // ── 首次同步也必须是一次批量提交，不得逐文件 write() 到 generation prefix ──
+    assert_eq!(
+        provider.generation_file_writes(),
+        0,
+        "首次同步不得退回逐文件 Contents API 路径"
+    );
+    let batches = provider.recorded_batches();
+    assert_eq!(
+        batches.len(),
+        1,
+        "空远端首次同步应恰好一次 commit_batch，实际 {}",
+        batches.len()
+    );
+    let batch = &batches[0];
+
+    // ── 没有旧 generation 的 blob 可复用：所有 upsert 都是 Put，内容是 staging 原字节 ──
+    match mutation_for(batch, utf8_path) {
+        BatchMutation::Put { content, .. } => assert_eq!(
+            content.as_slice(),
+            utf8_content,
+            "首次同步的 upsert 必须以原正文字节 Put"
+        ),
+        other => panic!("首次同步所有 upsert 都应是 Put，实际 {other:?}"),
+    }
+    match mutation_for(batch, SAFE_PATH) {
+        BatchMutation::Put { content, .. } => assert_eq!(content, SAFE_CONTENT),
+        other => panic!("首次同步所有 upsert 都应是 Put，实际 {other:?}"),
+    }
+    assert!(
+        batch
+            .mutations
+            .iter()
+            .all(|m| !matches!(m, BatchMutation::ReuseVersion { .. })),
+        "首次同步没有旧 blob 可复用，不应出现 ReuseVersion"
+    );
+
+    // ── manifest 与 meta(complete=true) 同一批 ──
+    match mutation_for(batch, SYNC_MANIFEST_PATH) {
+        BatchMutation::Put { content, .. } => {
+            let manifest: SyncManifest = serde_json::from_slice(content).unwrap();
+            let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+            assert!(
+                paths.contains(&utf8_path) && paths.contains(&SAFE_PATH),
+                "首次同步 manifest 应包含全部 upsert 路径，实际 {paths:?}"
+            );
+        }
+        other => panic!("manifest 必须是 Put，实际 {other:?}"),
+    }
+    let new_gen_prefix = assert_meta_complete_true(batch);
+    assert!(
+        new_gen_prefix.contains(GENERATION_SUBDIR),
+        "meta 必须落在 generation prefix，实际 {new_gen_prefix}"
+    );
+
+    // ── 发布成功：catalog 指向这次 batch 的 generation，正文按原字节存在 ──
+    let status = &transfer.targets[0].result.status;
+    assert!(
+        matches!(status, SyncStatus::LatestWinsApplied),
+        "首次同步发布后应是 LatestWinsApplied，实际 {status:?}"
+    );
+    let catalog_after = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&catalog_after.catalog, PROJECT_PREFIX).expect("catalog record");
+    let gen_id = record
+        .active_generation
+        .as_deref()
+        .expect("首次同步应写入 active_generation");
+    assert_eq!(
+        format!("{PROJECT_PREFIX}/{GENERATION_SUBDIR}/{gen_id}"),
+        new_gen_prefix,
+        "catalog 应指向同一次 batch 发布的 generation"
+    );
+
+    let published = provider
+        .read(&format!("{new_gen_prefix}/{utf8_path}"))
+        .unwrap()
+        .expect("generation 内应有正文对象");
+    assert_eq!(
+        published.content, utf8_content,
+        "generation 内正文必须是原始 UTF-8 字节"
+    );
+
+    eprintln!(
+        "[BUGFIX_REGRESSION_TRACE] Issue #761 空远端首次同步：commit_batch 1 次、\
+         逐文件 generation write {} 次、generation {}（全部 upsert 走 Put）",
+        provider.generation_file_writes(),
+        gen_id
+    );
+}
+
+/// 场景 6（Issue #761 评论 5828969186 问题 4）：branch ref CAS 冲突进入重试，不是 fatal。
+///
+/// 远端已有 visible generation（因此 generation 发布必然走 batch 路径），
+/// 第一次 `commit_batch` 模拟另一台设备在本次提交期间推进 branch（ref PATCH 409/422）：
+/// - `PreconditionFailed` → Core `SyncRemoteError(category=precondition_failed)`；
+/// - transfer 必须重新 `load_remote_catalog` 后 continue `MAX_CAS_RETRIES` 循环；
+/// - 重试轮次看到并发设备更新的 record（LWW 更大）→ 收敛，不再发布第二次；
+/// - 最终状态不得是 `FatalError`（修复前这里会直接打成 fatal）。
+#[test]
+fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
+    let tmp = TempDir::new().unwrap();
+    let inner = MemoryProvider::new();
+    // 远端已有 visible generation（与场景 1 同一 fixture：CONFLICT_PATH 冲突、
+    // SAFE_PATH 为本地新文件 → candidate (T, DEVICE_LOCAL) 严格赢，必须 publish）。
+    let remote_gen_prefix = format!("{PROJECT_PREFIX}/{GENERATION_SUBDIR}/{GEN_EXISTING}");
+    write_remote_generation(
+        &inner,
+        &remote_gen_prefix,
+        &[(CONFLICT_PATH, REMOTE_CONFLICT_CONTENT)],
+        T,
+        DEVICE_REMOTE,
+    );
+    let provider = RecordingProvider::with_concurrent_ref_advance(
+        inner,
+        PROJECT_PREFIX,
+        T + 1000,
+        "device_other",
+    );
+    let catalog_snapshot = seed_remote_catalog(&provider, T - 1, DEVICE_REMOTE, GEN_EXISTING);
+
+    let staging_root = build_staging(
+        &tmp,
+        &[
+            (CONFLICT_PATH, LOCAL_CONFLICT_CONTENT),
+            (SAFE_PATH, SAFE_CONTENT),
+        ],
+        T,
+        DEVICE_LOCAL,
+    );
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, catalog_snapshot);
+    let transfer = run_transfer(&provider, &plan, None);
+    assert_eq!(transfer.targets.len(), 1);
+
+    let status = &transfer.targets[0].result.status;
+    assert!(
+        !matches!(
+            status,
+            SyncStatus::FatalError(_) | SyncStatus::RecoverableError(_)
+        ),
+        "ref CAS 冲突是正常竞争，应重试后收敛，实际 {status:?}（error={:?}）",
+        transfer.targets[0].result.error
+    );
+
+    // 第一次 commit_batch 撞冲突后重读 catalog，看到并发设备更新的 record
+    // （LWW 更大）→ candidate 不赢，收敛且不再 publish。
+    assert_eq!(
+        provider.recorded_batches().len(),
+        1,
+        "重试轮次应看到更新的远端 record 并收敛，不再 publish"
+    );
+
+    // 并发设备的 record 未被覆盖（force=false 语义：绝不覆盖别人刚提交的 head）。
+    let catalog_after = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&catalog_after.catalog, PROJECT_PREFIX).expect("catalog record");
+    assert_eq!(record.device_id, "device_other");
+    assert_eq!(record.updated_at_ms, T + 1000);
+
+    eprintln!(
+        "[BUGFIX_REGRESSION_TRACE] Issue #761 ref CAS 冲突：commit_batch 1 次即收敛、\
+         状态 {status:?}（不再是 FatalError）"
     );
 }
