@@ -18,6 +18,8 @@ export interface AdaptiveState {
   contentMaxWidth: number
   pagePadding: number
   gridColumns: number
+  // 底部安全区域高度（导航栏避让），单位 vp
+  safeBottomVp: number
 }
 
 /**
@@ -133,7 +135,8 @@ export class AdaptiveContext {
       isTwoPane: this.state.isTwoPane,
       contentMaxWidth: this.state.contentMaxWidth,
       pagePadding: this.state.pagePadding,
-      gridColumns: this.state.gridColumns
+      gridColumns: this.state.gridColumns,
+      safeBottomVp: this.cachedSafeBottomVp
     }
   }
 
@@ -253,7 +256,8 @@ export class AdaptiveContext {
           isTwoPane: contract.shellMode === ShellMode.TwoPane,
           contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
           pagePadding: plan.pagePaddingVp,
-          gridColumns: plan.gridColumns
+          gridColumns: plan.gridColumns,
+          safeBottomVp: this.cachedSafeBottomVp
         }
         // Issue #752：第一次拿到非 0 有效尺寸的首帧路标日志。
         if (isFirstValidSize) {
@@ -306,7 +310,8 @@ export class AdaptiveContext {
       isTwoPane: false,
       contentMaxWidth: Number.MAX_SAFE_INTEGER,
       pagePadding: 16,
-      gridColumns: 2
+      gridColumns: 2,
+      safeBottomVp: 0
     }
   }
 

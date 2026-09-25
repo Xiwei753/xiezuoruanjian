@@ -39,6 +39,10 @@ export class EditorLayoutSnapshot {
   // 所以 revision + generation + compositionGeneration 可能把 session A 的旧布局误认成 session B。
   // 必须把 compositionSessionId 一起加入 layout identity。
   readonly compositionSessionId: number
+  // Issue #768：行高倍数、首行缩进设置，从 LocalSettings 传入，接进文字排版。
+  readonly lineSpacingMultiplier: number
+  readonly autoIndentEnabled: boolean
+  readonly autoIndentWidth: number
 
   constructor(
     text: string,
@@ -51,7 +55,10 @@ export class EditorLayoutSnapshot {
     fontSize: number = 16,
     generation: number = 0,
     compositionGeneration: number = -1,
-    compositionSessionId: number = 0
+    compositionSessionId: number = 0,
+    lineSpacingMultiplier: number = 1.8,
+    autoIndentEnabled: boolean = true,
+    autoIndentWidth: number = 2
   ) {
     this.text = text
     this.selectionAnchor = selectionAnchor
@@ -64,6 +71,9 @@ export class EditorLayoutSnapshot {
     this.generation = generation
     this.compositionGeneration = compositionGeneration
     this.compositionSessionId = compositionSessionId
+    this.lineSpacingMultiplier = lineSpacingMultiplier
+    this.autoIndentEnabled = autoIndentEnabled
+    this.autoIndentWidth = autoIndentWidth
   }
 
   // 从 Core EditorSessionSnapshot 构造布局快照。
@@ -75,7 +85,13 @@ export class EditorLayoutSnapshot {
   // 保存正文仍只取 snap.text（committed text），不把 preedit 写进文件。
   // Issue #629 评论15 第2项：不再接受 contentWidth 参数；用 generation/compositionGeneration 标识编辑状态。
   // Issue #629 评论5358224312 第1项：display projection 由 projectEditorDisplay 统一计算，此处只做字段映射。
-  static fromEditorSnapshot(snap: EditorSessionSnapshot, fontSize?: number): EditorLayoutSnapshot {
+  static fromEditorSnapshot(
+    snap: EditorSessionSnapshot,
+    fontSize?: number,
+    lineSpacingMultiplier?: number,
+    autoIndentEnabled?: boolean,
+    autoIndentWidth?: number
+  ): EditorLayoutSnapshot {
     // Issue #753：editor_display_projection.EditorSessionSnapshotInput 与
     // EditorDtos.EditorSessionSnapshot 字段一致，区别仅在 composition 可选性
     //（DTO 可选 vs 纯逻辑 | null）。构造符合纯逻辑类型的桥接对象传入。
@@ -100,7 +116,10 @@ export class EditorLayoutSnapshot {
       fontSize ?? 16,
       snap.generation ?? 0,
       hasComposition ? (snap.composition!.generation ?? 0) : -1,
-      hasComposition ? snap.composition!.sessionId : 0
+      hasComposition ? snap.composition!.sessionId : 0,
+      lineSpacingMultiplier ?? 1.8,
+      autoIndentEnabled ?? true,
+      autoIndentWidth ?? 2
     )
   }
 }

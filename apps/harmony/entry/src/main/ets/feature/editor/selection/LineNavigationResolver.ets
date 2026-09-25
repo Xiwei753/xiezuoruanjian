@@ -14,8 +14,10 @@ import {
   positionForHorizontalArrival,
   positionForOffsetInLine,
   resolveVisualLineIndex,
+  buildLineRangesFromMetrics,
 } from '../render/editor_layout_math'
 import { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
+import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 
 import { LineLayoutStore } from './line_layout_store'
 import { EditorLayoutIdentity } from './editor_layout_identity'
@@ -161,5 +163,65 @@ export class LineNavigationResolver {
       return line.startUtf16
     }
     return offsetForHorizontal(stops, x)
+  }
+
+  /**
+   * Issue #768 任务10：从系统 LayoutManager 数据构建 LineLayoutState。
+   *
+   * 从系统 LineMetrics 构建 LineLayout[]（含 y/height/breakKind），
+   * 然后构造 LineLayoutState。系统行的 caretStops 为空数组
+   *（因为系统行的 caret stops 由 LayoutManager 管理，不需要自计算）。
+   */
+  static buildLayoutStateFromSystem(
+    layout: LayoutManager,
+    systemLineCount: number,
+    snapshot: EditorLayoutSnapshot,
+    contentWidth: number,
+  ): LineLayoutState {
+    const text = snapshot.text
+    const lineMetricsData: Array<{ startIndex: number; endIndex: number; isLastLine: boolean; text: string }> = []
+    const systemLines: NavigationLine[] = []
+
+    for (let i = 0; i < systemLineCount; i++) {
+      const metrics = layout.getLineMetrics(i)
+      const startUtf16 = metrics.startIndex
+      const endUtf16 = metrics.endIndex
+      lineMetricsData.push({
+        startIndex: startUtf16,
+        endIndex: endUtf16,
+        isLastLine: i === systemLineCount - 1,
+        text,
+      })
+      const y = metrics.topHeight
+      const height = metrics.height
+      systemLines.push({
+        startUtf16,
+        endUtf16,
+        y,
+        height,
+        breakKind: LineBreakKind.EndOfText, // 占位，下面用 buildLineRangesFromMetrics 覆盖
+        caretStops: [],
+      })
+    }
+
+    const systemLineRanges = buildLineRangesFromMetrics(lineMetricsData)
+    // 用推导出的 breakKind 更新 systemLines
+    for (let i = 0; i < systemLines.length; i++) {
+      systemLines[i] = {
+        ...systemLines[i],
+        breakKind: systemLineRanges[i].breakKind,
+      }
+    }
+
+    return {
+      revision: snapshot.revision,
+      generation: snapshot.generation,
+      compositionGeneration: snapshot.compositionGeneration,
+      compositionSessionId: snapshot.compositionSessionId,
+      displayText: snapshot.text,
+      contentWidth,
+      fontSize: snapshot.fontSize,
+      lines: systemLines,
+    }
   }
 }

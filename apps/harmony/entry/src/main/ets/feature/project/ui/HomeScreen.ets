@@ -625,9 +625,9 @@ export struct HomeScreen {
       .height('100%')
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
-      // Issue #767：改用原生 Button(ButtonType.Circle)，系统材质处理形状、按压、阴影
+      // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
-        Button({ type: ButtonType.Circle }) {
+        Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
             .width(24)
             .height(24)

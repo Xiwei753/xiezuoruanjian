@@ -33,6 +33,9 @@
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
 | 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
 | Application 颜色模式 | @kit.AbilityKit (ApplicationContext) | 11 | 无独立 SystemCapability（随 @kit.AbilityKit Application 生命周期） | 无 | 否 | ui/theme/HarmonyColorModeController.ets |
+| HDS Tabs（悬浮页签） | @kit.ArkUI (HdsTabs) | 23 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
+| TextController + LayoutManager | @kit.ArkUI (TextController / LayoutManager) | 12（getLayoutManager/getLineCount/getGlyphPositionAtCoordinate/getLineMetrics）/ 14（getRectsForRange） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets, feature/editor/render/EditorRenderBackend.ets |
+| StyledString / MutableStyledString | @kit.ArkUI (StyledString / MutableStyledString) | 12 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/render/EditorTextStyleProjector.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -237,3 +240,49 @@
 - fallback：调用失败时只记 hilog error，不阻塞应用运行；UI 仍按系统默认颜色模式渲染
 - 实现文件：`ui/theme/HarmonyColorModeController.ets`
 - 说明：华为官方文档要求 `setColorMode()` 在页面 `loadContent` 成功之后才能调用，因此 `HarmonyColorModeController` 引入 `pageLoaded` 标志和 `desiredMode` 缓存机制，确保时序正确。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/js-apis-inner-application-uiabilitycontext
+
+## HDS Tabs（悬浮页签）
+
+- Kit：`@kit.ArkUI`（HDS UI Design Kit 的 `HdsTabs` 组件）
+- 接口：`HdsTabs` 悬浮页签组件
+- 最低 API：23
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：API < 23 使用普通 `Tabs + BottomTabBarStyle`
+- 实现文件：`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`
+- 对外 facade：`app/navigation/PrimaryTabShell.ets`（通过 `PlatformApiResolver` 分流）
+
+## TextController + LayoutManager
+
+- Kit：`@kit.ArkUI`（`TextController` / `LayoutManager`）
+- 接口：
+  - `TextController.getLayoutManager()` —— 获取文本布局管理器（API12+）
+  - `LayoutManager.getLineCount()` —— 获取行数
+  - `LayoutManager.getGlyphPositionAtCoordinate(x, y)` —— 坐标→字符位置命中测试
+  - `LayoutManager.getLineMetrics(index)` —— 获取行度量信息
+  - `LayoutManager.getRectsForRange(start, end)` —— 获取字符范围的矩形区域（API14+）
+- 最低 API：12（`getLayoutManager`/`getLineCount`/`getGlyphPositionAtCoordinate`/`getLineMetrics`），14（`getRectsForRange`）
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：API12-13 无 `getRectsForRange`，通过 `getLineMetrics` + `getGlyphPositionAtCoordinate` 推导 caret/selection 矩形
+- 实现文件：`feature/editor/ui/SujianEditor.ets`、`feature/editor/render/EditorRenderBackend.ets`
+- 说明：HarmonyOS 官方文档 https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/ts-text-common
+
+## StyledString / MutableStyledString
+
+- Kit：`@kit.ArkUI`（`StyledString` / `MutableStyledString`）
+- 接口：
+  - `MutableStyledString(text)` —— 创建可变样式字符串
+  - `TextStyle({ fontSize, ... })` —— 文本样式
+  - `LineHeightStyle({ lineHeight })` —— 行高样式
+  - `ParagraphStyle({ textIndent })` —— 段落样式（首行缩进）
+  - `styledString.setStyle(style, start, end)` —— 对范围应用样式
+- 最低 API：12
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：无（等于 compatibleSdkVersion 12，实际始终可用）
+- 实现文件：`feature/editor/render/EditorTextStyleProjector.ets`
+- 说明：华为官方文档 https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/arkts-styled-string

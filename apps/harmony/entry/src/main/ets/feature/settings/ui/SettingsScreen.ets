@@ -95,7 +95,12 @@ export struct SettingsScreen {
 
   // ── 安全返回 ──
   private goBack(): void {
-    this.navCoordinator.safePop()
+    const stack = this.navCoordinator.getNavPathStack()
+    if (stack) {
+      this.navCoordinator.safePopWithStack(stack)
+    } else {
+      this.navCoordinator.safePop() // fallback
+    }
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──

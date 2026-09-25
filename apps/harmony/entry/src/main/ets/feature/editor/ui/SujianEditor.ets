@@ -36,20 +36,22 @@
 
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderBackend'
-import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout } from '../render/editor_render_geometry'
+import { SelectionRect, CaretRect, CompositionUnderlineRect } from '../render/editor_render_geometry'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher, SemanticEditCommand } from '../input/EditorSemanticDispatcher'
 import { LineNavigationResolver, LineLayoutState, NavigationLine } from '../selection/LineNavigationResolver'
 import { CaretAffinity } from '../render/editor_layout_math'
-import { VisualCaretPosition, CaretStop } from '../render/editor_layout_math'
+import { VisualCaretPosition } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
 import { StylusInputService } from '../../../platform/input/StylusInputService'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
+import { EditorTextStyleProjector, EditorStyleConfig } from '../render/EditorTextStyleProjector'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import hilog from '@ohos.hilog'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
@@ -95,6 +97,10 @@ export struct SujianEditor {
   @State contentHeight: number = 0
   // viewport 滚动控制器（ArkUI Scroller）。controller.restore 经此 scrollTo。
   private scroller: Scroller = new Scroller()
+  // Issue #768 任务9：TextController 让 ArkUI Text 的 LayoutManager 成为唯一布局真源。
+  // 正文 Text 通过 controller 接收 StyledString（含字号/行高/首行缩进样式），
+  // LayoutManager 提供真实行布局/命中测试，消除自算 measureText 与系统布局的错位。
+  private textController: TextController = new TextController()
   // 输入服务单例。
   private keyboardService: KeyboardInputService = KeyboardInputService.getInstance()
   private pointerService: PointerInputService = PointerInputService.getInstance()
@@ -174,6 +180,8 @@ export struct SujianEditor {
   // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
   private onSnapshotChanged(): void {
     if (this.snapshot === null) {
+      // Issue #768 任务9：snapshot 为 null 时也清空 StyledString
+      this.textController.setStyledString(new MutableStyledString(''))
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
       this.renderResult = null
@@ -191,14 +199,29 @@ export struct SujianEditor {
   // Issue #629 评论11 第2项：refreshRender 不再用 render() 的空 lines 覆盖 lineResolver。
   // render() 不计算几何（lines: []），用它覆盖会把 resolver 清空。lineResolver 只在
   // refreshRenderLayout（contentWidth > 0，有真实几何）时更新（带身份）。
+  // Issue #768 任务9：通过 TextController.setStyledString 下发内容和样式（字号/行高/首行缩进），
+  // 让系统 Text 的 LayoutManager 成为唯一布局真源。
   private refreshRender(): void {
     if (this.snapshot) {
+      // 通过 StyledString 下发内容和样式
+      const config: EditorStyleConfig = {
+        fontSize: this.snapshot.fontSize,
+        lineSpacingMultiplier: this.snapshot.lineSpacingMultiplier,
+        autoIndentEnabled: this.snapshot.autoIndentEnabled,
+        autoIndentWidth: this.snapshot.autoIndentWidth,
+      }
+      const styledString = EditorTextStyleProjector.projectToStyledString(this.snapshot.text, config)
+      this.textController.setStyledString(styledString)
+
+      // 仍然用 EditorRenderBackend.render() 转 offset（不含几何）
       const result = EditorRenderBackend.render(this.snapshot)
       this.renderResult = result
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
     } else {
+      // 清空 StyledString
+      this.textController.setStyledString(new MutableStyledString(''))
       this.renderResult = null
       this.selectionRects = []
       this.caretRect = null
@@ -215,65 +238,134 @@ export struct SujianEditor {
   // 保证 snapshot/revision/composition 变化时立刻用已有宽度计算真实 lines 并更新 lineResolver，
   // 不等 onAreaChange 才更新。lineResolver 带身份（revision + displayText + cursorUtf16），
   // executeLineNavigation 出队时验证身份匹配才用 lines 算目标。
+  // Issue #768 任务9：优先使用系统 LayoutManager 做唯一布局真源。
+  // - API14+：用 getRectsForRange 获取选区/光标/composition 矩形，完全不需要 measureText
+  // - API12-13：用 LineMetrics 获取行边界（折行/行高），用 measureText 算行内 x 坐标
+  // - Fallback：LayoutManager 不可用时走旧的自计算路径
   private refreshRenderLayout(): void {
     if (this.snapshot && this.contentWidth > 0) {
       const snap = this.snapshot
-      // 真实文本测量：getMeasureUtils().measureText 返回 px 单行宽度，
-      // fontSize 用 snap.fontSize（vp）与 Text.fontSize 一致，测量与渲染同一字体度量。
-      const measureUtils = this.getUIContext().getMeasureUtils()
-      const measureTextFn = (s: string): number => {
-        return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+
+      // 优先使用系统 LayoutManager
+      const layout = this.textController.getLayoutManager()
+      if (layout !== null && layout !== undefined) {
+        const systemLineCount = layout.getLineCount()
+        if (systemLineCount > 0) {
+          this.refreshRenderLayoutFromSystem(layout, systemLineCount, snap)
+          return
+        }
       }
-      // Issue #629 R7：每次从 SelectionController（唯一 owner）取当前 cursor 的 visual position。
-      // offset 不匹配时 getVisualCaret 返回默认 Downstream，
-      // 消除 snapshot 前进后旧 affinity 残留的双状态问题。
-      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(
-        snap.text,
-        snap.cursorByteOffset,
-      )
-      const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
-        ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
-      const result = EditorRenderBackend.renderLayout(
-        snap,
-        this.contentWidth,
-        this.contentHeight,
-        measureTextFn,
-        visualCaret.affinity,
-      )
-      this.renderResult = result
-      this.selectionRects = result.selectionRects
-      this.caretRect = result.caretRect
-      this.compositionUnderlineRects = result.compositionUnderlineRects
-      // Issue #629 评论11 第2项 + 评论14 第3项 + 评论15 第3项：行布局更新后同步给行级导航解析器（带身份）。
-      // 身份来自 Core 编辑状态：revision + generation + compositionGeneration + displayText。
-      // contentWidth/fontSize 决定折行但不属于编辑状态身份（评论15 第2项）。
-      // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
-      // Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
-      // 与 hitTestPoint 共享同一套 code point 边界算法，不两套折行/测宽。
-      // Issue #629 评论18：不再需要手动拼 NavigationLine。
-      // EditorRenderBackend.renderLayout() 已返回 LineLayout[]（含 breakKind + caretStops），
-      // NavigationLine = LineLayout（类型别名），直接使用 result.lines 即可。
-      const navigationLines: NavigationLine[] = result.lines
-      const layoutState: LineLayoutState = {
-        revision: snap.revision,
-        generation: snap.generation,
-        compositionGeneration: snap.compositionGeneration,
-        compositionSessionId: snap.compositionSessionId,
-        displayText: snap.text,
-        contentWidth: this.contentWidth,
-        fontSize: snap.fontSize,
-        lines: navigationLines
-      }
-      this.lineResolver.updateLayout(layoutState)
+
+      // Fallback: 旧的自计算路径（LayoutManager 不可用或无行）
+      this.refreshRenderLayoutFallback(snap)
     }
+  }
+
+  // Issue #768 任务10：从系统 LayoutManager 获取真实布局。
+  // 逻辑已下沉到 EditorRenderBackend.renderLayoutFromSystem() 和
+  // LineNavigationResolver.buildLayoutStateFromSystem()。
+  private refreshRenderLayoutFromSystem(
+    layout: LayoutManager,
+    systemLineCount: number,
+    snap: EditorLayoutSnapshot,
+  ): void {
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
+    const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
+      ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+    const isApi14Plus = PlatformApiResolver.getInstance().isApiAtLeast(14)
+
+    // measureTextFn：API12-13 fallback 用，API14+ 不需要但保持接口一致
+    const measureUtils = this.getUIContext().getMeasureUtils()
+    const measureTextFn = (s: string): number => {
+      return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+    }
+
+    // 1. 调用 EditorRenderBackend.renderLayoutFromSystem 获取完整渲染结果
+    const result = EditorRenderBackend.renderLayoutFromSystem(
+      layout,
+      systemLineCount,
+      snap,
+      this.contentWidth,
+      visualCaret.affinity,
+      isApi14Plus,
+      measureTextFn,
+    )
+
+    // 2. 更新 renderResult 和几何状态
+    this.renderResult = result
+    this.selectionRects = result.selectionRects
+    this.caretRect = result.caretRect
+    this.compositionUnderlineRects = result.compositionUnderlineRects
+
+    // 3. 更新行级导航解析器（带身份）
+    const layoutState = LineNavigationResolver.buildLayoutStateFromSystem(
+      layout,
+      systemLineCount,
+      snap,
+      this.contentWidth,
+    )
+    this.lineResolver.updateLayout(layoutState)
+  }
+
+  // Issue #768 任务9：Fallback 路径 — LayoutManager 不可用时走旧的自计算路径。
+  private refreshRenderLayoutFallback(snap: EditorLayoutSnapshot): void {
+    const measureUtils = this.getUIContext().getMeasureUtils()
+    const measureTextFn = (s: string): number => {
+      return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+    }
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(
+      snap.text,
+      snap.cursorByteOffset,
+    )
+    const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
+      ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+    const result = EditorRenderBackend.renderLayout(
+      snap,
+      this.contentWidth,
+      this.contentHeight,
+      measureTextFn,
+      visualCaret.affinity,
+    )
+    this.renderResult = result
+    this.selectionRects = result.selectionRects
+    this.caretRect = result.caretRect
+    this.compositionUnderlineRects = result.compositionUnderlineRects
+    const navigationLines: NavigationLine[] = result.lines
+    const layoutState: LineLayoutState = {
+      revision: snap.revision,
+      generation: snap.generation,
+      compositionGeneration: snap.compositionGeneration,
+      compositionSessionId: snap.compositionSessionId,
+      displayText: snap.text,
+      contentWidth: this.contentWidth,
+      fontSize: snap.fontSize,
+      lines: navigationLines,
+    }
+    this.lineResolver.updateLayout(layoutState)
   }
 
   // Issue #629 评论18：命中测试返回 VisualCaretPosition（含 CaretAffinity）。
   // soft-wrap 边界上半点击返回 Upstream（上一行尾），下半返回 Downstream（下一行首）。
+  // Issue #768 任务10：优先使用系统 LayoutManager 的 getGlyphPositionAtCoordinate 做命中测试，
+  // 消除自算折行与系统布局的错位。Fallback 到旧的自计算路径。
+  // 命中测试逻辑已下沉到 EditorRenderBackend.hitTestByLayoutManager()。
   private hitTestContent(contentX: number, contentY: number): VisualCaretPosition {
     if (!this.snapshot || !this.renderResult || this.contentWidth <= 0) {
       return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     }
+
+    // 优先使用系统 LayoutManager
+    const layout = this.textController.getLayoutManager()
+    if (layout !== null && layout !== undefined) {
+      try {
+        return EditorRenderBackend.hitTestByLayoutManager(layout, contentX, contentY)
+      } catch (e) {
+        hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
+          `hitTestContent: getGlyphPositionAtCoordinate failed: ${JSON.stringify(e)}`)
+      }
+    }
+
+    // Fallback: 旧的自计算命中测试
     const snap = this.snapshot
     const measureUtils = this.getUIContext().getMeasureUtils()
     const measureTextFn = (s: string): number => {
@@ -611,9 +703,11 @@ export struct SujianEditor {
           }, (rect: SelectionRect, index: number) => index.toString())
 
           // 2. text — 只负责绘制文字，不再承担焦点/输入事件职责。
-          // wordBreak(BREAK_ALL) 与 EditorRenderBackend.hitTestByPoint 的逐 code point 折行一致。
-          Text(this.renderResult.text)
-            .fontSize(this.snapshot.fontSize)
+          // Issue #768 任务9：Text 接 TextController，内容通过 StyledString 下发（含字号/行高/首行缩进）。
+          // wordBreak(BREAK_ALL) 与 fallback 路径的逐 code point 折行一致。
+          // 字号、行高、首行缩进通过 StyledString 的 TextStyle/LineHeightStyle/ParagraphStyle 下发，
+          // 不再在 Text 属性上设置 fontSize。
+          Text(undefined, { controller: this.textController })
             .width('100%')
             .textAlign(TextAlign.Start)
             .wordBreak(WordBreak.BREAK_ALL)

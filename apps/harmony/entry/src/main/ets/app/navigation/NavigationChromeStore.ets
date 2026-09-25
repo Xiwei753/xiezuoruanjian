@@ -2,6 +2,9 @@
 // 各 Screen 的根 NavDestination.onShown 上报自己的 ScreenRole；
 // AppNavigation 订阅此 store，再 resolve ScreenPolicy 控制底栏显隐。
 // 不塞回 NavigationTransactionCoordinator，保持 UI chrome 和导航事务分离。
+//
+// Issue #768：按 tab 保存最后一个可见 role，切 tab 时同步发布该 tab 当前 role。
+// 修复全局 currentRole 在多 tab 间错乱的问题。
 
 import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
 
@@ -11,6 +14,8 @@ export class NavigationChromeStore {
   private static instance: NavigationChromeStore
   private currentRole: ScreenRole = ScreenRole.ProjectList
   private observers: ScreenRoleObserver[] = []
+  // Issue #768：按 tab 保存最后一个可见 role。
+  private tabRoles: Map<number, ScreenRole> = new Map()
 
   private constructor() {}
 
@@ -21,12 +26,33 @@ export class NavigationChromeStore {
     return NavigationChromeStore.instance
   }
 
-  // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole
-  reportScreenRole(role: ScreenRole): void {
+  // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole。
+  // tabIndex 可选：传入则同时更新 tabRoles，使切 tab 时能恢复该 tab 的 role。
+  reportScreenRole(role: ScreenRole, tabIndex?: number): void {
     this.currentRole = role
+    if (tabIndex !== undefined) {
+      this.tabRoles.set(tabIndex, role)
+    }
     for (const observer of this.observers) {
       observer(role)
     }
+  }
+
+  // Issue #768：切 tab 时从 tabRoles 取该 tab 的 role，设为 currentRole 并通知观察者。
+  // PrimaryTabShell.syncActiveTab 调用此方法，确保切回某 tab 时底栏状态与该 tab 内容一致。
+  syncTabRole(tabIndex: number): void {
+    const role: ScreenRole | undefined = this.tabRoles.get(tabIndex)
+    const resolvedRole: ScreenRole = role !== undefined ? role : ScreenRole.ProjectList
+    this.currentRole = resolvedRole
+    for (const observer of this.observers) {
+      observer(resolvedRole)
+    }
+  }
+
+  // Issue #768：返回指定 tab 的最后一个 role，默认 ScreenRole.ProjectList。
+  getRoleForTab(tabIndex: number): ScreenRole {
+    const role: ScreenRole | undefined = this.tabRoles.get(tabIndex)
+    return role !== undefined ? role : ScreenRole.ProjectList
   }
 
   // AppNavigation 订阅 ScreenRole 变化

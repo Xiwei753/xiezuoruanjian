@@ -221,7 +221,7 @@ export struct WorkspaceScreen {
 
   build() {
     // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    // WorkspaceScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
+    // Issue #768：启用 NavDestination 原生标题栏，显示项目名和系统返回按钮。
     NavDestination() {
       Stack() {
         Column() {
@@ -252,7 +252,13 @@ export struct WorkspaceScreen {
       .width('100%')
       .height('100%')
     }
-    .hideTitleBar(true)
+    // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮和沉浸光感材质）
+    .hideTitleBar(false)
+    .title(this.viewModel.projectName)
+    .onBackPressed(() => {
+      this.handleBack()
+      return true
+    })
     .onShown(() => {
       NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace)
     })
@@ -283,12 +289,8 @@ export struct WorkspaceScreen {
   LeftPanel() {
     Column() {
       // 标题栏
+      // Issue #768：删除手写返回按钮，改用 NavDestination 原生标题栏的返回按钮
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .onClick(() => this.handleBack())
-
         Text(this.viewModel.projectName)
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
@@ -506,9 +508,9 @@ export struct WorkspaceScreen {
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
-      // Issue #767：改用原生 Button(ButtonType.Circle)，系统材质处理形状、按压、阴影
+      // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        Button({ type: ButtonType.Circle }) {
+        Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
             .width(24)
             .height(24)

@@ -316,4 +316,20 @@ export class NavigationTransactionCoordinator {
     const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
     return this.enqueueNavigation(intent, replace)
   }
+
+  // Issue #768：安全的 pop（显式目标栈版本）。
+  // 接受显式 targetStack，不再从 activeTabStack 猜，避免全局活动栈与当前页面持有的栈不对齐时弹错栈。
+  safePopWithStack(targetStack: NavPathStack): Promise<boolean> {
+    const intent: NavigationIntent = { kind: 'Pop', dedupeKey: 'pop' }
+    return this.enqueueNavigation(intent, (): void => {
+      targetStack.pop()
+    })
+  }
+
+  // Issue #768：安全的 replace path（显式目标栈版本）。
+  // 接受显式 targetStack，不再从 activeTabStack 猜。
+  safeReplacePathWithStack(targetStack: NavPathStack, targetKey: string, replace: () => void): Promise<boolean> {
+    const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
+    return this.enqueueNavigation(intent, replace)
+  }
 }

@@ -29,6 +29,7 @@ import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { EditorRuntimeSnapshotStore } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
@@ -93,6 +94,29 @@ interface UiRuntimeAttachment {
   statsStackDepth: number    // 统计 tab 导航栈深度
 }
 
+// editor_runtime_sanitized.json 附件 DTO — Issue #768 编辑器运行时快照。
+// 全部脱敏，不含正文内容。
+interface EditorRuntimeAttachment {
+  lineCount: number                    // 总行数
+  contentWidthPx: number               // 内容区域宽度（px）
+  contentHeightPx: number              // 内容区域高度（px）
+  viewportWidthPx: number              // 视口宽度（px）
+  viewportHeightPx: number             // 视口高度（px）
+  cursorUtf16Offset: number            // 光标 UTF-16 偏移
+  selectionStartUtf16: number          // 选区起点
+  selectionEndUtf16: number            // 选区终点
+  hasComposition: boolean              // 是否有输入法 composition
+  compositionLength: number            // composition 长度（不记内容）
+  layoutSource: string                 // 'system' | 'fallback' | 'none'
+  usingLayoutManager: boolean          // 是否使用系统 LayoutManager
+  apiLevel: number                     // 当前 API Level
+  isImeAttached: boolean               // IME 是否连接
+  revision: number                     // 当前编辑器 revision
+  textLength: number                   // 正文总长度（字符数，不含内容）
+  lastLayoutError: string | null       // 最后一次布局错误信息
+  fallbackCount: number                // fallback 次数累计
+}
+
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
 const DIAGNOSTICS_DIR = 'diagnostics'
 
@@ -104,6 +128,7 @@ const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
 const ATTACHMENT_BUILD_IDENTITY = 'build_identity.json'
 const ATTACHMENT_THEME_RUNTIME = 'theme_runtime_sanitized.json'
 const ATTACHMENT_UI_RUNTIME = 'ui_runtime_sanitized.json'
+const ATTACHMENT_EDITOR_RUNTIME = 'editor_runtime_sanitized.json'
 
 export class HarmonyDiagnosticsExporter {
   private bridge: IWriterCoreBridge
@@ -222,6 +247,9 @@ export class HarmonyDiagnosticsExporter {
 
     // ui_runtime_sanitized.json — Issue #767 UI 运行时快照
     this.addUiRuntimeAttachment(attachments)
+
+    // editor_runtime_sanitized.json — Issue #768 编辑器运行时快照
+    this.addEditorRuntimeAttachment(attachments)
 
     return attachments
   }
@@ -406,6 +434,44 @@ export class HarmonyDiagnosticsExporter {
       attachments.push(this.makeAttachment(ATTACHMENT_UI_RUNTIME, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_UI_RUNTIME, String(e)))
+    }
+  }
+
+  // editor_runtime_sanitized.json — 编辑器运行时快照（Issue #768）。
+  // 从 EditorRuntimeSnapshotStore 获取当前编辑器状态，记录布局、光标、IME、降级等信息。
+  // 全部脱敏，不含正文内容。
+  private addEditorRuntimeAttachment(attachments: AttachmentItem[]): void {
+    try {
+      const snapshot = EditorRuntimeSnapshotStore.getInstance().getSnapshot()
+      if (snapshot === null) {
+        attachments.push(this.errorAttachment(ATTACHMENT_EDITOR_RUNTIME,
+          'no editor runtime snapshot available'))
+        return
+      }
+      const attachment: EditorRuntimeAttachment = {
+        lineCount: snapshot.lineCount,
+        contentWidthPx: snapshot.contentWidthPx,
+        contentHeightPx: snapshot.contentHeightPx,
+        viewportWidthPx: snapshot.viewportWidthPx,
+        viewportHeightPx: snapshot.viewportHeightPx,
+        cursorUtf16Offset: snapshot.cursorUtf16Offset,
+        selectionStartUtf16: snapshot.selectionStartUtf16,
+        selectionEndUtf16: snapshot.selectionEndUtf16,
+        hasComposition: snapshot.hasComposition,
+        compositionLength: snapshot.compositionLength,
+        layoutSource: snapshot.layoutSource,
+        usingLayoutManager: snapshot.usingLayoutManager,
+        apiLevel: snapshot.apiLevel,
+        isImeAttached: snapshot.isImeAttached,
+        revision: snapshot.revision,
+        textLength: snapshot.textLength,
+        lastLayoutError: snapshot.lastLayoutError,
+        fallbackCount: snapshot.fallbackCount
+      }
+      const json = JSON.stringify(attachment, null, 2)
+      attachments.push(this.makeAttachment(ATTACHMENT_EDITOR_RUNTIME, json))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_EDITOR_RUNTIME, String(e)))
     }
   }
 

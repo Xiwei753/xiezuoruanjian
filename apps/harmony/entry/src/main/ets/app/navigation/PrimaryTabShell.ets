@@ -29,6 +29,8 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } fr
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
+import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
+import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -69,6 +71,9 @@ export struct PrimaryTabShell {
   // 是否显示底部一级导航栏，由 Core ScreenPolicy.showPrimaryNavigation 决定
   @State currentShowPrimaryNav: boolean = true
 
+  // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
+  @State useHdsTabs: boolean = false
+
   // Issue #767：@Provide 活动栈，供 @Consume("navPathStack") 的页面使用。
   // 初始值引用 homeStack（默认 tab 是作品，homeStack 在此之前已声明初始化）。
   // Tabs onChange 切换时更新为对应 tab 的 stack。
@@ -82,23 +87,29 @@ export struct PrimaryTabShell {
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
 
-    // Issue #767：向 coordinator 显式登记三个 tab 的 NavPathStack。
-    // 这样 AppNavigation 的接续恢复可以通过 getTabStack(TAB_HOME) 拿到正确的栈，
-    // 而不是依赖可能尚未同步的 activeTabStack。
-    const coordinator = NavigationTransactionCoordinator.getInstance()
-    coordinator.registerTabStack(TAB_HOME, this.homeStack)
-    coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
-    coordinator.registerTabStack(TAB_STATS, this.statsStack)
+    // Issue #768：检测 API Level，决定是否使用 HdsTabs。
+    this.useHdsTabs = PlatformApiResolver.getInstance().isApiAtLeast(23)
 
-    // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
-    // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
-    // Issue #767 评论5832129578 第1项：aboutToAppear 时组件还在初始化，@Watch 不会触发，
-    // 所以直接调 syncActiveTab 而不是 onTabChange。
-    this.syncActiveTab(this.currentTab)
+    // Issue #768：useHdsTabs=true 时跳过栈注册，由 HdsPrimaryTabsApi23 自己注册。
+    if (!this.useHdsTabs) {
+      // Issue #767：向 coordinator 显式登记三个 tab 的 NavPathStack。
+      // 这样 AppNavigation 的接续恢复可以通过 getTabStack(TAB_HOME) 拿到正确的栈，
+      // 而不是依赖可能尚未同步的 activeTabStack。
+      const coordinator = NavigationTransactionCoordinator.getInstance()
+      coordinator.registerTabStack(TAB_HOME, this.homeStack)
+      coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
+      coordinator.registerTabStack(TAB_STATS, this.statsStack)
 
-    // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
-    // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
-    coordinator.tryConsumePendingRestore()
+      // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
+      // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
+      // Issue #767 评论5832129578 第1项：aboutToAppear 时组件还在初始化，@Watch 不会触发，
+      // 所以直接调 syncActiveTab 而不是 onTabChange。
+      this.syncActiveTab(this.currentTab)
+
+      // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
+      // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
+      coordinator.tryConsumePendingRestore()
+    }
 
     // 注册主题观察者，Tab 配色随主题变化。
     const self = this
@@ -132,12 +143,15 @@ export struct PrimaryTabShell {
     if (this.navChromeObserver) {
       NavigationChromeStore.getInstance().unsubscribe(this.navChromeObserver)
     }
-    // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
-    // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
-    const coordinator = NavigationTransactionCoordinator.getInstance()
-    coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
-    coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
-    coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
+    // Issue #768：useHdsTabs=true 时跳过栈注销，由 HdsPrimaryTabsApi23 自己注销。
+    if (!this.useHdsTabs) {
+      // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
+      // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
+      const coordinator = NavigationTransactionCoordinator.getInstance()
+      coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
+      coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
+      coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
+    }
   }
 
   // 通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。
@@ -223,55 +237,65 @@ export struct PrimaryTabShell {
   }
 
   build() {
-    Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
-      // 作品 tab（TAB_HOME=0）
-      TabContent() {
-        Navigation(this.homeStack) {
-          // 内容由 homeStack 驱动
+    // Issue #768：API23+ 分流到 HdsPrimaryTabsApi23（使用 HdsTabs 悬浮页签）。
+    // API < 23 保持普通 Tabs + BottomTabBarStyle 实现。
+    if (this.useHdsTabs) {
+      HdsPrimaryTabsApi23({
+        currentTab: $currentTab,
+        safeBottomVp: this.adaptiveState.safeBottomVp,
+        currentShowPrimaryNav: this.currentShowPrimaryNav
+      })
+    } else {
+      Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
+        // 作品 tab（TAB_HOME=0）
+        TabContent() {
+          Navigation(this.homeStack) {
+            // 内容由 homeStack 驱动
+          }
+          .navDestination(this.PageMap)
+          .mode(NavigationMode.Stack)
+          .hideTitleBar(true)
         }
-        .navDestination(this.PageMap)
-        .mode(NavigationMode.Stack)
-        .hideTitleBar(true)
-      }
-      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_text'), '作品'))
+        .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_text'), '作品'))
 
-      // 星图 tab（TAB_STARMAP=1）
-      TabContent() {
-        Navigation(this.starMapStack) {
-          // 内容由 starMapStack 驱动
+        // 星图 tab（TAB_STARMAP=1）
+        TabContent() {
+          Navigation(this.starMapStack) {
+            // 内容由 starMapStack 驱动
+          }
+          .navDestination(this.PageMap)
+          .mode(NavigationMode.Stack)
+          .hideTitleBar(true)
         }
-        .navDestination(this.PageMap)
-        .mode(NavigationMode.Stack)
-        .hideTitleBar(true)
-      }
-      .tabBar(new BottomTabBarStyle($r('app.media.ic_star'), '星图'))
+        .tabBar(new BottomTabBarStyle($r('app.media.ic_star'), '星图'))
 
-      // 统计 tab（TAB_STATS=2）
-      TabContent() {
-        Navigation(this.statsStack) {
-          // 内容由 statsStack 驱动
+        // 统计 tab（TAB_STATS=2）
+        TabContent() {
+          Navigation(this.statsStack) {
+            // 内容由 statsStack 驱动
+          }
+          .navDestination(this.PageMap)
+          .mode(NavigationMode.Stack)
+          .hideTitleBar(true)
         }
-        .navDestination(this.PageMap)
-        .mode(NavigationMode.Stack)
-        .hideTitleBar(true)
+        .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
       }
-      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
+      .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
+      // Issue #767 评论5832129578 第2项：正文/设置页禁止横向滑动切 tab，
+      // 防止绕过 requestLeave/safePop 的离开事务。
+      .scrollable(this.currentShowPrimaryNav)
+      .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
+        // Issue #767 评论5832129578 第2项：底栏隐藏时（Writing/Settings）禁止横向滑动切 tab。
+        if (!this.currentShowPrimaryNav) {
+          return false
+        }
+        return true
+      })
+      .onChange((index: number) => {
+        this.onTabChange(index)
+      })
+      .width('100%')
+      .height('100%')
     }
-    .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
-    // Issue #767 评论5832129578 第2项：正文/设置页禁止横向滑动切 tab，
-    // 防止绕过 requestLeave/safePop 的离开事务。
-    .scrollable(this.currentShowPrimaryNav)
-    .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
-      // Issue #767 评论5832129578 第2项：底栏隐藏时（Writing/Settings）禁止横向滑动切 tab。
-      if (!this.currentShowPrimaryNav) {
-        return false
-      }
-      return true
-    })
-    .onChange((index: number) => {
-      this.onTabChange(index)
-    })
-    .width('100%')
-    .height('100%')
   }
 }

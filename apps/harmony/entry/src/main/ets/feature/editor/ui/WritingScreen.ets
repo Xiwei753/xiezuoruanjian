@@ -175,7 +175,13 @@ export struct WritingScreen {
     // Core 已 Applied 只是平台 patch 失败时 recovery 后 editResult=本次 result.data，仍按 contentDelta 更新。
     this.coordinator.setStateListener((update: EditorStateUpdate) => {
       const snap = update.snapshot
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(snap, self.settings.editorFontSize)
+      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
+        snap,
+        self.settings.editorFontSize,
+        self.settings.editorLineSpacingMultiplier,
+        self.settings.autoIndentEnabled,
+        self.settings.autoIndentWidth
+      )
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
       // 实时字数：消费 editResult.contentDelta（Core 非空白字符增量）
@@ -353,7 +359,7 @@ export struct WritingScreen {
       return this.leaveTask
     }
     const task: Promise<void> = (async () => {
-      await NavigationTransactionCoordinator.getInstance().safePop()
+      await NavigationTransactionCoordinator.getInstance().safePopWithStack(this.navPathStack)
     })()
     this.leaveTask = task
     task.then(
@@ -612,7 +618,7 @@ export struct WritingScreen {
     }
     const host = NavigationTransactionCoordinator.getInstance()
     const targetKey = `writing:${this.projectId}:${volumeId}:${chapterId}`
-    await host.safeReplacePath(targetKey, () => {
+    await host.safeReplacePathWithStack(this.navPathStack, targetKey, () => {
       const replaceParam: WritingRouteParams = {
         chapterId: chapterId,
         chapterTitle: chapterTitle,
