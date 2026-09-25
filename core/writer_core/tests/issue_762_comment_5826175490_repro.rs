@@ -1167,11 +1167,13 @@ fn first_sync_preserves_stable_device_id_from_staging() {
         .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
         .unwrap();
 
-    // 同步后 live 必须有 state.local.json，且 device_id 非空。
+    // 同步后 live 必须有 state.local.json，且 device_id 等于平台稳定 DEVICE_LOCAL。
+    // #761 要求设备身份来自 planner/platform 的稳定 DEVICE_LOCAL，
+    // 仅断言非空抓不住 identity 漂移（随机 UUID 也会通过）。
     let p1_state = SyncService::load_sync_state(&live_root).unwrap();
-    assert!(
-        !p1_state.device_id.is_empty(),
-        "首次同步后 live 的 device_id 必须非空（来自 staging Transfer 生成的稳定值），\
-         修复前会被空 live 覆盖成空字符串"
+    assert_eq!(
+        p1_state.device_id, DEVICE_LOCAL,
+        "首次同步后 live 的 device_id 必须等于平台稳定 DEVICE_LOCAL，\
+         修复前会被空 live 覆盖成空字符串或随机 UUID，仅断言非空抓不住真正的 identity 漂移"
     );
 }

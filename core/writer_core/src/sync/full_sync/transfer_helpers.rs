@@ -329,7 +329,20 @@ pub(super) fn transfer_live_project(
                             attempt + 1,
                             source_prefix
                         );
-                        let mut merge_state = crate::sync::SyncService::load_sync_state(sync_root)?;
+                        // device_id 兼容（#762 评论 5831349330）：用平台注入的
+                        // preferred device_id 加载 staging state，而非 load_sync_state
+                        // （preferred=None → 首次同步回退 default 随机 UUID）。
+                        // live_lww.device_id 来自 planner 的本机稳定 device_id
+                        // （#761），首次同步时 staging 无 state → 用 preferred 生成
+                        // 稳定 device_id；非首次同步 staging 有 state 且 device_id 非空
+                        // → existing 优先，preferred 不影响。
+                        let preferred_device_id =
+                            planned.live_lww.as_ref().map(|l| l.device_id.as_str());
+                        let mut merge_state =
+                            crate::sync::SyncService::load_sync_state_with_preferred_device_id(
+                                sync_root,
+                                preferred_device_id,
+                            )?;
                         let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
                             sync_root,
                             provider,
@@ -337,6 +350,11 @@ pub(super) fn transfer_live_project(
                             planned.target.scope,
                             &mut merge_state,
                         )?;
+                        // 落盘 staging state（含稳定 device_id + merge 结果），
+                        // 供 Commit 阶段 merge_sync_state_three_way 三方合并读取。
+                        // 修复前不落盘 → staging state.local.json 不存在 →
+                        // merge 早期返回 live default（随机 UUID），丢掉稳定 device_id。
+                        crate::sync::SyncService::save_sync_state(sync_root, &merge_state)?;
                         // 从当前 staging 的完整未解决冲突状态生成快照。
                         let unresolved_conflicts: Vec<crate::sync::types::SyncConflict> =
                             merge_state

@@ -154,18 +154,13 @@ pub(crate) fn merge_sync_state_three_way(
         merged
     };
 
-    // device_id 三方合并：不能无条件取 live。
-    // 真实首次同步时 live 还没有 state.local.json，read_sync_state_or_default
-    // 返回 SyncState::default()（device_id 是随机 UUID，非空但不是真实设备身份）。
-    // 此时 staging 的 device_id 是 Transfer 在 staging 里生成的（#761），必须保留。
-    // - live 有 state.local.json → 保留 live（真实用户状态）
-    // - live 没有 → 使用 staging（首次同步 Transfer 生成）
-    let live_state_path = live_root.join("app-meta/sync/state.local.json");
-    let merged_device_id = if live_state_path.exists() {
-        live_state.device_id.clone()
-    } else {
-        staging_state.device_id.clone()
-    };
+    let merged_device_id = merge_device_id_three_way(
+        base_root,
+        live_root,
+        &base_state,
+        &live_state,
+        &staging_state,
+    )?;
 
     // tombstones / deleted_files：按 staging 同步结果合并（同步引擎管理的）。
     let merged_tombstones = staging_state.tombstones.clone();
@@ -197,6 +192,48 @@ pub(crate) fn merge_sync_state_three_way(
     };
 
     Ok((merged_state, merged_conflicts_json))
+}
+
+/// device_id 三方合并：按"state.local.json 存在且 device_id 字段非空"选择，
+/// 不能只看文件是否存在，也不能只看字段是否非空。
+/// - 只看文件存在：漏掉"文件存在但 device_id 为空"的合法旧数据/迁移输入
+///   （config_store.rs::load_sync_state_with_preferred_device_id 明确支持这种补齐），
+///   staging 已被 Transfer 用 preferred device_id 修成稳定值时会被 live 的空值覆盖
+///   （评论 5831349330 的场景）。
+/// - 只看字段非空：漏掉"文件不存在时 read_sync_state_or_default 回退 default()，
+///   其 device_id 是随机 UUID（非空但不是真实设备身份）"，会把首次同步时 staging
+///   Transfer 生成的稳定 device_id 丢掉（#761 回归）。
+///
+/// 有效 device_id = state.local.json 存在 且 device_id 字段非空。
+/// - live 有效 → 用 live（真实用户状态）
+/// - live 无效、staging 有效 → 用 staging（Transfer 生成/修复的稳定值）
+/// - live/staging 都无效 → 看 base
+/// - 三方都拿不到有效 device_id → 返回错误，让正式同步路径处理，
+///   不静默制造另一套设备身份。
+fn merge_device_id_three_way(
+    base_root: &Path,
+    live_root: &Path,
+    base_state: &SyncState,
+    live_state: &SyncState,
+    staging_state: &SyncState,
+) -> Result<String> {
+    let live_state_path = live_root.join("app-meta/sync/state.local.json");
+    let base_state_path = base_root.join("app-meta/sync/state.local.json");
+    if live_state_path.exists() && !live_state.device_id.is_empty() {
+        Ok(live_state.device_id.clone())
+    } else if !staging_state.device_id.is_empty() {
+        // staging_state_path 在调用方已确认存在（不存在则早期返回），
+        // 此处只需检查字段非空。
+        Ok(staging_state.device_id.clone())
+    } else if base_state_path.exists() && !base_state.device_id.is_empty() {
+        Ok(base_state.device_id.clone())
+    } else {
+        Err(crate::Error::Io(std::io::Error::other(
+            "merge_sync_state_three_way: no valid device_id in base/live/staging \
+             (all empty or missing); cannot silently fabricate a new device identity"
+                .to_string(),
+        )))
+    }
 }
 
 /// 读取 `app-meta/sync/state.local.json`，文件不存在/损坏时回退 `SyncState::default()`。
@@ -492,6 +529,59 @@ mod tests {
         assert_eq!(
             merged_state.device_id, "stable-device-from-transfer",
             "首次同步时 live 无 state，合并结果必须使用 staging 生成的稳定 device_id"
+        );
+    }
+
+    /// live 有 state.local.json 但 device_id 为空（合法旧数据/迁移输入），
+    /// staging 已被 Transfer 修成稳定 device_id → 合并结果必须用 staging 的稳定值，
+    /// 不能因为 live state 文件"存在"就选 live 的空 device_id。
+    ///
+    /// 生产顺序：live 已有旧 state.local.json（device_id=""）；seed 复制到 base/staging；
+    /// Transfer 在 staging 用 preferred device_id 修成稳定值；live 仍为空；
+    /// Commit 进入 merge。修复前因 live state 文件存在直接选 live_state.device_id=""，
+    /// 把 staging 修好的稳定 device_id 覆盖成空。
+    #[test]
+    fn device_id_uses_staging_when_live_file_exists_but_field_empty() {
+        let tmp = TempDir::new().unwrap();
+        let base_root = tmp.path().join("base");
+        let live_root = tmp.path().join("live");
+        let staging_root = tmp.path().join("staging");
+
+        // base: 旧数据，state.local.json 存在但 device_id 为空
+        let mut base_state = SyncState::default();
+        base_state.device_id = "".to_string();
+        write_state(&base_root, &base_state);
+        write_conflicts(&base_root, &[]);
+
+        // live: 旧数据，state.local.json 存在但 device_id 为空
+        let mut live_state = SyncState::default();
+        live_state.device_id = "".to_string();
+        write_state(&live_root, &live_state);
+        write_conflicts(&live_root, &[]);
+
+        // staging: Transfer 已用 preferred device_id 修成稳定值
+        let mut staging_state = SyncState::default();
+        staging_state.device_id = "stable-device".to_string();
+        write_state(&staging_root, &staging_state);
+        write_conflicts(&staging_root, &[]);
+
+        // 确认 base/live 的 state.local.json 都真实存在（测试前提）
+        assert!(
+            base_root.join("app-meta/sync/state.local.json").exists(),
+            "测试前提：base 应有 state.local.json"
+        );
+        assert!(
+            live_root.join("app-meta/sync/state.local.json").exists(),
+            "测试前提：live 应有 state.local.json"
+        );
+
+        let (merged_state, _) =
+            merge_sync_state_three_way(&base_root, &live_root, &staging_root).unwrap();
+
+        assert_eq!(
+            merged_state.device_id, "stable-device",
+            "live state 文件存在但 device_id 为空时，合并结果必须使用 staging 的稳定 device_id，\
+             不能因为文件存在就选 live 的空值"
         );
     }
 
