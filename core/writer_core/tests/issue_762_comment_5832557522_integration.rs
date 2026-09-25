@@ -403,7 +403,10 @@ fn sink_and_callback_cooperate_on_same_sync_chain() {
         .expect("perform_full_sync_with_provider 应成功");
 
     let observed_snapshots = observed.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let callback_rows = callback_records.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let callback_rows = callback_records
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
 
     // 采样摘要（失败时打印辅助诊断）。
     let phase_trace: Vec<(Option<String>, Option<String>)> = observed_snapshots

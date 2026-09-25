@@ -719,6 +719,39 @@ impl WriterCoreApi {
     /// 最终值，用户收到 progress 立刻 resolve 不会被后续 Commit 覆盖。
     ///
     /// 返回 `(冲突已合并进结果的 target 结果, workspace-relative committed paths)`。
+    /// 把 `record_staging_conflicts` 的结果合并进 target 结果。
+    /// 从 `commit_target_after_transfer` 提取以控制 `with_sync_state_lock` 闭包嵌套深度
+    /// （Issue #762 评论 5834136935）。
+    fn apply_staging_conflicts_to_target(
+        target_with_conflicts: &mut crate::sync::types::TargetSyncResult,
+        run: &crate::sync::staging::StagingRun,
+        target_sync_result: &crate::sync::types::TargetSyncResult,
+        conflicts: &[crate::sync::staging::StagingConflict],
+    ) {
+        if conflicts.is_empty() {
+            return;
+        }
+        let existing_conflicts = target_sync_result.result.conflicts.clone();
+        match crate::sync::conflict::record_staging_conflicts(
+            run.target_live_root(),
+            &target_sync_result.remote_prefix,
+            conflicts,
+            &existing_conflicts,
+        ) {
+            Ok(merged) => {
+                target_with_conflicts.result.conflicts = merged;
+                target_with_conflicts.result.status = crate::sync::SyncStatus::Conflict;
+            }
+            Err(e) => {
+                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                    format!("staging_conflict_persist_failed: {}", e),
+                );
+                target_with_conflicts.result.error =
+                    Some(format!("failed to persist staging conflicts: {}", e));
+            }
+        }
+    }
+
     fn commit_target_after_transfer(
         &self,
         run: &crate::sync::staging::StagingRun,
@@ -727,42 +760,34 @@ impl WriterCoreApi {
         crate::sync::types::TargetSyncResult,
         Vec<std::path::PathBuf>,
     ) {
-        let _core = self.core_write();
-        let (commit_result, conflicts, committed_paths) =
-            crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
-        let mut target_with_conflicts = target_sync_result.clone();
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 sync root 的
+        // state/conflict mutation。整段 Commit（三方 merge + SaveTransaction 写回 +
+        // record_staging_conflicts）持有该 project root 的共享锁，防止 UI resolve
+        // 在 Commit 过程中写入后被旧 merged state 覆盖。
+        crate::sync::state_lock::with_sync_state_lock(run.target_live_root(), || {
+            let _core = self.core_write();
+            let (commit_result, conflicts, committed_paths) =
+                crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
+            let mut target_with_conflicts = target_sync_result.clone();
 
-        if !conflicts.is_empty() {
-            let existing_conflicts = target_sync_result.result.conflicts.clone();
-            match crate::sync::conflict::record_staging_conflicts(
-                run.target_live_root(),
-                &target_sync_result.remote_prefix,
+            Self::apply_staging_conflicts_to_target(
+                &mut target_with_conflicts,
+                run,
+                target_sync_result,
                 &conflicts,
-                &existing_conflicts,
-            ) {
-                Ok(merged) => {
-                    target_with_conflicts.result.conflicts = merged;
-                    target_with_conflicts.result.status = crate::sync::SyncStatus::Conflict;
-                }
-                Err(e) => {
-                    target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                        format!("staging_conflict_persist_failed: {}", e),
-                    );
-                    target_with_conflicts.result.error =
-                        Some(format!("failed to persist staging conflicts: {}", e));
-                }
-            }
-        }
-
-        // commit 失败注入错误状态。
-        if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = &commit_result {
-            target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                format!("staging_commit_failed: {}", msg),
             );
-            target_with_conflicts.result.error = Some(format!("staging commit failed: {}", msg));
-        }
 
-        (target_with_conflicts, committed_paths)
+            // commit 失败注入错误状态。
+            if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = &commit_result {
+                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                    format!("staging_commit_failed: {}", msg),
+                );
+                target_with_conflicts.result.error =
+                    Some(format!("staging commit failed: {}", msg));
+            }
+
+            (target_with_conflicts, committed_paths)
+        })
     }
 
     /// 整轮结束后的 generation GC — 清理未引用 generation。
@@ -878,10 +903,17 @@ impl WriterCoreApi {
 
     /// 冲突解决：保留本地版本。
     pub fn resolve_conflict_keep_local(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        self.core_write()
-            .resolve_conflict_keep_local(project_id, path)
-            .map(|_| true)
-            .map_err(Into::into)
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 project root 的
+        // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
+        // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
+        // Commit 先拿锁 → resolve 等 Commit 完成，再基于最终 live 状态解决。
+        let project_root = self.projects_root.join(project_id);
+        crate::sync::state_lock::with_sync_state_lock(&project_root, || {
+            self.core_write()
+                .resolve_conflict_keep_local(project_id, path)
+                .map(|_| true)
+                .map_err(Into::into)
+        })
     }
 
     /// 冲突解决：采用远端版本。
@@ -889,17 +921,31 @@ impl WriterCoreApi {
     /// 返回 `applied_live` bool：`true` 表示已立即修改 live 正文（snapshot 替换/移入 trash），
     /// 平台层据此触发编辑器重载；`false` 表示仅排队 pending_take_remote（老数据兼容）。
     pub fn resolve_conflict_take_remote(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        self.core_write()
-            .resolve_conflict_take_remote(project_id, path)
-            .map_err(Into::into)
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 project root 的
+        // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
+        // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
+        // Commit 先拿锁 → resolve 等 Commit 完成，再基于最终 live 状态解决。
+        let project_root = self.projects_root.join(project_id);
+        crate::sync::state_lock::with_sync_state_lock(&project_root, || {
+            self.core_write()
+                .resolve_conflict_take_remote(project_id, path)
+                .map_err(Into::into)
+        })
     }
 
     /// 冲突解决：标记为已合并。
     pub fn resolve_conflict_mark_merged(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        self.core_write()
-            .resolve_conflict_mark_merged(project_id, path)
-            .map(|_| true)
-            .map_err(Into::into)
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 project root 的
+        // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
+        // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
+        // Commit 先拿锁 → resolve 等 Commit 完成，再基于最终 live 状态解决。
+        let project_root = self.projects_root.join(project_id);
+        crate::sync::state_lock::with_sync_state_lock(&project_root, || {
+            self.core_write()
+                .resolve_conflict_mark_merged(project_id, path)
+                .map(|_| true)
+                .map_err(Into::into)
+        })
     }
 
     /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
