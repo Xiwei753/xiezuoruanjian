@@ -225,13 +225,18 @@ export struct WorkspaceScreen {
     NavDestination() {
       Stack() {
         Column() {
-          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          if (this.adaptiveState.sizeClass === WidthClass.Compact) {
+            // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
+            this.CompactWorkspaceLayout()
+          } else if (this.adaptiveState.isTwoPane) {
             // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
             // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
             this.TwoPaneLayout()
           } else {
-            // ── 单栏模式（窄屏卷卡可展开设计） ──
-            this.SinglePaneLayout()
+            // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
+            // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
+            // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
+            this.LegacySinglePaneLayout()
           }
         }
         .width('100%')
@@ -466,11 +471,11 @@ export struct WorkspaceScreen {
   }
 
   // ────────────────────────────────────────
-  // 单栏布局（窄屏卷卡可展开设计 — Issue #760）
+  // 窄屏布局（Compact — Issue #760 卷卡可展开设计）
   // ────────────────────────────────────────
 
   @Builder
-  SinglePaneLayout() {
+  CompactWorkspaceLayout() {
     Stack() {
       Column() {
         // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
@@ -603,6 +608,115 @@ export struct WorkspaceScreen {
             .onClick(() => this.navigateToSettings())
         }
       }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
+    }
+    .width('100%')
+    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
+  }
+
+  // ────────────────────────────────────────
+  // 旧单栏布局（LegacySinglePane — #760 前的非窄屏单栏布局）
+  // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
+  // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
+  // ────────────────────────────────────────
+
+  @Builder
+  LegacySinglePaneLayout() {
+    Column() {
+      // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
+      this.LegacySinglePaneHeader()
+
+      // ── 内容区 ──
+      if (this.viewModel.isLoadingState) {
+        Column() {
+          LoadingProgress()
+            .width(48)
+            .height(48)
+            .color(this.themeConfig.colors.primary)
+          Text($r('app.string.loading'))
+            .fontSize(14)
+            .fontColor(this.themeConfig.colors.textHint)
+            .margin({ top: 12 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else if (this.viewModel.errorMessageState) {
+        Column() {
+          Text(this.viewModel.errorMessageState)
+            .fontSize(16)
+            .fontColor(this.themeConfig.colors.error)
+            .margin({ bottom: 16 })
+
+          Button($r('app.string.retry'))
+            .onClick(() => this.handleRetry())
+            .backgroundColor(this.themeConfig.colors.primary)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        Scroll() {
+          Column() {
+            if (this.viewModel.volumeCardStates.length === 0) {
+              this.EmptyState()
+            } else {
+              ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
+                this.VolumeCard(cardState)
+              }, (cardState: VolumeCardState) => cardState.volumeId)
+            }
+          }
+          .width('100%')
+          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
+        }
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.themeConfig.colors.background)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  // ── 旧顶栏：左 返回+作品名 / 右 同步+设置 ──
+  // 保持 #760 前的交互：同步按钮跳设置页（不执行真正的同步动作）
+  @Builder
+  LegacySinglePaneHeader() {
+    Row() {
+      // 左：返回 + 作品名
+      Image($r('sys.media.ohos_ic_public_arrow_left'))
+        .width(24)
+        .height(24)
+        .fillColor(this.themeConfig.colors.textPrimary)
+        .onClick(() => this.handleBack())
+
+      Text(this.viewModel.projectName)
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ left: 12 })
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+      // 右：同步、设置（旧版交互：同步按钮跳设置页）
+      Button($r('app.string.sync'))
+        .fontSize(13)
+        .height(28)
+        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
+        .fontColor(this.themeConfig.colors.textSecondary)
+        .margin({ right: 8 })
+        .onClick(() => this.navigateToSettings())
+
+      // 设置按钮
+      Button($r('app.string.settings'))
+        .fontSize(13)
+        .height(28)
+        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
+        .fontColor(this.themeConfig.colors.textSecondary)
+        .onClick(() => this.navigateToSettings())
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
