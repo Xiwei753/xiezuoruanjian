@@ -359,6 +359,14 @@ dictionary SyncOperationCountsDto {
     u32 overwritten;
     u32 ignored;
     u32 conflicts;
+    u32 conflict_count;
+};
+
+// 当前正在处理的同步 target — 诊断用。
+dictionary SyncCurrentTargetDto {
+    string? target_remote_prefix;
+    string? project_id;
+    string? phase;
 };
 
 dictionary SyncOperationStateDto {
@@ -368,8 +376,20 @@ dictionary SyncOperationStateDto {
     string? phase_key;
     string? summary_key;
     record<string, string> summary_args;
+    SyncCurrentTargetDto? current_target;
+    u32 finished_targets;
+    u32 total_targets;
     SyncOperationCountsDto counts;
     string? raw_error;
+};
+
+// 全局冲突摘要条目 — 诊断包用，只保留路径语义和类型，不含正文/快照内容。
+dictionary AllSyncConflictEntryDto {
+    string project_id;
+    string project_title;
+    string path;
+    string kind;
+    i64 created_at;
 };
 
 dictionary SyncPlanDto {
@@ -1299,6 +1319,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     sequence<SyncConflictDto> list_sync_conflicts(string project_id);
+
+    // 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。诊断包用。
+    [Throws=WriterError]
+    sequence<AllSyncConflictEntryDto> list_all_sync_conflicts();
 
     [Throws=WriterError]
     SyncConflictPreviewDto load_sync_conflict_preview(string project_id, string path);

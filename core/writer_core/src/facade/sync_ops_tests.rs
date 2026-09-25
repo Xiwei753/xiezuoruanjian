@@ -737,7 +737,7 @@ fn full_sync_transport_init_failure_persists_recoverable() {
     core.sync_transport = Some(factory);
 
     let config = test_config();
-    let result = core.perform_full_sync(&config, false);
+    let result = core.perform_full_sync(&config, false, None);
     assert!(result.is_err(), "transport init failure must return Err");
 
     let state = core
@@ -768,7 +768,7 @@ fn full_sync_transport_init_failure_auth_is_fatal() {
     core.sync_transport = Some(factory);
 
     let config = test_config();
-    let result = core.perform_full_sync(&config, false);
+    let result = core.perform_full_sync(&config, false, None);
     assert!(result.is_err(), "transport init failure must return Err");
 
     let state = core
@@ -1002,7 +1002,7 @@ fn transport_init_failure_auth_returns_sync_auth_failed_and_persists_fatal() {
     core.sync_transport = Some(factory);
 
     let config = test_config();
-    let result = core.perform_full_sync(&config, false);
+    let result = core.perform_full_sync(&config, false, None);
     let err = result.expect_err("transport init failure must return Err");
     assert!(
         matches!(err, crate::Error::SyncAuthFailed { .. }),
@@ -1039,7 +1039,7 @@ fn transport_init_failure_network_returns_sync_network_unavailable_and_persists_
     core.sync_transport = Some(factory);
 
     let config = test_config();
-    let result = core.perform_full_sync(&config, false);
+    let result = core.perform_full_sync(&config, false, None);
     let err = result.expect_err("transport init failure must return Err");
     assert!(
         matches!(err, crate::Error::SyncNetworkUnavailable { .. }),
@@ -1079,7 +1079,7 @@ fn transport_init_failure_rate_limited_returns_sync_rate_limited_and_persists_re
     core.sync_transport = Some(factory);
 
     let config = test_config();
-    let result = core.perform_full_sync(&config, false);
+    let result = core.perform_full_sync(&config, false, None);
     let err = result.expect_err("transport init failure must return Err");
     assert!(
         matches!(
@@ -1121,7 +1121,7 @@ fn transport_init_failure_unknown_category_defaults_to_auth_failed() {
     core.sync_transport = Some(factory);
 
     let config = test_config();
-    let result = core.perform_full_sync(&config, false);
+    let result = core.perform_full_sync(&config, false, None);
     let err = result.expect_err("transport init failure must return Err");
     assert!(
         matches!(err, crate::Error::SyncAuthFailed { .. }),

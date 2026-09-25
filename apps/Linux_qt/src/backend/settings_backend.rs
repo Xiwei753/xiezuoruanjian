@@ -174,7 +174,14 @@ fn determine_export_dir(app_data_root: &std::path::Path) -> std::path::PathBuf {
 /// - `system_info.json`：系统信息（QSysInfo）
 /// - `device_info.json`：设备摘要
 /// - `app_settings_sanitized.json`：设置快照（存在时）
+/// - `sync_operation_state.json`：当前同步操作状态（含 target 进度，运行中才有）
+/// - `full_sync_state.json`：全量同步持久状态
+/// - `sync_conflicts.json`：全局冲突摘要（只含路径语义和类型，不含正文/快照）
+/// - `sync_runtime.json`：同步运行时状态（data root 脱敏，只保留 basename）
+///
+/// `app` 用于读取同步运行时状态和 Core API；`app_data_root` 用于定位设置快照文件。
 fn build_export_attachments(
+    app: &AppBackend,
     app_data_root: &std::path::Path,
 ) -> Vec<writer_diagnostics::PlatformAttachment> {
     let mut attachments = Vec::new();
@@ -234,6 +241,91 @@ fn build_export_attachments(
             content: content.into_bytes(),
         });
     }
+
+    // sync_operation_state.json — 当前同步操作状态（含 target 进度）。
+    // current_sync_operation_state 是 Core SyncOperationStateDto 的 JSON 序列化。
+    // 若有进度 sink（同步进行中），合并 currentTarget/finishedTargets/totalTargets。
+    // 不自己发明格式，直接取 Core DTO 的 JSON；解析失败时原样输出，不丢信息。
+    if !app.current_sync_operation_state.is_empty() {
+        let content = if let Some(ref sink) = app.current_sync_progress {
+            let progress = sink.snapshot();
+            match serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state) {
+                Ok(mut v) => {
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "currentTarget".to_string(),
+                            serde_json::json!({
+                                "targetRemotePrefix": progress.current_target_remote_prefix,
+                                "projectId": progress.current_project_id,
+                                "phase": progress.current_phase,
+                            }),
+                        );
+                        obj.insert(
+                            "finishedTargets".to_string(),
+                            serde_json::json!(progress.finished_targets),
+                        );
+                        obj.insert(
+                            "totalTargets".to_string(),
+                            serde_json::json!(progress.total_targets),
+                        );
+                    }
+                    serde_json::to_string_pretty(&v)
+                        .unwrap_or_else(|_| app.current_sync_operation_state.clone())
+                }
+                Err(_) => app.current_sync_operation_state.clone(),
+            }
+        } else {
+            app.current_sync_operation_state.clone()
+        };
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "sync_operation_state.json".to_string(),
+            content: content.into_bytes(),
+        });
+    }
+
+    // full_sync_state.json — 全量同步持久状态。core_api() 返回 None（无工作区）时跳过。
+    if let Some(api) = app.core_api() {
+        if let Ok(Some(state)) = api.load_full_sync_state() {
+            let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
+            attachments.push(writer_diagnostics::PlatformAttachment {
+                relative_path: "full_sync_state.json".to_string(),
+                content: json.into_bytes(),
+            });
+        }
+    }
+
+    // sync_conflicts.json — 全局冲突摘要（AllSyncConflictEntryDto 只含 project_id/title/
+    // path/kind/created_at，不含正文/快照，安全）。core_api() 返回 None 时跳过。
+    if let Some(api) = app.core_api() {
+        if let Ok(conflicts) = api.list_all_sync_conflicts() {
+            let json =
+                serde_json::to_string_pretty(&conflicts).unwrap_or_else(|_| "[]".to_string());
+            attachments.push(writer_diagnostics::PlatformAttachment {
+                relative_path: "sync_conflicts.json".to_string(),
+                content: json.into_bytes(),
+            });
+        }
+    }
+
+    // sync_runtime.json — 同步运行时状态。data root 绝对路径不进诊断包，只放 basename。
+    let data_root_basename = std::path::Path::new(&app.current_data_root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let runtime = serde_json::json!({
+        "syncInProgress": app.current_sync_in_progress,
+        "operationId": app.current_sync_operation_id,
+        "syncStatus": app.current_sync_status,
+        "workspaceGeneration": app.current_workspace_generation,
+        "dataRootBasename": data_root_basename,
+    });
+    attachments.push(writer_diagnostics::PlatformAttachment {
+        relative_path: "sync_runtime.json".to_string(),
+        content: serde_json::to_string_pretty(&runtime)
+            .unwrap_or_else(|_| "{}".to_string())
+            .into_bytes(),
+    });
 
     attachments
 }
@@ -628,9 +720,10 @@ impl SettingsBackend {
             }
 
             // 构造平台附件：runtime_info.json、system_info.json、device_info.json、
-            // app_settings_sanitized.json。附件内容由平台采集器提供，脱敏和打包由
+            // app_settings_sanitized.json、sync_operation_state.json、full_sync_state.json、
+            // sync_conflicts.json、sync_runtime.json。附件内容由平台采集器提供，脱敏和打包由
             // writer_diagnostics::export 接管。
-            let attachments = build_export_attachments(&app_data_root);
+            let attachments = build_export_attachments(app, &app_data_root);
 
             // 调用共享 Rust exporter 生成 zip 包。
             match writer_diagnostics::export(&export_dir, &attachments) {

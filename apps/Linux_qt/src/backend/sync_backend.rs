@@ -633,6 +633,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.status.already_running".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -650,6 +653,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.no_workspace".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: Some("workspace_empty".to_string()),
             };
@@ -668,6 +674,9 @@ impl AppBackend {
             phase_key: Some("sync.phase.diagnose".to_string()),
             summary_key: None,
             summary_args: std::collections::HashMap::new(),
+            current_target: None,
+            finished_targets: 0,
+            total_targets: 0,
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
@@ -688,6 +697,9 @@ impl AppBackend {
                     phase_key: None,
                     summary_key: Some("sync.block.no_workspace_layout".to_string()),
                     summary_args: std::collections::HashMap::new(),
+                    current_target: None,
+                    finished_targets: 0,
+                    total_targets: 0,
                     counts: writer_core::api::SyncOperationCountsDto::default(),
                     raw_error: None,
                 };
@@ -738,6 +750,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some(summary_key),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
@@ -769,6 +784,9 @@ impl AppBackend {
                                 Some("sync.result.diagnose_failed".to_string())
                             },
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: result.diagnostics.raw_error.clone(),
                         };
@@ -790,6 +808,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some("sync.result.diagnose_failed".to_string()),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&e.to_string())),
                         };
@@ -822,6 +843,9 @@ impl AppBackend {
                         phase_key: None,
                         summary_key: Some("error.sync_diagnose_panic".to_string()),
                         summary_args: [("panic_msg".to_string(), panic_msg)].into_iter().collect(),
+                        current_target: None,
+                        finished_targets: 0,
+                        total_targets: 0,
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: None,
                     };
@@ -1003,6 +1027,9 @@ impl AppBackend {
                     phase_key: None,
                     summary_key: Some("error.save_sync_config_failed".to_string()),
                     summary_args: std::collections::HashMap::new(),
+                    current_target: None,
+                    finished_targets: 0,
+                    total_targets: 0,
                     counts: writer_core::api::SyncOperationCountsDto::default(),
                     raw_error: Some(format!("{} ({})", resolved_key, error_code)),
                 });
@@ -1035,6 +1062,9 @@ impl AppBackend {
                         phase_key: None,
                         summary_key: Some("error.save_sync_secrets_failed".to_string()),
                         summary_args: std::collections::HashMap::new(),
+                        current_target: None,
+                        finished_targets: 0,
+                        total_targets: 0,
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: Some(format!("{} ({})", resolved_key, error_code)),
                     });
@@ -1048,6 +1078,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("error.core_not_initialized".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             });
@@ -1073,6 +1106,9 @@ impl AppBackend {
             phase_key: None,
             summary_key: Some("sync.result.save_config_success".to_string()),
             summary_args: std::collections::HashMap::new(),
+            current_target: None,
+            finished_targets: 0,
+            total_targets: 0,
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };

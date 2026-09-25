@@ -373,6 +373,10 @@ pub struct AppBackend {
     current_sync_operation_kind: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
+    /// 同步进度共享状态 — 后台线程写 target 进度，诊断导出时主线程读。
+    /// `None` 表示当前无同步在进行。`SyncProgressSink` 是 `Clone`（廉价 Arc）且
+    /// `Send + Sync`，可安全跨线程共享（后台线程持有 clone 写，主线程读 snapshot）。
+    current_sync_progress: Option<writer_core::sync::SyncProgressSink>,
     /// 手动同步 pending 标志。当手动同步请求到来时正在运行自动同步，
     /// 设为 true 排队等待当前同步完成后再执行一次 manual sync。
     /// 连续点击只保留一次 pending，不堆无限队列。

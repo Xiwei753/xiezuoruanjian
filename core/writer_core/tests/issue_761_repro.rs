@@ -423,7 +423,7 @@ fn regression_issue_761_conflict_reuses_remote_blob_in_single_atomic_batch() {
         DEVICE_LOCAL,
     );
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, catalog_snapshot);
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
 
     // ── 一次批量提交，不再逐文件 write() 到 generation prefix ──
@@ -594,7 +594,7 @@ fn regression_issue_761_unresolved_conflict_without_remote_blob_returns_partial_
         DEVICE_LOCAL,
         catalog_snapshot,
     );
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
 
     let status = &transfer.targets[0].result.status;
@@ -788,7 +788,7 @@ fn regression_issue_761_first_sync_empty_remote_uses_batch_without_file_writes()
         DEVICE_LOCAL,
         empty_remote_catalog_snapshot(),
     );
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
 
     // ── 首次同步也必须是一次批量提交，不得逐文件 write() 到 generation prefix ──
@@ -920,7 +920,7 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
         DEVICE_LOCAL,
     );
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, catalog_snapshot);
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
 
     let status = &transfer.targets[0].result.status;
@@ -1045,7 +1045,7 @@ fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
     };
 
     // 4. 空远端 catalog，跑 run_transfer。
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
 
     // 5. 修复后行为：target 不应是 RecoverableError，应成功走 batch 路径。

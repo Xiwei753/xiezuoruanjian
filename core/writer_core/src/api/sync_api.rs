@@ -1,6 +1,6 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
-use crate::sync::cancellation_token::SyncCancellationToken;
+use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
 
 /// 同步 API — 全量同步统一入口。
 ///
@@ -296,6 +296,7 @@ impl WriterCoreApi {
         config: SyncConfigDto,
         force_sync: bool,
         cancellation_token: Option<SyncCancellationToken>,
+        progress: Option<SyncProgressSink>,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
@@ -533,6 +534,7 @@ impl WriterCoreApi {
             provider.as_ref(),
             &plan,
             cancellation_token.as_ref(),
+            progress.as_ref(),
         );
 
         // Issue #729：run_transfer 返回后检查取消令牌。
@@ -661,6 +663,15 @@ impl WriterCoreApi {
         self.core_read()
             .list_sync_conflicts(project_id)
             .map(|conflicts| conflicts.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
+    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
+    ///
+    /// 诊断包用（Issue #763）。单项目读取失败不阻断全局聚合，跳过该项目继续。
+    pub fn list_all_sync_conflicts(&self) -> ApiResult<Vec<AllSyncConflictEntryDto>> {
+        self.core_read()
+            .list_all_sync_conflicts()
             .map_err(Into::into)
     }
 

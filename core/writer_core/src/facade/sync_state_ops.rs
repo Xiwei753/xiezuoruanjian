@@ -97,6 +97,44 @@ impl super::WriterCore {
         crate::sync::SyncService::list_conflicts(&self.project_root(project_id))
     }
 
+    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
+    ///
+    /// 诊断包用（Issue #763）。单项目读取失败不阻断全局聚合，跳过该项目继续。
+    pub fn list_all_sync_conflicts(
+        &self,
+    ) -> crate::error::Result<Vec<crate::api::AllSyncConflictEntryDto>> {
+        let projects = self.list_projects()?;
+        let mut entries = Vec::new();
+        for project in &projects {
+            let conflicts = match self.list_sync_conflicts(&project.id) {
+                Ok(c) => c,
+                Err(e) => {
+                    // 单项目失败不阻断全局聚合，记录警告后继续下一项目。
+                    log::warn!(
+                        "list_all_sync_conflicts: skip project {} ({}) — {e}",
+                        project.id,
+                        project.title
+                    );
+                    continue;
+                }
+            };
+            for c in conflicts {
+                let kind = match c.kind {
+                    crate::sync::types::SyncConflictKind::BothChanged => "both_changed",
+                    crate::sync::types::SyncConflictKind::RemoteDeleted => "remote_deleted",
+                };
+                entries.push(crate::api::AllSyncConflictEntryDto {
+                    project_id: project.id.clone(),
+                    project_title: project.title.clone(),
+                    path: c.local_path,
+                    kind: kind.to_string(),
+                    created_at: c.created_at,
+                });
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {
         crate::sync::SyncService::get_sync_ignored_paths(
             &self.project_root(project_id),

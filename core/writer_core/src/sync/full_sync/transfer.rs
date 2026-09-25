@@ -2,7 +2,7 @@
 //!
 //! Contains `run_transfer`; all helpers live in `transfer_helpers.rs`.
 
-use crate::sync::cancellation_token::SyncCancellationToken;
+use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncResult, TargetSyncResult};
 
@@ -19,6 +19,10 @@ use super::{FullSyncPlan, FullSyncTransferResult};
 /// `cancellation_token`：平台层持有的取消令牌。在每次 target 迭代开头检查
 /// `is_cancelled()`，如果已取消则 break 并返回已收集的结果（已完成的 targets +
 /// 剩余的标记为 cancelled/skipped）。
+///
+/// `progress`：可选的进度 sink（Issue #763）。在 target 开始/结束时写入当前
+/// target 的 remote_prefix / project_id / phase / finished / total，供诊断包导出时
+/// 读取实时进度。`None` 时不产生任何进度更新。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -28,6 +32,7 @@ pub fn run_transfer(
     provider: &dyn SyncProvider,
     plan: &FullSyncPlan,
     cancellation_token: Option<&SyncCancellationToken>,
+    progress: Option<&SyncProgressSink>,
 ) -> FullSyncTransferResult {
     use crate::sync::types::PlannedTargetKind;
 
@@ -41,8 +46,9 @@ pub fn run_transfer(
 
     let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
 
+    let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
     let mut targets = Vec::with_capacity(plan.targets.len());
-    for planned in &plan.targets {
+    for (idx, planned) in plan.targets.iter().enumerate() {
         // Issue #729：每次 target 迭代开头检查取消令牌。
         // 已取消则 break，已完成的 targets 保留，剩余的不执行。
         if let Some(token) = cancellation_token {
@@ -53,6 +59,18 @@ pub fn run_transfer(
                 );
                 break;
             }
+        }
+
+        // Issue #763：target 开始时写入进度 sink。
+        if let Some(sink) = progress {
+            let finished = u32::try_from(idx).unwrap_or(u32::MAX);
+            sink.update_target_start(
+                &planned.target.remote_prefix,
+                planned.project_id.as_deref(),
+                planned.target_kind.as_target_kind_str(),
+                finished,
+                total_targets,
+            );
         }
 
         let (result, resolution, action) = match planned.target_kind {
@@ -115,6 +133,17 @@ pub fn run_transfer(
             deleted_resolution: resolution,
             local_lifecycle_action: action.unwrap_or_default(),
         });
+
+        // Issue #763：target 结束时写入进度 sink（phase 清空表示该 target 已完成）。
+        if let Some(sink) = progress {
+            let finished = u32::try_from(idx + 1).unwrap_or(u32::MAX);
+            sink.update_target_finish(
+                &planned.target.remote_prefix,
+                planned.project_id.as_deref(),
+                finished,
+                total_targets,
+            );
+        }
     }
 
     // generation GC — 清理未引用 generation。
