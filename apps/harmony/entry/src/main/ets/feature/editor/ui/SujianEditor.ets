@@ -36,20 +36,24 @@
 
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderBackend'
-import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout } from '../render/editor_render_geometry'
+import { SelectionRect, CaretRect, CompositionUnderlineRect } from '../render/editor_render_geometry'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { EditorSemanticDispatcher, SemanticEditCommand } from '../input/EditorSemanticDispatcher'
 import { LineNavigationResolver, LineLayoutState, NavigationLine } from '../selection/LineNavigationResolver'
 import { CaretAffinity } from '../render/editor_layout_math'
-import { VisualCaretPosition, CaretStop } from '../render/editor_layout_math'
+import { VisualCaretPosition } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { KeyboardInputService, PlatformKeyEvent, SemanticKeyCommand } from '../../../platform/input/KeyboardInputService'
 import { PointerInputService, PlatformPointerEvent } from '../../../platform/input/PointerInputService'
 import { StylusInputService } from '../../../platform/input/StylusInputService'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
+import { EditorTextStyleProjector, EditorStyleConfig } from '../render/EditorTextStyleProjector'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../diagnostics/EditorRuntimeSnapshotStore'
+import { inspector } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
@@ -57,6 +61,8 @@ import hilog from '@ohos.hilog'
 const EDITOR_LOG_DOMAIN = 0x0000
 const EDITOR_LOG_TAG = 'SujianEditor'
 const INPUT_HOST_ID = 'sujian-editor-input-host'
+// Issue #768 评论5837824666：正文 Text 的固定 id，用于 ComponentObserver 监听布局完成回调。
+const EDITOR_TEXT_ID = 'sujian-editor-text'
 
 @Component
 export struct SujianEditor {
@@ -95,6 +101,10 @@ export struct SujianEditor {
   @State contentHeight: number = 0
   // viewport 滚动控制器（ArkUI Scroller）。controller.restore 经此 scrollTo。
   private scroller: Scroller = new Scroller()
+  // Issue #768 任务9：TextController 让 ArkUI Text 的 LayoutManager 成为唯一布局真源。
+  // 正文 Text 通过 controller 接收 StyledString（含字号/行高/首行缩进样式），
+  // LayoutManager 提供真实行布局/命中测试，消除自算 measureText 与系统布局的错位。
+  private textController: TextController = new TextController()
   // 输入服务单例。
   private keyboardService: KeyboardInputService = KeyboardInputService.getInstance()
   private pointerService: PointerInputService = PointerInputService.getInstance()
@@ -111,6 +121,33 @@ export struct SujianEditor {
   // 不丢弃命中测试的 soft-wrap 亲和性。
   private dragAnchor: VisualCaretPosition | null = null
   private isDragging: boolean = false
+  // Issue #768：编辑器焦点状态，供诊断快照读取。
+  private isFocused: boolean = false
+  // Issue #768：布局来源标记，供诊断快照读取。
+  // 'system' = 用系统 LayoutManager，'fallback' = 自计算，'none' = 无布局。
+  private lastLayoutSource: string = 'none'
+  // Issue #768 评论5835171266 第5项：真实记录布局错误和 fallback 次数。
+  private lastLayoutError: string | null = null
+  private fallbackCount: number = 0
+  // Issue #768 评论5837229456：Text 组件挂载状态标记。
+  // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
+  // 因为组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
+  private textMounted: boolean = false
+  // Issue #768 评论5837824666：系统布局完成回调观察者。
+  // setStyledString 后不能同步读 LayoutManager（可能拿到上一版布局）。
+  // 用 ComponentObserver 'layout' 回调确保只在系统布局完成后才读取 LayoutManager。
+  private textLayoutObserver: inspector.ComponentObserver | null = null
+  private textLayoutCallback: (() => void) | null = null
+  // Issue #768 评论5837824666：布局身份字段。
+  // 记录当前已发布的布局对应的 snapshot 身份，供诊断快照判断是否出现"新 revision + 旧 layout"。
+  private layoutRevision: number = 0
+  private layoutGeneration: number = 0
+  private layoutCompositionGeneration: number = 0
+  private visualCaretAffinity: string = 'downstream'
+  // Issue #768 评论5837824666：缓存上一次布局完成后的行度量和行数，
+  // 供 pushDiagnosticsSnapshot 在布局未完成时使用（避免读到旧 LayoutManager）。
+  private lastSystemLayoutLineCount: number = 0
+  private lastCurrentLineMetrics: CurrentLineMetricsSnapshot | null = null
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
@@ -126,6 +163,8 @@ export struct SujianEditor {
     if (this.selectionController) {
       this.selectionController.registerVisualCaretListener((_pos: VisualCaretPosition | null) => {
         this.refreshRenderLayout()
+        // Issue #768：光标/选区变化时推送诊断快照。
+        this.pushDiagnosticsSnapshot()
       })
     }
     // Issue #629 评论6 Part C + 评论7 第4项：注册父子 viewport 恢复通道。
@@ -147,10 +186,14 @@ export struct SujianEditor {
         }
       )
     }
+    // Issue #768：会话创建时推送诊断快照。
+    this.pushDiagnosticsSnapshot()
   }
 
   aboutToDisappear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToDisappear')
+    // Issue #768 评论5837824666：兜底注销布局观察者（onDisAppear 可能未触发）。
+    this.detachTextLayoutObserver()
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
     this.lineResolver.cancelWait()
     if (this.dispatcher) {
@@ -164,26 +207,273 @@ export struct SujianEditor {
     if (this.viewportController) {
       this.viewportController.unregister()
     }
+    // Issue #768 评论5835171266 第5项：不清空快照，标记编辑器已卸载。
+    // 保留最后快照供离页后导出诊断；下次打开编辑器时 updateSnapshot 会覆盖。
+    EditorRuntimeSnapshotStore.getInstance().markEditorUnmounted()
+  }
+
+  // Issue #768 评论5837824666：用 ArkUI ComponentObserver 的 layout 回调
+  // 作为系统几何刷新入口，确保 setStyledString 后等待布局完成才读取 LayoutManager。
+  // 华为官方文档明确：文本内容变更后，需等待布局完成才可获取到最新的布局信息。
+  // ComponentObserver 从 API10 起可用，项目 compatibleSdk=12 可以直接用。
+  private attachTextLayoutObserver(): void {
+    if (this.textLayoutObserver !== null) {
+      return
+    }
+    const observer = this.getUIContext()
+      .getUIInspector()
+      .createComponentObserver(EDITOR_TEXT_ID)
+    const callback = (): void => {
+      if (!this.textMounted || this.snapshot === null) {
+        return
+      }
+      // 到这里 Text 已完成本轮 layout，才读取 LayoutManager。
+      this.refreshRenderLayout()
+    }
+    observer.on('layout', callback)
+    this.textLayoutObserver = observer
+    this.textLayoutCallback = callback
+  }
+
+  private detachTextLayoutObserver(): void {
+    if (this.textLayoutObserver !== null && this.textLayoutCallback !== null) {
+      this.textLayoutObserver.off('layout', this.textLayoutCallback)
+    }
+    this.textLayoutObserver = null
+    this.textLayoutCallback = null
+  }
+
+  // Issue #768：把当前编辑器运行时状态推送到诊断快照存储。
+  // 从 this.snapshot、几何状态、IME 状态、滚动状态等读取数据构造完整快照。
+  // 不写正文内容，只写长度、offset、几何和状态。在各生命周期点调用。
+  private pushDiagnosticsSnapshot(): void {
+    const store = EditorRuntimeSnapshotStore.getInstance()
+    const snap = this.snapshot
+
+    // 滚动偏移
+    let scrollX: number = 0
+    let scrollY: number = 0
+    try {
+      const offset = this.scroller.currentOffset()
+      scrollX = offset.xOffset
+      scrollY = offset.yOffset
+    } catch (_e) {
+      // scroller 未就绪时保持 0
+    }
+    const imeAttached: boolean = this.harmonyImeConnection !== null && this.harmonyImeConnection.isAttached()
+    const apiLevel: number = PlatformApiResolver.getInstance().getApiLevel()
+
+    // 无活跃会话时推送 hasActiveSession=false 的快照，仍记录视口/IME/焦点/滚动状态。
+    if (snap === null) {
+      const emptySnapshot: EditorRuntimeSnapshot = {
+        hasActiveSession: false,
+        revision: 0,
+        generation: 0,
+        textUtf8Bytes: 0,
+        textUtf16Length: 0,
+        cursorByteOffset: 0,
+        cursorUtf16Offset: 0,
+        selectionAnchorByte: 0,
+        selectionHeadByte: 0,
+        hasComposition: false,
+        compositionStartByte: -1,
+        compositionEndByte: -1,
+        fontSizeVp: 0,
+        lineSpacingMultiplier: 0,
+        effectiveLineHeightVp: 0,
+        firstLineIndentEnabled: false,
+        firstLineIndentChars: 0,
+        effectiveFirstLineIndentVp: 0,
+        viewportWidthPx: this.viewportWidth,
+        viewportHeightPx: this.viewportHeight,
+        contentWidthPx: this.contentWidth,
+        contentHeightPx: this.contentHeight,
+        systemLayoutLineCount: 0,
+        caretRect: null,
+        selectionRectCount: 0,
+        currentLineMetrics: null,
+        imeAttached: imeAttached,
+        editorFocused: this.isFocused,
+        currentScrollX: scrollX,
+        currentScrollY: scrollY,
+        leadingWhitespaceCountOfCurrentParagraph: 0,
+        layoutSource: 'none',
+        usingLayoutManager: false,
+        apiLevel: apiLevel,
+        lastLayoutError: this.lastLayoutError,
+        fallbackCount: this.fallbackCount,
+        layoutRevision: 0,
+        layoutGeneration: 0,
+        layoutCompositionGeneration: 0,
+        visualCaretAffinity: 'downstream',
+        // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
+        isEditorMounted: true,
+        capturedAtMs: Date.now(),
+      }
+      store.updateSnapshot(emptySnapshot)
+      return
+    }
+
+    // 有活跃会话：从 snapshot 和当前状态构造完整快照。
+    const text: string = snap.text
+    const textUtf16Length: number = text.length
+    const textUtf8Bytes: number = TextOffsetMapper.utf16ToUtf8(text, textUtf16Length)
+    const cursorUtf16Offset: number = TextOffsetMapper.utf8ToUtf16(text, snap.cursorByteOffset)
+    const hasComposition: boolean = snap.compositionStart !== null && snap.compositionEnd !== null
+    const compositionStartByte: number = snap.compositionStart !== null ? snap.compositionStart : -1
+    const compositionEndByte: number = snap.compositionEnd !== null ? snap.compositionEnd : -1
+
+    // 排版设置
+    const fontSizeVp: number = snap.fontSize
+    const lineSpacingMultiplier: number = snap.lineSpacingMultiplier
+    const effectiveLineHeightVp: number = fontSizeVp * lineSpacingMultiplier
+    const firstLineIndentEnabled: boolean = snap.autoIndentEnabled
+    const firstLineIndentChars: number = snap.autoIndentWidth
+    const effectiveFirstLineIndentVp: number = firstLineIndentEnabled ? firstLineIndentChars * fontSizeVp : 0
+
+    // 布局来源/行数 — Issue #768 评论5837824666：
+    // 不再直接读 getLayoutManager()（可能拿到上一版布局），改为从缓存字段读取。
+    // 缓存字段在 refreshRenderLayoutFromSystem/Fallback 成功后更新。
+    const usingLayoutManager: boolean = this.lastLayoutSource === 'system'
+    const systemLayoutLineCount: number = this.lastSystemLayoutLineCount
+
+    // 光标矩形
+    let caretRect: CaretRectSnapshot | null = null
+    if (this.caretRect !== null) {
+      caretRect = {
+        x: this.caretRect.x,
+        y: this.caretRect.y,
+        width: this.caretRect.width,
+        height: this.caretRect.height,
+      }
+    }
+
+    // 当前行度量 — Issue #768 评论5837824666：
+    // 不再从 renderResult.lines 拼（baseline 固定 0、无 left/topHeight），
+    // 改为从缓存字段读取（在 refreshRenderLayoutFromSystem 中从真实 layout.getLineMetrics 获取）。
+    const currentLineMetrics: CurrentLineMetricsSnapshot | null = this.lastCurrentLineMetrics
+
+    // 段落前导空白
+    const leadingWhitespaceCount: number = this.computeLeadingWhitespaceCount(text, cursorUtf16Offset)
+
+    const fullSnapshot: EditorRuntimeSnapshot = {
+      hasActiveSession: true,
+      revision: snap.revision,
+      generation: snap.generation,
+      textUtf8Bytes: textUtf8Bytes,
+      textUtf16Length: textUtf16Length,
+      cursorByteOffset: snap.cursorByteOffset,
+      cursorUtf16Offset: cursorUtf16Offset,
+      selectionAnchorByte: snap.selectionAnchor,
+      selectionHeadByte: snap.selectionHead,
+      hasComposition: hasComposition,
+      compositionStartByte: compositionStartByte,
+      compositionEndByte: compositionEndByte,
+      fontSizeVp: fontSizeVp,
+      lineSpacingMultiplier: lineSpacingMultiplier,
+      effectiveLineHeightVp: effectiveLineHeightVp,
+      firstLineIndentEnabled: firstLineIndentEnabled,
+      firstLineIndentChars: firstLineIndentChars,
+      effectiveFirstLineIndentVp: effectiveFirstLineIndentVp,
+      viewportWidthPx: this.viewportWidth,
+      viewportHeightPx: this.viewportHeight,
+      contentWidthPx: this.contentWidth,
+      contentHeightPx: this.contentHeight,
+      systemLayoutLineCount: systemLayoutLineCount,
+      caretRect: caretRect,
+      selectionRectCount: this.selectionRects.length,
+      currentLineMetrics: currentLineMetrics,
+      imeAttached: imeAttached,
+      editorFocused: this.isFocused,
+      currentScrollX: scrollX,
+      currentScrollY: scrollY,
+      leadingWhitespaceCountOfCurrentParagraph: leadingWhitespaceCount,
+      layoutSource: this.lastLayoutSource,
+      usingLayoutManager: usingLayoutManager,
+      apiLevel: apiLevel,
+      lastLayoutError: this.lastLayoutError,
+      fallbackCount: this.fallbackCount,
+      // Issue #768 评论5837824666：布局身份字段。
+      layoutRevision: this.layoutRevision,
+      layoutGeneration: this.layoutGeneration,
+      layoutCompositionGeneration: this.layoutCompositionGeneration,
+      visualCaretAffinity: this.visualCaretAffinity,
+      // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
+      isEditorMounted: true,
+      capturedAtMs: Date.now(),
+    }
+    store.updateSnapshot(fullSnapshot)
+  }
+
+  // Issue #768：计算光标所在段落的前导空白字符数（空格/制表符）。
+  private computeLeadingWhitespaceCount(text: string, cursorUtf16: number): number {
+    // 找光标所在段落的起点：从 cursor 往前找到 \n 后一个字符或 0
+    let paragraphStart: number = cursorUtf16
+    while (paragraphStart > 0) {
+      if (text.charAt(paragraphStart - 1) === '\n') {
+        break
+      }
+      paragraphStart--
+    }
+    // 从段落起点数空白字符
+    let count: number = 0
+    for (let i = paragraphStart; i < text.length; i++) {
+      const ch: string = text.charAt(i)
+      if (ch === ' ' || ch === '\t') {
+        count++
+      } else {
+        break
+      }
+    }
+    return count
   }
 
   // Issue #629 评论16 第1项：用 @Watch 监听 snapshot 变化替代 aboutToUpdate。
   // aboutToUpdate 不是 OpenHarmony 官方生命周期回调（官方 V1 监听机制是 @Watch）。
-  // snapshot 前进时先 refreshRender（无几何 fallback），再 refreshRenderLayout
-  // （contentWidth > 0 时用已有宽度计算真实 lines + 更新 lineResolver 带身份）。
-  // 这样打完字后按 Up/Down/Home/End 不需要等 onAreaChange 才更新 lineResolver，
-  // resolver 的身份与当前 Core snapshot 匹配，executeLineNavigation 不会 STALE_LAYOUT。
+  // Issue #768 评论5837824666：snapshot 前进时只提交新的文字/样式（setStyledString），
+  // 不再同步调 refreshRenderLayout() — 系统布局可能还没完成，会拿到上一版 LayoutManager。
+  // 布局结果等系统 layout 完成回调（ComponentObserver 'layout'）后才更新。
+  // 这样才真正做到：StyledString N → ArkUI layout N 完成 → LayoutManager N → caret/selection N。
   private onSnapshotChanged(): void {
     if (this.snapshot === null) {
+      // Issue #768 评论5837229456：通过 applyStyledText 清空 StyledString（受 textMounted 守卫）
+      this.applyStyledText()
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
       this.renderResult = null
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
+      // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
+      this.pushDiagnosticsSnapshot()
       return
     }
+    // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
     this.refreshRender()
-    this.refreshRenderLayout()
+    // Issue #768 评论5837824666：推送诊断快照（布局相关字段从缓存读取）。
+    // 诊断方可通过 revision !== layoutRevision 判断布局是否已跟上 snapshot。
+    this.pushDiagnosticsSnapshot()
+  }
+
+  // Issue #768 评论5837229456：把"生成 StyledString"和"写进 TextController"分开。
+  // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
+  // 因为 Text 组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
+  private applyStyledText(): void {
+    if (!this.textMounted) {
+      return
+    }
+    if (this.snapshot === null) {
+      this.textController.setStyledString(new MutableStyledString(''))
+      return
+    }
+    const config: EditorStyleConfig = {
+      fontSize: this.snapshot.fontSize,
+      lineSpacingMultiplier: this.snapshot.lineSpacingMultiplier,
+      autoIndentEnabled: this.snapshot.autoIndentEnabled,
+      autoIndentWidth: this.snapshot.autoIndentWidth,
+    }
+    const styled = EditorTextStyleProjector.projectToStyledString(this.snapshot.text, config)
+    this.textController.setStyledString(styled)
   }
 
   // 基础渲染：用 render() 转 offset，不含几何（lines/rects 为空）。
@@ -191,8 +481,11 @@ export struct SujianEditor {
   // Issue #629 评论11 第2项：refreshRender 不再用 render() 的空 lines 覆盖 lineResolver。
   // render() 不计算几何（lines: []），用它覆盖会把 resolver 清空。lineResolver 只在
   // refreshRenderLayout（contentWidth > 0，有真实几何）时更新（带身份）。
+  // Issue #768 评论5837229456：不再在 refreshRender 里直接调 setStyledString，
+  // 改为通过 applyStyledText()（受 textMounted 守卫）下发 StyledString。
   private refreshRender(): void {
     if (this.snapshot) {
+      // 仍然用 EditorRenderBackend.render() 转 offset（不含几何）
       const result = EditorRenderBackend.render(this.snapshot)
       this.renderResult = result
       this.selectionRects = result.selectionRects
@@ -207,6 +500,8 @@ export struct SujianEditor {
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
     }
+    // 通过 applyStyledText 下发 StyledString（受 textMounted 守卫）
+    this.applyStyledText()
   }
 
   // 完整静态渲染：用 renderLayout() 计算行布局/选区/光标/composition 下划线几何。
@@ -215,65 +510,249 @@ export struct SujianEditor {
   // 保证 snapshot/revision/composition 变化时立刻用已有宽度计算真实 lines 并更新 lineResolver，
   // 不等 onAreaChange 才更新。lineResolver 带身份（revision + displayText + cursorUtf16），
   // executeLineNavigation 出队时验证身份匹配才用 lines 算目标。
+  // Issue #768 任务9：优先使用系统 LayoutManager 做唯一布局真源。
+  // - API14+：用 getRectsForRange 获取选区/光标/composition 矩形，完全不需要 measureText
+  // - API12-13：用 LineMetrics 获取行边界（折行/行高），用 measureText 算行内 x 坐标
+  // - Fallback：LayoutManager 不可用时走旧的自计算路径
   private refreshRenderLayout(): void {
     if (this.snapshot && this.contentWidth > 0) {
       const snap = this.snapshot
-      // 真实文本测量：getMeasureUtils().measureText 返回 px 单行宽度，
-      // fontSize 用 snap.fontSize（vp）与 Text.fontSize 一致，测量与渲染同一字体度量。
+
+      // 优先使用系统 LayoutManager
+      const layout = this.textController.getLayoutManager()
+      if (layout !== null && layout !== undefined) {
+        const systemLineCount = layout.getLineCount()
+        if (systemLineCount > 0) {
+          this.refreshRenderLayoutFromSystem(layout, systemLineCount, snap)
+          return
+        }
+      }
+
+      // Fallback: 旧的自计算路径（LayoutManager 不可用或无行）
+      // Issue #768 评论5835171266 第5项：记录 fallback 原因和递增计数。
+      this.fallbackCount++
+      if (layout === null || layout === undefined) {
+        this.lastLayoutError = 'LayoutManager unavailable'
+      } else {
+        this.lastLayoutError = 'LayoutManager returned 0 lines'
+      }
+      this.refreshRenderLayoutFallback(snap)
+    }
+  }
+
+  // Issue #768 任务10：从系统 LayoutManager 获取真实布局。
+  // 逻辑已下沉到 EditorRenderBackend.renderLayoutFromSystem() 和
+  // LineNavigationResolver.buildLayoutStateFromSystem()。
+  private refreshRenderLayoutFromSystem(
+    layout: LayoutManager,
+    systemLineCount: number,
+    snap: EditorLayoutSnapshot,
+  ): void {
+    try {
+      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
+      const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
+        ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+      const isApi14Plus = PlatformApiResolver.getInstance().isApiAtLeast(14)
+
+      // measureTextFn：API12-13 fallback 用，API14+ 不需要但保持接口一致
       const measureUtils = this.getUIContext().getMeasureUtils()
       const measureTextFn = (s: string): number => {
         return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
       }
-      // Issue #629 R7：每次从 SelectionController（唯一 owner）取当前 cursor 的 visual position。
-      // offset 不匹配时 getVisualCaret 返回默认 Downstream，
-      // 消除 snapshot 前进后旧 affinity 残留的双状态问题。
-      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(
-        snap.text,
-        snap.cursorByteOffset,
-      )
-      const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
-        ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
-      const result = EditorRenderBackend.renderLayout(
+
+      // 1. 调用 EditorRenderBackend.renderLayoutFromSystem 获取完整渲染结果
+      const result = EditorRenderBackend.renderLayoutFromSystem(
+        layout,
+        systemLineCount,
         snap,
         this.contentWidth,
-        this.contentHeight,
-        measureTextFn,
         visualCaret.affinity,
+        isApi14Plus,
+        measureTextFn,
       )
+
+      // 2. 更新 renderResult 和几何状态
       this.renderResult = result
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
-      // Issue #629 评论11 第2项 + 评论14 第3项 + 评论15 第3项：行布局更新后同步给行级导航解析器（带身份）。
-      // 身份来自 Core 编辑状态：revision + generation + compositionGeneration + displayText。
-      // contentWidth/fontSize 决定折行但不属于编辑状态身份（评论15 第2项）。
-      // executeLineNavigation 出队时验证此身份与当前 Core snapshot 匹配才用 lines 算目标。
-      // Issue #629 评论17 第4项：caret stop 生成下沉到 editor_layout_math.ts。
-      // 与 hitTestPoint 共享同一套 code point 边界算法，不两套折行/测宽。
-      // Issue #629 评论18：不再需要手动拼 NavigationLine。
-      // EditorRenderBackend.renderLayout() 已返回 LineLayout[]（含 breakKind + caretStops），
-      // NavigationLine = LineLayout（类型别名），直接使用 result.lines 即可。
-      const navigationLines: NavigationLine[] = result.lines
-      const layoutState: LineLayoutState = {
-        revision: snap.revision,
-        generation: snap.generation,
-        compositionGeneration: snap.compositionGeneration,
-        compositionSessionId: snap.compositionSessionId,
-        displayText: snap.text,
-        contentWidth: this.contentWidth,
-        fontSize: snap.fontSize,
-        lines: navigationLines
-      }
+
+      // 3. 更新行级导航解析器（带身份）
+      // Issue #768 评论5836390597 第2项：传入 measureTextFn 让 buildLayoutStateFromSystem
+      // 能用 buildLineCaretStops + metrics.left 偏移构建 caretStops，
+      // API12~13 的 Up/Down 行导航不再跳到行首。
+      const layoutState = LineNavigationResolver.buildLayoutStateFromSystem(
+        layout,
+        systemLineCount,
+        snap,
+        this.contentWidth,
+        measureTextFn,
+      )
       this.lineResolver.updateLayout(layoutState)
+      // Issue #768：标记布局来源为 system 并推送诊断快照（布局更新时）。
+      this.lastLayoutSource = 'system'
+      // Issue #768 评论5835171266 第5项：系统路径成功时清除错误。
+      this.lastLayoutError = null
+      // Issue #768 评论5837824666：更新布局身份字段，标记当前布局对应的 snapshot 身份。
+      this.layoutRevision = snap.revision
+      this.layoutGeneration = snap.generation
+      this.layoutCompositionGeneration = snap.compositionGeneration
+      this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
+      // Issue #768 评论5837824666：缓存系统布局行数和当前行度量，供 pushDiagnosticsSnapshot 使用。
+      this.lastSystemLayoutLineCount = systemLineCount
+      this.lastCurrentLineMetrics = this.extractCurrentLineMetrics(layout, systemLineCount, cursorUtf16, visualCaret.affinity)
+      this.pushDiagnosticsSnapshot()
+    } catch (e) {
+      // Issue #768 评论5835171266 第5项：记录系统布局错误，回退到 fallback。
+      this.lastLayoutError = `system layout failed: ${String(e)}`
+      this.fallbackCount++
+      this.refreshRenderLayoutFallback(snap)
     }
+  }
+
+  // Issue #768 任务9：Fallback 路径 — LayoutManager 不可用时走旧的自计算路径。
+  private refreshRenderLayoutFallback(snap: EditorLayoutSnapshot): void {
+    const measureUtils = this.getUIContext().getMeasureUtils()
+    const measureTextFn = (s: string): number => {
+      return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+    }
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(
+      snap.text,
+      snap.cursorByteOffset,
+    )
+    const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
+      ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+    const result = EditorRenderBackend.renderLayout(
+      snap,
+      this.contentWidth,
+      this.contentHeight,
+      measureTextFn,
+      visualCaret.affinity,
+    )
+    this.renderResult = result
+    this.selectionRects = result.selectionRects
+    this.caretRect = result.caretRect
+    this.compositionUnderlineRects = result.compositionUnderlineRects
+    const navigationLines: NavigationLine[] = result.lines
+    const layoutState: LineLayoutState = {
+      revision: snap.revision,
+      generation: snap.generation,
+      compositionGeneration: snap.compositionGeneration,
+      compositionSessionId: snap.compositionSessionId,
+      displayText: snap.text,
+      contentWidth: this.contentWidth,
+      fontSize: snap.fontSize,
+      lines: navigationLines,
+      // Fallback 路径无系统 LayoutManager，行导航回退到 caretStops 方案。
+      systemLayoutManager: null,
+    }
+    this.lineResolver.updateLayout(layoutState)
+    // Issue #768：标记布局来源为 fallback 并推送诊断快照（布局更新时）。
+    this.lastLayoutSource = 'fallback'
+    // Issue #768 评论5837824666：更新布局身份字段。
+    this.layoutRevision = snap.revision
+    this.layoutGeneration = snap.generation
+    this.layoutCompositionGeneration = snap.compositionGeneration
+    this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
+    // Issue #768 评论5837824666：缓存系统布局行数（fallback 路径无 LayoutManager，行数为 0）
+    // 和当前行度量（从 renderResult.lines 获取，但 baseline/left/topHeight 不可用）。
+    this.lastSystemLayoutLineCount = 0
+    this.lastCurrentLineMetrics = this.extractCurrentLineMetricsFromRenderResult(result, cursorUtf16)
+    this.pushDiagnosticsSnapshot()
+  }
+
+  // Issue #768 评论5838624438：从真实 LayoutManager.LineMetrics 提取当前行度量。
+  // 直接从 layout.getLineMetrics(index) 记录 left/topHeight/height/baseline/startIndex/endIndex，
+  // 不再拿 renderResult.lines 拼一个残缺的 currentLineMetrics。
+  // Issue #768 评论5838624438：soft-wrap 边界按 affinity 选择上行或下行，
+  // 和 caret 规则保持一致：Upstream → 上一视觉行，Downstream → 下一视觉行。
+  private extractCurrentLineMetrics(
+    layout: LayoutManager,
+    systemLineCount: number,
+    cursorUtf16: number,
+    affinity: CaretAffinity,
+  ): CurrentLineMetricsSnapshot | null {
+    try {
+      for (let i = 0; i < systemLineCount; i++) {
+        const metrics = layout.getLineMetrics(i)
+        if (cursorUtf16 >= metrics.startIndex && cursorUtf16 <= metrics.endIndex) {
+          // soft-wrap 边界：同一个 UTF-16 offset 同时是上一行 endIndex 和下一行 startIndex。
+          // Upstream → 上一视觉行（当前匹配行），Downstream → 下一视觉行（i+1）。
+          if (cursorUtf16 === metrics.endIndex
+            && affinity === CaretAffinity.Downstream
+            && i + 1 < systemLineCount) {
+            const nextMetrics = layout.getLineMetrics(i + 1)
+            return {
+              startIndex: nextMetrics.startIndex,
+              endIndex: nextMetrics.endIndex,
+              height: nextMetrics.height,
+              baseline: nextMetrics.baseline,
+              left: nextMetrics.left,
+              topHeight: nextMetrics.topHeight,
+            }
+          }
+          return {
+            startIndex: metrics.startIndex,
+            endIndex: metrics.endIndex,
+            height: metrics.height,
+            baseline: metrics.baseline,
+            left: metrics.left,
+            topHeight: metrics.topHeight,
+          }
+        }
+      }
+    } catch (e) {
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
+        `extractCurrentLineMetrics: getLineMetrics failed: ${JSON.stringify(e)}`)
+    }
+    return null
+  }
+
+  // Issue #768 评论5837824666：Fallback 路径从 renderResult.lines 提取当前行度量。
+  // LineLayout 不含 baseline/left/topHeight，这些字段填 0 表示不可用。
+  private extractCurrentLineMetricsFromRenderResult(
+    result: EditorRenderResult,
+    cursorUtf16: number,
+  ): CurrentLineMetricsSnapshot | null {
+    const lines = result.lines
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
+        return {
+          startIndex: line.startUtf16,
+          endIndex: line.endUtf16,
+          height: line.height,
+          baseline: 0,
+          left: 0,
+          topHeight: 0,
+        }
+      }
+    }
+    return null
   }
 
   // Issue #629 评论18：命中测试返回 VisualCaretPosition（含 CaretAffinity）。
   // soft-wrap 边界上半点击返回 Upstream（上一行尾），下半返回 Downstream（下一行首）。
+  // Issue #768 任务10：优先使用系统 LayoutManager 的 getGlyphPositionAtCoordinate 做命中测试，
+  // 消除自算折行与系统布局的错位。Fallback 到旧的自计算路径。
+  // 命中测试逻辑已下沉到 EditorRenderBackend.hitTestByLayoutManager()。
   private hitTestContent(contentX: number, contentY: number): VisualCaretPosition {
     if (!this.snapshot || !this.renderResult || this.contentWidth <= 0) {
       return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     }
+
+    // 优先使用系统 LayoutManager
+    const layout = this.textController.getLayoutManager()
+    if (layout !== null && layout !== undefined) {
+      try {
+        return EditorRenderBackend.hitTestByLayoutManager(layout, contentX, contentY)
+      } catch (e) {
+        hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
+          `hitTestContent: getGlyphPositionAtCoordinate failed: ${JSON.stringify(e)}`)
+      }
+    }
+
+    // Fallback: 旧的自计算命中测试
     const snap = this.snapshot
     const measureUtils = this.getUIContext().getMeasureUtils()
     const measureTextFn = (s: string): number => {
@@ -347,6 +826,8 @@ export struct SujianEditor {
     const dispatcher = this.dispatcher
     imeConnection.attach(dispatcher).then(() => {
       hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: IME attach success')
+      // Issue #768：IME attach 成功后推送诊断快照。
+      this.pushDiagnosticsSnapshot()
     }).catch((e: Object) => {
       hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: IME attach failure: ${JSON.stringify(e)}`)
     })
@@ -611,12 +1092,31 @@ export struct SujianEditor {
           }, (rect: SelectionRect, index: number) => index.toString())
 
           // 2. text — 只负责绘制文字，不再承担焦点/输入事件职责。
-          // wordBreak(BREAK_ALL) 与 EditorRenderBackend.hitTestByPoint 的逐 code point 折行一致。
-          Text(this.renderResult.text)
-            .fontSize(this.snapshot.fontSize)
+          // Issue #768 任务9：Text 接 TextController，内容通过 StyledString 下发（含字号/行高/首行缩进）。
+          // wordBreak(BREAK_ALL) 与 fallback 路径的逐 code point 折行一致。
+          // 字号、行高、首行缩进通过 StyledString 的 TextStyle/LineHeightStyle/ParagraphStyle 下发，
+          // 不再在 Text 属性上设置 fontSize。
+          Text(undefined, { controller: this.textController })
+            .id(EDITOR_TEXT_ID)
             .width('100%')
             .textAlign(TextAlign.Start)
             .wordBreak(WordBreak.BREAK_ALL)
+            .onAppear(() => {
+              // Issue #768 评论5837229456：API15 之前，在 aboutToAppear 里通过
+              // TextController.setStyledString() 设置内容无法显示，因为组件还未创建。
+              // 在 Text.onAppear 后才标记挂载并下发 StyledString。
+              // Issue #768 评论5837824666：在 onAppear 中注册布局观察者，
+              // 确保后续 setStyledString 后通过 layout 回调（而非同步读取）获取 LayoutManager。
+              this.textMounted = true
+              this.attachTextLayoutObserver()
+              this.applyStyledText()
+              // 不再同步调 refreshRenderLayout() — 等 ComponentObserver 'layout' 回调触发。
+            })
+            .onDisAppear(() => {
+              // Issue #768 评论5837824666：注销布局观察者。
+              this.detachTextLayoutObserver()
+              this.textMounted = false
+            })
             .onAreaChange((_oldArea: Area, newArea: Area): void => {
               // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
@@ -667,11 +1167,16 @@ export struct SujianEditor {
         // HarmonyImeConnection.attach() 已是串行幂等（唯一 transitionTask 链），
         // focusAndAttachIme 和 onFocus 都发起 attach 只会排进同一条串行链，不会并发 controller.attach()。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: input host focus acquired')
+        // Issue #768：记录焦点状态并推送诊断快照。
+        this.isFocused = true
+        this.pushDiagnosticsSnapshot()
         if (this.harmonyImeConnection && this.dispatcher) {
           const imeConnection = this.harmonyImeConnection
           const dispatcher = this.dispatcher
           imeConnection.attach(dispatcher).then(() => {
             hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: IME attach success')
+            // Issue #768：IME attach 成功后推送诊断快照。
+            this.pushDiagnosticsSnapshot()
           }).catch((e: Object) => {
             hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `onFocus: IME attach failure: ${JSON.stringify(e)}`)
           })
@@ -680,8 +1185,14 @@ export struct SujianEditor {
       .onBlur((): void => {
         // Issue #767 评论 5828448634 第 1 节：编辑区失焦 → detach IME。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onBlur: input host blur')
+        // Issue #768：记录失焦状态并推送诊断快照。
+        this.isFocused = false
+        this.pushDiagnosticsSnapshot()
         if (this.harmonyImeConnection) {
-          this.harmonyImeConnection.detach().then(() => {})
+          this.harmonyImeConnection.detach().then(() => {
+            // Issue #768：IME detach 完成后推送诊断快照。
+            this.pushDiagnosticsSnapshot()
+          })
         }
       })
       .onKeyEvent((event: KeyEvent): boolean => {
@@ -724,10 +1235,14 @@ export struct SujianEditor {
       if (this.viewportController) {
         this.viewportController.notifyDimensionsChanged()
       }
+      // Issue #768：视口尺寸变化时推送诊断快照。
+      this.pushDiagnosticsSnapshot()
     })
     .onScroll((xOffset: number, yOffset: number): void => {
       // 滚动时把 viewport 状态回调给 WritingScreen（供接续状态持续写入）。
       this.emitViewportChange(xOffset, yOffset)
+      // Issue #768：滚动变化时推送诊断快照（含 currentScrollX/Y）。
+      this.pushDiagnosticsSnapshot()
     })
   }
 }

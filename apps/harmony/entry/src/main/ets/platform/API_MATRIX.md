@@ -33,6 +33,10 @@
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
 | 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
 | Application 颜色模式 | @kit.AbilityKit (ApplicationContext) | 11 | 无独立 SystemCapability（随 @kit.AbilityKit Application 生命周期） | 无 | 否 | ui/theme/HarmonyColorModeController.ets |
+| HDS Tabs（悬浮页签） | @kit.UIDesignKit (HdsTabs) | 23 | SystemCapability.UIDesign.HDSComponent.Core | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
+| TextController + LayoutManager | @kit.ArkUI (TextController / LayoutManager) | 12（getLayoutManager/getLineCount/getGlyphPositionAtCoordinate/getLineMetrics）/ 14（getRectsForRange） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets, feature/editor/render/EditorRenderBackend.ets |
+| StyledString / MutableStyledString | @kit.ArkUI (StyledString / MutableStyledString) | 12 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/render/EditorTextStyleProjector.ets |
+| ComponentObserver (inspector) | @kit.ArkUI (inspector) | 12（on('layout') 回调） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -237,3 +241,90 @@
 - fallback：调用失败时只记 hilog error，不阻塞应用运行；UI 仍按系统默认颜色模式渲染
 - 实现文件：`ui/theme/HarmonyColorModeController.ets`
 - 说明：华为官方文档要求 `setColorMode()` 在页面 `loadContent` 成功之后才能调用，因此 `HarmonyColorModeController` 引入 `pageLoaded` 标志和 `desiredMode` 缓存机制，确保时序正确。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/js-apis-inner-application-uiabilitycontext
+
+## HDS Tabs（悬浮页签）
+
+- Kit：`@kit.UIDesignKit`（HDS UI Design Kit 的 `HdsTabs` 组件）
+- 接口：
+  - `HdsTabs` 悬浮页签组件
+  - `HdsTabsAttribute.barFloatingStyle(style?: HdsTabsFloatingStyle)` — 悬浮页签样式（since 6.1.0(23)）
+  - `HdsTabsFloatingStyle.systemMaterialEffect?: SystemMaterialParams` — 系统材质效果
+  - `hdsMaterial.MaterialType.IMMERSIVE = 101` — 沉浸光感材质类型（since 6.1.0(23)）
+- 最低 API：23
+- SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
+- 权限：无
+- ACL：否
+- fallback：API < 23 使用普通 `Tabs + BottomTabBarStyle`
+- 实现文件：`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`
+- 对外 facade：`app/navigation/PrimaryTabShell.ets`（通过 `PlatformApiResolver` 分流）
+
+## HDS Navigation / HdsNavDestination（沉浸光感导航）
+
+- Kit：`@kit.UIDesignKit`（HDS UI Design Kit 的 `HdsNavigation` / `HdsNavDestination` 组件）
+- 接口：
+  - `HdsNavigation(pathInfos?: NavPathStack): HdsNavigationAttribute` — HDS 导航容器（since 5.1.0(18)）
+  - `HdsNavDestination(): HdsNavDestinationAttribute` — HDS 导航目标页（since 5.1.0(18)）
+  - `HdsNavDestinationAttribute.titleBar(options?: HdsNavigationTitleBarOptions)` — 标题栏配置
+  - `HdsNavDestinationAttribute.hideTitleBar(hide: boolean, animated?: boolean)` — 隐藏标题栏
+  - `HdsNavDestinationAttribute.onBackPressed(callback)` — 返回按钮回调
+  - `HdsNavDestinationAttribute.onShown(callback)` — 页面显示回调
+  - `HdsNavigationTitleBarOptions.content?.title?.mainTitle: ResourceStr` — 标题文本
+- 最低 API：23（本项目使用条件：API23+ 时启用，API < 23 fallback 到普通 Navigation/NavDestination）
+- SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
+- 权限：无
+- ACL：否
+- fallback：API < 23 使用普通 `Navigation` / `NavDestination`
+- 实现文件：
+  - `app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`（HdsNavigation 替代 Navigation）
+  - `feature/project/ui/WorkspaceScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
+  - `feature/editor/ui/WritingScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
+  - `feature/settings/ui/SettingsScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
+
+## TextController + LayoutManager
+
+- Kit：`@kit.ArkUI`（`TextController` / `LayoutManager`）
+- 接口：
+  - `TextController.getLayoutManager()` —— 获取文本布局管理器（API12+）
+  - `LayoutManager.getLineCount()` —— 获取行数
+  - `LayoutManager.getGlyphPositionAtCoordinate(x, y)` —— 坐标→字符位置命中测试
+  - `LayoutManager.getLineMetrics(index)` —— 获取行度量信息
+  - `LayoutManager.getRectsForRange(start, end)` —— 获取字符范围的矩形区域（API14+）
+- 最低 API：12（`getLayoutManager`/`getLineCount`/`getGlyphPositionAtCoordinate`/`getLineMetrics`），14（`getRectsForRange`）
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：API12-13 无 `getRectsForRange`，通过 `getLineMetrics` + `getGlyphPositionAtCoordinate` 推导 caret/selection 矩形
+- 实现文件：`feature/editor/ui/SujianEditor.ets`、`feature/editor/render/EditorRenderBackend.ets`
+- 说明：HarmonyOS 官方文档 https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/ts-text-common
+
+## StyledString / MutableStyledString
+
+- Kit：`@kit.ArkUI`（`StyledString` / `MutableStyledString`）
+- 接口：
+  - `MutableStyledString(text)` —— 创建可变样式字符串
+  - `TextStyle({ fontSize, ... })` —— 文本样式
+  - `LineHeightStyle({ lineHeight })` —— 行高样式
+  - `ParagraphStyle({ textIndent })` —— 段落样式（首行缩进）
+  - `styledString.setStyle(style, start, end)` —— 对范围应用样式
+- 最低 API：12
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：无（等于 compatibleSdkVersion 12，实际始终可用）
+- 实现文件：`feature/editor/render/EditorTextStyleProjector.ets`
+- 说明：华为官方文档 https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/arkts-styled-string
+
+## ComponentObserver（inspector）
+
+- Kit：`@kit.ArkUI`（`inspector` 模块）
+- 接口：
+  - `getUIContext().getUIInspector().createComponentObserver(id: string): ComponentObserver` — 创建组件观察者
+  - `ComponentObserver.on('layout', callback: () => void): void` — 注册布局完成回调
+  - `ComponentObserver.off('layout', callback: () => void): void` — 注销布局完成回调
+- 最低 API：12（`on('layout', callback)` 从 API12 起支持；`ComponentObserver` 从 API10 起可用）
+- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- 权限：无
+- ACL：否
+- fallback：无（等于 compatibleSdkVersion 12，实际始终可用）
+- 实现文件：`feature/editor/ui/SujianEditor.ets`
+- 说明：用于解决 setStyledString 后同步读取 LayoutManager 拿到上一版布局的时序问题。华为官方文档明确"文本内容变更后，需等待布局完成才可获取到最新的布局信息"，ComponentObserver 的 `layout` 回调是系统布局完成的官方通知入口。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/ts-text-common

@@ -63,6 +63,7 @@ import { LineNavigationResolver, LineLayoutState } from '../selection/LineNaviga
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { CaretAffinity, LineBreakKind, VisualCaretPosition } from '../render/editor_layout_math'
 import { EditorLayoutIdentity } from '../selection/editor_layout_identity'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 
 // 语义命令类型：把物理键盘/IME/鼠标/触摸的输入统一成语义命令。
 // 出队执行时才读 Coordinator snapshot，避免并发命令拿到同一个旧 cursor/selection。
@@ -966,6 +967,24 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
+        // Issue #768 评论5835958606：系统 LayoutManager 路径需区分 API14+ 和 API12~13。
+        // API14+：可用 getRectsForRange 拿真实 caret x（走 getCaretXFromSystem）。
+        // API12~13：保留 caretStops/measureText 兼容分支，不调用 API14 接口。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+          }
+          // 目标行 y 用中部，避免落在上下两行边界。
+          const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
+          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+          const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+          if (extend) {
+            return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
+          }
+          return this.selectionController.onTap(targetPosition)
+        }
+        // Fallback：caretStops 方案（systemLayoutManager === null 或 API12~13）
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
@@ -982,6 +1001,22 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
+        // Issue #768 评论5835958606：系统 LayoutManager 路径需区分 API14+ 和 API12~13。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+          }
+          // 目标行 y 用中部，避免落在上下两行边界。
+          const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
+          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+          const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+          if (extend) {
+            return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
+          }
+          return this.selectionController.onTap(targetPosition)
+        }
+        // Fallback：caretStops 方案（systemLayoutManager === null 或 API12~13）
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
@@ -1036,10 +1071,21 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
-        if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+        // Issue #768 评论5835958606：系统 LayoutManager 路径需区分 API14+ 和 API12~13。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+          }
+          // 目标行 y 用中部，避免落在上下两行边界。
+          const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
+          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+        } else {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+          }
+          targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         }
-        targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'down': {
@@ -1047,10 +1093,21 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
-        if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+        // Issue #768 评论5835958606：系统 LayoutManager 路径需区分 API14+ 和 API12~13。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+          }
+          // 目标行 y 用中部，避免落在上下两行边界。
+          const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
+          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+        } else {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+          }
+          targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         }
-        targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'home': {

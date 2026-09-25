@@ -29,6 +29,7 @@ import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { EditorRuntimeSnapshotStore, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
@@ -93,6 +94,74 @@ interface UiRuntimeAttachment {
   statsStackDepth: number    // 统计 tab 导航栈深度
 }
 
+// editor_runtime_sanitized.json 附件 DTO — Issue #768 编辑器运行时快照。
+// 全部脱敏，不含正文内容。字段与 EditorRuntimeSnapshot 一一对齐。
+interface EditorRuntimeAttachment {
+  // 会话/版本
+  hasActiveSession: boolean
+  revision: number
+  generation: number
+
+  // 文本长度（不含内容）
+  textUtf8Bytes: number
+  textUtf16Length: number
+
+  // 光标/选区（byte offset）
+  cursorByteOffset: number
+  cursorUtf16Offset: number
+  selectionAnchorByte: number
+  selectionHeadByte: number
+
+  // composition
+  hasComposition: boolean
+  compositionStartByte: number
+  compositionEndByte: number
+
+  // 排版设置
+  fontSizeVp: number
+  lineSpacingMultiplier: number
+  effectiveLineHeightVp: number
+  firstLineIndentEnabled: boolean
+  firstLineIndentChars: number
+  effectiveFirstLineIndentVp: number
+
+  // 视口/内容尺寸（px）
+  viewportWidthPx: number
+  viewportHeightPx: number
+  contentWidthPx: number
+  contentHeightPx: number
+
+  // 布局几何
+  systemLayoutLineCount: number
+  caretRect: CaretRectSnapshot | null
+  selectionRectCount: number
+  currentLineMetrics: CurrentLineMetricsSnapshot | null
+
+  // IME/焦点/滚动
+  imeAttached: boolean
+  editorFocused: boolean
+  currentScrollX: number
+  currentScrollY: number
+
+  // 段落前导空白
+  leadingWhitespaceCountOfCurrentParagraph: number
+
+  // 布局来源/降级
+  layoutSource: string
+  usingLayoutManager: boolean
+  apiLevel: number
+  lastLayoutError: string | null
+  fallbackCount: number
+  // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
+  isEditorMounted: boolean
+  capturedAtMs: number
+  // Issue #768 评论5837824666：布局身份字段。
+  layoutRevision: number
+  layoutGeneration: number
+  layoutCompositionGeneration: number
+  visualCaretAffinity: string
+}
+
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
 const DIAGNOSTICS_DIR = 'diagnostics'
 
@@ -104,6 +173,7 @@ const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
 const ATTACHMENT_BUILD_IDENTITY = 'build_identity.json'
 const ATTACHMENT_THEME_RUNTIME = 'theme_runtime_sanitized.json'
 const ATTACHMENT_UI_RUNTIME = 'ui_runtime_sanitized.json'
+const ATTACHMENT_EDITOR_RUNTIME = 'editor_runtime_sanitized.json'
 
 export class HarmonyDiagnosticsExporter {
   private bridge: IWriterCoreBridge
@@ -222,6 +292,9 @@ export class HarmonyDiagnosticsExporter {
 
     // ui_runtime_sanitized.json — Issue #767 UI 运行时快照
     this.addUiRuntimeAttachment(attachments)
+
+    // editor_runtime_sanitized.json — Issue #768 编辑器运行时快照
+    this.addEditorRuntimeAttachment(attachments)
 
     return attachments
   }
@@ -406,6 +479,70 @@ export class HarmonyDiagnosticsExporter {
       attachments.push(this.makeAttachment(ATTACHMENT_UI_RUNTIME, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_UI_RUNTIME, String(e)))
+    }
+  }
+
+  // editor_runtime_sanitized.json — 编辑器运行时快照（Issue #768）。
+  // 从 EditorRuntimeSnapshotStore 获取当前编辑器状态，记录布局、光标、IME、降级等信息。
+  // 全部脱敏，不含正文内容。
+  private addEditorRuntimeAttachment(attachments: AttachmentItem[]): void {
+    try {
+      const snapshot = EditorRuntimeSnapshotStore.getInstance().getSnapshot()
+      if (snapshot === null) {
+        attachments.push(this.errorAttachment(ATTACHMENT_EDITOR_RUNTIME,
+          'no editor runtime snapshot available'))
+        return
+      }
+      // Issue #768 评论5835171266 第5项：isEditorMounted=false 时仍导出快照，
+      // 但在 JSON 中标注编辑器已卸载，诊断方可知晓数据来自离页前的最后状态。
+      const attachment: EditorRuntimeAttachment = {
+        hasActiveSession: snapshot.hasActiveSession,
+        revision: snapshot.revision,
+        generation: snapshot.generation,
+        textUtf8Bytes: snapshot.textUtf8Bytes,
+        textUtf16Length: snapshot.textUtf16Length,
+        cursorByteOffset: snapshot.cursorByteOffset,
+        cursorUtf16Offset: snapshot.cursorUtf16Offset,
+        selectionAnchorByte: snapshot.selectionAnchorByte,
+        selectionHeadByte: snapshot.selectionHeadByte,
+        hasComposition: snapshot.hasComposition,
+        compositionStartByte: snapshot.compositionStartByte,
+        compositionEndByte: snapshot.compositionEndByte,
+        fontSizeVp: snapshot.fontSizeVp,
+        lineSpacingMultiplier: snapshot.lineSpacingMultiplier,
+        effectiveLineHeightVp: snapshot.effectiveLineHeightVp,
+        firstLineIndentEnabled: snapshot.firstLineIndentEnabled,
+        firstLineIndentChars: snapshot.firstLineIndentChars,
+        effectiveFirstLineIndentVp: snapshot.effectiveFirstLineIndentVp,
+        viewportWidthPx: snapshot.viewportWidthPx,
+        viewportHeightPx: snapshot.viewportHeightPx,
+        contentWidthPx: snapshot.contentWidthPx,
+        contentHeightPx: snapshot.contentHeightPx,
+        systemLayoutLineCount: snapshot.systemLayoutLineCount,
+        caretRect: snapshot.caretRect,
+        selectionRectCount: snapshot.selectionRectCount,
+        currentLineMetrics: snapshot.currentLineMetrics,
+        imeAttached: snapshot.imeAttached,
+        editorFocused: snapshot.editorFocused,
+        currentScrollX: snapshot.currentScrollX,
+        currentScrollY: snapshot.currentScrollY,
+        leadingWhitespaceCountOfCurrentParagraph: snapshot.leadingWhitespaceCountOfCurrentParagraph,
+        layoutSource: snapshot.layoutSource,
+        usingLayoutManager: snapshot.usingLayoutManager,
+        apiLevel: snapshot.apiLevel,
+        lastLayoutError: snapshot.lastLayoutError,
+        fallbackCount: snapshot.fallbackCount,
+        isEditorMounted: snapshot.isEditorMounted,
+        capturedAtMs: snapshot.capturedAtMs,
+        layoutRevision: snapshot.layoutRevision,
+        layoutGeneration: snapshot.layoutGeneration,
+        layoutCompositionGeneration: snapshot.layoutCompositionGeneration,
+        visualCaretAffinity: snapshot.visualCaretAffinity,
+      }
+      const json = JSON.stringify(attachment, null, 2)
+      attachments.push(this.makeAttachment(ATTACHMENT_EDITOR_RUNTIME, json))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_EDITOR_RUNTIME, String(e)))
     }
   }
 

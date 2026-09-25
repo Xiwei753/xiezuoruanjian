@@ -10,7 +10,7 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
-import { Routes, WorkspaceRouteParams, SettingsRouteParams, WritingRouteParams, StarMapRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, SettingsRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -25,6 +25,10 @@ import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HomeScreen {
+  // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab，不再 push 进 homeStack。
+  // 星图已是一级 tab，push 进作品栈会制造 currentTab/screenRole 分叉。
+  @Param onOpenStarMap: () => void = (): void => {}
+
   // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器，V2 中不可用）
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
@@ -95,13 +99,10 @@ export struct HomeScreen {
     navPathStack.pushPath({ name: Routes.Settings, param: settingsParam })
   }
 
+  // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
+  // 星图已是一级 tab，不再 push 进 homeStack（会制造 currentTab/screenRole 分叉）。
   private navigateToStarMap(): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
-    const starMapParam: StarMapRouteParams = { starmapId: 'starmap-001', starmapTitle: 'Character Relations' }
-    navPathStack.pushPath({ name: Routes.StarMap, param: starMapParam })
+    this.onOpenStarMap()
   }
 
   private navigateToRecentEdit(): void {
@@ -266,7 +267,7 @@ export struct HomeScreen {
     .hideTitleBar(true)
     .onShown((_reason: VisibilityChangeReason) => {
       hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList)
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
     })
   }
 
@@ -625,9 +626,9 @@ export struct HomeScreen {
       .height('100%')
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
-      // Issue #767：改用原生 Button(ButtonType.Circle)，系统材质处理形状、按压、阴影
+      // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
-        Button({ type: ButtonType.Circle }) {
+        Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
             .width(24)
             .height(24)

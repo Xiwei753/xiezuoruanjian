@@ -13,6 +13,8 @@ import {
   computeSelectionRects,
   computeCaretRect,
   computeCompositionUnderlineRects,
+  computeSelectionRectsFromLineLayouts,
+  computeCaretRectFromLineLayouts,
   CARET_WIDTH_PX,
   UNDERLINE_HEIGHT_PX,
 } from '../editor_render_geometry.ts'
@@ -787,6 +789,128 @@ test('composition 投影: revision 透传', () => {
   }
   const layout = EditorLayoutSnapshot.fromEditorSnapshot(snap)
   assert.equal(layout.revision, 42)
+})
+
+// ════════════════════════════════════════════════════════════════════
+// ── Issue #768 评论5836931927：API12-13 LineLayout 几何修复验证 ──
+// computeSelectionRectsFromLineLayouts / computeCaretRectFromLineLayouts
+// 使用 LineLayout[]（含 left/y/height），模拟系统行几何。
+// ════════════════════════════════════════════════════════════════════
+
+console.log('---')
+console.log('Issue #768 评论5836931927：LineLayout 几何修复')
+console.log('---')
+
+// ── 第2项：空 hard line 首行缩进时选区宽度不越过内容右边界 ──
+// 修复前：width = contentWidth，矩形右边 = line.left + contentWidth > contentWidth
+// 修复后：width = Math.max(0, contentWidth - line.left)，矩形右边 = contentWidth
+test('FromLineLayouts: 空 hard line 首行缩进 left=20 → width=contentWidth-left 不越界', () => {
+  // text='a\n\nb'，中间空 hard line 首行缩进 left=20
+  // lines = [{0,1,HB},{2,2,HB},{3,4,EOT}]
+  const text = 'a\n\nb'
+  const lines = [
+    { startUtf16: 0, endUtf16: 1, left: 0, y: 0, height: 20, breakKind: LineBreakKind.HardBreak, caretStops: [] },
+    { startUtf16: 2, endUtf16: 2, left: 20, y: 20, height: 20, breakKind: LineBreakKind.HardBreak, caretStops: [] },
+    { startUtf16: 3, endUtf16: 4, left: 0, y: 40, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  const contentWidth = 200
+  // sel=[0,4) 全选：line0 'a'+LF, line1 空行 LF, line2 'b'
+  const rects = computeSelectionRectsFromLineLayouts(text, lines, contentWidth, 0, 4, mockMeasure)
+  // line0: 文本 rect + LF rect
+  // line1: 空 hard line LF rect → x=20, width=200-20=180
+  // line2: 文本 rect
+  assert.equal(rects.length, 4)
+  // line1 空 hard line rect
+  const emptyLineRect = rects[2]
+  assert.equal(emptyLineRect.x, 20)
+  assert.equal(emptyLineRect.width, 180)
+  // 关键：矩形右边不越过 contentWidth
+  assert.ok(emptyLineRect.x + emptyLineRect.width <= contentWidth,
+    `空行矩形右边 ${emptyLineRect.x + emptyLineRect.width} 不应超过 contentWidth ${contentWidth}`)
+})
+
+test('FromLineLayouts: 空 hard line left=0 → width=contentWidth（无缩进退化为旧行为）', () => {
+  const text = '\n'
+  const lines = [
+    { startUtf16: 0, endUtf16: 0, left: 0, y: 0, height: 20, breakKind: LineBreakKind.HardBreak, caretStops: [] },
+    { startUtf16: 1, endUtf16: 1, left: 0, y: 20, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  const rects = computeSelectionRectsFromLineLayouts(text, lines, 200, 0, 1, mockMeasure)
+  assert.equal(rects.length, 1)
+  assert.equal(rects[0].x, 0)
+  assert.equal(rects[0].width, 200)
+})
+
+test('FromLineLayouts: 空 hard line left>contentWidth → width=0（Math.max 防负）', () => {
+  const text = '\n'
+  const lines = [
+    { startUtf16: 0, endUtf16: 0, left: 250, y: 0, height: 20, breakKind: LineBreakKind.HardBreak, caretStops: [] },
+    { startUtf16: 1, endUtf16: 1, left: 0, y: 20, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  // contentWidth=200 < left=250 → width = max(0, 200-250) = 0
+  const rects = computeSelectionRectsFromLineLayouts(text, lines, 200, 0, 1, mockMeasure)
+  assert.equal(rects.length, 1)
+  assert.equal(rects[0].width, 0)
+})
+
+test('FromLineLayouts: 非空 hard line LF rect 仍用 contentWidth - x（不受第2项影响）', () => {
+  const text = 'a\nb'
+  const lines = [
+    { startUtf16: 0, endUtf16: 1, left: 10, y: 0, height: 20, breakKind: LineBreakKind.HardBreak, caretStops: [] },
+    { startUtf16: 2, endUtf16: 3, left: 0, y: 20, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  // sel=[1,2) 选中 LF：line0 非空，x = left + measure('a') = 10+10 = 20, width = 200-20 = 180
+  const rects = computeSelectionRectsFromLineLayouts(text, lines, 200, 1, 2, mockMeasure)
+  assert.equal(rects.length, 1)
+  assert.equal(rects[0].x, 20)
+  assert.equal(rects[0].width, 180)
+})
+
+// ── 第1项：soft-wrap Upstream 光标 x/y 同属一行 ──
+// computeCaretRectFromLineLayouts 是 buildCaretRectFromSystem 的纯数学对应函数，
+// 使用 resolveVisualLineIndex 按 affinity 选定视觉行。
+// buildCaretRectFromSystem 的修复逻辑：lineIndex 已是按 affinity 选定的行，
+// 直接判断 line 本身是否 soft-wrap Upstream，不回头找 lineIndex-1。
+test('FromLineLayouts: soft-wrap 边界 Upstream → 光标 x/y 同属上一行', () => {
+  // text='abcdef' 容器 30px → 2 行 [0,3 SoftWrap] [3,6 EndOfText]
+  // cursor=3 在 soft-wrap 边界，Upstream → 行0 末尾
+  const text = 'abcdef'
+  const lines = [
+    { startUtf16: 0, endUtf16: 3, left: 0, y: 0, height: 20, breakKind: LineBreakKind.SoftWrap, caretStops: [] },
+    { startUtf16: 3, endUtf16: 6, left: 0, y: 20, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  const caret = computeCaretRectFromLineLayouts(text, lines, 3, mockMeasure, CaretAffinity.Upstream)
+  // y 应在行0（y=0），x = left + measure('abc') = 0 + 30 = 30
+  assert.equal(caret.y, 0)
+  assert.equal(caret.x, 30)
+  // 关键：x 和 y 同属行0，不分属两行
+  assert.equal(caret.y, lines[0].y)
+})
+
+test('FromLineLayouts: soft-wrap 边界 Downstream → 光标 x/y 同属下一行', () => {
+  const text = 'abcdef'
+  const lines = [
+    { startUtf16: 0, endUtf16: 3, left: 0, y: 0, height: 20, breakKind: LineBreakKind.SoftWrap, caretStops: [] },
+    { startUtf16: 3, endUtf16: 6, left: 0, y: 20, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  const caret = computeCaretRectFromLineLayouts(text, lines, 3, mockMeasure, CaretAffinity.Downstream)
+  // y 应在行1（y=20），x = left + measure('') = 0
+  assert.equal(caret.y, 20)
+  assert.equal(caret.x, 0)
+  assert.equal(caret.y, lines[1].y)
+})
+
+test('FromLineLayouts: soft-wrap Upstream 首行缩进 left>0 → x 含 left', () => {
+  // 首行缩进 left=15，soft-wrap 边界 Upstream
+  const text = 'abcdef'
+  const lines = [
+    { startUtf16: 0, endUtf16: 3, left: 15, y: 0, height: 20, breakKind: LineBreakKind.SoftWrap, caretStops: [] },
+    { startUtf16: 3, endUtf16: 6, left: 0, y: 20, height: 20, breakKind: LineBreakKind.EndOfText, caretStops: [] },
+  ]
+  const caret = computeCaretRectFromLineLayouts(text, lines, 3, mockMeasure, CaretAffinity.Upstream)
+  // x = left + measure('abc') = 15 + 30 = 45, y = 0（行0）
+  assert.equal(caret.x, 45)
+  assert.equal(caret.y, 0)
 })
 
 console.log('---')

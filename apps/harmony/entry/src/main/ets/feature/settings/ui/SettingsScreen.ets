@@ -19,6 +19,8 @@ import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsSettingsDestinationApi23 } from '../../../app/navigation/impl/api23/HdsSettingsDestinationApi23'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -45,7 +47,9 @@ interface SettingsSelectOption {
 
 @ComponentV2
 export struct SettingsScreen {
-  // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器）。
+  // Issue #768 评论5838296806：通过 @Param 从父组件接收 NavPathStack，不再依赖全局 activeTabStack
+  @Param navPathStack: NavPathStack = new NavPathStack()
+  // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
@@ -59,6 +63,9 @@ export struct SettingsScreen {
   @Local filteredGroups: GroupDefinition[] = GROUP_DEFINITIONS
   // 问题5：复制设备信息结果提示
   @Local copyMessage: string = ''
+  // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
+  // 获得 HDS 沉浸光感材质效果。
+  @Local useHdsNav: boolean = false
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -66,6 +73,8 @@ export struct SettingsScreen {
 
   aboutToAppear() {
     hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
+    // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
 
     // 注册主题观察者
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
@@ -94,8 +103,9 @@ export struct SettingsScreen {
   }
 
   // ── 安全返回 ──
+  // Issue #768 评论5838296806：使用 @Param 传入的 NavPathStack，不再依赖全局 activeTabStack。
   private goBack(): void {
-    this.navCoordinator.safePop()
+    this.navCoordinator.safePopWithStack(this.navPathStack)
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──
@@ -187,47 +197,71 @@ export struct SettingsScreen {
     return ''
   }
 
-  build() {
-    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    NavDestination() {
-      Column() {
-        // ── 顶部 Header：宽屏无搜索框，窄屏有搜索框 ──
-        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-          this.WideSettingsHeader()
-        } else {
-          this.CompactSettingsHeader()
-        }
+  // Issue #768 评论5835171266 第3项：NavDestination 内容部分抽取为 @Builder，
+  // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
+  @Builder
+  NavContent() {
+    Column() {
+      // ── 顶部 Header：宽屏无搜索框，窄屏有搜索框 ──
+      if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+        this.WideSettingsHeader()
+      } else {
+        this.CompactSettingsHeader()
+      }
 
-        if (this.viewModel.isLoading) {
-          Column() {
-            LoadingProgress()
-              .width(48)
-              .height(48)
-            Text($r('app.string.loading'))
-              .fontSize(14)
-              .margin({ top: 12 })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
+      if (this.viewModel.isLoading) {
+        Column() {
+          LoadingProgress()
+            .width(48)
+            .height(48)
+          Text($r('app.string.loading'))
+            .fontSize(14)
+            .margin({ top: 12 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        // 问题3：宽屏/窄屏分支
+        // 宽屏 (isTwoPane)：恢复 #760 之前的完整设置列表布局
+        // 窄屏 (!isTwoPane)：保留折叠分类布局
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          this.WideScreenLayout()
         } else {
-          // 问题3：宽屏/窄屏分支
-          // 宽屏 (isTwoPane)：恢复 #760 之前的完整设置列表布局
-          // 窄屏 (!isTwoPane)：保留折叠分类布局
-          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-            this.WideScreenLayout()
-          } else {
-            this.CompactScreenLayout()
-          }
+          this.CompactScreenLayout()
         }
       }
-      .width('100%')
-      .height('100%')
     }
-    .hideTitleBar(true)
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings)
-    })
+    .width('100%')
+    .height('100%')
+  }
+
+  build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
+    // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
+    if (this.useHdsNav) {
+      HdsSettingsDestinationApi23({
+        contentBuilder: this.NavContent,
+        title: $r('app.string.settings'),
+        onBack: () => { this.goBack() },
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0) }
+      })
+    } else {
+      NavDestination() {
+        this.NavContent()
+      }
+      // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮），删除手写返回 Image。
+      .hideTitleBar(false)
+      .title($r('app.string.settings'))
+      .onBackPressed(() => {
+        this.goBack()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0)
+      })
+    }
   }
 
   // ════════════════════════════════════════════
@@ -254,19 +288,13 @@ export struct SettingsScreen {
     .align(Alignment.Top)
   }
 
-  // ── 宽屏 Header：返回按钮 + 标题 + 保存状态提示（无搜索框，恢复 #760 之前样式） ──
+  // ── 宽屏 Header：标题 + 保存状态提示（返回按钮由 NavDestination 原生标题栏承载，Issue #768） ──
   @Builder
   WideSettingsHeader() {
     Row() {
-      Image($r('sys.media.ohos_ic_public_arrow_left'))
-        .width(24)
-        .height(24)
-        .onClick(() => this.goBack())
-
       Text($r('app.string.settings'))
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ left: 12 })
 
       Blank()
 
@@ -288,21 +316,15 @@ export struct SettingsScreen {
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
   }
 
-  // ── 窄屏 Header：返回按钮 + 标题 + 搜索框 ──
+  // ── 窄屏 Header：标题 + 搜索框（返回按钮由 NavDestination 原生标题栏承载，Issue #768） ──
   @Builder
   CompactSettingsHeader() {
     Column() {
-      // 返回按钮行
+      // 标题行
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .onClick(() => this.goBack())
-
         Text($r('app.string.settings'))
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .margin({ left: 12 })
 
         Blank()
 

@@ -10,6 +10,8 @@ import { NavigationTransactionCoordinator } from '../../../app/navigation/Naviga
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
 import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -28,7 +30,9 @@ const DIVIDER_WIDTH: number = 0.5
 // - 页面只派发意图，ViewModel 内部管理 async 和状态
 @ComponentV2
 export struct WorkspaceScreen {
-  // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器，V2 中不可用）
+  // Issue #768 评论5838296806：通过 @Param 从父组件接收 NavPathStack，不再依赖全局 activeTabStack
+  @Param navPathStack: NavPathStack = new NavPathStack()
+  // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
   // ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
@@ -37,6 +41,9 @@ export struct WorkspaceScreen {
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
+  // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
+  // 获得 HDS 沉浸光感材质效果。
+  @Local useHdsNav: boolean = false
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -44,17 +51,16 @@ export struct WorkspaceScreen {
 
   aboutToAppear() {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (navPathStack) {
-      const paramsArr = navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
-      const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
-      if (params) {
-        this.viewModel.projectId = params.projectId
-        this.viewModel.projectName = params.projectName
-        this.viewModel.loadData(params.projectId)
-        // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
-        AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
-      }
+    // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
+    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
+    if (params) {
+      this.viewModel.projectId = params.projectId
+      this.viewModel.projectName = params.projectName
+      this.viewModel.loadData(params.projectId)
+      // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
+      AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
     }
 
     const self = this
@@ -110,37 +116,29 @@ export struct WorkspaceScreen {
   // Issue #629 评论14 第1项：章节点击统一进入 Routes.Writing，不再内联编辑。
   // 窄屏和宽屏都走同一条导航路径，屏幕宽度变化只改布局，不换 TextEditSession owner。
   private navigateToWriting(chapterId: string, chapterTitle: string, volumeId: string): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
     const writingParam: WritingRouteParams = {
       chapterId: chapterId,
       chapterTitle: chapterTitle,
       projectId: this.viewModel.projectId,
       volumeId: volumeId
     }
-    navPathStack.pushPath({
+    this.navPathStack.pushPath({
       name: Routes.Writing,
       param: writingParam
     })
   }
 
-  // Issue #760：使用 NavigationTransactionCoordinator.getInstance().safePop() 代替直接 navPathStack.pop()
+  // Issue #768 评论5838296806：返回链使用 @Param 传入的 NavPathStack，不再依赖全局 activeTabStack。
   private handleBack(): void {
-    this.navCoordinator.safePop()
+    this.navCoordinator.safePopWithStack(this.navPathStack)
   }
 
   // 导航到设置页
   private navigateToSettings(): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
     const settingsParam: SettingsRouteParams = {
       projectId: this.viewModel.projectId
     }
-    navPathStack.pushPath({
+    this.navPathStack.pushPath({
       name: Routes.Settings,
       param: settingsParam
     })
@@ -219,43 +217,66 @@ export struct WorkspaceScreen {
 
   // ========== 构建 UI ==========
 
-  build() {
-    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    // WorkspaceScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
-    NavDestination() {
-      Stack() {
-        Column() {
-          if (this.adaptiveState.sizeClass === WidthClass.Compact) {
-            // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
-            this.CompactWorkspaceLayout()
-          } else if (this.adaptiveState.isTwoPane) {
-            // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
-            // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
-            this.TwoPaneLayout()
-          } else {
-            // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
-            // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
-            // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
-            this.LegacySinglePaneLayout()
-          }
-        }
-        .width('100%')
-        .height('100%')
-        // ── 对话框层 ──
-        if (this.viewModel.renameTarget !== null) {
-          this.RenameDialog()
-        }
-        if (this.viewModel.deleteTarget !== null) {
-          this.DeleteConfirmDialog()
+  // Issue #768 评论5835171266 第3项：NavDestination 内容部分抽取为 @Builder，
+  // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
+  @Builder
+  NavContent() {
+    Stack() {
+      Column() {
+        if (this.adaptiveState.sizeClass === WidthClass.Compact) {
+          // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
+          this.CompactWorkspaceLayout()
+        } else if (this.adaptiveState.isTwoPane) {
+          // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
+          // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
+          this.TwoPaneLayout()
+        } else {
+          // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
+          // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
+          // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
+          this.LegacySinglePaneLayout()
         }
       }
       .width('100%')
       .height('100%')
+      // ── 对话框层 ──
+      if (this.viewModel.renameTarget !== null) {
+        this.RenameDialog()
+      }
+      if (this.viewModel.deleteTarget !== null) {
+        this.DeleteConfirmDialog()
+      }
     }
-    .hideTitleBar(true)
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace)
-    })
+    .width('100%')
+    .height('100%')
+  }
+
+  build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // Issue #768：启用 NavDestination 原生标题栏，显示项目名和系统返回按钮。
+    // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
+    // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
+    if (this.useHdsNav) {
+      HdsWorkspaceDestinationApi23({
+        contentBuilder: this.NavContent,
+        title: this.viewModel.projectName,
+        onBack: () => { this.handleBack() },
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) }
+      })
+    } else {
+      NavDestination() {
+        this.NavContent()
+      }
+      .hideTitleBar(false)
+      .title(this.viewModel.projectName)
+      .onBackPressed(() => {
+        this.handleBack()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0)
+      })
+    }
   }
 
   // ────────────────────────────────────────
@@ -283,12 +304,8 @@ export struct WorkspaceScreen {
   LeftPanel() {
     Column() {
       // 标题栏
+      // Issue #768：删除手写返回按钮，改用 NavDestination 原生标题栏的返回按钮
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .onClick(() => this.handleBack())
-
         Text(this.viewModel.projectName)
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
@@ -506,9 +523,9 @@ export struct WorkspaceScreen {
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
-      // Issue #767：改用原生 Button(ButtonType.Circle)，系统材质处理形状、按压、阴影
+      // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        Button({ type: ButtonType.Circle }) {
+        Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
             .width(24)
             .height(24)
@@ -532,16 +549,10 @@ export struct WorkspaceScreen {
   @Builder
   SinglePaneHeader() {
     Row() {
-      // 左：返回 + 作品名
-      Image($r('sys.media.ohos_ic_public_arrow_left'))
-        .width(24)
-        .height(24)
-        .onClick(() => this.handleBack())
-
+      // 左：作品名（返回按钮由 NavDestination 原生标题栏承载，Issue #768）
       Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ left: 12 })
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -639,16 +650,10 @@ export struct WorkspaceScreen {
   @Builder
   LegacySinglePaneHeader() {
     Row() {
-      // 左：返回 + 作品名
-      Image($r('sys.media.ohos_ic_public_arrow_left'))
-        .width(24)
-        .height(24)
-        .onClick(() => this.handleBack())
-
+      // 左：作品名（返回按钮由 NavDestination 原生标题栏承载，Issue #768）
       Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ left: 12 })
 
       Blank()
 

@@ -577,7 +577,7 @@ export struct StarMapScreen {
     }
     .hideTitleBar(true)
     .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMap)
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMap, 1)
     })
   }
 

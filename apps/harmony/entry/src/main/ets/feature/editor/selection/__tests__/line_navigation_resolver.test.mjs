@@ -48,7 +48,7 @@ function mockNavLines(text) {
     }
     const isLast = end === text.length
     const breakKind = isLast ? 'endOfText' : 'softWrap'
-    lines.push({ startUtf16: start, endUtf16: end, y: 0, height: 20, breakKind, caretStops: stops })
+    lines.push({ startUtf16: start, endUtf16: end, left: 0, y: 0, height: 20, breakKind, caretStops: stops })
     start = end
   }
   return lines
@@ -196,10 +196,10 @@ testAsync('LineLayoutStore: 等待返回 state 后目标计算必须使用该 st
   store.update(makeState('old'))
   const waitPromise = store.waitFor(makeIdentity('new'))
   const newState = makeState('new', { lines: [
-    { startUtf16: 0, endUtf16: 10, y: 0, height: 20, breakKind: 'softWrap', caretStops: [
+    { startUtf16: 0, endUtf16: 10, left: 0, y: 0, height: 20, breakKind: 'softWrap', caretStops: [
       { utf16Offset: 0, x: 0 }, { utf16Offset: 10, x: 100 }
     ] },
-    { startUtf16: 10, endUtf16: 20, y: 20, height: 20, breakKind: 'endOfText', caretStops: [
+    { startUtf16: 10, endUtf16: 20, left: 0, y: 20, height: 20, breakKind: 'endOfText', caretStops: [
       { utf16Offset: 10, x: 0 }, { utf16Offset: 20, x: 100 }
     ] }
   ]})

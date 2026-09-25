@@ -344,3 +344,32 @@ export function positionForOffsetInLine(
   // 其他位置：Downstream。
   return { utf16Offset, affinity: CaretAffinity.Downstream }
 }
+
+/**
+ * Issue #768 任务10：从系统 LineMetrics 纯数据构建 LineRange[]。
+ * 不依赖 ArkUI LayoutManager 对象，只接受纯数据参数，保持纯函数性质。
+ *
+ * breakKind 推导规则：
+ * - 末行：text[endIndex-1] === '\n' → HardBreak，否则 EndOfText
+ * - 非末行：text[endIndex-1] === '\n' → HardBreak，否则 SoftWrap
+ */
+export function buildLineRangesFromMetrics(
+  lineMetricsData: Array<{ startIndex: number; endIndex: number; isLastLine: boolean; text: string }>,
+): LineRange[] {
+  const ranges: LineRange[] = []
+  for (const data of lineMetricsData) {
+    const { startIndex, endIndex, isLastLine, text } = data
+    let breakKind: LineBreakKind
+    if (isLastLine) {
+      breakKind = (endIndex > startIndex && text.charAt(endIndex - 1) === '\n')
+        ? LineBreakKind.HardBreak
+        : LineBreakKind.EndOfText
+    } else {
+      breakKind = (endIndex > startIndex && text.charAt(endIndex - 1) === '\n')
+        ? LineBreakKind.HardBreak
+        : LineBreakKind.SoftWrap
+    }
+    ranges.push({ start: startIndex, end: endIndex, breakKind })
+  }
+  return ranges
+}
