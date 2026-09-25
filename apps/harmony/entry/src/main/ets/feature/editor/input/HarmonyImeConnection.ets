@@ -36,152 +36,113 @@ const IME_LOG_TAG = 'HarmonyImeConnection'
 
 export class HarmonyImeConnection {
   private controller: inputMethod.InputMethodController = inputMethod.getController()
-  private dispatcher: EditorSemanticDispatcher | null = null
-  private attached: boolean = false
-  // Issue #767 评论 5828448634 第 1 节：单一状态源——attach 进行中的 Promise。
-  // 同一 dispatcher 在 attach 进行中时直接复用同一个 task，避免并发 attach。
-  // attach 失败时清掉 attachTask / dispatcher / attached，允许下一次点击重试。
-  private attachTask: Promise<void> | null = null
-  // Issue #767 评论 5828681434 第 1 节：attach 生命周期 generation/token。
-  // 每次 detach 递增 generation，让所有进行中的旧 attach 失效。
-  // 旧 controller.attach() await 返回后检查 generation：已失效则立即 controller.detach()，
-  // 不注册 listeners，不设 attached=true。避免页面离开后 IME 重新 attach 成功。
-  private attachGeneration: number = 0
+  // Issue #767 评论 5828898817：唯一串行 transition 链。
+  // 不再分别维护 attachTask + attached + generation，让 attach/detach 各自抢状态。
+  // 所有 IME 生命周期操作串到同一条 transitionTask 后面，保证同一时间只有一条 attach/detach 链。
+  // desiredDispatcher：期望连接的 dispatcher（attach 写入，detach 写 null）。
+  // attachedDispatcher：实际已连接的 dispatcher（reconcile 成功后写入，detach 后写 null）。
+  // isAttached() 直接由 attachedDispatcher !== null 判断，不再维护另一份 bool。
+  private transitionTask: Promise<void> = Promise.resolve()
+  private desiredDispatcher: EditorSemanticDispatcher | null = null
+  private attachedDispatcher: EditorSemanticDispatcher | null = null
 
   // 编辑框获得焦点时调用：绑定语义调度器，attach 到 IME，注册事件回调。
-  // 接受 dispatcher 而非 inputAdapter + selectionController：所有输入经 dispatcher 统一排队。
-  // Issue #767 评论 5828448634 第 1 节：单一 attach owner，避免并发 attach 竞态。
-  // - 已 attached 且 dispatcher 还是当前 dispatcher：直接返回（不 detach 重连）；
-  // - attach 进行中（attachTask != null）且同一 dispatcher：复用同一个 task；
-  // - attached 但 dispatcher 已变化：才 detach 后重新 attach；
-  // - attach 失败时清掉 attachTask / dispatcher / attached，允许下一次点击重试。
-  // Issue #767 评论 5828681434 第 1 节：attachTask != null 但 dispatcher 不同时，
-  // 不能直接启动第二个 doAttach()——整个 InputMethodController 同一时间只能有一条
-  // attach/detach 链。先递增 generation 让当前 attach 失效，等当前 task 完全结束后
-  // （包括失效后的 controller.detach()）再切 dispatcher 重新 attach。
+  // Issue #767 评论 5828898817：attach 只做两件事：
+  // 1. 写 desiredDispatcher = dispatcher；
+  // 2. 把"把实际状态收敛到 desiredDispatcher"的 reconcile 操作串到 transitionTask 后面。
+  // 不再分别维护 attachTask + attached + generation，避免并发窗口。
   attach(dispatcher: EditorSemanticDispatcher): Promise<void> {
-    // 已 attached 且 dispatcher 未变化：直接返回，避免反复 detach/attach。
-    if (this.attached && this.dispatcher === dispatcher) {
-      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: already attached with same dispatcher, skip')
-      return Promise.resolve()
-    }
-    // attach 进行中且同一 dispatcher：复用同一个 task，避免并发 attach。
-    if (this.attachTask !== null && this.dispatcher === dispatcher) {
-      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: attach in progress with same dispatcher, reuse task')
-      return this.attachTask
-    }
-    // attach 进行中但 dispatcher 已变化：递增 generation 让当前 attach 失效，
-    // 等当前 task 完全结束后再重新 attach（确保 controller 只有一条 attach/detach 链）。
-    if (this.attachTask !== null && this.dispatcher !== dispatcher) {
-      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: dispatcher changed during attach, wait then re-attach')
-      this.attachGeneration++
-      const prevTask = this.attachTask
-      const newTask = prevTask.then(
-        () => this.doAttach(dispatcher),
-        () => this.doAttach(dispatcher)
-      )
-      this.attachTask = newTask
-      newTask.then(
-        () => { if (this.attachTask === newTask) this.attachTask = null },
-        () => { if (this.attachTask === newTask) this.attachTask = null }
-      )
-      return newTask
-    }
-    // attached 但 dispatcher 已变化：先 detach 再重新 attach。
-    if (this.attached && this.dispatcher !== dispatcher) {
-      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: dispatcher changed, detach then re-attach')
-      const newTask = this.detach().then(() => {
-        return this.doAttach(dispatcher)
-      })
-      this.attachTask = newTask
-      newTask.then(
-        () => { if (this.attachTask === newTask) this.attachTask = null },
-        () => { if (this.attachTask === newTask) this.attachTask = null }
-      )
-      return newTask
-    }
-    // 首次 attach 或上次失败后重试。
-    const task = this.doAttach(dispatcher)
-    this.attachTask = task
-    task.then(
-      () => { if (this.attachTask === task) this.attachTask = null },
-      () => { if (this.attachTask === task) this.attachTask = null }
+    this.desiredDispatcher = dispatcher
+    const task = this.transitionTask.then(() => this.reconcile())
+    // transitionTask 始终保持 resolved 状态（吞掉错误），链不会因单次 reconcile 失败而断掉。
+    this.transitionTask = task.then(
+      () => undefined,
+      () => undefined
     )
     return task
   }
 
-  // 真正执行 attach 的内部方法。调用方负责管理 attachTask 状态。
-  // Issue #767 评论 5828681434 第 1 节：generation 检查防止失效 attach 继续。
-  // - doAttach 开始时记录当前 attachGeneration；
-  // - await controller.attach() 返回后检查 generation 是否仍是自己的；
-  // - 已失效（detach 在 attach 进行中调用过）则立即 controller.detach()，不注册 listeners，不设 attached；
-  // - 只有 generation 仍有效时才能 registerListeners() 并提交 attached 状态。
-  private async doAttach(dispatcher: EditorSemanticDispatcher): Promise<void> {
-    this.dispatcher = dispatcher
-    const myGeneration = this.attachGeneration
-    // API26 InputMethodController.attach 需要 TextConfig；素笺是多行文本编辑框，
-    // 用 MULTILINE + UNSPECIFIED 回车键类型。IME 通过 selectByRange 事件主动查询选区。
-    const textConfig: inputMethod.TextConfig = {
-      inputAttribute: {
-        textInputType: inputMethod.TextInputType.MULTILINE,
-        enterKeyType: inputMethod.EnterKeyType.UNSPECIFIED,
-      },
-    }
-    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: start')
-    try {
-      await this.controller.attach(true, textConfig)
-    } catch (e) {
-      // Issue #767 评论 5828448634 第 1 节：attach 失败时清掉所有状态，允许下次重试。
-      // Issue #767 评论 5828681434 第 1 节：只在 generation 仍有效时才清状态，
-      // 避免覆盖 detach 或新 doAttach 已设置的状态。
-      hilog.error(IME_LOG_DOMAIN, IME_LOG_TAG, `attach: failure, reason: ${JSON.stringify(e)}`)
-      if (myGeneration === this.attachGeneration) {
-        this.dispatcher = null
-        this.attached = false
-      }
-      throw new Error(`IME attach failed: ${JSON.stringify(e)}`)
-    }
-    // Issue #767 评论 5828681434 第 1 节：generation 检查。
-    // 如果 detach 在 attach 进行中调用过（递增了 attachGeneration），
-    // 此 attach 已失效——立即 controller.detach()，不注册 listeners，不设 attached。
-    if (myGeneration !== this.attachGeneration) {
-      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: generation mismatch, detaching stale attach')
+  // 失焦/页面退出时调用：取消监听并 detach。
+  // Issue #767 评论 5828898817：detach 只做两件事：
+  // 1. 写 desiredDispatcher = null；
+  // 2. 同样串到 transitionTask 后面；
+  // 3. 返回这个 transition Promise。
+  // 不再把 attachTask 设 null 来模拟取消——串行链保证旧 attach 完成后才会处理 detach。
+  detach(): Promise<void> {
+    this.desiredDispatcher = null
+    const task = this.transitionTask.then(() => this.reconcile())
+    this.transitionTask = task.then(
+      () => undefined,
+      () => undefined
+    )
+    return task
+  }
+
+  // Issue #767 评论 5828898817：唯一串行 reconcile——把实际状态收敛到 desiredDispatcher。
+  // - 当前已连接旧 dispatcher 而 desired 不同：先 unregister + await controller.detach；
+  // - desired 为 null：结束；
+  // - desired 非 null 且当前未连接：await controller.attach；
+  // - attach 返回后再次检查 desired 是否还是本 dispatcher；
+  // - 已变更就立刻 detach，不注册 listener；
+  // - 仍一致才 registerListeners，并把 attachedDispatcher = desiredDispatcher。
+  // 这样 attach、detach、快速 blur→focus、dispatcher 切换全部只有一条串行控制链。
+  private async reconcile(): Promise<void> {
+    const desired = this.desiredDispatcher
+
+    // 当前已连接旧 dispatcher 而 desired 不同：先 unregister + await controller.detach。
+    if (this.attachedDispatcher !== null && this.attachedDispatcher !== desired) {
+      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'reconcile: detach old dispatcher')
+      this.unregisterListeners()
       try {
         await this.controller.detach()
       } catch (_e) {
         // detach 失败不阻塞清理
       }
-      return
+      this.attachedDispatcher = null
     }
-    this.registerListeners()
-    this.attached = true
-    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: success')
-  }
 
-  // 失焦/页面退出时调用：取消监听并 detach。
-  // Issue #767 评论 5828448634 第 1 节：detach 时也清掉 attachTask。
-  // Issue #767 评论 5828681434 第 1 节：先递增 attachGeneration，让所有进行中的旧 attach 失效。
-  // 旧 attach 的 doAttach 在 await controller.attach() 返回后检测到 generation 不匹配，
-  // 会立即 controller.detach() 并 return，不注册 listeners，不设 attached=true。
-  // 这避免了"页面已 blur/离开，IME 却在后面重新 attach 成功"的竞态。
-  async detach(): Promise<void> {
-    this.attachGeneration++
-    this.attachTask = null
-    if (!this.attached) {
+    // desired 为 null：结束。
+    if (desired === null) {
       return
     }
-    this.unregisterListeners()
-    try {
-      await this.controller.detach()
-    } catch (_e) {
-      // detach 失败不阻塞清理
+
+    // desired 非 null 且当前未连接：await controller.attach。
+    if (this.attachedDispatcher === null) {
+      const textConfig: inputMethod.TextConfig = {
+        inputAttribute: {
+          textInputType: inputMethod.TextInputType.MULTILINE,
+          enterKeyType: inputMethod.EnterKeyType.UNSPECIFIED,
+        },
+      }
+      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'reconcile: attach start')
+      try {
+        await this.controller.attach(true, textConfig)
+      } catch (e) {
+        hilog.error(IME_LOG_DOMAIN, IME_LOG_TAG, `reconcile: attach failed: ${JSON.stringify(e)}`)
+        throw new Error(`IME attach failed: ${JSON.stringify(e)}`)
+      }
+
+      // attach 返回后再次检查 desired 是否还是本 dispatcher。
+      if (this.desiredDispatcher !== desired) {
+        // 已变更就立刻 detach，不注册 listener。
+        hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'reconcile: desired changed during attach, detaching')
+        try {
+          await this.controller.detach()
+        } catch (_e) {
+          // detach 失败不阻塞清理
+        }
+        return
+      }
+
+      // 仍一致才 registerListeners，并把 attachedDispatcher = desiredDispatcher。
+      this.registerListeners()
+      this.attachedDispatcher = desired
+      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'reconcile: attach success')
     }
-    this.attached = false
-    this.dispatcher = null
   }
 
   isAttached(): boolean {
-    return this.attached
+    return this.attachedDispatcher !== null
   }
 
   // 通知 IME 当前选区（UTF-16 code unit offset，ArkUI 事件坐标）。
@@ -189,7 +150,7 @@ export class HarmonyImeConnection {
   // （只有 changeSelection(text, start, end)，需要传完整 text，不适合这里主动推送）。
   // API26 IME 通过 selectByRange 事件主动查询选区，编辑器不主动推送，这里保留 no-op。
   async notifySelection(_utf16Start: number, _utf16End: number): Promise<void> {
-    if (!this.attached) {
+    if (!this.attachedDispatcher) {
       return
     }
     // no-op：API26 IME 通过 selectByRange 事件主动查询选区。
@@ -198,7 +159,7 @@ export class HarmonyImeConnection {
   // 通知 IME 当前光标位置（UTF-16 code unit offset）。
   // Issue #744 评论 5794965395 第 5 节：同 notifySelection，API26 改 no-op。
   async notifyCursor(_utf16Offset: number): Promise<void> {
-    if (!this.attached) {
+    if (!this.attachedDispatcher) {
       return
     }
     // no-op：API26 IME 通过 selectByRange 事件主动查询选区。
@@ -206,12 +167,12 @@ export class HarmonyImeConnection {
 
   // Issue #629 R11 评论5329310563 第2项：从 dispatcher 读当前 display selection 并通知 IME。
   // 在 dispatch Promise resolve（命令已应用、snapshot 已更新）后调用，
-  // 避免拿原 hitPos 猜未来状态通知系统。已持有 dispatcher 字段，无循环依赖。
+  // 避免拿原 hitPos 猜未来状态通知系统。已持有 attachedDispatcher 字段，无循环依赖。
   async syncSelectionFromEditor(): Promise<void> {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
-    const sel = this.dispatcher.getCurrentDisplaySelectionUtf16()
+    const sel = this.attachedDispatcher.getCurrentDisplaySelectionUtf16()
     if (sel !== null) {
       await this.notifySelection(sel.start, sel.end)
     }
@@ -244,11 +205,11 @@ export class HarmonyImeConnection {
   // 不在本类队列外判断。dispatcher 串行队列保证 IME 事件按到达顺序执行。
   // Issue #744 评论 5794965395 第 5 节：回车也走 insertText('\n')，不再有单独的 sendEnterKey 事件。
   private onInsertText(text: string): void {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
     hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `insertText: length=${text.length}`)
-    this.dispatcher.dispatchFireAndForget({ kind: 'imeCommitText', text })
+    this.attachedDispatcher.dispatchFireAndForget({ kind: 'imeCommitText', text })
   }
 
   // IME 向左删除（退格）：派发 imeDeleteLeft（带长度）。
@@ -256,22 +217,22 @@ export class HarmonyImeConnection {
   // 删除边界由 Core grapheme boundary 决定，不退回 UTF-16 ±1。
   // length 是 IME 要求删除的字符数；dispatcher 在唯一队列里逐个 grapheme 边界连续删除。
   private onDeleteLeft(length: number): void {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
     hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `deleteLeft: length=${length}`)
-    this.dispatcher.dispatchFireAndForget({ kind: 'imeDeleteLeft', length: length })
+    this.attachedDispatcher.dispatchFireAndForget({ kind: 'imeDeleteLeft', length: length })
   }
 
   // IME 向右删除（向前删除）：派发 imeDeleteRight（带长度）。
   // Issue #744 评论 5794965395 第 5 节：API26 事件是 deleteRight(length)，
   // 删除边界由 Core grapheme boundary 决定，不退回 UTF-16 ±1。
   private onDeleteRight(length: number): void {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
     hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `deleteRight: length=${length}`)
-    this.dispatcher.dispatchFireAndForget({ kind: 'imeDeleteRight', length: length })
+    this.attachedDispatcher.dispatchFireAndForget({ kind: 'imeDeleteRight', length: length })
   }
 
   // IME 选区变化：翻译成 imeSetSelection 语义命令，经 dispatcher 派发。
@@ -281,10 +242,10 @@ export class HarmonyImeConnection {
   // composition 内外判断由 EditorSemanticDispatcher 在唯一队列出队时做，
   // 本连接只负责传 start/end UTF-16 显示坐标。
   private onSelectByRange(range: inputMethod.Range): void {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
-    this.dispatcher.dispatchFireAndForget({ kind: 'imeSetSelection', utf16Start: range.start, utf16End: range.end })
+    this.attachedDispatcher.dispatchFireAndForget({ kind: 'imeSetSelection', utf16Start: range.start, utf16End: range.end })
   }
 
   // IME composition preedit：纯翻译器，派发 imePreviewText。
@@ -295,21 +256,21 @@ export class HarmonyImeConnection {
   // 不在本类队列外判断 composing 状态。dispatcher 串行队列保证 begin→update→update→finish/cancel 顺序。
   // range 参数目前不参与语义命令（preedit cursor 由 Core snapshot 驱动），保留以匹配 API26 签名。
   private onSetPreviewText(text: string, _range: inputMethod.Range): void {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
     hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `setPreviewText: length=${text.length}`)
-    this.dispatcher.dispatchFireAndForget({ kind: 'imePreviewText', text })
+    this.attachedDispatcher.dispatchFireAndForget({ kind: 'imePreviewText', text })
   }
 
   // IME 取消 composition preedit：纯翻译器，派发 imeCancelPreview。
   // Issue #744 评论 5794965395 第 5 节：API26 用 finishTextPreview 事件（不是 unsetPreviewText）。
   // 是否真的 cancel 由 EditorSemanticDispatcher 出队时查 isComposing() 决定（无 composition 时 no-op）。
   private onFinishTextPreview(): void {
-    if (!this.dispatcher) {
+    if (!this.attachedDispatcher) {
       return
     }
     hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'finishTextPreview')
-    this.dispatcher.dispatchFireAndForget({ kind: 'imeCancelPreview' })
+    this.attachedDispatcher.dispatchFireAndForget({ kind: 'imeCancelPreview' })
   }
 }
