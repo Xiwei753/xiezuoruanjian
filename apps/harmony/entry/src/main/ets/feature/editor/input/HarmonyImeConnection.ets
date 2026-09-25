@@ -38,24 +38,56 @@ export class HarmonyImeConnection {
   private controller: inputMethod.InputMethodController = inputMethod.getController()
   private dispatcher: EditorSemanticDispatcher | null = null
   private attached: boolean = false
+  // Issue #767 评论 5828448634 第 1 节：单一状态源——attach 进行中的 Promise。
+  // 同一 dispatcher 在 attach 进行中时直接复用同一个 task，避免并发 attach。
+  // attach 失败时清掉 attachTask / dispatcher / attached，允许下一次点击重试。
+  private attachTask: Promise<void> | null = null
 
   // 编辑框获得焦点时调用：绑定语义调度器，attach 到 IME，注册事件回调。
   // 接受 dispatcher 而非 inputAdapter + selectionController：所有输入经 dispatcher 统一排队。
-  // Issue #767 评论 5828146609 第 1 节：attach 逻辑优化。
+  // Issue #767 评论 5828448634 第 1 节：单一 attach owner，避免并发 attach 竞态。
   // - 已 attached 且 dispatcher 还是当前 dispatcher：直接返回（不 detach 重连）；
+  // - attach 进行中（attachTask != null）且同一 dispatcher：复用同一个 task；
   // - attached 但 dispatcher 已变化：才 detach 后重新 attach；
-  // - attach 异常向上抛并记录失败原因。
-  async attach(dispatcher: EditorSemanticDispatcher): Promise<void> {
+  // - attach 失败时清掉 attachTask / dispatcher / attached，允许下一次点击重试。
+  attach(dispatcher: EditorSemanticDispatcher): Promise<void> {
     // 已 attached 且 dispatcher 未变化：直接返回，避免反复 detach/attach。
     if (this.attached && this.dispatcher === dispatcher) {
       hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: already attached with same dispatcher, skip')
-      return
+      return Promise.resolve()
+    }
+    // attach 进行中且同一 dispatcher：复用同一个 task，避免并发 attach。
+    if (this.attachTask !== null && this.dispatcher === dispatcher) {
+      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: attach in progress with same dispatcher, reuse task')
+      return this.attachTask
     }
     // attached 但 dispatcher 已变化：先 detach 再重新 attach。
     if (this.attached && this.dispatcher !== dispatcher) {
       hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: dispatcher changed, detach then re-attach')
-      await this.detach()
+      // detach 是 async，但我们不能在这里 await（此方法是同步返回 Promise 的）。
+      // 用 detach().then(() => doAttach()) 链式处理。
+      const detachAndAttach = this.detach().then(() => {
+        return this.doAttach(dispatcher)
+      })
+      this.attachTask = detachAndAttach
+      detachAndAttach.then(
+        () => { this.attachTask = null },
+        () => { this.attachTask = null }
+      )
+      return detachAndAttach
     }
+    // 首次 attach 或上次失败后重试。
+    const task = this.doAttach(dispatcher)
+    this.attachTask = task
+    task.then(
+      () => { this.attachTask = null },
+      () => { this.attachTask = null }
+    )
+    return task
+  }
+
+  // 真正执行 attach 的内部方法。调用方负责管理 attachTask 状态。
+  private async doAttach(dispatcher: EditorSemanticDispatcher): Promise<void> {
     this.dispatcher = dispatcher
     // API26 InputMethodController.attach 需要 TextConfig；素笺是多行文本编辑框，
     // 用 MULTILINE + UNSPECIFIED 回车键类型。IME 通过 selectByRange 事件主动查询选区。
@@ -69,8 +101,11 @@ export class HarmonyImeConnection {
     try {
       await this.controller.attach(true, textConfig)
     } catch (e) {
+      // Issue #767 评论 5828448634 第 1 节：attach 失败时清掉所有状态，允许下次重试。
       hilog.error(IME_LOG_DOMAIN, IME_LOG_TAG, `attach: failure, reason: ${JSON.stringify(e)}`)
-      throw e
+      this.dispatcher = null
+      this.attached = false
+      throw new Error(`IME attach failed: ${JSON.stringify(e)}`)
     }
     this.registerListeners()
     this.attached = true
@@ -78,7 +113,9 @@ export class HarmonyImeConnection {
   }
 
   // 失焦/页面退出时调用：取消监听并 detach。
+  // Issue #767 评论 5828448634 第 1 节：detach 时也清掉 attachTask。
   async detach(): Promise<void> {
+    this.attachTask = null
     if (!this.attached) {
       return
     }

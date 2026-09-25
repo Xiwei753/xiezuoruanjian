@@ -109,8 +109,6 @@ export struct SujianEditor {
   // 不丢弃命中测试的 soft-wrap 亲和性。
   private dragAnchor: VisualCaretPosition | null = null
   private isDragging: boolean = false
-  // Issue #767 评论 5828146609 第 1 节：IME 是否已 attach（避免首次 touch 重复 attach）。
-  private hasAttachedIme: boolean = false
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
@@ -151,7 +149,6 @@ export struct SujianEditor {
 
   aboutToDisappear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToDisappear')
-    this.hasAttachedIme = false
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
     this.lineResolver.cancelWait()
     if (this.dispatcher) {
@@ -323,36 +320,24 @@ export struct SujianEditor {
     return this.snapshot.selectionAnchor !== this.snapshot.selectionHead
   }
 
-  // Issue #767 评论 5828146609 第 1 节：统一焦点请求 + IME attach 方法。
-  // 1. 用当前 UIContext 的 FocusController 主动 requestFocus(INPUT_HOST_ID)；
-  // 2. 焦点成功后调用 HarmonyImeConnection.attach(dispatcher)；
-  // 3. attach 失败必须写 hilog，不能继续 .then(() => {}) 静默吞掉。
-  // 首次触摸编辑区时先确保 focus/IME，再继续现有 hitTest / 光标 / drag selection 逻辑。
+  // Issue #767 评论 5828448634 第 1 节：focusAndAttachIme 只负责 requestFocus(INPUT_HOST_ID)。
+  // 真正的 IME attach 只在 .onFocus() 回调里调一次，避免点击和 onFocus 两边各 attach 一次的竞态。
+  // requestFocus 抛错时直接 return，不继续 attach。
+  // "focus acquired" 只能在 .onFocus() 里记，不能在调用 requestFocus() 后立刻写"已获焦"。
   private focusAndAttachIme(): void {
     if (!this.harmonyImeConnection || !this.dispatcher) {
       hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: no imeConnection or dispatcher')
       return
     }
-    // 已 attach 且 dispatcher 未变化时不需要重复 attach。
-    if (this.hasAttachedIme && this.harmonyImeConnection.isAttached()) {
-      return
-    }
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: requesting focus')
     try {
       this.getUIContext().getFocusController().requestFocus(INPUT_HOST_ID)
-      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: focus acquired')
     } catch (e) {
       hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: requestFocus failed: ${JSON.stringify(e)}`)
+      return
     }
-    // attach IME，失败写 hilog 不静默吞掉。
-    const imeConnection = this.harmonyImeConnection
-    const dispatcher = this.dispatcher
-    imeConnection.attach(dispatcher).then(() => {
-      this.hasAttachedIme = true
-      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: IME attach success')
-    }).catch((e: Object) => {
-      hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: IME attach failure: ${JSON.stringify(e)}`)
-    })
+    // 不在这里 attach IME——attach 由 .onFocus() 回调统一负责。
+    // requestFocus 成功后系统会触发 .onFocus()，在那里做唯一 attach。
   }
 
   // ── 键盘语义命令分发 ──
@@ -665,13 +650,14 @@ export struct SujianEditor {
       .id(INPUT_HOST_ID)
       .focusable(true)
       .onFocus((): void => {
-        // Issue #767 评论 5828146609 第 1 节：编辑区获得焦点 → attach IME。
+        // Issue #767 评论 5828448634 第 1 节：编辑区获得焦点 → 唯一 IME attach 入口。
+        // focusAndAttachIme() 只调 requestFocus，真正的 attach 只在这里做一次。
+        // HarmonyImeConnection 是单一状态源：attach 进行中复用同一 task，已 attached 直接返回。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: input host focus acquired')
         if (this.harmonyImeConnection && this.dispatcher) {
           const imeConnection = this.harmonyImeConnection
           const dispatcher = this.dispatcher
           imeConnection.attach(dispatcher).then(() => {
-            this.hasAttachedIme = true
             hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: IME attach success')
           }).catch((e: Object) => {
             hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `onFocus: IME attach failure: ${JSON.stringify(e)}`)
@@ -679,9 +665,8 @@ export struct SujianEditor {
         }
       })
       .onBlur((): void => {
-        // Issue #767 评论 5828146609 第 1 节：编辑区失焦 → detach IME。
+        // Issue #767 评论 5828448634 第 1 节：编辑区失焦 → detach IME。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onBlur: input host blur')
-        this.hasAttachedIme = false
         if (this.harmonyImeConnection) {
           this.harmonyImeConnection.detach().then(() => {})
         }
