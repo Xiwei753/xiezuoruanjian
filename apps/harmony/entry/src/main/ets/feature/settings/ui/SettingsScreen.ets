@@ -342,7 +342,7 @@ export struct SettingsScreen {
       .width('100%')
       .height(40)
       .margin({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 8 })
-      .backgroundColor($r('sys.color.search_bg_color'))
+      .backgroundColor($r('sys.color.comp_background_gray'))
       .borderRadius(DesignTokens.radiusSm)
     }
     .width('100%')

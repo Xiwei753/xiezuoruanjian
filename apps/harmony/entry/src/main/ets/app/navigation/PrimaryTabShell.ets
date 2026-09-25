@@ -233,7 +233,7 @@ export struct PrimaryTabShell {
         .mode(NavigationMode.Stack)
         .hideTitleBar(true)
       }
-      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_folder'), '作品'))
+      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_text'), '作品'))
 
       // 星图 tab（TAB_STARMAP=1）
       TabContent() {
