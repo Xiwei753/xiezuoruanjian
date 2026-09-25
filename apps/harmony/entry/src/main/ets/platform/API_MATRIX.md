@@ -32,6 +32,7 @@
 | Native HiLog | @kit.BasicServicesKit (hilog) — C 接口 | 12 | SystemCapability.HiviewDFX.HiLog | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets（ArkTS 侧调用 getHilogSnapshot），cpp/corebridge/napi/napi_init.cpp（C++ 侧 OH_LOG_SetCallback） |
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
 | 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
+| Application 颜色模式 | @kit.AbilityKit (ApplicationContext) | 11 | 无独立 SystemCapability（随 @kit.AbilityKit Application 生命周期） | 无 | 否 | ui/theme/HarmonyColorModeController.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -218,3 +219,21 @@
 - ACL：否
 - fallback：写入失败时返回 false，不伪造成功
 - 实现文件：`feature/settings/presentation/SettingsViewModel.ets`（`copyDeviceInfoToClipboard()` 方法）
+
+## Application 颜色模式（setColorMode）
+
+- Kit：`@kit.AbilityKit`（`ApplicationContext` 模块）
+- 接口：
+  - `ApplicationContext.setColorMode(ConfigurationConstant.ColorMode): void` — 设置应用级别的深浅色模式
+  - 枚举 `ConfigurationConstant.ColorMode`：
+    - `COLOR_MODE_NOT_SET = -1`（跟随系统）
+    - `COLOR_MODE_DARK = 0`
+    - `COLOR_MODE_LIGHT = 1`
+- 最低 API：11（`ApplicationContext.setColorMode` 从 API11 起支持，覆盖 compatibleSdkVersion=12 安装基线）
+- SystemCapability：无独立 SystemCapability（随 `@kit.AbilityKit` Application 生命周期）
+- 权限：无
+- ACL：否
+- 优先级：`UIAbility 深浅色 > Application 深浅色 > 系统深浅色`
+- fallback：调用失败时只记 hilog error，不阻塞应用运行；UI 仍按系统默认颜色模式渲染
+- 实现文件：`ui/theme/HarmonyColorModeController.ets`
+- 说明：华为官方文档要求 `setColorMode()` 在页面 `loadContent` 成功之后才能调用，因此 `HarmonyColorModeController` 引入 `pageLoaded` 标志和 `desiredMode` 缓存机制，确保时序正确。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/js-apis-inner-application-uiabilitycontext

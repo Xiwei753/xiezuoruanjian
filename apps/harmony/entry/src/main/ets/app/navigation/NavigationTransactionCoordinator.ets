@@ -2,6 +2,13 @@
 // 从 AppNavigation.ets 分离出来的导航事务逻辑：导航意图队列、离开守卫、安全 pop/replace/rebuild。
 // AppNavigation struct 通过 getInstance() 注册 navPathStack 和恢复回调，
 // EntryAbility / WritingScreen 通过 getInstance() 触发接续恢复和安全导航操作。
+//
+// Issue #767：支持多 tab stack。
+// - 单一 navPathStack 改为 tabStacks Map（显式登记每个 tab 的 stack）
+// - 增加 registerTabStack / getTabStack / setActiveTab 方法
+// - pendingRestore 延迟到 homeStack 可用时才消费（tryConsumePendingRestore）
+// - safePop / safeReplacePath 仍操作 activeTabStack（兼容）
+// - getNavPathStack() 返回当前活动栈（兼容）
 
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 
@@ -51,10 +58,21 @@ interface ActiveNavigationTask {
 // - registerLeaveGuard 返回唯一 lease/token（单调递增 number），
 //   unregisterLeaveGuard(token) 只注销这一个实例。
 // - 新增 safeReplacePath(path)，宽屏 Writing 左侧切章节统一走它。
+//
+// Issue #767：支持多 tab stack。
+// - tabStacks Map 显式登记每个 tab 的 NavPathStack，替代单一 activeTabStack。
+// - setActiveTab() 设置当前活动 tab index，getTabStack() 按 index 取栈。
+// - pendingRestore 延迟到 homeStack 可用时才消费（tryConsumePendingRestore）。
+// - safePop / safeReplacePath 仍操作 activeTabStack（兼容）。
+// - getNavPathStack() 返回当前活动栈（兼容）。
 export class NavigationTransactionCoordinator {
   private static instance: NavigationTransactionCoordinator
-  // AppNavigation 注册的 navPathStack；struct 未挂载时为 null。
-  private navPathStack: NavPathStack | null = null
+  // Issue #767：当前活动 tab 的 NavPathStack（兼容字段，safePop/safeReplacePath 使用）。
+  private activeTabStack: NavPathStack | null = null
+  // Issue #767：当前活动 tab index。
+  private activeTabIndex: number = 0
+  // Issue #767：显式登记的 tab stack Map，key 为 tab index。
+  private tabStacks: Map<number, NavPathStack> = new Map()
   // AppNavigation 注册的恢复回调：能访问 struct @State 进行 selection/cursor/viewport 恢复。
   private restoreListener: ((payload: ContinuationPayload) => void) | null = null
   // AppNavigation 尚未 aboutToAppear 时暂存 payload，待注册后消费。
@@ -85,37 +103,100 @@ export class NavigationTransactionCoordinator {
     return NavigationTransactionCoordinator.instance
   }
 
-  // AppNavigation.aboutToAppear 注册 navPathStack 与恢复回调。
-  // 若 EntryAbility 已先交付 payload（pendingRestore），立即消费。
-  register(navPathStack: NavPathStack, restoreListener: (payload: ContinuationPayload) => void): void {
-    this.navPathStack = navPathStack
+  // Issue #767：设置当前活动 tab 的 NavPathStack（兼容方法）。
+  // Tabs onChange 切换后调用此方法更新活动栈，
+  // 使 safePop / safeReplacePath / getNavPathStack 操作正确的栈。
+  setActiveStack(stack: NavPathStack): void {
+    this.activeTabStack = stack
+  }
+
+  // Issue #767：登记指定 tab index 的 NavPathStack。
+  // PrimaryTabShell 在 aboutToAppear 中为三个 tab 分别调用。
+  registerTabStack(tabIndex: number, stack: NavPathStack): void {
+    this.tabStacks.set(tabIndex, stack)
+  }
+
+  // Issue #767：获取指定 tab index 的 NavPathStack。
+  // 返回 null 表示该 tab 的 stack 尚未注册（PrimaryTabShell 还没挂载）。
+  getTabStack(tabIndex: number): NavPathStack | null {
+    const stack: NavPathStack | undefined = this.tabStacks.get(tabIndex)
+    if (stack === undefined) {
+      return null
+    }
+    return stack
+  }
+
+  // Issue #767：设置当前活动 tab index。
+  // 同时更新 activeTabStack 为对应 tab 的 stack（如果已注册）。
+  setActiveTab(tabIndex: number): void {
+    this.activeTabIndex = tabIndex
+    const stack: NavPathStack | null = this.getTabStack(tabIndex)
+    if (stack !== null) {
+      this.activeTabStack = stack
+    }
+  }
+
+  // Issue #767 评论5830638688 第1项：注册恢复回调（纯 listener，不再收 placeholderStack）。
+  // 不再接受 navPathStack 参数——之前传 placeholderStack 会污染 activeTabStack，
+  // 导致 safePop/safeReplacePath 在 PrimaryTabShell 注册真实栈之前操作错误栈。
+  // pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack 后调用 tryConsumePendingRestore()。
+  registerRestoreListener(restoreListener: (payload: ContinuationPayload) => void): void {
     this.restoreListener = restoreListener
-    if (this.pendingRestore !== null) {
-      const pending: ContinuationPayload = this.pendingRestore
-      this.pendingRestore = null
-      restoreListener(pending)
+  }
+
+  // Issue #767：尝试消费待处理的接续恢复。
+  // 当 PrimaryTabShell 注册了 homeStack 后调用此方法。
+  // 如果有 pendingRestore 且 homeStack 可用（getTabStack(TAB_HOME) 返回非 null），才消费。
+  tryConsumePendingRestore(): void {
+    if (this.pendingRestore !== null && this.restoreListener !== null) {
+      // 确认 homeStack 已注册才消费，避免恢复内容写到错误的栈。
+      const homeStack: NavPathStack | null = this.getTabStack(0)
+      if (homeStack !== null) {
+        const pending: ContinuationPayload = this.pendingRestore
+        this.pendingRestore = null
+        this.restoreListener(pending)
+      }
+    }
+  }
+
+  // Issue #767 评论5831949869 第1项：按实例相等注销指定 tab 的 NavPathStack。
+  // 必须按"实例相等"再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
+  unregisterTabStack(tabIndex: number, stack: NavPathStack): void {
+    const registered = this.tabStacks.get(tabIndex)
+    if (registered === stack) {
+      this.tabStacks.delete(tabIndex)
+    }
+    if (this.activeTabStack === stack) {
+      this.activeTabStack = null
     }
   }
 
   // AppNavigation.aboutToDisappear 注销，避免悬空回调。
   unregister(): void {
-    this.navPathStack = null
+    this.activeTabStack = null
     this.restoreListener = null
   }
 
   // EntryAbility 调此方法触发接续恢复。
-  // 若 AppNavigation 已挂载，直接调回调；否则暂存，aboutToAppear 时消费。
+  // Issue #767 评论5830638688 第1项：同时检查 restoreListener 和 homeStack 是否可用。
+  // 之前只检查 restoreListener：如果 continuation 正好在"restoreListener 已注册、homeStack 还没注册"
+  // 的窗口到达，payload 直接进 applyContinuation()，getTabStack(TAB_HOME) 返回 null，
+  // callback 直接 return，payload 没重新放回 pendingRestore，接续数据就丢了。
+  // 现在改为：只要 restoreListener 或 homeStack 任一不可用，就暂存到 pendingRestore，
+  // 等 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 消费。
   restoreFromContinuation(payload: ContinuationPayload): void {
-    if (this.restoreListener !== null) {
-      this.restoreListener(payload)
+    const homeStack: NavPathStack | null = this.getTabStack(0)
+    if (this.restoreListener === null || homeStack === null) {
+      this.pendingRestore = payload
       return
     }
-    this.pendingRestore = payload
+    this.restoreListener(payload)
   }
 
-  // 供恢复回调内部使用：直接操作 navPathStack 重建路由栈。
+  // Issue #767：返回当前活动 tab 的 NavPathStack。
+  // safePop / safeReplacePath 内部使用此方法获取操作目标。
   getNavPathStack(): NavPathStack | null {
-    return this.navPathStack
+    return this.activeTabStack
   }
 
   // Issue #629 评论14 第2项：注册离开守卫，返回唯一 token。
@@ -208,12 +289,13 @@ export class NavigationTransactionCoordinator {
   }
 
   // Issue #629 评论14 第2项：安全的 pop。
-  // 串行排队，guard 成功才 navPathStack.pop()；失败留在本页。
+  // 串行排队，guard 成功才 activeTabStack.pop()；失败留在本页。
+  // Issue #767：操作当前活动 tab 的 stack。
   safePop(): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'Pop', dedupeKey: 'pop' }
     return this.enqueueNavigation(intent, (): void => {
-      if (this.navPathStack !== null) {
-        this.navPathStack.pop()
+      if (this.activeTabStack !== null) {
+        this.activeTabStack.pop()
       }
     })
   }
@@ -229,6 +311,7 @@ export class NavigationTransactionCoordinator {
   // Issue #629 评论14 第2项：安全的 replace path。
   // 宽屏 Writing 左侧切章节统一走它：guard 成功才 replace 当前路由为新 Writing route；
   // 失败保持当前页面。
+  // Issue #767：操作当前活动 tab 的 stack。
   safeReplacePath(targetKey: string, replace: () => void): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
     return this.enqueueNavigation(intent, replace)

@@ -1,7 +1,8 @@
 import window from '@ohos.window'
+import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
-
-export type ThemeMode = 'light' | 'dark' | 'system'
+import { HarmonyColorModeController } from './HarmonyColorModeController'
+import { ThemeMode } from './HarmonyThemeTypes'
 
 export type ColorSource = 'built_in' | 'saved_palette'
 
@@ -177,7 +178,11 @@ export interface ThemeUpdateParams {
 export class HarmonyThemeAdapter {
   private static instance: HarmonyThemeAdapter
   private mainWindow: window.Window | null = null
-  private systemColorMode: number = 0 // 0=light, 1=dark (ConfigurationConstant.ColorMode)
+  // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举，不再手写数字。
+  // 华为/OpenHarmony 枚举：COLOR_MODE_NOT_SET=-1, COLOR_MODE_DARK=0, COLOR_MODE_LIGHT=1
+  private systemColorMode: ConfigurationConstant.ColorMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT
+  private useSystemTokens: boolean = true // 默认使用系统 token，用户显式选择主题后切换为 false
+  private effectiveColorMode: string = 'light' // 'light' | 'dark'，根据 mode 和 systemColorMode 计算
   private currentTheme: ThemeConfig = {
     mode: 'system',
     colorSource: 'built_in',
@@ -238,6 +243,36 @@ export class HarmonyThemeAdapter {
     return this.currentTheme.selectedBuiltinThemeId
   }
 
+  // Issue #767：是否使用系统 token（默认启动时为 true，用户显式选择主题后为 false）
+  isUsingSystemTokens(): boolean {
+    return this.useSystemTokens
+  }
+
+  // Issue #767：获取有效颜色模式（'light' | 'dark'），根据 mode 和 systemColorMode 计算
+  getEffectiveColorMode(): string {
+    return this.effectiveColorMode
+  }
+
+  // Issue #767 评论 5831067980：获取系统当前深浅色模式（ConfigurationConstant.ColorMode 枚举）
+  getSystemColorMode(): ConfigurationConstant.ColorMode {
+    return this.systemColorMode
+  }
+
+  // Issue #767 评论 5831067980：首次启动时由 EntryAbility 注入当前系统 colorMode，
+  // 避免一直靠默认值先按亮色启动。使用 ConfigurationConstant.ColorMode 枚举类型。
+  // Issue #767 评论 5831321551：COLOR_MODE_NOT_SET 不当成 light，
+  // 不覆盖上一份有效系统模式。
+  initSystemColorMode(colorMode: ConfigurationConstant.ColorMode): void {
+    if (colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+      return
+    }
+    this.systemColorMode = colorMode
+    this.updateEffectiveColorMode()
+    if (this.useSystemTokens) {
+      this.applySystemColorMode(colorMode)
+    }
+  }
+
   getPaletteRecords(): ThemePaletteRecordDto[] {
     return this.paletteRecords
   }
@@ -247,31 +282,38 @@ export class HarmonyThemeAdapter {
   }
 
   setMode(mode: ThemeMode): void {
-    this.currentTheme.mode = mode
-    this.updateColors()
+    // Issue #767 评论 5831658277：统一走 applyMode 私有入口，不允许三条路径各写一套逻辑。
+    this.applyMode(mode)
     this.notifyObservers()
   }
 
+  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens，
+  // 不在 setter 里手动设置 useSystemTokens。
   setColorSource(colorSource: ColorSource): void {
     this.currentTheme.colorSource = colorSource
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
 
+  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens。
   setSelectedPaletteId(paletteId: string): void {
     this.currentTheme.selectedPaletteId = paletteId
     if (paletteId.length > 0) {
       this.currentTheme.colorSource = 'saved_palette'
     }
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
 
+  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens。
   setSelectedBuiltinThemeId(themeId: string): void {
     this.currentTheme.selectedBuiltinThemeId = themeId
     if (themeId.length > 0) {
       this.currentTheme.colorSource = 'built_in'
     }
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
@@ -304,7 +346,9 @@ export class HarmonyThemeAdapter {
   }
 
   updateFromSettings(settings: ThemeUpdateParams): void {
-    this.currentTheme.mode = settings.theme
+    // Issue #767 评论 5831658277：统一走 applyMode 私有入口，确保从接续/直接恢复到 Writing
+    // 的路径也会把深浅色模式真正下发到平台，不只写进 Adapter 假状态。
+    this.applyMode(settings.theme)
     this.currentTheme.fontSize = settings.fontSize
     this.currentTheme.fontFamily = settings.fontFamily
     this.currentTheme.lineHeight = settings.lineHeight
@@ -313,10 +357,15 @@ export class HarmonyThemeAdapter {
   }
 
   updateFromLocalSettings(appearanceMode: string, colorSource: string, selectedPaletteId: string, selectedBuiltinThemeId: string): void {
-    this.currentTheme.mode = appearanceMode as ThemeMode
+    // Issue #767 评论 5831658277：统一走 applyMode 私有入口，确保应用重启后
+    // 也能把用户选择的深浅色模式真正下发到系统。
+    this.applyMode(appearanceMode as ThemeMode)
     this.currentTheme.colorSource = colorSource as ColorSource
     this.currentTheme.selectedPaletteId = selectedPaletteId
     this.currentTheme.selectedBuiltinThemeId = selectedBuiltinThemeId
+    // Issue #767 评论 5831067980：根据显式主题选择重算 useSystemTokens，
+    // 避免应用重启后 adapter 仍保持默认 useSystemTokens=true。
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
@@ -329,20 +378,58 @@ export class HarmonyThemeAdapter {
     this.observers.delete(observer)
   }
 
-  onConfigurationUpdate(colorMode: number): void {
+  // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举类型。
+  // COLOR_MODE_NOT_SET 不当成 light 硬吃，保留上一份有效系统模式。
+  onConfigurationUpdate(colorMode: ConfigurationConstant.ColorMode): void {
+    if (colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+      return
+    }
     this.systemColorMode = colorMode
-    this.applySystemColorMode(colorMode)
+    this.updateEffectiveColorMode()
+    if (this.useSystemTokens) {
+      this.applySystemColorMode(colorMode)
+    }
     if (this.currentTheme.mode === 'system') {
       this.notifyObservers()
     }
   }
 
   startSystemThemeListener(): void {
-    this.applySystemColorMode(this.systemColorMode)
+    this.updateEffectiveColorMode()
+    if (this.useSystemTokens) {
+      this.applySystemColorMode(this.systemColorMode)
+    }
   }
 
-  private applySystemColorMode(colorMode: number): void {
-    if (colorMode === 1) {
+  // Issue #767 评论 5831658277：统一的模式下发私有入口。
+  // setMode()、updateFromSettings()、updateFromLocalSettings() 全部走这里，
+  // 确保 mode 写入 currentTheme、下发到 HarmonyColorModeController、更新 colors，
+  // 不允许三条路径各写一套逻辑。
+  private applyMode(mode: ThemeMode): void {
+    this.currentTheme.mode = mode
+    HarmonyColorModeController.getInstance().setDesiredMode(mode)
+    this.updateColors()
+  }
+
+  // Issue #767 评论 5831067980：根据 mode 和 systemColorMode 计算有效颜色模式。
+  // 使用 ConfigurationConstant.ColorMode 枚举判断，不再手写数字。
+  private updateEffectiveColorMode(): void {
+    if (this.currentTheme.mode === 'dark') {
+      this.effectiveColorMode = 'dark'
+    } else if (this.currentTheme.mode === 'light') {
+      this.effectiveColorMode = 'light'
+    } else {
+      // system mode：跟随系统 colorMode
+      // COLOR_MODE_DARK=0, COLOR_MODE_LIGHT=1, COLOR_MODE_NOT_SET=-1
+      const isDark = this.systemColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+      this.effectiveColorMode = isDark ? 'dark' : 'light'
+    }
+  }
+
+  // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举判断。
+  // COLOR_MODE_DARK=0 → DarkTheme, COLOR_MODE_LIGHT=1 → LightTheme
+  private applySystemColorMode(colorMode: ConfigurationConstant.ColorMode): void {
+    if (colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) {
       this.currentTheme.colors = DarkTheme
     } else {
       this.currentTheme.colors = LightTheme
@@ -354,16 +441,46 @@ export class HarmonyThemeAdapter {
   }
 
   isDarkMode(): boolean {
-    return this.currentTheme.colors === DarkTheme
+    // Issue #767：使用 effectiveColorMode 判断，而非直接比较 colors === DarkTheme
+    return this.effectiveColorMode === 'dark'
   }
 
   private isCurrentlyDark(): boolean {
-    if (this.currentTheme.mode === 'dark') return true
-    if (this.currentTheme.mode === 'light') return false
-    return this.systemColorMode === 1
+    // Issue #767：使用 effectiveColorMode 判断
+    return this.effectiveColorMode === 'dark'
+  }
+
+  // Issue #767 评论 5831067980：根据 colorSource 和 selectedPaletteId/selectedBuiltinThemeId
+  // 重算 useSystemTokens，确保应用重启后不会保持默认 useSystemTokens=true。
+  // - selectedPaletteId 非空且 colorSource=saved_palette → useSystemTokens=false
+  // - selectedBuiltinThemeId 非空且 colorSource=built_in → useSystemTokens=false
+  // - 两者都没有有效显式覆盖 → useSystemTokens=true
+  private recomputeUseSystemTokens(): void {
+    if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {
+      this.useSystemTokens = false
+    } else if (this.currentTheme.colorSource === 'built_in' && this.currentTheme.selectedBuiltinThemeId.length > 0) {
+      this.useSystemTokens = false
+    } else {
+      this.useSystemTokens = true
+    }
   }
 
   private updateColors(): void {
+    this.updateEffectiveColorMode()
+
+    // Issue #767：当 useSystemTokens = true 时，不覆盖 colors，
+    // 页面应使用系统 token 而非 themeConfig.colors。
+    // currentTheme.colors 保持为 LightTheme/DarkTheme 作为 fallback。
+    if (this.useSystemTokens) {
+      // 仅更新 fallback colors 以匹配当前模式，不影响 useSystemTokens 标志
+      if (this.effectiveColorMode === 'dark') {
+        this.currentTheme.colors = DarkTheme
+      } else {
+        this.currentTheme.colors = LightTheme
+      }
+      return
+    }
+
     const isDark = this.isCurrentlyDark()
 
     if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {

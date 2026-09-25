@@ -10,7 +10,8 @@
 import hilog from '@ohos.hilog'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource, ThemeMode } from '../../../ui/theme/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
+import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
@@ -202,10 +203,8 @@ export struct SettingsScreen {
             LoadingProgress()
               .width(48)
               .height(48)
-              .color(this.themeConfig.colors.primary)
             Text($r('app.string.loading'))
               .fontSize(14)
-              .fontColor(this.themeConfig.colors.textHint)
               .margin({ top: 12 })
           }
           .width('100%')
@@ -224,7 +223,6 @@ export struct SettingsScreen {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.themeConfig.colors.background)
     }
     .hideTitleBar(true)
     .onShown(() => {
@@ -263,13 +261,11 @@ export struct SettingsScreen {
       Image($r('sys.media.ohos_ic_public_arrow_left'))
         .width(24)
         .height(24)
-        .fillColor(this.themeConfig.colors.textPrimary)
         .onClick(() => this.goBack())
 
       Text($r('app.string.settings'))
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ left: 12 })
 
       Blank()
@@ -278,15 +274,12 @@ export struct SettingsScreen {
       if (this.viewModel.saveMessage) {
         Text(this.resolveSaveMessage())
           .fontSize(12)
-          .fontColor(this.viewModel.saveMessage === 'saved'
-            ? this.themeConfig.colors.success : this.themeConfig.colors.error)
       }
 
       // 复制设备信息结果提示
       if (this.copyMessage) {
         Text(this.copyMessage)
           .fontSize(12)
-          .fontColor(this.themeConfig.colors.success)
           .margin({ left: 8 })
       }
     }
@@ -304,13 +297,11 @@ export struct SettingsScreen {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
           .height(24)
-          .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => this.goBack())
 
         Text($r('app.string.settings'))
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ left: 12 })
 
         Blank()
@@ -319,15 +310,12 @@ export struct SettingsScreen {
         if (this.viewModel.saveMessage) {
           Text(this.resolveSaveMessage())
             .fontSize(12)
-            .fontColor(this.viewModel.saveMessage === 'saved'
-              ? this.themeConfig.colors.success : this.themeConfig.colors.error)
         }
 
         // 复制设备信息结果提示
         if (this.copyMessage) {
           Text(this.copyMessage)
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.success)
             .margin({ left: 8 })
         }
       }
@@ -339,15 +327,12 @@ export struct SettingsScreen {
         Image($r('app.media.ic_search'))
           .width(20)
           .height(20)
-          .fillColor(this.themeConfig.colors.textHint)
           .margin({ left: 12 })
 
         TextInput({ placeholder: $r('app.string.settings'), text: this.searchText })
           .layoutWeight(1)
           .height(36)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .placeholderColor(this.themeConfig.colors.textHint)
           .backgroundColor(Color.Transparent)
           .onChange((value: string) => {
             this.searchText = value
@@ -357,7 +342,7 @@ export struct SettingsScreen {
       .width('100%')
       .height(40)
       .margin({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 8 })
-      .backgroundColor(this.themeConfig.colors.surfaceContainerLow)
+      .backgroundColor($r('sys.color.search_bg_color'))
       .borderRadius(DesignTokens.radiusSm)
     }
     .width('100%')
@@ -407,7 +392,6 @@ export struct SettingsScreen {
     Text(this.getGroupTitle(groupId))
       .fontSize(14)
       .fontWeight(FontWeight.Medium)
-      .fontColor(this.themeConfig.colors.textSecondary)
       .margin({ bottom: 8, top: 8 })
       .width('100%')
   }
@@ -421,20 +405,17 @@ export struct SettingsScreen {
         Text(this.getSectionTitle(sectionId))
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         // 当前值摘要
         Text(this.getSectionValueSummary(sectionId))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
         // 展开/收起箭头
         Image($r('sys.media.ohos_ic_public_arrow_down'))
           .width(20)
           .height(20)
-          .fillColor(this.themeConfig.colors.textHint)
           .rotate({ angle: this.viewModel.isSectionExpanded(sectionId) ? 180 : 0 })
           .animation({ duration: 150, curve: Curve.EaseInOut })
       }
@@ -454,7 +435,6 @@ export struct SettingsScreen {
       }
     }
     .width('100%')
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 8 })
   }
@@ -492,14 +472,12 @@ export struct SettingsScreen {
       Text($r('app.string.appearance'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       // 主题模式 — 顺序必须是 跟随系统→浅色→深色
       Row() {
         Text($r('app.string.theme_mode'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Select(this.getAppearanceOptions())
@@ -520,11 +498,10 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 颜色主题来源
+      // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
       Row() {
-        Text('颜色主题')
+        Text('颜色主题（实验性）')
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Select(this.getColorSourceOptions())
@@ -544,12 +521,11 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 内置主题选择
+      // 内置主题选择（实验性）
       if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
         Row() {
-          Text('内置主题')
+          Text('内置主题（实验性）')
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Select(this.getBuiltinThemeOptions())
@@ -571,12 +547,11 @@ export struct SettingsScreen {
         .margin({ bottom: 16 })
       }
 
-      // 已保存调色板选择
+      // 已保存调色板选择（实验性）
       if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
         Row() {
-          Text('设备配色')
+          Text('设备配色（实验性）')
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Select(this.viewModel.paletteRecords.map((r: ThemePaletteRecordDto): SettingsSelectOption => {
@@ -606,11 +581,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.font_size'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text(`${this.viewModel.settings.editorFontSize}px`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
         Slider({ value: this.viewModel.settings.editorFontSize, min: 12, max: 32, step: 1 })
           .width(120)
@@ -629,11 +602,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.line_spacing_multiplier'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text(`${this.viewModel.settings.editorLineSpacingMultiplier.toFixed(1)}`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
         Slider({ value: this.viewModel.settings.editorLineSpacingMultiplier, min: 1.0, max: 3.0, step: 0.1 })
           .width(120)
@@ -650,7 +621,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -664,14 +634,12 @@ export struct SettingsScreen {
       Text($r('app.string.editor'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       // 自动缩进
       Row() {
         Text($r('app.string.auto_indent'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoIndentEnabled })
           .onChange((isOn: boolean) => {
@@ -689,11 +657,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.indent_width'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text(`${this.viewModel.settings.autoIndentWidth}`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
         Slider({ value: this.viewModel.settings.autoIndentWidth, min: 0, max: 8, step: 1 })
           .width(120)
@@ -712,7 +678,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.typing_animation'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: false })
           .enabled(false)
@@ -724,7 +689,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.smooth_cursor'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: false })
           .enabled(false)
@@ -733,7 +697,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -747,14 +710,12 @@ export struct SettingsScreen {
       Text($r('app.string.save_section'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       // 自动保存
       Row() {
         Text($r('app.string.auto_save'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoSaveEnabled })
           .onChange((isOn: boolean) => {
@@ -773,12 +734,10 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.auto_save_delay'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
           Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
             .replace('%s', `${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)}`))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
           Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
             .width(120)
@@ -796,7 +755,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -811,15 +769,11 @@ export struct SettingsScreen {
         Text($r('app.string.sync_section'))
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.themeConfig.colors.textPrimary)
-
         Blank()
 
         if (this.viewModel.syncMessage) {
           Text(this.resolveSyncMessage())
             .fontSize(12)
-            .fontColor(this.viewModel.syncMessage.startsWith('sync_complete')
-              ? this.themeConfig.colors.success : this.themeConfig.colors.error)
         }
       }
       .width('100%')
@@ -829,7 +783,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.enable_sync'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.enabled || false })
@@ -857,7 +810,6 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.sync_method'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Select(this.getSyncProviderOptions())
@@ -886,7 +838,6 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.auto_sync'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.autoSync || false })
@@ -912,13 +863,11 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.sync_interval'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
             .replace('%s', `${this.viewModel.syncConfig?.syncIntervalSeconds || 300}`))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
 
           Slider({
@@ -951,15 +900,12 @@ export struct SettingsScreen {
           Button($r('app.string.sync_section'))
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
             .enabled(!this.viewModel.isSyncing)
             .onClick(() => this.viewModel.performSync())
 
           Button($r('app.string.diagnose'))
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.secondaryContainer)
-            .fontColor(this.themeConfig.colors.onSecondaryContainer)
             .margin({ left: 12 })
             .enabled(!this.viewModel.isDiagnosing)
             .onClick(() => this.viewModel.runSyncDiagnostics())
@@ -975,7 +921,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -989,13 +934,11 @@ export struct SettingsScreen {
       Text($r('app.string.ai_section'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       Row() {
         Text($r('app.string.enable_ai'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.aiEnabled })
           .onChange((isOn: boolean) => {
@@ -1010,7 +953,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -1024,14 +966,12 @@ export struct SettingsScreen {
       Text('诊断与日志')
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       // 开启诊断日志
       Row() {
         Text('开启诊断日志')
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsEnabled })
           .onChange((isOn: boolean) => {
@@ -1052,7 +992,6 @@ export struct SettingsScreen {
       Row() {
         Text('详细日志')
           .fontSize(16)
-          .fontColor(this.viewModel.settings.diagnosticsEnabled ? this.themeConfig.colors.textPrimary : this.themeConfig.colors.textHint)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsVerbose })
           .enabled(this.viewModel.settings.diagnosticsEnabled)
@@ -1072,8 +1011,6 @@ export struct SettingsScreen {
         .fontSize(14)
         .height(36)
         .width('100%')
-        .backgroundColor(this.themeConfig.colors.secondaryContainer)
-        .fontColor(this.themeConfig.colors.onSecondaryContainer)
         .margin({ bottom: 12 })
         .onClick(() => {
           this.viewModel.exportDiagnostics()
@@ -1084,8 +1021,6 @@ export struct SettingsScreen {
         .fontSize(14)
         .height(36)
         .width('100%')
-        .backgroundColor(this.themeConfig.colors.secondaryContainer)
-        .fontColor(this.themeConfig.colors.onSecondaryContainer)
         .margin({ bottom: 12 })
         .onClick(() => {
           this.viewModel.clearLogs()
@@ -1096,8 +1031,6 @@ export struct SettingsScreen {
         .fontSize(14)
         .height(36)
         .width('100%')
-        .backgroundColor(this.themeConfig.colors.secondaryContainer)
-        .fontColor(this.themeConfig.colors.onSecondaryContainer)
         .onClick(async () => {
           const ok = await this.viewModel.copyDeviceInfoToClipboard()
           if (ok) {
@@ -1111,7 +1044,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -1125,18 +1057,15 @@ export struct SettingsScreen {
       Text($r('app.string.about_title'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       // 应用名
       Row() {
         Text($r('app.string.about_app_name_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_app_name'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
       .margin({ bottom: 8 })
@@ -1145,11 +1074,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.about_author_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_author'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
       .margin({ bottom: 8 })
@@ -1158,14 +1085,11 @@ export struct SettingsScreen {
       Column() {
         Text($r('app.string.about_project_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 4 })
         Text('GitHub: github.com/Xiwei753/xiezuoruanjian')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.primary)
         Text($r('app.string.about_gitee'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.primary)
           .margin({ top: 4 })
       }
       .width('100%')
@@ -1176,11 +1100,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.about_license_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_license'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
       .margin({ bottom: 8 })
@@ -1188,18 +1110,15 @@ export struct SettingsScreen {
       // 镜像说明
       Text($r('app.string.about_mirror_note'))
         .fontSize(13)
-        .fontColor(this.themeConfig.colors.textHint)
         .margin({ bottom: 8 })
 
       // 版本信息
       Row() {
         Text($r('app.string.version_info'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_platform'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
 
@@ -1207,7 +1126,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.workspace_path'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
       }
       .width('100%')
@@ -1215,7 +1133,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
@@ -1230,7 +1147,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.theme_mode'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Select(this.getAppearanceOptions())
@@ -1251,11 +1167,10 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 颜色主题来源
+      // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
       Row() {
-        Text('颜色主题')
+        Text('颜色主题（实验性）')
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Select(this.getColorSourceOptions())
@@ -1275,12 +1190,11 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 内置主题选择
+      // 内置主题选择（实验性）
       if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
         Row() {
-          Text('内置主题')
+          Text('内置主题（实验性）')
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Select(this.getBuiltinThemeOptions())
@@ -1302,12 +1216,11 @@ export struct SettingsScreen {
         .margin({ bottom: 16 })
       }
 
-      // 已保存调色板选择
+      // 已保存调色板选择（实验性）
       if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
         Row() {
-          Text('设备配色')
+          Text('设备配色（实验性）')
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Select(this.viewModel.paletteRecords.map((r: ThemePaletteRecordDto): SettingsSelectOption => {
@@ -1337,11 +1250,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.font_size'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text(`${this.viewModel.settings.editorFontSize}px`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
         Slider({ value: this.viewModel.settings.editorFontSize, min: 12, max: 32, step: 1 })
           .width(120)
@@ -1360,11 +1271,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.line_spacing_multiplier'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text(`${this.viewModel.settings.editorLineSpacingMultiplier.toFixed(1)}`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
         Slider({ value: this.viewModel.settings.editorLineSpacingMultiplier, min: 1.0, max: 3.0, step: 0.1 })
           .width(120)
@@ -1391,7 +1300,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.auto_indent'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoIndentEnabled })
           .onChange((isOn: boolean) => {
@@ -1409,11 +1317,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.indent_width'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text(`${this.viewModel.settings.autoIndentWidth}`)
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
         Slider({ value: this.viewModel.settings.autoIndentWidth, min: 0, max: 8, step: 1 })
           .width(120)
@@ -1432,7 +1338,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.typing_animation'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: false })
           .enabled(false)
@@ -1444,7 +1349,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.smooth_cursor'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textSecondary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: false })
           .enabled(false)
@@ -1463,7 +1367,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.auto_save'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoSaveEnabled })
           .onChange((isOn: boolean) => {
@@ -1482,12 +1385,10 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.auto_save_delay'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
           Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
             .replace('%s', `${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)}`))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
           Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
             .width(120)
@@ -1515,8 +1416,6 @@ export struct SettingsScreen {
         Row() {
           Text(this.resolveSyncMessage())
             .fontSize(12)
-            .fontColor(this.viewModel.syncMessage.startsWith('sync_complete')
-              ? this.themeConfig.colors.success : this.themeConfig.colors.error)
         }
         .width('100%')
         .margin({ bottom: 12 })
@@ -1526,7 +1425,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.enable_sync'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.enabled || false })
@@ -1554,7 +1452,6 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.sync_method'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Select(this.getSyncProviderOptions())
@@ -1583,7 +1480,6 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.auto_sync'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.autoSync || false })
@@ -1609,13 +1505,11 @@ export struct SettingsScreen {
         Row() {
           Text($r('app.string.sync_interval'))
             .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
           Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
             .replace('%s', `${this.viewModel.syncConfig?.syncIntervalSeconds || 300}`))
             .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
 
           Slider({
@@ -1648,15 +1542,12 @@ export struct SettingsScreen {
           Button($r('app.string.sync_section'))
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.primary)
             .enabled(!this.viewModel.isSyncing)
             .onClick(() => this.viewModel.performSync())
 
           Button($r('app.string.diagnose'))
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.secondaryContainer)
-            .fontColor(this.themeConfig.colors.onSecondaryContainer)
             .margin({ left: 12 })
             .enabled(!this.viewModel.isDiagnosing)
             .onClick(() => this.viewModel.runSyncDiagnostics())
@@ -1679,7 +1570,6 @@ export struct SettingsScreen {
       Text($r('app.string.diagnostics_result'))
         .fontSize(16)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 12 })
 
       // Four check items
@@ -1700,7 +1590,6 @@ export struct SettingsScreen {
         ? MessageKeyMapper.resolveMessage(getContext(this), `error.${this.viewModel.syncDiagnostics!.errorCategory}`, undefined, undefined)
         : (this.viewModel.syncDiagnostics!.rawError ?? this.viewModel.syncDiagnostics!.providerDetails ?? ''))
         .fontSize(14)
-        .fontColor(this.viewModel.syncDiagnostics!.success ? this.themeConfig.colors.success : this.themeConfig.colors.error)
         .margin({ bottom: 8 })
 
       // Error category
@@ -1708,10 +1597,8 @@ export struct SettingsScreen {
         Row() {
           Text(getContext(this).resourceManager.getStringSync($r('app.string.error_category').id) + ': ')
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.textSecondary)
           Text(this.viewModel.syncDiagnostics!.errorCategory)
             .fontSize(12)
-            .fontColor(this.themeConfig.colors.error)
         }
         .width('100%')
         .margin({ bottom: 4 })
@@ -1719,7 +1606,6 @@ export struct SettingsScreen {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor(this.themeConfig.colors.background)
     .borderRadius(DesignTokens.radiusSm)
     .margin({ bottom: 16 })
   }
@@ -1730,15 +1616,12 @@ export struct SettingsScreen {
       Text(ok ? 'OK' : 'FAIL')
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
-        .fontColor(ok ? this.themeConfig.colors.success : this.themeConfig.colors.error)
       Text(label)
         .fontSize(12)
-        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ top: 4 })
       if (status) {
         Text(status)
           .fontSize(10)
-          .fontColor(this.themeConfig.colors.textHint)
           .margin({ top: 2 })
       }
     }
@@ -1753,7 +1636,6 @@ export struct SettingsScreen {
     Column() {
       Text('恢复功能即将上线')
         .fontSize(14)
-        .fontColor(this.themeConfig.colors.textHint)
     }
     .width('100%')
   }
@@ -1767,7 +1649,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.enable_ai'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.aiEnabled })
           .onChange((isOn: boolean) => {
@@ -1792,7 +1673,6 @@ export struct SettingsScreen {
       Row() {
         Text('开启诊断日志')
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsEnabled })
           .onChange((isOn: boolean) => {
@@ -1813,7 +1693,6 @@ export struct SettingsScreen {
       Row() {
         Text('详细日志')
           .fontSize(16)
-          .fontColor(this.viewModel.settings.diagnosticsEnabled ? this.themeConfig.colors.textPrimary : this.themeConfig.colors.textHint)
           .layoutWeight(1)
         Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsVerbose })
           .enabled(this.viewModel.settings.diagnosticsEnabled)
@@ -1833,8 +1712,6 @@ export struct SettingsScreen {
         .fontSize(14)
         .height(36)
         .width('100%')
-        .backgroundColor(this.themeConfig.colors.secondaryContainer)
-        .fontColor(this.themeConfig.colors.onSecondaryContainer)
         .margin({ bottom: 12 })
         .onClick(() => {
           this.viewModel.exportDiagnostics()
@@ -1845,8 +1722,6 @@ export struct SettingsScreen {
         .fontSize(14)
         .height(36)
         .width('100%')
-        .backgroundColor(this.themeConfig.colors.secondaryContainer)
-        .fontColor(this.themeConfig.colors.onSecondaryContainer)
         .margin({ bottom: 12 })
         .onClick(() => {
           this.viewModel.clearLogs()
@@ -1857,8 +1732,6 @@ export struct SettingsScreen {
         .fontSize(14)
         .height(36)
         .width('100%')
-        .backgroundColor(this.themeConfig.colors.secondaryContainer)
-        .fontColor(this.themeConfig.colors.onSecondaryContainer)
         .onClick(async () => {
           const ok = await this.viewModel.copyDeviceInfoToClipboard()
           if (ok) {
@@ -1881,7 +1754,6 @@ export struct SettingsScreen {
     Column() {
       Text('实验室功能即将上线')
         .fontSize(14)
-        .fontColor(this.themeConfig.colors.textHint)
     }
     .width('100%')
   }
@@ -1896,11 +1768,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.about_app_name_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_app_name'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
       .margin({ bottom: 8 })
@@ -1909,11 +1779,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.about_author_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_author'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
       .margin({ bottom: 8 })
@@ -1922,14 +1790,11 @@ export struct SettingsScreen {
       Column() {
         Text($r('app.string.about_project_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ bottom: 4 })
         Text('GitHub: github.com/Xiwei753/xiezuoruanjian')
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.primary)
         Text($r('app.string.about_gitee'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.primary)
           .margin({ top: 4 })
       }
       .width('100%')
@@ -1940,11 +1805,9 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.about_license_label'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_license'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
       .margin({ bottom: 8 })
@@ -1952,18 +1815,15 @@ export struct SettingsScreen {
       // 镜像说明
       Text($r('app.string.about_mirror_note'))
         .fontSize(13)
-        .fontColor(this.themeConfig.colors.textHint)
         .margin({ bottom: 8 })
 
       // 版本信息
       Row() {
         Text($r('app.string.version_info'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
         Text($r('app.string.about_platform'))
           .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
       }
       .width('100%')
 
@@ -1971,7 +1831,6 @@ export struct SettingsScreen {
       Row() {
         Text($r('app.string.workspace_path'))
           .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
       }
       .width('100%')
@@ -2033,9 +1892,9 @@ export struct SettingsScreen {
       case 'appearance':
         return [
           ctx.resourceManager.getStringSync($r('app.string.theme_mode').id),
-          '颜色主题',
-          '内置主题',
-          '设备配色',
+          '颜色主题（实验性）',
+          '内置主题（实验性）',
+          '设备配色（实验性）',
           ctx.resourceManager.getStringSync($r('app.string.font_size').id),
           ctx.resourceManager.getStringSync($r('app.string.line_spacing_multiplier').id)
         ]

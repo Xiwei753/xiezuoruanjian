@@ -2,19 +2,19 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "写作软件鸿蒙客户端"
+      "value": "素笺写作鸿蒙客户端"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "写作软件"
+      "value": "素笺写作"
     },
     {
       "name": "EntryAbility_label",
-      "value": "写作软件"
+      "value": "素笺写作"
     },
     {
       "name": "app_name",
-      "value": "写作软件"
+      "value": "素笺写作"
     },
     {
       "name": "permission_file_reason",
@@ -74,7 +74,7 @@
     },
     {
       "name": "app_title",
-      "value": "写作软件"
+      "value": "素笺"
     },
     {
       "name": "my_writing_space",

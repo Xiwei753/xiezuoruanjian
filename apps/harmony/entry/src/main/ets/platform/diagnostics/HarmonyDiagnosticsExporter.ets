@@ -10,7 +10,7 @@
 //
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
-import { common } from '@kit.AbilityKit'
+import { common, ConfigurationConstant } from '@kit.AbilityKit'
 import { fileUri } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
 import util from '@ohos.util'
@@ -24,6 +24,11 @@ import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
 import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
+import { HarmonyThemeAdapter } from '../../ui/theme/HarmonyThemeAdapter'
+import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
+import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
+import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
+import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
@@ -63,6 +68,31 @@ interface BuildIdentityAttachment {
   buildKey: string
 }
 
+// theme_runtime_sanitized.json 附件 DTO — Issue #767 主题运行时快照。
+// Issue #767 评论 5831067980：systemColorMode 使用 ConfigurationConstant.ColorMode 枚举类型。
+interface ThemeRuntimeAttachment {
+  systemColorMode: ConfigurationConstant.ColorMode
+  appearanceMode: string
+  effectiveColorMode: string
+  useSystemTokens: boolean
+  hasExplicitThemeOverride: boolean
+  selectedBuiltinThemeId: string
+  selectedPaletteId: string
+  colorSource: string
+}
+
+// ui_runtime_sanitized.json 附件 DTO — Issue #767 UI 运行时快照。
+interface UiRuntimeAttachment {
+  screenRole: string         // 当前 ScreenRole
+  widthClass: string         // 当前 WidthClass
+  windowWidthVp: number      // 窗口宽度 vp
+  windowHeightVp: number     // 窗口高度 vp
+  currentTab: number         // 当前一级 tab（0=作品, 1=星图, 2=统计）
+  homeStackDepth: number     // 作品 tab 导航栈深度
+  starMapStackDepth: number  // 星图 tab 导航栈深度
+  statsStackDepth: number    // 统计 tab 导航栈深度
+}
+
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
 const DIAGNOSTICS_DIR = 'diagnostics'
 
@@ -72,6 +102,8 @@ const ATTACHMENT_APP_SETTINGS = 'app_settings_sanitized.json'
 const ATTACHMENT_SYNC_STATE = 'sync_state_sanitized.json'
 const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
 const ATTACHMENT_BUILD_IDENTITY = 'build_identity.json'
+const ATTACHMENT_THEME_RUNTIME = 'theme_runtime_sanitized.json'
+const ATTACHMENT_UI_RUNTIME = 'ui_runtime_sanitized.json'
 
 export class HarmonyDiagnosticsExporter {
   private bridge: IWriterCoreBridge
@@ -185,6 +217,12 @@ export class HarmonyDiagnosticsExporter {
     // build_identity.json
     this.addBuildIdentityAttachment(attachments)
 
+    // theme_runtime_sanitized.json — Issue #767 主题运行时快照
+    this.addThemeRuntimeAttachment(attachments)
+
+    // ui_runtime_sanitized.json — Issue #767 UI 运行时快照
+    this.addUiRuntimeAttachment(attachments)
+
     return attachments
   }
 
@@ -291,6 +329,83 @@ export class HarmonyDiagnosticsExporter {
       attachments.push(this.makeAttachment(ATTACHMENT_BUILD_IDENTITY, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_BUILD_IDENTITY, String(e)))
+    }
+  }
+
+  // theme_runtime_sanitized.json — 主题运行时快照（Issue #767）。
+  // 从 HarmonyThemeAdapter 获取当前主题状态，记录深浅色模式、系统 token 使用情况等。
+  private addThemeRuntimeAttachment(attachments: AttachmentItem[]): void {
+    try {
+      const adapter = HarmonyThemeAdapter.getInstance()
+      const useSystemTokens = adapter.isUsingSystemTokens()
+      const snapshot: ThemeRuntimeAttachment = {
+        systemColorMode: adapter.getSystemColorMode(),
+        appearanceMode: adapter.getMode(),
+        effectiveColorMode: adapter.getEffectiveColorMode(),
+        useSystemTokens: useSystemTokens,
+        hasExplicitThemeOverride: !useSystemTokens,
+        selectedBuiltinThemeId: adapter.getSelectedBuiltinThemeId(),
+        selectedPaletteId: adapter.getSelectedPaletteId(),
+        colorSource: adapter.getColorSource()
+      }
+      const json = JSON.stringify(snapshot, null, 2)
+      attachments.push(this.makeAttachment(ATTACHMENT_THEME_RUNTIME, json))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_THEME_RUNTIME, String(e)))
+    }
+  }
+
+  // ui_runtime_sanitized.json — UI 运行时快照（Issue #767）。
+  // 收集当前 ScreenRole、WidthClass、窗口尺寸、当前一级 tab、各 tab 导航栈深度。
+  private addUiRuntimeAttachment(attachments: AttachmentItem[]): void {
+    try {
+      // 从 AdaptiveContext 获取 WidthClass 和窗口尺寸
+      const adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+      const widthClass: WidthClass = adaptiveState.sizeClass
+      const windowWidthVp: number = adaptiveState.widthVp
+      const windowHeightVp: number = adaptiveState.heightVp
+
+      // 从 NavigationChromeStore 获取当前 ScreenRole
+      const screenRole: ScreenRole = NavigationChromeStore.getInstance().getCurrentRole()
+
+      // 从 NavigationTransactionCoordinator 获取当前 tab 和各 stack 深度
+      const coordinator = NavigationTransactionCoordinator.getInstance()
+      const activeStack = coordinator.getNavPathStack()
+
+      // 通过引用比较确定当前活动 tab（coordinator 没有 getActiveTab getter）
+      let currentTab: number = -1
+      if (activeStack !== null) {
+        for (let i = 0; i <= 2; i++) {
+          const tabStack = coordinator.getTabStack(i)
+          if (tabStack === activeStack) {
+            currentTab = i
+            break
+          }
+        }
+      }
+
+      // 各 tab 导航栈深度（NavPathStack.size() 返回栈中路径数）
+      const homeStack = coordinator.getTabStack(0)
+      const starMapStack = coordinator.getTabStack(1)
+      const statsStack = coordinator.getTabStack(2)
+      const homeStackDepth: number = homeStack !== null ? homeStack.size() : -1
+      const starMapStackDepth: number = starMapStack !== null ? starMapStack.size() : -1
+      const statsStackDepth: number = statsStack !== null ? statsStack.size() : -1
+
+      const snapshot: UiRuntimeAttachment = {
+        screenRole: screenRole,
+        widthClass: widthClass,
+        windowWidthVp: windowWidthVp,
+        windowHeightVp: windowHeightVp,
+        currentTab: currentTab,
+        homeStackDepth: homeStackDepth,
+        starMapStackDepth: starMapStackDepth,
+        statsStackDepth: statsStackDepth
+      }
+      const json = JSON.stringify(snapshot, null, 2)
+      attachments.push(this.makeAttachment(ATTACHMENT_UI_RUNTIME, json))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_UI_RUNTIME, String(e)))
     }
   }
 
