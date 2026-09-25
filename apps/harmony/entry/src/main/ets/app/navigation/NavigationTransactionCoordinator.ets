@@ -136,11 +136,11 @@ export class NavigationTransactionCoordinator {
     }
   }
 
-  // Issue #767：注册恢复回调。
-  // 不再立即消费 pendingRestore——改为只注册 restoreListener。
+  // Issue #767 评论5830638688 第1项：注册恢复回调（纯 listener，不再收 placeholderStack）。
+  // 不再接受 navPathStack 参数——之前传 placeholderStack 会污染 activeTabStack，
+  // 导致 safePop/safeReplacePath 在 PrimaryTabShell 注册真实栈之前操作错误栈。
   // pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack 后调用 tryConsumePendingRestore()。
-  register(navPathStack: NavPathStack, restoreListener: (payload: ContinuationPayload) => void): void {
-    this.activeTabStack = navPathStack
+  registerRestoreListener(restoreListener: (payload: ContinuationPayload) => void): void {
     this.restoreListener = restoreListener
   }
 
@@ -166,13 +166,19 @@ export class NavigationTransactionCoordinator {
   }
 
   // EntryAbility 调此方法触发接续恢复。
-  // 若 AppNavigation 已挂载，直接调回调；否则暂存，aboutToAppear 时消费。
+  // Issue #767 评论5830638688 第1项：同时检查 restoreListener 和 homeStack 是否可用。
+  // 之前只检查 restoreListener：如果 continuation 正好在"restoreListener 已注册、homeStack 还没注册"
+  // 的窗口到达，payload 直接进 applyContinuation()，getTabStack(TAB_HOME) 返回 null，
+  // callback 直接 return，payload 没重新放回 pendingRestore，接续数据就丢了。
+  // 现在改为：只要 restoreListener 或 homeStack 任一不可用，就暂存到 pendingRestore，
+  // 等 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 消费。
   restoreFromContinuation(payload: ContinuationPayload): void {
-    if (this.restoreListener !== null) {
-      this.restoreListener(payload)
+    const homeStack: NavPathStack | null = this.getTabStack(0)
+    if (this.restoreListener === null || homeStack === null) {
+      this.pendingRestore = payload
       return
     }
-    this.pendingRestore = payload
+    this.restoreListener(payload)
   }
 
   // Issue #767：返回当前活动 tab 的 NavPathStack。

@@ -497,9 +497,9 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 颜色主题来源
+      // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
       Row() {
-        Text('颜色主题')
+        Text('颜色主题（实验性）')
           .fontSize(16)
           .layoutWeight(1)
 
@@ -520,10 +520,10 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 内置主题选择
+      // 内置主题选择（实验性）
       if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
         Row() {
-          Text('内置主题')
+          Text('内置主题（实验性）')
             .fontSize(16)
             .layoutWeight(1)
 
@@ -546,10 +546,10 @@ export struct SettingsScreen {
         .margin({ bottom: 16 })
       }
 
-      // 已保存调色板选择
+      // 已保存调色板选择（实验性）
       if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
         Row() {
-          Text('设备配色')
+          Text('设备配色（实验性）')
             .fontSize(16)
             .layoutWeight(1)
 
@@ -1166,9 +1166,9 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 颜色主题来源
+      // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
       Row() {
-        Text('颜色主题')
+        Text('颜色主题（实验性）')
           .fontSize(16)
           .layoutWeight(1)
 
@@ -1189,10 +1189,10 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 内置主题选择
+      // 内置主题选择（实验性）
       if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
         Row() {
-          Text('内置主题')
+          Text('内置主题（实验性）')
             .fontSize(16)
             .layoutWeight(1)
 
@@ -1215,10 +1215,10 @@ export struct SettingsScreen {
         .margin({ bottom: 16 })
       }
 
-      // 已保存调色板选择
+      // 已保存调色板选择（实验性）
       if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
         Row() {
-          Text('设备配色')
+          Text('设备配色（实验性）')
             .fontSize(16)
             .layoutWeight(1)
 
@@ -1891,9 +1891,9 @@ export struct SettingsScreen {
       case 'appearance':
         return [
           ctx.resourceManager.getStringSync($r('app.string.theme_mode').id),
-          '颜色主题',
-          '内置主题',
-          '设备配色',
+          '颜色主题（实验性）',
+          '内置主题（实验性）',
+          '设备配色（实验性）',
           ctx.resourceManager.getStringSync($r('app.string.font_size').id),
           ctx.resourceManager.getStringSync($r('app.string.line_spacing_multiplier').id)
         ]

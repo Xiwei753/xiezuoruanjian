@@ -31,12 +31,11 @@ export struct AppNavigation {
   aboutToAppear(): void {
     hilog.info(0x0000, 'AppNavigation', 'aboutToAppear: registering with coordinator')
     // 注册到 coordinator，使 EntryAbility 能触发接续恢复。
-    // Issue #767：不再创建 tempStack，只注册 restoreListener 回调。
-    // pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 触发。
+    // Issue #767 评论5830638688 第1项：不再创建 placeholderStack 污染 activeTabStack。
+    // 只注册 restoreListener 回调；pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack
+    // 后由 tryConsumePendingRestore() 触发。
     const coordinator = NavigationTransactionCoordinator.getInstance()
-    // navPathStack 参数保留兼容性，此处传一个空栈即可（coordinator 内部不再依赖此参数消费 pending）。
-    const placeholderStack: NavPathStack = new NavPathStack()
-    coordinator.register(placeholderStack, (payload: ContinuationPayload) => {
+    coordinator.registerRestoreListener((payload: ContinuationPayload) => {
       this.applyContinuation(payload)
     })
   }

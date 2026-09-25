@@ -584,12 +584,8 @@ export struct StarMapScreen {
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
-      Button({ type: ButtonType.Circle }) {
-        // 空内容：圆形 Button 由系统材质处理形状和按压效果，避免自绘 Circle 的白边/方块感
-      }
-        .width(56)
-        .height(56)
-        .backgroundColor(this.getNodeColor(node))
+      Circle({ width: 56, height: 56 })
+        .fill(this.getNodeColor(node))
         .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
         .strokeWidth(4)
         .shadow({

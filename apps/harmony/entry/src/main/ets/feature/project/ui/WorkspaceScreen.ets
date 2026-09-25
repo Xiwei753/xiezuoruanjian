@@ -977,6 +977,7 @@ export struct WorkspaceScreen {
       .width('80%')
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
@@ -1022,6 +1023,7 @@ export struct WorkspaceScreen {
       .width('80%')
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
