@@ -1,4 +1,4 @@
-import { AbilityConstant, UIAbility, Want, wantConstant, Configuration } from '@kit.AbilityKit'
+import { AbilityConstant, UIAbility, Want, wantConstant, Configuration, ConfigurationConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
@@ -169,10 +169,15 @@ export default class EntryAbility extends UIAbility {
     this.lifecycle.notifyBackground()
   }
 
-  // Issue #767：系统配置变更回调（深色模式切换等）。
+  // Issue #767 评论 5831067980：系统配置变更回调（深色模式切换等）。
   // 读取 newConfig.colorMode 并转给 HarmonyThemeAdapter，
   // 只在 appearanceMode = system 时跟随系统切换（该逻辑在 HarmonyThemeAdapter.onConfigurationUpdate 中处理）。
+  // colorMode 是可选字段，必须先判 undefined，不能直接当 number 传。
   onConfigurationUpdate(newConfig: Configuration): void {
+    if (newConfig.colorMode === undefined) {
+      hilog.info(0x0000, 'EntryAbility', 'onConfigurationUpdate: colorMode is undefined, skip')
+      return
+    }
     hilog.info(0x0000, 'EntryAbility', 'onConfigurationUpdate: colorMode=%{public}d', newConfig.colorMode)
     try {
       HarmonyThemeAdapter.getInstance().onConfigurationUpdate(newConfig.colorMode)

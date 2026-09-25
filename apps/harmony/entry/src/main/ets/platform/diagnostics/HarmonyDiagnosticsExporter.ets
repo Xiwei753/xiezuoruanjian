@@ -10,7 +10,7 @@
 //
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
-import { common } from '@kit.AbilityKit'
+import { common, ConfigurationConstant } from '@kit.AbilityKit'
 import { fileUri } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
 import util from '@ohos.util'
@@ -69,8 +69,9 @@ interface BuildIdentityAttachment {
 }
 
 // theme_runtime_sanitized.json 附件 DTO — Issue #767 主题运行时快照。
+// Issue #767 评论 5831067980：systemColorMode 使用 ConfigurationConstant.ColorMode 枚举类型。
 interface ThemeRuntimeAttachment {
-  systemColorMode: number
+  systemColorMode: ConfigurationConstant.ColorMode
   appearanceMode: string
   effectiveColorMode: string
   useSystemTokens: boolean

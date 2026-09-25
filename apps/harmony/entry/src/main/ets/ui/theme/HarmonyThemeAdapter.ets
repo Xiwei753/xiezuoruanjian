@@ -1,4 +1,5 @@
 import window from '@ohos.window'
+import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
@@ -177,7 +178,9 @@ export interface ThemeUpdateParams {
 export class HarmonyThemeAdapter {
   private static instance: HarmonyThemeAdapter
   private mainWindow: window.Window | null = null
-  private systemColorMode: number = 0 // 0=light, 1=dark (ConfigurationConstant.ColorMode)
+  // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举，不再手写数字。
+  // 华为/OpenHarmony 枚举：COLOR_MODE_NOT_SET=-1, COLOR_MODE_DARK=0, COLOR_MODE_LIGHT=1
+  private systemColorMode: ConfigurationConstant.ColorMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT
   private useSystemTokens: boolean = true // 默认使用系统 token，用户显式选择主题后切换为 false
   private effectiveColorMode: string = 'light' // 'light' | 'dark'，根据 mode 和 systemColorMode 计算
   private currentTheme: ThemeConfig = {
@@ -250,14 +253,14 @@ export class HarmonyThemeAdapter {
     return this.effectiveColorMode
   }
 
-  // Issue #767：获取系统当前深浅色模式（0=light, 1=dark）
-  getSystemColorMode(): number {
+  // Issue #767 评论 5831067980：获取系统当前深浅色模式（ConfigurationConstant.ColorMode 枚举）
+  getSystemColorMode(): ConfigurationConstant.ColorMode {
     return this.systemColorMode
   }
 
-  // Issue #767：首次启动时由 EntryAbility 注入当前系统 colorMode，
-  // 避免一直靠 systemColorMode = 0 的默认值先按亮色启动。
-  initSystemColorMode(colorMode: number): void {
+  // Issue #767 评论 5831067980：首次启动时由 EntryAbility 注入当前系统 colorMode，
+  // 避免一直靠默认值先按亮色启动。使用 ConfigurationConstant.ColorMode 枚举类型。
+  initSystemColorMode(colorMode: ConfigurationConstant.ColorMode): void {
     this.systemColorMode = colorMode
     this.updateEffectiveColorMode()
     if (this.useSystemTokens) {
@@ -348,6 +351,9 @@ export class HarmonyThemeAdapter {
     this.currentTheme.colorSource = colorSource as ColorSource
     this.currentTheme.selectedPaletteId = selectedPaletteId
     this.currentTheme.selectedBuiltinThemeId = selectedBuiltinThemeId
+    // Issue #767 评论 5831067980：根据显式主题选择重算 useSystemTokens，
+    // 避免应用重启后 adapter 仍保持默认 useSystemTokens=true。
+    this.recomputeUseSystemTokens()
     this.updateColors()
     this.notifyObservers()
   }
@@ -360,7 +366,12 @@ export class HarmonyThemeAdapter {
     this.observers.delete(observer)
   }
 
-  onConfigurationUpdate(colorMode: number): void {
+  // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举类型。
+  // COLOR_MODE_NOT_SET 不当成 light 硬吃，保留上一份有效系统模式。
+  onConfigurationUpdate(colorMode: ConfigurationConstant.ColorMode): void {
+    if (colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+      return
+    }
     this.systemColorMode = colorMode
     this.updateEffectiveColorMode()
     if (this.useSystemTokens) {
@@ -378,7 +389,8 @@ export class HarmonyThemeAdapter {
     }
   }
 
-  // Issue #767：根据 mode 和 systemColorMode 计算有效颜色模式
+  // Issue #767 评论 5831067980：根据 mode 和 systemColorMode 计算有效颜色模式。
+  // 使用 ConfigurationConstant.ColorMode 枚举判断，不再手写数字。
   private updateEffectiveColorMode(): void {
     if (this.currentTheme.mode === 'dark') {
       this.effectiveColorMode = 'dark'
@@ -386,12 +398,16 @@ export class HarmonyThemeAdapter {
       this.effectiveColorMode = 'light'
     } else {
       // system mode：跟随系统 colorMode
-      this.effectiveColorMode = this.systemColorMode === 1 ? 'dark' : 'light'
+      // COLOR_MODE_DARK=0, COLOR_MODE_LIGHT=1, COLOR_MODE_NOT_SET=-1
+      const isDark = this.systemColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+      this.effectiveColorMode = isDark ? 'dark' : 'light'
     }
   }
 
-  private applySystemColorMode(colorMode: number): void {
-    if (colorMode === 1) {
+  // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举判断。
+  // COLOR_MODE_DARK=0 → DarkTheme, COLOR_MODE_LIGHT=1 → LightTheme
+  private applySystemColorMode(colorMode: ConfigurationConstant.ColorMode): void {
+    if (colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) {
       this.currentTheme.colors = DarkTheme
     } else {
       this.currentTheme.colors = LightTheme
@@ -410,6 +426,21 @@ export class HarmonyThemeAdapter {
   private isCurrentlyDark(): boolean {
     // Issue #767：使用 effectiveColorMode 判断
     return this.effectiveColorMode === 'dark'
+  }
+
+  // Issue #767 评论 5831067980：根据 colorSource 和 selectedPaletteId/selectedBuiltinThemeId
+  // 重算 useSystemTokens，确保应用重启后不会保持默认 useSystemTokens=true。
+  // - selectedPaletteId 非空且 colorSource=saved_palette → useSystemTokens=false
+  // - selectedBuiltinThemeId 非空且 colorSource=built_in → useSystemTokens=false
+  // - 两者都没有有效显式覆盖 → useSystemTokens=true
+  private recomputeUseSystemTokens(): void {
+    if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {
+      this.useSystemTokens = false
+    } else if (this.currentTheme.colorSource === 'built_in' && this.currentTheme.selectedBuiltinThemeId.length > 0) {
+      this.useSystemTokens = false
+    } else {
+      this.useSystemTokens = true
+    }
   }
 
   private updateColors(): void {
