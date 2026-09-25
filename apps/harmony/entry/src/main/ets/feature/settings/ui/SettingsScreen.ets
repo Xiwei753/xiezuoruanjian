@@ -47,7 +47,9 @@ interface SettingsSelectOption {
 
 @ComponentV2
 export struct SettingsScreen {
-  // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器）。
+  // Issue #768 评论5838296806：通过 @Param 从父组件接收 NavPathStack，不再依赖全局 activeTabStack
+  @Param navPathStack: NavPathStack = new NavPathStack()
+  // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
@@ -101,13 +103,9 @@ export struct SettingsScreen {
   }
 
   // ── 安全返回 ──
+  // Issue #768 评论5838296806：使用 @Param 传入的 NavPathStack，不再依赖全局 activeTabStack。
   private goBack(): void {
-    const stack = this.navCoordinator.getNavPathStack()
-    if (stack) {
-      this.navCoordinator.safePopWithStack(stack)
-    } else {
-      this.navCoordinator.safePop() // fallback
-    }
+    this.navCoordinator.safePopWithStack(this.navPathStack)
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──

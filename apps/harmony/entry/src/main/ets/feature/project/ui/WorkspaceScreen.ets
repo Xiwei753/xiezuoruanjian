@@ -30,7 +30,9 @@ const DIVIDER_WIDTH: number = 0.5
 // - 页面只派发意图，ViewModel 内部管理 async 和状态
 @ComponentV2
 export struct WorkspaceScreen {
-  // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器，V2 中不可用）
+  // Issue #768 评论5838296806：通过 @Param 从父组件接收 NavPathStack，不再依赖全局 activeTabStack
+  @Param navPathStack: NavPathStack = new NavPathStack()
+  // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
   // ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
@@ -51,17 +53,14 @@ export struct WorkspaceScreen {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (navPathStack) {
-      const paramsArr = navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
-      const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
-      if (params) {
-        this.viewModel.projectId = params.projectId
-        this.viewModel.projectName = params.projectName
-        this.viewModel.loadData(params.projectId)
-        // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
-        AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
-      }
+    const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
+    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
+    if (params) {
+      this.viewModel.projectId = params.projectId
+      this.viewModel.projectName = params.projectName
+      this.viewModel.loadData(params.projectId)
+      // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
+      AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
     }
 
     const self = this
@@ -117,43 +116,29 @@ export struct WorkspaceScreen {
   // Issue #629 评论14 第1项：章节点击统一进入 Routes.Writing，不再内联编辑。
   // 窄屏和宽屏都走同一条导航路径，屏幕宽度变化只改布局，不换 TextEditSession owner。
   private navigateToWriting(chapterId: string, chapterTitle: string, volumeId: string): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
     const writingParam: WritingRouteParams = {
       chapterId: chapterId,
       chapterTitle: chapterTitle,
       projectId: this.viewModel.projectId,
       volumeId: volumeId
     }
-    navPathStack.pushPath({
+    this.navPathStack.pushPath({
       name: Routes.Writing,
       param: writingParam
     })
   }
 
-  // Issue #768：返回链必须使用页面明确持有的 NavPathStack，不再用全局 activeTabStack。
-  // WorkspaceScreen 是 V1 组件，通过 coordinator.getNavPathStack() 获取当前栈后显式传给 safePopWithStack。
+  // Issue #768 评论5838296806：返回链使用 @Param 传入的 NavPathStack，不再依赖全局 activeTabStack。
   private handleBack(): void {
-    const stack = this.navCoordinator.getNavPathStack()
-    if (stack) {
-      this.navCoordinator.safePopWithStack(stack)
-    } else {
-      this.navCoordinator.safePop()
-    }
+    this.navCoordinator.safePopWithStack(this.navPathStack)
   }
 
   // 导航到设置页
   private navigateToSettings(): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
     const settingsParam: SettingsRouteParams = {
       projectId: this.viewModel.projectId
     }
-    navPathStack.pushPath({
+    this.navPathStack.pushPath({
       name: Routes.Settings,
       param: settingsParam
     })

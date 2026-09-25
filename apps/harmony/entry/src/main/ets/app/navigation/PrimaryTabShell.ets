@@ -223,13 +223,15 @@ export struct PrimaryTabShell {
     if (name === Routes.Home) {
       HomeScreen()
     } else if (name === Routes.Workspace) {
-      WorkspaceScreen()
+      // Issue #768 评论5838296806：显式传 homeStack，不再依赖全局 activeTabStack
+      WorkspaceScreen({ navPathStack: this.homeStack })
     } else if (name === Routes.Writing) {
       WritingScreen()
     } else if (name === Routes.StarMap) {
       StarMapScreen()
     } else if (name === Routes.Settings) {
-      SettingsScreen()
+      // Issue #768 评论5838296806：显式传 homeStack，不再依赖全局 activeTabStack
+      SettingsScreen({ navPathStack: this.homeStack })
     } else if (name === Routes.Stats) {
       StatsScreen()
     }

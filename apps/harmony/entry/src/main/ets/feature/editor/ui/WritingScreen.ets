@@ -164,8 +164,7 @@ export struct WritingScreen {
       this.volumeId = params.volumeId || ''
       // 暂存接续参数，loadChapter 在 coordinator.open 成功后消费以恢复编辑器状态。
       this.continuationParams = params
-      this.loadChapter()
-      this.loadSettings()
+      this.loadWritingContent()
       // Issue #629 评论14 第1项：宽屏双栏模式下加载项目树（供 ChapterTreePane）。
       if (this.adaptiveState.isTwoPane) {
         this.loadProjectTree()
@@ -415,6 +414,13 @@ export struct WritingScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+  }
+
+  // Issue #768 评论5838296806：先加载排版设置，再打开章节会话。
+  // 避免并发加载时 coordinator.open() 先完成导致 editorSnapshot 用默认设置生成。
+  private async loadWritingContent(): Promise<void> {
+    await this.loadSettings()
+    await this.loadChapter()
   }
 
   async loadChapter() {
@@ -727,6 +733,18 @@ export struct WritingScreen {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
         this.settings = result.data
+        // Issue #768 评论5838296806：设置真相变化后，如果 coordinator 已有 snapshot，
+        // 同步重建 editorSnapshot，保证 StyledString 与设置真相一致。
+        const existingSnap = this.coordinator.getSnapshot()
+        if (existingSnap !== null) {
+          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
+            existingSnap,
+            this.settings.editorFontSize,
+            this.settings.editorLineSpacingMultiplier,
+            this.settings.autoIndentEnabled,
+            this.settings.autoIndentWidth
+          )
+        }
         // Issue #705：Core 的 themeMode 已废弃，运行时恒为 null；
         // 主题真相是 appearanceMode（与 SettingsScreen 同一读法）。
         const appearanceMode = result.data.appearanceMode || result.data.themeMode || 'system'
