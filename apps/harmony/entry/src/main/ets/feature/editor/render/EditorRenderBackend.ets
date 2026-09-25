@@ -355,10 +355,16 @@ export class EditorRenderBackend {
       let x: number
       if (cursorUtf16 < text.length) {
         // 光标在文本中间
-        if (affinity === CaretAffinity.Upstream && cursorUtf16 > 0
-          && lineIndex > 0 && cursorUtf16 === systemLines[lineIndex - 1].endUtf16
-          && systemLines[lineIndex - 1].breakKind === LineBreakKind.SoftWrap) {
-          // soft-wrap 边界 Upstream：取 [cursor-1, cursor] 的 right（上一行末尾）
+        // Issue #768 评论5836931927 第1项：lineIndex 已经是按 affinity 选定的视觉行，
+        // 直接判断 line 本身是否 soft-wrap Upstream，不要回头找 lineIndex - 1。
+        const isSoftWrapUpstream =
+          affinity === CaretAffinity.Upstream
+          && cursorUtf16 > 0
+          && cursorUtf16 === line.endUtf16
+          && line.breakKind === LineBreakKind.SoftWrap
+
+        if (isSoftWrapUpstream) {
+          // soft-wrap 边界 Upstream：取 [cursor-1, cursor] 的 right（当前行末尾）
           const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
           const textBoxes: TextBox[] = layout.getRectsForRange(
             range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
@@ -366,7 +372,7 @@ export class EditorRenderBackend {
           if (textBoxes.length > 0) {
             x = textBoxes[textBoxes.length - 1].rect.right
           } else {
-            x = 0
+            x = line.left
           }
         } else {
           // 正常情况或 Downstream：取 [cursor, cursor+1] 的 left
@@ -377,7 +383,7 @@ export class EditorRenderBackend {
           if (textBoxes.length > 0) {
             x = textBoxes[0].rect.left
           } else {
-            x = 0
+            x = line.left
           }
         }
       } else {

@@ -274,7 +274,9 @@ export function computeSelectionRectsFromLineLayouts(
       if (lfCovered) {
         const isEmptyLine = line.startUtf16 >= line.endUtf16
         if (isEmptyLine) {
-          rects.push({ x: line.left, y: line.y, width: contentWidth, height: line.height })
+          // Issue #768 评论5836931927 第2项：空 hard line 首行缩进时 line.left > 0，
+          // width 需要减去 line.left，否则矩形右边会越过内容右边界。
+          rects.push({ x: line.left, y: line.y, width: Math.max(0, contentWidth - line.left), height: line.height })
         } else {
           const x = line.left + measureTextFn(text.substring(line.startUtf16, line.endUtf16))
           rects.push({ x, y: line.y, width: Math.max(0, contentWidth - x), height: line.height })
