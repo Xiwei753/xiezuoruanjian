@@ -572,8 +572,14 @@ pub(super) fn transfer_live_project(
                     );
 
                     // publish generation。
-                    //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
-                    //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
+                    //    Issue #761：冲突时仍可 publish + CAS（非冲突文件需同步），
+                    //    但 batch generation builder（publish_generation_batch）对冲突
+                    //    路径使用远端 blob SHA（ReuseVersion），不读本地冲突正文。
+                    //    没有 remote_tree_files[path] 可复用的 unresolved BothChanged
+                    //    时，publish_generation_batch 直接返回 PartialConflict，不
+                    //    生成内容不完整/哈希不一致的 generation。
+                    //    CAS 成功后仍记录 PartialConflict 状态（而非 Success），确保
+                    //    冲突信息不被丢失。
                     //    Issue #716 评论 5741695768：merge_outcome 已在前面归一化，
                     //    这里只负责根据归一化后的 outcome 决定 publish 参数。
                     let content_result = match &merge_outcome_opt {
