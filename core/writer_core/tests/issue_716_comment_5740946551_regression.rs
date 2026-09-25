@@ -22,7 +22,8 @@ use writer_core::sync::provider::capabilities::SyncCapabilities;
 use writer_core::sync::provider::error::ProviderError;
 use writer_core::sync::provider::memory::MemoryProvider;
 use writer_core::sync::provider::model::{
-    DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+    BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
+    WritePrecondition,
 };
 use writer_core::sync::provider::SyncProvider;
 use writer_core::sync::target_lifecycle::{
@@ -89,6 +90,37 @@ impl SyncProvider for CountingProvider {
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
+    }
+    /// Issue #761：batch 路径下 commit_batch 提交所有 mutation。
+    /// 计数 meta writes（+2，让 publish_count = meta_writes / 2 仍然正确：
+    /// batch 路径 1 次 publish = 1 次 commit_batch = 1 个 meta mutation）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for m in mutations {
+            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        }
+        self.inner.commit_batch(mutations, message)
+    }
+}
+
+/// Issue #761：batch 路径下计数 generation write / meta write。
+fn count_batch_generation_write(
+    m: &BatchMutation,
+    generation_writes: &AtomicUsize,
+    generation_meta_writes: &AtomicUsize,
+) {
+    let path = m.path();
+    if !path.contains(GENERATION_SUBDIR) {
+        return;
+    }
+    generation_writes.fetch_add(1, Ordering::SeqCst);
+    if path.ends_with(GENERATION_META_FILENAME) {
+        // batch 路径 1 次 publish = 1 个 meta mutation，
+        // 计数 +2 让 publish_count = meta_writes / 2 == 1。
+        generation_meta_writes.fetch_add(2, Ordering::SeqCst);
     }
 }
 
@@ -161,6 +193,17 @@ impl SyncProvider for ConflictInjectingProvider {
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
+    }
+    /// Issue #761：batch 路径下 commit_batch 计数 meta writes（+2，同 CountingProvider）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for m in mutations {
+            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        }
+        self.inner.commit_batch(mutations, message)
     }
 }
 
@@ -557,6 +600,17 @@ impl SyncProvider for FailingReadProvider {
     }
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
+    }
+    /// Issue #761：batch 路径下 commit_batch 计数 meta writes（+2，同 CountingProvider）。
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for m in mutations {
+            count_batch_generation_write(m, &self.generation_writes, &self.generation_meta_writes);
+        }
+        self.inner.commit_batch(mutations, message)
     }
 }
 
