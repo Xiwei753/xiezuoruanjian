@@ -103,11 +103,13 @@ fn sync_result_with_status(status: SyncStatus) -> SyncResult {
 // ════════════════════════════════════════════════════════════════════════════
 
 /// 期望行为（修复后 **通过**）：
-/// `app-meta/sync/manifest.sync.json` 与 `app-meta/sync/state.local.json` 是
-/// EngineState，Transfer 在 staging 里真实更新了它们，Commit 应把它们写回 live。
+/// `app-meta/sync/manifest.sync.json` 是 EngineState，Transfer 在 staging 里真实
+/// 更新了它，Commit 应把它写回 live。`app-meta/sync/state.local.json` 走三方
+/// 语义合并（Issue #762 评论 5830266600），设 `needs_sync_state_merge=true`。
 ///
-/// 修复后：`classify_staging_commit_path` 把这两个文件归为 `EngineState`，
-/// 出现在 `plan.engine_state_actions` 里。
+/// 修复后：`classify_staging_commit_path` 把 manifest 归为 `EngineState`，
+/// 出现在 `plan.engine_state_actions` 里；state.local.json 归为 `EngineStateMerge`，
+/// 设 `plan.needs_sync_state_merge = true`。
 #[test]
 fn repro_issue644_p1_app_meta_engine_state_expected_to_be_committed() {
     let tmp = TempDir::new().unwrap();
@@ -129,19 +131,26 @@ fn repro_issue644_p1_app_meta_engine_state_expected_to_be_committed() {
 
     let plan = run.compute_commit_plan(&live).unwrap();
 
-    // 期望：两个 EngineState 文件应出现在 plan.engine_state_actions 里（写回 live）。
+    // 期望：manifest.sync.json 应出现在 plan.engine_state_actions 里（写回 live）。
     assert!(
         plan_engine_state_applies_contains(&plan, manifest),
         "期望 manifest.sync.json 作为 EngineState 被提交写回 live"
     );
+    // Issue #762 评论 5830266600：state.local.json 走三方语义合并，
+    // 不再出现在 engine_state_actions 里，而是设 needs_sync_state_merge=true。
     assert!(
-        plan_engine_state_applies_contains(&plan, state),
-        "期望 state.local.json 作为 EngineState 被提交写回 live"
+        plan.needs_sync_state_merge,
+        "期望 state.local.json 触发 needs_sync_state_merge（三方语义合并）"
+    );
+    assert!(
+        !plan_engine_state_applies_contains(&plan, state),
+        "期望 state.local.json 不在 engine_state_actions 里（走三方合并）"
     );
 }
 
 /// 修复后行为（修复后 **通过**）：
-/// 两个 EngineState 文件现在出现在 `plan.engine_state_actions` 里（不再被跳过）。
+/// manifest.sync.json 出现在 `plan.engine_state_actions` 里；state.local.json
+/// 走三方语义合并（Issue #762 评论 5830266600），设 `needs_sync_state_merge=true`。
 #[test]
 fn repro_issue644_p1_app_meta_engine_state_now_committed() {
     let tmp = TempDir::new().unwrap();
@@ -161,14 +170,15 @@ fn repro_issue644_p1_app_meta_engine_state_now_committed() {
 
     let plan = run.compute_commit_plan(&live).unwrap();
 
-    // 修复后：两个文件作为 EngineState 写回 live，出现在 engine_state_actions 里。
+    // 修复后：manifest.sync.json 作为 EngineState 写回 live。
     assert!(
         plan_engine_state_applies_contains(&plan, manifest),
         "修复后：manifest.sync.json 作为 EngineState 写回 live"
     );
+    // Issue #762 评论 5830266600：state.local.json 走三方语义合并。
     assert!(
-        plan_engine_state_applies_contains(&plan, state),
-        "修复后：state.local.json 作为 EngineState 写回 live"
+        plan.needs_sync_state_merge,
+        "修复后：state.local.json 触发 needs_sync_state_merge（三方语义合并）"
     );
     // 且内容是 incoming（staging 里的最新权威值）。
     let manifest_content = plan_applied_content(&plan, manifest).unwrap();

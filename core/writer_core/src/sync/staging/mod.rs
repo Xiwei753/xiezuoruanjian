@@ -18,6 +18,7 @@ pub(crate) mod commit_plan;
 pub(crate) mod replace;
 pub(crate) mod resolve;
 pub(crate) mod run;
+pub(crate) mod sync_state_merge;
 
 pub use commit_plan::*;
 pub use run::*;

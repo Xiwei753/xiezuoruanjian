@@ -675,3 +675,410 @@ fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 4. Issue #762 评论 5830266600：已有冲突在 Target Commit 前被解决，仍会复活
+// ---------------------------------------------------------------------------
+
+/// 构造带预存在冲突的 live project：chapter.md（本轮新冲突 B）+ existing.md（预存在冲突 A）。
+///
+/// `prepare_staging_runs` 从 live seed staging，staging 会带上旧的 conflict A 状态。
+/// 测试在 seed 后、perform_full_sync 前对 live 调 resolve_conflict_*，模拟用户
+/// 在同步开始后、target Commit 前解决冲突。
+fn build_live_project_with_preexisting_conflict(
+    projects_root: &std::path::Path,
+    project_id: &str,
+    chapter_content: &[u8],
+    lww_time: i64,
+    device_id: &str,
+) -> std::path::PathBuf {
+    let live_root = build_live_project(
+        projects_root,
+        project_id,
+        chapter_content,
+        lww_time,
+        device_id,
+    );
+    // 写 existing.md（预存在冲突 A 的本地文件）
+    let existing_path = live_root.join("volumes/v1/chapters/existing.md");
+    std::fs::write(&existing_path, b"local existing content").unwrap();
+    // 记算 local_hash
+    let local_hash = format!("{:x}", md5::compute(b"local existing content"));
+    // 记算 remote_hash（模拟远端版本）
+    let remote_hash = format!("{:x}", md5::compute(b"remote existing content"));
+    // 落盘一条未解决冲突 A
+    let conflict = SyncConflict {
+        local_path: "volumes/v1/chapters/existing.md".to_string(),
+        remote_path: "volumes/v1/chapters/existing.md".to_string(),
+        kind: SyncConflictKind::BothChanged,
+        local_hash,
+        remote_hash,
+        base_hash: "base-existing-hash".to_string(),
+        created_at: 1_000,
+        description: "pre-existing conflict".to_string(),
+        remote_snapshot_path: None,
+    };
+    SyncService::record_sync_conflict(&live_root, conflict, Some("local existing content"))
+        .unwrap();
+    live_root
+}
+
+/// 构造带预存在冲突 + remote snapshot 的 live project（take_remote 测试用）。
+///
+/// 与 [`build_live_project_with_preexisting_conflict`] 的区别：冲突 A 带有
+/// `remote_snapshot_path`，让 `resolve_conflict_take_remote` 能真正 apply
+/// 远端正文到 live（而非走 pending fallback）。
+fn build_live_project_with_preexisting_conflict_and_snapshot(
+    projects_root: &std::path::Path,
+    project_id: &str,
+    chapter_content: &[u8],
+    lww_time: i64,
+    device_id: &str,
+) -> std::path::PathBuf {
+    let live_root = build_live_project(
+        projects_root,
+        project_id,
+        chapter_content,
+        lww_time,
+        device_id,
+    );
+    // 写 existing.md（预存在冲突 A 的本地文件）
+    let existing_path = live_root.join("volumes/v1/chapters/existing.md");
+    std::fs::write(&existing_path, b"local existing content").unwrap();
+    // 写 remote snapshot 文件（take_remote 会读这个文件替换本地正文）
+    let snapshot_rel = "volumes/v1/chapters/existing.md.remote-snapshot";
+    let snapshot_path = live_root.join(snapshot_rel);
+    std::fs::write(&snapshot_path, b"remote existing content").unwrap();
+    // 计算 hashes
+    let local_hash = format!("{:x}", md5::compute(b"local existing content"));
+    let remote_hash = format!("{:x}", md5::compute(b"remote existing content"));
+    // 落盘一条未解决冲突 A（带 remote_snapshot_path）
+    let conflict = SyncConflict {
+        local_path: "volumes/v1/chapters/existing.md".to_string(),
+        remote_path: "volumes/v1/chapters/existing.md".to_string(),
+        kind: SyncConflictKind::BothChanged,
+        local_hash,
+        remote_hash,
+        base_hash: "base-existing-hash".to_string(),
+        created_at: 1_000,
+        description: "pre-existing conflict with snapshot".to_string(),
+        remote_snapshot_path: Some(snapshot_rel.to_string()),
+    };
+    SyncService::record_sync_conflict(&live_root, conflict, Some("local existing content"))
+        .unwrap();
+    live_root
+}
+
+/// Issue #762 评论 5830266600：已有冲突在 Target Commit 前被解决，仍会复活。
+///
+/// 真实顺序：
+/// 1. live 里原本已有冲突 A（p1）
+/// 2. prepare_staging_runs 把旧 state/conflicts 复制进 p1 staging
+/// 3. 在 p1 Commit 前对 live 调 resolve_conflict_keep_local(A)
+/// 4. p1 Transfer/Commit（三方合并应保留 live 的解决结果）
+/// 5. p2 继续同步
+/// 6. 整轮结束
+///
+/// 断言：A 仍已解决、conflicted_files 无 A、known_files[A] 未被 staging 旧值覆盖、
+/// p1 本轮新冲突 B 仍进入 live。
+#[test]
+#[allow(clippy::too_many_lines)]
+fn preexisting_conflict_resolved_before_target_commit_keep_local_is_not_revived() {
+    const CONFLICT_A: &str = "volumes/v1/chapters/existing.md";
+    const CONFLICT_B: &str = "volumes/v1/chapters/chapter.md";
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider = MemoryProvider::new();
+    let tmp = TempDir::new().unwrap();
+    let app_data_root = tmp.path().to_path_buf();
+    let projects_root = app_data_root.join("projects");
+    std::fs::create_dir_all(&projects_root).unwrap();
+
+    // p1: 预存在冲突 A + chapter.md（本轮会与远端冲突 → 新冲突 B）
+    let p1_root = build_live_project_with_preexisting_conflict(
+        &projects_root,
+        "p1",
+        b"local chapter content p1",
+        T,
+        DEVICE_LOCAL,
+    );
+    // p2: 普通冲突（对照）
+    let p2_root = build_live_project(
+        &projects_root,
+        "p2",
+        b"local chapter content p2",
+        T,
+        DEVICE_LOCAL,
+    );
+
+    // 远端 generation：chapter.md 内容不同 → BothChanged
+    write_remote_generation_for(
+        &provider,
+        "p1",
+        GEN_EXISTING,
+        b"remote chapter content p1",
+        T,
+        DEVICE_REMOTE,
+    );
+    write_remote_generation_for(
+        &provider,
+        "p2",
+        GEN_EXISTING,
+        b"remote chapter content p2",
+        T,
+        DEVICE_REMOTE,
+    );
+    let remote_catalog_snapshot = write_remote_catalog_for_projects(
+        &provider,
+        &[
+            ("p1", GEN_EXISTING, T, DEVICE_REMOTE),
+            ("p2", GEN_EXISTING, T, DEVICE_REMOTE),
+        ],
+    );
+
+    let mut plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: true,
+        targets: vec![
+            planned_live_project("p1", p1_root.clone(), T, DEVICE_LOCAL),
+            planned_live_project("p2", p2_root, T, DEVICE_LOCAL),
+        ],
+        app_data_root: app_data_root.clone(),
+        remote_catalog_snapshot,
+    };
+    // 与生产 Phase 2 一致：从 live seed staging（base + staging 克隆）。
+    // 此时 staging 里有旧的 conflict A 状态（从 live 复制）。
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(staging_runs.len(), 2);
+
+    // 在 p1 Commit 前对 live 调 resolve_conflict_keep_local(A)。
+    // 模拟用户在同步开始后、target1 Commit 前解决冲突。
+    // 此时 live 已无冲突 A，但 staging 里有旧的。
+    SyncService::resolve_conflict_keep_local(&p1_root, CONFLICT_A).unwrap();
+
+    // 验证 resolve 确实生效了
+    let p1_state_before = SyncService::load_sync_state(&p1_root).unwrap();
+    assert!(
+        !p1_state_before.conflicted_files.contains(CONFLICT_A),
+        "resolve 后 live 应无冲突 A"
+    );
+    let keep_local_hash = format!("{:x}", md5::compute(b"remote existing content"));
+    assert_eq!(
+        p1_state_before
+            .known_files
+            .get(CONFLICT_A)
+            .map(String::as_str),
+        Some(keep_local_hash.as_str()),
+        "resolve 后 known_files[A] 应为 remote_hash"
+    );
+
+    let api = WriterCoreApi::new(&app_data_root, &projects_root);
+    let result = api
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
+        .unwrap();
+
+    // 断言 1：A 仍已解决（不被 staging 旧状态复活）
+    let p1_conflicts = api.list_sync_conflicts("p1").unwrap();
+    assert!(
+        p1_conflicts.iter().all(|c| c.local_path != CONFLICT_A),
+        "已解决的冲突 A 不应被 staging 旧状态复活"
+    );
+
+    // 断言 2：conflicted_files 无 A
+    let p1_state = SyncService::load_sync_state(&p1_root).unwrap();
+    assert!(
+        !p1_state.conflicted_files.contains(CONFLICT_A),
+        "conflicted_files 不能复活冲突 A"
+    );
+
+    // 断言 3：known_files[A] 未被 staging 旧值覆盖
+    assert_eq!(
+        p1_state.known_files.get(CONFLICT_A).map(String::as_str),
+        Some(keep_local_hash.as_str()),
+        "keep_local 调整的 known_files[A] 不能被旧 staging state 覆盖"
+    );
+
+    // 断言 4：p1 本轮新冲突 B 仍进入 live
+    assert!(
+        p1_conflicts.iter().any(|c| c.local_path == CONFLICT_B),
+        "本轮新冲突 B 应进入 live"
+    );
+    assert!(
+        p1_state.conflicted_files.contains(CONFLICT_B),
+        "conflicted_files 应包含新冲突 B"
+    );
+
+    // 断言 5：p2 的冲突仍然在（对照）
+    let p2_conflicts = api.list_sync_conflicts("p2").unwrap();
+    assert_eq!(p2_conflicts.len(), 1, "p2 自己的冲突必须仍然存在");
+    assert_eq!(
+        result.overall_status, "partial_conflict",
+        "整轮聚合状态反映仍存在的冲突"
+    );
+}
+
+/// Issue #762 评论 5830266600：take_remote 路径——已有冲突在 Target Commit 前被解决，
+/// 仍会复活。
+///
+/// 与 keep_local 测试的区别：用 `resolve_conflict_take_remote` 解决冲突 A。
+/// take_remote 除了 conflict metadata 还会改 live 正文/known_files，
+/// 最容易暴露旧 staging 覆盖问题。
+#[test]
+#[allow(clippy::too_many_lines)]
+fn preexisting_conflict_resolved_before_target_commit_take_remote_is_not_revived() {
+    const CONFLICT_A: &str = "volumes/v1/chapters/existing.md";
+    const CONFLICT_B: &str = "volumes/v1/chapters/chapter.md";
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider = MemoryProvider::new();
+    let tmp = TempDir::new().unwrap();
+    let app_data_root = tmp.path().to_path_buf();
+    let projects_root = app_data_root.join("projects");
+    std::fs::create_dir_all(&projects_root).unwrap();
+
+    // p1: 预存在冲突 A（带 remote snapshot）+ chapter.md（本轮新冲突 B）
+    let p1_root = build_live_project_with_preexisting_conflict_and_snapshot(
+        &projects_root,
+        "p1",
+        b"local chapter content p1",
+        T,
+        DEVICE_LOCAL,
+    );
+    // p2: 普通冲突（对照）
+    let p2_root = build_live_project(
+        &projects_root,
+        "p2",
+        b"local chapter content p2",
+        T,
+        DEVICE_LOCAL,
+    );
+
+    write_remote_generation_for(
+        &provider,
+        "p1",
+        GEN_EXISTING,
+        b"remote chapter content p1",
+        T,
+        DEVICE_REMOTE,
+    );
+    write_remote_generation_for(
+        &provider,
+        "p2",
+        GEN_EXISTING,
+        b"remote chapter content p2",
+        T,
+        DEVICE_REMOTE,
+    );
+    let remote_catalog_snapshot = write_remote_catalog_for_projects(
+        &provider,
+        &[
+            ("p1", GEN_EXISTING, T, DEVICE_REMOTE),
+            ("p2", GEN_EXISTING, T, DEVICE_REMOTE),
+        ],
+    );
+
+    let mut plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: true,
+        targets: vec![
+            planned_live_project("p1", p1_root.clone(), T, DEVICE_LOCAL),
+            planned_live_project("p2", p2_root, T, DEVICE_LOCAL),
+        ],
+        app_data_root: app_data_root.clone(),
+        remote_catalog_snapshot,
+    };
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(staging_runs.len(), 2);
+
+    // 在 p1 Commit 前对 live 调 resolve_conflict_take_remote(A)。
+    // take_remote 会用 remote snapshot 替换本地正文，并更新 known_files。
+    let applied = SyncService::resolve_conflict_take_remote(&p1_root, CONFLICT_A).unwrap();
+    assert!(applied, "take_remote 应已立即应用（有 remote snapshot）");
+
+    // 验证 resolve 确实生效了
+    let p1_state_before = SyncService::load_sync_state(&p1_root).unwrap();
+    assert!(
+        !p1_state_before.conflicted_files.contains(CONFLICT_A),
+        "resolve 后 live 应无冲突 A"
+    );
+    let take_remote_hash = format!("{:x}", md5::compute(b"remote existing content"));
+    assert_eq!(
+        p1_state_before
+            .known_files
+            .get(CONFLICT_A)
+            .map(String::as_str),
+        Some(take_remote_hash.as_str()),
+        "resolve 后 known_files[A] 应为 remote_hash"
+    );
+    // 验证本地正文已被替换为远端版本
+    let existing_content = std::fs::read_to_string(p1_root.join(CONFLICT_A)).unwrap();
+    assert_eq!(
+        existing_content, "remote existing content",
+        "take_remote 后本地正文应替换为远端版本"
+    );
+
+    let api = WriterCoreApi::new(&app_data_root, &projects_root);
+    let result = api
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
+        .unwrap();
+
+    // 断言 1：A 仍已解决（不被 staging 旧状态复活）
+    let p1_conflicts = api.list_sync_conflicts("p1").unwrap();
+    assert!(
+        p1_conflicts.iter().all(|c| c.local_path != CONFLICT_A),
+        "已解决的冲突 A 不应被 staging 旧状态复活（take_remote 路径）"
+    );
+
+    // 断言 2：conflicted_files 无 A
+    let p1_state = SyncService::load_sync_state(&p1_root).unwrap();
+    assert!(
+        !p1_state.conflicted_files.contains(CONFLICT_A),
+        "conflicted_files 不能复活冲突 A（take_remote 路径）"
+    );
+
+    // 断言 3：known_files[A] 未被 staging 旧值覆盖
+    assert_eq!(
+        p1_state.known_files.get(CONFLICT_A).map(String::as_str),
+        Some(take_remote_hash.as_str()),
+        "take_remote 调整的 known_files[A] 不能被旧 staging state 覆盖"
+    );
+
+    // 断言 4：本地正文未被 staging 旧值覆盖
+    let existing_after = std::fs::read_to_string(p1_root.join(CONFLICT_A)).unwrap();
+    assert_eq!(
+        existing_after, "remote existing content",
+        "take_remote 替换的本地正文不能被旧 staging 覆盖"
+    );
+
+    // 断言 5：p1 本轮新冲突 B 仍进入 live
+    assert!(
+        p1_conflicts.iter().any(|c| c.local_path == CONFLICT_B),
+        "本轮新冲突 B 应进入 live"
+    );
+    assert!(
+        p1_state.conflicted_files.contains(CONFLICT_B),
+        "conflicted_files 应包含新冲突 B"
+    );
+
+    // 断言 6：p2 的冲突仍然在（对照）
+    let p2_conflicts = api.list_sync_conflicts("p2").unwrap();
+    assert_eq!(p2_conflicts.len(), 1, "p2 自己的冲突必须仍然存在");
+    assert_eq!(
+        result.overall_status, "partial_conflict",
+        "整轮聚合状态反映仍存在的冲突"
+    );
+}

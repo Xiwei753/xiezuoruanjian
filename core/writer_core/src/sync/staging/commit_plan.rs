@@ -4,17 +4,25 @@ use std::path::PathBuf;
 ///
 ///   拆 `content_actions` `engine_state_actions`。
 /// - `content_actions`：用户内容（正文、元数据、缓存）的写回动作。
-/// - `engine_state_actions`：同步引擎自身状态（manifest.sync.json、
-///   state.local.json、conflicts.json）的写回动作。
+/// - `engine_state_actions`：同步引擎自身状态（`manifest.sync.json`）的写回动作。
+///   `state.local.json` / `conflicts.json` 不在此列——它们走三方语义合并
+///   （[`Self::needs_sync_state_merge`]），避免用户在同步期间解决的冲突被
+///   staging 旧基线覆盖复活（Issue #762 评论 5830266600）。
 ///
 /// 两类最后用同一个 `SaveTransaction` 一次写回 live，不另起第二套保存路径。
 #[derive(Default, Debug)]
 pub struct CommitPlan {
     /// 用户内容写回动作：local==base 时安全应用 incoming（含 incoming 独有新增）。
     pub content_actions: Vec<CommitAction>,
-    /// 引擎状态写回动作：app-meta/sync/manifest.sync.json、state.local.json、
-    /// conflicts.json 等。Transfer 在 staging 里更新了它们，Commit 必须写回 live。
+    /// 引擎状态写回动作：`app-meta/sync/manifest.sync.json`。
+    /// Transfer 在 staging 里更新了它，Commit 必须写回 live。
+    /// `state.local.json` / `conflicts.json` 不在此列——走三方语义合并。
     pub engine_state_actions: Vec<CommitAction>,
+    /// 是否需要对 `state.local.json` / `conflicts.json` 做三方语义合并。
+    /// true 时调用方应调
+    /// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
+    /// 并在同一 tx 里提交合并结果，而不是从 `engine_state_actions` 直接 apply。
+    pub needs_sync_state_merge: bool,
     /// incoming==base，保留 local（无需动作，记录供诊断）。
     pub keep_local: Vec<PathBuf>,
     /// local==incoming，内容相同，无需操作。
@@ -68,16 +76,25 @@ pub enum CommitAction {
 /// 与 [`ContentClass`]（远端同步语义）正交。决定 Transfer 在 staging 里产生的
 /// 哪些本地状态必须写回 live：
 /// - `Content`：用户内容，走三方比较/LWW 决策。
-/// - `EngineState`：同步引擎自身状态（manifest/state/conflicts），直接写回 live。
+/// - `EngineState`：同步引擎自身状态（`manifest.sync.json`），直接写回 live。
+/// - `EngineStateMerge`：需要三方语义合并的引擎状态（`state.local.json`、
+///   `conflicts.json`）。不能直接 apply incoming——用户在同步期间解决的冲突
+///   会被 staging 旧基线覆盖复活（Issue #762 评论 5830266600）。
 /// - `Skip`：永不进 commit（.git/、full-sync-staging/、app-meta/transactions/、
 ///   config.local.json、secrets）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StagingCommitClass {
     /// 用户内容：正文、元数据、缓存。走三方比较/LWW 决策。
     Content,
-    /// 引擎状态：manifest.sync.json、state.local.json、conflicts.json。
-    /// Transfer 在 staging 里更新了它们，Commit 必须写回 live。
+    /// 引擎状态：`manifest.sync.json`。Transfer 在 staging 里更新了它，
+    /// Commit 必须写回 live。
     EngineState,
+    /// 需要三方语义合并的引擎状态：`state.local.json`、`conflicts.json`。
+    /// 不能直接 apply incoming——用户在同步期间解决的冲突会被 staging 旧基线
+    /// 覆盖复活（Issue #762 评论 5830266600）。调用方应调
+    /// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
+    /// 并在同一 tx 里提交合并结果。
+    EngineStateMerge,
     /// 永不进 commit：.git/、full-sync-staging/、app-meta/transactions/、
     /// config.local.json、secrets。
     Skip,
@@ -120,11 +137,15 @@ pub(crate) fn classify_staging_commit_path(raw_path: &str) -> StagingCommitClass
     }
 
     // EngineState：同步引擎自身状态，Transfer 在 staging 里更新了它们，Commit 必须写回 live。
-    if path == "app-meta/sync/manifest.sync.json"
-        || path == "app-meta/sync/state.local.json"
-        || path == "app-meta/sync/conflicts.json"
-    {
+    // manifest.sync.json 继续走 EngineState 直接写回（同步引擎管理的远端 LWW 元数据）。
+    if path == "app-meta/sync/manifest.sync.json" {
         return StagingCommitClass::EngineState;
+    }
+    // state.local.json / conflicts.json 走三方语义合并——
+    // 用户在同步期间解决的冲突不能被 staging 旧基线覆盖复活
+    // （Issue #762 评论 5830266600）。
+    if path == "app-meta/sync/state.local.json" || path == "app-meta/sync/conflicts.json" {
+        return StagingCommitClass::EngineStateMerge;
     }
 
     // 平台配置/凭证：不从 staging 覆盖 live（设备专属）。
@@ -171,6 +192,11 @@ pub(crate) fn apply_incoming(
     match class {
         StagingCommitClass::EngineState => plan.engine_state_actions.push(action),
         StagingCommitClass::Content => plan.content_actions.push(action),
+        StagingCommitClass::EngineStateMerge => {
+            // EngineStateMerge 路径不通过 apply_incoming 写回——
+            // 调用方（compute_commit_plan）应设 needs_sync_state_merge=true
+            // 并 continue，不调 apply_incoming。此分支防御性丢弃。
+        }
         StagingCommitClass::Skip => {
             // classify_staging_commit_path 已过滤 Skip，不应到达此处。
             // 防御性丢弃，不写回 live。

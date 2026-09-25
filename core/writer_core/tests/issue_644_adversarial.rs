@@ -125,7 +125,8 @@ fn adv_p1_manifest_sync_json_goes_to_engine_state_actions() {
     );
 }
 
-/// 对抗式：state.local.json 同样必须进 engine_state_actions。
+/// 对抗式：state.local.json 走三方语义合并（Issue #762 评论 5830266600），
+/// 不再进 engine_state_actions 直接 apply incoming。
 #[test]
 fn adv_p1_state_local_json_goes_to_engine_state_actions() {
     let tmp = TempDir::new().unwrap();
@@ -140,13 +141,19 @@ fn adv_p1_state_local_json_goes_to_engine_state_actions() {
 
     let plan = run.compute_commit_plan(&live).unwrap();
 
+    // Issue #762 评论 5830266600：state.local.json 不再直接 apply incoming，
+    // 改走三方语义合并，避免用户在同步期间解决的冲突被 staging 旧基线覆盖复活。
+    assert!(
+        plan.needs_sync_state_merge,
+        "对抗式失败：state.local.json 必须触发 needs_sync_state_merge"
+    );
     let in_engine_state = plan
         .engine_state_actions
         .iter()
         .any(|a| matches!(a, CommitAction::Apply { rel_path, .. } if rel_path.to_string_lossy() == state));
     assert!(
-        in_engine_state,
-        "对抗式失败：state.local.json 必须在 engine_state_actions 里"
+        !in_engine_state,
+        "对抗式失败：state.local.json 不应在 engine_state_actions 里（走三方合并）"
     );
 }
 
@@ -316,9 +323,11 @@ fn adv_p1_engine_state_writes_incoming_content_not_base() {
 // ════════════════════════════════════════════════════════════════════════════
 
 /// 对抗式：PartialConflict 时已安全完成的非冲突文件 project.json 落到 live，
-/// 冲突元数据 conflicts.json 也落到 live。
+/// 冲突元数据 conflicts.json 也落到 live（经三方语义合并）。
 #[test]
 fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
+    use writer_core::sync::types::{SyncConflict, SyncConflictKind, SyncState};
+
     let tmp = TempDir::new().unwrap();
     let app_data = tmp.path().join("app-data");
     let projects = tmp.path().join("projects");
@@ -327,6 +336,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
 
     let project_json = "project.json";
     let conflicts_json = "app-meta/sync/conflicts.json";
+    let state_local = "app-meta/sync/state.local.json";
 
     // live = base
     write_rel(&project_live, project_json, "base-content");
@@ -335,8 +345,27 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
         .unwrap();
     // Transfer 在 staging 写入 project.json 远端更新（非冲突文件，已安全下载）
     write_rel(&run.staging_root(), project_json, "incoming-updated");
-    // staging 里也写了冲突元数据
-    write_rel(&run.staging_root(), conflicts_json, "new-conflicts-meta");
+    // staging 里也写了冲突元数据（有效 JSON，经三方合并后应落 live）
+    let conflict = SyncConflict {
+        local_path: "volumes/v1/chapters/c1.md".to_string(),
+        remote_path: "volumes/v1/chapters/c1.md".to_string(),
+        kind: SyncConflictKind::BothChanged,
+        local_hash: "local".to_string(),
+        remote_hash: "remote".to_string(),
+        base_hash: "base".to_string(),
+        created_at: 1,
+        description: "test conflict".to_string(),
+        remote_snapshot_path: None,
+    };
+    let conflicts_json_content = serde_json::to_string_pretty(&vec![conflict.clone()]).unwrap();
+    write_rel(&run.staging_root(), conflicts_json, &conflicts_json_content);
+    // staging 也需要 state.local.json，否则 merge_sync_state_three_way 会 early-return
+    let staging_state = SyncState::default();
+    write_rel(
+        &run.staging_root(),
+        state_local,
+        &serde_json::to_string_pretty(&staging_state).unwrap(),
+    );
 
     let transfer_result = FullSyncTransferResult {
         targets: vec![TargetSyncResult {
@@ -359,11 +388,18 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
         live_project, "incoming-updated",
         "对抗式失败：PartialConflict 时已安全完成的非冲突文件 project.json 应落 live"
     );
-    // 对抗式断言2：冲突元数据 conflicts.json 落到 live
-    let live_conflicts = fs::read_to_string(project_live.join(conflicts_json)).unwrap();
+    // 对抗式断言2：冲突元数据 conflicts.json 落到 live（经三方合并后）
+    let live_conflicts_str = fs::read_to_string(project_live.join(conflicts_json)).unwrap();
+    let live_conflicts: Vec<SyncConflict> =
+        serde_json::from_str(&live_conflicts_str).unwrap_or_default();
     assert_eq!(
-        live_conflicts, "new-conflicts-meta",
-        "对抗式失败：PartialConflict 时冲突元数据 conflicts.json 应落 live"
+        live_conflicts.len(),
+        1,
+        "对抗式失败：PartialConflict 时冲突元数据 conflicts.json 应落 live（含 1 条冲突）"
+    );
+    assert_eq!(
+        live_conflicts[0].local_path, conflict.local_path,
+        "对抗式失败：落 live 的冲突路径应与 staging 一致"
     );
 }
 

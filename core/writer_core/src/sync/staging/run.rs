@@ -224,10 +224,10 @@ impl StagingRun {
                     continue;
                 }
                 StagingCommitClass::EngineState => {
-                    // app-meta/sync/manifest.sync.json、app-meta/sync/state.local.json、
-                    // app-meta/sync/conflicts.json：Transfer 在 staging 里更新了它们，
-                    // Commit 必须写回 live。直接 apply incoming（无三方比较——这些是
-                    // 同步引擎自己产生的状态，staging 里的就是最新权威值）。
+                    // app-meta/sync/manifest.sync.json：
+                    // Transfer 在 staging 里更新了它，Commit 必须写回 live。
+                    // 直接 apply incoming（无三方比较——这是同步引擎自己产生的状态，
+                    // staging 里的就是最新权威值）。
                     let staging_path = staging_root.join(&rel);
                     let incoming: Option<Vec<u8>> = if staging_path.exists() {
                         Some(read_bytes(&staging_path)?)
@@ -235,6 +235,15 @@ impl StagingRun {
                         None
                     };
                     apply_incoming(&mut plan, rel, incoming, StagingCommitClass::EngineState);
+                    continue;
+                }
+                StagingCommitClass::EngineStateMerge => {
+                    // app-meta/sync/state.local.json、app-meta/sync/conflicts.json：
+                    // 不能直接 apply incoming——用户在同步期间解决的冲突会被
+                    // staging 旧基线覆盖复活（Issue #762 评论 5830266600）。
+                    // 标记 needs_sync_state_merge=true，由调用方调
+                    // merge_sync_state_three_way 做三方语义合并。
+                    plan.needs_sync_state_merge = true;
                     continue;
                 }
                 StagingCommitClass::Content => {

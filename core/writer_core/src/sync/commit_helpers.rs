@@ -86,10 +86,119 @@ pub(crate) fn apply_commit_plan_to_live(
     Ok(tx)
 }
 
+/// 带 sync state 三方语义合并的 commit plan 写回 live。
+///
+/// 与 [`apply_commit_plan_to_live`] 的区别：`state.local.json` 和
+/// `conflicts.json` 不从 `engine_state_actions` 直接 apply incoming，
+/// 而是用 `merged_state` / `merged_conflicts`（由
+/// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
+/// 产出）在同一个 `SaveTransaction` 里提交。
+///
+/// `engine_state_actions` 此时只剩 `manifest.sync.json`（`state.local.json` /
+/// `conflicts.json` 已被 `compute_commit_plan` 排除，走 `EngineStateMerge` 分支）。
+///
+/// Issue #762 评论 5830266600：用户在同步期间解决的冲突不能被 staging 旧基线
+/// 覆盖复活。
+pub(crate) fn apply_commit_plan_with_sync_state_merge(
+    live_root: &Path,
+    content_actions: &[crate::sync::staging::CommitAction],
+    engine_state_actions: &[crate::sync::staging::CommitAction],
+    merged_state: &crate::sync::types::SyncState,
+    merged_conflicts: &[crate::sync::types::SyncConflict],
+    backup_mode: bool,
+) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+    if content_actions.is_empty() && engine_state_actions.is_empty() && !backup_mode {
+        return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
+    }
+    let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
+    if backup_mode {
+        tx.enable_backup_mode();
+    }
+    // engine_state_actions 只剩 manifest.sync.json。
+    for action in engine_state_actions {
+        match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_bytes(&rel_str, content)?;
+            }
+            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_delete(&rel_str);
+            }
+        }
+    }
+    // 合并后的 state.local.json + conflicts.json。
+    let state_json = serde_json::to_string_pretty(merged_state)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let conflicts_json = serde_json::to_string_pretty(merged_conflicts)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
+    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
+    // content_actions（安全正文）。
+    for action in content_actions {
+        match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, content } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_bytes(&rel_str, content)?;
+            }
+            crate::sync::staging::CommitAction::Delete { rel_path } => {
+                let rel_str = rel_path.to_string_lossy();
+                tx.add_delete(&rel_str);
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(tx)
+}
+
 pub(crate) enum TargetCommitResult {
     Ok,
     Skipped,
     Failed(String),
+}
+
+/// 根据 `plan.needs_sync_state_merge` 选择走三方语义合并还是直接 apply。
+///
+/// - `needs_sync_state_merge == true`：调
+///   [`merge_sync_state_three_way`] 得到合并后的 state/conflicts，
+///   再调 [`apply_commit_plan_with_sync_state_merge`] 在同一个 tx 里提交。
+/// - `needs_sync_state_merge == false`：走原 [`apply_commit_plan_to_live`]。
+///
+/// `content_actions` 由调用方过滤（`ConflictMetadataOnly` 会过滤掉 transfer
+/// 冲突路径），`engine_state_actions` 直接用 `plan.engine_state_actions`
+/// （只剩 `manifest.sync.json`）。
+fn apply_commit_plan_with_optional_merge(
+    run: &crate::sync::staging::StagingRun,
+    live_root: &Path,
+    plan: &crate::sync::staging::CommitPlan,
+    content_actions: &[crate::sync::staging::CommitAction],
+    backup_mode: bool,
+) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+    if plan.needs_sync_state_merge {
+        let base_root = run.base_root();
+        let staging_root = run.staging_root();
+        let (merged_state, merged_conflicts) =
+            crate::sync::staging::sync_state_merge::merge_sync_state_three_way(
+                &base_root,
+                live_root,
+                &staging_root,
+            )?;
+        apply_commit_plan_with_sync_state_merge(
+            live_root,
+            content_actions,
+            &plan.engine_state_actions,
+            &merged_state,
+            &merged_conflicts,
+            backup_mode,
+        )
+    } else {
+        apply_commit_plan_to_live(
+            live_root,
+            content_actions,
+            &plan.engine_state_actions,
+            backup_mode,
+        )
+    }
 }
 
 /// 在 staging cleanup 前，对 plan.conflict 的每个 StagingConflict 读取 incoming
@@ -240,15 +349,16 @@ pub(crate) fn apply_staging_commits_for_targets(
                     }
                 };
 
-                let mut tx = match apply_commit_plan_to_live(
+                let mut tx = match apply_commit_plan_with_optional_merge(
+                    run,
                     live_root,
+                    &plan,
                     &plan.content_actions,
-                    &plan.engine_state_actions,
                     false,
                 ) {
                     Ok(tx) => tx,
                     Err(e) => {
-                        let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                        let msg = format!("apply_commit_plan failed: {}", e);
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                         target_results.push(TargetCommitResult::Failed(msg));
                         target_conflicts.push(Vec::new());
@@ -340,15 +450,16 @@ pub(crate) fn apply_staging_commits_for_targets(
                     })
                     .cloned()
                     .collect();
-                if let Err(e) = apply_commit_plan_to_live(
+                if let Err(e) = apply_commit_plan_with_optional_merge(
+                    run,
                     live_root,
+                    &plan,
                     &safe_content_actions,
-                    &plan.engine_state_actions,
                     false,
                 )
                 .map(|_tx| ())
                 {
-                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    let msg = format!("apply_commit_plan failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     target_results.push(TargetCommitResult::Failed(msg));
                     target_conflicts.push(Vec::new());
@@ -585,15 +696,16 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
 
-            let mut tx = match apply_commit_plan_to_live(
+            let mut tx = match apply_commit_plan_with_optional_merge(
+                run,
                 live_root,
+                &plan,
                 &plan.content_actions,
-                &plan.engine_state_actions,
                 false,
             ) {
                 Ok(tx) => tx,
                 Err(e) => {
-                    let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                    let msg = format!("apply_commit_plan failed: {}", e);
                     log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                     return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                 }
@@ -657,15 +769,16 @@ pub(crate) fn commit_single_target_staging(
                 })
                 .cloned()
                 .collect();
-            if let Err(e) = apply_commit_plan_to_live(
+            if let Err(e) = apply_commit_plan_with_optional_merge(
+                run,
                 live_root,
+                &plan,
                 &safe_content_actions,
-                &plan.engine_state_actions,
                 false,
             )
             .map(|_tx| ())
             {
-                let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                let msg = format!("apply_commit_plan failed: {}", e);
                 log::warn!("Staging commit: {} for run {}", msg, run.run_id());
                 return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
             }
