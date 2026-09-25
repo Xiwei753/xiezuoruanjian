@@ -155,8 +155,43 @@ impl SyncProgressSink {
     ///
     /// 用于 generation GC / Commit 等非 target 阶段，让诊断包能区分
     /// 同步卡在 transfer / generation_gc / commit 哪一步（Issue #763）。
+    ///
+    /// 注意：该方不清 `current_target_remote_prefix` / `current_project_id`，
+    /// 在 generation GC / Commit 等需要重置或精确指向当前 target 的场景应改用
+    /// `set_target_phase` / `set_global_phase`（Issue #763 评论 5831610228）。
     pub fn set_phase(&self, phase: &str) {
         if let Ok(mut g) = self.inner.lock() {
+            g.current_phase = Some(phase.to_string());
+        }
+    }
+
+    /// target 级阶段：更新 `remote_prefix` / `project_id` / `phase`。
+    ///
+    /// 用于 generation GC 循环里每处理一个 planned target 时，
+    /// 让诊断包能准确指向"当前卡在哪个作品的哪一步"
+    /// （Issue #763 评论 5831610228）。
+    ///
+    /// 不更新 `finished_targets` / `total_targets`：GC 复用 Transfer 已完成的总数，
+    /// 不把 GC 当成新的 target 计数。
+    pub fn set_target_phase(&self, remote_prefix: &str, project_id: Option<&str>, phase: &str) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.current_target_remote_prefix = Some(remote_prefix.to_string());
+            g.current_project_id = project_id.map(|s| s.to_string());
+            g.current_phase = Some(phase.to_string());
+        }
+    }
+
+    /// 全局阶段：清 current target，只写 `phase`。
+    ///
+    /// 用于 Commit 等整轮全局操作，语义是"当前处于全局 commit，没有单一 current target"。
+    /// 必须把 `current_target_remote_prefix` 和 `current_project_id` 清成 `None`
+    /// （Issue #763 评论 5831610228）。
+    ///
+    /// 不更新 `finished_targets` / `total_targets`，保留 Transfer 阶段写入的总数。
+    pub fn set_global_phase(&self, phase: &str) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.current_target_remote_prefix = None;
+            g.current_project_id = None;
             g.current_phase = Some(phase.to_string());
         }
     }
@@ -325,5 +360,50 @@ mod tests {
         let snap = sink.snapshot();
         assert_eq!(snap.finished_targets, 2);
         assert_eq!(snap.current_phase.as_deref(), Some("uploading"));
+    }
+
+    // ── Issue #763 评论 5831610228 回归测试 ──
+
+    #[test]
+    fn set_target_phase_updates_target_and_phase() {
+        let sink = SyncProgressSink::new(3);
+        // 先模拟 Transfer 最后处理 p2
+        sink.update_target_start("projects/p2", Some("p2"), "transfer", 1, 3);
+        sink.update_target_finish("projects/p2", Some("p2"), 2, 3);
+        // GC 开始处理 p1
+        sink.set_target_phase("projects/p1", Some("p1"), "generation_gc");
+        let snap = sink.snapshot();
+        assert_eq!(
+            snap.current_target_remote_prefix.as_deref(),
+            Some("projects/p1")
+        );
+        assert_eq!(snap.current_project_id.as_deref(), Some("p1"));
+        assert_eq!(snap.current_phase.as_deref(), Some("generation_gc"));
+        // finished/total 保持 Transfer 的值，不被 GC 重置
+        assert_eq!(snap.finished_targets, 2);
+        assert_eq!(snap.total_targets, 3);
+    }
+
+    #[test]
+    fn set_global_phase_clears_current_target() {
+        let sink = SyncProgressSink::new(3);
+        // 先模拟 Transfer 最后处理 p2
+        sink.update_target_start("projects/p2", Some("p2"), "transfer", 1, 3);
+        sink.update_target_finish("projects/p2", Some("p2"), 2, 3);
+        // 进入全局 commit
+        sink.set_global_phase("commit");
+        let snap = sink.snapshot();
+        assert!(
+            snap.current_target_remote_prefix.is_none(),
+            "commit 应清 current target"
+        );
+        assert!(
+            snap.current_project_id.is_none(),
+            "commit 应清 current project_id"
+        );
+        assert_eq!(snap.current_phase.as_deref(), Some("commit"));
+        // finished/total 保持不变
+        assert_eq!(snap.finished_targets, 2);
+        assert_eq!(snap.total_targets, 3);
     }
 }

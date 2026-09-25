@@ -160,10 +160,9 @@ pub fn run_transfer(
         }
     }
 
-    // Issue #763：generation GC 阶段，更新 progress sink 的 phase。
-    if let Some(sink) = progress {
-        sink.set_phase("generation_gc");
-    }
+    // Issue #763 评论 5831610228：generation GC 阶段不再在循环前用 set_phase 写死 phase，
+    // 改为在循环内每处理一个 planned target 时用 set_target_phase 更新 remote_prefix /
+    // project_id / phase，避免残留最后一个 Transfer target 导致诊断包指错作品。
     for planned in &plan.targets {
         // Issue #729：generation GC 循环内每个 target 前检查取消令牌。
         if let Some(token) = cancellation_token {
@@ -173,6 +172,15 @@ pub fn run_transfer(
                 );
                 break;
             }
+        }
+        // Issue #763 评论 5831610228：generation GC 循环里每处理一个 planned，
+        // 都更新 sink 的 target 信息，避免残留最后一个 Transfer target 指错作品。
+        if let Some(sink) = progress {
+            sink.set_target_phase(
+                &planned.target.remote_prefix,
+                planned.project_id.as_deref(),
+                "generation_gc",
+            );
         }
         if planned.target.remote_prefix.starts_with("projects/") {
             let active_generation = crate::sync::target_lifecycle::find_record(

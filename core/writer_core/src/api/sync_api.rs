@@ -552,10 +552,10 @@ impl WriterCoreApi {
             }
         }
 
-        // Issue #763：Commit 阶段，更新 progress sink 的 phase。
-        // 拿不到当前 target 时至少明确写出 phase，不留 null。
+        // Issue #763 评论 5831610228：Commit 是整轮全局操作，清 current target，
+        // 只写 phase = "commit"，语义是"当前处于全局 commit，没有单一 current target"。
         if let Some(sink) = progress.as_ref() {
-            sink.set_phase("commit");
+            sink.set_global_phase("commit");
         }
 
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
