@@ -10,6 +10,8 @@ import { NavigationTransactionCoordinator } from '../../../app/navigation/Naviga
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
 import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -37,6 +39,9 @@ export struct WorkspaceScreen {
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
+  // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
+  // 获得 HDS 沉浸光感材质效果。
+  @Local useHdsNav: boolean = false
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -44,6 +49,8 @@ export struct WorkspaceScreen {
 
   aboutToAppear() {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
+    // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     const navPathStack = this.navCoordinator.getNavPathStack()
     if (navPathStack) {
       const paramsArr = navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
@@ -225,49 +232,72 @@ export struct WorkspaceScreen {
 
   // ========== 构建 UI ==========
 
-  build() {
-    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    // Issue #768：启用 NavDestination 原生标题栏，显示项目名和系统返回按钮。
-    NavDestination() {
-      Stack() {
-        Column() {
-          if (this.adaptiveState.sizeClass === WidthClass.Compact) {
-            // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
-            this.CompactWorkspaceLayout()
-          } else if (this.adaptiveState.isTwoPane) {
-            // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
-            // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
-            this.TwoPaneLayout()
-          } else {
-            // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
-            // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
-            // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
-            this.LegacySinglePaneLayout()
-          }
-        }
-        .width('100%')
-        .height('100%')
-        // ── 对话框层 ──
-        if (this.viewModel.renameTarget !== null) {
-          this.RenameDialog()
-        }
-        if (this.viewModel.deleteTarget !== null) {
-          this.DeleteConfirmDialog()
+  // Issue #768 评论5835171266 第3项：NavDestination 内容部分抽取为 @Builder，
+  // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
+  @Builder
+  NavContent() {
+    Stack() {
+      Column() {
+        if (this.adaptiveState.sizeClass === WidthClass.Compact) {
+          // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
+          this.CompactWorkspaceLayout()
+        } else if (this.adaptiveState.isTwoPane) {
+          // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
+          // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
+          this.TwoPaneLayout()
+        } else {
+          // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
+          // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
+          // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
+          this.LegacySinglePaneLayout()
         }
       }
       .width('100%')
       .height('100%')
+      // ── 对话框层 ──
+      if (this.viewModel.renameTarget !== null) {
+        this.RenameDialog()
+      }
+      if (this.viewModel.deleteTarget !== null) {
+        this.DeleteConfirmDialog()
+      }
     }
-    // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮和沉浸光感材质）
-    .hideTitleBar(false)
-    .title(this.viewModel.projectName)
-    .onBackPressed(() => {
-      this.handleBack()
-      return true
-    })
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace)
-    })
+    .width('100%')
+    .height('100%')
+  }
+
+  build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // Issue #768：启用 NavDestination 原生标题栏，显示项目名和系统返回按钮。
+    // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
+    // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
+    if (this.useHdsNav) {
+      HdsNavDestination() {
+        this.NavContent()
+      }
+      .hideTitleBar(false)
+      .titleBar({ content: { title: { mainTitle: this.viewModel.projectName } } } as HdsNavigationTitleBarOptions)
+      .onBackPressed(() => {
+        this.handleBack()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0)
+      })
+    } else {
+      NavDestination() {
+        this.NavContent()
+      }
+      .hideTitleBar(false)
+      .title(this.viewModel.projectName)
+      .onBackPressed(() => {
+        this.handleBack()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0)
+      })
+    }
   }
 
   // ────────────────────────────────────────

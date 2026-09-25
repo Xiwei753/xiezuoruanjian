@@ -26,10 +26,15 @@ import { EditorLayoutIdentity } from './editor_layout_identity'
 export type NavigationLine = LineLayout
 
 // 带身份的行布局状态。
+// Issue #768 评论5835171266 第4项：新增 systemLayoutManager 字段。
+// 当此字段非 null 时，Up/Down 行导航用系统 LayoutManager API 取真实 x/offset，
+// 不依赖 caretStops（系统行的 caretStops 为空数组）。
 export interface LineLayoutState extends EditorLayoutIdentity {
   readonly contentWidth: number
   readonly fontSize: number
   readonly lines: NavigationLine[]
+  // 系统 LayoutManager 引用。非 null 时行导航用系统 API；null 时回退到 caretStops 方案。
+  readonly systemLayoutManager: LayoutManager | null
 }
 
 export class LineNavigationResolver {
@@ -165,12 +170,49 @@ export class LineNavigationResolver {
     return offsetForHorizontal(stops, x)
   }
 
+  // ── Issue #768 评论5835171266 第4项：系统 LayoutManager 行导航 API ──
+  // 系统行的 caretStops 为空数组，Up/Down 行导航不能依赖 caretStops。
+  // 当 state.systemLayoutManager 非 null 时，用系统 API 取真实 x/offset。
+
+  /**
+   * 从系统 LayoutManager 获取当前光标的 x 坐标。
+   * 用 getRectsForRange(offset, offset+1) 取 rect，返回 rect.x。
+   * 失败时返回 0（回退到行首）。
+   */
+  static getCaretXFromSystem(layout: LayoutManager, cursorUtf16: number): number {
+    try {
+      const rects = layout.getRectsForRange(cursorUtf16, cursorUtf16 + 1)
+      if (rects.length > 0) {
+        return rects[0].x
+      }
+    } catch (_e) {
+      // getRectsForRange 失败时回退到 0
+    }
+    return 0
+  }
+
+  /**
+   * 从系统 LayoutManager 获取目标行最接近 targetX 的 offset。
+   * 用 getGlyphPositionAtCoordinate(targetX, targetLineY) 取 offset。
+   * 失败时返回目标行 startUtf16（回退到行首）。
+   */
+  static getNearestOffsetFromSystem(layout: LayoutManager, targetX: number, targetLineY: number): number {
+    try {
+      return layout.getGlyphPositionAtCoordinate(targetX, targetLineY)
+    } catch (_e) {
+      // getGlyphPositionAtCoordinate 失败时回退到行首
+    }
+    return 0
+  }
+
   /**
    * Issue #768 任务10：从系统 LayoutManager 数据构建 LineLayoutState。
    *
    * 从系统 LineMetrics 构建 LineLayout[]（含 y/height/breakKind），
    * 然后构造 LineLayoutState。系统行的 caretStops 为空数组
    *（因为系统行的 caret stops 由 LayoutManager 管理，不需要自计算）。
+   * Issue #768 评论5835171266 第4项：把 layout 引用写入 systemLayoutManager，
+   * 让行导航可以直接用系统 API。
    */
   static buildLayoutStateFromSystem(
     layout: LayoutManager,
@@ -222,6 +264,7 @@ export class LineNavigationResolver {
       contentWidth,
       fontSize: snapshot.fontSize,
       lines: systemLines,
+      systemLayoutManager: layout,
     }
   }
 }

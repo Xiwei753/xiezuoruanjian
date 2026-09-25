@@ -1,12 +1,12 @@
 // HdsPrimaryTabsApi23 — API23+ 一级底部导航壳层，使用 HdsTabs 悬浮页签。
 // Issue #768：API23+ 改用 UI Design Kit 的 HdsTabs 替代普通 Tabs + BottomTabBarStyle。
-// 三个 tab 仍复用现有 home/starMap/stats 三个 NavPathStack，只替换平台 chrome，不重建业务导航状态。
+// Issue #768 评论5835171266 第1项：不再自己创建 NavPathStack、不注册 coordinator、
+// 不创建 @Link @Watch currentTab、不 @Provide activeStack。
+// 三个 NavPathStack 由父组件 PrimaryTabShell 唯一持有并传入，currentTab 通过 @Link 双向绑定
+// 回父组件（不加 @Watch，不写 coordinator），切 tab 时只有 PrimaryTabShell 的 @Watch 触发 syncActiveTab。
 //
-// 与 PrimaryTabShell 的差异：
-// - 使用 HdsTabs（悬浮页签）替代普通 Tabs
-// - safeBottomVp 由外部传入（来自 AdaptiveState），不在组件内部订阅 AdaptiveContext
-// - currentShowPrimaryNav 由外部传入，不在组件内部订阅 NavigationChromeStore / ScreenPolicyBridge
-// - 主题/响应式观察者由外部管理，此组件只负责渲染
+// Issue #768 评论5835171266 第3项：HdsTabs 加 barFloatingStyle + systemMaterialEffect(IMMERSIVE)
+// 实现真正的悬浮沉浸光感效果；Navigation 改为 HdsNavigation。
 
 import { Routes } from '../../Routes'
 import hilog from '@ohos.hilog'
@@ -16,7 +16,7 @@ import { WritingScreen } from '../../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../../feature/starmap/ui/StarMapScreen'
 import { SettingsScreen } from '../../../feature/settings/ui/SettingsScreen'
 import { StatsScreen } from '../../../feature/stats/ui/StatsScreen'
-import { NavigationTransactionCoordinator } from '../../NavigationTransactionCoordinator'
+import { HdsTabsFloatingStyle, hdsMaterial } from '@kit.UIDesignKit'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -28,91 +28,27 @@ const NORMAL_BAR_HEIGHT: number = 56
 // 隐藏底栏时的高度（vp）
 const HIDDEN_BAR_HEIGHT: number = 0
 
-// Issue #767：工厂函数，在字段初始化时创建已经带根路由的 NavPathStack。
-function createStackWithRoot(rootRoute: string): NavPathStack {
-  const stack: NavPathStack = new NavPathStack()
-  stack.pushPath({ name: rootRoute })
-  return stack
-}
-
 @Component
 export struct HdsPrimaryTabsApi23 {
-  // 每个 tab 各自持有自己的 NavPathStack，字段初始化时创建并带根路由。
-  @State homeStack: NavPathStack = createStackWithRoot(Routes.Home)
-  @State starMapStack: NavPathStack = createStackWithRoot(Routes.StarMap)
-  @State statsStack: NavPathStack = createStackWithRoot(Routes.Stats)
+  // Issue #768 评论5835171266 第1项：三个 NavPathStack 由父组件 PrimaryTabShell 传入，
+  // 本组件不创建自己的 stack，不注册 coordinator。
+  // 使用普通变量传递（非 @Prop），因为 NavPathStack 是引用类型，@Prop 会深拷贝导致
+  // 子组件操作的是副本而非原始 stack。普通变量传递引用，Navigation(stack) 直接使用同一实例。
+  homeStack: NavPathStack = new NavPathStack()
+  starMapStack: NavPathStack = new NavPathStack()
+  statsStack: NavPathStack = new NavPathStack()
 
-  // 当前选中的 tab 索引（与 AppNavigation 通过 @Link 共享）
-  @Link @Watch('onCurrentTabChanged') currentTab: number
+  // Issue #768 评论5835171266 第1项：保留 @Link currentTab（用于 HdsTabs 的 index 和 onChange 写入），
+  // 但不加 @Watch、不调 syncActiveTab、不写 coordinator。
+  // HdsTabs.onChange 写 this.currentTab = index → @Link 双向绑定到父组件 →
+  // 父组件 PrimaryTabShell 的 @Watch 触发 syncActiveTab → 只有一处写 coordinator。
+  @Link currentTab: number
 
   // 来自 AdaptiveState 的底部安全区域高度（vp），用于悬浮页签底部间距
   @Prop safeBottomVp: number = 0
 
   // 是否显示一级导航栏，由外部 ScreenPolicy 决定
   @Prop currentShowPrimaryNav: boolean = true
-
-  // @Provide 活动栈，供 @Consume("navPathStack") 的页面使用。
-  @Provide('navPathStack') activeStack: NavPathStack = this.homeStack
-
-  aboutToAppear(): void {
-    hilog.info(0x0000, 'HdsPrimaryTabsApi23', 'aboutToAppear: stacks initialized with root routes')
-
-    // 向 coordinator 显式登记三个 tab 的 NavPathStack。
-    const coordinator = NavigationTransactionCoordinator.getInstance()
-    coordinator.registerTabStack(TAB_HOME, this.homeStack)
-    coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
-    coordinator.registerTabStack(TAB_STATS, this.statsStack)
-
-    // 按真实 currentTab 同步活动栈。
-    this.syncActiveTab(this.currentTab)
-
-    // 注册完 homeStack 后尝试消费待处理的接续恢复。
-    coordinator.tryConsumePendingRestore()
-  }
-
-  aboutToDisappear(): void {
-    // 注销自己持有的三个栈，必须按实例相等再删。
-    const coordinator = NavigationTransactionCoordinator.getInstance()
-    coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
-    coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
-    coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
-  }
-
-  // syncActiveTab 是同步 activeStack 和 Coordinator 的唯一入口。
-  private syncActiveTab(index: number): void {
-    const stack = index === TAB_HOME
-      ? this.homeStack
-      : index === TAB_STARMAP
-        ? this.starMapStack
-        : this.statsStack
-
-    this.activeStack = stack
-    const coordinator = NavigationTransactionCoordinator.getInstance()
-    coordinator.setActiveTab(index)
-    coordinator.setActiveStack(stack)
-    hilog.info(0x0000, 'HdsPrimaryTabsApi23', 'syncActiveTab: index=%{public}d, stack updated', index)
-  }
-
-  // @Watch 回调，currentTab 被父组件程序修改时触发同步。
-  private onCurrentTabChanged(): void {
-    this.syncActiveTab(this.currentTab)
-  }
-
-  // Tabs onChange 切换后只更新 currentTab，由 @Watch 统一触发 syncActiveTab。
-  private onTabChange(index: number): void {
-    this.currentTab = index
-  }
-
-  // 获取指定 tab 的 NavPathStack。
-  getStackForTab(tabIndex: number): NavPathStack {
-    if (tabIndex === TAB_HOME) {
-      return this.homeStack
-    } else if (tabIndex === TAB_STARMAP) {
-      return this.starMapStack
-    } else {
-      return this.statsStack
-    }
-  }
 
   @Builder
   PageMap(name: string) {
@@ -132,12 +68,12 @@ export struct HdsPrimaryTabsApi23 {
   }
 
   build() {
-    // Issue #768：API23+ 使用 HdsTabs 悬浮页签替代普通 Tabs + BottomTabBarStyle。
-    // HdsTabs 是 ArkUI 全局组件（API23+），不需要 import @kit.*。
+    // Issue #768 评论5835171266 第3项：HdsTabs 加 barFloatingStyle 配置悬浮样式，
+    // systemMaterialEffect 设为 IMMERSIVE 实现沉浸光感效果。
     HdsTabs({ barPosition: BarPosition.End, index: this.currentTab }) {
       // 作品 tab（TAB_HOME=0）
       TabContent() {
-        Navigation(this.homeStack) {
+        HdsNavigation(this.homeStack) {
           // 内容由 homeStack 驱动
         }
         .navDestination(this.PageMap)
@@ -148,7 +84,7 @@ export struct HdsPrimaryTabsApi23 {
 
       // 星图 tab（TAB_STARMAP=1）
       TabContent() {
-        Navigation(this.starMapStack) {
+        HdsNavigation(this.starMapStack) {
           // 内容由 starMapStack 驱动
         }
         .navDestination(this.PageMap)
@@ -159,7 +95,7 @@ export struct HdsPrimaryTabsApi23 {
 
       // 统计 tab（TAB_STATS=2）
       TabContent() {
-        Navigation(this.statsStack) {
+        HdsNavigation(this.statsStack) {
           // 内容由 statsStack 驱动
         }
         .navDestination(this.PageMap)
@@ -171,6 +107,10 @@ export struct HdsPrimaryTabsApi23 {
     .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
     // 悬浮页签底部间距跟真实安全区走，不在页面里写死。
     .barMargin({ bottom: this.safeBottomVp })
+    // Issue #768 评论5835171266 第3项：悬浮沉浸光感样式。
+    .barFloatingStyle({
+      systemMaterialEffect: { materialType: hdsMaterial.MaterialType.IMMERSIVE }
+    } as HdsTabsFloatingStyle)
     // 正文/设置页禁止横向滑动切 tab，防止绕过离开事务。
     .scrollable(this.currentShowPrimaryNav)
     .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
@@ -180,7 +120,9 @@ export struct HdsPrimaryTabsApi23 {
       return true
     })
     .onChange((index: number) => {
-      this.onTabChange(index)
+      // Issue #768 评论5835171266 第1项：onChange 只写 currentTab（@Link 双向绑定到父组件），
+      // 父组件 PrimaryTabShell 的 @Watch 会触发 syncActiveTab，不再在此处调 syncActiveTab。
+      this.currentTab = index
     })
     .width('100%')
     .height('100%')

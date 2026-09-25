@@ -90,6 +90,10 @@ export interface EditorRuntimeSnapshot {
   apiLevel: number                      // 当前 API Level
   lastLayoutError: string | null        // 最后一次布局错误信息
   fallbackCount: number                 // fallback 次数累计
+
+  // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
+  isEditorMounted: boolean              // 编辑器是否仍挂载（aboutToDisappear 时设 false）
+  capturedAtMs: number                  // 快照捕获时间戳（Date.now()）
 }
 
 export class EditorRuntimeSnapshotStore {
@@ -116,7 +120,57 @@ export class EditorRuntimeSnapshotStore {
     return this.snapshot
   }
 
-  // 清空快照（组件销毁时）。
+  // Issue #768 评论5835171266 第5项：编辑器卸载时标记 isEditorMounted=false。
+  // 不清空快照，保留最后状态供离页后导出诊断。下次打开编辑器时 updateSnapshot 会覆盖。
+  markEditorUnmounted(): void {
+    if (this.snapshot !== null) {
+      // 构造新快照，把 isEditorMounted 设为 false，其余字段保留。
+      // ArkTS 不支持异构 spread，必须逐字段构造。
+      const old = this.snapshot
+      this.snapshot = {
+        hasActiveSession: old.hasActiveSession,
+        revision: old.revision,
+        generation: old.generation,
+        textUtf8Bytes: old.textUtf8Bytes,
+        textUtf16Length: old.textUtf16Length,
+        cursorByteOffset: old.cursorByteOffset,
+        cursorUtf16Offset: old.cursorUtf16Offset,
+        selectionAnchorByte: old.selectionAnchorByte,
+        selectionHeadByte: old.selectionHeadByte,
+        hasComposition: old.hasComposition,
+        compositionStartByte: old.compositionStartByte,
+        compositionEndByte: old.compositionEndByte,
+        fontSizeVp: old.fontSizeVp,
+        lineSpacingMultiplier: old.lineSpacingMultiplier,
+        effectiveLineHeightVp: old.effectiveLineHeightVp,
+        firstLineIndentEnabled: old.firstLineIndentEnabled,
+        firstLineIndentChars: old.firstLineIndentChars,
+        effectiveFirstLineIndentVp: old.effectiveFirstLineIndentVp,
+        viewportWidthPx: old.viewportWidthPx,
+        viewportHeightPx: old.viewportHeightPx,
+        contentWidthPx: old.contentWidthPx,
+        contentHeightPx: old.contentHeightPx,
+        systemLayoutLineCount: old.systemLayoutLineCount,
+        caretRect: old.caretRect,
+        selectionRectCount: old.selectionRectCount,
+        currentLineMetrics: old.currentLineMetrics,
+        imeAttached: old.imeAttached,
+        editorFocused: old.editorFocused,
+        currentScrollX: old.currentScrollX,
+        currentScrollY: old.currentScrollY,
+        leadingWhitespaceCountOfCurrentParagraph: old.leadingWhitespaceCountOfCurrentParagraph,
+        layoutSource: old.layoutSource,
+        usingLayoutManager: old.usingLayoutManager,
+        apiLevel: old.apiLevel,
+        lastLayoutError: old.lastLayoutError,
+        fallbackCount: old.fallbackCount,
+        isEditorMounted: false,
+        capturedAtMs: old.capturedAtMs,
+      }
+    }
+  }
+
+  // 清空快照（仅在完全重置时使用，aboutToDisappear 不再调用）。
   clear(): void {
     this.snapshot = null
   }

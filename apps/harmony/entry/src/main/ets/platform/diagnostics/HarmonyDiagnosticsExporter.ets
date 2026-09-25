@@ -152,6 +152,9 @@ interface EditorRuntimeAttachment {
   apiLevel: number
   lastLayoutError: string | null
   fallbackCount: number
+  // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
+  isEditorMounted: boolean
+  capturedAtMs: number
 }
 
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
@@ -485,6 +488,8 @@ export class HarmonyDiagnosticsExporter {
           'no editor runtime snapshot available'))
         return
       }
+      // Issue #768 评论5835171266 第5项：isEditorMounted=false 时仍导出快照，
+      // 但在 JSON 中标注编辑器已卸载，诊断方可知晓数据来自离页前的最后状态。
       const attachment: EditorRuntimeAttachment = {
         hasActiveSession: snapshot.hasActiveSession,
         revision: snapshot.revision,
@@ -521,7 +526,9 @@ export class HarmonyDiagnosticsExporter {
         usingLayoutManager: snapshot.usingLayoutManager,
         apiLevel: snapshot.apiLevel,
         lastLayoutError: snapshot.lastLayoutError,
-        fallbackCount: snapshot.fallbackCount
+        fallbackCount: snapshot.fallbackCount,
+        isEditorMounted: snapshot.isEditorMounted,
+        capturedAtMs: snapshot.capturedAtMs,
       }
       const json = JSON.stringify(attachment, null, 2)
       attachments.push(this.makeAttachment(ATTACHMENT_EDITOR_RUNTIME, json))

@@ -123,6 +123,9 @@ export struct SujianEditor {
   // Issue #768：布局来源标记，供诊断快照读取。
   // 'system' = 用系统 LayoutManager，'fallback' = 自计算，'none' = 无布局。
   private lastLayoutSource: string = 'none'
+  // Issue #768 评论5835171266 第5项：真实记录布局错误和 fallback 次数。
+  private lastLayoutError: string | null = null
+  private fallbackCount: number = 0
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
@@ -180,8 +183,9 @@ export struct SujianEditor {
     if (this.viewportController) {
       this.viewportController.unregister()
     }
-    // Issue #768：组件销毁时清空诊断快照，避免导出已销毁编辑器的陈旧状态。
-    EditorRuntimeSnapshotStore.getInstance().clear()
+    // Issue #768 评论5835171266 第5项：不清空快照，标记编辑器已卸载。
+    // 保留最后快照供离页后导出诊断；下次打开编辑器时 updateSnapshot 会覆盖。
+    EditorRuntimeSnapshotStore.getInstance().markEditorUnmounted()
   }
 
   // Issue #768：把当前编辑器运行时状态推送到诊断快照存储。
@@ -241,8 +245,11 @@ export struct SujianEditor {
         layoutSource: 'none',
         usingLayoutManager: false,
         apiLevel: apiLevel,
-        lastLayoutError: null,
-        fallbackCount: 0,
+        lastLayoutError: this.lastLayoutError,
+        fallbackCount: this.fallbackCount,
+        // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
+        isEditorMounted: true,
+        capturedAtMs: Date.now(),
       }
       store.updateSnapshot(emptySnapshot)
       return
@@ -340,8 +347,11 @@ export struct SujianEditor {
       layoutSource: this.lastLayoutSource,
       usingLayoutManager: usingLayoutManager,
       apiLevel: apiLevel,
-      lastLayoutError: null,
-      fallbackCount: 0,
+      lastLayoutError: this.lastLayoutError,
+      fallbackCount: this.fallbackCount,
+      // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
+      isEditorMounted: true,
+      capturedAtMs: Date.now(),
     }
     store.updateSnapshot(fullSnapshot)
   }
@@ -458,6 +468,13 @@ export struct SujianEditor {
       }
 
       // Fallback: 旧的自计算路径（LayoutManager 不可用或无行）
+      // Issue #768 评论5835171266 第5项：记录 fallback 原因和递增计数。
+      this.fallbackCount++
+      if (layout === null || layout === undefined) {
+        this.lastLayoutError = 'LayoutManager unavailable'
+      } else {
+        this.lastLayoutError = 'LayoutManager returned 0 lines'
+      }
       this.refreshRenderLayoutFallback(snap)
     }
   }
@@ -470,45 +487,54 @@ export struct SujianEditor {
     systemLineCount: number,
     snap: EditorLayoutSnapshot,
   ): void {
-    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
-    const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
-      ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
-    const isApi14Plus = PlatformApiResolver.getInstance().isApiAtLeast(14)
+    try {
+      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
+      const visualCaret = this.selectionController?.getVisualCaret(cursorUtf16)
+        ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+      const isApi14Plus = PlatformApiResolver.getInstance().isApiAtLeast(14)
 
-    // measureTextFn：API12-13 fallback 用，API14+ 不需要但保持接口一致
-    const measureUtils = this.getUIContext().getMeasureUtils()
-    const measureTextFn = (s: string): number => {
-      return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+      // measureTextFn：API12-13 fallback 用，API14+ 不需要但保持接口一致
+      const measureUtils = this.getUIContext().getMeasureUtils()
+      const measureTextFn = (s: string): number => {
+        return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+      }
+
+      // 1. 调用 EditorRenderBackend.renderLayoutFromSystem 获取完整渲染结果
+      const result = EditorRenderBackend.renderLayoutFromSystem(
+        layout,
+        systemLineCount,
+        snap,
+        this.contentWidth,
+        visualCaret.affinity,
+        isApi14Plus,
+        measureTextFn,
+      )
+
+      // 2. 更新 renderResult 和几何状态
+      this.renderResult = result
+      this.selectionRects = result.selectionRects
+      this.caretRect = result.caretRect
+      this.compositionUnderlineRects = result.compositionUnderlineRects
+
+      // 3. 更新行级导航解析器（带身份）
+      const layoutState = LineNavigationResolver.buildLayoutStateFromSystem(
+        layout,
+        systemLineCount,
+        snap,
+        this.contentWidth,
+      )
+      this.lineResolver.updateLayout(layoutState)
+      // Issue #768：标记布局来源为 system 并推送诊断快照（布局更新时）。
+      this.lastLayoutSource = 'system'
+      // Issue #768 评论5835171266 第5项：系统路径成功时清除错误。
+      this.lastLayoutError = null
+      this.pushDiagnosticsSnapshot()
+    } catch (e) {
+      // Issue #768 评论5835171266 第5项：记录系统布局错误，回退到 fallback。
+      this.lastLayoutError = `system layout failed: ${String(e)}`
+      this.fallbackCount++
+      this.refreshRenderLayoutFallback(snap)
     }
-
-    // 1. 调用 EditorRenderBackend.renderLayoutFromSystem 获取完整渲染结果
-    const result = EditorRenderBackend.renderLayoutFromSystem(
-      layout,
-      systemLineCount,
-      snap,
-      this.contentWidth,
-      visualCaret.affinity,
-      isApi14Plus,
-      measureTextFn,
-    )
-
-    // 2. 更新 renderResult 和几何状态
-    this.renderResult = result
-    this.selectionRects = result.selectionRects
-    this.caretRect = result.caretRect
-    this.compositionUnderlineRects = result.compositionUnderlineRects
-
-    // 3. 更新行级导航解析器（带身份）
-    const layoutState = LineNavigationResolver.buildLayoutStateFromSystem(
-      layout,
-      systemLineCount,
-      snap,
-      this.contentWidth,
-    )
-    this.lineResolver.updateLayout(layoutState)
-    // Issue #768：标记布局来源为 system 并推送诊断快照（布局更新时）。
-    this.lastLayoutSource = 'system'
-    this.pushDiagnosticsSnapshot()
   }
 
   // Issue #768 任务9：Fallback 路径 — LayoutManager 不可用时走旧的自计算路径。
@@ -544,6 +570,8 @@ export struct SujianEditor {
       contentWidth: this.contentWidth,
       fontSize: snap.fontSize,
       lines: navigationLines,
+      // Fallback 路径无系统 LayoutManager，行导航回退到 caretStops 方案。
+      systemLayoutManager: null,
     }
     this.lineResolver.updateLayout(layoutState)
     // Issue #768：标记布局来源为 fallback 并推送诊断快照（布局更新时）。

@@ -225,7 +225,7 @@ export struct StatsScreen {
     }
     .hideTitleBar(true)
     .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Stats)
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Stats, 2)
     })
   }
 }

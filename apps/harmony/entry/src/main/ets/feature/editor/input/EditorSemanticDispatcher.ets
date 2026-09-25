@@ -966,6 +966,21 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
+        // Issue #768 评论5835171266 第4项：系统 LayoutManager 路径用系统 API 取真实 x/offset。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset)
+          }
+          const targetLineY = state.lines[targetLineIdx].y
+          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetLineY)
+          const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+          if (extend) {
+            return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
+          }
+          return this.selectionController.onTap(targetPosition)
+        }
+        // Fallback：caretStops 方案
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
@@ -982,6 +997,21 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
+        // Issue #768 评论5835171266 第4项：系统 LayoutManager 路径用系统 API 取真实 x/offset。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset)
+          }
+          const targetLineY = state.lines[targetLineIdx].y
+          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetLineY)
+          const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
+          if (extend) {
+            return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
+          }
+          return this.selectionController.onTap(targetPosition)
+        }
+        // Fallback：caretStops 方案
         if (this.navTargetX < 0) {
           this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
         }
@@ -1036,10 +1066,20 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
-        if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+        // Issue #768 评论5835171266 第4项：系统 LayoutManager 路径用系统 API 取真实 x/offset。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset)
+          }
+          const targetLineY = state.lines[targetLineIdx].y
+          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetLineY)
+        } else {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+          }
+          targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         }
-        targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'down': {
@@ -1047,10 +1087,20 @@ export class EditorSemanticDispatcher {
         if (targetLineIdx < 0) {
           return Promise.resolve<ResultEnvelope<EditorEditResult>>({ success: true})
         }
-        if (this.navTargetX < 0) {
-          this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+        // Issue #768 评论5835171266 第4项：系统 LayoutManager 路径用系统 API 取真实 x/offset。
+        const sysLayout = state.systemLayoutManager
+        if (sysLayout !== null) {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset)
+          }
+          const targetLineY = state.lines[targetLineIdx].y
+          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetLineY)
+        } else {
+          if (this.navTargetX < 0) {
+            this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
+          }
+          targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         }
-        targetOffset = LineNavigationResolver.getNearestOffsetAtX(state, targetLineIdx, this.navTargetX)
         break
       }
       case 'home': {

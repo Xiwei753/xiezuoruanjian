@@ -90,26 +90,25 @@ export struct PrimaryTabShell {
     // Issue #768：检测 API Level，决定是否使用 HdsTabs。
     this.useHdsTabs = PlatformApiResolver.getInstance().isApiAtLeast(23)
 
-    // Issue #768：useHdsTabs=true 时跳过栈注册，由 HdsPrimaryTabsApi23 自己注册。
-    if (!this.useHdsTabs) {
-      // Issue #767：向 coordinator 显式登记三个 tab 的 NavPathStack。
-      // 这样 AppNavigation 的接续恢复可以通过 getTabStack(TAB_HOME) 拿到正确的栈，
-      // 而不是依赖可能尚未同步的 activeTabStack。
-      const coordinator = NavigationTransactionCoordinator.getInstance()
-      coordinator.registerTabStack(TAB_HOME, this.homeStack)
-      coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
-      coordinator.registerTabStack(TAB_STATS, this.statsStack)
+    // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终持有三个 NavPathStack 并注册到 coordinator，
+    // 不再因 useHdsTabs 跳过——HdsPrimaryTabsApi23 不再自己创建 stack 或注册。
+    // Issue #767：向 coordinator 显式登记三个 tab 的 NavPathStack。
+    // 这样 AppNavigation 的接续恢复可以通过 getTabStack(TAB_HOME) 拿到正确的栈，
+    // 而不是依赖可能尚未同步的 activeTabStack。
+    const coordinator = NavigationTransactionCoordinator.getInstance()
+    coordinator.registerTabStack(TAB_HOME, this.homeStack)
+    coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
+    coordinator.registerTabStack(TAB_STATS, this.statsStack)
 
-      // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
-      // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
-      // Issue #767 评论5832129578 第1项：aboutToAppear 时组件还在初始化，@Watch 不会触发，
-      // 所以直接调 syncActiveTab 而不是 onTabChange。
-      this.syncActiveTab(this.currentTab)
+    // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
+    // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
+    // Issue #767 评论5832129578 第1项：aboutToAppear 时组件还在初始化，@Watch 不会触发，
+    // 所以直接调 syncActiveTab 而不是 onTabChange。
+    this.syncActiveTab(this.currentTab)
 
-      // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
-      // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
-      coordinator.tryConsumePendingRestore()
-    }
+    // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
+    // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
+    coordinator.tryConsumePendingRestore()
 
     // 注册主题观察者，Tab 配色随主题变化。
     const self = this
@@ -143,15 +142,13 @@ export struct PrimaryTabShell {
     if (this.navChromeObserver) {
       NavigationChromeStore.getInstance().unsubscribe(this.navChromeObserver)
     }
-    // Issue #768：useHdsTabs=true 时跳过栈注销，由 HdsPrimaryTabsApi23 自己注销。
-    if (!this.useHdsTabs) {
-      // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
-      // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
-      const coordinator = NavigationTransactionCoordinator.getInstance()
-      coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
-      coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
-      coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
-    }
+    // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终注销三个栈，不再因 useHdsTabs 跳过。
+    // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
+    // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
+    const coordinator = NavigationTransactionCoordinator.getInstance()
+    coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
+    coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
+    coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
   }
 
   // 通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。
@@ -193,6 +190,9 @@ export struct PrimaryTabShell {
     const coordinator = NavigationTransactionCoordinator.getInstance()
     coordinator.setActiveTab(index)
     coordinator.setActiveStack(stack)
+    // Issue #768 评论5835171266 第2项：切 tab 时同步该 tab 的 role 到 NavigationChromeStore，
+    // 确保底栏显隐状态与当前 tab 内容一致。
+    NavigationChromeStore.getInstance().syncTabRole(index)
     hilog.info(0x0000, 'PrimaryTabShell', 'syncActiveTab: index=%{public}d, stack updated', index)
   }
 
@@ -242,6 +242,9 @@ export struct PrimaryTabShell {
     if (this.useHdsTabs) {
       HdsPrimaryTabsApi23({
         currentTab: $currentTab,
+        homeStack: this.homeStack,
+        starMapStack: this.starMapStack,
+        statsStack: this.statsStack,
         safeBottomVp: this.adaptiveState.safeBottomVp,
         currentShowPrimaryNav: this.currentShowPrimaryNav
       })

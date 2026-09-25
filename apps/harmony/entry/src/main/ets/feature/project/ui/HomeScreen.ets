@@ -266,7 +266,7 @@ export struct HomeScreen {
     .hideTitleBar(true)
     .onShown((_reason: VisibilityChangeReason) => {
       hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList)
+      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
     })
   }
 

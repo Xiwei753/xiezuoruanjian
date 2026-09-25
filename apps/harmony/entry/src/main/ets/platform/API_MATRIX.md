@@ -33,7 +33,7 @@
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
 | 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
 | Application 颜色模式 | @kit.AbilityKit (ApplicationContext) | 11 | 无独立 SystemCapability（随 @kit.AbilityKit Application 生命周期） | 无 | 否 | ui/theme/HarmonyColorModeController.ets |
-| HDS Tabs（悬浮页签） | @kit.ArkUI (HdsTabs) | 23 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
+| HDS Tabs（悬浮页签） | @kit.UIDesignKit (HdsTabs) | 23 | SystemCapability.UIDesign.HDSComponent.Core | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
 | TextController + LayoutManager | @kit.ArkUI (TextController / LayoutManager) | 12（getLayoutManager/getLineCount/getGlyphPositionAtCoordinate/getLineMetrics）/ 14（getRectsForRange） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets, feature/editor/render/EditorRenderBackend.ets |
 | StyledString / MutableStyledString | @kit.ArkUI (StyledString / MutableStyledString) | 12 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/render/EditorTextStyleProjector.ets |
 
@@ -243,15 +243,41 @@
 
 ## HDS Tabs（悬浮页签）
 
-- Kit：`@kit.ArkUI`（HDS UI Design Kit 的 `HdsTabs` 组件）
-- 接口：`HdsTabs` 悬浮页签组件
+- Kit：`@kit.UIDesignKit`（HDS UI Design Kit 的 `HdsTabs` 组件）
+- 接口：
+  - `HdsTabs` 悬浮页签组件
+  - `HdsTabsAttribute.barFloatingStyle(style?: HdsTabsFloatingStyle)` — 悬浮页签样式（since 6.1.0(23)）
+  - `HdsTabsFloatingStyle.systemMaterialEffect?: SystemMaterialParams` — 系统材质效果
+  - `hdsMaterial.MaterialType.IMMERSIVE = 101` — 沉浸光感材质类型（since 6.1.0(23)）
 - 最低 API：23
-- SystemCapability：无独立 SystemCapability（随 `@kit.ArkUI` 整体可用）
+- SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
 - 权限：无
 - ACL：否
 - fallback：API < 23 使用普通 `Tabs + BottomTabBarStyle`
 - 实现文件：`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`
 - 对外 facade：`app/navigation/PrimaryTabShell.ets`（通过 `PlatformApiResolver` 分流）
+
+## HDS Navigation / HdsNavDestination（沉浸光感导航）
+
+- Kit：`@kit.UIDesignKit`（HDS UI Design Kit 的 `HdsNavigation` / `HdsNavDestination` 组件）
+- 接口：
+  - `HdsNavigation(pathInfos?: NavPathStack): HdsNavigationAttribute` — HDS 导航容器（since 5.1.0(18)）
+  - `HdsNavDestination(): HdsNavDestinationAttribute` — HDS 导航目标页（since 5.1.0(18)）
+  - `HdsNavDestinationAttribute.titleBar(options?: HdsNavigationTitleBarOptions)` — 标题栏配置
+  - `HdsNavDestinationAttribute.hideTitleBar(hide: boolean, animated?: boolean)` — 隐藏标题栏
+  - `HdsNavDestinationAttribute.onBackPressed(callback)` — 返回按钮回调
+  - `HdsNavDestinationAttribute.onShown(callback)` — 页面显示回调
+  - `HdsNavigationTitleBarOptions.content?.title?.mainTitle: ResourceStr` — 标题文本
+- 最低 API：23（本项目使用条件：API23+ 时启用，API < 23 fallback 到普通 Navigation/NavDestination）
+- SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
+- 权限：无
+- ACL：否
+- fallback：API < 23 使用普通 `Navigation` / `NavDestination`
+- 实现文件：
+  - `app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`（HdsNavigation 替代 Navigation）
+  - `feature/project/ui/WorkspaceScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
+  - `feature/editor/ui/WritingScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
+  - `feature/settings/ui/SettingsScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
 
 ## TextController + LayoutManager
 

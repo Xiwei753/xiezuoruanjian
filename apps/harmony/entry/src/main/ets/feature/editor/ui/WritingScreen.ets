@@ -29,6 +29,8 @@ import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
@@ -103,6 +105,9 @@ export struct WritingScreen {
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
   // 强类型 EditorViewportState，不用裸 object（Issue #629 评论 5 第 8 节）。
   @State currentViewport: EditorViewportState | null = null
+  // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
+  // 获得 HDS 沉浸光感材质效果。
+  @State useHdsNav: boolean = false
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -148,6 +153,8 @@ export struct WritingScreen {
 
   aboutToAppear() {
     hilog.info(0x0000, 'WritingScreen', 'route name=Writing')
+    // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -928,64 +935,88 @@ export struct WritingScreen {
     }
   }
 
+  // Issue #768 评论5835171266 第3项：NavDestination 内容部分抽取为 @Builder，
+  // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
+  @Builder
+  NavContent() {
+    if (this.adaptiveState.isTwoPane) {
+      // Issue #629 评论14 第1项：宽屏双栏布局。
+      // 左侧：ChapterTreePane（纯目录 UI，不持有编辑会话）。
+      // 右侧：当前 WritingScreen 的编辑会话（同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
+      // 屏幕宽度变化只改布局，不换 TextEditSession owner。
+      Row() {
+        // 左侧目录面板
+        ChapterTreePane({
+          volumeTrees: this.volumeTrees,
+          expandedVolumes: this.expandedVolumes,
+          selectedChapterId: this.chapterId,
+          onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
+          onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
+            this.switchChapter(chapterId, chapterTitle, volumeId)
+          },
+          onCreateVolume: (): void => { this.createVolume() },
+          onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
+          onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
+          onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
+        })
+          .width(320)
+          .height('100%')
+
+        // 分割线
+        Column() {}
+          .width(0.5)
+          .height('100%')
+        // 右侧编辑区域（同一个 WritingScreen 编辑会话）
+        this.EditorPane()
+      }
+      .width('100%')
+      .height('100%')
+    } else {
+      // Issue #629 评论9 第3项：窄屏单栏布局。
+      this.EditorPane()
+    }
+  }
+
   build() {
     // Issue #629 评论9 第3项：NavDestination 作为根容器，onBackPressed 拦截系统返回键/侧滑返回。
     // 拦截默认退栈（return true），异步调 requestLeave()（performGracefulClose 成功才 pop）；
     // 失败留在本页不 pop。aboutToDisappear 不再当返回拦截器，只做页面已离开后的清理。
-    NavDestination() {
-      if (this.adaptiveState.isTwoPane) {
-        // Issue #629 评论14 第1项：宽屏双栏布局。
-        // 左侧：ChapterTreePane（纯目录 UI，不持有编辑会话）。
-        // 右侧：当前 WritingScreen 的编辑会话（同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
-        // 屏幕宽度变化只改布局，不换 TextEditSession owner。
-        Row() {
-          // 左侧目录面板
-          ChapterTreePane({
-            volumeTrees: this.volumeTrees,
-            expandedVolumes: this.expandedVolumes,
-            selectedChapterId: this.chapterId,
-            onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
-            onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
-              this.switchChapter(chapterId, chapterTitle, volumeId)
-            },
-            onCreateVolume: (): void => { this.createVolume() },
-            onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
-            onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
-            onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
-          })
-            .width(320)
-            .height('100%')
-
-          // 分割线
-          Column() {}
-            .width(0.5)
-            .height('100%')
-          // 右侧编辑区域（同一个 WritingScreen 编辑会话）
-          this.EditorPane()
-        }
-        .width('100%')
-        .height('100%')
-      } else {
-        // Issue #629 评论9 第3项：窄屏单栏布局。
-        this.EditorPane()
+    // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
+    // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
+    if (this.useHdsNav) {
+      HdsNavDestination() {
+        this.NavContent()
       }
+      .hideTitleBar(false)
+      .titleBar({ content: { title: { mainTitle: this.chapterTitle } } } as HdsNavigationTitleBarOptions)
+      .onBackPressed(() => {
+        this.requestLeave()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
+      })
+    } else {
+      NavDestination() {
+        this.NavContent()
+      }
+      // Issue #750 评论 5805761237：真正使用 NavDestination 原生标题栏承载返回入口和标题栏材质。
+      // 通用 systemMaterial 沉浸光感材质只在 Navigation/NavDestination 标题栏等规定区域生效
+      //（module.json5 已配置 ohos.arkui.UIMaterial.state = enable）。
+      // NavigationMode.Stack 模式下（AppNavigation.ets 已配置），非根 NavDestination 自动显示返回按钮；
+      // 返回按钮点击触发 onBackPressed，仍走 requestLeave() -> safePop() -> leaveGuard，不绕开离开守卫。
+      .hideTitleBar(false)
+      .title(this.chapterTitle)
+      .onBackPressed(() => {
+        // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
+        // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
+        this.requestLeave()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
+      })
     }
-    // Issue #750 评论 5805761237：真正使用 NavDestination 原生标题栏承载返回入口和标题栏材质。
-    // 通用 systemMaterial 沉浸光感材质只在 Navigation/NavDestination 标题栏等规定区域生效
-    //（module.json5 已配置 ohos.arkui.UIMaterial.state = enable）。
-    // NavigationMode.Stack 模式下（AppNavigation.ets 已配置），非根 NavDestination 自动显示返回按钮；
-    // 返回按钮点击触发 onBackPressed，仍走 requestLeave() -> safePop() -> leaveGuard，不绕开离开守卫。
-    .hideTitleBar(false)
-    .title(this.chapterTitle)
-    .onBackPressed(() => {
-      // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
-      // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
-      this.requestLeave()
-      return true
-    })
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing)
-    })
   }
 
   // Issue #767 评论 5828146609 第 2 节：删除正文页右上"分享/保存"按钮。

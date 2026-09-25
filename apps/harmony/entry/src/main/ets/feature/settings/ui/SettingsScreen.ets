@@ -19,6 +19,8 @@ import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -59,6 +61,9 @@ export struct SettingsScreen {
   @Local filteredGroups: GroupDefinition[] = GROUP_DEFINITIONS
   // 问题5：复制设备信息结果提示
   @Local copyMessage: string = ''
+  // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
+  // 获得 HDS 沉浸光感材质效果。
+  @Local useHdsNav: boolean = false
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -66,6 +71,8 @@ export struct SettingsScreen {
 
   aboutToAppear() {
     hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
+    // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
 
     // 注册主题观察者
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
@@ -192,53 +199,77 @@ export struct SettingsScreen {
     return ''
   }
 
-  build() {
-    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    NavDestination() {
-      Column() {
-        // ── 顶部 Header：宽屏无搜索框，窄屏有搜索框 ──
-        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-          this.WideSettingsHeader()
-        } else {
-          this.CompactSettingsHeader()
-        }
+  // Issue #768 评论5835171266 第3项：NavDestination 内容部分抽取为 @Builder，
+  // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
+  @Builder
+  NavContent() {
+    Column() {
+      // ── 顶部 Header：宽屏无搜索框，窄屏有搜索框 ──
+      if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+        this.WideSettingsHeader()
+      } else {
+        this.CompactSettingsHeader()
+      }
 
-        if (this.viewModel.isLoading) {
-          Column() {
-            LoadingProgress()
-              .width(48)
-              .height(48)
-            Text($r('app.string.loading'))
-              .fontSize(14)
-              .margin({ top: 12 })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
+      if (this.viewModel.isLoading) {
+        Column() {
+          LoadingProgress()
+            .width(48)
+            .height(48)
+          Text($r('app.string.loading'))
+            .fontSize(14)
+            .margin({ top: 12 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        // 问题3：宽屏/窄屏分支
+        // 宽屏 (isTwoPane)：恢复 #760 之前的完整设置列表布局
+        // 窄屏 (!isTwoPane)：保留折叠分类布局
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          this.WideScreenLayout()
         } else {
-          // 问题3：宽屏/窄屏分支
-          // 宽屏 (isTwoPane)：恢复 #760 之前的完整设置列表布局
-          // 窄屏 (!isTwoPane)：保留折叠分类布局
-          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-            this.WideScreenLayout()
-          } else {
-            this.CompactScreenLayout()
-          }
+          this.CompactScreenLayout()
         }
       }
-      .width('100%')
-      .height('100%')
     }
-    // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮），删除手写返回 Image。
-    .hideTitleBar(false)
-    .title($r('app.string.settings'))
-    .onBackPressed(() => {
-      this.goBack()
-      return true
-    })
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings)
-    })
+    .width('100%')
+    .height('100%')
+  }
+
+  build() {
+    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
+    // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
+    // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
+    if (this.useHdsNav) {
+      HdsNavDestination() {
+        this.NavContent()
+      }
+      .hideTitleBar(false)
+      .titleBar({ content: { title: { mainTitle: $r('app.string.settings') } } } as HdsNavigationTitleBarOptions)
+      .onBackPressed(() => {
+        this.goBack()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0)
+      })
+    } else {
+      NavDestination() {
+        this.NavContent()
+      }
+      // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮），删除手写返回 Image。
+      .hideTitleBar(false)
+      .title($r('app.string.settings'))
+      .onBackPressed(() => {
+        this.goBack()
+        return true
+      })
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0)
+      })
+    }
   }
 
   // ════════════════════════════════════════════
