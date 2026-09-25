@@ -286,7 +286,7 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
     .unwrap();
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -334,7 +334,7 @@ fn regression_candidate_strictly_wins_publishes_once() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -365,7 +365,7 @@ fn regression_no_remote_record_publishes_once() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -429,7 +429,7 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -473,7 +473,7 @@ fn regression_remote_winner_delete_semantics_unchanged() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -693,7 +693,7 @@ fn regression_remote_upsert_wins_with_merge_conflict_preserves_partial_conflict(
     let staging_root = build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -763,7 +763,7 @@ fn regression_remote_upsert_wins_with_merge_error_preserves_error() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -838,7 +838,7 @@ fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
     .unwrap();
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1007,7 +1007,7 @@ fn regression_scenario_9_pending_take_remote_failed_swallowed_as_success() {
 
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1104,7 +1104,7 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1240,7 +1240,7 @@ fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_del
         remote_catalog_snapshot,
     );
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1330,7 +1330,7 @@ fn regression_scenario_12_candidate_wins_pending_take_remote_failed_no_publish()
 
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
@@ -1440,7 +1440,7 @@ fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_del
     // 同时间戳，DEVICE_REMOTE > DEVICE_LOCAL → remote 严格赢 → RemoteWins(Upsert) → 不 publish
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
-    let transfer = run_transfer(&provider, &plan, None);
+    let transfer = run_transfer(&provider, &plan, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),

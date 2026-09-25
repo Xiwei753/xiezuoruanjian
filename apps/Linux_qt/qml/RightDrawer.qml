@@ -48,6 +48,8 @@ Rectangle {
     property var syncBackendRef: null
     property string workspaceProjectId: ""
     property bool hasConflicts: false
+    // Issue #762 评论 5826175490 第 4 点：冲突路径，透传给 SyncConflictPanel 选中对应冲突
+    property string conflictPath: ""
     // 冲突 tab 固定 idx=3，不偏移现有星图(0)/AI(1)/统计(2)，保持兼容。
     readonly property int conflictTabIdx: 3
 
@@ -264,6 +266,7 @@ Rectangle {
                     dt: root.dt
                     syncBackendRef: root.syncBackendRef
                     projectId: root.workspaceProjectId
+                    conflictPath: root.conflictPath
                     onCloseRequested: root.closeRequested()
                     onConflictsResolved: {
                         // 解决一个冲突后刷新列表；若全部解决，外部应把 hasConflicts 置 false。

@@ -97,6 +97,42 @@ impl super::WriterCore {
         crate::sync::SyncService::list_conflicts(&self.project_root(project_id))
     }
 
+    /// 列出所有作品的所有未解决冲突。
+    ///
+    /// 复用 `list_projects()` 枚举作品，对每个 project 调
+    /// `SyncService::list_conflicts()`，返回扁平的 `ProjectSyncConflict`
+    /// （project_id + project_title + SyncConflict），只返回有未解决冲突的条目。
+    /// 平台层按 project_id 分组展示，不需要自己扫目录。
+    ///
+    /// 单个 project 读取冲突失败时跳过该 project（记 warn），不阻断整体查询——
+    /// 一个作品目录损坏不应让全局冲突入口完全不可用。
+    #[allow(clippy::excessive_nesting)]
+    pub fn list_all_sync_conflicts(
+        &self,
+    ) -> crate::error::Result<Vec<crate::sync::types::ProjectSyncConflict>> {
+        let projects = self.list_projects()?;
+        let mut all = Vec::new();
+        for project in projects {
+            match crate::sync::SyncService::list_conflicts(&self.project_root(&project.id)) {
+                Ok(conflicts) => {
+                    all.extend(conflicts.into_iter().map(|conflict| {
+                        crate::sync::types::ProjectSyncConflict {
+                            project_id: project.id.clone(),
+                            project_title: project.title.clone(),
+                            conflict,
+                        }
+                    }));
+                }
+                Err(e) => log::warn!(
+                    "list_all_sync_conflicts: skip project {} — conflict load failed: {}",
+                    project.id,
+                    e
+                ),
+            }
+        }
+        Ok(all)
+    }
+
     pub fn get_sync_ignored_paths(&self, project_id: &str) -> crate::error::Result<Vec<String>> {
         crate::sync::SyncService::get_sync_ignored_paths(
             &self.project_root(project_id),

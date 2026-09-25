@@ -28,6 +28,7 @@ pub fn run_transfer(
     provider: &dyn SyncProvider,
     plan: &FullSyncPlan,
     cancellation_token: Option<&SyncCancellationToken>,
+    progress: Option<&super::SyncProgressCallback>,
 ) -> FullSyncTransferResult {
     use crate::sync::types::PlannedTargetKind;
 
@@ -107,6 +108,11 @@ pub fn run_transfer(
             }
         };
 
+        // 在 move result 进 TargetSyncResult 之前提取 progress 载荷。
+        let progress_status = crate::api::types::sync_status_to_wire(&result.status);
+        let progress_conflict_count = u32::try_from(result.conflicts.len()).unwrap_or(u32::MAX);
+        let progress_target_kind = planned.target_kind.as_target_kind_str();
+
         targets.push(TargetSyncResult {
             target_kind: planned.target_kind.as_target_kind_str().to_string(),
             project_id: planned.project_id.clone(),
@@ -115,6 +121,17 @@ pub fn run_transfer(
             deleted_resolution: resolution,
             local_lifecycle_action: action.unwrap_or_default(),
         });
+
+        // 每个 target 完成后立即回调 progress，平台层据此实时刷新冲突数，
+        // 不必等最终 FullSyncResult。
+        if let Some(cb) = progress {
+            cb(super::SyncTargetProgress {
+                project_id: planned.project_id.clone(),
+                target_kind: progress_target_kind.to_string(),
+                status: progress_status,
+                conflict_count: progress_conflict_count,
+            });
+        }
     }
 
     // generation GC — 清理未引用 generation。

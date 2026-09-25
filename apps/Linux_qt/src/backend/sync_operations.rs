@@ -629,17 +629,40 @@ impl AppBackend {
         let data_root_capture = data_root.clone();
 
         let app_qptr = QPointer::from(&*self);
+        // Issue #762 评论 5826175490：progress 回调通道。
+        // 在主线程构造 progress callback（用 queued_callback 包装 QPointer）。
+        // queued_callback 内部把闭包标记为 Send+Sync（qmetaobject 的 UnsafeSendFn），
+        // 返回的 callback 是 Send+Sync，可 move 进后台线程。
+        // 后台线程每个 target 完成后调用 progress callback，通过 queued_callback
+        // 投递回主线程调 SyncBackend::handle_sync_target_progress 刷新全局冲突数。
+        let progress_qptr = sync_qptr.clone();
+        let progress_callback: Option<writer_core::sync::full_sync::SyncProgressCallback> =
+            progress_qptr.as_ref().map(|sq| {
+                let sq = sq.clone();
+                let main_thread_cb = qmetaobject::queued_callback(move |()| {
+                    sq.as_pinned().map(|this| {
+                        let mut this = this.borrow_mut();
+                        this.handle_sync_target_progress();
+                    });
+                });
+                std::sync::Arc::new(
+                    move |_progress: writer_core::sync::full_sync::SyncTargetProgress| {
+                        main_thread_cb(());
+                    },
+                ) as writer_core::sync::full_sync::SyncProgressCallback
+            });
         let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         let trigger = trigger.to_string();
         thread::spawn(move || {
-            // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture) and a GitRepoLayout
-            // snapshot which auto-implement UnwindSafe. No shared mutable state or borrows are
-            // captured, so the closure is UnwindSafe by auto-impl without needing
-            // AssertUnwindSafe.
-            let result = std::panic::catch_unwind(|| {
+            // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure captures
+            // owned String data (data_root, projects_root, op_id_capture), a GitRepoLayout
+            // snapshot, and progress_callback (Option<Arc<dyn Fn + Send + Sync>>). Arc<dyn Fn>
+            // is not RefUnwindSafe (dyn Fn lacks RefUnwindSafe bound), so the closure is wrapped
+            // in AssertUnwindSafe to satisfy catch_unwind's UnwindSafe bound. AssertUnwindSafe
+            // is std's safe wrapper (not unsafe impl), no hand-written unsafe.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = crate::backend::app_backend::with_layout_core_api(
                     &data_root,
                     &projects_root,
@@ -680,7 +703,14 @@ impl AppBackend {
                     &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
                 );
 
-                match api.perform_full_sync(config, trigger == "manual", cancel_token.clone()) {
+                // Issue #762 评论 5826175490 第 5 点：progress callback 在主线程构造，
+                // 闭包用 AssertUnwindSafe 包装，progress_callback.as_ref() 直接传入。
+                match api.perform_full_sync(
+                    config,
+                    trigger == "manual",
+                    cancel_token.clone(),
+                    progress_callback.as_ref(),
+                ) {
                     Ok(result) => {
                         let status_code = result.overall_status.clone();
                         let summary_key = match status_code.as_str() {
@@ -814,7 +844,7 @@ impl AppBackend {
                         }
                     }
                 }
-            });
+            }));
 
             match result {
                 Ok(outcome) => callback(outcome),

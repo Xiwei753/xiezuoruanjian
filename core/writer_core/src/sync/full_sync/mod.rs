@@ -38,6 +38,26 @@ pub use aggregate::{
 pub use plan::build_full_sync_target_plan;
 pub use transfer::run_transfer;
 
+/// 单个 target 完成后的进度回调载荷。
+///
+/// `project_id` 为 `None` 表示 App target（非作品）。
+/// `status` 是线格式状态码（`"success"` / `"partial_conflict"` / `"error"` 等），
+/// 与 `crate::api::types::sync_status_to_wire` 映射一致。
+/// `conflict_count` 是该 target 当前未解决冲突数。
+#[derive(Debug, Clone)]
+pub struct SyncTargetProgress {
+    pub project_id: Option<String>,
+    pub target_kind: String,
+    pub status: String,
+    pub conflict_count: u32,
+}
+
+/// progress 回调类型 — `Send + Sync`，可跨线程传递。
+///
+/// 用 `Arc<dyn Fn(SyncTargetProgress) + Send + Sync>`，自动实现 `Send + Sync`，
+/// 不手写 `unsafe impl`。Core 内部机制，不导出到 UDL（UDL 不能导出闭包）。
+pub type SyncProgressCallback = std::sync::Arc<dyn Fn(SyncTargetProgress) + Send + Sync>;
+
 // ──   generation 原子发布 helpers ──
 
 // ── Plan / Transfer 结果 ──

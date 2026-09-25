@@ -312,6 +312,12 @@ dictionary SyncConflictDto {
     string? remote_snapshot_path;
 };
 
+dictionary ProjectSyncConflictDto {
+    string project_id;
+    string project_title;
+    SyncConflictDto conflict;
+};
+
 dictionary SyncConflictPreviewDto {
     string path;
     string kind;
@@ -1299,6 +1305,9 @@ interface WriterAppService {
 
     [Throws=WriterError]
     sequence<SyncConflictDto> list_sync_conflicts(string project_id);
+
+    [Throws=WriterError]
+    sequence<ProjectSyncConflictDto> list_all_sync_conflicts();
 
     [Throws=WriterError]
     SyncConflictPreviewDto load_sync_conflict_preview(string project_id, string path);

@@ -59,6 +59,10 @@ Rectangle {
 
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
+    onWorkspaceProjectIdChanged: {
+        // Issue #762 评论 5826175490 第 3 点：切换作品时立即刷新冲突
+        root.refreshConflictList()
+    }
 
     // Issue #757 评论 5818193510 第 5 点：同步冲突侧栏支持。
     // syncBackendRef 由 main.qml 传入（全局 syncBackend），用于监听同步完成信号
@@ -66,9 +70,24 @@ Rectangle {
     property var syncBackendRef: null
     // 是否有未解决冲突 — 透传给 RightDrawer 控制冲突 tab 显隐。
     property bool hasConflicts: false
+    // Issue #762 评论 5826175490 第 4 点：冲突路径，由外部（main.qml）设置后
+    // 打开右侧抽屉并选中对应冲突。
+    property string conflictPath: ""
 
     signal backToProjects()
     signal openSettings()
+
+    // Issue #762 评论 5826175490 第 4 点：当外部设置 conflictPath 时，
+    // 刷新冲突列表并打开右侧抽屉到冲突 tab，把 conflictPath 透传给 RightDrawer。
+    onConflictPathChanged: {
+        if (root.conflictPath) {
+            root.refreshConflictList();
+            if (root.hasConflicts) {
+                root.drawerOpen = true;
+                root.drawerTab = rightDrawerRect.conflictTabIdx;
+            }
+        }
+    }
 
     function flushActiveEditorBeforeSync() {
         if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId) return true;
@@ -185,6 +204,8 @@ Rectangle {
         }
 
         root.requestEditorFocus()
+        // Issue #762 评论 5826175490 第 3 点：打开作品时立即刷新冲突，不等同步结束
+        root.refreshConflictList()
     }
 
     function openChapter(pId, vId, cId, cTitle) {
@@ -1166,6 +1187,8 @@ Rectangle {
             syncBackendRef: root.syncBackendRef
             workspaceProjectId: root.workspaceProjectId
             hasConflicts: root.hasConflicts
+            // Issue #762 评论 5826175490 第 4 点：透传 conflictPath 给 RightDrawer
+            conflictPath: root.conflictPath
             onCloseRequested: root.drawerOpen = false
             onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
             onOpenSettings: root.openSettings()
@@ -1259,6 +1282,15 @@ Rectangle {
         target: root.syncBackendRef
         function onSync_action_completed() {
             root.checkConflictsAfterSync();
+        }
+    }
+
+    // Issue #762 评论 5826175490 第 3 点：监听 sync_conflicts_changed 信号
+    // 同步过程中冲突数变化时，冲突列表自动更新
+    Connections {
+        target: root.syncBackendRef
+        function onSync_conflicts_changed() {
+            root.refreshConflictList();
         }
     }
 

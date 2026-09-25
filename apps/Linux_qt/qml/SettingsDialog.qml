@@ -42,6 +42,8 @@ Dialog {
     property bool settingsDirty: false
     property var _saveTimer: null
     signal settingsChanged()
+    // Issue #762 评论 5826175490 第 4 点：转发 SyncPage 的 openConflict 信号给主窗口
+    signal openConflict(string projectId, string path)
 
     background: Rectangle { color: dt.surface; border.color: dt.border; border.width: 1; radius: dt.radiusXl }
     header: null
@@ -470,6 +472,10 @@ Dialog {
                         return true;
                     }
                     onSettingsChanged: root.settingsChanged()
+                    // Issue #762 评论 5826175490 第 4 点：转发 openConflict 信号给主窗口
+                    onOpenConflict: function(projectId, path) {
+                        root.openConflict(projectId, path)
+                    }
                 }
             }
 

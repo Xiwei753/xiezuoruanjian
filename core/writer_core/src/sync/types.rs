@@ -482,7 +482,7 @@ pub enum SyncConflictKind {
 /// 隐式传递机器可解析信息。`remote_snapshot_path` 指向本地保存的远端副本
 /// （相对 `sync_root` 的路径），供预览 API 读取远端内容；`RemoteDeleted` 时为 `None`。
 /// `description` 只做展示文字，不再承担机器可解析字段。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SyncConflict {
     pub local_path: String,
     pub remote_path: String,
@@ -498,6 +498,17 @@ pub struct SyncConflict {
     /// 旧数据缺少此字段时默认 `None`。
     #[serde(default)]
     pub remote_snapshot_path: Option<String>,
+}
+
+/// 跨作品冲突记录 — 全局冲突查询返回的扁平结构。
+///
+/// 每条记录是一个未解决冲突，附带所属作品的 id 和 title。
+/// 平台层按 `project_id` 分组展示，不需要自己扫目录。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectSyncConflict {
+    pub project_id: String,
+    pub project_title: String,
+    pub conflict: SyncConflict,
 }
 
 /// 同步冲突预览 — 供平台层展示本地/远端内容的内部结构。

@@ -296,6 +296,7 @@ impl WriterCoreApi {
         config: SyncConfigDto,
         force_sync: bool,
         cancellation_token: Option<SyncCancellationToken>,
+        progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
@@ -533,6 +534,7 @@ impl WriterCoreApi {
             provider.as_ref(),
             &plan,
             cancellation_token.as_ref(),
+            progress,
         );
 
         // Issue #729：run_transfer 返回后检查取消令牌。
@@ -661,6 +663,17 @@ impl WriterCoreApi {
         self.core_read()
             .list_sync_conflicts(project_id)
             .map(|conflicts| conflicts.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
+    /// 列出所有作品的所有未解决冲突。
+    ///
+    /// 跨作品全局冲突查询，返回扁平的 `ProjectSyncConflictDto`。
+    /// 平台层按 projectId 分组展示。单个 project 读取失败时跳过，不阻断整体查询。
+    pub fn list_all_sync_conflicts(&self) -> ApiResult<Vec<ProjectSyncConflictDto>> {
+        self.core_read()
+            .list_all_sync_conflicts()
+            .map(|all| all.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 

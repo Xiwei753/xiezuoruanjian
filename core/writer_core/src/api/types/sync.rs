@@ -290,6 +290,28 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
     }
 }
 
+/// 跨作品冲突 DTO — 全局冲突查询返回的扁平结构。
+///
+/// 每条记录是一个未解决冲突，附带所属作品的 id 和 title。
+/// QML 端按 projectId 分组展示。与 `crate::sync::types::ProjectSyncConflict` 一一对应。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSyncConflictDto {
+    pub project_id: String,
+    pub project_title: String,
+    pub conflict: SyncConflictDto,
+}
+
+impl From<crate::sync::types::ProjectSyncConflict> for ProjectSyncConflictDto {
+    fn from(p: crate::sync::types::ProjectSyncConflict) -> Self {
+        Self {
+            project_id: p.project_id,
+            project_title: p.project_title,
+            conflict: p.conflict.into(),
+        }
+    }
+}
+
 impl From<SyncStateDto> for crate::sync::SyncState {
     fn from(s: SyncStateDto) -> Self {
         crate::sync::SyncState {
@@ -516,7 +538,7 @@ fn sync_protocol_from_wire(s: &str) -> crate::sync::provider::github::config::Gi
 /// 将 `SyncStatus` 枚举转换为线格式字符串。
 /// `RecoverableError`/`FatalError`/`Error` 携带的详细信息在线格式中丢失，
 /// 平台端需通过 `error`/`error_category` 字段获取具体错误原因。
-fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
+pub(crate) fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
     match status {
         crate::sync::SyncStatus::Idle => "idle",
         crate::sync::SyncStatus::Syncing => "syncing",

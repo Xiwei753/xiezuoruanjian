@@ -119,6 +119,13 @@ pub struct SyncBackend {
     // 不承载 workspace 状态属性。
     #[allow(dead_code)]
     sync_content_applied: qt_signal!(),
+    // Issue #762 评论 5826175490：全局冲突数 + 通知 signal。
+    // sync_conflict_count 是持久状态（跨所有作品的未解决冲突数），
+    // 与"当前有没有正在跑一轮同步"是两回事。不依赖 sync_operation_state 的最终 status。
+    #[allow(dead_code)]
+    sync_conflict_count: qt_property!(u32; READ sync_conflict_count NOTIFY sync_conflicts_changed),
+    #[allow(dead_code)]
+    sync_conflicts_changed: qt_signal!(),
     #[allow(dead_code)]
     set_sync_token: qt_method!(fn(&mut self, token: QString)),
     #[allow(dead_code)]
@@ -140,6 +147,9 @@ pub struct SyncBackend {
     // QML 端 JSON.parse 后按 success 分支取 data.conflicts / data.preview / data.resolved。
     #[allow(dead_code)]
     list_sync_conflicts: qt_method!(fn(&mut self, project_id: QString) -> QString),
+    // Issue #762 评论 5826175490：跨作品全局冲突列表入口。
+    #[allow(dead_code)]
+    list_all_sync_conflicts: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
     load_sync_conflict_preview:
         qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
@@ -152,6 +162,8 @@ pub struct SyncBackend {
     #[allow(dead_code)]
     resolve_conflict_mark_merged:
         qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    // Issue #762 评论 5826175490：全局冲突数缓存，u32 Default 为 0，符合 #[derive(Default)]。
+    current_sync_conflict_count: u32,
     app: AppRef,
 }
 
@@ -193,6 +205,9 @@ impl SyncBackend {
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
             self.sync_content_applied();
         }
+        // Issue #762 评论 5826175490：同步结束后刷新全局冲突数。
+        // 冲突是持久状态，无论同步成功还是冲突都需刷新。
+        self.refresh_sync_conflict_count();
     }
 
     fn with_app<R>(
@@ -343,6 +358,9 @@ impl SyncBackend {
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync(&mut self) -> QString {
+        // Issue #762 评论 5826175490：同步开始前刷新全局冲突数，
+        // 让 QML 在同步运行期间就显示当前持久冲突状态。
+        self.refresh_sync_conflict_count();
         let qptr = QPointer::from(&*self);
         let result = self.with_app_mut(|app| app.perform_sync(Some(qptr)));
         if result.is_ok() {
@@ -388,6 +406,32 @@ impl SyncBackend {
         match result {
             Ok(Some(Ok(conflicts))) => {
                 let data = serde_json::json!({ "conflicts": conflicts });
+                writer_core::api::ResultEnvelope::success(data)
+                    .to_json_string()
+                    .into()
+            }
+            Ok(Some(Err(error))) => {
+                writer_core::api::ResultEnvelope::<serde_json::Value>::error(error)
+                    .to_json_string()
+                    .into()
+            }
+            Ok(None) => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("workspace not initialized".to_string()),
+            )
+            .into(),
+            Err(_) => crate::backend::json_utils::borrow_conflict_error_json().into(),
+        }
+    }
+
+    /// 列出所有作品的所有未解决冲突（全局冲突入口）。
+    ///
+    /// 返回 `ResultEnvelope<{ conflicts: ProjectSyncConflictDto[] }>` JSON 字符串。
+    /// QML 端 JSON.parse 后按 projectId 分组展示。
+    fn list_all_sync_conflicts(&mut self) -> QString {
+        let result = self.with_app(|app| app.core_api().map(|api| api.list_all_sync_conflicts()));
+        match result {
+            Ok(Some(Ok(all))) => {
+                let data = serde_json::json!({ "conflicts": all });
                 writer_core::api::ResultEnvelope::success(data)
                     .to_json_string()
                     .into()
@@ -479,6 +523,8 @@ impl SyncBackend {
         if envelope.success {
             self.sync_status_changed();
             self.sync_action_completed();
+            // Issue #762 评论 5826175490：resolve 成功后冲突数变化，刷新全局冲突数。
+            self.refresh_sync_conflict_count();
             // Issue #757 评论 5819894306 第 2 点：take_remote 的 BothChanged 原子替换
             // 正文、RemoteDeleted 移走正文，当前编辑器仍持有旧正文，需触发
             // onSync_content_applied 走现有 refreshStateImmediate + reconcileActiveChapter
@@ -501,6 +547,37 @@ impl SyncBackend {
 
     fn resolve_conflict_mark_merged(&mut self, project_id: QString, path: QString) -> QString {
         self.resolve_conflict_dispatch(project_id, path, "mark_merged")
+    }
+
+    // ── Issue #762 评论 5826175490：全局冲突数刷新 ──
+
+    /// 刷新全局冲突数。调 Core API list_all_sync_conflicts，更新 count，变化时发 signal。
+    ///
+    /// 冲突是持久状态，与同步运行状态无关。同步开始前/结束后/resolve 后/target progress 时都调。
+    fn refresh_sync_conflict_count(&mut self) {
+        let new_count = self
+            .with_app(|app| {
+                app.core_api()
+                    .and_then(|api| api.list_all_sync_conflicts().ok())
+            })
+            .ok()
+            .flatten()
+            .map(|all| u32::try_from(all.len()).unwrap_or(u32::MAX))
+            .unwrap_or(0);
+        if new_count != self.current_sync_conflict_count {
+            self.current_sync_conflict_count = new_count;
+            self.sync_conflicts_changed();
+        }
+    }
+
+    fn sync_conflict_count(&self) -> u32 {
+        self.current_sync_conflict_count
+    }
+
+    /// progress 回调入口 — 后台线程 target 完成后通过 queued_callback 回主线程调此方法。
+    /// 只刷新冲突数，不传 progress 数据到 QML（QML 端收到 sync_conflicts_changed 后自己刷新）。
+    pub(crate) fn handle_sync_target_progress(&mut self) {
+        self.refresh_sync_conflict_count();
     }
 }
 

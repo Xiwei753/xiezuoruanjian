@@ -811,6 +811,15 @@ ApplicationWindow {
                 // 避免与 settingsBackend.onSettings_changed 重复 resolve。
                 if (themeController) themeController.reload_from_backend_if_changed();
             }
+            // Issue #762 评论 5826175490 第 4 点：处理 SyncPage 的 openConflict 信号
+            onOpenConflict: function(projectId, path) {
+                // 打开作品
+                appController.openWriting(projectId, "");
+                // 把 conflictPath 传给 WritingWorkspace
+                if (writingWorkspaceLoader.item) {
+                    writingWorkspaceLoader.item.conflictPath = path
+                }
+            }
         }
     }
 

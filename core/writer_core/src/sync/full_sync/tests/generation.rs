@@ -65,7 +65,7 @@ fn test_live_project_uploads_to_generation_prefix() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let _transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
+    let _transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None, None);
 
     let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
     let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/P")
@@ -214,7 +214,7 @@ fn test_restore_project_downloads_from_generation_prefix() {
         remote_catalog_snapshot: catalog_snapshot,
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None, None);
 
     let staged_content = std::fs::read(staging_root.join("chapter.md"));
     assert!(

@@ -31,6 +31,10 @@ Item {
     property string activeOperationId: ""
     property string activeOperationKind: ""
 
+    // Issue #762 评论 5826175490: 全局冲突列表
+    property var allSyncConflicts: []
+    signal openConflict(string projectId, string path)
+
     // Local reactive sync state
     property string currentSyncStatus: "not_configured"
     property bool currentSyncInProgress: false
@@ -299,6 +303,19 @@ Item {
                 dt: root.resolvedDt
                 status: root.statusKind()
                 text: root.statusText()
+            }
+
+            // Issue #762 评论 5826175490: 待处理冲突显示
+            AppText {
+                id: pendingConflictsCount
+                dt: root.resolvedDt
+                visible: root.allSyncConflicts.length > 0
+                text: qsTr("待处理冲突 %1").arg(root.allSyncConflicts.length)
+                color: resolvedDt.error
+                font.pointSize: resolvedDt.bodyPt
+                font.family: resolvedDt.fontFamily
+                font.weight: Font.Bold
+                Layout.alignment: Qt.AlignVCenter
             }
         }
 
@@ -619,6 +636,92 @@ Item {
                 onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(syncRawErrorArea.text)
             }
         }
+
+        // Issue #762 评论 5826175490: 按作品分组显示全局冲突列表
+        AppCard {
+            id: conflictsCard
+            Layout.fillWidth: true
+            dt: root.resolvedDt
+            variant: "surface"
+            spacing: resolvedDt.sp12
+            visible: root.allSyncConflicts.length > 0
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: resolvedDt.sp12
+
+                AppText {
+                    dt: root.resolvedDt
+                    text: qsTr("全局同步冲突")
+                    color: resolvedDt.onBackground
+                    font.pointSize: resolvedDt.titlePt
+                    font.family: resolvedDt.fontFamily
+                    font.weight: Font.Bold
+                }
+
+                // 按 project_id 分组显示冲突
+                Repeater {
+                    model: root.allSyncConflicts.length
+                    delegate: ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: resolvedDt.sp8
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            color: resolvedDt.surfaceContainerLow
+                            border.color: resolvedDt.border
+                            border.width: 1
+                            radius: resolvedDt.radiusMd
+                            Layout.preferredHeight: childrenRect.height
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.margins: resolvedDt.sp12
+                                spacing: resolvedDt.sp8
+
+                                AppText {
+                                    dt: root.resolvedDt
+                                    text: root.allSyncConflicts[model.index].projectTitle
+                                    color: resolvedDt.onBackground
+                                    font.pointSize: resolvedDt.bodyPt
+                                    font.family: resolvedDt.fontFamily
+                                    font.weight: Font.Medium
+                                }
+
+                                AppText {
+                                    dt: root.resolvedDt
+                                    text: qsTr("冲突数量: %1").arg(root.allSyncConflicts[model.index].conflict ? 1 : 0)
+                                    color: resolvedDt.onSurfaceVariant
+                                    font.pointSize: resolvedDt.captionPt
+                                    font.family: resolvedDt.fontFamily
+                                }
+
+                                AppText {
+                                    dt: root.resolvedDt
+                                    text: qsTr("冲突路径: %1").arg(root.allSyncConflicts[model.index].conflict ? root.allSyncConflicts[model.index].conflict.localPath : "")
+                                    color: resolvedDt.onSurfaceVariant
+                                    font.pointSize: resolvedDt.captionPt
+                                    font.family: resolvedDt.fontFamily
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+
+                                AppButton {
+                                    text: qsTr("打开冲突")
+                                    dt: root.resolvedDt
+                                    variant: "secondary"
+                                    onClicked: {
+                                        var projectId = root.allSyncConflicts[model.index].projectId
+                                        var path = root.allSyncConflicts[model.index].conflict ? root.allSyncConflicts[model.index].conflict.localPath : ""
+                                        root.openConflict(projectId, path)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Component.onCompleted: {
@@ -626,14 +729,19 @@ Item {
             root.syncBackendRef.load_sync_config()
             autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false
             syncIntervalSlider.value = (root.syncBackendRef.sync_interval || 300) / 60
+            // Issue #762 评论 5826175490: 获取全局冲突列表
+            var result = root.syncBackendRef.list_all_sync_conflicts()
+            if (result && result.success && result.data && result.data.conflicts) {
+                root.allSyncConflicts = result.data.conflicts
+            }
         }
         root.refreshLocalSyncState();
-        }
-
-        TextEdit {
-            id: syncRawErrorArea
-            visible: false
-            text: ""
-            readOnly: true
-        }
     }
+
+    TextEdit {
+        id: syncRawErrorArea
+        visible: false
+        text: ""
+        readOnly: true
+    }
+}
