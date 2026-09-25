@@ -973,7 +973,8 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
 ///    manifest + meta(complete=true) 同一批提交，CAS 成功后 catalog 指向新 generation。
 #[test]
 #[allow(clippy::too_many_lines)]
-fn regression_issue_761_real_first_sync_no_manifest_fails_before_publish() {
+#[allow(clippy::cognitive_complexity)]
+fn regression_issue_761_real_first_sync_no_manifest_device_id_consistent() {
     let tmp = TempDir::new().unwrap();
     let provider = RecordingProvider::new(MemoryProvider::new());
 
@@ -1089,6 +1090,13 @@ fn regression_issue_761_real_first_sync_no_manifest_fails_before_publish() {
          实际 known_files={:?}",
         state_after.known_files.keys().collect::<Vec<_>>()
     );
+    // device_id 一致性：staging state 必须使用平台注入的 DEVICE_LOCAL，
+    // 不能在真实首次同步（无 state.local.json）时随机生成新 UUID。
+    assert_eq!(
+        state_after.device_id, DEVICE_LOCAL,
+        "首次同步 staging state 的 device_id 必须是平台注入的 DEVICE_LOCAL，实际 {:?}",
+        state_after.device_id
+    );
 
     // 10. batch 内 upsert 全部是 Put（首次同步没有旧 blob 可复用）。
     assert!(
@@ -1117,6 +1125,19 @@ fn regression_issue_761_real_first_sync_no_manifest_fails_before_publish() {
                 paths.contains(&chapter_rel),
                 "merged manifest 应包含正文路径，实际 {paths:?}"
             );
+            // device_id 一致性：manifest upsert records 与 staging state 必须同源。
+            // 首次同步生成的 manifest upsert record 的 device_id 必须等于平台注入的
+            // DEVICE_LOCAL（也即 state_after.device_id），不能是随机 UUID。
+            for rec in &manifest.files {
+                if rec.op == "upsert" {
+                    assert_eq!(
+                        rec.device_id, state_after.device_id,
+                        "首次同步 manifest upsert record 的 device_id 必须与 staging state 一致，\
+                         path={} manifest device_id={} state device_id={}",
+                        rec.path, rec.device_id, state_after.device_id
+                    );
+                }
+            }
         }
         other => panic!("manifest 必须是 Put，实际 {other:?}"),
     }

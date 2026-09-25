@@ -536,10 +536,21 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     // 3. 重建 SyncState：known_files / known_files_updated_at / last_sync_time。
     //    与 merge_remote_into_local_snapshot 的 known_files 重建逻辑对齐：
     //    遍历本地 scan 结果，对每个 Upload 类（非 manifest）文件记录 hash + updated_at。
-    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
-    if !preferred_device_id.is_empty() && state.device_id.is_empty() {
-        state.device_id = preferred_device_id.to_string();
-    }
+    // 与 snapshot_local_records_read_only 使用同一设备身份来源：
+    //   preferred_device_id 非空 → Some(preferred_device_id)
+    //   preferred_device_id 为空 → None（由 resolve_device_id 在真实首次同步时随机生成）
+    // load_sync_state_with_preferred_device_id 内部 resolve_device_id 已覆盖
+    // 「existing 非空用 existing；否则 preferred 非空用 preferred；否则随机」语义，
+    // 不再在此处追加 fallback 或第二套 device_id 推断。
+    let preferred_device_opt: Option<&str> = if preferred_device_id.is_empty() {
+        None
+    } else {
+        Some(preferred_device_id)
+    };
+    let mut state = crate::sync::SyncService::load_sync_state_with_preferred_device_id(
+        sync_root,
+        preferred_device_opt,
+    )?;
 
     // 保留冲突状态（conflicted_files / conflicts / pending_take_remote），
     // 只重建 known_files / known_files_updated_at。
