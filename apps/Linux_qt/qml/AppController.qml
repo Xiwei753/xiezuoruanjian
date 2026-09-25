@@ -114,23 +114,15 @@ QtObject {
         if (state) applyState(state);
     }
 
-    // Issue #765：需要重新读 Core 的路径只走这个明确的 reloadProjectState()。
-    // 供工作区打开/切换/创建、restoreWorkspace 首次恢复等领域事件使用。
-    function reloadProjectState(fallbackMessage) {
-        var projectApi = projectBackendRef;
-        if (!projectApi) return;
-        var state = projectApi.refresh_app_state();
-        if (state) applyState(state);
-    }
-
     function restoreWorkspace() {
         var workspaceApi = workspaceBackendRef;
         var appApi = appBackendRef;
         if (!workspaceApi) return;
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
-        // Issue #765：首次恢复工作区时 cached_tree 可能为空，需要 reload 一次。
-        reloadProjectState(qsTr("恢复工作区失败"));
+        // Issue #765 评论 5832424693：try_restore_last_workspace 内部已通过
+        // internal_open_data_root 调用 reload_tree 更新缓存，这里只读 snapshot 即可。
+        refreshStateImmediate(qsTr("恢复工作区失败"));
 
         // 恢复上次导航状态
         if (workspaceApi.has_workspace) {
@@ -226,8 +218,9 @@ QtObject {
         workspaceApi.switch_workspace();
         route = "hub";
         workspaceApi.clear_last_navigation_state();
-        // Issue #765：工作区切换是领域事件，需要 reload Core 树。
-        reloadProjectState(qsTr("切换工作区失败"));
+        // Issue #765 评论 5832424693：switch_workspace 内部 reset_workspace_state
+        // 已清空树缓存为空数组，这里只读 snapshot 即可得到空工作区状态。
+        refreshStateImmediate(qsTr("切换工作区失败"));
     }
 
     function createWorkspace(openExisting) {
@@ -244,8 +237,9 @@ QtObject {
             return; 
         }
         if (res.success) {
-            // Issue #765：工作区创建/打开是领域事件，成功后 reload Core 树。
-            reloadProjectState(qsTr("打开工作区成功"));
+            // Issue #765 评论 5832424693：internal_open_data_root 成功后已 reload_tree，
+            // 这里只读 cached snapshot，不再重复全量扫描 Core 树。
+            refreshStateImmediate(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
             refreshStateImmediate(qsTr("打开工作区失败"));
@@ -266,8 +260,9 @@ QtObject {
             return; 
         }
         if (res.success) {
-            // Issue #765：工作区创建/打开是领域事件，成功后 reload Core 树。
-            reloadProjectState(qsTr("打开工作区成功"));
+            // Issue #765 评论 5832424693：internal_open_data_root 成功后已 reload_tree，
+            // 这里只读 cached snapshot，不再重复全量扫描 Core 树。
+            refreshStateImmediate(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
             refreshStateImmediate(qsTr("打开工作区失败"));
