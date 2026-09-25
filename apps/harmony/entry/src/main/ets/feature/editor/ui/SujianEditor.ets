@@ -600,7 +600,7 @@ export struct SujianEditor {
       this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
       // Issue #768 评论5837824666：缓存系统布局行数和当前行度量，供 pushDiagnosticsSnapshot 使用。
       this.lastSystemLayoutLineCount = systemLineCount
-      this.lastCurrentLineMetrics = this.extractCurrentLineMetrics(layout, systemLineCount, cursorUtf16)
+      this.lastCurrentLineMetrics = this.extractCurrentLineMetrics(layout, systemLineCount, cursorUtf16, visualCaret.affinity)
       this.pushDiagnosticsSnapshot()
     } catch (e) {
       // Issue #768 评论5835171266 第5项：记录系统布局错误，回退到 fallback。
@@ -661,18 +661,36 @@ export struct SujianEditor {
     this.pushDiagnosticsSnapshot()
   }
 
-  // Issue #768 评论5837824666：从真实 LayoutManager.LineMetrics 提取当前行度量。
+  // Issue #768 评论5838624438：从真实 LayoutManager.LineMetrics 提取当前行度量。
   // 直接从 layout.getLineMetrics(index) 记录 left/topHeight/height/baseline/startIndex/endIndex，
   // 不再拿 renderResult.lines 拼一个残缺的 currentLineMetrics。
+  // Issue #768 评论5838624438：soft-wrap 边界按 affinity 选择上行或下行，
+  // 和 caret 规则保持一致：Upstream → 上一视觉行，Downstream → 下一视觉行。
   private extractCurrentLineMetrics(
     layout: LayoutManager,
     systemLineCount: number,
     cursorUtf16: number,
+    affinity: CaretAffinity,
   ): CurrentLineMetricsSnapshot | null {
     try {
       for (let i = 0; i < systemLineCount; i++) {
         const metrics = layout.getLineMetrics(i)
         if (cursorUtf16 >= metrics.startIndex && cursorUtf16 <= metrics.endIndex) {
+          // soft-wrap 边界：同一个 UTF-16 offset 同时是上一行 endIndex 和下一行 startIndex。
+          // Upstream → 上一视觉行（当前匹配行），Downstream → 下一视觉行（i+1）。
+          if (cursorUtf16 === metrics.endIndex
+            && affinity === CaretAffinity.Downstream
+            && i + 1 < systemLineCount) {
+            const nextMetrics = layout.getLineMetrics(i + 1)
+            return {
+              startIndex: nextMetrics.startIndex,
+              endIndex: nextMetrics.endIndex,
+              height: nextMetrics.height,
+              baseline: nextMetrics.baseline,
+              left: nextMetrics.left,
+              topHeight: nextMetrics.topHeight,
+            }
+          }
           return {
             startIndex: metrics.startIndex,
             endIndex: metrics.endIndex,

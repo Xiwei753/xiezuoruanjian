@@ -58,7 +58,12 @@ export struct HdsPrimaryTabsApi23 {
   @Builder
   PageMap(name: string) {
     if (name === Routes.Home) {
-      HomeScreen()
+      // Issue #768 评论5838624438：星图快捷入口改为切换一级 tab，不再 push 进 homeStack。
+      HomeScreen({
+        onOpenStarMap: (): void => {
+          this.currentTab = TAB_STARMAP
+        }
+      })
     } else if (name === Routes.Workspace) {
       // Issue #768 评论5838296806：显式传 homeStack，不再依赖全局 activeTabStack
       WorkspaceScreen({ navPathStack: this.homeStack })
