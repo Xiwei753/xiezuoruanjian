@@ -65,6 +65,8 @@ pub use url::*;
 
 // 同步取消令牌是同步语义的一部分，顶层 re-export 方便平台层使用。
 pub use cancellation_token::SyncCancellationToken;
+// 同步进度 sink 同属同步语义（Issue #763），顶层 re-export 方便平台层与诊断包使用。
+pub use cancellation_token::{SyncProgressSink, SyncTargetProgressDto};
 
 #[cfg(test)]
 mod api_tests;

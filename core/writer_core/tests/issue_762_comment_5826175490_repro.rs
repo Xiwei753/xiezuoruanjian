@@ -441,7 +441,14 @@ fn target_progress_exposes_conflict_before_full_sync_finishes() {
     let api = WriterCoreApi::new(&app_data_root, &projects_root);
 
     let result = api
-        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, Some(&progress))
+        .perform_full_sync_with_provider(
+            &provider,
+            &plan,
+            staging_runs,
+            None,
+            None,
+            Some(&progress),
+        )
         .unwrap();
 
     let events = recorder.events.lock().unwrap();
@@ -621,6 +628,7 @@ fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
             &fixture.provider,
             &fixture.plan,
             fixture.staging_runs,
+            None,
             None,
             Some(&progress),
         )
@@ -881,7 +889,7 @@ fn preexisting_conflict_resolved_before_target_commit_keep_local_is_not_revived(
 
     let api = WriterCoreApi::new(&app_data_root, &projects_root);
     let result = api
-        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None, None)
         .unwrap();
 
     // 断言 1：A 仍已解决（不被 staging 旧状态复活）
@@ -1033,7 +1041,7 @@ fn preexisting_conflict_resolved_before_target_commit_take_remote_is_not_revived
 
     let api = WriterCoreApi::new(&app_data_root, &projects_root);
     let result = api
-        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None, None)
         .unwrap();
 
     // 断言 1：A 仍已解决（不被 staging 旧状态复活）
@@ -1164,7 +1172,7 @@ fn first_sync_preserves_stable_device_id_from_staging() {
 
     let api = WriterCoreApi::new(&app_data_root, &projects_root);
     let _result = api
-        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None, None)
         .unwrap();
 
     // 同步后 live 必须有 state.local.json，且 device_id 等于平台稳定 DEVICE_LOCAL。

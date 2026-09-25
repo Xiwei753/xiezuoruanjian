@@ -57,6 +57,7 @@ impl super::WriterCore {
         &self,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
+        progress: Option<crate::sync::SyncProgressSink>,
     ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
         // 一进正式事务先原子写 Syncing 本次 attempt
         // 时间（保留旧 last_success_time）。进程中断/被杀后重启读到的是 Syncing，
@@ -66,7 +67,7 @@ impl super::WriterCore {
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let provider = self.create_sync_provider_for_plan(config, &secrets)?;
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
-        self.perform_full_sync_with_provider(provider.as_ref(), &sync_policy, force_sync)
+        self.perform_full_sync_with_provider(provider.as_ref(), &sync_policy, force_sync, progress)
     }
 
     /// 内部：用给定 provider 执行全量同步。
@@ -82,6 +83,7 @@ impl super::WriterCore {
         provider: &dyn crate::sync::provider::SyncProvider,
         sync_policy: &crate::sync::types::SyncPolicy,
         force_sync: bool,
+        _progress: Option<crate::sync::SyncProgressSink>,
     ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
         use crate::sync::types::{SyncTarget, TargetSyncResult};
 

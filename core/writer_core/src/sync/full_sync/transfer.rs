@@ -4,7 +4,7 @@
 //! （新编排入口，每个 target 独立执行，不调用 `persist_unresolved_conflicts_early`）。
 //! 所有 helpers live in `transfer_helpers.rs`.
 
-use crate::sync::cancellation_token::SyncCancellationToken;
+use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{
     DeletedTargetResolution, LocalLifecycleCommitAction, SyncResult, TargetSyncResult,
@@ -23,12 +23,22 @@ use super::{FullSyncPlan, FullSyncTransferResult};
 /// `cancellation_token`：平台层持有的取消令牌。在每次 target 迭代开头检查
 /// `is_cancelled()`，如果已取消则 break 并返回已收集的结果（已完成的 targets +
 /// 剩余的标记为 cancelled/skipped）。
+///
+/// `progress_sink`：可选的进度 sink（Issue #763）。在 target 开始/结束时写入当前
+/// target 的 remote_prefix / project_id / phase / finished / total，供诊断包导出时
+/// 读取实时进度。`None` 时不产生任何进度更新。
+///
+/// `target_progress`：可选的 #762 callback。每个 target Transfer 完成后回调一次，
+/// 平台层据此实时刷新冲突状态。生产路径（`perform_full_sync_with_provider`）的
+/// callback 在 Commit 之后调，不在此处调；本参数仅供兼容入口 `run_transfer` 的
+/// 旧测试用。
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub fn run_transfer(
     provider: &dyn SyncProvider,
     plan: &FullSyncPlan,
     cancellation_token: Option<&SyncCancellationToken>,
-    progress: Option<&super::SyncProgressCallback>,
+    progress_sink: Option<&SyncProgressSink>,
+    target_progress: Option<&super::SyncProgressCallback>,
 ) -> FullSyncTransferResult {
     if !plan.sync_policy.enabled {
         log::debug!("[sync] run_transfer: sync disabled — returning no-op");
@@ -40,6 +50,7 @@ pub fn run_transfer(
 
     let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
 
+    let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
     let mut targets = Vec::with_capacity(plan.targets.len());
     for target_index in 0..plan.targets.len() {
         // Issue #729：每次 target 迭代开头检查取消令牌。
@@ -54,6 +65,20 @@ pub fn run_transfer(
             }
         }
 
+        let planned = &plan.targets[target_index];
+
+        // Issue #763：target 开始时写入进度 sink。
+        if let Some(sink) = progress_sink {
+            let finished = u32::try_from(target_index).unwrap_or(u32::MAX);
+            sink.update_target_start(
+                &planned.target.remote_prefix,
+                planned.project_id.as_deref(),
+                "transfer",
+                finished,
+                total_targets,
+            );
+        }
+
         // 与生产编排共用同一个单 target 入口，不复制 dispatch。
         let Some((target_result, _resolution, _action)) = run_single_target_transfer(
             provider,
@@ -66,9 +91,23 @@ pub fn run_transfer(
             break;
         };
 
+        // Issue #763：target 结束时写入进度 sink（phase 清空表示该 target 已完成）。
+        if let Some(sink) = progress_sink {
+            let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
+            sink.update_target_finish(
+                &planned.target.remote_prefix,
+                planned.project_id.as_deref(),
+                finished,
+                total_targets,
+            );
+        }
+
         // 每个 target 完成后立即回调 progress，平台层据此实时刷新冲突状态，
         // 不必等最终 FullSyncResult。
-        if let Some(cb) = progress {
+        // 注意：本回调是"Transfer 后"而非"Commit 后"——`run_transfer` 是兼容入口
+        // 不做 Commit。生产路径的 callback 在 `perform_full_sync_with_provider` 的
+        // Commit 之后调，不经过此处。
+        if let Some(cb) = target_progress {
             let progress_status =
                 crate::api::types::sync_status_to_wire(&target_result.result.status);
             let progress_conflict_count =
@@ -97,6 +136,9 @@ pub fn run_transfer(
             };
         }
     }
+    // Issue #763 评论 5831610228：generation GC 阶段在循环内每处理一个 planned
+    // target 时用 set_target_phase 更新 remote_prefix / project_id / phase，
+    // 避免残留最后一个 Transfer target 导致诊断包指错作品。
     for planned in &plan.targets {
         // Issue #729：generation GC 循环内每个 target 前检查取消令牌。
         if let Some(token) = cancellation_token {
@@ -106,6 +148,15 @@ pub fn run_transfer(
                 );
                 break;
             }
+        }
+        // Issue #763 评论 5831610228：generation GC 循环里每处理一个 planned，
+        // 都更新 sink 的 target 信息，避免残留最后一个 Transfer target 指错作品。
+        if let Some(sink) = progress_sink {
+            sink.set_target_phase(
+                &planned.target.remote_prefix,
+                planned.project_id.as_deref(),
+                "generation_gc",
+            );
         }
         if planned.target.remote_prefix.starts_with("projects/") {
             let active_generation = crate::sync::target_lifecycle::find_record(

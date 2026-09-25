@@ -93,16 +93,18 @@ impl super::WriterAppService {
 
     /// 全量同步。
     ///
-    /// UniFFI 导出接口保持 2 参数签名不变。cancellation_token 在此层固定为 None，
-    /// 因为 UniFFI 调用方（Android）不传取消令牌。Linux_Qt 后台线程直接调
-    /// `WriterCoreApi::perform_full_sync` 传入 token，不经此方法。
+    /// UniFFI 导出接口保持 2 参数签名不变。cancellation_token / progress_sink /
+    /// target_progress 在此层固定为 None，因为 UniFFI 调用方（Android）不传取消令牌
+    /// 和进度入口。Linux_Qt 后台线程直接调 `WriterCoreApi::perform_full_sync` 传入
+    /// token / sink / callback，不经此方法。
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
         force_sync: bool,
     ) -> Result<FullSyncResultDto, WriterError> {
         self.refresh_secrets_override();
-        self.api.perform_full_sync(config, force_sync, None, None)
+        self.api
+            .perform_full_sync(config, force_sync, None, None, None)
     }
 
     pub fn resolve_conflict_keep_local(

@@ -409,6 +409,18 @@ pub struct SyncOperationCountsDto {
     pub overwritten: u32,
     pub ignored: u32,
     pub conflicts: u32,
+    /// 未解决冲突总数（跨所有项目，区别于 `conflicts` 本次同步产生数）。
+    /// 诊断包用，由 `list_all_sync_conflicts` 聚合得到。
+    pub conflict_count: u32,
+}
+
+/// 当前正在处理的同步 target — 诊断用，让导出包能知道同步卡在哪个 target。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncCurrentTargetDto {
+    pub target_remote_prefix: Option<String>,
+    pub project_id: Option<String>,
+    pub phase: Option<String>,
 }
 
 /// 同步操作状态 — 描述一次同步操作的进度和结果。
@@ -418,6 +430,8 @@ pub struct SyncOperationCountsDto {
 /// - `status_code`：操作状态（`"idle"` / `"running"` / `"completed"` / `"failed"`）
 /// - `phase_key`：当前阶段 i18n key（如 `"uploading"` / `"downloading"` / `"resolving_conflicts"`）
 /// - `summary_key`：完成摘要 i18n key（如 `"sync_completed"` / `"sync_completed_with_conflicts"`）
+/// - `current_target`：当前正在处理的 target（诊断用，运行中才有值）
+/// - `finished_targets` / `total_targets`：target 进度计数
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncOperationStateDto {
@@ -427,6 +441,9 @@ pub struct SyncOperationStateDto {
     pub phase_key: Option<String>,
     pub summary_key: Option<String>,
     pub summary_args: std::collections::HashMap<String, String>,
+    pub current_target: Option<SyncCurrentTargetDto>,
+    pub finished_targets: u32,
+    pub total_targets: u32,
     pub counts: SyncOperationCountsDto,
     pub raw_error: Option<String>,
 }

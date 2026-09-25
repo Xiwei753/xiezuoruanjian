@@ -365,6 +365,14 @@ dictionary SyncOperationCountsDto {
     u32 overwritten;
     u32 ignored;
     u32 conflicts;
+    u32 conflict_count;
+};
+
+// 当前正在处理的同步 target — 诊断用。
+dictionary SyncCurrentTargetDto {
+    string? target_remote_prefix;
+    string? project_id;
+    string? phase;
 };
 
 dictionary SyncOperationStateDto {
@@ -374,6 +382,9 @@ dictionary SyncOperationStateDto {
     string? phase_key;
     string? summary_key;
     record<string, string> summary_args;
+    SyncCurrentTargetDto? current_target;
+    u32 finished_targets;
+    u32 total_targets;
     SyncOperationCountsDto counts;
     string? raw_error;
 };

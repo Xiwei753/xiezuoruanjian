@@ -449,6 +449,8 @@ impl AppBackend {
         self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // c. 清 in_progress：旧同步不再算作进行中，新工作区的 single-flight 不会被旧同步卡住。
         self.current_sync_in_progress = false;
+        // Issue #763：丢弃旧工作区的进度 sink，避免诊断导出带上旧工作区 target 进度。
+        self.current_sync_progress = None;
 
         self.flush_writing_stats();
         self.flush_recent_edits();

@@ -131,6 +131,8 @@ impl AppBackend {
 
         self.current_sync_status = outcome.sync_status.clone();
         self.current_sync_in_progress = false;
+        // 同步结束：丢弃进度 sink，后续诊断导出不再附带 target 进度。
+        self.current_sync_progress = None;
         self.current_last_sync_time = Self::now_epoch_seconds();
         self.current_sync_operation_state = outcome.action_result.clone();
         let status_str = outcome.sync_status.as_str();
@@ -202,6 +204,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.status.already_running".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -219,6 +224,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.no_workspace".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -235,6 +243,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.remote_url_missing".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -251,6 +262,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.token_missing".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -271,6 +285,9 @@ impl AppBackend {
             phase_key: Some("sync.phase.dry_run".to_string()),
             summary_key: None,
             summary_args: std::collections::HashMap::new(),
+            current_target: None,
+            finished_targets: 0,
+            total_targets: 0,
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
@@ -291,6 +308,9 @@ impl AppBackend {
                     phase_key: None,
                     summary_key: Some("sync.block.no_workspace_layout".to_string()),
                     summary_args: std::collections::HashMap::new(),
+                    current_target: None,
+                    finished_targets: 0,
+                    total_targets: 0,
                     counts: writer_core::api::SyncOperationCountsDto::default(),
                     raw_error: None,
                 };
@@ -343,6 +363,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some(summary_key),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
@@ -369,6 +392,7 @@ impl AppBackend {
                             ignored: plan.total_ignored,
                             conflicts: plan.total_conflicts,
                             overwritten: 0,
+                            conflict_count: 0,
                         };
 
                         let state = writer_core::api::SyncOperationStateDto {
@@ -378,6 +402,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some("sync.result.dry_run_summary".to_string()),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts,
                             raw_error: None,
                         };
@@ -401,6 +428,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some("sync.result.dry_run_failed".to_string()),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
@@ -433,6 +463,9 @@ impl AppBackend {
                         phase_key: None,
                         summary_key: Some("error.sync_dry_run_panic".to_string()),
                         summary_args: [("panic_msg".to_string(), panic_msg)].into_iter().collect(),
+                        current_target: None,
+                        finished_targets: 0,
+                        total_targets: 0,
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: None,
                     };
@@ -486,6 +519,9 @@ impl AppBackend {
                     phase_key: None,
                     summary_key: Some("sync.status.already_running".to_string()),
                     summary_args: std::collections::HashMap::new(),
+                    current_target: None,
+                    finished_targets: 0,
+                    total_targets: 0,
                     counts: writer_core::api::SyncOperationCountsDto::default(),
                     raw_error: None,
                 };
@@ -520,6 +556,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.no_workspace".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -537,6 +576,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.remote_url_missing".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -554,6 +596,9 @@ impl AppBackend {
                 phase_key: None,
                 summary_key: Some("sync.block.token_missing".to_string()),
                 summary_args: std::collections::HashMap::new(),
+                current_target: None,
+                finished_targets: 0,
+                total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
@@ -582,6 +627,9 @@ impl AppBackend {
             }),
             summary_key: None,
             summary_args: std::collections::HashMap::new(),
+            current_target: None,
+            finished_targets: 0,
+            total_targets: 0,
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
@@ -604,6 +652,9 @@ impl AppBackend {
                     phase_key: None,
                     summary_key: Some("sync.block.no_workspace_layout".to_string()),
                     summary_args: std::collections::HashMap::new(),
+                    current_target: None,
+                    finished_targets: 0,
+                    total_targets: 0,
                     counts: writer_core::api::SyncOperationCountsDto::default(),
                     raw_error: None,
                 };
@@ -625,6 +676,12 @@ impl AppBackend {
             .current_sync_cancel_token
             .as_ref()
             .map(|arc| (**arc).clone());
+        // Issue #763：创建同步进度共享 sink。total 初始 0，Core run_transfer 会在
+        // 各 target 开始/结束时更新 finished/total。存到 self 供诊断导出主线程读，
+        // clone 一份 move 进后台线程传给 perform_full_sync。SyncProgressSink 是
+        // Clone（廉价 Arc）且 Send + Sync，可安全跨线程共享。
+        let progress_sink = writer_core::sync::SyncProgressSink::new(0);
+        self.current_sync_progress = Some(progress_sink.clone());
         // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
         let data_root_capture = data_root.clone();
 
@@ -655,10 +712,11 @@ impl AppBackend {
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure captures
             // owned String data (data_root, projects_root, op_id_capture), a GitRepoLayout
-            // snapshot, and progress_callback (Option<Arc<dyn Fn + Send + Sync>>). Arc<dyn Fn>
-            // is not RefUnwindSafe (dyn Fn lacks RefUnwindSafe bound), so the closure is wrapped
-            // in AssertUnwindSafe to satisfy catch_unwind's UnwindSafe bound. AssertUnwindSafe
-            // is std's safe wrapper (not unsafe impl), no hand-written unsafe.
+            // snapshot, progress_sink (SyncProgressSink = Arc<Mutex<..>>, RefUnwindSafe),
+            // and progress_callback (Option<Arc<dyn Fn + Send + Sync>>). Arc<dyn Fn> is not
+            // RefUnwindSafe (dyn Fn lacks RefUnwindSafe bound), so the closure is wrapped in
+            // AssertUnwindSafe to satisfy catch_unwind's UnwindSafe bound. AssertUnwindSafe is
+            // std's safe wrapper (not unsafe impl), no hand-written unsafe.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = crate::backend::app_backend::with_layout_core_api(
                     &data_root,
@@ -677,6 +735,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some(summary_key),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
@@ -702,10 +763,14 @@ impl AppBackend {
 
                 // Issue #762 评论 5826175490 第 5 点：progress callback 在主线程构造，
                 // 闭包用 AssertUnwindSafe 包装，progress_callback.as_ref() 直接传入。
+                // Issue #763：progress_sink.clone() 传入，Core 在各 target 开始/结束更新。
+                // sink + callback 同时传：sink 供诊断导出读 target 进度，callback 供主线程
+                // 每个 target 完成后刷新全局冲突数。
                 match api.perform_full_sync(
                     config,
                     trigger == "manual",
                     cancel_token.clone(),
+                    Some(progress_sink.clone()),
                     progress_callback.as_ref(),
                 ) {
                     Ok(result) => {
@@ -762,6 +827,7 @@ impl AppBackend {
                             overwritten: result.total_overwritten,
                             ignored: result.total_ignored,
                             conflicts: result.total_conflicts,
+                            conflict_count: 0,
                         };
 
                         let mut summary_args = std::collections::HashMap::new();
@@ -790,6 +856,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key,
                             summary_args,
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts,
                             raw_error: result.error.as_ref().map(|e| mask_sync_error(e)),
                         };
@@ -829,6 +898,9 @@ impl AppBackend {
                             phase_key: None,
                             summary_key: Some(summary_key.to_string()),
                             summary_args: std::collections::HashMap::new(),
+                            current_target: None,
+                            finished_targets: 0,
+                            total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
@@ -860,6 +932,9 @@ impl AppBackend {
                         phase_key: None,
                         summary_key: Some("error.sync_panic".to_string()),
                         summary_args: [("panic_msg".to_string(), panic_msg)].into_iter().collect(),
+                        current_target: None,
+                        finished_targets: 0,
+                        total_targets: 0,
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: None,
                     };

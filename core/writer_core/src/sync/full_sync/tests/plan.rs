@@ -473,7 +473,7 @@ fn repro_issue_645_q2_manifest_missing_fakes_lww_now() {
         app_data_root: app_root.clone(),
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
-    let transfer = super::super::run_transfer(&provider, &plan, None, None);
+    let transfer = super::super::run_transfer(&provider, &plan, None, None, None);
 
     let final_snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
     let rec = crate::sync::target_lifecycle::find_record(&final_snapshot.catalog, "projects/P");
