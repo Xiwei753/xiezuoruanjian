@@ -153,11 +153,15 @@ export struct PrimaryTabShell {
     if (this.currentScreenRole !== requestedRole) {
       return
     }
-    if (policy) {
-      this.currentShowPrimaryNav = policy.showPrimaryNavigation
-    } else {
-      this.currentShowPrimaryNav = true
+    // Issue #767 评论5832378491：policy 解析失败时保持 fail-closed（currentShowPrimaryNav 已为 false），
+    // 不要 fail-open 把一级导航重新放开，否则 Writing/Settings 用户能横向切 tab 绕过离开事务。
+    if (policy === null) {
+      hilog.warn(0x0000, 'PrimaryTabShell',
+        'resolveScreenPolicy failed for role=%{public}s; keep primary navigation disabled',
+        String(requestedRole))
+      return
     }
+    this.currentShowPrimaryNav = policy.showPrimaryNavigation
   }
 
   // Issue #767 评论5832129578 第1项：syncActiveTab 是同步 activeStack 和 Coordinator 的唯一入口。
