@@ -48,7 +48,8 @@ QtObject {
         onTriggered: {
             var projectApi = projectBackendRef;
             if (!projectApi) return;
-            var state = projectApi.refresh_app_state();
+            // Issue #765：debounced refresh 只读 cached snapshot，不触发全量 Core 树扫描。
+            var state = projectApi.get_app_state();
             if (state) applyState(state);
         }
     }
@@ -108,7 +109,8 @@ QtObject {
     function refreshStateImmediate(fallbackMessage) {
         var projectApi = projectBackendRef;
         if (!projectApi) return;
-        var state = projectApi.refresh_app_state();
+        // Issue #765：普通 UI 读取 appState 只拿现有 cached snapshot，不触发全量 Core 树扫描。
+        var state = projectApi.get_app_state();
         if (state) applyState(state);
     }
 
@@ -118,6 +120,8 @@ QtObject {
         if (!workspaceApi) return;
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
+        // Issue #765 评论 5832424693：try_restore_last_workspace 内部已通过
+        // internal_open_data_root 调用 reload_tree 更新缓存，这里只读 snapshot 即可。
         refreshStateImmediate(qsTr("恢复工作区失败"));
 
         // 恢复上次导航状态
@@ -214,6 +218,8 @@ QtObject {
         workspaceApi.switch_workspace();
         route = "hub";
         workspaceApi.clear_last_navigation_state();
+        // Issue #765 评论 5832424693：switch_workspace 内部 reset_workspace_state
+        // 已清空树缓存为空数组，这里只读 snapshot 即可得到空工作区状态。
         refreshStateImmediate(qsTr("切换工作区失败"));
     }
 
@@ -231,6 +237,8 @@ QtObject {
             return; 
         }
         if (res.success) {
+            // Issue #765 评论 5832424693：internal_open_data_root 成功后已 reload_tree，
+            // 这里只读 cached snapshot，不再重复全量扫描 Core 树。
             refreshStateImmediate(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
@@ -252,6 +260,8 @@ QtObject {
             return; 
         }
         if (res.success) {
+            // Issue #765 评论 5832424693：internal_open_data_root 成功后已 reload_tree，
+            // 这里只读 cached snapshot，不再重复全量扫描 Core 树。
             refreshStateImmediate(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));

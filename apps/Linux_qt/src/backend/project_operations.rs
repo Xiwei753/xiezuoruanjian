@@ -58,6 +58,9 @@ impl AppBackend {
     pub(crate) fn reload_tree(&mut self) {
         let before_count = self.cached_tree.len();
         let mut list = QJsonArray::default();
+        // Issue #765：并行构建 serde_json::Value 镜像，供 appState/tree model 纯转换路径使用。
+        // 保持与原 build_tree_model_json 完全相同的 JSON 结构（project/volume/chapter 字段）。
+        let mut tree_vec: Vec<serde_json::Value> = Vec::new();
         if let Some(core) = self.core_api() {
             if let Ok(projects) = core.list_projects() {
                 for p in projects {
@@ -66,6 +69,15 @@ impl AppBackend {
                     p_map.insert("id", QJsonValue::from(QString::from(p.id.clone())));
                     p_map.insert("type", QJsonValue::from(QString::from("project")));
                     list.push(QJsonValue::from(p_map));
+
+                    // serde 镜像：project 节点（与原 build_tree_model_json 结构一致）
+                    tree_vec.push(serde_json::json!({
+                        "title": p.title,
+                        "id": p.id,
+                        "type": "project",
+                        "projectId": "",
+                        "volumeId": ""
+                    }));
 
                     if let Ok(volumes) = core.list_volumes(&p.id) {
                         for v in volumes {
@@ -76,6 +88,15 @@ impl AppBackend {
                                 .insert("projectId", QJsonValue::from(QString::from(p.id.clone())));
                             v_map.insert("type", QJsonValue::from(QString::from("volume")));
                             list.push(QJsonValue::from(v_map));
+
+                            // serde 镜像：volume 节点
+                            tree_vec.push(serde_json::json!({
+                                "title": v.title,
+                                "id": v.id,
+                                "projectId": p.id,
+                                "volumeId": v.id,
+                                "type": "volume"
+                            }));
 
                             if let Ok(chapters) = core.list_chapters(&p.id, &v.id) {
                                 for c in chapters {
@@ -99,6 +120,15 @@ impl AppBackend {
                                     c_map
                                         .insert("type", QJsonValue::from(QString::from("chapter")));
                                     list.push(QJsonValue::from(c_map));
+
+                                    // serde 镜像：chapter 节点
+                                    tree_vec.push(serde_json::json!({
+                                        "title": c.title,
+                                        "id": c.id,
+                                        "projectId": p.id,
+                                        "volumeId": v.id,
+                                        "type": "chapter"
+                                    }));
                                 }
                             }
                         }
@@ -107,6 +137,7 @@ impl AppBackend {
             }
         }
         self.cached_tree = list;
+        self.cached_tree_json = serde_json::Value::Array(tree_vec);
         let after_count = self.cached_tree.len();
         self.debug_log(
             "tree",
@@ -115,51 +146,18 @@ impl AppBackend {
         );
     }
 
-    pub(crate) fn build_tree_model_json(&self) -> serde_json::Value {
-        use serde_json::json;
-        let mut tree = Vec::new();
-        if let Some(core) = self.core_api() {
-            if let Ok(projects) = core.list_projects() {
-                for p in &projects {
-                    let mut p_map = serde_json::Map::new();
-                    p_map.insert("title".into(), json!(p.title));
-                    p_map.insert("id".into(), json!(p.id));
-                    p_map.insert("type".into(), json!("project"));
-                    p_map.insert("projectId".into(), json!(""));
-                    p_map.insert("volumeId".into(), json!(""));
-                    tree.push(serde_json::Value::Object(p_map));
-
-                    if let Ok(volumes) = core.list_volumes(&p.id) {
-                        for v in &volumes {
-                            let mut v_map = serde_json::Map::new();
-                            v_map.insert("title".into(), json!(v.title));
-                            v_map.insert("id".into(), json!(v.id));
-                            v_map.insert("projectId".into(), json!(p.id));
-                            v_map.insert("volumeId".into(), json!(v.id));
-                            v_map.insert("type".into(), json!("volume"));
-                            tree.push(serde_json::Value::Object(v_map));
-
-                            if let Ok(chapters) = core.list_chapters(&p.id, &v.id) {
-                                for c in &chapters {
-                                    let mut c_map = serde_json::Map::new();
-                                    c_map.insert("title".into(), json!(c.title));
-                                    c_map.insert("id".into(), json!(c.id));
-                                    c_map.insert("projectId".into(), json!(p.id));
-                                    c_map.insert("volumeId".into(), json!(v.id));
-                                    c_map.insert("type".into(), json!("chapter"));
-                                    tree.push(serde_json::Value::Object(c_map));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    /// Issue #765：纯转换函数，只返回 cached_tree_json 的克隆，不读磁盘、不调 Core。
+    /// 若 cached_tree_json 尚未初始化（Null），归一化为空数组以保持与原 build_tree_model_json
+    /// 在无 workspace 时返回 Array(vec![]) 的兼容行为。
+    pub(crate) fn cached_tree_to_json(&self) -> serde_json::Value {
+        match &self.cached_tree_json {
+            serde_json::Value::Array(_) => self.cached_tree_json.clone(),
+            _ => serde_json::Value::Array(vec![]),
         }
-        serde_json::Value::Array(tree)
     }
 
     pub(crate) fn get_tree_model_json(&self) -> QString {
-        let items = self.build_tree_model_json();
+        let items = self.cached_tree_to_json();
         let count = match &items {
             serde_json::Value::Array(arr) => arr.len(),
             _ => 0,
@@ -177,9 +175,38 @@ impl AppBackend {
         self.get_tree_model_json()
     }
 
+    /// Issue #765：只读 snapshot，不调用 reload_tree，直接用 cached_tree_to_json()。
+    /// 供 QML 侧普通 UI 读取 appState（纯路由、debounce、mutation else 分支等）使用。
+    pub(crate) fn get_app_state_json(&self) -> QString {
+        let tree_json = self.cached_tree_to_json();
+        let state = serde_json::json!({
+            "hasWorkspace": self.current_has_data_root,
+            "workspacePath": self.current_data_root,
+            "saveStatus": self.current_save_status,
+            "selected": {
+                "projectId": self.selected_project_id.clone().unwrap_or_default(),
+                "volumeId": self.selected_volume_id.clone().unwrap_or_default(),
+                "chapterId": self.selected_chapter_id.clone().unwrap_or_default()
+            },
+            "tree": tree_json,
+            "settings": {
+                "fontSize": self.current_setting_font_size,
+                // Issue #705: themeMode 字段改读 appearance_mode(诊断日志用)。
+                "themeMode": self.current_setting_appearance_mode.clone()
+            },
+            "sync": {
+                "status": self.current_sync_status
+            }
+        });
+        state.to_string().into()
+    }
+
+    /// Issue #765：reload + snapshot。只供真正需要重扫 Core 的场景调用
+    ///（QML 侧 reloadProjectState：工作区打开/切换/创建、restoreWorkspace 首次恢复）。
+    /// 不再调用 build_tree_model_json 做第二遍全量扫描。
     pub(crate) fn refresh_app_state_json(&mut self) -> QString {
         self.reload_tree();
-        let tree_json = self.build_tree_model_json();
+        let tree_json = self.cached_tree_to_json();
         let state = serde_json::json!({
             "hasWorkspace": self.current_has_data_root,
             "workspacePath": self.current_data_root,
@@ -213,7 +240,7 @@ impl AppBackend {
                 "volumeId": self.selected_volume_id.clone().unwrap_or_default(),
                 "chapterId": self.selected_chapter_id.clone().unwrap_or_default()
             },
-            "tree": self.build_tree_model_json(),
+            "tree": self.cached_tree_to_json(),
             "settings": {
                 "fontSize": self.current_setting_font_size,
                 // Issue #705: themeMode 字段改读 appearance_mode(诊断日志用)。
