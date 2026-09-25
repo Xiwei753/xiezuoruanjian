@@ -229,7 +229,13 @@ export struct SettingsScreen {
       .width('100%')
       .height('100%')
     }
-    .hideTitleBar(true)
+    // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮），删除手写返回 Image。
+    .hideTitleBar(false)
+    .title($r('app.string.settings'))
+    .onBackPressed(() => {
+      this.goBack()
+      return true
+    })
     .onShown(() => {
       NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings)
     })
@@ -259,19 +265,13 @@ export struct SettingsScreen {
     .align(Alignment.Top)
   }
 
-  // ── 宽屏 Header：返回按钮 + 标题 + 保存状态提示（无搜索框，恢复 #760 之前样式） ──
+  // ── 宽屏 Header：标题 + 保存状态提示（返回按钮由 NavDestination 原生标题栏承载，Issue #768） ──
   @Builder
   WideSettingsHeader() {
     Row() {
-      Image($r('sys.media.ohos_ic_public_arrow_left'))
-        .width(24)
-        .height(24)
-        .onClick(() => this.goBack())
-
       Text($r('app.string.settings'))
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ left: 12 })
 
       Blank()
 
@@ -293,21 +293,15 @@ export struct SettingsScreen {
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
   }
 
-  // ── 窄屏 Header：返回按钮 + 标题 + 搜索框 ──
+  // ── 窄屏 Header：标题 + 搜索框（返回按钮由 NavDestination 原生标题栏承载，Issue #768） ──
   @Builder
   CompactSettingsHeader() {
     Column() {
-      // 返回按钮行
+      // 标题行
       Row() {
-        Image($r('sys.media.ohos_ic_public_arrow_left'))
-          .width(24)
-          .height(24)
-          .onClick(() => this.goBack())
-
         Text($r('app.string.settings'))
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .margin({ left: 12 })
 
         Blank()
 

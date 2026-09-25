@@ -52,6 +52,7 @@ import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
 import { EditorTextStyleProjector, EditorStyleConfig } from '../render/EditorTextStyleProjector'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../diagnostics/EditorRuntimeSnapshotStore'
 import hilog from '@ohos.hilog'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
@@ -117,6 +118,11 @@ export struct SujianEditor {
   // 不丢弃命中测试的 soft-wrap 亲和性。
   private dragAnchor: VisualCaretPosition | null = null
   private isDragging: boolean = false
+  // Issue #768：编辑器焦点状态，供诊断快照读取。
+  private isFocused: boolean = false
+  // Issue #768：布局来源标记，供诊断快照读取。
+  // 'system' = 用系统 LayoutManager，'fallback' = 自计算，'none' = 无布局。
+  private lastLayoutSource: string = 'none'
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
@@ -132,6 +138,8 @@ export struct SujianEditor {
     if (this.selectionController) {
       this.selectionController.registerVisualCaretListener((_pos: VisualCaretPosition | null) => {
         this.refreshRenderLayout()
+        // Issue #768：光标/选区变化时推送诊断快照。
+        this.pushDiagnosticsSnapshot()
       })
     }
     // Issue #629 评论6 Part C + 评论7 第4项：注册父子 viewport 恢复通道。
@@ -153,6 +161,8 @@ export struct SujianEditor {
         }
       )
     }
+    // Issue #768：会话创建时推送诊断快照。
+    this.pushDiagnosticsSnapshot()
   }
 
   aboutToDisappear(): void {
@@ -170,6 +180,193 @@ export struct SujianEditor {
     if (this.viewportController) {
       this.viewportController.unregister()
     }
+    // Issue #768：组件销毁时清空诊断快照，避免导出已销毁编辑器的陈旧状态。
+    EditorRuntimeSnapshotStore.getInstance().clear()
+  }
+
+  // Issue #768：把当前编辑器运行时状态推送到诊断快照存储。
+  // 从 this.snapshot、几何状态、IME 状态、滚动状态等读取数据构造完整快照。
+  // 不写正文内容，只写长度、offset、几何和状态。在各生命周期点调用。
+  private pushDiagnosticsSnapshot(): void {
+    const store = EditorRuntimeSnapshotStore.getInstance()
+    const snap = this.snapshot
+
+    // 滚动偏移
+    let scrollX: number = 0
+    let scrollY: number = 0
+    try {
+      const offset = this.scroller.currentOffset()
+      scrollX = offset.xOffset
+      scrollY = offset.yOffset
+    } catch (_e) {
+      // scroller 未就绪时保持 0
+    }
+    const imeAttached: boolean = this.harmonyImeConnection !== null && this.harmonyImeConnection.isAttached()
+    const apiLevel: number = PlatformApiResolver.getInstance().getApiLevel()
+
+    // 无活跃会话时推送 hasActiveSession=false 的快照，仍记录视口/IME/焦点/滚动状态。
+    if (snap === null) {
+      const emptySnapshot: EditorRuntimeSnapshot = {
+        hasActiveSession: false,
+        revision: 0,
+        generation: 0,
+        textUtf8Bytes: 0,
+        textUtf16Length: 0,
+        cursorByteOffset: 0,
+        cursorUtf16Offset: 0,
+        selectionAnchorByte: 0,
+        selectionHeadByte: 0,
+        hasComposition: false,
+        compositionStartByte: -1,
+        compositionEndByte: -1,
+        fontSizeVp: 0,
+        lineSpacingMultiplier: 0,
+        effectiveLineHeightVp: 0,
+        firstLineIndentEnabled: false,
+        firstLineIndentChars: 0,
+        effectiveFirstLineIndentVp: 0,
+        viewportWidthPx: this.viewportWidth,
+        viewportHeightPx: this.viewportHeight,
+        contentWidthPx: this.contentWidth,
+        contentHeightPx: this.contentHeight,
+        systemLayoutLineCount: 0,
+        caretRect: null,
+        selectionRectCount: 0,
+        currentLineMetrics: null,
+        imeAttached: imeAttached,
+        editorFocused: this.isFocused,
+        currentScrollX: scrollX,
+        currentScrollY: scrollY,
+        leadingWhitespaceCountOfCurrentParagraph: 0,
+        layoutSource: 'none',
+        usingLayoutManager: false,
+        apiLevel: apiLevel,
+        lastLayoutError: null,
+        fallbackCount: 0,
+      }
+      store.updateSnapshot(emptySnapshot)
+      return
+    }
+
+    // 有活跃会话：从 snapshot 和当前状态构造完整快照。
+    const text: string = snap.text
+    const textUtf16Length: number = text.length
+    const textUtf8Bytes: number = TextOffsetMapper.utf16ToUtf8(text, textUtf16Length)
+    const cursorUtf16Offset: number = TextOffsetMapper.utf8ToUtf16(text, snap.cursorByteOffset)
+    const hasComposition: boolean = snap.compositionStart !== null && snap.compositionEnd !== null
+    const compositionStartByte: number = snap.compositionStart !== null ? snap.compositionStart : -1
+    const compositionEndByte: number = snap.compositionEnd !== null ? snap.compositionEnd : -1
+
+    // 排版设置
+    const fontSizeVp: number = snap.fontSize
+    const lineSpacingMultiplier: number = snap.lineSpacingMultiplier
+    const effectiveLineHeightVp: number = fontSizeVp * lineSpacingMultiplier
+    const firstLineIndentEnabled: boolean = snap.autoIndentEnabled
+    const firstLineIndentChars: number = snap.autoIndentWidth
+    const effectiveFirstLineIndentVp: number = firstLineIndentEnabled ? firstLineIndentChars * fontSizeVp : 0
+
+    // 布局来源/行数
+    const layout = this.textController.getLayoutManager()
+    const usingLayoutManager: boolean = layout !== null && layout !== undefined
+    let systemLayoutLineCount: number = 0
+    if (usingLayoutManager && layout !== null) {
+      systemLayoutLineCount = layout.getLineCount()
+    }
+
+    // 光标矩形
+    let caretRect: CaretRectSnapshot | null = null
+    if (this.caretRect !== null) {
+      caretRect = {
+        x: this.caretRect.x,
+        y: this.caretRect.y,
+        width: this.caretRect.width,
+        height: this.caretRect.height,
+      }
+    }
+
+    // 当前行度量：从 renderResult.lines 找光标所在行
+    let currentLineMetrics: CurrentLineMetricsSnapshot | null = null
+    if (this.renderResult !== null) {
+      const lines = this.renderResult.lines
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        if (cursorUtf16Offset >= line.startUtf16 && cursorUtf16Offset <= line.endUtf16) {
+          currentLineMetrics = {
+            startIndex: line.startUtf16,
+            endIndex: line.endUtf16,
+            height: line.height,
+            baseline: 0, // LineLayout 不含 baseline，填 0 表示不可用
+          }
+          break
+        }
+      }
+    }
+
+    // 段落前导空白
+    const leadingWhitespaceCount: number = this.computeLeadingWhitespaceCount(text, cursorUtf16Offset)
+
+    const fullSnapshot: EditorRuntimeSnapshot = {
+      hasActiveSession: true,
+      revision: snap.revision,
+      generation: snap.generation,
+      textUtf8Bytes: textUtf8Bytes,
+      textUtf16Length: textUtf16Length,
+      cursorByteOffset: snap.cursorByteOffset,
+      cursorUtf16Offset: cursorUtf16Offset,
+      selectionAnchorByte: snap.selectionAnchor,
+      selectionHeadByte: snap.selectionHead,
+      hasComposition: hasComposition,
+      compositionStartByte: compositionStartByte,
+      compositionEndByte: compositionEndByte,
+      fontSizeVp: fontSizeVp,
+      lineSpacingMultiplier: lineSpacingMultiplier,
+      effectiveLineHeightVp: effectiveLineHeightVp,
+      firstLineIndentEnabled: firstLineIndentEnabled,
+      firstLineIndentChars: firstLineIndentChars,
+      effectiveFirstLineIndentVp: effectiveFirstLineIndentVp,
+      viewportWidthPx: this.viewportWidth,
+      viewportHeightPx: this.viewportHeight,
+      contentWidthPx: this.contentWidth,
+      contentHeightPx: this.contentHeight,
+      systemLayoutLineCount: systemLayoutLineCount,
+      caretRect: caretRect,
+      selectionRectCount: this.selectionRects.length,
+      currentLineMetrics: currentLineMetrics,
+      imeAttached: imeAttached,
+      editorFocused: this.isFocused,
+      currentScrollX: scrollX,
+      currentScrollY: scrollY,
+      leadingWhitespaceCountOfCurrentParagraph: leadingWhitespaceCount,
+      layoutSource: this.lastLayoutSource,
+      usingLayoutManager: usingLayoutManager,
+      apiLevel: apiLevel,
+      lastLayoutError: null,
+      fallbackCount: 0,
+    }
+    store.updateSnapshot(fullSnapshot)
+  }
+
+  // Issue #768：计算光标所在段落的前导空白字符数（空格/制表符）。
+  private computeLeadingWhitespaceCount(text: string, cursorUtf16: number): number {
+    // 找光标所在段落的起点：从 cursor 往前找到 \n 后一个字符或 0
+    let paragraphStart: number = cursorUtf16
+    while (paragraphStart > 0) {
+      if (text.charAt(paragraphStart - 1) === '\n') {
+        break
+      }
+      paragraphStart--
+    }
+    // 从段落起点数空白字符
+    let count: number = 0
+    for (let i = paragraphStart; i < text.length; i++) {
+      const ch: string = text.charAt(i)
+      if (ch === ' ' || ch === '\t') {
+        count++
+      } else {
+        break
+      }
+    }
+    return count
   }
 
   // Issue #629 评论16 第1项：用 @Watch 监听 snapshot 变化替代 aboutToUpdate。
@@ -188,10 +385,14 @@ export struct SujianEditor {
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
+      // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
+      this.pushDiagnosticsSnapshot()
       return
     }
     this.refreshRender()
     this.refreshRenderLayout()
+    // Issue #768：snapshot 前进后推送诊断快照（含光标/选区/composition 变化）。
+    this.pushDiagnosticsSnapshot()
   }
 
   // 基础渲染：用 render() 转 offset，不含几何（lines/rects 为空）。
@@ -305,6 +506,9 @@ export struct SujianEditor {
       this.contentWidth,
     )
     this.lineResolver.updateLayout(layoutState)
+    // Issue #768：标记布局来源为 system 并推送诊断快照（布局更新时）。
+    this.lastLayoutSource = 'system'
+    this.pushDiagnosticsSnapshot()
   }
 
   // Issue #768 任务9：Fallback 路径 — LayoutManager 不可用时走旧的自计算路径。
@@ -342,6 +546,9 @@ export struct SujianEditor {
       lines: navigationLines,
     }
     this.lineResolver.updateLayout(layoutState)
+    // Issue #768：标记布局来源为 fallback 并推送诊断快照（布局更新时）。
+    this.lastLayoutSource = 'fallback'
+    this.pushDiagnosticsSnapshot()
   }
 
   // Issue #629 评论18：命中测试返回 VisualCaretPosition（含 CaretAffinity）。
@@ -439,6 +646,8 @@ export struct SujianEditor {
     const dispatcher = this.dispatcher
     imeConnection.attach(dispatcher).then(() => {
       hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: IME attach success')
+      // Issue #768：IME attach 成功后推送诊断快照。
+      this.pushDiagnosticsSnapshot()
     }).catch((e: Object) => {
       hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: IME attach failure: ${JSON.stringify(e)}`)
     })
@@ -761,11 +970,16 @@ export struct SujianEditor {
         // HarmonyImeConnection.attach() 已是串行幂等（唯一 transitionTask 链），
         // focusAndAttachIme 和 onFocus 都发起 attach 只会排进同一条串行链，不会并发 controller.attach()。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: input host focus acquired')
+        // Issue #768：记录焦点状态并推送诊断快照。
+        this.isFocused = true
+        this.pushDiagnosticsSnapshot()
         if (this.harmonyImeConnection && this.dispatcher) {
           const imeConnection = this.harmonyImeConnection
           const dispatcher = this.dispatcher
           imeConnection.attach(dispatcher).then(() => {
             hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: IME attach success')
+            // Issue #768：IME attach 成功后推送诊断快照。
+            this.pushDiagnosticsSnapshot()
           }).catch((e: Object) => {
             hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `onFocus: IME attach failure: ${JSON.stringify(e)}`)
           })
@@ -774,8 +988,14 @@ export struct SujianEditor {
       .onBlur((): void => {
         // Issue #767 评论 5828448634 第 1 节：编辑区失焦 → detach IME。
         hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onBlur: input host blur')
+        // Issue #768：记录失焦状态并推送诊断快照。
+        this.isFocused = false
+        this.pushDiagnosticsSnapshot()
         if (this.harmonyImeConnection) {
-          this.harmonyImeConnection.detach().then(() => {})
+          this.harmonyImeConnection.detach().then(() => {
+            // Issue #768：IME detach 完成后推送诊断快照。
+            this.pushDiagnosticsSnapshot()
+          })
         }
       })
       .onKeyEvent((event: KeyEvent): boolean => {
@@ -818,10 +1038,14 @@ export struct SujianEditor {
       if (this.viewportController) {
         this.viewportController.notifyDimensionsChanged()
       }
+      // Issue #768：视口尺寸变化时推送诊断快照。
+      this.pushDiagnosticsSnapshot()
     })
     .onScroll((xOffset: number, yOffset: number): void => {
       // 滚动时把 viewport 状态回调给 WritingScreen（供接续状态持续写入）。
       this.emitViewportChange(xOffset, yOffset)
+      // Issue #768：滚动变化时推送诊断快照（含 currentScrollX/Y）。
+      this.pushDiagnosticsSnapshot()
     })
   }
 }

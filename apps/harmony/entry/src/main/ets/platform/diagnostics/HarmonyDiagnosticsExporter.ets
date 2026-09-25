@@ -29,7 +29,7 @@ import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
-import { EditorRuntimeSnapshotStore } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
+import { EditorRuntimeSnapshotStore, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
@@ -95,26 +95,63 @@ interface UiRuntimeAttachment {
 }
 
 // editor_runtime_sanitized.json 附件 DTO — Issue #768 编辑器运行时快照。
-// 全部脱敏，不含正文内容。
+// 全部脱敏，不含正文内容。字段与 EditorRuntimeSnapshot 一一对齐。
 interface EditorRuntimeAttachment {
-  lineCount: number                    // 总行数
-  contentWidthPx: number               // 内容区域宽度（px）
-  contentHeightPx: number              // 内容区域高度（px）
-  viewportWidthPx: number              // 视口宽度（px）
-  viewportHeightPx: number             // 视口高度（px）
-  cursorUtf16Offset: number            // 光标 UTF-16 偏移
-  selectionStartUtf16: number          // 选区起点
-  selectionEndUtf16: number            // 选区终点
-  hasComposition: boolean              // 是否有输入法 composition
-  compositionLength: number            // composition 长度（不记内容）
-  layoutSource: string                 // 'system' | 'fallback' | 'none'
-  usingLayoutManager: boolean          // 是否使用系统 LayoutManager
-  apiLevel: number                     // 当前 API Level
-  isImeAttached: boolean               // IME 是否连接
-  revision: number                     // 当前编辑器 revision
-  textLength: number                   // 正文总长度（字符数，不含内容）
-  lastLayoutError: string | null       // 最后一次布局错误信息
-  fallbackCount: number                // fallback 次数累计
+  // 会话/版本
+  hasActiveSession: boolean
+  revision: number
+  generation: number
+
+  // 文本长度（不含内容）
+  textUtf8Bytes: number
+  textUtf16Length: number
+
+  // 光标/选区（byte offset）
+  cursorByteOffset: number
+  cursorUtf16Offset: number
+  selectionAnchorByte: number
+  selectionHeadByte: number
+
+  // composition
+  hasComposition: boolean
+  compositionStartByte: number
+  compositionEndByte: number
+
+  // 排版设置
+  fontSizeVp: number
+  lineSpacingMultiplier: number
+  effectiveLineHeightVp: number
+  firstLineIndentEnabled: boolean
+  firstLineIndentChars: number
+  effectiveFirstLineIndentVp: number
+
+  // 视口/内容尺寸（px）
+  viewportWidthPx: number
+  viewportHeightPx: number
+  contentWidthPx: number
+  contentHeightPx: number
+
+  // 布局几何
+  systemLayoutLineCount: number
+  caretRect: CaretRectSnapshot | null
+  selectionRectCount: number
+  currentLineMetrics: CurrentLineMetricsSnapshot | null
+
+  // IME/焦点/滚动
+  imeAttached: boolean
+  editorFocused: boolean
+  currentScrollX: number
+  currentScrollY: number
+
+  // 段落前导空白
+  leadingWhitespaceCountOfCurrentParagraph: number
+
+  // 布局来源/降级
+  layoutSource: string
+  usingLayoutManager: boolean
+  apiLevel: number
+  lastLayoutError: string | null
+  fallbackCount: number
 }
 
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
@@ -449,22 +486,40 @@ export class HarmonyDiagnosticsExporter {
         return
       }
       const attachment: EditorRuntimeAttachment = {
-        lineCount: snapshot.lineCount,
-        contentWidthPx: snapshot.contentWidthPx,
-        contentHeightPx: snapshot.contentHeightPx,
+        hasActiveSession: snapshot.hasActiveSession,
+        revision: snapshot.revision,
+        generation: snapshot.generation,
+        textUtf8Bytes: snapshot.textUtf8Bytes,
+        textUtf16Length: snapshot.textUtf16Length,
+        cursorByteOffset: snapshot.cursorByteOffset,
+        cursorUtf16Offset: snapshot.cursorUtf16Offset,
+        selectionAnchorByte: snapshot.selectionAnchorByte,
+        selectionHeadByte: snapshot.selectionHeadByte,
+        hasComposition: snapshot.hasComposition,
+        compositionStartByte: snapshot.compositionStartByte,
+        compositionEndByte: snapshot.compositionEndByte,
+        fontSizeVp: snapshot.fontSizeVp,
+        lineSpacingMultiplier: snapshot.lineSpacingMultiplier,
+        effectiveLineHeightVp: snapshot.effectiveLineHeightVp,
+        firstLineIndentEnabled: snapshot.firstLineIndentEnabled,
+        firstLineIndentChars: snapshot.firstLineIndentChars,
+        effectiveFirstLineIndentVp: snapshot.effectiveFirstLineIndentVp,
         viewportWidthPx: snapshot.viewportWidthPx,
         viewportHeightPx: snapshot.viewportHeightPx,
-        cursorUtf16Offset: snapshot.cursorUtf16Offset,
-        selectionStartUtf16: snapshot.selectionStartUtf16,
-        selectionEndUtf16: snapshot.selectionEndUtf16,
-        hasComposition: snapshot.hasComposition,
-        compositionLength: snapshot.compositionLength,
+        contentWidthPx: snapshot.contentWidthPx,
+        contentHeightPx: snapshot.contentHeightPx,
+        systemLayoutLineCount: snapshot.systemLayoutLineCount,
+        caretRect: snapshot.caretRect,
+        selectionRectCount: snapshot.selectionRectCount,
+        currentLineMetrics: snapshot.currentLineMetrics,
+        imeAttached: snapshot.imeAttached,
+        editorFocused: snapshot.editorFocused,
+        currentScrollX: snapshot.currentScrollX,
+        currentScrollY: snapshot.currentScrollY,
+        leadingWhitespaceCountOfCurrentParagraph: snapshot.leadingWhitespaceCountOfCurrentParagraph,
         layoutSource: snapshot.layoutSource,
         usingLayoutManager: snapshot.usingLayoutManager,
         apiLevel: snapshot.apiLevel,
-        isImeAttached: snapshot.isImeAttached,
-        revision: snapshot.revision,
-        textLength: snapshot.textLength,
         lastLayoutError: snapshot.lastLayoutError,
         fallbackCount: snapshot.fallbackCount
       }

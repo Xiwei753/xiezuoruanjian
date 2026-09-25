@@ -126,9 +126,15 @@ export struct WorkspaceScreen {
     })
   }
 
-  // Issue #760：使用 NavigationTransactionCoordinator.getInstance().safePop() 代替直接 navPathStack.pop()
+  // Issue #768：返回链必须使用页面明确持有的 NavPathStack，不再用全局 activeTabStack。
+  // WorkspaceScreen 是 V1 组件，通过 coordinator.getNavPathStack() 获取当前栈后显式传给 safePopWithStack。
   private handleBack(): void {
-    this.navCoordinator.safePop()
+    const stack = this.navCoordinator.getNavPathStack()
+    if (stack) {
+      this.navCoordinator.safePopWithStack(stack)
+    } else {
+      this.navCoordinator.safePop()
+    }
   }
 
   // 导航到设置页
@@ -534,16 +540,10 @@ export struct WorkspaceScreen {
   @Builder
   SinglePaneHeader() {
     Row() {
-      // 左：返回 + 作品名
-      Image($r('sys.media.ohos_ic_public_arrow_left'))
-        .width(24)
-        .height(24)
-        .onClick(() => this.handleBack())
-
+      // 左：作品名（返回按钮由 NavDestination 原生标题栏承载，Issue #768）
       Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ left: 12 })
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -641,16 +641,10 @@ export struct WorkspaceScreen {
   @Builder
   LegacySinglePaneHeader() {
     Row() {
-      // 左：返回 + 作品名
-      Image($r('sys.media.ohos_ic_public_arrow_left'))
-        .width(24)
-        .height(24)
-        .onClick(() => this.handleBack())
-
+      // 左：作品名（返回按钮由 NavDestination 原生标题栏承载，Issue #768）
       Text(this.viewModel.projectName)
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ left: 12 })
 
       Blank()
 
