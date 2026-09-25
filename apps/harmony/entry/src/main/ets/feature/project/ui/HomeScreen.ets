@@ -20,7 +20,7 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HomeScreen {
@@ -237,7 +237,7 @@ export struct HomeScreen {
     NavDestination() {
       Stack() {
         Column() {
-          if (this.adaptiveState.isTwoPane) {
+          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
             // ── 宽屏布局：恢复 #760 之前的实现 ──
             this.TwoPaneLayout()
           } else {

@@ -155,9 +155,6 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
     int32_t result = writer_core_init(path);
     OH_LOG_INFO(LOG_APP, "NativeInit: writer_core_init returned %{public}d", result);
 
-    // 注册 HiLog callback（幂等），尽早开始收集系统日志
-    RegisterHilogCallback();
-
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (path='%{public}s')", result, path);
     }
@@ -213,10 +210,8 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     napi_get_value_string_utf8(env, args[4], locale, sizeof(locale), &len);
     napi_get_value_string_utf8(env, args[5], timezone, sizeof(timezone), &len);
 
-    // 注册 HiLog callback（幂等）— 必须在第一条 OH_LOG 和 writer_core_init_diagnostics() 之前注册，
-    // 否则 EntryAbility.onCreate 最开始的日志、NativeInitDiagnostics 的 calling/returned、
-    // 以及 Rust diagnostics 初始化过程中产生的 HiLog 都不会进环形缓冲。
-    RegisterHilogCallback();
+    // Issue #760 评论 5824787641：RegisterHilogCallback() 已移至 NAPI Init() 开头，
+    // 在模块加载时（比 EntryAbility.onCreate 更早）完成注册，此处不再重复调用。
 
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
     int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
@@ -466,6 +461,11 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
 //   Domain descriptor arrays are allocated by each get*Descriptors() function
 //   and must remain valid for the lifetime of the module.
 static napi_value Init(napi_env env, napi_value exports) {
+    // Issue #760 评论 5824787641：在 NAPI 模块 Init 开头注册 HiLog callback。
+    // NAPI 模块在 ArkTS import native module 时初始化，比 EntryAbility.onCreate 更早，
+    // 确保 EntryAbility.onCreate 的第一条启动日志也能被环形缓冲捕获。
+    RegisterHilogCallback();
+
     // Collect descriptors from all domains
     size_t app_state_count = 0, proj_count = 0, chap_count = 0, set_count = 0;
     size_t sync_count = 0, stats_count = 0, sm_count = 0, editor_count = 0;

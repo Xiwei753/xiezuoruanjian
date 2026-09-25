@@ -427,7 +427,7 @@ export struct StarMapScreen {
     Column() {
       // Header
       Row() {
-        if (this.adaptiveState.isTwoPane) {
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
           Image($r('sys.media.ohos_ic_public_arrow_left'))
             .width(24)
             .height(24)

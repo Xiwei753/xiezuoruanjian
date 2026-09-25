@@ -24,7 +24,7 @@ import { ContinuationPayload } from '../../platform/continuity/ContinuationPaylo
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
-import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
 
@@ -241,7 +241,7 @@ export struct AppNavigation {
 
       // 底部 Tab Bar — 仅窄屏（!isTwoPane）且当前页面 ScreenPolicy.showPrimaryNavigation=true 时显示
       // Issue #760 评论 5823355851 问题1：底栏显隐由 Core ScreenPolicy 决定，不再手工布尔值控制
-      if (!this.adaptiveState.isTwoPane && this.currentShowPrimaryNav) {
+      if (this.adaptiveState.sizeClass === WidthClass.Compact && this.currentShowPrimaryNav) {
         this.BottomTabBar()
       }
     }

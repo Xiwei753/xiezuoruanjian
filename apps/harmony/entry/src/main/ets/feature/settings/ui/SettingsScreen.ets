@@ -17,7 +17,7 @@ import { NavigationTransactionCoordinator } from '../../../app/navigation/Naviga
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -133,7 +133,7 @@ export struct SettingsScreen {
     NavDestination() {
       Column() {
         // ── 顶部 Header：宽屏无搜索框，窄屏有搜索框 ──
-        if (this.adaptiveState.isTwoPane) {
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
           this.WideSettingsHeader()
         } else {
           this.CompactSettingsHeader()
@@ -157,7 +157,7 @@ export struct SettingsScreen {
           // 问题3：宽屏/窄屏分支
           // 宽屏 (isTwoPane)：恢复 #760 之前的完整设置列表布局
           // 窄屏 (!isTwoPane)：保留折叠分类布局
-          if (this.adaptiveState.isTwoPane) {
+          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
             this.WideScreenLayout()
           } else {
             this.CompactScreenLayout()

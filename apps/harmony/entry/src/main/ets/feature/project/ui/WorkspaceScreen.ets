@@ -8,7 +8,7 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
-import { ActionSlot, ActionTarget, ActionRole, ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 
 /** 左侧面板宽度（双栏模式） */
@@ -225,7 +225,7 @@ export struct WorkspaceScreen {
     NavDestination() {
       Stack() {
         Column() {
-          if (this.adaptiveState.isTwoPane) {
+          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
             // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
             // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
             this.TwoPaneLayout()
