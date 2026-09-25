@@ -10,7 +10,7 @@
 //! 4. POST `/git/commits`，parent=第 1 步读到的 head，tree=第 3 步返回的新 tree SHA；
 //! 5. PATCH `/git/refs/heads/<branch>`，`sha`=第 4 步的新 commit SHA，`force=false`。
 //!
-//! ref 更新失败（409）映射成 `ProviderError::PreconditionFailed`，回到现有 LWW/CAS
+//! ref 更新失败（409/422）映射成 `ProviderError::PreconditionFailed`，回到现有 LWW/CAS
 //! 重试，不允许 force 覆盖别人刚提交的 head。
 //!
 //! 参考官方接口：
@@ -187,12 +187,16 @@ pub(crate) fn commit_batch_via_git_database(
     let patch_resp = patch_ref(transport, api_base, token, branch, &new_commit_sha)?;
     let patch_body = String::from_utf8(patch_resp.body).unwrap_or_default();
     if !(200..300).contains(&patch_resp.status) {
-        // 409 → PreconditionFailed（ref 已被别人推进，回到 CAS 重试）
-        if patch_resp.status == 409 {
+        // 409/422 → PreconditionFailed（ref 已被别人推进，回到 LWW/CAS 重试）。
+        // GitHub "Update a reference" 对非 fast-forward 更新返回 409 或 422
+        // （<https://docs.github.com/en/rest/git/refs>），两者都按乐观并发冲突处理；
+        // `force=false` 保证绝不覆盖别人刚提交的 head。
+        if matches!(patch_resp.status, 409 | 422) {
             return Err(ProviderError::PreconditionFailed {
                 path: format!("refs/heads/{branch}"),
                 reason: format!(
-                    "git_database patch_ref 409: remote ref moved; {}",
+                    "git_database patch_ref {}: remote ref moved; {}",
+                    patch_resp.status,
                     patch_body.chars().take(200).collect::<String>()
                 ),
             });
@@ -213,7 +217,266 @@ pub(crate) fn commit_batch_via_git_database(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
+
     use super::*;
+
+    /// 记录请求、按顺序返回预设响应的假 transport。
+    ///
+    /// 用于断言 Git Database API 的请求顺序和 payload 形状，
+    /// 不依赖真实网络。
+    struct CannedTransport {
+        responses: Mutex<VecDeque<HttpResponse>>,
+        requests: Mutex<Vec<HttpRequest>>,
+    }
+
+    impl CannedTransport {
+        fn new(responses: Vec<HttpResponse>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requests(&self) -> Vec<HttpRequest> {
+            self.requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
+    }
+
+    impl SyncTransport for CannedTransport {
+        fn execute(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(request);
+            self.responses
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pop_front()
+                .ok_or_else(|| {
+                    TransportError::new("test", "canned responses exhausted".to_string())
+                })
+        }
+    }
+
+    fn json_response(status: u16, body: &str) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    /// 读取请求的 JSON body。
+    fn request_json(req: &HttpRequest) -> serde_json::Value {
+        serde_json::from_slice(req.body.as_ref().expect("request body")).expect("request json")
+    }
+
+    /// 5 步成功响应：ref → commit → trees → commits → ref PATCH。
+    fn success_responses() -> Vec<HttpResponse> {
+        vec![
+            json_response(
+                200,
+                r#"{"ref":"refs/heads/main","object":{"sha":"head_c","type":"commit"}}"#,
+            ),
+            json_response(
+                200,
+                r#"{"sha":"head_c","tree":{"sha":"base_t","type":"tree"},"parents":[]}"#,
+            ),
+            json_response(201, r#"{"sha":"new_t","tree":[]}"#),
+            json_response(
+                201,
+                r#"{"sha":"new_c","tree":{"sha":"new_t"},"parents":[{"sha":"head_c"}]}"#,
+            ),
+            json_response(
+                200,
+                r#"{"ref":"refs/heads/main","object":{"sha":"new_c","type":"commit"}}"#,
+            ),
+        ]
+    }
+
+    fn sample_mutations() -> Vec<BatchMutation> {
+        vec![
+            BatchMutation::Put {
+                path: "projects/p1/__generations__/g1/a.md".to_string(),
+                content: b"hello".to_vec(),
+            },
+            BatchMutation::ReuseVersion {
+                path: "projects/p1/__generations__/g1/b.md".to_string(),
+                version: RemoteVersion("blob_sha_b".to_string()),
+            },
+            BatchMutation::Delete {
+                path: "projects/p1/__generations__/g1/c.md".to_string(),
+            },
+        ]
+    }
+
+    const API_BASE: &str = "https://api.github.com/repos/owner/repo";
+
+    /// Issue #761 Part 2：5 步 Git Database API 调用顺序与 payload 形状。
+    ///
+    /// 一次 batch 必须恰好产生 5 个请求，且不触碰 Contents API：
+    /// 1. GET ref → head commit；
+    /// 2. GET commit → base tree；
+    /// 3. POST trees（base_tree + content/sha/null 三种 entry）；
+    /// 4. POST commits（parent=head，tree=新 tree）；
+    /// 5. PATCH ref（force=false）。
+    #[test]
+    fn commit_batch_runs_five_git_database_steps_in_order() {
+        let transport = CannedTransport::new(success_responses());
+        let mutations = sample_mutations();
+
+        let result = commit_batch_via_git_database(
+            &transport,
+            API_BASE,
+            "tok",
+            "main",
+            &mutations,
+            "WriterApp publish generation g1",
+        )
+        .expect("batch should succeed");
+
+        assert_eq!(result.revision.as_str(), "new_c");
+        assert_eq!(
+            result.touched_paths,
+            vec![
+                "projects/p1/__generations__/g1/a.md".to_string(),
+                "projects/p1/__generations__/g1/b.md".to_string(),
+                "projects/p1/__generations__/g1/c.md".to_string(),
+            ]
+        );
+
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 5, "一次 batch 恰好 5 个请求");
+        let seen: Vec<(&str, String)> = requests
+            .iter()
+            .map(|r| (r.method.as_str(), r.url.clone()))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("GET", format!("{API_BASE}/git/ref/heads/main")),
+                ("GET", format!("{API_BASE}/git/commits/head_c")),
+                ("POST", format!("{API_BASE}/git/trees")),
+                ("POST", format!("{API_BASE}/git/commits")),
+                ("PATCH", format!("{API_BASE}/git/refs/heads/main")),
+            ]
+        );
+        assert!(
+            !requests.iter().any(|r| r.url.contains("/contents/")),
+            "generation 发布不得触碰 Contents API 单文件入口"
+        );
+        assert!(
+            requests.iter().all(|r| r
+                .headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer tok")),
+            "每个请求都应带 Bearer token"
+        );
+
+        // POST /git/trees：base_tree + 三种 entry（Put 用 content，ReuseVersion 用 sha，Delete 用 sha:null）。
+        let trees = request_json(&requests[2]);
+        assert_eq!(trees["base_tree"], "base_t");
+        let entries = trees["tree"].as_array().expect("tree entries");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["path"], "projects/p1/__generations__/g1/a.md");
+        assert_eq!(entries[0]["mode"], "100644");
+        assert_eq!(entries[0]["type"], "blob");
+        // base64("hello")
+        assert_eq!(entries[0]["content"], "aGVsbG8=");
+        assert_eq!(entries[1]["sha"], "blob_sha_b");
+        assert!(entries[1].get("content").is_none());
+        assert_eq!(entries[2]["sha"], serde_json::Value::Null);
+
+        // POST /git/commits：新 tree + parent=head。
+        let commit = request_json(&requests[3]);
+        assert_eq!(commit["message"], "WriterApp publish generation g1");
+        assert_eq!(commit["tree"], "new_t");
+        assert_eq!(commit["parents"][0], "head_c");
+
+        // PATCH /git/refs：新 commit + force=false（绝不覆盖别人刚提交的 head）。
+        let patch = request_json(&requests[4]);
+        assert_eq!(patch["sha"], "new_c");
+        assert_eq!(patch["force"], false);
+    }
+
+    /// Issue #761 Part 2：ref 更新冲突（409/422）映射成 `PreconditionFailed`。
+    #[test]
+    fn commit_batch_maps_ref_conflict_to_precondition_failed() {
+        for status in [409_u16, 422_u16] {
+            let mut responses = success_responses();
+            responses[4] = json_response(status, r#"{"message":"Update is not a fast forward"}"#);
+            let transport = CannedTransport::new(responses);
+
+            let err = commit_batch_via_git_database(
+                &transport,
+                API_BASE,
+                "tok",
+                "main",
+                &sample_mutations(),
+                "publish",
+            )
+            .expect_err("ref update rejection must fail the batch");
+
+            match err {
+                ProviderError::PreconditionFailed { path, reason } => {
+                    assert_eq!(path, "refs/heads/main");
+                    assert!(
+                        reason.contains(&status.to_string()),
+                        "reason 应带 HTTP {status} 上下文，实际 {reason}"
+                    );
+                }
+                other => panic!("{status} 必须映射成 PreconditionFailed，实际 {other:?}"),
+            }
+            assert_eq!(
+                transport.requests().len(),
+                5,
+                "ref 冲突发生在第 5 步，前 4 步已执行"
+            );
+        }
+    }
+
+    /// Issue #761 Part 2：tree 创建失败时不创建 commit、不推进 ref。
+    #[test]
+    fn commit_batch_stops_before_commit_when_tree_creation_fails() {
+        let mut responses = success_responses();
+        responses[2] = json_response(422, r#"{"message":"Invalid tree entry"}"#);
+        let transport = CannedTransport::new(responses);
+
+        let err = commit_batch_via_git_database(
+            &transport,
+            API_BASE,
+            "tok",
+            "main",
+            &sample_mutations(),
+            "publish",
+        )
+        .expect_err("tree creation failure must fail the batch");
+
+        assert!(
+            !matches!(err, ProviderError::PreconditionFailed { .. }),
+            "tree 创建失败不是 CAS 冲突，实际 {err:?}"
+        );
+        let requests = transport.requests();
+        assert_eq!(
+            requests.len(),
+            3,
+            "tree 创建失败后不得再 POST commit / PATCH ref，实际 {} 个请求",
+            requests.len()
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|r| r.url.ends_with("/git/commits") || r.url.contains("/git/refs/")),
+            "tree 创建失败后不得推进 commit / ref"
+        );
+    }
 
     #[test]
     fn parse_ref_head_sha_extracts_object_sha() {
