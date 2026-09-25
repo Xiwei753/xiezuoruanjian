@@ -124,12 +124,48 @@ pub(crate) fn merge_sync_state_three_way(
         }
     }
 
-    // pending_take_remote：保留 live 值（用户操作），不拿 staging 覆盖。
-    // 用户的 take_remote 排队不能被 staging 覆盖。
-    let merged_pending_take_remote = live_state.pending_take_remote.clone();
+    // pending_take_remote：按 path 做三方集合合并，不能整套 HashSet 直接复制 live。
+    // 对每个 path：live 相对 base 的 membership 发生变化 → 取 live（用户在同步期间改了）；
+    // 否则取 staging（让 Transfer 对旧 pending 的成功消费/失败保留正常生效）。
+    // 即 live_has != base_has ? live_has : staging_has。
+    let merged_pending_take_remote: HashSet<String> = {
+        let all_paths: HashSet<&String> = base_state
+            .pending_take_remote
+            .iter()
+            .chain(live_state.pending_take_remote.iter())
+            .chain(staging_state.pending_take_remote.iter())
+            .collect();
+        let mut merged = HashSet::new();
+        for p in all_paths {
+            let base_has = base_state.pending_take_remote.contains(p);
+            let live_has = live_state.pending_take_remote.contains(p);
+            let staging_has = staging_state.pending_take_remote.contains(p);
+            let keep = if live_has != base_has {
+                // live 相对 base 改了 → 取 live 的 membership
+                live_has
+            } else {
+                // live 没改 → 取 staging 的 membership（Transfer 消费结果）
+                staging_has
+            };
+            if keep {
+                merged.insert(p.clone());
+            }
+        }
+        merged
+    };
 
-    // device_id：保留 live 值（设备身份不能被 staging 覆盖）。
-    let merged_device_id = live_state.device_id.clone();
+    // device_id 三方合并：不能无条件取 live。
+    // 真实首次同步时 live 还没有 state.local.json，read_sync_state_or_default
+    // 返回 SyncState::default()（device_id 是随机 UUID，非空但不是真实设备身份）。
+    // 此时 staging 的 device_id 是 Transfer 在 staging 里生成的（#761），必须保留。
+    // - live 有 state.local.json → 保留 live（真实用户状态）
+    // - live 没有 → 使用 staging（首次同步 Transfer 生成）
+    let live_state_path = live_root.join("app-meta/sync/state.local.json");
+    let merged_device_id = if live_state_path.exists() {
+        live_state.device_id.clone()
+    } else {
+        staging_state.device_id.clone()
+    };
 
     // tombstones / deleted_files：按 staging 同步结果合并（同步引擎管理的）。
     let merged_tombstones = staging_state.tombstones.clone();
@@ -422,6 +458,78 @@ mod tests {
         assert_eq!(
             merged_state.device_id, "live-device",
             "device_id 应保留 live 值"
+        );
+    }
+
+    /// 真实首次同步：live/base 无 state（device_id 空），staging Transfer 生成稳定
+    /// device_id → 合并结果必须使用 staging 的 device_id，不能因为 live 优先而丢掉。
+    ///
+    /// 生产顺序：live 还没有 state.local.json → seed 后 base/live 都没 state →
+    /// Transfer 在 staging 生成 state.local.json（#761 保证用平台稳定 device_id）→
+    /// Commit 三方 merge。修复前合并器无条件选 live（default 的随机 UUID）把 staging
+    /// 的稳定 device_id 丢掉，把 #761 的首次同步 device identity 修复打回去。
+    #[test]
+    fn device_id_first_sync_uses_staging_when_live_empty() {
+        let tmp = TempDir::new().unwrap();
+        let base_root = tmp.path().join("base");
+        let live_root = tmp.path().join("live");
+        let staging_root = tmp.path().join("staging");
+
+        // base/live 都没有 state.local.json（首次同步）
+        // read_sync_state_or_default 返回 default（device_id 是随机 UUID，非空但无意义）
+        std::fs::create_dir_all(base_root.join("app-meta/sync")).unwrap();
+        std::fs::create_dir_all(live_root.join("app-meta/sync")).unwrap();
+
+        // staging: Transfer 生成的稳定 device_id
+        let mut staging_state = SyncState::default();
+        staging_state.device_id = "stable-device-from-transfer".to_string();
+        write_state(&staging_root, &staging_state);
+        write_conflicts(&staging_root, &[]);
+
+        let (merged_state, _) =
+            merge_sync_state_three_way(&base_root, &live_root, &staging_root).unwrap();
+
+        assert_eq!(
+            merged_state.device_id, "stable-device-from-transfer",
+            "首次同步时 live 无 state，合并结果必须使用 staging 生成的稳定 device_id"
+        );
+    }
+
+    /// Transfer 成功消费 pending 后不能复活：base={A}, live={A}, staging={} → merged 必须空。
+    ///
+    /// 生产顺序：同步前 live 已有旧兼容数据 pending_take_remote={A}；seed 后 base/staging
+    /// 也有 A；Transfer 在 staging 成功下载 A 并按 LWW 把 A 从 staging pending 移除；
+    /// live 没有并发用户改动仍为 {A}。修复前合并器无条件复制 live={A}，A 被重新写回
+    /// pending，下一轮重复执行 take_remote。
+    #[test]
+    fn pending_take_remote_consumed_by_transfer_not_revived() {
+        let tmp = TempDir::new().unwrap();
+        let base_root = tmp.path().join("base");
+        let live_root = tmp.path().join("live");
+        let staging_root = tmp.path().join("staging");
+
+        // base = {A}
+        let mut base_state = SyncState::default();
+        base_state.pending_take_remote.insert("a.md".to_string());
+        write_state(&base_root, &base_state);
+        write_conflicts(&base_root, &[]);
+
+        // live = {A}（用户没并发改动，与 base 一致）
+        let mut live_state = SyncState::default();
+        live_state.pending_take_remote.insert("a.md".to_string());
+        write_state(&live_root, &live_state);
+        write_conflicts(&live_root, &[]);
+
+        // staging = {}（Transfer 成功消费 A，从 pending 移除）
+        write_state(&staging_root, &SyncState::default());
+        write_conflicts(&staging_root, &[]);
+
+        let (merged_state, _) =
+            merge_sync_state_three_way(&base_root, &live_root, &staging_root).unwrap();
+
+        assert!(
+            merged_state.pending_take_remote.is_empty(),
+            "Transfer 成功消费的 pending 不应被 live 无条件复制复活"
         );
     }
 }

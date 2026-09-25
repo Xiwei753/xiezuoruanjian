@@ -1082,3 +1082,96 @@ fn preexisting_conflict_resolved_before_target_commit_take_remote_is_not_revived
         "整轮聚合状态反映仍存在的冲突"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 5. Issue #762 评论 5831036790：真实首次同步 device_id 不被空 live 覆盖
+// ---------------------------------------------------------------------------
+
+/// 真实首次同步：live/base 无 state.local.json，Transfer 在 staging 生成稳定 device_id，
+/// Commit 三方合并后 live 的 device_id 必须仍是该稳定值（非空）。
+///
+/// 生产顺序：
+/// 1. live 还没有 state.local.json（首次同步）
+/// 2. seed 后 base/staging 也没有 state（从 live 复制）
+/// 3. Transfer（perform_lww_sync）在 staging 生成 state.local.json，
+///    device_id = uuid::Uuid::new_v4()（engine.rs:63-67）
+/// 4. Commit 进入三方 state merge
+/// 5. 修复前：合并器无条件选 live（空 device_id）→ 把 staging 的稳定 device_id 丢掉
+///    修复后：live 空、staging 非空 → 使用 staging 的 device_id
+///
+/// 断言：同步后 live 的 device_id 非空。
+/// 修复前此断言会失败（device_id 被写成空字符串），直接打回 #761 的首次同步修复。
+#[test]
+fn first_sync_preserves_stable_device_id_from_staging() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider = MemoryProvider::new();
+    let tmp = TempDir::new().unwrap();
+    let app_data_root = tmp.path().to_path_buf();
+    let projects_root = app_data_root.join("projects");
+    std::fs::create_dir_all(&projects_root).unwrap();
+
+    // live: 首次同步，没有 state.local.json
+    // build_live_project 只写 chapter.md + manifest.sync.json，不写 state.local.json
+    let live_root = build_live_project(
+        &projects_root,
+        "p1",
+        b"local chapter content",
+        T,
+        DEVICE_LOCAL,
+    );
+
+    // 确认 live 确实没有 state.local.json（首次同步前提）
+    assert!(
+        !live_root.join("app-meta/sync/state.local.json").exists(),
+        "测试前提：首次同步 live 不应有 state.local.json"
+    );
+
+    // 远端有不同内容 → 产生同步（BothChanged 冲突或 RemoteWins）
+    write_remote_generation_for(
+        &provider,
+        "p1",
+        GEN_EXISTING,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+    let remote_catalog_snapshot =
+        write_remote_catalog_for_projects(&provider, &[("p1", GEN_EXISTING, T, DEVICE_REMOTE)]);
+
+    let mut plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: true,
+        targets: vec![planned_live_project(
+            "p1",
+            live_root.clone(),
+            T,
+            DEVICE_LOCAL,
+        )],
+        app_data_root: app_data_root.clone(),
+        remote_catalog_snapshot,
+    };
+    // 与生产 Phase 2 一致：从 live seed staging（base + staging 克隆）。
+    let staging_runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(staging_runs.len(), 1);
+
+    let api = WriterCoreApi::new(&app_data_root, &projects_root);
+    let _result = api
+        .perform_full_sync_with_provider(&provider, &plan, staging_runs, None, None)
+        .unwrap();
+
+    // 同步后 live 必须有 state.local.json，且 device_id 非空。
+    let p1_state = SyncService::load_sync_state(&live_root).unwrap();
+    assert!(
+        !p1_state.device_id.is_empty(),
+        "首次同步后 live 的 device_id 必须非空（来自 staging Transfer 生成的稳定值），\
+         修复前会被空 live 覆盖成空字符串"
+    );
+}
