@@ -55,48 +55,69 @@ export class SystemShareApi11 {
   // 把业务 SharePayload 构造成 systemShare.SharedData。
   // 无非空内容时返回 null（调用方返回 false，不假装成功）。
   // 该映射仅服务于普通系统分享后端；碰一碰 / 隔空传送各自独立处理，不走本方法。
-  // 规格与既有 SystemShareService.buildSharedData 完全一致（原样搬过来）。
+  //
+  // 按 payload.kind 选主记录（Issue #766）：
+  //   kind='file'：第一条必须是 general.file-uri，title 写进该 record 的 title 字段；
+  //                其余 URI addRecord；text 在文件记录之后，不允许抢第一条。
+  //   kind='text'（及其他）：第一条是 general.text，title 写进同一条 record 的 title 字段；
+  //                不再把 title 伪装成独立正文记录。
   //
   // SDK 真实接口（@hms.collaboration.systemShare d.ts，since 4.1.0(11)）：
   //   SharedData 构造函数必传首个 SharedRecord；后续记录用 addRecord 追加。
+  //   SharedRecord 有 title?: string 元数据字段（非正文内容）。
   //   无 addText/addURI 方法；文本记录 utd='general.text' + content，URI 记录 utd='general.file-uri' + uri。
   private buildSharedData(payload: SharePayload): systemShare.SharedData | null {
     const hasText: boolean = payload !== undefined && payload !== null &&
       payload.text !== undefined && payload.text !== null && payload.text.length > 0
-    const hasUris: boolean = payload !== undefined && payload !== null &&
-      payload.uris !== undefined && payload.uris !== null && payload.uris.length > 0
-    if (!hasText && !hasUris) {
-      return null
-    }
+    const hasTitle: boolean = payload !== undefined && payload !== null &&
+      payload.title !== undefined && payload.title !== null && payload.title.length > 0
+    const titleValue: string | undefined = hasTitle ? payload.title : undefined
 
-    // 收集所有 SharedRecord；首个传 SharedData 构造函数，其余 addRecord 追加。
-    const records: systemShare.SharedRecord[] = []
-
-    // 标题（可选）。作为独立文本项加入（若 API 有专用 setTitle，可在此替换）。
-    if (payload.title !== undefined && payload.title !== null && payload.title.length > 0) {
-      records.push({ utd: 'general.text', content: payload.title })
-    }
-
-    // 正文文本。
-    if (hasText) {
-      records.push({ utd: 'general.text', content: payload.text })
-    }
-
-    // URI 列表（文件/图片）。过滤空串。
-    if (payload.uris !== undefined && payload.uris !== null) {
+    // 过滤有效 URI（非空串）。
+    const validUris: string[] = []
+    if (payload !== undefined && payload !== null &&
+      payload.uris !== undefined && payload.uris !== null) {
       for (const uri of payload.uris) {
         if (uri !== undefined && uri !== null && uri.length > 0) {
-          records.push({ utd: 'general.file-uri', uri: uri })
+          validUris.push(uri)
         }
       }
     }
 
-    // records 非空由 hasText/hasUris 守卫保证；SharedData 构造函数要求至少一条记录。
-    const data: systemShare.SharedData = new systemShare.SharedData(records[0])
-    for (let i = 1; i < records.length; i++) {
-      data.addRecord(records[i])
+    if (!hasText && validUris.length === 0) {
+      return null
     }
 
+    if (payload !== undefined && payload !== null && payload.kind === 'file' && validUris.length > 0) {
+      // 文件分享：第一条必须是 general.file-uri，带 title 元数据。
+      const primary: systemShare.SharedRecord = {
+        utd: 'general.file-uri',
+        uri: validUris[0],
+        title: titleValue
+      }
+      const data: systemShare.SharedData = new systemShare.SharedData(primary)
+      // 其余文件 URI 追加。
+      for (let i = 1; i < validUris.length; i++) {
+        data.addRecord({ utd: 'general.file-uri', uri: validUris[i], title: titleValue })
+      }
+      // 正文（如果存在）放到文件记录之后，不允许抢第一条。
+      if (hasText) {
+        data.addRecord({ utd: 'general.text', content: payload.text })
+      }
+      return data
+    }
+
+    // 纯文本分享：第一条是 general.text，标题写进同一条 record 的 title 字段。
+    const primary: systemShare.SharedRecord = {
+      utd: 'general.text',
+      content: hasText ? payload.text : '',
+      title: titleValue
+    }
+    const data: systemShare.SharedData = new systemShare.SharedData(primary)
+    // 非 file kind 但携带了 URI（如 image），追加 file-uri 记录。
+    for (const uri of validUris) {
+      data.addRecord({ utd: 'general.file-uri', uri: uri })
+    }
     return data
   }
 }
