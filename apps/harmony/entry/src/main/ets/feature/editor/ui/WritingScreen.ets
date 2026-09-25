@@ -573,15 +573,8 @@ export struct WritingScreen {
     this.shareService.stopAirTransferSharing().then(() => {})
   }
 
-  // 普通系统分享按钮：只调用 HarmonyShareService.share(payload, 'system')。
-  // 碰一碰/隔空传送不走此入口，走其生命周期接口。
-  private async shareToSystem(): Promise<void> {
-    const payload = this.buildSharePayload()
-    if (payload === null) {
-      return
-    }
-    await this.shareService.share(payload, 'system')
-  }
+  // Issue #767 评论 5828146609 第 2 节：shareToSystem() 已删除。
+  // 普通"系统分享"按钮不再存在；碰一碰/隔空传送仍走 startShareLifecycle/stopShareLifecycle。
 
   // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
   private async loadProjectTree(): Promise<void> {
@@ -991,43 +984,17 @@ export struct WritingScreen {
     })
   }
 
+  // Issue #767 评论 5828146609 第 2 节：删除正文页右上"分享/保存"按钮。
+  // shareToSystem() 已删除，但保留 HarmonyShareService / SharePayload / buildSharePayload() /
+  // startShareLifecycle() / updateSharePayload() / stopShareLifecycle()（碰一碰/隔空传送仍在用）。
   // Issue #629 评论14 第1项：编辑区域 Builder（窄屏和宽屏复用同一套编辑会话）。
   @Builder
   EditorPane() {
     Column() {
       // Issue #750 评论 5805761237：返回入口和标题已由 NavDestination 原生标题栏承载
       //（hideTitleBar(false) + title(this.chapterTitle)，沉浸光感 systemMaterial 在标题栏区域生效）。
-      // 此处只保留一个轻量编辑操作栏（非标题栏）：字数显示 + 分享 + 手动保存。
-      // share/save 不再放进 EditableTitleBarV2（该组件自身无 systemMaterial 配置项，
-      // 且塞在内容区无法获得 Navigation/NavDestination 标题栏的沉浸光感材质）。
-      Row() {
-        // 字数显示
-        Text(getContext(this).resourceManager
-          .getStringSync($r('app.string.word_count_format').id)
-          .replace('%s', String(this.wordCount)))
-          .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
-
-        Blank()
-
-        // 分享按钮
-        Button($r('app.string.share'))
-          .type(ButtonType.Normal)
-          .fontSize(14)
-          .onClick(() => { this.shareToSystem() })
-          .margin({ right: 8 })
-
-        // 保存按钮
-        Button($r('app.string.save'))
-          .type(ButtonType.Normal)
-          .fontSize(14)
-          .backgroundColor(this.themeConfig.colors.primary)
-          .fontColor(this.themeConfig.colors.background)
-          .onClick(() => { this.saveChapter() })
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 8 })
+      // Issue #767 评论 5828146609 第 2 节：删除顶部操作栏（分享/保存按钮已删）。
+      // 字数显示合并到底部保存状态栏，正文顶部不再留一条空操作栏。
 
       if (this.isLoading) {
         Column() {
@@ -1075,12 +1042,20 @@ export struct WritingScreen {
           .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       }
 
-      // Bottom toolbar
+      // Bottom toolbar — Issue #767 评论 5828146609 第 2 节：字数显示合并到底部保存状态栏。
       Row() {
+        // 字数显示（从顶部操作栏合并到此）
+        Text(getContext(this).resourceManager
+          .getStringSync($r('app.string.word_count_format').id)
+          .replace('%s', String(this.wordCount)))
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textHint)
+
         if (this.settings.autoSaveEnabled) {
           Text($r('app.string.auto_save'))
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)
+            .margin({ left: 8 })
         }
 
         Blank()

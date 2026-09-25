@@ -28,7 +28,11 @@
 //   IME 通过 selectByRange 事件主动查询选区，编辑器不主动推送。
 
 import { inputMethod } from '@kit.IMEKit'
+import hilog from '@ohos.hilog'
 import { EditorSemanticDispatcher } from './EditorSemanticDispatcher'
+
+const IME_LOG_DOMAIN = 0x0000
+const IME_LOG_TAG = 'HarmonyImeConnection'
 
 export class HarmonyImeConnection {
   private controller: inputMethod.InputMethodController = inputMethod.getController()
@@ -37,8 +41,19 @@ export class HarmonyImeConnection {
 
   // 编辑框获得焦点时调用：绑定语义调度器，attach 到 IME，注册事件回调。
   // 接受 dispatcher 而非 inputAdapter + selectionController：所有输入经 dispatcher 统一排队。
+  // Issue #767 评论 5828146609 第 1 节：attach 逻辑优化。
+  // - 已 attached 且 dispatcher 还是当前 dispatcher：直接返回（不 detach 重连）；
+  // - attached 但 dispatcher 已变化：才 detach 后重新 attach；
+  // - attach 异常向上抛并记录失败原因。
   async attach(dispatcher: EditorSemanticDispatcher): Promise<void> {
-    if (this.attached) {
+    // 已 attached 且 dispatcher 未变化：直接返回，避免反复 detach/attach。
+    if (this.attached && this.dispatcher === dispatcher) {
+      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: already attached with same dispatcher, skip')
+      return
+    }
+    // attached 但 dispatcher 已变化：先 detach 再重新 attach。
+    if (this.attached && this.dispatcher !== dispatcher) {
+      hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: dispatcher changed, detach then re-attach')
       await this.detach()
     }
     this.dispatcher = dispatcher
@@ -50,9 +65,16 @@ export class HarmonyImeConnection {
         enterKeyType: inputMethod.EnterKeyType.UNSPECIFIED,
       },
     }
-    await this.controller.attach(true, textConfig)
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: start')
+    try {
+      await this.controller.attach(true, textConfig)
+    } catch (e) {
+      hilog.error(IME_LOG_DOMAIN, IME_LOG_TAG, `attach: failure, reason: ${JSON.stringify(e)}`)
+      throw e
+    }
     this.registerListeners()
     this.attached = true
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'attach: success')
   }
 
   // 失焦/页面退出时调用：取消监听并 detach。
@@ -137,6 +159,7 @@ export class HarmonyImeConnection {
     if (!this.dispatcher) {
       return
     }
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `insertText: length=${text.length}`)
     this.dispatcher.dispatchFireAndForget({ kind: 'imeCommitText', text })
   }
 
@@ -148,6 +171,7 @@ export class HarmonyImeConnection {
     if (!this.dispatcher) {
       return
     }
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `deleteLeft: length=${length}`)
     this.dispatcher.dispatchFireAndForget({ kind: 'imeDeleteLeft', length: length })
   }
 
@@ -158,6 +182,7 @@ export class HarmonyImeConnection {
     if (!this.dispatcher) {
       return
     }
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `deleteRight: length=${length}`)
     this.dispatcher.dispatchFireAndForget({ kind: 'imeDeleteRight', length: length })
   }
 
@@ -185,6 +210,7 @@ export class HarmonyImeConnection {
     if (!this.dispatcher) {
       return
     }
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, `setPreviewText: length=${text.length}`)
     this.dispatcher.dispatchFireAndForget({ kind: 'imePreviewText', text })
   }
 
@@ -195,6 +221,7 @@ export class HarmonyImeConnection {
     if (!this.dispatcher) {
       return
     }
+    hilog.info(IME_LOG_DOMAIN, IME_LOG_TAG, 'finishTextPreview')
     this.dispatcher.dispatchFireAndForget({ kind: 'imeCancelPreview' })
   }
 }

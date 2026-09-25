@@ -50,8 +50,13 @@ import { PointerInputService, PlatformPointerEvent } from '../../../platform/inp
 import { StylusInputService } from '../../../platform/input/StylusInputService'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController, ViewportDimensions } from '../render/EditorViewportController'
+import hilog from '@ohos.hilog'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
+
+const EDITOR_LOG_DOMAIN = 0x0000
+const EDITOR_LOG_TAG = 'SujianEditor'
+const INPUT_HOST_ID = 'sujian-editor-input-host'
 
 @Component
 export struct SujianEditor {
@@ -104,8 +109,11 @@ export struct SujianEditor {
   // 不丢弃命中测试的 soft-wrap 亲和性。
   private dragAnchor: VisualCaretPosition | null = null
   private isDragging: boolean = false
+  // Issue #767 评论 5828146609 第 1 节：IME 是否已 attach（避免首次 touch 重复 attach）。
+  private hasAttachedIme: boolean = false
 
   aboutToAppear(): void {
+    hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
     this.refreshRender()
     // Issue #629 评论11 第2项：注册行级导航解析器到 Dispatcher。
     // SujianEditor 持有 renderResult；每次渲染更新后同步给 resolver。
@@ -142,6 +150,8 @@ export struct SujianEditor {
   }
 
   aboutToDisappear(): void {
+    hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToDisappear')
+    this.hasAttachedIme = false
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
     this.lineResolver.cancelWait()
     if (this.dispatcher) {
@@ -313,6 +323,38 @@ export struct SujianEditor {
     return this.snapshot.selectionAnchor !== this.snapshot.selectionHead
   }
 
+  // Issue #767 评论 5828146609 第 1 节：统一焦点请求 + IME attach 方法。
+  // 1. 用当前 UIContext 的 FocusController 主动 requestFocus(INPUT_HOST_ID)；
+  // 2. 焦点成功后调用 HarmonyImeConnection.attach(dispatcher)；
+  // 3. attach 失败必须写 hilog，不能继续 .then(() => {}) 静默吞掉。
+  // 首次触摸编辑区时先确保 focus/IME，再继续现有 hitTest / 光标 / drag selection 逻辑。
+  private focusAndAttachIme(): void {
+    if (!this.harmonyImeConnection || !this.dispatcher) {
+      hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: no imeConnection or dispatcher')
+      return
+    }
+    // 已 attach 且 dispatcher 未变化时不需要重复 attach。
+    if (this.hasAttachedIme && this.harmonyImeConnection.isAttached()) {
+      return
+    }
+    hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: requesting focus')
+    try {
+      this.getUIContext().getFocusController().requestFocus(INPUT_HOST_ID)
+      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: focus acquired')
+    } catch (e) {
+      hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: requestFocus failed: ${JSON.stringify(e)}`)
+    }
+    // attach IME，失败写 hilog 不静默吞掉。
+    const imeConnection = this.harmonyImeConnection
+    const dispatcher = this.dispatcher
+    imeConnection.attach(dispatcher).then(() => {
+      this.hasAttachedIme = true
+      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'focusAndAttachIme: IME attach success')
+    }).catch((e: Object) => {
+      hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `focusAndAttachIme: IME attach failure: ${JSON.stringify(e)}`)
+    })
+  }
+
   // ── 键盘语义命令分发 ──
   // 把 SemanticKeyCommand 转成语义命令经 EditorSemanticDispatcher 派发。
   // 原始 KeyEvent 不进 Rust；这里只派发语义命令。
@@ -418,6 +460,8 @@ export struct SujianEditor {
     switch (ev.action) {
       case 'down':
         if (ev.button === 0) {
+          // Issue #767 评论 5828146609 第 1 节：鼠标点击也先确保 focus/IME。
+          this.focusAndAttachIme()
           // 左键按下：记 anchor position，开始 potential drag。
           this.dragAnchor = hitPos
           this.isDragging = true
@@ -470,6 +514,12 @@ export struct SujianEditor {
       return
     }
     const touch: TouchObject = event.touches[0]
+    // Issue #767 评论 5828146609 第 1 节：首次触摸编辑区时先确保 focus/IME，
+    // 这样空白处点击也能获得焦点和键盘。
+    if (event.type === TouchType.Down) {
+      hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `touch down: x=${touch.x}, y=${touch.y}`)
+      this.focusAndAttachIme()
+    }
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
@@ -548,8 +598,10 @@ export struct SujianEditor {
     // 正文+选区+composition+caret 在同一滚动坐标系里（Stack align(TopStart)）。
     // 滚轮由 Scroll 自动消费；onScroll 回调把 viewport 状态回调给 WritingScreen。
     Scroll(this.scroller) {
-      // Stack 层叠组合静态层：selection background → text → composition underline → static caret。
-      // align(TopStart) 让 Text 从左上角开始渲染，与 Rect.position 的坐标系（相对左上）一致。
+      // Issue #767 评论 5828146609 第 1 节：Stack 作为唯一输入宿主（INPUT_HOST_ID）。
+      // 焦点和输入事件挂在整个全尺寸 Stack 上，不再挂在正文 Text 上。
+      // 正文 Text 只负责绘制文字，不再承担"可点击输入框"职责。
+      // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
       Stack() {
         if (this.renderResult && this.snapshot) {
           // 1. selection background（最底层）
@@ -561,40 +613,13 @@ export struct SujianEditor {
               .fill(this.selectionBackgroundColor)
           }, (rect: SelectionRect, index: number) => index.toString())
 
-          // 2. text
+          // 2. text — 只负责绘制文字，不再承担焦点/输入事件职责。
           // wordBreak(BREAK_ALL) 与 EditorRenderBackend.hitTestByPoint 的逐 code point 折行一致。
           Text(this.renderResult.text)
             .fontSize(this.snapshot.fontSize)
             .width('100%')
             .textAlign(TextAlign.Start)
             .wordBreak(WordBreak.BREAK_ALL)
-            .focusable(true)
-            .onFocus((): void => {
-              // 编辑框获得焦点：attach 自绘编辑框到 IME Kit（传 dispatcher，所有输入经 dispatcher 统一排队）
-              if (this.harmonyImeConnection && this.dispatcher) {
-                this.harmonyImeConnection.attach(this.dispatcher).then(() => {})
-              }
-            })
-            .onBlur((): void => {
-              // 编辑框失焦：detach IME Kit
-              if (this.harmonyImeConnection) {
-                this.harmonyImeConnection.detach().then(() => {})
-              }
-            })
-            .onKeyEvent((event: KeyEvent): boolean => {
-              // 物理键盘事件 → KeyboardInputService 归一化 → 语义命令 → dispatcher.dispatch。
-              // 原始 KeyEvent 不进 Rust。所有输入经 dispatcher 统一排队（Part A）。
-              const platformEv: PlatformKeyEvent = this.keyboardService.normalize(event)
-              const cmd: SemanticKeyCommand = this.keyboardService.toSemanticCommand(platformEv)
-              this.dispatchKeyCommand(cmd)
-              // 消费已识别的命令（非 ignore），防止事件冒泡到系统默认处理。
-              return cmd.kind !== 'ignore'
-            })
-            .onMouse((event: MouseEvent): boolean => {
-              // 鼠标/触控板事件 → PointerInputService 归一化 → 点击/drag/滚轮。
-              this.handleMouseEvent(event)
-              return false
-            })
             .onAreaChange((_oldArea: Area, newArea: Area): void => {
               // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
               // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
@@ -614,10 +639,6 @@ export struct SujianEditor {
               if (this.viewportController) {
                 this.viewportController.notifyDimensionsChanged()
               }
-            })
-            .onTouch((event: TouchEvent): void => {
-              // 触摸/笔事件 → hit test + drag selection。
-              this.handleTouchEvent(event)
             })
 
           // 3. composition underline（在 text 上面）
@@ -641,6 +662,48 @@ export struct SujianEditor {
           Text('')
         }
       }
+      .id(INPUT_HOST_ID)
+      .focusable(true)
+      .onFocus((): void => {
+        // Issue #767 评论 5828146609 第 1 节：编辑区获得焦点 → attach IME。
+        hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: input host focus acquired')
+        if (this.harmonyImeConnection && this.dispatcher) {
+          const imeConnection = this.harmonyImeConnection
+          const dispatcher = this.dispatcher
+          imeConnection.attach(dispatcher).then(() => {
+            this.hasAttachedIme = true
+            hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onFocus: IME attach success')
+          }).catch((e: Object) => {
+            hilog.error(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `onFocus: IME attach failure: ${JSON.stringify(e)}`)
+          })
+        }
+      })
+      .onBlur((): void => {
+        // Issue #767 评论 5828146609 第 1 节：编辑区失焦 → detach IME。
+        hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'onBlur: input host blur')
+        this.hasAttachedIme = false
+        if (this.harmonyImeConnection) {
+          this.harmonyImeConnection.detach().then(() => {})
+        }
+      })
+      .onKeyEvent((event: KeyEvent): boolean => {
+        // 物理键盘事件 → KeyboardInputService 归一化 → 语义命令 → dispatcher.dispatch。
+        // 原始 KeyEvent 不进 Rust。所有输入经 dispatcher 统一排队（Part A）。
+        const platformEv: PlatformKeyEvent = this.keyboardService.normalize(event)
+        const cmd: SemanticKeyCommand = this.keyboardService.toSemanticCommand(platformEv)
+        this.dispatchKeyCommand(cmd)
+        // 消费已识别的命令（非 ignore），防止事件冒泡到系统默认处理。
+        return cmd.kind !== 'ignore'
+      })
+      .onMouse((event: MouseEvent): boolean => {
+        // 鼠标/触控板事件 → PointerInputService 归一化 → 点击/drag/滚轮。
+        this.handleMouseEvent(event)
+        return false
+      })
+      .onTouch((event: TouchEvent): void => {
+        // 触摸/笔事件 → hit test + drag selection。
+        this.handleTouchEvent(event)
+      })
       .align(Alignment.TopStart)
       .width('100%')
       // Issue #629 评论6 Part C：Stack 高度：至少 viewport 高度，随正文增长。
