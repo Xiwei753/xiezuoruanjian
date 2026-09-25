@@ -623,7 +623,7 @@ export struct WorkspaceScreen {
   @Builder
   LegacySinglePaneLayout() {
     Column() {
-      // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
+      // ── 顶栏：左 返回+作品名 / 右 卷数量+新建卷 ──
       this.LegacySinglePaneHeader()
 
       // ── 内容区 ──
@@ -658,12 +658,12 @@ export struct WorkspaceScreen {
       } else {
         Scroll() {
           Column() {
-            if (this.viewModel.volumeCardStates.length === 0) {
+            if (this.viewModel.volumeTrees.length === 0) {
               this.EmptyState()
             } else {
-              ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
-                this.VolumeCard(cardState)
-              }, (cardState: VolumeCardState) => cardState.volumeId)
+              ForEach(this.viewModel.volumeTrees, (volumeTree: VolumeTree) => {
+                this.LegacySinglePaneVolumeSection(volumeTree)
+              }, (volumeTree: VolumeTree) => volumeTree.volume.id)
             }
           }
           .width('100%')
@@ -680,8 +680,9 @@ export struct WorkspaceScreen {
     .alignItems(HorizontalAlign.Center)
   }
 
-  // ── 旧顶栏：左 返回+作品名 / 右 同步+设置 ──
-  // 保持 #760 前的交互：同步按钮跳设置页（不执行真正的同步动作）
+  // ── 旧顶栏：左 返回+作品名 / 右 卷数量+新建卷 ──
+  // Issue #760 评论 5825309208：恢复 #760 前的旧单栏顶栏交互。
+  // 旧版顶栏是：返回、作品名、卷数量、新建卷（不是同步+设置）。
   @Builder
   LegacySinglePaneHeader() {
     Row() {
@@ -697,30 +698,138 @@ export struct WorkspaceScreen {
         .fontWeight(FontWeight.Bold)
         .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ left: 12 })
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      // 右：同步、设置（旧版交互：同步按钮跳设置页）
-      Button($r('app.string.sync'))
-        .fontSize(13)
-        .height(28)
-        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
-        .fontColor(this.themeConfig.colors.textSecondary)
-        .margin({ right: 8 })
-        .onClick(() => this.navigateToSettings())
+      Blank()
 
-      // 设置按钮
-      Button($r('app.string.settings'))
-        .fontSize(13)
-        .height(28)
-        .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
-        .fontColor(this.themeConfig.colors.textSecondary)
-        .onClick(() => this.navigateToSettings())
+      // 右：卷数量 + 新建卷
+      if (this.viewModel.project) {
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.volume_count_format').id).replace('%s', `${this.viewModel.volumeTrees.length}`))
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 12 })
+      }
+
+      Button($r('app.string.new_volume'))
+        .fontSize(14)
+        .height(32)
+        .backgroundColor(this.themeConfig.colors.primary)
+        .onClick(() => this.handleCreateVolume())
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
     .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
+  }
+
+  // ── 旧单栏卷章节列表 ──
+  // Issue #760 评论 5825309208：恢复 #760 前的旧单栏卷章节列表结构。
+  // 保持原来的展开箭头 / 卷名 / 章节数 / + / × / 章节标题 / 字数 / 最后编辑时间 / × / 右箭头结构。
+  // CRUD 调用现有 ViewModel/handler，不恢复旧 Core 直连代码。
+  @Builder
+  LegacySinglePaneVolumeSection(volumeTree: VolumeTree) {
+    Column() {
+      // 卷头：展开箭头 / 卷名 / 章节数 / +（新增章节）/ ×（删除卷）
+      Row() {
+        Image(this.viewModel.isVolumeExpanded(volumeTree.volume.id)
+          ? $r('sys.media.ohos_ic_public_arrow_down')
+          : $r('sys.media.ohos_ic_public_arrow_right'))
+          .width(16)
+          .height(16)
+          .fillColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 8 })
+
+        Text(volumeTree.volume.title)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textHint)
+          .margin({ right: 8 })
+
+        Button('+')
+          .fontSize(14)
+          .width(28)
+          .height(28)
+          .backgroundColor(this.themeConfig.colors.secondary)
+          .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
+
+        Button('×')
+          .fontSize(14)
+          .width(28)
+          .height(28)
+          .backgroundColor(this.themeConfig.colors.error)
+          .margin({ left: 4 })
+          .onClick(() => this.viewModel.startDeleteVolume(volumeTree.volume.id, true))
+      }
+      .width('100%')
+      .padding(12)
+      .backgroundColor(this.themeConfig.colors.surface)
+      .borderRadius({ topLeft: DesignTokens.radiusSm, topRight: DesignTokens.radiusSm })
+      .onClick(() => this.handleToggleVolume(volumeTree.volume.id))
+
+      // 章节列表（展开后显示）
+      if (this.viewModel.isVolumeExpanded(volumeTree.volume.id)) {
+        if (volumeTree.chapters.length === 0) {
+          Column() {
+            Text($r('app.string.no_chapters'))
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textHint)
+              .padding(16)
+          }
+          .width('100%')
+          .backgroundColor(this.themeConfig.colors.surface)
+        } else {
+          ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
+            Row() {
+              Column() {
+                Text(chapter.title)
+                  .fontSize(15)
+                  .fontColor(this.themeConfig.colors.textPrimary)
+                  .margin({ bottom: 4 })
+
+                Row() {
+                  Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
+                    .fontSize(12)
+                    .fontColor(this.themeConfig.colors.textSecondary)
+                    .margin({ right: 12 })
+
+                  Text(this.formatTime(chapter.updatedAt))
+                    .fontSize(12)
+                    .fontColor(this.themeConfig.colors.textHint)
+                }
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Button('×')
+                .fontSize(14)
+                .width(24)
+                .height(24)
+                .backgroundColor('transparent')
+                .fontColor(this.themeConfig.colors.textHint)
+                .onClick(() => this.viewModel.startDeleteChapter(chapter.id, true))
+
+              Image($r('sys.media.ohos_ic_public_arrow_right'))
+                .width(16)
+                .height(16)
+                .fillColor(this.themeConfig.colors.textHint)
+                .margin({ left: 8 })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .backgroundColor(this.themeConfig.colors.surface)
+            .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
+          }, (chapter: ChapterMeta) => chapter.id)
+        }
+      }
+    }
+    .width('100%')
+    .margin({ bottom: 12 })
+    .borderRadius(DesignTokens.radiusSm)
+    .clip(true)
+    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
   }
 
   // ── 空状态 ──
