@@ -159,6 +159,18 @@ export class NavigationTransactionCoordinator {
     }
   }
 
+  // Issue #767 评论5831949869 第1项：按实例相等注销指定 tab 的 NavPathStack。
+  // 必须按"实例相等"再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
+  unregisterTabStack(tabIndex: number, stack: NavPathStack): void {
+    const registered = this.tabStacks.get(tabIndex)
+    if (registered === stack) {
+      this.tabStacks.delete(tabIndex)
+    }
+    if (this.activeTabStack === stack) {
+      this.activeTabStack = null
+    }
+  }
+
   // AppNavigation.aboutToDisappear 注销，避免悬空回调。
   unregister(): void {
     this.activeTabStack = null

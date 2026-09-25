@@ -89,8 +89,9 @@ export struct PrimaryTabShell {
     coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
     coordinator.registerTabStack(TAB_STATS, this.statsStack)
 
-    // Issue #767：设置初始活动 tab 为 TAB_HOME，同时更新 activeTabStack。
-    coordinator.setActiveTab(TAB_HOME)
+    // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
+    // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
+    this.onTabChange(this.currentTab)
 
     // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
     // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
@@ -128,6 +129,12 @@ export struct PrimaryTabShell {
     if (this.navChromeObserver) {
       NavigationChromeStore.getInstance().unsubscribe(this.navChromeObserver)
     }
+    // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
+    // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
+    const coordinator = NavigationTransactionCoordinator.getInstance()
+    coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
+    coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
+    coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
   }
 
   // 通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。

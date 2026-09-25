@@ -51,9 +51,12 @@ class MockNavPathStack {
 // - activeTask: 正在执行的任务仍在"可去重集合"里（shift 后不消失）
 // - 不同 intent 严格串行执行，不同 dedupeKey 不合并
 // - Issue #767：navPathStack 改为 activeTabStack，增加 setActiveStack / getNavPathStack
+// - Issue #767 评论5831949869：增加 unregisterTabStack 按实例相等注销
 class NavigationTransactionCoordinator {
   constructor() {
     this.activeTabStack = null
+    this.activeTabIndex = 0
+    this.tabStacks = new Map()
     this.activeGuardLease = null
     this.pendingTasks = []
     this.activeTask = null
@@ -66,6 +69,32 @@ class NavigationTransactionCoordinator {
   // Issue #767：获取当前活动 tab 的 stack
   getNavPathStack() {
     return this.activeTabStack
+  }
+  // Issue #767：登记指定 tab index 的 stack
+  registerTabStack(tabIndex, stack) {
+    this.tabStacks.set(tabIndex, stack)
+  }
+  // Issue #767：获取指定 tab index 的 stack
+  getTabStack(tabIndex) {
+    return this.tabStacks.get(tabIndex) ?? null
+  }
+  // Issue #767：设置当前活动 tab index
+  setActiveTab(tabIndex) {
+    this.activeTabIndex = tabIndex
+    const stack = this.getTabStack(tabIndex)
+    if (stack !== null) {
+      this.activeTabStack = stack
+    }
+  }
+  // Issue #767 评论5831949869 第1项：按实例相等注销指定 tab 的 stack
+  unregisterTabStack(tabIndex, stack) {
+    const registered = this.tabStacks.get(tabIndex)
+    if (registered === stack) {
+      this.tabStacks.delete(tabIndex)
+    }
+    if (this.activeTabStack === stack) {
+      this.activeTabStack = null
+    }
   }
   register(navPathStack) {
     this.activeTabStack = navPathStack
@@ -314,6 +343,56 @@ await testAsync('unregisterLeaveGuard 后 safePop: 无 guard，直接 pop', asyn
   const ok = await host.safePop()
   assert.equal(ok, true)
   assert.equal(stack.popCalls.length, 1)
+})
+
+// Issue #767 评论5831949869 第1项：unregisterTabStack 按实例相等注销
+await testAsync('unregisterTabStack: 按实例相等注销已注册的 tab stack', async () => {
+  const host = new NavigationTransactionCoordinator()
+  const stack0 = new MockNavPathStack()
+  const stack1 = new MockNavPathStack()
+  host.registerTabStack(0, stack0)
+  host.registerTabStack(1, stack1)
+  host.setActiveTab(0)
+  assert.equal(host.getTabStack(0), stack0, 'tab 0 注册了 stack0')
+  assert.equal(host.getTabStack(1), stack1, 'tab 1 注册了 stack1')
+  assert.equal(host.getNavPathStack(), stack0, 'activeTabStack 是 stack0')
+  // 注销 tab 0 的 stack0
+  host.unregisterTabStack(0, stack0)
+  assert.equal(host.getTabStack(0), null, 'tab 0 已注销')
+  assert.equal(host.getNavPathStack(), null, 'activeTabStack 已清空（因为它是 stack0）')
+  assert.equal(host.getTabStack(1), stack1, 'tab 1 仍在')
+})
+
+await testAsync('unregisterTabStack: 旧 Shell 迟到 disappear 不删新 Shell 的 stack', async () => {
+  const host = new NavigationTransactionCoordinator()
+  const oldStack = new MockNavPathStack()
+  const newStack = new MockNavPathStack()
+  // 旧 Shell 注册了 stack
+  host.registerTabStack(0, oldStack)
+  host.setActiveTab(0)
+  // 新 Shell 重新注册了同一个 tab 的 stack
+  host.registerTabStack(0, newStack)
+  host.setActiveTab(0)
+  assert.equal(host.getTabStack(0), newStack, 'tab 0 现在是 newStack')
+  // 旧 Shell 的 aboutToDisappear 迟到，尝试注销 oldStack
+  host.unregisterTabStack(0, oldStack)
+  // newStack 不应被删
+  assert.equal(host.getTabStack(0), newStack, '新 Shell 的 stack 不受旧 Shell disappear 影响')
+  assert.equal(host.getNavPathStack(), newStack, 'activeTabStack 仍是 newStack')
+})
+
+await testAsync('unregisterTabStack: 注销非活动 tab 不影响 activeTabStack', async () => {
+  const host = new NavigationTransactionCoordinator()
+  const stack0 = new MockNavPathStack()
+  const stack1 = new MockNavPathStack()
+  host.registerTabStack(0, stack0)
+  host.registerTabStack(1, stack1)
+  host.setActiveTab(0)
+  assert.equal(host.getNavPathStack(), stack0, 'activeTabStack 是 stack0')
+  // 注销 tab 1（非活动 tab）
+  host.unregisterTabStack(1, stack1)
+  assert.equal(host.getTabStack(1), null, 'tab 1 已注销')
+  assert.equal(host.getNavPathStack(), stack0, 'activeTabStack 不受影响')
 })
 
 console.log('---')
