@@ -266,7 +266,7 @@ export class EditorRenderBackend {
     const result = layout.getGlyphPositionAtCoordinate(touchX, touchY)
     // PositionWithAffinity.affinity: UPSTREAM=0, DOWNSTREAM=1
     // CaretAffinity: Upstream='upstream', Downstream='downstream'
-    const affinity: CaretAffinity = result.affinity === Affinity.Upstream
+    const affinity: CaretAffinity = result.affinity === Affinity.UPSTREAM
       ? CaretAffinity.Upstream
       : CaretAffinity.Downstream
     return { utf16Offset: result.position, affinity }
