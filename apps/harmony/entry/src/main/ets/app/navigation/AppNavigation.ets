@@ -53,6 +53,8 @@ export struct AppNavigation {
     const dedupeKey = `continuation:${payload.chapterId ?? ''}:${payload.projectId ?? ''}`
     await NavigationTransactionCoordinator.getInstance().safeClearAndRebuild(dedupeKey, (): void => {
       // 接续恢复始终回到 Home tab。
+      // Issue #767 评论5832129578 第1项：currentTab 变化会通过 @Watch 触发
+      // PrimaryTabShell.syncActiveTab，不再依赖 Tabs.onChange 回调。
       this.currentTab = TAB_HOME
 
       // Issue #767：用 getTabStack(TAB_HOME) 获取作品 tab 的 NavPathStack，

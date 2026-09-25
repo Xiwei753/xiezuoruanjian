@@ -57,7 +57,8 @@ export struct PrimaryTabShell {
   @State statsStack: NavPathStack = createStackWithRoot(Routes.Stats)
 
   // 当前选中的 tab 索引（与 AppNavigation 通过 @Link 共享）
-  @Link currentTab: number
+  // Issue #767 评论5832129578 第1项：加 @Watch 监听，程序修改 currentTab 时也能触发 syncActiveTab。
+  @Link @Watch('onCurrentTabChanged') currentTab: number
 
   // 响应式布局状态（用于判断是否显示底部 Tab Bar）
   @State adaptiveState: AdaptiveState = getAdaptiveState()
@@ -91,7 +92,9 @@ export struct PrimaryTabShell {
 
     // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
     // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
-    this.onTabChange(this.currentTab)
+    // Issue #767 评论5832129578 第1项：aboutToAppear 时组件还在初始化，@Watch 不会触发，
+    // 所以直接调 syncActiveTab 而不是 onTabChange。
+    this.syncActiveTab(this.currentTab)
 
     // Issue #767：注册完 homeStack 后尝试消费待处理的接续恢复。
     // 如果 AppNavigation 已注册 restoreListener 且有 pendingRestore，此时才真正消费。
@@ -139,8 +142,17 @@ export struct PrimaryTabShell {
 
   // 通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。
   // Core 规则：Writing/Settings=false，Home/ProjectWorkspace/StarMap/Stats/Sync=true。
+  // Issue #767 评论5832129578 第3项：role 变化时先禁用切 tab（保守策略），
+  // 等 policy 返回后再决定是否开放；异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态。
   private async updateShowPrimaryNav(screenRole: ScreenRole): Promise<void> {
+    this.currentShowPrimaryNav = false
+
+    const requestedRole = screenRole
     const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(screenRole)
+    // 异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态
+    if (this.currentScreenRole !== requestedRole) {
+      return
+    }
     if (policy) {
       this.currentShowPrimaryNav = policy.showPrimaryNavigation
     } else {
@@ -148,24 +160,33 @@ export struct PrimaryTabShell {
     }
   }
 
-  // Issue #767：Tabs onChange 切换后更新活动栈。
-  // 一级切换只切 tab index，不再 clear() + pushPath() 重建根页面。
-  private onTabChange(index: number): void {
-    this.currentTab = index
-    let stack: NavPathStack
-    if (index === TAB_HOME) {
-      stack = this.homeStack
-    } else if (index === TAB_STARMAP) {
-      stack = this.starMapStack
-    } else {
-      stack = this.statsStack
-    }
+  // Issue #767 评论5832129578 第1项：syncActiveTab 是同步 activeStack 和 Coordinator 的唯一入口。
+  // 无论是用户手势切 tab（Tabs.onChange → onTabChange → currentTab 赋值 → @Watch → syncActiveTab）
+  // 还是程序修改 currentTab（如 applyContinuation 中 this.currentTab = TAB_HOME → @Watch → syncActiveTab），
+  // 都走这个方法，确保 activeStack 和 Coordinator 状态一致。
+  private syncActiveTab(index: number): void {
+    const stack = index === TAB_HOME
+      ? this.homeStack
+      : index === TAB_STARMAP
+        ? this.starMapStack
+        : this.statsStack
+
     this.activeStack = stack
-    // Issue #767：同时调用 setActiveTab 和 setActiveStack，确保 coordinator 状态一致。
     const coordinator = NavigationTransactionCoordinator.getInstance()
     coordinator.setActiveTab(index)
     coordinator.setActiveStack(stack)
-    hilog.info(0x0000, 'PrimaryTabShell', 'onTabChange: index=%{public}d, stack updated', index)
+    hilog.info(0x0000, 'PrimaryTabShell', 'syncActiveTab: index=%{public}d, stack updated', index)
+  }
+
+  // Issue #767 评论5832129578 第1项：@Watch 回调，currentTab 被父组件程序修改时触发同步。
+  private onCurrentTabChanged(): void {
+    this.syncActiveTab(this.currentTab)
+  }
+
+  // Issue #767：Tabs onChange 切换后只更新 currentTab，由 @Watch 统一触发 syncActiveTab。
+  // 一级切换只切 tab index，不再 clear() + pushPath() 重建根页面。
+  private onTabChange(index: number): void {
+    this.currentTab = index
   }
 
   // Issue #767：获取指定 tab 的 NavPathStack。
@@ -233,6 +254,16 @@ export struct PrimaryTabShell {
       .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
     }
     .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
+    // Issue #767 评论5832129578 第2项：正文/设置页禁止横向滑动切 tab，
+    // 防止绕过 requestLeave/safePop 的离开事务。
+    .scrollable(this.currentShowPrimaryNav)
+    .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
+      // Issue #767 评论5832129578 第2项：底栏隐藏时（Writing/Settings）禁止横向滑动切 tab。
+      if (!this.currentShowPrimaryNav) {
+        return false
+      }
+      return true
+    })
     .onChange((index: number) => {
       this.onTabChange(index)
     })
