@@ -207,7 +207,7 @@ fn test_full_sync_single_target_err_does_not_block_others() {
 
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("single target failure must not make full sync return Err");
 
     // 3 个 target 都在结果中（1 app + 2 project）
@@ -275,7 +275,7 @@ fn test_full_sync_mixed_outcomes_all_targets_present() {
 
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("mixed outcomes must not make full sync return Err");
 
     assert_eq!(result.targets.len(), 3, "all targets present");
@@ -329,7 +329,7 @@ fn test_full_sync_all_ok_overall_success() {
     let backend = MockProvider::new(MockOutcome::ok(SyncResult::success()));
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("full sync ok");
 
     assert_eq!(result.targets.len(), 2);
@@ -352,8 +352,12 @@ fn test_full_sync_list_projects_failure_returns_err_and_persists_global() {
     let core = WriterCore::new(temp_dir.path(), &projects_path);
     let backend = MockProvider::new(MockOutcome::ok(SyncResult::success()));
     let config = test_config();
-    let result =
-        core.perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false);
+    let result = core.perform_full_sync_with_provider(
+        &backend,
+        &SyncPolicy::from_config(&config),
+        false,
+        None,
+    );
     assert!(
         result.is_err(),
         "list_projects failure should make perform_full_sync return Err"
@@ -515,7 +519,7 @@ fn full_sync_state_persisted_after_all_success() {
     let backend = MockProvider::new(MockOutcome::ok(SyncResult::success()));
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("full sync");
     assert!(matches!(
         result.overall_status,
@@ -549,7 +553,12 @@ fn full_sync_state_partial_failure_preserves_previous_last_success() {
     let backend_ok = MockProvider::new(MockOutcome::ok(SyncResult::success()));
     let config = test_config();
     let result1 = core
-        .perform_full_sync_with_provider(&backend_ok, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(
+            &backend_ok,
+            &SyncPolicy::from_config(&config),
+            false,
+            None,
+        )
         .expect("full sync 1");
     assert!(matches!(
         result1.overall_status,
@@ -570,7 +579,12 @@ fn full_sync_state_partial_failure_preserves_previous_last_success() {
         MockOutcome::ErrOther("project sync failed".to_string()),
     );
     let _result2 = core
-        .perform_full_sync_with_provider(&backend_partial, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(
+            &backend_partial,
+            &SyncPolicy::from_config(&config),
+            false,
+            None,
+        )
         .expect("full sync 2");
     // LWW engine 可能将 ProviderError::Other 分类为可重试并重试后成功，
     // 所以总体状态可能是 Success/LatestWinsApplied/NoChanges 或 RecoverableError。
@@ -699,6 +713,7 @@ fn full_sync_in_flight_state_is_syncing_until_final_write() {
             },
             &SyncPolicy::from_config(&config),
             false,
+            None,
         )
         .expect("full sync completes");
     assert!(matches!(
@@ -878,7 +893,7 @@ fn aggregate_recoverable_only_overall_is_recoverable() {
 
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("full sync");
 
     assert!(
@@ -1249,7 +1264,7 @@ fn aggregate_success_plus_latest_wins_applied_is_latest_wins_applied() {
 
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("full sync");
 
     assert_eq!(
@@ -1276,7 +1291,7 @@ fn aggregate_latest_wins_applied_beats_no_changes() {
 
     let config = test_config();
     let result = core
-        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false)
+        .perform_full_sync_with_provider(&backend, &SyncPolicy::from_config(&config), false, None)
         .expect("full sync");
 
     assert_eq!(

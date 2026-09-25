@@ -150,6 +150,16 @@ impl SyncProgressSink {
             g.total_targets = total;
         }
     }
+
+    /// 只更新当前阶段，不改变 target 信息。
+    ///
+    /// 用于 generation GC / Commit 等非 target 阶段，让诊断包能区分
+    /// 同步卡在 transfer / generation_gc / commit 哪一步（Issue #763）。
+    pub fn set_phase(&self, phase: &str) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.current_phase = Some(phase.to_string());
+        }
+    }
 }
 
 impl Default for SyncProgressSink {

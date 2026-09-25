@@ -67,7 +67,7 @@ pub fn run_transfer(
             sink.update_target_start(
                 &planned.target.remote_prefix,
                 planned.project_id.as_deref(),
-                planned.target_kind.as_target_kind_str(),
+                "transfer",
                 finished,
                 total_targets,
             );
@@ -158,6 +158,11 @@ pub fn run_transfer(
                 generation_gc_result: None,
             };
         }
+    }
+
+    // Issue #763：generation GC 阶段，更新 progress sink 的 phase。
+    if let Some(sink) = progress {
+        sink.set_phase("generation_gc");
     }
     for planned in &plan.targets {
         // Issue #729：generation GC 循环内每个 target 前检查取消令牌。

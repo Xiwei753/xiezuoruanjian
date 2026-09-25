@@ -552,6 +552,12 @@ impl WriterCoreApi {
             }
         }
 
+        // Issue #763：Commit 阶段，更新 progress sink 的 phase。
+        // 拿不到当前 target 时至少明确写出 phase，不留 null。
+        if let Some(sink) = progress.as_ref() {
+            sink.set_phase("commit");
+        }
+
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();

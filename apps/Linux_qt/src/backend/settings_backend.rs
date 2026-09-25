@@ -242,41 +242,63 @@ fn build_export_attachments(
         });
     }
 
+    // Issue #763：先读取全局冲突摘要一次，复用于 sync_operation_state.json 的
+    // counts.conflictCount 和 sync_conflicts.json，不为计数再扫第二遍项目。
+    // core_api() 返回 None（无工作区）或读取失败时为 None，两者都跳过。
+    let sync_conflicts_opt = app
+        .core_api()
+        .and_then(|api| api.list_all_sync_conflicts().ok());
+
     // sync_operation_state.json — 当前同步操作状态（含 target 进度）。
     // current_sync_operation_state 是 Core SyncOperationStateDto 的 JSON 序列化。
     // 若有进度 sink（同步进行中），合并 currentTarget/finishedTargets/totalTargets。
     // 不自己发明格式，直接取 Core DTO 的 JSON；解析失败时原样输出，不丢信息。
     if !app.current_sync_operation_state.is_empty() {
-        let content = if let Some(ref sink) = app.current_sync_progress {
-            let progress = sink.snapshot();
+        // Issue #763：无论是否有 progress sink，都解析 JSON 以写入真实 conflictCount。
+        // 有 sink 时额外合并 currentTarget/finishedTargets/totalTargets。
+        let content =
             match serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state) {
                 Ok(mut v) => {
                     if let Some(obj) = v.as_object_mut() {
-                        obj.insert(
-                            "currentTarget".to_string(),
-                            serde_json::json!({
-                                "targetRemotePrefix": progress.current_target_remote_prefix,
-                                "projectId": progress.current_project_id,
-                                "phase": progress.current_phase,
-                            }),
-                        );
-                        obj.insert(
-                            "finishedTargets".to_string(),
-                            serde_json::json!(progress.finished_targets),
-                        );
-                        obj.insert(
-                            "totalTargets".to_string(),
-                            serde_json::json!(progress.total_targets),
-                        );
+                        // 合并 progress sink 的 target 进度（同步运行中才有）。
+                        if let Some(ref sink) = app.current_sync_progress {
+                            let progress = sink.snapshot();
+                            obj.insert(
+                                "currentTarget".to_string(),
+                                serde_json::json!({
+                                    "targetRemotePrefix": progress.current_target_remote_prefix,
+                                    "projectId": progress.current_project_id,
+                                    "phase": progress.current_phase,
+                                }),
+                            );
+                            obj.insert(
+                                "finishedTargets".to_string(),
+                                serde_json::json!(progress.finished_targets),
+                            );
+                            obj.insert(
+                                "totalTargets".to_string(),
+                                serde_json::json!(progress.total_targets),
+                            );
+                        }
+                        // Issue #763：写入真实未解决冲突总数，复用已读取的
+                        // list_all_sync_conflicts 结果，不为计数再扫第二遍项目。
+                        if let Some(conflicts) = sync_conflicts_opt.as_ref() {
+                            let conflict_count = u32::try_from(conflicts.len()).unwrap_or(u32::MAX);
+                            if let Some(counts) =
+                                obj.get_mut("counts").and_then(|c| c.as_object_mut())
+                            {
+                                counts.insert(
+                                    "conflictCount".to_string(),
+                                    serde_json::json!(conflict_count),
+                                );
+                            }
+                        }
                     }
                     serde_json::to_string_pretty(&v)
                         .unwrap_or_else(|_| app.current_sync_operation_state.clone())
                 }
                 Err(_) => app.current_sync_operation_state.clone(),
-            }
-        } else {
-            app.current_sync_operation_state.clone()
-        };
+            };
         attachments.push(writer_diagnostics::PlatformAttachment {
             relative_path: "sync_operation_state.json".to_string(),
             content: content.into_bytes(),
@@ -294,17 +316,14 @@ fn build_export_attachments(
         }
     }
 
-    // sync_conflicts.json — 全局冲突摘要（AllSyncConflictEntryDto 只含 project_id/title/
-    // path/kind/created_at，不含正文/快照，安全）。core_api() 返回 None 时跳过。
-    if let Some(api) = app.core_api() {
-        if let Ok(conflicts) = api.list_all_sync_conflicts() {
-            let json =
-                serde_json::to_string_pretty(&conflicts).unwrap_or_else(|_| "[]".to_string());
-            attachments.push(writer_diagnostics::PlatformAttachment {
-                relative_path: "sync_conflicts.json".to_string(),
-                content: json.into_bytes(),
-            });
-        }
+    // sync_conflicts.json — 复用已读取的全局冲突摘要（AllSyncConflictEntryDto 只含
+    // project_id/title/path/kind/created_at，不含正文/快照，安全）。
+    if let Some(ref conflicts) = sync_conflicts_opt {
+        let json = serde_json::to_string_pretty(conflicts).unwrap_or_else(|_| "[]".to_string());
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "sync_conflicts.json".to_string(),
+            content: json.into_bytes(),
+        });
     }
 
     // sync_runtime.json — 同步运行时状态。data root 绝对路径不进诊断包，只放 basename。
