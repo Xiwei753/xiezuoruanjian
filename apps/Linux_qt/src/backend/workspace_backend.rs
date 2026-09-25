@@ -464,6 +464,8 @@ impl AppBackend {
         self.selected_chapter_id = None;
         // Clear tree
         self.cached_tree = QJsonArray::default();
+        // Issue #765：同步清空 serde 镜像，避免切工作区后旧树快照残留。
+        self.cached_tree_json = serde_json::Value::Array(vec![]);
         // Reset sync status
         self.current_sync_status = "no_workspace".to_string();
         self.current_save_status = "未打开工作区".to_string();

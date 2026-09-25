@@ -353,6 +353,12 @@ pub struct AppBackend {
     selected_chapter_id: Option<String>,
 
     cached_tree: QJsonArray,
+    /// Issue #765：cached_tree 的 serde_json::Value 镜像，由 reload_tree() 在构建
+    /// QJsonArray 的同时并行构建。供 appState/tree model 的纯转换路径使用，
+    /// 避免每次读 appState 都重新做一遍全量 Core 树扫描。
+    /// qmetaobject 0.2.10 的 QJsonArray 在 Rust 侧没有可靠的遍历 API，
+    /// 因此在 reload_tree() 遍历 Core 数据时同步构建这份 serde 镜像。
+    pub(crate) cached_tree_json: serde_json::Value,
 
     stats_device_id: String,
     stats_session_id: String,

@@ -48,7 +48,8 @@ QtObject {
         onTriggered: {
             var projectApi = projectBackendRef;
             if (!projectApi) return;
-            var state = projectApi.refresh_app_state();
+            // Issue #765：debounced refresh 只读 cached snapshot，不触发全量 Core 树扫描。
+            var state = projectApi.get_app_state();
             if (state) applyState(state);
         }
     }
@@ -108,6 +109,16 @@ QtObject {
     function refreshStateImmediate(fallbackMessage) {
         var projectApi = projectBackendRef;
         if (!projectApi) return;
+        // Issue #765：普通 UI 读取 appState 只拿现有 cached snapshot，不触发全量 Core 树扫描。
+        var state = projectApi.get_app_state();
+        if (state) applyState(state);
+    }
+
+    // Issue #765：需要重新读 Core 的路径只走这个明确的 reloadProjectState()。
+    // 供工作区打开/切换/创建、restoreWorkspace 首次恢复等领域事件使用。
+    function reloadProjectState(fallbackMessage) {
+        var projectApi = projectBackendRef;
+        if (!projectApi) return;
         var state = projectApi.refresh_app_state();
         if (state) applyState(state);
     }
@@ -118,7 +129,8 @@ QtObject {
         if (!workspaceApi) return;
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
-        refreshStateImmediate(qsTr("恢复工作区失败"));
+        // Issue #765：首次恢复工作区时 cached_tree 可能为空，需要 reload 一次。
+        reloadProjectState(qsTr("恢复工作区失败"));
 
         // 恢复上次导航状态
         if (workspaceApi.has_workspace) {
@@ -214,7 +226,8 @@ QtObject {
         workspaceApi.switch_workspace();
         route = "hub";
         workspaceApi.clear_last_navigation_state();
-        refreshStateImmediate(qsTr("切换工作区失败"));
+        // Issue #765：工作区切换是领域事件，需要 reload Core 树。
+        reloadProjectState(qsTr("切换工作区失败"));
     }
 
     function createWorkspace(openExisting) {
@@ -231,7 +244,8 @@ QtObject {
             return; 
         }
         if (res.success) {
-            refreshStateImmediate(qsTr("打开工作区成功"));
+            // Issue #765：工作区创建/打开是领域事件，成功后 reload Core 树。
+            reloadProjectState(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
             refreshStateImmediate(qsTr("打开工作区失败"));
@@ -252,7 +266,8 @@ QtObject {
             return; 
         }
         if (res.success) {
-            refreshStateImmediate(qsTr("打开工作区成功"));
+            // Issue #765：工作区创建/打开是领域事件，成功后 reload Core 树。
+            reloadProjectState(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
             refreshStateImmediate(qsTr("打开工作区失败"));
