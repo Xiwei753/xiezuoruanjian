@@ -873,7 +873,7 @@ export struct HomeScreen {
   ProjectMoreMenu() {
     Menu() {
       ForEach(this.viewModel.getContextActions(ActionTarget.Project), (slot: ActionSlot) => {
-        MenuItem(this.getActionLabel(slot.role))
+        MenuItem({ content: this.getActionLabel(slot.role) })
           .onClick(() => this.handleProjectContextAction(slot))
       }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }

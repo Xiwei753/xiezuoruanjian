@@ -1,6 +1,6 @@
 import hilog from '@ohos.hilog'
 import { getBridge } from '../../app/AppContext'
-import { ScreenRole, ActionRole, ActionRegion, ActionTarget, ActionSlot, ScreenPolicy } from '../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ScreenPolicy } from '../../corebridge/dto/PlatformDtos'
 
 const TAG = 'ScreenPolicyBridge'
 const DOMAIN = 0x0000
@@ -28,7 +28,7 @@ export class ScreenPolicyBridge {
       const bridge = getBridge()
       const result = await bridge.resolveScreenPolicy(screenRole)
       if (result.success && result.data) {
-        return this.parseScreenPolicy(result.data)
+        return result.data
       }
       return null
     } catch (err) {
@@ -37,59 +37,6 @@ export class ScreenPolicyBridge {
     }
   }
 
-  private parseScreenPolicy(data: Record<string, Object>): ScreenPolicy {
-    const rawSlots = (data['actionSlots'] ?? data['action_slots'] ?? []) as Array<Record<string, Object>>
-    const actionSlots: ActionSlot[] = rawSlots.map((slot: Record<string, Object>) => {
-      const rawOrder = (slot['order'] ?? 0) as number
-      return {
-        role: this.parseActionRole((slot['role'] ?? '') as string),
-        // #610 评论二：业务目标身份（Delete+Volume vs Delete+Chapter 等）。
-        target: this.parseActionTarget((slot['target'] ?? 'App') as string),
-        region: this.parseActionRegion((slot['region'] ?? '') as string),
-        order: Number(rawOrder),
-        requiresConfirmation: (slot['requiresConfirmation'] ?? slot['requires_confirmation'] ?? false) as boolean
-      }
-    })
-    actionSlots.sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
-
-    return {
-      screenRole: this.parseScreenRole((data['screenRole'] ?? data['screen_role'] ?? 'Home') as string),
-      showPrimaryNavigation: (data['showPrimaryNavigation'] ?? data['show_primary_navigation'] ?? true) as boolean,
-      actionSlots: actionSlots
-    }
-  }
-
-  private parseScreenRole(value: string): ScreenRole {
-    const entries = Object.entries(ScreenRole)
-    for (const [, v] of entries) {
-      if (v === value) return v as ScreenRole
-    }
-    return ScreenRole.Home
-  }
-
-  private parseActionRole(value: string): ActionRole {
-    const entries = Object.entries(ActionRole)
-    for (const [, v] of entries) {
-      if (v === value) return v as ActionRole
-    }
-    return ActionRole.Back
-  }
-
-  private parseActionRegion(value: string): ActionRegion {
-    const entries = Object.entries(ActionRegion)
-    for (const [, v] of entries) {
-      if (v === value) return v as ActionRegion
-    }
-    return ActionRegion.HeaderTrailing
-  }
-
-  private parseActionTarget(value: string): ActionTarget {
-    const entries = Object.entries(ActionTarget)
-    for (const [, v] of entries) {
-      if (v === value) return v as ActionTarget
-    }
-    return ActionTarget.App
-  }
 }
 
 export function getScreenPolicyBridge(): ScreenPolicyBridge {

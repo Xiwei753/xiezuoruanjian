@@ -54,6 +54,8 @@ export struct SettingsScreen {
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
   @Local searchText: string = ''
+  // 搜索过滤后的分组列表（窄屏搜索用）
+  @Local filteredGroups: GroupDefinition[] = GROUP_DEFINITIONS
   // 问题5：复制设备信息结果提示
   @Local copyMessage: string = ''
 
@@ -93,6 +95,52 @@ export struct SettingsScreen {
   // ── 安全返回 ──
   private goBack(): void {
     this.navCoordinator.safePop()
+  }
+
+  // ── 搜索过滤设置项（窄屏搜索用） ──
+  // 匹配分组标题（getGroupTitle）和分类标题（getSectionTitle），
+  // 搜索文本匹配到某个分类时，自动展开该分类。
+  private filterSettings(searchText: string): void {
+    if (searchText.length === 0) {
+      this.filteredGroups = GROUP_DEFINITIONS
+      return
+    }
+
+    const keyword = searchText.toLowerCase()
+    const result: GroupDefinition[] = []
+
+    for (const groupDef of GROUP_DEFINITIONS) {
+      const groupTitle = this.getGroupTitle(groupDef.id).toLowerCase()
+      let groupMatched = groupTitle.includes(keyword)
+
+      // 检查分组内各分类标题是否匹配
+      const matchedSections: SettingsSectionId[] = []
+      for (const sectionId of groupDef.sections) {
+        const sectionTitle = this.getSectionTitle(sectionId).toLowerCase()
+        if (sectionTitle.includes(keyword)) {
+          matchedSections.push(sectionId)
+          groupMatched = true
+        }
+      }
+
+      if (groupMatched) {
+        // 如果分组标题匹配，保留全部分类；如果只有部分分类匹配，只保留匹配的分类
+        if (groupTitle.includes(keyword)) {
+          result.push(groupDef)
+        } else {
+          result.push({ id: groupDef.id, sections: matchedSections })
+        }
+
+        // 自动展开匹配到的分类
+        for (const sectionId of matchedSections) {
+          if (!this.viewModel.isSectionExpanded(sectionId)) {
+            this.viewModel.toggleSection(sectionId)
+          }
+        }
+      }
+    }
+
+    this.filteredGroups = result
   }
 
   // ── 保存设置后的消息解析（问题9：在页面层做本地化，ViewModel 只管状态） ──
@@ -276,9 +324,9 @@ export struct SettingsScreen {
       .width('100%')
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 8 })
 
-      // 搜索框（仅窄屏，不实现搜索逻辑）
+      // 搜索框（窄屏搜索过滤设置项）
       Row() {
-        Image($r('sys.media.ohos_ic_public_search'))
+        Image($r('sys.media.ohos_ic_public_input_search'))
           .width(20)
           .height(20)
           .fillColor(this.themeConfig.colors.textHint)
@@ -293,6 +341,7 @@ export struct SettingsScreen {
           .backgroundColor(Color.Transparent)
           .onChange((value: string) => {
             this.searchText = value
+            this.filterSettings(value)
           })
       }
       .width('100%')
@@ -324,10 +373,10 @@ export struct SettingsScreen {
     .align(Alignment.Top)
   }
 
-  // ── 分组列表（窄屏折叠布局） ──
+  // ── 分组列表（窄屏折叠布局，支持搜索过滤） ──
   @Builder
   SettingsGroupList() {
-    ForEach(GROUP_DEFINITIONS, (groupDef: GroupDefinition) => {
+    ForEach(this.filteredGroups, (groupDef: GroupDefinition) => {
       Column() {
         // 分组标题
         this.SettingsGroupHeader(groupDef.id)
