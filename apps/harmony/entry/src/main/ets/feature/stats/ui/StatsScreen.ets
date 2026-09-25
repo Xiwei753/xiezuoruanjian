@@ -9,7 +9,7 @@ import { WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 
 @Component
@@ -66,7 +66,7 @@ export struct StatsScreen {
     NavDestination() {
     Column() {
       Row() {
-        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+        if (this.adaptiveState.isTwoPane) {
           Image($r('sys.media.ohos_ic_public_arrow_left'))
             .width(24)
             .height(24)

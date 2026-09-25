@@ -152,25 +152,12 @@ export struct HomeScreen {
   /** 宽屏删除作品 — AlertDialog 确认后调用 ViewModel 删除（恢复 #760 之前宽屏布局） */
   private deleteProjectWithConfirm(projectId: string): void {
     AlertDialog.show({
-      title: '确认删除',
-      message: '确定要删除这个作品吗？此操作不可撤销。',
-      primaryButton: { value: '取消', action: () => {} },
+      title: $r('app.string.confirm_delete'),
+      message: $r('app.string.confirm_delete_project'),
+      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
       secondaryButton: {
-        value: '删除',
+        value: $r('app.string.delete'),
         action: () => { this.viewModel.deleteProject(projectId) }
-      }
-    })
-  }
-
-  /** 宽屏新建作品 — AlertDialog 确认后调用 ViewModel 创建（恢复 #760 之前宽屏布局） */
-  private createProjectWithConfirm(): void {
-    AlertDialog.show({
-      title: '新建作品',
-      message: '是否创建新作品？',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: {
-        value: '创建',
-        action: () => { this.viewModel.createProject('新建作品') }
       }
     })
   }
@@ -292,7 +279,7 @@ export struct HomeScreen {
     Column() {
       // Header — app_title + workspace name + writing stats + native status
       Row() {
-        Text('素笺')
+        Text($r('app.string.app_title'))
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -503,12 +490,12 @@ export struct HomeScreen {
 
         Blank()
 
-        Button('新建作品')
+        Button($r('app.string.new_project'))
           .fontSize(14)
           .height(32)
           .backgroundColor(this.themeConfig.colors.primary)
           .onClick(() => {
-            this.viewModel.createProject('新建作品')
+            this.viewModel.createProject(getContext(this).resourceManager.getStringSync($r('app.string.default_new_project_title').id))
           })
       }
       .width('100%')

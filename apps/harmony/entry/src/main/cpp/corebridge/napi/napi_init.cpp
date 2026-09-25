@@ -213,12 +213,14 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     napi_get_value_string_utf8(env, args[4], locale, sizeof(locale), &len);
     napi_get_value_string_utf8(env, args[5], timezone, sizeof(timezone), &len);
 
+    // 注册 HiLog callback（幂等）— 必须在第一条 OH_LOG 和 writer_core_init_diagnostics() 之前注册，
+    // 否则 EntryAbility.onCreate 最开始的日志、NativeInitDiagnostics 的 calling/returned、
+    // 以及 Rust diagnostics 初始化过程中产生的 HiLog 都不会进环形缓冲。
+    RegisterHilogCallback();
+
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
     int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: writer_core_init_diagnostics returned %{public}d", result);
-
-    // 注册 HiLog callback（幂等），确保 onCreate 阶段就开始收集系统日志
-    RegisterHilogCallback();
 
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: FAILED with code %{public}d", result);
