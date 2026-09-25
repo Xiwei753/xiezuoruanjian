@@ -1193,6 +1193,7 @@ function makeSoftWrapLayoutState(text, containerWidth, composition = null) {
   const lines = ranges.map((r, i) => ({
     startUtf16: r.start,
     endUtf16: r.end,
+    left: 0,
     y: i * 20,
     height: 20,
     breakKind: r.breakKind,

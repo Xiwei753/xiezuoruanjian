@@ -73,10 +73,11 @@ export struct HdsPrimaryTabsApi23 {
   }
 
   build() {
-    // Issue #768 评论5835171266 第3项：HdsTabs 加 barFloatingStyle 配置悬浮样式，
-    // systemMaterialEffect 设为 IMMERSIVE 实现沉浸光感效果。
-    HdsTabs({ barPosition: BarPosition.End, index: this.currentTab }) {
-      // 作品 tab（TAB_HOME=0）
+    // Issue #768 评论5836390597 第1项：按华为官方文档组合设置悬浮页签完整参数。
+    // 官方要求：barFloatingStyle + barOverlap(true) + vertical(false) + barPosition(BarPosition.End)。
+    // 悬浮栏和底部安全区的距离进 HdsTabsFloatingStyle.barBottomMargin，不用普通 Tabs 的 barMargin。
+    HdsTabs({ index: this.currentTab }) {
+      // 作品 tab（TAB_HOME=0）— 保留图标 + 文字
       TabContent() {
         HdsNavigation(this.homeStack) {
           // 内容由 homeStack 驱动
@@ -85,9 +86,9 @@ export struct HdsPrimaryTabsApi23 {
         .mode(NavigationMode.Stack)
         .hideTitleBar(true)
       }
-      .tabBar('作品')
+      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_text'), '作品'))
 
-      // 星图 tab（TAB_STARMAP=1）
+      // 星图 tab（TAB_STARMAP=1）— 保留图标 + 文字
       TabContent() {
         HdsNavigation(this.starMapStack) {
           // 内容由 starMapStack 驱动
@@ -96,9 +97,9 @@ export struct HdsPrimaryTabsApi23 {
         .mode(NavigationMode.Stack)
         .hideTitleBar(true)
       }
-      .tabBar('星图')
+      .tabBar(new BottomTabBarStyle($r('app.media.ic_star'), '星图'))
 
-      // 统计 tab（TAB_STATS=2）
+      // 统计 tab（TAB_STATS=2）— 保留图标 + 文字
       TabContent() {
         HdsNavigation(this.statsStack) {
           // 内容由 statsStack 驱动
@@ -107,14 +108,19 @@ export struct HdsPrimaryTabsApi23 {
         .mode(NavigationMode.Stack)
         .hideTitleBar(true)
       }
-      .tabBar('统计')
+      .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
     }
+    .barOverlap(true)
+    .barPosition(BarPosition.End)
+    .vertical(false)
     .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
-    // 悬浮页签底部间距跟真实安全区走，不在页面里写死。
-    .barMargin({ bottom: this.safeBottomVp })
-    // Issue #768 评论5835171266 第3项：悬浮沉浸光感样式。
+    // Issue #768 评论5836390597 第1项：悬浮页签底部间距进 barBottomMargin，不再用 barMargin。
     .barFloatingStyle({
-      systemMaterialEffect: { materialType: hdsMaterial.MaterialType.IMMERSIVE }
+      barBottomMargin: this.safeBottomVp,
+      systemMaterialEffect: {
+        materialType: hdsMaterial.MaterialType.IMMERSIVE,
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+      }
     } as HdsTabsFloatingStyle)
     // 正文/设置页禁止横向滑动切 tab，防止绕过离开事务。
     .scrollable(this.currentShowPrimaryNav)

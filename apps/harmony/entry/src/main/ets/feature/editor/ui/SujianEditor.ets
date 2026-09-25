@@ -517,11 +517,15 @@ export struct SujianEditor {
       this.compositionUnderlineRects = result.compositionUnderlineRects
 
       // 3. 更新行级导航解析器（带身份）
+      // Issue #768 评论5836390597 第2项：传入 measureTextFn 让 buildLayoutStateFromSystem
+      // 能用 buildLineCaretStops + metrics.left 偏移构建 caretStops，
+      // API12~13 的 Up/Down 行导航不再跳到行首。
       const layoutState = LineNavigationResolver.buildLayoutStateFromSystem(
         layout,
         systemLineCount,
         snap,
         this.contentWidth,
+        measureTextFn,
       )
       this.lineResolver.updateLayout(layoutState)
       // Issue #768：标记布局来源为 system 并推送诊断快照（布局更新时）。

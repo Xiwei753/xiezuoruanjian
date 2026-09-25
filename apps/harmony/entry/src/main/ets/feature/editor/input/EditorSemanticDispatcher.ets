@@ -973,7 +973,7 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
@@ -1005,7 +1005,7 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
@@ -1075,7 +1075,7 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
@@ -1097,7 +1097,7 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2

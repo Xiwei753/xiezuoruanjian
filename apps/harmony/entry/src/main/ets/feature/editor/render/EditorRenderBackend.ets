@@ -17,6 +17,9 @@ import {
   computeSelectionRects,
   computeCaretRect,
   computeCompositionUnderlineRects,
+  computeCaretRectFromLineLayouts,
+  computeSelectionRectsFromLineLayouts,
+  computeCompositionUnderlineRectsFromLineLayouts,
   LineLayout,
   SelectionRect,
   CaretRect,
@@ -183,9 +186,11 @@ export class EditorRenderBackend {
       // y 坐标：topHeight 是从段落顶部到当前行的距离，用作行顶部 y
       const y = metrics.topHeight
       const height = metrics.height
+      const left = metrics.left
       systemLines.push({
         startUtf16,
         endUtf16,
+        left,
         y,
         height,
         breakKind: LineBreakKind.EndOfText, // 占位，下面用 buildLineRangesFromMetrics 覆盖
@@ -209,24 +214,25 @@ export class EditorRenderBackend {
     if (isApi14Plus) {
       // API14+：用 getRectsForRange 获取真实矩形
       selectionRects = EditorRenderBackend.buildSelectionRectsFromSystem(layout, selStart, selEnd)
-      caretRect = EditorRenderBackend.buildCaretRectFromSystem(layout, systemLines, cursorUtf16, text)
+      // Issue #768 评论5836390597 第3项：把 affinity 传给 buildCaretRectFromSystem。
+      caretRect = EditorRenderBackend.buildCaretRectFromSystem(layout, systemLines, cursorUtf16, text, visualCaretAffinity)
       compositionUnderlineRects = EditorRenderBackend.buildCompositionRectsFromSystem(
         layout, base.compositionStartUtf16, base.compositionEndUtf16,
       )
     } else {
       // API12-13：用 LineMetrics 行边界 + measureText 算行内 x 坐标
-      // lineSpacingPx 用第一行高度（系统行高，比 textHeight/lines.length 更准确）
-      const lineSpacingPx = systemLines.length > 0 ? systemLines[0].height : 0
-      selectionRects = computeSelectionRects(
-        text, systemLineRanges, lineSpacingPx, contentWidth,
+      // Issue #768 评论5836390597 第2项：使用 LineLayout[]（含 left/y/height）的新几何函数，
+      // 不再用 "x=0 + 第一行高度当所有行高度" 的旧函数。
+      selectionRects = computeSelectionRectsFromLineLayouts(
+        text, systemLines, contentWidth,
         selStart, selEnd, measureTextFn,
       )
-      caretRect = computeCaretRect(
-        text, systemLineRanges, lineSpacingPx, cursorUtf16,
+      caretRect = computeCaretRectFromLineLayouts(
+        text, systemLines, cursorUtf16,
         measureTextFn, visualCaretAffinity,
       )
-      compositionUnderlineRects = computeCompositionUnderlineRects(
-        text, systemLineRanges, lineSpacingPx,
+      compositionUnderlineRects = computeCompositionUnderlineRectsFromLineLayouts(
+        text, systemLines,
         base.compositionStartUtf16, base.compositionEndUtf16,
         measureTextFn,
       )
@@ -300,23 +306,43 @@ export class EditorRenderBackend {
 
   /**
    * API14+ 用 getRectsForRange 获取光标矩形。
-   * 光标在文本中间时取 [cursor, cursor+1] 的左边缘；
-   * 光标在文本末尾时取 [cursor-1, cursor] 的右边缘。
+   * Issue #768 评论5836390597 第3项：接收 affinity 参数，正确处理 soft-wrap 边界。
+   *
+   * soft-wrap 边界规则：
+   * - Upstream → 上一视觉行末，取 [offset-1, offset] 的 right，y 用上一行
+   * - Downstream → 下一视觉行首，取 [offset, offset+1] 的 left，y 用下一行
+   * 不允许 x 和 y 分别猜两次。
    */
   private static buildCaretRectFromSystem(
     layout: LayoutManager,
     systemLines: LineLayout[],
     cursorUtf16: number,
     text: string,
+    affinity: CaretAffinity,
   ): CaretRect | null {
     if (systemLines.length === 0) {
       return null
     }
-    // 找到光标所在行
+
+    // 找到光标所在行，考虑 affinity。
+    // soft-wrap 边界：同一个 UTF-16 offset 同时是上一行末尾和下一行开头。
+    // Upstream → 上一行（endUtf16 === cursor 且 breakKind === SoftWrap）
+    // Downstream → 下一行（startUtf16 === cursor）
     let lineIndex = 0
     for (let i = 0; i < systemLines.length; i++) {
-      if (cursorUtf16 <= systemLines[i].endUtf16) {
+      if (cursorUtf16 < systemLines[i].endUtf16) {
         lineIndex = i
+        break
+      }
+      if (cursorUtf16 === systemLines[i].endUtf16) {
+        // soft-wrap 边界：检查 affinity
+        if (systemLines[i].breakKind === LineBreakKind.SoftWrap && affinity === CaretAffinity.Downstream) {
+          // Downstream → 下一行开头
+          lineIndex = Math.min(i + 1, systemLines.length - 1)
+        } else {
+          // Upstream 或非 soft-wrap → 当前行末尾
+          lineIndex = i
+        }
         break
       }
       if (i === systemLines.length - 1) {
@@ -328,18 +354,34 @@ export class EditorRenderBackend {
     try {
       let x: number
       if (cursorUtf16 < text.length) {
-        // 光标在文本中间：取 [cursor, cursor+1] 的左边缘
-        const range: TextRange = { start: cursorUtf16, end: cursorUtf16 + 1 }
-        const textBoxes: TextBox[] = layout.getRectsForRange(
-          range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
-        )
-        if (textBoxes.length > 0) {
-          x = textBoxes[0].rect.left
+        // 光标在文本中间
+        if (affinity === CaretAffinity.Upstream && cursorUtf16 > 0
+          && lineIndex > 0 && cursorUtf16 === systemLines[lineIndex - 1].endUtf16
+          && systemLines[lineIndex - 1].breakKind === LineBreakKind.SoftWrap) {
+          // soft-wrap 边界 Upstream：取 [cursor-1, cursor] 的 right（上一行末尾）
+          const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
+          const textBoxes: TextBox[] = layout.getRectsForRange(
+            range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+          )
+          if (textBoxes.length > 0) {
+            x = textBoxes[textBoxes.length - 1].rect.right
+          } else {
+            x = 0
+          }
         } else {
-          x = 0
+          // 正常情况或 Downstream：取 [cursor, cursor+1] 的 left
+          const range: TextRange = { start: cursorUtf16, end: cursorUtf16 + 1 }
+          const textBoxes: TextBox[] = layout.getRectsForRange(
+            range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+          )
+          if (textBoxes.length > 0) {
+            x = textBoxes[0].rect.left
+          } else {
+            x = 0
+          }
         }
       } else {
-        // 光标在文本末尾：取 [cursor-1, cursor] 的右边缘
+        // 光标在文本末尾：取 [cursor-1, cursor] 的 right
         if (cursorUtf16 > 0) {
           const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
           const textBoxes: TextBox[] = layout.getRectsForRange(

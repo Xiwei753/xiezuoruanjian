@@ -36,10 +36,14 @@ export interface CompositionUnderlineRect {
   readonly height: number
 }
 
-/** 行布局（含 y/height/breakKind/caretStops，px，相对组件左上）。 */
+/** 行布局（含 left/y/height/breakKind/caretStops，px，相对组件左上）。 */
+// Issue #768 评论5836390597 第2项：新增 left 字段。
+// 系统行的 left 来自 LineMetrics.left（首行缩进等场景 left > 0）；
+// 自计算行的 left 始终为 0（measureText 从行首算 x）。
 export interface LineLayout {
   readonly startUtf16: number
   readonly endUtf16: number
+  readonly left: number
   readonly y: number
   readonly height: number
   readonly breakKind: LineBreakKind
@@ -74,6 +78,7 @@ export function toLineLayouts(
     out.push({
       startUtf16: line.start,
       endUtf16: line.end,
+      left: 0,
       y: i * spacing,
       height: spacing,
       breakKind: line.breakKind,
@@ -199,6 +204,119 @@ export function computeCompositionUnderlineRects(
     rects.push({
       x,
       y: i * spacing + spacing - UNDERLINE_HEIGHT_PX,
+      width: w,
+      height: UNDERLINE_HEIGHT_PX,
+    })
+  }
+  return rects
+}
+
+// ── Issue #768 评论5836390597 第2项：系统行几何函数 ──
+// API12~13 系统行的 caret/selection/composition 需要使用每行自己的 left/y/height，
+// 不能再用 "x=0 + 第一行高度当所有行高度"。
+// 这些函数接收 LineLayout[]（含 left/y/height），不依赖 lineSpacingPx。
+
+/**
+ * 计算光标矩形（使用 LineLayout[] 的 left/y/height）。
+ * 系统行的 left 来自 LineMetrics.left（首行缩进时 > 0）。
+ */
+export function computeCaretRectFromLineLayouts(
+  text: string,
+  lines: LineLayout[],
+  cursorUtf16: number,
+  measureTextFn: (s: string) => number,
+  affinity: CaretAffinity = CaretAffinity.Upstream,
+): CaretRect | null {
+  if (lines.length === 0) { return null }
+  const n = text.length
+  let cursor = cursorUtf16
+  if (cursor < 0) { cursor = 0 }
+  if (cursor > n) { cursor = n }
+  const lineRanges: LineRange[] = lines.map((l: LineLayout): LineRange => ({
+    start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+  }))
+  const lineIndex = resolveVisualLineIndex(lineRanges, { utf16Offset: cursor, affinity })
+  const line = lines[lineIndex]
+  const clampedCursor = Math.max(line.startUtf16, Math.min(line.endUtf16, cursor))
+  const x = line.left + measureTextFn(text.substring(line.startUtf16, clampedCursor))
+  return { x, y: line.y, width: CARET_WIDTH_PX, height: line.height }
+}
+
+/**
+ * 计算选区矩形列表（使用 LineLayout[] 的 left/y/height）。
+ */
+export function computeSelectionRectsFromLineLayouts(
+  text: string,
+  lines: LineLayout[],
+  contentWidth: number,
+  selStartUtf16: number,
+  selEndUtf16: number,
+  measureTextFn: (s: string) => number,
+): SelectionRect[] {
+  if (lines.length === 0) { return [] }
+  if (selStartUtf16 === selEndUtf16) { return [] }
+  const start = Math.min(selStartUtf16, selEndUtf16)
+  const end = Math.max(selStartUtf16, selEndUtf16)
+  const rects: SelectionRect[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const selStartInLine = Math.max(line.startUtf16, start)
+    const selEndInLine = Math.min(line.endUtf16, end)
+    const hasVisibleText = selStartInLine < selEndInLine
+
+    if (line.breakKind === LineBreakKind.HardBreak) {
+      if (hasVisibleText) {
+        const x = line.left + measureTextFn(text.substring(line.startUtf16, selStartInLine))
+        const w = measureTextFn(text.substring(selStartInLine, selEndInLine))
+        rects.push({ x, y: line.y, width: w, height: line.height })
+      }
+      const lfCovered = start <= line.endUtf16 && end > line.endUtf16
+      if (lfCovered) {
+        const isEmptyLine = line.startUtf16 >= line.endUtf16
+        if (isEmptyLine) {
+          rects.push({ x: line.left, y: line.y, width: contentWidth, height: line.height })
+        } else {
+          const x = line.left + measureTextFn(text.substring(line.startUtf16, line.endUtf16))
+          rects.push({ x, y: line.y, width: Math.max(0, contentWidth - x), height: line.height })
+        }
+      }
+      continue
+    }
+
+    if (selStartInLine >= selEndInLine) { continue }
+    const x = line.left + measureTextFn(text.substring(line.startUtf16, selStartInLine))
+    const w = measureTextFn(text.substring(selStartInLine, selEndInLine))
+    rects.push({ x, y: line.y, width: w, height: line.height })
+  }
+  return rects
+}
+
+/**
+ * 计算 composition 下划线矩形列表（使用 LineLayout[] 的 left/y/height）。
+ */
+export function computeCompositionUnderlineRectsFromLineLayouts(
+  text: string,
+  lines: LineLayout[],
+  compStartUtf16: number | null,
+  compEndUtf16: number | null,
+  measureTextFn: (s: string) => number,
+): CompositionUnderlineRect[] {
+  if (lines.length === 0) { return [] }
+  if (compStartUtf16 === null || compEndUtf16 === null) { return [] }
+  if (compStartUtf16 === compEndUtf16) { return [] }
+  const start = Math.min(compStartUtf16, compEndUtf16)
+  const end = Math.max(compStartUtf16, compEndUtf16)
+  const rects: CompositionUnderlineRect[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const compStartInLine = Math.max(line.startUtf16, start)
+    const compEndInLine = Math.min(line.endUtf16, end)
+    if (compStartInLine >= compEndInLine) { continue }
+    const x = line.left + measureTextFn(text.substring(line.startUtf16, compStartInLine))
+    const w = measureTextFn(text.substring(compStartInLine, compEndInLine))
+    rects.push({
+      x,
+      y: line.y + line.height - UNDERLINE_HEIGHT_PX,
       width: w,
       height: UNDERLINE_HEIGHT_PX,
     })
