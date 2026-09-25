@@ -57,9 +57,11 @@ pub(crate) fn merge_sync_state_three_way(
     live_root: &Path,
     staging_root: &Path,
 ) -> Result<(SyncState, Vec<SyncConflict>)> {
-    // 读取三方 SyncState。文件不存在/损坏时回退 SyncState::default()。
-    let base_state = read_sync_state_or_default(base_root);
-    let live_state = read_sync_state_or_default(live_root);
+    // 读取三方 SyncState。严格区分"文件不存在"（首次同步，回退 default 空状态
+    // 参与合并）与"文件存在但损坏"（必须返回 Err 让该 target Commit 失败，
+    // 不能伪装成随机 device_id 的默认状态，参见 Issue #762 评论 5831990584）。
+    let base_state = read_sync_state(base_root)?.unwrap_or_default();
+    let live_state = read_sync_state(live_root)?.unwrap_or_default();
 
     // staging 的 state.local.json 不存在 → Transfer 没产生新状态，
     // 直接返回 live 状态（无变更）。
@@ -68,7 +70,11 @@ pub(crate) fn merge_sync_state_three_way(
         let live_conflicts = load_conflicts_json(live_root).unwrap_or_default();
         return Ok((live_state, live_conflicts));
     }
-    let staging_state = read_sync_state_or_default(staging_root);
+    // staging_state_path 已确认存在；read_sync_state 返回 Err 则传播（staging
+    // 损坏必须让该 target Commit 失败）。理论上 None 不会到达（已确认 exists），
+    // 但为防御 TOCTOU 竞态（文件在 exists() 与 read 之间被删），回退 default
+    // 空状态——等价于"staging 不存在"语义，不引入随机 device_id。
+    let staging_state = read_sync_state(staging_root)?.unwrap_or_default();
 
     // 读取三方 conflicts.json。文件不存在/损坏时回退空 Vec。
     // base/live 的 conflicts.json 不需要读取——合并只依赖 base_state.conflicted_files
@@ -200,9 +206,9 @@ pub(crate) fn merge_sync_state_three_way(
 ///   （config_store.rs::load_sync_state_with_preferred_device_id 明确支持这种补齐），
 ///   staging 已被 Transfer 用 preferred device_id 修成稳定值时会被 live 的空值覆盖
 ///   （评论 5831349330 的场景）。
-/// - 只看字段非空：漏掉"文件不存在时 read_sync_state_or_default 回退 default()，
-///   其 device_id 是随机 UUID（非空但不是真实设备身份）"，会把首次同步时 staging
-///   Transfer 生成的稳定 device_id 丢掉（#761 回归）。
+/// - 只看字段非空：漏掉"文件不存在时 read_sync_state 返回 None，调用方回退
+///   default()，其 device_id 是随机 UUID（非空但不是真实设备身份）"，会把首次同步
+///   时 staging Transfer 生成的稳定 device_id 丢掉（#761 回归）。
 ///
 /// 有效 device_id = state.local.json 存在 且 device_id 字段非空。
 /// - live 有效 → 用 live（真实用户状态）
@@ -236,20 +242,37 @@ fn merge_device_id_three_way(
     }
 }
 
-/// 读取 `app-meta/sync/state.local.json`，文件不存在/损坏时回退 `SyncState::default()`。
+/// 读取 `app-meta/sync/state.local.json`，严格区分三态。
+///
+/// - 文件不存在 → `Ok(None)`（首次同步语义，调用方按需回退 `SyncState::default()`）
+/// - 文件存在且合法 → `Ok(Some(state))`
+/// - read 失败 / JSON parse 失败 → `Err`（带清晰错误信息，损坏必须让该 target
+///   Commit 失败，不能像旧 `read_sync_state_or_default` 那样静默回退
+///   `SyncState::default()`——后者的 device_id 是随机 UUID，会把损坏文件
+///   伪装成一份新的随机设备状态参与三方判断，参见 Issue #762 评论 5831990584）
 ///
 /// 只读，不做旧格式迁移、不写文件（与 `SyncService::load_sync_state` 不同，
 /// 后者可能落盘迁移结果）。合并阶段不应有副作用。
-fn read_sync_state_or_default(root: &Path) -> SyncState {
+///
+/// 错误格式参考 `config_store.rs::load_sync_state`（行 335-343）。
+fn read_sync_state(root: &Path) -> Result<Option<SyncState>> {
     let state_path = root.join("app-meta/sync/state.local.json");
     if !state_path.exists() {
-        return SyncState::default();
+        return Ok(None);
     }
-    let content = match std::fs::read_to_string(&state_path) {
-        Ok(c) => c,
-        Err(_) => return SyncState::default(),
-    };
-    serde_json::from_str(&content).unwrap_or_default()
+    let content = std::fs::read_to_string(&state_path).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "read_sync_state: state.local.json read failed at {}: {e}",
+            state_path.display()
+        )))
+    })?;
+    let state: SyncState = serde_json::from_str(&content).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "read_sync_state: state.local.json parse failed at {}: {e}",
+            state_path.display()
+        )))
+    })?;
+    Ok(Some(state))
 }
 
 #[cfg(test)]
@@ -621,5 +644,70 @@ mod tests {
             merged_state.pending_take_remote.is_empty(),
             "Transfer 成功消费的 pending 不应被 live 无条件复制复活"
         );
+    }
+
+    /// Issue #762 评论 5831990584 问题 1 复现：
+    /// live 的 state.local.json 真实存在但写入非法 JSON 时，
+    /// `read_sync_state_or_default()` 会通过 `unwrap_or_default()` 回退到
+    /// `SyncState::default()`，其 device_id 是随机 UUID（非空但无意义）。
+    /// `merge_device_id_three_way()` 看到 live 文件存在且 device_id 非空，
+    /// 会把这个随机 UUID 当成"有效 live device_id"返回，导致
+    /// `merge_sync_state_three_way()` 错误地返回 Ok（伪装的随机设备状态）。
+    ///
+    /// 正式加载逻辑 `config_store.rs::load_sync_state_with_preferred_device_id`
+    /// 对"文件存在但解析失败"明确返回 Err。合并阶段也应返回 Err，而不是
+    /// 静默把损坏文件伪装成一份新的随机设备状态参与三方判断。
+    ///
+    /// 修复前：本测试在 `assert!(result.is_err())` 处失败——
+    /// `merge_sync_state_three_way` 返回 Ok，device_id 是随机 UUID。
+    #[test]
+    fn corrupt_live_state_json_must_return_err_not_fabricate_random_device_id() {
+        let tmp = TempDir::new().unwrap();
+        let base_root = tmp.path().join("base");
+        let live_root = tmp.path().join("live");
+        let staging_root = tmp.path().join("staging");
+
+        // base: 合法的 state（device_id 稳定）
+        let mut base_state = SyncState::default();
+        base_state.device_id = "base-device".to_string();
+        write_state(&base_root, &base_state);
+        write_conflicts(&base_root, &[]);
+
+        // live: state.local.json 真实存在但内容是非法 JSON
+        let live_sync_dir = live_root.join("app-meta/sync");
+        std::fs::create_dir_all(&live_sync_dir).unwrap();
+        std::fs::write(live_sync_dir.join("state.local.json"), "{not valid json").unwrap();
+        // 确认测试前提：live 的 state.local.json 真实存在
+        assert!(
+            live_root.join("app-meta/sync/state.local.json").exists(),
+            "测试前提：live 应有损坏的 state.local.json"
+        );
+
+        // staging: 合法的 state（device_id 稳定），避免 staging 不存在时 early return
+        let mut staging_state = SyncState::default();
+        staging_state.device_id = "staging-device".to_string();
+        write_state(&staging_root, &staging_state);
+        write_conflicts(&staging_root, &[]);
+
+        let result = merge_sync_state_three_way(&base_root, &live_root, &staging_root);
+
+        // 期望：live 的 state.local.json 存在但解析失败 → 返回 Err
+        // 当前（未修复）代码：返回 Ok，device_id 是随机 UUID → 此断言失败
+        assert!(
+            result.is_err(),
+            "live 的 state.local.json 存在但 JSON 损坏时，merge_sync_state_three_way 必须返回 Err，\
+             不能把损坏文件伪装成一份随机 device_id 的默认状态参与三方合并。\
+             实际得到：{:?}",
+            result.as_ref().err().map(|e| e.to_string())
+        );
+
+        // 若修复后返回 Err，进一步验证错误信息提及解析失败（可选，不强制措辞）。
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("parse") || msg.contains("json") || msg.contains("state.local.json"),
+                "错误信息应提及 state.local.json 解析失败，实际：{msg}"
+            );
+        }
     }
 }
