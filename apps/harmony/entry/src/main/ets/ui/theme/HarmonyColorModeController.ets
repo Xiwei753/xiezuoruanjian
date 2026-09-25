@@ -20,7 +20,7 @@
 
 import { common, ConfigurationConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
-import { ThemeMode } from './HarmonyThemeAdapter'
+import { ThemeMode } from './HarmonyThemeTypes'
 
 const LOG_DOMAIN: number = 0x0001
 const LOG_TAG: string = 'HarmonyColorModeController'
@@ -82,12 +82,16 @@ export class HarmonyColorModeController {
     }
 
     try {
-      this.context!.setColorMode(colorMode)
+      // Issue #767 评论 5831658277：改用 ApplicationContext.setColorMode()（API11+），
+      // 不再用 UIAbilityContext.setColorMode()（API18+），因为 compatibleSdkVersion=12。
+      // ApplicationContext 语义正好是应用级深浅色，不需要 UIAbility 级覆盖。
+      const appContext = this.context!.getApplicationContext()
+      appContext.setColorMode(colorMode)
       hilog.info(LOG_DOMAIN, LOG_TAG,
-        `applyDesiredMode: setColorMode(${this.desiredMode} → ${colorMode}) 调用成功`)
+        `applyDesiredMode: ApplicationContext.setColorMode(${this.desiredMode} → ${colorMode}) 调用成功`)
     } catch (error) {
       hilog.error(LOG_DOMAIN, LOG_TAG,
-        `applyDesiredMode: setColorMode(${this.desiredMode} → ${colorMode}) 调用失败: ${error}`)
+        `applyDesiredMode: ApplicationContext.setColorMode(${this.desiredMode} → ${colorMode}) 调用失败: ${error}`)
     }
   }
 }

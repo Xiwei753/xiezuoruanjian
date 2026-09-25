@@ -2,8 +2,7 @@ import window from '@ohos.window'
 import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
 import { HarmonyColorModeController } from './HarmonyColorModeController'
-
-export type ThemeMode = 'light' | 'dark' | 'system'
+import { ThemeMode } from './HarmonyThemeTypes'
 
 export type ColorSource = 'built_in' | 'saved_palette'
 
@@ -283,11 +282,8 @@ export class HarmonyThemeAdapter {
   }
 
   setMode(mode: ThemeMode): void {
-    this.currentTheme.mode = mode
-    // Issue #767 评论 5831321551：把用户选择的 mode 下发给 HarmonyColorModeController，
-    // 由 controller 调用 UIAbilityContext.setColorMode() 真正切换系统颜色模式。
-    HarmonyColorModeController.getInstance().setDesiredMode(mode)
-    this.updateColors()
+    // Issue #767 评论 5831658277：统一走 applyMode 私有入口，不允许三条路径各写一套逻辑。
+    this.applyMode(mode)
     this.notifyObservers()
   }
 
@@ -350,7 +346,9 @@ export class HarmonyThemeAdapter {
   }
 
   updateFromSettings(settings: ThemeUpdateParams): void {
-    this.currentTheme.mode = settings.theme
+    // Issue #767 评论 5831658277：统一走 applyMode 私有入口，确保从接续/直接恢复到 Writing
+    // 的路径也会把深浅色模式真正下发到平台，不只写进 Adapter 假状态。
+    this.applyMode(settings.theme)
     this.currentTheme.fontSize = settings.fontSize
     this.currentTheme.fontFamily = settings.fontFamily
     this.currentTheme.lineHeight = settings.lineHeight
@@ -359,10 +357,9 @@ export class HarmonyThemeAdapter {
   }
 
   updateFromLocalSettings(appearanceMode: string, colorSource: string, selectedPaletteId: string, selectedBuiltinThemeId: string): void {
-    this.currentTheme.mode = appearanceMode as ThemeMode
-    // Issue #767 评论 5831321551：把持久化的 appearanceMode 下发给 HarmonyColorModeController，
-    // 确保应用重启后也能把用户选择的深浅色模式真正下发到系统。
-    HarmonyColorModeController.getInstance().setDesiredMode(appearanceMode as ThemeMode)
+    // Issue #767 评论 5831658277：统一走 applyMode 私有入口，确保应用重启后
+    // 也能把用户选择的深浅色模式真正下发到系统。
+    this.applyMode(appearanceMode as ThemeMode)
     this.currentTheme.colorSource = colorSource as ColorSource
     this.currentTheme.selectedPaletteId = selectedPaletteId
     this.currentTheme.selectedBuiltinThemeId = selectedBuiltinThemeId
@@ -402,6 +399,16 @@ export class HarmonyThemeAdapter {
     if (this.useSystemTokens) {
       this.applySystemColorMode(this.systemColorMode)
     }
+  }
+
+  // Issue #767 评论 5831658277：统一的模式下发私有入口。
+  // setMode()、updateFromSettings()、updateFromLocalSettings() 全部走这里，
+  // 确保 mode 写入 currentTheme、下发到 HarmonyColorModeController、更新 colors，
+  // 不允许三条路径各写一套逻辑。
+  private applyMode(mode: ThemeMode): void {
+    this.currentTheme.mode = mode
+    HarmonyColorModeController.getInstance().setDesiredMode(mode)
+    this.updateColors()
   }
 
   // Issue #767 评论 5831067980：根据 mode 和 systemColorMode 计算有效颜色模式。
