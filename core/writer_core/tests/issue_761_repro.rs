@@ -952,3 +952,200 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
          状态 {status:?}（不再是 FatalError）"
     );
 }
+
+/// 场景 7（Issue #761 评论 5829270182）：真实首次同步无 manifest 时走 batch 路径。
+///
+/// 与场景 5（`regression_issue_761_first_sync_empty_remote_uses_batch_without_file_writes`）
+/// 的关键区别：场景 5 用 `build_staging()` helper，该 helper **手工先写了
+/// manifest.sync.json**（见 `write_staging_manifest`），这不是真实首次同步的状态。
+///
+/// 本测试用正式 `StagingRun::create` + `seed_from_live` 从 live seed staging：
+/// 1. 建 live project，只写 project.json、卷章正文等正常作品文件；
+/// 2. **明确不创建** `app-meta/sync/manifest.sync.json`；
+/// 3. `seed_from_live` 只复制 live 已存在文件，不会凭空创建 manifest → staging 里
+///    同样没有 manifest.sync.json；
+/// 4. 空远端 catalog；
+/// 5. 跑 `run_transfer()`；
+/// 6. 修复后行为：`transfer_live_project` 中远端无 visible source → 调用
+///    `materialize_local_snapshot_for_empty_remote` 把本地完整快照 materialize 成
+///    staging 的 manifest + state，返回 `Some(LwwMergeOutcome)`，后续
+///    `publish_generation_batch` 走 batch 路径，所有 upsert 都是 Put，
+///    manifest + meta(complete=true) 同一批提交，CAS 成功后 catalog 指向新 generation。
+#[test]
+#[allow(clippy::too_many_lines)]
+fn regression_issue_761_real_first_sync_no_manifest_fails_before_publish() {
+    let tmp = TempDir::new().unwrap();
+    let provider = RecordingProvider::new(MemoryProvider::new());
+
+    // 1. 建 live project，只写正常作品文件，明确不创建 manifest.sync.json。
+    let live_root = tmp.path().join("projects").join("p1");
+    let project_json_path = live_root.join("project.json");
+    std::fs::create_dir_all(project_json_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &project_json_path,
+        br#"{"id":"p1","title":"first-sync-test","volumes":[]}"#,
+    )
+    .unwrap();
+
+    let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+    let chapter_path = live_root.join(chapter_rel);
+    std::fs::create_dir_all(chapter_path.parent().unwrap()).unwrap();
+    let chapter_content = b"first chapter content";
+    std::fs::write(&chapter_path, chapter_content).unwrap();
+
+    // 真实首次同步：live project 不应有 manifest.sync.json。
+    let live_manifest_path = live_root.join(SYNC_MANIFEST_PATH);
+    assert!(
+        !live_manifest_path.exists(),
+        "真实首次同步：live project 不应有 manifest.sync.json"
+    );
+
+    // 2. 用正式 StagingRun::create + seed_from_live 从 live seed staging。
+    //    seed_from_live 只复制 live 已存在文件，不会凭空创建 manifest。
+    let staging_run = writer_core::sync::staging::StagingRun::create(tmp.path(), live_root.clone())
+        .expect("StagingRun::create");
+    staging_run
+        .seed_from_live(&live_root)
+        .expect("seed_from_live");
+
+    // staging 里同样没有 manifest.sync.json（seed_from_live 只复制 live 已存在文件）。
+    let staging_manifest_path = staging_run.staging_root().join(SYNC_MANIFEST_PATH);
+    assert!(
+        !staging_manifest_path.exists(),
+        "seed_from_live 不应凭空创建 manifest.sync.json — \
+         真实首次同步 staging 里没有 manifest"
+    );
+
+    // 3. 构造 FullSyncPlan（LiveProject）。
+    let planned = PlannedTarget {
+        target: SyncTarget::project("p1"),
+        local_root: live_root.clone(),
+        staging_root: Some(staging_run.staging_root()),
+        target_kind: PlannedTargetKind::LiveProject,
+        project_id: Some("p1".to_string()),
+        target_live_root: live_root,
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: Some(LiveTargetLww {
+            lww_time_ms: 0,
+            device_id: DEVICE_LOCAL.to_string(),
+        }),
+        expected_delete_lww: None,
+    };
+    let plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![planned],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot: empty_remote_catalog_snapshot(),
+    };
+
+    // 4. 空远端 catalog，跑 run_transfer。
+    let transfer = run_transfer(&provider, &plan, None);
+    assert_eq!(transfer.targets.len(), 1);
+
+    // 5. 修复后行为：target 不应是 RecoverableError，应成功走 batch 路径。
+    let status = &transfer.targets[0].result.status;
+    assert!(
+        !matches!(status, SyncStatus::RecoverableError(_)),
+        "真实首次同步无 manifest 时修复后不应返回 RecoverableError，实际: {status:?}\
+         （error={:?}）",
+        transfer.targets[0].result.error
+    );
+
+    // 6. generation provider.write() 次数 = 0（只走 batch，不逐文件 write）。
+    assert_eq!(
+        provider.generation_file_writes(),
+        0,
+        "真实首次同步应走 batch 路径，不应逐文件 write() 到 generation prefix"
+    );
+
+    // 7. 只走 batch：恰好一次 commit_batch。
+    let batches = provider.recorded_batches();
+    assert_eq!(
+        batches.len(),
+        1,
+        "真实首次同步应恰好一次 commit_batch，实际 {} 次",
+        batches.len()
+    );
+    let batch = &batches[0];
+
+    // 8. staging 已生成 manifest（materialize_local_snapshot_for_empty_remote 写入）。
+    let staging_manifest_after = staging_run.staging_root().join(SYNC_MANIFEST_PATH);
+    assert!(
+        staging_manifest_after.exists(),
+        "修复后 staging 应已生成 manifest.sync.json"
+    );
+
+    // 9. staging SyncState 的 known_files 已包含正文/元数据。
+    let state_after = writer_core::sync::SyncService::load_sync_state(&staging_run.staging_root())
+        .expect("load_sync_state after transfer");
+    assert!(
+        state_after.known_files.contains_key(chapter_rel),
+        "staging SyncState 的 known_files 应包含正文路径 {chapter_rel}，\
+         实际 known_files={:?}",
+        state_after.known_files.keys().collect::<Vec<_>>()
+    );
+
+    // 10. batch 内 upsert 全部是 Put（首次同步没有旧 blob 可复用）。
+    assert!(
+        batch
+            .mutations
+            .iter()
+            .all(|m| !matches!(m, BatchMutation::ReuseVersion { .. })),
+        "真实首次同步没有旧 blob 可复用，不应出现 ReuseVersion"
+    );
+    // 正文路径应是 Put 且内容是原字节。
+    match mutation_for(batch, chapter_rel) {
+        BatchMutation::Put { content, .. } => assert_eq!(
+            content.as_slice(),
+            chapter_content,
+            "真实首次同步的正文 upsert 必须以原字节 Put"
+        ),
+        other => panic!("真实首次同步正文路径应是 Put，实际 {other:?}"),
+    }
+
+    // 11. manifest 同一批提交，且包含正文路径。
+    match mutation_for(batch, SYNC_MANIFEST_PATH) {
+        BatchMutation::Put { content, .. } => {
+            let manifest: SyncManifest = serde_json::from_slice(content).unwrap();
+            let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+            assert!(
+                paths.contains(&chapter_rel),
+                "merged manifest 应包含正文路径，实际 {paths:?}"
+            );
+        }
+        other => panic!("manifest 必须是 Put，实际 {other:?}"),
+    }
+
+    // 12. meta 直接 complete=true。
+    let new_gen_prefix = assert_meta_complete_true(batch);
+    let new_gen_id = new_gen_prefix.rsplit('/').next().expect("generation id");
+
+    // 13. catalog 最终指向新 generation。
+    let catalog_after = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&catalog_after.catalog, PROJECT_PREFIX).expect("catalog record");
+    assert_eq!(
+        record.active_generation.as_deref(),
+        Some(new_gen_id),
+        "CAS 成功后 catalog 应指向新 generation"
+    );
+
+    // 14. 状态应是 LatestWinsApplied（首次同步发布了内容）。
+    assert!(
+        matches!(status, SyncStatus::LatestWinsApplied),
+        "首次同步发布后应是 LatestWinsApplied，实际 {status:?}"
+    );
+
+    eprintln!(
+        "[BUGFIX_REGRESSION_TRACE] Issue #761 真实首次同步无 manifest 修复后：\
+         commit_batch {} 次、逐文件 generation write {} 次、generation {}（全部 upsert 走 Put）、\
+         staging 已生成 manifest、known_files 包含正文、catalog 指向新 generation",
+        batches.len(),
+        provider.generation_file_writes(),
+        new_gen_id
+    );
+}

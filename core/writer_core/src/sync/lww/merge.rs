@@ -468,3 +468,174 @@ pub(crate) fn merge_remote_into_local_snapshot(
         merged_manifest: sync_manifest,
     })
 }
+
+/// Issue #761 评论 5829270182：远端无 visible source 时的本地-only snapshot materialization。
+///
+/// 真实首次同步（live project 无 manifest.sync.json、远端 catalog 空）时，
+/// `transfer_live_project` 得到 `merge_outcome_opt = None`，但后续
+/// `read_post_transfer_lww` / candidate 构造 / `publish_generation_batch` 都假设
+/// staging 已有 manifest。`seed_from_live` 只复制 live 已存在文件，不创建 manifest，
+/// 所以 staging 里也没有 manifest.sync.json，导致 `read_post_transfer_lww` 返回 None
+/// → `RecoverableError("post-transfer staging manifest unreadable")`，走不到 batch 路径。
+///
+/// 本 helper 复用现有只读投影 + manifest 构造 + SyncState 重建 + 原子持久化，
+/// 把当前本地完整快照 materialize 成 staging 的 manifest + state + conflicts，
+/// 返回 `LwwMergeOutcome` 让后续 publish 走统一 batch 路径：
+///
+/// - `merged_manifest` = 当前本地完整快照（`snapshot_local_records_read_only` 投影）；
+/// - 所有 `op=upsert` 路径进入 `remote_upload_paths`（首次同步全部需上传）；
+/// - delete tombstone 只留在 manifest，不需要物理 blob；
+/// - `remote_tree_files` 为空（远端无 visible source，无 blob 可复用）；
+/// - `conflicts` 为空（首次同步无冲突）；
+/// - `remote_manifest_path` / `manifest_json` 与 `merged_manifest` 一致。
+///
+/// 内部复用：
+/// - `snapshot_local_records_read_only()`（与 planner / LWW attempt 同源）；
+/// - manifest 排序/构造（与 `merge_remote_into_local_snapshot` 对齐）；
+/// - SyncState 的 `known_files / known_files_updated_at / last_sync_time` 重建；
+/// - `persist_sync_merge_result()` 一次写入 manifest + state + conflicts。
+///
+/// 不在 generation.rs 单独再补一套 scanner——本 helper 是唯一的本地快照 materialization 入口。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::cast_possible_truncation
+)]
+pub(crate) fn materialize_local_snapshot_for_empty_remote(
+    sync_root: &Path,
+    scope: SyncScope,
+    preferred_device_id: &str,
+) -> crate::error::Result<LwwMergeOutcome> {
+    log::debug!(
+        "[sync] materialize_local_snapshot_for_empty_remote: sync_root={} scope={:?} \
+         preferred_device_id={}",
+        sync_root.display(),
+        scope,
+        preferred_device_id
+    );
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // 1. 用 snapshot_local_records_read_only 取本地完整快照（与 planner / LWW attempt 同源）。
+    //    manifest 不存在 → 空 HashMap（首次同步，正常）；manifest 损坏 → Err。
+    let local_records = snapshot_local_records_read_only(sync_root, scope, preferred_device_id)?;
+
+    // 2. 构造 manifest（排序、清除过期 delete tombstone），与 merge_remote_into_local_snapshot 对齐。
+    let purge_time = now_ms - 30 * 24 * 3600 * 1000;
+    let mut manifest_files_vec: Vec<ManifestFileRecord> = local_records.values().cloned().collect();
+    manifest_files_vec.retain(|rec| rec.op != "delete" || lww_record_time(rec) > purge_time);
+    manifest_files_vec.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let sync_manifest = SyncManifest {
+        files: manifest_files_vec,
+    };
+    let manifest_json = serde_json::to_string_pretty(&sync_manifest)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+
+    // 3. 重建 SyncState：known_files / known_files_updated_at / last_sync_time。
+    //    与 merge_remote_into_local_snapshot 的 known_files 重建逻辑对齐：
+    //    遍历本地 scan 结果，对每个 Upload 类（非 manifest）文件记录 hash + updated_at。
+    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
+    if !preferred_device_id.is_empty() && state.device_id.is_empty() {
+        state.device_id = preferred_device_id.to_string();
+    }
+
+    // 保留冲突状态（conflicted_files / conflicts / pending_take_remote），
+    // 只重建 known_files / known_files_updated_at。
+    let conflicted_known_files: HashMap<String, String> = state
+        .conflicted_files
+        .iter()
+        .filter_map(|p| state.known_files.get(p).map(|v| (p.clone(), v.clone())))
+        .collect();
+    let conflicted_known_files_updated_at: HashMap<String, i64> = state
+        .conflicted_files
+        .iter()
+        .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), *v)))
+        .collect();
+
+    state.known_files.clear();
+    state.known_files_updated_at.clear();
+
+    let post_local_entries = scan_for_sync(sync_root, scope)?;
+    for entry in &post_local_entries {
+        if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
+            if state.conflicted_files.contains(&entry.relative_path) {
+                continue;
+            }
+            state
+                .known_files
+                .insert(entry.relative_path.clone(), entry.file_hash.clone());
+
+            // 用 manifest record 的 updated_at_ms（若匹配），否则读文件 mtime，最后回退 now_ms。
+            let matched_rec = local_records.get(&entry.relative_path);
+            let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
+                std::fs::metadata(sync_root.join(&entry.relative_path))
+                    .and_then(|m| m.modified())
+                    .and_then(|time| {
+                        time.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .map_err(std::io::Error::other)
+                    })
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(now_ms)
+            });
+            state
+                .known_files_updated_at
+                .insert(entry.relative_path.clone(), t);
+        }
+    }
+
+    for (path, hash) in conflicted_known_files {
+        state.known_files.insert(path, hash);
+    }
+    for (path, t) in conflicted_known_files_updated_at {
+        state.known_files_updated_at.insert(path, t);
+    }
+
+    state.last_sync_time = Some(chrono::Utc::now().timestamp());
+    state.last_error = None;
+    state
+        .tombstones
+        .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
+
+    // 4. 一次事务原子提交 manifest + state + conflicts，
+    //    避免分多次独立写入中间崩溃导致三者不一致。
+    let conflicts_json = crate::sync::conflict::load_conflicts_json(sync_root)?;
+    crate::sync::conflict::persist_sync_merge_result(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &manifest_json,
+        &state,
+        &conflicts_json,
+    )?;
+
+    // 5. 构造 LwwMergeOutcome：所有 upsert 进 remote_upload_paths（首次同步全部需上传），
+    //    remote_tree_files 为空（远端无 visible source，无 blob 可复用），
+    //    conflicts 为空（首次同步无冲突）。
+    let remote_upload_paths: Vec<String> = sync_manifest
+        .files
+        .iter()
+        .filter(|rec| rec.op == "upsert")
+        .map(|rec| rec.path.clone())
+        .collect();
+
+    // remote_manifest_path 用空 source prefix（远端无 visible source）。
+    // 调用方（publish_generation_batch）不依赖此字段构造远端路径——
+    // 它用 generation_prefix + record.path。
+    let remote_manifest_path = SYNC_MANIFEST_PATH.to_string();
+
+    Ok(LwwMergeOutcome {
+        conflicts: Vec::new(),
+        downloaded_files: Vec::new(),
+        local_deletes: Vec::new(),
+        remote_upload_paths,
+        remote_delete_paths: Vec::new(),
+        overwritten_files: Vec::new(),
+        ignored_files: Vec::new(),
+        pending_take_remote_failed: Vec::new(),
+        remote_tree_files: HashMap::new(),
+        remote_manifest_path,
+        manifest_json,
+        merged_manifest: sync_manifest,
+    })
+}

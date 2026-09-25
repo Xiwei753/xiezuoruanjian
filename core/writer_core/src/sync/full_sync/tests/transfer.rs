@@ -699,7 +699,15 @@ fn q3_publish_uses_post_transfer_staging_lww() {
     );
 }
 
-///   post-transfer staging manifest 读取失败 → RecoverableError。
+///   Issue #761 评论 5829270182：staging 无 manifest 时不再返回 RecoverableError，
+/// 而是 materialize 本地快照走 batch 路径。
+///
+/// 修复前：`read_post_transfer_lww` 读不到 staging manifest → None →
+/// `RecoverableError("post-transfer staging manifest unreadable")`。
+/// 修复后：远端无 visible source 时调用 `materialize_local_snapshot_for_empty_remote`
+/// 把本地完整快照 materialize 成 staging 的 manifest + state，走 batch 路径。
+/// staging 完全为空时 materialize 产出空 manifest，candidate 回退到 live_lww，
+/// 仍走 batch 路径（发布空 generation），不伪造旧 live_lww 时间戳。
 #[test]
 fn q3_post_transfer_manifest_unreadable_returns_error() {
     use crate::sync::types::{PlannedTargetKind, SyncPolicy};
@@ -738,19 +746,27 @@ fn q3_post_transfer_manifest_unreadable_returns_error() {
     };
 
     let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
+    // 修复后：staging 无 manifest 时 materialize 本地快照走 batch 路径，
+    // 不再返回 RecoverableError。
     assert!(
-        matches!(
+        !matches!(
             transfer.targets[0].result.status,
             crate::sync::SyncStatus::RecoverableError(_)
         ),
-        "问题3: post-transfer manifest 不可读应返回 RecoverableError，\
-         不伪造旧 live_lww。status={:?}",
+        "问题3: Issue #761 修复后 staging 无 manifest 应 materialize 本地快照走 batch 路径，\
+         不应返回 RecoverableError。status={:?}",
         transfer.targets[0].result.status
     );
+    // candidate 回退到 live_lww (1000, dev-1)，CandidateWins → catalog 写入新 generation。
     let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
-    assert!(
-        snapshot.catalog.records.is_empty(),
-        "问题3: manifest 不可读时不应写 catalog"
+    let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1")
+        .expect("问题3: 修复后应写入 catalog（candidate 用 live_lww 赢）");
+    assert_eq!(rec.op, crate::sync::types::TargetOp::Upsert);
+    // candidate 用 live_lww (1000, dev-1)，不伪造更大时间戳。
+    assert_eq!(
+        rec.updated_at_ms, 1000,
+        "问题3: candidate 应使用 live_lww (1000)，不伪造旧 live_lww。实际 {}",
+        rec.updated_at_ms
     );
 }
 

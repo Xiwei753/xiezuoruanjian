@@ -445,8 +445,12 @@ fn lww_record_time_for_manifest_record(r: &crate::sync::types::ManifestFileRecor
 /// 按 `(lww_record_time(record), record.device_id)` 取最大 record，
 /// 返回完整 `LiveTargetLww { lww_time_ms, device_id: winner_record.device_id }`。
 /// Prepare 前判断和 post-transfer publish 都用同一个 helper，
-/// 保证 catalog 写入的 device_id 与真实 winner 一致（不再硬塞本机设备）。
-fn manifest_target_lww(manifest: &crate::sync::types::SyncManifest) -> Option<LiveTargetLww> {
+/// 保证 catalog 写入的 device_id 与真实 winner 一致（不再硬塞本机设备）///
+/// Issue #761 评论 5829270182：暴露为 pub(super) 供 transfer_helpers 直接从
+/// outcome.merged_manifest 算 candidate，不必刚写完 manifest 又从磁盘读一遍。
+pub(super) fn manifest_target_lww(
+    manifest: &crate::sync::types::SyncManifest,
+) -> Option<LiveTargetLww> {
     let winner = manifest.files.iter().max_by(|a, b| {
         let a_time = lww_record_time_for_manifest_record(a);
         let b_time = lww_record_time_for_manifest_record(b);
