@@ -9,6 +9,9 @@ on:
     paths:
       - 'apps/harmony/**'
       - 'core/writer_core/**'
+      - 'platform/rust/harmony/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'tools/build_harmony*'
       - 'tools/setup_harmony_cli.sh'
       - '.github/workflows/harmony_static_analysis.yml'
@@ -27,6 +30,7 @@ jobs:
       - name: Setup HarmonyOS CLI
         run: |
           source tools/setup_harmony_cli.sh
+          echo "HARMONY_CLI_HOME=$HARMONY_CLI_HOME" >> "$GITHUB_ENV"
           echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
@@ -51,4 +55,4 @@ jobs:
 
       - name: Build HarmonyOS app (debug)
         working-directory: apps/harmony
-        run: ./hvigorw --mode project -p product=default -p buildMode=debug assembleApp
+        run: hvigorw --mode project -p product=default -p buildMode=debug assembleApp

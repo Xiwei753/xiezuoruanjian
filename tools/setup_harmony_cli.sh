@@ -15,7 +15,7 @@
 #   hvigorw — HarmonyOS 构建工具
 #
 # 环境变量：
-#   HARMONY_CLI_VERSION — 固定版本号（默认: 5.0.5.200）
+#   HARMONY_CLI_VERSION — 固定版本号（默认: 26.0.0.821）
 #   HARMONY_CLI_HOME — 安装目录（默认: $HOME/.harmony-cli）
 #
 # 注：HARMONY_CLI_HOME 直接指向解压后的 command-line-tools 目录，
@@ -27,15 +27,21 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # 固定配置：版本号、下载地址、SHA256
 # -----------------------------------------------------------------------------
-# 版本号必须带完整 build 号（如 5.0.5.200），不要截断为 5.0.5。
+# 版本号必须带完整 build 号（如 26.0.0.821），不要截断。
 # 此版本与 apps/harmony/build-profile.json5 的 targetSdkVersion 26.0.0 配套。
-HARMONY_CLI_VERSION="${HARMONY_CLI_VERSION:-5.0.5.200}"
+# 版本对照：26.0.0.821 = API 26 正式版（HarmonyOS 6.0）
+HARMONY_CLI_VERSION="${HARMONY_CLI_VERSION:-26.0.0.821}"
 HARMONY_CLI_HOME="${HARMONY_CLI_HOME:-$HOME/.harmony-cli}"
 
-# 官方下载地址（含完整版本号，不截断）
-CLI_URL="https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/81/v3/00BjWG6lRNOlKs2xQ3WJfQ/commandlinetools-linux-x64-${HARMONY_CLI_VERSION}.zip"
-# SHA256 校验值（下载后验证完整性）
-CLI_SHA256="${CLI_SHA256:-}"
+# 下载源：ErBWs/ohos-sdk 社区镜像（华为官方下载中心链接带时效签名，无法固定）。
+# 该镜像提供 GitHub Release 直链，分片存储（.aa/.ab），拼接后得到完整 tar.gz。
+# 镜像地址：https://github.com/ErBWs/ohos-sdk/releases/tag/${HARMONY_CLI_VERSION}
+CLI_BASE_URL="https://github.com/ErBWs/ohos-sdk/releases/download/${HARMONY_CLI_VERSION}"
+CLI_FILENAME="ohos-sdk-linux-amd64.tar.gz"
+
+# SHA256 校验值（必须固定，不允许空值）
+# 来源：https://github.com/ErBWs/ohos-sdk/releases/download/26.0.0.821/ohos-sdk-linux-amd64.tar.gz.sha256
+CLI_SHA256="0cbdf7ac5c1be1e42694d448ffaee0c0be0ba9a948197e2bc5b61ca5bdc481f2"
 
 # 检查是否已安装且版本匹配
 if [ -x "$HARMONY_CLI_HOME/bin/ohpm" ] && [ -f "$HARMONY_CLI_HOME/VERSION" ] && [ "$(cat "$HARMONY_CLI_HOME/VERSION")" = "$HARMONY_CLI_VERSION" ]; then
@@ -52,28 +58,43 @@ mkdir -p "$HARMONY_CLI_HOME"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-echo "下载 CLI 包..."
-if ! curl -fSL -o "$TMP_DIR/cli.zip" "$CLI_URL"; then
-  echo "错误：下载 HarmonyOS CLI 失败。请检查版本号和网络连接。" >&2
-  echo "可手动下载并设置 HARMONY_CLI_HOME 指向解压目录。" >&2
+# -----------------------------------------------------------------------------
+# 下载分片文件并拼接
+# -----------------------------------------------------------------------------
+echo "下载 CLI 包（分片文件）..."
+
+# 下载分片 .aa
+if ! curl -fSL -o "$TMP_DIR/${CLI_FILENAME}.aa" "${CLI_BASE_URL}/${CLI_FILENAME}.aa"; then
+  echo "错误：下载分片 .aa 失败。" >&2
+  echo "请检查版本号和网络连接。" >&2
   exit 1
 fi
 
-# SHA256 校验（如果提供了校验值）
-if [ -n "$CLI_SHA256" ]; then
-  echo "校验 SHA256..."
-  ACTUAL_SHA256=$(sha256sum "$TMP_DIR/cli.zip" | awk '{print $1}')
-  if [ "$ACTUAL_SHA256" != "$CLI_SHA256" ]; then
-    echo "错误：SHA256 校验失败。" >&2
-    echo "  期望: $CLI_SHA256" >&2
-    echo "  实际: $ACTUAL_SHA256" >&2
-    exit 1
-  fi
-  echo "SHA256 校验通过。"
+# 下载分片 .ab
+if ! curl -fSL -o "$TMP_DIR/${CLI_FILENAME}.ab" "${CLI_BASE_URL}/${CLI_FILENAME}.ab"; then
+  echo "错误：下载分片 .ab 失败。" >&2
+  exit 1
 fi
 
+# 拼接分片为完整归档
+cat "$TMP_DIR/${CLI_FILENAME}.aa" "$TMP_DIR/${CLI_FILENAME}.ab" > "$TMP_DIR/$CLI_FILENAME"
+
+# SHA256 校验（强制执行，不允许跳过）
+echo "校验 SHA256..."
+ACTUAL_SHA256=$(sha256sum "$TMP_DIR/$CLI_FILENAME" | awk '{print $1}')
+if [ "$ACTUAL_SHA256" != "$CLI_SHA256" ]; then
+  echo "错误：SHA256 校验失败。" >&2
+  echo "  期望: $CLI_SHA256" >&2
+  echo "  实际: $ACTUAL_SHA256" >&2
+  exit 1
+fi
+echo "SHA256 校验通过。"
+
+# -----------------------------------------------------------------------------
+# 解压并安装
+# -----------------------------------------------------------------------------
 echo "解压 CLI 包..."
-if ! unzip -q "$TMP_DIR/cli.zip" -d "$TMP_DIR/cli"; then
+if ! tar -xzf "$TMP_DIR/$CLI_FILENAME" -C "$TMP_DIR/cli"; then
   echo "错误：解压 HarmonyOS CLI 失败。" >&2
   exit 1
 fi
