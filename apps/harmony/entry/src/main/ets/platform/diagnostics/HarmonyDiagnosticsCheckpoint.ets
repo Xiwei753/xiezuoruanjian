@@ -77,6 +77,9 @@ export class HarmonyDiagnosticsCheckpoint {
   private context: common.UIAbilityContext | null = null
   private exporter: HarmonyDiagnosticsExporter
   private dirty: boolean = false
+  // Issue #773 评论 5846511131：版本号机制 — 导出过程中若 observer 又 markDirty()，
+  // 最后 dirty = false 不会把新变化吃掉。tick 开始记版本号，成功后比较是否变化。
+  private dirtyVersion: number = 0
   private isGenerating: boolean = false
   private timerId: number = -1
 
@@ -142,6 +145,7 @@ export class HarmonyDiagnosticsCheckpoint {
   // 实际的 checkpoint 生成由定时器触发，最多每 5 秒一次。
   markDirty(): void {
     this.dirty = true
+    this.dirtyVersion += 1
   }
 
   // Issue #773 评论 5845398115：立即排一轮 checkpoint，不等 5 秒 timer。
@@ -173,6 +177,8 @@ export class HarmonyDiagnosticsCheckpoint {
   // Rust live log 持续 append 不触发 Store dirty；窗口尺寸/折叠/safe area 变化由 AdaptiveObserver 触发。
   // 日志变了就生成新 checkpoint，保证 latest.zip 最多落后几秒。
   // Issue #773 评论 5845876043：候选签名只在成功发布后提交，失败时保留重试条件。
+  // Issue #773 评论 5846511131：tick 开始记版本号，成功后比较 dirtyVersion 是否变化。
+  // 若导出过程中 observer 又 markDirty()，dirtyVersion 已递增，dirty 不会被错误清零。
   private async onTimerTick(): Promise<void> {
     if (this.isGenerating) {
       return
@@ -182,10 +188,11 @@ export class HarmonyDiagnosticsCheckpoint {
     if (!this.dirty && !logChanged) {
       return
     }
+    const versionAtStart = this.dirtyVersion
     const published = await this.generateCheckpoint()
     if (published) {
       this.lastLogSignature = signature
-      this.dirty = false
+      this.dirty = this.dirtyVersion !== versionAtStart
     } else {
       // 保留重试条件，下一 tick 继续尝试
       this.dirty = true
@@ -288,19 +295,19 @@ export class HarmonyDiagnosticsCheckpoint {
   }
 
   // 双槽 + 原子替换：
-  // 1. 如果 previous.zip 存在，删除
-  // 2. 如果 latest.zip 存在，rename → previous.zip
-  // 3. latest.tmp → latest.zip
+  // Issue #773 评论 5846511131：只有 latest 真存在时才轮换 previous，
+  // 避免连续两次 tmp → latest 失败时把最后一份 previous 也删掉。
+  // 1. 如果 latest.zip 存在，删旧 previous.zip，然后 latest.zip → previous.zip
+  // 2. latest.tmp → latest.zip
   // 如果进程恰好死在打包中途，latest.zip 或 previous.zip 至少还有一份完整包。
   private atomicReplace(tmpPath: string, latestPath: string, previousPath: string): boolean {
     try {
-      // 1. 如果 previous.zip 存在，删除
-      this.safeDelete(previousPath)
-      // 2. 如果 latest.zip 存在，rename → previous.zip
+      // 1. 只有 latest 真存在时才轮换 previous
       if (this.fileExists(latestPath)) {
+        this.safeDelete(previousPath)
         fs.renameSync(latestPath, previousPath)
       }
-      // 3. latest.tmp → latest.zip
+      // 2. latest.tmp → latest.zip
       fs.renameSync(tmpPath, latestPath)
       return true
     } catch (e) {

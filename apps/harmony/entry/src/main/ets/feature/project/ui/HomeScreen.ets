@@ -24,7 +24,8 @@ import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeS
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 // Issue #773 评论5844518092 第3项：FAB 改独立绝对坐标，不再用整页右下角锚点定位。
-// FAB 尺寸（vp）；FAB 距安全区底部的额外间距（设计值，不是底栏高度）。
+// Issue #773 评论 5846511131：FAB 坐标改为使用 FAB 所在 Stack 容器的宽高，
+// 不再用窗口全局坐标（adaptiveState.widthVp/heightVp），因为 position() 是父 Stack 的局部坐标。
 const FAB_SIZE: number = 56
 const FAB_BOTTOM_GAP: number = 28
 
@@ -43,6 +44,9 @@ export struct HomeScreen {
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
+  // Issue #773 评论 5846511131：FAB 所在 Stack 容器的宽高，用于计算 FAB 局部坐标。
+  @Local fabHostWidth: number = 0
+  @Local fabHostHeight: number = 0
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -632,9 +636,8 @@ export struct HomeScreen {
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
       // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
-      // Issue #773 评论5844518092 第3项：删除 position(100%,100%)+markAnchor+offset 锚点写法，
-      // 改用基于窗口宽高、安全区、页面 padding、FAB 尺寸的独立绝对坐标（vp）。
-      // 不读取 HdsTabs 的 barHeight/barWidth/barBottomMargin，不依赖底栏实际位置。
+      // Issue #773 评论 5846511131：FAB 坐标改为使用 FAB 所在 Stack 容器的宽高（fabHostWidth/fabHostHeight），
+      // 不再用窗口全局坐标（adaptiveState.widthVp/heightVp），因为 position() 是父 Stack 的局部坐标。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
         Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
@@ -644,8 +647,8 @@ export struct HomeScreen {
         .width(FAB_SIZE)
         .height(FAB_SIZE)
         .position({
-          x: this.adaptiveState.widthVp - this.adaptiveState.pagePadding - FAB_SIZE,
-          y: this.adaptiveState.heightVp - this.adaptiveState.safeBottomVp - FAB_SIZE - FAB_BOTTOM_GAP
+          x: this.fabHostWidth - this.adaptiveState.pagePadding - FAB_SIZE,
+          y: this.fabHostHeight - this.adaptiveState.safeBottomVp - FAB_SIZE - FAB_BOTTOM_GAP
         })
         .onClick(() => {
           this.viewModel.showCreateDialog = true
@@ -655,6 +658,10 @@ export struct HomeScreen {
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((_old, area) => {
+      this.fabHostWidth = Number(area.width)
+      this.fabHostHeight = Number(area.height)
+    })
   }
 
   // ── 窄屏顶栏：app_title + 按 ScreenPolicy HeaderTrailing 顺序渲染按钮 ──

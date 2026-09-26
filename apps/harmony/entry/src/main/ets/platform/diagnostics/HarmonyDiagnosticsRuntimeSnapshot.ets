@@ -44,11 +44,12 @@ interface ThemeRuntimeDto {
   selectedBuiltinThemeId: string
   selectedPaletteId: string
   colorSource: string
-  // Issue #773 评论 5844518092 第5项：材质真实运行态（API26+ 从 uiMaterial 读取）
-  materialState: string
-  materialType: string
-  immersiveMaterialSupported: boolean
-  globalMaterialLevel: string
+  // Issue #773 评论 5846511131：材质配置状态（不是支持状态）。
+  // state 是 module.json5 的材质配置值，不代表 HDS 组件已实际生效。
+  // 删除 immersiveMaterialSupported（state !== DISABLE 推导不成立），
+  // 改为真实语义字段。
+  appMaterialState: string
+  appMaterialType: string
   hdsRequestedMaterialType: string
   hdsRequestedMaterialLevel: string
 }
@@ -130,24 +131,21 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
     const adapter = HarmonyThemeAdapter.getInstance()
     const useSystemTokens = adapter.isUsingSystemTokens()
 
-    // Issue #773 评论 5844518092 第5项：材质真实运行态。
+    // Issue #773 评论 5846511131：材质配置状态（不是支持状态）。
     // API >= 26 从 uiMaterial.getMaterialInfo() 读取；API < 26 字段写 "unavailable"。
-    let materialState = 'unavailable'
-    let materialType = 'unavailable'
-    let immersiveMaterialSupported = false
-    let globalMaterialLevel = 'unavailable'
+    // state 是 module.json5 的材质配置值（DEFAULT/ENABLE/DISABLE），不代表 HDS 组件已实际生效。
+    let appMaterialState = 'unavailable'
+    let appMaterialType = 'unavailable'
     const hdsRequestedMaterialType = 'IMMERSIVE'
     const hdsRequestedMaterialLevel = 'ADAPTIVE'
     if (PlatformApiResolver.getInstance().isApiAtLeast(26)) {
       try {
         const materialInfo = HarmonyMaterialRuntimeApi26.getInstance().getMaterialRuntimeInfo()
-        materialState = materialInfo.materialState
-        materialType = materialInfo.materialType
-        immersiveMaterialSupported = materialInfo.immersiveMaterialSupported
-        globalMaterialLevel = materialInfo.globalMaterialLevel
+        appMaterialState = materialInfo.appMaterialState
+        appMaterialType = materialInfo.appMaterialType
       } catch (e) {
         hilog.error(0x0000, LOG_TAG, 'read material runtime failed: %{public}s', String(e))
-        materialState = 'error'
+        appMaterialState = 'error'
       }
     }
 
@@ -160,10 +158,8 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
       selectedBuiltinThemeId: adapter.getSelectedBuiltinThemeId(),
       selectedPaletteId: adapter.getSelectedPaletteId(),
       colorSource: adapter.getColorSource(),
-      materialState: materialState,
-      materialType: materialType,
-      immersiveMaterialSupported: immersiveMaterialSupported,
-      globalMaterialLevel: globalMaterialLevel,
+      appMaterialState: appMaterialState,
+      appMaterialType: appMaterialType,
       hdsRequestedMaterialType: hdsRequestedMaterialType,
       hdsRequestedMaterialLevel: hdsRequestedMaterialLevel
     }
