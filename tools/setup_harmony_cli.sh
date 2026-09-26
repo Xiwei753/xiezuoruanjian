@@ -94,6 +94,7 @@ echo "SHA256 校验通过。"
 # 解压并安装
 # -----------------------------------------------------------------------------
 echo "解压 CLI 包..."
+mkdir -p "$TMP_DIR/cli"
 if ! tar -xzf "$TMP_DIR/$CLI_FILENAME" -C "$TMP_DIR/cli"; then
   echo "错误：解压 HarmonyOS CLI 失败。" >&2
   exit 1
