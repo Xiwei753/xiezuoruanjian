@@ -15,6 +15,8 @@ on:
       - 'tools/build_harmony*'
       - 'tools/setup_harmony_cli.sh'
       - 'tools/check_codelinter_report.py'
+      - 'tools/check_harmony_share_files.py'
+      - 'tools/test_check_harmony_share_files.py'
       - '.github/workflows/harmony_static_analysis.yml'
 
 permissions:
@@ -43,6 +45,12 @@ jobs:
       - name: Run validate.mjs
         working-directory: apps/harmony
         run: node validate.mjs
+
+      - name: Test shareFiles profile checker
+        run: python3 tools/test_check_harmony_share_files.py
+
+      - name: Check shareFiles profile（SDK schema + 官方路径限制）
+        run: python3 tools/check_harmony_share_files.py .
 
       - name: Run codelinter
         working-directory: apps/harmony

@@ -177,18 +177,19 @@ export class HarmonyDiagnosticsCheckpoint {
   // Rust live log 持续 append 不触发 Store dirty；窗口尺寸/折叠/safe area 变化由 AdaptiveObserver 触发。
   // 日志变了就生成新 checkpoint，保证 latest.zip 最多落后几秒。
   // Issue #773 评论 5845876043：候选签名只在成功发布后提交，失败时保留重试条件。
-  // Issue #773 评论 5846511131：tick 开始记版本号，成功后比较 dirtyVersion 是否变化。
-  // 若导出过程中 observer 又 markDirty()，dirtyVersion 已递增，dirty 不会被错误清零。
+  // Issue #773 评论 5846511131：tick 一开始就记 versionAtStart，再取签名。
+  // 导出期间 observer 若又 markDirty()，dirtyVersion 已递增，
+  // 发布成功后 dirty 按版本号差保留 true，新变化不会被 dirty = false 吃掉。
   private async onTimerTick(): Promise<void> {
     if (this.isGenerating) {
       return
     }
+    const versionAtStart = this.dirtyVersion
     const signature = this.getLogSignature()
     const logChanged = signature !== this.lastLogSignature
     if (!this.dirty && !logChanged) {
       return
     }
-    const versionAtStart = this.dirtyVersion
     const published = await this.generateCheckpoint()
     if (published) {
       this.lastLogSignature = signature
@@ -298,21 +299,42 @@ export class HarmonyDiagnosticsCheckpoint {
   // Issue #773 评论 5846511131：只有 latest 真存在时才轮换 previous，
   // 避免连续两次 tmp → latest 失败时把最后一份 previous 也删掉。
   // 1. 如果 latest.zip 存在，删旧 previous.zip，然后 latest.zip → previous.zip
-  // 2. latest.tmp → latest.zip
+  // 2. latest.tmp → latest.zip；这一步失败时把刚轮换走的 previous 恢复成 latest
+  //    （评论 5846308072：tmp 发布失败后恢复 previous，别让两份完整包同时消失）
   // 如果进程恰好死在打包中途，latest.zip 或 previous.zip 至少还有一份完整包。
   private atomicReplace(tmpPath: string, latestPath: string, previousPath: string): boolean {
-    try {
-      // 1. 只有 latest 真存在时才轮换 previous
-      if (this.fileExists(latestPath)) {
+    const hadLatest = this.fileExists(latestPath)
+    if (hadLatest) {
+      try {
         this.safeDelete(previousPath)
         fs.renameSync(latestPath, previousPath)
+      } catch (e) {
+        // 轮换这一步失败时 latest 自己还在，保留旧包，不再冒险覆盖
+        hilog.error(0x0000, LOG_TAG, 'atomicReplace rotate latest→previous failed: %{public}s', String(e))
+        return false
       }
-      // 2. latest.tmp → latest.zip
+    }
+    try {
       fs.renameSync(tmpPath, latestPath)
       return true
     } catch (e) {
+      this.restorePreviousAsLatest(hadLatest, latestPath, previousPath)
       hilog.error(0x0000, LOG_TAG, 'atomicReplace failed: %{public}s', String(e))
       return false
+    }
+  }
+
+  // Issue #773 评论 5846308072（本轮 5846511131 重申）：tmp → latest 失败后，
+  // 把刚轮换到 previous 的旧包恢复成 latest，避免重试再次失败后两份都不在。
+  private restorePreviousAsLatest(hadLatest: boolean, latestPath: string, previousPath: string): void {
+    if (!hadLatest || this.fileExists(latestPath) || !this.fileExists(previousPath)) {
+      return
+    }
+    try {
+      fs.renameSync(previousPath, latestPath)
+      hilog.info(0x0000, LOG_TAG, 'restored previous zip back to latest after failed publish')
+    } catch (e) {
+      hilog.error(0x0000, LOG_TAG, 'restore previous→latest failed: %{public}s', String(e))
     }
   }
 

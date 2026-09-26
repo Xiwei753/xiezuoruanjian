@@ -16,6 +16,7 @@ import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
+import { FAB_SIZE, resolveFabLocalAnchor } from '../../../ui/adaptive/FabAnchor'
 import { ProjectListViewModel } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
@@ -24,10 +25,8 @@ import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeS
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 // Issue #773 评论5844518092 第3项：FAB 改独立绝对坐标，不再用整页右下角锚点定位。
-// Issue #773 评论 5846511131：FAB 坐标改为使用 FAB 所在 Stack 容器的宽高，
-// 不再用窗口全局坐标（adaptiveState.widthVp/heightVp），因为 position() 是父 Stack 的局部坐标。
-const FAB_SIZE: number = 56
-const FAB_BOTTOM_GAP: number = 28
+// Issue #773 评论 5846511131：FAB 坐标改用 ui/adaptive/FabAnchor.ets 的共用 helper，
+// 只按 FAB 承载 Stack 自己的宽高算局部坐标，Home 与 Workspace 共用同一套算法。
 
 @ComponentV2
 export struct HomeScreen {
@@ -636,8 +635,8 @@ export struct HomeScreen {
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
       // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
-      // Issue #773 评论 5846511131：FAB 坐标改为使用 FAB 所在 Stack 容器的宽高（fabHostWidth/fabHostHeight），
-      // 不再用窗口全局坐标（adaptiveState.widthVp/heightVp），因为 position() 是父 Stack 的局部坐标。
+      // Issue #773 评论 5846511131：局部坐标由 FabAnchor.resolveFabLocalAnchor 统一提供，
+      // 输入只有本 Stack 的宽高（onAreaChange）+ 页面边距 + 底部安全区，不读底栏几何。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
         Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
@@ -646,10 +645,7 @@ export struct HomeScreen {
         }
         .width(FAB_SIZE)
         .height(FAB_SIZE)
-        .position({
-          x: this.fabHostWidth - this.adaptiveState.pagePadding - FAB_SIZE,
-          y: this.fabHostHeight - this.adaptiveState.safeBottomVp - FAB_SIZE - FAB_BOTTOM_GAP
-        })
+        .position(resolveFabLocalAnchor(this.fabHostWidth, this.fabHostHeight, this.adaptiveState))
         .onClick(() => {
           this.viewModel.showCreateDialog = true
           this.viewModel.newProjectName = ''

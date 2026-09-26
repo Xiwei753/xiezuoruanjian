@@ -31,6 +31,12 @@ WHITELIST_FILENAMES = {
 
     'settings.json', 'graph.json', 'migration.json',
     'harmony_build.yml',
+
+    # 不随仓库分发的配置文件：SDK 自带 schema / 本机 CLI 生成物。
+    # 引用它们的文档是准确的，不能按"仓库里找不到"判为断链。
+    'shareFiles.json',  # SDK: <sdk>/default/openharmony/toolchains/modulecheck/
+    'opencode.json',    # devecocli init --mcp 生成的 .opencode 本机配置，不入库
+    'SKILL.md',         # devecocli init --skill 写入 .opencode/skills/**，不入库
 }
 
 WHITELIST_PATHS = {
