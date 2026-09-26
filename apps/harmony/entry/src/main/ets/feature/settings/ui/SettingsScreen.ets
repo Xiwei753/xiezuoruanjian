@@ -346,7 +346,7 @@ export struct SettingsScreen {
           .height(20)
           .margin({ left: 12 })
 
-        TextInput({ placeholder: $r('app.string.settings'), text: this.searchText })
+        TextInput({ placeholder: $r('app.string.search_settings'), text: this.searchText })
           .layoutWeight(1)
           .height(36)
           .fontSize(14)

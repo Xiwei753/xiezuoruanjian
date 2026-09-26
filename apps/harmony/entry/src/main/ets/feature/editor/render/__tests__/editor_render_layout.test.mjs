@@ -1,7 +1,7 @@
 // editor_render_layout.test.mjs — editor_render_geometry.ts 的纯逻辑单测。
 //
 // 用 Node --experimental-strip-types 直接 import editor_render_geometry.ts（纯 TS，无 ArkUI 依赖）。
-// 注入确定性 mock measureFn（每 UTF-16 code unit 10px），验证选区/光标/composition 下划线
+// 注入确定性 mock measureFn（每 UTF-16 code unit 10vp），验证选区/光标/composition 下划线
 // 矩形计算的数学性质：单行/多行/空选区/越界/自动交换/行尾归行。
 //
 // 运行：node --experimental-strip-types editor_render_layout.test.mjs
@@ -15,11 +15,11 @@ import {
   computeCompositionUnderlineRects,
   computeSelectionRectsFromLineLayouts,
   computeCaretRectFromLineLayouts,
-  CARET_WIDTH_PX,
-  UNDERLINE_HEIGHT_PX,
+  CARET_WIDTH_VP,
+  UNDERLINE_HEIGHT_VP,
 } from '../editor_render_geometry.ts'
 
-// 确定性 mock measureFn：每 UTF-16 code unit 10px。满足 measure('')===0 与单调不减。
+// 确定性 mock measureFn：每 UTF-16 code unit 10vp。满足 measure('')===0 与单调不减。
 const mockMeasure = (s) => s.length * 10
 
 let passed = 0
@@ -33,11 +33,11 @@ console.log('editor_render_geometry 纯逻辑单测')
 console.log('---')
 
 // ── 常量 ──
-test('常量: CARET_WIDTH_PX === 2', () => {
-  assert.equal(CARET_WIDTH_PX, 2)
+test('常量: CARET_WIDTH_VP === 2', () => {
+  assert.equal(CARET_WIDTH_VP, 2)
 })
-test('常量: UNDERLINE_HEIGHT_PX === 2', () => {
-  assert.equal(UNDERLINE_HEIGHT_PX, 2)
+test('常量: UNDERLINE_HEIGHT_VP === 2', () => {
+  assert.equal(UNDERLINE_HEIGHT_VP, 2)
 })
 
 // ── toLineLayouts ──
@@ -64,7 +64,7 @@ test('toLineLayouts: 多行 y = i * lineSpacing', () => {
   assert.equal(ls[1].y, 20)
   assert.equal(ls[2].y, 40)
 })
-test('toLineLayouts: lineSpacingPx<=0 退化 y=0 height=0', () => {
+test('toLineLayouts: lineSpacingVp<=0 退化 y=0 height=0', () => {
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const ls = toLineLayouts(lines, 0, 'abcdef', mockMeasure)
   assert.equal(ls.length, 1)
@@ -118,7 +118,7 @@ test('computeSelectionRects: 选区起点越界 clamp 到行首', () => {
   const rects = computeSelectionRects('abcdef', lines, 20, 1000, -5, 2, mockMeasure)
   assert.deepEqual(rects, [{ x: 0, y: 0, width: 20, height: 20 }])
 })
-test('computeSelectionRects: lineSpacingPx<=0 退化 y=0 height=0', () => {
+test('computeSelectionRects: lineSpacingVp<=0 退化 y=0 height=0', () => {
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const rects = computeSelectionRects('abcdef', lines, 0, 1000, 1, 3, mockMeasure)
   assert.deepEqual(rects, [{ x: 10, y: 0, width: 20, height: 0 }])
@@ -143,75 +143,75 @@ test('computeCaretRect: 空文本返回 null', () => {
 test('computeCaretRect: 光标在行首 x=0', () => {
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 0, mockMeasure)
-  assert.deepEqual(caret, { x: 0, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 0, y: 0, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: 光标在行中', () => {
   // cursor=2 → x=measure('ab')=20
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 2, mockMeasure)
-  assert.deepEqual(caret, { x: 20, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 20, y: 0, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: 光标在行尾（单行）', () => {
   // cursor=6 → x=measure('abcdef')=60
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 6, mockMeasure)
-  assert.deepEqual(caret, { x: 60, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 60, y: 0, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: soft-wrap 边界 Upstream → 上一行尾', () => {
   // text='abcdef' 容器 30px → 2 行 [0,3) [3,6)
   // cursor=3 在 soft-wrap 边界：Upstream → 行0 末尾，x=measure('abc')=30, y=0
   const lines = layoutLines('abcdef', 30, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 3, mockMeasure, CaretAffinity.Upstream)
-  assert.deepEqual(caret, { x: 30, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 30, y: 0, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: soft-wrap 边界 Downstream → 下一行首', () => {
   // cursor=3 在 soft-wrap 边界：Downstream → 行1 首，x=0, y=20
   const lines = layoutLines('abcdef', 30, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 3, mockMeasure, CaretAffinity.Downstream)
-  assert.deepEqual(caret, { x: 0, y: 20, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 0, y: 20, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: hard break 两侧 offset 不同不靠 affinity', () => {
   // text='a\nb' 容器 1000px → 2 行 [0,1 HardBreak] [2,3 EndOfText]
   // cursor=1 → 行0 末尾，x=measure('a')=10
   const lines = layoutLines('a\nb', 1000, mockMeasure)
   const caret = computeCaretRect('a\nb', lines, 20, 1, mockMeasure)
-  assert.deepEqual(caret, { x: 10, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 10, y: 0, width: CARET_WIDTH_VP, height: 20 })
   // cursor=2 → 行1 首，x=0
   const caret2 = computeCaretRect('a\nb', lines, 20, 2, mockMeasure)
-  assert.deepEqual(caret2, { x: 0, y: 20, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret2, { x: 0, y: 20, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: 多行光标在行中归到对应行', () => {
   // cursor=3 → line.end=4>=3 归到行1，x=measure(text.substring(2,3))=measure('c')=10, y=20
   const lines = layoutLines('abcdef', 25, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 3, mockMeasure)
-  assert.deepEqual(caret, { x: 10, y: 20, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 10, y: 20, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: cursor=4 归到行1行尾', () => {
   // cursor=4 → line.end=4>=4 归到行1，x=measure('cd')=20, y=20
   const lines = layoutLines('abcdef', 25, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 4, mockMeasure)
-  assert.deepEqual(caret, { x: 20, y: 20, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 20, y: 20, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: cursor=5 归到行2', () => {
   // cursor=5 → line.end=6>=5 归到行2，x=measure('e')=10, y=40
   const lines = layoutLines('abcdef', 25, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 5, mockMeasure)
-  assert.deepEqual(caret, { x: 10, y: 40, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 10, y: 40, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: 越界 cursor<0 clamp 到 0', () => {
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, -5, mockMeasure)
-  assert.deepEqual(caret, { x: 0, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 0, y: 0, width: CARET_WIDTH_VP, height: 20 })
 })
 test('computeCaretRect: 越界 cursor>text.length clamp 到行尾', () => {
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 20, 100, mockMeasure)
-  assert.deepEqual(caret, { x: 60, y: 0, width: CARET_WIDTH_PX, height: 20 })
+  assert.deepEqual(caret, { x: 60, y: 0, width: CARET_WIDTH_VP, height: 20 })
 })
-test('computeCaretRect: lineSpacingPx<=0 退化 y=0 height=0', () => {
+test('computeCaretRect: lineSpacingVp<=0 退化 y=0 height=0', () => {
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const caret = computeCaretRect('abcdef', lines, 0, 2, mockMeasure)
-  assert.deepEqual(caret, { x: 20, y: 0, width: CARET_WIDTH_PX, height: 0 })
+  assert.deepEqual(caret, { x: 20, y: 0, width: CARET_WIDTH_VP, height: 0 })
 })
 
 // ── computeCompositionUnderlineRects ──
@@ -233,7 +233,7 @@ test('computeCompositionUnderlineRects: 空范围返回 []', () => {
 test("computeCompositionUnderlineRects: compStart>compEnd 自动交换成 [1,3)", () => {
   const lines = layoutLines("abcdef", 1000, mockMeasure)
   const rects = computeCompositionUnderlineRects("abcdef", lines, 20, 3, 1, mockMeasure)
-  assert.deepEqual(rects, [{ x: 10, y: 18, width: 20, height: UNDERLINE_HEIGHT_PX }])
+  assert.deepEqual(rects, [{ x: 10, y: 18, width: 20, height: UNDERLINE_HEIGHT_VP }])
 })
 test('computeCompositionUnderlineRects: 单行 composition 下划线在行底', () => {
   // text='abcdef' 容器 1000px 单行，compStart=1, compEnd=3, lineSpacing=20
@@ -241,7 +241,7 @@ test('computeCompositionUnderlineRects: 单行 composition 下划线在行底', 
   // y = 0*20 + 20 - 2 = 18, height = 2
   const lines = layoutLines('abcdef', 1000, mockMeasure)
   const rects = computeCompositionUnderlineRects('abcdef', lines, 20, 1, 3, mockMeasure)
-  assert.deepEqual(rects, [{ x: 10, y: 18, width: 20, height: UNDERLINE_HEIGHT_PX }])
+  assert.deepEqual(rects, [{ x: 10, y: 18, width: 20, height: UNDERLINE_HEIGHT_VP }])
 })
 test('computeCompositionUnderlineRects: 多行 composition 每行一个下划线', () => {
   // text='abcdef' 容器 25px → 3 行 [0,2)[2,4)[4,6)
@@ -252,9 +252,9 @@ test('computeCompositionUnderlineRects: 多行 composition 每行一个下划线
   const lines = layoutLines('abcdef', 25, mockMeasure)
   const rects = computeCompositionUnderlineRects('abcdef', lines, 20, 1, 5, mockMeasure)
   assert.deepEqual(rects, [
-    { x: 10, y: 18, width: 10, height: UNDERLINE_HEIGHT_PX },
-    { x: 0, y: 38, width: 20, height: UNDERLINE_HEIGHT_PX },
-    { x: 0, y: 58, width: 10, height: UNDERLINE_HEIGHT_PX },
+    { x: 10, y: 18, width: 10, height: UNDERLINE_HEIGHT_VP },
+    { x: 0, y: 38, width: 20, height: UNDERLINE_HEIGHT_VP },
+    { x: 0, y: 58, width: 10, height: UNDERLINE_HEIGHT_VP },
   ])
 })
 test("computeCompositionUnderlineRects: compStart>compEnd 自动交换", () => {
@@ -263,7 +263,7 @@ test("computeCompositionUnderlineRects: compStart>compEnd 自动交换", () => {
   const r2 = computeCompositionUnderlineRects("abcdef", lines, 20, 3, 1, mockMeasure)
   // compStart>compEnd 自动交换，r1 和 r2 应相等
   assert.deepEqual(r1, r2)
-  assert.deepEqual(r1, [{ x: 10, y: 18, width: 20, height: UNDERLINE_HEIGHT_PX }])
+  assert.deepEqual(r1, [{ x: 10, y: 18, width: 20, height: UNDERLINE_HEIGHT_VP }])
 })
 test('computeCompositionUnderlineRects: 中文 composition', () => {
   // '你好世界' 容器 25px → 2 行 [0,2)[2,4)
@@ -273,8 +273,8 @@ test('computeCompositionUnderlineRects: 中文 composition', () => {
   const lines = layoutLines('你好世界', 25, mockMeasure)
   const rects = computeCompositionUnderlineRects('你好世界', lines, 20, 0, 3, mockMeasure)
   assert.deepEqual(rects, [
-    { x: 0, y: 18, width: 20, height: UNDERLINE_HEIGHT_PX },
-    { x: 0, y: 38, width: 10, height: UNDERLINE_HEIGHT_PX },
+    { x: 0, y: 18, width: 20, height: UNDERLINE_HEIGHT_VP },
+    { x: 0, y: 38, width: 10, height: UNDERLINE_HEIGHT_VP },
   ])
 })
 
@@ -429,7 +429,7 @@ test('端到端: 选区/光标/composition 共存于多行文本', () => {
   assert.equal(comp.length, 3)
   // composition 下划线 y = 选区 y + lineSpacing - UNDERLINE_HEIGHT
   for (let i = 0; i < sel.length; i++) {
-    assert.equal(comp[i].y, sel[i].y + 20 - UNDERLINE_HEIGHT_PX)
+    assert.equal(comp[i].y, sel[i].y + 20 - UNDERLINE_HEIGHT_VP)
     assert.equal(comp[i].x, sel[i].x)
     assert.equal(comp[i].width, sel[i].width)
   }
