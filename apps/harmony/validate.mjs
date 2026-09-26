@@ -14,24 +14,82 @@ function walk(dir) {
   }
 }
 
+// Strip comments and string literals so checks only see code.
+// 花括号/标识符出现在注释和字符串里时不是代码：例如注释里的裸 '{'、
+// startsWith('{')、以及 HiLog 占位符 '%{public}s'。
+// 模板字面量只保留 ${} 插值里的代码，插值照常参与花括号配平和类型检查。
+function stripNonCode(src) {
+  let out = ''
+  // null | 'line-comment' | 'block-comment' | 'single' | 'double' | 'template'
+  let state = null
+  const interpDepths = [] // ${} 插值栈：记录当前插值内的花括号深度
+  let i = 0
+  while (i < src.length) {
+    const ch = src[i]
+    const next = src[i + 1]
+    if (state === null) {
+      if (ch === '/' && next === '/') { state = 'line-comment'; i += 2; continue }
+      if (ch === '/' && next === '*') { state = 'block-comment'; i += 2; continue }
+      if (ch === "'") { state = 'single'; i += 1; continue }
+      if (ch === '"') { state = 'double'; i += 1; continue }
+      if (ch === '`') { state = 'template'; i += 1; continue }
+      if (interpDepths.length > 0) {
+        if (ch === '{') { interpDepths[interpDepths.length - 1] += 1; out += ch; i += 1; continue }
+        if (ch === '}') {
+          if (interpDepths[interpDepths.length - 1] === 0) {
+            interpDepths.pop()
+            state = 'template' // 插值结束，回到模板字面量
+            i += 1
+            continue
+          }
+          interpDepths[interpDepths.length - 1] -= 1
+          out += ch
+          i += 1
+          continue
+        }
+      }
+      out += ch
+      i += 1
+      continue
+    }
+    if (state === 'line-comment') {
+      if (ch === '\n') { state = null; out += ch }
+      i += 1
+      continue
+    }
+    if (state === 'block-comment') {
+      if (ch === '*' && next === '/') { state = null; i += 2; continue }
+      i += 1
+      continue
+    }
+    if (state === 'template') {
+      if (ch === '\\') { i += 2; continue }
+      if (ch === '`') { state = null; i += 1; continue }
+      if (ch === '$' && next === '{') { interpDepths.push(0); state = null; i += 2; continue }
+      i += 1
+      continue
+    }
+    // 单/双引号字符串内部：跳过转义和结束引号，内容一律不计入代码。
+    if (ch === '\\') { i += 2; continue }
+    if ((state === 'single' && ch === "'") || (state === 'double' && ch === '"')) state = null
+    i += 1
+  }
+  return out
+}
+
 function checkFile(path) {
   const src = readFileSync(path, 'utf8')
   const rel = path.replace(import.meta.dirname + '/', '')
-  const lines = src.split('\n')
+  const codeOnly = stripNonCode(src)
 
-  // 1. Brace balance
+  // 1. Brace balance (code only — comments and string literals excluded)
   let braces = 0
-  for (const ch of src) {
+  for (const ch of codeOnly) {
     if (ch === '{') braces++
     if (ch === '}') braces--
     if (braces < 0) { errors.push(`${rel}: unmatched '}'`); break }
   }
   if (braces !== 0) errors.push(`${rel}: unbalanced braces (${braces > 0 ? '+' : ''}${braces})`)
-
-  // Strip comments for code-only checks
-  const codeOnly = lines
-    .map(l => l.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, ''))
-    .join('\n')
 
   // 2. References to removed types (code only, not comments)
   const removed = ['TokenStore', 'EncryptionProvider', 'MockTokenStore', 'NativeTokenStore', 'MockEncryptionProvider']

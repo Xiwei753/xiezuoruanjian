@@ -323,7 +323,7 @@ export class EditorRenderBackend {
     layout: LayoutManager,
     systemLines: LineLayout[],
     cursorUtf16: number,
-    text: string,
+    content: string,
     affinity: CaretAffinity,
   ): CaretRect | null {
     if (systemLines.length === 0) {
@@ -359,7 +359,7 @@ export class EditorRenderBackend {
 
     try {
       let x: number
-      if (cursorUtf16 < text.length) {
+      if (cursorUtf16 < content.length) {
         // 光标在文本中间
         // Issue #768 评论5836931927 第1项：lineIndex 已经是按 affinity 选定的视觉行，
         // 直接判断 line 本身是否 soft-wrap Upstream，不要回头找 lineIndex - 1。
