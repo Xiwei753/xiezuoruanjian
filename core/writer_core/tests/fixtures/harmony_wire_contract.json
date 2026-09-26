@@ -2628,10 +2628,6 @@
     "element": {
       "kind": "object",
       "fields": {
-        "chapterCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
         "createdAt": {
           "kind": "scalar",
           "ty": "string"
@@ -2644,17 +2640,9 @@
           "kind": "scalar",
           "ty": "string"
         },
-        "totalWordCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
         "updatedAt": {
           "kind": "scalar",
           "ty": "string"
-        },
-        "volumeCount": {
-          "kind": "scalar",
-          "ty": "number"
         }
       }
     }

@@ -128,7 +128,13 @@ pub(crate) fn merge_remote_into_local_snapshot(
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let local_records = snapshot_local_records_read_only(sync_root, scope, &state.device_id)?;
-    let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope)?;
+    let remote_records = build_remote_records(
+        remote_manifest,
+        &remote_tree_files,
+        scope,
+        provider,
+        source_remote_prefix,
+    )?;
 
     // 提前加载 conflicts_json，让它一直带到最后的 persist_sync_merge_result，
     // 不要末尾再重新读一份。旧基线归一化和主循环都操作这一份 conflicts_json，
@@ -186,6 +192,34 @@ pub(crate) fn merge_remote_into_local_snapshot(
         // 如果该 path 已经在 conflicted_files，用归一化后的 base 重新跑正文三路决策。
         // 只对正文文件做（is_document_content_path），非正文文件不走三路比较。
         if state.conflicted_files.contains(&path) {
+            // 旧基线归一化成功后，同步规范化 state.conflicts 和 conflicts_json 中
+            // 同 path 旧记录的 local_hash / remote_hash / base_hash。
+            // 旧冲突记录可能携带 40 位 Git blob SHA 作为 local_hash/remote_hash/base_hash
+            // （旧版本同步系统误写入），三路比较里不是同一种内容哈希会导致空内容被
+            // 误判为 BothChanged 冲突。归一化后 base 改成 MD5，同时把 local/remote 也
+            // 改成 MD5（local_records / remote_records 的 content_hash 在修改 1 后保证是 MD5）。
+            // 只在能拿到 local_md5 / remote_md5 时才改对应字段；拿不到就不改那个字段（不伪造）。
+            // 保留 created_at / kind / remote_snapshot_path / description 不变。
+            let local_md5_opt = local_records.get(&path).map(|r| r.content_hash.clone());
+            let remote_md5_opt = remote_records.get(&path).map(|r| r.content_hash.clone());
+            for c in state.conflicts.iter_mut().filter(|c| c.local_path == path) {
+                if let Some(local_md5) = &local_md5_opt {
+                    c.local_hash = local_md5.clone();
+                }
+                if let Some(remote_md5) = &remote_md5_opt {
+                    c.remote_hash = remote_md5.clone();
+                }
+                c.base_hash = new_base.clone();
+            }
+            for c in conflicts_json.iter_mut().filter(|c| c.local_path == path) {
+                if let Some(local_md5) = &local_md5_opt {
+                    c.local_hash = local_md5.clone();
+                }
+                if let Some(remote_md5) = &remote_md5_opt {
+                    c.remote_hash = remote_md5.clone();
+                }
+                c.base_hash = new_base.clone();
+            }
             if let (Some(local_rec), Some(remote_rec)) =
                 (local_records.get(&path), remote_records.get(&path))
             {

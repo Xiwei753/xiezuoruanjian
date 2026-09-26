@@ -2246,7 +2246,10 @@ mod tests {
 
         let local_content = "local version B";
         let base_hash = "hash_base_A".to_string();
-        let remote_hash = "hash_remote_C".to_string();
+        // 用真实 MD5 作为 remote_hash：resolve_conflict_* 现在对非 MD5 的 remote_hash
+        // 做 canonical 规范化（评论 5843392838 口子2b），测试需用 MD5 才能验证
+        // known_files 被设为 remote_hash 的不变量。
+        let remote_hash = crate::sync::hash::content_md5(b"remote version C");
 
         std::fs::write(&chapter_abs, local_content).unwrap();
 
@@ -2425,7 +2428,10 @@ mod tests {
         std::fs::write(&chapter_abs, merged_content).unwrap();
 
         let base_hash = "hash_base_A".to_string();
-        let remote_hash = "hash_remote_C".to_string();
+        // 用真实 MD5 作为 remote_hash：resolve_conflict_* 现在对非 MD5 的 remote_hash
+        // 做 canonical 规范化（评论 5843392838 口子2b），测试需用 MD5 才能验证
+        // known_files 被设为 remote_hash 的不变量。
+        let remote_hash = crate::sync::hash::content_md5(b"remote version C");
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();

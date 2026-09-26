@@ -233,6 +233,55 @@ pub fn record_staging_conflicts(
 }
 
 impl crate::sync::SyncService {
+    /// 计算写入 `known_files` 的规范化内容哈希（MD5）。
+    ///
+    /// `resolve_conflict_keep_local` / `mark_merged` / `decide_take_remote` 的
+    /// BothChanged 分支都把 `conflict.remote_hash` 写回 `state.known_files`。
+    /// 旧冲突记录的 `remote_hash` 可能是 40 位 Git blob SHA（旧版本同步系统误写入），
+    /// 直接写进 `known_files` 会再次污染基线，导致下一轮三路比较把空内容误判为
+    /// `BothChanged` 冲突。本 helper 在写入前做 MD5 规范化：
+    ///
+    /// 1. **`conflict.remote_hash` 已是 MD5**：直接用（保持原行为，不破坏
+    ///    `resolve_conflict_keep_local` 的不变量：known_files 必须设为 remote_hash
+    ///    而非 local_hash，下次同步才会上传本地版本而非下载远端覆盖）。
+    /// 2. **`conflict.remote_hash` 不是 MD5**（旧 40 位 Git blob SHA），按以下顺序
+    ///    找一个 MD5 替代：
+    ///    - **优先 `remote_snapshot_path`**：读 `sync_root.join(snapshot_rel)` 算 MD5。
+    ///      BothChanged 冲突保存了远端副本快照，这是远端内容的事实来源，
+    ///      算出来的 MD5 等价于 remote_hash 应有的值。
+    ///    - **其次本地文件**：读 `sync_root.join(path)` 算 MD5。没有 snapshot 时的
+    ///      fallback——虽然语义上 base 应该是 remote_hash，但用本地 MD5 总比写入
+    ///      40 位 SHA 污染基线好，至少不会触发"空内容误判为 BothChanged"的 bug。
+    ///    - **都不行 → `None`**：不伪造内容哈希，调用方跳过 `known_files` 写入。
+    ///
+    /// 读 snapshot / 本地文件失败时返回 `None`（不向上传播 IO 错误，让调用方决定
+    /// 是否跳过 `known_files` 写入）。本 helper 只读不写，无副作用。
+    fn canonical_known_hash(
+        sync_root: &Path,
+        path: &str,
+        conflict: &SyncConflict,
+    ) -> Option<String> {
+        // 1. conflict.remote_hash 已是 MD5 → 直接用，保持原行为。
+        if crate::sync::hash::is_md5_content_hash(&conflict.remote_hash) {
+            return Some(conflict.remote_hash.clone());
+        }
+        // 2. conflict.remote_hash 不是 MD5（旧 40 位 Git blob SHA）：
+        //    a. 优先 remote_snapshot_path 算 MD5（远端副本是远端内容的事实来源）。
+        if let Some(snapshot_rel) = &conflict.remote_snapshot_path {
+            let snapshot_path = sync_root.join(snapshot_rel);
+            if let Ok(content) = std::fs::read(&snapshot_path) {
+                return Some(crate::sync::hash::content_md5(&content));
+            }
+        }
+        //    b. 其次本地文件算 MD5（fallback，避免写入 40 位 SHA 污染基线）。
+        let local_full = sync_root.join(path);
+        if let Ok(content) = std::fs::read(&local_full) {
+            return Some(crate::sync::hash::content_md5(&content));
+        }
+        //    c. 都不行 → None，不伪造内容哈希。
+        None
+    }
+
     /// 记录同步冲突——将冲突元数据追加到 `app-meta/sync/conflicts.json`，
     /// 并将本地内容备份为 `{path}.conflict.{timestamp}` 文件。
     ///
@@ -303,9 +352,13 @@ impl crate::sync::SyncService {
         // RemoteChanged and download the remote version over local — the opposite of
         // what "keep local" means.
         if let Some(conflict) = state.conflicts.iter().find(|c| c.local_path == path) {
-            state
-                .known_files
-                .insert(path.to_string(), conflict.remote_hash.clone());
+            // 写 known_files 前做 MD5 规范化：旧冲突记录的 remote_hash 可能是
+            // 40 位 Git blob SHA，直接写进 known_files 会再次污染基线。
+            // canonical_known_hash 优先用 remote_snapshot_path / 本地文件算 MD5，
+            // 都不行时跳过 known_files 写入（不 insert 污染值）。
+            if let Some(hash) = Self::canonical_known_hash(sync_root, path, conflict) {
+                state.known_files.insert(path.to_string(), hash);
+            }
             if let Some(t) = state
                 .known_files_updated_at
                 .get(&conflict.remote_path)
@@ -444,14 +497,18 @@ impl crate::sync::SyncService {
                 Some(snapshot_rel) => {
                     // BothChanged + snapshot：用保存的远端副本原子替换本地正文。
                     Self::apply_remote_snapshot(sync_root, path, snapshot_rel)?;
-                    // 基线更新为被选择的远端 snapshot 的 hash（即 conflict.remote_hash）。
-                    state
-                        .known_files
-                        .insert(path.to_string(), conflict.remote_hash.clone());
-                    let now_ts = chrono::Utc::now().timestamp_millis();
-                    state
-                        .known_files_updated_at
-                        .insert(path.to_string(), now_ts);
+                    // 基线更新为被选择的远端 snapshot 的 hash（MD5）。
+                    // 写 known_files 前做 MD5 规范化：旧冲突记录的 remote_hash 可能是
+                    // 40 位 Git blob SHA，直接写进 known_files 会再次污染基线。
+                    // canonical_known_hash 优先用 remote_snapshot_path（刚写入的远端副本）
+                    // 算 MD5，其次本地文件，都不行时跳过 known_files 写入。
+                    if let Some(hash) = Self::canonical_known_hash(sync_root, path, &conflict) {
+                        state.known_files.insert(path.to_string(), hash);
+                        let now_ts = chrono::Utc::now().timestamp_millis();
+                        state
+                            .known_files_updated_at
+                            .insert(path.to_string(), now_ts);
+                    }
                     Ok(false)
                 }
                 None => {
@@ -480,9 +537,13 @@ impl crate::sync::SyncService {
         // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
         // This ensures the merged local version gets uploaded to the remote.
         if let Some(conflict) = state.conflicts.iter().find(|c| c.local_path == path) {
-            state
-                .known_files
-                .insert(path.to_string(), conflict.remote_hash.clone());
+            // 写 known_files 前做 MD5 规范化：旧冲突记录的 remote_hash 可能是
+            // 40 位 Git blob SHA，直接写进 known_files 会再次污染基线。
+            // canonical_known_hash 优先用 remote_snapshot_path / 本地文件算 MD5，
+            // 都不行时跳过 known_files 写入（不 insert 污染值）。
+            if let Some(hash) = Self::canonical_known_hash(sync_root, path, conflict) {
+                state.known_files.insert(path.to_string(), hash);
+            }
             if let Some(t) = state
                 .known_files_updated_at
                 .get(&conflict.remote_path)

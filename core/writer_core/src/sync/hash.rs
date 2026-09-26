@@ -39,9 +39,9 @@ pub(crate) fn content_md5_file(path: &Path) -> std::io::Result<String> {
 /// 名字明确写 blob oid，与 MD5 内容哈希区分。失败返回 `Err`，**不**偷偷退成
 /// MD5（旧 `compute_git_hash` 的 fallback 行为是 bug 的根源）。
 ///
-/// 只在 `git-https` feature 下可用（依赖 `git2`）。不在该 feature 下时调用方
-/// 应跳过依赖 Git blob OID 的比较逻辑。
-#[cfg(feature = "git-https")]
+/// `git2` 在 `core/writer_core/Cargo.toml` 是无条件依赖
+/// （`default-features = false, features = ["vendored-libgit2"]`），
+/// `Oid::hash_object` 不需要 HTTPS feature，因此本函数始终编译。
 pub(crate) fn git_blob_oid(bytes: &[u8]) -> crate::Result<String> {
     git2::Oid::hash_object(git2::ObjectType::Blob, bytes)
         .map(|oid| oid.to_string())
@@ -89,8 +89,8 @@ pub(crate) fn is_legacy_git_blob_oid(s: &str) -> bool {
 ///
 /// # feature gate
 ///
-/// 不在 `git-https` feature 下时无法计算本地 Git blob OID，只能走远端比较路径
-/// （步骤 1）。远端不匹配时直接保持原值。
+/// `git2` 在 `core/writer_core/Cargo.toml` 是无条件依赖，`Oid::hash_object` 不需要
+/// HTTPS feature，因此本函数始终能计算本地 Git blob OID（步骤 1 + 步骤 2 都可用）。
 pub(crate) fn normalize_legacy_base_hash(
     base_hash: &str,
     remote_content_hash: &str,
@@ -118,8 +118,10 @@ pub(crate) fn normalize_legacy_base_hash(
     normalize_via_local_blob_oid(base_hash, local_content_opt, path, sync_root)
 }
 
-/// 在 `git-https` feature 下通过本地 Git blob OID 归一化。
-#[cfg(feature = "git-https")]
+/// 通过本地 Git blob OID 归一化。
+///
+/// 读本地文件算 Git blob OID，与旧 base 比较：相等则把 base 改成本地 MD5，
+/// 否则保持原值。`git2` 无条件依赖，不需要 feature gate。
 fn normalize_via_local_blob_oid(
     base_hash: &str,
     local_content_opt: Option<&str>,
@@ -145,17 +147,6 @@ fn normalize_via_local_blob_oid(
         // 3. 两边都无法证明时保持原值，不猜。
         base_hash.to_string()
     }
-}
-
-/// 不在 `git-https` feature 下无法计算本地 Git blob OID，保持原值。
-#[cfg(not(feature = "git-https"))]
-fn normalize_via_local_blob_oid(
-    base_hash: &str,
-    _local_content_opt: Option<&str>,
-    _path: &str,
-    _sync_root: &Path,
-) -> String {
-    base_hash.to_string()
 }
 
 #[cfg(test)]
@@ -250,7 +241,6 @@ mod tests {
         assert_eq!(result, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
     }
 
-    #[cfg(feature = "git-https")]
     #[test]
     fn test_git_blob_oid_empty() {
         // 空内容的 Git blob OID：e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -260,7 +250,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "git-https")]
     #[test]
     fn test_git_blob_oid_hello_world() {
         assert_eq!(

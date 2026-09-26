@@ -15,6 +15,7 @@
 //! 让同步停在非破坏性状态，不伪造 delete record 传播到远端。
 
 use crate::sync::path::ValidatedSyncPath;
+use crate::sync::provider::SyncProvider;
 use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope};
 use crate::sync::SyncService;
 use std::collections::HashMap;
@@ -250,7 +251,15 @@ pub fn snapshot_local_records_read_only(
 ///
 /// 从远端 manifest 和 tree 构建 `path → ManifestFileRecord` 映射。
 /// 远端 tree 中存在但 manifest 中无记录的文件（首次同步或 manifest 损失），
-/// 用 tree SHA 作为 content_hash 补充记录。
+/// 通过 `provider.read` 读取远端正文算 MD5 作为 `content_hash` 补充记录。
+///
+/// **不变量**：返回的 `ManifestFileRecord.content_hash` 始终是 MD5（32位 hex）。
+/// - manifest 明确给出的 `op == "upsert"` 记录，若 `content_hash` 已是 MD5 直接保留；
+///   若不是 MD5（旧版本可能写入 40 位 Git blob SHA），读远端正文算 MD5 替换。
+/// - tree 有文件但 manifest 无记录的 fallback 记录，读远端正文算 MD5 作为 `content_hash`，
+///   不再把 40 位 Git blob SHA 塞进 `content_hash`。tree SHA 只留在 `remote_tree_files` 里
+///   （由调用方持有），不写进 `content_hash`。
+/// - 远端正文读不到（`provider.read` 返回 `None`）时返回 `Err`，不伪造内容哈希。
 ///
 /// 所有远端路径在进入同步逻辑前必须通过 [`ValidatedSyncPath`] 验证；
 /// 非法路径（绝对路径、`..` 穿越、Windows prefix 等）直接返回错误，
@@ -259,6 +268,8 @@ pub(super) fn build_remote_records(
     remote_manifest: SyncManifest,
     remote_tree_files: &HashMap<String, String>,
     scope: SyncScope,
+    provider: &dyn SyncProvider,
+    source_remote_prefix: &str,
 ) -> crate::Result<HashMap<String, ManifestFileRecord>> {
     let mut remote_records = HashMap::new();
     // 两个来源（remote_manifest.files / remote_tree_files）按同一顺序处理：
@@ -282,6 +293,25 @@ pub(super) fn build_remote_records(
             continue;
         }
         rec.path = normalized.to_string();
+        // manifest 明确给出的 upsert 记录：若 content_hash 不是 MD5（旧版本可能写入
+        // 40 位 Git blob SHA），读远端正文算 MD5 替换，保证 content_hash 始终是 MD5。
+        // 远端文件不存在时返回 Err，不伪造内容哈希。
+        if rec.op == "upsert" && !crate::sync::hash::is_md5_content_hash(&rec.content_hash) {
+            let remote_path = format!("{}/{}", source_remote_prefix, normalized);
+            let remote_obj = provider.read(&remote_path)?;
+            match remote_obj {
+                Some(obj) => {
+                    rec.content_hash = crate::sync::hash::content_md5(&obj.content);
+                }
+                None => {
+                    return Err(crate::Error::Other(format!(
+                        "build_remote_records: manifest upsert for {} but remote object missing \
+                         at {} — cannot fabricate content hash",
+                        normalized, remote_path
+                    )));
+                }
+            }
+        }
         remote_records.insert(normalized.to_string(), rec);
     }
 
@@ -298,11 +328,28 @@ pub(super) fn build_remote_records(
         {
             continue;
         }
+        // tree 有文件但 manifest 无记录：读远端正文算 MD5 作为 content_hash，
+        // 不再用 40 位 Git blob SHA（sha）作为 content_hash。tree SHA 只留在
+        // remote_tree_files 里（由调用方持有），不写进 content_hash。
+        // 远端文件不存在时返回 Err，不伪造内容哈希。
+        let remote_path = format!("{}/{}", source_remote_prefix, normalized);
+        let remote_obj = provider.read(&remote_path)?;
+        let content_hash = match remote_obj {
+            Some(obj) => crate::sync::hash::content_md5(&obj.content),
+            None => {
+                return Err(crate::Error::Other(format!(
+                    "build_remote_records: tree entry for {} but remote object missing at {} \
+                     — cannot fabricate content hash",
+                    normalized, remote_path
+                )));
+            }
+        };
+        let _ = sha; // tree SHA 不写进 content_hash，仅留在 remote_tree_files 里。
         remote_records.insert(
             normalized.to_string(),
             ManifestFileRecord {
                 path: normalized.to_string(),
-                content_hash: sha.clone(),
+                content_hash,
                 updated_at_ms: 0,
                 deleted_at_ms: None,
                 device_id: "remote".to_string(),
