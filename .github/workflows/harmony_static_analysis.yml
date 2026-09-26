@@ -14,6 +14,7 @@ on:
       - 'Cargo.lock'
       - 'tools/build_harmony*'
       - 'tools/setup_harmony_cli.sh'
+      - 'tools/check_codelinter_report.py'
       - '.github/workflows/harmony_static_analysis.yml'
 
 permissions:
