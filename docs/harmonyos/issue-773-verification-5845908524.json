@@ -1,0 +1,63 @@
+{
+  "issue": 773,
+  "comment": 5845908524,
+  "branch": "auto-issue-773-comment-5845908524-20260926202730",
+  "baseline_commit": "68c0afac8c448957a3fe2832b055beab38bdc7cf",
+  "fix_commit": "2c26536edc530ab3719a3d5cb03baf8050b58fe8",
+  "verifier_layer": "fallback-layer-2 (codearts-glm-5.2)",
+  "date": "2026-09-26",
+  "summary": "独立逐文件审查 commit 2c26536ed 的全部修复并运行全部 GREEN 命令，确认评论 5845908524 指出的 4 个问题项均已正确修复且验证通过。",
+  "problem_items": {
+    "1_checkpoint_signature_timing": {
+      "status": "fixed",
+      "file": "apps/harmony/entry/src/main/ets/platform/diagnostics/HarmonyDiagnosticsCheckpoint.ets",
+      "evidence": "onTimerTick() 只在 generateCheckpoint() 返回 true（发布成功）后才提交 lastLogSignature 和清 dirty；失败时 dirty=true 保留重试条件。getLogSignature() 只计算签名不修改 lastLogSignature。"
+    },
+    "2_atomicReplace_failure_handling": {
+      "status": "fixed",
+      "file": "apps/harmony/entry/src/main/ets/platform/diagnostics/HarmonyDiagnosticsCheckpoint.ets",
+      "evidence": "generateCheckpoint() 行 272 if(!this.atomicReplace(...)) 打印 error 并 return false 阻断发布；atomicReplace() 返回 boolean，catch 返回 false。"
+    },
+    "3_opencode_json_restored": {
+      "status": "fixed",
+      "file": ".opencode/opencode.json",
+      "evidence": "commit 2c26536ed 相对 68c0afac 新增 17 行恢复该文件；工作区误删状态已 git restore 恢复。"
+    },
+    "4_hds_bottombar_fab_systemtheme_api26": {
+      "status": "fixed",
+      "subitems": {
+        "hds_v1_to_v2": "HdsSettingsDestinationApi23/HdsWorkspaceDestinationApi23: @Component→@ComponentV2, title/onBack/onShown 改 @Param；SettingsScreen/WorkspaceScreen contentBuilder 改 V2 尾随闭包，消除 this 变壳组件导致 adaptiveState undefined 的 TypeError。",
+        "bottombar_geometry": "HdsPrimaryTabsApi23: HdsTabsController 经构造 options 传入（修复 GetHdsTabsController）；barPosition 放进 options（修复 GetTabBarPosition）；barFloatingStyle 补齐 barWidth；barBottomMargin 用固定设计值 28（修复 ParseProp barBottomMargin）；正常态不强制 barHeight(56) 让 HDS 自己决定，仅隐藏分支压 0。",
+        "independent_fab_coords": "HomeScreen/WorkspaceScreen FAB: 删除 position(100%,100%)+markAnchor+offset 锚点定位，改成基于 widthVp/heightVp/safeBottomVp/pagePadding/FAB_SIZE 的独立绝对坐标，不读取底栏几何。",
+        "system_theme": "module.json5 增加 systemTheme=$profile:theme_config；新增 theme_config.json 声明 $ohos:theme:ohos_theme（修复 not found systemTheme）。",
+        "api26_material_runtime": "新增 HarmonyMaterialRuntimeApi26 从 @kit.ArkUI uiMaterial.getMaterialInfo() 读取材质真实运行态；HarmonyDiagnosticsRuntimeSnapshot 按 API level 分流（API>=26 真实读取，<26 写 unavailable）写入 materialState/materialType/immersiveMaterialSupported/globalMaterialLevel/hdsRequestedMaterialType/hdsRequestedMaterialLevel。API26 文件诚实记录 SDK 实际签名与评论描述的差异。"
+      }
+    }
+  },
+  "green_commands": {
+    "check_rust_safety_patterns": {"cmd": "python3 tools/check_rust_safety_patterns.py .", "exit": 0},
+    "test_check_rust_safety_patterns": {"cmd": "python3 tools/test_check_rust_safety_patterns.py", "exit": 0, "detail": "37 tests OK"},
+    "check_harmony_dto_contract": {"cmd": "python3 tools/check_harmony_dto_contract.py .", "exit": 0, "detail": "ALL PASS"},
+    "test_check_harmony_dto_contract": {"cmd": "python3 tools/test_check_harmony_dto_contract.py", "exit": 0, "detail": "14 tests OK"},
+    "validate_mjs": {"cmd": "node validate.mjs (apps/harmony)", "exit": 0, "detail": "All .ets files pass basic validation"},
+    "hvigorw_compile_arkts": {"cmd": "./hvigorw --mode module -p module=entry@default -p product=default -p buildMode=debug default@CompileArkTS", "exit": 0},
+    "codelinter": {"cmd": "codelinter -f json -o <report>", "exit": 0, "env_note": "本地 DevEco Studio 的 codelinter result 目录由 root 拥有，当前用户无写权限导致 logger 配置失败；复制 codelinter 工具到 /tmp 可写位置后通过。CI 用 setup_harmony_cli.sh 装到 $HOME/.harmony-cli 不受此影响。"},
+    "check_codelinter_report": {"cmd": "python3 tools/check_codelinter_report.py <report>", "exit": 0, "detail": "CodeLinter 报告无 error 级缺陷（12 条 warn/suggestion 均为既有性能建议，非本次引入）"}
+  },
+  "files_reviewed": [
+    "apps/harmony/entry/src/main/ets/platform/diagnostics/HarmonyDiagnosticsCheckpoint.ets",
+    "apps/harmony/entry/src/main/ets/platform/diagnostics/HarmonyDiagnosticsRuntimeSnapshot.ets",
+    "apps/harmony/entry/src/main/ets/platform/material/impl/api26/HarmonyMaterialRuntimeApi26.ets",
+    "apps/harmony/entry/src/main/ets/app/navigation/impl/api23/HdsPrimaryTabsApi23.ets",
+    "apps/harmony/entry/src/main/ets/app/navigation/impl/api23/HdsSettingsDestinationApi23.ets",
+    "apps/harmony/entry/src/main/ets/app/navigation/impl/api23/HdsWorkspaceDestinationApi23.ets",
+    "apps/harmony/entry/src/main/ets/feature/project/ui/HomeScreen.ets",
+    "apps/harmony/entry/src/main/ets/feature/project/ui/WorkspaceScreen.ets",
+    "apps/harmony/entry/src/main/ets/feature/settings/ui/SettingsScreen.ets",
+    "apps/harmony/entry/src/main/module.json5",
+    "apps/harmony/entry/src/main/resources/base/profile/theme_config.json",
+    "apps/harmony/entry/src/main/resources/base/profile/share_files.json",
+    ".opencode/opencode.json"
+  ],
+  "conclusion": "评论 5845908524 指出的全部 4 个问题项已在 commit 2c26536ed 中正确修复；全部 8 个 GREEN 命令 exit 0。Issue #773 暂不关闭（需上层复核确认真机行为）。"
+}
