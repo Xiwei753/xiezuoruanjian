@@ -323,21 +323,8 @@ pub unsafe extern "C" fn writer_core_save_starmap_viewport(
 
 /// # Safety
 /// `graph_json` must be a valid null-terminated UTF-8 C string containing StarMapGraphDto JSON.
-/// Returns a caller-owned C string containing JSON array of StarMapEdgeRenderDto. Free with `writer_core_free_string`.
+/// Returns a caller-owned C string containing JSON StarMapEdgeRenderBatchDto. Free with `writer_core_free_string`.
 #[no_mangle]
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless,
-    deprecated
-)]
 pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
     graph_json: *const c_char,
 ) -> *mut c_char {
@@ -350,7 +337,7 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
             )
         }
     };
-    let graph: crate::api::types::StarMapGraphDto = match serde_json::from_str(&graph_str) {
+    let graph_dto: crate::api::types::StarMapGraphDto = match serde_json::from_str(&graph_str) {
         Ok(g) => g,
         Err(e) => {
             return err_json(
@@ -360,47 +347,17 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
         }
     };
     match with_app_service(|svc| {
-        // Get layout for the starmap to compute node centers
         let layout = svc
-            .get_starmap_layout_raw(&graph.starmap_id)
+            .get_starmap_layout_raw(&graph_dto.starmap_id)
             .map_err(|e| format!("{}", e))?;
-        let node_centers: std::collections::HashMap<String, (f32, f32)> = layout
-            .nodes
-            .iter()
-            .map(|node| {
-                (
-                    node.node_id.clone(),
-                    (node.x + node.width / 2.0, node.y + node.height / 2.0),
-                )
-            })
-            .collect();
-        let edges: Vec<crate::starmap::render::EdgeInput> = graph
-            .edges
-            .into_iter()
-            .filter_map(|edge| {
-                let from = edge.from.target.node_id.filter(|id| !id.is_empty())?;
-                let to = edge.to.target.node_id.filter(|id| !id.is_empty())?;
-                Some(crate::starmap::render::EdgeInput {
-                    id: edge.id,
-                    from,
-                    to,
-                    label: edge.label,
-                })
-            })
-            .collect();
-        let renders = crate::starmap::render::compute_edge_renders(
-            &edges,
-            &node_centers,
+        let graph: crate::starmap::types::StarMapGraph = graph_dto.into();
+        let batch = crate::starmap::render::compute_edge_renders_from_paths(
+            &graph.edges,
+            &graph,
+            &layout,
             &crate::starmap::render::EdgeRenderParams::default(),
         );
-        let json_arr: Vec<serde_json::Value> = renders
-            .into_iter()
-            .map(|r| {
-                serde_json::to_value(crate::api::types::StarMapEdgeRenderDto::from(r))
-                    .unwrap_or_default()
-            })
-            .collect();
-        Ok(json_arr)
+        Ok(crate::api::types::StarMapEdgeRenderBatchDto::from(batch))
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_ERROR", &e),

@@ -1,11 +1,13 @@
 //! # 跨星图引用路径
 //!
 //! `StarMapTargetPath` 是星图中所有跨星图引用的统一类型。
-//! 边的 from/to、链接的 source/target、嵌入的 host_path、传送门的 target 都使用此类型。
+//! 边的 from/to、链接的 source/target、嵌入的 host_path 都使用此类型。
+//! Portal 不再使用此类型——Portal 直接持有 `destination_starmap_id` 和可选落点。
 //!
 //! ## 路径结构
 //!
-//! - `starmap_id`：起始星图 ID
+//! - `starmap_id`：**起始宿主图** ID。语义固定为"引用出发的宿主图"，
+//!   即这条路径从哪张图开始解析。resolver 以此为起点逐段穿越。
 //! - `segments`：中间层级穿越段（`EnterEmbed` 或 `EnterPortal`）
 //! - `target`：路径终点的具体引用（节点/锚点/章节范围等）
 //!
@@ -17,6 +19,9 @@ use serde::{Deserialize, Serialize};
 pub use crate::starmap::semantic::StarMapTargetDetail;
 
 /// 跨星图引用路径：统一的引用模型。
+///
+/// `starmap_id` 语义固定为"起始宿主图"——引用出发的宿主图 ID，
+/// resolver 以此为起点逐段穿越 segments 到达 target。
 ///
 /// 替代旧的 `StarMapDeepTarget`、`StarMapEdgeEndpoint`、`StarMapEndpoint`、`StarMapEndpointPath`。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

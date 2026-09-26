@@ -22,12 +22,12 @@ fn load_full_returns_diagnostics_for_missing_files() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec!["missing-node".to_string()],
         edge_ids: vec![],
@@ -42,6 +42,7 @@ fn load_full_returns_diagnostics_for_missing_files() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -58,12 +59,12 @@ fn load_full_returns_diagnostics_for_missing_link() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -78,6 +79,7 @@ fn load_full_returns_diagnostics_for_missing_link() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -99,7 +101,7 @@ fn load_full_detects_dangling_edge_reference() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
@@ -113,14 +115,14 @@ fn load_full_detects_dangling_edge_reference() {
         label: None,
         payload: None,
         from: StarMapTargetPath {
-            starmap_id: String::new(),
+            starmap_id: "test-id".to_string(),
             segments: vec![],
             target: StarMapTargetDetail::Node {
                 node_id: "n1".to_string(),
             },
         },
         to: StarMapTargetPath {
-            starmap_id: String::new(),
+            starmap_id: "test-id".to_string(),
             segments: vec![],
             target: StarMapTargetDetail::Node {
                 node_id: "nonexistent".to_string(),
@@ -133,7 +135,7 @@ fn load_full_detects_dangling_edge_reference() {
     write_to_bucket(&starmap_dir, "edges", "e1", &edge_json);
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec!["n1".to_string()],
         edge_ids: vec!["e1".to_string()],
@@ -148,6 +150,7 @@ fn load_full_detects_dangling_edge_reference() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -160,7 +163,7 @@ fn load_full_detects_dangling_edge_reference() {
         .filter(|d| d.kind == LoadDiagnosticKind::DanglingReference)
         .collect();
     assert!(!dangling.is_empty());
-    assert!(dangling[0].detail.contains("nonexistent"));
+    assert!(dangling[0].detail.contains("non-existent node"));
 }
 #[test]
 fn load_full_detects_orphan_object_on_disk() {
@@ -168,7 +171,7 @@ fn load_full_detects_orphan_object_on_disk() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
@@ -177,7 +180,7 @@ fn load_full_detects_orphan_object_on_disk() {
     write_to_bucket(&starmap_dir, "nodes", "orphan-node", &orphan_json);
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -192,6 +195,7 @@ fn load_full_detects_orphan_object_on_disk() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -212,7 +216,7 @@ fn load_full_detects_unsupported_version() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
@@ -232,19 +236,16 @@ fn load_full_detects_unsupported_version() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), "test-id");
-    let result = store.load_full().unwrap();
-    let unsupported: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.kind == LoadDiagnosticKind::UnsupportedVersion)
-        .collect();
-    assert!(!unsupported.is_empty());
-    assert!(unsupported[0].detail.contains("99"));
+    let result = store.load_full();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "UNSUPPORTED_VERSION");
 }
 #[test]
 fn load_phased_graph_meta_only() {
@@ -642,8 +643,10 @@ fn save_starmap_graph_corrupt_existing_returns_error() {
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     let result = store2.load_full();
-    assert!(result.is_ok());
-    assert!(!store2.diagnostics().is_empty());
+    assert!(
+        result.is_err(),
+        "fail-closed: corrupt graph.json should cause load_full to return Err"
+    );
 }
 
 #[test]
@@ -887,7 +890,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
 
     // Write graph.json directly to disk with a link_ids entry that has no corresponding file.
     let graph_meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: meta.starmap_id.clone(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -902,6 +905,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
         package_revision: 0,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let graph_json = serde_json::to_string_pretty(&graph_meta).unwrap();
     let graph_path = dir
@@ -915,7 +919,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
     store.load_full().unwrap();
 
-    let result = store.list_links_with_diagnostics();
+    let result = store.list_links_with_diagnostics().unwrap();
     assert!(
         !result.diagnostics.is_empty(),
         "should report missing link as diagnostic"
@@ -1164,7 +1168,7 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
     store2.graph_meta = Some(gm);
     store2.current_load_phase = Some(LoadPhase::GraphMeta);
 
-    let result = store2.list_links_with_diagnostics();
+    let result = store2.list_links_with_diagnostics().unwrap();
     assert!(
         !result.diagnostics.is_empty(),
         "should have diagnostics for corrupt link, got {} diagnostics",
@@ -1212,7 +1216,8 @@ fn prefetch_nearby_objects_no_infinite_recursion_when_no2_index() {
     store.upsert_edge(edge);
 
     store.flush_save_queue().unwrap();
-    store.update_graph_meta_file().unwrap();
+    let dirty = store.collect_flush_dirty_set();
+    store.update_graph_meta_file(&dirty).unwrap();
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     let result = store2.load_phased(LoadPhase::PrefetchNearbyObjects);
@@ -1220,5 +1225,177 @@ fn prefetch_nearby_objects_no_infinite_recursion_when_no2_index() {
         result.is_ok(),
         "load_phased must not stack overflow: {:?}",
         result
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 测试组 B：phased/full loader 服从 GraphMeta 成员列表（Issue #772 回归）
+// ---------------------------------------------------------------------------
+
+fn make_layout_node(id: &str, x: f32) -> StarMapLayoutNode {
+    StarMapLayoutNode {
+        node_id: id.to_string(),
+        x,
+        y: 0.0,
+        width: 100.0,
+        height: 50.0,
+        radius: 25.0,
+        collapsed: false,
+        z_index: 0,
+        scale: 1.0,
+        depth: 0.0,
+        focus_weight: 0.0,
+        orbit_group: None,
+    }
+}
+
+fn wide_viewport() -> StarMapViewport {
+    StarMapViewport {
+        scale: 1.0,
+        offset_x: 0.0,
+        offset_y: 0.0,
+        width: 500.0,
+        height: 500.0,
+    }
+}
+
+#[test]
+fn phased_load_skips_viewport_node_not_in_graph_meta() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+    store.upsert_node(make_test_node("n1", "N1"));
+    store.upsert_node(make_test_node("n_old", "Old"));
+    let mut layout = StarMapLayout::default();
+    layout.nodes.push(make_layout_node("n1", 0.0));
+    layout.nodes.push(make_layout_node("n_old", 50.0));
+    store.set_layout(layout);
+    store.set_viewport(wide_viewport());
+    store.flush().unwrap();
+
+    // 手动改 graph.json：node_ids 只留 n1，n_old 成为磁盘 orphan
+    let graph_json_path = store.starmap_dir().join("graph.json");
+    let mut gm: GraphMeta =
+        serde_json::from_str(&std::fs::read_to_string(&graph_json_path).unwrap()).unwrap();
+    gm.node_ids = vec!["n1".to_string()];
+    std::fs::write(&graph_json_path, serde_json::to_string_pretty(&gm).unwrap()).unwrap();
+
+    let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+    store2
+        .load_phased(LoadPhase::CurrentViewportObjects)
+        .unwrap();
+
+    assert!(
+        store2.get_node("n1").is_some(),
+        "n1 is in GraphMeta.node_ids and should be loaded"
+    );
+    assert!(
+        store2.get_node("n_old").is_none(),
+        "n_old is not in GraphMeta.node_ids and should be skipped as orphan"
+    );
+}
+
+#[test]
+fn phased_load_skips_stale_edge_relation_index() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+    let sid = &meta.starmap_id;
+
+    let mut store = StarMapStore::new(dir.path(), sid);
+    store.upsert_node(make_test_node("n1", "N1"));
+    store.upsert_node(make_test_node("n2", "N2"));
+    for eid in ["e1", "e_stale"] {
+        store.upsert_edge(StarMapEdge {
+            id: eid.to_string(),
+            from: StarMapTargetPath {
+                starmap_id: sid.to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "n1".to_string(),
+                },
+            },
+            to: StarMapTargetPath {
+                starmap_id: sid.to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "n2".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        });
+    }
+    let mut layout = StarMapLayout::default();
+    layout.nodes.push(make_layout_node("n1", 0.0));
+    layout.nodes.push(make_layout_node("n2", 50.0));
+    store.set_layout(layout);
+    store.set_viewport(wide_viewport());
+    store.flush().unwrap();
+
+    // 手动改 graph.json：edge_ids 只留 e1，edge_relation_index 保留 e1 和 e_stale
+    let graph_json_path = store.starmap_dir().join("graph.json");
+    let mut gm: GraphMeta =
+        serde_json::from_str(&std::fs::read_to_string(&graph_json_path).unwrap()).unwrap();
+    gm.edge_ids = vec!["e1".to_string()];
+    std::fs::write(&graph_json_path, serde_json::to_string_pretty(&gm).unwrap()).unwrap();
+
+    let mut store2 = StarMapStore::new(dir.path(), sid);
+    store2
+        .load_phased(LoadPhase::CurrentViewportObjects)
+        .unwrap();
+
+    assert!(
+        store2.get_edge("e1").is_some(),
+        "e1 is in GraphMeta.edge_ids and should be loaded"
+    );
+    assert!(
+        store2.get_edge("e_stale").is_none(),
+        "e_stale is not in GraphMeta.edge_ids and should be skipped"
+    );
+}
+
+#[test]
+fn full_load_evicts_non_dirty_orphan_from_memory() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+    // 手动 insert orphan node（不在 GraphMeta.node_ids）
+    store.upsert_node(make_test_node("n_old", "Orphan"));
+    assert!(store.get_node("n_old").is_some());
+    // 清掉 dirty，让它成为非 dirty orphan（partial cache 残留或旧 revision 残留）
+    store.dirty_nodes.clear();
+
+    store.load_full().unwrap();
+
+    assert!(
+        store.get_node("n_old").is_none(),
+        "non-dirty orphan not in GraphMeta.node_ids should be evicted by load_full"
+    );
+}
+
+#[test]
+fn full_load_keeps_dirty_object_not_in_graph_meta() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+    // 刚 add 的新 node，在 dirty_nodes，还没 flush，不在 GraphMeta.node_ids
+    store.upsert_node(make_test_node("n_new", "New"));
+    assert!(store.dirty_nodes.contains("n_new"));
+
+    store.load_full().unwrap();
+
+    assert!(
+        store.get_node("n_new").is_some(),
+        "dirty object should be kept by load_full even if not in GraphMeta.node_ids"
     );
 }

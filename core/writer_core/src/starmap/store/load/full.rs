@@ -1,10 +1,5 @@
-use std::collections::HashMap;
+use crate::error::{Error, Result};
 
-use crate::error::Result;
-use crate::starmap::types::*;
-
-use super::super::meta::{DeletedSinceLastSync, GraphMeta};
-use super::super::relation_index::*;
 use super::super::types::*;
 use super::super::StarMapStore;
 
@@ -25,150 +20,21 @@ impl StarMapStore {
         let graph_dir = self.starmap_dir();
         let graph_json_path = graph_dir.join("graph.json");
 
-        if graph_json_path.exists() {
-            let content = std::fs::read_to_string(&graph_json_path).unwrap_or_default();
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                let schema_version_str = value
-                    .get("schemaVersion")
-                    .or_else(|| value.get("schema_version"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-
-                let is_new_format = schema_version_str.as_deref() == Some("2");
-
-                if let Some(ref sv) = schema_version_str {
-                    if sv != "2" && sv != "1" {
-                        diagnostics.push(LoadDiagnostic {
-                            kind: LoadDiagnosticKind::UnsupportedVersion,
-                            object_type: "graph".to_string(),
-                            object_id: self.starmap_id.clone(),
-                            detail: format!("unsupported schemaVersion: {}", sv),
-                        });
-                    }
-                }
-
-                if is_new_format {
-                    match serde_json::from_str::<GraphMeta>(&content) {
-                        Ok(meta) => {
-                            self.graph_meta = Some(meta);
-                        }
-                        Err(e) => {
-                            diagnostics.push(LoadDiagnostic {
-                                kind: LoadDiagnosticKind::Corrupt,
-                                object_type: "graph".to_string(),
-                                object_id: self.starmap_id.clone(),
-                                detail: format!("graph.json v2 parse failed: {}", e),
-                            });
-                            self.scan_objects_from_disk(&mut diagnostics);
-                        }
-                    }
-                } else if let Ok(graph) = serde_json::from_str::<StarMapGraph>(&content) {
-                    self.graph_meta = Some(GraphMeta {
-                        schema_version: "2".to_string(),
-                        starmap_id: graph.starmap_id.clone(),
-                        node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
-                        edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
-                        embed_instance_ids: graph
-                            .embeds
-                            .iter()
-                            .map(|e| e.instance_id.clone())
-                            .collect(),
-                        link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
-                        hyperlink_ids: vec![],
-                        edge_relation_index: graph
-                            .edges
-                            .iter()
-                            .map(|e| EdgeRelationIndex {
-                                edge_id: e.id.clone(),
-                                from: e.from.clone(),
-                                to: e.to.clone(),
-                            })
-                            .collect(),
-                        embed_host_index: graph
-                            .embeds
-                            .iter()
-                            .map(|e| EmbedHostIndex {
-                                instance_id: e.instance_id.clone(),
-                                host_path: e.host_path.clone(),
-                            })
-                            .collect(),
-                        link_relation_index: graph
-                            .links
-                            .iter()
-                            .map(|l| LinkRelationIndex {
-                                link_id: l.link_id.clone(),
-                                source_node_id: super::super::relation_index::target_path_node_id(
-                                    &l.source,
-                                )
-                                .unwrap_or_default()
-                                .to_string(),
-                            })
-                            .collect(),
-                        hyperlink_relation_index: vec![],
-                        node_kind_counts: {
-                            let mut counts = HashMap::new();
-                            for node in &graph.nodes {
-                                *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
-                            }
-                            counts
-                        },
-                        package_revision: 0,
-                        updated_at: crate::starmap::now_epoch(),
-                        deleted_since_last_sync: DeletedSinceLastSync::default(),
-                    });
-                    for node in &graph.nodes {
-                        self.nodes.insert(node.id.clone(), node.clone());
-                        self.dirty_nodes.insert(node.id.clone());
-                    }
-                    for edge in &graph.edges {
-                        self.edges.insert(edge.id.clone(), edge.clone());
-                        self.dirty_edges.insert(edge.id.clone());
-                    }
-                    for embed in &graph.embeds {
-                        self.embeds.insert(embed.instance_id.clone(), embed.clone());
-                        self.dirty_embeds.insert(embed.instance_id.clone());
-                    }
-                    for link in &graph.links {
-                        self.links.insert(link.link_id.clone(), link.clone());
-                        self.dirty_links.insert(link.link_id.clone());
-                    }
-                    self.dirty_graph_meta = true;
-                    self.enqueue_save(SaveQueueEntry::Node);
-                    self.enqueue_save(SaveQueueEntry::Edge);
-                    self.enqueue_save(SaveQueueEntry::Embed);
-                    self.enqueue_save(SaveQueueEntry::Link);
-                    self.enqueue_save(SaveQueueEntry::GraphMeta);
-                    self.record_migration(
-                        "graph_v1_to_v2",
-                        "migrated inline v1 graph.json to v2 package format",
-                    );
-                } else {
-                    match self.load_graph_meta_from_file(&graph_json_path) {
-                        Ok(meta) => {
-                            self.graph_meta = Some(meta);
-                        }
-                        Err(e) => {
-                            diagnostics.push(LoadDiagnostic {
-                                kind: LoadDiagnosticKind::Corrupt,
-                                object_type: "graph".to_string(),
-                                object_id: self.starmap_id.clone(),
-                                detail: format!("graph.json parse failed: {}", e),
-                            });
-                            self.scan_objects_from_disk(&mut diagnostics);
-                        }
-                    }
-                }
-            } else {
-                diagnostics.push(LoadDiagnostic {
-                    kind: LoadDiagnosticKind::Corrupt,
-                    object_type: "graph".to_string(),
-                    object_id: self.starmap_id.clone(),
-                    detail: "graph.json is not valid JSON".to_string(),
-                });
-                self.scan_objects_from_disk(&mut diagnostics);
+        match super::phased::load_current_graph_meta(&graph_json_path, &self.starmap_id) {
+            Ok(Some(meta)) => {
+                self.graph_meta = Some(meta);
             }
-        } else {
-            self.scan_objects_from_disk(&mut diagnostics);
+            Ok(None) => {
+                // graph.json 不存在：允许新空图，保持空图，不调 scan_objects_from_disk。
+            }
+            Err(Error::UnsupportedVersion { version }) => {
+                return Err(Error::UnsupportedVersion { version });
+            }
+            Err(e) => {
+                // JSON corrupt / IO read failed：fail-closed 直接返回 Err，
+                // 不再记 Corrupt diagnostic 后继续 scan_objects_from_disk。
+                return Err(e);
+            }
         }
 
         let node_ids = self
@@ -239,6 +105,50 @@ impl StarMapStore {
                     self.links.insert(link_id.clone(), link_path);
                 }
             }
+        }
+
+        // 收死最终成员集合：非 dirty 的内存对象如果不在 GraphMeta 成员列表里，
+        // 视为 orphan（partial cache 残留或磁盘 revision 切换留下的旧对象），移除。
+        // dirty 对象保留：刚被 CRUD 修改、还没 flush 的合法对象（如刚 add 的 node
+        // 还没进 GraphMeta.node_ids，但它在 dirty_nodes 里）。
+        // 这样 to_starmap_graph() 只返回 GraphMeta 声明的完整集合 + dirty 对象，不含 orphan。
+        {
+            let declared_node_ids: std::collections::HashSet<String> = self
+                .graph_meta
+                .as_ref()
+                .map(|m| m.node_ids.iter().cloned().collect())
+                .unwrap_or_default();
+            let declared_edge_ids: std::collections::HashSet<String> = self
+                .graph_meta
+                .as_ref()
+                .map(|m| m.edge_ids.iter().cloned().collect())
+                .unwrap_or_default();
+            let declared_embed_ids: std::collections::HashSet<String> = self
+                .graph_meta
+                .as_ref()
+                .map(|m| m.embed_instance_ids.iter().cloned().collect())
+                .unwrap_or_default();
+            let declared_link_ids: std::collections::HashSet<String> = self
+                .graph_meta
+                .as_ref()
+                .map(|m| m.link_ids.iter().cloned().collect())
+                .unwrap_or_default();
+            let declared_hl_ids: std::collections::HashSet<String> = self
+                .graph_meta
+                .as_ref()
+                .map(|m| m.hyperlink_ids.iter().cloned().collect())
+                .unwrap_or_default();
+
+            self.nodes
+                .retain(|id, _| self.dirty_nodes.contains(id) || declared_node_ids.contains(id));
+            self.edges
+                .retain(|id, _| self.dirty_edges.contains(id) || declared_edge_ids.contains(id));
+            self.embeds
+                .retain(|id, _| self.dirty_embeds.contains(id) || declared_embed_ids.contains(id));
+            self.links
+                .retain(|id, _| self.dirty_links.contains(id) || declared_link_ids.contains(id));
+            self.hyperlinks
+                .retain(|id, _| self.dirty_hyperlinks.contains(id) || declared_hl_ids.contains(id));
         }
 
         self.layout = self.try_load_layout();

@@ -44,10 +44,20 @@ pub enum StarMapEdgeKind {
     Custom,
 }
 
+/// 当前支持的星图 import/export package schema 版本。
+///
+/// `import_or_replace_starmap_package` 只接受此版本，不匹配直接
+/// 返回 `UnsupportedVersion`。`Default` 和 `to_starmap_graph()`
+/// 固定写出此版本。
+///
+/// 版本 2：删除了旧 id/title/timestamps 和旧 Edge/Embed/Link 引用字段，
+/// 采用新的 StarMapTargetPath 引用模型。
+pub const CURRENT_GRAPH_SCHEMA_VERSION: u32 = 2;
+
 /// 星图图数据：节点、边、嵌入、链接的完整集合。
 ///
 /// 持久化为 `graph.json`（单文件模式）或 `graph.json` + 子目录（包存储模式）。
-/// `schema_version` 用于未来格式迁移；当前固定为 1。
+/// `schema_version` 用于未来格式迁移；当前固定为 2。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapGraph {
@@ -66,7 +76,7 @@ pub struct StarMapGraph {
 impl Default for StarMapGraph {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: CURRENT_GRAPH_SCHEMA_VERSION,
             starmap_id: String::new(),
             nodes: vec![],
             edges: vec![],

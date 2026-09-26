@@ -1,7 +1,11 @@
 use super::super::*;
 use super::*;
-use crate::starmap::semantic::StarMapTargetDetail;
-use crate::starmap::types::reference::StarMapTargetPath;
+use crate::facade::WriterCore;
+use crate::starmap::semantic::{
+    StarMapPortal, StarMapPortalMode, StarMapPortalPreviewPolicy, StarMapTargetDetail,
+};
+use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
+use crate::starmap::types::StarMapHyperlinkPatch;
 use tempfile::TempDir;
 
 #[test]
@@ -265,27 +269,6 @@ fn update_embed_host_marks_dirty_graph_meta() {
 }
 
 #[test]
-fn delete_also_removes_flat_path() {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
-
-    let starmap_dir = dir.path().join("starmaps").join(&meta.starmap_id);
-    let nodes_dir = starmap_dir.join("nodes");
-    std::fs::create_dir_all(&nodes_dir).unwrap();
-
-    let flat_path = nodes_dir.join("n1.json");
-    std::fs::write(&flat_path, "{}").unwrap();
-    assert!(flat_path.exists(), "flat file should exist before delete");
-
-    package_storage::delete_node_file(dir.path(), &meta.starmap_id, "n1").unwrap();
-    assert!(
-        !flat_path.exists(),
-        "flat file should be removed by delete_node_file"
-    );
-}
-
-#[test]
 fn add_link_updates_graph_meta_link_ids() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
@@ -388,7 +371,6 @@ fn hyperlink_add_update_delete_round_trip() {
         },
         target_uri: "https://example.com".to_string(),
         label: Some("Example".to_string()),
-        target_starmap_id: None,
         created_at: 0,
         updated_at: 0,
     });
@@ -402,7 +384,14 @@ fn hyperlink_add_update_delete_round_trip() {
     assert_eq!(hl.target_uri, "https://example.com");
 
     store2
-        .update_hyperlink("hl1", Some("Updated"), None)
+        .update_hyperlink(
+            "hl1",
+            &StarMapHyperlinkPatch {
+                label: Some(Some("Updated".to_string())),
+                target_uri: None,
+                source: None,
+            },
+        )
         .unwrap();
     store2.flush().unwrap();
 
@@ -419,4 +408,306 @@ fn hyperlink_add_update_delete_round_trip() {
     let mut store4 = StarMapStore::new(dir.path(), &meta.starmap_id);
     store4.load_full().unwrap();
     assert_eq!(store4.hyperlink_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 测试组 A：delete Node/Embed 走统一 validator + 级联 EnterPortal/EnterEmbed
+// 第一段引用（Issue #772 回归）
+// ---------------------------------------------------------------------------
+
+/// 构造一个 portal 节点（destination 指向 `dest_starmap_id`）。
+fn make_portal_node(id: &str, title: &str, dest_starmap_id: &str) -> StarMapNode {
+    let mut node = make_test_node(id, title);
+    node.portal = Some(StarMapPortal {
+        destination_starmap_id: dest_starmap_id.to_string(),
+        destination_target: None,
+        mode: StarMapPortalMode::EnterPortal,
+        preview_policy: StarMapPortalPreviewPolicy::default(),
+    });
+    node
+}
+
+#[test]
+fn delete_node_cascades_edge_with_first_segment_enter_portal() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Host", "", None).unwrap();
+    let other = crate::starmap::create_starmap(dir.path(), "Other", "", None).unwrap();
+    let host = &meta.starmap_id;
+
+    let mut store = StarMapStore::new(dir.path(), host);
+    store.upsert_node(make_portal_node("A", "Portal A", &other.starmap_id));
+    store.upsert_node(make_test_node("B", "Node B"));
+
+    // edge E：from 第一段 EnterPortal{A} 穿越 A 的 portal
+    let edge_e = StarMapEdge {
+        id: "E".to_string(),
+        from: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![StarMapPathSegment::EnterPortal {
+                node_id: "A".to_string(),
+            }],
+            target: StarMapTargetDetail::Node {
+                node_id: "B".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "B".to_string(),
+            },
+        },
+        kind: StarMapEdgeKind::References,
+        label: None,
+        payload: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_edge(edge_e);
+    assert!(store.get_edge("E").is_some());
+
+    store.delete_node("A").unwrap();
+
+    assert!(store.get_node("A").is_none(), "node A should be deleted");
+    assert!(
+        store.get_edge("E").is_none(),
+        "edge E should be cascaded deleted (from first segment EnterPortal references A)"
+    );
+}
+
+#[test]
+fn delete_node_cascades_link_with_first_segment_enter_portal() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Host", "", None).unwrap();
+    let other = crate::starmap::create_starmap(dir.path(), "Other", "", None).unwrap();
+    let host = &meta.starmap_id;
+
+    let mut store = StarMapStore::new(dir.path(), host);
+    store.upsert_node(make_portal_node("A", "Portal A", &other.starmap_id));
+    store.upsert_node(make_test_node("B", "Node B"));
+
+    let link = StarMapLink {
+        link_id: "L".to_string(),
+        source: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![StarMapPathSegment::EnterPortal {
+                node_id: "A".to_string(),
+            }],
+            target: StarMapTargetDetail::Starmap,
+        },
+        target: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        label: Some("L".to_string()),
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_link(link);
+    assert!(store.get_link("L").is_some());
+
+    store.delete_node("A").unwrap();
+
+    assert!(store.get_node("A").is_none(), "node A should be deleted");
+    assert!(
+        store.get_link("L").is_none(),
+        "link L should be cascaded deleted (source first segment EnterPortal references A)"
+    );
+}
+
+#[test]
+fn delete_embed_cascades_edge_with_first_segment_enter_embed() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Host", "", None).unwrap();
+    let other = crate::starmap::create_starmap(dir.path(), "Other", "", None).unwrap();
+    let host = &meta.starmap_id;
+
+    let mut store = StarMapStore::new(dir.path(), host);
+    store.upsert_node(make_test_node("B", "Node B"));
+    let embed = StarMapEmbed {
+        instance_id: "I".to_string(),
+        target_starmap_id: other.starmap_id.clone(),
+        label: None,
+        display_policy: crate::starmap::semantic::StarMapDisplayPolicy::default(),
+        open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
+        placement: StarMapEmbedPlacement::default(),
+        target_viewport: StarMapEmbedViewport::default(),
+        host_path: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "B".to_string(),
+            },
+        },
+        provenance: crate::starmap::semantic::StarMapProvenance::default(),
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_embed(embed);
+
+    // edge E：from 第一段 EnterEmbed{I}
+    let edge_e = StarMapEdge {
+        id: "E".to_string(),
+        from: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "I".to_string(),
+            }],
+            target: StarMapTargetDetail::Node {
+                node_id: "B".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "B".to_string(),
+            },
+        },
+        kind: StarMapEdgeKind::References,
+        label: None,
+        payload: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_edge(edge_e);
+    assert!(store.get_edge("E").is_some());
+
+    store.delete_embed("I").unwrap();
+
+    assert!(store.get_embed("I").is_none(), "embed I should be deleted");
+    assert!(
+        store.get_edge("E").is_none(),
+        "edge E should be cascaded deleted (from first segment EnterEmbed references I)"
+    );
+}
+
+#[test]
+fn delete_embed_cascades_link_and_hyperlink_with_first_segment_enter_embed() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Host", "", None).unwrap();
+    let other = crate::starmap::create_starmap(dir.path(), "Other", "", None).unwrap();
+    let host = &meta.starmap_id;
+
+    let mut store = StarMapStore::new(dir.path(), host);
+    store.upsert_node(make_test_node("B", "Node B"));
+    let embed = StarMapEmbed {
+        instance_id: "I".to_string(),
+        target_starmap_id: other.starmap_id.clone(),
+        label: None,
+        display_policy: crate::starmap::semantic::StarMapDisplayPolicy::default(),
+        open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
+        placement: StarMapEmbedPlacement::default(),
+        target_viewport: StarMapEmbedViewport::default(),
+        host_path: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "B".to_string(),
+            },
+        },
+        provenance: crate::starmap::semantic::StarMapProvenance::default(),
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_embed(embed);
+
+    let enter_embed = StarMapPathSegment::EnterEmbed {
+        instance_id: "I".to_string(),
+    };
+    let link = StarMapLink {
+        link_id: "L".to_string(),
+        source: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![enter_embed.clone()],
+            target: StarMapTargetDetail::Starmap,
+        },
+        target: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        label: Some("L".to_string()),
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_link(link);
+
+    let hyperlink = StarMapHyperlink {
+        hyperlink_id: "H".to_string(),
+        source: StarMapTargetPath {
+            starmap_id: host.to_string(),
+            segments: vec![enter_embed],
+            target: StarMapTargetDetail::Starmap,
+        },
+        target_uri: "https://example.com".to_string(),
+        label: Some("H".to_string()),
+        created_at: 0,
+        updated_at: 0,
+    };
+    store.upsert_hyperlink(hyperlink);
+    assert!(store.get_link("L").is_some());
+    assert!(store.get_hyperlink("H").is_some());
+
+    store.delete_embed("I").unwrap();
+
+    assert!(store.get_embed("I").is_none(), "embed I should be deleted");
+    assert!(
+        store.get_link("L").is_none(),
+        "link L should be cascaded deleted (source first segment EnterEmbed references I)"
+    );
+    assert!(
+        store.get_hyperlink("H").is_none(),
+        "hyperlink H should be cascaded deleted (source first segment EnterEmbed references I)"
+    );
+}
+
+#[test]
+fn delete_starmap_node_validates_candidate_before_mutating() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Host", "", None).unwrap();
+    let host = &meta.starmap_id;
+
+    // node A：普通节点（将被删）。
+    // node B：portal 落点指向 A（destination_starmap_id = host, destination_target = Node{A}）。
+    // 删除 A 后 B.portal 落点 dangling → validate_graph 拒绝 candidate → Err，store 不变。
+    // 这验证 delete 走了 candidate validate，不是先删后校验。
+    let mut store = StarMapStore::new(dir.path(), host);
+    store.upsert_node(make_test_node("A", "Node A"));
+    let mut node_b = make_test_node("B", "Portal B");
+    node_b.portal = Some(StarMapPortal {
+        destination_starmap_id: host.to_string(),
+        destination_target: Some(StarMapTargetDetail::Node {
+            node_id: "A".to_string(),
+        }),
+        mode: StarMapPortalMode::EnterPortal,
+        preview_policy: StarMapPortalPreviewPolicy::default(),
+    });
+    store.upsert_node(node_b);
+    store.flush().unwrap();
+
+    let core = WriterCore::new(dir.path(), dir.path().join("projects"));
+    let result = core.delete_starmap_node(host, "A");
+    assert!(
+        result.is_err(),
+        "delete_starmap_node should return Err: deleting A leaves B.portal destination dangling"
+    );
+
+    // store 状态未变：A 还在，B 还在（candidate validate 失败，未真正改 Store）
+    let mut store2 = StarMapStore::new(dir.path(), host);
+    store2.load_full().unwrap();
+    assert!(
+        store2.get_node("A").is_some(),
+        "node A should still exist (store unchanged after validate rejection)"
+    );
+    assert!(
+        store2.get_node("B").is_some(),
+        "node B should still exist (store unchanged after validate rejection)"
+    );
 }

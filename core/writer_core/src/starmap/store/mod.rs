@@ -18,14 +18,13 @@
 //! ├── graph.json                          -- 星图元信息、成员 ID 列表、规范顺序、package revision
 //! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
 //! ├── edges/<bucket>/<edge_id>.json       -- 单条边
-//! ├── child_starmaps/<bucket>/<instance_id>.json -- 子星图放置
+//! ├── embeds/<bucket>/<instance_id>.json -- 嵌入放置
 //! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
 //! ├── links/<bucket>/<link_id>.json      -- 链接
 //! ├── layouts/default/
 //! │   ├── kind.json                       -- 布局类型
 //! │   └── nodes/<bucket>.json            -- 布局节点分片
 //! └── metadata/
-//!     ├── migration.json                  -- 迁移记录
 //!     └── recovery.json                  -- 解析失败对象的恢复记录
 //!
 //! session/starmaps/<starmap_id>/
@@ -40,7 +39,6 @@ use crate::starmap::types::*;
 pub mod crud;
 pub mod load;
 pub mod meta;
-pub mod migration;
 pub mod recovery;
 pub mod relation_index;
 pub mod save;
@@ -50,7 +48,7 @@ pub mod types;
 pub use meta::DeletedSinceLastSync;
 pub use meta::GraphMeta;
 pub use relation_index::{
-    EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
+    CascadeIds, EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
 };
 pub use snapshot::{PhasedSnapshotRequest, StarMapPhasedSnapshot};
 pub use types::*;
@@ -202,18 +200,53 @@ impl StarMapStore {
             || self.dirty_graph_meta
     }
 
-    pub fn clear_persistent_deletion_log(&mut self) {
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.entries.clear();
-            self.dirty_graph_meta = true;
+    /// 快照当前 dirty 集合，供测试验证 `update_graph_meta_file` 记录对象 revision。
+    /// 生产路径 `flush_save_queue` 已改用 `successful_writes`/`successful_deletes`，
+    /// 不再调用此方法；保留供测试断言使用。
+    #[cfg(test)]
+    pub(in crate::starmap::store) fn collect_flush_dirty_set(&self) -> FlushDirtySet {
+        FlushDirtySet {
+            nodes: self.dirty_nodes.clone(),
+            edges: self.dirty_edges.clone(),
+            embeds: self.dirty_embeds.clone(),
+            links: self.dirty_links.clone(),
+            hyperlinks: self.dirty_hyperlinks.clone(),
+            layout: self.dirty_layout,
+            deleted_nodes: self.deleted_node_ids.clone(),
+            deleted_edges: self.deleted_edge_ids.clone(),
+            deleted_embeds: self.deleted_embed_ids.clone(),
+            deleted_links: self.deleted_link_ids.clone(),
+            deleted_hyperlinks: self.deleted_hyperlink_ids.clone(),
         }
     }
 
-    pub fn compact_deletion_log(&mut self, keep_since_revision: u64) {
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.compact(keep_since_revision);
-            self.dirty_graph_meta = true;
+    /// 确认到 `acknowledged_revision`（含）为止的删除 tombstone 已被同步方
+    /// 持久化，可以安全清理。保留 `deleted_at_revision > acknowledged_revision`
+    /// 的 tombstone。清理后标记 graph_meta 为 dirty，下次 flush 会把清理后的
+    /// deletion log 写回磁盘。
+    pub fn acknowledge_deletions(
+        &mut self,
+        acknowledged_revision: u64,
+    ) -> crate::error::Result<()> {
+        // Fix 4: ack revision 不能大于当前 package_revision。
+        self.reload_graph_meta_if_stale()?;
+        if acknowledged_revision > self.package_revision {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "acknowledged_revision ({}) cannot exceed current package_revision ({})",
+                    acknowledged_revision, self.package_revision
+                ),
+            )));
         }
+        if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync
+                .acknowledge(acknowledged_revision);
+            self.dirty_graph_meta = true;
+            // Fix 4: 必须 enqueue GraphMeta，否则 flush_save_queue 不会写 graph meta。
+            self.enqueue_save(crate::starmap::store::types::SaveQueueEntry::GraphMeta);
+        }
+        Ok(())
     }
 }
 

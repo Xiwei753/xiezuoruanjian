@@ -34,8 +34,7 @@ impl StarMapStore {
     pub fn update_hyperlink(
         &mut self,
         hyperlink_id: &str,
-        label: Option<&str>,
-        target_uri: Option<&str>,
+        patch: &crate::starmap::types::StarMapHyperlinkPatch,
     ) -> Result<StarMapHyperlink> {
         if !self.hyperlinks.contains_key(hyperlink_id) {
             self.ensure_hyperlink_loaded(hyperlink_id)?;
@@ -46,11 +45,15 @@ impl StarMapStore {
                 "Hyperlink not found",
             ))
         })?;
-        if let Some(l) = label {
-            hl.label = Some(l.to_string());
+        if let Some(ref l) = patch.label {
+            hl.label = l.clone();
         }
-        if let Some(u) = target_uri {
-            hl.target_uri = u.to_string();
+        if let Some(ref u) = patch.target_uri {
+            crate::starmap::graph::validation::validate_hyperlink_uri(u)?;
+            hl.target_uri = u.clone();
+        }
+        if let Some(ref s) = patch.source {
+            hl.source = s.clone();
         }
         hl.updated_at = crate::starmap::now_epoch();
         let updated = hl.clone();

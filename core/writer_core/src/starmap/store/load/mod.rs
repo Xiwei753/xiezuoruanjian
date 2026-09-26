@@ -1,5 +1,5 @@
 mod diagnostic;
 mod full;
 mod lazy;
-mod phased;
+pub(in crate::starmap) mod phased;
 mod try_load;

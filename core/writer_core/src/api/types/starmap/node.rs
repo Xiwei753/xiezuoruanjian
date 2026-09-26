@@ -261,6 +261,13 @@ pub struct StarMapNodePatchInputDto {
     pub payload: Option<String>,
     pub clear_payload: bool,
     pub tags: Option<Vec<String>>,
+    pub content: Option<StarMapNodeContentDto>,
+    pub anchors: Option<Vec<StarMapAnchorDto>>,
+    pub portal: Option<StarMapPortalDto>,
+    pub clear_portal: bool,
+    pub display_policy: Option<StarMapDisplayPolicyDto>,
+    pub open_behavior: Option<StarMapOpenBehaviorDto>,
+    pub provenance: Option<StarMapProvenanceDto>,
 }
 
 impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
@@ -274,12 +281,16 @@ impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
                 d.payload.map(Some)
             },
             tags: d.tags,
-            content: None,
-            anchors: None,
-            portal: None,
-            display_policy: None,
-            open_behavior: None,
-            provenance: None,
+            content: d.content,
+            anchors: d.anchors,
+            portal: if d.clear_portal {
+                Some(None)
+            } else {
+                d.portal.map(Some)
+            },
+            display_policy: d.display_policy,
+            open_behavior: d.open_behavior,
+            provenance: d.provenance,
         }
     }
 }

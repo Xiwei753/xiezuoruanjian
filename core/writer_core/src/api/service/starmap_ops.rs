@@ -284,6 +284,17 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// Fix 4: 确认星图删除 tombstone 已被同步方持久化。
+    pub fn ack_starmap_deletions(
+        &self,
+        starmap_id: &str,
+        acknowledged_revision: u64,
+    ) -> ApiResult<()> {
+        self.core_write()
+            .ack_starmap_deletions(starmap_id, acknowledged_revision)
+            .map_err(WriterError::from)
+    }
+
     pub fn get_starmap_motion_policy(
         &self,
     ) -> ApiResult<crate::api::types::StarMapMotionPolicyDto> {
@@ -439,40 +450,18 @@ impl WriterCoreApi {
         &self,
         graph: crate::api::types::StarMapGraphDto,
         layout: crate::api::types::StarMapLayoutDto,
-    ) -> ApiResult<Vec<crate::api::types::StarMapEdgeRenderDto>> {
-        let node_centers: HashMap<String, (f32, f32)> = layout
-            .nodes
-            .iter()
-            .map(|node| {
-                (
-                    node.node_id.clone(),
-                    (node.x + node.width / 2.0, node.y + node.height / 2.0),
-                )
-            })
-            .collect();
-        let edges: Vec<crate::starmap::render::EdgeInput> = graph
-            .edges
-            .into_iter()
-            .filter_map(|edge| {
-                let from = edge.from.target.node_id.clone()?;
-                let to = edge.to.target.node_id.clone()?;
-                Some(crate::starmap::render::EdgeInput {
-                    id: edge.id,
-                    from,
-                    to,
-                    label: edge.label,
-                })
-            })
-            .collect();
-
-        Ok(crate::starmap::render::compute_edge_renders(
-            &edges,
-            &node_centers,
+    ) -> ApiResult<crate::api::types::StarMapEdgeRenderBatchDto> {
+        // 统一调用 render 层的路径锚点解析，不再自己从 DTO 猜 node_id。
+        // graph/layout DTO 转成 Core 类型后交给 compute_edge_renders_from_paths。
+        let graph: crate::starmap::types::StarMapGraph = graph.into();
+        let layout: crate::starmap::types::StarMapLayout = layout.into();
+        let batch = crate::starmap::render::compute_edge_renders_from_paths(
+            &graph.edges,
+            &graph,
+            &layout,
             &crate::starmap::render::EdgeRenderParams::default(),
-        )
-        .into_iter()
-        .map(Into::into)
-        .collect())
+        );
+        Ok(batch.into())
     }
 
     pub fn hit_test_starmap_node(
@@ -1342,11 +1331,10 @@ impl WriterCoreApi {
         hyperlink_id: &str,
         patch: crate::api::types::StarMapHyperlinkPatchDto,
     ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
-        let label = patch.label.as_ref().and_then(|opt| opt.as_deref());
-        let target_uri = patch.target_uri.as_ref().and_then(|opt| opt.as_deref());
+        let core_patch: crate::starmap::types::StarMapHyperlinkPatch = patch.into();
         let result = self
             .core_write()
-            .update_starmap_hyperlink(starmap_id, hyperlink_id, label, target_uri)
+            .update_starmap_hyperlink(starmap_id, hyperlink_id, &core_patch)
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
         let hl_label = result.label.as_deref().unwrap_or("");

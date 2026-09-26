@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::starmap::store::relation_index::CascadeIds;
 use crate::starmap::types::*;
 
 use super::super::StarMapStore;
@@ -90,6 +91,23 @@ impl StarMapStore {
         Ok(updated)
     }
 
+    /// 计算删除本地 node 时需要级联删除的 edge/embed/link/hyperlink ID 集合。
+    ///
+    /// 这是 pub 方法，供 facade 的 candidate 模拟删除复用，保证 candidate
+    /// 模拟和 store 真实删除产生相同的最终对象集合。内部调用
+    /// `relation_index::node_cascade_ids` 纯函数。
+    pub fn node_cascade_ids(&self, node_id: &str) -> CascadeIds {
+        let host = self.starmap_id.as_str();
+        crate::starmap::store::relation_index::node_cascade_ids(
+            node_id,
+            host,
+            self.edges.values(),
+            self.embeds.values(),
+            self.links.values(),
+            self.hyperlinks.values(),
+        )
+    }
+
     pub fn delete_node(&mut self, node_id: &str) -> Result<()> {
         if !self.nodes.contains_key(node_id) {
             self.ensure_object_loaded(node_id)?;
@@ -101,64 +119,32 @@ impl StarMapStore {
             )));
         }
 
-        // Collect IDs of edges, embeds, links, hyperlinks that reference this node.
-        // These are derived from the in-memory objects directly, not from the relation index.
-        let edge_ids_to_remove: Vec<String> = self
-            .edges
-            .values()
-            .filter(|e| {
-                let from_refs = crate::starmap::store::relation_index::target_path_node_id(&e.from);
-                let to_refs = crate::starmap::store::relation_index::target_path_node_id(&e.to);
-                from_refs == Some(node_id) || to_refs == Some(node_id)
-            })
-            .map(|e| e.id.clone())
-            .collect();
-
-        let embed_ids_to_remove: Vec<String> = self
-            .embeds
-            .values()
-            .filter(|em| {
-                crate::starmap::store::relation_index::target_path_node_id(&em.host_path)
-                    == Some(node_id)
-            })
-            .map(|em| em.instance_id.clone())
-            .collect();
-
-        let link_ids_to_remove: Vec<String> = self
-            .links
-            .values()
-            .filter(|l| {
-                crate::starmap::store::relation_index::target_path_node_id(&l.source)
-                    == Some(node_id)
-            })
-            .map(|l| l.link_id.clone())
-            .collect();
-
-        let hyperlink_ids_to_remove: Vec<String> = self
-            .hyperlinks
-            .values()
-            .filter(|hl| {
-                crate::starmap::store::relation_index::target_path_node_id(&hl.source)
-                    == Some(node_id)
-            })
-            .map(|hl| hl.hyperlink_id.clone())
-            .collect();
+        // Collect IDs of edges, embeds, links, hyperlinks that reference this node
+        // **as a local node reference** (path.starmap_id == host && segments.is_empty())
+        // OR via first-segment EnterPortal (path.starmap_id == host && segments[0]
+        // is EnterPortal { node_id })。跨层路径的终点 node_id 属于另一张星图，
+        // 绝不参与本图的级联删除；但第一段 EnterPortal 引用的 portal 节点属于
+        // 本图，删除 portal 节点必须级联删所有穿越它的路径。
+        //
+        // 级联 ID 计算复用 `node_cascade_ids` 纯函数，candidate 模拟删除也用
+        // 同一函数，避免两套逻辑漂移。
+        let cascade = self.node_cascade_ids(node_id);
 
         self.remove_node(node_id);
 
-        for eid in &edge_ids_to_remove {
+        for eid in &cascade.edge_ids {
             self.remove_edge(eid);
         }
 
-        for iid in &embed_ids_to_remove {
+        for iid in &cascade.embed_ids {
             self.remove_embed(iid);
         }
 
-        for lid in &link_ids_to_remove {
+        for lid in &cascade.link_ids {
             self.remove_link(lid);
         }
 
-        for hlid in &hyperlink_ids_to_remove {
+        for hlid in &cascade.hyperlink_ids {
             self.remove_hyperlink(hlid);
         }
 

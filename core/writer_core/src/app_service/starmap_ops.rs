@@ -1,5 +1,5 @@
 use crate::api::{
-    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEdgeRenderDto, StarMapEmbedDto,
+    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEdgeRenderBatchDto, StarMapEmbedDto,
     StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
     StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
     StarMapMotionPolicyDto, StarMapNodeDto, StarMapNodePatchInputDto, StarMapPhasedSnapshotDto,
@@ -114,7 +114,7 @@ impl super::WriterAppService {
         &self,
         graph: StarMapGraphDto,
         layout: StarMapLayoutDto,
-    ) -> Result<Vec<StarMapEdgeRenderDto>, WriterError> {
+    ) -> Result<StarMapEdgeRenderBatchDto, WriterError> {
         self.api.compute_starmap_edge_renders(graph, layout)
     }
 
@@ -184,6 +184,16 @@ impl super::WriterAppService {
         target_starmap_id: String,
     ) -> Result<Vec<StarMapReferenceDto>, WriterError> {
         self.api.find_starmap_references(&target_starmap_id)
+    }
+
+    /// Fix 4: 确认星图删除 tombstone 已被同步方持久化。
+    pub fn ack_starmap_deletions(
+        &self,
+        starmap_id: String,
+        acknowledged_revision: u64,
+    ) -> Result<(), WriterError> {
+        self.api
+            .ack_starmap_deletions(&starmap_id, acknowledged_revision)
     }
 
     pub fn get_starmap_motion_policy(&self) -> Result<StarMapMotionPolicyDto, WriterError> {
