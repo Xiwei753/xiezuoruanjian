@@ -200,8 +200,10 @@ impl StarMapStore {
             || self.dirty_graph_meta
     }
 
-    /// 快照当前 dirty 集合，供 `update_graph_meta_file` 记录对象 revision。
-    /// 必须在 `flush_save_queue` 清空 dirty 集合之前调用。
+    /// 快照当前 dirty 集合，供测试验证 `update_graph_meta_file` 记录对象 revision。
+    /// 生产路径 `flush_save_queue` 已改用 `successful_writes`/`successful_deletes`，
+    /// 不再调用此方法；保留供测试断言使用。
+    #[cfg(test)]
     pub(in crate::starmap::store) fn collect_flush_dirty_set(&self) -> FlushDirtySet {
         FlushDirtySet {
             nodes: self.dirty_nodes.clone(),

@@ -530,13 +530,13 @@ pub struct StarMapReference {
 ///
 /// **Fail-safe**：resolver 出错时返回 `Err`，而不是静默返回 `false`。
 /// 删除保护宁可拒绝删除也不能因为 resolver 故障而漏掉真实引用。
-/// 引用扫描场景已 flush，传 `None` overlay（从磁盘读取）。
+/// 引用扫描场景已 flush，传空 overlays 的 context（从磁盘读取）。
 fn target_path_references_starmap(
-    app_data_root: &Path,
+    context: &crate::starmap::graph::resolve::GraphResolverContext,
     path: &crate::starmap::types::reference::StarMapTargetPath,
     target_starmap_id: &str,
 ) -> Result<bool> {
-    match crate::starmap::graph::resolve::resolve_target(app_data_root, path, None) {
+    match crate::starmap::graph::resolve::resolve_target(context, path) {
         Ok(resolved) => Ok(resolved
             .traversed_starmap_ids
             .iter()
@@ -561,6 +561,10 @@ pub fn find_starmap_references(
     let mut refs = Vec::new();
     let idx = load_index(app_data_root)?;
 
+    // 引用扫描场景已 flush，传空 overlays 的 context（从磁盘读取）。
+    let context =
+        crate::starmap::graph::resolve::GraphResolverContext::new_disk_only(app_data_root);
+
     for m in &idx.starmaps {
         let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &m.starmap_id);
         // 引用扫描必须基于完整加载的图。任一 host 星图加载失败就返回 Err，
@@ -568,7 +572,7 @@ pub fn find_starmap_references(
         store.load_full()?;
 
         let graph = store.to_starmap_graph();
-        // 1. Check embeds
+        // 1. Check embeds — target_starmap_id 和 host_path 都可能引用目标星图
         for embed in &graph.embeds {
             if embed.target_starmap_id == target_starmap_id {
                 refs.push(StarMapReference {
@@ -579,11 +583,30 @@ pub fn find_starmap_references(
                     target_starmap_id: target_starmap_id.to_string(),
                 });
             }
+            // Embed 的 host_path 也可能穿越或落在目标星图
+            if target_path_references_starmap(&context, &embed.host_path, target_starmap_id)? {
+                refs.push(StarMapReference {
+                    host_starmap_id: m.starmap_id.clone(),
+                    host_title: m.title.clone(),
+                    ref_type: "embed".to_string(),
+                    ref_id: embed.instance_id.clone(),
+                    target_starmap_id: target_starmap_id.to_string(),
+                });
+            }
         }
 
-        // 2. Check links
+        // 2. Check links — source 和 target 都可能引用目标星图
         for link in &graph.links {
-            if target_path_references_starmap(app_data_root, &link.target, target_starmap_id)? {
+            if target_path_references_starmap(&context, &link.source, target_starmap_id)? {
+                refs.push(StarMapReference {
+                    host_starmap_id: m.starmap_id.clone(),
+                    host_title: m.title.clone(),
+                    ref_type: "link".to_string(),
+                    ref_id: link.link_id.clone(),
+                    target_starmap_id: target_starmap_id.to_string(),
+                });
+            }
+            if target_path_references_starmap(&context, &link.target, target_starmap_id)? {
                 refs.push(StarMapReference {
                     host_starmap_id: m.starmap_id.clone(),
                     host_title: m.title.clone(),
@@ -596,9 +619,8 @@ pub fn find_starmap_references(
 
         // 3. Check edges
         for edge in &graph.edges {
-            let matches =
-                target_path_references_starmap(app_data_root, &edge.from, target_starmap_id)?
-                    || target_path_references_starmap(app_data_root, &edge.to, target_starmap_id)?;
+            let matches = target_path_references_starmap(&context, &edge.from, target_starmap_id)?
+                || target_path_references_starmap(&context, &edge.to, target_starmap_id)?;
 
             if matches {
                 refs.push(StarMapReference {
@@ -628,7 +650,7 @@ pub fn find_starmap_references(
 
         // 5. Check hyperlinks — hyperlink 的 source 路径也可能穿越目标星图。
         for hl in &graph.hyperlinks {
-            if target_path_references_starmap(app_data_root, &hl.source, target_starmap_id)? {
+            if target_path_references_starmap(&context, &hl.source, target_starmap_id)? {
                 refs.push(StarMapReference {
                     host_starmap_id: m.starmap_id.clone(),
                     host_title: m.title.clone(),

@@ -49,7 +49,7 @@ impl StarMapStore {
             hl.label = l.clone();
         }
         if let Some(ref u) = patch.target_uri {
-            validate_hyperlink_uri(u)?;
+            crate::starmap::graph::validation::validate_hyperlink_uri(u)?;
             hl.target_uri = u.clone();
         }
         if let Some(ref s) = patch.source {
@@ -75,33 +75,4 @@ impl StarMapStore {
         self.remove_hyperlink(hyperlink_id);
         Ok(())
     }
-}
-
-/// 校验 hyperlink target_uri 的 scheme。
-///
-/// URI 必须有合法 scheme：以 `xxx:` 开头（xxx 非空且只含 ASCII 字母/数字/+/-/.）。
-/// 不用 `contains("://")` 因为 `mailto:`、`tel:` 等没有 `//`。
-fn validate_hyperlink_uri(uri: &str) -> Result<()> {
-    let colon = uri.find(':').ok_or_else(|| {
-        crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "target_uri must have a scheme (e.g. 'https:', 'mailto:')",
-        ))
-    })?;
-    let scheme = &uri[..colon];
-    if scheme.is_empty() {
-        return Err(crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "target_uri scheme must not be empty",
-        )));
-    }
-    for c in scheme.chars() {
-        if !c.is_ascii_alphanumeric() && c != '+' && c != '-' && c != '.' {
-            return Err(crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("target_uri scheme contains invalid character: {c}"),
-            )));
-        }
-    }
-    Ok(())
 }

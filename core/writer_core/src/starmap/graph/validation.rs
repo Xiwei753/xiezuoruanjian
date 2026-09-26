@@ -1,5 +1,50 @@
 use crate::error::{Error, Result};
+use crate::starmap::graph::resolve::{resolve_target_path, GraphResolverContext};
+use crate::starmap::types::reference::StarMapTargetPath;
 use crate::starmap::types::*;
+
+/// 校验 hyperlink target_uri 的 scheme。
+///
+/// URI 必须有合法 scheme：以 `xxx:` 开头，scheme 第一字符必须是 ASCII 字母，
+/// 后续字符允许 ASCII 字母/数字/+/-/.。
+/// 不用 `contains("://")` 因为 `mailto:`、`tel:` 等没有 `//`。
+pub(crate) fn validate_hyperlink_uri(uri: &str) -> Result<()> {
+    let colon = uri.find(':').ok_or_else(|| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target_uri must have a scheme (e.g. 'https:', 'mailto:')",
+        ))
+    })?;
+    let scheme = &uri[..colon];
+    if scheme.is_empty() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target_uri scheme must not be empty",
+        )));
+    }
+    let mut chars = scheme.chars();
+    let first = chars.next().ok_or_else(|| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target_uri scheme must not be empty",
+        ))
+    })?;
+    if !first.is_ascii_alphabetic() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target_uri scheme first character must be a letter",
+        )));
+    }
+    for c in chars {
+        if !c.is_ascii_alphanumeric() && c != '+' && c != '-' && c != '.' {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("target_uri scheme contains invalid character: {c}"),
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// 图数据完整性验证入口。
 ///
@@ -16,12 +61,12 @@ use crate::starmap::types::*;
 /// - Portal 的 `destination_starmap_id` 必须存在（所有 mode），可选落点在目标图中存在
 /// - DisplayPolicy scale 层级有序
 /// - 数值字段 finite（无 NaN/Inf）
-pub(crate) fn validate_graph(app_data_root: &std::path::Path, graph: &StarMapGraph) -> Result<()> {
-    let node_ids = validate_nodes(app_data_root, graph)?;
-    validate_edges(app_data_root, graph, &node_ids)?;
-    validate_embeds(app_data_root, graph, &node_ids)?;
-    validate_links(app_data_root, graph, &node_ids)?;
-    validate_hyperlinks(app_data_root, graph, &node_ids)?;
+pub(crate) fn validate_graph(context: &GraphResolverContext, graph: &StarMapGraph) -> Result<()> {
+    let node_ids = validate_nodes(context, graph)?;
+    validate_edges(context, graph, &node_ids)?;
+    validate_embeds(context, graph, &node_ids)?;
+    validate_links(context, graph, &node_ids)?;
+    validate_hyperlinks(context, graph, &node_ids)?;
     Ok(())
 }
 
@@ -35,7 +80,7 @@ pub(crate) fn validate_graph(app_data_root: &std::path::Path, graph: &StarMapGra
     clippy::type_complexity
 )]
 fn validate_nodes(
-    app_data_root: &std::path::Path,
+    context: &GraphResolverContext,
     graph: &StarMapGraph,
 ) -> Result<std::collections::HashSet<String>> {
     let mut node_ids = std::collections::HashSet::new();
@@ -91,99 +136,41 @@ fn validate_nodes(
         if let Some(portal) = &node.portal {
             // 所有 mode（EnterPortal/PreviewInline/ReferenceOnly）都必须保证
             // destination_starmap_id 存在；不能只在校验 EnterPortal 时才查。
-            if crate::starmap::load_starmap_meta(app_data_root, &portal.destination_starmap_id)
-                .is_err()
-            {
+            // 使用 context（包含 overlays）检查目标星图是否存在。
+            if !crate::starmap::graph::resolve::starmap_exists(
+                context,
+                &portal.destination_starmap_id,
+            ) {
                 return Err(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "Portal destination_starmap_id does not exist",
                 )));
             }
-            // 可选落点必须在目标图中存在
+            // 可选落点必须通过统一 resolver 校验
             if let Some(detail) = &portal.destination_target {
-                validate_portal_destination_target(
-                    app_data_root,
-                    &portal.destination_starmap_id,
-                    detail,
-                )?;
+                let path = StarMapTargetPath {
+                    starmap_id: portal.destination_starmap_id.clone(),
+                    segments: vec![],
+                    target: detail.clone(),
+                };
+                let status = resolve_target_path(context, &path);
+                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                match status {
+                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+                    | MissingEmbed | MissingPortal | InvalidRange => {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Portal destination_target resolve failed: {:?}", status),
+                        )));
+                    }
+                    _ => {}
+                }
             }
         }
 
         crate::starmap::semantic::validate_display_policy(&node.display_policy)?;
     }
     Ok(node_ids)
-}
-
-/// 校验 Portal 可选落点在目标星图中存在。
-///
-/// 只校验 Node/Anchor/ChapterRange 三种需要落点的 target；
-/// Starmap/Entity/External 等不依赖目标图内对象，直接通过。
-fn validate_portal_destination_target(
-    app_data_root: &std::path::Path,
-    destination_starmap_id: &str,
-    detail: &crate::starmap::semantic::StarMapTargetDetail,
-) -> Result<()> {
-    use crate::starmap::semantic::StarMapTargetDetail;
-    match detail {
-        StarMapTargetDetail::Node { node_id } => {
-            let mut store =
-                crate::starmap::store::StarMapStore::new(app_data_root, destination_starmap_id);
-            if store.load_full().is_err() {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Portal destination starmap cannot be loaded",
-                )));
-            }
-            if store.get_node(node_id).is_none() {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Portal destination_target node does not exist",
-                )));
-            }
-        }
-        StarMapTargetDetail::Anchor { node_id, anchor_id } => {
-            let mut store =
-                crate::starmap::store::StarMapStore::new(app_data_root, destination_starmap_id);
-            if store.load_full().is_err() {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Portal destination starmap cannot be loaded",
-                )));
-            }
-            match store.get_node(node_id) {
-                Some(n) => {
-                    if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Portal destination_target anchor does not exist",
-                        )));
-                    }
-                }
-                None => {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Portal destination_target node does not exist",
-                    )));
-                }
-            }
-        }
-        StarMapTargetDetail::ChapterRange {
-            range_start,
-            range_end,
-            ..
-        } => {
-            if let (Some(s), Some(e)) = (range_start, range_end) {
-                if s > e {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Portal destination_target range_start > range_end",
-                    )));
-                }
-            }
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 /// 验证边：端点引用完整性。
@@ -198,7 +185,7 @@ fn validate_portal_destination_target(
     clippy::type_complexity
 )]
 fn validate_edges(
-    app_data_root: &std::path::Path,
+    context: &GraphResolverContext,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -212,8 +199,8 @@ fn validate_edges(
                 "Duplicate edge ID",
             )));
         }
-        validate_target_path(app_data_root, &edge.from, graph, node_ids, "from")?;
-        validate_target_path(app_data_root, &edge.to, graph, node_ids, "to")?;
+        validate_target_path(context, &edge.from, graph, node_ids, "from")?;
+        validate_target_path(context, &edge.to, graph, node_ids, "to")?;
     }
     Ok(())
 }
@@ -226,14 +213,14 @@ fn validate_edges(
 /// 本身（见 `types/reference.rs` 的语义定义）。这防止在 A 图里保存
 /// `starmap_id = B` 的路径。
 ///
-/// ## overlay
+/// ## context
 ///
-/// 跨层路径走 resolver 时，把 `graph` 作为 overlay 传入，使 resolver 优先
-/// 从 candidate graph 读取对象（内存刚改完、磁盘还没 flush 的场景）。
+/// 跨层路径走 resolver 时，使用 context（包含 overlays）使 resolver 优先
+/// 从内存图读取对象（内存刚改完、磁盘还没 flush 的场景）。
 #[allow(clippy::excessive_nesting)]
 fn validate_target_path(
-    app_data_root: &std::path::Path,
-    path: &crate::starmap::types::reference::StarMapTargetPath,
+    context: &GraphResolverContext,
+    path: &StarMapTargetPath,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
     endpoint_name: &str,
@@ -295,8 +282,8 @@ fn validate_target_path(
             _ => {}
         }
     } else {
-        // 跨星图路径，调用 resolver 验证，传 graph 作为 overlay
-        let status = super::resolve::resolve_target_path(app_data_root, path, Some(graph));
+        // 跨星图路径，调用 resolver 验证，使用 context（包含 overlays）
+        let status = resolve_target_path(context, path);
         use crate::starmap::semantic::StarMapTargetResolveStatus::*;
         match status {
             CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
@@ -323,7 +310,7 @@ fn validate_target_path(
     clippy::cognitive_complexity
 )]
 fn validate_embeds(
-    app_data_root: &std::path::Path,
+    context: &GraphResolverContext,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -342,7 +329,9 @@ fn validate_embeds(
             )));
         }
 
-        if crate::starmap::load_starmap_meta(app_data_root, &embed.target_starmap_id).is_err() {
+        if crate::starmap::load_starmap_meta(&context.app_data_root, &embed.target_starmap_id)
+            .is_err()
+        {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Embed target starmap does not exist",
@@ -381,7 +370,7 @@ fn validate_embeds(
         // 验证 host_path 引用完整性：统一走 validate_target_path，
         // 无 segments 时做本地校验，有 segments 时走 resolve_target 跨星图解析。
         validate_target_path(
-            app_data_root,
+            context,
             &embed.host_path,
             graph,
             node_ids,
@@ -402,7 +391,7 @@ fn validate_embeds(
     clippy::type_complexity
 )]
 fn validate_links(
-    app_data_root: &std::path::Path,
+    context: &GraphResolverContext,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -415,16 +404,16 @@ fn validate_links(
             )));
         }
         // 验证 source 路径
-        validate_target_path(app_data_root, &link.source, graph, node_ids, "link source")?;
+        validate_target_path(context, &link.source, graph, node_ids, "link source")?;
         // 验证 target 路径
-        validate_target_path(app_data_root, &link.target, graph, node_ids, "link target")?;
+        validate_target_path(context, &link.target, graph, node_ids, "link target")?;
     }
     Ok(())
 }
 
-/// 验证超链接：hyperlink_id 唯一、source 路径合法、target_uri 非空且有 scheme。
+/// 验证超链接：hyperlink_id 唯一、source 路径合法、target_uri 非空且有合法 scheme。
 fn validate_hyperlinks(
-    app_data_root: &std::path::Path,
+    context: &GraphResolverContext,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -437,13 +426,7 @@ fn validate_hyperlinks(
             )));
         }
         // source 路径必须合法
-        validate_target_path(
-            app_data_root,
-            &hl.source,
-            graph,
-            node_ids,
-            "hyperlink source",
-        )?;
+        validate_target_path(context, &hl.source, graph, node_ids, "hyperlink source")?;
         // target_uri 非空
         if hl.target_uri.is_empty() {
             return Err(Error::Io(std::io::Error::new(
@@ -451,13 +434,8 @@ fn validate_hyperlinks(
                 "Hyperlink target_uri cannot be empty",
             )));
         }
-        // target_uri 必须有 scheme（包含 "://"）
-        if !hl.target_uri.contains("://") {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Hyperlink target_uri must have a scheme (e.g. https://)",
-            )));
-        }
+        // target_uri 必须有合法 scheme（统一调用 validate_hyperlink_uri）
+        validate_hyperlink_uri(&hl.target_uri)?;
     }
     Ok(())
 }

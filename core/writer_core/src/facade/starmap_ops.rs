@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::starmap::graph::resolve::GraphResolverContext;
 use crate::starmap::graph::validation;
 use crate::starmap::store::{SaveQueueEntry, StarMapStore};
 
@@ -198,7 +199,7 @@ impl super::WriterCore {
                 graph.starmap_id, starmap_id
             )));
         }
-        validation::validate_graph(&self.app_data_root, graph)?;
+        validation::validate_graph(&self.build_resolver_context(graph), graph)?;
 
         let mut stores = self
             .starmap_stores
@@ -332,7 +333,7 @@ impl super::WriterCore {
         // 先在 candidate graph 上模拟 add，跑 validate_graph，再真正改 Store。
         let mut candidate = store.to_starmap_graph();
         candidate.nodes.push(node.clone());
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.add_node(node, default_x, default_y);
         store.enqueue_save(SaveQueueEntry::Node);
@@ -360,7 +361,7 @@ impl super::WriterCore {
         // 先在 candidate graph 上模拟 update，跑 validate_graph，再真正改 Store。
         let mut candidate = store.to_starmap_graph();
         apply_node_patch_to_graph(&mut candidate, node_id, &patch)?;
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.update_node(node_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Node);
@@ -406,7 +407,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         candidate.edges.push(edge.clone());
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.add_edge(edge)?;
         store.enqueue_save(SaveQueueEntry::Edge);
@@ -432,7 +433,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         apply_edge_patch_to_graph(&mut candidate, edge_id, &patch)?;
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.update_edge(edge_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Edge);
@@ -542,7 +543,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         candidate.embeds.push(embed.clone());
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.add_embed(embed)?;
         store.enqueue_save(SaveQueueEntry::Embed);
@@ -568,7 +569,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         apply_embed_patch_to_graph(&mut candidate, instance_id, &patch)?;
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.update_embed(instance_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Embed);
@@ -608,7 +609,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         candidate.links.push(link.clone());
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.add_link(link)?;
         store.enqueue_save(SaveQueueEntry::Link);
@@ -634,7 +635,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         apply_link_patch_to_graph(&mut candidate, link_id, &patch)?;
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.update_link(link_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Link);
@@ -690,7 +691,7 @@ impl super::WriterCore {
 
         let mut candidate = store.to_starmap_graph();
         candidate.hyperlinks.push(hl.clone());
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.add_hyperlink(hl)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
@@ -717,7 +718,7 @@ impl super::WriterCore {
         // hyperlink update 统一走 validate 以保持引用完整性（source 路径可能变）。
         let mut candidate = store.to_starmap_graph();
         apply_hyperlink_update_to_graph(&mut candidate, hyperlink_id, patch)?;
-        validation::validate_graph(&self.app_data_root, &candidate)?;
+        validation::validate_graph(&self.build_resolver_context(&candidate), &candidate)?;
 
         let result = store.update_hyperlink(hyperlink_id, patch)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
@@ -807,7 +808,9 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         if let Some(store) = stores.get_mut(starmap_id) {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
-                return store.flush();
+                let paths = store.flush()?;
+                stores.remove(starmap_id);
+                return Ok(paths);
             }
         }
         stores.remove(starmap_id);
@@ -840,6 +843,33 @@ impl super::WriterCore {
             }
         }
         Ok(all_changed)
+    }
+
+    /// 构建一个 `GraphResolverContext`，包含当前所有已加载 Store 的
+    /// `to_starmap_graph()` 快照作为 overlays。这样 resolver 在校验 candidate
+    /// graph 时可以看到其他星图内存中尚未 flush 的变更。
+    ///
+    /// 调用方应在持有 `starmap_stores` 锁的上下文中调用此方法。
+    fn build_resolver_context(
+        &self,
+        candidate: &crate::starmap::types::StarMapGraph,
+    ) -> GraphResolverContext {
+        let stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut overlays = std::collections::HashMap::new();
+        // 先放入所有已加载的 Store 的图快照
+        for (id, store) in stores.iter() {
+            overlays.insert(id.clone(), store.to_starmap_graph());
+        }
+        // 最后用 candidate graph 覆盖对应 starmap_id 的 overlay，
+        // 确保 candidate 的最新变更优先于 Store 快照。
+        overlays.insert(candidate.starmap_id.clone(), candidate.clone());
+        GraphResolverContext {
+            app_data_root: self.app_data_root.clone(),
+            overlays,
+        }
     }
 }
 

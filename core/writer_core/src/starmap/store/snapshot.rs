@@ -276,116 +276,132 @@ impl StarMapStore {
         &mut self,
         dirty: &FlushDirtySet,
     ) -> Result<(u64, std::path::PathBuf)> {
+        // Candidate meta 模式：所有修改先在 clone 上做，写盘成功后才提交到 self。
+        // 这样写盘失败时内存 GraphMeta 保持不变，不会出现半提交。
         if self.graph_meta.is_none() {
             self.reload_graph_meta_if_stale();
         }
-        if self.graph_meta.is_none() {
-            self.graph_meta = Some(GraphMeta {
-                schema_version: "2".to_string(),
-                starmap_id: self.starmap_id.clone(),
-                node_ids: Vec::new(),
-                edge_ids: Vec::new(),
-                embed_instance_ids: Vec::new(),
-                link_ids: Vec::new(),
-                hyperlink_ids: Vec::new(),
-                edge_relation_index: Vec::new(),
-                embed_host_index: Vec::new(),
-                link_relation_index: Vec::new(),
-                hyperlink_relation_index: Vec::new(),
-                node_kind_counts: HashMap::new(),
-                package_revision: self.package_revision,
-                updated_at: crate::starmap::now_epoch(),
-                deleted_since_last_sync: super::meta::DeletedSinceLastSync::default(),
-                ..Default::default()
-            });
-        }
 
-        self.merge_memory_ids_into_graph_meta();
+        let mut candidate_meta = self.graph_meta.clone().unwrap_or_else(|| GraphMeta {
+            schema_version: "2".to_string(),
+            starmap_id: self.starmap_id.clone(),
+            node_ids: Vec::new(),
+            edge_ids: Vec::new(),
+            embed_instance_ids: Vec::new(),
+            link_ids: Vec::new(),
+            hyperlink_ids: Vec::new(),
+            edge_relation_index: Vec::new(),
+            embed_host_index: Vec::new(),
+            link_relation_index: Vec::new(),
+            hyperlink_relation_index: Vec::new(),
+            node_kind_counts: HashMap::new(),
+            package_revision: self.package_revision,
+            updated_at: crate::starmap::now_epoch(),
+            deleted_since_last_sync: super::meta::DeletedSinceLastSync::default(),
+            ..Default::default()
+        });
+
+        // 在 candidate_meta 上做 merge_memory_ids（增量合并 + deletion tombstone）。
+        self.merge_memory_ids_into_graph_meta_on(&mut candidate_meta);
 
         let next_revision = self.package_revision.saturating_add(1);
 
-        // 记录本次事务真正写过的对象 revision，并移除已删除对象的 revision。
-        // deletion log 的 tombstone（deleted_at_revision = next_revision）已在
-        // merge_memory_ids_into_graph_meta 中追加，这里只维护对象 revision map。
-        // 使用传入的 dirty 快照而非 self.dirty_*，因为 flush_save_queue 在到达
-        // GraphMeta 分支前已清空对应 dirty 集合。
-        if let Some(ref mut meta) = self.graph_meta {
-            for node_id in &dirty.nodes {
-                meta.node_revisions.insert(node_id.clone(), next_revision);
-            }
-            for edge_id in &dirty.edges {
-                meta.edge_revisions.insert(edge_id.clone(), next_revision);
-            }
-            for instance_id in &dirty.embeds {
-                meta.embed_revisions
-                    .insert(instance_id.clone(), next_revision);
-            }
-            for link_id in &dirty.links {
-                meta.link_revisions.insert(link_id.clone(), next_revision);
-            }
-            for hl_id in &dirty.hyperlinks {
-                meta.hyperlink_revisions
-                    .insert(hl_id.clone(), next_revision);
-            }
-            if dirty.layout {
-                meta.layout_revision = next_revision;
-            }
-            for node_id in &dirty.deleted_nodes {
-                meta.node_revisions.remove(node_id);
-            }
-            for edge_id in &dirty.deleted_edges {
-                meta.edge_revisions.remove(edge_id);
-            }
-            for instance_id in &dirty.deleted_embeds {
-                meta.embed_revisions.remove(instance_id);
-            }
-            for link_id in &dirty.deleted_links {
-                meta.link_revisions.remove(link_id);
-            }
-            for hl_id in &dirty.deleted_hyperlinks {
-                meta.hyperlink_revisions.remove(hl_id);
-            }
+        // 在 candidate_meta 上记录本次事务真正写过的对象 revision，
+        // 并移除已删除对象的 revision。
+        for node_id in &dirty.nodes {
+            candidate_meta
+                .node_revisions
+                .insert(node_id.clone(), next_revision);
+        }
+        for edge_id in &dirty.edges {
+            candidate_meta
+                .edge_revisions
+                .insert(edge_id.clone(), next_revision);
+        }
+        for instance_id in &dirty.embeds {
+            candidate_meta
+                .embed_revisions
+                .insert(instance_id.clone(), next_revision);
+        }
+        for link_id in &dirty.links {
+            candidate_meta
+                .link_revisions
+                .insert(link_id.clone(), next_revision);
+        }
+        for hl_id in &dirty.hyperlinks {
+            candidate_meta
+                .hyperlink_revisions
+                .insert(hl_id.clone(), next_revision);
+        }
+        if dirty.layout {
+            candidate_meta.layout_revision = next_revision;
+        }
+        for node_id in &dirty.deleted_nodes {
+            candidate_meta.node_revisions.remove(node_id);
+        }
+        for edge_id in &dirty.deleted_edges {
+            candidate_meta.edge_revisions.remove(edge_id);
+        }
+        for instance_id in &dirty.deleted_embeds {
+            candidate_meta.embed_revisions.remove(instance_id);
+        }
+        for link_id in &dirty.deleted_links {
+            candidate_meta.link_revisions.remove(link_id);
+        }
+        for hl_id in &dirty.deleted_hyperlinks {
+            candidate_meta.hyperlink_revisions.remove(hl_id);
         }
 
-        let meta = self.graph_meta.as_ref().ok_or_else(|| {
-            crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "graph_meta not initialized",
-            ))
-        })?;
-
+        // 构造要写入磁盘的 GraphMeta（更新 package_revision 和 updated_at）。
         let meta_to_write = GraphMeta {
-            schema_version: meta.schema_version.clone(),
-            starmap_id: meta.starmap_id.clone(),
-            node_ids: meta.node_ids.clone(),
-            edge_ids: meta.edge_ids.clone(),
-            embed_instance_ids: meta.embed_instance_ids.clone(),
-            link_ids: meta.link_ids.clone(),
-            hyperlink_ids: meta.hyperlink_ids.clone(),
-            edge_relation_index: meta.edge_relation_index.clone(),
-            embed_host_index: meta.embed_host_index.clone(),
-            link_relation_index: meta.link_relation_index.clone(),
-            hyperlink_relation_index: meta.hyperlink_relation_index.clone(),
-            node_kind_counts: meta.node_kind_counts.clone(),
-            node_revisions: meta.node_revisions.clone(),
-            edge_revisions: meta.edge_revisions.clone(),
-            embed_revisions: meta.embed_revisions.clone(),
-            link_revisions: meta.link_revisions.clone(),
-            hyperlink_revisions: meta.hyperlink_revisions.clone(),
-            layout_revision: meta.layout_revision,
+            schema_version: candidate_meta.schema_version.clone(),
+            starmap_id: candidate_meta.starmap_id.clone(),
+            node_ids: candidate_meta.node_ids.clone(),
+            edge_ids: candidate_meta.edge_ids.clone(),
+            embed_instance_ids: candidate_meta.embed_instance_ids.clone(),
+            link_ids: candidate_meta.link_ids.clone(),
+            hyperlink_ids: candidate_meta.hyperlink_ids.clone(),
+            edge_relation_index: candidate_meta.edge_relation_index.clone(),
+            embed_host_index: candidate_meta.embed_host_index.clone(),
+            link_relation_index: candidate_meta.link_relation_index.clone(),
+            hyperlink_relation_index: candidate_meta.hyperlink_relation_index.clone(),
+            node_kind_counts: candidate_meta.node_kind_counts.clone(),
+            node_revisions: candidate_meta.node_revisions.clone(),
+            edge_revisions: candidate_meta.edge_revisions.clone(),
+            embed_revisions: candidate_meta.embed_revisions.clone(),
+            link_revisions: candidate_meta.link_revisions.clone(),
+            hyperlink_revisions: candidate_meta.hyperlink_revisions.clone(),
+            layout_revision: candidate_meta.layout_revision,
             package_revision: next_revision,
             updated_at: crate::starmap::now_epoch(),
-            deleted_since_last_sync: meta.deleted_since_last_sync.clone(),
+            deleted_since_last_sync: candidate_meta.deleted_since_last_sync.clone(),
         };
 
         let json = serde_json::to_string_pretty(&meta_to_write)?;
         let path = self.starmap_dir().join("graph.json");
         crate::storage::atomic_write_string(&path, &json)?;
 
+        // 写盘成功后才提交内存状态。
+        candidate_meta.package_revision = next_revision;
+        candidate_meta.updated_at = meta_to_write.updated_at;
+        self.graph_meta = Some(candidate_meta);
+        self.package_revision = next_revision;
+
         let rel_path = std::path::PathBuf::from("starmaps")
             .join(&self.starmap_id)
             .join("graph.json");
         Ok((next_revision, rel_path))
+    }
+
+    /// 供测试触发的 merge wrapper：在 `graph_meta` 上执行增量合并。
+    /// 生产路径 `update_graph_meta_file` 已直接调用 `merge_memory_ids_into_graph_meta_on`
+    /// 在 candidate_meta 上操作；保留此 wrapper 供测试断言使用。
+    #[cfg(test)]
+    pub(super) fn merge_memory_ids_into_graph_meta(&mut self) {
+        if let Some(mut meta) = self.graph_meta.take() {
+            self.merge_memory_ids_into_graph_meta_on(&mut meta);
+            self.graph_meta = Some(meta);
+        }
     }
 
     #[allow(
@@ -395,11 +411,7 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub(super) fn merge_memory_ids_into_graph_meta(&mut self) {
-        let Some(ref mut meta) = self.graph_meta else {
-            return;
-        };
-
+    pub(super) fn merge_memory_ids_into_graph_meta_on(&self, meta: &mut GraphMeta) {
         // 增量合并：保留磁盘上已有的对象 IDs，添加内存中新增的，移除已删除的。
         // 不能无条件从 scratch 重建，因为 store 可能只部分加载，或者磁盘上有
         // 其他 store 实例直接写入的对象（例如测试中局部 store 写入的 hyperlink）。
