@@ -2598,9 +2598,9 @@ mod tests {
         );
     }
 
-    /// Issue #770 评论 5844343324：BothChanged + remote_hash 非 MD5（旧 40 位 Git SHA）
-    /// 且无 remote_snapshot_path → canonical_known_hash 返回 None → keep_local 不覆盖
-    /// known_files。旧版本会 fallback 读本地文件算 MD5 冒充远端 hash，现在不能。
+    /// Issue #770 评论 5844542687：BothChanged + remote_hash 非 MD5（旧 40 位 Git SHA）
+    /// 且无 remote_snapshot_path → canonical_known_hash 返回 None → keep_local 必须
+    /// 返回 Err 保持冲突原样，不得"假解决"（删 conflicted_files 但不更新 known_files）。
     #[test]
     fn test_resolve_conflict_keep_local_both_changed_non_md5_no_snapshot_keeps_old_base() {
         let dir = tempdir().unwrap();
@@ -2632,32 +2632,58 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 手动写 conflicts.json，让 resolve_conflict_keep_local 能读到冲突记录。
+        // save_sync_state 只写 state.local.json，不写 conflicts.json。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
-        SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
+        // keep_local 必须返回 Err：BothChanged + non-MD5 remote_hash + no snapshot
+        // → canonical_known_hash 返回 None → 无法形成可执行的同步意图。
+        let result = SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel);
+        assert!(
+            result.is_err(),
+            "keep_local must return Err when BothChanged has non-MD5 remote_hash and no snapshot"
+        );
 
         let state_after = SyncService::load_sync_state(dir.path()).unwrap();
         assert!(
-            !state_after.conflicted_files.contains(chapter_rel),
-            "conflicted_files must be cleared after resolution"
+            state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain path after Err"
         );
         assert!(
-            state_after.conflicts.is_empty(),
-            "conflicts must be cleared after resolution"
+            !state_after.conflicts.is_empty(),
+            "conflicts must still be preserved after Err"
         );
-        // canonical_known_hash 返回 None（remote_hash 非 MD5 + 无 snapshot），
-        // 所以 known_files 不被覆盖，保留旧 base hash。
-        // 关键：known_files 没有被写成本地正文 MD5（不拿本地 hash 冒充远端 hash）。
+        // known_files 必须保持不变（没有被覆盖成本地 MD5，也没有被删）。
         assert_eq!(
             state_after.known_files.get(chapter_rel).unwrap(),
             &base_hash,
-            "known_files must remain at old base_hash — canonical_known_hash returns None \
-             (non-MD5 remote_hash + no snapshot), so keep_local must NOT overwrite with \
-             local MD5 (that would impersonate the remote hash)"
+            "known_files must remain unchanged"
+        );
+
+        // conflicts.json 仍保留 1 条记录。
+        let conflicts_json_path = dir.path().join("app-meta/sync/conflicts.json");
+        assert!(
+            conflicts_json_path.exists(),
+            "conflicts.json must still exist"
+        );
+        let conflicts_json_content = std::fs::read_to_string(&conflicts_json_path).unwrap();
+        let conflicts_arr: Vec<crate::sync::types::SyncConflict> =
+            serde_json::from_str(&conflicts_json_content).unwrap();
+        assert_eq!(
+            conflicts_arr.len(),
+            1,
+            "conflicts.json must still contain exactly 1 record"
         );
     }
 
-    /// Issue #770 评论 5844343324：BothChanged + 非 MD5 + 无 snapshot → mark_merged
-    /// 同样不覆盖 known_files。
+    /// Issue #770 评论 5844542687：BothChanged + 非 MD5 + 无 snapshot → mark_merged
+    /// 同样必须返回 Err 保持冲突原样。
     #[test]
     fn test_resolve_conflict_mark_merged_both_changed_non_md5_no_snapshot_keeps_old_base() {
         let dir = tempdir().unwrap();
@@ -2688,23 +2714,52 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 手动写 conflicts.json，让 resolve_conflict_mark_merged 能读到冲突记录。
+        // save_sync_state 只写 state.local.json，不写 conflicts.json。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
-        SyncService::resolve_conflict_mark_merged(dir.path(), chapter_rel).unwrap();
+        // mark_merged 必须返回 Err：BothChanged + non-MD5 remote_hash + no snapshot
+        // → canonical_known_hash 返回 None → 无法形成可执行的同步意图。
+        let result = SyncService::resolve_conflict_mark_merged(dir.path(), chapter_rel);
+        assert!(
+            result.is_err(),
+            "mark_merged must return Err when BothChanged has non-MD5 remote_hash and no snapshot"
+        );
 
         let state_after = SyncService::load_sync_state(dir.path()).unwrap();
         assert!(
-            !state_after.conflicted_files.contains(chapter_rel),
-            "conflicted_files must be cleared after resolution"
+            state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain path after Err"
         );
         assert!(
-            state_after.conflicts.is_empty(),
-            "conflicts must be cleared after resolution"
+            !state_after.conflicts.is_empty(),
+            "conflicts must still be preserved after Err"
         );
         assert_eq!(
             state_after.known_files.get(chapter_rel).unwrap(),
             &base_hash,
-            "known_files must remain at old base_hash — canonical_known_hash returns None, \
-             mark_merged must NOT overwrite with local MD5"
+            "known_files must remain unchanged"
+        );
+
+        // conflicts.json 仍保留 1 条记录。
+        let conflicts_json_path = dir.path().join("app-meta/sync/conflicts.json");
+        assert!(
+            conflicts_json_path.exists(),
+            "conflicts.json must still exist"
+        );
+        let conflicts_json_content = std::fs::read_to_string(&conflicts_json_path).unwrap();
+        let conflicts_arr: Vec<crate::sync::types::SyncConflict> =
+            serde_json::from_str(&conflicts_json_content).unwrap();
+        assert_eq!(
+            conflicts_arr.len(),
+            1,
+            "conflicts.json must still contain exactly 1 record"
         );
     }
 
@@ -3899,6 +3954,259 @@ mod tests {
         assert_eq!(
             live_after, local_content,
             "live content must be unchanged when falling back to pending_take_remote"
+        );
+    }
+
+    // ── Issue #770 评论 5844542687：merge 旧 unresolved conflict 规范化测试 ──
+
+    /// 测试用 mock provider：`list` 返回内容的 Git blob OID 作为 version，
+    /// 让 merge 旧 unresolved conflict 规范化逻辑能触发
+    /// （`remote_tree_files[path]` == 40 位 Git blob OID）。
+    ///
+    /// `MemoryProvider` 的 `list` 返回 UUID 作为 version，无法触发
+    /// `is_legacy_git_blob_oid` 分支。本 provider 用 `git2::Oid::hash_object`
+    /// 算出真实 blob OID，模拟 GitHub provider 的行为。
+    struct BlobOidMockProvider {
+        store: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    }
+
+    impl BlobOidMockProvider {
+        fn with_entries(entries: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
+            let mut map = std::collections::HashMap::new();
+            for (path, content) in entries {
+                map.insert(path, content);
+            }
+            Self {
+                store: std::sync::Mutex::new(map),
+            }
+        }
+
+        fn lock_err() -> crate::sync::provider::ProviderError {
+            crate::sync::provider::ProviderError::Other {
+                reason: "lock poisoned".to_string(),
+            }
+        }
+
+        fn blob_oid(content: &[u8]) -> String {
+            git2::Oid::hash_object(git2::ObjectType::Blob, content)
+                .map(|oid| oid.to_string())
+                .unwrap_or_default()
+        }
+    }
+
+    impl crate::sync::provider::SyncProvider for BlobOidMockProvider {
+        fn capabilities(&self) -> crate::sync::provider::SyncCapabilities {
+            crate::sync::provider::SyncCapabilities::memory()
+        }
+
+        fn list(
+            &self,
+            prefix: &str,
+        ) -> Result<Vec<crate::sync::provider::RemoteEntry>, crate::sync::provider::ProviderError>
+        {
+            let store = self.store.lock().map_err(|_| Self::lock_err())?;
+            let needle = if prefix.is_empty() {
+                None
+            } else {
+                Some(format!("{prefix}/"))
+            };
+            let mut entries = Vec::new();
+            for (path, content) in store.iter() {
+                let entry_path = match &needle {
+                    None => Some(path.clone()),
+                    Some(n) => path.strip_prefix(n).map(|s| s.to_string()),
+                };
+                if let Some(p) = entry_path {
+                    entries.push(crate::sync::provider::RemoteEntry {
+                        path: p,
+                        version: crate::sync::provider::RemoteVersion(Self::blob_oid(content)),
+                    });
+                }
+            }
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
+            Ok(entries)
+        }
+
+        fn read(
+            &self,
+            path: &str,
+        ) -> Result<Option<crate::sync::provider::RemoteObject>, crate::sync::provider::ProviderError>
+        {
+            let store = self.store.lock().map_err(|_| Self::lock_err())?;
+            match store.get(path) {
+                Some(content) => Ok(Some(crate::sync::provider::RemoteObject {
+                    path: path.to_string(),
+                    content: content.clone(),
+                    version: crate::sync::provider::RemoteVersion(Self::blob_oid(content)),
+                })),
+                None => Ok(None),
+            }
+        }
+
+        fn write(
+            &self,
+            path: &str,
+            content: &[u8],
+            _precondition: crate::sync::provider::WritePrecondition,
+        ) -> Result<crate::sync::provider::RemoteVersion, crate::sync::provider::ProviderError>
+        {
+            let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+            store.insert(path.to_string(), content.to_vec());
+            Ok(crate::sync::provider::RemoteVersion(Self::blob_oid(
+                content,
+            )))
+        }
+
+        fn delete(
+            &self,
+            path: &str,
+            _precondition: crate::sync::provider::DeletePrecondition,
+        ) -> Result<(), crate::sync::provider::ProviderError> {
+            let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+            store.remove(path);
+            Ok(())
+        }
+    }
+
+    /// Issue #770 评论 5844542687：merge 旧 unresolved conflict 规范化。
+    ///
+    /// 旧 BothChanged 记录（remote_hash=当前 remote blob OID、snapshot=None）跑一次
+    /// merge 后，必须被补成 remote MD5 + snapshot；之后 keep_local 再执行能够把
+    /// `known_files` 设成 remote MD5；下一轮得到 `LocalChanged`，不会重新冒出
+    /// 同一个冲突。
+    #[test]
+    #[cfg(not(windows))]
+    #[allow(clippy::too_many_lines)]
+    fn test_merge_normalizes_old_both_changed_conflict_to_md5_with_snapshot() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version A";
+        let local_content = "local version B";
+        let remote_content = "remote version C";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let remote_md5 = format!("{:x}", md5::compute(remote_content.as_bytes()));
+        // 旧 remote_hash 是 40 位 Git blob OID（旧版本误写入）。
+        let remote_blob_oid =
+            git2::Oid::hash_object(git2::ObjectType::Blob, remote_content.as_bytes())
+                .unwrap()
+                .to_string();
+
+        // 构造远端 manifest（记录 remote_content 的 MD5）。
+        let remote_manifest = crate::sync::types::SyncManifest {
+            files: vec![crate::sync::types::ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_md5.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        let manifest_json = serde_json::to_string(&remote_manifest).unwrap();
+
+        let remote_prefix = "projects/test";
+        let provider = BlobOidMockProvider::with_entries([
+            (
+                format!("{remote_prefix}/{chapter_rel}"),
+                remote_content.as_bytes().to_vec(),
+            ),
+            (
+                format!("{remote_prefix}/app-meta/sync/manifest.sync.json"),
+                manifest_json.into_bytes(),
+            ),
+        ]);
+
+        // 构造旧 SyncState：
+        // - known_files[path] = base_hash（MD5，已规范化）
+        // - conflicts = [BothChanged(remote_hash = remote blob OID, snapshot = None)]
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_old".to_string(),
+            remote_hash: remote_blob_oid.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "old both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // === Step 1: merge 规范化旧冲突记录 ===
+        let res1 = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+        // 冲突路径在 unresolved_conflict_paths 中，主循环跳过它，不产生新冲突
+        // （doc_conflicts 为空），所以 res1.status 不是 PartialConflict。
+        // 但旧的冲突仍然在 state.conflicts 中（规范化后），保持 unresolved。
+        // res1.status 可能是 NoChanges（没有上传/下载/删除动作）。
+        let _ = res1.status; // 不断言具体 status，只检查 state_after_1 的冲突记录。
+
+        let state_after_1 = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            state_after_1.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain path after normalization"
+        );
+        assert!(
+            !state_after_1.conflicts.is_empty(),
+            "conflicts must still be preserved after normalization"
+        );
+        // 冲突记录的 remote_hash 必须被规范化成 MD5。
+        let conflict_after_1 = state_after_1
+            .conflicts
+            .iter()
+            .find(|c| c.local_path == chapter_rel)
+            .expect("conflict record must exist");
+        assert_eq!(
+            conflict_after_1.remote_hash, remote_md5,
+            "remote_hash must be normalized to MD5"
+        );
+        assert!(
+            conflict_after_1.remote_snapshot_path.is_some(),
+            "remote_snapshot_path must be set after normalization"
+        );
+
+        // === Step 2: keep_local 现在能真正解决冲突 ===
+        SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
+        let state_after_resolve = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after_resolve.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert_eq!(
+            state_after_resolve.known_files.get(chapter_rel).unwrap(),
+            &remote_md5,
+            "known_files must be remote MD5 after keep_local"
+        );
+
+        // === Step 3: 下一轮 sync 得到 LocalChanged，不会重新冒出同一个冲突 ===
+        let res2 = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+        assert!(
+            res2.uploaded_files.contains(&chapter_rel.to_string()),
+            "After keep_local, sync must upload the local version (LocalChanged)"
+        );
+        assert!(
+            !res2.downloaded_files.contains(&chapter_rel.to_string()),
+            "After keep_local, sync must NOT download remote over local"
+        );
+        let state_after_2 = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after_2.conflicted_files.contains(chapter_rel),
+            "conflicted_files must stay cleared — no re-emerging conflict"
         );
     }
 }

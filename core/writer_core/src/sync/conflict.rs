@@ -378,6 +378,30 @@ impl crate::sync::SyncService {
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
     pub fn resolve_conflict_keep_local(sync_root: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(sync_root)?;
+        // 先 clone 出 conflict，完成 kind/hash 可解决性判断，再移除 conflicted_files。
+        // 避免逻辑顺序上先"删冲突"再发现不能解决。
+        let conflict_opt = state
+            .conflicts
+            .iter()
+            .find(|c| c.local_path == path)
+            .cloned();
+
+        // BothChanged + canonical_known_hash == None 时返回 Err，保持冲突原样。
+        // 不调用 remove_conflict_in_memory，不返回"解决成功"。
+        if let Some(conflict) = &conflict_opt {
+            if conflict.kind == SyncConflictKind::BothChanged
+                && Self::canonical_known_hash(sync_root, path, conflict).is_none()
+            {
+                return Err(crate::Error::Other(format!(
+                    "resolve_conflict_keep_local: path '{}' has BothChanged conflict with \
+                     non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
+                     without a proven remote content hash; run a sync to normalize the \
+                     conflict record first",
+                    path
+                )));
+            }
+        }
+
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_keep_local: path '{}' is not in conflicted_files",
@@ -390,15 +414,9 @@ impl crate::sync::SyncService {
         // RemoteChanged and download the remote version over local — the opposite of
         // what "keep local" means.
         //
-        // 用 .cloned() 取出 conflict，因为 match 分支里 state.known_files.remove(path)
-        // 需要 &mut state，而 state.conflicts.iter().find(...) 借用 &state.conflicts，
-        // 同时借用会冲突。.cloned() 把 conflict 变成 owned 即可。
-        if let Some(conflict) = state
-            .conflicts
-            .iter()
-            .find(|c| c.local_path == path)
-            .cloned()
-        {
+        // 用 conflict_opt（上面已 clone）替换原来的 state.conflicts.iter().find(...)，
+        // 因为 state.conflicted_files.remove(path) 已经借用了 &mut state。
+        if let Some(conflict) = conflict_opt {
             match conflict.kind {
                 SyncConflictKind::RemoteDeleted => {
                     // RemoteDeleted：远端已删除，直接移除 known base。
@@ -412,6 +430,7 @@ impl crate::sync::SyncService {
                 SyncConflictKind::BothChanged => {
                     // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
                     // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
+                    // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
                     Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
                 }
             }
@@ -583,6 +602,30 @@ impl crate::sync::SyncService {
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
     pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(sync_root)?;
+        // 先 clone 出 conflict，完成 kind/hash 可解决性判断，再移除 conflicted_files。
+        // 避免逻辑顺序上先"删冲突"再发现不能解决。
+        let conflict_opt = state
+            .conflicts
+            .iter()
+            .find(|c| c.local_path == path)
+            .cloned();
+
+        // BothChanged + canonical_known_hash == None 时返回 Err，保持冲突原样。
+        // 不调用 remove_conflict_in_memory，不返回"解决成功"。
+        if let Some(conflict) = &conflict_opt {
+            if conflict.kind == SyncConflictKind::BothChanged
+                && Self::canonical_known_hash(sync_root, path, conflict).is_none()
+            {
+                return Err(crate::Error::Other(format!(
+                    "resolve_conflict_mark_merged: path '{}' has BothChanged conflict with \
+                     non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
+                     without a proven remote content hash; run a sync to normalize the \
+                     conflict record first",
+                    path
+                )));
+            }
+        }
+
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_mark_merged: path '{}' is not in conflicted_files",
@@ -593,15 +636,9 @@ impl crate::sync::SyncService {
         // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
         // This ensures the merged local version gets uploaded to the remote.
         //
-        // 用 .cloned() 取出 conflict，因为 match 分支里 state.known_files.remove(path)
-        // 需要 &mut state，而 state.conflicts.iter().find(...) 借用 &state.conflicts，
-        // 同时借用会冲突。.cloned() 把 conflict 变成 owned 即可。
-        if let Some(conflict) = state
-            .conflicts
-            .iter()
-            .find(|c| c.local_path == path)
-            .cloned()
-        {
+        // 用 conflict_opt（上面已 clone）替换原来的 state.conflicts.iter().find(...)，
+        // 因为 state.conflicted_files.remove(path) 已经借用了 &mut state。
+        if let Some(conflict) = conflict_opt {
             match conflict.kind {
                 SyncConflictKind::RemoteDeleted => {
                     // RemoteDeleted：远端已删除，直接移除 known base。
@@ -615,6 +652,7 @@ impl crate::sync::SyncService {
                 SyncConflictKind::BothChanged => {
                     // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
                     // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
+                    // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
                     Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
                 }
             }
