@@ -11,6 +11,7 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "shareFiles": "$profile:share_files",
     "metadata": [
       {
         "name": "ohos.arkui.UIMaterial.state",

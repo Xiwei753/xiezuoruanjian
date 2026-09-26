@@ -163,6 +163,7 @@ interface EditorRuntimeAttachment {
 }
 
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
+// 诊断目录名 — 位于 filesDir 下（非 cacheDir），因为 snapshots 子目录需要持久保留 latest.zip/previous.zip
 const DIAGNOSTICS_DIR = 'diagnostics'
 
 // 附件名常量 — 与 Android 端 DiagnosticsExporterInterop 保持一致。
@@ -202,13 +203,13 @@ export class HarmonyDiagnosticsExporter {
         hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics failed with code %{public}d; continuing export', flushResult)
       }
 
-      // 2. 准备输出目录
+      // 2. 准备输出目录 — 使用 filesDir 而非 cacheDir，因为 snapshots 目录需要持久保留 latest.zip/previous.zip
       if (this.abilityContext === null) {
         hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
         return null
       }
-      const cacheDir = this.abilityContext.cacheDir
-      const outputDir = `${cacheDir}/${DIAGNOSTICS_DIR}`
+      const filesDir = this.abilityContext.filesDir
+      const outputDir = `${filesDir}/${DIAGNOSTICS_DIR}/snapshots`
       this.ensureOutputDir(outputDir)
 
       // 3. 收集平台附件
@@ -314,8 +315,8 @@ export class HarmonyDiagnosticsExporter {
         attachments.push(this.errorAttachment(ATTACHMENT_HILOG, 'abilityContext is null'))
         return
       }
-      const cacheDir = this.abilityContext.cacheDir
-      const logDir = `${cacheDir}/log`
+      const filesDir = this.abilityContext.filesDir
+      const logDir = `${filesDir}/diagnostics/live/log`
       const logContent = this.readLogFiles(logDir)
       if (logContent.length > 0) {
         attachments.push(this.makeAttachment(ATTACHMENT_HILOG, logContent))
@@ -618,22 +619,12 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
-  // 确保输出目录存在，并清理旧文件。
+  // 确保输出目录存在。
+  // 不清空旧 zip 文件，因为 snapshots 目录需要保留 latest.zip/previous.zip。
   private ensureOutputDir(outputDir: string): void {
     try {
       if (!fs.accessSync(outputDir)) {
         fs.mkdirSync(outputDir, true)
-      }
-      // 清理旧的 zip 文件
-      const entries = fs.listFileSync(outputDir)
-      for (const entry of entries) {
-        if (entry.endsWith('.zip')) {
-          try {
-            fs.unlinkSync(`${outputDir}/${entry}`)
-          } catch (_) {
-            // 删除失败不影响导出
-          }
-        }
       }
     } catch (_) {
       // 目录创建失败不影响导出（Rust 层会自己创建）
