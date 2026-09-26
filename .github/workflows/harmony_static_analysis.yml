@@ -54,6 +54,6 @@ jobs:
           export OHOS_NDK_HOME="$HARMONY_CLI_HOME/sdk/default/openharmony/native"
           bash tools/build_harmony.sh
 
-      - name: Build HarmonyOS app (debug)
+      - name: Compile ArkTS
         working-directory: apps/harmony
-        run: hvigorw --mode project -p product=default -p buildMode=debug assembleApp
+        run: hvigorw --mode module -p module=entry@default -p product=default -p buildMode=debug CompileArkTS
