@@ -18,6 +18,8 @@
 #   HARMONY_CLI_VERSION — 固定版本号（默认: 26.0.0.821）
 #   HARMONY_CLI_HOME — 安装目录（默认: $HOME/.harmony-cli）
 #
+# source 之后同时导出工具链自带 Node 的 PATH 和 DEVECO_SDK_HOME（hvigor 定位 SDK 用）。
+#
 # 注：HARMONY_CLI_HOME 直接指向解压后的 command-line-tools 目录，
 #     保留完整结构（bin/、lib/、tool/node/、sdk/ 等），
 #     不拆目录复制，确保 hvigorw、Native 构建等都能正常工作。
@@ -46,7 +48,8 @@ CLI_SHA256="0cbdf7ac5c1be1e42694d448ffaee0c0be0ba9a948197e2bc5b61ca5bdc481f2"
 # 检查是否已安装且版本匹配
 if [ -x "$HARMONY_CLI_HOME/bin/ohpm" ] && [ -f "$HARMONY_CLI_HOME/VERSION" ] && [ "$(cat "$HARMONY_CLI_HOME/VERSION")" = "$HARMONY_CLI_VERSION" ]; then
   echo "HarmonyOS CLI $HARMONY_CLI_VERSION 已安装，跳过安装。"
-  export PATH="$HARMONY_CLI_HOME/bin:$PATH"
+  export DEVECO_SDK_HOME="$HARMONY_CLI_HOME/sdk"
+  export PATH="$HARMONY_CLI_HOME/tool/node/bin:$HARMONY_CLI_HOME/bin:$PATH"
   return 0 2>/dev/null || exit 0
 fi
 
@@ -126,8 +129,10 @@ cp -r "$CLI_EXTRACTED/".[!.]* "$HARMONY_CLI_HOME/" 2>/dev/null || true
 # 标记版本
 echo "$HARMONY_CLI_VERSION" > "$HARMONY_CLI_HOME/VERSION"
 
-# 加入 PATH
-export PATH="$HARMONY_CLI_HOME/bin:$PATH"
+# 加入 PATH 与环境变量
+# hvigorw 需要同一套 CLI 自带 Node；DEVECO_SDK_HOME 是 hvigor 定位 HarmonyOS SDK 的唯一来源。
+export DEVECO_SDK_HOME="$HARMONY_CLI_HOME/sdk"
+export PATH="$HARMONY_CLI_HOME/tool/node/bin:$HARMONY_CLI_HOME/bin:$PATH"
 
 echo ""
 echo "=== HarmonyOS CLI 安装完成 ==="

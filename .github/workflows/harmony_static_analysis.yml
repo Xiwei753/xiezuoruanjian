@@ -31,6 +31,7 @@ jobs:
         run: |
           source tools/setup_harmony_cli.sh
           echo "HARMONY_CLI_HOME=$HARMONY_CLI_HOME" >> "$GITHUB_ENV"
+          echo "DEVECO_SDK_HOME=$HARMONY_CLI_HOME/sdk" >> "$GITHUB_ENV"
           echo "$HARMONY_CLI_HOME/tool/node/bin" >> "$GITHUB_PATH"
           echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
 
@@ -44,7 +45,10 @@ jobs:
 
       - name: Run codelinter
         working-directory: apps/harmony
-        run: codelinter
+        run: codelinter -f json -o "$RUNNER_TEMP/codelinter-report.json"
+
+      - name: Check codelinter report
+        run: python3 tools/check_codelinter_report.py "$RUNNER_TEMP/codelinter-report.json"
 
       - name: Setup Rust toolchain
         run: rustup target add aarch64-unknown-linux-ohos
@@ -56,4 +60,4 @@ jobs:
 
       - name: Compile ArkTS
         working-directory: apps/harmony
-        run: hvigorw --mode module -p module=entry@default -p product=default -p buildMode=debug CompileArkTS
+        run: hvigorw --mode module -p module=entry@default -p product=default -p buildMode=debug default@CompileArkTS
