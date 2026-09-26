@@ -120,6 +120,28 @@ pub fn merge_sync_conflicts(
     merged
 }
 
+/// 只操作内存三件套的冲突移除 helper。
+///
+/// 同时从 `state.conflicted_files`、`state.conflicts` 和 `conflicts_json` 删除
+/// 指定路径的冲突记录，保持三者一致。不持久化（调用方负责后续 persist）。
+///
+/// 用于：
+/// - `resolve_conflict_keep_local` / `take_remote` / `mark_merged` 解决冲突后清理；
+/// - `merge_remote_into_local_snapshot` 旧基线归一化时清理历史哈希污染制造的假冲突。
+///
+/// 用 `local_path` 和 `remote_path` 双重匹配，避免同路径不同 remote_path 的边缘情况。
+pub(crate) fn remove_conflict_in_memory(
+    state: &mut crate::sync::types::SyncState,
+    conflicts_json: &mut Vec<SyncConflict>,
+    path: &str,
+) {
+    state.conflicted_files.remove(path);
+    state
+        .conflicts
+        .retain(|c| c.local_path != path && c.remote_path != path);
+    conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+}
+
 /// staging 三方冲突 → `SyncConflict` 映射 持久化。
 ///
 /// 改成完整事务——先在内存里构造新的 `SyncState` 和
@@ -296,17 +318,14 @@ impl crate::sync::SyncService {
             let full_path = sync_root.join(path);
             if full_path.exists() {
                 let content = std::fs::read(&full_path)?;
-                let hash = format!("{:x}", md5::compute(&content));
+                let hash = crate::sync::hash::content_md5(&content);
                 state.known_files.insert(path.to_string(), hash);
             }
         }
-        // Remove the conflict record from state.conflicts
-        state
-            .conflicts
-            .retain(|c| c.local_path != path && c.remote_path != path);
-        // 一次事务写 state + conflicts.json，避免两次独立写入中间崩溃导致不一致。
+        // Remove the conflict record from state.conflicts and conflicts.json
+        // via the shared in-memory helper.
         let mut conflicts_json = load_conflicts_json(sync_root)?;
-        conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+        remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
     }
@@ -382,13 +401,10 @@ impl crate::sync::SyncService {
             state.pending_take_remote.insert(path.to_string());
         }
 
-        // Remove the conflict record from state.conflicts
-        state
-            .conflicts
-            .retain(|c| c.local_path != path && c.remote_path != path);
-        // 一次事务写 state + conflicts.json，避免两次独立写入中间崩溃导致不一致。
+        // Remove the conflict record from state.conflicts and conflicts.json
+        // via the shared in-memory helper.
         let mut conflicts_json = load_conflicts_json(sync_root)?;
-        conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+        remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         // applied_live = !use_pending_fallback：
         // - use_pending_fallback=false → 已立即应用 live 正文（snapshot 替换/移入 trash）。
@@ -479,17 +495,14 @@ impl crate::sync::SyncService {
             let full_path = sync_root.join(path);
             if full_path.exists() {
                 let content = std::fs::read(&full_path)?;
-                let hash = format!("{:x}", md5::compute(&content));
+                let hash = crate::sync::hash::content_md5(&content);
                 state.known_files.insert(path.to_string(), hash);
             }
         }
-        // Remove the conflict record from state.conflicts
-        state
-            .conflicts
-            .retain(|c| c.local_path != path && c.remote_path != path);
-        // 一次事务写 state + conflicts.json，避免两次独立写入中间崩溃导致不一致。
+        // Remove the conflict record from state.conflicts and conflicts.json
+        // via the shared in-memory helper.
         let mut conflicts_json = load_conflicts_json(sync_root)?;
-        conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+        remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
     }

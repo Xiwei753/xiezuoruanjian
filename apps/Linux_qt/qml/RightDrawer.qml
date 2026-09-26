@@ -48,8 +48,12 @@ Rectangle {
     property var syncBackendRef: null
     property string workspaceProjectId: ""
     property bool hasConflicts: false
-    // Issue #762 评论 5826175490 第 4 点：冲突路径，透传给 SyncConflictPanel 选中对应冲突
-    property string conflictPath: ""
+    // Issue #770 评论 5842877986: 完整冲突快照，由 WritingWorkspace 透传，
+    // 再下发给 SyncConflictPanel，不在 RightDrawer 内部调 list_sync_conflicts。
+    property var syncConflicts: []
+    // Issue #762 评论 5826175490 第 4 点：外部请求的冲突路径，透传给 SyncConflictPanel。
+    // requestedConflictPath 是单向输入，RightDrawer/SyncConflictPanel 绝不在内部赋值。
+    property string requestedConflictPath: ""
     // 冲突 tab 固定 idx=3，不偏移现有星图(0)/AI(1)/统计(2)，保持兼容。
     readonly property int conflictTabIdx: 3
 
@@ -58,6 +62,9 @@ Rectangle {
     signal openSettings()
     // 冲突 tab 被请求时发出（hasConflicts 从 false 变 true），外部据此打开 drawer。
     signal conflictTabRequested()
+    // Issue #770 评论 5842877986: tab 点击改发信号，由外部（WritingWorkspace）
+    // 修改 drawerTab，避免双向写 currentTab binding。
+    signal tabRequested(int tabIdx)
 
     color: "transparent"
     clip: true
@@ -140,7 +147,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.currentTab = modelData.idx
+                                onClicked: root.tabRequested(modelData.idx)
                             }
                         }
                     }
@@ -266,7 +273,10 @@ Rectangle {
                     dt: root.dt
                     syncBackendRef: root.syncBackendRef
                     projectId: root.workspaceProjectId
-                    conflictPath: root.conflictPath
+                    // Issue #770 评论 5842877986: 透传完整冲突快照和请求路径，
+                    // 不再让 SyncConflictPanel 自己查一份。
+                    conflicts: root.syncConflicts
+                    requestedConflictPath: root.requestedConflictPath
                     onCloseRequested: root.closeRequested()
                     onConflictsResolved: {
                         // 解决一个冲突后刷新列表；若全部解决，外部应把 hasConflicts 置 false。
@@ -282,7 +292,8 @@ Rectangle {
     // RightDrawer 不自己控制 isOpen（单向属性，由外部绑定）。
     onHasConflictsChanged: {
         if (root.hasConflicts) {
-            root.currentTab = root.conflictTabIdx;
+            // Issue #770 评论 5842877986: 不直接改 currentTab（双向写 binding），
+            // 只发 conflictTabRequested()，由外部（WritingWorkspace）统一改 drawerTab。
             root.conflictTabRequested();
         }
     }

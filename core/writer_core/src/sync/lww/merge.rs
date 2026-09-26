@@ -130,6 +130,91 @@ pub(crate) fn merge_remote_into_local_snapshot(
     let local_records = snapshot_local_records_read_only(sync_root, scope, &state.device_id)?;
     let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope)?;
 
+    // 提前加载 conflicts_json，让它一直带到最后的 persist_sync_merge_result，
+    // 不要末尾再重新读一份。旧基线归一化和主循环都操作这一份 conflicts_json，
+    // 保证归一化清除的假冲突不会在末尾 persist 时被重新加载的旧 conflicts.json 覆盖。
+    let mut conflicts_json = crate::sync::conflict::load_conflicts_json(sync_root)?;
+
+    // ── 旧基线归一化 ──
+    // 旧版本同步系统可能把 Git blob OID（40位 hex）误写入 state.known_files，
+    // 而当前同步系统使用 MD5（32位 hex）。三路比较里 local/remote/base 不是同一种
+    // 内容哈希会导致空内容被误判为 BothChanged 冲突。
+    //
+    // 对 state.known_files 中每个值是 40 位 hex（is_legacy_git_blob_oid）的 path：
+    // 1. 能证明 remote blob oid == base → 把 known_files[path] 改成 remote_rec.content_hash（MD5）。
+    // 2. 否则能证明 local blob oid == base → 改成 local_rec.content_hash（MD5）。
+    // 3. 如果该 path 已经在 conflicted_files，用归一化后的 base 重新跑正文三路决策。
+    // 4. 如果不再是冲突，说明是历史哈希污染制造的假冲突，用 remove_conflict_in_memory 清除。
+    // 5. 无法证明时不自动清冲突，保留真实选择权。
+    let legacy_paths: Vec<String> = state
+        .known_files
+        .iter()
+        .filter(|(_, h)| crate::sync::hash::is_legacy_git_blob_oid(h))
+        .map(|(p, _)| p.clone())
+        .collect();
+    for path in legacy_paths {
+        let old_base = match state.known_files.get(&path) {
+            Some(h) => h.clone(),
+            None => continue,
+        };
+        let remote_content_hash = remote_records
+            .get(&path)
+            .map(|r| r.content_hash.as_str())
+            .unwrap_or("");
+        let local_content_opt = local_records.get(&path).map(|r| r.content_hash.as_str());
+        let new_base = crate::sync::hash::normalize_legacy_base_hash(
+            &old_base,
+            remote_content_hash,
+            local_content_opt,
+            &remote_tree_files,
+            &path,
+            sync_root,
+        );
+        if new_base == old_base || !crate::sync::hash::is_md5_content_hash(&new_base) {
+            // 无法证明旧 base 对应哪一侧，或归一化结果不是 MD5（数据异常），
+            // 保留原值，不自动清冲突。
+            continue;
+        }
+        state.known_files.insert(path.clone(), new_base.clone());
+        log::info!(
+            "[sync] legacy base hash normalization: path={} old_base={} new_base={}",
+            path,
+            old_base,
+            new_base
+        );
+
+        // 如果该 path 已经在 conflicted_files，用归一化后的 base 重新跑正文三路决策。
+        // 只对正文文件做（is_document_content_path），非正文文件不走三路比较。
+        if state.conflicted_files.contains(&path) {
+            if let (Some(local_rec), Some(remote_rec)) =
+                (local_records.get(&path), remote_records.get(&path))
+            {
+                let is_document = is_document_content_path(&path);
+                let (decision, _overwritten) =
+                    resolve_path_decision(local_rec, remote_rec, &new_base, is_document);
+                match decision {
+                    PathDecision::DocumentConflictBothChanged
+                    | PathDecision::DocumentConflictRemoteDeleted => {
+                        // 仍是真实冲突，保留用户选择权。
+                    }
+                    _ => {
+                        // 历史哈希污染制造的假冲突，从内存三件套清除。
+                        // 后续主循环会按归一化后的 base 走正常 UploadLocal/DownloadRemote/NoOp。
+                        crate::sync::conflict::remove_conflict_in_memory(
+                            state,
+                            &mut conflicts_json,
+                            &path,
+                        );
+                        log::info!(
+                            "[sync] legacy base hash normalization: cleared fake conflict path={}",
+                            path
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let unresolved_conflict_paths: std::collections::HashSet<String> =
         state.conflicted_files.clone();
 
@@ -153,7 +238,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
 
         for (path, content) in pending_results {
             if let Some(content) = content {
-                let hash = format!("{:x}", md5::compute(&content));
+                let hash = crate::sync::hash::content_md5(&content);
                 state.known_files.insert(path.clone(), hash);
                 let now_ts = chrono::Utc::now().timestamp_millis();
                 state.known_files_updated_at.insert(path.clone(), now_ts);
@@ -369,7 +454,8 @@ pub(crate) fn merge_remote_into_local_snapshot(
     // 在内存中收集冲突到 state.conflicts 和 conflicts_json，
     // 不再逐条调用 record_sync_conflict（每次内部写盘）。
     // 冲突记录失败必须向上返回 Err，不再 let _ = 吞错误。
-    let mut conflicts_json = crate::sync::conflict::load_conflicts_json(sync_root)?;
+    // conflicts_json 已在归一化前提前加载（旧基线归一化可能清除假冲突），
+    // 这里直接复用，不再重新读一份。
     for conflict in &doc_conflicts {
         crate::sync::conflict::upsert_conflict(
             &mut conflicts_json,

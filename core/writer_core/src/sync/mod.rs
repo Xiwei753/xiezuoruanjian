@@ -41,6 +41,8 @@ pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
 ///   generation GC（provider-neutral 清理未引用 generation）。
 pub mod generation_gc;
+/// 同步哈希语义集中模块（MD5 内容哈希 / Git blob OID / 旧基线归一化）。
+pub(crate) mod hash;
 pub mod lww;
 ///   待删除同步 target 的持久化（provider-neutral）。
 pub mod path;
@@ -58,7 +60,6 @@ pub mod target_lifecycle;
 pub mod tests;
 pub mod types;
 pub mod url;
-pub mod utils;
 
 pub use provider::*;
 pub use service::*;

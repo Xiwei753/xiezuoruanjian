@@ -158,6 +158,9 @@ ApplicationWindow {
     // Issue #762 评论 5826175490 第 4 点：从 SyncPage 全局冲突入口跳到具体作品。
     // 待选中的冲突路径先记在这里，等 WritingWorkspace 实例化后再交给它——
     // 用户可能在 hub/设置页触发，此时 writingWorkspaceLoader.item 还不存在。
+    // Issue #770 评论 5842877986: 跨作品点冲突时不能只缓存 path，还要缓存 projectId，
+    // 否则项目没切到位就消费 pending，会落到错误作品的冲突列表里。
+    property string pendingConflictProjectId: ""
     property string pendingConflictPath: ""
 
     function projectTitleById(projectId) {
@@ -174,17 +177,25 @@ ApplicationWindow {
         if (!pendingConflictPath) return
         var workspace = writingWorkspaceLoader.item
         if (!workspace) return
+        // Issue #770 评论 5842877986: 只有项目真正切到位才消费 pending，
+        // 否则保留等 projectReady 信号到来再消费。
+        if (workspace.workspaceProjectId !== pendingConflictProjectId) return
         workspace.openConflictPath(pendingConflictPath)
         pendingConflictPath = ""
+        pendingConflictProjectId = ""
     }
 
     function openConflictInProject(projectId, path) {
         if (!projectId) return
         // 关闭设置页，让写作工作区可见。
         if (settingsDialogLoader.item) settingsDialogLoader.item.close()
-        appController.openWriting(projectId, window.projectTitleById(projectId))
+        // Issue #770 评论 5842877986: 先写 pending（projectId + path）再切作品，
+        // 等 WritingWorkspace projectReady 信号到来且 projectId 匹配时再消费。
+        window.pendingConflictProjectId = projectId
         window.pendingConflictPath = path || ""
+        appController.openWriting(projectId, window.projectTitleById(projectId))
         // 不要求这一轮同步先结束；打开作品与同步是否在跑互不影响。
+        // 若 Loader 已存在且项目已切到位，立即消费；否则等 projectReady。
         window.applyPendingConflictPath()
     }
 
@@ -636,6 +647,9 @@ ApplicationWindow {
                 // Issue #757 评论 5818193510 第 5 点：传入 syncBackend 给 WritingWorkspace，
                 // 用于监听同步完成信号并在冲突产生时打开临时冲突侧栏。
                 syncBackendRef: syncBackend
+                // Issue #770 评论 5842877986: 作品切到位后发 projectReady，
+                // main.qml 据此消费 pendingConflictPath（项目 id 匹配才消费）。
+                onProjectReady: window.applyPendingConflictPath()
 
                 onBackToProjects: {
                     appController.openHub();

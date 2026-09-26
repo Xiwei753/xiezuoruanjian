@@ -20,12 +20,17 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     required property var dt
-    // SyncBackend 引用，用于调用 list_sync_conflicts / load_sync_conflict_preview / resolve_*。
+    // SyncBackend 引用，用于调用 load_sync_conflict_preview / resolve_*。
     property var syncBackendRef: null
     // 当前项目 ID（由 WritingWorkspace.workspaceProjectId 传入）。
     property string projectId: ""
-    // 当前选中的冲突路径（由外部指定，或内部自动选第一个）。
-    property string conflictPath: ""
+    // Issue #770 评论 5842877986: 冲突列表由外部（WritingWorkspace.syncConflicts）传入，
+    // 面板不再自己调 list_sync_conflicts 维护第二份缓存。
+    required property var conflicts
+    // 外部请求选中的冲突路径（单向输入，绝不在组件内部赋值）。
+    property string requestedConflictPath: ""
+    // 面板内部当前选中的冲突路径（上一条/下一条、解决后选下一条只改这个）。
+    property string selectedConflictPath: ""
 
     // 关闭只收起侧栏，冲突仍保留。
     signal closeRequested()
@@ -61,8 +66,6 @@ Rectangle {
     readonly property bool _isNarrow: root.width < _narrowThreshold
 
     // ── 内部状态 ──
-    // list_sync_conflicts 返回的冲突数组（SyncConflictDto[]，camelCase 字段）。
-    property var conflicts: []
     // load_sync_conflict_preview 返回的预览对象（{ path, kind, createdAt, localContent, remoteContent, remoteDeleted }）。
     property var preview: null
     // 当前冲突在 conflicts 数组中的索引。
@@ -75,51 +78,12 @@ Rectangle {
 
     // ── 数据加载 ──
 
-    function reloadConflicts() {
-        if (!root.syncBackendRef || !root.projectId) {
-            root.conflicts = [];
-            root.preview = null;
-            return;
-        }
-        root.loading = true;
-        var raw = root.syncBackendRef.list_sync_conflicts(root.projectId);
-        root.loading = false;
-        var resp;
-        try { resp = JSON.parse(raw); } catch (e) { resp = null; }
-        if (resp && resp.success && resp.data) {
-            root.conflicts = resp.data.conflicts || [];
-            // 选中 conflictPath 对应的冲突，否则选第一个。
-            var found = -1;
-            if (root.conflictPath) {
-                for (var i = 0; i < root.conflicts.length; i++) {
-                    if (root.conflicts[i].localPath === root.conflictPath) {
-                        found = i;
-                        break;
-                    }
-                }
-            }
-            if (found >= 0) {
-                root.currentIndex = found;
-            } else if (root.conflicts.length > 0) {
-                root.currentIndex = 0;
-                root.conflictPath = root.conflicts[0].localPath;
-            } else {
-                root.currentIndex = 0;
-                root.conflictPath = "";
-            }
-            loadPreview();
-        } else {
-            root.conflicts = [];
-            root.preview = null;
-        }
-    }
-
     function loadPreview() {
-        if (!root.syncBackendRef || !root.projectId || !root.conflictPath) {
+        if (!root.syncBackendRef || !root.projectId || !root.selectedConflictPath) {
             root.preview = null;
             return;
         }
-        var raw = root.syncBackendRef.load_sync_conflict_preview(root.projectId, root.conflictPath);
+        var raw = root.syncBackendRef.load_sync_conflict_preview(root.projectId, root.selectedConflictPath);
         var resp;
         try { resp = JSON.parse(raw); } catch (e) { resp = null; }
         if (resp && resp.success && resp.data) {
@@ -130,59 +94,71 @@ Rectangle {
     }
 
     function resolveAction(action) {
-        if (!root.syncBackendRef || !root.projectId || !root.conflictPath) return;
+        if (!root.syncBackendRef || !root.projectId || !root.selectedConflictPath) return;
         var raw;
         if (action === "keep_local") {
-            raw = root.syncBackendRef.resolve_conflict_keep_local(root.projectId, root.conflictPath);
+            raw = root.syncBackendRef.resolve_conflict_keep_local(root.projectId, root.selectedConflictPath);
         } else if (action === "take_remote") {
-            raw = root.syncBackendRef.resolve_conflict_take_remote(root.projectId, root.conflictPath);
+            raw = root.syncBackendRef.resolve_conflict_take_remote(root.projectId, root.selectedConflictPath);
         } else if (action === "mark_merged") {
-            raw = root.syncBackendRef.resolve_conflict_mark_merged(root.projectId, root.conflictPath);
+            raw = root.syncBackendRef.resolve_conflict_mark_merged(root.projectId, root.selectedConflictPath);
         } else {
             return;
         }
         var resp;
         try { resp = JSON.parse(raw); } catch (e) { resp = null; }
         if (resp && resp.success) {
+            // Issue #770 评论 5842877986: 解决后不再自己 reloadConflicts，
+            // 只发 conflictsResolved() 信号让外部（WritingWorkspace）刷新 syncConflicts。
+            // 外部刷新后 conflicts 变化会触发 onConflictsChanged 重新选择索引。
             root.conflictsResolved();
-            // 解决一个冲突后刷新列表，自动跳到下一个或清空。
-            var resolvedPath = root.conflictPath;
-            root.conflictPath = "";
-            reloadConflicts();
-            // 若仍有冲突且未自动选中，选第一个。
-            if (root.conflicts.length > 0 && !root.conflictPath) {
-                root.conflictPath = root.conflicts[0].localPath;
-                root.currentIndex = 0;
-                loadPreview();
-            }
         }
     }
 
     function selectIndex(idx) {
         if (idx < 0 || idx >= root.conflicts.length) return;
         root.currentIndex = idx;
-        root.conflictPath = root.conflicts[idx].localPath;
+        root.selectedConflictPath = root.conflicts[idx].localPath || "";
         loadPreview();
     }
 
-    onConflictPathChanged: {
-        // Issue #762 评论 5826175490 第 4 点：外部（SyncPage 全局冲突入口）指定路径时，
-        // 把当前索引同步到该路径，避免列表高亮与实际预览错位。
-        for (var i = 0; i < root.conflicts.length; i++) {
-            if (root.conflicts[i].localPath === root.conflictPath) {
-                root.currentIndex = i;
-                break;
+    // Issue #770 评论 5842877986: 当外部 conflicts 或 requestedConflictPath 变化时，
+    // 重新选择索引并加载 preview。如果 requestedConflictPath 在 conflicts 里找到就选它，
+    // 否则选第一个。这是面板唯一的选择入口，不在内部调 list_sync_conflicts。
+    function reselectFromConflicts() {
+        var conflicts = root.conflicts || [];
+        var found = -1;
+        if (root.requestedConflictPath) {
+            for (var i = 0; i < conflicts.length; i++) {
+                if (conflicts[i].localPath === root.requestedConflictPath) {
+                    found = i;
+                    break;
+                }
             }
         }
-        loadPreview()
+        if (found >= 0) {
+            root.currentIndex = found;
+            root.selectedConflictPath = conflicts[found].localPath || "";
+        } else if (conflicts.length > 0) {
+            root.currentIndex = 0;
+            root.selectedConflictPath = conflicts[0].localPath || "";
+        } else {
+            root.currentIndex = 0;
+            root.selectedConflictPath = "";
+            root.preview = null;
+            return;
+        }
+        loadPreview();
     }
+
+    onConflictsChanged: root.reselectFromConflicts()
+    onRequestedConflictPathChanged: root.reselectFromConflicts()
     onProjectIdChanged: {
-        // 切换作品后旧冲突列表属于上一个作品，必须重新加载；否则全局入口带过来的
-        // 路径在旧列表里找不到，会继续显示错作品的冲突。
-        root.conflictPath = ""
-        reloadConflicts()
+        // Issue #770 评论 5842877986: 切换作品后冲突列表由外部统一刷新，
+        // 面板只清理 preview，不再自己调 list_sync_conflicts。
+        root.preview = null;
     }
-    Component.onCompleted: reloadConflicts()
+    Component.onCompleted: root.reselectFromConflicts()
 
     // ── 布局 ──
 
@@ -204,7 +180,7 @@ Rectangle {
 
                 AppText {
                     dt: root.dt
-                    text: root.conflictPath ? root.conflictPath : qsTr("无冲突")
+                    text: root.selectedConflictPath ? root.selectedConflictPath : qsTr("无冲突")
                     color: root._textPrimary
                     font.pointSize: root._fontMd
                     font.weight: Font.DemiBold
