@@ -452,7 +452,7 @@ mod tests {
     fn compute_starmap_edge_renders_uses_core_geometry() {
         let api = WriterCoreApi::new("", "");
         let graph = StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: "map".to_string(),
             nodes: vec![],
             edges: vec![StarMapEdgeDto {

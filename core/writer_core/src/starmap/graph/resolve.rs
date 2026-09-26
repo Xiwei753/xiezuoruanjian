@@ -1,6 +1,7 @@
 use crate::starmap::package_storage::bucket_for_id;
 use crate::starmap::semantic::StarMapTargetDetail;
 use crate::starmap::store::load::phased::load_current_graph_meta;
+use crate::starmap::store::meta::GraphMeta;
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
 use crate::starmap::types::StarMapGraph;
 
@@ -72,30 +73,44 @@ impl<'a> ResolverGraphProvider<'a> {
         self.app_data_root.join("starmaps").join(starmap_id)
     }
 
-    /// 检查目标星图 graph.json 的 schema 版本。
+    /// 加载 GraphMeta 并做 schema 版本检查。
     ///
-    /// graph.json 不存在时返回 `Ok(())`（允许空星图，对象读取返回 `None`）。
-    fn check_schema(&self, starmap_id: &str) -> Result<(), ResolverReadError> {
+    /// graph.json 不存在时返回 `Ok(None)`（空星图）。
+    /// `load_current_graph_meta` 已内置 schema 版本检查，此处只需正确映射错误类型。
+    fn load_graph_meta_checked(
+        &self,
+        starmap_id: &str,
+    ) -> Result<Option<GraphMeta>, ResolverReadError> {
         let graph_json_path = self.starmap_dir(starmap_id).join("graph.json");
         if !graph_json_path.exists() {
-            return Ok(());
+            return Ok(None);
         }
         match load_current_graph_meta(&graph_json_path) {
-            Ok(_) => Ok(()),
+            Ok(meta) => Ok(meta),
             Err(crate::error::Error::UnsupportedVersion { .. }) => {
                 Err(ResolverReadError::UnsupportedVersion)
             }
+            Err(crate::error::Error::Io(_)) => Err(ResolverReadError::ReadFailed),
             Err(_) => Err(ResolverReadError::CorruptStarmap),
         }
     }
 
-    /// 读取一个 node 对象文件。文件不存在返回 `Ok(None)`。
+    /// 读取一个 node 对象文件。文件不存在或不在 GraphMeta 成员列表中返回 `Ok(None)`。
     fn get_node(
         &self,
         starmap_id: &str,
         node_id: &str,
     ) -> Result<Option<crate::starmap::types::StarMapNode>, ResolverReadError> {
-        self.check_schema(starmap_id)?;
+        let meta = self.load_graph_meta_checked(starmap_id)?;
+        // GraphMeta 为 None 表示空星图，对象不存在
+        // GraphMeta 存在时，node_id 必须在 node_ids 列表中才视为合法
+        if let Some(ref m) = meta {
+            if !m.node_ids.iter().any(|id| id == node_id) {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        }
         let bucket_dir = self
             .starmap_dir(starmap_id)
             .join("nodes")
@@ -110,13 +125,22 @@ impl<'a> ResolverGraphProvider<'a> {
             .map_err(|_| ResolverReadError::CorruptStarmap)
     }
 
-    /// 读取一个 embed 对象文件。文件不存在返回 `Ok(None)`。
+    /// 读取一个 embed 对象文件。文件不存在或不在 GraphMeta 成员列表中返回 `Ok(None)`。
     fn get_embed(
         &self,
         starmap_id: &str,
         instance_id: &str,
     ) -> Result<Option<crate::starmap::types::StarMapEmbed>, ResolverReadError> {
-        self.check_schema(starmap_id)?;
+        let meta = self.load_graph_meta_checked(starmap_id)?;
+        // GraphMeta 为 None 表示空星图，对象不存在
+        // GraphMeta 存在时，instance_id 必须在 embed_instance_ids 列表中才视为合法
+        if let Some(ref m) = meta {
+            if !m.embed_instance_ids.iter().any(|id| id == instance_id) {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        }
         let bucket_dir = self
             .starmap_dir(starmap_id)
             .join("embeds")
@@ -129,6 +153,37 @@ impl<'a> ResolverGraphProvider<'a> {
         serde_json::from_str::<crate::starmap::types::StarMapEmbed>(&content)
             .map(Some)
             .map_err(|_| ResolverReadError::CorruptStarmap)
+    }
+
+    /// 检查星图是否可读：星图 meta 文件存在且 graph.json（若存在）能正确解析。
+    ///
+    /// 1. `starmaps/{id}.meta.json` 存在（星图已通过 create_starmap 创建）
+    /// 2. graph.json 存在时，能成功通过 `load_current_graph_meta` 解析
+    /// 3. graph.json 不存在时也算可读（空星图，尚未写入任何对象）
+    fn starmap_exists_and_readable(&self, starmap_id: &str) -> Result<bool, ResolverReadError> {
+        // 先检查 .meta.json 是否存在（星图已创建）
+        // .meta.json 路径是 starmaps/{id}.meta.json，不是 starmaps/{id}/.meta.json
+        let meta_path = self
+            .app_data_root
+            .join("starmaps")
+            .join(format!("{}.meta.json", starmap_id));
+        if !meta_path.exists() {
+            return Ok(false);
+        }
+        // 再检查 graph.json 是否可读（schema 版本、JSON 完整性）
+        let graph_json_path = self.starmap_dir(starmap_id).join("graph.json");
+        if !graph_json_path.exists() {
+            // 空星图（尚未写入任何对象），可读
+            return Ok(true);
+        }
+        match load_current_graph_meta(&graph_json_path) {
+            Ok(_) => Ok(true),
+            Err(crate::error::Error::UnsupportedVersion { .. }) => {
+                Err(ResolverReadError::UnsupportedVersion)
+            }
+            Err(crate::error::Error::Io(_)) => Err(ResolverReadError::ReadFailed),
+            Err(_) => Err(ResolverReadError::CorruptStarmap),
+        }
     }
 }
 
@@ -192,12 +247,49 @@ fn lookup_node(
         .map_err(map_read_error)
 }
 
-/// 检查星图元数据是否存在（先查 context.overlays，找不到再查磁盘）。
+/// 检查星图是否存在且可读（先查 context.overlays，找不到再查磁盘 provider）。
+///
+/// 使用 `starmap_exists_and_readable` 而非仅查目录存在，确保 schema 不兼容
+/// 或 graph.json 损坏的星图不会被误判为存在。
+///
+/// **fail-safe 语义**：遇到 `UnsupportedVersion/CorruptStarmap/ReadFailed` 时返回 `true`，
+/// 因为删除保护调用此函数时，不能把"读取失败"当成"星图不存在"而允许删除。
+/// `resolve_target` 的起点检查不使用此函数，而是直接调用 `starmap_exists_and_readable`
+/// 以获取精确的错误类型。
 pub(crate) fn starmap_exists(context: &GraphResolverContext, starmap_id: &str) -> bool {
     if context.overlays.contains_key(starmap_id) {
         return true;
     }
-    crate::starmap::load_starmap_meta(&context.app_data_root, starmap_id).is_ok()
+    let provider = ResolverGraphProvider {
+        app_data_root: &context.app_data_root,
+    };
+    // fail-safe：读取错误时认为星图存在（防止删除保护误删）
+    provider.starmap_exists_and_readable(starmap_id).unwrap_or(true)
+}
+
+/// `resolve_target` 内部使用的星图可读性检查，返回精确的错误类型。
+///
+/// 与 `starmap_exists` 不同，此函数在遇到 `UnsupportedVersion/CorruptStarmap/ReadFailed`
+/// 时返回对应的 `StarMapTargetResolveStatus`，而不是 fail-safe 返回 `true`。
+/// 这确保 resolver 能向上传递"目标星图 schema 不兼容"等错误，而不是吞成 `MissingStarmap`。
+fn check_starmap_readable(
+    context: &GraphResolverContext,
+    starmap_id: &str,
+) -> Result<(), crate::starmap::semantic::StarMapTargetResolveStatus> {
+    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+    if context.overlays.contains_key(starmap_id) {
+        return Ok(());
+    }
+    let provider = ResolverGraphProvider {
+        app_data_root: &context.app_data_root,
+    };
+    match provider.starmap_exists_and_readable(starmap_id) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(MissingStarmap),
+        Err(ResolverReadError::UnsupportedVersion) => Err(UnsupportedVersion),
+        Err(ResolverReadError::CorruptStarmap) => Err(CorruptStarmap),
+        Err(ResolverReadError::ReadFailed) => Err(ReadFailed),
+    }
 }
 
 /// 解析目标路径的可达性，返回详细解析结果。
@@ -230,9 +322,8 @@ pub fn resolve_target(
         return Err(TooDeep);
     }
 
-    if !starmap_exists(context, &path.starmap_id) {
-        return Err(MissingStarmap);
-    }
+    // 起点检查：直接使用 starmap_exists_and_readable 以正确传递 UnsupportedVersion 等错误
+    check_starmap_readable(context, &path.starmap_id)?;
 
     let mut current_starmap_id = path.starmap_id.clone();
     let mut traversed_starmap_ids = vec![current_starmap_id.clone()];
@@ -251,9 +342,7 @@ pub fn resolve_target(
                 if !visited.insert(current_starmap_id.clone()) {
                     return Err(CycleDetected);
                 }
-                if !starmap_exists(context, &current_starmap_id) {
-                    return Err(MissingStarmap);
-                }
+                check_starmap_readable(context, &current_starmap_id)?;
                 traversed_starmap_ids.push(current_starmap_id.clone());
             }
             StarMapPathSegment::EnterPortal { node_id } => {
@@ -270,9 +359,7 @@ pub fn resolve_target(
                 if !visited.insert(current_starmap_id.clone()) {
                     return Err(CycleDetected);
                 }
-                if !starmap_exists(context, &current_starmap_id) {
-                    return Err(MissingStarmap);
-                }
+                check_starmap_readable(context, &current_starmap_id)?;
                 traversed_starmap_ids.push(current_starmap_id.clone());
             }
         }
@@ -308,7 +395,11 @@ pub fn resolve_target(
                 }
             }
         }
-        _ => {}
+        StarMapTargetDetail::Starmap => {
+            // 直接 Starmap 目标也要走 provider 检查，不能只查目录存在
+            check_starmap_readable(context, &current_starmap_id)?;
+        }
+        StarMapTargetDetail::Entity { .. } | StarMapTargetDetail::External { .. } => {}
     }
 
     Ok(ResolvedTarget {

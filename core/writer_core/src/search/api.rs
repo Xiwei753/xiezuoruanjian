@@ -1055,7 +1055,7 @@ mod tests {
         };
 
         let old_graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![node_a, node_b],
             edges: vec![],
@@ -1093,7 +1093,7 @@ mod tests {
             updated_at: 0,
         };
         let new_graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![node_a_only],
             edges: vec![],
@@ -1450,7 +1450,7 @@ mod tests {
         };
 
         let old_graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![node_a, node_b],
             edges: vec![edge_ab],
@@ -1485,7 +1485,7 @@ mod tests {
             updated_at: 0,
         };
         let new_graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![node_a_only],
             edges: vec![],
@@ -2101,7 +2101,7 @@ mod tests {
         let meta = api.create_starmap("RevMap", "desc", None).unwrap();
 
         let graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![],
             edges: vec![],
@@ -2187,7 +2187,7 @@ mod tests {
         };
 
         let old_graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![node_n1.clone()],
             edges: vec![],
@@ -2233,7 +2233,7 @@ mod tests {
             updated_at: 0,
         };
         let new_graph = crate::api::types::StarMapGraphDto {
-            schema_version: 1,
+            schema_version: 2,
             starmap_id: meta.starmap_id.clone(),
             nodes: vec![node_n1],
             edges: vec![],
