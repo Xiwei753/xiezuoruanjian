@@ -33,6 +33,7 @@ import { HarmonyThemeAdapter, ThemeObserver, ThemeConfig } from '../../ui/theme/
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, EditorSnapshotObserver } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { AdaptiveContext, AdaptiveObserver, AdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'
 const CHECKPOINT_INTERVAL_MS = 5000  // 最多每5秒生成一次
@@ -58,6 +59,19 @@ class CheckpointThemeObserver implements ThemeObserver {
 // Issue #773 评论 5845033983：NavObserver — navigation 变化时 persist + markDirty。
 type CheckpointNavObserver = (role: ScreenRole) => void
 
+// Issue #773 评论 5845398115：AdaptiveObserver 实现 — 窗口尺寸/折叠/安全区变化时 persist + markDirty。
+class CheckpointAdaptiveObserver implements AdaptiveObserver {
+  private checkpoint: HarmonyDiagnosticsCheckpoint
+
+  constructor(checkpoint: HarmonyDiagnosticsCheckpoint) {
+    this.checkpoint = checkpoint
+  }
+
+  onWindowSizeChange(_state: AdaptiveState): void {
+    this.checkpoint.persistRuntimeSnapshot()
+  }
+}
+
 export class HarmonyDiagnosticsCheckpoint {
   private static instance: HarmonyDiagnosticsCheckpoint
   private context: common.UIAbilityContext | null = null
@@ -71,6 +85,11 @@ export class HarmonyDiagnosticsCheckpoint {
   private navObserver: CheckpointNavObserver | null = null
   private editorObserver: EditorSnapshotObserver | null = null
 
+  // Issue #773 评论 5845398115：生命周期幂等 + AdaptiveContext 订阅 + 日志变化检测。
+  private initialized: boolean = false
+  private adaptiveObserver: CheckpointAdaptiveObserver | null = null
+  private lastLogSignature: string = ''
+
   private constructor() {
     this.exporter = new HarmonyDiagnosticsExporter()
   }
@@ -83,7 +102,13 @@ export class HarmonyDiagnosticsCheckpoint {
   }
 
   // 初始化 — 注入 UIAbilityContext，订阅 observer，启动定时器。
+  // Issue #773 评论 5845398115：生命周期幂等 — UIAbility 在同一进程销毁后重建时，
+  // 不重复订阅 observer、不重复开 timer。destroy() 后 initialized 复位，允许下次 init。
   init(context: common.UIAbilityContext): void {
+    if (this.initialized) {
+      return
+    }
+    this.initialized = true
     this.context = context
     this.exporter.setAbilityContext(context)
 
@@ -106,6 +131,10 @@ export class HarmonyDiagnosticsCheckpoint {
     }
     EditorRuntimeSnapshotStore.getInstance().addObserver(this.editorObserver)
 
+    // Issue #773 评论 5845398115：订阅 AdaptiveContext — 窗口尺寸/折叠/安全区变化时 persist + markDirty。
+    this.adaptiveObserver = new CheckpointAdaptiveObserver(this)
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
+
     this.startTimer()
   }
 
@@ -113,6 +142,13 @@ export class HarmonyDiagnosticsCheckpoint {
   // 实际的 checkpoint 生成由定时器触发，最多每 5 秒一次。
   markDirty(): void {
     this.dirty = true
+  }
+
+  // Issue #773 评论 5845398115：立即排一轮 checkpoint，不等 5 秒 timer。
+  // 首次启动立即调用，消除"首启 5 秒空窗期内闪退没有 latest.zip"的问题。
+  requestCheckpoint(): void {
+    this.markDirty()
+    this.onTimerTick()
   }
 
   // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
@@ -133,12 +169,56 @@ export class HarmonyDiagnosticsCheckpoint {
   }
 
   // 定时器回调 — 检查 dirty 状态，必要时触发 checkpoint 生成。
+  // Issue #773 评论 5845398115：tick 不仅看 Store dirty，还比较 live/log 当前日志文件的 size/mtime。
+  // Rust live log 持续 append 不触发 Store dirty；窗口尺寸/折叠/safe area 变化由 AdaptiveObserver 触发。
+  // 日志变了就生成新 checkpoint，保证 latest.zip 最多落后几秒。
   private async onTimerTick(): Promise<void> {
-    if (!this.dirty || this.isGenerating) {
+    if (this.isGenerating) {
+      return
+    }
+    const logChanged = this.hasLogChanged()
+    if (!this.dirty && !logChanged) {
       return
     }
     this.dirty = false
     await this.generateCheckpoint()
+  }
+
+  // Issue #773 评论 5845398115：计算 live/log 目录下所有文件的总 size + 最大 mtime 作为签名。
+  // 签名变化说明 Rust 又写了日志，需要生成新 checkpoint。
+  private hasLogChanged(): boolean {
+    if (this.context === null) {
+      return false
+    }
+    const logDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/live/log`
+    const sig = this.computeLogSignature(logDir)
+    if (sig !== this.lastLogSignature) {
+      this.lastLogSignature = sig
+      return true
+    }
+    return false
+  }
+
+  private computeLogSignature(logDir: string): string {
+    try {
+      if (!fs.accessSync(logDir)) {
+        return ''
+      }
+      const entries = fs.listFileSync(logDir)
+      let totalSize: number = 0
+      let maxMtime: number = 0
+      for (let i = 0; i < entries.length; i++) {
+        const fullPath = `${logDir}/${entries[i]}`
+        const stat = fs.statSync(fullPath)
+        totalSize += stat.size
+        if (stat.mtime > maxMtime) {
+          maxMtime = stat.mtime
+        }
+      }
+      return `${totalSize}:${maxMtime}`
+    } catch (_) {
+      return ''
+    }
   }
 
   // 生成 checkpoint — 复用 HarmonyDiagnosticsExporter.exportTo() 生成 zip，
@@ -278,5 +358,13 @@ export class HarmonyDiagnosticsCheckpoint {
       EditorRuntimeSnapshotStore.getInstance().removeObserver(this.editorObserver)
       this.editorObserver = null
     }
+    // Issue #773 评论 5845398115：取消 AdaptiveContext 订阅。
+    if (this.adaptiveObserver !== null) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
+      this.adaptiveObserver = null
+    }
+    // Issue #773 评论 5845398115：生命周期幂等 — 复位 initialized，允许下次 init。
+    this.initialized = false
+    this.lastLogSignature = ''
   }
 }

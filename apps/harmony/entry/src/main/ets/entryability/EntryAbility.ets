@@ -46,10 +46,12 @@ export default class EntryAbility extends UIAbility {
     // 在下一次启动时把上一轮 crash fault log 补进 diagnostics/crashes/。
     HarmonyCrashEventWatcher.getInstance().init(this.context)
 
-    // Issue #773 评论 5845033983：初始化诊断 checkpoint，启动后台定时器维护 latest.zip。
+    // Issue #773 评论 5845398115：初始化诊断 checkpoint，首次启动立即排一轮，不等 5 秒 timer。
+    // 消除"首启 5 秒空窗期内闪退文件管理里只有 live 目录没有 latest.zip"的问题。
     const checkpoint = HarmonyDiagnosticsCheckpoint.getInstance()
     checkpoint.init(this.context)
-    checkpoint.markDirty()
+    checkpoint.persistRuntimeSnapshot()
+    checkpoint.requestCheckpoint()
 
     this.lifecycle.notifyCreate()
 
@@ -126,8 +128,12 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
+  // Issue #773 评论 5845398115：Ability 销毁时解绑诊断 checkpoint 和 crash watcher，
+  // 避免同一进程里 UIAbility 重建后重复订阅 observer / 重复开 timer / 重复注册 HiAppEvent watcher。
   onDestroy() {
     hilog.info(0x0000, 'EntryAbility', 'onDestroy')
+    HarmonyDiagnosticsCheckpoint.getInstance().destroy()
+    HarmonyCrashEventWatcher.getInstance().destroy()
     this.lifecycle.notifyDestroy()
   }
 

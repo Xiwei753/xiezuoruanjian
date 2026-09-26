@@ -19,6 +19,7 @@ import hiAppEvent from '@ohos.hiviewdfx.hiAppEvent'
 import util from '@ohos.util'
 import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
+import { PlatformApiResolver } from '../version/PlatformApiResolver'
 
 const LOG_TAG = 'HarmonyCrashEventWatcher'
 const DIAGNOSTICS_DIR = 'diagnostics'
@@ -30,11 +31,21 @@ interface AttachmentItem {
   content: string
 }
 
+// 崩溃事件记录 — 用于序列化 params.json。
+// ArkTS 严格模式要求对象字面量有显式 interface 类型（arkts-no-untyped-obj-literals）。
+interface CrashRecord {
+  domain: string
+  name: string
+  eventType: number
+  params: Record<string, Object>
+}
+
 export class HarmonyCrashEventWatcher {
   private static instance: HarmonyCrashEventWatcher
   private context: common.UIAbilityContext | null = null
   private diagnosticsBridge: NativeDiagnosticsBridge
   private watcher: hiAppEvent.Watcher | null = null
+  private initialized: boolean = false
 
   private constructor() {
     this.diagnosticsBridge = new NativeDiagnosticsBridge(new NativeCoreModule())
@@ -49,9 +60,30 @@ export class HarmonyCrashEventWatcher {
 
   // 在 EntryAbility.onCreate 中调用，订阅 HiAppEvent 崩溃事件。
   // 系统会在下一次启动时回放上一轮的 crash/killed 事件。
+  // Issue #773 评论 5845398115：生命周期幂等 — UIAbility 在同一进程销毁后重建时，
+  // 不重复注册 HiAppEvent watcher。destroy() 后 initialized 复位，允许下次 init 重新订阅。
   init(context: common.UIAbilityContext): void {
+    if (this.initialized) {
+      return
+    }
+    this.initialized = true
     this.context = context
     this.subscribeCrashEvents()
+  }
+
+  // Issue #773 评论 5845398115：Ability 销毁时解绑 HiAppEvent watcher。
+  // 进程 crash 时系统直接杀掉，不依赖 destroy；正常 Ability 销毁要解绑避免泄漏。
+  destroy(): void {
+    if (this.watcher !== null) {
+      try {
+        hiAppEvent.removeWatcher(this.watcher)
+      } catch (e) {
+        hilog.error(0x0000, LOG_TAG, 'removeWatcher failed: %{public}s', String(e))
+      }
+      this.watcher = null
+    }
+    this.initialized = false
+    this.context = null
   }
 
   // 订阅 APP_CRASH 和 APP_KILLED 事件。
@@ -60,7 +92,9 @@ export class HarmonyCrashEventWatcher {
   // 因此按运行时 API Level 分流：API >= 20 才注册 APP_KILLED。
   private subscribeCrashEvents(): void {
     try {
-      const apiVersion = this.context!.config?.apiVersion ?? 12
+      // Issue #773 评论 5845398115：UIAbilityContext.config 是 Configuration，
+      // 官方 Configuration 字段没有 apiVersion。统一走 PlatformApiResolver 读 deviceInfo.sdkApiVersion。
+      const apiVersion = PlatformApiResolver.getInstance().getApiLevel()
 
       const eventNames: string[] = [hiAppEvent.event.APP_CRASH]
       if (apiVersion >= 20) {
@@ -117,11 +151,12 @@ export class HarmonyCrashEventWatcher {
       fs.mkdirSync(crashesDir, true)
 
       // 写 params.json — 把整个 event 信息序列化保存
-      const crashRecord = {
+      // ArkTS 严格模式要求对象字面量有显式 interface 类型（arkts-no-untyped-obj-literals）。
+      const crashRecord: CrashRecord = {
         domain: event.domain,
         name: event.name,
         eventType: event.eventType,
-        params: event.params
+        params: event.params as Record<string, Object>
       }
       const paramsJson = JSON.stringify(crashRecord, null, 2)
       this.writeAtomic(`${crashesDir}/params.json`, paramsJson)
@@ -148,7 +183,7 @@ export class HarmonyCrashEventWatcher {
   // 崩溃补全包不覆盖 latest.zip / previous.zip，使用独立的 crash 前缀文件名。
   private generateCrashZip(
     timestamp: string,
-    crashRecord: Record<string, Object>,
+    crashRecord: CrashRecord,
     externalLog: string[]
   ): void {
     try {
@@ -275,7 +310,7 @@ export class HarmonyCrashEventWatcher {
         try { fs.closeSync(fd) } catch (_) { /* fd 可能已关闭 */ }
       }
       this.safeDelete(newPath)
-      throw e
+      throw e instanceof Error ? e : new Error(String(e))
     }
 
     // 2. 删旧 .bak（如果存在）
@@ -288,7 +323,7 @@ export class HarmonyCrashEventWatcher {
       }
     } catch (e) {
       this.safeDelete(newPath)
-      throw e
+      throw e instanceof Error ? e : new Error(String(e))
     }
 
     // 4. .new → 目标
@@ -302,7 +337,7 @@ export class HarmonyCrashEventWatcher {
         }
       } catch (_) { /* 恢复失败，尽力而为 */ }
       this.safeDelete(newPath)
-      throw e
+      throw e instanceof Error ? e : new Error(String(e))
     }
 
     // 5. 成功后删 .bak
