@@ -7,11 +7,50 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::starmap::hittest::point_to_segment_distance;
+use crate::starmap::types::reference::StarMapTargetPath;
+use crate::starmap::types::{StarMapGraph, StarMapLayout};
 
 const DEFAULT_BIDIRECTIONAL_OFFSET: f32 = 12.0;
 const DEFAULT_ARROW_PADDING: f32 = 42.0;
 const DEFAULT_ARROW_LENGTH: f32 = 10.0;
 const DEFAULT_HIT_THRESHOLD: f32 = 10.0;
+
+/// 边端点锚点解析失败的诊断信息。
+///
+/// `compute_edge_renders` 不再静默丢掉无法定位的端点，而是返回诊断，
+/// 让平台端能向用户提示"这条边的 from/to 路径无法在当前画布上定位"。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeAnchorDiagnostic {
+    pub edge_id: String,
+    pub endpoint: String, // "from" | "to"
+    pub reason: EdgeAnchorDiagnosticReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum EdgeAnchorDiagnosticReason {
+    /// 本地节点/锚点引用，但节点不存在于 graph 或 layout 中
+    LocalNodeMissing,
+    /// 跨层路径（segments 非空或 starmap_id 不同），当前画布无法直接定位
+    CrossLayerPath,
+    /// 路径终点不是 Node/Anchor（例如 Starmap/ChapterRange），没有几何锚点
+    NonGeometricTarget,
+    /// 第一段 EnterEmbed，但 embed 不存在于 graph 中
+    EmbedMissing,
+    /// 第一段 EnterPortal，但 portal 节点不存在于 graph 或 layout 中
+    PortalMissing,
+    /// 路径有多段 segments，当前实现只支持单段穿越的可见锚点
+    MultiSegmentUnsupported,
+}
+
+/// 边渲染批结果：成功渲染的边 + 无法定位端点的诊断。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeRenderBatch {
+    pub renders: Vec<EdgeRender>,
+    pub diagnostics: Vec<EdgeAnchorDiagnostic>,
+}
 
 /// 边渲染几何数据 — 平台端据此绘制箭头和标签。
 ///
@@ -84,6 +123,251 @@ pub struct EdgeInput {
     pub from: String,
     pub to: String,
     pub label: Option<String>,
+}
+
+/// 解析边端点路径在当前画布上的可见锚点坐标。
+///
+/// 这是边渲染的**唯一锚点解析入口**。平台端不应自己从 DTO 猜 node_id，
+/// 必须通过此函数把 `StarMapTargetPath` 解析为画布坐标。
+///
+/// ## 解析规则
+///
+/// - **本地 Node/Anchor**（`path.starmap_id == graph.starmap_id && segments.is_empty()`）
+///   -> 对应 node layout 中心。Anchor 附在节点上，几何位置就是节点中心。
+/// - **第一段 EnterEmbed** -> 对应 embed placement 的可见锚点（placement 中心）。
+///   只处理单段穿越；多段返回 `MultiSegmentUnsupported`。
+/// - **第一段 EnterPortal** -> portal 所在 node 的 layout 锚点（节点中心）。
+///   只处理单段穿越；多段返回 `MultiSegmentUnsupported`。
+/// - **跨层路径**（`segments` 非空或 `starmap_id` 不同）且不属于上述单段穿越
+///   -> `CrossLayerPath`，当前画布无法直接定位。
+/// - **非几何 target**（Starmap/ChapterRange/Entity/External）-> `NonGeometricTarget`。
+///
+/// 返回 `Err(diagnostic)` 表示无法定位，调用方应收集诊断而非静默丢掉。
+pub fn resolve_edge_endpoint_anchor(
+    path: &StarMapTargetPath,
+    graph: &StarMapGraph,
+    layout: &StarMapLayout,
+    endpoint: &str,
+    edge_id: &str,
+) -> Result<(f32, f32), EdgeAnchorDiagnostic> {
+    use crate::starmap::semantic::StarMapTargetDetail;
+    use crate::starmap::types::reference::StarMapPathSegment;
+
+    let is_local = path.starmap_id == graph.starmap_id && path.segments.is_empty();
+
+    if is_local {
+        return match &path.target {
+            StarMapTargetDetail::Node { node_id } | StarMapTargetDetail::Anchor { node_id, .. } => {
+                node_layout_center(node_id, layout).ok_or(EdgeAnchorDiagnostic {
+                    edge_id: edge_id.to_string(),
+                    endpoint: endpoint.to_string(),
+                    reason: EdgeAnchorDiagnosticReason::LocalNodeMissing,
+                })
+            }
+            _ => Err(EdgeAnchorDiagnostic {
+                edge_id: edge_id.to_string(),
+                endpoint: endpoint.to_string(),
+                reason: EdgeAnchorDiagnosticReason::NonGeometricTarget,
+            }),
+        };
+    }
+
+    // 跨层路径。只支持单段穿越的可见锚点。
+    if path.segments.len() > 1 {
+        return Err(EdgeAnchorDiagnostic {
+            edge_id: edge_id.to_string(),
+            endpoint: endpoint.to_string(),
+            reason: EdgeAnchorDiagnosticReason::MultiSegmentUnsupported,
+        });
+    }
+
+    // 起点星图不是当前画布的星图，且没有 segments —— 纯跨图引用，无法在当前画布定位。
+    if path.segments.is_empty() {
+        return Err(EdgeAnchorDiagnostic {
+            edge_id: edge_id.to_string(),
+            endpoint: endpoint.to_string(),
+            reason: EdgeAnchorDiagnosticReason::CrossLayerPath,
+        });
+    }
+
+    // 单段穿越
+    match &path.segments[0] {
+        StarMapPathSegment::EnterEmbed { instance_id } => {
+            // embed placement 的可见锚点 = placement 中心
+            let embed = graph.embeds.iter().find(|e| e.instance_id == *instance_id);
+            match embed {
+                Some(em) => {
+                    let p = &em.placement;
+                    Ok((p.x + p.width / 2.0, p.y + p.height / 2.0))
+                }
+                None => Err(EdgeAnchorDiagnostic {
+                    edge_id: edge_id.to_string(),
+                    endpoint: endpoint.to_string(),
+                    reason: EdgeAnchorDiagnosticReason::EmbedMissing,
+                }),
+            }
+        }
+        StarMapPathSegment::EnterPortal { node_id } => {
+            // portal 所在 node 的 layout 锚点
+            node_layout_center(node_id, layout).ok_or(EdgeAnchorDiagnostic {
+                edge_id: edge_id.to_string(),
+                endpoint: endpoint.to_string(),
+                reason: EdgeAnchorDiagnosticReason::PortalMissing,
+            })
+        }
+    }
+}
+
+/// 查节点 layout 中心坐标。节点不存在于 layout 时返回 None。
+fn node_layout_center(node_id: &str, layout: &StarMapLayout) -> Option<(f32, f32)> {
+    layout
+        .nodes
+        .iter()
+        .find(|n| n.node_id == node_id)
+        .map(|n| (n.x + n.width / 2.0, n.y + n.height / 2.0))
+}
+
+/// 已解析端点的边，用于渲染计算。
+struct ResolvedEdge {
+    id: String,
+    from: (f32, f32),
+    to: (f32, f32),
+    label: Option<String>,
+}
+
+/// 基于路径锚点解析的边渲染批计算。
+///
+/// 对每条边，用 [`resolve_edge_endpoint_anchor`] 解析 from/to 端点。
+/// 任一端点解析失败则记录诊断并跳过该边（不静默丢掉）。
+/// 成功解析的边按原有几何算法渲染。
+pub fn compute_edge_renders_from_paths(
+    edges: &[crate::starmap::types::StarMapEdge],
+    graph: &StarMapGraph,
+    layout: &StarMapLayout,
+    params: &EdgeRenderParams,
+) -> EdgeRenderBatch {
+    let mut renders = Vec::new();
+    let mut diagnostics = Vec::new();
+
+    let mut resolved_edges: Vec<ResolvedEdge> = Vec::new();
+
+    for edge in edges {
+        let from = match resolve_edge_endpoint_anchor(&edge.from, graph, layout, "from", &edge.id) {
+            Ok(p) => p,
+            Err(d) => {
+                diagnostics.push(d);
+                continue;
+            }
+        };
+        let to = match resolve_edge_endpoint_anchor(&edge.to, graph, layout, "to", &edge.id) {
+            Ok(p) => p,
+            Err(d) => {
+                diagnostics.push(d);
+                continue;
+            }
+        };
+        resolved_edges.push(ResolvedEdge {
+            id: edge.id.clone(),
+            from,
+            to,
+            label: edge.label.clone(),
+        });
+    }
+
+    compute_renders_from_resolved(&resolved_edges, params, &mut renders, &mut diagnostics);
+
+    EdgeRenderBatch {
+        renders,
+        diagnostics,
+    }
+}
+
+/// 从已解析端点的边列表计算渲染几何。
+fn compute_renders_from_resolved(
+    resolved_edges: &[ResolvedEdge],
+    params: &EdgeRenderParams,
+    renders: &mut Vec<EdgeRender>,
+    diagnostics: &mut Vec<EdgeAnchorDiagnostic>,
+) {
+    // 双向边检测：基于坐标对匹配（而非 node_id），因为路径锚点解析后只有坐标。
+    let bidirectional_set: std::collections::HashSet<(usize, usize)> = resolved_edges
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            resolved_edges.iter().enumerate().find_map(|(j, o)| {
+                if i != j && coords_eq(e.from, o.to) && coords_eq(e.to, o.from) {
+                    Some((i, j))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    for (i, edge) in resolved_edges.iter().enumerate() {
+        let (fx, fy) = edge.from;
+        let (tx, ty) = edge.to;
+        let dx = tx - fx;
+        let dy = ty - fy;
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            diagnostics.push(EdgeAnchorDiagnostic {
+                edge_id: edge.id.clone(),
+                endpoint: "from".to_string(),
+                reason: EdgeAnchorDiagnosticReason::LocalNodeMissing,
+            });
+            continue;
+        }
+
+        let has_bi = bidirectional_set.iter().any(|(a, b)| *a == i || *b == i);
+        let offset = if has_bi {
+            params.bidirectional_offset
+        } else {
+            0.0
+        };
+        let ox = if has_bi { -dy / len * offset } else { 0.0 };
+        let oy = if has_bi { dx / len * offset } else { 0.0 };
+
+        let dir_x = dx / len;
+        let dir_y = dy / len;
+
+        let sx = fx + ox + dir_x * params.arrow_padding;
+        let sy = fy + oy + dir_y * params.arrow_padding;
+        let ex = tx + ox - dir_x * params.arrow_padding;
+        let ey = ty + oy - dir_y * params.arrow_padding;
+
+        let angle = dy.atan2(dx);
+        let half_spread = std::f32::consts::PI / 6.0;
+        let al = params.arrow_length;
+
+        renders.push(EdgeRender {
+            edge_id: edge.id.clone(),
+            from_cx: fx,
+            from_cy: fy,
+            to_cx: tx,
+            to_cy: ty,
+            start_x: sx,
+            start_y: sy,
+            end_x: ex,
+            end_y: ey,
+            offset_x: ox,
+            offset_y: oy,
+            arrow_tip_x: ex,
+            arrow_tip_y: ey,
+            arrow_left_x: ex - al * (angle - half_spread).cos(),
+            arrow_left_y: ey - al * (angle - half_spread).sin(),
+            arrow_right_x: ex - al * (angle + half_spread).cos(),
+            arrow_right_y: ey - al * (angle + half_spread).sin(),
+            label_x: (sx + ex) / 2.0,
+            label_y: (sy + ey) / 2.0,
+            label: edge.label.clone(),
+            has_bidirectional: has_bi,
+        });
+    }
+}
+
+fn coords_eq(a: (f32, f32), b: (f32, f32)) -> bool {
+    (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
 }
 
 pub fn compute_edge_renders(

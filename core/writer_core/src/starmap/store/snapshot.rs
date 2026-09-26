@@ -53,6 +53,8 @@ impl StarMapStore {
     pub fn set_layout(&mut self, layout: StarMapLayout) {
         self.layout = Some(layout);
         self.dirty_layout = true;
+        // layout_revision 记录在 graph.json 中，layout 变更需要更新 graph_meta。
+        self.dirty_graph_meta = true;
     }
 
     pub fn set_viewport(&mut self, viewport: StarMapViewport) {
@@ -85,18 +87,85 @@ impl StarMapStore {
         let complete = request.target_phase == LoadPhase::BackgroundFullLoad;
         let since_rev = request.since_revision;
 
-        let skip_unchanged = complete && since_rev > 0 && since_rev == self.package_revision;
+        // 增量模式：complete 快照且 since_revision > 0 时，只返回
+        // `object_revisions[id] > since_revision` 的对象。since_revision == 0
+        // 走全量（complete 模式），保持首次拉取返回全部已加载对象的行为。
+        let incremental = complete && since_rev > 0;
 
-        let (nodes, edges, embeds, links, hyperlinks) = if skip_unchanged {
-            (vec![], vec![], vec![], vec![], vec![])
+        // 提取各对象 revision map 的引用，避免在过滤闭包中重复借用 self.graph_meta。
+        let node_revs = self.graph_meta.as_ref().map(|m| &m.node_revisions);
+        let edge_revs = self.graph_meta.as_ref().map(|m| &m.edge_revisions);
+        let embed_revs = self.graph_meta.as_ref().map(|m| &m.embed_revisions);
+        let link_revs = self.graph_meta.as_ref().map(|m| &m.link_revisions);
+        let hyperlink_revs = self.graph_meta.as_ref().map(|m| &m.hyperlink_revisions);
+        let layout_rev = self
+            .graph_meta
+            .as_ref()
+            .map(|m| m.layout_revision)
+            .unwrap_or(0);
+
+        let nodes: Vec<StarMapNode> = if incremental {
+            self.nodes
+                .values()
+                .filter(|n| node_revs.and_then(|r| r.get(&n.id)).copied().unwrap_or(0) > since_rev)
+                .cloned()
+                .collect()
         } else {
-            (
-                self.nodes.values().cloned().collect(),
-                self.edges.values().cloned().collect(),
-                self.embeds.values().cloned().collect(),
-                self.links.values().cloned().collect(),
-                self.hyperlinks.values().cloned().collect(),
-            )
+            self.nodes.values().cloned().collect()
+        };
+        let edges: Vec<StarMapEdge> = if incremental {
+            self.edges
+                .values()
+                .filter(|e| edge_revs.and_then(|r| r.get(&e.id)).copied().unwrap_or(0) > since_rev)
+                .cloned()
+                .collect()
+        } else {
+            self.edges.values().cloned().collect()
+        };
+        let embeds: Vec<StarMapEmbed> = if incremental {
+            self.embeds
+                .values()
+                .filter(|em| {
+                    embed_revs
+                        .and_then(|r| r.get(&em.instance_id))
+                        .copied()
+                        .unwrap_or(0)
+                        > since_rev
+                })
+                .cloned()
+                .collect()
+        } else {
+            self.embeds.values().cloned().collect()
+        };
+        let links: Vec<StarMapLink> = if incremental {
+            self.links
+                .values()
+                .filter(|l| {
+                    link_revs
+                        .and_then(|r| r.get(&l.link_id))
+                        .copied()
+                        .unwrap_or(0)
+                        > since_rev
+                })
+                .cloned()
+                .collect()
+        } else {
+            self.links.values().cloned().collect()
+        };
+        let hyperlinks: Vec<StarMapHyperlink> = if incremental {
+            self.hyperlinks
+                .values()
+                .filter(|h| {
+                    hyperlink_revs
+                        .and_then(|r| r.get(&h.hyperlink_id))
+                        .copied()
+                        .unwrap_or(0)
+                        > since_rev
+                })
+                .cloned()
+                .collect()
+        } else {
+            self.hyperlinks.values().cloned().collect()
         };
 
         let persistent_entries = self
@@ -182,13 +251,20 @@ impl StarMapStore {
             deleted_embed_ids,
             deleted_link_ids,
             deleted_hyperlink_ids,
-            layout: self.layout.clone(),
+            layout: if incremental && layout_rev <= since_rev {
+                None
+            } else {
+                self.layout.clone()
+            },
             viewport: self.viewport.clone(),
             diagnostics: self.recovery_log.clone(),
         })
     }
 
-    pub(super) fn update_graph_meta_file(&mut self) -> Result<(u64, std::path::PathBuf)> {
+    pub(super) fn update_graph_meta_file(
+        &mut self,
+        dirty: &FlushDirtySet,
+    ) -> Result<(u64, std::path::PathBuf)> {
         if self.graph_meta.is_none() {
             self.reload_graph_meta_if_stale();
         }
@@ -209,10 +285,56 @@ impl StarMapStore {
                 package_revision: self.package_revision,
                 updated_at: crate::starmap::now_epoch(),
                 deleted_since_last_sync: super::meta::DeletedSinceLastSync::default(),
+                ..Default::default()
             });
         }
 
         self.merge_memory_ids_into_graph_meta();
+
+        let next_revision = self.package_revision.saturating_add(1);
+
+        // 记录本次事务真正写过的对象 revision，并移除已删除对象的 revision。
+        // deletion log 的 tombstone（deleted_at_revision = next_revision）已在
+        // merge_memory_ids_into_graph_meta 中追加，这里只维护对象 revision map。
+        // 使用传入的 dirty 快照而非 self.dirty_*，因为 flush_save_queue 在到达
+        // GraphMeta 分支前已清空对应 dirty 集合。
+        if let Some(ref mut meta) = self.graph_meta {
+            for node_id in &dirty.nodes {
+                meta.node_revisions.insert(node_id.clone(), next_revision);
+            }
+            for edge_id in &dirty.edges {
+                meta.edge_revisions.insert(edge_id.clone(), next_revision);
+            }
+            for instance_id in &dirty.embeds {
+                meta.embed_revisions
+                    .insert(instance_id.clone(), next_revision);
+            }
+            for link_id in &dirty.links {
+                meta.link_revisions.insert(link_id.clone(), next_revision);
+            }
+            for hl_id in &dirty.hyperlinks {
+                meta.hyperlink_revisions
+                    .insert(hl_id.clone(), next_revision);
+            }
+            if dirty.layout {
+                meta.layout_revision = next_revision;
+            }
+            for node_id in &dirty.deleted_nodes {
+                meta.node_revisions.remove(node_id);
+            }
+            for edge_id in &dirty.deleted_edges {
+                meta.edge_revisions.remove(edge_id);
+            }
+            for instance_id in &dirty.deleted_embeds {
+                meta.embed_revisions.remove(instance_id);
+            }
+            for link_id in &dirty.deleted_links {
+                meta.link_revisions.remove(link_id);
+            }
+            for hl_id in &dirty.deleted_hyperlinks {
+                meta.hyperlink_revisions.remove(hl_id);
+            }
+        }
 
         let meta = self.graph_meta.as_ref().ok_or_else(|| {
             crate::error::Error::Io(std::io::Error::new(
@@ -220,8 +342,6 @@ impl StarMapStore {
                 "graph_meta not initialized",
             ))
         })?;
-
-        let next_revision = self.package_revision.saturating_add(1);
 
         let meta_to_write = GraphMeta {
             schema_version: meta.schema_version.clone(),
@@ -236,6 +356,12 @@ impl StarMapStore {
             link_relation_index: meta.link_relation_index.clone(),
             hyperlink_relation_index: meta.hyperlink_relation_index.clone(),
             node_kind_counts: meta.node_kind_counts.clone(),
+            node_revisions: meta.node_revisions.clone(),
+            edge_revisions: meta.edge_revisions.clone(),
+            embed_revisions: meta.embed_revisions.clone(),
+            link_revisions: meta.link_revisions.clone(),
+            hyperlink_revisions: meta.hyperlink_revisions.clone(),
+            layout_revision: meta.layout_revision,
             package_revision: next_revision,
             updated_at: crate::starmap::now_epoch(),
             deleted_since_last_sync: meta.deleted_since_last_sync.clone(),
@@ -344,7 +470,7 @@ impl StarMapStore {
             if self.deleted_link_ids.contains(&link.link_id) {
                 continue;
             }
-            let source_node_id = target_path_node_id(&link.source)
+            let source_node_id = target_path_node_id(&link.source, &self.starmap_id)
                 .unwrap_or_default()
                 .to_string();
             if !meta.link_ids.contains(&link.link_id) {
@@ -373,7 +499,7 @@ impl StarMapStore {
             if self.deleted_hyperlink_ids.contains(&hl.hyperlink_id) {
                 continue;
             }
-            let source_node_id = target_path_node_id(&hl.source)
+            let source_node_id = target_path_node_id(&hl.source, &self.starmap_id)
                 .unwrap_or_default()
                 .to_string();
             if !meta.hyperlink_ids.contains(&hl.hyperlink_id) {

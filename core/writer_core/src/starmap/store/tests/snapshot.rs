@@ -257,13 +257,16 @@ fn phased_snapshot_incremental_by_revision() {
     let rev2 = store.package_revision();
     assert!(rev2 > rev1);
 
+    // 增量快照：since_revision = rev1 只返回 node_revisions > rev1 的节点。
+    // n1 在 rev1 写入（不 > rev1），n2 在 rev2 写入（> rev1），故只返回 n2。
     let request = PhasedSnapshotRequest {
         target_phase: LoadPhase::BackgroundFullLoad,
         since_revision: rev1,
     };
     let snap = store.get_phased_snapshot(&request).unwrap();
     assert_eq!(snap.package_revision, rev2);
-    assert_eq!(snap.nodes.len(), 2);
+    assert_eq!(snap.nodes.len(), 1);
+    assert_eq!(snap.nodes[0].id, "n2");
 }
 
 #[test]
@@ -343,6 +346,7 @@ fn phased_snapshot_returns_objects_when_revision_advanced() {
     let rev2 = store.package_revision();
     assert!(rev2 > rev1);
 
+    // 增量：since rev1 只返回 n2（n1 的 revision == rev1 不 > rev1）。
     let request = PhasedSnapshotRequest {
         target_phase: LoadPhase::BackgroundFullLoad,
         since_revision: rev1,
@@ -350,7 +354,8 @@ fn phased_snapshot_returns_objects_when_revision_advanced() {
     let snap = store.get_phased_snapshot(&request).unwrap();
     assert_eq!(snap.since_revision, rev1);
     assert_eq!(snap.package_revision, rev2);
-    assert_eq!(snap.nodes.len(), 2);
+    assert_eq!(snap.nodes.len(), 1);
+    assert_eq!(snap.nodes[0].id, "n2");
 }
 
 #[test]
@@ -400,16 +405,43 @@ fn phased_snapshot_incremental_preserves_layout_and_viewport() {
     });
     flush_store(&mut store);
     store.flush_viewport().unwrap();
-    let rev = store.package_revision();
+    let rev1 = store.package_revision();
 
+    // 第二次事务：只改 layout，再 flush。layout_revision 升到 rev2 > rev1。
+    store.set_layout(StarMapLayout {
+        kind: StarMapLayoutKind::Freeform,
+        nodes: vec![StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 70.0,
+            y: 80.0,
+            width: 100.0,
+            height: 80.0,
+            radius: 30.0,
+            collapsed: false,
+            z_index: 0,
+            scale: 1.0,
+            depth: 0.0,
+            focus_weight: 1.0,
+            orbit_group: None,
+        }],
+    });
+    flush_store(&mut store);
+    let rev2 = store.package_revision();
+    assert!(rev2 > rev1);
+
+    // 增量：since rev1，layout_revision == rev2 > rev1，layout 应返回。
+    // n1 的 node_revisions == rev1 不 > rev1，nodes 应为空。
+    // viewport 是设备本地，始终返回。
     let request = PhasedSnapshotRequest {
         target_phase: LoadPhase::BackgroundFullLoad,
-        since_revision: rev,
+        since_revision: rev1,
     };
     let snap = store.get_phased_snapshot(&request).unwrap();
     assert!(snap.nodes.is_empty());
     assert!(snap.layout.is_some());
     assert!(snap.viewport.is_some());
+    let l = snap.layout.as_ref().expect("layout present");
+    assert!((l.nodes[0].x - 70.0).abs() < f32::EPSILON);
 }
 
 #[test]

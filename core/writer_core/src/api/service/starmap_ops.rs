@@ -439,40 +439,18 @@ impl WriterCoreApi {
         &self,
         graph: crate::api::types::StarMapGraphDto,
         layout: crate::api::types::StarMapLayoutDto,
-    ) -> ApiResult<Vec<crate::api::types::StarMapEdgeRenderDto>> {
-        let node_centers: HashMap<String, (f32, f32)> = layout
-            .nodes
-            .iter()
-            .map(|node| {
-                (
-                    node.node_id.clone(),
-                    (node.x + node.width / 2.0, node.y + node.height / 2.0),
-                )
-            })
-            .collect();
-        let edges: Vec<crate::starmap::render::EdgeInput> = graph
-            .edges
-            .into_iter()
-            .filter_map(|edge| {
-                let from = edge.from.target.node_id.clone()?;
-                let to = edge.to.target.node_id.clone()?;
-                Some(crate::starmap::render::EdgeInput {
-                    id: edge.id,
-                    from,
-                    to,
-                    label: edge.label,
-                })
-            })
-            .collect();
-
-        Ok(crate::starmap::render::compute_edge_renders(
-            &edges,
-            &node_centers,
+    ) -> ApiResult<crate::api::types::StarMapEdgeRenderBatchDto> {
+        // 统一调用 render 层的路径锚点解析，不再自己从 DTO 猜 node_id。
+        // graph/layout DTO 转成 Core 类型后交给 compute_edge_renders_from_paths。
+        let graph: crate::starmap::types::StarMapGraph = graph.into();
+        let layout: crate::starmap::types::StarMapLayout = layout.into();
+        let batch = crate::starmap::render::compute_edge_renders_from_paths(
+            &graph.edges,
+            &graph,
+            &layout,
             &crate::starmap::render::EdgeRenderParams::default(),
-        )
-        .into_iter()
-        .map(Into::into)
-        .collect())
+        );
+        Ok(batch.into())
     }
 
     pub fn hit_test_starmap_node(

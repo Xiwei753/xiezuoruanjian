@@ -101,14 +101,19 @@ impl StarMapStore {
             )));
         }
 
-        // Collect IDs of edges, embeds, links, hyperlinks that reference this node.
+        // Collect IDs of edges, embeds, links, hyperlinks that reference this node
+        // **as a local node reference** (path.starmap_id == host && segments.is_empty()).
+        // 跨层路径的终点 node_id 属于另一张星图，绝不参与本图的级联删除。
         // These are derived from the in-memory objects directly, not from the relation index.
+        let host = self.starmap_id.as_str();
         let edge_ids_to_remove: Vec<String> = self
             .edges
             .values()
             .filter(|e| {
-                let from_refs = crate::starmap::store::relation_index::target_path_node_id(&e.from);
-                let to_refs = crate::starmap::store::relation_index::target_path_node_id(&e.to);
+                let from_refs =
+                    crate::starmap::store::relation_index::target_path_node_id(&e.from, host);
+                let to_refs =
+                    crate::starmap::store::relation_index::target_path_node_id(&e.to, host);
                 from_refs == Some(node_id) || to_refs == Some(node_id)
             })
             .map(|e| e.id.clone())
@@ -118,7 +123,7 @@ impl StarMapStore {
             .embeds
             .values()
             .filter(|em| {
-                crate::starmap::store::relation_index::target_path_node_id(&em.host_path)
+                crate::starmap::store::relation_index::target_path_node_id(&em.host_path, host)
                     == Some(node_id)
             })
             .map(|em| em.instance_id.clone())
@@ -128,7 +133,7 @@ impl StarMapStore {
             .links
             .values()
             .filter(|l| {
-                crate::starmap::store::relation_index::target_path_node_id(&l.source)
+                crate::starmap::store::relation_index::target_path_node_id(&l.source, host)
                     == Some(node_id)
             })
             .map(|l| l.link_id.clone())
@@ -138,7 +143,7 @@ impl StarMapStore {
             .hyperlinks
             .values()
             .filter(|hl| {
-                crate::starmap::store::relation_index::target_path_node_id(&hl.source)
+                crate::starmap::store::relation_index::target_path_node_id(&hl.source, host)
                     == Some(node_id)
             })
             .map(|hl| hl.hyperlink_id.clone())

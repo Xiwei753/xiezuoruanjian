@@ -6,7 +6,7 @@ use super::relation_index::{
     EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphMeta {
     pub schema_version: String,
@@ -26,6 +26,25 @@ pub struct GraphMeta {
     pub hyperlink_relation_index: Vec<HyperlinkRelationIndex>,
     #[serde(default)]
     pub node_kind_counts: HashMap<String, u32>,
+    /// 每个节点最近一次被写入的事务 revision。用于增量快照：只返回
+    /// `node_revisions[id] > since_revision` 的节点。
+    #[serde(default)]
+    pub node_revisions: HashMap<String, u64>,
+    /// 每条边最近一次被写入的事务 revision。
+    #[serde(default)]
+    pub edge_revisions: HashMap<String, u64>,
+    /// 每个嵌入实例最近一次被写入的事务 revision。
+    #[serde(default)]
+    pub embed_revisions: HashMap<String, u64>,
+    /// 每条链接最近一次被写入的事务 revision。
+    #[serde(default)]
+    pub link_revisions: HashMap<String, u64>,
+    /// 每条超链接最近一次被写入的事务 revision。
+    #[serde(default)]
+    pub hyperlink_revisions: HashMap<String, u64>,
+    /// 布局最近一次被写入的事务 revision。
+    #[serde(default)]
+    pub layout_revision: u64,
     pub package_revision: u64,
     pub updated_at: u64,
     #[serde(default)]
@@ -65,6 +84,14 @@ impl DeletedSinceLastSync {
         self.entries
             .iter()
             .filter(move |e| e.deleted_at_revision > since_revision)
+    }
+
+    /// 确认到 `acknowledged_revision`（含）为止的删除都已被同步方持久化，
+    /// 可以安全清理对应的 tombstone。保留 `deleted_at_revision > acknowledged_revision`
+    /// 的条目，删除 `deleted_at_revision <= acknowledged_revision` 的条目。
+    pub fn acknowledge(&mut self, acknowledged_revision: u64) {
+        self.entries
+            .retain(|e| e.deleted_at_revision > acknowledged_revision);
     }
 
     pub fn compact(&mut self, keep_since_revision: u64) {

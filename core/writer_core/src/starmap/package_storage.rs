@@ -52,28 +52,15 @@ fn node_path(dir: &Path, node_id: &str) -> PathBuf {
         .join(format!("{}.json", node_id))
 }
 
-fn flat_node_path(dir: &Path, node_id: &str) -> PathBuf {
-    dir.join("nodes").join(format!("{}.json", node_id))
-}
-
 fn edge_path(dir: &Path, edge_id: &str) -> PathBuf {
     dir.join("edges")
         .join(bucket_for_id(edge_id))
         .join(format!("{}.json", edge_id))
 }
 
-fn flat_edge_path(dir: &Path, edge_id: &str) -> PathBuf {
-    dir.join("edges").join(format!("{}.json", edge_id))
-}
-
 fn child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
     dir.join("child_starmaps")
         .join(bucket_for_id(instance_id))
-        .join(format!("{}.json", instance_id))
-}
-
-fn flat_child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
-    dir.join("child_starmaps")
         .join(format!("{}.json", instance_id))
 }
 
@@ -83,27 +70,14 @@ fn link_path(dir: &Path, link_id: &str) -> PathBuf {
         .join(format!("{}.json", link_id))
 }
 
-fn flat_link_path(dir: &Path, link_id: &str) -> PathBuf {
-    dir.join("links").join(format!("{}.json", link_id))
-}
-
 fn hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
     dir.join("hyperlinks")
         .join(bucket_for_id(hyperlink_id))
         .join(format!("{}.json", hyperlink_id))
 }
 
-fn flat_hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
-    dir.join("hyperlinks")
-        .join(format!("{}.json", hyperlink_id))
-}
-
 fn layout_dir(dir: &Path) -> PathBuf {
     dir.join("layouts").join("default")
-}
-
-fn legacy_layout_path(dir: &Path) -> PathBuf {
-    dir.join("layouts").join("default.json")
 }
 
 fn layout_kind_path(dir: &Path) -> PathBuf {
@@ -155,15 +129,6 @@ pub fn delete_node_file(
                 .join(format!("{}.json", node_id)),
         );
     }
-    let flat = flat_node_path(&dir, node_id);
-    if flat.exists() {
-        let _ = fs::remove_file(&flat);
-        changed.push(
-            starmap_pkg_rel_dir(starmap_id)
-                .join("nodes")
-                .join(format!("{}.json", node_id)),
-        );
-    }
     Ok(changed)
 }
 
@@ -192,15 +157,6 @@ pub fn delete_edge_file(
             starmap_pkg_rel_dir(starmap_id)
                 .join("edges")
                 .join(bucket_for_id(edge_id))
-                .join(format!("{}.json", edge_id)),
-        );
-    }
-    let flat = flat_edge_path(&dir, edge_id);
-    if flat.exists() {
-        let _ = fs::remove_file(&flat);
-        changed.push(
-            starmap_pkg_rel_dir(starmap_id)
-                .join("edges")
                 .join(format!("{}.json", edge_id)),
         );
     }
@@ -238,15 +194,6 @@ pub fn delete_embed_file(
                 .join(format!("{}.json", instance_id)),
         );
     }
-    let flat = flat_child_starmap_path(&dir, instance_id);
-    if flat.exists() {
-        let _ = fs::remove_file(&flat);
-        changed.push(
-            starmap_pkg_rel_dir(starmap_id)
-                .join("child_starmaps")
-                .join(format!("{}.json", instance_id)),
-        );
-    }
     Ok(changed)
 }
 
@@ -275,15 +222,6 @@ pub fn delete_link_file(
             starmap_pkg_rel_dir(starmap_id)
                 .join("links")
                 .join(bucket_for_id(link_id))
-                .join(format!("{}.json", link_id)),
-        );
-    }
-    let flat = flat_link_path(&dir, link_id);
-    if flat.exists() {
-        let _ = fs::remove_file(&flat);
-        changed.push(
-            starmap_pkg_rel_dir(starmap_id)
-                .join("links")
                 .join(format!("{}.json", link_id)),
         );
     }
@@ -319,15 +257,6 @@ pub fn delete_hyperlink_file(
             starmap_pkg_rel_dir(starmap_id)
                 .join("hyperlinks")
                 .join(bucket_for_id(hyperlink_id))
-                .join(format!("{}.json", hyperlink_id)),
-        );
-    }
-    let flat = flat_hyperlink_path(&dir, hyperlink_id);
-    if flat.exists() {
-        let _ = fs::remove_file(&flat);
-        changed.push(
-            starmap_pkg_rel_dir(starmap_id)
-                .join("hyperlinks")
                 .join(format!("{}.json", hyperlink_id)),
         );
     }
@@ -427,15 +356,6 @@ pub(crate) fn load_layout_sharded(dir: &Path) -> Option<StarMapLayout> {
         kind,
         nodes: all_nodes,
     })
-}
-
-pub(crate) fn load_legacy_layout(dir: &Path) -> Option<StarMapLayout> {
-    let path = legacy_layout_path(dir);
-    if !path.exists() {
-        return None;
-    }
-    let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
 }
 
 pub fn save_viewport(
@@ -662,40 +582,6 @@ mod tests {
         );
         assert!(layout_nodes_shard_path(&pkg_dir, a_bucket).exists());
         assert!(layout_nodes_shard_path(&pkg_dir, upper_a_bucket).exists());
-    }
-
-    #[test]
-    fn test_layout_legacy_fallback() {
-        let dir = setup_project_root();
-        let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
-        let pkg_dir = starmap_pkg_dir(dir.path(), &meta.starmap_id);
-
-        let legacy_layout = StarMapLayout {
-            kind: StarMapLayoutKind::Freeform,
-            nodes: vec![StarMapLayoutNode {
-                node_id: "legacy_n1".to_string(),
-                x: 50.0,
-                y: 50.0,
-                width: 150.0,
-                height: 60.0,
-                radius: 30.0,
-                collapsed: false,
-                z_index: 0,
-                scale: 1.0,
-                depth: 0.0,
-                focus_weight: 0.0,
-                orbit_group: None,
-            }],
-        };
-        fs::create_dir_all(pkg_dir.join("layouts")).unwrap();
-        let json = serde_json::to_string_pretty(&legacy_layout).unwrap();
-        atomic_write_string(&legacy_layout_path(&pkg_dir), &json).unwrap();
-
-        let loaded = load_legacy_layout(&pkg_dir).unwrap();
-        assert_eq!(loaded.nodes.len(), 1);
-        assert_eq!(loaded.nodes[0].node_id, "legacy_n1");
-
-        assert!(load_layout_sharded(&pkg_dir).is_none());
     }
 
     #[test]

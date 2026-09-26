@@ -34,6 +34,9 @@ impl StarMapStore {
         clippy::type_complexity
     )]
     pub fn flush_save_queue(&mut self) -> Result<Vec<PathBuf>> {
+        // 在清空 dirty 集合前快照本次事务涉及的 dirty 对象，供 GraphMeta 分支
+        // 记录对象 revision。Node/Edge/… 分支会逐个清空 dirty 集合。
+        let flush_dirty = self.collect_flush_dirty_set();
         let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
         let mut any_processed = false;
         let mut failed_types: Vec<String> = Vec::new();
@@ -159,7 +162,7 @@ impl StarMapStore {
                 SaveQueueEntry::GraphMeta => {
                     if self.dirty_graph_meta {
                         self.reload_graph_meta_if_stale();
-                        match self.update_graph_meta_file() {
+                        match self.update_graph_meta_file(&flush_dirty) {
                             Ok((written_revision, rel_path)) => {
                                 self.dirty_graph_meta = false;
                                 self.package_revision = written_revision;
@@ -409,7 +412,8 @@ impl StarMapStore {
         // 先更新 graph_meta（merge_memory_ids），后处理删除文件。
         // 这样 merge 时 deleted_*_ids 还在，增量合并能正确移除已删除的对象 IDs。
         // 如果先删文件后 merge，deleted_*_ids 已被清空，merge 无法移除已删除的 IDs。
-        let (written_revision, graph_meta_path) = self.update_graph_meta_file()?;
+        let dirty = self.collect_flush_dirty_set();
+        let (written_revision, graph_meta_path) = self.update_graph_meta_file(&dirty)?;
         self.package_revision = written_revision;
         changed_paths.push(graph_meta_path);
 

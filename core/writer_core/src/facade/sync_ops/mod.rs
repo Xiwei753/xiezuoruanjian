@@ -31,8 +31,9 @@ mod commit;
 mod dry_run;
 mod prepare;
 
+#[cfg(feature = "github-api")]
 use crate::sync::full_sync::transport_init_failure_error;
-#[cfg(test)]
+#[cfg(all(test, feature = "github-api"))]
 use crate::sync::full_sync_utils::*;
 
 impl super::WriterCore {
@@ -52,7 +53,7 @@ impl super::WriterCore {
     /// 它会加载 pending deleted targets、走三段式 staging + workspace history。
     /// 本方法不加载 pending deleted targets、不走 staging，是旧编排，不能被
     /// FFI/UniFFI 等生产入口调用。
-    #[cfg(test)]
+    #[cfg(all(test, feature = "github-api"))]
     pub(crate) fn perform_full_sync(
         &self,
         config: &crate::sync::SyncConfig,
@@ -77,7 +78,7 @@ impl super::WriterCore {
     /// `SyncResult::error(...)` 后继续，只有 `list_projects` 失败才整体 `Err`。
     ///
     ///   降级为 `#[cfg(test)]`，只给内部测试用。
-    #[cfg(test)]
+    #[cfg(all(test, feature = "github-api"))]
     pub(crate) fn perform_full_sync_with_provider(
         &self,
         provider: &dyn crate::sync::provider::SyncProvider,
@@ -183,7 +184,7 @@ impl super::WriterCore {
     ///
     ///   降级为 `#[cfg(test)]`，只给 `perform_full_sync_with_provider` 用。
     /// 生产路径用 `crate::sync::full_sync::aggregate_full_sync_result`（pub 函数）。
-    #[cfg(test)]
+    #[cfg(all(test, feature = "github-api"))]
     fn aggregate_full_sync_result(
         targets: Vec<crate::sync::types::TargetSyncResult>,
     ) -> crate::sync::types::FullSyncResult {
@@ -327,6 +328,7 @@ impl super::WriterCore {
     ///
     /// transport 初始化失败返回类型化 `Error`；调用方决定是否持久化失败状态。
     /// 把 `match backend` → `if let Some(factory)` → `match factory()` 三层嵌套收成一个方法。
+    #[cfg(feature = "github-api")]
     fn init_sync_transport(
         &self,
     ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {

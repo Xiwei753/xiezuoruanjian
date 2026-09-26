@@ -183,7 +183,7 @@ impl StarMapStore {
             if let Some(link) = self.links.get(link_id) {
                 link_relation_index.push(LinkRelationIndex {
                     link_id: link.link_id.clone(),
-                    source_node_id: target_path_node_id(&link.source)
+                    source_node_id: target_path_node_id(&link.source, &self.starmap_id)
                         .unwrap_or_default()
                         .to_string(),
                 });
@@ -200,7 +200,7 @@ impl StarMapStore {
             if let Some(hl) = self.hyperlinks.get(hl_id) {
                 hyperlink_relation_index.push(HyperlinkRelationIndex {
                     hyperlink_id: hl.hyperlink_id.clone(),
-                    source_node_id: target_path_node_id(&hl.source)
+                    source_node_id: target_path_node_id(&hl.source, &self.starmap_id)
                         .unwrap_or_default()
                         .to_string(),
                 });
@@ -223,10 +223,6 @@ impl StarMapStore {
         }
         self.dirty_graph_meta = true;
         self.enqueue_save(SaveQueueEntry::GraphMeta);
-        self.record_migration(
-            "rebuild_relation_indexes",
-            "rebuilt relation indexes from object files for no-index legacy package",
-        );
     }
 
     #[allow(
@@ -263,7 +259,7 @@ impl StarMapStore {
             if let Some(meta) = self.graph_meta.as_ref() {
                 let edge_relation_index = meta.edge_relation_index.clone();
                 for eri in &edge_relation_index {
-                    let refs = extract_eri_node_refs(eri);
+                    let refs = extract_eri_node_refs(eri, &self.starmap_id);
                     for node_id in &refs {
                         if loaded_node_ids.contains(*node_id) {
                             for other_id in &refs {
@@ -307,7 +303,7 @@ impl StarMapStore {
                 let edge_relation_index = meta.edge_relation_index.clone();
                 for eri in &edge_relation_index {
                     if !self.edges.contains_key(&eri.edge_id) {
-                        let refs = extract_eri_node_refs(eri);
+                        let refs = extract_eri_node_refs(eri, &self.starmap_id);
                         let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
                         if any_loaded {
                             if let Some(edge) = self.try_load_edge(&eri.edge_id) {
@@ -327,7 +323,7 @@ impl StarMapStore {
                 let embed_host_index = meta.embed_host_index.clone();
                 for ehi in &embed_host_index {
                     if !self.embeds.contains_key(&ehi.instance_id) {
-                        let refs = extract_ehi_node_refs(ehi);
+                        let refs = extract_ehi_node_refs(ehi, &self.starmap_id);
                         let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
                         if any_loaded {
                             if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
@@ -498,9 +494,12 @@ impl StarMapStore {
         diagnostics: &mut Vec<LoadDiagnostic>,
     ) {
         let node_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
+        let host = self.starmap_id.as_str();
         for edge in self.edges.values() {
-            // 检查 from 路径中的节点引用
-            if let Some(node_id) = super::super::relation_index::target_path_node_id(&edge.from) {
+            // 检查 from 路径中的本地节点引用
+            if let Some(node_id) =
+                super::super::relation_index::target_path_node_id(&edge.from, host)
+            {
                 if !node_ids.contains(node_id) {
                     diagnostics.push(LoadDiagnostic {
                         kind: LoadDiagnosticKind::DanglingReference,
@@ -510,8 +509,9 @@ impl StarMapStore {
                     });
                 }
             }
-            // 检查 to 路径中的节点引用
-            if let Some(node_id) = super::super::relation_index::target_path_node_id(&edge.to) {
+            // 检查 to 路径中的本地节点引用
+            if let Some(node_id) = super::super::relation_index::target_path_node_id(&edge.to, host)
+            {
                 if !node_ids.contains(node_id) {
                     diagnostics.push(LoadDiagnostic {
                         kind: LoadDiagnosticKind::DanglingReference,
@@ -523,9 +523,9 @@ impl StarMapStore {
             }
         }
         for embed in self.embeds.values() {
-            // 检查 host_path 中的节点引用
+            // 检查 host_path 中的本地节点引用
             if let Some(node_id) =
-                super::super::relation_index::target_path_node_id(&embed.host_path)
+                super::super::relation_index::target_path_node_id(&embed.host_path, host)
             {
                 if !node_ids.contains(node_id) {
                     diagnostics.push(LoadDiagnostic {

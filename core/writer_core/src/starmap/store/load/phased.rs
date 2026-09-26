@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use crate::error::{Error, Result};
 
-use crate::error::Result;
-use crate::starmap::types::*;
-
-use super::super::meta::{DeletedSinceLastSync, GraphMeta};
-use super::super::relation_index::*;
+use super::super::meta::GraphMeta;
+use super::super::relation_index::{extract_ehi_node_refs, extract_eri_node_refs};
 use super::super::types::*;
 use super::super::StarMapStore;
+
+/// 当前支持的星图 schema 版本。load 只接受此版本，不猜测或迁移旧格式。
+const CURRENT_SCHEMA_VERSION: &str = "2";
 
 impl StarMapStore {
     pub(in crate::starmap::store) fn reload_graph_meta_if_stale(&mut self) {
@@ -46,7 +46,7 @@ impl StarMapStore {
         loop {
             match current {
                 LoadPhase::GraphMeta => {
-                    self.load_graph_meta_phase(&mut diagnostics);
+                    self.load_graph_meta_phase(&mut diagnostics)?;
                     self.current_load_phase = Some(LoadPhase::GraphMeta);
                 }
                 LoadPhase::ViewportAndLayoutIndex => {
@@ -99,160 +99,44 @@ impl StarMapStore {
         })
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub(in crate::starmap::store) fn load_graph_meta_phase(
         &mut self,
         diagnostics: &mut Vec<LoadDiagnostic>,
-    ) {
+    ) -> Result<()> {
         let graph_dir = self.starmap_dir();
         let graph_json_path = graph_dir.join("graph.json");
 
         if graph_json_path.exists() {
             let content = std::fs::read_to_string(&graph_json_path).unwrap_or_default();
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                let schema_version_str = value
-                    .get("schemaVersion")
-                    .or_else(|| value.get("schema_version"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+            let value: serde_json::Value = serde_json::from_str(&content)?;
 
-                if let Some(ref sv) = schema_version_str {
-                    if sv != "2" && sv != "1" {
-                        diagnostics.push(LoadDiagnostic {
-                            kind: LoadDiagnosticKind::UnsupportedVersion,
-                            object_type: "graph".to_string(),
-                            object_id: self.starmap_id.clone(),
-                            detail: format!("unsupported schemaVersion: {}", sv),
-                        });
-                    }
-                }
+            let schema_version_str = value
+                .get("schemaVersion")
+                .or_else(|| value.get("schema_version"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-                let is_new_format = schema_version_str.as_deref() == Some("2");
-
-                if is_new_format {
-                    match serde_json::from_str::<GraphMeta>(&content) {
-                        Ok(meta) => {
-                            self.graph_meta = Some(meta);
-                        }
-                        Err(e) => {
-                            diagnostics.push(LoadDiagnostic {
-                                kind: LoadDiagnosticKind::Corrupt,
-                                object_type: "graph".to_string(),
-                                object_id: self.starmap_id.clone(),
-                                detail: format!("graph.json v2 parse failed: {}", e),
-                            });
-                        }
-                    }
-                } else if let Ok(graph) = serde_json::from_str::<StarMapGraph>(&content) {
-                    self.graph_meta = Some(GraphMeta {
-                        schema_version: "2".to_string(),
-                        starmap_id: graph.starmap_id.clone(),
-                        node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
-                        edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
-                        embed_instance_ids: graph
-                            .embeds
-                            .iter()
-                            .map(|e| e.instance_id.clone())
-                            .collect(),
-                        link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
-                        hyperlink_ids: vec![],
-                        edge_relation_index: graph
-                            .edges
-                            .iter()
-                            .map(|e| EdgeRelationIndex {
-                                edge_id: e.id.clone(),
-                                from: e.from.clone(),
-                                to: e.to.clone(),
-                            })
-                            .collect(),
-                        embed_host_index: graph
-                            .embeds
-                            .iter()
-                            .map(|e| EmbedHostIndex {
-                                instance_id: e.instance_id.clone(),
-                                host_path: e.host_path.clone(),
-                            })
-                            .collect(),
-                        link_relation_index: graph
-                            .links
-                            .iter()
-                            .map(|l| LinkRelationIndex {
-                                link_id: l.link_id.clone(),
-                                source_node_id: super::super::relation_index::target_path_node_id(
-                                    &l.source,
-                                )
-                                .unwrap_or_default()
-                                .to_string(),
-                            })
-                            .collect(),
-                        hyperlink_relation_index: vec![],
-                        node_kind_counts: {
-                            let mut counts = HashMap::new();
-                            for node in &graph.nodes {
-                                *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
-                            }
-                            counts
-                        },
-                        package_revision: 0,
-                        updated_at: crate::starmap::now_epoch(),
-                        deleted_since_last_sync: DeletedSinceLastSync::default(),
-                    });
-                    for node in &graph.nodes {
-                        self.nodes.insert(node.id.clone(), node.clone());
-                        self.dirty_nodes.insert(node.id.clone());
-                    }
-                    for edge in &graph.edges {
-                        self.edges.insert(edge.id.clone(), edge.clone());
-                        self.dirty_edges.insert(edge.id.clone());
-                    }
-                    for embed in &graph.embeds {
-                        self.embeds.insert(embed.instance_id.clone(), embed.clone());
-                        self.dirty_embeds.insert(embed.instance_id.clone());
-                    }
-                    for link in &graph.links {
-                        self.links.insert(link.link_id.clone(), link.clone());
-                        self.dirty_links.insert(link.link_id.clone());
-                    }
-                    self.dirty_graph_meta = true;
-                    self.enqueue_save(SaveQueueEntry::Node);
-                    self.enqueue_save(SaveQueueEntry::Edge);
-                    self.enqueue_save(SaveQueueEntry::Embed);
-                    self.enqueue_save(SaveQueueEntry::Link);
-                    self.enqueue_save(SaveQueueEntry::GraphMeta);
-                    self.record_migration(
-                        "graph_v1_to_v2",
-                        "migrated inline v1 graph.json to v2 package format",
-                    );
-                } else {
-                    match self.load_graph_meta_from_file(&graph_json_path) {
-                        Ok(meta) => {
-                            self.graph_meta = Some(meta);
-                        }
-                        Err(e) => {
-                            diagnostics.push(LoadDiagnostic {
-                                kind: LoadDiagnosticKind::Corrupt,
-                                object_type: "graph".to_string(),
-                                object_id: self.starmap_id.clone(),
-                                detail: format!("graph.json parse failed: {}", e),
-                            });
-                        }
-                    }
-                }
-            } else {
-                diagnostics.push(LoadDiagnostic {
-                    kind: LoadDiagnosticKind::Corrupt,
-                    object_type: "graph".to_string(),
-                    object_id: self.starmap_id.clone(),
-                    detail: "graph.json is not valid JSON".to_string(),
+            if schema_version_str.as_deref() != Some(CURRENT_SCHEMA_VERSION) {
+                return Err(Error::UnsupportedVersion {
+                    version: schema_version_str.unwrap_or_default(),
                 });
             }
+
+            match serde_json::from_str::<GraphMeta>(&content) {
+                Ok(meta) => {
+                    self.graph_meta = Some(meta);
+                }
+                Err(e) => {
+                    diagnostics.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::Corrupt,
+                        object_type: "graph".to_string(),
+                        object_id: self.starmap_id.clone(),
+                        detail: format!("graph.json parse failed: {}", e),
+                    });
+                }
+            }
         }
+        Ok(())
     }
 
     pub(in crate::starmap::store) fn load_viewport_objects(
@@ -329,7 +213,7 @@ impl StarMapStore {
                     if self.edges.contains_key(&eri.edge_id) {
                         continue;
                     }
-                    let refs = extract_eri_node_refs(eri);
+                    let refs = extract_eri_node_refs(eri, &self.starmap_id);
                     let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
                     if any_in_viewport {
                         if let Some(edge) = self.try_load_edge(&eri.edge_id) {
@@ -341,7 +225,7 @@ impl StarMapStore {
                     if self.embeds.contains_key(&ehi.instance_id) {
                         continue;
                     }
-                    let refs = extract_ehi_node_refs(ehi);
+                    let refs = extract_ehi_node_refs(ehi, &self.starmap_id);
                     let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
                     if any_in_viewport {
                         if let Some(embed) = self.try_load_embed(&ehi.instance_id) {

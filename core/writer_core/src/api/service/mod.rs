@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -522,10 +521,10 @@ mod tests {
 
         let renders = api.compute_starmap_edge_renders(graph, layout).unwrap();
 
-        assert_eq!(renders.len(), 1);
-        assert_eq!(renders[0].edge_id, "edge-1");
-        assert!((renders[0].start_x - 92.0).abs() < 0.1);
-        assert!((renders[0].end_x - 208.0).abs() < 0.1);
+        assert_eq!(renders.renders.len(), 1);
+        assert_eq!(renders.renders[0].edge_id, "edge-1");
+        assert!((renders.renders[0].start_x - 92.0).abs() < 0.1);
+        assert!((renders.renders[0].end_x - 208.0).abs() < 0.1);
     }
 
     #[test]

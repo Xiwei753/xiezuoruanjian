@@ -245,7 +245,9 @@ impl From<StarMapAnchorRoleDto> for crate::starmap::semantic::StarMapAnchorRole 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortalDto {
-    pub target: StarMapTargetPathDto,
+    pub destination_starmap_id: String,
+    #[serde(default)]
+    pub destination_target: Option<StarMapTargetDetailDto>,
     #[serde(default)]
     pub mode: StarMapPortalModeDto,
     #[serde(default)]
@@ -255,7 +257,8 @@ pub struct StarMapPortalDto {
 impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
     fn from(p: crate::starmap::semantic::StarMapPortal) -> Self {
         Self {
-            target: p.target.into(),
+            destination_starmap_id: p.destination_starmap_id,
+            destination_target: p.destination_target.map(Into::into),
             mode: p.mode.into(),
             preview_policy: p.preview_policy.into(),
         }
@@ -265,7 +268,8 @@ impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
 impl From<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
     fn from(d: StarMapPortalDto) -> Self {
         Self {
-            target: d.target.into(),
+            destination_starmap_id: d.destination_starmap_id,
+            destination_target: d.destination_target.map(Into::into),
             mode: d.mode.into(),
             preview_policy: d.preview_policy.into(),
         }

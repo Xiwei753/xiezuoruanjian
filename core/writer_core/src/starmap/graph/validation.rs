@@ -12,14 +12,16 @@ use crate::starmap::types::*;
 /// - 边端点引用的节点/锚点必须存在
 /// - 嵌入的 `instance_id` 全局唯一，且不能自嵌入
 /// - 链接的 `link_id` 全局唯一
-/// - Portal target 可达（无循环、无缺失）
+/// - 超链接的 `hyperlink_id` 全局唯一，source 路径合法，URI 非空且有 scheme
+/// - Portal 的 `destination_starmap_id` 必须存在（所有 mode），可选落点在目标图中存在
 /// - DisplayPolicy scale 层级有序
-/// - 数值字段无 NaN/非法值
+/// - 数值字段 finite（无 NaN/Inf）
 pub(crate) fn validate_graph(app_data_root: &std::path::Path, graph: &StarMapGraph) -> Result<()> {
     let node_ids = validate_nodes(app_data_root, graph)?;
     validate_edges(app_data_root, graph, &node_ids)?;
     validate_embeds(app_data_root, graph, &node_ids)?;
     validate_links(app_data_root, graph, &node_ids)?;
+    validate_hyperlinks(app_data_root, graph, &node_ids)?;
     Ok(())
 }
 
@@ -87,25 +89,101 @@ fn validate_nodes(
         }
 
         if let Some(portal) = &node.portal {
-            if portal.mode == crate::starmap::semantic::StarMapPortalMode::EnterPortal {
-                let status = super::resolve::resolve_target_path(app_data_root, &portal.target);
-                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                match status {
-                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-                    | MissingEmbed | MissingPortal | InvalidRange => {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Portal target resolve failed: {:?}", status),
-                        )));
-                    }
-                    _ => {}
-                }
+            // 所有 mode（EnterPortal/PreviewInline/ReferenceOnly）都必须保证
+            // destination_starmap_id 存在；不能只在校验 EnterPortal 时才查。
+            if crate::starmap::load_starmap_meta(app_data_root, &portal.destination_starmap_id)
+                .is_err()
+            {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Portal destination_starmap_id does not exist",
+                )));
+            }
+            // 可选落点必须在目标图中存在
+            if let Some(detail) = &portal.destination_target {
+                validate_portal_destination_target(
+                    app_data_root,
+                    &portal.destination_starmap_id,
+                    detail,
+                )?;
             }
         }
 
         crate::starmap::semantic::validate_display_policy(&node.display_policy)?;
     }
     Ok(node_ids)
+}
+
+/// 校验 Portal 可选落点在目标星图中存在。
+///
+/// 只校验 Node/Anchor/ChapterRange 三种需要落点的 target；
+/// Starmap/Entity/External 等不依赖目标图内对象，直接通过。
+fn validate_portal_destination_target(
+    app_data_root: &std::path::Path,
+    destination_starmap_id: &str,
+    detail: &crate::starmap::semantic::StarMapTargetDetail,
+) -> Result<()> {
+    use crate::starmap::semantic::StarMapTargetDetail;
+    match detail {
+        StarMapTargetDetail::Node { node_id } => {
+            let mut store =
+                crate::starmap::store::StarMapStore::new(app_data_root, destination_starmap_id);
+            if store.load_full().is_err() {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Portal destination starmap cannot be loaded",
+                )));
+            }
+            if store.get_node(node_id).is_none() {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Portal destination_target node does not exist",
+                )));
+            }
+        }
+        StarMapTargetDetail::Anchor { node_id, anchor_id } => {
+            let mut store =
+                crate::starmap::store::StarMapStore::new(app_data_root, destination_starmap_id);
+            if store.load_full().is_err() {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Portal destination starmap cannot be loaded",
+                )));
+            }
+            match store.get_node(node_id) {
+                Some(n) => {
+                    if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Portal destination_target anchor does not exist",
+                        )));
+                    }
+                }
+                None => {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Portal destination_target node does not exist",
+                    )));
+                }
+            }
+        }
+        StarMapTargetDetail::ChapterRange {
+            range_start,
+            range_end,
+            ..
+        } => {
+            if let (Some(s), Some(e)) = (range_start, range_end) {
+                if s > e {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Portal destination_target range_start > range_end",
+                    )));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// 验证边：端点引用完整性。
@@ -220,14 +298,15 @@ fn validate_embeds(
         }
 
         let p = &embed.placement;
+        // width/height 允许为 0（折叠），不允许为负；所有数值必须 finite。
         if p.width < 0.0
             || p.height < 0.0
             || p.scale <= 0.0
-            || p.width.is_nan()
-            || p.height.is_nan()
-            || p.scale.is_nan()
-            || p.x.is_nan()
-            || p.y.is_nan()
+            || !p.width.is_finite()
+            || !p.height.is_finite()
+            || !p.scale.is_finite()
+            || !p.x.is_finite()
+            || !p.y.is_finite()
         {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -236,7 +315,10 @@ fn validate_embeds(
         }
 
         let tvp = &embed.target_viewport;
-        if tvp.scale <= 0.0 || tvp.scale.is_nan() || tvp.offset_x.is_nan() || tvp.offset_y.is_nan()
+        if tvp.scale <= 0.0
+            || !tvp.scale.is_finite()
+            || !tvp.offset_x.is_finite()
+            || !tvp.offset_y.is_finite()
         {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -244,34 +326,15 @@ fn validate_embeds(
             )));
         }
 
-        // 验证 host_path 引用完整性
-        if embed.host_path.segments.is_empty() {
-            match &embed.host_path.target {
-                crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
-                    if !node_ids.contains(node_id) {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Embed host_path references non-existent node",
-                        )));
-                    }
-                }
-                crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
-                    let mut anchor_found = false;
-                    if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
-                        if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                            anchor_found = true;
-                        }
-                    }
-                    if !anchor_found {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Embed host_path references non-existent anchor",
-                        )));
-                    }
-                }
-                _ => {}
-            }
-        }
+        // 验证 host_path 引用完整性：统一走 validate_target_path，
+        // 无 segments 时做本地校验，有 segments 时走 resolve_target 跨星图解析。
+        validate_target_path(
+            app_data_root,
+            &embed.host_path,
+            graph,
+            node_ids,
+            "embed host_path",
+        )?;
 
         crate::starmap::semantic::validate_display_policy(&embed.display_policy)?;
     }
@@ -307,25 +370,86 @@ fn validate_links(
     Ok(())
 }
 
-/// 布局验证：scale > 0 且非 NaN，depth/focus_weight 非 NaN。
+/// 验证超链接：hyperlink_id 唯一、source 路径合法、target_uri 非空且有 scheme。
+fn validate_hyperlinks(
+    app_data_root: &std::path::Path,
+    graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let mut hyperlink_ids = std::collections::HashSet::new();
+    for hl in &graph.hyperlinks {
+        if !hyperlink_ids.insert(&hl.hyperlink_id) {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Duplicate hyperlink_id",
+            )));
+        }
+        // source 路径必须合法
+        validate_target_path(
+            app_data_root,
+            &hl.source,
+            graph,
+            node_ids,
+            "hyperlink source",
+        )?;
+        // target_uri 非空
+        if hl.target_uri.is_empty() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Hyperlink target_uri cannot be empty",
+            )));
+        }
+        // target_uri 必须有 scheme（包含 "://"）
+        if !hl.target_uri.contains("://") {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Hyperlink target_uri must have a scheme (e.g. https://)",
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 布局验证：scale > 0 且 finite，所有数值 finite。
 /// 坐标值（x/y/width/height）允许为负或零，因为平台端可能使用不同坐标系原点。
 pub(crate) fn validate_layout(layout: &StarMapLayout) -> Result<()> {
     for node in &layout.nodes {
         if node.scale <= 0.0
-            || node.scale.is_nan()
-            || node.x.is_nan()
-            || node.y.is_nan()
-            || node.width.is_nan()
-            || node.height.is_nan()
-            || node.radius.is_nan()
-            || node.depth.is_nan()
-            || node.focus_weight.is_nan()
+            || !node.scale.is_finite()
+            || !node.x.is_finite()
+            || !node.y.is_finite()
+            || !node.width.is_finite()
+            || !node.height.is_finite()
+            || !node.radius.is_finite()
+            || !node.depth.is_finite()
+            || !node.focus_weight.is_finite()
         {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Invalid layout node values",
             )));
         }
+    }
+    Ok(())
+}
+
+/// 视口验证：scale > 0 且 finite，offset/width/height finite。
+///
+/// 在 `save_starmap_viewport` 保存前调用，确保写入磁盘的视口数值合法。
+/// scale 必须 > 0（缩放比不能为零或负）；offset/width/height 允许任意有限值
+/// （平台端坐标系原点可能不同），但不能是 NaN/Inf。
+pub(crate) fn validate_viewport(viewport: &StarMapViewport) -> Result<()> {
+    if viewport.scale <= 0.0
+        || !viewport.scale.is_finite()
+        || !viewport.offset_x.is_finite()
+        || !viewport.offset_y.is_finite()
+        || !viewport.width.is_finite()
+        || !viewport.height.is_finite()
+    {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid starmap viewport values",
+        )));
     }
     Ok(())
 }

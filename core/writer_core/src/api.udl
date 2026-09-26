@@ -702,7 +702,8 @@ dictionary StarMapAnchorTargetDto {
 };
 
 dictionary StarMapPortalDto {
-    StarMapTargetPathDto target;
+    string destination_starmap_id;
+    StarMapTargetDetailDto? destination_target;
     StarMapPortalModeDto mode;
     StarMapPortalPreviewPolicyDto preview_policy;
 };
@@ -892,6 +893,26 @@ dictionary StarMapEdgeRenderDto {
     boolean has_bidirectional;
 };
 
+enum StarMapEdgeAnchorDiagnosticReasonDto {
+    "LocalNodeMissing",
+    "CrossLayerPath",
+    "NonGeometricTarget",
+    "EmbedMissing",
+    "PortalMissing",
+    "MultiSegmentUnsupported"
+};
+
+dictionary StarMapEdgeAnchorDiagnosticDto {
+    string edge_id;
+    string endpoint;
+    StarMapEdgeAnchorDiagnosticReasonDto reason;
+};
+
+dictionary StarMapEdgeRenderBatchDto {
+    sequence<StarMapEdgeRenderDto> renders;
+    sequence<StarMapEdgeAnchorDiagnosticDto> diagnostics;
+};
+
 dictionary StarMapReferenceDto {
     string host_starmap_id;
     string host_title;
@@ -947,12 +968,23 @@ dictionary StarMapNodePatchInputDto {
     string? payload;
     boolean clear_payload;
     sequence<string>? tags;
+    StarMapNodeContentDto? content;
+    sequence<StarMapAnchorDto>? anchors;
+    StarMapPortalDto? portal;
+    boolean clear_portal;
+    StarMapDisplayPolicyDto? display_policy;
+    StarMapOpenBehaviorDto? open_behavior;
+    StarMapProvenanceDto? provenance;
 };
 
 dictionary StarMapEdgePatchInputDto {
     StarMapEdgeKindDto? kind;
     string? label;
     boolean clear_label;
+    string? payload;
+    boolean clear_payload;
+    StarMapTargetPathDto? from;
+    StarMapTargetPathDto? to;
 };
 
 enum StarMapNodeKindDto {
@@ -1357,7 +1389,7 @@ interface WriterAppService {
     boolean save_starmap_viewport(string starmap_id, StarMapViewportDto viewport);
 
     [Throws=WriterError]
-    sequence<StarMapEdgeRenderDto> compute_starmap_edge_renders(StarMapGraphDto graph, StarMapLayoutDto layout);
+    StarMapEdgeRenderBatchDto compute_starmap_edge_renders(StarMapGraphDto graph, StarMapLayoutDto layout);
 
     [Throws=WriterError]
     string? hit_test_starmap_node(StarMapLayoutDto layout, float x, float y);

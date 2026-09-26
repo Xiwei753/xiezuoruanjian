@@ -517,28 +517,27 @@ pub fn update_starmap_stats(
 pub struct StarMapReference {
     pub host_starmap_id: String,
     pub host_title: String,
-    pub ref_type: String, // "embed", "link", "portal", "edge"
+    pub ref_type: String, // "embed", "link", "portal", "edge", "hyperlink"
     pub ref_id: String,
     pub target_starmap_id: String,
 }
 
+/// 判断路径是否穿越或落在 `target_starmap_id`。
+///
+/// 用 `resolve_target` 返回的 `traversed_starmap_ids` 判断目标星图是否在
+/// 路径的穿越链中（含起点和终点图）。这是删除保护的唯一真实依据——
+/// 任何经过目标星图的路径都构成引用，删除目标星图会破坏该路径的可达性。
 fn target_path_references_starmap(
+    app_data_root: &Path,
     path: &crate::starmap::types::reference::StarMapTargetPath,
     target_starmap_id: &str,
 ) -> bool {
-    if path.starmap_id == target_starmap_id {
-        return true;
-    }
-    // 路径段中的嵌入和 portal 引用的目标星图需要 resolver 查询，
-    // 但在引用检查时我们只能检查 starmap_id 和 target 中的直接引用。
-    // 只有当存在路径段时，Starmap target 才可能通过间接层级引用目标星图。
-    if !path.segments.is_empty() {
-        matches!(
-            &path.target,
-            crate::starmap::semantic::StarMapTargetDetail::Starmap
-        )
-    } else {
-        false
+    match crate::starmap::graph::resolve::resolve_target(app_data_root, path) {
+        Ok(resolved) => resolved
+            .traversed_starmap_ids
+            .iter()
+            .any(|id| id == target_starmap_id),
+        Err(_) => false,
     }
 }
 
@@ -558,63 +557,79 @@ pub fn find_starmap_references(
 
     for m in &idx.starmaps {
         let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &m.starmap_id);
-        if store.load_full().is_ok() {
-            let graph = store.to_starmap_graph();
-            // 1. Check embeds
-            for embed in &graph.embeds {
-                if embed.target_starmap_id == target_starmap_id {
+        // 引用扫描必须基于完整加载的图。任一 host 星图加载失败就返回 Err，
+        // 不允许在引用扫描不完整时继续删除（否则会漏掉真实引用导致误删）。
+        store.load_full()?;
+
+        let graph = store.to_starmap_graph();
+        // 1. Check embeds
+        for embed in &graph.embeds {
+            if embed.target_starmap_id == target_starmap_id {
+                refs.push(StarMapReference {
+                    host_starmap_id: m.starmap_id.clone(),
+                    host_title: m.title.clone(),
+                    ref_type: "embed".to_string(),
+                    ref_id: embed.instance_id.clone(),
+                    target_starmap_id: target_starmap_id.to_string(),
+                });
+            }
+        }
+
+        // 2. Check links
+        for link in &graph.links {
+            if target_path_references_starmap(app_data_root, &link.target, target_starmap_id) {
+                refs.push(StarMapReference {
+                    host_starmap_id: m.starmap_id.clone(),
+                    host_title: m.title.clone(),
+                    ref_type: "link".to_string(),
+                    ref_id: link.link_id.clone(),
+                    target_starmap_id: target_starmap_id.to_string(),
+                });
+            }
+        }
+
+        // 3. Check edges
+        for edge in &graph.edges {
+            let matches =
+                target_path_references_starmap(app_data_root, &edge.from, target_starmap_id)
+                    || target_path_references_starmap(app_data_root, &edge.to, target_starmap_id);
+
+            if matches {
+                refs.push(StarMapReference {
+                    host_starmap_id: m.starmap_id.clone(),
+                    host_title: m.title.clone(),
+                    ref_type: "edge".to_string(),
+                    ref_id: edge.id.clone(),
+                    target_starmap_id: target_starmap_id.to_string(),
+                });
+            }
+        }
+
+        // 4. Check portals
+        for node in &graph.nodes {
+            if let Some(portal) = &node.portal {
+                if portal.destination_starmap_id == target_starmap_id {
                     refs.push(StarMapReference {
                         host_starmap_id: m.starmap_id.clone(),
                         host_title: m.title.clone(),
-                        ref_type: "embed".to_string(),
-                        ref_id: embed.instance_id.clone(),
+                        ref_type: "portal".to_string(),
+                        ref_id: node.id.clone(),
                         target_starmap_id: target_starmap_id.to_string(),
                     });
                 }
             }
+        }
 
-            // 2. Check links
-            for link in &graph.links {
-                if target_path_references_starmap(&link.target, target_starmap_id) {
-                    refs.push(StarMapReference {
-                        host_starmap_id: m.starmap_id.clone(),
-                        host_title: m.title.clone(),
-                        ref_type: "link".to_string(),
-                        ref_id: link.link_id.clone(),
-                        target_starmap_id: target_starmap_id.to_string(),
-                    });
-                }
-            }
-
-            // 3. Check edges
-            for edge in &graph.edges {
-                let matches = target_path_references_starmap(&edge.from, target_starmap_id)
-                    || target_path_references_starmap(&edge.to, target_starmap_id);
-
-                if matches {
-                    refs.push(StarMapReference {
-                        host_starmap_id: m.starmap_id.clone(),
-                        host_title: m.title.clone(),
-                        ref_type: "edge".to_string(),
-                        ref_id: edge.id.clone(),
-                        target_starmap_id: target_starmap_id.to_string(),
-                    });
-                }
-            }
-
-            // 4. Check portals
-            for node in &graph.nodes {
-                if let Some(portal) = &node.portal {
-                    if target_path_references_starmap(&portal.target, target_starmap_id) {
-                        refs.push(StarMapReference {
-                            host_starmap_id: m.starmap_id.clone(),
-                            host_title: m.title.clone(),
-                            ref_type: "portal".to_string(),
-                            ref_id: node.id.clone(),
-                            target_starmap_id: target_starmap_id.to_string(),
-                        });
-                    }
-                }
+        // 5. Check hyperlinks — hyperlink 的 source 路径也可能穿越目标星图。
+        for hl in &graph.hyperlinks {
+            if target_path_references_starmap(app_data_root, &hl.source, target_starmap_id) {
+                refs.push(StarMapReference {
+                    host_starmap_id: m.starmap_id.clone(),
+                    host_title: m.title.clone(),
+                    ref_type: "hyperlink".to_string(),
+                    ref_id: hl.hyperlink_id.clone(),
+                    target_starmap_id: target_starmap_id.to_string(),
+                });
             }
         }
     }

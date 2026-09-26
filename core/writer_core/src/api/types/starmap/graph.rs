@@ -143,3 +143,61 @@ impl From<crate::starmap::render::EdgeRender> for StarMapEdgeRenderDto {
         }
     }
 }
+
+/// 边端点锚点解析诊断 DTO。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEdgeAnchorDiagnosticDto {
+    pub edge_id: String,
+    pub endpoint: String,
+    pub reason: StarMapEdgeAnchorDiagnosticReasonDto,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapEdgeAnchorDiagnosticReasonDto {
+    LocalNodeMissing,
+    CrossLayerPath,
+    NonGeometricTarget,
+    EmbedMissing,
+    PortalMissing,
+    MultiSegmentUnsupported,
+}
+
+impl From<crate::starmap::render::EdgeAnchorDiagnostic> for StarMapEdgeAnchorDiagnosticDto {
+    fn from(d: crate::starmap::render::EdgeAnchorDiagnostic) -> Self {
+        use crate::starmap::render::EdgeAnchorDiagnosticReason as R;
+        let reason = match d.reason {
+            R::LocalNodeMissing => StarMapEdgeAnchorDiagnosticReasonDto::LocalNodeMissing,
+            R::CrossLayerPath => StarMapEdgeAnchorDiagnosticReasonDto::CrossLayerPath,
+            R::NonGeometricTarget => StarMapEdgeAnchorDiagnosticReasonDto::NonGeometricTarget,
+            R::EmbedMissing => StarMapEdgeAnchorDiagnosticReasonDto::EmbedMissing,
+            R::PortalMissing => StarMapEdgeAnchorDiagnosticReasonDto::PortalMissing,
+            R::MultiSegmentUnsupported => {
+                StarMapEdgeAnchorDiagnosticReasonDto::MultiSegmentUnsupported
+            }
+        };
+        Self {
+            edge_id: d.edge_id,
+            endpoint: d.endpoint,
+            reason,
+        }
+    }
+}
+
+/// 边渲染批结果 DTO：成功渲染的边 + 无法定位端点的诊断。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEdgeRenderBatchDto {
+    pub renders: Vec<StarMapEdgeRenderDto>,
+    pub diagnostics: Vec<StarMapEdgeAnchorDiagnosticDto>,
+}
+
+impl From<crate::starmap::render::EdgeRenderBatch> for StarMapEdgeRenderBatchDto {
+    fn from(b: crate::starmap::render::EdgeRenderBatch) -> Self {
+        Self {
+            renders: b.renders.into_iter().map(Into::into).collect(),
+            diagnostics: b.diagnostics.into_iter().map(Into::into).collect(),
+        }
+    }
+}

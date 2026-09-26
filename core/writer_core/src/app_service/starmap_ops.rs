@@ -1,5 +1,5 @@
 use crate::api::{
-    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEdgeRenderDto, StarMapEmbedDto,
+    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEdgeRenderBatchDto, StarMapEmbedDto,
     StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
     StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
     StarMapMotionPolicyDto, StarMapNodeDto, StarMapNodePatchInputDto, StarMapPhasedSnapshotDto,
@@ -114,7 +114,7 @@ impl super::WriterAppService {
         &self,
         graph: StarMapGraphDto,
         layout: StarMapLayoutDto,
-    ) -> Result<Vec<StarMapEdgeRenderDto>, WriterError> {
+    ) -> Result<StarMapEdgeRenderBatchDto, WriterError> {
         self.api.compute_starmap_edge_renders(graph, layout)
     }
 

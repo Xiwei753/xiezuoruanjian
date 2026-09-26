@@ -169,13 +169,23 @@ pub enum StarMapAnchorRole {
 
 /// 传送门：节点进入子星图的入口。
 ///
-/// - `EnterPortal`：点击后进入子星图编辑空间
-/// - `PreviewInline`：在当前星图内内联预览子星图
-/// - `ReferenceOnly`：仅作为引用标记，不提供交互入口
+/// Portal 是一个明确的跳转定义，直接持有目标星图 ID 和可选落点，
+/// 不再嵌套 `StarMapTargetPath`（避免 Portal 自身持有一条可能再次包含
+/// `EnterPortal` 的路径，那会与 `EnterPortal { node_id }` 路径段语义冲突）。
+///
+/// - `destination_starmap_id`：portal 跳转的目标星图 ID
+/// - `destination_target`：可选的目标落点（目标图内的 Node/Anchor/ChapterRange 等）
+/// - `mode`：跳转模式
+///   - `EnterPortal`：点击后进入子星图编辑空间
+///   - `PreviewInline`：在当前星图内内联预览子星图
+///   - `ReferenceOnly`：仅作为引用标记，不提供交互入口
+/// - `preview_policy`：内联预览策略
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortal {
-    pub target: StarMapTargetPath,
+    pub destination_starmap_id: String,
+    #[serde(default)]
+    pub destination_target: Option<StarMapTargetDetail>,
     #[serde(default)]
     pub mode: StarMapPortalMode,
     #[serde(default)]
@@ -245,20 +255,20 @@ impl Default for StarMapDisplayPolicy {
 /// 校验 DisplayPolicy 的 scale 层级不变量和数值合法性。
 ///
 /// 不变量：`min_visible_scale <= title_scale <= summary_scale <= detail_scale`，
-/// 所有值非 NaN、非负，`max_preview_chars ≤ 10000`。
+/// 所有值 finite、非负，`max_preview_chars ≤ 10000`。
 pub fn validate_display_policy(dp: &StarMapDisplayPolicy) -> crate::error::Result<()> {
-    if dp.importance.is_nan()
-        || dp.importance < 0.0
-        || dp.min_visible_scale.is_nan()
+    if dp.importance < 0.0
+        || !dp.importance.is_finite()
         || dp.min_visible_scale < 0.0
-        || dp.title_scale.is_nan()
+        || !dp.min_visible_scale.is_finite()
         || dp.title_scale < 0.0
-        || dp.summary_scale.is_nan()
+        || !dp.title_scale.is_finite()
         || dp.summary_scale < 0.0
-        || dp.detail_scale.is_nan()
+        || !dp.summary_scale.is_finite()
         || dp.detail_scale < 0.0
-        || dp.min_readable_px.is_nan()
+        || !dp.detail_scale.is_finite()
         || dp.min_readable_px < 0.0
+        || !dp.min_readable_px.is_finite()
     {
         return Err(crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,

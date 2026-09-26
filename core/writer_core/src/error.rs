@@ -61,6 +61,9 @@ pub enum Error {
     /// 删除目标无效（非项目/卷/章节路径）。
     #[error("Invalid delete target: {0}")]
     InvalidDeleteTarget(String),
+    /// 数据 schema 版本不被支持。不可恢复，需用户或同步层介入。
+    #[error("Unsupported schema version: {version}")]
+    UnsupportedVersion { version: String },
 
     // --- Sync errors ---
     /// 同步认证失败（Token 无效/权限不足）。不可恢复，需用户干预。
@@ -152,6 +155,7 @@ impl Error {
             Error::NotImplemented => "NOT_IMPLEMENTED",
             Error::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             Error::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
+            Error::UnsupportedVersion { .. } => "UNSUPPORTED_VERSION",
             Error::SyncAuthFailed { .. } => "SYNC_AUTH_FAILED",
             Error::SyncNetworkUnavailable { .. } => "SYNC_NETWORK_UNAVAILABLE",
             Error::SyncRateLimited { .. } => "SYNC_RATE_LIMITED",
@@ -184,6 +188,7 @@ impl Error {
             Error::NotImplemented => false,
             Error::RefuseToDeleteRoot => false,
             Error::InvalidDeleteTarget(_) => false,
+            Error::UnsupportedVersion { .. } => false,
             Error::SyncAuthFailed { .. } => false,
             Error::SyncNetworkUnavailable { .. } => true,
             Error::SyncRateLimited { .. } => true,
@@ -296,6 +301,9 @@ impl Error {
             }
             Error::InvalidDeleteTarget(detail) => {
                 m.insert("detail".into(), detail.clone());
+            }
+            Error::UnsupportedVersion { version } => {
+                m.insert("version".into(), version.clone());
             }
             _ => {}
         }

@@ -265,27 +265,6 @@ fn update_embed_host_marks_dirty_graph_meta() {
 }
 
 #[test]
-fn delete_also_removes_flat_path() {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
-
-    let starmap_dir = dir.path().join("starmaps").join(&meta.starmap_id);
-    let nodes_dir = starmap_dir.join("nodes");
-    std::fs::create_dir_all(&nodes_dir).unwrap();
-
-    let flat_path = nodes_dir.join("n1.json");
-    std::fs::write(&flat_path, "{}").unwrap();
-    assert!(flat_path.exists(), "flat file should exist before delete");
-
-    package_storage::delete_node_file(dir.path(), &meta.starmap_id, "n1").unwrap();
-    assert!(
-        !flat_path.exists(),
-        "flat file should be removed by delete_node_file"
-    );
-}
-
-#[test]
 fn add_link_updates_graph_meta_link_ids() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();

@@ -25,7 +25,6 @@
 //! │   ├── kind.json                       -- 布局类型
 //! │   └── nodes/<bucket>.json            -- 布局节点分片
 //! └── metadata/
-//!     ├── migration.json                  -- 迁移记录
 //!     └── recovery.json                  -- 解析失败对象的恢复记录
 //!
 //! session/starmaps/<starmap_id>/
@@ -40,7 +39,6 @@ use crate::starmap::types::*;
 pub mod crud;
 pub mod load;
 pub mod meta;
-pub mod migration;
 pub mod recovery;
 pub mod relation_index;
 pub mod save;
@@ -202,18 +200,39 @@ impl StarMapStore {
             || self.dirty_graph_meta
     }
 
-    pub fn clear_persistent_deletion_log(&mut self) {
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.entries.clear();
-            self.dirty_graph_meta = true;
+    /// 快照当前 dirty 集合，供 `update_graph_meta_file` 记录对象 revision。
+    /// 必须在 `flush_save_queue` 清空 dirty 集合之前调用。
+    pub(in crate::starmap::store) fn collect_flush_dirty_set(&self) -> FlushDirtySet {
+        FlushDirtySet {
+            nodes: self.dirty_nodes.clone(),
+            edges: self.dirty_edges.clone(),
+            embeds: self.dirty_embeds.clone(),
+            links: self.dirty_links.clone(),
+            hyperlinks: self.dirty_hyperlinks.clone(),
+            layout: self.dirty_layout,
+            deleted_nodes: self.deleted_node_ids.clone(),
+            deleted_edges: self.deleted_edge_ids.clone(),
+            deleted_embeds: self.deleted_embed_ids.clone(),
+            deleted_links: self.deleted_link_ids.clone(),
+            deleted_hyperlinks: self.deleted_hyperlink_ids.clone(),
         }
     }
 
-    pub fn compact_deletion_log(&mut self, keep_since_revision: u64) {
+    /// 确认到 `acknowledged_revision`（含）为止的删除 tombstone 已被同步方
+    /// 持久化，可以安全清理。保留 `deleted_at_revision > acknowledged_revision`
+    /// 的 tombstone。清理后标记 graph_meta 为 dirty，下次 flush 会把清理后的
+    /// deletion log 写回磁盘。
+    pub fn acknowledge_deletions(
+        &mut self,
+        acknowledged_revision: u64,
+    ) -> crate::error::Result<()> {
+        self.reload_graph_meta_if_stale();
         if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.compact(keep_since_revision);
+            meta.deleted_since_last_sync
+                .acknowledge(acknowledged_revision);
             self.dirty_graph_meta = true;
         }
+        Ok(())
     }
 }
 

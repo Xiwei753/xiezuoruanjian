@@ -4,24 +4,6 @@ use crate::starmap::types::reference::{StarMapTargetDetail, StarMapTargetPath};
 use tempfile::TempDir;
 
 #[test]
-fn migration_json_recorded_on_v1_load() {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
-
-    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store.upsert_node(make_test_node("n1", "Node1"));
-    store.enqueue_save(SaveQueueEntry::Node);
-    store.enqueue_save(SaveQueueEntry::GraphMeta);
-    store.flush().unwrap();
-
-    let migration_path = store.starmap_dir().join("metadata").join("migration.json");
-    assert!(!migration_path.exists());
-
-    store.record_migration("test_migration", "test detail");
-    assert!(migration_path.exists());
-}
-#[test]
 fn merge_memory_ids_updates_edge_endpoint_in_index() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
@@ -166,44 +148,6 @@ fn merge_memory_ids_updates_embed_host_in_index() {
     );
 }
 #[test]
-fn migrate_flat_to_bucket_records_migration() {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
-
-    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store.upsert_node(make_test_node("n1", "A"));
-    store.flush().unwrap();
-
-    let starmap_dir = store.starmap_dir();
-    let nodes_dir = starmap_dir.join("nodes");
-    let flat_path = nodes_dir.join("n1.json");
-    let bucket_dir = nodes_dir.join(package_storage::bucket_for_id("n1"));
-    let bucket_path = bucket_dir.join("n1.json");
-
-    std::fs::create_dir_all(&bucket_dir).unwrap();
-    std::fs::write(&flat_path, "{}").unwrap();
-    let _ = std::fs::remove_file(&bucket_path);
-
-    store.migrate_flat_to_bucket(&flat_path, &bucket_path);
-    assert!(
-        bucket_path.exists(),
-        "bucket file should exist after migration"
-    );
-    assert!(
-        !flat_path.exists(),
-        "flat file should be removed after migration"
-    );
-
-    let migration_path = starmap_dir.join("metadata").join("migration.json");
-    assert!(migration_path.exists(), "migration.json should be recorded");
-    let content = std::fs::read_to_string(&migration_path).unwrap();
-    assert!(
-        content.contains("flat_to_bucket"),
-        "migration record should mention flat_to_bucket"
-    );
-}
-#[test]
 fn merge_memory_ids_removes_deleted_ids() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
@@ -280,27 +224,5 @@ fn merge_memory_ids_skips_deleted_edge_in_index() {
     assert!(
         !meta.edge_relation_index.iter().any(|e| e.edge_id == "e1"),
         "deleted edge should be removed from relation index"
-    );
-}
-#[test]
-fn migrate_flat_to_bucket_atomic_on_failure() {
-    let dir = TempDir::new().unwrap();
-    let flat_dir = dir.path().join("flat_src");
-    std::fs::create_dir_all(&flat_dir).unwrap();
-    let flat_path = flat_dir.join("test.json");
-    std::fs::write(&flat_path, r#"{"test": true}"#).unwrap();
-
-    let bucket_dir = dir.path().join("bucket_dst");
-    let bucket_path = bucket_dir.join("test.json");
-
-    let mut store = StarMapStore::new(dir.path(), "dummy-id");
-    store.migrate_flat_to_bucket(&flat_path, &bucket_path);
-    assert!(
-        bucket_path.exists(),
-        "bucket file should exist after migration"
-    );
-    assert!(
-        !flat_path.exists(),
-        "flat file should be removed after successful migration"
     );
 }

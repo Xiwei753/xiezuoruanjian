@@ -424,12 +424,11 @@ fn migrate_legacy_sync_config(
     config
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "github-api"))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "github-api")]
     fn migrate_legacy_top_level_fields_to_provider_config() {
         let raw: serde_json::Value = serde_json::json!({
             "enabled": true,
@@ -457,7 +456,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "github-api")]
     fn migrate_legacy_git_backend_with_github_https_upgrades_to_github_api() {
         let raw: serde_json::Value = serde_json::json!({
             "enabled": true,
@@ -473,7 +471,6 @@ mod tests {
     /// 旧 Git backend 不是 GitHub HTTPS 时，
     /// 禁用同步并要求重新配置，不写 `"git"` 到 active_provider。
     #[test]
-    #[cfg(feature = "github-api")]
     fn migrate_legacy_non_github_git_disables_sync() {
         let raw: serde_json::Value = serde_json::json!({
             "enabled": true,
@@ -492,7 +489,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "github-api")]
     fn migrate_legacy_skips_when_provider_config_already_present() {
         let raw: serde_json::Value = serde_json::json!({
             "enabled": true,

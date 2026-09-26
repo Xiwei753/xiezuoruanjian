@@ -216,6 +216,9 @@ impl From<crate::error::Error> for WriterError {
             Error::NotImplemented => WriterError::NotImplemented,
             Error::RefuseToDeleteRoot => WriterError::RefuseToDeleteRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
+            Error::UnsupportedVersion { version } => {
+                WriterError::Fatal(format!("unsupported_schema_version: {}", version))
+            }
             Error::SyncAuthFailed { reason } => WriterError::Authentication(reason),
             Error::SyncNetworkUnavailable { reason } => WriterError::RetryableNetwork(reason),
             Error::SyncRateLimited { retry_after_secs } => WriterError::RetryableNetwork(format!(

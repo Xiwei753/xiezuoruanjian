@@ -42,6 +42,7 @@ fn load_full_returns_diagnostics_for_missing_files() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -78,6 +79,7 @@ fn load_full_returns_diagnostics_for_missing_link() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -113,14 +115,14 @@ fn load_full_detects_dangling_edge_reference() {
         label: None,
         payload: None,
         from: StarMapTargetPath {
-            starmap_id: String::new(),
+            starmap_id: "test-id".to_string(),
             segments: vec![],
             target: StarMapTargetDetail::Node {
                 node_id: "n1".to_string(),
             },
         },
         to: StarMapTargetPath {
-            starmap_id: String::new(),
+            starmap_id: "test-id".to_string(),
             segments: vec![],
             target: StarMapTargetDetail::Node {
                 node_id: "nonexistent".to_string(),
@@ -148,6 +150,7 @@ fn load_full_detects_dangling_edge_reference() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -192,6 +195,7 @@ fn load_full_detects_orphan_object_on_disk() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -232,19 +236,16 @@ fn load_full_detects_unsupported_version() {
         package_revision: 1,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let json = serde_json::to_string_pretty(&meta).unwrap();
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), "test-id");
-    let result = store.load_full().unwrap();
-    let unsupported: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.kind == LoadDiagnosticKind::UnsupportedVersion)
-        .collect();
-    assert!(!unsupported.is_empty());
-    assert!(unsupported[0].detail.contains("99"));
+    let result = store.load_full();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "UNSUPPORTED_VERSION");
 }
 #[test]
 fn load_phased_graph_meta_only() {
@@ -642,8 +643,7 @@ fn save_starmap_graph_corrupt_existing_returns_error() {
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     let result = store2.load_full();
-    assert!(result.is_ok());
-    assert!(!store2.diagnostics().is_empty());
+    assert!(result.is_err());
 }
 
 #[test]
@@ -902,6 +902,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
         package_revision: 0,
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
     };
     let graph_json = serde_json::to_string_pretty(&graph_meta).unwrap();
     let graph_path = dir
@@ -1212,7 +1213,8 @@ fn prefetch_nearby_objects_no_infinite_recursion_when_no2_index() {
     store.upsert_edge(edge);
 
     store.flush_save_queue().unwrap();
-    store.update_graph_meta_file().unwrap();
+    let dirty = store.collect_flush_dirty_set();
+    store.update_graph_meta_file(&dirty).unwrap();
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     let result = store2.load_phased(LoadPhase::PrefetchNearbyObjects);

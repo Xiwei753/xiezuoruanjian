@@ -88,6 +88,10 @@ pub struct StarMapEdgePatchInputDto {
     pub kind: Option<StarMapEdgeKindDto>,
     pub label: Option<String>,
     pub clear_label: bool,
+    pub payload: Option<String>,
+    pub clear_payload: bool,
+    pub from: Option<StarMapTargetPathDto>,
+    pub to: Option<StarMapTargetPathDto>,
 }
 
 impl From<StarMapEdgePatchInputDto> for StarMapEdgePatchDto {
@@ -99,9 +103,13 @@ impl From<StarMapEdgePatchInputDto> for StarMapEdgePatchDto {
             } else {
                 d.label.map(Some)
             },
-            payload: None,
-            from: None,
-            to: None,
+            payload: if d.clear_payload {
+                Some(None)
+            } else {
+                d.payload.map(Some)
+            },
+            from: d.from,
+            to: d.to,
         }
     }
 }
