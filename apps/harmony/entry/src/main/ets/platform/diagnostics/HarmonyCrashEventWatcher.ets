@@ -56,14 +56,23 @@ export class HarmonyCrashEventWatcher {
 
   // 订阅 APP_CRASH 和 APP_KILLED 事件。
   // 使用 addWatcher + onReceive 实时接收系统事件回调。
+  // APP_KILLED 是 API 20 新增事件，API 12-19 设备上注册会导致整个 watcher 失败（包括 APP_CRASH），
+  // 因此按运行时 API Level 分流：API >= 20 才注册 APP_KILLED。
   private subscribeCrashEvents(): void {
     try {
+      const apiVersion = this.context!.config?.apiVersion ?? 12
+
+      const eventNames: string[] = [hiAppEvent.event.APP_CRASH]
+      if (apiVersion >= 20) {
+        eventNames.push(hiAppEvent.event.APP_KILLED)
+      }
+
       this.watcher = {
         name: 'sujianCrashWatcher',
         appEventFilters: [
           {
             domain: hiAppEvent.domain.OS,
-            names: [hiAppEvent.event.APP_CRASH, hiAppEvent.event.APP_KILLED]
+            names: eventNames
           }
         ],
         onReceive: (domain: string, appEventGroups: Array<hiAppEvent.AppEventGroup>) => {
@@ -71,7 +80,8 @@ export class HarmonyCrashEventWatcher {
         }
       }
       hiAppEvent.addWatcher(this.watcher)
-      hilog.info(0x0000, LOG_TAG, 'Subscribed to APP_CRASH and APP_KILLED events via addWatcher')
+      hilog.info(0x0000, LOG_TAG, 'Subscribed to crash events (API %{public}d): %{public}s',
+        apiVersion, eventNames.join(', '))
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'subscribeCrashEvents failed: %{public}s', String(e))
     }
@@ -117,10 +127,14 @@ export class HarmonyCrashEventWatcher {
       this.writeAtomic(`${crashesDir}/params.json`, paramsJson)
 
       // 复制 external_log 文件到 crashes 目录
+      // APP_KILLED 事件不保证有 external_log（官方样例只有 reason/time/foreground 等字段），
+      // 没有 external_log 是正常情况，用 info 级别记录，不当失败处理。
       if (externalLog.length > 0) {
         for (let i = 0; i < externalLog.length; i++) {
           this.copyFile(externalLog[i], crashesDir)
         }
+      } else {
+        hilog.info(0x0000, LOG_TAG, 'No external_log in event %{public}s (normal for APP_KILLED)', event.name)
       }
 
       // 生成崩溃补全包 zip
@@ -154,11 +168,14 @@ export class HarmonyCrashEventWatcher {
       const paramsJson = JSON.stringify(crashRecord, null, 2)
       attachments.push(this.makeAttachment('crashes/' + timestamp + '/params.json', paramsJson))
 
-      // external_log 内容附件 — 读取每个日志文件内容并打包
+      // external_log 内容附件 — 从已复制到 diagnostics 的持久副本读取
+      // （原始系统路径的 external_log 在 copyFile 中已被删除，不能再依赖）
+      const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${timestamp}`
       for (let i = 0; i < externalLog.length; i++) {
-        const logContent = this.readFileContent(externalLog[i])
+        const fileName = this.extractFileName(externalLog[i])
+        const persistedPath = `${crashesDir}/${fileName}`
+        const logContent = this.readFileContent(persistedPath)
         if (logContent.length > 0) {
-          const fileName = this.extractFileName(externalLog[i])
           attachments.push(this.makeAttachment('crashes/' + timestamp + '/' + fileName, logContent))
         }
       }
@@ -226,26 +243,70 @@ export class HarmonyCrashEventWatcher {
     return []
   }
 
-  // 原子写入 — 写 .tmp 然后 rename，确保写入是原子的。
+  // 原子写入 — 双槽模式（崩溃安全）：
+  // 1. 写完整 file.new
+  // 2. 删旧 file.bak（如果存在）
+  // 3. file → file.bak（如果 file 存在）
+  // 4. file.new → file
+  // 5. 成功后删 file.bak
+  // 如果进程在步骤 3-4 之间崩溃，下次写入时 file 不存在但 file.bak 存在，
+  // 自动恢复 file.bak → file。
   private writeAtomic(filePath: string, content: string): void {
-    const tmpPath = `${filePath}.tmp`
-    const fd = fs.openSync(tmpPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
+    const newPath = `${filePath}.new`
+    const bakPath = `${filePath}.bak`
+
+    // 初始化恢复：如果目标文件不存在但 .bak 存在，说明上次写入中断，恢复 .bak → 目标
+    try {
+      if (!fs.accessSync(filePath) && fs.accessSync(bakPath)) {
+        fs.renameSync(bakPath, filePath)
+        hilog.info(0x0000, LOG_TAG, 'Restored from backup: %{public}s → %{public}s', bakPath, filePath)
+      }
+    } catch (_) { /* 恢复失败不影响后续写入 */ }
+
+    // 1. 写完整 .new 文件
+    const fd = fs.openSync(newPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
     let closed = false
     try {
       fs.writeSync(fd.fd, content)
       fs.closeSync(fd)
       closed = true
-      // HarmonyOS fs.renameSync 目标已存在时会抛异常，先删除
-      this.safeDelete(filePath)
-      fs.renameSync(tmpPath, filePath)
     } catch (e) {
       if (!closed) {
         try { fs.closeSync(fd) } catch (_) { /* fd 可能已关闭 */ }
       }
-      // 清理临时文件
-      this.safeDelete(tmpPath)
+      this.safeDelete(newPath)
       throw e
     }
+
+    // 2. 删旧 .bak（如果存在）
+    this.safeDelete(bakPath)
+
+    // 3. 目标存在 → rename 为 .bak
+    try {
+      if (fs.accessSync(filePath)) {
+        fs.renameSync(filePath, bakPath)
+      }
+    } catch (e) {
+      this.safeDelete(newPath)
+      throw e
+    }
+
+    // 4. .new → 目标
+    try {
+      fs.renameSync(newPath, filePath)
+    } catch (e) {
+      // 步骤 4 失败，尝试恢复 .bak → 目标
+      try {
+        if (fs.accessSync(bakPath)) {
+          fs.renameSync(bakPath, filePath)
+        }
+      } catch (_) { /* 恢复失败，尽力而为 */ }
+      this.safeDelete(newPath)
+      throw e
+    }
+
+    // 5. 成功后删 .bak
+    this.safeDelete(bakPath)
   }
 
   // 安全删除文件 — 如果文件不存在，不抛异常。
@@ -257,13 +318,23 @@ export class HarmonyCrashEventWatcher {
     }
   }
 
-  // 复制 external_log 文件到 crashes 目录。
+  // 复制 external_log 文件到 crashes 目录，复制成功后删除系统源文件。
+  // 华为官方要求处理完 external_log 后及时删除，否则故障日志目录达到上限后
+  // 后续新日志可能写不出来。删除失败只记 warn，不影响后续流程。
   private copyFile(srcPath: string, destDir: string): void {
     try {
       const fileName = this.extractFileName(srcPath)
       const destPath = `${destDir}/${fileName}`
       fs.copyFileSync(srcPath, destPath)
       hilog.info(0x0000, LOG_TAG, 'Copied external log: %{public}s → %{public}s', srcPath, destPath)
+      // 复制成功后删除系统源文件
+      try {
+        fs.unlinkSync(srcPath)
+        hilog.info(0x0000, LOG_TAG, 'Deleted system external log source: %{public}s', srcPath)
+      } catch (unlinkErr) {
+        hilog.warn(0x0000, LOG_TAG, 'Failed to delete system external log source %{public}s: %{public}s',
+          srcPath, String(unlinkErr))
+      }
     } catch (e) {
       hilog.warn(0x0000, LOG_TAG, 'copyFile failed for %{public}s: %{public}s', srcPath, String(e))
     }

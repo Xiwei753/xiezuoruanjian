@@ -10,7 +10,7 @@
 //
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
-import { common, ConfigurationConstant } from '@kit.AbilityKit'
+import { common } from '@kit.AbilityKit'
 import { fileUri } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
 import util from '@ohos.util'
@@ -24,12 +24,7 @@ import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
 import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
-import { HarmonyThemeAdapter } from '../../ui/theme/HarmonyThemeAdapter'
-import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
-import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
-import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
-import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
-import { EditorRuntimeSnapshotStore, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
+import { HarmonyDiagnosticsRuntimeSnapshot } from './HarmonyDiagnosticsRuntimeSnapshot'
 
 // 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
 // content 是 base64 编码的二进制数据。
@@ -69,98 +64,9 @@ interface BuildIdentityAttachment {
   buildKey: string
 }
 
-// theme_runtime_sanitized.json 附件 DTO — Issue #767 主题运行时快照。
-// Issue #767 评论 5831067980：systemColorMode 使用 ConfigurationConstant.ColorMode 枚举类型。
-interface ThemeRuntimeAttachment {
-  systemColorMode: ConfigurationConstant.ColorMode
-  appearanceMode: string
-  effectiveColorMode: string
-  useSystemTokens: boolean
-  hasExplicitThemeOverride: boolean
-  selectedBuiltinThemeId: string
-  selectedPaletteId: string
-  colorSource: string
-}
-
-// ui_runtime_sanitized.json 附件 DTO — Issue #767 UI 运行时快照。
-interface UiRuntimeAttachment {
-  screenRole: string         // 当前 ScreenRole
-  widthClass: string         // 当前 WidthClass
-  windowWidthVp: number      // 窗口宽度 vp
-  windowHeightVp: number     // 窗口高度 vp
-  currentTab: number         // 当前一级 tab（0=作品, 1=星图, 2=统计）
-  homeStackDepth: number     // 作品 tab 导航栈深度
-  starMapStackDepth: number  // 星图 tab 导航栈深度
-  statsStackDepth: number    // 统计 tab 导航栈深度
-}
-
-// editor_runtime_sanitized.json 附件 DTO — Issue #768 编辑器运行时快照。
-// 全部脱敏，不含正文内容。字段与 EditorRuntimeSnapshot 一一对齐。
-interface EditorRuntimeAttachment {
-  // 会话/版本
-  hasActiveSession: boolean
-  revision: number
-  generation: number
-
-  // 文本长度（不含内容）
-  textUtf8Bytes: number
-  textUtf16Length: number
-
-  // 光标/选区（byte offset）
-  cursorByteOffset: number
-  cursorUtf16Offset: number
-  selectionAnchorByte: number
-  selectionHeadByte: number
-
-  // composition
-  hasComposition: boolean
-  compositionStartByte: number
-  compositionEndByte: number
-
-  // 排版设置
-  fontSizeVp: number
-  lineSpacingMultiplier: number
-  effectiveLineHeightVp: number
-  firstLineIndentEnabled: boolean
-  firstLineIndentChars: number
-  effectiveFirstLineIndentVp: number
-
-  // 视口/内容尺寸（px）
-  viewportWidthPx: number
-  viewportHeightPx: number
-  contentWidthPx: number
-  contentHeightPx: number
-
-  // 布局几何
-  systemLayoutLineCount: number
-  caretRect: CaretRectSnapshot | null
-  selectionRectCount: number
-  currentLineMetrics: CurrentLineMetricsSnapshot | null
-
-  // IME/焦点/滚动
-  imeAttached: boolean
-  editorFocused: boolean
-  currentScrollX: number
-  currentScrollY: number
-
-  // 段落前导空白
-  leadingWhitespaceCountOfCurrentParagraph: number
-
-  // 布局来源/降级
-  layoutSource: string
-  usingLayoutManager: boolean
-  apiLevel: number
-  lastLayoutError: string | null
-  fallbackCount: number
-  // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
-  isEditorMounted: boolean
-  capturedAtMs: number
-  // Issue #768 评论5837824666：布局身份字段。
-  layoutRevision: number
-  layoutGeneration: number
-  layoutCompositionGeneration: number
-  visualCaretAffinity: string
-}
+// Issue #773 评论 5845033983：ThemeRuntimeAttachment / UiRuntimeAttachment / EditorRuntimeAttachment
+// 三个 interface 已删除，序列化逻辑统一移到 HarmonyDiagnosticsRuntimeSnapshot。
+// 附件名常量保留，用于 makeAttachment 调用。
 
 const LOG_TAG = 'HarmonyDiagnosticsExporter'
 // 诊断目录名 — 位于 filesDir 下（非 cacheDir），因为 snapshots 子目录需要持久保留 latest.zip/previous.zip
@@ -195,7 +101,21 @@ export class HarmonyDiagnosticsExporter {
 
   // 导出诊断包 — 完整流程：flush → 收集附件 → export → 分享。
   // 返回 zip 文件路径；失败返回 null。
+  // Issue #773 评论 5845033983：内部调用 exportTo(defaultDir)，复用统一逻辑。
   async export(): Promise<string | null> {
+    if (this.abilityContext === null) {
+      hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
+      return null
+    }
+    const filesDir = this.abilityContext.filesDir
+    const outputDir = `${filesDir}/${DIAGNOSTICS_DIR}/snapshots`
+    return this.exportTo(outputDir)
+  }
+
+  // Issue #773 评论 5845033983：导出诊断包到指定目录。
+  // 与 export() 类似，但接受 outputDir 参数，不使用默认的 snapshots 目录。
+  // Checkpoint 调用此方法导出到 staging 目录，确认完整成功后再移动到 snapshots。
+  async exportTo(outputDir: string): Promise<string | null> {
     try {
       // 1. flush 日志落盘
       const flushResult = this.diagnosticsBridge.flushDiagnostics()
@@ -203,13 +123,11 @@ export class HarmonyDiagnosticsExporter {
         hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics failed with code %{public}d; continuing export', flushResult)
       }
 
-      // 2. 准备输出目录 — 使用 filesDir 而非 cacheDir，因为 snapshots 目录需要持久保留 latest.zip/previous.zip
+      // 2. 准备输出目录
       if (this.abilityContext === null) {
         hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
         return null
       }
-      const filesDir = this.abilityContext.filesDir
-      const outputDir = `${filesDir}/${DIAGNOSTICS_DIR}/snapshots`
       this.ensureOutputDir(outputDir)
 
       // 3. 收集平台附件
@@ -233,7 +151,7 @@ export class HarmonyDiagnosticsExporter {
       hilog.info(0x0000, LOG_TAG, 'exportDiagnostics succeeded: %{public}s', zipPath)
       return zipPath
     } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'export failed: %{public}s', String(e))
+      hilog.error(0x0000, LOG_TAG, 'exportTo failed: %{public}s', String(e))
       return null
     }
   }
@@ -407,22 +325,10 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // theme_runtime_sanitized.json — 主题运行时快照（Issue #767）。
-  // 从 HarmonyThemeAdapter 获取当前主题状态，记录深浅色模式、系统 token 使用情况等。
+  // Issue #773 评论 5845033983：从 HarmonyDiagnosticsRuntimeSnapshot 获取 JSON，不再保留自己的序列化逻辑。
   private addThemeRuntimeAttachment(attachments: AttachmentItem[]): void {
     try {
-      const adapter = HarmonyThemeAdapter.getInstance()
-      const useSystemTokens = adapter.isUsingSystemTokens()
-      const snapshot: ThemeRuntimeAttachment = {
-        systemColorMode: adapter.getSystemColorMode(),
-        appearanceMode: adapter.getMode(),
-        effectiveColorMode: adapter.getEffectiveColorMode(),
-        useSystemTokens: useSystemTokens,
-        hasExplicitThemeOverride: !useSystemTokens,
-        selectedBuiltinThemeId: adapter.getSelectedBuiltinThemeId(),
-        selectedPaletteId: adapter.getSelectedPaletteId(),
-        colorSource: adapter.getColorSource()
-      }
-      const json = JSON.stringify(snapshot, null, 2)
+      const json = HarmonyDiagnosticsRuntimeSnapshot.getInstance().getThemeRuntimeJson()
       attachments.push(this.makeAttachment(ATTACHMENT_THEME_RUNTIME, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_THEME_RUNTIME, String(e)))
@@ -430,53 +336,10 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // ui_runtime_sanitized.json — UI 运行时快照（Issue #767）。
-  // 收集当前 ScreenRole、WidthClass、窗口尺寸、当前一级 tab、各 tab 导航栈深度。
+  // Issue #773 评论 5845033983：从 HarmonyDiagnosticsRuntimeSnapshot 获取 JSON，不再保留自己的序列化逻辑。
   private addUiRuntimeAttachment(attachments: AttachmentItem[]): void {
     try {
-      // 从 AdaptiveContext 获取 WidthClass 和窗口尺寸
-      const adaptiveState = AdaptiveContext.getInstance().getCurrentState()
-      const widthClass: WidthClass = adaptiveState.sizeClass
-      const windowWidthVp: number = adaptiveState.widthVp
-      const windowHeightVp: number = adaptiveState.heightVp
-
-      // 从 NavigationChromeStore 获取当前 ScreenRole
-      const screenRole: ScreenRole = NavigationChromeStore.getInstance().getCurrentRole()
-
-      // 从 NavigationTransactionCoordinator 获取当前 tab 和各 stack 深度
-      const coordinator = NavigationTransactionCoordinator.getInstance()
-      const activeStack = coordinator.getNavPathStack()
-
-      // 通过引用比较确定当前活动 tab（coordinator 没有 getActiveTab getter）
-      let currentTab: number = -1
-      if (activeStack !== null) {
-        for (let i = 0; i <= 2; i++) {
-          const tabStack = coordinator.getTabStack(i)
-          if (tabStack === activeStack) {
-            currentTab = i
-            break
-          }
-        }
-      }
-
-      // 各 tab 导航栈深度（NavPathStack.size() 返回栈中路径数）
-      const homeStack = coordinator.getTabStack(0)
-      const starMapStack = coordinator.getTabStack(1)
-      const statsStack = coordinator.getTabStack(2)
-      const homeStackDepth: number = homeStack !== null ? homeStack.size() : -1
-      const starMapStackDepth: number = starMapStack !== null ? starMapStack.size() : -1
-      const statsStackDepth: number = statsStack !== null ? statsStack.size() : -1
-
-      const snapshot: UiRuntimeAttachment = {
-        screenRole: screenRole,
-        widthClass: widthClass,
-        windowWidthVp: windowWidthVp,
-        windowHeightVp: windowHeightVp,
-        currentTab: currentTab,
-        homeStackDepth: homeStackDepth,
-        starMapStackDepth: starMapStackDepth,
-        statsStackDepth: statsStackDepth
-      }
-      const json = JSON.stringify(snapshot, null, 2)
+      const json = HarmonyDiagnosticsRuntimeSnapshot.getInstance().getUiRuntimeJson()
       attachments.push(this.makeAttachment(ATTACHMENT_UI_RUNTIME, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_UI_RUNTIME, String(e)))
@@ -484,63 +347,10 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // editor_runtime_sanitized.json — 编辑器运行时快照（Issue #768）。
-  // 从 EditorRuntimeSnapshotStore 获取当前编辑器状态，记录布局、光标、IME、降级等信息。
-  // 全部脱敏，不含正文内容。
+  // Issue #773 评论 5845033983：从 HarmonyDiagnosticsRuntimeSnapshot 获取 JSON，不再保留自己的序列化逻辑。
   private addEditorRuntimeAttachment(attachments: AttachmentItem[]): void {
     try {
-      const snapshot = EditorRuntimeSnapshotStore.getInstance().getSnapshot()
-      if (snapshot === null) {
-        attachments.push(this.errorAttachment(ATTACHMENT_EDITOR_RUNTIME,
-          'no editor runtime snapshot available'))
-        return
-      }
-      // Issue #768 评论5835171266 第5项：isEditorMounted=false 时仍导出快照，
-      // 但在 JSON 中标注编辑器已卸载，诊断方可知晓数据来自离页前的最后状态。
-      const attachment: EditorRuntimeAttachment = {
-        hasActiveSession: snapshot.hasActiveSession,
-        revision: snapshot.revision,
-        generation: snapshot.generation,
-        textUtf8Bytes: snapshot.textUtf8Bytes,
-        textUtf16Length: snapshot.textUtf16Length,
-        cursorByteOffset: snapshot.cursorByteOffset,
-        cursorUtf16Offset: snapshot.cursorUtf16Offset,
-        selectionAnchorByte: snapshot.selectionAnchorByte,
-        selectionHeadByte: snapshot.selectionHeadByte,
-        hasComposition: snapshot.hasComposition,
-        compositionStartByte: snapshot.compositionStartByte,
-        compositionEndByte: snapshot.compositionEndByte,
-        fontSizeVp: snapshot.fontSizeVp,
-        lineSpacingMultiplier: snapshot.lineSpacingMultiplier,
-        effectiveLineHeightVp: snapshot.effectiveLineHeightVp,
-        firstLineIndentEnabled: snapshot.firstLineIndentEnabled,
-        firstLineIndentChars: snapshot.firstLineIndentChars,
-        effectiveFirstLineIndentVp: snapshot.effectiveFirstLineIndentVp,
-        viewportWidthPx: snapshot.viewportWidthPx,
-        viewportHeightPx: snapshot.viewportHeightPx,
-        contentWidthPx: snapshot.contentWidthPx,
-        contentHeightPx: snapshot.contentHeightPx,
-        systemLayoutLineCount: snapshot.systemLayoutLineCount,
-        caretRect: snapshot.caretRect,
-        selectionRectCount: snapshot.selectionRectCount,
-        currentLineMetrics: snapshot.currentLineMetrics,
-        imeAttached: snapshot.imeAttached,
-        editorFocused: snapshot.editorFocused,
-        currentScrollX: snapshot.currentScrollX,
-        currentScrollY: snapshot.currentScrollY,
-        leadingWhitespaceCountOfCurrentParagraph: snapshot.leadingWhitespaceCountOfCurrentParagraph,
-        layoutSource: snapshot.layoutSource,
-        usingLayoutManager: snapshot.usingLayoutManager,
-        apiLevel: snapshot.apiLevel,
-        lastLayoutError: snapshot.lastLayoutError,
-        fallbackCount: snapshot.fallbackCount,
-        isEditorMounted: snapshot.isEditorMounted,
-        capturedAtMs: snapshot.capturedAtMs,
-        layoutRevision: snapshot.layoutRevision,
-        layoutGeneration: snapshot.layoutGeneration,
-        layoutCompositionGeneration: snapshot.layoutCompositionGeneration,
-        visualCaretAffinity: snapshot.visualCaretAffinity,
-      }
-      const json = JSON.stringify(attachment, null, 2)
+      const json = HarmonyDiagnosticsRuntimeSnapshot.getInstance().getEditorRuntimeJson()
       attachments.push(this.makeAttachment(ATTACHMENT_EDITOR_RUNTIME, json))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_EDITOR_RUNTIME, String(e)))

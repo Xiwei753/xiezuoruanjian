@@ -12,6 +12,7 @@ import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentit
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
 import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
+import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
 
@@ -44,6 +45,11 @@ export default class EntryAbility extends UIAbility {
     // Issue #773 评论 5844589231：订阅系统 HiAppEvent 崩溃事件，
     // 在下一次启动时把上一轮 crash fault log 补进 diagnostics/crashes/。
     HarmonyCrashEventWatcher.getInstance().init(this.context)
+
+    // Issue #773 评论 5845033983：初始化诊断 checkpoint，启动后台定时器维护 latest.zip。
+    const checkpoint = HarmonyDiagnosticsCheckpoint.getInstance()
+    checkpoint.init(this.context)
+    checkpoint.markDirty()
 
     this.lifecycle.notifyCreate()
 

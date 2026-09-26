@@ -4,23 +4,35 @@
 // 运行态发生变化时只标记 dirty；最多每 5 秒生成一次 checkpoint，
 // 避免每条日志都重新压 zip。
 //
+// Issue #773 评论 5845033983：激活 checkpoint — 订阅三个 Store 的 observer，
+// theme/navigation/editor 变化时自动 persistRuntimeSnapshot + markDirty。
+// 三个 Store 不反向 import Checkpoint，避免循环依赖。Checkpoint 主动订阅 Store 的 observer。
+//
 // 目录结构：
 //   context.filesDir/diagnostics/
 //     live/
 //       log/          ← Rust writer 持续 append 的日志
-//       runtime/      ← 运行态 JSON 快照
+//       runtime/      ← 运行态 JSON 快照（双槽原子写入）
 //     snapshots/
 //       sujian-diagnostics-latest.zip      ← 当前最近一次完整包
 //       sujian-diagnostics-previous.zip    ← 上一次完整包
 //       sujian-diagnostics-latest.tmp      ← 正在生成的临时文件
+//     .staging/
+//       checkpoint/   ← 导出暂存目录，确认完整成功后再移动到 snapshots
 //
 // 双槽 + 原子替换：如果进程恰好死在打包中途，
 // latest.zip 或 previous.zip 至少还有一份完整包。
 
-import { common } from '@kit.AbilityKit'
+import { common, ConfigurationConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
+
 import { HarmonyDiagnosticsExporter } from './HarmonyDiagnosticsExporter'
+import { HarmonyDiagnosticsRuntimeSnapshot } from './HarmonyDiagnosticsRuntimeSnapshot'
+import { HarmonyThemeAdapter, ThemeObserver, ThemeConfig } from '../../ui/theme/HarmonyThemeAdapter'
+import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
+import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, EditorSnapshotObserver } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
+import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'
 const CHECKPOINT_INTERVAL_MS = 5000  // 最多每5秒生成一次
@@ -28,6 +40,23 @@ const DIAGNOSTICS_DIR = 'diagnostics'
 const LATEST_ZIP = 'sujian-diagnostics-latest.zip'
 const PREVIOUS_ZIP = 'sujian-diagnostics-previous.zip'
 const LATEST_TMP = 'sujian-diagnostics-latest.tmp'
+const STAGING_SUBDIR = '.staging/checkpoint'
+
+// Issue #773 评论 5845033983：ThemeObserver 实现 — theme 变化时 persist + markDirty。
+class CheckpointThemeObserver implements ThemeObserver {
+  private checkpoint: HarmonyDiagnosticsCheckpoint
+
+  constructor(checkpoint: HarmonyDiagnosticsCheckpoint) {
+    this.checkpoint = checkpoint
+  }
+
+  onThemeChanged(_theme: ThemeConfig): void {
+    this.checkpoint.persistRuntimeSnapshot()
+  }
+}
+
+// Issue #773 评论 5845033983：NavObserver — navigation 变化时 persist + markDirty。
+type CheckpointNavObserver = (role: ScreenRole) => void
 
 export class HarmonyDiagnosticsCheckpoint {
   private static instance: HarmonyDiagnosticsCheckpoint
@@ -36,6 +65,11 @@ export class HarmonyDiagnosticsCheckpoint {
   private dirty: boolean = false
   private isGenerating: boolean = false
   private timerId: number = -1
+
+  // Issue #773 评论 5845033983：三个 observer，在 destroy 中取消订阅。
+  private themeObserver: CheckpointThemeObserver | null = null
+  private navObserver: CheckpointNavObserver | null = null
+  private editorObserver: EditorSnapshotObserver | null = null
 
   private constructor() {
     this.exporter = new HarmonyDiagnosticsExporter()
@@ -48,10 +82,30 @@ export class HarmonyDiagnosticsCheckpoint {
     return HarmonyDiagnosticsCheckpoint.instance
   }
 
-  // 初始化 — 注入 UIAbilityContext，启动定时器。
+  // 初始化 — 注入 UIAbilityContext，订阅 observer，启动定时器。
   init(context: common.UIAbilityContext): void {
     this.context = context
     this.exporter.setAbilityContext(context)
+
+    // Issue #773 评论 5845033983：订阅三个 Store 的 observer。
+    // 三个 Store 不反向 import Checkpoint，避免循环依赖。Checkpoint 主动订阅。
+
+    // Theme observer — theme 变化时 persistRuntimeSnapshot + markDirty
+    this.themeObserver = new CheckpointThemeObserver(this)
+    HarmonyThemeAdapter.getInstance().addObserver(this.themeObserver)
+
+    // Nav observer — navigation 变化时 persistRuntimeSnapshot + markDirty
+    this.navObserver = (_role: ScreenRole) => {
+      this.persistRuntimeSnapshot()
+    }
+    NavigationChromeStore.getInstance().subscribe(this.navObserver)
+
+    // Editor observer — editor 变化时 persistRuntimeSnapshot + markDirty
+    this.editorObserver = (_snapshot: EditorRuntimeSnapshot | null) => {
+      this.persistRuntimeSnapshot()
+    }
+    EditorRuntimeSnapshotStore.getInstance().addObserver(this.editorObserver)
+
     this.startTimer()
   }
 
@@ -61,33 +115,14 @@ export class HarmonyDiagnosticsCheckpoint {
     this.dirty = true
   }
 
-  // 原子写入运行态 JSON 到 live/runtime/ 目录。
-  // 先写 .tmp 文件，然后 rename 为最终文件名（原子覆盖）。
-  // 文件名如 theme_runtime_sanitized.json、ui_runtime_sanitized.json、editor_runtime_sanitized.json。
-  writeRuntimeJson(filename: string, jsonContent: string): void {
+  // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
+  // 然后标记 dirty，让定时器在下一个 tick 生成 checkpoint。
+  persistRuntimeSnapshot(): void {
     if (this.context === null) {
-      hilog.warn(0x0000, LOG_TAG, 'context is null; cannot write runtime json')
       return
     }
-    const runtimeDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/live/runtime`
-    this.ensureDir(runtimeDir)
-    const tmpPath = `${runtimeDir}/${filename}.tmp`
-    const finalPath = `${runtimeDir}/${filename}`
-    try {
-      // 写入 .tmp 文件
-      const file = fs.openSync(tmpPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
-      try {
-        fs.writeSync(file.fd, jsonContent)
-      } finally {
-        fs.closeSync(file)
-      }
-      // rename 为最终文件名（原子覆盖）
-      // HarmonyOS fs.renameSync 目标已存在时会抛异常，所以先删除
-      this.safeDelete(finalPath)
-      fs.renameSync(tmpPath, finalPath)
-    } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'writeRuntimeJson failed: %{public}s', String(e))
-    }
+    HarmonyDiagnosticsRuntimeSnapshot.getInstance().persistAll(this.context)
+    this.markDirty()
   }
 
   // 启动内部定时器，每 CHECKPOINT_INTERVAL_MS 检查一次 dirty 状态。
@@ -106,8 +141,9 @@ export class HarmonyDiagnosticsCheckpoint {
     await this.generateCheckpoint()
   }
 
-  // 生成 checkpoint — 复用 HarmonyDiagnosticsExporter.export() 生成带时间戳的 zip，
+  // 生成 checkpoint — 复用 HarmonyDiagnosticsExporter.exportTo() 生成 zip，
   // 然后通过双槽 + 原子替换流程维护 latest.zip / previous.zip。
+  // Issue #773 评论 5845033983：先导出到 staging 目录，确认完整成功后再移动到 snapshots。
   private async generateCheckpoint(): Promise<void> {
     if (this.context === null) {
       hilog.warn(0x0000, LOG_TAG, 'context is null; cannot generate checkpoint')
@@ -115,32 +151,39 @@ export class HarmonyDiagnosticsCheckpoint {
     }
     this.isGenerating = true
     try {
-      // 1. 调用 exporter.export() 生成带时间戳的 zip
-      //    export() 内部会：flush 日志 → 收集附件 → 调用 Rust export → 返回 zip 路径
-      const timestampedZipPath = await this.exporter.export()
+      // 1. 准备 staging 目录
+      const stagingDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/${STAGING_SUBDIR}`
+      this.ensureDir(stagingDir)
+
+      // 2. 调用 exporter.exportTo(stagingDir) 导出到 staging 目录
+      const timestampedZipPath = await this.exporter.exportTo(stagingDir)
       if (timestampedZipPath === null) {
-        hilog.warn(0x0000, LOG_TAG, 'export returned null; skipping checkpoint')
+        hilog.warn(0x0000, LOG_TAG, 'exportTo returned null; skipping checkpoint')
         return
       }
 
-      // 2. 确认带时间戳的 zip 文件存在
+      // 3. 确认 zip 文件存在
       if (!this.fileExists(timestampedZipPath)) {
         hilog.warn(0x0000, LOG_TAG, 'timestamped zip does not exist: %{public}s', timestampedZipPath)
         return
       }
 
-      // 3. 准备路径
+      // 4. 准备 snapshots 路径
       const snapshotsDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/snapshots`
+      this.ensureDir(snapshotsDir)
       const tmpPath = `${snapshotsDir}/${LATEST_TMP}`
       const latestPath = `${snapshotsDir}/${LATEST_ZIP}`
       const previousPath = `${snapshotsDir}/${PREVIOUS_ZIP}`
 
-      // 4. 将带时间戳的 zip rename 为 latest.tmp
+      // 5. 将带时间戳的 zip rename 为 latest.tmp
       this.safeDelete(tmpPath)
       fs.renameSync(timestampedZipPath, tmpPath)
 
-      // 5. 原子替换：旧 latest.zip → previous.zip, latest.tmp → latest.zip
+      // 6. 原子替换：旧 latest.zip → previous.zip, latest.tmp → latest.zip
       this.atomicReplace(tmpPath, latestPath, previousPath)
+
+      // 7. 清理 staging 目录
+      this.cleanStagingDir(stagingDir)
 
       hilog.info(0x0000, LOG_TAG, 'checkpoint generated successfully')
     } catch (e) {
@@ -169,6 +212,21 @@ export class HarmonyDiagnosticsCheckpoint {
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'atomicReplace failed: %{public}s', String(e))
       return false
+    }
+  }
+
+  // 清理 staging 目录中的残留文件。
+  private cleanStagingDir(stagingDir: string): void {
+    try {
+      if (!fs.accessSync(stagingDir)) {
+        return
+      }
+      const entries = fs.listFileSync(stagingDir)
+      for (const entry of entries) {
+        this.safeDelete(`${stagingDir}/${entry}`)
+      }
+    } catch (_) {
+      // 清理失败不影响主流程
     }
   }
 
@@ -201,11 +259,24 @@ export class HarmonyDiagnosticsCheckpoint {
     }
   }
 
-  // 销毁 — 停止定时器，释放资源。
+  // 销毁 — 停止定时器，取消所有 observer 订阅，释放资源。
   destroy(): void {
     if (this.timerId !== -1) {
       clearInterval(this.timerId)
       this.timerId = -1
+    }
+    // Issue #773 评论 5845033983：取消三个 Store 的 observer 订阅。
+    if (this.themeObserver !== null) {
+      HarmonyThemeAdapter.getInstance().removeObserver(this.themeObserver)
+      this.themeObserver = null
+    }
+    if (this.navObserver !== null) {
+      NavigationChromeStore.getInstance().unsubscribe(this.navObserver)
+      this.navObserver = null
+    }
+    if (this.editorObserver !== null) {
+      EditorRuntimeSnapshotStore.getInstance().removeObserver(this.editorObserver)
+      this.editorObserver = null
     }
   }
 }
