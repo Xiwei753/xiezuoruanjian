@@ -1,3 +1,6 @@
+use crate::starmap::semantic::StarMapTargetDetail;
+use crate::starmap::types::reference::StarMapTargetPath;
+use crate::starmap::types::*;
 use crate::starmap::*;
 use tempfile::tempdir;
 
@@ -32,22 +35,6 @@ fn test_create_and_list_starmaps() {
 }
 
 #[test]
-fn test_create_child_starmap() {
-    let dir = setup_temp_dir();
-    let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
-    let child = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
-
-    assert_eq!(
-        child.parent_starmap_id.as_deref(),
-        Some(parent.starmap_id.as_str())
-    );
-    assert_eq!(child.project_id, None);
-
-    let refreshed_parent = get_starmap(dir.path(), &parent.starmap_id).unwrap();
-    assert_eq!(refreshed_parent.child_starmap_count, 1);
-}
-
-#[test]
 fn test_bind_and_get_main_starmap() {
     let dir = setup_temp_dir();
     let sm = create_starmap(dir.path(), "My Map", "", None).unwrap();
@@ -63,16 +50,14 @@ fn test_bind_and_get_main_starmap() {
 #[test]
 fn test_delete_starmap_no_cascade() {
     let dir = setup_temp_dir();
-    let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
-    let child1 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
-    let child2 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+    let sm1 = create_starmap(dir.path(), "Map 1", "", None).unwrap();
+    let sm2 = create_starmap(dir.path(), "Map 2", "", None).unwrap();
 
-    delete_starmap(dir.path(), &parent.starmap_id).unwrap();
+    delete_starmap(dir.path(), &sm1.starmap_id).unwrap();
 
     let all = list_starmaps(dir.path()).unwrap();
-    assert_eq!(all.len(), 2);
-    assert!(all.iter().any(|m| m.starmap_id == child1.starmap_id));
-    assert!(all.iter().any(|m| m.starmap_id == child2.starmap_id));
+    assert_eq!(all.len(), 1);
+    assert!(all.iter().any(|m| m.starmap_id == sm2.starmap_id));
 }
 
 #[test]
@@ -105,29 +90,28 @@ fn test_delete_starmap_edge_protection() {
     let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
     let child = create_starmap(dir.path(), "Child", "", None).unwrap();
 
-    let use_store_get = |ws: &std::path::Path, sid: &str| -> crate::starmap::types::StarMapGraph {
+    let use_store_get = |ws: &std::path::Path, sid: &str| -> StarMapGraph {
         let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
         s.load_full().unwrap();
         s.to_starmap_graph()
     };
-    let use_store_save =
-        |ws: &std::path::Path, sid: &str, g: &crate::starmap::types::StarMapGraph| {
-            let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
-            s.load_full().unwrap();
-            for node in &g.nodes {
-                s.upsert_node(node.clone());
-            }
-            for edge in &g.edges {
-                s.upsert_edge(edge.clone());
-            }
-            for embed in &g.embeds {
-                s.upsert_embed(embed.clone());
-            }
-            for link in &g.links {
-                s.upsert_link(link.clone());
-            }
-            s.flush().unwrap();
-        };
+    let use_store_save = |ws: &std::path::Path, sid: &str, g: &StarMapGraph| {
+        let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
+        s.load_full().unwrap();
+        for node in &g.nodes {
+            s.upsert_node(node.clone());
+        }
+        for edge in &g.edges {
+            s.upsert_edge(edge.clone());
+        }
+        for embed in &g.embeds {
+            s.upsert_embed(embed.clone());
+        }
+        for link in &g.links {
+            s.upsert_link(link.clone());
+        }
+        s.flush().unwrap();
+    };
     let use_store_delete_edge = |ws: &std::path::Path, sid: &str, eid: &str| {
         let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
         s.load_full().unwrap();
@@ -136,25 +120,21 @@ fn test_delete_starmap_edge_protection() {
     };
 
     let mut parent_graph = use_store_get(dir.path(), &parent.starmap_id);
-    let internal_edge = crate::starmap::types::StarMapEdge {
+    let internal_edge = StarMapEdge {
         id: "internal_e".to_string(),
-        from: None,
-        to: None,
-        kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+        from: StarMapTargetPath {
+            starmap_id: parent.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        to: StarMapTargetPath {
+            starmap_id: parent.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        kind: StarMapEdgeKind::RelatedTo,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::Starmap),
-        to_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
-            target: crate::starmap::semantic::StarMapDeepTarget {
-                starmap_id: parent.starmap_id.clone(),
-                path: vec![],
-                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-            },
-        }),
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -162,25 +142,21 @@ fn test_delete_starmap_edge_protection() {
     use_store_save(dir.path(), &parent.starmap_id, &parent_graph);
 
     let mut parent_graph = use_store_get(dir.path(), &parent.starmap_id);
-    let external_edge = crate::starmap::types::StarMapEdge {
+    let external_edge = StarMapEdge {
         id: "external_e".to_string(),
-        from: None,
-        to: None,
-        kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+        from: StarMapTargetPath {
+            starmap_id: parent.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        to: StarMapTargetPath {
+            starmap_id: child.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        kind: StarMapEdgeKind::RelatedTo,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
-            target: crate::starmap::semantic::StarMapDeepTarget {
-                starmap_id: child.starmap_id.clone(),
-                path: vec![],
-                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-            },
-        }),
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -196,51 +172,13 @@ fn test_delete_starmap_edge_protection() {
 
     use_store_delete_edge(dir.path(), &parent.starmap_id, "external_e");
 
-    let mut parent_graph = use_store_get(dir.path(), &parent.starmap_id);
-    let external_edge_2 = crate::starmap::types::StarMapEdge {
-        id: "external_e2".to_string(),
-        from: None,
-        to: None,
-        kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
-        label: None,
-        payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
-            target: crate::starmap::semantic::StarMapDeepTarget {
-                starmap_id: parent.starmap_id.clone(),
-                path: vec![crate::starmap::semantic::StarMapPathSegment::EnterChild {
-                    starmap_id: child.starmap_id.clone(),
-                }],
-                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-            },
-        }),
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
-        created_at: 0,
-        updated_at: 0,
-    };
-    parent_graph.edges.push(external_edge_2);
-    use_store_save(dir.path(), &parent.starmap_id, &parent_graph);
-
-    let refs2 = find_starmap_references(dir.path(), &child.starmap_id).unwrap();
-    assert_eq!(refs2.len(), 1);
-    assert_eq!(refs2[0].ref_type, "edge");
-    assert_eq!(refs2[0].ref_id, "external_e2");
-
-    assert!(delete_starmap(dir.path(), &child.starmap_id).is_err());
-
-    use_store_delete_edge(dir.path(), &parent.starmap_id, "external_e2");
-
     assert!(delete_starmap(dir.path(), &child.starmap_id).is_ok());
-
     assert!(delete_starmap(dir.path(), &parent.starmap_id).is_ok());
 }
 
 #[test]
 fn test_motion_policy_default() {
-    let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
+    let policy = StarMapMotionPolicyDto::default();
     assert!(policy.enabled);
     assert!(policy.idle_wobble_enabled);
     assert_eq!(policy.idle_amplitude_vp, 2.0);
@@ -252,10 +190,9 @@ fn test_motion_policy_default() {
 
 #[test]
 fn test_motion_policy_serialization() {
-    let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
+    let policy = StarMapMotionPolicyDto::default();
     let json = serde_json::to_value(&policy).unwrap();
-    let roundtrip: crate::starmap::types::StarMapMotionPolicyDto =
-        serde_json::from_value(json).unwrap();
+    let roundtrip: StarMapMotionPolicyDto = serde_json::from_value(json).unwrap();
     assert_eq!(policy.enabled, roundtrip.enabled);
     assert_eq!(policy.idle_wobble_enabled, roundtrip.idle_wobble_enabled);
     assert_eq!(policy.reduce_motion, roundtrip.reduce_motion);

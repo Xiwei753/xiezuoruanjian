@@ -52,42 +52,6 @@ impl super::WriterCore {
         )
     }
 
-    pub fn create_child_starmap(
-        &self,
-        parent_id: &str,
-        title: &str,
-        description: &str,
-        accent_color: Option<&str>,
-    ) -> Result<crate::starmap::StarMapMeta> {
-        crate::starmap::create_child_starmap(
-            &self.app_data_root,
-            parent_id,
-            title,
-            description,
-            accent_color,
-        )
-    }
-
-    ///   create_child_starmap 的变更集版本。
-    pub fn create_child_starmap_with_changes(
-        &self,
-        parent_id: &str,
-        title: &str,
-        description: &str,
-        accent_color: Option<&str>,
-    ) -> Result<(
-        crate::starmap::StarMapMeta,
-        crate::storage::workspace_git::WorkspaceChangeSet,
-    )> {
-        crate::starmap::create_child_starmap_with_changes(
-            &self.app_data_root,
-            parent_id,
-            title,
-            description,
-            accent_color,
-        )
-    }
-
     pub fn rename_starmap(
         &self,
         starmap_id: &str,
@@ -235,7 +199,7 @@ impl super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
+        store.ensure_fully_loaded()?;
         Ok(store.to_starmap_graph())
     }
 
@@ -536,8 +500,6 @@ impl super::WriterCore {
         starmap_id: &str,
         viewport: &crate::starmap::types::StarMapViewport,
     ) -> Result<Vec<std::path::PathBuf>> {
-        validation::validate_viewport(viewport)?;
-
         let mut stores = self
             .starmap_stores
             .lock()

@@ -30,7 +30,6 @@ impl Default for PhasedSnapshotRequest {
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPhasedSnapshot {
     pub starmap_id: String,
-    pub title: String,
     pub load_phase: LoadPhase,
     pub package_revision: u64,
     pub complete: bool,
@@ -63,20 +62,12 @@ impl StarMapStore {
     pub fn to_starmap_graph(&self) -> StarMapGraph {
         StarMapGraph {
             schema_version: 1,
-            id: self.starmap_id.clone(),
             starmap_id: self.starmap_id.clone(),
-            title: self
-                .graph_meta
-                .as_ref()
-                .map(|m| m.title.clone())
-                .unwrap_or_default(),
             nodes: self.nodes.values().cloned().collect(),
             edges: self.edges.values().cloned().collect(),
             embeds: self.embeds.values().cloned().collect(),
             links: self.links.values().cloned().collect(),
             hyperlinks: self.hyperlinks.values().cloned().collect(),
-            created_at: 0,
-            updated_at: crate::starmap::now_epoch(),
         }
     }
 
@@ -177,11 +168,6 @@ impl StarMapStore {
 
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
-            title: self
-                .graph_meta
-                .as_ref()
-                .map(|meta| meta.title.clone())
-                .unwrap_or_default(),
             load_phase: request.target_phase,
             package_revision: self.package_revision,
             complete,
@@ -210,7 +196,6 @@ impl StarMapStore {
             self.graph_meta = Some(GraphMeta {
                 schema_version: "2".to_string(),
                 starmap_id: self.starmap_id.clone(),
-                title: String::new(),
                 node_ids: Vec::new(),
                 edge_ids: Vec::new(),
                 embed_instance_ids: Vec::new(),
@@ -241,7 +226,6 @@ impl StarMapStore {
         let meta_to_write = GraphMeta {
             schema_version: meta.schema_version.clone(),
             starmap_id: meta.starmap_id.clone(),
-            title: meta.title.clone(),
             node_ids: meta.node_ids.clone(),
             edge_ids: meta.edge_ids.clone(),
             embed_instance_ids: meta.embed_instance_ids.clone(),
@@ -279,11 +263,33 @@ impl StarMapStore {
             return;
         };
 
+        // 增量合并：保留磁盘上已有的对象 IDs，添加内存中新增的，移除已删除的。
+        // 不能无条件从 scratch 重建，因为 store 可能只部分加载，或者磁盘上有
+        // 其他 store 实例直接写入的对象（例如测试中局部 store 写入的 hyperlink）。
+        // 从 scratch 会丢失这些对象。增量合并保留磁盘已有，添加内存新增，移除
+        // 明确删除的（deleted_*_ids）。删除处理在 flush 中先删文件后清空 deleted_*_ids，
+        // 因此调用方需保证 merge 在清空 deleted_*_ids 之前执行。
+
+        // --- node_ids + node_kind_counts ---
         for node_id in self.nodes.keys() {
             if !meta.node_ids.contains(node_id) && !self.deleted_node_ids.contains(node_id) {
                 meta.node_ids.push(node_id.clone());
             }
         }
+        meta.node_ids
+            .retain(|id| !self.deleted_node_ids.contains(id));
+        // node_kind_counts: 仅在 fully loaded 时从 scratch 重建
+        if self.current_load_phase >= Some(LoadPhase::BackgroundFullLoad) {
+            meta.node_kind_counts.clear();
+            for node in self.nodes.values() {
+                *meta
+                    .node_kind_counts
+                    .entry(format!("{:?}", node.kind))
+                    .or_insert(0u32) += 1;
+            }
+        }
+
+        // --- edge_ids + edge_relation_index ---
         for edge in self.edges.values() {
             if self.deleted_edge_ids.contains(&edge.id) {
                 continue;
@@ -293,27 +299,23 @@ impl StarMapStore {
                 .iter_mut()
                 .find(|eri| eri.edge_id == edge.id)
             {
-                eri.from = edge.from.clone().unwrap_or_default();
-                eri.to = edge.to.clone().unwrap_or_default();
-                eri.from_endpoint = edge.from_endpoint.clone();
-                eri.to_endpoint = edge.to_endpoint.clone();
-                eri.from_endpoint_path = edge.from_endpoint_path.clone();
-                eri.to_endpoint_path = edge.to_endpoint_path.clone();
-            } else {
-                if !meta.edge_ids.contains(&edge.id) {
-                    meta.edge_ids.push(edge.id.clone());
-                }
+                eri.from = edge.from.clone();
+                eri.to = edge.to.clone();
+            } else if !meta.edge_ids.contains(&edge.id) {
+                meta.edge_ids.push(edge.id.clone());
                 meta.edge_relation_index.push(EdgeRelationIndex {
                     edge_id: edge.id.clone(),
-                    from: edge.from.clone().unwrap_or_default(),
-                    to: edge.to.clone().unwrap_or_default(),
-                    from_endpoint: edge.from_endpoint.clone(),
-                    to_endpoint: edge.to_endpoint.clone(),
-                    from_endpoint_path: edge.from_endpoint_path.clone(),
-                    to_endpoint_path: edge.to_endpoint_path.clone(),
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
                 });
             }
         }
+        meta.edge_ids
+            .retain(|id| !self.deleted_edge_ids.contains(id));
+        meta.edge_relation_index
+            .retain(|eri| !self.deleted_edge_ids.contains(&eri.edge_id));
+
+        // --- embed_instance_ids + embed_host_index ---
         for embed in self.embeds.values() {
             if self.deleted_embed_ids.contains(&embed.instance_id) {
                 continue;
@@ -323,29 +325,31 @@ impl StarMapStore {
                 .iter_mut()
                 .find(|ehi| ehi.instance_id == embed.instance_id)
             {
-                ehi.host_node_id = embed.source_node_id.clone().unwrap_or_default();
-                ehi.host_endpoint = embed.host_endpoint.clone();
-            } else {
-                if !meta.embed_instance_ids.contains(&embed.instance_id) {
-                    meta.embed_instance_ids.push(embed.instance_id.clone());
-                }
+                ehi.host_path = embed.host_path.clone();
+            } else if !meta.embed_instance_ids.contains(&embed.instance_id) {
+                meta.embed_instance_ids.push(embed.instance_id.clone());
                 meta.embed_host_index.push(EmbedHostIndex {
                     instance_id: embed.instance_id.clone(),
-                    host_node_id: embed.source_node_id.clone().unwrap_or_default(),
-                    host_endpoint: embed.host_endpoint.clone(),
+                    host_path: embed.host_path.clone(),
                 });
             }
         }
+        meta.embed_instance_ids
+            .retain(|id| !self.deleted_embed_ids.contains(id));
+        meta.embed_host_index
+            .retain(|ehi| !self.deleted_embed_ids.contains(&ehi.instance_id));
+
+        // --- link_ids + link_relation_index ---
         for link in self.links.values() {
             if self.deleted_link_ids.contains(&link.link_id) {
                 continue;
             }
+            let source_node_id = target_path_node_id(&link.source)
+                .unwrap_or_default()
+                .to_string();
             if !meta.link_ids.contains(&link.link_id) {
                 meta.link_ids.push(link.link_id.clone());
             }
-            let source_node_id = endpoint_node_id(&link.source)
-                .unwrap_or_default()
-                .to_string();
             if let Some(lri) = meta
                 .link_relation_index
                 .iter_mut()
@@ -359,16 +363,22 @@ impl StarMapStore {
                 });
             }
         }
+        meta.link_ids
+            .retain(|id| !self.deleted_link_ids.contains(id));
+        meta.link_relation_index
+            .retain(|lri| !self.deleted_link_ids.contains(&lri.link_id));
+
+        // --- hyperlink_ids + hyperlink_relation_index ---
         for hl in self.hyperlinks.values() {
             if self.deleted_hyperlink_ids.contains(&hl.hyperlink_id) {
                 continue;
             }
+            let source_node_id = target_path_node_id(&hl.source)
+                .unwrap_or_default()
+                .to_string();
             if !meta.hyperlink_ids.contains(&hl.hyperlink_id) {
                 meta.hyperlink_ids.push(hl.hyperlink_id.clone());
             }
-            let source_node_id = endpoint_path_node_id(&hl.source)
-                .unwrap_or_default()
-                .to_string();
             if let Some(hri) = meta
                 .hyperlink_relation_index
                 .iter_mut()
@@ -382,24 +392,51 @@ impl StarMapStore {
                 });
             }
         }
-
-        meta.node_ids
-            .retain(|id| !self.deleted_node_ids.contains(id));
-        meta.edge_ids
-            .retain(|id| !self.deleted_edge_ids.contains(id));
-        meta.edge_relation_index
-            .retain(|eri| !self.deleted_edge_ids.contains(&eri.edge_id));
-        meta.embed_instance_ids
-            .retain(|id| !self.deleted_embed_ids.contains(id));
-        meta.embed_host_index
-            .retain(|ehi| !self.deleted_embed_ids.contains(&ehi.instance_id));
-        meta.link_ids
-            .retain(|id| !self.deleted_link_ids.contains(id));
-        meta.link_relation_index
-            .retain(|lri| !self.deleted_link_ids.contains(&lri.link_id));
         meta.hyperlink_ids
             .retain(|id| !self.deleted_hyperlink_ids.contains(id));
         meta.hyperlink_relation_index
             .retain(|hri| !self.deleted_hyperlink_ids.contains(&hri.hyperlink_id));
+
+        // Update deleted_since_last_sync: add entries for newly deleted objects
+        let next_rev = self.package_revision.saturating_add(1);
+        for node_id in &self.deleted_node_ids {
+            meta.deleted_since_last_sync
+                .add_entry("node", node_id, next_rev);
+        }
+        for edge_id in &self.deleted_edge_ids {
+            meta.deleted_since_last_sync
+                .add_entry("edge", edge_id, next_rev);
+        }
+        for instance_id in &self.deleted_embed_ids {
+            meta.deleted_since_last_sync
+                .add_entry("embed", instance_id, next_rev);
+        }
+        for link_id in &self.deleted_link_ids {
+            meta.deleted_since_last_sync
+                .add_entry("link", link_id, next_rev);
+        }
+        for hl_id in &self.deleted_hyperlink_ids {
+            meta.deleted_since_last_sync
+                .add_entry("hyperlink", hl_id, next_rev);
+        }
+
+        // Remove deleted_since_last_sync entries for objects that are back in memory
+        for node_id in self.nodes.keys() {
+            meta.deleted_since_last_sync.remove_entry("node", node_id);
+        }
+        for edge_id in self.edges.keys() {
+            meta.deleted_since_last_sync.remove_entry("edge", edge_id);
+        }
+        for instance_id in self.embeds.keys() {
+            meta.deleted_since_last_sync
+                .remove_entry("embed", instance_id);
+        }
+        for link_id in self.links.keys() {
+            meta.deleted_since_last_sync.remove_entry("link", link_id);
+        }
+        for hl_id in self.hyperlinks.keys() {
+            meta.deleted_since_last_sync
+                .remove_entry("hyperlink", hl_id);
+        }
     }
 }

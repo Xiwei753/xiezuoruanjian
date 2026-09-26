@@ -42,8 +42,6 @@ pub struct StarMapMeta {
     #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
-    pub parent_starmap_id: Option<String>,
-    #[serde(default)]
     pub is_main_for_project: bool,
     #[serde(default = "default_accent_color")]
     pub accent_color: String,
@@ -55,8 +53,6 @@ pub struct StarMapMeta {
     pub edge_count: u32,
     #[serde(default)]
     pub linked_chapter_count: u32,
-    #[serde(default)]
-    pub child_starmap_count: u32,
 }
 
 fn default_accent_color() -> String {
@@ -216,7 +212,6 @@ pub fn create_starmap(
         title: title.to_string(),
         description: description.to_string(),
         project_id: None,
-        parent_starmap_id: None,
         is_main_for_project: false,
         accent_color: accent_color.unwrap_or(&default_accent_color()).to_string(),
         created_at: now,
@@ -224,7 +219,6 @@ pub fn create_starmap(
         node_count: 0,
         edge_count: 0,
         linked_chapter_count: 0,
-        child_starmap_count: 0,
     };
     save_starmap_meta(app_data_root, &meta)?;
     let mut idx = load_index(app_data_root)?;
@@ -249,68 +243,6 @@ pub fn create_starmap_with_changes(
 )> {
     let meta = create_starmap(app_data_root, title, description, accent_color)?;
     let change_set = change_set_for_meta_and_index(&meta.starmap_id);
-    Ok((meta, change_set))
-}
-
-pub fn create_child_starmap(
-    app_data_root: &Path,
-    parent_id: &str,
-    title: &str,
-    description: &str,
-    accent_color: Option<&str>,
-) -> Result<StarMapMeta> {
-    let parent = load_starmap_meta(app_data_root, parent_id)?;
-    let now = now_epoch();
-    let meta = StarMapMeta {
-        starmap_id: format!("sm_{}", uuid::Uuid::new_v4()),
-        title: title.to_string(),
-        description: description.to_string(),
-        project_id: parent.project_id.clone(),
-        parent_starmap_id: Some(parent_id.to_string()),
-        is_main_for_project: false,
-        accent_color: accent_color.unwrap_or(&parent.accent_color).to_string(),
-        created_at: now,
-        updated_at: now,
-        node_count: 0,
-        edge_count: 0,
-        linked_chapter_count: 0,
-        child_starmap_count: 0,
-    };
-    save_starmap_meta(app_data_root, &meta)?;
-
-    let mut idx = load_index(app_data_root)?;
-    idx.starmaps.push(meta.clone());
-    idx.updated_at = now;
-    save_index(app_data_root, &idx)?;
-
-    // Update parent child count
-    let mut updated_parent = parent;
-    updated_parent.child_starmap_count += 1;
-    updated_parent.updated_at = now;
-    save_starmap_meta(app_data_root, &updated_parent)?;
-
-    Ok(meta)
-}
-
-///   create_child_starmap 的变更集版本。
-///
-/// 返回 `(StarMapMeta, WorkspaceChangeSet)`，变更集包含
-/// `Upsert(child meta) + Upsert(parent meta) + Upsert(index.json)`。
-pub fn create_child_starmap_with_changes(
-    app_data_root: &Path,
-    parent_id: &str,
-    title: &str,
-    description: &str,
-    accent_color: Option<&str>,
-) -> Result<(
-    StarMapMeta,
-    crate::storage::workspace_git::WorkspaceChangeSet,
-)> {
-    let meta = create_child_starmap(app_data_root, parent_id, title, description, accent_color)?;
-    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-        .add_upsert(starmap_meta_rel_path(&meta.starmap_id))
-        .add_upsert(starmap_meta_rel_path(parent_id))
-        .add_upsert(starmaps_index_rel_path());
     Ok((meta, change_set))
 }
 
@@ -353,7 +285,6 @@ pub fn rename_starmap_with_changes(
 ///
 /// 先检查是否有外部引用（embed/link/edge 指向此星图），有则拒绝删除。
 /// 自引用（星图内部的边/嵌入指向自身）不阻止删除。
-/// 删除后同步更新父星图的 `child_starmap_count` 和全局索引。
 pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     // Before deleting, check if it's referenced by any EXTERNAL StarMap.
     let refs = find_starmap_references(app_data_root, starmap_id)?;
@@ -366,19 +297,6 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
             "Cannot delete StarMap because it is referenced by {} external places.",
             external_refs.len()
         ))));
-    }
-
-    let meta = load_starmap_meta(app_data_root, starmap_id)?;
-
-    // Remove from parent's child count (if parent exists)
-    if let Some(ref parent_id) = meta.parent_starmap_id {
-        if let Ok(mut parent_meta) = load_starmap_meta(app_data_root, parent_id) {
-            if parent_meta.child_starmap_count > 0 {
-                parent_meta.child_starmap_count -= 1;
-                parent_meta.updated_at = now_epoch();
-                let _ = save_starmap_meta(app_data_root, &parent_meta);
-            }
-        }
     }
 
     delete_starmap_meta(app_data_root, starmap_id)?;
@@ -399,23 +317,16 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
 ///   delete_starmap 的变更集版本。
 ///
 /// 变更集：`Delete(starmaps/{id}.meta.json) + DeleteTree(starmaps/{id}) +
-/// Upsert(starmaps/index.json) + 可选 Upsert(parent meta)`。
+/// Upsert(starmaps/index.json)`。
 pub fn delete_starmap_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    // 先读取 parent_id（删除前），用于构造变更集。
-    let meta = load_starmap_meta(app_data_root, starmap_id).ok();
     delete_starmap(app_data_root, starmap_id)?;
-    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
         .add_delete(starmap_meta_rel_path(starmap_id))
         .add_delete_tree(starmap_dir_rel_path(starmap_id))
         .add_upsert(starmaps_index_rel_path());
-    if let Some(m) = meta {
-        if let Some(ref parent_id) = m.parent_starmap_id {
-            change_set = change_set.add_upsert(starmap_meta_rel_path(parent_id));
-        }
-    }
     Ok(change_set)
 }
 
@@ -611,29 +522,23 @@ pub struct StarMapReference {
     pub target_starmap_id: String,
 }
 
-fn deep_target_references_starmap(
-    target: &crate::starmap::semantic::StarMapDeepTarget,
+fn target_path_references_starmap(
+    path: &crate::starmap::types::reference::StarMapTargetPath,
     target_starmap_id: &str,
 ) -> bool {
-    if target.starmap_id == target_starmap_id {
+    if path.starmap_id == target_starmap_id {
         return true;
     }
-    target.path.iter().any(|p| match p {
-        crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => {
-            s == target_starmap_id
-        }
-    })
-}
-
-fn edge_endpoint_references_starmap(
-    endpoint: &crate::starmap::types::StarMapEdgeEndpoint,
-    target_starmap_id: &str,
-) -> bool {
-    match endpoint {
-        crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => {
-            deep_target_references_starmap(target, target_starmap_id)
-        }
-        _ => false,
+    // 路径段中的嵌入和 portal 引用的目标星图需要 resolver 查询，
+    // 但在引用检查时我们只能检查 starmap_id 和 target 中的直接引用。
+    // 只有当存在路径段时，Starmap target 才可能通过间接层级引用目标星图。
+    if !path.segments.is_empty() {
+        matches!(
+            &path.target,
+            crate::starmap::semantic::StarMapTargetDetail::Starmap
+        )
+    } else {
+        false
     }
 }
 
@@ -670,7 +575,7 @@ pub fn find_starmap_references(
 
             // 2. Check links
             for link in &graph.links {
-                if deep_target_references_starmap(&link.target, target_starmap_id) {
+                if target_path_references_starmap(&link.target, target_starmap_id) {
                     refs.push(StarMapReference {
                         host_starmap_id: m.starmap_id.clone(),
                         host_title: m.title.clone(),
@@ -683,27 +588,8 @@ pub fn find_starmap_references(
 
             // 3. Check edges
             for edge in &graph.edges {
-                let mut matches = false;
-                if let Some(ft) = &edge.from_target {
-                    if deep_target_references_starmap(ft, target_starmap_id) {
-                        matches = true;
-                    }
-                }
-                if let Some(tt) = &edge.to_target {
-                    if deep_target_references_starmap(tt, target_starmap_id) {
-                        matches = true;
-                    }
-                }
-                if let Some(fe) = &edge.from_endpoint {
-                    if edge_endpoint_references_starmap(fe, target_starmap_id) {
-                        matches = true;
-                    }
-                }
-                if let Some(te) = &edge.to_endpoint {
-                    if edge_endpoint_references_starmap(te, target_starmap_id) {
-                        matches = true;
-                    }
-                }
+                let matches = target_path_references_starmap(&edge.from, target_starmap_id)
+                    || target_path_references_starmap(&edge.to, target_starmap_id);
 
                 if matches {
                     refs.push(StarMapReference {
@@ -719,17 +605,7 @@ pub fn find_starmap_references(
             // 4. Check portals
             for node in &graph.nodes {
                 if let Some(portal) = &node.portal {
-                    let mut matches = false;
-                    if portal.target_starmap_id == target_starmap_id {
-                        matches = true;
-                    }
-                    if let Some(dt) = &portal.deep_target {
-                        if deep_target_references_starmap(dt, target_starmap_id) {
-                            matches = true;
-                        }
-                    }
-
-                    if matches {
+                    if target_path_references_starmap(&portal.target, target_starmap_id) {
                         refs.push(StarMapReference {
                             host_starmap_id: m.starmap_id.clone(),
                             host_title: m.title.clone(),

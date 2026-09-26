@@ -378,8 +378,8 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
             .edges
             .into_iter()
             .filter_map(|edge| {
-                let from = edge.from.filter(|id| !id.is_empty())?;
-                let to = edge.to.filter(|id| !id.is_empty())?;
+                let from = edge.from.target.node_id.filter(|id| !id.is_empty())?;
+                let to = edge.to.target.node_id.filter(|id| !id.is_empty())?;
                 Some(crate::starmap::render::EdgeInput {
                     id: edge.id,
                     from,

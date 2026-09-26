@@ -9,10 +9,10 @@ use crate::starmap::types::*;
 /// ## 验证不变量
 ///
 /// - 节点 ID 全局唯一
-/// - 边端点引用的节点/锚点必须存在（legacy ID、endpoint、deep_target 三级校验）
+/// - 边端点引用的节点/锚点必须存在
 /// - 嵌入的 `instance_id` 全局唯一，且不能自嵌入
 /// - 链接的 `link_id` 全局唯一
-/// - Portal deep_target 可达（无循环、无缺失）
+/// - Portal target 可达（无循环、无缺失）
 /// - DisplayPolicy scale 层级有序
 /// - 数值字段无 NaN/非法值
 pub(crate) fn validate_graph(app_data_root: &std::path::Path, graph: &StarMapGraph) -> Result<()> {
@@ -87,33 +87,18 @@ fn validate_nodes(
         }
 
         if let Some(portal) = &node.portal {
-            if portal.mode == crate::starmap::semantic::StarMapPortalMode::EnterChild {
-                let target_id = portal
-                    .deep_target
-                    .as_ref()
-                    .map(|t| t.starmap_id.clone())
-                    .unwrap_or_else(|| portal.target_starmap_id.clone());
-
-                if crate::starmap::load_starmap_meta(app_data_root, &target_id).is_err() {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Portal target starmap does not exist",
-                    )));
-                }
-
-                if let Some(dt) = &portal.deep_target {
-                    let status = super::resolve::resolve_deep_target(app_data_root, dt);
-                    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                    match status {
-                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-                        | InvalidRange => {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("Deep target resolve failed: {:?}", status),
-                            )));
-                        }
-                        _ => {}
+            if portal.mode == crate::starmap::semantic::StarMapPortalMode::EnterPortal {
+                let status = super::resolve::resolve_target_path(app_data_root, &portal.target);
+                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                match status {
+                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+                    | MissingEmbed | MissingPortal | InvalidRange => {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Portal target resolve failed: {:?}", status),
+                        )));
                     }
+                    _ => {}
                 }
             }
         }
@@ -125,12 +110,8 @@ fn validate_nodes(
 
 /// 验证边：端点引用完整性。
 ///
-/// 每条边的 from/to 端点按优先级校验：
-/// 1. `endpoint`（结构化端点）→ 检查节点/锚点存在性
-/// 2. `legacy_target`（旧格式 deep_target）→ 调用 resolve_deep_target
-/// 3. `legacy_id`（最旧格式节点 ID）→ 检查节点存在性
-///
-/// `Starmap` 端点和 `DeepTarget` 端点中的 Starmap 变体无需本地节点引用。
+/// 每条边的 from/to 端点使用 `StarMapTargetPath`，
+/// 验证路径中的节点/锚点在当前星图中存在，或跨星图路径可达。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -144,91 +125,68 @@ fn validate_edges(
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
     for edge in &graph.edges {
-        let validate_edge_endpoint =
-            |ep: &Option<StarMapEdgeEndpoint>,
-             legacy_id: &Option<String>,
-             legacy_target: &Option<crate::starmap::semantic::StarMapDeepTarget>,
-             endpoint_name: &str|
-             -> Result<()> {
-                if let Some(endpoint) = ep {
-                    match endpoint {
-                        StarMapEdgeEndpoint::Node { node_id } => {
-                            if !node_ids.contains(node_id) {
-                                return Err(Error::Io(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    format!(
-                                        "Edge {} endpoint references non-existent node",
-                                        endpoint_name
-                                    ),
-                                )));
-                            }
-                        }
-                        StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => {
-                            let mut anchor_found = false;
-                            if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
-                                if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                                    anchor_found = true;
-                                }
-                            }
-                            if !anchor_found {
-                                return Err(Error::Io(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    format!(
-                                        "Edge {} endpoint references non-existent anchor",
-                                        endpoint_name
-                                    ),
-                                )));
-                            }
-                        }
-                        StarMapEdgeEndpoint::Starmap => {}
-                        StarMapEdgeEndpoint::DeepTarget { target } => {
-                            let status = super::resolve::resolve_deep_target(app_data_root, target);
-                            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                            match status {
-                                CycleDetected | TooDeep | MissingStarmap | MissingNode
-                                | MissingAnchor | InvalidRange => {
-                                    return Err(Error::Io(std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        format!("Edge deep target resolve failed: {:?}", status),
-                                    )));
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                } else if let Some(target) = legacy_target {
-                    let status = super::resolve::resolve_deep_target(app_data_root, target);
-                    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                    match status {
-                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-                        | InvalidRange => {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("Edge deep target resolve failed: {:?}", status),
-                            )));
-                        }
-                        _ => {}
-                    }
-                } else if let Some(id) = legacy_id {
-                    if !node_ids.contains(id) {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Edge {} references non-existent node", endpoint_name),
-                        )));
-                    }
-                }
-                Ok(())
-            };
+        validate_target_path(app_data_root, &edge.from, graph, node_ids, "from")?;
+        validate_target_path(app_data_root, &edge.to, graph, node_ids, "to")?;
+    }
+    Ok(())
+}
 
-        validate_edge_endpoint(&edge.from_endpoint, &edge.from, &edge.from_target, "from")?;
-        validate_edge_endpoint(&edge.to_endpoint, &edge.to, &edge.to_target, "to")?;
+fn validate_target_path(
+    app_data_root: &std::path::Path,
+    path: &crate::starmap::types::reference::StarMapTargetPath,
+    graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<String>,
+    endpoint_name: &str,
+) -> Result<()> {
+    // 如果路径没有 segments，则 target 在当前星图中
+    if path.segments.is_empty() {
+        match &path.target {
+            crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
+                if !node_ids.contains(node_id) {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Edge {} references non-existent node", endpoint_name),
+                    )));
+                }
+            }
+            crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
+                let anchor_found = graph
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == node_id)
+                    .is_some_and(|node| node.anchors.iter().any(|a| &a.anchor_id == anchor_id));
+                if !anchor_found {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Edge {} references non-existent anchor", endpoint_name),
+                    )));
+                }
+            }
+            _ => {}
+        }
+    } else {
+        // 跨星图路径，调用 resolver 验证
+        let status = super::resolve::resolve_target_path(app_data_root, path);
+        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+        match status {
+            CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+            | MissingEmbed | MissingPortal | InvalidRange => {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Edge {} target path resolve failed: {:?}",
+                        endpoint_name, status
+                    ),
+                )));
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
 
 /// 验证嵌入：instance_id 唯一、禁止自嵌入、目标星图存在、
-/// placement/viewport 数值合法性、source_node_id/host_endpoint 引用完整性。
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+/// placement/viewport 数值合法性、host_path 引用完整性。
 #[allow(
     clippy::excessive_nesting,
     clippy::too_many_lines,
@@ -286,26 +244,18 @@ fn validate_embeds(
             )));
         }
 
-        if let Some(sni) = &embed.source_node_id {
-            if !node_ids.contains(sni) {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Embed source_node_id does not exist",
-                )));
-            }
-        }
-
-        if let Some(ep) = &embed.host_endpoint {
-            match ep {
-                StarMapEndpoint::Node { node_id } => {
+        // 验证 host_path 引用完整性
+        if embed.host_path.segments.is_empty() {
+            match &embed.host_path.target {
+                crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
                     if !node_ids.contains(node_id) {
                         return Err(Error::Io(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            "Embed host_endpoint references non-existent node",
+                            "Embed host_path references non-existent node",
                         )));
                     }
                 }
-                StarMapEndpoint::Anchor { node_id, anchor_id } => {
+                crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
                     let mut anchor_found = false;
                     if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
                         if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
@@ -315,11 +265,11 @@ fn validate_embeds(
                     if !anchor_found {
                         return Err(Error::Io(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            "Embed host_endpoint references non-existent anchor",
+                            "Embed host_path references non-existent anchor",
                         )));
                     }
                 }
-                StarMapEndpoint::Starmap => {}
+                _ => {}
             }
         }
 
@@ -328,7 +278,7 @@ fn validate_embeds(
     Ok(())
 }
 
-/// 验证链接：link_id 唯一、source 端点引用完整、target deep_target 可达。
+/// 验证链接：link_id 唯一、source 端点引用完整、target 路径可达。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -349,45 +299,10 @@ fn validate_links(
                 "Duplicate link_id",
             )));
         }
-        match &link.source {
-            StarMapEndpoint::Node { node_id } => {
-                if !node_ids.contains(node_id) {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Link source node does not exist",
-                    )));
-                }
-            }
-            StarMapEndpoint::Anchor { node_id, anchor_id } => {
-                if let Some(n) = graph.nodes.iter().find(|n| &n.id == node_id) {
-                    if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Link source anchor does not exist",
-                        )));
-                    }
-                } else {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Link source node for anchor does not exist",
-                    )));
-                }
-            }
-            StarMapEndpoint::Starmap => {}
-        }
-
-        let status = super::resolve::resolve_deep_target(app_data_root, &link.target);
-        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-        match status {
-            CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-            | InvalidRange => {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Link deep target resolve failed: {:?}", status),
-                )));
-            }
-            _ => {}
-        }
+        // 验证 source 路径
+        validate_target_path(app_data_root, &link.source, graph, node_ids, "link source")?;
+        // 验证 target 路径
+        validate_target_path(app_data_root, &link.target, graph, node_ids, "link target")?;
     }
     Ok(())
 }
@@ -396,40 +311,21 @@ fn validate_links(
 /// 坐标值（x/y/width/height）允许为负或零，因为平台端可能使用不同坐标系原点。
 pub(crate) fn validate_layout(layout: &StarMapLayout) -> Result<()> {
     for node in &layout.nodes {
-        if node.scale <= 0.0 || node.scale.is_nan() {
+        if node.scale <= 0.0
+            || node.scale.is_nan()
+            || node.x.is_nan()
+            || node.y.is_nan()
+            || node.width.is_nan()
+            || node.height.is_nan()
+            || node.radius.is_nan()
+            || node.depth.is_nan()
+            || node.focus_weight.is_nan()
+        {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Layout scale must be > 0",
+                "Invalid layout node values",
             )));
         }
-        if node.depth.is_nan() || node.focus_weight.is_nan() {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Layout depth or focus_weight cannot be NaN",
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// 视口验证：scale 为有限正值，所有偏移/尺寸为有限数。
-/// offset 允许为负（视口可向左/上平移），但 NaN/Inf 会导致渲染异常。
-pub(crate) fn validate_viewport(viewport: &StarMapViewport) -> Result<()> {
-    if viewport.scale <= 0.0 || !viewport.scale.is_finite() {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Viewport scale must be a finite value > 0",
-        )));
-    }
-    if !viewport.offset_x.is_finite()
-        || !viewport.offset_y.is_finite()
-        || !viewport.width.is_finite()
-        || !viewport.height.is_finite()
-    {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Viewport values must be finite",
-        )));
     }
     Ok(())
 }
