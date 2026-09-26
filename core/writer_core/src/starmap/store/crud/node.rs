@@ -135,6 +135,8 @@ impl StarMapStore {
             .filter(|l| {
                 crate::starmap::store::relation_index::target_path_node_id(&l.source, host)
                     == Some(node_id)
+                    || crate::starmap::store::relation_index::target_path_node_id(&l.target, host)
+                        == Some(node_id)
             })
             .map(|l| l.link_id.clone())
             .collect();

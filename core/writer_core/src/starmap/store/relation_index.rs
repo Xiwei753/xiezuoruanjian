@@ -21,7 +21,8 @@ pub struct EmbedHostIndex {
 #[serde(rename_all = "camelCase")]
 pub struct LinkRelationIndex {
     pub link_id: String,
-    pub source_node_id: String,
+    pub source: StarMapTargetPath,
+    pub target: StarMapTargetPath,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

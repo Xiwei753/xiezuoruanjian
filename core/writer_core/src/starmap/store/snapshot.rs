@@ -493,9 +493,6 @@ impl StarMapStore {
             if self.deleted_link_ids.contains(&link.link_id) {
                 continue;
             }
-            let source_node_id = target_path_node_id(&link.source, &self.starmap_id)
-                .unwrap_or_default()
-                .to_string();
             if !meta.link_ids.contains(&link.link_id) {
                 meta.link_ids.push(link.link_id.clone());
             }
@@ -504,11 +501,13 @@ impl StarMapStore {
                 .iter_mut()
                 .find(|lri| lri.link_id == link.link_id)
             {
-                lri.source_node_id = source_node_id;
+                lri.source = link.source.clone();
+                lri.target = link.target.clone();
             } else {
                 meta.link_relation_index.push(LinkRelationIndex {
                     link_id: link.link_id.clone(),
-                    source_node_id,
+                    source: link.source.clone(),
+                    target: link.target.clone(),
                 });
             }
         }

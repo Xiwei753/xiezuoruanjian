@@ -183,9 +183,8 @@ impl StarMapStore {
             if let Some(link) = self.links.get(link_id) {
                 link_relation_index.push(LinkRelationIndex {
                     link_id: link.link_id.clone(),
-                    source_node_id: target_path_node_id(&link.source, &self.starmap_id)
-                        .unwrap_or_default()
-                        .to_string(),
+                    source: link.source.clone(),
+                    target: link.target.clone(),
                 });
             }
         }
@@ -536,6 +535,34 @@ impl StarMapStore {
                             "embed host_path references non-existent node: {}",
                             node_id
                         ),
+                    });
+                }
+            }
+        }
+        for link in self.links.values() {
+            // 检查 link.source 中的本地节点引用
+            if let Some(node_id) =
+                super::super::relation_index::target_path_node_id(&link.source, host)
+            {
+                if !node_ids.contains(node_id) {
+                    diagnostics.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::DanglingReference,
+                        object_type: "link".to_string(),
+                        object_id: link.link_id.clone(),
+                        detail: format!("link source references non-existent node: {}", node_id),
+                    });
+                }
+            }
+            // 检查 link.target 中的本地节点引用
+            if let Some(node_id) =
+                super::super::relation_index::target_path_node_id(&link.target, host)
+            {
+                if !node_ids.contains(node_id) {
+                    diagnostics.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::DanglingReference,
+                        object_type: "link".to_string(),
+                        object_id: link.link_id.clone(),
+                        detail: format!("link target references non-existent node: {}", node_id),
                     });
                 }
             }
