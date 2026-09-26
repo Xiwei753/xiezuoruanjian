@@ -80,7 +80,51 @@ export class ThemePaletteHelper {
    */
   static mergeIntoThemeColors(colors: ThemeColors, palette: ThemePaletteData, isDark: boolean): ThemeColors {
     const prefix = isDark ? 'dark_' : 'light_'
-    const result = { ...colors }
+    // ArkTS 严格模式不允许对 interface 使用 object spread（{ ...colors }），
+    // 必须显式逐字段重建 ThemeColors。
+    const result: ThemeColors = {
+      primary: colors.primary,
+      onPrimary: colors.onPrimary,
+      primaryContainer: colors.primaryContainer,
+      onPrimaryContainer: colors.onPrimaryContainer,
+      secondary: colors.secondary,
+      onSecondary: colors.onSecondary,
+      secondaryContainer: colors.secondaryContainer,
+      onSecondaryContainer: colors.onSecondaryContainer,
+      tertiary: colors.tertiary,
+      onTertiary: colors.onTertiary,
+      tertiaryContainer: colors.tertiaryContainer,
+      onTertiaryContainer: colors.onTertiaryContainer,
+      error: colors.error,
+      onError: colors.onError,
+      errorContainer: colors.errorContainer,
+      onErrorContainer: colors.onErrorContainer,
+      background: colors.background,
+      onBackground: colors.onBackground,
+      surface: colors.surface,
+      onSurface: colors.onSurface,
+      surfaceVariant: colors.surfaceVariant,
+      onSurfaceVariant: colors.onSurfaceVariant,
+      surfaceContainerLowest: colors.surfaceContainerLowest,
+      surfaceContainerLow: colors.surfaceContainerLow,
+      surfaceContainer: colors.surfaceContainer,
+      surfaceContainerHigh: colors.surfaceContainerHigh,
+      surfaceContainerHighest: colors.surfaceContainerHighest,
+      surfaceDim: colors.surfaceDim,
+      surfaceBright: colors.surfaceBright,
+      outline: colors.outline,
+      outlineVariant: colors.outlineVariant,
+      inverseSurface: colors.inverseSurface,
+      inverseOnSurface: colors.inverseOnSurface,
+      inversePrimary: colors.inversePrimary,
+      scrim: colors.scrim,
+      textPrimary: colors.textPrimary,
+      textSecondary: colors.textSecondary,
+      textHint: colors.textHint,
+      success: colors.success,
+      divider: colors.divider,
+      overlay: colors.overlay,
+    }
 
     const merge = (key: keyof ThemeColors, paletteKey: string) => {
       const val = (palette as Record<string, string>)[paletteKey]
