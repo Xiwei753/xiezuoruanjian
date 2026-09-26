@@ -37,6 +37,8 @@
 | TextController + LayoutManager | @kit.ArkUI (TextController / LayoutManager) | 12（getLayoutManager/getLineCount/getGlyphPositionAtCoordinate/getLineMetrics）/ 14（getRectsForRange） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets, feature/editor/render/EditorRenderBackend.ets |
 | StyledString / MutableStyledString | @kit.ArkUI (StyledString / MutableStyledString) | 12 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/render/EditorTextStyleProjector.ets |
 | ComponentObserver (inspector) | @kit.ArkUI (inspector) | 12（on('layout') 回调） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets |
+| 沉浸光感材质运行态 | @kit.ArkUI (uiMaterial) | 26 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | material/impl/api26/HarmonyMaterialRuntimeApi26.ets |
+| 应用共享目录 / 捐献沙箱目录 | 无独立 Kit（module.json5 shareFiles profile） | 23（共享目录）/ 26.0.0（捐献目录 sharingOS*） | 无独立 SystemCapability（模块级配置） | 无 | 否 | entry/src/main/resources/base/profile/share_files.json（工程资源，不在 platform/ 下） |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -328,3 +330,45 @@
 - fallback：无（等于 compatibleSdkVersion 12，实际始终可用）
 - 实现文件：`feature/editor/ui/SujianEditor.ets`
 - 说明：用于解决 setStyledString 后同步读取 LayoutManager 拿到上一版布局的时序问题。华为官方文档明确"文本内容变更后，需等待布局完成才可获取到最新的布局信息"，ComponentObserver 的 `layout` 回调是系统布局完成的官方通知入口。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/ts-text-common
+
+## 沉浸光感材质运行态（uiMaterial）
+
+- Kit：`@kit.ArkUI`（`uiMaterial` 模块）
+- 接口：
+  - `uiMaterial.getMaterialInfo(): MaterialInfo` —— 读取应用级沉浸材质配置状态（since 26.0.0）
+  - `MaterialInfo.state: MaterialState` —— `DEFAULT = 0` / `ENABLE = 1` / `DISABLE = 2`
+  - `MaterialInfo.type: MaterialType` —— `IMMERSIVE = 2`
+- 最低 API：26
+- SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`（随 `@kit.ArkUI` 整体可用，官方未为该方法单独声明 syscap）
+- 权限：无
+- ACL：否
+- fallback：API < 26、能力不支持或调用抛错时，诊断包对应字段写 `unavailable` / `error`，不伪造状态
+- 实现文件：`material/impl/api26/HarmonyMaterialRuntimeApi26.ets`
+- 语义边界：`MaterialState` 对应的是应用 `module.json5` 里的材质配置状态，只说明"应用级材质开关配成了什么"，**不证明**某个 HdsTabs / HdsNavDestination 已经实际渲染了沉浸光感。诊断包因此分开记录应用级配置（`appMaterialState` / `appMaterialType`）与 HDS 请求值（`hdsRequestedMaterialType` / `hdsRequestedMaterialLevel`），不再用 `state !== DISABLE` 推导 `immersiveMaterialSupported`。
+- 说明：本机 SDK d.ts `/opt/devecostudio/sdk/default/openharmony/ets/api/@ohos.arkui.uiMaterial.d.ts`（`MaterialState`：*states of the application-level immersive system material configuration*）。官方文档：https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/arkts-immersive-light-sense-enable
+
+## 应用共享目录 / 捐献沙箱目录（shareFiles profile）
+
+- Kit：无独立 Kit（`module.json5` 的 `shareFiles` 标签 + `resources/base/profile/share_files.json`）
+- 配置项：
+  - `module.json5`：`"shareFiles": "$profile:share_files"`
+  - `share_files.scopes[].path` / `permission`（`r` 只读 / `r+w` 读写）—— 应用沙箱共享目录
+  - `share_files.sharingOSPath` / `sharingOSSubpath` / `sharingOSPermission` —— 捐献给操作系统的沙箱目录
+- 最低 API：23（共享目录）；26.0.0（捐献目录三个 sharingOS* 字段）
+- SystemCapability：无独立 SystemCapability（模块级配置）
+- 权限：无
+- ACL：否
+- fallback：低版本系统忽略该配置；未配置共享/捐献目录时，文件管理器看不到应用沙箱内的诊断包
+- 实现文件：`apps/harmony/entry/src/main/resources/base/profile/share_files.json`（工程资源，不在 `platform/` 下）
+- 路径限制（官方《应用共享目录配置》，配套版本 26.0.0）：
+  - 第一级必须是 `el1`~`el5` 加密目录，第二级只支持 `base` / `distributedfiles` / `cloud`，深度 2~10 级
+  - 最多 20 条、不可重复、不可同时配置父目录与子目录，path 不以 `/` 结尾
+  - `sharingOSPath` 必须等于 `scopes` 中已配置的 path；`sharingOSSubpath` 长度不超过 32；`sharingOSPermission` 必须是该路径 permission 的子集
+  - 任何一条 path 不合规时，系统会**自动清除该应用的全部已配置路径**（日志关键字 `TransAndSetToMapInner failed for bundle`），不是"只忽略这一条"
+- **`/base/files` 不是合法 `scopes[].path`**：SDK 26.0.0 的 `<sdk>/default/openharmony/toolchains/modulecheck/shareFiles.json` 用
+  `^/(?:el1|el2|el3|el4|el5)/(?:base|distributedfiles|cloud)(?:/[a-zA-Z0-9_-]+){0,8}$` 校验 `scopes[].path`，
+  写成 `/base/files` 会在 PreBuild schema validate 阶段 BUILD FAILED（本机 `~/.harmony-cli/sdk` 与 DevEco SDK 两份 schema 一致）。
+  官方示例本身也是 `"path": "/el2/base/files"` + `"sharingOSPath": "/el2/base/files"`。本仓库因此保持
+  `/el2/base/files` + `"sharingOSSubpath": "/diagnostics"`，只把诊断目录捐给文件管理器。
+- 门禁：`tools/check_harmony_share_files.py`（自测 `tools/test_check_harmony_share_files.py`），在 harmony workflow 里跑。
+  它用 SDK 自带 schema 正则 + 官方路径限制同时校验，`/base/files` 这类写法会直接失败，不再靠文档口径争论。

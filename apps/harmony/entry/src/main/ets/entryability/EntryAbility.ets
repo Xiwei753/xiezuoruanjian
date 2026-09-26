@@ -11,6 +11,8 @@ import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
+import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
+import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
 
@@ -40,6 +42,17 @@ export default class EntryAbility extends UIAbility {
     // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
     this.initDiagnostics()
 
+    // Issue #773 评论 5844589231：订阅系统 HiAppEvent 崩溃事件，
+    // 在下一次启动时把上一轮 crash fault log 补进 diagnostics/crashes/。
+    HarmonyCrashEventWatcher.getInstance().init(this.context)
+
+    // Issue #773 评论 5845398115：初始化诊断 checkpoint，首次启动立即排一轮，不等 5 秒 timer。
+    // 消除"首启 5 秒空窗期内闪退文件管理里只有 live 目录没有 latest.zip"的问题。
+    const checkpoint = HarmonyDiagnosticsCheckpoint.getInstance()
+    checkpoint.init(this.context)
+    checkpoint.persistRuntimeSnapshot()
+    checkpoint.requestCheckpoint()
+
     this.lifecycle.notifyCreate()
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
@@ -65,10 +78,12 @@ export default class EntryAbility extends UIAbility {
   // 初始化 Rust 诊断后端 — Issue #670 评论 5652119660 修复 2e。
   // 在 EntryAbility.onCreate() 中调用，把目录/设备/版本/locale/timezone 传进 Rust。
   // 失败只记 hilog，不阻塞应用启动。
+  // Issue #773 评论 5844589231：logDir 从 cacheDir/log 改为 filesDir/diagnostics/live/log。
+  // cacheDir 属于应用私有缓存，文件管理器看不到且系统可清理；filesDir 是持久化目录，进程崩溃后文件仍然存在。
   private initDiagnostics(): void {
     try {
-      const cacheDir = this.context.cacheDir
-      const logDir = `${cacheDir}/log`
+      const filesDir = this.context.filesDir
+      const logDir = `${filesDir}/diagnostics/live/log`
       const deviceId = HarmonyDeviceIdentity.getOrCreateDeviceId(this.context)
       const identity = this.getBuildIdentity()
       const appVersion = identity.appVersion
@@ -113,8 +128,12 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
+  // Issue #773 评论 5845398115：Ability 销毁时解绑诊断 checkpoint 和 crash watcher，
+  // 避免同一进程里 UIAbility 重建后重复订阅 observer / 重复开 timer / 重复注册 HiAppEvent watcher。
   onDestroy() {
     hilog.info(0x0000, 'EntryAbility', 'onDestroy')
+    HarmonyDiagnosticsCheckpoint.getInstance().destroy()
+    HarmonyCrashEventWatcher.getInstance().destroy()
     this.lifecycle.notifyDestroy()
   }
 

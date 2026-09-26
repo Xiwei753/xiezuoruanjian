@@ -107,9 +107,15 @@ export interface EditorRuntimeSnapshot {
   capturedAtMs: number                  // 快照捕获时间戳（Date.now()）
 }
 
+// Issue #773 评论 5845033983：observer 类型，让 Checkpoint 能订阅 editor 状态变化。
+// 不反向 import Checkpoint（避免循环依赖）。
+export type EditorSnapshotObserver = (snapshot: EditorRuntimeSnapshot | null) => void
+
 export class EditorRuntimeSnapshotStore {
   private static instance: EditorRuntimeSnapshotStore
   private snapshot: EditorRuntimeSnapshot | null = null
+  // Issue #773 评论 5845033983：observer 列表，Checkpoint 订阅 editor 状态变化。
+  private observers: EditorSnapshotObserver[] = []
 
   static getInstance(): EditorRuntimeSnapshotStore {
     if (EditorRuntimeSnapshotStore.instance === undefined || EditorRuntimeSnapshotStore.instance === null) {
@@ -118,12 +124,33 @@ export class EditorRuntimeSnapshotStore {
     return EditorRuntimeSnapshotStore.instance
   }
 
+  // Issue #773 评论 5845033983：添加 observer，editor 状态变化时通知。
+  addObserver(observer: EditorSnapshotObserver): void {
+    this.observers.push(observer)
+  }
+
+  // Issue #773 评论 5845033983：移除 observer。
+  removeObserver(observer: EditorSnapshotObserver): void {
+    const index = this.observers.indexOf(observer)
+    if (index >= 0) {
+      this.observers.splice(index, 1)
+    }
+  }
+
+  // Issue #773 评论 5845033983：通知所有 observer。
+  private notifyObservers(): void {
+    for (const observer of this.observers) {
+      observer(this.snapshot)
+    }
+  }
+
   // SujianEditor 调用，更新完整快照。
   // 接收完整 EditorRuntimeSnapshot（所有字段必填），直接替换当前快照。
   // SujianEditor 持有全部状态，每次从自身字段构造完整快照传入，
   // 保证诊断数据一致，不会出现新旧字段混合。
   updateSnapshot(snapshot: EditorRuntimeSnapshot): void {
     this.snapshot = snapshot
+    this.notifyObservers()
   }
 
   // 诊断导出器调用，读取当前快照。
@@ -182,11 +209,13 @@ export class EditorRuntimeSnapshotStore {
         isEditorMounted: false,
         capturedAtMs: old.capturedAtMs,
       }
+      this.notifyObservers()
     }
   }
 
   // 清空快照（仅在完全重置时使用，aboutToDisappear 不再调用）。
   clear(): void {
     this.snapshot = null
+    this.notifyObservers()
   }
 }

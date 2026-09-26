@@ -50,6 +50,7 @@ apps/harmony/.appanalyzer/
 apps/harmony/.clang-tidy
 apps/harmony/.clangd
 apps/harmony/oh-package-lock.json5
+apps/harmony/package-lock.json
 
 # IDE / OS
 .idea/
