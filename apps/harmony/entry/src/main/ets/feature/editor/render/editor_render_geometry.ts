@@ -80,11 +80,15 @@ export function toLineLayouts(
   const out: LineLayout[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const stops = buildLineCaretStops(text, line, measureTextFn)
-    // Issue #776 评论5848626733 第7项：判断是否是段落首行。
-    // i===0 是文本首行；i>0 时检查前一行末尾是否是 \n（即 line.start 前一个字符是 \n）。
+    // Issue #776 评论5849108212 问题3：caretStops 的 x 加上 line.left，
+    // 使 caretStops 反映真实行左边界（首行缩进时 left > 0）。
+    const rawStops = buildLineCaretStops(text, line, measureTextFn)
     const isParagraphFirstLine = i === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
     const left = isParagraphFirstLine ? firstLineIndentVp : 0
+    const stops = rawStops.map((stop: CaretStop): CaretStop => ({
+      utf16Offset: stop.utf16Offset,
+      x: left + stop.x,
+    }))
     out.push({
       startUtf16: line.start,
       endUtf16: line.end,
@@ -143,8 +147,8 @@ export function computeSelectionRects(
       if (lfCovered) {
         const isEmptyLine = line.start >= line.end
         if (isEmptyLine) {
-          // 空 hard line: LF 被选中 → 整行从 lineLeft 起, width=contentWidth
-          rects.push({ x: lineLeft, y: i * spacing, width: contentWidth, height: spacing })
+          // 空 hard line: LF 被选中 → 整行从 lineLeft 起, width 不超过内容右边界
+          rects.push({ x: lineLeft, y: i * spacing, width: Math.max(0, contentWidth - lineLeft), height: spacing })
         } else {
           // 非空 hard line: LF 被选中 → 从文字末端画到 contentWidth
           // Issue #629 R9：极端单 glyph 宽于容器时避免负数 width

@@ -427,6 +427,18 @@ export struct SettingsScreen {
       .onClick(onClick)
   }
 
+  // ── 横排内联操作按钮（用于 Row 中并排按钮，layoutWeight 均分宽度） ──
+  @Builder
+  SettingsInlineAction(label: ResourceStr, onClick: () => void, enabled: boolean = true) {
+    Button(label, { type: ButtonType.Normal })
+      .layoutWeight(1)
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .fontColor($r('sys.color.font_primary'))
+      .borderRadius(DesignTokens.radiusSm)
+      .enabled(enabled)
+      .onClick(onClick)
+  }
+
   // ── 可展开折叠分类 ──
   @Builder
   ExpandableCategory(sectionId: SettingsSectionId) {
@@ -927,12 +939,12 @@ export struct SettingsScreen {
         .margin({ bottom: 16 })
 
         // Sync actions
-        Row() {
-          this.SettingsNeutralAction($r('app.string.sync_section'),
+        Row({ space: 12 }) {
+          this.SettingsInlineAction($r('app.string.sync_section'),
             () => this.viewModel.performSync(),
             !this.viewModel.isSyncing)
 
-          this.SettingsNeutralAction($r('app.string.diagnose'),
+          this.SettingsInlineAction($r('app.string.diagnose'),
             () => this.viewModel.runSyncDiagnostics(),
             !this.viewModel.isDiagnosing)
         }
@@ -1033,26 +1045,29 @@ export struct SettingsScreen {
       .margin({ bottom: 16 })
 
       // 导出诊断包
-      this.SettingsNeutralAction('导出诊断包', () => {
-        this.viewModel.exportDiagnostics()
-      })
+      Column({ space: 12 }) {
+        this.SettingsNeutralAction('导出诊断包', () => {
+          this.viewModel.exportDiagnostics()
+        })
 
-      // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
-      this.SettingsNeutralAction('清空日志', () => {
-        this.viewModel.clearLogs()
-      })
+        // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
+        this.SettingsNeutralAction('清空日志', () => {
+          this.viewModel.clearLogs()
+        })
 
-      // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
-      this.SettingsNeutralAction('复制设备信息', async () => {
-        const ok = await this.viewModel.copyDeviceInfoToClipboard()
-        if (ok) {
-          this.copyMessage = '已复制'
-          setTimeout(() => { this.copyMessage = '' }, 2000)
-        } else {
-          this.copyMessage = '复制失败'
-          setTimeout(() => { this.copyMessage = '' }, 2000)
-        }
-      })
+        // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
+        this.SettingsNeutralAction('复制设备信息', async () => {
+          const ok = await this.viewModel.copyDeviceInfoToClipboard()
+          if (ok) {
+            this.copyMessage = '已复制'
+            setTimeout(() => { this.copyMessage = '' }, 2000)
+          } else {
+            this.copyMessage = '复制失败'
+            setTimeout(() => { this.copyMessage = '' }, 2000)
+          }
+        })
+      }
+      .width('100%')
     }
     .width('100%')
     .padding(16)
@@ -1550,12 +1565,12 @@ export struct SettingsScreen {
         .margin({ bottom: 16 })
 
         // Sync actions
-        Row() {
-          this.SettingsNeutralAction($r('app.string.sync_section'),
+        Row({ space: 12 }) {
+          this.SettingsInlineAction($r('app.string.sync_section'),
             () => this.viewModel.performSync(),
             !this.viewModel.isSyncing)
 
-          this.SettingsNeutralAction($r('app.string.diagnose'),
+          this.SettingsInlineAction($r('app.string.diagnose'),
             () => this.viewModel.runSyncDiagnostics(),
             !this.viewModel.isDiagnosing)
         }
@@ -1715,26 +1730,29 @@ export struct SettingsScreen {
       .margin({ bottom: 16 })
 
       // 导出诊断包
-      this.SettingsNeutralAction('导出诊断包', () => {
-        this.viewModel.exportDiagnostics()
-      })
+      Column({ space: 12 }) {
+        this.SettingsNeutralAction('导出诊断包', () => {
+          this.viewModel.exportDiagnostics()
+        })
 
-      // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
-      this.SettingsNeutralAction('清空日志', () => {
-        this.viewModel.clearLogs()
-      })
+        // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
+        this.SettingsNeutralAction('清空日志', () => {
+          this.viewModel.clearLogs()
+        })
 
-      // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
-      this.SettingsNeutralAction('复制设备信息', async () => {
-        const ok = await this.viewModel.copyDeviceInfoToClipboard()
-        if (ok) {
-          this.copyMessage = '已复制'
-          setTimeout(() => { this.copyMessage = '' }, 2000)
-        } else {
-          this.copyMessage = '复制失败'
-          setTimeout(() => { this.copyMessage = '' }, 2000)
-        }
-      })
+        // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
+        this.SettingsNeutralAction('复制设备信息', async () => {
+          const ok = await this.viewModel.copyDeviceInfoToClipboard()
+          if (ok) {
+            this.copyMessage = '已复制'
+            setTimeout(() => { this.copyMessage = '' }, 2000)
+          } else {
+            this.copyMessage = '复制失败'
+            setTimeout(() => { this.copyMessage = '' }, 2000)
+          }
+        })
+      }
+      .width('100%')
     }
     .width('100%')
   }

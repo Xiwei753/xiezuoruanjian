@@ -38,6 +38,11 @@ export interface LineLayoutState extends EditorLayoutIdentity {
   readonly lines: NavigationLine[]
   // 系统 LayoutManager 引用。非 null 时行导航用系统 API；null 时回退到 caretStops 方案。
   readonly systemLayoutManager: LayoutManager | null
+  // Issue #776 评论5849108212 问题2：px↔vp 转换函数，用于系统 LayoutManager 路径的单位统一。
+  // 系统行导航（getCaretXFromSystem/getNearestOffsetFromSystem）需要用这两个函数
+  // 把系统 API 的 px 坐标和编辑器的 vp 坐标互相转换。
+  readonly pxToVp?: (value: number) => number
+  readonly vpToPx?: (value: number) => number
 }
 
 export class LineNavigationResolver {
@@ -188,14 +193,16 @@ export class LineNavigationResolver {
    * - Downstream → 下一行开头，取 [offset, offset+1] 的 left
    * 与 EditorRenderBackend.buildCaretRectFromSystem() 保持同一语义。
    */
-  static getCaretXFromSystem(layout: LayoutManager, cursorUtf16: number, textLength: number, affinity: CaretAffinity): number {
+  static getCaretXFromSystem(layout: LayoutManager, cursorUtf16: number, textLength: number, affinity: CaretAffinity, pxToVp?: (value: number) => number): number {
     try {
       // soft-wrap 边界 Upstream：取 [cursor-1, cursor] 的 right
       if (affinity === CaretAffinity.Upstream && cursorUtf16 > 0 && cursorUtf16 < textLength) {
         const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
         const boxes = layout.getRectsForRange(range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT)
         if (boxes.length > 0) {
-          return boxes[boxes.length - 1].rect.right
+          // Issue #776 评论5849108212 问题2：系统返回 px，需要转成 vp。
+          const right = boxes[boxes.length - 1].rect.right
+          return pxToVp ? pxToVp(right) : right
         }
         return 0
       }
@@ -211,9 +218,13 @@ export class LineNavigationResolver {
       const boxes = layout.getRectsForRange(range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT)
       if (boxes.length > 0) {
         if (cursorUtf16 < textLength) {
-          return boxes[0].rect.left
+          // Issue #776 评论5849108212 问题2：系统返回 px，需要转成 vp。
+          const left = boxes[0].rect.left
+          return pxToVp ? pxToVp(left) : left
         } else {
-          return boxes[boxes.length - 1].rect.right
+          // Issue #776 评论5849108212 问题2：系统返回 px，需要转成 vp。
+          const right = boxes[boxes.length - 1].rect.right
+          return pxToVp ? pxToVp(right) : right
         }
       }
     } catch (_e) {
@@ -226,9 +237,13 @@ export class LineNavigationResolver {
    * 从系统 LayoutManager 获取目标行最接近 targetX 的 offset。
    * Issue #768 评论5835958606：修正 API 签名，返回 PositionWithAffinity.position。
    */
-  static getNearestOffsetFromSystem(layout: LayoutManager, targetX: number, targetLineY: number): number {
+  static getNearestOffsetFromSystem(layout: LayoutManager, targetX: number, targetLineY: number, vpToPx?: (value: number) => number): number {
     try {
-      const pos = layout.getGlyphPositionAtCoordinate(targetX, targetLineY)
+      // Issue #776 评论5849108212 问题2：targetX/targetLineY 是 vp 坐标，
+      // getGlyphPositionAtCoordinate 接收 px，需要先转回 px。
+      const pxX = vpToPx ? vpToPx(targetX) : targetX
+      const pxY = vpToPx ? vpToPx(targetLineY) : targetLineY
+      const pos = layout.getGlyphPositionAtCoordinate(pxX, pxY)
       return pos.position
     } catch (_e) {
       // getGlyphPositionAtCoordinate 失败时回退到行首
@@ -255,6 +270,8 @@ export class LineNavigationResolver {
     snapshot: EditorLayoutSnapshot,
     contentWidth: number,
     measureTextFn?: (s: string) => number,
+    pxToVp?: (value: number) => number,
+    vpToPx?: (value: number) => number,
   ): LineLayoutState {
     const text = snapshot.text
     const lineMetricsData: SystemLineMetricData[] = []
@@ -270,9 +287,10 @@ export class LineNavigationResolver {
         isLastLine: i === systemLineCount - 1,
         text,
       })
-      const y = metrics.topHeight
-      const height = metrics.height
-      const left = metrics.left
+      // Issue #776 评论5849108212 问题2：LineMetrics 的 topHeight/height/left 是 px，转成 vp。
+      const y = pxToVp ? pxToVp(metrics.topHeight) : metrics.topHeight
+      const height = pxToVp ? pxToVp(metrics.height) : metrics.height
+      const left = pxToVp ? pxToVp(metrics.left) : metrics.left
 
       // Issue #768 评论5836390597 第2项：用 buildLineCaretStops 生成行内 caret stops，
       // 再用 metrics.left 偏移每个 stop 的 x，使 caretStops 反映真实行左边界。
@@ -324,6 +342,9 @@ export class LineNavigationResolver {
       fontSize: snapshot.fontSize,
       lines: systemLines,
       systemLayoutManager: layout,
+      // Issue #776 评论5849108212 问题2：把 pxToVp/vpToPx 写入 state，供行导航调用系统 API 时使用。
+      pxToVp,
+      vpToPx,
     }
   }
 }

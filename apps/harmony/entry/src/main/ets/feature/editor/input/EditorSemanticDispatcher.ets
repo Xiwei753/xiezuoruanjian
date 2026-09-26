@@ -973,11 +973,11 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity, state.pxToVp)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
-          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY, state.vpToPx)
           const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
           if (extend) {
             return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
@@ -1005,11 +1005,11 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity, state.pxToVp)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
-          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+          const targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY, state.vpToPx)
           const targetPosition = LineNavigationResolver.positionForOffsetInLine(state, targetLineIdx, targetOffset)
           if (extend) {
             return this.selectionController.onDragSelect(anchorUtf16, targetPosition)
@@ -1075,11 +1075,11 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity, state.pxToVp)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
-          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY, state.vpToPx)
         } else {
           if (this.navTargetX < 0) {
             this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)
@@ -1097,11 +1097,11 @@ export class EditorSemanticDispatcher {
         const sysLayout = state.systemLayoutManager
         if (sysLayout !== null && PlatformApiResolver.getInstance().isApiAtLeast(14)) {
           if (this.navTargetX < 0) {
-            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity)
+            this.navTargetX = LineNavigationResolver.getCaretXFromSystem(sysLayout, currentPosition.utf16Offset, state.displayText.length, currentPosition.affinity, state.pxToVp)
           }
           // 目标行 y 用中部，避免落在上下两行边界。
           const targetY = state.lines[targetLineIdx].y + state.lines[targetLineIdx].height / 2
-          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY)
+          targetOffset = LineNavigationResolver.getNearestOffsetFromSystem(sysLayout, this.navTargetX, targetY, state.vpToPx)
         } else {
           if (this.navTargetX < 0) {
             this.navTargetX = LineNavigationResolver.getCaretX(state, currentPosition)

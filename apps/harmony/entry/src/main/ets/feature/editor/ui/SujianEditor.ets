@@ -187,7 +187,8 @@ export struct SujianEditor {
             viewportWidth: this.viewportWidth,
             viewportHeight: this.viewportHeight,
             contentWidth: this.contentWidth,
-            contentHeight: this.contentHeight,
+            // Issue #776 评论5849108212 问题5：返回 Scroll 内容总高度（含 padding）。
+            contentHeight: this.contentHeight + EDITOR_TOP_PADDING_VP + EDITOR_BOTTOM_PADDING_VP,
           }
         }
       )
@@ -571,6 +572,9 @@ export struct SujianEditor {
       // Issue #776 评论5848626733 第6项：系统 LayoutManager 返回 px，renderLayoutFromSystem
       // 内部用 pxToVp 把 LineMetrics/getRectsForRange 的 px 转成 vp。
       const pxToVp = (value: number): number => this.getUIContext().px2vp(value)
+      // Issue #776 评论5849108212 问题2：vpToPx 用于行导航 getNearestOffsetFromSystem
+      // 把 vp 坐标转回 px 传给系统 API。
+      const vpToPx = (value: number): number => this.getUIContext().vp2px(value)
 
       // 1. 调用 EditorRenderBackend.renderLayoutFromSystem 获取完整渲染结果
       const result = EditorRenderBackend.renderLayoutFromSystem(
@@ -600,6 +604,8 @@ export struct SujianEditor {
         snap,
         this.contentWidth,
         measureTextFn,
+        pxToVp,
+        vpToPx,
       )
       this.lineResolver.updateLayout(layoutState)
       // Issue #768：标记布局来源为 system 并推送诊断快照（布局更新时）。
@@ -660,6 +666,10 @@ export struct SujianEditor {
       lines: navigationLines,
       // Fallback 路径无系统 LayoutManager，行导航回退到 caretStops 方案。
       systemLayoutManager: null,
+      // Issue #776 评论5849108212 问题2：fallback 路径也提供 pxToVp/vpToPx，
+      // 虽然 fallback 行导航不走系统 API，但保持接口一致。
+      pxToVp: (value: number): number => this.getUIContext().px2vp(value),
+      vpToPx: (value: number): number => this.getUIContext().vp2px(value),
     }
     this.lineResolver.updateLayout(layoutState)
     // Issue #768：标记布局来源为 fallback 并推送诊断快照（布局更新时）。
@@ -1091,13 +1101,15 @@ export struct SujianEditor {
     if (!this.onViewportChange) {
       return
     }
+    // Issue #776 评论5849108212 问题5：报告 Scroll 内容总高度（含 padding）。
+    const scrollContentHeight = this.contentHeight + EDITOR_TOP_PADDING_VP + EDITOR_BOTTOM_PADDING_VP
     const state: EditorViewportState = new EditorViewportState(
       yOffset,
       xOffset,
       this.viewportWidth,
       this.viewportHeight,
       this.contentWidth,
-      this.contentHeight
+      scrollContentHeight
     )
     this.onViewportChange(state)
   }
@@ -1107,8 +1119,10 @@ export struct SujianEditor {
   // 新实现：contentHeight > viewportHeight 时用 contentHeight（长正文可滚动）；
   // 否则用 viewportHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
   private stackHeight(): number | string {
-    if (this.contentHeight > 0 && this.contentHeight > this.viewportHeight) {
-      return this.contentHeight
+    // Issue #776 评论5849108212 问题5：Stack 加了上下 padding，滚动内容高度需包含 padding。
+    const totalContentHeight = this.contentHeight + EDITOR_TOP_PADDING_VP + EDITOR_BOTTOM_PADDING_VP
+    if (totalContentHeight > 0 && totalContentHeight > this.viewportHeight) {
+      return totalContentHeight
     }
     if (this.viewportHeight > 0) {
       return this.viewportHeight

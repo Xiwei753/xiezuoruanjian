@@ -84,10 +84,10 @@ export class EditorRenderBackend {
   ): EditorRenderResult {
     const base = EditorRenderBackend.render(snapshot)
     const text = base.text
-    const lines = layoutLines(text, containerWidth, measureTextFn)
-    const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
-    // Issue #776 评论5848626733 第7项：fallback 路径首行缩进。
+    // Issue #776 评论5849108212 问题3：fallback 路径首行缩进。
     const firstLineIndentVp = snapshot.autoIndentEnabled ? snapshot.autoIndentWidth * snapshot.fontSize : 0
+    const lines = layoutLines(text, containerWidth, measureTextFn, firstLineIndentVp)
+    const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
     const lineLayouts = toLineLayouts(lines, lineSpacingPx, text, measureTextFn, firstLineIndentVp)
     const selStart = Math.min(base.selectionStartUtf16, base.selectionEndUtf16)
     const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
@@ -141,9 +141,11 @@ export class EditorRenderBackend {
     measureTextFn: (s: string) => number,
   ): VisualCaretPosition {
     const text = snapshot.text
-    const lines = layoutLines(text, containerWidth, measureTextFn)
+    // Issue #776 评论5849108212 问题3：fallback 路径首行缩进。
+    const firstLineIndentVp = snapshot.autoIndentEnabled ? snapshot.autoIndentWidth * snapshot.fontSize : 0
+    const lines = layoutLines(text, containerWidth, measureTextFn, firstLineIndentVp)
     const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
-    return hitTestPoint(text, lines, lineSpacingPx, touchX, touchY, measureTextFn)
+    return hitTestPoint(text, lines, lineSpacingPx, touchX, touchY, measureTextFn, firstLineIndentVp)
   }
 
   // ── Issue #768 任务10：系统 LayoutManager 路径 ──
@@ -412,7 +414,8 @@ export class EditorRenderBackend {
             range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
           )
           if (textBoxes.length > 0) {
-            x = textBoxes[textBoxes.length - 1].rect.right
+            // Issue #776 评论5849108212 问题1：文末光标的 right 也是 px，需要转成 vp。
+            x = pxToVp(textBoxes[textBoxes.length - 1].rect.right)
           } else {
             x = 0
           }

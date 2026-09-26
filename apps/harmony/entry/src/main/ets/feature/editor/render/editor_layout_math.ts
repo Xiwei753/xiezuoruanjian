@@ -99,6 +99,7 @@ export function layoutLines(
   text: string,
   containerWidth: number,
   measureTextFn: (s: string) => number,
+  firstLineIndentVp: number = 0,
 ): LineRange[] {
   const n = text.length
   if (n === 0) {
@@ -139,13 +140,16 @@ export function layoutLines(
 
     while (pos < lastPos) {
       const lineStart = segBounds[pos]
+      // Issue #776 评论5849108212 问题3：段落首行可用宽度减去首行缩进。
+      const isSegFirstLine = pos === 0
+      const availableWidth = isSegFirstLine ? Math.max(0, containerWidth - firstLineIndentVp) : containerWidth
       let lo = pos + 1
       let hi = lastPos
       let bestIdx = pos + 1
       while (lo <= hi) {
         const mid = Math.floor((lo + hi) / 2)
         const w = measureTextFn(text.substring(lineStart, segBounds[mid]))
-        if (w <= containerWidth) {
+        if (w <= availableWidth) {
           bestIdx = mid
           lo = mid + 1
         } else {
@@ -259,6 +263,7 @@ export function hitTestPoint(
   touchX: number,
   touchY: number,
   measureTextFn: (s: string) => number,
+  firstLineIndentVp: number = 0,
 ): VisualCaretPosition {
   if (lines.length === 0) {
     return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
@@ -268,8 +273,13 @@ export function hitTestPoint(
   if (lineIndex > lines.length - 1) { lineIndex = lines.length - 1 }
 
   const line = lines[lineIndex]
+  // Issue #776 评论5849108212 问题3：首行缩进时，命中测试需要先减去当前行的 left，
+  // 再找最近 caret stop。段落首行的 left = firstLineIndentVp。
+  const isParagraphFirstLine = lineIndex === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
+  const lineLeft = isParagraphFirstLine ? firstLineIndentVp : 0
+  const adjustedX = touchX - lineLeft
   const stops = buildLineCaretStops(text, line, measureTextFn)
-  const offset = offsetForHorizontal(stops, touchX)
+  const offset = offsetForHorizontal(stops, adjustedX)
 
   // Issue #629 R7-C item4: touchY 已选定 lineIndex，命中该行 soft-wrap 末尾恒为 Upstream；
   // 下一行 start 自然保持 Downstream。不再按同一行上/下半区分。
