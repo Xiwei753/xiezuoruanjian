@@ -157,7 +157,8 @@ fn validate_nodes(
                 use crate::starmap::semantic::StarMapTargetResolveStatus::*;
                 match status {
                     CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-                    | MissingEmbed | MissingPortal | InvalidRange => {
+                    | MissingEmbed | MissingPortal | InvalidRange | UnsupportedVersion
+                    | CorruptStarmap | ReadFailed => {
                         return Err(Error::Io(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             format!("Portal destination_target resolve failed: {:?}", status),
@@ -287,7 +288,8 @@ fn validate_target_path(
         use crate::starmap::semantic::StarMapTargetResolveStatus::*;
         match status {
             CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-            | MissingEmbed | MissingPortal | InvalidRange => {
+            | MissingEmbed | MissingPortal | InvalidRange | UnsupportedVersion | CorruptStarmap
+            | ReadFailed => {
                 return Err(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(

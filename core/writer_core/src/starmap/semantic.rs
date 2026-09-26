@@ -416,6 +416,12 @@ pub enum StarMapTargetDisplayStatus {
 /// - `TooDeep`：路径超过 32 层深度限制
 /// - `CycleDetected`：路径中存在循环引用
 /// - `InvalidRange`：章节范围 range_start > range_end
+/// - `UnsupportedVersion`：目标星图 graph.json schema 版本不被支持
+/// - `CorruptStarmap`：目标星图对象文件损坏（JSON 解析失败等）
+/// - `ReadFailed`：目标星图对象文件读取失败（IO 错误等）
+///
+/// 后三个变体由 resolver 的只读 provider 返回，用于区分"对象真不存在"
+/// 与"读取失败/版本不兼容"，避免把磁盘错误吞成 MissingNode/MissingEmbed。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapTargetResolveStatus {
@@ -430,6 +436,9 @@ pub enum StarMapTargetResolveStatus {
     TooDeep,
     CycleDetected,
     InvalidRange,
+    UnsupportedVersion,
+    CorruptStarmap,
+    ReadFailed,
 }
 
 /// 计算目标展示状态，只提供底层计算语义。

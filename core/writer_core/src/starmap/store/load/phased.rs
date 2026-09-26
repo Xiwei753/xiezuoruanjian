@@ -13,7 +13,7 @@ use super::super::StarMapStore;
 /// `UnsupportedVersion` → 当前版本 deserialize GraphMeta。
 /// `load_full`、`load_graph_meta_phase`、`reload_graph_meta_if_stale`
 /// 全部走此函数，确保 schema 检查不被绕过。
-pub(in crate::starmap::store) fn load_current_graph_meta(path: &Path) -> Result<Option<GraphMeta>> {
+pub(in crate::starmap) fn load_current_graph_meta(path: &Path) -> Result<Option<GraphMeta>> {
     if !path.exists() {
         return Ok(None);
     }

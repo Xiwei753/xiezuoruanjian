@@ -1,4 +1,6 @@
+use crate::starmap::package_storage::bucket_for_id;
 use crate::starmap::semantic::StarMapTargetDetail;
+use crate::starmap::store::load::phased::load_current_graph_meta;
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
 use crate::starmap::types::StarMapGraph;
 
@@ -40,9 +42,111 @@ pub struct ResolvedTarget {
     pub traversed_starmap_ids: Vec<String>,
 }
 
-/// 从 context.overlays 或磁盘 Store 读取一个 embed 实例。
+/// resolver 磁盘读取的不可恢复错误。
 ///
-/// 先查 context.overlays（按 starmap_id 匹配），找不到再从磁盘 Store 读取。
+/// 与 [`crate::starmap::semantic::StarMapTargetResolveStatus`] 的后三个变体一一对应，
+/// 由 [`map_read_error`] 映射。区分"对象真不存在"（返回 `Ok(None)`）与"读取失败"
+/// （返回 `Err`），避免把磁盘错误/版本不兼容吞成 MissingNode/MissingEmbed。
+enum ResolverReadError {
+    UnsupportedVersion,
+    CorruptStarmap,
+    ReadFailed,
+}
+
+/// 无副作用的只读星图对象 provider，供 resolver 使用。
+///
+/// 只做：
+/// 1. 用 [`load_current_graph_meta`] 检查 graph.json schema 版本；
+/// 2. 按 bucket 路径直接读取 node/embed 文件。
+///
+/// 不跑 `detect_dangling_references`、不跑 orphan scan、不创建完整 `StarMapStore`、
+/// 不递归加载整张图。这切断了 `lookup_node`/`lookup_embed` → `load_full` →
+/// `detect_dangling_references` → `resolve_target` → `lookup_node`/`lookup_embed`
+/// 的无限递归路径。
+struct ResolverGraphProvider<'a> {
+    app_data_root: &'a std::path::Path,
+}
+
+impl<'a> ResolverGraphProvider<'a> {
+    fn starmap_dir(&self, starmap_id: &str) -> std::path::PathBuf {
+        self.app_data_root.join("starmaps").join(starmap_id)
+    }
+
+    /// 检查目标星图 graph.json 的 schema 版本。
+    ///
+    /// graph.json 不存在时返回 `Ok(())`（允许空星图，对象读取返回 `None`）。
+    fn check_schema(&self, starmap_id: &str) -> Result<(), ResolverReadError> {
+        let graph_json_path = self.starmap_dir(starmap_id).join("graph.json");
+        if !graph_json_path.exists() {
+            return Ok(());
+        }
+        match load_current_graph_meta(&graph_json_path) {
+            Ok(_) => Ok(()),
+            Err(crate::error::Error::UnsupportedVersion { .. }) => {
+                Err(ResolverReadError::UnsupportedVersion)
+            }
+            Err(_) => Err(ResolverReadError::CorruptStarmap),
+        }
+    }
+
+    /// 读取一个 node 对象文件。文件不存在返回 `Ok(None)`。
+    fn get_node(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+    ) -> Result<Option<crate::starmap::types::StarMapNode>, ResolverReadError> {
+        self.check_schema(starmap_id)?;
+        let bucket_dir = self
+            .starmap_dir(starmap_id)
+            .join("nodes")
+            .join(bucket_for_id(node_id));
+        let path = bucket_dir.join(format!("{}.json", node_id));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path).map_err(|_| ResolverReadError::ReadFailed)?;
+        serde_json::from_str::<crate::starmap::types::StarMapNode>(&content)
+            .map(Some)
+            .map_err(|_| ResolverReadError::CorruptStarmap)
+    }
+
+    /// 读取一个 embed 对象文件。文件不存在返回 `Ok(None)`。
+    fn get_embed(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+    ) -> Result<Option<crate::starmap::types::StarMapEmbed>, ResolverReadError> {
+        self.check_schema(starmap_id)?;
+        let bucket_dir = self
+            .starmap_dir(starmap_id)
+            .join("embeds")
+            .join(bucket_for_id(instance_id));
+        let path = bucket_dir.join(format!("{}.json", instance_id));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path).map_err(|_| ResolverReadError::ReadFailed)?;
+        serde_json::from_str::<crate::starmap::types::StarMapEmbed>(&content)
+            .map(Some)
+            .map_err(|_| ResolverReadError::CorruptStarmap)
+    }
+}
+
+/// 把 [`ResolverReadError`] 映射成 resolver 对外的解析状态。
+fn map_read_error(e: ResolverReadError) -> crate::starmap::semantic::StarMapTargetResolveStatus {
+    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+    match e {
+        ResolverReadError::UnsupportedVersion => UnsupportedVersion,
+        ResolverReadError::CorruptStarmap => CorruptStarmap,
+        ResolverReadError::ReadFailed => ReadFailed,
+    }
+}
+
+/// 从 context.overlays 或磁盘只读 provider 读取一个 embed 实例。
+///
+/// 先查 context.overlays（按 starmap_id 匹配），找不到再用
+/// [`ResolverGraphProvider`] 从磁盘按 bucket 路径直接读取对象文件。
+/// 不调用 `StarMapStore::load_full`，避免 detect_dangling_references 递归。
 fn lookup_embed(
     context: &GraphResolverContext,
     current_starmap_id: &str,
@@ -51,7 +155,6 @@ fn lookup_embed(
     Option<crate::starmap::types::StarMapEmbed>,
     crate::starmap::semantic::StarMapTargetResolveStatus,
 > {
-    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
     if let Some(g) = context.overlays.get(current_starmap_id) {
         return Ok(g
             .embeds
@@ -59,15 +162,17 @@ fn lookup_embed(
             .find(|e| e.instance_id == instance_id)
             .cloned());
     }
-    let mut store =
-        crate::starmap::store::StarMapStore::new(&context.app_data_root, current_starmap_id);
-    if store.load_full().is_err() {
-        return Err(MissingEmbed);
-    }
-    Ok(store.get_embed(instance_id).cloned())
+    let provider = ResolverGraphProvider {
+        app_data_root: &context.app_data_root,
+    };
+    provider
+        .get_embed(current_starmap_id, instance_id)
+        .map_err(map_read_error)
 }
 
-/// 从 context.overlays 或磁盘 Store 读取一个节点。
+/// 从 context.overlays 或磁盘只读 provider 读取一个节点。
+///
+/// 不调用 `StarMapStore::load_full`，避免 detect_dangling_references 递归。
 fn lookup_node(
     context: &GraphResolverContext,
     current_starmap_id: &str,
@@ -76,16 +181,15 @@ fn lookup_node(
     Option<crate::starmap::types::StarMapNode>,
     crate::starmap::semantic::StarMapTargetResolveStatus,
 > {
-    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
     if let Some(g) = context.overlays.get(current_starmap_id) {
         return Ok(g.nodes.iter().find(|n| n.id == node_id).cloned());
     }
-    let mut store =
-        crate::starmap::store::StarMapStore::new(&context.app_data_root, current_starmap_id);
-    if store.load_full().is_err() {
-        return Err(MissingNode);
-    }
-    Ok(store.get_node(node_id).cloned())
+    let provider = ResolverGraphProvider {
+        app_data_root: &context.app_data_root,
+    };
+    provider
+        .get_node(current_starmap_id, node_id)
+        .map_err(map_read_error)
 }
 
 /// 检查星图元数据是否存在（先查 context.overlays，找不到再查磁盘）。

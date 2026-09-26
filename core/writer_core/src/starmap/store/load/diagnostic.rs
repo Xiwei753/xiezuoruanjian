@@ -505,64 +505,159 @@ impl StarMapStore {
             overlays,
         };
 
-        // 辅助闭包：对一条引用路径做 resolve，失败时推入 DanglingReference diagnostic。
-        let mut check_path =
-            |path: &StarMapTargetPath, object_type: &str, object_id: &str, endpoint: &str| {
-                if let Err(status) = resolve_target(&context, path) {
-                    let detail = format!(
-                        "{} {} {}",
-                        endpoint,
-                        object_id,
-                        match status {
-                            StarMapTargetResolveStatus::MissingStarmap => {
-                                "references non-existent starmap"
-                            }
-                            StarMapTargetResolveStatus::MissingNode => {
-                                "references non-existent node"
-                            }
-                            StarMapTargetResolveStatus::MissingAnchor => {
-                                "references non-existent anchor"
-                            }
-                            StarMapTargetResolveStatus::MissingEmbed => {
-                                "references non-existent embed"
-                            }
-                            StarMapTargetResolveStatus::MissingPortal => {
-                                "references non-existent portal"
-                            }
-                            StarMapTargetResolveStatus::CycleDetected => "contains a cycle",
-                            StarMapTargetResolveStatus::InvalidRange => "has invalid range",
-                            StarMapTargetResolveStatus::TooDeep => "path too deep",
-                            StarMapTargetResolveStatus::Unresolved => "unresolved",
-                            StarMapTargetResolveStatus::Resolved => "resolved",
+        // 嵌套辅助函数：对一条引用路径做 resolve，失败时推入 DanglingReference diagnostic。
+        fn check_path(
+            context: &GraphResolverContext,
+            diagnostics: &mut Vec<LoadDiagnostic>,
+            path: &StarMapTargetPath,
+            object_type: &str,
+            object_id: &str,
+            endpoint: &str,
+        ) {
+            if let Err(status) = resolve_target(context, path) {
+                let detail = format!(
+                    "{} {} {}",
+                    endpoint,
+                    object_id,
+                    match status {
+                        StarMapTargetResolveStatus::MissingStarmap => {
+                            "references non-existent starmap"
                         }
-                    );
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: object_type.to_string(),
-                        object_id: object_id.to_string(),
-                        detail,
-                    });
-                }
-            };
+                        StarMapTargetResolveStatus::MissingNode => {
+                            "references non-existent node"
+                        }
+                        StarMapTargetResolveStatus::MissingAnchor => {
+                            "references non-existent anchor"
+                        }
+                        StarMapTargetResolveStatus::MissingEmbed => {
+                            "references non-existent embed"
+                        }
+                        StarMapTargetResolveStatus::MissingPortal => {
+                            "references non-existent portal"
+                        }
+                        StarMapTargetResolveStatus::CycleDetected => "contains a cycle",
+                        StarMapTargetResolveStatus::InvalidRange => "has invalid range",
+                        StarMapTargetResolveStatus::TooDeep => "path too deep",
+                        StarMapTargetResolveStatus::UnsupportedVersion => {
+                            "target starmap has unsupported schema version"
+                        }
+                        StarMapTargetResolveStatus::CorruptStarmap => "target starmap is corrupt",
+                        StarMapTargetResolveStatus::ReadFailed => "target starmap read failed",
+                        StarMapTargetResolveStatus::Unresolved => "unresolved",
+                        StarMapTargetResolveStatus::Resolved => "resolved",
+                    }
+                );
+                diagnostics.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::DanglingReference,
+                    object_type: object_type.to_string(),
+                    object_id: object_id.to_string(),
+                    detail,
+                });
+            }
+        }
 
+        // owned path 检查：起点 starmap_id 必须等于宿主图，否则直接记 DanglingReference。
+        //
+        // 写入 validation 已要求 `path.starmap_id == graph.starmap_id`，但 load diagnostics
+        // 直接 resolve_target。若磁盘坏数据写成 `path.starmap_id = B`，只要 B 上目标存在，
+        // resolver 返回 Resolved，diagnostics 反而认为正常。这里在 resolve 前先校验起点。
+        fn check_owned_path(
+            context: &GraphResolverContext,
+            diagnostics: &mut Vec<LoadDiagnostic>,
+            host_starmap_id: &str,
+            path: &StarMapTargetPath,
+            object_type: &str,
+            object_id: &str,
+            endpoint: &str,
+        ) {
+            if path.starmap_id != host_starmap_id {
+                diagnostics.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::DanglingReference,
+                    object_type: object_type.to_string(),
+                    object_id: object_id.to_string(),
+                    detail: format!(
+                        "{} {} invalid host path: starmap_id '{}' does not match host graph '{}'",
+                        endpoint, object_id, path.starmap_id, host_starmap_id
+                    ),
+                });
+                return;
+            }
+            check_path(context, diagnostics, path, object_type, object_id, endpoint);
+        }
+
+        let host_starmap_id = self.starmap_id.clone();
         for edge in self.edges.values() {
-            check_path(&edge.from, "edge", &edge.id, "edge from");
-            check_path(&edge.to, "edge", &edge.id, "edge to");
+            check_owned_path(
+                &context,
+                diagnostics,
+                &host_starmap_id,
+                &edge.from,
+                "edge",
+                &edge.id,
+                "edge from",
+            );
+            check_owned_path(
+                &context,
+                diagnostics,
+                &host_starmap_id,
+                &edge.to,
+                "edge",
+                &edge.id,
+                "edge to",
+            );
         }
         for embed in self.embeds.values() {
-            check_path(
+            // host_path 属于当前图，走 owned path 检查（起点必须等于宿主图）。
+            check_owned_path(
+                &context,
+                diagnostics,
+                &host_starmap_id,
                 &embed.host_path,
                 "embed",
                 &embed.instance_id,
                 "embed host_path",
             );
+            // target_starmap_id 是 embed 真正嵌进去的目标图，属于直接目标（非 owned path），
+            // 和 Portal destination 一样构造 synthetic path 检查目标星图是否存在。
+            let target_path = StarMapTargetPath {
+                starmap_id: embed.target_starmap_id.clone(),
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            };
+            check_path(
+                &context,
+                diagnostics,
+                &target_path,
+                "embed",
+                &embed.instance_id,
+                "embed target_starmap_id",
+            );
         }
         for link in self.links.values() {
-            check_path(&link.source, "link", &link.link_id, "link source");
-            check_path(&link.target, "link", &link.link_id, "link target");
+            check_owned_path(
+                &context,
+                diagnostics,
+                &host_starmap_id,
+                &link.source,
+                "link",
+                &link.link_id,
+                "link source",
+            );
+            check_owned_path(
+                &context,
+                diagnostics,
+                &host_starmap_id,
+                &link.target,
+                "link",
+                &link.link_id,
+                "link target",
+            );
         }
         for hl in self.hyperlinks.values() {
-            check_path(
+            check_owned_path(
+                &context,
+                diagnostics,
+                &host_starmap_id,
                 &hl.source,
                 "hyperlink",
                 &hl.hyperlink_id,
@@ -570,6 +665,7 @@ impl StarMapStore {
             );
         }
         // Portal destination：构造 StarMapTargetPath 检查目标星图和落点。
+        // Portal destination 是直接目标，不属于 owned path 起点规则，用 check_path。
         for node in self.nodes.values() {
             if let Some(portal) = &node.portal {
                 let target = portal
@@ -581,7 +677,14 @@ impl StarMapStore {
                     segments: vec![],
                     target,
                 };
-                check_path(&path, "node", &node.id, "node portal destination");
+                check_path(
+                    &context,
+                    diagnostics,
+                    &path,
+                    "node",
+                    &node.id,
+                    "node portal destination",
+                );
             }
         }
     }

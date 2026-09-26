@@ -1,6 +1,7 @@
 mod crud;
 mod load;
 mod relation_index;
+mod resolve_recursion;
 mod save;
 mod snapshot;
 
