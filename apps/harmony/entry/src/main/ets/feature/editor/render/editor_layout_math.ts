@@ -345,6 +345,14 @@ export function positionForOffsetInLine(
   return { utf16Offset, affinity: CaretAffinity.Downstream }
 }
 
+/** 系统行度量纯数据（从 LayoutManager.getLineMetrics() 提取）。 */
+export interface SystemLineMetricData {
+  readonly startIndex: number
+  readonly endIndex: number
+  readonly isLastLine: boolean
+  readonly text: string
+}
+
 /**
  * Issue #768 任务10：从系统 LineMetrics 纯数据构建 LineRange[]。
  * 不依赖 ArkUI LayoutManager 对象，只接受纯数据参数，保持纯函数性质。
@@ -354,7 +362,7 @@ export function positionForOffsetInLine(
  * - 非末行：text[endIndex-1] === '\n' → HardBreak，否则 SoftWrap
  */
 export function buildLineRangesFromMetrics(
-  lineMetricsData: Array<{ startIndex: number; endIndex: number; isLastLine: boolean; text: string }>,
+  lineMetricsData: SystemLineMetricData[],
 ): LineRange[] {
   const ranges: LineRange[] = []
   for (const data of lineMetricsData) {

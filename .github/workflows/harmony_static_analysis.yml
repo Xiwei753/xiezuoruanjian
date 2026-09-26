@@ -1,0 +1,45 @@
+name: HarmonyOS Static Analysis
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'apps/harmony/**'
+      - 'core/writer_core/**'
+      - 'tools/build_harmony*'
+      - '.github/workflows/harmony_static_analysis.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  harmony-static-analysis:
+    name: HarmonyOS ArkTS Lint & Build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup HarmonyOS CLI
+        run: |
+          source tools/setup_harmony_cli.sh
+          echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        working-directory: apps/harmony
+        run: ohpm install
+
+      - name: Run validate.mjs
+        working-directory: apps/harmony
+        run: node validate.mjs
+
+      - name: Run codelinter
+        working-directory: apps/harmony
+        run: codelinter
+
+      - name: Build HarmonyOS app (debug)
+        working-directory: apps/harmony
+        run: ./hvigorw --mode project -p product=default -p buildMode=debug assembleApp

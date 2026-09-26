@@ -10,7 +10,7 @@
 
 import { EditorLayoutSnapshot } from './EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
-import { layoutLines, hitTestPoint, CaretAffinity, LineBreakKind, buildLineRangesFromMetrics } from './editor_layout_math'
+import { layoutLines, hitTestPoint, CaretAffinity, LineBreakKind, buildLineRangesFromMetrics, SystemLineMetricData } from './editor_layout_math'
 import { VisualCaretPosition, LineRange } from './editor_layout_math'
 import {
   toLineLayouts,
@@ -27,6 +27,7 @@ import {
   CARET_WIDTH_PX,
   UNDERLINE_HEIGHT_PX,
 } from './editor_render_geometry'
+import { text } from '@kit.ArkGraphics2D'
 
 export interface EditorRenderResult {
   text: string
@@ -172,7 +173,7 @@ export class EditorRenderBackend {
 
     // 1. 从 LineMetrics 构建 LineLayout[] 和 LineRange[]
     const systemLines: LineLayout[] = []
-    const lineMetricsData: Array<{ startIndex: number; endIndex: number; isLastLine: boolean; text: string }> = []
+    const lineMetricsData: SystemLineMetricData[] = []
     for (let i = 0; i < systemLineCount; i++) {
       const metrics = layout.getLineMetrics(i)
       const startUtf16 = metrics.startIndex
@@ -198,10 +199,15 @@ export class EditorRenderBackend {
       })
     }
     const systemLineRanges = buildLineRangesFromMetrics(lineMetricsData)
-    // 用推导出的 breakKind 更新 systemLines
+    // 用推导出的 breakKind 更新 systemLines（显式复制，不用 object spread）
     for (let i = 0; i < systemLines.length; i++) {
       systemLines[i] = {
-        ...systemLines[i],
+        startUtf16: systemLines[i].startUtf16,
+        endUtf16: systemLines[i].endUtf16,
+        left: systemLines[i].left,
+        y: systemLines[i].y,
+        height: systemLines[i].height,
+        caretStops: systemLines[i].caretStops,
         breakKind: systemLineRanges[i].breakKind,
       }
     }
@@ -266,7 +272,7 @@ export class EditorRenderBackend {
     const result = layout.getGlyphPositionAtCoordinate(touchX, touchY)
     // PositionWithAffinity.affinity: UPSTREAM=0, DOWNSTREAM=1
     // CaretAffinity: Upstream='upstream', Downstream='downstream'
-    const affinity: CaretAffinity = result.affinity === Affinity.UPSTREAM
+    const affinity: CaretAffinity = result.affinity === text.Affinity.UPSTREAM
       ? CaretAffinity.Upstream
       : CaretAffinity.Downstream
     return { utf16Offset: result.position, affinity }
@@ -286,7 +292,7 @@ export class EditorRenderBackend {
     try {
       const range: TextRange = { start: selStart, end: selEnd }
       const textBoxes: TextBox[] = layout.getRectsForRange(
-        range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+        range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
       )
       const rects: SelectionRect[] = []
       for (const box of textBoxes) {
@@ -367,7 +373,7 @@ export class EditorRenderBackend {
           // soft-wrap 边界 Upstream：取 [cursor-1, cursor] 的 right（当前行末尾）
           const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
           const textBoxes: TextBox[] = layout.getRectsForRange(
-            range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+            range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
           )
           if (textBoxes.length > 0) {
             x = textBoxes[textBoxes.length - 1].rect.right
@@ -378,7 +384,7 @@ export class EditorRenderBackend {
           // 正常情况或 Downstream：取 [cursor, cursor+1] 的 left
           const range: TextRange = { start: cursorUtf16, end: cursorUtf16 + 1 }
           const textBoxes: TextBox[] = layout.getRectsForRange(
-            range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+            range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
           )
           if (textBoxes.length > 0) {
             x = textBoxes[0].rect.left
@@ -391,7 +397,7 @@ export class EditorRenderBackend {
         if (cursorUtf16 > 0) {
           const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
           const textBoxes: TextBox[] = layout.getRectsForRange(
-            range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+            range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
           )
           if (textBoxes.length > 0) {
             x = textBoxes[textBoxes.length - 1].rect.right
@@ -426,7 +432,7 @@ export class EditorRenderBackend {
     try {
       const range: TextRange = { start: compStart, end: compEnd }
       const textBoxes: TextBox[] = layout.getRectsForRange(
-        range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT,
+        range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
       )
       const rects: CompositionUnderlineRect[] = []
       for (const box of textBoxes) {

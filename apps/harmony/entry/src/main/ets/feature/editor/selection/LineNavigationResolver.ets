@@ -16,9 +16,11 @@ import {
   resolveVisualLineIndex,
   buildLineRangesFromMetrics,
   buildLineCaretStops,
+  SystemLineMetricData,
 } from '../render/editor_layout_math'
 import { CaretStop, LineRange, VisualCaretPosition } from '../render/editor_layout_math'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
+import { text } from '@kit.ArkGraphics2D'
 
 import { LineLayoutStore } from './line_layout_store'
 import { EditorLayoutIdentity } from './editor_layout_identity'
@@ -191,7 +193,7 @@ export class LineNavigationResolver {
       // soft-wrap 边界 Upstream：取 [cursor-1, cursor] 的 right
       if (affinity === CaretAffinity.Upstream && cursorUtf16 > 0 && cursorUtf16 < textLength) {
         const range: TextRange = { start: cursorUtf16 - 1, end: cursorUtf16 }
-        const boxes = layout.getRectsForRange(range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT)
+        const boxes = layout.getRectsForRange(range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT)
         if (boxes.length > 0) {
           return boxes[boxes.length - 1].rect.right
         }
@@ -206,7 +208,7 @@ export class LineNavigationResolver {
       } else {
         return 0 // 空文本
       }
-      const boxes = layout.getRectsForRange(range, RectWidthStyle.TIGHT, RectHeightStyle.TIGHT)
+      const boxes = layout.getRectsForRange(range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT)
       if (boxes.length > 0) {
         if (cursorUtf16 < textLength) {
           return boxes[0].rect.left
@@ -255,7 +257,7 @@ export class LineNavigationResolver {
     measureTextFn?: (s: string) => number,
   ): LineLayoutState {
     const text = snapshot.text
-    const lineMetricsData: Array<{ startIndex: number; endIndex: number; isLastLine: boolean; text: string }> = []
+    const lineMetricsData: SystemLineMetricData[] = []
     const systemLines: NavigationLine[] = []
 
     for (let i = 0; i < systemLineCount; i++) {
@@ -299,10 +301,15 @@ export class LineNavigationResolver {
     }
 
     const systemLineRanges = buildLineRangesFromMetrics(lineMetricsData)
-    // 用推导出的 breakKind 更新 systemLines
+    // 用推导出的 breakKind 更新 systemLines（显式复制，不用 object spread）
     for (let i = 0; i < systemLines.length; i++) {
       systemLines[i] = {
-        ...systemLines[i],
+        startUtf16: systemLines[i].startUtf16,
+        endUtf16: systemLines[i].endUtf16,
+        left: systemLines[i].left,
+        y: systemLines[i].y,
+        height: systemLines[i].height,
+        caretStops: systemLines[i].caretStops,
         breakKind: systemLineRanges[i].breakKind,
       }
     }
