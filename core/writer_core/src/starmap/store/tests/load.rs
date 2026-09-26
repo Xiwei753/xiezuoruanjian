@@ -642,15 +642,10 @@ fn save_starmap_graph_corrupt_existing_returns_error() {
     std::fs::write(&graph_json, "not valid json at all {{{").unwrap();
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let result = store2.load_full().unwrap();
-    let corrupt: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.kind == LoadDiagnosticKind::Corrupt)
-        .collect();
+    let result = store2.load_full();
     assert!(
-        !corrupt.is_empty(),
-        "should report corrupt graph.json as Corrupt diagnostic"
+        result.is_err(),
+        "fail-closed: corrupt graph.json should cause load_full to return Err"
     );
 }
 

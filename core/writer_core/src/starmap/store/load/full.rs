@@ -20,24 +20,20 @@ impl StarMapStore {
         let graph_dir = self.starmap_dir();
         let graph_json_path = graph_dir.join("graph.json");
 
-        match super::phased::load_current_graph_meta(&graph_json_path) {
+        match super::phased::load_current_graph_meta(&graph_json_path, &self.starmap_id) {
             Ok(Some(meta)) => {
                 self.graph_meta = Some(meta);
             }
             Ok(None) => {
-                self.scan_objects_from_disk(&mut diagnostics);
+                // graph.json 不存在：允许新空图，保持空图，不调 scan_objects_from_disk。
             }
             Err(Error::UnsupportedVersion { version }) => {
                 return Err(Error::UnsupportedVersion { version });
             }
             Err(e) => {
-                diagnostics.push(LoadDiagnostic {
-                    kind: LoadDiagnosticKind::Corrupt,
-                    object_type: "graph".to_string(),
-                    object_id: self.starmap_id.clone(),
-                    detail: format!("graph.json parse failed: {}", e),
-                });
-                self.scan_objects_from_disk(&mut diagnostics);
+                // JSON corrupt / IO read failed：fail-closed 直接返回 Err，
+                // 不再记 Corrupt diagnostic 后继续 scan_objects_from_disk。
+                return Err(e);
             }
         }
 

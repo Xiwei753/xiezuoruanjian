@@ -135,36 +135,26 @@ fn validate_nodes(
 
         if let Some(portal) = &node.portal {
             // 所有 mode（EnterPortal/PreviewInline/ReferenceOnly）都必须保证
-            // destination_starmap_id 存在；不能只在校验 EnterPortal 时才查。
-            // 使用 context（包含 overlays）检查目标星图是否存在。
-            if !crate::starmap::graph::resolve::starmap_exists(
-                context,
-                &portal.destination_starmap_id,
-            ) {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Portal destination_starmap_id does not exist",
-                )));
-            }
-            // 可选落点必须通过统一 resolver 校验
-            if let Some(detail) = &portal.destination_target {
-                let path = StarMapTargetPath {
-                    starmap_id: portal.destination_starmap_id.clone(),
-                    segments: vec![],
-                    target: detail.clone(),
-                };
-                let status = resolve_target_path(context, &path);
-                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                match status {
-                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-                    | MissingEmbed | MissingPortal | InvalidRange | UnsupportedVersion
-                    | CorruptStarmap | ReadFailed => {
-                        return Err(Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Portal destination_target resolve failed: {:?}", status),
-                        )));
-                    }
-                    _ => {}
+            // destination_starmap_id 存在且落点可达。统一走 resolve_target_path：
+            // 无论 destination_target 有没有值，都构造 synthetic path 解析。
+            // 无 destination_target 时用 StarMapTargetDetail::Starmap（只检查目标星图存在）。
+            let path = StarMapTargetPath {
+                starmap_id: portal.destination_starmap_id.clone(),
+                segments: vec![],
+                target: portal
+                    .destination_target
+                    .clone()
+                    .unwrap_or(crate::starmap::semantic::StarMapTargetDetail::Starmap),
+            };
+            let status = resolve_target_path(context, &path);
+            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+            match status {
+                Resolved => {}
+                _ => {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Portal destination resolve failed: {:?}", status),
+                    )));
                 }
             }
         }
@@ -331,13 +321,22 @@ fn validate_embeds(
             )));
         }
 
-        if crate::starmap::load_starmap_meta(&context.app_data_root, &embed.target_starmap_id)
-            .is_err()
-        {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Embed target starmap does not exist",
-            )));
+        // 统一走 resolve_target_path 校验目标星图存在且可读。
+        let embed_target_path = StarMapTargetPath {
+            starmap_id: embed.target_starmap_id.clone(),
+            segments: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+        };
+        let embed_status = resolve_target_path(context, &embed_target_path);
+        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+        match embed_status {
+            Resolved => {}
+            _ => {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Embed target starmap resolve failed: {:?}", embed_status),
+                )));
+            }
         }
 
         let p = &embed.placement;

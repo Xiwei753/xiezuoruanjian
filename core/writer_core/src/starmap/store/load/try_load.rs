@@ -25,7 +25,21 @@ impl StarMapStore {
         }
         let content = std::fs::read_to_string(&bucket_path).ok()?;
         match serde_json::from_str::<StarMapNode>(&content) {
-            Ok(node) => Some(node),
+            Ok(node) => {
+                if node.id != node_id {
+                    self.recovery_log.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::Corrupt,
+                        object_type: "node".to_string(),
+                        object_id: node_id.to_string(),
+                        detail: format!(
+                            "node internal id '{}' does not match filename '{}'",
+                            node.id, node_id
+                        ),
+                    });
+                    return None;
+                }
+                Some(node)
+            }
             Err(e) => {
                 self.recovery_log.push(LoadDiagnostic {
                     kind: LoadDiagnosticKind::Corrupt,
@@ -58,7 +72,21 @@ impl StarMapStore {
         }
         let content = std::fs::read_to_string(&bucket_path).ok()?;
         match serde_json::from_str::<StarMapEdge>(&content) {
-            Ok(edge) => Some(edge),
+            Ok(edge) => {
+                if edge.id != edge_id {
+                    self.recovery_log.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::Corrupt,
+                        object_type: "edge".to_string(),
+                        object_id: edge_id.to_string(),
+                        detail: format!(
+                            "edge internal id '{}' does not match filename '{}'",
+                            edge.id, edge_id
+                        ),
+                    });
+                    return None;
+                }
+                Some(edge)
+            }
             Err(e) => {
                 self.recovery_log.push(LoadDiagnostic {
                     kind: LoadDiagnosticKind::Corrupt,
@@ -91,7 +119,21 @@ impl StarMapStore {
         }
         let content = std::fs::read_to_string(&bucket_path).ok()?;
         match serde_json::from_str::<StarMapEmbed>(&content) {
-            Ok(embed) => Some(embed),
+            Ok(embed) => {
+                if embed.instance_id != instance_id {
+                    self.recovery_log.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::Corrupt,
+                        object_type: "embed".to_string(),
+                        object_id: instance_id.to_string(),
+                        detail: format!(
+                            "embed internal instance_id '{}' does not match filename '{}'",
+                            embed.instance_id, instance_id
+                        ),
+                    });
+                    return None;
+                }
+                Some(embed)
+            }
             Err(e) => {
                 self.recovery_log.push(LoadDiagnostic {
                     kind: LoadDiagnosticKind::Corrupt,
@@ -124,7 +166,21 @@ impl StarMapStore {
         }
         let content = std::fs::read_to_string(&bucket_path).ok()?;
         match serde_json::from_str::<StarMapHyperlink>(&content) {
-            Ok(hl) => Some(hl),
+            Ok(hl) => {
+                if hl.hyperlink_id != hyperlink_id {
+                    self.recovery_log.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::Corrupt,
+                        object_type: "hyperlink".to_string(),
+                        object_id: hyperlink_id.to_string(),
+                        detail: format!(
+                            "hyperlink internal id '{}' does not match filename '{}'",
+                            hl.hyperlink_id, hyperlink_id
+                        ),
+                    });
+                    return None;
+                }
+                Some(hl)
+            }
             Err(e) => {
                 self.recovery_log.push(LoadDiagnostic {
                     kind: LoadDiagnosticKind::Corrupt,
@@ -162,7 +218,21 @@ impl StarMapStore {
         }
         let content = std::fs::read_to_string(&bucket_path).ok()?;
         match serde_json::from_str::<StarMapLink>(&content) {
-            Ok(link) => Some(link),
+            Ok(link) => {
+                if link.link_id != link_id {
+                    self.recovery_log.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::Corrupt,
+                        object_type: "link".to_string(),
+                        object_id: link_id.to_string(),
+                        detail: format!(
+                            "link internal id '{}' does not match filename '{}'",
+                            link.link_id, link_id
+                        ),
+                    });
+                    return None;
+                }
+                Some(link)
+            }
             Err(e) => {
                 self.recovery_log.push(LoadDiagnostic {
                     kind: LoadDiagnosticKind::Corrupt,

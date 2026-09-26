@@ -7,13 +7,18 @@ use super::super::relation_index::{extract_ehi_node_refs, extract_eri_node_refs}
 use super::super::types::*;
 use super::super::StarMapStore;
 
-/// 读取 graph.json 并校验 schema 版本的唯一入口。
+/// 读取 graph.json 并校验 schema 版本与 starmap_id 一致性的唯一入口。
 ///
 /// 统一执行：读 JSON → 取 schemaVersion → 非当前版本返回
-/// `UnsupportedVersion` → 当前版本 deserialize GraphMeta。
+/// `UnsupportedVersion` → 当前版本 deserialize GraphMeta → 校验
+/// `meta.starmap_id == expected_starmap_id`（不一致返回 `Error::Other`，
+/// 上层 resolve 会映射成 `CorruptStarmap`）。
 /// `load_full`、`load_graph_meta_phase`、`reload_graph_meta_if_stale`
-/// 全部走此函数，确保 schema 检查不被绕过。
-pub(in crate::starmap) fn load_current_graph_meta(path: &Path) -> Result<Option<GraphMeta>> {
+/// 全部走此函数，确保 schema 检查与 ID 一致性检查不被绕过。
+pub(in crate::starmap) fn load_current_graph_meta(
+    path: &Path,
+    expected_starmap_id: &str,
+) -> Result<Option<GraphMeta>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -33,13 +38,19 @@ pub(in crate::starmap) fn load_current_graph_meta(path: &Path) -> Result<Option<
     }
 
     let meta: GraphMeta = serde_json::from_str(&content)?;
+    if meta.starmap_id != expected_starmap_id {
+        return Err(Error::Other(format!(
+            "GraphMeta starmap_id '{}' does not match expected '{}'",
+            meta.starmap_id, expected_starmap_id
+        )));
+    }
     Ok(Some(meta))
 }
 
 impl StarMapStore {
     pub(in crate::starmap::store) fn reload_graph_meta_if_stale(&mut self) -> Result<()> {
         let graph_json_path = self.starmap_dir().join("graph.json");
-        let Some(disk_meta) = load_current_graph_meta(&graph_json_path)? else {
+        let Some(disk_meta) = load_current_graph_meta(&graph_json_path, &self.starmap_id)? else {
             return Ok(());
         };
         let mem_rev = self
@@ -126,8 +137,11 @@ impl StarMapStore {
         &mut self,
         diagnostics: &mut Vec<LoadDiagnostic>,
     ) -> Result<()> {
+        // fail-closed：graph.json 损坏/IO 失败直接返回 Err，不再记 Corrupt diagnostic 后继续。
+        // diagnostics 参数保留以维持调用签名兼容，此处不再向其写入。
+        let _ = diagnostics;
         let graph_json_path = self.starmap_dir().join("graph.json");
-        match load_current_graph_meta(&graph_json_path) {
+        match load_current_graph_meta(&graph_json_path, &self.starmap_id) {
             Ok(Some(meta)) => {
                 self.graph_meta = Some(meta);
             }
@@ -136,12 +150,7 @@ impl StarMapStore {
                 return Err(Error::UnsupportedVersion { version });
             }
             Err(e) => {
-                diagnostics.push(LoadDiagnostic {
-                    kind: LoadDiagnosticKind::Corrupt,
-                    object_type: "graph".to_string(),
-                    object_id: self.starmap_id.clone(),
-                    detail: format!("graph.json parse failed: {}", e),
-                });
+                return Err(e);
             }
         }
         Ok(())

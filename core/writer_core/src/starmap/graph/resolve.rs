@@ -85,7 +85,7 @@ impl<'a> ResolverGraphProvider<'a> {
         if !graph_json_path.exists() {
             return Ok(None);
         }
-        match load_current_graph_meta(&graph_json_path) {
+        match load_current_graph_meta(&graph_json_path, starmap_id) {
             Ok(meta) => Ok(meta),
             Err(crate::error::Error::UnsupportedVersion { .. }) => {
                 Err(ResolverReadError::UnsupportedVersion)
@@ -120,9 +120,12 @@ impl<'a> ResolverGraphProvider<'a> {
             return Ok(None);
         }
         let content = std::fs::read_to_string(&path).map_err(|_| ResolverReadError::ReadFailed)?;
-        serde_json::from_str::<crate::starmap::types::StarMapNode>(&content)
-            .map(Some)
-            .map_err(|_| ResolverReadError::CorruptStarmap)
+        let node = serde_json::from_str::<crate::starmap::types::StarMapNode>(&content)
+            .map_err(|_| ResolverReadError::CorruptStarmap)?;
+        if node.id != node_id {
+            return Err(ResolverReadError::CorruptStarmap);
+        }
+        Ok(Some(node))
     }
 
     /// 读取一个 embed 对象文件。文件不存在或不在 GraphMeta 成员列表中返回 `Ok(None)`。
@@ -150,9 +153,12 @@ impl<'a> ResolverGraphProvider<'a> {
             return Ok(None);
         }
         let content = std::fs::read_to_string(&path).map_err(|_| ResolverReadError::ReadFailed)?;
-        serde_json::from_str::<crate::starmap::types::StarMapEmbed>(&content)
-            .map(Some)
-            .map_err(|_| ResolverReadError::CorruptStarmap)
+        let embed = serde_json::from_str::<crate::starmap::types::StarMapEmbed>(&content)
+            .map_err(|_| ResolverReadError::CorruptStarmap)?;
+        if embed.instance_id != instance_id {
+            return Err(ResolverReadError::CorruptStarmap);
+        }
+        Ok(Some(embed))
     }
 
     /// 检查星图是否可读：星图 meta 文件存在且 graph.json（若存在）能正确解析。
@@ -176,7 +182,7 @@ impl<'a> ResolverGraphProvider<'a> {
             // 空星图（尚未写入任何对象），可读
             return Ok(true);
         }
-        match load_current_graph_meta(&graph_json_path) {
+        match load_current_graph_meta(&graph_json_path, starmap_id) {
             Ok(_) => Ok(true),
             Err(crate::error::Error::UnsupportedVersion { .. }) => {
                 Err(ResolverReadError::UnsupportedVersion)
@@ -247,29 +253,9 @@ fn lookup_node(
         .map_err(map_read_error)
 }
 
-/// 检查星图是否存在且可读（先查 context.overlays，找不到再查磁盘 provider）。
-///
-/// 使用 `starmap_exists_and_readable` 而非仅查目录存在，确保 schema 不兼容
-/// 或 graph.json 损坏的星图不会被误判为存在。
-///
-/// **fail-safe 语义**：遇到 `UnsupportedVersion/CorruptStarmap/ReadFailed` 时返回 `true`，
-/// 因为删除保护调用此函数时，不能把"读取失败"当成"星图不存在"而允许删除。
-/// `resolve_target` 的起点检查不使用此函数，而是直接调用 `starmap_exists_and_readable`
-/// 以获取精确的错误类型。
-pub(crate) fn starmap_exists(context: &GraphResolverContext, starmap_id: &str) -> bool {
-    if context.overlays.contains_key(starmap_id) {
-        return true;
-    }
-    let provider = ResolverGraphProvider {
-        app_data_root: &context.app_data_root,
-    };
-    // fail-safe：读取错误时认为星图存在（防止删除保护误删）
-    provider.starmap_exists_and_readable(starmap_id).unwrap_or(true)
-}
-
 /// `resolve_target` 内部使用的星图可读性检查，返回精确的错误类型。
 ///
-/// 与 `starmap_exists` 不同，此函数在遇到 `UnsupportedVersion/CorruptStarmap/ReadFailed`
+/// 此函数在遇到 `UnsupportedVersion/CorruptStarmap/ReadFailed`
 /// 时返回对应的 `StarMapTargetResolveStatus`，而不是 fail-safe 返回 `true`。
 /// 这确保 resolver 能向上传递"目标星图 schema 不兼容"等错误，而不是吞成 `MissingStarmap`。
 fn check_starmap_readable(
