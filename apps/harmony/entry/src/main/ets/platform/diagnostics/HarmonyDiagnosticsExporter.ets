@@ -171,10 +171,14 @@ export class HarmonyDiagnosticsExporter {
       const shareDir = `${filesDir}/${DIAGNOSTICS_DIR}/share`
       this.ensureOutputDir(shareDir)
 
-      const zipFileName = this.extractFileName(zipPath)
-      const shareZipPath = `${shareDir}/${zipFileName}`
+      // 固定分享文件名：share 目录只保留当前待分享的一份，不做历史仓库。
+      // snapshots/ 负责内部历史，share/ 永远只有一份。
+      const shareZipPath = `${shareDir}/sujian-diagnostics-share.zip`
 
-      // copy zip 到 share 目录
+      // 旧文件存在先删，避免堆积重复 zip
+      if (fs.accessSync(shareZipPath)) {
+        fs.unlinkSync(shareZipPath)
+      }
       fs.copyFileSync(zipPath, shareZipPath)
 
       // 验证 share copy 的 size

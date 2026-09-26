@@ -14,5 +14,7 @@ export interface SharePayload {
   title?: string
   text?: string
   uris?: string[]
+  // utd = 文件真实 UTD；file kind 三个分享后端统一消费。
+  // 未提供时退回 general.file-uri。
   utd?: string
 }

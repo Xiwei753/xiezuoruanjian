@@ -40,10 +40,11 @@ function payloadToSharedDataConfig(payload) {
 
   if (kind === 'file' && validUris.length > 0) {
     // 文件分享：主记录是 general.file-uri，带 title
-    const primaryRecord = { utd: 'general.file-uri', uri: validUris[0], title: titleValue }
+    const fileUtd = payload.utd ?? 'general.file-uri'
+    const primaryRecord = { utd: fileUtd, uri: validUris[0], title: titleValue }
     const additionalRecords = []
     for (let i = 1; i < validUris.length; i++) {
-      additionalRecords.push({ utd: 'general.file-uri', uri: validUris[i], title: titleValue })
+      additionalRecords.push({ utd: fileUtd, uri: validUris[i], title: titleValue })
     }
     if (hasText) {
       additionalRecords.push({ utd: 'general.text', content: payload.text })
@@ -147,9 +148,15 @@ assert(r.additionalRecords.length === 2, '两条额外 URI 记录')
 assert(r.additionalRecords[0].uri === 'b', '额外记录[0].uri=b')
 assert(r.additionalRecords[1].uri === 'c', '额外记录[1].uri=c')
 
-console.log('12. 诊断包场景：kind=file, title=素笺诊断包, uris=[zip]')
-r = payloadToSharedDataConfig({ kind: 'file', title: '素笺诊断包', uris: ['file://sujian-diagnostics-2026.zip'] })
-assert(r.primaryRecord.utd === 'general.file-uri', '诊断包主记录 utd=general.file-uri（不是 text）')
+console.log('12. 诊断包场景：kind=file, title=素笺诊断包, utd=general.zip-archive, uris=[zip]')
+r = payloadToSharedDataConfig({
+  kind: 'file',
+  title: '素笺诊断包',
+  utd: 'general.zip-archive',
+  uris: ['file://sujian-diagnostics-2026.zip']
+})
+assert(r.primaryRecord.utd === 'general.zip-archive',
+  '诊断包主记录使用真实 ZIP UTD')
 assert(r.primaryRecord.uri === 'file://sujian-diagnostics-2026.zip', '诊断包主记录 uri=zip')
 assert(r.primaryRecord.title === '素笺诊断包', '诊断包主记录 title=素笺诊断包')
 assert(eq(r.additionalRecords, []), '诊断包无额外记录')

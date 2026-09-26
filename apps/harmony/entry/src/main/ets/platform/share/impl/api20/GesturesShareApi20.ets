@@ -110,14 +110,15 @@ export class GesturesShareApi20 {
 
     if (payload !== undefined && payload !== null && payload.kind === 'file' && validUris.length > 0) {
       // 文件分享：第一条必须是 general.file-uri，带 title 元数据。
+      const fileUtd: string = payload.utd ?? 'general.file-uri'
       const primary: systemShare.SharedRecord = {
-        utd: 'general.file-uri',
+        utd: fileUtd,
         uri: validUris[0],
         title: titleValue
       }
       const data: systemShare.SharedData = new systemShare.SharedData(primary)
       for (let i = 1; i < validUris.length; i++) {
-        data.addRecord({ utd: 'general.file-uri', uri: validUris[i], title: titleValue })
+        data.addRecord({ utd: fileUtd, uri: validUris[i], title: titleValue })
       }
       if (hasText) {
         data.addRecord({ utd: 'general.text', content: payload.text })
