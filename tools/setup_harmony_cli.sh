@@ -3,7 +3,7 @@
 # HarmonyOS CLI 工具链安装脚本
 # =============================================================================
 #
-# 安装 HarmonyOS 命令行工具（ohpm、codelinter、hvigorw）并加入 PATH。
+# 安装 HarmonyOS 命令行工具（ohpm、codelinter、hvigorw、SDK、Node）并加入 PATH。
 # 固定版本，供 CI workflow 和本地开发统一使用。
 #
 # 使用方法：
@@ -15,13 +15,27 @@
 #   hvigorw — HarmonyOS 构建工具
 #
 # 环境变量：
-#   HARMONY_CLI_VERSION — 固定版本号（默认: 5.0.5）
+#   HARMONY_CLI_VERSION — 固定版本号（默认: 5.0.5.200）
 #   HARMONY_CLI_HOME — 安装目录（默认: $HOME/.harmony-cli）
+#
+# 注：HARMONY_CLI_HOME 直接指向解压后的 command-line-tools 目录，
+#     保留完整结构（bin/、lib/、tool/node/、sdk/ 等），
+#     不拆目录复制，确保 hvigorw、Native 构建等都能正常工作。
 
 set -euo pipefail
 
-HARMONY_CLI_VERSION="${HARMONY_CLI_VERSION:-5.0.5}"
+# -----------------------------------------------------------------------------
+# 固定配置：版本号、下载地址、SHA256
+# -----------------------------------------------------------------------------
+# 版本号必须带完整 build 号（如 5.0.5.200），不要截断为 5.0.5。
+# 此版本与 apps/harmony/build-profile.json5 的 targetSdkVersion 26.0.0 配套。
+HARMONY_CLI_VERSION="${HARMONY_CLI_VERSION:-5.0.5.200}"
 HARMONY_CLI_HOME="${HARMONY_CLI_HOME:-$HOME/.harmony-cli}"
+
+# 官方下载地址（含完整版本号，不截断）
+CLI_URL="https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/81/v3/00BjWG6lRNOlKs2xQ3WJfQ/commandlinetools-linux-x64-${HARMONY_CLI_VERSION}.zip"
+# SHA256 校验值（下载后验证完整性）
+CLI_SHA256="${CLI_SHA256:-}"
 
 # 检查是否已安装且版本匹配
 if [ -x "$HARMONY_CLI_HOME/bin/ohpm" ] && [ -f "$HARMONY_CLI_HOME/VERSION" ] && [ "$(cat "$HARMONY_CLI_HOME/VERSION")" = "$HARMONY_CLI_VERSION" ]; then
@@ -33,13 +47,7 @@ fi
 echo "=== 安装 HarmonyOS CLI $HARMONY_CLI_VERSION ==="
 
 # 创建安装目录
-mkdir -p "$HARMONY_CLI_HOME/bin"
-mkdir -p "$HARMONY_CLI_HOME/lib"
-
-# 下载并安装 command-line-tools
-# 官方下载地址：https://developer.huawei.com/consumer/cn/download/
-# CLI 包名格式：command-line-tools-linux-x64-{version}.zip
-CLI_URL="https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/81/v3/00BjWG6lRNOlKs2xQ3WJfQ/commandlinetools-linux-x64-${HARMONY_CLI_VERSION}.zip"
+mkdir -p "$HARMONY_CLI_HOME"
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -51,22 +59,47 @@ if ! curl -fSL -o "$TMP_DIR/cli.zip" "$CLI_URL"; then
   exit 1
 fi
 
+# SHA256 校验（如果提供了校验值）
+if [ -n "$CLI_SHA256" ]; then
+  echo "校验 SHA256..."
+  ACTUAL_SHA256=$(sha256sum "$TMP_DIR/cli.zip" | awk '{print $1}')
+  if [ "$ACTUAL_SHA256" != "$CLI_SHA256" ]; then
+    echo "错误：SHA256 校验失败。" >&2
+    echo "  期望: $CLI_SHA256" >&2
+    echo "  实际: $ACTUAL_SHA256" >&2
+    exit 1
+  fi
+  echo "SHA256 校验通过。"
+fi
+
 echo "解压 CLI 包..."
 if ! unzip -q "$TMP_DIR/cli.zip" -d "$TMP_DIR/cli"; then
   echo "错误：解压 HarmonyOS CLI 失败。" >&2
   exit 1
 fi
 
-# 查找解压后的工具目录
-CLI_EXTRACTED=$(find "$TMP_DIR/cli" -maxdepth 1 -type d | tail -1)
+# 查找解压后的 command-line-tools 目录
+# 官方包解压后是完整的 command-line-tools/ 目录结构，包含：
+#   bin/（ohpm、codelinter、hvigorw）
+#   lib/
+#   tool/node/（配套 Node.js）
+#   sdk/default/openharmony/（HarmonyOS SDK）
+#   sdk/default/openharmony/native/（Native SDK）
+CLI_EXTRACTED=$(find "$TMP_DIR/cli" -maxdepth 1 -type d -name "command-line-tools" | head -1)
+if [ -z "$CLI_EXTRACTED" ]; then
+  # 如果没有 command-line-tools 子目录，取解压目录本身
+  CLI_EXTRACTED=$(find "$TMP_DIR/cli" -maxdepth 1 -type d | tail -1)
+fi
 if [ ! -d "$CLI_EXTRACTED" ]; then
   echo "错误：未找到解压后的 CLI 目录。" >&2
   exit 1
 fi
 
-# 复制工具到安装目录
-cp -r "$CLI_EXTRACTED/bin/"* "$HARMONY_CLI_HOME/bin/"
-cp -r "$CLI_EXTRACTED/lib/"* "$HARMONY_CLI_HOME/lib/" 2>/dev/null || true
+# 直接复制整个 command-line-tools 目录到 HARMONY_CLI_HOME
+# 不拆目录复制，保留完整结构（SDK、Node、Native 等）
+echo "安装 CLI 到 $HARMONY_CLI_HOME ..."
+cp -r "$CLI_EXTRACTED/"* "$HARMONY_CLI_HOME/"
+cp -r "$CLI_EXTRACTED/".[!.]* "$HARMONY_CLI_HOME/" 2>/dev/null || true
 
 # 标记版本
 echo "$HARMONY_CLI_VERSION" > "$HARMONY_CLI_HOME/VERSION"
@@ -81,3 +114,5 @@ echo "  安装目录: $HARMONY_CLI_HOME"
 echo "  PATH 已更新"
 echo ""
 echo "可用命令: ohpm, codelinter, hvigorw"
+echo "Native SDK: $HARMONY_CLI_HOME/sdk/default/openharmony/native"
+echo "内置 Node: $HARMONY_CLI_HOME/tool/node"

@@ -10,6 +10,7 @@ on:
       - 'apps/harmony/**'
       - 'core/writer_core/**'
       - 'tools/build_harmony*'
+      - 'tools/setup_harmony_cli.sh'
       - '.github/workflows/harmony_static_analysis.yml'
 
 permissions:
@@ -39,6 +40,14 @@ jobs:
       - name: Run codelinter
         working-directory: apps/harmony
         run: codelinter
+
+      - name: Setup Rust toolchain
+        run: rustup target add aarch64-unknown-linux-ohos
+
+      - name: Build Rust FFI library
+        run: |
+          export OHOS_NDK_HOME="$HARMONY_CLI_HOME/sdk/default/openharmony/native"
+          bash tools/build_harmony.sh
 
       - name: Build HarmonyOS app (debug)
         working-directory: apps/harmony
