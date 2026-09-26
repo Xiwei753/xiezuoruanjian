@@ -22,12 +22,12 @@ fn load_full_returns_diagnostics_for_missing_files() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec!["missing-node".to_string()],
         edge_ids: vec![],
@@ -59,12 +59,12 @@ fn load_full_returns_diagnostics_for_missing_link() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -101,7 +101,7 @@ fn load_full_detects_dangling_edge_reference() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
@@ -135,7 +135,7 @@ fn load_full_detects_dangling_edge_reference() {
     write_to_bucket(&starmap_dir, "edges", "e1", &edge_json);
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec!["n1".to_string()],
         edge_ids: vec!["e1".to_string()],
@@ -163,7 +163,7 @@ fn load_full_detects_dangling_edge_reference() {
         .filter(|d| d.kind == LoadDiagnosticKind::DanglingReference)
         .collect();
     assert!(!dangling.is_empty());
-    assert!(dangling[0].detail.contains("nonexistent"));
+    assert!(dangling[0].detail.contains("non-existent node"));
 }
 #[test]
 fn load_full_detects_orphan_object_on_disk() {
@@ -171,7 +171,7 @@ fn load_full_detects_orphan_object_on_disk() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
@@ -180,7 +180,7 @@ fn load_full_detects_orphan_object_on_disk() {
     write_to_bucket(&starmap_dir, "nodes", "orphan-node", &orphan_json);
 
     let meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -216,7 +216,7 @@ fn load_full_detects_unsupported_version() {
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
@@ -642,8 +642,16 @@ fn save_starmap_graph_corrupt_existing_returns_error() {
     std::fs::write(&graph_json, "not valid json at all {{{").unwrap();
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
-    let result = store2.load_full();
-    assert!(result.is_err());
+    let result = store2.load_full().unwrap();
+    let corrupt: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == LoadDiagnosticKind::Corrupt)
+        .collect();
+    assert!(
+        !corrupt.is_empty(),
+        "should report corrupt graph.json as Corrupt diagnostic"
+    );
 }
 
 #[test]
@@ -887,7 +895,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
 
     // Write graph.json directly to disk with a link_ids entry that has no corresponding file.
     let graph_meta = GraphMeta {
-        schema_version: "2".to_string(),
+        schema_version: "3".to_string(),
         starmap_id: meta.starmap_id.clone(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -916,7 +924,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
     store.load_full().unwrap();
 
-    let result = store.list_links_with_diagnostics();
+    let result = store.list_links_with_diagnostics().unwrap();
     assert!(
         !result.diagnostics.is_empty(),
         "should report missing link as diagnostic"
@@ -1165,7 +1173,7 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
     store2.graph_meta = Some(gm);
     store2.current_load_phase = Some(LoadPhase::GraphMeta);
 
-    let result = store2.list_links_with_diagnostics();
+    let result = store2.list_links_with_diagnostics().unwrap();
     assert!(
         !result.diagnostics.is_empty(),
         "should have diagnostics for corrupt link, got {} diagnostics",

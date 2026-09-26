@@ -6,6 +6,12 @@ use super::relation_index::{
     EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
 };
 
+/// 当前支持的星图 graph.json schema 版本。
+///
+/// load 只接受此版本，不猜测或迁移旧格式。旧版本直接返回
+/// `UnsupportedVersion`，不尝试兼容解析。
+pub const CURRENT_SCHEMA_VERSION: &str = "3";
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphMeta {

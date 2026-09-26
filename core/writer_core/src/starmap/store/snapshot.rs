@@ -63,7 +63,7 @@ impl StarMapStore {
 
     pub fn to_starmap_graph(&self) -> StarMapGraph {
         StarMapGraph {
-            schema_version: 1,
+            schema_version: crate::starmap::types::CURRENT_GRAPH_SCHEMA_VERSION,
             starmap_id: self.starmap_id.clone(),
             nodes: self.nodes.values().cloned().collect(),
             edges: self.edges.values().cloned().collect(),
@@ -279,11 +279,11 @@ impl StarMapStore {
         // Candidate meta 模式：所有修改先在 clone 上做，写盘成功后才提交到 self。
         // 这样写盘失败时内存 GraphMeta 保持不变，不会出现半提交。
         if self.graph_meta.is_none() {
-            self.reload_graph_meta_if_stale();
+            self.reload_graph_meta_if_stale()?;
         }
 
         let mut candidate_meta = self.graph_meta.clone().unwrap_or_else(|| GraphMeta {
-            schema_version: "2".to_string(),
+            schema_version: super::meta::CURRENT_SCHEMA_VERSION.to_string(),
             starmap_id: self.starmap_id.clone(),
             node_ids: Vec::new(),
             edge_ids: Vec::new(),

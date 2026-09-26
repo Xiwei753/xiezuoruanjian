@@ -345,7 +345,7 @@ impl StarMapStore {
             false
         } else if self.dirty_graph_meta {
             any_processed = true;
-            self.reload_graph_meta_if_stale();
+            self.reload_graph_meta_if_stale()?;
             // 用 successful_writes 和 successful_deletes 生成本次 revision，
             // 因为只有真正写成功的对象才应该获得新 revision。
             let flush_dirty = FlushDirtySet {

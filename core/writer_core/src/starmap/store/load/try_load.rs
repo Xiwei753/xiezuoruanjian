@@ -77,7 +77,7 @@ impl StarMapStore {
     ) -> Option<StarMapEmbed> {
         let bucket_dir = self
             .starmap_dir()
-            .join("child_starmaps")
+            .join("embeds")
             .join(package_storage::bucket_for_id(instance_id));
         let bucket_path = bucket_dir.join(format!("{}.json", instance_id));
         if !bucket_path.exists() {

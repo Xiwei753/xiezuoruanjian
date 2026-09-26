@@ -1,11 +1,7 @@
 use crate::error::{Error, Result};
 
-use super::super::meta::GraphMeta;
 use super::super::types::*;
 use super::super::StarMapStore;
-
-/// 当前支持的星图 schema 版本。load 只接受此版本，不猜测或迁移旧格式。
-const CURRENT_SCHEMA_VERSION: &str = "2";
 
 impl StarMapStore {
     #[allow(
@@ -24,38 +20,25 @@ impl StarMapStore {
         let graph_dir = self.starmap_dir();
         let graph_json_path = graph_dir.join("graph.json");
 
-        if graph_json_path.exists() {
-            let content = std::fs::read_to_string(&graph_json_path).unwrap_or_default();
-            let value: serde_json::Value = serde_json::from_str(&content)?;
-
-            let schema_version_str = value
-                .get("schemaVersion")
-                .or_else(|| value.get("schema_version"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            if schema_version_str.as_deref() != Some(CURRENT_SCHEMA_VERSION) {
-                return Err(Error::UnsupportedVersion {
-                    version: schema_version_str.unwrap_or_default(),
+        match super::phased::load_current_graph_meta(&graph_json_path) {
+            Ok(Some(meta)) => {
+                self.graph_meta = Some(meta);
+            }
+            Ok(None) => {
+                self.scan_objects_from_disk(&mut diagnostics);
+            }
+            Err(Error::UnsupportedVersion { version }) => {
+                return Err(Error::UnsupportedVersion { version });
+            }
+            Err(e) => {
+                diagnostics.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::Corrupt,
+                    object_type: "graph".to_string(),
+                    object_id: self.starmap_id.clone(),
+                    detail: format!("graph.json parse failed: {}", e),
                 });
+                self.scan_objects_from_disk(&mut diagnostics);
             }
-
-            match serde_json::from_str::<GraphMeta>(&content) {
-                Ok(meta) => {
-                    self.graph_meta = Some(meta);
-                }
-                Err(e) => {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::Corrupt,
-                        object_type: "graph".to_string(),
-                        object_id: self.starmap_id.clone(),
-                        detail: format!("graph.json parse failed: {}", e),
-                    });
-                    self.scan_objects_from_disk(&mut diagnostics);
-                }
-            }
-        } else {
-            self.scan_objects_from_disk(&mut diagnostics);
         }
 
         let node_ids = self

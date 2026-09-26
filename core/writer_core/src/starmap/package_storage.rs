@@ -58,8 +58,8 @@ fn edge_path(dir: &Path, edge_id: &str) -> PathBuf {
         .join(format!("{}.json", edge_id))
 }
 
-fn child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
-    dir.join("child_starmaps")
+fn embed_path(dir: &Path, instance_id: &str) -> PathBuf {
+    dir.join("embeds")
         .join(bucket_for_id(instance_id))
         .join(format!("{}.json", instance_id))
 }
@@ -165,14 +165,11 @@ pub fn delete_edge_file(
 
 pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
-    fs::create_dir_all(
-        dir.join("child_starmaps")
-            .join(bucket_for_id(&embed.instance_id)),
-    )?;
+    fs::create_dir_all(dir.join("embeds").join(bucket_for_id(&embed.instance_id)))?;
     let json = serde_json::to_string_pretty(embed)?;
-    atomic_write_string(&child_starmap_path(&dir, &embed.instance_id), &json)?;
+    atomic_write_string(&embed_path(&dir, &embed.instance_id), &json)?;
     Ok(starmap_pkg_rel_dir(starmap_id)
-        .join("child_starmaps")
+        .join("embeds")
         .join(bucket_for_id(&embed.instance_id))
         .join(format!("{}.json", embed.instance_id)))
 }
@@ -184,12 +181,12 @@ pub fn delete_embed_file(
 ) -> Result<Vec<PathBuf>> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let mut changed: Vec<PathBuf> = Vec::new();
-    let path = child_starmap_path(&dir, instance_id);
+    let path = embed_path(&dir, instance_id);
     if path.exists() {
         fs::remove_file(&path)?;
         changed.push(
             starmap_pkg_rel_dir(starmap_id)
-                .join("child_starmaps")
+                .join("embeds")
                 .join(bucket_for_id(instance_id))
                 .join(format!("{}.json", instance_id)),
         );

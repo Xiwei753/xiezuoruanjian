@@ -1,6 +1,6 @@
 mod crud;
 mod load;
-mod migration;
+mod relation_index;
 mod save;
 mod snapshot;
 

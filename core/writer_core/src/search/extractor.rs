@@ -215,7 +215,7 @@ pub fn extract_starmap_entries(
             }
         }
 
-        let embeds_dir = starmap_path.join("child_starmaps");
+        let embeds_dir = starmap_path.join("embeds");
         if embeds_dir.exists() {
             if let Ok(embed_files) = scan_json_files(&embeds_dir) {
                 for (eid, embed_file) in embed_files {

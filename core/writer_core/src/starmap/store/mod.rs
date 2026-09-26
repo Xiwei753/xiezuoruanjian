@@ -18,7 +18,7 @@
 //! ├── graph.json                          -- 星图元信息、成员 ID 列表、规范顺序、package revision
 //! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
 //! ├── edges/<bucket>/<edge_id>.json       -- 单条边
-//! ├── child_starmaps/<bucket>/<instance_id>.json -- 子星图放置
+//! ├── embeds/<bucket>/<instance_id>.json -- 嵌入放置
 //! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
 //! ├── links/<bucket>/<link_id>.json      -- 链接
 //! ├── layouts/default/
@@ -229,7 +229,7 @@ impl StarMapStore {
         acknowledged_revision: u64,
     ) -> crate::error::Result<()> {
         // Fix 4: ack revision 不能大于当前 package_revision。
-        self.reload_graph_meta_if_stale();
+        self.reload_graph_meta_if_stale()?;
         if acknowledged_revision > self.package_revision {
             return Err(crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

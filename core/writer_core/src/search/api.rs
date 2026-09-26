@@ -1885,7 +1885,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let starmaps_root = dir.path().join("starmaps");
         let starmap_dir = starmaps_root.join("sm1");
-        std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "EmbedMap"}).to_string(),
@@ -1909,7 +1909,7 @@ mod tests {
             updated_at: 0,
         };
         std::fs::write(
-            starmap_dir.join("child_starmaps").join("em1.json"),
+            starmap_dir.join("embeds").join("em1.json"),
             serde_json::to_string(&embed).unwrap(),
         )
         .unwrap();

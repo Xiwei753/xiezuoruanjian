@@ -201,6 +201,12 @@ impl super::WriterCore {
             )));
         }
 
+        if graph.schema_version != crate::starmap::types::CURRENT_GRAPH_SCHEMA_VERSION {
+            return Err(crate::error::Error::UnsupportedVersion {
+                version: graph.schema_version.to_string(),
+            });
+        }
+
         let mut stores = self
             .starmap_stores
             .lock()
@@ -759,7 +765,7 @@ impl super::WriterCore {
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_fully_loaded()?;
-        Ok(store.list_hyperlinks_with_diagnostics())
+        store.list_hyperlinks_with_diagnostics()
     }
 
     pub fn add_starmap_hyperlink(
@@ -862,7 +868,7 @@ impl super::WriterCore {
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_fully_loaded()?;
-        Ok(store.list_links_with_diagnostics())
+        store.list_links_with_diagnostics()
     }
 
     pub fn get_starmap_phased_snapshot(

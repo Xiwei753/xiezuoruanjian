@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::error::Result;
+use crate::starmap::graph::resolve::{resolve_target, GraphResolverContext};
+use crate::starmap::semantic::StarMapTargetResolveStatus;
 use crate::starmap::types::*;
 
 use super::super::relation_index::*;
@@ -14,8 +17,10 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub fn list_hyperlinks_with_diagnostics(&mut self) -> ListWithDiagnostics<StarMapHyperlink> {
-        self.reload_graph_meta_if_stale();
+    pub fn list_hyperlinks_with_diagnostics(
+        &mut self,
+    ) -> Result<ListWithDiagnostics<StarMapHyperlink>> {
+        self.reload_graph_meta_if_stale()?;
         let hl_ids = self.graph_meta_hyperlink_ids();
         let mut items = Vec::new();
         let mut diagnostics = Vec::new();
@@ -46,7 +51,7 @@ impl StarMapStore {
                 items.push(hl);
             }
         }
-        ListWithDiagnostics { items, diagnostics }
+        Ok(ListWithDiagnostics { items, diagnostics })
     }
 
     #[allow(
@@ -56,8 +61,8 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub fn list_links_with_diagnostics(&mut self) -> ListWithDiagnostics<StarMapLink> {
-        self.reload_graph_meta_if_stale();
+    pub fn list_links_with_diagnostics(&mut self) -> Result<ListWithDiagnostics<StarMapLink>> {
+        self.reload_graph_meta_if_stale()?;
         let link_ids = self.graph_meta_link_ids();
         let mut items = Vec::new();
         let mut diagnostics = Vec::new();
@@ -88,7 +93,7 @@ impl StarMapStore {
                 items.push(link);
             }
         }
-        ListWithDiagnostics { items, diagnostics }
+        Ok(ListWithDiagnostics { items, diagnostics })
     }
 
     pub fn graph_meta_hyperlink_ids(&self) -> Vec<String> {
@@ -425,7 +430,7 @@ impl StarMapStore {
             }
             let _ = diag;
         });
-        self.scan_bucketed_dir_insert("child_starmaps", |s, id, diag| {
+        self.scan_bucketed_dir_insert("embeds", |s, id, diag| {
             if let Some(embed) = s.try_load_embed(id) {
                 s.embeds.insert(id.to_string(), embed);
             }
@@ -492,79 +497,91 @@ impl StarMapStore {
         &self,
         diagnostics: &mut Vec<LoadDiagnostic>,
     ) {
-        let node_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
-        let host = self.starmap_id.as_str();
+        // 构造 resolver context：当前完整图作为 overlay，其他图从磁盘读取。
+        let mut overlays = std::collections::HashMap::new();
+        overlays.insert(self.starmap_id.clone(), self.to_starmap_graph());
+        let context = GraphResolverContext {
+            app_data_root: self.app_data_root.clone(),
+            overlays,
+        };
+
+        // 辅助闭包：对一条引用路径做 resolve，失败时推入 DanglingReference diagnostic。
+        let mut check_path =
+            |path: &StarMapTargetPath, object_type: &str, object_id: &str, endpoint: &str| {
+                if let Err(status) = resolve_target(&context, path) {
+                    let detail = format!(
+                        "{} {} {}",
+                        endpoint,
+                        object_id,
+                        match status {
+                            StarMapTargetResolveStatus::MissingStarmap => {
+                                "references non-existent starmap"
+                            }
+                            StarMapTargetResolveStatus::MissingNode => {
+                                "references non-existent node"
+                            }
+                            StarMapTargetResolveStatus::MissingAnchor => {
+                                "references non-existent anchor"
+                            }
+                            StarMapTargetResolveStatus::MissingEmbed => {
+                                "references non-existent embed"
+                            }
+                            StarMapTargetResolveStatus::MissingPortal => {
+                                "references non-existent portal"
+                            }
+                            StarMapTargetResolveStatus::CycleDetected => "contains a cycle",
+                            StarMapTargetResolveStatus::InvalidRange => "has invalid range",
+                            StarMapTargetResolveStatus::TooDeep => "path too deep",
+                            StarMapTargetResolveStatus::Unresolved => "unresolved",
+                            StarMapTargetResolveStatus::Resolved => "resolved",
+                        }
+                    );
+                    diagnostics.push(LoadDiagnostic {
+                        kind: LoadDiagnosticKind::DanglingReference,
+                        object_type: object_type.to_string(),
+                        object_id: object_id.to_string(),
+                        detail,
+                    });
+                }
+            };
+
         for edge in self.edges.values() {
-            // 检查 from 路径中的本地节点引用
-            if let Some(node_id) =
-                super::super::relation_index::target_path_node_id(&edge.from, host)
-            {
-                if !node_ids.contains(node_id) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "edge".to_string(),
-                        object_id: edge.id.clone(),
-                        detail: format!("edge from references non-existent node: {}", node_id),
-                    });
-                }
-            }
-            // 检查 to 路径中的本地节点引用
-            if let Some(node_id) = super::super::relation_index::target_path_node_id(&edge.to, host)
-            {
-                if !node_ids.contains(node_id) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "edge".to_string(),
-                        object_id: edge.id.clone(),
-                        detail: format!("edge to references non-existent node: {}", node_id),
-                    });
-                }
-            }
+            check_path(&edge.from, "edge", &edge.id, "edge from");
+            check_path(&edge.to, "edge", &edge.id, "edge to");
         }
         for embed in self.embeds.values() {
-            // 检查 host_path 中的本地节点引用
-            if let Some(node_id) =
-                super::super::relation_index::target_path_node_id(&embed.host_path, host)
-            {
-                if !node_ids.contains(node_id) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "embed".to_string(),
-                        object_id: embed.instance_id.clone(),
-                        detail: format!(
-                            "embed host_path references non-existent node: {}",
-                            node_id
-                        ),
-                    });
-                }
-            }
+            check_path(
+                &embed.host_path,
+                "embed",
+                &embed.instance_id,
+                "embed host_path",
+            );
         }
         for link in self.links.values() {
-            // 检查 link.source 中的本地节点引用
-            if let Some(node_id) =
-                super::super::relation_index::target_path_node_id(&link.source, host)
-            {
-                if !node_ids.contains(node_id) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "link".to_string(),
-                        object_id: link.link_id.clone(),
-                        detail: format!("link source references non-existent node: {}", node_id),
-                    });
-                }
-            }
-            // 检查 link.target 中的本地节点引用
-            if let Some(node_id) =
-                super::super::relation_index::target_path_node_id(&link.target, host)
-            {
-                if !node_ids.contains(node_id) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "link".to_string(),
-                        object_id: link.link_id.clone(),
-                        detail: format!("link target references non-existent node: {}", node_id),
-                    });
-                }
+            check_path(&link.source, "link", &link.link_id, "link source");
+            check_path(&link.target, "link", &link.link_id, "link target");
+        }
+        for hl in self.hyperlinks.values() {
+            check_path(
+                &hl.source,
+                "hyperlink",
+                &hl.hyperlink_id,
+                "hyperlink source",
+            );
+        }
+        // Portal destination：构造 StarMapTargetPath 检查目标星图和落点。
+        for node in self.nodes.values() {
+            if let Some(portal) = &node.portal {
+                let target = portal
+                    .destination_target
+                    .clone()
+                    .unwrap_or(crate::starmap::semantic::StarMapTargetDetail::Starmap);
+                let path = StarMapTargetPath {
+                    starmap_id: portal.destination_starmap_id.clone(),
+                    segments: vec![],
+                    target,
+                };
+                check_path(&path, "node", &node.id, "node portal destination");
             }
         }
     }
@@ -601,7 +618,7 @@ impl StarMapStore {
 
         self.check_orphan_dir("nodes", &declared_node_ids, "node", diagnostics);
         self.check_orphan_dir("edges", &declared_edge_ids, "edge", diagnostics);
-        self.check_orphan_dir("child_starmaps", &declared_embed_ids, "embed", diagnostics);
+        self.check_orphan_dir("embeds", &declared_embed_ids, "embed", diagnostics);
         self.check_orphan_dir("hyperlinks", &declared_hl_ids, "hyperlink", diagnostics);
         self.check_orphan_dir("links", &declared_link_ids, "link", diagnostics);
     }
