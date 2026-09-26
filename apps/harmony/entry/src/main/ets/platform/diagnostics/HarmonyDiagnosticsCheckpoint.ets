@@ -169,36 +169,43 @@ export class HarmonyDiagnosticsCheckpoint {
   }
 
   // 定时器回调 — 检查 dirty 状态，必要时触发 checkpoint 生成。
-  // Issue #773 评论 5845398115：tick 不仅看 Store dirty，还比较 live/log 当前日志文件的 size/mtime。
+  // Issue #773 评论 5845033983：tick 不仅看 Store dirty，还比较 live/log 当前日志文件的 size/mtime。
   // Rust live log 持续 append 不触发 Store dirty；窗口尺寸/折叠/safe area 变化由 AdaptiveObserver 触发。
   // 日志变了就生成新 checkpoint，保证 latest.zip 最多落后几秒。
+  // Issue #773 评论 5845876043：候选签名只在成功发布后提交，失败时保留重试条件。
   private async onTimerTick(): Promise<void> {
     if (this.isGenerating) {
       return
     }
-    const logChanged = this.hasLogChanged()
+    const signature = this.getLogSignature()
+    const logChanged = signature !== this.lastLogSignature
     if (!this.dirty && !logChanged) {
       return
     }
-    this.dirty = false
-    await this.generateCheckpoint()
+    const published = await this.generateCheckpoint()
+    if (published) {
+      this.lastLogSignature = signature
+      this.dirty = false
+    } else {
+      // 保留重试条件，下一 tick 继续尝试
+      this.dirty = true
+    }
+  }
+
+  // Issue #773 评论 5845876043：getLogSignature 只计算签名，不修改 lastLogSignature。
+  // 签名的提交（lastLogSignature 赋值）推迟到 onTimerTick 确认发布成功之后。
+  private getLogSignature(): string {
+    if (this.context === null) {
+      return ''
+    }
+    const logDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/live/log`
+    return this.computeLogSignature(logDir)
   }
 
   // Issue #773 评论 5845398115：计算 live/log 目录下所有文件的总 size + 最大 mtime 作为签名。
   // 签名变化说明 Rust 又写了日志，需要生成新 checkpoint。
-  private hasLogChanged(): boolean {
-    if (this.context === null) {
-      return false
-    }
-    const logDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/live/log`
-    const sig = this.computeLogSignature(logDir)
-    if (sig !== this.lastLogSignature) {
-      this.lastLogSignature = sig
-      return true
-    }
-    return false
-  }
-
+  // Issue #773 评论 5845876043：本方法只计算签名，不修改 lastLogSignature；
+  // 签名提交由 onTimerTick 在确认发布成功后执行。
   private computeLogSignature(logDir: string): string {
     try {
       if (!fs.accessSync(logDir)) {
@@ -224,10 +231,12 @@ export class HarmonyDiagnosticsCheckpoint {
   // 生成 checkpoint — 复用 HarmonyDiagnosticsExporter.exportTo() 生成 zip，
   // 然后通过双槽 + 原子替换流程维护 latest.zip / previous.zip。
   // Issue #773 评论 5845033983：先导出到 staging 目录，确认完整成功后再移动到 snapshots。
-  private async generateCheckpoint(): Promise<void> {
+  // Issue #773 评论 5845876043：改为 Promise<boolean>，所有失败分支返回 false；
+  // 只有 atomicReplace 成功后才清 staging、打印成功并返回 true。
+  private async generateCheckpoint(): Promise<boolean> {
     if (this.context === null) {
       hilog.warn(0x0000, LOG_TAG, 'context is null; cannot generate checkpoint')
-      return
+      return false
     }
     this.isGenerating = true
     try {
@@ -239,13 +248,13 @@ export class HarmonyDiagnosticsCheckpoint {
       const timestampedZipPath = await this.exporter.exportTo(stagingDir)
       if (timestampedZipPath === null) {
         hilog.warn(0x0000, LOG_TAG, 'exportTo returned null; skipping checkpoint')
-        return
+        return false
       }
 
       // 3. 确认 zip 文件存在
       if (!this.fileExists(timestampedZipPath)) {
         hilog.warn(0x0000, LOG_TAG, 'timestamped zip does not exist: %{public}s', timestampedZipPath)
-        return
+        return false
       }
 
       // 4. 准备 snapshots 路径
@@ -260,14 +269,19 @@ export class HarmonyDiagnosticsCheckpoint {
       fs.renameSync(timestampedZipPath, tmpPath)
 
       // 6. 原子替换：旧 latest.zip → previous.zip, latest.tmp → latest.zip
-      this.atomicReplace(tmpPath, latestPath, previousPath)
+      if (!this.atomicReplace(tmpPath, latestPath, previousPath)) {
+        hilog.error(0x0000, LOG_TAG, 'atomicReplace failed; checkpoint not published')
+        return false
+      }
 
       // 7. 清理 staging 目录
       this.cleanStagingDir(stagingDir)
 
       hilog.info(0x0000, LOG_TAG, 'checkpoint generated successfully')
+      return true
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'generateCheckpoint failed: %{public}s', String(e))
+      return false
     } finally {
       this.isGenerating = false
     }

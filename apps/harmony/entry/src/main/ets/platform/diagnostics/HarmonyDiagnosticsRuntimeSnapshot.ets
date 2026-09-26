@@ -21,6 +21,8 @@ import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
 import { EditorRuntimeSnapshotStore, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { PlatformApiResolver } from '../version/PlatformApiResolver'
+import { HarmonyMaterialRuntimeApi26 } from '../material/impl/api26/HarmonyMaterialRuntimeApi26'
 
 const LOG_TAG = 'HarmonyDiagnosticsRuntimeSnapshot'
 const DIAGNOSTICS_DIR = 'diagnostics'
@@ -42,6 +44,13 @@ interface ThemeRuntimeDto {
   selectedBuiltinThemeId: string
   selectedPaletteId: string
   colorSource: string
+  // Issue #773 评论 5844518092 第5项：材质真实运行态（API26+ 从 uiMaterial 读取）
+  materialState: string
+  materialType: string
+  immersiveMaterialSupported: boolean
+  globalMaterialLevel: string
+  hdsRequestedMaterialType: string
+  hdsRequestedMaterialLevel: string
 }
 
 // ── UI runtime DTO ─────────────────────────────────────────────
@@ -120,6 +129,28 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
   getThemeRuntimeJson(): string {
     const adapter = HarmonyThemeAdapter.getInstance()
     const useSystemTokens = adapter.isUsingSystemTokens()
+
+    // Issue #773 评论 5844518092 第5项：材质真实运行态。
+    // API >= 26 从 uiMaterial.getMaterialInfo() 读取；API < 26 字段写 "unavailable"。
+    let materialState = 'unavailable'
+    let materialType = 'unavailable'
+    let immersiveMaterialSupported = false
+    let globalMaterialLevel = 'unavailable'
+    const hdsRequestedMaterialType = 'IMMERSIVE'
+    const hdsRequestedMaterialLevel = 'ADAPTIVE'
+    if (PlatformApiResolver.getInstance().isApiAtLeast(26)) {
+      try {
+        const materialInfo = HarmonyMaterialRuntimeApi26.getInstance().getMaterialRuntimeInfo()
+        materialState = materialInfo.materialState
+        materialType = materialInfo.materialType
+        immersiveMaterialSupported = materialInfo.immersiveMaterialSupported
+        globalMaterialLevel = materialInfo.globalMaterialLevel
+      } catch (e) {
+        hilog.error(0x0000, LOG_TAG, 'read material runtime failed: %{public}s', String(e))
+        materialState = 'error'
+      }
+    }
+
     const dto: ThemeRuntimeDto = {
       systemColorMode: adapter.getSystemColorMode(),
       appearanceMode: adapter.getMode(),
@@ -128,7 +159,13 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
       hasExplicitThemeOverride: !useSystemTokens,
       selectedBuiltinThemeId: adapter.getSelectedBuiltinThemeId(),
       selectedPaletteId: adapter.getSelectedPaletteId(),
-      colorSource: adapter.getColorSource()
+      colorSource: adapter.getColorSource(),
+      materialState: materialState,
+      materialType: materialType,
+      immersiveMaterialSupported: immersiveMaterialSupported,
+      globalMaterialLevel: globalMaterialLevel,
+      hdsRequestedMaterialType: hdsRequestedMaterialType,
+      hdsRequestedMaterialLevel: hdsRequestedMaterialLevel
     }
     return JSON.stringify(dto, null, 2)
   }

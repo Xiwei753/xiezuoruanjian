@@ -19,6 +19,11 @@ const LEFT_PANEL_WIDTH: number = 320
 /** 分割线宽度 */
 const DIVIDER_WIDTH: number = 0.5
 
+// Issue #773 评论5844518092 第3项：FAB 改独立绝对坐标，不再用整页右下角锚点定位。
+// FAB 尺寸（vp）；FAB 距安全区底部的额外间距（设计值，不是底栏高度）。
+const FAB_SIZE: number = 56
+const FAB_BOTTOM_GAP: number = 28
+
 // Issue #629 评论14 第1项：WorkspaceScreen 只保留项目/卷/章节浏览和目录操作。
 // 章节正文只有 WritingScreen 一个页面级 owner。
 // 删除所有 editor session/input/IME/save/wordCount/正文状态和 RightPanel() 内联写作区。
@@ -257,12 +262,15 @@ export struct WorkspaceScreen {
     // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
     // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
     if (this.useHdsNav) {
+      // Issue #773 评论5844518092：改用 V2 官方尾随闭包传 @BuilderParam，
+      // 让 NavContent 始终在页面上下文执行，避免 this 变成壳组件导致 adaptiveState undefined。
       HdsWorkspaceDestinationApi23({
-        contentBuilder: this.NavContent,
         title: this.viewModel.projectName,
         onBack: () => { this.handleBack() },
         onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) }
-      })
+      }) {
+        this.NavContent()
+      }
     } else {
       NavDestination() {
         this.NavContent()
@@ -524,17 +532,21 @@ export struct WorkspaceScreen {
 
       // ── FAB 层：新建卷浮动按钮 ──
       // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
+      // Issue #773 评论5844518092 第3项：删除 position(100%,100%)+markAnchor+offset 锚点写法，
+      // 改用基于窗口宽高、安全区、页面 padding、FAB 尺寸的独立绝对坐标（vp）。
+      // 不读取 HdsTabs 的 barHeight/barWidth/barBottomMargin，不依赖底栏实际位置。
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
         Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
             .width(24)
             .height(24)
         }
-        .width(56)
-        .height(56)
-        .position({ x: '100%', y: '100%' })
-        .markAnchor({ x: '100%', y: '100%' })
-        .offset({ x: -this.adaptiveState.pagePadding - 16, y: -56 - 16 })
+        .width(FAB_SIZE)
+        .height(FAB_SIZE)
+        .position({
+          x: this.adaptiveState.widthVp - this.adaptiveState.pagePadding - FAB_SIZE,
+          y: this.adaptiveState.heightVp - this.adaptiveState.safeBottomVp - FAB_SIZE - FAB_BOTTOM_GAP
+        })
         .onClick(() => {
           this.handleCreateVolume()
         })

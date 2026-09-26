@@ -241,12 +241,15 @@ export struct SettingsScreen {
     // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination 替代 NavDestination，
     // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
     if (this.useHdsNav) {
+      // Issue #773 评论5844518092：改用 V2 官方尾随闭包传 @BuilderParam，
+      // 让 NavContent 始终在页面上下文执行，避免 this 变成壳组件导致 adaptiveState undefined。
       HdsSettingsDestinationApi23({
-        contentBuilder: this.NavContent,
         title: $r('app.string.settings'),
         onBack: () => { this.goBack() },
         onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0) }
-      })
+      }) {
+        this.NavContent()
+      }
     } else {
       NavDestination() {
         this.NavContent()

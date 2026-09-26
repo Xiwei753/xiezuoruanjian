@@ -23,6 +23,11 @@ import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/Pl
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
+// Issue #773 评论5844518092 第3项：FAB 改独立绝对坐标，不再用整页右下角锚点定位。
+// FAB 尺寸（vp）；FAB 距安全区底部的额外间距（设计值，不是底栏高度）。
+const FAB_SIZE: number = 56
+const FAB_BOTTOM_GAP: number = 28
+
 @ComponentV2
 export struct HomeScreen {
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab，不再 push 进 homeStack。
@@ -627,17 +632,21 @@ export struct HomeScreen {
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
       // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
+      // Issue #773 评论5844518092 第3项：删除 position(100%,100%)+markAnchor+offset 锚点写法，
+      // 改用基于窗口宽高、安全区、页面 padding、FAB 尺寸的独立绝对坐标（vp）。
+      // 不读取 HdsTabs 的 barHeight/barWidth/barBottomMargin，不依赖底栏实际位置。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
         Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
           Image($r('sys.media.ohos_ic_public_add'))
             .width(24)
             .height(24)
         }
-        .width(56)
-        .height(56)
-        .position({ x: '100%', y: '100%' })
-        .markAnchor({ x: '100%', y: '100%' })
-        .offset({ x: -this.adaptiveState.pagePadding - 16, y: -56 - 16 })
+        .width(FAB_SIZE)
+        .height(FAB_SIZE)
+        .position({
+          x: this.adaptiveState.widthVp - this.adaptiveState.pagePadding - FAB_SIZE,
+          y: this.adaptiveState.heightVp - this.adaptiveState.safeBottomVp - FAB_SIZE - FAB_BOTTOM_GAP
+        })
         .onClick(() => {
           this.viewModel.showCreateDialog = true
           this.viewModel.newProjectName = ''

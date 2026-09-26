@@ -12,6 +12,7 @@
     "installationFree": false,
     "pages": "$profile:main_pages",
     "shareFiles": "$profile:share_files",
+    "systemTheme": "$profile:theme_config",
     "metadata": [
       {
         "name": "ohos.arkui.UIMaterial.state",
