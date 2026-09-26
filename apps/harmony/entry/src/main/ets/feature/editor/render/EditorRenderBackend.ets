@@ -24,8 +24,8 @@ import {
   SelectionRect,
   CaretRect,
   CompositionUnderlineRect,
-  CARET_WIDTH_PX,
-  UNDERLINE_HEIGHT_PX,
+  CARET_WIDTH_VP,
+  UNDERLINE_HEIGHT_VP,
 } from './editor_render_geometry'
 import { text } from '@kit.ArkGraphics2D'
 
@@ -86,11 +86,13 @@ export class EditorRenderBackend {
     const text = base.text
     const lines = layoutLines(text, containerWidth, measureTextFn)
     const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
-    const lineLayouts = toLineLayouts(lines, lineSpacingPx, text, measureTextFn)
+    // Issue #776 评论5848626733 第7项：fallback 路径首行缩进。
+    const firstLineIndentVp = snapshot.autoIndentEnabled ? snapshot.autoIndentWidth * snapshot.fontSize : 0
+    const lineLayouts = toLineLayouts(lines, lineSpacingPx, text, measureTextFn, firstLineIndentVp)
     const selStart = Math.min(base.selectionStartUtf16, base.selectionEndUtf16)
     const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
-    const selectionRects = computeSelectionRects(text, lines, lineSpacingPx, containerWidth, selStart, selEnd, measureTextFn)
-    const caretRect = computeCaretRect(text, lines, lineSpacingPx, base.cursorUtf16, measureTextFn, visualCaretAffinity)
+    const selectionRects = computeSelectionRects(text, lines, lineSpacingPx, containerWidth, selStart, selEnd, measureTextFn, firstLineIndentVp)
+    const caretRect = computeCaretRect(text, lines, lineSpacingPx, base.cursorUtf16, measureTextFn, visualCaretAffinity, firstLineIndentVp)
     const compositionUnderlineRects = computeCompositionUnderlineRects(
       text,
       lines,
@@ -98,6 +100,7 @@ export class EditorRenderBackend {
       base.compositionStartUtf16,
       base.compositionEndUtf16,
       measureTextFn,
+      firstLineIndentVp,
     )
     return {
       text: base.text,
@@ -164,6 +167,8 @@ export class EditorRenderBackend {
     visualCaretAffinity: CaretAffinity,
     isApi14Plus: boolean,
     measureTextFn: (s: string) => number,
+    // Issue #776 评论5848626733 第6项：系统 LayoutManager 返回 px，需要转成 vp。
+    pxToVp: (value: number) => number,
   ): EditorRenderResult {
     const base = EditorRenderBackend.render(snapshot)
     const text = base.text
@@ -172,6 +177,7 @@ export class EditorRenderBackend {
     const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
 
     // 1. 从 LineMetrics 构建 LineLayout[] 和 LineRange[]
+    // Issue #776 评论5848626733 第6项：LineMetrics 的 left/topHeight/height 是 px，转成 vp。
     const systemLines: LineLayout[] = []
     const lineMetricsData: SystemLineMetricData[] = []
     for (let i = 0; i < systemLineCount; i++) {
@@ -185,9 +191,9 @@ export class EditorRenderBackend {
         text,
       })
       // y 坐标：topHeight 是从段落顶部到当前行的距离，用作行顶部 y
-      const y = metrics.topHeight
-      const height = metrics.height
-      const left = metrics.left
+      const y = pxToVp(metrics.topHeight)
+      const height = pxToVp(metrics.height)
+      const left = pxToVp(metrics.left)
       systemLines.push({
         startUtf16,
         endUtf16,
@@ -219,11 +225,12 @@ export class EditorRenderBackend {
 
     if (isApi14Plus) {
       // API14+：用 getRectsForRange 获取真实矩形
-      selectionRects = EditorRenderBackend.buildSelectionRectsFromSystem(layout, selStart, selEnd)
+      // Issue #776 评论5848626733 第6项：getRectsForRange 返回 px，需要转成 vp。
+      selectionRects = EditorRenderBackend.buildSelectionRectsFromSystem(layout, selStart, selEnd, pxToVp)
       // Issue #768 评论5836390597 第3项：把 affinity 传给 buildCaretRectFromSystem。
-      caretRect = EditorRenderBackend.buildCaretRectFromSystem(layout, systemLines, cursorUtf16, text, visualCaretAffinity)
+      caretRect = EditorRenderBackend.buildCaretRectFromSystem(layout, systemLines, cursorUtf16, text, visualCaretAffinity, pxToVp)
       compositionUnderlineRects = EditorRenderBackend.buildCompositionRectsFromSystem(
-        layout, base.compositionStartUtf16, base.compositionEndUtf16,
+        layout, base.compositionStartUtf16, base.compositionEndUtf16, pxToVp,
       )
     } else {
       // API12-13：用 LineMetrics 行边界 + measureText 算行内 x 坐标
@@ -285,6 +292,7 @@ export class EditorRenderBackend {
     layout: LayoutManager,
     selStart: number,
     selEnd: number,
+    pxToVp: (value: number) => number,
   ): SelectionRect[] {
     if (selStart === selEnd) {
       return []
@@ -297,11 +305,12 @@ export class EditorRenderBackend {
       const rects: SelectionRect[] = []
       for (const box of textBoxes) {
         const r = box.rect
+        // Issue #776 评论5848626733 第6项：getRectsForRange 返回 px，转成 vp。
         rects.push({
-          x: r.left,
-          y: r.top,
-          width: r.right - r.left,
-          height: r.bottom - r.top,
+          x: pxToVp(r.left),
+          y: pxToVp(r.top),
+          width: pxToVp(r.right) - pxToVp(r.left),
+          height: pxToVp(r.bottom) - pxToVp(r.top),
         })
       }
       return rects
@@ -325,6 +334,7 @@ export class EditorRenderBackend {
     cursorUtf16: number,
     content: string,
     affinity: CaretAffinity,
+    pxToVp: (value: number) => number,
   ): CaretRect | null {
     if (systemLines.length === 0) {
       return null
@@ -376,7 +386,8 @@ export class EditorRenderBackend {
             range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
           )
           if (textBoxes.length > 0) {
-            x = textBoxes[textBoxes.length - 1].rect.right
+            // Issue #776 评论5848626733 第6项：getRectsForRange 返回 px，转成 vp。
+            x = pxToVp(textBoxes[textBoxes.length - 1].rect.right)
           } else {
             x = line.left
           }
@@ -387,7 +398,8 @@ export class EditorRenderBackend {
             range, text.RectWidthStyle.TIGHT, text.RectHeightStyle.TIGHT,
           )
           if (textBoxes.length > 0) {
-            x = textBoxes[0].rect.left
+            // Issue #776 评论5848626733 第6项：getRectsForRange 返回 px，转成 vp。
+            x = pxToVp(textBoxes[0].rect.left)
           } else {
             x = line.left
           }
@@ -412,7 +424,7 @@ export class EditorRenderBackend {
       return {
         x,
         y: line.y,
-        width: CARET_WIDTH_PX,
+        width: CARET_WIDTH_VP,
         height: line.height,
       }
     } catch (_e) {
@@ -425,6 +437,8 @@ export class EditorRenderBackend {
     layout: LayoutManager,
     compStart: number | null,
     compEnd: number | null,
+    // Issue #776 评论5848626733 第6项：getRectsForRange 返回 px，需要转成 vp。
+    pxToVp: (value: number) => number,
   ): CompositionUnderlineRect[] {
     if (compStart === null || compEnd === null || compStart === compEnd) {
       return []
@@ -437,11 +451,12 @@ export class EditorRenderBackend {
       const rects: CompositionUnderlineRect[] = []
       for (const box of textBoxes) {
         const r = box.rect
+        // Issue #776 评论5848626733 第6项：getRectsForRange 返回 px，转成 vp。
         rects.push({
-          x: r.left,
-          y: r.bottom - UNDERLINE_HEIGHT_PX,
-          width: r.right - r.left,
-          height: UNDERLINE_HEIGHT_PX,
+          x: pxToVp(r.left),
+          y: pxToVp(r.bottom) - UNDERLINE_HEIGHT_VP,
+          width: pxToVp(r.right) - pxToVp(r.left),
+          height: UNDERLINE_HEIGHT_VP,
         })
       }
       return rects

@@ -44,7 +44,7 @@ interface ActiveSaveTask {
 
 @Component
 export struct WritingScreen {
-  @Consume("navPathStack") navPathStack: NavPathStack
+  navPathStack: NavPathStack = new NavPathStack()
   @State chapterId: string = ''
   @State chapterTitle: string = ''
   @State projectId: string = ''

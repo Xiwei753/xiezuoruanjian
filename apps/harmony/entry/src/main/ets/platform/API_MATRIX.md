@@ -38,7 +38,7 @@
 | StyledString / MutableStyledString | @kit.ArkUI (StyledString / MutableStyledString) | 12 | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/render/EditorTextStyleProjector.ets |
 | ComponentObserver (inspector) | @kit.ArkUI (inspector) | 12（on('layout') 回调） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets |
 | 沉浸光感材质运行态 | @kit.ArkUI (uiMaterial) | 26 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | material/impl/api26/HarmonyMaterialRuntimeApi26.ets |
-| 应用共享目录 / 捐献沙箱目录 | 无独立 Kit（module.json5 shareFiles profile） | 23（共享目录）/ 26.0.0（捐献目录 sharingOS*） | 无独立 SystemCapability（模块级配置） | 无 | 否 | entry/src/main/resources/base/profile/share_files.json（工程资源，不在 platform/ 下） |
+| 应用共享目录 / 捐献沙箱目录 | 无独立 Kit（module.json5 shareFiles profile） | 23（共享目录 scopes）/ 26.0.0（捐献目录 sharingOS*） | 无独立 SystemCapability（模块级配置） | 无 | 否 | entry/src/main/resources/base/profile/share_files.json（工程资源，不在 platform/ 下） |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -352,23 +352,44 @@
 - Kit：无独立 Kit（`module.json5` 的 `shareFiles` 标签 + `resources/base/profile/share_files.json`）
 - 配置项：
   - `module.json5`：`"shareFiles": "$profile:share_files"`
-  - `share_files.scopes[].path` / `permission`（`r` 只读 / `r+w` 读写）—— 应用沙箱共享目录
-  - `share_files.sharingOSPath` / `sharingOSSubpath` / `sharingOSPermission` —— 捐献给操作系统的沙箱目录
-- 最低 API：23（共享目录）；26.0.0（捐献目录三个 sharingOS* 字段）
+  - `share_files.scopes[].path` / `permission`（`r` 只读 / `r+w` 读写）—— 应用沙箱共享目录（API23+）
+  - `share_files.sharingOSPath` / `sharingOSSubpath` / `sharingOSPermission` —— 捐献给操作系统的沙箱目录（API26+）
+- 最低 API：23（共享目录 `scopes`）；26.0.0（捐献目录三个 `sharingOS*` 字段）
 - SystemCapability：无独立 SystemCapability（模块级配置）
 - 权限：无
 - ACL：否
-- fallback：低版本系统忽略该配置；未配置共享/捐献目录时，文件管理器看不到应用沙箱内的诊断包
 - 实现文件：`apps/harmony/entry/src/main/resources/base/profile/share_files.json`（工程资源，不在 `platform/` 下）
-- 路径限制（官方《应用共享目录配置》，配套版本 26.0.0）：
-  - 第一级必须是 `el1`~`el5` 加密目录，第二级只支持 `base` / `distributedfiles` / `cloud`，深度 2~10 级
-  - 最多 20 条、不可重复、不可同时配置父目录与子目录，path 不以 `/` 结尾
-  - `sharingOSPath` 必须等于 `scopes` 中已配置的 path；`sharingOSSubpath` 长度不超过 32；`sharingOSPermission` 必须是该路径 permission 的子集
-  - 任何一条 path 不合规时，系统会**自动清除该应用的全部已配置路径**（日志关键字 `TransAndSetToMapInner failed for bundle`），不是"只忽略这一条"
-- **`/base/files` 不是合法 `scopes[].path`**：SDK 26.0.0 的 `<sdk>/default/openharmony/toolchains/modulecheck/shareFiles.json` 用
-  `^/(?:el1|el2|el3|el4|el5)/(?:base|distributedfiles|cloud)(?:/[a-zA-Z0-9_-]+){0,8}$` 校验 `scopes[].path`，
-  写成 `/base/files` 会在 PreBuild schema validate 阶段 BUILD FAILED（本机 `~/.harmony-cli/sdk` 与 DevEco SDK 两份 schema 一致）。
-  官方示例本身也是 `"path": "/el2/base/files"` + `"sharingOSPath": "/el2/base/files"`。本仓库因此保持
-  `/el2/base/files` + `"sharingOSSubpath": "/diagnostics"`，只把诊断目录捐给文件管理器。
-- 门禁：`tools/check_harmony_share_files.py`（自测 `tools/test_check_harmony_share_files.py`），在 harmony workflow 里跑。
-  它用 SDK 自带 schema 正则 + 官方路径限制同时校验，`/base/files` 这类写法会直接失败，不再靠文档口径争论。
+
+### 路径分流语义
+
+shareFiles profile 的路径配置分两层：`scopes` 控制共享文件范围，`sharingOS*` 控制目录捐献。两者路径必须对齐。
+
+- **scopes（API23+）**：profile 路径写 `/el2/base/files`。SDK 26.0.0 的 `modulecheck/shareFiles.json` schema 用 `^/(?:el1|el2|el3|el4|el5)/(?:base|distributedfiles|cloud)...` 校验 `scopes[].path`，第一级必须是 `el1~el5`，第二级必须是 `base`/`distributedfiles`/`cloud`。`/el2/base/files` 是 shareFiles profile 的合法逻辑路径（不是运行时沙箱绝对路径 `/data/app/el2/.../base/files`），系统在运行时自动映射到应用沙箱。写成 `/base/files` 不匹配 schema，PreBuild schema validate 会 BUILD FAILED。
+- **sharingOSPath / sharingOSSubpath（API26+）**：`sharingOSPath` 必须和 `scopes` 中已配置的 path 对上（即 `/el2/base/files`），再用 `sharingOSSubpath` 选真正捐献给操作系统的子目录（如 `/diagnostics`）。这样 HarmonyOS 7 的文件管理器可以浏览 `diagnostics` 子目录，而不会暴露整个 `/el2/base/files`。
+- **版本行为**：
+  - HarmonyOS 7（API26+）：文件管理器可浏览 `diagnostics` 目录，用户直接看到诊断包文件。
+  - API12~25：保持现有系统分享入口（ShareKit），不假装支持目录浏览。低版本系统忽略 `sharingOS*` 配置，不影响应用正常运行。
+
+### 当前配置
+
+```json
+{
+  "share_files": {
+    "scopes": [
+      { "path": "/el2/base/files", "permission": "r" }
+    ],
+    "sharingOSPath": "/el2/base/files",
+    "sharingOSSubpath": "/diagnostics",
+    "sharingOSPermission": "r"
+  }
+}
+```
+
+- `scopes` 声明 `/el2/base/files` 只读共享（profile 合法逻辑路径，系统运行时映射到应用沙箱）
+- `sharingOSPath` = `/el2/base/files`（与 scope 对齐），`sharingOSSubpath` = `/diagnostics`（只捐献诊断子目录，不暴露整个 filesDir）
+- `sharingOSPermission` = `r`（只读，是 scope permission 的子集）
+- Issue #776 评论5848626733：`sharingOSSubpath` 从 `/share` 改为 `/diagnostics`，只把诊断目录捐给文件管理器；`permission` 从 `r+w` 改为 `r`，只读共享。
+
+### 门禁
+
+`tools/check_harmony_share_files.py`（自测 `tools/test_check_harmony_share_files.py`），在 harmony workflow 里跑。用 SDK 自带 schema 正则 + 官方路径限制同时校验：`scopes[].path` 必须匹配 `^/(?:el1|el2|el3|el4|el5)/(?:base|distributedfiles|cloud)...`，`sharingOSPath` 与 scope path 对齐，`sharingOSSubpath` 是 scope path 的子目录，`sharingOSPermission` 是 scope permission 子集。

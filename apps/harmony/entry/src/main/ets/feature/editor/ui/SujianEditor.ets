@@ -63,6 +63,12 @@ const EDITOR_LOG_TAG = 'SujianEditor'
 const INPUT_HOST_ID = 'sujian-editor-input-host'
 // Issue #768 评论5837824666：正文 Text 的固定 id，用于 ComponentObserver 监听布局完成回调。
 const EDITOR_TEXT_ID = 'sujian-editor-text'
+// Issue #776 评论5848626733 第8项：正文阅读边距（vp）。
+// 文字、selection、composition、caret 都在同一个带 padding 的内容容器里，
+// 光标不会和文字错位，正文不贴着标题栏和屏幕边缘。
+const EDITOR_HORIZONTAL_PADDING_VP = 20
+const EDITOR_TOP_PADDING_VP = 20
+const EDITOR_BOTTOM_PADDING_VP = 32
 
 @Component
 export struct SujianEditor {
@@ -555,10 +561,16 @@ export struct SujianEditor {
       const isApi14Plus = PlatformApiResolver.getInstance().isApiAtLeast(14)
 
       // measureTextFn：API12-13 fallback 用，API14+ 不需要但保持接口一致
+      // Issue #776 评论5848626733 第6项：measureUtils.measureText 返回 px，
+      // fallback 几何统一到 vp，这里包一层 px2vp。
       const measureUtils = this.getUIContext().getMeasureUtils()
       const measureTextFn = (s: string): number => {
-        return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+        return this.getUIContext().px2vp(measureUtils.measureText({ textContent: s, fontSize: snap.fontSize }))
       }
+
+      // Issue #776 评论5848626733 第6项：系统 LayoutManager 返回 px，renderLayoutFromSystem
+      // 内部用 pxToVp 把 LineMetrics/getRectsForRange 的 px 转成 vp。
+      const pxToVp = (value: number): number => this.getUIContext().px2vp(value)
 
       // 1. 调用 EditorRenderBackend.renderLayoutFromSystem 获取完整渲染结果
       const result = EditorRenderBackend.renderLayoutFromSystem(
@@ -569,6 +581,7 @@ export struct SujianEditor {
         visualCaret.affinity,
         isApi14Plus,
         measureTextFn,
+        pxToVp,
       )
 
       // 2. 更新 renderResult 和几何状态
@@ -612,9 +625,11 @@ export struct SujianEditor {
 
   // Issue #768 任务9：Fallback 路径 — LayoutManager 不可用时走旧的自计算路径。
   private refreshRenderLayoutFallback(snap: EditorLayoutSnapshot): void {
+    // Issue #776 评论5848626733 第6项：measureUtils.measureText 返回 px，
+    // fallback 几何统一到 vp，这里包一层 px2vp。
     const measureUtils = this.getUIContext().getMeasureUtils()
     const measureTextFn = (s: string): number => {
-      return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+      return this.getUIContext().px2vp(measureUtils.measureText({ textContent: s, fontSize: snap.fontSize }))
     }
     const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(
       snap.text,
@@ -745,7 +760,11 @@ export struct SujianEditor {
     const layout = this.textController.getLayoutManager()
     if (layout !== null && layout !== undefined) {
       try {
-        return EditorRenderBackend.hitTestByLayoutManager(layout, contentX, contentY)
+        // Issue #776 评论5848626733 第6项：getGlyphPositionAtCoordinate 接收 px，
+        // contentX/contentY 是编辑器本地 vp 坐标，先转成 px。
+        const pxX = this.getUIContext().vp2px(contentX)
+        const pxY = this.getUIContext().vp2px(contentY)
+        return EditorRenderBackend.hitTestByLayoutManager(layout, pxX, pxY)
       } catch (e) {
         hilog.warn(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG,
           `hitTestContent: getGlyphPositionAtCoordinate failed: ${JSON.stringify(e)}`)
@@ -754,9 +773,11 @@ export struct SujianEditor {
 
     // Fallback: 旧的自计算命中测试
     const snap = this.snapshot
+    // Issue #776 评论5848626733 第6项：measureUtils.measureText 返回 px，
+    // fallback 几何统一到 vp，这里包一层 px2vp。
     const measureUtils = this.getUIContext().getMeasureUtils()
     const measureTextFn = (s: string): number => {
-      return measureUtils.measureText({ textContent: s, fontSize: snap.fontSize })
+      return this.getUIContext().px2vp(measureUtils.measureText({ textContent: s, fontSize: snap.fontSize }))
     }
     return EditorRenderBackend.hitTestByPoint(
       snap,
@@ -933,13 +954,24 @@ export struct SujianEditor {
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(ev.x, ev.y)
+    // Issue #776 评论5848626733 第8项：contentCoord 是相对 Stack 左上角（含 padding）的 vp 坐标，
+    // 减去 padding 得到相对内容原点的坐标。padding 区域是留白，不命中文字。
+    const paddedX = contentCoord[0] - EDITOR_HORIZONTAL_PADDING_VP
+    const paddedY = contentCoord[1] - EDITOR_TOP_PADDING_VP
+    const inContentArea = paddedX >= 0 && paddedY >= 0
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
-    const hitPos: VisualCaretPosition = this.hitTestContent(contentCoord[0], contentCoord[1])
+    const hitPos: VisualCaretPosition = inContentArea
+      ? this.hitTestContent(paddedX, paddedY)
+      : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     switch (ev.action) {
       case 'down':
         if (ev.button === 0) {
           // Issue #767 评论 5828146609 第 1 节：鼠标点击也先确保 focus/IME。
           this.focusAndAttachIme()
+          // Issue #776 评论5848626733 第8项：padding 区域只获焦，不改变 selection。
+          if (!inContentArea) {
+            break
+          }
           // 左键按下：记 anchor position，开始 potential drag。
           this.dragAnchor = hitPos
           this.isDragging = true
@@ -949,7 +981,7 @@ export struct SujianEditor {
         }
         break
       case 'move':
-        if (this.isDragging && this.dragAnchor !== null) {
+        if (this.isDragging && this.dragAnchor !== null && inContentArea) {
           // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
           this.dispatchSelectionAndSyncIme({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
         }
@@ -1000,8 +1032,15 @@ export struct SujianEditor {
     }
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
+    // Issue #776 评论5848626733 第8项：contentCoord 是相对 Stack 左上角（含 padding）的 vp 坐标，
+    // 减去 padding 得到相对内容原点的坐标。padding 区域是留白，不命中文字。
+    const paddedX = contentCoord[0] - EDITOR_HORIZONTAL_PADDING_VP
+    const paddedY = contentCoord[1] - EDITOR_TOP_PADDING_VP
+    const inContentArea = paddedX >= 0 && paddedY >= 0
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
-    const hitPos: VisualCaretPosition = this.hitTestContent(contentCoord[0], contentCoord[1])
+    const hitPos: VisualCaretPosition = inContentArea
+      ? this.hitTestContent(paddedX, paddedY)
+      : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
 
     // 笔事件识别：统一由 StylusInputService.isStylusEvent 按 ArkUI event.sourceTool 判断。
     // 由 StylusInputService 归一化后按触控选择/书写区交互处理，原始 stylus event 不进 Core。
@@ -1012,19 +1051,25 @@ export struct SujianEditor {
 
     switch (event.type) {
       case TouchType.Down:
+        // Issue #776 评论5848626733 第8项：padding 区域不命中文字，不开始 drag。
+        if (!inContentArea) {
+          break
+        }
         // 按下：记 anchor，开始 potential drag。
         this.dragAnchor = hitPos
         this.isDragging = true
         break
       case TouchType.Move:
         // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
-        if (this.isDragging && this.dragAnchor !== null && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
+        if (this.isDragging && this.dragAnchor !== null && inContentArea
+          && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
           this.dispatchSelectionAndSyncIme({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
         }
         break
       case TouchType.Up:
         if (this.isDragging) {
-          if (this.dragAnchor !== null && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
+          if (inContentArea && this.dragAnchor !== null
+            && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
             // 单击：经 dispatcher 发 selection，成功后查询最终 selection 再通知 IME。
             this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: hitPos })
           }
@@ -1212,6 +1257,16 @@ export struct SujianEditor {
       .onTouch((event: TouchEvent): void => {
         // 触摸/笔事件 → hit test + drag selection。
         this.handleTouchEvent(event)
+      })
+      // Issue #776 评论5848626733 第8项：正文阅读边距。
+      // Stack 内容区域自动缩进 padding，子组件（selection Rect / Text / composition Rect / caret Rect）
+      // 的 .position({x, y}) 都相对 padding 后的内容原点。Text 的 width('100%') 自动是减去左右 padding
+      // 的宽度，onAreaChange 拿到的 contentWidth 已是文字实际可用宽度。
+      .padding({
+        left: EDITOR_HORIZONTAL_PADDING_VP,
+        right: EDITOR_HORIZONTAL_PADDING_VP,
+        top: EDITOR_TOP_PADDING_VP,
+        bottom: EDITOR_BOTTOM_PADDING_VP,
       })
       .align(Alignment.TopStart)
       .width('100%')

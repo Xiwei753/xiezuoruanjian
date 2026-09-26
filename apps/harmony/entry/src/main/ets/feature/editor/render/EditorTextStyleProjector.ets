@@ -83,30 +83,46 @@ export class EditorTextStyleProjector {
     })
 
     // 按段落范围应用 ParagraphStyle：每个段落是从段落开始到下一个 \n（含 \n）的范围
-    // 用 SpanStyle({ start, length, styledKey, styledValue }) 格式，length 明确表示区间长度
+    // Issue #776 评论5848626733：循环内和循环后都走 applyParagraphStyle 同一 helper，
+    // 避免不同分支生成不同样式。
     let paragraphStart = 0
     for (let i = 0; i < textLength; i++) {
       if (text.charAt(i) === '\n') {
         const paragraphEndExclusive = i + 1
-        styledString.setStyle({
-          start: paragraphStart,
-          length: paragraphEndExclusive - paragraphStart,
-          styledKey: StyledStringKey.PARAGRAPH_STYLE,
-          styledValue: paragraphStyle,
-        })
+        EditorTextStyleProjector.applyParagraphStyle(
+          styledString, paragraphStart, paragraphEndExclusive - paragraphStart, paragraphStyle,
+        )
         paragraphStart = i + 1
       }
     }
     // 最后一个段落（可能没有以 \n 结尾）
-    if (paragraphStart < textLength) {
-      styledString.setStyle({
-        start: paragraphStart,
-        length: textLength - paragraphStart,
-        styledKey: StyledStringKey.PARAGRAPH_STYLE,
-        styledValue: paragraphStyle,
-      })
-    }
+    EditorTextStyleProjector.applyParagraphStyle(
+      styledString, paragraphStart, textLength - paragraphStart, paragraphStyle,
+    )
 
     return styledString
+  }
+
+  /**
+   * 对指定区间应用 ParagraphStyle。length <= 0 时跳过，避免空段落生成样式。
+   *
+   * Issue #776 评论5848626733：段落投影统一入口，循环内（每个 \n 段落）和
+   * 循环后（最后非空段）都调此 helper，避免不同分支生成不同样式。
+   */
+  private static applyParagraphStyle(
+    styledString: MutableStyledString,
+    start: number,
+    length: number,
+    paragraphStyle: ParagraphStyle,
+  ): void {
+    if (length <= 0) {
+      return
+    }
+    styledString.setStyle({
+      start,
+      length,
+      styledKey: StyledStringKey.PARAGRAPH_STYLE,
+      styledValue: paragraphStyle,
+    })
   }
 }

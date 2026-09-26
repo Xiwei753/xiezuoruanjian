@@ -537,9 +537,9 @@ export struct HomeScreen {
       GridRow({ columns: this.adaptiveState.gridColumns, gutter: 16 }) {
         GridCol({ span: 1 }) {
           Column() {
-            Image($r('sys.media.ohos_ic_public_add'))
-              .width(36)
-              .height(36)
+            SymbolGlyph($r('sys.symbol.plus'))
+              .fontSize(36)
+              .fontColor([$r('sys.color.icon_primary')])
               .margin({ bottom: 10 })
 
             Text('新章节')
@@ -639,9 +639,9 @@ export struct HomeScreen {
       // 输入只有本 Stack 的宽高（onAreaChange）+ 页面边距 + 底部安全区，不读底栏几何。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
         Button({ type: ButtonType.Normal }) {
-          Image($r('sys.media.ohos_ic_public_add'))
-            .width(28)
-            .height(28)
+          SymbolGlyph($r('sys.symbol.plus'))
+            .fontSize(28)
+            .fontColor([$r('sys.color.icon_primary')])
         }
         .width(FAB_SIZE)
         .height(FAB_SIZE)

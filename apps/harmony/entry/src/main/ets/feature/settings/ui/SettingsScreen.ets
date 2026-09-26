@@ -390,8 +390,10 @@ export struct SettingsScreen {
   SettingsGroupList() {
     ForEach(this.filteredGroups, (groupDef: GroupDefinition) => {
       Column() {
-        // 分组标题
-        this.SettingsGroupHeader(groupDef.id)
+        // 分组标题（单分类且组名等于分类名时不重复画）
+        if (this.shouldShowGroupHeader(groupDef)) {
+          this.SettingsGroupHeader(groupDef.id)
+        }
 
         // 分组内各分类（可独立展开折叠项）
         ForEach(groupDef.sections, (sectionId: SettingsSectionId) => {
@@ -411,6 +413,18 @@ export struct SettingsScreen {
       .fontWeight(FontWeight.Medium)
       .margin({ bottom: 8, top: 8 })
       .width('100%')
+  }
+
+  // ── 中性操作按钮（避免深色模式下大面积蓝色） ──
+  @Builder
+  SettingsNeutralAction(label: ResourceStr, onClick: () => void, enabled: boolean = true) {
+    Button(label, { type: ButtonType.Normal })
+      .width('100%')
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .fontColor($r('sys.color.font_primary'))
+      .borderRadius(DesignTokens.radiusSm)
+      .enabled(enabled)
+      .onClick(onClick)
   }
 
   // ── 可展开折叠分类 ──
@@ -914,18 +928,13 @@ export struct SettingsScreen {
 
         // Sync actions
         Row() {
-          Button($r('app.string.sync_section'))
-            .fontSize(14)
-            .height(36)
-            .enabled(!this.viewModel.isSyncing)
-            .onClick(() => this.viewModel.performSync())
+          this.SettingsNeutralAction($r('app.string.sync_section'),
+            () => this.viewModel.performSync(),
+            !this.viewModel.isSyncing)
 
-          Button($r('app.string.diagnose'))
-            .fontSize(14)
-            .height(36)
-            .margin({ left: 12 })
-            .enabled(!this.viewModel.isDiagnosing)
-            .onClick(() => this.viewModel.runSyncDiagnostics())
+          this.SettingsNeutralAction($r('app.string.diagnose'),
+            () => this.viewModel.runSyncDiagnostics(),
+            !this.viewModel.isDiagnosing)
         }
         .width('100%')
         .margin({ bottom: 16 })
@@ -1024,40 +1033,26 @@ export struct SettingsScreen {
       .margin({ bottom: 16 })
 
       // 导出诊断包
-      Button('导出诊断包')
-        .fontSize(14)
-        .height(36)
-        .width('100%')
-        .margin({ bottom: 12 })
-        .onClick(() => {
-          this.viewModel.exportDiagnostics()
-        })
+      this.SettingsNeutralAction('导出诊断包', () => {
+        this.viewModel.exportDiagnostics()
+      })
 
       // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
-      Button('清空日志')
-        .fontSize(14)
-        .height(36)
-        .width('100%')
-        .margin({ bottom: 12 })
-        .onClick(() => {
-          this.viewModel.clearLogs()
-        })
+      this.SettingsNeutralAction('清空日志', () => {
+        this.viewModel.clearLogs()
+      })
 
       // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
-      Button('复制设备信息')
-        .fontSize(14)
-        .height(36)
-        .width('100%')
-        .onClick(async () => {
-          const ok = await this.viewModel.copyDeviceInfoToClipboard()
-          if (ok) {
-            this.copyMessage = '已复制'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
-          } else {
-            this.copyMessage = '复制失败'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
-          }
-        })
+      this.SettingsNeutralAction('复制设备信息', async () => {
+        const ok = await this.viewModel.copyDeviceInfoToClipboard()
+        if (ok) {
+          this.copyMessage = '已复制'
+          setTimeout(() => { this.copyMessage = '' }, 2000)
+        } else {
+          this.copyMessage = '复制失败'
+          setTimeout(() => { this.copyMessage = '' }, 2000)
+        }
+      })
     }
     .width('100%')
     .padding(16)
@@ -1556,18 +1551,13 @@ export struct SettingsScreen {
 
         // Sync actions
         Row() {
-          Button($r('app.string.sync_section'))
-            .fontSize(14)
-            .height(36)
-            .enabled(!this.viewModel.isSyncing)
-            .onClick(() => this.viewModel.performSync())
+          this.SettingsNeutralAction($r('app.string.sync_section'),
+            () => this.viewModel.performSync(),
+            !this.viewModel.isSyncing)
 
-          Button($r('app.string.diagnose'))
-            .fontSize(14)
-            .height(36)
-            .margin({ left: 12 })
-            .enabled(!this.viewModel.isDiagnosing)
-            .onClick(() => this.viewModel.runSyncDiagnostics())
+          this.SettingsNeutralAction($r('app.string.diagnose'),
+            () => this.viewModel.runSyncDiagnostics(),
+            !this.viewModel.isDiagnosing)
         }
         .width('100%')
         .margin({ bottom: 16 })
@@ -1725,40 +1715,26 @@ export struct SettingsScreen {
       .margin({ bottom: 16 })
 
       // 导出诊断包
-      Button('导出诊断包')
-        .fontSize(14)
-        .height(36)
-        .width('100%')
-        .margin({ bottom: 12 })
-        .onClick(() => {
-          this.viewModel.exportDiagnostics()
-        })
+      this.SettingsNeutralAction('导出诊断包', () => {
+        this.viewModel.exportDiagnostics()
+      })
 
       // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
-      Button('清空日志')
-        .fontSize(14)
-        .height(36)
-        .width('100%')
-        .margin({ bottom: 12 })
-        .onClick(() => {
-          this.viewModel.clearLogs()
-        })
+      this.SettingsNeutralAction('清空日志', () => {
+        this.viewModel.clearLogs()
+      })
 
       // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
-      Button('复制设备信息')
-        .fontSize(14)
-        .height(36)
-        .width('100%')
-        .onClick(async () => {
-          const ok = await this.viewModel.copyDeviceInfoToClipboard()
-          if (ok) {
-            this.copyMessage = '已复制'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
-          } else {
-            this.copyMessage = '复制失败'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
-          }
-        })
+      this.SettingsNeutralAction('复制设备信息', async () => {
+        const ok = await this.viewModel.copyDeviceInfoToClipboard()
+        if (ok) {
+          this.copyMessage = '已复制'
+          setTimeout(() => { this.copyMessage = '' }, 2000)
+        } else {
+          this.copyMessage = '复制失败'
+          setTimeout(() => { this.copyMessage = '' }, 2000)
+        }
+      })
     }
     .width('100%')
   }
@@ -1854,6 +1830,14 @@ export struct SettingsScreen {
       .margin({ top: 8 })
     }
     .width('100%')
+  }
+
+  // ── 判断是否需要显示分组标题（单分类且组名等于分类名时不重复画） ──
+  private shouldShowGroupHeader(groupDef: GroupDefinition): boolean {
+    if (groupDef.sections.length !== 1) {
+      return true
+    }
+    return this.getGroupTitle(groupDef.id) !== this.getSectionTitle(groupDef.sections[0])
   }
 
   // ════════════════════════════════════════════

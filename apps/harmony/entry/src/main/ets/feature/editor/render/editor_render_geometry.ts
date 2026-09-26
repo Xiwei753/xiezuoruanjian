@@ -7,12 +7,15 @@
 // 保证测试和生产代码走同一条路径。
 //
 // 所有 offset 是 UTF-16 code unit offset（ArkTS string.length 语义）。
-// 坐标单位 px，相对组件左上角。
+// 坐标单位 vp，相对组件左上角。
+// Issue #776 评论5848626733 第6项：系统 LayoutManager 返回的几何是 px，
+// 调用方（EditorRenderBackend）在传入前用 pxToVp 转成 vp；
+// fallback 路径的 measureTextFn 契约也返回 vp。
 
 import type { LineRange, VisualCaretPosition, CaretStop } from './editor_layout_math.ts'
 import { LineBreakKind, CaretAffinity, nextCodePointBoundary, buildLineCaretStops, horizontalForOffset, offsetForHorizontal, resolveVisualLineIndex } from './editor_layout_math.ts'
 
-/** 选区矩形（px，相对组件左上）。 */
+/** 选区矩形（vp，相对组件左上）。 */
 export interface SelectionRect {
   readonly x: number
   readonly y: number
@@ -20,7 +23,7 @@ export interface SelectionRect {
   readonly height: number
 }
 
-/** 光标矩形（px，相对组件左上）。width 通常 1-2px。 */
+/** 光标矩形（vp，相对组件左上）。width 通常 2vp。 */
 export interface CaretRect {
   readonly x: number
   readonly y: number
@@ -28,7 +31,7 @@ export interface CaretRect {
   readonly height: number
 }
 
-/** composition 下划线矩形（px，相对组件左上）。height 通常 1-2px。 */
+/** composition 下划线矩形（vp，相对组件左上）。height 通常 2vp。 */
 export interface CompositionUnderlineRect {
   readonly x: number
   readonly y: number
@@ -36,10 +39,10 @@ export interface CompositionUnderlineRect {
   readonly height: number
 }
 
-/** 行布局（含 left/y/height/breakKind/caretStops，px，相对组件左上）。 */
+/** 行布局（含 left/y/height/breakKind/caretStops，vp，相对组件左上）。 */
 // Issue #768 评论5836390597 第2项：新增 left 字段。
 // 系统行的 left 来自 LineMetrics.left（首行缩进等场景 left > 0）；
-// 自计算行的 left 始终为 0（measureText 从行首算 x）。
+// fallback 自计算行的 left 来自 toLineLayouts 的 firstLineIndentVp 参数（段落首行 > 0）。
 export interface LineLayout {
   readonly startUtf16: number
   readonly endUtf16: number
@@ -50,10 +53,10 @@ export interface LineLayout {
   readonly caretStops: CaretStop[]
 }
 
-/** 静态光标宽度（px）。 */
-export const CARET_WIDTH_PX = 2
-/** composition 下划线高度（px）。 */
-export const UNDERLINE_HEIGHT_PX = 2
+/** 静态光标宽度（vp）。 */
+export const CARET_WIDTH_VP = 2
+/** composition 下划线高度（vp）。 */
+export const UNDERLINE_HEIGHT_VP = 2
 
 // Issue #629 评论18：所有 offset↔x 算法统一来自 editor_layout_math.ts。
 // 不再重复实现 nextCodePointBoundary / buildLineCaretStops / resolveVisualLineIndex。
@@ -63,22 +66,29 @@ export const UNDERLINE_HEIGHT_PX = 2
 /**
  * 把 LineRange[] 转成 LineLayout[]（补 y/height/breakKind/caretStops）。
  * lineSpacingPx <= 0 时按 0 处理。
+ * Issue #776 评论5848626733 第7项：firstLineIndentVp 用于 fallback 路径的首行缩进。
+ * 段落首行（i===0 或前一个字符是 \n）的 left = firstLineIndentVp；其余行 left = 0。
  */
 export function toLineLayouts(
   lines: LineRange[],
   lineSpacingPx: number,
   text: string,
   measureTextFn: (s: string) => number,
+  firstLineIndentVp: number = 0,
 ): LineLayout[] {
   const spacing = lineSpacingPx > 0 ? lineSpacingPx : 0
   const out: LineLayout[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const stops = buildLineCaretStops(text, line, measureTextFn)
+    // Issue #776 评论5848626733 第7项：判断是否是段落首行。
+    // i===0 是文本首行；i>0 时检查前一行末尾是否是 \n（即 line.start 前一个字符是 \n）。
+    const isParagraphFirstLine = i === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
+    const left = isParagraphFirstLine ? firstLineIndentVp : 0
     out.push({
       startUtf16: line.start,
       endUtf16: line.end,
-      left: 0,
+      left,
       y: i * spacing,
       height: spacing,
       breakKind: line.breakKind,
@@ -103,6 +113,7 @@ export function computeSelectionRects(
   selStartUtf16: number,
   selEndUtf16: number,
   measureTextFn: (s: string) => number,
+  firstLineIndentVp: number = 0,
 ): SelectionRect[] {
   if (lines.length === 0) { return [] }
   if (selStartUtf16 === selEndUtf16) { return [] }
@@ -115,11 +126,14 @@ export function computeSelectionRects(
     const selStartInLine = Math.max(line.start, start)
     const selEndInLine = Math.min(line.end, end)
     const hasVisibleText = selStartInLine < selEndInLine
+    // Issue #776 评论5848626733 第7项：fallback 路径首行缩进。
+    const isParagraphFirstLine = i === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
+    const lineLeft = isParagraphFirstLine ? firstLineIndentVp : 0
 
     if (line.breakKind === LineBreakKind.HardBreak) {
       // 仍有可见文本被选中时画标准选区 rect（先画，保持从左到右渲染顺序）
       if (hasVisibleText) {
-        const x = measureTextFn(text.substring(line.start, selStartInLine))
+        const x = lineLeft + measureTextFn(text.substring(line.start, selStartInLine))
         const w = measureTextFn(text.substring(selStartInLine, selEndInLine))
         rects.push({ x, y: i * spacing, width: w, height: spacing })
       }
@@ -129,12 +143,12 @@ export function computeSelectionRects(
       if (lfCovered) {
         const isEmptyLine = line.start >= line.end
         if (isEmptyLine) {
-          // 空 hard line: LF 被选中 → 整行 x=0, width=contentWidth
-          rects.push({ x: 0, y: i * spacing, width: contentWidth, height: spacing })
+          // 空 hard line: LF 被选中 → 整行从 lineLeft 起, width=contentWidth
+          rects.push({ x: lineLeft, y: i * spacing, width: contentWidth, height: spacing })
         } else {
           // 非空 hard line: LF 被选中 → 从文字末端画到 contentWidth
           // Issue #629 R9：极端单 glyph 宽于容器时避免负数 width
-          const x = measureTextFn(text.substring(line.start, line.end))
+          const x = lineLeft + measureTextFn(text.substring(line.start, line.end))
           rects.push({ x, y: i * spacing, width: Math.max(0, contentWidth - x), height: spacing })
         }
       }
@@ -143,7 +157,7 @@ export function computeSelectionRects(
 
     // SoftWrap / EndOfText: 标准选区 rect
     if (selStartInLine >= selEndInLine) { continue }
-    const x = measureTextFn(text.substring(line.start, selStartInLine))
+    const x = lineLeft + measureTextFn(text.substring(line.start, selStartInLine))
     const w = measureTextFn(text.substring(selStartInLine, selEndInLine))
     rects.push({ x, y: i * spacing, width: w, height: spacing })
   }
@@ -164,6 +178,7 @@ export function computeCaretRect(
   // 默认 Upstream：soft-wrap 边界放在上一行末尾（与旧行为一致）。
   // Downstream 用于命中测试明确指定了 affinity 的场景。
   affinity: CaretAffinity = CaretAffinity.Upstream,
+  firstLineIndentVp: number = 0,
 ): CaretRect | null {
   if (lines.length === 0) { return null }
   const n = text.length
@@ -173,9 +188,12 @@ export function computeCaretRect(
   const lineIndex = resolveVisualLineIndex(lines, { utf16Offset: cursor, affinity })
   const line = lines[lineIndex]
   const clampedCursor = Math.max(line.start, Math.min(line.end, cursor))
-  const x = measureTextFn(text.substring(line.start, clampedCursor))
+  // Issue #776 评论5848626733 第7项：fallback 路径首行缩进。
+  const isParagraphFirstLine = lineIndex === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
+  const lineLeft = isParagraphFirstLine ? firstLineIndentVp : 0
+  const x = lineLeft + measureTextFn(text.substring(line.start, clampedCursor))
   const spacing = lineSpacingPx > 0 ? lineSpacingPx : 0
-  return { x, y: lineIndex * spacing, width: CARET_WIDTH_PX, height: spacing }
+  return { x, y: lineIndex * spacing, width: CARET_WIDTH_VP, height: spacing }
 }
 
 /** 计算 composition 下划线矩形列表。 */
@@ -186,6 +204,7 @@ export function computeCompositionUnderlineRects(
   compStartUtf16: number | null,
   compEndUtf16: number | null,
   measureTextFn: (s: string) => number,
+  firstLineIndentVp: number = 0,
 ): CompositionUnderlineRect[] {
   if (lines.length === 0) { return [] }
   if (compStartUtf16 === null || compEndUtf16 === null) { return [] }
@@ -199,13 +218,16 @@ export function computeCompositionUnderlineRects(
     const compStartInLine = Math.max(line.start, start)
     const compEndInLine = Math.min(line.end, end)
     if (compStartInLine >= compEndInLine) { continue }
-    const x = measureTextFn(text.substring(line.start, compStartInLine))
+    // Issue #776 评论5848626733 第7项：fallback 路径首行缩进。
+    const isParagraphFirstLine = i === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
+    const lineLeft = isParagraphFirstLine ? firstLineIndentVp : 0
+    const x = lineLeft + measureTextFn(text.substring(line.start, compStartInLine))
     const w = measureTextFn(text.substring(compStartInLine, compEndInLine))
     rects.push({
       x,
-      y: i * spacing + spacing - UNDERLINE_HEIGHT_PX,
+      y: i * spacing + spacing - UNDERLINE_HEIGHT_VP,
       width: w,
-      height: UNDERLINE_HEIGHT_PX,
+      height: UNDERLINE_HEIGHT_VP,
     })
   }
   return rects
@@ -239,7 +261,7 @@ export function computeCaretRectFromLineLayouts(
   const line = lines[lineIndex]
   const clampedCursor = Math.max(line.startUtf16, Math.min(line.endUtf16, cursor))
   const x = line.left + measureTextFn(text.substring(line.startUtf16, clampedCursor))
-  return { x, y: line.y, width: CARET_WIDTH_PX, height: line.height }
+  return { x, y: line.y, width: CARET_WIDTH_VP, height: line.height }
 }
 
 /**
@@ -318,9 +340,9 @@ export function computeCompositionUnderlineRectsFromLineLayouts(
     const w = measureTextFn(text.substring(compStartInLine, compEndInLine))
     rects.push({
       x,
-      y: line.y + line.height - UNDERLINE_HEIGHT_PX,
+      y: line.y + line.height - UNDERLINE_HEIGHT_VP,
       width: w,
-      height: UNDERLINE_HEIGHT_PX,
+      height: UNDERLINE_HEIGHT_VP,
     })
   }
   return rects

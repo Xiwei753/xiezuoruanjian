@@ -403,9 +403,9 @@ export struct WorkspaceScreen {
           .margin({ right: 8 })
 
         Button({ type: ButtonType.Normal }) {
-          Image($r('sys.media.ohos_ic_public_add'))
-            .width(28)
-            .height(28)
+          SymbolGlyph($r('sys.symbol.plus'))
+            .fontSize(28)
+            .fontColor([$r('sys.color.icon_primary')])
         }
         .width(48)
         .height(48)
@@ -536,9 +536,9 @@ export struct WorkspaceScreen {
       // 输入只有本 Stack 的宽高（onAreaChange）+ 页面边距 + 底部安全区，不读底栏几何。
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
         Button({ type: ButtonType.Normal }) {
-          Image($r('sys.media.ohos_ic_public_add'))
-            .width(28)
-            .height(28)
+          SymbolGlyph($r('sys.symbol.plus'))
+            .fontSize(28)
+            .fontColor([$r('sys.color.icon_primary')])
         }
         .width(FAB_SIZE)
         .height(FAB_SIZE)
@@ -702,9 +702,9 @@ export struct WorkspaceScreen {
           .margin({ right: 8 })
 
         Button({ type: ButtonType.Normal }) {
-          Image($r('sys.media.ohos_ic_public_add'))
-            .width(28)
-            .height(28)
+          SymbolGlyph($r('sys.symbol.plus'))
+            .fontSize(28)
+            .fontColor([$r('sys.color.icon_primary')])
         }
         .width(48)
         .height(48)
@@ -782,9 +782,9 @@ export struct WorkspaceScreen {
   @Builder
   EmptyState() {
     Column() {
-      Image($r('sys.media.ohos_ic_public_add'))
-        .width(64)
-        .height(64)
+      SymbolGlyph($r('sys.symbol.plus'))
+        .fontSize(64)
+        .fontColor([$r('sys.color.icon_primary')])
         .margin({ bottom: 16 })
 
       Text($r('app.string.no_volumes_chapters'))
@@ -817,9 +817,9 @@ export struct WorkspaceScreen {
 
         // 新增章节按钮
         Button({ type: ButtonType.Normal }) {
-          Image($r('sys.media.ohos_ic_public_add'))
-            .width(28)
-            .height(28)
+          SymbolGlyph($r('sys.symbol.plus'))
+            .fontSize(28)
+            .fontColor([$r('sys.color.icon_primary')])
         }
         .width(48)
         .height(48)

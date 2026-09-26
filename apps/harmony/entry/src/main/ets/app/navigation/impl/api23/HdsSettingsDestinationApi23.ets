@@ -5,7 +5,7 @@
 // Issue #773 评论5844518092：统一为 V2 @ComponentV2 + @Param，消除 V2 页面把 @Builder
 // 交给 V1 壳的 @BuilderParam 后 this 变成壳组件导致 adaptiveState undefined 的 TypeError。
 
-import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
+import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 
 @ComponentV2
 export struct HdsSettingsDestinationApi23 {
@@ -19,7 +19,16 @@ export struct HdsSettingsDestinationApi23 {
       this.contentBuilder()
     }
     .hideTitleBar(false)
-    .titleBar({ content: { title: { mainTitle: this.title } } } as HdsNavigationTitleBarOptions)
+    .titleBar({
+      enableComponentSafeArea: true,
+      content: { title: { mainTitle: this.title } },
+      style: {
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        }
+      }
+    } as HdsNavigationTitleBarOptions)
     .onBackPressed(() => {
       if (this.onBack) {
         this.onBack()

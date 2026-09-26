@@ -117,23 +117,17 @@ export class HarmonyDiagnosticsExporter {
   // Checkpoint 调用此方法导出到 staging 目录，确认完整成功后再移动到 snapshots。
   async exportTo(outputDir: string): Promise<string | null> {
     try {
-      // 1. flush 日志落盘
-      const flushResult = this.diagnosticsBridge.flushDiagnostics()
-      if (flushResult !== 0) {
-        hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics failed with code %{public}d; continuing export', flushResult)
-      }
-
-      // 2. 准备输出目录
+      // 1. 准备输出目录
       if (this.abilityContext === null) {
         hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
         return null
       }
       this.ensureOutputDir(outputDir)
 
-      // 3. 收集平台附件
+      // 2. 收集平台附件
       const attachments = await this.collectAttachments()
 
-      // 4. 调用 Rust exporter 生成 zip
+      // 3. 调用 Rust exporter 生成 zip
       const attachmentsJson = JSON.stringify(attachments)
       const zipPath = this.diagnosticsBridge.exportDiagnostics(outputDir, attachmentsJson)
 
@@ -181,13 +175,9 @@ export class HarmonyDiagnosticsExporter {
       }
       fs.copyFileSync(zipPath, shareZipPath)
 
-      // 验证 share copy 的 size
+      // 记录 share copy 的 size（仅日志，不拦截）
       const stat = fs.statSync(shareZipPath)
       hilog.info(0x0000, LOG_TAG, 'Share zip size: %{public}d bytes', stat.size)
-      if (stat.size <= 0) {
-        hilog.error(0x0000, LOG_TAG, 'Share zip size is 0 or negative; aborting share')
-        return false
-      }
 
       // 只把 share copy 的 URI 交给 ShareKit
       const shareService = HarmonyShareService.getInstance()

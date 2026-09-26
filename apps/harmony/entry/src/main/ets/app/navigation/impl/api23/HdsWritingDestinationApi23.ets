@@ -3,7 +3,7 @@
 // 收进 impl/api23 组件，共享页面 WritingScreen 不再直接 import @kit.UIDesignKit，
 // 避免高版本模块引用进入所有版本都会加载的共享页面，破坏版本隔离。
 
-import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
+import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 
 @ComponentV2
 export struct HdsWritingDestinationApi23 {
@@ -17,7 +17,16 @@ export struct HdsWritingDestinationApi23 {
       this.contentBuilder()
     }
     .hideTitleBar(false)
-    .titleBar({ content: { title: { mainTitle: this.title } } } as HdsNavigationTitleBarOptions)
+    .titleBar({
+      enableComponentSafeArea: true,
+      content: { title: { mainTitle: this.title } },
+      style: {
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        }
+      }
+    } as HdsNavigationTitleBarOptions)
     .onBackPressed(() => {
       if (this.onBack) {
         this.onBack()
