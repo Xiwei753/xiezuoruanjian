@@ -406,6 +406,13 @@ impl StarMapStore {
             }
         }
 
+        // 先更新 graph_meta（merge_memory_ids），后处理删除文件。
+        // 这样 merge 时 deleted_*_ids 还在，增量合并能正确移除已删除的对象 IDs。
+        // 如果先删文件后 merge，deleted_*_ids 已被清空，merge 无法移除已删除的 IDs。
+        let (written_revision, graph_meta_path) = self.update_graph_meta_file()?;
+        self.package_revision = written_revision;
+        changed_paths.push(graph_meta_path);
+
         let node_ids_to_delete: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
         for node_id in &node_ids_to_delete {
             match package_storage::delete_node_file(&self.app_data_root, &self.starmap_id, node_id)
@@ -496,10 +503,6 @@ impl StarMapStore {
                 }
             }
         }
-
-        let (written_revision, graph_meta_path) = self.update_graph_meta_file()?;
-        self.package_revision = written_revision;
-        changed_paths.push(graph_meta_path);
 
         let node_count: u32 = self
             .graph_meta

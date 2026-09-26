@@ -5,6 +5,11 @@ mod save;
 mod snapshot;
 
 use crate::starmap::package_storage;
+use crate::starmap::semantic::{
+    StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
+    StarMapTargetDetail,
+};
+use crate::starmap::types::reference::StarMapTargetPath;
 use crate::starmap::types::*;
 
 fn write_to_bucket(dir: &std::path::Path, subdir: &str, id: &str, json: &str) {
@@ -14,9 +19,6 @@ fn write_to_bucket(dir: &std::path::Path, subdir: &str, id: &str, json: &str) {
     std::fs::write(&path, json).unwrap();
 }
 fn make_test_node(id: &str, title: &str) -> StarMapNode {
-    use crate::starmap::semantic::{
-        StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
-    };
     StarMapNode {
         id: id.to_string(),
         title: title.to_string(),
@@ -34,13 +36,16 @@ fn make_test_node(id: &str, title: &str) -> StarMapNode {
     }
 }
 fn make_test_link(link_id: &str, label: &str) -> StarMapLink {
-    use crate::starmap::semantic::{StarMapDeepTarget, StarMapTargetDetail};
     StarMapLink {
         link_id: link_id.to_string(),
-        source: StarMapEndpoint::Starmap,
-        target: StarMapDeepTarget {
+        source: StarMapTargetPath {
+            starmap_id: "self".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        },
+        target: StarMapTargetPath {
             starmap_id: "other".to_string(),
-            path: vec![],
+            segments: vec![],
             target: StarMapTargetDetail::Starmap,
         },
         label: Some(label.to_string()),

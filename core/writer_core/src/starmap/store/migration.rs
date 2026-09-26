@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::error::Result;
 
-use super::meta::{DeletedSinceLastSync, GraphMeta, LegacyGraphMeta};
+use super::meta::{DeletedSinceLastSync, GraphMeta};
 use super::relation_index::*;
 use super::types::*;
 use super::StarMapStore;
@@ -129,7 +129,6 @@ impl StarMapStore {
                         return Ok(GraphMeta {
                             schema_version: "2".to_string(),
                             starmap_id: graph.starmap_id.clone(),
-                            title: graph.title.clone(),
                             node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
                             edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
                             embed_instance_ids: graph
@@ -144,12 +143,8 @@ impl StarMapStore {
                                 .iter()
                                 .map(|e| EdgeRelationIndex {
                                     edge_id: e.id.clone(),
-                                    from: e.from.clone().unwrap_or_default(),
-                                    to: e.to.clone().unwrap_or_default(),
-                                    from_endpoint: e.from_endpoint.clone(),
-                                    to_endpoint: e.to_endpoint.clone(),
-                                    from_endpoint_path: e.from_endpoint_path.clone(),
-                                    to_endpoint_path: e.to_endpoint_path.clone(),
+                                    from: e.from.clone(),
+                                    to: e.to.clone(),
                                 })
                                 .collect(),
                             embed_host_index: graph
@@ -157,8 +152,7 @@ impl StarMapStore {
                                 .iter()
                                 .map(|e| EmbedHostIndex {
                                     instance_id: e.instance_id.clone(),
-                                    host_node_id: e.source_node_id.clone().unwrap_or_default(),
-                                    host_endpoint: e.host_endpoint.clone(),
+                                    host_path: e.host_path.clone(),
                                 })
                                 .collect(),
                             link_relation_index: graph
@@ -166,7 +160,7 @@ impl StarMapStore {
                                 .iter()
                                 .map(|l| LinkRelationIndex {
                                     link_id: l.link_id.clone(),
-                                    source_node_id: endpoint_node_id(&l.source)
+                                    source_node_id: target_path_node_id(&l.source)
                                         .unwrap_or_default()
                                         .to_string(),
                                 })
@@ -180,15 +174,19 @@ impl StarMapStore {
                                 counts
                             },
                             package_revision: 0,
-                            updated_at: graph.updated_at,
+                            updated_at: crate::starmap::now_epoch(),
                             deleted_since_last_sync: DeletedSinceLastSync::default(),
                         });
                     }
-                    let meta: LegacyGraphMeta = serde_json::from_str(&content)?;
+                    // v1 legacy format without inline nodes — treat as empty graph meta
                     return Ok(GraphMeta {
                         schema_version: "2".to_string(),
-                        starmap_id: meta.starmap_id.clone(),
-                        title: meta.title.clone(),
+                        starmap_id: value
+                            .get("starmapId")
+                            .or_else(|| value.get("starmap_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         node_ids: vec![],
                         edge_ids: vec![],
                         embed_instance_ids: vec![],
@@ -200,7 +198,7 @@ impl StarMapStore {
                         hyperlink_relation_index: vec![],
                         node_kind_counts: HashMap::new(),
                         package_revision: 0,
-                        updated_at: meta.updated_at,
+                        updated_at: crate::starmap::now_epoch(),
                         deleted_since_last_sync: DeletedSinceLastSync::default(),
                     });
                 }

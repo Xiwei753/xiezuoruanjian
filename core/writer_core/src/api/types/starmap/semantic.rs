@@ -245,9 +245,7 @@ impl From<StarMapAnchorRoleDto> for crate::starmap::semantic::StarMapAnchorRole 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortalDto {
-    pub target_starmap_id: String,
-    #[serde(default)]
-    pub deep_target: Option<StarMapDeepTargetDto>,
+    pub target: StarMapTargetPathDto,
     #[serde(default)]
     pub mode: StarMapPortalModeDto,
     #[serde(default)]
@@ -257,8 +255,7 @@ pub struct StarMapPortalDto {
 impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
     fn from(p: crate::starmap::semantic::StarMapPortal) -> Self {
         Self {
-            target_starmap_id: p.target_starmap_id,
-            deep_target: p.deep_target.map(Into::into),
+            target: p.target.into(),
             mode: p.mode.into(),
             preview_policy: p.preview_policy.into(),
         }
@@ -268,8 +265,7 @@ impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
 impl From<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
     fn from(d: StarMapPortalDto) -> Self {
         Self {
-            target_starmap_id: d.target_starmap_id,
-            deep_target: d.deep_target.map(Into::into),
+            target: d.target.into(),
             mode: d.mode.into(),
             preview_policy: d.preview_policy.into(),
         }
@@ -280,7 +276,7 @@ impl From<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
 
 pub enum StarMapPortalModeDto {
     #[default]
-    EnterChild,
+    EnterPortal,
     PreviewInline,
     ReferenceOnly,
 }
@@ -288,7 +284,7 @@ pub enum StarMapPortalModeDto {
 impl From<crate::starmap::semantic::StarMapPortalMode> for StarMapPortalModeDto {
     fn from(m: crate::starmap::semantic::StarMapPortalMode) -> Self {
         match m {
-            crate::starmap::semantic::StarMapPortalMode::EnterChild => Self::EnterChild,
+            crate::starmap::semantic::StarMapPortalMode::EnterPortal => Self::EnterPortal,
             crate::starmap::semantic::StarMapPortalMode::PreviewInline => Self::PreviewInline,
             crate::starmap::semantic::StarMapPortalMode::ReferenceOnly => Self::ReferenceOnly,
         }
@@ -298,7 +294,7 @@ impl From<crate::starmap::semantic::StarMapPortalMode> for StarMapPortalModeDto 
 impl From<StarMapPortalModeDto> for crate::starmap::semantic::StarMapPortalMode {
     fn from(dto: StarMapPortalModeDto) -> Self {
         match dto {
-            StarMapPortalModeDto::EnterChild => Self::EnterChild,
+            StarMapPortalModeDto::EnterPortal => Self::EnterPortal,
             StarMapPortalModeDto::PreviewInline => Self::PreviewInline,
             StarMapPortalModeDto::ReferenceOnly => Self::ReferenceOnly,
         }
@@ -463,30 +459,30 @@ impl Default for StarMapProvenanceDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct StarMapDeepTargetDto {
+pub struct StarMapTargetPathDto {
     pub starmap_id: String,
     #[serde(default)]
-    pub path: Vec<StarMapPathSegmentDto>,
+    pub segments: Vec<StarMapPathSegmentDto>,
     pub target: StarMapTargetDetailDto,
 }
 
-impl From<crate::starmap::semantic::StarMapDeepTarget> for StarMapDeepTargetDto {
-    fn from(t: crate::starmap::semantic::StarMapDeepTarget) -> Self {
+impl From<crate::starmap::types::reference::StarMapTargetPath> for StarMapTargetPathDto {
+    fn from(p: crate::starmap::types::reference::StarMapTargetPath) -> Self {
         Self {
-            starmap_id: t.starmap_id,
-            path: t.path.into_iter().map(Into::into).collect(),
-            target: t.target.into(),
+            starmap_id: p.starmap_id,
+            segments: p.segments.into_iter().map(Into::into).collect(),
+            target: p.target.into(),
         }
     }
 }
 
-impl From<StarMapDeepTargetDto> for crate::starmap::semantic::StarMapDeepTarget {
-    fn from(d: StarMapDeepTargetDto) -> Self {
+impl From<StarMapTargetPathDto> for crate::starmap::types::reference::StarMapTargetPath {
+    fn from(d: StarMapTargetPathDto) -> Self {
         Self {
             starmap_id: d.starmap_id,
-            path: d.path.into_iter().map(Into::into).collect(),
+            segments: d.segments.into_iter().map(Into::into).collect(),
             target: d.target.into(),
         }
     }
@@ -497,24 +493,38 @@ impl From<StarMapDeepTargetDto> for crate::starmap::semantic::StarMapDeepTarget 
 pub struct StarMapPathSegmentDto {
     #[serde(rename = "type")]
     pub kind: String,
-    pub starmap_id: Option<String>,
+    pub instance_id: Option<String>,
+    pub node_id: Option<String>,
 }
 
-impl From<crate::starmap::semantic::StarMapPathSegment> for StarMapPathSegmentDto {
-    fn from(s: crate::starmap::semantic::StarMapPathSegment) -> Self {
+impl From<crate::starmap::types::reference::StarMapPathSegment> for StarMapPathSegmentDto {
+    fn from(s: crate::starmap::types::reference::StarMapPathSegment) -> Self {
         match s {
-            crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id } => Self {
-                kind: "enterChild".to_string(),
-                starmap_id: Some(starmap_id),
+            crate::starmap::types::reference::StarMapPathSegment::EnterEmbed { instance_id } => {
+                Self {
+                    kind: "enterEmbed".to_string(),
+                    instance_id: Some(instance_id),
+                    node_id: None,
+                }
+            }
+            crate::starmap::types::reference::StarMapPathSegment::EnterPortal { node_id } => Self {
+                kind: "enterPortal".to_string(),
+                instance_id: None,
+                node_id: Some(node_id),
             },
         }
     }
 }
 
-impl From<StarMapPathSegmentDto> for crate::starmap::semantic::StarMapPathSegment {
+impl From<StarMapPathSegmentDto> for crate::starmap::types::reference::StarMapPathSegment {
     fn from(d: StarMapPathSegmentDto) -> Self {
-        Self::EnterChild {
-            starmap_id: d.starmap_id.unwrap_or_default(),
+        match d.kind.as_str() {
+            "enterPortal" => Self::EnterPortal {
+                node_id: d.node_id.unwrap_or_default(),
+            },
+            _ => Self::EnterEmbed {
+                instance_id: d.instance_id.unwrap_or_default(),
+            },
         }
     }
 }

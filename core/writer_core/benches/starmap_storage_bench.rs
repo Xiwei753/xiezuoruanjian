@@ -18,7 +18,6 @@ fn bench_load_starmap(c: &mut Criterion) {
     let gmeta = GraphMeta {
         schema_version: "2".to_string(),
         starmap_id: real_id.clone(),
-        title: "Bench".to_string(),
         node_ids: (0..1000).map(|i| format!("node_{}", i)).collect(),
         edge_ids: vec![],
         embed_instance_ids: vec![],

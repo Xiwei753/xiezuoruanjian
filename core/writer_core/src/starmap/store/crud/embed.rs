@@ -1,51 +1,14 @@
 use crate::error::Result;
 use crate::starmap::types::*;
 
-use super::super::relation_index::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub fn upsert_embed(&mut self, embed: StarMapEmbed) {
         let instance_id = embed.instance_id.clone();
-        let is_new = !self.embeds.contains_key(&instance_id);
-        let host_node_id = embed.source_node_id.clone().unwrap_or_default();
-        let host_endpoint = embed.host_endpoint.clone();
         self.embeds.insert(instance_id.clone(), embed);
         self.dirty_embeds.insert(instance_id.clone());
         self.deleted_embed_ids.remove(&instance_id);
-        if self.graph_meta.is_none() {
-            self.ensure_graph_meta_initialized();
-        }
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync
-                .remove_entry("embed", &instance_id);
-            if is_new {
-                if !meta.embed_instance_ids.contains(&instance_id) {
-                    meta.embed_instance_ids.push(instance_id.clone());
-                }
-                meta.embed_host_index.push(EmbedHostIndex {
-                    instance_id: instance_id.clone(),
-                    host_node_id: host_node_id.clone(),
-                    host_endpoint,
-                });
-            } else {
-                if let Some(ehi) = meta
-                    .embed_host_index
-                    .iter_mut()
-                    .find(|e| e.instance_id == instance_id)
-                {
-                    ehi.host_node_id = host_node_id;
-                    ehi.host_endpoint = host_endpoint;
-                }
-            }
-        }
         self.dirty_graph_meta = true;
     }
 
@@ -53,19 +16,6 @@ impl StarMapStore {
         self.embeds.remove(instance_id);
         self.dirty_embeds.remove(instance_id);
         self.deleted_embed_ids.insert(instance_id.to_string());
-        if self.graph_meta.is_none() {
-            self.ensure_graph_meta_initialized();
-        }
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.embed_instance_ids.retain(|id| id != instance_id);
-            meta.embed_host_index
-                .retain(|ehi| ehi.instance_id != instance_id);
-            meta.deleted_since_last_sync.add_entry(
-                "embed",
-                instance_id,
-                self.package_revision.saturating_add(1),
-            );
-        }
         self.dirty_graph_meta = true;
     }
 
@@ -81,14 +31,6 @@ impl StarMapStore {
         Ok(result)
     }
 
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub fn update_embed(
         &mut self,
         instance_id: &str,
@@ -118,46 +60,13 @@ impl StarMapStore {
         if let Some(Some(ref vp)) = patch.target_viewport {
             embed.target_viewport = vp.clone();
         }
-        if let Some(Some(ref vp)) = patch.viewport {
-            embed.placement.width = vp.width;
-            embed.placement.height = vp.height;
-            embed.target_viewport.scale = vp.scale;
-            embed.target_viewport.offset_x = vp.offset_x;
-            embed.target_viewport.offset_y = vp.offset_y;
-        }
-        let host_changed = patch.source_node_id.is_some()
-            || patch.host_endpoint.is_some()
-            || patch.host_anchor.is_some();
-        if let Some(ref sni) = patch.source_node_id {
-            embed.source_node_id = sni.clone();
-        }
-        if let Some(ref ep) = patch.host_endpoint {
-            embed.host_endpoint = ep.clone();
-        }
-        if let Some(Some(ref anchor_id)) = patch.host_anchor {
-            if let Some(ref node_id) = embed.source_node_id {
-                embed.host_endpoint = Some(StarMapEndpoint::Anchor {
-                    node_id: node_id.clone(),
-                    anchor_id: anchor_id.clone(),
-                });
-            }
+        if let Some(ref hp) = patch.host_path {
+            embed.host_path = hp.clone();
         }
         embed.updated_at = crate::starmap::now_epoch();
         let updated = embed.clone();
         self.dirty_embeds.insert(instance_id.to_string());
-        if host_changed {
-            if let Some(ref mut meta) = self.graph_meta {
-                if let Some(ehi) = meta
-                    .embed_host_index
-                    .iter_mut()
-                    .find(|e| e.instance_id == instance_id)
-                {
-                    ehi.host_node_id = updated.source_node_id.clone().unwrap_or_default();
-                    ehi.host_endpoint = updated.host_endpoint.clone();
-                }
-            }
-            self.dirty_graph_meta = true;
-        }
+        self.dirty_graph_meta = true;
         Ok(updated)
     }
 

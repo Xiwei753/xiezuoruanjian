@@ -454,8 +454,8 @@ impl WriterCoreApi {
             .edges
             .into_iter()
             .filter_map(|edge| {
-                let from = edge.from.filter(|id| !id.is_empty())?;
-                let to = edge.to.filter(|id| !id.is_empty())?;
+                let from = edge.from.target.node_id.clone()?;
+                let to = edge.to.target.node_id.clone()?;
                 Some(crate::starmap::render::EdgeInput {
                     id: edge.id,
                     from,
@@ -931,37 +931,6 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn create_child_starmap(
-        &self,
-        parent_id: &str,
-        title: &str,
-        desc: &str,
-        accent_color: Option<&str>,
-    ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        //   用 _with_changes 版本记录本地历史。
-        let (result, change_set) = self
-            .core_write()
-            .create_child_starmap_with_changes(parent_id, title, desc, accent_color)
-            .map_err(WriterError::from)?;
-        let project_id = result.project_id.as_deref();
-        let entry = crate::search::extractor::extract_starmap_title_entry(
-            &result.starmap_id,
-            project_id,
-            title,
-        );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Upsert,
-            object_id: entry.object_id.clone(),
-            scope: entry.scope,
-            title: entry.title.clone(),
-            body: entry.body.clone(),
-            target: Some(entry.target.clone()),
-        });
-        let result_dto: crate::api::types::StarMapMetaDto = result.into();
-        let _ = self.record_workspace_change_set_history(&change_set, "create_child_starmap");
-        Ok(result_dto)
-    }
-
     pub fn update_starmap_node(
         &self,
         starmap_id: &str,
@@ -1281,10 +1250,14 @@ impl WriterCoreApi {
             });
         }
 
+        let meta = self
+            .core_write()
+            .get_starmap(starmap_id)
+            .map_err(WriterError::from)?;
         let entry = crate::search::extractor::extract_starmap_title_entry(
             starmap_id,
             project_id.as_deref(),
-            &graph.title,
+            &meta.title,
         );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,

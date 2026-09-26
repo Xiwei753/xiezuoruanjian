@@ -78,8 +78,7 @@ pub struct StarMapEmbedDto {
     pub open_behavior: StarMapOpenBehaviorDto,
     pub placement: StarMapEmbedPlacementDto,
     pub target_viewport: StarMapEmbedViewportDto,
-    pub source_node_id: Option<String>,
-    pub host_endpoint: Option<StarMapEndpointDto>,
+    pub host_path: StarMapTargetPathDto,
     pub provenance: StarMapProvenanceDto,
     pub created_at: u64,
     pub updated_at: u64,
@@ -95,8 +94,7 @@ impl From<crate::starmap::types::StarMapEmbed> for StarMapEmbedDto {
             open_behavior: e.open_behavior.into(),
             placement: e.placement.into(),
             target_viewport: e.target_viewport.into(),
-            source_node_id: e.source_node_id,
-            host_endpoint: e.host_endpoint.map(Into::into),
+            host_path: e.host_path.into(),
             provenance: e.provenance.into(),
             created_at: e.created_at,
             updated_at: e.updated_at,
@@ -114,8 +112,7 @@ impl From<StarMapEmbedDto> for crate::starmap::types::StarMapEmbed {
             open_behavior: d.open_behavior.into(),
             placement: d.placement.into(),
             target_viewport: d.target_viewport.into(),
-            source_node_id: d.source_node_id,
-            host_endpoint: d.host_endpoint.map(Into::into),
+            host_path: d.host_path.into(),
             provenance: d.provenance.into(),
             created_at: d.created_at,
             updated_at: d.updated_at,
@@ -129,12 +126,9 @@ pub struct StarMapEmbedPatchDto {
     pub label: Option<Option<String>>,
     pub display_policy: Option<StarMapDisplayPolicyDto>,
     pub open_behavior: Option<StarMapOpenBehaviorDto>,
-    pub viewport: Option<Option<StarMapViewportDto>>,
     pub placement: Option<Option<StarMapEmbedPlacementDto>>,
     pub target_viewport: Option<Option<StarMapEmbedViewportDto>>,
-    pub source_node_id: Option<Option<String>>,
-    pub host_anchor: Option<Option<String>>,
-    pub host_endpoint: Option<Option<StarMapEndpointDto>>,
+    pub host_path: Option<StarMapTargetPathDto>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -144,18 +138,11 @@ pub struct StarMapEmbedPatchInputDto {
     pub clear_label: bool,
     pub display_policy: Option<StarMapDisplayPolicyDto>,
     pub open_behavior: Option<StarMapOpenBehaviorDto>,
-    pub viewport: Option<StarMapViewportDto>,
-    pub clear_viewport: bool,
     pub placement: Option<StarMapEmbedPlacementDto>,
     pub clear_placement: bool,
     pub target_viewport: Option<StarMapEmbedViewportDto>,
     pub clear_target_viewport: bool,
-    pub source_node_id: Option<String>,
-    pub clear_source_node_id: bool,
-    pub host_anchor: Option<String>,
-    pub clear_host_anchor: bool,
-    pub host_endpoint: Option<StarMapEndpointDto>,
-    pub clear_host_endpoint: bool,
+    pub host_path: Option<StarMapTargetPathDto>,
 }
 
 impl From<StarMapEmbedPatchInputDto> for StarMapEmbedPatchDto {
@@ -168,11 +155,6 @@ impl From<StarMapEmbedPatchInputDto> for StarMapEmbedPatchDto {
             },
             display_policy: d.display_policy,
             open_behavior: d.open_behavior,
-            viewport: if d.clear_viewport {
-                Some(None)
-            } else {
-                d.viewport.map(Some)
-            },
             placement: if d.clear_placement {
                 Some(None)
             } else {
@@ -183,21 +165,7 @@ impl From<StarMapEmbedPatchInputDto> for StarMapEmbedPatchDto {
             } else {
                 d.target_viewport.map(Some)
             },
-            source_node_id: if d.clear_source_node_id {
-                Some(None)
-            } else {
-                d.source_node_id.map(Some)
-            },
-            host_anchor: if d.clear_host_anchor {
-                Some(None)
-            } else {
-                d.host_anchor.map(Some)
-            },
-            host_endpoint: if d.clear_host_endpoint {
-                Some(None)
-            } else {
-                d.host_endpoint.map(Some)
-            },
+            host_path: d.host_path,
         }
     }
 }
@@ -208,12 +176,9 @@ impl From<StarMapEmbedPatchDto> for crate::starmap::types::StarMapEmbedPatch {
             label: d.label,
             display_policy: d.display_policy.map(Into::into),
             open_behavior: d.open_behavior.map(Into::into),
-            viewport: d.viewport.map(|v| v.map(Into::into)),
             placement: d.placement.map(|p| p.map(Into::into)),
             target_viewport: d.target_viewport.map(|v| v.map(Into::into)),
-            source_node_id: d.source_node_id,
-            host_anchor: d.host_anchor,
-            host_endpoint: d.host_endpoint.map(|v| v.map(Into::into)),
+            host_path: d.host_path.map(Into::into),
         }
     }
 }

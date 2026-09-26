@@ -1,76 +1,29 @@
 use crate::error::Result;
 use crate::starmap::types::*;
 
-use super::super::relation_index::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub fn upsert_node(&mut self, node: StarMapNode) {
         let node_id = node.id.clone();
-        let kind_key = format!("{:?}", node.kind);
-        let is_new = !self.nodes.contains_key(&node_id);
         self.nodes.insert(node_id.clone(), node);
         self.dirty_nodes.insert(node_id.clone());
         self.deleted_node_ids.remove(&node_id);
-        if self.graph_meta.is_none() {
-            self.ensure_graph_meta_initialized();
-        }
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.remove_entry("node", &node_id);
-            if is_new {
-                if !meta.node_ids.contains(&node_id) {
-                    meta.node_ids.push(node_id.clone());
-                }
-                *meta.node_kind_counts.entry(kind_key).or_insert(0u32) += 1;
-            }
-            self.dirty_graph_meta = true;
-        }
+        self.dirty_graph_meta = true;
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub fn remove_node(&mut self, node_id: &str) {
-        if let Some(node) = self.nodes.get(node_id) {
-            let kind_key = format!("{:?}", node.kind);
-            if let Some(ref mut meta) = self.graph_meta {
-                if let Some(count) = meta.node_kind_counts.get_mut(&kind_key) {
-                    *count = count.saturating_sub(1);
-                }
-            }
-        }
         self.nodes.remove(node_id);
         self.dirty_nodes.remove(node_id);
         self.deleted_node_ids.insert(node_id.to_string());
-        if self.graph_meta.is_none() {
-            self.ensure_graph_meta_initialized();
-        }
-        if let Some(ref mut meta) = self.graph_meta {
-            meta.node_ids.retain(|id| id != node_id);
-            meta.deleted_since_last_sync.add_entry(
-                "node",
-                node_id,
-                self.package_revision.saturating_add(1),
-            );
-        }
         self.dirty_graph_meta = true;
     }
 
     pub fn add_node(&mut self, node: StarMapNode, default_x: f32, default_y: f32) -> StarMapNode {
         let result = node.clone();
         self.upsert_node(node);
-        if let Some(ref mut layout) = self.layout {
+        let layout = self.layout.get_or_insert_with(StarMapLayout::default);
+        if !layout.nodes.iter().any(|n| n.node_id == result.id) {
             layout.nodes.push(StarMapLayoutNode {
                 node_id: result.id.clone(),
                 x: default_x,
@@ -90,13 +43,6 @@ impl StarMapStore {
         result
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub fn update_node(&mut self, node_id: &str, patch: &StarMapNodePatch) -> Result<StarMapNode> {
         if !self.nodes.contains_key(node_id) {
             self.ensure_object_loaded(node_id)?;
@@ -111,17 +57,6 @@ impl StarMapStore {
             node.title = t.clone();
         }
         if let Some(ref k) = patch.kind {
-            let old_kind_key = format!("{:?}", node.kind);
-            let new_kind_key = format!("{:?}", k);
-            if old_kind_key != new_kind_key {
-                if let Some(ref mut meta) = self.graph_meta {
-                    if let Some(count) = meta.node_kind_counts.get_mut(&old_kind_key) {
-                        *count = count.saturating_sub(1);
-                    }
-                    *meta.node_kind_counts.entry(new_kind_key).or_insert(0u32) += 1;
-                }
-                self.dirty_graph_meta = true;
-            }
             node.kind = k.clone();
         }
         if let Some(ref p) = patch.payload {
@@ -151,6 +86,7 @@ impl StarMapStore {
         node.updated_at = crate::starmap::now_epoch();
         let updated = node.clone();
         self.dirty_nodes.insert(node_id.to_string());
+        self.dirty_graph_meta = true;
         Ok(updated)
     }
 
@@ -165,53 +101,48 @@ impl StarMapStore {
             )));
         }
 
+        // Collect IDs of edges, embeds, links, hyperlinks that reference this node.
+        // These are derived from the in-memory objects directly, not from the relation index.
         let edge_ids_to_remove: Vec<String> = self
-            .graph_meta
-            .as_ref()
-            .map(|m| {
-                m.edge_relation_index
-                    .iter()
-                    .filter(|eri| extract_eri_node_refs(eri).contains(&node_id))
-                    .map(|eri| eri.edge_id.clone())
-                    .collect()
+            .edges
+            .values()
+            .filter(|e| {
+                let from_refs = crate::starmap::store::relation_index::target_path_node_id(&e.from);
+                let to_refs = crate::starmap::store::relation_index::target_path_node_id(&e.to);
+                from_refs == Some(node_id) || to_refs == Some(node_id)
             })
-            .unwrap_or_default();
+            .map(|e| e.id.clone())
+            .collect();
 
         let embed_ids_to_remove: Vec<String> = self
-            .graph_meta
-            .as_ref()
-            .map(|m| {
-                m.embed_host_index
-                    .iter()
-                    .filter(|ehi| extract_ehi_node_refs(ehi).contains(&node_id))
-                    .map(|ehi| ehi.instance_id.clone())
-                    .collect()
+            .embeds
+            .values()
+            .filter(|em| {
+                crate::starmap::store::relation_index::target_path_node_id(&em.host_path)
+                    == Some(node_id)
             })
-            .unwrap_or_default();
+            .map(|em| em.instance_id.clone())
+            .collect();
 
         let link_ids_to_remove: Vec<String> = self
-            .graph_meta
-            .as_ref()
-            .map(|m| {
-                m.link_relation_index
-                    .iter()
-                    .filter(|lri| lri.source_node_id == node_id)
-                    .map(|lri| lri.link_id.clone())
-                    .collect()
+            .links
+            .values()
+            .filter(|l| {
+                crate::starmap::store::relation_index::target_path_node_id(&l.source)
+                    == Some(node_id)
             })
-            .unwrap_or_default();
+            .map(|l| l.link_id.clone())
+            .collect();
 
         let hyperlink_ids_to_remove: Vec<String> = self
-            .graph_meta
-            .as_ref()
-            .map(|m| {
-                m.hyperlink_relation_index
-                    .iter()
-                    .filter(|hri| hri.source_node_id == node_id)
-                    .map(|hri| hri.hyperlink_id.clone())
-                    .collect()
+            .hyperlinks
+            .values()
+            .filter(|hl| {
+                crate::starmap::store::relation_index::target_path_node_id(&hl.source)
+                    == Some(node_id)
             })
-            .unwrap_or_default();
+            .map(|hl| hl.hyperlink_id.clone())
+            .collect();
 
         self.remove_node(node_id);
 

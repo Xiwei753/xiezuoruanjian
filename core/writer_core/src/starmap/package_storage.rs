@@ -508,17 +508,23 @@ mod tests {
         let now = crate::starmap::now_epoch();
         let edge = StarMapEdge {
             id: "e1".to_string(),
-            from: Some("n1".to_string()),
-            to: Some("n2".to_string()),
+            from: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: String::new(),
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Node {
+                    node_id: "n1".to_string(),
+                },
+            },
+            to: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: String::new(),
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Node {
+                    node_id: "n2".to_string(),
+                },
+            },
             kind: StarMapEdgeKind::RelatedTo,
             label: Some("relates".to_string()),
             payload: None,
-            from_target: None,
-            to_target: None,
-            from_endpoint: None,
-            to_endpoint: None,
-            from_endpoint_path: None,
-            to_endpoint_path: None,
             created_at: now,
             updated_at: now,
         };
@@ -536,10 +542,14 @@ mod tests {
         let now = crate::starmap::now_epoch();
         let link = StarMapLink {
             link_id: "l1".to_string(),
-            source: StarMapEndpoint::Starmap,
-            target: crate::starmap::semantic::StarMapDeepTarget {
+            source: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: String::new(),
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            target: crate::starmap::types::reference::StarMapTargetPath {
                 starmap_id: "other".to_string(),
-                path: vec![],
+                segments: vec![],
                 target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             },
             label: Some("link".to_string()),

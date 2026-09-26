@@ -335,12 +335,16 @@ mod tests {
         ).unwrap();
         let link = crate::starmap::types::StarMapLink {
             link_id: "l1".to_string(),
-            source: crate::starmap::types::StarMapEndpoint::Node {
-                node_id: "n1".to_string(),
-            },
-            target: crate::starmap::semantic::StarMapDeepTarget {
+            source: crate::starmap::types::reference::StarMapTargetPath {
                 starmap_id: "sm1".to_string(),
-                path: vec![],
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Node {
+                    node_id: "n1".to_string(),
+                },
+            },
+            target: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: "sm1".to_string(),
+                segments: vec![],
                 target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             },
             label: Some("MyLink".to_string()),
@@ -1052,16 +1056,12 @@ mod tests {
 
         let old_graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "GraphMap".to_string(),
             nodes: vec![node_a, node_b],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         };
         api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0)
             .unwrap();
@@ -1094,16 +1094,12 @@ mod tests {
         };
         let new_graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "GraphMap".to_string(),
             nodes: vec![node_a_only],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         };
         let rev1 = api
             .core_write()
@@ -1347,9 +1343,10 @@ mod tests {
 
         let hl = crate::starmap::types::StarMapHyperlink {
             hyperlink_id: "hl1".to_string(),
-            source: crate::starmap::types::StarMapEndpointPath {
+            source: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: "sm1".to_string(),
                 segments: vec![],
-                endpoint: crate::starmap::types::StarMapEdgeEndpoint::Starmap,
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             },
             target_uri: "https://example.com/docs".to_string(),
             label: Some("ExampleDoc".to_string()),
@@ -1428,33 +1425,39 @@ mod tests {
         };
         let edge_ab = crate::api::types::StarMapEdgeDto {
             id: "e1".to_string(),
-            from: Some("na".to_string()),
-            to: Some("nb".to_string()),
+            from: crate::api::types::StarMapTargetPathDto {
+                starmap_id: meta.starmap_id.clone(),
+                segments: vec![],
+                target: crate::api::types::StarMapTargetDetailDto {
+                    kind: "node".to_string(),
+                    node_id: Some("na".to_string()),
+                    ..Default::default()
+                },
+            },
+            to: crate::api::types::StarMapTargetPathDto {
+                starmap_id: meta.starmap_id.clone(),
+                segments: vec![],
+                target: crate::api::types::StarMapTargetDetailDto {
+                    kind: "node".to_string(),
+                    node_id: Some("nb".to_string()),
+                    ..Default::default()
+                },
+            },
             kind: crate::api::types::StarMapEdgeKindDto::RelatedTo,
             label: Some("EdgeLabel".to_string()),
             payload: None,
-            from_target: None,
-            to_target: None,
-            from_endpoint: None,
-            to_endpoint: None,
-            from_endpoint_path: None,
-            to_endpoint_path: None,
             created_at: 0,
             updated_at: 0,
         };
 
         let old_graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "EdgeMap".to_string(),
             nodes: vec![node_a, node_b],
             edges: vec![edge_ab],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         };
         api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0)
             .unwrap();
@@ -1484,16 +1487,12 @@ mod tests {
         };
         let new_graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "EdgeMap".to_string(),
             nodes: vec![node_a_only],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         };
         let rev1 = api
             .core_write()
@@ -1665,8 +1664,7 @@ mod tests {
                 offset_x: 0.0,
                 offset_y: 0.0,
             },
-            source_node_id: None,
-            host_endpoint: None,
+            host_path: crate::api::types::StarMapTargetPathDto::default(),
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
@@ -1675,9 +1673,10 @@ mod tests {
 
         let hl = crate::starmap::types::StarMapHyperlink {
             hyperlink_id: "hl1".to_string(),
-            source: crate::starmap::types::StarMapEndpointPath {
+            source: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: "sm1".to_string(),
                 segments: vec![],
-                endpoint: crate::starmap::types::StarMapEdgeEndpoint::Starmap,
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             },
             target_uri: "https://example.com".to_string(),
             label: Some("MyHL".to_string()),
@@ -1803,8 +1802,7 @@ mod tests {
                 offset_x: 0.0,
                 offset_y: 0.0,
             },
-            source_node_id: None,
-            host_endpoint: None,
+            host_path: crate::api::types::StarMapTargetPathDto::default(),
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
@@ -1813,9 +1811,10 @@ mod tests {
 
         let hl = crate::starmap::types::StarMapHyperlink {
             hyperlink_id: "hl1".to_string(),
-            source: crate::starmap::types::StarMapEndpointPath {
+            source: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: "sm1".to_string(),
                 segments: vec![],
-                endpoint: crate::starmap::types::StarMapEdgeEndpoint::Starmap,
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             },
             target_uri: "https://example.com".to_string(),
             label: Some("CascadeHL".to_string()),
@@ -1897,8 +1896,7 @@ mod tests {
             open_behavior: Default::default(),
             placement: Default::default(),
             target_viewport: Default::default(),
-            source_node_id: None,
-            host_endpoint: None,
+            host_path: crate::starmap::types::reference::StarMapTargetPath::default(),
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
@@ -2097,16 +2095,12 @@ mod tests {
 
         let graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "RevMap".to_string(),
             nodes: vec![],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         };
 
         let result = api.import_or_replace_starmap_package(&meta.starmap_id, &graph, 99);
@@ -2143,13 +2137,13 @@ mod tests {
         let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("HlMap", "desc", None).unwrap();
 
-        let endpoint_path = crate::api::types::StarMapEndpointPathDto {
+        let endpoint_path = crate::api::types::StarMapTargetPathDto {
+            starmap_id: meta.starmap_id.clone(),
             segments: vec![],
-            endpoint: crate::api::types::StarMapEdgeEndpointDto {
+            target: crate::api::types::StarMapTargetDetailDto {
                 kind: "node".to_string(),
                 node_id: Some("n1".to_string()),
-                anchor_id: None,
-                target: None,
+                ..Default::default()
             },
         };
         let hl1 = crate::api::types::StarMapHyperlinkDto {
@@ -2173,16 +2167,12 @@ mod tests {
 
         let old_graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "HlMap".to_string(),
             nodes: vec![],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![hl1, hl2],
-            created_at: 0,
-            updated_at: 0,
         };
         api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0)
             .unwrap();
@@ -2208,13 +2198,13 @@ mod tests {
         };
         let hl1_updated = crate::api::types::StarMapHyperlinkDto {
             hyperlink_id: "hl1".to_string(),
-            source: crate::api::types::StarMapEndpointPathDto {
+            source: crate::api::types::StarMapTargetPathDto {
+                starmap_id: meta.starmap_id.clone(),
                 segments: vec![],
-                endpoint: crate::api::types::StarMapEdgeEndpointDto {
+                target: crate::api::types::StarMapTargetDetailDto {
                     kind: "node".to_string(),
                     node_id: Some("n1".to_string()),
-                    anchor_id: None,
-                    target: None,
+                    ..Default::default()
                 },
             },
             target_uri: "https://example.com/updated".to_string(),
@@ -2225,16 +2215,12 @@ mod tests {
         };
         let new_graph = crate::api::types::StarMapGraphDto {
             schema_version: 1,
-            id: "g1".to_string(),
             starmap_id: meta.starmap_id.clone(),
-            title: "HlMap".to_string(),
             nodes: vec![],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![hl1_updated, hl3],
-            created_at: 0,
-            updated_at: 0,
         };
         let rev1 = api
             .core_write()

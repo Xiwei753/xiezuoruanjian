@@ -4,30 +4,7 @@ use crate::starmap::semantic::{
     StarMapAnchor, StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapPortal,
     StarMapProvenance,
 };
-
-use super::StarMapEndpointPath;
-
-/// 边端点类型（结构化引用，替代 legacy `from`/`to` 字符串）。
-///
-/// - `Node`：直接引用当前星图中的节点
-/// - `Anchor`：引用节点内的锚点
-/// - `Starmap`：指向整个星图（无边端点）
-/// - `DeepTarget`：跨星图层级引用，由 `resolve_deep_target` 在验证时解析
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum StarMapEdgeEndpoint {
-    Node {
-        node_id: String,
-    },
-    Anchor {
-        node_id: String,
-        anchor_id: String,
-    },
-    Starmap,
-    DeepTarget {
-        target: crate::starmap::semantic::StarMapDeepTarget,
-    },
-}
+use crate::starmap::types::reference::StarMapTargetPath;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,9 +52,7 @@ pub enum StarMapEdgeKind {
 #[serde(rename_all = "camelCase")]
 pub struct StarMapGraph {
     pub schema_version: u32,
-    pub id: String,
     pub starmap_id: String,
-    pub title: String,
     pub nodes: Vec<StarMapNode>,
     pub edges: Vec<StarMapEdge>,
     #[serde(default)]
@@ -86,24 +61,18 @@ pub struct StarMapGraph {
     pub links: Vec<super::StarMapLink>,
     #[serde(default)]
     pub hyperlinks: Vec<super::StarMapHyperlink>,
-    pub created_at: u64,
-    pub updated_at: u64,
 }
 
 impl Default for StarMapGraph {
     fn default() -> Self {
         Self {
             schema_version: 1,
-            id: String::new(),
             starmap_id: String::new(),
-            title: String::new(),
             nodes: vec![],
             edges: vec![],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         }
     }
 }
@@ -136,39 +105,17 @@ pub struct StarMapNode {
 
 /// 星图边。
 ///
-/// ## 端点引用演进（向后兼容）
-///
-/// 边的端点引用有三代字段，优先级从高到低：
-/// 1. `from_endpoint_path` / `to_endpoint_path`：跨星图层级路径（v3，最优先）
-/// 2. `from_endpoint` / `to_endpoint`：结构化端点（v2）
-/// 3. `from` / `to`：legacy 节点 ID 字符串（v1，最低优先级）
-///
-/// 所有 legacy 字段使用 `#[serde(default)]` 保持向前兼容——
-/// 旧格式 JSON 缺少新字段时自动填充为 `None`，新格式 JSON 缺少旧字段时同理。
-/// 验证和渲染时按优先级选择可用的端点引用。
+/// 边的端点使用统一的 `StarMapTargetPath` 引用模型，
+/// 支持跨星图层级引用。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEdge {
     pub id: String,
-    #[serde(default)]
-    pub from: Option<String>,
-    #[serde(default)]
-    pub to: Option<String>,
+    pub from: StarMapTargetPath,
+    pub to: StarMapTargetPath,
     pub kind: StarMapEdgeKind,
     pub label: Option<String>,
     pub payload: Option<serde_json::Value>,
-    #[serde(default)]
-    pub from_target: Option<crate::starmap::semantic::StarMapDeepTarget>,
-    #[serde(default)]
-    pub to_target: Option<crate::starmap::semantic::StarMapDeepTarget>,
-    #[serde(default)]
-    pub from_endpoint: Option<StarMapEdgeEndpoint>,
-    #[serde(default)]
-    pub to_endpoint: Option<StarMapEdgeEndpoint>,
-    #[serde(default)]
-    pub from_endpoint_path: Option<StarMapEndpointPath>,
-    #[serde(default)]
-    pub to_endpoint_path: Option<StarMapEndpointPath>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -201,10 +148,6 @@ pub struct StarMapEdgePatch {
     pub kind: Option<StarMapEdgeKind>,
     pub label: Option<Option<String>>,
     pub payload: Option<Option<serde_json::Value>>,
-    pub from_target: Option<Option<crate::starmap::semantic::StarMapDeepTarget>>,
-    pub to_target: Option<Option<crate::starmap::semantic::StarMapDeepTarget>>,
-    pub from_endpoint: Option<Option<StarMapEdgeEndpoint>>,
-    pub to_endpoint: Option<Option<StarMapEdgeEndpoint>>,
-    pub from_endpoint_path: Option<Option<StarMapEndpointPath>>,
-    pub to_endpoint_path: Option<Option<StarMapEndpointPath>>,
+    pub from: Option<StarMapTargetPath>,
+    pub to: Option<StarMapTargetPath>,
 }

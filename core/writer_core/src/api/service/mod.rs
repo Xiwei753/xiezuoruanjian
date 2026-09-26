@@ -454,31 +454,37 @@ mod tests {
         let api = WriterCoreApi::new("", "");
         let graph = StarMapGraphDto {
             schema_version: 1,
-            id: "graph".to_string(),
             starmap_id: "map".to_string(),
-            title: "Map".to_string(),
             nodes: vec![],
             edges: vec![StarMapEdgeDto {
                 id: "edge-1".to_string(),
-                from: Some("a".to_string()),
-                to: Some("b".to_string()),
+                from: StarMapTargetPathDto {
+                    starmap_id: "map".to_string(),
+                    segments: vec![],
+                    target: StarMapTargetDetailDto {
+                        kind: "node".to_string(),
+                        node_id: Some("a".to_string()),
+                        ..Default::default()
+                    },
+                },
+                to: StarMapTargetPathDto {
+                    starmap_id: "map".to_string(),
+                    segments: vec![],
+                    target: StarMapTargetDetailDto {
+                        kind: "node".to_string(),
+                        node_id: Some("b".to_string()),
+                        ..Default::default()
+                    },
+                },
                 kind: StarMapEdgeKindDto::RelatedTo,
                 label: None,
                 payload: None,
-                from_target: None,
-                to_target: None,
-                from_endpoint: None,
-                to_endpoint: None,
-                from_endpoint_path: None,
-                to_endpoint_path: None,
                 created_at: 0,
                 updated_at: 0,
             }],
             embeds: vec![],
             links: vec![],
             hyperlinks: vec![],
-            created_at: 0,
-            updated_at: 0,
         };
         let layout = StarMapLayoutDto {
             kind: StarMapLayoutKindDto::Freeform,

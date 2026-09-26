@@ -1,5 +1,6 @@
 use super::super::*;
 use super::*;
+use crate::starmap::types::reference::{StarMapTargetDetail, StarMapTargetPath};
 use tempfile::TempDir;
 
 #[test]
@@ -33,17 +34,23 @@ fn merge_memory_ids_updates_edge_endpoint_in_index() {
 
     let edge = crate::starmap::types::StarMapEdge {
         id: "e1".to_string(),
-        from: Some("n1".to_string()),
-        to: Some("n2".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string(),
+            },
+        },
         kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -51,7 +58,13 @@ fn merge_memory_ids_updates_edge_endpoint_in_index() {
     store.flush().unwrap();
 
     let updated_edge = crate::starmap::types::StarMapEdge {
-        from: Some("n3".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n3".to_string(),
+            },
+        },
         ..edge
     };
     store.upsert_edge(updated_edge);
@@ -66,10 +79,26 @@ fn merge_memory_ids_updates_edge_endpoint_in_index() {
         .find(|e| e.edge_id == "e1")
         .unwrap();
     assert_eq!(
-        eri.from, "n3",
+        eri.from,
+        StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n3".to_string()
+            },
+        },
         "edge_relation_index should reflect updated endpoint"
     );
-    assert_eq!(eri.to, "n2");
+    assert_eq!(
+        eri.to,
+        StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string()
+            },
+        }
+    );
 }
 #[test]
 fn merge_memory_ids_updates_embed_host_in_index() {
@@ -89,8 +118,13 @@ fn merge_memory_ids_updates_embed_host_in_index() {
         open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
         placement: crate::starmap::types::StarMapEmbedPlacement::default(),
         target_viewport: crate::starmap::types::StarMapEmbedViewport::default(),
-        source_node_id: Some("n1".to_string()),
-        host_endpoint: None,
+        host_path: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
         provenance: crate::starmap::semantic::StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
@@ -99,7 +133,13 @@ fn merge_memory_ids_updates_embed_host_in_index() {
     store.flush().unwrap();
 
     let updated_embed = crate::starmap::types::StarMapEmbed {
-        source_node_id: Some("n2".to_string()),
+        host_path: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string(),
+            },
+        },
         ..embed
     };
     store.upsert_embed(updated_embed);
@@ -114,7 +154,14 @@ fn merge_memory_ids_updates_embed_host_in_index() {
         .find(|e| e.instance_id == "em1")
         .unwrap();
     assert_eq!(
-        ehi.host_node_id, "n2",
+        ehi.host_path,
+        StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string()
+            },
+        },
         "embed_host_index should reflect updated host"
     );
 }
@@ -199,17 +246,23 @@ fn merge_memory_ids_skips_deleted_edge_in_index() {
     use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
     store.upsert_edge(StarMapEdge {
         id: "e1".to_string(),
-        from: Some("n1".to_string()),
-        to: Some("n2".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string(),
+            },
+        },
         kind: StarMapEdgeKind::References,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     });

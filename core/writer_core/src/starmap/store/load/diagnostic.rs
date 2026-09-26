@@ -152,12 +152,8 @@ impl StarMapStore {
             if let Some(edge) = self.edges.get(edge_id) {
                 edge_relation_index.push(EdgeRelationIndex {
                     edge_id: edge.id.clone(),
-                    from: edge.from.clone().unwrap_or_default(),
-                    to: edge.to.clone().unwrap_or_default(),
-                    from_endpoint: edge.from_endpoint.clone(),
-                    to_endpoint: edge.to_endpoint.clone(),
-                    from_endpoint_path: edge.from_endpoint_path.clone(),
-                    to_endpoint_path: edge.to_endpoint_path.clone(),
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
                 });
             }
         }
@@ -172,8 +168,7 @@ impl StarMapStore {
             if let Some(embed) = self.embeds.get(instance_id) {
                 embed_host_index.push(EmbedHostIndex {
                     instance_id: embed.instance_id.clone(),
-                    host_node_id: embed.source_node_id.clone().unwrap_or_default(),
-                    host_endpoint: embed.host_endpoint.clone(),
+                    host_path: embed.host_path.clone(),
                 });
             }
         }
@@ -188,7 +183,7 @@ impl StarMapStore {
             if let Some(link) = self.links.get(link_id) {
                 link_relation_index.push(LinkRelationIndex {
                     link_id: link.link_id.clone(),
-                    source_node_id: endpoint_node_id(&link.source)
+                    source_node_id: target_path_node_id(&link.source)
                         .unwrap_or_default()
                         .to_string(),
                 });
@@ -205,7 +200,7 @@ impl StarMapStore {
             if let Some(hl) = self.hyperlinks.get(hl_id) {
                 hyperlink_relation_index.push(HyperlinkRelationIndex {
                     hyperlink_id: hl.hyperlink_id.clone(),
-                    source_node_id: endpoint_path_node_id(&hl.source)
+                    source_node_id: target_path_node_id(&hl.source)
                         .unwrap_or_default()
                         .to_string(),
                 });
@@ -504,67 +499,42 @@ impl StarMapStore {
     ) {
         let node_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
         for edge in self.edges.values() {
-            if let Some(ref from_id) = edge.from {
-                if !node_ids.contains(from_id.as_str()) {
+            // 检查 from 路径中的节点引用
+            if let Some(node_id) = super::super::relation_index::target_path_node_id(&edge.from) {
+                if !node_ids.contains(node_id) {
                     diagnostics.push(LoadDiagnostic {
                         kind: LoadDiagnosticKind::DanglingReference,
                         object_type: "edge".to_string(),
                         object_id: edge.id.clone(),
-                        detail: format!("edge references non-existent from node: {}", from_id),
+                        detail: format!("edge from references non-existent node: {}", node_id),
                     });
                 }
             }
-            if let Some(ref to_id) = edge.to {
-                if !node_ids.contains(to_id.as_str()) {
+            // 检查 to 路径中的节点引用
+            if let Some(node_id) = super::super::relation_index::target_path_node_id(&edge.to) {
+                if !node_ids.contains(node_id) {
                     diagnostics.push(LoadDiagnostic {
                         kind: LoadDiagnosticKind::DanglingReference,
                         object_type: "edge".to_string(),
                         object_id: edge.id.clone(),
-                        detail: format!("edge references non-existent to node: {}", to_id),
-                    });
-                }
-            }
-            if let Some(ref ep) = edge.from_endpoint {
-                let nid = match ep {
-                    StarMapEdgeEndpoint::Node { node_id } => node_id.as_str(),
-                    StarMapEdgeEndpoint::Anchor { node_id, .. } => node_id.as_str(),
-                    _ => "",
-                };
-                if !nid.is_empty() && !node_ids.contains(nid) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "edge".to_string(),
-                        object_id: edge.id.clone(),
-                        detail: format!("edge from_endpoint references non-existent node: {}", nid),
-                    });
-                }
-            }
-            if let Some(ref ep) = edge.to_endpoint {
-                let nid = match ep {
-                    StarMapEdgeEndpoint::Node { node_id } => node_id.as_str(),
-                    StarMapEdgeEndpoint::Anchor { node_id, .. } => node_id.as_str(),
-                    _ => "",
-                };
-                if !nid.is_empty() && !node_ids.contains(nid) {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::DanglingReference,
-                        object_type: "edge".to_string(),
-                        object_id: edge.id.clone(),
-                        detail: format!("edge to_endpoint references non-existent node: {}", nid),
+                        detail: format!("edge to references non-existent node: {}", node_id),
                     });
                 }
             }
         }
         for embed in self.embeds.values() {
-            if let Some(ref source_id) = embed.source_node_id {
-                if !node_ids.contains(source_id.as_str()) {
+            // 检查 host_path 中的节点引用
+            if let Some(node_id) =
+                super::super::relation_index::target_path_node_id(&embed.host_path)
+            {
+                if !node_ids.contains(node_id) {
                     diagnostics.push(LoadDiagnostic {
                         kind: LoadDiagnosticKind::DanglingReference,
                         object_type: "embed".to_string(),
                         object_id: embed.instance_id.clone(),
                         detail: format!(
-                            "embed references non-existent source_node_id: {}",
-                            source_id
+                            "embed host_path references non-existent node: {}",
+                            node_id
                         ),
                     });
                 }

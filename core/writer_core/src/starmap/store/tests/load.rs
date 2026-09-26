@@ -1,6 +1,8 @@
 use super::super::meta::DeletedSinceLastSync;
 use super::super::*;
 use super::*;
+use crate::starmap::semantic::StarMapTargetDetail;
+use crate::starmap::types::reference::StarMapTargetPath;
 use tempfile::TempDir;
 
 #[test]
@@ -27,7 +29,6 @@ fn load_full_returns_diagnostics_for_missing_files() {
     let meta = GraphMeta {
         schema_version: "2".to_string(),
         starmap_id: "test-id".to_string(),
-        title: "Test".to_string(),
         node_ids: vec!["missing-node".to_string()],
         edge_ids: vec![],
         embed_instance_ids: vec![],
@@ -64,7 +65,6 @@ fn load_full_returns_diagnostics_for_missing_link() {
     let meta = GraphMeta {
         schema_version: "2".to_string(),
         starmap_id: "test-id".to_string(),
-        title: "Test".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
         embed_instance_ids: vec![],
@@ -112,14 +112,20 @@ fn load_full_detects_dangling_edge_reference() {
         kind: StarMapEdgeKind::References,
         label: None,
         payload: None,
-        from: Some("n1".to_string()),
-        to: Some("nonexistent".to_string()),
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
+        from: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "nonexistent".to_string(),
+            },
+        },
         created_at: 0,
         updated_at: 0,
     };
@@ -129,7 +135,6 @@ fn load_full_detects_dangling_edge_reference() {
     let meta = GraphMeta {
         schema_version: "2".to_string(),
         starmap_id: "test-id".to_string(),
-        title: "Test".to_string(),
         node_ids: vec!["n1".to_string()],
         edge_ids: vec!["e1".to_string()],
         embed_instance_ids: vec![],
@@ -174,7 +179,6 @@ fn load_full_detects_orphan_object_on_disk() {
     let meta = GraphMeta {
         schema_version: "2".to_string(),
         starmap_id: "test-id".to_string(),
-        title: "Test".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
         embed_instance_ids: vec![],
@@ -215,7 +219,6 @@ fn load_full_detects_unsupported_version() {
     let meta = GraphMeta {
         schema_version: "99".to_string(),
         starmap_id: "test-id".to_string(),
-        title: "Test".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
         embed_instance_ids: vec![],
@@ -474,14 +477,20 @@ fn prefetch_nearby_loads_adjacent_nodes() {
         kind: StarMapEdgeKind::References,
         label: None,
         payload: None,
-        from: Some("n1".to_string()),
-        to: Some("n2".to_string()),
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
+        from: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string(),
+            },
+        },
         created_at: 0,
         updated_at: 0,
     };
@@ -837,17 +846,23 @@ fn ensure_object_loaded_for_edge_embed_link_hyperlink() {
     store.upsert_node(node.clone());
     let edge = StarMapEdge {
         id: "e1".to_string(),
-        from: Some("n1".to_string()),
-        to: Some("n1".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
         kind: StarMapEdgeKind::RelatedTo,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     };
@@ -870,11 +885,10 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
-    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+    // Write graph.json directly to disk with a link_ids entry that has no corresponding file.
     let graph_meta = GraphMeta {
         schema_version: "2".to_string(),
         starmap_id: meta.starmap_id.clone(),
-        title: "Test".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
         embed_instance_ids: vec![],
@@ -889,8 +903,17 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
         updated_at: 0,
         deleted_since_last_sync: DeletedSinceLastSync::default(),
     };
-    store.graph_meta = Some(graph_meta);
-    store.flush().unwrap();
+    let graph_json = serde_json::to_string_pretty(&graph_meta).unwrap();
+    let graph_path = dir
+        .path()
+        .join("starmaps")
+        .join(&meta.starmap_id)
+        .join("graph.json");
+    std::fs::create_dir_all(graph_path.parent().unwrap()).unwrap();
+    std::fs::write(&graph_path, &graph_json).unwrap();
+
+    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+    store.load_full().unwrap();
 
     let result = store.list_links_with_diagnostics();
     assert!(
@@ -914,17 +937,23 @@ fn prefetch_only_loads_adjacent_edges() {
     for i in 1..=9 {
         store.upsert_edge(StarMapEdge {
             id: format!("e{}", i),
-            from: Some(format!("n{}", i)),
-            to: Some(format!("n{}", i + 1)),
+            from: StarMapTargetPath {
+                starmap_id: meta.starmap_id.clone(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: format!("n{}", i),
+                },
+            },
+            to: StarMapTargetPath {
+                starmap_id: meta.starmap_id.clone(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: format!("n{}", i + 1),
+                },
+            },
             kind: StarMapEdgeKind::References,
             label: None,
             payload: None,
-            from_target: None,
-            to_target: None,
-            from_endpoint: None,
-            to_endpoint: None,
-            from_endpoint_path: None,
-            to_endpoint_path: None,
             created_at: 0,
             updated_at: 0,
         });
@@ -979,9 +1008,7 @@ fn prefetch_only_loads_adjacent_edges() {
 }
 #[test]
 fn edge_relation_index_preserves_endpoint_fields() {
-    use crate::starmap::types::{
-        StarMapEdge, StarMapEdgeEndpoint, StarMapEdgeKind, StarMapEndpointPath,
-    };
+    use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
@@ -991,27 +1018,24 @@ fn edge_relation_index_preserves_endpoint_fields() {
     store.upsert_node(make_test_node("n2", "Node2"));
     store.upsert_edge(StarMapEdge {
         id: "e1".to_string(),
-        from: Some("n1".to_string()),
-        to: Some("n2".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Anchor {
+                node_id: "n2".to_string(),
+                anchor_id: "a1".to_string(),
+            },
+        },
         kind: StarMapEdgeKind::References,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: Some(StarMapEdgeEndpoint::Node {
-            node_id: "n1".to_string(),
-        }),
-        to_endpoint: Some(StarMapEdgeEndpoint::Anchor {
-            node_id: "n2".to_string(),
-            anchor_id: "a1".to_string(),
-        }),
-        from_endpoint_path: None,
-        to_endpoint_path: Some(StarMapEndpointPath {
-            segments: vec![],
-            endpoint: StarMapEdgeEndpoint::Node {
-                node_id: "n2".to_string(),
-            },
-        }),
         created_at: 0,
         updated_at: 0,
     });
@@ -1028,22 +1052,18 @@ fn edge_relation_index_preserves_endpoint_fields() {
         .find(|e| e.edge_id == "e1")
         .unwrap();
     assert!(
-        eri.from_endpoint.is_some(),
-        "from_endpoint should be preserved in index"
+        matches!(eri.from.target, StarMapTargetDetail::Node { .. }),
+        "from target should be Node in index"
     );
     assert!(
-        eri.to_endpoint.is_some(),
-        "to_endpoint should be preserved in index"
-    );
-    assert!(
-        eri.to_endpoint_path.is_some(),
-        "to_endpoint_path should be preserved in index"
+        matches!(eri.to.target, StarMapTargetDetail::Anchor { .. }),
+        "to target should be Anchor in index"
     );
 }
 #[test]
 fn embed_host_index_preserves_host_endpoint() {
     use crate::starmap::semantic::{StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance};
-    use crate::starmap::types::{StarMapEmbed, StarMapEndpoint};
+    use crate::starmap::types::StarMapEmbed;
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
@@ -1058,11 +1078,14 @@ fn embed_host_index_preserves_host_endpoint() {
         open_behavior: StarMapOpenBehavior::default(),
         placement: Default::default(),
         target_viewport: Default::default(),
-        source_node_id: Some("n1".to_string()),
-        host_endpoint: Some(StarMapEndpoint::Anchor {
-            node_id: "n1".to_string(),
-            anchor_id: "a1".to_string(),
-        }),
+        host_path: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Anchor {
+                node_id: "n1".to_string(),
+                anchor_id: "a1".to_string(),
+            },
+        },
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
@@ -1080,26 +1103,29 @@ fn embed_host_index_preserves_host_endpoint() {
         .find(|e| e.instance_id == "emb1")
         .unwrap();
     assert!(
-        ehi.host_endpoint.is_some(),
-        "host_endpoint should be preserved in index"
+        matches!(ehi.host_path.target, StarMapTargetDetail::Anchor { .. }),
+        "host_path should preserve Anchor target in index"
     );
 }
 #[test]
 fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
-    use crate::starmap::semantic::{StarMapDeepTarget, StarMapTargetDetail};
-    use crate::starmap::types::{StarMapEndpoint, StarMapLink};
+    use crate::starmap::types::StarMapLink;
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let link = StarMapLink {
         link_id: "l1".to_string(),
-        source: StarMapEndpoint::Node {
-            node_id: "n1".to_string(),
-        },
-        target: StarMapDeepTarget {
+        source: StarMapTargetPath {
             starmap_id: meta.starmap_id.clone(),
-            path: vec![],
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        target: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
             target: StarMapTargetDetail::Node {
                 node_id: "other".to_string(),
             },
@@ -1163,17 +1189,23 @@ fn prefetch_nearby_objects_no_infinite_recursion_when_no2_index() {
 
     let edge = crate::starmap::types::StarMapEdge {
         id: "e1".to_string(),
-        from: Some("n1".to_string()),
-        to: Some("n2".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: meta.starmap_id.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string(),
+            },
+        },
         kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     };

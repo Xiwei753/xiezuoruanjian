@@ -262,8 +262,6 @@ fn starmap_graph_dto_serialization_contract() {
     assert!(json.get("edges").is_some());
     assert!(json.get("embeds").is_some());
     assert!(json.get("links").is_some());
-    assert!(json.get("createdAt").is_some());
-    assert!(json.get("updatedAt").is_some());
 }
 
 #[test]

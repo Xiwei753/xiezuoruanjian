@@ -233,10 +233,8 @@ fn problem3_other_direct_starmap_ops_recorded() {
     let parent = api.create_starmap("父星图", "", None).unwrap();
     // rename
     api.rename_starmap(&parent.starmap_id, "新名").unwrap();
-    // create_child
-    let child = api
-        .create_child_starmap(&parent.starmap_id, "子星图", "", None)
-        .unwrap();
+    // create_child_starmap was removed; use create_starmap instead
+    let child = api.create_starmap("子星图", "", None).unwrap();
     // bind 到一个 project
     let project = api.create_project("绑定作品").unwrap();
     api.bind_starmap_to_project(&child.starmap_id, &project.id)

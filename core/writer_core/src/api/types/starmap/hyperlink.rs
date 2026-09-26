@@ -4,7 +4,7 @@ use super::*;
 #[serde(rename_all = "camelCase")]
 pub struct StarMapHyperlinkDto {
     pub hyperlink_id: String,
-    pub source: StarMapEndpointPathDto,
+    pub source: StarMapTargetPathDto,
     pub target_uri: String,
     pub label: Option<String>,
     pub target_starmap_id: Option<String>,
@@ -150,7 +150,6 @@ impl From<PhasedSnapshotRequestDto> for crate::starmap::store::PhasedSnapshotReq
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPhasedSnapshotDto {
     pub starmap_id: String,
-    pub title: String,
     pub load_phase: String,
     pub package_revision: u64,
     pub complete: bool,
@@ -174,7 +173,6 @@ impl From<crate::starmap::store::StarMapPhasedSnapshot> for StarMapPhasedSnapsho
     fn from(s: crate::starmap::store::StarMapPhasedSnapshot) -> Self {
         Self {
             starmap_id: s.starmap_id,
-            title: s.title,
             load_phase: match s.load_phase {
                 crate::starmap::store::LoadPhase::GraphMeta => "GraphMeta".to_string(),
                 crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => {

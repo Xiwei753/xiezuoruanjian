@@ -64,12 +64,8 @@ pub struct StarMapEdgePatchDto {
     pub kind: Option<StarMapEdgeKindDto>,
     pub label: Option<Option<String>>,
     pub payload: Option<Option<String>>,
-    pub from_target: Option<Option<StarMapDeepTargetDto>>,
-    pub to_target: Option<Option<StarMapDeepTargetDto>>,
-    pub from_endpoint: Option<Option<StarMapEdgeEndpointDto>>,
-    pub to_endpoint: Option<Option<StarMapEdgeEndpointDto>>,
-    pub from_endpoint_path: Option<Option<StarMapEndpointPathDto>>,
-    pub to_endpoint_path: Option<Option<StarMapEndpointPathDto>>,
+    pub from: Option<StarMapTargetPathDto>,
+    pub to: Option<StarMapTargetPathDto>,
 }
 
 impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
@@ -80,12 +76,8 @@ impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
             payload: d.payload.map(|opt| {
                 opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
             }),
-            from_target: d.from_target.map(|v| v.map(Into::into)),
-            to_target: d.to_target.map(|v| v.map(Into::into)),
-            from_endpoint: d.from_endpoint.map(|v| v.map(Into::into)),
-            to_endpoint: d.to_endpoint.map(|v| v.map(Into::into)),
-            from_endpoint_path: d.from_endpoint_path.map(|v| v.map(Into::into)),
-            to_endpoint_path: d.to_endpoint_path.map(|v| v.map(Into::into)),
+            from: d.from.map(Into::into),
+            to: d.to.map(Into::into),
         }
     }
 }
@@ -108,12 +100,8 @@ impl From<StarMapEdgePatchInputDto> for StarMapEdgePatchDto {
                 d.label.map(Some)
             },
             payload: None,
-            from_target: None,
-            to_target: None,
-            from_endpoint: None,
-            to_endpoint: None,
-            from_endpoint_path: None,
-            to_endpoint_path: None,
+            from: None,
+            to: None,
         }
     }
 }

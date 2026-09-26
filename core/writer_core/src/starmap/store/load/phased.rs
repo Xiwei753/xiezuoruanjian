@@ -35,33 +35,6 @@ impl StarMapStore {
         }
     }
 
-    pub(in crate::starmap::store) fn ensure_graph_meta_initialized(&mut self) {
-        if self.graph_meta.is_some() {
-            return;
-        }
-        self.reload_graph_meta_if_stale();
-        if self.graph_meta.is_none() {
-            self.graph_meta = Some(GraphMeta {
-                schema_version: "2".to_string(),
-                starmap_id: self.starmap_id.clone(),
-                title: String::new(),
-                node_ids: Vec::new(),
-                edge_ids: Vec::new(),
-                embed_instance_ids: Vec::new(),
-                link_ids: Vec::new(),
-                hyperlink_ids: Vec::new(),
-                edge_relation_index: Vec::new(),
-                embed_host_index: Vec::new(),
-                link_relation_index: Vec::new(),
-                hyperlink_relation_index: Vec::new(),
-                node_kind_counts: HashMap::new(),
-                package_revision: self.package_revision,
-                updated_at: crate::starmap::now_epoch(),
-                deleted_since_last_sync: DeletedSinceLastSync::default(),
-            });
-        }
-    }
-
     pub fn load_phased(&mut self, up_to: LoadPhase) -> Result<StarMapStoreResult> {
         self.recovery_log.clear();
         let mut diagnostics = Vec::new();
@@ -180,7 +153,6 @@ impl StarMapStore {
                     self.graph_meta = Some(GraphMeta {
                         schema_version: "2".to_string(),
                         starmap_id: graph.starmap_id.clone(),
-                        title: graph.title.clone(),
                         node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
                         edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
                         embed_instance_ids: graph
@@ -195,12 +167,8 @@ impl StarMapStore {
                             .iter()
                             .map(|e| EdgeRelationIndex {
                                 edge_id: e.id.clone(),
-                                from: e.from.clone().unwrap_or_default(),
-                                to: e.to.clone().unwrap_or_default(),
-                                from_endpoint: e.from_endpoint.clone(),
-                                to_endpoint: e.to_endpoint.clone(),
-                                from_endpoint_path: e.from_endpoint_path.clone(),
-                                to_endpoint_path: e.to_endpoint_path.clone(),
+                                from: e.from.clone(),
+                                to: e.to.clone(),
                             })
                             .collect(),
                         embed_host_index: graph
@@ -208,8 +176,7 @@ impl StarMapStore {
                             .iter()
                             .map(|e| EmbedHostIndex {
                                 instance_id: e.instance_id.clone(),
-                                host_node_id: e.source_node_id.clone().unwrap_or_default(),
-                                host_endpoint: e.host_endpoint.clone(),
+                                host_path: e.host_path.clone(),
                             })
                             .collect(),
                         link_relation_index: graph
@@ -217,9 +184,11 @@ impl StarMapStore {
                             .iter()
                             .map(|l| LinkRelationIndex {
                                 link_id: l.link_id.clone(),
-                                source_node_id: endpoint_node_id(&l.source)
-                                    .unwrap_or_default()
-                                    .to_string(),
+                                source_node_id: super::super::relation_index::target_path_node_id(
+                                    &l.source,
+                                )
+                                .unwrap_or_default()
+                                .to_string(),
                             })
                             .collect(),
                         hyperlink_relation_index: vec![],
@@ -231,7 +200,7 @@ impl StarMapStore {
                             counts
                         },
                         package_revision: 0,
-                        updated_at: graph.updated_at,
+                        updated_at: crate::starmap::now_epoch(),
                         deleted_since_last_sync: DeletedSinceLastSync::default(),
                     });
                     for node in &graph.nodes {

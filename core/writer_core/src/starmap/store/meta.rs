@@ -11,7 +11,6 @@ use super::relation_index::{
 pub struct GraphMeta {
     pub schema_version: String,
     pub starmap_id: String,
-    pub title: String,
     pub node_ids: Vec<String>,
     pub edge_ids: Vec<String>,
     pub embed_instance_ids: Vec<String>,
@@ -72,15 +71,4 @@ impl DeletedSinceLastSync {
         self.entries
             .retain(|e| e.deleted_at_revision >= keep_since_revision);
     }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct LegacyGraphMeta {
-    pub(super) schema_version: u32,
-    pub(super) id: String,
-    pub(super) starmap_id: String,
-    pub(super) title: String,
-    pub(super) created_at: u64,
-    pub(super) updated_at: u64,
 }

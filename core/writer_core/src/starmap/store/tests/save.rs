@@ -392,20 +392,27 @@ fn flush_stats_uses_graph_meta_counts() {
     store.upsert_node(make_test_node("n3", "C"));
     store.upsert_node(make_test_node("n4", "D"));
 
+    use crate::starmap::types::reference::{StarMapTargetDetail, StarMapTargetPath};
     use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
     store.upsert_edge(StarMapEdge {
         id: "e1".to_string(),
-        from: Some("n1".to_string()),
-        to: Some("n2".to_string()),
+        from: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        },
+        to: StarMapTargetPath {
+            starmap_id: String::new(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n2".to_string(),
+            },
+        },
         kind: StarMapEdgeKind::References,
         label: None,
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: 0,
         updated_at: 0,
     });
@@ -422,10 +429,12 @@ fn flush_stats_uses_graph_meta_counts() {
 
     store2.remove_node("n4");
     assert_eq!(store2.nodes.len(), 3, "cache has 3 after removal");
+    // graph_meta indexes are rebuilt during flush, not immediately after CRUD
+    store2.flush().unwrap();
     assert_eq!(
         store2.graph_meta.as_ref().unwrap().node_ids.len(),
         3,
-        "graph_meta node_ids should have 3 after removal"
+        "graph_meta node_ids should have 3 after flush"
     );
 
     let result = store2.flush();
@@ -478,10 +487,12 @@ fn delete_link_flush_save_queue_persists_via_save_queue() {
         store.dirty_graph_meta,
         "add_link must mark dirty_graph_meta"
     );
+
+    store.flush().unwrap();
     let meta_ids = store.graph_meta.as_ref().unwrap().link_ids.clone();
     assert!(
         meta_ids.contains(&"l1".to_string()),
-        "add_link must add link_id to graph_meta.link_ids"
+        "after flush, graph_meta.link_ids must contain the link_id"
     );
 
     store.flush().unwrap();

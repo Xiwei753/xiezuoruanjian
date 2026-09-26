@@ -1,42 +1,76 @@
-/// 解析深目标（DeepTarget）的可达性。
+use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
+
+/// 解析目标路径的可达性。
 ///
 /// ## 算法
 ///
-/// 1. **深度限制**：`path.len() > 32` 返回 `TooDeep`。此上限防止恶意或错误数据
+/// 1. **深度限制**：`segments.len() > 32` 返回 `TooDeep`。此上限防止恶意或错误数据
 ///    导致无限递归，32 层远超实际使用深度（通常 0-3 层）。
-/// 2. **循环检测**：沿 `path` 逐段遍历，用 `HashSet` 记录已访问的 `starmap_id`，
+/// 2. **循环检测**：沿 `segments` 逐段遍历，用 `HashSet` 记录已访问的 `starmap_id`，
 ///    重复进入同一星图即返回 `CycleDetected`。
-/// 3. **存在性校验**：每层 `EnterChild` 的 `starmap_id` 必须在磁盘上存在。
+/// 3. **存在性校验**：每层路径段引用的嵌入实例或 portal 节点必须在当前星图中存在。
 /// 4. **终节点校验**：路径末端的 `StarMapTargetDetail`（Node/Anchor/ChapterRange）
 ///    在目标星图的 `graph.json` 中验证存在性和范围合法性。
 ///
 /// ## 性能注意
 ///
-/// 此函数在 `validation::validate_graph` 中对每个 deep_target 调用，
+/// 此函数在 `validation::validate_graph` 中对每个目标路径调用，
 /// 涉及磁盘 I/O（`load_starmap_meta`、`read_to_string`）。
-/// 对于大量 deep_target 的图，验证可能较慢。
-pub fn resolve_deep_target(
+/// 对于大量目标路径的图，验证可能较慢。
+pub fn resolve_target_path(
     app_data_root: &std::path::Path,
-    dt: &crate::starmap::semantic::StarMapDeepTarget,
+    path: &StarMapTargetPath,
 ) -> crate::starmap::semantic::StarMapTargetResolveStatus {
     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
 
-    if dt.path.len() > 32 {
+    if path.segments.len() > 32 {
         return TooDeep;
     }
 
-    if crate::starmap::load_starmap_meta(app_data_root, &dt.starmap_id).is_err() {
+    if crate::starmap::load_starmap_meta(app_data_root, &path.starmap_id).is_err() {
         return MissingStarmap;
     }
 
-    let mut current_starmap_id = dt.starmap_id.clone();
+    let mut current_starmap_id = path.starmap_id.clone();
     let mut visited = std::collections::HashSet::new();
     visited.insert(current_starmap_id.clone());
 
-    for segment in &dt.path {
+    for segment in &path.segments {
         match segment {
-            crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id } => {
-                current_starmap_id = starmap_id.clone();
+            StarMapPathSegment::EnterEmbed { instance_id } => {
+                let mut store =
+                    crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
+                if store.load_full().is_err() {
+                    return MissingEmbed;
+                }
+                let embed = match store.get_embed(instance_id) {
+                    Some(e) => e,
+                    None => return MissingEmbed,
+                };
+                current_starmap_id = embed.target_starmap_id.clone();
+                if !visited.insert(current_starmap_id.clone()) {
+                    return CycleDetected;
+                }
+                if crate::starmap::load_starmap_meta(app_data_root, &current_starmap_id).is_err() {
+                    return MissingStarmap;
+                }
+            }
+            StarMapPathSegment::EnterPortal { node_id } => {
+                let mut store =
+                    crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
+                if store.load_full().is_err() {
+                    return MissingPortal;
+                }
+                let node = match store.get_node(node_id) {
+                    Some(n) => n,
+                    None => return MissingPortal,
+                };
+                let portal = match &node.portal {
+                    Some(p) => p,
+                    None => return MissingPortal,
+                };
+                // Portal target 的 starmap_id 是目标星图
+                current_starmap_id = portal.target.starmap_id.clone();
                 if !visited.insert(current_starmap_id.clone()) {
                     return CycleDetected;
                 }
@@ -47,7 +81,7 @@ pub fn resolve_deep_target(
         }
     }
 
-    match &dt.target {
+    match &path.target {
         crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
             let mut store =
                 crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
