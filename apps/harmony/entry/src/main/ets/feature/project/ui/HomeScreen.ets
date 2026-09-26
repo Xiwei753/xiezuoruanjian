@@ -643,8 +643,8 @@ export struct HomeScreen {
             .width(28)
             .height(28)
         }
-        .width(48)
-        .height(48)
+        .width(FAB_SIZE)
+        .height(FAB_SIZE)
         .backgroundColor(Color.Transparent)
         .position(resolveFabLocalAnchor(this.fabHostWidth, this.fabHostHeight, this.adaptiveState))
         .onClick(() => {

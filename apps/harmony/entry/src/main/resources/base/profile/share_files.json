@@ -2,12 +2,12 @@
   "share_files": {
     "scopes": [
       {
-        "path": "/el2/base/files/diagnostics/share",
+        "path": "/el2/base/files/diagnostics",
         "permission": "r+w"
       }
     ],
-    "sharingOSPath": "/el2/base/files",
-    "sharingOSSubpath": "/diagnostics/share",
+    "sharingOSPath": "/el2/base/files/diagnostics",
+    "sharingOSSubpath": "/share",
     "sharingOSPermission": "r"
   }
 }

@@ -70,6 +70,9 @@ export struct PrimaryTabShell {
   @State currentScreenRole: ScreenRole = ScreenRole.ProjectList
   // 是否显示底部一级导航栏，由 Core ScreenPolicy.showPrimaryNavigation 决定
   @State currentShowPrimaryNav: boolean = true
+  // Issue #774 评论5847638284 第2项：交互锁——异步查 policy 期间禁止切 tab，
+  // 但不触发 @Watch 导致底栏无意义 hide→show。与视觉显示分开。
+  @State currentPrimaryNavInteractive: boolean = true
 
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
@@ -155,8 +158,10 @@ export struct PrimaryTabShell {
   // Core 规则：Writing/Settings=false，Home/ProjectWorkspace/StarMap/Stats/Sync=true。
   // Issue #767 评论5832129578 第3项：role 变化时先禁用切 tab（保守策略），
   // 等 policy 返回后再决定是否开放；异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态。
+  // Issue #774 评论5847638284 第2项：只改交互锁，不改 currentShowPrimaryNav，
+  // 避免 @Watch 触发 controller.applyHideAnimation/applyShowAnimation 导致正常切换也 hide→show。
   private async updateShowPrimaryNav(screenRole: ScreenRole): Promise<void> {
-    this.currentShowPrimaryNav = false
+    this.currentPrimaryNavInteractive = false
 
     const requestedRole = screenRole
     const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(screenRole)
@@ -164,15 +169,18 @@ export struct PrimaryTabShell {
     if (this.currentScreenRole !== requestedRole) {
       return
     }
-    // Issue #767 评论5832378491：policy 解析失败时保持 fail-closed（currentShowPrimaryNav 已为 false），
+    // Issue #767 评论5832378491：policy 解析失败时保持 fail-closed，
     // 不要 fail-open 把一级导航重新放开，否则 Writing/Settings 用户能横向切 tab 绕过离开事务。
     if (policy === null) {
       hilog.warn(0x0000, 'PrimaryTabShell',
         'resolveScreenPolicy failed for role=%{public}s; keep primary navigation disabled',
         String(requestedRole))
+      this.currentShowPrimaryNav = false
+      this.currentPrimaryNavInteractive = false
       return
     }
     this.currentShowPrimaryNav = policy.showPrimaryNavigation
+    this.currentPrimaryNavInteractive = policy.showPrimaryNavigation
   }
 
   // Issue #767 评论5832129578 第1项：syncActiveTab 是同步 activeStack 和 Coordinator 的唯一入口。
@@ -252,7 +260,8 @@ export struct PrimaryTabShell {
         starMapStack: this.starMapStack,
         statsStack: this.statsStack,
         safeBottomVp: this.adaptiveState.safeBottomVp,
-        currentShowPrimaryNav: this.currentShowPrimaryNav
+        currentShowPrimaryNav: this.currentShowPrimaryNav,
+        currentPrimaryNavInteractive: this.currentPrimaryNavInteractive
       })
     } else {
       Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
@@ -290,12 +299,12 @@ export struct PrimaryTabShell {
         .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
       }
       .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
-      // Issue #767 评论5832129578 第2项：正文/设置页禁止横向滑动切 tab，
-      // 防止绕过 requestLeave/safePop 的离开事务。
-      .scrollable(this.currentShowPrimaryNav)
+      // Issue #774 评论5847638284 第2项：scrollable 用交互锁而非视觉显示，
+      // 避免 @Watch 触发底栏 hide→show 动画。
+      .scrollable(this.currentPrimaryNavInteractive)
       .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
-        // Issue #767 评论5832129578 第2项：底栏隐藏时（Writing/Settings）禁止横向滑动切 tab。
-        if (!this.currentShowPrimaryNav) {
+        // Issue #774 评论5847638284 第2项：用交互锁判断，而非视觉显示。
+        if (!this.currentPrimaryNavInteractive) {
           return false
         }
         return true

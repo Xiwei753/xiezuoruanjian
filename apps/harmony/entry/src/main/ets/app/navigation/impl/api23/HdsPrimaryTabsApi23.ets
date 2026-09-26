@@ -63,6 +63,10 @@ export struct HdsPrimaryTabsApi23 {
   // 控制底栏显隐，不再靠 if/else 两套 HdsTabs 重建整棵页面树。
   @Prop @Watch('onShowPrimaryNavChange') currentShowPrimaryNav: boolean = true
 
+  // Issue #774 评论5847638284 第2项：交互锁——异步查 policy 期间禁止切 tab，
+  // 但不触发 @Watch 导致底栏无意义 hide→show。与视觉显示分开。
+  @Prop currentPrimaryNavInteractive: boolean = true
+
   // Issue #773 评论5844518092 第2项：长期持有的 HdsTabsController，创建 HdsTabs 时经 options 传入，
   // 修复真机日志 "GetHdsTabsController no hdsTabsControllerClass prop"。
   private controller: HdsTabsController = new HdsTabsController()
@@ -175,9 +179,10 @@ export struct HdsPrimaryTabsApi23 {
     .vertical(false)
     .barFloatingStyle(this.buildFloatingStyle())
     // 正文/设置页禁止横向滑动切 tab，防止绕过离开事务。
-    .scrollable(this.currentShowPrimaryNav)
+    // Issue #774 评论5847638284 第2项：用交互锁而非视觉显示，避免 @Watch 触发底栏 hide→show。
+    .scrollable(this.currentPrimaryNavInteractive)
     .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
-      if (!this.currentShowPrimaryNav) {
+      if (!this.currentPrimaryNavInteractive) {
         return false
       }
       return true

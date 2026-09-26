@@ -209,12 +209,21 @@ export class ProjectWorkspaceViewModel {
         const newChapterMeta: ChapterMeta = result.data
 
         // 1. 在 volumeTrees 中找到目标卷，追加新 ChapterMeta
+        // Issue #774 评论5847638284 第4项：顶层重新赋值 volumeTrees，不原地改嵌套 chapters，
+        // 确保 V2 状态管理正确触发更新（VolumeTree 是普通 interface，不是 @ObservedV2）。
+        const nextTrees: VolumeTree[] = []
         for (const vt of this.volumeTrees) {
           if (vt.volume.id === volumeId) {
-            vt.chapters.push(newChapterMeta)
-            break
+            const nextTree: VolumeTree = {
+              volume: vt.volume,
+              chapters: vt.chapters.concat([newChapterMeta])
+            }
+            nextTrees.push(nextTree)
+          } else {
+            nextTrees.push(vt)
           }
         }
+        this.volumeTrees = nextTrees
 
         // 2. 在 volumeCardStates 中找到对应 VolumeCardState，追加新 ChapterRowState
         for (const card of this.volumeCardStates) {
