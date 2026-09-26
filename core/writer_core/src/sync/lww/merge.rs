@@ -143,10 +143,11 @@ pub(crate) fn merge_remote_into_local_snapshot(
 
     // ── 对齐冲突事实源 ──
     // conflicts.json 是用户可见/可解决的 canonical record，state.conflicts + conflicted_files
-    // 是同步引擎 mirror。两者可能因历史写入分叉而不一致，在归一化前先对齐：
+    // 是同步引擎 mirror。两者可能因历史写入分叉而不一致，在归一化前先用 canonical record
+    // 重建 mirror（单向，不回填 JSON）：
     // - conflicts.json 有、state mirror 缺 → 补 state
-    // - state.conflicts 有、conflicts.json 缺 → 补 conflicts.json
-    // - conflicted_files 至少包含所有有完整 SyncConflict 记录的 path
+    // - state.conflicts 有、conflicts.json 缺 → 丢掉 stale mirror，不复活
+    // - conflicted_files 孤儿 path → 丢弃，不再永久 skip
     // 后面所有 legacy hash normalization / unresolved skip 都只在这份对齐后的内存状态上做。
     crate::sync::conflict::align_conflict_state_mirror(state, &mut conflicts_json);
 

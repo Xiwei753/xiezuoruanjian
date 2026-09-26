@@ -584,8 +584,16 @@ fn regression_issue_761_unresolved_conflict_without_remote_blob_returns_partial_
         ..Default::default()
     };
     state.conflicted_files.insert(ghost_path.to_string());
-    state.conflicts.push(conflict);
+    state.conflicts.push(conflict.clone());
     write_sync_state(&staging_root, &state);
+    // 同时写 conflicts.json（与真实系统 persist_conflict_state 事务一致）：
+    // align_conflict_state_mirror 以 conflicts.json 为 canonical record，
+    // 只写 state 不写 conflicts.json 会导致单向 mirror 丢弃这条冲突。
+    std::fs::write(
+        staging_root.join("app-meta/sync/conflicts.json"),
+        serde_json::to_vec(&vec![conflict]).unwrap(),
+    )
+    .unwrap();
 
     let plan = build_plan(
         &tmp,

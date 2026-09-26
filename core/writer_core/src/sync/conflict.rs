@@ -95,46 +95,36 @@ pub(crate) fn upsert_conflict(
     }
 }
 
-/// 对齐 `state.conflicts` / `conflicted_files` 与 `conflicts.json`，使两者成为
-/// 同一份事实的 mirror。
+/// 对齐 `state.conflicts` / `conflicted_files` 与 `conflicts.json`，使后者成为
+/// 唯一事实源（canonical record），前者完全由后者重建。
 ///
 /// `conflicts.json` 是用户可见/可解决的 canonical record（`list_conflicts` /
-/// `load_conflict_preview` 读它），`state.conflicts` + `conflicted_files` 是
-/// 同步引擎 mirror（resolve / merge 操作它）。两者可能因历史写入分叉而不一致，
-/// 在 merge 归一化前先对齐：
-/// - `conflicts.json` 有、`state.conflicts` 缺 → 补 `state`（canonical 优先覆盖同 path 旧记录）；
-/// - `state.conflicts` 有、`conflicts.json` 缺 → 补 `conflicts.json`（只补不覆盖，canonical 优先）；
-/// - `conflicted_files` 至少包含所有有完整 `SyncConflict` 记录的 path。
+/// `load_conflict_preview` 读它）。`state.conflicts` + `conflicted_files` 是
+/// 同步引擎 mirror，每次 merge 入口直接用 canonical record **重建 mirror**，
+/// 不做 state -> json 回填：
+/// - `conflicts.json` 有、`state.conflicts` 缺 → 自然补回 state；
+/// - `conflicts.json` 和 `state.conflicts` 同 path 内容不同 → JSON 覆盖 state；
+/// - `state.conflicts` 有、`conflicts.json` 缺 → 丢掉 stale mirror，不复活；
+/// - 只有 `conflicted_files` 的孤儿 path → 丢掉，不再永久 skip。
 ///
-/// 对齐后两边内容一致，后续 legacy hash normalization / unresolved skip 都只在这份
-/// 对齐后的内存状态上做，不再出现"state 有 conflicts.json 没有"的隐藏 unresolved。
+/// 如果 JSON 曾经真的丢了一条未解决冲突，也不从旧 mirror 猜着复活；下一轮正常
+/// 三路比较会重新根据 local/remote/base 检出真实冲突并重新生成完整 `SyncConflict`。
 pub(crate) fn align_conflict_state_mirror(
     state: &mut crate::sync::types::SyncState,
     conflicts_json: &mut Vec<SyncConflict>,
 ) {
-    // 1. conflicts.json 有、state.conflicts 缺 → 补 state。
-    //    已有同 path 记录时用 conflicts.json 的 canonical 记录覆盖（canonical 优先）。
-    for conflict in conflicts_json.iter().cloned() {
-        let path = conflict.local_path.clone();
-        state.conflicted_files.insert(path.clone());
-        if let Some(existing) = state.conflicts.iter_mut().find(|c| c.local_path == path) {
-            *existing = conflict;
-        } else {
-            state.conflicts.push(conflict);
-        }
-    }
-    // 2. state.conflicts 有、conflicts.json 缺 → 补 conflicts.json。
-    //    已有同 path 记录时不覆盖（conflicts.json 是 canonical，上面已经用它覆盖了 state）。
-    for conflict in state.conflicts.iter().cloned() {
-        let path = conflict.local_path.clone();
-        if !conflicts_json.iter().any(|c| c.local_path == path) {
-            conflicts_json.push(conflict);
-        }
-    }
-    // 3. conflicted_files 至少包含所有有完整 SyncConflict 记录的 path。
-    for conflict in conflicts_json.iter() {
-        state.conflicted_files.insert(conflict.local_path.clone());
-    }
+    // 1. 先按 local_path 给 conflicts.json 去重（保留最后一条）。
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    conflicts_json.retain(|c| seen.insert(c.local_path.clone()));
+
+    // 2. state.conflicts 直接用 canonical record 重建。
+    state.conflicts = conflicts_json.clone();
+
+    // 3. state.conflicted_files 直接用 canonical record 重建。
+    state.conflicted_files = conflicts_json
+        .iter()
+        .map(|c| c.local_path.clone())
+        .collect();
 }
 
 /// 合并两批冲突，按 `local_path` 去重。

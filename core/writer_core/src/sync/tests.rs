@@ -2905,14 +2905,12 @@ mod tests {
         );
     }
 
-    /// #770 评论 5844795710：state.conflicts 有记录但 conflicts.json 缺（幽灵冲突）。
-    /// merge 时对齐后 conflicts.json 补上这条，list_conflicts() 能看到它，
-    /// 不再形成隐藏 unresolved。
+    /// #770 评论 5845076351：align_conflict_state_mirror 改成真正的单向 mirror。
+    /// conflicts.json 是 canonical record，state 完全由 conflicts.json 重建，
+    /// 不做 state -> json 回填，不复活旧 mirror 中的幽灵冲突。
     ///
     /// 这里直接测试 `align_conflict_state_mirror` 函数本身——构造 state 和 conflicts_json
-    /// 不一致的状态，调用 align 后断言两边一致。这是对齐逻辑的单元测试。
-    /// merge 集成测试在 `test_merge_normalizes_old_both_changed_conflict_to_md5_with_snapshot`
-    /// 系列中已覆盖 merge 路径，这里专注验证对齐函数的正确性。
+    /// 不一致的状态，调用 align 后断言 state 完全由 conflicts.json 重建。
     #[test]
     fn test_align_conflict_state_mirror_syncs_state_only_conflict_into_conflicts_json() {
         use crate::sync::types::{SyncConflict, SyncState};
@@ -2920,7 +2918,8 @@ mod tests {
         let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
 
         // 场景 1：state.conflicts 有记录但 conflicts.json 缺（幽灵冲突）。
-        // 对齐后 conflicts.json 应补上这条，state 不变。
+        // 单向 mirror 语义：conflicts.json 是 canonical，state 有但 JSON 没 → 丢掉 stale mirror。
+        // align 后 state.conflicts 为空、conflicted_files 为空、JSON 仍空。
         let mut state = SyncState::default();
         state.conflicted_files.insert(chapter_rel.to_string());
         state.conflicts.push(SyncConflict {
@@ -2938,30 +2937,45 @@ mod tests {
 
         crate::sync::conflict::align_conflict_state_mirror(&mut state, &mut conflicts_json);
 
-        // 对齐后 conflicts.json 补上了这条。
+        // conflicts.json 仍空（不从 state 回填）。
         assert_eq!(
             conflicts_json.len(),
-            1,
-            "conflicts.json must be populated from state.conflicts"
+            0,
+            "conflicts.json must remain empty — canonical record is not revived from stale mirror"
         );
-        assert_eq!(
-            conflicts_json[0].local_path, chapter_rel,
-            "conflicts.json must contain the ghost conflict"
-        );
-        // state.conflicts 仍有一条（不丢失）。
+        // state.conflicts 被清空（stale mirror 丢弃）。
         assert_eq!(
             state.conflicts.len(),
-            1,
-            "state.conflicts must still contain the record"
+            0,
+            "state.conflicts must be cleared — stale mirror is discarded"
         );
-        // conflicted_files 仍包含 path。
+        // conflicted_files 被清空（孤儿 path 丢弃）。
         assert!(
-            state.conflicted_files.contains(chapter_rel),
-            "conflicted_files must still contain path"
+            !state.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared — orphan path is discarded"
+        );
+
+        // 场景 1b：只有 conflicted_files 有 path、两份完整记录都空（孤儿 path）。
+        // align 后孤儿 path 被删除，不再永久 skip。
+        let mut state1b = SyncState::default();
+        state1b.conflicted_files.insert(chapter_rel.to_string());
+        // state1b.conflicts 和 conflicts_json1b 都空。
+        let mut conflicts_json1b: Vec<SyncConflict> = Vec::new();
+
+        crate::sync::conflict::align_conflict_state_mirror(&mut state1b, &mut conflicts_json1b);
+
+        assert!(
+            !state1b.conflicted_files.contains(chapter_rel),
+            "orphan conflicted_files path must be removed"
+        );
+        assert_eq!(
+            state1b.conflicts.len(),
+            0,
+            "state.conflicts must remain empty for orphan path"
         );
 
         // 场景 2：conflicts.json 有记录但 state.conflicts 缺（canonical 优先）。
-        // 对齐后 state.conflicts 应被 canonical 记录覆盖补齐。
+        // 对齐后 state.conflicts 应被 canonical 记录完整重建。
         let mut state2 = SyncState::default();
         state2.conflicted_files.insert(chapter_rel.to_string());
         // state2.conflicts 故意留空。
@@ -2980,11 +2994,11 @@ mod tests {
 
         crate::sync::conflict::align_conflict_state_mirror(&mut state2, &mut conflicts_json2);
 
-        // state.conflicts 被 canonical 记录补齐。
+        // state.conflicts 被 canonical 记录完整重建。
         assert_eq!(
             state2.conflicts.len(),
             1,
-            "state.conflicts must be populated from conflicts.json"
+            "state.conflicts must be rebuilt from conflicts.json"
         );
         assert_eq!(
             state2.conflicts[0].remote_hash, canonical_conflict.remote_hash,
