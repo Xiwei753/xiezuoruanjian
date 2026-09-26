@@ -291,14 +291,10 @@ export struct SettingsScreen {
     .align(Alignment.Top)
   }
 
-  // ── 宽屏 Header：标题 + 保存状态提示（返回按钮由 NavDestination 原生标题栏承载，Issue #768） ──
+  // ── 宽屏 Header：保存状态提示（标题由 NavDestination/HdsSettingsDestination 原生标题栏承载，Issue #768/#774） ──
   @Builder
   WideSettingsHeader() {
     Row() {
-      Text($r('app.string.settings'))
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-
       Blank()
 
       // 保存状态提示
@@ -319,16 +315,12 @@ export struct SettingsScreen {
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
   }
 
-  // ── 窄屏 Header：标题 + 搜索框（返回按钮由 NavDestination 原生标题栏承载，Issue #768） ──
+  // ── 窄屏 Header：保存状态提示 + 搜索框（标题由 NavDestination/HdsSettingsDestination 原生标题栏承载，Issue #768/#774） ──
   @Builder
   CompactSettingsHeader() {
     Column() {
-      // 标题行
+      // 状态提示行
       Row() {
-        Text($r('app.string.settings'))
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-
         Blank()
 
         // 保存状态提示

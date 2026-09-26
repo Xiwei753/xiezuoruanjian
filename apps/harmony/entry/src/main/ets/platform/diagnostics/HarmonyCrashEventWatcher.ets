@@ -46,6 +46,7 @@ export class HarmonyCrashEventWatcher {
   private diagnosticsBridge: NativeDiagnosticsBridge
   private watcher: hiAppEvent.Watcher | null = null
   private initialized: boolean = false
+  private processedEventKeys: Set<string> = new Set()
 
   private constructor() {
     this.diagnosticsBridge = new NativeDiagnosticsBridge(new NativeCoreModule())
@@ -135,7 +136,7 @@ export class HarmonyCrashEventWatcher {
   }
 
   // 处理单个崩溃事件：
-  // 1. 创建 crashes/<timestamp>/ 目录
+  // 1. 创建 crashes/<eventKey>/ 目录
   // 2. 写 params.json
   // 3. 复制 external_log 文件
   // 4. 生成崩溃补全包 zip
@@ -146,8 +147,16 @@ export class HarmonyCrashEventWatcher {
       const time = this.extractTime(params)
       const externalLog = this.extractExternalLog(params)
       const timestamp = this.formatTimestamp(time)
+      const eventKey = this.sanitizeEventKey(`${timestamp}-${event.name}`)
 
-      const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${timestamp}`
+      // 去重：同一 eventKey 的重复事件直接跳过
+      if (this.processedEventKeys.has(eventKey)) {
+        hilog.info(0x0000, LOG_TAG, 'Duplicate crash event key skipped: %{public}s', eventKey)
+        return
+      }
+      this.processedEventKeys.add(eventKey)
+
+      const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${eventKey}`
       fs.mkdirSync(crashesDir, true)
 
       // 写 params.json — 把整个 event 信息序列化保存
@@ -173,7 +182,7 @@ export class HarmonyCrashEventWatcher {
       }
 
       // 生成崩溃补全包 zip
-      this.generateCrashZip(timestamp, crashRecord, externalLog)
+      this.generateCrashZip(eventKey, crashRecord, externalLog)
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'handleCrashEvent failed: %{public}s', String(e))
     }
@@ -182,7 +191,7 @@ export class HarmonyCrashEventWatcher {
   // 生成崩溃补全包 zip — flush → export → 重命名为 crash 前缀。
   // 崩溃补全包不覆盖 latest.zip / previous.zip，使用独立的 crash 前缀文件名。
   private generateCrashZip(
-    timestamp: string,
+    eventKey: string,
     crashRecord: CrashRecord,
     externalLog: string[]
   ): void {
@@ -201,17 +210,17 @@ export class HarmonyCrashEventWatcher {
       const attachments: AttachmentItem[] = []
       // params.json 附件
       const paramsJson = JSON.stringify(crashRecord, null, 2)
-      attachments.push(this.makeAttachment('crashes/' + timestamp + '/params.json', paramsJson))
+      attachments.push(this.makeAttachment('crashes/' + eventKey + '/params.json', paramsJson))
 
       // external_log 内容附件 — 从已复制到 diagnostics 的持久副本读取
       // （原始系统路径的 external_log 在 copyFile 中已被删除，不能再依赖）
-      const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${timestamp}`
+      const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${eventKey}`
       for (let i = 0; i < externalLog.length; i++) {
         const fileName = this.extractFileName(externalLog[i])
         const persistedPath = `${crashesDir}/${fileName}`
         const logContent = this.readFileContent(persistedPath)
         if (logContent.length > 0) {
-          attachments.push(this.makeAttachment('crashes/' + timestamp + '/' + fileName, logContent))
+          attachments.push(this.makeAttachment('crashes/' + eventKey + '/' + fileName, logContent))
         }
       }
 
@@ -231,8 +240,8 @@ export class HarmonyCrashEventWatcher {
 
       // 5. 重命名为 crash 前缀文件名
       // Rust 层生成的文件名格式是 sujian-diagnostics-{rust_timestamp}.zip
-      // 我们需要重命名为 sujian-diagnostics-crash-{our_timestamp}.zip
-      const crashZipName = `sujian-diagnostics-crash-${timestamp}.zip`
+      // 我们需要重命名为 sujian-diagnostics-crash-{eventKey}.zip
+      const crashZipName = `sujian-diagnostics-crash-${eventKey}.zip`
       const crashZipPath = `${outputDir}/${crashZipName}`
       try {
         // 如果目标文件已存在（同一时间戳的崩溃事件），先删除
@@ -345,9 +354,12 @@ export class HarmonyCrashEventWatcher {
   }
 
   // 安全删除文件 — 如果文件不存在，不抛异常。
+  // 先 accessSync 检查文件是否存在，避免 native file_api 反复打印 ret -2。
   private safeDelete(filePath: string): void {
     try {
-      fs.unlinkSync(filePath)
+      if (fs.accessSync(filePath)) {
+        fs.unlinkSync(filePath)
+      }
     } catch (_) {
       // 文件不存在是正常情况
     }
@@ -401,6 +413,11 @@ export class HarmonyCrashEventWatcher {
       return filePath.substring(lastSlash + 1)
     }
     return filePath
+  }
+
+  // 清理 eventKey 中的非法字符，确保可作为目录名/文件名使用。
+  private sanitizeEventKey(key: string): string {
+    return key.replace(/[^a-zA-Z0-9_-]/g, '_')
   }
 
   // 格式化时间戳为目录名格式：YYYYMMDD-HHMMSS。

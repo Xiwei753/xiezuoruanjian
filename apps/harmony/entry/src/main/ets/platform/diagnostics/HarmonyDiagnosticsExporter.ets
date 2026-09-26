@@ -158,23 +158,44 @@ export class HarmonyDiagnosticsExporter {
 
   // 导出并分享 — 导出成功后拉起系统分享面板。
   // 返回 true 表示分享面板成功拉起；false 表示导出失败或分享失败。
+  // Issue #774：把 zip copy 到 share 目录后再交给 ShareKit，避免 PERMISSION_DENIED。
   async exportAndShare(): Promise<boolean> {
     const zipPath = await this.export()
     if (zipPath === null) {
       return false
     }
 
-    // 拉起系统分享面板
     try {
+      // 把 zip copy 到 share 目录
+      const filesDir = this.abilityContext!.filesDir
+      const shareDir = `${filesDir}/${DIAGNOSTICS_DIR}/share`
+      this.ensureOutputDir(shareDir)
+
+      const zipFileName = this.extractFileName(zipPath)
+      const shareZipPath = `${shareDir}/${zipFileName}`
+
+      // copy zip 到 share 目录
+      fs.copyFileSync(zipPath, shareZipPath)
+
+      // 验证 share copy 的 size
+      const stat = fs.statSync(shareZipPath)
+      hilog.info(0x0000, LOG_TAG, 'Share zip size: %{public}d bytes', stat.size)
+      if (stat.size <= 0) {
+        hilog.error(0x0000, LOG_TAG, 'Share zip size is 0 or negative; aborting share')
+        return false
+      }
+
+      // 只把 share copy 的 URI 交给 ShareKit
       const shareService = HarmonyShareService.getInstance()
       const payload: SharePayload = {
         kind: 'file',
         title: '素笺诊断包',
-        uris: [fileUri.getUriFromPath(zipPath)]
+        utd: 'general.zip-archive',
+        uris: [fileUri.getUriFromPath(shareZipPath)]
       }
       const ok = await shareService.share(payload, 'system')
       if (!ok) {
-        hilog.warn(0x0000, LOG_TAG, 'system share returned false; zip is still at %{public}s', zipPath)
+        hilog.warn(0x0000, LOG_TAG, 'system share returned false; zip is still at %{public}s', shareZipPath)
       }
       return ok
     } catch (e) {
@@ -439,5 +460,14 @@ export class HarmonyDiagnosticsExporter {
     } catch (_) {
       // 目录创建失败不影响导出（Rust 层会自己创建）
     }
+  }
+
+  // 从文件路径中提取文件名。
+  private extractFileName(filePath: string): string {
+    const lastSlash = filePath.lastIndexOf('/')
+    if (lastSlash >= 0 && lastSlash < filePath.length - 1) {
+      return filePath.substring(lastSlash + 1)
+    }
+    return filePath
   }
 }

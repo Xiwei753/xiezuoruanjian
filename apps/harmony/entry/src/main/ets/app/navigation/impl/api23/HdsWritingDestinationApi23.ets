@@ -5,12 +5,12 @@
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions } from '@kit.UIDesignKit'
 
-@Component
+@ComponentV2
 export struct HdsWritingDestinationApi23 {
   @BuilderParam contentBuilder: () => void
-  title: string | Resource = ''
-  onBack: (() => void) | null = null
-  onShown: (() => void) | null = null
+  @Param title: string | Resource = ''
+  @Param onBack: (() => void) | null = null
+  @Param onShown: (() => void) | null = null
 
   build() {
     HdsNavDestination() {

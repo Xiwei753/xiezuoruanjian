@@ -1003,11 +1003,14 @@ export struct WritingScreen {
     // 获得 HDS 沉浸光感材质效果；API < 23 保持普通 NavDestination。
     if (this.useHdsNav) {
       HdsWritingDestinationApi23({
-        contentBuilder: this.NavContent,
         title: this.chapterTitle,
         onBack: () => { this.requestLeave() },
-        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0) }
-      })
+        onShown: () => {
+          NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
+        }
+      }) {
+        this.NavContent()
+      }
     } else {
       NavDestination() {
         this.NavContent()

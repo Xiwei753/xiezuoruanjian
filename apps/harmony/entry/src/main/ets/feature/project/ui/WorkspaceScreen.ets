@@ -316,15 +316,8 @@ export struct WorkspaceScreen {
     Column() {
       // 标题栏
       // Issue #768：删除手写返回按钮，改用 NavDestination 原生标题栏的返回按钮
+      // Issue #774：标题由 NavDestination/HdsWorkspaceDestination 原生标题栏承载，删除重复 projectName
       Row() {
-        Text(this.viewModel.projectName)
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .margin({ left: 12 })
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
         Button($r('app.string.new_volume'))
           .fontSize(12)
           .height(28)
@@ -409,11 +402,15 @@ export struct WorkspaceScreen {
           .fontSize(11)
           .margin({ right: 8 })
 
-        Button('+')
-          .fontSize(12)
-          .width(24)
-          .height(24)
-          .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
+        Button({ type: ButtonType.Normal }) {
+          Image($r('sys.media.ohos_ic_public_add'))
+            .width(28)
+            .height(28)
+        }
+        .width(48)
+        .height(48)
+        .backgroundColor(Color.Transparent)
+        .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 10, bottom: 10 })
@@ -534,17 +531,18 @@ export struct WorkspaceScreen {
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
-      // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
+      // Issue #774：FAB 改透明点击区域 + 系统加号图标，不用默认强调色 Button 表面
       // Issue #773 评论 5846511131：局部坐标由 FabAnchor.resolveFabLocalAnchor 统一提供，
       // 输入只有本 Stack 的宽高（onAreaChange）+ 页面边距 + 底部安全区，不读底栏几何。
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
+        Button({ type: ButtonType.Normal }) {
           Image($r('sys.media.ohos_ic_public_add'))
-            .width(24)
-            .height(24)
+            .width(28)
+            .height(28)
         }
-        .width(FAB_SIZE)
-        .height(FAB_SIZE)
+        .width(48)
+        .height(48)
+        .backgroundColor(Color.Transparent)
         .position(resolveFabLocalAnchor(this.fabHostWidth, this.fabHostHeight, this.adaptiveState))
         .onClick(() => {
           this.handleCreateVolume()
@@ -559,19 +557,12 @@ export struct WorkspaceScreen {
     })
   }
 
-  // ── 顶栏：左 返回+作品名 / 右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Settings ──
+  // ── 顶栏：右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Settings ──
   // Issue #760 评论 5825003601：窄屏不渲染 Search 图标（避免无动作可点击控件）
+  // Issue #774：标题由 NavDestination/HdsWorkspaceDestination 原生标题栏承载，删除重复 projectName
   @Builder
   SinglePaneHeader() {
     Row() {
-      // 左：作品名（返回按钮由 NavDestination 原生标题栏承载，Issue #768）
-      Text(this.viewModel.projectName)
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-
       // 右：按 ScreenPolicy HeaderTrailing 顺序渲染（Sync → Settings）
       // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
       // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
@@ -659,17 +650,13 @@ export struct WorkspaceScreen {
     .alignItems(HorizontalAlign.Center)
   }
 
-  // ── 旧顶栏：左 返回+作品名 / 右 卷数量+新建卷 ──
+  // ── 旧顶栏：右 卷数量+新建卷 ──
   // Issue #760 评论 5825309208：恢复 #760 前的旧单栏顶栏交互。
   // 旧版顶栏是：返回、作品名、卷数量、新建卷（不是同步+设置）。
+  // Issue #774：标题由 NavDestination/HdsWorkspaceDestination 原生标题栏承载，删除重复 projectName
   @Builder
   LegacySinglePaneHeader() {
     Row() {
-      // 左：作品名（返回按钮由 NavDestination 原生标题栏承载，Issue #768）
-      Text(this.viewModel.projectName)
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-
       Blank()
 
       // 右：卷数量 + 新建卷
@@ -714,11 +701,15 @@ export struct WorkspaceScreen {
           .fontSize(12)
           .margin({ right: 8 })
 
-        Button('+')
-          .fontSize(14)
-          .width(28)
-          .height(28)
-          .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
+        Button({ type: ButtonType.Normal }) {
+          Image($r('sys.media.ohos_ic_public_add'))
+            .width(28)
+            .height(28)
+        }
+        .width(48)
+        .height(48)
+        .backgroundColor(Color.Transparent)
+        .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
 
         Button('×')
           .fontSize(14)
@@ -825,11 +816,15 @@ export struct WorkspaceScreen {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         // 新增章节按钮
-        Button('+')
-          .fontSize(14)
-          .width(28)
-          .height(28)
-          .onClick(() => this.handleCreateChapter(cardState.volumeId))
+        Button({ type: ButtonType.Normal }) {
+          Image($r('sys.media.ohos_ic_public_add'))
+            .width(28)
+            .height(28)
+        }
+        .width(48)
+        .height(48)
+        .backgroundColor(Color.Transparent)
+        .onClick(() => this.handleCreateChapter(cardState.volumeId))
 
         // 更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
         Image($r('sys.media.ohos_ic_public_more'))

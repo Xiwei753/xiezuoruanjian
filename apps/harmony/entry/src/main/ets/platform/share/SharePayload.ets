@@ -14,4 +14,5 @@ export interface SharePayload {
   title?: string
   text?: string
   uris?: string[]
+  utd?: string
 }

@@ -10,6 +10,8 @@
 // 工程 compatibleSdkVersion=12，API11 < 12，API12+ 设备上天然可用。
 import { systemShare } from '@kit.ShareKit'
 import { common } from '@kit.AbilityKit'
+import { BusinessError } from '@ohos.base'
+import hilog from '@ohos.hilog'
 import { PlatformApiResolver } from '../../../version/PlatformApiResolver'
 import { SharePayload } from '../../SharePayload'
 
@@ -46,7 +48,8 @@ export class SystemShareApi11 {
       await controller.show(context, {})
       return true
     } catch (e) {
-      // 系统分享失败；返回真实失败。
+      const err = e as BusinessError
+      hilog.error(0x0000, 'SystemShareApi11', 'share failed: code=%{public}d message=%{public}s', err.code, err.message)
       return false
     }
   }
@@ -91,14 +94,14 @@ export class SystemShareApi11 {
     if (payload !== undefined && payload !== null && payload.kind === 'file' && validUris.length > 0) {
       // 文件分享：第一条必须是 general.file-uri，带 title 元数据。
       const primary: systemShare.SharedRecord = {
-        utd: 'general.file-uri',
+        utd: payload.utd ?? 'general.file-uri',
         uri: validUris[0],
         title: titleValue
       }
       const data: systemShare.SharedData = new systemShare.SharedData(primary)
       // 其余文件 URI 追加。
       for (let i = 1; i < validUris.length; i++) {
-        data.addRecord({ utd: 'general.file-uri', uri: validUris[i], title: titleValue })
+        data.addRecord({ utd: payload.utd ?? 'general.file-uri', uri: validUris[i], title: titleValue })
       }
       // 正文（如果存在）放到文件记录之后，不允许抢第一条。
       if (hasText) {

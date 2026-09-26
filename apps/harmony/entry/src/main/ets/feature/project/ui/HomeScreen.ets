@@ -634,17 +634,18 @@ export struct HomeScreen {
       .height('100%')
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
-      // Issue #768：改用 ButtonType.ROUNDED_RECTANGLE，保持系统默认材质
+      // Issue #774：FAB 改透明点击区域 + 系统加号图标，不用默认强调色 Button 表面
       // Issue #773 评论 5846511131：局部坐标由 FabAnchor.resolveFabLocalAnchor 统一提供，
       // 输入只有本 Stack 的宽高（onAreaChange）+ 页面边距 + 底部安全区，不读底栏几何。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
-        Button({ type: ButtonType.ROUNDED_RECTANGLE }) {
+        Button({ type: ButtonType.Normal }) {
           Image($r('sys.media.ohos_ic_public_add'))
-            .width(24)
-            .height(24)
+            .width(28)
+            .height(28)
         }
-        .width(FAB_SIZE)
-        .height(FAB_SIZE)
+        .width(48)
+        .height(48)
+        .backgroundColor(Color.Transparent)
         .position(resolveFabLocalAnchor(this.fabHostWidth, this.fabHostHeight, this.adaptiveState))
         .onClick(() => {
           this.viewModel.showCreateDialog = true

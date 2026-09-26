@@ -110,8 +110,8 @@ export class ProjectWorkspaceViewModel {
         this.project = result.data.project
         this.volumeTrees = result.data.volumes
         this.volumeCardStates = this.convertToCardStates(this.volumeTrees)
-        // 默认展开第一个卷
-        if (this.volumeCardStates.length > 0) {
+        // 只在首次加载（expandedVolumes 为空）时默认展开第一个卷
+        if (this.expandedVolumes.size === 0 && this.volumeCardStates.length > 0) {
           const newSet = new Set<string>()
           newSet.add(this.volumeCardStates[0].volumeId)
           this.expandedVolumes = newSet
@@ -205,8 +205,39 @@ export class ProjectWorkspaceViewModel {
   async createChapter(volumeId: string): Promise<boolean> {
     try {
       const result = await this.bridge.createChapter(volumeId, '新章节')
-      if (result.success) {
-        await this.loadData(this.projectId)
+      if (result.success && result.data) {
+        const newChapterMeta: ChapterMeta = result.data
+
+        // 1. 在 volumeTrees 中找到目标卷，追加新 ChapterMeta
+        for (const vt of this.volumeTrees) {
+          if (vt.volume.id === volumeId) {
+            vt.chapters.push(newChapterMeta)
+            break
+          }
+        }
+
+        // 2. 在 volumeCardStates 中找到对应 VolumeCardState，追加新 ChapterRowState
+        for (const card of this.volumeCardStates) {
+          if (card.volumeId === volumeId) {
+            const chState: ChapterRowState = new ChapterRowState()
+            chState.chapterId = newChapterMeta.id
+            chState.chapterTitle = newChapterMeta.title
+            chState.wordCount = newChapterMeta.wordCount
+            chState.lastEditedTime = newChapterMeta.updatedAt
+            chState.volumeId = volumeId
+            card.chapters.push(chState)
+            card.chapterCount = card.chapters.length
+            break
+          }
+        }
+
+        // 3. 保证目标卷在 expandedVolumes 中（新增章节后应展开该卷）
+        if (!this.expandedVolumes.has(volumeId)) {
+          const newSet = new Set<string>(this.expandedVolumes)
+          newSet.add(volumeId)
+          this.expandedVolumes = newSet
+        }
+
         return true
       }
     } catch (_err) {
