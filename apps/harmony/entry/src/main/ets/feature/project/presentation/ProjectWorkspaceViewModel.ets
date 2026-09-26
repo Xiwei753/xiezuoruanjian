@@ -97,6 +97,10 @@ export class ProjectWorkspaceViewModel {
   @Trace currentMenuVolumeId: string = ''
   @Trace currentMenuChapterId: string = ''
 
+  // Issue #774 评论5847908386：区分"首次加载"和"普通刷新"，
+  // 不再用 expandedVolumes.size === 0 冒充首次加载判断
+  private loadedProjectId: string = ''
+
   // ─── 数据加载 ───
 
   async loadData(projectId: string): Promise<void> {
@@ -107,14 +111,36 @@ export class ProjectWorkspaceViewModel {
     try {
       const result = await this.bridge.getProjectTree(this.projectId)
       if (result.success && result.data) {
+        // Issue #774 评论5847908386：按项目身份区分首次加载和普通刷新
+        const isFirstLoadForProject: boolean = this.loadedProjectId !== this.projectId
+
         this.project = result.data.project
         this.volumeTrees = result.data.volumes
         this.volumeCardStates = this.convertToCardStates(this.volumeTrees)
-        // 只在首次加载（expandedVolumes 为空）时默认展开第一个卷
-        if (this.expandedVolumes.size === 0 && this.volumeCardStates.length > 0) {
+
+        // 收集当前有效的 volumeId 集合（用于清理已删除卷的残留展开 ID）
+        const validVolumeIds = new Set<string>()
+        for (const card of this.volumeCardStates) {
+          validVolumeIds.add(card.volumeId)
+        }
+
+        if (isFirstLoadForProject) {
+          // 首次打开一个作品：默认展开第一卷
           const newSet = new Set<string>()
-          newSet.add(this.volumeCardStates[0].volumeId)
+          if (this.volumeCardStates.length > 0) {
+            newSet.add(this.volumeCardStates[0].volumeId)
+          }
           this.expandedVolumes = newSet
+          this.loadedProjectId = this.projectId
+        } else {
+          // 普通刷新：保持用户当前展开状态，清理已删除卷的残留 ID
+          const nextExpanded = new Set<string>()
+          for (const volumeId of this.expandedVolumes) {
+            if (validVolumeIds.has(volumeId)) {
+              nextExpanded.add(volumeId)
+            }
+          }
+          this.expandedVolumes = nextExpanded
         }
       } else {
         this.errorMessageState = '加载项目失败'
