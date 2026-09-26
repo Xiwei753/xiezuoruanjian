@@ -95,6 +95,48 @@ pub(crate) fn upsert_conflict(
     }
 }
 
+/// 对齐 `state.conflicts` / `conflicted_files` 与 `conflicts.json`，使两者成为
+/// 同一份事实的 mirror。
+///
+/// `conflicts.json` 是用户可见/可解决的 canonical record（`list_conflicts` /
+/// `load_conflict_preview` 读它），`state.conflicts` + `conflicted_files` 是
+/// 同步引擎 mirror（resolve / merge 操作它）。两者可能因历史写入分叉而不一致，
+/// 在 merge 归一化前先对齐：
+/// - `conflicts.json` 有、`state.conflicts` 缺 → 补 `state`（canonical 优先覆盖同 path 旧记录）；
+/// - `state.conflicts` 有、`conflicts.json` 缺 → 补 `conflicts.json`（只补不覆盖，canonical 优先）；
+/// - `conflicted_files` 至少包含所有有完整 `SyncConflict` 记录的 path。
+///
+/// 对齐后两边内容一致，后续 legacy hash normalization / unresolved skip 都只在这份
+/// 对齐后的内存状态上做，不再出现"state 有 conflicts.json 没有"的隐藏 unresolved。
+pub(crate) fn align_conflict_state_mirror(
+    state: &mut crate::sync::types::SyncState,
+    conflicts_json: &mut Vec<SyncConflict>,
+) {
+    // 1. conflicts.json 有、state.conflicts 缺 → 补 state。
+    //    已有同 path 记录时用 conflicts.json 的 canonical 记录覆盖（canonical 优先）。
+    for conflict in conflicts_json.iter().cloned() {
+        let path = conflict.local_path.clone();
+        state.conflicted_files.insert(path.clone());
+        if let Some(existing) = state.conflicts.iter_mut().find(|c| c.local_path == path) {
+            *existing = conflict;
+        } else {
+            state.conflicts.push(conflict);
+        }
+    }
+    // 2. state.conflicts 有、conflicts.json 缺 → 补 conflicts.json。
+    //    已有同 path 记录时不覆盖（conflicts.json 是 canonical，上面已经用它覆盖了 state）。
+    for conflict in state.conflicts.iter().cloned() {
+        let path = conflict.local_path.clone();
+        if !conflicts_json.iter().any(|c| c.local_path == path) {
+            conflicts_json.push(conflict);
+        }
+    }
+    // 3. conflicted_files 至少包含所有有完整 SyncConflict 记录的 path。
+    for conflict in conflicts_json.iter() {
+        state.conflicted_files.insert(conflict.local_path.clone());
+    }
+}
+
 /// 合并两批冲突，按 `local_path` 去重。
 ///
 /// `incoming` 中的记录覆盖 `existing` 中同路径的旧记录（外层同路径覆盖旧记录即可）。
@@ -233,6 +275,43 @@ pub fn record_staging_conflicts(
 }
 
 impl crate::sync::SyncService {
+    /// 从 `conflicts.json` 加载 canonical conflict 并修复 `state` mirror。
+    ///
+    /// 三个 resolve 函数（`keep_local` / `take_remote` / `mark_merged`）共用：
+    /// - 如果 `conflicts.json` 没有该 path → 返回 `Err`（canonical record 不存在，
+    ///   不再回退到读本地文件算 MD5 的 fallback）。
+    /// - 如果 `conflicts.json` 有记录但 `state.conflicts` / `conflicted_files` 缺
+    ///   → 用 canonical conflict 调用 [`upsert_conflict`] 补齐 mirror
+    ///   （同时更新 `conflicts_json` / `state.conflicts` / `conflicted_files` 三件套）。
+    ///
+    /// 返回找到的 canonical conflict，供调用方执行 resolve 逻辑。
+    fn load_canonical_conflict_and_repair_mirror(
+        path: &str,
+        state: &mut crate::sync::types::SyncState,
+        conflicts_json: &mut Vec<SyncConflict>,
+        resolve_fn_name: &str,
+    ) -> crate::Result<SyncConflict> {
+        let conflict = conflicts_json
+            .iter()
+            .find(|c| c.local_path == path)
+            .cloned()
+            .ok_or_else(|| {
+                crate::Error::Other(format!(
+                    "{}: no conflict record in conflicts.json for path '{}'",
+                    resolve_fn_name, path
+                ))
+            })?;
+        // 修复 state mirror：如果 state.conflicts 缺这条或内容旧，
+        // 用 canonical conflict 补齐（upsert_conflict 同时更新三件套）。
+        upsert_conflict(
+            conflicts_json,
+            &mut state.conflicts,
+            &mut state.conflicted_files,
+            conflict.clone(),
+        );
+        Ok(conflict)
+    }
+
     /// 计算写入 `known_files` 的规范化内容哈希（MD5）。
     ///
     /// `resolve_conflict_keep_local` / `mark_merged` / `decide_take_remote` 的
@@ -378,30 +457,34 @@ impl crate::sync::SyncService {
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
     pub fn resolve_conflict_keep_local(sync_root: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(sync_root)?;
-        // 先 clone 出 conflict，完成 kind/hash 可解决性判断，再移除 conflicted_files。
-        // 避免逻辑顺序上先"删冲突"再发现不能解决。
-        let conflict_opt = state
-            .conflicts
-            .iter()
-            .find(|c| c.local_path == path)
-            .cloned();
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
+
+        // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
+        // 不再回退到读本地文件算 MD5 的 fallback（那会用本地 MD5 冒充远端基线）。
+        // 如果 state mirror 缺这条，用 canonical conflict 补齐。
+        let conflict = Self::load_canonical_conflict_and_repair_mirror(
+            path,
+            &mut state,
+            &mut conflicts_json,
+            "resolve_conflict_keep_local",
+        )?;
 
         // BothChanged + canonical_known_hash == None 时返回 Err，保持冲突原样。
         // 不调用 remove_conflict_in_memory，不返回"解决成功"。
-        if let Some(conflict) = &conflict_opt {
-            if conflict.kind == SyncConflictKind::BothChanged
-                && Self::canonical_known_hash(sync_root, path, conflict).is_none()
-            {
-                return Err(crate::Error::Other(format!(
-                    "resolve_conflict_keep_local: path '{}' has BothChanged conflict with \
-                     non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
-                     without a proven remote content hash; run a sync to normalize the \
-                     conflict record first",
-                    path
-                )));
-            }
+        if conflict.kind == SyncConflictKind::BothChanged
+            && Self::canonical_known_hash(sync_root, path, &conflict).is_none()
+        {
+            return Err(crate::Error::Other(format!(
+                "resolve_conflict_keep_local: path '{}' has BothChanged conflict with \
+                 non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
+                 without a proven remote content hash; run a sync to normalize the \
+                 conflict record first",
+                path
+            )));
         }
 
+        // canonical conflict 已找到并修复 mirror，conflicted_files 必含该 path。
+        // remove 同时校验存在性：如果仍不在则属于内部不一致，返回 Err。
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_keep_local: path '{}' is not in conflicted_files",
@@ -413,39 +496,25 @@ impl crate::sync::SyncService {
         // If we set known_files to local_hash instead, three-way would see
         // RemoteChanged and download the remote version over local — the opposite of
         // what "keep local" means.
-        //
-        // 用 conflict_opt（上面已 clone）替换原来的 state.conflicts.iter().find(...)，
-        // 因为 state.conflicted_files.remove(path) 已经借用了 &mut state。
-        if let Some(conflict) = conflict_opt {
-            match conflict.kind {
-                SyncConflictKind::RemoteDeleted => {
-                    // RemoteDeleted：远端已删除，直接移除 known base。
-                    // 下一轮三路比较 base 默认为空，和远端 delete 的空 hash 对齐，
-                    // 得到 LocalChanged → 正确上传用户保留的本地正文。
-                    // 不能把本地 MD5 写进 known_files 冒充远端 hash——那会让下一轮
-                    // 误判为 RemoteChanged → DeleteLocal，把用户保留的本地正文移进 trash。
-                    state.known_files.remove(path);
-                    state.known_files_updated_at.remove(path);
-                }
-                SyncConflictKind::BothChanged => {
-                    // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
-                    // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
-                    // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
-                    Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
-                }
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                // RemoteDeleted：远端已删除，直接移除 known base。
+                // 下一轮三路比较 base 默认为空，和远端 delete 的空 hash 对齐，
+                // 得到 LocalChanged → 正确上传用户保留的本地正文。
+                // 不能把本地 MD5 写进 known_files 冒充远端 hash——那会让下一轮
+                // 误判为 RemoteChanged → DeleteLocal，把用户保留的本地正文移进 trash。
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
             }
-        } else {
-            // Fallback: if no conflict record, use the current local file hash.
-            let full_path = sync_root.join(path);
-            if full_path.exists() {
-                let content = std::fs::read(&full_path)?;
-                let hash = crate::sync::hash::content_md5(&content);
-                state.known_files.insert(path.to_string(), hash);
+            SyncConflictKind::BothChanged => {
+                // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
+                // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
+                // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
+                Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
             }
         }
         // Remove the conflict record from state.conflicts and conflicts.json
         // via the shared in-memory helper.
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
@@ -500,6 +569,18 @@ impl crate::sync::SyncService {
     ///   平台层不应触发编辑器重载。
     pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
         let mut state = Self::load_sync_state(sync_root)?;
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
+
+        // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
+        // 不再回退到读本地文件算 MD5 的 fallback。如果 state mirror 缺这条，用 canonical conflict 补齐。
+        let conflict = Self::load_canonical_conflict_and_repair_mirror(
+            path,
+            &mut state,
+            &mut conflicts_json,
+            "resolve_conflict_take_remote",
+        )?;
+
+        // canonical conflict 已找到并修复 mirror，conflicted_files 必含该 path。
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_take_remote: path '{}' is not in conflicted_files",
@@ -507,15 +588,11 @@ impl crate::sync::SyncService {
             )));
         }
 
-        // 取出该路径的冲突记录，按 kind 决策。
-        let conflict_opt = state
-            .conflicts
-            .iter()
-            .find(|c| c.local_path == path)
-            .cloned();
-
+        // 用 canonical conflict 传给 decide_take_remote。
+        // decide_take_remote 的 None 分支（返回 Ok(true) 即 pending fallback）现在不应再被触发
+        // （因为 conflict 必为 Some），但保留它作为防御性代码不删（签名不变，仍接受 Option）。
         let use_pending_fallback =
-            Self::decide_take_remote(sync_root, path, &mut state, conflict_opt)?;
+            Self::decide_take_remote(sync_root, path, &mut state, Some(conflict))?;
 
         if use_pending_fallback {
             // 兼容路径：标记为 pending_take_remote，下次 perform_sync 强制下载远端内容。
@@ -524,7 +601,6 @@ impl crate::sync::SyncService {
 
         // Remove the conflict record from state.conflicts and conflicts.json
         // via the shared in-memory helper.
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         // applied_live = !use_pending_fallback：
@@ -602,30 +678,33 @@ impl crate::sync::SyncService {
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
     pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(sync_root)?;
-        // 先 clone 出 conflict，完成 kind/hash 可解决性判断，再移除 conflicted_files。
-        // 避免逻辑顺序上先"删冲突"再发现不能解决。
-        let conflict_opt = state
-            .conflicts
-            .iter()
-            .find(|c| c.local_path == path)
-            .cloned();
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
+
+        // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
+        // 不再回退到读本地文件算 MD5 的 fallback（那会用本地 MD5 冒充远端基线）。
+        // 如果 state mirror 缺这条，用 canonical conflict 补齐。
+        let conflict = Self::load_canonical_conflict_and_repair_mirror(
+            path,
+            &mut state,
+            &mut conflicts_json,
+            "resolve_conflict_mark_merged",
+        )?;
 
         // BothChanged + canonical_known_hash == None 时返回 Err，保持冲突原样。
         // 不调用 remove_conflict_in_memory，不返回"解决成功"。
-        if let Some(conflict) = &conflict_opt {
-            if conflict.kind == SyncConflictKind::BothChanged
-                && Self::canonical_known_hash(sync_root, path, conflict).is_none()
-            {
-                return Err(crate::Error::Other(format!(
-                    "resolve_conflict_mark_merged: path '{}' has BothChanged conflict with \
-                     non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
-                     without a proven remote content hash; run a sync to normalize the \
-                     conflict record first",
-                    path
-                )));
-            }
+        if conflict.kind == SyncConflictKind::BothChanged
+            && Self::canonical_known_hash(sync_root, path, &conflict).is_none()
+        {
+            return Err(crate::Error::Other(format!(
+                "resolve_conflict_mark_merged: path '{}' has BothChanged conflict with \
+                 non-MD5 remote_hash and no remote_snapshot_path — cannot resolve \
+                 without a proven remote content hash; run a sync to normalize the \
+                 conflict record first",
+                path
+            )));
         }
 
+        // canonical conflict 已找到并修复 mirror，conflicted_files 必含该 path。
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_mark_merged: path '{}' is not in conflicted_files",
@@ -635,39 +714,25 @@ impl crate::sync::SyncService {
         // Set known_files to the remote_hash so that three-way comparison on the
         // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
         // This ensures the merged local version gets uploaded to the remote.
-        //
-        // 用 conflict_opt（上面已 clone）替换原来的 state.conflicts.iter().find(...)，
-        // 因为 state.conflicted_files.remove(path) 已经借用了 &mut state。
-        if let Some(conflict) = conflict_opt {
-            match conflict.kind {
-                SyncConflictKind::RemoteDeleted => {
-                    // RemoteDeleted：远端已删除，直接移除 known base。
-                    // 下一轮三路比较 base 默认为空，和远端 delete 的空 hash 对齐，
-                    // 得到 LocalChanged → 正确上传用户合并后的本地正文。
-                    // 不能把本地 MD5 写进 known_files 冒充远端 hash——那会让下一轮
-                    // 误判为 RemoteChanged → DeleteLocal，把用户合并后的本地正文移进 trash。
-                    state.known_files.remove(path);
-                    state.known_files_updated_at.remove(path);
-                }
-                SyncConflictKind::BothChanged => {
-                    // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
-                    // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
-                    // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
-                    Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
-                }
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                // RemoteDeleted：远端已删除，直接移除 known base。
+                // 下一轮三路比较 base 默认为空，和远端 delete 的空 hash 对齐，
+                // 得到 LocalChanged → 正确上传用户合并后的本地正文。
+                // 不能把本地 MD5 写进 known_files 冒充远端 hash——那会让下一轮
+                // 误判为 RemoteChanged → DeleteLocal，把用户合并后的本地正文移进 trash。
+                state.known_files.remove(path);
+                state.known_files_updated_at.remove(path);
             }
-        } else {
-            // Fallback: if no conflict record, use the current local file hash.
-            let full_path = sync_root.join(path);
-            if full_path.exists() {
-                let content = std::fs::read(&full_path)?;
-                let hash = crate::sync::hash::content_md5(&content);
-                state.known_files.insert(path.to_string(), hash);
+            SyncConflictKind::BothChanged => {
+                // BothChanged：只有 canonical_known_hash() 返回可证明的远端 MD5 时
+                // 才覆盖 known_files。返回 None 时不拿本地 hash 冒充远端 hash。
+                // （None 的情况已在上面提前返回 Err，这里 canonical_known_hash 必返回 Some。）
+                Self::apply_both_changed_known_base(sync_root, path, &mut state, &conflict);
             }
         }
         // Remove the conflict record from state.conflicts and conflicts.json
         // via the shared in-memory helper.
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())

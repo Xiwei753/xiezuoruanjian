@@ -141,6 +141,15 @@ pub(crate) fn merge_remote_into_local_snapshot(
     // 保证归一化清除的假冲突不会在末尾 persist 时被重新加载的旧 conflicts.json 覆盖。
     let mut conflicts_json = crate::sync::conflict::load_conflicts_json(sync_root)?;
 
+    // ── 对齐冲突事实源 ──
+    // conflicts.json 是用户可见/可解决的 canonical record，state.conflicts + conflicted_files
+    // 是同步引擎 mirror。两者可能因历史写入分叉而不一致，在归一化前先对齐：
+    // - conflicts.json 有、state mirror 缺 → 补 state
+    // - state.conflicts 有、conflicts.json 缺 → 补 conflicts.json
+    // - conflicted_files 至少包含所有有完整 SyncConflict 记录的 path
+    // 后面所有 legacy hash normalization / unresolved skip 都只在这份对齐后的内存状态上做。
+    crate::sync::conflict::align_conflict_state_mirror(state, &mut conflicts_json);
+
     // ── 旧基线归一化 ──
     // 旧版本同步系统可能把 Git blob OID（40位 hex）误写入 state.known_files，
     // 而当前同步系统使用 MD5（32位 hex）。三路比较里 local/remote/base 不是同一种
