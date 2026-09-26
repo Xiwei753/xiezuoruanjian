@@ -48,13 +48,18 @@ fn make_core() -> (TempDir, WriterCore) {
 }
 
 /// 造一条最小可用的未解决冲突记录。
+///
+/// `remote_hash` 必须是有效 MD5（32位 hex），否则 Issue #770 评论 5844542687 后
+/// `resolve_conflict_mark_merged` / `keep_local` 会返回 Err（BothChanged + 非 MD5
+/// remote_hash + 无 snapshot → canonical_known_hash 返回 None → 无法解决）。
 fn make_conflict(local_path: &str) -> SyncConflict {
     SyncConflict {
         local_path: local_path.to_string(),
         remote_path: local_path.to_string(),
         kind: SyncConflictKind::BothChanged,
         local_hash: "local-hash".to_string(),
-        remote_hash: "remote-hash".to_string(),
+        // 有效 MD5（空内容的 MD5），让 canonical_known_hash 返回 Some。
+        remote_hash: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
         base_hash: "base-hash".to_string(),
         created_at: 1_000,
         description: "both changed".to_string(),

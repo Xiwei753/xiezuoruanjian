@@ -97,7 +97,7 @@ pub(crate) fn scan_for_sync(
                 })?
                 .as_secs();
             let modified_time = modified_time as i64;
-            let file_hash = SyncService::compute_file_hash(&absolute_path).map_err(|e| {
+            let file_hash = crate::sync::hash::content_md5_file(&absolute_path).map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "scan_for_sync: hash failed for {}: {e}",
                     absolute_path.display()
@@ -122,7 +122,7 @@ pub(crate) fn scan_for_sync(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let file_hash = SyncService::compute_file_hash(&absolute_path).unwrap_or_default();
+            let file_hash = crate::sync::hash::content_md5_file(&absolute_path).unwrap_or_default();
 
             entries.push(SyncFileEntry {
                 relative_path: rel_path,

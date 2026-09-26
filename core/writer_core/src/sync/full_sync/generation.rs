@@ -499,7 +499,7 @@ fn build_put_mutation(
             record.path
         )))
     })?;
-    let actual_hash = format!("{:x}", md5::compute(&content));
+    let actual_hash = crate::sync::hash::content_md5(&content);
     if actual_hash != record.content_hash {
         return Err(crate::Error::Io(std::io::Error::other(format!(
             "publish_generation_batch: hash mismatch for path={} expected={} actual={}",
@@ -580,7 +580,7 @@ fn upload_complete_generation_snapshot(
                 record.path
             )))
         })?;
-        let actual_hash = format!("{:x}", md5::compute(&content));
+        let actual_hash = crate::sync::hash::content_md5(&content);
         if actual_hash != record.content_hash {
             return Err(crate::Error::Io(std::io::Error::other(format!(
                 "upload_complete_generation_snapshot: hash mismatch for path={} expected={} actual={}",

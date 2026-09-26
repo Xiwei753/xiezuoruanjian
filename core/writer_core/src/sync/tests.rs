@@ -1268,7 +1268,7 @@ mod tests {
     fn test_perform_lww_sync_local_delete_generates_manifest_delete() {
         let dir = tempdir().unwrap();
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -1356,7 +1356,7 @@ mod tests {
         std::fs::create_dir_all(local_path.parent().unwrap()).unwrap();
         std::fs::write(&local_path, "local content").unwrap();
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state.known_files.insert(
             "project.json".to_string(),
@@ -1428,7 +1428,7 @@ mod tests {
         std::fs::create_dir_all(local_p2.parent().unwrap()).unwrap();
         std::fs::write(&local_p2, "local older content").unwrap();
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state.known_files.insert(
             "project.json".to_string(),
@@ -1645,7 +1645,7 @@ mod tests {
         let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -1741,7 +1741,7 @@ mod tests {
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -1844,7 +1844,7 @@ mod tests {
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
         let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state.known_files.insert(chapter_rel.to_string(), base_hash);
         state
@@ -1920,7 +1920,7 @@ mod tests {
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state.known_files.insert(chapter_rel.to_string(), base_hash);
         state
@@ -1999,7 +1999,7 @@ mod tests {
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
         let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -2086,7 +2086,7 @@ mod tests {
         let local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -2246,17 +2246,20 @@ mod tests {
 
         let local_content = "local version B";
         let base_hash = "hash_base_A".to_string();
-        let remote_hash = "hash_remote_C".to_string();
+        // 用真实 MD5 作为 remote_hash：resolve_conflict_* 现在对非 MD5 的 remote_hash
+        // 做 canonical 规范化（评论 5843392838 口子2b），测试需用 MD5 才能验证
+        // known_files 被设为 remote_hash 的不变量。
+        let remote_hash = crate::sync::hash::content_md5(b"remote version C");
 
         std::fs::write(&chapter_abs, local_content).unwrap();
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
             .insert(chapter_rel.to_string(), base_hash.clone());
         state.conflicted_files.insert(chapter_rel.to_string());
-        state.conflicts.push(SyncConflict {
+        state.conflicts.push(crate::sync::types::SyncConflict {
             local_path: chapter_rel.to_string(),
             remote_path: chapter_rel.to_string(),
             local_hash: "hash_local_B".to_string(),
@@ -2268,6 +2271,14 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
         // Resolve by keeping local
         SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
@@ -2301,13 +2312,13 @@ mod tests {
         let base_hash = "hash_base_A".to_string();
         let remote_hash = "hash_remote_C".to_string();
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
             .insert(chapter_rel.to_string(), base_hash.clone());
         state.conflicted_files.insert(chapter_rel.to_string());
-        state.conflicts.push(SyncConflict {
+        state.conflicts.push(crate::sync::types::SyncConflict {
             local_path: chapter_rel.to_string(),
             remote_path: chapter_rel.to_string(),
             local_hash: "hash_local_B".to_string(),
@@ -2319,6 +2330,14 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
         // Resolve by taking remote
         SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
@@ -2381,6 +2400,14 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
         // Resolve by taking remote: RemoteDeleted → move local file to trash +
         // remove from known_files (NOT insert remote_hash).
@@ -2425,15 +2452,18 @@ mod tests {
         std::fs::write(&chapter_abs, merged_content).unwrap();
 
         let base_hash = "hash_base_A".to_string();
-        let remote_hash = "hash_remote_C".to_string();
+        // 用真实 MD5 作为 remote_hash：resolve_conflict_* 现在对非 MD5 的 remote_hash
+        // 做 canonical 规范化（评论 5843392838 口子2b），测试需用 MD5 才能验证
+        // known_files 被设为 remote_hash 的不变量。
+        let remote_hash = crate::sync::hash::content_md5(b"remote version C");
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
             .insert(chapter_rel.to_string(), base_hash.clone());
         state.conflicted_files.insert(chapter_rel.to_string());
-        state.conflicts.push(SyncConflict {
+        state.conflicts.push(crate::sync::types::SyncConflict {
             local_path: chapter_rel.to_string(),
             remote_path: chapter_rel.to_string(),
             local_hash: "hash_local_B".to_string(),
@@ -2445,6 +2475,14 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
         // Resolve by marking as merged
         SyncService::resolve_conflict_mark_merged(dir.path(), chapter_rel).unwrap();
@@ -2464,6 +2502,542 @@ mod tests {
         assert!(
             state_after.conflicts.is_empty(),
             "conflicts must be cleared after resolution"
+        );
+    }
+
+    /// Issue #770 评论 5844343324：RemoteDeleted + keep_local 必须移除 known_files，
+    /// 不能把本地 MD5 写进 known_files 冒充远端 hash。
+    /// 否则下一轮三路比较：local_hash==base_hash, 远端 delete 的 remote_hash!=base_hash
+    /// → 误判 RemoteChanged → DeleteLocal，把用户保留的本地正文移进 trash。
+    #[test]
+    fn test_resolve_conflict_keep_local_remote_deleted_removes_known_files() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        // 本地正文存在（用户修改过，远端已删除）。
+        std::fs::write(&chapter_abs, "local content to keep").unwrap();
+
+        let base_hash = "hash_base_A".to_string();
+        // RemoteDeleted 的 remote_hash 是空串（远端已删除，无内容）。
+        let remote_hash = String::new();
+
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "remote deleted".to_string(),
+            kind: SyncConflictKind::RemoteDeleted,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
+
+        // Resolve by keeping local — 用户选择保留本地正文。
+        SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "conflicts must be cleared after resolution"
+        );
+        assert!(
+            !state_after.known_files.contains_key(chapter_rel),
+            "known_files must NOT contain the path after RemoteDeleted keep_local \
+             — writing local MD5 as base would make next three-way compare see \
+             local==base, remote delete != base → RemoteChanged → DeleteLocal, \
+             trashing the content the user chose to keep"
+        );
+        assert!(
+            !state_after.known_files_updated_at.contains_key(chapter_rel),
+            "known_files_updated_at must NOT contain the path after RemoteDeleted keep_local"
+        );
+        assert!(
+            chapter_abs.exists(),
+            "local content file must still exist — keep_local must not move it to trash"
+        );
+    }
+
+    /// Issue #770 评论 5844343324：RemoteDeleted + mark_merged 同样必须移除 known_files。
+    #[test]
+    fn test_resolve_conflict_mark_merged_remote_deleted_removes_known_files() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        std::fs::write(&chapter_abs, "merged content").unwrap();
+
+        let base_hash = "hash_base_A".to_string();
+        let remote_hash = String::new();
+
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash,
+            base_hash,
+            created_at: 12345,
+            description: "remote deleted".to_string(),
+            kind: SyncConflictKind::RemoteDeleted,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
+
+        SyncService::resolve_conflict_mark_merged(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "conflicts must be cleared after resolution"
+        );
+        assert!(
+            !state_after.known_files.contains_key(chapter_rel),
+            "known_files must NOT contain the path after RemoteDeleted mark_merged"
+        );
+        assert!(
+            !state_after.known_files_updated_at.contains_key(chapter_rel),
+            "known_files_updated_at must NOT contain the path after RemoteDeleted mark_merged"
+        );
+    }
+
+    /// Issue #770 评论 5844542687：BothChanged + remote_hash 非 MD5（旧 40 位 Git SHA）
+    /// 且无 remote_snapshot_path → canonical_known_hash 返回 None → keep_local 必须
+    /// 返回 Err 保持冲突原样，不得"假解决"（删 conflicted_files 但不更新 known_files）。
+    #[test]
+    fn test_resolve_conflict_keep_local_both_changed_non_md5_no_snapshot_keeps_old_base() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        std::fs::write(&chapter_abs, "local content").unwrap();
+
+        let base_hash = "hash_base_A".to_string();
+        // 40 位 Git blob SHA（旧版本误写入），不是 32 位 MD5。
+        let remote_hash = "0123456789abcdef0123456789abcdef01234567".to_string();
+
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 手动写 conflicts.json，让 resolve_conflict_keep_local 能读到冲突记录。
+        // save_sync_state 只写 state.local.json，不写 conflicts.json。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
+
+        // keep_local 必须返回 Err：BothChanged + non-MD5 remote_hash + no snapshot
+        // → canonical_known_hash 返回 None → 无法形成可执行的同步意图。
+        let result = SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel);
+        assert!(
+            result.is_err(),
+            "keep_local must return Err when BothChanged has non-MD5 remote_hash and no snapshot"
+        );
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain path after Err"
+        );
+        assert!(
+            !state_after.conflicts.is_empty(),
+            "conflicts must still be preserved after Err"
+        );
+        // known_files 必须保持不变（没有被覆盖成本地 MD5，也没有被删）。
+        assert_eq!(
+            state_after.known_files.get(chapter_rel).unwrap(),
+            &base_hash,
+            "known_files must remain unchanged"
+        );
+
+        // conflicts.json 仍保留 1 条记录。
+        let conflicts_json_path = dir.path().join("app-meta/sync/conflicts.json");
+        assert!(
+            conflicts_json_path.exists(),
+            "conflicts.json must still exist"
+        );
+        let conflicts_json_content = std::fs::read_to_string(&conflicts_json_path).unwrap();
+        let conflicts_arr: Vec<crate::sync::types::SyncConflict> =
+            serde_json::from_str(&conflicts_json_content).unwrap();
+        assert_eq!(
+            conflicts_arr.len(),
+            1,
+            "conflicts.json must still contain exactly 1 record"
+        );
+    }
+
+    /// Issue #770 评论 5844542687：BothChanged + 非 MD5 + 无 snapshot → mark_merged
+    /// 同样必须返回 Err 保持冲突原样。
+    #[test]
+    fn test_resolve_conflict_mark_merged_both_changed_non_md5_no_snapshot_keeps_old_base() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        std::fs::write(&chapter_abs, "merged content").unwrap();
+
+        let base_hash = "hash_base_A".to_string();
+        let remote_hash = "0123456789abcdef0123456789abcdef01234567".to_string();
+
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 手动写 conflicts.json，让 resolve_conflict_mark_merged 能读到冲突记录。
+        // save_sync_state 只写 state.local.json，不写 conflicts.json。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
+
+        // mark_merged 必须返回 Err：BothChanged + non-MD5 remote_hash + no snapshot
+        // → canonical_known_hash 返回 None → 无法形成可执行的同步意图。
+        let result = SyncService::resolve_conflict_mark_merged(dir.path(), chapter_rel);
+        assert!(
+            result.is_err(),
+            "mark_merged must return Err when BothChanged has non-MD5 remote_hash and no snapshot"
+        );
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain path after Err"
+        );
+        assert!(
+            !state_after.conflicts.is_empty(),
+            "conflicts must still be preserved after Err"
+        );
+        assert_eq!(
+            state_after.known_files.get(chapter_rel).unwrap(),
+            &base_hash,
+            "known_files must remain unchanged"
+        );
+
+        // conflicts.json 仍保留 1 条记录。
+        let conflicts_json_path = dir.path().join("app-meta/sync/conflicts.json");
+        assert!(
+            conflicts_json_path.exists(),
+            "conflicts.json must still exist"
+        );
+        let conflicts_json_content = std::fs::read_to_string(&conflicts_json_path).unwrap();
+        let conflicts_arr: Vec<crate::sync::types::SyncConflict> =
+            serde_json::from_str(&conflicts_json_content).unwrap();
+        assert_eq!(
+            conflicts_arr.len(),
+            1,
+            "conflicts.json must still contain exactly 1 record"
+        );
+    }
+
+    /// #770 评论 5844795710：conflicts.json 有 BothChanged 记录，但 state.conflicts 缺
+    /// （只有 conflicted_files 有 path）。keep_local 必须用 conflicts.json 里的
+    /// remote_hash/snapshot 解决，不能 fallback 到本地文件 MD5。
+    #[test]
+    fn test_resolve_keep_local_uses_json_canonical_when_state_mirror_missing() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        // 本地正文（和远端不同）。
+        let local_content = "local version B";
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        // 远端正文和它的 MD5。
+        let remote_content = "remote version C";
+        let remote_md5 = crate::sync::hash::content_md5(remote_content.as_bytes());
+        let base_hash = crate::sync::hash::content_md5(b"base version A");
+
+        // 写远端 snapshot 文件（conflict.remote_snapshot_path 指向它）。
+        let snapshot_rel = format!("app-meta/sync/snapshots/{}.remote", chapter_rel);
+        let snapshot_abs = dir.path().join(&snapshot_rel);
+        std::fs::create_dir_all(snapshot_abs.parent().unwrap()).unwrap();
+        std::fs::write(&snapshot_abs, remote_content).unwrap();
+
+        // 手动写 conflicts.json，放一条 BothChanged 冲突（remote_hash 是有效 MD5，有 remote_snapshot_path）。
+        let conflict = crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: crate::sync::hash::content_md5(local_content.as_bytes()),
+            remote_hash: remote_md5.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: Some(snapshot_rel),
+        };
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        let conflicts_json = serde_json::to_string_pretty(&vec![conflict.clone()]).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
+
+        // 手动写 state.local.json：conflicted_files 包含 path 但 state.conflicts 为空
+        // （模拟 mirror 缺失的分叉场景）。
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        state.conflicted_files.insert(chapter_rel.to_string());
+        // state.conflicts 故意留空 — 模拟 mirror 缺失。
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // 执行 resolve_conflict_keep_local：必须用 conflicts.json 里的 remote_hash 解决。
+        SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        // known_files[path] == conflicts.json 里的 remote_hash（不是本地文件 MD5）。
+        assert_eq!(
+            state_after.known_files.get(chapter_rel).unwrap(),
+            &remote_md5,
+            "known_files must be conflicts.json remote_hash, not local file MD5"
+        );
+        // 本地文件 MD5 不应等于 remote_md5（内容不同）。
+        let local_md5 = crate::sync::hash::content_md5(local_content.as_bytes());
+        assert_ne!(
+            local_md5, remote_md5,
+            "test precondition: local and remote content must differ"
+        );
+        // conflicts.json 和 state.conflicts 都清掉了这条。
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "state.conflicts must be cleared after resolution"
+        );
+        let conflicts_json_after: Vec<crate::sync::types::SyncConflict> = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("app-meta/sync/conflicts.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            conflicts_json_after.is_empty(),
+            "conflicts.json must be cleared after resolution"
+        );
+    }
+
+    /// #770 评论 5845076351：align_conflict_state_mirror 改成真正的单向 mirror。
+    /// conflicts.json 是 canonical record，state 完全由 conflicts.json 重建，
+    /// 不做 state -> json 回填，不复活旧 mirror 中的幽灵冲突。
+    ///
+    /// 这里直接测试 `align_conflict_state_mirror` 函数本身——构造 state 和 conflicts_json
+    /// 不一致的状态，调用 align 后断言 state 完全由 conflicts.json 重建。
+    #[test]
+    fn test_align_conflict_state_mirror_syncs_state_only_conflict_into_conflicts_json() {
+        use crate::sync::types::{SyncConflict, SyncState};
+
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+
+        // 场景 1：state.conflicts 有记录但 conflicts.json 缺（幽灵冲突）。
+        // 单向 mirror 语义：conflicts.json 是 canonical，state 有但 JSON 没 → 丢掉 stale mirror。
+        // align 后 state.conflicts 为空、conflicted_files 为空、JSON 仍空。
+        let mut state = SyncState::default();
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local".to_string(),
+            remote_hash: "hash_remote".to_string(),
+            base_hash: "hash_base".to_string(),
+            created_at: 12345,
+            description: "ghost conflict".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        let mut conflicts_json: Vec<SyncConflict> = Vec::new(); // 空 — conflicts.json 缺这条。
+
+        crate::sync::conflict::align_conflict_state_mirror(&mut state, &mut conflicts_json);
+
+        // conflicts.json 仍空（不从 state 回填）。
+        assert_eq!(
+            conflicts_json.len(),
+            0,
+            "conflicts.json must remain empty — canonical record is not revived from stale mirror"
+        );
+        // state.conflicts 被清空（stale mirror 丢弃）。
+        assert_eq!(
+            state.conflicts.len(),
+            0,
+            "state.conflicts must be cleared — stale mirror is discarded"
+        );
+        // conflicted_files 被清空（孤儿 path 丢弃）。
+        assert!(
+            !state.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared — orphan path is discarded"
+        );
+
+        // 场景 1b：只有 conflicted_files 有 path、两份完整记录都空（孤儿 path）。
+        // align 后孤儿 path 被删除，不再永久 skip。
+        let mut state1b = SyncState::default();
+        state1b.conflicted_files.insert(chapter_rel.to_string());
+        // state1b.conflicts 和 conflicts_json1b 都空。
+        let mut conflicts_json1b: Vec<SyncConflict> = Vec::new();
+
+        crate::sync::conflict::align_conflict_state_mirror(&mut state1b, &mut conflicts_json1b);
+
+        assert!(
+            !state1b.conflicted_files.contains(chapter_rel),
+            "orphan conflicted_files path must be removed"
+        );
+        assert_eq!(
+            state1b.conflicts.len(),
+            0,
+            "state.conflicts must remain empty for orphan path"
+        );
+
+        // 场景 2：conflicts.json 有记录但 state.conflicts 缺（canonical 优先）。
+        // 对齐后 state.conflicts 应被 canonical 记录完整重建。
+        let mut state2 = SyncState::default();
+        state2.conflicted_files.insert(chapter_rel.to_string());
+        // state2.conflicts 故意留空。
+        let canonical_conflict = SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "canonical_local".to_string(),
+            remote_hash: "canonical_remote".to_string(),
+            base_hash: "canonical_base".to_string(),
+            created_at: 99999,
+            description: "canonical".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        };
+        let mut conflicts_json2 = vec![canonical_conflict.clone()];
+
+        crate::sync::conflict::align_conflict_state_mirror(&mut state2, &mut conflicts_json2);
+
+        // state.conflicts 被 canonical 记录完整重建。
+        assert_eq!(
+            state2.conflicts.len(),
+            1,
+            "state.conflicts must be rebuilt from conflicts.json"
+        );
+        assert_eq!(
+            state2.conflicts[0].remote_hash, canonical_conflict.remote_hash,
+            "state.conflicts must use canonical record from conflicts.json"
+        );
+        // conflicts.json 不变（已有这条）。
+        assert_eq!(
+            conflicts_json2.len(),
+            1,
+            "conflicts.json must remain unchanged"
+        );
+
+        // 场景 3：两边都有同 path 记录但内容不同 → conflicts.json（canonical）覆盖 state。
+        let mut state3 = SyncState::default();
+        state3.conflicted_files.insert(chapter_rel.to_string());
+        state3.conflicts.push(SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "stale_local".to_string(),
+            remote_hash: "stale_remote".to_string(),
+            base_hash: "stale_base".to_string(),
+            created_at: 11111,
+            description: "stale".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        let mut conflicts_json3 = vec![canonical_conflict.clone()];
+
+        crate::sync::conflict::align_conflict_state_mirror(&mut state3, &mut conflicts_json3);
+
+        // state.conflicts 被 canonical（conflicts.json）覆盖。
+        assert_eq!(
+            state3.conflicts[0].remote_hash, canonical_conflict.remote_hash,
+            "state.conflicts must be overwritten by canonical conflicts.json record"
+        );
+        assert_eq!(
+            conflicts_json3.len(),
+            1,
+            "conflicts.json must remain with 1 record (not duplicated)"
         );
     }
 
@@ -2488,7 +3062,7 @@ mod tests {
         let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -2693,7 +3267,7 @@ mod tests {
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -2916,7 +3490,7 @@ mod tests {
 
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -3037,7 +3611,7 @@ mod tests {
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
         let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
 
-        let mut state = SyncState::default();
+        let mut state = crate::sync::types::SyncState::default();
         state.device_id = "device_local".to_string();
         state
             .known_files
@@ -3638,6 +4212,14 @@ mod tests {
             remote_snapshot_path: None,
         });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
+        // 同步写 conflicts.json：resolve 现在以 conflicts.json 为 canonical record。
+        let conflicts_json = serde_json::to_string_pretty(&state.conflicts).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/conflicts.json"),
+            conflicts_json,
+        )
+        .unwrap();
 
         let applied_live =
             SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
@@ -3658,6 +4240,259 @@ mod tests {
         assert_eq!(
             live_after, local_content,
             "live content must be unchanged when falling back to pending_take_remote"
+        );
+    }
+
+    // ── Issue #770 评论 5844542687：merge 旧 unresolved conflict 规范化测试 ──
+
+    /// 测试用 mock provider：`list` 返回内容的 Git blob OID 作为 version，
+    /// 让 merge 旧 unresolved conflict 规范化逻辑能触发
+    /// （`remote_tree_files[path]` == 40 位 Git blob OID）。
+    ///
+    /// `MemoryProvider` 的 `list` 返回 UUID 作为 version，无法触发
+    /// `is_legacy_git_blob_oid` 分支。本 provider 用 `git2::Oid::hash_object`
+    /// 算出真实 blob OID，模拟 GitHub provider 的行为。
+    struct BlobOidMockProvider {
+        store: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    }
+
+    impl BlobOidMockProvider {
+        fn with_entries(entries: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
+            let mut map = std::collections::HashMap::new();
+            for (path, content) in entries {
+                map.insert(path, content);
+            }
+            Self {
+                store: std::sync::Mutex::new(map),
+            }
+        }
+
+        fn lock_err() -> crate::sync::provider::ProviderError {
+            crate::sync::provider::ProviderError::Other {
+                reason: "lock poisoned".to_string(),
+            }
+        }
+
+        fn blob_oid(content: &[u8]) -> String {
+            git2::Oid::hash_object(git2::ObjectType::Blob, content)
+                .map(|oid| oid.to_string())
+                .unwrap_or_default()
+        }
+    }
+
+    impl crate::sync::provider::SyncProvider for BlobOidMockProvider {
+        fn capabilities(&self) -> crate::sync::provider::SyncCapabilities {
+            crate::sync::provider::SyncCapabilities::memory()
+        }
+
+        fn list(
+            &self,
+            prefix: &str,
+        ) -> Result<Vec<crate::sync::provider::RemoteEntry>, crate::sync::provider::ProviderError>
+        {
+            let store = self.store.lock().map_err(|_| Self::lock_err())?;
+            let needle = if prefix.is_empty() {
+                None
+            } else {
+                Some(format!("{prefix}/"))
+            };
+            let mut entries = Vec::new();
+            for (path, content) in store.iter() {
+                let entry_path = match &needle {
+                    None => Some(path.clone()),
+                    Some(n) => path.strip_prefix(n).map(|s| s.to_string()),
+                };
+                if let Some(p) = entry_path {
+                    entries.push(crate::sync::provider::RemoteEntry {
+                        path: p,
+                        version: crate::sync::provider::RemoteVersion(Self::blob_oid(content)),
+                    });
+                }
+            }
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
+            Ok(entries)
+        }
+
+        fn read(
+            &self,
+            path: &str,
+        ) -> Result<Option<crate::sync::provider::RemoteObject>, crate::sync::provider::ProviderError>
+        {
+            let store = self.store.lock().map_err(|_| Self::lock_err())?;
+            match store.get(path) {
+                Some(content) => Ok(Some(crate::sync::provider::RemoteObject {
+                    path: path.to_string(),
+                    content: content.clone(),
+                    version: crate::sync::provider::RemoteVersion(Self::blob_oid(content)),
+                })),
+                None => Ok(None),
+            }
+        }
+
+        fn write(
+            &self,
+            path: &str,
+            content: &[u8],
+            _precondition: crate::sync::provider::WritePrecondition,
+        ) -> Result<crate::sync::provider::RemoteVersion, crate::sync::provider::ProviderError>
+        {
+            let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+            store.insert(path.to_string(), content.to_vec());
+            Ok(crate::sync::provider::RemoteVersion(Self::blob_oid(
+                content,
+            )))
+        }
+
+        fn delete(
+            &self,
+            path: &str,
+            _precondition: crate::sync::provider::DeletePrecondition,
+        ) -> Result<(), crate::sync::provider::ProviderError> {
+            let mut store = self.store.lock().map_err(|_| Self::lock_err())?;
+            store.remove(path);
+            Ok(())
+        }
+    }
+
+    /// Issue #770 评论 5844542687：merge 旧 unresolved conflict 规范化。
+    ///
+    /// 旧 BothChanged 记录（remote_hash=当前 remote blob OID、snapshot=None）跑一次
+    /// merge 后，必须被补成 remote MD5 + snapshot；之后 keep_local 再执行能够把
+    /// `known_files` 设成 remote MD5；下一轮得到 `LocalChanged`，不会重新冒出
+    /// 同一个冲突。
+    #[test]
+    #[cfg(not(windows))]
+    #[allow(clippy::too_many_lines)]
+    fn test_merge_normalizes_old_both_changed_conflict_to_md5_with_snapshot() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version A";
+        let local_content = "local version B";
+        let remote_content = "remote version C";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let remote_md5 = format!("{:x}", md5::compute(remote_content.as_bytes()));
+        // 旧 remote_hash 是 40 位 Git blob OID（旧版本误写入）。
+        let remote_blob_oid =
+            git2::Oid::hash_object(git2::ObjectType::Blob, remote_content.as_bytes())
+                .unwrap()
+                .to_string();
+
+        // 构造远端 manifest（记录 remote_content 的 MD5）。
+        let remote_manifest = crate::sync::types::SyncManifest {
+            files: vec![crate::sync::types::ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_md5.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        let manifest_json = serde_json::to_string(&remote_manifest).unwrap();
+
+        let remote_prefix = "projects/test";
+        let provider = BlobOidMockProvider::with_entries([
+            (
+                format!("{remote_prefix}/{chapter_rel}"),
+                remote_content.as_bytes().to_vec(),
+            ),
+            (
+                format!("{remote_prefix}/app-meta/sync/manifest.sync.json"),
+                manifest_json.into_bytes(),
+            ),
+        ]);
+
+        // 构造旧 SyncState：
+        // - known_files[path] = base_hash（MD5，已规范化）
+        // - conflicts = [BothChanged(remote_hash = remote blob OID, snapshot = None)]
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(crate::sync::types::SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_old".to_string(),
+            remote_hash: remote_blob_oid.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "old both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: None,
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // === Step 1: merge 规范化旧冲突记录 ===
+        let res1 = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+        // 冲突路径在 unresolved_conflict_paths 中，主循环跳过它，不产生新冲突
+        // （doc_conflicts 为空），所以 res1.status 不是 PartialConflict。
+        // 但旧的冲突仍然在 state.conflicts 中（规范化后），保持 unresolved。
+        // res1.status 可能是 NoChanges（没有上传/下载/删除动作）。
+        let _ = res1.status; // 不断言具体 status，只检查 state_after_1 的冲突记录。
+
+        let state_after_1 = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            state_after_1.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain path after normalization"
+        );
+        assert!(
+            !state_after_1.conflicts.is_empty(),
+            "conflicts must still be preserved after normalization"
+        );
+        // 冲突记录的 remote_hash 必须被规范化成 MD5。
+        let conflict_after_1 = state_after_1
+            .conflicts
+            .iter()
+            .find(|c| c.local_path == chapter_rel)
+            .expect("conflict record must exist");
+        assert_eq!(
+            conflict_after_1.remote_hash, remote_md5,
+            "remote_hash must be normalized to MD5"
+        );
+        assert!(
+            conflict_after_1.remote_snapshot_path.is_some(),
+            "remote_snapshot_path must be set after normalization"
+        );
+
+        // === Step 2: keep_local 现在能真正解决冲突 ===
+        SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
+        let state_after_resolve = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after_resolve.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert_eq!(
+            state_after_resolve.known_files.get(chapter_rel).unwrap(),
+            &remote_md5,
+            "known_files must be remote MD5 after keep_local"
+        );
+
+        // === Step 3: 下一轮 sync 得到 LocalChanged，不会重新冒出同一个冲突 ===
+        let res2 = lww_sync_with_memory(dir.path(), &provider, true).unwrap();
+        assert!(
+            res2.uploaded_files.contains(&chapter_rel.to_string()),
+            "After keep_local, sync must upload the local version (LocalChanged)"
+        );
+        assert!(
+            !res2.downloaded_files.contains(&chapter_rel.to_string()),
+            "After keep_local, sync must NOT download remote over local"
+        );
+        let state_after_2 = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after_2.conflicted_files.contains(chapter_rel),
+            "conflicted_files must stay cleared — no re-emerging conflict"
         );
     }
 }

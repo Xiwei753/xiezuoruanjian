@@ -65,20 +65,31 @@ Rectangle {
         // 外部（SyncPage 全局入口）随后会用 openConflictPath() 给出目标路径。
         root.conflictPath = ""
         root.refreshConflictList()
+        // Issue #770 评论 5842877986: 通知外部（main.qml）作品已切到位，
+        // 可以消费 pendingConflictPath。用 Qt.callLater 确保本轮属性变更
+        // 完全生效后再发，避免外部在绑定尚未更新完时消费 pending。
+        Qt.callLater(root.projectReady)
     }
 
     // Issue #757 评论 5818193510 第 5 点：同步冲突侧栏支持。
     // syncBackendRef 由 main.qml 传入（全局 syncBackend），用于监听同步完成信号
     // 并在冲突产生时刷新冲突列表、打开临时侧栏。
     property var syncBackendRef: null
-    // 是否有未解决冲突 — 透传给 RightDrawer 控制冲突 tab 显隐。
-    property bool hasConflicts: false
+    // Issue #770 评论 5842877986: 当前作品的冲突列表快照（唯一事实源）。
+    // refreshConflictList() 唯一负责填充，RightDrawer/SyncConflictPanel 都消费这一份，
+    // 不再各自调 list_sync_conflicts 维护第二份缓存。
+    property var syncConflicts: []
+    // 是否有未解决冲突 — 派生自 syncConflicts，透传给 RightDrawer 控制冲突 tab 显隐。
+    readonly property bool hasConflicts: syncConflicts.length > 0
     // Issue #762 评论 5826175490 第 4 点：冲突路径，由外部（main.qml）设置后
     // 打开右侧抽屉并选中对应冲突。
     property string conflictPath: ""
 
     signal backToProjects()
     signal openSettings()
+    // Issue #770 评论 5842877986: 作品切到位后发出，main.qml 据此消费
+    // pendingConflictPath（projectId 匹配才消费），不靠猜 Loader 是否已存在。
+    signal projectReady()
 
     // Issue #762 评论 5826175490 第 4 点：当外部设置 conflictPath 时，
     // 刷新冲突列表并打开右侧抽屉到冲突 tab，把 conflictPath 透传给 RightDrawer。
@@ -1190,8 +1201,12 @@ Rectangle {
             syncBackendRef: root.syncBackendRef
             workspaceProjectId: root.workspaceProjectId
             hasConflicts: root.hasConflicts
-            // Issue #762 评论 5826175490 第 4 点：透传 conflictPath 给 RightDrawer
-            conflictPath: root.conflictPath
+            // Issue #770 评论 5842877986: 透传完整冲突快照给 RightDrawer，
+            // 不再让 RightDrawer/SyncConflictPanel 各自查一份。
+            syncConflicts: root.syncConflicts
+            // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
+            // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
+            requestedConflictPath: root.conflictPath
             onCloseRequested: root.drawerOpen = false
             onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
             onOpenSettings: root.openSettings()
@@ -1200,6 +1215,11 @@ Rectangle {
                 root.drawerOpen = true;
                 root.drawerTab = rightDrawerRect.conflictTabIdx;
                 root.refreshConflictList();
+            }
+            // Issue #770 评论 5842877986: RightDrawer tab 点击改为发信号，
+            // 由 WritingWorkspace 修改 drawerTab，避免双向写 binding。
+            onTabRequested: function(tabIdx) {
+                root.drawerTab = tabIdx;
             }
         }
     }
@@ -1243,16 +1263,18 @@ Rectangle {
     function refreshConflictList() {
         var sb = root.syncBackendRef;
         if (!sb || !root.workspaceProjectId) {
-            root.hasConflicts = false;
+            root.syncConflicts = [];
             return;
         }
         var raw = sb.list_sync_conflicts(root.workspaceProjectId);
         var resp;
         try { resp = JSON.parse(raw); } catch (e) { resp = null; }
         if (resp && resp.success && resp.data && resp.data.conflicts) {
-            root.hasConflicts = resp.data.conflicts.length > 0;
+            // Issue #770 评论 5842877986: 把完整数组写进 syncConflicts（唯一快照），
+            // 不再只设 hasConflicts 布尔。RightDrawer/SyncConflictPanel 都消费这一份。
+            root.syncConflicts = resp.data.conflicts;
         } else {
-            root.hasConflicts = false;
+            root.syncConflicts = [];
         }
         // Issue #757 评论 5819894306 第 3 点：最后一个冲突解决后自动退出冲突 tab。
         // hasConflicts 为 false 且 drawer 停在冲突 tab 时，切回 tab 0 并关闭 drawer，
