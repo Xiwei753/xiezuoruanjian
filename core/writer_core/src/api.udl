@@ -806,7 +806,6 @@ dictionary StarMapHyperlinkDto {
     StarMapTargetPathDto source;
     string target_uri;
     string? label;
-    string? target_starmap_id;
     u64 created_at;
     u64 updated_at;
 };
@@ -815,7 +814,7 @@ dictionary StarMapHyperlinkPatchInputDto {
     string? label;
     boolean clear_label;
     string? target_uri;
-    boolean clear_target_uri;
+    StarMapTargetPathDto? source;
 };
 
 dictionary StarMapHyperlinkListWithDiagnosticsDto {
@@ -898,8 +897,7 @@ enum StarMapEdgeAnchorDiagnosticReasonDto {
     "CrossLayerPath",
     "NonGeometricTarget",
     "EmbedMissing",
-    "PortalMissing",
-    "MultiSegmentUnsupported"
+    "PortalMissing"
 };
 
 dictionary StarMapEdgeAnchorDiagnosticDto {
@@ -1414,6 +1412,9 @@ interface WriterAppService {
 
     [Throws=WriterError]
     sequence<StarMapReferenceDto> find_starmap_references(string target_starmap_id);
+
+    [Throws=WriterError]
+    void ack_starmap_deletions(string starmap_id, u64 acknowledged_revision);
 
     [Throws=WriterError]
     StarMapMotionPolicyDto get_starmap_motion_policy();

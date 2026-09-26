@@ -7,7 +7,6 @@ pub struct StarMapHyperlinkDto {
     pub source: StarMapTargetPathDto,
     pub target_uri: String,
     pub label: Option<String>,
-    pub target_starmap_id: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -19,7 +18,6 @@ impl From<crate::starmap::types::StarMapHyperlink> for StarMapHyperlinkDto {
             source: h.source.into(),
             target_uri: h.target_uri,
             label: h.label,
-            target_starmap_id: h.target_starmap_id,
             created_at: h.created_at,
             updated_at: h.updated_at,
         }
@@ -33,7 +31,6 @@ impl From<StarMapHyperlinkDto> for crate::starmap::types::StarMapHyperlink {
             source: d.source.into(),
             target_uri: d.target_uri,
             label: d.label,
-            target_starmap_id: d.target_starmap_id,
             created_at: d.created_at,
             updated_at: d.updated_at,
         }
@@ -44,16 +41,47 @@ impl From<StarMapHyperlinkDto> for crate::starmap::types::StarMapHyperlink {
 #[serde(rename_all = "camelCase")]
 pub struct StarMapHyperlinkPatchDto {
     pub label: Option<Option<String>>,
-    pub target_uri: Option<Option<String>>,
+    pub target_uri: Option<String>,
+    pub source: Option<StarMapTargetPathDto>,
 }
 
+impl From<crate::starmap::types::StarMapHyperlinkPatch> for StarMapHyperlinkPatchDto {
+    fn from(p: crate::starmap::types::StarMapHyperlinkPatch) -> Self {
+        Self {
+            label: p.label,
+            target_uri: p.target_uri,
+            source: p.source.map(Into::into),
+        }
+    }
+}
+
+impl From<StarMapHyperlinkPatchDto> for crate::starmap::types::StarMapHyperlinkPatch {
+    fn from(d: StarMapHyperlinkPatchDto) -> Self {
+        Self {
+            label: d.label,
+            target_uri: d.target_uri,
+            source: d.source.map(Into::into),
+        }
+    }
+}
+
+/// UDL 层 patch 输入：平台端用扁平字段表达 Option<Option<String>>。
+///
+/// `label: Option<String>` + `clear_label: bool`：
+/// - `clear_label = true` -> `Some(None)`（清空 label）。
+/// - `clear_label = false` + `label = Some(s)` -> `Some(Some(s))`。
+/// - `clear_label = false` + `label = None` -> `None`（不修改）。
+///
+/// `target_uri: Option<String>`：`None` 不修改，`Some(s)` 替换。
+///
+/// `source: Option<StarMapTargetPathDto>`：`None` 不修改，`Some(p)` 替换。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapHyperlinkPatchInputDto {
     pub label: Option<String>,
     pub clear_label: bool,
     pub target_uri: Option<String>,
-    pub clear_target_uri: bool,
+    pub source: Option<StarMapTargetPathDto>,
 }
 
 impl From<StarMapHyperlinkPatchInputDto> for StarMapHyperlinkPatchDto {
@@ -64,11 +92,8 @@ impl From<StarMapHyperlinkPatchInputDto> for StarMapHyperlinkPatchDto {
             } else {
                 d.label.map(Some)
             },
-            target_uri: if d.clear_target_uri {
-                Some(None)
-            } else {
-                d.target_uri.map(Some)
-            },
+            target_uri: d.target_uri,
+            source: d.source,
         }
     }
 }

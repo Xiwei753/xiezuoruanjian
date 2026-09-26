@@ -527,17 +527,23 @@ pub struct StarMapReference {
 /// 用 `resolve_target` 返回的 `traversed_starmap_ids` 判断目标星图是否在
 /// 路径的穿越链中（含起点和终点图）。这是删除保护的唯一真实依据——
 /// 任何经过目标星图的路径都构成引用，删除目标星图会破坏该路径的可达性。
+///
+/// **Fail-safe**：resolver 出错时返回 `Err`，而不是静默返回 `false`。
+/// 删除保护宁可拒绝删除也不能因为 resolver 故障而漏掉真实引用。
+/// 引用扫描场景已 flush，传 `None` overlay（从磁盘读取）。
 fn target_path_references_starmap(
     app_data_root: &Path,
     path: &crate::starmap::types::reference::StarMapTargetPath,
     target_starmap_id: &str,
-) -> bool {
-    match crate::starmap::graph::resolve::resolve_target(app_data_root, path) {
-        Ok(resolved) => resolved
+) -> Result<bool> {
+    match crate::starmap::graph::resolve::resolve_target(app_data_root, path, None) {
+        Ok(resolved) => Ok(resolved
             .traversed_starmap_ids
             .iter()
-            .any(|id| id == target_starmap_id),
-        Err(_) => false,
+            .any(|id| id == target_starmap_id)),
+        Err(status) => Err(crate::error::Error::Io(std::io::Error::other(format!(
+            "StarMap resolver failed during reference scan: {status:?}"
+        )))),
     }
 }
 
@@ -577,7 +583,7 @@ pub fn find_starmap_references(
 
         // 2. Check links
         for link in &graph.links {
-            if target_path_references_starmap(app_data_root, &link.target, target_starmap_id) {
+            if target_path_references_starmap(app_data_root, &link.target, target_starmap_id)? {
                 refs.push(StarMapReference {
                     host_starmap_id: m.starmap_id.clone(),
                     host_title: m.title.clone(),
@@ -591,8 +597,8 @@ pub fn find_starmap_references(
         // 3. Check edges
         for edge in &graph.edges {
             let matches =
-                target_path_references_starmap(app_data_root, &edge.from, target_starmap_id)
-                    || target_path_references_starmap(app_data_root, &edge.to, target_starmap_id);
+                target_path_references_starmap(app_data_root, &edge.from, target_starmap_id)?
+                    || target_path_references_starmap(app_data_root, &edge.to, target_starmap_id)?;
 
             if matches {
                 refs.push(StarMapReference {
@@ -622,7 +628,7 @@ pub fn find_starmap_references(
 
         // 5. Check hyperlinks — hyperlink 的 source 路径也可能穿越目标星图。
         for hl in &graph.hyperlinks {
-            if target_path_references_starmap(app_data_root, &hl.source, target_starmap_id) {
+            if target_path_references_starmap(app_data_root, &hl.source, target_starmap_id)? {
                 refs.push(StarMapReference {
                     host_starmap_id: m.starmap_id.clone(),
                     host_title: m.title.clone(),

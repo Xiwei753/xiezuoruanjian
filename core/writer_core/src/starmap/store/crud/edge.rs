@@ -20,6 +20,13 @@ impl StarMapStore {
     }
 
     pub fn add_edge(&mut self, edge: StarMapEdge) -> Result<StarMapEdge> {
+        // Fix 7: 显式拒绝重复 edge ID，与 add_embed/add_link 行为一致。
+        if self.edges.contains_key(&edge.id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("Edge with id '{}' already exists", edge.id),
+            )));
+        }
         let result = edge.clone();
         self.upsert_edge(edge);
         Ok(result)

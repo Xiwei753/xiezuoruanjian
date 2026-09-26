@@ -1,5 +1,6 @@
 use crate::starmap::semantic::StarMapTargetDetail;
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
+use crate::starmap::types::StarMapGraph;
 
 /// 解析后的目标：resolver 的唯一真实解析结果。
 ///
@@ -15,38 +16,98 @@ pub struct ResolvedTarget {
     pub traversed_starmap_ids: Vec<String>,
 }
 
+/// 从 overlay graph 或磁盘 Store 读取一个 embed 实例。
+///
+/// 当 `overlay` 的 `starmap_id` 与 `current_starmap_id` 匹配时，优先从 overlay
+/// 读取（candidate graph 校验场景：内存刚改完，磁盘还没 flush）。否则从磁盘
+/// Store 读取。多层路径中如果再次走回 overlay 对应的星图，也拿 overlay。
+fn lookup_embed(
+    app_data_root: &std::path::Path,
+    overlay: Option<&StarMapGraph>,
+    current_starmap_id: &str,
+    instance_id: &str,
+) -> Result<
+    Option<crate::starmap::types::StarMapEmbed>,
+    crate::starmap::semantic::StarMapTargetResolveStatus,
+> {
+    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+    if let Some(g) = overlay {
+        if g.starmap_id == current_starmap_id {
+            return Ok(g
+                .embeds
+                .iter()
+                .find(|e| e.instance_id == instance_id)
+                .cloned());
+        }
+    }
+    let mut store = crate::starmap::store::StarMapStore::new(app_data_root, current_starmap_id);
+    if store.load_full().is_err() {
+        return Err(MissingEmbed);
+    }
+    Ok(store.get_embed(instance_id).cloned())
+}
+
+/// 从 overlay graph 或磁盘 Store 读取一个节点。
+fn lookup_node(
+    app_data_root: &std::path::Path,
+    overlay: Option<&StarMapGraph>,
+    current_starmap_id: &str,
+    node_id: &str,
+) -> Result<
+    Option<crate::starmap::types::StarMapNode>,
+    crate::starmap::semantic::StarMapTargetResolveStatus,
+> {
+    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+    if let Some(g) = overlay {
+        if g.starmap_id == current_starmap_id {
+            return Ok(g.nodes.iter().find(|n| n.id == node_id).cloned());
+        }
+    }
+    let mut store = crate::starmap::store::StarMapStore::new(app_data_root, current_starmap_id);
+    if store.load_full().is_err() {
+        return Err(MissingNode);
+    }
+    Ok(store.get_node(node_id).cloned())
+}
+
+/// 检查星图元数据是否存在（overlay 匹配时跳过磁盘检查）。
+fn starmap_exists(
+    app_data_root: &std::path::Path,
+    overlay: Option<&StarMapGraph>,
+    starmap_id: &str,
+) -> bool {
+    if let Some(g) = overlay {
+        if g.starmap_id == starmap_id {
+            return true;
+        }
+    }
+    crate::starmap::load_starmap_meta(app_data_root, starmap_id).is_ok()
+}
+
 /// 解析目标路径的可达性，返回详细解析结果。
 ///
 /// 这是星图路径解析的**唯一真实入口**。所有需要"从某张宿主图开始，经过
 /// Embed/Portal，到终点"的引用解析都应调用此函数。
 ///
+/// ## overlay 参数
+///
+/// `overlay` 是当前正在校验的 candidate graph（通常来自 facade 的 add/update
+/// 流程：先构造 candidate graph 再跑 validate_graph）。当路径穿越到 overlay
+/// 对应的星图时，优先从 overlay 读取对象，而不是从磁盘 Store 读取。这解决了
+/// "内存刚改完，resolver 去读旧磁盘"的一致性问题。多层路径中如果再次走回
+/// overlay 对应的星图，也拿 overlay。引用扫描等已 flush 的场景传 `None`。
+///
 /// ## 算法
 ///
-/// 1. **深度限制**：`segments.len() > 32` 返回 `TooDeep`。此上限防止恶意或错误数据
-///    导致无限递归，32 层远超实际使用深度（通常 0-3 层）。
+/// 1. **深度限制**：`segments.len() > 32` 返回 `TooDeep`。
 /// 2. **起点检查**：`path.starmap_id` 对应的星图必须存在。
 /// 3. **逐段穿越**：沿 `segments` 遍历，用 `HashSet` 记录已访问的 `starmap_id`，
 ///    重复进入同一星图即返回 `CycleDetected`。
-///    - `EnterEmbed`：当前图必须存在该 `instance_id`，再得到下一张图
-///      （`embed.target_starmap_id`）。
-///    - `EnterPortal`：当前图必须存在 portal 节点，再得到下一张图
-///      （`portal.destination_starmap_id`）。
-/// 4. **终节点校验**：路径末端的 `StarMapTargetDetail`（Node/Anchor/ChapterRange）
-///    在最终星图中验证存在性和范围合法性。
-///
-/// ## 返回
-///
-/// - `Ok(ResolvedTarget)`：路径完整可达，含最终星图 ID、终点和经过的星图链。
-/// - `Err(StarMapTargetResolveStatus)`：解析失败的具体状态。
-///
-/// ## 性能注意
-///
-/// 此函数在 `validation::validate_graph` 中对每个目标路径调用，
-/// 涉及磁盘 I/O（`load_starmap_meta`、`read_to_string`）。
-/// 对于大量目标路径的图，验证可能较慢。
+/// 4. **终节点校验**：路径末端的 `StarMapTargetDetail` 在最终星图中验证。
 pub fn resolve_target(
     app_data_root: &std::path::Path,
     path: &StarMapTargetPath,
+    overlay: Option<&StarMapGraph>,
 ) -> Result<ResolvedTarget, crate::starmap::semantic::StarMapTargetResolveStatus> {
     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
 
@@ -54,7 +115,7 @@ pub fn resolve_target(
         return Err(TooDeep);
     }
 
-    if crate::starmap::load_starmap_meta(app_data_root, &path.starmap_id).is_err() {
+    if !starmap_exists(app_data_root, overlay, &path.starmap_id) {
         return Err(MissingStarmap);
     }
 
@@ -66,44 +127,36 @@ pub fn resolve_target(
     for segment in &path.segments {
         match segment {
             StarMapPathSegment::EnterEmbed { instance_id } => {
-                let mut store =
-                    crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
-                if store.load_full().is_err() {
-                    return Err(MissingEmbed);
-                }
-                let embed = match store.get_embed(instance_id) {
-                    Some(e) => e,
-                    None => return Err(MissingEmbed),
-                };
+                let embed =
+                    match lookup_embed(app_data_root, overlay, &current_starmap_id, instance_id) {
+                        Ok(Some(e)) => e,
+                        Ok(None) => return Err(MissingEmbed),
+                        Err(status) => return Err(status),
+                    };
                 current_starmap_id = embed.target_starmap_id.clone();
                 if !visited.insert(current_starmap_id.clone()) {
                     return Err(CycleDetected);
                 }
-                if crate::starmap::load_starmap_meta(app_data_root, &current_starmap_id).is_err() {
+                if !starmap_exists(app_data_root, overlay, &current_starmap_id) {
                     return Err(MissingStarmap);
                 }
                 traversed_starmap_ids.push(current_starmap_id.clone());
             }
             StarMapPathSegment::EnterPortal { node_id } => {
-                let mut store =
-                    crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
-                if store.load_full().is_err() {
-                    return Err(MissingPortal);
-                }
-                let node = match store.get_node(node_id) {
-                    Some(n) => n,
-                    None => return Err(MissingPortal),
+                let node = match lookup_node(app_data_root, overlay, &current_starmap_id, node_id) {
+                    Ok(Some(n)) => n,
+                    Ok(None) => return Err(MissingPortal),
+                    Err(status) => return Err(status),
                 };
                 let portal = match &node.portal {
                     Some(p) => p,
                     None => return Err(MissingPortal),
                 };
-                // Portal 的 destination_starmap_id 是目标星图
                 current_starmap_id = portal.destination_starmap_id.clone();
                 if !visited.insert(current_starmap_id.clone()) {
                     return Err(CycleDetected);
                 }
-                if crate::starmap::load_starmap_meta(app_data_root, &current_starmap_id).is_err() {
+                if !starmap_exists(app_data_root, overlay, &current_starmap_id) {
                     return Err(MissingStarmap);
                 }
                 traversed_starmap_ids.push(current_starmap_id.clone());
@@ -113,27 +166,21 @@ pub fn resolve_target(
 
     match &path.target {
         StarMapTargetDetail::Node { node_id } => {
-            let mut store =
-                crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
-            if store.load_full().is_err() {
-                return Err(MissingNode);
-            }
-            if store.get_node(node_id).is_none() {
-                return Err(MissingNode);
+            match lookup_node(app_data_root, overlay, &current_starmap_id, node_id) {
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(MissingNode),
+                Err(status) => return Err(status),
             }
         }
         StarMapTargetDetail::Anchor { node_id, anchor_id } => {
-            let mut store =
-                crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
-            if store.load_full().is_err() {
-                return Err(MissingNode);
-            }
-            if let Some(n) = store.get_node(node_id) {
-                if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                    return Err(MissingAnchor);
+            match lookup_node(app_data_root, overlay, &current_starmap_id, node_id) {
+                Ok(Some(n)) => {
+                    if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                        return Err(MissingAnchor);
+                    }
                 }
-            } else {
-                return Err(MissingNode);
+                Ok(None) => return Err(MissingNode),
+                Err(status) => return Err(status),
             }
         }
         StarMapTargetDetail::ChapterRange {
@@ -160,16 +207,14 @@ pub fn resolve_target(
 /// 解析目标路径的可达性（兼容包装）。
 ///
 /// 内部调用 [`resolve_target`]，仅返回状态而不返回详细解析结果。
-/// 保留此函数以兼容现有只关心"是否可达"的调用点；需要经过的星图链等
-/// 详细信息的调用点应直接使用 [`resolve_target`]。
+/// `overlay` 语义同 [`resolve_target`]；无 candidate graph 的场景传 `None`。
 pub fn resolve_target_path(
     app_data_root: &std::path::Path,
     path: &StarMapTargetPath,
+    overlay: Option<&StarMapGraph>,
 ) -> crate::starmap::semantic::StarMapTargetResolveStatus {
-    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-
-    match resolve_target(app_data_root, path) {
-        Ok(_) => Resolved,
+    match resolve_target(app_data_root, path, overlay) {
+        Ok(_) => crate::starmap::semantic::StarMapTargetResolveStatus::Resolved,
         Err(status) => status,
     }
 }

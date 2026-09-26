@@ -80,17 +80,10 @@ impl super::WriterCore {
         clippy::type_complexity
     )]
     pub fn delete_starmap(&self, starmap_id: &str) -> Result<()> {
-        {
-            let mut stores = self
-                .starmap_stores
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(store) = stores.get_mut(starmap_id) {
-                if store.is_dirty() || store.has_pending_deletes() {
-                    store.flush()?;
-                }
-            }
-        }
+        // Fix 6: 引用扫描前必须 flush 所有 dirty starmap stores，否则
+        // find_starmap_references 读到的磁盘数据可能不含刚写入的引用，
+        // 导致误删。先 flush 全部，再移除待删 store，最后落盘删除。
+        self.flush_all_starmap_stores()?;
         {
             let mut stores = self
                 .starmap_stores
@@ -106,24 +99,11 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
     ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        // 先 flush store（与 delete_starmap 同样的前置逻辑），再移除缓存并落盘删除。
-        self.flush_starmap_store_if_dirty(starmap_id)?;
+        // 先 flush 全部 dirty stores（与 delete_starmap 同样的前置逻辑），
+        // 再移除缓存并落盘删除。
+        self.flush_all_starmap_stores()?;
         self.remove_starmap_store(starmap_id);
         crate::starmap::delete_starmap_with_changes(&self.app_data_root, starmap_id)
-    }
-
-    /// Flush 指定 starmap store 的脏数据（内部 helper，降低调用方嵌套深度）。
-    fn flush_starmap_store_if_dirty(&self, starmap_id: &str) -> Result<()> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(store) = stores.get_mut(starmap_id) {
-            if store.is_dirty() || store.has_pending_deletes() {
-                store.flush()?;
-            }
-        }
-        Ok(())
     }
 
     /// 从缓存中移除指定 starmap store（内部 helper）。
@@ -209,6 +189,15 @@ impl super::WriterCore {
         graph: &crate::starmap::types::StarMapGraph,
         base_package_revision: u64,
     ) -> Result<Vec<std::path::PathBuf>> {
+        // Fix 2: graph.starmap_id 必须与传入的 starmap_id 一致，
+        // 否则 validate_graph 中的 path.starmap_id == graph.starmap_id
+        // 不变量无法保证跨层路径的正确性。
+        if graph.starmap_id != starmap_id {
+            return Err(crate::error::Error::Other(format!(
+                "graph.starmap_id ({}) does not match starmap_id ({})",
+                graph.starmap_id, starmap_id
+            )));
+        }
         validation::validate_graph(&self.app_data_root, graph)?;
 
         let mut stores = self
@@ -713,8 +702,7 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
         hyperlink_id: &str,
-        label: Option<&str>,
-        target_uri: Option<&str>,
+        patch: &crate::starmap::types::StarMapHyperlinkPatch,
     ) -> Result<crate::starmap::types::StarMapHyperlink> {
         let mut stores = self
             .starmap_stores
@@ -726,13 +714,12 @@ impl super::WriterCore {
         store.ensure_fully_loaded()?;
         store.ensure_hyperlink_loaded(hyperlink_id)?;
 
-        // hyperlink update 只改 label/target_uri，不影响引用完整性，
-        // 但仍统一走 validate 以保持契约一致（例如 target_uri scheme 检查）。
+        // hyperlink update 统一走 validate 以保持引用完整性（source 路径可能变）。
         let mut candidate = store.to_starmap_graph();
-        apply_hyperlink_update_to_graph(&mut candidate, hyperlink_id, label, target_uri)?;
+        apply_hyperlink_update_to_graph(&mut candidate, hyperlink_id, patch)?;
         validation::validate_graph(&self.app_data_root, &candidate)?;
 
-        let result = store.update_hyperlink(hyperlink_id, label, target_uri)?;
+        let result = store.update_hyperlink(hyperlink_id, patch)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(result)
@@ -1011,8 +998,7 @@ fn apply_link_patch_to_graph(
 fn apply_hyperlink_update_to_graph(
     graph: &mut crate::starmap::types::StarMapGraph,
     hyperlink_id: &str,
-    label: Option<&str>,
-    target_uri: Option<&str>,
+    patch: &crate::starmap::types::StarMapHyperlinkPatch,
 ) -> Result<()> {
     let hl = graph
         .hyperlinks
@@ -1024,11 +1010,14 @@ fn apply_hyperlink_update_to_graph(
                 "Hyperlink not found",
             ))
         })?;
-    if let Some(l) = label {
-        hl.label = Some(l.to_string());
+    if let Some(ref l) = patch.label {
+        hl.label = l.clone();
     }
-    if let Some(u) = target_uri {
-        hl.target_uri = u.to_string();
+    if let Some(ref u) = patch.target_uri {
+        hl.target_uri = u.clone();
+    }
+    if let Some(ref s) = patch.source {
+        hl.source = s.clone();
     }
     Ok(())
 }

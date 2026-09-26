@@ -52,7 +52,6 @@ fn test_hyperlink_roundtrip() {
         },
         target_uri: "https://example.com".to_string(),
         label: Some("Example".to_string()),
-        target_starmap_id: Some("sm_other".to_string()),
         created_at: 0,
         updated_at: 0,
     };
@@ -61,7 +60,6 @@ fn test_hyperlink_roundtrip() {
     let deserialized: StarMapHyperlink = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.hyperlink_id, "hl_1");
     assert_eq!(deserialized.target_uri, "https://example.com");
-    assert_eq!(deserialized.target_starmap_id, Some("sm_other".to_string()));
 }
 
 #[test]

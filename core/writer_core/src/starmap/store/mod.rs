@@ -226,11 +226,23 @@ impl StarMapStore {
         &mut self,
         acknowledged_revision: u64,
     ) -> crate::error::Result<()> {
+        // Fix 4: ack revision 不能大于当前 package_revision。
         self.reload_graph_meta_if_stale();
+        if acknowledged_revision > self.package_revision {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "acknowledged_revision ({}) cannot exceed current package_revision ({})",
+                    acknowledged_revision, self.package_revision
+                ),
+            )));
+        }
         if let Some(ref mut meta) = self.graph_meta {
             meta.deleted_since_last_sync
                 .acknowledge(acknowledged_revision);
             self.dirty_graph_meta = true;
+            // Fix 4: 必须 enqueue GraphMeta，否则 flush_save_queue 不会写 graph meta。
+            self.enqueue_save(crate::starmap::store::types::SaveQueueEntry::GraphMeta);
         }
         Ok(())
     }

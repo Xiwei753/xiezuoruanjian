@@ -87,10 +87,21 @@ impl StarMapStore {
         let complete = request.target_phase == LoadPhase::BackgroundFullLoad;
         let since_rev = request.since_revision;
 
-        // 增量模式：complete 快照且 since_revision > 0 时，只返回
-        // `object_revisions[id] > since_revision` 的对象。since_revision == 0
-        // 走全量（complete 模式），保持首次拉取返回全部已加载对象的行为。
-        let incremental = complete && since_rev > 0;
+        // Fix 5: since_revision > package_revision 是非法请求。
+        if since_rev > self.package_revision {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "since_revision ({}) cannot exceed current package_revision ({})",
+                    since_rev, self.package_revision
+                ),
+            )));
+        }
+
+        // Fix 5: 增量模式不再要求 complete（BackgroundFullLoad）。
+        // 只要 since_revision > 0，所有 phase 都按 revision map 过滤。
+        // since_revision == 0 走全量，保持首次拉取返回全部已加载对象的行为。
+        let incremental = since_rev > 0;
 
         // 提取各对象 revision map 的引用，避免在过滤闭包中重复借用 self.graph_meta。
         let node_revs = self.graph_meta.as_ref().map(|m| &m.node_revisions);

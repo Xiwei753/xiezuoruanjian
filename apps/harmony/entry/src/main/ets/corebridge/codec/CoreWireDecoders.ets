@@ -1251,14 +1251,11 @@ function decodeStarMapHyperlink(data: Object): DecodeResult<StarMapHyperlink> {
   if (updatedAt === null) { return err<StarMapHyperlink>('updatedAt missing') }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
   if (!labelR.ok || labelR.value === undefined) { return err<StarMapHyperlink>(`StarMapHyperlink.${labelR.error ?? 'decode failed'}`) }
-  const targetStarmapIdR: DecodeResult<string | null> = nullStr(data, 'targetStarmapId')
-  if (!targetStarmapIdR.ok || targetStarmapIdR.value === undefined) { return err<StarMapHyperlink>(`StarMapHyperlink.${targetStarmapIdR.error ?? 'decode failed'}`) }
   const value: StarMapHyperlink = {
     hyperlinkId: hyperlinkId,
     source: sourceR.value,
     targetUri: targetUri,
     label: labelR.value,
-    targetStarmapId: targetStarmapIdR.value,
     createdAt: createdAt,
     updatedAt: updatedAt
   }

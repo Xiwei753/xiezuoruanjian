@@ -202,13 +202,35 @@ fn validate_edges(
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
+    let mut edge_ids = std::collections::HashSet::new();
     for edge in &graph.edges {
+        // Edge ID 全局唯一，与 node/embed/link/hyperlink 一致。
+        // add_edge 也会显式拒绝重复 ID，这里在 validate_graph 层再守一道。
+        if !edge_ids.insert(&edge.id) {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Duplicate edge ID",
+            )));
+        }
         validate_target_path(app_data_root, &edge.from, graph, node_ids, "from")?;
         validate_target_path(app_data_root, &edge.to, graph, node_ids, "to")?;
     }
     Ok(())
 }
 
+/// 校验单条目标路径的引用完整性。
+///
+/// ## 不变量
+///
+/// `path.starmap_id` 必须等于 `graph.starmap_id`——路径起点必须是宿主图
+/// 本身（见 `types/reference.rs` 的语义定义）。这防止在 A 图里保存
+/// `starmap_id = B` 的路径。
+///
+/// ## overlay
+///
+/// 跨层路径走 resolver 时，把 `graph` 作为 overlay 传入，使 resolver 优先
+/// 从 candidate graph 读取对象（内存刚改完、磁盘还没 flush 的场景）。
+#[allow(clippy::excessive_nesting)]
 fn validate_target_path(
     app_data_root: &std::path::Path,
     path: &crate::starmap::types::reference::StarMapTargetPath,
@@ -216,6 +238,17 @@ fn validate_target_path(
     node_ids: &std::collections::HashSet<String>,
     endpoint_name: &str,
 ) -> Result<()> {
+    // 不变量：路径起点必须等于宿主图。
+    if path.starmap_id != graph.starmap_id {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} target path starmap_id '{}' does not match host graph '{}'",
+                endpoint_name, path.starmap_id, graph.starmap_id
+            ),
+        )));
+    }
+
     // 如果路径没有 segments，则 target 在当前星图中
     if path.segments.is_empty() {
         match &path.target {
@@ -240,11 +273,30 @@ fn validate_target_path(
                     )));
                 }
             }
+            crate::starmap::semantic::StarMapTargetDetail::ChapterRange {
+                range_start,
+                range_end,
+                ..
+            } => {
+                // 空 segments 的 ChapterRange 也要校验 range，
+                // 不能只有跨层才经过 resolver。
+                if let (Some(s), Some(e)) = (range_start, range_end) {
+                    if s > e {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "Edge {} ChapterRange range_start > range_end",
+                                endpoint_name
+                            ),
+                        )));
+                    }
+                }
+            }
             _ => {}
         }
     } else {
-        // 跨星图路径，调用 resolver 验证
-        let status = super::resolve::resolve_target_path(app_data_root, path);
+        // 跨星图路径，调用 resolver 验证，传 graph 作为 overlay
+        let status = super::resolve::resolve_target_path(app_data_root, path, Some(graph));
         use crate::starmap::semantic::StarMapTargetResolveStatus::*;
         match status {
             CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor

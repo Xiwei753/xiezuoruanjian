@@ -1350,7 +1350,6 @@ mod tests {
             },
             target_uri: "https://example.com/docs".to_string(),
             label: Some("ExampleDoc".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -1666,7 +1665,10 @@ mod tests {
                 offset_x: 0.0,
                 offset_y: 0.0,
             },
-            host_path: crate::api::types::StarMapTargetPathDto::default(),
+            host_path: crate::api::types::StarMapTargetPathDto {
+                starmap_id: meta.starmap_id.clone(),
+                ..Default::default()
+            },
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
@@ -1682,7 +1684,6 @@ mod tests {
             },
             target_uri: "https://example.com".to_string(),
             label: Some("MyHL".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -1806,7 +1807,10 @@ mod tests {
                 offset_x: 0.0,
                 offset_y: 0.0,
             },
-            host_path: crate::api::types::StarMapTargetPathDto::default(),
+            host_path: crate::api::types::StarMapTargetPathDto {
+                starmap_id: meta.starmap_id.clone(),
+                ..Default::default()
+            },
             provenance: Default::default(),
             created_at: 0,
             updated_at: 0,
@@ -1822,7 +1826,6 @@ mod tests {
             },
             target_uri: "https://example.com".to_string(),
             label: Some("CascadeHL".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -2155,7 +2158,6 @@ mod tests {
             source: endpoint_path.clone(),
             target_uri: "https://example.com/page1".to_string(),
             label: Some("Page1Link".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -2164,7 +2166,6 @@ mod tests {
             source: endpoint_path.clone(),
             target_uri: "https://example.com/page2".to_string(),
             label: Some("Page2Link".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -2212,7 +2213,6 @@ mod tests {
             source: endpoint_path,
             target_uri: "https://example.com/page3".to_string(),
             label: Some("Page3Link".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -2229,7 +2229,6 @@ mod tests {
             },
             target_uri: "https://example.com/updated".to_string(),
             label: Some("UpdatedLink".to_string()),
-            target_starmap_id: None,
             created_at: 0,
             updated_at: 0,
         };

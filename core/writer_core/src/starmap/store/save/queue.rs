@@ -34,14 +34,31 @@ impl StarMapStore {
         clippy::type_complexity
     )]
     pub fn flush_save_queue(&mut self) -> Result<Vec<PathBuf>> {
-        // 在清空 dirty 集合前快照本次事务涉及的 dirty 对象，供 GraphMeta 分支
-        // 记录对象 revision。Node/Edge/… 分支会逐个清空 dirty 集合。
+        // Fix 3: 事务化 flush。GraphMeta 作为 commit record 必须最后写入。
+        // Delete* 分支不再立刻清 deleted_*_ids——merge_memory_ids_into_graph_meta
+        // 需要这些集合来从 graph meta 中移除已删除的 IDs。全部对象写入/删除成功后
+        // 才写 GraphMeta，GraphMeta 成功后才统一清空 dirty/deleted 集合。
         let flush_dirty = self.collect_flush_dirty_set();
+
+        // 将 GraphMeta 排到队列末尾，确保它最后处理。
+        let mut graph_meta_entry = None;
+        let mut other_entries: VecDeque<SaveQueueEntry> = VecDeque::new();
+        while let Some(entry) = self.save_queue.pop_front() {
+            if matches!(entry, SaveQueueEntry::GraphMeta) {
+                graph_meta_entry = Some(entry);
+            } else {
+                other_entries.push_back(entry);
+            }
+        }
+
         let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
         let mut any_processed = false;
         let mut failed_types: Vec<String> = Vec::new();
         let mut changed_paths: Vec<PathBuf> = Vec::new();
-        while let Some(entry) = self.save_queue.pop_front() {
+
+        // Phase 1: 处理所有非 GraphMeta 条目（写入 + 删除）。
+        // Delete* 分支不清 deleted_*_ids，只记录成功删除的 IDs。
+        while let Some(entry) = other_entries.pop_front() {
             let mut succeeded = true;
             any_processed = true;
             match entry {
@@ -159,21 +176,6 @@ impl StarMapStore {
                         }
                     }
                 }
-                SaveQueueEntry::GraphMeta => {
-                    if self.dirty_graph_meta {
-                        self.reload_graph_meta_if_stale();
-                        match self.update_graph_meta_file(&flush_dirty) {
-                            Ok((written_revision, rel_path)) => {
-                                self.dirty_graph_meta = false;
-                                self.package_revision = written_revision;
-                                changed_paths.push(rel_path);
-                            }
-                            Err(_) => {
-                                succeeded = false;
-                            }
-                        }
-                    }
-                }
                 SaveQueueEntry::DeleteNode => {
                     let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
                     for node_id in &ids {
@@ -184,7 +186,8 @@ impl StarMapStore {
                         ) {
                             Ok(paths) => {
                                 changed_paths.extend(paths);
-                                self.deleted_node_ids.remove(node_id);
+                                // Fix 3: 不在此处清 deleted_node_ids；
+                                // 等 GraphMeta commit 后统一清。
                             }
                             Err(e) => {
                                 self.record_delete_failure("node", node_id, &e);
@@ -204,7 +207,6 @@ impl StarMapStore {
                         ) {
                             Ok(paths) => {
                                 changed_paths.extend(paths);
-                                self.deleted_edge_ids.remove(edge_id);
                             }
                             Err(e) => {
                                 self.record_delete_failure("edge", edge_id, &e);
@@ -224,7 +226,6 @@ impl StarMapStore {
                         ) {
                             Ok(paths) => {
                                 changed_paths.extend(paths);
-                                self.deleted_embed_ids.remove(instance_id);
                             }
                             Err(e) => {
                                 self.record_delete_failure("embed", instance_id, &e);
@@ -244,7 +245,6 @@ impl StarMapStore {
                         ) {
                             Ok(paths) => {
                                 changed_paths.extend(paths);
-                                self.deleted_link_ids.remove(link_id);
                             }
                             Err(e) => {
                                 self.record_delete_failure("link", link_id, &e);
@@ -264,7 +264,6 @@ impl StarMapStore {
                         ) {
                             Ok(paths) => {
                                 changed_paths.extend(paths);
-                                self.deleted_hyperlink_ids.remove(hl_id);
                             }
                             Err(e) => {
                                 self.record_delete_failure("hyperlink", hl_id, &e);
@@ -274,12 +273,55 @@ impl StarMapStore {
                         }
                     }
                 }
+                SaveQueueEntry::GraphMeta => {
+                    // 不应到达此处（GraphMeta 已提取到 graph_meta_entry）。
+                    graph_meta_entry = Some(SaveQueueEntry::GraphMeta);
+                }
             }
             if !succeeded {
                 failed_types.push(format!("{:?}", entry));
                 remaining.push_back(entry);
             }
         }
+
+        // Phase 2: 如果 Phase 1 全部成功，写 GraphMeta（commit record）。
+        // merge_memory_ids_into_graph_meta 此时能看到完整的 deleted_*_ids。
+        let graph_meta_succeeded = if let Some(SaveQueueEntry::GraphMeta) = graph_meta_entry {
+            any_processed = true;
+            if self.dirty_graph_meta {
+                self.reload_graph_meta_if_stale();
+                match self.update_graph_meta_file(&flush_dirty) {
+                    Ok((written_revision, rel_path)) => {
+                        self.package_revision = written_revision;
+                        changed_paths.push(rel_path);
+                        true
+                    }
+                    Err(_) => {
+                        failed_types.push("GraphMeta".to_string());
+                        false
+                    }
+                }
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+
+        // Phase 3: GraphMeta commit 成功后，统一清空 dirty/deleted 集合。
+        if failed_types.is_empty() && graph_meta_succeeded {
+            self.dirty_graph_meta = false;
+            self.deleted_node_ids.clear();
+            self.deleted_edge_ids.clear();
+            self.deleted_embed_ids.clear();
+            self.deleted_link_ids.clear();
+            self.deleted_hyperlink_ids.clear();
+        } else if let Some(gme) = graph_meta_entry {
+            if !graph_meta_succeeded {
+                remaining.push_back(gme);
+            }
+        }
+
         self.save_queue = remaining;
 
         let all_flushed = !self.is_dirty() && !self.dirty_graph_meta && !self.has_pending_deletes();

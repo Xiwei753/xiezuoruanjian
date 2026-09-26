@@ -2,6 +2,7 @@ use super::super::*;
 use super::*;
 use crate::starmap::semantic::StarMapTargetDetail;
 use crate::starmap::types::reference::StarMapTargetPath;
+use crate::starmap::types::StarMapHyperlinkPatch;
 use tempfile::TempDir;
 
 #[test]
@@ -367,7 +368,6 @@ fn hyperlink_add_update_delete_round_trip() {
         },
         target_uri: "https://example.com".to_string(),
         label: Some("Example".to_string()),
-        target_starmap_id: None,
         created_at: 0,
         updated_at: 0,
     });
@@ -381,7 +381,14 @@ fn hyperlink_add_update_delete_round_trip() {
     assert_eq!(hl.target_uri, "https://example.com");
 
     store2
-        .update_hyperlink("hl1", Some("Updated"), None)
+        .update_hyperlink(
+            "hl1",
+            &StarMapHyperlinkPatch {
+                label: Some(Some("Updated".to_string())),
+                target_uri: None,
+                source: None,
+            },
+        )
         .unwrap();
     store2.flush().unwrap();
 

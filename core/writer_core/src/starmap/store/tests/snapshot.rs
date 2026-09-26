@@ -227,7 +227,6 @@ fn phased_snapshot_preserves_embed_link_hyperlink() {
         },
         target_uri: "https://example.com".to_string(),
         label: Some("hl".to_string()),
-        target_starmap_id: Some("tgt".to_string()),
         created_at: 0,
         updated_at: 0,
     });

@@ -161,7 +161,6 @@ pub enum StarMapEdgeAnchorDiagnosticReasonDto {
     NonGeometricTarget,
     EmbedMissing,
     PortalMissing,
-    MultiSegmentUnsupported,
 }
 
 impl From<crate::starmap::render::EdgeAnchorDiagnostic> for StarMapEdgeAnchorDiagnosticDto {
@@ -173,9 +172,6 @@ impl From<crate::starmap::render::EdgeAnchorDiagnostic> for StarMapEdgeAnchorDia
             R::NonGeometricTarget => StarMapEdgeAnchorDiagnosticReasonDto::NonGeometricTarget,
             R::EmbedMissing => StarMapEdgeAnchorDiagnosticReasonDto::EmbedMissing,
             R::PortalMissing => StarMapEdgeAnchorDiagnosticReasonDto::PortalMissing,
-            R::MultiSegmentUnsupported => {
-                StarMapEdgeAnchorDiagnosticReasonDto::MultiSegmentUnsupported
-            }
         };
         Self {
             edge_id: d.edge_id,

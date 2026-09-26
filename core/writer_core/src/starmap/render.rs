@@ -32,16 +32,14 @@ pub struct EdgeAnchorDiagnostic {
 pub enum EdgeAnchorDiagnosticReason {
     /// 本地节点/锚点引用，但节点不存在于 graph 或 layout 中
     LocalNodeMissing,
-    /// 跨层路径（segments 非空或 starmap_id 不同），当前画布无法直接定位
+    /// 跨层路径（起点星图不是当前画布的星图），当前画布无法直接定位
     CrossLayerPath,
     /// 路径终点不是 Node/Anchor（例如 Starmap/ChapterRange），没有几何锚点
     NonGeometricTarget,
     /// 第一段 EnterEmbed，但 embed 不存在于 graph 中
     EmbedMissing,
-    /// 第一段 EnterPortal，但 portal 节点不存在于 graph 或 layout 中
+    /// 第一段 EnterPortal，但 portal 节点不存在于 graph 或 layout 中，或节点没有 portal
     PortalMissing,
-    /// 路径有多段 segments，当前实现只支持单段穿越的可见锚点
-    MultiSegmentUnsupported,
 }
 
 /// 边渲染批结果：成功渲染的边 + 无法定位端点的诊断。
@@ -134,11 +132,12 @@ pub struct EdgeInput {
 ///
 /// - **本地 Node/Anchor**（`path.starmap_id == graph.starmap_id && segments.is_empty()`）
 ///   -> 对应 node layout 中心。Anchor 附在节点上，几何位置就是节点中心。
-/// - **第一段 EnterEmbed** -> 对应 embed placement 的可见锚点（placement 中心）。
-///   只处理单段穿越；多段返回 `MultiSegmentUnsupported`。
-/// - **第一段 EnterPortal** -> portal 所在 node 的 layout 锚点（节点中心）。
-///   只处理单段穿越；多段返回 `MultiSegmentUnsupported`。
-/// - **跨层路径**（`segments` 非空或 `starmap_id` 不同）且不属于上述单段穿越
+/// - **深路径**（`path.starmap_id == graph.starmap_id && !segments.is_empty()`）
+///   -> 根据第一段定位当前画布上的可见锚点：
+///   - **EnterEmbed** -> embed placement 中心。
+///   - **EnterPortal** -> portal 所在 node 的 layout 中心（且确认 node 有 portal）。
+///     后续更深层的穿越不在当前画布上可见，但第一段的锚点可见。
+/// - **跨层路径**（`path.starmap_id != graph.starmap_id`）
 ///   -> `CrossLayerPath`，当前画布无法直接定位。
 /// - **非几何 target**（Starmap/ChapterRange/Entity/External）-> `NonGeometricTarget`。
 ///
@@ -172,17 +171,8 @@ pub fn resolve_edge_endpoint_anchor(
         };
     }
 
-    // 跨层路径。只支持单段穿越的可见锚点。
-    if path.segments.len() > 1 {
-        return Err(EdgeAnchorDiagnostic {
-            edge_id: edge_id.to_string(),
-            endpoint: endpoint.to_string(),
-            reason: EdgeAnchorDiagnosticReason::MultiSegmentUnsupported,
-        });
-    }
-
-    // 起点星图不是当前画布的星图，且没有 segments —— 纯跨图引用，无法在当前画布定位。
-    if path.segments.is_empty() {
+    // 起点星图不是当前画布的星图 —— 纯跨图引用，无法在当前画布定位。
+    if path.starmap_id != graph.starmap_id {
         return Err(EdgeAnchorDiagnostic {
             edge_id: edge_id.to_string(),
             endpoint: endpoint.to_string(),
@@ -190,7 +180,9 @@ pub fn resolve_edge_endpoint_anchor(
         });
     }
 
-    // 单段穿越
+    // 深路径：起点是当前 graph 且 segments 非空。
+    // 根据第一段定位当前画布上的可见锚点。后续更深层穿越不在当前画布可见，
+    // 但第一段的锚点可见，足以绘制边的端点。
     match &path.segments[0] {
         StarMapPathSegment::EnterEmbed { instance_id } => {
             // embed placement 的可见锚点 = placement 中心
@@ -208,7 +200,15 @@ pub fn resolve_edge_endpoint_anchor(
             }
         }
         StarMapPathSegment::EnterPortal { node_id } => {
-            // portal 所在 node 的 layout 锚点
+            // portal 所在 node 的 layout 锚点；确认 node 确实有 portal
+            let node = graph.nodes.iter().find(|n| n.id == *node_id);
+            if node.and_then(|n| n.portal.as_ref()).is_none() {
+                return Err(EdgeAnchorDiagnostic {
+                    edge_id: edge_id.to_string(),
+                    endpoint: endpoint.to_string(),
+                    reason: EdgeAnchorDiagnosticReason::PortalMissing,
+                });
+            }
             node_layout_center(node_id, layout).ok_or(EdgeAnchorDiagnostic {
                 edge_id: edge_id.to_string(),
                 endpoint: endpoint.to_string(),

@@ -252,7 +252,6 @@ export interface StarMapHyperlink {
   source: StarMapEndpointPath
   targetUri: string
   label: string | null
-  targetStarmapId: string | null
   createdAt: number
   updatedAt: number
 }

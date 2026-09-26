@@ -284,6 +284,17 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// Fix 4: 确认星图删除 tombstone 已被同步方持久化。
+    pub fn ack_starmap_deletions(
+        &self,
+        starmap_id: &str,
+        acknowledged_revision: u64,
+    ) -> ApiResult<()> {
+        self.core_write()
+            .ack_starmap_deletions(starmap_id, acknowledged_revision)
+            .map_err(WriterError::from)
+    }
+
     pub fn get_starmap_motion_policy(
         &self,
     ) -> ApiResult<crate::api::types::StarMapMotionPolicyDto> {
@@ -1320,11 +1331,10 @@ impl WriterCoreApi {
         hyperlink_id: &str,
         patch: crate::api::types::StarMapHyperlinkPatchDto,
     ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
-        let label = patch.label.as_ref().and_then(|opt| opt.as_deref());
-        let target_uri = patch.target_uri.as_ref().and_then(|opt| opt.as_deref());
+        let core_patch: crate::starmap::types::StarMapHyperlinkPatch = patch.into();
         let result = self
             .core_write()
-            .update_starmap_hyperlink(starmap_id, hyperlink_id, label, target_uri)
+            .update_starmap_hyperlink(starmap_id, hyperlink_id, &core_patch)
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
         let hl_label = result.label.as_deref().unwrap_or("");
