@@ -262,6 +262,9 @@ impl StarMapStore {
         if has_index_after_rebuild {
             if let Some(meta) = self.graph_meta.as_ref() {
                 let edge_relation_index = meta.edge_relation_index.clone();
+                // clone 成员列表，让 meta 借用提前释放。
+                let meta_node_ids: std::collections::HashSet<String> =
+                    meta.node_ids.iter().cloned().collect();
                 for eri in &edge_relation_index {
                     let refs = extract_eri_node_refs(eri, &self.starmap_id);
                     for node_id in &refs {
@@ -270,6 +273,7 @@ impl StarMapStore {
                                 if other_id != node_id
                                     && !self.nodes.contains_key(*other_id)
                                     && !other_id.is_empty()
+                                    && meta_node_ids.contains(*other_id)
                                 {
                                     adjacent_node_ids.insert(other_id.to_string());
                                 }
@@ -305,7 +309,14 @@ impl StarMapStore {
             }
             if let Some(ref meta) = self.graph_meta {
                 let edge_relation_index = meta.edge_relation_index.clone();
+                // clone 成员列表，让 meta 借用提前释放。
+                let meta_edge_ids: std::collections::HashSet<String> =
+                    meta.edge_ids.iter().cloned().collect();
                 for eri in &edge_relation_index {
+                    // 严格服从 GraphMeta 成员列表：只加载 meta.edge_ids 声明的 edge。
+                    if !meta_edge_ids.contains(&eri.edge_id) {
+                        continue;
+                    }
                     if !self.edges.contains_key(&eri.edge_id) {
                         let refs = extract_eri_node_refs(eri, &self.starmap_id);
                         let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
@@ -325,7 +336,14 @@ impl StarMapStore {
             }
             if let Some(ref meta) = self.graph_meta {
                 let embed_host_index = meta.embed_host_index.clone();
+                // clone 成员列表，让 meta 借用提前释放。
+                let meta_embed_ids: std::collections::HashSet<String> =
+                    meta.embed_instance_ids.iter().cloned().collect();
                 for ehi in &embed_host_index {
+                    // 严格服从 GraphMeta 成员列表：只加载 meta.embed_instance_ids 声明的 embed。
+                    if !meta_embed_ids.contains(&ehi.instance_id) {
+                        continue;
+                    }
                     if !self.embeds.contains_key(&ehi.instance_id) {
                         let refs = extract_ehi_node_refs(ehi, &self.starmap_id);
                         let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));

@@ -407,12 +407,31 @@ impl super::WriterCore {
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        // 级联删除需要完整加载，否则会漏掉跨对象的引用关系。
-        store.ensure_fully_loaded()?;
-        store.ensure_object_loaded(node_id)?;
+        {
+            let store = stores
+                .entry(starmap_id.to_string())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
+            // 级联删除需要完整加载，否则会漏掉跨对象的引用关系。
+            store.ensure_fully_loaded()?;
+            store.ensure_object_loaded(node_id)?;
+        }
+
+        // 先在 candidate graph 上模拟删除（含级联），跑 validate_graph，再真正改 Store。
+        // 级联 ID 复用 store.node_cascade_ids 纯函数，保证 candidate 模拟和 store
+        // 真实删除产生相同的最终对象集合。
+        let candidate = {
+            let store = Self::get_store_or_err(&stores, starmap_id)?;
+            let cascade = store.node_cascade_ids(node_id);
+            let mut g = store.to_starmap_graph();
+            apply_node_deletion_to_graph(&mut g, node_id, &cascade);
+            g
+        };
+        validation::validate_graph(
+            &self.build_resolver_context_from_stores(&stores, &candidate),
+            &candidate,
+        )?;
+
+        let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         store.delete_node(node_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteNode);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
@@ -655,13 +674,36 @@ impl super::WriterCore {
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
-        store.ensure_embed_loaded(instance_id)?;
+        {
+            let store = stores
+                .entry(starmap_id.to_string())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
+            // 级联删除需要完整加载，否则会漏掉跨对象的引用关系。
+            store.ensure_fully_loaded()?;
+            store.ensure_embed_loaded(instance_id)?;
+        }
+
+        // 先在 candidate graph 上模拟删除（含级联），跑 validate_graph，再真正改 Store。
+        // 级联 ID 复用 store.embed_cascade_ids 纯函数，保证 candidate 模拟和 store
+        // 真实删除产生相同的最终对象集合。
+        let candidate = {
+            let store = Self::get_store_or_err(&stores, starmap_id)?;
+            let cascade = store.embed_cascade_ids(instance_id);
+            let mut g = store.to_starmap_graph();
+            apply_embed_deletion_to_graph(&mut g, instance_id, &cascade);
+            g
+        };
+        validation::validate_graph(
+            &self.build_resolver_context_from_stores(&stores, &candidate),
+            &candidate,
+        )?;
+
+        let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         store.delete_embed(instance_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
+        store.enqueue_save(SaveQueueEntry::DeleteEdge);
+        store.enqueue_save(SaveQueueEntry::DeleteLink);
+        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(())
     }
@@ -1196,4 +1238,50 @@ fn apply_hyperlink_update_to_graph(
         hl.source = s.clone();
     }
     Ok(())
+}
+
+/// 在 candidate graph 上模拟 node 删除（含级联）。
+///
+/// `cascade` 由 `store.node_cascade_ids(node_id)` 计算得出，和 store 真实删除
+/// 用同一纯函数，保证 candidate 模拟和 store 真实删除产生相同的最终对象集合。
+fn apply_node_deletion_to_graph(
+    graph: &mut crate::starmap::types::StarMapGraph,
+    node_id: &str,
+    cascade: &crate::starmap::store::CascadeIds,
+) {
+    graph.nodes.retain(|n| n.id != node_id);
+    graph.edges.retain(|e| !cascade.edge_ids.contains(&e.id));
+    graph
+        .embeds
+        .retain(|em| !cascade.embed_ids.contains(&em.instance_id));
+    graph
+        .links
+        .retain(|l| !cascade.link_ids.contains(&l.link_id));
+    graph
+        .hyperlinks
+        .retain(|hl| !cascade.hyperlink_ids.contains(&hl.hyperlink_id));
+}
+
+/// 在 candidate graph 上模拟 embed 删除（含级联）。
+///
+/// `cascade` 由 `store.embed_cascade_ids(instance_id)` 计算得出，和 store 真实删除
+/// 用同一纯函数，保证 candidate 模拟和 store 真实删除产生相同的最终对象集合。
+fn apply_embed_deletion_to_graph(
+    graph: &mut crate::starmap::types::StarMapGraph,
+    instance_id: &str,
+    cascade: &crate::starmap::store::CascadeIds,
+) {
+    graph.embeds.retain(|em| em.instance_id != instance_id);
+    graph.edges.retain(|e| !cascade.edge_ids.contains(&e.id));
+    // cascade.embed_ids 已排除被删 instance 自己（见 embed_cascade_ids），
+    // 但这里 retain 已经移除了自己，再 retain cascade.embed_ids 安全。
+    graph
+        .embeds
+        .retain(|em| !cascade.embed_ids.contains(&em.instance_id));
+    graph
+        .links
+        .retain(|l| !cascade.link_ids.contains(&l.link_id));
+    graph
+        .hyperlinks
+        .retain(|hl| !cascade.hyperlink_ids.contains(&hl.hyperlink_id));
 }
