@@ -235,7 +235,8 @@ impl SujianEditorItem {
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
                     &handle, &line_ids, dpr, text_color,
                 );
-                crate::editor::layout::inject_animation_visuals_into_snapshot(
+                // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
+                let _ = crate::editor::layout::inject_animation_visuals_into_snapshot(
                     &mut doc_snapshot,
                     line_snapshots,
                 );
@@ -398,7 +399,8 @@ impl SujianEditorItem {
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
                     &handle, &line_ids, dpr, text_color,
                 );
-                crate::editor::layout::inject_animation_visuals_into_snapshot(
+                // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
+                let _ = crate::editor::layout::inject_animation_visuals_into_snapshot(
                     &mut doc_snapshot,
                     line_snapshots,
                 );

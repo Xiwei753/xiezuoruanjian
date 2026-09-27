@@ -95,7 +95,7 @@ impl LineSnapshotBuilder {
                 .iter()
                 .find(|p| p.paragraph_document_byte_start == line.para_start);
 
-            let (image, clusters) = if let Some(canonical) = canonical_para {
+            let (mut image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
@@ -110,6 +110,12 @@ impl LineSnapshotBuilder {
             // 如果 canonical line 已有 image 但 clusters 为空且该行含可见字符，
             // 说明 animation visuals 注入链漏了该行的 clusters（image 注入了但 clusters 没注入）。
             // 计诊断事件让诊断包直接看出，不在 builder 里伪造 cluster 几何。
+            //
+            // Issue #785 评论 5857873894 修改 4: 不仅打 debug_warn，还要确保不生成
+            // "image 有、clusters 空"的 PreparedLineSnapshot 进入动画事务构建。
+            // 没有 cluster 的 image 无法参与动画（InsertReveal 按 cluster 匹配 inserted range），
+            // 保留 image 会让 transaction_builder 看到该行像正常路径但 InsertReveal 为 0。
+            // 把 image 也设为 None，明确标记该行动画视觉不可用。
             if image.is_some()
                 && clusters.is_empty()
                 && line
@@ -123,7 +129,8 @@ impl LineSnapshotBuilder {
                     &format!(
                         "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} — \
                          canonical line has image but clusters empty and line contains visible chars, \
-                         animation visuals injection incomplete for this line",
+                         animation visuals injection incomplete for this line, dropping image to \
+                         prevent empty-cluster animation snapshot",
                         revision.0,
                         line.para_start,
                         line.qtextline_idx,
@@ -131,6 +138,7 @@ impl LineSnapshotBuilder {
                         line.byte_end,
                     ),
                 );
+                image = None;
             }
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);

@@ -585,7 +585,12 @@ impl LinuxEditorPipeline {
                 ctx.dpr,
                 &ctx.text_color,
             );
-            layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
+            // Issue #785 评论 5857873894 修改 2b: inject 现在返回成功注入行数；
+            // 此处为全量提取路径，忽略返回值（全量注入，失败由 inject 内部诊断记录）。
+            let _ = layout::inject_animation_visuals_into_snapshot(
+                &mut doc_snap,
+                animation_visuals,
+            );
         }
 
         // fallback 路径释放临时 generation，不泄漏。
@@ -1295,7 +1300,11 @@ impl LinuxEditorPipeline {
 
                 // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
                 // （QImage/clusters）注入到 old_doc_snapshot，使动画纹理可用。
-                layout::inject_animation_visuals_into_snapshot(&mut doc_snap, old_line_snapshots);
+                // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
+                let _ = layout::inject_animation_visuals_into_snapshot(
+                    &mut doc_snap,
+                    old_line_snapshots,
+                );
 
                 // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
                 // new_doc_snapshot 已完成基础排版（QTextLayout 存入 new_generation），
@@ -1345,9 +1354,12 @@ impl LinuxEditorPipeline {
                     ctx.dpr,
                     &ctx.text_color,
                 );
-                layout::inject_animation_visuals_into_snapshot(
+                // Issue #785 评论 5857873894 修改 3 + 2b: 检查 + 注入 + 诊断收口到辅助函数，
+                // 避免 prepare_edit_motion 函数体过长（静态守卫测试用 32000 字符窗口）。
+                inject_new_animation_visuals_with_diagnostics(
                     &mut new_doc_snapshot,
                     new_line_snapshots,
+                    motion.inserted_range,
                 );
 
                 // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
@@ -1405,13 +1417,15 @@ impl LinuxEditorPipeline {
                         }
                     }
                     if !old_move_visuals.is_empty() {
-                        layout::inject_animation_visuals_into_snapshot(
+                        // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
+                        let _ = layout::inject_animation_visuals_into_snapshot(
                             &mut doc_snap,
                             old_move_visuals,
                         );
                     }
                     if !move_visuals.is_empty() {
-                        layout::inject_animation_visuals_into_snapshot(
+                        // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
+                        let _ = layout::inject_animation_visuals_into_snapshot(
                             &mut new_doc_snapshot,
                             move_visuals,
                         );
@@ -1659,6 +1673,111 @@ fn make_cursor_rect_from_caret_doc(
         top: caret.y,
         bottom: caret.y + caret.h,
         baseline_y,
+    }
+}
+
+/// Issue #785 评论 5857873894 修改 3 + 2b: 检查 prepare_animation_visuals_from_layout
+/// 返回的 new_line_snapshots 是否覆盖 inserted_range 所在行，然后注入并验证注入结果。
+///
+/// 提取成独立函数避免 `prepare_edit_motion` 函数体过长（静态守卫测试用 32000 字符窗口
+/// 检查 `self.layout_revision = new_revision;` 的位置）。
+///
+/// 诊断逻辑：
+/// - 针对 inserted_range 相交且含可见字符的视觉行，检查 new_line_snapshots 中是否有
+///   对应行（按稳定行身份 paragraph_document_byte_start + qtextline_idx）、clusters 是否非空。
+/// - 注入后检查返回的成功注入行数是否与输入数量一致。
+/// - 找不到目标行或 clusters 为空时记录 debug_warn，明确报告是提取还是注入环节失败。
+fn inject_new_animation_visuals_with_diagnostics(
+    new_doc_snapshot: &mut layout::CanonicalDocumentVisualSnapshot,
+    new_line_snapshots: Vec<layout::CanonicalLineSnapshot>,
+    inserted_range: Option<Utf8ByteRange>,
+) {
+    // 修改 3: 在 prepare 返回后、inject 之前，针对 inserted_range 检查
+    // new_line_snapshots 中是否有对应行、clusters 是否非空。
+    // 不再猜"行没进 raster ids"——评论已证明本轮新增的 raster-id 并入循环是 no-op。
+    if let Some(range) = inserted_range {
+        let ins_start = range.start().value();
+        let ins_end = range.end().value();
+        if ins_end > ins_start {
+            for (i, vl) in new_doc_snapshot.visual_lines.iter().enumerate() {
+                // 只检查与 inserted_range 相交且含可见字符的行
+                if vl.byte_start >= ins_end || vl.byte_end <= ins_start {
+                    continue;
+                }
+                let has_visible_char = vl
+                    .para_text
+                    .chars()
+                    .any(|c| !c.is_whitespace() && !c.is_control());
+                if !has_visible_char {
+                    continue;
+                }
+                // 在 new_line_snapshots 中找该行（按稳定行身份）
+                let snap = new_line_snapshots.iter().find(|s| {
+                    s.paragraph_document_byte_start == vl.para_start
+                        && s.qtextline_idx == vl.qtextline_idx
+                });
+                match snap {
+                    None => {
+                        crate::backend::app_backend::debug_warn_static(
+                            "pipeline",
+                            "prepare_animation_visuals_missing_for_inserted_line",
+                            &format!(
+                                "inserted_range=[{}..{}) visual_line_idx={} \
+                                 para_start={} qtextline_idx={} byte_start={} \
+                                 byte_end={} — prepare_animation_visuals_from_layout \
+                                 did not return a snapshot for this inserted line, \
+                                 animation visuals extraction missed this line",
+                                ins_start,
+                                ins_end,
+                                i,
+                                vl.para_start,
+                                vl.qtextline_idx,
+                                vl.byte_start,
+                                vl.byte_end,
+                            ),
+                        );
+                    }
+                    Some(s) if s.clusters.is_empty() => {
+                        crate::backend::app_backend::debug_warn_static(
+                            "pipeline",
+                            "prepare_animation_visuals_clusters_empty_for_inserted_line",
+                            &format!(
+                                "inserted_range=[{}..{}) visual_line_idx={} \
+                                 para_start={} qtextline_idx={} byte_start={} \
+                                 byte_end={} — prepare returned snapshot but clusters \
+                                 empty, animation visuals extraction incomplete",
+                                ins_start,
+                                ins_end,
+                                i,
+                                vl.para_start,
+                                vl.qtextline_idx,
+                                vl.byte_start,
+                                vl.byte_end,
+                            ),
+                        );
+                    }
+                    Some(_) => {
+                        // 该行有 snapshot 且 clusters 非空，提取环节正常。
+                    }
+                }
+            }
+        }
+    }
+    // 修改 2b: inject 返回成功注入行数。检查返回值是否与 new_line_snapshots 数量一致，
+    // 不一致说明有行未注入，由 inject 内部诊断记录，这里再记一层 pipeline 级诊断。
+    let expected_inject_count = new_line_snapshots.len();
+    let actual_inject_count =
+        layout::inject_animation_visuals_into_snapshot(new_doc_snapshot, new_line_snapshots);
+    if actual_inject_count < expected_inject_count {
+        crate::backend::app_backend::debug_warn_static(
+            "pipeline",
+            "inject_animation_visuals_partial_for_new_snapshot",
+            &format!(
+                "expected={} actual={} — some new line snapshots were not injected \
+                 (see canonical_snapshot::inject_animation_visuals_line_not_found)",
+                expected_inject_count, actual_inject_count,
+            ),
+        );
     }
 }
 

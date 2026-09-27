@@ -272,6 +272,10 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     // 环境变量）即可在 zip 中看到，满足"诊断包直接看出原因"的要求。
     // 字段带 inserted range、snapshot revision、相交 line 数、相交 cluster 数、
     // 空白/控制字符跳过数，便于定位是注入链遗漏还是全部 cluster 被当空白跳过。
+    //
+    // Issue #785 评论 5857873894 修改 5: 正式 Warn 只针对 inserted range 确实含可见字符
+    //（非空白、非控制字符）但最终 InsertReveal 为 0 的情况。空格、tab、换行继续正常跳过，
+    // 不报异常。如果所有 inserted range 都只含空白/控制字符，则不记 Warn（这是正常跳过）。
     if spec.text_animation_enabled && !spec.inserted_ranges.is_empty() {
         let insert_reveal_count = units
             .iter()
@@ -302,74 +306,98 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                     }
                 }
             }
-            {
-                use std::collections::BTreeMap;
-                let mut fields = BTreeMap::new();
-                fields.insert(
-                    "transaction_id".to_string(),
-                    serde_json::json!(spec.key.transaction_id),
-                );
-                fields.insert(
-                    "generation".to_string(),
-                    serde_json::json!(spec.key.generation),
-                );
-                fields.insert(
-                    "operation_kind".to_string(),
-                    serde_json::Value::String(
-                        operation_kind_label(spec.operation_kind).to_string(),
-                    ),
-                );
-                fields.insert(
-                    "inserted_ranges".to_string(),
-                    serde_json::json!(spec.inserted_ranges),
-                );
-                fields.insert(
-                    "snapshot_revision".to_string(),
-                    serde_json::json!(spec.new_snapshot.revision.0),
-                );
-                fields.insert(
-                    "intersecting_line_count".to_string(),
-                    serde_json::json!(intersecting_lines),
-                );
-                fields.insert(
-                    "intersecting_cluster_count".to_string(),
-                    serde_json::json!(intersecting_clusters),
-                );
-                fields.insert(
-                    "whitespace_skip_count".to_string(),
-                    serde_json::json!(whitespace_skip_count),
-                );
-                fields.insert(
-                    "unit_kinds".to_string(),
-                    serde_json::Value::String(unit_kind_labels(&units).join(",")),
-                );
-                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
-                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                    sequence: 0,
-                    session_id: String::new(),
-                    level: writer_diagnostics::DiagnosticLevel::Warn,
-                    origin: writer_diagnostics::DiagnosticOrigin::App,
-                    event: "editor.anim.insert_reveal_not_generated".to_string(),
-                    target: "editor.anim".to_string(),
-                    message: Some(
-                        "inserted range has visible chars but InsertReveal count is 0".to_string(),
-                    ),
-                    fields,
-                });
+            // Issue #785 评论 5857873894 修改 5: 判断 inserted range 是否真的含可见字符。
+            // 如果所有 inserted range 都只含空白/控制字符，InsertReveal 为 0 是正常跳过，
+            // 不记 Warn。只有当至少有一个 inserted range 含可见字符但 InsertReveal 为 0
+            // 时才记 Warn。优先用 intersecting_clusters + whitespace_skip_count 判断：
+            // 若 intersecting_clusters > 0 且全部都是空白（whitespace_skip_count == intersecting_clusters），
+            // 则所有相交 cluster 都是空白，属于正常跳过。若 intersecting_clusters == 0，
+            // 再直接检查 inserted range 正文是否含可见字符，避免漏报注入链遗漏的情况。
+            let all_inserted_is_whitespace = if intersecting_clusters > 0 {
+                whitespace_skip_count == intersecting_clusters
+            } else {
+                // 没有相交 cluster，直接检查 inserted range 正文是否含可见字符。
+                // 如果所有 inserted range 都只含空白/控制字符，则属于正常跳过；
+                // 如果有可见字符但无相交 cluster，则属于注入链遗漏，需要记 Warn。
+                spec.inserted_ranges.iter().all(|&(i_start, i_end)| {
+                    let text = spec
+                        .new_snapshot
+                        .virtual_text
+                        .get(i_start..i_end)
+                        .unwrap_or("");
+                    text.chars().all(|c| c.is_whitespace() || c.is_control())
+                })
+            };
+            if !all_inserted_is_whitespace {
+                {
+                    use std::collections::BTreeMap;
+                    let mut fields = BTreeMap::new();
+                    fields.insert(
+                        "transaction_id".to_string(),
+                        serde_json::json!(spec.key.transaction_id),
+                    );
+                    fields.insert(
+                        "generation".to_string(),
+                        serde_json::json!(spec.key.generation),
+                    );
+                    fields.insert(
+                        "operation_kind".to_string(),
+                        serde_json::Value::String(
+                            operation_kind_label(spec.operation_kind).to_string(),
+                        ),
+                    );
+                    fields.insert(
+                        "inserted_ranges".to_string(),
+                        serde_json::json!(spec.inserted_ranges),
+                    );
+                    fields.insert(
+                        "snapshot_revision".to_string(),
+                        serde_json::json!(spec.new_snapshot.revision.0),
+                    );
+                    fields.insert(
+                        "intersecting_line_count".to_string(),
+                        serde_json::json!(intersecting_lines),
+                    );
+                    fields.insert(
+                        "intersecting_cluster_count".to_string(),
+                        serde_json::json!(intersecting_clusters),
+                    );
+                    fields.insert(
+                        "whitespace_skip_count".to_string(),
+                        serde_json::json!(whitespace_skip_count),
+                    );
+                    fields.insert(
+                        "unit_kinds".to_string(),
+                        serde_json::Value::String(unit_kind_labels(&units).join(",")),
+                    );
+                    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        sequence: 0,
+                        session_id: String::new(),
+                        level: writer_diagnostics::DiagnosticLevel::Warn,
+                        origin: writer_diagnostics::DiagnosticOrigin::App,
+                        event: "editor.anim.insert_reveal_not_generated".to_string(),
+                        target: "editor.anim".to_string(),
+                        message: Some(
+                            "inserted range has visible chars but InsertReveal count is 0".to_string(),
+                        ),
+                        fields,
+                    });
+                }
+                // 保留 env-gated debug log 作为开发时辅助，正式诊断走上面的 writer_diagnostics 事件。
+                editor_animation_debug_log(&format!(
+                    "anim_diagnostic: InsertReveal_not_generated inserted_ranges={:?} \
+                     snapshot_revision={} intersecting_lines={} intersecting_clusters={} \
+                     whitespace_skip={} — possible causes: animation visuals injection missed \
+                     the inserted line, no non-whitespace cluster in range, or all clusters \
+                     skipped as whitespace",
+                    spec.inserted_ranges,
+                    spec.new_snapshot.revision.0,
+                    intersecting_lines,
+                    intersecting_clusters,
+                    whitespace_skip_count,
+                ));
             }
-            // 保留 env-gated debug log 作为开发时辅助，正式诊断走上面的 writer_diagnostics 事件。
-            editor_animation_debug_log(&format!(
-                "anim_diagnostic: InsertReveal_not_generated inserted_ranges={:?} \
-                 snapshot_revision={} intersecting_lines={} intersecting_clusters={} \
-                 whitespace_skip={} — possible causes: animation visuals injection missed \
-                 the inserted line, no non-whitespace cluster in range, or all clusters \
-                 skipped as whitespace",
-                spec.inserted_ranges,
-                spec.new_snapshot.revision.0,
-                intersecting_lines,
-                intersecting_clusters,
-                whitespace_skip_count,
-            ));
         }
     }
 

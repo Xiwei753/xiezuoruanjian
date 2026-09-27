@@ -45,6 +45,15 @@ pub struct CanonicalLineSnapshot {
     pub image: Option<qmetaobject::QImage>,
     pub clusters: Vec<CanonicalClusterSnapshot>,
     pub cursor_x_map: Vec<CursorXMapEntry>,
+    // Issue #785 评论 5857873894 修改 2a: 稳定行身份字段。
+    // prepare_animation_visuals_from_layout 按 (generation, cache_slot, qtextline_idx)
+    // 从 QTextLayout 提取动画视觉，但 inject_animation_visuals_into_snapshot 之前只按
+    // document_byte_start 猜目标行，找不到就静默跳过。新增段落文档起点 + 段落内
+    // qtextline_idx 作为稳定行身份，inject 时按同一身份精确匹配，避免行身份漂移。
+    // paragraph_document_byte_start = 该行所属段落在文档中的 byte 起始偏移。
+    pub paragraph_document_byte_start: usize,
+    // qtextline_idx = 该视觉行在所属段落 QTextLayout 中的 line index。
+    pub qtextline_idx: i32,
 }
 
 #[derive(Clone)]
@@ -684,6 +693,12 @@ pub fn prepare_animation_visuals_from_layout(
             image,
             clusters,
             cursor_x_map,
+            // Issue #785 评论 5857873894 修改 2a: 填充稳定行身份。
+            // para_start = handle.lines[line_id].para_start（段落文档 byte 起始），
+            // qtextline_idx = handle.lines[line_id].qtextline_idx（段落内视觉行索引）。
+            // inject_animation_visuals_into_snapshot 按此身份精确匹配目标行。
+            paragraph_document_byte_start: para_start,
+            qtextline_idx,
         });
     }
 
@@ -1145,6 +1160,10 @@ pub fn assemble_document_visual_snapshot_from_lines(
             // cursor_x_from_canonical 在 cursor_x_map 为空时退化为 line.x（行首），
             // 对 old 动画起点可接受（动画主要看 new cursor 和 glyph rects）。
             cursor_x_map: Vec::new(),
+            // Issue #785 评论 5857873894 修改 2a: 填充稳定行身份。
+            // 这里从 VisualLine 组装 canonical line，行身份直接来自 VisualLine。
+            paragraph_document_byte_start: line.para_start,
+            qtextline_idx: line.qtextline_idx,
         });
     }
 
@@ -1612,31 +1631,81 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 /// 包含 QImage/clusters，但 `old_doc_snapshot` 用 `generate_animation_visuals=false` 排版时
 /// 其 `paragraphs[].lines[].image` 为 None。本函数按 `document_byte_start` 匹配，
 /// 把提取的 QImage/clusters 注入到 doc snapshot 的对应行，使动画纹理可用。
+///
+/// Issue #785 评论 5857873894 修改 2b: 按 (paragraph_document_byte_start, qtextline_idx)
+/// 稳定行身份匹配目标行，不再只按 document_byte_start 猜。返回成功注入的行数，
+/// 找不到目标行时通过 debug_warn 明确报告，不静默跳过，让调用方知道注入失败。
 pub fn inject_animation_visuals_into_snapshot(
     doc_snapshot: &mut CanonicalDocumentVisualSnapshot,
     animation_visuals: Vec<CanonicalLineSnapshot>,
-) {
+) -> usize {
+    let mut injected_count: usize = 0;
     for mut anim_line in animation_visuals {
-        // 在 paragraphs 中找到包含该行的段落
+        // Issue #785 评论 5857873894 修改 2b: 优先按稳定行身份
+        // (paragraph_document_byte_start, qtextline_idx) 精确匹配。
+        // 这是 prepare_animation_visuals_from_layout 提取时记录的段落起点 + 段落内
+        // 视觉行索引，与 doc_snapshot.paragraphs[].lines[].qtextline_idx 同源，
+        // 不会因 document_byte_start 在 reflow 后漂移而误匹配。
+        let mut matched = false;
         for para in &mut doc_snapshot.paragraphs {
-            let para_start = para.paragraph_document_byte_start;
-            let para_end = para_start + para.paragraph_text.len();
-            // 检查 anim_line 是否属于该段落
-            if anim_line.document_byte_start >= para_start
-                && anim_line.document_byte_start < para_end
+            if para.paragraph_document_byte_start
+                != anim_line.paragraph_document_byte_start
             {
-                // 在该段落的 lines 中找到匹配的行（按 document_byte_start）
-                for line in &mut para.lines {
-                    if line.document_byte_start == anim_line.document_byte_start {
-                        line.image = anim_line.image.take();
-                        if !anim_line.clusters.is_empty() {
-                            line.clusters = std::mem::take(&mut anim_line.clusters);
-                        }
-                        break;
-                    }
+                continue;
+            }
+            // 段落匹配，按 qtextline_idx 精确匹配行。
+            // qtextline_idx 是段落内视觉行索引，与 para.lines 的索引一致。
+            let line_idx = anim_line.qtextline_idx as usize;
+            if let Some(line) = para.lines.get_mut(line_idx) {
+                line.image = anim_line.image.take();
+                if !anim_line.clusters.is_empty() {
+                    line.clusters = std::mem::take(&mut anim_line.clusters);
                 }
-                break;
+                injected_count += 1;
+                matched = true;
+            }
+            break;
+        }
+        if !matched {
+            // Issue #785 评论 5857873894 修改 2b: 找不到目标行时明确报告，不静默跳过。
+            // 回退到按 document_byte_start 匹配作为兜底（兼容历史调用路径中
+            // paragraph_document_byte_start 未正确填充的情况），并记录诊断。
+            for para in &mut doc_snapshot.paragraphs {
+                let para_start = para.paragraph_document_byte_start;
+                let para_end = para_start + para.paragraph_text.len();
+                if anim_line.document_byte_start >= para_start
+                    && anim_line.document_byte_start < para_end
+                {
+                    for line in &mut para.lines {
+                        if line.document_byte_start == anim_line.document_byte_start {
+                            line.image = anim_line.image.take();
+                            if !anim_line.clusters.is_empty() {
+                                line.clusters = std::mem::take(&mut anim_line.clusters);
+                            }
+                            injected_count += 1;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    break;
+                }
             }
         }
+        if !matched {
+            crate::backend::app_backend::debug_warn_static(
+                "canonical_snapshot",
+                "inject_animation_visuals_line_not_found",
+                &format!(
+                    "paragraph_document_byte_start={} qtextline_idx={} \
+                     document_byte_start={} document_byte_end={} — \
+                     target line not found in doc_snapshot, animation visuals dropped",
+                    anim_line.paragraph_document_byte_start,
+                    anim_line.qtextline_idx,
+                    anim_line.document_byte_start,
+                    anim_line.document_byte_end,
+                ),
+            );
+        }
     }
+    injected_count
 }

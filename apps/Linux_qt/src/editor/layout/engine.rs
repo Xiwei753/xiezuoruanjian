@@ -194,18 +194,22 @@ cpp! {{
         uint64_t gen, int slot, int qtextline_idx,
         double dpr, const QColor& textColor
     ) {
+        // Issue #785 评论 5857873894 修改 1: clear 必须在所有 early-return 之前。
+        // 之前 clear 在 get_paragraph_layout / qtextline 有效性检查之后，
+        // 一旦 early-return 命中，上次残留的 g_canonical_line_buf 不会被清空，
+        // Rust 侧 `!g_canonical_line_buf.empty()` 会把上次残留数据当成本次成功，
+        // 导致普通可见字符输入时 InsertReveal 动画数量为 0。
+        g_canonical_line_buf.clear();
+        g_canonical_cluster_buf.clear();
+        g_canonical_cluster_glyph_buf.clear();
+        g_canonical_line_images.clear();
+
         QTextLayout* layout = get_paragraph_layout(gen, slot);
         if (!layout) return;
         if (qtextline_idx < 0 || qtextline_idx >= layout->lineCount()) return;
 
         QTextLine line = layout->lineAt(qtextline_idx);
         if (!line.isValid()) return;
-
-        // 清空之前的 buffers
-        g_canonical_line_buf.clear();
-        g_canonical_cluster_buf.clear();
-        g_canonical_cluster_glyph_buf.clear();
-        g_canonical_line_images.clear();
 
         CanonicalLineEntry entry;
         entry.qcharStart = line.textStart();
@@ -1156,6 +1160,11 @@ pub fn prepare_paragraph_visual_snapshot(
             image,
             clusters,
             cursor_x_map,
+            // Issue #785 评论 5857873894 修改 2a: 填充稳定行身份。
+            // paragraph_document_byte_start 是函数参数（段落文档 byte 起始），
+            // idx = line_idx 是段落内 qtextline 索引。
+            paragraph_document_byte_start,
+            qtextline_idx: idx,
         });
     }
 
