@@ -569,6 +569,7 @@ export struct HomeScreen {
             Image($r('app.media.ic_star'))
               .width(36)
               .height(36)
+              .fillColor($r('sys.color.icon_primary'))
               .margin({ bottom: 10 })
 
             Text('星图')

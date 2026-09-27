@@ -347,6 +347,7 @@ export struct SettingsScreen {
         Image($r('app.media.ic_search'))
           .width(20)
           .height(20)
+          .fillColor($r('sys.color.icon_primary'))
           .margin({ left: 12 })
 
         TextInput({ placeholder: '', text: this.searchText })
