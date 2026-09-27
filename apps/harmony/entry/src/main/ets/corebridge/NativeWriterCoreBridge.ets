@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
@@ -221,22 +221,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>> {
     return this.starMapBridge.renameStarMap(starmapId, newTitle)
-  }
-
-  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
-    return this.starMapBridge.saveStarMapLayout(starmapId, layout)
-  }
-
-  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
-    return this.starMapBridge.getStarMapLayout(starmapId)
-  }
-
-  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
-    return this.starMapBridge.getStarMapMotionPolicy()
-  }
-
-  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
-    return this.starMapBridge.computeStarMapEdgeRenders(graph)
   }
 
   // ── Settings ──
