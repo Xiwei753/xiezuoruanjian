@@ -1400,6 +1400,14 @@
         <translation>已同步</translation>
     </message>
     <message>
+        <source>无需同步</source>
+        <translation>无需同步</translation>
+    </message>
+    <message>
+        <source>已同步（已应用较新版本）</source>
+        <translation>已同步（已应用较新版本）</translation>
+    </message>
+    <message>
         <source>已设置（输入新 Token 以覆盖）</source>
         <translation>已设置（输入新 Token 以覆盖）</translation>
     </message>
