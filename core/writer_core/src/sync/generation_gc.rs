@@ -15,7 +15,7 @@
 //! （upload_lease_until_ms）。GC 用 meta 判断 generation 是否可删。
 
 use crate::sync::cancellation_token::SyncCancellationToken;
-use crate::sync::provider::model::DeletePrecondition;
+use crate::sync::provider::model::{BatchMutation, DeletePrecondition};
 use crate::sync::provider::SyncProvider;
 
 /// generation meta — 记录单个 generation 的上传状态和保留信息。
@@ -216,20 +216,80 @@ pub fn run_generation_gc(
         );
         let gen_prefix = format!("{generations_prefix}/{gen_id}");
         let gen_entries = provider.list(&gen_prefix).map_err(crate::Error::from)?;
-        for ge in &gen_entries {
-            let full_path = format!("{gen_prefix}/{}", ge.path);
-            provider
-                .delete(&full_path, DeletePrecondition::Unconditional)
-                .map_err(crate::Error::from)?;
-            // Issue #729 评论 5765306162 问题5：每次 provider.delete 返回后检查取消令牌。
-            // 取消则返回 Ok(())（已完成的删除保留，未完成的不继续）。
+        // Issue #729 评论 5765306162 问题5：provider.list 返回后检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] run_generation_gc: cancellation requested after list {} — returning Ok",
+                    gen_prefix
+                );
+                return Ok(());
+            }
+        }
+        // 空 generation 直接跳过（nothing to delete）。
+        if gen_entries.is_empty() {
+            log::debug!(
+                "[sync] run_generation_gc: {} generation {} has no entries — skipping delete",
+                project_remote_prefix,
+                gen_id
+            );
+            continue;
+        }
+        // Issue #779 评论 5853718466：batch provider 用一次 commit_batch 删除整个
+        // generation prefix 下所有对象，避免逐文件 delete 产生几十个远端 commit
+        // 长时间占用同步。非 batch provider 降级为逐文件 delete（保留原有取消检查）。
+        if provider.capabilities().batch {
+            let mutations: Vec<BatchMutation> = gen_entries
+                .iter()
+                .map(|ge| BatchMutation::Delete {
+                    path: format!("{gen_prefix}/{}", ge.path),
+                })
+                .collect();
+            let batch_message = format!("generation GC delete {gen_prefix}");
+            // Issue #779 评论 5854082763：GC 遇到 PreconditionFailed（ref 被用户同步推进）
+            // 时放弃本轮 GC，返回 Ok — 下次再清，不和用户同步争抢。
+            // Issue #779 评论 5854511049：只吞 PreconditionFailed，其他错误（网络/认证/403/
+            // Git Database API 失败）照常向上返回，交给 maintenance 层记录，不伪装成成功。
+            match provider.commit_batch(&mutations, &batch_message) {
+                Ok(_) => {}
+                Err(crate::sync::provider::error::ProviderError::PreconditionFailed {
+                    path,
+                    reason,
+                }) => {
+                    log::info!(
+                        "[sync] run_generation_gc: {} generation {} commit_batch PreconditionFailed (ref moved by user sync): path={}, reason={} — abandoning GC this round",
+                        project_remote_prefix, gen_id, path, reason
+                    );
+                    return Ok(());
+                }
+                Err(e) => return Err(crate::Error::from(e)),
+            }
+            // commit_batch 后检查取消令牌（取消则返回 Ok，已完成的删除保留）。
             if let Some(token) = cancellation_token {
                 if token.is_cancelled() {
                     log::info!(
-                        "[sync] run_generation_gc: cancellation requested after delete {} — returning Ok",
-                        full_path
+                        "[sync] run_generation_gc: cancellation requested after commit_batch {} — returning Ok",
+                        gen_prefix
                     );
                     return Ok(());
+                }
+            }
+        } else {
+            for ge in &gen_entries {
+                let full_path = format!("{gen_prefix}/{}", ge.path);
+                provider
+                    .delete(&full_path, DeletePrecondition::Unconditional)
+                    .map_err(crate::Error::from)?;
+                // Issue #729 评论 5765306162 问题5：每次 provider.delete 返回后检查取消令牌。
+                // 取消则返回 Ok(())（已完成的删除保留，未完成的不继续）。
+                if let Some(token) = cancellation_token {
+                    if token.is_cancelled() {
+                        log::info!(
+                            "[sync] run_generation_gc: cancellation requested after delete {} — returning Ok",
+                            full_path
+                        );
+                        return Ok(());
+                    }
                 }
             }
         }
