@@ -199,6 +199,8 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
             &excluded_new,
             spec.old_cursor_rect.as_ref(),
             spec.new_cursor_rect.as_ref(),
+            spec.visual_affected_byte_range_old,
+            spec.visual_affected_byte_range_new,
         ));
     }
 
@@ -264,6 +266,37 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         spec.caret_animation_enabled,
         spec.coordinated_animation_enabled,
     ));
+
+    // Issue #785: 诊断 InsertReveal 未生成。当 inserted_ranges 非空、文字动画已开、
+    // 但最终生成的 InsertReveal 数量为 0 时，打明确诊断日志帮助定位
+    //（可能原因：range 与 snapshot cluster 对齐错位、全部 cluster 被当空白跳过）。
+    if spec.text_animation_enabled && !spec.inserted_ranges.is_empty() {
+        let insert_reveal_count = units
+            .iter()
+            .filter(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
+            .count();
+        if insert_reveal_count == 0 {
+            let mut intersecting_clusters = 0usize;
+            for &(i_start, i_end) in &spec.inserted_ranges {
+                for new_line in spec.new_snapshot.line_snapshots.iter() {
+                    for new_cluster in new_line.clusters.iter() {
+                        if new_cluster.byte_start < i_end && new_cluster.byte_end > i_start {
+                            intersecting_clusters += 1;
+                        }
+                    }
+                }
+            }
+            editor_animation_debug_log(&format!(
+                "anim_diagnostic: InsertReveal_not_generated inserted_ranges={:?} \
+                 snapshot_revision={} intersecting_clusters={} — \
+                 possible causes: no non-whitespace cluster in range, \
+                 range misalignment with snapshot, or all clusters skipped as whitespace",
+                spec.inserted_ranges,
+                spec.new_snapshot.revision.0,
+                intersecting_clusters,
+            ));
+        }
+    }
 
     // 6. 唯一 PreparedTextVisualTransaction struct literal
     PreparedTextVisualTransaction {
@@ -478,6 +511,8 @@ pub(crate) fn build_cluster_reflow_slices(
     excluded_new_ranges: &[(usize, usize)],
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
+    visual_affected_byte_range_old: Option<(usize, usize)>,
+    visual_affected_byte_range_new: Option<(usize, usize)>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
@@ -492,10 +527,19 @@ pub(crate) fn build_cluster_reflow_slices(
     // ── 阶段 1：收集所有未 excluded 的 old/new cluster refs ──
     // 被 excluded 的 old cluster 保留在 old_refs 中（标记 excluded=true），
     // 不参与一对一匹配和多对多处理。被 excluded 的 new cluster 直接跳过。
+    // Issue #785: visual_affected_byte_range_old/new 限制 reflow 范围——
+    // affected range 外的 cluster 不参与 reflow（Enter 后 affected range 外的
+    // 正文不生成 ReflowMove）。
     let mut old_refs: Vec<ReflowClusterRef> = Vec::new();
     let mut old_excluded_flags: Vec<bool> = Vec::new();
     for (line_idx, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, old_cluster) in old_line.clusters.iter().enumerate() {
+            // Issue #785: 跳过 affected range 外的 old cluster。
+            if let Some((aff_s, aff_e)) = visual_affected_byte_range_old {
+                if old_cluster.byte_end <= aff_s || old_cluster.byte_start >= aff_e {
+                    continue;
+                }
+            }
             let is_excluded = excluded_old_ranges
                 .iter()
                 .any(|(s, e)| old_cluster.byte_start >= *s && old_cluster.byte_end <= *e);
@@ -512,6 +556,12 @@ pub(crate) fn build_cluster_reflow_slices(
     let mut new_refs: Vec<ReflowClusterRef> = Vec::new();
     for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
+            // Issue #785: 跳过 affected range 外的 new cluster。
+            if let Some((aff_s, aff_e)) = visual_affected_byte_range_new {
+                if new_cluster.byte_end <= aff_s || new_cluster.byte_start >= aff_e {
+                    continue;
+                }
+            }
             if excluded_new_ranges
                 .iter()
                 .any(|(s, e)| new_cluster.byte_start >= *s && new_cluster.byte_end <= *e)

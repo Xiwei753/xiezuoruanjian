@@ -626,17 +626,15 @@ fn build_split_replacement_units(
             reflow_anchors: vec![new_anchor], // Split 后每个 replacement 只有一个 anchor，与 slice 同 basis
         };
         let mut new_unit = PreparedVisualUnit::wrap(new_slice, remaining_duration_ms);
-        if let VisualUnitTiming::Timed {
+        let VisualUnitTiming::Timed {
             start_fraction,
             started_at,
             duration_ms,
             ..
-        } = &mut new_unit.timing
-        {
-            *start_fraction = 0.0;
-            *started_at = Some(now);
-            *duration_ms = remaining_duration_ms;
-        }
+        } = &mut new_unit.timing;
+        *start_fraction = 0.0;
+        *started_at = Some(now);
+        *duration_ms = remaining_duration_ms;
         replacements.push(new_unit);
     }
     replacements
@@ -713,17 +711,15 @@ fn build_crossfade_split_replacement_units(
             reflow_anchors: vec![new_anchor],
         };
         let mut new_unit = PreparedVisualUnit::wrap(new_slice, remaining_duration_ms);
-        if let VisualUnitTiming::Timed {
+        let VisualUnitTiming::Timed {
             start_fraction,
             started_at,
             duration_ms,
             ..
-        } = &mut new_unit.timing
-        {
-            *start_fraction = 0.0;
-            *started_at = Some(now);
-            *duration_ms = remaining_duration_ms;
-        }
+        } = &mut new_unit.timing;
+        *start_fraction = 0.0;
+        *started_at = Some(now);
+        *duration_ms = remaining_duration_ms;
         replacements.push(new_unit);
     }
     replacements
@@ -732,21 +728,19 @@ fn build_crossfade_split_replacement_units(
 /// Issue #738 评论 5794018647: 重置 unit timing，算 remaining duration 并重置
 /// start_fraction/started_at/duration。所有 Rebind 变体共用同一时间线语义。
 fn reset_timing(timing: &mut VisualUnitTiming, now: Instant) {
-    if let VisualUnitTiming::Timed {
+    let VisualUnitTiming::Timed {
         start_fraction,
         started_at,
         duration_ms,
         ..
-    } = timing
-    {
-        let remaining = match *started_at {
-            Some(start) => duration_ms.saturating_sub(now.duration_since(start).as_millis() as u64),
-            None => *duration_ms,
-        };
-        *start_fraction = 0.0;
-        *started_at = Some(now);
-        *duration_ms = remaining.max(1);
-    }
+    } = timing;
+    let remaining = match *started_at {
+        Some(start) => duration_ms.saturating_sub(now.duration_since(start).as_millis() as u64),
+        None => *duration_ms,
+    };
+    *start_fraction = 0.0;
+    *started_at = Some(now);
+    *duration_ms = remaining.max(1);
 }
 
 /// Issue #738 评论 5794018647: CrossFade old side 重绑辅助。target = Some 时跟随

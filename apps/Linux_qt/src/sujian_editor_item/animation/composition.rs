@@ -126,11 +126,8 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             text_duration_ms: u64::from(self.typing_animation_duration_ms),
-            caret_duration_ms: u64::from(if coordinated_animation_enabled {
-                self.typing_animation_duration_ms
-            } else {
-                self.cursor_animation_duration_ms
-            }),
+            // Issue #785: caret duration 始终独立，不再因 coordinated 共享 typing duration。
+            caret_duration_ms: u64::from(self.cursor_animation_duration_ms),
             // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
             text_animation_enabled,
             caret_animation_enabled,
@@ -347,11 +344,8 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             text_duration_ms: u64::from(self.typing_animation_duration_ms),
-            caret_duration_ms: u64::from(if coordinated_animation_enabled {
-                self.typing_animation_duration_ms
-            } else {
-                self.cursor_animation_duration_ms
-            }),
+            // Issue #785: caret duration 始终独立，不再因 coordinated 共享 typing duration。
+            caret_duration_ms: u64::from(self.cursor_animation_duration_ms),
             // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
             text_animation_enabled,
             caret_animation_enabled,

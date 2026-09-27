@@ -1017,13 +1017,12 @@ Rectangle {
                         selected_text_color: dt.selectedTextHex
                         cursor_color: dt.primaryHex
                         smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                        cursor_animation_duration_ms: settingsBackend ? (settingsBackend.setting_coordinated_text_cursor_animation_enabled ? settingsBackend.setting_typing_animation_duration_ms : settingsBackend.setting_smooth_cursor_duration_ms) : 80
+                        // Issue #785: cursor duration 始终独立，不再因协同绑到 typing duration。
+                        cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                         typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
-                        // Issue #756: 协同动画显式模式开关。
-                        // coordinated=true 时文字与光标共用 typing_animation_duration_ms（上面
-                        // cursor_animation_duration_ms 已按协同模式绑到 typing duration）。
-                        // coordinated=false 时各自使用独立 duration。
+                        // Issue #756 / Issue #785: 协同动画显式模式开关。
+                        // 协同只表示同事务/同首帧/同 rebase，不共享 duration。
                         coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
                         scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                         viewport_height: sujianEditor.height

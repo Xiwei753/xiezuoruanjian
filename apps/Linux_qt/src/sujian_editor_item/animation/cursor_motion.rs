@@ -188,7 +188,9 @@ impl LinuxEditorAnimationCoordinator {
                 .find(|t| t.key == key)
             {
                 if tx.cursor_owner_epoch != current_cursor_epoch {
-                    // Issue #735 评论 5773604666 问题3: 收口这笔事务的 CaretDriven units。
+                    // Issue #735 评论 5773604666 问题3 / Issue #785: 退休这笔事务的
+                    // cursor motion ownership。文字 unit 有独立时间线，不被推到终态，
+                    // 按自己 Timed 时间线继续播完/rebase。
                     self.retire_caret_driven_units_for_transaction(key);
                 }
             }

@@ -136,24 +136,17 @@ fn elapsed_unit(
     now: Instant,
 ) -> PreparedVisualUnit {
     let mut unit = PreparedVisualUnit::wrap(slice, duration_ms);
-    // Issue #727 约束 2: 通过 VisualUnitTiming 设置 started_at / start_fraction。
-    // CaretDriven unit 无 started_at，通过 start_fraction 模拟已吐/吞比例。
-    // Timed unit 通过 started_at 设置独立时间线。
+    // Issue #727 约束 2 / Issue #785: 通过 VisualUnitTiming 设置 started_at。
+    // 所有 unit 都是 Timed，通过 started_at 设置独立时间线。
     let fraction = if duration_ms > 0 {
         (elapsed_ms as f64 / duration_ms as f64).clamp(0.0, 1.0)
     } else {
         0.0
     };
+    let _ = fraction;
     match &mut unit.timing {
         VisualUnitTiming::Timed { started_at, .. } => {
             *started_at = Some(now - Duration::from_millis(elapsed_ms));
-        }
-        VisualUnitTiming::CaretDriven { .. } => {
-            // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track
-            // progress 推导（start + (target - start) * ease_out_quad(progress)），
-            // 不需要通过 start_fraction 模拟已演进状态。
-            // start_fraction 保持 fresh unit 的初始值（0 for InsertReveal, 1 for DeleteConceal）。
-            // 测试中 caret track 的 started_at 由 rendering_tx 设置，反映已演进状态。
         }
     }
     unit
@@ -1371,37 +1364,33 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
     // rebased text unit: start_fraction = 0.75（旧 unit 当前可见比例）。
     // Issue #690 评论 5683759796 关键断言: started_at 必须是 None（不是 Some(sampled_at)），
     // 这样才不会从旧事务交棒时刻提前计时。
-    // Issue #727 约束 2: CaretDriven unit 无独立 duration_ms，剩余时长由 caret track 管理。
-    // CaretDriven unit 的 start_fraction 是 rebase 交棒时的载体（0.75）。
+    // Issue #785: 所有 unit 都是 Timed，start_fraction 是 rebase 交棒载体（0.75），
+    // duration_ms 为剩余时长 50。
     let (new_started_at_is_none, new_duration_ms) = match &new_units[0].timing {
-        VisualUnitTiming::CaretDriven { start_fraction, .. } => {
-            // CaretDriven unit 无 duration_ms 字段，剩余时长在 caret track 中断言。
-            assert!(
-                (start_fraction - 0.75).abs() < 1e-9,
-                "rebase 后 CaretDriven unit start_fraction 应为 0.75，got {}",
-                start_fraction
-            );
-            (true, 0u64)
-        }
         VisualUnitTiming::Timed {
             started_at,
             duration_ms,
+            start_fraction,
             ..
-        } => (started_at.is_none(), *duration_ms),
+        } => {
+            assert!(
+                (start_fraction - 0.75).abs() < 1e-9,
+                "rebase 后 Timed unit start_fraction 应为 0.75，got {}",
+                start_fraction
+            );
+            (started_at.is_none(), *duration_ms)
+        }
     };
     assert!(
         new_started_at_is_none,
         "Issue #690 评论 5683759796: rebase 后文字 unit started_at 应为 None\
              （等 Rendering 再启动）"
     );
-    // CaretDriven unit 无独立 duration_ms，剩余时长在 caret track 中断言（见下方）。
-    // Timed unit 的 duration_ms 应为剩余时长 50。
-    if !matches!(&new_units[0].timing, VisualUnitTiming::CaretDriven { .. }) {
-        assert_eq!(
-            new_duration_ms, 50,
-            "rebase 后 Timed unit duration_ms 应为剩余时长 50"
-        );
-    }
+    // Issue #785: Timed unit 的 duration_ms 应为剩余时长 50。
+    assert_eq!(
+        new_duration_ms, 50,
+        "rebase 后 Timed unit duration_ms 应为剩余时长 50"
+    );
 
     // ── 4. 构造新事务的 caret track（rebase_to，started_at = None） ──
     let new_caret_track = old_caret_track.rebase_to(caret(220.0), now);
@@ -1530,12 +1519,8 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             Some(frame_now_0),
             "进入 Rendering 后 caret track started_at 应等于第一帧 frame_now"
         );
-        // Issue #727 约束 2: CaretDriven unit 无 started_at，progress 总是 0.0。
-        // Timed unit 的 started_at 应等于第一帧 frame_now。
+        // Issue #727 约束 2 / Issue #785: 所有 unit 都是 Timed，started_at 应等于第一帧 frame_now。
         match &tx_ref.units[0].timing {
-            VisualUnitTiming::CaretDriven { .. } => {
-                // CaretDriven: 无独立时间线，progress 由 caret track 驱动。
-            }
             VisualUnitTiming::Timed { started_at, .. } => {
                 assert_eq!(
                     *started_at,
@@ -1602,10 +1587,10 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             .expect("应有 caret track");
         let track_progress = track.progress(frame_now_mid);
         let unit_progress = tx_ref.units[0].progress(frame_now_mid);
-        // CaretDriven unit 的 progress 总是 0.0（无独立时间线）。
+        // Issue #785: Timed unit 有独立时间线，推进 25ms 后 progress = 0.5（25/50）。
         assert!(
-            (unit_progress - 0.0).abs() < 1e-9,
-            "Issue #727 约束 2: CaretDriven unit progress 总是 0.0，got {}",
+            (unit_progress - 0.5).abs() < 1e-9,
+            "Issue #785: Timed unit 推进 25ms 后 progress 应为 0.5（25/50），got {}",
             unit_progress
         );
         assert!(
@@ -1613,13 +1598,12 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             "推进 25ms 后 caret track progress 应为 0.5（25/50），got {}",
             track_progress
         );
-        // CaretDriven unit 的 current_visible_fraction 返回 start_fraction（rebase 交棒载体），
-        // 不随时间变化。这是正确的——真正的可见比例推导在 build_text_animation_plan_with_sample 中
-        // 从 caret track progress 计算。
+        // Issue #785: Timed unit 的 current_visible_fraction 从 start_fraction=0.75
+        // 按独立时间线继续前进（0.75 + (1.0-0.75)*ease(0.5)），不再固定返回 start_fraction。
         let unit_visible = tx_ref.units[0].current_visible_fraction(frame_now_mid);
         assert!(
-                (unit_visible - 0.75).abs() < 1e-9,
-                "Issue #727 约束 2: CaretDriven unit current_visible_fraction 返回 start_fraction（0.75），got {}",
+                unit_visible > 0.75,
+                "Issue #785: Timed unit current_visible_fraction 应从 0.75 继续前进（>0.75），got {}",
                 unit_visible
             );
     }
@@ -1653,10 +1637,10 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             .expect("应有 caret track");
         let track_progress = track.progress(frame_now_1);
         let unit_progress = tx_ref.units[0].progress(frame_now_1);
-        // CaretDriven unit 的 progress 总是 0.0（无独立时间线）。
+        // Issue #785: Timed unit 推进 50ms 后 progress = 1.0（50/50，已播完）。
         assert!(
-            (unit_progress - 0.0).abs() < 1e-9,
-            "Issue #727 约束 2: CaretDriven unit progress 总是 0.0，got {}",
+            (unit_progress - 1.0).abs() < 1e-9,
+            "Issue #785: Timed unit 推进 50ms 后 progress 应为 1.0（50/50，已播完），got {}",
             unit_progress
         );
         assert!(
@@ -1664,11 +1648,11 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             "推进 50ms 后 caret track progress 应为 1.0（50/50），got {}",
             track_progress
         );
-        // CaretDriven unit 的 current_visible_fraction 返回 start_fraction（rebase 交棒载体）。
+        // Issue #785: Timed unit 的 current_visible_fraction 到达 target_fraction=1.0（已播完）。
         let unit_visible = tx_ref.units[0].current_visible_fraction(frame_now_1);
         assert!(
-                (unit_visible - 0.75).abs() < 1e-9,
-                "Issue #727 约束 2: CaretDriven unit current_visible_fraction 返回 start_fraction（0.75），got {}",
+                (unit_visible - 1.0).abs() < 1e-9,
+                "Issue #785: Timed unit current_visible_fraction 应为 1.0（已播完，到达 target_fraction），got {}",
                 unit_visible
             );
     }
@@ -1825,7 +1809,10 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         "第 1 帧 old tx 应仍在 active queue（ReflowMove 未完成）"
     );
 
-    // 方案 A 核心断言：old tx 的 caret_motion_retired 应已被置 true
+    // 方案 A 核心断言 / Issue #785: old tx 的 caret_motion_retired 不被强制置 true。
+    // 新语义下 has_caret_driven_units 始终 false，文字 unit 有独立时间线，
+    // 失去 caret ownership 不需要强制 retired——old tx 可以在 new tx 完成后
+    // 重新成为 owner，文字 unit 按自己时间线继续播完。
     {
         let old_tx_ref = coord
             .prepared_queue
@@ -1833,10 +1820,11 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
             .iter()
             .find(|t| t.key == old_key)
             .expect("old tx 应仍在队列中");
+        // Issue #785: 不再强制 retired。old tx 的 caret_motion_retired 保持 false。
         assert!(
-                old_tx_ref.caret_motion_retired,
-                "第 1 帧 build_text_animation_plan_with_sample 应把 old tx 的 caret_motion_retired 置 true\
-                 （has_caret_driven_units && !owns_caret）"
+                !old_tx_ref.caret_motion_retired,
+                "Issue #785: 第 1 帧 old tx 不应被强制 retired\
+                 （文字 unit 有独立时间线，失去 owner 不强制收口）"
             );
     }
 
@@ -1844,7 +1832,7 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
     let removed = coord.prepared_queue.complete(new_key);
     assert!(removed.is_some(), "new tx 应能被 complete");
 
-    // ── 6. 第 2 帧：确认修复——old tx 不能重新成为 owner ──
+    // ── 6. 第 2 帧 / Issue #785: old tx 可以重新成为 owner ──
     // 推进一小段时间（远小于 ReflowMove 的 1000ms，确保 old tx 的 ReflowMove 仍未完成）
     let frame_now_1 = frame_now_0 + Duration::from_millis(50);
     // old tx 的 ReflowMove duration=1000ms，elapsed≈66ms，progress≈0.066 < 1.0 → 未完成
@@ -1852,22 +1840,24 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
     let mut sample_1 = AnimationFrameSample::new(frame_now_1);
     sample_1.set_progress(old_key, 0.5);
 
-    // 修复后：active_text_transaction_key_with_epoch 跳过 retired 事务，返回 None
+    // Issue #785: 新语义下 old tx 不被强制 retired，active_text_transaction_key_with_epoch
+    // 返回 old_key（old tx 重新成为 owner，文字 unit 按独立时间线继续播完）。
     let active_key_1 =
         coord.active_text_transaction_key_with_epoch(epoch, LayoutRevision::initial());
     assert_eq!(
-        active_key_1, None,
-        "修复后：*不应重新返回 old tx\
-             （caret_motion_retired == true，被跳过）"
+        active_key_1,
+        Some(old_key),
+        "Issue #785: 第 2 帧 old tx 重新成为 owner（文字 unit 独立时间线，不强制 retired）"
     );
 
-    // 修复后：sample_coordinated_motion_frame 的 owner_key 为 None（不重新变成 old_key）
+    // Issue #785: sample_coordinated_motion_frame 的 owner_key 为 Some(old_key)
     let coordinated_frame_1 =
         coord.sample_coordinated_motion_frame(&sample_1, epoch, LayoutRevision::initial());
     assert_eq!(
-        coordinated_frame_1.owner_key, None,
-        "修复后：第 2 帧 owner_key 不应重新变成 old tx\
-             —— 旧 caret/吞吐字轨迹不会重新接管，不会造成 caret 回跳"
+        coordinated_frame_1.owner_key,
+        Some(old_key),
+        "Issue #785: 第 2 帧 owner_key 重新变成 old tx\
+         —— 文字 unit 有独立时间线，old tx 重新接管 caret 是正确行为"
     );
 
     // 验证 old tx 仍在 active queue（ReflowMove 仍未完成，Timed Reflow 继续播完）
@@ -1879,11 +1869,11 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
             .find(|t| t.key == old_key)
             .expect("old tx 应仍在队列中（ReflowMove 未完成）");
         assert!(
-            old_tx_ref.caret_motion_retired,
-            "第 2 帧 old tx 的 caret_motion_retired 仍应为 true（永久退休，不会重置）"
+            !old_tx_ref.caret_motion_retired,
+            "Issue #785: 第 2 帧 old tx 的 caret_motion_retired 保持 false（不强制退休）"
         );
         // old tx 的 caret track 仍原封不动（from=caret(0), to=caret(100)），
-        // 但因为 retired，不会再被选为 owner，不会重新接管。
+        // 重新成为 owner 后继续驱动 caret。
         let track = old_tx_ref
             .cursor_visual_track
             .as_ref()
@@ -1891,22 +1881,21 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         assert_eq!(
             (track.from.x, track.to.x),
             (0.0, 100.0),
-            "old tx 的 caret track 仍原封不动（from=0, to=100），\
-                 但因 caret_motion_retired == true 不会被重新选为 owner"
+            "old tx 的 caret track 仍原封不动（from=0, to=100）"
         );
     }
 
-    // 额外验证：active_text_transaction_key()（无 epoch 版本）也跳过 retired 事务
+    // 额外验证：active_text_transaction_key()（无 epoch 版本）也返回 old tx
     let active_key_no_epoch = coord.active_text_transaction_key();
     assert_eq!(
-        active_key_no_epoch, None,
-        "修复后：active_text_transaction_key()（无 epoch 版本）也应跳过 retired 事务，\
-             find_cursor_transaction_for_target / compute_coordinated_cursor_position\
-             不会再用 old tx 驱动 caret"
+        active_key_no_epoch,
+        Some(old_key),
+        "Issue #785: active_text_transaction_key()（无 epoch 版本）返回 old tx\
+         —— old tx 重新成为 owner 是正确行为"
     );
 
     // 额外验证：再调一次 build_text_animation_plan_with_sample，
-    // old tx 的 caret_motion_retired 不会被重置（已经是 true 就保持 true）
+    // old tx 的 caret_motion_retired 保持 false（不强制退休）
     let (_plan_1, _keys_to_complete_1, _) =
         coord.build_text_animation_plan_with_sample(&sample_1, epoch, LayoutRevision::initial());
     {
@@ -1917,14 +1906,14 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
             .find(|t| t.key == old_key)
             .expect("第 2 帧 build 后 old tx 应仍在队列中");
         assert!(
-            old_tx_ref.caret_motion_retired,
-            "第 2 帧 build_text_animation_plan_with_sample 后 old tx 的 caret_motion_retired\
-                 仍应为 true（永久退休，不会因再次进入循环而重置）"
+            !old_tx_ref.caret_motion_retired,
+            "Issue #785: 第 2 帧 build_text_animation_plan_with_sample 后 old tx 的 caret_motion_retired\
+             保持 false（文字 unit 独立时间线，不强制退休）"
         );
     }
 
     println!(
-        "[BUGFIX_VERIFY] Issue #727 评论 5760650874 方案 A: \
-             旧 CaretDriven 事务失去 owner 后永远不能再重新获得 owner FIXED"
+        "[BUGFIX_VERIFY] Issue #727 评论 5760650874 / Issue #785: \
+         旧事务失去 owner 后文字 unit 按独立时间线继续，可重新获得 owner（正确行为）"
     );
 }

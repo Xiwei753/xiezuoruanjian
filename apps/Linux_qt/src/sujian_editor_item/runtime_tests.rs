@@ -831,8 +831,10 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
 
         // 同一个正文事务应仍在队列中（move 不取消事务），但因 epoch 不一致
         // 已被 `find_cursor_transaction_for_target` 触发收口（caret_motion_retired = true）。
-        // Issue #735 评论 5773604666 问题3: 新行为——epoch 不一致时 CaretDriven units
-        // 立即落到终态，事务 retired，active_text_transaction_key() 不再返回它。
+        // Issue #735 评论 5773604666 问题3 / Issue #785: 新行为——epoch 不一致时
+        // 只退休 cursor motion ownership（caret_motion_retired = true），文字 unit
+        // 有独立 Timed 时间线，不被推到终态，按自己时间线继续。事务 retired，
+        // active_text_transaction_key() 不再返回它。
         let tx_still_in_queue = item
             .pipeline
             .animation_coordinator_mut()
@@ -855,10 +857,12 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             .expect("事务应仍在队列中");
         assert!(
             tx_ref.caret_motion_retired,
-            "Issue #735 评论 5773604666 问题3: epoch 不一致后事务应被 retired\
-             （CaretDriven units 已落到终态）"
+            "Issue #735 评论 5773604666 问题3 / Issue #785: epoch 不一致后事务应被 retired\
+             （caret_motion_retired = true，cursor motion 已退休）"
         );
-        // 验证新行为：CaretDriven units 的 start_fraction 已设为 target_fraction（终态）
+        // Issue #785: 文字 unit 有独立 Timed 时间线，epoch 失效不把文字推到终态。
+        // 不再断言 start_fraction == target_fraction。文字 unit 按自己时间线继续播完。
+        // 这里只验证 unit 仍是 Timed（独立时间线完好）。
         for unit in &tx_ref.units {
             use super::animated_slice::AnimatedSliceKind;
             use super::animation::VisualUnitTiming;
@@ -866,24 +870,14 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                 unit.slice.kind,
                 AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
             ) {
-                if let VisualUnitTiming::CaretDriven {
-                    start_fraction,
-                    target_fraction,
-                } = &unit.timing
-                {
-                    assert!(
-                        (start_fraction - target_fraction).abs() < 1e-9,
-                        "Issue #735 评论 5773604666 问题3: CaretDriven unit 的 \
-                         start_fraction 应已设为 target_fraction（终态）: \
-                         start={:.4}, target={:.4}",
-                        start_fraction,
-                        target_fraction
-                    );
-                }
+                assert!(
+                    matches!(unit.timing, VisualUnitTiming::Timed { .. }),
+                    "Issue #785: epoch 失效后文字 unit 应仍是 Timed（独立时间线不被破坏）"
+                );
             }
         }
         println!(
-            "[BEHAVIOR_VERIFY] 阶段4: 事务 {:?} 已 retired，CaretDriven units 已落到终态",
+            "[BEHAVIOR_VERIFY] 阶段4: 事务 {:?} 已 retired，cursor motion 已退休，文字 unit 独立时间线继续",
             tx_key
         );
         // 验证 has_active_timed_units 语义：收口后事务是否还有活跃 Timed unit

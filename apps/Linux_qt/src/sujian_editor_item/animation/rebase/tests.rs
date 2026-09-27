@@ -211,24 +211,17 @@ fn elapsed_unit(
     now: Instant,
 ) -> PreparedVisualUnit {
     let mut unit = PreparedVisualUnit::wrap(slice, duration_ms);
-    // Issue #727 约束 2: 通过 VisualUnitTiming 设置 started_at / start_fraction。
-    // CaretDriven unit 无 started_at，通过 start_fraction 模拟已吐/吞比例。
-    // Timed unit 通过 started_at 设置独立时间线。
+    // Issue #727 约束 2 / Issue #785: 通过 VisualUnitTiming 设置 started_at。
+    // 所有 unit 都是 Timed，通过 started_at 设置独立时间线。
     let fraction = if duration_ms > 0 {
         (elapsed_ms as f64 / duration_ms as f64).clamp(0.0, 1.0)
     } else {
         0.0
     };
+    let _ = fraction;
     match &mut unit.timing {
         VisualUnitTiming::Timed { started_at, .. } => {
             *started_at = Some(now - Duration::from_millis(elapsed_ms));
-        }
-        VisualUnitTiming::CaretDriven { .. } => {
-            // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track
-            // progress 推导（start + (target - start) * ease_out_quad(progress)），
-            // 不需要通过 start_fraction 模拟已演进状态。
-            // start_fraction 保持 fresh unit 的初始值（0 for InsertReveal, 1 for DeleteConceal）。
-            // 测试中 caret track 的 started_at 由 rendering_tx 设置，反映已演进状态。
         }
     }
     unit
@@ -1031,10 +1024,9 @@ fn issue690_match_rebase_frames_continues_unit_timeline() {
     match_rebase_frames(&frames, &mut units, &offset_map);
 
     let unit = &units[0];
-    // Issue #727 约束 2: CaretDriven unit 的 start_fraction 是 rebase 交棒时的载体。
+    // Issue #727 约束 2 / Issue #785: 所有 unit 都是 Timed，start_fraction 是 rebase 交棒时的载体。
     // 交棒后 start_fraction = visible_fraction = 0.75。
     let (start_fraction, started_at_is_none) = match &unit.timing {
-        VisualUnitTiming::CaretDriven { start_fraction, .. } => (*start_fraction, true),
         VisualUnitTiming::Timed {
             start_fraction,
             started_at,
@@ -1046,11 +1038,11 @@ fn issue690_match_rebase_frames_continues_unit_timeline() {
         "Reveal 单元交棒后应从已显示比例继续，got {}",
         start_fraction
     );
-    // Issue #727 约束 2: CaretDriven unit 没有 duration_ms / started_at。
-    // remaining_duration_ms 由 caret track 管理，不由 unit 自己的时间线决定。
+    // Issue #690 评论 5679744253 问题 1 / Issue #785: retarget 时从当前帧重新起段，
+    // started_at 留 None，等进入 Rendering 再启动，progress 从 0 开始。
     assert!(
         started_at_is_none,
-        "CaretDriven unit 无独立时间线，started_at 不适用"
+        "Timed unit rebase 后 started_at 应为 None（等 Rendering 再启动）"
     );
     // Issue #690 评论 5679744253 问题 1: retarget 时从当前帧重新起段，
     // started_at 留 None，等进入 Rendering 再启动，progress 从 0 开始。

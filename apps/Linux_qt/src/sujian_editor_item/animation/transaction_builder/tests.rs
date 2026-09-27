@@ -884,18 +884,10 @@ fn issue756_insert_spec_with_durations(
 ) -> VisualEditSpec {
     let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
     let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
-    // Issue #756 评论 5821042551: 协同时两个 duration 都用 typing duration（共享 timeline）；
-    // 非协同时文字用 typing、光标用 smooth，各自独立。
-    let actual_text_duration = if coordinated_animation_enabled {
-        text_duration_ms
-    } else {
-        text_duration_ms
-    };
-    let actual_caret_duration = if coordinated_animation_enabled {
-        text_duration_ms
-    } else {
-        caret_duration_ms
-    };
+    // Issue #756 评论 5821042551 / Issue #785: 文字与光标各自独立 duration。
+    // 协同只表示同事务/同首帧/同 rebase，不共享 duration。
+    let actual_text_duration = text_duration_ms;
+    let actual_caret_duration = caret_duration_ms;
     let sid = issue756_shaping_identity();
     let old_snapshot = make_test_snapshot(
         "ab",
@@ -1092,7 +1084,8 @@ fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
 /// composition 的 VisualEditSpec 构造，传入不同的 coordinated/typing/smooth 组合。
 
 /// coordinated=true + typing=false + smooth=false：协同仍正常
-///（text=true, caret=true, coordinated=true，吞吐字 CaretDriven）。
+///（text=true, caret=true, coordinated=true，吞吐字 Timed 独立时间线）。
+/// Issue #785: 协同不再切 CaretDriven，吞吐字用 Timed timing。
 #[test]
 fn issue756_ime_coordinated_only() {
     let key = VisualTransactionKey::new(1, 756);
@@ -1107,8 +1100,8 @@ fn issue756_ime_coordinated_only() {
     );
     assert!(tx.coordinated, "coordinated=true: 事务标记 coordinated");
     assert!(
-        tx.units.iter().any(|u| u.timing.is_caret_driven()),
-        "coordinated=true: 吞吐字用 CaretDriven timing（消费 caret frame）"
+        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
+        "Issue #785: coordinated=true: 吞吐字用 Timed timing（独立时间线），不是 CaretDriven"
     );
 }
 
@@ -1383,6 +1376,7 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
         key, false, true, true, true, 100, 300,
     ));
     // 文字 unit 用 typing duration (100ms)
+    // Issue #785: 所有 unit 都是 Timed。
     for unit in &tx.units {
         match unit.timing {
             VisualUnitTiming::Timed { duration_ms, .. } => {
@@ -1390,9 +1384,6 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
                     duration_ms, 100,
                     "非协同: Timed 文字 unit 必须用 typing duration (100ms)，不是 smooth (300ms)"
                 );
-            }
-            VisualUnitTiming::CaretDriven { .. } => {
-                panic!("非协同: 吞吐字不应是 CaretDriven");
             }
         }
     }
@@ -1417,6 +1408,7 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
         key, false, true, true, true, 300, 100,
     ));
     // 文字 unit 用 typing duration (300ms)
+    // Issue #785: 所有 unit 都是 Timed。
     for unit in &tx.units {
         match unit.timing {
             VisualUnitTiming::Timed { duration_ms, .. } => {
@@ -1424,9 +1416,6 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
                     duration_ms, 300,
                     "非协同: Timed 文字 unit 必须用 typing duration (300ms)，不是 smooth (100ms)"
                 );
-            }
-            VisualUnitTiming::CaretDriven { .. } => {
-                panic!("非协同: 吞吐字不应是 CaretDriven");
             }
         }
     }
@@ -1441,28 +1430,30 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
     );
 }
 
-/// Issue #756 评论 5821042551: 协同时两个 duration 都用 typing duration（共享 timeline）。
+/// Issue #756 评论 5821042551 / Issue #785: 协同时两个 duration 各自独立。
+/// 协同只表示同事务/同首帧/同 rebase，不共享 duration。
+/// 文字用 typing duration，光标用 smooth cursor duration。
 #[test]
 fn issue756_comment5821042551_coordinated_shares_typing_duration() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=true, typing=false, smooth=false, typing=100ms, smooth=300ms
-    // 协同时 caret_duration_ms 应等于 text_duration_ms（共享 timeline）
+    // Issue #785: 协同时 caret_duration_ms 始终独立（用 smooth=300ms），不再共享 typing=100ms。
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, true, false, false, true, 100, 300,
     ));
-    // 协同: 吞吐字是 CaretDriven
+    // Issue #785: 协同: 吞吐字是 Timed（独立时间线），不是 CaretDriven。
     assert!(
-        tx.units.iter().any(|u| u.timing.is_caret_driven()),
-        "协同: 吞吐字用 CaretDriven timing"
+        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
+        "Issue #785: 协同: 吞吐字用 Timed timing（独立时间线），不是 CaretDriven"
     );
-    // 协同: cursor_visual_track 用 typing duration (100ms)，不是 smooth (300ms)
+    // Issue #785: 协同: cursor_visual_track 用 smooth cursor duration (300ms)，始终独立。
     let track = tx
         .cursor_visual_track
         .as_ref()
         .expect("coordinated=true: 必须有 cursor_visual_track");
     assert_eq!(
-        track.duration_ms, 100,
-        "协同: cursor_visual_track 用 typing duration (100ms)（共享 timeline），不是 smooth (300ms)"
+        track.duration_ms, 300,
+        "Issue #785: 协同: cursor_visual_track 用 smooth cursor duration (300ms)，始终独立，不再共享 typing (100ms)"
     );
 }
 

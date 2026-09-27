@@ -206,14 +206,12 @@ impl LinuxEditorAnimationCoordinator {
             .map(|t| t.key)
             .collect();
         for key in keys {
-            // Issue #738 评论 5795950264 问题1: 先 retire CaretDriven units，让旧 caret
-            // track 永久失去 ownership，再 rebind Timed Reflow。如果先 rebind 会把
-            // layout_basis_revision 提升到当前 canonical，导致 basis 守卫
-            //（build_text_animation_plan_with_sample / find_cursor_transaction_for_target）
-            // 不再 retire 旧 CaretDriven，旧 caret track 重新拿到 ownership 在新 canonical
-            // 上继续用旧布局几何。retire 把 CaretDriven 落到终态并置 caret_motion_retired=true，
-            // ReflowMove/ReflowCrossFade 保留不动继续播。
-            self.retire_caret_driven_units_for_transaction(key);
+            // Issue #785: 不再先 retire CaretDriven text units。文字 unit 有独立时间线，
+            // epoch 失效只退休 cursor motion ownership（在 find_cursor_transaction_for_target
+            // / build_text_animation_plan_with_sample 中处理），不把文字推到终态。
+            // 旧文字动画按自己当前帧做 rebase（rebind_timed_units_to_canonical），
+            // 真正被新编辑覆盖的才取消/替换。协同关系在 transaction/rebase 层维护，
+            // 不通过"光标位置裁文字"维护。
             let tx = match self
                 .prepared_queue
                 .active_transactions_mut()
@@ -450,21 +448,19 @@ impl LinuxEditorAnimationCoordinator {
     /// 和 `active_text_transaction_key_with_epoch` 一样跳过 basis 不一致的事务。
     /// 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
     /// coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
-    /// Issue #735 评论 5773604666 问题3: 收口指定事务的 CaretDriven units。
+    /// Issue #735 评论 5773604666 问题3 / Issue #785: 收口指定事务的 caret motion ownership。
     ///
-    /// 当正文 edit motion 失去 caret ownership 时调用。把指定事务的
-    /// CaretDriven units（InsertReveal/DeleteConceal）的 `start_fraction` 设为
-    /// `target_fraction`（终态），并置 `caret_motion_retired = true`。
-    /// ReflowMove/ReflowCrossFade 保留不动，作为独立 passive reflow track 继续。
+    /// Issue #785 后：文字 unit（InsertReveal/DeleteConceal）有独立时间线，epoch 失效
+    /// 只退休 cursor motion ownership（`caret_motion_retired = true`），**不把文字动画
+    /// 推到终态**。文字 unit 按自己的 Timed 时间线继续播完/rebase。
     ///
     /// 调用后：
-    /// - CaretDriven units 立即落到 canonical final state，不再继续播。
     /// - `active_text_transaction_key_with_epoch` / `active_text_transaction_key`
-    ///   永远跳过此事务（`caret_motion_retired == true`）。
-    /// - 如果事务中还有 Timed unit（Reflow），事务不立即 Completed，等它们播完。
-    /// - 如果没有 Timed unit，事务可在下一帧 Completed。
+    ///   永远跳过此事务（`caret_motion_retired == true`），不再给它 owner_key。
+    /// - 文字 unit（InsertReveal/DeleteConceal/ReflowMove/ReflowCrossFade）保留独立时间线
+    ///   继续播完，事务只等剩余 Timed unit 完成。
     ///
-    /// 幂等：对已 retired 的事务再次调用是 no-op（start_fraction 已是 target_fraction）。
+    /// 幂等：对已 retired 的事务再次调用是 no-op。
     pub(crate) fn retire_caret_driven_units_for_transaction(&mut self, key: VisualTransactionKey) {
         let tx = match self
             .prepared_queue
@@ -479,16 +475,11 @@ impl LinuxEditorAnimationCoordinator {
         if tx.caret_motion_retired {
             return;
         }
-        // 只有含 CaretDriven units 的事务才需要收口。
-        if !tx.has_caret_driven_units() {
-            // 纯 Reflow 事务本来就不驱动 caret，只置 retired 标记防止重新被选为 owner。
-            tx.caret_motion_retired = true;
-            return;
-        }
-        tx.retire_caret_driven_units();
+        // Issue #785: 文字 unit 有独立时间线，epoch 失效只退休 cursor motion ownership，
+        // 不把文字动画推到终态。文字按自己时间线继续/rebase。
         tx.caret_motion_retired = true;
         editor_animation_debug_log(&format!(
-            "retire_caret_driven: key={:?} op={:?} units={} — CaretDriven units 已落到终态",
+            "retire_caret_motion: key={:?} op={:?} units={} — cursor motion retired, text units continue independently",
             tx.key,
             tx.operation_kind,
             tx.units.len(),
@@ -523,7 +514,7 @@ impl LinuxEditorAnimationCoordinator {
                     && t.state != TextVisualTransactionState::Cancelled
                     && t.units
                         .iter()
-                        .any(|u| matches!(u.timing, VisualUnitTiming::CaretDriven { .. }))
+                        .any(|u| u.timing.is_caret_driven())
             })
             .map(|t| t.key)
             .collect();

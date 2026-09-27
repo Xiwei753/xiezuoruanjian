@@ -339,13 +339,11 @@ impl LinuxEditorAnimationCoordinator {
                 // 也不能继续裁 canonical 正文——非 owner 的 CaretDriven 已 Snap 到 canonical，
                 // 再藏 canonical 会挖出文字空洞。
                 let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
+                // Issue #785: 所有文字 unit 都是 Timed，不再因 caret-driven 跳过 clip_rects 收集。
+                // caret frame 只负责画 caret，不驱动文字。has_caret_frame / owns_caret 保留
+                // 供后续 caret 渲染判断，但不再影响文字 clip 收集。
+                let _ = (has_caret_frame, owns_caret);
                 for unit in &tx.units {
-                    // Issue #756: 按 timing 判断 caret-driven（coordinated=true 吞吐字）。
-                    let is_caret_driven = unit.timing.is_caret_driven();
-                    // CaretDriven unit 只在拥有 caret frame 时收集；Timed 始终收集。
-                    if is_caret_driven && (!has_caret_frame || !owns_caret) {
-                        continue;
-                    }
                     for doc_rect in &unit.slice.static_hidden_document_rects {
                         if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
                             clip_rects.push(
@@ -545,18 +543,14 @@ impl LinuxEditorAnimationCoordinator {
                 Some(track) => track.progress(sample.frame_now) >= 1.0,
                 None => true,
             };
-            // 完成判断按 kind 分开: CaretDriven unit 的完成由 caret_track_done 决定，
-            // Timed unit（Reflow + typing-driven 吞吐字）看 progress >= 1.0。
+            // Issue #785: 所有 unit 都是 Timed，完成判断统一用 progress >= 1.0。
+            // 不再有 CaretDriven 分支。
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units.iter().all(|u| {
-                    if u.timing.is_caret_driven() {
-                        true
-                    } else {
-                        u.progress(sample.frame_now) >= 1.0
-                    }
-                })
+                tx.units
+                    .iter()
+                    .all(|u| u.progress(sample.frame_now) >= 1.0)
             };
             // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成，
             // 不再仅限于 CaretDriven 事务。非协同 typing+smooth 没有 CaretDriven unit，
@@ -578,39 +572,11 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // Issue #756: 按 timing 区分 caret-driven 和 timed 吞吐字。
-                // - CaretDriven（coordinated=true 的 InsertReveal/DeleteConceal）：从统一
-                //   CoordinatedMotionFrame.caret 消费，按 owner_key 过滤。
-                // - Timed（Reflow + coordinated=false 的 typing-driven 吞吐字）：用自己
-                //   的时间线算 visible，走 compute_frame(visible)，不消费 caret frame。
-                let frame = if unit.timing.is_caret_driven() {
-                    // active 时生成 glyph，否则 continue（已 retire）。
-                    if !caret_driven_active {
-                        continue;
-                    }
-                    // 从统一 CoordinatedMotionFrame 获取 caret geometry。
-                    // 用 match 而非 expect，避免用 expect 代替错误处理。
-                    let Some(caret_frame) = coordinated_motion_frame.caret else {
-                        continue;
-                    };
-                    // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
-                    // progress 推导，不再由 unit 自己的时间线驱动。
-                    // visible = start_fraction + (target - start) * ease_out_quad(progress)
-                    let eased = AnimatedSlice::ease_out_quad(caret_frame.progress);
-                    let start = unit.timing.start_fraction();
-                    let target = unit.timing.target_fraction();
-                    let visible = start + (target - start) * eased;
-                    unit.slice.compute_frame_caret_driven(
-                        caret_frame.x,
-                        caret_frame.y,
-                        caret_frame.visual_line_id,
-                        visible,
-                    )
-                } else {
-                    // Timed unit（Reflow / typing-driven 吞吐字）：用自己的时间线算 visible。
-                    let visible = unit.current_visible_fraction(sample.frame_now);
-                    unit.slice.compute_frame(visible)
-                };
+                // Issue #785: 所有文字 unit 统一走 Timed 路径——用自己的时间线算 visible，
+                // 走 compute_frame(visible)，不消费 caret frame。caret frame 只负责画 caret，
+                // 不驱动文字。即使 cursor ownership/epoch 发生切换，文字动画也不会凭空消失。
+                let visible = unit.current_visible_fraction(sample.frame_now);
+                let frame = unit.slice.compute_frame(visible);
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,
                     y: frame.y,

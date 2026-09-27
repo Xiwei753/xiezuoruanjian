@@ -401,21 +401,21 @@ impl AnimatedSlice {
     /// 纯插值计算：根据"最终可见比例" `visible`（0..1）计算当前帧的 destination rect
     /// 和 source rect。
     ///
-    /// Issue #722 评论 5747719529 核心语义：光标本身就是吞字/吐字的视觉边界。
-    /// 真正决定当前 reveal/conceal 截止位置的是这一帧的 caret geometry，不是文字 unit
-    /// 自己的独立 timeline。此函数保留作为 reflow/crossfade 的纯几何插值入口；
-    /// InsertReveal/DeleteConceal 的裁切边界应通过 `compute_frame_caret_driven`
-    /// 直接消费本帧 coordinated caret 的位置（caret_driven_clip），caret 与文字使用
-    /// 同一个 frame_now 和同一个 from→to 几何轨迹。文字不能再维护一套会和 caret
-    /// 分叉的"自己什么时候完全出现/完全消失"的位置/可见度进度。
+    /// Issue #722 评论 5747719529 核心语义 / Issue #785: 所有文字 unit（含协同模式
+    /// InsertReveal/DeleteConceal）统一用 `Timed` timing，拥有独立 started_at /
+    /// duration_ms / progress。`visible` 由 unit 自己的时间线算出
+    ///（`start_fraction + (target - start) * ease_out_quad(progress)`），不再由
+    /// caret frame 驱动。caret 与文字各自按自己的 duration 推进。
+    ///
+    /// InsertReveal/DeleteConceal 的裁切范围从文字自己的 `visible_fraction` 算
+    ///（即 start_fraction + (target-start)*ease(progress)），吞字方向、吐字方向
+    /// 几何语义保留不变，只改"谁驱动进度"。
     pub fn compute_frame(&self, visible: f64) -> AnimatedSliceFrame {
         let visible = visible.clamp(0.0, 1.0);
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                // Issue #722 评论 5747719529: caret_driven_clip — 吐字时裁切边界
-                // 由本帧 coordinated caret 位置决定。此回退入口用 visible 推导等效
-                // caret 边界（caret_geometry_clip），保持向后兼容；主路径应调用
-                // compute_frame_caret_driven 直接消费 caret geometry。
+                // Issue #785: 文字 unit 用独立 Timed timing，visible 来自
+                // unit.current_visible_fraction(frame_now)，不再由 caret frame 驱动。
                 let caret_clip_boundary =
                     self.to_document_rect.x + self.to_document_rect.w * visible;
                 let reveal_from_caret = (caret_clip_boundary - self.to_document_rect.x)
@@ -438,10 +438,8 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                // Issue #722 评论 5747719529: caret_driven_clip — 吞字时裁切边界
-                // 由本帧 coordinated caret 位置决定。此回退入口用 visible 推导等效
-                // caret 边界（caret_geometry_clip），保持向后兼容；主路径应调用
-                // compute_frame_caret_driven 直接消费 caret geometry。
+                // Issue #785: 文字 unit 用独立 Timed timing，visible 来自
+                // unit.current_visible_fraction(frame_now)，不再由 caret frame 驱动。
                 let frame_h = self.from_document_rect.h;
                 let (caret_clip_boundary, frame_x, src_x) = if self.conceal_to_left_edge {
                     let caret_b = self.from_document_rect.x + self.from_document_rect.w * visible;
@@ -556,25 +554,21 @@ impl AnimatedSlice {
         }
     }
 
-    /// Issue #722 评论 5747719529 核心语义：caret 驱动裁切边界。
+    /// Issue #722 评论 5747719529 核心语义 / Issue #785: caret 驱动裁切边界（**已弃用**）。
     ///
-    /// 光标本身就是吞字/吐字的视觉边界。InsertReveal/DeleteConceal 的裁切边界直接
-    /// 消费本帧 coordinated caret 的位置（`caret_clip_boundary`），不再由 unit 自己
-    /// 的 visible fraction 驱动。caret 与文字使用同一个 frame_now 和同一个
-    /// from→to 几何轨迹。
+    /// Issue #785 后：文字 unit（InsertReveal/DeleteConceal）统一用 `Timed` timing，
+    /// 不再由 caret frame 驱动。主路径改为 `compute_frame(visible)`，`visible` 来自
+    /// `unit.current_visible_fraction(frame_now)`。此方法保留供过渡/测试引用，
+    /// 标记 `#[deprecated]`，调用方应改用 `compute_frame`。
+    ///
+    /// 历史语义：光标本身就是吞字/吐字的视觉边界。InsertReveal/DeleteConceal 的裁切
+    /// 边界直接消费本帧 coordinated caret 的位置（`caret_clip_boundary`）。
     ///
     /// - InsertReveal（吐字）：光标往前走到哪里，文字就显示到哪里。
-    ///   `caret_clip_boundary` 是本帧 coordinated caret 的 x 坐标，裁切宽度 =
-    ///   `caret_clip_boundary - to_document_rect.x`（已被光标"带出来"的部分）。
     /// - DeleteConceal（吞字）：光标往回走到哪里，文字就消失到哪里。
-    ///   `caret_clip_boundary` 是本帧 coordinated caret 的 x 坐标，裁切宽度 =
-    ///   `caret_clip_boundary - from_document_rect.x`（Backspace，conceal_to_left_edge）；
-    ///   前向 Delete 时裁切宽度 = `from_document_rect.right - caret_clip_boundary`。
     /// - ReflowMove / ReflowCrossFade：不消费 caret 边界，回退到 `compute_frame(visible)`。
-    ///
-    /// 快速连续输入/删除时，新事务必须从当前这条视觉边界继续。上一帧光标已经扫过
-    /// 的部分保持最终状态，尚未扫过的部分继续跟着新的光标边界走。快速 rebase 时
-    /// 先采样当前 caret 边界，再把这个边界作为下一段动画起点。
+    #[deprecated(note = "Issue #785: 文字 unit 用独立 Timed timing，不再由 caret 驱动")]
+    #[allow(deprecated)]
     pub fn compute_frame_caret_driven(
         &self,
         caret_clip_boundary: f64,

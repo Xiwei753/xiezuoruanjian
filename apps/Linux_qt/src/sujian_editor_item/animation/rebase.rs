@@ -198,20 +198,11 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
     caret_remaining_ms: u64,
     now: Instant,
 ) -> Option<RebaseFrame> {
-    // Issue #756: 按 timing 判断 visible_fraction 推导方式。
-    // - CaretDriven（coordinated=true 吞吐字）：从 caret track progress 推导。
-    // - Timed（Reflow + coordinated=false typing-driven 吞吐字）：从自己的时间线算。
-    let visible_fraction = if unit.timing.is_caret_driven() {
-        // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
-        // visible = start_fraction + (target - start) * ease_out_quad(progress)
-        let progress = caret_track_progress.unwrap_or(0.0);
-        let eased = AnimatedSlice::ease_out_quad(progress);
-        let start = unit.timing.start_fraction();
-        let target = unit.timing.target_fraction();
-        start + (target - start) * eased
-    } else {
-        unit.current_visible_fraction(now)
-    };
+    // Issue #756 / Issue #785: 所有 unit 都是 Timed，visible_fraction 从自己的时间线算。
+    // 不再有 CaretDriven 分支。caret_track_progress / caret_remaining_ms 保留在签名里
+    // 供调用方兼容，但 Issue #785 后不再使用。
+    let _ = (caret_track_progress, caret_remaining_ms);
+    let visible_fraction = unit.current_visible_fraction(now);
     // Issue #727 约束 4: 不依赖 caret geometry，统一用 compute_frame。
     let frame = unit.slice.compute_frame(visible_fraction);
     // 按真实帧判断终态。
@@ -244,7 +235,6 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => visible_fraction,
     };
     let (elapsed_ms, duration_ms) = match &unit.timing {
-        VisualUnitTiming::CaretDriven { .. } => (0u64, caret_remaining_ms),
         VisualUnitTiming::Timed {
             started_at,
             duration_ms,

@@ -88,23 +88,14 @@ impl TransactionTimeline {
 
 /// Issue #727 评论 5754041813 约束 2: 视觉单元的计时语义拆分。
 ///
-/// - `CaretDriven`：`InsertReveal` / `DeleteConceal` 永远使用此变体。吞字/吐字不是
-///   独立动画，光标运动才是它的唯一视觉驱动。CaretDriven unit **没有自己的** progress /
-///   duration / started_at；裁切边界直接消费本帧 coordinated caret 的位置
-///   （`compute_frame_caret_driven`）。`start_fraction` / `target_fraction` 仅作为
-///   rebase 交棒时的可见比例载体，不驱动独立时间线。
-/// - `Timed`：`ReflowMove` / `ReflowCrossFade` 允许独立时间线（几何插值需要自己的
-///   started_at / duration_ms / start_fraction / target_fraction）。
+/// Issue #785: 删除 `CaretDriven` 变体。所有文字 unit（含协同模式
+/// InsertReveal/DeleteConceal）统一用 `Timed` timing，拥有独立
+/// started_at / duration_ms / progress。协同只表示同事务/同首帧/同 rebase，
+/// 不表示同速度——文字与 caret 各自按自己的 duration 推进。
 #[derive(Clone, Debug)]
 pub(crate) enum VisualUnitTiming {
-    /// InsertReveal / DeleteConceal：由本帧 caret geometry 驱动，无独立时间线。
-    CaretDriven {
-        /// rebase 交棒时的可见比例载体。不随时间变化，仅由 rebase 更新。
-        start_fraction: f64,
-        /// 目标可见比例（InsertReveal=1.0，DeleteConceal=0.0）。
-        target_fraction: f64,
-    },
-    /// ReflowMove / ReflowCrossFade：独立时间线几何插值。
+    /// 所有视觉单元（InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）
+    /// 统一使用独立时间线。Issue #785 后不再有 CaretDriven 变体。
     Timed {
         started_at: Option<Instant>,
         duration_ms: u64,
@@ -115,7 +106,7 @@ pub(crate) enum VisualUnitTiming {
 
 impl VisualUnitTiming {
     /// 从 `AnimatedSliceKind` 推断默认计时语义。
-    /// InsertReveal / DeleteConceal → CaretDriven；ReflowMove / ReflowCrossFade → Timed。
+    /// Issue #785: 所有 kind 统一返回 `Timed`（含 InsertReveal/DeleteConceal）。
     pub(crate) fn default_for_kind(kind: AnimatedSliceKind, duration_ms: u64) -> Self {
         let target_fraction = match kind {
             AnimatedSliceKind::DeleteConceal => 0.0,
@@ -125,84 +116,41 @@ impl VisualUnitTiming {
             AnimatedSliceKind::DeleteConceal => 1.0,
             _ => 0.0,
         };
-        match kind {
-            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                VisualUnitTiming::CaretDriven {
-                    start_fraction,
-                    target_fraction,
-                }
-            }
-            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                VisualUnitTiming::Timed {
-                    started_at: None,
-                    duration_ms,
-                    start_fraction,
-                    target_fraction,
-                }
-            }
+        VisualUnitTiming::Timed {
+            started_at: None,
+            duration_ms,
+            start_fraction,
+            target_fraction,
         }
     }
 
-    /// Issue #756: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
+    /// Issue #756 / Issue #785: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
     ///
-    /// - `coordinated=true`：吞吐字由 caret 驱动 → `CaretDriven`（裁切边界消费本帧
-    ///   coordinated caret 位置，无独立时间线）。与 `default_for_kind` 一致。
-    /// - `coordinated=false`：吞吐字用 typing timeline 自己推进 → `Timed`（独立时间线，
-    ///   `compute_frame(visible)` 推进裁切，不消费 caret frame）。ReflowMove/ReflowCrossFade
-    ///   永远 `Timed`，与 coordinated 无关。
+    /// Issue #785 后：`coordinated` 参数保留在签名里但**不再影响 timing 选择**。
+    /// 无论 coordinated true/false，所有 kind 都返回 `Timed`。协同只表示
+    /// 同事务/同首帧/同 rebase，不表示同速度——文字与 caret 各自按自己的
+    /// duration 推进，拥有独立 started_at / duration_ms / progress。
     pub(crate) fn default_for_kind_with_coordinated(
         kind: AnimatedSliceKind,
         duration_ms: u64,
         coordinated: bool,
     ) -> Self {
-        let target_fraction = match kind {
-            AnimatedSliceKind::DeleteConceal => 0.0,
-            _ => 1.0,
-        };
-        let start_fraction = match kind {
-            AnimatedSliceKind::DeleteConceal => 1.0,
-            _ => 0.0,
-        };
-        match kind {
-            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                if coordinated {
-                    VisualUnitTiming::CaretDriven {
-                        start_fraction,
-                        target_fraction,
-                    }
-                } else {
-                    VisualUnitTiming::Timed {
-                        started_at: None,
-                        duration_ms,
-                        start_fraction,
-                        target_fraction,
-                    }
-                }
-            }
-            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                VisualUnitTiming::Timed {
-                    started_at: None,
-                    duration_ms,
-                    start_fraction,
-                    target_fraction,
-                }
-            }
-        }
+        // coordinated 仅用于协同语义（同事务/同首帧/同 rebase），不再切换 timing 变体。
+        let _ = coordinated;
+        Self::default_for_kind(kind, duration_ms)
     }
 
-    /// Issue #756: 是否为 CaretDriven（由 caret frame 驱动裁切的吞吐字）。
+    /// Issue #785: 是否为 CaretDriven（由 caret frame 驱动裁切的吞吐字）。
     ///
-    /// coordinated=true 的 InsertReveal/DeleteConceal → true；
-    /// coordinated=false 的 InsertReveal/DeleteConceal（typing-driven）→ false；
-    /// ReflowMove/ReflowCrossFade → false。
+    /// 删除 CaretDriven 变体后始终返回 `false`。保留方法签名避免大量调用点
+    /// 编译错误；调用方拿到 false 后会走 Timed 路径（独立时间线驱动裁切）。
     pub(crate) fn is_caret_driven(&self) -> bool {
-        matches!(self, VisualUnitTiming::CaretDriven { .. })
+        false
     }
 
     /// 获取 `start_fraction`（rebase 交棒载体）。
     pub fn start_fraction(&self) -> f64 {
         match self {
-            VisualUnitTiming::CaretDriven { start_fraction, .. } => *start_fraction,
             VisualUnitTiming::Timed { start_fraction, .. } => *start_fraction,
         }
     }
@@ -210,9 +158,6 @@ impl VisualUnitTiming {
     /// 获取 `target_fraction`。
     pub fn target_fraction(&self) -> f64 {
         match self {
-            VisualUnitTiming::CaretDriven {
-                target_fraction, ..
-            } => *target_fraction,
             VisualUnitTiming::Timed {
                 target_fraction, ..
             } => *target_fraction,
@@ -220,11 +165,9 @@ impl VisualUnitTiming {
     }
 
     /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
-    /// Issue #727 约束 2: CaretDriven unit 没有自己的时间线，返回 0.0。
-    /// 只有 Timed unit（ReflowMove / ReflowCrossFade）才从自己的时间线算 progress。
+    /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算 progress。
     pub fn progress(&self, now: Instant) -> f64 {
         match self {
-            VisualUnitTiming::CaretDriven { .. } => 0.0,
             VisualUnitTiming::Timed {
                 started_at,
                 duration_ms,
@@ -244,12 +187,10 @@ impl VisualUnitTiming {
 
     /// 单元在 `now` 时刻的真实可见比例（0..1）。
     ///
-    /// Issue #727 约束 2: CaretDriven unit（InsertReveal / DeleteConceal）不再从独立
-    /// 时间线驱动可见比例，直接返回 `start_fraction`（由 rebase 交棒设置）。
-    /// 只有 Timed unit（ReflowMove / ReflowCrossFade）才从自己的时间线算可见比例。
+    /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算可见比例：
+    /// `start_fraction + (target_fraction - start_fraction) * ease_out_quad(progress)`。
     pub fn current_visible_fraction(&self, now: Instant) -> f64 {
         match self {
-            VisualUnitTiming::CaretDriven { start_fraction, .. } => start_fraction.clamp(0.0, 1.0),
             VisualUnitTiming::Timed {
                 start_fraction,
                 target_fraction,
@@ -262,23 +203,21 @@ impl VisualUnitTiming {
     }
 
     /// Issue #690 评论 5683759796: 在事务进入 Rendering 时打上统一起始时间。
-    /// 只有 Timed unit 需要 started_at；CaretDriven unit 无独立时间线，no-op。
+    /// Issue #785: 所有 unit 都是 Timed，统一设置 started_at。
     pub fn mark_started(&mut self, frame_now: Instant) {
-        if let VisualUnitTiming::Timed { started_at, .. } = self {
-            if started_at.is_none() {
-                *started_at = Some(frame_now);
-            }
+        let VisualUnitTiming::Timed { started_at, .. } = self;
+        if started_at.is_none() {
+            *started_at = Some(frame_now);
         }
     }
 
-    /// Issue #690 评论 5683759796: rebase 交棒时更新可见比例载体。
-    /// CaretDriven: 只更新 start_fraction（无时间线）。
-    /// Timed: 更新 start_fraction + 重置时间线（started_at=None, duration=remaining）。
+    /// Issue #690 评论 5683759796 / Issue #785: rebase 交棒时更新可见比例载体。
+    ///
+    /// 所有 unit 都是 Timed：更新 start_fraction + 重置时间线
+    ///（started_at = None, duration = remaining）。文字从当前 `visible_fraction`
+    /// 继续，不从 0 重播。
     pub fn rebase_from_frame(&mut self, visible_fraction: f64, remaining_duration_ms: u64) {
         match self {
-            VisualUnitTiming::CaretDriven { start_fraction, .. } => {
-                *start_fraction = visible_fraction.clamp(0.0, 1.0);
-            }
             VisualUnitTiming::Timed {
                 start_fraction,
                 started_at,

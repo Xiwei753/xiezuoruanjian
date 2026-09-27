@@ -1102,14 +1102,11 @@ impl LinuxEditorPipeline {
         if (!text_animation_enabled && !caret_animation_enabled) || ctx.is_scrolling {
             return None;
         }
-        // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
-        // 协同时两者都用 typing duration（共享 timeline）；非协同时文字用 typing、光标用 smooth。
+        // Issue #756 评论 5821042551 / Issue #785: 文字与光标各自独立的时长。
+        // Issue #785: 协同只传递"同事务协同"语义（同首帧/同 rebase），不再修改两个 duration。
+        // 文字用 typing duration、光标用 smooth cursor duration，始终独立。
         let text_duration_ms = self.typing_animation_duration_ms;
-        let caret_duration_ms = if ctx.coordinated_animation_enabled {
-            self.typing_animation_duration_ms
-        } else {
-            self.cursor_animation_duration_ms
-        };
+        let caret_duration_ms = self.cursor_animation_duration_ms;
         let mut motion = PreparedEditMotion::from_edit_result(
             result,
             &old.text,
