@@ -144,7 +144,6 @@ impl LinuxEditorAnimationCoordinator {
     ///   current_cursor_epoch` 的事务。如果有多个，取 `key.transaction_id` 最大的
     ///   （最新创建的）。对选中的那一笔采样 caret 构造 `RebaseCaretHandoff`。
     ///   如果没有冲突事务拥有 coordinated caret，handoff 为 None。
-
     /// Issue #738 评论 5796693007 问题1: 正文编辑路径 prepare 阶段——采 rebase frame +
     /// caret handoff，取消真正被覆盖的冲突事务，但还不创建新事务。
     ///
@@ -155,14 +154,12 @@ impl LinuxEditorAnimationCoordinator {
     /// `take_rebase_frames` 内部会 cancel 冲突事务，所以 prepare 阶段取消的旧事务在
     /// 后续 reconcile 阶段已经不在 active_transactions 里了。
     #[allow(clippy::too_many_arguments)]
-
     /// Issue #738 评论 5796693007 问题1: 正文编辑路径 create 阶段——用 prepare 阶段
     /// 采好的 rebase frame + caret handoff 创建新事务。
     ///
     /// 必须在 `prepare_rebase_handoff_for_edit` 之后、`reconcile_active_transactions_with_canonical`
     /// 之后调用。`prepared` 为 None 时直接返回 None（prepare 阶段 early return 或 Cursor 分支）。
     #[allow(clippy::too_many_arguments)]
-
     /// Issue #738 评论 5796693007 问题1: `process_transaction` 保留原内联 match 结构
     /// 作为 issue687/issue702 白盒测试的锚点（`EditorAnimationKind::Insert/Delete/Cursor =>`
     /// + `build_cluster_reflow_slices` 调用）。
@@ -173,7 +170,6 @@ impl LinuxEditorAnimationCoordinator {
     /// 采好之后才 retire。此方法保留供测试锚点和潜在的未来直接调用，语义与
     /// prepare → create（中间不插 reconcile）等价。
     #[allow(clippy::too_many_arguments)]
-
     /// Issue #738 评论 5787277777: 把全部活动事务从上一份 canonical 几何重绑到这份新 canonical。
     ///
     /// 在 `record_visual_transaction` 里 `new_doc_snapshot` 已完成后、创建本次新事务之前调：
@@ -433,7 +429,6 @@ impl LinuxEditorAnimationCoordinator {
     /// `find_cursor_transaction_for_target` / `compute_coordinated_cursor_position`
     /// 直接调 `active_text_transaction_key()` 后手动检查 epoch，以保留结构守卫测试
     /// 期望的 `self.active_text_transaction_key()` 调用形式。
-
     /// Issue #679 评论 5657313927 (3d): 按当前光标 target 查找对应的事务。
     ///
     /// Issue #686 评论 5664857575 领域2：当存在活动正文事务时，直接返回该事务的 key
@@ -455,7 +450,6 @@ impl LinuxEditorAnimationCoordinator {
     /// 和 `active_text_transaction_key_with_epoch` 一样跳过 basis 不一致的事务。
     /// 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
     /// coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
-
     /// Issue #735 评论 5773604666 问题3: 收口指定事务的 CaretDriven units。
     ///
     /// 当正文 edit motion 失去 caret ownership 时调用。把指定事务的
@@ -509,7 +503,6 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     #[allow(clippy::too_many_arguments)]
-
     /// Issue #727 约束 7: 滚动开始时，CaretDriven 事务（InsertReveal/DeleteConceal）
     /// 依赖 caret motion track，caret track 被终止时它们必须立即完成到 canonical 状态，
     /// 不能只 pause（pause 后 resume 时 caret track 已不存在，数据依赖链断裂）。
@@ -559,14 +552,12 @@ impl LinuxEditorAnimationCoordinator {
     /// 新事务第一帧采样时状态仍为 Prepared → caret=None → InsertReveal/DeleteConceal
     /// 不画、clip 也不藏 → 第一帧直接显示最终正文 → 下一帧才从 progress≈0 开始动画，
     /// 形成固定的一帧"先显示最终文字，再开始动画"的闪烁。
-
     /// Issue #690 评论 5675007226 步骤 1+2: 接受 `frame_now`，统一采样文字和光标 progress。
     ///
     /// 文字和光标的 progress 全部从同一个 `frame_now` 计算，消除 GUI 线程 tick 和
     /// Scene Graph 渲染帧之间的采样偏差。当正文编辑事务活跃且 coordinated 动画启用时，
     /// 光标位置直接从 text animation progress 计算（跟随文字吞吐边界），
     /// 不再使用 GUI 线程上一帧留下的 `cursor_ctrl.visual_x/y`。
-
     /// Issue #727 约束 3: 采样本帧统一的 CoordinatedMotionFrame。
     ///
     /// 在 `build_render_plan_full` 入口处调用，先采样 caret motion 得到一份
@@ -575,7 +566,6 @@ impl LinuxEditorAnimationCoordinator {
     /// Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
     /// 事务立刻失去 caret motion ownership，CaretDriven units（InsertReveal/DeleteConceal）
     /// 已落到 canonical final state（不再继续播放）。
-
     /// Issue #701 评论 5699573227 第三阶段 (F5): 用同一份 `AnimationFrameSample`
     /// 采样 CursorOnly 光标位置。
     ///
@@ -584,7 +574,6 @@ impl LinuxEditorAnimationCoordinator {
     /// 文字层和光标层都使用同一份 frame state。
     /// Issue #702 评论 5707449688 问题 2: 不再用 `anim.driver_key` 查事务，
     /// 直接用 CursorAnimationState 自己的 timeline（started_at + duration_ms）推进。
-
     /// Issue #690 评论 5675007226 步骤 1+3: 从同一 `AnimationFrameSample` 读取文字 progress，
     ///
     /// 替代原来的 `build_text_animation_plan()`（内部各自 `Instant::now()`）。
@@ -595,7 +584,6 @@ impl LinuxEditorAnimationCoordinator {
     /// caret 与文字使用同一个 frame_now 和同一个 from→to 几何轨迹。reflow/crossfade
     /// 继续用 unit 的时间线做几何插值；`start_fraction` 由 rebase 决定（新单元为 0，
     /// 被连续输入覆盖的单元从已显示比例继续）。
-
     /// Issue #690 评论 5675007226 步骤 2 + 5681206040: 协同光标直接计算最终屏幕位置。
     ///
     /// Issue #722 评论 5747719529 改法 4 + 核心语义：光标本身就是吞字/吐字的视觉边界。
@@ -620,7 +608,6 @@ impl LinuxEditorAnimationCoordinator {
     /// Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
     /// 事务立刻失去 caret motion ownership，CaretDriven units 已落到 canonical
     /// final state（不再继续播放）。
-
     /// 返回当前最新正文编辑事务的操作类型，用于决定光标 blink mode。
     /// Issue #702 评论 5707449688 问题 2: TextVisualOperationKind::Cursor 已删除，
     /// 所有非 Completed/Cancelled 的事务都是正文事务。

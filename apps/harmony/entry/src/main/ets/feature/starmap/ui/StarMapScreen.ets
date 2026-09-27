@@ -706,7 +706,7 @@ export struct StarMapScreen {
             .margin({ bottom: 8 })
 
           ForEach(this.graph.edges.filter(e =>
-            e.from === this.selectedNodeId || e.to === this.selectedNodeId
+            e.from.target.nodeId === this.selectedNodeId || e.to.target.nodeId === this.selectedNodeId
           ), (edge: StarMapEdge) => {
             Row() {
               Circle({ width: 8, height: 8 })
@@ -720,7 +720,7 @@ export struct StarMapScreen {
               }
               .layoutWeight(1)
 
-              Text(edge.from === this.selectedNodeId ? '→' : '←')
+              Text(edge.from.target.nodeId === this.selectedNodeId ? '→' : '←')
                 .fontSize(14)
             }
             .margin({ bottom: 8 })
@@ -825,8 +825,8 @@ export struct StarMapScreen {
       const graphEdge = this.graph.edges.find(e => e.id === edge.edgeId)
       if (!graphEdge) continue
 
-      const fromId = graphEdge.from || ''
-      const toId = graphEdge.to || ''
+      const fromId = graphEdge.from.target.nodeId || ''
+      const toId = graphEdge.to.target.nodeId || ''
       const defaultWobble: WobbleOffset = { dx: 0, dy: 0 }
       const fromWobble = wobbleMap.get(fromId) || defaultWobble
       const toWobble = wobbleMap.get(toId) || defaultWobble

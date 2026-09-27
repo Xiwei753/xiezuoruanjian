@@ -24,16 +24,12 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
         graph =
             StarMapGraphDto(
                 schemaVersion = 1u,
-                id = starmapId,
                 starmapId = starmapId,
-                title = title,
                 nodes = nodes,
                 edges = edges,
                 embeds = embeds,
                 links = links,
                 hyperlinks = hyperlinks,
-                createdAt = 0u,
-                updatedAt = 0u,
             ),
         nodes = nodes.associateByTo(mutableMapOf()) { it.id },
         edges = edges.associateByTo(mutableMapOf()) { it.id },
@@ -66,13 +62,9 @@ internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotR
             graph =
                 StarMapGraphData(
                     schemaVersion = 0,
-                    id = starmapId,
                     starmapId = starmapId,
-                    title = title,
                     nodes = nodes.map { it.toGraphNode() },
                     edges = edges.map { it.toGraphEdge() },
-                    createdAt = 0L,
-                    updatedAt = 0L,
                 ),
             layout = layoutData,
             viewport = viewport?.toModel() ?: com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData(),

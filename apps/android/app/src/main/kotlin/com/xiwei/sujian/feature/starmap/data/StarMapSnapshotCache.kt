@@ -62,13 +62,9 @@ internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
             graph =
                 StarMapGraphData(
                     schemaVersion = graphMeta?.schemaVersion?.toInt() ?: 0,
-                    id = graphMeta?.id ?: "",
                     starmapId = graphMeta?.starmapId ?: "",
-                    title = graphMeta?.title ?: "",
                     nodes = nodes.values.map { it.toGraphNode() },
                     edges = edges.values.map { it.toGraphEdge() },
-                    createdAt = graphMeta?.createdAt?.toLong() ?: 0L,
-                    updatedAt = graphMeta?.updatedAt?.toLong() ?: 0L,
                 ),
             layout = layoutData,
             viewport = viewport?.toModel() ?: StarMapViewportData(),
@@ -199,16 +195,12 @@ internal class StarMapSnapshotCache {
         cache.graph =
             StarMapGraphDto(
                 schemaVersion = meta.schemaVersion,
-                id = meta.id,
                 starmapId = meta.starmapId,
-                title = meta.title,
                 nodes = cache.nodes.values.toList(),
                 edges = cache.edges.values.toList(),
                 embeds = cache.embeds.values.toList(),
                 links = cache.links.values.toList(),
                 hyperlinks = cache.hyperlinks.values.toList(),
-                createdAt = meta.createdAt,
-                updatedAt = meta.updatedAt,
             )
     }
 

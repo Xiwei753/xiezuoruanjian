@@ -234,6 +234,8 @@ internal fun SyncConflict.toDto() =
         baseHash = baseHash,
         createdAt = createdAt,
         description = description,
+        kind = kind,
+        remoteSnapshotPath = remoteSnapshotPath,
     )
 
 internal fun SyncState.toDto() =
@@ -254,13 +256,15 @@ internal fun SyncStateDto.toModel() =
 
 internal fun SyncConflictDto.toModel() =
     SyncConflict(
-        localPath,
-        remotePath,
-        localHash,
-        remoteHash,
-        baseHash,
-        createdAt,
-        description,
+        localPath = localPath,
+        remotePath = remotePath,
+        localHash = localHash,
+        remoteHash = remoteHash,
+        baseHash = baseHash,
+        createdAt = createdAt,
+        description = description,
+        kind = kind,
+        remoteSnapshotPath = remoteSnapshotPath,
     )
 
 internal fun SyncDiagnosticsResultDto.toModel() =

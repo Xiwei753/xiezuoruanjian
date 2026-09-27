@@ -125,38 +125,10 @@ Rectangle {
 
         Item { Layout.fillHeight: true }
 
-        // Bottom row: child count + time
+        // Bottom row: time
         Row {
             Layout.fillWidth: true
             spacing: dt.sp8
-
-            Rectangle {
-                visible: (starmapData.childStarmapCount || 0) > 0
-                width: childCountRow.implicitWidth + dt.sp8
-                height: 20
-                radius: dt.radiusSm
-                color: dt.accentSoft
-
-                Row {
-                    id: childCountRow
-                    anchors.centerIn: parent
-                    spacing: dt.sp4
-                    AppText {
-                        dt: root.dt
-                        text: "\u25BC"
-                        color: dt.accentText
-                        font.pointSize: dt.fontXsPt
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                    AppText {
-                        dt: root.dt
-                        text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
-                        color: dt.accentText
-                        font.pointSize: dt.fontXsPt
-                        Layout.alignment: Qt.AlignVCenter
-                    }
-                }
-            }
 
             Item { Layout.fillWidth: true }
 

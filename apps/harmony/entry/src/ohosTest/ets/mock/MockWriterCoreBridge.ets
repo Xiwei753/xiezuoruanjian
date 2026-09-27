@@ -33,16 +33,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   private mockStarMapGraph: StarMapGraph = {
     schemaVersion: 1,
-    id: '',
     starmapId: '',
-    title: '',
     nodes: [] as StarMapNode[],
     edges: [] as StarMapEdge[],
     embeds: [] as StarMapEmbed[],
     links: [] as StarMapLink[],
-    layout: this.mockStarMapLayout,
-    createdAt: 0,
-    updatedAt: 0
+    hyperlinks: []
   }
 
   private mockSettings: LocalSettings = {
@@ -416,7 +412,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>> {
     await this.delay(200)
-    if (this.mockStarMapGraph.id === starmapId) {
+    if (this.mockStarMapGraph.starmapId === starmapId) {
       return this.success(this.mockStarMapGraph)
     }
     return this.error('STARMAP_NOT_FOUND', '星图不存在')
@@ -429,15 +425,13 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       title,
       description,
       projectId: null,
-      parentStarmapId: null,
       isMainForProject: false,
       accentColor: '#4A90D9',
       nodeCount: 0,
       edgeCount: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      linkedChapterCount: 0,
-      childStarmapCount: 0
+      linkedChapterCount: 0
     }
     this.mockStarMaps.push(newStarMap)
     return this.success(newStarMap)

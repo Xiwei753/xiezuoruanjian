@@ -27,6 +27,8 @@ import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapNodePatchInputDto
+import uniffi.writer_core.StarMapTargetDetailDto
+import uniffi.writer_core.StarMapTargetPathDto
 
 class StarMapRepository internal constructor(
     private val bridge: StarMapBridgeOps,
@@ -127,6 +129,13 @@ class StarMapRepository internal constructor(
                 payload = null,
                 clearPayload = false,
                 tags = tags,
+                content = null,
+                anchors = null,
+                portal = null,
+                clearPortal = false,
+                displayPolicy = null,
+                openBehavior = null,
+                provenance = null,
             )
         return when (val result = bridge.updateStarMapNode(starmapId, nodeId, patch)) {
             is BridgeResult.Success -> {
@@ -163,17 +172,11 @@ class StarMapRepository internal constructor(
         val edge =
             StarMapEdgeDto(
                 id = java.util.UUID.randomUUID().toString(),
-                from = from,
-                to = to,
+                from = nodeTargetPathDto(starmapId, from),
+                to = nodeTargetPathDto(starmapId, to),
                 kind = kind.toDto(),
                 label = label,
                 payload = null,
-                fromTarget = null,
-                toTarget = null,
-                fromEndpoint = null,
-                toEndpoint = null,
-                fromEndpointPath = null,
-                toEndpointPath = null,
                 createdAt = now.toULong(),
                 updatedAt = now.toULong(),
             )
@@ -186,6 +189,29 @@ class StarMapRepository internal constructor(
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
+
+    private fun nodeTargetPathDto(
+        starmapId: String,
+        nodeId: String,
+    ): StarMapTargetPathDto =
+        StarMapTargetPathDto(
+            starmapId = starmapId,
+            segments = emptyList(),
+            target =
+                StarMapTargetDetailDto(
+                    kind = "node",
+                    nodeId = nodeId,
+                    anchorId = null,
+                    projectId = null,
+                    volumeId = null,
+                    chapterId = null,
+                    rangeStart = null,
+                    rangeEnd = null,
+                    entityType = null,
+                    entityId = null,
+                    uri = null,
+                ),
+        )
 
     fun deleteStarmapEdge(
         starmapId: String,
@@ -212,6 +238,10 @@ class StarMapRepository internal constructor(
                 kind = kind?.toDto(),
                 label = label,
                 clearLabel = false,
+                payload = null,
+                clearPayload = false,
+                from = null,
+                to = null,
             )
         return when (val result = bridge.updateStarMapEdge(starmapId, edgeId, patch)) {
             is BridgeResult.Success -> {
@@ -415,7 +445,7 @@ class StarMapRepository internal constructor(
                 ),
             )
         return when (val result = bridge.computeStarMapEdgeRenders(graph, data.layout.toDto(rawCache))) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
+            is BridgeResult.Success -> BridgeResult.Success(result.data.renders.map { it.toModel() })
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }

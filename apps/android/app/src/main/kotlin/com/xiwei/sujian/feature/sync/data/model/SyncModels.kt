@@ -89,6 +89,8 @@ data class SyncConflict(
     val baseHash: String,
     val createdAt: Long,
     val description: String,
+    val kind: String = "both_changed",
+    val remoteSnapshotPath: String? = null,
 )
 
 data class SyncDiagnosticsResult(

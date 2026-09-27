@@ -37,7 +37,7 @@ use super::json_utils::{
     serde_to_qjson_object,
 };
 use super::linux_qt_layout_plan_dto::LinuxQtLayoutPlanDto;
-use crate::{starmap_bridge, sync_bridge, writing_bridge};
+use crate::{starmap_bridge, writing_bridge};
 
 cpp! {{
     #include <QtGlobal>
@@ -294,8 +294,6 @@ pub(crate) fn record_struct_event(
         fields: field_map,
     });
 }
-
-use sync_bridge::SyncTaskOutcome;
 
 #[path = "system_utils.rs"]
 mod system_utils;

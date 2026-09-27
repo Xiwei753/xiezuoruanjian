@@ -23,7 +23,7 @@ export type OpenBehavior = 'Inspector' | 'ExpandCard' | 'WritingMode' | 'JumpToA
 export type AnchorRole = 'Source' | 'Destination' | 'Reference' | 'Custom'
 
 // StarMapPortalModeDto
-export type PortalMode = 'EnterChild' | 'PreviewInline' | 'ReferenceOnly'
+export type PortalMode = 'EnterPortal' | 'PreviewInline' | 'ReferenceOnly'
 
 // StarMapPortalPreviewPolicyDto
 export type PortalPreviewPolicy = 'Auto' | 'Always' | 'Never'
@@ -76,8 +76,9 @@ export interface StarMapAnchor {
 
 // StarMapPathSegmentDto
 export interface StarMapPathSegment {
-  type: string  // 目前只有 "enterChild"
-  starmapId: string | null
+  type: string  // "enterPortal" | "enterEmbed"
+  instanceId: string | null
+  nodeId: string | null
 }
 
 // StarMapTargetDetailDto
@@ -95,17 +96,17 @@ export interface StarMapTargetDetail {
   uri: string | null
 }
 
-// StarMapDeepTargetDto
-export interface StarMapDeepTarget {
+// StarMapTargetPathDto
+export interface StarMapTargetPath {
   starmapId: string
-  path: StarMapPathSegment[]
+  segments: StarMapPathSegment[]
   target: StarMapTargetDetail
 }
 
 // StarMapPortalDto
 export interface StarMapPortal {
-  targetStarmapId: string
-  deepTarget: StarMapDeepTarget | null
+  destinationStarmapId: string
+  destinationTarget: StarMapTargetDetail | null
   mode: PortalMode
   previewPolicy: PortalPreviewPolicy
 }
@@ -155,40 +156,14 @@ export type EdgeKind = 'Contains' | 'References' | 'AppearsIn' | 'Causes' | 'Rel
   | 'LocatedAt' | 'CharacterRelation' | 'Timeline' | 'Foreshadows' | 'Resolves'
   | 'DependsOn' | 'ConflictsWith' | 'Custom'
 
-// StarMapEdgeEndpointDto
-export interface StarMapEdgeEndpoint {
-  type: string  // "node" | "anchor" | "starmap" | "deepTarget"
-  nodeId: string | null
-  anchorId: string | null
-  target: StarMapDeepTarget | null
-}
-
-// StarMapEndpointPathSegmentDto
-export interface StarMapEndpointPathSegment {
-  type: string  // 目前只有 "enterChildMap"
-  starmapId: string | null
-}
-
-// StarMapEndpointPathDto
-export interface StarMapEndpointPath {
-  segments: StarMapEndpointPathSegment[]
-  endpoint: StarMapEdgeEndpoint
-}
-
 // StarMapEdgeDto
 export interface StarMapEdge {
   id: string
-  from: string | null
-  to: string | null
+  from: StarMapTargetPath
+  to: StarMapTargetPath
   kind: EdgeKind
   label: string | null
   payload: string | null  // JSON 字符串，非对象
-  fromTarget: StarMapDeepTarget | null
-  toTarget: StarMapDeepTarget | null
-  fromEndpoint: StarMapEdgeEndpoint | null
-  toEndpoint: StarMapEdgeEndpoint | null
-  fromEndpointPath: StarMapEndpointPath | null
-  toEndpointPath: StarMapEndpointPath | null
   createdAt: number
   updatedAt: number
 }
@@ -213,13 +188,6 @@ export interface StarMapEmbedViewport {
   offsetY: number
 }
 
-// StarMapEndpointDto（link 端点，与 edge endpoint 不同）
-export interface StarMapEndpoint {
-  type: string  // "node" | "anchor" | "starmap"
-  nodeId: string | null
-  anchorId: string | null
-}
-
 // StarMapEmbedDto
 export interface StarMapEmbed {
   instanceId: string
@@ -229,8 +197,7 @@ export interface StarMapEmbed {
   openBehavior: OpenBehavior
   placement: StarMapEmbedPlacement
   targetViewport: StarMapEmbedViewport
-  sourceNodeId: string | null
-  hostEndpoint: StarMapEndpoint | null
+  hostPath: StarMapTargetPath
   provenance: StarMapProvenance
   createdAt: number
   updatedAt: number
@@ -239,8 +206,8 @@ export interface StarMapEmbed {
 // StarMapLinkDto
 export interface StarMapLink {
   linkId: string
-  source: StarMapEndpoint
-  target: StarMapDeepTarget
+  source: StarMapTargetPath
+  target: StarMapTargetPath
   label: string | null
   createdAt: number
   updatedAt: number
@@ -249,10 +216,9 @@ export interface StarMapLink {
 // StarMapHyperlinkDto
 export interface StarMapHyperlink {
   hyperlinkId: string
-  source: StarMapEndpointPath
+  source: StarMapTargetPath
   targetUri: string
   label: string | null
-  targetStarmapId: string | null
   createdAt: number
   updatedAt: number
 }
@@ -262,16 +228,12 @@ export interface StarMapHyperlink {
 // StarMapGraphDto
 export interface StarMapGraph {
   schemaVersion: number
-  id: string
   starmapId: string
-  title: string
   nodes: StarMapNode[]
   edges: StarMapEdge[]
   embeds: StarMapEmbed[]
   links: StarMapLink[]
   hyperlinks: StarMapHyperlink[]
-  createdAt: number
-  updatedAt: number
 }
 
 // ─── 元信息 / 布局 / 渲染 ───
@@ -282,7 +244,6 @@ export interface StarMapMeta {
   title: string
   description: string
   projectId: string | null
-  parentStarmapId: string | null
   isMainForProject: boolean
   accentColor: string
   createdAt: number
@@ -290,7 +251,6 @@ export interface StarMapMeta {
   nodeCount: number
   edgeCount: number
   linkedChapterCount: number
-  childStarmapCount: number
 }
 
 // StarMapViewportDto

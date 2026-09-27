@@ -22,7 +22,6 @@ data class StarMapMeta(
     val title: String,
     val description: String,
     val projectId: String?,
-    val parentStarmapId: String?,
     val isMainForProject: Boolean,
     val accentColor: String,
     val createdAt: Long,
@@ -30,7 +29,6 @@ data class StarMapMeta(
     val nodeCount: Int,
     val edgeCount: Int,
     val linkedChapterCount: Int,
-    val childStarmapCount: Int,
 )
 
 enum class StarMapNodeKind {
@@ -93,10 +91,10 @@ data class StarMapGraphNode(
 )
 
 data class StarMapPortalData(
-    val targetStarmapId: String = "",
-    val deepTarget: StarMapDeepTargetData? = null,
-    val mode: String = "Navigate",
-    val previewPolicy: String = "Inline",
+    val destinationStarmapId: String = "",
+    val destinationTarget: StarMapTargetDetailData? = null,
+    val mode: String = "EnterPortal",
+    val previewPolicy: String = "Auto",
 )
 
 data class StarMapAnchorData(
@@ -135,32 +133,16 @@ data class StarMapProvenanceData(
     val createdFromAnchor: String? = null,
 )
 
-data class StarMapEdgeEndpointData(
-    val kind: String,
-    val nodeId: String? = null,
-    val anchorId: String? = null,
-    val deepTarget: StarMapDeepTargetData? = null,
-)
-
-data class StarMapEndpointPathSegmentData(
-    val kind: String,
-    val starmapId: String? = null,
-)
-
-data class StarMapEndpointPathData(
-    val segments: List<StarMapEndpointPathSegmentData> = emptyList(),
-    val endpoint: StarMapEdgeEndpointData,
-)
-
-data class StarMapDeepTargetData(
-    val starmapId: String,
-    val path: List<StarMapPathSegmentData> = emptyList(),
-    val target: StarMapTargetDetailData,
-)
-
 data class StarMapPathSegmentData(
     val kind: String,
-    val starmapId: String? = null,
+    val instanceId: String? = null,
+    val nodeId: String? = null,
+)
+
+data class StarMapTargetPathData(
+    val starmapId: String,
+    val segments: List<StarMapPathSegmentData> = emptyList(),
+    val target: StarMapTargetDetailData,
 )
 
 data class StarMapTargetDetailData(
@@ -177,38 +159,22 @@ data class StarMapTargetDetailData(
     val uri: String? = null,
 )
 
-data class StarMapEndpointData(
-    val kind: String,
-    val nodeId: String? = null,
-    val anchorId: String? = null,
-)
-
 data class StarMapGraphEdge(
     val id: String,
-    val from: String,
-    val to: String,
+    val from: StarMapTargetPathData,
+    val to: StarMapTargetPathData,
     val kind: StarMapEdgeKind,
     val label: String? = null,
     val payload: Map<String, Any>? = null,
-    val fromTarget: StarMapDeepTargetData? = null,
-    val toTarget: StarMapDeepTargetData? = null,
-    val fromEndpoint: StarMapEdgeEndpointData? = null,
-    val toEndpoint: StarMapEdgeEndpointData? = null,
-    val fromEndpointPath: StarMapEndpointPathData? = null,
-    val toEndpointPath: StarMapEndpointPathData? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
 )
 
 data class StarMapGraphData(
     val schemaVersion: Int,
-    val id: String,
     val starmapId: String,
-    val title: String,
     val nodes: List<StarMapGraphNode>,
     val edges: List<StarMapGraphEdge>,
-    val createdAt: Long,
-    val updatedAt: Long,
 )
 
 enum class StarMapLayoutKind {
@@ -300,8 +266,7 @@ data class StarMapEmbedData(
     val instanceId: String,
     val targetStarmapId: String,
     val label: String? = null,
-    val sourceNodeId: String? = null,
-    val hostEndpoint: StarMapEndpointData? = null,
+    val hostPath: StarMapTargetPathData? = null,
     val displayPolicy: StarMapDisplayPolicyData? = null,
     val openBehavior: String = "Inspector",
     val provenance: StarMapProvenanceData? = null,
@@ -327,17 +292,16 @@ data class StarMapEmbedViewportData(
 
 data class StarMapLinkData(
     val linkId: String,
-    val source: StarMapEndpointData = StarMapEndpointData(kind = "Node"),
-    val target: StarMapDeepTargetData? = null,
+    val source: StarMapTargetPathData,
+    val target: StarMapTargetPathData,
     val label: String? = null,
 )
 
 data class StarMapHyperlinkData(
     val hyperlinkId: String,
-    val source: StarMapEndpointPathData? = null,
+    val source: StarMapTargetPathData? = null,
     val targetUri: String,
     val label: String? = null,
-    val targetStarmapId: String? = null,
 )
 
 data class StarMapPhasedSnapshotResult(

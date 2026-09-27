@@ -32,15 +32,6 @@ pub struct StarMapBackend {
     create_starmap: qt_method!(
         fn(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject
     ),
-    create_child_starmap_json: qt_method!(
-        fn(
-            &mut self,
-            parent_id: QString,
-            title: QString,
-            description: QString,
-            accent_color: QString,
-        ) -> QString
-    ),
 
     rename_starmap_json:
         qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
@@ -118,7 +109,7 @@ pub struct StarMapBackend {
     save_starmap_layout:
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
     compute_edge_renders_json:
-        qt_method!(fn(&self, edges_json: QString, nodes_json: QString) -> QString),
+        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QString),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
@@ -192,18 +183,6 @@ impl StarMapBackend {
                 )
             })
     }
-    fn create_child_starmap_json(
-        &mut self,
-        parent_id: QString,
-        title: QString,
-        description: QString,
-        accent_color: QString,
-    ) -> QString {
-        self.with_app_mut(|app| {
-            app.create_child_starmap_json(parent_id, title, description, accent_color)
-        })
-        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
-    }
 
     fn rename_starmap_json(&mut self, starmap_id: QString, new_title: QString) -> QString {
         self.with_app_mut(|app| app.rename_starmap_json(starmap_id, new_title))
@@ -243,10 +222,15 @@ impl StarMapBackend {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
     }
-    fn compute_edge_renders_json(&self, edges_json: QString, nodes_json: QString) -> QString {
-        let ej = edges_json.to_string();
+    fn compute_edge_renders_json(&self, starmap_id: QString, nodes_json: QString) -> QString {
+        let sid = starmap_id.to_string();
         let nj = nodes_json.to_string();
-        crate::starmap_bridge::compute_edge_renders_json(&ej, &nj).into()
+        match self.with_app(|app| app.core_api()) {
+            Ok(Some(core)) => {
+                crate::starmap_bridge::compute_edge_renders_json(&core, &sid, &nj).into()
+            }
+            _ => crate::backend::json_utils::borrow_conflict_error_json().into(),
+        }
     }
     fn hit_test_edge_renders_json(&self, renders_json: QString, x: f64, y: f64) -> QString {
         let rj = renders_json.to_string();
@@ -505,32 +489,6 @@ impl AppBackend {
             .create_starmap_json(title, description, accent_color)
             .to_string();
         qjson_object_from_json(&raw)
-    }
-
-    pub(crate) fn create_child_starmap_json(
-        &mut self,
-        parent_id: QString,
-        title: QString,
-        description: QString,
-        accent_color: QString,
-    ) -> QString {
-        let pid = parent_id.to_string();
-        let t = title.to_string();
-        let d = description.to_string();
-        let ac = accent_color.to_string();
-        let color_ref = if ac.is_empty() {
-            None
-        } else {
-            Some(ac.as_str())
-        };
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_child_starmap(&core, &pid, &t, &d, color_ref).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
-        }
     }
 
     // AppBackend::rename_starmap_json

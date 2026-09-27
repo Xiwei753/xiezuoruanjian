@@ -1,5 +1,3 @@
-use cpp::cpp;
-
 // ── Qt 文本布局模块：测试线程辅助 ──
 //
 // Issue #748 评论 5810761209: run_on_qt_thread 从 engine.rs 移到此处，
@@ -28,6 +26,7 @@ pub fn run_on_qt_thread<F>(f: F)
 where
     F: FnOnce() + Send + 'static,
 {
+    use cpp::cpp;
     use std::sync::mpsc::channel;
     use std::sync::OnceLock;
 

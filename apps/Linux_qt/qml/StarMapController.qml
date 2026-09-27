@@ -40,17 +40,6 @@ QtObject {
         }
     }
 
-    function createChildStarmap(parentId, title, description) {
-        var api = starmapApi();
-        if (!api || !appController || !parentId || !title) return false;
-        try {
-            return appController.handleMutationResult(api.create_child_starmap_json(parentId, title, description || "", ""), qsTr("创建子星图失败"));
-        } catch (e) {
-            appController.emitError(qsTr("后端调用失败: ") + e);
-            return false;
-        }
-    }
-
     function renameStarmap(starmapId, title) {
         var api = starmapApi();
         if (!api || !appController || !starmapId || !title) return false;

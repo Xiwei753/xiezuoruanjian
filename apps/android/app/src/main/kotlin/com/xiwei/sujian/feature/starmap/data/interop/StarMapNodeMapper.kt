@@ -1,17 +1,16 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
 import com.xiwei.sujian.feature.starmap.data.model.StarMapAnchorData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapDeepTargetData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapDisplayPolicyData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPathSegmentData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPortalData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapProvenanceData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetDetailData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetPathData
 import uniffi.writer_core.StarMapAnchorDto
 import uniffi.writer_core.StarMapAnchorRoleDto
 import uniffi.writer_core.StarMapAnchorTargetDto
-import uniffi.writer_core.StarMapDeepTargetDto
 import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapNodeContentDto
 import uniffi.writer_core.StarMapNodeDto
@@ -24,6 +23,7 @@ import uniffi.writer_core.StarMapProvenanceDto
 import uniffi.writer_core.StarMapReviewStatusDto
 import uniffi.writer_core.StarMapSourceKindDto
 import uniffi.writer_core.StarMapTargetDetailDto
+import uniffi.writer_core.StarMapTargetPathDto
 
 internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode =
     StarMapGraphNode(
@@ -73,8 +73,8 @@ internal fun StarMapAnchorDto.toAnchorModel(): StarMapAnchorData =
 
 internal fun StarMapPortalDto.toPortalModel(): StarMapPortalData =
     StarMapPortalData(
-        targetStarmapId = targetStarmapId,
-        deepTarget = deepTarget?.toModel(),
+        destinationStarmapId = destinationStarmapId,
+        destinationTarget = destinationTarget?.toModel(),
         mode = mode.name,
         previewPolicy = previewPolicy.name,
     )
@@ -200,13 +200,13 @@ internal fun StarMapAnchorData.anchorToDto(): StarMapAnchorDto =
 
 internal fun StarMapPortalData.portalToDto(): StarMapPortalDto =
     StarMapPortalDto(
-        targetStarmapId = targetStarmapId,
-        deepTarget = deepTarget?.toDeepTargetDto(),
+        destinationStarmapId = destinationStarmapId,
+        destinationTarget = destinationTarget?.toTargetDetailDto(),
         mode =
             when (mode) {
                 "PREVIEW_INLINE" -> StarMapPortalModeDto.PREVIEW_INLINE
                 "REFERENCE_ONLY" -> StarMapPortalModeDto.REFERENCE_ONLY
-                else -> StarMapPortalModeDto.ENTER_CHILD
+                else -> StarMapPortalModeDto.ENTER_PORTAL
             },
         previewPolicy =
             when (previewPolicy) {
@@ -262,17 +262,18 @@ internal fun String.toOpenBehaviorDto(): StarMapOpenBehaviorDto =
         else -> StarMapOpenBehaviorDto.INSPECTOR
     }
 
-internal fun StarMapDeepTargetData.toDeepTargetDto(): StarMapDeepTargetDto =
-    StarMapDeepTargetDto(
+internal fun StarMapTargetPathData.toTargetPathDto(): StarMapTargetPathDto =
+    StarMapTargetPathDto(
         starmapId = starmapId,
-        path = path.map { it.toPathSegmentDto() },
+        segments = segments.map { it.toPathSegmentDto() },
         target = target.toTargetDetailDto(),
     )
 
 internal fun StarMapPathSegmentData.toPathSegmentDto(): StarMapPathSegmentDto =
     StarMapPathSegmentDto(
         kind = kind,
-        starmapId = starmapId,
+        instanceId = instanceId,
+        nodeId = nodeId,
     )
 
 internal fun StarMapTargetDetailData.toTargetDetailDto(): StarMapTargetDetailDto =

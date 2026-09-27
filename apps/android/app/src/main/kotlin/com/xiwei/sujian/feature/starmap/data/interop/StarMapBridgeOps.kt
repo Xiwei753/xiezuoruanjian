@@ -4,7 +4,7 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
-import uniffi.writer_core.StarMapEdgeRenderDto
+import uniffi.writer_core.StarMapEdgeRenderBatchDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
@@ -55,7 +55,7 @@ internal interface StarMapBridgeOps {
     fun computeStarMapEdgeRenders(
         graph: StarMapGraphDto,
         layout: StarMapLayoutDto,
-    ): BridgeResult<List<StarMapEdgeRenderDto>>
+    ): BridgeResult<StarMapEdgeRenderBatchDto>
 
     fun hitTestStarMapNode(
         layout: StarMapLayoutDto,

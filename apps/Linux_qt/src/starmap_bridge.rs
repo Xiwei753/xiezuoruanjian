@@ -17,7 +17,8 @@
 
 use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapLayoutDto,
-    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
+    StarMapLayoutKindDto, StarMapLayoutNodeDto, StarMapNodeContentDto, StarMapNodeDto,
+    StarMapNodeKindDto, StarMapNodePatchDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -70,16 +71,6 @@ pub fn create_starmap(
     accent_color: Option<&str>,
 ) -> String {
     envelope(api.create_starmap(title, description, accent_color))
-}
-
-pub fn create_child_starmap(
-    api: &WriterCoreApi,
-    parent_id: &str,
-    title: &str,
-    description: &str,
-    accent_color: Option<&str>,
-) -> String {
-    envelope(api.create_child_starmap(parent_id, title, description, accent_color))
 }
 
 pub fn rename_starmap(api: &WriterCoreApi, starmap_id: &str, new_title: &str) -> String {
@@ -155,10 +146,28 @@ pub fn create_starmap_edge(
     label: &str,
 ) -> String {
     let now = now_ms();
+    let from = StarMapTargetPathDto {
+        starmap_id: starmap_id.to_string(),
+        segments: vec![],
+        target: StarMapTargetDetailDto {
+            kind: "node".to_string(),
+            node_id: Some(from_node_id.to_string()),
+            ..Default::default()
+        },
+    };
+    let to = StarMapTargetPathDto {
+        starmap_id: starmap_id.to_string(),
+        segments: vec![],
+        target: StarMapTargetDetailDto {
+            kind: "node".to_string(),
+            node_id: Some(to_node_id.to_string()),
+            ..Default::default()
+        },
+    };
     let edge = StarMapEdgeDto {
         id: format!("e_{}", uuid::Uuid::new_v4()),
-        from: Some(from_node_id.to_string()),
-        to: Some(to_node_id.to_string()),
+        from,
+        to,
         kind: parse_edge_kind(kind),
         label: if label.is_empty() {
             None
@@ -166,12 +175,6 @@ pub fn create_starmap_edge(
             Some(label.to_string())
         },
         payload: None,
-        from_target: None,
-        to_target: None,
-        from_endpoint: None,
-        to_endpoint: None,
-        from_endpoint_path: None,
-        to_endpoint_path: None,
         created_at: now,
         updated_at: now,
     };
@@ -222,13 +225,11 @@ pub fn unbind_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.unbind_starmap_from_project(starmap_id))
 }
 
-pub fn compute_edge_renders_json(edges_json: &str, nodes_json: &str) -> String {
-    let edges: Vec<writer_core::starmap::render::EdgeInput> = match serde_json::from_str(edges_json)
-    {
-        Ok(v) => v,
-        Err(e) => return envelope_err_str(&format!("Invalid edges JSON: {}", e)),
-    };
-
+pub fn compute_edge_renders_json(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    nodes_json: &str,
+) -> String {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct NodePos {
@@ -244,17 +245,44 @@ pub fn compute_edge_renders_json(edges_json: &str, nodes_json: &str) -> String {
         Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
     };
 
-    let centers: std::collections::HashMap<String, (f32, f32)> = nodes
+    let layout_nodes: Vec<StarMapLayoutNodeDto> = nodes
         .into_iter()
-        .map(|n| (n.id, (n.x + n.width / 2.0, n.y + n.height / 2.0)))
+        .map(|n| StarMapLayoutNodeDto {
+            node_id: n.id,
+            x: n.x,
+            y: n.y,
+            width: n.width,
+            height: n.height,
+            radius: 0.0,
+            collapsed: false,
+            z_index: 0,
+            scale: 1.0,
+            depth: 0.0,
+            focus_weight: 1.0,
+            orbit_group: None,
+        })
         .collect();
 
-    let renders = writer_core::starmap::render::compute_edge_renders(
-        &edges,
-        &centers,
-        &writer_core::starmap::render::EdgeRenderParams::default(),
-    );
-    envelope_ok(renders)
+    let layout = StarMapLayoutDto {
+        kind: StarMapLayoutKindDto::Freeform,
+        nodes: layout_nodes,
+    };
+
+    let graph = match api.get_starmap_graph(starmap_id) {
+        Ok(g) => g,
+        Err(e) => return envelope_err_str(&e.to_string()),
+    };
+
+    match api.compute_starmap_edge_renders(graph, layout) {
+        Ok(batch) => {
+            log::debug!(
+                "compute_starmap_edge_renders diagnostics: {:?}",
+                batch.diagnostics
+            );
+            envelope_ok(batch.renders)
+        }
+        Err(e) => envelope_err_str(&e.to_string()),
+    }
 }
 
 pub fn hit_test_edge_renders_json(renders_json: &str, x: f32, y: f32) -> String {

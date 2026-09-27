@@ -6,7 +6,7 @@ import com.xiwei.sujian.feature.starmap.data.StarMapSnapshotCache
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
-import uniffi.writer_core.StarMapEdgeRenderDto
+import uniffi.writer_core.StarMapEdgeRenderBatchDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
@@ -92,7 +92,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     override fun computeStarMapEdgeRenders(
         graph: StarMapGraphDto,
         layout: StarMapLayoutDto,
-    ): BridgeResult<List<StarMapEdgeRenderDto>> =
+    ): BridgeResult<StarMapEdgeRenderBatchDto> =
         holder.wrapResult {
             holder.service.computeStarmapEdgeRenders(graph, layout)
         }

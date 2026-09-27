@@ -94,7 +94,8 @@ QtObject {
         var graphEdges = graphData && graphData.edges ? graphData.edges : [];
         for (var j = 0; j < graphEdges.length; j++) {
             var ge = graphEdges[j];
-            newEdges.push({ id: ge.id, from: ge.from, to: ge.to, kind: ge.kind, label: ge.label, isSelected: false });
+            // from/to 现在是 StarMapTargetPathDto 路径对象，保留完整路径供 Core 统一解析。
+            newEdges.push({ id: ge.id, fromPath: ge.from, toPath: ge.to, kind: ge.kind, label: ge.label, isSelected: false });
         }
         edgesModel = newEdges;
 
@@ -300,17 +301,12 @@ QtObject {
 
     function computeEdgeRenders() {
         if (!ensureBackend()) return;
-        var edgeInputs = [];
-        for (var i = 0; i < edgesModel.length; i++) {
-            var e = edgesModel[i];
-            edgeInputs.push({ id: e.id, from: e.from, to: e.to });
-        }
         var nodePos = [];
         for (var j = 0; j < nodesModel.length; j++) {
             var n = nodesModel[j];
             nodePos.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
         }
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders_json(JSON.stringify(edgeInputs), JSON.stringify(nodePos)), "");
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders_json(starmapId, JSON.stringify(nodePos)), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }
@@ -327,6 +323,15 @@ QtObject {
             }
         }
         return null;
+    }
+
+    // 从 StarMapTargetPathDto 路径对象中提取本图节点 ID。
+    // 仅当 target.type === "node" 且 segments 为空（即直接指向本图节点）时返回 nodeId，否则 null。
+    function localNodeIdFromPath(path) {
+        if (!path || !path.target) return null;
+        if (path.target.type !== "node") return null;
+        if (path.segments && path.segments.length > 0) return null;
+        return path.target.nodeId || null;
     }
 
     function invalidateEdgeRenders() { edgeRenders = []; }

@@ -657,7 +657,6 @@ pub(crate) fn build_cluster_reflow_slices(
         // 不再给 old/new 各自独立发 group_id（那会导致 crossfade_pairs 永远配不上，
         // 所有 CrossFade units 掉进"未配对独立处理"路径，出现只续一边/只删一边）。
         let group_id = next_crossfade_group_id;
-        next_crossfade_group_id += 1;
         for &oi in &unmatched_old {
             let oref = &old_refs[oi];
             let old_line = &old_snapshot.line_snapshots[oref.line_idx];
@@ -897,7 +896,6 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                             let new_doc = new_line.source_rect_to_document_rect(&new_sr);
                             let new_doc_for_hide = new_doc.clone();
                             let group_id = next_crossfade_group_id;
-                            next_crossfade_group_id += 1;
                             let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                                 key,
                                 new_line.id,
