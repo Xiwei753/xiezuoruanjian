@@ -52,6 +52,17 @@ impl super::WriterAppService {
         Ok(())
     }
 
+    /// 查询进程级 secrets override 是否已设置。
+    ///
+    /// 供 FFI 层 `run_sync_op` 收口测试验证 override 生命周期：一次同步
+    /// 操作结束后 override 必须被清除，不能跨操作缓存陈旧 Token
+    /// （Issue #780 评论 5854433590）。ffi 模块仅在 `harmony-ffi` feature
+    /// 下编译，故此查询方法亦仅在该 feature 的测试构建中存在。
+    #[cfg(all(test, feature = "harmony-ffi"))]
+    pub(crate) fn has_secrets_override(&self) -> bool {
+        self.api.has_secrets_override()
+    }
+
     /** 按 generation 保存凭据到安全存储。 */
     pub fn save_sync_secrets_for_generation(
         &self,
