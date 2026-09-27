@@ -4,7 +4,7 @@ import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, Proje
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from './dto/StarMapDtos'
-import { SyncConfig, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
+import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 
 export interface IWriterCoreBridge {
   // App State 查询
@@ -66,6 +66,8 @@ export interface IWriterCoreBridge {
   // 一个全局 SyncConfig + 一份全局凭据，App target + 所有 Project target 一次同步。
   loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
   saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
+  loadSyncSecrets(): Promise<ResultEnvelope<SyncSecrets>>
+  saveSyncSecrets(secrets: SyncSecrets): Promise<ResultEnvelope<boolean>>
   syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>>
   performSync(): Promise<ResultEnvelope<FullSyncResult>>
   syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>>

@@ -15,7 +15,7 @@
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind, StarMapEdgeAnchorDiagnostic, StarMapEdgeRenderBatch, EdgeAnchorDiagnosticReason } from '../dto/StarMapDtos'
-import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig } from '../dto/SyncDtos'
+import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics } from '../dto/PlatformDtos'
 
@@ -1471,6 +1471,29 @@ export function decodeProviderConfig(data: Object): DecodeResult<ProviderConfig>
   const transport: string | null = reqStr(data, 'transport')
   if (transport === null) { return err<ProviderConfig>('ProviderConfig.transport missing or not string') }
   return ok<ProviderConfig>({ type: type, remote_url: remoteUrl, branch: branch, username: username, transport: transport })
+}
+
+export function decodeProviderSecrets(data: Object): DecodeResult<ProviderSecrets> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<ProviderSecrets>('ProviderSecrets: expected object')
+  }
+  const type: string | null = reqStr(data, 'type')
+  if (type === null) { return err<ProviderSecrets>('ProviderSecrets.type missing or not string') }
+  if (type !== 'github') { return err<ProviderSecrets>(`ProviderSecrets.type: expected "github", got "${type}"`) }
+  const token: string | null = reqStr(data, 'token')
+  if (token === null) { return err<ProviderSecrets>('ProviderSecrets.token missing or not string') }
+  return ok<ProviderSecrets>({ type: type, token: token })
+}
+
+export function decodeSyncSecrets(data: Object): DecodeResult<SyncSecrets> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SyncSecrets>('SyncSecrets: expected object')
+  }
+  const providerSecretsR = decodeOptional<ProviderSecrets>(data, 'providerSecrets', decodeProviderSecrets)
+  if (!providerSecretsR.ok || providerSecretsR.value === undefined) {
+    return err<SyncSecrets>(`providerSecrets: ${providerSecretsR.error ?? 'decode failed'}`)
+  }
+  return ok<SyncSecrets>({ providerSecrets: providerSecretsR.value })
 }
 
 export function decodeSyncConfig(data: Object): DecodeResult<SyncConfig> {

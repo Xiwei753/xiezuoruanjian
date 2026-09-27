@@ -57,6 +57,48 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_sync_secrets() -> *mut c_char {
+    match with_app_service(|svc| {
+        let dto: crate::api::SyncSecretsDto =
+            svc.load_sync_secrets().map_err(|e| format!("{}", e))?;
+        Ok(dto)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
+    }
+}
+
+/// # Safety
+/// `secrets_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_sync_secrets(
+    secrets_json: *const c_char,
+) -> *mut c_char {
+    let json_str = match c_str_to_rust(secrets_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid secrets_json: error {}", e),
+            )
+        }
+    };
+    match with_app_service(|svc| {
+        let dto: crate::api::SyncSecretsDto =
+            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+        svc.save_sync_secrets(dto)
+            .map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_INVALID", &e),
+    }
+}
+
 /// 全量同步 dry-run C ABI。
 ///
 ///   改走 `with_app_service` 唯一 pipeline，

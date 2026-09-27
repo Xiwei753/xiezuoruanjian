@@ -5,7 +5,7 @@ import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, Proje
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from './dto/StarMapDtos'
-import { SyncConfig, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
+import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
 import { NativeProjectBridge } from './native/NativeProjectBridge'
@@ -282,6 +282,14 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     return this.syncBridge.saveSyncConfig(config)
+  }
+
+  async loadSyncSecrets(): Promise<ResultEnvelope<SyncSecrets>> {
+    return this.syncBridge.loadSyncSecrets()
+  }
+
+  async saveSyncSecrets(secrets: SyncSecrets): Promise<ResultEnvelope<boolean>> {
+    return this.syncBridge.saveSyncSecrets(secrets)
   }
 
   async syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {

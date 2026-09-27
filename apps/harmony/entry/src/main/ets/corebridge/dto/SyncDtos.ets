@@ -133,3 +133,17 @@ export interface SyncPlan {
 export interface FullSyncDiagnosticsResult {
   diagnostics: SyncDiagnosticsResult
 }
+
+// ── Secrets DTO（Issue #780） ──
+// ProviderSecrets 是 internally-tagged enum（`#[serde(tag = "type")]`），
+// 当前唯一变体 "github"，字段保持 Rust 字段名（token）。
+// SyncSecrets.providerSecrets 对应 Core 侧 `Option<ProviderSecretsDto>`，nullable。
+
+export interface ProviderSecrets {
+  type: string // "github"
+  token: string
+}
+
+export interface SyncSecrets {
+  providerSecrets: ProviderSecrets | null
+}

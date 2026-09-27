@@ -11,7 +11,7 @@ import pasteboard from '@ohos.pasteboard'
 import { AppStorageV2 } from '@kit.ArkUI'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
-import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
+import { SyncConfig, SyncDiagnosticsResult, SyncSecrets, ProviderSecrets, ProviderConfig } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { getAppContext } from '../../../app/AppContext'
@@ -120,6 +120,9 @@ export class SettingsViewModel {
   @Trace paletteRecords: ThemePaletteRecordDto[] = []
   @Trace builtinThemes: BuiltinThemeDto[] = []
   @Trace syncConfig: SyncConfig | null = null
+  @Trace syncToken: string = ''
+  @Trace syncRemoteUrl: string = ''
+  @Trace syncBranch: string = ''
   @Trace isLoading: boolean = true
   @Trace isSaving: boolean = false
   @Trace isSyncing: boolean = false
@@ -190,7 +193,15 @@ export class SettingsViewModel {
 
       if (syncConfigResult.success && syncConfigResult.data) {
         this.syncConfig = syncConfigResult.data
+        // 回填 UI 可观察字段
+        if (syncConfigResult.data.providerConfig) {
+          this.syncRemoteUrl = syncConfigResult.data.providerConfig.remote_url
+          this.syncBranch = syncConfigResult.data.providerConfig.branch
+        }
       }
+
+      // 加载同步密钥，回填 token
+      await this.loadSyncSecrets()
 
       // 加载设置后，把当前诊断配置同步一次到底层 runtime。
       try {
@@ -359,6 +370,127 @@ export class SettingsViewModel {
 
   updateSettings(updater: (settings: LocalSettings) => LocalSettings): void {
     this.settings = updater(this.settings)
+  }
+
+  // ── 同步配置更新与保存 ──
+
+  /**
+   * 更新 syncConfig 并立即保存到 Core。
+   * 保证 activeProvider='github_api'，providerConfig.type='github'，transport='https_token'。
+   */
+  updateSyncConfig(config: SyncConfig): void {
+    this.syncConfig = config
+    this.saveSyncConfig()
+  }
+
+  /**
+   * 更新远程仓库地址，修改 providerConfig.remote_url，然后保存。
+   */
+  updateSyncRemoteUrl(value: string): void {
+    this.syncRemoteUrl = value
+    if (this.syncConfig) {
+      const providerConfig: ProviderConfig = this.syncConfig.providerConfig ?? {
+        type: 'github',
+        remote_url: value,
+        branch: this.syncBranch,
+        username: '',
+        transport: 'https_token'
+      }
+      providerConfig.remote_url = value
+      const newConfig: SyncConfig = {
+        enabled: this.syncConfig.enabled,
+        activeProvider: 'github_api',
+        providerConfig: providerConfig,
+        autoSync: this.syncConfig.autoSync,
+        syncIntervalSeconds: this.syncConfig.syncIntervalSeconds,
+        hasNetworkPermission: this.syncConfig.hasNetworkPermission,
+        hasNetworkStatePermission: this.syncConfig.hasNetworkStatePermission
+      }
+      this.syncConfig = newConfig
+      this.saveSyncConfig()
+    }
+  }
+
+  /**
+   * 更新分支，修改 providerConfig.branch，然后保存。
+   */
+  updateSyncBranch(value: string): void {
+    this.syncBranch = value
+    if (this.syncConfig) {
+      const providerConfig: ProviderConfig = this.syncConfig.providerConfig ?? {
+        type: 'github',
+        remote_url: this.syncRemoteUrl,
+        branch: value,
+        username: '',
+        transport: 'https_token'
+      }
+      providerConfig.branch = value
+      const newConfig: SyncConfig = {
+        enabled: this.syncConfig.enabled,
+        activeProvider: 'github_api',
+        providerConfig: providerConfig,
+        autoSync: this.syncConfig.autoSync,
+        syncIntervalSeconds: this.syncConfig.syncIntervalSeconds,
+        hasNetworkPermission: this.syncConfig.hasNetworkPermission,
+        hasNetworkStatePermission: this.syncConfig.hasNetworkStatePermission
+      }
+      this.syncConfig = newConfig
+      this.saveSyncConfig()
+    }
+  }
+
+  /**
+   * 更新 Token，保存到 SyncSecrets（不放进 SyncConfig）。
+   */
+  updateSyncToken(value: string): void {
+    this.syncToken = value
+    this.saveSyncSecrets()
+  }
+
+  /**
+   * 保存同步配置到 Core。
+   */
+  async saveSyncConfig(): Promise<void> {
+    if (!this.syncConfig) {
+      return
+    }
+    try {
+      await this.bridge.saveSyncConfig(this.syncConfig)
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to save sync config: ${err}`)
+    }
+  }
+
+  /**
+   * 加载同步密钥，从结果中提取 token 回填到 syncToken。
+   */
+  async loadSyncSecrets(): Promise<void> {
+    try {
+      const result = await this.bridge.loadSyncSecrets()
+      if (result.success && result.data && result.data.providerSecrets) {
+        this.syncToken = result.data.providerSecrets.token
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to load sync secrets: ${err}`)
+    }
+  }
+
+  /**
+   * 构造 SyncSecrets 对象并保存到 Core。
+   */
+  async saveSyncSecrets(): Promise<void> {
+    try {
+      const providerSecrets: ProviderSecrets = {
+        type: 'github',
+        token: this.syncToken
+      }
+      const secrets: SyncSecrets = {
+        providerSecrets: providerSecrets
+      }
+      await this.bridge.saveSyncSecrets(secrets)
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to save sync secrets: ${err}`)
+    }
   }
 
   // ── 诊断导出 ──

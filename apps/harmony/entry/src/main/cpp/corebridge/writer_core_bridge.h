@@ -111,6 +111,8 @@ char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title)
 // app-level sync 双套 C ABI 已删除，对应声明不再保留。
 char*  writer_core_load_sync_config(void);
 char*  writer_core_save_sync_config(const char* config_json);
+char*  writer_core_load_sync_secrets(void);
+char*  writer_core_save_sync_secrets(const char* secrets_json);
 char*  writer_core_full_sync_dry_run(void);
 char*  writer_core_full_sync_diagnostics(void);
 char*  writer_core_perform_full_sync(void);

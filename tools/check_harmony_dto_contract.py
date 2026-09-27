@@ -157,6 +157,8 @@ DECODER_MAP: dict[str, str] = {
     "decodeStarMapMotionPolicy": "StarMapMotionPolicyDto",
     "decodeStarMapMeta": "StarMapMetaDto",
     "decodeProviderConfig": "ProviderConfigDto",
+    "decodeProviderSecrets": "ProviderSecretsDto",
+    "decodeSyncSecrets": "SyncSecretsDto",
     "decodeSyncConfig": "SyncConfigDto",
     "decodeSyncState": "SyncStateDto",
     "decodeSyncConflict": "SyncConflictDto",
@@ -310,20 +312,42 @@ def parse_rust_dtos_from_text(path: Path, text: str) -> dict[str, RustDto]:
                 if is_enum:
                     variant = _VARIANT_FIELDS_RE.match(line)
                     if variant:
-                        idx += 1
-                        while idx < len(lines) and lines[idx].strip() != "},":
-                            field_match = _FIELD_RE.match(lines[idx])
-                            if field_match:
-                                fname = field_match.group("name")
-                                dto.fields[fname] = RustField(
-                                    wire_name=fname,
-                                    rust_type=field_match.group("ty").rstrip(","),
-                                    nullable="Option<" in field_match.group("ty"),
-                                    may_be_omitted=not field_match.group("ty")
-                                    .strip()
-                                    .startswith("Vec<"),
-                                )
+                        # Check for single-line variant: `Variant { field: Type },`
+                        rest_of_line = line[variant.end():]
+                        if '}' in rest_of_line:
+                            # Single-line variant — parse fields from same line
+                            inner = rest_of_line[:rest_of_line.index('}')].strip()
+                            if inner:
+                                for field_part in inner.split(','):
+                                    field_part = field_part.strip()
+                                    if field_part:
+                                        fm = _FIELD_RE.match(field_part)
+                                        if fm:
+                                            fname = fm.group("name")
+                                            dto.fields[fname] = RustField(
+                                                wire_name=fname,
+                                                rust_type=fm.group("ty").rstrip(","),
+                                                nullable="Option<" in fm.group("ty"),
+                                                may_be_omitted=not fm.group("ty")
+                                                .strip()
+                                                .startswith("Vec<"),
+                                            )
+                        else:
+                            # Multi-line variant
                             idx += 1
+                            while idx < len(lines) and lines[idx].strip() not in ("},", "}"):
+                                field_match = _FIELD_RE.match(lines[idx])
+                                if field_match:
+                                    fname = field_match.group("name")
+                                    dto.fields[fname] = RustField(
+                                        wire_name=fname,
+                                        rust_type=field_match.group("ty").rstrip(","),
+                                        nullable="Option<" in field_match.group("ty"),
+                                        may_be_omitted=not field_match.group("ty")
+                                        .strip()
+                                        .startswith("Vec<"),
+                                    )
+                                idx += 1
                         variant_attrs = []
                     idx += 1
                     continue

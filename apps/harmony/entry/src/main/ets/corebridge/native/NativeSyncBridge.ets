@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncState } from '../dto/SyncDtos'
+import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult } from '../codec/CoreWireDecoders'
+import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
@@ -28,6 +28,20 @@ export class NativeSyncBridge {
   async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config))
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  async loadSyncSecrets(): Promise<ResultEnvelope<SyncSecrets>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeLoadSyncSecrets()
+      return this.core.decodeEnvelope<SyncSecrets>(jsonStr, decodeSyncSecrets)
+    } catch (e) { return nativeError<SyncSecrets>(e) }
+  }
+
+  async saveSyncSecrets(secrets: SyncSecrets): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeSaveSyncSecrets(JSON.stringify(secrets))
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }

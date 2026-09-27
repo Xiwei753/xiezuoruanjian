@@ -337,7 +337,7 @@ export struct SettingsScreen {
         }
       }
       .width('100%')
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 8 })
+      .padding({ top: 16, bottom: 8 })
 
       // 搜索框（窄屏搜索过滤设置项）
       Row() {
@@ -346,7 +346,7 @@ export struct SettingsScreen {
           .height(20)
           .margin({ left: 12 })
 
-        TextInput({ placeholder: $r('app.string.search_settings'), text: this.searchText })
+        TextInput({ placeholder: '', text: this.searchText })
           .layoutWeight(1)
           .height(36)
           .fontSize(14)
@@ -358,11 +358,12 @@ export struct SettingsScreen {
       }
       .width('100%')
       .height(40)
-      .margin({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 8 })
+      .margin({ bottom: 8 })
       .backgroundColor($r('sys.color.comp_background_gray'))
       .borderRadius(DesignTokens.radiusSm)
     }
     .width('100%')
+    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding })
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
   }
 
@@ -822,7 +823,7 @@ export struct SettingsScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // Sync enabled
+      // 启用同步
       Row() {
         Text($r('app.string.enable_sync'))
           .fontSize(16)
@@ -833,14 +834,14 @@ export struct SettingsScreen {
             if (this.viewModel.syncConfig) {
               const newConfig: SyncConfig = {
                 enabled: isOn,
-                activeProvider: this.viewModel.syncConfig.activeProvider,
+                activeProvider: 'github_api',
                 providerConfig: this.viewModel.syncConfig.providerConfig,
                 autoSync: this.viewModel.syncConfig.autoSync,
                 syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
                 hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
                 hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
               }
-              this.viewModel.syncConfig = newConfig
+              this.viewModel.updateSyncConfig(newConfig)
             }
           })
       }
@@ -849,35 +850,7 @@ export struct SettingsScreen {
 
       // Sync 详细配置（仅在同步开启时显示）
       if (this.viewModel.syncConfig?.enabled) {
-        // Sync backend type
-        Row() {
-          Text($r('app.string.sync_method'))
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Select(this.getSyncProviderOptions())
-            .selected(this.getSyncProviderIndex())
-            .value(this.getSyncProviderName())
-            .onSelect((index: number) => {
-              if (this.viewModel.syncConfig) {
-                const providers = ['github', 'gitlab', 'gitea', 'custom']
-                const newConfig: SyncConfig = {
-                  enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: providers[index],
-                  providerConfig: this.viewModel.syncConfig.providerConfig,
-                  autoSync: this.viewModel.syncConfig.autoSync,
-                  syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
-                  hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
-                  hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
-                }
-                this.viewModel.syncConfig = newConfig
-              }
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // Auto sync
+        // 自动同步
         Row() {
           Text($r('app.string.auto_sync'))
             .fontSize(16)
@@ -888,21 +861,74 @@ export struct SettingsScreen {
               if (this.viewModel.syncConfig) {
                 const newConfig: SyncConfig = {
                   enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: this.viewModel.syncConfig.activeProvider,
+                  activeProvider: 'github_api',
                   providerConfig: this.viewModel.syncConfig.providerConfig,
                   autoSync: isOn,
                   syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
                   hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
                   hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
                 }
-                this.viewModel.syncConfig = newConfig
+                this.viewModel.updateSyncConfig(newConfig)
               }
             })
         }
         .width('100%')
         .margin({ bottom: 16 })
 
-        // Sync interval
+        // GitHub 远程仓库地址
+        Column() {
+          Text($r('app.string.github_repo'))
+            .fontSize(16)
+            .margin({ bottom: 8 })
+
+          TextInput({ text: this.viewModel.syncRemoteUrl })
+            .width('100%')
+            .height(40)
+            .fontSize(14)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncRemoteUrl(value)
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+
+        // 分支
+        Column() {
+          Text($r('app.string.sync_branch'))
+            .fontSize(16)
+            .margin({ bottom: 8 })
+
+          TextInput({ text: this.viewModel.syncBranch })
+            .width('100%')
+            .height(40)
+            .fontSize(14)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncBranch(value)
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+
+        // HTTPS Token
+        Column() {
+          Text($r('app.string.https_token'))
+            .fontSize(16)
+            .margin({ bottom: 8 })
+
+          TextInput({ text: this.viewModel.syncToken })
+            .width('100%')
+            .height(40)
+            .fontSize(14)
+            .type(InputType.Password)
+            .showPasswordIcon(true)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncToken(value)
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+
+        // 同步间隔
         Row() {
           Text($r('app.string.sync_interval'))
             .fontSize(16)
@@ -924,14 +950,14 @@ export struct SettingsScreen {
               if (this.viewModel.syncConfig) {
                 const newConfig: SyncConfig = {
                   enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: this.viewModel.syncConfig.activeProvider,
+                  activeProvider: 'github_api',
                   providerConfig: this.viewModel.syncConfig.providerConfig,
                   autoSync: this.viewModel.syncConfig.autoSync,
                   syncIntervalSeconds: value,
                   hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
                   hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
                 }
-                this.viewModel.syncConfig = newConfig
+                this.viewModel.updateSyncConfig(newConfig)
               }
             })
         }
@@ -1448,7 +1474,7 @@ export struct SettingsScreen {
         .margin({ bottom: 12 })
       }
 
-      // Sync enabled
+      // 启用同步
       Row() {
         Text($r('app.string.enable_sync'))
           .fontSize(16)
@@ -1459,14 +1485,14 @@ export struct SettingsScreen {
             if (this.viewModel.syncConfig) {
               const newConfig: SyncConfig = {
                 enabled: isOn,
-                activeProvider: this.viewModel.syncConfig.activeProvider,
+                activeProvider: 'github_api',
                 providerConfig: this.viewModel.syncConfig.providerConfig,
                 autoSync: this.viewModel.syncConfig.autoSync,
                 syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
                 hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
                 hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
               }
-              this.viewModel.syncConfig = newConfig
+              this.viewModel.updateSyncConfig(newConfig)
             }
           })
       }
@@ -1475,35 +1501,7 @@ export struct SettingsScreen {
 
       // Sync 详细配置（仅在同步开启时显示）
       if (this.viewModel.syncConfig?.enabled) {
-        // Sync backend type
-        Row() {
-          Text($r('app.string.sync_method'))
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Select(this.getSyncProviderOptions())
-            .selected(this.getSyncProviderIndex())
-            .value(this.getSyncProviderName())
-            .onSelect((index: number) => {
-              if (this.viewModel.syncConfig) {
-                const providers = ['github', 'gitlab', 'gitea', 'custom']
-                const newConfig: SyncConfig = {
-                  enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: providers[index],
-                  providerConfig: this.viewModel.syncConfig.providerConfig,
-                  autoSync: this.viewModel.syncConfig.autoSync,
-                  syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
-                  hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
-                  hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
-                }
-                this.viewModel.syncConfig = newConfig
-              }
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // Auto sync
+        // 自动同步
         Row() {
           Text($r('app.string.auto_sync'))
             .fontSize(16)
@@ -1514,21 +1512,74 @@ export struct SettingsScreen {
               if (this.viewModel.syncConfig) {
                 const newConfig: SyncConfig = {
                   enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: this.viewModel.syncConfig.activeProvider,
+                  activeProvider: 'github_api',
                   providerConfig: this.viewModel.syncConfig.providerConfig,
                   autoSync: isOn,
                   syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
                   hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
                   hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
                 }
-                this.viewModel.syncConfig = newConfig
+                this.viewModel.updateSyncConfig(newConfig)
               }
             })
         }
         .width('100%')
         .margin({ bottom: 16 })
 
-        // Sync interval
+        // GitHub 远程仓库地址
+        Column() {
+          Text($r('app.string.github_repo'))
+            .fontSize(16)
+            .margin({ bottom: 8 })
+
+          TextInput({ text: this.viewModel.syncRemoteUrl })
+            .width('100%')
+            .height(40)
+            .fontSize(14)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncRemoteUrl(value)
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+
+        // 分支
+        Column() {
+          Text($r('app.string.sync_branch'))
+            .fontSize(16)
+            .margin({ bottom: 8 })
+
+          TextInput({ text: this.viewModel.syncBranch })
+            .width('100%')
+            .height(40)
+            .fontSize(14)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncBranch(value)
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+
+        // HTTPS Token
+        Column() {
+          Text($r('app.string.https_token'))
+            .fontSize(16)
+            .margin({ bottom: 8 })
+
+          TextInput({ text: this.viewModel.syncToken })
+            .width('100%')
+            .height(40)
+            .fontSize(14)
+            .type(InputType.Password)
+            .showPasswordIcon(true)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncToken(value)
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+
+        // 同步间隔
         Row() {
           Text($r('app.string.sync_interval'))
             .fontSize(16)
@@ -1550,14 +1601,14 @@ export struct SettingsScreen {
               if (this.viewModel.syncConfig) {
                 const newConfig: SyncConfig = {
                   enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: this.viewModel.syncConfig.activeProvider,
+                  activeProvider: 'github_api',
                   providerConfig: this.viewModel.syncConfig.providerConfig,
                   autoSync: this.viewModel.syncConfig.autoSync,
                   syncIntervalSeconds: value,
                   hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
                   hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
                 }
-                this.viewModel.syncConfig = newConfig
+                this.viewModel.updateSyncConfig(newConfig)
               }
             })
         }
@@ -1929,8 +1980,10 @@ export struct SettingsScreen {
       case 'sync':
         return [
           ctx.resourceManager.getStringSync($r('app.string.enable_sync').id),
-          ctx.resourceManager.getStringSync($r('app.string.sync_method').id),
           ctx.resourceManager.getStringSync($r('app.string.auto_sync').id),
+          ctx.resourceManager.getStringSync($r('app.string.github_repo').id),
+          ctx.resourceManager.getStringSync($r('app.string.sync_branch').id),
+          ctx.resourceManager.getStringSync($r('app.string.https_token').id),
           ctx.resourceManager.getStringSync($r('app.string.sync_interval').id),
           ctx.resourceManager.getStringSync($r('app.string.diagnose').id)
         ]
@@ -2008,15 +2061,6 @@ export struct SettingsScreen {
     })
   }
 
-  getSyncProviderOptions(): SettingsSelectOption[] {
-    return [
-      { value: 'GitHub', icon: '' },
-      { value: 'GitLab', icon: '' },
-      { value: 'Gitea', icon: '' },
-      { value: getContext(this).resourceManager.getStringSync($r('app.string.custom').id), icon: '' }
-    ]
-  }
-
   getThemeIndex(): number {
     const mode = this.viewModel.settings.appearanceMode || this.viewModel.settings.themeMode || 'system'
     const themes = ['system', 'light', 'dark']
@@ -2074,18 +2118,5 @@ export struct SettingsScreen {
       return `${record.source_device_class} · ${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
     }
     return ''
-  }
-
-  getSyncProviderIndex(): number {
-    const providers: string[] = ['github', 'gitlab', 'gitea', 'custom']
-    return providers.indexOf(this.viewModel.syncConfig?.activeProvider || 'github')
-  }
-
-  getSyncProviderName(): string {
-    const p: string = this.viewModel.syncConfig?.activeProvider || 'github'
-    if (p === 'github') return 'GitHub'
-    if (p === 'gitlab') return 'GitLab'
-    if (p === 'gitea') return 'Gitea'
-    return getContext(this).resourceManager.getStringSync($r('app.string.custom').id)
   }
 }
