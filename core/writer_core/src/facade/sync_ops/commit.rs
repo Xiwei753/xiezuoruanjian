@@ -31,6 +31,9 @@ impl crate::facade::WriterCore {
         let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
         // generation GC 失败 → 聚合进 FullSyncResult。
+        // Issue #779 评论 5853718466：生产路径 `perform_full_sync_with_provider` 已传
+        // `None`，此分支不会触发。保留作为防御性：万一有其他调用方传 `Some`，仍按
+        // 原语义升级为 RecoverableError，避免静默吞掉 GC 失败。
         if let Some(Err(gc_err)) = &generation_gc_result {
             let gc_msg = format!("generation_gc failed: {gc_err}");
             log::warn!("[sync] finalize_full_sync: {gc_msg}");
@@ -181,24 +184,17 @@ impl crate::facade::WriterCore {
             }
         }
 
-        let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
+        let result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
-        // generation GC 失败 → 聚合进 FullSyncResult。
-        // GC 出错是 RecoverableError（下一轮 full-sync 自然再次执行 GC）。
-        // 只在当前 overall_status 是成功类时升级，避免覆盖更严重的 FatalError/Conflict。
+        // generation GC 失败 → 只 log warn，不升级 overall_status。
+        // Issue #779 评论 5853718466：GC 失败是维护性错误，下一轮同步自然再次执行
+        // GC，不能把正文同步的成功终态重新变成失败。生产路径已不再在同步阻塞路径
+        // 内执行 GC（见 `perform_full_sync_with_provider`），本入口（`commit_full_sync`）
+        // 仅供 #644 staging commit 语义测试使用，同样不应因 GC 失败升级状态。
         if let Some(Err(gc_err)) = &transfer_result.generation_gc_result {
-            let gc_msg = format!("generation_gc failed: {gc_err}");
-            log::warn!("[sync] commit_full_sync: {gc_msg}");
-            if matches!(
-                result.overall_status,
-                crate::sync::SyncStatus::Success
-                    | crate::sync::SyncStatus::NoChanges
-                    | crate::sync::SyncStatus::LatestWinsApplied
-            ) {
-                result.overall_status =
-                    crate::sync::SyncStatus::RecoverableError("generation_gc_failed".to_string());
-                result.error = Some(gc_msg);
-            }
+            log::warn!(
+                "[sync] commit_full_sync: generation_gc failed (maintenance only, not escalating): {gc_err}"
+            );
         }
 
         //   deleted target 远端清理成功后，

@@ -130,6 +130,11 @@ impl AppBackend {
         );
 
         self.current_sync_status = outcome.sync_status.clone();
+        // Issue #779 评论 5853718466：Core 返回终态后立即结束同步 operation；
+        // generation GC 作为 Core 内部独立 maintenance 异步执行（spawn 后台线程，
+        // fire-and-forget），不占用本 operation 的 busy 生命周期。Core 修改后
+        // perform_full_sync 拿到终态即返回，outcome 及时到达，此处立即清
+        // current_sync_in_progress，UI 不会因 GC 慢而一直显示 syncing。
         self.current_sync_in_progress = false;
         // 同步结束：丢弃进度 sink，后续诊断导出不再附带 target 进度。
         self.current_sync_progress = None;

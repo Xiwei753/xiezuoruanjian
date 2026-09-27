@@ -492,17 +492,12 @@ fn sink_and_callback_cooperate_on_same_sync_chain() {
         "p2 callback 触发时 finished_targets 应为 2"
     );
 
-    // ---- 场景 5：generation GC 切到真实 target（phase=generation_gc + project_id 非 None）----
-    let saw_generation_gc_with_target = observed_snapshots
-        .iter()
-        .any(|s| s.phase.as_deref() == Some("generation_gc") && s.project_id.is_some());
-    assert!(
-        saw_generation_gc_with_target,
-        "场景 5：sink 应在 generation GC 期间显示 phase=generation_gc 且指向真实 target\
-         （project_id 非 None），不应残留空 target。\n\
-         采到的 (phase, project_id) 序列：{:?}",
-        phase_trace
-    );
+    // ---- 场景 5：generation GC 已移出同步阻塞路径 ----
+    // Issue #779 评论 5853718466：generation GC 改为 perform_full_sync 拿到终态后
+    // spawn 的后台 maintenance 线程执行，不再在 perform_full_sync_with_provider 同步
+    // 路径内更新 sink。因此 sink 不会再观察到 phase=generation_gc，本场景不再适用。
+    // GC 行为由 generation.rs / issue_761 等测试覆盖（直接调 run_generation_gc 或
+    // 通过 run_transfer 兼容入口触发）。
 
     // ---- 场景 6：最终全局收口 ----
     let final_snap = sink.snapshot();
