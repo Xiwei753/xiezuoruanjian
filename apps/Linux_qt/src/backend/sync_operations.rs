@@ -165,12 +165,31 @@ impl AppBackend {
             SyncOutcomeEffect::StatusOnly
         };
 
-        // Issue #779 评论 5854082763：同步成功且没有排队的 manual sync 时，
-        // 启动 generation GC maintenance（独立 token，single-flight）。
-        // 有 manual_sync_pending 时先启动用户同步，不同时启动 GC —
-        // 下一轮同步完成后会自己启动 GC。
-        if sync_success && !self.manual_sync_pending {
-            self.start_gc_maintenance();
+        // Issue #779 评论 5854734343：GC 触发要看完整成功类终态，不仅字面上的 success，
+        // 还包括 no_changes / latest_wins_applied / branch_missing_recovered —
+        // 这些都是 Core aggregate_full_sync_result() 的成功类终态。LWW 正常覆盖时
+        // overall_status 就是 latest_wins_applied，无变化时是 no_changes，都应启动 GC。
+        // 注意：sync_success（用于 content_changed）保持原义 success|branch_missing_recovered，
+        // 不在此扩展，避免 no_changes 触发无意义的 content refresh。
+        let gc_success = matches!(
+            status_str,
+            "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
+        );
+        if gc_success && !self.manual_sync_pending {
+            if self.current_gc_maintenance_cancel_token.is_some() {
+                // 旧 GC 还没退干净（done callback 还没清 token），标记 pending，
+                // 等 done callback 清 token 后补启动。不直接丢，避免本轮 GC 永久跳过。
+                self.gc_maintenance_pending = true;
+                self.debug_log(
+                    "sync",
+                    "gc_maintenance_pending_set",
+                    "GC needed but previous GC token still present — deferring to pending",
+                );
+            } else {
+                // token 空闲，直接启动。清掉可能残留的 pending（本轮 GC 已启动）。
+                self.gc_maintenance_pending = false;
+                self.start_gc_maintenance();
+            }
         }
 
         // 当前同步任务真正结束并把 busy 清掉后，检查 manual_sync_pending。
@@ -257,6 +276,18 @@ impl AppBackend {
                         "gc_maintenance_done",
                         "generation GC maintenance completed",
                     );
+                    // Issue #779 评论 5854734343：done callback 清 token 后，如果 pending
+                    // 且当前没有用户同步在跑，补启动一次新的 maintenance。
+                    // still_same_workspace 已确保仍是同一 workspace，无需再校验。
+                    if this.gc_maintenance_pending && !this.current_sync_in_progress {
+                        this.gc_maintenance_pending = false;
+                        this.debug_log(
+                            "sync",
+                            "gc_maintenance_pending_triggered",
+                            "starting deferred GC maintenance after previous GC completed",
+                        );
+                        this.start_gc_maintenance();
+                    }
                 } else {
                     this.debug_log(
                         "sync",
@@ -788,6 +819,10 @@ impl AppBackend {
         // GC 线程的 done callback 会清。
         if let Some(gc_token) = self.current_gc_maintenance_cancel_token.as_ref() {
             gc_token.cancel();
+            // Issue #779 评论 5854734343：cancel 了正在跑的 GC，标记 pending，
+            // 确保本轮用户同步完成后能补启动一次 GC（不靠"下次用户再同步"兜底）。
+            // 不清 token — GC 线程的 done callback 会清，并在清后检查 pending 补启动。
+            self.gc_maintenance_pending = true;
             self.debug_log(
                 "sync",
                 "gc_maintenance_cancelled_for_user_sync",

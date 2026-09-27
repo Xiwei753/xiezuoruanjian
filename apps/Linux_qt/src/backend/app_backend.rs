@@ -350,6 +350,11 @@ pub struct AppBackend {
     /// - workspace reset 时 cancel 并清 None
     /// - GC 线程结束后通过 queued_callback 清 None
     current_gc_maintenance_cancel_token: Option<Arc<SyncCancellationToken>>,
+    /// Issue #779 评论 5854734343：GC maintenance pending 标志。
+    /// 当用户同步 cancel 了正在跑的 GC，或同步成功完成但旧 GC token 仍存在时，
+    /// 标记为 true。GC done callback 清 token 后若 pending 且无用户同步在跑，
+    /// 补启动一次新的 maintenance，避免本轮 GC 因上一条还没退出而被永久跳过。
+    gc_maintenance_pending: bool,
     current_save_status: String,
     current_word_count: i32,
     current_error_message: String,
@@ -774,6 +779,7 @@ pub use workspace_backend::WorkspaceBackend;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_bridge::SyncTaskOutcome;
     use tempfile::tempdir;
 
     #[test]

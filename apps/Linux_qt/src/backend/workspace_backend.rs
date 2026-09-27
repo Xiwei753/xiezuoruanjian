@@ -464,6 +464,8 @@ impl AppBackend {
         if let Some(gc_token) = self.current_gc_maintenance_cancel_token.take() {
             gc_token.cancel();
         }
+        // Issue #779 评论 5854734343：workspace reset 时清 GC pending。
+        self.gc_maintenance_pending = false;
         // b. 递增 workspace generation：使旧同步回调的 generation 校验不匹配而被丢弃。
         //    即使旧同步线程仍在运行，其回调进入 handle_sync_outcome 时会被 generation 拦截。
         self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
