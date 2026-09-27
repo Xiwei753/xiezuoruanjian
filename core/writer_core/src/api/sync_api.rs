@@ -801,6 +801,13 @@ impl WriterCoreApi {
     ///
     /// 内部：创建 provider → discover catalog → 对每个 project target 调 run_generation_gc。
     /// GC 失败只 log warn，不传播（下一轮自然再清）。
+    ///
+    /// Issue #779 评论 5854912227：maintenance 用 [`create_sync_provider_for_maintenance`]
+    /// 创建 provider，**不调用 `persist_full_sync_early_failure`**，不触碰磁盘
+    /// `FullSyncState`。generation GC 失败只能作为维护错误，不能把正文同步重新
+    /// 变成失败。后续 discover catalog 失败、`run_generation_gc` 失败、网络/认证/
+    /// 权限失败都只 log warn / 返回 maintenance 错误，不调任何
+    /// `persist_full_sync_*failure`。
     #[allow(clippy::excessive_nesting)]
     pub fn perform_generation_gc_maintenance(
         &self,
@@ -817,9 +824,11 @@ impl WriterCoreApi {
             }
         }
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
+        //   用无副作用 provider factory：transport 初始化失败只返回 Err，
+        // 不调 persist_full_sync_early_failure，不污染用户同步终态（Issue #779 评论 5854912227）。
         let provider = {
             let core = self.core_write();
-            core.create_sync_provider_for_plan(&sync_config, &secrets)?
+            core.create_sync_provider_for_maintenance(&sync_config, &secrets)?
         };
         let remote_catalog_snapshot =
             match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {

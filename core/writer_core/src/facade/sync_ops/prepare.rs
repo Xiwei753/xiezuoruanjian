@@ -150,10 +150,47 @@ impl crate::facade::WriterCore {
     ///
     /// transport 初始化失败时返回 Err（已持久化失败状态）。
     /// 根据 `config.active_provider` 选择对应的 Provider 实现。
+    ///
+    /// 这是**用户同步路径**的 provider factory：transport 初始化失败会通过
+    /// `persist_full_sync_early_failure` 把失败状态持久化到磁盘
+    /// `FullSyncState`（`"preflight"` 标记），符合用户同步语义。
+    ///
+    /// maintenance / GC 等不应触碰用户同步终态的路径应改用
+    /// [`create_sync_provider_for_maintenance`]。
     pub fn create_sync_provider_for_plan(
         &self,
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
+        self.create_sync_provider_inner(config, secrets, true)
+    }
+
+    /// generation GC maintenance 等维护路径的 provider factory。
+    ///
+    /// 与 [`create_sync_provider_for_plan`] 的区别：transport 初始化失败时**只返回
+    /// Err，不调用 `persist_full_sync_early_failure`**，不触碰磁盘
+    /// `FullSyncState`。维护失败只能作为维护错误，不能把用户同步的终态重新写成
+    /// 失败（Issue #779 评论 5854912227）。
+    pub fn create_sync_provider_for_maintenance(
+        &self,
+        config: &crate::sync::SyncConfig,
+        secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
+        self.create_sync_provider_inner(config, secrets, false)
+    }
+
+    /// provider 构造内部实现。
+    ///
+    /// `persist_preflight_failure`：
+    /// - `true`：用户同步路径，transport 初始化失败时调
+    ///   `persist_full_sync_early_failure(status, "preflight")` 持久化失败状态；
+    /// - `false`：维护路径（GC maintenance 等），transport 初始化失败只返回 Err，
+    ///   不触碰 `FullSyncState`。
+    fn create_sync_provider_inner(
+        &self,
+        config: &crate::sync::SyncConfig,
+        secrets: &crate::sync::SyncSecrets,
+        persist_preflight_failure: bool,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
         // secrets 仅在 github-api feature 下使用；非 github-api 时消费以避免 unused。
         #[cfg(not(feature = "github-api"))]
@@ -161,10 +198,8 @@ impl crate::facade::WriterCore {
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
             "github_api" => {
-                let transport = self.init_sync_transport().inspect_err(|err| {
-                    let status = crate::sync::full_sync::error_to_persist_status(err);
-                    self.persist_full_sync_early_failure(status, "preflight");
-                })?;
+                let transport =
+                    self.init_sync_transport_with_optional_persist(persist_preflight_failure)?;
                 let github_config = config
                     .provider_config
                     .as_ref()
@@ -185,6 +220,26 @@ impl crate::facade::WriterCore {
             #[cfg(not(feature = "github-api"))]
             "github_api" => Err(crate::Error::NotImplemented),
             _ => Err(crate::Error::NotImplemented),
+        }
+    }
+
+    /// 初始化 sync transport，可选持久化 preflight 失败状态。
+    ///
+    /// `persist_preflight_failure = true`（用户同步路径）：失败时调
+    /// `persist_full_sync_early_failure(status, "preflight")` 持久化失败状态；
+    /// `false`（维护路径）：只返回 Err，不触碰 `FullSyncState`。
+    fn init_sync_transport_with_optional_persist(
+        &self,
+        persist_preflight_failure: bool,
+    ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {
+        let transport_result = self.init_sync_transport();
+        if persist_preflight_failure {
+            transport_result.inspect_err(|err| {
+                let status = crate::sync::full_sync::error_to_persist_status(err);
+                self.persist_full_sync_early_failure(status, "preflight");
+            })
+        } else {
+            transport_result
         }
     }
 }
