@@ -834,9 +834,18 @@ impl WriterCoreApi {
             if !record.remote_prefix.starts_with("projects/") {
                 continue;
             }
-            if record.op != crate::sync::types::TargetOp::Upsert {
-                continue;
-            }
+            // Issue #779 评论 5854511049：不再只处理 Upsert。
+            // - Upsert：传当前 active_generation 作为保护。
+            // - Delete：同样调 run_generation_gc，active hint 传 None（作品已删除，
+            //   没有需要保护的 active generation，所有超过 retention 的 generation 都可清）。
+            //   delete_all_remote_objects 故意跳过 __generations__，留给 GC 在 retention
+            //   到期后清；若 maintenance 再跳过 Delete，这些旧 generation 将永久留在远端。
+            //   仍由 run_generation_gc 自己执行 retention、incomplete lease、删除前 fresh
+            //   catalog 二次确认这些安全规则。
+            let active_hint = match record.op {
+                crate::sync::types::TargetOp::Upsert => record.active_generation.as_deref(),
+                crate::sync::types::TargetOp::Delete => None,
+            };
             if let Some(ref token) = cancellation_token {
                 if token.is_cancelled() {
                     log::info!("[sync] gc_maintenance: cancellation requested — stopping");
@@ -846,7 +855,7 @@ impl WriterCoreApi {
             if let Err(e) = crate::sync::generation_gc::run_generation_gc(
                 provider.as_ref(),
                 &record.remote_prefix,
-                record.active_generation.as_deref(),
+                active_hint,
                 now_ms,
                 crate::sync::generation_gc::GENERATION_RETENTION_MS,
                 cancellation_token.as_ref(),

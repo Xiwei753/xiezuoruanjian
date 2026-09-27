@@ -231,16 +231,42 @@ impl AppBackend {
         );
 
         let app_qptr = QPointer::from(&*self);
+        // Issue #779 评论 5854511049：done callback 捕获启动时的身份（workspace_generation、
+        // data_root、本次 token 的 Arc 身份），只有三者都仍一致时才清 None。
+        // 旧 workspace 的 callback 不能修改新 workspace 的 maintenance 状态。
+        let captured_workspace_generation = self.current_workspace_generation;
+        let captured_data_root = data_root.clone();
+        let captured_token = token.clone();
         // GC 线程结束后回到主线程清 token。
         let gc_done_callback = qmetaobject::queued_callback(move |_result: ()| {
             app_qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
-                this.current_gc_maintenance_cancel_token = None;
-                this.debug_log(
-                    "sync",
-                    "gc_maintenance_done",
-                    "generation GC maintenance completed",
-                );
+                // 身份校验：workspace_generation、data_root、token Arc 身份三者都一致才清。
+                let still_same_workspace =
+                    this.current_workspace_generation == captured_workspace_generation;
+                let still_same_data_root = this.current_data_root == captured_data_root;
+                let still_same_token = this
+                    .current_gc_maintenance_cancel_token
+                    .as_ref()
+                    .map(|t| Arc::ptr_eq(t, &captured_token))
+                    .unwrap_or(false);
+                if still_same_workspace && still_same_data_root && still_same_token {
+                    this.current_gc_maintenance_cancel_token = None;
+                    this.debug_log(
+                        "sync",
+                        "gc_maintenance_done",
+                        "generation GC maintenance completed",
+                    );
+                } else {
+                    this.debug_log(
+                        "sync",
+                        "gc_maintenance_done_skipped",
+                        &format!(
+                            "GC done callback skipped: workspace_changed={}, data_root_changed={}, token_changed={} — not clearing current_gc_maintenance_cancel_token",
+                            !still_same_workspace, !still_same_data_root, !still_same_token
+                        ),
+                    );
+                }
             });
         });
 
