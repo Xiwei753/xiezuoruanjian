@@ -512,11 +512,13 @@ export struct WorkspaceScreen {
               }
             }
             .width('100%')
+            .justifyContent(FlexAlign.Start)
             .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
+            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 24 })
           }
           .layoutWeight(1)
           .scrollBar(BarState.Off)
+          .align(Alignment.Top)
         }
       }
       .width('100%')
@@ -524,17 +526,17 @@ export struct WorkspaceScreen {
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
-      // Issue #774：FAB 改透明点击区域 + 系统加号图标，不用默认强调色 Button 表面
+      // Issue #783 评论5855754605：恢复真正的圆形沉浸光感 Button。
+      // ButtonType.Circle + stateEffect: true，系统提供沉浸光感圆形按钮表面，
+      // 不再用 ButtonType.Normal + backgroundColor(Color.Transparent) 导致实机只剩裸 +。
       // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        Button({ type: ButtonType.Normal }) {
+        Button({ type: ButtonType.Circle, stateEffect: true }) {
           SymbolGlyph($r('sys.symbol.plus'))
             .fontSize(28)
-            .fontColor([$r('sys.color.icon_primary')])
         }
         .width(PRIMARY_FAB_SIZE_VP)
         .height(PRIMARY_FAB_SIZE_VP)
-        .backgroundColor(Color.Transparent)
         .margin({
           right: this.adaptiveState.pagePadding,
           bottom: PRIMARY_FAB_BOTTOM_INSET_VP

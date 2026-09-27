@@ -148,7 +148,9 @@ export struct WritingScreen {
   // Issue #629 评论 5308748920 问题2：离开事务（close + pop）整体幂等。
   // 已有 leaveTask 时直接返回同一 task，task 内只 pop 一次。
   // close 失败时清 leaveTask 允许再次返回重试；成功后不重置（页面已离开）。
-  private leaveTask: Promise<void> | null = null
+  // Issue #783 评论5855754605：改为 Promise<boolean>；关闭事务返回 false 时，
+  // 页面没有任何变化，需要给用户提示"保存或关闭失败，未退出"。
+  private leaveTask: Promise<boolean> | null = null
   // Issue #629 评论14 第2项：离开守卫唯一 token。registerLeaveGuard 返回，
   // aboutToDisappear 用此 token 注销，避免误注销其他 WritingScreen 实例的 guard。
   private leaveGuardToken: number = -1
@@ -362,28 +364,47 @@ export struct WritingScreen {
   // safePop 内部 runGuardedNavigation 先 await leaveGuard（performGracefulClose），
   // 成功才 navPathStack.pop()，且两个并发 safePop 合并成一次事务（guard 一次、pop 一次）。
   // leaveTask 仍保留作为 requestLeave 自身重入防护（safePop 内部 navigationTask 也幂等，双保险）。
-  private requestLeave(): Promise<void> {
+  // Issue #783 评论5855754605：requestLeave 改为返回 Promise<boolean>；
+  // safePopWithStack 返回 false 时（关闭事务被拒绝），给用户提示"保存或关闭失败，未退出"。
+  private requestLeave(): Promise<boolean> {
     if (this.leaveTask !== null) {
       return this.leaveTask
     }
-    const task: Promise<void> = (async () => {
-      await NavigationTransactionCoordinator.getInstance().safePopWithStack(this.navPathStack)
-    })()
-    this.leaveTask = task
-    task.then(
-      () => {
-        // safePop 完成（无论成功失败）：清 leaveTask 允许再次调用。
-        if (this.leaveTask === task) {
-          this.leaveTask = null
-        }
-      },
-      () => {
-        if (this.leaveTask === task) {
-          this.leaveTask = null
-        }
+
+    const task: Promise<boolean> = (async () => {
+      const ok = await NavigationTransactionCoordinator
+        .getInstance()
+        .safePopWithStack(this.navPathStack)
+
+      if (!ok) {
+        hilog.error(0x0000, 'WritingScreen', 'requestLeave: graceful close rejected')
+        this.saveMessage = '保存或关闭失败，未退出'
       }
-    )
+      return ok
+    })()
+
+    this.leaveTask = task
+    task.finally(() => {
+      if (this.leaveTask === task) {
+        this.leaveTask = null
+      }
+    })
     return task
+  }
+
+  // Issue #783 评论5855754605：把"标题栏返回"和"系统返回手势"分成两个意图。
+  // 标题栏返回按钮始终走 requestLeave（退出页面）。
+  // 系统返回手势在 IME 打开时先收键盘（dismissForBack），再次手势才退出页面。
+  private handleTitleBack(): void {
+    this.requestLeave()
+  }
+
+  private handleSystemBack(): void {
+    if (this.harmonyImeConnection.canDismissForBack()) {
+      this.harmonyImeConnection.dismissForBack()
+      return
+    }
+    this.requestLeave()
   }
 
   // Issue #629 评论9 第3项：aboutToDisappear 不再承担“阻止丢正文”职责——返回拦截由
@@ -1006,7 +1027,8 @@ export struct WritingScreen {
     if (this.useHdsNav) {
       HdsWritingDestinationApi23({
         title: this.chapterTitle,
-        onBack: () => { this.requestLeave() },
+        onTitleBack: () => { this.handleTitleBack() },
+        onSystemBack: () => { this.handleSystemBack() },
         onShown: () => {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
         },
@@ -1026,9 +1048,10 @@ export struct WritingScreen {
       .hideTitleBar(false)
       .title(this.chapterTitle)
       .onBackPressed(() => {
-        // 拦截默认退栈：异步调 requestLeave()（成功才 pop），立即 return true 阻止默认回退。
-        // 失败时 requestLeave 不 pop，用户留在本页可继续编辑。
-        this.requestLeave()
+        // Issue #783 评论5855754605：系统返回手势（包括全面屏侧滑返回）和标题栏返回按钮
+        // 不再共用一个回调。onBackPressed 只处理系统返回手势：
+        // IME 打开时先收键盘，IME 未打开时走 requestLeave 退出页面。
+        this.handleSystemBack()
         return true
       })
       .onShown(() => {

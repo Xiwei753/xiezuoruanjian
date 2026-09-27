@@ -1072,8 +1072,12 @@ export struct SettingsScreen {
 
       // 导出诊断包
       Column({ space: 12 }) {
-        this.SettingsNeutralAction('导出诊断包', () => {
-          this.viewModel.exportDiagnostics()
+        this.SettingsNeutralAction('导出诊断包', async () => {
+          const ok = await this.viewModel.exportDiagnostics()
+          if (!ok) {
+            this.copyMessage = '导出失败'
+            setTimeout(() => { this.copyMessage = '' }, 2000)
+          }
         })
 
         // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
@@ -1782,8 +1786,12 @@ export struct SettingsScreen {
 
       // 导出诊断包
       Column({ space: 12 }) {
-        this.SettingsNeutralAction('导出诊断包', () => {
-          this.viewModel.exportDiagnostics()
+        this.SettingsNeutralAction('导出诊断包', async () => {
+          const ok = await this.viewModel.exportDiagnostics()
+          if (!ok) {
+            this.copyMessage = '导出失败'
+            setTimeout(() => { this.copyMessage = '' }, 2000)
+          }
         })
 
         // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）

@@ -145,6 +145,19 @@ export class HarmonyImeConnection {
     return this.attachedDispatcher !== null
   }
 
+  // Issue #783 评论5855754605：系统返回手势的"只收键盘"入口。
+  // canDismissForBack 返回 true 时，系统返回手势只收起 IME，不退出页面；
+  // 返回 false 时，系统返回手势直接走页面退出逻辑。
+  // SujianEditor 的点击路径会再次调用 attach()，所以 detach 收起 IME 后，
+  // 再点正文仍可重新拉起输入法。
+  canDismissForBack(): boolean {
+    return this.isAttached()
+  }
+
+  dismissForBack(): Promise<void> {
+    return this.detach()
+  }
+
   // 通知 IME 当前选区（UTF-16 code unit offset，ArkUI 事件坐标）。
   // Issue #744 评论 5794965395 第 5 节：API26 InputMethodController 没有 setSelection 方法
   // （只有 changeSelection(text, start, end)，需要传完整 text，不适合这里主动推送）。

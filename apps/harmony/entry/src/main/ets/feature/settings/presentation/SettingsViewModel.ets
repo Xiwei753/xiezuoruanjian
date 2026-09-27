@@ -20,7 +20,6 @@ import { HarmonyDiagnosticsExporter } from '../../../platform/diagnostics/Harmon
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
-import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
@@ -505,7 +504,9 @@ export class SettingsViewModel {
   }
 
   // ── 诊断导出 ──
-
+  // Issue #783 评论5855754605：设置页按钮是用户主动导出，统一走 exportAndShare()，
+  // 不在 API 26+ 静默写 zip 到私有目录（那样用户看不到文件，看起来像"点了没反应"）。
+  // export() 继续给内部快照使用；设置页按钮只走真正会把文件交给用户的 exportAndShare()。
   async exportDiagnostics(): Promise<boolean> {
     try {
       if (this.diagnosticsExporter === null) {
@@ -515,14 +516,6 @@ export class SettingsViewModel {
           this.diagnosticsExporter.setAbilityContext(context)
         }
       }
-
-      const resolver = PlatformApiResolver.getInstance()
-
-      if (resolver.isApiAtLeast(26)) {
-        const zipPath = await this.diagnosticsExporter.export()
-        return zipPath !== null
-      }
-
       return await this.diagnosticsExporter.exportAndShare()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `exportDiagnostics failed: ${err}`)
