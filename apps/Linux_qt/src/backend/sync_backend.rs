@@ -626,50 +626,45 @@ impl AppBackend {
         self.current_sync_status = val.to_string();
     }
 
-    // AppBackend::refresh_sync_status_from_config
-    pub(crate) fn refresh_sync_status_from_config(&mut self) {
-        if !self.current_has_data_root {
-            self.current_sync_status = "no_workspace".to_string();
-            return;
-        }
-        let has_remote = !self.current_sync_remote_url.is_empty();
-        if !has_remote || !self.current_sync_enabled {
-            self.current_sync_status = "not_configured".to_string();
-        } else {
-            self.current_sync_status = "configured_not_tested".to_string();
-        }
-    }
-
-    /// 恢复同步运行状态（Issue #782 评论 5855709706）。
+    /// 恢复同步运行状态（Issue #782 评论 5855709706 / 5855913889）。
     ///
-    /// 替代旧的 `refresh_sync_status_from_config` 在 `load_sync_config` 中的无条件覆盖。
-    /// 优先级：
+    /// 替代旧的 `refresh_sync_status_from_config` 在 `load_sync_config` / `save_sync_config`
+    /// 中的无条件覆盖。优先级（配置检查提前到 full_sync_state 读取之前）：
     /// 1. `current_sync_in_progress == true` → `"syncing"`
-    /// 2. `core_api().load_full_sync_state()` 有值 → 使用其 `overall_status`
-    /// 3. 没有 full sync 历史 → 根据配置落 `no_workspace` / `not_configured` / `configured_not_tested`
+    /// 2. 没有工作区（`!current_has_data_root || current_data_root.is_empty()`）→ `"no_workspace"`
+    /// 3. 当前配置 `!current_sync_enabled` 或远端地址为空 → `"not_configured"`
+    /// 4. 当前配置仍有效，再读取 `core_api().load_full_sync_state()`，有历史就恢复真实 `overall_status`
+    /// 5. 没有历史才 → `"configured_not_tested"`
     ///
-    /// 重新读取同一份配置不会覆盖 `success`/`error`/`syncing`；只有完全没有同步历史时
-    /// 才根据配置落到 `configured_not_tested`。用户主动关闭同步或清空远端由
-    /// `save_sync_config` / setter 入口处理，不在此 helper 职责内。
+    /// 这样"以前同步成功过、之后用户关闭同步或清空远端、再重启应用"不会从旧 `full_sync_state`
+    /// 恢复成 `success`，而是正确落到 `not_configured`。重新读取同一份有效配置也不会覆盖
+    /// 真实同步结果；只有完全没有同步历史且配置有效时才落到 `configured_not_tested`。
     pub(crate) fn restore_sync_status_from_runtime(&mut self) {
         if self.current_sync_in_progress {
             self.current_sync_status = "syncing".to_string();
             return;
         }
+        // 第 2 步：没有工作区 → no_workspace。条件与 core_api() 门禁一致，
+        // 保证第 4 步走到时 core_api() 一定返回 Some。
+        if !self.current_has_data_root || self.current_data_root.is_empty() {
+            self.current_sync_status = "no_workspace".to_string();
+            return;
+        }
+        // 第 3 步：当前配置关闭同步或远端地址为空 → not_configured。
+        // 提前到 full_sync_state 读取之前，避免旧 success 历史覆盖"已关闭同步"的事实。
+        if !self.current_sync_enabled || self.current_sync_remote_url.is_empty() {
+            self.current_sync_status = "not_configured".to_string();
+            return;
+        }
+        // 第 4 步：当前配置仍有效，再读取 full_sync_state，有历史就恢复真实 overall_status。
         if let Some(api) = self.core_api() {
             if let Ok(Some(state)) = api.load_full_sync_state() {
                 self.current_sync_status = state.overall_status;
                 return;
             }
         }
-        // 没有 full sync 历史，根据当前配置落到初始状态。
-        if !self.current_has_data_root {
-            self.current_sync_status = "no_workspace".to_string();
-        } else if self.current_sync_remote_url.is_empty() || !self.current_sync_enabled {
-            self.current_sync_status = "not_configured".to_string();
-        } else {
-            self.current_sync_status = "configured_not_tested".to_string();
-        }
+        // 第 5 步：配置有效但没有同步历史 → configured_not_tested。
+        self.current_sync_status = "configured_not_tested".to_string();
     }
 
     // AppBackend::set_sync_enabled
@@ -1241,7 +1236,11 @@ impl AppBackend {
             return false;
         }
 
-        self.refresh_sync_status_from_config();
+        // Issue #782 评论 5855913889：保存成功后不再调用旧的 refresh_sync_status_from_config
+        // 无条件把状态写成 configured_not_tested。改走同一套 restore_sync_status_from_runtime
+        // 规则：如果本次保存明确关闭同步或清空远端，落到 not_configured；配置仍有效且有
+        // 同步历史则恢复真实 overall_status；没有历史才 configured_not_tested。
+        self.restore_sync_status_from_runtime();
         let state = writer_core::api::SyncOperationStateDto {
             operation_id: String::new(),
             operation_kind: "save_config".to_string(),
