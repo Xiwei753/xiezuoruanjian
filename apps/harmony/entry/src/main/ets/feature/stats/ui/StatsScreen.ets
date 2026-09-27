@@ -13,7 +13,7 @@ import { ScreenRole, WidthClass, ActionSlot } from '../../../corebridge/dto/Plat
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
-import { buildNavMenuItems } from '../../../app/navigation/impl/api23/HdsHeaderActionMenu'
+import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 @Component

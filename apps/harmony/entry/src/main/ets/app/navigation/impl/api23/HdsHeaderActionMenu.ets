@@ -6,8 +6,10 @@
 // Core ScreenPolicy → NavigationHeaderActionModel → HdsHeaderActionMenu 适配器 → NavigationHeaderActionDispatcher。
 // Issue #784 评论 5857856673：HDS 菜单项改用真实 SDK 类型 HdsNavigationBadgeIconOptions，
 // 不再用 Object[] 绕过编译器类型检查。
+// Issue #784 评论 5858136516：拆分普通 ArkUI buildNavMenuItems 到 NavigationHeaderActionMenu.ets，
+// 本文件只保留 HDS（API23+）菜单项构建。
 
-import { HdsNavigationBadgeIconOptions, HdsNavigationIconOptions } from '@kit.UIDesignKit'
+import { HdsNavigationBadgeIconOptions } from '@kit.UIDesignKit'
 import { ActionSlot, ActionRole } from '../../../../corebridge/dto/PlatformDtos'
 import { sortedHeaderTrailingActions } from '../../NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../NavigationHeaderActionDispatcher'
@@ -23,34 +25,6 @@ export function buildHdsMenuItems(actionSlots: ActionSlot[]): HdsNavigationBadge
 
   for (const slot of sorted) {
     const mapped = mapHdsMenuItem(slot)
-    if (mapped !== null) {
-      items.push(mapped)
-    }
-  }
-
-  return items
-}
-
-/**
- * NavDestination 菜单项结构（API < 23）。
- * NavDestination .menus() 不使用 HDS 类型系统，格式为 { icon, action }。
- */
-interface NavMenuItem {
-  icon: ResourceStr
-  action: () => void
-}
-
-/**
- * 构建 NavDestination .menus() 所需的菜单项数组（API < 23）。
- * NavDestination menus 不支持 label，格式为 { icon, action }。
- * 仅处理 Sync / Search / Settings 三个 ActionRole，其余跳过。
- */
-export function buildNavMenuItems(actionSlots: ActionSlot[]): NavMenuItem[] {
-  const sorted = sortedHeaderTrailingActions(actionSlots)
-  const items: NavMenuItem[] = []
-
-  for (const slot of sorted) {
-    const mapped = mapNavMenuItem(slot)
     if (mapped !== null) {
       items.push(mapped)
     }
@@ -88,43 +62,11 @@ function mapHdsMenuItem(slot: ActionSlot): HdsNavigationBadgeIconOptions | null 
   if (slot.role === ActionRole.Settings) {
     return {
       content: {
-        icon: $r('sys.media.ohos_ic_public_more'),
+        icon: $r('app.media.ic_settings'),
         label: '设置',
         action: () => {
           NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
         }
-      }
-    }
-  }
-
-  return null
-}
-
-/** ActionRole → NavDestination 菜单项（不含 label）映射；非 Sync/Search/Settings 返回 null */
-function mapNavMenuItem(slot: ActionSlot): NavMenuItem | null {
-  if (slot.role === ActionRole.Sync) {
-    return {
-      icon: $r('app.media.ic_refresh'),
-      action: () => {
-        NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
-      }
-    }
-  }
-
-  if (slot.role === ActionRole.Search) {
-    return {
-      icon: $r('app.media.ic_search'),
-      action: () => {
-        NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
-      }
-    }
-  }
-
-  if (slot.role === ActionRole.Settings) {
-    return {
-      icon: $r('sys.media.ohos_ic_public_more'),
-      action: () => {
-        NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
       }
     }
   }

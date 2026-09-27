@@ -954,11 +954,11 @@ export struct WritingScreen {
       return $r('app.media.ic_search')
     }
     if (role === ActionRole.Settings) {
-      return $r('sys.media.ohos_ic_public_more')
+      return $r('app.media.ic_settings')
     }
     // 非预期 role 不应出现（sortedHeaderTrailingActions 只返回 HeaderTrailing slot），
     // 给一个 fallback 图标避免编译报错。
-    return $r('sys.media.ohos_ic_public_more')
+    return $r('app.media.ic_settings')
   }
 
   async clearContent() {

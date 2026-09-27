@@ -12,7 +12,7 @@ import { HarmonyShareService } from '../../../platform/share/HarmonyShareService
 import { SharePayload } from '../../../platform/share/SharePayload'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
-import { buildNavMenuItems } from '../../../app/navigation/impl/api23/HdsHeaderActionMenu'
+import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 interface SelectOption {
@@ -467,7 +467,7 @@ export struct StarMapScreen {
         .height(36)
         .fontSize(18)
         .onClick(() => {
-          this.zoomScale *= 0.8
+          this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
         })
 
       // 当前缩放百分比
@@ -482,7 +482,7 @@ export struct StarMapScreen {
         .height(36)
         .fontSize(18)
         .onClick(() => {
-          this.zoomScale *= 1.25
+          this.zoomScale = Math.min(3, this.zoomScale + 0.1)
         })
 
       // 重置视图按钮
