@@ -340,6 +340,10 @@ Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
+                            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                            Component.onCompleted: {
+                                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                            }
 
                             TextArea {
                                 readOnly: true
@@ -403,6 +407,10 @@ Rectangle {
                             Layout.fillHeight: true
                             visible: !(root.preview && root.preview.remoteDeleted === true)
                             clip: true
+                            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                            Component.onCompleted: {
+                                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                            }
 
                             TextArea {
                                 readOnly: true
@@ -435,6 +443,10 @@ Rectangle {
                         anchors.fill: parent
                         visible: root.narrowTab === 0
                         clip: true
+                        // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                        Component.onCompleted: {
+                            if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                        }
 
                         TextArea {
                             readOnly: true
@@ -482,6 +494,10 @@ Rectangle {
                             Layout.fillHeight: true
                             visible: !(root.preview && root.preview.remoteDeleted === true)
                             clip: true
+                            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                            Component.onCompleted: {
+                                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                            }
 
                             TextArea {
                                 readOnly: true

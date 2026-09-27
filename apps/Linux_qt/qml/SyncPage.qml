@@ -273,7 +273,9 @@ Item {
     // Remove color since root is now an Item
     function statusKind() {
         var s = root.currentSyncStatus
-        if (s === "success") return "success"
+        // Issue #782 评论 5856119763: no_changes / latest_wins_applied 也是 Core 的
+        // 合法同步成功终态，和 success 一样归到 success pill，不要显示成普通 info。
+        if (s === "success" || s === "no_changes" || s === "latest_wins_applied") return "success"
         if (s === "syncing") return "warning"
         if (s === "partial_conflict") return "warning"
         if (root.isFailureStatus(s)) return "error"
@@ -291,6 +293,10 @@ Item {
     function statusText() {
         var s = root.currentSyncStatus
         if (s === "success") return qsTr("已同步")
+        // Issue #782 评论 5856119763: 补齐 Core 合法同步终态的展示映射。
+        // no_changes / latest_wins_applied 之前会一路掉到"同步"，不是完成状态。
+        if (s === "no_changes") return qsTr("无需同步")
+        if (s === "latest_wins_applied") return qsTr("已同步（已应用较新版本）")
         if (s === "syncing") return qsTr("同步中")
         if (s === "conflict") return qsTr("同步冲突")
         if (s === "partial_conflict") return qsTr("部分同步，存在正文冲突")
@@ -675,6 +681,10 @@ Item {
                 anchors.margins: resolvedDt.sp12
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                Component.onCompleted: {
+                    if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                }
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth
