@@ -1667,31 +1667,6 @@ pub fn inject_animation_visuals_into_snapshot(
             break;
         }
         if !matched {
-            // Issue #785 评论 5857873894 修改 2b: 找不到目标行时明确报告，不静默跳过。
-            // 回退到按 document_byte_start 匹配作为兜底（兼容历史调用路径中
-            // paragraph_document_byte_start 未正确填充的情况），并记录诊断。
-            for para in &mut doc_snapshot.paragraphs {
-                let para_start = para.paragraph_document_byte_start;
-                let para_end = para_start + para.paragraph_text.len();
-                if anim_line.document_byte_start >= para_start
-                    && anim_line.document_byte_start < para_end
-                {
-                    for line in &mut para.lines {
-                        if line.document_byte_start == anim_line.document_byte_start {
-                            line.image = anim_line.image.take();
-                            if !anim_line.clusters.is_empty() {
-                                line.clusters = std::mem::take(&mut anim_line.clusters);
-                            }
-                            injected_count += 1;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        if !matched {
             crate::backend::app_backend::debug_warn_static(
                 "canonical_snapshot",
                 "inject_animation_visuals_line_not_found",

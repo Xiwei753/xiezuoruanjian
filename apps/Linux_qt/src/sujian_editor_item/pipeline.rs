@@ -1406,6 +1406,11 @@ impl LinuxEditorPipeline {
                             let mut new_snap = snap.clone();
                             new_snap.document_byte_start = new_line.byte_start;
                             new_snap.document_byte_end = new_line.byte_end;
+                            // Issue #785 评论 5858151780: reusable move 的 new_snap 必须把稳定行身份
+                            // 一起切到 new layout，否则 inject 仍按旧段落起点 + 旧 qtextline_idx 匹配，
+                            // 跨段落位移时会掉进旧身份 fallback 或命中错误的新行。
+                            new_snap.paragraph_document_byte_start = new_line.para_start;
+                            new_snap.qtextline_idx = new_line.qtextline_idx;
                             for cluster in &mut new_snap.clusters {
                                 cluster.document_byte_start = cluster
                                     .document_byte_start

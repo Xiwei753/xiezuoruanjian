@@ -306,28 +306,18 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                     }
                 }
             }
-            // Issue #785 评论 5857873894 修改 5: 判断 inserted range 是否真的含可见字符。
-            // 如果所有 inserted range 都只含空白/控制字符，InsertReveal 为 0 是正常跳过，
-            // 不记 Warn。只有当至少有一个 inserted range 含可见字符但 InsertReveal 为 0
-            // 时才记 Warn。优先用 intersecting_clusters + whitespace_skip_count 判断：
-            // 若 intersecting_clusters > 0 且全部都是空白（whitespace_skip_count == intersecting_clusters），
-            // 则所有相交 cluster 都是空白，属于正常跳过。若 intersecting_clusters == 0，
-            // 再直接检查 inserted range 正文是否含可见字符，避免漏报注入链遗漏的情况。
-            let all_inserted_is_whitespace = if intersecting_clusters > 0 {
-                whitespace_skip_count == intersecting_clusters
-            } else {
-                // 没有相交 cluster，直接检查 inserted range 正文是否含可见字符。
-                // 如果所有 inserted range 都只含空白/控制字符，则属于正常跳过；
-                // 如果有可见字符但无相交 cluster，则属于注入链遗漏，需要记 Warn。
-                spec.inserted_ranges.iter().all(|&(i_start, i_end)| {
-                    let text = spec
-                        .new_snapshot
-                        .virtual_text
-                        .get(i_start..i_end)
-                        .unwrap_or("");
-                    text.chars().all(|c| c.is_whitespace() || c.is_control())
-                })
-            };
+            // Issue #785 评论 5858151780: 是否属于"可见字符 Insert"直接检查
+            // new_snapshot.virtual_text[inserted_range]，不用"相交 cluster 是否全是 whitespace"
+            // 反推。Partial cluster 可能同时包含旧可见字符和本次插入的空白，按整个 cluster
+            // 判断会把正常空白输入误报成 InsertReveal 丢失。
+            let all_inserted_is_whitespace = spec.inserted_ranges.iter().all(|&(i_start, i_end)| {
+                let text = spec
+                    .new_snapshot
+                    .virtual_text
+                    .get(i_start..i_end)
+                    .unwrap_or("");
+                text.chars().all(|c| c.is_whitespace() || c.is_control())
+            });
             if !all_inserted_is_whitespace {
                 {
                     use std::collections::BTreeMap;
