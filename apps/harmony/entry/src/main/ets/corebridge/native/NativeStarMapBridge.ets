@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeStarMapMeta, decodeStarMapGraph, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRenderBatch, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
@@ -63,5 +63,33 @@ export class NativeStarMapBridge {
       const jsonStr: string = this.core.getNativeModule().nativeRenameStarMap(starmapId, newTitle)
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeSaveStarMapLayout(starmapId, JSON.stringify(layout))
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeGetStarMapLayout(starmapId)
+      return this.core.decodeEnvelope<StarMapLayout>(jsonStr, decodeStarMapLayout)
+    } catch (e) { return nativeError<StarMapLayout>(e) }
+  }
+
+  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeGetStarMapMotionPolicy()
+      return this.core.decodeEnvelope<StarMapMotionPolicy>(jsonStr, decodeStarMapMotionPolicy)
+    } catch (e) { return nativeError<StarMapMotionPolicy>(e) }
+  }
+
+  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
+      return this.core.decodeEnvelope<StarMapEdgeRenderBatch>(jsonStr, decodeStarMapEdgeRenderBatch)
+    } catch (e) { return nativeError<StarMapEdgeRenderBatch>(e) }
   }
 }
