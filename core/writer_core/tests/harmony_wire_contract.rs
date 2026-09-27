@@ -322,21 +322,17 @@ fn seeded_graph_json(starmap_id: &str) -> String {
     format!(
         r#"{{
       "schemaVersion": 1,
-      "id": "{starmap_id}",
       "starmapId": "{starmap_id}",
-      "title": "契约基线",
       "nodes": [
         {{"id":"n1","title":"节点一","kind":"Concept","payload":null,"createdAt":0,"updatedAt":0}},
         {{"id":"n2","title":"节点二","kind":"Concept","payload":null,"createdAt":0,"updatedAt":0}}
       ],
       "edges": [
-        {{"id":"e1","from":"n1","to":"n2","kind":"RelatedTo","label":null,"payload":null,"createdAt":0,"updatedAt":0}}
+        {{"id":"e1","from":{{"starmapId":"{starmap_id}","segments":[],"target":{{"type":"node","nodeId":"n1"}}}},"to":{{"starmapId":"{starmap_id}","segments":[],"target":{{"type":"node","nodeId":"n2"}}}},"kind":"RelatedTo","label":null,"payload":null,"createdAt":0,"updatedAt":0}}
       ],
       "embeds": [],
       "links": [],
-      "hyperlinks": [],
-      "createdAt": 0,
-      "updatedAt": 0
+      "hyperlinks": []
     }}"#
     )
 }
@@ -723,7 +719,7 @@ fn harmony_wire_contract_matches_fixture() {
         ),
     );
     assert_eq!(
-        renders["data"].as_array().map_or(0, |v| v.len()),
+        renders["data"]["renders"].as_array().map_or(0, |v| v.len()),
         1,
         "一条边应得到一条渲染数据"
     );

@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapEdgeRenderBatch, StarMapMotionPolicy } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRender, decodeStarMapEdgeRenderBatch, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRenderBatch, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}

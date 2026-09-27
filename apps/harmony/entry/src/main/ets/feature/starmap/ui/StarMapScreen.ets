@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapEdgeRenderBatch, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'

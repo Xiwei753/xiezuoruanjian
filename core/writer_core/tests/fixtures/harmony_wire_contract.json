@@ -31,6 +31,10 @@
   "computeStarMapEdgeRenders": {
     "kind": "object",
     "fields": {
+      "diagnostics": {
+        "kind": "array",
+        "element": null
+      },
       "renders": {
         "kind": "array",
         "element": {
@@ -122,26 +126,6 @@
             }
           }
         }
-      },
-      "diagnostics": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "edgeId": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "endpoint": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "reason": {
-              "kind": "scalar",
-              "ty": "string"
-            }
-          }
-        }
       }
     }
   },
@@ -210,10 +194,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "childStarmapCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "createdAt": {
         "kind": "scalar",
         "ty": "number"
@@ -237,10 +217,6 @@
       "nodeCount": {
         "kind": "scalar",
         "ty": "number"
-      },
-      "parentStarmapId": {
-        "kind": "scalar",
-        "ty": "null"
       },
       "projectId": {
         "kind": "scalar",
@@ -1930,10 +1906,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "childStarmapCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "createdAt": {
         "kind": "scalar",
         "ty": "number"
@@ -1958,10 +1930,6 @@
         "kind": "scalar",
         "ty": "number"
       },
-      "parentStarmapId": {
-        "kind": "scalar",
-        "ty": "null"
-      },
       "projectId": {
         "kind": "scalar",
         "ty": "null"
@@ -1983,10 +1951,6 @@
   "getStarMapGraph": {
     "kind": "object",
     "fields": {
-      "createdAt": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "edges": {
         "kind": "array",
         "element": null
@@ -1998,10 +1962,6 @@
       "hyperlinks": {
         "kind": "array",
         "element": null
-      },
-      "id": {
-        "kind": "scalar",
-        "ty": "string"
       },
       "links": {
         "kind": "array",
@@ -2018,14 +1978,6 @@
       "starmapId": {
         "kind": "scalar",
         "ty": "string"
-      },
-      "title": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "updatedAt": {
-        "kind": "scalar",
-        "ty": "number"
       }
     }
   },
@@ -2681,31 +2633,31 @@
           "kind": "scalar",
           "ty": "string"
         },
-      "createdAt": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "description": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "edgeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "isMainForProject": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "linkedChapterCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "nodeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "projectId": {
+        "createdAt": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "description": {
+          "kind": "scalar",
+          "ty": "string"
+        },
+        "edgeCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "isMainForProject": {
+          "kind": "scalar",
+          "ty": "boolean"
+        },
+        "linkedChapterCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "nodeCount": {
+          "kind": "scalar",
+          "ty": "number"
+        },
+        "projectId": {
           "kind": "scalar",
           "ty": "null"
         },
@@ -3164,10 +3116,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "childStarmapCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "createdAt": {
         "kind": "scalar",
         "ty": "number"
@@ -3191,10 +3139,6 @@
       "nodeCount": {
         "kind": "scalar",
         "ty": "number"
-      },
-      "parentStarmapId": {
-        "kind": "scalar",
-        "ty": "null"
       },
       "projectId": {
         "kind": "scalar",
