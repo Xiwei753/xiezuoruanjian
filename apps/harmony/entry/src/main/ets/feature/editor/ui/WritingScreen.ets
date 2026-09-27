@@ -1098,6 +1098,7 @@ export struct WritingScreen {
                 Image(this.getHeaderActionIcon(slot.role))
                   .width(24)
                   .height(24)
+                  .fillColor($r('sys.color.icon_primary'))
               }
               .width(40)
               .height(40)
