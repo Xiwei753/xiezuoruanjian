@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapEdgeRenderBatch, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -153,7 +153,11 @@ export struct StarMapScreen {
         // 获取 edgeRenders（Core 计算连线几何）
         const edgeResult = await this.bridge.computeStarMapEdgeRenders(result.data)
         if (edgeResult.success && edgeResult.data) {
-          this.edgeRenders = edgeResult.data
+          this.edgeRenders = edgeResult.data.renders
+          // diagnostics 不丢弃，至少进入诊断日志
+          if (edgeResult.data.diagnostics.length > 0) {
+            hilog.warn(0x0000, 'StarMapScreen', `edge render diagnostics: ${edgeResult.data.diagnostics.length} items`)
+          }
         }
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)

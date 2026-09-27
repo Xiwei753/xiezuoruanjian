@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, LayoutMetrics, ScreenPolicy, ActionSlot
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapViewport, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapViewport, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapEdgeRenderBatch, StarMapEdgeAnchorDiagnostic, StarMapMotionPolicy } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -32,7 +32,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   } as StarMapLayout
 
   private mockStarMapGraph: StarMapGraph = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     starmapId: '',
     nodes: [] as StarMapNode[],
     edges: [] as StarMapEdge[],
@@ -492,9 +492,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(policy)
   }
 
-  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>> {
+  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
     await this.delay(100)
-    return this.success([] as StarMapEdgeRender[])
+    return this.success({ renders: [] as StarMapEdgeRender[], diagnostics: [] as StarMapEdgeAnchorDiagnostic[] } as StarMapEdgeRenderBatch)
   }
 
   // Settings methods

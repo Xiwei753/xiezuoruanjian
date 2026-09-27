@@ -34,6 +34,8 @@ pub struct StarMapPhasedSnapshot {
     pub package_revision: u64,
     pub complete: bool,
     pub since_revision: u64,
+    #[serde(default)]
+    pub schema_version: u32,
     pub nodes: Vec<StarMapNode>,
     pub edges: Vec<StarMapEdge>,
     pub embeds: Vec<StarMapEmbed>,
@@ -252,6 +254,7 @@ impl StarMapStore {
             package_revision: self.package_revision,
             complete,
             since_revision: since_rev,
+            schema_version: crate::starmap::types::CURRENT_GRAPH_SCHEMA_VERSION,
             nodes,
             edges,
             embeds,

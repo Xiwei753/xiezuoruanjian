@@ -29,93 +29,118 @@
     }
   },
   "computeStarMapEdgeRenders": {
-    "kind": "array",
-    "element": {
-      "kind": "object",
-      "fields": {
-        "arrowLeftX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "arrowLeftY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "arrowRightX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "arrowRightY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "arrowTipX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "arrowTipY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "edgeId": {
-          "kind": "scalar",
-          "ty": "string"
-        },
-        "endX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "endY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "fromCx": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "fromCy": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "hasBidirectional": {
-          "kind": "scalar",
-          "ty": "boolean"
-        },
-        "label": {
-          "kind": "scalar",
-          "ty": "null"
-        },
-        "labelX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "labelY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "offsetX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "offsetY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "startX": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "startY": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "toCx": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "toCy": {
-          "kind": "scalar",
-          "ty": "number"
+    "kind": "object",
+    "fields": {
+      "renders": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "arrowLeftX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "arrowLeftY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "arrowRightX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "arrowRightY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "arrowTipX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "arrowTipY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "edgeId": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "endX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "endY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "fromCx": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "fromCy": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "hasBidirectional": {
+              "kind": "scalar",
+              "ty": "boolean"
+            },
+            "label": {
+              "kind": "scalar",
+              "ty": "null"
+            },
+            "labelX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "labelY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "offsetX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "offsetY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "startX": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "startY": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "toCx": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "toCy": {
+              "kind": "scalar",
+              "ty": "number"
+            }
+          }
+        }
+      },
+      "diagnostics": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "edgeId": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "endpoint": {
+              "kind": "scalar",
+              "ty": "string"
+            },
+            "reason": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
         }
       }
     }
@@ -2656,39 +2681,31 @@
           "kind": "scalar",
           "ty": "string"
         },
-        "childStarmapCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "createdAt": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "description": {
-          "kind": "scalar",
-          "ty": "string"
-        },
-        "edgeCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "isMainForProject": {
-          "kind": "scalar",
-          "ty": "boolean"
-        },
-        "linkedChapterCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "nodeCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "parentStarmapId": {
-          "kind": "scalar",
-          "ty": "null"
-        },
-        "projectId": {
+      "createdAt": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "description": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "edgeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "isMainForProject": {
+        "kind": "scalar",
+        "ty": "boolean"
+      },
+      "linkedChapterCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "nodeCount": {
+        "kind": "scalar",
+        "ty": "number"
+      },
+      "projectId": {
           "kind": "scalar",
           "ty": "null"
         },

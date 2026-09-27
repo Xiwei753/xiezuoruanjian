@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapMotionPolicy } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRender, StarMapEdgeRenderBatch, StarMapMotionPolicy } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRender, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRender, decodeStarMapEdgeRenderBatch, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
@@ -86,11 +86,10 @@ export class NativeStarMapBridge {
     } catch (e) { return nativeError<StarMapMotionPolicy>(e) }
   }
 
-  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>> {
+  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
-      return this.core.decodeEnvelope<StarMapEdgeRender[]>(jsonStr,
-        (d: Object) => decodeArray<StarMapEdgeRender>(d, decodeStarMapEdgeRender, 'StarMapEdgeRender'))
-    } catch (e) { return nativeError<StarMapEdgeRender[]>(e) }
+      return this.core.decodeEnvelope<StarMapEdgeRenderBatch>(jsonStr, decodeStarMapEdgeRenderBatch)
+    } catch (e) { return nativeError<StarMapEdgeRenderBatch>(e) }
   }
 }

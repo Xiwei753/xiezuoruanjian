@@ -23,7 +23,7 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
     StarMapRawCache(
         graph =
             StarMapGraphDto(
-                schemaVersion = 1u,
+                schemaVersion = schemaVersion,
                 starmapId = starmapId,
                 nodes = nodes,
                 edges = edges,
@@ -61,7 +61,7 @@ internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotR
         StarMapData(
             graph =
                 StarMapGraphData(
-                    schemaVersion = 0,
+                    schemaVersion = schemaVersion,
                     starmapId = starmapId,
                     nodes = nodes.map { it.toGraphNode() },
                     edges = edges.map { it.toGraphEdge() },

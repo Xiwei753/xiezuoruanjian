@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapMotionPolicy, NodeType, EdgeKind, StarMapEdgeAnchorDiagnostic, StarMapEdgeRenderBatch, EdgeAnchorDiagnosticReason } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics } from '../dto/PlatformDtos'
@@ -1346,6 +1346,48 @@ export function decodeStarMapEdgeRender(data: Object): DecodeResult<StarMapEdgeR
     hasBidirectional: hasBidirectional
   }
   return ok<StarMapEdgeRender>(value)
+}
+
+export function decodeStarMapEdgeAnchorDiagnostic(data: Object): DecodeResult<StarMapEdgeAnchorDiagnostic> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<StarMapEdgeAnchorDiagnostic>('StarMapEdgeAnchorDiagnostic: expected object')
+  }
+  const edgeId: string | null = reqStr(data, 'edgeId')
+  if (edgeId === null) { return err<StarMapEdgeAnchorDiagnostic>('edgeId missing') }
+  const endpoint: string | null = reqStr(data, 'endpoint')
+  if (endpoint === null) { return err<StarMapEdgeAnchorDiagnostic>('endpoint missing') }
+  const reason: string | null = reqStr(data, 'reason')
+  if (reason === null) { return err<StarMapEdgeAnchorDiagnostic>('reason missing') }
+  // 验证 reason 是合法枚举值
+  const validReasons = ['LocalNodeMissing', 'CrossLayerPath', 'NonGeometricTarget', 'EmbedMissing', 'PortalMissing']
+  if (!validReasons.includes(reason)) {
+    return err<StarMapEdgeAnchorDiagnostic>(`reason: invalid value ${reason}`)
+  }
+  const value: StarMapEdgeAnchorDiagnostic = {
+    edgeId: edgeId,
+    endpoint: endpoint,
+    reason: reason as EdgeAnchorDiagnosticReason
+  }
+  return ok<StarMapEdgeAnchorDiagnostic>(value)
+}
+
+export function decodeStarMapEdgeRenderBatch(data: Object): DecodeResult<StarMapEdgeRenderBatch> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<StarMapEdgeRenderBatch>('StarMapEdgeRenderBatch: expected object')
+  }
+  const rendersArr: Array<Object> | null = reqArray(data, 'renders')
+  if (rendersArr === null) { return err<StarMapEdgeRenderBatch>('renders missing or not array') }
+  const rendersR: DecodeResult<StarMapEdgeRender[]> = decodeArray<StarMapEdgeRender>(rendersArr as Object, decodeStarMapEdgeRender, 'StarMapEdgeRender')
+  if (!rendersR.ok || rendersR.value === undefined) { return err<StarMapEdgeRenderBatch>(rendersR.error ?? 'renders decode failed') }
+  const diagnosticsArr: Array<Object> | null = reqArray(data, 'diagnostics')
+  if (diagnosticsArr === null) { return err<StarMapEdgeRenderBatch>('diagnostics missing or not array') }
+  const diagnosticsR: DecodeResult<StarMapEdgeAnchorDiagnostic[]> = decodeArray<StarMapEdgeAnchorDiagnostic>(diagnosticsArr as Object, decodeStarMapEdgeAnchorDiagnostic, 'StarMapEdgeAnchorDiagnostic')
+  if (!diagnosticsR.ok || diagnosticsR.value === undefined) { return err<StarMapEdgeRenderBatch>(diagnosticsR.error ?? 'diagnostics decode failed') }
+  const value: StarMapEdgeRenderBatch = {
+    renders: rendersR.value,
+    diagnostics: diagnosticsR.value
+  }
+  return ok<StarMapEdgeRenderBatch>(value)
 }
 
 export function decodeStarMapMotionPolicy(data: Object): DecodeResult<StarMapMotionPolicy> {

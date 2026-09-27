@@ -323,3 +323,19 @@ export interface StarMapMotionPolicy {
   settleDurationMs: number
   reduceMotion: boolean
 }
+
+// StarMapEdgeAnchorDiagnosticReasonDto
+export type EdgeAnchorDiagnosticReason = 'LocalNodeMissing' | 'CrossLayerPath' | 'NonGeometricTarget' | 'EmbedMissing' | 'PortalMissing'
+
+// StarMapEdgeAnchorDiagnosticDto
+export interface StarMapEdgeAnchorDiagnostic {
+  edgeId: string
+  endpoint: string
+  reason: EdgeAnchorDiagnosticReason
+}
+
+// StarMapEdgeRenderBatchDto
+export interface StarMapEdgeRenderBatch {
+  renders: StarMapEdgeRender[]
+  diagnostics: StarMapEdgeAnchorDiagnostic[]
+}
