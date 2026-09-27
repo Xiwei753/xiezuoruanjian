@@ -24,7 +24,7 @@ fn make_graph_meta(
     embed_ids: &[&str],
 ) -> GraphMeta {
     GraphMeta {
-        schema_version: "3".to_string(),
+        schema_version: "4".to_string(),
         starmap_id: starmap_id.to_string(),
         node_ids: node_ids.iter().map(|s| s.to_string()).collect(),
         edge_ids: edge_ids.iter().map(|s| s.to_string()).collect(),
@@ -205,7 +205,7 @@ fn resolve_target_returns_unsupported_version_for_schema_2() {
     let dir_b = dir.path().join("starmaps").join(id_b);
     std::fs::create_dir_all(dir_b.join("nodes")).unwrap();
 
-    // 写一个 schema 版本为 "2" 的 graph.json（不兼容当前版本 "3"）。
+    // 写一个 schema 版本为 "2" 的 graph.json（不兼容当前版本 "4"）。
     let bad_meta = serde_json::json!({
         "schemaVersion": "2",
         "starmapId": id_b,

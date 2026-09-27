@@ -48,9 +48,10 @@ pub enum StarMapEdgeKind {
 /// `Default` 和 `to_starmap_graph()` 固定写出此版本。当前不做导出/导入 API；
 /// 以后真做导入导出时，直接把同一套 Meta + Graph 包起来，不再另造一套模型。
 ///
-/// 版本 2：删除了旧 id/title/timestamps 和旧 Edge/Embed/Link 引用字段，
-/// 采用新的 StarMapTargetPath 引用模型。
-pub const CURRENT_GRAPH_SCHEMA_VERSION: u32 = 2;
+/// 版本 3：node/embed 的 position/style 进入 authored object，删除 layout/viewport/
+/// displayPolicy/openBehavior 等显示层字段。Graph 结构发生破坏性变化，
+/// 从 2 升到 3 以区分 #772 的旧 Graph 和 #781 的新 Graph。
+pub const CURRENT_GRAPH_SCHEMA_VERSION: u32 = 3;
 
 /// 星图图数据：节点、边、嵌入、链接的完整集合。
 ///
@@ -87,10 +88,11 @@ impl Default for StarMapGraph {
     }
 }
 
-/// 节点在星图文档坐标系下的位置（逻辑像素）。
+/// 节点在星图文档坐标系下的位置。
 ///
-/// 这是节点的底层数据字段，平台渲染时乘以 dpr 转为物理像素。
-/// 节点移动就是更新 `position`，不再另外创建 layout record。
+/// 这是节点的底层数据字段。节点移动就是更新 `position`，
+/// 不再另外创建 layout record。各平台如何映射到像素属于显示层，
+/// Core 的 position 只是星图文档坐标，不定义成屏幕像素单位。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPoint {

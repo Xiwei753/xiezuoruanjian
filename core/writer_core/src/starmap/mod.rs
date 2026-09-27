@@ -13,6 +13,7 @@
 //! 由平台端自行管理。Core 只保留节点/嵌入的 `position` 数据字段。
 
 pub mod graph;
+pub mod migration;
 pub mod package_storage;
 pub mod semantic;
 pub mod store;
@@ -104,10 +105,14 @@ fn change_set_for_meta_and_index(
 }
 
 fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
+    // 在读取 index 之前先做一次旧格式迁移（schema 1 -> 2）。
+    // 迁移是幂等的：已经是新格式则跳过。
+    migration::migrate_index(app_data_root)?;
+
     let path = index_path(app_data_root);
     if !path.exists() {
         return Ok(StarMapIndexRecord {
-            schema_version: 1,
+            schema_version: 2,
             starmap_ids: vec![],
             main_starmap_by_project: std::collections::HashMap::new(),
             updated_at: now_epoch(),
@@ -231,16 +236,14 @@ pub fn rename_starmap(
     meta.title = new_title.to_string();
     meta.updated_at = now_epoch();
     save_starmap_meta(app_data_root, &meta)?;
-
-    let mut idx = load_index(app_data_root)?;
-    idx.updated_at = meta.updated_at;
-    save_index(app_data_root, &idx)?;
+    // rename 不重写 index：title 只在 meta 文件里，index 不持久化 title，
+    // 不为了更新 index.updated_at 形成无意义双写。
     Ok(meta)
 }
 
 ///   rename_starmap 的变更集版本。
 ///
-/// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+/// 变更集：`Upsert(starmaps/{id}.meta.json)`。rename 不再写 index。
 pub fn rename_starmap_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
@@ -250,7 +253,11 @@ pub fn rename_starmap_with_changes(
     crate::storage::workspace_git::WorkspaceChangeSet,
 )> {
     let meta = rename_starmap(app_data_root, starmap_id, new_title)?;
-    Ok((meta, change_set_for_meta_and_index(starmap_id)))
+    Ok((
+        meta,
+        crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(starmap_meta_rel_path(starmap_id)),
+    ))
 }
 
 /// 删除星图。
@@ -310,13 +317,25 @@ pub fn bind_starmap_to_project(
     project_id: &str,
 ) -> Result<()> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
+    let old_project_id = meta.project_id.clone();
     meta.project_id = Some(project_id.to_string());
     meta.updated_at = now_epoch();
     save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(app_data_root)?;
-    idx.updated_at = meta.updated_at;
-    save_index(app_data_root, &idx)?;
+    // 维护不变量：main_starmap_by_project[pid] 指向的星图其 meta.project_id 必须等于 pid。
+    // 如果把一个原来属于别的 project、且还是旧 project main 的星图迁走，
+    // 要同时清掉旧 main 映射。只有在 main 映射真的变化时才写 index，
+    // 不为了 index.updated_at 形成无意义双写。
+    if let Some(old_pid) = &old_project_id {
+        if old_pid != project_id {
+            let mut idx = load_index(app_data_root)?;
+            if idx.main_starmap_by_project.get(old_pid) == Some(&starmap_id.to_string()) {
+                idx.main_starmap_by_project.remove(old_pid);
+                idx.updated_at = meta.updated_at;
+                save_index(app_data_root, &idx)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -334,31 +353,45 @@ pub fn bind_starmap_to_project_with_changes(
 
 /// 设置项目的主星图。
 ///
-/// 在 `StarMapIndexRecord.main_starmap_by_project` 中直接设置/替换映射，
-/// 同时更新目标 starmap 的 meta 文件（更新 updated_at）。
+/// 先校验目标星图已绑定到该 project（`meta.project_id == Some(project_id)`），
+/// 校验通过后只修改 `main_starmap_by_project` 映射，不再顺带改写目标 meta。
+/// "设为主星图"与"绑定到作品"是两个独立的关系，不能混在一起。
+///
+/// 维护不变量：`main_starmap_by_project[project_id]` 指向的星图，
+/// 其 `meta.project_id` 必须等于这个 `project_id`。
 pub fn set_main_starmap_for_project(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
 ) -> Result<()> {
+    // 先读目标 meta，确认星图存在。
+    let meta = load_starmap_meta(app_data_root, starmap_id)?;
+    // 要设成某个 project 的 main，目标必须已经 meta.project_id == Some(project_id)，
+    // 否则直接 Err。
+    if meta.project_id.as_deref() != Some(project_id) {
+        return Err(crate::error::Error::Other(format!(
+            "starmap '{}' is not bound to project '{}' (current project_id: {:?}); \
+             bind it first before setting as main",
+            starmap_id, project_id, meta.project_id
+        )));
+    }
+
+    // 校验完成以后只修改 main_starmap_by_project。
+    // 只有在 main 映射真的变化时才写 index，不为了 index.updated_at 形成无意义双写。
     let mut idx = load_index(app_data_root)?;
+    if idx.main_starmap_by_project.get(project_id) == Some(&starmap_id.to_string()) {
+        return Ok(());
+    }
     idx.main_starmap_by_project
         .insert(project_id.to_string(), starmap_id.to_string());
     idx.updated_at = now_epoch();
     save_index(app_data_root, &idx)?;
-
-    // Update the target starmap's meta file (updated_at)
-    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
-    meta.project_id = Some(project_id.to_string());
-    meta.updated_at = now_epoch();
-    save_starmap_meta(app_data_root, &meta)?;
-
     Ok(())
 }
 
 ///   set_main_starmap_for_project 的变更集版本。
 ///
-/// 变更集：目标 starmap meta + `Upsert(starmaps/index.json)`。
+/// 变更集：`Upsert(starmaps/index.json)`。只记录 index 变化，不再写目标 meta。
 pub fn set_main_starmap_for_project_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
@@ -367,7 +400,6 @@ pub fn set_main_starmap_for_project_with_changes(
     set_main_starmap_for_project(app_data_root, starmap_id, project_id)?;
 
     let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-        .add_upsert(starmap_meta_rel_path(starmap_id))
         .add_upsert(starmaps_index_rel_path());
     Ok(change_set)
 }
@@ -390,15 +422,16 @@ pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Re
     meta.updated_at = now_epoch();
     save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(app_data_root)?;
-    // If this starmap was the main for its project, remove the mapping.
+    // 如果它当前是 main，要清 main 映射。
+    // 只有在 main 映射真的变化时才写 index，不为了 index.updated_at 形成无意义双写。
     if let Some(pid) = &old_project_id {
+        let mut idx = load_index(app_data_root)?;
         if idx.main_starmap_by_project.get(pid) == Some(&starmap_id.to_string()) {
             idx.main_starmap_by_project.remove(pid);
+            idx.updated_at = meta.updated_at;
+            save_index(app_data_root, &idx)?;
         }
     }
-    idx.updated_at = meta.updated_at;
-    save_index(app_data_root, &idx)?;
     Ok(())
 }
 

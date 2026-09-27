@@ -14,6 +14,9 @@ use super::super::StarMapStore;
 /// 上层 resolve 会映射成 `CorruptStarmap`）。
 /// `load_full`、`load_graph_meta_phase`、`reload_graph_meta_if_stale`
 /// 全部走此函数，确保 schema 检查与 ID 一致性检查不被绕过。
+///
+/// 在严格版本检查前先跑旧格式迁移（schema "3" -> "4"）。
+/// 迁移是幂等的：已经是新格式则跳过。
 pub(in crate::starmap) fn load_current_graph_meta(
     path: &Path,
     expected_starmap_id: &str,
@@ -21,6 +24,25 @@ pub(in crate::starmap) fn load_current_graph_meta(
     if !path.exists() {
         return Ok(None);
     }
+
+    // 在严格版本检查前先跑旧格式迁移。
+    // path = app_data_root/starmaps/{id}/graph.json
+    // 从 path 推导出 app_data_root 和 starmap_id。
+    if let Some(graph_dir) = path.parent() {
+        if let Some(starmaps_dir) = graph_dir.parent() {
+            if let Some(app_data_root) = starmaps_dir.parent() {
+                let starmap_id = graph_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(expected_starmap_id);
+                super::super::super::migration::migrate_one_starmap_graph(
+                    app_data_root,
+                    starmap_id,
+                )?;
+            }
+        }
+    }
+
     let content = std::fs::read_to_string(path)?;
     let value: serde_json::Value = serde_json::from_str(&content)?;
 

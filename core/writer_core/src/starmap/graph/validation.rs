@@ -91,6 +91,14 @@ fn validate_nodes(
             )));
         }
 
+        // position 数值必须 finite（无 NaN/Inf），与 embed.position 校验一致。
+        if !node.position.x.is_finite() || !node.position.y.is_finite() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid node position values",
+            )));
+        }
+
         if let crate::starmap::semantic::StarMapNodeContent::ChapterRef {
             range_start,
             range_end,

@@ -27,7 +27,7 @@ fn load_full_returns_diagnostics_for_missing_files() {
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
-        schema_version: "3".to_string(),
+        schema_version: "4".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec!["missing-node".to_string()],
         edge_ids: vec![],
@@ -64,7 +64,7 @@ fn load_full_returns_diagnostics_for_missing_link() {
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
-        schema_version: "3".to_string(),
+        schema_version: "4".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -135,7 +135,7 @@ fn load_full_detects_dangling_edge_reference() {
     write_to_bucket(&starmap_dir, "edges", "e1", &edge_json);
 
     let meta = GraphMeta {
-        schema_version: "3".to_string(),
+        schema_version: "4".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec!["n1".to_string()],
         edge_ids: vec!["e1".to_string()],
@@ -180,7 +180,7 @@ fn load_full_detects_orphan_object_on_disk() {
     write_to_bucket(&starmap_dir, "nodes", "orphan-node", &orphan_json);
 
     let meta = GraphMeta {
-        schema_version: "3".to_string(),
+        schema_version: "4".to_string(),
         starmap_id: "test-id".to_string(),
         node_ids: vec![],
         edge_ids: vec![],
@@ -486,7 +486,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
 
     // Write graph.json directly to disk with a link_ids entry that has no corresponding file.
     let graph_meta = GraphMeta {
-        schema_version: "3".to_string(),
+        schema_version: "4".to_string(),
         starmap_id: meta.starmap_id.clone(),
         node_ids: vec![],
         edge_ids: vec![],

@@ -62,8 +62,9 @@ pub struct GraphMeta {
 /// 当前支持的星图 graph.json schema 版本。
 ///
 /// load 只接受此版本，不猜测或迁移旧格式。旧版本直接返回
-/// `UnsupportedVersion`，不尝试兼容解析。
-pub const CURRENT_SCHEMA_VERSION: &str = "3";
+/// `UnsupportedVersion`，不尝试兼容解析。旧格式由 `migration` 模块
+/// 在 load 之前一次性迁移到当前版本。
+pub const CURRENT_SCHEMA_VERSION: &str = "4";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
