@@ -1,4 +1,4 @@
-import { Routes, WorkspaceRouteParams, WritingRouteParams, SettingsRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -13,6 +13,8 @@ import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '..
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -45,15 +47,25 @@ export struct WorkspaceScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @Local useHdsNav: boolean = false
+  // Issue #784 评论5857397503 第4点：API < 23 时通过 ScreenPolicy 加载 HeaderTrailing 动作，
+  // 传入 NavDestination .menus() 渲染右上角操作项。
+  @Local headerActions: ActionSlot[] = []
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    // Issue #784 评论5857397503 第4点：API < 23 时加载 ScreenPolicy 的 HeaderTrailing 动作。
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectWorkspace)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -132,22 +144,6 @@ export struct WorkspaceScreen {
   // Issue #768 评论5838296806：返回链使用 @Param 传入的 NavPathStack，不再依赖全局 activeTabStack。
   private handleBack(): void {
     this.navCoordinator.safePopWithStack(this.navPathStack)
-  }
-
-  // 导航到设置页
-  private navigateToSettings(): void {
-    const settingsParam: SettingsRouteParams = {
-      projectId: this.viewModel.projectId
-    }
-    this.navPathStack.pushPath({
-      name: Routes.Settings,
-      param: settingsParam
-    })
-  }
-
-  // 执行同步（通过 ViewModel，而不是跳设置页）
-  private handleSync(): void {
-    this.viewModel.performSync()
   }
 
   // ─── Context Action 处理 ───
@@ -263,7 +259,8 @@ export struct WorkspaceScreen {
       HdsWorkspaceDestinationApi23({
         title: this.viewModel.projectName,
         onBack: () => { this.handleBack() },
-        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) }
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) },
+        screenRole: ScreenRole.ProjectWorkspace
       }) {
         this.NavContent()
       }
@@ -273,6 +270,7 @@ export struct WorkspaceScreen {
       }
       .hideTitleBar(false)
       .title(this.viewModel.projectName)
+      .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {
         this.handleBack()
         return true
@@ -472,9 +470,6 @@ export struct WorkspaceScreen {
   CompactWorkspaceLayout() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
-        this.SinglePaneHeader()
-
         // ── 内容区 ──
         if (this.viewModel.isLoadingState) {
           Column() {
@@ -548,38 +543,6 @@ export struct WorkspaceScreen {
     }
     .width('100%')
     .height('100%')
-  }
-
-  // ── 顶栏：右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Settings ──
-  // Issue #760 评论 5825003601：窄屏不渲染 Search 图标（避免无动作可点击控件）
-  // Issue #774：标题由 NavDestination/HdsWorkspaceDestination 原生标题栏承载，删除重复 projectName
-  @Builder
-  SinglePaneHeader() {
-    Row() {
-      // 右：按 ScreenPolicy HeaderTrailing 顺序渲染（Sync → Settings）
-      // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
-      // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
-      ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
-        if (slot.role === ActionRole.Sync) {
-          // 同步按钮 — 执行真正的同步动作（通过 ViewModel）
-          Button($r('app.string.sync'))
-            .fontSize(13)
-            .height(28)
-            .margin({ right: 8 })
-            .enabled(!this.viewModel.isSyncing)
-            .onClick(() => this.handleSync())
-        } else if (slot.role === ActionRole.Settings) {
-          // 设置按钮
-          Button($r('app.string.settings'))
-            .fontSize(13)
-            .height(28)
-            .onClick(() => this.navigateToSettings())
-        }
-      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
-    }
-    .width('100%')
-    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
   }
 
   // ────────────────────────────────────────

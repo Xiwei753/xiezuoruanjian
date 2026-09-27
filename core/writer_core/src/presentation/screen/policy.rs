@@ -124,6 +124,36 @@ pub struct ScreenPolicy {
 
 // ========== 核心纯函数 ==========
 
+/// 全局页头右侧动作 — Sync / Search / Settings（ 评论 5856805657）。
+///
+/// 所有需要这三个全局动作的 ScreenRole 统一从此函数获取，
+/// 不允许各角色手抄，避免出现"动作是否存在"的第二真相。
+fn global_header_trailing_actions() -> Vec<ActionSlot> {
+    vec![
+        ActionSlot {
+            role: ActionRole::Sync,
+            target: ActionTarget::App,
+            region: ActionRegion::HeaderTrailing,
+            order: 10,
+            requires_confirmation: false,
+        },
+        ActionSlot {
+            role: ActionRole::Search,
+            target: ActionTarget::App,
+            region: ActionRegion::HeaderTrailing,
+            order: 20,
+            requires_confirmation: false,
+        },
+        ActionSlot {
+            role: ActionRole::Settings,
+            target: ActionTarget::App,
+            region: ActionRegion::HeaderTrailing,
+            order: 30,
+            requires_confirmation: false,
+        },
+    ]
+}
+
 /// 根据页面角色解析动作槽位列表。纯函数，无副作用。
 ///
 /// 槽位不随壳层模式变化：区域与顺序是产品语义，控件呈现由平台端决定
@@ -132,226 +162,151 @@ pub struct ScreenPolicy {
 #[allow(clippy::too_many_lines)]
 pub fn resolve_action_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
     match screen_role {
-        ScreenRole::Home => vec![
-            ActionSlot {
-                role: ActionRole::Search,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 20,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Settings,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 30,
-                requires_confirmation: false,
-            },
-        ],
-        ScreenRole::ProjectList => vec![
-            // 作品列表顶栏右侧与 ProjectWorkspace 一致，
-            // 同步 / 搜索 / 设置（order 升序）。
-            ActionSlot {
-                role: ActionRole::Sync,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 10,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Search,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 20,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Settings,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 30,
-                requires_confirmation: false,
-            },
+        ScreenRole::Home => global_header_trailing_actions(),
+        ScreenRole::ProjectList => {
+            let mut slots = global_header_trailing_actions();
             // 新建作品是页面主操作（PrimaryAction），
             // 不再声明为 HeaderTrailing 而实际画在右下角。
-            ActionSlot {
+            slots.push(ActionSlot {
                 role: ActionRole::CreateProject,
                 target: ActionTarget::Project,
                 region: ActionRegion::PrimaryAction,
                 order: 10,
                 requires_confirmation: false,
-            },
+            });
             // 删除/重命名目标就是 Project。
-            ActionSlot {
+            slots.push(ActionSlot {
                 role: ActionRole::Delete,
                 target: ActionTarget::Project,
                 region: ActionRegion::Context,
                 order: 10,
                 requires_confirmation: true,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::Rename,
                 target: ActionTarget::Project,
                 region: ActionRegion::Context,
                 order: 20,
                 requires_confirmation: false,
-            },
-        ],
+            });
+            slots
+        }
         //  正文：作品页顶栏右侧产品顺序（从右往左）为 设置 / 搜索 / 同步状态，
         // Material3 actions 按代码顺序从左往右摆，因此 order 升序为 同步 → 搜索 → 设置。
         // Sort 未实现，不再在共享契约中声明；
         // Delete/Rename 各自通过 ActionTarget 区分卷与章节。
         // 卷/章节的上移/下移是真实功能，以 MoveEarlier/MoveLater
         // 进入 Context 区域（不恢复笼统的 Sort）。
-        ScreenRole::ProjectWorkspace => vec![
-            // 作品工作区顶栏左侧返回动作。
-            ActionSlot {
+        ScreenRole::ProjectWorkspace => {
+            let mut slots = vec![ActionSlot {
                 role: ActionRole::Back,
                 target: ActionTarget::App,
                 region: ActionRegion::HeaderLeading,
                 order: 10,
                 requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Sync,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 10,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Search,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 20,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Settings,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 30,
-                requires_confirmation: false,
-            },
+            }];
+            slots.extend(global_header_trailing_actions());
             // 新建卷是 ProjectWorkspace 的主操作，与 CreateProject 同 region。
             // Android compact 画成 FAB，宽窗口按平台 M3 映射成合适的主操作控件。
-            ActionSlot {
+            slots.push(ActionSlot {
                 role: ActionRole::CreateVolume,
                 target: ActionTarget::Project,
                 region: ActionRegion::PrimaryAction,
                 order: 10,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::CreateChapter,
                 target: ActionTarget::Volume,
                 region: ActionRegion::ItemTrailing,
                 order: 10,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::CreateChapter,
                 target: ActionTarget::Volume,
                 region: ActionRegion::EmptyState,
                 order: 10,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::Delete,
                 target: ActionTarget::Volume,
                 region: ActionRegion::Context,
                 order: 10,
                 requires_confirmation: true,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::Delete,
                 target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 20,
                 requires_confirmation: true,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::Rename,
                 target: ActionTarget::Volume,
                 region: ActionRegion::Context,
                 order: 30,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::Rename,
                 target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 40,
                 requires_confirmation: false,
-            },
+            });
             // 卷/章节的真实顺序动作（跨端语义 MoveEarlier/MoveLater）。
-            ActionSlot {
+            slots.push(ActionSlot {
                 role: ActionRole::MoveEarlier,
                 target: ActionTarget::Volume,
                 region: ActionRegion::Context,
                 order: 50,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::MoveLater,
                 target: ActionTarget::Volume,
                 region: ActionRegion::Context,
                 order: 60,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::MoveEarlier,
                 target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 70,
                 requires_confirmation: false,
-            },
-            ActionSlot {
+            });
+            slots.push(ActionSlot {
                 role: ActionRole::MoveLater,
                 target: ActionTarget::Chapter,
                 region: ActionRegion::Context,
                 order: 80,
                 requires_confirmation: false,
-            },
-        ],
+            });
+            slots
+        }
         // 写作区顶栏恢复 返回 同步 → 搜索 → 设置。搜索入口由  接管，
         // 功能未完成时点击可暂无动作，但图标不得从产品契约消失。
         // 正文自动保存，Save 不再是真实存在的动作，不再声明。
         // 返回箭头是否出现由平台端按工作区导航状态动态决定，不在静态契约里。
-        ScreenRole::Writing => vec![
-            ActionSlot {
+        ScreenRole::Writing => {
+            let mut slots = vec![ActionSlot {
                 role: ActionRole::Back,
                 target: ActionTarget::App,
                 region: ActionRegion::HeaderLeading,
                 order: 10,
                 requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Sync,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 10,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Search,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 20,
-                requires_confirmation: false,
-            },
-            ActionSlot {
-                role: ActionRole::Settings,
-                target: ActionTarget::App,
-                region: ActionRegion::HeaderTrailing,
-                order: 30,
-                requires_confirmation: false,
-            },
-        ],
+            }];
+            slots.extend(global_header_trailing_actions());
+            slots
+        }
         //  正文四：星图根页没有返回动作（占位页无编辑态顶栏状态）。
-        ScreenRole::StarMap => Vec::new(),
+        ScreenRole::StarMap => global_header_trailing_actions(),
         // 统计根页是独立一级入口，不继承作品工作区的返回能力。
-        ScreenRole::Stats => Vec::new(),
+        ScreenRole::Stats => global_header_trailing_actions(),
         ScreenRole::Settings => vec![ActionSlot {
             role: ActionRole::Back,
             target: ActionTarget::App,

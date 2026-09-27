@@ -10,7 +10,7 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
-import { Routes, WorkspaceRouteParams, SettingsRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -23,6 +23,11 @@ import { NavigationTransactionCoordinator } from '../../../app/navigation/Naviga
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 @ComponentV2
 export struct HomeScreen {
@@ -39,12 +44,14 @@ export struct HomeScreen {
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
+  @Local useHdsNav: boolean = false
+  @Local headerActions: ActionSlot[] = []
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'HomeScreen', 'route name=Home')
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
@@ -59,6 +66,14 @@ export struct HomeScreen {
 
     AppContinuationService.getInstance().clear()
     this.viewModel.loadData()
+
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectList)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
   }
 
   aboutToDisappear() {
@@ -72,10 +87,6 @@ export struct HomeScreen {
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
 
-  private handleSync(): void {
-    this.viewModel.performSync()
-  }
-
   private handleRetry(): void {
     this.viewModel.retry()
   }
@@ -87,17 +98,6 @@ export struct HomeScreen {
     }
     const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
     navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
-  }
-
-  private navigateToSettings(): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
-    const settingsParam: SettingsRouteParams = {
-      projectId: this.viewModel.projects.length > 0 ? this.viewModel.projects[0].id : ''
-    }
-    navPathStack.pushPath({ name: Routes.Settings, param: settingsParam })
   }
 
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
@@ -236,40 +236,57 @@ export struct HomeScreen {
 
   // ========== 构建 UI ==========
 
-  build() {
-    NavDestination() {
-      Stack() {
-        Column() {
-          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-            // ── 宽屏布局：恢复 #760 之前的实现 ──
-            this.TwoPaneLayout()
-          } else {
-            // ── 窄屏布局：保留当前的新作品卡布局 ──
-            this.SinglePaneLayout()
-          }
-        }
-        .width('100%')
-        .height('100%')
-
-        // ── 对话框层 ──
-        if (this.viewModel.showCreateDialog) {
-          this.CreateDialog()
-        }
-        if (this.viewModel.renameTarget !== null) {
-          this.RenameDialog()
-        }
-        if (this.viewModel.deleteTarget !== null) {
-          this.DeleteConfirmDialog()
+  @Builder
+  HomeContent() {
+    Stack() {
+      Column() {
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          // ── 宽屏布局：恢复 #760 之前的实现 ──
+          this.TwoPaneLayout()
+        } else {
+          // ── 窄屏布局：保留当前的新作品卡布局 ──
+          this.SinglePaneLayout()
         }
       }
       .width('100%')
       .height('100%')
+
+      // ── 对话框层 ──
+      if (this.viewModel.showCreateDialog) {
+        this.CreateDialog()
+      }
+      if (this.viewModel.renameTarget !== null) {
+        this.RenameDialog()
+      }
+      if (this.viewModel.deleteTarget !== null) {
+        this.DeleteConfirmDialog()
+      }
     }
-    .hideTitleBar(true)
-    .onShown((_reason: VisibilityChangeReason) => {
-      hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
-    })
+    .width('100%')
+    .height('100%')
+  }
+
+  build() {
+    if (this.useHdsNav) {
+      HdsAppDestinationApi23({
+        title: $r('app.string.app_title'),
+        screenRole: ScreenRole.ProjectList,
+        tabIndex: 0
+      }) {
+        this.HomeContent()
+      }
+    } else {
+      NavDestination() {
+        this.HomeContent()
+      }
+      .hideTitleBar(false)
+      .title($r('app.string.app_title'))
+      .menus(buildNavMenuItems(this.headerActions))
+      .onShown((_reason: VisibilityChangeReason) => {
+        hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
+      })
+    }
   }
 
   // ────────────────────────────────────────
@@ -552,6 +569,7 @@ export struct HomeScreen {
             Image($r('app.media.ic_star'))
               .width(36)
               .height(36)
+              .fillColor($r('sys.color.icon_primary'))
               .margin({ bottom: 10 })
 
             Text('星图')
@@ -580,7 +598,9 @@ export struct HomeScreen {
           .justifyContent(FlexAlign.Center)
           .borderRadius(DesignTokens.cardRadius)
         }
-        .onClick(() => this.navigateToSettings())
+        .onClick(() => {
+          NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Settings)
+        })
 
         GridCol({ span: 1 }) {
           Column() {
@@ -598,7 +618,9 @@ export struct HomeScreen {
           .justifyContent(FlexAlign.Center)
           .borderRadius(DesignTokens.cardRadius)
         }
-        .onClick(() => this.navigateToSettings())
+        .onClick(() => {
+          NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Sync)
+        })
       }
       .width('100%')
     }
@@ -654,7 +676,7 @@ export struct HomeScreen {
     .height('100%')
   }
 
-  // ── 窄屏顶栏：app_title + 按 ScreenPolicy HeaderTrailing 顺序渲染按钮 ──
+  // ── 窄屏顶栏：只保留标题，页头动作由 NavigationHeaderActionDispatcher 统一管理 ──
   @Builder
   SinglePaneTopBar() {
     Row() {
@@ -663,26 +685,6 @@ export struct HomeScreen {
         .fontWeight(FontWeight.Bold)
 
       Blank()
-
-      // 按 HeaderTrailing order 顺序渲染：Sync(10) → Settings(30)
-      // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
-      // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
-      ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
-        if (slot.role === ActionRole.Sync) {
-          Image($r('app.media.ic_refresh'))
-            .width(24)
-            .height(24)
-            .fillColor($r('sys.color.icon_primary'))
-            .margin({ right: 16 })
-            .onClick(() => this.handleSync())
-        } else if (slot.role === ActionRole.Settings) {
-          Image($r('sys.media.ohos_ic_public_more'))
-            .width(24)
-            .height(24)
-            .fillColor($r('sys.color.icon_primary'))
-            .onClick(() => this.navigateToSettings())
-        }
-      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

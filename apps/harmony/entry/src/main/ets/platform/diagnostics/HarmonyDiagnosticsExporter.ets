@@ -11,7 +11,7 @@
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
 import { common } from '@kit.AbilityKit'
-import { fileUri } from '@kit.CoreFileKit'
+import { fileUri, picker } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
 import util from '@ohos.util'
 import fs from '@ohos.file.fs'
@@ -196,6 +196,55 @@ export class HarmonyDiagnosticsExporter {
       hilog.error(0x0000, LOG_TAG, 'share failed: %{public}s', String(e))
       return false
     }
+  }
+
+  // 导出并保存到用户文件 — 使用 DocumentViewPicker.save() 让用户选择保存位置。
+  // 返回 true 表示保存成功；false 表示导出失败或用户取消。
+  // 与 exportAndShare() 的区别：exportAndShare 拉起系统分享面板，exportAndSaveToUserFile 让用户选择本地保存位置。
+  async exportAndSaveToUserFile(): Promise<boolean> {
+    const zipPath = await this.export()
+    if (zipPath === null || this.abilityContext === null) {
+      return false
+    }
+
+    try {
+      const options = new picker.DocumentSaveOptions()
+      options.newFileNames = [this.buildExportFileName()]
+
+      const documentPicker = new picker.DocumentViewPicker(this.abilityContext)
+      const uris: string[] = await documentPicker.save(options)
+      if (uris.length === 0) {
+        return false
+      }
+
+      const src = fs.openSync(zipPath, fs.OpenMode.READ_ONLY)
+      const dst = fs.openSync(uris[0], fs.OpenMode.READ_WRITE)
+      try {
+        const size = fs.statSync(src.fd).size
+        const data = new ArrayBuffer(size)
+        fs.readSync(src.fd, data)
+        fs.truncate(dst.fd, 0)
+        fs.writeSync(dst.fd, data)
+      } finally {
+        fs.closeSync(src)
+        fs.closeSync(dst)
+      }
+      return true
+    } catch (e) {
+      hilog.error(0x0000, LOG_TAG, 'save diagnostics failed: %{public}s', String(e))
+      return false
+    }
+  }
+
+  // 用真实时间生成诊断包文件名，格式：sujian-diagnostics-YYYYMMDD-HHmm.zip
+  private buildExportFileName(): string {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = (now.getMonth() + 1).toString().padStart(2, '0')
+    const day = now.getDate().toString().padStart(2, '0')
+    const hours = now.getHours().toString().padStart(2, '0')
+    const minutes = now.getMinutes().toString().padStart(2, '0')
+    return `sujian-diagnostics-${year}${month}${day}-${hours}${minutes}.zip`
   }
 
   // ── 附件收集 ──────────────────────────────────────────────────

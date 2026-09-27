@@ -3,6 +3,7 @@ import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
 import { HarmonyColorModeController } from './HarmonyColorModeController'
 import { ThemeMode } from './HarmonyThemeTypes'
+import { applySujianMonochromeTheme } from './HarmonyMonochromeTheme'
 
 export type ColorSource = 'built_in' | 'saved_palette'
 
@@ -72,18 +73,18 @@ export interface ThemeConfig {
 }
 
 export const LightTheme: ThemeColors = {
-  primary: '#006497',
+  primary: '#000000',
   onPrimary: '#FFFFFF',
-  primaryContainer: '#CCE5FF',
-  onPrimaryContainer: '#001E31',
+  primaryContainer: '#E0E0E0',
+  onPrimaryContainer: '#1A1C1E',
   secondary: '#51606F',
   onSecondary: '#FFFFFF',
-  secondaryContainer: '#D4E4F6',
-  onSecondaryContainer: '#0E1D2A',
-  tertiary: '#6D578C',
+  secondaryContainer: '#D4D4D4',
+  onSecondaryContainer: '#1A1C1E',
+  tertiary: '#5C5C5C',
   onTertiary: '#FFFFFF',
-  tertiaryContainer: '#F1DAFF',
-  onTertiaryContainer: '#261447',
+  tertiaryContainer: '#E8E8E8',
+  onTertiaryContainer: '#1A1C1E',
   error: '#BA1A1A',
   onError: '#FFFFFF',
   errorContainer: '#FFDAD6',
@@ -105,7 +106,7 @@ export const LightTheme: ThemeColors = {
   outlineVariant: '#C2C6CF',
   inverseSurface: '#2E3036',
   inverseOnSurface: '#F0F0F7',
-  inversePrimary: '#92CCFF',
+  inversePrimary: '#72777F',
   scrim: '#000000',
   // Legacy compat
   textPrimary: '#1A1C1E',
@@ -117,18 +118,18 @@ export const LightTheme: ThemeColors = {
 }
 
 export const DarkTheme: ThemeColors = {
-  primary: '#92CCFF',
-  onPrimary: '#003351',
-  primaryContainer: '#004B73',
-  onPrimaryContainer: '#CCE5FF',
+  primary: '#FFFFFF',
+  onPrimary: '#000000',
+  primaryContainer: '#33353A',
+  onPrimaryContainer: '#E2E2E5',
   secondary: '#B8C8DA',
   onSecondary: '#233240',
-  secondaryContainer: '#394857',
-  onSecondaryContainer: '#D4E4F6',
-  tertiary: '#D7BFFF',
-  onTertiary: '#3E2A5C',
-  tertiaryContainer: '#554074',
-  onTertiaryContainer: '#F1DAFF',
+  secondaryContainer: '#393B40',
+  onSecondaryContainer: '#E2E2E5',
+  tertiary: '#B8B8B8',
+  onTertiary: '#2E3036',
+  tertiaryContainer: '#393B40',
+  onTertiaryContainer: '#E2E2E5',
   error: '#FFB4AB',
   onError: '#690005',
   errorContainer: '#93000A',
@@ -150,7 +151,7 @@ export const DarkTheme: ThemeColors = {
   outlineVariant: '#42474E',
   inverseSurface: '#E0E2E9',
   inverseOnSurface: '#2E3036',
-  inversePrimary: '#006497',
+  inversePrimary: '#8C919A',
   scrim: '#000000',
   // Legacy compat
   textPrimary: '#E2E2E5',
@@ -424,6 +425,8 @@ export class HarmonyThemeAdapter {
       const isDark = this.systemColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
       this.effectiveColorMode = isDark ? 'dark' : 'light'
     }
+    // Issue #784：每次 effectiveColorMode 变化后统一调用应用级单色主题
+    applySujianMonochromeTheme(this.effectiveColorMode === 'dark')
   }
 
   // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举判断。

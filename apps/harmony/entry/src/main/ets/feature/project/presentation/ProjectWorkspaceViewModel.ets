@@ -64,7 +64,7 @@ export class DeleteTarget {
  * - 创建/删除/重命名卷和章节
  * - 管理 expandedVolumes 展开状态
  * - 将 Core DTO（VolumeTree / ChapterMeta）转换为页面状态对象（VolumeCardState / ChapterRowState）
- * - 管理 loading / error / rename / delete / sync 状态
+ * - 管理 loading / error / rename / delete 状态
  * - 暴露排序后的 Context actions 供 UI 按 action slot 渲染菜单
  *
  * 不负责：
@@ -83,14 +83,10 @@ export class ProjectWorkspaceViewModel {
   @Trace errorMessageState: string = ''
   @Trace expandedVolumes: Set<string> = new Set()
   @Trace screenPolicy: ScreenPolicy | null = null
-  // Issue #760 评论 5823355851 问题3：暴露 HeaderTrailing 和 PrimaryAction 供 UI 渲染顶栏
-  @Trace headerTrailingActions: ActionSlot[] = []
   @Trace primaryActions: ActionSlot[] = []
   @Trace renameTarget: RenameTarget | null = null
   @Trace renameInput: string = ''
   @Trace deleteTarget: DeleteTarget | null = null
-  @Trace isSyncing: boolean = false
-  @Trace syncMessage: string = ''
   @Trace projectId: string = ''
   @Trace projectName: string = ''
   // 当前更多菜单上下文 — 用于 @Builder 无参数方法访问正确的 volumeId/chapterId
@@ -152,10 +148,6 @@ export class ProjectWorkspaceViewModel {
         throw new Error(policyResult.errorCode ?? 'resolve screen policy failed')
       }
       this.screenPolicy = policyResult.data
-      // Issue #760 评论 5823355851 问题3：提取 HeaderTrailing 和 PrimaryAction（按 order 排序）
-      this.headerTrailingActions = policyResult.data.actionSlots
-        .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
-        .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
       this.primaryActions = policyResult.data.actionSlots
         .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
         .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
@@ -578,25 +570,6 @@ export class ProjectWorkspaceViewModel {
   /** 取消删除 — 清除对话框状态 */
   cancelDelete(): void {
     this.deleteTarget = null
-  }
-
-  // ─── 同步 ───
-
-  async performSync(): Promise<void> {
-    this.isSyncing = true
-    this.syncMessage = ''
-    try {
-      const result = await this.bridge.performSync()
-      if (result.success) {
-        this.syncMessage = '同步完成'
-      } else {
-        this.syncMessage = '同步失败'
-      }
-    } catch (_err) {
-      this.syncMessage = '同步时发生错误'
-    } finally {
-      this.isSyncing = false
-    }
   }
 
   // ─── Core DTO → 页面状态对象转换 ───

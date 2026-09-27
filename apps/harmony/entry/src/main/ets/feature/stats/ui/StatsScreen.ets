@@ -9,8 +9,12 @@ import { WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, WidthClass, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 @Component
 export struct StatsScreen {
@@ -20,12 +24,23 @@ export struct StatsScreen {
   @State errorMessage: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
+  @State useHdsNav: boolean = false
+  @State headerActions: ActionSlot[] = []
 
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
     this.loadStats()
+
+    // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.Stats)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
 
     const self = this
     this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
@@ -60,29 +75,9 @@ export struct StatsScreen {
     }
   }
 
-  build() {
-    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    // StatsScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
-    NavDestination() {
+  @Builder
+  StatsContent() {
     Column() {
-      Row() {
-        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-          Image($r('sys.media.ohos_ic_public_arrow_left'))
-            .width(24)
-            .height(24)
-            .onClick(() => this.navPathStack.pop())
-        }
-
-        Text('统计')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .margin({ left: 12 })
-
-        Blank()
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
-
       if (this.isLoading) {
         Column() {
           LoadingProgress()
@@ -222,10 +217,29 @@ export struct StatsScreen {
     }
     .width('100%')
     .height('100%')
+  }
+
+  build() {
+    // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳消费 HeaderTrailing；
+    // API < 23 用 NavDestination .menus() 接入 HeaderTrailing 动作。
+    if (this.useHdsNav) {
+      HdsAppDestinationApi23({
+        title: '统计',
+        screenRole: ScreenRole.Stats,
+        tabIndex: 2
+      }) {
+        this.StatsContent()
+      }
+    } else {
+      NavDestination() {
+        this.StatsContent()
+      }
+      .hideTitleBar(false)
+      .title('统计')
+      .menus(buildNavMenuItems(this.headerActions))
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Stats, 2)
+      })
     }
-    .hideTitleBar(true)
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Stats, 2)
-    })
   }
 }

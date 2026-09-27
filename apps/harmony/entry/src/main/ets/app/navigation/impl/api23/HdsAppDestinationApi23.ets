@@ -1,24 +1,23 @@
-// HdsWorkspaceDestinationApi23 — API23+ 项目工作区页 NavDestination 壳层。
-// Issue #768 评论5835958606：把 HdsNavDestination + HdsNavigationTitleBarOptions
-// 收进 impl/api23 组件，共享页面 WorkspaceScreen 不再直接 import @kit.UIDesignKit，
-// 避免高版本模块引用进入所有版本都会加载的共享页面，破坏版本隔离。
-// Issue #773 评论5844518092：统一为 V2 @ComponentV2 + @Param，消除 V2 页面把 @Builder
-// 交给 V1 壳的 @BuilderParam 后 this 变成壳组件导致 adaptiveState undefined 的 TypeError。
-// Issue #784 评论5857397503：移除硬编码的三个 menu item，改为通过 ScreenPolicyBridge
-// 异步加载 ActionSlot[]，用 buildHdsMenuItems 生成菜单。
+// HdsAppDestinationApi23 — API23+ Home/StarMap/Stats 共享根页面壳。
+// Issue #784 评论 5857397503 第 1 点：Home 删除旧顶栏后没有新标题栏接上，
+// 新建此共享根页面壳，让 Home / StarMap / Stats 共用 HdsNavDestination + 标题栏。
+// 通过 ScreenPolicyBridge 异步加载 ActionSlot[]，用 buildHdsMenuItems 生成菜单，
+// 不再在平台端硬编码"同步/搜索/设置"三个 item。
+// onShown 时通过 NavigationChromeStore.reportScreenRole 上报当前 ScreenRole + tabIndex。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 import { buildHdsMenuItems } from './HdsHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
+import { NavigationChromeStore } from '../../NavigationChromeStore'
 import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
-export struct HdsWorkspaceDestinationApi23 {
+export struct HdsAppDestinationApi23 {
   @BuilderParam contentBuilder: () => void
   @Param title: string | Resource = ''
-  @Param onBack: (() => void) | null = null
+  @Param screenRole: ScreenRole = ScreenRole.ProjectList
   @Param onShown: (() => void) | null = null
-  @Param screenRole: ScreenRole = ScreenRole.ProjectWorkspace
+  @Param tabIndex: number = 0
   @Local headerActions: ActionSlot[] = []
 
   async aboutToAppear() {
@@ -48,13 +47,8 @@ export struct HdsWorkspaceDestinationApi23 {
         }
       }
     } as HdsNavigationTitleBarOptions)
-    .onBackPressed(() => {
-      if (this.onBack) {
-        this.onBack()
-      }
-      return true
-    })
     .onShown(() => {
+      NavigationChromeStore.getInstance().reportScreenRole(this.screenRole, this.tabIndex)
       if (this.onShown) {
         this.onShown()
       }

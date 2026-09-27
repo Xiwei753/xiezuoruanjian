@@ -8,8 +8,14 @@
 // - onSystemBack：系统返回手势（全面屏侧滑返回），IME 打开时先收键盘，再次手势才退出页面。
 // - HDS 标题栏使用原生 backIcon.action 绑定返回按钮，不再使用不存在的 customizedArea。
 // - .onBackPressed 只调用 onSystemBack 并消费本次系统返回（return true）。
+//
+// Issue #784 评论5857397503：移除硬编码的三个 menu item（同步/搜索/设置），
+// 改为通过 ScreenPolicyBridge 异步加载 ActionSlot[]，用 buildHdsMenuItems 生成菜单。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
+import { buildHdsMenuItems } from './HdsHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
+import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HdsWritingDestinationApi23 {
@@ -21,6 +27,16 @@ export struct HdsWritingDestinationApi23 {
   @Param onShown: (() => void) | null = null
   // Issue #778 任务8：接收父级传入的 scroller，绑定到 HdsNavDestination 做沉浸联动。
   @Param scroller: Scroller = new Scroller()
+  // Issue #784 评论5857397503：接收 ScreenRole，异步加载 ScreenPolicy 获取 ActionSlot[]。
+  @Param screenRole: ScreenRole = ScreenRole.Writing
+  @Local headerActions: ActionSlot[] = []
+
+  async aboutToAppear() {
+    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(this.screenRole)
+    if (policy !== null) {
+      this.headerActions = policy.actionSlots
+    }
+  }
 
   build() {
     HdsNavDestination() {
@@ -42,6 +58,11 @@ export struct HdsWritingDestinationApi23 {
               this.onTitleBack()
             }
           }
+        },
+        // Issue #784 评论5857397503：菜单项由 buildHdsMenuItems 从 ActionSlot[] 动态生成，
+        // 不再硬编码"同步/搜索/设置"三个 item。
+        menu: {
+          value: buildHdsMenuItems(this.headerActions)
         }
       },
       style: {

@@ -6,10 +6,14 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } fr
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { WidthClass, ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { WidthClass, ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
 import { SharePayload } from '../../../platform/share/SharePayload'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 interface SelectOption {
   value: string
@@ -39,6 +43,8 @@ export struct StarMapScreen {
   @State @Watch('onTransformChange') offsetY: number = 0
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
+  @State useHdsNav: boolean = false
+  @State headerActions: ActionSlot[] = []
 
   // 动画状态变量
   @State motionTick: number = 0
@@ -65,7 +71,7 @@ export struct StarMapScreen {
   // 分享服务（碰一碰/隔空传送/系统分享统一入口）。
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'StarMapScreen', 'route name=StarMap')
     const paramsArr = this.navPathStack.getParamByName(Routes.StarMap) as StarMapRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
@@ -77,6 +83,15 @@ export struct StarMapScreen {
     } else {
       // 无参数时（一级 Tab 入口）：先列出所有星图，选择第一个后加载
       this.loadAllStarMapsAndSelectFirst()
+    }
+
+    // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.StarMap)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
     }
 
     const self = this
@@ -424,92 +439,79 @@ export struct StarMapScreen {
     return this.layoutNodes.find(ln => ln.nodeId === nodeId)
   }
 
-  build() {
-    // Issue #752：NavDestination 作为 Navigation 目标页根节点，否则实机白屏。
-    // StarMapScreen 自带 header，hideTitleBar(true) 隐藏原生标题栏。
-    NavDestination() {
+  // Issue #784 评论 5857856673 问题3：星图专属操作工具条。
+  // 包含：星图切换下拉框、缩小、缩放百分比、放大、重置视图、分享。
+  // 全局动作（同步/搜索/设置）继续留在标题栏右侧，此处只放星图自己的操作。
+  @Builder
+  StarMapToolbar() {
+    Row() {
+      // 星图切换下拉框
+      Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => {
+        return { value: sm.title, icon: '' } as SelectOption
+      }))
+        .selected(this.allStarMaps.findIndex((sm: StarMapMeta) => sm.starmapId === this.starmapId))
+        .value(this.starmapTitle)
+        .onSelect((index: number) => {
+          if (index >= 0 && index < this.allStarMaps.length) {
+            this.starmapId = this.allStarMaps[index].starmapId
+            this.starmapTitle = this.allStarMaps[index].title
+            this.loadStarMap()
+          }
+        })
+        .width(160)
+        .fontSize(14)
+
+      // 缩小按钮
+      Button('−')
+        .width(36)
+        .height(36)
+        .fontSize(18)
+        .onClick(() => {
+          this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
+        })
+
+      // 当前缩放百分比
+      Text(`${Math.round(this.zoomScale * 100)}%`)
+        .fontSize(14)
+        .width(60)
+        .textAlign(TextAlign.Center)
+
+      // 放大按钮
+      Button('+')
+        .width(36)
+        .height(36)
+        .fontSize(18)
+        .onClick(() => {
+          this.zoomScale = Math.min(3, this.zoomScale + 0.1)
+        })
+
+      // 重置视图按钮
+      Button($r('app.string.reset'))
+        .fontSize(12)
+        .height(36)
+        .onClick(() => {
+          this.zoomScale = 1
+          this.offsetX = 0
+          this.offsetY = 0
+        })
+
+      // 分享按钮
+      Button($r('app.string.share'))
+        .fontSize(12)
+        .height(36)
+        .onClick(() => {
+          void this.shareService.share(this.buildSharePayload(), 'system')
+        })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+    .justifyContent(FlexAlign.SpaceEvenly)
+  }
+
+  @Builder
+  StarMapContent() {
     Column() {
-      // Header
-      Row() {
-        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-          Image($r('sys.media.ohos_ic_public_arrow_left'))
-            .width(24)
-            .height(24)
-            .onClick(() => this.navPathStack.pop())
-        }
-
-        Text(this.starmapTitle)
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .margin({ left: 12 })
-
-        Blank()
-
-        // Star map selector
-        if (this.allStarMaps.length > 1) {
-          Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => ({ value: sm.title, icon: '' })))
-            .selected(this.allStarMaps.findIndex(sm => sm.starmapId === this.starmapId))
-            .value(this.starmapTitle)
-            .width(150)
-            .onSelect((index: number) => {
-              const sm = this.allStarMaps[index]
-              if (sm) {
-                this.starmapId = sm.starmapId
-                this.starmapTitle = sm.title
-                this.loadStarMap()
-              }
-            })
-            .margin({ right: 12 })
-        }
-
-        // Zoom controls
-        Row() {
-          Button('-')
-            .fontSize(18)
-            .width(36)
-            .height(36)
-            .onClick(() => {
-              this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
-            })
-
-          Text(`${Math.round(this.zoomScale * 100)}%`)
-            .fontSize(14)
-            .width(50)
-            .textAlign(TextAlign.Center)
-
-          Button('+')
-            .fontSize(18)
-            .width(36)
-            .height(36)
-            .onClick(() => {
-              this.zoomScale = Math.min(3, this.zoomScale + 0.1)
-            })
-
-          Button($r('app.string.reset'))
-            .fontSize(12)
-            .height(36)
-            .margin({ left: 8 })
-            .onClick(() => {
-              this.zoomScale = 1
-              this.offsetX = 0
-              this.offsetY = 0
-            })
-
-          // 普通"系统分享"按钮：只走 HarmonyShareService.share(payload, 'system')。
-          // 碰一碰/隔空传送走生命周期接口，不在此按钮混用。
-          Button('\u5206\u4eab')
-            .fontSize(12)
-            .height(36)
-            .margin({ left: 8 })
-            .onClick(() => {
-              const payload: SharePayload = this.buildSharePayload()
-              void this.shareService.share(payload, 'system')
-            })
-        }
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
+      this.StarMapToolbar()
 
       if (this.isLoading) {
         Column() {
@@ -578,11 +580,30 @@ export struct StarMapScreen {
     }
     .width('100%')
     .height('100%')
+  }
+
+  build() {
+    // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳消费 HeaderTrailing；
+    // API < 23 用 NavDestination .menus() 接入 HeaderTrailing 动作。
+    if (this.useHdsNav) {
+      HdsAppDestinationApi23({
+        title: this.starmapTitle,
+        screenRole: ScreenRole.StarMap,
+        tabIndex: 1
+      }) {
+        this.StarMapContent()
+      }
+    } else {
+      NavDestination() {
+        this.StarMapContent()
+      }
+      .hideTitleBar(false)
+      .title(this.starmapTitle)
+      .menus(buildNavMenuItems(this.headerActions))
+      .onShown(() => {
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMap, 1)
+      })
     }
-    .hideTitleBar(true)
-    .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMap, 1)
-    })
   }
 
   @Builder

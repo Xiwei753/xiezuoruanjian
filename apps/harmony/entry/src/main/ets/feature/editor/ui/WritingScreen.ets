@@ -28,9 +28,12 @@ import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, ActionRole } from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
+import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
+import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
@@ -108,6 +111,9 @@ export struct WritingScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @State useHdsNav: boolean = false
+  // Issue #784 评论5857397503 第4点：API < 23 时通过 ScreenPolicy 加载 HeaderTrailing 动作，
+  // 传入 NavDestination .menus() 渲染右上角操作项。
+  @State headerActions: ActionSlot[] = []
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -155,10 +161,17 @@ export struct WritingScreen {
   // aboutToDisappear 用此 token 注销，避免误注销其他 WritingScreen 实例的 guard。
   private leaveGuardToken: number = -1
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'WritingScreen', 'route name=Writing')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    // Issue #784 评论5857397503 第4点：API < 23 时加载 ScreenPolicy 的 HeaderTrailing 动作。
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.Writing)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -931,6 +944,23 @@ export struct WritingScreen {
     return getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
   }
 
+  // Issue #784 评论5857856673 问题2：API<23 自定义标题 Row 右侧动作按钮的图标映射。
+  // 与 HdsHeaderActionMenu 中 mapNavMenuItem 的图标保持一致。
+  private getHeaderActionIcon(role: ActionRole): Resource {
+    if (role === ActionRole.Sync) {
+      return $r('app.media.ic_refresh')
+    }
+    if (role === ActionRole.Search) {
+      return $r('app.media.ic_search')
+    }
+    if (role === ActionRole.Settings) {
+      return $r('app.media.ic_settings')
+    }
+    // 非预期 role 不应出现（sortedHeaderTrailingActions 只返回 HeaderTrailing slot），
+    // 给一个 fallback 图标避免编译报错。
+    return $r('app.media.ic_settings')
+  }
+
   async clearContent() {
     AlertDialog.show({
       title: $r('app.string.confirm_clear'),
@@ -1032,7 +1062,8 @@ export struct WritingScreen {
         onShown: () => {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
         },
-        scroller: this.editorScroller
+        scroller: this.editorScroller,
+        screenRole: ScreenRole.Writing
       }) {
         this.NavContent()
       }
@@ -1056,6 +1087,25 @@ export struct WritingScreen {
             Text(this.chapterTitle)
               .fontSize(20)
               .margin({ left: 12 })
+
+            // Issue #784 评论5857856673 问题2：右侧渲染 HeaderTrailing 动作按钮。
+            // 动作来源是 Core ScreenPolicy（this.headerActions），通过 sortedHeaderTrailingActions
+            // 排序后 ForEach 渲染，统一调用 NavigationHeaderActionDispatcher.dispatchAction。
+            Blank()
+
+            ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
+              Button({ type: ButtonType.Circle, stateEffect: true }) {
+                Image(this.getHeaderActionIcon(slot.role))
+                  .width(24)
+                  .height(24)
+                  .fillColor($r('sys.color.icon_primary'))
+              }
+              .width(40)
+              .height(40)
+              .onClick(() => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+              })
+            }, (slot: ActionSlot) => slot.role)
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
