@@ -15,6 +15,7 @@ import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDto
 import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import { PRIMARY_FAB_SIZE_VP, PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ProjectListViewModel } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -636,12 +637,12 @@ export struct HomeScreen {
             .fontSize(28)
             .fontColor([$r('sys.color.icon_primary')])
         }
-        .width(56)
-        .height(56)
+        .width(PRIMARY_FAB_SIZE_VP)
+        .height(PRIMARY_FAB_SIZE_VP)
         .backgroundColor(Color.Transparent)
         .margin({
           right: this.adaptiveState.pagePadding,
-          bottom: 112
+          bottom: PRIMARY_FAB_BOTTOM_INSET_VP
         })
         .onClick(() => {
           this.viewModel.showCreateDialog = true

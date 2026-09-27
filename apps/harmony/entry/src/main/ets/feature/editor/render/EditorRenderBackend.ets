@@ -75,7 +75,6 @@ export class EditorRenderBackend {
   static renderLayout(
     snapshot: EditorLayoutSnapshot,
     containerWidth: number,
-    textHeight: number,
     measureTextFn: (s: string) => number,
     // Issue #629 评论18：renderLayout 接受可选 visualCaretAffinity，
     // 由 SelectionController 发布的 VisualCaretPosition.affinity 传入，
@@ -135,7 +134,6 @@ export class EditorRenderBackend {
   static hitTestByPoint(
     snapshot: EditorLayoutSnapshot,
     containerWidth: number,
-    textHeight: number,
     touchX: number,
     touchY: number,
     measureTextFn: (s: string) => number,

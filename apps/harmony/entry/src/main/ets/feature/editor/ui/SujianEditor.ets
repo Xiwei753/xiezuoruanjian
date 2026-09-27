@@ -647,7 +647,6 @@ export struct SujianEditor {
     const result = EditorRenderBackend.renderLayout(
       snap,
       this.contentWidth,
-      this.contentHeight,
       measureTextFn,
       visualCaret.affinity,
     )
@@ -793,17 +792,10 @@ export struct SujianEditor {
     return EditorRenderBackend.hitTestByPoint(
       snap,
       this.contentWidth,
-      this.contentHeight,
       contentX,
       contentY,
       measureTextFn,
     )
-  }
-
-  // 把视口内坐标（相对组件左上）转成内容坐标（加上滚动偏移）。
-  private viewportToContent(viewportX: number, viewportY: number): [number, number] {
-    const offset = this.scroller.currentOffset()
-    return [viewportX + offset.xOffset, viewportY + offset.yOffset]
   }
 
   // 当前光标 UTF-16 offset（从 snapshot.cursorByteOffset 转）。
@@ -963,16 +955,19 @@ export struct SujianEditor {
       return
     }
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
-    // 把视口坐标转成内容坐标。
-    const contentCoord: [number, number] = this.viewportToContent(ev.x, ev.y)
-    // Issue #776 评论5848626733 第8项 / Issue #778 任务7：contentCoord 是相对 Scroll 内容区域左上角的 vp 坐标，
-    // Stack 在 Column 的 padding 后区域，减去 padding 得到相对 Stack 左上角的坐标。padding 区域是留白，不命中文字。
-    const paddedX = contentCoord[0] - EDITOR_HORIZONTAL_PADDING_VP
-    const paddedY = contentCoord[1] - EDITOR_TOP_PADDING_VP
-    const inContentArea = paddedX >= 0 && paddedY >= 0
+    // Issue #778 评论5853666955 第1项：onMouse 绑定在内层 Stack 上，
+    // ArkUI MouseEvent.x/y 已是相对 Stack 左上角的局部坐标，滚动后也由 ArkUI 自动补偿。
+    // 不再调用 viewportToContent()（会把滚动量算第二次），也不再减 padding（padding 在外层 Column）。
+    const contentX = ev.x
+    const contentY = ev.y
+    const inContentArea =
+      contentX >= 0 &&
+      contentY >= 0 &&
+      contentX <= this.contentWidth &&
+      contentY <= this.contentHeight
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
     const hitPos: VisualCaretPosition = inContentArea
-      ? this.hitTestContent(paddedX, paddedY)
+      ? this.hitTestContent(contentX, contentY)
       : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     switch (ev.action) {
       case 'down':
@@ -1041,16 +1036,19 @@ export struct SujianEditor {
       hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, `touch down: x=${touch.x}, y=${touch.y}`)
       this.focusAndAttachIme()
     }
-    // 把视口坐标转成内容坐标。
-    const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
-    // Issue #776 评论5848626733 第8项 / Issue #778 任务7：contentCoord 是相对 Scroll 内容区域左上角的 vp 坐标，
-    // Stack 在 Column 的 padding 后区域，减去 padding 得到相对 Stack 左上角的坐标。padding 区域是留白，不命中文字。
-    const paddedX = contentCoord[0] - EDITOR_HORIZONTAL_PADDING_VP
-    const paddedY = contentCoord[1] - EDITOR_TOP_PADDING_VP
-    const inContentArea = paddedX >= 0 && paddedY >= 0
+    // Issue #778 评论5853666955 第1项：onTouch 绑定在内层 Stack 上，
+    // ArkUI TouchObject.x/y 已是相对 Stack 左上角的局部坐标，滚动后也由 ArkUI 自动补偿。
+    // 不再调用 viewportToContent()（会把滚动量算第二次），也不再减 padding（padding 在外层 Column）。
+    const contentX = touch.x
+    const contentY = touch.y
+    const inContentArea =
+      contentX >= 0 &&
+      contentY >= 0 &&
+      contentX <= this.contentWidth &&
+      contentY <= this.contentHeight
     // Issue #629 评论18：hitTestContent 返回 VisualCaretPosition。
     const hitPos: VisualCaretPosition = inContentArea
-      ? this.hitTestContent(paddedX, paddedY)
+      ? this.hitTestContent(contentX, contentY)
       : { utf16Offset: 0, affinity: CaretAffinity.Downstream }
 
     // 笔事件识别：统一由 StylusInputService.isStylusEvent 按 ArkUI event.sourceTool 判断。
