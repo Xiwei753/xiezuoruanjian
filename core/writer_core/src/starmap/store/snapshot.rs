@@ -46,23 +46,10 @@ pub struct StarMapPhasedSnapshot {
     pub deleted_embed_ids: Vec<String>,
     pub deleted_link_ids: Vec<String>,
     pub deleted_hyperlink_ids: Vec<String>,
-    pub layout: Option<StarMapLayout>,
-    pub viewport: Option<StarMapViewport>,
     pub diagnostics: Vec<LoadDiagnostic>,
 }
 
 impl StarMapStore {
-    pub fn set_layout(&mut self, layout: StarMapLayout) {
-        self.layout = Some(layout);
-        self.dirty_layout = true;
-        // layout_revision 记录在 graph.json 中，layout 变更需要更新 graph_meta。
-        self.dirty_graph_meta = true;
-    }
-
-    pub fn set_viewport(&mut self, viewport: StarMapViewport) {
-        self.viewport = Some(viewport);
-    }
-
     pub fn to_starmap_graph(&self) -> StarMapGraph {
         StarMapGraph {
             schema_version: crate::starmap::types::CURRENT_GRAPH_SCHEMA_VERSION,
@@ -111,11 +98,6 @@ impl StarMapStore {
         let embed_revs = self.graph_meta.as_ref().map(|m| &m.embed_revisions);
         let link_revs = self.graph_meta.as_ref().map(|m| &m.link_revisions);
         let hyperlink_revs = self.graph_meta.as_ref().map(|m| &m.hyperlink_revisions);
-        let layout_rev = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.layout_revision)
-            .unwrap_or(0);
 
         let nodes: Vec<StarMapNode> = if incremental {
             self.nodes
@@ -265,12 +247,6 @@ impl StarMapStore {
             deleted_embed_ids,
             deleted_link_ids,
             deleted_hyperlink_ids,
-            layout: if incremental && layout_rev <= since_rev {
-                None
-            } else {
-                self.layout.clone()
-            },
-            viewport: self.viewport.clone(),
             diagnostics: self.recovery_log.clone(),
         })
     }
@@ -336,9 +312,6 @@ impl StarMapStore {
                 .hyperlink_revisions
                 .insert(hl_id.clone(), next_revision);
         }
-        if dirty.layout {
-            candidate_meta.layout_revision = next_revision;
-        }
         for node_id in &dirty.deleted_nodes {
             candidate_meta.node_revisions.remove(node_id);
         }
@@ -374,7 +347,6 @@ impl StarMapStore {
             embed_revisions: candidate_meta.embed_revisions.clone(),
             link_revisions: candidate_meta.link_revisions.clone(),
             hyperlink_revisions: candidate_meta.hyperlink_revisions.clone(),
-            layout_revision: candidate_meta.layout_revision,
             package_revision: next_revision,
             updated_at: crate::starmap::now_epoch(),
             deleted_since_last_sync: candidate_meta.deleted_since_last_sync.clone(),

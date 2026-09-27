@@ -1,4 +1,4 @@
-//! # 星图语义 DTO — 锚点、目标、Portal、DisplayPolicy 的跨语言类型
+//! # 星图语义 DTO — 锚点、目标、Portal 的跨语言类型
 //!
 //! `StarMapAnchorTargetDto` 使用 `kind` 字符串判别 + 扁平 Optional 字段模式
 //! （而非 Rust 枚举），因为 JSON 线格式需要跨语言可解析。
@@ -25,14 +25,16 @@ impl From<crate::starmap::semantic::StarMapAnchor> for StarMapAnchorDto {
     }
 }
 
-impl From<StarMapAnchorDto> for crate::starmap::semantic::StarMapAnchor {
-    fn from(d: StarMapAnchorDto) -> Self {
-        Self {
+impl TryFrom<StarMapAnchorDto> for crate::starmap::semantic::StarMapAnchor {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapAnchorDto) -> Result<Self, Self::Error> {
+        Ok(Self {
             anchor_id: d.anchor_id,
-            target: d.target.into(),
+            target: d.target.try_into()?,
             label: d.label,
             role: d.role.into(),
-        }
+        })
     }
 }
 
@@ -142,52 +144,119 @@ impl From<crate::starmap::semantic::StarMapAnchorTarget> for StarMapAnchorTarget
     }
 }
 
-impl From<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchorTarget {
-    fn from(d: StarMapAnchorTargetDto) -> Self {
+impl TryFrom<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchorTarget {
+    type Error = crate::error::Error;
+
+    #[allow(clippy::too_many_lines)]
+    fn try_from(d: StarMapAnchorTargetDto) -> Result<Self, Self::Error> {
         match d.kind.as_str() {
-            "project" => Self::Project {
-                project_id: d.project_id.unwrap_or_default(),
-            },
-            "volume" => Self::Volume {
-                project_id: d.project_id,
-                volume_id: d.volume_id.unwrap_or_default(),
-            },
-            "chapter" => Self::Chapter {
-                project_id: d.project_id,
-                volume_id: d.volume_id,
-                chapter_id: d.chapter_id.unwrap_or_default(),
-            },
-            "character" => Self::Character {
-                entity_id: d.entity_id.unwrap_or_default(),
-            },
-            "item" => Self::Item {
-                entity_id: d.entity_id.unwrap_or_default(),
-            },
-            "location" => Self::Location {
-                entity_id: d.entity_id.unwrap_or_default(),
-            },
-            "event" => Self::Event {
-                entity_id: d.entity_id.unwrap_or_default(),
-            },
-            "starmap" => Self::Starmap {
-                starmap_id: d.starmap_id.unwrap_or_default(),
-            },
-            "external" => Self::External {
-                uri: d.uri.unwrap_or_default(),
-            },
-            "custom" => Self::Custom {
-                payload: d
-                    .payload
-                    .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
-                    .unwrap_or(serde_json::Value::Null),
-            },
-            _ => Self::ChapterRange {
-                project_id: d.project_id,
-                volume_id: d.volume_id,
-                chapter_id: d.chapter_id.unwrap_or_default(),
-                range_start: d.range_start,
-                range_end: d.range_end,
-            },
+            "project" => {
+                let project_id = d.project_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field project_id for kind 'project'".into(),
+                    )
+                })?;
+                Ok(Self::Project { project_id })
+            }
+            "volume" => {
+                let volume_id = d.volume_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field volume_id for kind 'volume'".into(),
+                    )
+                })?;
+                Ok(Self::Volume {
+                    project_id: d.project_id,
+                    volume_id,
+                })
+            }
+            "chapter" => {
+                let chapter_id = d.chapter_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field chapter_id for kind 'chapter'".into(),
+                    )
+                })?;
+                Ok(Self::Chapter {
+                    project_id: d.project_id,
+                    volume_id: d.volume_id,
+                    chapter_id,
+                })
+            }
+            "chapterRange" => {
+                let chapter_id = d.chapter_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field chapter_id for kind 'chapterRange'".into(),
+                    )
+                })?;
+                Ok(Self::ChapterRange {
+                    project_id: d.project_id,
+                    volume_id: d.volume_id,
+                    chapter_id,
+                    range_start: d.range_start,
+                    range_end: d.range_end,
+                })
+            }
+            "character" => {
+                let entity_id = d.entity_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_id for kind 'character'".into(),
+                    )
+                })?;
+                Ok(Self::Character { entity_id })
+            }
+            "item" => {
+                let entity_id = d.entity_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_id for kind 'item'".into(),
+                    )
+                })?;
+                Ok(Self::Item { entity_id })
+            }
+            "location" => {
+                let entity_id = d.entity_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_id for kind 'location'".into(),
+                    )
+                })?;
+                Ok(Self::Location { entity_id })
+            }
+            "event" => {
+                let entity_id = d.entity_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_id for kind 'event'".into(),
+                    )
+                })?;
+                Ok(Self::Event { entity_id })
+            }
+            "starmap" => {
+                let starmap_id = d.starmap_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field starmap_id for kind 'starmap'".into(),
+                    )
+                })?;
+                Ok(Self::Starmap { starmap_id })
+            }
+            "external" => {
+                let uri = d.uri.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field uri for kind 'external'".into(),
+                    )
+                })?;
+                Ok(Self::External { uri })
+            }
+            "custom" => {
+                let payload_str = d.payload.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field payload for kind 'custom'".into(),
+                    )
+                })?;
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload_str).map_err(crate::error::Error::from)?;
+                Ok(Self::Custom { payload })
+            }
+            unknown => Err(crate::error::Error::Other(format!(
+                "unknown anchor target kind: {}",
+                unknown
+            ))),
         }
     }
 }
@@ -242,16 +311,14 @@ impl From<StarMapAnchorRoleDto> for crate::starmap::semantic::StarMapAnchorRole 
     }
 }
 
+/// Portal DTO — 跳转定义，只保留目标星图 ID 和可选落点。
+/// 显示/交互策略（mode、preview_policy）已退出 Core。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortalDto {
     pub destination_starmap_id: String,
     #[serde(default)]
     pub destination_target: Option<StarMapTargetDetailDto>,
-    #[serde(default)]
-    pub mode: StarMapPortalModeDto,
-    #[serde(default)]
-    pub preview_policy: StarMapPortalPreviewPolicyDto,
 }
 
 impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
@@ -259,161 +326,61 @@ impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
         Self {
             destination_starmap_id: p.destination_starmap_id,
             destination_target: p.destination_target.map(Into::into),
-            mode: p.mode.into(),
-            preview_policy: p.preview_policy.into(),
         }
     }
 }
 
-impl From<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
-    fn from(d: StarMapPortalDto) -> Self {
-        Self {
+impl TryFrom<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapPortalDto) -> Result<Self, Self::Error> {
+        Ok(Self {
             destination_starmap_id: d.destination_starmap_id,
-            destination_target: d.destination_target.map(Into::into),
-            mode: d.mode.into(),
-            preview_policy: d.preview_policy.into(),
-        }
+            destination_target: d.destination_target.map(|t| t.try_into()).transpose()?,
+        })
     }
 }
 
+/// 节点位置 DTO — 星图文档坐标系下的 (x, y)。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
-pub enum StarMapPortalModeDto {
-    #[default]
-    EnterPortal,
-    PreviewInline,
-    ReferenceOnly,
-}
-
-impl From<crate::starmap::semantic::StarMapPortalMode> for StarMapPortalModeDto {
-    fn from(m: crate::starmap::semantic::StarMapPortalMode) -> Self {
-        match m {
-            crate::starmap::semantic::StarMapPortalMode::EnterPortal => Self::EnterPortal,
-            crate::starmap::semantic::StarMapPortalMode::PreviewInline => Self::PreviewInline,
-            crate::starmap::semantic::StarMapPortalMode::ReferenceOnly => Self::ReferenceOnly,
-        }
-    }
-}
-
-impl From<StarMapPortalModeDto> for crate::starmap::semantic::StarMapPortalMode {
-    fn from(dto: StarMapPortalModeDto) -> Self {
-        match dto {
-            StarMapPortalModeDto::EnterPortal => Self::EnterPortal,
-            StarMapPortalModeDto::PreviewInline => Self::PreviewInline,
-            StarMapPortalModeDto::ReferenceOnly => Self::ReferenceOnly,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
-pub enum StarMapPortalPreviewPolicyDto {
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
-impl From<crate::starmap::semantic::StarMapPortalPreviewPolicy> for StarMapPortalPreviewPolicyDto {
-    fn from(p: crate::starmap::semantic::StarMapPortalPreviewPolicy) -> Self {
-        match p {
-            crate::starmap::semantic::StarMapPortalPreviewPolicy::Auto => Self::Auto,
-            crate::starmap::semantic::StarMapPortalPreviewPolicy::Always => Self::Always,
-            crate::starmap::semantic::StarMapPortalPreviewPolicy::Never => Self::Never,
-        }
-    }
-}
-
-impl From<StarMapPortalPreviewPolicyDto> for crate::starmap::semantic::StarMapPortalPreviewPolicy {
-    fn from(dto: StarMapPortalPreviewPolicyDto) -> Self {
-        match dto {
-            StarMapPortalPreviewPolicyDto::Auto => Self::Auto,
-            StarMapPortalPreviewPolicyDto::Always => Self::Always,
-            StarMapPortalPreviewPolicyDto::Never => Self::Never,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct StarMapDisplayPolicyDto {
-    pub importance: f32,
-    pub min_visible_scale: f32,
-    pub title_scale: f32,
-    pub summary_scale: f32,
-    pub detail_scale: f32,
-    pub max_preview_chars: u32,
-    pub min_readable_px: f32,
+pub struct StarMapPointDto {
+    pub x: f32,
+    pub y: f32,
 }
 
-impl Default for StarMapDisplayPolicyDto {
-    fn default() -> Self {
-        crate::starmap::semantic::StarMapDisplayPolicy::default().into()
+impl From<crate::starmap::types::StarMapPoint> for StarMapPointDto {
+    fn from(p: crate::starmap::types::StarMapPoint) -> Self {
+        Self { x: p.x, y: p.y }
     }
 }
 
-impl From<crate::starmap::semantic::StarMapDisplayPolicy> for StarMapDisplayPolicyDto {
-    fn from(p: crate::starmap::semantic::StarMapDisplayPolicy) -> Self {
-        Self {
-            importance: p.importance,
-            min_visible_scale: p.min_visible_scale,
-            title_scale: p.title_scale,
-            summary_scale: p.summary_scale,
-            detail_scale: p.detail_scale,
-            max_preview_chars: p.max_preview_chars,
-            min_readable_px: p.min_readable_px,
-        }
+impl From<StarMapPointDto> for crate::starmap::types::StarMapPoint {
+    fn from(d: StarMapPointDto) -> Self {
+        Self { x: d.x, y: d.y }
     }
 }
 
-impl From<StarMapDisplayPolicyDto> for crate::starmap::semantic::StarMapDisplayPolicy {
-    fn from(d: StarMapDisplayPolicyDto) -> Self {
-        Self {
-            importance: d.importance,
-            min_visible_scale: d.min_visible_scale,
-            title_scale: d.title_scale,
-            summary_scale: d.summary_scale,
-            detail_scale: d.detail_scale,
-            max_preview_chars: d.max_preview_chars,
-            min_readable_px: d.min_readable_px,
-        }
-    }
-}
-
+/// 节点样式 DTO — 纯数据层的外观属性。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
-pub enum StarMapOpenBehaviorDto {
-    #[default]
-    Inspector,
-    ExpandCard,
-    WritingMode,
-    JumpToAnchor,
-    EnterPortal,
-    Custom,
+#[serde(rename_all = "camelCase")]
+pub struct StarMapNodeStyleDto {
+    #[serde(default)]
+    pub fill_color: Option<String>,
 }
 
-impl From<crate::starmap::semantic::StarMapOpenBehavior> for StarMapOpenBehaviorDto {
-    fn from(b: crate::starmap::semantic::StarMapOpenBehavior) -> Self {
-        match b {
-            crate::starmap::semantic::StarMapOpenBehavior::Inspector => Self::Inspector,
-            crate::starmap::semantic::StarMapOpenBehavior::ExpandCard => Self::ExpandCard,
-            crate::starmap::semantic::StarMapOpenBehavior::WritingMode => Self::WritingMode,
-            crate::starmap::semantic::StarMapOpenBehavior::JumpToAnchor => Self::JumpToAnchor,
-            crate::starmap::semantic::StarMapOpenBehavior::EnterPortal => Self::EnterPortal,
-            crate::starmap::semantic::StarMapOpenBehavior::Custom => Self::Custom,
+impl From<crate::starmap::types::StarMapNodeStyle> for StarMapNodeStyleDto {
+    fn from(s: crate::starmap::types::StarMapNodeStyle) -> Self {
+        Self {
+            fill_color: s.fill_color,
         }
     }
 }
 
-impl From<StarMapOpenBehaviorDto> for crate::starmap::semantic::StarMapOpenBehavior {
-    fn from(d: StarMapOpenBehaviorDto) -> Self {
-        match d {
-            StarMapOpenBehaviorDto::Inspector => Self::Inspector,
-            StarMapOpenBehaviorDto::ExpandCard => Self::ExpandCard,
-            StarMapOpenBehaviorDto::WritingMode => Self::WritingMode,
-            StarMapOpenBehaviorDto::JumpToAnchor => Self::JumpToAnchor,
-            StarMapOpenBehaviorDto::EnterPortal => Self::EnterPortal,
-            StarMapOpenBehaviorDto::Custom => Self::Custom,
+impl From<StarMapNodeStyleDto> for crate::starmap::types::StarMapNodeStyle {
+    fn from(d: StarMapNodeStyleDto) -> Self {
+        Self {
+            fill_color: d.fill_color,
         }
     }
 }
@@ -482,13 +449,19 @@ impl From<crate::starmap::types::reference::StarMapTargetPath> for StarMapTarget
     }
 }
 
-impl From<StarMapTargetPathDto> for crate::starmap::types::reference::StarMapTargetPath {
-    fn from(d: StarMapTargetPathDto) -> Self {
-        Self {
+impl TryFrom<StarMapTargetPathDto> for crate::starmap::types::reference::StarMapTargetPath {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapTargetPathDto) -> Result<Self, Self::Error> {
+        Ok(Self {
             starmap_id: d.starmap_id,
-            segments: d.segments.into_iter().map(Into::into).collect(),
-            target: d.target.into(),
-        }
+            segments: d
+                .segments
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            target: d.target.try_into()?,
+        })
     }
 }
 
@@ -520,15 +493,31 @@ impl From<crate::starmap::types::reference::StarMapPathSegment> for StarMapPathS
     }
 }
 
-impl From<StarMapPathSegmentDto> for crate::starmap::types::reference::StarMapPathSegment {
-    fn from(d: StarMapPathSegmentDto) -> Self {
+impl TryFrom<StarMapPathSegmentDto> for crate::starmap::types::reference::StarMapPathSegment {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapPathSegmentDto) -> Result<Self, Self::Error> {
         match d.kind.as_str() {
-            "enterPortal" => Self::EnterPortal {
-                node_id: d.node_id.unwrap_or_default(),
-            },
-            _ => Self::EnterEmbed {
-                instance_id: d.instance_id.unwrap_or_default(),
-            },
+            "enterEmbed" => {
+                let instance_id = d.instance_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field instance_id for kind 'enterEmbed'".into(),
+                    )
+                })?;
+                Ok(Self::EnterEmbed { instance_id })
+            }
+            "enterPortal" => {
+                let node_id = d.node_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field node_id for kind 'enterPortal'".into(),
+                    )
+                })?;
+                Ok(Self::EnterPortal { node_id })
+            }
+            unknown => Err(crate::error::Error::Other(format!(
+                "unknown path segment kind: {}",
+                unknown
+            ))),
         }
     }
 }
@@ -601,31 +590,75 @@ impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetail
     }
 }
 
-impl From<StarMapTargetDetailDto> for crate::starmap::semantic::StarMapTargetDetail {
-    fn from(d: StarMapTargetDetailDto) -> Self {
+impl TryFrom<StarMapTargetDetailDto> for crate::starmap::semantic::StarMapTargetDetail {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapTargetDetailDto) -> Result<Self, Self::Error> {
         match d.kind.as_str() {
-            "node" => Self::Node {
-                node_id: d.node_id.unwrap_or_default(),
-            },
-            "anchor" => Self::Anchor {
-                node_id: d.node_id.unwrap_or_default(),
-                anchor_id: d.anchor_id.unwrap_or_default(),
-            },
-            "chapterRange" => Self::ChapterRange {
-                project_id: d.project_id,
-                volume_id: d.volume_id,
-                chapter_id: d.chapter_id.unwrap_or_default(),
-                range_start: d.range_start,
-                range_end: d.range_end,
-            },
-            "entity" => Self::Entity {
-                entity_type: d.entity_type.unwrap_or_default(),
-                entity_id: d.entity_id.unwrap_or_default(),
-            },
-            "external" => Self::External {
-                uri: d.uri.unwrap_or_default(),
-            },
-            _ => Self::Starmap,
+            "starmap" => Ok(Self::Starmap),
+            "node" => {
+                let node_id = d.node_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field node_id for kind 'node'".into(),
+                    )
+                })?;
+                Ok(Self::Node { node_id })
+            }
+            "anchor" => {
+                let node_id = d.node_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field node_id for kind 'anchor'".into(),
+                    )
+                })?;
+                let anchor_id = d.anchor_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field anchor_id for kind 'anchor'".into(),
+                    )
+                })?;
+                Ok(Self::Anchor { node_id, anchor_id })
+            }
+            "chapterRange" => {
+                let chapter_id = d.chapter_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field chapter_id for kind 'chapterRange'".into(),
+                    )
+                })?;
+                Ok(Self::ChapterRange {
+                    project_id: d.project_id,
+                    volume_id: d.volume_id,
+                    chapter_id,
+                    range_start: d.range_start,
+                    range_end: d.range_end,
+                })
+            }
+            "entity" => {
+                let entity_type = d.entity_type.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_type for kind 'entity'".into(),
+                    )
+                })?;
+                let entity_id = d.entity_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_id for kind 'entity'".into(),
+                    )
+                })?;
+                Ok(Self::Entity {
+                    entity_type,
+                    entity_id,
+                })
+            }
+            "external" => {
+                let uri = d.uri.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field uri for kind 'external'".into(),
+                    )
+                })?;
+                Ok(Self::External { uri })
+            }
+            unknown => Err(crate::error::Error::Other(format!(
+                "unknown target detail kind: {}",
+                unknown
+            ))),
         }
     }
 }

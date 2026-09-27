@@ -6,10 +6,7 @@ mod save;
 mod snapshot;
 
 use crate::starmap::package_storage;
-use crate::starmap::semantic::{
-    StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
-    StarMapTargetDetail,
-};
+use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance, StarMapTargetDetail};
 use crate::starmap::types::reference::StarMapTargetPath;
 use crate::starmap::types::*;
 
@@ -29,8 +26,8 @@ fn make_test_node(id: &str, title: &str) -> StarMapNode {
         content: StarMapNodeContent::Empty,
         anchors: vec![],
         portal: None,
-        display_policy: StarMapDisplayPolicy::default(),
-        open_behavior: StarMapOpenBehavior::default(),
+        position: Default::default(),
+        style: Default::default(),
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,

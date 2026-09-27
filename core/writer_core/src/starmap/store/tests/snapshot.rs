@@ -42,7 +42,6 @@ fn flush_store(store: &mut StarMapStore) {
     store.enqueue_save(SaveQueueEntry::Embed);
     store.enqueue_save(SaveQueueEntry::Link);
     store.enqueue_save(SaveQueueEntry::Hyperlink);
-    store.enqueue_save(SaveQueueEntry::Layout);
     store.enqueue_save(SaveQueueEntry::GraphMeta);
     store.flush_save_queue().unwrap();
 }
@@ -77,36 +76,6 @@ fn phased_snapshot_complete_at_background_full_load() {
     flush_store(&mut store);
     let snapshot = load_full_snapshot(dir.path(), &sid);
     assert!(snapshot.complete);
-}
-
-#[test]
-fn phased_snapshot_preserves_layout_after_disk_roundtrip() {
-    let (dir, sid) = setup_temp_dir();
-    let mut store = StarMapStore::new(dir.path(), &sid);
-    store.upsert_node(make_test_node("n1", "Node1"));
-    store.set_layout(StarMapLayout {
-        kind: StarMapLayoutKind::Freeform,
-        nodes: vec![StarMapLayoutNode {
-            node_id: "n1".to_string(),
-            x: 100.0,
-            y: 200.0,
-            width: 150.0,
-            height: 80.0,
-            radius: 40.0,
-            collapsed: false,
-            z_index: 0,
-            scale: 1.0,
-            depth: 0.0,
-            focus_weight: 1.0,
-            orbit_group: None,
-        }],
-    });
-    flush_store(&mut store);
-    let snapshot = load_full_snapshot(dir.path(), &sid);
-    let l = snapshot.layout.as_ref().expect("layout should be present");
-    assert_eq!(l.nodes.len(), 1);
-    assert!((l.nodes[0].x - 100.0).abs() < f32::EPSILON);
-    assert!((l.nodes[0].y - 200.0).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -163,30 +132,13 @@ fn phased_snapshot_preserves_embed_link_hyperlink() {
     let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "Host"));
-    use crate::starmap::semantic::{
-        StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance, StarMapTargetDetail,
-    };
+    use crate::starmap::semantic::{StarMapProvenance, StarMapTargetDetail};
     use crate::starmap::types::reference::StarMapTargetPath;
     store.upsert_embed(StarMapEmbed {
         instance_id: "emb1".to_string(),
         target_starmap_id: "child".to_string(),
         label: Some("child".to_string()),
-        display_policy: StarMapDisplayPolicy::default(),
-        open_behavior: StarMapOpenBehavior::default(),
-        placement: StarMapEmbedPlacement {
-            x: 10.0,
-            y: 20.0,
-            width: 200.0,
-            height: 150.0,
-            scale: 1.0,
-            z_index: 0,
-            collapsed: false,
-        },
-        target_viewport: StarMapEmbedViewport {
-            scale: 1.0,
-            offset_x: 0.0,
-            offset_y: 0.0,
-        },
+        position: Default::default(),
         host_path: StarMapTargetPath {
             starmap_id: sid.clone(),
             segments: vec![],
@@ -234,7 +186,6 @@ fn phased_snapshot_preserves_embed_link_hyperlink() {
     let snapshot = load_full_snapshot(dir.path(), &sid);
     assert_eq!(snapshot.embeds.len(), 1);
     assert_eq!(snapshot.embeds[0].instance_id, "emb1");
-    assert!((snapshot.embeds[0].placement.x - 10.0).abs() < f32::EPSILON);
     assert_eq!(snapshot.links.len(), 1);
     assert_eq!(snapshot.links[0].link_id, "lk1");
     assert_eq!(snapshot.hyperlinks.len(), 1);
@@ -271,8 +222,8 @@ fn phased_snapshot_incremental_by_revision() {
 #[test]
 fn phased_snapshot_preserves_node_anchor_semantics() {
     use crate::starmap::semantic::{
-        StarMapAnchor, StarMapAnchorRole, StarMapAnchorTarget, StarMapDisplayPolicy,
-        StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
+        StarMapAnchor, StarMapAnchorRole, StarMapAnchorTarget, StarMapNodeContent,
+        StarMapProvenance,
     };
     let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
@@ -294,8 +245,8 @@ fn phased_snapshot_preserves_node_anchor_semantics() {
             role: StarMapAnchorRole::Source,
         }],
         portal: None,
-        display_policy: StarMapDisplayPolicy::default(),
-        open_behavior: StarMapOpenBehavior::default(),
+        position: Default::default(),
+        style: Default::default(),
         provenance: StarMapProvenance::default(),
         created_at: 0,
         updated_at: 0,
@@ -374,106 +325,12 @@ fn phased_snapshot_since_revision_zero_returns_all() {
 }
 
 #[test]
-fn phased_snapshot_incremental_preserves_layout_and_viewport() {
-    let (dir, sid) = setup_temp_dir();
-    let mut store = StarMapStore::new(dir.path(), &sid);
-    store.upsert_node(make_test_node("n1", "A"));
-    store.set_layout(StarMapLayout {
-        kind: StarMapLayoutKind::Freeform,
-        nodes: vec![StarMapLayoutNode {
-            node_id: "n1".to_string(),
-            x: 50.0,
-            y: 60.0,
-            width: 100.0,
-            height: 80.0,
-            radius: 30.0,
-            collapsed: false,
-            z_index: 0,
-            scale: 1.0,
-            depth: 0.0,
-            focus_weight: 1.0,
-            orbit_group: None,
-        }],
-    });
-    store.set_viewport(StarMapViewport {
-        scale: 1.0,
-        offset_x: 0.0,
-        offset_y: 0.0,
-        width: 800.0,
-        height: 600.0,
-    });
-    flush_store(&mut store);
-    store.flush_viewport().unwrap();
-    let rev1 = store.package_revision();
-
-    // 第二次事务：只改 layout，再 flush。layout_revision 升到 rev2 > rev1。
-    store.set_layout(StarMapLayout {
-        kind: StarMapLayoutKind::Freeform,
-        nodes: vec![StarMapLayoutNode {
-            node_id: "n1".to_string(),
-            x: 70.0,
-            y: 80.0,
-            width: 100.0,
-            height: 80.0,
-            radius: 30.0,
-            collapsed: false,
-            z_index: 0,
-            scale: 1.0,
-            depth: 0.0,
-            focus_weight: 1.0,
-            orbit_group: None,
-        }],
-    });
-    flush_store(&mut store);
-    let rev2 = store.package_revision();
-    assert!(rev2 > rev1);
-
-    // 增量：since rev1，layout_revision == rev2 > rev1，layout 应返回。
-    // n1 的 node_revisions == rev1 不 > rev1，nodes 应为空。
-    // viewport 是设备本地，始终返回。
-    let request = PhasedSnapshotRequest {
-        target_phase: LoadPhase::BackgroundFullLoad,
-        since_revision: rev1,
-    };
-    let snap = store.get_phased_snapshot(&request).unwrap();
-    assert!(snap.nodes.is_empty());
-    assert!(snap.layout.is_some());
-    assert!(snap.viewport.is_some());
-    let l = snap.layout.as_ref().expect("layout present");
-    assert!((l.nodes[0].x - 70.0).abs() < f32::EPSILON);
-}
-
-#[test]
 fn phased_snapshot_phases_have_increasing_object_counts() {
     let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "InView"));
     store.upsert_node(make_test_node("n2", "Nearby"));
     store.upsert_edge(make_test_edge("e1", "n1", "n2"));
-    store.set_layout(StarMapLayout {
-        kind: StarMapLayoutKind::Freeform,
-        nodes: vec![StarMapLayoutNode {
-            node_id: "n1".to_string(),
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 50.0,
-            radius: 25.0,
-            collapsed: false,
-            z_index: 0,
-            scale: 1.0,
-            depth: 0.0,
-            focus_weight: 1.0,
-            orbit_group: None,
-        }],
-    });
-    store.set_viewport(StarMapViewport {
-        scale: 1.0,
-        offset_x: 0.0,
-        offset_y: 0.0,
-        width: 800.0,
-        height: 600.0,
-    });
     flush_store(&mut store);
 
     // Use a fresh store instance so GraphMeta phase doesn't have in-memory nodes

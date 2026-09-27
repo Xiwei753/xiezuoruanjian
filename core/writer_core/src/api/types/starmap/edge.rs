@@ -68,17 +68,24 @@ pub struct StarMapEdgePatchDto {
     pub to: Option<StarMapTargetPathDto>,
 }
 
-impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
-    fn from(d: StarMapEdgePatchDto) -> Self {
-        Self {
+impl TryFrom<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapEdgePatchDto) -> Result<Self, Self::Error> {
+        let payload = d
+            .payload
+            .map(|opt| {
+                opt.map(|s| serde_json::from_str(&s).map_err(crate::error::Error::from))
+                    .transpose()
+            })
+            .transpose()?;
+        Ok(Self {
             kind: d.kind.map(Into::into),
             label: d.label,
-            payload: d.payload.map(|opt| {
-                opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
-            }),
-            from: d.from.map(Into::into),
-            to: d.to.map(Into::into),
-        }
+            payload,
+            from: d.from.map(|f| f.try_into()).transpose()?,
+            to: d.to.map(|t| t.try_into()).transpose()?,
+        })
     }
 }
 

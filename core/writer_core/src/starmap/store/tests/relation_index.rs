@@ -96,10 +96,7 @@ fn merge_memory_ids_updates_embed_host_in_index() {
         instance_id: "em1".to_string(),
         target_starmap_id: String::new(),
         label: None,
-        display_policy: crate::starmap::semantic::StarMapDisplayPolicy::default(),
-        open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
-        placement: crate::starmap::types::StarMapEmbedPlacement::default(),
-        target_viewport: crate::starmap::types::StarMapEmbedViewport::default(),
+        position: Default::default(),
         host_path: StarMapTargetPath {
             starmap_id: String::new(),
             segments: vec![],

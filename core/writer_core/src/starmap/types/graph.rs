@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::starmap::semantic::{
-    StarMapAnchor, StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapPortal,
-    StarMapProvenance,
+    StarMapAnchor, StarMapNodeContent, StarMapPortal, StarMapProvenance,
 };
 use crate::starmap::types::reference::StarMapTargetPath;
 
@@ -44,11 +43,10 @@ pub enum StarMapEdgeKind {
     Custom,
 }
 
-/// 当前支持的星图 import/export package schema 版本。
+/// 当前支持的星图 graph schema 版本。
 ///
-/// `import_or_replace_starmap_package` 只接受此版本，不匹配直接
-/// 返回 `UnsupportedVersion`。`Default` 和 `to_starmap_graph()`
-/// 固定写出此版本。
+/// `Default` 和 `to_starmap_graph()` 固定写出此版本。当前不做导出/导入 API；
+/// 以后真做导入导出时，直接把同一套 Meta + Graph 包起来，不再另造一套模型。
 ///
 /// 版本 2：删除了旧 id/title/timestamps 和旧 Edge/Embed/Link 引用字段，
 /// 采用新的 StarMapTargetPath 引用模型。
@@ -56,8 +54,10 @@ pub const CURRENT_GRAPH_SCHEMA_VERSION: u32 = 2;
 
 /// 星图图数据：节点、边、嵌入、链接的完整集合。
 ///
-/// 持久化为 `graph.json`（单文件模式）或 `graph.json` + 子目录（包存储模式）。
-/// `schema_version` 用于未来格式迁移；当前固定为 2。
+/// 这是星图 authored object 的完整集合：节点的 `position`/`style`、
+/// 嵌入的 `position` 都在对象自己身上，序列化 Graph 即可完整还原星图本身，
+/// 不依赖 layout/viewport/display policy。持久化为 `graph.json`。
+/// `schema_version` 用于格式识别；当前固定为 2。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapGraph {
@@ -87,6 +87,34 @@ impl Default for StarMapGraph {
     }
 }
 
+/// 节点在星图文档坐标系下的位置（逻辑像素）。
+///
+/// 这是节点的底层数据字段，平台渲染时乘以 dpr 转为物理像素。
+/// 节点移动就是更新 `position`，不再另外创建 layout record。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Default for StarMapPoint {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+/// 节点样式：纯数据层的外观属性，不含任何交互/渲染策略。
+///
+/// `fill_color` 为可选的 CSS 颜色字符串（如 `#7B8CDE`），
+/// `None` 表示使用平台默认主题色。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapNodeStyle {
+    #[serde(default)]
+    pub fill_color: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNode {
@@ -102,10 +130,12 @@ pub struct StarMapNode {
     pub anchors: Vec<StarMapAnchor>,
     #[serde(default)]
     pub portal: Option<StarMapPortal>,
+    /// 节点在星图文档坐标系下的位置。旧 schema 无此字段，
+    /// 反序列化时默认-补全为 (0.0, 0.0)。
     #[serde(default)]
-    pub display_policy: StarMapDisplayPolicy,
+    pub position: StarMapPoint,
     #[serde(default)]
-    pub open_behavior: StarMapOpenBehavior,
+    pub style: StarMapNodeStyle,
     #[serde(default)]
     pub provenance: StarMapProvenance,
 
@@ -143,8 +173,8 @@ pub struct StarMapNodePatch {
     pub content: Option<StarMapNodeContent>,
     pub anchors: Option<Vec<StarMapAnchor>>,
     pub portal: Option<Option<StarMapPortal>>,
-    pub display_policy: Option<StarMapDisplayPolicy>,
-    pub open_behavior: Option<StarMapOpenBehavior>,
+    pub position: Option<StarMapPoint>,
+    pub style: Option<StarMapNodeStyle>,
     pub provenance: Option<StarMapProvenance>,
 }
 

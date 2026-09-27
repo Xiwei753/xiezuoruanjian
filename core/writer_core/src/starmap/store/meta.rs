@@ -6,12 +6,11 @@ use super::relation_index::{
     EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
 };
 
-/// 当前支持的星图 graph.json schema 版本。
+/// 星图元信息、成员 ID 列表、规范顺序、package revision 和派生索引。
 ///
-/// load 只接受此版本，不猜测或迁移旧格式。旧版本直接返回
-/// `UnsupportedVersion`，不尝试兼容解析。
-pub const CURRENT_SCHEMA_VERSION: &str = "3";
-
+/// `GraphMeta` 是分片存储 manifest / revision / tombstone / 可重建索引，
+/// 不属于未来导出的领域数据。`relation index` 和 `node_kind_counts` 是派生缓存，
+/// 能够从对象文件重建，不是第二份业务真相。
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphMeta {
@@ -22,16 +21,22 @@ pub struct GraphMeta {
     pub embed_instance_ids: Vec<String>,
     pub link_ids: Vec<String>,
     pub hyperlink_ids: Vec<String>,
+    /// 边关系索引（派生缓存，可从边对象文件重建）。
     #[serde(default)]
     pub edge_relation_index: Vec<EdgeRelationIndex>,
+    /// 嵌入宿主路径索引（派生缓存，可从嵌入对象文件重建）。
     #[serde(default)]
     pub embed_host_index: Vec<EmbedHostIndex>,
+    /// 链接关系索引（派生缓存，可从链接对象文件重建）。
     #[serde(default)]
     pub link_relation_index: Vec<LinkRelationIndex>,
+    /// 超链接关系索引（派生缓存，可从超链接对象文件重建）。
     #[serde(default)]
     pub hyperlink_relation_index: Vec<HyperlinkRelationIndex>,
+    /// 节点种类计数（派生缓存，可从节点对象文件重建）。
     #[serde(default)]
     pub node_kind_counts: HashMap<String, u32>,
+
     /// 每个节点最近一次被写入的事务 revision。用于增量快照：只返回
     /// `node_revisions[id] > since_revision` 的节点。
     #[serde(default)]
@@ -48,14 +53,17 @@ pub struct GraphMeta {
     /// 每条超链接最近一次被写入的事务 revision。
     #[serde(default)]
     pub hyperlink_revisions: HashMap<String, u64>,
-    /// 布局最近一次被写入的事务 revision。
-    #[serde(default)]
-    pub layout_revision: u64,
     pub package_revision: u64,
     pub updated_at: u64,
     #[serde(default)]
     pub deleted_since_last_sync: DeletedSinceLastSync,
 }
+
+/// 当前支持的星图 graph.json schema 版本。
+///
+/// load 只接受此版本，不猜测或迁移旧格式。旧版本直接返回
+/// `UnsupportedVersion`，不尝试兼容解析。
+pub const CURRENT_SCHEMA_VERSION: &str = "3";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

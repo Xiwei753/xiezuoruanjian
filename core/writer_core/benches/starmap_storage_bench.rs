@@ -2,9 +2,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::fs;
 use tempfile::tempdir;
-use writer_core::starmap::semantic::{
-    StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
-};
+use writer_core::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
 use writer_core::starmap::store::{GraphMeta, StarMapStore};
 use writer_core::starmap::types::*;
 
@@ -33,7 +31,6 @@ fn bench_load_starmap(c: &mut Criterion) {
         embed_revisions: std::collections::HashMap::new(),
         link_revisions: std::collections::HashMap::new(),
         hyperlink_revisions: std::collections::HashMap::new(),
-        layout_revision: 0,
         package_revision: 0,
         updated_at: 0,
         deleted_since_last_sync: writer_core::starmap::store::DeletedSinceLastSync::default(),
@@ -57,8 +54,8 @@ fn bench_load_starmap(c: &mut Criterion) {
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
-            display_policy: StarMapDisplayPolicy::default(),
-            open_behavior: StarMapOpenBehavior::default(),
+            position: Default::default(),
+            style: Default::default(),
             provenance: StarMapProvenance::default(),
             created_at: 0,
             updated_at: 0,

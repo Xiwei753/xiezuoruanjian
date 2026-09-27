@@ -8,14 +8,12 @@
 //! - **星图元数据管理**：创建、读取、更新、删除星图的基本信息
 //! - **星图索引管理**：维护数据根中所有星图的索引，支持快速查询
 //! - **项目关联**：将星图绑定到特定项目，支持设置项目主星图
-//! - **布局算法**：grid / radial 自动布局（Core 层，跨端共享）
-//! - **命中测试**：节点 AABB / 边线段距离（Core 层，跨端共享）
+//!
+//! 显示/交互/渲染职责（布局算法、命中测试、运动策略、视口）已全部退出 Core，
+//! 由平台端自行管理。Core 只保留节点/嵌入的 `position` 数据字段。
 
 pub mod graph;
-pub mod hittest;
-pub mod layout;
 pub mod package_storage;
-pub mod render;
 pub mod semantic;
 pub mod store;
 pub mod types;
@@ -27,11 +25,8 @@ use std::path::Path;
 
 /// 星图元数据。
 ///
-/// 每个星图同时维护两份持久化：
-/// 1. 独立元数据文件 `app-meta/starmaps/{id}.meta.json`
-/// 2. 全局索引 `app-meta/starmaps/index.json` 中的条目
-///
-/// 两份数据必须保持一致（双写），修改时需同时更新两者。
+/// `starmaps/{id}.meta.json` 是标题、描述、project_id、accent_color、
+/// created_at、updated_at 的唯一事实源。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapMeta {
@@ -41,33 +36,26 @@ pub struct StarMapMeta {
     pub description: String,
     #[serde(default)]
     pub project_id: Option<String>,
-    #[serde(default)]
-    pub is_main_for_project: bool,
     #[serde(default = "default_accent_color")]
     pub accent_color: String,
     pub created_at: u64,
     pub updated_at: u64,
-    #[serde(default)]
-    pub node_count: u32,
-    #[serde(default)]
-    pub edge_count: u32,
-    #[serde(default)]
-    pub linked_chapter_count: u32,
 }
 
 fn default_accent_color() -> String {
     "#7B8CDE".to_string()
 }
 
-/// 星图全局索引。
+/// 星图全局索引记录。
 ///
-/// 存储于 `app-meta/starmaps/index.json`，包含所有星图的元数据摘要。
-/// 与各星图独立元数据文件构成双写关系，修改时需同步更新。
+/// 存储于 `app-meta/starmaps/index.json`，只保存 starmap_ids 列表和
+/// main_starmap_by_project 映射。各星图的详细元数据从独立的 meta 文件读取。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StarMapIndex {
+pub struct StarMapIndexRecord {
     pub schema_version: u32,
-    pub starmaps: Vec<StarMapMeta>,
+    pub starmap_ids: Vec<String>,
+    pub main_starmap_by_project: std::collections::HashMap<String, String>,
     pub updated_at: u64,
 }
 
@@ -115,21 +103,22 @@ fn change_set_for_meta_and_index(
         .add_upsert(starmaps_index_rel_path())
 }
 
-fn load_index(app_data_root: &Path) -> Result<StarMapIndex> {
+fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     let path = index_path(app_data_root);
     if !path.exists() {
-        return Ok(StarMapIndex {
+        return Ok(StarMapIndexRecord {
             schema_version: 1,
-            starmaps: vec![],
+            starmap_ids: vec![],
+            main_starmap_by_project: std::collections::HashMap::new(),
             updated_at: now_epoch(),
         });
     }
     let content = fs::read_to_string(&path)?;
-    let idx: StarMapIndex = serde_json::from_str(&content)?;
+    let idx: StarMapIndexRecord = serde_json::from_str(&content)?;
     Ok(idx)
 }
 
-fn save_index(app_data_root: &Path, idx: &StarMapIndex) -> Result<()> {
+fn save_index(app_data_root: &Path, idx: &StarMapIndexRecord) -> Result<()> {
     let dir = starmaps_dir(app_data_root);
     fs::create_dir_all(&dir)?;
     let content = serde_json::to_string_pretty(idx)?;
@@ -167,22 +156,13 @@ fn delete_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn starmap_graph_path(app_data_root: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(app_data_root)
-        .join(starmap_id)
-        .join("graph.json")
-}
-
 pub fn list_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
     let idx = load_index(app_data_root)?;
-    Ok(idx.starmaps)
-}
-
-pub fn list_starmaps_for_project(
-    app_data_root: &Path,
-    project_id: &str,
-) -> Result<Vec<StarMapMeta>> {
-    list_starmaps_bound_to_project(app_data_root, project_id)
+    let mut metas = Vec::new();
+    for id in &idx.starmap_ids {
+        metas.push(load_starmap_meta(app_data_root, id)?);
+    }
+    Ok(metas)
 }
 
 pub fn list_starmaps_bound_to_project(
@@ -212,17 +192,13 @@ pub fn create_starmap(
         title: title.to_string(),
         description: description.to_string(),
         project_id: None,
-        is_main_for_project: false,
         accent_color: accent_color.unwrap_or(&default_accent_color()).to_string(),
         created_at: now,
         updated_at: now,
-        node_count: 0,
-        edge_count: 0,
-        linked_chapter_count: 0,
     };
     save_starmap_meta(app_data_root, &meta)?;
     let mut idx = load_index(app_data_root)?;
-    idx.starmaps.push(meta.clone());
+    idx.starmap_ids.push(meta.starmap_id.clone());
     idx.updated_at = now;
     save_index(app_data_root, &idx)?;
     Ok(meta)
@@ -257,10 +233,6 @@ pub fn rename_starmap(
     save_starmap_meta(app_data_root, &meta)?;
 
     let mut idx = load_index(app_data_root)?;
-    if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
-        entry.title = new_title.to_string();
-        entry.updated_at = meta.updated_at;
-    }
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
     Ok(meta)
@@ -302,13 +274,15 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     delete_starmap_meta(app_data_root, starmap_id)?;
 
     let mut idx = load_index(app_data_root)?;
-    idx.starmaps.retain(|m| m.starmap_id != starmap_id);
+    idx.starmap_ids.retain(|id| id != starmap_id);
+    // Remove from main_starmap_by_project if this starmap was a main for any project.
+    idx.main_starmap_by_project.retain(|_, v| v != starmap_id);
     idx.updated_at = now_epoch();
     save_index(app_data_root, &idx)?;
 
     let graph_dir = starmaps_dir(app_data_root).join(starmap_id);
     if graph_dir.exists() {
-        let _ = fs::remove_dir_all(&graph_dir);
+        fs::remove_dir_all(&graph_dir)?;
     }
 
     Ok(())
@@ -341,10 +315,6 @@ pub fn bind_starmap_to_project(
     save_starmap_meta(app_data_root, &meta)?;
 
     let mut idx = load_index(app_data_root)?;
-    if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
-        entry.project_id = Some(project_id.to_string());
-        entry.updated_at = meta.updated_at;
-    }
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
     Ok(())
@@ -364,36 +334,21 @@ pub fn bind_starmap_to_project_with_changes(
 
 /// 设置项目的主星图。
 ///
-/// 先清除该项目下所有星图的 `is_main_for_project` 标记，再设置目标星图。
-/// 清除和设置之间不是原子的，崩溃可能导致无主星图状态，但不会导致多主星图。
+/// 在 `StarMapIndexRecord.main_starmap_by_project` 中直接设置/替换映射，
+/// 同时更新目标 starmap 的 meta 文件（更新 updated_at）。
 pub fn set_main_starmap_for_project(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
 ) -> Result<()> {
-    // Clear previous main
     let mut idx = load_index(app_data_root)?;
-    for entry in &mut idx.starmaps {
-        if entry.project_id.as_deref() == Some(project_id) && entry.is_main_for_project {
-            entry.is_main_for_project = false;
-            entry.updated_at = now_epoch();
-            let _ = save_starmap_meta(app_data_root, entry);
-        }
-    }
-
-    // Set new main
-    if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
-        entry.is_main_for_project = true;
-        entry.project_id = Some(project_id.to_string());
-        entry.updated_at = now_epoch();
-        let _ = save_starmap_meta(app_data_root, entry);
-    }
+    idx.main_starmap_by_project
+        .insert(project_id.to_string(), starmap_id.to_string());
     idx.updated_at = now_epoch();
     save_index(app_data_root, &idx)?;
 
-    // Also update the meta file
+    // Update the target starmap's meta file (updated_at)
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
-    meta.is_main_for_project = true;
     meta.project_id = Some(project_id.to_string());
     meta.updated_at = now_epoch();
     save_starmap_meta(app_data_root, &meta)?;
@@ -403,35 +358,17 @@ pub fn set_main_starmap_for_project(
 
 ///   set_main_starmap_for_project 的变更集版本。
 ///
-/// 变更集：所有本次实际改过的 meta + `Upsert(starmaps/index.json)`。
-/// 包含被清除 main 标记的旧主星图 meta、新主星图 meta、index.json。
+/// 变更集：目标 starmap meta + `Upsert(starmaps/index.json)`。
 pub fn set_main_starmap_for_project_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    // 先收集本次会被改的 meta：当前 project 下所有 is_main 的 + 目标 starmap。
-    let idx = load_index(app_data_root)?;
-    let mut changed_metas: Vec<String> = idx
-        .starmaps
-        .iter()
-        .filter(|m| {
-            (m.project_id.as_deref() == Some(project_id) && m.is_main_for_project)
-                || m.starmap_id == starmap_id
-        })
-        .map(|m| m.starmap_id.clone())
-        .collect();
-    // 去重（目标 starmap 可能本身就是旧 main）。
-    changed_metas.sort();
-    changed_metas.dedup();
-
     set_main_starmap_for_project(app_data_root, starmap_id, project_id)?;
 
-    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(starmap_meta_rel_path(starmap_id))
         .add_upsert(starmaps_index_rel_path());
-    for id in &changed_metas {
-        change_set = change_set.add_upsert(starmap_meta_rel_path(id));
-    }
     Ok(change_set)
 }
 
@@ -440,26 +377,25 @@ pub fn get_main_starmap_for_project(
     project_id: &str,
 ) -> Result<Option<StarMapMeta>> {
     let idx = load_index(app_data_root)?;
-    for entry in &idx.starmaps {
-        if entry.project_id.as_deref() == Some(project_id) && entry.is_main_for_project {
-            return Ok(Some(load_starmap_meta(app_data_root, &entry.starmap_id)?));
-        }
+    if let Some(starmap_id) = idx.main_starmap_by_project.get(project_id) {
+        return Ok(Some(load_starmap_meta(app_data_root, starmap_id)?));
     }
     Ok(None)
 }
 
 pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
+    let old_project_id = meta.project_id.clone();
     meta.project_id = None;
-    meta.is_main_for_project = false;
     meta.updated_at = now_epoch();
     save_starmap_meta(app_data_root, &meta)?;
 
     let mut idx = load_index(app_data_root)?;
-    if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
-        entry.project_id = None;
-        entry.is_main_for_project = false;
-        entry.updated_at = meta.updated_at;
+    // If this starmap was the main for its project, remove the mapping.
+    if let Some(pid) = &old_project_id {
+        if idx.main_starmap_by_project.get(pid) == Some(&starmap_id.to_string()) {
+            idx.main_starmap_by_project.remove(pid);
+        }
     }
     idx.updated_at = meta.updated_at;
     save_index(app_data_root, &idx)?;
@@ -475,42 +411,6 @@ pub fn unbind_starmap_from_project_with_changes(
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
     unbind_starmap_from_project(app_data_root, starmap_id)?;
     Ok(change_set_for_meta_and_index(starmap_id))
-}
-
-pub fn get_motion_policy(
-    _app_data_root: &Path,
-) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
-    Ok(crate::starmap::types::StarMapMotionPolicyDto::default())
-}
-
-pub fn update_starmap_stats(
-    app_data_root: &Path,
-    starmap_id: &str,
-    node_count: u32,
-    edge_count: u32,
-    linked_chapter_count: u32,
-) -> Result<Vec<std::path::PathBuf>> {
-    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
-    meta.node_count = node_count;
-    meta.edge_count = edge_count;
-    meta.linked_chapter_count = linked_chapter_count;
-    meta.updated_at = now_epoch();
-    save_starmap_meta(app_data_root, &meta)?;
-
-    let mut idx = load_index(app_data_root)?;
-    if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
-        entry.node_count = node_count;
-        entry.edge_count = edge_count;
-        entry.linked_chapter_count = linked_chapter_count;
-        entry.updated_at = meta.updated_at;
-    }
-    idx.updated_at = meta.updated_at;
-    save_index(app_data_root, &idx)?;
-
-    Ok(vec![
-        std::path::PathBuf::from("starmaps").join(format!("{}.meta.json", starmap_id)),
-        std::path::PathBuf::from("starmaps").join("index.json"),
-    ])
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -565,8 +465,9 @@ pub fn find_starmap_references(
     let context =
         crate::starmap::graph::resolve::GraphResolverContext::new_disk_only(app_data_root);
 
-    for m in &idx.starmaps {
-        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &m.starmap_id);
+    for id in &idx.starmap_ids {
+        let host_meta = load_starmap_meta(app_data_root, id)?;
+        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, id);
         // 引用扫描必须基于完整加载的图。任一 host 星图加载失败就返回 Err，
         // 不允许在引用扫描不完整时继续删除（否则会漏掉真实引用导致误删）。
         store.load_full()?;
@@ -576,8 +477,8 @@ pub fn find_starmap_references(
         for embed in &graph.embeds {
             if embed.target_starmap_id == target_starmap_id {
                 refs.push(StarMapReference {
-                    host_starmap_id: m.starmap_id.clone(),
-                    host_title: m.title.clone(),
+                    host_starmap_id: id.clone(),
+                    host_title: host_meta.title.clone(),
                     ref_type: "embed".to_string(),
                     ref_id: embed.instance_id.clone(),
                     target_starmap_id: target_starmap_id.to_string(),
@@ -586,8 +487,8 @@ pub fn find_starmap_references(
             // Embed 的 host_path 也可能穿越或落在目标星图
             if target_path_references_starmap(&context, &embed.host_path, target_starmap_id)? {
                 refs.push(StarMapReference {
-                    host_starmap_id: m.starmap_id.clone(),
-                    host_title: m.title.clone(),
+                    host_starmap_id: id.clone(),
+                    host_title: host_meta.title.clone(),
                     ref_type: "embed".to_string(),
                     ref_id: embed.instance_id.clone(),
                     target_starmap_id: target_starmap_id.to_string(),
@@ -599,8 +500,8 @@ pub fn find_starmap_references(
         for link in &graph.links {
             if target_path_references_starmap(&context, &link.source, target_starmap_id)? {
                 refs.push(StarMapReference {
-                    host_starmap_id: m.starmap_id.clone(),
-                    host_title: m.title.clone(),
+                    host_starmap_id: id.clone(),
+                    host_title: host_meta.title.clone(),
                     ref_type: "link".to_string(),
                     ref_id: link.link_id.clone(),
                     target_starmap_id: target_starmap_id.to_string(),
@@ -608,8 +509,8 @@ pub fn find_starmap_references(
             }
             if target_path_references_starmap(&context, &link.target, target_starmap_id)? {
                 refs.push(StarMapReference {
-                    host_starmap_id: m.starmap_id.clone(),
-                    host_title: m.title.clone(),
+                    host_starmap_id: id.clone(),
+                    host_title: host_meta.title.clone(),
                     ref_type: "link".to_string(),
                     ref_id: link.link_id.clone(),
                     target_starmap_id: target_starmap_id.to_string(),
@@ -624,8 +525,8 @@ pub fn find_starmap_references(
 
             if matches {
                 refs.push(StarMapReference {
-                    host_starmap_id: m.starmap_id.clone(),
-                    host_title: m.title.clone(),
+                    host_starmap_id: id.clone(),
+                    host_title: host_meta.title.clone(),
                     ref_type: "edge".to_string(),
                     ref_id: edge.id.clone(),
                     target_starmap_id: target_starmap_id.to_string(),
@@ -638,8 +539,8 @@ pub fn find_starmap_references(
             if let Some(portal) = &node.portal {
                 if portal.destination_starmap_id == target_starmap_id {
                     refs.push(StarMapReference {
-                        host_starmap_id: m.starmap_id.clone(),
-                        host_title: m.title.clone(),
+                        host_starmap_id: id.clone(),
+                        host_title: host_meta.title.clone(),
                         ref_type: "portal".to_string(),
                         ref_id: node.id.clone(),
                         target_starmap_id: target_starmap_id.to_string(),
@@ -652,8 +553,8 @@ pub fn find_starmap_references(
         for hl in &graph.hyperlinks {
             if target_path_references_starmap(&context, &hl.source, target_starmap_id)? {
                 refs.push(StarMapReference {
-                    host_starmap_id: m.starmap_id.clone(),
-                    host_title: m.title.clone(),
+                    host_starmap_id: id.clone(),
+                    host_title: host_meta.title.clone(),
                     ref_type: "hyperlink".to_string(),
                     ref_id: hl.hyperlink_id.clone(),
                     target_starmap_id: target_starmap_id.to_string(),

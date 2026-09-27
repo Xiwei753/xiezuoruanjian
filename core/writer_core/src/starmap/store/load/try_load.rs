@@ -193,11 +193,6 @@ impl StarMapStore {
         }
     }
 
-    pub(in crate::starmap::store) fn try_load_layout(&self) -> Option<StarMapLayout> {
-        let dir = self.starmap_dir();
-        package_storage::load_layout_sharded(&dir)
-    }
-
     pub(in crate::starmap::store) fn try_load_link(
         &mut self,
         link_id: &str,
@@ -243,9 +238,5 @@ impl StarMapStore {
                 None
             }
         }
-    }
-
-    pub(in crate::starmap::store) fn try_load_viewport(&self) -> Option<StarMapViewport> {
-        package_storage::load_viewport(&self.app_data_root, &self.starmap_id)
     }
 }

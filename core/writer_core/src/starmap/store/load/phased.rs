@@ -3,7 +3,6 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 use super::super::meta::GraphMeta;
-use super::super::relation_index::{extract_ehi_node_refs, extract_eri_node_refs};
 use super::super::types::*;
 use super::super::StarMapStore;
 
@@ -83,14 +82,9 @@ impl StarMapStore {
                     self.load_graph_meta_phase(&mut diagnostics)?;
                     self.current_load_phase = Some(LoadPhase::GraphMeta);
                 }
-                LoadPhase::ViewportAndLayoutIndex => {
-                    self.layout = self.try_load_layout();
-                    self.viewport = self.try_load_viewport();
-                    self.current_load_phase = Some(LoadPhase::ViewportAndLayoutIndex);
-                }
-                LoadPhase::CurrentViewportObjects => {
-                    self.load_viewport_objects(&mut diagnostics);
-                    self.current_load_phase = Some(LoadPhase::CurrentViewportObjects);
+                LoadPhase::CurrentObjects => {
+                    self.load_current_objects(&mut diagnostics);
+                    self.current_load_phase = Some(LoadPhase::CurrentObjects);
                 }
                 LoadPhase::PrefetchNearbyObjects => {
                     self.prefetch_nearby_objects(&mut diagnostics);
@@ -156,133 +150,55 @@ impl StarMapStore {
         Ok(())
     }
 
-    pub(in crate::starmap::store) fn load_viewport_objects(
+    #[allow(clippy::excessive_nesting)]
+    pub(in crate::starmap::store) fn load_current_objects(
         &mut self,
         diagnostics: &mut Vec<LoadDiagnostic>,
     ) {
-        self.load_viewport_objects_impl(diagnostics, false);
-    }
-
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
-    fn load_viewport_objects_impl(
-        &mut self,
-        diagnostics: &mut Vec<LoadDiagnostic>,
-        index_already_rebuilt: bool,
-    ) {
-        let viewport_node_ids: std::collections::HashSet<String> =
-            match (&self.layout, &self.viewport) {
-                (Some(l), Some(vp)) => {
-                    let vp_left = vp.offset_x;
-                    let vp_top = vp.offset_y;
-                    let vp_right = vp.offset_x + vp.width / vp.scale;
-                    let vp_bottom = vp.offset_y + vp.height / vp.scale;
-                    l.nodes
-                        .iter()
-                        .filter(|n| {
-                            let node_left = n.x;
-                            let node_top = n.y;
-                            let node_right = n.x + n.width;
-                            let node_bottom = n.y + n.height;
-                            node_right > vp_left
-                                && node_left < vp_right
-                                && node_bottom > vp_top
-                                && node_top < vp_bottom
-                        })
-                        .map(|n| n.node_id.clone())
-                        .collect()
+        // 布局/视口已退出 Core。CurrentObjects 阶段不再基于视口筛选，
+        // 直接加载所有 GraphMeta 声明的对象（与旧 BackgroundFullLoad 行为一致）。
+        let _ = diagnostics;
+        if let Some(meta) = self.graph_meta.clone() {
+            for node_id in &meta.node_ids {
+                if self.nodes.contains_key(node_id) {
+                    continue;
                 }
-                (Some(l), None) => l.nodes.iter().map(|n| n.node_id.clone()).collect(),
-                _ => std::collections::HashSet::new(),
-            };
-
-        if viewport_node_ids.is_empty() {
-            let _ = diagnostics;
-            return;
-        }
-
-        for node_id in &viewport_node_ids {
-            // 严格服从 GraphMeta 成员列表：只加载 meta.node_ids 声明的 node。
-            // 不在成员列表里的（layout 引用的 stale node 或 orphan）跳过。
-            // meta 为 None（空星图）时没有声明对象，全部跳过。
-            let in_meta = self
-                .graph_meta
-                .as_ref()
-                .map(|m| m.node_ids.contains(node_id))
-                .unwrap_or(false);
-            if !in_meta {
-                continue;
-            }
-            if !self.nodes.contains_key(node_id) {
                 if let Some(node) = self.try_load_node(node_id) {
                     self.nodes.insert(node_id.clone(), node);
                 }
             }
-        }
-
-        let has_index = self
-            .graph_meta
-            .as_ref()
-            .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
-            .unwrap_or(false);
-
-        if has_index {
-            if let Some(meta) = self.graph_meta.as_ref() {
-                let edge_relation_index = meta.edge_relation_index.clone();
-                let embed_host_index = meta.embed_host_index.clone();
-                // clone 成员列表到 HashSet，让 meta 借用提前释放，
-                // 循环内可变借用 self.try_load_edge/try_load_embed 不冲突。
-                let meta_edge_ids: std::collections::HashSet<String> =
-                    meta.edge_ids.iter().cloned().collect();
-                let meta_embed_ids: std::collections::HashSet<String> =
-                    meta.embed_instance_ids.iter().cloned().collect();
-
-                for eri in &edge_relation_index {
-                    // 严格服从 GraphMeta 成员列表：只加载 meta.edge_ids 声明的 edge。
-                    // stale index 条目（edge 已删但 index 未更新）跳过，不加载 orphan。
-                    if !meta_edge_ids.contains(&eri.edge_id) {
-                        continue;
-                    }
-                    if self.edges.contains_key(&eri.edge_id) {
-                        continue;
-                    }
-                    let refs = extract_eri_node_refs(eri, &self.starmap_id);
-                    let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
-                    if any_in_viewport {
-                        if let Some(edge) = self.try_load_edge(&eri.edge_id) {
-                            self.edges.insert(eri.edge_id.clone(), edge);
-                        }
-                    }
+            for edge_id in &meta.edge_ids {
+                if self.edges.contains_key(edge_id) {
+                    continue;
                 }
-                for ehi in &embed_host_index {
-                    // 严格服从 GraphMeta 成员列表：只加载 meta.embed_instance_ids 声明的 embed。
-                    // stale index 条目跳过，不加载 orphan。
-                    if !meta_embed_ids.contains(&ehi.instance_id) {
-                        continue;
-                    }
-                    if self.embeds.contains_key(&ehi.instance_id) {
-                        continue;
-                    }
-                    let refs = extract_ehi_node_refs(ehi, &self.starmap_id);
-                    let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
-                    if any_in_viewport {
-                        if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
-                            self.embeds.insert(ehi.instance_id.clone(), embed);
-                        }
-                    }
+                if let Some(edge) = self.try_load_edge(edge_id) {
+                    self.edges.insert(edge_id.clone(), edge);
                 }
             }
-        } else if !index_already_rebuilt {
-            self.rebuild_relation_indexes();
-            self.load_viewport_objects_impl(diagnostics, true);
+            for embed_id in &meta.embed_instance_ids {
+                if self.embeds.contains_key(embed_id) {
+                    continue;
+                }
+                if let Some(embed) = self.try_load_embed(embed_id) {
+                    self.embeds.insert(embed_id.clone(), embed);
+                }
+            }
+            for link_id in &meta.link_ids {
+                if self.links.contains_key(link_id) {
+                    continue;
+                }
+                if let Some(link) = self.try_load_link(link_id) {
+                    self.links.insert(link_id.clone(), link);
+                }
+            }
+            for hl_id in &meta.hyperlink_ids {
+                if self.hyperlinks.contains_key(hl_id) {
+                    continue;
+                }
+                if let Some(hl) = self.try_load_hyperlink(hl_id) {
+                    self.hyperlinks.insert(hl_id.clone(), hl);
+                }
+            }
         }
-
-        let _ = diagnostics;
     }
 }

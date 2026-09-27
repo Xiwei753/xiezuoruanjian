@@ -1,13 +1,13 @@
 //! # 星图包存储入口 — 唯一可写真相
 //!
-//! `StarMapStore` 是星图 CRUD、解析、保存、迁移、导入和同步的唯一入口。
-//! 所有对星图对象（节点、边、子星图放置、超链接、布局）的修改必须通过此类型执行。
+//! `StarMapStore` 是星图 CRUD、解析、保存和同步的唯一入口。
+//! 所有对星图对象（节点、边、嵌入、链接、超链接）的修改必须通过此类型执行。
 //!
 //! ## 核心设计
 //!
 //! - 运行时维护已加载对象缓存和 dirty record
 //! - 增量写入：只保存实际修改的对象文件
-//! - 同一对象的连续修改合并，拖动结束后写布局分片
+//! - 同一对象的连续修改合并
 //! - 加载结果返回结构化诊断（missing、corrupt、unsupportedVersion 等）
 //! - 对象删除通过明确删除事务执行，保存过程根据 dirty record 写入
 //!
@@ -18,18 +18,15 @@
 //! ├── graph.json                          -- 星图元信息、成员 ID 列表、规范顺序、package revision
 //! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
 //! ├── edges/<bucket>/<edge_id>.json       -- 单条边
-//! ├── embeds/<bucket>/<instance_id>.json -- 嵌入放置
+//! ├── embeds/<bucket>/<instance_id>.json -- 嵌入实例（含宿主图内 position）
 //! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
 //! ├── links/<bucket>/<link_id>.json      -- 链接
-//! ├── layouts/default/
-//! │   ├── kind.json                       -- 布局类型
-//! │   └── nodes/<bucket>.json            -- 布局节点分片
 //! └── metadata/
 //!     └── recovery.json                  -- 解析失败对象的恢复记录
-//!
-//! session/starmaps/<starmap_id>/
-//! └── viewport.json                       -- 设备本地视口（不进入同步数据）
 //! ```
+//!
+//! 布局/视口/运动策略已退出 Core，由平台端自行管理。
+//! 节点位置在 `node.position`，嵌入位置在 `embed.position`。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -61,15 +58,12 @@ pub struct StarMapStore {
     pub(super) embeds: HashMap<String, StarMapEmbed>,
     pub(super) links: HashMap<String, StarMapLink>,
     pub(super) hyperlinks: HashMap<String, StarMapHyperlink>,
-    pub(super) layout: Option<StarMapLayout>,
-    pub(super) viewport: Option<StarMapViewport>,
     pub(super) graph_meta: Option<GraphMeta>,
     pub(super) dirty_nodes: HashSet<String>,
     pub(super) dirty_edges: HashSet<String>,
     pub(super) dirty_embeds: HashSet<String>,
     pub(super) dirty_links: HashSet<String>,
     pub(super) dirty_hyperlinks: HashSet<String>,
-    pub(super) dirty_layout: bool,
     pub(super) dirty_graph_meta: bool,
     pub(super) deleted_node_ids: HashSet<String>,
     pub(super) deleted_edge_ids: HashSet<String>,
@@ -92,15 +86,12 @@ impl StarMapStore {
             embeds: HashMap::new(),
             links: HashMap::new(),
             hyperlinks: HashMap::new(),
-            layout: None,
-            viewport: None,
             graph_meta: None,
             dirty_nodes: HashSet::new(),
             dirty_edges: HashSet::new(),
             dirty_embeds: HashSet::new(),
             dirty_links: HashSet::new(),
             dirty_hyperlinks: HashSet::new(),
-            dirty_layout: false,
             dirty_graph_meta: false,
             deleted_node_ids: HashSet::new(),
             deleted_edge_ids: HashSet::new(),
@@ -162,14 +153,6 @@ impl StarMapStore {
         self.links.get(link_id)
     }
 
-    pub fn get_layout(&self) -> Option<&StarMapLayout> {
-        self.layout.as_ref()
-    }
-
-    pub fn get_viewport(&self) -> Option<&StarMapViewport> {
-        self.viewport.as_ref()
-    }
-
     pub fn all_nodes(&self) -> impl Iterator<Item = &StarMapNode> {
         self.nodes.values()
     }
@@ -196,7 +179,6 @@ impl StarMapStore {
             || !self.dirty_embeds.is_empty()
             || !self.dirty_links.is_empty()
             || !self.dirty_hyperlinks.is_empty()
-            || self.dirty_layout
             || self.dirty_graph_meta
     }
 
@@ -211,7 +193,6 @@ impl StarMapStore {
             embeds: self.dirty_embeds.clone(),
             links: self.dirty_links.clone(),
             hyperlinks: self.dirty_hyperlinks.clone(),
-            layout: self.dirty_layout,
             deleted_nodes: self.deleted_node_ids.clone(),
             deleted_edges: self.deleted_edge_ids.clone(),
             deleted_embeds: self.deleted_embed_ids.clone(),

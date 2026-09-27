@@ -29,17 +29,39 @@ impl From<crate::starmap::types::StarMapGraph> for StarMapGraphDto {
     }
 }
 
-impl From<StarMapGraphDto> for crate::starmap::types::StarMapGraph {
-    fn from(d: StarMapGraphDto) -> Self {
-        Self {
+impl TryFrom<StarMapGraphDto> for crate::starmap::types::StarMapGraph {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapGraphDto) -> Result<Self, Self::Error> {
+        Ok(Self {
             schema_version: d.schema_version,
             starmap_id: d.starmap_id,
-            nodes: d.nodes.into_iter().map(Into::into).collect(),
-            edges: d.edges.into_iter().map(Into::into).collect(),
-            embeds: d.embeds.into_iter().map(Into::into).collect(),
-            links: d.links.into_iter().map(Into::into).collect(),
-            hyperlinks: d.hyperlinks.into_iter().map(Into::into).collect(),
-        }
+            nodes: d
+                .nodes
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            edges: d
+                .edges
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            embeds: d
+                .embeds
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            links: d
+                .links
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            hyperlinks: d
+                .hyperlinks
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 
@@ -73,127 +95,23 @@ impl From<crate::starmap::types::StarMapEdge> for StarMapEdgeDto {
     }
 }
 
-impl From<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
-    fn from(d: StarMapEdgeDto) -> Self {
-        Self {
+impl TryFrom<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapEdgeDto) -> Result<Self, Self::Error> {
+        let payload = d
+            .payload
+            .map(|s| serde_json::from_str(&s).map_err(crate::error::Error::from))
+            .transpose()?;
+        Ok(Self {
             id: d.id,
-            from: d.from.into(),
-            to: d.to.into(),
+            from: d.from.try_into()?,
+            to: d.to.try_into()?,
             kind: d.kind.into(),
             label: d.label,
-            payload: d
-                .payload
-                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            payload,
             created_at: d.created_at,
             updated_at: d.updated_at,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StarMapEdgeRenderDto {
-    pub edge_id: String,
-    pub from_cx: f32,
-    pub from_cy: f32,
-    pub to_cx: f32,
-    pub to_cy: f32,
-    pub start_x: f32,
-    pub start_y: f32,
-    pub end_x: f32,
-    pub end_y: f32,
-    pub offset_x: f32,
-    pub offset_y: f32,
-    pub arrow_tip_x: f32,
-    pub arrow_tip_y: f32,
-    pub arrow_left_x: f32,
-    pub arrow_left_y: f32,
-    pub arrow_right_x: f32,
-    pub arrow_right_y: f32,
-    pub label_x: f32,
-    pub label_y: f32,
-    pub label: Option<String>,
-    pub has_bidirectional: bool,
-}
-
-impl From<crate::starmap::render::EdgeRender> for StarMapEdgeRenderDto {
-    fn from(r: crate::starmap::render::EdgeRender) -> Self {
-        Self {
-            edge_id: r.edge_id,
-            from_cx: r.from_cx,
-            from_cy: r.from_cy,
-            to_cx: r.to_cx,
-            to_cy: r.to_cy,
-            start_x: r.start_x,
-            start_y: r.start_y,
-            end_x: r.end_x,
-            end_y: r.end_y,
-            offset_x: r.offset_x,
-            offset_y: r.offset_y,
-            arrow_tip_x: r.arrow_tip_x,
-            arrow_tip_y: r.arrow_tip_y,
-            arrow_left_x: r.arrow_left_x,
-            arrow_left_y: r.arrow_left_y,
-            arrow_right_x: r.arrow_right_x,
-            arrow_right_y: r.arrow_right_y,
-            label_x: r.label_x,
-            label_y: r.label_y,
-            label: r.label,
-            has_bidirectional: r.has_bidirectional,
-        }
-    }
-}
-
-/// 边端点锚点解析诊断 DTO。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StarMapEdgeAnchorDiagnosticDto {
-    pub edge_id: String,
-    pub endpoint: String,
-    pub reason: StarMapEdgeAnchorDiagnosticReasonDto,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum StarMapEdgeAnchorDiagnosticReasonDto {
-    LocalNodeMissing,
-    CrossLayerPath,
-    NonGeometricTarget,
-    EmbedMissing,
-    PortalMissing,
-}
-
-impl From<crate::starmap::render::EdgeAnchorDiagnostic> for StarMapEdgeAnchorDiagnosticDto {
-    fn from(d: crate::starmap::render::EdgeAnchorDiagnostic) -> Self {
-        use crate::starmap::render::EdgeAnchorDiagnosticReason as R;
-        let reason = match d.reason {
-            R::LocalNodeMissing => StarMapEdgeAnchorDiagnosticReasonDto::LocalNodeMissing,
-            R::CrossLayerPath => StarMapEdgeAnchorDiagnosticReasonDto::CrossLayerPath,
-            R::NonGeometricTarget => StarMapEdgeAnchorDiagnosticReasonDto::NonGeometricTarget,
-            R::EmbedMissing => StarMapEdgeAnchorDiagnosticReasonDto::EmbedMissing,
-            R::PortalMissing => StarMapEdgeAnchorDiagnosticReasonDto::PortalMissing,
-        };
-        Self {
-            edge_id: d.edge_id,
-            endpoint: d.endpoint,
-            reason,
-        }
-    }
-}
-
-/// 边渲染批结果 DTO：成功渲染的边 + 无法定位端点的诊断。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct StarMapEdgeRenderBatchDto {
-    pub renders: Vec<StarMapEdgeRenderDto>,
-    pub diagnostics: Vec<StarMapEdgeAnchorDiagnosticDto>,
-}
-
-impl From<crate::starmap::render::EdgeRenderBatch> for StarMapEdgeRenderBatchDto {
-    fn from(b: crate::starmap::render::EdgeRenderBatch) -> Self {
-        Self {
-            renders: b.renders.into_iter().map(Into::into).collect(),
-            diagnostics: b.diagnostics.into_iter().map(Into::into).collect(),
-        }
+        })
     }
 }

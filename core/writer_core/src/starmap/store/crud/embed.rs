@@ -49,17 +49,8 @@ impl StarMapStore {
         if let Some(ref l) = patch.label {
             embed.label = l.clone();
         }
-        if let Some(ref dp) = patch.display_policy {
-            embed.display_policy = dp.clone();
-        }
-        if let Some(ref ob) = patch.open_behavior {
-            embed.open_behavior = ob.clone();
-        }
-        if let Some(Some(ref pl)) = patch.placement {
-            embed.placement = pl.clone();
-        }
-        if let Some(Some(ref vp)) = patch.target_viewport {
-            embed.target_viewport = vp.clone();
+        if let Some(ref p) = patch.position {
+            embed.position = p.clone();
         }
         if let Some(ref hp) = patch.host_path {
             embed.host_path = hp.clone();

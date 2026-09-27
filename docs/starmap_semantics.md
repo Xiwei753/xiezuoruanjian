@@ -13,7 +13,7 @@ StarMap 不再是一个强依赖父子拥有权的嵌套树。它是一个**语�
 ## 核心独立模型与 CRUD
 
 ### 1. StarMap 本体
-* 它是独立的文档对象，拥有自己的 `starmap_id`、meta、graph 和 layout。
+* 它是独立的文档对象，拥有自己的 `starmap_id`、meta 和 graph。对象的 authored 位置（`StarMapNode.position`、`StarMapEmbed.position`）与样式（`StarMapNode.style`）都在 graph 里的对象自身上；布局算法、视口、运动策略、显示策略、命中测试、边渲染几何全部属于平台显示层，不在 Core。
 * 它不依赖父星图（`parent_starmap_id`）才能存在。`parent_starmap_id` 仅作为遗留的兼容组织字段。
 * **删除安全 (Deletion Safety)**：删除 StarMap 时，底层现在会进行深度引用检测 (`find_starmap_references`)。如果该星图被其他星图通过 Embed、Link、Portal 或 DeepTarget Edge 引用，底层将**拒绝删除**并返回引用报告。**不再存在静默的级联删除行为**。如果需要遗留的强制连带删除，必须调用专门的 `delete_starmap_cascade_legacy`。
 
@@ -54,7 +54,7 @@ StarMap 不再是一个强依赖父子拥有权的嵌套树。它是一个**语�
 * **重复性**：同图不能有重复的 `instance_id` 或 `link_id`。
 * **目标存活**：Embed 指向的星图必须存在。不允许 Self-Embed。
 * **端点安全**：`StarMapEndpoint` 取代了旧的单纯字符串引用。Link、Embed (host) 以及 Edge 都使用端点（Node、Anchor、Starmap）。如果端点是 Node/Anchor，则它们必须存在于当前的 Host StarMap 中。
-* **显示策略校验**：`max_preview_chars` 限制最大字符数（如 10000），各种缩放级别必须满足单调性：`min_visible <= title <= summary <= detail`。
+* **位置合法**：节点的 `position`、嵌入的 `position` 数值必须 finite（无 NaN/Inf）。
 * **深层可达性**：Link 的目标深层路径不仅不能指向虚无，而且不能发生环路（CycleDetected）或者层级太深（TooDeep）。
 * **级联清理**：调用 `delete_starmap_node` 删除节点时，会自动级联清理连接到该节点的 Edge `from_endpoint/to_endpoint`，以及以该节点为宿主的 Embed `host_endpoint` 和 Link `source`。
 * **删除保护**：调用 `delete_starmap` 时，仅当存在**外部引用**（被其他星图引用）时才阻止删除。自身发出的内部 Link 不会阻碍自身的删除。

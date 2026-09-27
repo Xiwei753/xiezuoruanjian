@@ -6,8 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::starmap::types::reference::StarMapTargetPath;
-
 /// 节点内容类型。
 ///
 /// `ChapterRef` 中的 `range_start`/`range_end` 为 UTF-8 byte offset（半开区间），
@@ -175,137 +173,14 @@ pub enum StarMapAnchorRole {
 ///
 /// - `destination_starmap_id`：portal 跳转的目标星图 ID
 /// - `destination_target`：可选的目标落点（目标图内的 Node/Anchor/ChapterRange 等）
-/// - `mode`：跳转模式
-///   - `EnterPortal`：点击后进入子星图编辑空间
-///   - `PreviewInline`：在当前星图内内联预览子星图
-///   - `ReferenceOnly`：仅作为引用标记，不提供交互入口
-/// - `preview_policy`：内联预览策略
+///
+/// 显示/交互策略（mode、preview_policy）已退出 Core，由平台端自行管理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortal {
     pub destination_starmap_id: String,
     #[serde(default)]
     pub destination_target: Option<StarMapTargetDetail>,
-    #[serde(default)]
-    pub mode: StarMapPortalMode,
-    #[serde(default)]
-    pub preview_policy: StarMapPortalPreviewPolicy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[derive(Default)]
-pub enum StarMapPortalMode {
-    EnterPortal,
-    PreviewInline,
-    #[default]
-    ReferenceOnly,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-#[derive(Default)]
-pub enum StarMapPortalPreviewPolicy {
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
-/// 显示策略：控制节点/嵌入在不同缩放级别下的可见内容。
-///
-/// ## Scale 层级不变量
-///
-/// `min_visible_scale <= title_scale <= summary_scale <= detail_scale`
-///
-/// - `min_visible_scale`：节点开始可见的最低缩放
-/// - `title_scale`：标题文字可读的缩放
-/// - `summary_scale`：摘要可读的缩放
-/// - `detail_scale`：完整详情可读的缩放
-///
-/// `importance` 影响自动布局中的节点排序权重。
-/// `max_preview_chars` 限制内联预览文本长度（防止大文本拖慢渲染）。
-/// `min_readable_px` 为平台端提供最小可读像素阈值参考。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StarMapDisplayPolicy {
-    pub importance: f32,
-    pub min_visible_scale: f32,
-    pub title_scale: f32,
-    pub summary_scale: f32,
-    pub detail_scale: f32,
-    pub max_preview_chars: u32,
-    pub min_readable_px: f32,
-}
-
-impl Default for StarMapDisplayPolicy {
-    fn default() -> Self {
-        Self {
-            importance: 1.0,
-            min_visible_scale: 0.1,
-            title_scale: 0.2,
-            summary_scale: 0.5,
-            detail_scale: 1.0,
-            max_preview_chars: 100,
-            min_readable_px: 12.0,
-        }
-    }
-}
-
-/// 校验 DisplayPolicy 的 scale 层级不变量和数值合法性。
-///
-/// 不变量：`min_visible_scale <= title_scale <= summary_scale <= detail_scale`，
-/// 所有值 finite、非负，`max_preview_chars ≤ 10000`。
-pub fn validate_display_policy(dp: &StarMapDisplayPolicy) -> crate::error::Result<()> {
-    if dp.importance < 0.0
-        || !dp.importance.is_finite()
-        || dp.min_visible_scale < 0.0
-        || !dp.min_visible_scale.is_finite()
-        || dp.title_scale < 0.0
-        || !dp.title_scale.is_finite()
-        || dp.summary_scale < 0.0
-        || !dp.summary_scale.is_finite()
-        || dp.detail_scale < 0.0
-        || !dp.detail_scale.is_finite()
-        || dp.min_readable_px < 0.0
-        || !dp.min_readable_px.is_finite()
-    {
-        return Err(crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Invalid display policy values",
-        )));
-    }
-
-    if !(dp.min_visible_scale <= dp.title_scale
-        && dp.title_scale <= dp.summary_scale
-        && dp.summary_scale <= dp.detail_scale)
-    {
-        return Err(crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Display policy scales must be ordered: min_visible <= title <= summary <= detail",
-        )));
-    }
-    if dp.max_preview_chars > 10000 {
-        return Err(crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "max_preview_chars cannot exceed 10000",
-        )));
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum StarMapOpenBehavior {
-    #[default]
-    Inspector,
-    ExpandCard,
-    WritingMode,
-    JumpToAnchor,
-    EnterPortal,
-    #[serde(other)]
-    Custom,
 }
 
 /// 来源溯源（Provenance）：记录节点/嵌入的创建来源和审核状态。
@@ -397,17 +272,6 @@ pub enum StarMapTargetDetail {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum StarMapTargetDisplayStatus {
-    #[default]
-    Unresolved,
-    TitleOnly,
-    TitleSummary,
-    MiniMap,
-    ExpandedGraph,
-}
-
 /// 目标路径解析状态。
 ///
 /// - `Resolved`：路径完整可达
@@ -439,35 +303,6 @@ pub enum StarMapTargetResolveStatus {
     UnsupportedVersion,
     CorruptStarmap,
     ReadFailed,
-}
-
-/// 计算目标展示状态，只提供底层计算语义。
-pub fn resolve_target_display_status(
-    _target_path: &StarMapTargetPath,
-    current_scale: f32,
-    display_policy: Option<&StarMapDisplayPolicy>,
-    is_resolved: bool,
-) -> StarMapTargetDisplayStatus {
-    if !is_resolved {
-        return StarMapTargetDisplayStatus::Unresolved;
-    }
-
-    let default_policy = StarMapDisplayPolicy::default();
-    let dp = display_policy.unwrap_or(&default_policy);
-
-    if current_scale < dp.min_visible_scale {
-        return StarMapTargetDisplayStatus::TitleOnly;
-    }
-
-    if current_scale >= dp.detail_scale {
-        return StarMapTargetDisplayStatus::ExpandedGraph;
-    } else if current_scale >= dp.summary_scale {
-        return StarMapTargetDisplayStatus::MiniMap;
-    } else if current_scale >= dp.title_scale {
-        return StarMapTargetDisplayStatus::TitleSummary;
-    }
-
-    StarMapTargetDisplayStatus::TitleOnly
 }
 
 #[cfg(test)]

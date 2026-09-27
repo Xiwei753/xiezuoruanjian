@@ -317,26 +317,6 @@ fn assert_field(data: &Value, field: &str, expected: &str) {
     );
 }
 
-/// 手造一份含 2 节点 1 边的 `StarMapGraphDto` JSON，用来观察边渲染输出形状。
-fn seeded_graph_json(starmap_id: &str) -> String {
-    format!(
-        r#"{{
-      "schemaVersion": 1,
-      "starmapId": "{starmap_id}",
-      "nodes": [
-        {{"id":"n1","title":"节点一","kind":"Concept","payload":null,"createdAt":0,"updatedAt":0}},
-        {{"id":"n2","title":"节点二","kind":"Concept","payload":null,"createdAt":0,"updatedAt":0}}
-      ],
-      "edges": [
-        {{"id":"e1","from":{{"starmapId":"{starmap_id}","segments":[],"target":{{"type":"node","nodeId":"n1"}}}},"to":{{"starmapId":"{starmap_id}","segments":[],"target":{{"type":"node","nodeId":"n2"}}}},"kind":"RelatedTo","label":null,"payload":null,"createdAt":0,"updatedAt":0}}
-      ],
-      "embeds": [],
-      "links": [],
-      "hyperlinks": []
-    }}"#
-    )
-}
-
 #[test]
 #[allow(clippy::too_many_lines)]
 fn harmony_wire_contract_matches_fixture() {
@@ -668,68 +648,11 @@ fn harmony_wire_contract_matches_fixture() {
     );
     let _ = note(
         &mut out,
-        "getStarMapLayout",
-        &call1(starmap::writer_core_get_starmap_layout, &starmap_c),
-    );
-    let _ = note(
-        &mut out,
-        "getStarMapMotionPolicy",
-        &call0(starmap::writer_core_get_starmap_motion_policy),
-    );
-    let _ = note(
-        &mut out,
         "renameStarMap",
         &call2(
             starmap::writer_core_rename_starmap,
             &starmap_c,
             &cstr("人物图2"),
-        ),
-    );
-    // 两个节点 + 一条边：让边渲染输出带上真实元素形状，同时校验 StarMapGraphDto 入参契约。
-    let seeded_layout = cstr(
-        r#"{"kind":"Freeform","nodes":[{"nodeId":"n1","x":10.0,"y":10.0,"width":48.0,"height":48.0,"radius":24.0,"collapsed":false,"zIndex":0,"scale":1.0,"depth":0.0,"focusWeight":1.0,"orbitGroup":null},{"nodeId":"n2","x":210.0,"y":150.0,"width":48.0,"height":48.0,"radius":24.0,"collapsed":false,"zIndex":1,"scale":1.0,"depth":0.0,"focusWeight":1.0,"orbitGroup":null}]}"#,
-    );
-    let _ = note(
-        &mut out,
-        "saveStarMapLayout",
-        &call2(
-            starmap::writer_core_save_starmap_layout,
-            &starmap_c,
-            &seeded_layout,
-        ),
-    );
-    let layout_after_save = note(
-        &mut out,
-        "getStarMapLayoutAfterSeed",
-        &call1(starmap::writer_core_get_starmap_layout, &starmap_c),
-    );
-    assert_eq!(
-        layout_after_save["data"]["nodes"]
-            .as_array()
-            .map_or(0, |v| v.len()),
-        2
-    );
-    let seeded_graph = cstr(&seeded_graph_json(&starmap_id));
-    let renders = note(
-        &mut out,
-        "computeStarMapEdgeRenders",
-        &call1(
-            starmap::writer_core_compute_starmap_edge_renders,
-            &seeded_graph,
-        ),
-    );
-    assert_eq!(
-        renders["data"]["renders"].as_array().map_or(0, |v| v.len()),
-        1,
-        "一条边应得到一条渲染数据"
-    );
-    let _ = note(
-        &mut out,
-        "saveStarMapViewport",
-        &call2(
-            starmap::writer_core_save_starmap_viewport,
-            &starmap_c,
-            &cstr(r#"{"scale":1.25,"offsetX":-30.0,"offsetY":12.0,"width":384.0,"height":640.0}"#),
         ),
     );
 

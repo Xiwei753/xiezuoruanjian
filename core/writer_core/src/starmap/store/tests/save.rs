@@ -320,47 +320,6 @@ fn deferred_save_with_delete_merges_into_single_flush() {
     assert!(!store.is_dirty());
 }
 #[test]
-fn layout_flush_only_on_explicit_save() {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
-
-    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store.upsert_node(make_test_node("n1", "Node1"));
-    store.flush().unwrap();
-
-    let mut layout = StarMapLayout::default();
-    layout.nodes.push(StarMapLayoutNode {
-        node_id: "n1".to_string(),
-        x: 10.0,
-        y: 20.0,
-        width: 100.0,
-        height: 50.0,
-        radius: 25.0,
-        collapsed: false,
-        z_index: 0,
-        scale: 1.0,
-        depth: 0.0,
-        focus_weight: 0.0,
-        orbit_group: None,
-    });
-    store.set_layout(layout);
-    store.enqueue_save(SaveQueueEntry::Layout);
-    store.enqueue_save(SaveQueueEntry::GraphMeta);
-
-    assert!(store.is_dirty());
-    assert_eq!(store.save_queue_len(), 2);
-
-    store.upsert_node(make_test_node("n2", "Node2"));
-    store.enqueue_save(SaveQueueEntry::Node);
-    store.enqueue_save(SaveQueueEntry::GraphMeta);
-
-    assert_eq!(store.save_queue_len(), 3);
-
-    store.flush_save_queue().unwrap();
-    assert!(!store.is_dirty());
-}
-#[test]
 fn flush_package_revision_memory_matches_disk() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();

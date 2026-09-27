@@ -44,7 +44,6 @@ impl StarMapStore {
         // 清空 save_queue，本轮从 dirty 集合重新生成待处理集合。
         self.save_queue.clear();
 
-        let mut any_processed = false;
         let mut failed_types: Vec<String> = Vec::new();
         let mut changed_paths: Vec<PathBuf> = Vec::new();
 
@@ -58,7 +57,6 @@ impl StarMapStore {
         // 失败时不 requeue——dirty 集合保持原样，下一轮会重新发现。
 
         if !self.dirty_nodes.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
             let mut succeeded = true;
             for node_id in &ids {
@@ -84,7 +82,6 @@ impl StarMapStore {
         }
 
         if !self.dirty_edges.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
             let mut succeeded = true;
             for edge_id in &ids {
@@ -109,7 +106,6 @@ impl StarMapStore {
         }
 
         if !self.dirty_embeds.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
             let mut succeeded = true;
             for instance_id in &ids {
@@ -135,7 +131,6 @@ impl StarMapStore {
         }
 
         if !self.dirty_links.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
             let mut succeeded = true;
             for link_id in &ids {
@@ -160,7 +155,6 @@ impl StarMapStore {
         }
 
         if !self.dirty_hyperlinks.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.dirty_hyperlinks.iter().cloned().collect();
             let mut succeeded = true;
             for hl_id in &ids {
@@ -185,29 +179,7 @@ impl StarMapStore {
             }
         }
 
-        if self.dirty_layout {
-            any_processed = true;
-            let mut succeeded = true;
-            if let Some(ref layout) = self.layout {
-                match package_storage::save_layout(&self.app_data_root, &self.starmap_id, layout) {
-                    Ok(paths) => {
-                        changed_paths.extend(paths);
-                        successful_writes.layout = true;
-                    }
-                    Err(_) => {
-                        succeeded = false;
-                    }
-                }
-            } else {
-                successful_writes.layout = true;
-            }
-            if !succeeded {
-                failed_types.push("Layout".to_string());
-            }
-        }
-
         if !self.deleted_node_ids.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
             let mut succeeded = true;
             for node_id in &ids {
@@ -233,7 +205,6 @@ impl StarMapStore {
         }
 
         if !self.deleted_edge_ids.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
             let mut succeeded = true;
             for edge_id in &ids {
@@ -259,7 +230,6 @@ impl StarMapStore {
         }
 
         if !self.deleted_embed_ids.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
             let mut succeeded = true;
             for instance_id in &ids {
@@ -287,7 +257,6 @@ impl StarMapStore {
         }
 
         if !self.deleted_link_ids.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
             let mut succeeded = true;
             for link_id in &ids {
@@ -313,7 +282,6 @@ impl StarMapStore {
         }
 
         if !self.deleted_hyperlink_ids.is_empty() {
-            any_processed = true;
             let ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
             let mut succeeded = true;
             for hl_id in &ids {
@@ -344,7 +312,6 @@ impl StarMapStore {
         let graph_meta_succeeded = if !failed_types.is_empty() {
             false
         } else if self.dirty_graph_meta {
-            any_processed = true;
             self.reload_graph_meta_if_stale()?;
             // 用 successful_writes 和 successful_deletes 生成本次 revision，
             // 因为只有真正写成功的对象才应该获得新 revision。
@@ -354,7 +321,6 @@ impl StarMapStore {
                 embeds: successful_writes.embeds.clone(),
                 links: successful_writes.links.clone(),
                 hyperlinks: successful_writes.hyperlinks.clone(),
-                layout: successful_writes.layout,
                 deleted_nodes: successful_deletes.deleted_nodes.clone(),
                 deleted_edges: successful_deletes.deleted_edges.clone(),
                 deleted_embeds: successful_deletes.deleted_embeds.clone(),
@@ -394,9 +360,6 @@ impl StarMapStore {
             for hl_id in &successful_writes.hyperlinks {
                 self.dirty_hyperlinks.remove(hl_id);
             }
-            if successful_writes.layout {
-                self.dirty_layout = false;
-            }
             for node_id in &successful_deletes.deleted_nodes {
                 self.deleted_node_ids.remove(node_id);
             }
@@ -415,38 +378,10 @@ impl StarMapStore {
             self.dirty_graph_meta = false;
         }
 
-        let all_flushed = !self.is_dirty() && !self.dirty_graph_meta && !self.has_pending_deletes();
-
         if self.has_pending_deletes() || self.has_pending_writes() || !self.recovery_log.is_empty()
         {
             let recovery_path = self.flush_recovery_to_disk()?;
             changed_paths.push(recovery_path);
-        }
-
-        if any_processed && all_flushed {
-            let node_count: u32 = self
-                .graph_meta
-                .as_ref()
-                .map(|m| m.node_ids.len().try_into().unwrap_or(u32::MAX))
-                .unwrap_or_else(|| self.nodes.len().try_into().unwrap_or(u32::MAX));
-            let edge_count: u32 = self
-                .graph_meta
-                .as_ref()
-                .map(|m| m.edge_ids.len().try_into().unwrap_or(u32::MAX))
-                .unwrap_or_else(|| self.edges.len().try_into().unwrap_or(u32::MAX));
-            let linked_chapters = self
-                .graph_meta
-                .as_ref()
-                .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
-                .unwrap_or(0u32);
-            let stats_paths = crate::starmap::update_starmap_stats(
-                &self.app_data_root,
-                &self.starmap_id,
-                node_count,
-                edge_count,
-                linked_chapters,
-            )?;
-            changed_paths.extend(stats_paths);
         }
 
         if !failed_types.is_empty() {
@@ -502,9 +437,6 @@ impl StarMapStore {
         if !self.dirty_hyperlinks.is_empty() {
             self.enqueue_save(SaveQueueEntry::Hyperlink);
         }
-        if self.dirty_layout {
-            self.enqueue_save(SaveQueueEntry::Layout);
-        }
         if self.has_pending_deletes() {
             self.enqueue_save(SaveQueueEntry::DeleteNode);
             self.enqueue_save(SaveQueueEntry::DeleteEdge);
@@ -516,15 +448,5 @@ impl StarMapStore {
             self.enqueue_save(SaveQueueEntry::GraphMeta);
         }
         self.flush_save_queue()
-    }
-
-    pub fn flush_viewport(&self) -> Result<Vec<PathBuf>> {
-        let mut changed_paths: Vec<PathBuf> = Vec::new();
-        if let Some(ref viewport) = self.viewport {
-            let rel_path =
-                package_storage::save_viewport(&self.app_data_root, &self.starmap_id, viewport)?;
-            changed_paths.push(rel_path);
-        }
-        Ok(changed_paths)
     }
 }

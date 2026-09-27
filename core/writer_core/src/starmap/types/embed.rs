@@ -1,83 +1,37 @@
 use serde::{Deserialize, Serialize};
 
-use crate::starmap::semantic::{StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance};
+use crate::starmap::semantic::StarMapProvenance;
+use crate::starmap::types::graph::StarMapPoint;
 use crate::starmap::types::reference::StarMapTargetPath;
 
-/// 嵌入放置参数：位置、尺寸、缩放、层级。
+/// 星图嵌入：当前星图里放置另一个星图实例的领域语义。
 ///
-/// 所有坐标为星图文档坐标（逻辑像素），平台渲染时乘以 dpr 转为物理像素。
-/// `width`/`height` 允许为 0（折叠状态），不允许为负（验证拦截）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StarMapEmbedPlacement {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub scale: f32,
-    pub z_index: i32,
-    pub collapsed: bool,
-}
-
-impl Default for StarMapEmbedPlacement {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            width: 300.0,
-            height: 200.0,
-            scale: 1.0,
-            z_index: 0,
-            collapsed: false,
-        }
-    }
-}
-
-/// 嵌入目标视口：子星图在嵌入框内的初始视口参数。
-///
-/// `scale` 为子星图内容的缩放比，`offset_x`/`offset_y` 为子星图坐标偏移。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StarMapEmbedViewport {
-    pub scale: f32,
-    pub offset_x: f32,
-    pub offset_y: f32,
-}
-
-impl Default for StarMapEmbedViewport {
-    fn default() -> Self {
-        Self {
-            scale: 1.0,
-            offset_x: 0.0,
-            offset_y: 0.0,
-        }
-    }
-}
-
-/// 星图嵌入（子星图放置实例）。
+/// 只保存 `position`（在宿主星图文档坐标系下的位置）和 `host_path`
+/// （宿主路径）。显示/交互/渲染参数（width/height/scale/z_index/collapsed、
+/// viewport、display_policy、open_behavior）全部退出 Core，由平台端自行管理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbed {
     pub instance_id: String,
     pub target_starmap_id: String,
     pub label: Option<String>,
-    pub display_policy: StarMapDisplayPolicy,
-    pub open_behavior: StarMapOpenBehavior,
-    pub placement: StarMapEmbedPlacement,
-    pub target_viewport: StarMapEmbedViewport,
+    /// 嵌入在宿主星图文档坐标系下的位置。必填的数据字段，
+    /// 旧 schema 一次性迁移时从 placement.x/y 合并而来。
+    pub position: StarMapPoint,
     pub host_path: StarMapTargetPath,
     pub provenance: StarMapProvenance,
     pub created_at: u64,
     pub updated_at: u64,
 }
 
+/// Embed 局部更新补丁。
+///
+/// 只保留真正可修改的数据字段：`label`、`position`、`host_path`。
+/// `None` 表示"不修改"，`Some(None)` 表示"清空可选字段"（如 label）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedPatch {
     pub label: Option<Option<String>>,
-    pub display_policy: Option<StarMapDisplayPolicy>,
-    pub open_behavior: Option<StarMapOpenBehavior>,
-    pub placement: Option<Option<StarMapEmbedPlacement>>,
-    pub target_viewport: Option<Option<StarMapEmbedViewport>>,
+    pub position: Option<StarMapPoint>,
     pub host_path: Option<StarMapTargetPath>,
 }

@@ -11,8 +11,7 @@ use super::super::*;
 use super::*;
 use crate::starmap::graph::resolve::{resolve_target, GraphResolverContext};
 use crate::starmap::semantic::{
-    StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance, StarMapTargetDetail,
-    StarMapTargetResolveStatus,
+    StarMapProvenance, StarMapTargetDetail, StarMapTargetResolveStatus,
 };
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
 use tempfile::TempDir;
@@ -56,10 +55,7 @@ fn make_embed(instance_id: &str, target_starmap_id: &str, host_starmap_id: &str)
         instance_id: instance_id.to_string(),
         target_starmap_id: target_starmap_id.to_string(),
         label: None,
-        display_policy: StarMapDisplayPolicy::default(),
-        open_behavior: StarMapOpenBehavior::default(),
-        placement: StarMapEmbedPlacement::default(),
-        target_viewport: StarMapEmbedViewport::default(),
+        position: Default::default(),
         host_path: StarMapTargetPath {
             starmap_id: host_starmap_id.to_string(),
             segments: vec![],

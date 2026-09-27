@@ -264,7 +264,9 @@ impl WriterAppService {
         &self,
         project_id: &str,
     ) -> crate::error::Result<Vec<crate::starmap::StarMapMeta>> {
-        self.api.core_read().list_starmaps_for_project(project_id)
+        self.api
+            .core_read()
+            .list_starmaps_bound_to_project(project_id)
     }
 
     pub fn get_starmap(
@@ -272,19 +274,6 @@ impl WriterAppService {
         starmap_id: &str,
     ) -> crate::error::Result<crate::starmap::StarMapMeta> {
         self.api.core_read().get_starmap(starmap_id)
-    }
-
-    pub fn get_starmap_layout_raw(
-        &self,
-        starmap_id: &str,
-    ) -> crate::error::Result<crate::starmap::types::StarMapLayout> {
-        self.api.core_read().get_starmap_layout(starmap_id)
-    }
-
-    pub fn get_starmap_motion_policy_raw(
-        &self,
-    ) -> crate::error::Result<crate::starmap::types::StarMapMotionPolicyDto> {
-        self.api.core_read().get_motion_policy()
     }
 
     pub fn rename_starmap_raw(

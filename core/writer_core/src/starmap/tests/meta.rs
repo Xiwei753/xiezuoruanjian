@@ -11,17 +11,6 @@ fn setup_temp_dir() -> tempfile::TempDir {
 }
 
 #[test]
-fn test_starmap_graph_path() {
-    let app_data_root = std::path::Path::new("/dummy/app_data");
-    let starmap_id = "test_starmap_id";
-
-    let path = starmap_graph_path(app_data_root, starmap_id);
-
-    let expected = std::path::PathBuf::from("/dummy/app_data/starmaps/test_starmap_id/graph.json");
-    assert_eq!(path, expected);
-}
-
-#[test]
 fn test_create_and_list_starmaps() {
     let dir = setup_temp_dir();
     let _meta1 = create_starmap(dir.path(), "Star Map 1", "desc1", None).unwrap();
@@ -177,28 +166,6 @@ fn test_delete_starmap_edge_protection() {
 }
 
 #[test]
-fn test_motion_policy_default() {
-    let policy = StarMapMotionPolicyDto::default();
-    assert!(policy.enabled);
-    assert!(policy.idle_wobble_enabled);
-    assert_eq!(policy.idle_amplitude_vp, 2.0);
-    assert_eq!(policy.idle_period_ms, 4200);
-    assert_eq!(policy.drag_lift_scale, 1.04);
-    assert_eq!(policy.settle_duration_ms, 220);
-    assert!(!policy.reduce_motion);
-}
-
-#[test]
-fn test_motion_policy_serialization() {
-    let policy = StarMapMotionPolicyDto::default();
-    let json = serde_json::to_value(&policy).unwrap();
-    let roundtrip: StarMapMotionPolicyDto = serde_json::from_value(json).unwrap();
-    assert_eq!(policy.enabled, roundtrip.enabled);
-    assert_eq!(policy.idle_wobble_enabled, roundtrip.idle_wobble_enabled);
-    assert_eq!(policy.reduce_motion, roundtrip.reduce_motion);
-}
-
-#[test]
 fn test_list_starmaps_for_project_excludes_unbound() {
     let dir = setup_temp_dir();
     let sm_bound = create_starmap(dir.path(), "Bound", "", None).unwrap();
@@ -208,7 +175,7 @@ fn test_list_starmaps_for_project_excludes_unbound() {
     bind_starmap_to_project(dir.path(), &sm_bound.starmap_id, "proj1").unwrap();
     bind_starmap_to_project(dir.path(), &_sm_other.starmap_id, "proj2").unwrap();
 
-    let for_proj1 = list_starmaps_for_project(dir.path(), "proj1").unwrap();
+    let for_proj1 = list_starmaps_bound_to_project(dir.path(), "proj1").unwrap();
     assert_eq!(for_proj1.len(), 1);
     assert_eq!(for_proj1[0].starmap_id, sm_bound.starmap_id);
 
@@ -216,10 +183,10 @@ fn test_list_starmaps_for_project_excludes_unbound() {
     assert_eq!(bound_proj1.len(), 1);
     assert_eq!(bound_proj1[0].starmap_id, sm_bound.starmap_id);
 
-    let for_proj2 = list_starmaps_for_project(dir.path(), "proj2").unwrap();
+    let for_proj2 = list_starmaps_bound_to_project(dir.path(), "proj2").unwrap();
     assert_eq!(for_proj2.len(), 1);
     assert_eq!(for_proj2[0].starmap_id, _sm_other.starmap_id);
 
-    let for_nonexistent = list_starmaps_for_project(dir.path(), "no_such_project").unwrap();
+    let for_nonexistent = list_starmaps_bound_to_project(dir.path(), "no_such_project").unwrap();
     assert!(for_nonexistent.is_empty());
 }
