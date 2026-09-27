@@ -3,10 +3,10 @@
 // 收进 impl/api23 组件，共享页面 WritingScreen 不再直接 import @kit.UIDesignKit，
 // 避免高版本模块引用进入所有版本都会加载的共享页面，破坏版本隔离。
 //
-// Issue #783 评论5855754605：分离"标题栏返回"和"系统返回手势"。
-// - onTitleBack：标题栏自定义区域中的圆形返回按钮点击，始终走 requestLeave（退出页面）。
+// Issue #783 评论5856245403：分离"标题栏返回"和"系统返回手势"。
+// - onTitleBack：标题栏 backIcon 点击，始终走 requestLeave（退出页面）。
 // - onSystemBack：系统返回手势（全面屏侧滑返回），IME 打开时先收键盘，再次手势才退出页面。
-// - HDS 标题栏隐藏默认 back，使用 titleBar 自定义区域放系统风格圆形返回按钮。
+// - HDS 标题栏使用原生 backIcon.action 绑定返回按钮，不再使用不存在的 customizedArea。
 // - .onBackPressed 只调用 onSystemBack 并消费本次系统返回（return true）。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
@@ -31,9 +31,18 @@ export struct HdsWritingDestinationApi23 {
       enableComponentSafeArea: true,
       content: {
         title: { mainTitle: this.title },
-        // Issue #783 评论5855754605：自定义区域放系统风格圆形返回按钮，
+        // Issue #783 评论5856245403：使用 HDS 标题栏原生 backIcon，
         // 点击只调用 onTitleBack（退出页面），不和系统返回手势共用回调。
-        customizedArea: this.TitleBarCustomArea
+        backIcon: {
+          label: '返回',
+          icon: $r('sys.symbol.chevron_left'),
+          isEnabled: true,
+          action: () => {
+            if (this.onTitleBack) {
+              this.onTitleBack()
+            }
+          }
+        }
       },
       style: {
         systemMaterialEffect: {
@@ -54,24 +63,6 @@ export struct HdsWritingDestinationApi23 {
     .onShown(() => {
       if (this.onShown) {
         this.onShown()
-      }
-    })
-  }
-
-  // Issue #783 评论5855754605：标题栏自定义区域 — 系统风格圆形返回按钮。
-  // 点击只调用 onTitleBack（始终退出页面），不受 IME 状态影响。
-  @Builder
-  TitleBarCustomArea() {
-    Button({ type: ButtonType.Circle, stateEffect: true }) {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(24)
-        .fontColor([$r('sys.color.icon_primary')])
-    }
-    .width(40)
-    .height(40)
-    .onClick(() => {
-      if (this.onTitleBack) {
-        this.onTitleBack()
       }
     })
   }

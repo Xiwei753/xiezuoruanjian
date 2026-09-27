@@ -1038,19 +1038,38 @@ export struct WritingScreen {
       }
     } else {
       NavDestination() {
-        this.NavContent()
+        Column() {
+          // Issue #783 评论5856245403：自定义标题行 — 圆形返回按钮 + 标题。
+          // 标题栏返回走 handleTitleBack（始终退出页面），
+          // 系统返回手势走 onBackPressed → handleSystemBack（IME 打开时先收键盘）。
+          // 隐藏 NavDestination 内置标题栏，在内容顶部放自己的标题 Row，
+          // 这样 API<23 fallback 和 API23+ HDS 分支都有两个明确返回意图。
+          Row() {
+            Button({ type: ButtonType.Circle, stateEffect: true }) {
+              SymbolGlyph($r('sys.symbol.chevron_left'))
+                .fontSize(24)
+            }
+            .width(40)
+            .height(40)
+            .onClick(() => this.handleTitleBack())
+
+            Text(this.chapterTitle)
+              .fontSize(20)
+              .margin({ left: 12 })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+
+          Stack() {
+            this.NavContent()
+          }
+          .layoutWeight(1)
+        }
       }
-      // Issue #750 评论 5805761237：真正使用 NavDestination 原生标题栏承载返回入口和标题栏材质。
-      // 通用 systemMaterial 沉浸光感材质只在 Navigation/NavDestination 标题栏等规定区域生效
-      //（module.json5 已配置 ohos.arkui.UIMaterial.state = enable）。
-      // NavigationMode.Stack 模式下（AppNavigation.ets 已配置），非根 NavDestination 自动显示返回按钮；
-      // 返回按钮点击触发 onBackPressed，仍走 requestLeave() -> safePop() -> leaveGuard，不绕开离开守卫。
-      .hideTitleBar(false)
-      .title(this.chapterTitle)
+      // Issue #783 评论5856245403：隐藏内置标题栏，用自定义标题 Row 替代。
+      .hideTitleBar(true)
       .onBackPressed(() => {
-        // Issue #783 评论5855754605：系统返回手势（包括全面屏侧滑返回）和标题栏返回按钮
-        // 不再共用一个回调。onBackPressed 只处理系统返回手势：
-        // IME 打开时先收键盘，IME 未打开时走 requestLeave 退出页面。
+        // 系统返回手势（包括全面屏侧滑返回）：IME 打开时先收键盘，否则退出页面。
         this.handleSystemBack()
         return true
       })
@@ -1067,8 +1086,8 @@ export struct WritingScreen {
   @Builder
   EditorPane() {
     Column() {
-      // Issue #750 评论 5805761237：返回入口和标题已由 NavDestination 原生标题栏承载
-      //（hideTitleBar(false) + title(this.chapterTitle)，沉浸光感 systemMaterial 在标题栏区域生效）。
+      // Issue #783 评论5856245403：返回入口和标题由各分支的标题栏承载
+      //（API23+ HDS backIcon / API<23 自定义标题 Row），EditorPane 只负责正文和底部状态栏。
       // Issue #767 评论 5828146609 第 2 节：删除顶部操作栏（分享/保存按钮已删）。
       // 字数显示合并到底部保存状态栏，正文顶部不再留一条空操作栏。
 
