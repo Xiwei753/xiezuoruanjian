@@ -57,7 +57,9 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 #[test]
 fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(&src, "fn prepare_edit_motion", 28000);
+    // Issue #785 评论 5857451442: prepare_edit_motion 函数因 InsertReveal 构造链修复
+    //（把 inserted_range 所在 visual line 并入 new_raster_ids）变长，窗口随之增大。
+    let window = function_window(&src, "fn prepare_edit_motion", 32000);
 
     // 修复后：layout_revision = new_revision 存在。
     assert!(

@@ -120,11 +120,13 @@ fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
         !has_hardcoded_zero,
         "build_text_animation_plan_with_sample 不应硬编码 0usize 作为 caret_line_id"
     );
-    // Issue #727 约束 3+4: InsertReveal/DeleteConceal 从 CoordinatedMotionFrame.caret 消费
-    // visual_line_id，不再由文字层自己采样。应包含 caret_frame.visual_line_id。
+    // Issue #785: 文字 unit 统一走 Timed 路径（current_visible_fraction + compute_frame(visible)），
+    // 不再从 caret_frame 消费 visual_line_id。caret frame 只负责画 caret，不驱动文字。
+    // 即使 cursor ownership/epoch 发生切换，文字动画也不会凭空消失。
     assert!(
-        window.contains("caret_frame.visual_line_id"),
-        "build_text_animation_plan_with_sample 应从 CoordinatedMotionFrame.caret 消费 visual_line_id"
+        window.contains("current_visible_fraction")
+            && window.contains("compute_frame(visible)"),
+        "build_text_animation_plan_with_sample 应走 Timed 路径（current_visible_fraction + compute_frame(visible)），不从 caret_frame 消费"
     );
 }
 
@@ -280,15 +282,17 @@ fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
         has_sample_fn,
         "应有 sample_coordinated_motion_frame 采样统一 CoordinatedMotionFrame"
     );
-    // build_text_animation_plan_with_sample 从 coordinated_motion_frame.caret 消费
+    // Issue #785: 文字 unit 统一走 Timed 路径（current_visible_fraction），不消费 caret_frame。
+    // caret frame 只负责画 caret，不驱动文字。协同只传递"同事务协同"语义（同首帧/同 rebase），
+    // 不再把 caret duration 强绑到 typing duration。
     let btap_window = function_window(
         &render_plan,
         "fn build_text_animation_plan_with_sample",
         8000,
     );
     assert!(
-        btap_window.contains("caret_frame"),
-        "build_text_animation_plan_with_sample 应从 CoordinatedMotionFrame.caret 消费"
+        btap_window.contains("current_visible_fraction"),
+        "build_text_animation_plan_with_sample 应走 Timed 路径（current_visible_fraction），不消费 caret_frame"
     );
 }
 

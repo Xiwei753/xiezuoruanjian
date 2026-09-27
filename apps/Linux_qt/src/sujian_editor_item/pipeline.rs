@@ -1315,6 +1315,30 @@ impl LinuxEditorPipeline {
                         }
                     }
                 }
+                // Issue #785 评论 5857451442: 显式把 inserted_range 所在 visual line 并入 new_raster_ids。
+                // diff.new_raster_line_ids 只含 diff 判定需重新栅格化的行；新插入可见字符所在行
+                // 可能被 compare_old_new_visual_lines 归为 reusable/unchanged 而不在其中，
+                // 导致 prepare_animation_visuals_from_layout 不为该行生成 QImage/clusters，
+                // inject_animation_visuals_into_snapshot 不注入，最终 build_insert_reveal_slices
+                // 遍历 new_snapshot 时该行 clusters 为空，InsertReveal 数量为 0，输入动画彻底消失。
+                // 这里按 motion.inserted_range（new text 坐标系）与 new_doc_snapshot.visual_lines
+                // 的 byte_start/byte_end 相交判断，把所有相交行并入 new_raster_ids，
+                // 确保新插入可见字符所在行带 QImage/clusters 进入 new_doc_snapshot。
+                if let Some((ins_start, ins_end)) = motion
+                    .inserted_range
+                    .map(|r| (r.start().value(), r.end().value()))
+                {
+                    if ins_end > ins_start {
+                        for (i, l) in new_doc_snapshot.visual_lines.iter().enumerate() {
+                            if l.byte_start < ins_end
+                                && l.byte_end > ins_start
+                                && !new_raster_ids.contains(&i)
+                            {
+                                new_raster_ids.push(i);
+                            }
+                        }
+                    }
+                }
                 let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
                     &new_handle,
                     &new_raster_ids,

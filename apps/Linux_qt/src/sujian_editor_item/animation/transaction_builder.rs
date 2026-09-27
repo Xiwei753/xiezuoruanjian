@@ -267,33 +267,108 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         spec.coordinated_animation_enabled,
     ));
 
-    // Issue #785: 诊断 InsertReveal 未生成。当 inserted_ranges 非空、文字动画已开、
-    // 但最终生成的 InsertReveal 数量为 0 时，打明确诊断日志帮助定位
-    //（可能原因：range 与 snapshot cluster 对齐错位、全部 cluster 被当空白跳过）。
+    // Issue #785 评论 5857451442: 把 InsertReveal 未生成的诊断从 env-gated debug log
+    // 升级为正式 editor.anim.* 诊断事件（writer_diagnostics），普通诊断包（不带 debug
+    // 环境变量）即可在 zip 中看到，满足"诊断包直接看出原因"的要求。
+    // 字段带 inserted range、snapshot revision、相交 line 数、相交 cluster 数、
+    // 空白/控制字符跳过数，便于定位是注入链遗漏还是全部 cluster 被当空白跳过。
     if spec.text_animation_enabled && !spec.inserted_ranges.is_empty() {
         let insert_reveal_count = units
             .iter()
             .filter(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
             .count();
         if insert_reveal_count == 0 {
+            let mut intersecting_lines = 0usize;
             let mut intersecting_clusters = 0usize;
+            let mut whitespace_skip_count = 0usize;
             for &(i_start, i_end) in &spec.inserted_ranges {
                 for new_line in spec.new_snapshot.line_snapshots.iter() {
+                    if new_line.byte_start < i_end && new_line.byte_end > i_start {
+                        intersecting_lines += 1;
+                    }
                     for new_cluster in new_line.clusters.iter() {
                         if new_cluster.byte_start < i_end && new_cluster.byte_end > i_start {
                             intersecting_clusters += 1;
+                            if let Some(text) = spec
+                                .new_snapshot
+                                .virtual_text
+                                .get(new_cluster.byte_start..new_cluster.byte_end)
+                            {
+                                if text.chars().all(|c| c.is_whitespace() || c.is_control()) {
+                                    whitespace_skip_count += 1;
+                                }
+                            }
                         }
                     }
                 }
             }
+            {
+                use std::collections::BTreeMap;
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "transaction_id".to_string(),
+                    serde_json::json!(spec.key.transaction_id),
+                );
+                fields.insert(
+                    "generation".to_string(),
+                    serde_json::json!(spec.key.generation),
+                );
+                fields.insert(
+                    "operation_kind".to_string(),
+                    serde_json::Value::String(
+                        operation_kind_label(spec.operation_kind).to_string(),
+                    ),
+                );
+                fields.insert(
+                    "inserted_ranges".to_string(),
+                    serde_json::json!(spec.inserted_ranges),
+                );
+                fields.insert(
+                    "snapshot_revision".to_string(),
+                    serde_json::json!(spec.new_snapshot.revision.0),
+                );
+                fields.insert(
+                    "intersecting_line_count".to_string(),
+                    serde_json::json!(intersecting_lines),
+                );
+                fields.insert(
+                    "intersecting_cluster_count".to_string(),
+                    serde_json::json!(intersecting_clusters),
+                );
+                fields.insert(
+                    "whitespace_skip_count".to_string(),
+                    serde_json::json!(whitespace_skip_count),
+                );
+                fields.insert(
+                    "unit_kinds".to_string(),
+                    serde_json::Value::String(unit_kind_labels(&units).join(",")),
+                );
+                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    sequence: 0,
+                    session_id: String::new(),
+                    level: writer_diagnostics::DiagnosticLevel::Warn,
+                    origin: writer_diagnostics::DiagnosticOrigin::App,
+                    event: "editor.anim.insert_reveal_not_generated".to_string(),
+                    target: "editor.anim".to_string(),
+                    message: Some(
+                        "inserted range has visible chars but InsertReveal count is 0".to_string(),
+                    ),
+                    fields,
+                });
+            }
+            // 保留 env-gated debug log 作为开发时辅助，正式诊断走上面的 writer_diagnostics 事件。
             editor_animation_debug_log(&format!(
                 "anim_diagnostic: InsertReveal_not_generated inserted_ranges={:?} \
-                 snapshot_revision={} intersecting_clusters={} — \
-                 possible causes: no non-whitespace cluster in range, \
-                 range misalignment with snapshot, or all clusters skipped as whitespace",
+                 snapshot_revision={} intersecting_lines={} intersecting_clusters={} \
+                 whitespace_skip={} — possible causes: animation visuals injection missed \
+                 the inserted line, no non-whitespace cluster in range, or all clusters \
+                 skipped as whitespace",
                 spec.inserted_ranges,
                 spec.new_snapshot.revision.0,
+                intersecting_lines,
                 intersecting_clusters,
+                whitespace_skip_count,
             ));
         }
     }

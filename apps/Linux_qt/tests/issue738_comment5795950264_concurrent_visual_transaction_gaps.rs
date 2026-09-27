@@ -54,10 +54,10 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 // 问题1守卫: reconcile 先 retire CaretDriven 再 rebind，rebind 有条件提升 basis
 // =========================================================================
 
-/// 守卫1a: reconcile_active_transactions_with_canonical 中先调
-/// retire_caret_driven_units_for_transaction(key) retire CaretDriven units，
-/// 再调 rebind_timed_units_to_canonical 重绑 Timed Reflow。retire 调用位置
-/// 必须在 rebind 调用之前。
+/// 守卫1a: Issue #785 后 reconcile_active_transactions_with_canonical 不再先调
+/// retire_caret_driven_units_for_transaction(key) retire CaretDriven units。
+/// 文字 unit 有独立时间线，epoch 失效只退休 cursor motion ownership，不把文字推到终态。
+/// reconcile 只调 rebind_timed_units_to_canonical 重绑 Timed Reflow。
 #[test]
 fn fix1a_reconcile_retires_caret_driven_before_rebind() {
     let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
@@ -70,25 +70,14 @@ fn fix1a_reconcile_retires_caret_driven_before_rebind() {
     let retire_marker = "retire_caret_driven_units_for_transaction(key)";
     let rebind_marker = "rebind_timed_units_to_canonical";
 
+    // Issue #785: 不再 retire CaretDriven text units，文字 unit 有独立时间线。
     assert!(
-        window.contains(retire_marker),
-        "修复后 reconcile 应先调 retire_caret_driven_units_for_transaction(key) retire CaretDriven units。"
+        !window.contains(retire_marker),
+        "Issue #785: reconcile 不应再调 retire_caret_driven_units_for_transaction，文字 unit 有独立时间线"
     );
     assert!(
         window.contains(rebind_marker),
         "修复后 reconcile 应调 rebind_timed_units_to_canonical 重绑 Timed Reflow。"
-    );
-
-    let retire_pos = window
-        .find(retire_marker)
-        .expect("retire marker 已确认存在");
-    let rebind_pos = window
-        .find(rebind_marker)
-        .expect("rebind marker 已确认存在");
-    assert!(
-        retire_pos < rebind_pos,
-        "修复后 retire 调用必须在 rebind 调用之前，否则 rebind 会先提升 layout_basis_revision \
-         导致 basis 守卫不再 retire 旧 CaretDriven。"
     );
 }
 

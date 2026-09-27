@@ -106,6 +106,33 @@ impl LineSnapshotBuilder {
                 (None, Vec::new())
             };
 
+            // Issue #785 评论 5857451442: 防御性诊断——不伪造字符几何。
+            // 如果 canonical line 已有 image 但 clusters 为空且该行含可见字符，
+            // 说明 animation visuals 注入链漏了该行的 clusters（image 注入了但 clusters 没注入）。
+            // 计诊断事件让诊断包直接看出，不在 builder 里伪造 cluster 几何。
+            if image.is_some()
+                && clusters.is_empty()
+                && line
+                    .para_text
+                    .chars()
+                    .any(|c| !c.is_whitespace() && !c.is_control())
+            {
+                crate::backend::app_backend::debug_warn_static(
+                    "line_snapshot_builder",
+                    "canonical_line_image_but_clusters_empty",
+                    &format!(
+                        "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} — \
+                         canonical line has image but clusters empty and line contains visible chars, \
+                         animation visuals injection incomplete for this line",
+                        revision.0,
+                        line.para_start,
+                        line.qtextline_idx,
+                        line.byte_start,
+                        line.byte_end,
+                    ),
+                );
+            }
+
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
             line_snapshots.push(PreparedLineSnapshot {
