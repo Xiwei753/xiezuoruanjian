@@ -941,12 +941,15 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
         transfer.targets[0].result.error
     );
 
-    // 第一次 commit_batch 撞冲突后重读 catalog，看到并发设备更新的 record
-    // （LWW 更大）→ candidate 不赢，收敛且不再 publish。
+    // Issue #779 评论 5854082763：publish_generation_batch 对 PreconditionFailed 做有限次重试。
+    // 第一次 commit_batch 撞 PreconditionFailed（ref 被并发设备推进）→ publish_generation_batch
+    // 内部重试，第二次 commit_batch 成功（generation 文件发布）。但 apply_lifecycle_record
+    // CAS 失败 → 重读 catalog 看到并发设备更新的 record（LWW 更大）→ RemoteWinner →
+    // transfer 层重试 → candidate 不赢，收敛。并发设备的 record 未被覆盖。
     assert_eq!(
         provider.recorded_batches().len(),
-        1,
-        "重试轮次应看到更新的远端 record 并收敛，不再 publish"
+        2,
+        "publish_generation_batch 内部重试一次后成功，apply_lifecycle_record CAS 兜底收敛"
     );
 
     // 并发设备的 record 未被覆盖（force=false 语义：绝不覆盖别人刚提交的 head）。
@@ -956,7 +959,7 @@ fn regression_issue_761_ref_cas_conflict_retries_instead_of_fatal() {
     assert_eq!(record.updated_at_ms, T + 1000);
 
     eprintln!(
-        "[BUGFIX_REGRESSION_TRACE] Issue #761 ref CAS 冲突：commit_batch 1 次即收敛、\
+        "[BUGFIX_REGRESSION_TRACE] Issue #761 ref CAS 冲突：commit_batch 2 次（#779 内部重试）后 apply_lifecycle_record CAS 兜底收敛、\
          状态 {status:?}（不再是 FatalError）"
     );
 }

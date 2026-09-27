@@ -246,9 +246,19 @@ pub fn run_generation_gc(
                 })
                 .collect();
             let batch_message = format!("generation GC delete {gen_prefix}");
-            provider
-                .commit_batch(&mutations, &batch_message)
-                .map_err(crate::Error::from)?;
+            // Issue #779 评论 5854082763：GC 遇到 PreconditionFailed（ref 被用户同步推进）
+            // 时放弃本轮 GC，返回 Ok — 下次再清，不和用户同步争抢。
+            if let Err(crate::sync::provider::error::ProviderError::PreconditionFailed {
+                path,
+                reason,
+            }) = provider.commit_batch(&mutations, &batch_message)
+            {
+                log::info!(
+                    "[sync] run_generation_gc: {} generation {} commit_batch PreconditionFailed (ref moved by user sync): path={}, reason={} — abandoning GC this round",
+                    project_remote_prefix, gen_id, path, reason
+                );
+                return Ok(());
+            }
             // commit_batch 后检查取消令牌（取消则返回 Ok，已完成的删除保留）。
             if let Some(token) = cancellation_token {
                 if token.is_cancelled() {

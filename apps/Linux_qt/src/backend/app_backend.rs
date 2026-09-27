@@ -342,6 +342,14 @@ pub struct AppBackend {
     /// 标记旧同步已取消。`Option` + `take()` 在 reset_workspace_state 中消费。
     /// `Arc<SyncCancellationToken>` 是 `Send + Sync`（由 `Arc` 自动推导），可在线程间共享。
     current_sync_cancel_token: Option<Arc<SyncCancellationToken>>,
+    /// Issue #779 评论 5854082763：generation GC maintenance 的独立取消令牌。
+    /// 与 current_sync_cancel_token 完全独立 — 用户 sync busy 只代表正文同步，
+    /// 不包含 GC。GC maintenance 有自己的 single-flight 身份。
+    /// - 启动 GC maintenance 时创建新 token 存入此字段
+    /// - 新用户同步开始时 cancel 此 token（停止 GC 继续发起新远端操作）
+    /// - workspace reset 时 cancel 并清 None
+    /// - GC 线程结束后通过 queued_callback 清 None
+    current_gc_maintenance_cancel_token: Option<Arc<SyncCancellationToken>>,
     current_save_status: String,
     current_word_count: i32,
     current_error_message: String,

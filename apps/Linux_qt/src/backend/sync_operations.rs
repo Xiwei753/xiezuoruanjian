@@ -165,6 +165,14 @@ impl AppBackend {
             SyncOutcomeEffect::StatusOnly
         };
 
+        // Issue #779 评论 5854082763：同步成功且没有排队的 manual sync 时，
+        // 启动 generation GC maintenance（独立 token，single-flight）。
+        // 有 manual_sync_pending 时先启动用户同步，不同时启动 GC —
+        // 下一轮同步完成后会自己启动 GC。
+        if sync_success && !self.manual_sync_pending {
+            self.start_gc_maintenance();
+        }
+
         // 当前同步任务真正结束并把 busy 清掉后，检查 manual_sync_pending。
         // 为 true 时先清 flag，再启动一次 manual sync。
         // 排队的同步还没执行，当前 outcome 的 effect 才是返回值。
@@ -178,6 +186,111 @@ impl AppBackend {
             self.perform_sync_internal("manual", false, sync_qptr);
         }
         effect
+    }
+
+    /// Issue #779 评论 5854082763：启动 generation GC maintenance 后台线程。
+    ///
+    /// - single-flight：如果 `current_gc_maintenance_cancel_token` 已存在，跳过
+    ///   （说明上一轮 GC 还在跑或还没清理）。
+    /// - 创建独立的 maintenance token（不复用用户同步 token）。
+    /// - spawn 后台线程调 Core 的 `perform_generation_gc_maintenance`。
+    /// - 线程结束后通过 queued_callback 清 `current_gc_maintenance_cancel_token = None`。
+    /// - GC 失败只 log warn，不影响任何用户状态。
+    fn start_gc_maintenance(&mut self) {
+        // single-flight：已有 maintenance 在跑，跳过。
+        if self.current_gc_maintenance_cancel_token.is_some() {
+            self.debug_log(
+                "sync",
+                "gc_maintenance_skipped",
+                "GC maintenance already running — skipping",
+            );
+            return;
+        }
+
+        let data_root = self.current_data_root.clone();
+        let projects_root = self.current_projects_root.clone();
+        if data_root.is_empty() {
+            return;
+        }
+
+        // 获取 workspace git layout 快照，供后台线程构造 API。
+        let layout = match self.current_workspace_git_layout.clone() {
+            Some(l) => l,
+            None => return,
+        };
+
+        // 创建独立的 maintenance cancellation token。
+        let token = Arc::new(writer_core::sync::SyncCancellationToken::new());
+        self.current_gc_maintenance_cancel_token = Some(token.clone());
+        let cancel_token_for_thread: writer_core::sync::SyncCancellationToken = (*token).clone();
+
+        self.debug_log(
+            "sync",
+            "gc_maintenance_start",
+            "starting generation GC maintenance",
+        );
+
+        let app_qptr = QPointer::from(&*self);
+        // GC 线程结束后回到主线程清 token。
+        let gc_done_callback = qmetaobject::queued_callback(move |_result: ()| {
+            app_qptr.as_pinned().map(|this| {
+                let mut this = this.borrow_mut();
+                this.current_gc_maintenance_cancel_token = None;
+                this.debug_log(
+                    "sync",
+                    "gc_maintenance_done",
+                    "generation GC maintenance completed",
+                );
+            });
+        });
+
+        thread::spawn(move || {
+            // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only
+            // captures owned String data (data_root, projects_root), a GitRepoLayout snapshot,
+            // and a SyncCancellationToken (Arc<AtomicBool>). All of these auto-implement
+            // UnwindSafe: String/GitRepoLayout are plain data, and SyncCancellationToken is
+            // Arc<AtomicBool> where std impls RefUnwindSafe for both Arc<T> and AtomicBool.
+            // No hand-rolled `unsafe impl` or AssertUnwindSafe is needed.
+            let result = std::panic::catch_unwind(|| {
+                let api = crate::backend::app_backend::with_layout_core_api(
+                    &data_root,
+                    &projects_root,
+                    &layout,
+                );
+                let config = match prepare_sync_profile(&api) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::warn!(
+                            "[sync] gc_maintenance: prepare_sync_profile failed: {}",
+                            e.raw_error()
+                        );
+                        return;
+                    }
+                };
+                // GC maintenance 不需要 network permission 检查 —
+                // GC 是低优先级 maintenance，网络不可用时 Core 内部自然失败。
+                if let Err(e) =
+                    api.perform_generation_gc_maintenance(config, Some(cancel_token_for_thread))
+                {
+                    log::warn!(
+                        "[sync] gc_maintenance: perform_generation_gc_maintenance failed: {e}"
+                    );
+                }
+            });
+
+            if let Err(err) = result {
+                let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "panic.unknown".to_string()
+                };
+                log::error!("[sync] gc_maintenance: panic: {panic_msg}");
+            }
+
+            gc_done_callback(());
+        });
     }
 
     pub(crate) fn handle_sync_content_refresh(&mut self) {
@@ -642,6 +755,20 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
+
+        // Issue #779 评论 5854082763：新用户同步开始时，取消已有 GC maintenance。
+        // GC maintenance 会尽快停止发起新的远端操作（token 取消后 run_generation_gc
+        // 在下次检查时退出）。不立即清 current_gc_maintenance_cancel_token —
+        // GC 线程的 done callback 会清。
+        if let Some(gc_token) = self.current_gc_maintenance_cancel_token.as_ref() {
+            gc_token.cancel();
+            self.debug_log(
+                "sync",
+                "gc_maintenance_cancelled_for_user_sync",
+                "cancelled existing GC maintenance before starting user sync",
+            );
+        }
+
         // 获取 workspace git layout 快照，供后台线程用 with_layout_core_api 构造 API。
         // 不在线程里重新 bootstrap（ensure .git + recover_storage_transactions）。
         // 无 layout 说明 workspace 未正确打开，直接返回状态错误。

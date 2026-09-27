@@ -516,39 +516,19 @@ impl WriterCoreApi {
         }
 
         // Phase 3+4+5：逐 target Transfer → Commit → progress，整轮结束聚合收口。
-        // Issue #779 评论 5853718466：perform_full_sync_with_provider 不再同步执行
-        // generation GC，拿到终态后立即返回。GC 由下方 spawn 的后台线程执行。
+        // Issue #779 评论 5854082763：perform_full_sync_with_provider 拿到终态后立即返回。
+        // generation GC maintenance 不再在用户同步路径内 spawn，改由平台层通过
+        // perform_generation_gc_maintenance 异步调用（独立 maintenance token，
+        // 不复用用户同步 token），避免 GC detached thread 和下一轮用户同步同时写
+        // 同一 branch 导致 PreconditionFailed。
         let result = self.perform_full_sync_with_provider(
             provider.as_ref(),
             &plan,
             staging_runs,
-            cancellation_token.clone(),
+            cancellation_token,
             progress_sink,
             target_progress,
         )?;
-
-        // Issue #779 评论 5853718466：spawn 后台线程执行 generation GC maintenance。
-        // fire-and-forget：不阻塞终态返回，不传播 GC 失败到同步结果。
-        // provider 是 Box<dyn SyncProvider>（Send + Sync），可 move 进线程。
-        // cancellation_token clone（SyncCancellationToken 内部 Arc<AtomicBool>，廉价）。
-        // 从 plan.targets 提取 project targets 的 (remote_prefix, active_generation)，
-        // active_generation 从 catalog_snapshot 查 find_record。
-        Self::spawn_generation_gc_maintenance(
-            provider,
-            plan.targets
-                .iter()
-                .filter(|planned| planned.target.remote_prefix.starts_with("projects/"))
-                .map(|planned| {
-                    let active_generation = crate::sync::target_lifecycle::find_record(
-                        &plan.remote_catalog_snapshot.catalog,
-                        &planned.target.remote_prefix,
-                    )
-                    .and_then(|r| r.active_generation.clone());
-                    (planned.target.remote_prefix.clone(), active_generation)
-                })
-                .collect(),
-            cancellation_token,
-        );
 
         Ok(result)
     }
@@ -814,67 +794,70 @@ impl WriterCoreApi {
         })
     }
 
-    /// Issue #779 评论 5853718466：spawn 后台线程执行 generation GC maintenance。
+    /// Issue #779 评论 5854082763：generation GC maintenance 独立入口。
     ///
-    /// fire-and-forget：不阻塞调用方返回，不传播 GC 失败到同步终态。GC 失败只
-    /// `log::warn!`，下一轮同步自然再次执行 GC。
+    /// 主同步（perform_full_sync）拿到终态后立即返回，GC 由平台层通过此方法
+    /// 异步调用。此方法有自己独立的 cancellation token，不复用用户同步 token。
     ///
-    /// - `provider`：`Box<dyn SyncProvider>`（`Send + Sync`），move 进线程后用
-    ///   `provider.as_ref()` 调用，线程结束自动 drop。
-    /// - `project_targets`：每个 project target 的 `(remote_prefix, active_generation)`，
-    ///   `active_generation` 从 catalog snapshot 查 `find_record` 得到。
-    /// - `cancellation_token`：可选的取消令牌 clone（`SyncCancellationToken` 内部
-    ///   `Arc<AtomicBool>`，廉价）。后台 GC 感知取消后提前返回。
-    ///
-    /// 不引入 `unsafe`：`Box<dyn SyncProvider>` 是 `Send`（trait 要求 `Send + Sync`），
-    /// `Vec<(String, Option<String>)>` 和 `Option<SyncCancellationToken>` 都是 `Send`，
-    /// `std::thread::spawn` 的闭包捕获这些 owned 值自动满足 `Send + 'static`。
+    /// 内部：创建 provider → discover catalog → 对每个 project target 调 run_generation_gc。
+    /// GC 失败只 log warn，不传播（下一轮自然再清）。
     #[allow(clippy::excessive_nesting)]
-    fn spawn_generation_gc_maintenance(
-        provider: Box<dyn crate::sync::provider::SyncProvider>,
-        project_targets: Vec<(String, Option<String>)>,
+    pub fn perform_generation_gc_maintenance(
+        &self,
+        config: SyncConfigDto,
         cancellation_token: Option<SyncCancellationToken>,
-    ) {
-        if project_targets.is_empty() {
-            // 没有 project target，无需 GC。provider 直接 drop。
-            log::debug!("[sync] spawn_generation_gc_maintenance: no project targets — skipping GC");
-            return;
+    ) -> ApiResult<()> {
+        let sync_config: crate::sync::SyncConfig = config.into();
+        if !sync_config.enabled {
+            return Ok(());
         }
-        log::info!(
-            "[sync] spawn_generation_gc_maintenance: spawning background GC for {} project target(s)",
-            project_targets.len()
-        );
-        std::thread::spawn(move || {
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            for (remote_prefix, active_generation) in &project_targets {
-                if let Some(ref token) = cancellation_token {
-                    if token.is_cancelled() {
-                        log::info!(
-                            "[sync] generation_gc_maintenance: cancellation requested — stopping GC loop"
-                        );
-                        break;
-                    }
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                return Ok(());
+            }
+        }
+        let secrets = self.secrets_override_snapshot().unwrap_or_default();
+        let provider = {
+            let core = self.core_write();
+            core.create_sync_provider_for_plan(&sync_config, &secrets)?
+        };
+        let remote_catalog_snapshot =
+            match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    log::warn!("[sync] gc_maintenance: discover catalog failed: {e}");
+                    return Ok(()); // GC 失败不传播
                 }
-                if let Err(e) = crate::sync::generation_gc::run_generation_gc(
-                    provider.as_ref(),
-                    remote_prefix,
-                    active_generation.as_deref(),
-                    now_ms,
-                    crate::sync::generation_gc::GENERATION_RETENTION_MS,
-                    cancellation_token.as_ref(),
-                ) {
-                    // GC 失败只 log warn，不传播 — 下一轮同步自然再次执行 GC。
-                    log::warn!(
-                        "[sync] generation_gc_maintenance: generation GC failed for {}: {e}",
-                        remote_prefix
-                    );
+            };
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for record in &remote_catalog_snapshot.catalog.records {
+            if !record.remote_prefix.starts_with("projects/") {
+                continue;
+            }
+            if record.op != crate::sync::types::TargetOp::Upsert {
+                continue;
+            }
+            if let Some(ref token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!("[sync] gc_maintenance: cancellation requested — stopping");
+                    return Ok(());
                 }
             }
-            log::info!(
-                "[sync] spawn_generation_gc_maintenance: background GC completed for {} project target(s)",
-                project_targets.len()
-            );
-        });
+            if let Err(e) = crate::sync::generation_gc::run_generation_gc(
+                provider.as_ref(),
+                &record.remote_prefix,
+                record.active_generation.as_deref(),
+                now_ms,
+                crate::sync::generation_gc::GENERATION_RETENTION_MS,
+                cancellation_token.as_ref(),
+            ) {
+                log::warn!(
+                    "[sync] gc_maintenance: GC failed for {}: {e}",
+                    record.remote_prefix
+                );
+            }
+        }
+        Ok(())
     }
 
     /// 与 sync disabled 相同的 no-op `FullSyncResult`。
