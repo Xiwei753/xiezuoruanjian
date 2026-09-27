@@ -110,7 +110,9 @@ impl super::WriterCore {
     }
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
-        crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)
+        let _ =
+            crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)?;
+        Ok(())
     }
 
     ///   bind_starmap_to_project 的变更集版本。
@@ -127,7 +129,12 @@ impl super::WriterCore {
     }
 
     pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
-        crate::starmap::set_main_starmap_for_project(&self.app_data_root, starmap_id, project_id)
+        let _ = crate::starmap::set_main_starmap_for_project(
+            &self.app_data_root,
+            starmap_id,
+            project_id,
+        )?;
+        Ok(())
     }
 
     ///   set_main_starmap_for_project 的变更集版本。
@@ -151,7 +158,8 @@ impl super::WriterCore {
     }
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> Result<()> {
-        crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)
+        let _ = crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)?;
+        Ok(())
     }
 
     ///   unbind_starmap_from_project 的变更集版本。
@@ -195,6 +203,15 @@ impl super::WriterCore {
             store.ensure_fully_loaded()?;
         }
 
+        // 先把 default_x/default_y 合进 node.position，再用同一个 node 做校验和写入。
+        // 这样 validator 检查的就是真正要写入的同一份数据，不会出现 DTO 自带 position
+        // 校验通过但 default_x=NaN 被写进 node.position 的情况。
+        let mut node = node;
+        node.position = crate::starmap::types::StarMapPoint {
+            x: default_x,
+            y: default_y,
+        };
+
         // 先在 candidate graph 上模拟 add，跑 validate_graph，再真正改 Store。
         let candidate = {
             let store = Self::get_store_or_err(&stores, starmap_id)?;
@@ -208,7 +225,7 @@ impl super::WriterCore {
         )?;
 
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        let result = store.add_node(node, default_x, default_y);
+        let result = store.add_node(node);
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(result)

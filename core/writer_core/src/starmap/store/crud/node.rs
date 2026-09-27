@@ -22,18 +22,11 @@ impl StarMapStore {
 
     /// 添加节点。
     ///
-    /// `default_x`/`default_y` 作为节点初始位置写入 `node.position`。
+    /// `node.position` 是节点初始位置，由调用方在写入前设置好。
     /// 节点移动以后就是更新 `node.position`，不再另外创建 layout record。
-    pub fn add_node(
-        &mut self,
-        mut node: StarMapNode,
-        default_x: f32,
-        default_y: f32,
-    ) -> StarMapNode {
-        node.position = StarMapPoint {
-            x: default_x,
-            y: default_y,
-        };
+    /// 不再二次覆盖 position：facade 的 `add_starmap_node` 负责把
+    /// `default_x`/`default_y` 合进 `node.position`，store 只信任传入的 node。
+    pub fn add_node(&mut self, node: StarMapNode) -> StarMapNode {
         let result = node.clone();
         self.upsert_node(node);
         result

@@ -132,9 +132,9 @@ pub struct StarMapNode {
     pub anchors: Vec<StarMapAnchor>,
     #[serde(default)]
     pub portal: Option<StarMapPortal>,
-    /// 节点在星图文档坐标系下的位置。旧 schema 无此字段，
-    /// 反序列化时默认-补全为 (0.0, 0.0)。
-    #[serde(default)]
+    /// 节点在星图文档坐标系下的位置。schema 4 起为必填 authored data。
+    /// 旧格式由 migration 补 position；新格式缺 position 即视为损坏，
+    /// 反序列化直接失败，不静默补 (0,0)。
     pub position: StarMapPoint,
     #[serde(default)]
     pub style: StarMapNodeStyle,

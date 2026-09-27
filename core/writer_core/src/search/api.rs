@@ -641,6 +641,7 @@ mod tests {
                 "kind": "note",
                 "content": {"type": "inline", "summary": "节点摘要", "body": "节点正文"},
                 "tags": ["标签A", "标签B"],
+                "position": {"x": 0.0, "y": 0.0},
                 "createdAt": 0,
                 "updatedAt": 0
             })

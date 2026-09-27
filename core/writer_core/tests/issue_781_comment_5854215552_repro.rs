@@ -60,6 +60,12 @@ fn make_node(id: &str, title: &str) -> StarMapNode {
     }
 }
 
+/// 把 node 的 position 设成 (x, y) 后返回，用于 add_node 调用。
+fn node_at(mut node: StarMapNode, x: f32, y: f32) -> StarMapNode {
+    node.position = StarMapPoint { x, y };
+    node
+}
+
 fn local_path(host: &str, node_id: &str) -> StarMapTargetPath {
     StarMapTargetPath {
         starmap_id: host.to_string(),
@@ -123,7 +129,7 @@ fn seed_full_graph(dir: &TempDir, host_sid: &str, child_sid: &str) -> StarMapSto
         destination_starmap_id: child_sid.to_string(),
         destination_target: Some(StarMapTargetDetail::Starmap),
     });
-    store.add_node(node, 30.0, 40.0);
+    store.add_node(node_at(node, 30.0, 40.0));
     store
         .update_node("n1", &move_and_style_patch(30.0, 40.0, "#aabbcc"))
         .unwrap();
@@ -186,7 +192,7 @@ fn node_position_is_authored_data_and_survives_object_file_roundtrip() {
     let (dir, sid) = setup();
     let mut store = StarMapStore::new(dir.path(), &sid);
 
-    let created = store.add_node(make_node("n1", "甲"), 42.0, 24.0);
+    let created = store.add_node(node_at(make_node("n1", "甲"), 42.0, 24.0));
     assert_eq!(
         created.position,
         StarMapPoint { x: 42.0, y: 24.0 },
@@ -226,7 +232,7 @@ fn embed_position_is_authored_data_and_survives_object_file_roundtrip() {
     let child = writer_core::starmap::create_starmap(dir.path(), "子图", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &host_sid);
-    store.add_node(make_node("n1", "宿主节点"), 10.0, 10.0);
+    store.add_node(node_at(make_node("n1", "宿主节点"), 10.0, 10.0));
     store
         .add_embed(make_embed("emb1", &child.starmap_id, &host_sid, "n1"))
         .unwrap();
@@ -340,7 +346,7 @@ fn graph_serialization_carries_position_and_style_without_display_layer_state() 
 fn moving_objects_writes_no_layout_or_viewport_state() {
     let (dir, sid) = setup();
     let mut store = StarMapStore::new(dir.path(), &sid);
-    store.add_node(make_node("n1", "甲"), 1.0, 2.0);
+    store.add_node(node_at(make_node("n1", "甲"), 1.0, 2.0));
     store
         .update_node("n1", &move_and_style_patch(11.0, 12.0, "#334455"))
         .unwrap();
@@ -384,8 +390,8 @@ fn moving_objects_writes_no_layout_or_viewport_state() {
 fn meta_and_index_keep_one_truth_without_persisted_stats() {
     let (dir, sid) = setup();
     let mut store = StarMapStore::new(dir.path(), &sid);
-    store.add_node(make_node("n1", "甲"), 0.0, 0.0);
-    store.add_node(make_node("n2", "乙"), 0.0, 0.0);
+    store.add_node(node_at(make_node("n1", "甲"), 0.0, 0.0));
+    store.add_node(node_at(make_node("n2", "乙"), 0.0, 0.0));
     store
         .add_edge(StarMapEdge {
             id: "e1".to_string(),

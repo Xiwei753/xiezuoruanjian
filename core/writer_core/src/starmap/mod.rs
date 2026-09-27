@@ -311,44 +311,59 @@ pub fn delete_starmap_with_changes(
     Ok(change_set)
 }
 
+/// 把星图绑定到项目。
+///
+/// 先清旧 main index，再写 meta：如果 meta 写失败，最多变成"这个 project
+/// 暂时没有 main"，不会留下"main 指向不属于这个 project 的星图"。
+///
+/// 返回 `index_changed`：index 是否真的被改过。`_with_changes` 版本据此
+/// 组装真实写入路径的 change set。
 pub fn bind_starmap_to_project(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     let old_project_id = meta.project_id.clone();
-    meta.project_id = Some(project_id.to_string());
-    meta.updated_at = now_epoch();
-    save_starmap_meta(app_data_root, &meta)?;
 
     // 维护不变量：main_starmap_by_project[pid] 指向的星图其 meta.project_id 必须等于 pid。
-    // 如果把一个原来属于别的 project、且还是旧 project main 的星图迁走，
-    // 要同时清掉旧 main 映射。只有在 main 映射真的变化时才写 index，
-    // 不为了 index.updated_at 形成无意义双写。
+    // 先清旧 main 映射（如果存在且不同），确保 save_index 成功落盘后再写 meta。
+    let mut index_changed = false;
     if let Some(old_pid) = &old_project_id {
         if old_pid != project_id {
             let mut idx = load_index(app_data_root)?;
             if idx.main_starmap_by_project.get(old_pid) == Some(&starmap_id.to_string()) {
                 idx.main_starmap_by_project.remove(old_pid);
-                idx.updated_at = meta.updated_at;
+                idx.updated_at = now_epoch();
                 save_index(app_data_root, &idx)?;
+                index_changed = true;
             }
         }
     }
-    Ok(())
+
+    meta.project_id = Some(project_id.to_string());
+    meta.updated_at = now_epoch();
+    save_starmap_meta(app_data_root, &meta)?;
+
+    Ok(index_changed)
 }
 
 ///   bind_starmap_to_project 的变更集版本。
 ///
-/// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+/// 根据 `bind_starmap_to_project` 返回的 `index_changed` 组装真实写入路径的
+/// change set：index 没有变化时只含 meta，否则含 meta + index。
 pub fn bind_starmap_to_project_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    bind_starmap_to_project(app_data_root, starmap_id, project_id)?;
-    Ok(change_set_for_meta_and_index(starmap_id))
+    let index_changed = bind_starmap_to_project(app_data_root, starmap_id, project_id)?;
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(starmap_meta_rel_path(starmap_id));
+    if index_changed {
+        change_set = change_set.add_upsert(starmaps_index_rel_path());
+    }
+    Ok(change_set)
 }
 
 /// 设置项目的主星图。
@@ -359,11 +374,13 @@ pub fn bind_starmap_to_project_with_changes(
 ///
 /// 维护不变量：`main_starmap_by_project[project_id]` 指向的星图，
 /// 其 `meta.project_id` 必须等于这个 `project_id`。
+///
+/// 返回 `index_changed`：index 是否真的被改过。映射本来就相同时返回 `Ok(false)`。
 pub fn set_main_starmap_for_project(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
-) -> Result<()> {
+) -> Result<bool> {
     // 先读目标 meta，确认星图存在。
     let meta = load_starmap_meta(app_data_root, starmap_id)?;
     // 要设成某个 project 的 main，目标必须已经 meta.project_id == Some(project_id)，
@@ -380,27 +397,32 @@ pub fn set_main_starmap_for_project(
     // 只有在 main 映射真的变化时才写 index，不为了 index.updated_at 形成无意义双写。
     let mut idx = load_index(app_data_root)?;
     if idx.main_starmap_by_project.get(project_id) == Some(&starmap_id.to_string()) {
-        return Ok(());
+        return Ok(false);
     }
     idx.main_starmap_by_project
         .insert(project_id.to_string(), starmap_id.to_string());
     idx.updated_at = now_epoch();
     save_index(app_data_root, &idx)?;
-    Ok(())
+    Ok(true)
 }
 
 ///   set_main_starmap_for_project 的变更集版本。
 ///
-/// 变更集：`Upsert(starmaps/index.json)`。只记录 index 变化，不再写目标 meta。
+/// 根据 `set_main_starmap_for_project` 返回的 `index_changed` 组装真实写入路径的
+/// change set：index 没有变化时返回空 change set，否则含 `Upsert(starmaps/index.json)`。
 pub fn set_main_starmap_for_project_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    set_main_starmap_for_project(app_data_root, starmap_id, project_id)?;
+    let index_changed = set_main_starmap_for_project(app_data_root, starmap_id, project_id)?;
 
-    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-        .add_upsert(starmaps_index_rel_path());
+    let change_set = if index_changed {
+        crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(starmaps_index_rel_path())
+    } else {
+        crate::storage::workspace_git::WorkspaceChangeSet::new()
+    };
     Ok(change_set)
 }
 
@@ -415,35 +437,50 @@ pub fn get_main_starmap_for_project(
     Ok(None)
 }
 
-pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Result<()> {
+/// 把星图从项目解绑。
+///
+/// 先清 main index，再写 meta：如果 meta 写失败，最多变成"这个 project
+/// 暂时没有 main"，不会留下"main 指向不属于这个 project 的星图"。
+///
+/// 返回 `index_changed`：index 是否真的被改过。
+pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Result<bool> {
     let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     let old_project_id = meta.project_id.clone();
-    meta.project_id = None;
-    meta.updated_at = now_epoch();
-    save_starmap_meta(app_data_root, &meta)?;
 
-    // 如果它当前是 main，要清 main 映射。
-    // 只有在 main 映射真的变化时才写 index，不为了 index.updated_at 形成无意义双写。
+    // 先清 main 映射（如果它是 main），确保 save_index 成功落盘后再写 meta。
+    let mut index_changed = false;
     if let Some(pid) = &old_project_id {
         let mut idx = load_index(app_data_root)?;
         if idx.main_starmap_by_project.get(pid) == Some(&starmap_id.to_string()) {
             idx.main_starmap_by_project.remove(pid);
-            idx.updated_at = meta.updated_at;
+            idx.updated_at = now_epoch();
             save_index(app_data_root, &idx)?;
+            index_changed = true;
         }
     }
-    Ok(())
+
+    meta.project_id = None;
+    meta.updated_at = now_epoch();
+    save_starmap_meta(app_data_root, &meta)?;
+
+    Ok(index_changed)
 }
 
 ///   unbind_starmap_from_project 的变更集版本。
 ///
-/// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+/// 根据 `unbind_starmap_from_project` 返回的 `index_changed` 组装真实写入路径的
+/// change set：index 没有变化时只含 meta，否则含 meta + index。
 pub fn unbind_starmap_from_project_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    unbind_starmap_from_project(app_data_root, starmap_id)?;
-    Ok(change_set_for_meta_and_index(starmap_id))
+    let index_changed = unbind_starmap_from_project(app_data_root, starmap_id)?;
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_upsert(starmap_meta_rel_path(starmap_id));
+    if index_changed {
+        change_set = change_set.add_upsert(starmaps_index_rel_path());
+    }
+    Ok(change_set)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

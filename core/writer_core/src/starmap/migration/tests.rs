@@ -551,3 +551,492 @@ fn validate_nodes_rejects_infinity_position() {
         "Infinity position must be rejected by validate_graph"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 修复 1/2/3：幂等对象迁移、layout 解析失败 Err、revision 推进、meta 重写
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_node_with_existing_position_keeps_it() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_pos");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_pos",
+        "nodeIds": ["n1"],
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // node 已有合法 position (50, 60)。
+    let node1 = json!({
+        "id": "n1", "title": "N1", "kind": "concept", "payload": null,
+        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "position": {"x": 50.0, "y": 60.0},
+        "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
+    });
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir.join("nodes").join(bucket).join("n1.json"),
+        &node1,
+    );
+
+    // 同时提供 layout（位置不同），迁移后应保留 node 已有 position，不被 layout 覆盖。
+    let layout_nodes = json!([
+        {"nodeId": "n1", "x": 999.0, "y": 888.0, "width": 80.0, "height": 60.0,
+         "radius": 0.0, "collapsed": false, "zIndex": 0, "scale": 1.0},
+    ]);
+    write_json(
+        &graph_dir
+            .join("layouts")
+            .join("default")
+            .join("nodes")
+            .join(format!("{bucket}.json")),
+        &layout_nodes,
+    );
+
+    migrate_one_starmap_graph(dir.path(), "sm_pos").unwrap();
+
+    let migrated: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(graph_dir.join("nodes").join(bucket).join("n1.json")).unwrap(),
+    )
+    .unwrap();
+    // 保留已有 position，不被 layout 覆盖。
+    assert_eq!(migrated["position"], json!({"x": 50.0, "y": 60.0}));
+}
+
+#[test]
+fn migrate_embed_with_existing_position_keeps_it() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_emb_pos");
+    std::fs::create_dir_all(graph_dir.join("embeds")).unwrap();
+
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_emb_pos",
+        "nodeIds": [],
+        "edgeIds": [],
+        "embedInstanceIds": ["emb1"],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // embed 已有合法 position (70, 80)。
+    let embed = json!({
+        "instanceId": "emb1",
+        "targetStarmapId": "child_sm",
+        "label": "子图",
+        "position": {"x": 70.0, "y": 80.0},
+        "hostPath": {"starmapId": "sm_emb_pos", "segments": [], "target": {"kind": "starmap"}},
+        "provenance": {"origin": "user"},
+        "createdAt": 0,
+        "updatedAt": 0,
+    });
+    let bucket = crate::starmap::package_storage::bucket_for_id("emb1");
+    write_json(
+        &graph_dir.join("embeds").join(bucket).join("emb1.json"),
+        &embed,
+    );
+
+    migrate_one_starmap_graph(dir.path(), "sm_emb_pos").unwrap();
+
+    let migrated: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(graph_dir.join("embeds").join(bucket).join("emb1.json")).unwrap(),
+    )
+    .unwrap();
+    // 保留已有 position。
+    assert_eq!(migrated["position"], json!({"x": 70.0, "y": 80.0}));
+}
+
+#[test]
+fn migrate_embed_without_position_or_placement_errors() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_emb_err");
+    std::fs::create_dir_all(graph_dir.join("embeds")).unwrap();
+
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_emb_err",
+        "nodeIds": [],
+        "edgeIds": [],
+        "embedInstanceIds": ["emb1"],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // embed 既没有 position 也没有 placement。
+    let embed = json!({
+        "instanceId": "emb1",
+        "targetStarmapId": "child_sm",
+        "label": "子图",
+        "hostPath": {"starmapId": "sm_emb_err", "segments": [], "target": {"kind": "starmap"}},
+        "provenance": {"origin": "user"},
+        "createdAt": 0,
+        "updatedAt": 0,
+    });
+    let bucket = crate::starmap::package_storage::bucket_for_id("emb1");
+    write_json(
+        &graph_dir.join("embeds").join(bucket).join("emb1.json"),
+        &embed,
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_emb_err");
+    assert!(
+        result.is_err(),
+        "embed without position or placement must Err, not guess (0,0)"
+    );
+}
+
+#[test]
+fn migrate_corrupt_layout_errors() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_corrupt_layout");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_corrupt_layout",
+        "nodeIds": ["n1"],
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // 损坏的 layout shard JSON（不是合法 JSON 数组）。
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    std::fs::create_dir_all(graph_dir.join("layouts").join("default").join("nodes")).unwrap();
+    std::fs::write(
+        graph_dir
+            .join("layouts")
+            .join("default")
+            .join("nodes")
+            .join(format!("{bucket}.json")),
+        "this is not valid json {{{",
+    )
+    .unwrap();
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_corrupt_layout");
+    assert!(
+        result.is_err(),
+        "corrupt layout shard must Err, not unwrap_or_default"
+    );
+}
+
+#[test]
+fn migrate_advances_package_revision() {
+    let dir = temp_root();
+    setup_old_starmap(dir.path(), "sm_rev");
+
+    migrate_one_starmap_graph(dir.path(), "sm_rev").unwrap();
+
+    let graph_dir = dir.path().join("starmaps").join("sm_rev");
+    let graph_meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(graph_dir.join("graph.json")).unwrap())
+            .unwrap();
+
+    // packageRevision = old(1) + 1 = 2。
+    assert_eq!(graph_meta["packageRevision"], json!(2));
+
+    // 所有迁过的 node 的 revision = 2。
+    let node_revisions = graph_meta["nodeRevisions"].as_object().unwrap();
+    assert_eq!(node_revisions["n1"], json!(2));
+    assert_eq!(node_revisions["n2"], json!(2));
+
+    // 所有迁过的 embed 的 revision = 2。
+    let embed_revisions = graph_meta["embedRevisions"].as_object().unwrap();
+    assert_eq!(embed_revisions["emb1"], json!(2));
+
+    // updatedAt 被推进。
+    let updated_at = graph_meta["updatedAt"].as_u64().unwrap();
+    assert!(updated_at > 0, "updatedAt must be advanced to now");
+}
+
+#[test]
+fn migrate_index_rewrites_meta_files() {
+    let dir = temp_root();
+    let index_path = dir.path().join("starmaps").join("index.json");
+
+    // 旧格式 index + 旧 meta 文件含废弃字段。
+    let old_index = json!({
+        "schemaVersion": 1,
+        "starmaps": [
+            {
+                "starmapId": "sm_a",
+                "title": "A",
+                "projectId": "p1",
+                "isMainForProject": true,
+                "accentColor": "#7B8CDE",
+                "createdAt": 100,
+                "updatedAt": 200,
+                "nodeCount": 5,
+                "edgeCount": 3,
+                "linkedChapterCount": 2,
+            },
+        ],
+        "updatedAt": 300,
+    });
+    write_json(&index_path, &old_index);
+
+    // 写一个含废弃字段的 meta 文件。
+    let meta_path = dir.path().join("starmaps").join("sm_a.meta.json");
+    write_json(
+        &meta_path,
+        &json!({
+            "starmapId": "sm_a",
+            "title": "A",
+            "description": "desc",
+            "projectId": "p1",
+            "accentColor": "#7B8CDE",
+            "createdAt": 100,
+            "updatedAt": 200,
+            "isMainForProject": true,
+            "nodeCount": 5,
+            "edgeCount": 3,
+            "linkedChapterCount": 2,
+        }),
+    );
+
+    migrate_index(dir.path()).unwrap();
+
+    let migrated_meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+    // 只保留 7 个字段。
+    let keys: Vec<String> = migrated_meta.as_object().unwrap().keys().cloned().collect();
+    for removed in [
+        "isMainForProject",
+        "nodeCount",
+        "edgeCount",
+        "linkedChapterCount",
+    ] {
+        assert!(
+            !keys.contains(&removed.to_string()),
+            "meta should not have {removed} after migration"
+        );
+    }
+    assert_eq!(migrated_meta["starmapId"], json!("sm_a"));
+    assert_eq!(migrated_meta["title"], json!("A"));
+    assert_eq!(migrated_meta["description"], json!("desc"));
+    assert_eq!(migrated_meta["projectId"], json!("p1"));
+    assert_eq!(migrated_meta["accentColor"], json!("#7B8CDE"));
+}
+
+#[test]
+fn migrate_is_safe_to_rerun_after_partial_failure() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_rerun");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_rerun",
+        "nodeIds": ["n1"],
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // node 没有 position，有 layout → 第一次迁移会从 layout 提取 position。
+    let layout_nodes = json!([
+        {"nodeId": "n1", "x": 100.0, "y": 200.0, "width": 80.0, "height": 60.0,
+         "radius": 0.0, "collapsed": false, "zIndex": 0, "scale": 1.0},
+    ]);
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir
+            .join("layouts")
+            .join("default")
+            .join("nodes")
+            .join(format!("{bucket}.json")),
+        &layout_nodes,
+    );
+
+    let node1 = json!({
+        "id": "n1", "title": "N1", "kind": "concept", "payload": null,
+        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
+    });
+    write_json(
+        &graph_dir.join("nodes").join(bucket).join("n1.json"),
+        &node1,
+    );
+
+    // 第一次迁移：从 layout 提取 position (100, 200)。
+    // 但模拟"第 5 步写 graph.json schema 4 失败"——我们手动只迁 node，不迁 graph.json。
+    // 实际上我们直接调 migrate_node_json 模拟部分迁移。
+    {
+        let layout_positions = super::read_layout_positions(&graph_dir).unwrap();
+        super::migrate_node_json(&graph_dir, "n1", &layout_positions).unwrap();
+        // 故意不写 graph.json schema 4，模拟中途失败。schema 仍是 "3"。
+    }
+
+    // 此时 node 已有 position (100, 200)。
+    let after_first: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(graph_dir.join("nodes").join(bucket).join("n1.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(after_first["position"], json!({"x": 100.0, "y": 200.0}));
+
+    // 手动把 position 改成非零值 (500, 600)，模拟用户后续移动了节点。
+    let mut modified = after_first.clone();
+    modified["position"] = json!({"x": 500.0, "y": 600.0});
+    std::fs::write(
+        graph_dir.join("nodes").join(bucket).join("n1.json"),
+        serde_json::to_string_pretty(&modified).unwrap(),
+    )
+    .unwrap();
+
+    // 重跑迁移（schema 仍是 "3"）。已有合法 position (500, 600) 应保留，不被覆盖。
+    migrate_one_starmap_graph(dir.path(), "sm_rerun").unwrap();
+
+    let after_rerun: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(graph_dir.join("nodes").join(bucket).join("n1.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        after_rerun["position"],
+        json!({"x": 500.0, "y": 600.0}),
+        "rerun must keep existing valid position, not overwrite with layout"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 修复 4：add_starmap_node 的 finite 校验
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_starmap_node_with_nan_x_rejected() {
+    use crate::facade::WriterCore;
+    use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
+    use crate::starmap::types::*;
+
+    let dir = temp_root();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let core = WriterCore::new(dir.path(), dir.path().join("projects"));
+    let meta = core.create_starmap("S", "", None).unwrap();
+
+    let node = StarMapNode {
+        id: "n1".to_string(),
+        title: "N1".to_string(),
+        kind: StarMapNodeKind::Concept,
+        payload: None,
+        tags: vec![],
+        content: StarMapNodeContent::Empty,
+        anchors: vec![],
+        portal: None,
+        position: StarMapPoint::default(),
+        style: StarMapNodeStyle::default(),
+        provenance: StarMapProvenance::default(),
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    // default_x = NaN 现在会被合进 node.position 再校验，应被拒绝。
+    let result = core.add_starmap_node(&meta.starmap_id, node, f32::NAN, 0.0);
+    assert!(
+        result.is_err(),
+        "add_starmap_node with NaN default_x must be rejected by validate_graph"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 修复 5：bind/unbind 顺序和 change set
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bind_clears_old_main_before_writing_meta() {
+    let dir = temp_root();
+    let meta = crate::starmap::create_starmap(dir.path(), "S", "", None).unwrap();
+    crate::starmap::bind_starmap_to_project(dir.path(), &meta.starmap_id, "p1").unwrap();
+    crate::starmap::set_main_starmap_for_project(dir.path(), &meta.starmap_id, "p1").unwrap();
+
+    // 把星图从 p1 迁到 p2，应先清 p1 的 main 映射再写 meta。
+    crate::starmap::bind_starmap_to_project(dir.path(), &meta.starmap_id, "p2").unwrap();
+
+    // 最终不变量：p1 没有 main，meta.project_id == p2。
+    let main_p1 = crate::starmap::get_main_starmap_for_project(dir.path(), "p1").unwrap();
+    assert!(main_p1.is_none(), "p1 main should be cleared");
+    let meta_after = crate::starmap::get_starmap(dir.path(), &meta.starmap_id).unwrap();
+    assert_eq!(meta_after.project_id.as_deref(), Some("p2"));
+}
+
+#[test]
+fn bind_with_changes_no_index_change_when_same_project() {
+    let dir = temp_root();
+    let meta = crate::starmap::create_starmap(dir.path(), "S", "", None).unwrap();
+    crate::starmap::bind_starmap_to_project(dir.path(), &meta.starmap_id, "p1").unwrap();
+
+    // 再次 bind 到相同 project，change set 不应含 index。
+    let change_set =
+        crate::starmap::bind_starmap_to_project_with_changes(dir.path(), &meta.starmap_id, "p1")
+            .unwrap();
+    let paths = change_set.to_flat_paths();
+    let has_index = paths
+        .iter()
+        .any(|p| p == &std::path::PathBuf::from("starmaps/index.json"));
+    assert!(
+        !has_index,
+        "change set must not contain index when binding to same project"
+    );
+}
+
+#[test]
+fn unbind_with_changes_no_index_change_when_not_main() {
+    let dir = temp_root();
+    let meta = crate::starmap::create_starmap(dir.path(), "S", "", None).unwrap();
+    crate::starmap::bind_starmap_to_project(dir.path(), &meta.starmap_id, "p1").unwrap();
+    // 不设为 main。
+
+    // unbind 一个不是 main 的星图，change set 不应含 index。
+    let change_set =
+        crate::starmap::unbind_starmap_from_project_with_changes(dir.path(), &meta.starmap_id)
+            .unwrap();
+    let paths = change_set.to_flat_paths();
+    let has_index = paths
+        .iter()
+        .any(|p| p == &std::path::PathBuf::from("starmaps/index.json"));
+    assert!(
+        !has_index,
+        "change set must not contain index when unbinding non-main starmap"
+    );
+}
+
+#[test]
+fn set_main_with_changes_empty_when_already_main() {
+    let dir = temp_root();
+    let meta = crate::starmap::create_starmap(dir.path(), "S", "", None).unwrap();
+    crate::starmap::bind_starmap_to_project(dir.path(), &meta.starmap_id, "p1").unwrap();
+    crate::starmap::set_main_starmap_for_project(dir.path(), &meta.starmap_id, "p1").unwrap();
+
+    // 再次 set_main 相同星图，change set 应为空。
+    let change_set = crate::starmap::set_main_starmap_for_project_with_changes(
+        dir.path(),
+        &meta.starmap_id,
+        "p1",
+    )
+    .unwrap();
+    assert!(
+        change_set.is_empty(),
+        "change set must be empty when starmap is already main"
+    );
+}

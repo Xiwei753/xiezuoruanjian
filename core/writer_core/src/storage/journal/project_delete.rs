@@ -417,7 +417,7 @@ impl ProjectDeleteTransaction {
         for sm_id in &self.journal.starmap_ids {
             // 幂等 unbind：如果 starmap 已解绑则跳过。
             // unbind 错误直接返回，不吞——半状态比保留 journal 下次恢复更糟。
-            crate::starmap::unbind_starmap_from_project(&app_data_root, sm_id)?;
+            let _ = crate::starmap::unbind_starmap_from_project(&app_data_root, sm_id)?;
         }
         self.advance_phase(ProjectDeletePhase::StarMapsUnbound)?;
         Ok(())

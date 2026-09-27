@@ -49,6 +49,10 @@ pub fn migrate_starmap_data(app_data_root: &Path) -> Result<()> {
 ///
 /// 读取 `starmaps/index.json`，如果是旧 schema 1 格式则迁移为新 schema 2。
 /// 已经是 schema 2 或文件不存在则跳过。
+///
+/// 同时重写每个星图的 `starmaps/{id}.meta.json`，只保留当前唯一结构字段
+/// `starmapId / title / description / projectId / accentColor / createdAt / updatedAt`，
+/// 删除 `isMainForProject / nodeCount / edgeCount / linkedChapterCount` 等废弃字段。
 pub fn migrate_index(app_data_root: &Path) -> Result<()> {
     let index_path = app_data_root.join("starmaps").join("index.json");
     if !index_path.exists() {
@@ -92,6 +96,9 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
                 main_starmap_by_project.insert(pid.to_string(), starmap_id.to_string());
             }
         }
+
+        // 重写 meta JSON，只保留当前唯一结构字段。
+        rewrite_meta_to_current_shape(app_data_root, starmap_id, meta)?;
     }
 
     let updated_at = value
@@ -108,6 +115,73 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
 
     let new_content = serde_json::to_string_pretty(&new_index)?;
     crate::storage::atomic_write_string(&index_path, &new_content)?;
+    Ok(())
+}
+
+/// 把旧 meta JSON 重写成当前唯一结构，只保留
+/// `starmapId / title / description / projectId / accentColor / createdAt / updatedAt`。
+///
+/// 缺失字段使用默认值：description=""、projectId=null、accentColor="#7B8CDE"。
+/// meta 文件不存在时跳过（不报错）。
+fn rewrite_meta_to_current_shape(
+    app_data_root: &Path,
+    starmap_id: &str,
+    fallback_meta: &Value,
+) -> Result<()> {
+    let meta_path = app_data_root
+        .join("starmaps")
+        .join(format!("{}.meta.json", starmap_id));
+    // 优先用磁盘上已存在的 meta 文件作为来源，否则用 index 里的 fallback。
+    let source: Value = if meta_path.exists() {
+        let content = std::fs::read_to_string(&meta_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        // meta 文件不存在，跳过（不报错）。
+        return Ok(());
+    };
+
+    let title = source
+        .get("title")
+        .and_then(|v| v.as_str())
+        .or_else(|| fallback_meta.get("title").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let description = source
+        .get("description")
+        .and_then(|v| v.as_str())
+        .or_else(|| fallback_meta.get("description").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let project_id = source
+        .get("projectId")
+        .and_then(|v| v.as_str())
+        .or_else(|| fallback_meta.get("projectId").and_then(|v| v.as_str()));
+    let accent_color = source
+        .get("accentColor")
+        .and_then(|v| v.as_str())
+        .or_else(|| fallback_meta.get("accentColor").and_then(|v| v.as_str()))
+        .unwrap_or("#7B8CDE");
+    let created_at = source
+        .get("createdAt")
+        .and_then(|v| v.as_u64())
+        .or_else(|| fallback_meta.get("createdAt").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    let updated_at = source
+        .get("updatedAt")
+        .and_then(|v| v.as_u64())
+        .or_else(|| fallback_meta.get("updatedAt").and_then(|v| v.as_u64()))
+        .unwrap_or_else(super::now_epoch);
+
+    let new_meta = serde_json::json!({
+        "starmapId": starmap_id,
+        "title": title,
+        "description": description,
+        "projectId": project_id,
+        "accentColor": accent_color,
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+    });
+
+    let new_content = serde_json::to_string_pretty(&new_meta)?;
+    crate::storage::atomic_write_string(&meta_path, &new_content)?;
     Ok(())
 }
 
@@ -161,19 +235,21 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     let layout_positions = read_layout_positions(&graph_dir)?;
 
     // 2. 迁移 node JSON：写入 position，删除 displayPolicy/openBehavior，portal 删除 mode/previewPolicy。
+    let mut migrated_node_ids: Vec<String> = Vec::new();
     if let Some(node_ids) = value.get("nodeIds").and_then(|v| v.as_array()) {
-        for nid in node_ids {
-            if let Some(id) = nid.as_str() {
-                migrate_node_json(&graph_dir, id, &layout_positions)?;
+        for id in node_ids.iter().filter_map(|v| v.as_str()) {
+            if migrate_node_json(&graph_dir, id, &layout_positions)? {
+                migrated_node_ids.push(id.to_string());
             }
         }
     }
 
     // 3. 迁移 embed JSON：placement.x/y -> position，删除旧显示层字段。
+    let mut migrated_embed_ids: Vec<String> = Vec::new();
     if let Some(embed_ids) = value.get("embedInstanceIds").and_then(|v| v.as_array()) {
-        for eid in embed_ids {
-            if let Some(id) = eid.as_str() {
-                migrate_embed_json(&graph_dir, id)?;
+        for id in embed_ids.iter().filter_map(|v| v.as_str()) {
+            if migrate_embed_json(&graph_dir, id)? {
+                migrated_embed_ids.push(id.to_string());
             }
         }
     }
@@ -200,7 +276,8 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
         let _ = std::fs::remove_dir(&session_starmap_dir);
     }
 
-    // 5. 把 GraphMeta schema 写成 "4"，删除 layoutRevision。
+    // 5. 把 GraphMeta schema 写成 "4"，删除 layoutRevision，推进 package revision。
+    //    一次 schema 迁移就是一次真实的数据事务：文件内容变了 revision 必须变。
     let mut new_value = value.clone();
     if let Some(obj) = new_value.as_object_mut() {
         obj.insert(
@@ -208,6 +285,20 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
             Value::String(NEW_GRAPH_META_SCHEMA_VERSION.to_string()),
         );
         obj.remove("layoutRevision");
+
+        let old_package_revision = obj
+            .get("packageRevision")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let next = old_package_revision.saturating_add(1);
+        obj.insert("packageRevision".to_string(), Value::from(next));
+
+        let now = super::now_epoch();
+        obj.insert("updatedAt".to_string(), Value::from(now));
+
+        // 所有本轮实际迁过的 node/embed 的 revision 设为 next。
+        set_revisions_for_ids(obj, "nodeRevisions", &migrated_node_ids, next);
+        set_revisions_for_ids(obj, "embedRevisions", &migrated_embed_ids, next);
     }
     let new_content = serde_json::to_string_pretty(&new_value)?;
     crate::storage::atomic_write_string(&graph_json_path, &new_content)?;
@@ -215,7 +306,30 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     Ok(())
 }
 
+/// 把 `ids` 中每个 id 的 revision 设为 `next`，写入 `obj[field]` 的 map。
+fn set_revisions_for_ids(
+    obj: &mut serde_json::Map<String, Value>,
+    field: &str,
+    ids: &[String],
+    next: u64,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    let rev_map = obj
+        .entry(field.to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Some(map) = rev_map.as_object_mut() {
+        for id in ids {
+            map.insert(id.clone(), Value::from(next));
+        }
+    }
+}
+
 /// 读取旧 `layouts/default/nodes/*.json`，构建 nodeId -> (x, y) 映射。
+///
+/// layout shard JSON 解析失败必须返回 `Err`：不能把损坏 layout 当成"没有位置"
+/// 然后继续删源数据。
 #[allow(clippy::cast_possible_truncation)]
 fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>> {
     let mut positions = HashMap::new();
@@ -231,8 +345,9 @@ fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>
             continue;
         }
         let content = std::fs::read_to_string(&path)?;
-        // 旧 layout node shard 是 Vec<StarMapLayoutNode>。
-        let nodes: Vec<Value> = serde_json::from_str(&content).unwrap_or_default();
+        // 旧 layout node shard 是 Vec<StarMapLayoutNode>。解析失败必须 Err，
+        // 不能 unwrap_or_default 把损坏 layout 当成空。
+        let nodes: Vec<Value> = serde_json::from_str(&content)?;
         for node in nodes {
             let node_id = node.get("nodeId").and_then(|v| v.as_str());
             let x = node.get("x").and_then(|v| v.as_f64());
@@ -245,19 +360,49 @@ fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>
     Ok(positions)
 }
 
+/// 判断 JSON `position` 字段是否合法（x、y 都是 finite f32）。
+#[allow(clippy::cast_possible_truncation)]
+fn position_is_valid_finite(pos: &Value) -> bool {
+    let obj = match pos.as_object() {
+        Some(o) => o,
+        None => return false,
+    };
+    let x = match obj.get("x").and_then(|v| v.as_f64()) {
+        Some(x) => x,
+        None => return false,
+    };
+    let y = match obj.get("y").and_then(|v| v.as_f64()) {
+        Some(y) => y,
+        None => return false,
+    };
+    // as f32 截断后也要 finite。
+    let xf = x as f32;
+    let yf = y as f32;
+    xf.is_finite() && yf.is_finite()
+}
+
 /// 迁移单个 node JSON 文件。
+///
+/// 幂等对象迁移：如果 node JSON 已有合法 `position`（x、y 都是 finite f32），
+/// 保留，不再用 layout 覆盖；只有没有 position 时才从旧 layout 提取；
+/// 没有 layout 也没有 position 时用 (0,0)（node 的合理默认）。
+///
+/// 删除 displayPolicy/openBehavior 和 portal 的 mode/previewPolicy 仍然执行
+/// （这些是旧字段清理，幂等）。
+///
+/// 返回 `true` 表示文件被实际重写，`false` 表示文件不存在。
 fn migrate_node_json(
     graph_dir: &Path,
     node_id: &str,
     layout_positions: &HashMap<String, (f32, f32)>,
-) -> Result<()> {
+) -> Result<bool> {
     let bucket = crate::starmap::package_storage::bucket_for_id(node_id);
     let node_path = graph_dir
         .join("nodes")
         .join(bucket)
         .join(format!("{}.json", node_id));
     if !node_path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let content = std::fs::read_to_string(&node_path)?;
     let mut value: Value = serde_json::from_str(&content)?;
@@ -266,12 +411,19 @@ fn migrate_node_json(
         obj.remove("displayPolicy");
         obj.remove("openBehavior");
 
-        // 写入 position：优先用 layout 位置，否则默认 (0, 0)。
-        let (x, y) = layout_positions.get(node_id).copied().unwrap_or((0.0, 0.0));
-        obj.insert(
-            "position".to_string(),
-            serde_json::json!({ "x": x, "y": y }),
-        );
+        // 幂等 position 迁移：已有合法 position 则保留，否则从 layout 提取，
+        // 否则用 (0, 0)。
+        let has_valid_position = obj
+            .get("position")
+            .map(position_is_valid_finite)
+            .unwrap_or(false);
+        if !has_valid_position {
+            let (x, y) = layout_positions.get(node_id).copied().unwrap_or((0.0, 0.0));
+            obj.insert(
+                "position".to_string(),
+                serde_json::json!({ "x": x, "y": y }),
+            );
+        }
 
         // portal 删除 mode/previewPolicy。
         if let Some(portal) = obj.get_mut("portal").and_then(|v| v.as_object_mut()) {
@@ -281,36 +433,82 @@ fn migrate_node_json(
     }
     let new_content = serde_json::to_string_pretty(&value)?;
     crate::storage::atomic_write_string(&node_path, &new_content)?;
-    Ok(())
+    Ok(true)
+}
+
+/// 从旧 placement JSON 提取 finite (x, y)。placement 不存在或 x/y 不合法 → Err。
+#[allow(clippy::cast_possible_truncation)]
+fn extract_position_from_placement(
+    instance_id: &str,
+    obj: &serde_json::Map<String, Value>,
+) -> Result<(f32, f32)> {
+    let placement = obj
+        .get("placement")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "embed '{}' has no position and no placement to migrate from",
+                instance_id
+            ))
+        })?;
+    let x = placement.get("x").and_then(|v| v.as_f64()).ok_or_else(|| {
+        Error::Other(format!(
+            "embed '{}' placement missing valid x for migration",
+            instance_id
+        ))
+    })?;
+    let y = placement.get("y").and_then(|v| v.as_f64()).ok_or_else(|| {
+        Error::Other(format!(
+            "embed '{}' placement missing valid y for migration",
+            instance_id
+        ))
+    })?;
+    let xf = x as f32;
+    let yf = y as f32;
+    if !xf.is_finite() || !yf.is_finite() {
+        return Err(Error::Other(format!(
+            "embed '{}' placement x/y not finite for migration",
+            instance_id
+        )));
+    }
+    Ok((xf, yf))
 }
 
 /// 迁移单个 embed JSON 文件。
-#[allow(clippy::cast_possible_truncation)]
-fn migrate_embed_json(graph_dir: &Path, instance_id: &str) -> Result<()> {
+///
+/// 幂等对象迁移：如果 embed JSON 已有合法 `position`（x、y 都是 finite），
+/// 保留，不再要求 placement；只有没有 position 时才从旧 placement.x/y 提取；
+/// 旧 schema 3 的 embed 既没有 position 又没有合法 placement（placement 字段
+/// 不存在或 x/y 不是合法数字）时直接 `Err`，不能猜 (0,0)。
+///
+/// 删除 placement/targetViewport/displayPolicy/openBehavior 仍然执行（幂等清理）。
+///
+/// 返回 `true` 表示文件被实际重写，`false` 表示文件不存在。
+fn migrate_embed_json(graph_dir: &Path, instance_id: &str) -> Result<bool> {
     let bucket = crate::starmap::package_storage::bucket_for_id(instance_id);
     let embed_path = graph_dir
         .join("embeds")
         .join(bucket)
         .join(format!("{}.json", instance_id));
     if !embed_path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let content = std::fs::read_to_string(&embed_path)?;
     let mut value: Value = serde_json::from_str(&content)?;
     if let Some(obj) = value.as_object_mut() {
-        // 从 placement.x/y 提取 position。
-        let (x, y) = if let Some(p) = obj.get("placement").and_then(|v| v.as_object()) {
-            let x = p.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let y = p.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            (x as f32, y as f32)
-        } else {
-            (0.0, 0.0)
-        };
+        // 幂等 position 迁移：已有合法 position 则保留。
+        let has_valid_position = obj
+            .get("position")
+            .map(position_is_valid_finite)
+            .unwrap_or(false);
 
-        obj.insert(
-            "position".to_string(),
-            serde_json::json!({ "x": x, "y": y }),
-        );
+        if !has_valid_position {
+            let (x, y) = extract_position_from_placement(instance_id, obj)?;
+            obj.insert(
+                "position".to_string(),
+                serde_json::json!({ "x": x, "y": y }),
+            );
+        }
 
         // 删除旧显示层字段。
         obj.remove("placement");
@@ -320,7 +518,7 @@ fn migrate_embed_json(graph_dir: &Path, instance_id: &str) -> Result<()> {
     }
     let new_content = serde_json::to_string_pretty(&value)?;
     crate::storage::atomic_write_string(&embed_path, &new_content)?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
