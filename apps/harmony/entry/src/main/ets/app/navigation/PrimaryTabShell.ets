@@ -228,8 +228,9 @@ export struct PrimaryTabShell {
 
   // Issue #784 评论5857397503 第3点：PageMapForStack 按 ownerStack 传入 navPathStack，
   // 不再写死 homeStack，修复从星图/统计进入 Settings 时操作错 NavPathStack 的问题。
+  // Issue #784 评论5857856673 问题1：增加 ownerTabIndex 参数，SettingsScreen 用它上报正确的 tab。
   @Builder
-  PageMapForStack(name: string, ownerStack: NavPathStack) {
+  PageMapForStack(name: string, ownerStack: NavPathStack, ownerTabIndex: number) {
     if (name === Routes.Home) {
       // Issue #768 评论5838624438：星图快捷入口改为切换一级 tab，不再 push 进 homeStack。
       HomeScreen({
@@ -244,7 +245,7 @@ export struct PrimaryTabShell {
     } else if (name === Routes.StarMap) {
       StarMapScreen()
     } else if (name === Routes.Settings) {
-      SettingsScreen({ navPathStack: ownerStack })
+      SettingsScreen({ navPathStack: ownerStack, tabIndex: ownerTabIndex })
     } else if (name === Routes.Stats) {
       StatsScreen()
     }
@@ -271,7 +272,7 @@ export struct PrimaryTabShell {
             // 内容由 homeStack 驱动
           }
           .navDestination((name: string) => {
-            this.PageMapForStack(name, this.homeStack)
+            this.PageMapForStack(name, this.homeStack, TAB_HOME)
           })
           .mode(NavigationMode.Stack)
           .hideTitleBar(true)
@@ -284,7 +285,7 @@ export struct PrimaryTabShell {
             // 内容由 starMapStack 驱动
           }
           .navDestination((name: string) => {
-            this.PageMapForStack(name, this.starMapStack)
+            this.PageMapForStack(name, this.starMapStack, TAB_STARMAP)
           })
           .mode(NavigationMode.Stack)
           .hideTitleBar(true)
@@ -297,7 +298,7 @@ export struct PrimaryTabShell {
             // 内容由 statsStack 驱动
           }
           .navDestination((name: string) => {
-            this.PageMapForStack(name, this.statsStack)
+            this.PageMapForStack(name, this.statsStack, TAB_STATS)
           })
           .mode(NavigationMode.Stack)
           .hideTitleBar(true)

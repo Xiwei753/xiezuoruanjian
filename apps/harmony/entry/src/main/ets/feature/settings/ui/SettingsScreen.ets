@@ -49,6 +49,9 @@ interface SettingsSelectOption {
 export struct SettingsScreen {
   // Issue #768 评论5838296806：通过 @Param 从父组件接收 NavPathStack，不再依赖全局 activeTabStack
   @Param navPathStack: NavPathStack = new NavPathStack()
+  // Issue #784 评论5857856673 问题1：通过 @Param 从父组件接收 tabIndex，
+  // 用于向 NavigationChromeStore 上报正确的 tab，不再硬编码为 0。
+  @Param tabIndex: number = 0
   // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
@@ -246,7 +249,7 @@ export struct SettingsScreen {
       HdsSettingsDestinationApi23({
         title: $r('app.string.settings'),
         onBack: () => { this.goBack() },
-        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0) }
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.tabIndex) }
       }) {
         this.NavContent()
       }
@@ -262,7 +265,7 @@ export struct SettingsScreen {
         return true
       })
       .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, 0)
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.tabIndex)
       })
     }
   }

@@ -28,10 +28,11 @@ import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, ActionRole } from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
-import { buildNavMenuItems } from '../../../app/navigation/impl/api23/HdsHeaderActionMenu'
+import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
+import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
@@ -943,6 +944,23 @@ export struct WritingScreen {
     return getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
   }
 
+  // Issue #784 评论5857856673 问题2：API<23 自定义标题 Row 右侧动作按钮的图标映射。
+  // 与 HdsHeaderActionMenu 中 mapNavMenuItem 的图标保持一致。
+  private getHeaderActionIcon(role: ActionRole): Resource {
+    if (role === ActionRole.Sync) {
+      return $r('app.media.ic_refresh')
+    }
+    if (role === ActionRole.Search) {
+      return $r('app.media.ic_search')
+    }
+    if (role === ActionRole.Settings) {
+      return $r('sys.media.ohos_ic_public_more')
+    }
+    // 非预期 role 不应出现（sortedHeaderTrailingActions 只返回 HeaderTrailing slot），
+    // 给一个 fallback 图标避免编译报错。
+    return $r('sys.media.ohos_ic_public_more')
+  }
+
   async clearContent() {
     AlertDialog.show({
       title: $r('app.string.confirm_clear'),
@@ -1069,6 +1087,24 @@ export struct WritingScreen {
             Text(this.chapterTitle)
               .fontSize(20)
               .margin({ left: 12 })
+
+            // Issue #784 评论5857856673 问题2：右侧渲染 HeaderTrailing 动作按钮。
+            // 动作来源是 Core ScreenPolicy（this.headerActions），通过 sortedHeaderTrailingActions
+            // 排序后 ForEach 渲染，统一调用 NavigationHeaderActionDispatcher.dispatchAction。
+            Blank()
+
+            ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
+              Button({ type: ButtonType.Circle, stateEffect: true }) {
+                Image(this.getHeaderActionIcon(slot.role))
+                  .width(24)
+                  .height(24)
+              }
+              .width(40)
+              .height(40)
+              .onClick(() => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+              })
+            }, (slot: ActionSlot) => slot.role)
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
@@ -1081,7 +1117,6 @@ export struct WritingScreen {
       }
       // Issue #783 评论5856245403：隐藏内置标题栏，用自定义标题 Row 替代。
       .hideTitleBar(true)
-      .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {
         // 系统返回手势（包括全面屏侧滑返回）：IME 打开时先收键盘，否则退出页面。
         this.handleSystemBack()
