@@ -17,6 +17,8 @@ on:
       - 'tools/check_codelinter_report.py'
       - 'tools/check_harmony_share_files.py'
       - 'tools/test_check_harmony_share_files.py'
+      - 'tools/check_harmony_monochrome_theme.py'
+      - 'tools/test_check_harmony_monochrome_theme.py'
       - '.github/workflows/harmony_static_analysis.yml'
 
 permissions:
@@ -51,6 +53,12 @@ jobs:
 
       - name: Check shareFiles profile（SDK schema + 官方路径限制）
         run: python3 tools/check_harmony_share_files.py .
+
+      - name: Test monochrome theme / dark icon guard
+        run: python3 tools/test_check_harmony_monochrome_theme.py
+
+      - name: Check monochrome theme / dark icon guard（Issue #784）
+        run: python3 tools/check_harmony_monochrome_theme.py .
 
       - name: Run codelinter
         working-directory: apps/harmony
