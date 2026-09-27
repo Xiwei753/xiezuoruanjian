@@ -378,6 +378,27 @@ impl AppBackend {
         self.current_workspace_git_layout = Some(layout);
         self.current_save_status = "已保存".to_string();
         self.reload_tree();
+
+        // #782 评论 5856268690：冷启动恢复中断的 Syncing 状态（与 Android
+        // WriterAppServiceHolder 创建 service 时对齐）。Core 全量同步事务一开始就把
+        // full_state.local.json 写成 Syncing，进程在同步中被杀后磁盘会故意留下这个
+        // Syncing。这里在 create_core_api_with_layout 成功拿到本次新 api 后、
+        // load_sync_config() 之前调用一次，把残留 Syncing 原子改成
+        // RecoverableError("previous_full_sync_interrupted")，避免重启后
+        // current_sync_in_progress=false 但磁盘仍 syncing，后续
+        // restore_sync_status_from_runtime() 误恢复成假"同步中"。
+        // 只在打开/切换 workspace 这条初始化路径调用一次，不塞进 load_sync_config()
+        // 等会反复执行的入口。恢复失败按 Android 现有语义记 warning，不阻断工作区打开；
+        // 恢复成功后下面 load_sync_config() 再读 full_sync_state 时会拿到
+        // recoverable_error，不会出现假的永久"同步中"。
+        if let Err(e) = api.recover_interrupted_full_sync_state() {
+            self.debug_warn(
+                "workspace",
+                "recover_interrupted_full_sync_state_failed",
+                &format!("{}", e),
+            );
+        }
+
         self.load_sync_config();
         self.load_local_settings();
 
