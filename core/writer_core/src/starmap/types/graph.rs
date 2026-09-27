@@ -58,7 +58,7 @@ pub const CURRENT_GRAPH_SCHEMA_VERSION: u32 = 3;
 /// 这是星图 authored object 的完整集合：节点的 `position`/`style`、
 /// 嵌入的 `position` 都在对象自己身上，序列化 Graph 即可完整还原星图本身，
 /// 不依赖 layout/viewport/display policy。持久化为 `graph.json`。
-/// `schema_version` 用于格式识别；当前固定为 2。
+/// `schema_version` 用于格式识别；当前固定为 3。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapGraph {

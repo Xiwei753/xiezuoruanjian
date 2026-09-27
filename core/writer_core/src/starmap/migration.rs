@@ -29,7 +29,7 @@ use crate::error::{Error, Result};
 /// 旧 index schema 版本。
 const OLD_INDEX_SCHEMA_VERSION: u64 = 1;
 /// 新 index schema 版本。
-const NEW_INDEX_SCHEMA_VERSION: u32 = 2;
+pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 2;
 
 /// 旧 GraphMeta schema 版本。
 const OLD_GRAPH_META_SCHEMA_VERSION: &str = "3";
@@ -48,7 +48,10 @@ pub fn migrate_starmap_data(app_data_root: &Path) -> Result<()> {
 /// index schema 1 -> 2。
 ///
 /// 读取 `starmaps/index.json`，如果是旧 schema 1 格式则迁移为新 schema 2。
-/// 已经是 schema 2 或文件不存在则跳过。
+/// 已经是 schema 2 则跳过（`Ok(())`）。
+///
+/// **Fail-closed 版本策略**：未知 / 缺失 / 非法版本（既不是 1 也不是 2）
+/// 直接返回 `Err(UnsupportedVersion)`，不把未来格式当 schema 2 静默接受。
 ///
 /// 同时重写每个星图的 `starmaps/{id}.meta.json`，只保留当前唯一结构字段
 /// `starmapId / title / description / projectId / accentColor / createdAt / updatedAt`，
@@ -65,9 +68,16 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
         .get("schemaVersion")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    if schema_version != OLD_INDEX_SCHEMA_VERSION {
-        // 已经是新格式或未知格式，跳过。
+
+    if schema_version == u64::from(NEW_INDEX_SCHEMA_VERSION) {
+        // 已经是 schema 2，无需迁移。
         return Ok(());
+    }
+    if schema_version != OLD_INDEX_SCHEMA_VERSION {
+        // 未知/缺失/非法版本，fail-closed：不把未来格式当 schema 2 静默接受。
+        return Err(Error::UnsupportedVersion {
+            version: schema_version.to_string(),
+        });
     }
 
     // 旧格式：{ schemaVersion: 1, starmaps: [StarMapMeta], updatedAt }

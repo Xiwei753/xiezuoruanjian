@@ -1040,3 +1040,53 @@ fn set_main_with_changes_empty_when_already_main() {
         "change set must be empty when starmap is already main"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 修复：migrate_index fail-closed 版本策略
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_index_rejects_unknown_schema_version() {
+    let dir = temp_root();
+    let index_path = dir.path().join("starmaps").join("index.json");
+
+    // schemaVersion=99 是未知未来版本，fail-closed 应返回 Err(UnsupportedVersion)。
+    let unknown_index = json!({
+        "schemaVersion": 99,
+        "starmapIds": ["sm_x"],
+        "mainStarmapByProject": {},
+        "updatedAt": 999,
+    });
+    write_json(&index_path, &unknown_index);
+
+    let result = migrate_index(dir.path());
+    assert!(
+        matches!(result, Err(crate::error::Error::UnsupportedVersion { .. })),
+        "unknown schemaVersion must be rejected with UnsupportedVersion, got: {result:?}"
+    );
+
+    // 文件应保持原样，没有被静默改写。
+    let after: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+    assert_eq!(after["schemaVersion"], json!(99));
+}
+
+#[test]
+fn migrate_index_rejects_missing_schema_version_field() {
+    let dir = temp_root();
+    let index_path = dir.path().join("starmaps").join("index.json");
+
+    // 完全没有 schemaVersion 字段，fail-closed 应返回 Err(UnsupportedVersion)。
+    let missing_version_index = json!({
+        "starmapIds": ["sm_x"],
+        "mainStarmapByProject": {},
+        "updatedAt": 999,
+    });
+    write_json(&index_path, &missing_version_index);
+
+    let result = migrate_index(dir.path());
+    assert!(
+        matches!(result, Err(crate::error::Error::UnsupportedVersion { .. })),
+        "missing schemaVersion field must be rejected with UnsupportedVersion, got: {result:?}"
+    );
+}

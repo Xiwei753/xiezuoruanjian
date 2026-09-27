@@ -106,13 +106,13 @@ fn change_set_for_meta_and_index(
 
 fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     // 在读取 index 之前先做一次旧格式迁移（schema 1 -> 2）。
-    // 迁移是幂等的：已经是新格式则跳过。
+    // 迁移是幂等的：已经是新格式则跳过；未知版本 fail-closed 返回 Err。
     migration::migrate_index(app_data_root)?;
 
     let path = index_path(app_data_root);
     if !path.exists() {
         return Ok(StarMapIndexRecord {
-            schema_version: 2,
+            schema_version: migration::NEW_INDEX_SCHEMA_VERSION,
             starmap_ids: vec![],
             main_starmap_by_project: std::collections::HashMap::new(),
             updated_at: now_epoch(),
@@ -120,6 +120,12 @@ fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     }
     let content = fs::read_to_string(&path)?;
     let idx: StarMapIndexRecord = serde_json::from_str(&content)?;
+    // 双重保险：迁移入口可能被别的调用方式绕开，反序列化后再断言一次版本。
+    if idx.schema_version != migration::NEW_INDEX_SCHEMA_VERSION {
+        return Err(crate::error::Error::UnsupportedVersion {
+            version: idx.schema_version.to_string(),
+        });
+    }
     Ok(idx)
 }
 
@@ -264,6 +270,12 @@ pub fn rename_starmap_with_changes(
 ///
 /// 先检查是否有外部引用（embed/link/edge 指向此星图），有则拒绝删除。
 /// 自引用（星图内部的边/嵌入指向自身）不阻止删除。
+///
+/// 写盘顺序：先断 index 引用 → 删对象目录 → 删 meta 真相。
+/// 任何中途失败最多留下"index 已不引用的孤儿文件"，
+/// 不会留下"有效 index 指向不存在 meta"的 dangling 状态。
+/// 再次调用 delete 能继续清理孤儿文件：index 已不引用该 id 时 retain 是 no-op，
+/// 后续删除对象目录和 meta 仍会执行。
 pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     // Before deleting, check if it's referenced by any EXTERNAL StarMap.
     let refs = find_starmap_references(app_data_root, starmap_id)?;
@@ -278,19 +290,25 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
         ))));
     }
 
-    delete_starmap_meta(app_data_root, starmap_id)?;
-
+    // 写盘顺序：先断 index 引用，再删对象目录，最后删 meta 真相。
+    // 任何中途失败最多留下 index 已不引用的孤儿文件，
+    // 不会留下"有效 index 指向不存在 meta"的 dangling 状态。
+    // 再次调用 delete 能继续清理孤儿文件：index 已不引用该 id 时 retain 是 no-op，
+    // 后续删除对象目录和 meta 仍会执行。
     let mut idx = load_index(app_data_root)?;
     idx.starmap_ids.retain(|id| id != starmap_id);
-    // Remove from main_starmap_by_project if this starmap was a main for any project.
     idx.main_starmap_by_project.retain(|_, v| v != starmap_id);
     idx.updated_at = now_epoch();
     save_index(app_data_root, &idx)?;
 
+    // 删除对象目录。失败时最多留下 index 已不引用的孤儿目录。
     let graph_dir = starmaps_dir(app_data_root).join(starmap_id);
     if graph_dir.exists() {
         fs::remove_dir_all(&graph_dir)?;
     }
+
+    // 最后删除 meta 真相。失败时最多留下 index 已不引用的孤儿 meta。
+    delete_starmap_meta(app_data_root, starmap_id)?;
 
     Ok(())
 }
