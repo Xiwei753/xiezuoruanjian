@@ -389,6 +389,10 @@ Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
+                        // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                        Component.onCompleted: {
+                            if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                        }
 
                         ListView {
                             id: treeListView

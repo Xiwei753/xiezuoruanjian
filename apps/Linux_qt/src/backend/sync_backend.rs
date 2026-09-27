@@ -329,9 +329,20 @@ impl SyncBackend {
         }
     }
     fn load_sync_config(&mut self) {
+        // Issue #782 评论 5855709706：重新加载配置只刷新配置字段（sync_config_changed），
+        // 不把"重新读取同一份配置"等同于"同步状态发生变化"。只有当 restore_sync_status_from_runtime
+        // 真的修正了状态时才发 sync_status_changed。
+        let prev_status = self
+            .with_app(|app| app.sync_status().to_string())
+            .unwrap_or_default();
         if self.with_app_mut(|app| app.load_sync_config()).is_ok() {
             self.sync_config_changed();
-            self.sync_status_changed();
+            let new_status = self
+                .with_app(|app| app.sync_status().to_string())
+                .unwrap_or_default();
+            if new_status != prev_status {
+                self.sync_status_changed();
+            }
         }
         // Issue #762 评论 5828791004：工作区打开 / load sync config 后也刷新一次冲突状态，
         // 不能让应用刚启动时 sync_conflict_count 永远先是 0，直到用户手动同步或 resolve 才更新。
@@ -623,6 +634,38 @@ impl AppBackend {
         }
         let has_remote = !self.current_sync_remote_url.is_empty();
         if !has_remote || !self.current_sync_enabled {
+            self.current_sync_status = "not_configured".to_string();
+        } else {
+            self.current_sync_status = "configured_not_tested".to_string();
+        }
+    }
+
+    /// 恢复同步运行状态（Issue #782 评论 5855709706）。
+    ///
+    /// 替代旧的 `refresh_sync_status_from_config` 在 `load_sync_config` 中的无条件覆盖。
+    /// 优先级：
+    /// 1. `current_sync_in_progress == true` → `"syncing"`
+    /// 2. `core_api().load_full_sync_state()` 有值 → 使用其 `overall_status`
+    /// 3. 没有 full sync 历史 → 根据配置落 `no_workspace` / `not_configured` / `configured_not_tested`
+    ///
+    /// 重新读取同一份配置不会覆盖 `success`/`error`/`syncing`；只有完全没有同步历史时
+    /// 才根据配置落到 `configured_not_tested`。用户主动关闭同步或清空远端由
+    /// `save_sync_config` / setter 入口处理，不在此 helper 职责内。
+    pub(crate) fn restore_sync_status_from_runtime(&mut self) {
+        if self.current_sync_in_progress {
+            self.current_sync_status = "syncing".to_string();
+            return;
+        }
+        if let Some(api) = self.core_api() {
+            if let Ok(Some(state)) = api.load_full_sync_state() {
+                self.current_sync_status = state.overall_status;
+                return;
+            }
+        }
+        // 没有 full sync 历史，根据当前配置落到初始状态。
+        if !self.current_has_data_root {
+            self.current_sync_status = "no_workspace".to_string();
+        } else if self.current_sync_remote_url.is_empty() || !self.current_sync_enabled {
             self.current_sync_status = "not_configured".to_string();
         } else {
             self.current_sync_status = "configured_not_tested".to_string();
@@ -1010,7 +1053,7 @@ impl AppBackend {
             } else {
                 self.current_sync_token = "".to_string();
             }
-            self.refresh_sync_status_from_config();
+            self.restore_sync_status_from_runtime();
             let token_present = !self.current_sync_token.is_empty();
             let masked_url = mask_sync_error(&self.current_sync_remote_url);
             self.debug_log(

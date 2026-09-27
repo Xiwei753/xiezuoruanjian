@@ -675,6 +675,10 @@ Item {
                 anchors.margins: resolvedDt.sp12
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                Component.onCompleted: {
+                    if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                }
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth

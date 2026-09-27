@@ -191,6 +191,11 @@ Dialog {
         anchors.bottomMargin: dt.sp20
         anchors.topMargin: dt.sp8
         clip: true
+        // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面，
+        // 保留滚轮/触摸板/滚动条/触屏滚动。
+        Component.onCompleted: {
+            if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+        }
         contentWidth: availableWidth
         contentHeight: settingsColumn.implicitHeight
 

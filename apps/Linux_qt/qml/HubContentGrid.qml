@@ -52,6 +52,9 @@ Item {
         topMargin: 0
         bottomMargin: 0
         boundsBehavior: Flickable.StopAtBounds
+        // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面，
+        // 保留滚轮/触摸板/滚动条/触屏滚动。
+        acceptedButtons: Qt.NoButton
     }
 
     Item {
