@@ -259,7 +259,7 @@ export function resolveVisualLineIndex(
 export function hitTestPoint(
   text: string,
   lines: LineRange[],
-  lineSpacingPx: number,
+  lineHeightVp: number,
   touchX: number,
   touchY: number,
   measureTextFn: (s: string) => number,
@@ -268,7 +268,7 @@ export function hitTestPoint(
   if (lines.length === 0) {
     return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
   }
-  let lineIndex = lineSpacingPx > 0 ? Math.floor(touchY / lineSpacingPx) : 0
+  let lineIndex = lineHeightVp > 0 ? Math.floor(touchY / lineHeightVp) : 0
   if (lineIndex < 0) { lineIndex = 0 }
   if (lineIndex > lines.length - 1) { lineIndex = lines.length - 1 }
 

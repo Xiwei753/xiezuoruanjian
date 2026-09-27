@@ -148,16 +148,17 @@ export class ProjectWorkspaceViewModel {
 
       // 加载页面策略（ScreenPolicy）
       const policyResult = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectWorkspace)
-      if (policyResult.success && policyResult.data) {
-        this.screenPolicy = policyResult.data
-        // Issue #760 评论 5823355851 问题3：提取 HeaderTrailing 和 PrimaryAction（按 order 排序）
-        this.headerTrailingActions = policyResult.data.actionSlots
-          .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
-          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
-        this.primaryActions = policyResult.data.actionSlots
-          .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
-          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+      if (!policyResult.success || !policyResult.data) {
+        throw new Error(policyResult.errorCode ?? 'resolve screen policy failed')
       }
+      this.screenPolicy = policyResult.data
+      // Issue #760 评论 5823355851 问题3：提取 HeaderTrailing 和 PrimaryAction（按 order 排序）
+      this.headerTrailingActions = policyResult.data.actionSlots
+        .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
+        .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+      this.primaryActions = policyResult.data.actionSlots
+        .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
+        .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
     } catch (_err) {
       this.errorMessageState = '加载项目时发生错误'
     } finally {

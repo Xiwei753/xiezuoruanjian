@@ -132,6 +132,8 @@ export struct WritingScreen {
   // WritingScreen 持有 controller 实例并注入 SujianEditor；接续加载完成、目标设备 layout 就绪后
   // 调 controller.restore(state)，controller 按目标设备当前 viewport/content 尺寸 clamp + scrollTo。
   private viewportController: EditorViewportController = new EditorViewportController()
+  // Issue #778 任务8：唯一 owner scroller，传给 SujianEditor 和 HDS 壳层做沉浸联动。
+  private editorScroller: Scroller = new Scroller()
   // Issue #629 评论7 第5项：幂等关闭事务 Promise。performGracefulClose 复用此 Promise，
   // 避免返回按钮 + aboutToDisappear 双重执行真实关闭链，防止重复统计。
   // Issue #629 评论8 第2项：改为 Promise<boolean>；关闭失败（保存失败/close 失败）时重置，
@@ -1007,7 +1009,8 @@ export struct WritingScreen {
         onBack: () => { this.requestLeave() },
         onShown: () => {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
-        }
+        },
+        scroller: this.editorScroller
       }) {
         this.NavContent()
       }
@@ -1072,6 +1075,7 @@ export struct WritingScreen {
         .justifyContent(FlexAlign.Center)
       } else {
         SujianEditor({
+          scroller: this.editorScroller,
           snapshot: this.editorSnapshot,
           harmonyImeConnection: this.harmonyImeConnection,
           inputAdapter: this.inputAdapter,

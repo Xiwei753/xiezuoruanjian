@@ -415,12 +415,12 @@ export struct SettingsScreen {
       .width('100%')
   }
 
-  // ── 中性操作按钮（避免深色模式下大面积蓝色） ──
+  // ── 中性操作按钮（使用系统中性表面色） ──
   @Builder
   SettingsNeutralAction(label: ResourceStr, onClick: () => void, enabled: boolean = true) {
     Button(label, { type: ButtonType.Normal })
       .width('100%')
-      .backgroundColor($r('sys.color.comp_background_gray'))
+      .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
       .fontColor($r('sys.color.font_primary'))
       .borderRadius(DesignTokens.radiusSm)
       .enabled(enabled)
@@ -432,7 +432,7 @@ export struct SettingsScreen {
   SettingsInlineAction(label: ResourceStr, onClick: () => void, enabled: boolean = true) {
     Button(label, { type: ButtonType.Normal })
       .layoutWeight(1)
-      .backgroundColor($r('sys.color.comp_background_gray'))
+      .backgroundColor($r('sys.color.ohos_id_color_button_normal'))
       .fontColor($r('sys.color.font_primary'))
       .borderRadius(DesignTokens.radiusSm)
       .enabled(enabled)
@@ -1850,12 +1850,9 @@ export struct SettingsScreen {
     .width('100%')
   }
 
-  // ── 判断是否需要显示分组标题（单分类且组名等于分类名时不重复画） ──
+  // ── 判断是否需要显示分组标题（单分类时不画分组标题，只画 ExpandableCategory 自己的标题） ──
   private shouldShowGroupHeader(groupDef: GroupDefinition): boolean {
-    if (groupDef.sections.length !== 1) {
-      return true
-    }
-    return this.getGroupTitle(groupDef.id) !== this.getSectionTitle(groupDef.sections[0])
+    return groupDef.sections.length > 1
   }
 
   // ════════════════════════════════════════════

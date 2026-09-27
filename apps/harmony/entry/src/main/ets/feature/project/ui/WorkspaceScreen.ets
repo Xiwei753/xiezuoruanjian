@@ -4,7 +4,6 @@ import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { FAB_SIZE, resolveFabLocalAnchor } from '../../../ui/adaptive/FabAnchor'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
@@ -19,10 +18,6 @@ const LEFT_PANEL_WIDTH: number = 320
 
 /** 分割线宽度 */
 const DIVIDER_WIDTH: number = 0.5
-
-// Issue #773 评论5844518092 第3项：FAB 改独立绝对坐标，不再用整页右下角锚点定位。
-// Issue #773 评论 5846511131：FAB 坐标改用 ui/adaptive/FabAnchor.ets 的共用 helper，
-// 只按 FAB 承载 Stack 自己的宽高算局部坐标，Home 与 Workspace 共用同一套算法。
 
 // Issue #629 评论14 第1项：WorkspaceScreen 只保留项目/卷/章节浏览和目录操作。
 // 章节正文只有 WritingScreen 一个页面级 owner。
@@ -46,9 +41,6 @@ export struct WorkspaceScreen {
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
-  // Issue #773 评论 5846511131：FAB 所在 Stack 容器的宽高，用于计算 FAB 局部坐标。
-  @Local fabHostWidth: number = 0
-  @Local fabHostHeight: number = 0
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @Local useHdsNav: boolean = false
@@ -477,7 +469,7 @@ export struct WorkspaceScreen {
 
   @Builder
   CompactWorkspaceLayout() {
-    Stack() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
         // ── 顶栏：左 返回+作品名 / 右 同步+设置 ──
         this.SinglePaneHeader()
@@ -532,18 +524,20 @@ export struct WorkspaceScreen {
 
       // ── FAB 层：新建卷浮动按钮 ──
       // Issue #774：FAB 改透明点击区域 + 系统加号图标，不用默认强调色 Button 表面
-      // Issue #773 评论 5846511131：局部坐标由 FabAnchor.resolveFabLocalAnchor 统一提供，
-      // 输入只有本 Stack 的宽高（onAreaChange）+ 页面边距 + 底部安全区，不读底栏几何。
+      // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
         Button({ type: ButtonType.Normal }) {
           SymbolGlyph($r('sys.symbol.plus'))
             .fontSize(28)
             .fontColor([$r('sys.color.icon_primary')])
         }
-        .width(FAB_SIZE)
-        .height(FAB_SIZE)
+        .width(56)
+        .height(56)
         .backgroundColor(Color.Transparent)
-        .position(resolveFabLocalAnchor(this.fabHostWidth, this.fabHostHeight, this.adaptiveState))
+        .margin({
+          right: this.adaptiveState.pagePadding,
+          bottom: 112
+        })
         .onClick(() => {
           this.handleCreateVolume()
         })
@@ -551,10 +545,6 @@ export struct WorkspaceScreen {
     }
     .width('100%')
     .height('100%')
-    .onAreaChange((_old, area) => {
-      this.fabHostWidth = Number(area.width)
-      this.fabHostHeight = Number(area.height)
-    })
   }
 
   // ── 顶栏：右 按 ScreenPolicy HeaderTrailing 渲染 Sync→Settings ──
@@ -830,6 +820,7 @@ export struct WorkspaceScreen {
         Image($r('sys.media.ohos_ic_public_more'))
           .width(24)
           .height(24)
+          .fillColor($r('sys.color.icon_primary'))
           .margin({ left: 8 })
           .onClick(() => {
             this.viewModel.currentMenuVolumeId = cardState.volumeId
@@ -914,6 +905,7 @@ export struct WorkspaceScreen {
       Image($r('sys.media.ohos_ic_public_more'))
         .width(20)
         .height(20)
+        .fillColor($r('sys.color.icon_primary'))
         .margin({ left: 8 })
         .onClick(() => {
           this.viewModel.currentMenuChapterId = chapterState.chapterId

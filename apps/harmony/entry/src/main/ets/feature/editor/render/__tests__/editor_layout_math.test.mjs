@@ -232,7 +232,7 @@ test('hitTestPoint: surrogate pair 命中不切断（返回 emoji 起始）', ()
   const result = hitTestPoint('a😀b', el, 20, 5, 25, mockMeasure)
   assert.equal(result.utf16Offset, 1)
 })
-test('hitTestPoint: lineSpacingPx<=0 按第 0 行处理', () => {
+test('hitTestPoint: lineHeightVp<=0 按第 0 行处理', () => {
   const hl = layoutLines('abcdef', 25, mockMeasure)
   const result = hitTestPoint('abcdef', hl, 0, 5, 25, mockMeasure)
   assert.equal(result.utf16Offset, 0)

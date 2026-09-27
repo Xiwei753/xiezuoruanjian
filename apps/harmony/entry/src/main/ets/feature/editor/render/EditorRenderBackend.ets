@@ -87,16 +87,16 @@ export class EditorRenderBackend {
     // Issue #776 评论5849108212 问题3：fallback 路径首行缩进。
     const firstLineIndentVp = snapshot.autoIndentEnabled ? snapshot.autoIndentWidth * snapshot.fontSize : 0
     const lines = layoutLines(text, containerWidth, measureTextFn, firstLineIndentVp)
-    const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
-    const lineLayouts = toLineLayouts(lines, lineSpacingPx, text, measureTextFn, firstLineIndentVp)
+    const lineHeightVp = snapshot.fontSize * snapshot.lineSpacingMultiplier
+    const lineLayouts = toLineLayouts(lines, lineHeightVp, text, measureTextFn, firstLineIndentVp)
     const selStart = Math.min(base.selectionStartUtf16, base.selectionEndUtf16)
     const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
-    const selectionRects = computeSelectionRects(text, lines, lineSpacingPx, containerWidth, selStart, selEnd, measureTextFn, firstLineIndentVp)
-    const caretRect = computeCaretRect(text, lines, lineSpacingPx, base.cursorUtf16, measureTextFn, visualCaretAffinity, firstLineIndentVp)
+    const selectionRects = computeSelectionRects(text, lines, lineHeightVp, containerWidth, selStart, selEnd, measureTextFn, firstLineIndentVp)
+    const caretRect = computeCaretRect(text, lines, lineHeightVp, base.cursorUtf16, measureTextFn, visualCaretAffinity, firstLineIndentVp)
     const compositionUnderlineRects = computeCompositionUnderlineRects(
       text,
       lines,
-      lineSpacingPx,
+      lineHeightVp,
       base.compositionStartUtf16,
       base.compositionEndUtf16,
       measureTextFn,
@@ -144,8 +144,8 @@ export class EditorRenderBackend {
     // Issue #776 评论5849108212 问题3：fallback 路径首行缩进。
     const firstLineIndentVp = snapshot.autoIndentEnabled ? snapshot.autoIndentWidth * snapshot.fontSize : 0
     const lines = layoutLines(text, containerWidth, measureTextFn, firstLineIndentVp)
-    const lineSpacingPx = lines.length > 0 ? textHeight / lines.length : 0
-    return hitTestPoint(text, lines, lineSpacingPx, touchX, touchY, measureTextFn, firstLineIndentVp)
+    const lineHeightVp = snapshot.fontSize * snapshot.lineSpacingMultiplier
+    return hitTestPoint(text, lines, lineHeightVp, touchX, touchY, measureTextFn, firstLineIndentVp)
   }
 
   // ── Issue #768 任务10：系统 LayoutManager 路径 ──

@@ -66,9 +66,8 @@ export class ProjectListViewModel {
           else if (errCode === -3) { errDesc = 'Internal state error' }
           else if (errCode === -4) { errDesc = 'Workspace dir creation failed' }
           else if (errCode === -999) { errDesc = 'NAPI exception (SO load failed?)' }
-          this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${appDataRoot}\nDetail: ${rustError}`
-          this.isLoading = false
-          return
+        this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${appDataRoot}\nDetail: ${rustError}`
+        return
         }
         const statusResult = await nativeBridge.getNativeLoadStatus()
         this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
@@ -79,6 +78,7 @@ export class ProjectListViewModel {
       this.initializeTheme()
     } catch (err) {
       this.errorMessage = `Init error: ${err}`
+    } finally {
       this.isLoading = false
     }
   }
@@ -86,7 +86,6 @@ export class ProjectListViewModel {
   // ── 加载 workspace 数据 ──
 
   private async loadWorkspace(): Promise<void> {
-    this.isLoading = true
     this.errorMessage = ''
 
     try {
@@ -107,31 +106,26 @@ export class ProjectListViewModel {
       }
     } catch (err) {
       this.errorMessage = `Failed to load workspace: ${err}`
-    } finally {
-      this.isLoading = false
     }
   }
 
   // ── 加载 ScreenPolicy（问题5） ──
 
   private async loadScreenPolicy(): Promise<void> {
-    try {
-      const result = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectList)
-      if (result.success && result.data) {
-        this.screenPolicy = result.data
-        this.contextActions = result.data.actionSlots
-          .filter((slot: ActionSlot) => slot.region === ActionRegion.Context)
-          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
-        this.headerTrailingActions = result.data.actionSlots
-          .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
-          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
-        this.primaryActions = result.data.actionSlots
-          .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
-          .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
-      }
-    } catch (_e) {
-      hilog.warn(DOMAIN, TAG, 'loadScreenPolicy failed')
+    const result = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectList)
+    if (!result.success || !result.data) {
+      throw new Error(result.errorCode ?? 'resolve screen policy failed')
     }
+    this.screenPolicy = result.data
+    this.contextActions = result.data.actionSlots
+      .filter((slot: ActionSlot) => slot.region === ActionRegion.Context)
+      .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+    this.headerTrailingActions = result.data.actionSlots
+      .filter((slot: ActionSlot) => slot.region === ActionRegion.HeaderTrailing)
+      .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
+    this.primaryActions = result.data.actionSlots
+      .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
+      .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
   }
 
   // ── 同步（问题6：执行真正的同步动作） ──

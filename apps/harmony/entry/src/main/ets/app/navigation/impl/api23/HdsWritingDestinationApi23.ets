@@ -11,6 +11,8 @@ export struct HdsWritingDestinationApi23 {
   @Param title: string | Resource = ''
   @Param onBack: (() => void) | null = null
   @Param onShown: (() => void) | null = null
+  // Issue #778 任务8：接收父级传入的 scroller，绑定到 HdsNavDestination 做沉浸联动。
+  @Param scroller: Scroller = new Scroller()
 
   build() {
     HdsNavDestination() {
@@ -27,6 +29,7 @@ export struct HdsWritingDestinationApi23 {
         }
       }
     } as HdsNavigationTitleBarOptions)
+    .bindToScrollable([this.scroller])
     .onBackPressed(() => {
       if (this.onBack) {
         this.onBack()

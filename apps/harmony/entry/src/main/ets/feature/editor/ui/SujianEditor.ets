@@ -106,7 +106,8 @@ export struct SujianEditor {
   @State contentWidth: number = 0
   @State contentHeight: number = 0
   // viewport 滚动控制器（ArkUI Scroller）。controller.restore 经此 scrollTo。
-  private scroller: Scroller = new Scroller()
+  // Issue #778 任务8：scroller 由父组件（WritingScreen）注入，HDS 壳层绑定同一 scroller 做沉浸联动。
+  scroller: Scroller = new Scroller()
   // Issue #768 任务9：TextController 让 ArkUI Text 的 LayoutManager 成为唯一布局真源。
   // 正文 Text 通过 controller 接收 StyledString（含字号/行高/首行缩进样式），
   // LayoutManager 提供真实行布局/命中测试，消除自算 measureText 与系统布局的错位。
@@ -964,8 +965,8 @@ export struct SujianEditor {
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(ev.x, ev.y)
-    // Issue #776 评论5848626733 第8项：contentCoord 是相对 Stack 左上角（含 padding）的 vp 坐标，
-    // 减去 padding 得到相对内容原点的坐标。padding 区域是留白，不命中文字。
+    // Issue #776 评论5848626733 第8项 / Issue #778 任务7：contentCoord 是相对 Scroll 内容区域左上角的 vp 坐标，
+    // Stack 在 Column 的 padding 后区域，减去 padding 得到相对 Stack 左上角的坐标。padding 区域是留白，不命中文字。
     const paddedX = contentCoord[0] - EDITOR_HORIZONTAL_PADDING_VP
     const paddedY = contentCoord[1] - EDITOR_TOP_PADDING_VP
     const inContentArea = paddedX >= 0 && paddedY >= 0
@@ -1042,8 +1043,8 @@ export struct SujianEditor {
     }
     // 把视口坐标转成内容坐标。
     const contentCoord: [number, number] = this.viewportToContent(touch.x, touch.y)
-    // Issue #776 评论5848626733 第8项：contentCoord 是相对 Stack 左上角（含 padding）的 vp 坐标，
-    // 减去 padding 得到相对内容原点的坐标。padding 区域是留白，不命中文字。
+    // Issue #776 评论5848626733 第8项 / Issue #778 任务7：contentCoord 是相对 Scroll 内容区域左上角的 vp 坐标，
+    // Stack 在 Column 的 padding 后区域，减去 padding 得到相对 Stack 左上角的坐标。padding 区域是留白，不命中文字。
     const paddedX = contentCoord[0] - EDITOR_HORIZONTAL_PADDING_VP
     const paddedY = contentCoord[1] - EDITOR_TOP_PADDING_VP
     const inContentArea = paddedX >= 0 && paddedY >= 0
@@ -1114,18 +1115,19 @@ export struct SujianEditor {
     this.onViewportChange(state)
   }
 
-  // Issue #629 评论6 Part C：Stack 高度：至少 viewport 高度，随正文增长。
+  // Issue #629 评论6 Part C：Stack 高度：至少可用区域高度，随正文增长。
   // 旧实现固定 .height('100%')，长正文真实内容高度被压成视口高度，maxScrollTop 永远 0。
-  // 新实现：contentHeight > viewportHeight 时用 contentHeight（长正文可滚动）；
-  // 否则用 viewportHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
+  // 新实现：contentHeight > availableHeight 时用 contentHeight（长正文可滚动）；
+  // 否则用 availableHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
+  // Issue #778 任务7：padding 从 Stack 移到外层 Column，Stack 高度不含 padding。
+  // availableHeight = viewportHeight - 上下 padding（Column 的 padding 占用了一部分 viewport 高度）。
   private stackHeight(): number | string {
-    // Issue #776 评论5849108212 问题5：Stack 加了上下 padding，滚动内容高度需包含 padding。
-    const totalContentHeight = this.contentHeight + EDITOR_TOP_PADDING_VP + EDITOR_BOTTOM_PADDING_VP
-    if (totalContentHeight > 0 && totalContentHeight > this.viewportHeight) {
-      return totalContentHeight
+    const availableHeight = Math.max(0, this.viewportHeight - EDITOR_TOP_PADDING_VP - EDITOR_BOTTOM_PADDING_VP)
+    if (this.contentHeight > 0 && this.contentHeight > availableHeight) {
+      return this.contentHeight
     }
-    if (this.viewportHeight > 0) {
-      return this.viewportHeight
+    if (availableHeight > 0) {
+      return availableHeight
     }
     return '100%'
   }
@@ -1135,11 +1137,14 @@ export struct SujianEditor {
     // 正文+选区+composition+caret 在同一滚动坐标系里（Stack align(TopStart)）。
     // 滚轮由 Scroll 自动消费；onScroll 回调把 viewport 状态回调给 WritingScreen。
     Scroll(this.scroller) {
-      // Issue #767 评论 5828146609 第 1 节：Stack 作为唯一输入宿主（INPUT_HOST_ID）。
-      // 焦点和输入事件挂在整个全尺寸 Stack 上，不再挂在正文 Text 上。
-      // 正文 Text 只负责绘制文字，不再承担"可点击输入框"职责。
-      // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
-      Stack() {
+      // Issue #778 任务7：padding 从 Stack 移到外层 Column，Stack 只做编辑坐标系。
+      // Column 负责留白（阅读边距），Stack 内所有坐标基于自身左上角（不含 padding）。
+      Column() {
+        // Issue #767 评论 5828146609 第 1 节：Stack 作为唯一输入宿主（INPUT_HOST_ID）。
+        // 焦点和输入事件挂在整个全尺寸 Stack 上，不再挂在正文 Text 上。
+        // 正文 Text 只负责绘制文字，不再承担"可点击输入框"职责。
+        // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
+        Stack() {
         if (this.renderResult && this.snapshot) {
           // 1. selection background（最底层）
           ForEach(this.selectionRects, (rect: SelectionRect, index: number) => {
@@ -1272,23 +1277,23 @@ export struct SujianEditor {
         // 触摸/笔事件 → hit test + drag selection。
         this.handleTouchEvent(event)
       })
-      // Issue #776 评论5848626733 第8项：正文阅读边距。
-      // Stack 内容区域自动缩进 padding，子组件（selection Rect / Text / composition Rect / caret Rect）
-      // 的 .position({x, y}) 都相对 padding 后的内容原点。Text 的 width('100%') 自动是减去左右 padding
-      // 的宽度，onAreaChange 拿到的 contentWidth 已是文字实际可用宽度。
+      .align(Alignment.TopStart)
+      .width('100%')
+      // Issue #629 评论6 Part C：Stack 高度：至少可用区域高度，随正文增长。
+      // 旧实现固定 .height('100%')，长正文真实内容高度被压成视口高度，maxScrollTop 永远 0。
+      // 新实现：contentHeight > availableHeight 时用 contentHeight（长正文可滚动）；
+      // 否则用 availableHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
+      .height(this.stackHeight())
+      }
+      .width('100%')
+      // Issue #778 任务7：正文阅读边距从 Stack 移到外层 Column。
+      // Column 负责留白，Stack 内坐标不含 padding。
       .padding({
         left: EDITOR_HORIZONTAL_PADDING_VP,
         right: EDITOR_HORIZONTAL_PADDING_VP,
         top: EDITOR_TOP_PADDING_VP,
         bottom: EDITOR_BOTTOM_PADDING_VP,
       })
-      .align(Alignment.TopStart)
-      .width('100%')
-      // Issue #629 评论6 Part C：Stack 高度：至少 viewport 高度，随正文增长。
-      // 旧实现固定 .height('100%')，长正文真实内容高度被压成视口高度，maxScrollTop 永远 0。
-      // 新实现：contentHeight > viewportHeight 时用 contentHeight（长正文可滚动）；
-      // 否则用 viewportHeight（短正文至少占满视口）；都是 0 时用 '100%' 兜底避免高度 0。
-      .height(this.stackHeight())
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)

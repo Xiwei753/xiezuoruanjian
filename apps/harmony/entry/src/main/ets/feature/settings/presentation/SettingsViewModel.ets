@@ -20,6 +20,7 @@ import { HarmonyDiagnosticsExporter } from '../../../platform/diagnostics/Harmon
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
@@ -371,6 +372,14 @@ export class SettingsViewModel {
           this.diagnosticsExporter.setAbilityContext(context)
         }
       }
+
+      const resolver = PlatformApiResolver.getInstance()
+
+      if (resolver.isApiAtLeast(26)) {
+        const zipPath = await this.diagnosticsExporter.export()
+        return zipPath !== null
+      }
+
       return await this.diagnosticsExporter.exportAndShare()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `exportDiagnostics failed: ${err}`)

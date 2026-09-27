@@ -65,18 +65,18 @@ export const UNDERLINE_HEIGHT_VP = 2
 
 /**
  * 把 LineRange[] 转成 LineLayout[]（补 y/height/breakKind/caretStops）。
- * lineSpacingPx <= 0 时按 0 处理。
+ * lineHeightVp <= 0 时按 0 处理。
  * Issue #776 评论5848626733 第7项：firstLineIndentVp 用于 fallback 路径的首行缩进。
  * 段落首行（i===0 或前一个字符是 \n）的 left = firstLineIndentVp；其余行 left = 0。
  */
 export function toLineLayouts(
   lines: LineRange[],
-  lineSpacingPx: number,
+  lineHeightVp: number,
   text: string,
   measureTextFn: (s: string) => number,
   firstLineIndentVp: number = 0,
 ): LineLayout[] {
-  const spacing = lineSpacingPx > 0 ? lineSpacingPx : 0
+  const spacing = lineHeightVp > 0 ? lineHeightVp : 0
   const out: LineLayout[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -112,7 +112,7 @@ export function toLineLayouts(
 export function computeSelectionRects(
   text: string,
   lines: LineRange[],
-  lineSpacingPx: number,
+  lineHeightVp: number,
   contentWidth: number,
   selStartUtf16: number,
   selEndUtf16: number,
@@ -123,7 +123,7 @@ export function computeSelectionRects(
   if (selStartUtf16 === selEndUtf16) { return [] }
   const start = Math.min(selStartUtf16, selEndUtf16)
   const end = Math.max(selStartUtf16, selEndUtf16)
-  const spacing = lineSpacingPx > 0 ? lineSpacingPx : 0
+  const spacing = lineHeightVp > 0 ? lineHeightVp : 0
   const rects: SelectionRect[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -176,7 +176,7 @@ export function computeSelectionRects(
 export function computeCaretRect(
   text: string,
   lines: LineRange[],
-  lineSpacingPx: number,
+  lineHeightVp: number,
   cursorUtf16: number,
   measureTextFn: (s: string) => number,
   // 默认 Upstream：soft-wrap 边界放在上一行末尾（与旧行为一致）。
@@ -196,7 +196,7 @@ export function computeCaretRect(
   const isParagraphFirstLine = lineIndex === 0 || (line.start > 0 && text.charAt(line.start - 1) === '\n')
   const lineLeft = isParagraphFirstLine ? firstLineIndentVp : 0
   const x = lineLeft + measureTextFn(text.substring(line.start, clampedCursor))
-  const spacing = lineSpacingPx > 0 ? lineSpacingPx : 0
+  const spacing = lineHeightVp > 0 ? lineHeightVp : 0
   return { x, y: lineIndex * spacing, width: CARET_WIDTH_VP, height: spacing }
 }
 
@@ -204,7 +204,7 @@ export function computeCaretRect(
 export function computeCompositionUnderlineRects(
   text: string,
   lines: LineRange[],
-  lineSpacingPx: number,
+  lineHeightVp: number,
   compStartUtf16: number | null,
   compEndUtf16: number | null,
   measureTextFn: (s: string) => number,
@@ -215,7 +215,7 @@ export function computeCompositionUnderlineRects(
   if (compStartUtf16 === compEndUtf16) { return [] }
   const start = Math.min(compStartUtf16, compEndUtf16)
   const end = Math.max(compStartUtf16, compEndUtf16)
-  const spacing = lineSpacingPx > 0 ? lineSpacingPx : 0
+  const spacing = lineHeightVp > 0 ? lineHeightVp : 0
   const rects: CompositionUnderlineRect[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -240,7 +240,7 @@ export function computeCompositionUnderlineRects(
 // ── Issue #768 评论5836390597 第2项：系统行几何函数 ──
 // API12~13 系统行的 caret/selection/composition 需要使用每行自己的 left/y/height，
 // 不能再用 "x=0 + 第一行高度当所有行高度"。
-// 这些函数接收 LineLayout[]（含 left/y/height），不依赖 lineSpacingPx。
+// 这些函数接收 LineLayout[]（含 left/y/height），不依赖 lineHeightVp。
 
 /**
  * 计算光标矩形（使用 LineLayout[] 的 left/y/height）。
