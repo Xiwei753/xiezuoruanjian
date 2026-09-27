@@ -11,7 +11,7 @@ import pasteboard from '@ohos.pasteboard'
 import { AppStorageV2 } from '@kit.ArkUI'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
-import { SyncConfig, SyncDiagnosticsResult, SyncSecrets, ProviderSecrets, ProviderConfig } from '../../../corebridge/dto/SyncDtos'
+import { SyncConfig, SyncDiagnosticsResult, SyncSecrets, ProviderConfig } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { getAppContext } from '../../../app/AppContext'
@@ -455,9 +455,13 @@ export class SettingsViewModel {
       return
     }
     try {
-      await this.bridge.saveSyncConfig(this.syncConfig)
+      const result = await this.bridge.saveSyncConfig(this.syncConfig)
+      if (!result.success) {
+        this.saveMessage = `error:${result.errorCode || 'unknown'}`
+      }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to save sync config: ${err}`)
+      this.saveMessage = 'error:save_failed'
     }
   }
 
@@ -467,8 +471,12 @@ export class SettingsViewModel {
   async loadSyncSecrets(): Promise<void> {
     try {
       const result = await this.bridge.loadSyncSecrets()
-      if (result.success && result.data && result.data.providerSecrets) {
-        this.syncToken = result.data.providerSecrets.token
+      if (result.success && result.data) {
+        if (result.data.providerSecrets) {
+          this.syncToken = result.data.providerSecrets.token
+        } else {
+          this.syncToken = ''
+        }
       }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to load sync secrets: ${err}`)
@@ -480,16 +488,19 @@ export class SettingsViewModel {
    */
   async saveSyncSecrets(): Promise<void> {
     try {
-      const providerSecrets: ProviderSecrets = {
-        type: 'github',
-        token: this.syncToken
-      }
       const secrets: SyncSecrets = {
-        providerSecrets: providerSecrets
+        providerSecrets: this.syncToken.length === 0 ? null : {
+          type: 'github',
+          token: this.syncToken
+        }
       }
-      await this.bridge.saveSyncSecrets(secrets)
+      const result = await this.bridge.saveSyncSecrets(secrets)
+      if (!result.success) {
+        this.syncMessage = `error:${result.errorCode || 'unknown'}`
+      }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to save sync secrets: ${err}`)
+      this.syncMessage = 'error:save_failed'
     }
   }
 

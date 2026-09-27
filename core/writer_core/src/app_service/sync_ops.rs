@@ -32,11 +32,12 @@ impl super::WriterAppService {
      * [crate::api::service::WriterCoreApi::secrets_override_snapshot] 取当前应使用的凭据，
      * 若 override 未显式设置则把 snapshot 写入 API override，后续 sync 全程复用。
      */
-    fn refresh_secrets_override(&self) {
+    fn refresh_secrets_override(&self) -> Result<(), WriterError> {
         if !self.api.has_secrets_override() {
-            let snapshot = self.api.secrets_override_snapshot();
-            self.api.set_secrets_override(snapshot);
+            let secrets = self.api.load_sync_secrets()?;
+            self.api.set_secrets_override(Some(secrets.into()));
         }
+        Ok(())
     }
 
     /** 显式设置进程级 secrets override（同步启动前由平台层调用）。 */
@@ -79,7 +80,7 @@ impl super::WriterAppService {
         &self,
         config: SyncConfigDto,
     ) -> Result<FullSyncDiagnosticsResultDto, WriterError> {
-        self.refresh_secrets_override();
+        self.refresh_secrets_override()?;
         self.api.perform_full_sync_diagnostics(config)
     }
 
@@ -88,7 +89,7 @@ impl super::WriterAppService {
         &self,
         config: SyncConfigDto,
     ) -> Result<FullSyncDryRunResultDto, WriterError> {
-        self.refresh_secrets_override();
+        self.refresh_secrets_override()?;
         self.api.perform_full_sync_dry_run(config)
     }
 
@@ -102,7 +103,7 @@ impl super::WriterAppService {
         config: SyncConfigDto,
         force_sync: bool,
     ) -> Result<FullSyncResultDto, WriterError> {
-        self.refresh_secrets_override();
+        self.refresh_secrets_override()?;
         self.api
             .perform_full_sync(config, force_sync, None, None, None)
     }
