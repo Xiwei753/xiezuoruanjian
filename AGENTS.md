@@ -47,17 +47,9 @@ python3 tools/check_rust_safety_patterns.py .
 python3 tools/test_check_rust_safety_patterns.py
 ```
 
-仓库级 Harmony 数据契约守卫（Core serde DTO ↔ ArkTS DTO/decoder 字段、可空性、契约层 import）：
-
 ```bash
 python3 tools/check_harmony_dto_contract.py .
 python3 tools/test_check_harmony_dto_contract.py
 ```
 
-仓库级 Harmony 单色主题 / 深色图标守卫（自定义 SVG 可着色、`Image` 带 `fillColor`、
-强调色只由应用级主题下发、资源表不再声明强调色）：
 
-```bash
-python3 tools/check_harmony_monochrome_theme.py .
-python3 tools/test_check_harmony_monochrome_theme.py
-```
