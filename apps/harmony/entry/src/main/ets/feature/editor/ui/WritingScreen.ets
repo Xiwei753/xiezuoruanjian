@@ -28,9 +28,11 @@ import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/impl/api23/HdsHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
@@ -108,6 +110,9 @@ export struct WritingScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @State useHdsNav: boolean = false
+  // Issue #784 评论5857397503 第4点：API < 23 时通过 ScreenPolicy 加载 HeaderTrailing 动作，
+  // 传入 NavDestination .menus() 渲染右上角操作项。
+  @State headerActions: ActionSlot[] = []
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -155,10 +160,17 @@ export struct WritingScreen {
   // aboutToDisappear 用此 token 注销，避免误注销其他 WritingScreen 实例的 guard。
   private leaveGuardToken: number = -1
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'WritingScreen', 'route name=Writing')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    // Issue #784 评论5857397503 第4点：API < 23 时加载 ScreenPolicy 的 HeaderTrailing 动作。
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.Writing)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -1032,7 +1044,8 @@ export struct WritingScreen {
         onShown: () => {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
         },
-        scroller: this.editorScroller
+        scroller: this.editorScroller,
+        screenRole: ScreenRole.Writing
       }) {
         this.NavContent()
       }
@@ -1068,6 +1081,7 @@ export struct WritingScreen {
       }
       // Issue #783 评论5856245403：隐藏内置标题栏，用自定义标题 Row 替代。
       .hideTitleBar(true)
+      .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {
         // 系统返回手势（包括全面屏侧滑返回）：IME 打开时先收键盘，否则退出页面。
         this.handleSystemBack()

@@ -13,6 +13,8 @@ import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '..
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/impl/api23/HdsHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 /** 左侧面板宽度（双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
@@ -45,15 +47,25 @@ export struct WorkspaceScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @Local useHdsNav: boolean = false
+  // Issue #784 评论5857397503 第4点：API < 23 时通过 ScreenPolicy 加载 HeaderTrailing 动作，
+  // 传入 NavDestination .menus() 渲染右上角操作项。
+  @Local headerActions: ActionSlot[] = []
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    // Issue #784 评论5857397503 第4点：API < 23 时加载 ScreenPolicy 的 HeaderTrailing 动作。
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectWorkspace)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -247,7 +259,8 @@ export struct WorkspaceScreen {
       HdsWorkspaceDestinationApi23({
         title: this.viewModel.projectName,
         onBack: () => { this.handleBack() },
-        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) }
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) },
+        screenRole: ScreenRole.ProjectWorkspace
       }) {
         this.NavContent()
       }
@@ -257,6 +270,7 @@ export struct WorkspaceScreen {
       }
       .hideTitleBar(false)
       .title(this.viewModel.projectName)
+      .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {
         this.handleBack()
         return true

@@ -24,6 +24,10 @@ import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/Pl
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
+import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
+import { buildNavMenuItems } from '../../../app/navigation/impl/api23/HdsHeaderActionMenu'
+import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 @ComponentV2
 export struct HomeScreen {
@@ -40,12 +44,14 @@ export struct HomeScreen {
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
+  @Local useHdsNav: boolean = false
+  @Local headerActions: ActionSlot[] = []
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  aboutToAppear() {
+  async aboutToAppear() {
     hilog.info(0x0000, 'HomeScreen', 'route name=Home')
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
@@ -60,6 +66,14 @@ export struct HomeScreen {
 
     AppContinuationService.getInstance().clear()
     this.viewModel.loadData()
+
+    this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    if (!this.useHdsNav) {
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectList)
+      if (policy !== null) {
+        this.headerActions = policy.actionSlots
+      }
+    }
   }
 
   aboutToDisappear() {
@@ -222,40 +236,57 @@ export struct HomeScreen {
 
   // ========== 构建 UI ==========
 
-  build() {
-    NavDestination() {
-      Stack() {
-        Column() {
-          if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-            // ── 宽屏布局：恢复 #760 之前的实现 ──
-            this.TwoPaneLayout()
-          } else {
-            // ── 窄屏布局：保留当前的新作品卡布局 ──
-            this.SinglePaneLayout()
-          }
-        }
-        .width('100%')
-        .height('100%')
-
-        // ── 对话框层 ──
-        if (this.viewModel.showCreateDialog) {
-          this.CreateDialog()
-        }
-        if (this.viewModel.renameTarget !== null) {
-          this.RenameDialog()
-        }
-        if (this.viewModel.deleteTarget !== null) {
-          this.DeleteConfirmDialog()
+  @Builder
+  HomeContent() {
+    Stack() {
+      Column() {
+        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+          // ── 宽屏布局：恢复 #760 之前的实现 ──
+          this.TwoPaneLayout()
+        } else {
+          // ── 窄屏布局：保留当前的新作品卡布局 ──
+          this.SinglePaneLayout()
         }
       }
       .width('100%')
       .height('100%')
+
+      // ── 对话框层 ──
+      if (this.viewModel.showCreateDialog) {
+        this.CreateDialog()
+      }
+      if (this.viewModel.renameTarget !== null) {
+        this.RenameDialog()
+      }
+      if (this.viewModel.deleteTarget !== null) {
+        this.DeleteConfirmDialog()
+      }
     }
-    .hideTitleBar(true)
-    .onShown((_reason: VisibilityChangeReason) => {
-      hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
-      NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
-    })
+    .width('100%')
+    .height('100%')
+  }
+
+  build() {
+    if (this.useHdsNav) {
+      HdsAppDestinationApi23({
+        title: $r('app.string.app_title'),
+        screenRole: ScreenRole.ProjectList,
+        tabIndex: 0
+      }) {
+        this.HomeContent()
+      }
+    } else {
+      NavDestination() {
+        this.HomeContent()
+      }
+      .hideTitleBar(false)
+      .title($r('app.string.app_title'))
+      .menus(buildNavMenuItems(this.headerActions))
+      .onShown((_reason: VisibilityChangeReason) => {
+        hilog.info(0x0000, 'HomeScreen', 'Home NavDestination onShown')
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
+      })
+    }
   }
 
   // ────────────────────────────────────────
