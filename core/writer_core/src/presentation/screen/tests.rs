@@ -337,24 +337,34 @@ fn test_settings_policy_only_back() {
 }
 
 #[test]
-fn test_starmap_and_stats_have_no_slots() {
-    //  正文四：星图根页没有返回动作；统计根页是独立一级入口。
-    assert!(resolve_screen_policy(ScreenRole::StarMap)
-        .action_slots
-        .is_empty());
-    assert!(resolve_screen_policy(ScreenRole::Stats)
-        .action_slots
-        .is_empty());
+fn test_starmap_and_stats_have_global_header_actions() {
+    //  评论 5856805657：星图/统计根页统一使用全局页头三动作（Sync/Search/Settings）。
+    for role in [ScreenRole::StarMap, ScreenRole::Stats] {
+        let policy = resolve_screen_policy(role);
+        let header: Vec<_> = policy
+            .action_slots
+            .iter()
+            .filter(|s| s.region == ActionRegion::HeaderTrailing)
+            .collect();
+        assert_eq!(header.len(), 3, "{role:?} 应有 3 个全局页头动作");
+        assert_eq!(header[0].role, ActionRole::Sync);
+        assert_eq!(header[1].role, ActionRole::Search);
+        assert_eq!(header[2].role, ActionRole::Settings);
+        assert!(header.windows(2).all(|w| w[0].order < w[1].order));
+    }
 }
 
 #[test]
 fn test_home_policy() {
+    //  评论 5856805657：Home 统一使用全局页头三动作（Sync/Search/Settings）。
     let policy = resolve_screen_policy(ScreenRole::Home);
-    assert_eq!(policy.action_slots.len(), 2);
-    assert_eq!(policy.action_slots[0].role, ActionRole::Search);
+    assert_eq!(policy.action_slots.len(), 3);
+    assert_eq!(policy.action_slots[0].role, ActionRole::Sync);
     assert_eq!(policy.action_slots[0].region, ActionRegion::HeaderTrailing);
-    assert_eq!(policy.action_slots[1].role, ActionRole::Settings);
+    assert_eq!(policy.action_slots[1].role, ActionRole::Search);
     assert_eq!(policy.action_slots[1].region, ActionRegion::HeaderTrailing);
+    assert_eq!(policy.action_slots[2].role, ActionRole::Settings);
+    assert_eq!(policy.action_slots[2].region, ActionRegion::HeaderTrailing);
 }
 
 #[test]

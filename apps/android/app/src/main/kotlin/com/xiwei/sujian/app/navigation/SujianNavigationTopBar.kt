@@ -108,44 +108,42 @@ private fun rememberSujianTopBarActions(
     // 供 Settings onClick 在导航前立刻收 IME。
     val editorWindowHost = com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost.current
     val actions: @Composable () -> Unit = {
-        if (currentRoute is SujianRoute.Works) {
-            chrome.actions.forEach { action ->
-                when (action) {
-                    SujianChromeAction.Settings ->
-                        SujianIconButton(
-                            onClick = {
-                                // #624 评论5：进入设置前先立刻收 IME（清焦点 + 隐藏输入法），
-                                // 再切页面 — 不等 AndroidView onRelease 晚一拍才 hide keyboard。
-                                editorWindowHost?.dismissImeForNavigation()
-                                env.topLevelBackStack.add(SujianRoute.Settings)
+        chrome.actions.forEach { action ->
+            when (action) {
+                SujianChromeAction.Settings ->
+                    SujianIconButton(
+                        onClick = {
+                            // #624 评论5：进入设置前先立刻收 IME（清焦点 + 隐藏输入法），
+                            // 再切页面 — 不等 AndroidView onRelease 晚一拍才 hide keyboard。
+                            editorWindowHost?.dismissImeForNavigation()
+                            env.topLevelBackStack.add(SujianRoute.Settings)
+                        },
+                        icon = SujianIcons.Settings,
+                        contentDescription = stringResource(id = R.string.action_settings),
+                        semanticId = SujianSemanticIds.NavigationSettings,
+                    )
+                SujianChromeAction.Search ->
+                    // #624 评论6：写作页/作品页搜索入口恢复可用状态 — #477 的全局搜索
+                    // 界面接入前 onClick 保持空动作，但图标不能从产品契约消失。
+                    SujianIconButton(
+                        onClick = { },
+                        icon = SujianIcons.Search,
+                        contentDescription = stringResource(id = R.string.cd_search_dev),
+                        semanticId = SujianSemanticIds.NavigationSearch,
+                    )
+                SujianChromeAction.Sync ->
+                    SujianIconButton(
+                        onClick = rememberSujianManualSyncOnClick(env),
+                        icon =
+                            when (env.syncState) {
+                                SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
+                                SyncIndicatorState.Syncing -> SujianIcons.CloudSync
+                                SyncIndicatorState.Synced -> SujianIcons.CloudDone
+                                SyncIndicatorState.Failed -> SujianIcons.CloudError
                             },
-                            icon = SujianIcons.Settings,
-                            contentDescription = stringResource(id = R.string.action_settings),
-                            semanticId = SujianSemanticIds.NavigationSettings,
-                        )
-                    SujianChromeAction.Search ->
-                        // #624 评论6：写作页/作品页搜索入口恢复可用状态 — #477 的全局搜索
-                        // 界面接入前 onClick 保持空动作，但图标不能从产品契约消失。
-                        SujianIconButton(
-                            onClick = { },
-                            icon = SujianIcons.Search,
-                            contentDescription = stringResource(id = R.string.cd_search_dev),
-                            semanticId = SujianSemanticIds.NavigationSearch,
-                        )
-                    SujianChromeAction.Sync ->
-                        SujianIconButton(
-                            onClick = rememberSujianManualSyncOnClick(env),
-                            icon =
-                                when (env.syncState) {
-                                    SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
-                                    SyncIndicatorState.Syncing -> SujianIcons.CloudSync
-                                    SyncIndicatorState.Synced -> SujianIcons.CloudDone
-                                    SyncIndicatorState.Failed -> SujianIcons.CloudError
-                                },
-                            contentDescription = stringResource(id = R.string.cd_sync_manual),
-                            semanticId = SujianSemanticIds.NavigationSync,
-                        )
-                }
+                        contentDescription = stringResource(id = R.string.cd_sync_manual),
+                        semanticId = SujianSemanticIds.NavigationSync,
+                    )
             }
         }
     }

@@ -10,6 +10,8 @@
 // - .onBackPressed 只调用 onSystemBack 并消费本次系统返回（return true）。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
+import { NavigationHeaderActionDispatcher } from '../../NavigationHeaderActionDispatcher'
+import { ActionRole } from '../../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HdsWritingDestinationApi23 {
@@ -42,6 +44,31 @@ export struct HdsWritingDestinationApi23 {
               this.onTitleBack()
             }
           }
+        },
+        menu: {
+          value: [
+            {
+              label: '同步',
+              icon: $r('app.media.ic_refresh'),
+              action: () => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Sync)
+              }
+            },
+            {
+              label: '搜索',
+              icon: $r('app.media.ic_search'),
+              action: () => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Search)
+              }
+            },
+            {
+              label: '设置',
+              icon: $r('sys.media.ohos_ic_public_more'),
+              action: () => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Settings)
+              }
+            }
+          ]
         }
       },
       style: {

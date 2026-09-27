@@ -3,6 +3,7 @@ import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
 import { HarmonyColorModeController } from './HarmonyColorModeController'
 import { ThemeMode } from './HarmonyThemeTypes'
+import { applySujianMonochromeTheme } from './HarmonyMonochromeTheme'
 
 export type ColorSource = 'built_in' | 'saved_palette'
 
@@ -72,7 +73,7 @@ export interface ThemeConfig {
 }
 
 export const LightTheme: ThemeColors = {
-  primary: '#006497',
+  primary: '#000000',
   onPrimary: '#FFFFFF',
   primaryContainer: '#CCE5FF',
   onPrimaryContainer: '#001E31',
@@ -117,8 +118,8 @@ export const LightTheme: ThemeColors = {
 }
 
 export const DarkTheme: ThemeColors = {
-  primary: '#92CCFF',
-  onPrimary: '#003351',
+  primary: '#FFFFFF',
+  onPrimary: '#000000',
   primaryContainer: '#004B73',
   onPrimaryContainer: '#CCE5FF',
   secondary: '#B8C8DA',
@@ -424,6 +425,8 @@ export class HarmonyThemeAdapter {
       const isDark = this.systemColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
       this.effectiveColorMode = isDark ? 'dark' : 'light'
     }
+    // Issue #784：每次 effectiveColorMode 变化后统一调用应用级单色主题
+    applySujianMonochromeTheme(this.effectiveColorMode === 'dark')
   }
 
   // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举判断。

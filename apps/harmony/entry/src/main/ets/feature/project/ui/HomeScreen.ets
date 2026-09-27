@@ -10,7 +10,7 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
-import { Routes, WorkspaceRouteParams, SettingsRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -23,6 +23,7 @@ import { NavigationTransactionCoordinator } from '../../../app/navigation/Naviga
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
 
 @ComponentV2
 export struct HomeScreen {
@@ -72,10 +73,6 @@ export struct HomeScreen {
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
 
-  private handleSync(): void {
-    this.viewModel.performSync()
-  }
-
   private handleRetry(): void {
     this.viewModel.retry()
   }
@@ -87,17 +84,6 @@ export struct HomeScreen {
     }
     const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
     navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
-  }
-
-  private navigateToSettings(): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
-    const settingsParam: SettingsRouteParams = {
-      projectId: this.viewModel.projects.length > 0 ? this.viewModel.projects[0].id : ''
-    }
-    navPathStack.pushPath({ name: Routes.Settings, param: settingsParam })
   }
 
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
@@ -580,7 +566,9 @@ export struct HomeScreen {
           .justifyContent(FlexAlign.Center)
           .borderRadius(DesignTokens.cardRadius)
         }
-        .onClick(() => this.navigateToSettings())
+        .onClick(() => {
+          NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Settings)
+        })
 
         GridCol({ span: 1 }) {
           Column() {
@@ -598,7 +586,9 @@ export struct HomeScreen {
           .justifyContent(FlexAlign.Center)
           .borderRadius(DesignTokens.cardRadius)
         }
-        .onClick(() => this.navigateToSettings())
+        .onClick(() => {
+          NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Sync)
+        })
       }
       .width('100%')
     }
@@ -654,7 +644,7 @@ export struct HomeScreen {
     .height('100%')
   }
 
-  // ── 窄屏顶栏：app_title + 按 ScreenPolicy HeaderTrailing 顺序渲染按钮 ──
+  // ── 窄屏顶栏：只保留标题，页头动作由 NavigationHeaderActionDispatcher 统一管理 ──
   @Builder
   SinglePaneTopBar() {
     Row() {
@@ -663,26 +653,6 @@ export struct HomeScreen {
         .fontWeight(FontWeight.Bold)
 
       Blank()
-
-      // 按 HeaderTrailing order 顺序渲染：Sync(10) → Settings(30)
-      // Issue #760 评论 5825003601：Search slot 保留在 Core ScreenPolicy 中（不影响 Android/全局搜索），
-      // 但 Harmony 窄屏本轮不渲染 Search 图标，避免出现无动作的可点击控件。
-      ForEach(this.viewModel.headerTrailingActions, (slot: ActionSlot) => {
-        if (slot.role === ActionRole.Sync) {
-          Image($r('app.media.ic_refresh'))
-            .width(24)
-            .height(24)
-            .fillColor($r('sys.color.icon_primary'))
-            .margin({ right: 16 })
-            .onClick(() => this.handleSync())
-        } else if (slot.role === ActionRole.Settings) {
-          Image($r('sys.media.ohos_ic_public_more'))
-            .width(24)
-            .height(24)
-            .fillColor($r('sys.color.icon_primary'))
-            .onClick(() => this.navigateToSettings())
-        }
-      }, (slot: ActionSlot) => `${slot.role}_${slot.order}`)
     }
     .width('100%')
     .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

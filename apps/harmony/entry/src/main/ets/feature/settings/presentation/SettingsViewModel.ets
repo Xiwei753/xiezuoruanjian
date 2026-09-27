@@ -504,9 +504,9 @@ export class SettingsViewModel {
   }
 
   // ── 诊断导出 ──
-  // Issue #783 评论5855754605：设置页按钮是用户主动导出，统一走 exportAndShare()，
-  // 不在 API 26+ 静默写 zip 到私有目录（那样用户看不到文件，看起来像"点了没反应"）。
-  // export() 继续给内部快照使用；设置页按钮只走真正会把文件交给用户的 exportAndShare()。
+  // Issue #784：设置页按钮是用户主动导出，使用 DocumentViewPicker.save() 让用户选择保存位置，
+  // 将诊断 zip 文件保存到用户可见的本地目录，而非拉起分享面板。
+  // export() 继续给内部快照使用；exportAndShare() 保留给以后可能的"分享诊断包"功能。
   async exportDiagnostics(): Promise<boolean> {
     try {
       if (this.diagnosticsExporter === null) {
@@ -516,7 +516,7 @@ export class SettingsViewModel {
           this.diagnosticsExporter.setAbilityContext(context)
         }
       }
-      return await this.diagnosticsExporter.exportAndShare()
+      return await this.diagnosticsExporter.exportAndSaveToUserFile()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `exportDiagnostics failed: ${err}`)
       return false

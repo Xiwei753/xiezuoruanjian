@@ -6,6 +6,8 @@
 // 交给 V1 壳的 @BuilderParam 后 this 变成壳组件导致 adaptiveState undefined 的 TypeError。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
+import { NavigationHeaderActionDispatcher } from '../../NavigationHeaderActionDispatcher'
+import { ActionRole } from '../../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HdsWorkspaceDestinationApi23 {
@@ -21,7 +23,34 @@ export struct HdsWorkspaceDestinationApi23 {
     .hideTitleBar(false)
     .titleBar({
       enableComponentSafeArea: true,
-      content: { title: { mainTitle: this.title } },
+      content: {
+        title: { mainTitle: this.title },
+        menu: {
+          value: [
+            {
+              label: '同步',
+              icon: $r('app.media.ic_refresh'),
+              action: () => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Sync)
+              }
+            },
+            {
+              label: '搜索',
+              icon: $r('app.media.ic_search'),
+              action: () => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Search)
+              }
+            },
+            {
+              label: '设置',
+              icon: $r('sys.media.ohos_ic_public_more'),
+              action: () => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Settings)
+              }
+            }
+          ]
+        }
+      },
       style: {
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.IMMERSIVE,
