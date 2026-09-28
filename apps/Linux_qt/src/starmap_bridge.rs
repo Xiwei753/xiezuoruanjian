@@ -16,9 +16,9 @@
 // =============================================================================
 
 use writer_core::api::types::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapGraphDto,
-    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
-    StarMapPointDto, StarMapTargetDetailDto, StarMapTargetPathDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapGraphDto, StarMapHyperlinkDto,
+    StarMapHyperlinkPatchDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
+    StarMapNodePatchDto, StarMapPointDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -399,4 +399,52 @@ pub fn calculate_grid_layout_json(node_ids_json: &str, existing_layout_json: &st
 
     let layout = grid_layout::calculate_grid_layout(&node_ids, &existing);
     envelope_ok(layout)
+}
+
+// -----------------------------------------------------------------------------
+// 星图超链接（hyperlink）envelope 接口
+// -----------------------------------------------------------------------------
+
+pub fn add_starmap_hyperlink(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    hyperlink_json: &str,
+) -> String {
+    let mut hl: StarMapHyperlinkDto = match serde_json::from_str(hyperlink_json) {
+        Ok(h) => h,
+        Err(e) => return envelope_err_str(&format!("Invalid hyperlink JSON: {}", e)),
+    };
+    // hyperlink_id 由 bridge 层生成。Core 的 add_starmap_hyperlink 直接使用传入的
+    // hyperlink_id（重复则报 Duplicate），不会内部生成新 id，因此这里统一分配新 id，
+    // 与 create_starmap_node 在 bridge 层生成 `n_{uuid}` 的模式一致。
+    let now = now_ms();
+    hl.hyperlink_id = format!("hl_{}", uuid::Uuid::new_v4());
+    hl.created_at = now;
+    hl.updated_at = now;
+    envelope(api.add_starmap_hyperlink(starmap_id, hl))
+}
+
+pub fn update_starmap_hyperlink(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    hyperlink_id: &str,
+    patch_json: &str,
+) -> String {
+    let patch: StarMapHyperlinkPatchDto = match serde_json::from_str(patch_json) {
+        Ok(p) => p,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    envelope(api.update_starmap_hyperlink(starmap_id, hyperlink_id, patch))
+}
+
+pub fn delete_starmap_hyperlink(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    hyperlink_id: &str,
+) -> String {
+    envelope(api.delete_starmap_hyperlink(starmap_id, hyperlink_id))
+}
+
+pub fn list_starmap_hyperlinks(api: &WriterCoreApi, starmap_id: &str) -> String {
+    envelope(api.list_starmap_hyperlinks(starmap_id))
 }

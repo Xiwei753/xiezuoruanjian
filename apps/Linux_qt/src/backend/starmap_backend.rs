@@ -36,6 +36,7 @@ pub struct StarMapBackend {
     rename_starmap_json:
         qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
     delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
+    delete_starmap: qt_method!(fn(&mut self, starmap_id: QString) -> QJsonObject),
     bind_starmap_to_project_json:
         qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
     set_main_starmap_json:
@@ -110,11 +111,31 @@ pub struct StarMapBackend {
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
     compute_edge_renders_json:
         qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QString),
+    compute_edge_renders:
+        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
+    hit_test_edge_renders:
+        qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QJsonObject),
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
+    hit_test_nodes: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject),
     calculate_grid_layout_json:
         qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QString),
+    calculate_grid_layout:
+        qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QJsonObject),
+    add_starmap_hyperlink:
+        qt_method!(fn(&mut self, starmap_id: QString, hyperlink_json: QString) -> QJsonObject),
+    update_starmap_hyperlink: qt_method!(
+        fn(
+            &mut self,
+            starmap_id: QString,
+            hyperlink_id: QString,
+            patch_json: QString,
+        ) -> QJsonObject
+    ),
+    delete_starmap_hyperlink:
+        qt_method!(fn(&mut self, starmap_id: QString, hyperlink_id: QString) -> QJsonObject),
+    list_starmap_hyperlinks: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     app: AppRef,
 }
 
@@ -136,6 +157,40 @@ impl StarMapBackend {
         f: impl FnOnce(&mut AppBackend) -> R,
     ) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app_mut(f)
+    }
+
+    /// 记录星图写操作的真实业务结果（按 JSON envelope 的 success/errorCode/messageKey/rawError/data.* 字段），
+    /// 不再用 with_app_mut().is_ok() 代表业务成功。
+    fn log_starmap_envelope(operation: &str, starmap_id: &str, object_id: &str, raw_json: &str) {
+        let v: serde_json::Value = match serde_json::from_str(raw_json) {
+            Ok(v) => v,
+            Err(_) => {
+                log::info!(
+                    "starmap_op operation={} starmapId={} success=false error=invalid_envelope_json",
+                    operation, starmap_id
+                );
+                return;
+            }
+        };
+        let success = v.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+        let error_code = v.get("errorCode").and_then(|x| x.as_str()).unwrap_or("");
+        let message_key = v.get("messageKey").and_then(|x| x.as_str()).unwrap_or("");
+        let raw_error = v.get("rawError").and_then(|x| x.as_str()).unwrap_or("");
+        // data.id / data.nodeId / data.edgeId 都尝试读
+        let data_id = v
+            .get("data")
+            .and_then(|d| {
+                d.get("id")
+                    .or_else(|| d.get("nodeId"))
+                    .or_else(|| d.get("edgeId"))
+                    .or_else(|| d.get("starmapId"))
+            })
+            .and_then(|i| i.as_str())
+            .unwrap_or("");
+        log::info!(
+            "starmap_op operation={} starmapId={} objectId={} dataId={} success={} errorCode={} messageKey={} rawError={}",
+            operation, starmap_id, object_id, data_id, success, error_code, message_key, raw_error
+        );
     }
 
     fn list_starmaps_json(&self) -> QString {
@@ -196,6 +251,10 @@ impl StarMapBackend {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
     }
+    fn delete_starmap(&mut self, starmap_id: QString) -> QJsonObject {
+        let raw = self.delete_starmap_json(starmap_id).to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
     fn bind_starmap_to_project_json(
         &mut self,
         starmap_id: QString,
@@ -249,6 +308,32 @@ impl StarMapBackend {
         let el = existing_layout_json.to_string();
         crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
     }
+    fn compute_edge_renders(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject {
+        let raw = self
+            .compute_edge_renders_json(starmap_id, nodes_json)
+            .to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn hit_test_edge_renders(&self, renders_json: QString, x: f64, y: f64) -> QJsonObject {
+        let raw = self
+            .hit_test_edge_renders_json(renders_json, x, y)
+            .to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn hit_test_nodes(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject {
+        let raw = self.hit_test_nodes_json(nodes_json, x, y).to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn calculate_grid_layout(
+        &self,
+        node_ids_json: QString,
+        existing_layout_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .calculate_grid_layout_json(node_ids_json, existing_layout_json)
+            .to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         self.with_app(|app| app.get_starmap_graph_json(starmap_id))
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -282,12 +367,12 @@ impl StarMapBackend {
         x: f64,
         y: f64,
     ) -> QJsonObject {
-        self.with_app_mut(|app| app.create_starmap_node(starmap_id, title, kind, x, y))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
+        let sid = starmap_id.to_string();
+        let raw = self
+            .create_starmap_node_json(starmap_id, title, kind, x, y)
+            .to_string();
+        Self::log_starmap_envelope("create_starmap_node", &sid, "", &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn update_starmap_node_json(
         &mut self,
@@ -306,12 +391,13 @@ impl StarMapBackend {
         node_id: QString,
         patch_json: QString,
     ) -> QJsonObject {
-        self.with_app_mut(|app| app.update_starmap_node(starmap_id, node_id, patch_json))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
+        let sid = starmap_id.to_string();
+        let nid = node_id.to_string();
+        let raw = self
+            .update_starmap_node_json(starmap_id, node_id, patch_json)
+            .to_string();
+        Self::log_starmap_envelope("update_starmap_node", &sid, &nid, &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn delete_starmap_node_json(&mut self, starmap_id: QString, node_id: QString) -> QString {
         self.with_app_mut(|app| app.delete_starmap_node_json(starmap_id, node_id))
@@ -320,12 +406,13 @@ impl StarMapBackend {
             })
     }
     fn delete_starmap_node(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject {
-        self.with_app_mut(|app| app.delete_starmap_node(starmap_id, node_id))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
+        let sid = starmap_id.to_string();
+        let nid = node_id.to_string();
+        let raw = self
+            .delete_starmap_node_json(starmap_id, node_id)
+            .to_string();
+        Self::log_starmap_envelope("delete_starmap_node", &sid, &nid, &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn create_starmap_edge_json(
         &mut self,
@@ -348,14 +435,12 @@ impl StarMapBackend {
         kind: QString,
         label: QString,
     ) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.create_starmap_edge(starmap_id, from_node_id, to_node_id, kind, label)
-        })
-        .unwrap_or_else(|_| {
-            crate::backend::json_utils::qjson_object_from_json(
-                &crate::backend::json_utils::borrow_conflict_error_json(),
-            )
-        })
+        let sid = starmap_id.to_string();
+        let raw = self
+            .create_starmap_edge_json(starmap_id, from_node_id, to_node_id, kind, label)
+            .to_string();
+        Self::log_starmap_envelope("create_starmap_edge", &sid, "", &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn update_starmap_edge_json(
         &mut self,
@@ -374,12 +459,13 @@ impl StarMapBackend {
         edge_id: QString,
         patch_json: QString,
     ) -> QJsonObject {
-        self.with_app_mut(|app| app.update_starmap_edge(starmap_id, edge_id, patch_json))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
+        let sid = starmap_id.to_string();
+        let eid = edge_id.to_string();
+        let raw = self
+            .update_starmap_edge_json(starmap_id, edge_id, patch_json)
+            .to_string();
+        Self::log_starmap_envelope("update_starmap_edge", &sid, &eid, &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn delete_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString) -> QString {
         self.with_app_mut(|app| app.delete_starmap_edge_json(starmap_id, edge_id))
@@ -388,12 +474,13 @@ impl StarMapBackend {
             })
     }
     fn delete_starmap_edge(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject {
-        self.with_app_mut(|app| app.delete_starmap_edge(starmap_id, edge_id))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
+        let sid = starmap_id.to_string();
+        let eid = edge_id.to_string();
+        let raw = self
+            .delete_starmap_edge_json(starmap_id, edge_id)
+            .to_string();
+        Self::log_starmap_envelope("delete_starmap_edge", &sid, &eid, &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
         self.with_app_mut(|app| app.save_starmap_layout_json(starmap_id, layout_json))
@@ -403,6 +490,51 @@ impl StarMapBackend {
     }
     fn save_starmap_layout(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject {
         self.with_app_mut(|app| app.save_starmap_layout(starmap_id, layout_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn add_starmap_hyperlink(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_json: QString,
+    ) -> QJsonObject {
+        self.with_app_mut(|app| app.add_starmap_hyperlink(starmap_id, hyperlink_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn update_starmap_hyperlink(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_id: QString,
+        patch_json: QString,
+    ) -> QJsonObject {
+        self.with_app_mut(|app| app.update_starmap_hyperlink(starmap_id, hyperlink_id, patch_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn delete_starmap_hyperlink(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_id: QString,
+    ) -> QJsonObject {
+        self.with_app_mut(|app| app.delete_starmap_hyperlink(starmap_id, hyperlink_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn list_starmap_hyperlinks(&self, starmap_id: QString) -> QJsonObject {
+        self.with_app(|app| app.list_starmap_hyperlinks(starmap_id))
             .unwrap_or_else(|_| {
                 crate::backend::json_utils::qjson_object_from_json(
                     &crate::backend::json_utils::borrow_conflict_error_json(),
@@ -520,6 +652,12 @@ impl AppBackend {
             ))
             .into()
         }
+    }
+
+    // AppBackend::delete_starmap
+    pub(crate) fn delete_starmap(&mut self, starmap_id: QString) -> QJsonObject {
+        let raw = self.delete_starmap_json(starmap_id).to_string();
+        qjson_object_from_json(&raw)
     }
 
     // AppBackend::get_starmap_graph_json
@@ -830,5 +968,117 @@ impl AppBackend {
             ))
             .into()
         }
+    }
+
+    // AppBackend::add_starmap_hyperlink_json
+    pub(crate) fn add_starmap_hyperlink_json(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_json: QString,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let hj = hyperlink_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::add_starmap_hyperlink(&core, &sid, &hj).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::add_starmap_hyperlink
+    pub(crate) fn add_starmap_hyperlink(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .add_starmap_hyperlink_json(starmap_id, hyperlink_json)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
+    // AppBackend::update_starmap_hyperlink_json
+    pub(crate) fn update_starmap_hyperlink_json(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_id: QString,
+        patch_json: QString,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let hid = hyperlink_id.to_string();
+        let pj = patch_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::update_starmap_hyperlink(&core, &sid, &hid, &pj).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::update_starmap_hyperlink
+    pub(crate) fn update_starmap_hyperlink(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_id: QString,
+        patch_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .update_starmap_hyperlink_json(starmap_id, hyperlink_id, patch_json)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
+    // AppBackend::delete_starmap_hyperlink_json
+    pub(crate) fn delete_starmap_hyperlink_json(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_id: QString,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let hid = hyperlink_id.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::delete_starmap_hyperlink(&core, &sid, &hid).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::delete_starmap_hyperlink
+    pub(crate) fn delete_starmap_hyperlink(
+        &mut self,
+        starmap_id: QString,
+        hyperlink_id: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .delete_starmap_hyperlink_json(starmap_id, hyperlink_id)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
+    // AppBackend::list_starmap_hyperlinks_json
+    pub(crate) fn list_starmap_hyperlinks_json(&self, starmap_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::list_starmap_hyperlinks(&core, &sid).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::list_starmap_hyperlinks
+    pub(crate) fn list_starmap_hyperlinks(&self, starmap_id: QString) -> QJsonObject {
+        let raw = self.list_starmap_hyperlinks_json(starmap_id).to_string();
+        qjson_object_from_json(&raw)
     }
 }

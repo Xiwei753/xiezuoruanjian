@@ -142,6 +142,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
+    // Issue #790 评论 5875963057: 全局顶栏公共入口组件
+    "qml/GlobalTopActions.qml" as "GlobalTopActions.qml",
     "qml/AppController.qml" as "AppController.qml",
     "qml/ProjectController.qml" as "ProjectController.qml",
     "qml/StarMapController.qml" as "StarMapController.qml",

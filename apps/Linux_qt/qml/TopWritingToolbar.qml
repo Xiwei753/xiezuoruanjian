@@ -22,6 +22,7 @@ Rectangle {
     property bool firstLineIndent: false
     property string saveStatus: ""
     property string currentProjectId: ""
+    property var appState: ({})
     readonly property int minFontSize: 10
     readonly property int maxFontSize: 72
 
@@ -32,6 +33,9 @@ Rectangle {
     signal linkToStarMap()
     signal openStats()
     signal openSettings()
+    // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
+    signal requestSync()
+    signal requestSearch()
 
     function syncFontSizeInput() {
         if (fontSizeInput) {
@@ -314,40 +318,6 @@ Rectangle {
             }
         }
 
-        // Settings button
-        Rectangle {
-            visible: true
-            width: settingsRow.implicitWidth + dt.sp12
-            height: 32
-            radius: dt.radiusPill
-            color: settingsHover.containsMouse ? dt.surfaceVariant : "transparent"
-            border.color: dt.border
-            border.width: 1
-
-            Row {
-                id: settingsRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: qsTr("设置")
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-            }
-
-            MouseArea {
-                id: settingsHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.openSettings()
-            }
-        }
-
-        Item { Layout.preferredWidth: dt.sp8 }
-
         // Save status
         AppText {
             dt: root.dt
@@ -356,6 +326,15 @@ Rectangle {
             font.pointSize: dt.captionPt
             font.family: dt.fontFamily
             visible: text !== ""
+        }
+
+        // Issue #790 评论 5875963057: 右端公共入口收口到 GlobalTopActions
+        GlobalTopActions {
+            dt: root.dt
+            appState: root.appState
+            onRequestSync: root.requestSync()
+            onRequestSearch: root.requestSearch()
+            onOpenSettings: root.openSettings()
         }
     }
 

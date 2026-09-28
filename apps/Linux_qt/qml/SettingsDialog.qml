@@ -44,6 +44,8 @@ Dialog {
     signal settingsChanged()
     // Issue #762 评论 5826175490 第 4 点：转发 SyncPage 的 openConflict 信号给主窗口
     signal openConflict(string projectId, string path)
+    // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
+    signal switchWorkspaceRequested()
 
     background: Rectangle { color: dt.surface; border.color: dt.border; border.width: 1; radius: dt.radiusXl }
     header: null
@@ -415,6 +417,14 @@ Dialog {
                     clickable: true
                     onClicked: root.setSwitchValue(autoSave, "setting_auto_save_enabled", !autoSave.checked)
                     ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoSave, "setting_auto_save_enabled", v) } }
+                }
+                // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("切换工作区")
+                    description: qsTr("切换到另一个工作区目录")
+                    clickable: true
+                    onClicked: root.switchWorkspaceRequested()
                 }
                 AppSlider {
                     id: autoSaveDelay

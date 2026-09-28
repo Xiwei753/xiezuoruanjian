@@ -448,6 +448,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");
     println!("cargo:rerun-if-changed=qml/TopWritingToolbar.qml");
+    // Issue #790 评论 5875963057: 全局顶栏公共入口组件
+    println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。

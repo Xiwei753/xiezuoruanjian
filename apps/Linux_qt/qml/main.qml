@@ -552,11 +552,25 @@ ApplicationWindow {
                 starmapBackendRef: starmapBackend
                 starmapId: appController.starmapId
                 starmapTitle: appController.starmapTitle
+                appState: window.appState
                 onBackClicked: {
                     appController.openHub();
                 }
                 onEnterStarmapRequested: function(smId, smTitle) {
                     appController.openStarmap(smId, smTitle);
+                }
+                // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索/设置入口
+                onRequestSync: {
+                    if (!window.preSyncBarrier()) return;
+                    if (syncBackend) {
+                        syncBackend.perform_sync();
+                    }
+                }
+                onRequestSearch: {
+                    window.debugLog("search", "request_search", "");
+                }
+                onOpenSettings: {
+                    window.openSettingsDialog();
                 }
             }
         }
@@ -617,9 +631,8 @@ ApplicationWindow {
                     }
                 }
 
-                onSwitchWorkspace: {
-                    window.debugLog("workspace", "switch_workspace_clicked", "");
-                    appController.switchWorkspace();
+                onRequestSearch: {
+                    window.debugLog("search", "request_search", "");
                 }
             }
         }
@@ -661,6 +674,18 @@ ApplicationWindow {
 
                 onOpenSettings: {
                     window.openSettingsDialog();
+                }
+
+                // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
+                onRequestSync: {
+                    if (!window.preSyncBarrier()) return;
+                    if (syncBackend) {
+                        syncBackend.perform_sync();
+                    }
+                }
+                onRequestSearch: {
+                    // 全局搜索正式 UI 继续接 #477，搜索页还没接完时保留入口
+                    window.debugLog("search", "request_search", "");
                 }
 
 
@@ -869,6 +894,15 @@ ApplicationWindow {
             // 不要求这一轮同步先结束。
             onOpenConflict: function(projectId, path) {
                 window.openConflictInProject(projectId, path)
+            }
+            // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
+            onSwitchWorkspaceRequested: {
+                var dialog = settingsDialogLoader.item
+                if (dialog) {
+                    dialog.flushSave()
+                    dialog.close()
+                }
+                appController.switchWorkspace();
             }
         }
     }
