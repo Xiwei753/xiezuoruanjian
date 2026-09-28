@@ -23,9 +23,14 @@ Item {
     property string starmapTitle: qsTr("星图")
     required property var dt
     property var starmapBackendRef: null
+    // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索/设置入口
+    property var appState: ({})
 
     signal backClicked()
     signal enterStarmapRequested(string starmapId, string title)
+    signal requestSync()
+    signal requestSearch()
+    signal openSettings()
 
     Rectangle {
         anchors.fill: parent
@@ -68,43 +73,13 @@ Item {
 
                     Item { Layout.fillWidth: true }
 
-                    AppButton {
+                    // Issue #790 评论 5875963057: 右侧公共入口收口到 GlobalTopActions
+                    GlobalTopActions {
                         dt: root.dt
-                        variant: "primary"
-                        text: qsTr("+ 新建节点")
-                        onClicked: canvas.createNodeAtCenter()
-                    }
-
-                    AppButton {
-                        dt: root.dt
-                        variant: "secondary"
-                        text: qsTr("自动布局")
-                        onClicked: canvas.autoLayout()
-                    }
-
-                    AppButton {
-                        dt: root.dt
-                        variant: "secondary"
-                        text: qsTr("放大")
-                        onClicked: canvas.zoomLevel = Math.min(2.5, canvas.zoomLevel + 0.2)
-                    }
-
-                    AppButton {
-                        dt: root.dt
-                        variant: "secondary"
-                        text: qsTr("缩小")
-                        onClicked: canvas.zoomLevel = Math.max(0.35, canvas.zoomLevel - 0.2)
-                    }
-
-                    AppButton {
-                        dt: root.dt
-                        variant: "secondary"
-                        text: qsTr("重置视图")
-                        onClicked: {
-                            canvas.panX = 0
-                            canvas.panY = 0
-                            canvas.zoomLevel = 1.0
-                        }
+                        appState: root.appState
+                        onRequestSync: root.requestSync()
+                        onRequestSearch: root.requestSearch()
+                        onOpenSettings: root.openSettings()
                     }
                 }
             }

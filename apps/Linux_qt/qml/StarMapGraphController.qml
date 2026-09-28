@@ -111,7 +111,7 @@ QtObject {
         var nodeIds = [];
         for (var i = 0; i < nodesModel.length; i++) nodeIds.push(nodesModel[i].id);
         var existingJson = layoutData ? JSON.stringify(layoutData) : "{}";
-        var res = normalizeBackendResult(starmapBackendRef.calculate_grid_layout_json(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
+        var res = normalizeBackendResult(starmapBackendRef.calculate_grid_layout(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
         if (res.success && res.data && res.data.nodes) {
             var layoutNodes = res.data.nodes;
             for (var j = 0; j < nodesModel.length; j++) {
@@ -159,7 +159,7 @@ QtObject {
             var n = nodesModel[i];
             layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
         }
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes_json(JSON.stringify(layoutNodes), wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes(JSON.stringify(layoutNodes), wx, wy), "");
         if (res.success && res.data) {
             return getNode(res.data);
         }
@@ -211,7 +211,7 @@ QtObject {
             loadGraph();
             selectNode(res.data.id);
         } else {
-            setError(qsTr("创建节点失败"));
+            setError(res.message || qsTr("创建节点失败"));
         }
     }
 
@@ -222,7 +222,7 @@ QtObject {
             clearError();
             loadGraph();
         } else {
-            setError(qsTr("创建连线失败"));
+            setError(res.message || qsTr("创建连线失败"));
         }
     }
 
@@ -253,7 +253,7 @@ QtObject {
                 }
             }
         } else {
-            setError(qsTr("更新节点失败"));
+            setError(res.message || qsTr("更新节点失败"));
         }
     }
 
@@ -265,7 +265,7 @@ QtObject {
             loadGraph();
             clearSelection();
         } else {
-            setError(qsTr("删除节点失败"));
+            setError(res.message || qsTr("删除节点失败"));
         }
     }
 
@@ -284,7 +284,7 @@ QtObject {
                 }
             }
         } else {
-            setError(qsTr("更新连线失败"));
+            setError(res.message || qsTr("更新连线失败"));
         }
     }
 
@@ -296,7 +296,7 @@ QtObject {
             loadGraph();
             clearSelection();
         } else {
-            setError(qsTr("删除连线失败"));
+            setError(res.message || qsTr("删除连线失败"));
         }
     }
 
@@ -307,7 +307,7 @@ QtObject {
             var n = nodesModel[j];
             nodePos.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
         }
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders_json(starmapId, JSON.stringify(nodePos)), "");
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(starmapId, JSON.stringify(nodePos)), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }
@@ -317,7 +317,7 @@ QtObject {
         if (!ensureBackend()) return null;
         if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders();
         if (!edgeRenders || edgeRenders.length === 0) return null;
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders_json(JSON.stringify(edgeRenders), wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy), "");
         if (res.success && res.data) {
             for (var i = 0; i < edgesModel.length; i++) {
                 if (edgesModel[i].id === res.data) return edgesModel[i];
@@ -333,6 +333,30 @@ QtObject {
         if (path.target.type !== "node") return null;
         if (path.segments && path.segments.length > 0) return null;
         return path.target.nodeId || null;
+    }
+
+    // Issue #790 评论 5875963057: 添加超链接（Core 正式 hyperlink API）
+    function addHyperlink(nodeId, url, label) {
+        if (!ensureBackend()) return;
+        var source = {
+            starmapId: starmapId,
+            segments: [],
+            target: { type: "node", nodeId: nodeId }
+        };
+        var hl = {
+            hyperlinkId: "",  // Core 生成
+            source: source,
+            targetUri: url,
+            label: label || null,
+            createdAt: 0,
+            updatedAt: 0
+        };
+        var res = normalizeBackendResult(starmapBackendRef.add_starmap_hyperlink(starmapId, JSON.stringify(hl)), qsTr("添加超链接失败"));
+        if (res.success) {
+            clearError();
+        } else {
+            setError(res.message || qsTr("添加超链接失败"));
+        }
     }
 
     function invalidateEdgeRenders() { edgeRenders = []; }

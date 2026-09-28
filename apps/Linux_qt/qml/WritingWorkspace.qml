@@ -87,6 +87,9 @@ Rectangle {
 
     signal backToProjects()
     signal openSettings()
+    // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
+    signal requestSync()
+    signal requestSearch()
     // Issue #770 评论 5842877986: 作品切到位后发出，main.qml 据此消费
     // pendingConflictPath（projectId 匹配才消费），不靠猜 Loader 是否已存在。
     signal projectReady()
@@ -701,6 +704,7 @@ Rectangle {
                 currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                 firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
                 saveStatus: editorController.saveStatus
+                appState: root.appState
                 onFontSizeChanged: function(size) {
                     if (settingsBackend) {
                         settingsBackend.setting_font_size = size;
@@ -723,6 +727,8 @@ Rectangle {
                 onLinkToStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
                 onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
                 onOpenSettings: root.openSettings()
+                onRequestSync: root.requestSync()
+                onRequestSearch: root.requestSearch()
             }
 
             // Editor Container Area

@@ -32,8 +32,8 @@ Rectangle {
     signal createProject()
     signal openSettings()
     signal requestSync()
+    signal requestSearch()
 
-    signal switchWorkspace()
     signal openStarmapWorkspace(string smId, string smTitle)
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
@@ -118,122 +118,13 @@ Rectangle {
 
                 Item { Layout.fillWidth: true }
 
-                // Right actions — enlarged buttons
-                Row {
-                    spacing: dt.sp8
-                    Layout.alignment: Qt.AlignVCenter
-
-                    // Sync status indicator
-                    Rectangle {
-                        width: syncRow.implicitWidth + dt.sp16
-                        height: 40
-                        radius: dt.radiusPill
-                        color: syncHover.containsMouse ? dt.surfaceVariant : "transparent"
-                        visible: root.appState && root.appState.sync && root.appState.sync.status !== "not_configured" && root.appState.sync.status !== "no_workspace"
-
-                        Row {
-                            id: syncRow
-                            anchors.centerIn: parent
-                            spacing: dt.sp6
-
-                            Rectangle {
-                                width: 8; height: 8; radius: 4
-                                color: {
-                                    var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                    if (s === "success") return dt.success;
-                                    if (s === "syncing") return dt.warning;
-                                    if (s === "error" || s === "conflict" || s === "partial_conflict") return dt.error;
-                                    return dt.textMuted;
-                                }
-                                Layout.alignment: Qt.AlignVCenter
-                            }
-
-                             AppText {
-                                 dt: root.dt
-                                  text: {
-                                      var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                      if (s === "success") return qsTr("已同步");
-                                      if (s === "syncing") return qsTr("同步中");
-                                      if (s === "error") return qsTr("同步失败");
-                                      if (s === "conflict") return qsTr("同步冲突");
-                                      if (s === "partial_conflict") return qsTr("同步冲突");
-                                      // 已配置但无特定状态时显示"同步"
-                                      return qsTr("同步");
-                                  }
-                                  color: dt.onSurfaceVariant
-                                  font.pointSize: dt.captionPt
-                                  font.family: dt.fontFamily
-                                  Layout.alignment: Qt.AlignVCenter
-                                  visible: root.width > 700
-                             }
-                        }
-
-                        MouseArea {
-                            id: syncHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root.requestSync();
-                            }
-                        }
-                    }
-
-                    // Settings button
-                    Rectangle {
-                        width: settingsText.implicitWidth + 24
-                        height: 40
-                        radius: dt.radiusPill
-                        color: settingsHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                        AppText {
-                            id: settingsText
-                            dt: root.dt
-                            anchors.centerIn: parent
-                            text: qsTr("设置")
-                            color: dt.onSurfaceVariant
-                            font.pointSize: dt.captionPt
-                        }
-
-                        MouseArea {
-                            id: settingsHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.openSettings()
-                        }
-                    }
-
-                    // Workspace switch
-                    Rectangle {
-                        width: switchRow.implicitWidth + dt.sp16
-                        height: 40
-                        radius: dt.radiusPill
-                        color: switchHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                        Row {
-                            id: switchRow
-                            anchors.centerIn: parent
-                            spacing: dt.sp6
-                            AppText {
-                                dt: root.dt
-                                text: qsTr("切换工作区")
-                                color: dt.onSurfaceVariant
-                                font.pointSize: dt.captionPt
-                                font.family: dt.fontFamily
-                                Layout.alignment: Qt.AlignVCenter
-                                visible: true
-                            }
-                        }
-
-                        MouseArea {
-                            id: switchHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.switchWorkspace()
-                        }
-                    }
+                // Right actions — 收口到 GlobalTopActions（同步 / 搜索 / 设置）
+                GlobalTopActions {
+                    dt: root.dt
+                    appState: root.appState
+                    onRequestSync: root.requestSync()
+                    onRequestSearch: root.requestSearch()
+                    onOpenSettings: root.openSettings()
                 }
             }
         }

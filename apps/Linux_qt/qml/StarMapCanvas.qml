@@ -463,7 +463,7 @@ Item {
     AppText {
         dt: canvasArea.dt
         anchors.centerIn: parent
-        text: qsTr("还没有节点，点击新增节点开始构建星图")
+        text: qsTr("右键空白处新建节点或子星图")
         color: _textSecondary
         font.pointSize: dt.fontLgPt
         visible: nodesModel.length === 0
@@ -529,10 +529,63 @@ Item {
         graphController.clearSelection()
     }
 
-    function createNodeAtCenter() {
-        var wx = (width/2 - panX) / zoomLevel
-        var wy = (height/2 - panY) / zoomLevel
-        graphController.createNode(wx, wy)
+    // Issue #790 评论 5875963057: 新建子星图（右键空白处）
+    function createSubStarmapAt(wx, wy) {
+        if (!starmapBackendRef) {
+            graphController.setError(qsTr("星图后端未初始化"))
+            return
+        }
+        // 1. 创建目标星图（QJsonObject 版，返回 {success, data:{id,...}}）
+        var createRes = graphController.normalizeBackendResult(
+            starmapBackendRef.create_starmap(qsTr("子星图"), "", ""),
+            qsTr("创建子星图失败")
+        )
+        if (!createRes.success) {
+            graphController.setError(createRes.message || qsTr("创建子星图失败"))
+            return
+        }
+        var targetStarmapId = createRes.data && createRes.data.id ? createRes.data.id : ""
+        if (!targetStarmapId) {
+            graphController.setError(qsTr("创建子星图失败"))
+            return
+        }
+        // 2. 在当前星图创建入口节点
+        var nodeRes = graphController.normalizeBackendResult(
+            starmapBackendRef.create_starmap_node(starmapId, qsTr("入口节点"), "Note", wx, wy),
+            qsTr("创建入口节点失败")
+        )
+        if (!nodeRes.success) {
+            // 回滚：删掉刚创建的目标星图，不留孤儿
+            starmapBackendRef.delete_starmap(targetStarmapId)
+            graphController.setError(nodeRes.message || qsTr("创建入口节点失败"))
+            return
+        }
+        var nodeId = nodeRes.data && nodeRes.data.id ? nodeRes.data.id : ""
+        if (!nodeId) {
+            starmapBackendRef.delete_starmap(targetStarmapId)
+            graphController.setError(qsTr("创建入口节点失败"))
+            return
+        }
+        // 3. 写 portal，指向目标星图
+        var portalPatch = { portal: { destinationStarmapId: targetStarmapId, destinationTarget: null } }
+        var updateRes = graphController.normalizeBackendResult(
+            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(portalPatch)),
+            qsTr("写入子星图入口失败")
+        )
+        if (!updateRes.success) {
+            // 回滚：删掉刚创建的目标星图
+            starmapBackendRef.delete_starmap(targetStarmapId)
+            graphController.setError(updateRes.message || qsTr("写入子星图入口失败"))
+            return
+        }
+        // 4. 成功，刷新
+        graphController.clearError()
+        graphController.loadGraph()
+    }
+
+    // Issue #790 评论 5875963057: 超链接转发给 graphController
+    function addHyperlink(nodeId, url, label) {
+        graphController.addHyperlink(nodeId, url, label)
     }
 
     function createEdge(fromId, toId) {
@@ -599,6 +652,25 @@ Item {
             }
             onTriggered: createNodeAtWorld(contextMenuWorldX, contextMenuWorldY)
         }
+
+        MenuItem {
+            id: bgMenuItem2
+            text: qsTr("新建子星图")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: bgMenuItem2.text
+                color: bgMenuItem2.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                font.bold: true
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: bgMenuItem2.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: createSubStarmapAt(contextMenuWorldX, contextMenuWorldY)
+        }
     }
 
     Menu {
@@ -613,30 +685,32 @@ Item {
         }
 
         MenuItem {
-            id: nodeMenuItemRename
-            text: qsTr("重命名")
+            id: nodeMenuItemEdit
+            text: qsTr("编辑")
             contentItem: AppText {
                 dt: canvasArea.dt
-                text: nodeMenuItemRename.text
-                color: nodeMenuItemRename.hovered ? _accent : _textPrimary
+                text: nodeMenuItemEdit.text
+                color: nodeMenuItemEdit.hovered ? _accent : _textPrimary
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: nodeMenuItemRename.hovered ? _accentSoft : "transparent"
+                color: nodeMenuItemEdit.hovered ? _accentSoft : "transparent"
                 radius: _radiusXs
             }
             onTriggered: {
+                // Issue #790 评论 5875963057: 选中节点并打开/聚焦 Inspector
+                // （Inspector 已在 StarMapWorkspace 中，选中节点后自动显示）
                 if (selectedNodeForMenu) {
-                    renameDialog.open("node", selectedNodeForMenu.id, selectedNodeForMenu.title)
+                    graphController.selectNode(selectedNodeForMenu.id)
                 }
             }
         }
 
         MenuItem {
             id: nodeMenuItemMove
-            text: qsTr("移动节点")
+            text: qsTr("移动")
             contentItem: AppText {
                 dt: canvasArea.dt
                 text: nodeMenuItemMove.text
@@ -658,8 +732,30 @@ Item {
         }
 
         MenuItem {
+            id: nodeMenuItemHyperlink
+            text: qsTr("超链接")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: nodeMenuItemHyperlink.text
+                color: nodeMenuItemHyperlink.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: nodeMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                if (selectedNodeForMenu) {
+                    hyperlinkDialog.open(selectedNodeForMenu.id)
+                }
+            }
+        }
+
+        MenuItem {
             id: nodeMenuItemDelete
-            text: qsTr("删除节点")
+            text: qsTr("删除")
             contentItem: AppText {
                 dt: canvasArea.dt
                 text: nodeMenuItemDelete.text
@@ -852,6 +948,142 @@ Item {
                 updateNodeFromInspector(targetId, { title: renameInput.text })
             } else if (targetType === "edge") {
                 updateEdgeFromInspector(targetId, { label: renameInput.text })
+            }
+            close()
+        }
+    }
+
+    // Issue #790 评论 5875963057: 超链接编辑 Dialog
+    Rectangle {
+        id: hyperlinkDialog
+        anchors.fill: parent
+        color: _scrim
+        visible: false
+        z: 9999
+
+        property string targetNodeId: ""
+
+        // Prevent mouse clicks from propagating to canvas
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+            width: 340
+            height: 200
+            color: _card
+            border.color: _border
+            border.width: 1.5
+            radius: _dialogRadius
+            anchors.centerIn: parent
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 12
+
+                AppText {
+                    dt: canvasArea.dt
+                    text: qsTr("添加超链接")
+                    font.pointSize: dt.fontLgPt
+                    font.bold: true
+                    color: _textPrimary
+                }
+
+                TextField {
+                    id: hyperlinkUrlInput
+                    Layout.fillWidth: true
+                    height: 36
+                    color: _textPrimary
+                    font.pointSize: dt.bodyPt
+                    placeholderText: qsTr("URL")
+                    text: ""
+
+                    background: Rectangle {
+                        color: _surfaceContainer
+                        border.color: hyperlinkUrlInput.activeFocus ? _accent : _border
+                        border.width: 1.5
+                        radius: _radiusXs
+                    }
+
+                    Keys.onReturnPressed: hyperlinkDialog.confirm()
+                    Keys.onEscapePressed: hyperlinkDialog.close()
+                }
+
+                TextField {
+                    id: hyperlinkLabelInput
+                    Layout.fillWidth: true
+                    height: 36
+                    color: _textPrimary
+                    font.pointSize: dt.bodyPt
+                    placeholderText: qsTr("标签（可选）")
+                    text: ""
+
+                    background: Rectangle {
+                        color: _surfaceContainer
+                        border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
+                        border.width: 1.5
+                        radius: _radiusXs
+                    }
+
+                    Keys.onReturnPressed: hyperlinkDialog.confirm()
+                    Keys.onEscapePressed: hyperlinkDialog.close()
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignRight
+                    spacing: 12
+
+                    Button {
+                        id: hyperlinkCancelBtn
+                        text: qsTr("取消")
+                        onClicked: hyperlinkDialog.close()
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: hyperlinkCancelBtn.text
+                            color: _textSecondary
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: hyperlinkCancelBtn.hovered ? _surfaceContainer : "transparent"
+                            border.color: _border
+                            radius: _radiusXs
+                        }
+                    }
+
+                    Button {
+                        id: hyperlinkConfirmBtn
+                        text: qsTr("确定")
+                        onClicked: hyperlinkDialog.confirm()
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: hyperlinkConfirmBtn.text
+                            color: _onPrimary
+                            font.bold: true
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: hyperlinkConfirmBtn.hovered ? _accentHover : _accent
+                            radius: _radiusXs
+                        }
+                    }
+                }
+            }
+        }
+
+        function open(nodeId) {
+            targetNodeId = nodeId
+            hyperlinkUrlInput.text = ""
+            hyperlinkLabelInput.text = ""
+            visible = true
+            hyperlinkUrlInput.forceActiveFocus()
+        }
+
+        function close() {
+            visible = false
+        }
+
+        function confirm() {
+            if (targetNodeId && hyperlinkUrlInput.text.trim().length > 0) {
+                addHyperlink(targetNodeId, hyperlinkUrlInput.text.trim(), hyperlinkLabelInput.text.trim())
             }
             close()
         }
