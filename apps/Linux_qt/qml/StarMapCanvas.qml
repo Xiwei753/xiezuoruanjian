@@ -3,10 +3,11 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：星图可视化渲染、平移/缩放交互、节点拖拽、连线模式、右键菜单
+// 职责：星图可视化渲染、平移/缩放交互、节点选中/编辑/连线/移动、右键菜单
 // 约束：
 //   - 纯渲染和交互层，业务逻辑委托给 StarMapGraphController
-//   - 节点/边增删改通过 signal 传递给 StarMapGraphController
+//   - 鼠标行为由 pointerMode 状态机明确驱动，不再用单一 MouseArea 猜行为
+//   - 节点只上抛点击类信号，决定权交回 Canvas
 //   - 使用 Canvas 进行自定义绘制
 // =============================================================================
 
@@ -49,11 +50,24 @@ Item {
     property real panY: 0
     property real zoomLevel: 1.0
 
-    // Interaction states
-    property bool isConnectingMode: false
-    property string connectingFromNodeId: ""
-    property real mouseWorldX: 0
-    property real mouseWorldY: 0
+    // ---------------------------------------------------------------------------
+    // 鼠标状态机：idle / pan / connect / move
+    //   idle    — 无活跃拖拽手势
+    //   pan     — 长按空白后拖动，平移画布
+    //   connect — 长按节点后拖动，拉线预览
+    //   move    — 节点右键菜单"移动节点"后左键拖动，仅移动指定节点
+    // ---------------------------------------------------------------------------
+    property string pointerMode: "idle"
+    property string pressedNodeId: ""
+    property string connectFromNodeId: ""
+    property real connectMouseX: 0
+    property real connectMouseY: 0
+
+    // 上下文菜单辅助状态
+    property var selectedNodeForMenu: null
+    property var selectedEdgeForMenu: null
+    property real contextMenuWorldX: 0
+    property real contextMenuWorldY: 0
 
     // Signals
     signal nodeSelected(var node)
@@ -63,16 +77,6 @@ Item {
     // Model data
     property var nodesModel: []
     property var edgesModel: []
-
-    // New right-click gesture & context menu properties
-    property real rightPressStartX: 0
-    property real rightPressStartY: 0
-    property bool isRightDraggingGesture: false
-    property string gestureStartNodeId: ""
-    property var selectedNodeForMenu: null
-    property var selectedEdgeForMenu: null
-    property real contextMenuWorldX: 0
-    property real contextMenuWorldY: 0
 
     StarMapGraphController {
         id: graphController
@@ -124,93 +128,109 @@ Item {
         }
     }
 
-    // Single unified Fullscreen MouseArea for Panning, Zooming, and Edge selection/right-clicks
-    MouseArea {
-        id: canvasMouseArea
+    // ---------------------------------------------------------------------------
+    // 背景交互层：TapHandler 处理点击类，MouseArea 处理 pan 拖动与滚轮
+    // TapHandler 与 MouseArea 共存：Handler 独立收到 tap/longPress 信号
+    // ---------------------------------------------------------------------------
+    Item {
+        id: bgInteractionLayer
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
-        property real lastMouseX: 0
-        property real lastMouseY: 0
+        z: 0
 
-        onPressed: function(mouse) {
-            lastMouseX = mouse.x
-            lastMouseY = mouse.y
-
-            if (mouse.button === Qt.RightButton) {
-                rightPressStartX = mouse.x
-                rightPressStartY = mouse.y
-            }
-        }
-
-        onPositionChanged: function(mouse) {
-            mouseWorldX = (mouse.x - panX) / zoomLevel
-            mouseWorldY = (mouse.y - panY) / zoomLevel
-
-            // Pan canvas if left button or middle button is dragged
-            if (pressedButtons & Qt.MiddleButton || (pressedButtons & Qt.LeftButton && !isConnectingMode)) {
-                var dx = mouse.x - lastMouseX
-                var dy = mouse.y - lastMouseY
-                panX += dx
-                panY += dy
-                lastMouseX = mouse.x
-                lastMouseY = mouse.y
-            }
-        }
-
-        onReleased: function(mouse) {
-            if (isConnectingMode) return;
-
-            var dx = mouse.x - rightPressStartX
-            var dy = mouse.y - rightPressStartY
-            var dist = Math.sqrt(dx * dx + dy * dy)
-
-            // We only process clicks (drag distance < 8px)
-            if (dist < 8) {
-                var mx = (mouse.x - panX) / zoomLevel
-                var my = (mouse.y - panY) / zoomLevel
-
-                // 1. Check if clicking on/near an edge (via Core hit-test)
+        // 左键单击：边选中或清选区
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            onSingleTapped: function(eventPoint) {
+                var mx = (eventPoint.position.x - panX) / zoomLevel
+                var my = (eventPoint.position.y - panY) / zoomLevel
                 var clickedEdge = graphController.hitTestEdge(mx, my)
-
                 if (clickedEdge) {
-                    if (mouse.button === Qt.RightButton) {
-                        selectedEdgeForMenu = clickedEdge
-                        edgeContextMenu.popup(mouse.x, mouse.y)
-                    } else if (mouse.button === Qt.LeftButton) {
-                        graphController.selectEdge(clickedEdge.id)
-                    }
+                    graphController.selectEdge(clickedEdge.id)
                 } else {
-                    // Clicked on empty background
-                    if (mouse.button === Qt.RightButton) {
-                        contextMenuWorldX = mx
-                        contextMenuWorldY = my
-                        bgContextMenu.popup(mouse.x, mouse.y)
-                    } else if (mouse.button === Qt.LeftButton) {
-                        clearSelection()
-                    }
+                    clearSelection()
+                }
+            }
+            // 左键长按空白：进入 pan 模式
+            onLongPressed: function(eventPoint) {
+                pointerMode = "pan"
+                bgDragArea.lastX = eventPoint.position.x
+                bgDragArea.lastY = eventPoint.position.y
+            }
+        }
+
+        // 右键单击：边菜单或画布菜单
+        TapHandler {
+            acceptedButtons: Qt.RightButton
+            onSingleTapped: function(eventPoint) {
+                var mx = (eventPoint.position.x - panX) / zoomLevel
+                var my = (eventPoint.position.y - panY) / zoomLevel
+                var clickedEdge = graphController.hitTestEdge(mx, my)
+                if (clickedEdge) {
+                    selectedEdgeForMenu = clickedEdge
+                    edgeContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
+                } else {
+                    contextMenuWorldX = mx
+                    contextMenuWorldY = my
+                    bgContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
                 }
             }
         }
 
-        onWheel: function(wheel) {
-            var oldZoom = zoomLevel
-            var delta = wheel.angleDelta.y / 120
-            zoomLevel += delta * 0.1
-            zoomLevel = Math.max(0.35, Math.min(2.5, zoomLevel))
+        // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
+        MouseArea {
+            id: bgDragArea
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            hoverEnabled: true
 
-            var mx = wheel.x
-            var my = wheel.y
-            panX = mx - (mx - panX) * (zoomLevel / oldZoom)
-            panY = my - (my - panY) * (zoomLevel / oldZoom)
+            property real lastX: 0
+            property real lastY: 0
+
+            onPressed: function(mouse) {
+                lastX = mouse.x
+                lastY = mouse.y
+                // 中键直接进入 pan（不依赖长按）
+                if (mouse.button === Qt.MiddleButton) {
+                    pointerMode = "pan"
+                }
+            }
+
+            onPositionChanged: function(mouse) {
+                if (pointerMode === "pan") {
+                    var dx = mouse.x - lastX
+                    var dy = mouse.y - lastY
+                    panX += dx
+                    panY += dy
+                    lastX = mouse.x
+                    lastY = mouse.y
+                }
+            }
+
+            onReleased: function(mouse) {
+                if (pointerMode === "pan") {
+                    pointerMode = "idle"
+                }
+            }
+
+            onWheel: function(wheel) {
+                var oldZoom = zoomLevel
+                var delta = wheel.angleDelta.y / 120
+                zoomLevel += delta * 0.1
+                zoomLevel = Math.max(0.35, Math.min(2.5, zoomLevel))
+
+                var mx = wheel.x
+                var my = wheel.y
+                panX = mx - (mx - panX) * (zoomLevel / oldZoom)
+                panY = my - (my - panY) * (zoomLevel / oldZoom)
+            }
         }
     }
-
-
 
     // Edges canvas (now fullscreen, translated/scaled dynamically to prevent panning drifts)
     Canvas {
         id: edgeCanvas
         anchors.fill: parent
+        z: 1
 
         Connections {
             target: canvasArea
@@ -222,13 +242,13 @@ Item {
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
-            
+
             ctx.save()
             ctx.translate(panX, panY)
             ctx.scale(zoomLevel, zoomLevel)
             ctx.lineWidth = 2
 
-            // Draw all edges using Core precomputed render data
+            // Draw all edges using Linux platform render data
             graphController.computeEdgeRenders()
             var renders = graphController.edgeRenders
             for (var i = 0; i < renders.length; i++) {
@@ -271,13 +291,13 @@ Item {
                 }
             }
 
-            // Draw connecting line if in progress
-            if (isConnectingMode && connectingFromNodeId !== "") {
-                var startNode = getNode(connectingFromNodeId)
+            // Draw connecting preview line while in connect mode
+            if (pointerMode === "connect" && connectFromNodeId !== "") {
+                var startNode = getNode(connectFromNodeId)
                 if (startNode) {
                     ctx.beginPath()
                     ctx.moveTo(startNode.x + startNode.width/2, startNode.y + startNode.height/2)
-                    ctx.lineTo(mouseWorldX, mouseWorldY)
+                    ctx.lineTo(connectMouseX, connectMouseY)
                     ctx.strokeStyle = _accent
                     ctx.lineWidth = 2
                     ctx.stroke()
@@ -295,8 +315,7 @@ Item {
         y: panY
         scale: zoomLevel
         transformOrigin: Item.TopLeft
-
-
+        z: 2
 
         Repeater {
             model: nodesModel.length
@@ -315,7 +334,6 @@ Item {
                 // Idle wobble 视觉偏移
                 property real wobbleOffsetX: 0
                 property real wobbleOffsetY: 0
-                property bool isBeingDragged: false
 
                 // 用 index 错开 phase，避免所有节点同步晃
                 SequentialAnimation on wobbleOffsetX {
@@ -349,63 +367,70 @@ Item {
                     edgeCanvas.requestPaint()
                 }
 
-                onPositionChangeFinished: {
-                    isBeingDragged = false
-                    saveLayout()
-                }
-
-                onClicked: {
+                // -------------------------------------------------------------------
+                // 节点上抛信号 → Canvas 状态机决定行为
+                // -------------------------------------------------------------------
+                onSingleClicked: {
                     graphController.selectNode(nodesModel[index].id)
                 }
 
-                onPositionChanged: {
-                    // 拖拽开始时停止 idle wobble
+                onDoubleClicked: {
+                    var nd = nodesModel[index]
+                    selectedNodeForMenu = nd
+                    renameDialog.open("node", nd.id, nd.title)
+                }
+
+                onLongPressed: function(sceneX, sceneY) {
+                    var nd = nodesModel[index]
+                    pointerMode = "connect"
+                    connectFromNodeId = nd.id
+                    // 预览线起点：节点中心（世界坐标）
+                    connectMouseX = nd.x + nd.width / 2
+                    connectMouseY = nd.y + nd.height / 2
                     isBeingDragged = true
+                    edgeCanvas.requestPaint()
                 }
 
-                onRightPressed: function(mouseX, mouseY) {
-                    graphController.selectNode(nodesModel[index].id)
-
-                    rightPressStartX = mouseX
-                    rightPressStartY = mouseY
-                    isRightDraggingGesture = false
-                    gestureStartNodeId = nodeData.id
+                onContextMenuRequested: function(sceneX, sceneY) {
+                    var nd = nodesModel[index]
+                    graphController.selectNode(nd.id)
+                    selectedNodeForMenu = nd
+                    // sceneX/sceneY 是场景坐标，菜单用屏幕坐标
+                    nodeContextMenu.popup(sceneX, sceneY)
                 }
 
-                onRightDragged: function(worldX, worldY) {
-                    var dx = worldX - (nodeData.x + rightPressStartX)
-                    var dy = worldY - (nodeData.y + rightPressStartY)
-                    var dist = Math.sqrt(dx * dx + dy * dy)
-                    if (dist > 8) {
-                        isRightDraggingGesture = true
-                        isConnectingMode = true
-                        connectingFromNodeId = gestureStartNodeId
-                        mouseWorldX = worldX
-                        mouseWorldY = worldY
+                onMoveDelta: function(dx, dy) {
+                    if (pointerMode === "connect" && connectFromNodeId === nodeData.id) {
+                        connectMouseX += dx
+                        connectMouseY += dy
+                        edgeCanvas.requestPaint()
+                    } else if (pointerMode === "move" && pressedNodeId === nodeData.id) {
+                        x += dx
+                        y += dy
+                        isBeingDragged = true
                         edgeCanvas.requestPaint()
                     }
                 }
 
-                onRightReleased: function(worldX, worldY) {
-                    if (isRightDraggingGesture) {
-                        var targetNode = findNodeAt(worldX, worldY)
-                        if (targetNode && targetNode.id !== gestureStartNodeId) {
-                            createEdge(gestureStartNodeId, targetNode.id)
+                onMoveFinished: {
+                    isBeingDragged = false
+                    if (pointerMode === "connect" && connectFromNodeId === nodeData.id) {
+                        var target = findNodeAt(connectMouseX, connectMouseY)
+                        if (target && target.id !== connectFromNodeId) {
+                            createEdge(connectFromNodeId, target.id)
                         }
-                        isConnectingMode = false
-                        connectingFromNodeId = ""
-                        isRightDraggingGesture = false
+                        pointerMode = "idle"
+                        connectFromNodeId = ""
                         edgeCanvas.requestPaint()
-                    } else {
-                        selectedNodeForMenu = nodeData
-                        nodeContextMenu.popup(worldX * zoomLevel + panX, worldY * zoomLevel + panY)
+                    } else if (pointerMode === "move" && pressedNodeId === nodeData.id) {
+                        saveLayout()
+                        pointerMode = "idle"
+                        pressedNodeId = ""
                     }
                 }
             }
         }
     }
-
-
 
     AppText {
         dt: canvasArea.dt
@@ -519,7 +544,7 @@ Item {
     // Context Menus
     Menu {
         id: bgContextMenu
-        
+
         background: Rectangle {
             implicitWidth: 150
             color: _card
@@ -550,7 +575,7 @@ Item {
 
     Menu {
         id: nodeContextMenu
-        
+
         background: Rectangle {
             implicitWidth: 150
             color: _card
@@ -560,18 +585,18 @@ Item {
         }
 
         MenuItem {
-            id: nodeMenuItem1
+            id: nodeMenuItemRename
             text: qsTr("重命名")
             contentItem: AppText {
                 dt: canvasArea.dt
-                text: nodeMenuItem1.text
-                color: nodeMenuItem1.hovered ? _accent : _textPrimary
+                text: nodeMenuItemRename.text
+                color: nodeMenuItemRename.hovered ? _accent : _textPrimary
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: nodeMenuItem1.hovered ? _accentSoft : "transparent"
+                color: nodeMenuItemRename.hovered ? _accentSoft : "transparent"
                 radius: _radiusXs
             }
             onTriggered: {
@@ -582,18 +607,41 @@ Item {
         }
 
         MenuItem {
-            id: nodeMenuItem2
-            text: qsTr("删除节点")
+            id: nodeMenuItemMove
+            text: qsTr("移动节点")
             contentItem: AppText {
                 dt: canvasArea.dt
-                text: nodeMenuItem2.text
-                color: nodeMenuItem2.hovered ? _danger : _textPrimary
+                text: nodeMenuItemMove.text
+                color: nodeMenuItemMove.hovered ? _accent : _textPrimary
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: nodeMenuItem2.hovered ? _dangerContainer : "transparent"
+                color: nodeMenuItemMove.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                if (selectedNodeForMenu) {
+                    pointerMode = "move"
+                    pressedNodeId = selectedNodeForMenu.id
+                }
+            }
+        }
+
+        MenuItem {
+            id: nodeMenuItemDelete
+            text: qsTr("删除节点")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: nodeMenuItemDelete.text
+                color: nodeMenuItemDelete.hovered ? _danger : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: nodeMenuItemDelete.hovered ? _dangerContainer : "transparent"
                 radius: _radiusXs
             }
             onTriggered: {
@@ -606,7 +654,7 @@ Item {
 
     Menu {
         id: edgeContextMenu
-        
+
         background: Rectangle {
             implicitWidth: 150
             color: _card

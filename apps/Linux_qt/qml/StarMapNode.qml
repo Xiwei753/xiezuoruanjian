@@ -3,10 +3,11 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：单个星图节点的可视化渲染、拖拽交互、选中状态展示
+// 职责：单个星图节点的可视化渲染、选中态展示、上抛点击类交互信号
 // 约束：
 //   - 纯 UI 组件，数据通过 property 传入
-//   - 节点位置变化通过 signal 传递给 StarMapCanvas
+//   - 节点只负责展示与上抛信号，不决定"移动还是拉线"——决定权交回 Canvas
+//   - 节点自身不修改 x/y；只有 Canvas 在 move 模式下通过绑定驱动位置
 //   - 使用 DesignTokens 统一样式
 // =============================================================================
 
@@ -34,9 +35,18 @@ Rectangle {
     property string kind: "Note"
     property bool isSelected: false
 
-    signal positionChanged(real newX, real newY)
-    signal positionChangeFinished()
-    signal clicked()
+    // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
+    property bool isBeingDragged: false
+
+    // ---------------------------------------------------------------------------
+    // 对外信号：节点只上抛事件，由 Canvas 决定后续行为
+    // ---------------------------------------------------------------------------
+    signal singleClicked()
+    signal doubleClicked()
+    signal longPressed(real sceneX, real sceneY)
+    signal contextMenuRequested(real sceneX, real sceneY)
+    signal moveDelta(real dx, real dy)
+    signal moveFinished()
 
     radius: _radiusSm
     color: _surfaceContainer
@@ -89,47 +99,54 @@ Rectangle {
         }
     }
 
-    signal rightPressed(real mouseX, real mouseY)
-    signal rightDragged(real worldX, real worldY)
-    signal rightReleased(real worldX, real worldY)
+    // ---------------------------------------------------------------------------
+    // 交互：用 TapHandler 上抛点击类信号，节点不自行决定行为
+    // ---------------------------------------------------------------------------
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        onSingleTapped: root.singleClicked()
+        onDoubleTapped: root.doubleClicked()
+        onLongPressed: function(eventPoint) {
+            root.longPressed(eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+        }
+    }
 
-    MouseArea {
-        id: hoverArea
-        anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
-        
-        property point clickPos: "0,0"
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        onSingleTapped: function(eventPoint) {
+            root.contextMenuRequested(eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+        }
+    }
 
-        onPressed: function(mouse) {
-            if (mouse.button === Qt.RightButton) {
-                root.rightPressed(mouse.x, mouse.y)
-            } else if (mouse.button === Qt.LeftButton) {
-                clickPos = Qt.point(mouse.x, mouse.y)
-                root.clicked()
+    // ---------------------------------------------------------------------------
+    // 拖动跟踪：DragHandler 只上抛原始移动增量，不修改 x/y、不决定行为
+    // Canvas 根据 pointerMode 决定 moveDelta 的含义（connect 预览线 / move 移动节点）
+    // ---------------------------------------------------------------------------
+    DragHandler {
+        id: nodeDragHandler
+        target: null
+        acceptedButtons: Qt.LeftButton
+
+        property real lastTx: 0
+        property real lastTy: 0
+
+        onActiveChanged: {
+            if (active) {
+                lastTx = 0
+                lastTy = 0
+            } else {
+                root.moveFinished()
             }
         }
 
-        onPositionChanged: function(mouse) {
-            if (pressedButtons & Qt.RightButton) {
-                var mapped = mapToItem(root.parent, mouse.x, mouse.y)
-                root.rightDragged(mapped.x, mapped.y)
-            } else if (pressedButtons & Qt.LeftButton) {
-                var dx = mouse.x - clickPos.x
-                var dy = mouse.y - clickPos.y
-                var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-                root.x += dx / zoom
-                root.y += dy / zoom
-                root.positionChanged(root.x, root.y)
-            }
-        }
-
-        onReleased: function(mouse) {
-            if (mouse.button === Qt.RightButton) {
-                var mapped = mapToItem(root.parent, mouse.x, mouse.y)
-                root.rightReleased(mapped.x, mapped.y)
-            } else if (mouse.button === Qt.LeftButton) {
-                root.positionChangeFinished()
-            }
+        onActiveTranslationChanged: {
+            var dx = activeTranslation.x - lastTx
+            var dy = activeTranslation.y - lastTy
+            lastTx = activeTranslation.x
+            lastTy = activeTranslation.y
+            // 转成世界坐标增量（除以父项 scale，container.scale === zoomLevel）
+            var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+            root.moveDelta(dx / zoom, dy / zoom)
         }
     }
 

@@ -307,7 +307,7 @@ pub fn unbind_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
 
 /// 计算边渲染几何（箭头/偏移/标签位置）。
 ///
-/// 几何算法已随 Core 收口归到平台端 `starmap_view::edge_render`。
+/// 几何算法在 Linux 平台端 `starmap_view::edge_render` 实现，Core 不预计算渲染数据。
 /// 输入仍是 QML 传来的 `[{id,x,y,width,height}]`，转成显示层 layout 节点。
 pub fn compute_edge_renders_json(
     api: &WriterCoreApi,

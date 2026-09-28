@@ -70,19 +70,21 @@ QtObject {
     }
 
     function buildModels() {
+        // graph.nodes[].position 是节点位置唯一真相，直接从 graph 派生平台显示模型。
+        // 宽高/圆角是纯显示参数，用默认值（与 starmap_bridge.rs DEFAULT_NODE_* 一致）。
         var newNodes = [];
         var graphNodes = graphData && graphData.nodes ? graphData.nodes : [];
         for (var i = 0; i < graphNodes.length; i++) {
             var gn = graphNodes[i];
-            var ln = getLayoutNode(gn.id);
+            var pos = gn.position || { x: 0, y: 0 };
             newNodes.push({
                 id: gn.id,
                 title: gn.title,
                 kind: gn.kind,
-                x: ln ? ln.x : 0,
-                y: ln ? ln.y : 0,
-                width: ln ? ln.width : 150,
-                height: ln ? ln.height : 60,
+                x: pos.x,
+                y: pos.y,
+                width: 150,
+                height: 60,
                 isSelected: false,
                 payload: gn.payload,
                 tags: gn.tags
@@ -123,23 +125,21 @@ QtObject {
             nodesModelChanged();
             saveLayout();
         } else {
-            var curX = 100;
-            var curY = 100;
-            for (var i2 = 0; i2 < nodesModel.length; i2++) {
-                nodesModel[i2].x = curX;
-                nodesModel[i2].y = curY;
-                curX += 200;
-                if (curX > 800) { curX = 100; curY += 100; }
-            }
-            nodesModelChanged();
-            saveLayout();
+            // 后端失败直接报错，不再用 QML 临时坐标兜底成"成功"
+            setError(qsTr("自动布局失败"));
         }
     }
 
+    // 从 graph.nodes[].position 查节点位置，保持 layout.nodes[].nodeId/x/y 契约兼容。
+    // 不再作为坐标真相源（buildModels 直接从 graph.position 取），仅作辅助查询。
     function getLayoutNode(id) {
-        if (!layoutData || !layoutData.nodes) return null;
-        for (var i = 0; i < layoutData.nodes.length; i++) {
-            if (layoutData.nodes[i].nodeId === id) return layoutData.nodes[i];
+        if (!graphData || !graphData.nodes) return null;
+        for (var i = 0; i < graphData.nodes.length; i++) {
+            var gn = graphData.nodes[i];
+            if (gn.id === id) {
+                var pos = gn.position || { x: 0, y: 0 };
+                return { nodeId: gn.id, x: pos.x, y: pos.y, width: 150, height: 60 };
+            }
         }
         return null;
     }
