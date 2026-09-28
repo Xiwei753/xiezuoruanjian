@@ -17,7 +17,7 @@ fn store_new_has_zero_counts() {
     assert!(!store.is_dirty());
 }
 #[test]
-fn load_full_returns_diagnostics_for_missing_files() {
+fn load_full_errors_for_missing_declared_node() {
     let dir = TempDir::new().unwrap();
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
@@ -48,13 +48,14 @@ fn load_full_returns_diagnostics_for_missing_files() {
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), "test-id");
-    let result = store.load_full().unwrap();
-    assert_eq!(result.loaded_node_count, 0);
-    assert!(!result.diagnostics.is_empty());
-    assert_eq!(result.diagnostics[0].kind, LoadDiagnosticKind::Missing);
+    // fail-closed：GraphMeta 声明 node 但文件缺失 → Err，不能返回残缺图。
+    assert!(
+        store.load_full().is_err(),
+        "load_full must Err when GraphMeta declares a node but its file is missing"
+    );
 }
 #[test]
-fn load_full_returns_diagnostics_for_missing_link() {
+fn load_full_errors_for_missing_declared_link() {
     let dir = TempDir::new().unwrap();
     let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
@@ -85,15 +86,11 @@ fn load_full_returns_diagnostics_for_missing_link() {
     std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), "test-id");
-    let result = store.load_full().unwrap();
-    assert_eq!(result.loaded_link_count, 0);
-    let link_diag: Vec<_> = result
-        .diagnostics
-        .iter()
-        .filter(|d| d.object_type == "link")
-        .collect();
-    assert!(!link_diag.is_empty());
-    assert_eq!(link_diag[0].kind, LoadDiagnosticKind::Missing);
+    // fail-closed：GraphMeta 声明 link 但文件缺失 → Err。
+    assert!(
+        store.load_full().is_err(),
+        "load_full must Err when GraphMeta declares a link but its file is missing"
+    );
 }
 #[test]
 fn load_full_detects_dangling_edge_reference() {
@@ -513,7 +510,8 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
     std::fs::write(&graph_path, &graph_json).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store.load_full().unwrap();
+    // 只加载 GraphMeta 阶段，不加载 objects（load_full 会因声明的 link 文件缺失而 Err）。
+    store.load_phased(LoadPhase::GraphMeta).unwrap();
 
     let result = store.list_links_with_diagnostics().unwrap();
     assert!(
@@ -575,7 +573,7 @@ fn prefetch_only_loads_adjacent_edges() {
     fresh.upsert_node(make_test_node("n3", "Node3"));
     assert_eq!(fresh.nodes.len(), 2, "only loaded 2 selected nodes");
 
-    fresh.prefetch_nearby_objects(&mut vec![]);
+    fresh.prefetch_nearby_objects(&mut vec![]).unwrap();
 
     assert!(
         fresh.nodes.contains_key("n1"),
@@ -862,5 +860,111 @@ fn full_load_keeps_dirty_object_not_in_graph_meta() {
     assert!(
         store.get_node("n_new").is_some(),
         "dirty object should be kept by load_full even if not in GraphMeta.node_ids"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #781 评论 5863487463 复现测试
+// ---------------------------------------------------------------------------
+//
+// 这组测试断言 issue 要求的 fail-closed / 数据完整性行为。
+// 当前代码违反这些要求（load_full 吞错误返回残缺图），
+// 因此这些测试在未修复的代码上会失败，从而证明 bug 存在。
+// 修复后这些测试应当通过。
+
+/// 复现问题 2：load_full 对 GraphMeta 声明的 node 文件缺失必须 Err，不能返回残缺图。
+///
+/// 场景：schema "4" graph.json 声明 node "missing-node"，但对应文件不存在。
+/// 期望：load_full 返回 Err（GraphMeta 声明的对象不允许 None）。
+/// 当前错误行为：load_full 跳过失败对象，返回 Ok 且 loaded_node_count=0（残缺图）。
+#[test]
+fn repro_781_load_full_missing_declared_node_must_error() {
+    let dir = TempDir::new().unwrap();
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
+    std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
+
+    // graph.json 声明 node "missing-node"，但不写对应的 node 文件。
+    let meta = GraphMeta {
+        schema_version: "4".to_string(),
+        starmap_id: "test-id".to_string(),
+        node_ids: vec!["missing-node".to_string()],
+        edge_ids: vec![],
+        embed_instance_ids: vec![],
+        link_ids: vec![],
+        hyperlink_ids: vec![],
+        edge_relation_index: vec![],
+        embed_host_index: vec![],
+        link_relation_index: vec![],
+        hyperlink_relation_index: vec![],
+        node_kind_counts: HashMap::new(),
+        package_revision: 1,
+        updated_at: 0,
+        deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string_pretty(&meta).unwrap();
+    std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
+
+    let mut store = StarMapStore::new(dir.path(), "test-id");
+    let result = store.load_full();
+
+    // 期望：fail-closed 返回 Err（GraphMeta 声明的 node 文件缺失）。
+    // 当前 bug 行为：返回 Ok 且 loaded_node_count=0（残缺图，看起来成功但少对象）。
+    assert!(
+        result.is_err(),
+        "repro_781: load_full must Err when GraphMeta declares a node but its file is missing, \
+         but got Ok (current bug: returns incomplete graph as if successful). result={result:?}"
+    );
+}
+
+/// 复现问题 2（补充）：load_full 对 GraphMeta 声明的 link 文件缺失必须 Err。
+///
+/// 场景：schema "4" graph.json 声明 link "missing-link"，但对应文件不存在。
+/// 期望：load_full 返回 Err。
+/// 当前错误行为：返回 Ok 且 loaded_link_count=0（残缺图）。
+#[test]
+fn repro_781_load_full_missing_declared_link_must_error() {
+    let dir = TempDir::new().unwrap();
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
+    std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
+    std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
+
+    let meta = GraphMeta {
+        schema_version: "4".to_string(),
+        starmap_id: "test-id".to_string(),
+        node_ids: vec![],
+        edge_ids: vec![],
+        embed_instance_ids: vec![],
+        link_ids: vec!["missing-link".to_string()],
+        hyperlink_ids: vec![],
+        edge_relation_index: vec![],
+        embed_host_index: vec![],
+        link_relation_index: vec![],
+        hyperlink_relation_index: vec![],
+        node_kind_counts: HashMap::new(),
+        package_revision: 1,
+        updated_at: 0,
+        deleted_since_last_sync: DeletedSinceLastSync::default(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string_pretty(&meta).unwrap();
+    std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
+
+    let mut store = StarMapStore::new(dir.path(), "test-id");
+    let result = store.load_full();
+
+    // 期望：fail-closed 返回 Err。
+    // 当前 bug 行为：返回 Ok 且 loaded_link_count=0（残缺图）。
+    assert!(
+        result.is_err(),
+        "repro_781: load_full must Err when GraphMeta declares a link but its file is missing, \
+         but got Ok (current bug: returns incomplete graph as if successful). result={result:?}"
     );
 }

@@ -105,15 +105,15 @@ impl StarMapStore {
                     self.current_load_phase = Some(LoadPhase::GraphMeta);
                 }
                 LoadPhase::CurrentObjects => {
-                    self.load_current_objects(&mut diagnostics);
+                    self.load_current_objects(&mut diagnostics)?;
                     self.current_load_phase = Some(LoadPhase::CurrentObjects);
                 }
                 LoadPhase::PrefetchNearbyObjects => {
-                    self.prefetch_nearby_objects(&mut diagnostics);
+                    self.prefetch_nearby_objects(&mut diagnostics)?;
                     self.current_load_phase = Some(LoadPhase::PrefetchNearbyObjects);
                 }
                 LoadPhase::BackgroundFullLoad => {
-                    self.load_remaining_objects(&mut diagnostics);
+                    self.load_remaining_objects(&mut diagnostics)?;
                     self.detect_dangling_references(&mut diagnostics);
                     self.detect_orphan_objects(&mut diagnostics);
                     self.current_load_phase = Some(LoadPhase::BackgroundFullLoad);
@@ -176,51 +176,48 @@ impl StarMapStore {
     pub(in crate::starmap::store) fn load_current_objects(
         &mut self,
         diagnostics: &mut Vec<LoadDiagnostic>,
-    ) {
+    ) -> Result<()> {
         // 布局/视口已退出 Core。CurrentObjects 阶段不再基于视口筛选，
         // 直接加载所有 GraphMeta 声明的对象（与旧 BackgroundFullLoad 行为一致）。
+        // fail-closed：GraphMeta 声明的对象必须全部加载成功，任意失败返回 Err。
         let _ = diagnostics;
         if let Some(meta) = self.graph_meta.clone() {
             for node_id in &meta.node_ids {
                 if self.nodes.contains_key(node_id) {
                     continue;
                 }
-                if let Some(node) = self.try_load_node(node_id) {
-                    self.nodes.insert(node_id.clone(), node);
-                }
+                let node = self.try_load_node(node_id)?;
+                self.nodes.insert(node_id.clone(), node);
             }
             for edge_id in &meta.edge_ids {
                 if self.edges.contains_key(edge_id) {
                     continue;
                 }
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    self.edges.insert(edge_id.clone(), edge);
-                }
+                let edge = self.try_load_edge(edge_id)?;
+                self.edges.insert(edge_id.clone(), edge);
             }
             for embed_id in &meta.embed_instance_ids {
                 if self.embeds.contains_key(embed_id) {
                     continue;
                 }
-                if let Some(embed) = self.try_load_embed(embed_id) {
-                    self.embeds.insert(embed_id.clone(), embed);
-                }
+                let embed = self.try_load_embed(embed_id)?;
+                self.embeds.insert(embed_id.clone(), embed);
             }
             for link_id in &meta.link_ids {
                 if self.links.contains_key(link_id) {
                     continue;
                 }
-                if let Some(link) = self.try_load_link(link_id) {
-                    self.links.insert(link_id.clone(), link);
-                }
+                let link = self.try_load_link(link_id)?;
+                self.links.insert(link_id.clone(), link);
             }
             for hl_id in &meta.hyperlink_ids {
                 if self.hyperlinks.contains_key(hl_id) {
                     continue;
                 }
-                if let Some(hl) = self.try_load_hyperlink(hl_id) {
-                    self.hyperlinks.insert(hl_id.clone(), hl);
-                }
+                let hl = self.try_load_hyperlink(hl_id)?;
+                self.hyperlinks.insert(hl_id.clone(), hl);
             }
         }
+        Ok(())
     }
 }
