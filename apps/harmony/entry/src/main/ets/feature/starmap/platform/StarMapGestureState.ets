@@ -18,12 +18,12 @@
 import { PlatformPoint } from './StarMapLayout'
 
 /** 手势模式枚举 */
-export type GestureMode = 'idle' | 'panCanvas' | 'nodeMenu' | 'connect' | 'moveNode' | 'moveEmbed'
+export type StarMapGestureMode = 'idle' | 'panCanvas' | 'nodeMenu' | 'connect' | 'moveNode' | 'moveEmbed'
 
 /** 触屏状态数据接口 */
 export interface GestureState {
   /** 当前手势模式 */
-  mode: GestureMode
+  mode: StarMapGestureMode
   /** 当前操作的节点 ID（空字符串表示无） */
   activeNodeId: string
   /** 手势起点（画布坐标） */

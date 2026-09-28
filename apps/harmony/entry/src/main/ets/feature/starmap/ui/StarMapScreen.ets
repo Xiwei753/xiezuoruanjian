@@ -17,7 +17,7 @@ import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRectFromLayoutNode, hitTest, computeAllEdgeRenders, screenToCanvas } from '../platform/StarMapGeometry'
 import { PlatformLayoutNode, PlatformPoint, NodePositionPatch, buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout, autoGridLayoutNodes, generatePositionPatches } from '../platform/StarMapLayout'
 import { PlatformMotionConfig, defaultMotionConfig, wobbleX, wobbleY, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
-import { GestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 
 interface SelectOption {
   value: string
@@ -68,7 +68,7 @@ export struct StarMapScreen {
 
   // 手势状态
   private gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
-  @State gestureMode: GestureMode = 'idle'
+  @State gestureMode: StarMapGestureMode = 'idle'
   @State showNodeMenu: boolean = false
   @State nodeMenuNodeId: string = ''
   @State previewLineFrom: PlatformPoint = { x: 0, y: 0 }
@@ -79,6 +79,18 @@ export struct StarMapScreen {
 
   // 双指缩放的基准比例（手势开始时记录）
   private pinchBaseScale: number = 1
+
+  // 画布拖动基准（onActionStart 记录，onActionUpdate 用 base+offset 避免重复累加）
+  private panBaseX: number = 0
+  private panBaseY: number = 0
+
+  // 节点移动基准（onActionStart 记录，onActionUpdate 用 start+offset/zoom 避免重复累加）
+  private moveNodeStartX: number = 0
+  private moveNodeStartY: number = 0
+
+  // Embed 移动基准（同节点移动）
+  private moveEmbedStartX: number = 0
+  private moveEmbedStartY: number = 0
 
   // Stack 容器尺寸（用于 position 数值计算）
   @State stackWidth: number = 0
@@ -379,7 +391,7 @@ export struct StarMapScreen {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseX = ln ? ln.x : 0
     const wobbleDx = wobbleX(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
-    return (baseX + wobbleDx) * this.zoomScale + this.offsetX - (ln ? ln.width : 160) / 2
+    return (baseX + wobbleDx) * this.zoomScale + this.offsetX
   }
 
   /**
@@ -389,7 +401,7 @@ export struct StarMapScreen {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseY = ln ? ln.y : 0
     const wobbleDy = wobbleY(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
-    return (baseY + wobbleDy) * this.zoomScale + this.offsetY - (ln ? ln.height : 80) / 2
+    return (baseY + wobbleDy) * this.zoomScale + this.offsetY
   }
 
   /**
@@ -439,15 +451,7 @@ export struct StarMapScreen {
     if (this.parentStarmapId.length === 0) {
       return
     }
-    this.navPathStack.pushPath({
-      name: Routes.StarMap,
-      param: {
-        starmapId: this.parentStarmapId,
-        starmapTitle: this.parentStarmapTitle,
-        parentStarmapId: '',
-        parentStarmapTitle: ''
-      } as StarMapRouteParams
-    })
+    this.navPathStack.pop()
   }
 
   /** 放大一级（工具栏 +） */
@@ -741,11 +745,13 @@ export struct StarMapScreen {
                 const point = this.gestureScreenPoint(event, 0, 0)
                 this.gestureTracker.beginPanCanvas(point.x, point.y)
                 this.gestureMode = 'panCanvas'
+                this.panBaseX = this.offsetX
+                this.panBaseY = this.offsetY
               })
               .onActionUpdate((event: GestureEvent) => {
                 if (this.gestureMode === 'panCanvas') {
-                  this.offsetX += event.offsetX
-                  this.offsetY += event.offsetY
+                  this.offsetX = this.panBaseX + event.offsetX
+                  this.offsetY = this.panBaseY + event.offsetY
                 }
               })
               .onActionEnd(() => {
@@ -784,7 +790,7 @@ export struct StarMapScreen {
   }
 
   /**
-   * 节点组件：用 GestureGroup(Exclusive, LongPress + Pan) 绑定触屏交互。
+   * 节点组件：用 GestureGroup(Parallel, LongPress + Pan) 绑定触屏交互。
    *
    * 触屏规则：
    * - 点击节点 → 选中（只改变视觉选中态，不进入手势模式）
@@ -820,6 +826,9 @@ export struct StarMapScreen {
         .textAlign(TextAlign.Center)
         .width(80)
     }
+    .width(160)
+    .height(80)
+    .justifyContent(FlexAlign.Center)
     .position({
       x: this.getNodeScreenX(node.id),
       y: this.getNodeScreenY(node.id)
@@ -834,7 +843,7 @@ export struct StarMapScreen {
       this.selectNode(node.id)
     })
     .gesture(
-      GestureGroup(GestureMode.Exclusive,
+      GestureGroup(GestureMode.Parallel,
         // 长按 → 弹出节点菜单
         LongPressGesture({ repeat: false, duration: 500 })
           .onAction((event: GestureEvent) => {
@@ -859,14 +868,19 @@ export struct StarMapScreen {
               const ln = this.getPlatformLayoutNode(node.id)
               if (ln) {
                 this.previewLineFrom = {
-                  x: ln.x * this.zoomScale + this.offsetX,
-                  y: ln.y * this.zoomScale + this.offsetY
+                  x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
+                  y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
                 }
               }
               this.previewLineTo = point
             } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
               // 从菜单显式进入 moveNode 后，Pan 改 node.position
               this.motionPauseTracker.pauseNode(node.id)
+              const ln = this.getPlatformLayoutNode(node.id)
+              if (ln) {
+                this.moveNodeStartX = ln.x
+                this.moveNodeStartY = ln.y
+              }
             }
           })
           .onActionUpdate((event: GestureEvent) => {
@@ -875,8 +889,13 @@ export struct StarMapScreen {
               // connect 模式：更新预览线终点（触点相对节点的偏移 + 节点屏幕位置）
               this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
             } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
-              // moveNode 模式：更新节点位置（新数组赋值，保证刷新）
-              this.moveNodeBy(node.id, event.offsetX, event.offsetY)
+              // moveNode 模式：更新节点位置（base+offset 避免重复累加）
+              const newDx = this.moveNodeStartX + event.offsetX / this.zoomScale
+              const newDy = this.moveNodeStartY + event.offsetY / this.zoomScale
+              const positions = new Map<string, PlatformPoint>()
+              positions.set(node.id, { x: newDx, y: newDy })
+              this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
+              this.recomputeGeometry()
             }
           })
           .onActionEnd(() => {
@@ -936,7 +955,7 @@ export struct StarMapScreen {
       this.navigateToEmbed(embed)
     })
     .gesture(
-      GestureGroup(GestureMode.Exclusive,
+      GestureGroup(GestureMode.Parallel,
         LongPressGesture({ repeat: false, duration: 500 })
           .onAction((event: GestureEvent) => {
             const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
@@ -950,13 +969,23 @@ export struct StarMapScreen {
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveEmbed' && state.activeNodeId === embed.instanceId) {
               this.motionPauseTracker.pauseNode(embed.instanceId)
+              const ln = this.getPlatformLayoutNode(embed.instanceId)
+              if (ln) {
+                this.moveEmbedStartX = ln.x
+                this.moveEmbedStartY = ln.y
+              }
             }
           })
           .onActionUpdate((event: GestureEvent) => {
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveEmbed' && state.activeNodeId === embed.instanceId) {
-              // moveEmbed 模式：更新 Embed 位置（新数组赋值，保证刷新）
-              this.moveEmbedBy(embed.instanceId, event.offsetX, event.offsetY)
+              // moveEmbed 模式：更新 Embed 位置（base+offset 避免重复累加）
+              const newDx = this.moveEmbedStartX + event.offsetX / this.zoomScale
+              const newDy = this.moveEmbedStartY + event.offsetY / this.zoomScale
+              const positions = new Map<string, PlatformPoint>()
+              positions.set(embed.instanceId, { x: newDx, y: newDy })
+              this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
+              this.recomputeGeometry()
             }
           })
           .onActionEnd(() => {
@@ -1038,8 +1067,8 @@ export struct StarMapScreen {
           const ln = this.getPlatformLayoutNode(this.nodeMenuNodeId)
           if (ln) {
             this.previewLineFrom = {
-              x: ln.x * this.zoomScale + this.offsetX,
-              y: ln.y * this.zoomScale + this.offsetY
+              x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
+              y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
             }
           }
           this.previewLineTo = this.previewLineFrom
