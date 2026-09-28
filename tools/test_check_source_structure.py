@@ -466,6 +466,53 @@ fn mixed() {
         source = "/* block\n multi line */\nfn a() {}\n"
         self.assertEqual(MODULE._count_effective_lines(source), 1)
 
+    # ------------------------------------------------------------------
+    # _find_block_end 回归：生命周期 / raw string / 字符字面量里的引号
+    # 曾让引号状态永不闭合、函数返回 None，规则被静默跳过。
+    # ------------------------------------------------------------------
+
+    def test_find_block_end_ignores_rust_lifetime(self) -> None:
+        lines = ["mod tests {", "    let a: &'static str = \"x\";", "}"]
+        self.assertEqual(MODULE._find_block_end(lines, 0), 2)
+
+    def test_find_block_end_ignores_odd_apostrophe_count(self) -> None:
+        lines = [
+            "mod tests {",
+            "    let a: &'static str = \"one\";",
+            "    let b: &'a str = \"two\";",
+            "    assert_eq!(x, \"'\");",
+            "}",
+        ]
+        self.assertEqual(MODULE._find_block_end(lines, 0), 4)
+
+    def test_find_block_end_ignores_char_literal_quote(self) -> None:
+        lines = ["mod tests {", "    let c = '\"';", "    let d = '}';", "}"]
+        self.assertEqual(MODULE._find_block_end(lines, 0), 3)
+
+    def test_find_block_end_ignores_escaped_quote_char_literal(self) -> None:
+        lines = ["mod tests {", "    let c = '\\'';", "}"]
+        self.assertEqual(MODULE._find_block_end(lines, 0), 2)
+
+    def test_find_block_end_handles_raw_string_with_inner_quotes(self) -> None:
+        lines = [
+            "fn f() {",
+            '    let s = r#"{"a": "}"}"#;',
+            "    let t = br#\"x\"#;",
+            "}",
+        ]
+        self.assertEqual(MODULE._find_block_end(lines, 0), 3)
+
+    def test_find_block_end_returns_none_when_unclosed(self) -> None:
+        self.assertIsNone(MODULE._find_block_end(["fn f() {", "    let a = 1;"], 0))
+
+    def test_test_bloat_detected_despite_lifetimes_in_test_module(self) -> None:
+        body = "\n".join(
+            f"    let value_{i}: &'static str = \"v{i}\";" for i in range(120)
+        )
+        source = "fn helper() {}\n\n#[cfg(test)]\nmod tests {\n" + body + "\n}\n"
+        findings = MODULE.scan_text(Path("core/demo.rs"), source)
+        self.assertIn("production-test-bloat", {f.rule for f in findings})
+
 
 if __name__ == "__main__":
     unittest.main()

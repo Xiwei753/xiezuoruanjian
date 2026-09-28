@@ -400,13 +400,40 @@ def _count_effective_lines(text: str) -> int:
     return count
 
 
+# raw string 必须带至少一个 #；r"..." 与普通字符串同样安全，按普通串处理。
+_RAW_STRING_PREFIX_RE = re.compile(r"[br]*(#+)\"")
+_LIFETIME_RE = re.compile(r"'[A-Za-z_]")
+_IDENT_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
+
+
+def _is_lifetime(line: str, index: int) -> bool:
+    """判断 `'` 处是 Rust 生命周期/标签而不是字符字面量。
+
+    字符字面量形如 `'a'` / `'\\n'` / `'\\''`：闭合引号必须立刻出现。
+    生命周期 `'a` 后面要么不是 `'`，要么是 `'` + 非标识符（如 `'\''`）。
+    """
+    if line[index] != "'":
+        return False
+    if line[index + 1 : index + 2] == "\\":
+        return False
+    if line[index + 1 : index + 2] == "'":
+        return False
+    return _IDENT_CHAR_RE.match(line[index + 1 : index + 2]) is not None
+
+
 def _find_block_end(lines: list[str], start_index: int) -> int | None:
-    """从 start_index 行开始，找到匹配的 } 的行号（0-indexed）。"""
+    """从 start_index 行开始，找到匹配的 } 的行号（0-indexed）。
+
+    跳过行注释、块注释、普通字符串、raw string（r#"..."#）、
+    字节字符串、字符字面量；Rust 生命周期 `'a` 不当成字符串起始，
+    否则一个文件里出现奇数个撇号就会让引号状态永不闭合，
+    导致本函数返回 None，规则被静默跳过。
+    """
     depth = 0
     started = False
     in_string = False
-    string_char: str | None = None
     in_block_comment = False
+    raw_hashes: str | None = None
 
     for i in range(start_index, len(lines)):
         line = lines[i]
@@ -421,11 +448,17 @@ def _find_block_end(lines: list[str], start_index: int) -> int | None:
                 j += 1
                 continue
             if in_string:
-                if ch == "\\":
+                if raw_hashes is None and ch == "\\":
                     j += 2
                     continue
-                if ch == string_char:
-                    in_string = False
+                if ch == '"':
+                    if raw_hashes is None:
+                        in_string = False
+                    elif line[j + 1 :].startswith(raw_hashes):
+                        j += 1 + len(raw_hashes)
+                        in_string = False
+                        raw_hashes = None
+                        continue
                 j += 1
                 continue
             if ch == "/" and j + 1 < len(line):
@@ -435,10 +468,29 @@ def _find_block_end(lines: list[str], start_index: int) -> int | None:
                     in_block_comment = True
                     j += 2
                     continue
-            if ch in ('"', "'"):
+            raw = _RAW_STRING_PREFIX_RE.match(line, j)
+            if raw:
                 in_string = True
-                string_char = ch
+                raw_hashes = raw.group(1)
+                j = raw.end()
+                continue
+            if ch == '"':
+                in_string = True
+                raw_hashes = None
                 j += 1
+                continue
+            if ch == "'":
+                if _is_lifetime(line, j):
+                    j += 1
+                    continue
+                # 字符字面量：'x' 或 '\x'
+                j += 1
+                if j < len(line) and line[j] == "\\":
+                    j += 2
+                else:
+                    j += 1
+                if j < len(line) and line[j] == "'":
+                    j += 1
                 continue
             if ch == "{":
                 depth += 1
