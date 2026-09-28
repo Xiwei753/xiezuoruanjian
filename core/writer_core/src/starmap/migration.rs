@@ -359,11 +359,12 @@ fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>
         // 不能 unwrap_or_default 把损坏 layout 当成空。
         let nodes: Vec<Value> = serde_json::from_str(&content)?;
         for node in nodes {
-            // 先取 nodeId：缺失则跳过这个 entry（没有 id 无法映射到 node）。
-            let node_id = match node.get("nodeId").and_then(|v| v.as_str()) {
-                Some(id) => id,
-                None => continue,
-            };
+            // fail-closed：layout node shard 里每条记录都是 layout node，
+            // 必须有合法 nodeId/x/y，否则直接 Err，不能静默跳过坏记录。
+            let node_id = node
+                .get("nodeId")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| Error::Other("layout node entry has no nodeId".to_string()))?;
             // fail-closed：有 nodeId 但 x/y 缺失/非数字/非 finite → Err，
             // 不能静默跳过坏 x/y（那是 layout 损坏，不是"没有位置"）。
             let x = node.get("x").and_then(|v| v.as_f64()).ok_or_else(|| {
