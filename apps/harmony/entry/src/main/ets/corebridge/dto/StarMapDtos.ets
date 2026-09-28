@@ -262,15 +262,6 @@ export interface StarMapViewport {
   height: number
 }
 
-// StarMapLayoutKindDto
-export type LayoutKind = 'Freeform' | 'AutoRadial' | 'Custom'
-
-// StarMapLayoutDto
-export interface StarMapLayout {
-  kind: LayoutKind
-  nodes: StarMapLayoutNode[]
-}
-
 // StarMapLayoutNodeDto
 export interface StarMapLayoutNode {
   nodeId: string
@@ -285,57 +276,4 @@ export interface StarMapLayoutNode {
   depth: number
   focusWeight: number
   orbitGroup: string | null
-}
-
-// StarMapEdgeRenderDto
-export interface StarMapEdgeRender {
-  edgeId: string
-  fromCx: number
-  fromCy: number
-  toCx: number
-  toCy: number
-  startX: number
-  startY: number
-  endX: number
-  endY: number
-  offsetX: number
-  offsetY: number
-  arrowTipX: number
-  arrowTipY: number
-  arrowLeftX: number
-  arrowLeftY: number
-  arrowRightX: number
-  arrowRightY: number
-  labelX: number
-  labelY: number
-  label: string | null
-  hasBidirectional: boolean
-}
-
-// StarMapMotionPolicyDto
-export interface StarMapMotionPolicy {
-  enabled: boolean
-  idleWobbleEnabled: boolean
-  idleAmplitudeVp: number
-  idlePeriodMs: number
-  dragLiftScale: number
-  dragShadowBoost: number
-  settleDurationMs: number
-  reduceMotion: boolean
-}
-
-// StarMapEdgeAnchorDiagnosticReasonDto
-export type EdgeAnchorDiagnosticReason = 'LocalNodeMissing' | 'CrossLayerPath' | 'NonGeometricTarget' | 'EmbedMissing' | 'PortalMissing'
-
-// StarMapEdgeAnchorDiagnosticDto
-export interface StarMapEdgeAnchorDiagnostic {
-  edgeId: string
-  endpoint: string
-  reason: EdgeAnchorDiagnosticReason
-}
-
-// StarMapEdgeRenderBatchDto
-export interface StarMapEdgeRenderBatch {
-  renders: StarMapEdgeRender[]
-  diagnostics: StarMapEdgeAnchorDiagnostic[]
 }

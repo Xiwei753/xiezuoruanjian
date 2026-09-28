@@ -3,7 +3,7 @@ import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 
 export interface IWriterCoreBridge {
@@ -43,12 +43,6 @@ export interface IWriterCoreBridge {
   createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>>
   deleteStarMap(starmapId: string): Promise<ResultEnvelope<boolean>>
   renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>>
-
-  // StarMap Layout & Motion
-  saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>>
-  getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>>
-  getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>>
-  computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>>
 
   // Settings
   getLocalSettings(): Promise<ResultEnvelope<LocalSettings>>

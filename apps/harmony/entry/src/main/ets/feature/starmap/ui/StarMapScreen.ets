@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -14,15 +14,14 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
+import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRects, hitTest, computeAllEdgeRenders, canvasToScreen, screenToCanvas } from '../platform/StarMapGeometry'
+import { PlatformLayoutNode, NodePositionPatch, defaultLayoutNodes, applyFreeformLayout, generatePositionPatches } from '../platform/StarMapLayout'
+import { PlatformMotionConfig, defaultMotionConfig, stablePhase, wobbleX, wobbleY, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
+import { GestureMode, GestureState, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 
 interface SelectOption {
   value: string
   icon: string
-}
-
-interface WobbleOffset {
-  dx: number
-  dy: number
 }
 
 @Component
@@ -31,8 +30,6 @@ export struct StarMapScreen {
   @State starmapId: string = ''
   @State starmapTitle: string = ''
   @State graph: StarMapGraph | null = null
-  @State layoutNodes: StarMapLayoutNode[] = []
-  @State edgeRenders: StarMapEdgeRender[] = []
   @State allStarMaps: StarMapMeta[] = []
   @State isLoading: boolean = true
   @State errorMessage: string = ''
@@ -46,22 +43,29 @@ export struct StarMapScreen {
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
 
-  // 动画状态变量
-  @State motionTick: number = 0
-  @State draggingNodeId: string = ''
-  @State motionEnabled: boolean = true
-  @State idleWobbleEnabled: boolean = true
-  @State idleAmplitudeVp: number = 2.0
-  @State idlePeriodMs: number = 4200
-  @State dragLiftScale: number = 1.04
-  @State settleDurationMs: number = 220
-  @State reduceMotion: boolean = false
+  // 平台层布局
+  @State platformLayoutNodes: PlatformLayoutNode[] = []
+  @State nodeRects: PlatformNodeRect[] = []
+  @State localEdgeRenders: PlatformEdgeRender[] = []
+
+  // 运动配置（本地默认值，不从 Core 获取）
+  @State motionConfig: PlatformMotionConfig = defaultMotionConfig()
+  private motionPauseTracker: MotionPauseTracker = new MotionPauseTracker()
+
+  // 手势状态
+  private gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
+  @State gestureMode: GestureMode = 'idle'
+  @State showNodeMenu: boolean = false
+  @State nodeMenuNodeId: string = ''
+  @State previewLineFrom: { x: number, y: number } = { x: 0, y: 0 }
+  @State previewLineTo: { x: number, y: number } = { x: 0, y: 0 }
+
+  // 动画驱动：用 animateTo 驱动 animPhase 从 0→1 无限循环，替代 setInterval
+  @State animPhase: number = 0
 
   // Stack 容器尺寸（用于 position 数值计算）
   @State stackWidth: number = 0
   @State stackHeight: number = 0
-
-  private motionTimer: number = -1
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -81,11 +85,9 @@ export struct StarMapScreen {
       this.loadStarMap()
       this.loadAllStarMaps()
     } else {
-      // 无参数时（一级 Tab 入口）：先列出所有星图，选择第一个后加载
       this.loadAllStarMapsAndSelectFirst()
     }
 
-    // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     if (!this.useHdsNav) {
       const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.StarMap)
@@ -100,23 +102,15 @@ export struct StarMapScreen {
     })
     this.themeAdapter.addObserver(this.themeObserver!)
 
-    // 注册响应式布局观察者
     this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
       self.adaptiveState = state
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
-    // 初始化时同步一次状态
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
-    // 加载动画策略
-    this.loadMotionPolicy()
+    // 启动 wobble 动画：用 animateTo 驱动 animPhase 从 0→1 无限循环
+    this.startWobbleAnimation()
 
-    // 启动动画定时器
-    this.startMotionTimer()
-
-    // 进入前台：注册碰一碰/隔空传送分享生命周期。
-    // payload 携带当前星图信息（title + graph 摘要）；graph 加载完成后 update 补全。
-    // fire-and-forget；内部吞错，不假装成功。
     void this.startShareLifecycle()
   }
 
@@ -127,15 +121,27 @@ export struct StarMapScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
-    // 停止动画定时器
-    if (this.motionTimer !== -1) {
-      clearInterval(this.motionTimer)
-      this.motionTimer = -1
-    }
-
-    // 离开页面：成对 stop 碰一碰/隔空传送分享生命周期，并清空 payload。
-    // fire-and-forget；内部吞错。
     void this.stopShareLifecycle()
+  }
+
+  /**
+   * 用 animateTo 驱动 animPhase 从 0→1 无限循环，替代 setInterval 定时器。
+   * wobbleX/wobbleY 用 animPhase * idlePeriodMs 作为 tick 计算偏移。
+   */
+  startWobbleAnimation() {
+    if (!shouldAnimate(this.motionConfig)) {
+      return
+    }
+    animateTo({
+      duration: this.motionConfig.idlePeriodMs,
+      iterations: -1,
+      curve: Curve.Linear,
+      onFinish: () => {
+        this.animPhase = this.animPhase + 1
+      }
+    }, () => {
+      this.animPhase = this.animPhase + 1
+    })
   }
 
   async loadStarMap() {
@@ -146,34 +152,15 @@ export struct StarMapScreen {
       const result = await this.bridge.getStarMapGraph(this.starmapId)
       if (result.success && result.data) {
         this.graph = result.data
-        // Issue #753：StarMapGraph DTO 无 layout 字段。
-        // 从 nodes 生成默认布局坐标（Core 未下发布局时 UI 自行排布）。
-        this.layoutNodes = result.data.nodes.map((node: StarMapNode): StarMapLayoutNode => {
-          const layoutNode: StarMapLayoutNode = {
-            nodeId: node.id,
-            x: 0,
-            y: 0,
-            width: 160,
-            height: 80,
-            radius: 16,
-            collapsed: false,
-            zIndex: 0,
-            scale: 1,
-            depth: 0,
-            focusWeight: 0,
-            orbitGroup: null
-          }
-          return layoutNode
-        })
-        // 获取 edgeRenders（Core 计算连线几何）
-        const edgeResult = await this.bridge.computeStarMapEdgeRenders(result.data)
-        if (edgeResult.success && edgeResult.data) {
-          this.edgeRenders = edgeResult.data.renders
-          // diagnostics 不丢弃，至少进入诊断日志
-          if (edgeResult.data.diagnostics.length > 0) {
-            hilog.warn(0x0000, 'StarMapScreen', `edge render diagnostics: ${edgeResult.data.diagnostics.length} items`)
-          }
+        // 使用平台层布局：从 graph.nodes 的 ID 列表创建默认布局节点
+        const nodeIds: string[] = result.data.nodes.map((node: StarMapNode) => node.id)
+        this.platformLayoutNodes = defaultLayoutNodes(nodeIds)
+        // 应用自动网格布局（居中排布）
+        if (this.stackWidth > 0 && this.stackHeight > 0) {
+          this.applyAutoLayout()
         }
+        // 本地计算 nodeRects 和 edgeRenders（不再从 Core 获取）
+        this.recomputeGeometry()
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
       }
@@ -183,8 +170,67 @@ export struct StarMapScreen {
       this.isLoading = false
     }
 
-    // 内容加载完成：update 碰一碰/隔空传送 payload（携带完整 graph 摘要）。
     this.updateSharePayload()
+  }
+
+  /**
+   * 自动网格布局：将节点按行列排布并居中。
+   */
+  applyAutoLayout() {
+    if (this.platformLayoutNodes.length === 0 || this.stackWidth === 0) {
+      return
+    }
+    const nodeCount = this.platformLayoutNodes.length
+    const cols = Math.ceil(Math.sqrt(nodeCount))
+    const rows = Math.ceil(nodeCount / cols)
+    const gridHSpacing = 200
+    const gridVSpacing = 120
+    const gridWidth = (cols - 1) * gridHSpacing + 160
+    const gridHeight = (rows - 1) * gridVSpacing + 80
+    const offsetX = (this.stackWidth - gridWidth) / 2
+    const offsetY = (this.stackHeight - gridHeight) / 2
+
+    const positions = new Map<string, { x: number, y: number }>()
+    for (let i = 0; i < this.platformLayoutNodes.length; i++) {
+      const col = i % cols
+      const row = Math.floor(i / cols)
+      positions.set(this.platformLayoutNodes[i].nodeId, {
+        x: offsetX + col * gridHSpacing,
+        y: offsetY + row * gridVSpacing
+      })
+    }
+    this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
+    this.recomputeGeometry()
+  }
+
+  /**
+   * 重新计算所有几何：nodeRects + localEdgeRenders。
+   * 在节点位置变化、graph 加载后调用。
+   */
+  recomputeGeometry() {
+    if (!this.graph) {
+      this.nodeRects = []
+      this.localEdgeRenders = []
+      return
+    }
+    // 从 platformLayoutNodes 派生 nodeRects
+    this.nodeRects = this.platformLayoutNodes.map((ln: PlatformLayoutNode): PlatformNodeRect => {
+      return {
+        nodeId: ln.nodeId,
+        x: ln.x,
+        y: ln.y,
+        width: ln.width,
+        height: ln.height,
+        radius: ln.radius
+      }
+    })
+    // 构建 nodeId → PlatformNodeRect 映射
+    const rectMap = new Map<string, PlatformNodeRect>()
+    for (const rect of this.nodeRects) {
+      rectMap.set(rect.nodeId, rect)
+    }
+    // 本地计算 edgeRenders
+    this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap)
   }
 
   async loadAllStarMaps() {
@@ -208,7 +254,6 @@ export struct StarMapScreen {
         this.starmapTitle = first.title
         this.loadStarMap()
       } else {
-        // 没有星图数据，停止 loading
         this.isLoading = false
       }
     } catch (err) {
@@ -216,26 +261,7 @@ export struct StarMapScreen {
     }
   }
 
-  async loadMotionPolicy() {
-    try {
-      const result = await this.bridge.getStarMapMotionPolicy()
-      if (result.success && result.data) {
-        const policy = result.data
-        this.motionEnabled = policy.enabled
-        this.idleWobbleEnabled = policy.idleWobbleEnabled
-        this.idleAmplitudeVp = policy.idleAmplitudeVp
-        this.idlePeriodMs = policy.idlePeriodMs
-        this.dragLiftScale = policy.dragLiftScale
-        this.settleDurationMs = policy.settleDurationMs
-        this.reduceMotion = policy.reduceMotion
-      }
-    } catch (err) {
-      // 保留本地默认值
-    }
-  }
-
   getNodeColor(node: StarMapNode): string {
-    // Issue #753：StarMapNode DTO 无 color 字段，按 kind 映射颜色。
     const kindColors: Record<string, string> = {
       'Character': '#4A90D9',
       'Location': '#F39C12',
@@ -280,12 +306,51 @@ export struct StarMapScreen {
     this.selectedNode = this.graph?.nodes.find(n => n.id === nodeId) || null
   }
 
-  // —— 分享生命周期（Issue #629 评论5 第7部分）——
-  // 由星图页拥有生命周期：进入前台 start、内容变化 update、离开/退后台 stop。
-  // 碰一碰/隔空传送走生命周期接口；普通系统分享按钮只走 share(payload, 'system')。
+  deselectNode() {
+    this.selectedNodeId = ''
+    this.selectedNode = null
+  }
 
-  // 构造当前星图的分享 payload。
-  // payload 携带星图标题 + 节点/关系摘要 + 节点名列表（前 20 个）。
+  /**
+   * 获取当前动画 tick 值：animPhase * idlePeriodMs
+   */
+  private getAnimTick(): number {
+    return this.animPhase * this.motionConfig.idlePeriodMs
+  }
+
+  /**
+   * 获取平台层布局节点
+   */
+  private getPlatformLayoutNode(nodeId: string): PlatformLayoutNode | undefined {
+    return this.platformLayoutNodes.find(ln => ln.nodeId === nodeId)
+  }
+
+  /**
+   * 计算节点在屏幕上的最终 x 坐标（含 zoom、offset、wobble）
+   */
+  private getNodeScreenX(nodeId: string): number {
+    const ln = this.getPlatformLayoutNode(nodeId)
+    const baseX = ln ? ln.x : 0
+    const wobbleDx = wobbleX(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
+    return (baseX + wobbleDx) * this.zoomScale + this.offsetX - (ln ? ln.width : 160) / 2
+  }
+
+  /**
+   * 计算节点在屏幕上的最终 y 坐标（含 zoom、offset、wobble）
+   */
+  private getNodeScreenY(nodeId: string): number {
+    const ln = this.getPlatformLayoutNode(nodeId)
+    const baseY = ln ? ln.y : 0
+    const wobbleDy = wobbleY(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
+    return (baseY + wobbleDy) * this.zoomScale + this.offsetY - (ln ? ln.height : 80) / 2
+  }
+
+  onTransformChange() {
+    this.drawEdges()
+  }
+
+  // —— 分享生命周期（保留不变）——
+
   buildSharePayload(): SharePayload {
     const title: string = this.starmapTitle
     let text: string = ''
@@ -321,131 +386,48 @@ export struct StarMapScreen {
     return payload
   }
 
-  // 进入前台：注册碰一碰 + 隔空传送分享生命周期。
-  // startTapSharing 同步返回真实注册结果；startAirTransferSharing 异步返回真实注册结果。
-  // 失败不抛、不假装成功。
   async startShareLifecycle(): Promise<void> {
     const payload: SharePayload = this.buildSharePayload()
     try {
       this.shareService.startTapSharing(payload)
     } catch (e) {
-      // tap start 失败；忽略，不假装成功。
     }
     try {
       await this.shareService.startAirTransferSharing(payload)
     } catch (e) {
-      // airTransfer start 失败；忽略，不假装成功。
     }
   }
 
-  // 内容变化：update 碰一碰 + 隔空传送 payload（不重新 start）。
   updateSharePayload(): void {
     const payload: SharePayload = this.buildSharePayload()
     try {
       this.shareService.updateTapPayload(payload)
       this.shareService.updateAirTransferPayload(payload)
     } catch (e) {
-      // update 失败；忽略。
     }
   }
 
-  // 离开页面/退后台：成对 stop 碰一碰 + 隔空传送，并清空 payload 避免悬空。
   async stopShareLifecycle(): Promise<void> {
     try {
       this.shareService.stopTapSharing()
     } catch (e) {
-      // 忽略。
     }
     try {
       await this.shareService.stopAirTransferSharing()
     } catch (e) {
-      // 忽略。
     }
     try {
       this.shareService.updateTapPayload(null)
       this.shareService.updateAirTransferPayload(null)
     } catch (e) {
-      // 忽略。
     }
   }
 
-  /**
-   * 用 nodeId hash 算稳定 phase
-   */
-  stablePhase(nodeId: string): number {
-    let hash = 0
-    for (let i = 0; i < nodeId.length; i++) {
-      hash = ((hash << 5) - hash) + nodeId.charCodeAt(i)
-      hash = hash & hash // Convert to 32bit integer
-    }
-    return (Math.abs(hash) % 360) * Math.PI / 180
-  }
+  // —— 星图工具条（保留不变）——
 
-  /**
-   * 计算节点的视觉水平偏移（idle wobble），不修改 node.x/y。
-   * 使用 nodeId hash 算稳定 phase，不用随机数。
-   */
-  wobbleX(nodeId: string, tick: number): number {
-    if (!this.motionEnabled || !this.idleWobbleEnabled || this.reduceMotion || this.draggingNodeId === nodeId) {
-      return 0
-    }
-    const phase = this.stablePhase(nodeId)
-    const period = this.idlePeriodMs
-    const amplitude = this.idleAmplitudeVp
-    return Math.sin((tick / period) * 2 * Math.PI + phase) * amplitude
-  }
-
-  /**
-   * 计算节点的视觉垂直偏移（idle wobble），不修改 node.y。
-   * Y 方向频率略低（0.7x）、振幅更小（0.6x），营造自然漂浮感。
-   */
-  wobbleY(nodeId: string, tick: number): number {
-    if (!this.motionEnabled || !this.idleWobbleEnabled || this.reduceMotion || this.draggingNodeId === nodeId) {
-      return 0
-    }
-    const phase = this.stablePhase(nodeId)
-    const period = this.idlePeriodMs
-    const amplitude = this.idleAmplitudeVp
-    return Math.cos((tick / period) * 0.7 * 2 * Math.PI + phase) * amplitude * 0.6
-  }
-
-  /**
-   * 启动动画定时器，约 33ms 一帧（~30fps），wobble 不需要高频率。
-   */
-  startMotionTimer() {
-    if (this.motionTimer !== -1) {
-      clearInterval(this.motionTimer)
-    }
-    this.motionTimer = setInterval(() => {
-      if (this.motionEnabled && !this.reduceMotion) {
-        this.motionTick = Date.now()
-      }
-    }, 33)
-  }
-
-  deselectNode() {
-    this.selectedNodeId = ''
-    this.selectedNode = null
-  }
-
-  onTransformChange() {
-    this.drawEdges()
-  }
-
-  /**
-   * 查找节点布局坐标
-   */
-  private getLayoutNode(nodeId: string): StarMapLayoutNode | undefined {
-    return this.layoutNodes.find(ln => ln.nodeId === nodeId)
-  }
-
-  // Issue #784 评论 5857856673 问题3：星图专属操作工具条。
-  // 包含：星图切换下拉框、缩小、缩放百分比、放大、重置视图、分享。
-  // 全局动作（同步/搜索/设置）继续留在标题栏右侧，此处只放星图自己的操作。
   @Builder
   StarMapToolbar() {
     Row() {
-      // 星图切换下拉框
       Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => {
         return { value: sm.title, icon: '' } as SelectOption
       }))
@@ -460,7 +442,6 @@ export struct StarMapScreen {
         })
         .width(160)
 
-      // 缩小按钮
       Button('−')
         .width(36)
         .height(36)
@@ -469,13 +450,11 @@ export struct StarMapScreen {
           this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
         })
 
-      // 当前缩放百分比
       Text(`${Math.round(this.zoomScale * 100)}%`)
         .fontSize(14)
         .width(60)
         .textAlign(TextAlign.Center)
 
-      // 放大按钮
       Button('+')
         .width(36)
         .height(36)
@@ -484,7 +463,6 @@ export struct StarMapScreen {
           this.zoomScale = Math.min(3, this.zoomScale + 0.1)
         })
 
-      // 重置视图按钮
       Button($r('app.string.reset'))
         .fontSize(12)
         .height(36)
@@ -494,7 +472,6 @@ export struct StarMapScreen {
           this.offsetY = 0
         })
 
-      // 分享按钮
       Button($r('app.string.share'))
         .fontSize(12)
         .height(36)
@@ -538,7 +515,7 @@ export struct StarMapScreen {
         .justifyContent(FlexAlign.Center)
       } else if (this.graph) {
         Stack() {
-          // Canvas for edges
+          // Canvas for edges（本地几何计算）
           Canvas(this.buildCanvasContext())
             .width('100%')
             .height('100%')
@@ -546,17 +523,32 @@ export struct StarMapScreen {
               this.drawEdges()
             })
 
-          // Nodes layer
+          // 节点层：每个节点用 GestureGroup(LongPress + Pan) 绑定触屏交互
           ForEach(this.graph.nodes, (node: StarMapNode) => {
             this.StarMapNodeItem(node)
           }, (node: StarMapNode) => node.id)
 
-          // Node info panel — 宽屏下偏右，窄屏下左上角
+          // 预览连线（connect 模式下显示）
+          if (this.gestureMode === 'connect') {
+            Canvas(this.buildPreviewCanvasContext())
+              .width('100%')
+              .height('100%')
+              .onReady(() => {
+                this.drawPreviewLine()
+              })
+          }
+
+          // 节点菜单（nodeMenu 模式下显示）
+          if (this.showNodeMenu) {
+            this.NodeMenu()
+          }
+
+          // Node info panel
           if (this.selectedNode) {
             this.NodeInfoPanel()
           }
 
-          // Legend — 宽屏下右下角，窄屏下左下角
+          // Legend
           this.Legend()
 
           // Graph info
@@ -567,26 +559,37 @@ export struct StarMapScreen {
         .onAreaChange((_oldArea: Area, newArea: Area) => {
           this.stackWidth = Number(newArea.width)
           this.stackHeight = Number(newArea.height)
+          // 首次获取尺寸后应用自动布局
+          if (this.platformLayoutNodes.length > 0 && this.getPlatformLayoutNode(this.platformLayoutNodes[0].nodeId)?.x === 0) {
+            this.applyAutoLayout()
+          }
         })
+        // 空白区域：PanGesture → 拖动画布（panCanvas 模式）
         .gesture(
           PanGesture()
+            .onActionStart((event: GestureEvent) => {
+              this.gestureTracker.beginPanCanvas(event.x, event.y)
+              this.gestureMode = 'panCanvas'
+            })
             .onActionUpdate((event: GestureEvent) => {
-              this.offsetX += event.offsetX
-              this.offsetY += event.offsetY
+              if (this.gestureMode === 'panCanvas') {
+                this.offsetX += event.offsetX
+                this.offsetY += event.offsetY
+              }
+            })
+            .onActionEnd(() => {
+              this.gestureTracker.reset()
+              this.gestureMode = 'idle'
             })
         )
       }
     }
     .width('100%')
     .height('100%')
-    // 与首页同口径：页面底色用系统 background_secondary（#F2F3F5），让悬浮底栏有底可滤。
-    // 官方《组件颜色与界面背景颜色相近》faqs-arkui-1119。
     .backgroundColor($r('sys.color.background_secondary'))
   }
 
   build() {
-    // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳消费 HeaderTrailing；
-    // API < 23 用 NavDestination .menus() 接入 HeaderTrailing 动作。
     if (this.useHdsNav) {
       HdsAppDestinationApi23({
         title: this.starmapTitle,
@@ -608,6 +611,16 @@ export struct StarMapScreen {
     }
   }
 
+  /**
+   * 节点组件：用 GestureGroup(Exclusive, LongPress + Pan) 绑定触屏交互。
+   *
+   * 触屏规则：
+   * - 点击节点 → 选中（只改变视觉选中态，不进入手势模式）
+   * - 长按节点 → 弹出节点菜单（nodeMenu 模式）
+   * - 长按后继续移动 → 从 nodeMenu 切到 connect，关闭菜单并显示预览线
+   * - 松手落到另一节点 → 创建关系
+   * - "移动节点"必须从菜单显式进入 moveNode 模式，之后 Pan 才改 node.position
+   */
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
@@ -616,10 +629,15 @@ export struct StarMapScreen {
         .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
         .strokeWidth(4)
         .shadow({
-          radius: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.radius : (this.selectedNodeId === node.id ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
-          color: this.draggingNodeId === node.id ? '#40000000' : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
+          radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id ?
+            DesignTokens.shadowStrong.radius :
+            (this.selectedNodeId === node.id ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
+          color: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id ?
+            '#40000000' :
+            (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
           offsetX: 0,
-          offsetY: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
+          offsetY: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id ?
+            DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
         })
 
       Text(node.title)
@@ -631,44 +649,189 @@ export struct StarMapScreen {
         .width(80)
     }
     .position({
-      x: ((this.getLayoutNode(node.id)?.x ?? 0) * this.zoomScale) + this.offsetX - (this.getLayoutNode(node.id)?.width ?? 160) / 2 + this.wobbleX(node.id, this.motionTick),
-      y: ((this.getLayoutNode(node.id)?.y ?? 0) * this.zoomScale) + this.offsetY - (this.getLayoutNode(node.id)?.height ?? 80) / 2 + this.wobbleY(node.id, this.motionTick)
+      x: this.getNodeScreenX(node.id),
+      y: this.getNodeScreenY(node.id)
     })
     .scale(
-      this.draggingNodeId === node.id
-        ? { x: this.dragLiftScale, y: this.dragLiftScale }
+      this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id
+        ? { x: this.motionConfig.dragLiftScale, y: this.motionConfig.dragLiftScale }
         : { x: 1, y: 1 }
     )
     .onClick(() => {
+      // 点击节点 → 选中（不进入手势模式）
       this.selectNode(node.id)
     })
     .gesture(
-      PanGesture()
-        .onActionStart(() => {
-          this.draggingNodeId = node.id
-        })
-        .onActionUpdate((event: GestureEvent) => {
-          // 更新 layoutNode 坐标，不修改 StarMapNode
-          const layoutIndex = this.layoutNodes.findIndex(ln => ln.nodeId === node.id)
-          if (layoutIndex >= 0) {
-            this.layoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
-            this.layoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
-          }
-        })
-        .onActionEnd(() => {
-          this.draggingNodeId = ''
-          // debounce 300ms 后保存布局
-          setTimeout(() => {
-            if (this.starmapId && this.layoutNodes.length > 0) {
-              const layout: StarMapLayout = {
-                kind: 'Freeform',
-                nodes: this.layoutNodes
+      GestureGroup(GestureMode.Exclusive,
+        // 长按 → 弹出节点菜单
+        LongPressGesture({ repeat: false, duration: 500 })
+          .onAction((event: GestureEvent) => {
+            this.gestureTracker.beginNodeMenu(node.id, event.x, event.y)
+            this.gestureMode = 'nodeMenu'
+            this.showNodeMenu = true
+            this.nodeMenuNodeId = node.id
+            this.selectNode(node.id)
+          }),
+        // Pan → 根据当前手势模式处理
+        PanGesture()
+          .onActionStart((event: GestureEvent) => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'nodeMenu') {
+              // 长按后继续移动 → 从 nodeMenu 切到 connect
+              this.gestureTracker.beginConnect(node.id, event.x, event.y)
+              this.gestureMode = 'connect'
+              this.showNodeMenu = false
+              // 设置预览线起点（节点中心屏幕坐标）
+              const ln = this.getPlatformLayoutNode(node.id)
+              if (ln) {
+                this.previewLineFrom = {
+                  x: ln.x * this.zoomScale + this.offsetX,
+                  y: ln.y * this.zoomScale + this.offsetY
+                }
               }
-              this.bridge.saveStarMapLayout(this.starmapId, layout)
+              this.previewLineTo = { x: event.x, y: event.y }
+            } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
+              // 从菜单显式进入 moveNode 后，Pan 改 node.position
+              this.motionPauseTracker.pauseNode(node.id)
             }
-          }, 300)
-        })
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'connect') {
+              // connect 模式：更新预览线终点
+              this.previewLineTo = { x: event.x, y: event.y }
+            } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
+              // moveNode 模式：更新节点位置
+              const layoutIndex = this.platformLayoutNodes.findIndex(ln => ln.nodeId === node.id)
+              if (layoutIndex >= 0) {
+                this.platformLayoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
+                this.platformLayoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
+                this.recomputeGeometry()
+              }
+            } else if (state.mode === 'moveEmbed' && state.activeNodeId === node.id) {
+              // moveEmbed 模式：更新 Embed 位置（与 moveNode 同逻辑）
+              const layoutIndex = this.platformLayoutNodes.findIndex(ln => ln.nodeId === node.id)
+              if (layoutIndex >= 0) {
+                this.platformLayoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
+                this.platformLayoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
+                this.recomputeGeometry()
+              }
+            }
+          })
+          .onActionEnd(() => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'connect') {
+              // connect 模式：检查是否落到另一节点，创建关系
+              const screenX = this.previewLineTo.x
+              const screenY = this.previewLineTo.y
+              // 将屏幕坐标转为画布坐标进行命中测试
+              const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
+              const targetNodeId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
+              if (targetNodeId !== null && targetNodeId !== node.id) {
+                // 创建关系：通过 bridge 的星图 CRUD API
+                this.createEdge(node.id, targetNodeId)
+              }
+            } else if (state.mode === 'moveNode' || state.mode === 'moveEmbed') {
+              // 移动结束：保存节点位置（通过 bridge 的星图节点更新 API）
+              this.saveNodePosition(node.id)
+              this.motionPauseTracker.resumeNode(node.id)
+            }
+            // 重置手势状态
+            this.gestureTracker.reset()
+            this.gestureMode = 'idle'
+            this.showNodeMenu = false
+            this.nodeMenuNodeId = ''
+          })
+      )
     )
+  }
+
+  /**
+   * 创建关系（边）：通过 bridge 的星图 CRUD API。
+   * 当前 bridge 没有直接的 createEdge 方法，此处预留接口。
+   */
+  createEdge(fromNodeId: string, toNodeId: string) {
+    hilog.info(0x0000, 'StarMapScreen', `createEdge: ${fromNodeId} → ${toNodeId}`)
+    // TODO: 通过 bridge 创建边
+  }
+
+  /**
+   * 保存节点位置：生成 position patch，通过 bridge 的星图节点更新 API 写回。
+   * 不再调 saveStarMapLayout。
+   */
+  saveNodePosition(nodeId: string) {
+    const ln = this.getPlatformLayoutNode(nodeId)
+    if (!ln) return
+    const patches = generatePositionPatches([ln])
+    hilog.info(0x0000, 'StarMapScreen', `saveNodePosition: ${nodeId} → (${ln.x}, ${ln.y})`)
+    // TODO: 通过 bridge 的节点更新 API 写回 position patch
+  }
+
+  /**
+   * 节点菜单：长按节点后弹出，提供"移动节点"和"创建关系"选项。
+   */
+  @Builder
+  NodeMenu() {
+    Column() {
+      Text(this.getPlatformLayoutNode(this.nodeMenuNodeId)?.nodeId ?? '')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .margin({ bottom: 8 })
+
+      // 移动节点：从菜单显式进入 moveNode 模式
+      Button($r('app.string.move_node'))
+        .fontSize(13)
+        .height(36)
+        .width('100%')
+        .onClick(() => {
+          this.gestureTracker.beginMoveNode(this.nodeMenuNodeId, 0, 0)
+          this.gestureMode = 'moveNode'
+          this.showNodeMenu = false
+          this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
+        })
+
+      // 创建关系：从菜单显式进入 connect 模式
+      Button($r('app.string.connect_node'))
+        .fontSize(13)
+        .height(36)
+        .width('100%')
+        .margin({ top: 4 })
+        .onClick(() => {
+          this.gestureTracker.beginConnect(this.nodeMenuNodeId, 0, 0)
+          this.gestureMode = 'connect'
+          this.showNodeMenu = false
+          const ln = this.getPlatformLayoutNode(this.nodeMenuNodeId)
+          if (ln) {
+            this.previewLineFrom = {
+              x: ln.x * this.zoomScale + this.offsetX,
+              y: ln.y * this.zoomScale + this.offsetY
+            }
+          }
+          this.previewLineTo = this.previewLineFrom
+        })
+
+      // 取消菜单
+      Button($r('app.string.cancel'))
+        .fontSize(13)
+        .height(36)
+        .width('100%')
+        .margin({ top: 4 })
+        .onClick(() => {
+          this.gestureTracker.reset()
+          this.gestureMode = 'idle'
+          this.showNodeMenu = false
+          this.nodeMenuNodeId = ''
+        })
+    }
+    .width(160)
+    .padding(12)
+    .borderRadius(DesignTokens.radiusMd)
+    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
+    .backgroundColor('#FFFFFF')
+    .position({
+      x: this.getNodeScreenX(this.nodeMenuNodeId) + 80,
+      y: this.getNodeScreenY(this.nodeMenuNodeId) - 40
+    })
   }
 
   @Builder
@@ -690,7 +853,6 @@ export struct StarMapScreen {
       .margin({ bottom: 12 })
 
       Column() {
-        // Node type badge
         Row() {
           Circle({ width: 12, height: 12 })
             .fill(this.getNodeColor(this.selectedNode!))
@@ -701,31 +863,28 @@ export struct StarMapScreen {
         }
         .margin({ bottom: 12 })
 
-        // Node title
         Text(this.selectedNode!.title)
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
           .margin({ bottom: 8 })
 
-        // Node summary — Issue #753：StarMapNode DTO 无 description，用 content.summary 作为节点摘要。
         if (this.selectedNode!.content.summary) {
           Text(this.selectedNode!.content.summary)
             .fontSize(14)
             .margin({ bottom: 12 })
         }
 
-        // Node coordinates — 从 layoutNodes 查找
+        // 节点坐标 — 从 platformLayoutNodes 查找
         Row() {
-          Text(`X: ${Math.round(this.layoutNodes.find(ln => ln.nodeId === this.selectedNodeId)?.x ?? 0)}`)
+          Text(`X: ${Math.round(this.getPlatformLayoutNode(this.selectedNodeId)?.x ?? 0)}`)
             .fontSize(12)
             .margin({ right: 16 })
 
-          Text(`Y: ${Math.round(this.layoutNodes.find(ln => ln.nodeId === this.selectedNodeId)?.y ?? 0)}`)
+          Text(`Y: ${Math.round(this.getPlatformLayoutNode(this.selectedNodeId)?.y ?? 0)}`)
             .fontSize(12)
         }
         .margin({ bottom: 16 })
 
-        // Related edges
         if (this.graph) {
           Text($r('app.string.related_relations'))
             .fontSize(14)
@@ -740,7 +899,7 @@ export struct StarMapScreen {
                 .margin({ right: 8 })
 
               Column() {
-                 Text(edge.label || getContext(this).resourceManager.getStringSync($r('app.string.unnamed_relation').id))
+                Text(edge.label || getContext(this).resourceManager.getStringSync($r('app.string.unnamed_relation').id))
                   .fontSize(13)
                 Text(this.getEdgeTypeName(edge.kind))
                   .fontSize(11)
@@ -758,7 +917,7 @@ export struct StarMapScreen {
     .width(300)
     .padding(16)
     .borderRadius(DesignTokens.radiusMd)
-    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY  })
+    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
     .position({
       x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 300 - 16 : 16,
       y: 16
@@ -789,7 +948,7 @@ export struct StarMapScreen {
     }
     .padding(12)
     .borderRadius(DesignTokens.radiusSm)
-    .shadow({ radius: DesignTokens.shadowLight.radius, offsetX: 0, offsetY: DesignTokens.shadowLight.offsetY  })
+    .shadow({ radius: DesignTokens.shadowLight.radius, offsetX: 0, offsetY: DesignTokens.shadowLight.offsetY })
     .position({
       x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 200 - 16 : 16,
       y: this.stackHeight - 120 - 16
@@ -819,17 +978,29 @@ export struct StarMapScreen {
     }
     .padding(8)
     .borderRadius(DesignTokens.radiusXs)
-    .shadow({ radius: 2, offsetX: 0, offsetY: 1  })
+    .shadow({ radius: 2, offsetX: 0, offsetY: 1 })
     .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 })
   }
 
+  // —— Canvas 绘制 ——
+
   private canvasCtx: CanvasRenderingContext2D | null = null
+  private previewCanvasCtx: CanvasRenderingContext2D | null = null
 
   buildCanvasContext(): CanvasRenderingContext2D {
     this.canvasCtx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
     return this.canvasCtx
   }
 
+  buildPreviewCanvasContext(): CanvasRenderingContext2D {
+    this.previewCanvasCtx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
+    return this.previewCanvasCtx
+  }
+
+  /**
+   * 绘制边：使用本地 localEdgeRenders（不再从 Core 获取）。
+   * wobble 偏移在节点位置计算中已包含，此处只需应用 zoom/offset 变换。
+   */
   drawEdges() {
     if (!this.canvasCtx || !this.graph) return
     const ctx = this.canvasCtx
@@ -837,24 +1008,21 @@ export struct StarMapScreen {
     ctx.clearRect(0, 0, ctx.width, ctx.height)
 
     // 构建 nodeId → wobble offset 映射
-    const wobbleMap = new Map<string, WobbleOffset>()
+    const tick = this.getAnimTick()
+    const wobbleMap = new Map<string, { dx: number, dy: number }>()
     for (const node of this.graph.nodes) {
-      const offset: WobbleOffset = {
-        dx: this.wobbleX(node.id, this.motionTick),
-        dy: this.wobbleY(node.id, this.motionTick)
-      }
-      wobbleMap.set(node.id, offset)
+      const dx = wobbleX(node.id, tick, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+      const dy = wobbleY(node.id, tick, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+      wobbleMap.set(node.id, { dx, dy })
     }
 
-    // 遍历 edgeRenders（Core 计算的连线几何）
-    for (const edge of this.edgeRenders) {
-      // 找到对应的 graph edge 以获取 from/to nodeId
+    for (const edge of this.localEdgeRenders) {
       const graphEdge = this.graph.edges.find(e => e.id === edge.edgeId)
       if (!graphEdge) continue
 
       const fromId = graphEdge.from.target.nodeId || ''
       const toId = graphEdge.to.target.nodeId || ''
-      const defaultWobble: WobbleOffset = { dx: 0, dy: 0 }
+      const defaultWobble = { dx: 0, dy: 0 }
       const fromWobble = wobbleMap.get(fromId) || defaultWobble
       const toWobble = wobbleMap.get(toId) || defaultWobble
 
@@ -871,7 +1039,6 @@ export struct StarMapScreen {
       ctx.strokeStyle = isSelected ? "#007DFF" : "#33000000"
       ctx.lineWidth = isSelected ? 2.5 : 1.5
 
-      // 虚线样式
       if (graphEdge.kind === 'DependsOn' || graphEdge.kind === 'ConflictsWith') {
         ctx.setLineDash([6, 4])
       } else {
@@ -880,7 +1047,7 @@ export struct StarMapScreen {
       ctx.stroke()
       ctx.setLineDash([])
 
-      // 箭头（使用 edgeRenders 的箭头坐标 + wobble offset）
+      // 箭头
       const atx = (edge.arrowTipX + toWobble.dx) * this.zoomScale + this.offsetX
       const aty = (edge.arrowTipY + toWobble.dy) * this.zoomScale + this.offsetY
       const alx = (edge.arrowLeftX + toWobble.dx) * this.zoomScale + this.offsetX
@@ -908,5 +1075,24 @@ export struct StarMapScreen {
         ctx.fillText(graphEdge.label, lx, ly - 6)
       }
     }
+  }
+
+  /**
+   * 绘制预览连线：connect 模式下从源节点到当前手指位置。
+   */
+  drawPreviewLine() {
+    if (!this.previewCanvasCtx) return
+    const ctx = this.previewCanvasCtx
+
+    ctx.clearRect(0, 0, ctx.width, ctx.height)
+
+    ctx.beginPath()
+    ctx.moveTo(this.previewLineFrom.x, this.previewLineFrom.y)
+    ctx.lineTo(this.previewLineTo.x, this.previewLineTo.y)
+    ctx.strokeStyle = "#007DFF"
+    ctx.lineWidth = 2
+    ctx.setLineDash([8, 4])
+    ctx.stroke()
+    ctx.setLineDash([])
   }
 }
