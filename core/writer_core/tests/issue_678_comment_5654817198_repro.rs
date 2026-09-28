@@ -55,6 +55,21 @@ fn read_source(rel_path: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取 {path:?} 失败: {e}"))
 }
 
+/// 读整个 `sync_operations` 模块。
+///
+/// 源码结构门禁把原本 1157 行的 sync_operations.rs 拆成了主文件加
+/// sync_operations/{gc,dry_run,perform}.rs（GC maintenance / 预演 / 真实执行）。
+/// 本文件的守卫断言的是「同步执行这条链路」的性质（例如 sync 与 dry_run 各有
+/// 一处 with_layout_core_api），所以按模块整体读取，而不是只看主文件。
+fn read_sync_operations_module() -> String {
+    let mut text = read_source("sync_operations.rs");
+    for sub in ["gc.rs", "dry_run.rs", "perform.rs"] {
+        text.push('\n');
+        text.push_str(&read_source(&format!("sync_operations/{sub}")));
+    }
+    text
+}
+
 fn read_writer_core_source(rel_path: &str) -> String {
     let path = repo_root().join("core/writer_core/src").join(rel_path);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("读取 {path:?} 失败: {e}"))
@@ -68,7 +83,7 @@ fn read_writer_core_source(rel_path: &str) -> String {
 /// 的后台线程用 with_layout_core_api + layout 快照，不再调用 create_core_api（bootstrap）。
 #[test]
 fn verify_problem1_backend_sync_thread_uses_layout_snapshot() {
-    let sync_ops = read_source("sync_operations.rs");
+    let sync_ops = read_sync_operations_module();
     let sync_backend = read_source("sync_backend.rs");
 
     // 后台线程内不应再调用 create_core_api（bootstrap）。
@@ -129,7 +144,7 @@ fn verify_problem1_backend_sync_thread_uses_layout_snapshot() {
 /// maybe_auto_sync_on_foreground)已从 Linux_Qt 移除，只保留显式手动同步。
 #[test]
 fn verify_problem2_syncbackend_callback_chain_intact() {
-    let sync_ops = read_source("sync_operations.rs");
+    let sync_ops = read_sync_operations_module();
     let sync_backend = read_source("sync_backend.rs");
 
     // handle_sync_outcome 不应再传 None 给排队的 manual sync。
@@ -191,7 +206,7 @@ fn verify_problem2_syncbackend_callback_chain_intact() {
 /// 在启动线程前设置 current_sync_in_progress=true，统一 single-flight。
 #[test]
 fn verify_problem3_diagnostics_dryrun_singleflight_effective() {
-    let sync_ops = read_source("sync_operations.rs");
+    let sync_ops = read_sync_operations_module();
     let sync_backend = read_source("sync_backend.rs");
 
     // sync_operations.rs 应至少有 2 处 current_sync_in_progress = true
