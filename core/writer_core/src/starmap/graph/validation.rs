@@ -58,8 +58,7 @@ pub(crate) fn validate_hyperlink_uri(uri: &str) -> Result<()> {
 /// - 嵌入的 `instance_id` 全局唯一，且不能自嵌入
 /// - 链接的 `link_id` 全局唯一
 /// - 超链接的 `hyperlink_id` 全局唯一，source 路径合法，URI 非空且有 scheme
-/// - Portal 的 `destination_starmap_id` 必须存在（所有 mode），可选落点在目标图中存在
-/// - DisplayPolicy scale 层级有序
+/// - Portal 的 `destination_starmap_id` 必须存在，可选落点在目标图中存在
 /// - 数值字段 finite（无 NaN/Inf）
 pub(crate) fn validate_graph(context: &GraphResolverContext, graph: &StarMapGraph) -> Result<()> {
     let node_ids = validate_nodes(context, graph)?;
@@ -89,6 +88,14 @@ fn validate_nodes(
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Duplicate node ID",
+            )));
+        }
+
+        // position 数值必须 finite（无 NaN/Inf），与 embed.position 校验一致。
+        if !node.position.x.is_finite() || !node.position.y.is_finite() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid node position values",
             )));
         }
 
@@ -158,8 +165,6 @@ fn validate_nodes(
                 }
             }
         }
-
-        crate::starmap::semantic::validate_display_policy(&node.display_policy)?;
     }
     Ok(node_ids)
 }
@@ -295,7 +300,7 @@ fn validate_target_path(
 }
 
 /// 验证嵌入：instance_id 唯一、禁止自嵌入、目标星图存在、
-/// placement/viewport 数值合法性、host_path 引用完整性。
+/// position 数值合法性、host_path 引用完整性。
 #[allow(
     clippy::excessive_nesting,
     clippy::too_many_lines,
@@ -339,32 +344,11 @@ fn validate_embeds(
             }
         }
 
-        let p = &embed.placement;
-        // width/height 允许为 0（折叠），不允许为负；所有数值必须 finite。
-        if p.width < 0.0
-            || p.height < 0.0
-            || p.scale <= 0.0
-            || !p.width.is_finite()
-            || !p.height.is_finite()
-            || !p.scale.is_finite()
-            || !p.x.is_finite()
-            || !p.y.is_finite()
-        {
+        // position 数值必须 finite。
+        if !embed.position.x.is_finite() || !embed.position.y.is_finite() {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "Invalid embed placement values",
-            )));
-        }
-
-        let tvp = &embed.target_viewport;
-        if tvp.scale <= 0.0
-            || !tvp.scale.is_finite()
-            || !tvp.offset_x.is_finite()
-            || !tvp.offset_y.is_finite()
-        {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid embed target_viewport values",
+                "Invalid embed position values",
             )));
         }
 
@@ -377,8 +361,6 @@ fn validate_embeds(
             node_ids,
             "embed host_path",
         )?;
-
-        crate::starmap::semantic::validate_display_policy(&embed.display_policy)?;
     }
     Ok(())
 }
@@ -437,50 +419,6 @@ fn validate_hyperlinks(
         }
         // target_uri 必须有合法 scheme（统一调用 validate_hyperlink_uri）
         validate_hyperlink_uri(&hl.target_uri)?;
-    }
-    Ok(())
-}
-
-/// 布局验证：scale > 0 且 finite，所有数值 finite。
-/// 坐标值（x/y/width/height）允许为负或零，因为平台端可能使用不同坐标系原点。
-pub(crate) fn validate_layout(layout: &StarMapLayout) -> Result<()> {
-    for node in &layout.nodes {
-        if node.scale <= 0.0
-            || !node.scale.is_finite()
-            || !node.x.is_finite()
-            || !node.y.is_finite()
-            || !node.width.is_finite()
-            || !node.height.is_finite()
-            || !node.radius.is_finite()
-            || !node.depth.is_finite()
-            || !node.focus_weight.is_finite()
-        {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid layout node values",
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// 视口验证：scale > 0 且 finite，offset/width/height finite。
-///
-/// 在 `save_starmap_viewport` 保存前调用，确保写入磁盘的视口数值合法。
-/// scale 必须 > 0（缩放比不能为零或负）；offset/width/height 允许任意有限值
-/// （平台端坐标系原点可能不同），但不能是 NaN/Inf。
-pub(crate) fn validate_viewport(viewport: &StarMapViewport) -> Result<()> {
-    if viewport.scale <= 0.0
-        || !viewport.scale.is_finite()
-        || !viewport.offset_x.is_finite()
-        || !viewport.offset_y.is_finite()
-        || !viewport.width.is_finite()
-        || !viewport.height.is_finite()
-    {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Invalid starmap viewport values",
-        )));
     }
     Ok(())
 }

@@ -28,107 +28,6 @@
       }
     }
   },
-  "computeStarMapEdgeRenders": {
-    "kind": "object",
-    "fields": {
-      "diagnostics": {
-        "kind": "array",
-        "element": null
-      },
-      "renders": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "arrowLeftX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "arrowLeftY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "arrowRightX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "arrowRightY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "arrowTipX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "arrowTipY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "edgeId": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "endX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "endY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "fromCx": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "fromCy": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "hasBidirectional": {
-              "kind": "scalar",
-              "ty": "boolean"
-            },
-            "label": {
-              "kind": "scalar",
-              "ty": "null"
-            },
-            "labelX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "labelY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "offsetX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "offsetY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "startX": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "startY": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "toCx": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "toCy": {
-              "kind": "scalar",
-              "ty": "number"
-            }
-          }
-        }
-      }
-    }
-  },
   "createChapter": {
     "kind": "object",
     "fields": {
@@ -201,22 +100,6 @@
       "description": {
         "kind": "scalar",
         "ty": "string"
-      },
-      "edgeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "isMainForProject": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "linkedChapterCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "nodeCount": {
-        "kind": "scalar",
-        "ty": "number"
       },
       "projectId": {
         "kind": "scalar",
@@ -1914,22 +1797,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "edgeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "isMainForProject": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "linkedChapterCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "nodeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "projectId": {
         "kind": "scalar",
         "ty": "null"
@@ -1978,121 +1845,6 @@
       "starmapId": {
         "kind": "scalar",
         "ty": "string"
-      }
-    }
-  },
-  "getStarMapLayout": {
-    "kind": "object",
-    "fields": {
-      "kind": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "nodes": {
-        "kind": "array",
-        "element": null
-      }
-    }
-  },
-  "getStarMapLayoutAfterSeed": {
-    "kind": "object",
-    "fields": {
-      "kind": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "nodes": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "collapsed": {
-              "kind": "scalar",
-              "ty": "boolean"
-            },
-            "depth": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "focusWeight": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "height": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "nodeId": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "orbitGroup": {
-              "kind": "scalar",
-              "ty": "null"
-            },
-            "radius": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "scale": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "width": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "x": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "y": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "zIndex": {
-              "kind": "scalar",
-              "ty": "number"
-            }
-          }
-        }
-      }
-    }
-  },
-  "getStarMapMotionPolicy": {
-    "kind": "object",
-    "fields": {
-      "dragLiftScale": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "dragShadowBoost": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "enabled": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "idleAmplitudeVp": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "idlePeriodMs": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "idleWobbleEnabled": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "reduceMotion": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "settleDurationMs": {
-        "kind": "scalar",
-        "ty": "number"
       }
     }
   },
@@ -2641,22 +2393,6 @@
           "kind": "scalar",
           "ty": "string"
         },
-        "edgeCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "isMainForProject": {
-          "kind": "scalar",
-          "ty": "boolean"
-        },
-        "linkedChapterCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
-        "nodeCount": {
-          "kind": "scalar",
-          "ty": "number"
-        },
         "projectId": {
           "kind": "scalar",
           "ty": "null"
@@ -3124,22 +2860,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "edgeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "isMainForProject": {
-        "kind": "scalar",
-        "ty": "boolean"
-      },
-      "linkedChapterCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "nodeCount": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "projectId": {
         "kind": "scalar",
         "ty": "null"
@@ -3460,14 +3180,6 @@
     }
   },
   "saveLocalSettings": {
-    "kind": "scalar",
-    "ty": "boolean"
-  },
-  "saveStarMapLayout": {
-    "kind": "scalar",
-    "ty": "boolean"
-  },
-  "saveStarMapViewport": {
     "kind": "scalar",
     "ty": "boolean"
   },

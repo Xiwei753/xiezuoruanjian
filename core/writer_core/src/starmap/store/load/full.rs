@@ -151,9 +151,6 @@ impl StarMapStore {
                 .retain(|id, _| self.dirty_hyperlinks.contains(id) || declared_hl_ids.contains(id));
         }
 
-        self.layout = self.try_load_layout();
-        self.viewport = self.try_load_viewport();
-
         self.detect_dangling_references(&mut diagnostics);
         self.detect_orphan_objects(&mut diagnostics);
 

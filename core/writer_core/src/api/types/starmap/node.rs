@@ -15,10 +15,9 @@ pub struct StarMapNodeDto {
     pub anchors: Vec<StarMapAnchorDto>,
     #[serde(default)]
     pub portal: Option<StarMapPortalDto>,
+    pub position: StarMapPointDto,
     #[serde(default)]
-    pub display_policy: StarMapDisplayPolicyDto,
-    #[serde(default)]
-    pub open_behavior: StarMapOpenBehaviorDto,
+    pub style: StarMapNodeStyleDto,
     #[serde(default)]
     pub provenance: StarMapProvenanceDto,
     pub created_at: u64,
@@ -38,8 +37,8 @@ impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
             content: n.content.into(),
             anchors: n.anchors.into_iter().map(Into::into).collect(),
             portal: n.portal.map(Into::into),
-            display_policy: n.display_policy.into(),
-            open_behavior: n.open_behavior.into(),
+            position: n.position.into(),
+            style: n.style.into(),
             provenance: n.provenance.into(),
             created_at: n.created_at,
             updated_at: n.updated_at,
@@ -47,25 +46,33 @@ impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
     }
 }
 
-impl From<StarMapNodeDto> for crate::starmap::types::StarMapNode {
-    fn from(d: StarMapNodeDto) -> Self {
-        Self {
+impl TryFrom<StarMapNodeDto> for crate::starmap::types::StarMapNode {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapNodeDto) -> Result<Self, Self::Error> {
+        let payload = d
+            .payload
+            .map(|s| serde_json::from_str(&s).map_err(crate::error::Error::from))
+            .transpose()?;
+        Ok(Self {
             id: d.id,
             title: d.title,
             kind: d.kind.into(),
-            payload: d
-                .payload
-                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            payload,
             tags: d.tags,
-            content: d.content.into(),
-            anchors: d.anchors.into_iter().map(Into::into).collect(),
-            portal: d.portal.map(Into::into),
-            display_policy: d.display_policy.into(),
-            open_behavior: d.open_behavior.into(),
+            content: d.content.try_into()?,
+            anchors: d
+                .anchors
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            portal: d.portal.map(|p| p.try_into()).transpose()?,
+            position: d.position.into(),
+            style: d.style.into(),
             provenance: d.provenance.into(),
             created_at: d.created_at,
             updated_at: d.updated_at,
-        }
+        })
     }
 }
 
@@ -134,29 +141,66 @@ impl From<crate::starmap::semantic::StarMapNodeContent> for StarMapNodeContentDt
     }
 }
 
-impl From<StarMapNodeContentDto> for crate::starmap::semantic::StarMapNodeContent {
-    fn from(d: StarMapNodeContentDto) -> Self {
+impl TryFrom<StarMapNodeContentDto> for crate::starmap::semantic::StarMapNodeContent {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapNodeContentDto) -> Result<Self, Self::Error> {
         match d.kind.as_str() {
-            "inline" => Self::Inline {
+            "empty" => Ok(Self::Empty),
+            "inline" => Ok(Self::Inline {
                 summary: d.summary,
                 body: d.body,
-            },
-            "chapterRef" => Self::ChapterRef {
-                project_id: d.project_id.unwrap_or_default(),
-                volume_id: d.volume_id,
-                chapter_id: d.chapter_id.unwrap_or_default(),
-                range_start: d.range_start,
-                range_end: d.range_end,
-            },
-            "entityRef" => Self::EntityRef {
-                entity_type: d.entity_type.unwrap_or_default(),
-                entity_id: d.entity_id.unwrap_or_default(),
-            },
-            "externalRef" => Self::ExternalRef {
-                uri: d.uri.unwrap_or_default(),
-                label: d.label,
-            },
-            _ => Self::Empty,
+            }),
+            "chapterRef" => {
+                let project_id = d.project_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field project_id for kind 'chapterRef'".into(),
+                    )
+                })?;
+                let chapter_id = d.chapter_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field chapter_id for kind 'chapterRef'".into(),
+                    )
+                })?;
+                Ok(Self::ChapterRef {
+                    project_id,
+                    volume_id: d.volume_id,
+                    chapter_id,
+                    range_start: d.range_start,
+                    range_end: d.range_end,
+                })
+            }
+            "entityRef" => {
+                let entity_type = d.entity_type.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_type for kind 'entityRef'".into(),
+                    )
+                })?;
+                let entity_id = d.entity_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field entity_id for kind 'entityRef'".into(),
+                    )
+                })?;
+                Ok(Self::EntityRef {
+                    entity_type,
+                    entity_id,
+                })
+            }
+            "externalRef" => {
+                let uri = d.uri.filter(|s| !s.is_empty()).ok_or_else(|| {
+                    crate::error::Error::Other(
+                        "missing or empty required field uri for kind 'externalRef'".into(),
+                    )
+                })?;
+                Ok(Self::ExternalRef {
+                    uri,
+                    label: d.label,
+                })
+            }
+            unknown => Err(crate::error::Error::Other(format!(
+                "unknown node content kind: {}",
+                unknown
+            ))),
         }
     }
 }
@@ -171,27 +215,44 @@ pub struct StarMapNodePatchDto {
     pub content: Option<StarMapNodeContentDto>,
     pub anchors: Option<Vec<StarMapAnchorDto>>,
     pub portal: Option<Option<StarMapPortalDto>>,
-    pub display_policy: Option<StarMapDisplayPolicyDto>,
-    pub open_behavior: Option<StarMapOpenBehaviorDto>,
+    pub position: Option<StarMapPointDto>,
+    pub style: Option<StarMapNodeStyleDto>,
     pub provenance: Option<StarMapProvenanceDto>,
 }
 
-impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
-    fn from(d: StarMapNodePatchDto) -> Self {
-        Self {
+impl TryFrom<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapNodePatchDto) -> Result<Self, Self::Error> {
+        let payload = d
+            .payload
+            .map(|opt| {
+                opt.map(|s| serde_json::from_str(&s).map_err(crate::error::Error::from))
+                    .transpose()
+            })
+            .transpose()?;
+        Ok(Self {
             title: d.title,
             kind: d.kind.map(Into::into),
-            payload: d.payload.map(|opt| {
-                opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
-            }),
+            payload,
             tags: d.tags,
-            content: d.content.map(Into::into),
-            anchors: d.anchors.map(|v| v.into_iter().map(Into::into).collect()),
-            portal: d.portal.map(|p| p.map(Into::into)),
-            display_policy: d.display_policy.map(Into::into),
-            open_behavior: d.open_behavior.map(Into::into),
+            content: d.content.map(|c| c.try_into()).transpose()?,
+            anchors: d
+                .anchors
+                .map(|v| {
+                    v.into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?,
+            portal: d
+                .portal
+                .map(|p| p.map(|inner| inner.try_into()).transpose())
+                .transpose()?,
+            position: d.position.map(Into::into),
+            style: d.style.map(Into::into),
             provenance: d.provenance.map(Into::into),
-        }
+        })
     }
 }
 
@@ -265,8 +326,8 @@ pub struct StarMapNodePatchInputDto {
     pub anchors: Option<Vec<StarMapAnchorDto>>,
     pub portal: Option<StarMapPortalDto>,
     pub clear_portal: bool,
-    pub display_policy: Option<StarMapDisplayPolicyDto>,
-    pub open_behavior: Option<StarMapOpenBehaviorDto>,
+    pub position: Option<StarMapPointDto>,
+    pub style: Option<StarMapNodeStyleDto>,
     pub provenance: Option<StarMapProvenanceDto>,
 }
 
@@ -288,8 +349,8 @@ impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
             } else {
                 d.portal.map(Some)
             },
-            display_policy: d.display_policy,
-            open_behavior: d.open_behavior,
+            position: d.position,
+            style: d.style,
             provenance: d.provenance,
         }
     }

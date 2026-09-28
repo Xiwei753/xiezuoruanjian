@@ -20,27 +20,15 @@ impl StarMapStore {
         self.dirty_graph_meta = true;
     }
 
-    pub fn add_node(&mut self, node: StarMapNode, default_x: f32, default_y: f32) -> StarMapNode {
+    /// 添加节点。
+    ///
+    /// `node.position` 是节点初始位置，由调用方在写入前设置好。
+    /// 节点移动以后就是更新 `node.position`，不再另外创建 layout record。
+    /// 不再二次覆盖 position：facade 的 `add_starmap_node` 负责把
+    /// `default_x`/`default_y` 合进 `node.position`，store 只信任传入的 node。
+    pub fn add_node(&mut self, node: StarMapNode) -> StarMapNode {
         let result = node.clone();
         self.upsert_node(node);
-        let layout = self.layout.get_or_insert_with(StarMapLayout::default);
-        if !layout.nodes.iter().any(|n| n.node_id == result.id) {
-            layout.nodes.push(StarMapLayoutNode {
-                node_id: result.id.clone(),
-                x: default_x,
-                y: default_y,
-                width: 150.0,
-                height: 60.0,
-                radius: 30.0,
-                collapsed: false,
-                z_index: 0,
-                scale: 1.0,
-                depth: 0.0,
-                focus_weight: 0.0,
-                orbit_group: None,
-            });
-            self.dirty_layout = true;
-        }
         result
     }
 
@@ -75,11 +63,11 @@ impl StarMapStore {
         if let Some(ref p) = patch.portal {
             node.portal = p.clone();
         }
-        if let Some(ref dp) = patch.display_policy {
-            node.display_policy = dp.clone();
+        if let Some(ref p) = patch.position {
+            node.position = p.clone();
         }
-        if let Some(ref ob) = patch.open_behavior {
-            node.open_behavior = ob.clone();
+        if let Some(ref s) = patch.style {
+            node.style = s.clone();
         }
         if let Some(ref p) = patch.provenance {
             node.provenance = p.clone();
@@ -146,11 +134,6 @@ impl StarMapStore {
 
         for hlid in &cascade.hyperlink_ids {
             self.remove_hyperlink(hlid);
-        }
-
-        if let Some(ref mut layout) = self.layout {
-            layout.nodes.retain(|n| n.node_id != node_id);
-            self.dirty_layout = true;
         }
 
         Ok(())

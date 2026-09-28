@@ -103,7 +103,7 @@ fn test_edge_target_path_roundtrip() {
 #[test]
 fn test_starmap_graph_default() {
     let graph = StarMapGraph::default();
-    assert_eq!(graph.schema_version, 2);
+    assert_eq!(graph.schema_version, 3);
     assert!(graph.nodes.is_empty());
     assert!(graph.edges.is_empty());
     assert!(graph.embeds.is_empty());

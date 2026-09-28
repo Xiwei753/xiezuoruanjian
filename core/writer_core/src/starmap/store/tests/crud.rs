@@ -1,9 +1,7 @@
 use super::super::*;
 use super::*;
 use crate::facade::WriterCore;
-use crate::starmap::semantic::{
-    StarMapPortal, StarMapPortalMode, StarMapPortalPreviewPolicy, StarMapTargetDetail,
-};
+use crate::starmap::semantic::{StarMapPortal, StarMapTargetDetail};
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
 use crate::starmap::types::StarMapHyperlinkPatch;
 use tempfile::TempDir;
@@ -205,17 +203,12 @@ fn update_embed_host_marks_dirty_graph_meta() {
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
 
-    use crate::starmap::semantic::{
-        StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance, StarMapTargetDetail,
-    };
+    use crate::starmap::semantic::{StarMapProvenance, StarMapTargetDetail};
     let embed = StarMapEmbed {
         instance_id: "emb1".to_string(),
         target_starmap_id: "other".to_string(),
         label: None,
-        display_policy: StarMapDisplayPolicy::default(),
-        open_behavior: StarMapOpenBehavior::default(),
-        placement: StarMapEmbedPlacement::default(),
-        target_viewport: StarMapEmbedViewport::default(),
+        position: Default::default(),
         host_path: StarMapTargetPath {
             starmap_id: meta.starmap_id.clone(),
             segments: vec![],
@@ -232,10 +225,7 @@ fn update_embed_host_marks_dirty_graph_meta() {
 
     let patch = StarMapEmbedPatch {
         label: None,
-        display_policy: None,
-        open_behavior: None,
-        placement: None,
-        target_viewport: None,
+        position: None,
         host_path: Some(StarMapTargetPath {
             starmap_id: meta.starmap_id.clone(),
             segments: vec![],
@@ -421,8 +411,6 @@ fn make_portal_node(id: &str, title: &str, dest_starmap_id: &str) -> StarMapNode
     node.portal = Some(StarMapPortal {
         destination_starmap_id: dest_starmap_id.to_string(),
         destination_target: None,
-        mode: StarMapPortalMode::EnterPortal,
-        preview_policy: StarMapPortalPreviewPolicy::default(),
     });
     node
 }
@@ -532,10 +520,7 @@ fn delete_embed_cascades_edge_with_first_segment_enter_embed() {
         instance_id: "I".to_string(),
         target_starmap_id: other.starmap_id.clone(),
         label: None,
-        display_policy: crate::starmap::semantic::StarMapDisplayPolicy::default(),
-        open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
-        placement: StarMapEmbedPlacement::default(),
-        target_viewport: StarMapEmbedViewport::default(),
+        position: Default::default(),
         host_path: StarMapTargetPath {
             starmap_id: host.to_string(),
             segments: vec![],
@@ -600,10 +585,7 @@ fn delete_embed_cascades_link_and_hyperlink_with_first_segment_enter_embed() {
         instance_id: "I".to_string(),
         target_starmap_id: other.starmap_id.clone(),
         label: None,
-        display_policy: crate::starmap::semantic::StarMapDisplayPolicy::default(),
-        open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
-        placement: StarMapEmbedPlacement::default(),
-        target_viewport: StarMapEmbedViewport::default(),
+        position: Default::default(),
         host_path: StarMapTargetPath {
             starmap_id: host.to_string(),
             segments: vec![],
@@ -686,8 +668,6 @@ fn delete_starmap_node_validates_candidate_before_mutating() {
         destination_target: Some(StarMapTargetDetail::Node {
             node_id: "A".to_string(),
         }),
-        mode: StarMapPortalMode::EnterPortal,
-        preview_policy: StarMapPortalPreviewPolicy::default(),
     });
     store.upsert_node(node_b);
     store.flush().unwrap();

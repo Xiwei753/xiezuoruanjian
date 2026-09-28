@@ -15,7 +15,6 @@ pub struct FlushDirtySet {
     pub embeds: HashSet<String>,
     pub links: HashSet<String>,
     pub hyperlinks: HashSet<String>,
-    pub layout: bool,
     pub deleted_nodes: HashSet<String>,
     pub deleted_edges: HashSet<String>,
     pub deleted_embeds: HashSet<String>,
@@ -30,7 +29,6 @@ pub enum DirtyKind {
     Embed,
     Hyperlink,
     Link,
-    Layout,
     GraphMeta,
 }
 
@@ -71,12 +69,16 @@ pub struct ListWithDiagnostics<T> {
     pub diagnostics: Vec<LoadDiagnostic>,
 }
 
+/// 加载阶段。布局/视口已退出 Core，阶段简化为：
+/// - `GraphMeta`：加载 graph.json 元信息
+/// - `CurrentObjects`：加载当前需要的对象
+/// - `PrefetchNearbyObjects`：预取附近对象
+/// - `BackgroundFullLoad`：后台全量加载
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LoadPhase {
     GraphMeta,
-    ViewportAndLayoutIndex,
-    CurrentViewportObjects,
+    CurrentObjects,
     PrefetchNearbyObjects,
     BackgroundFullLoad,
 }
@@ -84,9 +86,8 @@ pub enum LoadPhase {
 impl LoadPhase {
     pub fn next(self) -> Option<LoadPhase> {
         match self {
-            LoadPhase::GraphMeta => Some(LoadPhase::ViewportAndLayoutIndex),
-            LoadPhase::ViewportAndLayoutIndex => Some(LoadPhase::CurrentViewportObjects),
-            LoadPhase::CurrentViewportObjects => Some(LoadPhase::PrefetchNearbyObjects),
+            LoadPhase::GraphMeta => Some(LoadPhase::CurrentObjects),
+            LoadPhase::CurrentObjects => Some(LoadPhase::PrefetchNearbyObjects),
             LoadPhase::PrefetchNearbyObjects => Some(LoadPhase::BackgroundFullLoad),
             LoadPhase::BackgroundFullLoad => None,
         }
@@ -100,7 +101,6 @@ pub enum SaveQueueEntry {
     Embed,
     Link,
     Hyperlink,
-    Layout,
     GraphMeta,
     DeleteNode,
     DeleteEdge,

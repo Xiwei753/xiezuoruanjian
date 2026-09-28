@@ -24,16 +24,18 @@ impl From<crate::starmap::types::StarMapLink> for StarMapLinkDto {
     }
 }
 
-impl From<StarMapLinkDto> for crate::starmap::types::StarMapLink {
-    fn from(d: StarMapLinkDto) -> Self {
-        Self {
+impl TryFrom<StarMapLinkDto> for crate::starmap::types::StarMapLink {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapLinkDto) -> Result<Self, Self::Error> {
+        Ok(Self {
             link_id: d.link_id,
-            source: d.source.into(),
-            target: d.target.into(),
+            source: d.source.try_into()?,
+            target: d.target.try_into()?,
             label: d.label,
             created_at: d.created_at,
             updated_at: d.updated_at,
-        }
+        })
     }
 }
 
@@ -68,13 +70,15 @@ impl From<StarMapLinkPatchInputDto> for StarMapLinkPatchDto {
     }
 }
 
-impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
-    fn from(d: StarMapLinkPatchDto) -> Self {
-        Self {
-            source: d.source.map(Into::into),
-            target: d.target.map(Into::into),
+impl TryFrom<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
+    type Error = crate::error::Error;
+
+    fn try_from(d: StarMapLinkPatchDto) -> Result<Self, Self::Error> {
+        Ok(Self {
+            source: d.source.map(|s| s.try_into()).transpose()?,
+            target: d.target.map(|t| t.try_into()).transpose()?,
             label: d.label,
-        }
+        })
     }
 }
 

@@ -6,7 +6,6 @@
 
 mod embed;
 mod graph;
-mod layout;
 mod link;
 pub mod reference;
 
@@ -14,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 pub use embed::*;
 pub use graph::*;
-pub use layout::*;
 pub use link::*;
 pub use reference::*;
 

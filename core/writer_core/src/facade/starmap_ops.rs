@@ -8,13 +8,6 @@ impl super::WriterCore {
         crate::starmap::list_starmaps(&self.app_data_root)
     }
 
-    pub fn list_starmaps_for_project(
-        &self,
-        project_id: &str,
-    ) -> Result<Vec<crate::starmap::StarMapMeta>> {
-        crate::starmap::list_starmaps_for_project(&self.app_data_root, project_id)
-    }
-
     pub fn list_starmaps_bound_to_project(
         &self,
         project_id: &str,
@@ -117,7 +110,9 @@ impl super::WriterCore {
     }
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
-        crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)
+        let _ =
+            crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)?;
+        Ok(())
     }
 
     ///   bind_starmap_to_project 的变更集版本。
@@ -134,7 +129,12 @@ impl super::WriterCore {
     }
 
     pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
-        crate::starmap::set_main_starmap_for_project(&self.app_data_root, starmap_id, project_id)
+        let _ = crate::starmap::set_main_starmap_for_project(
+            &self.app_data_root,
+            starmap_id,
+            project_id,
+        )?;
+        Ok(())
     }
 
     ///   set_main_starmap_for_project 的变更集版本。
@@ -158,7 +158,8 @@ impl super::WriterCore {
     }
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> Result<()> {
-        crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)
+        let _ = crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)?;
+        Ok(())
     }
 
     ///   unbind_starmap_from_project 的变更集版本。
@@ -184,149 +185,6 @@ impl super::WriterCore {
         Ok(store.to_starmap_graph())
     }
 
-    #[allow(clippy::too_many_lines)]
-    pub fn import_or_replace_starmap_package(
-        &self,
-        starmap_id: &str,
-        graph: &crate::starmap::types::StarMapGraph,
-        base_package_revision: u64,
-    ) -> Result<Vec<std::path::PathBuf>> {
-        // Fix 2: graph.starmap_id 必须与传入的 starmap_id 一致，
-        // 否则 validate_graph 中的 path.starmap_id == graph.starmap_id
-        // 不变量无法保证跨层路径的正确性。
-        if graph.starmap_id != starmap_id {
-            return Err(crate::error::Error::Other(format!(
-                "graph.starmap_id ({}) does not match starmap_id ({})",
-                graph.starmap_id, starmap_id
-            )));
-        }
-
-        if graph.schema_version != crate::starmap::types::CURRENT_GRAPH_SCHEMA_VERSION {
-            return Err(crate::error::Error::UnsupportedVersion {
-                version: graph.schema_version.to_string(),
-            });
-        }
-
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
-        // 在持有 stores lock 的情况下构建 resolver context，避免重复 lock 死锁。
-        validation::validate_graph(
-            &self.build_resolver_context_from_stores(&stores, graph),
-            graph,
-        )?;
-
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-
-        store.ensure_fully_loaded()?;
-
-        let current_revision = store.package_revision();
-        if base_package_revision != current_revision {
-            return Err(crate::error::Error::Other(format!(
-                "package revision mismatch: base={}, current={}",
-                base_package_revision, current_revision
-            )));
-        }
-
-        let old_node_ids: std::collections::HashSet<String> =
-            store.all_nodes().map(|n| n.id.clone()).collect();
-        let old_edge_ids: std::collections::HashSet<String> =
-            store.all_edges().map(|e| e.id.clone()).collect();
-        let old_embed_ids: std::collections::HashSet<String> =
-            store.all_embeds().map(|e| e.instance_id.clone()).collect();
-        let old_link_ids: std::collections::HashSet<String> =
-            store.all_links().map(|l| l.link_id.clone()).collect();
-        let old_hyperlink_ids: std::collections::HashSet<String> = store
-            .all_hyperlinks()
-            .map(|hl| hl.hyperlink_id.clone())
-            .collect();
-
-        let new_node_ids: std::collections::HashSet<String> =
-            graph.nodes.iter().map(|n| n.id.clone()).collect();
-        let new_edge_ids: std::collections::HashSet<String> =
-            graph.edges.iter().map(|e| e.id.clone()).collect();
-        let new_embed_ids: std::collections::HashSet<String> =
-            graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
-        let new_link_ids: std::collections::HashSet<String> =
-            graph.links.iter().map(|l| l.link_id.clone()).collect();
-        let new_hyperlink_ids: std::collections::HashSet<String> = graph
-            .hyperlinks
-            .iter()
-            .map(|hl| hl.hyperlink_id.clone())
-            .collect();
-
-        for node in &graph.nodes {
-            store.upsert_node(node.clone());
-        }
-        for edge in &graph.edges {
-            store.upsert_edge(edge.clone());
-        }
-        for embed in &graph.embeds {
-            store.upsert_embed(embed.clone());
-        }
-        for link in &graph.links {
-            store.upsert_link(link.clone());
-        }
-        for hl in &graph.hyperlinks {
-            store.upsert_hyperlink(hl.clone());
-        }
-
-        for old_id in &old_node_ids {
-            if !new_node_ids.contains(old_id) {
-                let _ = store.delete_node(old_id);
-            }
-        }
-        for old_id in &old_edge_ids {
-            if !new_edge_ids.contains(old_id) {
-                store.remove_edge(old_id);
-            }
-        }
-        for old_id in &old_embed_ids {
-            if !new_embed_ids.contains(old_id) {
-                store.remove_embed(old_id);
-            }
-        }
-        for old_id in &old_link_ids {
-            if !new_link_ids.contains(old_id) {
-                store.remove_link(old_id);
-            }
-        }
-        for old_id in &old_hyperlink_ids {
-            if !new_hyperlink_ids.contains(old_id) {
-                store.remove_hyperlink(old_id);
-            }
-        }
-
-        store.enqueue_save(SaveQueueEntry::Node);
-        store.enqueue_save(SaveQueueEntry::Edge);
-        store.enqueue_save(SaveQueueEntry::Embed);
-        store.enqueue_save(SaveQueueEntry::Link);
-        store.enqueue_save(SaveQueueEntry::Hyperlink);
-        store.enqueue_save(SaveQueueEntry::DeleteNode);
-        store.enqueue_save(SaveQueueEntry::DeleteEdge);
-        store.enqueue_save(SaveQueueEntry::DeleteEmbed);
-        store.enqueue_save(SaveQueueEntry::DeleteLink);
-        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush()
-    }
-
-    pub fn get_starmap_store_package_revision(&self, starmap_id: &str) -> u64 {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        let _ = store.ensure_loaded();
-        store.package_revision()
-    }
-
     pub fn add_starmap_node(
         &self,
         starmap_id: &str,
@@ -345,6 +203,15 @@ impl super::WriterCore {
             store.ensure_fully_loaded()?;
         }
 
+        // 先把 default_x/default_y 合进 node.position，再用同一个 node 做校验和写入。
+        // 这样 validator 检查的就是真正要写入的同一份数据，不会出现 DTO 自带 position
+        // 校验通过但 default_x=NaN 被写进 node.position 的情况。
+        let mut node = node;
+        node.position = crate::starmap::types::StarMapPoint {
+            x: default_x,
+            y: default_y,
+        };
+
         // 先在 candidate graph 上模拟 add，跑 validate_graph，再真正改 Store。
         let candidate = {
             let store = Self::get_store_or_err(&stores, starmap_id)?;
@@ -358,9 +225,8 @@ impl super::WriterCore {
         )?;
 
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        let result = store.add_node(node, default_x, default_y);
+        let result = store.add_node(node);
         store.enqueue_save(SaveQueueEntry::Node);
-        store.enqueue_save(SaveQueueEntry::Layout);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(result)
     }
@@ -438,7 +304,6 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
-        store.enqueue_save(SaveQueueEntry::Layout);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(())
     }
@@ -527,76 +392,6 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(())
-    }
-
-    pub fn get_starmap_layout(
-        &self,
-        starmap_id: &str,
-    ) -> Result<crate::starmap::types::StarMapLayout> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
-        Ok(store.get_layout().cloned().unwrap_or_default())
-    }
-
-    pub fn save_starmap_layout(
-        &self,
-        starmap_id: &str,
-        layout: &crate::starmap::types::StarMapLayout,
-    ) -> Result<Vec<std::path::PathBuf>> {
-        validation::validate_layout(layout)?;
-
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
-        store.set_layout(layout.clone());
-        store.enqueue_save(SaveQueueEntry::Layout);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush()
-    }
-
-    pub fn get_starmap_viewport(
-        &self,
-        starmap_id: &str,
-    ) -> Result<crate::starmap::types::StarMapViewport> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
-        Ok(store.get_viewport().cloned().unwrap_or_default())
-    }
-
-    pub fn save_starmap_viewport(
-        &self,
-        starmap_id: &str,
-        viewport: &crate::starmap::types::StarMapViewport,
-    ) -> Result<Vec<std::path::PathBuf>> {
-        validation::validate_viewport(viewport)?;
-
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
-        store.set_viewport(viewport.clone());
-        store.flush_viewport()
     }
 
     pub fn add_starmap_embed(
@@ -952,10 +747,6 @@ impl super::WriterCore {
         crate::starmap::find_starmap_references(&self.app_data_root, target_starmap_id)
     }
 
-    pub fn get_motion_policy(&self) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
-        crate::starmap::get_motion_policy(&self.app_data_root)
-    }
-
     pub fn close_starmap_store(&self, starmap_id: &str) -> Result<Vec<std::path::PathBuf>> {
         let mut stores = self
             .starmap_stores
@@ -1105,11 +896,11 @@ fn apply_node_patch_to_graph(
     if let Some(ref p) = patch.portal {
         node.portal = p.clone();
     }
-    if let Some(ref dp) = patch.display_policy {
-        node.display_policy = dp.clone();
+    if let Some(ref p) = patch.position {
+        node.position = p.clone();
     }
-    if let Some(ref ob) = patch.open_behavior {
-        node.open_behavior = ob.clone();
+    if let Some(ref s) = patch.style {
+        node.style = s.clone();
     }
     if let Some(ref p) = patch.provenance {
         node.provenance = p.clone();
@@ -1168,17 +959,8 @@ fn apply_embed_patch_to_graph(
     if let Some(ref l) = patch.label {
         embed.label = l.clone();
     }
-    if let Some(ref dp) = patch.display_policy {
-        embed.display_policy = dp.clone();
-    }
-    if let Some(ref ob) = patch.open_behavior {
-        embed.open_behavior = ob.clone();
-    }
-    if let Some(Some(ref pl)) = patch.placement {
-        embed.placement = pl.clone();
-    }
-    if let Some(Some(ref vp)) = patch.target_viewport {
-        embed.target_viewport = vp.clone();
+    if let Some(ref p) = patch.position {
+        embed.position = p.clone();
     }
     if let Some(ref hp) = patch.host_path {
         embed.host_path = hp.clone();

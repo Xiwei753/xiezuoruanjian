@@ -1,9 +1,8 @@
 use crate::api::{
-    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEdgeRenderBatchDto, StarMapEmbedDto,
-    StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
-    StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
-    StarMapMotionPolicyDto, StarMapNodeDto, StarMapNodePatchInputDto, StarMapPhasedSnapshotDto,
-    StarMapReferenceDto, StarMapViewportDto, WriterError,
+    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto,
+    StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto, StarMapLinkDto,
+    StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNodeDto, StarMapNodePatchInputDto,
+    StarMapPhasedSnapshotDto, StarMapReferenceDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -77,56 +76,6 @@ impl super::WriterAppService {
         self.api.delete_starmap_edge(&starmap_id, &edge_id)
     }
 
-    pub fn import_or_replace_starmap_package(
-        &self,
-        starmap_id: String,
-        graph: StarMapGraphDto,
-        base_package_revision: u64,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .import_or_replace_starmap_package(&starmap_id, &graph, base_package_revision)
-    }
-
-    pub fn save_starmap_layout(
-        &self,
-        starmap_id: String,
-        layout: StarMapLayoutDto,
-    ) -> Result<bool, WriterError> {
-        self.api.save_starmap_layout(&starmap_id, &layout)
-    }
-
-    pub fn get_starmap_viewport(
-        &self,
-        starmap_id: String,
-    ) -> Result<StarMapViewportDto, WriterError> {
-        self.api.get_starmap_viewport(&starmap_id)
-    }
-
-    pub fn save_starmap_viewport(
-        &self,
-        starmap_id: String,
-        viewport: StarMapViewportDto,
-    ) -> Result<bool, WriterError> {
-        self.api.save_starmap_viewport(&starmap_id, viewport)
-    }
-
-    pub fn compute_starmap_edge_renders(
-        &self,
-        graph: StarMapGraphDto,
-        layout: StarMapLayoutDto,
-    ) -> Result<StarMapEdgeRenderBatchDto, WriterError> {
-        self.api.compute_starmap_edge_renders(graph, layout)
-    }
-
-    pub fn hit_test_starmap_node(
-        &self,
-        layout: StarMapLayoutDto,
-        x: f32,
-        y: f32,
-    ) -> Result<Option<String>, WriterError> {
-        self.api.hit_test_starmap_node(layout, x, y)
-    }
-
     pub fn add_starmap_embed(
         &self,
         starmap_id: String,
@@ -194,10 +143,6 @@ impl super::WriterAppService {
     ) -> Result<(), WriterError> {
         self.api
             .ack_starmap_deletions(&starmap_id, acknowledged_revision)
-    }
-
-    pub fn get_starmap_motion_policy(&self) -> Result<StarMapMotionPolicyDto, WriterError> {
-        self.api.get_starmap_motion_policy()
     }
 
     pub fn flush_starmap_store(&self, starmap_id: String) -> Result<bool, WriterError> {
