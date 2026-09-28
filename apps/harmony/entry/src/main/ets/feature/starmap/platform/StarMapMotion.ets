@@ -2,7 +2,7 @@
  * StarMapMotion — 星图节点运动逻辑纯计算模块。
  *
  * 从 StarMapScreen.ets 抽出的运动逻辑，不依赖 ArkUI 组件，不依赖 corebridge。
- * 只提供计算函数，不启动定时器；调用方应使用 ArkUI animation / animateTo 驱动动画。
+ * 只提供计算函数，不启动定时器；调用方应使用 ArkUI Animator 的 onFrame 逐帧回调驱动动画。
  */
 
 // ── Motion 配置 ──────────────────────────────────────────────
@@ -110,6 +110,56 @@ export function wobbleY(
   const period = config.idlePeriodMs
   const amplitude = config.idleAmplitudeVp
   return Math.cos((tick / period) * 0.7 * 2 * Math.PI + phase) * amplitude * 0.6
+}
+
+// ── Idle wobble（progress 驱动）─────────────────────────────
+
+/**
+ * 计算节点的视觉水平偏移（idle wobble），基于动画 progress ∈ [0, 1]。
+ *
+ * progress 由 ArkUI Animator 的 onFrame 逐帧回调提供，每帧更新。
+ * progress 直接映射到 sin 的完整周期：progress=0 → sin(phase)，progress=1 → sin(2π+phase)。
+ *
+ * 当 motion 未启用、idleWobble 未启用、reduceMotion 开启、或该节点正在被拖动时返回 0。
+ *
+ * @param nodeId         节点 ID
+ * @param progress       动画进度 ∈ [0, 1]，由 Animator onFrame 提供
+ * @param config         运动配置
+ * @param draggingNodeId 当前正在拖动的节点 ID（空字符串表示无拖动）
+ */
+export function wobbleXFromProgress(
+  nodeId: string,
+  progress: number,
+  config: PlatformMotionConfig,
+  draggingNodeId: string,
+): number {
+  if (!config.enabled || !config.idleWobbleEnabled || config.reduceMotion || draggingNodeId === nodeId) {
+    return 0
+  }
+  return Math.sin(progress * Math.PI * 2 + stablePhase(nodeId)) * config.idleAmplitudeVp
+}
+
+/**
+ * 计算节点的视觉垂直偏移（idle wobble），基于动画 progress ∈ [0, 1]。
+ * Y 方向频率略低（0.7x）、振幅更小（0.6x），营造自然漂浮感。
+ *
+ * 当 motion 未启用、idleWobble 未启用、reduceMotion 开启、或该节点正在被拖动时返回 0。
+ *
+ * @param nodeId         节点 ID
+ * @param progress       动画进度 ∈ [0, 1]，由 Animator onFrame 提供
+ * @param config         运动配置
+ * @param draggingNodeId 当前正在拖动的节点 ID（空字符串表示无拖动）
+ */
+export function wobbleYFromProgress(
+  nodeId: string,
+  progress: number,
+  config: PlatformMotionConfig,
+  draggingNodeId: string,
+): number {
+  if (!config.enabled || !config.idleWobbleEnabled || config.reduceMotion || draggingNodeId === nodeId) {
+    return 0
+  }
+  return Math.cos(progress * 0.7 * Math.PI * 2 + stablePhase(nodeId)) * config.idleAmplitudeVp * 0.6
 }
 
 // ── 拖动/拉线暂停追踪 ───────────────────────────────────────

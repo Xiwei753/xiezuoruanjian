@@ -16,7 +16,8 @@ import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActio
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRectFromLayoutNode, hitTest, computeAllEdgeRenders, screenToCanvas } from '../platform/StarMapGeometry'
 import { PlatformLayoutNode, PlatformPoint, NodePositionPatch, buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout, autoGridLayoutNodes, generatePositionPatches } from '../platform/StarMapLayout'
-import { PlatformMotionConfig, defaultMotionConfig, wobbleX, wobbleY, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
+import { PlatformMotionConfig, defaultMotionConfig, wobbleXFromProgress, wobbleYFromProgress, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
+import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 
 interface SelectOption {
@@ -74,9 +75,10 @@ export struct StarMapScreen {
   @State previewLineFrom: PlatformPoint = { x: 0, y: 0 }
   @State previewLineTo: PlatformPoint = { x: 0, y: 0 }
 
-  // 动画驱动：用 animateTo 驱动 animPhase 从 0→1 无限循环，替代 setInterval
-  // @Watch 驱动 Canvas 主动重画：wobble 偏移随 animPhase 变化，边和预览线必须跟着重绘
-  @State @Watch('onAnimPhaseChange') animPhase: number = 0
+  // 动画驱动：用 Animator onFrame 逐帧回调驱动 motionProgress ∈ [0, 1]
+  // progress 直接映射到 wobble 的 sin/cos 相位，每帧更新节点位置和 Canvas 边
+  @State @Watch('onMotionProgressChange') motionProgress: number = 0
+  private wobbleAnimator: AnimatorResult | null = null
 
   // 双指缩放的基准比例（手势开始时记录）
   private pinchBaseScale: number = 1
@@ -140,13 +142,15 @@ export struct StarMapScreen {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
-    // 启动 wobble 动画：用 animateTo 驱动 animPhase 从 0→1 无限循环
+    // 启动 wobble 动画：用 Animator onFrame 逐帧回调驱动 motionProgress
     this.startWobbleAnimation()
 
     void this.startShareLifecycle()
   }
 
   aboutToDisappear() {
+    // 页面退出时 cancel Animator，避免动画继续持有页面状态
+    this.stopWobbleAnimation()
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -157,23 +161,40 @@ export struct StarMapScreen {
   }
 
   /**
-   * 用 animateTo 驱动 animPhase 从 0→1 无限循环，替代 setInterval 定时器。
-   * wobbleX/wobbleY 用 animPhase * idlePeriodMs 作为 tick 计算偏移。
+   * 用 ArkUI Animator 的 onFrame 逐帧回调驱动 motionProgress ∈ [0, 1]。
+   * Animator 的 begin=0, end=1, iterations=-1（无限循环），easing='linear'。
+   * onFrame 每帧把 progress 写入 @State motionProgress，触发 @Watch 重画 Canvas 边。
+   * 节点位置也从同一个 motionProgress 派生 wobble 偏移，保证边和节点同步。
    */
   startWobbleAnimation() {
     if (!shouldAnimate(this.motionConfig)) {
       return
     }
-    animateTo({
+    this.wobbleAnimator = Animator.create({
       duration: this.motionConfig.idlePeriodMs,
       iterations: -1,
-      curve: Curve.Linear,
-      onFinish: () => {
-        this.animPhase = this.animPhase + 1
-      }
-    }, () => {
-      this.animPhase = this.animPhase + 1
+      easing: 'linear',
+      begin: 0,
+      end: 1,
+      delay: 0,
+      fill: 'none',
+      direction: 'normal'
     })
+    this.wobbleAnimator.onFrame = (progress: number) => {
+      this.motionProgress = progress
+    }
+    this.wobbleAnimator.play()
+  }
+
+  /**
+   * 停止 wobble Animator，释放动画资源。
+   * 页面退出时调用，避免动画继续持有页面状态。
+   */
+  stopWobbleAnimation() {
+    if (this.wobbleAnimator) {
+      this.wobbleAnimator.cancel()
+      this.wobbleAnimator = null
+    }
   }
 
   async loadStarMap() {
@@ -335,13 +356,6 @@ export struct StarMapScreen {
   }
 
   /**
-   * 获取当前动画 tick 值：animPhase * idlePeriodMs
-   */
-  private getAnimTick(): number {
-    return this.animPhase * this.motionConfig.idlePeriodMs
-  }
-
-  /**
    * 手势触点的屏幕坐标。
    * GestureEvent 本身没有 x/y：触点坐标在 `fingerList[0].localX/localY`（相对触发组件
    * 左上角），加上组件自身的屏幕位置才是屏幕坐标。
@@ -394,7 +408,7 @@ export struct StarMapScreen {
   private getNodeScreenX(nodeId: string): number {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseX = ln ? ln.x : 0
-    const wobbleDx = wobbleX(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
+    const wobbleDx = wobbleXFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
     return (baseX + wobbleDx) * this.zoomScale + this.offsetX
   }
 
@@ -404,7 +418,7 @@ export struct StarMapScreen {
   private getNodeScreenY(nodeId: string): number {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseY = ln ? ln.y : 0
-    const wobbleDy = wobbleY(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
+    const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
     return (baseY + wobbleDy) * this.zoomScale + this.offsetY
   }
 
@@ -501,10 +515,10 @@ export struct StarMapScreen {
   }
 
   /**
-   * animPhase 变化时重画边和预览线。
-   * wobble 偏移随 animPhase 变化，如果 Canvas 不重画，节点在晃但线端点不跟。
+   * motionProgress 变化时重画边和预览线。
+   * wobble 偏移随 progress 变化，如果 Canvas 不重画，节点在晃但线端点不跟。
    */
-  onAnimPhaseChange() {
+  onMotionProgressChange() {
     this.drawEdges()
     if (this.gestureMode === 'connect') {
       this.drawPreviewLine()
@@ -1307,11 +1321,11 @@ export struct StarMapScreen {
     ctx.clearRect(0, 0, ctx.width, ctx.height)
 
     // 构建 nodeId → wobble offset 映射
-    const tick = this.getAnimTick()
+    const progress = this.motionProgress
     const wobbleMap = new Map<string, WobbleOffset>()
     for (const node of this.graph.nodes) {
-      const dx = wobbleX(node.id, tick, this.motionConfig, this.gestureTracker.getState().activeNodeId)
-      const dy = wobbleY(node.id, tick, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+      const dx = wobbleXFromProgress(node.id, progress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+      const dy = wobbleYFromProgress(node.id, progress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
       wobbleMap.set(node.id, { dx, dy })
     }
 
