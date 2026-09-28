@@ -968,3 +968,198 @@ fn repro_781_load_full_missing_declared_link_must_error() {
          but got Ok (current bug: returns incomplete graph as if successful). result={result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 评论 5863582949：对象加载严格传播（缺失 / 损坏 / ID 不一致都必须 Err）
+// ---------------------------------------------------------------------------
+
+/// 写一份只声明指定成员列表的 graph.json（schema "4"）。
+fn write_graph_meta_declaring(
+    starmap_dir: &std::path::Path,
+    starmap_id: &str,
+    field: &str,
+    ids: Vec<String>,
+) {
+    let mut meta = GraphMeta {
+        schema_version: "4".to_string(),
+        starmap_id: starmap_id.to_string(),
+        package_revision: 1,
+        ..Default::default()
+    };
+    match field {
+        "nodeIds" => meta.node_ids = ids,
+        "edgeIds" => meta.edge_ids = ids,
+        "embedInstanceIds" => meta.embed_instance_ids = ids,
+        "linkIds" => meta.link_ids = ids,
+        "hyperlinkIds" => meta.hyperlink_ids = ids,
+        other => panic!("unknown member list field '{other}'"),
+    }
+    std::fs::write(
+        starmap_dir.join("graph.json"),
+        serde_json::to_string_pretty(&meta).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn load_full_errors_for_corrupt_declared_node_file() {
+    let dir = TempDir::new().unwrap();
+    let starmap_id = "test-id";
+    let starmap_dir = dir.path().join("starmaps").join(starmap_id);
+    std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+
+    write_to_bucket(&starmap_dir, "nodes", "n1", "THIS IS NOT JSON");
+    write_graph_meta_declaring(&starmap_dir, starmap_id, "nodeIds", vec!["n1".to_string()]);
+
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    // fail-closed：声明的 node 文件存在但解析失败 → Err，不能当 missing 跳过。
+    let result = store.load_full();
+    assert!(
+        result.is_err(),
+        "load_full must Err when a declared node file cannot be parsed, got: {result:?}"
+    );
+}
+
+#[test]
+fn load_full_errors_when_object_internal_id_mismatches_filename() {
+    use crate::starmap::semantic::StarMapProvenance;
+    use crate::starmap::types::*;
+
+    let dir = TempDir::new().unwrap();
+    let starmap_id = "test-id";
+    let starmap_dir = dir.path().join("starmaps").join(starmap_id);
+    for subdir in ["nodes", "edges", "embeds", "hyperlinks", "links"] {
+        std::fs::create_dir_all(starmap_dir.join(subdir)).unwrap();
+    }
+
+    let target = |starmap: &str| StarMapTargetPath {
+        starmap_id: starmap.to_string(),
+        segments: vec![],
+        target: StarMapTargetDetail::Starmap,
+    };
+    let mismatched_node = make_test_node("id-in-file", "N");
+    let mismatched_edge = StarMapEdge {
+        id: "id-in-file".to_string(),
+        from: target(starmap_id),
+        to: target(starmap_id),
+        kind: StarMapEdgeKind::RelatedTo,
+        label: None,
+        payload: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mismatched_embed = StarMapEmbed {
+        instance_id: "id-in-file".to_string(),
+        target_starmap_id: starmap_id.to_string(),
+        label: None,
+        position: Default::default(),
+        host_path: target(starmap_id),
+        provenance: StarMapProvenance::default(),
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mismatched_hyperlink = StarMapHyperlink {
+        hyperlink_id: "id-in-file".to_string(),
+        source: target(starmap_id),
+        target_uri: "https://example.com".to_string(),
+        label: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mismatched_link = make_test_link("id-in-file", "L");
+
+    let cases = [
+        (
+            "nodes",
+            "nodeIds",
+            "node-a",
+            serde_json::to_string(&mismatched_node).unwrap(),
+        ),
+        (
+            "edges",
+            "edgeIds",
+            "edge-a",
+            serde_json::to_string(&mismatched_edge).unwrap(),
+        ),
+        (
+            "embeds",
+            "embedInstanceIds",
+            "embed-a",
+            serde_json::to_string(&mismatched_embed).unwrap(),
+        ),
+        (
+            "hyperlinks",
+            "hyperlinkIds",
+            "hyperlink-a",
+            serde_json::to_string(&mismatched_hyperlink).unwrap(),
+        ),
+        (
+            "links",
+            "linkIds",
+            "link-a",
+            serde_json::to_string(&mismatched_link).unwrap(),
+        ),
+    ];
+    for (subdir, field, declared_id, content) in cases {
+        write_to_bucket(&starmap_dir, subdir, declared_id, &content);
+        write_graph_meta_declaring(
+            &starmap_dir,
+            starmap_id,
+            field,
+            vec![declared_id.to_string()],
+        );
+
+        let mut store = StarMapStore::new(dir.path(), starmap_id);
+        let result = store.load_full();
+        assert!(
+            result.is_err(),
+            "load_full must Err when {subdir} internal id does not match filename \
+             '{declared_id}', got: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn load_phased_current_objects_errors_for_missing_declared_node() {
+    let dir = TempDir::new().unwrap();
+    let starmap_id = "test-id";
+    let starmap_dir = dir.path().join("starmaps").join(starmap_id);
+    std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+
+    write_graph_meta_declaring(
+        &starmap_dir,
+        starmap_id,
+        "nodeIds",
+        vec!["missing-node".to_string()],
+    );
+
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    let result = store.load_phased(LoadPhase::CurrentObjects);
+    assert!(
+        result.is_err(),
+        "load_phased(CurrentObjects) must Err for a missing declared node, got: {result:?}"
+    );
+}
+
+#[test]
+fn load_remaining_objects_errors_for_missing_declared_node() {
+    let dir = TempDir::new().unwrap();
+    let starmap_id = "test-id";
+    let starmap_dir = dir.path().join("starmaps").join(starmap_id);
+    std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+
+    write_graph_meta_declaring(
+        &starmap_dir,
+        starmap_id,
+        "nodeIds",
+        vec!["missing-node".to_string()],
+    );
+
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    store.load_graph_meta_phase(&mut vec![]).unwrap();
+    let result = store.load_remaining_objects(&mut vec![]);
+    assert!(
+        result.is_err(),
+        "load_remaining_objects must Err for a missing declared node, got: {result:?}"
+    );
+}

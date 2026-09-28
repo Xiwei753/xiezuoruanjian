@@ -1209,3 +1209,202 @@ fn repro_781_read_layout_positions_bad_xy_must_error() {
          but got Ok (current bug: if let skips bad x/y then guesses (0,0)). result={result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 评论 5863582949：旧 layouts/default/** 只能在所有 Node 和 Embed 迁移成功后删除
+// ---------------------------------------------------------------------------
+
+/// 写 schema "3" 的 graph.json。`members = None` 表示完全省略成员列表字段。
+fn write_schema3_graph_json(
+    graph_dir: &std::path::Path,
+    starmap_id: &str,
+    members: Option<(serde_json::Value, serde_json::Value)>,
+) {
+    let mut meta = json!({
+        "schemaVersion": "3",
+        "starmapId": starmap_id,
+        "edgeIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    if let Some((node_ids, embed_ids)) = members {
+        meta["nodeIds"] = node_ids;
+        meta["embedInstanceIds"] = embed_ids;
+    }
+    write_json(&graph_dir.join("graph.json"), &meta);
+}
+
+/// 写一份旧 layout shard，声明每个 node 的 x/y。
+fn write_layout_shard(graph_dir: &std::path::Path, entries: &[(&str, f64, f64)]) {
+    let nodes: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(node_id, x, y)| {
+            json!({
+                "nodeId": node_id, "x": x, "y": y, "width": 80.0, "height": 60.0,
+                "radius": 0.0, "collapsed": false, "zIndex": 0, "scale": 1.0,
+            })
+        })
+        .collect();
+    let Some((first_id, _, _)) = entries.first() else {
+        return;
+    };
+    let bucket = crate::starmap::package_storage::bucket_for_id(first_id);
+    write_json(
+        &graph_dir
+            .join("layouts")
+            .join("default")
+            .join("nodes")
+            .join(format!("{bucket}.json")),
+        &serde_json::Value::Array(nodes),
+    );
+}
+
+/// 写一个没有 position 的旧 node JSON 文件（旧数据需要从 layout 迁位置）。
+fn write_legacy_node_file(graph_dir: &std::path::Path, node_id: &str) {
+    let node = json!({
+        "id": node_id, "title": node_id, "kind": "concept", "payload": null,
+        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
+    });
+    let bucket = crate::starmap::package_storage::bucket_for_id(node_id);
+    write_json(
+        &graph_dir
+            .join("nodes")
+            .join(bucket)
+            .join(format!("{node_id}.json")),
+        &node,
+    );
+}
+
+/// 读回 graph.json 的 schemaVersion。
+fn read_graph_schema_version(graph_dir: &std::path::Path) -> serde_json::Value {
+    let content = std::fs::read_to_string(graph_dir.join("graph.json")).unwrap();
+    let meta: serde_json::Value = serde_json::from_str(&content).unwrap();
+    meta["schemaVersion"].clone()
+}
+
+#[test]
+fn migrate_declared_node_without_file_errors_and_keeps_legacy_layout() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_missing_node");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    // GraphMeta 声明 n1、n2，但只写了 n1 的对象文件。
+    write_schema3_graph_json(
+        &graph_dir,
+        "sm_missing_node",
+        Some((json!(["n1", "n2"]), json!([]))),
+    );
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0), ("n2", 300.0, 400.0)]);
+    write_legacy_node_file(&graph_dir, "n1");
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_missing_node");
+    assert!(
+        result.is_err(),
+        "declared node without object file must Err, got: {result:?}"
+    );
+
+    // 旧 layout 是 n2 position 的唯一来源，缺文件时必须保留。
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when a declared node was not migrated"
+    );
+    assert_eq!(
+        read_graph_schema_version(&graph_dir),
+        json!("3"),
+        "schema must not advance when migration did not finish"
+    );
+}
+
+#[test]
+fn migrate_declared_embed_without_file_errors_and_keeps_legacy_layout() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_missing_embed");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+    std::fs::create_dir_all(graph_dir.join("embeds")).unwrap();
+
+    write_schema3_graph_json(
+        &graph_dir,
+        "sm_missing_embed",
+        Some((json!(["n1"]), json!(["emb1"]))),
+    );
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0)]);
+    write_legacy_node_file(&graph_dir, "n1");
+    // 故意不写 embeds/emb1.json。
+    write_json(
+        &dir_path_session(dir.path(), "sm_missing_embed"),
+        &json!({"scale": 1.0, "offsetX": 0.0, "offsetY": 0.0}),
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_missing_embed");
+    assert!(
+        result.is_err(),
+        "declared embed without object file must Err, got: {result:?}"
+    );
+
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when a declared embed was not migrated"
+    );
+    assert!(
+        dir_path_session(dir.path(), "sm_missing_embed").exists(),
+        "legacy viewport must be kept when migration did not finish"
+    );
+    assert_eq!(
+        read_graph_schema_version(&graph_dir),
+        json!("3"),
+        "schema must not advance when migration did not finish"
+    );
+}
+
+#[test]
+fn migrate_missing_member_list_errors_and_keeps_legacy_layout() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_no_members");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    // 成员列表缺失 → 无法知道要迁哪些 node，必须 Err，
+    // 不能当成空集合然后在什么都没迁的情况下删掉旧 layout。
+    write_schema3_graph_json(&graph_dir, "sm_no_members", None);
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0)]);
+    write_legacy_node_file(&graph_dir, "n1");
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_no_members");
+    assert!(
+        result.is_err(),
+        "missing nodeIds member list must Err, got: {result:?}"
+    );
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when the member list cannot be parsed"
+    );
+    assert_eq!(read_graph_schema_version(&graph_dir), json!("3"));
+}
+
+#[test]
+fn migrate_non_string_member_id_errors() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_bad_member");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    // 成员列表里混入非字符串条目 → 成员集合不完整，必须 Err。
+    write_schema3_graph_json(
+        &graph_dir,
+        "sm_bad_member",
+        Some((json!(["n1", 42]), json!([]))),
+    );
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0)]);
+    write_legacy_node_file(&graph_dir, "n1");
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_bad_member");
+    assert!(
+        result.is_err(),
+        "non-string member id must Err, got: {result:?}"
+    );
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when the member list is corrupt"
+    );
+}

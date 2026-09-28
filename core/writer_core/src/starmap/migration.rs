@@ -17,6 +17,8 @@
 //! - node 删除 `displayPolicy / openBehavior`
 //! - portal 删除 `mode / previewPolicy`
 //! - 全部对象写成功以后，再删除旧 `layouts/default/**` 和 `session/starmaps/{id}/viewport.json`
+//!   （GraphMeta 声明的成员列表必须可解析、每个 node/embed 文件都必须存在，
+//!   否则 Err 并保留旧 layout——那是 position 的唯一来源）
 //! - 最后把 GraphMeta schema 写成 "4"
 
 use std::collections::HashMap;
@@ -219,6 +221,11 @@ fn migrate_all_starmap_graphs(app_data_root: &Path) -> Result<()> {
 ///
 /// 读取 `starmaps/{id}/graph.json`，如果 schemaVersion 是 "3" 则执行迁移。
 /// 已经是 "4" 或文件不存在则跳过。
+///
+/// **Fail-closed 源数据保护**：GraphMeta 声明的每个 node / embed 都必须迁移成功
+/// （成员列表必须可解析、对象文件必须存在），否则返回 `Err` 并保留旧
+/// `layouts/default/**`——旧 layout 是所有缺失 position 的唯一来源，
+/// 不允许在没迁完的情况下删除。
 pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     let graph_dir = app_data_root.join("starmaps").join(starmap_id);
     if !graph_dir.is_dir() {
@@ -245,26 +252,35 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     let layout_positions = read_layout_positions(&graph_dir)?;
 
     // 2. 迁移 node JSON：写入 position，删除 displayPolicy/openBehavior，portal 删除 mode/previewPolicy。
+    //    成员集合来自 GraphMeta，必须严格解析并逐个迁移成功：声明的 node 文件缺失
+    //    就是 Err，不能当成"没有这个成员"跳过，否则会在没迁完时删掉旧 layout。
+    let node_ids = read_declared_member_ids(&value, "nodeIds")?;
     let mut migrated_node_ids: Vec<String> = Vec::new();
-    if let Some(node_ids) = value.get("nodeIds").and_then(|v| v.as_array()) {
-        for id in node_ids.iter().filter_map(|v| v.as_str()) {
-            if migrate_node_json(&graph_dir, id, &layout_positions)? {
-                migrated_node_ids.push(id.to_string());
-            }
+    for node_id in node_ids {
+        if !migrate_node_json(&graph_dir, &node_id, &layout_positions)? {
+            return Err(Error::Other(format!(
+                "node '{}' is declared in graph.json but has no node file to migrate",
+                node_id
+            )));
         }
+        migrated_node_ids.push(node_id);
     }
 
     // 3. 迁移 embed JSON：placement.x/y -> position，删除旧显示层字段。
+    let embed_instance_ids = read_declared_member_ids(&value, "embedInstanceIds")?;
     let mut migrated_embed_ids: Vec<String> = Vec::new();
-    if let Some(embed_ids) = value.get("embedInstanceIds").and_then(|v| v.as_array()) {
-        for id in embed_ids.iter().filter_map(|v| v.as_str()) {
-            if migrate_embed_json(&graph_dir, id)? {
-                migrated_embed_ids.push(id.to_string());
-            }
+    for instance_id in embed_instance_ids {
+        if !migrate_embed_json(&graph_dir, &instance_id)? {
+            return Err(Error::Other(format!(
+                "embed '{}' is declared in graph.json but has no embed file to migrate",
+                instance_id
+            )));
         }
+        migrated_embed_ids.push(instance_id);
     }
 
     // 4. 删除旧 layouts/default/** 和 session/starmaps/{id}/viewport.json。
+    //    只有上面所有声明的 node / embed 都迁移成功（没有提前 return Err）才走到这里。
     let layouts_dir = graph_dir.join("layouts");
     if layouts_dir.exists() {
         std::fs::remove_dir_all(&layouts_dir)?;
@@ -314,6 +330,31 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     crate::storage::atomic_write_string(&graph_json_path, &new_content)?;
 
     Ok(())
+}
+
+/// 读取旧 GraphMeta 的成员 ID 数组（`nodeIds` / `embedInstanceIds`）。
+///
+/// 迁移必须在"声明的成员全部迁完"之后才能删旧 layout，所以成员列表本身
+/// 也 fail-closed：字段缺失、不是数组、条目不是字符串都返回 `Err`，
+/// 不能静默当成空集合继续（那会在什么都没迁的情况下删掉 position 的唯一来源）。
+fn read_declared_member_ids(value: &Value, field: &str) -> Result<Vec<String>> {
+    let entries = value.get(field).and_then(|v| v.as_array()).ok_or_else(|| {
+        Error::Other(format!(
+            "legacy graph.json member list '{}' is missing or not an array",
+            field
+        ))
+    })?;
+    let mut ids = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry.as_str().ok_or_else(|| {
+            Error::Other(format!(
+                "legacy graph.json member list '{}' contains a non-string id",
+                field
+            ))
+        })?;
+        ids.push(id.to_string());
+    }
+    Ok(ids)
 }
 
 /// 把 `ids` 中每个 id 的 revision 设为 `next`，写入 `obj[field]` 的 map。
@@ -424,7 +465,9 @@ fn position_is_valid_finite(pos: &Value) -> bool {
 /// 删除 displayPolicy/openBehavior 和 portal 的 mode/previewPolicy 仍然执行
 /// （这些是旧字段清理，幂等）。
 ///
-/// 返回 `true` 表示文件被实际重写，`false` 表示文件不存在。
+/// 返回 `true` 表示文件被实际重写。返回 `false` 只表示"这个对象没有文件"；
+/// 调用方对 GraphMeta 声明的成员必须把 `false` 当 `Err` 处理，
+/// 不能把缺文件当成"没有这个成员"，否则会提前删除旧 layout。
 fn migrate_node_json(
     graph_dir: &Path,
     node_id: &str,
@@ -524,7 +567,9 @@ fn extract_position_from_placement(
 ///
 /// 删除 placement/targetViewport/displayPolicy/openBehavior 仍然执行（幂等清理）。
 ///
-/// 返回 `true` 表示文件被实际重写，`false` 表示文件不存在。
+/// 返回 `true` 表示文件被实际重写。返回 `false` 只表示"这个对象没有文件"；
+/// 调用方对 GraphMeta 声明的成员必须把 `false` 当 `Err` 处理，
+/// 不能把缺文件当成"没有这个成员"，否则会提前删除旧 layout。
 fn migrate_embed_json(graph_dir: &Path, instance_id: &str) -> Result<bool> {
     let bucket = crate::starmap::package_storage::bucket_for_id(instance_id);
     let embed_path = graph_dir
