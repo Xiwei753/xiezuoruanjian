@@ -26,25 +26,30 @@ impl StarMapStore {
         let mut diagnostics = Vec::new();
         for hl_id in &hl_ids {
             if !self.hyperlinks.contains_key(hl_id) {
-                if let Some(hl) = self.try_load_hyperlink(hl_id) {
-                    self.hyperlinks.insert(hl_id.clone(), hl);
-                } else {
-                    let recovery_len = self.recovery_log.len();
-                    if recovery_len > 0 {
-                        if let Some(last) = self.recovery_log.last().cloned() {
-                            if last.object_id == *hl_id {
-                                diagnostics.push(last);
-                                continue;
+                match self.try_load_hyperlink(hl_id) {
+                    Ok(hl) => {
+                        self.hyperlinks.insert(hl_id.clone(), hl);
+                    }
+                    Err(e) => {
+                        // 保持 ListWithDiagnostics 语义：单个坏对象不让整个列表失败。
+                        // try_load 已 push diagnostic 到 recovery_log，这里同步到 diagnostics。
+                        let recovery_len = self.recovery_log.len();
+                        if recovery_len > 0 {
+                            if let Some(last) = self.recovery_log.last().cloned() {
+                                if last.object_id == *hl_id {
+                                    diagnostics.push(last);
+                                    continue;
+                                }
                             }
                         }
+                        diagnostics.push(LoadDiagnostic {
+                            kind: LoadDiagnosticKind::Corrupt,
+                            object_type: "hyperlink".to_string(),
+                            object_id: hl_id.clone(),
+                            detail: format!("{}", e),
+                        });
+                        continue;
                     }
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::Missing,
-                        object_type: "hyperlink".to_string(),
-                        object_id: hl_id.clone(),
-                        detail: "hyperlink could not be loaded".to_string(),
-                    });
-                    continue;
                 }
             }
             if let Some(hl) = self.hyperlinks.get(hl_id).cloned() {
@@ -68,25 +73,29 @@ impl StarMapStore {
         let mut diagnostics = Vec::new();
         for link_id in &link_ids {
             if !self.links.contains_key(link_id) {
-                if let Some(link) = self.try_load_link(link_id) {
-                    self.links.insert(link_id.clone(), link);
-                } else {
-                    let recovery_len = self.recovery_log.len();
-                    if recovery_len > 0 {
-                        if let Some(last) = self.recovery_log.last().cloned() {
-                            if last.object_id == *link_id {
-                                diagnostics.push(last);
-                                continue;
+                match self.try_load_link(link_id) {
+                    Ok(link) => {
+                        self.links.insert(link_id.clone(), link);
+                    }
+                    Err(e) => {
+                        // 保持 ListWithDiagnostics 语义：单个坏对象不让整个列表失败。
+                        let recovery_len = self.recovery_log.len();
+                        if recovery_len > 0 {
+                            if let Some(last) = self.recovery_log.last().cloned() {
+                                if last.object_id == *link_id {
+                                    diagnostics.push(last);
+                                    continue;
+                                }
                             }
                         }
+                        diagnostics.push(LoadDiagnostic {
+                            kind: LoadDiagnosticKind::Corrupt,
+                            object_type: "link".to_string(),
+                            object_id: link_id.clone(),
+                            detail: format!("{}", e),
+                        });
+                        continue;
                     }
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::Missing,
-                        object_type: "link".to_string(),
-                        object_id: link_id.clone(),
-                        detail: "link could not be loaded".to_string(),
-                    });
-                    continue;
                 }
             }
             if let Some(link) = self.links.get(link_id).cloned() {
@@ -125,7 +134,7 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub(in crate::starmap::store) fn rebuild_relation_indexes(&mut self) {
+    pub(in crate::starmap::store) fn rebuild_relation_indexes(&mut self) -> Result<()> {
         let edge_ids = self
             .graph_meta
             .as_ref()
@@ -150,9 +159,8 @@ impl StarMapStore {
         let mut edge_relation_index = Vec::new();
         for edge_id in &edge_ids {
             if !self.edges.contains_key(edge_id) {
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    self.edges.insert(edge_id.clone(), edge);
-                }
+                let edge = self.try_load_edge(edge_id)?;
+                self.edges.insert(edge_id.clone(), edge);
             }
             if let Some(edge) = self.edges.get(edge_id) {
                 edge_relation_index.push(EdgeRelationIndex {
@@ -166,9 +174,8 @@ impl StarMapStore {
         let mut embed_host_index = Vec::new();
         for instance_id in &embed_ids {
             if !self.embeds.contains_key(instance_id) {
-                if let Some(embed) = self.try_load_embed(instance_id) {
-                    self.embeds.insert(instance_id.clone(), embed);
-                }
+                let embed = self.try_load_embed(instance_id)?;
+                self.embeds.insert(instance_id.clone(), embed);
             }
             if let Some(embed) = self.embeds.get(instance_id) {
                 embed_host_index.push(EmbedHostIndex {
@@ -181,9 +188,8 @@ impl StarMapStore {
         let mut link_relation_index = Vec::new();
         for link_id in &link_ids {
             if !self.links.contains_key(link_id) {
-                if let Some(link) = self.try_load_link(link_id) {
-                    self.links.insert(link_id.clone(), link);
-                }
+                let link = self.try_load_link(link_id)?;
+                self.links.insert(link_id.clone(), link);
             }
             if let Some(link) = self.links.get(link_id) {
                 link_relation_index.push(LinkRelationIndex {
@@ -197,9 +203,8 @@ impl StarMapStore {
         let mut hyperlink_relation_index = Vec::new();
         for hl_id in &hl_ids {
             if !self.hyperlinks.contains_key(hl_id) {
-                if let Some(hl) = self.try_load_hyperlink(hl_id) {
-                    self.hyperlinks.insert(hl_id.clone(), hl);
-                }
+                let hl = self.try_load_hyperlink(hl_id)?;
+                self.hyperlinks.insert(hl_id.clone(), hl);
             }
             if let Some(hl) = self.hyperlinks.get(hl_id) {
                 hyperlink_relation_index.push(HyperlinkRelationIndex {
@@ -227,6 +232,7 @@ impl StarMapStore {
         }
         self.dirty_graph_meta = true;
         self.enqueue_save(SaveQueueEntry::GraphMeta);
+        Ok(())
     }
 
     #[allow(
@@ -239,7 +245,7 @@ impl StarMapStore {
     pub(in crate::starmap::store) fn prefetch_nearby_objects(
         &mut self,
         _diagnostics: &mut Vec<LoadDiagnostic>,
-    ) {
+    ) -> Result<()> {
         let loaded_node_ids: HashSet<String> = self.nodes.keys().cloned().collect();
         let mut adjacent_node_ids: HashSet<String> = HashSet::new();
 
@@ -251,7 +257,7 @@ impl StarMapStore {
 
         let mut has_index_after_rebuild = has_index;
         if !has_index {
-            self.rebuild_relation_indexes();
+            self.rebuild_relation_indexes()?;
             has_index_after_rebuild = self
                 .graph_meta
                 .as_ref()
@@ -286,9 +292,8 @@ impl StarMapStore {
 
         for node_id in &adjacent_node_ids {
             if !self.nodes.contains_key(node_id) {
-                if let Some(node) = self.try_load_node(node_id) {
-                    self.nodes.insert(node_id.clone(), node);
-                }
+                let node = self.try_load_node(node_id)?;
+                self.nodes.insert(node_id.clone(), node);
             }
         }
 
@@ -305,7 +310,7 @@ impl StarMapStore {
 
         if has_edge_index || self.graph_meta.is_some() {
             if !has_edge_index {
-                self.rebuild_relation_indexes();
+                self.rebuild_relation_indexes()?;
             }
             if let Some(ref meta) = self.graph_meta {
                 let edge_relation_index = meta.edge_relation_index.clone();
@@ -321,9 +326,8 @@ impl StarMapStore {
                         let refs = extract_eri_node_refs(eri, &self.starmap_id);
                         let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
                         if any_loaded {
-                            if let Some(edge) = self.try_load_edge(&eri.edge_id) {
-                                self.edges.insert(eri.edge_id.clone(), edge);
-                            }
+                            let edge = self.try_load_edge(&eri.edge_id)?;
+                            self.edges.insert(eri.edge_id.clone(), edge);
                         }
                     }
                 }
@@ -332,7 +336,7 @@ impl StarMapStore {
 
         if has_embed_index || self.graph_meta.is_some() {
             if !has_embed_index {
-                self.rebuild_relation_indexes();
+                self.rebuild_relation_indexes()?;
             }
             if let Some(ref meta) = self.graph_meta {
                 let embed_host_index = meta.embed_host_index.clone();
@@ -348,14 +352,14 @@ impl StarMapStore {
                         let refs = extract_ehi_node_refs(ehi, &self.starmap_id);
                         let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
                         if any_loaded {
-                            if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
-                                self.embeds.insert(ehi.instance_id.clone(), embed);
-                            }
+                            let embed = self.try_load_embed(&ehi.instance_id)?;
+                            self.embeds.insert(ehi.instance_id.clone(), embed);
                         }
                     }
                 }
             }
         }
+        Ok(())
     }
 
     #[allow(
@@ -368,7 +372,7 @@ impl StarMapStore {
     pub(in crate::starmap::store) fn load_remaining_objects(
         &mut self,
         _diagnostics: &mut Vec<LoadDiagnostic>,
-    ) {
+    ) -> Result<()> {
         let all_node_ids = self
             .graph_meta
             .as_ref()
@@ -397,39 +401,35 @@ impl StarMapStore {
 
         for node_id in &all_node_ids {
             if !self.nodes.contains_key(node_id) {
-                if let Some(node) = self.try_load_node(node_id) {
-                    self.nodes.insert(node_id.clone(), node);
-                }
+                let node = self.try_load_node(node_id)?;
+                self.nodes.insert(node_id.clone(), node);
             }
         }
         for edge_id in &all_edge_ids {
             if !self.edges.contains_key(edge_id) {
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    self.edges.insert(edge_id.clone(), edge);
-                }
+                let edge = self.try_load_edge(edge_id)?;
+                self.edges.insert(edge_id.clone(), edge);
             }
         }
         for instance_id in &all_embed_ids {
             if !self.embeds.contains_key(instance_id) {
-                if let Some(embed) = self.try_load_embed(instance_id) {
-                    self.embeds.insert(instance_id.clone(), embed);
-                }
+                let embed = self.try_load_embed(instance_id)?;
+                self.embeds.insert(instance_id.clone(), embed);
             }
         }
         for hl_id in &all_hl_ids {
             if !self.hyperlinks.contains_key(hl_id) {
-                if let Some(hl) = self.try_load_hyperlink(hl_id) {
-                    self.hyperlinks.insert(hl_id.clone(), hl);
-                }
+                let hl = self.try_load_hyperlink(hl_id)?;
+                self.hyperlinks.insert(hl_id.clone(), hl);
             }
         }
         for link_id in &all_link_ids {
             if !self.links.contains_key(link_id) {
-                if let Some(link) = self.try_load_link(link_id) {
-                    self.links.insert(link_id.clone(), link);
-                }
+                let link = self.try_load_link(link_id)?;
+                self.links.insert(link_id.clone(), link);
             }
         }
+        Ok(())
     }
 
     #[allow(

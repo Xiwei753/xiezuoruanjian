@@ -162,11 +162,12 @@ fn flush_delete_failure_returns_error_and_retains_id() {
         .join("n1.json");
     assert!(node_path.exists());
 
-    std::fs::remove_file(&node_path).unwrap();
-    std::fs::create_dir_all(&node_path).unwrap();
-
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     store2.load_full().unwrap();
+    // load_full 成功后再把 node 文件变成目录，模拟 flush 删除时 IO 失败。
+    // （修复后 load_full 对坏 node 文件会 Err，所以必须在 load_full 之后破坏文件。）
+    std::fs::remove_file(&node_path).unwrap();
+    std::fs::create_dir_all(&node_path).unwrap();
     store2.remove_node("n1");
     assert!(store2.has_pending_deletes());
 

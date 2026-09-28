@@ -45,9 +45,8 @@ impl StarMapStore {
 
         for node_id in &node_ids {
             if !self.nodes.contains_key(node_id) {
-                if let Some(node) = self.try_load_node(node_id) {
-                    self.nodes.insert(node_id.clone(), node);
-                }
+                let node = self.try_load_node(node_id)?;
+                self.nodes.insert(node_id.clone(), node);
             }
         }
 
@@ -59,9 +58,8 @@ impl StarMapStore {
 
         for edge_id in &edge_ids {
             if !self.edges.contains_key(edge_id) {
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    self.edges.insert(edge_id.clone(), edge);
-                }
+                let edge = self.try_load_edge(edge_id)?;
+                self.edges.insert(edge_id.clone(), edge);
             }
         }
 
@@ -73,9 +71,8 @@ impl StarMapStore {
 
         for instance_id in &embed_ids {
             if !self.embeds.contains_key(instance_id) {
-                if let Some(embed) = self.try_load_embed(instance_id) {
-                    self.embeds.insert(instance_id.clone(), embed);
-                }
+                let embed = self.try_load_embed(instance_id)?;
+                self.embeds.insert(instance_id.clone(), embed);
             }
         }
 
@@ -87,9 +84,8 @@ impl StarMapStore {
 
         for hl_id in &hl_ids {
             if !self.hyperlinks.contains_key(hl_id) {
-                if let Some(hl) = self.try_load_hyperlink(hl_id) {
-                    self.hyperlinks.insert(hl_id.clone(), hl);
-                }
+                let hl = self.try_load_hyperlink(hl_id)?;
+                self.hyperlinks.insert(hl_id.clone(), hl);
             }
         }
 
@@ -101,9 +97,8 @@ impl StarMapStore {
 
         for link_id in &link_ids {
             if !self.links.contains_key(link_id) {
-                if let Some(link_path) = self.try_load_link(link_id) {
-                    self.links.insert(link_id.clone(), link_path);
-                }
+                let link_path = self.try_load_link(link_id)?;
+                self.links.insert(link_id.clone(), link_path);
             }
         }
 

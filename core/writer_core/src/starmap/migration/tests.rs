@@ -336,7 +336,7 @@ fn migrate_starmap_graph_skips_missing_graph_json() {
 }
 
 #[test]
-fn migrate_starmap_graph_node_without_layout_gets_default_position() {
+fn migrate_starmap_graph_node_without_layout_errors() {
     let dir = temp_root();
     let graph_dir = dir.path().join("starmaps").join("sm_x");
     std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
@@ -367,14 +367,12 @@ fn migrate_starmap_graph_node_without_layout_gets_default_position() {
         &node1,
     );
 
-    migrate_one_starmap_graph(dir.path(), "sm_x").unwrap();
-
-    let migrated: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(graph_dir.join("nodes").join(bucket).join("n1.json")).unwrap(),
-    )
-    .unwrap();
-    // 没有 layout 时 position 默认 (0, 0)。
-    assert_eq!(migrated["position"], json!({"x": 0.0, "y": 0.0}));
+    // fail-closed：node 无 position 无 layout → Err，不能猜 (0,0)。
+    let result = migrate_one_starmap_graph(dir.path(), "sm_x");
+    assert!(
+        result.is_err(),
+        "node without position and without layout must Err, not guess (0,0)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,5 +1086,126 @@ fn migrate_index_rejects_missing_schema_version_field() {
     assert!(
         matches!(result, Err(crate::error::Error::UnsupportedVersion { .. })),
         "missing schemaVersion field must be rejected with UnsupportedVersion, got: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #781 评论 5863487463 复现测试
+// ---------------------------------------------------------------------------
+//
+// 这组测试断言 issue 要求的 fail-closed / 数据完整性行为。
+// 当前代码违反这些要求（静默猜 (0,0)、if let 跳过坏 x/y），
+// 因此这些测试在未修复的代码上会失败，从而证明 bug 存在。
+// 修复后这些测试应当通过。
+
+/// 复现问题 1：旧 Node 迁移在缺失 layout 时静默猜成 (0,0)。
+///
+/// 场景：schema "3" graph.json 声明 node n1，n1 无 position 且无 layout。
+/// 期望：migrate_one_starmap_graph 返回 Err（不能把"迁移源数据缺失"伪装成合法 authored position）。
+/// 当前错误行为：返回 Ok 且 position 被写成 (0,0)。
+#[test]
+fn repro_781_migration_missing_layout_must_error() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_repro1");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    // schema "3" graph.json 声明 node n1，但没有 layouts 目录。
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_repro1",
+        "nodeIds": ["n1"],
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // node n1 没有 position，也没有 layout 提供位置。
+    let node1 = json!({
+        "id": "n1", "title": "N1", "kind": "concept", "payload": null,
+        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
+    });
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir.join("nodes").join(bucket).join("n1.json"),
+        &node1,
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_repro1");
+
+    // 期望：fail-closed 返回 Err。
+    // 当前 bug 行为：返回 Ok，且 position 被静默写成 (0,0)。
+    assert!(
+        result.is_err(),
+        "repro_781: migrate_one_starmap_graph must Err when node has no position and no layout, \
+         but got Ok (current bug: silently guesses (0,0)). result={result:?}"
+    );
+}
+
+/// 复现问题 1（补充）：read_layout_positions 对 shard 内声明的坏 x/y 必须 fail-closed。
+///
+/// 场景：layout shard 声明 nodeId="n1" 但 x 字段为 null（坏 x/y）。
+/// 期望：migrate_one_starmap_graph 返回 Err（不能 if let 跳过坏 x/y 然后猜 (0,0)）。
+/// 当前错误行为：read_layout_positions 用 if let 跳过坏 x/y，
+///   layout_positions 为空，migrate_node_json 用 unwrap_or((0,0)) → Ok 且 position=(0,0)。
+#[test]
+fn repro_781_read_layout_positions_bad_xy_must_error() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_repro3");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": "sm_repro3",
+        "nodeIds": ["n1"],
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    // layout shard 声明 n1，但 x 是 null（坏 x/y）。
+    let layout_nodes = json!([
+        {"nodeId": "n1", "x": null, "y": 200.0, "width": 80.0, "height": 60.0,
+         "radius": 0.0, "collapsed": false, "zIndex": 0, "scale": 1.0},
+    ]);
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir
+            .join("layouts")
+            .join("default")
+            .join("nodes")
+            .join(format!("{bucket}.json")),
+        &layout_nodes,
+    );
+
+    // node n1 没有 position，需要从 layout 提取，但 layout 的 x 是 null。
+    let node1 = json!({
+        "id": "n1", "title": "N1", "kind": "concept", "payload": null,
+        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
+    });
+    let n1_bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir.join("nodes").join(n1_bucket).join("n1.json"),
+        &node1,
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_repro3");
+
+    // 期望：fail-closed 返回 Err（layout 声明了 n1 但 x/y 坏）。
+    // 当前 bug 行为：read_layout_positions 用 if let 跳过坏 x/y，
+    //   migrate_node_json 用 unwrap_or((0,0)) → Ok 且 position=(0,0)。
+    assert!(
+        result.is_err(),
+        "repro_781: migrate_one_starmap_graph must Err when layout declares nodeId but has bad x/y, \
+         but got Ok (current bug: if let skips bad x/y then guesses (0,0)). result={result:?}"
     );
 }

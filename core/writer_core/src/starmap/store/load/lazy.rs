@@ -24,9 +24,8 @@ impl StarMapStore {
         if self.nodes.contains_key(node_id) {
             return Ok(());
         }
-        if let Some(node) = self.try_load_node(node_id) {
-            self.nodes.insert(node_id.to_string(), node);
-        }
+        let node = self.try_load_node(node_id)?;
+        self.nodes.insert(node_id.to_string(), node);
         Ok(())
     }
 
@@ -34,9 +33,8 @@ impl StarMapStore {
         if self.edges.contains_key(edge_id) {
             return Ok(());
         }
-        if let Some(edge) = self.try_load_edge(edge_id) {
-            self.edges.insert(edge_id.to_string(), edge);
-        }
+        let edge = self.try_load_edge(edge_id)?;
+        self.edges.insert(edge_id.to_string(), edge);
         Ok(())
     }
 
@@ -44,9 +42,8 @@ impl StarMapStore {
         if self.embeds.contains_key(instance_id) {
             return Ok(());
         }
-        if let Some(embed) = self.try_load_embed(instance_id) {
-            self.embeds.insert(instance_id.to_string(), embed);
-        }
+        let embed = self.try_load_embed(instance_id)?;
+        self.embeds.insert(instance_id.to_string(), embed);
         Ok(())
     }
 
@@ -54,9 +51,8 @@ impl StarMapStore {
         if self.links.contains_key(link_id) {
             return Ok(());
         }
-        if let Some(link) = self.try_load_link(link_id) {
-            self.links.insert(link_id.to_string(), link);
-        }
+        let link = self.try_load_link(link_id)?;
+        self.links.insert(link_id.to_string(), link);
         Ok(())
     }
 
@@ -64,9 +60,8 @@ impl StarMapStore {
         if self.hyperlinks.contains_key(hyperlink_id) {
             return Ok(());
         }
-        if let Some(hl) = self.try_load_hyperlink(hyperlink_id) {
-            self.hyperlinks.insert(hyperlink_id.to_string(), hl);
-        }
+        let hl = self.try_load_hyperlink(hyperlink_id)?;
+        self.hyperlinks.insert(hyperlink_id.to_string(), hl);
         Ok(())
     }
 }

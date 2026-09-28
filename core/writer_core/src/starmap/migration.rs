@@ -359,12 +359,34 @@ fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>
         // 不能 unwrap_or_default 把损坏 layout 当成空。
         let nodes: Vec<Value> = serde_json::from_str(&content)?;
         for node in nodes {
-            let node_id = node.get("nodeId").and_then(|v| v.as_str());
-            let x = node.get("x").and_then(|v| v.as_f64());
-            let y = node.get("y").and_then(|v| v.as_f64());
-            if let (Some(id), Some(x), Some(y)) = (node_id, x, y) {
-                positions.insert(id.to_string(), (x as f32, y as f32));
+            // 先取 nodeId：缺失则跳过这个 entry（没有 id 无法映射到 node）。
+            let node_id = match node.get("nodeId").and_then(|v| v.as_str()) {
+                Some(id) => id,
+                None => continue,
+            };
+            // fail-closed：有 nodeId 但 x/y 缺失/非数字/非 finite → Err，
+            // 不能静默跳过坏 x/y（那是 layout 损坏，不是"没有位置"）。
+            let x = node.get("x").and_then(|v| v.as_f64()).ok_or_else(|| {
+                Error::Other(format!(
+                    "layout node '{}' has nodeId but x is missing or not a number",
+                    node_id
+                ))
+            })?;
+            let y = node.get("y").and_then(|v| v.as_f64()).ok_or_else(|| {
+                Error::Other(format!(
+                    "layout node '{}' has nodeId but y is missing or not a number",
+                    node_id
+                ))
+            })?;
+            let xf = x as f32;
+            let yf = y as f32;
+            if !xf.is_finite() || !yf.is_finite() {
+                return Err(Error::Other(format!(
+                    "layout node '{}' x/y not finite after f32 truncation",
+                    node_id
+                )));
             }
+            positions.insert(node_id.to_string(), (xf, yf));
         }
     }
     Ok(positions)
@@ -395,7 +417,8 @@ fn position_is_valid_finite(pos: &Value) -> bool {
 ///
 /// 幂等对象迁移：如果 node JSON 已有合法 `position`（x、y 都是 finite f32），
 /// 保留，不再用 layout 覆盖；只有没有 position 时才从旧 layout 提取；
-/// 没有 layout 也没有 position 时用 (0,0)（node 的合理默认）。
+/// 没有 layout 也没有 position 时直接 `Err`，不能猜 (0,0) 伪装成用户
+/// authored position——这是数据损坏，必须 fail-closed。
 ///
 /// 删除 displayPolicy/openBehavior 和 portal 的 mode/previewPolicy 仍然执行
 /// （这些是旧字段清理，幂等）。
@@ -428,7 +451,14 @@ fn migrate_node_json(
             .map(position_is_valid_finite)
             .unwrap_or(false);
         if !has_valid_position {
-            let (x, y) = layout_positions.get(node_id).copied().unwrap_or((0.0, 0.0));
+            // fail-closed：没有合法 position 且没有 legacy layout 位置可迁移时，
+            // 不能猜 (0,0) 伪装成用户 authored position——这是数据损坏，必须 Err。
+            let (x, y) = layout_positions.get(node_id).copied().ok_or_else(|| {
+                Error::Other(format!(
+                    "node '{}' has no position and no legacy layout position to migrate from",
+                    node_id
+                ))
+            })?;
             obj.insert(
                 "position".to_string(),
                 serde_json::json!({ "x": x, "y": y }),
