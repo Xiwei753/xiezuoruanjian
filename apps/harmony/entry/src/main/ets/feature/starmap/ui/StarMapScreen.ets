@@ -75,7 +75,8 @@ export struct StarMapScreen {
   @State previewLineTo: PlatformPoint = { x: 0, y: 0 }
 
   // 动画驱动：用 animateTo 驱动 animPhase 从 0→1 无限循环，替代 setInterval
-  @State animPhase: number = 0
+  // @Watch 驱动 Canvas 主动重画：wobble 偏移随 animPhase 变化，边和预览线必须跟着重绘
+  @State @Watch('onAnimPhaseChange') animPhase: number = 0
 
   // 双指缩放的基准比例（手势开始时记录）
   private pinchBaseScale: number = 1
@@ -232,6 +233,7 @@ export struct StarMapScreen {
   /**
    * 重新计算所有几何：nodeRects + localEdgeRenders。
    * 在节点位置变化、graph 加载后调用。
+   * 几何重算后主动重画边 Canvas，否则节点移动时旧连线不会跟着动。
    */
   recomputeGeometry() {
     if (!this.graph) {
@@ -250,6 +252,8 @@ export struct StarMapScreen {
     }
     // 本地计算 edgeRenders
     this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap)
+    // 几何重算后主动重画边 Canvas（canvasCtx 可能还未初始化，drawEdges 内部有 null 检查）
+    this.drawEdges()
   }
 
   async loadAllStarMaps() {
@@ -494,6 +498,17 @@ export struct StarMapScreen {
 
   onTransformChange() {
     this.drawEdges()
+  }
+
+  /**
+   * animPhase 变化时重画边和预览线。
+   * wobble 偏移随 animPhase 变化，如果 Canvas 不重画，节点在晃但线端点不跟。
+   */
+  onAnimPhaseChange() {
+    this.drawEdges()
+    if (this.gestureMode === 'connect') {
+      this.drawPreviewLine()
+    }
   }
 
   // —— 分享生命周期（保留不变）——
@@ -802,7 +817,7 @@ export struct StarMapScreen {
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
-      Circle({ width: 56, height: 56 })
+      Circle({ width: 56 * this.zoomScale, height: 56 * this.zoomScale })
         .fill(this.getNodeColor(node))
         .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
         .strokeWidth(4)
@@ -819,15 +834,15 @@ export struct StarMapScreen {
         })
 
       Text(node.title)
-        .fontSize(13)
+        .fontSize(13 * this.zoomScale)
         .fontWeight(this.selectedNodeId === node.id ? FontWeight.Bold : FontWeight.Normal)
-        .margin({ top: 6 })
+        .margin({ top: 6 * this.zoomScale })
         .maxLines(2)
         .textAlign(TextAlign.Center)
-        .width(80)
+        .width(80 * this.zoomScale)
     }
-    .width(160)
-    .height(80)
+    .width(160 * this.zoomScale)
+    .height(80 * this.zoomScale)
     .justifyContent(FlexAlign.Center)
     .position({
       x: this.getNodeScreenX(node.id),
@@ -888,6 +903,8 @@ export struct StarMapScreen {
             if (state.mode === 'connect') {
               // connect 模式：更新预览线终点（触点相对节点的偏移 + 节点屏幕位置）
               this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+              // 预览线跟手重画：onReady 只画一次，手指移动时必须主动重绘
+              this.drawPreviewLine()
             } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
               // moveNode 模式：更新节点位置（base+offset 避免重复累加）
               const newDx = this.moveNodeStartX + event.offsetX / this.zoomScale
@@ -906,7 +923,10 @@ export struct StarMapScreen {
               const screenY = this.previewLineTo.y
               // 将屏幕坐标转为画布坐标进行命中测试
               const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
-              const targetNodeId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
+              // 建边命中只查普通节点 rect，不能把 Embed 当 Node target
+              // （Embed 的 Pan 没有 connect 路径，addStarMapEdge 也只接受 Node ID）
+              const nodeOnlyRects: PlatformNodeRect[] = this.nodeRects.filter((r: PlatformNodeRect) => !this.isEmbed(r.nodeId))
+              const targetNodeId = hitTest(nodeOnlyRects, canvasPoint.x, canvasPoint.y)
               if (targetNodeId !== null && targetNodeId !== node.id) {
                 // 创建关系：走 Core 的 add_starmap_edge
                 void this.createEdge(node.id, targetNodeId)
@@ -933,17 +953,17 @@ export struct StarMapScreen {
   StarMapEmbedItem(embed: StarMapEmbed) {
     Column() {
       Text(embed.label ?? embed.targetStarmapId)
-        .fontSize(14)
+        .fontSize(14 * this.zoomScale)
         .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 4 })
+        .margin({ bottom: 4 * this.zoomScale })
 
       Text($r('app.string.embed_subtitle'))
-        .fontSize(12)
+        .fontSize(12 * this.zoomScale)
         .fontColor('#666666')
     }
-    .width(200)
-    .height(120)
-    .borderRadius(12)
+    .width(200 * this.zoomScale)
+    .height(120 * this.zoomScale)
+    .borderRadius(12 * this.zoomScale)
     .backgroundColor('#E8E8E8')
     .border({ width: 2, color: '#CCCCCC' })
     .position({
@@ -1032,7 +1052,9 @@ export struct StarMapScreen {
   }
 
   /**
-   * 节点菜单：长按节点后弹出，提供"移动节点"和"创建关系"选项。
+   * 节点菜单：长按节点/Embed后弹出。
+   * 普通节点和 Embed 分开菜单：Embed 只有"移动子星图"，普通节点有"移动节点"和"创建关系"。
+   * Embed 上"移动节点"/"创建关系"会进入无效状态（Embed 的 Pan 不处理 moveNode/connect）。
    */
   @Builder
   NodeMenu() {
@@ -1042,54 +1064,52 @@ export struct StarMapScreen {
         .fontWeight(FontWeight.Medium)
         .margin({ bottom: 8 })
 
-      // 移动节点：从菜单显式进入 moveNode 模式
-      Button($r('app.string.move_node'))
-        .fontSize(13)
-        .height(36)
-        .width('100%')
-        .onClick(() => {
-          this.gestureTracker.beginMoveNode(this.nodeMenuNodeId, 0, 0)
-          this.gestureMode = 'moveNode'
-          this.showNodeMenu = false
-          this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
-        })
-
-      // 创建关系：从菜单显式进入 connect 模式
-      Button($r('app.string.connect_node'))
-        .fontSize(13)
-        .height(36)
-        .width('100%')
-        .margin({ top: 4 })
-        .onClick(() => {
-          this.gestureTracker.beginConnect(this.nodeMenuNodeId, 0, 0)
-          this.gestureMode = 'connect'
-          this.showNodeMenu = false
-          const ln = this.getPlatformLayoutNode(this.nodeMenuNodeId)
-          if (ln) {
-            this.previewLineFrom = {
-              x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
-              y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
-            }
-          }
-          this.previewLineTo = this.previewLineFrom
-        })
-
-      // 如果当前菜单节点是 Embed，提供"移动子星图"选项
       if (this.isEmbed(this.nodeMenuNodeId)) {
+        // Embed 菜单：只放 Embed 自己的动作
         Button($r('app.string.move_embed'))
           .fontSize(13)
           .height(36)
           .width('100%')
-          .margin({ top: 4 })
           .onClick(() => {
             this.gestureTracker.beginMoveEmbed(this.nodeMenuNodeId, 0, 0)
             this.gestureMode = 'moveEmbed'
             this.showNodeMenu = false
             this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
           })
+      } else {
+        // 普通节点菜单：移动节点 + 创建关系
+        Button($r('app.string.move_node'))
+          .fontSize(13)
+          .height(36)
+          .width('100%')
+          .onClick(() => {
+            this.gestureTracker.beginMoveNode(this.nodeMenuNodeId, 0, 0)
+            this.gestureMode = 'moveNode'
+            this.showNodeMenu = false
+            this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
+          })
+
+        Button($r('app.string.connect_node'))
+          .fontSize(13)
+          .height(36)
+          .width('100%')
+          .margin({ top: 4 })
+          .onClick(() => {
+            this.gestureTracker.beginConnect(this.nodeMenuNodeId, 0, 0)
+            this.gestureMode = 'connect'
+            this.showNodeMenu = false
+            const ln = this.getPlatformLayoutNode(this.nodeMenuNodeId)
+            if (ln) {
+              this.previewLineFrom = {
+                x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
+                y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
+              }
+            }
+            this.previewLineTo = this.previewLineFrom
+          })
       }
 
-      // 取消菜单
+      // 取消菜单（两种情况都有）
       Button($r('app.string.cancel'))
         .fontSize(13)
         .height(36)
