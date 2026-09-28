@@ -123,7 +123,8 @@ fn issue1_prepared_cursor_visual_track_saves_line_ids() {
 /// 视口裁剪后和全文 VisualLine.id 不一致，跨行裁切会判断错。必须用 line.visual_line_id。
 #[test]
 fn issue1_build_slices_pass_some_line_idx() {
-    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    // slice 构造已拆到 transaction_builder/slices.rs（见该文件头注释）
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
     // 函数体较大，取 8000 字符确保覆盖完整调用
     let insert_window = function_window(&src, "fn build_insert_reveal_slices", 8000);
     let delete_window = function_window(&src, "fn build_delete_conceal_slices", 8000);

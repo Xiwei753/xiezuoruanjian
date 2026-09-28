@@ -67,7 +67,9 @@
 #![allow(clippy::wrong_self_convention)]
 // unreachable_patterns — Qt/cfg 条件编译造成的模式匹配冗余
 #![allow(unreachable_patterns)]
-#![allow(deprecated)]
+// 全仓没有任何 #[deprecated] 标记的自家 API，也没有一处真的需要屏蔽
+// deprecated 告警；这条 crate 级放行会让将来新引入的 deprecated 调用静默
+// 通过，故删除。
 //
 //
 // 引用了什么：

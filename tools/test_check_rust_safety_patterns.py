@@ -319,7 +319,9 @@ fn qt_version() -> String {
     unsafe { std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned() }
 }
 '''
-        rules = self.rule_names(source, path="apps/Linux_qt/src/editor/layout/engine.rs")
+        rules = self.rule_names(
+            source, path="apps/Linux_qt/src/editor/layout/engine/geometry.rs"
+        )
         self.assertNotIn("cpp-unsafe-call", rules)
 
     def test_flags_cpp_unsafe_empty_capture_in_disallowed_file(self) -> None:

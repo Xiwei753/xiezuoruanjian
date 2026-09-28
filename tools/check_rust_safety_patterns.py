@@ -201,9 +201,10 @@ _RULES_PRODUCTION_ONLY = {
 _CPP_UNSAFE_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/editor/input/qt_surface.rs"),
     Path("apps/Linux_qt/src/editor/layout/qt_cache.rs"),
-    Path("apps/Linux_qt/src/editor/layout/engine.rs"),
+    Path("apps/Linux_qt/src/editor/layout/engine/geometry.rs"),
     Path("apps/Linux_qt/src/editor/layout/test_support.rs"),
-    Path("apps/Linux_qt/src/editor/layout/canonical_snapshot.rs"),
+    Path("apps/Linux_qt/src/editor/layout/canonical_snapshot/ffi.rs"),
+    Path("apps/Linux_qt/src/editor/layout/canonical_snapshot/prepare.rs"),
     Path("apps/Linux_qt/src/editor/renderer.rs"),
     Path("apps/Linux_qt/src/editor/scene_graph.rs"),
     Path("apps/Linux_qt/src/main.rs"),
@@ -224,8 +225,8 @@ def _is_cpp_unsafe_in_allowed_file(path: Path) -> bool:
 
 _ASSERT_UNWIND_SAFE_WHITELIST_ENTRIES = {
     (Path("apps/Linux_qt/src/backend/sync_backend.rs"), "perform_sync_diagnostics"),
-    (Path("apps/Linux_qt/src/backend/sync_operations.rs"), "perform_sync_dry_run"),
-    (Path("apps/Linux_qt/src/backend/sync_operations.rs"), "perform_sync_internal"),
+    (Path("apps/Linux_qt/src/backend/sync_operations/dry_run.rs"), "perform_sync_dry_run"),
+    (Path("apps/Linux_qt/src/backend/sync_operations/perform.rs"), "perform_sync_internal"),
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_handle_key_and_text"),
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_commit"),
     (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_replace_and_commit"),

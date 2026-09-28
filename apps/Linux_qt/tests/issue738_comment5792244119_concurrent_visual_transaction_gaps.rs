@@ -203,7 +203,9 @@ fn issue2_fix_apply_decision_handles_split() {
 /// 修复后守卫 8: 多对多阶段 unmatched_old 和 unmatched_new 共享同一个 group_id。
 #[test]
 fn issue3_fix_many_to_many_old_new_share_group_id() {
-    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    // 多对多成组配对在 build_cluster_reflow_slices 里，已随四类 slice 构造
+    // 拆到 transaction_builder/slices.rs。
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
     // 定位多对多阶段：unmatched_old 循环
     let unmatched_old_pos = src
         .find("for &oi in &unmatched_old")
