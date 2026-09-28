@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, LayoutMetrics, ScreenPolicy, ActionSlot
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapViewport, StarMapLayout, StarMapLayoutNode, StarMapEdgeRender, StarMapEdgeRenderBatch, StarMapEdgeAnchorDiagnostic, StarMapMotionPolicy } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -17,19 +17,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   private mockChapterContents: Map<string, string> = new Map<string, string>()
 
   private mockStarMaps: StarMapMeta[] = []
-
-  private mockStarMapViewport: StarMapViewport = {
-    scale: 1,
-    offsetX: 0,
-    offsetY: 0,
-    width: 800,
-    height: 600
-  } as StarMapViewport
-
-  private mockStarMapLayout: StarMapLayout = {
-    kind: 'Freeform',
-    nodes: [] as StarMapLayoutNode[]
-  } as StarMapLayout
 
   private mockStarMapGraph: StarMapGraph = {
     schemaVersion: 2,
@@ -425,13 +412,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       title,
       description,
       projectId: null,
-      isMainForProject: false,
       accentColor: '#4A90D9',
-      nodeCount: 0,
-      edgeCount: 0,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      linkedChapterCount: 0
+      updatedAt: Date.now()
     }
     this.mockStarMaps.push(newStarMap)
     return this.success(newStarMap)
@@ -458,43 +441,66 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
-  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
+  async updateStarMapNode(starmapId: string, nodeId: string,
+    position: { x: number, y: number }): Promise<ResultEnvelope<StarMapNode>> {
+    await this.delay(100)
+    const node = this.mockStarMapGraph.nodes.find(n => n.id === nodeId)
+    if (!node) {
+      return this.error('STARMAP_NOT_FOUND', '节点不存在')
+    }
+    node.position = { x: position.x, y: position.y }
+    node.updatedAt = Date.now()
+    return this.success(node)
+  }
+
+  async updateStarMapEmbed(starmapId: string, instanceId: string,
+    position: { x: number, y: number }): Promise<ResultEnvelope<StarMapEmbed>> {
+    await this.delay(100)
+    const embed = this.mockStarMapGraph.embeds.find(e => e.instanceId === instanceId)
+    if (!embed) {
+      return this.error('STARMAP_NOT_FOUND', '子星图不存在')
+    }
+    embed.position = { x: position.x, y: position.y }
+    embed.updatedAt = Date.now()
+    return this.success(embed)
+  }
+
+  async addStarMapEdge(starmapId: string, fromNodeId: string, toNodeId: string, kind: string,
+    label: string | null): Promise<ResultEnvelope<StarMapEdge>> {
     await this.delay(150)
-    const starmap = this.mockStarMaps.find(sm => sm.starmapId === starmapId)
-    if (!starmap) {
-      return this.error('STARMAP_NOT_FOUND', '星图不存在')
+    const now = Date.now()
+    const edge: StarMapEdge = {
+      id: `edge-${now}`,
+      from: this.nodeTargetPath(starmapId, fromNodeId),
+      to: this.nodeTargetPath(starmapId, toNodeId),
+      kind: kind as EdgeKind,
+      label: label,
+      payload: null,
+      createdAt: now,
+      updatedAt: now
     }
-    this.mockStarMapLayout = layout
-    return this.success(true)
+    this.mockStarMapGraph.edges.push(edge)
+    return this.success(edge)
   }
 
-  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
-    await this.delay(100)
-    const starmap = this.mockStarMaps.find(sm => sm.starmapId === starmapId)
-    if (!starmap) {
-      return this.error('STARMAP_NOT_FOUND', '星图不存在')
+  private nodeTargetPath(starmapId: string, nodeId: string): StarMapTargetPath {
+    return {
+      starmapId: starmapId,
+      segments: [],
+      target: {
+        type: 'node',
+        nodeId: nodeId,
+        anchorId: null,
+        projectId: null,
+        volumeId: null,
+        chapterId: null,
+        rangeStart: null,
+        rangeEnd: null,
+        entityType: null,
+        entityId: null,
+        uri: null
+      }
     }
-    return this.success(this.mockStarMapLayout)
-  }
-
-  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
-    await this.delay(100)
-    const policy: StarMapMotionPolicy = {
-      enabled: true,
-      idleWobbleEnabled: true,
-      idleAmplitudeVp: 2,
-      idlePeriodMs: 3000,
-      dragLiftScale: 1.05,
-      dragShadowBoost: 1.2,
-      settleDurationMs: 300,
-      reduceMotion: false
-    }
-    return this.success(policy)
-  }
-
-  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
-    await this.delay(100)
-    return this.success({ renders: [] as StarMapEdgeRender[], diagnostics: [] as StarMapEdgeAnchorDiagnostic[] } as StarMapEdgeRenderBatch)
   }
 
   // Settings methods

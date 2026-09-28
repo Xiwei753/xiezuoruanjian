@@ -15,6 +15,8 @@
  * - 普通滑动不能误拖节点
  */
 
+import { PlatformPoint } from './StarMapLayout'
+
 /** 手势模式枚举 */
 export type GestureMode = 'idle' | 'panCanvas' | 'nodeMenu' | 'connect' | 'moveNode' | 'moveEmbed'
 
@@ -25,9 +27,9 @@ export interface GestureState {
   /** 当前操作的节点 ID（空字符串表示无） */
   activeNodeId: string
   /** 手势起点（画布坐标） */
-  startPoint: { x: number, y: number }
+  startPoint: PlatformPoint
   /** 当前点（画布坐标） */
-  currentPoint: { x: number, y: number }
+  currentPoint: PlatformPoint
   /** connect 模式下目标节点 ID */
   targetNodeId: string
 }

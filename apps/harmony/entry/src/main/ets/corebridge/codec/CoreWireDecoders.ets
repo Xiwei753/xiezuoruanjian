@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapLayoutNode, NodeType, EdgeKind } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics } from '../dto/PlatformDtos'
@@ -632,32 +632,20 @@ export function decodeStarMapMeta(data: Object): DecodeResult<StarMapMeta> {
   if (description === null) { return err<StarMapMeta>('description missing or not string') }
   const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
   if (!projectIdR.ok || projectIdR.value === undefined) { return err<StarMapMeta>(`StarMapMeta.${projectIdR.error ?? 'decode failed'}`) }
-  const isMainForProject: boolean | null = reqBool(data, 'isMainForProject')
-  if (isMainForProject === null) { return err<StarMapMeta>('isMainForProject missing or not boolean') }
   const accentColor: string | null = reqStr(data, 'accentColor')
   if (accentColor === null) { return err<StarMapMeta>('accentColor missing or not string') }
   const createdAt: number | null = reqNum(data, 'createdAt')
   if (createdAt === null) { return err<StarMapMeta>('createdAt missing or not number') }
   const updatedAt: number | null = reqNum(data, 'updatedAt')
   if (updatedAt === null) { return err<StarMapMeta>('updatedAt missing or not number') }
-  const nodeCount: number | null = reqNum(data, 'nodeCount')
-  if (nodeCount === null) { return err<StarMapMeta>('nodeCount missing or not number') }
-  const edgeCount: number | null = reqNum(data, 'edgeCount')
-  if (edgeCount === null) { return err<StarMapMeta>('edgeCount missing or not number') }
-  const linkedChapterCount: number | null = reqNum(data, 'linkedChapterCount')
-  if (linkedChapterCount === null) { return err<StarMapMeta>('linkedChapterCount missing or not number') }
   const value: StarMapMeta = {
     starmapId: starmapId,
     title: title,
     description: description,
     projectId: projectIdR.value,
-    isMainForProject: isMainForProject,
     accentColor: accentColor,
     createdAt: createdAt,
-    updatedAt: updatedAt,
-    nodeCount: nodeCount,
-    edgeCount: edgeCount,
-    linkedChapterCount: linkedChapterCount
+    updatedAt: updatedAt
   }
   return ok<StarMapMeta>(value)
 }
@@ -775,10 +763,6 @@ function decodeStarMapPortal(data: Object): DecodeResult<import('../dto/StarMapD
   }
   const destinationStarmapId: string | null = reqStr(data, 'destinationStarmapId')
   if (destinationStarmapId === null) { return err('destinationStarmapId missing') }
-  const mode: string | null = reqStr(data, 'mode')
-  if (mode === null) { return err('mode missing') }
-  const previewPolicy: string | null = reqStr(data, 'previewPolicy')
-  if (previewPolicy === null) { return err('previewPolicy missing') }
   const destinationTargetObjR: DecodeResult<Object | null> = nullObj(data, 'destinationTarget')
   if (!destinationTargetObjR.ok || destinationTargetObjR.value === undefined) { return err(`StarMapPortal.${destinationTargetObjR.error ?? 'decode failed'}`) }
   let destinationTarget: import('../dto/StarMapDtos').StarMapTargetDetail | null = null
@@ -789,34 +773,7 @@ function decodeStarMapPortal(data: Object): DecodeResult<import('../dto/StarMapD
   }
   const value: import('../dto/StarMapDtos').StarMapPortal = {
     destinationStarmapId: destinationStarmapId,
-    destinationTarget: destinationTarget,
-    mode: mode as import('../dto/StarMapDtos').PortalMode,
-    previewPolicy: previewPolicy as import('../dto/StarMapDtos').PortalPreviewPolicy
-  }; return ok(value)
-}
-
-function decodeStarMapDisplayPolicy(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapDisplayPolicy> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err('StarMapDisplayPolicy: expected object')
-  }
-  const importance: number | null = reqNum(data, 'importance')
-  if (importance === null) { return err('importance missing') }
-  const minVisibleScale: number | null = reqNum(data, 'minVisibleScale')
-  if (minVisibleScale === null) { return err('minVisibleScale missing') }
-  const titleScale: number | null = reqNum(data, 'titleScale')
-  if (titleScale === null) { return err('titleScale missing') }
-  const summaryScale: number | null = reqNum(data, 'summaryScale')
-  if (summaryScale === null) { return err('summaryScale missing') }
-  const detailScale: number | null = reqNum(data, 'detailScale')
-  if (detailScale === null) { return err('detailScale missing') }
-  const maxPreviewChars: number | null = reqNum(data, 'maxPreviewChars')
-  if (maxPreviewChars === null) { return err('maxPreviewChars missing') }
-  const minReadablePx: number | null = reqNum(data, 'minReadablePx')
-  if (minReadablePx === null) { return err('minReadablePx missing') }
-  const value: import('../dto/StarMapDtos').StarMapDisplayPolicy = {
-    importance: importance, minVisibleScale: minVisibleScale, titleScale: titleScale,
-    summaryScale: summaryScale, detailScale: detailScale, maxPreviewChars: maxPreviewChars,
-    minReadablePx: minReadablePx
+    destinationTarget: destinationTarget
   }; return ok(value)
 }
 
@@ -846,7 +803,7 @@ function decodeStarMapProvenance(data: Object): DecodeResult<import('../dto/Star
   }; return ok(value)
 }
 
-function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
+export function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<StarMapNode>('StarMapNode: expected object')
   }
@@ -872,12 +829,18 @@ function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
     if (!aR.ok || aR.value === undefined) { return err<StarMapNode>(`anchors[${i}]: ${aR.error}`) }
     anchors.push(aR.value)
   }
-  const displayPolicyObj: Object | null = reqObj(data, 'displayPolicy')
-  if (displayPolicyObj === null) { return err<StarMapNode>('displayPolicy missing or not object') }
-  const displayPolicyR = decodeStarMapDisplayPolicy(displayPolicyObj)
-  if (!displayPolicyR.ok || displayPolicyR.value === undefined) { return err<StarMapNode>(`displayPolicy: ${displayPolicyR.error}`) }
-  const openBehavior: string | null = reqStr(data, 'openBehavior')
-  if (openBehavior === null) { return err<StarMapNode>('openBehavior missing or not string') }
+  const positionObj: Object | null = reqObj(data, 'position')
+  if (positionObj === null) { return err<StarMapNode>('position missing or not object') }
+  const posX: number | null = reqNum(positionObj, 'x')
+  if (posX === null) { return err<StarMapNode>('position.x missing or not number') }
+  const posY: number | null = reqNum(positionObj, 'y')
+  if (posY === null) { return err<StarMapNode>('position.y missing or not number') }
+  const position: StarMapPoint = { x: posX, y: posY }
+  const styleObj: Object | null = reqObj(data, 'style')
+  if (styleObj === null) { return err<StarMapNode>('style missing or not object') }
+  const fillColorR: DecodeResult<string | null> = nullStr(styleObj, 'fillColor')
+  if (!fillColorR.ok || fillColorR.value === undefined) { return err<StarMapNode>(`style.fillColor: ${fillColorR.error ?? 'decode failed'}`) }
+  const style: StarMapNodeStyle = { fillColor: fillColorR.value }
   const provenanceObj: Object | null = reqObj(data, 'provenance')
   if (provenanceObj === null) { return err<StarMapNode>('provenance missing or not object') }
   const provenanceR = decodeStarMapProvenance(provenanceObj)
@@ -903,8 +866,8 @@ function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
     content: contentR.value,
     anchors: anchors,
     portal: portal,
-    displayPolicy: displayPolicyR.value,
-    openBehavior: openBehavior as import('../dto/StarMapDtos').OpenBehavior,
+    position: position,
+    style: style,
     provenance: provenanceR.value,
     createdAt: createdAt,
     updatedAt: updatedAt
@@ -912,7 +875,7 @@ function decodeStarMapNode(data: Object): DecodeResult<StarMapNode> {
   return ok<StarMapNode>(value)
 }
 
-function decodeStarMapEdge(data: Object): DecodeResult<StarMapEdge> {
+export function decodeStarMapEdge(data: Object): DecodeResult<StarMapEdge> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<StarMapEdge>('StarMapEdge: expected object')
   }
@@ -949,7 +912,7 @@ function decodeStarMapEdge(data: Object): DecodeResult<StarMapEdge> {
   return ok<StarMapEdge>(value)
 }
 
-function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
+export function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<StarMapEmbed>('StarMapEmbed: expected object')
   }
@@ -957,20 +920,17 @@ function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
   if (instanceId === null) { return err<StarMapEmbed>('instanceId missing') }
   const targetStarmapId: string | null = reqStr(data, 'targetStarmapId')
   if (targetStarmapId === null) { return err<StarMapEmbed>('targetStarmapId missing') }
-  const openBehavior: string | null = reqStr(data, 'openBehavior')
-  if (openBehavior === null) { return err<StarMapEmbed>('openBehavior missing') }
   const createdAt: number | null = reqNum(data, 'createdAt')
   if (createdAt === null) { return err<StarMapEmbed>('createdAt missing') }
   const updatedAt: number | null = reqNum(data, 'updatedAt')
   if (updatedAt === null) { return err<StarMapEmbed>('updatedAt missing') }
-  const placementObj: Object | null = reqObj(data, 'placement')
-  if (placementObj === null) { return err<StarMapEmbed>('placement missing or not object') }
-  const targetViewportObj: Object | null = reqObj(data, 'targetViewport')
-  if (targetViewportObj === null) { return err<StarMapEmbed>('targetViewport missing or not object') }
-  const displayPolicyObj: Object | null = reqObj(data, 'displayPolicy')
-  if (displayPolicyObj === null) { return err<StarMapEmbed>('displayPolicy missing or not object') }
-  const displayPolicyR = decodeStarMapDisplayPolicy(displayPolicyObj)
-  if (!displayPolicyR.ok || displayPolicyR.value === undefined) { return err<StarMapEmbed>(`displayPolicy: ${displayPolicyR.error}`) }
+  const positionObj: Object | null = reqObj(data, 'position')
+  if (positionObj === null) { return err<StarMapEmbed>('position missing or not object') }
+  const posX: number | null = reqNum(positionObj, 'x')
+  if (posX === null) { return err<StarMapEmbed>('position.x missing or not number') }
+  const posY: number | null = reqNum(positionObj, 'y')
+  if (posY === null) { return err<StarMapEmbed>('position.y missing or not number') }
+  const position: StarMapPoint = { x: posX, y: posY }
   const provenanceObj: Object | null = reqObj(data, 'provenance')
   if (provenanceObj === null) { return err<StarMapEmbed>('provenance missing or not object') }
   const provenanceR = decodeStarMapProvenance(provenanceObj)
@@ -981,48 +941,11 @@ function decodeStarMapEmbed(data: Object): DecodeResult<StarMapEmbed> {
   if (!hostPathR.ok || hostPathR.value === undefined) { return err<StarMapEmbed>(`hostPath: ${hostPathR.error}`) }
   const labelR: DecodeResult<string | null> = nullStr(data, 'label')
   if (!labelR.ok || labelR.value === undefined) { return err<StarMapEmbed>(`StarMapEmbed.${labelR.error ?? 'decode failed'}`) }
-  const pX: number | null = reqNum(placementObj, 'x')
-  if (pX === null) { return err<StarMapEmbed>('StarMapEmbed.placement.x missing or not number') }
-  const pY: number | null = reqNum(placementObj, 'y')
-  if (pY === null) { return err<StarMapEmbed>('StarMapEmbed.placement.y missing or not number') }
-  const pWidth: number | null = reqNum(placementObj, 'width')
-  if (pWidth === null) { return err<StarMapEmbed>('StarMapEmbed.placement.width missing or not number') }
-  const pHeight: number | null = reqNum(placementObj, 'height')
-  if (pHeight === null) { return err<StarMapEmbed>('StarMapEmbed.placement.height missing or not number') }
-  const pScale: number | null = reqNum(placementObj, 'scale')
-  if (pScale === null) { return err<StarMapEmbed>('StarMapEmbed.placement.scale missing or not number') }
-  const pZIndex: number | null = reqNum(placementObj, 'zIndex')
-  if (pZIndex === null) { return err<StarMapEmbed>('StarMapEmbed.placement.zIndex missing or not number') }
-  const pCollapsed: boolean | null = reqBool(placementObj, 'collapsed')
-  if (pCollapsed === null) { return err<StarMapEmbed>('StarMapEmbed.placement.collapsed missing or not boolean') }
-  const tvScale: number | null = reqNum(targetViewportObj, 'scale')
-  if (tvScale === null) { return err<StarMapEmbed>('StarMapEmbed.targetViewport.scale missing or not number') }
-  const tvOffsetX: number | null = reqNum(targetViewportObj, 'offsetX')
-  if (tvOffsetX === null) { return err<StarMapEmbed>('StarMapEmbed.targetViewport.offsetX missing or not number') }
-  const tvOffsetY: number | null = reqNum(targetViewportObj, 'offsetY')
-  if (tvOffsetY === null) { return err<StarMapEmbed>('StarMapEmbed.targetViewport.offsetY missing or not number') }
-  const placement: import('../dto/StarMapDtos').StarMapEmbedPlacement = {
-    x: pX,
-    y: pY,
-    width: pWidth,
-    height: pHeight,
-    scale: pScale,
-    zIndex: pZIndex,
-    collapsed: pCollapsed
-  }
-  const targetViewport: import('../dto/StarMapDtos').StarMapEmbedViewport = {
-    scale: tvScale,
-    offsetX: tvOffsetX,
-    offsetY: tvOffsetY
-  }
   const value: StarMapEmbed = {
     instanceId: instanceId,
     targetStarmapId: targetStarmapId,
     label: labelR.value,
-    displayPolicy: displayPolicyR.value,
-    openBehavior: openBehavior as import('../dto/StarMapDtos').OpenBehavior,
-    placement: placement,
-    targetViewport: targetViewport,
+    position: position,
     hostPath: hostPathR.value,
     provenance: provenanceR.value,
     createdAt: createdAt,

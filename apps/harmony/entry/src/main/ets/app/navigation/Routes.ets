@@ -37,6 +37,8 @@ export interface WritingRouteParams {
 export interface StarMapRouteParams {
   starmapId: string
   starmapTitle: string
+  parentStarmapId?: string
+  parentStarmapTitle?: string
 }
 
 // Settings 页是应用级页面，不需要路由参数（Issue #784 评论 5856805657）。

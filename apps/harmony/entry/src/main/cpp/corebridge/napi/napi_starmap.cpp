@@ -75,7 +75,33 @@ static napi_value NativeRenameStarMap(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_rename_starmap(starmap_id, new_title));
 }
 
-static napi_value NativeSaveStarMapViewport(napi_env env, napi_callback_info info) {
+static napi_value NativeUpdateStarMapNode(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char starmap_id[256] = {0};
+    char node_id[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], node_id, sizeof(node_id), nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env, writer_core_update_starmap_node(starmap_id, node_id, json));
+    delete[] json;
+    return result;
+}
+
+static napi_value NativeAddStarMapEdge(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value args[2];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
@@ -94,7 +120,33 @@ static napi_value NativeSaveStarMapViewport(napi_env env, napi_callback_info inf
         json[0] = '\0';
     }
 
-    napi_value result = ReturnJsonString(env, writer_core_save_starmap_viewport(starmap_id, json));
+    napi_value result = ReturnJsonString(env, writer_core_add_starmap_edge(starmap_id, json));
+    delete[] json;
+    return result;
+}
+
+static napi_value NativeUpdateStarMapEmbed(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char starmap_id[256] = {0};
+    char instance_id[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], instance_id, sizeof(instance_id), nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env, writer_core_update_starmap_embed(starmap_id, instance_id, json));
     delete[] json;
     return result;
 }
@@ -107,7 +159,9 @@ napi_property_descriptor* getStarMapDescriptors(size_t* count) {
         {"nativeListStarMapsForProject", nullptr, NativeListStarMapsForProject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetStarMap", nullptr, NativeGetStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetStarMapGraph", nullptr, NativeGetStarMapGraph, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveStarMapViewport", nullptr, NativeSaveStarMapViewport, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeUpdateStarMapNode", nullptr, NativeUpdateStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeAddStarMapEdge", nullptr, NativeAddStarMapEdge, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeUpdateStarMapEmbed", nullptr, NativeUpdateStarMapEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCreateStarMap", nullptr, NativeCreateStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeDeleteStarMap", nullptr, NativeDeleteStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRenameStarMap", nullptr, NativeRenameStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapMeta } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -14,21 +14,34 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
-import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRects, hitTest, computeAllEdgeRenders, canvasToScreen, screenToCanvas } from '../platform/StarMapGeometry'
-import { PlatformLayoutNode, NodePositionPatch, defaultLayoutNodes, applyFreeformLayout, generatePositionPatches } from '../platform/StarMapLayout'
-import { PlatformMotionConfig, defaultMotionConfig, stablePhase, wobbleX, wobbleY, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
-import { GestureMode, GestureState, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRectFromLayoutNode, hitTest, computeAllEdgeRenders, screenToCanvas } from '../platform/StarMapGeometry'
+import { PlatformLayoutNode, PlatformPoint, NodePositionPatch, buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout, autoGridLayoutNodes, generatePositionPatches } from '../platform/StarMapLayout'
+import { PlatformMotionConfig, defaultMotionConfig, wobbleX, wobbleY, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
+import { GestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 
 interface SelectOption {
   value: string
   icon: string
 }
 
+/** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
+interface WobbleOffset {
+  dx: number
+  dy: number
+}
+
+// 缩放边界：缩到 MIN 之下即视为"退出当前层"，回到父星图（#789：缩放返回父层）
+const MIN_ZOOM: number = 0.3
+const MAX_ZOOM: number = 3
+const ZOOM_STEP: number = 0.1
+
 @Component
 export struct StarMapScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
   @State starmapId: string = ''
   @State starmapTitle: string = ''
+  @State parentStarmapId: string = ''
+  @State parentStarmapTitle: string = ''
   @State graph: StarMapGraph | null = null
   @State allStarMaps: StarMapMeta[] = []
   @State isLoading: boolean = true
@@ -45,6 +58,7 @@ export struct StarMapScreen {
 
   // 平台层布局
   @State platformLayoutNodes: PlatformLayoutNode[] = []
+  @State embedLayoutNodes: PlatformLayoutNode[] = []
   @State nodeRects: PlatformNodeRect[] = []
   @State localEdgeRenders: PlatformEdgeRender[] = []
 
@@ -57,11 +71,14 @@ export struct StarMapScreen {
   @State gestureMode: GestureMode = 'idle'
   @State showNodeMenu: boolean = false
   @State nodeMenuNodeId: string = ''
-  @State previewLineFrom: { x: number, y: number } = { x: 0, y: 0 }
-  @State previewLineTo: { x: number, y: number } = { x: 0, y: 0 }
+  @State previewLineFrom: PlatformPoint = { x: 0, y: 0 }
+  @State previewLineTo: PlatformPoint = { x: 0, y: 0 }
 
   // 动画驱动：用 animateTo 驱动 animPhase 从 0→1 无限循环，替代 setInterval
   @State animPhase: number = 0
+
+  // 双指缩放的基准比例（手势开始时记录）
+  private pinchBaseScale: number = 1
 
   // Stack 容器尺寸（用于 position 数值计算）
   @State stackWidth: number = 0
@@ -82,6 +99,8 @@ export struct StarMapScreen {
     if (params) {
       this.starmapId = params.starmapId
       this.starmapTitle = params.starmapTitle
+      this.parentStarmapId = params.parentStarmapId ?? ''
+      this.parentStarmapTitle = params.parentStarmapTitle ?? ''
       this.loadStarMap()
       this.loadAllStarMaps()
     } else {
@@ -152,13 +171,10 @@ export struct StarMapScreen {
       const result = await this.bridge.getStarMapGraph(this.starmapId)
       if (result.success && result.data) {
         this.graph = result.data
-        // 使用平台层布局：从 graph.nodes 的 ID 列表创建默认布局节点
-        const nodeIds: string[] = result.data.nodes.map((node: StarMapNode) => node.id)
-        this.platformLayoutNodes = defaultLayoutNodes(nodeIds)
-        // 应用自动网格布局（居中排布）
-        if (this.stackWidth > 0 && this.stackHeight > 0) {
-          this.applyAutoLayout()
-        }
+        // Freeform 布局：直接从 graph.nodes 的 authored position 构建布局节点
+        this.platformLayoutNodes = buildFreeformLayout(result.data.nodes)
+        // 构建 Embed 布局节点
+        this.embedLayoutNodes = buildEmbedLayoutNodes(result.data.embeds)
         // 本地计算 nodeRects 和 edgeRenders（不再从 Core 获取）
         this.recomputeGeometry()
       } else {
@@ -174,33 +190,31 @@ export struct StarMapScreen {
   }
 
   /**
-   * 自动网格布局：将节点按行列排布并居中。
+   * 自动网格布局：调用平台层的 autoGridLayoutNodes，把结果应用到现有节点。
+   * 只在用户明确点"自动布局"按钮时调用；加载页面不排网格。
    */
   applyAutoLayout() {
     if (this.platformLayoutNodes.length === 0 || this.stackWidth === 0) {
       return
     }
-    const nodeCount = this.platformLayoutNodes.length
-    const cols = Math.ceil(Math.sqrt(nodeCount))
-    const rows = Math.ceil(nodeCount / cols)
-    const gridHSpacing = 200
-    const gridVSpacing = 120
-    const gridWidth = (cols - 1) * gridHSpacing + 160
-    const gridHeight = (rows - 1) * gridVSpacing + 80
-    const offsetX = (this.stackWidth - gridWidth) / 2
-    const offsetY = (this.stackHeight - gridHeight) / 2
-
-    const positions = new Map<string, { x: number, y: number }>()
-    for (let i = 0; i < this.platformLayoutNodes.length; i++) {
-      const col = i % cols
-      const row = Math.floor(i / cols)
-      positions.set(this.platformLayoutNodes[i].nodeId, {
-        x: offsetX + col * gridHSpacing,
-        y: offsetY + row * gridVSpacing
-      })
-    }
-    this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
+    this.platformLayoutNodes = autoGridLayoutNodes(this.platformLayoutNodes, this.stackWidth, this.stackHeight)
     this.recomputeGeometry()
+    // 自动布局后把结果通过 position patch 写回 Core
+    this.saveAllNodePositions()
+  }
+
+  /**
+   * 保存所有节点位置到 Core（自动布局后批量写回 position patch）。
+   */
+  async saveAllNodePositions() {
+    if (!this.graph) return
+    const patches: NodePositionPatch[] = generatePositionPatches(this.platformLayoutNodes)
+    for (const patch of patches) {
+      const result = await this.bridge.updateStarMapNode(this.starmapId, patch.nodeId, { x: patch.x, y: patch.y })
+      if (!result.success) {
+        hilog.error(0x0000, 'StarMapScreen', `saveAllNodePositions ${patch.nodeId} failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
+      }
+    }
   }
 
   /**
@@ -213,17 +227,10 @@ export struct StarMapScreen {
       this.localEdgeRenders = []
       return
     }
-    // 从 platformLayoutNodes 派生 nodeRects
-    this.nodeRects = this.platformLayoutNodes.map((ln: PlatformLayoutNode): PlatformNodeRect => {
-      return {
-        nodeId: ln.nodeId,
-        x: ln.x,
-        y: ln.y,
-        width: ln.width,
-        height: ln.height,
-        radius: ln.radius
-      }
-    })
+    // 节点与 Embed 都从平台层布局节点派生显示矩形
+    const nodeRects: PlatformNodeRect[] = this.platformLayoutNodes.map((ln: PlatformLayoutNode) => deriveNodeRectFromLayoutNode(ln))
+    const embedRects: PlatformNodeRect[] = this.embedLayoutNodes.map((ln: PlatformLayoutNode) => deriveNodeRectFromLayoutNode(ln))
+    this.nodeRects = nodeRects.concat(embedRects)
     // 构建 nodeId → PlatformNodeRect 映射
     const rectMap = new Map<string, PlatformNodeRect>()
     for (const rect of this.nodeRects) {
@@ -319,10 +326,50 @@ export struct StarMapScreen {
   }
 
   /**
-   * 获取平台层布局节点
+   * 手势触点的屏幕坐标。
+   * GestureEvent 本身没有 x/y：触点坐标在 `fingerList[0].localX/localY`（相对触发组件
+   * 左上角），加上组件自身的屏幕位置才是屏幕坐标。
+   */
+  private gestureScreenPoint(event: GestureEvent, anchorX: number, anchorY: number): PlatformPoint {
+    const fingers: FingerInfo[] = event.fingerList
+    if (fingers && fingers.length > 0) {
+      return { x: anchorX + fingers[0].localX, y: anchorY + fingers[0].localY }
+    }
+    return { x: anchorX, y: anchorY }
+  }
+
+  /**
+   * 获取平台层布局节点（普通节点或 Embed：两者都在同一套 PlatformLayoutNode 上）
    */
   private getPlatformLayoutNode(nodeId: string): PlatformLayoutNode | undefined {
-    return this.platformLayoutNodes.find(ln => ln.nodeId === nodeId)
+    const node = this.platformLayoutNodes.find(ln => ln.nodeId === nodeId)
+    return node !== undefined ? node : this.embedLayoutNodes.find(ln => ln.nodeId === nodeId)
+  }
+
+  /**
+   * 按屏幕位移移动布局节点，返回新的布局数组（applyFreeformLayout 不原地改）。
+   */
+  private moveLayoutNode(layoutNodes: PlatformLayoutNode[], nodeId: string,
+    screenDx: number, screenDy: number): PlatformLayoutNode[] {
+    const ln = layoutNodes.find(n => n.nodeId === nodeId)
+    if (!ln) {
+      return layoutNodes
+    }
+    const positions = new Map<string, PlatformPoint>()
+    positions.set(nodeId, { x: ln.x + screenDx / this.zoomScale, y: ln.y + screenDy / this.zoomScale })
+    return applyFreeformLayout(layoutNodes, positions)
+  }
+
+  /** moveNode 模式：Pan 画布位移 → 节点布局坐标 */
+  private moveNodeBy(nodeId: string, screenDx: number, screenDy: number) {
+    this.platformLayoutNodes = this.moveLayoutNode(this.platformLayoutNodes, nodeId, screenDx, screenDy)
+    this.recomputeGeometry()
+  }
+
+  /** moveEmbed 模式：Pan 画布位移 → Embed 布局坐标 */
+  private moveEmbedBy(embedId: string, screenDx: number, screenDy: number) {
+    this.embedLayoutNodes = this.moveLayoutNode(this.embedLayoutNodes, embedId, screenDx, screenDy)
+    this.recomputeGeometry()
   }
 
   /**
@@ -343,6 +390,102 @@ export struct StarMapScreen {
     const baseY = ln ? ln.y : 0
     const wobbleDy = wobbleY(nodeId, this.getAnimTick(), this.motionConfig, this.gestureTracker.getState().activeNodeId)
     return (baseY + wobbleDy) * this.zoomScale + this.offsetY - (ln ? ln.height : 80) / 2
+  }
+
+  /**
+   * 计算 Embed 在屏幕上的 x 坐标（无 wobble：Embed 位置由用户显式移动）
+   */
+  private getEmbedScreenX(embedId: string): number {
+    const ln = this.getPlatformLayoutNode(embedId)
+    const baseX = ln ? ln.x : 0
+    return baseX * this.zoomScale + this.offsetX
+  }
+
+  /**
+   * 计算 Embed 在屏幕上的 y 坐标
+   */
+  private getEmbedScreenY(embedId: string): number {
+    const ln = this.getPlatformLayoutNode(embedId)
+    const baseY = ln ? ln.y : 0
+    return baseY * this.zoomScale + this.offsetY
+  }
+
+  /**
+   * 判断 nodeId 是否是 Embed
+   */
+  private isEmbed(nodeId: string): boolean {
+    if (!this.graph) return false
+    return this.graph.embeds.some(e => e.instanceId === nodeId)
+  }
+
+  /**
+   * 保存 Embed 位置：通过 bridge 的 Embed update API 把 position 写回 Core。
+   * Embed 位置只读 embed.position，显示宽高圆角由平台层定义。
+   */
+  async saveEmbedPosition(embedId: string) {
+    const ln = this.getPlatformLayoutNode(embedId)
+    if (!ln) return
+    hilog.info(0x0000, 'StarMapScreen', `saveEmbedPosition: ${embedId} → (${ln.x}, ${ln.y})`)
+    const result = await this.bridge.updateStarMapEmbed(this.starmapId, embedId, { x: ln.x, y: ln.y })
+    if (!result.success) {
+      hilog.error(0x0000, 'StarMapScreen', `saveEmbedPosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
+    }
+  }
+
+  /**
+   * 导航到父星图（"返回父星图"入口与"缩放返回父层"共用同一条路径）。
+   */
+  returnToParent() {
+    if (this.parentStarmapId.length === 0) {
+      return
+    }
+    this.navPathStack.pushPath({
+      name: Routes.StarMap,
+      param: {
+        starmapId: this.parentStarmapId,
+        starmapTitle: this.parentStarmapTitle,
+        parentStarmapId: '',
+        parentStarmapTitle: ''
+      } as StarMapRouteParams
+    })
+  }
+
+  /** 放大一级（工具栏 +） */
+  zoomIn() {
+    this.zoomScale = Math.min(MAX_ZOOM, this.zoomScale + ZOOM_STEP)
+  }
+
+  /** 缩小一级（工具栏 −）；已经缩到最小时缩出当前层，回到父星图 */
+  zoomOut() {
+    if (this.zoomScale - ZOOM_STEP < MIN_ZOOM && this.parentStarmapId.length > 0) {
+      this.returnToParent()
+      return
+    }
+    this.zoomScale = Math.max(MIN_ZOOM, this.zoomScale - ZOOM_STEP)
+  }
+
+  /** 双指缩放：比例低于 MIN_ZOOM 时同样退出当前层回到父星图 */
+  private applyPinchScale(scale: number) {
+    if (scale < MIN_ZOOM && this.parentStarmapId.length > 0) {
+      this.returnToParent()
+      return
+    }
+    this.zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale))
+  }
+
+  /**
+   * 导航到子星图（Embed 的目标星图）
+   */
+  navigateToEmbed(embed: StarMapEmbed) {
+    this.navPathStack.pushPath({
+      name: Routes.StarMap,
+      param: {
+        starmapId: embed.targetStarmapId,
+        starmapTitle: embed.label ?? embed.targetStarmapId,
+        parentStarmapId: this.starmapId,
+        parentStarmapTitle: this.starmapTitle
+      } as StarMapRouteParams
+    })
   }
 
   onTransformChange() {
@@ -423,11 +566,21 @@ export struct StarMapScreen {
     }
   }
 
-  // —— 星图工具条（保留不变）——
+  // —— 星图工具条 ——
 
   @Builder
   StarMapToolbar() {
     Row() {
+      // 返回父星图按钮（仅当有父星图时显示）
+      if (this.parentStarmapId.length > 0) {
+        Button($r('app.string.back_to_parent'))
+          .fontSize(12)
+          .height(36)
+          .onClick(() => {
+            this.returnToParent()
+          })
+      }
+
       Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => {
         return { value: sm.title, icon: '' } as SelectOption
       }))
@@ -447,7 +600,7 @@ export struct StarMapScreen {
         .height(36)
         .fontSize(18)
         .onClick(() => {
-          this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
+          this.zoomOut()
         })
 
       Text(`${Math.round(this.zoomScale * 100)}%`)
@@ -460,7 +613,7 @@ export struct StarMapScreen {
         .height(36)
         .fontSize(18)
         .onClick(() => {
-          this.zoomScale = Math.min(3, this.zoomScale + 0.1)
+          this.zoomIn()
         })
 
       Button($r('app.string.reset'))
@@ -470,6 +623,13 @@ export struct StarMapScreen {
           this.zoomScale = 1
           this.offsetX = 0
           this.offsetY = 0
+        })
+
+      Button($r('app.string.auto_layout'))
+        .fontSize(12)
+        .height(36)
+        .onClick(() => {
+          this.applyAutoLayout()
         })
 
       Button($r('app.string.share'))
@@ -528,6 +688,11 @@ export struct StarMapScreen {
             this.StarMapNodeItem(node)
           }, (node: StarMapNode) => node.id)
 
+          // Embed 层：渲染子星图嵌入
+          ForEach(this.graph.embeds, (embed: StarMapEmbed) => {
+            this.StarMapEmbedItem(embed)
+          }, (embed: StarMapEmbed) => embed.instanceId)
+
           // 预览连线（connect 模式下显示）
           if (this.gestureMode === 'connect') {
             Canvas(this.buildPreviewCanvasContext())
@@ -559,28 +724,35 @@ export struct StarMapScreen {
         .onAreaChange((_oldArea: Area, newArea: Area) => {
           this.stackWidth = Number(newArea.width)
           this.stackHeight = Number(newArea.height)
-          // 首次获取尺寸后应用自动布局
-          if (this.platformLayoutNodes.length > 0 && this.getPlatformLayoutNode(this.platformLayoutNodes[0].nodeId)?.x === 0) {
-            this.applyAutoLayout()
-          }
         })
-        // 空白区域：PanGesture → 拖动画布（panCanvas 模式）
+        // 空白区域：PanGesture → 拖动画布（panCanvas 模式）；PinchGesture → 双指缩放
         .gesture(
-          PanGesture()
-            .onActionStart((event: GestureEvent) => {
-              this.gestureTracker.beginPanCanvas(event.x, event.y)
-              this.gestureMode = 'panCanvas'
-            })
-            .onActionUpdate((event: GestureEvent) => {
-              if (this.gestureMode === 'panCanvas') {
-                this.offsetX += event.offsetX
-                this.offsetY += event.offsetY
-              }
-            })
-            .onActionEnd(() => {
-              this.gestureTracker.reset()
-              this.gestureMode = 'idle'
-            })
+          GestureGroup(GestureMode.Parallel,
+            PinchGesture({ fingers: 2 })
+              .onActionStart(() => {
+                this.pinchBaseScale = this.zoomScale
+              })
+              .onActionUpdate((event: GestureEvent) => {
+                this.applyPinchScale(this.pinchBaseScale * event.scale)
+              }),
+            PanGesture()
+              .onActionStart((event: GestureEvent) => {
+                // 空白区域手势挂在 Stack 上：组件左上角即 Stack 原点
+                const point = this.gestureScreenPoint(event, 0, 0)
+                this.gestureTracker.beginPanCanvas(point.x, point.y)
+                this.gestureMode = 'panCanvas'
+              })
+              .onActionUpdate((event: GestureEvent) => {
+                if (this.gestureMode === 'panCanvas') {
+                  this.offsetX += event.offsetX
+                  this.offsetY += event.offsetY
+                }
+              })
+              .onActionEnd(() => {
+                this.gestureTracker.reset()
+                this.gestureMode = 'idle'
+              })
+          )
         )
       }
     }
@@ -666,7 +838,8 @@ export struct StarMapScreen {
         // 长按 → 弹出节点菜单
         LongPressGesture({ repeat: false, duration: 500 })
           .onAction((event: GestureEvent) => {
-            this.gestureTracker.beginNodeMenu(node.id, event.x, event.y)
+            const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+            this.gestureTracker.beginNodeMenu(node.id, point.x, point.y)
             this.gestureMode = 'nodeMenu'
             this.showNodeMenu = true
             this.nodeMenuNodeId = node.id
@@ -678,7 +851,8 @@ export struct StarMapScreen {
             const state = this.gestureTracker.getState()
             if (state.mode === 'nodeMenu') {
               // 长按后继续移动 → 从 nodeMenu 切到 connect
-              this.gestureTracker.beginConnect(node.id, event.x, event.y)
+              const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+              this.gestureTracker.beginConnect(node.id, point.x, point.y)
               this.gestureMode = 'connect'
               this.showNodeMenu = false
               // 设置预览线起点（节点中心屏幕坐标）
@@ -689,7 +863,7 @@ export struct StarMapScreen {
                   y: ln.y * this.zoomScale + this.offsetY
                 }
               }
-              this.previewLineTo = { x: event.x, y: event.y }
+              this.previewLineTo = point
             } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
               // 从菜单显式进入 moveNode 后，Pan 改 node.position
               this.motionPauseTracker.pauseNode(node.id)
@@ -698,24 +872,11 @@ export struct StarMapScreen {
           .onActionUpdate((event: GestureEvent) => {
             const state = this.gestureTracker.getState()
             if (state.mode === 'connect') {
-              // connect 模式：更新预览线终点
-              this.previewLineTo = { x: event.x, y: event.y }
+              // connect 模式：更新预览线终点（触点相对节点的偏移 + 节点屏幕位置）
+              this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
             } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
-              // moveNode 模式：更新节点位置
-              const layoutIndex = this.platformLayoutNodes.findIndex(ln => ln.nodeId === node.id)
-              if (layoutIndex >= 0) {
-                this.platformLayoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
-                this.platformLayoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
-                this.recomputeGeometry()
-              }
-            } else if (state.mode === 'moveEmbed' && state.activeNodeId === node.id) {
-              // moveEmbed 模式：更新 Embed 位置（与 moveNode 同逻辑）
-              const layoutIndex = this.platformLayoutNodes.findIndex(ln => ln.nodeId === node.id)
-              if (layoutIndex >= 0) {
-                this.platformLayoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
-                this.platformLayoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
-                this.recomputeGeometry()
-              }
+              // moveNode 模式：更新节点位置（新数组赋值，保证刷新）
+              this.moveNodeBy(node.id, event.offsetX, event.offsetY)
             }
           })
           .onActionEnd(() => {
@@ -728,12 +889,12 @@ export struct StarMapScreen {
               const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
               const targetNodeId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
               if (targetNodeId !== null && targetNodeId !== node.id) {
-                // 创建关系：通过 bridge 的星图 CRUD API
-                this.createEdge(node.id, targetNodeId)
+                // 创建关系：走 Core 的 add_starmap_edge
+                void this.createEdge(node.id, targetNodeId)
               }
-            } else if (state.mode === 'moveNode' || state.mode === 'moveEmbed') {
-              // 移动结束：保存节点位置（通过 bridge 的星图节点更新 API）
-              this.saveNodePosition(node.id)
+            } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
+              // 移动结束：通过 bridge 的节点更新 API 把 position 写回 Core
+              void this.saveNodePosition(node.id)
               this.motionPauseTracker.resumeNode(node.id)
             }
             // 重置手势状态
@@ -747,24 +908,98 @@ export struct StarMapScreen {
   }
 
   /**
-   * 创建关系（边）：通过 bridge 的星图 CRUD API。
-   * 当前 bridge 没有直接的 createEdge 方法，此处预留接口。
+   * Embed 组件：渲染子星图嵌入，支持点击进入子星图和长按弹出菜单。
    */
-  createEdge(fromNodeId: string, toNodeId: string) {
-    hilog.info(0x0000, 'StarMapScreen', `createEdge: ${fromNodeId} → ${toNodeId}`)
-    // TODO: 通过 bridge 创建边
+  @Builder
+  StarMapEmbedItem(embed: StarMapEmbed) {
+    Column() {
+      Text(embed.label ?? embed.targetStarmapId)
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .margin({ bottom: 4 })
+
+      Text($r('app.string.embed_subtitle'))
+        .fontSize(12)
+        .fontColor('#666666')
+    }
+    .width(200)
+    .height(120)
+    .borderRadius(12)
+    .backgroundColor('#E8E8E8')
+    .border({ width: 2, color: '#CCCCCC' })
+    .position({
+      x: this.getEmbedScreenX(embed.instanceId),
+      y: this.getEmbedScreenY(embed.instanceId)
+    })
+    .onClick(() => {
+      // 点击 Embed → 进入子星图
+      this.navigateToEmbed(embed)
+    })
+    .gesture(
+      GestureGroup(GestureMode.Exclusive,
+        LongPressGesture({ repeat: false, duration: 500 })
+          .onAction((event: GestureEvent) => {
+            const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+            this.gestureTracker.beginNodeMenu(embed.instanceId, point.x, point.y)
+            this.gestureMode = 'nodeMenu'
+            this.showNodeMenu = true
+            this.nodeMenuNodeId = embed.instanceId
+          }),
+        PanGesture()
+          .onActionStart((event: GestureEvent) => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveEmbed' && state.activeNodeId === embed.instanceId) {
+              this.motionPauseTracker.pauseNode(embed.instanceId)
+            }
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveEmbed' && state.activeNodeId === embed.instanceId) {
+              // moveEmbed 模式：更新 Embed 位置（新数组赋值，保证刷新）
+              this.moveEmbedBy(embed.instanceId, event.offsetX, event.offsetY)
+            }
+          })
+          .onActionEnd(() => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveEmbed') {
+              // 移动结束：通过 bridge 的 Embed update API 把 position 写回 Core
+              void this.saveEmbedPosition(embed.instanceId)
+              this.motionPauseTracker.resumeNode(embed.instanceId)
+            }
+            this.gestureTracker.reset()
+            this.gestureMode = 'idle'
+            this.showNodeMenu = false
+            this.nodeMenuNodeId = ''
+          })
+      )
+    )
   }
 
   /**
-   * 保存节点位置：生成 position patch，通过 bridge 的星图节点更新 API 写回。
-   * 不再调 saveStarMapLayout。
+   * 创建关系（边）：通过 bridge 的星图 CRUD API。
    */
-  saveNodePosition(nodeId: string) {
+  async createEdge(fromNodeId: string, toNodeId: string) {
+    hilog.info(0x0000, 'StarMapScreen', `createEdge: ${fromNodeId} → ${toNodeId}`)
+    const result = await this.bridge.addStarMapEdge(this.starmapId, fromNodeId, toNodeId, 'RelatedTo', null)
+    if (result.success) {
+      // 重新加载星图以获取新边
+      this.loadStarMap()
+    } else {
+      hilog.error(0x0000, 'StarMapScreen', `createEdge failed: ${result.errorCode}, ${result.userMessage}`)
+    }
+  }
+
+  /**
+   * 保存节点位置：通过 bridge 的星图节点更新 API 写回。
+   */
+  async saveNodePosition(nodeId: string) {
     const ln = this.getPlatformLayoutNode(nodeId)
     if (!ln) return
-    const patches = generatePositionPatches([ln])
     hilog.info(0x0000, 'StarMapScreen', `saveNodePosition: ${nodeId} → (${ln.x}, ${ln.y})`)
-    // TODO: 通过 bridge 的节点更新 API 写回 position patch
+    const result = await this.bridge.updateStarMapNode(this.starmapId, nodeId, { x: ln.x, y: ln.y })
+    if (!result.success) {
+      hilog.error(0x0000, 'StarMapScreen', `saveNodePosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
+    }
   }
 
   /**
@@ -809,6 +1044,21 @@ export struct StarMapScreen {
           }
           this.previewLineTo = this.previewLineFrom
         })
+
+      // 如果当前菜单节点是 Embed，提供"移动子星图"选项
+      if (this.isEmbed(this.nodeMenuNodeId)) {
+        Button($r('app.string.move_embed'))
+          .fontSize(13)
+          .height(36)
+          .width('100%')
+          .margin({ top: 4 })
+          .onClick(() => {
+            this.gestureTracker.beginMoveEmbed(this.nodeMenuNodeId, 0, 0)
+            this.gestureMode = 'moveEmbed'
+            this.showNodeMenu = false
+            this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
+          })
+      }
 
       // 取消菜单
       Button($r('app.string.cancel'))
@@ -1009,7 +1259,7 @@ export struct StarMapScreen {
 
     // 构建 nodeId → wobble offset 映射
     const tick = this.getAnimTick()
-    const wobbleMap = new Map<string, { dx: number, dy: number }>()
+    const wobbleMap = new Map<string, WobbleOffset>()
     for (const node of this.graph.nodes) {
       const dx = wobbleX(node.id, tick, this.motionConfig, this.gestureTracker.getState().activeNodeId)
       const dy = wobbleY(node.id, tick, this.motionConfig, this.gestureTracker.getState().activeNodeId)
@@ -1022,7 +1272,7 @@ export struct StarMapScreen {
 
       const fromId = graphEdge.from.target.nodeId || ''
       const toId = graphEdge.to.target.nodeId || ''
-      const defaultWobble = { dx: 0, dy: 0 }
+      const defaultWobble: WobbleOffset = { dx: 0, dy: 0 }
       const fromWobble = wobbleMap.get(fromId) || defaultWobble
       const toWobble = wobbleMap.get(toId) || defaultWobble
 

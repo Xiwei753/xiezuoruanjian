@@ -3,15 +3,13 @@
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 
 import {
-  StarMapGraph,
-  StarMapEdge,
-  StarMapEmbed,
-  StarMapLayoutNode
+  StarMapEdge
 } from '../../../corebridge/dto/StarMapDtos'
+import { PlatformLayoutNode, PlatformPoint } from './StarMapLayout'
 
 // ─── 接口定义 ───
 
-/** 节点显示矩形：从 layout 或 embed placement 派生的屏幕坐标系矩形。 */
+/** 节点显示矩形：从 platform layout 或 embed.position 派生的屏幕坐标系矩形。 */
 export interface PlatformNodeRect {
   nodeId: string
   x: number
@@ -39,17 +37,8 @@ export interface PlatformEdgeRender {
   label: string | null
 }
 
-/** 二维点。 */
-export interface Point {
-  x: number
-  y: number
-}
-
 // ─── 常量 ───
 
-const DEFAULT_NODE_WIDTH: number = 160
-const DEFAULT_NODE_HEIGHT: number = 80
-const DEFAULT_NODE_RADIUS: number = 16
 const ARROW_SIZE: number = 10
 const ARROW_ANGLE: number = Math.PI / 6 // 30°
 const LABEL_OFFSET: number = 8
@@ -57,75 +46,21 @@ const LABEL_OFFSET: number = 8
 // ─── 节点矩形派生 ───
 
 /**
- * 从 graph + layout 数据派生所有节点显示矩形。
+ * 从平台层布局节点派生节点显示矩形。
+ * 普通节点与 Embed 都走同一条路径：位置来自平台布局（节点取 node.position，
+ * Embed 取 embed.position），宽高圆角来自平台层的显示尺寸定义。
  *
- * 普通节点：从 layoutNodes 获取 x/y/width/height/radius。
- * Embed 节点：从 graph.embeds[].placement 获取 x/y/width/height，并乘以 scale。
- *
- * @param graph 星图数据（包含 embeds）
- * @param layoutNodes 布局节点列表（包含普通节点的位置）
- * @returns 所有节点的显示矩形列表
+ * @param layoutNode 平台层布局节点
+ * @returns 节点显示矩形
  */
-export function deriveNodeRects(
-  graph: StarMapGraph,
-  layoutNodes: StarMapLayoutNode[]
-): PlatformNodeRect[] {
-  const rects: PlatformNodeRect[] = []
-
-  // 普通节点：从 layoutNodes 派生
-  for (const ln of layoutNodes) {
-    rects.push({
-      nodeId: ln.nodeId,
-      x: ln.x,
-      y: ln.y,
-      width: ln.width > 0 ? ln.width : DEFAULT_NODE_WIDTH,
-      height: ln.height > 0 ? ln.height : DEFAULT_NODE_HEIGHT,
-      radius: ln.radius >= 0 ? ln.radius : DEFAULT_NODE_RADIUS
-    })
-  }
-
-  // Embed 节点：从 placement 派生
-  for (const embed of graph.embeds) {
-    const p = embed.placement
-    rects.push({
-      nodeId: embed.instanceId,
-      x: p.x,
-      y: p.y,
-      width: p.width * p.scale,
-      height: p.height * p.scale,
-      radius: 0
-    })
-  }
-
-  return rects
-}
-
-/**
- * 从单个 layout node 派生节点矩形。
- */
-export function deriveNodeRectFromLayout(ln: StarMapLayoutNode): PlatformNodeRect {
+export function deriveNodeRectFromLayoutNode(layoutNode: PlatformLayoutNode): PlatformNodeRect {
   return {
-    nodeId: ln.nodeId,
-    x: ln.x,
-    y: ln.y,
-    width: ln.width > 0 ? ln.width : DEFAULT_NODE_WIDTH,
-    height: ln.height > 0 ? ln.height : DEFAULT_NODE_HEIGHT,
-    radius: ln.radius >= 0 ? ln.radius : DEFAULT_NODE_RADIUS
-  }
-}
-
-/**
- * 从 embed placement 派生节点矩形。
- */
-export function deriveNodeRectFromEmbed(embed: StarMapEmbed): PlatformNodeRect {
-  const p = embed.placement
-  return {
-    nodeId: embed.instanceId,
-    x: p.x,
-    y: p.y,
-    width: p.width * p.scale,
-    height: p.height * p.scale,
-    radius: 0
+    nodeId: layoutNode.nodeId,
+    x: layoutNode.x,
+    y: layoutNode.y,
+    width: layoutNode.width,
+    height: layoutNode.height,
+    radius: layoutNode.radius
   }
 }
 
@@ -226,7 +161,7 @@ function lineRectIntersection(
   rectY: number,
   rectW: number,
   rectH: number
-): Point {
+): PlatformPoint {
   const dx: number = tx - cx
   const dy: number = ty - cy
 
@@ -316,13 +251,13 @@ export function computeEdgeRender(
   const toCy: number = toRect.y + toRect.height / 2
 
   // 起点：fromRect 边界上指向 toRect 的交点
-  const start: Point = lineRectIntersection(
+  const start: PlatformPoint = lineRectIntersection(
     fromCx, fromCy, toCx, toCy,
     fromRect.x, fromRect.y, fromRect.width, fromRect.height
   )
 
   // 终点：toRect 边界上指向 fromRect 的交点
-  const end: Point = lineRectIntersection(
+  const end: PlatformPoint = lineRectIntersection(
     toCx, toCy, fromCx, fromCy,
     toRect.x, toRect.y, toRect.width, toRect.height
   )
@@ -452,7 +387,7 @@ export function canvasToScreen(
   zoomScale: number,
   offsetX: number,
   offsetY: number
-): Point {
+): PlatformPoint {
   return {
     x: canvasX * zoomScale + offsetX,
     y: canvasY * zoomScale + offsetY
@@ -478,7 +413,7 @@ export function screenToCanvas(
   zoomScale: number,
   offsetX: number,
   offsetY: number
-): Point {
+): PlatformPoint {
   if (zoomScale === 0) {
     return { x: 0, y: 0 }
   }

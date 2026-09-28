@@ -320,11 +320,15 @@ pub struct StarMapNodePatchInputDto {
     pub title: Option<String>,
     pub kind: Option<StarMapNodeKindDto>,
     pub payload: Option<String>,
+    /// JSON C-ABI（Harmony）只发要改的字段，省略 `clearPayload` 即"不清空"。
+    #[serde(default)]
     pub clear_payload: bool,
     pub tags: Option<Vec<String>>,
     pub content: Option<StarMapNodeContentDto>,
     pub anchors: Option<Vec<StarMapAnchorDto>>,
     pub portal: Option<StarMapPortalDto>,
+    /// 同 `clear_payload`：省略即"不清空 portal"。
+    #[serde(default)]
     pub clear_portal: bool,
     pub position: Option<StarMapPointDto>,
     pub style: Option<StarMapNodeStyleDto>,
