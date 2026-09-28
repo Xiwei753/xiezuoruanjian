@@ -51,7 +51,8 @@ export struct SettingsScreen {
   @Param navPathStack: NavPathStack = new NavPathStack()
   // Issue #784 评论5857856673 问题1：通过 @Param 从父组件接收 tabIndex，
   // 用于向 NavigationChromeStore 上报正确的 tab，不再硬编码为 0。
-  @Param tabIndex: number = 0
+  // 属性名避开 ArkUI 全局属性 tabIndex(index: number)。
+  @Param screenTabIndex: number = 0
   // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
@@ -249,7 +250,7 @@ export struct SettingsScreen {
       HdsSettingsDestinationApi23({
         title: $r('app.string.settings'),
         onBack: () => { this.goBack() },
-        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.tabIndex) }
+        onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.screenTabIndex) }
       }) {
         this.NavContent()
       }
@@ -265,7 +266,7 @@ export struct SettingsScreen {
         return true
       })
       .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.tabIndex)
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.screenTabIndex)
       })
     }
   }

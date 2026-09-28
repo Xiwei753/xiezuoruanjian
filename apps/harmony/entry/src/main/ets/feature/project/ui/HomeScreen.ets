@@ -271,7 +271,7 @@ export struct HomeScreen {
       HdsAppDestinationApi23({
         title: $r('app.string.app_title'),
         screenRole: ScreenRole.ProjectList,
-        tabIndex: 0
+        screenTabIndex: 0
       }) {
         this.HomeContent()
       }

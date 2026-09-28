@@ -17,7 +17,7 @@ export struct HdsAppDestinationApi23 {
   @Param title: string | Resource = ''
   @Param screenRole: ScreenRole = ScreenRole.ProjectList
   @Param onShown: (() => void) | null = null
-  @Param tabIndex: number = 0
+  @Param screenTabIndex: number = 0
   @Local headerActions: ActionSlot[] = []
 
   async aboutToAppear() {
@@ -48,7 +48,7 @@ export struct HdsAppDestinationApi23 {
       }
     } as HdsNavigationTitleBarOptions)
     .onShown(() => {
-      NavigationChromeStore.getInstance().reportScreenRole(this.screenRole, this.tabIndex)
+      NavigationChromeStore.getInstance().reportScreenRole(this.screenRole, this.screenTabIndex)
       if (this.onShown) {
         this.onShown()
       }
