@@ -16,10 +16,9 @@
 // =============================================================================
 
 use writer_core::api::types::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapGraphDto,
-    StarMapHyperlinkDto, StarMapHyperlinkPatchDto, StarMapNodeContentDto, StarMapNodeDto,
-    StarMapNodeKindDto, StarMapNodePatchDto, StarMapPointDto, StarMapTargetDetailDto,
-    StarMapTargetPathDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapGraphDto, StarMapHyperlinkDto,
+    StarMapHyperlinkPatchDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
+    StarMapNodePatchDto, StarMapPointDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -406,7 +405,11 @@ pub fn calculate_grid_layout_json(node_ids_json: &str, existing_layout_json: &st
 // 星图超链接（hyperlink）envelope 接口
 // -----------------------------------------------------------------------------
 
-pub fn add_starmap_hyperlink(api: &WriterCoreApi, starmap_id: &str, hyperlink_json: &str) -> String {
+pub fn add_starmap_hyperlink(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    hyperlink_json: &str,
+) -> String {
     let mut hl: StarMapHyperlinkDto = match serde_json::from_str(hyperlink_json) {
         Ok(h) => h,
         Err(e) => return envelope_err_str(&format!("Invalid hyperlink JSON: {}", e)),
@@ -434,7 +437,11 @@ pub fn update_starmap_hyperlink(
     envelope(api.update_starmap_hyperlink(starmap_id, hyperlink_id, patch))
 }
 
-pub fn delete_starmap_hyperlink(api: &WriterCoreApi, starmap_id: &str, hyperlink_id: &str) -> String {
+pub fn delete_starmap_hyperlink(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    hyperlink_id: &str,
+) -> String {
     envelope(api.delete_starmap_hyperlink(starmap_id, hyperlink_id))
 }
 

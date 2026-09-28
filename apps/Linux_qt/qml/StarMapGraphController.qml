@@ -40,10 +40,18 @@ QtObject {
 
     function clearError() { errorMessage = ""; }
 
+    // 统一后端错误文本：按 ResultEnvelope 标准字段（errorCode）拼接，
+    // 不读不存在的 message 字段；rawError 只进诊断日志，不直接展示给用户。
+    function backendErrorText(res, fallback) {
+        if (!res) return fallback
+        if (res.errorCode) return fallback + " (" + res.errorCode + ")"
+        return fallback
+    }
+
     function normalizeBackendResult(raw, fallbackMessage) {
         if (raw && raw.success !== undefined) return raw;
         setError(fallbackMessage);
-        return { success: false, message: fallbackMessage };
+        return { success: false };
     }
 
     function ensureBackend() {
@@ -211,7 +219,7 @@ QtObject {
             loadGraph();
             selectNode(res.data.id);
         } else {
-            setError(res.message || qsTr("创建节点失败"));
+            setError(backendErrorText(res, qsTr("创建节点失败")));
         }
     }
 
@@ -222,7 +230,7 @@ QtObject {
             clearError();
             loadGraph();
         } else {
-            setError(res.message || qsTr("创建连线失败"));
+            setError(backendErrorText(res, qsTr("创建连线失败")));
         }
     }
 
@@ -253,7 +261,7 @@ QtObject {
                 }
             }
         } else {
-            setError(res.message || qsTr("更新节点失败"));
+            setError(backendErrorText(res, qsTr("更新节点失败")));
         }
     }
 
@@ -265,7 +273,7 @@ QtObject {
             loadGraph();
             clearSelection();
         } else {
-            setError(res.message || qsTr("删除节点失败"));
+            setError(backendErrorText(res, qsTr("删除节点失败")));
         }
     }
 
@@ -284,7 +292,7 @@ QtObject {
                 }
             }
         } else {
-            setError(res.message || qsTr("更新连线失败"));
+            setError(backendErrorText(res, qsTr("更新连线失败")));
         }
     }
 
@@ -296,7 +304,7 @@ QtObject {
             loadGraph();
             clearSelection();
         } else {
-            setError(res.message || qsTr("删除连线失败"));
+            setError(backendErrorText(res, qsTr("删除连线失败")));
         }
     }
 
@@ -355,7 +363,7 @@ QtObject {
         if (res.success) {
             clearError();
         } else {
-            setError(res.message || qsTr("添加超链接失败"));
+            setError(backendErrorText(res, qsTr("添加超链接失败")));
         }
     }
 

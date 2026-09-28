@@ -123,15 +123,18 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QString),
     calculate_grid_layout:
         qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QJsonObject),
-    add_starmap_hyperlink: qt_method!(
-        fn(&mut self, starmap_id: QString, hyperlink_json: QString) -> QJsonObject
-    ),
+    add_starmap_hyperlink:
+        qt_method!(fn(&mut self, starmap_id: QString, hyperlink_json: QString) -> QJsonObject),
     update_starmap_hyperlink: qt_method!(
-        fn(&mut self, starmap_id: QString, hyperlink_id: QString, patch_json: QString) -> QJsonObject
+        fn(
+            &mut self,
+            starmap_id: QString,
+            hyperlink_id: QString,
+            patch_json: QString,
+        ) -> QJsonObject
     ),
-    delete_starmap_hyperlink: qt_method!(
-        fn(&mut self, starmap_id: QString, hyperlink_id: QString) -> QJsonObject
-    ),
+    delete_starmap_hyperlink:
+        qt_method!(fn(&mut self, starmap_id: QString, hyperlink_id: QString) -> QJsonObject),
     list_starmap_hyperlinks: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     app: AppRef,
 }
@@ -156,7 +159,7 @@ impl StarMapBackend {
         self.app.with_app_mut(f)
     }
 
-    /// 记录星图写操作的真实业务结果（按 JSON envelope 的 success/message/data.* 字段），
+    /// 记录星图写操作的真实业务结果（按 JSON envelope 的 success/errorCode/messageKey/rawError/data.* 字段），
     /// 不再用 with_app_mut().is_ok() 代表业务成功。
     fn log_starmap_envelope(operation: &str, starmap_id: &str, object_id: &str, raw_json: &str) {
         let v: serde_json::Value = match serde_json::from_str(raw_json) {
@@ -170,7 +173,9 @@ impl StarMapBackend {
             }
         };
         let success = v.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
-        let message = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        let error_code = v.get("errorCode").and_then(|x| x.as_str()).unwrap_or("");
+        let message_key = v.get("messageKey").and_then(|x| x.as_str()).unwrap_or("");
+        let raw_error = v.get("rawError").and_then(|x| x.as_str()).unwrap_or("");
         // data.id / data.nodeId / data.edgeId 都尝试读
         let data_id = v
             .get("data")
@@ -183,8 +188,8 @@ impl StarMapBackend {
             .and_then(|i| i.as_str())
             .unwrap_or("");
         log::info!(
-            "starmap_op operation={} starmapId={} objectId={} dataId={} success={} message={}",
-            operation, starmap_id, object_id, data_id, success, message
+            "starmap_op operation={} starmapId={} objectId={} dataId={} success={} errorCode={} messageKey={} rawError={}",
+            operation, starmap_id, object_id, data_id, success, error_code, message_key, raw_error
         );
     }
 
@@ -304,7 +309,9 @@ impl StarMapBackend {
         crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
     }
     fn compute_edge_renders(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject {
-        let raw = self.compute_edge_renders_json(starmap_id, nodes_json).to_string();
+        let raw = self
+            .compute_edge_renders_json(starmap_id, nodes_json)
+            .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn hit_test_edge_renders(&self, renders_json: QString, x: f64, y: f64) -> QJsonObject {
@@ -361,7 +368,9 @@ impl StarMapBackend {
         y: f64,
     ) -> QJsonObject {
         let sid = starmap_id.to_string();
-        let raw = self.create_starmap_node_json(starmap_id, title, kind, x, y).to_string();
+        let raw = self
+            .create_starmap_node_json(starmap_id, title, kind, x, y)
+            .to_string();
         Self::log_starmap_envelope("create_starmap_node", &sid, "", &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
@@ -399,7 +408,9 @@ impl StarMapBackend {
     fn delete_starmap_node(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
-        let raw = self.delete_starmap_node_json(starmap_id, node_id).to_string();
+        let raw = self
+            .delete_starmap_node_json(starmap_id, node_id)
+            .to_string();
         Self::log_starmap_envelope("delete_starmap_node", &sid, &nid, &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
@@ -465,7 +476,9 @@ impl StarMapBackend {
     fn delete_starmap_edge(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
-        let raw = self.delete_starmap_edge_json(starmap_id, edge_id).to_string();
+        let raw = self
+            .delete_starmap_edge_json(starmap_id, edge_id)
+            .to_string();
         Self::log_starmap_envelope("delete_starmap_edge", &sid, &eid, &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }

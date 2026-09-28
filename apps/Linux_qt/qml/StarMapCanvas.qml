@@ -549,7 +549,7 @@ Item {
             qsTr("创建子星图失败")
         )
         if (!createRes.success) {
-            graphController.setError(createRes.message || qsTr("创建子星图失败"))
+            graphController.setError(graphController.backendErrorText(createRes, qsTr("创建子星图失败")))
             return
         }
         var targetStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : ""
@@ -565,7 +565,7 @@ Item {
         if (!nodeRes.success) {
             // 回滚：删掉刚创建的目标星图，不留孤儿
             starmapBackendRef.delete_starmap(targetStarmapId)
-            graphController.setError(nodeRes.message || qsTr("创建入口节点失败"))
+            graphController.setError(graphController.backendErrorText(nodeRes, qsTr("创建入口节点失败")))
             return
         }
         var nodeId = nodeRes.data && nodeRes.data.id ? nodeRes.data.id : ""
@@ -583,7 +583,7 @@ Item {
         if (!updateRes.success) {
             starmapBackendRef.delete_starmap_node(starmapId, nodeId)
             starmapBackendRef.delete_starmap(targetStarmapId)
-            graphController.setError(updateRes.message || qsTr("写入子星图入口失败"))
+            graphController.setError(graphController.backendErrorText(updateRes, qsTr("写入子星图入口失败")))
             return
         }
         // 4. 成功，刷新
