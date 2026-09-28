@@ -465,6 +465,14 @@ def rule_visual_motion_pure() -> list[Finding]:
             # 数据类，引用 androidx.compose.ui.geometry.Rect / TextLayoutResult 做显示，
             # 与 ComposeVisualFrame 同类，不写正文持久状态。
             "feature/editor/visual/ComposeVisualRebase.kt",
+            # 源码结构门禁把 1372 行的 ComposeVisualRebase 按依赖关系拆成五个纯计算
+            # object（rebase / offsetMapStage / retainedMoveMerge / sliceMap / geometry），
+            # 引用 androidx.compose.ui.geometry.Offset|Rect 与 androidx.compose.ui.text.TextRange
+            # 做显示数据，与拆分前的 ComposeVisualRebase 同类，同批加入豁免。
+            "feature/editor/visual/ComposeVisualOffsetMapStage.kt",
+            "feature/editor/visual/ComposeVisualRetainedMoveMerge.kt",
+            "feature/editor/visual/ComposeVisualSliceMap.kt",
+            "feature/editor/visual/ComposeVisualGeometry.kt",
             "feature/editor/visual/EditorVisualModels.kt",
             # #644 评论 #684 项1-2：帧协调链核心类，引用 androidx.compose.ui.text.TextRange 做帧数据。
             "feature/editor/visual/ComposeVisualFrameCoordinator.kt",

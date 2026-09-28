@@ -66,7 +66,7 @@ class ComposeVisualRebaseOffsetMapTest {
                 expectedOldText = "abc",
                 expectedNewText = "ac",
             )
-        val composed = ComposeVisualRebase.composeOffsetMapChain(listOf(intent))
+        val composed = ComposeVisualOffsetMapStage.composeOffsetMapChain(listOf(intent))
         assertNotNull("offset map chain 应合成成功", composed)
         assertFalse(
             "删除区域 [1,2) 不应补 identity gap 条目",
@@ -224,8 +224,8 @@ class ComposeVisualRebaseOffsetMapTest {
             moves.map { move ->
                 val oldSnapshot = ComposeLayoutSnapshot(oldLayout, TextRange(0, 0), 0)
                 val newSnapshot = ComposeLayoutSnapshot(newLayout, TextRange(0, 0), 0)
-                val oldBounds = ComposeVisualRebase.safePathBounds(oldSnapshot, move.oldRange)
-                val newBounds = ComposeVisualRebase.safePathBounds(newSnapshot, move.newRange)
+                val oldBounds = ComposeVisualGeometry.safePathBounds(oldSnapshot, move.oldRange)
+                val newBounds = ComposeVisualGeometry.safePathBounds(newSnapshot, move.newRange)
                 requireNotNull(oldBounds) { "oldBounds 不应为 null: ${move.oldRange}" }
                 requireNotNull(newBounds) { "newBounds 不应为 null: ${move.newRange}" }
                 Pair(newBounds.left - oldBounds.left, newBounds.top - oldBounds.top)

@@ -180,14 +180,14 @@ class ComposeVisualFrameCoordinator(
 
         val chain = pendingChain.facts
         val coreTransactionIds = chain.map { it.coreTransactionId }
-        val composedOffsetMap = ComposeVisualRebase.composeOffsetMapChain(chain)
+        val composedOffsetMap = ComposeVisualOffsetMapStage.composeOffsetMapChain(chain)
         val oldLength = consumed.layout.result.layoutInput.text.text.length
         val newLength = newest.layout.result.layoutInput.text.text.length
         val mergedOldRanges: List<androidx.compose.ui.text.TextRange>
         val mergedNewRanges: List<androidx.compose.ui.text.TextRange>
         if (composedOffsetMap != null) {
             val frameChangedRanges =
-                ComposeVisualRebase.changedRangesFromComposedMap(
+                ComposeVisualSliceMap.changedRangesFromComposedMap(
                     composedOffsetMap,
                     oldLength,
                     newLength,
@@ -219,8 +219,8 @@ class ComposeVisualFrameCoordinator(
                 else -> TextVisualKind.Move
             }
 
-        val composedOldAnimationUnits = ComposeVisualRebase.composeOldAnimationUnitsToBase(chain)
-        val newAnimationUnits = ComposeVisualRebase.composeNewAnimationUnitsToFinal(chain)
+        val composedOldAnimationUnits = ComposeVisualOffsetMapStage.composeOldAnimationUnitsToBase(chain)
+        val newAnimationUnits = ComposeVisualOffsetMapStage.composeNewAnimationUnitsToFinal(chain)
 
         val insertedUnits =
             when (transactionTextKind) {

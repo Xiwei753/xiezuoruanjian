@@ -22,28 +22,28 @@ class ComposeVisualCoordinateBugsReproTest {
     @Test
     fun rebase_hasSafePathBounds_forCoordinateComputation() {
         // 方法引用验证 safePathBounds 存在 — 编译时检查
-        val ref = ComposeVisualRebase::safePathBounds
+        val ref = ComposeVisualGeometry::safePathBounds
         assertNotNull("safePathBounds 应存在（坐标计算基础）", ref)
     }
 
     @Test
     fun rebase_hasSplitMappedRangeForward_forSliceCoordinateComputation() {
         // 方法引用验证 splitMappedRangeForward 存在 — 编译时检查
-        val ref = ComposeVisualRebase::splitMappedRangeForward
+        val ref = ComposeVisualSliceMap::splitMappedRangeForward
         assertNotNull("splitMappedRangeForward 应存在（缺陷5 切片坐标计算）", ref)
     }
 
     @Test
     fun splitMappedRangeForward_emptyOffsetMap_returnsSingleGhostSlice() {
         val slices =
-            ComposeVisualRebase.splitMappedRangeForward(
+            ComposeVisualSliceMap.splitMappedRangeForward(
                 range = TextRange(0, 3),
                 offsetMap = emptyList(),
             )
         assertEquals("空 offsetMap 应返回单个 GHOST slice", 1, slices.size)
         assertEquals(
             "slice kind 应为 GHOST",
-            ComposeVisualRebase.MappedRangeSliceKind.GHOST,
+            ComposeVisualSliceMap.MappedRangeSliceKind.GHOST,
             slices[0].kind,
         )
     }

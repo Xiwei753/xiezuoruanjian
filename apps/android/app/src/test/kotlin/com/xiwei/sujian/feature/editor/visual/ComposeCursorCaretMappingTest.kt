@@ -92,7 +92,7 @@ class ComposeCursorCaretMappingTest {
         val chain = listOf(intent1, intent2)
 
         // 第一笔 cursor.new=4 穿过第二笔删除后应映射为 3
-        val mapped = ComposeVisualRebase.mapCursorOffsetThroughChain(chain, 0, 4)
+        val mapped = ComposeVisualOffsetMapStage.mapCursorOffsetThroughChain(chain, 0, 4)
         assertNotNull(
             "连续 Backspace：cursor=4 穿过第二笔删除后应映射成功，不能返回 null\n" +
                 "旧实现用半开区间 [3,4) 找不到 offset=4，返回 null，中间 cursor point 被丢掉",
@@ -177,7 +177,7 @@ class ComposeCursorCaretMappingTest {
         val chain = listOf(intent1, intent2)
 
         // 第一笔 cursor.new=4 穿过下一笔在 offset=4 的纯插入时，历史点应映射到 newStart=4
-        val mapped = ComposeVisualRebase.mapCursorOffsetThroughChain(chain, 0, 4)
+        val mapped = ComposeVisualOffsetMapStage.mapCursorOffsetThroughChain(chain, 0, 4)
         assertNotNull(
             "尾部连续 Insert：cursor=4 穿过下一笔纯插入后应映射成功，不能返回 null\n" +
                 "旧实现用半开区间 [0,4) 找不到 offset=4，返回 null",
@@ -269,7 +269,7 @@ class ComposeCursorCaretMappingTest {
         // delta = (0+3) - (0+3) = 0 → mapped = 4
         // 注意：这不是精确的 caret 边界映射（精确映射应为 3），但 offsetMap 回退是降级路径。
         // Core 提供 replaceBounds 时走精确路径（第一个测试已验证）。
-        val mapped = ComposeVisualRebase.mapCursorOffsetThroughChain(chain, 0, 4)
+        val mapped = ComposeVisualOffsetMapStage.mapCursorOffsetThroughChain(chain, 0, 4)
         assertNotNull(
             "offsetMap 回退路径：cursor=4 应能映射（suffix 平移），不能返回 null",
             mapped,

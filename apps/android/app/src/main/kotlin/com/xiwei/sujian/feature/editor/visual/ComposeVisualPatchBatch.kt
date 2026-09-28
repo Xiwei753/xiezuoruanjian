@@ -48,7 +48,7 @@ internal object ComposeVisualPatchBatch {
 
         // insert/delete 按最终净变化算（从 composed offset map 补集）
         val changedRanges =
-            ComposeVisualRebase.changedRangesFromComposedMap(composedOffsetMap, oldLength, newLength)
+            ComposeVisualSliceMap.changedRangesFromComposedMap(composedOffsetMap, oldLength, newLength)
         val transactionTextKind =
             when {
                 changedRanges.oldRanges.isEmpty() && changedRanges.newRanges.isEmpty() ->
@@ -70,9 +70,9 @@ internal object ComposeVisualPatchBatch {
         val perStageOldUnits = batch.map { it.deletedUnits }
         val perStageOffsetMaps = batch.map { it.offsetMap }
         val composedInserted =
-            ComposeVisualRebase.composeNewUnitsToFinalStages(perStageNewUnits, perStageOffsetMaps)
+            ComposeVisualOffsetMapStage.composeNewUnitsToFinalStages(perStageNewUnits, perStageOffsetMaps)
         val composedDeleted =
-            ComposeVisualRebase.composeOldUnitsToBaseStages(perStageOldUnits, perStageOffsetMaps)
+            ComposeVisualOffsetMapStage.composeOldUnitsToBaseStages(perStageOldUnits, perStageOffsetMaps)
 
         // batch 只合并事实 diff，不按 policy 筛 units — 是否播放由消费帧的 effective policy 决定。
         val insertedUnits =
@@ -155,8 +155,8 @@ internal object ComposeVisualPatchBatch {
      * 重新创造 retainedMoves — 那会在本地输入 batch（每笔 retainedMoves 都为空）时凭几何
      * 发明出非空 retainedMoves，把幸存文字错误交给 overlay 接管。
      *
-     * 映射模式参考 [ComposeVisualRebase.composeNewUnitsToFinalStages]（newRange 沿后续 stage
-     * 正向映射到 Tn）和 [ComposeVisualRebase.composeOldUnitsToBaseStages]（oldRange 沿前置 stage
+     * 映射模式参考 [ComposeVisualOffsetMapStage.composeNewUnitsToFinalStages]（newRange 沿后续 stage
+     * 正向映射到 Tn）和 [ComposeVisualOffsetMapStage.composeOldUnitsToBaseStages]（oldRange 沿前置 stage
      * 反向映射回 T0）。
      *
      * @param batch 同一帧待消费的 patch 列表。
@@ -190,7 +190,7 @@ internal object ComposeVisualPatchBatch {
      * 把 stage [stageIndex] 的 retainedMove.oldRange（T_i 坐标）沿前置 stage offset map
      * 反向映射回 T0。null offset map 跳过该 stage 映射；空 entries 清空结果。
      *
-     * 算法同 [ComposeVisualRebase.composeOldUnitsToBaseStages] 的单 range 版本。
+     * 算法同 [ComposeVisualOffsetMapStage.composeOldUnitsToBaseStages] 的单 range 版本。
      */
     private fun mapRetainedMoveOldRangeToBase(
         oldRange: TextRange,
@@ -205,7 +205,7 @@ internal object ComposeVisualPatchBatch {
                 ranges = emptyList()
                 break@mapBackwardLoop
             }
-            ranges = ComposeVisualRebase.mapRangesBackwardThroughOffsetMap(ranges, entries)
+            ranges = ComposeVisualOffsetMapStage.mapRangesBackwardThroughOffsetMap(ranges, entries)
         }
         return ranges
     }
@@ -214,7 +214,7 @@ internal object ComposeVisualPatchBatch {
      * 把 stage [stageIndex] 的 retainedMove.newRange（T_{i+1} 坐标）沿后续 stage offset map
      * 正向映射到 Tn。null offset map 跳过该 stage 映射；空 entries 清空结果。
      *
-     * 算法同 [ComposeVisualRebase.composeNewUnitsToFinalStages] 的单 range 版本。
+     * 算法同 [ComposeVisualOffsetMapStage.composeNewUnitsToFinalStages] 的单 range 版本。
      */
     private fun mapRetainedMoveNewRangeToFinal(
         newRange: TextRange,
@@ -230,7 +230,7 @@ internal object ComposeVisualPatchBatch {
                 ranges = emptyList()
                 break@mapForwardLoop
             }
-            ranges = ComposeVisualRebase.mapRangesForwardThroughOffsetMap(ranges, entries)
+            ranges = ComposeVisualOffsetMapStage.mapRangesForwardThroughOffsetMap(ranges, entries)
         }
         return ranges
     }
@@ -276,7 +276,7 @@ internal object ComposeVisualPatchBatch {
 
     /**
      * 从 oldText/newText 算 common prefix/suffix 存活段 —
-     * 与 [ComposeVisualRebase.buildFallbackEntriesFromReplaceBounds] 同语义。
+     * 与 [ComposeVisualOffsetMapStage.buildFallbackEntriesFromReplaceBounds] 同语义。
      */
     private fun buildFallbackOffsetMap(
         oldText: String,
@@ -320,7 +320,7 @@ internal object ComposeVisualPatchBatch {
 
     /**
      * 组合两段 offset map（acc: T0→T_i, stage: T_i→T_{i+1}）成 T0→T_{i+1}。
-     * 与 [ComposeVisualRebase.composeStage] 同算法。
+     * 与 [ComposeVisualOffsetMapStage.composeStage] 同算法。
      */
     private fun composeTwoMaps(
         acc: List<VisualOffsetMapEntry>,
