@@ -483,38 +483,58 @@ fn migrate_node_json(
     }
     let content = std::fs::read_to_string(&node_path)?;
     let mut value: Value = serde_json::from_str(&content)?;
-    if let Some(obj) = value.as_object_mut() {
-        // 删除旧显示层字段。
-        obj.remove("displayPolicy");
-        obj.remove("openBehavior");
+    // 根必须是 object：`[]` / `null` 等合法 JSON 但不是 object 时直接 Err，
+    // 不能写回文件并 Ok(true)——那会让上层在没真正迁完的情况下删掉旧 layout。
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| Error::Other(format!("node '{}' JSON root is not an object", node_id)))?;
+    // 删除旧显示层字段。
+    obj.remove("displayPolicy");
+    obj.remove("openBehavior");
 
-        // 幂等 position 迁移：已有合法 position 则保留，否则从 layout 提取，
-        // 否则用 (0, 0)。
-        let has_valid_position = obj
-            .get("position")
-            .map(position_is_valid_finite)
-            .unwrap_or(false);
-        if !has_valid_position {
-            // fail-closed：没有合法 position 且没有 legacy layout 位置可迁移时，
-            // 不能猜 (0,0) 伪装成用户 authored position——这是数据损坏，必须 Err。
-            let (x, y) = layout_positions.get(node_id).copied().ok_or_else(|| {
-                Error::Other(format!(
-                    "node '{}' has no position and no legacy layout position to migrate from",
-                    node_id
-                ))
-            })?;
-            obj.insert(
-                "position".to_string(),
-                serde_json::json!({ "x": x, "y": y }),
-            );
-        }
-
-        // portal 删除 mode/previewPolicy。
-        if let Some(portal) = obj.get_mut("portal").and_then(|v| v.as_object_mut()) {
-            portal.remove("mode");
-            portal.remove("previewPolicy");
-        }
+    // 幂等 position 迁移：已有合法 position 则保留，否则从 layout 提取，
+    // 否则用 (0, 0)。
+    let has_valid_position = obj
+        .get("position")
+        .map(position_is_valid_finite)
+        .unwrap_or(false);
+    if !has_valid_position {
+        // fail-closed：没有合法 position 且没有 legacy layout 位置可迁移时，
+        // 不能猜 (0,0) 伪装成用户 authored position——这是数据损坏，必须 Err。
+        let (x, y) = layout_positions.get(node_id).copied().ok_or_else(|| {
+            Error::Other(format!(
+                "node '{}' has no position and no legacy layout position to migrate from",
+                node_id
+            ))
+        })?;
+        obj.insert(
+            "position".to_string(),
+            serde_json::json!({ "x": x, "y": y }),
+        );
     }
+
+    // portal 删除 mode/previewPolicy。
+    if let Some(portal) = obj.get_mut("portal").and_then(|v| v.as_object_mut()) {
+        portal.remove("mode");
+        portal.remove("previewPolicy");
+    }
+
+    // 写回前用当前 StarMapNode 做一次反序列化校验，并确认内部 id 与 GraphMeta 声明 ID 一致。
+    // 只有这样才能算真正迁移成功，否则旧 layout 不能删。
+    let node: crate::starmap::types::StarMapNode =
+        serde_json::from_value(value.clone()).map_err(|e| {
+            Error::Other(format!(
+                "node '{}' failed StarMapNode deserialization after migration: {}",
+                node_id, e
+            ))
+        })?;
+    if node.id != node_id {
+        return Err(Error::Other(format!(
+            "node '{}' file contains id '{}' which does not match the declared node id",
+            node_id, node.id
+        )));
+    }
+
     let new_content = serde_json::to_string_pretty(&value)?;
     crate::storage::atomic_write_string(&node_path, &new_content)?;
     Ok(true)
@@ -581,27 +601,50 @@ fn migrate_embed_json(graph_dir: &Path, instance_id: &str) -> Result<bool> {
     }
     let content = std::fs::read_to_string(&embed_path)?;
     let mut value: Value = serde_json::from_str(&content)?;
-    if let Some(obj) = value.as_object_mut() {
-        // 幂等 position 迁移：已有合法 position 则保留。
-        let has_valid_position = obj
-            .get("position")
-            .map(position_is_valid_finite)
-            .unwrap_or(false);
+    // 根必须是 object：`[]` / `null` 等合法 JSON 但不是 object 时直接 Err，
+    // 不能写回文件并 Ok(true)——那会让上层在没真正迁完的情况下删掉旧 layout。
+    let obj = value.as_object_mut().ok_or_else(|| {
+        Error::Other(format!(
+            "embed '{}' JSON root is not an object",
+            instance_id
+        ))
+    })?;
+    // 幂等 position 迁移：已有合法 position 则保留。
+    let has_valid_position = obj
+        .get("position")
+        .map(position_is_valid_finite)
+        .unwrap_or(false);
 
-        if !has_valid_position {
-            let (x, y) = extract_position_from_placement(instance_id, obj)?;
-            obj.insert(
-                "position".to_string(),
-                serde_json::json!({ "x": x, "y": y }),
-            );
-        }
-
-        // 删除旧显示层字段。
-        obj.remove("placement");
-        obj.remove("targetViewport");
-        obj.remove("displayPolicy");
-        obj.remove("openBehavior");
+    if !has_valid_position {
+        let (x, y) = extract_position_from_placement(instance_id, obj)?;
+        obj.insert(
+            "position".to_string(),
+            serde_json::json!({ "x": x, "y": y }),
+        );
     }
+
+    // 删除旧显示层字段。
+    obj.remove("placement");
+    obj.remove("targetViewport");
+    obj.remove("displayPolicy");
+    obj.remove("openBehavior");
+
+    // 写回前用当前 StarMapEmbed 做一次反序列化校验，并确认内部 instance_id 与 GraphMeta 声明 ID 一致。
+    // 只有这样才能算真正迁移成功，否则旧 layout 不能删。
+    let embed: crate::starmap::types::StarMapEmbed = serde_json::from_value(value.clone())
+        .map_err(|e| {
+            Error::Other(format!(
+                "embed '{}' failed StarMapEmbed deserialization after migration: {}",
+                instance_id, e
+            ))
+        })?;
+    if embed.instance_id != instance_id {
+        return Err(Error::Other(format!(
+            "embed '{}' file contains instanceId '{}' which does not match the declared instance id",
+            instance_id, embed.instance_id
+        )));
+    }
+
     let new_content = serde_json::to_string_pretty(&value)?;
     crate::storage::atomic_write_string(&embed_path, &new_content)?;
     Ok(true)

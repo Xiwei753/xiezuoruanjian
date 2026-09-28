@@ -151,11 +151,11 @@ fn setup_old_starmap(app_data_root: &std::path::Path, starmap_id: &str) {
         "kind": "concept",
         "payload": null,
         "tags": [],
-        "content": {"kind": "empty"},
+        "content": {"type": "empty"},
         "anchors": [],
         "portal": {
             "destinationStarmapId": "other_sm",
-            "destinationTarget": {"kind": "starmap"},
+            "destinationTarget": {"type": "starmap"},
             "mode": "enterPortal",
             "previewPolicy": "inline",
         },
@@ -177,7 +177,7 @@ fn setup_old_starmap(app_data_root: &std::path::Path, starmap_id: &str) {
         "kind": "concept",
         "payload": null,
         "tags": [],
-        "content": {"kind": "empty"},
+        "content": {"type": "empty"},
         "anchors": [],
         "portal": null,
         "displayPolicy": {"visible": true},
@@ -202,7 +202,7 @@ fn setup_old_starmap(app_data_root: &std::path::Path, starmap_id: &str) {
         "placement": {"x": 500.0, "y": 600.0, "width": 300.0, "height": 200.0,
                        "scale": 1.0, "zIndex": 0, "collapsed": false},
         "targetViewport": {"scale": 1.0, "offsetX": 0.0, "offsetY": 0.0},
-        "hostPath": {"starmapId": starmap_id, "segments": [], "target": {"kind": "starmap"}},
+        "hostPath": {"starmapId": starmap_id, "segments": [], "target": {"type": "starmap"}},
         "provenance": {"origin": "user"},
         "createdAt": 0,
         "updatedAt": 0,
@@ -358,7 +358,7 @@ fn migrate_starmap_graph_node_without_layout_errors() {
     // node 没有 position，也没有 layout。
     let node1 = json!({
         "id": "n1", "title": "N1", "kind": "concept", "payload": null,
-        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "tags": [], "content": {"type": "empty"}, "anchors": [], "portal": null,
         "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
     });
     let bucket = crate::starmap::package_storage::bucket_for_id("n1");
@@ -576,7 +576,7 @@ fn migrate_node_with_existing_position_keeps_it() {
     // node 已有合法 position (50, 60)。
     let node1 = json!({
         "id": "n1", "title": "N1", "kind": "concept", "payload": null,
-        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "tags": [], "content": {"type": "empty"}, "anchors": [], "portal": null,
         "position": {"x": 50.0, "y": 60.0},
         "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
     });
@@ -635,7 +635,7 @@ fn migrate_embed_with_existing_position_keeps_it() {
         "targetStarmapId": "child_sm",
         "label": "子图",
         "position": {"x": 70.0, "y": 80.0},
-        "hostPath": {"starmapId": "sm_emb_pos", "segments": [], "target": {"kind": "starmap"}},
+        "hostPath": {"starmapId": "sm_emb_pos", "segments": [], "target": {"type": "starmap"}},
         "provenance": {"origin": "user"},
         "createdAt": 0,
         "updatedAt": 0,
@@ -680,7 +680,7 @@ fn migrate_embed_without_position_or_placement_errors() {
         "instanceId": "emb1",
         "targetStarmapId": "child_sm",
         "label": "子图",
-        "hostPath": {"starmapId": "sm_emb_err", "segments": [], "target": {"kind": "starmap"}},
+        "hostPath": {"starmapId": "sm_emb_err", "segments": [], "target": {"type": "starmap"}},
         "provenance": {"origin": "user"},
         "createdAt": 0,
         "updatedAt": 0,
@@ -871,7 +871,7 @@ fn migrate_is_safe_to_rerun_after_partial_failure() {
 
     let node1 = json!({
         "id": "n1", "title": "N1", "kind": "concept", "payload": null,
-        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "tags": [], "content": {"type": "empty"}, "anchors": [], "portal": null,
         "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
     });
     write_json(
@@ -1126,7 +1126,7 @@ fn repro_781_migration_missing_layout_must_error() {
     // node n1 没有 position，也没有 layout 提供位置。
     let node1 = json!({
         "id": "n1", "title": "N1", "kind": "concept", "payload": null,
-        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "tags": [], "content": {"type": "empty"}, "anchors": [], "portal": null,
         "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
     });
     let bucket = crate::starmap::package_storage::bucket_for_id("n1");
@@ -1189,7 +1189,7 @@ fn repro_781_read_layout_positions_bad_xy_must_error() {
     // node n1 没有 position，需要从 layout 提取，但 layout 的 x 是 null。
     let node1 = json!({
         "id": "n1", "title": "N1", "kind": "concept", "payload": null,
-        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "tags": [], "content": {"type": "empty"}, "anchors": [], "portal": null,
         "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
     });
     let n1_bucket = crate::starmap::package_storage::bucket_for_id("n1");
@@ -1265,7 +1265,7 @@ fn write_layout_shard(graph_dir: &std::path::Path, entries: &[(&str, f64, f64)])
 fn write_legacy_node_file(graph_dir: &std::path::Path, node_id: &str) {
     let node = json!({
         "id": node_id, "title": node_id, "kind": "concept", "payload": null,
-        "tags": [], "content": {"kind": "empty"}, "anchors": [], "portal": null,
+        "tags": [], "content": {"type": "empty"}, "anchors": [], "portal": null,
         "provenance": {"origin": "user"}, "createdAt": 0, "updatedAt": 0,
     });
     let bucket = crate::starmap::package_storage::bucket_for_id(node_id);
@@ -1406,5 +1406,124 @@ fn migrate_non_string_member_id_errors() {
     assert!(
         graph_dir.join("layouts").exists(),
         "legacy layouts must be kept when the member list is corrupt"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #787 评论 5865110129：声明的 node/embed 文件是合法 JSON 但根节点不是
+// object（[] / null）时，migration 必须 Err 并保留 legacy layout
+// ---------------------------------------------------------------------------
+
+/// GraphMeta 声明 n1，但 n1.json 内容是 `[]`（合法 JSON 但不是 object）。
+/// 期望：migrate_one_starmap_graph 返回 Err，旧 layout 保留，schema 仍是 "3"。
+#[test]
+fn migrate_declared_node_with_non_object_json_errors_and_keeps_legacy_layout() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_node_non_object");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    write_schema3_graph_json(
+        &graph_dir,
+        "sm_node_non_object",
+        Some((json!(["n1"]), json!([]))),
+    );
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0)]);
+    // n1.json 是 []（合法 JSON，但根节点不是 object）。
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir.join("nodes").join(bucket).join("n1.json"),
+        &json!([]),
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_node_non_object");
+    assert!(
+        result.is_err(),
+        "declared node with non-object JSON root must Err, got: {result:?}"
+    );
+
+    // 旧 layout 是 n1 position 的唯一来源，迁移失败时必须保留。
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when a declared node has non-object JSON"
+    );
+    assert_eq!(
+        read_graph_schema_version(&graph_dir),
+        json!("3"),
+        "schema must not advance when migration did not finish"
+    );
+}
+
+/// GraphMeta 声明 n1，但 n1.json 内容是 `null`（合法 JSON 但不是 object）。
+/// 期望：migrate_one_starmap_graph 返回 Err，旧 layout 保留，schema 仍是 "3"。
+#[test]
+fn migrate_declared_node_with_null_json_errors() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_node_null");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    write_schema3_graph_json(&graph_dir, "sm_node_null", Some((json!(["n1"]), json!([]))));
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0)]);
+    // n1.json 是 null（合法 JSON，但根节点不是 object）。
+    let bucket = crate::starmap::package_storage::bucket_for_id("n1");
+    write_json(
+        &graph_dir.join("nodes").join(bucket).join("n1.json"),
+        &serde_json::Value::Null,
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_node_null");
+    assert!(
+        result.is_err(),
+        "declared node with null JSON root must Err, got: {result:?}"
+    );
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when a declared node has null JSON"
+    );
+    assert_eq!(
+        read_graph_schema_version(&graph_dir),
+        json!("3"),
+        "schema must not advance when migration did not finish"
+    );
+}
+
+/// GraphMeta 声明 n1（合法 node）和 emb1，但 emb1.json 内容是 `null`
+/// （合法 JSON 但不是 object）。node n1 能迁移成功，证明 Err 来自 embed。
+/// 期望：migrate_one_starmap_graph 返回 Err，旧 layout 保留，schema 仍是 "3"。
+#[test]
+fn migrate_declared_embed_with_non_object_json_errors_and_keeps_legacy_layout() {
+    let dir = temp_root();
+    let graph_dir = dir.path().join("starmaps").join("sm_embed_non_object");
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+    std::fs::create_dir_all(graph_dir.join("embeds")).unwrap();
+
+    write_schema3_graph_json(
+        &graph_dir,
+        "sm_embed_non_object",
+        Some((json!(["n1"]), json!(["emb1"]))),
+    );
+    write_layout_shard(&graph_dir, &[("n1", 100.0, 200.0)]);
+    // n1 是合法 node，能迁移成功——这样能证明 Err 来自 embed 的非 object JSON。
+    write_legacy_node_file(&graph_dir, "n1");
+    // emb1.json 是 null（合法 JSON，但根节点不是 object）。
+    let emb_bucket = crate::starmap::package_storage::bucket_for_id("emb1");
+    write_json(
+        &graph_dir.join("embeds").join(emb_bucket).join("emb1.json"),
+        &serde_json::Value::Null,
+    );
+
+    let result = migrate_one_starmap_graph(dir.path(), "sm_embed_non_object");
+    assert!(
+        result.is_err(),
+        "declared embed with non-object JSON root must Err, got: {result:?}"
+    );
+
+    assert!(
+        graph_dir.join("layouts").exists(),
+        "legacy layouts must be kept when a declared embed has non-object JSON"
+    );
+    assert_eq!(
+        read_graph_schema_version(&graph_dir),
+        json!("3"),
+        "schema must not advance when migration did not finish"
     );
 }
