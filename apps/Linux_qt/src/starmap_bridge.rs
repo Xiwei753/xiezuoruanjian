@@ -414,7 +414,10 @@ pub fn add_starmap_hyperlink(api: &WriterCoreApi, starmap_id: &str, hyperlink_js
     // hyperlink_id 由 bridge 层生成。Core 的 add_starmap_hyperlink 直接使用传入的
     // hyperlink_id（重复则报 Duplicate），不会内部生成新 id，因此这里统一分配新 id，
     // 与 create_starmap_node 在 bridge 层生成 `n_{uuid}` 的模式一致。
+    let now = now_ms();
     hl.hyperlink_id = format!("hl_{}", uuid::Uuid::new_v4());
+    hl.created_at = now;
+    hl.updated_at = now;
     envelope(api.add_starmap_hyperlink(starmap_id, hl))
 }
 

@@ -630,6 +630,10 @@ ApplicationWindow {
                         syncBackend.perform_sync();
                     }
                 }
+
+                onRequestSearch: {
+                    window.debugLog("search", "request_search", "");
+                }
             }
         }
 
@@ -893,7 +897,11 @@ ApplicationWindow {
             }
             // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
             onSwitchWorkspaceRequested: {
-                settingsDialogLoader.active = false;
+                var dialog = settingsDialogLoader.item
+                if (dialog) {
+                    dialog.flushSave()
+                    dialog.close()
+                }
                 appController.switchWorkspace();
             }
         }

@@ -155,17 +155,9 @@ Item {
                     clearSelection()
                 }
             }
-            // 左键长按空白：进入 pan 模式
+            // pan 已由 bgDragArea.onPressed 直接处理（#373 桌面规则），
+            // long press 不再负责进入 pan。
             onLongPressed: {
-                var p = backgroundLeftTap.point.position
-                var mx = (p.x - panX) / zoomLevel
-                var my = (p.y - panY) / zoomLevel
-                if (findNodeAt(mx, my)) {
-                    return
-                }
-                pointerMode = "pan"
-                bgDragArea.lastX = p.x
-                bgDragArea.lastY = p.y
             }
         }
 
@@ -204,6 +196,13 @@ Item {
             onPressed: function(mouse) {
                 lastX = mouse.x
                 lastY = mouse.y
+                if (mouse.button === Qt.LeftButton) {
+                    var wx = (mouse.x - panX) / zoomLevel
+                    var wy = (mouse.y - panY) / zoomLevel
+                    if (!findNodeAt(wx, wy)) {
+                        pointerMode = "pan"
+                    }
+                }
                 // 中键直接进入 pan（不依赖长按）
                 if (mouse.button === Qt.MiddleButton) {
                     pointerMode = "pan"
@@ -392,11 +391,12 @@ Item {
                 onDoubleClicked: {
                     var nd = nodesModel[index]
                     if (nd.portal && nd.portal.destinationStarmapId) {
-                        var destTitle = nd.title || qsTr("子星图")
-                        enterStarmapRequested(nd.portal.destinationStarmapId, destTitle)
+                        enterStarmapRequested(
+                            nd.portal.destinationStarmapId,
+                            nd.title || qsTr("子星图")
+                        )
                     } else {
-                        selectedNodeForMenu = nd
-                        renameDialog.open("node", nd.id, nd.title)
+                        graphController.selectNode(nd.id)
                     }
                 }
 
@@ -430,7 +430,15 @@ Item {
                         connectMouseX += dx
                         connectMouseY += dy
                         edgeCanvas.requestPaint()
-                    } else if (pointerMode === "move" && pressedNodeId === nodeData.id) {
+                        return
+                    }
+
+                    if (pointerMode === "idle") {
+                        pointerMode = "move"
+                        pressedNodeId = nodeData.id
+                    }
+
+                    if (pointerMode === "move" && pressedNodeId === nodeData.id) {
                         x += dx
                         y += dy
                         isBeingDragged = true
@@ -544,7 +552,7 @@ Item {
             graphController.setError(createRes.message || qsTr("创建子星图失败"))
             return
         }
-        var targetStarmapId = createRes.data && createRes.data.id ? createRes.data.id : ""
+        var targetStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : ""
         if (!targetStarmapId) {
             graphController.setError(qsTr("创建子星图失败"))
             return
@@ -573,7 +581,7 @@ Item {
             qsTr("写入子星图入口失败")
         )
         if (!updateRes.success) {
-            // 回滚：删掉刚创建的目标星图
+            starmapBackendRef.delete_starmap_node(starmapId, nodeId)
             starmapBackendRef.delete_starmap(targetStarmapId)
             graphController.setError(updateRes.message || qsTr("写入子星图入口失败"))
             return

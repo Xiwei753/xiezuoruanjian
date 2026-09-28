@@ -32,7 +32,6 @@ RowLayout {
         height: 40
         radius: dt.radiusPill
         color: syncHover.containsMouse ? dt.surfaceVariant : "transparent"
-        visible: root.appState && root.appState.sync && root.appState.sync.status !== "not_configured" && root.appState.sync.status !== "no_workspace"
 
         Row {
             id: syncRow

@@ -318,17 +318,6 @@ Rectangle {
             }
         }
 
-        // Issue #790 评论 5875963057: 右端公共入口收口到 GlobalTopActions
-        GlobalTopActions {
-            dt: root.dt
-            appState: root.appState
-            onRequestSync: root.requestSync()
-            onRequestSearch: root.requestSearch()
-            onOpenSettings: root.openSettings()
-        }
-
-        Item { Layout.preferredWidth: dt.sp8 }
-
         // Save status
         AppText {
             dt: root.dt
@@ -337,6 +326,15 @@ Rectangle {
             font.pointSize: dt.captionPt
             font.family: dt.fontFamily
             visible: text !== ""
+        }
+
+        // Issue #790 评论 5875963057: 右端公共入口收口到 GlobalTopActions
+        GlobalTopActions {
+            dt: root.dt
+            appState: root.appState
+            onRequestSync: root.requestSync()
+            onRequestSearch: root.requestSearch()
+            onOpenSettings: root.openSettings()
         }
     }
 
