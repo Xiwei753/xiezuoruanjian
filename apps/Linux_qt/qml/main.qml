@@ -555,6 +555,9 @@ ApplicationWindow {
                 onBackClicked: {
                     appController.openHub();
                 }
+                onEnterStarmapRequested: function(smId, smTitle) {
+                    appController.openStarmap(smId, smTitle);
+                }
             }
         }
 

@@ -87,7 +87,8 @@ QtObject {
                 height: 60,
                 isSelected: false,
                 payload: gn.payload,
-                tags: gn.tags
+                tags: gn.tags,
+                portal: gn.portal
             });
         }
         nodesModel = newNodes;

@@ -73,6 +73,7 @@ Item {
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
     signal selectionCleared()
+    signal enterStarmapRequested(string starmapId, string title)
 
     // Model data
     property var nodesModel: []
@@ -139,10 +140,14 @@ Item {
 
         // 左键单击：边选中或清选区
         TapHandler {
+            id: backgroundLeftTap
             acceptedButtons: Qt.LeftButton
             onSingleTapped: function(eventPoint) {
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
+                if (findNodeAt(mx, my)) {
+                    return
+                }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
                 if (clickedEdge) {
                     graphController.selectEdge(clickedEdge.id)
@@ -151,19 +156,29 @@ Item {
                 }
             }
             // 左键长按空白：进入 pan 模式
-            onLongPressed: function(eventPoint) {
+            onLongPressed: {
+                var p = backgroundLeftTap.point.position
+                var mx = (p.x - panX) / zoomLevel
+                var my = (p.y - panY) / zoomLevel
+                if (findNodeAt(mx, my)) {
+                    return
+                }
                 pointerMode = "pan"
-                bgDragArea.lastX = eventPoint.position.x
-                bgDragArea.lastY = eventPoint.position.y
+                bgDragArea.lastX = p.x
+                bgDragArea.lastY = p.y
             }
         }
 
         // 右键单击：边菜单或画布菜单
         TapHandler {
+            id: backgroundRightTap
             acceptedButtons: Qt.RightButton
             onSingleTapped: function(eventPoint) {
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
+                if (findNodeAt(mx, my)) {
+                    return
+                }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
                 if (clickedEdge) {
                     selectedEdgeForMenu = clickedEdge
@@ -376,11 +391,16 @@ Item {
 
                 onDoubleClicked: {
                     var nd = nodesModel[index]
-                    selectedNodeForMenu = nd
-                    renameDialog.open("node", nd.id, nd.title)
+                    if (nd.portal && nd.portal.destinationStarmapId) {
+                        var destTitle = nd.title || qsTr("子星图")
+                        enterStarmapRequested(nd.portal.destinationStarmapId, destTitle)
+                    } else {
+                        selectedNodeForMenu = nd
+                        renameDialog.open("node", nd.id, nd.title)
+                    }
                 }
 
-                onLongPressed: function(sceneX, sceneY) {
+                onLongPressed: {
                     var nd = nodesModel[index]
                     pointerMode = "connect"
                     connectFromNodeId = nd.id

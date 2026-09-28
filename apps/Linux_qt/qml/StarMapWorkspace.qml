@@ -25,6 +25,7 @@ Item {
     property var starmapBackendRef: null
 
     signal backClicked()
+    signal enterStarmapRequested(string starmapId, string title)
 
     Rectangle {
         anchors.fill: parent
@@ -133,6 +134,9 @@ Item {
                     onSelectionCleared: {
                         inspector.selectedNode = null
                         inspector.selectedEdge = null
+                    }
+                    onEnterStarmapRequested: function(smId, smTitle) {
+                        root.enterStarmapRequested(smId, smTitle)
                     }
                 }
 

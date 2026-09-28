@@ -43,7 +43,7 @@ Rectangle {
     // ---------------------------------------------------------------------------
     signal singleClicked()
     signal doubleClicked()
-    signal longPressed(real sceneX, real sceneY)
+    signal longPressed()
     signal contextMenuRequested(real sceneX, real sceneY)
     signal moveDelta(real dx, real dy)
     signal moveFinished()
@@ -103,12 +103,11 @@ Rectangle {
     // 交互：用 TapHandler 上抛点击类信号，节点不自行决定行为
     // ---------------------------------------------------------------------------
     TapHandler {
+        id: nodeLeftTap
         acceptedButtons: Qt.LeftButton
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()
-        onLongPressed: function(eventPoint) {
-            root.longPressed(eventPoint.scenePosition.x, eventPoint.scenePosition.y)
-        }
+        onLongPressed: root.longPressed()
     }
 
     TapHandler {
