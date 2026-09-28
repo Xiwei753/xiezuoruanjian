@@ -12,6 +12,17 @@
 //!    visible 1→0 时文字一开始全没、末尾长回来）。
 //! 3. 快速输入/删除 rebase 仍然采的不是屏幕上真正那一帧（collect_rebase_frames
 //!    用 compute_frame 而非 compute_frame_caret_driven）。
+//!
+//! ## Issue #727 / #785 之后的变化（2026-09）
+//!
+//! 问题 1、2 的载体 `AnimatedSlice::compute_frame_caret_driven`（caret 驱动裁切）已被
+//! 生产路径整体取代：文字 unit 统一用 `unit.current_visible_fraction(now)` 的 Timed
+//! 时间线，再 `slice.compute_frame(visible)`（`rebase.rs::collect_rebase_frame_for_unit_without_caret`
+//! 与 `render_plan_builder.rs::build_text_animation_plan_with_sample` 都是这条路径）。
+//! 该函数在 `--bin` 构建下无调用方，源码连同行身份判断、y 半开区间 fallback、
+//! 前向 Delete 宽度方向一起删除 —— `tools/check_rust_safety_patterns.py` 禁止用
+//! `#[allow(dead_code)]` 或 `#[cfg_attr(..., allow(dead_code))]` 保留未使用代码。
+//! 因此原来针对该函数体的 4 个子测试一并退役，守卫改到「旧机制不复活」+「Timed 路径在位」。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -64,45 +75,6 @@ fn issue1_visual_line_id_is_option_not_usize() {
     assert!(
         !has_bare_usize,
         "AnimatedSlice.visual_line_id 不应是裸 usize"
-    );
-}
-
-/// 问题1 守卫2: compute_frame_caret_driven 的 caret_visual_line_id 参数必须是 Option<usize>。
-#[test]
-fn issue1_compute_frame_caret_driven_takes_option_for_line_id() {
-    let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub fn compute_frame_caret_driven", 600);
-    // 修复后：参数类型为 Option<usize>
-    assert!(
-        window.contains("caret_visual_line_id: Option<usize>"),
-        "compute_frame_caret_driven 的 caret_visual_line_id 必须是 Option<usize>"
-    );
-    // 不应再用 `!= 0` 判断行身份
-    assert!(
-        !window.contains("caret_visual_line_id != 0"),
-        "compute_frame_caret_driven 不应用 `!= 0` 判断行身份，应改用 Option match"
-    );
-}
-
-/// 问题1 守卫3: compute_frame_caret_driven 的 y fallback 必须用半开区间，
-/// 不用 abs(y - glyph_y) < glyph_h。
-#[test]
-fn issue1_y_fallback_uses_half_open_interval() {
-    let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub fn compute_frame_caret_driven", 2000);
-    // 修复后：y fallback 用半开区间 line_top <= caret_y < line_bottom
-    let has_half_open = window.contains("caret_clip_y >= line_top")
-        && window.contains("caret_clip_y < line_bottom");
-    assert!(
-        has_half_open,
-        "y fallback 必须用半开区间 line_top <= caret_y < line_bottom"
-    );
-    // 不应再用 abs() < h 判断同行
-    let has_abs = window.contains(".abs() < self.to_document_rect.h")
-        || window.contains(".abs() < self.from_document_rect.h");
-    assert!(
-        !has_abs,
-        "y fallback 不应用 abs(y - glyph_y) < glyph_h，相邻行会误判"
     );
 }
 
@@ -179,48 +151,12 @@ fn issue1_build_slices_pass_some_line_idx() {
 // 问题2: 前向 Delete 的宽度方向写反了
 // =========================================================================
 
-/// 问题2 守卫: compute_frame_caret_driven 前向 Delete 同一行分支
-/// 必须用 `full_w * visible` 而非 `full_w * (1.0 - conceal_progress)`。
-#[test]
-fn issue2_forward_delete_same_line_uses_full_w_times_visible() {
-    let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub fn compute_frame_caret_driven", 12000);
-    // 修复后：同一行分支用 frame_w = full_w * visible（visible.clamp 后）
-    let has_correct_direction = window.contains("full_w * visible.clamp(0.0, 1.0)");
-    assert!(
-        has_correct_direction,
-        "前向 Delete 同一行分支必须用 `full_w * visible`（visible 是剩余可见比例）"
-    );
-    // 不应再用 `full_w * (1.0 - conceal_progress)`（方向写反）
-    let has_wrong_direction = window.contains("full_w * (1.0 - conceal_progress)");
-    assert!(
-        !has_wrong_direction,
-        "前向 Delete 不应用 `full_w * (1.0 - conceal_progress)`，方向写反了"
-    );
-}
-
-/// 问题2 守卫2: 前向 Delete 同一行分支 frame_x = from_document_rect.x（左端固定），
-/// source_rect.x 保持原起点。
-#[test]
-fn issue2_forward_delete_same_line_frame_x_fixed_at_left() {
-    let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub fn compute_frame_caret_driven", 12000);
-    // 修复后：不应有 frame_x = from_document_rect.x + (from_document_rect.w - from_right)
-    // 即不应从右端往回算 frame_x
-    let has_right_aligned =
-        window.contains("self.from_document_rect.x + (self.from_document_rect.w - from_right)");
-    assert!(
-        !has_right_aligned,
-        "前向 Delete 同一行分支 frame_x 不应从右端往回算，应固定在 from_document_rect.x"
-    );
-}
-
 // =========================================================================
 // 问题3: 快速输入/删除 rebase 仍然采的不是屏幕上真正那一帧
 // =========================================================================
 
 /// 问题3 守卫1: take_rebase_frames 不再调 tx.collect_rebase_frames，
-/// 而是用 collect_rebase_frame_for_unit（对 Reveal/Conceal 用 compute_frame_caret_driven）。
+/// 而是用 collect_rebase_frame_for_unit 逐 unit 采集 rebase 帧（#785 后全部走 Timed 时间线）。
 #[test]
 fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
@@ -230,7 +166,7 @@ fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
     assert!(
         !has_old_collect,
         "take_rebase_frames 不应再调 tx.collect_rebase_frames(now)，\
-         应改用 collect_rebase_frame_for_unit 对 Reveal/Conceal 用 compute_frame_caret_driven"
+         应改用 collect_rebase_frame_for_unit 逐 unit 采集 rebase 帧"
     );
     // 应使用 sample_caret_geometry_for_caret_driven_clip 采样 caret
     assert!(
@@ -311,10 +247,21 @@ fn all_three_remaining_issues_fixed() {
     assert!(!animated_slice.contains("caret_visual_line_id != 0"));
     assert!(tx.contains("pub from_visual_line_id: Option<usize>"));
 
-    // 问题2: 前向 Delete 用 full_w * visible
-    let cf_window = function_window(&animated_slice, "pub fn compute_frame_caret_driven", 12000);
-    assert!(cf_window.contains("full_w * visible.clamp(0.0, 1.0)"));
-    assert!(!cf_window.contains("full_w * (1.0 - conceal_progress)"));
+    // 问题2（前向 Delete 宽度方向）原由 `compute_frame_caret_driven` 承载。
+    // Issue #727 约束 4 + Issue #785 之后，文字 unit 统一走
+    // `unit.current_visible_fraction(now)` + `slice.compute_frame(visible)`，
+    // 该函数在生产路径已无调用方，源码连同它的行身份判断、y 半开区间 fallback、
+    // 前向 Delete 宽度方向一起删除（check_rust_safety_patterns 禁止用
+    // `#[allow(dead_code)]` 保留）。这里改为守卫"旧机制不会复活"。
+    assert!(
+        !animated_slice.contains("pub fn compute_frame_caret_driven"),
+        "compute_frame_caret_driven 已被 #727/#785 的 Timed 路径取代，不应复活"
+    );
+    let rebase = read_src("src/sujian_editor_item/animation/rebase.rs");
+    assert!(
+        rebase.contains("unit.slice.compute_frame(visible_fraction)"),
+        "所有 unit（含 Reveal/Conceal）都应从自己的时间线取 visible 并调 compute_frame"
+    );
 
     // 问题3: take_rebase_frames 用 collect_rebase_frame_for_unit
     let reb_window = function_window(&anim_coord, "fn take_rebase_frames", 5000);

@@ -640,6 +640,7 @@ impl SujianEditorItem {
     /// - CursorOnly Tween active（`cursor_ctrl.animation.is_some()`）→ Suppressed
     /// - 当前 epoch 下正文视觉事务 active（`has_active_text_transaction()`）→ Suppressed
     /// - idle → Normal
+    ///
     /// Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关，
     /// 是否有吞吐字直接由"本帧有没有有效 caret motion"决定。
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {

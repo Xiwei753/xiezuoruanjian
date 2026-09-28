@@ -197,7 +197,6 @@ fn rendering_tx(
         new_snapshot: None,
         cursor_owner_epoch: 0,
         caret_motion_retired: false,
-        coordinated: false,
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         layout_basis_revision: LayoutRevision::initial(),
@@ -1125,7 +1124,6 @@ fn issue690_comment5682867529_caret_track_starts_with_text_unit_at_rendering() {
         new_snapshot: None,
         cursor_owner_epoch: 0,
         caret_motion_retired: false,
-        coordinated: false,
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         layout_basis_revision: LayoutRevision::initial(),
@@ -1420,7 +1418,6 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         new_snapshot: None,
         cursor_owner_epoch: 0,
         caret_motion_retired: false,
-        coordinated: false,
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         layout_basis_revision: LayoutRevision::initial(),
@@ -1602,10 +1599,10 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         // 按独立时间线继续前进（0.75 + (1.0-0.75)*ease(0.5)），不再固定返回 start_fraction。
         let unit_visible = tx_ref.units[0].current_visible_fraction(frame_now_mid);
         assert!(
-                unit_visible > 0.75,
-                "Issue #785: Timed unit current_visible_fraction 应从 0.75 继续前进（>0.75），got {}",
-                unit_visible
-            );
+            unit_visible > 0.75,
+            "Issue #785: Timed unit current_visible_fraction 应从 0.75 继续前进（>0.75），got {}",
+            unit_visible
+        );
     }
 
     // ── 11. 推进到 50ms，断言 caret track 到 1.0 ──
@@ -1723,7 +1720,6 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         new_snapshot: None,
         cursor_owner_epoch: epoch,
         caret_motion_retired: false,
-        coordinated: false,
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         layout_basis_revision: LayoutRevision::initial(),
@@ -1759,7 +1755,6 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         new_snapshot: None,
         cursor_owner_epoch: epoch,
         caret_motion_retired: false,
-        coordinated: false,
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         layout_basis_revision: LayoutRevision::initial(),
@@ -1822,10 +1817,10 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
             .expect("old tx 应仍在队列中");
         // Issue #785: 不再强制 retired。old tx 的 caret_motion_retired 保持 false。
         assert!(
-                !old_tx_ref.caret_motion_retired,
-                "Issue #785: 第 1 帧 old tx 不应被强制 retired\
+            !old_tx_ref.caret_motion_retired,
+            "Issue #785: 第 1 帧 old tx 不应被强制 retired\
                  （文字 unit 有独立时间线，失去 owner 不强制收口）"
-            );
+        );
     }
 
     // ── 5. 完成 new tx（从队列移除）──

@@ -587,10 +587,8 @@ impl LinuxEditorPipeline {
             );
             // Issue #785 评论 5857873894 修改 2b: inject 现在返回成功注入行数；
             // 此处为全量提取路径，忽略返回值（全量注入，失败由 inject 内部诊断记录）。
-            let _ = layout::inject_animation_visuals_into_snapshot(
-                &mut doc_snap,
-                animation_visuals,
-            );
+            let _ =
+                layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
         }
 
         // fallback 路径释放临时 generation，不泄漏。

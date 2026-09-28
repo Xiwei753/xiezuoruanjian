@@ -993,10 +993,6 @@ fn issue756_typing_only_creates_text_without_caret_track() {
     assert!(!tx.units.is_empty(), "打字动画开启：文字动画照播");
     // Issue #756: coordinated=false 时吞吐字是 Timed（typing-driven），不是 CaretDriven。
     assert!(
-        !tx.coordinated,
-        "coordinated=false: 事务不进入 coordinated ownership"
-    );
-    assert!(
         tx.units.iter().all(|u| !u.timing.is_caret_driven()),
         "coordinated=false: 吞吐字用 Timed timing，不消费 caret frame"
     );
@@ -1070,10 +1066,6 @@ fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
         "smooth=true 且有 caret rect: 必须有 cursor_visual_track（光标动画）"
     );
     assert!(
-        !tx.coordinated,
-        "coordinated=false: 不进入 coordinated ownership"
-    );
-    assert!(
         tx.units.iter().all(|u| !u.timing.is_caret_driven()),
         "coordinated=false: 吞吐字用 Timed timing，不消费 caret frame（两个动画并行但不绑死）"
     );
@@ -1098,7 +1090,6 @@ fn issue756_ime_coordinated_only() {
         tx.cursor_visual_track.is_some(),
         "coordinated=true: 必须有 caret track"
     );
-    assert!(tx.coordinated, "coordinated=true: 事务标记 coordinated");
     assert!(
         tx.units.iter().all(|u| !u.timing.is_caret_driven()),
         "Issue #785: coordinated=true: 吞吐字用 Timed timing（独立时间线），不是 CaretDriven"
@@ -1119,7 +1110,6 @@ fn issue756_ime_typing_only() {
         tx.cursor_visual_track.is_none(),
         "smooth=false 且非协同: 没有 caret track"
     );
-    assert!(!tx.coordinated, "coordinated=false: 事务不标记 coordinated");
     assert!(
         tx.units.iter().all(|u| !u.timing.is_caret_driven()),
         "coordinated=false: 吞吐字用 Timed timing"
@@ -1140,7 +1130,6 @@ fn issue756_ime_smooth_only() {
         tx.cursor_visual_track.is_some(),
         "smooth=true: 必须有 caret track"
     );
-    assert!(!tx.coordinated, "coordinated=false: 事务不标记 coordinated");
 }
 
 /// coordinated=false + typing=true + smooth=true：两个动画并行但不进入 coordinated ownership
@@ -1156,10 +1145,6 @@ fn issue756_ime_typing_and_smooth_not_coordinated() {
     assert!(
         tx.cursor_visual_track.is_some(),
         "smooth=true: 必须有 caret track"
-    );
-    assert!(
-        !tx.coordinated,
-        "coordinated=false: 两个开关同时开不等于协同"
     );
     assert!(
         tx.units.iter().all(|u| !u.timing.is_caret_driven()),
@@ -1694,11 +1679,6 @@ fn issue756_comment5821042551_composition_commit_smooth_only_creates_transaction
         tx.units.is_empty(),
         "smooth-only composition commit: tx.units 必须为空（text_animation_enabled=false）"
     );
-    // smooth-only commit: coordinated 必须为 false
-    assert!(
-        !tx.coordinated,
-        "smooth-only composition commit: coordinated 必须为 false"
-    );
 }
 
 /// Issue #756 评论 5821793349: composition commit 在 typing=true 时必须保留
@@ -1797,11 +1777,6 @@ fn issue756_comment5821793349_composition_commit_typing_enabled_keeps_crossfade_
     assert!(
         tx.cursor_visual_track.is_some(),
         "typing-enabled composition commit: 必须有 cursor_visual_track"
-    );
-    // coordinated 仍为 false
-    assert!(
-        !tx.coordinated,
-        "typing-enabled composition commit: coordinated 必须为 false"
     );
 }
 

@@ -201,47 +201,6 @@ pub(crate) fn editor_animation_diagnostic_event(
     });
 }
 
-pub(crate) fn is_complex_grapheme(ch: char) -> bool {
-    let cp = ch as u32;
-    if cp > 0xFFFF {
-        return true;
-    }
-    if cp == 0x200D {
-        return true;
-    }
-    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) {
-        return true;
-    }
-    if (0x0300..=0x036F).contains(&cp) {
-        return true;
-    }
-    if (0x1AB0..=0x1AFF).contains(&cp) {
-        return true;
-    }
-    if (0x1DC0..=0x1DFF).contains(&cp) {
-        return true;
-    }
-    if (0x20D0..=0x20FF).contains(&cp) {
-        return true;
-    }
-    if (0xFE20..=0xFE2F).contains(&cp) {
-        return true;
-    }
-    if (0x1F600..=0x1F64F).contains(&cp) {
-        return true;
-    }
-    if (0x1F300..=0x1F5FF).contains(&cp) {
-        return true;
-    }
-    if (0x1F680..=0x1F6FF).contains(&cp) {
-        return true;
-    }
-    if (0x1F900..=0x1F9FF).contains(&cp) {
-        return true;
-    }
-    false
-}
-
 #[derive(QObject)]
 pub struct SujianEditorItem {
     #[allow(dead_code)]
@@ -467,6 +426,7 @@ pub struct SujianEditorItem {
     /// - false->true（suppressed 开始）：立即 blink_visible = true（光标从可见状态开始）
     /// - true->false（suppressed 结束）：重置 blink_last_toggle = now / blink_visible = true，
     ///   不继承 suppressed 开始前碰巧为 false 的旧相位
+    ///
     /// 之前只跟踪 has_active_insert（只认 Insert），CursorOnly Tween 的起止不触发边沿重置。
     /// 现在跟踪 current_cursor_blink_mode() == Suppressed，覆盖 CursorOnly Tween。
     prev_cursor_blink_suppressed: bool,

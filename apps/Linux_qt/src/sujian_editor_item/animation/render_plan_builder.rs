@@ -2,7 +2,6 @@ use std::time::Instant;
 
 use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
 use super::transaction_builder::emit_transaction_diagnostic;
-use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
 use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
@@ -460,7 +459,6 @@ impl LinuxEditorAnimationCoordinator {
             clip_rects,
             cursor_sample_outcome,
             drawn_caret_rect,
-            coordinated_motion_frame,
         }
     }
 
@@ -548,9 +546,7 @@ impl LinuxEditorAnimationCoordinator {
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units
-                    .iter()
-                    .all(|u| u.progress(sample.frame_now) >= 1.0)
+                tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)
             };
             // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成，
             // 不再仅限于 CaretDriven 事务。非协同 typing+smooth 没有 CaretDriven unit，

@@ -812,15 +812,17 @@ fn is_timed_reflow_kind(kind: AnimatedSliceKind) -> bool {
 }
 
 /// Issue #738 评论 5789470425 问题2: 在 canonical snapshot 里按 byte range 找所有相交 cluster，
-/// 逐 cluster 返回（byte range、document rect、shaping identity），不做 bounding box，
+/// 逐 cluster 返回（document rect、shaping identity），不做 bounding box，
 /// 不只取第一个 cluster 的 shaping。
+///
+/// 相交判定所需的 byte range 只是 `find_clusters_in_canonical` 的入参，
+/// 调用方（`rebind_timed_units_to_canonical`）只用 doc_rect 和 shaping，
+/// 所以 hit 上不再冗余存 byte_start/byte_end。
 ///
 /// reconcile 时逐 anchor 调此函数，逐 cluster 校验 shaping；拆行或各 anchor 新移动
 /// 向量不同时拆回多个 Timed unit，而不是做一个跨行 bounding rect。
 #[derive(Clone, Debug)]
 struct CanonicalClusterHit {
-    byte_start: usize,
-    byte_end: usize,
     doc_rect: SourceRect,
     shaping: ShapingIdentity,
 }
@@ -860,12 +862,7 @@ fn find_clusters_in_canonical(
                         direction_rtl: cluster.is_rtl,
                         format_fingerprint: 0,
                     };
-                    hits.push(CanonicalClusterHit {
-                        byte_start: cluster.document_byte_start,
-                        byte_end: cluster.document_byte_end,
-                        doc_rect,
-                        shaping,
-                    });
+                    hits.push(CanonicalClusterHit { doc_rect, shaping });
                 }
             }
         }

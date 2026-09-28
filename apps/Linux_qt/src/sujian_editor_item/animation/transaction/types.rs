@@ -505,12 +505,6 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// ReflowMove/ReflowCrossFade / InsertReveal/DeleteConceal 作为独立 Timed track
     /// 继续播完，事务只等剩余 Timed unit 完成。
     pub caret_motion_retired: bool,
-    /// Issue #756 / Issue #785: 本事务的吞吐字（InsertReveal/DeleteConceal）是否协同。
-    ///
-    /// Issue #785 后：`coordinated` 只传递"同事务协同"语义（同首帧/同 rebase），
-    /// 不再切到 CaretDriven timing。文字 unit 始终用 Timed timing，与 caret 各自
-    /// 按自己的 duration 推进，拥有独立 started_at / duration_ms / progress。
-    pub coordinated: bool,
     /// Issue #710 评论 5731145076 症状五/六 / 评论 5732160521 问题 3:
     /// 事务的视觉 affected byte range，分 old/new 两侧保存。
     ///
@@ -525,8 +519,9 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// 现在拆成 old/new 两侧：
     /// - `visual_affected_byte_range_old`: old_text 坐标系（事务应用前的文本）
     /// - `visual_affected_byte_range_new`: new_text 坐标系（事务应用后的文本）
-    /// Insert 事务 old 侧是插入点、new 侧是 inserted_range；
-    /// Delete 事务 old 侧是 deleted_range、new 侧是删除后落点。
+    ///
+    ///   Insert 事务 old 侧是插入点、new 侧是 inserted_range；
+    ///   Delete 事务 old 侧是 deleted_range、new 侧是删除后落点。
     ///
     /// `find_conflicting_transaction` 接收新事务的 `OffsetMap`（从旧事务 new 坐标系
     /// 到新事务查询坐标系的映射），把旧事务的 `visual_affected_byte_range_new`

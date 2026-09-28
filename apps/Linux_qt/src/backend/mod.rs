@@ -165,7 +165,9 @@ impl AppRef {
         }
     }
 
-    pub fn snapshot(&self) -> &std::rc::Rc<std::cell::RefCell<DomainSnapshot>> {
+    // 保持 pub(crate)：DomainSnapshot 是平台端内部领域快照，
+    // 集成测试只通过 AppRef::default() / core_api() 进入，不直接读快照。
+    pub(crate) fn snapshot(&self) -> &std::rc::Rc<std::cell::RefCell<DomainSnapshot>> {
         &self.snapshot
     }
 

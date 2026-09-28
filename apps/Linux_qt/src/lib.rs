@@ -80,6 +80,7 @@ pub mod editor;
 pub mod platform;
 pub mod platform_utils;
 pub mod starmap_bridge;
+pub mod starmap_view;
 pub mod sujian_editor_item;
 pub mod sync_bridge;
 pub mod writing_bridge;

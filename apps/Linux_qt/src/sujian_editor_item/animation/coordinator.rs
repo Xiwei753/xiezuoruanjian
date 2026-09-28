@@ -144,6 +144,7 @@ impl LinuxEditorAnimationCoordinator {
     ///   current_cursor_epoch` 的事务。如果有多个，取 `key.transaction_id` 最大的
     ///   （最新创建的）。对选中的那一笔采样 caret 构造 `RebaseCaretHandoff`。
     ///   如果没有冲突事务拥有 coordinated caret，handoff 为 None。
+    ///
     /// Issue #738 评论 5796693007 问题1: 正文编辑路径 prepare 阶段——采 rebase frame +
     /// caret handoff，取消真正被覆盖的冲突事务，但还不创建新事务。
     ///
@@ -502,8 +503,6 @@ impl LinuxEditorAnimationCoordinator {
     /// 此方法先完成所有含 CaretDriven unit 的事务，再 pause 剩下的 Timed 事务。
     /// 返回被完成事务的 snapshot IDs，供调用方清理 texture cache。
     pub(crate) fn pause_all(&mut self) -> Vec<LineSnapshotId> {
-        use crate::sujian_editor_item::animation::VisualUnitTiming;
-
         // 1. 找出所有含 CaretDriven unit 的活跃事务，完成它们到 canonical 状态。
         let caret_driven_keys: Vec<VisualTransactionKey> = self
             .prepared_queue
@@ -512,9 +511,7 @@ impl LinuxEditorAnimationCoordinator {
             .filter(|t| {
                 t.state != TextVisualTransactionState::Completed
                     && t.state != TextVisualTransactionState::Cancelled
-                    && t.units
-                        .iter()
-                        .any(|u| u.timing.is_caret_driven())
+                    && t.units.iter().any(|u| u.timing.is_caret_driven())
             })
             .map(|t| t.key)
             .collect();

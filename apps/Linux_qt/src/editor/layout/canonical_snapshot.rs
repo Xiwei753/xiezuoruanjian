@@ -1648,9 +1648,7 @@ pub fn inject_animation_visuals_into_snapshot(
         // 不会因 document_byte_start 在 reflow 后漂移而误匹配。
         let mut matched = false;
         for para in &mut doc_snapshot.paragraphs {
-            if para.paragraph_document_byte_start
-                != anim_line.paragraph_document_byte_start
-            {
+            if para.paragraph_document_byte_start != anim_line.paragraph_document_byte_start {
                 continue;
             }
             // 段落匹配，按 qtextline_idx 精确匹配行。

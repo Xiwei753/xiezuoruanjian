@@ -16,11 +16,54 @@
 // =============================================================================
 
 use writer_core::api::types::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapLayoutDto,
-    StarMapLayoutKindDto, StarMapLayoutNodeDto, StarMapNodeContentDto, StarMapNodeDto,
-    StarMapNodeKindDto, StarMapNodePatchDto, StarMapTargetDetailDto, StarMapTargetPathDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapGraphDto,
+    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
+    StarMapPointDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
+
+use crate::starmap_view::edge_render::{self, EdgeRenderParams};
+use crate::starmap_view::grid_layout;
+use crate::starmap_view::hittest;
+use crate::starmap_view::layout_types::{StarMapLayout, StarMapLayoutKind, StarMapLayoutNode};
+
+/// 平台端显示层常量：节点默认包围盒与圆角。
+///
+/// Core 只保存 `StarMapNode.position`（节点左上角坐标），不含宽高/圆角——
+/// 那是纯显示参数，按「Core 不管显示层」契约归平台端。QML 侧
+/// `buildModels()` 在拿不到 layout 节点时也用同样的默认值，两处必须一致。
+const DEFAULT_NODE_WIDTH: f32 = 150.0;
+const DEFAULT_NODE_HEIGHT: f32 = 60.0;
+const DEFAULT_NODE_RADIUS: f32 = 30.0;
+
+/// 从星图图数据派生前端布局视图。
+///
+/// Core 收口后没有独立的 layout 实体，节点坐标唯一真相是
+/// `StarMapNodeDto.position`。这里把位置 + 显示默认值合成 `StarMapLayout`，
+/// 保持 QML 侧 `layout.nodes[].nodeId/x/y/width/height` 契约不变。
+fn layout_from_graph(graph: &StarMapGraphDto) -> StarMapLayout {
+    StarMapLayout {
+        kind: StarMapLayoutKind::Freeform,
+        nodes: graph
+            .nodes
+            .iter()
+            .map(|n| StarMapLayoutNode {
+                node_id: n.id.clone(),
+                x: n.position.x,
+                y: n.position.y,
+                width: DEFAULT_NODE_WIDTH,
+                height: DEFAULT_NODE_HEIGHT,
+                radius: DEFAULT_NODE_RADIUS,
+                collapsed: false,
+                z_index: 0,
+                scale: 1.0,
+                depth: 0.0,
+                focus_weight: 0.0,
+                orbit_group: None,
+            })
+            .collect(),
+    }
+}
 
 fn parse_node_kind(kind: &str) -> StarMapNodeKindDto {
     serde_json::from_value(serde_json::json!(kind)).unwrap_or(StarMapNodeKindDto::Note)
@@ -81,12 +124,15 @@ pub fn delete_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.delete_starmap(starmap_id))
 }
 
+/// 拉取图数据 + 派生布局视图。
+///
+/// Core 不再存 layout，`layout` 由 `layout_from_graph` 从节点 position 合成。
 pub fn get_starmap_graph_and_layout(api: &WriterCoreApi, starmap_id: &str) -> String {
     match api.get_starmap_graph(starmap_id) {
-        Ok(g) => match api.get_starmap_layout(starmap_id) {
-            Ok(l) => envelope_ok(serde_json::json!({ "graph": g, "layout": l })),
-            Err(_) => envelope_ok(serde_json::json!({ "graph": g, "layout": null })),
-        },
+        Ok(g) => {
+            let layout = layout_from_graph(&g);
+            envelope_ok(serde_json::json!({ "graph": g, "layout": layout }))
+        }
         Err(e) => envelope_err_str(&e.to_string()),
     }
 }
@@ -109,8 +155,12 @@ pub fn create_starmap_node(
         content: StarMapNodeContentDto::default(),
         anchors: vec![],
         portal: None,
-        display_policy: Default::default(),
-        open_behavior: Default::default(),
+        // Core 收口后显示策略由平台端自理，DTO 只保留 position 坐标与 style 外观。
+        position: StarMapPointDto {
+            x: x as f32,
+            y: y as f32,
+        },
+        style: Default::default(),
         provenance: Default::default(),
         created_at: now,
         updated_at: now,
@@ -200,13 +250,43 @@ pub fn delete_starmap_edge(api: &WriterCoreApi, starmap_id: &str, edge_id: &str)
     envelope(api.delete_starmap_edge(starmap_id, edge_id))
 }
 
+/// 保存布局：把前端算好的节点坐标写回 Core 的 `StarMapNode.position`。
+///
+/// Core 收口后没有 `save_starmap_layout` 这样的独立布局存储，节点坐标的唯一
+/// 真相是节点自身的 `position` 字段。这里逐节点发 position patch，Core 侧
+/// 仍是单事务真相源，平台端只负责把显示层算出的坐标提交回去。
+/// 宽高/圆角/层级是纯显示参数，不回传（Core 不消费）。
 pub fn save_starmap_layout(api: &WriterCoreApi, starmap_id: &str, layout_json: &str) -> String {
-    let layout: StarMapLayoutDto = match serde_json::from_str(layout_json) {
+    let layout: StarMapLayout = match serde_json::from_str(layout_json) {
         Ok(l) => l,
         Err(e) => return envelope_err_str(&format!("Invalid layout JSON: {}", e)),
     };
 
-    envelope(api.save_starmap_layout(starmap_id, &layout))
+    for node in &layout.nodes {
+        let patch = StarMapNodePatchDto {
+            title: None,
+            kind: None,
+            payload: None,
+            tags: None,
+            content: None,
+            anchors: None,
+            portal: None,
+            position: Some(StarMapPointDto {
+                x: node.x,
+                y: node.y,
+            }),
+            style: None,
+            provenance: None,
+        };
+        if let Err(e) = api.update_starmap_node(starmap_id, &node.node_id, patch) {
+            return envelope_err_str(&format!(
+                "Failed to save position for node {}: {}",
+                node.node_id, e
+            ));
+        }
+    }
+
+    envelope_ok(serde_json::json!({ "savedNodes": layout.nodes.len() }))
 }
 
 pub fn bind_starmap_to_project(api: &WriterCoreApi, starmap_id: &str, project_id: &str) -> String {
@@ -225,6 +305,10 @@ pub fn unbind_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.unbind_starmap_from_project(starmap_id))
 }
 
+/// 计算边渲染几何（箭头/偏移/标签位置）。
+///
+/// 几何算法已随 Core 收口归到平台端 `starmap_view::edge_render`。
+/// 输入仍是 QML 传来的 `[{id,x,y,width,height}]`，转成显示层 layout 节点。
 pub fn compute_edge_renders_json(
     api: &WriterCoreApi,
     starmap_id: &str,
@@ -245,65 +329,63 @@ pub fn compute_edge_renders_json(
         Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
     };
 
-    let layout_nodes: Vec<StarMapLayoutNodeDto> = nodes
-        .into_iter()
-        .map(|n| StarMapLayoutNodeDto {
-            node_id: n.id,
-            x: n.x,
-            y: n.y,
-            width: n.width,
-            height: n.height,
-            radius: 0.0,
-            collapsed: false,
-            z_index: 0,
-            scale: 1.0,
-            depth: 0.0,
-            focus_weight: 1.0,
-            orbit_group: None,
-        })
-        .collect();
-
-    let layout = StarMapLayoutDto {
-        kind: StarMapLayoutKindDto::Freeform,
-        nodes: layout_nodes,
+    let layout = StarMapLayout {
+        kind: StarMapLayoutKind::Freeform,
+        nodes: nodes
+            .into_iter()
+            .map(|n| StarMapLayoutNode {
+                node_id: n.id,
+                x: n.x,
+                y: n.y,
+                width: n.width,
+                height: n.height,
+                radius: DEFAULT_NODE_RADIUS,
+                collapsed: false,
+                z_index: 0,
+                scale: 1.0,
+                depth: 0.0,
+                focus_weight: 1.0,
+                orbit_group: None,
+            })
+            .collect(),
     };
 
-    let graph = match api.get_starmap_graph(starmap_id) {
+    let graph_dto = match api.get_starmap_graph(starmap_id) {
+        Ok(g) => g,
+        Err(e) => return envelope_err_str(&e.to_string()),
+    };
+    let graph: writer_core::starmap::types::StarMapGraph = match graph_dto.try_into() {
         Ok(g) => g,
         Err(e) => return envelope_err_str(&e.to_string()),
     };
 
-    match api.compute_starmap_edge_renders(graph, layout) {
-        Ok(batch) => {
-            log::debug!(
-                "compute_starmap_edge_renders diagnostics: {:?}",
-                batch.diagnostics
-            );
-            envelope_ok(batch.renders)
-        }
-        Err(e) => envelope_err_str(&e.to_string()),
-    }
+    let batch = edge_render::compute_edge_renders_from_paths(
+        &graph.edges,
+        &graph,
+        &layout,
+        &EdgeRenderParams::default(),
+    );
+    log::debug!("compute_edge_renders diagnostics: {:?}", batch.diagnostics);
+    envelope_ok(batch.renders)
 }
 
 pub fn hit_test_edge_renders_json(renders_json: &str, x: f32, y: f32) -> String {
-    let renders: Vec<writer_core::starmap::render::EdgeRender> =
-        match serde_json::from_str(renders_json) {
-            Ok(v) => v,
-            Err(e) => return envelope_err_str(&format!("Invalid renders JSON: {}", e)),
-        };
+    let renders: Vec<edge_render::EdgeRender> = match serde_json::from_str(renders_json) {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&format!("Invalid renders JSON: {}", e)),
+    };
 
-    let result = writer_core::starmap::render::hit_test_edge_renders(x, y, &renders);
+    let result = edge_render::hit_test_edge_renders(x, y, &renders);
     envelope_ok(result)
 }
 
 pub fn hit_test_nodes_json(nodes_json: &str, x: f32, y: f32) -> String {
-    let nodes: Vec<writer_core::starmap::types::StarMapLayoutNode> =
-        match serde_json::from_str(nodes_json) {
-            Ok(v) => v,
-            Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
-        };
+    let nodes: Vec<StarMapLayoutNode> = match serde_json::from_str(nodes_json) {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
+    };
 
-    let result = writer_core::starmap::hittest::hit_test_nodes(x, y, &nodes);
+    let result = hittest::hit_test_nodes(x, y, &nodes);
     envelope_ok(result.map(|r| r.id))
 }
 
@@ -313,9 +395,8 @@ pub fn calculate_grid_layout_json(node_ids_json: &str, existing_layout_json: &st
         Err(e) => return envelope_err_str(&format!("Invalid node IDs JSON: {}", e)),
     };
 
-    let existing: writer_core::starmap::types::StarMapLayout =
-        serde_json::from_str(existing_layout_json).unwrap_or_default();
+    let existing: StarMapLayout = serde_json::from_str(existing_layout_json).unwrap_or_default();
 
-    let layout = writer_core::starmap::layout::calculate_grid_layout(&node_ids, &existing);
+    let layout = grid_layout::calculate_grid_layout(&node_ids, &existing);
     envelope_ok(layout)
 }

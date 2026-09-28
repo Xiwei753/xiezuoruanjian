@@ -2,16 +2,18 @@ use serde::Serialize;
 
 /// Issue #735: Linux 私有动画模式 — 纯平台类型，不再从 Core `AnimationMode` 转换。
 ///
-/// Core 已删除 `AnimationMode`。平台端自行决定动画模式：
+/// Core 已删除 `AnimationMode`。平台端自行决定动画模式，只保留两种：
 /// - 正常编辑（typing / delete）→ `GlyphAnimation`
 /// - 滚动 / 加载 / 格式化期间 → `SystemSuppressed`
+///
+/// 原先还有 `ClusterAnimation` / `RunAnimation` / `LineReflowAnimation`
+/// 三个 cluster 级、run 级、整行 reflow 变体，但 `from_context()` 从来没有
+/// 产出过它们（#785 起文字 unit 一律走 Timed timing），三个变体是纯死状态，
+/// 按仓库约定"被新实现替代的旧入口直接删除"移除。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum AnimationMode {
     GlyphAnimation,
-    ClusterAnimation,
-    RunAnimation,
-    LineReflowAnimation,
     SystemSuppressed,
 }
 

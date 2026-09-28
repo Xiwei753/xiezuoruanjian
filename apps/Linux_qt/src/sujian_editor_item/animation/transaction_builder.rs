@@ -1,8 +1,14 @@
-use std::time::Instant;
-
 use writer_core::editor::OffsetMap;
 
+// 仅 `process_transaction` 的单元测试需要下列导入：生产路径已改为
+// `build_prepared_transaction` 直接构造、`rebind_timed_units_to_canonical` 重绑，
+// 因此这些名字在非测试构建里没有使用者，必须用 `#[cfg(test)]` 收起来，
+// 否则 `--bin sujian-linux-qt` 的 clippy（-D warnings）会报 unused import。
+#[cfg(test)]
+use std::time::Instant;
+
 use super::coordinator::LinuxEditorAnimationCoordinator;
+#[cfg(test)]
 use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
@@ -13,10 +19,11 @@ use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
     TextVisualTransactionState, TransactionTimeline,
 };
+#[cfg(test)]
 use crate::sujian_editor_item::animation_mode::AnimationMode;
-use crate::sujian_editor_item::edit_motion::{
-    diff_plain_text, CursorRect, EditorAnimationKind, PreparedEditMotion,
-};
+#[cfg(test)]
+use crate::sujian_editor_item::edit_motion::{diff_plain_text, EditorAnimationKind};
+use crate::sujian_editor_item::edit_motion::{CursorRect, PreparedEditMotion};
 use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{
@@ -310,14 +317,15 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
             // new_snapshot.virtual_text[inserted_range]，不用"相交 cluster 是否全是 whitespace"
             // 反推。Partial cluster 可能同时包含旧可见字符和本次插入的空白，按整个 cluster
             // 判断会把正常空白输入误报成 InsertReveal 丢失。
-            let all_inserted_is_whitespace = spec.inserted_ranges.iter().all(|&(i_start, i_end)| {
-                let text = spec
-                    .new_snapshot
-                    .virtual_text
-                    .get(i_start..i_end)
-                    .unwrap_or("");
-                text.chars().all(|c| c.is_whitespace() || c.is_control())
-            });
+            let all_inserted_is_whitespace =
+                spec.inserted_ranges.iter().all(|&(i_start, i_end)| {
+                    let text = spec
+                        .new_snapshot
+                        .virtual_text
+                        .get(i_start..i_end)
+                        .unwrap_or("");
+                    text.chars().all(|c| c.is_whitespace() || c.is_control())
+                });
             if !all_inserted_is_whitespace {
                 {
                     use std::collections::BTreeMap;
@@ -369,7 +377,8 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                         event: "editor.anim.insert_reveal_not_generated".to_string(),
                         target: "editor.anim".to_string(),
                         message: Some(
-                            "inserted range has visible chars but InsertReveal count is 0".to_string(),
+                            "inserted range has visible chars but InsertReveal count is 0"
+                                .to_string(),
                         ),
                         fields,
                     });
@@ -411,7 +420,6 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         new_snapshot: Some(spec.new_snapshot),
         cursor_owner_epoch: spec.cursor_owner_epoch,
         caret_motion_retired: false,
-        coordinated: spec.coordinated_animation_enabled,
         visual_affected_byte_range_old: spec.visual_affected_byte_range_old,
         visual_affected_byte_range_new: spec.visual_affected_byte_range_new,
         layout_basis_revision: spec.layout_basis_revision,
@@ -1378,6 +1386,10 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
+    // process_transaction 只服务本文件的单元测试：正文事务的生产路径已经改成
+    // `build_prepared_transaction` 直接构造，rebase 走 `rebind_timed_units_to_canonical`，
+    // 没有任何生产调用方。整段 cfg(test)，避免在正常构建里被 dead_code 判死。
+    #[cfg(test)]
     pub fn process_transaction(
         &mut self,
         vt: &PreparedEditMotion,

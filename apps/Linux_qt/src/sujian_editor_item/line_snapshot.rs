@@ -26,10 +26,6 @@ impl LineTextureStore {
         self.textures.contains_key(id)
     }
 
-    pub fn remove(&mut self, id: &LineSnapshotId) {
-        self.textures.remove(id);
-    }
-
     /// Issue #736 评论 5786231506: 只保留在给定 active ids 集合里的纹理。
     /// 事务完成/cancel/rebase 后，用当前所有 active transaction 实际还引用的
     /// LineSnapshotId 集合做 retain，不再让 remove_for_transaction 无条件删共享

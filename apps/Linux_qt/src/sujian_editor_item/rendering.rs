@@ -100,6 +100,7 @@ impl SujianEditorItem {
     /// - 无正文事务时（found_tx = None，纯鼠标点击/方向键/Home/End）：走纯光标 Tween，
     ///   CursorAnimationState 拥有自己的 timeline（started_at + duration_ms），
     ///   不依赖任何正文事务。
+    ///
     /// 两条时间线互斥，不为了修可见性再引入第二套光标动画。
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
         // Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间使用屏幕锚点替代

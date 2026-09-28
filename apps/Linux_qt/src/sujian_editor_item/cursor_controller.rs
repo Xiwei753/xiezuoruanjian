@@ -160,7 +160,10 @@ impl CursorController {
         self.visible
     }
 
-    pub fn cursor_blink_opacity(&self, blink_mode: CursorBlinkMode) -> f64 {
+    // 三个方法保持 pub(crate)：入参/返回的都是平台端内部光标动画状态，
+    // 消费方只有 qquickitem_impl / properties / editing / rendering，
+    // 集成测试只走 new() / bump_cursor_owner_epoch() / cursor_owner_epoch。
+    pub(crate) fn cursor_blink_opacity(&self, blink_mode: CursorBlinkMode) -> f64 {
         if !self.visible {
             return 0.0;
         }
@@ -174,7 +177,7 @@ impl CursorController {
         }
     }
 
-    pub fn apply_plan(&mut self, plan: &CursorAnimationPlan) -> CursorUpdateResult {
+    pub(crate) fn apply_plan(&mut self, plan: &CursorAnimationPlan) -> CursorUpdateResult {
         // Issue #724 评论 5750911834 问题 2: 在 apply_plan() 前段消费 force_snap_next，
         // 避免前面的 !should_be_visible 提前返回留下未消费的 force-snap，
         // 下一次正常光标移动仍被直接 Snap。
@@ -399,7 +402,7 @@ impl CursorController {
         }
     }
 
-    pub fn tick_blink(&mut self, blink_mode: CursorBlinkMode) -> bool {
+    pub(crate) fn tick_blink(&mut self, blink_mode: CursorBlinkMode) -> bool {
         if !self.visible {
             if !self.blink_visible {
                 return false;

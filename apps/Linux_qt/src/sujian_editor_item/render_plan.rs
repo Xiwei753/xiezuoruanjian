@@ -231,21 +231,29 @@ impl CoordinatedMotionFrame {
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
 pub struct RenderPlan {
-    pub text_animation: TextAnimationPlan,
-    pub selection_preedit: SelectionPreeditPlan,
+    // 除 drawn_caret_rect 外全部收回 pub(crate)：字段类型都是平台端内部渲染
+    // 状态（TextAnimationPlan / CursorRenderState / FrameContext 等），
+    // 集成测试只需要 drawn_caret_rect 这个 (x, y, h) 裸元组。
+    //
+    // Issue #727 约束 3 要求的"本帧统一采样的协同运动帧"不再挂在 RenderPlan 上：
+    // build_render_plan_full 在入口处 sample 一次后全程用局部变量消费
+    // （caret.is_some() 门禁 + owner_key 过滤），挂到帧上后没有任何读者，
+    // 只是一份和局部变量重复的副本，所以这里不再冗余存一份。
+    pub(crate) text_animation: TextAnimationPlan,
+    pub(crate) selection_preedit: SelectionPreeditPlan,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。
-    pub cursor: CursorRenderState,
-    pub frame_context: FrameContext,
-    pub cursor_style: CursorStyle,
+    pub(crate) cursor: CursorRenderState,
+    pub(crate) frame_context: FrameContext,
+    pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
-    pub selection_preedit_style: SelectionPreeditStyle,
+    pub(crate) selection_preedit_style: SelectionPreeditStyle,
     /// Issue #727 评论 5755858583 问题2: 动画期间静态正文层需要隐藏的裁剪矩形。
     /// 直接存储文档坐标 x/y/w/h，由 active units 的 AnimatedSlice.static_hidden_document_rects
     /// 收集而来。不再通过 StaticLinePatch 中间结构。
-    pub clip_rects: Vec<AnimationClipRect>,
+    pub(crate) clip_rects: Vec<AnimationClipRect>,
     /// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
-    pub cursor_sample_outcome: CursorSampleOutcome,
+    pub(crate) cursor_sample_outcome: CursorSampleOutcome,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///
     /// 正文协同动画时,这个 rect 就是同帧文字事务算出的实际光标位置;
@@ -255,10 +263,4 @@ pub struct RenderPlan {
     /// 输入、删除、鼠标点击创建新事务时,只允许从这个"上一帧真正
     /// 画出来的位置" rebase。
     pub drawn_caret_rect: Option<(f64, f64, f64)>,
-    /// Issue #727 约束 3: 本帧统一采样的协同运动帧。
-    ///
-    /// 由 `build_render_plan_full` 入口处采样一次，供 cursor layer 和文字
-    /// reveal/conceal 共享同一份 caret geometry。`caret` 为 `None` 时
-    /// InsertReveal / DeleteConceal 不生成动画 glyph。
-    pub coordinated_motion_frame: CoordinatedMotionFrame,
 }
