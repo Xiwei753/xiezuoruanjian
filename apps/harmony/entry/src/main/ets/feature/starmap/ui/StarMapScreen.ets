@@ -579,6 +579,9 @@ export struct StarMapScreen {
     }
     .width('100%')
     .height('100%')
+    // 与首页同口径：页面底色用系统 background_secondary（#F2F3F5），让悬浮底栏有底可滤。
+    // 官方《组件颜色与界面背景颜色相近》faqs-arkui-1119。
+    .backgroundColor($r('sys.color.background_secondary'))
   }
 
   build() {

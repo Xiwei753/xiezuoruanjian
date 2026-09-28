@@ -264,6 +264,15 @@ export struct HomeScreen {
     }
     .width('100%')
     .height('100%')
+    // 页面底色用系统 background_secondary。
+    // 实机实测本机浅色模式：background_primary = #FFFFFF（纯白，与背景融为一体，悬浮底栏
+    // 背后没有任何可折射内容）；background_secondary = #F2F3F5（带蓝相的浅冷白，
+    // 正是"我的华为"那一类系统页面的底色）。书卡用 ohos_id_color_card_bg = #FFFFFF，
+    // 与底色拉开 13/255 色阶。
+    // 官方《组件颜色与界面背景颜色相近》faqs-arkui-1119：组件背景色要与页面背景色区分，
+    // 否则组件区域无法突出显示，悬浮底栏的沉浸光感/背景模糊也无处显色。
+    // 用系统 token 而非硬编码色值，深浅色模式与系统主题自动跟随。
+    .backgroundColor($r('sys.color.background_secondary'))
   }
 
   build() {
@@ -296,12 +305,9 @@ export struct HomeScreen {
   @Builder
   TwoPaneLayout() {
     Column() {
-      // Header — app_title + workspace name + writing stats + native status
+      // Header — 只保留右侧工作空间名 + 写作统计 + Native 状态；
+      // 应用名由 HDS 顶栏承载，宽屏同样不在页内重复画标题。
       Row() {
-        Text($r('app.string.app_title'))
-          .fontSize(28)
-          .fontWeight(FontWeight.Bold)
-
         Blank()
 
         Column() {
@@ -635,9 +641,8 @@ export struct HomeScreen {
   SinglePaneLayout() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        // 顶栏
-        this.SinglePaneTopBar()
-
+        // 不再自绘窄屏顶栏：页面标题已由 HdsAppDestinationApi23 的 HDS 标题栏承载，
+        // 页内再画一份会出现两个"素笺"。窄屏/宽屏一律只保留顶栏那一个。
         // 内容区域
         if (this.viewModel.isLoading) {
           this.LoadingView()
@@ -674,21 +679,6 @@ export struct HomeScreen {
     }
     .width('100%')
     .height('100%')
-  }
-
-  // ── 窄屏顶栏：只保留标题，页头动作由 NavigationHeaderActionDispatcher 统一管理 ──
-  @Builder
-  SinglePaneTopBar() {
-    Row() {
-      Text($r('app.string.app_title'))
-        .fontSize(24)
-        .fontWeight(FontWeight.Bold)
-
-      Blank()
-    }
-    .width('100%')
-    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
   }
 
   // ────────────────────────────────────────
@@ -811,6 +801,9 @@ export struct HomeScreen {
     .width('100%')
     .padding({ left: 16, right: 16, top: 16, bottom: 16 })
     .borderRadius(DesignTokens.radiusMd)
+    // 卡片用系统卡片面色（浅色模式实测 #FFFFFF），与页面底色 background_secondary 拉开色阶。
+    // 官方 faqs-arkui-1119：组件背景色要与页面背景色区分，否则组件区域无法突出显示。
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
     .margin({ bottom: 10 })
     .onClick(() => this.navigateToWorkspace(project.id, project.title))
   }

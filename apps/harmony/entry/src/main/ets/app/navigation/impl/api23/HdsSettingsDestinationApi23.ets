@@ -21,6 +21,10 @@ export struct HdsSettingsDestinationApi23 {
     .hideTitleBar(false)
     .titleBar({
       enableComponentSafeArea: true,
+      // 窗口开了 setWindowLayoutFullScreen 之后，标题栏必须显式继续避让顶部状态栏，
+      // 否则「素笺」这类标题会被压到 18px 高（实测 [200,157][325,230] → [200,106][325,124]）。
+      // 本文件只在 API >= 23 渲染（见各 Screen 的 useHdsNav 判定），该字段 API 20+ 恒可用。
+      avoidLayoutSafeArea: true,
       content: { title: { mainTitle: this.title } },
       style: {
         systemMaterialEffect: {

@@ -173,6 +173,10 @@ export struct HdsPrimaryTabsApi23 {
         largeWidth: 500,
       },
       barBottomMargin: FLOATING_BAR_BOTTOM_MARGIN,
+      // 官方《设置页签栏的模糊样式》：gradientMask 就是手册里的"渐变模糊"，
+      // maskColor 是"底部纯色、向上逐渐透明"的遮罩色，maskHeight 控制渐隐高度。
+      // 官方 d.ts 确认 maskColor 只能取单色 ResourceColor，做不了渐变。
+      // 之前把它改成 Color.Transparent 等于关掉渐变模糊，且像素实测毫无收益，已回退。
       gradientMask: {
         maskColor: $r('sys.color.background_secondary'),
         maskHeight: 32,
@@ -198,6 +202,13 @@ export struct HdsPrimaryTabsApi23 {
     .barOverlap(true)
     .barPosition(BarPosition.End)
     .vertical(false)
+    // 官方《设置页签栏的模糊样式》给的"背景模糊"毛玻璃方案，官方定位是沉浸光感的
+    // 轻量兜底：沉浸光感是对身后画面做材质折射，背后无内容就没内容可折；
+    // 背景模糊是 BackdropBlur + 磨砂白，对任何背后像素都成立，所以观感更接近系统组件。
+    // 前置条件 barOverlap(true) / barPosition(End) / vertical(false) 见上方三行，缺一则模糊不渲染。
+    // 禁止再叠加原生 Tabs 的 barBackgroundColor / barBackgroundEffect / barBackgroundBlurStyle，
+    // 那会顶掉 HdsTabs 自己的模糊渲染管线（其中 barBackgroundColor 只会留下固定 80vp 半径、颜色被忽略）。
+    .barBackgroundBlurStyle(BlurStyle.Thin)
     .barFloatingStyle(this.buildFloatingStyle())
     // 正文/设置页禁止横向滑动切 tab，防止绕过离开事务。
     // Issue #774 评论5847638284 第2项：用交互锁而非视觉显示，避免 @Watch 触发底栏 hide→show。

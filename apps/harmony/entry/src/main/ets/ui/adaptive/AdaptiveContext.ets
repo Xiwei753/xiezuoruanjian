@@ -4,6 +4,7 @@ import hilog from '@ohos.hilog'
 import { getBridge } from '../../app/AppContext'
 import { WindowViewport, LayoutPlan, LayoutContract, FoldPosture, WidthClass, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan } from './LayoutPolicyHelper'
+import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 
 /**
  * 响应式布局状态 — 直接映射 Core LayoutPlan
@@ -92,6 +93,20 @@ export class AdaptiveContext {
       this.readSafeAreas()
       this.readKeyboardVisible()
       this.readFoldPosture()
+
+      // 底部手势条（导航指示器）沉浸式适配。
+      // ArkUI 默认把页面内容布局在安全区内，实机 dumpLayout 证实 Navigation / NavDestination /
+      // Scroll 全部被夹在 y=2603，屏幕底部 2603~2690 是一条画不出任何内容的死区：
+      // 滚动时列表项从 2603 这条白带"上面"经过，而不是从屏幕底边往上走。
+      // setWindowLayoutFullScreen(true) 让窗口内容铺满整屏，Navigation / NavDestination /
+      // Scroll 随即延伸到 y=2690，滚动内容得以经过手势条区域。
+      // 门控在 API 23：HDS 的 HdsNavigation 标题栏要靠 avoidLayoutSafeArea（API 20+）
+      // 才会继续避让顶部状态栏，两者配套才有正确结果；API 23 以下走非 HDS 壳，
+      // 保持改动前的默认避让行为，不引入未验证的沉浸态。
+      if (PlatformApiResolver.getInstance().isApiAtLeast(23)) {
+        this.mainWindow.setWindowLayoutFullScreen(true)
+        hilog.info(DOMAIN, TAG, 'Window layout full screen enabled for bottom inset immersion')
+      }
 
       // Issue #752 评论 5808818396：先注册窗口尺寸变化监听，再读取当前 windowRect。
       // 监听先挂上，保证后续尺寸变化不会漏；当前 windowRect 若仍是 0x0 则什么都不提交，
