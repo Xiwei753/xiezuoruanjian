@@ -100,10 +100,30 @@ export struct HdsPrimaryTabsApi23 {
     } else if (name === Routes.StarMap) {
       StarMapScreen()
     } else if (name === Routes.Settings) {
-      SettingsScreen({ navPathStack: ownerStack, tabIndex: ownerTabIndex })
+      SettingsScreen({ navPathStack: ownerStack, screenTabIndex: ownerTabIndex })
     } else if (name === Routes.Stats) {
       StatsScreen()
     }
+  }
+
+  // ArkUI navDestination 契约：只接受「单参 @Builder」。#784 为了把 ownerStack / ownerTabIndex
+  // 传进页面，把 @Builder 包成箭头 lambda 传给 navDestination，框架解析不到 builder
+  // （真机日志 "AceNavigation: Builder function is empty" / "load page failed: StarMap"），
+  // destination 退化成空节点，页面内容不渲染。
+  // 这里为三个 stack 各保留一个单参 @Builder 作为 navDestination 入口，内部再委托给 PageMapForStack。
+  @Builder
+  HomePageMap(name: string) {
+    this.PageMapForStack(name, this.homeStack, TAB_HOME)
+  }
+
+  @Builder
+  StarMapPageMap(name: string) {
+    this.PageMapForStack(name, this.starMapStack, TAB_STARMAP)
+  }
+
+  @Builder
+  StatsPageMap(name: string) {
+    this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
   // Issue #774 评论5847359998：三个 TabContent 提取为 @Builder，单棵树唯一复用。
@@ -114,9 +134,7 @@ export struct HdsPrimaryTabsApi23 {
       HdsNavigation(this.homeStack) {
         // 内容由 homeStack 驱动
       }
-      .navDestination((name: string) => {
-        this.PageMapForStack(name, this.homeStack, TAB_HOME)
-      })
+      .navDestination(this.HomePageMap)
       .mode(NavigationMode.Stack)
       .hideTitleBar(true)
     }
@@ -127,9 +145,7 @@ export struct HdsPrimaryTabsApi23 {
       HdsNavigation(this.starMapStack) {
         // 内容由 starMapStack 驱动
       }
-      .navDestination((name: string) => {
-        this.PageMapForStack(name, this.starMapStack, TAB_STARMAP)
-      })
+      .navDestination(this.StarMapPageMap)
       .mode(NavigationMode.Stack)
       .hideTitleBar(true)
     }
@@ -140,9 +156,7 @@ export struct HdsPrimaryTabsApi23 {
       HdsNavigation(this.statsStack) {
         // 内容由 statsStack 驱动
       }
-      .navDestination((name: string) => {
-        this.PageMapForStack(name, this.statsStack, TAB_STATS)
-      })
+      .navDestination(this.StatsPageMap)
       .mode(NavigationMode.Stack)
       .hideTitleBar(true)
     }

@@ -459,7 +459,6 @@ export struct StarMapScreen {
           }
         })
         .width(160)
-        .fontSize(14)
 
       // 缩小按钮
       Button('−')
@@ -589,7 +588,7 @@ export struct StarMapScreen {
       HdsAppDestinationApi23({
         title: this.starmapTitle,
         screenRole: ScreenRole.StarMap,
-        tabIndex: 1
+        screenTabIndex: 1
       }) {
         this.StarMapContent()
       }

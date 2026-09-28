@@ -3,7 +3,6 @@ import { ConfigurationConstant } from '@kit.AbilityKit'
 import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
 import { HarmonyColorModeController } from './HarmonyColorModeController'
 import { ThemeMode } from './HarmonyThemeTypes'
-import { applySujianMonochromeTheme } from './HarmonyMonochromeTheme'
 
 export type ColorSource = 'built_in' | 'saved_palette'
 
@@ -425,8 +424,7 @@ export class HarmonyThemeAdapter {
       const isDark = this.systemColorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
       this.effectiveColorMode = isDark ? 'dark' : 'light'
     }
-    // Issue #784：每次 effectiveColorMode 变化后统一调用应用级单色主题
-    applySujianMonochromeTheme(this.effectiveColorMode === 'dark')
+    // 不注册应用级自定义主题：底栏选中态、开关开启态等 HDS 强调色保持系统 HDS 官方蓝。
   }
 
   // Issue #767 评论 5831067980：使用 ConfigurationConstant.ColorMode 枚举判断。

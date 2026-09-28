@@ -226,7 +226,7 @@ export struct StatsScreen {
       HdsAppDestinationApi23({
         title: '统计',
         screenRole: ScreenRole.Stats,
-        tabIndex: 2
+        screenTabIndex: 2
       }) {
         this.StatsContent()
       }
