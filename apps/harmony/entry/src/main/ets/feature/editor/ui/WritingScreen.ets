@@ -302,10 +302,14 @@ export struct WritingScreen {
       await this.coordinator.whenIdle()
       // 5. Issue #629 评论 5308748920 问题1：composition 唯一真源是 Core snapshot。
       //    重读 afterFinish snapshot，只要 finishResult.success===false、afterFinish===null、
-      //    或 afterFinish.composition!==null，立即 unseal 并 return false，不进入保存。
+      //    或 afterFinish.composition 仍然存在，立即 unseal 并 return false，不进入保存。
       //    发生 stale/恢复时 Core 可能仍保留 composition，close 必须以最终 Core snapshot 为准。
+      // EditorSessionSnapshot.composition 是可选键（Core 侧 skip_serializing_if，不活跃时整个
+      // 键省略），所以"没有 composition"落在 undefined 上。只判 null 时 undefined !== null 恒成立，
+      // doGracefulClose 永远 return false → requestLeave 全部被拒 → 写作页再也退不出去。
       const afterFinish = this.coordinator.getSnapshot()
-      if (finishResult.success === false || afterFinish === null || afterFinish.composition !== null) {
+      if (finishResult.success === false || afterFinish === null ||
+        (afterFinish.composition !== null && afterFinish.composition !== undefined)) {
         this.dispatcher.unseal()
         return false
       }
