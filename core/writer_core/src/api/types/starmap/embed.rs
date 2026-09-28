@@ -57,6 +57,8 @@ pub struct StarMapEmbedPatchDto {
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedPatchInputDto {
     pub label: Option<String>,
+    /// JSON C-ABI（Harmony）只发要改的字段，省略 `clearLabel` 即"不清空"。
+    #[serde(default)]
     pub clear_label: bool,
     pub position: Option<StarMapPointDto>,
     pub host_path: Option<StarMapTargetPathDto>,

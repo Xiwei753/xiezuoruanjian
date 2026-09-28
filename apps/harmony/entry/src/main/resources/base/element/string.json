@@ -775,6 +775,30 @@
     {
       "name": "https_token",
       "value": "HTTPS Token"
+    },
+    {
+      "name": "move_node",
+      "value": "移动节点"
+    },
+    {
+      "name": "connect_node",
+      "value": "创建关系"
+    },
+    {
+      "name": "move_embed",
+      "value": "移动子星图"
+    },
+    {
+      "name": "embed_subtitle",
+      "value": "子星图嵌入"
+    },
+    {
+      "name": "back_to_parent",
+      "value": "返回父星图"
+    },
+    {
+      "name": "auto_layout",
+      "value": "自动布局"
     }
   ]
 }

@@ -1,10 +1,59 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapTargetDetail } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapLayout, decodeStarMapEdgeRenderBatch, decodeStarMapMotionPolicy, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeArray } from '../codec/CoreWireDecoders'
+import util from '@ohos.util'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+}
+
+/** StarMapNodePatchInputDto 请求体：platform 只发要改的字段（position）。 */
+interface StarMapNodePatchBody {
+  position: StarMapPoint
+}
+
+/** StarMapEmbedPatchInputDto 请求体：platform 只发要改的字段（position）。 */
+interface StarMapEmbedPatchBody {
+  position: StarMapPoint
+}
+
+/** StarMapEdgeDto 请求体：edge id / 时间戳由平台端生成。 */
+interface StarMapEdgeAddBody {
+  id: string
+  from: StarMapTargetPath
+  to: StarMapTargetPath
+  kind: string
+  label: string | null
+  payload: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+/**
+ * 构造 StarMapTargetPathDto（指向同一星图内的某个节点）。
+ * Core 的 StarMapTargetDetailDto 所有字段都参与反序列化，未用到的键必须显式发 null。
+ */
+function nodeTargetPath(starmapId: string, nodeId: string): StarMapTargetPath {
+  const target: StarMapTargetDetail = {
+    type: 'node',
+    nodeId: nodeId,
+    anchorId: null,
+    projectId: null,
+    volumeId: null,
+    chapterId: null,
+    rangeStart: null,
+    rangeEnd: null,
+    entityType: null,
+    entityId: null,
+    uri: null
+  }
+  const path: StarMapTargetPath = {
+    starmapId: starmapId,
+    segments: [],
+    target: target
+  }
+  return path
 }
 
 export class NativeStarMapBridge {
@@ -65,31 +114,41 @@ export class NativeStarMapBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
-  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
+  async updateStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveStarMapLayout(starmapId, JSON.stringify(layout))
-      return this.core.parseEnvelope<boolean>(jsonStr)
-    } catch (e) { return nativeError<boolean>(e) }
+      // StarMapNodePatchInputDto：只发 position（position 是节点位置的唯一真相）
+      const body: StarMapNodePatchBody = { position: position }
+      const jsonStr: string = this.core.getNativeModule().nativeUpdateStarMapNode(starmapId, nodeId, JSON.stringify(body))
+      return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)
+    } catch (e) { return nativeError<StarMapNode>(e) }
   }
 
-  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
+  async updateStarMapEmbed(starmapId: string, instanceId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeGetStarMapLayout(starmapId)
-      return this.core.decodeEnvelope<StarMapLayout>(jsonStr, decodeStarMapLayout)
-    } catch (e) { return nativeError<StarMapLayout>(e) }
+      // StarMapEmbedPatchInputDto：只发 position
+      const body: StarMapEmbedPatchBody = { position: position }
+      const jsonStr: string = this.core.getNativeModule().nativeUpdateStarMapEmbed(starmapId, instanceId, JSON.stringify(body))
+      return this.core.decodeEnvelope<StarMapEmbed>(jsonStr, decodeStarMapEmbed)
+    } catch (e) { return nativeError<StarMapEmbed>(e) }
   }
 
-  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
+  async addStarMapEdge(starmapId: string, fromNodeId: string, toNodeId: string, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeGetStarMapMotionPolicy()
-      return this.core.decodeEnvelope<StarMapMotionPolicy>(jsonStr, decodeStarMapMotionPolicy)
-    } catch (e) { return nativeError<StarMapMotionPolicy>(e) }
-  }
-
-  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
-      return this.core.decodeEnvelope<StarMapEdgeRenderBatch>(jsonStr, decodeStarMapEdgeRenderBatch)
-    } catch (e) { return nativeError<StarMapEdgeRenderBatch>(e) }
+      // StarMapEdgeDto：edge id 与时间戳由平台端生成（与 Android 端同构），
+      // from/to 是 StarMapTargetPathDto：{ starmapId, segments: [], target: { type: "node", nodeId } }
+      const now = Date.now()
+      const body: StarMapEdgeAddBody = {
+        id: util.generateRandomUUID(false),
+        from: nodeTargetPath(starmapId, fromNodeId),
+        to: nodeTargetPath(starmapId, toNodeId),
+        kind: kind,
+        label: label,
+        payload: null,
+        createdAt: now,
+        updatedAt: now
+      }
+      const jsonStr: string = this.core.getNativeModule().nativeAddStarMapEdge(starmapId, JSON.stringify(body))
+      return this.core.decodeEnvelope<StarMapEdge>(jsonStr, decodeStarMapEdge)
+    } catch (e) { return nativeError<StarMapEdge>(e) }
   }
 }

@@ -16,17 +16,8 @@
 export type NodeType = 'Character' | 'Event' | 'Location' | 'Item' | 'Concept' | 'Theme' | 'Note'
   | 'Organization' | 'Timeline' | 'Plot' | 'Foreshadowing' | 'Chapter' | 'Custom'
 
-// StarMapOpenBehaviorDto
-export type OpenBehavior = 'Inspector' | 'ExpandCard' | 'WritingMode' | 'JumpToAnchor' | 'EnterPortal' | 'Custom'
-
 // StarMapAnchorRoleDto
 export type AnchorRole = 'Source' | 'Destination' | 'Reference' | 'Custom'
-
-// StarMapPortalModeDto
-export type PortalMode = 'EnterPortal' | 'PreviewInline' | 'ReferenceOnly'
-
-// StarMapPortalPreviewPolicyDto
-export type PortalPreviewPolicy = 'Auto' | 'Always' | 'Never'
 
 // StarMapSourceKindDto
 export type SourceKind = 'Human' | 'Import' | 'Plugin' | 'Ai' | 'System' | 'Unknown'
@@ -103,23 +94,21 @@ export interface StarMapTargetPath {
   target: StarMapTargetDetail
 }
 
+// StarMapPointDto
+export interface StarMapPoint {
+  x: number
+  y: number
+}
+
+// StarMapNodeStyleDto
+export interface StarMapNodeStyle {
+  fillColor: string | null
+}
+
 // StarMapPortalDto
 export interface StarMapPortal {
   destinationStarmapId: string
   destinationTarget: StarMapTargetDetail | null
-  mode: PortalMode
-  previewPolicy: PortalPreviewPolicy
-}
-
-// StarMapDisplayPolicyDto
-export interface StarMapDisplayPolicy {
-  importance: number
-  minVisibleScale: number
-  titleScale: number
-  summaryScale: number
-  detailScale: number
-  maxPreviewChars: number
-  minReadablePx: number
 }
 
 // StarMapProvenanceDto
@@ -142,8 +131,8 @@ export interface StarMapNode {
   content: StarMapNodeContent
   anchors: StarMapAnchor[]
   portal: StarMapPortal | null
-  displayPolicy: StarMapDisplayPolicy
-  openBehavior: OpenBehavior
+  position: StarMapPoint
+  style: StarMapNodeStyle
   provenance: StarMapProvenance
   createdAt: number
   updatedAt: number
@@ -170,33 +159,12 @@ export interface StarMapEdge {
 
 // ─── 内嵌 / 链接 / 超链接 ───
 
-// StarMapEmbedPlacementDto
-export interface StarMapEmbedPlacement {
-  x: number
-  y: number
-  width: number
-  height: number
-  scale: number
-  zIndex: number
-  collapsed: boolean
-}
-
-// StarMapEmbedViewportDto
-export interface StarMapEmbedViewport {
-  scale: number
-  offsetX: number
-  offsetY: number
-}
-
 // StarMapEmbedDto
 export interface StarMapEmbed {
   instanceId: string
   targetStarmapId: string
   label: string | null
-  displayPolicy: StarMapDisplayPolicy
-  openBehavior: OpenBehavior
-  placement: StarMapEmbedPlacement
-  targetViewport: StarMapEmbedViewport
+  position: StarMapPoint
   hostPath: StarMapTargetPath
   provenance: StarMapProvenance
   createdAt: number
@@ -236,7 +204,7 @@ export interface StarMapGraph {
   hyperlinks: StarMapHyperlink[]
 }
 
-// ─── 元信息 / 布局 / 渲染 ───
+// ─── 元信息 ───
 
 // StarMapMetaDto
 export interface StarMapMeta {
@@ -244,98 +212,7 @@ export interface StarMapMeta {
   title: string
   description: string
   projectId: string | null
-  isMainForProject: boolean
   accentColor: string
   createdAt: number
   updatedAt: number
-  nodeCount: number
-  edgeCount: number
-  linkedChapterCount: number
-}
-
-// StarMapViewportDto
-export interface StarMapViewport {
-  scale: number
-  offsetX: number
-  offsetY: number
-  width: number
-  height: number
-}
-
-// StarMapLayoutKindDto
-export type LayoutKind = 'Freeform' | 'AutoRadial' | 'Custom'
-
-// StarMapLayoutDto
-export interface StarMapLayout {
-  kind: LayoutKind
-  nodes: StarMapLayoutNode[]
-}
-
-// StarMapLayoutNodeDto
-export interface StarMapLayoutNode {
-  nodeId: string
-  x: number
-  y: number
-  width: number
-  height: number
-  radius: number
-  collapsed: boolean
-  zIndex: number
-  scale: number
-  depth: number
-  focusWeight: number
-  orbitGroup: string | null
-}
-
-// StarMapEdgeRenderDto
-export interface StarMapEdgeRender {
-  edgeId: string
-  fromCx: number
-  fromCy: number
-  toCx: number
-  toCy: number
-  startX: number
-  startY: number
-  endX: number
-  endY: number
-  offsetX: number
-  offsetY: number
-  arrowTipX: number
-  arrowTipY: number
-  arrowLeftX: number
-  arrowLeftY: number
-  arrowRightX: number
-  arrowRightY: number
-  labelX: number
-  labelY: number
-  label: string | null
-  hasBidirectional: boolean
-}
-
-// StarMapMotionPolicyDto
-export interface StarMapMotionPolicy {
-  enabled: boolean
-  idleWobbleEnabled: boolean
-  idleAmplitudeVp: number
-  idlePeriodMs: number
-  dragLiftScale: number
-  dragShadowBoost: number
-  settleDurationMs: number
-  reduceMotion: boolean
-}
-
-// StarMapEdgeAnchorDiagnosticReasonDto
-export type EdgeAnchorDiagnosticReason = 'LocalNodeMissing' | 'CrossLayerPath' | 'NonGeometricTarget' | 'EmbedMissing' | 'PortalMissing'
-
-// StarMapEdgeAnchorDiagnosticDto
-export interface StarMapEdgeAnchorDiagnostic {
-  edgeId: string
-  endpoint: string
-  reason: EdgeAnchorDiagnosticReason
-}
-
-// StarMapEdgeRenderBatchDto
-export interface StarMapEdgeRenderBatch {
-  renders: StarMapEdgeRender[]
-  diagnostics: StarMapEdgeAnchorDiagnostic[]
 }

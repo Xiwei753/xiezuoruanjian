@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapLayout, StarMapEdgeRenderBatch, StarMapMotionPolicy } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
@@ -223,20 +223,17 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.starMapBridge.renameStarMap(starmapId, newTitle)
   }
 
-  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
-    return this.starMapBridge.saveStarMapLayout(starmapId, layout)
+  // StarMap Node/Edge/Embed mutations
+  async updateStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
+    return this.starMapBridge.updateStarMapNode(starmapId, nodeId, position)
   }
 
-  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
-    return this.starMapBridge.getStarMapLayout(starmapId)
+  async addStarMapEdge(starmapId: string, fromNodeId: string, toNodeId: string, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>> {
+    return this.starMapBridge.addStarMapEdge(starmapId, fromNodeId, toNodeId, kind, label)
   }
 
-  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
-    return this.starMapBridge.getStarMapMotionPolicy()
-  }
-
-  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRenderBatch>> {
-    return this.starMapBridge.computeStarMapEdgeRenders(graph)
+  async updateStarMapEmbed(starmapId: string, instanceId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>> {
+    return this.starMapBridge.updateStarMapEmbed(starmapId, instanceId, position)
   }
 
   // ── Settings ──

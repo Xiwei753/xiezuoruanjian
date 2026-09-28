@@ -95,14 +95,12 @@ char*  writer_core_list_starmaps(void);
 char*  writer_core_list_starmaps_for_project(const char* project_id);
 char*  writer_core_get_starmap(const char* starmap_id);
 char*  writer_core_get_starmap_graph(const char* starmap_id);
-char*  writer_core_get_starmap_motion_policy(void);
-char*  writer_core_get_starmap_layout(const char* starmap_id);
-char*  writer_core_save_starmap_layout(const char* starmap_id, const char* layout_json);
-char*  writer_core_save_starmap_viewport(const char* starmap_id, const char* viewport_json);
-char*  writer_core_compute_starmap_edge_renders(const char* graph_json);
 char*  writer_core_create_starmap(const char* title, const char* description);
 char*  writer_core_delete_starmap(const char* starmap_id);
 char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title);
+char*  writer_core_update_starmap_node(const char* starmap_id, const char* node_id, const char* patch_json);
+char*  writer_core_add_starmap_edge(const char* starmap_id, const char* edge_json);
+char*  writer_core_update_starmap_embed(const char* starmap_id, const char* instance_id, const char* patch_json);
 
 // ── Sync ──
 // All sync functions use JSON-in/JSON-out via ResultEnvelope.
