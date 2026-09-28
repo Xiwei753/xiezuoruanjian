@@ -4,23 +4,19 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
-import uniffi.writer_core.StarMapEdgeRenderBatchDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
 import uniffi.writer_core.StarMapHyperlinkDto
 import uniffi.writer_core.StarMapHyperlinkListWithDiagnosticsDto
 import uniffi.writer_core.StarMapHyperlinkPatchInputDto
-import uniffi.writer_core.StarMapLayoutDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapLinkPatchInputDto
 import uniffi.writer_core.StarMapMetaDto
-import uniffi.writer_core.StarMapMotionPolicyDto
 import uniffi.writer_core.StarMapNodeDto
 import uniffi.writer_core.StarMapNodePatchInputDto
 import uniffi.writer_core.StarMapPhasedSnapshotDto
 import uniffi.writer_core.StarMapReferenceDto
-import uniffi.writer_core.StarMapViewportDto
 
 internal interface StarMapBridgeOps {
     fun listStarMaps(): BridgeResult<List<StarMapMetaDto>>
@@ -39,29 +35,6 @@ internal interface StarMapBridgeOps {
         x: Float,
         y: Float,
     ): BridgeResult<StarMapNodeDto>
-
-    fun saveStarMapLayout(
-        starmapId: String,
-        layout: StarMapLayoutDto,
-    ): BridgeResult<Boolean>
-
-    fun getStarMapViewport(starmapId: String): BridgeResult<StarMapViewportDto>
-
-    fun saveStarMapViewport(
-        starmapId: String,
-        viewport: StarMapViewportDto,
-    ): BridgeResult<Boolean>
-
-    fun computeStarMapEdgeRenders(
-        graph: StarMapGraphDto,
-        layout: StarMapLayoutDto,
-    ): BridgeResult<StarMapEdgeRenderBatchDto>
-
-    fun hitTestStarMapNode(
-        layout: StarMapLayoutDto,
-        x: Float,
-        y: Float,
-    ): BridgeResult<String?>
 
     fun addStarmapEmbed(
         starmapId: String,
@@ -119,8 +92,6 @@ internal interface StarMapBridgeOps {
     ): BridgeResult<StarMapPhasedSnapshotDto>
 
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>>
-
-    fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto>
 
     fun updateStarMapNode(
         starmapId: String,

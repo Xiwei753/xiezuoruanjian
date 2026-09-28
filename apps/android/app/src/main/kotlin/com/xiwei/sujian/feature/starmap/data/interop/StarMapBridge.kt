@@ -6,22 +6,18 @@ import com.xiwei.sujian.feature.starmap.data.StarMapSnapshotCache
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
-import uniffi.writer_core.StarMapEdgeRenderBatchDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
 import uniffi.writer_core.StarMapHyperlinkDto
 import uniffi.writer_core.StarMapHyperlinkPatchInputDto
-import uniffi.writer_core.StarMapLayoutDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapLinkPatchInputDto
 import uniffi.writer_core.StarMapMetaDto
-import uniffi.writer_core.StarMapMotionPolicyDto
 import uniffi.writer_core.StarMapNodeDto
 import uniffi.writer_core.StarMapNodePatchInputDto
 import uniffi.writer_core.StarMapPhasedSnapshotDto
 import uniffi.writer_core.StarMapReferenceDto
-import uniffi.writer_core.StarMapViewportDto
 
 /**
  * 星图领域 Bridge — 平台边界委托与统一错误封装。
@@ -66,44 +62,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<StarMapNodeDto> =
         holder.wrapResult {
             holder.service.addStarmapNode(starmapId, node, x, y)
-        }
-
-    override fun saveStarMapLayout(
-        starmapId: String,
-        layout: StarMapLayoutDto,
-    ): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.saveStarmapLayout(starmapId, layout)
-        }
-
-    override fun getStarMapViewport(starmapId: String): BridgeResult<StarMapViewportDto> =
-        holder.wrapResult {
-            holder.service.getStarmapViewport(starmapId)
-        }
-
-    override fun saveStarMapViewport(
-        starmapId: String,
-        viewport: StarMapViewportDto,
-    ): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.saveStarmapViewport(starmapId, viewport)
-        }
-
-    override fun computeStarMapEdgeRenders(
-        graph: StarMapGraphDto,
-        layout: StarMapLayoutDto,
-    ): BridgeResult<StarMapEdgeRenderBatchDto> =
-        holder.wrapResult {
-            holder.service.computeStarmapEdgeRenders(graph, layout)
-        }
-
-    override fun hitTestStarMapNode(
-        layout: StarMapLayoutDto,
-        x: Float,
-        y: Float,
-    ): BridgeResult<String?> =
-        holder.wrapResult {
-            holder.service.hitTestStarmapNode(layout, x, y)
         }
 
     override fun addStarmapEmbed(
@@ -199,11 +157,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     override fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> =
         holder.wrapResult {
             holder.service.findStarmapReferences(targetStarmapId)
-        }
-
-    override fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> =
-        holder.wrapResult {
-            holder.service.getStarmapMotionPolicy()
         }
 
     override fun updateStarMapNode(

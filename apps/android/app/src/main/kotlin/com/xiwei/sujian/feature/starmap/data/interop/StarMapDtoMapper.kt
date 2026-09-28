@@ -3,37 +3,24 @@ package com.xiwei.sujian.feature.starmap.data.interop
 import com.google.gson.Gson
 import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 import com.xiwei.sujian.feature.starmap.data.model.StarMapData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapDisplayPolicyData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapEdgeRenderData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapEmbedData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapEmbedPlacementData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapEmbedViewportData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapHyperlinkData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutKind
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLoadDiagnostic
 import com.xiwei.sujian.feature.starmap.data.model.StarMapMeta
-import com.xiwei.sujian.feature.starmap.data.model.StarMapMotionPolicyData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPathSegmentData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapProvenanceData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetDetailData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetPathData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData
 import uniffi.writer_core.LoadDiagnosticDto
-import uniffi.writer_core.StarMapDisplayPolicyDto
-import uniffi.writer_core.StarMapEdgeRenderDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
 import uniffi.writer_core.StarMapHyperlinkDto
-import uniffi.writer_core.StarMapLayoutKindDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapMetaDto
-import uniffi.writer_core.StarMapMotionPolicyDto
 import uniffi.writer_core.StarMapPathSegmentDto
 import uniffi.writer_core.StarMapTargetPathDto
-import uniffi.writer_core.StarMapViewportDto
 
 internal val starMapPayloadGson = Gson()
 
@@ -43,13 +30,9 @@ internal fun StarMapMetaDto.toModel(): StarMapMeta =
         title = title,
         description = description,
         projectId = projectId,
-        isMainForProject = isMainForProject,
         accentColor = accentColor,
         createdAt = createdAt.toLong(),
         updatedAt = updatedAt.toLong(),
-        nodeCount = nodeCount.toInt(),
-        edgeCount = edgeCount.toInt(),
-        linkedChapterCount = linkedChapterCount.toInt(),
     )
 
 internal fun StarMapGraphDto.toRawCache(): StarMapRawCache =
@@ -62,7 +45,13 @@ internal fun StarMapGraphDto.toRawCache(): StarMapRawCache =
         hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId },
     )
 
-internal fun StarMapGraphDto.toModel(cache: StarMapRawCache? = null): StarMapData =
+/**
+ * 整图映射。
+ *
+ * Core 收口后布局/视口/边几何都不再由 Core 下发，节点坐标唯一真相是
+ * StarMapGraphNode.position，因此这里不再合成任何显示层数据。
+ */
+internal fun StarMapGraphDto.toModel(): StarMapData =
     StarMapData(
         graph =
             StarMapGraphData(
@@ -71,65 +60,7 @@ internal fun StarMapGraphDto.toModel(cache: StarMapRawCache? = null): StarMapDat
                 nodes = nodes.map { it.toGraphNode() },
                 edges = edges.map { it.toGraphEdge() },
             ),
-        layout =
-            cache?.let { c ->
-                val layoutNodes = c.layoutNodes.values.map { it.toModel() }
-                if (layoutNodes.isNotEmpty()) {
-                    StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = layoutNodes)
-                } else {
-                    null
-                }
-            } ?: StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList()),
     )
-
-internal fun StarMapEdgeRenderDto.toModel(): StarMapEdgeRenderData =
-    StarMapEdgeRenderData(
-        edgeId = edgeId,
-        fromCx = fromCx,
-        fromCy = fromCy,
-        toCx = toCx,
-        toCy = toCy,
-        startX = startX,
-        startY = startY,
-        endX = endX,
-        endY = endY,
-        offsetX = offsetX,
-        offsetY = offsetY,
-        arrowTipX = arrowTipX,
-        arrowTipY = arrowTipY,
-        arrowLeftX = arrowLeftX,
-        arrowLeftY = arrowLeftY,
-        arrowRightX = arrowRightX,
-        arrowRightY = arrowRightY,
-        labelX = labelX,
-        labelY = labelY,
-        hasBidirectional = hasBidirectional,
-    )
-
-internal fun StarMapViewportDto.toModel(): StarMapViewportData =
-    StarMapViewportData(
-        scale = scale,
-        offsetX = offsetX,
-        offsetY = offsetY,
-        width = width,
-        height = height,
-    )
-
-internal fun StarMapViewportData.toDto(): StarMapViewportDto =
-    StarMapViewportDto(
-        scale = scale,
-        offsetX = offsetX,
-        offsetY = offsetY,
-        width = width,
-        height = height,
-    )
-
-internal fun StarMapLayoutKind.toDto(): StarMapLayoutKindDto =
-    when (this) {
-        StarMapLayoutKind.Freeform -> StarMapLayoutKindDto.FREEFORM
-        StarMapLayoutKind.AutoRadial -> StarMapLayoutKindDto.AUTO_RADIAL
-        StarMapLayoutKind.Custom -> StarMapLayoutKindDto.CUSTOM
-    }
 
 @Suppress("UNCHECKED_CAST")
 internal fun String?.toPayloadMap(): Map<String, Any>? {
@@ -141,34 +72,12 @@ internal fun String?.toPayloadMap(): Map<String, Any>? {
     }
 }
 
-internal fun defaultStarMapDisplayPolicy() =
-    StarMapDisplayPolicyDto(
-        importance = 1f,
-        minVisibleScale = 0f,
-        titleScale = 1f,
-        summaryScale = 1f,
-        detailScale = 1f,
-        maxPreviewChars = 120u,
-        minReadablePx = 12f,
-    )
-
 internal fun StarMapEmbedDto.toModel(): StarMapEmbedData =
     StarMapEmbedData(
         instanceId = instanceId,
         targetStarmapId = targetStarmapId,
         label = label,
         hostPath = hostPath.toModel(),
-        displayPolicy =
-            StarMapDisplayPolicyData(
-                importance = displayPolicy.importance,
-                minVisibleScale = displayPolicy.minVisibleScale,
-                titleScale = displayPolicy.titleScale,
-                summaryScale = displayPolicy.summaryScale,
-                detailScale = displayPolicy.detailScale,
-                maxPreviewChars = displayPolicy.maxPreviewChars.toInt(),
-                minReadablePx = displayPolicy.minReadablePx,
-            ),
-        openBehavior = openBehavior.name,
         provenance =
             StarMapProvenanceData(
                 source = provenance.source.name,
@@ -178,22 +87,7 @@ internal fun StarMapEmbedDto.toModel(): StarMapEmbedData =
                 reviewStatus = provenance.reviewStatus.name,
                 createdFromAnchor = provenance.createdFromAnchor,
             ),
-        placement =
-            StarMapEmbedPlacementData(
-                x = placement.x,
-                y = placement.y,
-                width = placement.width,
-                height = placement.height,
-                scale = placement.scale,
-                zIndex = placement.zIndex,
-                collapsed = placement.collapsed,
-            ),
-        targetViewport =
-            StarMapEmbedViewportData(
-                scale = targetViewport.scale,
-                offsetX = targetViewport.offsetX,
-                offsetY = targetViewport.offsetY,
-            ),
+        position = position.toModel(),
     )
 
 internal fun StarMapLinkDto.toModel(): StarMapLinkData =
@@ -247,16 +141,4 @@ internal fun uniffi.writer_core.StarMapTargetDetailDto.toModel(): StarMapTargetD
         entityType = entityType,
         entityId = entityId,
         uri = uri,
-    )
-
-internal fun StarMapMotionPolicyDto.toModel(): StarMapMotionPolicyData =
-    StarMapMotionPolicyData(
-        enabled = enabled,
-        idleWobbleEnabled = idleWobbleEnabled,
-        idleAmplitudeVp = idleAmplitudeVp,
-        idlePeriodMs = idlePeriodMs.toInt(),
-        dragLiftScale = dragLiftScale,
-        dragShadowBoost = dragShadowBoost,
-        settleDurationMs = settleDurationMs.toInt(),
-        reduceMotion = reduceMotion,
     )

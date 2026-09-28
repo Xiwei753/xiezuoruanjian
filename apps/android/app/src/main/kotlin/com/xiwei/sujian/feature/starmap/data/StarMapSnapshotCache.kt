@@ -5,20 +5,20 @@ import com.xiwei.sujian.feature.starmap.data.interop.toGraphNode
 import com.xiwei.sujian.feature.starmap.data.interop.toModel
 import com.xiwei.sujian.feature.starmap.data.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutKind
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
-import com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
 import uniffi.writer_core.StarMapHyperlinkDto
-import uniffi.writer_core.StarMapLayoutKindDto
-import uniffi.writer_core.StarMapLayoutNodeDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapNodeDto
-import uniffi.writer_core.StarMapViewportDto
 
+/**
+ * 星图原始 DTO 缓存。
+ *
+ * Core 收口后布局/视口不再随快照下发，节点坐标真相在 nodes[*].position 里，
+ * 因此这里只缓存图对象本身。
+ */
 internal data class StarMapRawCache(
     var graph: StarMapGraphDto? = null,
     val nodes: MutableMap<String, StarMapNodeDto> = mutableMapOf(),
@@ -26,13 +26,10 @@ internal data class StarMapRawCache(
     val embeds: MutableMap<String, StarMapEmbedDto> = mutableMapOf(),
     val links: MutableMap<String, StarMapLinkDto> = mutableMapOf(),
     val hyperlinks: MutableMap<String, StarMapHyperlinkDto> = mutableMapOf(),
-    val layoutNodes: MutableMap<String, StarMapLayoutNodeDto> = mutableMapOf(),
-    var layoutKind: StarMapLayoutKindDto = StarMapLayoutKindDto.FREEFORM,
     var loadPhase: String = "CurrentViewportObjects",
     var packageRevision: ULong = 0u,
     var sinceRevision: ULong = 0u,
     var complete: Boolean = false,
-    var viewport: StarMapViewportDto? = null,
     var diagnostics: List<com.xiwei.sujian.feature.starmap.data.model.StarMapLoadDiagnostic> = emptyList(),
     val deletedNodeIds: MutableSet<String> = mutableSetOf(),
     val deletedEdgeIds: MutableSet<String> = mutableSetOf(),
@@ -42,20 +39,6 @@ internal data class StarMapRawCache(
 )
 
 internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
-    val layoutData =
-        if (layoutNodes.isNotEmpty()) {
-            StarMapLayoutData(
-                kind =
-                    when (layoutKind) {
-                        StarMapLayoutKindDto.FREEFORM -> StarMapLayoutKind.Freeform
-                        StarMapLayoutKindDto.AUTO_RADIAL -> StarMapLayoutKind.AutoRadial
-                        StarMapLayoutKindDto.CUSTOM -> StarMapLayoutKind.Custom
-                    },
-                nodes = layoutNodes.values.map { it.toModel() },
-            )
-        } else {
-            StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
-        }
     val graphMeta = graph
     val data =
         StarMapData(
@@ -66,8 +49,6 @@ internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
                     nodes = nodes.values.map { it.toGraphNode() },
                     edges = edges.values.map { it.toGraphEdge() },
                 ),
-            layout = layoutData,
-            viewport = viewport?.toModel() ?: StarMapViewportData(),
             embeds = embeds.values.map { it.toModel() },
             links = links.values.map { it.toModel() },
             hyperlinks = hyperlinks.values.map { it.toModel() },
@@ -143,14 +124,6 @@ internal class StarMapSnapshotCache {
         for ((hyperlinkId, hlDto) in incoming.hyperlinks) {
             existing.hyperlinks[hyperlinkId] = hlDto
         }
-        for ((nodeId, layoutNode) in incoming.layoutNodes) {
-            existing.layoutNodes[nodeId] = layoutNode
-        }
-        if (incoming.layoutKind != StarMapLayoutKindDto.FREEFORM ||
-            existing.layoutKind == StarMapLayoutKindDto.FREEFORM
-        ) {
-            existing.layoutKind = incoming.layoutKind
-        }
         if (incoming.loadPhase != "CurrentViewportObjects" || existing.loadPhase == "CurrentViewportObjects") {
             existing.loadPhase = incoming.loadPhase
         }
@@ -160,15 +133,11 @@ internal class StarMapSnapshotCache {
         if (incoming.complete) {
             existing.complete = true
         }
-        if (incoming.viewport != null) {
-            existing.viewport = incoming.viewport
-        }
         if (incoming.diagnostics.isNotEmpty()) {
             existing.diagnostics = incoming.diagnostics
         }
         for (deletedId in incoming.deletedNodeIds) {
             existing.nodes.remove(deletedId)
-            existing.layoutNodes.remove(deletedId)
             existing.deletedNodeIds.add(deletedId)
         }
         for (deletedId in incoming.deletedEdgeIds) {
@@ -277,14 +246,5 @@ internal class StarMapSnapshotCache {
         dto: StarMapHyperlinkDto,
     ) {
         rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.hyperlinks[hyperlinkId] = dto
-    }
-
-    fun updateLayoutNodes(
-        starmapId: String,
-        nodes: List<StarMapLayoutNodeDto>,
-    ) {
-        val cache = rawCacheByStarmapId[starmapId] ?: return
-        cache.layoutNodes.clear()
-        cache.layoutNodes.putAll(nodes.associateBy { it.nodeId })
     }
 }

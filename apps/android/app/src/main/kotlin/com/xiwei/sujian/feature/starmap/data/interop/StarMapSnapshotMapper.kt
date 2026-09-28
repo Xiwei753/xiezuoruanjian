@@ -3,8 +3,6 @@ package com.xiwei.sujian.feature.starmap.data.interop
 import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 import com.xiwei.sujian.feature.starmap.data.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutKind
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapGraphDto
@@ -36,13 +34,10 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
         embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
         links = links.associateByTo(mutableMapOf()) { it.linkId },
         hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId },
-        layoutNodes = layout?.nodes?.associateByTo(mutableMapOf()) { it.nodeId } ?: mutableMapOf(),
-        layoutKind = layout?.kind ?: uniffi.writer_core.StarMapLayoutKindDto.FREEFORM,
         loadPhase = loadPhase,
         packageRevision = packageRevision,
         sinceRevision = sinceRevision,
         complete = complete,
-        viewport = viewport,
         diagnostics = diagnostics.map { it.toModel() },
         deletedNodeIds = deletedNodeIds.toMutableSet(),
         deletedEdgeIds = deletedEdgeIds.toMutableSet(),
@@ -52,22 +47,15 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
     )
 
 internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotResult {
-    val layoutData =
-        layout?.toModel() ?: StarMapLayoutData(
-            kind = StarMapLayoutKind.Freeform,
-            nodes = emptyList(),
-        )
     val data =
         StarMapData(
             graph =
                 StarMapGraphData(
-                    schemaVersion = schemaVersion,
+                    schemaVersion = schemaVersion.toInt(),
                     starmapId = starmapId,
                     nodes = nodes.map { it.toGraphNode() },
                     edges = edges.map { it.toGraphEdge() },
                 ),
-            layout = layoutData,
-            viewport = viewport?.toModel() ?: com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData(),
             embeds = embeds.map { it.toModel() },
             links = links.map { it.toModel() },
             hyperlinks = hyperlinks.map { it.toModel() },

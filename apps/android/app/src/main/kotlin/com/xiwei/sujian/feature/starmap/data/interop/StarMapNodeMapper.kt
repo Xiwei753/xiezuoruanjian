@@ -1,9 +1,10 @@
 package com.xiwei.sujian.feature.starmap.data.interop
 
 import com.xiwei.sujian.feature.starmap.data.model.StarMapAnchorData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapDisplayPolicyData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
+import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeStyleData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPathSegmentData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapPointData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPortalData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapProvenanceData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetDetailData
@@ -11,14 +12,12 @@ import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetPathData
 import uniffi.writer_core.StarMapAnchorDto
 import uniffi.writer_core.StarMapAnchorRoleDto
 import uniffi.writer_core.StarMapAnchorTargetDto
-import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapNodeContentDto
 import uniffi.writer_core.StarMapNodeDto
-import uniffi.writer_core.StarMapOpenBehaviorDto
+import uniffi.writer_core.StarMapNodeStyleDto
 import uniffi.writer_core.StarMapPathSegmentDto
+import uniffi.writer_core.StarMapPointDto
 import uniffi.writer_core.StarMapPortalDto
-import uniffi.writer_core.StarMapPortalModeDto
-import uniffi.writer_core.StarMapPortalPreviewPolicyDto
 import uniffi.writer_core.StarMapProvenanceDto
 import uniffi.writer_core.StarMapReviewStatusDto
 import uniffi.writer_core.StarMapSourceKindDto
@@ -46,11 +45,28 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode =
         contentUri = content?.uri,
         anchors = anchors.map { it.toAnchorModel() },
         portal = portal?.toPortalModel(),
-        openBehavior = openBehavior?.name,
-        displayPolicy = displayPolicy.toDisplayPolicyModel(),
+        position = position.toModel(),
+        style = style.toModel(),
         provenance = provenance.toProvenanceModel(),
         createdAt = createdAt.toLong(),
         updatedAt = updatedAt.toLong(),
+    )
+
+internal fun StarMapPointDto.toModel(): StarMapPointData =
+    StarMapPointData(
+        x = x,
+        y = y,
+    )
+
+internal fun StarMapNodeStyleDto.toModel(): StarMapNodeStyleData =
+    StarMapNodeStyleData(
+        fillColor = fillColor,
+    )
+
+internal fun StarMapPointData.toPointDto(): StarMapPointDto =
+    StarMapPointDto(
+        x = x,
+        y = y,
     )
 
 internal fun StarMapAnchorDto.toAnchorModel(): StarMapAnchorData =
@@ -75,19 +91,6 @@ internal fun StarMapPortalDto.toPortalModel(): StarMapPortalData =
     StarMapPortalData(
         destinationStarmapId = destinationStarmapId,
         destinationTarget = destinationTarget?.toModel(),
-        mode = mode.name,
-        previewPolicy = previewPolicy.name,
-    )
-
-internal fun StarMapDisplayPolicyDto.toDisplayPolicyModel(): StarMapDisplayPolicyData =
-    StarMapDisplayPolicyData(
-        importance = importance,
-        minVisibleScale = minVisibleScale,
-        titleScale = titleScale,
-        summaryScale = summaryScale,
-        detailScale = detailScale,
-        maxPreviewChars = maxPreviewChars.toInt(),
-        minReadablePx = minReadablePx,
     )
 
 internal fun StarMapProvenanceDto.toProvenanceModel(): StarMapProvenanceData =
@@ -108,8 +111,8 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
     val dtoContent = contentToDto()
     val dtoAnchors = anchors.map { it.anchorToDto() }
     val dtoPortal = portal?.portalToDto()
-    val dtoDisplayPolicy = displayPolicy?.displayPolicyToDto() ?: base?.displayPolicy ?: defaultStarMapDisplayPolicy()
-    val dtoOpenBehavior = openBehavior?.toOpenBehaviorDto() ?: base?.openBehavior ?: StarMapOpenBehaviorDto.INSPECTOR
+    val dtoPosition = StarMapPointDto(x = position.x, y = position.y)
+    val dtoStyle = StarMapNodeStyleDto(fillColor = style.fillColor)
     val dtoProvenance =
         provenance?.provenanceToDto() ?: base?.provenance ?: StarMapProvenanceDto(
             source = StarMapSourceKindDto.HUMAN,
@@ -130,8 +133,8 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
             content = dtoContent,
             anchors = dtoAnchors,
             portal = dtoPortal,
-            displayPolicy = dtoDisplayPolicy,
-            openBehavior = dtoOpenBehavior,
+            position = dtoPosition,
+            style = dtoStyle,
             provenance = dtoProvenance,
             createdAt = dtoCreatedAt,
             updatedAt = dtoUpdatedAt,
@@ -146,8 +149,8 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
             content = dtoContent,
             anchors = dtoAnchors,
             portal = dtoPortal,
-            displayPolicy = dtoDisplayPolicy,
-            openBehavior = dtoOpenBehavior,
+            position = dtoPosition,
+            style = dtoStyle,
             provenance = dtoProvenance,
             createdAt = dtoCreatedAt,
             updatedAt = dtoUpdatedAt,
@@ -202,29 +205,6 @@ internal fun StarMapPortalData.portalToDto(): StarMapPortalDto =
     StarMapPortalDto(
         destinationStarmapId = destinationStarmapId,
         destinationTarget = destinationTarget?.toTargetDetailDto(),
-        mode =
-            when (mode) {
-                "PREVIEW_INLINE" -> StarMapPortalModeDto.PREVIEW_INLINE
-                "REFERENCE_ONLY" -> StarMapPortalModeDto.REFERENCE_ONLY
-                else -> StarMapPortalModeDto.ENTER_PORTAL
-            },
-        previewPolicy =
-            when (previewPolicy) {
-                "ALWAYS" -> StarMapPortalPreviewPolicyDto.ALWAYS
-                "NEVER" -> StarMapPortalPreviewPolicyDto.NEVER
-                else -> StarMapPortalPreviewPolicyDto.AUTO
-            },
-    )
-
-internal fun StarMapDisplayPolicyData.displayPolicyToDto(): StarMapDisplayPolicyDto =
-    StarMapDisplayPolicyDto(
-        importance = importance,
-        minVisibleScale = minVisibleScale,
-        titleScale = titleScale,
-        summaryScale = summaryScale,
-        detailScale = detailScale,
-        maxPreviewChars = maxPreviewChars.toUInt(),
-        minReadablePx = minReadablePx,
     )
 
 internal fun StarMapProvenanceData.provenanceToDto(): StarMapProvenanceDto =
@@ -251,16 +231,6 @@ internal fun StarMapProvenanceData.provenanceToDto(): StarMapProvenanceDto =
             },
         createdFromAnchor = createdFromAnchor,
     )
-
-internal fun String.toOpenBehaviorDto(): StarMapOpenBehaviorDto =
-    when (this) {
-        "EXPAND_CARD" -> StarMapOpenBehaviorDto.EXPAND_CARD
-        "WRITING_MODE" -> StarMapOpenBehaviorDto.WRITING_MODE
-        "JUMP_TO_ANCHOR" -> StarMapOpenBehaviorDto.JUMP_TO_ANCHOR
-        "ENTER_PORTAL" -> StarMapOpenBehaviorDto.ENTER_PORTAL
-        "CUSTOM" -> StarMapOpenBehaviorDto.CUSTOM
-        else -> StarMapOpenBehaviorDto.INSPECTOR
-    }
 
 internal fun StarMapTargetPathData.toTargetPathDto(): StarMapTargetPathDto =
     StarMapTargetPathDto(

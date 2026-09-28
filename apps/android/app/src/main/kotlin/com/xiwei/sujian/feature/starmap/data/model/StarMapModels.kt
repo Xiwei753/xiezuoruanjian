@@ -14,7 +14,11 @@ package com.xiwei.sujian.feature.starmap.data.model
  * - StarMapMeta：星图元数据
  * - StarMapNodeKind：节点类型枚举（角色、地点、事件等）
  * - StarMapEdgeKind：连线类型枚举
- * - StarMapData：星图完整数据（节点 + 连线 + 布局）
+ * - StarMapPointData：星图文档坐标点（节点 position 与嵌入落点的唯一真相）
+ * - StarMapData：星图完整数据（图 + 嵌入 + 链接）
+ *
+ * Core 收口后布局、视口、边几何、命中与动画策略已全部退出 Core，
+ * 坐标真相统一收敛在节点的 position 上，本文件不再保留显示层模型。
  */
 
 data class StarMapMeta(
@@ -22,13 +26,9 @@ data class StarMapMeta(
     val title: String,
     val description: String,
     val projectId: String?,
-    val isMainForProject: Boolean,
     val accentColor: String,
     val createdAt: Long,
     val updatedAt: Long,
-    val nodeCount: Int,
-    val edgeCount: Int,
-    val linkedChapterCount: Int,
 )
 
 enum class StarMapNodeKind {
@@ -83,8 +83,8 @@ data class StarMapGraphNode(
     val contentUri: String? = null,
     val anchors: List<StarMapAnchorData> = emptyList(),
     val portal: StarMapPortalData? = null,
-    val openBehavior: String? = null,
-    val displayPolicy: StarMapDisplayPolicyData? = null,
+    val position: StarMapPointData = StarMapPointData(),
+    val style: StarMapNodeStyleData = StarMapNodeStyleData(),
     val provenance: StarMapProvenanceData? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
@@ -93,8 +93,6 @@ data class StarMapGraphNode(
 data class StarMapPortalData(
     val destinationStarmapId: String = "",
     val destinationTarget: StarMapTargetDetailData? = null,
-    val mode: String = "EnterPortal",
-    val previewPolicy: String = "Auto",
 )
 
 data class StarMapAnchorData(
@@ -112,16 +110,6 @@ data class StarMapAnchorData(
     val targetUri: String? = null,
     val label: String? = null,
     val role: String = "Source",
-)
-
-data class StarMapDisplayPolicyData(
-    val importance: Float = 1f,
-    val minVisibleScale: Float = 0f,
-    val titleScale: Float = 1f,
-    val summaryScale: Float = 1f,
-    val detailScale: Float = 1f,
-    val maxPreviewChars: Int = 120,
-    val minReadablePx: Float = 12f,
 )
 
 data class StarMapProvenanceData(
@@ -177,62 +165,20 @@ data class StarMapGraphData(
     val edges: List<StarMapGraphEdge>,
 )
 
-enum class StarMapLayoutKind {
-    Freeform,
-    AutoRadial,
-    Custom,
-}
-
-data class StarMapLayoutNodeData(
-    val nodeId: String,
-    val x: Float,
-    val y: Float,
-    val width: Float,
-    val height: Float,
-    val radius: Float,
-    val collapsed: Boolean,
-    val zIndex: Int,
-    val scale: Float = 1f,
-    val depth: Float = 0f,
-    val focusWeight: Float = 1f,
-    val orbitGroup: String? = null,
+/**
+ * 星图文档坐标点。
+ *
+ * Core 收口后 position 是节点在星图坐标系里的唯一位置真相（原先由已退出的
+ * 显示层布局节点承载），嵌入星图的落点也复用同一结构。
+ */
+data class StarMapPointData(
+    val x: Float = 0f,
+    val y: Float = 0f,
 )
 
-data class StarMapLayoutData(
-    val kind: StarMapLayoutKind,
-    val nodes: List<StarMapLayoutNodeData>,
-)
-
-data class StarMapEdgeRenderData(
-    val edgeId: String,
-    val fromCx: Float,
-    val fromCy: Float,
-    val toCx: Float,
-    val toCy: Float,
-    val startX: Float,
-    val startY: Float,
-    val endX: Float,
-    val endY: Float,
-    val offsetX: Float,
-    val offsetY: Float,
-    val arrowTipX: Float,
-    val arrowTipY: Float,
-    val arrowLeftX: Float,
-    val arrowLeftY: Float,
-    val arrowRightX: Float,
-    val arrowRightY: Float,
-    val labelX: Float,
-    val labelY: Float,
-    val label: String? = null,
-    val hasBidirectional: Boolean,
-)
-
-data class StarMapViewportData(
-    val scale: Float = 1f,
-    val offsetX: Float = 0f,
-    val offsetY: Float = 0f,
-    val width: Float = 0f,
-    val height: Float = 0f,
+/** 节点显示样式，目前 Core 只保留一个自定义填充色。 */
+data class StarMapNodeStyleData(
+    val fillColor: String? = null,
 )
 
 data class StarMapNodePatch(
@@ -250,9 +196,6 @@ data class StarMapEdgePatch(
 
 data class StarMapData(
     val graph: StarMapGraphData,
-    val layout: StarMapLayoutData,
-    val edgeRenders: List<StarMapEdgeRenderData> = emptyList(),
-    val viewport: StarMapViewportData = StarMapViewportData(),
     val embeds: List<StarMapEmbedData> = emptyList(),
     val links: List<StarMapLinkData> = emptyList(),
     val hyperlinks: List<StarMapHyperlinkData> = emptyList(),
@@ -267,27 +210,8 @@ data class StarMapEmbedData(
     val targetStarmapId: String,
     val label: String? = null,
     val hostPath: StarMapTargetPathData? = null,
-    val displayPolicy: StarMapDisplayPolicyData? = null,
-    val openBehavior: String = "Inspector",
     val provenance: StarMapProvenanceData? = null,
-    val placement: StarMapEmbedPlacementData = StarMapEmbedPlacementData(),
-    val targetViewport: StarMapEmbedViewportData = StarMapEmbedViewportData(),
-)
-
-data class StarMapEmbedPlacementData(
-    val x: Float = 0f,
-    val y: Float = 0f,
-    val width: Float = 200f,
-    val height: Float = 150f,
-    val scale: Float = 1f,
-    val zIndex: Int = 0,
-    val collapsed: Boolean = false,
-)
-
-data class StarMapEmbedViewportData(
-    val scale: Float = 1f,
-    val offsetX: Float = 0f,
-    val offsetY: Float = 0f,
+    val position: StarMapPointData = StarMapPointData(),
 )
 
 data class StarMapLinkData(
@@ -314,22 +238,4 @@ data class StarMapLoadDiagnostic(
     val objectType: String,
     val objectId: String,
     val detail: String? = null,
-)
-
-/**
- * 星图动画策略参数，与 Rust Core 的 StarMapMotionPolicyDto 一一对应。
- *
- * ## 架构定位
- * - 跨端共享的动画策略，由 Core 层下发
- * - Android 端据此控制 idle wobble、drag lift、settle 等动画行为
- */
-data class StarMapMotionPolicyData(
-    val enabled: Boolean = true,
-    val idleWobbleEnabled: Boolean = true,
-    val idleAmplitudeVp: Float = 2.0f,
-    val idlePeriodMs: Int = 4200,
-    val dragLiftScale: Float = 1.04f,
-    val dragShadowBoost: Float = 8.0f,
-    val settleDurationMs: Int = 220,
-    val reduceMotion: Boolean = false,
 )

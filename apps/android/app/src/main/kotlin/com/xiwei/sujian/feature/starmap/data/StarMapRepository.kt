@@ -7,22 +7,19 @@ import com.xiwei.sujian.feature.starmap.data.interop.toDto
 import com.xiwei.sujian.feature.starmap.data.interop.toGraphEdge
 import com.xiwei.sujian.feature.starmap.data.interop.toGraphNode
 import com.xiwei.sujian.feature.starmap.data.interop.toModel
+import com.xiwei.sujian.feature.starmap.data.interop.toPointDto
 import com.xiwei.sujian.feature.starmap.data.interop.toRawCache
 import com.xiwei.sujian.feature.starmap.data.interop.toSnapshotResult
-import com.xiwei.sujian.feature.starmap.data.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapEdgeKind
-import com.xiwei.sujian.feature.starmap.data.model.StarMapEdgeRenderData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapEmbedData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphEdge
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
 import com.xiwei.sujian.feature.starmap.data.model.StarMapHyperlinkData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapLayoutData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapMeta
-import com.xiwei.sujian.feature.starmap.data.model.StarMapMotionPolicyData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeKind
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
-import com.xiwei.sujian.feature.starmap.data.model.StarMapViewportData
+import com.xiwei.sujian.feature.starmap.data.model.StarMapPointData
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
@@ -121,6 +118,7 @@ class StarMapRepository internal constructor(
         title: String? = null,
         kind: StarMapNodeKind? = null,
         tags: List<String>? = null,
+        position: StarMapPointData? = null,
     ): BridgeResult<StarMapGraphNode> {
         val patch =
             StarMapNodePatchInputDto(
@@ -133,8 +131,8 @@ class StarMapRepository internal constructor(
                 anchors = null,
                 portal = null,
                 clearPortal = false,
-                displayPolicy = null,
-                openBehavior = null,
+                position = position?.toPointDto(),
+                style = null,
                 provenance = null,
             )
         return when (val result = bridge.updateStarMapNode(starmapId, nodeId, patch)) {
@@ -385,91 +383,6 @@ class StarMapRepository internal constructor(
     fun listStarmapHyperlinks(starmapId: String): BridgeResult<List<StarMapHyperlinkData>> {
         return when (val result = bridge.listStarmapHyperlinks(starmapId)) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.items.map { it.toModel() })
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun saveStarmapLayout(
-        starmapId: String,
-        layout: StarMapLayoutData,
-    ): BridgeResult<Boolean> {
-        val rawCache =
-            cache.get(starmapId) ?: return BridgeResult.Error(
-                ResultEnvelope.errorOf(
-                    "SNAPSHOT_CACHE_NOT_INITIALIZED",
-                    "Starmap cache not initialized for $starmapId. Call getStarmapPhasedSnapshot first.",
-                ),
-            )
-        val dto = layout.toDto(rawCache)
-        return when (val result = bridge.saveStarMapLayout(starmapId, dto)) {
-            is BridgeResult.Success -> {
-                cache.updateLayoutNodes(starmapId, dto.nodes)
-                BridgeResult.Success(result.data)
-            }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun getStarmapViewport(starmapId: String): BridgeResult<StarMapViewportData> {
-        return when (val result = bridge.getStarMapViewport(starmapId)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun saveStarmapViewport(
-        starmapId: String,
-        viewport: StarMapViewportData,
-    ): BridgeResult<Boolean> {
-        return bridge.saveStarMapViewport(starmapId, viewport.toDto())
-    }
-
-    fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
-        val rawCache =
-            cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
-                ResultEnvelope.errorOf(
-                    "SNAPSHOT_CACHE_NOT_INITIALIZED",
-                    "Starmap snapshot cache not initialized for ${data.graph.starmapId}. " +
-                        "Call getStarmapPhasedSnapshot first.",
-                ),
-            )
-        val graph =
-            rawCache.graph ?: return BridgeResult.Error(
-                ResultEnvelope.errorOf(
-                    "STAR_MAP_CACHE_MISSING",
-                    "Raw starmap graph is not available in snapshot cache. " +
-                        "This should not happen after a successful getStarmapPhasedSnapshot call.",
-                ),
-            )
-        return when (val result = bridge.computeStarMapEdgeRenders(graph, data.layout.toDto(rawCache))) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.renders.map { it.toModel() })
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun hitTestStarmapNode(
-        data: StarMapData,
-        x: Float,
-        y: Float,
-    ): BridgeResult<String?> {
-        val rawCache =
-            cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
-                ResultEnvelope.errorOf(
-                    "SNAPSHOT_CACHE_NOT_INITIALIZED",
-                    "Starmap snapshot cache not initialized for ${data.graph.starmapId}. " +
-                        "Call getStarmapPhasedSnapshot first.",
-                ),
-            )
-        return bridge.hitTestStarMapNode(data.layout.toDto(rawCache), x, y)
-    }
-
-    fun getMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
-        return when (val result = bridge.getStarMapMotionPolicy()) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }

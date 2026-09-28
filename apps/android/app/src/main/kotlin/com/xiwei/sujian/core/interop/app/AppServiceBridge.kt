@@ -400,42 +400,6 @@ open class AppServiceBridge(
         y,
     )
 
-    fun saveStarMapLayout(
-        starmapId: String,
-        layout: uniffi.writer_core.StarMapLayoutDto,
-    ) = starMapBridge.saveStarMapLayout(
-        starmapId,
-        layout,
-    )
-
-    fun getStarMapViewport(starmapId: String) = starMapBridge.getStarMapViewport(starmapId)
-
-    fun saveStarMapViewport(
-        starmapId: String,
-        viewport: uniffi.writer_core.StarMapViewportDto,
-    ) = starMapBridge.saveStarMapViewport(
-        starmapId,
-        viewport,
-    )
-
-    fun computeStarMapEdgeRenders(
-        graph: uniffi.writer_core.StarMapGraphDto,
-        layout: uniffi.writer_core.StarMapLayoutDto,
-    ) = starMapBridge.computeStarMapEdgeRenders(
-        graph,
-        layout,
-    )
-
-    fun hitTestStarMapNode(
-        layout: uniffi.writer_core.StarMapLayoutDto,
-        x: Float,
-        y: Float,
-    ) = starMapBridge.hitTestStarMapNode(
-        layout,
-        x,
-        y,
-    )
-
     fun addStarmapEmbed(
         starmapId: String,
         embed: uniffi.writer_core.StarMapEmbedDto,
@@ -486,8 +450,6 @@ open class AppServiceBridge(
     ) = starMapBridge.deleteStarmapLink(starmapId, linkId)
 
     fun findStarmapReferences(targetStarmapId: String) = starMapBridge.findStarmapReferences(targetStarmapId)
-
-    fun getStarMapMotionPolicy() = starMapBridge.getStarMapMotionPolicy()
 
     fun aiAvailable(): Boolean =
         try {
