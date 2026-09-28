@@ -46,7 +46,10 @@ Rectangle {
     signal longPressed()
     signal contextMenuRequested(real sceneX, real sceneY)
     signal moveDelta(real dx, real dy)
-    signal moveFinished()
+    // 左键 press→release 追踪：由 PointHandler（passive grab）统一上抛，
+    // 即使 DragHandler 取得 exclusive grab 也不丢观察链，保证长按后
+    // 不拖动直接松开也能结束交互（Issue #788 评论 5868205321）。
+    signal leftReleased()
 
     radius: _radiusSm
     color: _surfaceContainer
@@ -120,6 +123,10 @@ Rectangle {
     // ---------------------------------------------------------------------------
     // 拖动跟踪：DragHandler 只上抛原始移动增量，不修改 x/y、不决定行为
     // Canvas 根据 pointerMode 决定 moveDelta 的含义（connect 预览线 / move 移动节点）
+    // DragHandler 只负责拖动增量；交互结束由 PointHandler 的 leftReleased 统一上抛。
+    // DragHandler.active 仅在超过 dragThreshold 后才为 true，长按后不拖动直接松开时
+    // onActiveChanged(false) 不会触发，故不能依赖它来结束 connect/move 状态。
+    // （Issue #788 评论 5868205321）
     // ---------------------------------------------------------------------------
     DragHandler {
         id: nodeDragHandler
@@ -133,8 +140,6 @@ Rectangle {
             if (active) {
                 lastTx = 0
                 lastTy = 0
-            } else {
-                root.moveFinished()
             }
         }
 
@@ -146,6 +151,24 @@ Rectangle {
             // 转成世界坐标增量（除以父项 scale，container.scale === zoomLevel）
             var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
             root.moveDelta(dx / zoom, dy / zoom)
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 左键 press→release 观察：PointHandler 用 passive grab，一旦拿到该点
+    // 会一直追踪到 release，即使 DragHandler 后来取得 exclusive grab 也不丢。
+    // 这样无论"长按后拖动"还是"长按后直接松手"，都走同一个 leftReleased
+    // 出口，由 Canvas 统一结束 connect/move 状态。
+    // https://doc.qt.io/qt-6.8/qml-qtquick-pointhandler.html
+    // ---------------------------------------------------------------------------
+    PointHandler {
+        id: leftPointTracker
+        acceptedButtons: Qt.LeftButton
+
+        onActiveChanged: {
+            if (!active) {
+                root.leftReleased()
+            }
         }
     }
 

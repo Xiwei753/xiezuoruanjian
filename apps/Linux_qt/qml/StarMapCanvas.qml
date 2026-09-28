@@ -402,6 +402,12 @@ Item {
 
                 onLongPressed: {
                     var nd = nodesModel[index]
+                    // 只允许 idle 时长按进入 connect；避免右键菜单"移动节点"
+                    // 已选 move 后，左键按住稍久被 long press 覆盖成 connect
+                    // （Issue #788 评论 5868205321）。
+                    if (pointerMode !== "idle") {
+                        return
+                    }
                     pointerMode = "connect"
                     connectFromNodeId = nd.id
                     // 预览线起点：节点中心（世界坐标）
@@ -432,7 +438,9 @@ Item {
                     }
                 }
 
-                onMoveFinished: {
+                onLeftReleased: {
+                    // 统一结束当前节点交互：无论长按后拖动还是直接松手，
+                    // 都由此出口闭环 connect/move 状态（Issue #788 评论 5868205321）。
                     isBeingDragged = false
                     if (pointerMode === "connect" && connectFromNodeId === nodeData.id) {
                         var target = findNodeAt(connectMouseX, connectMouseY)
