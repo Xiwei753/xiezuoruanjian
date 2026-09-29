@@ -19,6 +19,10 @@ export struct HdsAppDestinationApi23 {
   @Param screenRole: ScreenRole = ScreenRole.ProjectList
   @Param onShown: (() => void) | null = null
   @Param screenTabIndex: number = 0
+  // 是否根页：根页隐藏返回按钮、返回退出 Ability；非根页显示返回按钮、返回 pop 导航栈
+  @Param isRoot: boolean = true
+  // 非根页返回回调：返回 true 表示已处理，false 表示未处理（继续默认行为）
+  @Param onBack: (() => boolean) | null = null
   @Local headerActions: ActionSlot[] = []
 
   async aboutToAppear() {
@@ -38,8 +42,13 @@ export struct HdsAppDestinationApi23 {
       this.contentBuilder()
     }
     .hideTitleBar(false)
-    .hideBackButton(true)
-    .onBackPressed(() => handleRootBack())
+    .hideBackButton(this.isRoot)
+    .onBackPressed(() => {
+      if (!this.isRoot && this.onBack) {
+        return this.onBack()
+      }
+      return handleRootBack()
+    })
     .titleBar({
       enableComponentSafeArea: true,
       // 窗口开了 setWindowLayoutFullScreen 之后，标题栏必须显式继续避让顶部状态栏，

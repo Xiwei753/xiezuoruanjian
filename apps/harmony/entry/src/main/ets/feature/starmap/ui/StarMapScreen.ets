@@ -19,7 +19,6 @@ import { PlatformLayoutNode, PlatformPoint, NodePositionPatch, buildFreeformLayo
 import { PlatformMotionConfig, defaultMotionConfig, wobbleXFromProgress, wobbleYFromProgress, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
-import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
 interface WobbleOffset {
@@ -754,7 +753,12 @@ export struct StarMapScreen {
       HdsAppDestinationApi23({
         title: this.starmapTitle,
         screenRole: ScreenRole.StarMap,
-        screenTabIndex: 1
+        screenTabIndex: 1,
+        isRoot: false,
+        onBack: () => {
+          this.navPathStack.pop()
+          return true
+        }
       }) {
         this.StarMapContent()
       }
@@ -763,8 +767,11 @@ export struct StarMapScreen {
         this.StarMapContent()
       }
       .hideTitleBar(false)
-      .hideBackButton(true)
-      .onBackPressed(() => handleRootBack())
+      .hideBackButton(false)
+      .onBackPressed(() => {
+        this.navPathStack.pop()
+        return true
+      })
       .title(this.starmapTitle)
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {

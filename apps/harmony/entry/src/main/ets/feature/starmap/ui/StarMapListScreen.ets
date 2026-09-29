@@ -224,7 +224,7 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListContent() {
-    Stack() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
         if (this.isLoading) {
           this.LoadingView()
