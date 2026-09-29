@@ -1,5 +1,5 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapTargetDetail } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeArray } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
@@ -28,32 +28,6 @@ interface StarMapEdgeAddBody {
   payload: string | null
   createdAt: number
   updatedAt: number
-}
-
-/**
- * 构造 StarMapTargetPathDto（指向同一星图内的某个节点）。
- * Core 的 StarMapTargetDetailDto 所有字段都参与反序列化，未用到的键必须显式发 null。
- */
-function nodeTargetPath(starmapId: string, nodeId: string): StarMapTargetPath {
-  const target: StarMapTargetDetail = {
-    type: 'node',
-    nodeId: nodeId,
-    anchorId: null,
-    projectId: null,
-    volumeId: null,
-    chapterId: null,
-    rangeStart: null,
-    rangeEnd: null,
-    entityType: null,
-    entityId: null,
-    uri: null
-  }
-  const path: StarMapTargetPath = {
-    starmapId: starmapId,
-    segments: [],
-    target: target
-  }
-  return path
 }
 
 export class NativeStarMapBridge {
@@ -132,15 +106,13 @@ export class NativeStarMapBridge {
     } catch (e) { return nativeError<StarMapEmbed>(e) }
   }
 
-  async addStarMapEdge(starmapId: string, fromNodeId: string, toNodeId: string, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>> {
+  async addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>> {
     try {
-      // StarMapEdgeDto：edge id 与时间戳由平台端生成（与 Android 端同构），
-      // from/to 是 StarMapTargetPathDto：{ starmapId, segments: [], target: { type: "node", nodeId } }
       const now = Date.now()
       const body: StarMapEdgeAddBody = {
         id: util.generateRandomUUID(false),
-        from: nodeTargetPath(starmapId, fromNodeId),
-        to: nodeTargetPath(starmapId, toNodeId),
+        from: from,
+        to: to,
         kind: kind,
         label: label,
         payload: null,

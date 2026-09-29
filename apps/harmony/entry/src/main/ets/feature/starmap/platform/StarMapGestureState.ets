@@ -24,14 +24,14 @@ export type StarMapGestureMode = 'idle' | 'panCanvas' | 'nodeMenu' | 'connect' |
 export interface GestureState {
   /** 当前手势模式 */
   mode: StarMapGestureMode
-  /** 当前操作的节点 ID（空字符串表示无） */
-  activeNodeId: string
+  /** 当前操作的 item ID（普通节点 nodeId 或 Embed instanceId，空字符串表示无） */
+  activeItemId: string
   /** 手势起点（画布坐标） */
   startPoint: PlatformPoint
   /** 当前点（画布坐标） */
   currentPoint: PlatformPoint
-  /** connect 模式下目标节点 ID */
-  targetNodeId: string
+  /** connect 模式下目标 item ID */
+  targetItemId: string
 }
 
 /**
@@ -44,20 +44,20 @@ export class StarMapGestureStateTracker {
   /** 内部状态，外部通过 getState() 读取 */
   private state: GestureState = {
     mode: 'idle',
-    activeNodeId: '',
+    activeItemId: '',
     startPoint: { x: 0, y: 0 },
     currentPoint: { x: 0, y: 0 },
-    targetNodeId: ''
+    targetItemId: ''
   }
 
   /** 回到 idle，清空所有状态 */
   reset(): void {
     this.state = {
       mode: 'idle',
-      activeNodeId: '',
+      activeItemId: '',
       startPoint: { x: 0, y: 0 },
       currentPoint: { x: 0, y: 0 },
-      targetNodeId: ''
+      targetItemId: ''
     }
   }
 
@@ -65,10 +65,10 @@ export class StarMapGestureStateTracker {
   beginPanCanvas(startX: number, startY: number): void {
     this.state = {
       mode: 'panCanvas',
-      activeNodeId: '',
+      activeItemId: '',
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
-      targetNodeId: ''
+      targetItemId: ''
     }
   }
 
@@ -76,10 +76,10 @@ export class StarMapGestureStateTracker {
   beginNodeMenu(nodeId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'nodeMenu',
-      activeNodeId: nodeId,
+      activeItemId: nodeId,
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
-      targetNodeId: ''
+      targetItemId: ''
     }
   }
 
@@ -87,10 +87,10 @@ export class StarMapGestureStateTracker {
   beginConnect(nodeId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'connect',
-      activeNodeId: nodeId,
+      activeItemId: nodeId,
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
-      targetNodeId: ''
+      targetItemId: ''
     }
   }
 
@@ -98,10 +98,10 @@ export class StarMapGestureStateTracker {
   beginMoveNode(nodeId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'moveNode',
-      activeNodeId: nodeId,
+      activeItemId: nodeId,
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
-      targetNodeId: ''
+      targetItemId: ''
     }
   }
 
@@ -109,10 +109,10 @@ export class StarMapGestureStateTracker {
   beginMoveEmbed(embedInstanceId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'moveEmbed',
-      activeNodeId: embedInstanceId,
+      activeItemId: embedInstanceId,
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
-      targetNodeId: ''
+      targetItemId: ''
     }
   }
 
@@ -121,9 +121,9 @@ export class StarMapGestureStateTracker {
     this.state.currentPoint = { x, y }
   }
 
-  /** connect 模式下设置目标节点 */
-  setTargetNode(nodeId: string): void {
-    this.state.targetNodeId = nodeId
+  /** connect 模式下设置目标 item */
+  setTargetItem(itemId: string): void {
+    this.state.targetItemId = itemId
   }
 
   /** 当前是否处于 idle 状态 */
@@ -145,10 +145,10 @@ export class StarMapGestureStateTracker {
   getState(): GestureState {
     return {
       mode: this.state.mode,
-      activeNodeId: this.state.activeNodeId,
+      activeItemId: this.state.activeItemId,
       startPoint: { x: this.state.startPoint.x, y: this.state.startPoint.y },
       currentPoint: { x: this.state.currentPoint.x, y: this.state.currentPoint.y },
-      targetNodeId: this.state.targetNodeId
+      targetItemId: this.state.targetItemId
     }
   }
 }

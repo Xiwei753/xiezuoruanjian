@@ -3,7 +3,7 @@ import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 
 export interface IWriterCoreBridge {
@@ -46,7 +46,7 @@ export interface IWriterCoreBridge {
 
   // StarMap Node/Edge/Embed mutations（领域数据写入，不属于显示层回流）
   updateStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>>
-  addStarMapEdge(starmapId: string, fromNodeId: string, toNodeId: string, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>>
+  addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>>
   updateStarMapEmbed(starmapId: string, instanceId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>>
 
   // Settings

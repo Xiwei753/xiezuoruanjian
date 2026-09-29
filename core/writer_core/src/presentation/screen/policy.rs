@@ -20,6 +20,7 @@ pub enum ScreenRole {
     ProjectWorkspace,
     Writing,
     StarMap,
+    StarMapDetail,
     Stats,
     Settings,
     Sync,
@@ -305,6 +306,19 @@ pub fn resolve_action_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
         }
         //  正文四：星图根页没有返回动作（占位页无编辑态顶栏状态）。
         ScreenRole::StarMap => global_header_trailing_actions(),
+        // 星图详情页（具体星图画布）：沉浸二级页，与 Writing 类似，
+        // 返回 + 全局右上角动作（Sync / Search / Settings）。
+        ScreenRole::StarMapDetail => {
+            let mut slots = vec![ActionSlot {
+                role: ActionRole::Back,
+                target: ActionTarget::App,
+                region: ActionRegion::HeaderLeading,
+                order: 10,
+                requires_confirmation: false,
+            }];
+            slots.extend(global_header_trailing_actions());
+            slots
+        }
         // 统计根页是独立一级入口，不继承作品工作区的返回能力。
         ScreenRole::Stats => global_header_trailing_actions(),
         ScreenRole::Settings => vec![ActionSlot {
@@ -339,7 +353,7 @@ pub fn resolve_action_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
 /// 不再依赖 `keyboard_visible` / `pointer_class`（已从输入删除）。
 pub fn resolve_show_primary_navigation(screen_role: ScreenRole) -> bool {
     match screen_role {
-        ScreenRole::Writing | ScreenRole::Settings => false,
+        ScreenRole::Writing | ScreenRole::Settings | ScreenRole::StarMapDetail => false,
         ScreenRole::Home
         | ScreenRole::ProjectList
         | ScreenRole::ProjectWorkspace

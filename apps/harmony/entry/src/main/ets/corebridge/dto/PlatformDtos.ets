@@ -90,6 +90,7 @@ export enum ScreenRole {
   ProjectWorkspace = 'ProjectWorkspace',
   Writing = 'Writing',
   StarMap = 'StarMap',
+  StarMapDetail = 'StarMapDetail',
   Stats = 'Stats',
   Settings = 'Settings',
   Sync = 'Sync'

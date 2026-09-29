@@ -3,7 +3,8 @@
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 
 import {
-  StarMapEdge
+  StarMapEdge,
+  StarMapTargetPath
 } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformLayoutNode, PlatformPoint } from './StarMapLayout'
 
@@ -333,21 +334,69 @@ export function computeEdgeRender(
 }
 
 /**
+ * 解析边端点在当前画布上的可见锚点 ID。
+ * 与 Linux_qt starmap_view/edge_render.rs::resolve_edge_endpoint_anchor 对齐。
+ *
+ * 规则：
+ * - 本地路径（starmapId 匹配且 segments 为空）：
+ *   - target.type === 'node' 或 'anchor' → 返回 target.nodeId
+ *   - 其他 target type → null（非几何 target）
+ * - 跨层路径（starmapId 不匹配）→ null
+ * - 深路径（starmapId 匹配但 segments 非空），看第一段：
+ *   - segments[0].type === 'enterEmbed' → 返回 segments[0].instanceId
+ *   - segments[0].type === 'enterPortal' → 返回 segments[0].nodeId
+ *
+ * @param path 端点路径
+ * @param currentStarmapId 当前画布星图 ID
+ * @returns 可见锚点 ID（nodeId 或 Embed instanceId），或 null 表示无法在当前画布定位
+ */
+export function resolveEdgeEndpointAnchor(
+  path: StarMapTargetPath,
+  currentStarmapId: string
+): string | null {
+  const isLocal: boolean = path.starmapId === currentStarmapId && path.segments.length === 0
+
+  if (isLocal) {
+    if (path.target.type === 'node' || path.target.type === 'anchor') {
+      return path.target.nodeId
+    }
+    return null
+  }
+
+  // 跨层路径：starmapId 不匹配 → 无法在当前画布定位
+  if (path.starmapId !== currentStarmapId) {
+    return null
+  }
+
+  // 深路径：starmapId 匹配但 segments 非空，看第一段
+  const seg = path.segments[0]
+  if (seg.type === 'enterEmbed') {
+    return seg.instanceId
+  }
+  if (seg.type === 'enterPortal') {
+    return seg.nodeId
+  }
+  return null
+}
+
+/**
  * 批量计算所有边的渲染几何。
  *
  * @param edges 边列表
  * @param rectMap nodeId → PlatformNodeRect 的映射
+ * @param currentStarmapId 当前画布星图 ID，用于解析边端点在当前画布的可见锚点
  * @returns 边渲染几何列表
  */
 export function computeAllEdgeRenders(
   edges: StarMapEdge[],
-  rectMap: Map<string, PlatformNodeRect>
+  rectMap: Map<string, PlatformNodeRect>,
+  currentStarmapId: string
 ): PlatformEdgeRender[] {
   const renders: PlatformEdgeRender[] = []
 
   for (const edge of edges) {
-    const fromId: string | null = edge.from.target.nodeId
-    const toId: string | null = edge.to.target.nodeId
+    const fromId: string | null = resolveEdgeEndpointAnchor(edge.from, currentStarmapId)
+    const toId: string | null = resolveEdgeEndpointAnchor(edge.to, currentStarmapId)
 
     if (fromId === null || toId === null) {
       continue

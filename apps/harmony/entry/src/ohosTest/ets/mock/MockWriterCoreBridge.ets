@@ -465,14 +465,14 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(embed)
   }
 
-  async addStarMapEdge(starmapId: string, fromNodeId: string, toNodeId: string, kind: string,
+  async addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string,
     label: string | null): Promise<ResultEnvelope<StarMapEdge>> {
     await this.delay(150)
     const now = Date.now()
     const edge: StarMapEdge = {
       id: `edge-${now}`,
-      from: this.nodeTargetPath(starmapId, fromNodeId),
-      to: this.nodeTargetPath(starmapId, toNodeId),
+      from: from,
+      to: to,
       kind: kind as EdgeKind,
       label: label,
       payload: null,
@@ -481,26 +481,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     }
     this.mockStarMapGraph.edges.push(edge)
     return this.success(edge)
-  }
-
-  private nodeTargetPath(starmapId: string, nodeId: string): StarMapTargetPath {
-    return {
-      starmapId: starmapId,
-      segments: [],
-      target: {
-        type: 'node',
-        nodeId: nodeId,
-        anchorId: null,
-        projectId: null,
-        volumeId: null,
-        chapterId: null,
-        rangeStart: null,
-        rangeEnd: null,
-        entityType: null,
-        entityId: null,
-        uri: null
-      }
-    }
   }
 
   // Settings methods
@@ -831,9 +811,12 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   private mockResolveScreenPolicy(screenRole: ScreenRole): ScreenPolicy {
+    const showPrimaryNavigation = !(screenRole === ScreenRole.Writing ||
+      screenRole === ScreenRole.Settings || screenRole === ScreenRole.StarMapDetail)
     return {
       screenRole: screenRole,
-      actionSlots: this.mockBaseSlots(screenRole)
+      actionSlots: this.mockBaseSlots(screenRole),
+      showPrimaryNavigation: showPrimaryNavigation
     }
   }
 
@@ -885,6 +868,13 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       case ScreenRole.StarMap:
       case ScreenRole.Stats:
         return []
+      case ScreenRole.StarMapDetail:
+        return [
+          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
+          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
+          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
+        ]
       case ScreenRole.Settings:
         return [
           { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false }
