@@ -49,7 +49,11 @@ fn slice_between(src: &str, start: &str, end: &str) -> String {
 #[test]
 fn controller_embed_connect_path_builds_enter_portal_segment() {
     let src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
-    let helper = slice_between(&src, "function embedConnectPath(instanceId)", "function embedDrillSegment(");
+    let helper = slice_between(
+        &src,
+        "function embedConnectPath(instanceId)",
+        "function embedDrillSegment(",
+    );
     assert!(
         helper.contains("\"enterPortal\""),
         "Controller embedConnectPath 必须构造 enterPortal 段，实际窗口:\n{helper}"
@@ -68,7 +72,11 @@ fn controller_embed_connect_path_builds_enter_portal_segment() {
 #[test]
 fn controller_embed_connect_path_routes_legacy_portal() {
     let src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
-    let helper = slice_between(&src, "function embedConnectPath(instanceId)", "function embedDrillSegment(");
+    let helper = slice_between(
+        &src,
+        "function embedConnectPath(instanceId)",
+        "function embedDrillSegment(",
+    );
     assert!(
         helper.contains("legacyPortalNodeId"),
         "embedConnectPath 必须按 legacyPortalNodeId 分流，实际窗口:\n{helper}"
@@ -97,8 +105,11 @@ fn canvas_drill_down_signal_carries_segment() {
 #[test]
 fn canvas_embed_double_click_calls_controller_drill_segment() {
     let canvas_src = strip_line_comments(&read_src(CANVAS));
-    let embed_double_click =
-        function_window(&canvas_src, "onDoubleClicked: function(tgtStarmapId) {", 600);
+    let embed_double_click = function_window(
+        &canvas_src,
+        "onDoubleClicked: function(tgtStarmapId) {",
+        600,
+    );
     assert!(
         embed_double_click.contains("graphController.embedDrillSegment(ed.instanceId)"),
         "双击 Embed 必须调用 graphController.embedDrillSegment，实际窗口:\n{embed_double_click}"
@@ -108,13 +119,18 @@ fn canvas_embed_double_click_calls_controller_drill_segment() {
         "Canvas 双击不得再直接访问 legacyPortalNodeId，实际窗口:\n{embed_double_click}"
     );
     assert!(
-        embed_double_click.contains("drillDownRequested(tgtStarmapId, ed.label || qsTr(\"未命名\"), segment)"),
+        embed_double_click
+            .contains("drillDownRequested(tgtStarmapId, ed.label || qsTr(\"未命名\"), segment)"),
         "双击必须把 segment 传给 drillDownRequested 第三参数，实际窗口:\n{embed_double_click}"
     );
 
     // Controller embedDrillSegment 按 legacyPortalNodeId 分流
     let ctrl_src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
-    let drill_helper = slice_between(&ctrl_src, "function embedDrillSegment(instanceId)", "function findEmbedAt(");
+    let drill_helper = slice_between(
+        &ctrl_src,
+        "function embedDrillSegment(instanceId)",
+        "function findEmbedAt(",
+    );
     assert!(
         drill_helper.contains("\"enterPortal\"") && drill_helper.contains("\"enterEmbed\""),
         "Controller embedDrillSegment 必须包含 enterPortal/enterEmbed 分流，实际窗口:\n{drill_helper}"
@@ -135,7 +151,11 @@ fn workspace_declares_current_path_segments() {
 #[test]
 fn workspace_enter_child_starmap_appends_segment() {
     let src = strip_line_comments(&read_src(WORKSPACE));
-    let func = slice_between(&src, "function enterChildStarmap(", "function returnToParentStarmap(");
+    let func = slice_between(
+        &src,
+        "function enterChildStarmap(",
+        "function returnToParentStarmap(",
+    );
     assert!(
         func.contains("segment"),
         "enterChildStarmap 必须接收 segment 参数，实际窗口:\n{func}"

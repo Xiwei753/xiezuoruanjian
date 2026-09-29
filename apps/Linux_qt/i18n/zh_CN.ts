@@ -1013,10 +1013,6 @@
         <translation>天前</translation>
     </message>
     <message>
-        <source>子星图</source>
-        <translation>子星图</translation>
-    </message>
-    <message>
         <source>小时前</source>
         <translation>小时前</translation>
     </message>
