@@ -28,6 +28,7 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
+import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 
 @ComponentV2
 export struct HomeScreen {
@@ -290,9 +291,7 @@ export struct HomeScreen {
       }
       .hideTitleBar(false)
       .hideBackButton(true)
-      .onBackPressed(() => {
-        return true
-      })
+      .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))
       .menus(buildNavMenuItems(this.headerActions))
       .onShown((_reason: VisibilityChangeReason) => {

@@ -15,6 +15,7 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
+import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 
 @Component
 export struct StatsScreen {
@@ -239,9 +240,7 @@ export struct StatsScreen {
       }
       .hideTitleBar(false)
       .hideBackButton(true)
-      .onBackPressed(() => {
-        return true
-      })
+      .onBackPressed(() => handleRootBack())
       .title('统计')
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {

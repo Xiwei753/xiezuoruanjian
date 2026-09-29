@@ -19,6 +19,7 @@ import { PlatformLayoutNode, PlatformPoint, NodePositionPatch, buildFreeformLayo
 import { PlatformMotionConfig, defaultMotionConfig, wobbleXFromProgress, wobbleYFromProgress, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 
 interface SelectOption {
   value: string
@@ -811,9 +812,7 @@ export struct StarMapScreen {
       }
       .hideTitleBar(false)
       .hideBackButton(true)
-      .onBackPressed(() => {
-        return true
-      })
+      .onBackPressed(() => handleRootBack())
       .title(this.starmapTitle)
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {

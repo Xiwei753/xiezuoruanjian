@@ -10,6 +10,7 @@ import { buildHdsMenuItems } from './HdsHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from '../../NavigationChromeStore'
 import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
+import { handleRootBack } from '../../RootBackHandler'
 
 @ComponentV2
 export struct HdsAppDestinationApi23 {
@@ -38,9 +39,7 @@ export struct HdsAppDestinationApi23 {
     }
     .hideTitleBar(false)
     .hideBackButton(true)
-    .onBackPressed(() => {
-      return true
-    })
+    .onBackPressed(() => handleRootBack())
     .titleBar({
       enableComponentSafeArea: true,
       // 窗口开了 setWindowLayoutFullScreen 之后，标题栏必须显式继续避让顶部状态栏，
