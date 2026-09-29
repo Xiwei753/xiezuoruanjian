@@ -141,8 +141,11 @@ Item {
         }
     }
 
-    // 星图切换时重新加载
+    // 星图切换时先清瞬时交互状态再重新加载。
+    // Issue #798: 返回父图 / 进入子图复用同一个 Workspace 实例，
+    // 必须经过 resetInteraction 清掉旧 move/connect 状态，否则新图会继承旧 pointerMode。
     onStarmapIdChanged: {
+        canvas.resetInteraction()
         if (starmapId.length > 0) canvas.loadGraph()
     }
 

@@ -166,10 +166,12 @@ pub struct StarMapBackend {
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
     save_starmap_layout:
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
-    compute_edge_renders_json:
-        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString, embeds_json: QString) -> QString),
-    compute_edge_renders:
-        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject),
+    compute_edge_renders_json: qt_method!(
+        fn(&self, starmap_id: QString, nodes_json: QString, embeds_json: QString) -> QString
+    ),
+    compute_edge_renders: qt_method!(
+        fn(&self, starmap_id: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject
+    ),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
     hit_test_edge_renders:
@@ -361,21 +363,29 @@ impl StarMapBackend {
         let nj = nodes_json.to_string();
         let ej = embeds_json.to_string();
         match self.with_app(|app| app.core_api()) {
-            Ok(Some(core)) => match core.get_starmap_graph(&sid) {
-                Ok(graph_dto) => {
-                    match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(graph_dto) {
-                        Ok(graph) => crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej).into(),
-                        Err(e) => crate::backend::json_utils::envelope_error_json(
-                            writer_core::api::WriterError::Other(e.to_string()),
-                        )
-                        .into(),
+            Ok(Some(core)) => {
+                match core.get_starmap_graph(&sid) {
+                    Ok(graph_dto) => {
+                        match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<
+                            _,
+                        >>::try_from(graph_dto)
+                        {
+                            Ok(graph) => crate::starmap_view::bridge::compute_edge_renders_json(
+                                &graph, &nj, &ej,
+                            )
+                            .into(),
+                            Err(e) => crate::backend::json_utils::envelope_error_json(
+                                writer_core::api::WriterError::Other(e.to_string()),
+                            )
+                            .into(),
+                        }
                     }
+                    Err(e) => crate::backend::json_utils::envelope_error_json(
+                        writer_core::api::WriterError::Other(e.to_string()),
+                    )
+                    .into(),
                 }
-                Err(e) => crate::backend::json_utils::envelope_error_json(
-                    writer_core::api::WriterError::Other(e.to_string()),
-                )
-                .into(),
-            },
+            }
             _ => crate::backend::json_utils::borrow_conflict_error_json().into(),
         }
     }

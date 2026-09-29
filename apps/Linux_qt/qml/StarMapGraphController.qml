@@ -498,18 +498,30 @@ QtObject {
         }
     }
 
-    // Issue #798: 拖动结束后提交节点新位置。浅拷贝新数组一次赋值，
-    // 不原地改普通 JS 对象，再 saveLayout 持久化。
+    // Issue #798: 拖动结束后提交节点新位置。先持久化单节点 position，
+    // 后端成功后再浅拷贝新数组一次赋值更新 canonical model。
+    // 不再调用全量 saveLayout()，避免拖一个节点把所有节点逐个重写。
+    // 失败时 canonical model 不动，结束 transient move 后 delegate 因 binding
+    // 自动回旧位置（与 commitEmbedMove 顺序一致）。
     function commitNodeMove(nodeId, nx, ny) {
-        var nextNodes = [];
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = copyObject(nodesModel[i]);
-            if (n.id === nodeId) { n.x = nx; n.y = ny; }
-            nextNodes.push(n);
+        if (!ensureBackend()) return;
+        var res = normalizeBackendResult(
+            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify({ position: { x: nx, y: ny } })),
+            qsTr("更新节点位置失败")
+        );
+        if (res.success) {
+            clearError();
+            var nextNodes = [];
+            for (var i = 0; i < nodesModel.length; i++) {
+                var n = copyObject(nodesModel[i]);
+                if (n.id === nodeId) { n.x = nx; n.y = ny; }
+                nextNodes.push(n);
+            }
+            nodesModel = nextNodes;
+            graphChanged();
+        } else {
+            setError(backendErrorText(res, qsTr("更新节点位置失败")));
         }
-        nodesModel = nextNodes;
-        saveLayout();
-        graphChanged();
     }
 
     // Issue #798: 拖动结束后提交 Embed 新位置。先持久化到后端，

@@ -26,7 +26,9 @@ use writer_core::api::WriterError;
 use super::edge_render::{self, EdgeRenderParams};
 use super::grid_layout;
 use super::hittest;
-use super::layout_types::{StarMapEmbedSceneRect, StarMapLayout, StarMapLayoutKind, StarMapLayoutNode};
+use super::layout_types::{
+    StarMapEmbedSceneRect, StarMapLayout, StarMapLayoutKind, StarMapLayoutNode,
+};
 
 /// 平台端显示层常量：节点默认包围盒与圆角。
 ///

@@ -37,7 +37,12 @@ QtObject {
     property real moveY: 0
 
     // ── pan ──
-    function beginPan() { pointerMode = "pan" }
+    function beginPan() {
+        // Issue #798: 切模式前先明确 reset/cancel，不直接覆盖正在进行的
+        // connect/move 而留下旧 id。
+        if (pointerMode !== "idle") reset()
+        pointerMode = "pan"
+    }
     function endPan() { if (pointerMode === "pan") pointerMode = "idle" }
 
     // ── connect ──
@@ -70,6 +75,7 @@ QtObject {
         if (pointerMode !== "idle") return false
         pointerMode = "move"
         pressedNodeId = nodeId
+        pressedEmbedId = ""
         moveX = startX
         moveY = startY
         return true
@@ -78,6 +84,7 @@ QtObject {
         if (pointerMode !== "idle") return false
         pointerMode = "move"
         pressedEmbedId = instanceId
+        pressedNodeId = ""
         moveX = startX
         moveY = startY
         return true

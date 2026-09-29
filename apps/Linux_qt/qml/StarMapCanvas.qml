@@ -76,6 +76,11 @@ Item {
     signal enterStarmapRequested(string starmapId, string title)
     signal editNodeRequested(var node)
 
+    // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态，
+    // 不可见 / 离开工作区时也 reset，避免旧 move/connect 状态泄漏。
+    onStarmapIdChanged: interaction.reset()
+    onVisibleChanged: { if (!visible) interaction.reset() }
+
     // Issue #798: 渲染层直接读 graphController 的模型，不再在 Canvas 维护副本。
     // graphController 是当前星图 canonical scene model 的唯一持有者。
 
@@ -94,6 +99,11 @@ Item {
     StarMapInteractionController { id: interaction }
 
     function clearError() { graphController.clearError() }
+
+    // Issue #798: 公开 reset 入口，供 Workspace 切图 / 不可见时清瞬时交互状态。
+    function resetInteraction() {
+        interaction.reset()
+    }
 
     // Background Grid
     Rectangle {
@@ -373,8 +383,10 @@ Item {
                 dt: canvasArea.dt
                 property var nodeData: modelData
 
-                x: nodeData.x
-                y: nodeData.y
+                // Issue #798: 显示坐标从 transient 状态派生，不再被命令式赋值打断 binding。
+                // 当前节点处于 move 时读 interaction.moveX/moveY，否则读 canonical nodeData.x/y。
+                x: interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveX : nodeData.x
+                y: interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveY : nodeData.y
                 width: nodeData.width
                 height: nodeData.height
                 title: nodeData.title
@@ -444,9 +456,9 @@ Item {
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
-                        x += dx
-                        y += dy
-                        interaction.updateMove(x, y)
+                        // Issue #798: 不再命令式 x+=dx/y+=dy 打断 binding，
+                        // 只更新 transient 坐标，delegate 的 x/y binding 自动跟随。
+                        interaction.updateMove(interaction.moveX + dx, interaction.moveY + dy)
                         isBeingDragged = true
                         edgeCanvas.requestPaint()
                     }
@@ -471,9 +483,9 @@ Item {
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
-                        // Issue #798: 松手一次性提交新位置给 Controller，
-                        // 由 Controller 浅拷贝新数组更新模型并持久化。
-                        graphController.commitNodeMove(nodeData.id, x, y)
+                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
+                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
+                        graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
                         interaction.endMove()
                     }
                 }
@@ -491,8 +503,9 @@ Item {
                 dt: canvasArea.dt
                 property var embedData: modelData
 
-                x: embedData.x
-                y: embedData.y
+                // Issue #798: 显示坐标从 transient 状态派生，不再被命令式赋值打断 binding。
+                x: interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveX : embedData.x
+                y: interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveY : embedData.y
                 width: embedData.width
                 height: embedData.height
                 instanceId: embedData.instanceId
@@ -553,9 +566,9 @@ Item {
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
-                        x += dx
-                        y += dy
-                        interaction.updateMove(x, y)
+                        // Issue #798: 不再命令式 x+=dx/y+=dy 打断 binding，
+                        // 只更新 transient 坐标，delegate 的 x/y binding 自动跟随。
+                        interaction.updateMove(interaction.moveX + dx, interaction.moveY + dy)
                         isBeingDragged = true
                         edgeCanvas.requestPaint()
                     }
@@ -578,9 +591,9 @@ Item {
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
-                        // Issue #798: 松手一次性提交 Embed 新位置给 Controller，
-                        // 由 Controller 持久化并浅拷贝新数组更新模型。
-                        graphController.commitEmbedMove(embedData.instanceId, x, y)
+                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
+                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
+                        graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
                         interaction.endMove()
                     }
                 }
