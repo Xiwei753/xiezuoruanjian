@@ -8,6 +8,9 @@
 //   - 纯 UI 组件，数据通过 property 传入
 //   - 节点只负责展示与上抛信号，不决定"移动还是拉线"——决定权交回 Canvas
 //   - 节点自身不修改 x/y；只有 Canvas 在 move 模式下通过绑定驱动位置
+//   - 根对象是稳定 Item：x/y/width/height 与命中框恒定，对应 Canvas 的 nodeData 坐标；
+//     wobble 只偏移内部视觉 Rectangle（visualNode），不影响命中测试。
+//     TapHandler/DragHandler/PointHandler 全部挂在稳定 root Item 上。
 //   - 使用 DesignTokens 统一样式
 // =============================================================================
 
@@ -15,7 +18,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Rectangle {
+Item {
     id: root
 
     required property var dt
@@ -41,16 +44,23 @@ Rectangle {
     // Issue #793 评论 5884923277: portal 节点展示标记
     property bool isPortal: false
 
-    // Issue #793 评论 5884923277: wobble 改纯视觉偏移，不影响命中框。
-    // 根 Item 的 x/y/width/height 不变，handler 命中基于几何位置；
-    // 视觉偏移由根 Rectangle 的 transform 提供。
-    property real visualOffsetX: 0
-    property real visualOffsetY: 0
+    // Issue #793 评论 5885482530: wobble 改纯视觉偏移，不影响命中框。
+    // 根 Item 的 x/y/width/height 恒定，handler 命中基于稳定几何位置；
+    // 视觉偏移只作用在内部 visualNode Rectangle 的 transform 上。
     // 用 index 错开 phase，避免所有节点同步晃
     property int wobbleIndex: 0
-    // 动画驱动中间值，选中/拖动时 visualOffset 归零
+    // 动画驱动中间值，选中/按下/拖动时 visualOffset 归零
     property real _wobbleAnimX: 0
     property real _wobbleAnimY: 0
+
+    // Issue #793 评论 5885482530: 声明时即为最终 binding（不再二次绑定）。
+    // 选中、按下（nodeLeftTap.pressed）、拖动时归零；idle 时跟随 wobble 动画。
+    // nodeLeftTap 在下方定义，QML id 在组件作用域内全局可见，binding 在
+    // 组件 complete 阶段求值，引用后定义的 id 合法。
+    property real visualOffsetX:
+        (isSelected || isBeingDragged || nodeLeftTap.pressed) ? 0 : _wobbleAnimX
+    property real visualOffsetY:
+        (isSelected || isBeingDragged || nodeLeftTap.pressed) ? 0 : _wobbleAnimY
 
     // ---------------------------------------------------------------------------
     // 对外信号：节点只上抛事件，由 Canvas 决定后续行为
@@ -65,89 +75,96 @@ Rectangle {
     // 不拖动直接松开也能结束交互（Issue #788 评论 5868205321）。
     signal leftReleased()
 
-    radius: _radiusSm
-    color: _surfaceContainer
-    border.color: isSelected ? _accent : _border
-    border.width: isSelected ? 2 : 1
+    // ---------------------------------------------------------------------------
+    // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
+    // ---------------------------------------------------------------------------
+    Rectangle {
+        id: visualNode
+        anchors.fill: parent
 
-    // Issue #793 评论 5884923277: 纯视觉偏移，不影响 x/y 命中测试
-    transform: Translate {
-        x: visualOffsetX
-        y: visualOffsetY
+        radius: root._radiusSm
+        color: root._surfaceContainer
+        border.color: root.isSelected ? root._accent : root._border
+        border.width: root.isSelected ? 2 : 1
+
+        // Issue #793 评论 5885482530: 纯视觉偏移，不影响根 Item 的 x/y 命中测试
+        transform: Translate {
+            x: root.visualOffsetX
+            y: root.visualOffsetY
+        }
+
+        // Shadow effect approximation
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -1
+            z: -1
+            color: "transparent"
+            border.color: root._shadowLight
+            radius: visualNode.radius + 1
+            visible: !root.isSelected
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 8
+            spacing: 4
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 16
+                color: getKindColor(root.kind)
+                radius: root._radiusXs
+
+                AppText {
+                    dt: root.dt
+                    anchors.centerIn: parent
+                    // Issue #793 评论 5884923277: portal 节点顶部标签显示"子星图"，
+                    // 普通节点仍显示自己的 kind
+                    text: root.isPortal ? qsTr("子星图") : root.kind
+                    color: root._onPrimary
+                    font.pointSize: root.dt.fontXsPt
+                    font.bold: true
+                }
+            }
+
+            AppText {
+                dt: root.dt
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                text: root.title
+                color: root._textPrimary
+                font.pointSize: root.dt.fontSmPt
+                wrapMode: Text.Wrap
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
     }
-    // 选中或拖动时偏移归零；idle 时跟随 wobble 动画
-    visualOffsetX: (isSelected || isBeingDragged) ? 0 : _wobbleAnimX
-    visualOffsetY: (isSelected || isBeingDragged) ? 0 : _wobbleAnimY
 
     // Issue #793 评论 5884923277: wobble 降速
     //   X: ±0.6px，半周期 7000~9500ms（7000 + (index % 7) * 400）
     //   Y: ±0.4px，半周期 8500~11500ms（8500 + (index % 5) * 300）
-    // 选中/按下/拖动时动画暂停，idle 时才慢慢漂
+    // Issue #793 评论 5885482530: 选中/按下/拖动时动画暂停，idle 时才慢慢漂
     SequentialAnimation on _wobbleAnimX {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged
+        running: !isSelected && !isBeingDragged && !nodeLeftTap.pressed
         NumberAnimation { to: 0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
     }
     SequentialAnimation on _wobbleAnimY {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged
+        running: !isSelected && !isBeingDragged && !nodeLeftTap.pressed
         NumberAnimation { to: 0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
-    }
-
-    // Shadow effect approximation
-    Rectangle {
-        anchors.fill: parent
-        anchors.margins: -1
-        z: -1
-        color: "transparent"
-        border.color: _shadowLight
-        radius: root.radius + 1
-        visible: !isSelected
-    }
-
-    ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: 8
-        spacing: 4
-
-        Rectangle {
-            Layout.fillWidth: true
-            height: 16
-            color: getKindColor(root.kind)
-            radius: _radiusXs
-
-            AppText {
-                dt: root.dt
-                anchors.centerIn: parent
-                // Issue #793 评论 5884923277: portal 节点顶部标签显示"子星图"，
-                // 普通节点仍显示自己的 kind
-                text: isPortal ? qsTr("子星图") : root.kind
-                color: _onPrimary
-                font.pointSize: dt.fontXsPt
-                font.bold: true
-            }
-        }
-
-        AppText {
-            dt: root.dt
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            text: root.title
-            color: _textPrimary
-            font.pointSize: dt.fontSmPt
-            wrapMode: Text.Wrap
-            elide: Text.ElideRight
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
     }
 
     // ---------------------------------------------------------------------------
     // 交互：用 TapHandler 上抛点击类信号，节点不自行决定行为
     // Issue #793 评论 5884923277: 加 exclusiveSignals 真正分清单击/双击，
     // 默认 NotExclusive 时双击会同时触发单击。
+    // Issue #793 评论 5885482530: handler 全部挂在稳定 root Item 上，
+    // 不放进 visualNode，命中框恒定。
     // ---------------------------------------------------------------------------
     TapHandler {
         id: nodeLeftTap
