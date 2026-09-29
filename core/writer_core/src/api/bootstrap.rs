@@ -80,6 +80,53 @@ fn recover_storage_transactions(
 
     // 恢复统一 workspace 变更事务（workspace_change journal）。
     recover_workspace_change_transactions(app_data_root, layout)?;
+
+    // 恢复方星图子嵌入事务（child_embed journal）。
+    let recovered_child_embeds =
+        crate::storage::journal::starmap_child_embed::recover_pending_child_embed_transactions(
+            app_data_root,
+        )?;
+    for rec in &recovered_child_embeds {
+        match crate::storage::workspace_git::record_workspace_change_set(
+            layout,
+            &rec.changes,
+            "recover_starmap_child_embed",
+        ) {
+            Ok(result) => {
+                if result.oid.is_some() {
+                    log::debug!(
+                        "recover_storage_transactions: history committed for child embed {} \
+                         ({} staged)",
+                        rec.journal_token,
+                        result.staged_count
+                    );
+                }
+                // history 成功，推进 journal 到 Completed 并清理。
+                if let Err(e) =
+                    crate::storage::journal::starmap_child_embed::ack_child_embed_history(
+                        app_data_root,
+                        &rec.journal_token,
+                    )
+                {
+                    log::warn!(
+                        "recover_storage_transactions: ack failed for child embed {}: {} \
+                         — journal retained",
+                        rec.journal_token,
+                        e
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "recover_storage_transactions: record_workspace_change_set failed for \
+                     child embed {}: {} — journal retained, history will be补 on next startup",
+                    rec.journal_token,
+                    e
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 

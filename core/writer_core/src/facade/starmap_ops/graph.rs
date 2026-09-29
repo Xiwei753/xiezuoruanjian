@@ -673,7 +673,7 @@ impl super::super::WriterCore {
         };
 
         // Step 5: flush host Store，确认 Embed 已落盘
-        self.flush_starmap_store(host_starmap_id)?;
+        let host_changed_paths = self.flush_starmap_store(host_starmap_id)?;
         tx.mark_embed_added()?;
 
         // Step 6: 标记 journal completed 并清理
@@ -682,23 +682,17 @@ impl super::super::WriterCore {
 
         // 构造 WorkspaceChangeSet：
         // - child meta 路径 + starmap index 路径（create_starmap_with_id 写的）
-        // - host Embed/graph meta 路径（add_starmap_embed + flush 写的）
-        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        // - host changed paths（add_starmap_embed + flush 写的真实文件路径）
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
             .add_upsert(
                 std::path::PathBuf::from("starmaps")
                     .join(format!("{}.meta.json", child_meta.starmap_id)),
             )
-            .add_upsert(std::path::PathBuf::from("starmaps").join("index.json"))
-            .add_upsert(
-                std::path::PathBuf::from("starmaps")
-                    .join(host_starmap_id)
-                    .join("embeds"),
-            )
-            .add_upsert(
-                std::path::PathBuf::from("starmaps")
-                    .join(host_starmap_id)
-                    .join("graph-meta.json"),
-            );
+            .add_upsert(std::path::PathBuf::from("starmaps").join("index.json"));
+
+        for path in host_changed_paths {
+            change_set = change_set.add_upsert(path);
+        }
 
         Ok((child_meta, created_embed, change_set))
     }

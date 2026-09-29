@@ -100,6 +100,8 @@ export struct StarMapScreen {
   private pinchDrilledUp: boolean = false
   // Pinch 激活标志：Pinch 进行中时阻止 Pan 同时修改 offset，避免双指中心漂移
   private pinchActive: boolean = false
+  // Pan 激活标志：只有 !pinchActive 时启动的 Pan 才 active，Pinch 开始时让旧 Pan 失效
+  private panActive: boolean = false
 
   // 画布拖动基准（onActionStart 记录，onActionUpdate 用 base+offset 避免重复累加）
   private panBaseX: number = 0
@@ -645,6 +647,7 @@ export struct StarMapScreen {
         PinchGesture({ fingers: 2 })
           .onActionStart((event: GestureEvent) => {
             this.pinchActive = true
+            this.panActive = false
             this.pinchBaseScale = this.zoomScale
             this.pinchBaseOffsetX = this.offsetX
             this.pinchBaseOffsetY = this.offsetY
@@ -684,6 +687,7 @@ export struct StarMapScreen {
         PanGesture()
           .onActionStart((event: GestureEvent) => {
             if (this.pinchActive) return
+            this.panActive = true
             const point = this.gestureScreenPoint(event, 0, 0)
             this.gestureTracker.beginPanCanvas(point.x, point.y)
             this.gestureMode = 'panCanvas'
@@ -691,13 +695,14 @@ export struct StarMapScreen {
             this.panBaseY = this.offsetY
           })
           .onActionUpdate((event: GestureEvent) => {
-            if (this.pinchActive) return
+            if (!this.panActive || this.pinchActive) return
             if (this.gestureMode === 'panCanvas') {
               this.offsetX = this.panBaseX + event.offsetX
               this.offsetY = this.panBaseY + event.offsetY
             }
           })
           .onActionEnd(() => {
+            this.panActive = false
             this.gestureTracker.reset()
             this.gestureMode = 'idle'
           }),
@@ -880,6 +885,8 @@ export struct StarMapScreen {
               }
             } else {
               // 非移动模式：滑动交给画布 Pan
+              if (this.pinchActive) return
+              this.panActive = true
               const point = this.gestureScreenPoint(event, 0, 0)
               this.gestureTracker.beginPanCanvas(point.x, point.y)
               this.gestureMode = 'panCanvas'
@@ -897,7 +904,7 @@ export struct StarMapScreen {
               positions.set(node.id, { x: newDx, y: newDy })
               this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
               this.recomputeGeometry()
-            } else if (state.mode === 'panCanvas') {
+            } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
               this.offsetX = this.panBaseX + event.offsetX
               this.offsetY = this.panBaseY + event.offsetY
             }
@@ -908,6 +915,7 @@ export struct StarMapScreen {
               void this.saveNodePosition(node.id)
               this.motionPauseTracker.resumeNode(node.id)
             }
+            this.panActive = false
             this.gestureTracker.reset()
             this.gestureMode = 'idle'
           })
@@ -1023,6 +1031,8 @@ export struct StarMapScreen {
               }
             } else {
               // 非移动模式：滑动交给画布 Pan
+              if (this.pinchActive) return
+              this.panActive = true
               const point = this.gestureScreenPoint(event, 0, 0)
               this.gestureTracker.beginPanCanvas(point.x, point.y)
               this.gestureMode = 'panCanvas'
@@ -1040,7 +1050,7 @@ export struct StarMapScreen {
               positions.set(embed.instanceId, { x: newDx, y: newDy })
               this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
               this.recomputeGeometry()
-            } else if (state.mode === 'panCanvas') {
+            } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
               this.offsetX = this.panBaseX + event.offsetX
               this.offsetY = this.panBaseY + event.offsetY
             }
@@ -1051,6 +1061,7 @@ export struct StarMapScreen {
               void this.saveEmbedPosition(embed.instanceId)
               this.motionPauseTracker.resumeNode(embed.instanceId)
             }
+            this.panActive = false
             this.gestureTracker.reset()
             this.gestureMode = 'idle'
           })
