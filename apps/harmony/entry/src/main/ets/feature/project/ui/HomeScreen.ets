@@ -289,6 +289,10 @@ export struct HomeScreen {
         this.HomeContent()
       }
       .hideTitleBar(false)
+      .hideBackButton(true)
+      .onBackPressed(() => {
+        return true
+      })
       .title($r('app.string.app_title'))
       .menus(buildNavMenuItems(this.headerActions))
       .onShown((_reason: VisibilityChangeReason) => {

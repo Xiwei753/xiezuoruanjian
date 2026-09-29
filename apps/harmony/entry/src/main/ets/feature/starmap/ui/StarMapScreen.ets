@@ -810,6 +810,10 @@ export struct StarMapScreen {
         this.StarMapContent()
       }
       .hideTitleBar(false)
+      .hideBackButton(true)
+      .onBackPressed(() => {
+        return true
+      })
       .title(this.starmapTitle)
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {

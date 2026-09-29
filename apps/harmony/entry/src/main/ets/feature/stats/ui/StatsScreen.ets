@@ -238,6 +238,10 @@ export struct StatsScreen {
         this.StatsContent()
       }
       .hideTitleBar(false)
+      .hideBackButton(true)
+      .onBackPressed(() => {
+        return true
+      })
       .title('统计')
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {

@@ -37,6 +37,10 @@ export struct HdsAppDestinationApi23 {
       this.contentBuilder()
     }
     .hideTitleBar(false)
+    .hideBackButton(true)
+    .onBackPressed(() => {
+      return true
+    })
     .titleBar({
       enableComponentSafeArea: true,
       // 窗口开了 setWindowLayoutFullScreen 之后，标题栏必须显式继续避让顶部状态栏，

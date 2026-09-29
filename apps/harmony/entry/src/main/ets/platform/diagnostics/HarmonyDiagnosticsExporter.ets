@@ -220,11 +220,21 @@ export class HarmonyDiagnosticsExporter {
       const src = fs.openSync(zipPath, fs.OpenMode.READ_ONLY)
       const dst = fs.openSync(uris[0], fs.OpenMode.READ_WRITE)
       try {
-        const size = fs.statSync(src.fd).size
-        const data = new ArrayBuffer(size)
-        fs.readSync(src.fd, data)
-        fs.truncate(dst.fd, 0)
-        fs.writeSync(dst.fd, data)
+        const sourceSize = fs.statSync(src.fd).size
+        if (sourceSize <= 0) {
+          throw new Error('diagnostics source zip is empty')
+        }
+
+        const data = new ArrayBuffer(sourceSize)
+        const readSize = fs.readSync(src.fd, data)
+        if (readSize !== sourceSize) {
+          throw new Error(`diagnostics read incomplete: ${readSize}/${sourceSize}`)
+        }
+
+        const writeSize = fs.writeSync(dst.fd, data)
+        if (writeSize !== readSize) {
+          throw new Error(`diagnostics write incomplete: ${writeSize}/${readSize}`)
+        }
       } finally {
         fs.closeSync(src)
         fs.closeSync(dst)
