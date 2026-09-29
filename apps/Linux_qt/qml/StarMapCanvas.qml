@@ -590,7 +590,6 @@ Item {
                 width: nodeData.width
                 height: nodeData.height
                 title: nodeData.title
-                kind: nodeData.kind
                 isSelected: nodeData.isSelected
                 // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
                 wobbleIndex: index
@@ -982,7 +981,8 @@ Item {
         z: 60
 
         property string previewKind: ""   // "node" / "embed"
-        property real anchorX: 0          // 屏幕坐标锚点
+        // 屏幕坐标锚点
+        property real anchorX: 0
         property real anchorY: 0
 
         x: anchorX - width / 2

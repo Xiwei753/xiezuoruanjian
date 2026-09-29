@@ -52,10 +52,6 @@ fn envelope<T: serde::Serialize>(result: Result<T, WriterError>) -> String {
     }
 }
 
-fn envelope_ok<T: serde::Serialize>(data: T) -> String {
-    envelope(Ok(data))
-}
-
 fn envelope_err_str(msg: &str) -> String {
     envelope::<serde_json::Value>(Err(WriterError::Other(msg.to_string())))
 }

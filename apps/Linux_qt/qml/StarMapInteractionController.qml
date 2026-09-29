@@ -31,10 +31,14 @@ QtObject {
     readonly property real _moveThreshold: 10.0
 
     // connect 模式源端
-    property string connectFromKind: ""   // "node" 或 "embed"
-    property string connectFromId: ""     // nodeId 或 instanceId
-    property var connectFromPath: null    // StarMapTargetPathDto JS 对象
-    property string connectFromNodeId: "" // 保留给预览线绘制兼容路径
+    // "node" 或 "embed"
+    property string connectFromKind: ""
+    // nodeId 或 instanceId
+    property string connectFromId: ""
+    // StarMapTargetPathDto JS 对象
+    property var connectFromPath: null
+    // 保留给预览线绘制兼容路径
+    property string connectFromNodeId: ""
     property real connectMouseX: 0
     property real connectMouseY: 0
 

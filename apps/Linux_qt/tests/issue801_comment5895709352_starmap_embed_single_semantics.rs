@@ -16,6 +16,11 @@
 //! 5. `computeEdgeRenders()` 把归一后的旧 portal 节点几何补进边锚点 layout，
 //!    否则连到旧 portal 节点的边会因 `LocalNodeMissing`/`PortalMissing` 整条消失
 //!    （行为契约由 `starmap_view::edge_render` 的两个单测固定）。
+//! 6. Issue #801 评论 5896594591: 旧 portal 操作身份分流到 Node API。
+//! 7. Issue #801 评论 5895785633: 类型标签移除必须彻底——`StarMapNode` 不得再保留
+//!    `kind` 属性和 `getKindLabel`/`getKindColor` 死代码，`StarMapCanvas` 不再下发
+//!    `kind`；Embed 卡片文本直接绑定 `label`，渲染层不回落类型名，
+//!    空 label 由 Controller 统一兜底为 `qsTr("未命名")`。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -212,7 +217,11 @@ fn legacy_portal_operations_route_to_node_api() {
     );
 
     // updateEmbed 分流到 update_starmap_node
-    let update_embed = slice_between(&controller, "function updateEmbed(instanceId, patch)", "function deleteEmbed(");
+    let update_embed = slice_between(
+        &controller,
+        "function updateEmbed(instanceId, patch)",
+        "function deleteEmbed(",
+    );
     assert!(
         update_embed.contains("legacyPortalNodeId") && update_embed.contains("update_starmap_node"),
         "updateEmbed 必须按 legacyPortalNodeId 分流到 update_starmap_node，实际窗口:\n{update_embed}"
@@ -223,14 +232,22 @@ fn legacy_portal_operations_route_to_node_api() {
     );
 
     // deleteEmbed 分流到 delete_starmap_node
-    let delete_embed = slice_between(&controller, "function deleteEmbed(instanceId)", "function createSubStarmapAt(");
+    let delete_embed = slice_between(
+        &controller,
+        "function deleteEmbed(instanceId)",
+        "function createSubStarmapAt(",
+    );
     assert!(
         delete_embed.contains("legacyPortalNodeId") && delete_embed.contains("delete_starmap_node"),
         "deleteEmbed 必须按 legacyPortalNodeId 分流到 delete_starmap_node，实际窗口:\n{delete_embed}"
     );
 
     // commitEmbedMove 分流到 update_starmap_node
-    let commit_move = slice_between(&controller, "function commitEmbedMove(instanceId, nx, ny)", "function computeEdgeRenders(");
+    let commit_move = slice_between(
+        &controller,
+        "function commitEmbedMove(instanceId, nx, ny)",
+        "function computeEdgeRenders(",
+    );
     assert!(
         commit_move.contains("legacyPortalNodeId") && commit_move.contains("update_starmap_node"),
         "commitEmbedMove 必须按 legacyPortalNodeId 分流到 update_starmap_node，实际窗口:\n{commit_move}"
@@ -241,9 +258,14 @@ fn legacy_portal_operations_route_to_node_api() {
         canvas.contains("function embedConnectPath(embed)"),
         "StarMapCanvas 必须有 embedConnectPath helper"
     );
-    let helper = slice_between(&canvas, "function embedConnectPath(embed)", "function createEdgeWithPaths(");
+    let helper = slice_between(
+        &canvas,
+        "function embedConnectPath(embed)",
+        "function createEdgeWithPaths(",
+    );
     assert!(
-        helper.contains("legacyPortalNodeId") && helper.contains("nodePath(embed.legacyPortalNodeId)"),
+        helper.contains("legacyPortalNodeId")
+            && helper.contains("nodePath(embed.legacyPortalNodeId)"),
         "embedConnectPath 必须对 legacy portal 用 nodePath，实际窗口:\n{helper}"
     );
 
@@ -253,5 +275,44 @@ fn legacy_portal_operations_route_to_node_api() {
     assert!(
         connect_count >= 4,
         "Canvas 必须有至少 4 处 embedConnectPath 调用（拉线端点分流），实际: {connect_count}"
+    );
+}
+
+/// 7. Issue #801 评论 5895785633: 类型标签移除必须彻底——
+/// 节点组件不再保留 `kind` 属性与 `getKindLabel`/`getKindColor` 死代码，
+/// Canvas 的 Node delegate 不再下发 `kind`。
+#[test]
+fn node_component_has_no_type_label_leftovers() {
+    let node = strip_line_comments(&read_src(NODE));
+    assert!(
+        !node.contains("property string kind"),
+        "StarMapNode 不得再保留无消费者的 kind 属性"
+    );
+    assert!(
+        !node.contains("getKindLabel") && !node.contains("getKindColor"),
+        "StarMapNode 不得再保留类型标签 helper（getKindLabel/getKindColor）"
+    );
+
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        !canvas.contains("nodeData.kind"),
+        "StarMapCanvas 的 Node delegate 不得再向 StarMapNode 下发 kind"
+    );
+}
+
+/// 8. Issue #801 评论 5895785633: 空 Embed 不得把类型名“子星图”当标题显示——
+/// 卡片文本直接绑定 `label`，渲染层不做任何字符串 fallback；
+/// 未命名兜底统一在 Controller 的 `label: gem.label || qsTr("未命名")` 完成。
+#[test]
+fn embed_card_renders_empty_label_without_type_fallback() {
+    let embed = strip_line_comments(&read_src(EMBED));
+    assert!(
+        embed.contains("text: root.label"),
+        "Embed 卡片文本必须直接绑定 root.label"
+    );
+    let label_render = function_window(&embed, "text: root.label", 120);
+    assert!(
+        !label_render.contains("||") && !label_render.contains("子星图"),
+        "label 渲染不得回落类型名或做字符串 fallback，实际窗口:\n{label_render}"
     );
 }

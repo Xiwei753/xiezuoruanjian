@@ -35,7 +35,6 @@ Item {
     readonly property int _radiusSm: dt.radiusSm
 
     property string title: "Node"
-    property string kind: "Note"
     property bool isSelected: false
 
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
@@ -245,32 +244,6 @@ Item {
             if (!active) {
                 root.leftReleased()
             }
-        }
-    }
-
-    function getKindColor(k) {
-        switch(k) {
-            case "Chapter": return dt.starMapNodeChapter
-            case "Character": return dt.starMapNodeCharacter
-            case "Location": return dt.starMapNodeLocation
-            case "Event": return dt.starMapNodeEvent
-            case "Concept": return dt.starMapNodeConcept
-            default: return _textMuted
-        }
-    }
-
-    function getKindLabel(k) {
-        switch(k) {
-            case "Note": return qsTr("笔记")
-            case "Chapter": return qsTr("章节")
-            case "Character": return qsTr("角色")
-            case "Location": return qsTr("地点")
-            case "Event": return qsTr("事件")
-            case "Concept": return qsTr("概念")
-            case "Project": return qsTr("作品")
-            case "Volume": return qsTr("卷")
-            case "Custom": return qsTr("自定义")
-            default: return k
         }
     }
 }
