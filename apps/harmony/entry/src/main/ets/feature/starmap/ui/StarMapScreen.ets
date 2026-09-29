@@ -1252,7 +1252,7 @@ export struct StarMapScreen {
 
           Blank()
 
-          Button($r('app.string.create'))
+          Button('创建')
             .fontSize(14)
             .height(36)
             .enabled(this.newNodeTitle.trim().length > 0)
@@ -1302,7 +1302,7 @@ export struct StarMapScreen {
 
           Blank()
 
-          Button($r('app.string.create'))
+          Button('创建')
             .fontSize(14)
             .height(36)
             .enabled(this.newEmbedTitle.trim().length > 0)
