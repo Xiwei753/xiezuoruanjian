@@ -17,6 +17,7 @@ import { HomeScreen } from '../../../../feature/project/ui/HomeScreen'
 import { WorkspaceScreen } from '../../../../feature/project/ui/WorkspaceScreen'
 import { WritingScreen } from '../../../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../../../feature/starmap/ui/StarMapScreen'
+import { StarMapListScreen } from '../../../../feature/starmap/ui/StarMapListScreen'
 import { SettingsScreen } from '../../../../feature/settings/ui/SettingsScreen'
 import { StatsScreen } from '../../../../feature/stats/ui/StatsScreen'
 import {
@@ -97,6 +98,8 @@ export struct HdsPrimaryTabsApi23 {
       WorkspaceScreen({ navPathStack: ownerStack })
     } else if (name === Routes.Writing) {
       WritingScreen({ navPathStack: ownerStack })
+    } else if (name === Routes.StarMapList) {
+      StarMapListScreen({ navPathStack: ownerStack })
     } else if (name === Routes.StarMap) {
       StarMapScreen()
     } else if (name === Routes.Settings) {

@@ -21,6 +21,7 @@ import { HomeScreen } from '../../feature/project/ui/HomeScreen'
 import { WorkspaceScreen } from '../../feature/project/ui/WorkspaceScreen'
 import { WritingScreen } from '../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../feature/starmap/ui/StarMapScreen'
+import { StarMapListScreen } from '../../feature/starmap/ui/StarMapListScreen'
 import { SettingsScreen } from '../../feature/settings/ui/SettingsScreen'
 import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
@@ -55,7 +56,7 @@ export struct PrimaryTabShell {
   // Issue #767：每个 tab 各自持有自己的 NavPathStack，字段初始化时创建并带根路由。
   // 不在 aboutToAppear 里 pushPath，避免 render 期间修改状态变量。
   @State homeStack: NavPathStack = createStackWithRoot(Routes.Home)
-  @State starMapStack: NavPathStack = createStackWithRoot(Routes.StarMap)
+  @State starMapStack: NavPathStack = createStackWithRoot(Routes.StarMapList)
   @State statsStack: NavPathStack = createStackWithRoot(Routes.Stats)
 
   // 当前选中的 tab 索引（与 AppNavigation 通过 @Link 共享）
@@ -242,6 +243,8 @@ export struct PrimaryTabShell {
       WorkspaceScreen({ navPathStack: ownerStack })
     } else if (name === Routes.Writing) {
       WritingScreen({ navPathStack: ownerStack })
+    } else if (name === Routes.StarMapList) {
+      StarMapListScreen({ navPathStack: ownerStack })
     } else if (name === Routes.StarMap) {
       StarMapScreen()
     } else if (name === Routes.Settings) {
