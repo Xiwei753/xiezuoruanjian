@@ -38,10 +38,13 @@ QtObject {
 
     // ── pan ──
     function beginPan() {
-        // Issue #798: 切模式前先明确 reset/cancel，不直接覆盖正在进行的
-        // connect/move 而留下旧 id。
-        if (pointerMode !== "idle") reset()
+        // Issue #798 评论 5892406254: 不在内部 reset 一个正在进行的 move/connect，
+        // 那会只清状态机不清几何缓存。只有 idle 才允许进入 pan；
+        // 真正的取消必须从 Canvas 的 resetInteraction() 走，transient UI 和
+        // edge cache 一起清掉。
+        if (pointerMode !== "idle") return false
         pointerMode = "pan"
+        return true
     }
     function endPan() { if (pointerMode === "pan") pointerMode = "idle" }
 

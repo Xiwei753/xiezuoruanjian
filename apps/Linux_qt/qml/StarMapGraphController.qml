@@ -444,7 +444,7 @@ QtObject {
     // 失败时 canonical model 不动，结束 transient move 后 delegate 因 binding
     // 自动回旧位置（与 commitEmbedMove 顺序一致）。
     function commitNodeMove(nodeId, nx, ny) {
-        if (!ensureBackend()) return;
+        if (!ensureBackend()) return false;
         var res = normalizeBackendResult(
             starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify({ position: { x: nx, y: ny } })),
             qsTr("更新节点位置失败")
@@ -460,15 +460,22 @@ QtObject {
             nodesModel = nextNodes;
             computeEdgeRenders(null);
             graphChanged();
+            return true;
         } else {
             setError(backendErrorText(res, qsTr("更新节点位置失败")));
+            // Issue #798 评论 5892406254: 提交失败时 canonical model 未动，
+            // 但 edgeRenders 已被 transient move 更新成临时坐标。
+            // 恢复 edge cache 到 canonical，与 delegate 回旧位置保持一致。
+            computeEdgeRenders(null);
+            graphChanged();
+            return false;
         }
     }
 
     // Issue #798: 拖动结束后提交 Embed 新位置。先持久化到后端，
     // 再浅拷贝新数组一次赋值更新本地模型。
     function commitEmbedMove(instanceId, nx, ny) {
-        if (!ensureBackend()) return;
+        if (!ensureBackend()) return false;
         var res = normalizeBackendResult(
             starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify({ position: { x: nx, y: ny } })),
             qsTr("更新子星图入口失败")
@@ -484,8 +491,15 @@ QtObject {
             embedsModel = nextEmbeds;
             computeEdgeRenders(null);
             graphChanged();
+            return true;
         } else {
             setError(backendErrorText(res, qsTr("更新子星图入口失败")));
+            // Issue #798 评论 5892406254: 提交失败时 canonical model 未动，
+            // 但 edgeRenders 已被 transient move 更新成临时坐标。
+            // 恢复 edge cache 到 canonical，与 delegate 回旧位置保持一致。
+            computeEdgeRenders(null);
+            graphChanged();
+            return false;
         }
     }
 

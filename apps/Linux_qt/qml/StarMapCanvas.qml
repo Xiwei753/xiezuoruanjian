@@ -78,8 +78,8 @@ Item {
 
     // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态，
     // 不可见 / 离开工作区时也 reset，避免旧 move/connect 状态泄漏。
-    onStarmapIdChanged: interaction.reset()
-    onVisibleChanged: { if (!visible) interaction.reset() }
+    onStarmapIdChanged: resetInteraction()
+    onVisibleChanged: { if (!visible) resetInteraction() }
 
     // Issue #798: 渲染层直接读 graphController 的模型，不再在 Canvas 维护副本。
     // graphController 是当前星图 canonical scene model 的唯一持有者。
@@ -102,7 +102,15 @@ Item {
 
     // Issue #798: 公开 reset 入口，供 Workspace 切图 / 不可见时清瞬时交互状态。
     function resetInteraction() {
+        // Issue #798 评论 5892406254: reset 前若正在 move，edgeRenders 已被
+        // transient 坐标更新。reset 后 delegate 回 canonical，edge cache 也要
+        // 一起恢复 canonical，否则节点回去了线还停在拖动位置。
+        var wasMove = interaction.pointerMode === "move"
         interaction.reset()
+        if (wasMove) {
+            graphController.computeEdgeRenders(null)
+            edgeCanvas.requestPaint()
+        }
     }
 
     // Background Grid
