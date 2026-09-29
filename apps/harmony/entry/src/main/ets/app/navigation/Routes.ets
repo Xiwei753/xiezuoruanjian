@@ -10,6 +10,7 @@ export enum Routes {
   Home = 'Home',
   Workspace = 'Workspace',
   Writing = 'Writing',
+  StarMapList = 'StarMapList',
   StarMap = 'StarMap',
   Settings = 'Settings',
   Stats = 'Stats'

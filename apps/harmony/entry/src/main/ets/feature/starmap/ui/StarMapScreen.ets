@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapMeta } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -20,11 +20,6 @@ import { PlatformMotionConfig, defaultMotionConfig, wobbleXFromProgress, wobbleY
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
-
-interface SelectOption {
-  value: string
-  icon: string
-}
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
 interface WobbleOffset {
@@ -45,7 +40,6 @@ export struct StarMapScreen {
   @State parentStarmapId: string = ''
   @State parentStarmapTitle: string = ''
   @State graph: StarMapGraph | null = null
-  @State allStarMaps: StarMapMeta[] = []
   @State isLoading: boolean = true
   @State errorMessage: string = ''
   @State @Watch('onTransformChange') selectedNodeId: string = ''
@@ -118,9 +112,9 @@ export struct StarMapScreen {
       this.parentStarmapId = params.parentStarmapId ?? ''
       this.parentStarmapTitle = params.parentStarmapTitle ?? ''
       this.loadStarMap()
-      this.loadAllStarMaps()
     } else {
-      this.loadAllStarMapsAndSelectFirst()
+      // 没有路由参数时不自动选择第一张星图，直接显示空状态
+      this.isLoading = false
     }
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -276,34 +270,6 @@ export struct StarMapScreen {
     this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap)
     // 几何重算后主动重画边 Canvas（canvasCtx 可能还未初始化，drawEdges 内部有 null 检查）
     this.drawEdges()
-  }
-
-  async loadAllStarMaps() {
-    try {
-      const result = await this.bridge.listStarMaps()
-      if (result.success && result.data) {
-        this.allStarMaps = result.data
-      }
-    } catch (err) {
-      // Ignore
-    }
-  }
-
-  async loadAllStarMapsAndSelectFirst() {
-    try {
-      const result = await this.bridge.listStarMaps()
-      if (result.success && result.data && result.data.length > 0) {
-        this.allStarMaps = result.data
-        const first = result.data[0]
-        this.starmapId = first.starmapId
-        this.starmapTitle = first.title
-        this.loadStarMap()
-      } else {
-        this.isLoading = false
-      }
-    } catch (err) {
-      this.isLoading = false
-    }
   }
 
   getNodeColor(node: StarMapNode): string {
@@ -614,20 +580,6 @@ export struct StarMapScreen {
             this.returnToParent()
           })
       }
-
-      Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => {
-        return { value: sm.title, icon: '' } as SelectOption
-      }))
-        .selected(this.allStarMaps.findIndex((sm: StarMapMeta) => sm.starmapId === this.starmapId))
-        .value(this.starmapTitle)
-        .onSelect((index: number) => {
-          if (index >= 0 && index < this.allStarMaps.length) {
-            this.starmapId = this.allStarMaps[index].starmapId
-            this.starmapTitle = this.allStarMaps[index].title
-            this.loadStarMap()
-          }
-        })
-        .width(160)
 
       Button('−')
         .width(36)
