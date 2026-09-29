@@ -182,11 +182,76 @@ fn edge_layout_still_covers_normalized_legacy_portal_nodes() {
         "computeEdgeRenders 必须识别归一的旧 portal 节点，实际窗口:\n{compute}"
     );
     assert!(
-        compute.contains("getEmbed(pn.id)"),
-        "旧 portal 节点的显示几何必须从归一条目取，实际窗口:\n{compute}"
+        compute.contains("getEmbed(\"legacy-portal:\" + pn.id)"),
+        "旧 portal 节点的显示几何必须按归一前缀 key 取，实际窗口:\n{compute}"
     );
     assert!(
         compute.contains("nodePos.push({ id: pn.id"),
         "旧 portal 节点几何必须补进边锚点 layout，实际窗口:\n{compute}"
+    );
+}
+
+/// 6. Issue #801 评论 5896594591: 旧 portal 操作身份分流。
+/// 归一条目必须保存真实 Node ID（legacyPortalNodeId），instanceId 加前缀仅作 UI key；
+/// updateEmbed/deleteEmbed/commitEmbedMove 必须按 legacyPortalNodeId 分流到 Node API；
+/// Canvas 拉线端点对 legacy portal 用 nodePath，不构造 EnterEmbed。
+#[test]
+fn legacy_portal_operations_route_to_node_api() {
+    let controller = strip_line_comments(&read_src(GRAPH_CONTROLLER));
+    let canvas = strip_line_comments(&read_src(CANVAS));
+
+    // buildModels 归一条目保存真实身份
+    let build = slice_between(&controller, "function buildModels()", "function getNode(");
+    assert!(
+        build.contains("legacyPortalNodeId: gn.id"),
+        "buildModels 归一条目必须保存 legacyPortalNodeId: gn.id，实际窗口:\n{build}"
+    );
+    assert!(
+        build.contains("instanceId: \"legacy-portal:\" + gn.id"),
+        "buildModels 归一条目 instanceId 必须加 legacy-portal: 前缀，实际窗口:\n{build}"
+    );
+
+    // updateEmbed 分流到 update_starmap_node
+    let update_embed = slice_between(&controller, "function updateEmbed(instanceId, patch)", "function deleteEmbed(");
+    assert!(
+        update_embed.contains("legacyPortalNodeId") && update_embed.contains("update_starmap_node"),
+        "updateEmbed 必须按 legacyPortalNodeId 分流到 update_starmap_node，实际窗口:\n{update_embed}"
+    );
+    assert!(
+        update_embed.contains("nodePatch.title = patch.label"),
+        "updateEmbed 分流必须把 label patch 转成 Node title，实际窗口:\n{update_embed}"
+    );
+
+    // deleteEmbed 分流到 delete_starmap_node
+    let delete_embed = slice_between(&controller, "function deleteEmbed(instanceId)", "function createSubStarmapAt(");
+    assert!(
+        delete_embed.contains("legacyPortalNodeId") && delete_embed.contains("delete_starmap_node"),
+        "deleteEmbed 必须按 legacyPortalNodeId 分流到 delete_starmap_node，实际窗口:\n{delete_embed}"
+    );
+
+    // commitEmbedMove 分流到 update_starmap_node
+    let commit_move = slice_between(&controller, "function commitEmbedMove(instanceId, nx, ny)", "function computeEdgeRenders(");
+    assert!(
+        commit_move.contains("legacyPortalNodeId") && commit_move.contains("update_starmap_node"),
+        "commitEmbedMove 必须按 legacyPortalNodeId 分流到 update_starmap_node，实际窗口:\n{commit_move}"
+    );
+
+    // Canvas 有 embedConnectPath helper，legacy portal 用 nodePath
+    assert!(
+        canvas.contains("function embedConnectPath(embed)"),
+        "StarMapCanvas 必须有 embedConnectPath helper"
+    );
+    let helper = slice_between(&canvas, "function embedConnectPath(embed)", "function createEdgeWithPaths(");
+    assert!(
+        helper.contains("legacyPortalNodeId") && helper.contains("nodePath(embed.legacyPortalNodeId)"),
+        "embedConnectPath 必须对 legacy portal 用 nodePath，实际窗口:\n{helper}"
+    );
+
+    // 4 个拉线调用点用 embedConnectPath 而非裸 embedPath
+    // （connect 松手 / 鼠标长按 / 触屏长按 / connect 松手命中 embed）
+    let connect_count = canvas.matches("embedConnectPath(").count();
+    assert!(
+        connect_count >= 4,
+        "Canvas 必须有至少 4 处 embedConnectPath 调用（拉线端点分流），实际: {connect_count}"
     );
 }

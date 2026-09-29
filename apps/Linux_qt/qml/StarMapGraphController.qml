@@ -91,8 +91,12 @@ QtObject {
             // 不作为普通 Node 下发给 StarMapNode。保留旧节点的位置、标题和目标 starmap。
             // Canvas 以后只有一种子星图语义：Embed。
             if (gn.portal && gn.portal.destinationStarmapId) {
+                // Issue #801 评论 5896594591: 旧 portal 真实身份是 Node，操作必须走 Node API。
+                // instanceId 加前缀仅作 UI 唯一 key（不与真实 Embed instanceId 冲突），
+                // legacyPortalNodeId 保存真实 Node ID 供操作分流。
                 newEmbeds.push({
-                    instanceId: gn.id,
+                    instanceId: "legacy-portal:" + gn.id,
+                    legacyPortalNodeId: gn.id,
                     targetStarmapId: gn.portal.destinationStarmapId,
                     label: gn.title || qsTr("未命名"),
                     x: pos.x,
@@ -384,6 +388,35 @@ QtObject {
     // 里直接调，这里提供 update/delete 供右键菜单复用）。
     function updateEmbed(instanceId, patch) {
         if (!ensureBackend()) return;
+        // Issue #801 评论 5896594591: 旧 portal 真实身份是 Node，操作分流到 Node API。
+        var embed = getEmbed(instanceId);
+        if (embed && embed.legacyPortalNodeId) {
+            var nodePatch = {};
+            if (patch.label !== undefined) nodePatch.title = patch.label;
+            if (patch.position !== undefined) nodePatch.position = patch.position;
+            var nodeRes = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(nodePatch)), qsTr("更新节点失败"));
+            if (nodeRes.success) {
+                clearError();
+                var nextEmbeds = [];
+                for (var i = 0; i < embedsModel.length; i++) {
+                    var em = copyObject(embedsModel[i]);
+                    if (em.instanceId === instanceId) {
+                        if (patch.label !== undefined) em.label = patch.label;
+                        if (patch.position !== undefined) {
+                            em.x = patch.position.x;
+                            em.y = patch.position.y;
+                        }
+                    }
+                    nextEmbeds.push(em);
+                }
+                embedsModel = nextEmbeds;
+                graphChanged();
+            } else {
+                setError(backendErrorText(nodeRes, qsTr("更新节点失败")));
+            }
+            return;
+        }
+        // 正式 Embed 继续走 Embed API（原逻辑不变）
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(patch)), qsTr("更新子星图入口失败"));
         if (res.success) {
             clearError();
@@ -408,6 +441,20 @@ QtObject {
 
     function deleteEmbed(instanceId) {
         if (!ensureBackend()) return;
+        // Issue #801 评论 5896594591: 旧 portal 走 Node API。
+        var embed = getEmbed(instanceId);
+        if (embed && embed.legacyPortalNodeId) {
+            var nodeRes = normalizeBackendResult(starmapBackendRef.delete_starmap_node(starmapId, embed.legacyPortalNodeId), qsTr("删除节点失败"));
+            if (nodeRes.success) {
+                clearError();
+                loadGraph();
+                clearSelection();
+            } else {
+                setError(backendErrorText(nodeRes, qsTr("删除节点失败")));
+            }
+            return;
+        }
+        // 正式 Embed 继续走 Embed API（原逻辑不变）
         var res = normalizeBackendResult(starmapBackendRef.delete_starmap_embed(starmapId, instanceId), qsTr("删除子星图入口失败"));
         if (res.success) {
             clearError();
@@ -495,6 +542,33 @@ QtObject {
     // 再浅拷贝新数组一次赋值更新本地模型。
     function commitEmbedMove(instanceId, nx, ny) {
         if (!ensureBackend()) return false;
+        // Issue #801 评论 5896594591: 旧 portal 移动走 Node API。
+        var embed = getEmbed(instanceId);
+        if (embed && embed.legacyPortalNodeId) {
+            var nodeRes = normalizeBackendResult(
+                starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify({ position: { x: nx, y: ny } })),
+                qsTr("更新节点位置失败")
+            );
+            if (nodeRes.success) {
+                clearError();
+                var nextEmbeds = [];
+                for (var i = 0; i < embedsModel.length; i++) {
+                    var em = copyObject(embedsModel[i]);
+                    if (em.instanceId === instanceId) { em.x = nx; em.y = ny; }
+                    nextEmbeds.push(em);
+                }
+                embedsModel = nextEmbeds;
+                computeEdgeRenders(null);
+                graphChanged();
+                return true;
+            } else {
+                setError(backendErrorText(nodeRes, qsTr("更新节点位置失败")));
+                computeEdgeRenders(null);
+                graphChanged();
+                return false;
+            }
+        }
+        // 正式 Embed 继续走 Embed API（原逻辑不变）
         var res = normalizeBackendResult(
             starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify({ position: { x: nx, y: ny } })),
             qsTr("更新子星图入口失败")
@@ -542,10 +616,10 @@ QtObject {
         for (var p = 0; p < canonicalNodes.length; p++) {
             var pn = canonicalNodes[p];
             if (!pn.portal || !pn.portal.destinationStarmapId) continue;
-            var portalEntry = getEmbed(pn.id);
+            var portalEntry = getEmbed("legacy-portal:" + pn.id);
             if (!portalEntry) continue;
             var px = portalEntry.x, py = portalEntry.y;
-            if (moveOverride && moveOverride.kind === "embed" && moveOverride.id === pn.id) {
+            if (moveOverride && moveOverride.kind === "embed" && moveOverride.id === portalEntry.instanceId) {
                 px = moveOverride.x; py = moveOverride.y;
             }
             nodePos.push({ id: pn.id, x: px, y: py, width: portalEntry.width, height: portalEntry.height });

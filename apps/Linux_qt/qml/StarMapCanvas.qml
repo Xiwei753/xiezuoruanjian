@@ -720,7 +720,7 @@ Item {
                         } else {
                             var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                createEdgeWithPaths(interaction.connectFromPath, embedConnectPath(targetEmbed))
                             }
                         }
                         interaction.endConnect()
@@ -789,7 +789,7 @@ Item {
                 // Issue #801 评论 5894035036: 鼠标长按直接进 connect
                 onMouseLongPressed: function(instId) {
                     var ed = embedData
-                    if (!interaction.beginConnect("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginConnect("embed", instId, embedConnectPath(ed), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -800,7 +800,7 @@ Item {
                 // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（与 Node 对称）。
                 onTouchLongPressed: function(instId) {
                     var ed = embedData
-                    if (!interaction.beginContextPending("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginContextPending("embed", instId, embedConnectPath(ed), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -883,7 +883,7 @@ Item {
                         } else {
                             var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                createEdgeWithPaths(interaction.connectFromPath, embedConnectPath(targetEmbed))
                             }
                         }
                         interaction.endConnect()
@@ -1111,6 +1111,16 @@ Item {
             ],
             target: { type: "starmap" }
         }
+    }
+
+    // Issue #801 评论 5896594591: Embed 拉线端点路径。
+    // 旧 portal（legacyPortalNodeId 存在）真实身份是 Node，端点用 nodePath，
+    // 不能构造 EnterEmbed(fakeInstanceId)。正式 Embed 继续用 embedPath。
+    function embedConnectPath(embed) {
+        if (embed && embed.legacyPortalNodeId) {
+            return nodePath(embed.legacyPortalNodeId)
+        }
+        return embedPath(embed.instanceId)
     }
 
     // Issue #796 评论 5887280405: 用 fromPath/toPath 建边，支持 Node 和 Embed 端点。
