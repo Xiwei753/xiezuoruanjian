@@ -305,7 +305,36 @@ Item {
             target: null
             property real lastTx: 0
             property real lastTy: 0
-            onActiveChanged: { if (active) { lastTx = 0; lastTy = 0; _touchInputActive = true } }
+            // Issue #801 评论 5895310100: 标记当前 move 由触屏发起，
+            // 用于 onLeftReleased 区分鼠标 move（nodeDragHandler 驱动）和触屏 move（bgTouchDrag 驱动），
+            // 避免两者重复 commit。
+            property bool _wasTouchMove: false
+            onActiveChanged: {
+                if (active) {
+                    lastTx = 0
+                    lastTy = 0
+                    _touchInputActive = true
+                    // 触屏在 move 模式下开始拖动 → 标记，commit 由 bgTouchDrag 独占
+                    if (interaction.pointerMode === "move") {
+                        _wasTouchMove = true
+                    }
+                } else {
+                    // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
+                    // 鼠标 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
+                    // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
+                    if (_wasTouchMove && interaction.pointerMode === "move") {
+                        if (interaction.pressedNodeId !== "") {
+                            graphController.commitNodeMove(interaction.pressedNodeId, interaction.moveX, interaction.moveY)
+                        } else if (interaction.pressedEmbedId !== "") {
+                            graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
+                        }
+                        interaction.endMove()
+                        graphController.computeEdgeRenders(null)
+                        edgeCanvas.requestPaint()
+                    }
+                    _wasTouchMove = false
+                }
+            }
             onActiveTranslationChanged: {
                 var dx = activeTranslation.x - lastTx
                 var dy = activeTranslation.y - lastTy
@@ -322,10 +351,19 @@ Item {
                     // 移动总距离超过阈值则转 connect
                     if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
                         interaction.contextPendingToConnect()
+                        // Issue #801 评论 5895310100: 继续移动变连线，关闭长按菜单视觉层
+                        touchContextPreview.hide()
                     }
                     edgeCanvas.requestPaint()
                 } else if (interaction.pointerMode === "connect") {
                     interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
+                    edgeCanvas.requestPaint()
+                } else if (interaction.pointerMode === "move") {
+                    // Issue #801 评论 5895310100: 触屏菜单"移动"后再拖 → 更新 transient 坐标。
+                    // Node/Embed 的 DragHandler 限定 Mouse，触屏拖动穿透到背景层，
+                    // 由 bgTouchDrag 统一驱动 move。delegate 的 x/y binding 自动跟随 moveX/moveY。
+                    interaction.updateMove(interaction.moveX + dx / zoomLevel, interaction.moveY + dy / zoomLevel)
+                    graphController.computeEdgeRenders(currentMoveOverride())
                     edgeCanvas.requestPaint()
                 }
             }
@@ -603,12 +641,18 @@ Item {
 
                 // Issue #801 评论 5894035036: 触屏长按进 contextPending
                 // （不移动则松手弹菜单，移动超过阈值才转 connect）
+                // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（#373：长按先出菜单反馈）。
+                // 不等 onLeftReleased 才 popup；手指继续移动超过阈值时视觉层关闭转 connect，
+                // 手指松开时视觉层关闭并弹出真正可点击的 nodeContextMenu。
                 onTouchLongPressed: {
                     var nd = nodeData
                     if (!interaction.beginContextPending("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
                     isBeingDragged = true
+                    var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
+                    var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                    touchContextPreview.show("node", sceneX, sceneY)
                     edgeCanvas.requestPaint()
                 }
 
@@ -658,8 +702,9 @@ Item {
                     // 统一结束当前节点交互：无论长按后拖动还是直接松手，
                     // 都由此出口闭环 connect/move/contextPending 状态（Issue #788 评论 5868205321）。
                     isBeingDragged = false
-                    // Issue #801: contextPending 松手不移动，弹出对象菜单
+                    // Issue #801 评论 5895310100: contextPending 松手不移动，关闭视觉层并弹出可点击菜单
                     if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
+                        touchContextPreview.hide()
                         var pendingResult = interaction.endContextPending()
                         if (pendingResult && pendingResult.kind === "node") {
                             var nd = graphController.getNode(pendingResult.id)
@@ -690,10 +735,13 @@ Item {
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
-                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
-                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
-                        graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
-                        interaction.endMove()
+                        // Issue #801 评论 5895310100: 触屏 move 由 bgTouchDrag.onActiveChanged 独占 commit；
+                        // 这里只处理鼠标 move（nodeDragHandler 驱动）。用 _wasTouchMove 区分，
+                        // 无论 onLeftReleased 与 bgTouchDrag.onActiveChanged 的触发顺序如何都不会重复 commit。
+                        if (!bgTouchDrag._wasTouchMove) {
+                            graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
+                            interaction.endMove()
+                        }
                     }
                 }
             }
@@ -758,12 +806,16 @@ Item {
                 }
 
                 // Issue #801 评论 5894035036: 触屏长按进 contextPending
+                // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（与 Node 对称）。
                 onTouchLongPressed: function(instId) {
                     var ed = embedData
                     if (!interaction.beginContextPending("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
+                    var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
+                    var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                    touchContextPreview.show("embed", sceneX, sceneY)
                     edgeCanvas.requestPaint()
                 }
 
@@ -813,8 +865,9 @@ Item {
 
                 onLeftReleased: {
                     isBeingDragged = false
-                    // Issue #801: contextPending 松手不移动，弹出对象菜单
+                    // Issue #801 评论 5895310100: contextPending 松手不移动，关闭视觉层并弹出可点击菜单
                     if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
+                        touchContextPreview.hide()
                         var pendingResult = interaction.endContextPending()
                         if (pendingResult && pendingResult.kind === "embed") {
                             var ed = graphController.getEmbed(pendingResult.id)
@@ -845,10 +898,12 @@ Item {
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
-                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
-                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
-                        graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
-                        interaction.endMove()
+                        // Issue #801 评论 5895310100: 触屏 move 由 bgTouchDrag.onActiveChanged 独占 commit；
+                        // 这里只处理鼠标 move。用 _wasTouchMove 区分避免重复 commit。
+                        if (!bgTouchDrag._wasTouchMove) {
+                            graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
+                            interaction.endMove()
+                        }
                     }
                 }
             }
@@ -923,6 +978,75 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: clearError()
+        }
+    }
+
+    // Issue #801 评论 5895310100: 触屏长按菜单视觉层（不抢 pointer grab）。
+    // #373 要求长按时菜单先出现作为视觉反馈；手指继续移动超过阈值则关闭转连线，
+    // 手指松开则关闭视觉层并弹出真正可点击的 Menu。
+    // 此组件纯视觉，无任何 TapHandler/MouseArea/Handler，不会抢走正在进行的触摸手势。
+    Item {
+        id: touchContextPreview
+        visible: false
+        z: 60
+
+        property string previewKind: ""   // "node" / "embed"
+        property real anchorX: 0          // 屏幕坐标锚点
+        property real anchorY: 0
+
+        x: anchorX - width / 2
+        y: anchorY + 8
+        width: 150
+        height: 120
+
+        Rectangle {
+            anchors.fill: parent
+            color: _card
+            border.color: _border
+            border.width: 1
+            radius: _radiusSm
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 8
+            spacing: 4
+
+            AppText {
+                dt: canvasArea.dt
+                Layout.fillWidth: true
+                text: touchContextPreview.previewKind === "embed" ? qsTr("编辑名称") : qsTr("编辑")
+                color: _textPrimary
+                font.pointSize: dt.labelPt
+                leftPadding: 4
+            }
+            AppText {
+                dt: canvasArea.dt
+                Layout.fillWidth: true
+                text: qsTr("移动")
+                color: _textPrimary
+                font.pointSize: dt.labelPt
+                leftPadding: 4
+            }
+            AppText {
+                dt: canvasArea.dt
+                Layout.fillWidth: true
+                text: qsTr("删除")
+                color: _textPrimary
+                font.pointSize: dt.labelPt
+                leftPadding: 4
+            }
+        }
+
+        function show(kind, sx, sy) {
+            previewKind = kind
+            anchorX = sx
+            anchorY = sy
+            visible = true
+        }
+
+        function hide() {
+            visible = false
         }
     }
 
