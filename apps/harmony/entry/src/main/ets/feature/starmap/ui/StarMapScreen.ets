@@ -98,6 +98,8 @@ export struct StarMapScreen {
   private pinchAnchorCanvasX: number = 0
   private pinchAnchorCanvasY: number = 0
   private pinchDrilledUp: boolean = false
+  // Pinch 激活标志：Pinch 进行中时阻止 Pan 同时修改 offset，避免双指中心漂移
+  private pinchActive: boolean = false
 
   // 画布拖动基准（onActionStart 记录，onActionUpdate 用 base+offset 避免重复累加）
   private panBaseX: number = 0
@@ -642,51 +644,46 @@ export struct StarMapScreen {
       GestureGroup(GestureMode.Parallel,
         PinchGesture({ fingers: 2 })
           .onActionStart((event: GestureEvent) => {
+            this.pinchActive = true
             this.pinchBaseScale = this.zoomScale
             this.pinchBaseOffsetX = this.offsetX
             this.pinchBaseOffsetY = this.offsetY
             this.pinchDrilledUp = false
-            // 读取双指中心点（屏幕坐标），换算成画布坐标锚点
-            const fingers: FingerInfo[] = event.fingerList
-            if (fingers && fingers.length >= 2) {
-              const centerX = (fingers[0].localX + fingers[1].localX) / 2
-              const centerY = (fingers[0].localY + fingers[1].localY) / 2
-              this.pinchAnchorCanvasX = (centerX - this.offsetX) / this.zoomScale
-              this.pinchAnchorCanvasY = (centerY - this.offsetY) / this.zoomScale
-            } else {
-              // 防御性 fallback：用画布中心
-              this.pinchAnchorCanvasX = (this.canvasWidth / 2 - this.offsetX) / this.zoomScale
-              this.pinchAnchorCanvasY = (this.canvasHeight / 2 - this.offsetY) / this.zoomScale
-            }
+            // 使用 event.pinchCenterX/Y 作为双指中心点（华为文档直接提供），换算成画布坐标锚点
+            this.pinchAnchorCanvasX = (event.pinchCenterX - this.offsetX) / this.zoomScale
+            this.pinchAnchorCanvasY = (event.pinchCenterY - this.offsetY) / this.zoomScale
           })
           .onActionUpdate((event: GestureEvent) => {
-            const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.pinchBaseScale * event.scale))
-            // 重新读取双指中心点（手指可能移动了）
-            const fingers: FingerInfo[] = event.fingerList
-            let centerX: number
-            let centerY: number
-            if (fingers && fingers.length >= 2) {
-              centerX = (fingers[0].localX + fingers[1].localX) / 2
-              centerY = (fingers[0].localY + fingers[1].localY) / 2
-            } else {
-              centerX = this.canvasWidth / 2
-              centerY = this.canvasHeight / 2
+            // 返回父层后，本次 pinch 剩余 update 全部忽略，防止旧子层状态覆盖父层
+            if (this.pinchDrilledUp) return
+            // 用未 clamp 的 rawScale 先判断是否越过返回阈值
+            const rawScale = this.pinchBaseScale * event.scale
+            if (rawScale <= MIN_ZOOM && this.layerStack.length > 0 && !this.pinchDrilledUp) {
+              this.pinchDrilledUp = true
+              this.returnToParent()
+              return
             }
+            // 只有 rawScale > MIN_ZOOM 时才正常缩放
+            const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, rawScale))
+            // 使用 event.pinchCenterX/Y 作为双指中心点（手指可能移动了）
+            const centerX = event.pinchCenterX
+            const centerY = event.pinchCenterY
             // 围绕锚点缩放：保持 pinchAnchorCanvasX/Y 对应的屏幕点不动
             this.offsetX = centerX - this.pinchAnchorCanvasX * nextScale
             this.offsetY = centerY - this.pinchAnchorCanvasY * nextScale
             this.zoomScale = nextScale
-            // 缩到 MIN_ZOOM 以下且未触发过 returnToParent → 退回父层
-            if (nextScale <= MIN_ZOOM && this.layerStack.length > 0 && !this.pinchDrilledUp) {
-              this.pinchDrilledUp = true
-              this.returnToParent()
-            }
           })
           .onActionEnd(() => {
+            this.pinchActive = false
+            this.pinchDrilledUp = false
+          })
+          .onActionCancel(() => {
+            this.pinchActive = false
             this.pinchDrilledUp = false
           }),
         PanGesture()
           .onActionStart((event: GestureEvent) => {
+            if (this.pinchActive) return
             const point = this.gestureScreenPoint(event, 0, 0)
             this.gestureTracker.beginPanCanvas(point.x, point.y)
             this.gestureMode = 'panCanvas'
@@ -694,6 +691,7 @@ export struct StarMapScreen {
             this.panBaseY = this.offsetY
           })
           .onActionUpdate((event: GestureEvent) => {
+            if (this.pinchActive) return
             if (this.gestureMode === 'panCanvas') {
               this.offsetX = this.panBaseX + event.offsetX
               this.offsetY = this.panBaseY + event.offsetY

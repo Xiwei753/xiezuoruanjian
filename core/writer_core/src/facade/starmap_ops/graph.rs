@@ -582,15 +582,18 @@ impl super::super::WriterCore {
         store.acknowledge_deletions(acknowledged_revision)
     }
 
-    /// 原子组合操作：创建子星图并嵌入父图。
+    /// 原子组合操作：创建子星图并嵌入父图（crash-safe）。
     ///
-    /// 内部顺序：
-    /// 1. `create_starmap(title, "", DEFAULT_ACCENT_COLOR)` 创建目标 StarMap
-    /// 2. 构造 StarMapEmbed 并调用 `add_starmap_embed` 在宿主图创建 Embed
-    /// 3. 第二步失败时在 Core 内回滚刚创建的目标 StarMap
+    /// 使用 journal 事务确保 crash-safe：
+    /// 1. 先生成确定的 child_starmap_id
+    /// 2. 写 pending journal（原子写盘）
+    /// 3. 用确定 ID 创建 child meta/index
+    /// 4. 在 host Store 写 Embed
+    /// 5. flush host Store，确认 Embed 已落盘
+    /// 6. 标记 journal completed 并清理
     ///
-    /// 锁顺序：`create_starmap` 不持 `starmap_stores` 锁（纯磁盘操作），
-    /// `add_starmap_embed` 持锁。两步之间无锁竞争，不会死锁。
+    /// 返回 `(StarMapMeta, StarMapEmbed, WorkspaceChangeSet)`，
+    /// WorkspaceChangeSet 包含 child meta 路径、starmap index 路径、host Embed/graph meta 路径。
     pub fn create_starmap_child_embed(
         &self,
         host_starmap_id: &str,
@@ -599,16 +602,50 @@ impl super::super::WriterCore {
     ) -> Result<(
         crate::starmap::StarMapMeta,
         crate::starmap::types::StarMapEmbed,
+        crate::storage::workspace_git::WorkspaceChangeSet,
     )> {
-        // Step 1: 创建子星图（无锁，纯磁盘操作）
-        let child_meta = self.create_starmap(title, "", None)?;
+        // Step 1: 生成确定的 child_starmap_id
+        let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
 
-        // Step 2: 构造 Embed 并添加到宿主图
+        // Step 2: 写 pending journal（原子写盘）
+        let mut tx = crate::storage::journal::StarMapChildEmbedTransaction::new(
+            host_starmap_id,
+            &child_starmap_id,
+            title,
+            position.clone(),
+            &self.app_data_root,
+        );
+        tx.prepare()?;
+
+        // Step 3: 用确定 ID 创建 child meta/index
+        let child_meta = match crate::starmap::create_starmap_with_id(
+            &self.app_data_root,
+            &child_starmap_id,
+            title,
+            "",
+            None,
+        ) {
+            Ok(meta) => meta,
+            Err(e) => {
+                // 创建失败：清 journal（child 未创建，Pending phase）
+                log::warn!(
+                    "create_starmap_child_embed: create_starmap_with_id failed, \
+                     clearing journal tx_id={}: {}",
+                    tx.tx_id(),
+                    e
+                );
+                // journal 在 Pending phase，恢复时会清除
+                return Err(e);
+            }
+        };
+        tx.mark_child_created()?;
+
+        // Step 4: 构造 Embed 并添加到宿主图
         let now = crate::starmap::now_epoch();
         let embed = crate::starmap::types::StarMapEmbed {
             instance_id: format!("em_{}", uuid::Uuid::new_v4()),
             target_starmap_id: child_meta.starmap_id.clone(),
-            label: None,
+            label: Some(title.to_string()),
             position,
             host_path: crate::starmap::types::StarMapTargetPath {
                 starmap_id: host_starmap_id.to_string(),
@@ -620,26 +657,50 @@ impl super::super::WriterCore {
             updated_at: now,
         };
 
-        match self.add_starmap_embed(host_starmap_id, embed) {
-            Ok(created_embed) => Ok((child_meta, created_embed)),
+        let created_embed = match self.add_starmap_embed(host_starmap_id, embed) {
+            Ok(embed) => embed,
             Err(e) => {
-                // Step 3: 回滚——删除刚创建的子星图
+                // Embed 添加失败：journal 保留在 ChildCreated phase，
+                // 下次启动恢复时会补 Embed 或清理。
                 log::warn!(
-                    "create_starmap_child_embed: add_starmap_embed failed, rolling back \
-                     created starmap {}: {}",
-                    child_meta.starmap_id,
+                    "create_starmap_child_embed: add_starmap_embed failed, \
+                     journal retained at ChildCreated tx_id={}: {}",
+                    tx.tx_id(),
                     e
                 );
-                if let Err(rollback_err) = self.delete_starmap(&child_meta.starmap_id) {
-                    log::error!(
-                        "create_starmap_child_embed: rollback failed for starmap {}: {}",
-                        child_meta.starmap_id,
-                        rollback_err
-                    );
-                }
-                Err(e)
+                return Err(e);
             }
-        }
+        };
+
+        // Step 5: flush host Store，确认 Embed 已落盘
+        self.flush_starmap_store(host_starmap_id)?;
+        tx.mark_embed_added()?;
+
+        // Step 6: 标记 journal completed 并清理
+        tx.complete()?;
+        tx.cleanup_journal()?;
+
+        // 构造 WorkspaceChangeSet：
+        // - child meta 路径 + starmap index 路径（create_starmap_with_id 写的）
+        // - host Embed/graph meta 路径（add_starmap_embed + flush 写的）
+        let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(
+                std::path::PathBuf::from("starmaps")
+                    .join(format!("{}.meta.json", child_meta.starmap_id)),
+            )
+            .add_upsert(std::path::PathBuf::from("starmaps").join("index.json"))
+            .add_upsert(
+                std::path::PathBuf::from("starmaps")
+                    .join(host_starmap_id)
+                    .join("embeds"),
+            )
+            .add_upsert(
+                std::path::PathBuf::from("starmaps")
+                    .join(host_starmap_id)
+                    .join("graph-meta.json"),
+            );
+
+        Ok((child_meta, created_embed, change_set))
     }
 
     pub fn find_starmap_references(

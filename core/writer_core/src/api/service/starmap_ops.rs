@@ -99,7 +99,7 @@ impl WriterCoreApi {
         position: crate::api::types::StarMapPointDto,
     ) -> ApiResult<crate::api::types::CreateStarMapChildEmbedResultDto> {
         let core_position: crate::starmap::types::StarMapPoint = position.into();
-        let (starmap_meta, embed) = self
+        let (starmap_meta, embed, change_set) = self
             .core_write()
             .create_starmap_child_embed(host_starmap_id, title, core_position)
             .map_err(WriterError::from)?;
@@ -137,6 +137,9 @@ impl WriterCoreApi {
             body: embed_entry.body.clone(),
             target: Some(embed_entry.target.clone()),
         });
+
+        // 记录本地 Git history（组合操作只记录一次）
+        let _ = self.record_workspace_change_set_history(&change_set, "create_starmap_child_embed");
 
         Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
             starmap: starmap_meta.into(),
