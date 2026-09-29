@@ -654,19 +654,22 @@ pub fn find_starmap_references(
     Ok(refs)
 }
 
-/// 列出根星图（未被任何星图嵌入且非 legacy child 的星图）。
+/// 根星图过滤纯函数：给定全部星图 meta 和对应的图数据，返回未被嵌入且非
+/// legacy child 的根星图列表。
 ///
-/// 一级星图列表只展示"没有被任何星图嵌入的根星图"。判断依据：
+/// 此函数不自己加载任何 `StarMapStore`，调用方负责提供与 meta 对应的 graph。
+/// 这样 facade 可以传入内存中尚未 flush 的图数据，避免从磁盘读到旧状态。
+///
+/// 判断依据：
 /// 1. 扫描所有星图的 `graph.embeds[].target_starmap_id`，这些目标不进入一级列表。
 /// 2. 兼容旧版"伪子星图"：旧实现用 Note 节点 + portal（destination_target=null）
 ///    来模拟子星图嵌入。旧生成签名里 `portal.destination_starmap_id` 直接指向被嵌入
 ///    的子星图 id，因此按 `portal.destination_starmap_id` 判断该子星图应被排除，
 ///    不再按节点标题匹配（标题同名星图可能不止一个，按标题匹配会误伤）。
-///
-/// 加载失败时返回 Err（不静默跳过），避免漏扫某个父图而把它的子星图错误暴露到一级列表。
-pub fn list_root_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
-    let all_starmaps = list_starmaps(app_data_root)?;
-
+pub(crate) fn filter_root_starmaps(
+    all_starmaps: Vec<StarMapMeta>,
+    graphs: &[crate::starmap::types::StarMapGraph],
+) -> Vec<StarMapMeta> {
     // starmap_id → title：用于 legacy child 判断时校验 portal 目标确实是
     // 旧实现的子星图（destination_target 为 null 且目标 id 在已知星图集合中）。
     let titles_by_id: std::collections::HashMap<String, String> = all_starmaps
@@ -677,13 +680,7 @@ pub fn list_root_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
     // 收集所有应从一级列表排除的 starmap_id（embed 目标 + legacy child）。
     let mut excluded: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    for sm in &all_starmaps {
-        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &sm.starmap_id);
-        // 加载失败时返回 Err，不静默跳过：漏扫某个父图可能把它的子星图错误暴露到一级列表。
-        store.load_full()?;
-
-        let graph = store.to_starmap_graph();
-
+    for graph in graphs {
         // 正式 Embed：target_starmap_id 是子星图，排除。
         for embed in &graph.embeds {
             excluded.insert(embed.target_starmap_id.clone());
@@ -711,12 +708,30 @@ pub fn list_root_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
         }
     }
 
-    let roots: Vec<StarMapMeta> = all_starmaps
+    all_starmaps
         .into_iter()
         .filter(|sm| !excluded.contains(&sm.starmap_id))
-        .collect();
+        .collect()
+}
 
-    Ok(roots)
+/// 列出根星图（未被任何星图嵌入且非 legacy child 的星图）。
+///
+/// 此函数从磁盘加载星图数据。facade 层（`WriterCore::list_root_starmaps`）
+/// 使用内存中的 `starmap_stores` 以看到尚未 flush 的变更，应优先调用 facade 版本。
+///
+/// 加载失败时返回 Err（不静默跳过），避免漏扫某个父图而把它的子星图错误暴露到一级列表。
+pub fn list_root_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
+    let all_starmaps = list_starmaps(app_data_root)?;
+
+    let mut graphs = Vec::with_capacity(all_starmaps.len());
+    for sm in &all_starmaps {
+        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &sm.starmap_id);
+        // 加载失败时返回 Err，不静默跳过：漏扫某个父图可能把它的子星图错误暴露到一级列表。
+        store.load_full()?;
+        graphs.push(store.to_starmap_graph());
+    }
+
+    Ok(filter_root_starmaps(all_starmaps, &graphs))
 }
 
 #[cfg(test)]

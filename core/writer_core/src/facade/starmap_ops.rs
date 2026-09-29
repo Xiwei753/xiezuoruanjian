@@ -15,8 +15,33 @@ impl super::WriterCore {
         crate::starmap::list_starmaps(&self.app_data_root)
     }
 
+    /// 列出根星图（未被任何星图嵌入且非 legacy child 的星图）。
+    ///
+    /// 与 `crate::starmap::list_root_starmaps()` 不同，此方法使用内存中的
+    /// `starmap_stores` 作为图数据来源，能看到尚未 flush 到磁盘的 Embed 变更
+    ///（刚创建/删除的子星图层级）。这确保 `listRootStarMaps()` 返回的结果
+    /// 与 `get_starmap_graph()` 看到的是同一份事实来源。
+    ///
+    /// 对于尚未在 `starmap_stores` 中的星图，通过 `entry().or_insert_with()`
+    /// 懒创建并 `ensure_fully_loaded()`，与 `get_starmap_graph` 的加载路径一致。
     pub fn list_root_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
-        crate::starmap::list_root_starmaps(&self.app_data_root)
+        let all_starmaps = crate::starmap::list_starmaps(&self.app_data_root)?;
+
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let mut graphs = Vec::with_capacity(all_starmaps.len());
+        for sm in &all_starmaps {
+            let store = stores
+                .entry(sm.starmap_id.clone())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, &sm.starmap_id));
+            store.ensure_fully_loaded()?;
+            graphs.push(store.to_starmap_graph());
+        }
+
+        Ok(crate::starmap::filter_root_starmaps(all_starmaps, &graphs))
     }
 
     pub fn list_starmaps_bound_to_project(
