@@ -96,7 +96,11 @@ Item {
     // Issue #801 评论 5894035036: 层级切换请求上抛给 Workspace。
     //   drillDownRequested: 双击 portal/Embed 或下钻触发
     //   drillUpRequested: 滚轮/Pinch/按钮缩到最小以下触发
-    signal drillDownRequested(string starmapId, string title)
+    // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
+    // Workspace 据此维护完整 currentPathSegments（层级身份）。
+    //   正式 Embed -> { type: "enterEmbed", instanceId, nodeId: null }
+    //   legacy portal -> { type: "enterPortal", instanceId: null, nodeId }
+    signal drillDownRequested(string starmapId, string title, var segment)
     signal drillUpRequested()
 
     // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态并重新加载，
@@ -780,7 +784,15 @@ Item {
                         // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace，
                         // Canvas 不再自己 drillDown。
                         // Issue #801 评论 5895625744: title fallback 不再用"子星图"。
-                        drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"))
+                        // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
+                        // 正式 Embed -> EnterEmbed(instanceId)，legacy portal -> EnterPortal(nodeId)。
+                        var segment
+                        if (ed.legacyPortalNodeId) {
+                            segment = { type: "enterPortal", instanceId: null, nodeId: ed.legacyPortalNodeId }
+                        } else {
+                            segment = { type: "enterEmbed", instanceId: ed.instanceId, nodeId: null }
+                        }
+                        drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"), segment)
                         enterStarmapRequested(tgtStarmapId, ed.label || qsTr("未命名"))
                     }
                 }
@@ -1113,12 +1125,25 @@ Item {
         }
     }
 
+    // Issue #801 评论 5897793716: legacy portal 拉线端点用 EnterPortal 段。
+    // Core 已正式定义 EnterPortal { nodeId } = 通过 portal 节点进入子星图空间。
+    // 不再返回普通 nodePath——视觉上是子星图入口，底层语义也必须是 enterPortal。
+    function portalPath(nodeId) {
+        return {
+            starmapId: starmapId,
+            segments: [
+                { type: "enterPortal", instanceId: null, nodeId: nodeId }
+            ],
+            target: { type: "starmap" }
+        }
+    }
+
     // Issue #801 评论 5896594591: Embed 拉线端点路径。
-    // 旧 portal（legacyPortalNodeId 存在）真实身份是 Node，端点用 nodePath，
+    // 旧 portal（legacyPortalNodeId 存在）真实身份是 Node，端点用 portalPath（EnterPortal 段），
     // 不能构造 EnterEmbed(fakeInstanceId)。正式 Embed 继续用 embedPath。
     function embedConnectPath(embed) {
         if (embed && embed.legacyPortalNodeId) {
-            return nodePath(embed.legacyPortalNodeId)
+            return portalPath(embed.legacyPortalNodeId)
         }
         return embedPath(embed.instanceId)
     }

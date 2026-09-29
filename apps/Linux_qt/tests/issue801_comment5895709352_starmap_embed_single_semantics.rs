@@ -154,16 +154,22 @@ fn canvas_node_delegate_has_no_portal_special_case() {
     );
 }
 
-/// 4b. Embed 双击是唯一下钻入口，title fallback 不用类型名。
+/// 4b. Embed 双击是唯一下钻入口，title fallback 不用类型名，携带 segment。
 #[test]
 fn canvas_embed_delegate_is_the_only_drill_down_entry() {
     let src = strip_line_comments(&read_src(CANVAS));
     let embed_double_click =
-        function_window(&src, "onDoubleClicked: function(tgtStarmapId) {", 400);
+        function_window(&src, "onDoubleClicked: function(tgtStarmapId) {", 900);
     assert!(
         embed_double_click
-            .contains("drillDownRequested(tgtStarmapId, ed.label || qsTr(\"未命名\"))"),
-        "Embed 双击必须上抛 drillDownRequested 且 title fallback 用“未命名”，\
+            .contains("drillDownRequested(tgtStarmapId, ed.label || qsTr(\"未命名\"), segment)"),
+        "Embed 双击必须上抛三参数 drillDownRequested 且 title fallback 用“未命名”，\
+         实际窗口:\n{embed_double_click}"
+    );
+    // Issue #801 评论 5897793716: 双击必须构造 segment（EnterEmbed / EnterPortal 分流）
+    assert!(
+        embed_double_click.contains("enterPortal") && embed_double_click.contains("enterEmbed"),
+        "Embed 双击必须按 legacyPortalNodeId 分流构造 enterPortal/enterEmbed segment，\
          实际窗口:\n{embed_double_click}"
     );
     assert!(
@@ -199,7 +205,7 @@ fn edge_layout_still_covers_normalized_legacy_portal_nodes() {
 /// 6. Issue #801 评论 5896594591: 旧 portal 操作身份分流。
 /// 归一条目必须保存真实 Node ID（legacyPortalNodeId），instanceId 加前缀仅作 UI key；
 /// updateEmbed/deleteEmbed/commitEmbedMove 必须按 legacyPortalNodeId 分流到 Node API；
-/// Canvas 拉线端点对 legacy portal 用 nodePath，不构造 EnterEmbed。
+/// Canvas 拉线端点对 legacy portal 用 portalPath（EnterPortal 段），不构造 EnterEmbed。
 #[test]
 fn legacy_portal_operations_route_to_node_api() {
     let controller = strip_line_comments(&read_src(GRAPH_CONTROLLER));
@@ -253,10 +259,14 @@ fn legacy_portal_operations_route_to_node_api() {
         "commitEmbedMove 必须按 legacyPortalNodeId 分流到 update_starmap_node，实际窗口:\n{commit_move}"
     );
 
-    // Canvas 有 embedConnectPath helper，legacy portal 用 nodePath
+    // Issue #801 评论 5897793716: Canvas 有 embedConnectPath helper，legacy portal 用 portalPath（EnterPortal 段）
     assert!(
         canvas.contains("function embedConnectPath(embed)"),
         "StarMapCanvas 必须有 embedConnectPath helper"
+    );
+    assert!(
+        canvas.contains("function portalPath(nodeId)"),
+        "StarMapCanvas 必须有 portalPath helper（EnterPortal 段）"
     );
     let helper = slice_between(
         &canvas,
@@ -265,8 +275,8 @@ fn legacy_portal_operations_route_to_node_api() {
     );
     assert!(
         helper.contains("legacyPortalNodeId")
-            && helper.contains("nodePath(embed.legacyPortalNodeId)"),
-        "embedConnectPath 必须对 legacy portal 用 nodePath，实际窗口:\n{helper}"
+            && helper.contains("portalPath(embed.legacyPortalNodeId)"),
+        "embedConnectPath 必须对 legacy portal 用 portalPath（EnterPortal 段），实际窗口:\n{helper}"
     );
 
     // 4 个拉线调用点用 embedConnectPath 而非裸 embedPath

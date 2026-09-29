@@ -35,6 +35,13 @@ Item {
     property string currentStarmapId: ""
     property string currentStarmapTitle: qsTr("星图")
 
+    // Issue #801 评论 5897793716: 完整层级身份路径段。
+    // currentPathSegments 记录从根星图到当前层的所有穿越段
+    // （EnterEmbed{instanceId} 或 EnterPortal{nodeId}），根层为 []。
+    // 同一个 StarMap 被两个不同 Embed 实例嵌入时，下钻后实例身份不再丢失。
+    // currentStarmapId 继续作为当前实际加载图，但不再充当完整层级身份。
+    property var currentPathSegments: []
+
     signal backClicked()
     signal enterStarmapRequested(string starmapId, string title)
     signal requestSync()
@@ -124,8 +131,8 @@ Item {
 
                     // Issue #801 评论 5894035036: Canvas 上抛下钻/上钻请求，
                     // 由 Workspace 统一管理层级栈。
-                    onDrillDownRequested: function(smId, smTitle) {
-                        root.enterChildStarmap(smId, smTitle)
+                    onDrillDownRequested: function(smId, smTitle, segment) {
+                        root.enterChildStarmap(smId, smTitle, segment)
                     }
                     onDrillUpRequested: {
                         root.returnToParentStarmap()
@@ -189,6 +196,7 @@ Item {
         currentStarmapId = starmapId
         currentStarmapTitle = starmapTitle
         starmapPathStack = []
+        currentPathSegments = []
     }
 
     // Issue #801 评论 5894035036: 外部标题变化时（如 AppController 更新），
@@ -208,13 +216,16 @@ Item {
 
     // Issue #801 评论 5894035036: 下钻到子星图——push 当前层到栈，切换 current。
     // Issue #801 评论 5894639734: 只改栈和 current，Canvas.onStarmapIdChanged 负责 reset+reload。
-    function enterChildStarmap(targetId, title) {
+    function enterChildStarmap(targetId, title, segment) {
         // Issue #801 评论 5894981235: QML var 原地 push 不触发 change notification，
         // 必须重新赋值数组才能让 starmapPathStackChanged 发出，
         // canDrillUp binding 才会跟着层级正确更新。
+        // Issue #801 评论 5897793716: 栈元素保存进入本层的 segment，
+        // currentPathSegments 同步 append，保留完整层级身份。
         starmapPathStack = starmapPathStack.concat([
-            { starmapId: currentStarmapId, title: currentStarmapTitle }
+            { starmapId: currentStarmapId, title: currentStarmapTitle, segment: segment }
         ])
+        currentPathSegments = currentPathSegments.concat([segment])
         currentStarmapId = targetId
         currentStarmapTitle = title
     }
@@ -227,8 +238,10 @@ Item {
         // Issue #801 评论 5894981235: QML var 原地 pop 不触发 change notification，
         // 必须重新赋值数组才能让 starmapPathStackChanged 发出，
         // canDrillUp binding 才会跟着层级正确更新。
+        // Issue #801 评论 5897793716: currentPathSegments 同步 pop。
         var parent = starmapPathStack[starmapPathStack.length - 1]
         starmapPathStack = starmapPathStack.slice(0, starmapPathStack.length - 1)
+        currentPathSegments = currentPathSegments.slice(0, currentPathSegments.length - 1)
         currentStarmapId = parent.starmapId
         currentStarmapTitle = parent.title
     }
