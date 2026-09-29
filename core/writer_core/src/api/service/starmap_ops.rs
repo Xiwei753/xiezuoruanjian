@@ -139,30 +139,49 @@ impl WriterCoreApi {
         });
 
         // 先记录 history，成功后 ack journal。
-        // history 失败时用 `?` 传播错误——journal 保留在 EmbedAdded，
-        // 下次启动 recover 会补记 history。
-        self.record_workspace_change_set_history(&change_set, "create_starmap_child_embed")
-            .map_err(WriterError::from)?;
-
-        // history 成功，ack 推进 journal 到 Completed 并清理。
-        // ack 失败只 log::warn——数据已 durable，journal 残留不影响正确性，
-        // 下次启动 recover 会清理。
-        if let Err(e) = crate::storage::journal::starmap_child_embed::ack_child_embed_history(
-            &self.app_data_root,
-            &tx_id,
-        ) {
-            log::warn!(
-                "create_starmap_child_embed: ack_child_embed_history failed for tx_id={}: {} \
-                 — journal retained, will be recovered on next startup",
-                tx_id,
-                e
-            );
-        }
+        // history 失败时不返回 Err——journal 保留在 EmbedAdded，
+        // 下次启动 recover 会补记 history。返回 pending: true 让调用方知道
+        // 数据已 durable 但 history 待补。
+        let pending = match self
+            .record_workspace_change_set_history(&change_set, "create_starmap_child_embed")
+        {
+            Ok(()) => {
+                // history 成功，ack 推进 journal 到 Completed 并清理。
+                // ack 失败只 log::warn——数据已 durable，journal 残留不影响正确性，
+                // 下次启动 recover 会清理。
+                if let Err(e) =
+                    crate::storage::journal::starmap_child_embed::ack_child_embed_history(
+                        &self.app_data_root,
+                        &tx_id,
+                    )
+                {
+                    log::warn!(
+                        "create_starmap_child_embed: ack_child_embed_history failed for tx_id={}: {} \
+                         — journal retained, will be recovered on next startup",
+                        tx_id,
+                        e
+                    );
+                }
+                false
+            }
+            Err(e) => {
+                // history 失败：不传播错误，journal 保留在 EmbedAdded，
+                // 下次启动 recovery 会补记 history。
+                log::warn!(
+                    "create_starmap_child_embed: record_workspace_change_set_history failed for \
+                     tx_id={}: {} — journal retained at EmbedAdded, will be recovered on next \
+                     startup",
+                    tx_id,
+                    e
+                );
+                true
+            }
+        };
 
         Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
             starmap: starmap_meta.into(),
             embed: embed.into(),
-            pending: false,
+            pending,
         })
     }
 

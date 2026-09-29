@@ -67,7 +67,10 @@ pub struct StarMapChildEmbedJournal {
     /// 子星图 ID（预先生成，用于 create_starmap_with_id）。
     pub child_starmap_id: String,
     /// Embed 实例 ID（预先生成，正常路径和恢复路径共用同一 ID）。
-    pub embed_instance_id: String,
+    ///
+    /// 旧版 journal 文件不带此字段，反序列化时为 `None`，恢复流程会回填。
+    #[serde(default)]
+    pub embed_instance_id: Option<String>,
     /// 子星图标题。
     pub title: String,
     /// Embed 在宿主图中的位置。
@@ -125,7 +128,7 @@ impl StarMapChildEmbedTransaction {
             tx_id: tx_id.clone(),
             host_starmap_id: host_starmap_id.to_string(),
             child_starmap_id: child_starmap_id.to_string(),
-            embed_instance_id: embed_instance_id.clone(),
+            embed_instance_id: Some(embed_instance_id.clone()),
             title: title.to_string(),
             position,
             phase: StarMapChildEmbedPhase::Pending,
@@ -148,8 +151,12 @@ impl StarMapChildEmbedTransaction {
     }
 
     /// 获取预先生成的 Embed 实例 ID。
+    ///
+    /// 正常路径下 `embed_instance_id` 一定有值（`new()` 时生成）。
+    /// 旧版 journal 反序列化后可能为 `None`，此时返回空串——
+    /// 恢复流程会在使用前回填。
     pub fn embed_instance_id(&self) -> &str {
-        &self.journal.embed_instance_id
+        self.journal.embed_instance_id.as_deref().unwrap_or("")
     }
 
     /// 获取事务 ID。
@@ -318,6 +325,68 @@ pub fn ack_child_embed_history(app_data_root: &Path, journal_token: &str) -> Res
     Ok(())
 }
 
+/// 回填旧版 journal 中缺失的 `embed_instance_id`。
+///
+/// 旧版 journal 文件不带 `embed_instance_id` 字段，反序列化后为 `None`。
+/// 回填策略：
+/// 1. 先在 host graph 中查找指向 `child_starmap_id` 的 Embed，
+///    如果已存在，拿它真实的 `instance_id` 回填 journal。
+/// 2. 如果不存在，生成新的 `em_xxx`，先持久化回 journal，再继续恢复流程。
+///
+/// 回填后 journal 文件已更新，调用方需使用回填后的 journal 继续流程。
+fn backfill_embed_instance_id(
+    journal: &mut StarMapChildEmbedJournal,
+    journal_path: &Path,
+    app_data_root: &Path,
+) -> Result<()> {
+    // 先在 host graph 中查找指向 child_starmap_id 的 Embed。
+    let mut store =
+        crate::starmap::store::StarMapStore::new(app_data_root, &journal.host_starmap_id);
+    if store.load_full().is_ok() {
+        let graph = store.to_starmap_graph();
+        if let Some(existing_embed) = graph
+            .embeds
+            .iter()
+            .find(|e| e.target_starmap_id == journal.child_starmap_id)
+        {
+            // host graph 中已有指向 child 的 Embed，用它的 instance_id 回填。
+            log::info!(
+                "[backfill_embed_instance_id] found existing embed instance_id={} in host \
+                 graph for child_starmap_id={}, backfilling journal tx_id={}",
+                existing_embed.instance_id,
+                journal.child_starmap_id,
+                journal.tx_id
+            );
+            journal.embed_instance_id = Some(existing_embed.instance_id.clone());
+            persist_journal_update(journal, journal_path)?;
+            return Ok(());
+        }
+    }
+
+    // host graph 中没有指向 child 的 Embed，生成新的 embed_instance_id 并持久化。
+    let new_embed_id = format!("em_{}", uuid::Uuid::new_v4());
+    log::info!(
+        "[backfill_embed_instance_id] no existing embed in host graph, generated new \
+         embed_instance_id={} for journal tx_id={}",
+        new_embed_id,
+        journal.tx_id
+    );
+    journal.embed_instance_id = Some(new_embed_id);
+    persist_journal_update(journal, journal_path)?;
+    Ok(())
+}
+
+/// 将 journal 更新持久化到磁盘（原子写入）。
+fn persist_journal_update(journal: &StarMapChildEmbedJournal, journal_path: &Path) -> Result<()> {
+    let content = serde_json::to_vec(journal).map_err(|e| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "persist_journal_update: serialize: {e}"
+        )))
+    })?;
+    crate::storage::atomic_write_bytes(journal_path, &content)?;
+    Ok(())
+}
+
 /// 恢复单个子嵌入 journal。
 ///
 /// 返回 `Ok(Some(recovered))` 表示 journal 已推进到 `EmbedAdded`，
@@ -329,12 +398,18 @@ fn recover_single_child_embed_journal(
     app_data_root: &Path,
 ) -> Result<Option<RecoveredStarMapChildEmbed>> {
     let content = fs::read(journal_path)?;
-    let journal: StarMapChildEmbedJournal = serde_json::from_slice(&content).map_err(|e| {
+    let mut journal: StarMapChildEmbedJournal = serde_json::from_slice(&content).map_err(|e| {
         crate::error::Error::Io(std::io::Error::other(format!(
             "recover_single_child_embed_journal: parse {}: {e}",
             journal_path.display()
         )))
     })?;
+
+    // 旧版 journal 不带 embed_instance_id 字段，反序列化后为 None。
+    // 在进入恢复流程前回填，确保后续所有路径都有确定的 embed ID。
+    if journal.embed_instance_id.is_none() {
+        backfill_embed_instance_id(&mut journal, journal_path, app_data_root)?;
+    }
 
     match journal.phase {
         StarMapChildEmbedPhase::Pending => {
@@ -463,9 +538,13 @@ fn recover_child_created_or_embed_added(
     // 确保 index 中包含该 child ID（崩溃窗口：save meta 后、save index 前崩溃）。
     ensure_child_index_membership(app_data_root, &journal.child_starmap_id)?;
 
+    // embed_instance_id 在 recover_single_child_embed_journal 中已回填，
+    // 此处一定有值。
+    let embed_id = journal.embed_instance_id.as_deref().unwrap_or("");
     let embed_exists = check_embed_exists(
         app_data_root,
         &journal.host_starmap_id,
+        embed_id,
         &journal.child_starmap_id,
     )?;
 
@@ -525,12 +604,15 @@ fn build_child_embed_change_set(
 
     // 根据 journal 中记录的 embed_instance_id 构造确定的 host Embed 文件路径，
     // 即使 flush_paths 为空（恢复路径）也能包含 host Embed 和 graph.json。
-    let bucket = crate::starmap::package_storage::bucket_for_id(&journal.embed_instance_id);
+    // embed_instance_id 在恢复路径中已被回填（backfill_embed_instance_id），
+    // 正常路径中 new() 时生成，此处一定有值。
+    let embed_id = journal.embed_instance_id.as_deref().unwrap_or("");
+    let bucket = crate::starmap::package_storage::bucket_for_id(embed_id);
     let embed_rel_path = PathBuf::from("starmaps")
         .join(&journal.host_starmap_id)
         .join("embeds")
         .join(bucket)
-        .join(format!("{}.json", journal.embed_instance_id));
+        .join(format!("{}.json", embed_id));
     change_set = change_set.add_upsert(embed_rel_path);
 
     let graph_rel_path = PathBuf::from("starmaps")
@@ -618,10 +700,15 @@ fn ensure_child_index_membership(app_data_root: &Path, child_starmap_id: &str) -
     Ok(())
 }
 
-/// 检查宿主星图中是否已有指向 child_starmap_id 的 Embed。
+/// 检查宿主星图中是否已有指定 embed_instance_id 且指向 child_starmap_id 的 Embed。
+///
+/// 双重确认：`instance_id == embed_instance_id && target_starmap_id == child_starmap_id`。
+/// 这样即使宿主图中有其他 Embed 指向同一个 child（例如旧版本残留），
+/// 也不会误判为"已存在"，从而避免跳过 repair。
 fn check_embed_exists(
     app_data_root: &Path,
     host_starmap_id: &str,
+    embed_instance_id: &str,
     child_starmap_id: &str,
 ) -> Result<bool> {
     let mut store = crate::starmap::store::StarMapStore::new(app_data_root, host_starmap_id);
@@ -630,7 +717,7 @@ fn check_embed_exists(
     Ok(graph
         .embeds
         .iter()
-        .any(|e| e.target_starmap_id == child_starmap_id))
+        .any(|e| e.instance_id == embed_instance_id && e.target_starmap_id == child_starmap_id))
 }
 
 /// 为已创建的子星图补建 Embed 关系。
@@ -643,8 +730,14 @@ fn repair_embed_for_child(
     journal: &StarMapChildEmbedJournal,
 ) -> Result<Vec<PathBuf>> {
     let now = crate::starmap::now_epoch();
+    // embed_instance_id 在恢复路径中已被回填（backfill_embed_instance_id），
+    // 正常路径中 new() 时生成，此处一定有值。
+    let embed_id = journal
+        .embed_instance_id
+        .clone()
+        .unwrap_or_else(|| format!("em_{}", uuid::Uuid::new_v4()));
     let embed = crate::starmap::types::StarMapEmbed {
-        instance_id: journal.embed_instance_id.clone(),
+        instance_id: embed_id,
         target_starmap_id: journal.child_starmap_id.clone(),
         label: Some(journal.title.clone()),
         position: journal.position.clone(),

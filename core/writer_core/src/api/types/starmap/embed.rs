@@ -2,9 +2,13 @@ use super::*;
 
 /// 创建子星图并嵌入父图的原子组合操作结果。
 ///
-/// `starmap` 是新创建的子星图元数据，`embed` 是建立的 Embed 关系，
-/// `pending` 标识刚创建的子图是否处于"待完成"状态——原子操作成功时
-/// `pending` 为 `false`（Embed 已建立），为将来处理旧版孤儿数据提供基础。
+/// `starmap` 是新创建的子星图元数据，`embed` 是建立的 Embed 关系。
+/// `pending` 表示 Core 是否还有后台持久事务（Git history）待补：
+/// - `false`：数据已 durable 且 history 已记录，操作完全完成。
+/// - `true`：数据已 durable（child meta、Embed、graph 均已落盘），
+///   但 Git history 记录失败，下次启动会通过 journal recovery 补记。
+///   调用方不应将 `pending: true` 视为创建失败——子星图和 Embed
+///   已实际创建成功，应正常加入当前层显示。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateStarMapChildEmbedResultDto {
