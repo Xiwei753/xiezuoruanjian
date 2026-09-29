@@ -1176,4 +1176,217 @@ mod tests {
             index_rel
         );
     }
+
+    /// 旧版 journal 不带 `embed_instance_id` 字段（`String` → `Option<String>` + `serde(default)`）。
+    /// 验证旧 journal 能被反序列化，且 `embed_instance_id` 为 `None`。
+    #[test]
+    fn test_legacy_journal_without_embed_instance_id_deserializes() {
+        // 模拟旧版 journal JSON：没有 embed_instance_id 字段
+        let legacy_json = serde_json::json!({
+            "tx_id": "legacy_tx_001",
+            "host_starmap_id": "sm_host",
+            "child_starmap_id": "sm_child",
+            "title": "Legacy Child",
+            "position": crate::starmap::types::StarMapPoint::default(),
+            "phase": "child_created",
+        });
+
+        let journal: StarMapChildEmbedJournal =
+            serde_json::from_value(legacy_json).expect("旧版 journal 必须能反序列化");
+        assert_eq!(journal.tx_id, "legacy_tx_001");
+        assert_eq!(journal.host_starmap_id, "sm_host");
+        assert_eq!(journal.child_starmap_id, "sm_child");
+        assert!(
+            journal.embed_instance_id.is_none(),
+            "旧版 journal 反序列化后 embed_instance_id 应为 None"
+        );
+        assert_eq!(journal.phase, StarMapChildEmbedPhase::ChildCreated);
+    }
+
+    /// 旧版 journal（无 embed_instance_id）在恢复时会被 backfill：
+    /// 如果 host graph 中已有指向 child 的 Embed，用它的 instance_id 回填。
+    #[test]
+    fn test_legacy_journal_backfill_from_existing_embed() {
+        let dir = setup_temp_dir();
+        let app_data_root = dir.path();
+
+        // 创建宿主星图和子星图
+        let host_meta = crate::starmap::create_starmap(app_data_root, "Host", "", None).unwrap();
+        let child_meta = crate::starmap::create_starmap(app_data_root, "Child", "", None).unwrap();
+
+        // 在宿主图中添加 embed 指向 child（模拟旧版本创建的 embed）
+        let existing_embed_id = format!("em_legacy_{}", uuid::Uuid::new_v4());
+        let now = crate::starmap::now_epoch();
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: existing_embed_id.clone(),
+            target_starmap_id: child_meta.starmap_id.clone(),
+            label: Some("Child".to_string()),
+            position: crate::starmap::types::StarMapPoint::default(),
+            host_path: crate::starmap::types::StarMapTargetPath {
+                starmap_id: host_meta.starmap_id.clone(),
+                segments: Vec::new(),
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut store =
+            crate::starmap::store::StarMapStore::new(app_data_root, &host_meta.starmap_id);
+        store.load_full().unwrap();
+        store.upsert_embed(embed);
+        store.flush().unwrap();
+
+        // 手动写一个旧版格式的 journal（不带 embed_instance_id 字段）
+        let journals_dir = app_data_root.join(CHILD_EMBED_JOURNALS_DIR);
+        std::fs::create_dir_all(&journals_dir).unwrap();
+        let journal_path =
+            journals_dir.join(format!("{}legacy_tx_002", CHILD_EMBED_JOURNAL_PREFIX));
+        let legacy_journal = serde_json::json!({
+            "tx_id": "legacy_tx_002",
+            "host_starmap_id": host_meta.starmap_id,
+            "child_starmap_id": child_meta.starmap_id,
+            "title": "Child",
+            "position": crate::starmap::types::StarMapPoint::default(),
+            "phase": "child_created",
+        });
+        let content = serde_json::to_vec(&legacy_journal).unwrap();
+        crate::storage::atomic_write_bytes(&journal_path, &content).unwrap();
+
+        // 恢复：旧 journal 应被反序列化，backfill 从 host graph 中找到 embed 的 instance_id
+        let recovered = recover_pending_child_embed_transactions(app_data_root).unwrap();
+        assert_eq!(recovered.len(), 1, "应恢复一个子嵌入事务");
+        assert_eq!(recovered[0].journal_token, "legacy_tx_002");
+
+        // 验证 journal 文件已被更新（backfill 后 embed_instance_id 不再是 None）
+        let updated_content = fs::read(&journal_path).unwrap();
+        let updated_journal: StarMapChildEmbedJournal =
+            serde_json::from_slice(&updated_content).unwrap();
+        assert_eq!(
+            updated_journal.embed_instance_id,
+            Some(existing_embed_id.clone()),
+            "backfill 应从 host graph 中找到现有 embed 的 instance_id"
+        );
+        assert_eq!(updated_journal.phase, StarMapChildEmbedPhase::EmbedAdded);
+    }
+
+    /// 旧版 journal（无 embed_instance_id）在恢复时会被 backfill：
+    /// 如果 host graph 中没有指向 child 的 Embed，生成新的 embed_instance_id。
+    #[test]
+    fn test_legacy_journal_backfill_generates_new_id_when_no_embed() {
+        let dir = setup_temp_dir();
+        let app_data_root = dir.path();
+
+        // 创建宿主星图和子星图，但不添加 embed
+        let host_meta = crate::starmap::create_starmap(app_data_root, "Host", "", None).unwrap();
+        let child_meta = crate::starmap::create_starmap(app_data_root, "Child", "", None).unwrap();
+
+        // 手动写一个旧版格式的 journal（不带 embed_instance_id 字段）
+        let journals_dir = app_data_root.join(CHILD_EMBED_JOURNALS_DIR);
+        std::fs::create_dir_all(&journals_dir).unwrap();
+        let journal_path =
+            journals_dir.join(format!("{}legacy_tx_003", CHILD_EMBED_JOURNAL_PREFIX));
+        let legacy_journal = serde_json::json!({
+            "tx_id": "legacy_tx_003",
+            "host_starmap_id": host_meta.starmap_id,
+            "child_starmap_id": child_meta.starmap_id,
+            "title": "Child",
+            "position": crate::starmap::types::StarMapPoint::default(),
+            "phase": "child_created",
+        });
+        let content = serde_json::to_vec(&legacy_journal).unwrap();
+        crate::storage::atomic_write_bytes(&journal_path, &content).unwrap();
+
+        // 恢复：旧 journal 应被反序列化，backfill 生成新的 embed_instance_id
+        let recovered = recover_pending_child_embed_transactions(app_data_root).unwrap();
+        assert_eq!(recovered.len(), 1, "应恢复一个子嵌入事务");
+        assert_eq!(recovered[0].journal_token, "legacy_tx_003");
+
+        // 验证 journal 文件已被更新（backfill 后 embed_instance_id 不再是 None）
+        let updated_content = fs::read(&journal_path).unwrap();
+        let updated_journal: StarMapChildEmbedJournal =
+            serde_json::from_slice(&updated_content).unwrap();
+        assert!(
+            updated_journal.embed_instance_id.is_some(),
+            "backfill 应生成新的 embed_instance_id"
+        );
+        assert!(
+            updated_journal
+                .embed_instance_id
+                .as_ref()
+                .unwrap()
+                .starts_with("em_"),
+            "生成的 embed_instance_id 应以 em_ 前缀开头"
+        );
+
+        // 验证 embed 已被补建，且 instance_id 与 backfill 生成的一致
+        let mut store =
+            crate::starmap::store::StarMapStore::new(app_data_root, &host_meta.starmap_id);
+        store.load_full().unwrap();
+        let graph = store.to_starmap_graph();
+        assert_eq!(graph.embeds.len(), 1, "应补建一个 embed");
+        assert_eq!(
+            graph.embeds[0].instance_id,
+            updated_journal.embed_instance_id.unwrap(),
+            "补建的 embed instance_id 应与 backfill 生成的一致"
+        );
+    }
+
+    /// `check_embed_exists` 做双重确认：instance_id + target_starmap_id。
+    /// 即使 host graph 中有其他 embed 指向同一 child，也不会误判。
+    #[test]
+    fn test_check_embed_exists_double_confirmation() {
+        let dir = setup_temp_dir();
+        let app_data_root = dir.path();
+
+        let host_meta = crate::starmap::create_starmap(app_data_root, "Host", "", None).unwrap();
+        let child_meta = crate::starmap::create_starmap(app_data_root, "Child", "", None).unwrap();
+
+        // 在宿主图中添加一个指向 child 的 embed，但 instance_id 不同
+        let other_embed_id = format!("em_other_{}", uuid::Uuid::new_v4());
+        let now = crate::starmap::now_epoch();
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: other_embed_id,
+            target_starmap_id: child_meta.starmap_id.clone(),
+            label: Some("Child".to_string()),
+            position: crate::starmap::types::StarMapPoint::default(),
+            host_path: crate::starmap::types::StarMapTargetPath {
+                starmap_id: host_meta.starmap_id.clone(),
+                segments: Vec::new(),
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: now,
+            updated_at: now,
+        };
+        let mut store =
+            crate::starmap::store::StarMapStore::new(app_data_root, &host_meta.starmap_id);
+        store.load_full().unwrap();
+        store.upsert_embed(embed);
+        store.flush().unwrap();
+
+        // 用不同的 embed_instance_id 检查：应返回 false（不误判为已存在）
+        let exists = check_embed_exists(
+            app_data_root,
+            &host_meta.starmap_id,
+            "em_expected_different_id",
+            &child_meta.starmap_id,
+        )
+        .unwrap();
+        assert!(
+            !exists,
+            "check_embed_exists 不应仅凭 target_starmap_id 误判为已存在"
+        );
+
+        // 用正确的 embed_instance_id 检查：应返回 true
+        let exists = check_embed_exists(
+            app_data_root,
+            &host_meta.starmap_id,
+            &format!("em_other_{}", ""),
+            &child_meta.starmap_id,
+        )
+        .unwrap();
+        // em_other_{} 不等于实际的 em_other_{uuid}，所以应该是 false
+        assert!(!exists, "instance_id 不匹配时应返回 false");
+    }
 }
