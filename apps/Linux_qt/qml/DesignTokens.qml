@@ -177,7 +177,8 @@ QtObject {
     // 不悄悄回退上一份颜色。Rust 侧 #DFE3E7 到 QML 仍是 #DFE3E7 而非 #000000。
     function qcolor(value) {
         if (typeof value !== "string" || value.length === 0) {
-            return Qt.rgba(1.0, 0.0, 1.0, 1.0) // magenta 表示异常
+            // magenta 表示异常值
+            return Qt.rgba(1.0, 0.0, 1.0, 1.0)
         }
         // Qt.color 非法颜色返回 null（不抛异常），用 null 检查 fallback 到洋红。
         const c = Qt.color(value)

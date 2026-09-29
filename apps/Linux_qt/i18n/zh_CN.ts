@@ -141,6 +141,10 @@
         <translation>作品</translation>
     </message>
     <message>
+        <source>切换作品失败</source>
+        <translation>切换作品失败</translation>
+    </message>
+    <message>
         <source>切换工作区失败</source>
         <translation>切换工作区失败</translation>
     </message>
@@ -151,6 +155,10 @@
     <message>
         <source>恢复工作区失败</source>
         <translation>恢复工作区失败</translation>
+    </message>
+    <message>
+        <source>恢复章节状态失败</source>
+        <translation>恢复章节状态失败</translation>
     </message>
     <message>
         <source>打开工作区失败</source>
@@ -603,6 +611,10 @@
         <translation>Qt 桌面客户端</translation>
     </message>
     <message>
+        <source>文字与光标同事务协同（各自独立时长）</source>
+        <translation>文字与光标同事务协同（各自独立时长）</translation>
+    </message>
+    <message>
         <source>日志 zip: </source>
         <translation>日志 zip: </translation>
     </message>
@@ -906,6 +918,10 @@
         <translation>新建节点</translation>
     </message>
     <message>
+        <source>移动节点</source>
+        <translation>移动节点</translation>
+    </message>
+    <message>
         <source>还没有节点，点击新增节点开始构建星图</source>
         <translation>还没有节点，点击新增节点开始构建星图</translation>
     </message>
@@ -1120,6 +1136,10 @@
         <translation>删除</translation>
     </message>
     <message>
+        <source>删除星图</source>
+        <translation>删除星图</translation>
+    </message>
+    <message>
         <source>取消</source>
         <translation>取消</translation>
     </message>
@@ -1156,12 +1176,28 @@
         <translation>星图名称</translation>
     </message>
     <message>
+        <source>星图标题</source>
+        <translation>星图标题</translation>
+    </message>
+    <message>
+        <source>暂无星图</source>
+        <translation>暂无星图</translation>
+    </message>
+    <message>
         <source>构建你的创作宇宙</source>
         <translation>构建你的创作宇宙</translation>
     </message>
     <message>
+        <source>点击「新建星图」开始构建</source>
+        <translation>点击「新建星图」开始构建</translation>
+    </message>
+    <message>
         <source>确定</source>
         <translation>确定</translation>
+    </message>
+    <message>
+        <source>确定删除「%1」吗？此操作不可撤销。</source>
+        <translation>确定删除「%1」吗？此操作不可撤销。</translation>
     </message>
     <message>
         <source>简要描述这个星图的内容</source>
@@ -1238,8 +1274,16 @@
 <context>
     <name>StarMapWorkspace</name>
     <message>
+        <source>+ 新建节点</source>
+        <translation>+ 新建节点</translation>
+    </message>
+    <message>
         <source>← 返回</source>
         <translation>← 返回</translation>
+    </message>
+    <message>
+        <source>放大</source>
+        <translation>放大</translation>
     </message>
     <message>
         <source>星图功能将在后续版本实现，敬请期待</source>
@@ -1252,6 +1296,18 @@
     <message>
         <source>星图编辑器</source>
         <translation>星图编辑器</translation>
+    </message>
+    <message>
+        <source>缩小</source>
+        <translation>缩小</translation>
+    </message>
+    <message>
+        <source>自动布局</source>
+        <translation>自动布局</translation>
+    </message>
+    <message>
+        <source>重置视图</source>
+        <translation>重置视图</translation>
     </message>
 </context>
 <context>
@@ -1335,6 +1391,10 @@
 </context>
 <context>
     <name>SyncPage</name>
+    <message>
+        <source>当前同步完成后将再次同步</source>
+        <translation>当前同步完成后将再次同步</translation>
+    </message>
     <message>
         <source>待处理冲突 %1</source>
         <translation>待处理冲突 %1</translation>
@@ -1670,6 +1730,10 @@
     <message>
         <source>刷新工作区状态失败</source>
         <translation>刷新工作区状态失败</translation>
+    </message>
+    <message>
+        <source>刷新当前选择失败</source>
+        <translation>刷新当前选择失败</translation>
     </message>
     <message>
         <source>刷新设置失败</source>
@@ -2233,6 +2297,45 @@
     <message>
         <source>颜色来源</source>
         <translation>颜色来源</translation>
+    </message>
+</context>
+<context>
+    <name>SyncConflictPanel</name>
+    <message>
+        <source>保留本地</source>
+        <translation>保留本地</translation>
+    </message>
+    <message>
+        <source>加载中…</source>
+        <translation>加载中…</translation>
+    </message>
+    <message>
+        <source>手动合并后标记已解决</source>
+        <translation>手动合并后标记已解决</translation>
+    </message>
+    <message>
+        <source>无冲突</source>
+        <translation>无冲突</translation>
+    </message>
+    <message>
+        <source>本地</source>
+        <translation>本地</translation>
+    </message>
+    <message>
+        <source>没有未解决的冲突</source>
+        <translation>没有未解决的冲突</translation>
+    </message>
+    <message>
+        <source>远端</source>
+        <translation>远端</translation>
+    </message>
+    <message>
+        <source>远端已删除此文件</source>
+        <translation>远端已删除此文件</translation>
+    </message>
+    <message>
+        <source>采用远端</source>
+        <translation>采用远端</translation>
     </message>
 </context>
 </TS>

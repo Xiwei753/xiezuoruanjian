@@ -49,6 +49,9 @@ Rectangle {
     readonly property color _textSecondary: dt.textSecondary
     readonly property color _textMuted: dt.textMuted
     readonly property color _primary: dt.primary
+    // 落在 _primary 实色按钮上的文字色，走 DesignTokens.onPrimary（跟随明暗主题），
+    // 不再硬编码 #FFFFFF（scripts/check_ui_tokens.sh 禁止 QML 硬编码 hex）。
+    readonly property color _onPrimary: dt.onPrimary
     readonly property color _error: dt.error
     readonly property int _sp4: dt.sp4
     readonly property int _sp8: dt.sp8
@@ -602,7 +605,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: qsTr("手动合并后标记已解决")
                         dt: root.dt
-                        color: markMergedHover.containsMouse ? root._accentText : "#FFFFFF"
+                        color: markMergedHover.containsMouse ? root._accentText : root._onPrimary
                         font.pointSize: root._fontSm
                         font.weight: Font.DemiBold
                     }
