@@ -54,20 +54,23 @@ Item {
     property real _wobbleAnimY: 0
 
     // Issue #793 评论 5885482530: 声明时即为最终 binding（不再二次绑定）。
-    // 选中、按下（nodeLeftTap.pressed）、拖动时归零；idle 时跟随 wobble 动画。
-    // nodeLeftTap 在下方定义，QML id 在组件作用域内全局可见，binding 在
-    // 组件 complete 阶段求值，引用后定义的 id 合法。
+    // 选中、按下（nodeMouseTap/nodeTouchTap）、拖动时归零；idle 时跟随 wobble 动画。
+    // Issue #801 评论 5894035036: 鼠标和触屏 TapHandler 拆开，pressed 取并集。
     property real visualOffsetX:
-        (isSelected || isBeingDragged || nodeLeftTap.pressed) ? 0 : _wobbleAnimX
+        (isSelected || isBeingDragged || nodeMouseTap.pressed || nodeTouchTap.pressed) ? 0 : _wobbleAnimX
     property real visualOffsetY:
-        (isSelected || isBeingDragged || nodeLeftTap.pressed) ? 0 : _wobbleAnimY
+        (isSelected || isBeingDragged || nodeMouseTap.pressed || nodeTouchTap.pressed) ? 0 : _wobbleAnimY
 
     // ---------------------------------------------------------------------------
     // 对外信号：节点只上抛事件，由 Canvas 决定后续行为
+    // Issue #801 评论 5894035036: 长按按设备拆分——
+    //   mouseLongPressed: 鼠标长按 → Canvas 进 connect（#373 鼠标规则：长按后拖=拉线）
+    //   touchLongPressed: 触屏长按 → Canvas 进 contextPending（不移动弹菜单，移动转 connect）
     // ---------------------------------------------------------------------------
     signal singleClicked()
     signal doubleClicked()
-    signal longPressed()
+    signal mouseLongPressed()
+    signal touchLongPressed()
     signal contextMenuRequested(real sceneX, real sceneY)
     signal moveDelta(real dx, real dy)
     // 左键 press→release 追踪：由 PointHandler（passive grab）统一上抛，
@@ -129,15 +132,16 @@ Item {
     //   X: ±0.6px，半周期 7000~9500ms（7000 + (index % 7) * 400）
     //   Y: ±0.4px，半周期 8500~11500ms（8500 + (index % 5) * 300）
     // Issue #793 评论 5885482530: 选中/按下/拖动时动画暂停，idle 时才慢慢漂
+    // Issue #801 评论 5894035036: pressed 取鼠标/触屏并集。
     SequentialAnimation on _wobbleAnimX {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !nodeLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !nodeMouseTap.pressed && !nodeTouchTap.pressed
         NumberAnimation { to: 0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
     }
     SequentialAnimation on _wobbleAnimY {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !nodeLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !nodeMouseTap.pressed && !nodeTouchTap.pressed
         NumberAnimation { to: 0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
     }
@@ -148,18 +152,34 @@ Item {
     // 默认 NotExclusive 时双击会同时触发单击。
     // Issue #793 评论 5885482530: handler 全部挂在稳定 root Item 上，
     // 不放进 visualNode，命中框恒定。
+    // Issue #801 评论 5894035036: 按 acceptedDevices 拆鼠标/触屏——
+    //   鼠标长按 → mouseLongPressed（Canvas 进 connect）
+    //   触屏长按 → touchLongPressed（Canvas 进 contextPending）
     // ---------------------------------------------------------------------------
     TapHandler {
-        id: nodeLeftTap
+        id: nodeMouseTap
+        acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.LeftButton
         exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()
-        onLongPressed: root.longPressed()
+        onLongPressed: root.mouseLongPressed()
     }
 
     TapHandler {
+        id: nodeTouchTap
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+
+        onSingleTapped: root.singleClicked()
+        onDoubleTapped: root.doubleClicked()
+        onLongPressed: root.touchLongPressed()
+    }
+
+    TapHandler {
+        acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.RightButton
         onSingleTapped: function(eventPoint) {
             root.contextMenuRequested(eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -173,9 +193,12 @@ Item {
     // DragHandler.active 仅在超过 dragThreshold 后才为 true，长按后不拖动直接松开时
     // onActiveChanged(false) 不会触发，故不能依赖它来结束 connect/move 状态。
     // （Issue #788 评论 5868205321）
+    // Issue #801 评论 5894035036: 只鼠标直接拖 → move；触屏不在节点上 grab 拖动，
+    // 让事件穿透到背景 pan（触屏 connect 移动由背景层 bgTouchDrag 处理）。
     // ---------------------------------------------------------------------------
     DragHandler {
         id: nodeDragHandler
+        acceptedDevices: PointerDevice.Mouse
         target: null
         acceptedButtons: Qt.LeftButton
 
@@ -206,6 +229,7 @@ Item {
     // 这样无论"长按后拖动"还是"长按后直接松手"，都走同一个 leftReleased
     // 出口，由 Canvas 统一结束 connect/move 状态。
     // https://doc.qt.io/qt-6.8/qml-qtquick-pointhandler.html
+    // Issue #801 评论 5894035036: PointHandler 保留鼠标+触屏 release 追踪（passive grab）。
     // ---------------------------------------------------------------------------
     PointHandler {
         id: leftPointTracker

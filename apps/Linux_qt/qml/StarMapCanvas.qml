@@ -22,9 +22,9 @@ Item {
     property string starmapId: ""
     required property var dt
 
-    // Issue #801: 层级路径栈，记录从根星图到当前层的路径
-    // 每项格式：{ starmapId, title }
-    property var starmapPathStack: []
+    // Issue #801 评论 5894035036: 层级路径栈已移到 Workspace。
+    // Canvas 的 starmapId 是只读输入绑定（由 Workspace.currentStarmapId 驱动），
+    // 不再在内部赋值 starmapId，也不再维护 starmapPathStack。
 
     readonly property color _primary: dt.primary
     readonly property color _onPrimary: dt.onPrimary
@@ -54,6 +54,11 @@ Item {
     property real panY: 0
     property real zoomLevel: 1.0
 
+    // Issue #801 评论 5894035036: PinchHandler 以手势中心缩放的起点记录。
+    property real _pinchStartZoom: 1.0
+    property real _pinchStartPanX: 0
+    property real _pinchStartPanY: 0
+
     // ---------------------------------------------------------------------------
     // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
     //   pointerMode / connectFrom* / connectMouseX/Y / pressedNodeId / pressedEmbedId
@@ -79,10 +84,20 @@ Item {
     signal selectionCleared()
     signal enterStarmapRequested(string starmapId, string title)
     signal editNodeRequested(var node)
+    // Issue #801 评论 5894035036: 层级切换请求上抛给 Workspace。
+    //   drillDownRequested: 双击 portal/Embed 或下钻触发
+    //   drillUpRequested: 滚轮/Pinch/按钮缩到最小以下触发
+    signal drillDownRequested(string starmapId, string title)
+    signal drillUpRequested()
 
-    // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态，
+    // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态并重新加载，
     // 不可见 / 离开工作区时也 reset，避免旧 move/connect 状态泄漏。
-    onStarmapIdChanged: resetInteraction()
+    // Issue #801 评论 5894035036: starmapId 现在是只读输入，由 Workspace 驱动；
+    // 切图后 resetInteraction + loadGraph 让新图正确加载。
+    onStarmapIdChanged: {
+        resetInteraction()
+        if (starmapId.length > 0) loadGraph()
+    }
     onVisibleChanged: { if (!visible) resetInteraction() }
 
     // Issue #798: 渲染层直接读 graphController 的模型，不再在 Canvas 维护副本。
@@ -117,34 +132,10 @@ Item {
         }
     }
 
-    // Issue #801: 下钻到子星图——把当前 starmapId push 到栈，再加载子星图
-    function drillDown(targetStarmapId, title) {
-        starmapPathStack.push({ starmapId: starmapId, title: starmapTitle() })
-        starmapId = targetStarmapId
-        // starmapId 改变后 onStarmapIdChanged 会触发 resetInteraction 和 loadGraph
-    }
-
-    // Issue #801: 返回父星图——pop 栈并加载父星图数据
-    function drillUp() {
-        if (starmapPathStack.length > 0) {
-            var parent = starmapPathStack.pop()
-            starmapId = parent.starmapId
-            return true
-        }
-        return false
-    }
-
-    // Issue #801: 是否在根星图（没有父级）
-    function isAtRootStarmap() {
-        return starmapPathStack.length === 0
-    }
-
-    // Issue #801: 获取当前星图标题（用于 drillDown 时记录父级标题）
-    function starmapTitle() {
-        // 从 graphController 获取当前星图标题，若无则返回默认值
-        var title = graphController.starmapTitle
-        return title || qsTr("星图")
-    }
+    // Issue #801 评论 5894035036: drillDown / drillUp / isAtRootStarmap / starmapTitle
+    // 已移到 Workspace。层级栈由 Workspace 持有，Canvas 只通过 drillDownRequested /
+    // drillUpRequested 信号上抛请求。父级标题由 Workspace 的 currentStarmapTitle 维护，
+    // 不再从 graphController 反查（graphController 没有 starmapTitle 属性）。
 
     // Background Grid
     Rectangle {
@@ -182,17 +173,23 @@ Item {
     // ---------------------------------------------------------------------------
     // 背景交互层：TapHandler 处理点击类，MouseArea 处理 pan 拖动与滚轮
     // TapHandler 与 MouseArea 共存：Handler 独立收到 tap/longPress 信号
+    // Issue #801 评论 5894035036: 鼠标/触屏按 acceptedDevices 拆开：
+    //   - 鼠标空白长按无操作（鼠标用右键打开菜单）
+    //   - 触屏空白长按打开背景菜单
+    //   - 触屏未长按在节点上滑动 → 画布 pan（节点没挂触屏 DragHandler，事件穿透）
+    //   - 触屏长按后移动 → 更新 connect 坐标
     // ---------------------------------------------------------------------------
     Item {
         id: bgInteractionLayer
         anchors.fill: parent
         z: 0
 
-        // 左键单击：边选中或清选区
+        // 鼠标左键单击：边选中或清选区
         // Issue #796 评论 5886483653: 命中顺序统一成 Node/Embed → Edge → 空白，
         // 不让画布背景先吞掉对象点击。
         TapHandler {
-            id: backgroundLeftTap
+            id: bgMouseLeftTap
+            acceptedDevices: PointerDevice.Mouse
             acceptedButtons: Qt.LeftButton
             onSingleTapped: function(eventPoint) {
                 var mx = (eventPoint.position.x - panX) / zoomLevel
@@ -210,9 +207,43 @@ Item {
                     clearSelection()
                 }
             }
-            // pan 已由 bgDragArea.onPressed 直接处理（#373 桌面规则），
-            // long press 不再负责进入 pan。
+            // 鼠标空白长按无操作（鼠标用右键打开菜单）。
             onLongPressed: {
+            }
+        }
+
+        // 触屏左键单击：边选中或清选区；长按打开背景菜单
+        TapHandler {
+            id: bgTouchLeftTap
+            acceptedDevices: PointerDevice.TouchScreen
+            acceptedButtons: Qt.LeftButton
+            onSingleTapped: function(eventPoint) {
+                var mx = (eventPoint.position.x - panX) / zoomLevel
+                var my = (eventPoint.position.y - panY) / zoomLevel
+                if (findNodeAt(mx, my)) {
+                    return
+                }
+                if (findEmbedAt(mx, my)) {
+                    return
+                }
+                var clickedEdge = graphController.hitTestEdge(mx, my)
+                if (clickedEdge) {
+                    graphController.selectEdge(clickedEdge.id)
+                } else {
+                    clearSelection()
+                }
+            }
+            // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
+            // TapHandler.longPressed 信号无参数，用 point.position 拿当前点
+            // （TapHandler 继承自 SinglePointHandler，有 point 属性）。
+            onLongPressed: {
+                var px = bgTouchLeftTap.point.position.x
+                var py = bgTouchLeftTap.point.position.y
+                var mx = (px - panX) / zoomLevel
+                var my = (py - panY) / zoomLevel
+                contextMenuWorldX = mx
+                contextMenuWorldY = my
+                bgContextMenu.popup(px, py)
             }
         }
 
@@ -220,6 +251,7 @@ Item {
         // Issue #796 评论 5886483653: 命中顺序 Node/Embed → Edge → 空白。
         TapHandler {
             id: backgroundRightTap
+            acceptedDevices: PointerDevice.Mouse
             acceptedButtons: Qt.RightButton
             onSingleTapped: function(eventPoint) {
                 var mx = (eventPoint.position.x - panX) / zoomLevel
@@ -239,6 +271,71 @@ Item {
                     contextMenuWorldY = my
                     bgContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
                 }
+            }
+        }
+
+        // 触屏背景拖动：触屏未长按在节点上滑动 → 画布 pan；
+        // 触屏长按后移动 → 更新 connect 坐标，超过阈值转 connect。
+        // Issue #801 评论 5894035036: 节点没挂触屏 DragHandler，事件穿透到背景。
+        DragHandler {
+            id: bgTouchDrag
+            acceptedDevices: PointerDevice.TouchScreen
+            acceptedButtons: Qt.LeftButton
+            target: null
+            property real lastTx: 0
+            property real lastTy: 0
+            onActiveChanged: { if (active) { lastTx = 0; lastTy = 0 } }
+            onActiveTranslationChanged: {
+                var dx = activeTranslation.x - lastTx
+                var dy = activeTranslation.y - lastTy
+                lastTx = activeTranslation.x
+                lastTy = activeTranslation.y
+                if (interaction.pointerMode === "idle") {
+                    // 触屏未长按滑动 = 画布 pan（屏幕坐标增量直接加到 panX/panY）
+                    panX += dx
+                    panY += dy
+                } else if (interaction.pointerMode === "contextPending") {
+                    // 触屏长按后移动，更新 connect 坐标（世界坐标，除以 zoomLevel）
+                    interaction.connectMouseX += dx / zoomLevel
+                    interaction.connectMouseY += dy / zoomLevel
+                    // 移动总距离超过阈值则转 connect
+                    if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
+                        interaction.contextPendingToConnect()
+                    }
+                    edgeCanvas.requestPaint()
+                } else if (interaction.pointerMode === "connect") {
+                    interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
+                    edgeCanvas.requestPaint()
+                }
+            }
+        }
+
+        // Issue #801 评论 5894035036: 触屏双指 Pinch 缩放。
+        PinchHandler {
+            id: canvasPinch
+            acceptedDevices: PointerDevice.TouchScreen
+            target: null
+            onActiveChanged: {
+                if (active) {
+                    _pinchStartZoom = zoomLevel
+                    _pinchStartPanX = panX
+                    _pinchStartPanY = panY
+                }
+            }
+            onActiveScaleChanged: {
+                var newZoom = Math.max(0.35, Math.min(2.5, _pinchStartZoom * activeScale))
+                // Issue #801 评论 5894035036: 缩到最小以下，上抛 drillUpRequested
+                // 由 Workspace 决定是否有父级可返回。
+                if (newZoom <= 0.35) {
+                    drillUpRequested()
+                    return
+                }
+                zoomLevel = newZoom
+                // 以手势中心缩放
+                var cx = centroid.position.x
+                var cy = centroid.position.y
+                panX = cx - (cx - _pinchStartPanX) * (zoomLevel / _pinchStartZoom)
+                panY = cy - (cy - _pinchStartPanY) * (zoomLevel / _pinchStartZoom)
             }
         }
 
@@ -289,9 +386,10 @@ Item {
                 var oldZoom = zoomLevel
                 var delta = wheel.angleDelta.y / 120
                 var newZoom = zoomLevel + delta * 0.1
-                // Issue #801: 缩到最小以下且有父级，返回父星图
-                if (newZoom < 0.35 && starmapPathStack.length > 0) {
-                    drillUp()
+                // Issue #801 评论 5894035036: 缩到最小以下，上抛 drillUpRequested，
+                // 由 Workspace 决定是否有父级可返回。
+                if (newZoom < 0.35) {
+                    drillUpRequested()
                     return
                 }
                 zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
@@ -449,9 +547,10 @@ Item {
                 onDoubleClicked: {
                     var nd = nodeData
                     if (nd.portal && nd.portal.destinationStarmapId) {
-                        // Issue #801: Canvas 内下钻，不再通过信号做页面导航
-                        drillDown(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
-                        // 保留信号通知 Workspace 更新标题
+                        // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace
+                        // 由 Workspace 统一管理层级栈；Canvas 不再自己 drillDown。
+                        drillDownRequested(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
+                        // 保留信号通知 Workspace 同步标题
                         enterStarmapRequested(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
                     } else {
                         graphController.selectNode(nd.id)
@@ -459,10 +558,21 @@ Item {
                     }
                 }
 
-                onLongPressed: {
+                // Issue #801 评论 5894035036: 鼠标长按直接进 connect
+                // （#373 鼠标规则：长按后拖 = 拉线）
+                onMouseLongPressed: {
                     var nd = nodeData
-                    // Issue #801: 长按先进入 contextPending（菜单/连线预备态），
-                    // 不移动则松手弹菜单，移动超过阈值才转 connect
+                    if (!interaction.beginConnect("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
+                        return
+                    }
+                    isBeingDragged = true
+                    edgeCanvas.requestPaint()
+                }
+
+                // Issue #801 评论 5894035036: 触屏长按进 contextPending
+                // （不移动则松手弹菜单，移动超过阈值才转 connect）
+                onTouchLongPressed: {
+                    var nd = nodeData
                     if (!interaction.beginContextPending("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
@@ -593,16 +703,26 @@ Item {
                 onDoubleClicked: function(tgtStarmapId) {
                     if (tgtStarmapId) {
                         var ed = embedData
-                        // Issue #801: Canvas 内下钻，不再通过信号做页面导航
-                        drillDown(tgtStarmapId, ed.label || qsTr("子星图"))
-                        // 保留信号通知 Workspace 更新标题
+                        // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace，
+                        // Canvas 不再自己 drillDown。
+                        drillDownRequested(tgtStarmapId, ed.label || qsTr("子星图"))
+                        // 保留信号通知 Workspace 同步标题
                         enterStarmapRequested(tgtStarmapId, ed.label || qsTr("子星图"))
                     }
                 }
 
-                // Issue #801: Embed 长按进入 contextPending（菜单/连线预备态），
-                // 与 Node 长按对称。源端类型记为 "embed"，path 用 embedPath()。
-                onLongPressed: function(instId) {
+                // Issue #801 评论 5894035036: 鼠标长按直接进 connect
+                onMouseLongPressed: function(instId) {
+                    var ed = embedData
+                    if (!interaction.beginConnect("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                        return
+                    }
+                    isBeingDragged = true
+                    edgeCanvas.requestPaint()
+                }
+
+                // Issue #801 评论 5894035036: 触屏长按进 contextPending
+                onTouchLongPressed: function(instId) {
                     var ed = embedData
                     if (!interaction.beginContextPending("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
@@ -706,6 +826,41 @@ Item {
         color: _textSecondary
         font.pointSize: dt.fontLgPt
         visible: graphController.nodesModel.length === 0 && graphController.embedsModel.length === 0
+    }
+
+    // Issue #801 评论 5894035036: 触屏缩放 +/- 按钮（右下角浮层）。
+    // QML 无法可靠检测触屏设备，始终显示，鼠标也能点。
+    RowLayout {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 16
+        anchors.bottomMargin: 16
+        spacing: 8
+        z: 50
+
+        AppButton {
+            dt: canvasArea.dt
+            text: qsTr("+")
+            onClicked: {
+                // 单击放大：直接调到上限，不触发 drillUp
+                zoomLevel = Math.min(2.5, zoomLevel + 0.15)
+            }
+        }
+
+        AppButton {
+            dt: canvasArea.dt
+            text: qsTr("−")
+            onClicked: {
+                var newZoom = zoomLevel - 0.15
+                // Issue #801 评论 5894035036: 缩到最小以下，上抛 drillUpRequested
+                // 由 Workspace 决定是否有父级可返回。
+                if (newZoom < 0.35) {
+                    drillUpRequested()
+                    return
+                }
+                zoomLevel = Math.max(0.35, newZoom)
+            }
+        }
     }
 
     Rectangle {

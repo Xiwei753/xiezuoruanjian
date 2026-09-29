@@ -52,19 +52,24 @@ Item {
     property real _wobbleAnimX: 0
     property real _wobbleAnimY: 0
 
+    // Issue #801 评论 5894035036: 鼠标和触屏 TapHandler 拆开，pressed 取并集。
     property real visualOffsetX:
-        (isSelected || isBeingDragged || embedLeftTap.pressed) ? 0 : _wobbleAnimX
+        (isSelected || isBeingDragged || embedMouseTap.pressed || embedTouchTap.pressed) ? 0 : _wobbleAnimX
     property real visualOffsetY:
-        (isSelected || isBeingDragged || embedLeftTap.pressed) ? 0 : _wobbleAnimY
+        (isSelected || isBeingDragged || embedMouseTap.pressed || embedTouchTap.pressed) ? 0 : _wobbleAnimY
 
     // ---------------------------------------------------------------------------
     // 对外信号：Embed 只上抛事件，由 Canvas 决定后续行为
+    // Issue #801 评论 5894035036: 长按按设备拆分（与 Node 对称）——
+    //   mouseLongPressed: 鼠标长按 → Canvas 进 connect
+    //   touchLongPressed: 触屏长按 → Canvas 进 contextPending
     // ---------------------------------------------------------------------------
     signal clicked(string instanceId)
     signal doubleClicked(string targetStarmapId)
     signal rightClicked(string instanceId)
     signal moveDelta(real dx, real dy)
-    signal longPressed(string instanceId)
+    signal mouseLongPressed(string instanceId)
+    signal touchLongPressed(string instanceId)
     signal contextMenuRequested(string instanceId, real sceneX, real sceneY)
     signal leftReleased()
 
@@ -134,15 +139,16 @@ Item {
     }
 
     // wobble 降速，和 StarMapNode.qml 一致；选中/按下/拖动时动画暂停
+    // Issue #801 评论 5894035036: pressed 取鼠标/触屏并集。
     SequentialAnimation on _wobbleAnimX {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !embedLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !embedMouseTap.pressed && !embedTouchTap.pressed
         NumberAnimation { to: 0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
     }
     SequentialAnimation on _wobbleAnimY {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !embedLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !embedMouseTap.pressed && !embedTouchTap.pressed
         NumberAnimation { to: 0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
     }
@@ -150,18 +156,32 @@ Item {
     // ---------------------------------------------------------------------------
     // 交互：TapHandler.SingleTap | DoubleTap 互斥（和 StarMapNode.qml 一致）
     // handler 全部挂在稳定 root Item 上，命中框恒定
+    // Issue #801 评论 5894035036: 按 acceptedDevices 拆鼠标/触屏（与 Node 对称）。
     // ---------------------------------------------------------------------------
     TapHandler {
-        id: embedLeftTap
+        id: embedMouseTap
+        acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.LeftButton
         exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
         onSingleTapped: root.clicked(root.instanceId)
         onDoubleTapped: root.doubleClicked(root.targetStarmapId)
-        onLongPressed: root.longPressed(root.instanceId)
+        onLongPressed: root.mouseLongPressed(root.instanceId)
     }
 
     TapHandler {
+        id: embedTouchTap
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+
+        onSingleTapped: root.clicked(root.instanceId)
+        onDoubleTapped: root.doubleClicked(root.targetStarmapId)
+        onLongPressed: root.touchLongPressed(root.instanceId)
+    }
+
+    TapHandler {
+        acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.RightButton
         onSingleTapped: function(eventPoint) {
             root.rightClicked(root.instanceId)
@@ -174,9 +194,12 @@ Item {
     // Canvas 根据 pointerMode 决定 moveDelta 的含义（connect 预览线 / move 移动 Embed）
     // DragHandler 只负责拖动增量；交互结束由 PointHandler 的 leftReleased 统一上抛。
     // （和 StarMapNode.qml 对称，Issue #796 评论 5888480054）
+    // Issue #801 评论 5894035036: 只鼠标直接拖 → move；触屏不在 Embed 上 grab 拖动，
+    // 让事件穿透到背景 pan（触屏 connect 移动由背景层 bgTouchDrag 处理）。
     // ---------------------------------------------------------------------------
     DragHandler {
         id: embedDragHandler
+        acceptedDevices: PointerDevice.Mouse
         target: null
         acceptedButtons: Qt.LeftButton
 
@@ -202,6 +225,7 @@ Item {
     }
 
     // 左键 press→release 观察：PointHandler 用 passive grab
+    // Issue #801 评论 5894035036: 保留鼠标+触屏 release 追踪。
     PointHandler {
         id: leftPointTracker
         acceptedButtons: Qt.LeftButton

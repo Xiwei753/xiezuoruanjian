@@ -26,6 +26,15 @@ Item {
     // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索/设置入口
     property var appState: ({})
 
+    // Issue #801 评论 5894035036: 层级状态从 Canvas 收口到 Workspace。
+    //   starmapPathStack 记录从根星图到当前层的路径，每项 { starmapId, title }。
+    //   currentStarmapId / currentStarmapTitle 是 Canvas 实际渲染的星图。
+    //   根 starmapId / starmapTitle 只作为外部输入（来自 main.qml / AppController），
+    //   不再被 Canvas 内部反向赋值打断。
+    property var starmapPathStack: []
+    property string currentStarmapId: ""
+    property string currentStarmapTitle: qsTr("星图")
+
     signal backClicked()
     signal enterStarmapRequested(string starmapId, string title)
     signal requestSync()
@@ -59,10 +68,10 @@ Item {
                         variant: "text"
                         text: qsTr("← 返回")
                         onClicked: {
-                            // Issue #801: 优先返回父星图，根星图时才退出工作区
-                            if (!canvas.isAtRootStarmap()) {
-                                canvas.drillUp()
-                                root.starmapTitle = canvas.starmapTitle()
+                            // Issue #801 评论 5894035036: 优先返回父星图，
+                            // 根星图（路径栈空）时才退出工作区回 Hub。
+                            if (root.starmapPathStack.length > 0) {
+                                root.returnToParentStarmap()
                             } else {
                                 root.backClicked()
                             }
@@ -71,7 +80,9 @@ Item {
 
                     AppText {
                         dt: root.dt
-                        text: root.starmapTitle
+                        // Issue #801 评论 5894035036: 顶部标题用 currentStarmapTitle，
+                        // 不再读 root.starmapTitle（那是外部输入，下钻时不更新）。
+                        text: root.currentStarmapTitle
                         color: dt.onSurface
                         font.pointSize: dt.fontLgPt
                         font.family: dt.fontFamily
@@ -103,12 +114,24 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     dt: root.dt
-                    starmapId: root.starmapId
+                    // Issue #801 评论 5894035036: Canvas 的 starmapId 只读绑定到
+                    // Workspace 的 currentStarmapId，Canvas 不再自己赋值 starmapId。
+                    starmapId: root.currentStarmapId
                     starmapBackendRef: root.starmapBackendRef
 
+                    // Issue #801 评论 5894035036: Canvas 上抛下钻/上钻请求，
+                    // 由 Workspace 统一管理层级栈。
+                    onDrillDownRequested: function(smId, smTitle) {
+                        root.enterChildStarmap(smId, smTitle)
+                    }
+                    onDrillUpRequested: {
+                        root.returnToParentStarmap()
+                    }
                     onEnterStarmapRequested: function(smId, smTitle) {
-                        // Issue #801: Canvas 自己已处理下钻，这里只更新标题
-                        root.starmapTitle = smTitle
+                        // Issue #801 评论 5894035036: 双击 portal/Embed 时 Canvas
+                        // 仍上抛此信号用于标题同步；层级切换已由 drillDownRequested
+                        // 触发，这里只更新 currentStarmapTitle。
+                        root.currentStarmapTitle = smTitle
                     }
                     onEditNodeRequested: function(node) {
                         inspectorPopup.selectedNode = node
@@ -131,7 +154,9 @@ Item {
 
             contentItem: StarMapInspector {
                 dt: root.dt
-                starmapId: root.starmapId
+                // Issue #801 评论 5894035036: Inspector 用 currentStarmapId，
+                // 跟随层级栈切换，不再读根 starmapId。
+                starmapId: root.currentStarmapId
                 selectedNode: inspectorPopup.selectedNode
                 selectedEdge: null
 
@@ -153,12 +178,47 @@ Item {
     // 星图切换时先清瞬时交互状态再重新加载。
     // Issue #798: 返回父图 / 进入子图复用同一个 Workspace 实例，
     // 必须经过 resetInteraction 清掉旧 move/connect 状态，否则新图会继承旧 pointerMode。
+    // Issue #801 评论 5894035036: 根 starmapId/starmapTitle 变化时（外部切换星图），
+    // 重置层级栈，currentStarmapId/Title 同步成根，并触发 Canvas 重新加载。
     onStarmapIdChanged: {
+        currentStarmapId = starmapId
+        currentStarmapTitle = starmapTitle
+        starmapPathStack = []
         canvas.resetInteraction()
         if (starmapId.length > 0) canvas.loadGraph()
     }
 
+    // Issue #801 评论 5894035036: 外部标题变化时（如 AppController 更新），
+    // 若还在根星图，同步到 currentStarmapTitle。
+    onStarmapTitleChanged: {
+        if (starmapPathStack.length === 0) {
+            currentStarmapTitle = starmapTitle
+        }
+    }
+
     Component.onCompleted: {
+        currentStarmapId = starmapId
+        currentStarmapTitle = starmapTitle
         if (starmapId.length > 0) canvas.loadGraph()
+    }
+
+    // Issue #801 评论 5894035036: 下钻到子星图——push 当前层到栈，切换 current。
+    function enterChildStarmap(targetId, title) {
+        starmapPathStack.push({ starmapId: currentStarmapId, title: currentStarmapTitle })
+        currentStarmapId = targetId
+        currentStarmapTitle = title
+        canvas.resetInteraction()
+        canvas.loadGraph()
+    }
+
+    // Issue #801 评论 5894035036: 返回父星图——pop 栈并切换 current。
+    function returnToParentStarmap() {
+        if (starmapPathStack.length > 0) {
+            var parent = starmapPathStack.pop()
+            currentStarmapId = parent.starmapId
+            currentStarmapTitle = parent.title
+            canvas.resetInteraction()
+            canvas.loadGraph()
+        }
     }
 }
