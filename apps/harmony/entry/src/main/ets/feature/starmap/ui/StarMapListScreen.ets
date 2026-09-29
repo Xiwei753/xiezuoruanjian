@@ -22,12 +22,10 @@ import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAp
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
-import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
-
 @ComponentV2
 export struct StarMapListScreen {
-  // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器，V2 中不可用）
-  private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
+  // 由 PageMapForStack 显式传入 ownerStack，不使用全局 NavigationTransactionCoordinator
+  @Param navPathStack: NavPathStack = new NavPathStack()
 
   // 页面 UI 状态（V2 @Local）
   @Local starMaps: StarMapMeta[] = []
@@ -110,12 +108,8 @@ export struct StarMapListScreen {
   // ─── UI 事件处理 ───
 
   private navigateToStarMap(starmapId: string, starmapTitle: string): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
     const param: StarMapRouteParams = { starmapId, starmapTitle }
-    navPathStack.pushPath({ name: Routes.StarMap, param })
+    this.navPathStack.pushPath({ name: Routes.StarMap, param })
   }
 
   // ─── 新建星图 ───
@@ -156,10 +150,9 @@ export struct StarMapListScreen {
       const bridge: IWriterCoreBridge = getBridge()
       const result = await bridge.renameStarMap(this.renameTarget!.starmapId, this.renameInput.trim())
       if (result.success) {
-        const idx = this.starMaps.findIndex((s: StarMapMeta) => s.starmapId === this.renameTarget!.starmapId)
-        if (idx >= 0) {
-          this.starMaps[idx].title = this.renameInput.trim()
-        }
+        // StarMapMeta 是普通 DTO interface，不是 @ObservedV2/@Trace 对象，
+        // 原地修改 title 不会触发可靠刷新。重新从 Core 加载列表确保数据一致。
+        await this.loadStarMaps()
       }
     } catch (err) {
       hilog.error(0x0000, 'StarMapListScreen', `renameStarMap error: ${JSON.stringify(err)}`)

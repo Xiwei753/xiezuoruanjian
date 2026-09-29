@@ -244,7 +244,7 @@ export struct PrimaryTabShell {
     } else if (name === Routes.Writing) {
       WritingScreen({ navPathStack: ownerStack })
     } else if (name === Routes.StarMapList) {
-      StarMapListScreen()
+      StarMapListScreen({ navPathStack: ownerStack })
     } else if (name === Routes.StarMap) {
       StarMapScreen()
     } else if (name === Routes.Settings) {
