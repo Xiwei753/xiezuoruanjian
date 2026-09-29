@@ -255,7 +255,7 @@ export struct StarMapListScreen {
 
             SymbolGlyph($r('sys.symbol.plus'))
               .fontSize(28)
-              .fontColor(this.themeConfig.colors.onPrimary)
+              .fontColor([this.themeConfig.colors.onPrimary])
               .hitTestBehavior(HitTestMode.None)
           }
           .width(PRIMARY_FAB_SIZE_VP)

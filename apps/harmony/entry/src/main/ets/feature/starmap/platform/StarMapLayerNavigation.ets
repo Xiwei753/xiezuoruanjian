@@ -13,6 +13,12 @@ export interface StarMapLayerFrame {
   offsetY: number
 }
 
+/** popLayer 返回结果：新栈和弹出的 frame（栈空时 frame 为 null）。 */
+export interface PopLayerResult {
+  stack: StarMapLayerFrame[]
+  frame: StarMapLayerFrame | null
+}
+
 // ─── 层级栈操作 ───
 
 /**
@@ -42,14 +48,16 @@ export function pushLayer(
  */
 export function popLayer(
   stack: StarMapLayerFrame[]
-): { stack: StarMapLayerFrame[], frame: StarMapLayerFrame | null } {
+): PopLayerResult {
   if (stack.length === 0) {
-    return { stack: [], frame: null }
+    const emptyResult: PopLayerResult = { stack: [], frame: null }
+    return emptyResult
   }
 
   const frame: StarMapLayerFrame = stack[stack.length - 1]
   const newStack: StarMapLayerFrame[] = stack.slice(0, stack.length - 1)
-  return { stack: newStack, frame: frame }
+  const result: PopLayerResult = { stack: newStack, frame: frame }
+  return result
 }
 
 // ─── Frame 工厂 ───

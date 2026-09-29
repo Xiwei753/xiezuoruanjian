@@ -88,6 +88,9 @@ export struct StarMapScreen {
   @State canvasReady: boolean = false
   @State previewCanvasReady: boolean = false
 
+  // 加载序号：防止切层后旧异步结果覆盖新层
+  private graphLoadGeneration: number = 0
+
   // 双指缩放的基准比例（手势开始时记录）
   private pinchBaseScale: number = 1
 
@@ -211,13 +214,21 @@ export struct StarMapScreen {
   }
 
   async loadStarMap() {
-    this.canvasReady = false
+    const generation = ++this.graphLoadGeneration
+    const requestedStarmapId = this.starmapId
+
     this.previewCanvasReady = false
     this.isLoading = true
     this.errorMessage = ''
 
     try {
-      const result = await this.bridge.getStarMapGraph(this.starmapId)
+      const result = await this.bridge.getStarMapGraph(requestedStarmapId)
+
+      if (generation !== this.graphLoadGeneration ||
+          requestedStarmapId !== this.starmapId) {
+        return
+      }
+
       if (result.success && result.data) {
         this.graph = result.data
         // Freeform 布局：直接从 graph.nodes 的 authored position 构建布局节点
@@ -230,9 +241,16 @@ export struct StarMapScreen {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
       }
     } catch (err) {
+      if (generation !== this.graphLoadGeneration ||
+          requestedStarmapId !== this.starmapId) {
+        return
+      }
       this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap_detail').id)
     } finally {
-      this.isLoading = false
+      if (generation === this.graphLoadGeneration &&
+          requestedStarmapId === this.starmapId) {
+        this.isLoading = false
+      }
     }
   }
 
@@ -1020,8 +1038,13 @@ export struct StarMapScreen {
       // 直接 append 到当前 graph，不再 loadStarMap
       if (this.graph) {
         this.graph = {
-          ...this.graph,
-          edges: [...this.graph.edges, result.data]
+          schemaVersion: this.graph.schemaVersion,
+          starmapId: this.graph.starmapId,
+          nodes: this.graph.nodes,
+          edges: [...this.graph.edges, result.data],
+          embeds: this.graph.embeds,
+          links: this.graph.links,
+          hyperlinks: this.graph.hyperlinks
         }
         this.recomputeGeometry()
       }
@@ -1055,8 +1078,13 @@ export struct StarMapScreen {
       // 直接 append 到当前 graph，不再 loadStarMap
       if (this.graph) {
         this.graph = {
-          ...this.graph,
-          nodes: [...this.graph.nodes, result.data]
+          schemaVersion: this.graph.schemaVersion,
+          starmapId: this.graph.starmapId,
+          nodes: [...this.graph.nodes, result.data],
+          edges: this.graph.edges,
+          embeds: this.graph.embeds,
+          links: this.graph.links,
+          hyperlinks: this.graph.hyperlinks
         }
         this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
         this.recomputeGeometry()
@@ -1086,8 +1114,13 @@ export struct StarMapScreen {
       // 直接 append 到当前 graph，不再 loadStarMap
       if (this.graph) {
         this.graph = {
-          ...this.graph,
-          embeds: [...this.graph.embeds, embedResult.data]
+          schemaVersion: this.graph.schemaVersion,
+          starmapId: this.graph.starmapId,
+          nodes: this.graph.nodes,
+          edges: this.graph.edges,
+          embeds: [...this.graph.embeds, embedResult.data],
+          links: this.graph.links,
+          hyperlinks: this.graph.hyperlinks
         }
         this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
         this.recomputeGeometry()
