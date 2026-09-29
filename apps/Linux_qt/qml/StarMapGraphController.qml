@@ -146,16 +146,21 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.calculate_grid_layout(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
         if (res.success && res.data && res.data.nodes) {
             var layoutNodes = res.data.nodes;
+            // Issue #798: 生成新数组一次赋值，不原地改普通 JS 对象，
+            // 保证 delegate 绑定的 nodeData 收到 notify。
+            var nextNodes = [];
             for (var j = 0; j < nodesModel.length; j++) {
+                var n = copyObject(nodesModel[j]);
                 for (var k = 0; k < layoutNodes.length; k++) {
-                    if (nodesModel[j].id === layoutNodes[k].nodeId) {
-                        nodesModel[j].x = layoutNodes[k].x;
-                        nodesModel[j].y = layoutNodes[k].y;
+                    if (n.id === layoutNodes[k].nodeId) {
+                        n.x = layoutNodes[k].x;
+                        n.y = layoutNodes[k].y;
                         break;
                     }
                 }
+                nextNodes.push(n);
             }
-            nodesModelChanged();
+            nodesModel = nextNodes;
             saveLayout();
         } else {
             // 后端失败直接报错，不再用 QML 临时坐标兜底成"成功"
@@ -445,6 +450,82 @@ QtObject {
             clearSelection();
         } else {
             setError(backendErrorText(res, qsTr("删除子星图入口失败")));
+        }
+    }
+
+    // Issue #798: 从 StarMapCanvas 移入，Controller 成为图操作唯一入口。
+    // 流程：create_starmap 建子星图 → create_starmap_embed 嵌入当前图；
+    // 失败回滚 delete_starmap；成功后 loadGraph 刷新模型并选中新 Embed。
+    function createSubStarmapAt(title, wx, wy) {
+        if (!ensureBackend()) return;
+        // 1. 创建目标子星图
+        var createRes = normalizeBackendResult(
+            starmapBackendRef.create_starmap(title, "", ""),
+            qsTr("创建子星图失败")
+        );
+        if (!createRes.success) {
+            setError(backendErrorText(createRes, qsTr("创建子星图失败")));
+            return;
+        }
+        var newStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : "";
+        if (!newStarmapId) {
+            setError(qsTr("创建子星图失败"));
+            return;
+        }
+        // 2. 在当前星图创建 Embed，指向新子星图
+        var embedRes = normalizeBackendResult(
+            starmapBackendRef.create_starmap_embed(starmapId, newStarmapId, title, wx, wy),
+            qsTr("创建子星图入口失败")
+        );
+        if (!embedRes.success) {
+            // 3. create_starmap_embed 失败，删除刚创建的目标 StarMap 清理
+            starmapBackendRef.delete_starmap(newStarmapId);
+            setError(backendErrorText(embedRes, qsTr("创建子星图入口失败")));
+            return;
+        }
+        var instanceId = embedRes.data && embedRes.data.instanceId ? embedRes.data.instanceId : "";
+        // 4. 成功，reload graph 并选中新 Embed
+        clearError();
+        loadGraph();
+        if (instanceId) {
+            selectEmbed(instanceId);
+        }
+    }
+
+    // Issue #798: 拖动结束后提交节点新位置。浅拷贝新数组一次赋值，
+    // 不原地改普通 JS 对象，再 saveLayout 持久化。
+    function commitNodeMove(nodeId, nx, ny) {
+        var nextNodes = [];
+        for (var i = 0; i < nodesModel.length; i++) {
+            var n = copyObject(nodesModel[i]);
+            if (n.id === nodeId) { n.x = nx; n.y = ny; }
+            nextNodes.push(n);
+        }
+        nodesModel = nextNodes;
+        saveLayout();
+        graphChanged();
+    }
+
+    // Issue #798: 拖动结束后提交 Embed 新位置。先持久化到后端，
+    // 再浅拷贝新数组一次赋值更新本地模型。
+    function commitEmbedMove(instanceId, nx, ny) {
+        if (!ensureBackend()) return;
+        var res = normalizeBackendResult(
+            starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify({ position: { x: nx, y: ny } })),
+            qsTr("更新子星图入口失败")
+        );
+        if (res.success) {
+            clearError();
+            var nextEmbeds = [];
+            for (var i = 0; i < embedsModel.length; i++) {
+                var em = copyObject(embedsModel[i]);
+                if (em.instanceId === instanceId) { em.x = nx; em.y = ny; }
+                nextEmbeds.push(em);
+            }
+            embedsModel = nextEmbeds;
+            graphChanged();
+        } else {
+            setError(backendErrorText(res, qsTr("更新子星图入口失败")));
         }
     }
 

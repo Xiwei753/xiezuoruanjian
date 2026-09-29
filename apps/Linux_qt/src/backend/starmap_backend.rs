@@ -356,18 +356,18 @@ impl StarMapBackend {
         let nj = nodes_json.to_string();
         match self.with_app(|app| app.core_api()) {
             Ok(Some(core)) => {
-                crate::starmap_bridge::compute_edge_renders_json(&core, &sid, &nj).into()
+                crate::starmap_view::bridge::compute_edge_renders_json(&core, &sid, &nj).into()
             }
             _ => crate::backend::json_utils::borrow_conflict_error_json().into(),
         }
     }
     fn hit_test_edge_renders_json(&self, renders_json: QString, x: f64, y: f64) -> QString {
         let rj = renders_json.to_string();
-        crate::starmap_bridge::hit_test_edge_renders_json(&rj, x as f32, y as f32).into()
+        crate::starmap_view::bridge::hit_test_edge_renders_json(&rj, x as f32, y as f32).into()
     }
     fn hit_test_nodes_json(&self, nodes_json: QString, x: f64, y: f64) -> QString {
         let nj = nodes_json.to_string();
-        crate::starmap_bridge::hit_test_nodes_json(&nj, x as f32, y as f32).into()
+        crate::starmap_view::bridge::hit_test_nodes_json(&nj, x as f32, y as f32).into()
     }
     fn calculate_grid_layout_json(
         &self,
@@ -376,7 +376,7 @@ impl StarMapBackend {
     ) -> QString {
         let ni = node_ids_json.to_string();
         let el = existing_layout_json.to_string();
-        crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
+        crate::starmap_view::bridge::calculate_grid_layout_json(&ni, &el).into()
     }
     fn compute_edge_renders(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject {
         let raw = self

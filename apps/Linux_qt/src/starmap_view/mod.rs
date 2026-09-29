@@ -15,11 +15,15 @@
 // - grid_layout.rs：网格自动布局算法。
 // - hittest.rs：节点 AABB 命中测试 + 点到线段距离。
 // - edge_render.rs：边箭头/偏移/标签的渲染几何计算。
+// - bridge.rs：显示层入口，把上述算法组装成 backend 可直接调的 envelope JSON
+//   接口（边渲染/命中测试/网格布局/从图派生布局），并供 starmap_bridge 的
+//   `get_starmap_graph_and_layout` 复用 `layout_from_graph`。不碰 Core CRUD。
 //
 // 坐标约定：
 //   全部为星图文档坐标（像素，不含视口滚动偏移），视口变换由 QML 渲染层负责。
 // =============================================================================
 
+pub mod bridge;
 pub mod edge_render;
 pub mod grid_layout;
 pub mod hittest;
