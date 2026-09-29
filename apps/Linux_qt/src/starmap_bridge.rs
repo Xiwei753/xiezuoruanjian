@@ -580,68 +580,7 @@ pub fn list_starmap_hyperlinks(api: &WriterCoreApi, starmap_id: &str) -> String 
     envelope(api.list_starmap_hyperlinks(starmap_id))
 }
 
-// -----------------------------------------------------------------------------
-// 一级星图页：只列根星图
-// -----------------------------------------------------------------------------
-//
-// 一级星图列表只展示"没有被任何星图嵌入的根星图"。判断依据：
-// 1. 扫描所有星图的 graph.embeds[].targetStarmapId，这些目标不进入一级列表。
-// 2. 兼容旧版"伪子星图"：旧实现用 Note 节点 + portal（destinationTarget=null）
-//    来模拟子星图嵌入。旧生成签名里 portal.destinationStarmapId 直接指向被嵌入
-//    的子星图 id，因此按 portal.destination_starmap_id 判断该子星图应被排除，
-//    不再按节点标题匹配（标题同名星图可能不止一个，按标题匹配会误伤）。
-
-/// 列出根星图（未被嵌入且非 legacy child 的星图），envelope 格式。
+/// 列出根星图，envelope 格式。
 pub fn list_root_starmaps_json(api: &WriterCoreApi) -> String {
-    let all_starmaps = match api.list_starmaps() {
-        Ok(v) => v,
-        Err(e) => return envelope_err_str(&e.to_string()),
-    };
-
-    // starmap_id → title：用于 legacy child 判断时校验 portal 目标确实是
-    // 旧实现的子星图（destination_target 为 null 且目标 id 在已知星图集合中）。
-    let titles_by_id: std::collections::HashMap<String, String> = all_starmaps
-        .iter()
-        .map(|sm| (sm.starmap_id.clone(), sm.title.clone()))
-        .collect();
-
-    // 收集所有应从一级列表排除的 starmap_id（embed 目标 + legacy child）。
-    let mut excluded: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for sm in &all_starmaps {
-        // get_starmap_graph 失败时直接返回错误 envelope，不静默跳过：
-        // 漏扫某个父图可能把它的子星图错误暴露到一级列表。
-        let g = match api.get_starmap_graph(&sm.starmap_id) {
-            Ok(g) => g,
-            Err(e) => return envelope_err_str(&e.to_string()),
-        };
-        // 正式 Embed：target_starmap_id 是子星图，排除。
-        for embed in &g.embeds {
-            excluded.insert(embed.target_starmap_id.clone());
-        }
-        // Legacy child：Note + portal 非空 + destination_target 为 null
-        // + portal.destination_starmap_id 指向已知星图且其标题与节点标题一致
-        // → 该目标星图是旧实现的伪子星图，排除。
-        for node in &g.nodes {
-            if node.kind == StarMapNodeKindDto::Note {
-                if let Some(portal) = &node.portal {
-                    let target_id = &portal.destination_starmap_id;
-                    let is_legacy_child = portal.destination_target.is_none()
-                        && titles_by_id
-                            .get(target_id)
-                            .map(|title| title == &node.title)
-                            .unwrap_or(false);
-                    if is_legacy_child {
-                        excluded.insert(target_id.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    let roots: Vec<_> = all_starmaps
-        .into_iter()
-        .filter(|sm| !excluded.contains(&sm.starmap_id))
-        .collect();
-
-    envelope_ok(roots)
+    envelope(api.list_root_starmaps())
 }

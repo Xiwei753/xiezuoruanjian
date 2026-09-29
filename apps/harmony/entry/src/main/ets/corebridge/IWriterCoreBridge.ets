@@ -37,6 +37,7 @@ export interface IWriterCoreBridge {
 
   // StarMap
   listStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>>
+  listRootStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>>
   listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>>
   getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>>
   getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>>

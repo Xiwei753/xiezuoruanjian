@@ -91,7 +91,7 @@ export struct StarMapListScreen {
     this.errorMessage = ''
     try {
       const bridge: IWriterCoreBridge = getBridge()
-      const result = await bridge.listStarMaps()
+      const result = await bridge.listRootStarMaps()
       if (result.success && result.data) {
         this.starMaps = result.data
       } else {

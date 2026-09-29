@@ -1210,6 +1210,9 @@ interface WriterAppService {
     sequence<StarMapMetaDto> list_starmaps();
 
     [Throws=WriterError]
+    sequence<StarMapMetaDto> list_root_starmaps();
+
+    [Throws=WriterError]
     StarMapMetaDto create_starmap(string title, string desc);
 
     [Throws=WriterError]

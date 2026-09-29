@@ -24,6 +24,21 @@ pub unsafe extern "C" fn writer_core_list_starmaps() -> *mut c_char {
 #[no_mangle]
 /// # Safety
 ///
+/// This function does not take any pointer arguments, so there are no additional
+/// safety requirements beyond those inherent to FFI boundary calls.
+pub unsafe extern "C" fn writer_core_list_root_starmaps() -> *mut c_char {
+    match with_app_service(|svc| {
+        let starmaps = svc.list_root_starmaps().map_err(|e| format!("{}", e))?;
+        Ok(starmaps)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
 /// The caller must ensure `project_id` points to a valid, null-terminated C string.
 /// Passing a null pointer or an invalid pointer is undefined behavior.
 pub unsafe extern "C" fn writer_core_list_starmaps_for_project(

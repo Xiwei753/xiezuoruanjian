@@ -10,6 +10,10 @@ impl super::WriterAppService {
         self.api.list_starmaps()
     }
 
+    pub fn list_root_starmaps(&self) -> Result<Vec<StarMapMetaDto>, WriterError> {
+        self.api.list_root_starmaps()
+    }
+
     pub fn create_starmap(
         &self,
         title: String,

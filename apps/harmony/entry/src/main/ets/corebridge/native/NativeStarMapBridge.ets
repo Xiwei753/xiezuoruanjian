@@ -74,6 +74,14 @@ export class NativeStarMapBridge {
     } catch (e) { return nativeError<StarMapMeta[]>(e) }
   }
 
+  async listRootStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeListRootStarMaps()
+      return this.core.decodeEnvelope<StarMapMeta[]>(jsonStr,
+        (d: Object) => decodeArray<StarMapMeta>(d, decodeStarMapMeta, 'StarMapMeta'))
+    } catch (e) { return nativeError<StarMapMeta[]>(e) }
+  }
+
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeListStarMapsForProject(projectId)

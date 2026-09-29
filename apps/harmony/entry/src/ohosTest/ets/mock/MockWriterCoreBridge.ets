@@ -382,6 +382,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(this.mockStarMaps)
   }
 
+  async listRootStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
+    await this.delay(100)
+    return this.success(this.mockStarMaps)
+  }
+
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
     await this.delay(100)
     // StarMapMeta 当前无 projectId 字段，mock 暂返回全部

@@ -15,6 +15,10 @@ impl super::WriterCore {
         crate::starmap::list_starmaps(&self.app_data_root)
     }
 
+    pub fn list_root_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
+        crate::starmap::list_root_starmaps(&self.app_data_root)
+    }
+
     pub fn list_starmaps_bound_to_project(
         &self,
         project_id: &str,

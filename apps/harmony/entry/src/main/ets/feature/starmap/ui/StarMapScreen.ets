@@ -157,7 +157,7 @@ export struct StarMapScreen {
     // 先置 inactive，再 cancel animator、reset gesture/menu
     this.canvasActive = false
     this.canvasReady = false
-    this.previewCanvasReady = false
+    this.deactivatePreviewCanvas()
     this.stopWobbleAnimation()
     this.gestureTracker.reset()
     this.gestureMode = 'idle'
@@ -210,6 +210,10 @@ export struct StarMapScreen {
   }
 
   async loadStarMap() {
+    this.canvasReady = false
+    this.previewCanvasReady = false
+    this.canvasCtx = null
+    this.previewCanvasCtx = null
     this.isLoading = true
     this.errorMessage = ''
 
@@ -721,6 +725,7 @@ export struct StarMapScreen {
             .onActionStart((event: GestureEvent) => {
               const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
               this.gestureTracker.beginConnect(node.id, point.x, point.y)
+              this.previewCanvasReady = false
               this.gestureMode = 'connect'
               this.showNodeMenu = false
               const ln = this.getPlatformLayoutNode(node.id)
@@ -752,6 +757,7 @@ export struct StarMapScreen {
                 }
               }
               this.gestureTracker.reset()
+              this.deactivatePreviewCanvas()
               this.gestureMode = 'idle'
               this.showNodeMenu = false
               this.nodeMenuNodeId = ''
@@ -862,6 +868,7 @@ export struct StarMapScreen {
             .onActionStart((event: GestureEvent) => {
               const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
               this.gestureTracker.beginConnect(embed.instanceId, point.x, point.y)
+              this.previewCanvasReady = false
               this.gestureMode = 'connect'
               this.showNodeMenu = false
               const ln = this.getPlatformLayoutNode(embed.instanceId)
@@ -893,6 +900,7 @@ export struct StarMapScreen {
                 }
               }
               this.gestureTracker.reset()
+              this.deactivatePreviewCanvas()
               this.gestureMode = 'idle'
               this.showNodeMenu = false
               this.nodeMenuNodeId = ''
@@ -1032,7 +1040,7 @@ export struct StarMapScreen {
     }
     const result = await this.bridge.addStarMapNode(this.starmapId, this.newNodeTitle.trim(), this.newNodeKind, position)
     if (result.success && result.data) {
-      this.loadStarMap()
+      await this.loadStarMap()
       this.selectItem(result.data.id)
     } else {
       hilog.error(0x0000, 'StarMapScreen', `addStarMapNode failed: ${result.errorCode}, ${result.userMessage}`)
@@ -1215,12 +1223,15 @@ export struct StarMapScreen {
           })
 
         // 节点类型选择
-        Row() {
+        Flex({
+          direction: FlexDirection.Row,
+          wrap: FlexWrap.Wrap
+        }) {
           ForEach(['Character', 'Location', 'Event', 'Theme', 'Plot', 'Item', 'Organization', 'Custom'], (kind: string) => {
             Button(this.getNodeTypeName(kind))
               .fontSize(12)
               .height(32)
-              .margin({ right: 4 })
+              .margin({ right: 4, bottom: 4 })
               .backgroundColor(this.newNodeKind === kind ? $r('sys.color.ohos_id_color_activated') : $r('sys.color.ohos_id_color_button_normal'))
               .onClick(() => {
                 this.newNodeKind = kind
@@ -1326,6 +1337,11 @@ export struct StarMapScreen {
   buildPreviewCanvasContext(): CanvasRenderingContext2D {
     this.previewCanvasCtx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
     return this.previewCanvasCtx
+  }
+
+  private deactivatePreviewCanvas(): void {
+    this.previewCanvasReady = false
+    this.previewCanvasCtx = null
   }
 
   /**

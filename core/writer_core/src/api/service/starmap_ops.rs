@@ -245,6 +245,13 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn list_root_starmaps(&self) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
+        self.core_write()
+            .list_root_starmaps()
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
     pub fn list_starmaps_for_project(
         &self,
         project_id: &str,

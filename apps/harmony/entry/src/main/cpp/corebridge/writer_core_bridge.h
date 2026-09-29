@@ -92,6 +92,7 @@ char*  writer_core_clear_chapter(const char* project_id, const char* volume_id, 
 
 // ── StarMap ──
 char*  writer_core_list_starmaps(void);
+char*  writer_core_list_root_starmaps(void);
 char*  writer_core_list_starmaps_for_project(const char* project_id);
 char*  writer_core_get_starmap(const char* starmap_id);
 char*  writer_core_get_starmap_graph(const char* starmap_id);

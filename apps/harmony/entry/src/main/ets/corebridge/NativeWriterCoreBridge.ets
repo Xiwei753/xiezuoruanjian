@@ -199,6 +199,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.starMapBridge.listStarMaps()
   }
 
+  async listRootStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
+    return this.starMapBridge.listRootStarMaps()
+  }
+
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
     return this.starMapBridge.listStarMapsForProject(projectId)
   }

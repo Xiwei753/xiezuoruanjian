@@ -5,6 +5,10 @@ static napi_value NativeListStarMaps(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_list_starmaps());
 }
 
+static napi_value NativeListRootStarMaps(napi_env env, napi_callback_info info) {
+    return ReturnJsonString(env, writer_core_list_root_starmaps());
+}
+
 static napi_value NativeListStarMapsForProject(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -209,6 +213,7 @@ static napi_value NativeUpdateStarMapEmbed(napi_env env, napi_callback_info info
 napi_property_descriptor* getStarMapDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
         {"nativeListStarMaps", nullptr, NativeListStarMaps, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeListRootStarMaps", nullptr, NativeListRootStarMaps, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeListStarMapsForProject", nullptr, NativeListStarMapsForProject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetStarMap", nullptr, NativeGetStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetStarMapGraph", nullptr, NativeGetStarMapGraph, nullptr, nullptr, nullptr, napi_default, nullptr},
