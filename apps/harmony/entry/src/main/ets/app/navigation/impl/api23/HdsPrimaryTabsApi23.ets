@@ -202,10 +202,12 @@ export struct HdsPrimaryTabsApi23 {
     .barOverlap(true)
     .barPosition(BarPosition.End)
     .vertical(false)
-    // Issue #794 评论5885532765：显式配置 animationDuration，确保每次点击底栏切换都播放页签切换动画。
+    // Issue #794 评论5885532765/5886073378：显式配置 animationDuration，确保每次点击底栏切换都播放页签切换动画。
     // BottomTabBarStyle 下 animationDuration 默认值为 0（无动画），不显式设置则点击切换无动画。
     // 300ms 是 ArkUI Tabs 非 BottomTabBarStyle 的默认动画时长，与官方 TabBar 动画示例一致。
     // 横向滑动的跟手动画由 interpolatingSpring 弹性曲线驱动，不受 animationDuration 影响。
+    // 评论5886073378 复核确认：此改动直接作用于 TabContent 切换，未引入第二套切换逻辑
+    // （onChange 仍只写 this.currentTab = index，不在 onChange 里调 controller.changeIndex()，无一次性动画状态）。
     .animationDuration(300)
     // 官方《设置页签栏的模糊样式》给的"背景模糊"毛玻璃方案，官方定位是沉浸光感的
     // 轻量兜底：沉浸光感是对身后画面做材质折射，背后无内容就没内容可折；
