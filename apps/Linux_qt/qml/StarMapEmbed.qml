@@ -73,6 +73,10 @@ Item {
     signal contextMenuRequested(string instanceId, real sceneX, real sceneY)
     signal leftReleased()
 
+    // Issue #801 评论 5894981235: 鼠标交互上抛信号，通知 Canvas 切回鼠标模式
+    // （隐藏触屏 +/- 按钮）。触屏 TapHandler 不发此信号。
+    signal mouseInteracted()
+
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
     // ---------------------------------------------------------------------------
@@ -164,6 +168,9 @@ Item {
         acceptedButtons: Qt.LeftButton
         exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
+        // Issue #801 评论 5894981235: 鼠标按下即通知 Canvas 切回鼠标模式。
+        onPressedChanged: { if (pressed) root.mouseInteracted() }
+
         onSingleTapped: root.clicked(root.instanceId)
         onDoubleTapped: root.doubleClicked(root.targetStarmapId)
         onLongPressed: root.mouseLongPressed(root.instanceId)
@@ -183,6 +190,8 @@ Item {
     TapHandler {
         acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.RightButton
+        // Issue #801 评论 5894981235: 右键也是鼠标交互。
+        onPressedChanged: { if (pressed) root.mouseInteracted() }
         onSingleTapped: function(eventPoint) {
             root.rightClicked(root.instanceId)
             root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)

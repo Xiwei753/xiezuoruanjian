@@ -209,7 +209,12 @@ Item {
     // Issue #801 评论 5894035036: 下钻到子星图——push 当前层到栈，切换 current。
     // Issue #801 评论 5894639734: 只改栈和 current，Canvas.onStarmapIdChanged 负责 reset+reload。
     function enterChildStarmap(targetId, title) {
-        starmapPathStack.push({ starmapId: currentStarmapId, title: currentStarmapTitle })
+        // Issue #801 评论 5894981235: QML var 原地 push 不触发 change notification，
+        // 必须重新赋值数组才能让 starmapPathStackChanged 发出，
+        // canDrillUp binding 才会跟着层级正确更新。
+        starmapPathStack = starmapPathStack.concat([
+            { starmapId: currentStarmapId, title: currentStarmapTitle }
+        ])
         currentStarmapId = targetId
         currentStarmapTitle = title
     }
@@ -217,10 +222,14 @@ Item {
     // Issue #801 评论 5894035036: 返回父星图——pop 栈并切换 current。
     // Issue #801 评论 5894639734: 只改栈和 current，Canvas.onStarmapIdChanged 负责 reset+reload。
     function returnToParentStarmap() {
-        if (starmapPathStack.length > 0) {
-            var parent = starmapPathStack.pop()
-            currentStarmapId = parent.starmapId
-            currentStarmapTitle = parent.title
-        }
+        if (starmapPathStack.length === 0)
+            return
+        // Issue #801 评论 5894981235: QML var 原地 pop 不触发 change notification，
+        // 必须重新赋值数组才能让 starmapPathStackChanged 发出，
+        // canDrillUp binding 才会跟着层级正确更新。
+        var parent = starmapPathStack[starmapPathStack.length - 1]
+        starmapPathStack = starmapPathStack.slice(0, starmapPathStack.length - 1)
+        currentStarmapId = parent.starmapId
+        currentStarmapTitle = parent.title
     }
 }

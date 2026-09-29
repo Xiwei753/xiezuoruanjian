@@ -568,6 +568,10 @@ Item {
                 // -------------------------------------------------------------------
                 // 节点上抛信号 → Canvas 状态机决定行为
                 // -------------------------------------------------------------------
+                // Issue #801 评论 5894981235: 鼠标点击 Node 时切回鼠标模式，
+                // 隐藏触屏 +/- 按钮。
+                onMouseInteracted: _touchInputActive = false
+
                 onSingleClicked: {
                     graphController.selectNode(nodeData.id)
                 }
@@ -723,6 +727,10 @@ Item {
                 onYChanged: edgeCanvas.requestPaint()
 
                 // 单击只选中
+                // Issue #801 评论 5894981235: 鼠标点击 Embed 时切回鼠标模式，
+                // 隐藏触屏 +/- 按钮。
+                onMouseInteracted: _touchInputActive = false
+
                 onClicked: function(instId) {
                     graphController.selectEmbed(instId)
                 }
