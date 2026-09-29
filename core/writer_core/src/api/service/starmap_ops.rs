@@ -99,7 +99,7 @@ impl WriterCoreApi {
         position: crate::api::types::StarMapPointDto,
     ) -> ApiResult<crate::api::types::CreateStarMapChildEmbedResultDto> {
         let core_position: crate::starmap::types::StarMapPoint = position.into();
-        let (starmap_meta, embed, change_set) = self
+        let (starmap_meta, embed, change_set, tx_id) = self
             .core_write()
             .create_starmap_child_embed(host_starmap_id, title, core_position)
             .map_err(WriterError::from)?;
@@ -138,8 +138,26 @@ impl WriterCoreApi {
             target: Some(embed_entry.target.clone()),
         });
 
-        // 记录本地 Git history（组合操作只记录一次）
-        let _ = self.record_workspace_change_set_history(&change_set, "create_starmap_child_embed");
+        // 先记录 history，成功后 ack journal。
+        // history 失败时用 `?` 传播错误——journal 保留在 EmbedAdded，
+        // 下次启动 recover 会补记 history。
+        self.record_workspace_change_set_history(&change_set, "create_starmap_child_embed")
+            .map_err(WriterError::from)?;
+
+        // history 成功，ack 推进 journal 到 Completed 并清理。
+        // ack 失败只 log::warn——数据已 durable，journal 残留不影响正确性，
+        // 下次启动 recover 会清理。
+        if let Err(e) = crate::storage::journal::starmap_child_embed::ack_child_embed_history(
+            &self.app_data_root,
+            &tx_id,
+        ) {
+            log::warn!(
+                "create_starmap_child_embed: ack_child_embed_history failed for tx_id={}: {} \
+                 — journal retained, will be recovered on next startup",
+                tx_id,
+                e
+            );
+        }
 
         Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
             starmap: starmap_meta.into(),

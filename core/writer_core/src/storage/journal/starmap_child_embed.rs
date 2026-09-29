@@ -66,6 +66,8 @@ pub struct StarMapChildEmbedJournal {
     pub host_starmap_id: String,
     /// 子星图 ID（预先生成，用于 create_starmap_with_id）。
     pub child_starmap_id: String,
+    /// Embed 实例 ID（预先生成，正常路径和恢复路径共用同一 ID）。
+    pub embed_instance_id: String,
     /// 子星图标题。
     pub title: String,
     /// Embed 在宿主图中的位置。
@@ -117,10 +119,13 @@ impl StarMapChildEmbedTransaction {
             uuid::Uuid::new_v4()
         );
 
+        let embed_instance_id = format!("em_{}", uuid::Uuid::new_v4());
+
         let journal = StarMapChildEmbedJournal {
             tx_id: tx_id.clone(),
             host_starmap_id: host_starmap_id.to_string(),
             child_starmap_id: child_starmap_id.to_string(),
+            embed_instance_id: embed_instance_id.clone(),
             title: title.to_string(),
             position,
             phase: StarMapChildEmbedPhase::Pending,
@@ -140,6 +145,11 @@ impl StarMapChildEmbedTransaction {
     /// 获取预先生成的子星图 ID。
     pub fn child_starmap_id(&self) -> &str {
         &self.journal.child_starmap_id
+    }
+
+    /// 获取预先生成的 Embed 实例 ID。
+    pub fn embed_instance_id(&self) -> &str {
+        &self.journal.embed_instance_id
     }
 
     /// 获取事务 ID。
@@ -313,6 +323,7 @@ pub fn ack_child_embed_history(app_data_root: &Path, journal_token: &str) -> Res
 /// 返回 `Ok(Some(recovered))` 表示 journal 已推进到 `EmbedAdded`，
 /// 调用方需用 `recovered.changes` 补记 history 后推进 journal 到 `Completed` 并清 journal。
 /// 返回 `Ok(None)` 表示 journal 已清理（`Completed`），无需补 history。
+#[allow(clippy::too_many_lines)]
 fn recover_single_child_embed_journal(
     journal_path: &Path,
     app_data_root: &Path,
@@ -351,6 +362,8 @@ fn recover_single_child_embed_journal(
 
             if child_meta_exists {
                 // child meta 已存在：child 已经创建，需要补 Embed。
+                // 先确保 index 中包含该 child ID（崩溃窗口：save meta 后、save index 前崩溃）。
+                ensure_child_index_membership(app_data_root, &journal.child_starmap_id)?;
                 // 推进 phase 到 ChildCreated，然后走 ChildCreated 的恢复逻辑。
                 log::info!(
                     "[recover_single_child_embed_journal] Pending but child meta exists, \
@@ -391,12 +404,14 @@ fn recover_single_child_embed_journal(
                 .join(format!("{}.meta.json", journal.child_starmap_id));
 
             if !child_meta_path.exists() {
-                // child meta 不存在——child 根本没创建出来，清 journal。
+                // child meta 不存在——child 根本没创建出来。
+                // 同时检查并删除 index 中可能残留的 stale child ID。
                 log::info!(
                     "[recover_single_child_embed_journal] ChildCreated but child meta missing, \
-                     clearing journal tx_id={}",
+                     removing stale index entry and clearing journal tx_id={}",
                     journal.tx_id
                 );
+                remove_child_from_index(app_data_root, &journal.child_starmap_id)?;
                 fs::remove_file(journal_path)?;
                 if let Some(parent) = journal_path.parent() {
                     crate::storage::sync_dir(parent)?;
@@ -445,6 +460,9 @@ fn recover_child_created_or_embed_added(
     journal: &StarMapChildEmbedJournal,
     journal_path: &Path,
 ) -> Result<Option<RecoveredStarMapChildEmbed>> {
+    // 确保 index 中包含该 child ID（崩溃窗口：save meta 后、save index 前崩溃）。
+    ensure_child_index_membership(app_data_root, &journal.child_starmap_id)?;
+
     let embed_exists = check_embed_exists(
         app_data_root,
         &journal.host_starmap_id,
@@ -491,6 +509,8 @@ fn recover_child_created_or_embed_added(
 /// 包含：
 /// - child meta 路径：`starmaps/{child_starmap_id}.meta.json`
 /// - starmap index 路径：`starmaps/index.json`
+/// - host Embed 文件路径：`starmaps/{host}/embeds/{bucket}/{embed_instance_id}.json`
+/// - host graph.json 路径：`starmaps/{host}/graph.json`
 /// - host store flush 后的真实文件路径（strip prefix app_data_root 转为相对路径）
 fn build_child_embed_change_set(
     app_data_root: &Path,
@@ -502,6 +522,21 @@ fn build_child_embed_change_set(
             PathBuf::from("starmaps").join(format!("{}.meta.json", journal.child_starmap_id)),
         )
         .add_upsert(PathBuf::from("starmaps").join("index.json"));
+
+    // 根据 journal 中记录的 embed_instance_id 构造确定的 host Embed 文件路径，
+    // 即使 flush_paths 为空（恢复路径）也能包含 host Embed 和 graph.json。
+    let bucket = crate::starmap::package_storage::bucket_for_id(&journal.embed_instance_id);
+    let embed_rel_path = PathBuf::from("starmaps")
+        .join(&journal.host_starmap_id)
+        .join("embeds")
+        .join(bucket)
+        .join(format!("{}.json", journal.embed_instance_id));
+    change_set = change_set.add_upsert(embed_rel_path);
+
+    let graph_rel_path = PathBuf::from("starmaps")
+        .join(&journal.host_starmap_id)
+        .join("graph.json");
+    change_set = change_set.add_upsert(graph_rel_path);
 
     for path in flush_paths {
         let rel_path = path
@@ -540,6 +575,49 @@ fn remove_child_from_index(app_data_root: &Path, child_starmap_id: &str) -> Resu
     Ok(())
 }
 
+/// 确保 starmaps/index.json 中包含指定的 child_starmap_id（前提是 child meta 存在）。
+///
+/// 如果 child meta 存在但 index 中缺少该 ID，则补上；
+/// 如果 index 中已有该 ID，不做任何事；
+/// 如果 child meta 不存在，不做任何事（不应补 index）。
+fn ensure_child_index_membership(app_data_root: &Path, child_starmap_id: &str) -> Result<()> {
+    let child_meta_path = app_data_root
+        .join("starmaps")
+        .join(format!("{}.meta.json", child_starmap_id));
+    if !child_meta_path.exists() {
+        // child meta 不存在，不应补 index。
+        return Ok(());
+    }
+
+    let index_path = app_data_root.join("starmaps").join("index.json");
+    if !index_path.exists() {
+        // index 不存在但 child meta 存在——崩溃窗口：save meta 后、save index 前崩溃。
+        // 创建只含该 child ID 的 index。
+        let idx = crate::starmap::StarMapIndexRecord {
+            schema_version: crate::starmap::migration::NEW_INDEX_SCHEMA_VERSION,
+            starmap_ids: vec![child_starmap_id.to_string()],
+            main_starmap_by_project: std::collections::HashMap::new(),
+            updated_at: crate::starmap::now_epoch(),
+        };
+        let new_content = serde_json::to_string_pretty(&idx)?;
+        crate::storage::atomic_write_string(&index_path, &new_content)?;
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&index_path)?;
+    let mut idx: crate::starmap::StarMapIndexRecord = serde_json::from_str(&content)?;
+    if idx.starmap_ids.iter().any(|id| id == child_starmap_id) {
+        // index 中已有该 ID，不做任何事。
+        return Ok(());
+    }
+    // index 中没有该 ID，补上。
+    idx.starmap_ids.push(child_starmap_id.to_string());
+    idx.updated_at = crate::starmap::now_epoch();
+    let new_content = serde_json::to_string_pretty(&idx)?;
+    crate::storage::atomic_write_string(&index_path, &new_content)?;
+    Ok(())
+}
+
 /// 检查宿主星图中是否已有指向 child_starmap_id 的 Embed。
 fn check_embed_exists(
     app_data_root: &Path,
@@ -566,7 +644,7 @@ fn repair_embed_for_child(
 ) -> Result<Vec<PathBuf>> {
     let now = crate::starmap::now_epoch();
     let embed = crate::starmap::types::StarMapEmbed {
-        instance_id: format!("em_{}", uuid::Uuid::new_v4()),
+        instance_id: journal.embed_instance_id.clone(),
         target_starmap_id: journal.child_starmap_id.clone(),
         label: Some(journal.title.clone()),
         position: journal.position.clone(),

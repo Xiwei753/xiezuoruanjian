@@ -590,9 +590,12 @@ impl super::super::WriterCore {
     /// 3. 用确定 ID 创建 child meta/index
     /// 4. 在 host Store 写 Embed
     /// 5. flush host Store，确认 Embed 已落盘
-    /// 6. 标记 journal completed 并清理
     ///
-    /// 返回 `(StarMapMeta, StarMapEmbed, WorkspaceChangeSet)`，
+    /// **不** complete/cleanup journal——把 tx_id 返回给调用方，
+    /// 由调用方在 `record_workspace_change_set_history` 成功后
+    /// 调 `ack_child_embed_history` 推进 journal 到 Completed 并清理。
+    ///
+    /// 返回 `(StarMapMeta, StarMapEmbed, WorkspaceChangeSet, tx_id)`，
     /// WorkspaceChangeSet 包含 child meta 路径、starmap index 路径、host Embed/graph meta 路径。
     pub fn create_starmap_child_embed(
         &self,
@@ -603,6 +606,7 @@ impl super::super::WriterCore {
         crate::starmap::StarMapMeta,
         crate::starmap::types::StarMapEmbed,
         crate::storage::workspace_git::WorkspaceChangeSet,
+        String,
     )> {
         // Step 1: 生成确定的 child_starmap_id
         let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
@@ -640,10 +644,10 @@ impl super::super::WriterCore {
         };
         tx.mark_child_created()?;
 
-        // Step 4: 构造 Embed 并添加到宿主图
+        // Step 4: 构造 Embed 并添加到宿主图（使用 journal 中预生成的 embed_instance_id）
         let now = crate::starmap::now_epoch();
         let embed = crate::starmap::types::StarMapEmbed {
-            instance_id: format!("em_{}", uuid::Uuid::new_v4()),
+            instance_id: tx.embed_instance_id().to_string(),
             target_starmap_id: child_meta.starmap_id.clone(),
             label: Some(title.to_string()),
             position,
@@ -676,9 +680,8 @@ impl super::super::WriterCore {
         let host_changed_paths = self.flush_starmap_store(host_starmap_id)?;
         tx.mark_embed_added()?;
 
-        // Step 6: 标记 journal completed 并清理
-        tx.complete()?;
-        tx.cleanup_journal()?;
+        // 不 complete/cleanup journal——由调用方在 history 记录成功后 ack。
+        let tx_id = tx.tx_id().to_string();
 
         // 构造 WorkspaceChangeSet：
         // - child meta 路径 + starmap index 路径（create_starmap_with_id 写的）
@@ -694,7 +697,7 @@ impl super::super::WriterCore {
             change_set = change_set.add_upsert(path);
         }
 
-        Ok((child_meta, created_embed, change_set))
+        Ok((child_meta, created_embed, change_set, tx_id))
     }
 
     pub fn find_starmap_references(
