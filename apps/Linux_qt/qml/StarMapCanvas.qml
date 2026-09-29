@@ -59,6 +59,15 @@ Item {
     property real _pinchStartPanX: 0
     property real _pinchStartPanY: 0
 
+    // Issue #801 评论 5894639734: Pinch 连续 drillUp 去重 + 根星图可缩到最小。
+    // canDrillUp 由 Workspace 绑定（starmapPathStack.length > 0）；
+    // _pinchDrilledUp 在一次 Pinch 内只允许 drillUp 一次。
+    property bool canDrillUp: false
+    property bool _pinchDrilledUp: false
+    // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
+    // 第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
+    property bool _touchInputActive: false
+
     // ---------------------------------------------------------------------------
     // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
     //   pointerMode / connectFrom* / connectMouseX/Y / pressedNodeId / pressedEmbedId
@@ -192,6 +201,7 @@ Item {
             acceptedDevices: PointerDevice.Mouse
             acceptedButtons: Qt.LeftButton
             onSingleTapped: function(eventPoint) {
+                _touchInputActive = false
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
@@ -218,6 +228,7 @@ Item {
             acceptedDevices: PointerDevice.TouchScreen
             acceptedButtons: Qt.LeftButton
             onSingleTapped: function(eventPoint) {
+                _touchInputActive = true
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
@@ -236,13 +247,22 @@ Item {
             // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
             // TapHandler.longPressed 信号无参数，用 point.position 拿当前点
             // （TapHandler 继承自 SinglePointHandler，有 point 属性）。
+            // Issue #801 评论 5894639734: 长按前先判命中，节点/Embed/边上的长按
+            // 不弹背景菜单（Qt TapHandler 是 passive grab，背景和对象 Handler 会
+            // 同时观察同一个 press，不能假设背景自动收不到）。
             onLongPressed: {
+                _touchInputActive = true
                 var px = bgTouchLeftTap.point.position.x
                 var py = bgTouchLeftTap.point.position.y
-                var mx = (px - panX) / zoomLevel
-                var my = (py - panY) / zoomLevel
-                contextMenuWorldX = mx
-                contextMenuWorldY = my
+                var wx = (px - panX) / zoomLevel
+                var wy = (py - panY) / zoomLevel
+
+                if (findNodeAt(wx, wy)) return
+                if (findEmbedAt(wx, wy)) return
+                if (graphController.hitTestEdge(wx, wy)) return
+
+                contextMenuWorldX = wx
+                contextMenuWorldY = wy
                 bgContextMenu.popup(px, py)
             }
         }
@@ -254,6 +274,7 @@ Item {
             acceptedDevices: PointerDevice.Mouse
             acceptedButtons: Qt.RightButton
             onSingleTapped: function(eventPoint) {
+                _touchInputActive = false
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
@@ -284,7 +305,7 @@ Item {
             target: null
             property real lastTx: 0
             property real lastTy: 0
-            onActiveChanged: { if (active) { lastTx = 0; lastTy = 0 } }
+            onActiveChanged: { if (active) { lastTx = 0; lastTy = 0; _touchInputActive = true } }
             onActiveTranslationChanged: {
                 var dx = activeTranslation.x - lastTx
                 var dy = activeTranslation.y - lastTy
@@ -320,17 +341,22 @@ Item {
                     _pinchStartZoom = zoomLevel
                     _pinchStartPanX = panX
                     _pinchStartPanY = panY
+                    // Issue #801 评论 5894639734: 每次 Pinch 开始时重置去重标记。
+                    _pinchDrilledUp = false
+                    _touchInputActive = true
                 }
             }
             onActiveScaleChanged: {
-                var newZoom = Math.max(0.35, Math.min(2.5, _pinchStartZoom * activeScale))
-                // Issue #801 评论 5894035036: 缩到最小以下，上抛 drillUpRequested
-                // 由 Workspace 决定是否有父级可返回。
-                if (newZoom <= 0.35) {
+                var rawZoom = _pinchStartZoom * activeScale
+                // Issue #801 评论 5894639734: 一次 Pinch 只 drillUp 一次，
+                // 避免捏合不松手时连续 pop 多层；根星图（canDrillUp=false）
+                // 时正常 clamp 到 0.35，不 return。
+                if (rawZoom < 0.35 && canDrillUp && !_pinchDrilledUp) {
+                    _pinchDrilledUp = true
                     drillUpRequested()
                     return
                 }
-                zoomLevel = newZoom
+                zoomLevel = Math.max(0.35, Math.min(2.5, rawZoom))
                 // 以手势中心缩放
                 var cx = centroid.position.x
                 var cy = centroid.position.y
@@ -350,6 +376,7 @@ Item {
             property real lastY: 0
 
             onPressed: function(mouse) {
+                _touchInputActive = false
                 lastX = mouse.x
                 lastY = mouse.y
                 if (mouse.button === Qt.LeftButton) {
@@ -383,12 +410,13 @@ Item {
             }
 
             onWheel: function(wheel) {
+                _touchInputActive = false
                 var oldZoom = zoomLevel
                 var delta = wheel.angleDelta.y / 120
                 var newZoom = zoomLevel + delta * 0.1
-                // Issue #801 评论 5894035036: 缩到最小以下，上抛 drillUpRequested，
-                // 由 Workspace 决定是否有父级可返回。
-                if (newZoom < 0.35) {
+                // Issue #801 评论 5894639734: 只有 canDrillUp 时越过下限才返回父级；
+                // 已经在根图就正常 clamp 到 0.35。
+                if (newZoom < 0.35 && canDrillUp) {
                     drillUpRequested()
                     return
                 }
@@ -828,8 +856,9 @@ Item {
         visible: graphController.nodesModel.length === 0 && graphController.embedsModel.length === 0
     }
 
-    // Issue #801 评论 5894035036: 触屏缩放 +/- 按钮（右下角浮层）。
-    // QML 无法可靠检测触屏设备，始终显示，鼠标也能点。
+    // Issue #801 评论 5894639734: 触屏缩放 +/- 按钮（右下角浮层）。
+    // 按需显示：第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
+    // 不做硬件探测，靠 _touchInputActive 跟踪最近一次输入设备。
     RowLayout {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -837,6 +866,7 @@ Item {
         anchors.bottomMargin: 16
         spacing: 8
         z: 50
+        visible: _touchInputActive
 
         AppButton {
             dt: canvasArea.dt
@@ -852,9 +882,9 @@ Item {
             text: qsTr("−")
             onClicked: {
                 var newZoom = zoomLevel - 0.15
-                // Issue #801 评论 5894035036: 缩到最小以下，上抛 drillUpRequested
-                // 由 Workspace 决定是否有父级可返回。
-                if (newZoom < 0.35) {
+                // Issue #801 评论 5894639734: 只有 canDrillUp 时越过下限才返回父级；
+                // 已经在根图就正常 clamp 到 0.35。
+                if (newZoom < 0.35 && canDrillUp) {
                     drillUpRequested()
                     return
                 }

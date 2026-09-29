@@ -118,6 +118,9 @@ Item {
                     // Workspace 的 currentStarmapId，Canvas 不再自己赋值 starmapId。
                     starmapId: root.currentStarmapId
                     starmapBackendRef: root.starmapBackendRef
+                    // Issue #801 评论 5894639734: 告知 Canvas 当前是否有父级可返回，
+                    // 根星图时 canDrillUp=false，缩到最小只 clamp 不 drillUp。
+                    canDrillUp: root.starmapPathStack.length > 0
 
                     // Issue #801 评论 5894035036: Canvas 上抛下钻/上钻请求，
                     // 由 Workspace 统一管理层级栈。
@@ -180,12 +183,12 @@ Item {
     // 必须经过 resetInteraction 清掉旧 move/connect 状态，否则新图会继承旧 pointerMode。
     // Issue #801 评论 5894035036: 根 starmapId/starmapTitle 变化时（外部切换星图），
     // 重置层级栈，currentStarmapId/Title 同步成根，并触发 Canvas 重新加载。
+    // Issue #801 评论 5894639734: 只改 currentStarmapId/Title 和层级栈，
+    // reset+reload 统一由 Canvas.onStarmapIdChanged 负责，避免重复 loadGraph。
     onStarmapIdChanged: {
         currentStarmapId = starmapId
         currentStarmapTitle = starmapTitle
         starmapPathStack = []
-        canvas.resetInteraction()
-        if (starmapId.length > 0) canvas.loadGraph()
     }
 
     // Issue #801 评论 5894035036: 外部标题变化时（如 AppController 更新），
@@ -196,29 +199,28 @@ Item {
         }
     }
 
+    // Issue #801 评论 5894639734: 只设 current，Canvas.onStarmapIdChanged 会触发
+    // 首次 reset+loadGraph（currentStarmapId 从 "" 变成 starmapId 时）。
     Component.onCompleted: {
         currentStarmapId = starmapId
         currentStarmapTitle = starmapTitle
-        if (starmapId.length > 0) canvas.loadGraph()
     }
 
     // Issue #801 评论 5894035036: 下钻到子星图——push 当前层到栈，切换 current。
+    // Issue #801 评论 5894639734: 只改栈和 current，Canvas.onStarmapIdChanged 负责 reset+reload。
     function enterChildStarmap(targetId, title) {
         starmapPathStack.push({ starmapId: currentStarmapId, title: currentStarmapTitle })
         currentStarmapId = targetId
         currentStarmapTitle = title
-        canvas.resetInteraction()
-        canvas.loadGraph()
     }
 
     // Issue #801 评论 5894035036: 返回父星图——pop 栈并切换 current。
+    // Issue #801 评论 5894639734: 只改栈和 current，Canvas.onStarmapIdChanged 负责 reset+reload。
     function returnToParentStarmap() {
         if (starmapPathStack.length > 0) {
             var parent = starmapPathStack.pop()
             currentStarmapId = parent.starmapId
             currentStarmapTitle = parent.title
-            canvas.resetInteraction()
-            canvas.loadGraph()
         }
     }
 }
