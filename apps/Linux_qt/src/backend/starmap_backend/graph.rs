@@ -1,7 +1,6 @@
-//! 星图图元（graph / 节点 / 边）与坐标布局落盘的 `AppBackend` 领域方法。
+//! 星图图元（graph / 节点 / 边）的 `AppBackend` 领域方法。
 //!
-//! 从 `starmap_backend.rs` 拆出：图的读取、节点与边的增删改、以及高频拖拽
-//! 节点后的坐标批量落盘（`save_starmap_layout`）属于同一组图元操作。
+//! 从 `starmap_backend.rs` 拆出：图的读取、节点与边的增删改属于同一组图元操作。
 //! 布局算法本身在 `crate::starmap_view`（Linux 平台端），Core 只保存节点坐标。
 
 use super::*;
@@ -151,36 +150,6 @@ impl AppBackend {
             ))
             .into()
         }
-    }
-
-    // AppBackend::save_starmap_layout_json
-    pub(crate) fn save_starmap_layout_json(
-        &mut self,
-        starmap_id: QString,
-        layout_json: QString,
-    ) -> QString {
-        let sid = starmap_id.to_string();
-        let lj = layout_json.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::save_starmap_layout(&core, &sid, &lj).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
-        }
-    }
-
-    // AppBackend::save_starmap_layout
-    pub(crate) fn save_starmap_layout(
-        &mut self,
-        starmap_id: QString,
-        layout_json: QString,
-    ) -> QJsonObject {
-        let raw = self
-            .save_starmap_layout_json(starmap_id, layout_json)
-            .to_string();
-        qjson_object_from_json(&raw)
     }
 
     // -------------------------------------------------------------------------

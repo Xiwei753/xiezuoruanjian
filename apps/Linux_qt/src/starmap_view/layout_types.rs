@@ -144,3 +144,17 @@ impl Default for StarMapMotionPolicyDto {
         }
     }
 }
+
+/// Embed 在平台画布上的显示包围盒。
+///
+/// Core 只存 `StarMapEmbedDto.position`（左上角），不含宽高。显示锚点必须用
+/// 平台 scene geometry 的中心（x+width/2, y+height/2），与 QML 拉线预览一致。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEmbedSceneRect {
+    pub instance_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}

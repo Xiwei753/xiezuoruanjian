@@ -138,7 +138,31 @@ impl AppBackend {
     pub(crate) fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         let sid = starmap_id.to_string();
         if let Some(core) = self.core_api() {
-            starmap_bridge::get_starmap_graph_and_layout(&core, &sid).into()
+            match core.get_starmap_graph(&sid) {
+                Ok(g) => {
+                    // 真正有用的图快照日志：记录各类图元数量，便于排查"图空了""embed 丢失"等问题。
+                    // StarMapGraphDto 同时持有 `links`（普通连线）和 `hyperlinks`（超链接）两个字段，
+                    // 分别记录两者，避免把 hyperlinks 误当成 links 输出到日志。
+                    log::debug!(
+                        "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={} hyperlinks={}",
+                        sid,
+                        g.nodes.len(),
+                        g.edges.len(),
+                        g.embeds.len(),
+                        g.links.len(),
+                        g.hyperlinks.len()
+                    );
+                    writer_core::api::ResultEnvelope::success(serde_json::json!({
+                        "graph": g
+                    }))
+                    .to_json_string()
+                    .into()
+                }
+                Err(e) => crate::backend::json_utils::envelope_error_json(
+                    writer_core::api::WriterError::Other(e.to_string()),
+                )
+                .into(),
+            }
         } else {
             crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
                 "core api not available".to_string(),

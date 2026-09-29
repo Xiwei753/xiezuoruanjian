@@ -30,17 +30,10 @@ Rectangle {
     // 刷新星图列表：通过 StarMapController 拉取后端数据
     function refreshStarmaps() {
         if (!starMapController) return
-        var list = starMapController.listStarmaps() || []
-        starmapModel.clear()
-        for (var i = 0; i < list.length; i++) {
-            // ListModel 仅用于驱动网格数量与 count 判断；
-            // 完整数据通过 root.starmaps[index] 在 delegate 中取回。
-            starmapModel.append({ __idx: i })
-        }
-        root.starmaps = list
+        // Issue #798: 直接用真实星图对象列表驱动 GridView，
+        // 不再维护 ListModel + __idx 双模型。
+        root.starmaps = starMapController.listStarmaps() || []
     }
-
-    ListModel { id: starmapModel }
 
     Component.onCompleted: refreshStarmaps()
     onVisibleChanged: if (visible) refreshStarmaps()
@@ -87,7 +80,7 @@ Rectangle {
             dt: root.dt
             Layout.fillWidth: true
             Layout.fillHeight: true
-            dataModel: starmapModel
+            dataModel: root.starmaps
             cardHeight: 180
             minCardWidth: 260
             emptyTitle: qsTr("暂无星图")
@@ -95,13 +88,16 @@ Rectangle {
 
             delegate: Item {
                 id: cardWrapper
+                // Issue #798: Qt 6.11 GridView 显式 required property 模型契约。
+                required property var modelData
+                required property int index
                 width: GridView.view.gridRoot.cardWidth
                 height: GridView.view.gridRoot.cardHeight
 
                 StarMapCard {
                     anchors.fill: parent
                     dt: root.dt
-                    starmapData: root.starmaps[index] || ({})
+                    starmapData: cardWrapper.modelData || ({})
                     onClicked: function(smId, smTitle) {
                         root.openStarmap(smId, smTitle)
                     }

@@ -51,26 +51,10 @@ Item {
     property real zoomLevel: 1.0
 
     // ---------------------------------------------------------------------------
-    // 鼠标状态机：idle / pan / connect / move
-    //   idle    — 无活跃拖拽手势
-    //   pan     — 长按空白后拖动，平移画布
-    //   connect — 长按节点后拖动，拉线预览
-    //   move    — 节点右键菜单"移动节点"后左键拖动，仅移动指定节点
+    // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
+    //   pointerMode / connectFrom* / connectMouseX/Y / pressedNodeId / pressedEmbedId
+    // Canvas 只通过 interaction.* 读写瞬时状态，图操作仍留在 Canvas/GraphController。
     // ---------------------------------------------------------------------------
-    property string pointerMode: "idle"
-    property string pressedNodeId: ""
-    property string connectFromNodeId: ""
-    property real connectMouseX: 0
-    property real connectMouseY: 0
-    // Issue #796 评论 5887280405: connect 模式扩展，支持 Node 和 Embed 作为连线端点。
-    // connectFromKind: "node" 或 "embed"；connectFromId: nodeId 或 instanceId；
-    // connectFromPath: 源端 StarMapTargetPathDto JS 对象，由 nodePath()/embedPath() 构造。
-    // connectFromNodeId 保留给预览线绘制兼容路径，新代码逐步用 connectFromKind/Id 替代。
-    property string connectFromKind: ""
-    property string connectFromId: ""
-    property var connectFromPath: null
-    // Embed 移动模式用：右键菜单"移动"后左键拖动指定 Embed。
-    property string pressedEmbedId: ""
 
     // 上下文菜单辅助状态
     property var selectedNodeForMenu: null
@@ -92,29 +76,42 @@ Item {
     signal enterStarmapRequested(string starmapId, string title)
     signal editNodeRequested(var node)
 
-    // Model data
-    property var nodesModel: []
-    property var edgesModel: []
-    // Issue #796 评论 5886483653: Embed 显示模型，从 graphController 同步。
-    property var embedsModel: []
+    // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态，
+    // 不可见 / 离开工作区时也 reset，避免旧 move/connect 状态泄漏。
+    onStarmapIdChanged: resetInteraction()
+    onVisibleChanged: { if (!visible) resetInteraction() }
+
+    // Issue #798: 渲染层直接读 graphController 的模型，不再在 Canvas 维护副本。
+    // graphController 是当前星图 canonical scene model 的唯一持有者。
 
     StarMapGraphController {
         id: graphController
         starmapId: canvasArea.starmapId
         starmapBackendRef: canvasArea.starmapBackendRef
-        onGraphChanged: {
-            canvasArea.nodesModel = graphController.nodesModel
-            canvasArea.edgesModel = graphController.edgesModel
-            canvasArea.embedsModel = graphController.embedsModel
-            edgeCanvas.requestPaint()
-        }
+        onGraphChanged: edgeCanvas.requestPaint()
         onSelectionCleared: canvasArea.selectionCleared()
         onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
         onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
         onErrorMessageChanged: canvasArea.errorMessage = graphController.errorMessage
     }
 
+    // Issue #798: 瞬时手势状态机（pan/connect/move），不读写 Core，不保存节点数据。
+    StarMapInteractionController { id: interaction }
+
     function clearError() { graphController.clearError() }
+
+    // Issue #798: 公开 reset 入口，供 Workspace 切图 / 不可见时清瞬时交互状态。
+    function resetInteraction() {
+        // Issue #798 评论 5892406254: reset 前若正在 move，edgeRenders 已被
+        // transient 坐标更新。reset 后 delegate 回 canonical，edge cache 也要
+        // 一起恢复 canonical，否则节点回去了线还停在拖动位置。
+        var wasMove = interaction.pointerMode === "move"
+        interaction.reset()
+        if (wasMove) {
+            graphController.computeEdgeRenders(null)
+            edgeCanvas.requestPaint()
+        }
+    }
 
     // Background Grid
     Rectangle {
@@ -229,17 +226,17 @@ Item {
                     var wx = (mouse.x - panX) / zoomLevel
                     var wy = (mouse.y - panY) / zoomLevel
                     if (!findNodeAt(wx, wy) && !findEmbedAt(wx, wy)) {
-                        pointerMode = "pan"
+                        interaction.beginPan()
                     }
                 }
                 // 中键直接进入 pan（不依赖长按）
                 if (mouse.button === Qt.MiddleButton) {
-                    pointerMode = "pan"
+                    interaction.beginPan()
                 }
             }
 
             onPositionChanged: function(mouse) {
-                if (pointerMode === "pan") {
+                if (interaction.pointerMode === "pan") {
                     var dx = mouse.x - lastX
                     var dy = mouse.y - lastY
                     panX += dx
@@ -250,8 +247,8 @@ Item {
             }
 
             onReleased: function(mouse) {
-                if (pointerMode === "pan") {
-                    pointerMode = "idle"
+                if (interaction.pointerMode === "pan") {
+                    interaction.endPan()
                 }
             }
 
@@ -292,13 +289,12 @@ Item {
             ctx.lineWidth = 2
 
             // Draw all edges using Linux platform render data
-            graphController.computeEdgeRenders()
             var renders = graphController.edgeRenders
             for (var i = 0; i < renders.length; i++) {
                 var r = renders[i]
                 var edge = null
-                for (var ei = 0; ei < edgesModel.length; ei++) {
-                    if (edgesModel[ei].id === r.edgeId) { edge = edgesModel[ei]; break }
+                for (var ei = 0; ei < graphController.edgesModel.length; ei++) {
+                    if (graphController.edgesModel[ei].id === r.edgeId) { edge = graphController.edgesModel[ei]; break }
                 }
                 if (!edge) continue
 
@@ -337,14 +333,14 @@ Item {
             // Draw connecting preview line while in connect mode
             // Issue #796 评论 5887280405: 起点根据 connectFromKind 查 Node 或 Embed；
             // 兼容旧 connectFromNodeId 路径（旧代码未设 connectFromKind 时回退）。
-            if (pointerMode === "connect" && (connectFromId !== "" || connectFromNodeId !== "")) {
+            if (interaction.pointerMode === "connect" && (interaction.connectFromId !== "" || interaction.connectFromNodeId !== "")) {
                 var startNode = null
-                var startKind = connectFromKind
-                var startId = connectFromId
-                if (startId === "" && connectFromNodeId !== "") {
+                var startKind = interaction.connectFromKind
+                var startId = interaction.connectFromId
+                if (startId === "" && interaction.connectFromNodeId !== "") {
                     // 兼容旧路径：仅 connectFromNodeId 被设
                     startKind = "node"
-                    startId = connectFromNodeId
+                    startId = interaction.connectFromNodeId
                 }
                 if (startKind === "node") {
                     startNode = getNode(startId)
@@ -355,7 +351,7 @@ Item {
                 if (startNode) {
                     ctx.beginPath()
                     ctx.moveTo(startNode.x + startNode.width/2, startNode.y + startNode.height/2)
-                    ctx.lineTo(connectMouseX, connectMouseY)
+                    ctx.lineTo(interaction.connectMouseX, interaction.connectMouseY)
                     ctx.strokeStyle = _accent
                     ctx.lineWidth = 2
                     ctx.stroke()
@@ -376,13 +372,19 @@ Item {
         z: 2
 
         Repeater {
-            model: nodesModel.length
+            model: graphController.nodesModel
             delegate: StarMapNode {
+                // Issue #798: Qt 6.11 Repeater 要求 delegate 用显式 required property
+                // 接模型上下文，不能靠隐式 index。
+                required property var modelData
+                required property int index
                 dt: canvasArea.dt
-                property var nodeData: nodesModel[index]
+                property var nodeData: modelData
 
-                x: nodeData.x
-                y: nodeData.y
+                // Issue #798: 显示坐标从 transient 状态派生，不再被命令式赋值打断 binding。
+                // 当前节点处于 move 时读 interaction.moveX/moveY，否则读 canonical nodeData.x/y。
+                x: interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveX : nodeData.x
+                y: interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveY : nodeData.y
                 width: nodeData.width
                 height: nodeData.height
                 title: nodeData.title
@@ -394,29 +396,20 @@ Item {
                 // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
                 wobbleIndex: index
 
-                onXChanged: {
-                    if (nodeData) {
-                        nodeData.x = x
-                    }
-                    edgeCanvas.requestPaint()
-                }
-
-                onYChanged: {
-                    if (nodeData) {
-                        nodeData.y = y
-                    }
-                    edgeCanvas.requestPaint()
-                }
+                // Issue #798: 不再原地篡改 nodeData.x/y，拖动用 StarMapNode 自己的 x/y
+                // 作为临时显示坐标（命令式赋值打破初始绑定），松手提交 Controller。
+                onXChanged: edgeCanvas.requestPaint()
+                onYChanged: edgeCanvas.requestPaint()
 
                 // -------------------------------------------------------------------
                 // 节点上抛信号 → Canvas 状态机决定行为
                 // -------------------------------------------------------------------
                 onSingleClicked: {
-                    graphController.selectNode(nodesModel[index].id)
+                    graphController.selectNode(nodeData.id)
                 }
 
                 onDoubleClicked: {
-                    var nd = nodesModel[index]
+                    var nd = nodeData
                     if (nd.portal && nd.portal.destinationStarmapId) {
                         enterStarmapRequested(
                             nd.portal.destinationStarmapId,
@@ -429,28 +422,20 @@ Item {
                 }
 
                 onLongPressed: {
-                    var nd = nodesModel[index]
+                    var nd = nodeData
                     // 只允许 idle 时长按进入 connect；避免右键菜单"移动节点"
                     // 已选 move 后，左键按住稍久被 long press 覆盖成 connect
                     // （Issue #788 评论 5868205321）。
-                    if (pointerMode !== "idle") {
+                    // Issue #798: 手势状态交给 interaction，Canvas 只驱动状态切换。
+                    if (!interaction.beginConnect("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
-                    pointerMode = "connect"
-                    // Issue #796 评论 5887280405: 记录源端类型+id+path，松手时按类型建边。
-                    connectFromKind = "node"
-                    connectFromId = nd.id
-                    connectFromPath = nodePath(nd.id)
-                    connectFromNodeId = nd.id  // 保留给预览线绘制兼容路径
-                    // 预览线起点：节点中心（世界坐标）
-                    connectMouseX = nd.x + nd.width / 2
-                    connectMouseY = nd.y + nd.height / 2
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
 
                 onContextMenuRequested: function(sceneX, sceneY) {
-                    var nd = nodesModel[index]
+                    var nd = nodeData
                     graphController.selectNode(nd.id)
                     selectedNodeForMenu = nd
                     // sceneX/sceneY 是场景坐标，菜单用屏幕坐标
@@ -458,22 +443,22 @@ Item {
                 }
 
                 onMoveDelta: function(dx, dy) {
-                    if (pointerMode === "connect" && connectFromId === nodeData.id) {
-                        connectMouseX += dx
-                        connectMouseY += dy
+                    if (interaction.pointerMode === "connect" && interaction.connectFromId === nodeData.id) {
+                        interaction.updateConnect(interaction.connectMouseX + dx, interaction.connectMouseY + dy)
                         edgeCanvas.requestPaint()
                         return
                     }
 
-                    if (pointerMode === "idle") {
-                        pointerMode = "move"
-                        pressedNodeId = nodeData.id
+                    if (interaction.pointerMode === "idle") {
+                        interaction.beginMove(nodeData.id, x, y)
                     }
 
-                    if (pointerMode === "move" && pressedNodeId === nodeData.id) {
-                        x += dx
-                        y += dy
+                    if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
+                        // Issue #798: 不再命令式 x+=dx/y+=dy 打断 binding，
+                        // 只更新 transient 坐标，delegate 的 x/y binding 自动跟随。
+                        interaction.updateMove(interaction.moveX + dx, interaction.moveY + dy)
                         isBeingDragged = true
+                        graphController.computeEdgeRenders(currentMoveOverride())
                         edgeCanvas.requestPaint()
                     }
                 }
@@ -482,43 +467,44 @@ Item {
                     // 统一结束当前节点交互：无论长按后拖动还是直接松手，
                     // 都由此出口闭环 connect/move 状态（Issue #788 评论 5868205321）。
                     isBeingDragged = false
-                    if (pointerMode === "connect" && connectFromId === nodeData.id) {
+                    if (interaction.pointerMode === "connect" && interaction.connectFromId === nodeData.id) {
                         // Issue #796 评论 5887280405: 松手时 Node 和 Embed 都参与命中，
                         // 用 path 版建边支持 Embed 端点。
-                        var targetNode = findNodeAt(connectMouseX, connectMouseY)
-                        if (targetNode && targetNode.id !== connectFromId) {
-                            createEdgeWithPaths(connectFromPath, nodePath(targetNode.id))
+                        var targetNode = findNodeAt(interaction.connectMouseX, interaction.connectMouseY)
+                        if (targetNode && targetNode.id !== interaction.connectFromId) {
+                            createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
                         } else {
-                            var targetEmbed = findEmbedAt(connectMouseX, connectMouseY)
-                            if (targetEmbed && targetEmbed.instanceId !== connectFromId) {
-                                createEdgeWithPaths(connectFromPath, embedPath(targetEmbed.instanceId))
+                            var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
+                            if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
+                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
                             }
                         }
-                        pointerMode = "idle"
-                        connectFromKind = ""
-                        connectFromId = ""
-                        connectFromPath = null
-                        connectFromNodeId = ""
+                        interaction.endConnect()
                         edgeCanvas.requestPaint()
-                    } else if (pointerMode === "move" && pressedNodeId === nodeData.id) {
-                        saveLayout()
-                        pointerMode = "idle"
-                        pressedNodeId = ""
+                    } else if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
+                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
+                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
+                        graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
+                        interaction.endMove()
                     }
                 }
             }
         }
 
-        // Issue #796 评论 5886483653: Embed Repeater，用 StarMapEmbed.qml 渲染 embedsModel。
+        // Issue #796 评论 5886483653: Embed Repeater，用 StarMapEmbed.qml 渲染。
         // Node 和 Embed 都走同一套画布坐标转换（都在 container 里，受 panX/panY/zoomLevel 影响）。
         Repeater {
-            model: embedsModel.length
+            model: graphController.embedsModel
             delegate: StarMapEmbed {
+                // Issue #798: Qt 6.11 Repeater 显式 required property 模型契约。
+                required property var modelData
+                required property int index
                 dt: canvasArea.dt
-                property var embedData: embedsModel[index]
+                property var embedData: modelData
 
-                x: embedData.x
-                y: embedData.y
+                // Issue #798: 显示坐标从 transient 状态派生，不再被命令式赋值打断 binding。
+                x: interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveX : embedData.x
+                y: interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveY : embedData.y
                 width: embedData.width
                 height: embedData.height
                 instanceId: embedData.instanceId
@@ -527,19 +513,10 @@ Item {
                 isSelected: embedData.isSelected
                 wobbleIndex: index
 
-                onXChanged: {
-                    if (embedData) {
-                        embedData.x = x
-                    }
-                    edgeCanvas.requestPaint()
-                }
-
-                onYChanged: {
-                    if (embedData) {
-                        embedData.y = y
-                    }
-                    edgeCanvas.requestPaint()
-                }
+                // Issue #798: 不再原地篡改 embedData.x/y，拖动用 StarMapEmbed 自己的 x/y
+                // 作为临时显示坐标，松手提交 Controller。
+                onXChanged: edgeCanvas.requestPaint()
+                onYChanged: edgeCanvas.requestPaint()
 
                 // 单击只选中
                 onClicked: function(instId) {
@@ -549,7 +526,7 @@ Item {
                 // 双击进入 targetStarmapId
                 onDoubleClicked: function(tgtStarmapId) {
                     if (tgtStarmapId) {
-                        var ed = embedsModel[index]
+                        var ed = embedData
                         enterStarmapRequested(tgtStarmapId, ed.label || qsTr("子星图"))
                     }
                 }
@@ -557,17 +534,11 @@ Item {
                 // Issue #796 评论 5887280405: Embed 长按进入 connect 模式，
                 // 与 Node 长按对称。源端类型记为 "embed"，path 用 embedPath()。
                 onLongPressed: function(instId) {
-                    if (pointerMode !== "idle") {
+                    var ed = embedData
+                    // Issue #798: 手势状态交给 interaction，Canvas 只驱动状态切换。
+                    if (!interaction.beginConnect("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
-                    var ed = embedsModel[index]
-                    pointerMode = "connect"
-                    connectFromKind = "embed"
-                    connectFromId = instId
-                    connectFromPath = embedPath(instId)
-                    connectFromNodeId = ""  // Embed 没有 nodeId
-                    connectMouseX = ed.x + ed.width / 2
-                    connectMouseY = ed.y + ed.height / 2
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
@@ -583,22 +554,22 @@ Item {
                 // 和 Node 的 onMoveDelta 对称。connect 模式更新预览线终点；
                 // idle 转 move 移动 Embed position。
                 onMoveDelta: function(dx, dy) {
-                    if (pointerMode === "connect" && connectFromId === embedData.instanceId) {
-                        connectMouseX += dx
-                        connectMouseY += dy
+                    if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
+                        interaction.updateConnect(interaction.connectMouseX + dx, interaction.connectMouseY + dy)
                         edgeCanvas.requestPaint()
                         return
                     }
 
-                    if (pointerMode === "idle") {
-                        pointerMode = "move"
-                        pressedEmbedId = embedData.instanceId
+                    if (interaction.pointerMode === "idle") {
+                        interaction.beginEmbedMove(embedData.instanceId, x, y)
                     }
 
-                    if (pointerMode === "move" && pressedEmbedId === embedData.instanceId) {
-                        x += dx
-                        y += dy
+                    if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
+                        // Issue #798: 不再命令式 x+=dx/y+=dy 打断 binding，
+                        // 只更新 transient 坐标，delegate 的 x/y binding 自动跟随。
+                        interaction.updateMove(interaction.moveX + dx, interaction.moveY + dy)
                         isBeingDragged = true
+                        graphController.computeEdgeRenders(currentMoveOverride())
                         edgeCanvas.requestPaint()
                     }
                 }
@@ -607,30 +578,23 @@ Item {
                     isBeingDragged = false
                     // Issue #796 评论 5887280405: connect 模式下松手，Node 和 Embed 都参与命中，
                     // 用 path 版建边；否则走原拖动结束保存位置逻辑。
-                    if (pointerMode === "connect" && connectFromId === embedData.instanceId) {
-                        var targetNode = findNodeAt(connectMouseX, connectMouseY)
-                        if (targetNode && targetNode.id !== connectFromId) {
-                            createEdgeWithPaths(connectFromPath, nodePath(targetNode.id))
+                    if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
+                        var targetNode = findNodeAt(interaction.connectMouseX, interaction.connectMouseY)
+                        if (targetNode && targetNode.id !== interaction.connectFromId) {
+                            createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
                         } else {
-                            var targetEmbed = findEmbedAt(connectMouseX, connectMouseY)
-                            if (targetEmbed && targetEmbed.instanceId !== connectFromId) {
-                                createEdgeWithPaths(connectFromPath, embedPath(targetEmbed.instanceId))
+                            var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
+                            if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
+                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
                             }
                         }
-                        pointerMode = "idle"
-                        connectFromKind = ""
-                        connectFromId = ""
-                        connectFromPath = null
-                        connectFromNodeId = ""
+                        interaction.endConnect()
                         edgeCanvas.requestPaint()
-                    } else if (pointerMode === "move" && pressedEmbedId === embedData.instanceId) {
-                        // 拖动结束后保存 Embed 新位置到后端
-                        var ed = embedsModel[index]
-                        if (ed) {
-                            graphController.updateEmbed(ed.instanceId, { position: { x: ed.x, y: ed.y } })
-                        }
-                        pointerMode = "idle"
-                        pressedEmbedId = ""
+                    } else if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
+                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
+                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
+                        graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
+                        interaction.endMove()
                     }
                 }
             }
@@ -643,7 +607,7 @@ Item {
         text: qsTr("右键空白处新建节点或子星图")
         color: _textSecondary
         font.pointSize: dt.fontLgPt
-        visible: nodesModel.length === 0 && embedsModel.length === 0
+        visible: graphController.nodesModel.length === 0 && graphController.embedsModel.length === 0
     }
 
     Rectangle {
@@ -671,20 +635,23 @@ Item {
         }
     }
 
+    function currentMoveOverride() {
+        if (interaction.pointerMode === "move") {
+            if (interaction.pressedNodeId !== "") {
+                return { kind: "node", id: interaction.pressedNodeId, x: interaction.moveX, y: interaction.moveY }
+            } else if (interaction.pressedEmbedId !== "") {
+                return { kind: "embed", id: interaction.pressedEmbedId, x: interaction.moveX, y: interaction.moveY }
+            }
+        }
+        return null
+    }
+
     function loadGraph() {
         graphController.loadGraph()
     }
 
     function buildModels() {
         graphController.buildModels()
-    }
-
-    function autoLayout() {
-        graphController.autoLayout()
-    }
-
-    function getLayoutNode(id) {
-        return graphController.getLayoutNode(id)
     }
 
     function getNode(id) {
@@ -696,10 +663,8 @@ Item {
                 }
             }
         }
-        for (var j = 0; j < nodesModel.length; j++) {
-            if (nodesModel[j].id === id) return nodesModel[j];
-        }
-        return null;
+        // Issue #798: 回退到 Controller 的 canonical 模型。
+        return graphController.getNode(id);
     }
 
     function clearSelection() {
@@ -711,43 +676,9 @@ Item {
     // 成功后 reload graph 并选中新 Embed。
     // 旧 portal Node 仍按已有数据正常显示/进入，不再用它创建新的子星图。
     // title 由 createDialog 收集后传入，不再写死默认名。
+    // Issue #798: 图操作移进 GraphController，Canvas 只转发。
     function createSubStarmapAt(title, wx, wy) {
-        if (!starmapBackendRef) {
-            graphController.setError(qsTr("星图后端未初始化"))
-            return
-        }
-        // 1. 创建目标子星图
-        var createRes = graphController.normalizeBackendResult(
-            starmapBackendRef.create_starmap(title, "", ""),
-            qsTr("创建子星图失败")
-        )
-        if (!createRes.success) {
-            graphController.setError(graphController.backendErrorText(createRes, qsTr("创建子星图失败")))
-            return
-        }
-        var newStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : ""
-        if (!newStarmapId) {
-            graphController.setError(qsTr("创建子星图失败"))
-            return
-        }
-        // 2. 在当前星图创建 Embed，指向新子星图
-        var embedRes = graphController.normalizeBackendResult(
-            starmapBackendRef.create_starmap_embed(starmapId, newStarmapId, title, wx, wy),
-            qsTr("创建子星图入口失败")
-        )
-        if (!embedRes.success) {
-            // 3. create_starmap_embed 失败，删除刚创建的目标 StarMap 清理
-            starmapBackendRef.delete_starmap(newStarmapId)
-            graphController.setError(graphController.backendErrorText(embedRes, qsTr("创建子星图入口失败")))
-            return
-        }
-        var instanceId = embedRes.data && embedRes.data.instanceId ? embedRes.data.instanceId : ""
-        // 4. 成功，reload graph 并选中新 Embed
-        graphController.clearError()
-        graphController.loadGraph()
-        if (instanceId) {
-            graphController.selectEmbed(instanceId)
-        }
+        graphController.createSubStarmapAt(title, wx, wy)
     }
 
     // Issue #790 评论 5875963057: 超链接转发给 graphController
@@ -784,10 +715,6 @@ Item {
     // Issue #796 评论 5887280405: 用 fromPath/toPath 建边，支持 Node 和 Embed 端点。
     function createEdgeWithPaths(fromPath, toPath) {
         graphController.createEdgeWithPaths(fromPath, toPath)
-    }
-
-    function saveLayout() {
-        graphController.saveLayout()
     }
 
     function updateNodeFromInspector(nodeId, patch) {
@@ -850,10 +777,11 @@ Item {
         return { x: wx, y: wy }
     }
 
-    // 用 nodesModel 当前的 x/y/width/height 做矩形相交，四边多留 padding。
+    // 用 graphController.nodesModel 当前的 x/y/width/height 做矩形相交，四边多留 padding。
     function overlapsExistingNode(x, y, w, h, padding) {
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i]
+        var nodes = graphController.nodesModel
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i]
             var nx = n.x - padding
             var ny = n.y - padding
             var nw = n.width + padding * 2
@@ -967,8 +895,7 @@ Item {
             }
             onTriggered: {
                 if (selectedNodeForMenu) {
-                    pointerMode = "move"
-                    pressedNodeId = selectedNodeForMenu.id
+                    interaction.beginMove(selectedNodeForMenu.id, selectedNodeForMenu.x, selectedNodeForMenu.y)
                 }
             }
         }
@@ -1127,8 +1054,7 @@ Item {
             }
             onTriggered: {
                 if (selectedEmbedForMenu) {
-                    pointerMode = "move"
-                    pressedEmbedId = selectedEmbedForMenu.instanceId
+                    interaction.beginEmbedMove(selectedEmbedForMenu.instanceId, selectedEmbedForMenu.x, selectedEmbedForMenu.y)
                 }
             }
         }

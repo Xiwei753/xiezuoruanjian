@@ -9,7 +9,7 @@
 // 干什么的：
 // - 实现 StarMapBackend 结构体，作为 QML 中 "starmapBackend" 对象的桥梁。
 // - 提供星图管理交互（starmap_bridge::*），包括获取列表、新建、重命名、物理删除、作品绑定解绑。
-// - 负责星图二维大画布节点（Nodes）的添加/更新/删除、连接线（Edges）的增删改查、以及高频拖拽节点后的坐标布局落盘（save_starmap_layout）。
+// - 负责星图二维大画布节点（Nodes）的添加/更新/删除、连接线（Edges）的增删改查。
 //
 // 被什么引用：
 // - 被 apps/Linux_qt/src/backend/mod.rs 引用，用于实例化星图后端并绑定为 QML 全局上下文属性。
@@ -162,24 +162,18 @@ pub struct StarMapBackend {
         qt_method!(fn(&mut self, starmap_id: QString, instance_id: QString) -> QString),
     delete_starmap_embed:
         qt_method!(fn(&mut self, starmap_id: QString, instance_id: QString) -> QJsonObject),
-    save_starmap_layout_json:
-        qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
-    save_starmap_layout:
-        qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
-    compute_edge_renders_json:
-        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QString),
-    compute_edge_renders:
-        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject),
+    compute_edge_renders_json: qt_method!(
+        fn(&self, graph_json: QString, nodes_json: QString, embeds_json: QString) -> QString
+    ),
+    compute_edge_renders: qt_method!(
+        fn(&self, graph_json: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject
+    ),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
     hit_test_edge_renders:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QJsonObject),
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
     hit_test_nodes: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject),
-    calculate_grid_layout_json:
-        qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QString),
-    calculate_grid_layout:
-        qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QJsonObject),
     add_starmap_hyperlink:
         qt_method!(fn(&mut self, starmap_id: QString, hyperlink_json: QString) -> QJsonObject),
     update_starmap_hyperlink: qt_method!(
@@ -351,36 +345,52 @@ impl StarMapBackend {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
     }
-    fn compute_edge_renders_json(&self, starmap_id: QString, nodes_json: QString) -> QString {
-        let sid = starmap_id.to_string();
+    fn compute_edge_renders_json(
+        &self,
+        graph_json: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+    ) -> QString {
+        let gj = graph_json.to_string();
         let nj = nodes_json.to_string();
-        match self.with_app(|app| app.core_api()) {
-            Ok(Some(core)) => {
-                crate::starmap_bridge::compute_edge_renders_json(&core, &sid, &nj).into()
-            }
-            _ => crate::backend::json_utils::borrow_conflict_error_json().into(),
+        let ej = embeds_json.to_string();
+        let graph_dto: writer_core::api::types::StarMapGraphDto =
+            match serde_json::from_str(&gj) {
+                Ok(d) => d,
+                Err(e) => {
+                    return crate::backend::json_utils::envelope_error_json(
+                        writer_core::api::WriterError::Other(format!("Invalid graph JSON: {}", e)),
+                    )
+                    .into()
+                }
+            };
+        match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(
+            graph_dto,
+        ) {
+            Ok(graph) => crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej)
+                .into(),
+            Err(e) => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other(e.to_string()),
+            )
+            .into(),
         }
     }
     fn hit_test_edge_renders_json(&self, renders_json: QString, x: f64, y: f64) -> QString {
         let rj = renders_json.to_string();
-        crate::starmap_bridge::hit_test_edge_renders_json(&rj, x as f32, y as f32).into()
+        crate::starmap_view::bridge::hit_test_edge_renders_json(&rj, x as f32, y as f32).into()
     }
     fn hit_test_nodes_json(&self, nodes_json: QString, x: f64, y: f64) -> QString {
         let nj = nodes_json.to_string();
-        crate::starmap_bridge::hit_test_nodes_json(&nj, x as f32, y as f32).into()
+        crate::starmap_view::bridge::hit_test_nodes_json(&nj, x as f32, y as f32).into()
     }
-    fn calculate_grid_layout_json(
+    fn compute_edge_renders(
         &self,
-        node_ids_json: QString,
-        existing_layout_json: QString,
-    ) -> QString {
-        let ni = node_ids_json.to_string();
-        let el = existing_layout_json.to_string();
-        crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
-    }
-    fn compute_edge_renders(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject {
+        graph_json: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+    ) -> QJsonObject {
         let raw = self
-            .compute_edge_renders_json(starmap_id, nodes_json)
+            .compute_edge_renders_json(graph_json, nodes_json, embeds_json)
             .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
@@ -392,16 +402,6 @@ impl StarMapBackend {
     }
     fn hit_test_nodes(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject {
         let raw = self.hit_test_nodes_json(nodes_json, x, y).to_string();
-        crate::backend::json_utils::qjson_object_from_json(&raw)
-    }
-    fn calculate_grid_layout(
-        &self,
-        node_ids_json: QString,
-        existing_layout_json: QString,
-    ) -> QJsonObject {
-        let raw = self
-            .calculate_grid_layout_json(node_ids_json, existing_layout_json)
-            .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
@@ -659,20 +659,6 @@ impl StarMapBackend {
             .to_string();
         Self::log_starmap_envelope("delete_starmap_embed", &sid, &iid, &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
-    }
-    fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
-        self.with_app_mut(|app| app.save_starmap_layout_json(starmap_id, layout_json))
-            .unwrap_or_else(|_| {
-                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
-            })
-    }
-    fn save_starmap_layout(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject {
-        self.with_app_mut(|app| app.save_starmap_layout(starmap_id, layout_json))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
     }
     fn add_starmap_hyperlink(
         &mut self,

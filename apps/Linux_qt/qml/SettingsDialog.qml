@@ -360,8 +360,10 @@ Dialog {
                     onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
                     ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }
                 }
-                // Issue #785: 删除协同模式共享 duration 滑块。两个独立 duration 滑块始终可见。
+                // Issue #785: 两个独立 duration 滑块始终可见（onClosed 分别写）。
+                // Issue #756: 协同开启时隐藏"打字动画/平滑光标"两个独立开关，duration 文案改成协同语义。
                 SettingsRow {
+                    visible: !coordinatedAnim.checked
                     dt: root.dt
                     title: qsTr("打字动画")
                     description: qsTr("输入时字符从光标处吐出")
@@ -373,7 +375,8 @@ Dialog {
                     id: typingAnimDuration
                     Layout.fillWidth: true
                     dt: root.dt
-                    label: qsTr("打字动画持续时间")
+                    // 协同开启时文案为"文字动画持续时间"，关闭时恢复"打字动画持续时间"。
+                    label: coordinatedAnim.checked ? qsTr("文字动画持续时间") : qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
                     // range from Core settings_presentation: min=30, max=1000, step=10
                     from: 30
@@ -383,6 +386,7 @@ Dialog {
                     onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
                 SettingsRow {
+                    visible: !coordinatedAnim.checked
                     dt: root.dt
                     title: qsTr("平滑光标")
                     description: qsTr("光标移动更顺滑")
@@ -394,7 +398,8 @@ Dialog {
                     id: smoothCursorDuration
                     Layout.fillWidth: true
                     dt: root.dt
-                    label: qsTr("平滑光标持续时间")
+                    // 协同开启时文案为"光标动画持续时间"，关闭时恢复"平滑光标持续时间"。
+                    label: coordinatedAnim.checked ? qsTr("光标动画持续时间") : qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
                     // range from Core settings_presentation: min=30, max=1000, step=10
                     from: 30

@@ -59,7 +59,8 @@ Item {
 
     Item {
         anchors.fill: parent
-        visible: !root.dataModel || root.dataModel.count === 0
+        // Issue #798: 兼容 JS 数组(.length)和 ListModel(.count)两种 model 类型。
+        visible: !root.dataModel || root.dataModel.count === 0 || root.dataModel.length === 0
 
         Column {
             anchors.centerIn: parent

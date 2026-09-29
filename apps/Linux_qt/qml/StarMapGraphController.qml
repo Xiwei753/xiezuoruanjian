@@ -9,7 +9,7 @@
 //   - 通过 starmapBackendRef 调用 AppBackend (Rust QObject)
 //   - 图数据通过 AppBackend 暴露的对象/数组 DTO 与 Core 层交互
 //
-// 数据流：starmapBackendRef (DTO) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
+// 数据流：starmapBackendRef (DTO) → controller (graphData) → Canvas (nodesModel/edgesModel)
 // =============================================================================
 
 import QtQuick
@@ -21,7 +21,6 @@ QtObject {
     property var starmapBackendRef: null
     property string errorMessage: ""
     property var graphData: null
-    property var layoutData: null
     property var nodesModel: []
     property var edgesModel: []
     property var edgeRenders: []
@@ -33,8 +32,6 @@ QtObject {
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
     signal embedSelected(var embed)
-
-    onGraphChanged: invalidateEdgeRenders()
 
     function setError(msg) {
         errorMessage = msg || "";
@@ -73,8 +70,8 @@ QtObject {
         if (res.success) {
             clearError();
             graphData = res.data.graph;
-            layoutData = res.data.layout;
             buildModels();
+            computeEdgeRenders(null);
         } else {
             setError(qsTr("加载星图数据失败"));
         }
@@ -134,47 +131,7 @@ QtObject {
         }
         embedsModel = newEmbeds;
 
-        if (nodesModel.length > 0 && (!layoutData || !layoutData.nodes || layoutData.nodes.length === 0)) autoLayout();
         graphChanged();
-    }
-
-    function autoLayout() {
-        if (!ensureBackend()) return;
-        var nodeIds = [];
-        for (var i = 0; i < nodesModel.length; i++) nodeIds.push(nodesModel[i].id);
-        var existingJson = layoutData ? JSON.stringify(layoutData) : "{}";
-        var res = normalizeBackendResult(starmapBackendRef.calculate_grid_layout(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
-        if (res.success && res.data && res.data.nodes) {
-            var layoutNodes = res.data.nodes;
-            for (var j = 0; j < nodesModel.length; j++) {
-                for (var k = 0; k < layoutNodes.length; k++) {
-                    if (nodesModel[j].id === layoutNodes[k].nodeId) {
-                        nodesModel[j].x = layoutNodes[k].x;
-                        nodesModel[j].y = layoutNodes[k].y;
-                        break;
-                    }
-                }
-            }
-            nodesModelChanged();
-            saveLayout();
-        } else {
-            // 后端失败直接报错，不再用 QML 临时坐标兜底成"成功"
-            setError(qsTr("自动布局失败"));
-        }
-    }
-
-    // 从 graph.nodes[].position 查节点位置，保持 layout.nodes[].nodeId/x/y 契约兼容。
-    // 不再作为坐标真相源（buildModels 直接从 graph.position 取），仅作辅助查询。
-    function getLayoutNode(id) {
-        if (!graphData || !graphData.nodes) return null;
-        for (var i = 0; i < graphData.nodes.length; i++) {
-            var gn = graphData.nodes[i];
-            if (gn.id === id) {
-                var pos = gn.position || { x: 0, y: 0 };
-                return { nodeId: gn.id, x: pos.x, y: pos.y, width: 150, height: 60 };
-            }
-        }
-        return null;
     }
 
     function getNode(id) {
@@ -337,32 +294,22 @@ QtObject {
         }
     }
 
-    function saveLayout() {
-        if (!ensureBackend()) return;
-        var layoutNodes = [];
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i];
-            layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0 });
-        }
-        var res = normalizeBackendResult(starmapBackendRef.save_starmap_layout(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), qsTr("保存布局失败"));
-        if (res.success) clearError();
-        else setError(qsTr("保存布局失败"));
-    }
-
     function updateNode(nodeId, patch) {
         if (!ensureBackend()) return;
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
+            var nextNodes = [];
             for (var i = 0; i < nodesModel.length; i++) {
-                if (nodesModel[i].id === nodeId) {
-                    if (patch.title !== undefined) nodesModel[i].title = patch.title;
-                    if (patch.kind !== undefined) nodesModel[i].kind = patch.kind;
-                    nodesModelChanged();
-                    graphChanged();
-                    break;
+                var n = copyObject(nodesModel[i]);
+                if (n.id === nodeId) {
+                    if (patch.title !== undefined) n.title = patch.title;
+                    if (patch.kind !== undefined) n.kind = patch.kind;
                 }
+                nextNodes.push(n);
             }
+            nodesModel = nextNodes;
+            graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新节点失败")));
         }
@@ -385,15 +332,17 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(patch)), qsTr("更新连线失败"));
         if (res.success) {
             clearError();
+            var nextEdges = [];
             for (var i = 0; i < edgesModel.length; i++) {
-                if (edgesModel[i].id === edgeId) {
-                    if (patch.label !== undefined) edgesModel[i].label = patch.label;
-                    if (patch.kind !== undefined) edgesModel[i].kind = patch.kind;
-                    edgesModelChanged();
-                    graphChanged();
-                    break;
+                var e = copyObject(edgesModel[i]);
+                if (e.id === edgeId) {
+                    if (patch.label !== undefined) e.label = patch.label;
+                    if (patch.kind !== undefined) e.kind = patch.kind;
                 }
+                nextEdges.push(e);
             }
+            edgesModel = nextEdges;
+            graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新连线失败")));
         }
@@ -419,18 +368,20 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(patch)), qsTr("更新子星图入口失败"));
         if (res.success) {
             clearError();
+            var nextEmbeds = [];
             for (var i = 0; i < embedsModel.length; i++) {
-                if (embedsModel[i].instanceId === instanceId) {
-                    if (patch.label !== undefined) embedsModel[i].label = patch.label;
+                var em = copyObject(embedsModel[i]);
+                if (em.instanceId === instanceId) {
+                    if (patch.label !== undefined) em.label = patch.label;
                     if (patch.position !== undefined) {
-                        embedsModel[i].x = patch.position.x;
-                        embedsModel[i].y = patch.position.y;
+                        em.x = patch.position.x;
+                        em.y = patch.position.y;
                     }
-                    embedsModelChanged();
-                    graphChanged();
-                    break;
                 }
+                nextEmbeds.push(em);
             }
+            embedsModel = nextEmbeds;
+            graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新子星图入口失败")));
         }
@@ -448,14 +399,132 @@ QtObject {
         }
     }
 
-    function computeEdgeRenders() {
+    // Issue #798: 从 StarMapCanvas 移入，Controller 成为图操作唯一入口。
+    // 流程：create_starmap 建子星图 → create_starmap_embed 嵌入当前图；
+    // 失败回滚 delete_starmap；成功后 loadGraph 刷新模型并选中新 Embed。
+    function createSubStarmapAt(title, wx, wy) {
+        if (!ensureBackend()) return;
+        // 1. 创建目标子星图
+        var createRes = normalizeBackendResult(
+            starmapBackendRef.create_starmap(title, "", ""),
+            qsTr("创建子星图失败")
+        );
+        if (!createRes.success) {
+            setError(backendErrorText(createRes, qsTr("创建子星图失败")));
+            return;
+        }
+        var newStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : "";
+        if (!newStarmapId) {
+            setError(qsTr("创建子星图失败"));
+            return;
+        }
+        // 2. 在当前星图创建 Embed，指向新子星图
+        var embedRes = normalizeBackendResult(
+            starmapBackendRef.create_starmap_embed(starmapId, newStarmapId, title, wx, wy),
+            qsTr("创建子星图入口失败")
+        );
+        if (!embedRes.success) {
+            // 3. create_starmap_embed 失败，删除刚创建的目标 StarMap 清理
+            starmapBackendRef.delete_starmap(newStarmapId);
+            setError(backendErrorText(embedRes, qsTr("创建子星图入口失败")));
+            return;
+        }
+        var instanceId = embedRes.data && embedRes.data.instanceId ? embedRes.data.instanceId : "";
+        // 4. 成功，reload graph 并选中新 Embed
+        clearError();
+        loadGraph();
+        if (instanceId) {
+            selectEmbed(instanceId);
+        }
+    }
+
+    // Issue #798: 拖动结束后提交节点新位置。先持久化单节点 position，
+    // 后端成功后再浅拷贝新数组一次赋值更新 canonical model。
+    // 不再调用全量 saveLayout()，避免拖一个节点把所有节点逐个重写。
+    // 失败时 canonical model 不动，结束 transient move 后 delegate 因 binding
+    // 自动回旧位置（与 commitEmbedMove 顺序一致）。
+    function commitNodeMove(nodeId, nx, ny) {
+        if (!ensureBackend()) return false;
+        var res = normalizeBackendResult(
+            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify({ position: { x: nx, y: ny } })),
+            qsTr("更新节点位置失败")
+        );
+        if (res.success) {
+            clearError();
+            var nextNodes = [];
+            for (var i = 0; i < nodesModel.length; i++) {
+                var n = copyObject(nodesModel[i]);
+                if (n.id === nodeId) { n.x = nx; n.y = ny; }
+                nextNodes.push(n);
+            }
+            nodesModel = nextNodes;
+            computeEdgeRenders(null);
+            graphChanged();
+            return true;
+        } else {
+            setError(backendErrorText(res, qsTr("更新节点位置失败")));
+            // Issue #798 评论 5892406254: 提交失败时 canonical model 未动，
+            // 但 edgeRenders 已被 transient move 更新成临时坐标。
+            // 恢复 edge cache 到 canonical，与 delegate 回旧位置保持一致。
+            computeEdgeRenders(null);
+            graphChanged();
+            return false;
+        }
+    }
+
+    // Issue #798: 拖动结束后提交 Embed 新位置。先持久化到后端，
+    // 再浅拷贝新数组一次赋值更新本地模型。
+    function commitEmbedMove(instanceId, nx, ny) {
+        if (!ensureBackend()) return false;
+        var res = normalizeBackendResult(
+            starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify({ position: { x: nx, y: ny } })),
+            qsTr("更新子星图入口失败")
+        );
+        if (res.success) {
+            clearError();
+            var nextEmbeds = [];
+            for (var i = 0; i < embedsModel.length; i++) {
+                var em = copyObject(embedsModel[i]);
+                if (em.instanceId === instanceId) { em.x = nx; em.y = ny; }
+                nextEmbeds.push(em);
+            }
+            embedsModel = nextEmbeds;
+            computeEdgeRenders(null);
+            graphChanged();
+            return true;
+        } else {
+            setError(backendErrorText(res, qsTr("更新子星图入口失败")));
+            // Issue #798 评论 5892406254: 提交失败时 canonical model 未动，
+            // 但 edgeRenders 已被 transient move 更新成临时坐标。
+            // 恢复 edge cache 到 canonical，与 delegate 回旧位置保持一致。
+            computeEdgeRenders(null);
+            graphChanged();
+            return false;
+        }
+    }
+
+    function computeEdgeRenders(moveOverride) {
         if (!ensureBackend()) return;
         var nodePos = [];
         for (var j = 0; j < nodesModel.length; j++) {
             var n = nodesModel[j];
-            nodePos.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
+            var nx = n.x, ny = n.y;
+            if (moveOverride && moveOverride.kind === "node" && moveOverride.id === n.id) {
+                nx = moveOverride.x; ny = moveOverride.y;
+            }
+            nodePos.push({ id: n.id, x: nx, y: ny, width: n.width, height: n.height });
         }
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(starmapId, JSON.stringify(nodePos)), "");
+        var embedPos = [];
+        for (var k = 0; k < embedsModel.length; k++) {
+            var em = embedsModel[k];
+            var ex = em.x, ey = em.y;
+            if (moveOverride && moveOverride.kind === "embed" && moveOverride.id === em.instanceId) {
+                ex = moveOverride.x; ey = moveOverride.y;
+            }
+            embedPos.push({ instanceId: em.instanceId, x: ex, y: ey, width: em.width, height: em.height });
+        }
+        if (!graphData) return;
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(JSON.stringify(graphData), JSON.stringify(nodePos), JSON.stringify(embedPos)), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }
@@ -463,7 +532,7 @@ QtObject {
 
     function hitTestEdge(wx, wy) {
         if (!ensureBackend()) return null;
-        if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders();
+        if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders(null);
         if (!edgeRenders || edgeRenders.length === 0) return null;
         var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy), "");
         if (res.success && res.data) {
