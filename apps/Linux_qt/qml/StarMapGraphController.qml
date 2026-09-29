@@ -533,6 +533,23 @@ QtObject {
             }
             nodePos.push({ id: n.id, x: nx, y: ny, width: n.width, height: n.height });
         }
+        // Issue #801 评论 5895709352: 旧 portal Node 已归一到 embedsModel，不再出现在
+        // nodesModel，但边端点解析仍按 node id 查 layout（本地 Node 目标走
+        // node_layout_center，EnterPortal 段也要求 portal 节点在 layout 里）。
+        // 不补这份几何，连到旧 portal 节点的边会整条消失（LocalNodeMissing/PortalMissing）。
+        // 位置读归一条目，拖动中的位置用 embed move override 对齐。
+        var canonicalNodes = graphData && graphData.nodes ? graphData.nodes : [];
+        for (var p = 0; p < canonicalNodes.length; p++) {
+            var pn = canonicalNodes[p];
+            if (!pn.portal || !pn.portal.destinationStarmapId) continue;
+            var portalEntry = getEmbed(pn.id);
+            if (!portalEntry) continue;
+            var px = portalEntry.x, py = portalEntry.y;
+            if (moveOverride && moveOverride.kind === "embed" && moveOverride.id === pn.id) {
+                px = moveOverride.x; py = moveOverride.y;
+            }
+            nodePos.push({ id: pn.id, x: px, y: py, width: portalEntry.width, height: portalEntry.height });
+        }
         var embedPos = [];
         for (var k = 0; k < embedsModel.length; k++) {
             var em = embedsModel[k];
