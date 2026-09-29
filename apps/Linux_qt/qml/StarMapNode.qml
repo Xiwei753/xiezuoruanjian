@@ -38,6 +38,20 @@ Rectangle {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
+    // Issue #793 评论 5884923277: portal 节点展示标记
+    property bool isPortal: false
+
+    // Issue #793 评论 5884923277: wobble 改纯视觉偏移，不影响命中框。
+    // 根 Item 的 x/y/width/height 不变，handler 命中基于几何位置；
+    // 视觉偏移由根 Rectangle 的 transform 提供。
+    property real visualOffsetX: 0
+    property real visualOffsetY: 0
+    // 用 index 错开 phase，避免所有节点同步晃
+    property int wobbleIndex: 0
+    // 动画驱动中间值，选中/拖动时 visualOffset 归零
+    property real _wobbleAnimX: 0
+    property real _wobbleAnimY: 0
+
     // ---------------------------------------------------------------------------
     // 对外信号：节点只上抛事件，由 Canvas 决定后续行为
     // ---------------------------------------------------------------------------
@@ -55,6 +69,32 @@ Rectangle {
     color: _surfaceContainer
     border.color: isSelected ? _accent : _border
     border.width: isSelected ? 2 : 1
+
+    // Issue #793 评论 5884923277: 纯视觉偏移，不影响 x/y 命中测试
+    transform: Translate {
+        x: visualOffsetX
+        y: visualOffsetY
+    }
+    // 选中或拖动时偏移归零；idle 时跟随 wobble 动画
+    visualOffsetX: (isSelected || isBeingDragged) ? 0 : _wobbleAnimX
+    visualOffsetY: (isSelected || isBeingDragged) ? 0 : _wobbleAnimY
+
+    // Issue #793 评论 5884923277: wobble 降速
+    //   X: ±0.6px，半周期 7000~9500ms（7000 + (index % 7) * 400）
+    //   Y: ±0.4px，半周期 8500~11500ms（8500 + (index % 5) * 300）
+    // 选中/按下/拖动时动画暂停，idle 时才慢慢漂
+    SequentialAnimation on _wobbleAnimX {
+        loops: Animation.Infinite
+        running: !isSelected && !isBeingDragged
+        NumberAnimation { to: 0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
+        NumberAnimation { to: -0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
+    }
+    SequentialAnimation on _wobbleAnimY {
+        loops: Animation.Infinite
+        running: !isSelected && !isBeingDragged
+        NumberAnimation { to: 0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
+        NumberAnimation { to: -0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
+    }
 
     // Shadow effect approximation
     Rectangle {
@@ -81,7 +121,9 @@ Rectangle {
             AppText {
                 dt: root.dt
                 anchors.centerIn: parent
-                text: root.kind
+                // Issue #793 评论 5884923277: portal 节点顶部标签显示"子星图"，
+                // 普通节点仍显示自己的 kind
+                text: isPortal ? qsTr("子星图") : root.kind
                 color: _onPrimary
                 font.pointSize: dt.fontXsPt
                 font.bold: true
@@ -104,10 +146,14 @@ Rectangle {
 
     // ---------------------------------------------------------------------------
     // 交互：用 TapHandler 上抛点击类信号，节点不自行决定行为
+    // Issue #793 评论 5884923277: 加 exclusiveSignals 真正分清单击/双击，
+    // 默认 NotExclusive 时双击会同时触发单击。
     // ---------------------------------------------------------------------------
     TapHandler {
         id: nodeLeftTap
         acceptedButtons: Qt.LeftButton
+        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()
         onLongPressed: root.longPressed()

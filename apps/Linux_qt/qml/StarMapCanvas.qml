@@ -69,6 +69,11 @@ Item {
     property real contextMenuWorldX: 0
     property real contextMenuWorldY: 0
 
+    // 新建对话框状态：先收集名字再写 Core（Issue #793 评论 5884923277）
+    property string createMode: ""      // "node" / "starmap"
+    property real createWorldX: 0
+    property real createWorldY: 0
+
     // Signals
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
@@ -345,28 +350,11 @@ Item {
                 title: nodeData.title
                 kind: nodeData.kind
                 isSelected: nodeData.isSelected
-
-                // Idle wobble 视觉偏移
-                property real wobbleOffsetX: 0
-                property real wobbleOffsetY: 0
-
-                // 用 index 错开 phase，避免所有节点同步晃
-                SequentialAnimation on wobbleOffsetX {
-                    loops: Animation.Infinite
-                    NumberAnimation { to: 2; duration: 2100 + (index % 7) * 300; easing.type: Easing.InOutSine }
-                    NumberAnimation { to: -2; duration: 2100 + (index % 7) * 300; easing.type: Easing.InOutSine }
-                }
-                SequentialAnimation on wobbleOffsetY {
-                    loops: Animation.Infinite
-                    NumberAnimation { to: 1.2; duration: 2800 + (index % 5) * 200; easing.type: Easing.InOutSine }
-                    NumberAnimation { to: -1.2; duration: 2800 + (index % 5) * 200; easing.type: Easing.InOutSine }
-                }
-
-                // 拖动时停止 wobble，idle 时叠加偏移
-                transform: Translate {
-                    x: isBeingDragged ? 0 : wobbleOffsetX
-                    y: isBeingDragged ? 0 : wobbleOffsetY
-                }
+                // Issue #793 评论 5884923277: portal 节点展示标记，
+                // 双击仍沿用现有 destinationStarmapId 进入，不另外发明类型。
+                isPortal: !!(nodeData.portal && nodeData.portal.destinationStarmapId)
+                // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
+                wobbleIndex: index
 
                 onXChanged: {
                     if (nodeData) {
@@ -539,15 +527,16 @@ Item {
         graphController.clearSelection()
     }
 
-    // Issue #790 评论 5875963057: 新建子星图（右键空白处）
-    function createSubStarmapAt(wx, wy) {
+    // Issue #790 评论 5875963057 / #793 评论 5884923277: 新建子星图（右键空白处）
+    // title 由 createDialog 收集后传入，不再写死默认名。
+    function createSubStarmapAt(title, wx, wy) {
         if (!starmapBackendRef) {
             graphController.setError(qsTr("星图后端未初始化"))
             return
         }
         // 1. 创建目标星图（QJsonObject 版，返回 {success, data:{id,...}}）
         var createRes = graphController.normalizeBackendResult(
-            starmapBackendRef.create_starmap(qsTr("子星图"), "", ""),
+            starmapBackendRef.create_starmap(title, "", ""),
             qsTr("创建子星图失败")
         )
         if (!createRes.success) {
@@ -559,9 +548,9 @@ Item {
             graphController.setError(qsTr("创建子星图失败"))
             return
         }
-        // 2. 在当前星图创建入口节点
+        // 2. 在当前星图创建入口节点（标题沿用用户输入）
         var nodeRes = graphController.normalizeBackendResult(
-            starmapBackendRef.create_starmap_node(starmapId, qsTr("入口节点"), "Note", wx, wy),
+            starmapBackendRef.create_starmap_node(starmapId, title, "Note", wx, wy),
             qsTr("创建入口节点失败")
         )
         if (!nodeRes.success) {
@@ -588,9 +577,10 @@ Item {
             graphController.setError(graphController.backendErrorText(updateRes, qsTr("写入子星图入口失败")))
             return
         }
-        // 4. 成功，刷新
+        // 4. 成功，刷新并选中新入口节点（画布上出现用户输入的子星图名字）
         graphController.clearError()
         graphController.loadGraph()
+        graphController.selectNode(nodeId)
     }
 
     // Issue #790 评论 5875963057: 超链接转发给 graphController
@@ -627,9 +617,43 @@ Item {
         return graphController.findNodeAt(wx, wy)
     }
 
-    // Helper to create node at world coordinates
-    function createNodeAtWorld(wx, wy) {
-        graphController.createNode(wx, wy)
+    // Issue #793 评论 5884923277: 新节点落点选择，避免压在已有节点上。
+    // 从 (wx,wy) 起按 ring 扩张枚举候选格点，第一个不与现有节点矩形相交的即返回。
+    function findFreeSpawnPoint(wx, wy) {
+        var step = 24
+        var candidates = [{x: wx, y: wy}]
+
+        for (var ring = 1; ring <= 8; ring++) {
+            for (var dx = -ring; dx <= ring; dx++) {
+                candidates.push({ x: wx + dx * step, y: wy - ring * step })
+                candidates.push({ x: wx + dx * step, y: wy + ring * step })
+            }
+            for (var dy = -ring + 1; dy <= ring - 1; dy++) {
+                candidates.push({ x: wx - ring * step, y: wy + dy * step })
+                candidates.push({ x: wx + ring * step, y: wy + dy * step })
+            }
+        }
+
+        for (var i = 0; i < candidates.length; i++) {
+            if (!overlapsExistingNode(candidates[i].x, candidates[i].y, 150, 60, 12))
+                return candidates[i]
+        }
+
+        return { x: wx, y: wy }
+    }
+
+    // 用 nodesModel 当前的 x/y/width/height 做矩形相交，四边多留 padding。
+    function overlapsExistingNode(x, y, w, h, padding) {
+        for (var i = 0; i < nodesModel.length; i++) {
+            var n = nodesModel[i]
+            var nx = n.x - padding
+            var ny = n.y - padding
+            var nw = n.width + padding * 2
+            var nh = n.height + padding * 2
+            if (x < nx + nw && x + w > nx && y < ny + nh && y + h > ny)
+                return true
+        }
+        return false
     }
 
     // Context Menus
@@ -660,7 +684,7 @@ Item {
                 color: bgMenuItem1.hovered ? _accentSoft : "transparent"
                 radius: _radiusXs
             }
-            onTriggered: createNodeAtWorld(contextMenuWorldX, contextMenuWorldY)
+            onTriggered: createDialog.open("node", contextMenuWorldX, contextMenuWorldY)
         }
 
         MenuItem {
@@ -679,7 +703,7 @@ Item {
                 color: bgMenuItem2.hovered ? _accentSoft : "transparent"
                 radius: _radiusXs
             }
-            onTriggered: createSubStarmapAt(contextMenuWorldX, contextMenuWorldY)
+            onTriggered: createDialog.open("starmap", contextMenuWorldX, contextMenuWorldY)
         }
     }
 
@@ -958,6 +982,133 @@ Item {
                 updateNodeFromInspector(targetId, { title: renameInput.text })
             } else if (targetType === "edge") {
                 updateEdgeFromInspector(targetId, { label: renameInput.text })
+            }
+            close()
+        }
+    }
+
+    // Issue #793 评论 5884923277: 新建节点/子星图 Dialog
+    // 右键空白处不再直接创建，先收集名字再写 Core。
+    // 样式照 renameDialog：scrim + MouseArea 防穿透 + _card + ColumnLayout + TextField + RowLayout。
+    Rectangle {
+        id: createDialog
+        anchors.fill: parent
+        color: _scrim
+        visible: false
+        z: 9999
+
+        // Prevent mouse clicks from propagating to canvas
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+            width: 300
+            height: 160
+            color: _card
+            border.color: _border
+            border.width: 1.5
+            radius: _dialogRadius
+            anchors.centerIn: parent
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 16
+
+                AppText {
+                    dt: canvasArea.dt
+                    text: createMode === "starmap" ? qsTr("新建子星图") : qsTr("新建节点")
+                    font.pointSize: dt.fontLgPt
+                    font.bold: true
+                    color: _textPrimary
+                }
+
+                TextField {
+                    id: createInput
+                    Layout.fillWidth: true
+                    height: 36
+                    color: _textPrimary
+                    font.pointSize: dt.bodyPt
+                    placeholderText: qsTr("名称")
+                    focus: createDialog.visible
+                    text: ""
+
+                    background: Rectangle {
+                        color: _surfaceContainer
+                        border.color: createInput.activeFocus ? _accent : _border
+                        border.width: 1.5
+                        radius: _radiusXs
+                    }
+
+                    Keys.onReturnPressed: createDialog.confirm()
+                    Keys.onEscapePressed: createDialog.close()
+                }
+
+                RowLayout {
+                    Layout.alignment: Qt.AlignRight
+                    spacing: 12
+
+                    Button {
+                        id: createCancelBtn
+                        text: qsTr("取消")
+                        onClicked: createDialog.close()
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: createCancelBtn.text
+                            color: _textSecondary
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: createCancelBtn.hovered ? _surfaceContainer : "transparent"
+                            border.color: _border
+                            radius: _radiusXs
+                        }
+                    }
+
+                    Button {
+                        id: createConfirmBtn
+                        text: qsTr("确定")
+                        onClicked: createDialog.confirm()
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: createConfirmBtn.text
+                            color: _onPrimary
+                            font.bold: true
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: createConfirmBtn.hovered ? _accentHover : _accent
+                            radius: _radiusXs
+                        }
+                    }
+                }
+            }
+        }
+
+        function open(mode, wx, wy) {
+            createMode = mode
+            createWorldX = wx
+            createWorldY = wy
+            createInput.text = ""
+            visible = true
+            createInput.forceActiveFocus()
+        }
+
+        function close() {
+            visible = false
+        }
+
+        function confirm() {
+            var name = createInput.text.trim()
+            if (name.length === 0) {
+                close()
+                return
+            }
+            // 先算 spawn 落点，避免新节点压在旧节点上
+            var spawn = findFreeSpawnPoint(createWorldX, createWorldY)
+            if (createMode === "node") {
+                graphController.createNode(name, spawn.x, spawn.y)
+            } else if (createMode === "starmap") {
+                createSubStarmapAt(name, spawn.x, spawn.y)
             }
             close()
         }

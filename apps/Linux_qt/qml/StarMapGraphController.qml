@@ -174,46 +174,61 @@ QtObject {
         return null;
     }
 
+    // Issue #793 评论 5884923277: 选中状态用浅拷贝重新构造数组，
+    // 不再原地改普通 JS 对象，保证 delegate 绑定的 nodeData.isSelected 有独立 notify。
+    function copyObject(src) {
+        var dst = {}
+        for (var key in src)
+            dst[key] = src[key]
+        return dst
+    }
+
+    function applySelection(nodeId, edgeId) {
+        var nextNodes = []
+        for (var i = 0; i < nodesModel.length; i++) {
+            var n = copyObject(nodesModel[i])
+            n.isSelected = nodeId !== "" && n.id === nodeId
+            nextNodes.push(n)
+        }
+
+        var nextEdges = []
+        for (var j = 0; j < edgesModel.length; j++) {
+            var e = copyObject(edgesModel[j])
+            e.isSelected = edgeId !== "" && e.id === edgeId
+            nextEdges.push(e)
+        }
+
+        nodesModel = nextNodes
+        edgesModel = nextEdges
+        graphChanged()
+    }
+
     function clearSelection() {
-        for (var i = 0; i < nodesModel.length; i++) nodesModel[i].isSelected = false;
-        for (var j = 0; j < edgesModel.length; j++) edgesModel[j].isSelected = false;
-        nodesModelChanged();
-        edgesModelChanged();
-        graphChanged();
-        selectionCleared();
+        applySelection("", "")
+        selectionCleared()
     }
 
     function selectNode(nodeId) {
-        clearSelection();
-        for (var i = 0; i < nodesModel.length; i++) {
-            if (nodesModel[i].id === nodeId) {
-                nodesModel[i].isSelected = true;
-                nodesModelChanged();
-                graphChanged();
-                nodeSelected(nodesModel[i]);
-                return nodesModel[i];
-            }
-        }
-        return null;
+        applySelection(nodeId, "")
+        var node = getNode(nodeId)
+        if (node) nodeSelected(node)
+        return node
     }
 
     function selectEdge(edgeId) {
-        clearSelection();
+        applySelection("", edgeId)
+        var edge = null
         for (var i = 0; i < edgesModel.length; i++) {
-            if (edgesModel[i].id === edgeId) {
-                edgesModel[i].isSelected = true;
-                edgesModelChanged();
-                graphChanged();
-                edgeSelected(edgesModel[i]);
-                return edgesModel[i];
-            }
+            if (edgesModel[i].id === edgeId) { edge = edgesModel[i]; break }
         }
-        return null;
+        if (edge) edgeSelected(edge)
+        return edge
     }
 
-    function createNode(wx, wy) {
+    // Issue #793 评论 5884923277: createNode 接收 title，不再写死"新节点"。
+    function createNode(title, wx, wy) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(starmapBackendRef.create_starmap_node(starmapId, qsTr("新节点"), "Note", wx, wy), qsTr("创建节点失败"));
+        var res = normalizeBackendResult(starmapBackendRef.create_starmap_node(starmapId, title, "Note", wx, wy), qsTr("创建节点失败"));
         if (res.success) {
             clearError();
             loadGraph();

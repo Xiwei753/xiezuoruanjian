@@ -969,6 +969,10 @@
         <source>重命名连线</source>
         <translation>重命名连线</translation>
     </message>
+    <message>
+        <source>名称</source>
+        <translation>名称</translation>
+    </message>
 </context>
 <context>
     <name>StarMapCard</name>
@@ -1147,6 +1151,10 @@
     <message>
         <source>角色</source>
         <translation>角色</translation>
+    </message>
+    <message>
+        <source>子星图</source>
+        <translation>子星图</translation>
     </message>
 </context>
 <context>
