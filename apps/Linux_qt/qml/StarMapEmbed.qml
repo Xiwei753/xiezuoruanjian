@@ -46,10 +46,6 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
-    // Issue #796 评论 5887280405: connect 模式标志，由 Canvas 设置。
-    // connect 模式下 DragHandler 不改 x/y，只上抛 dragged 信号刷新预览线。
-    property bool isConnectMode: false
-
     // wobble 改纯视觉偏移，不影响命中框（和 StarMapNode.qml 一致）
     property int wobbleIndex: 0
     property real _wobbleAnimX: 0
@@ -66,7 +62,7 @@ Item {
     signal clicked(string instanceId)
     signal doubleClicked(string targetStarmapId)
     signal rightClicked(string instanceId)
-    signal dragged(string instanceId, real newX, real newY)
+    signal moveDelta(real dx, real dy)
     signal longPressed(string instanceId)
     signal contextMenuRequested(string instanceId, real sceneX, real sceneY)
     signal leftReleased()
@@ -176,7 +172,9 @@ Item {
 
     // ---------------------------------------------------------------------------
     // 拖动跟踪：DragHandler 只上抛原始移动增量，不修改 x/y、不决定行为
-    // Canvas 决定 dragged 的含义（move 模式下移动 Embed position）
+    // Canvas 根据 pointerMode 决定 moveDelta 的含义（connect 预览线 / move 移动 Embed）
+    // DragHandler 只负责拖动增量；交互结束由 PointHandler 的 leftReleased 统一上抛。
+    // （和 StarMapNode.qml 对称，Issue #796 评论 5888480054）
     // ---------------------------------------------------------------------------
     DragHandler {
         id: embedDragHandler
@@ -200,15 +198,7 @@ Item {
             lastTy = activeTranslation.y
             // 转成世界坐标增量（除以父项 scale，container.scale === zoomLevel）
             var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-            var wdx = dx / zoom
-            var wdy = dy / zoom
-            // Issue #796 评论 5887280405: connect 模式下不改 x/y，
-            // 只上抛 dragged 信号让 Canvas 刷新预览线。
-            if (!root.isConnectMode) {
-                root.x += wdx
-                root.y += wdy
-            }
-            root.dragged(root.instanceId, root.x, root.y)
+            root.moveDelta(dx / zoom, dy / zoom)
         }
     }
 

@@ -526,8 +526,6 @@ Item {
                 label: embedData.label
                 isSelected: embedData.isSelected
                 wobbleIndex: index
-                // Issue #796 评论 5887280405: connect 模式下阻止 DragHandler 移动 Embed。
-                isConnectMode: pointerMode === "connect" && connectFromId === embedData.instanceId
 
                 onXChanged: {
                     if (embedData) {
@@ -581,16 +579,28 @@ Item {
                     embedContextMenu.popup(sceneX, sceneY)
                 }
 
-                // 拖动只改 Embed 的 position
-                onDragged: function(instId, newX, newY) {
-                    // Issue #796 评论 5887280405: connect 模式下不移动 Embed，
-                    // 仅刷新预览线（起点固定，终点跟 connectMouseX/Y）。
-                    if (pointerMode === "connect" && connectFromId === instId) {
+                // Issue #796 评论 5888480054: Embed 拖动改上抛 moveDelta 增量，
+                // 和 Node 的 onMoveDelta 对称。connect 模式更新预览线终点；
+                // idle 转 move 移动 Embed position。
+                onMoveDelta: function(dx, dy) {
+                    if (pointerMode === "connect" && connectFromId === embedData.instanceId) {
+                        connectMouseX += dx
+                        connectMouseY += dy
                         edgeCanvas.requestPaint()
                         return
                     }
-                    isBeingDragged = true
-                    edgeCanvas.requestPaint()
+
+                    if (pointerMode === "idle") {
+                        pointerMode = "move"
+                        pressedEmbedId = embedData.instanceId
+                    }
+
+                    if (pointerMode === "move" && pressedEmbedId === embedData.instanceId) {
+                        x += dx
+                        y += dy
+                        isBeingDragged = true
+                        edgeCanvas.requestPaint()
+                    }
                 }
 
                 onLeftReleased: {
@@ -613,12 +623,14 @@ Item {
                         connectFromPath = null
                         connectFromNodeId = ""
                         edgeCanvas.requestPaint()
-                    } else {
+                    } else if (pointerMode === "move" && pressedEmbedId === embedData.instanceId) {
                         // 拖动结束后保存 Embed 新位置到后端
                         var ed = embedsModel[index]
                         if (ed) {
                             graphController.updateEmbed(ed.instanceId, { position: { x: ed.x, y: ed.y } })
                         }
+                        pointerMode = "idle"
+                        pressedEmbedId = ""
                     }
                 }
             }
@@ -631,7 +643,7 @@ Item {
         text: qsTr("右键空白处新建节点或子星图")
         color: _textSecondary
         font.pointSize: dt.fontLgPt
-        visible: nodesModel.length === 0
+        visible: nodesModel.length === 0 && embedsModel.length === 0
     }
 
     Rectangle {
