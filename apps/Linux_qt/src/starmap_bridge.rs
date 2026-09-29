@@ -6,18 +6,18 @@
 // - writer_core::api::types::*：星图节点、边、布局及相关 Patch 更新 DTO。
 // - writer_core::api::WriterCoreApi：核心库主业务 API。
 // - crate::starmap_view::layout_types::StarMapLayout：仅用于 save_starmap_layout
-//   反序列化前端算好的坐标写回 Core；显示算法本身在 starmap_view::bridge。
+//   反序列化前端算好的坐标写回 Core。这是纯数据类型，不是 bridge::* 函数。
 //
 // 干什么的：
 // - 负责星图领域核心 DTO 到客户端需要的兼容 JSON 字符串的双向数据编解码与类型转换。
 // - 提供星图生命周期（列表获取、绑定/解绑作品、创建/重命名/删除星图）的底层桥接。
 // - 提供图数据点、线、嵌入式富文本元素（add_starmap_embed 等）的增删改查动作。
-// - get_starmap_graph_and_layout 读图快照后委托 starmap_view::bridge::layout_from_graph
-//   派生布局视图；纯显示几何（边渲染/命中/网格布局）已移至 starmap_view::bridge。
 //
 // 不干什么：
 // - 不再实现边渲染、命中测试、网格布局等纯显示几何算法——它们归
 //   apps/Linux_qt/src/starmap_view/bridge.rs（Linux 平台端显示层入口）。
+// - graph 读取的布局派生已移到 backend 组合边界，本模块只做 Core DTO/CRUD/
+//   ResultEnvelope 适配，不调用 starmap_view::bridge::*。
 //
 // 被什么引用：
 // - 被 apps/Linux_qt/src/backend/starmap_backend.rs 及其分文件引用，作为后端
@@ -91,32 +91,6 @@ pub fn rename_starmap(api: &WriterCoreApi, starmap_id: &str, new_title: &str) ->
 
 pub fn delete_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.delete_starmap(starmap_id))
-}
-
-/// 拉取图数据 + 派生布局视图。
-///
-/// Core 不再存 layout，`layout` 由显示层 `starmap_view::bridge::layout_from_graph`
-/// 从节点 position 合成。本函数是 Core CRUD 适配（读图快照），布局派生委托显示层。
-pub fn get_starmap_graph_and_layout(api: &WriterCoreApi, starmap_id: &str) -> String {
-    match api.get_starmap_graph(starmap_id) {
-        Ok(g) => {
-            // 真正有用的图快照日志：记录各类图元数量，便于排查"图空了""embed 丢失"等问题。
-            // StarMapGraphDto 同时持有 `links`（普通连线）和 `hyperlinks`（超链接）两个字段，
-            // 分别记录两者，避免把 hyperlinks 误当成 links 输出到日志。
-            log::debug!(
-                "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={} hyperlinks={}",
-                starmap_id,
-                g.nodes.len(),
-                g.edges.len(),
-                g.embeds.len(),
-                g.links.len(),
-                g.hyperlinks.len()
-            );
-            let layout = crate::starmap_view::bridge::layout_from_graph(&g);
-            envelope_ok(serde_json::json!({ "graph": g, "layout": layout }))
-        }
-        Err(e) => envelope_err_str(&e.to_string()),
-    }
 }
 
 pub fn create_starmap_node(

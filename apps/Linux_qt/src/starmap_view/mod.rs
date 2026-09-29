@@ -11,13 +11,15 @@
 //   就是它们的 Linux 落点。Android/Harmony 各自有等价实现。
 //
 // 构成：
-// - layout_types.rs：纯数据类型（StarMapLayout / StarMapLayoutNode / StarMapViewport）。
+// - layout_types.rs：纯数据类型（StarMapLayout / StarMapLayoutNode / StarMapViewport
+//   / StarMapEmbedSceneRect）。
 // - grid_layout.rs：网格自动布局算法。
 // - hittest.rs：节点 AABB 命中测试 + 点到线段距离。
 // - edge_render.rs：边箭头/偏移/标签的渲染几何计算。
 // - bridge.rs：显示层入口，把上述算法组装成 backend 可直接调的 envelope JSON
-//   接口（边渲染/命中测试/网格布局/从图派生布局），并供 starmap_bridge 的
-//   `get_starmap_graph_and_layout` 复用 `layout_from_graph`。不碰 Core CRUD。
+//   接口（边渲染/命中测试/网格布局/从图派生布局）。边渲染接已取到的 graph + 平台
+//   scene geometry（node 位置 + embed 显示包围盒），只做显示计算，不再读 Core；
+//   供 backend 组合边界复用 layout_from_graph。不碰 Core CRUD。
 //
 // 坐标约定：
 //   全部为星图文档坐标（像素，不含视口滚动偏移），视口变换由 QML 渲染层负责。

@@ -32,6 +32,9 @@ QtObject {
     // move 模式目标
     property string pressedNodeId: ""
     property string pressedEmbedId: ""
+    // move 模式当前临时坐标（拖动期间未提交的显示位置）
+    property real moveX: 0
+    property real moveY: 0
 
     // ── pan ──
     function beginPan() { pointerMode = "pan" }
@@ -63,22 +66,33 @@ QtObject {
     }
 
     // ── move ──
-    function beginMove(nodeId) {
+    function beginMove(nodeId, startX, startY) {
         if (pointerMode !== "idle") return false
         pointerMode = "move"
         pressedNodeId = nodeId
+        moveX = startX
+        moveY = startY
         return true
     }
-    function beginEmbedMove(instanceId) {
+    function beginEmbedMove(instanceId, startX, startY) {
         if (pointerMode !== "idle") return false
         pointerMode = "move"
         pressedEmbedId = instanceId
+        moveX = startX
+        moveY = startY
         return true
+    }
+    function updateMove(x, y) {
+        if (pointerMode !== "move") return
+        moveX = x
+        moveY = y
     }
     function endMove() {
         pointerMode = "idle"
         pressedNodeId = ""
         pressedEmbedId = ""
+        moveX = 0
+        moveY = 0
     }
 
     // 统一复位所有瞬时状态（切换星图/失焦等场景调用）
@@ -90,5 +104,7 @@ QtObject {
         connectFromNodeId = ""
         pressedNodeId = ""
         pressedEmbedId = ""
+        moveX = 0
+        moveY = 0
     }
 }

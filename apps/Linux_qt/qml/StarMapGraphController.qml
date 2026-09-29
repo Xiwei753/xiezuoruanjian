@@ -359,15 +359,17 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
+            var nextNodes = [];
             for (var i = 0; i < nodesModel.length; i++) {
-                if (nodesModel[i].id === nodeId) {
-                    if (patch.title !== undefined) nodesModel[i].title = patch.title;
-                    if (patch.kind !== undefined) nodesModel[i].kind = patch.kind;
-                    nodesModelChanged();
-                    graphChanged();
-                    break;
+                var n = copyObject(nodesModel[i]);
+                if (n.id === nodeId) {
+                    if (patch.title !== undefined) n.title = patch.title;
+                    if (patch.kind !== undefined) n.kind = patch.kind;
                 }
+                nextNodes.push(n);
             }
+            nodesModel = nextNodes;
+            graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新节点失败")));
         }
@@ -390,15 +392,17 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(patch)), qsTr("更新连线失败"));
         if (res.success) {
             clearError();
+            var nextEdges = [];
             for (var i = 0; i < edgesModel.length; i++) {
-                if (edgesModel[i].id === edgeId) {
-                    if (patch.label !== undefined) edgesModel[i].label = patch.label;
-                    if (patch.kind !== undefined) edgesModel[i].kind = patch.kind;
-                    edgesModelChanged();
-                    graphChanged();
-                    break;
+                var e = copyObject(edgesModel[i]);
+                if (e.id === edgeId) {
+                    if (patch.label !== undefined) e.label = patch.label;
+                    if (patch.kind !== undefined) e.kind = patch.kind;
                 }
+                nextEdges.push(e);
             }
+            edgesModel = nextEdges;
+            graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新连线失败")));
         }
@@ -424,18 +428,20 @@ QtObject {
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(patch)), qsTr("更新子星图入口失败"));
         if (res.success) {
             clearError();
+            var nextEmbeds = [];
             for (var i = 0; i < embedsModel.length; i++) {
-                if (embedsModel[i].instanceId === instanceId) {
-                    if (patch.label !== undefined) embedsModel[i].label = patch.label;
+                var em = copyObject(embedsModel[i]);
+                if (em.instanceId === instanceId) {
+                    if (patch.label !== undefined) em.label = patch.label;
                     if (patch.position !== undefined) {
-                        embedsModel[i].x = patch.position.x;
-                        embedsModel[i].y = patch.position.y;
+                        em.x = patch.position.x;
+                        em.y = patch.position.y;
                     }
-                    embedsModelChanged();
-                    graphChanged();
-                    break;
                 }
+                nextEmbeds.push(em);
             }
+            embedsModel = nextEmbeds;
+            graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新子星图入口失败")));
         }
@@ -529,14 +535,27 @@ QtObject {
         }
     }
 
-    function computeEdgeRenders() {
+    function computeEdgeRenders(moveOverride) {
         if (!ensureBackend()) return;
         var nodePos = [];
         for (var j = 0; j < nodesModel.length; j++) {
             var n = nodesModel[j];
-            nodePos.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
+            var nx = n.x, ny = n.y;
+            if (moveOverride && moveOverride.kind === "node" && moveOverride.id === n.id) {
+                nx = moveOverride.x; ny = moveOverride.y;
+            }
+            nodePos.push({ id: n.id, x: nx, y: ny, width: n.width, height: n.height });
         }
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(starmapId, JSON.stringify(nodePos)), "");
+        var embedPos = [];
+        for (var k = 0; k < embedsModel.length; k++) {
+            var em = embedsModel[k];
+            var ex = em.x, ey = em.y;
+            if (moveOverride && moveOverride.kind === "embed" && moveOverride.id === em.instanceId) {
+                ex = moveOverride.x; ey = moveOverride.y;
+            }
+            embedPos.push({ instanceId: em.instanceId, x: ex, y: ey, width: em.width, height: em.height });
+        }
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(starmapId, JSON.stringify(nodePos), JSON.stringify(embedPos)), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }
@@ -544,7 +563,7 @@ QtObject {
 
     function hitTestEdge(wx, wy) {
         if (!ensureBackend()) return null;
-        if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders();
+        if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders(null);
         if (!edgeRenders || edgeRenders.length === 0) return null;
         var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy), "");
         if (res.success && res.data) {

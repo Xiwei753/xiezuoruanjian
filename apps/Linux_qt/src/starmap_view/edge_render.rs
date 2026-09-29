@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::hittest::point_to_segment_distance;
-use super::layout_types::StarMapLayout;
+use super::layout_types::{StarMapEmbedSceneRect, StarMapLayout};
 use writer_core::starmap::types::reference::StarMapTargetPath;
 use writer_core::starmap::types::StarMapGraph;
 
@@ -127,7 +127,9 @@ impl Default for EdgeRenderParams {
 ///   -> 对应 node layout 中心。Anchor 附在节点上，几何位置就是节点中心。
 /// - **深路径**（`path.starmap_id == graph.starmap_id && !segments.is_empty()`）
 ///   -> 根据第一段定位当前画布上的可见锚点：
-///   - **EnterEmbed** -> embed placement 中心。
+///   - **EnterEmbed** -> 平台 scene geometry 中心（`x+width/2, y+height/2`）。
+///     Core 只存 `StarMapEmbedDto.position`（左上角）不含宽高，显示锚点必须用
+///     平台传入的 `embed_rects` 中心，与 QML 拉线预览一致。
 ///   - **EnterPortal** -> portal 所在 node 的 layout 中心（且确认 node 有 portal）。
 ///     后续更深层的穿越不在当前画布上可见，但第一段的锚点可见。
 /// - **跨层路径**（`path.starmap_id != graph.starmap_id`）
@@ -139,6 +141,7 @@ pub fn resolve_edge_endpoint_anchor(
     path: &StarMapTargetPath,
     graph: &StarMapGraph,
     layout: &StarMapLayout,
+    embed_rects: &[StarMapEmbedSceneRect],
     endpoint: &str,
     edge_id: &str,
 ) -> Result<(f32, f32), EdgeAnchorDiagnostic> {
@@ -178,11 +181,13 @@ pub fn resolve_edge_endpoint_anchor(
     // 但第一段的锚点可见，足以绘制边的端点。
     match &path.segments[0] {
         StarMapPathSegment::EnterEmbed { instance_id } => {
-            // embed 锚点 = position。
-            // Core 收口把原来的 placement 包围盒并成单点 position，锚点直接取该点。
-            let embed = graph.embeds.iter().find(|e| e.instance_id == *instance_id);
-            match embed {
-                Some(em) => Ok((em.position.x, em.position.y)),
+            // embed 锚点 = 平台 scene geometry 中心。
+            // Core 只存 `StarMapEmbedDto.position`（左上角）不含宽高，不能用来
+            // 猜显示锚点。这里从平台传入的 `embed_rects` 按 instance_id 查显示
+            // 包围盒，取中心点，与 QML 拉线预览一致。
+            let rect = embed_rects.iter().find(|r| r.instance_id == *instance_id);
+            match rect {
+                Some(r) => Ok((r.x + r.width / 2.0, r.y + r.height / 2.0)),
                 None => Err(EdgeAnchorDiagnostic {
                     edge_id: edge_id.to_string(),
                     endpoint: endpoint.to_string(),
@@ -235,6 +240,7 @@ pub fn compute_edge_renders_from_paths(
     edges: &[writer_core::starmap::types::StarMapEdge],
     graph: &StarMapGraph,
     layout: &StarMapLayout,
+    embed_rects: &[StarMapEmbedSceneRect],
     params: &EdgeRenderParams,
 ) -> EdgeRenderBatch {
     let mut renders = Vec::new();
@@ -243,14 +249,28 @@ pub fn compute_edge_renders_from_paths(
     let mut resolved_edges: Vec<ResolvedEdge> = Vec::new();
 
     for edge in edges {
-        let from = match resolve_edge_endpoint_anchor(&edge.from, graph, layout, "from", &edge.id) {
+        let from = match resolve_edge_endpoint_anchor(
+            &edge.from,
+            graph,
+            layout,
+            embed_rects,
+            "from",
+            &edge.id,
+        ) {
             Ok(p) => p,
             Err(d) => {
                 diagnostics.push(d);
                 continue;
             }
         };
-        let to = match resolve_edge_endpoint_anchor(&edge.to, graph, layout, "to", &edge.id) {
+        let to = match resolve_edge_endpoint_anchor(
+            &edge.to,
+            graph,
+            layout,
+            embed_rects,
+            "to",
+            &edge.id,
+        ) {
             Ok(p) => p,
             Err(d) => {
                 diagnostics.push(d);

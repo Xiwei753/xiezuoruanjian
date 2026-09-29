@@ -271,7 +271,16 @@ Item {
             ctx.lineWidth = 2
 
             // Draw all edges using Linux platform render data
-            graphController.computeEdgeRenders()
+            // 组 transient move override：拖动期间用临时坐标让边实时跟随
+            var moveOverride = null
+            if (interaction.pointerMode === "move") {
+                if (interaction.pressedNodeId !== "") {
+                    moveOverride = { kind: "node", id: interaction.pressedNodeId, x: interaction.moveX, y: interaction.moveY }
+                } else if (interaction.pressedEmbedId !== "") {
+                    moveOverride = { kind: "embed", id: interaction.pressedEmbedId, x: interaction.moveX, y: interaction.moveY }
+                }
+            }
+            graphController.computeEdgeRenders(moveOverride)
             var renders = graphController.edgeRenders
             for (var i = 0; i < renders.length; i++) {
                 var r = renders[i]
@@ -431,12 +440,13 @@ Item {
                     }
 
                     if (interaction.pointerMode === "idle") {
-                        interaction.beginMove(nodeData.id)
+                        interaction.beginMove(nodeData.id, x, y)
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
                         x += dx
                         y += dy
+                        interaction.updateMove(x, y)
                         isBeingDragged = true
                         edgeCanvas.requestPaint()
                     }
@@ -539,12 +549,13 @@ Item {
                     }
 
                     if (interaction.pointerMode === "idle") {
-                        interaction.beginEmbedMove(embedData.instanceId)
+                        interaction.beginEmbedMove(embedData.instanceId, x, y)
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
                         x += dx
                         y += dy
+                        interaction.updateMove(x, y)
                         isBeingDragged = true
                         edgeCanvas.requestPaint()
                     }
@@ -872,7 +883,7 @@ Item {
             }
             onTriggered: {
                 if (selectedNodeForMenu) {
-                    interaction.beginMove(selectedNodeForMenu.id)
+                    interaction.beginMove(selectedNodeForMenu.id, selectedNodeForMenu.x, selectedNodeForMenu.y)
                 }
             }
         }
@@ -1031,7 +1042,7 @@ Item {
             }
             onTriggered: {
                 if (selectedEmbedForMenu) {
-                    interaction.beginEmbedMove(selectedEmbedForMenu.instanceId)
+                    interaction.beginEmbedMove(selectedEmbedForMenu.instanceId, selectedEmbedForMenu.x, selectedEmbedForMenu.y)
                 }
             }
         }

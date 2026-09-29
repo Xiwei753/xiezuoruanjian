@@ -167,9 +167,9 @@ pub struct StarMapBackend {
     save_starmap_layout:
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
     compute_edge_renders_json:
-        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QString),
+        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString, embeds_json: QString) -> QString),
     compute_edge_renders:
-        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject),
+        qt_method!(fn(&self, starmap_id: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
     hit_test_edge_renders:
@@ -351,13 +351,31 @@ impl StarMapBackend {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
     }
-    fn compute_edge_renders_json(&self, starmap_id: QString, nodes_json: QString) -> QString {
+    fn compute_edge_renders_json(
+        &self,
+        starmap_id: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+    ) -> QString {
         let sid = starmap_id.to_string();
         let nj = nodes_json.to_string();
+        let ej = embeds_json.to_string();
         match self.with_app(|app| app.core_api()) {
-            Ok(Some(core)) => {
-                crate::starmap_view::bridge::compute_edge_renders_json(&core, &sid, &nj).into()
-            }
+            Ok(Some(core)) => match core.get_starmap_graph(&sid) {
+                Ok(graph_dto) => {
+                    match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(graph_dto) {
+                        Ok(graph) => crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej).into(),
+                        Err(e) => crate::backend::json_utils::envelope_error_json(
+                            writer_core::api::WriterError::Other(e.to_string()),
+                        )
+                        .into(),
+                    }
+                }
+                Err(e) => crate::backend::json_utils::envelope_error_json(
+                    writer_core::api::WriterError::Other(e.to_string()),
+                )
+                .into(),
+            },
             _ => crate::backend::json_utils::borrow_conflict_error_json().into(),
         }
     }
@@ -378,9 +396,14 @@ impl StarMapBackend {
         let el = existing_layout_json.to_string();
         crate::starmap_view::bridge::calculate_grid_layout_json(&ni, &el).into()
     }
-    fn compute_edge_renders(&self, starmap_id: QString, nodes_json: QString) -> QJsonObject {
+    fn compute_edge_renders(
+        &self,
+        starmap_id: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+    ) -> QJsonObject {
         let raw = self
-            .compute_edge_renders_json(starmap_id, nodes_json)
+            .compute_edge_renders_json(starmap_id, nodes_json, embeds_json)
             .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
