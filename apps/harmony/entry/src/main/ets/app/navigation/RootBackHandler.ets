@@ -6,6 +6,7 @@
 // 官方说明：https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-arkui-831
 
 import hilog from '@ohos.hilog'
+import { BusinessError } from '@kit.BasicServicesKit'
 import { getAppContext } from '../AppContext'
 
 const ROOT_NAV_TAG = 'RootNavigation'
@@ -21,8 +22,9 @@ const ROOT_NAV_TAG = 'RootNavigation'
 export function handleRootBack(): boolean {
   const context = getAppContext().getAbilityContext()
   if (context !== null) {
-    context.terminateSelf().catch((err) => {
-      hilog.error(0x0000, ROOT_NAV_TAG, `terminateSelf failed: ${err}`)
+    // 显式标注 catch 回调参数类型：ArkTS 的 arkts-no-any-unknown 规则禁止隐式 any。
+    context.terminateSelf().catch((err: BusinessError) => {
+      hilog.error(0x0000, ROOT_NAV_TAG, `terminateSelf failed: code=${err.code} msg=${err.message}`)
     })
   }
   return true
