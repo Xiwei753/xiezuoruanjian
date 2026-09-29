@@ -9,7 +9,8 @@
 - [settings_schema.md](settings_schema.md)：设置项及同步属性。
 - [sync_rules.md](sync_rules.md)：同步与冲突规则。
 - [starmap_semantics.md](starmap_semantics.md)：星图对象、引用和语义约束。
-- [harmonyos/DEVECO_CLI.md](harmonyos/DEVECO_CLI.md)：HarmonyOS 客户端 DevEco CLI 安装、AI Agent/Skills 接入与构建发布命令。
+- [harmonyos/DEVECO_CLI.md](harmonyos/DEVECO_CLI.md)：HarmonyOS 客户端工具链安装、AI Agent/Skills 接入与构建发布命令。
+- [linux_qt_dev_env.md](linux_qt_dev_env.md)：Linux 桌面客户端本地构建的前置依赖、症状对照与常用验证命令。
 
 ## 维护规则
 

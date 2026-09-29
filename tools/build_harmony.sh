@@ -12,8 +12,10 @@
 #
 # HarmonyOS Native SDK 探测顺序：
 #   1. $OHOS_NDK_HOME（用户覆盖项；指向 HarmonyOS Native SDK 目录）
-#   2. /opt/devecostudio/sdk/default/openharmony/native（DevEco Studio 默认安装）
-#   3. ~/DevEcoStudio*/sdk/default/openharmony/native 等常见位置
+#   2. $HARMONY_CLI_HOME/sdk/default/openharmony/native
+#      （仓库标准入口 tools/setup_harmony_cli.sh 的安装位置，默认 ~/.harmony-cli；
+#        CI 的 HarmonyOS Static Analysis 也走这条）
+#   3. /opt/devecostudio/sdk/default/openharmony/native 等 DevEco Studio 安装位置
 #
 # 注：SDK 目录命名 openharmony/native 是工具链事实（HarmonyOS Native 构建链
 # 使用的目录命名），不代表产品兼容 OpenHarmony。本客户端只做 HarmonyOS。
@@ -42,6 +44,10 @@ echo ""
 detect_native_dir() {
     local -a cands=()
     [ -n "${OHOS_NDK_HOME:-}" ] && cands+=("$OHOS_NDK_HOME")
+    # 仓库标准入口 tools/setup_harmony_cli.sh 的安装位置（默认 ~/.harmony-cli）
+    local cli_home="${HARMONY_CLI_HOME:-$HOME/.harmony-cli}"
+    cands+=("$cli_home/sdk/default/openharmony/native")
+    # DevEco Studio 图形安装的位置，作为兜底
     cands+=(
         "/opt/devecostudio/sdk/default/openharmony/native"
         "$HOME/DevEcoStudio/sdk/default/openharmony/native"
@@ -65,8 +71,11 @@ detect_native_dir() {
 NATIVE_DIR="$(detect_native_dir)" || {
     echo "错误：未找到 HarmonyOS Native SDK（clang）。" >&2
     echo "" >&2
-    echo "请设置环境变量指向 HarmonyOS Native SDK 目录后重试：" >&2
-    echo "  export OHOS_NDK_HOME=/opt/devecostudio/sdk/default/openharmony/native" >&2
+    echo "先按仓库标准入口安装 HarmonyOS 命令行工具链（默认装到 ~/.harmony-cli）：" >&2
+    echo "  source tools/setup_harmony_cli.sh" >&2
+    echo "" >&2
+    echo "若你用的是别的安装位置，用环境变量直接指定 Native SDK 目录：" >&2
+    echo "  export OHOS_NDK_HOME=<你的路径>/openharmony/native" >&2
     echo "" >&2
     echo "注：路径中的 openharmony/native 是工具链目录命名，不代表产品兼容 OpenHarmony。" >&2
     exit 1
