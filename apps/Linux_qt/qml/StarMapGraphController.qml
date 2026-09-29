@@ -81,23 +81,41 @@ QtObject {
         // graph.nodes[].position 是节点位置唯一真相，直接从 graph 派生平台显示模型。
         // 宽高/圆角是纯显示参数，用默认值（与 starmap_bridge.rs DEFAULT_NODE_* 一致）。
         var newNodes = [];
+        // Issue #801 评论 5895625744: newEmbeds 提前声明，旧 portal Node 也往这里归一。
+        var newEmbeds = [];
         var graphNodes = graphData && graphData.nodes ? graphData.nodes : [];
         for (var i = 0; i < graphNodes.length; i++) {
             var gn = graphNodes[i];
             var pos = gn.position || { x: 0, y: 0 };
-            newNodes.push({
-                id: gn.id,
-                title: gn.title,
-                kind: gn.kind,
-                x: pos.x,
-                y: pos.y,
-                width: 150,
-                height: 60,
-                isSelected: false,
-                payload: gn.payload,
-                tags: gn.tags,
-                portal: gn.portal
-            });
+            // Issue #801 评论 5895625744: 旧 portal Node 在模型转换层归一到 Embed，
+            // 不作为普通 Node 下发给 StarMapNode。保留旧节点的位置、标题和目标 starmap。
+            // Canvas 以后只有一种子星图语义：Embed。
+            if (gn.portal && gn.portal.destinationStarmapId) {
+                newEmbeds.push({
+                    instanceId: gn.id,
+                    targetStarmapId: gn.portal.destinationStarmapId,
+                    label: gn.title || qsTr("未命名"),
+                    x: pos.x,
+                    y: pos.y,
+                    width: 150,
+                    height: 60,
+                    isSelected: false,
+                    hostPath: null
+                });
+            } else {
+                newNodes.push({
+                    id: gn.id,
+                    title: gn.title,
+                    kind: gn.kind,
+                    x: pos.x,
+                    y: pos.y,
+                    width: 150,
+                    height: 60,
+                    isSelected: false,
+                    payload: gn.payload,
+                    tags: gn.tags
+                });
+            }
         }
         nodesModel = newNodes;
 
@@ -112,7 +130,8 @@ QtObject {
 
         // Issue #796 评论 5886483653: 从 graphData.embeds 构造 embedsModel。
         // 位置只读 embed.position，宽高继续属于 Linux 显示层（用默认值，和 node 一致）。
-        var newEmbeds = [];
+        // Issue #801 评论 5895625744: 不再用"子星图"当 label fallback，改用未命名占位，
+        // 不再把对象类型当标题显示。newEmbeds 已在上方声明（旧 portal Node 也往里归一）。
         var graphEmbeds = graphData && graphData.embeds ? graphData.embeds : [];
         for (var k = 0; k < graphEmbeds.length; k++) {
             var gem = graphEmbeds[k];
@@ -120,7 +139,7 @@ QtObject {
             newEmbeds.push({
                 instanceId: gem.instanceId,
                 targetStarmapId: gem.targetStarmapId || "",
-                label: gem.label || qsTr("子星图"),
+                label: gem.label || qsTr("未命名"),
                 x: epos.x,
                 y: epos.y,
                 width: 150,

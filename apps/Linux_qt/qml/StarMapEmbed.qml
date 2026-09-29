@@ -41,7 +41,9 @@ Item {
     // Embed 身份与数据
     property string instanceId: ""
     property string targetStarmapId: ""
-    property string label: qsTr("子星图")
+    // Issue #801 评论 5895625744: 不再预设"子星图"类型文字，默认空。
+    // label 由 Controller 传入（含未命名 fallback）。
+    property string label: ""
     property bool isSelected: false
 
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）

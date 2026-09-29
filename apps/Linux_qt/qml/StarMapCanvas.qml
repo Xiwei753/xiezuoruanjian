@@ -592,9 +592,6 @@ Item {
                 title: nodeData.title
                 kind: nodeData.kind
                 isSelected: nodeData.isSelected
-                // Issue #793 评论 5884923277: portal 节点展示标记，
-                // 双击仍沿用现有 destinationStarmapId 进入，不另外发明类型。
-                isPortal: !!(nodeData.portal && nodeData.portal.destinationStarmapId)
                 // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
                 wobbleIndex: index
 
@@ -615,17 +612,11 @@ Item {
                 }
 
                 onDoubleClicked: {
+                    // Issue #801 评论 5895625744: 旧 portal Node 已在 Controller
+                    // buildModels() 归一到 Embed，Node 双击统一走编辑。
                     var nd = nodeData
-                    if (nd.portal && nd.portal.destinationStarmapId) {
-                        // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace
-                        // 由 Workspace 统一管理层级栈；Canvas 不再自己 drillDown。
-                        drillDownRequested(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
-                        // 保留信号通知 Workspace 同步标题
-                        enterStarmapRequested(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
-                    } else {
-                        graphController.selectNode(nd.id)
-                        editNodeRequested(nd)
-                    }
+                    graphController.selectNode(nd.id)
+                    editNodeRequested(nd)
                 }
 
                 // Issue #801 评论 5894035036: 鼠标长按直接进 connect
@@ -789,9 +780,9 @@ Item {
                         var ed = embedData
                         // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace，
                         // Canvas 不再自己 drillDown。
-                        drillDownRequested(tgtStarmapId, ed.label || qsTr("子星图"))
-                        // 保留信号通知 Workspace 同步标题
-                        enterStarmapRequested(tgtStarmapId, ed.label || qsTr("子星图"))
+                        // Issue #801 评论 5895625744: title fallback 不再用"子星图"。
+                        drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"))
+                        enterStarmapRequested(tgtStarmapId, ed.label || qsTr("未命名"))
                     }
                 }
 

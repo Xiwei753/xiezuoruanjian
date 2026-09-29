@@ -41,9 +41,6 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
-    // Issue #793 评论 5884923277: portal 节点展示标记
-    property bool isPortal: false
-
     // Issue #793 评论 5885482530: wobble 改纯视觉偏移，不影响命中框。
     // 根 Item 的 x/y/width/height 恒定，handler 命中基于稳定几何位置；
     // 视觉偏移只作用在内部 visualNode Rectangle 的 transform 上。
