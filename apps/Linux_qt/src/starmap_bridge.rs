@@ -5,8 +5,6 @@
 // 引用了什么：
 // - writer_core::api::types::*：星图节点、边、布局及相关 Patch 更新 DTO。
 // - writer_core::api::WriterCoreApi：核心库主业务 API。
-// - crate::starmap_view::layout_types::StarMapLayout：仅用于 save_starmap_layout
-//   反序列化前端算好的坐标写回 Core。这是纯数据类型，不是 bridge::* 函数。
 //
 // 干什么的：
 // - 负责星图领域核心 DTO 到客户端需要的兼容 JSON 字符串的双向数据编解码与类型转换。
@@ -31,8 +29,6 @@ use writer_core::api::types::{
     StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
-
-use crate::starmap_view::layout_types::StarMapLayout;
 
 fn parse_node_kind(kind: &str) -> StarMapNodeKindDto {
     serde_json::from_value(serde_json::json!(kind)).unwrap_or(StarMapNodeKindDto::Note)
@@ -319,45 +315,6 @@ pub fn update_starmap_embed(
 /// 删除子星图嵌入。
 pub fn delete_starmap_embed(api: &WriterCoreApi, starmap_id: &str, instance_id: &str) -> String {
     envelope(api.delete_starmap_embed(starmap_id, instance_id))
-}
-
-/// 保存布局：把前端算好的节点坐标写回 Core 的 `StarMapNode.position`。
-///
-/// Core 收口后没有 `save_starmap_layout` 这样的独立布局存储，节点坐标的唯一
-/// 真相是节点自身的 `position` 字段。这里逐节点发 position patch，Core 侧
-/// 仍是单事务真相源，平台端只负责把显示层算出的坐标提交回去。
-/// 宽高/圆角/层级是纯显示参数，不回传（Core 不消费）。
-pub fn save_starmap_layout(api: &WriterCoreApi, starmap_id: &str, layout_json: &str) -> String {
-    let layout: StarMapLayout = match serde_json::from_str(layout_json) {
-        Ok(l) => l,
-        Err(e) => return envelope_err_str(&format!("Invalid layout JSON: {}", e)),
-    };
-
-    for node in &layout.nodes {
-        let patch = StarMapNodePatchDto {
-            title: None,
-            kind: None,
-            payload: None,
-            tags: None,
-            content: None,
-            anchors: None,
-            portal: None,
-            position: Some(StarMapPointDto {
-                x: node.x,
-                y: node.y,
-            }),
-            style: None,
-            provenance: None,
-        };
-        if let Err(e) = api.update_starmap_node(starmap_id, &node.node_id, patch) {
-            return envelope_err_str(&format!(
-                "Failed to save position for node {}: {}",
-                node.node_id, e
-            ));
-        }
-    }
-
-    envelope_ok(serde_json::json!({ "savedNodes": layout.nodes.len() }))
 }
 
 pub fn bind_starmap_to_project(api: &WriterCoreApi, starmap_id: &str, project_id: &str) -> String {

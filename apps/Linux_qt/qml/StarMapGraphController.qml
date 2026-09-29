@@ -9,7 +9,7 @@
 //   - 通过 starmapBackendRef 调用 AppBackend (Rust QObject)
 //   - 图数据通过 AppBackend 暴露的对象/数组 DTO 与 Core 层交互
 //
-// 数据流：starmapBackendRef (DTO) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
+// 数据流：starmapBackendRef (DTO) → controller (graphData) → Canvas (nodesModel/edgesModel)
 // =============================================================================
 
 import QtQuick
@@ -21,7 +21,6 @@ QtObject {
     property var starmapBackendRef: null
     property string errorMessage: ""
     property var graphData: null
-    property var layoutData: null
     property var nodesModel: []
     property var edgesModel: []
     property var edgeRenders: []
@@ -33,8 +32,6 @@ QtObject {
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
     signal embedSelected(var embed)
-
-    onGraphChanged: invalidateEdgeRenders()
 
     function setError(msg) {
         errorMessage = msg || "";
@@ -73,8 +70,8 @@ QtObject {
         if (res.success) {
             clearError();
             graphData = res.data.graph;
-            layoutData = res.data.layout;
             buildModels();
+            computeEdgeRenders(null);
         } else {
             setError(qsTr("加载星图数据失败"));
         }
@@ -134,52 +131,7 @@ QtObject {
         }
         embedsModel = newEmbeds;
 
-        if (nodesModel.length > 0 && (!layoutData || !layoutData.nodes || layoutData.nodes.length === 0)) autoLayout();
         graphChanged();
-    }
-
-    function autoLayout() {
-        if (!ensureBackend()) return;
-        var nodeIds = [];
-        for (var i = 0; i < nodesModel.length; i++) nodeIds.push(nodesModel[i].id);
-        var existingJson = layoutData ? JSON.stringify(layoutData) : "{}";
-        var res = normalizeBackendResult(starmapBackendRef.calculate_grid_layout(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
-        if (res.success && res.data && res.data.nodes) {
-            var layoutNodes = res.data.nodes;
-            // Issue #798: 生成新数组一次赋值，不原地改普通 JS 对象，
-            // 保证 delegate 绑定的 nodeData 收到 notify。
-            var nextNodes = [];
-            for (var j = 0; j < nodesModel.length; j++) {
-                var n = copyObject(nodesModel[j]);
-                for (var k = 0; k < layoutNodes.length; k++) {
-                    if (n.id === layoutNodes[k].nodeId) {
-                        n.x = layoutNodes[k].x;
-                        n.y = layoutNodes[k].y;
-                        break;
-                    }
-                }
-                nextNodes.push(n);
-            }
-            nodesModel = nextNodes;
-            saveLayout();
-        } else {
-            // 后端失败直接报错，不再用 QML 临时坐标兜底成"成功"
-            setError(qsTr("自动布局失败"));
-        }
-    }
-
-    // 从 graph.nodes[].position 查节点位置，保持 layout.nodes[].nodeId/x/y 契约兼容。
-    // 不再作为坐标真相源（buildModels 直接从 graph.position 取），仅作辅助查询。
-    function getLayoutNode(id) {
-        if (!graphData || !graphData.nodes) return null;
-        for (var i = 0; i < graphData.nodes.length; i++) {
-            var gn = graphData.nodes[i];
-            if (gn.id === id) {
-                var pos = gn.position || { x: 0, y: 0 };
-                return { nodeId: gn.id, x: pos.x, y: pos.y, width: 150, height: 60 };
-            }
-        }
-        return null;
     }
 
     function getNode(id) {
@@ -340,18 +292,6 @@ QtObject {
         } else {
             setError(backendErrorText(res, qsTr("创建连线失败")));
         }
-    }
-
-    function saveLayout() {
-        if (!ensureBackend()) return;
-        var layoutNodes = [];
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i];
-            layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0 });
-        }
-        var res = normalizeBackendResult(starmapBackendRef.save_starmap_layout(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), qsTr("保存布局失败"));
-        if (res.success) clearError();
-        else setError(qsTr("保存布局失败"));
     }
 
     function updateNode(nodeId, patch) {
@@ -518,6 +458,7 @@ QtObject {
                 nextNodes.push(n);
             }
             nodesModel = nextNodes;
+            computeEdgeRenders(null);
             graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新节点位置失败")));
@@ -541,6 +482,7 @@ QtObject {
                 nextEmbeds.push(em);
             }
             embedsModel = nextEmbeds;
+            computeEdgeRenders(null);
             graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新子星图入口失败")));
@@ -567,7 +509,8 @@ QtObject {
             }
             embedPos.push({ instanceId: em.instanceId, x: ex, y: ey, width: em.width, height: em.height });
         }
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(starmapId, JSON.stringify(nodePos), JSON.stringify(embedPos)), "");
+        if (!graphData) return;
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(JSON.stringify(graphData), JSON.stringify(nodePos), JSON.stringify(embedPos)), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }

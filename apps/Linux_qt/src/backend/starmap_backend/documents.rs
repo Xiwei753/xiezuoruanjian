@@ -152,10 +152,8 @@ impl AppBackend {
                         g.links.len(),
                         g.hyperlinks.len()
                     );
-                    let layout = crate::starmap_view::bridge::layout_from_graph(&g);
                     writer_core::api::ResultEnvelope::success(serde_json::json!({
-                        "graph": g,
-                        "layout": layout
+                        "graph": g
                     }))
                     .to_json_string()
                     .into()

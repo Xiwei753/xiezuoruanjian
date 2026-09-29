@@ -281,16 +281,6 @@ Item {
             ctx.lineWidth = 2
 
             // Draw all edges using Linux platform render data
-            // 组 transient move override：拖动期间用临时坐标让边实时跟随
-            var moveOverride = null
-            if (interaction.pointerMode === "move") {
-                if (interaction.pressedNodeId !== "") {
-                    moveOverride = { kind: "node", id: interaction.pressedNodeId, x: interaction.moveX, y: interaction.moveY }
-                } else if (interaction.pressedEmbedId !== "") {
-                    moveOverride = { kind: "embed", id: interaction.pressedEmbedId, x: interaction.moveX, y: interaction.moveY }
-                }
-            }
-            graphController.computeEdgeRenders(moveOverride)
             var renders = graphController.edgeRenders
             for (var i = 0; i < renders.length; i++) {
                 var r = renders[i]
@@ -460,6 +450,7 @@ Item {
                         // 只更新 transient 坐标，delegate 的 x/y binding 自动跟随。
                         interaction.updateMove(interaction.moveX + dx, interaction.moveY + dy)
                         isBeingDragged = true
+                        graphController.computeEdgeRenders(currentMoveOverride())
                         edgeCanvas.requestPaint()
                     }
                 }
@@ -570,6 +561,7 @@ Item {
                         // 只更新 transient 坐标，delegate 的 x/y binding 自动跟随。
                         interaction.updateMove(interaction.moveX + dx, interaction.moveY + dy)
                         isBeingDragged = true
+                        graphController.computeEdgeRenders(currentMoveOverride())
                         edgeCanvas.requestPaint()
                     }
                 }
@@ -635,20 +627,23 @@ Item {
         }
     }
 
+    function currentMoveOverride() {
+        if (interaction.pointerMode === "move") {
+            if (interaction.pressedNodeId !== "") {
+                return { kind: "node", id: interaction.pressedNodeId, x: interaction.moveX, y: interaction.moveY }
+            } else if (interaction.pressedEmbedId !== "") {
+                return { kind: "embed", id: interaction.pressedEmbedId, x: interaction.moveX, y: interaction.moveY }
+            }
+        }
+        return null
+    }
+
     function loadGraph() {
         graphController.loadGraph()
     }
 
     function buildModels() {
         graphController.buildModels()
-    }
-
-    function autoLayout() {
-        graphController.autoLayout()
-    }
-
-    function getLayoutNode(id) {
-        return graphController.getLayoutNode(id)
     }
 
     function getNode(id) {
@@ -712,10 +707,6 @@ Item {
     // Issue #796 评论 5887280405: 用 fromPath/toPath 建边，支持 Node 和 Embed 端点。
     function createEdgeWithPaths(fromPath, toPath) {
         graphController.createEdgeWithPaths(fromPath, toPath)
-    }
-
-    function saveLayout() {
-        graphController.saveLayout()
     }
 
     function updateNodeFromInspector(nodeId, patch) {
