@@ -723,7 +723,7 @@ Item {
                         } else {
                             var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedConnectPath(targetEmbed))
+                                createEdgeWithPaths(interaction.connectFromPath, graphController.embedConnectPath(targetEmbed.instanceId))
                             }
                         }
                         interaction.endConnect()
@@ -786,12 +786,7 @@ Item {
                         // Issue #801 评论 5895625744: title fallback 不再用"子星图"。
                         // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
                         // 正式 Embed -> EnterEmbed(instanceId)，legacy portal -> EnterPortal(nodeId)。
-                        var segment
-                        if (ed.legacyPortalNodeId) {
-                            segment = { type: "enterPortal", instanceId: null, nodeId: ed.legacyPortalNodeId }
-                        } else {
-                            segment = { type: "enterEmbed", instanceId: ed.instanceId, nodeId: null }
-                        }
+                        var segment = graphController.embedDrillSegment(ed.instanceId)
                         drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"), segment)
                         enterStarmapRequested(tgtStarmapId, ed.label || qsTr("未命名"))
                     }
@@ -800,7 +795,7 @@ Item {
                 // Issue #801 评论 5894035036: 鼠标长按直接进 connect
                 onMouseLongPressed: function(instId) {
                     var ed = embedData
-                    if (!interaction.beginConnect("embed", instId, embedConnectPath(ed), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginConnect("embed", instId, graphController.embedConnectPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -811,7 +806,7 @@ Item {
                 // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（与 Node 对称）。
                 onTouchLongPressed: function(instId) {
                     var ed = embedData
-                    if (!interaction.beginContextPending("embed", instId, embedConnectPath(ed), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginContextPending("embed", instId, graphController.embedConnectPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -894,7 +889,7 @@ Item {
                         } else {
                             var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedConnectPath(targetEmbed))
+                                createEdgeWithPaths(interaction.connectFromPath, graphController.embedConnectPath(targetEmbed.instanceId))
                             }
                         }
                         interaction.endConnect()
@@ -1111,41 +1106,6 @@ Item {
             segments: [],
             target: { type: "node", nodeId: nodeId }
         }
-    }
-
-    // Issue #796 评论 5887280405: Embed 端点的 StarMapTargetPathDto JS 对象。
-    // segments 用 enterEmbed 段指向 instanceId，target.type 为 "starmap"。
-    function embedPath(instanceId) {
-        return {
-            starmapId: starmapId,
-            segments: [
-                { type: "enterEmbed", instanceId: instanceId, nodeId: null }
-            ],
-            target: { type: "starmap" }
-        }
-    }
-
-    // Issue #801 评论 5897793716: legacy portal 拉线端点用 EnterPortal 段。
-    // Core 已正式定义 EnterPortal { nodeId } = 通过 portal 节点进入子星图空间。
-    // 不再返回普通 nodePath——视觉上是子星图入口，底层语义也必须是 enterPortal。
-    function portalPath(nodeId) {
-        return {
-            starmapId: starmapId,
-            segments: [
-                { type: "enterPortal", instanceId: null, nodeId: nodeId }
-            ],
-            target: { type: "starmap" }
-        }
-    }
-
-    // Issue #801 评论 5896594591: Embed 拉线端点路径。
-    // 旧 portal（legacyPortalNodeId 存在）真实身份是 Node，端点用 portalPath（EnterPortal 段），
-    // 不能构造 EnterEmbed(fakeInstanceId)。正式 Embed 继续用 embedPath。
-    function embedConnectPath(embed) {
-        if (embed && embed.legacyPortalNodeId) {
-            return portalPath(embed.legacyPortalNodeId)
-        }
-        return embedPath(embed.instanceId)
     }
 
     // Issue #796 评论 5887280405: 用 fromPath/toPath 建边，支持 Node 和 Embed 端点。

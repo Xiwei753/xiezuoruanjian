@@ -253,6 +253,38 @@ QtObject {
         return null
     }
 
+    // Issue #801 评论 5895878756: Embed 拉线端点路径由 Controller 统一构造，
+    // Canvas 不再直接访问 legacyPortalNodeId 分流。
+    function embedConnectPath(instanceId) {
+        var embed = getEmbed(instanceId);
+        if (embed && embed.legacyPortalNodeId) {
+            return {
+                starmapId: starmapId,
+                segments: [
+                    { type: "enterPortal", instanceId: null, nodeId: embed.legacyPortalNodeId }
+                ],
+                target: { type: "starmap" }
+            };
+        }
+        return {
+            starmapId: starmapId,
+            segments: [
+                { type: "enterEmbed", instanceId: instanceId, nodeId: null }
+            ],
+            target: { type: "starmap" }
+        };
+    }
+
+    // Issue #801 评论 5895878756: Embed 下钻 segment 由 Controller 统一构造，
+    // Canvas 不再直接访问 legacyPortalNodeId 分流。
+    function embedDrillSegment(instanceId) {
+        var embed = getEmbed(instanceId);
+        if (embed && embed.legacyPortalNodeId) {
+            return { type: "enterPortal", instanceId: null, nodeId: embed.legacyPortalNodeId };
+        }
+        return { type: "enterEmbed", instanceId: instanceId, nodeId: null };
+    }
+
     // Issue #796 评论 5886483653: 按世界坐标命中 Embed。
     // 复用 hit_test_nodes 后端能力（embed 几何与 node 同构）。
     function findEmbedAt(wx, wy) {

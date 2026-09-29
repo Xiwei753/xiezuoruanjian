@@ -5,6 +5,10 @@
 //! 2. root starmap + 实例路径：下钻事件携带具体 segment（EnterEmbed/EnterPortal），
 //!    Workspace 维护完整 currentPathSegments，下钻 append、返回 pop，
 //!    currentStarmapId 不再充当完整层级身份。
+//!
+//! Issue #801 评论 5895878756 更新：legacyPortalNodeId 分流逻辑已从 Canvas 移到
+//! StarMapGraphController，Canvas 只调用 graphController.embedConnectPath(instanceId)
+//! 和 graphController.embedDrillSegment(instanceId)，不再直接访问 legacyPortalNodeId。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,6 +18,7 @@ mod source_guard;
 use source_guard::{function_window, read_src};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
+const GRAPH_CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
 
 /// 去掉整行 `//` 注释，只留可执行语句。
@@ -40,41 +45,41 @@ fn slice_between(src: &str, start: &str, end: &str) -> String {
     src[s..e].to_string()
 }
 
-/// 1. portalPath 构造 EnterPortal 段，target.type 为 "starmap"。
+/// 1. Controller embedConnectPath 对 legacy portal 构造 EnterPortal 段。
 #[test]
-fn canvas_portal_path_builds_enter_portal_segment() {
-    let src = strip_line_comments(&read_src(CANVAS));
-    let helper = slice_between(&src, "function portalPath(nodeId)", "function embedConnectPath(");
+fn controller_embed_connect_path_builds_enter_portal_segment() {
+    let src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
+    let helper = slice_between(&src, "function embedConnectPath(instanceId)", "function embedDrillSegment(");
     assert!(
         helper.contains("\"enterPortal\""),
-        "portalPath 必须构造 enterPortal 段，实际窗口:\n{helper}"
+        "Controller embedConnectPath 必须构造 enterPortal 段，实际窗口:\n{helper}"
     );
     assert!(
-        helper.contains("nodeId: nodeId"),
-        "portalPath 段必须携带 nodeId，实际窗口:\n{helper}"
+        helper.contains("nodeId: embed.legacyPortalNodeId"),
+        "embedConnectPath 段必须携带 nodeId，实际窗口:\n{helper}"
     );
     assert!(
         helper.contains("target: { type: \"starmap\" }"),
-        "portalPath target 必须是 starmap，实际窗口:\n{helper}"
+        "embedConnectPath target 必须是 starmap，实际窗口:\n{helper}"
     );
 }
 
-/// 2. embedConnectPath 对 legacy portal 用 portalPath，对正式 Embed 用 embedPath。
+/// 2. Controller embedConnectPath 对 legacy portal 用 enterPortal，对正式 Embed 用 enterEmbed。
 #[test]
-fn canvas_embed_connect_path_routes_legacy_portal_to_portal_path() {
-    let src = strip_line_comments(&read_src(CANVAS));
-    let helper = slice_between(&src, "function embedConnectPath(embed)", "function createEdgeWithPaths(");
+fn controller_embed_connect_path_routes_legacy_portal() {
+    let src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
+    let helper = slice_between(&src, "function embedConnectPath(instanceId)", "function embedDrillSegment(");
     assert!(
         helper.contains("legacyPortalNodeId"),
         "embedConnectPath 必须按 legacyPortalNodeId 分流，实际窗口:\n{helper}"
     );
     assert!(
-        helper.contains("portalPath(embed.legacyPortalNodeId)"),
-        "embedConnectPath 必须对 legacy portal 用 portalPath，实际窗口:\n{helper}"
+        helper.contains("\"enterPortal\""),
+        "embedConnectPath 必须对 legacy portal 构造 enterPortal 段，实际窗口:\n{helper}"
     );
     assert!(
-        helper.contains("embedPath(embed.instanceId)"),
-        "embedConnectPath 必须对正式 Embed 用 embedPath，实际窗口:\n{helper}"
+        helper.contains("\"enterEmbed\""),
+        "embedConnectPath 必须对正式 Embed 构造 enterEmbed 段，实际窗口:\n{helper}"
     );
 }
 
@@ -88,27 +93,31 @@ fn canvas_drill_down_signal_carries_segment() {
     );
 }
 
-/// 4. 双击 Embed 按 legacyPortalNodeId 分流构造 segment。
+/// 4. Canvas 双击 Embed 调用 graphController.embedDrillSegment，Controller 按 legacyPortalNodeId 分流。
 #[test]
-fn canvas_embed_double_click_builds_segment() {
-    let src = strip_line_comments(&read_src(CANVAS));
+fn canvas_embed_double_click_calls_controller_drill_segment() {
+    let canvas_src = strip_line_comments(&read_src(CANVAS));
     let embed_double_click =
-        function_window(&src, "onDoubleClicked: function(tgtStarmapId) {", 900);
+        function_window(&canvas_src, "onDoubleClicked: function(tgtStarmapId) {", 600);
     assert!(
-        embed_double_click.contains("ed.legacyPortalNodeId"),
-        "双击 Embed 必须按 legacyPortalNodeId 分流 segment，实际窗口:\n{embed_double_click}"
+        embed_double_click.contains("graphController.embedDrillSegment(ed.instanceId)"),
+        "双击 Embed 必须调用 graphController.embedDrillSegment，实际窗口:\n{embed_double_click}"
     );
     assert!(
-        embed_double_click.contains("\"enterPortal\"") && embed_double_click.contains("ed.legacyPortalNodeId"),
-        "legacy portal 双击必须构造 enterPortal 段携带 nodeId，实际窗口:\n{embed_double_click}"
-    );
-    assert!(
-        embed_double_click.contains("\"enterEmbed\"") && embed_double_click.contains("ed.instanceId"),
-        "正式 Embed 双击必须构造 enterEmbed 段携带 instanceId，实际窗口:\n{embed_double_click}"
+        !embed_double_click.contains("legacyPortalNodeId"),
+        "Canvas 双击不得再直接访问 legacyPortalNodeId，实际窗口:\n{embed_double_click}"
     );
     assert!(
         embed_double_click.contains("drillDownRequested(tgtStarmapId, ed.label || qsTr(\"未命名\"), segment)"),
         "双击必须把 segment 传给 drillDownRequested 第三参数，实际窗口:\n{embed_double_click}"
+    );
+
+    // Controller embedDrillSegment 按 legacyPortalNodeId 分流
+    let ctrl_src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
+    let drill_helper = slice_between(&ctrl_src, "function embedDrillSegment(instanceId)", "function findEmbedAt(");
+    assert!(
+        drill_helper.contains("\"enterPortal\"") && drill_helper.contains("\"enterEmbed\""),
+        "Controller embedDrillSegment 必须包含 enterPortal/enterEmbed 分流，实际窗口:\n{drill_helper}"
     );
 }
 
