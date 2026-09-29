@@ -17,6 +17,7 @@ import { PlatformLayoutNode, PlatformPoint, buildFreeformLayout, buildEmbedLayou
 import { PlatformMotionConfig, defaultMotionConfig, wobbleXFromProgress, wobbleYFromProgress, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { StarMapLayerFrame, pushLayer, popLayer, createLayerFrame } from '../platform/StarMapLayerNavigation'
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
 interface WobbleOffset {
@@ -36,6 +37,7 @@ export struct StarMapScreen {
   @State starmapTitle: string = ''
   @State parentStarmapId: string = ''
   @State parentStarmapTitle: string = ''
+  @State layerStack: StarMapLayerFrame[] = []
   @State graph: StarMapGraph | null = null
   @State isLoading: boolean = true
   @State errorMessage: string = ''
@@ -74,7 +76,6 @@ export struct StarMapScreen {
   @State showCreateNodeDialog: boolean = false
   @State showCreateEmbedDialog: boolean = false
   @State newNodeTitle: string = ''
-  @State newNodeKind: string = 'Character'
   @State newEmbedTitle: string = ''
 
   // 动画驱动：用 Animator onFrame 逐帧回调驱动 motionProgress ∈ [0, 1]
@@ -137,6 +138,7 @@ export struct StarMapScreen {
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
+      self.drawEdges()
     })
     this.themeAdapter.addObserver(this.themeObserver!)
 
@@ -156,7 +158,6 @@ export struct StarMapScreen {
   aboutToDisappear() {
     // 先置 inactive，再 cancel animator、reset gesture/menu
     this.canvasActive = false
-    this.canvasReady = false
     this.deactivatePreviewCanvas()
     this.stopWobbleAnimation()
     this.gestureTracker.reset()
@@ -212,8 +213,6 @@ export struct StarMapScreen {
   async loadStarMap() {
     this.canvasReady = false
     this.previewCanvasReady = false
-    this.canvasCtx = null
-    this.previewCanvasCtx = null
     this.isLoading = true
     this.errorMessage = ''
 
@@ -275,20 +274,6 @@ export struct StarMapScreen {
       'Custom': '#95A5A6'
     }
     return kindColors[node.kind] || '#4A90D9'
-  }
-
-  getNodeTypeName(kind: string): string {
-    const kindNames: Record<string, string> = {
-      'Character': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_character').id),
-      'Location': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_location').id),
-      'Event': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_event').id),
-      'Theme': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_theme').id),
-      'Plot': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_plot').id),
-      'Item': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_item').id),
-      'Organization': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_organization').id),
-      'Custom': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_custom').id)
-    }
-    return kindNames[kind] || getContext(this).resourceManager.getStringSync($r('app.string.node_kind_unknown').id)
   }
 
   getEdgeTypeName(kind: string): string {
@@ -425,10 +410,20 @@ export struct StarMapScreen {
    * 导航到父星图（"返回父星图"入口与"缩放返回父层"共用同一条路径）。
    */
   returnToParent() {
-    if (this.parentStarmapId.length === 0) {
-      return
+    if (this.layerStack.length > 0) {
+      const result = popLayer(this.layerStack)
+      this.layerStack = result.stack
+      if (result.frame) {
+        this.starmapId = result.frame.starmapId
+        this.starmapTitle = result.frame.title
+        this.zoomScale = result.frame.zoomScale
+        this.offsetX = result.frame.offsetX
+        this.offsetY = result.frame.offsetY
+        this.loadStarMap()
+      }
+    } else {
+      this.navPathStack.pop()
     }
-    this.navPathStack.pop()
   }
 
   /** 放大一级（工具栏 +） */
@@ -438,7 +433,7 @@ export struct StarMapScreen {
 
   /** 缩小一级（工具栏 −）；已经缩到最小时缩出当前层，回到父星图 */
   zoomOut() {
-    if (this.zoomScale - ZOOM_STEP < MIN_ZOOM && this.parentStarmapId.length > 0) {
+    if (this.zoomScale - ZOOM_STEP < MIN_ZOOM && this.layerStack.length > 0) {
       this.returnToParent()
       return
     }
@@ -447,7 +442,7 @@ export struct StarMapScreen {
 
   /** 双指缩放：比例低于 MIN_ZOOM 时同样退出当前层回到父星图 */
   private applyPinchScale(scale: number) {
-    if (scale < MIN_ZOOM && this.parentStarmapId.length > 0) {
+    if (scale < MIN_ZOOM && this.layerStack.length > 0) {
       this.returnToParent()
       return
     }
@@ -458,15 +453,19 @@ export struct StarMapScreen {
    * 导航到子星图（Embed 的目标星图）
    */
   navigateToEmbed(embed: StarMapEmbed) {
-    this.navPathStack.pushPath({
-      name: Routes.StarMap,
-      param: {
-        starmapId: embed.targetStarmapId,
-        starmapTitle: embed.label ?? embed.targetStarmapId,
-        parentStarmapId: this.starmapId,
-        parentStarmapTitle: this.starmapTitle
-      } as StarMapRouteParams
-    })
+    // 压入当前层 frame
+    this.layerStack = pushLayer(
+      this.layerStack,
+      createLayerFrame(this.starmapId, this.starmapTitle, this.zoomScale, this.offsetX, this.offsetY),
+      createLayerFrame(embed.targetStarmapId, embed.label ?? embed.targetStarmapId, 1, 0, 0)
+    )
+    // 切换到子层
+    this.starmapId = embed.targetStarmapId
+    this.starmapTitle = embed.label ?? embed.targetStarmapId
+    this.zoomScale = 1
+    this.offsetX = 0
+    this.offsetY = 0
+    this.loadStarMap()
   }
 
   onTransformChange() {
@@ -486,7 +485,63 @@ export struct StarMapScreen {
 
   @Builder
   StarMapContent() {
-    Column() {
+    Stack() {
+      // Canvas 常驻：只跟 StarMapScreen 生命周期走
+      Canvas(this.canvasCtx)
+        .width('100%')
+        .height('100%')
+        .onReady(() => {
+          this.canvasReady = true
+          this.drawEdges()
+        })
+
+      // 节点层
+      if (this.graph) {
+        ForEach(this.graph.nodes, (node: StarMapNode) => {
+          this.StarMapNodeItem(node)
+        }, (node: StarMapNode) => node.id)
+
+        // Embed 层
+        ForEach(this.graph.embeds, (embed: StarMapEmbed) => {
+          this.StarMapEmbedItem(embed)
+        }, (embed: StarMapEmbed) => embed.instanceId)
+      }
+
+      // 预览连线
+      if (this.gestureMode === 'connect') {
+        Canvas(this.previewCanvasCtx)
+          .width('100%')
+          .height('100%')
+          .onReady(() => {
+            this.previewCanvasReady = true
+            this.drawPreviewLine()
+          })
+      }
+
+      // 节点菜单
+      if (this.showNodeMenu) {
+        this.NodeMenu()
+      }
+
+      // 新建菜单
+      if (this.showCreateMenu) {
+        this.CreateMenu()
+      }
+
+      // 缩放控件
+      this.ZoomControls()
+
+      // 新建节点对话框
+      if (this.showCreateNodeDialog) {
+        this.CreateNodeDialog()
+      }
+
+      // 新建子星图对话框
+      if (this.showCreateEmbedDialog) {
+        this.CreateEmbedDialog()
+      }
+
+      // Loading 盖层
       if (this.isLoading) {
         Column() {
           LoadingProgress()
@@ -497,128 +552,71 @@ export struct StarMapScreen {
             .margin({ top: 12 })
         }
         .width('100%')
-        .layoutWeight(1)
+        .height('100%')
         .justifyContent(FlexAlign.Center)
-      } else if (this.errorMessage) {
+        .backgroundColor($r('sys.color.background_secondary'))
+      }
+
+      // Error 盖层
+      if (this.errorMessage) {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
             .margin({ bottom: 16 })
-
           Button($r('app.string.retry'))
             .onClick(() => this.loadStarMap())
         }
         .width('100%')
-        .layoutWeight(1)
+        .height('100%')
         .justifyContent(FlexAlign.Center)
-      } else if (this.graph) {
-        Stack() {
-          // Canvas for edges（本地几何计算）
-          Canvas(this.buildCanvasContext())
-            .width('100%')
-            .height('100%')
-            .onReady(() => {
-              this.canvasReady = true
-              this.drawEdges()
-            })
-
-          // 节点层：每个节点用 GestureGroup(LongPress + Pan) 绑定触屏交互
-          ForEach(this.graph.nodes, (node: StarMapNode) => {
-            this.StarMapNodeItem(node)
-          }, (node: StarMapNode) => node.id)
-
-          // Embed 层：渲染子星图嵌入
-          ForEach(this.graph.embeds, (embed: StarMapEmbed) => {
-            this.StarMapEmbedItem(embed)
-          }, (embed: StarMapEmbed) => embed.instanceId)
-
-          // 预览连线（connect 模式下显示）
-          if (this.gestureMode === 'connect') {
-            Canvas(this.buildPreviewCanvasContext())
-              .width('100%')
-              .height('100%')
-              .onReady(() => {
-                this.previewCanvasReady = true
-                this.drawPreviewLine()
-              })
-          }
-
-          // 节点菜单（nodeMenu 模式下显示）
-          if (this.showNodeMenu) {
-            this.NodeMenu()
-          }
-
-          // 新建菜单（空白区域长按后显示）
-          if (this.showCreateMenu) {
-            this.CreateMenu()
-          }
-
-          // 触屏缩放控件（#373：画布右下角 +/−）
-          this.ZoomControls()
-
-          // 新建节点对话框
-          if (this.showCreateNodeDialog) {
-            this.CreateNodeDialog()
-          }
-
-          // 新建子星图对话框
-          if (this.showCreateEmbedDialog) {
-            this.CreateEmbedDialog()
-          }
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .onAreaChange((_oldArea: Area, newArea: Area) => {
-          this.stackWidth = Number(newArea.width)
-          this.stackHeight = Number(newArea.height)
-        })
-        // 空白区域：PanGesture → 拖动画布（panCanvas 模式）；PinchGesture → 双指缩放
-        .gesture(
-          GestureGroup(GestureMode.Parallel,
-            PinchGesture({ fingers: 2 })
-              .onActionStart(() => {
-                this.pinchBaseScale = this.zoomScale
-              })
-              .onActionUpdate((event: GestureEvent) => {
-                this.applyPinchScale(this.pinchBaseScale * event.scale)
-              }),
-            PanGesture()
-              .onActionStart((event: GestureEvent) => {
-                // 空白区域手势挂在 Stack 上：组件左上角即 Stack 原点
-                const point = this.gestureScreenPoint(event, 0, 0)
-                this.gestureTracker.beginPanCanvas(point.x, point.y)
-                this.gestureMode = 'panCanvas'
-                this.panBaseX = this.offsetX
-                this.panBaseY = this.offsetY
-              })
-              .onActionUpdate((event: GestureEvent) => {
-                if (this.gestureMode === 'panCanvas') {
-                  this.offsetX = this.panBaseX + event.offsetX
-                  this.offsetY = this.panBaseY + event.offsetY
-                }
-              })
-              .onActionEnd(() => {
-                this.gestureTracker.reset()
-                this.gestureMode = 'idle'
-              }),
-            LongPressGesture({ repeat: false, duration: 500 })
-              .onAction((event: GestureEvent) => {
-                const point = this.gestureScreenPoint(event, 0, 0)
-                const canvasPoint = screenToCanvas(point.x, point.y, this.zoomScale, this.offsetX, this.offsetY)
-                const hitItemId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
-                if (hitItemId === null) {
-                  this.showCreateMenu = true
-                  this.createMenuPosition = { x: point.x, y: point.y }
-                  this.createMenuCanvasPosition = { x: canvasPoint.x, y: canvasPoint.y }
-                }
-              })
-          )
-        )
+        .backgroundColor($r('sys.color.background_secondary'))
       }
     }
+    .layoutWeight(1)
     .width('100%')
-    .height('100%')
     .backgroundColor($r('sys.color.background_secondary'))
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      this.stackWidth = Number(newArea.width)
+      this.stackHeight = Number(newArea.height)
+    })
+    .gesture(
+      GestureGroup(GestureMode.Parallel,
+        PinchGesture({ fingers: 2 })
+          .onActionStart(() => { this.pinchBaseScale = this.zoomScale })
+          .onActionUpdate((event: GestureEvent) => {
+            this.applyPinchScale(this.pinchBaseScale * event.scale)
+          }),
+        PanGesture()
+          .onActionStart((event: GestureEvent) => {
+            const point = this.gestureScreenPoint(event, 0, 0)
+            this.gestureTracker.beginPanCanvas(point.x, point.y)
+            this.gestureMode = 'panCanvas'
+            this.panBaseX = this.offsetX
+            this.panBaseY = this.offsetY
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            if (this.gestureMode === 'panCanvas') {
+              this.offsetX = this.panBaseX + event.offsetX
+              this.offsetY = this.panBaseY + event.offsetY
+            }
+          })
+          .onActionEnd(() => {
+            this.gestureTracker.reset()
+            this.gestureMode = 'idle'
+          }),
+        LongPressGesture({ repeat: false, duration: 500 })
+          .onAction((event: GestureEvent) => {
+            const point = this.gestureScreenPoint(event, 0, 0)
+            const canvasPoint = screenToCanvas(point.x, point.y, this.zoomScale, this.offsetX, this.offsetY)
+            const hitItemId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
+            if (hitItemId === null) {
+              this.showCreateMenu = true
+              this.createMenuPosition = { x: point.x, y: point.y }
+              this.createMenuCanvasPosition = { x: canvasPoint.x, y: canvasPoint.y }
+            }
+          })
+      )
+    )
   }
 
   build() {
@@ -629,6 +627,10 @@ export struct StarMapScreen {
         screenTabIndex: 1,
         isRoot: false,
         onBack: () => {
+          if (this.layerStack.length > 0) {
+            this.returnToParent()
+            return true
+          }
           this.navPathStack.pop()
           return true
         }
@@ -642,6 +644,10 @@ export struct StarMapScreen {
       .hideTitleBar(false)
       .hideBackButton(false)
       .onBackPressed(() => {
+        if (this.layerStack.length > 0) {
+          this.returnToParent()
+          return true
+        }
         this.navPathStack.pop()
         return true
       })
@@ -1010,9 +1016,15 @@ export struct StarMapScreen {
     const from = this.buildItemTargetPath(fromItemId)
     const to = this.buildItemTargetPath(toItemId)
     const result = await this.bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null)
-    if (result.success) {
-      // 重新加载星图以获取新边
-      this.loadStarMap()
+    if (result.success && result.data) {
+      // 直接 append 到当前 graph，不再 loadStarMap
+      if (this.graph) {
+        this.graph = {
+          ...this.graph,
+          edges: [...this.graph.edges, result.data]
+        }
+        this.recomputeGeometry()
+      }
     } else {
       hilog.error(0x0000, 'StarMapScreen', `createEdge failed: ${result.errorCode}, ${result.userMessage}`)
     }
@@ -1038,9 +1050,17 @@ export struct StarMapScreen {
       x: this.createMenuCanvasPosition.x,
       y: this.createMenuCanvasPosition.y
     }
-    const result = await this.bridge.addStarMapNode(this.starmapId, this.newNodeTitle.trim(), this.newNodeKind, position)
+    const result = await this.bridge.addStarMapNode(this.starmapId, this.newNodeTitle.trim(), 'Custom', position)
     if (result.success && result.data) {
-      await this.loadStarMap()
+      // 直接 append 到当前 graph，不再 loadStarMap
+      if (this.graph) {
+        this.graph = {
+          ...this.graph,
+          nodes: [...this.graph.nodes, result.data]
+        }
+        this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
+        this.recomputeGeometry()
+      }
       this.selectItem(result.data.id)
     } else {
       hilog.error(0x0000, 'StarMapScreen', `addStarMapNode failed: ${result.errorCode}, ${result.userMessage}`)
@@ -1062,8 +1082,16 @@ export struct StarMapScreen {
       y: this.createMenuCanvasPosition.y
     }
     const embedResult = await this.bridge.addStarMapEmbed(this.starmapId, targetStarmapId, this.newEmbedTitle.trim(), position)
-    if (embedResult.success) {
-      this.loadStarMap()
+    if (embedResult.success && embedResult.data) {
+      // 直接 append 到当前 graph，不再 loadStarMap
+      if (this.graph) {
+        this.graph = {
+          ...this.graph,
+          embeds: [...this.graph.embeds, embedResult.data]
+        }
+        this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
+        this.recomputeGeometry()
+      }
     } else {
       hilog.error(0x0000, 'StarMapScreen', `addStarMapEmbed failed, cleaning up orphan starmap: ${embedResult.errorCode}`)
       const deleteResult = await this.bridge.deleteStarMap(targetStarmapId)
@@ -1171,7 +1199,6 @@ export struct StarMapScreen {
           this.showCreateMenu = false
           this.showCreateNodeDialog = true
           this.newNodeTitle = ''
-          this.newNodeKind = 'Character'
         })
 
       Button('新建子星图')
@@ -1221,25 +1248,6 @@ export struct StarMapScreen {
           .onChange((value: string) => {
             this.newNodeTitle = value
           })
-
-        // 节点类型选择
-        Flex({
-          direction: FlexDirection.Row,
-          wrap: FlexWrap.Wrap
-        }) {
-          ForEach(['Character', 'Location', 'Event', 'Theme', 'Plot', 'Item', 'Organization', 'Custom'], (kind: string) => {
-            Button(this.getNodeTypeName(kind))
-              .fontSize(12)
-              .height(32)
-              .margin({ right: 4, bottom: 4 })
-              .backgroundColor(this.newNodeKind === kind ? $r('sys.color.ohos_id_color_activated') : $r('sys.color.ohos_id_color_button_normal'))
-              .onClick(() => {
-                this.newNodeKind = kind
-              })
-          }, (kind: string) => kind)
-        }
-        .width('100%')
-        .margin({ top: 12 })
 
         Row() {
           Button($r('app.string.cancel'))
@@ -1326,22 +1334,14 @@ export struct StarMapScreen {
 
   // —— Canvas 绘制 ——
 
-  private canvasCtx: CanvasRenderingContext2D | null = null
-  private previewCanvasCtx: CanvasRenderingContext2D | null = null
+  private canvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
+  private canvasCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.canvasSettings)
 
-  buildCanvasContext(): CanvasRenderingContext2D {
-    this.canvasCtx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
-    return this.canvasCtx
-  }
-
-  buildPreviewCanvasContext(): CanvasRenderingContext2D {
-    this.previewCanvasCtx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
-    return this.previewCanvasCtx
-  }
+  private previewCanvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
+  private previewCanvasCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.previewCanvasSettings)
 
   private deactivatePreviewCanvas(): void {
     this.previewCanvasReady = false
-    this.previewCanvasCtx = null
   }
 
   /**
@@ -1349,7 +1349,7 @@ export struct StarMapScreen {
    * wobble 偏移在节点位置计算中已包含，此处只需应用 zoom/offset 变换。
    */
   drawEdges() {
-    if (!this.canvasActive || !this.canvasReady || !this.canvasCtx || !this.graph) return
+    if (!this.canvasActive || !this.canvasReady || !this.graph) return
     const ctx = this.canvasCtx
 
     ctx.clearRect(0, 0, ctx.width, ctx.height)
@@ -1383,7 +1383,7 @@ export struct StarMapScreen {
       ctx.beginPath()
       ctx.moveTo(sx, sy)
       ctx.lineTo(ex, ey)
-      ctx.strokeStyle = isSelected ? "#007DFF" : "#33000000"
+      ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.outline
       ctx.lineWidth = isSelected ? 2.5 : 1.5
 
       if (graphEdge.kind === 'DependsOn' || graphEdge.kind === 'ConflictsWith') {
@@ -1407,7 +1407,7 @@ export struct StarMapScreen {
       ctx.lineTo(alx, aly)
       ctx.moveTo(atx, aty)
       ctx.lineTo(arx, ary)
-      ctx.strokeStyle = isSelected ? "#007DFF" : "#33000000"
+      ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.outline
       ctx.lineWidth = isSelected ? 2.5 : 1.5
       ctx.stroke()
 
@@ -1416,7 +1416,7 @@ export struct StarMapScreen {
         const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * this.zoomScale + this.offsetX
         const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * this.zoomScale + this.offsetY
         ctx.font = '11px HarmonyOS Sans'
-        ctx.fillStyle = isSelected ? "#000000" : "#99000000"
+        ctx.fillStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.onSurfaceVariant
         ctx.textAlign = 'center'
         ctx.textBaseline = 'bottom'
         ctx.fillText(graphEdge.label, lx, ly - 6)
@@ -1428,7 +1428,7 @@ export struct StarMapScreen {
    * 绘制预览连线：connect 模式下从源节点到当前手指位置。
    */
   drawPreviewLine() {
-    if (!this.canvasActive || !this.previewCanvasReady || !this.previewCanvasCtx) return
+    if (!this.canvasActive || !this.previewCanvasReady) return
     const ctx = this.previewCanvasCtx
 
     ctx.clearRect(0, 0, ctx.width, ctx.height)
@@ -1436,7 +1436,7 @@ export struct StarMapScreen {
     ctx.beginPath()
     ctx.moveTo(this.previewLineFrom.x, this.previewLineFrom.y)
     ctx.lineTo(this.previewLineTo.x, this.previewLineTo.y)
-    ctx.strokeStyle = "#007DFF"
+    ctx.strokeStyle = this.themeConfig.colors.primary
     ctx.lineWidth = 2
     ctx.setLineDash([8, 4])
     ctx.stroke()

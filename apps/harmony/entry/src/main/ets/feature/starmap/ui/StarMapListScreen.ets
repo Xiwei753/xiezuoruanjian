@@ -224,41 +224,62 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListContent() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Column() {
-        if (this.isLoading) {
-          this.LoadingView()
-        } else if (this.errorMessage) {
-          this.ErrorView()
-        } else {
-          this.StarMapListPane()
+    Stack() {
+      RelativeContainer() {
+        // 列表内容：锚定四边
+        Column() {
+          if (this.isLoading) {
+            this.LoadingView()
+          } else if (this.errorMessage) {
+            this.ErrorView()
+          } else {
+            this.StarMapListPane()
+          }
+        }
+        .width('100%')
+        .height('100%')
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          left: { anchor: '__container__', align: HorizontalAlign.Start },
+          right: { anchor: '__container__', align: HorizontalAlign.End },
+          bottom: { anchor: '__container__', align: VerticalAlign.Bottom }
+        })
+
+        // ── FAB 层：新建星图浮动按钮 ──
+        if (!this.isLoading && !this.errorMessage) {
+          Stack() {
+            Button({ type: ButtonType.Circle, stateEffect: true }) {}
+              .width(PRIMARY_FAB_SIZE_VP)
+              .height(PRIMARY_FAB_SIZE_VP)
+              .backgroundColor(this.themeConfig.colors.primary)
+
+            SymbolGlyph($r('sys.symbol.plus'))
+              .fontSize(28)
+              .fontColor(this.themeConfig.colors.onPrimary)
+              .hitTestBehavior(HitTestMode.None)
+          }
+          .width(PRIMARY_FAB_SIZE_VP)
+          .height(PRIMARY_FAB_SIZE_VP)
+          .alignRules({
+            right: { anchor: '__container__', align: HorizontalAlign.End },
+            bottom: { anchor: '__container__', align: VerticalAlign.Bottom }
+          })
+          .margin({
+            right: this.adaptiveState.pagePadding,
+            bottom: PRIMARY_FAB_BOTTOM_INSET_VP
+          })
+          .onClick(() => {
+            this.showCreateDialog = true
+            this.newStarMapName = ''
+            this.newStarMapDescription = ''
+          })
         }
       }
       .width('100%')
       .height('100%')
-      .align(Alignment.TopStart)
+      .backgroundColor($r('sys.color.background_secondary'))
 
-      // ── FAB 层：新建星图浮动按钮 ──
-      if (!this.isLoading && !this.errorMessage) {
-        Button({ type: ButtonType.Circle, stateEffect: true }) {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(28)
-        }
-        .width(PRIMARY_FAB_SIZE_VP)
-        .height(PRIMARY_FAB_SIZE_VP)
-        .align(Alignment.BottomEnd)
-        .margin({
-          right: this.adaptiveState.pagePadding,
-          bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-        })
-        .onClick(() => {
-          this.showCreateDialog = true
-          this.newStarMapName = ''
-          this.newStarMapDescription = ''
-        })
-      }
-
-      // ── 对话框层 ──
+      // ── 对话框层：全屏覆盖 ──
       if (this.showCreateDialog) {
         this.CreateDialog()
       }
@@ -271,7 +292,6 @@ export struct StarMapListScreen {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('sys.color.background_secondary'))
   }
 
   build() {
