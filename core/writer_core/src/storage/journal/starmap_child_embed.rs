@@ -1346,7 +1346,7 @@ mod tests {
         let other_embed_id = format!("em_other_{}", uuid::Uuid::new_v4());
         let now = crate::starmap::now_epoch();
         let embed = crate::starmap::types::StarMapEmbed {
-            instance_id: other_embed_id,
+            instance_id: other_embed_id.clone(),
             target_starmap_id: child_meta.starmap_id.clone(),
             label: Some("Child".to_string()),
             position: crate::starmap::types::StarMapPoint::default(),
@@ -1382,11 +1382,10 @@ mod tests {
         let exists = check_embed_exists(
             app_data_root,
             &host_meta.starmap_id,
-            &format!("em_other_{}", ""),
+            &other_embed_id,
             &child_meta.starmap_id,
         )
         .unwrap();
-        // em_other_{} 不等于实际的 em_other_{uuid}，所以应该是 false
-        assert!(!exists, "instance_id 不匹配时应返回 false");
+        assert!(exists, "instance_id + target 都匹配时应返回 true");
     }
 }
