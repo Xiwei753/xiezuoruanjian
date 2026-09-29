@@ -132,12 +132,15 @@ pub fn get_starmap_graph_and_layout(api: &WriterCoreApi, starmap_id: &str) -> St
     match api.get_starmap_graph(starmap_id) {
         Ok(g) => {
             // 真正有用的图快照日志：记录各类图元数量，便于排查"图空了""embed 丢失"等问题。
+            // StarMapGraphDto 同时持有 `links`（普通连线）和 `hyperlinks`（超链接）两个字段，
+            // 分别记录两者，避免把 hyperlinks 误当成 links 输出到日志。
             log::debug!(
-                "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={}",
+                "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={} hyperlinks={}",
                 starmap_id,
                 g.nodes.len(),
                 g.edges.len(),
                 g.embeds.len(),
+                g.links.len(),
                 g.hyperlinks.len()
             );
             let layout = layout_from_graph(&g);
@@ -224,6 +227,47 @@ pub fn create_starmap_edge(
             ..Default::default()
         },
     };
+    let edge = StarMapEdgeDto {
+        id: format!("e_{}", uuid::Uuid::new_v4()),
+        from,
+        to,
+        kind: parse_edge_kind(kind),
+        label: if label.is_empty() {
+            None
+        } else {
+            Some(label.to_string())
+        },
+        payload: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    envelope(api.add_starmap_edge(starmap_id, edge))
+}
+
+/// 用 fromPath/toPath 建边（path 版，支持 Node 和 Embed 作为端点）。
+///
+/// `from_path_json` / `to_path_json` 是 StarMapTargetPathDto 的 JSON，
+/// 反序列化后直接作为 edge 的 from/to，调用 Core 的 add_starmap_edge。
+/// 与 `create_starmap_edge`（仅支持 Node 端点）互补，供 QML 在 connect 模式下
+/// 把 Node 或 Embed 作为连线端点使用。
+pub fn create_starmap_edge_with_paths(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    from_path_json: &str,
+    to_path_json: &str,
+    kind: &str,
+    label: &str,
+) -> String {
+    let from: StarMapTargetPathDto = match serde_json::from_str(from_path_json) {
+        Ok(p) => p,
+        Err(e) => return envelope_err_str(&format!("Invalid fromPath JSON: {}", e)),
+    };
+    let to: StarMapTargetPathDto = match serde_json::from_str(to_path_json) {
+        Ok(p) => p,
+        Err(e) => return envelope_err_str(&format!("Invalid toPath JSON: {}", e)),
+    };
+    let now = now_ms();
     let edge = StarMapEdgeDto {
         id: format!("e_{}", uuid::Uuid::new_v4()),
         from,
@@ -543,8 +587,9 @@ pub fn list_starmap_hyperlinks(api: &WriterCoreApi, starmap_id: &str) -> String 
 // 一级星图列表只展示"没有被任何星图嵌入的根星图"。判断依据：
 // 1. 扫描所有星图的 graph.embeds[].targetStarmapId，这些目标不进入一级列表。
 // 2. 兼容旧版"伪子星图"：旧实现用 Note 节点 + portal（destinationTarget=null）
-//    + 节点标题等于目标星图标题 来模拟子星图嵌入。只把明确符合该旧生成签名的
-//    节点对应的星图隐藏，不要把所有普通 Portal 目标一刀切隐藏。
+//    来模拟子星图嵌入。旧生成签名里 portal.destinationStarmapId 直接指向被嵌入
+//    的子星图 id，因此按 portal.destination_starmap_id 判断该子星图应被排除，
+//    不再按节点标题匹配（标题同名星图可能不止一个，按标题匹配会误伤）。
 
 /// 列出根星图（未被嵌入且非 legacy child 的星图），envelope 格式。
 pub fn list_root_starmaps_json(api: &WriterCoreApi) -> String {
@@ -553,38 +598,40 @@ pub fn list_root_starmaps_json(api: &WriterCoreApi) -> String {
         Err(e) => return envelope_err_str(&e.to_string()),
     };
 
-    // title → starmap_id 列表：用于 legacy child 按 title 匹配。
-    // 多个星图可能同名，全部收集。
-    let mut title_to_ids: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    for sm in &all_starmaps {
-        title_to_ids
-            .entry(sm.title.clone())
-            .or_default()
-            .push(sm.starmap_id.clone());
-    }
+    // starmap_id → title：用于 legacy child 判断时校验 portal 目标确实是
+    // 旧实现的子星图（destination_target 为 null 且目标 id 在已知星图集合中）。
+    let titles_by_id: std::collections::HashMap<String, String> = all_starmaps
+        .iter()
+        .map(|sm| (sm.starmap_id.clone(), sm.title.clone()))
+        .collect();
 
     // 收集所有应从一级列表排除的 starmap_id（embed 目标 + legacy child）。
     let mut excluded: std::collections::HashSet<String> = std::collections::HashSet::new();
     for sm in &all_starmaps {
-        // 某个图读取失败时跳过它——不影响其他图的扫描，该图本身仍参与根列表过滤。
-        if let Ok(g) = api.get_starmap_graph(&sm.starmap_id) {
-            // 正式 Embed：target_starmap_id 是子星图，排除。
-            for embed in &g.embeds {
-                excluded.insert(embed.target_starmap_id.clone());
-            }
-            // Legacy child：Note + portal 非空 + destination_target 为 null
-            // + 节点标题匹配某星图标题 → 被匹配的星图是旧实现的伪子星图，排除。
-            for node in &g.nodes {
-                if node.kind == StarMapNodeKindDto::Note {
-                    if let Some(portal) = &node.portal {
-                        if portal.destination_target.is_none() {
-                            if let Some(target_ids) = title_to_ids.get(&node.title) {
-                                for tid in target_ids {
-                                    excluded.insert(tid.clone());
-                                }
-                            }
-                        }
+        // get_starmap_graph 失败时直接返回错误 envelope，不静默跳过：
+        // 漏扫某个父图可能把它的子星图错误暴露到一级列表。
+        let g = match api.get_starmap_graph(&sm.starmap_id) {
+            Ok(g) => g,
+            Err(e) => return envelope_err_str(&e.to_string()),
+        };
+        // 正式 Embed：target_starmap_id 是子星图，排除。
+        for embed in &g.embeds {
+            excluded.insert(embed.target_starmap_id.clone());
+        }
+        // Legacy child：Note + portal 非空 + destination_target 为 null
+        // + portal.destination_starmap_id 指向已知星图且其标题与节点标题一致
+        // → 该目标星图是旧实现的伪子星图，排除。
+        for node in &g.nodes {
+            if node.kind == StarMapNodeKindDto::Note {
+                if let Some(portal) = &node.portal {
+                    let target_id = &portal.destination_starmap_id;
+                    let is_legacy_child = portal.destination_target.is_none()
+                        && titles_by_id
+                            .get(target_id)
+                            .map(|title| title == &node.title)
+                            .unwrap_or(false);
+                    if is_legacy_child {
+                        excluded.insert(target_id.clone());
                     }
                 }
             }

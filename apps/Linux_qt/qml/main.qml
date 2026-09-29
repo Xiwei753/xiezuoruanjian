@@ -554,12 +554,14 @@ ApplicationWindow {
                 starmapTitle: appController.starmapTitle
                 appState: window.appState
                 onBackClicked: {
-                    // Issue #796 评论 5886483653: 从 StarMapWorkspace 左上角返回时
-                    // 调 openHub(1)，回"星图列表"，不是回作品页。
-                    appController.openHub(1);
+                    // Issue #796 评论 5887280405: 从 StarMapWorkspace 左上角返回时
+                    // 调 backFromStarmap()：栈非空回父星图，栈空回"星图列表"。
+                    appController.backFromStarmap();
                 }
                 onEnterStarmapRequested: function(smId, smTitle) {
-                    appController.openStarmap(smId, smTitle);
+                    // Issue #796 评论 5887280405: 从当前星图进入子星图
+                    // （Node portal 双击或 Embed 双击），push 父级到栈。
+                    appController.enterChildStarmap(smId, smTitle);
                 }
                 // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索/设置入口
                 onRequestSync: {
@@ -597,7 +599,8 @@ ApplicationWindow {
                 layoutPlan: window.layoutPlan
 
                 onOpenStarmapWorkspace: function(smId, smTitle) {
-                    appController.openStarmap(smId, smTitle);
+                    // Issue #796 评论 5887280405: 从 Hub 星图列表点卡片进入根星图，清空栈。
+                    appController.openRootStarmap(smId, smTitle);
                 }
 
                 onOpenProject: function(projectId, projectTitle) {

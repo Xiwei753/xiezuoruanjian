@@ -91,6 +91,30 @@ impl AppBackend {
         }
     }
 
+    // AppBackend::create_starmap_edge_with_paths_json
+    pub(crate) fn create_starmap_edge_with_paths_json(
+        &mut self,
+        starmap_id: QString,
+        from_path_json: QString,
+        to_path_json: QString,
+        kind: QString,
+        label: QString,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let fp = from_path_json.to_string();
+        let tp = to_path_json.to_string();
+        let k = kind.to_string();
+        let l = label.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::create_starmap_edge_with_paths(&core, &sid, &fp, &tp, &k, &l).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
     // AppBackend::update_starmap_edge_json
     pub(crate) fn update_starmap_edge_json(
         &mut self,

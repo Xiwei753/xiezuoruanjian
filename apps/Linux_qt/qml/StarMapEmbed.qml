@@ -46,6 +46,10 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
+    // Issue #796 评论 5887280405: connect 模式标志，由 Canvas 设置。
+    // connect 模式下 DragHandler 不改 x/y，只上抛 dragged 信号刷新预览线。
+    property bool isConnectMode: false
+
     // wobble 改纯视觉偏移，不影响命中框（和 StarMapNode.qml 一致）
     property int wobbleIndex: 0
     property real _wobbleAnimX: 0
@@ -198,9 +202,12 @@ Item {
             var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
             var wdx = dx / zoom
             var wdy = dy / zoom
-            // 直接改根 Item 的 x/y，并上拖 dragged 信号
-            root.x += wdx
-            root.y += wdy
+            // Issue #796 评论 5887280405: connect 模式下不改 x/y，
+            // 只上抛 dragged 信号让 Canvas 刷新预览线。
+            if (!root.isConnectMode) {
+                root.x += wdx
+                root.y += wdy
+            }
             root.dragged(root.instanceId, root.x, root.y)
         }
     }

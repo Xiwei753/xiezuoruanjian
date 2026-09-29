@@ -314,6 +314,29 @@ QtObject {
         }
     }
 
+    // Issue #796 评论 5887280405: 用 fromPath/toPath 建边（path 版），
+    // 支持 Node 和 Embed 作为端点。fromPath/toPath 是 StarMapTargetPathDto 的 JS 对象，
+    // 由 StarMapCanvas.nodePath()/embedPath() 构造，这里 JSON.stringify 后传给后端。
+    function createEdgeWithPaths(fromPath, toPath) {
+        if (!ensureBackend()) return;
+        var res = normalizeBackendResult(
+            starmapBackendRef.create_starmap_edge_with_paths(
+                starmapId,
+                JSON.stringify(fromPath),
+                JSON.stringify(toPath),
+                "RelatedTo",
+                ""
+            ),
+            qsTr("创建连线失败")
+        );
+        if (res.success) {
+            clearError();
+            loadGraph();
+        } else {
+            setError(backendErrorText(res, qsTr("创建连线失败")));
+        }
+    }
+
     function saveLayout() {
         if (!ensureBackend()) return;
         var layoutNodes = [];

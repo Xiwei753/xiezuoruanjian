@@ -97,6 +97,26 @@ pub struct StarMapBackend {
             label: QString,
         ) -> QJsonObject
     ),
+    create_starmap_edge_with_paths_json: qt_method!(
+        fn(
+            &mut self,
+            starmap_id: QString,
+            from_path_json: QString,
+            to_path_json: QString,
+            kind: QString,
+            label: QString,
+        ) -> QString
+    ),
+    create_starmap_edge_with_paths: qt_method!(
+        fn(
+            &mut self,
+            starmap_id: QString,
+            from_path_json: QString,
+            to_path_json: QString,
+            kind: QString,
+            label: QString,
+        ) -> QJsonObject
+    ),
     update_starmap_edge_json: qt_method!(
         fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString
     ),
@@ -490,6 +510,46 @@ impl StarMapBackend {
             .create_starmap_edge_json(starmap_id, from_node_id, to_node_id, kind, label)
             .to_string();
         Self::log_starmap_envelope("create_starmap_edge", &sid, "", &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn create_starmap_edge_with_paths_json(
+        &mut self,
+        starmap_id: QString,
+        from_path_json: QString,
+        to_path_json: QString,
+        kind: QString,
+        label: QString,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.create_starmap_edge_with_paths_json(
+                starmap_id,
+                from_path_json,
+                to_path_json,
+                kind,
+                label,
+            )
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn create_starmap_edge_with_paths(
+        &mut self,
+        starmap_id: QString,
+        from_path_json: QString,
+        to_path_json: QString,
+        kind: QString,
+        label: QString,
+    ) -> QJsonObject {
+        let sid = starmap_id.to_string();
+        let raw = self
+            .create_starmap_edge_with_paths_json(
+                starmap_id,
+                from_path_json,
+                to_path_json,
+                kind,
+                label,
+            )
+            .to_string();
+        Self::log_starmap_envelope("create_starmap_edge_with_paths", &sid, "", &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn update_starmap_edge_json(

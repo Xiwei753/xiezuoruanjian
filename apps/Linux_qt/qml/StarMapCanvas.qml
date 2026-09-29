@@ -62,6 +62,15 @@ Item {
     property string connectFromNodeId: ""
     property real connectMouseX: 0
     property real connectMouseY: 0
+    // Issue #796 评论 5887280405: connect 模式扩展，支持 Node 和 Embed 作为连线端点。
+    // connectFromKind: "node" 或 "embed"；connectFromId: nodeId 或 instanceId；
+    // connectFromPath: 源端 StarMapTargetPathDto JS 对象，由 nodePath()/embedPath() 构造。
+    // connectFromNodeId 保留给预览线绘制兼容路径，新代码逐步用 connectFromKind/Id 替代。
+    property string connectFromKind: ""
+    property string connectFromId: ""
+    property var connectFromPath: null
+    // Embed 移动模式用：右键菜单"移动"后左键拖动指定 Embed。
+    property string pressedEmbedId: ""
 
     // 上下文菜单辅助状态
     property var selectedNodeForMenu: null
@@ -326,8 +335,23 @@ Item {
             }
 
             // Draw connecting preview line while in connect mode
-            if (pointerMode === "connect" && connectFromNodeId !== "") {
-                var startNode = getNode(connectFromNodeId)
+            // Issue #796 评论 5887280405: 起点根据 connectFromKind 查 Node 或 Embed；
+            // 兼容旧 connectFromNodeId 路径（旧代码未设 connectFromKind 时回退）。
+            if (pointerMode === "connect" && (connectFromId !== "" || connectFromNodeId !== "")) {
+                var startNode = null
+                var startKind = connectFromKind
+                var startId = connectFromId
+                if (startId === "" && connectFromNodeId !== "") {
+                    // 兼容旧路径：仅 connectFromNodeId 被设
+                    startKind = "node"
+                    startId = connectFromNodeId
+                }
+                if (startKind === "node") {
+                    startNode = getNode(startId)
+                } else if (startKind === "embed") {
+                    // Embed 起点用 graphController.getEmbed 拿坐标
+                    startNode = graphController.getEmbed(startId)
+                }
                 if (startNode) {
                     ctx.beginPath()
                     ctx.moveTo(startNode.x + startNode.width/2, startNode.y + startNode.height/2)
@@ -413,7 +437,11 @@ Item {
                         return
                     }
                     pointerMode = "connect"
-                    connectFromNodeId = nd.id
+                    // Issue #796 评论 5887280405: 记录源端类型+id+path，松手时按类型建边。
+                    connectFromKind = "node"
+                    connectFromId = nd.id
+                    connectFromPath = nodePath(nd.id)
+                    connectFromNodeId = nd.id  // 保留给预览线绘制兼容路径
                     // 预览线起点：节点中心（世界坐标）
                     connectMouseX = nd.x + nd.width / 2
                     connectMouseY = nd.y + nd.height / 2
@@ -430,7 +458,7 @@ Item {
                 }
 
                 onMoveDelta: function(dx, dy) {
-                    if (pointerMode === "connect" && connectFromNodeId === nodeData.id) {
+                    if (pointerMode === "connect" && connectFromId === nodeData.id) {
                         connectMouseX += dx
                         connectMouseY += dy
                         edgeCanvas.requestPaint()
@@ -454,12 +482,22 @@ Item {
                     // 统一结束当前节点交互：无论长按后拖动还是直接松手，
                     // 都由此出口闭环 connect/move 状态（Issue #788 评论 5868205321）。
                     isBeingDragged = false
-                    if (pointerMode === "connect" && connectFromNodeId === nodeData.id) {
-                        var target = findNodeAt(connectMouseX, connectMouseY)
-                        if (target && target.id !== connectFromNodeId) {
-                            createEdge(connectFromNodeId, target.id)
+                    if (pointerMode === "connect" && connectFromId === nodeData.id) {
+                        // Issue #796 评论 5887280405: 松手时 Node 和 Embed 都参与命中，
+                        // 用 path 版建边支持 Embed 端点。
+                        var targetNode = findNodeAt(connectMouseX, connectMouseY)
+                        if (targetNode && targetNode.id !== connectFromId) {
+                            createEdgeWithPaths(connectFromPath, nodePath(targetNode.id))
+                        } else {
+                            var targetEmbed = findEmbedAt(connectMouseX, connectMouseY)
+                            if (targetEmbed && targetEmbed.instanceId !== connectFromId) {
+                                createEdgeWithPaths(connectFromPath, embedPath(targetEmbed.instanceId))
+                            }
                         }
                         pointerMode = "idle"
+                        connectFromKind = ""
+                        connectFromId = ""
+                        connectFromPath = null
                         connectFromNodeId = ""
                         edgeCanvas.requestPaint()
                     } else if (pointerMode === "move" && pressedNodeId === nodeData.id) {
@@ -488,6 +526,8 @@ Item {
                 label: embedData.label
                 isSelected: embedData.isSelected
                 wobbleIndex: index
+                // Issue #796 评论 5887280405: connect 模式下阻止 DragHandler 移动 Embed。
+                isConnectMode: pointerMode === "connect" && connectFromId === embedData.instanceId
 
                 onXChanged: {
                     if (embedData) {
@@ -516,6 +556,24 @@ Item {
                     }
                 }
 
+                // Issue #796 评论 5887280405: Embed 长按进入 connect 模式，
+                // 与 Node 长按对称。源端类型记为 "embed"，path 用 embedPath()。
+                onLongPressed: function(instId) {
+                    if (pointerMode !== "idle") {
+                        return
+                    }
+                    var ed = embedsModel[index]
+                    pointerMode = "connect"
+                    connectFromKind = "embed"
+                    connectFromId = instId
+                    connectFromPath = embedPath(instId)
+                    connectFromNodeId = ""  // Embed 没有 nodeId
+                    connectMouseX = ed.x + ed.width / 2
+                    connectMouseY = ed.y + ed.height / 2
+                    isBeingDragged = true
+                    edgeCanvas.requestPaint()
+                }
+
                 // 右键上抛菜单
                 onContextMenuRequested: function(instId, sceneX, sceneY) {
                     graphController.selectEmbed(instId)
@@ -525,16 +583,42 @@ Item {
 
                 // 拖动只改 Embed 的 position
                 onDragged: function(instId, newX, newY) {
+                    // Issue #796 评论 5887280405: connect 模式下不移动 Embed，
+                    // 仅刷新预览线（起点固定，终点跟 connectMouseX/Y）。
+                    if (pointerMode === "connect" && connectFromId === instId) {
+                        edgeCanvas.requestPaint()
+                        return
+                    }
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
 
                 onLeftReleased: {
                     isBeingDragged = false
-                    // 拖动结束后保存 Embed 新位置到后端
-                    var ed = embedsModel[index]
-                    if (ed) {
-                        graphController.updateEmbed(ed.instanceId, { position: { x: ed.x, y: ed.y } })
+                    // Issue #796 评论 5887280405: connect 模式下松手，Node 和 Embed 都参与命中，
+                    // 用 path 版建边；否则走原拖动结束保存位置逻辑。
+                    if (pointerMode === "connect" && connectFromId === embedData.instanceId) {
+                        var targetNode = findNodeAt(connectMouseX, connectMouseY)
+                        if (targetNode && targetNode.id !== connectFromId) {
+                            createEdgeWithPaths(connectFromPath, nodePath(targetNode.id))
+                        } else {
+                            var targetEmbed = findEmbedAt(connectMouseX, connectMouseY)
+                            if (targetEmbed && targetEmbed.instanceId !== connectFromId) {
+                                createEdgeWithPaths(connectFromPath, embedPath(targetEmbed.instanceId))
+                            }
+                        }
+                        pointerMode = "idle"
+                        connectFromKind = ""
+                        connectFromId = ""
+                        connectFromPath = null
+                        connectFromNodeId = ""
+                        edgeCanvas.requestPaint()
+                    } else {
+                        // 拖动结束后保存 Embed 新位置到后端
+                        var ed = embedsModel[index]
+                        if (ed) {
+                            graphController.updateEmbed(ed.instanceId, { position: { x: ed.x, y: ed.y } })
+                        }
                     }
                 }
             }
@@ -661,6 +745,33 @@ Item {
 
     function createEdge(fromId, toId) {
         graphController.createEdge(fromId, toId)
+    }
+
+    // Issue #796 评论 5887280405: Node 端点的 StarMapTargetPathDto JS 对象。
+    // JSON 字段名遵循 DTO serde rename：starmapId（camelCase）、segments、target.type/nodeId。
+    function nodePath(nodeId) {
+        return {
+            starmapId: starmapId,
+            segments: [],
+            target: { type: "node", nodeId: nodeId }
+        }
+    }
+
+    // Issue #796 评论 5887280405: Embed 端点的 StarMapTargetPathDto JS 对象。
+    // segments 用 enterEmbed 段指向 instanceId，target.type 为 "starmap"。
+    function embedPath(instanceId) {
+        return {
+            starmapId: starmapId,
+            segments: [
+                { type: "enterEmbed", instanceId: instanceId, nodeId: null }
+            ],
+            target: { type: "starmap" }
+        }
+    }
+
+    // Issue #796 评论 5887280405: 用 fromPath/toPath 建边，支持 Node 和 Embed 端点。
+    function createEdgeWithPaths(fromPath, toPath) {
+        graphController.createEdgeWithPaths(fromPath, toPath)
     }
 
     function saveLayout() {
@@ -981,6 +1092,31 @@ Item {
             onTriggered: {
                 if (selectedEmbedForMenu) {
                     renameDialog.open("embed", selectedEmbedForMenu.instanceId, selectedEmbedForMenu.label || "")
+                }
+            }
+        }
+
+        // Issue #796 评论 5887280405: Embed 移动菜单项，与 Node 移动对称。
+        // 触发后进入 move 模式，pressedEmbedId 记录待移动 Embed。
+        MenuItem {
+            id: embedMenuItemMove
+            text: qsTr("移动")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: embedMenuItemMove.text
+                color: embedMenuItemMove.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: embedMenuItemMove.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                if (selectedEmbedForMenu) {
+                    pointerMode = "move"
+                    pressedEmbedId = selectedEmbedForMenu.instanceId
                 }
             }
         }

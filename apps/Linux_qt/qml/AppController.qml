@@ -34,6 +34,10 @@ QtObject {
     property string writingProjectTitle: ""
     property string starmapId: ""
     property string starmapTitle: ""
+    // Issue #796 评论 5887280405: 星图导航栈，记录从根星图进入子星图的路径，
+    // 供 backFromStarmap() 逐层返回父星图。栈元素形如 { id, title }。
+    // openRootStarmap 清空栈；enterChildStarmap push 当前；backFromStarmap pop 父级。
+    property var starmapBackStack: []
     property string errorMessage: ""
     // Issue #796 评论 5886483653: 持久的 hubTab 属性，记录 Hub 一级页要回到哪个 tab。
     // 0=作品, 1=星图, 2=统计。Loader 重建后不会丢，避免永远回默认 0。
@@ -163,6 +167,8 @@ QtObject {
                     starmapTitle = "";
                     writingProjectId = "";
                     writingProjectTitle = "";
+                    // 恢复的是上次根星图，导航栈从空开始。
+                    starmapBackStack = [];
                     controller.route = "starmap";
                 } else {
                     controller.route = "hub";
@@ -196,13 +202,49 @@ QtObject {
         saveNavigationState()
     }
 
+    // Issue #796 评论 5887280405: 保留 openStarmap 兼容旧调用点，
+    // 内部委托 openRootStarmap 统一行为（清空栈、进入根星图）。
     function openStarmap(id, title) {
-        starmapId = id || "";
-        starmapTitle = title || qsTr("星图编辑器");
-        writingProjectId = "";
-        writingProjectTitle = "";
-        route = "starmap";
-        saveNavigationState();
+        openRootStarmap(id, title)
+    }
+
+    // Issue #796 评论 5887280405: 从 Hub 星图列表点卡片进入根星图，清空导航栈。
+    function openRootStarmap(id, title) {
+        starmapBackStack = []
+        starmapId = id || ""
+        starmapTitle = title || qsTr("星图编辑器")
+        writingProjectId = ""
+        writingProjectTitle = ""
+        route = "starmap"
+        saveNavigationState()
+    }
+
+    // Issue #796 评论 5887280405: 从当前星图进入子星图（Node portal 双击或 Embed 双击），
+    // 把当前星图 push 到导航栈，再切换到子星图。
+    function enterChildStarmap(id, title) {
+        var next = starmapBackStack.slice()
+        next.push({ id: starmapId, title: starmapTitle })
+        starmapBackStack = next
+
+        starmapId = id || ""
+        starmapTitle = title || qsTr("子星图")
+        route = "starmap"
+        saveNavigationState()
+    }
+
+    // Issue #796 评论 5887280405: 星图左上角返回。栈非空 pop 父星图；
+    // 栈空退到 Hub 星图一级页。
+    function backFromStarmap() {
+        if (starmapBackStack.length > 0) {
+            var next = starmapBackStack.slice()
+            var parent = next.pop()
+            starmapBackStack = next
+            starmapId = parent.id
+            starmapTitle = parent.title
+            saveNavigationState()
+            return
+        }
+        openHub(1)
     }
 
     // Issue #796 评论 5886483653: openHub(tabIndex) 可指定要回到作品/星图/统计哪个一级页。
@@ -216,6 +258,8 @@ QtObject {
         writingProjectTitle = "";
         starmapId = "";
         starmapTitle = "";
+        // 退出星图时清空导航栈，下次进入根星图从空栈开始。
+        starmapBackStack = [];
         saveNavigationState();
         refreshStateImmediate(qsTr("返回工作台失败"));
     }
