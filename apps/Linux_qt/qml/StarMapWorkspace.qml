@@ -84,7 +84,7 @@ Item {
                 }
             }
 
-            // 主体：左侧画布 + 右侧检查器
+            // 主体：画布占满（Inspector 改为按需编辑浮层，Issue #791 评论 5883783849）
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -98,43 +98,45 @@ Item {
                     starmapId: root.starmapId
                     starmapBackendRef: root.starmapBackendRef
 
-                    onNodeSelected: function(node) {
-                        inspector.selectedNode = node
-                        inspector.selectedEdge = null
-                    }
-                    onEdgeSelected: function(edge) {
-                        inspector.selectedEdge = edge
-                        inspector.selectedNode = null
-                    }
-                    onSelectionCleared: {
-                        inspector.selectedNode = null
-                        inspector.selectedEdge = null
-                    }
                     onEnterStarmapRequested: function(smId, smTitle) {
                         root.enterStarmapRequested(smId, smTitle)
                     }
-                }
-
-                StarMapInspector {
-                    id: inspector
-                    Layout.preferredWidth: 300
-                    Layout.fillHeight: true
-                    dt: root.dt
-                    starmapId: root.starmapId
-
-                    onNodeUpdated: function(nodeId, patch) {
-                        canvas.updateNodeFromInspector(nodeId, patch)
-                    }
-                    onNodeDeleted: function(nodeId) {
-                        canvas.deleteNodeFromInspector(nodeId)
-                    }
-                    onEdgeUpdated: function(edgeId, patch) {
-                        canvas.updateEdgeFromInspector(edgeId, patch)
-                    }
-                    onEdgeDeleted: function(edgeId) {
-                        canvas.deleteEdgeFromInspector(edgeId)
+                    onEditNodeRequested: function(node) {
+                        inspectorPopup.selectedNode = node
+                        inspectorPopup.open()
                     }
                 }
+            }
+        }
+
+        // Issue #791 评论 5883783849: 按需编辑浮层，不常驻不挤画布
+        Popup {
+            id: inspectorPopup
+            modal: true
+            focus: true
+            width: 360
+            height: 360
+            anchors.centerIn: parent
+
+            property var selectedNode: null
+
+            contentItem: StarMapInspector {
+                dt: root.dt
+                starmapId: root.starmapId
+                selectedNode: inspectorPopup.selectedNode
+                selectedEdge: null
+
+                onNodeUpdated: function(nodeId, patch) {
+                    canvas.updateNodeFromInspector(nodeId, patch)
+                }
+                onNodeDeleted: function(nodeId) {
+                    canvas.deleteNodeFromInspector(nodeId)
+                    inspectorPopup.close()
+                }
+            }
+
+            onClosed: {
+                selectedNode = null
             }
         }
     }

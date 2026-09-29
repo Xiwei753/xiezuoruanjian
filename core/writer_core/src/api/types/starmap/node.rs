@@ -76,7 +76,7 @@ impl TryFrom<StarMapNodeDto> for crate::starmap::types::StarMapNode {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNodeContentDto {
     #[serde(rename = "type")]
@@ -92,6 +92,27 @@ pub struct StarMapNodeContentDto {
     pub entity_id: Option<String>,
     pub uri: Option<String>,
     pub label: Option<String>,
+}
+
+// Issue #791 评论 5883783849: 手写 Default 返回合法的 kind:"empty"，
+// 避免派生 Default 产生 kind:"" 导致 TryFrom 报 "unknown node content kind:"。
+impl Default for StarMapNodeContentDto {
+    fn default() -> Self {
+        Self {
+            kind: "empty".to_string(),
+            summary: None,
+            body: None,
+            project_id: None,
+            volume_id: None,
+            chapter_id: None,
+            range_start: None,
+            range_end: None,
+            entity_type: None,
+            entity_id: None,
+            uri: None,
+            label: None,
+        }
+    }
 }
 
 impl From<crate::starmap::semantic::StarMapNodeContent> for StarMapNodeContentDto {

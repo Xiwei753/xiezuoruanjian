@@ -74,6 +74,7 @@ Item {
     signal edgeSelected(var edge)
     signal selectionCleared()
     signal enterStarmapRequested(string starmapId, string title)
+    signal editNodeRequested(var node)
 
     // Model data
     property var nodesModel: []
@@ -397,6 +398,7 @@ Item {
                         )
                     } else {
                         graphController.selectNode(nd.id)
+                        editNodeRequested(nd)
                     }
                 }
 
@@ -708,10 +710,10 @@ Item {
                 radius: _radiusXs
             }
             onTriggered: {
-                // Issue #790 评论 5875963057: 选中节点并打开/聚焦 Inspector
-                // （Inspector 已在 StarMapWorkspace 中，选中节点后自动显示）
+                // Issue #791: 右键"编辑"走 editNodeRequested 打开按需浮层
                 if (selectedNodeForMenu) {
                     graphController.selectNode(selectedNodeForMenu.id)
+                    editNodeRequested(selectedNodeForMenu)
                 }
             }
         }
