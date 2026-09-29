@@ -552,30 +552,5 @@ QtObject {
         return path.target.nodeId || null;
     }
 
-    // Issue #790 评论 5875963057: 添加超链接（Core 正式 hyperlink API）
-    function addHyperlink(nodeId, url, label) {
-        if (!ensureBackend()) return;
-        var source = {
-            starmapId: starmapId,
-            segments: [],
-            target: { type: "node", nodeId: nodeId }
-        };
-        var hl = {
-            // hyperlinkId 由 Core 生成
-            hyperlinkId: "",
-            source: source,
-            targetUri: url,
-            label: label || null,
-            createdAt: 0,
-            updatedAt: 0
-        };
-        var res = normalizeBackendResult(starmapBackendRef.add_starmap_hyperlink(starmapId, JSON.stringify(hl)), qsTr("添加超链接失败"));
-        if (res.success) {
-            clearError();
-        } else {
-            setError(backendErrorText(res, qsTr("添加超链接失败")));
-        }
-    }
-
     function invalidateEdgeRenders() { edgeRenders = []; }
 }

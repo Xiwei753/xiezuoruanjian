@@ -6,7 +6,8 @@
 // 职责：单个子星图 Embed 的可视化渲染、选中态展示、上抛点击类交互信号
 // 约束：
 //   - 纯 UI 组件，数据通过 property 传入
-//   - 不伪装成普通 Node：视觉参考 StarMapNode 但顶部标签明确写"子星图"
+//   - Issue #801: 不再用文字标签标注"子星图"，改用 accentSoft 背景色调 +
+//     右下角 ▸ 符号暗示可进入的嵌套空间；label 成为卡片主体视觉信息
 //   - 单击只选中；双击进入 targetStarmapId；右键上抛菜单；拖动只改 Embed position
 //   - 根对象是稳定 Item：x/y/width/height 与命中框恒定，对应 Canvas 的 embedData 坐标；
 //     wobble 只偏移内部视觉 Rectangle（visualEmbed），不影响命中测试。
@@ -75,7 +76,8 @@ Item {
         anchors.fill: parent
 
         radius: root._radiusSm
-        color: root._surfaceContainer
+        // Issue #801: 用 accentSoft 背景色调暗示可进入的嵌套空间（非文字方式）
+        color: root.isSelected ? root._surfaceContainer : root._accentSoft
         // 选中态和 StarMapNode.qml 一样有明确边框
         border.color: root.isSelected ? root._accent : root._border
         border.width: root.isSelected ? 2 : 1
@@ -97,27 +99,11 @@ Item {
             visible: !root.isSelected
         }
 
+        // Issue #801: 删除顶部"子星图"类型标签条，label 成为主体视觉信息
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
-            spacing: 4
-
-            // 顶部标签：明确写"子星图"，不伪装成普通 Node
-            Rectangle {
-                Layout.fillWidth: true
-                height: 16
-                color: root._accent
-                radius: root._radiusXs
-
-                AppText {
-                    dt: root.dt
-                    anchors.centerIn: parent
-                    text: qsTr("子星图")
-                    color: root._onPrimary
-                    font.pointSize: root.dt.fontXsPt
-                    font.bold: true
-                }
-            }
+            spacing: 0
 
             AppText {
                 dt: root.dt
@@ -131,6 +117,19 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
+        }
+
+        // Issue #801: 右下角 ▸ 符号暗示可进入的嵌套空间（非文字标签方式）
+        AppText {
+            dt: root.dt
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 4
+            anchors.bottomMargin: 2
+            text: "▸"
+            color: root._accent
+            font.pointSize: root.dt.fontSmPt
+            font.bold: true
         }
     }
 

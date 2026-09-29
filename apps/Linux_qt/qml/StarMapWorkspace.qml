@@ -58,7 +58,15 @@ Item {
                         dt: root.dt
                         variant: "text"
                         text: qsTr("← 返回")
-                        onClicked: root.backClicked()
+                        onClicked: {
+                            // Issue #801: 优先返回父星图，根星图时才退出工作区
+                            if (!canvas.isAtRootStarmap()) {
+                                canvas.drillUp()
+                                root.starmapTitle = canvas.starmapTitle()
+                            } else {
+                                root.backClicked()
+                            }
+                        }
                     }
 
                     AppText {
@@ -99,7 +107,8 @@ Item {
                     starmapBackendRef: root.starmapBackendRef
 
                     onEnterStarmapRequested: function(smId, smTitle) {
-                        root.enterStarmapRequested(smId, smTitle)
+                        // Issue #801: Canvas 自己已处理下钻，这里只更新标题
+                        root.starmapTitle = smTitle
                     }
                     onEditNodeRequested: function(node) {
                         inspectorPopup.selectedNode = node

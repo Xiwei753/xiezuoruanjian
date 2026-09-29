@@ -104,28 +104,11 @@ Item {
             visible: !root.isSelected
         }
 
+        // Issue #801: 删除顶部类型标签条，标题成为卡片主体视觉信息
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
-            spacing: 4
-
-            Rectangle {
-                Layout.fillWidth: true
-                height: 16
-                color: getKindColor(root.kind)
-                radius: root._radiusXs
-
-                AppText {
-                    dt: root.dt
-                    anchors.centerIn: parent
-                    // Issue #793 评论 5884923277: portal 节点顶部标签显示"子星图"，
-                    // 普通节点仍显示自己的 kind
-                    text: root.isPortal ? qsTr("子星图") : root.kind
-                    color: root._onPrimary
-                    font.pointSize: root.dt.fontXsPt
-                    font.bold: true
-                }
-            }
+            spacing: 0
 
             AppText {
                 dt: root.dt

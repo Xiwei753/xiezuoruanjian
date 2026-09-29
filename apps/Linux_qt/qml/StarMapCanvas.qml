@@ -22,6 +22,10 @@ Item {
     property string starmapId: ""
     required property var dt
 
+    // Issue #801: 层级路径栈，记录从根星图到当前层的路径
+    // 每项格式：{ starmapId, title }
+    property var starmapPathStack: []
+
     readonly property color _primary: dt.primary
     readonly property color _onPrimary: dt.onPrimary
     readonly property color _accent: dt.accent
@@ -111,6 +115,35 @@ Item {
             graphController.computeEdgeRenders(null)
             edgeCanvas.requestPaint()
         }
+    }
+
+    // Issue #801: 下钻到子星图——把当前 starmapId push 到栈，再加载子星图
+    function drillDown(targetStarmapId, title) {
+        starmapPathStack.push({ starmapId: starmapId, title: starmapTitle() })
+        starmapId = targetStarmapId
+        // starmapId 改变后 onStarmapIdChanged 会触发 resetInteraction 和 loadGraph
+    }
+
+    // Issue #801: 返回父星图——pop 栈并加载父星图数据
+    function drillUp() {
+        if (starmapPathStack.length > 0) {
+            var parent = starmapPathStack.pop()
+            starmapId = parent.starmapId
+            return true
+        }
+        return false
+    }
+
+    // Issue #801: 是否在根星图（没有父级）
+    function isAtRootStarmap() {
+        return starmapPathStack.length === 0
+    }
+
+    // Issue #801: 获取当前星图标题（用于 drillDown 时记录父级标题）
+    function starmapTitle() {
+        // 从 graphController 获取当前星图标题，若无则返回默认值
+        var title = graphController.starmapTitle
+        return title || qsTr("星图")
     }
 
     // Background Grid
@@ -255,8 +288,13 @@ Item {
             onWheel: function(wheel) {
                 var oldZoom = zoomLevel
                 var delta = wheel.angleDelta.y / 120
-                zoomLevel += delta * 0.1
-                zoomLevel = Math.max(0.35, Math.min(2.5, zoomLevel))
+                var newZoom = zoomLevel + delta * 0.1
+                // Issue #801: 缩到最小以下且有父级，返回父星图
+                if (newZoom < 0.35 && starmapPathStack.length > 0) {
+                    drillUp()
+                    return
+                }
+                zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
 
                 var mx = wheel.x
                 var my = wheel.y
@@ -411,10 +449,10 @@ Item {
                 onDoubleClicked: {
                     var nd = nodeData
                     if (nd.portal && nd.portal.destinationStarmapId) {
-                        enterStarmapRequested(
-                            nd.portal.destinationStarmapId,
-                            nd.title || qsTr("子星图")
-                        )
+                        // Issue #801: Canvas 内下钻，不再通过信号做页面导航
+                        drillDown(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
+                        // 保留信号通知 Workspace 更新标题
+                        enterStarmapRequested(nd.portal.destinationStarmapId, nd.title || qsTr("子星图"))
                     } else {
                         graphController.selectNode(nd.id)
                         editNodeRequested(nd)
@@ -423,11 +461,9 @@ Item {
 
                 onLongPressed: {
                     var nd = nodeData
-                    // 只允许 idle 时长按进入 connect；避免右键菜单"移动节点"
-                    // 已选 move 后，左键按住稍久被 long press 覆盖成 connect
-                    // （Issue #788 评论 5868205321）。
-                    // Issue #798: 手势状态交给 interaction，Canvas 只驱动状态切换。
-                    if (!interaction.beginConnect("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
+                    // Issue #801: 长按先进入 contextPending（菜单/连线预备态），
+                    // 不移动则松手弹菜单，移动超过阈值才转 connect
+                    if (!interaction.beginContextPending("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -443,6 +479,19 @@ Item {
                 }
 
                 onMoveDelta: function(dx, dy) {
+                    // Issue #801: contextPending 状态下移动超过阈值则转 connect
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
+                        interaction.connectMouseX += dx
+                        interaction.connectMouseY += dy
+                        var totalDx = interaction.connectMouseX - (nodeData.x + nodeData.width / 2)
+                        var totalDy = interaction.connectMouseY - (nodeData.y + nodeData.height / 2)
+                        if (Math.sqrt(totalDx * totalDx + totalDy * totalDy) > interaction._moveThreshold) {
+                            interaction.contextPendingToConnect()
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
+
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === nodeData.id) {
                         interaction.updateConnect(interaction.connectMouseX + dx, interaction.connectMouseY + dy)
                         edgeCanvas.requestPaint()
@@ -465,8 +514,25 @@ Item {
 
                 onLeftReleased: {
                     // 统一结束当前节点交互：无论长按后拖动还是直接松手，
-                    // 都由此出口闭环 connect/move 状态（Issue #788 评论 5868205321）。
+                    // 都由此出口闭环 connect/move/contextPending 状态（Issue #788 评论 5868205321）。
                     isBeingDragged = false
+                    // Issue #801: contextPending 松手不移动，弹出对象菜单
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
+                        var pendingResult = interaction.endContextPending()
+                        if (pendingResult && pendingResult.kind === "node") {
+                            var nd = graphController.getNode(pendingResult.id)
+                            if (nd) {
+                                graphController.selectNode(nd.id)
+                                selectedNodeForMenu = nd
+                                // 用节点中心位置弹出菜单
+                                var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
+                                var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                                nodeContextMenu.popup(sceneX, sceneY)
+                            }
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === nodeData.id) {
                         // Issue #796 评论 5887280405: 松手时 Node 和 Embed 都参与命中，
                         // 用 path 版建边支持 Embed 端点。
@@ -527,16 +593,18 @@ Item {
                 onDoubleClicked: function(tgtStarmapId) {
                     if (tgtStarmapId) {
                         var ed = embedData
+                        // Issue #801: Canvas 内下钻，不再通过信号做页面导航
+                        drillDown(tgtStarmapId, ed.label || qsTr("子星图"))
+                        // 保留信号通知 Workspace 更新标题
                         enterStarmapRequested(tgtStarmapId, ed.label || qsTr("子星图"))
                     }
                 }
 
-                // Issue #796 评论 5887280405: Embed 长按进入 connect 模式，
+                // Issue #801: Embed 长按进入 contextPending（菜单/连线预备态），
                 // 与 Node 长按对称。源端类型记为 "embed"，path 用 embedPath()。
                 onLongPressed: function(instId) {
                     var ed = embedData
-                    // Issue #798: 手势状态交给 interaction，Canvas 只驱动状态切换。
-                    if (!interaction.beginConnect("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginContextPending("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -554,6 +622,19 @@ Item {
                 // 和 Node 的 onMoveDelta 对称。connect 模式更新预览线终点；
                 // idle 转 move 移动 Embed position。
                 onMoveDelta: function(dx, dy) {
+                    // Issue #801: contextPending 状态下移动超过阈值则转 connect
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
+                        interaction.connectMouseX += dx
+                        interaction.connectMouseY += dy
+                        var totalDx = interaction.connectMouseX - (embedData.x + embedData.width / 2)
+                        var totalDy = interaction.connectMouseY - (embedData.y + embedData.height / 2)
+                        if (Math.sqrt(totalDx * totalDx + totalDy * totalDy) > interaction._moveThreshold) {
+                            interaction.contextPendingToConnect()
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
+
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
                         interaction.updateConnect(interaction.connectMouseX + dx, interaction.connectMouseY + dy)
                         edgeCanvas.requestPaint()
@@ -576,6 +657,23 @@ Item {
 
                 onLeftReleased: {
                     isBeingDragged = false
+                    // Issue #801: contextPending 松手不移动，弹出对象菜单
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
+                        var pendingResult = interaction.endContextPending()
+                        if (pendingResult && pendingResult.kind === "embed") {
+                            var ed = graphController.getEmbed(pendingResult.id)
+                            if (ed) {
+                                graphController.selectEmbed(ed.instanceId)
+                                selectedEmbedForMenu = ed
+                                // 用 Embed 中心位置弹出菜单
+                                var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
+                                var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                                embedContextMenu.popup(sceneX, sceneY)
+                            }
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
                     // Issue #796 评论 5887280405: connect 模式下松手，Node 和 Embed 都参与命中，
                     // 用 path 版建边；否则走原拖动结束保存位置逻辑。
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
@@ -679,11 +777,6 @@ Item {
     // Issue #798: 图操作移进 GraphController，Canvas 只转发。
     function createSubStarmapAt(title, wx, wy) {
         graphController.createSubStarmapAt(title, wx, wy)
-    }
-
-    // Issue #790 评论 5875963057: 超链接转发给 graphController
-    function addHyperlink(nodeId, url, label) {
-        graphController.addHyperlink(nodeId, url, label)
     }
 
     function createEdge(fromId, toId) {
@@ -896,28 +989,6 @@ Item {
             onTriggered: {
                 if (selectedNodeForMenu) {
                     interaction.beginMove(selectedNodeForMenu.id, selectedNodeForMenu.x, selectedNodeForMenu.y)
-                }
-            }
-        }
-
-        MenuItem {
-            id: nodeMenuItemHyperlink
-            text: qsTr("超链接")
-            contentItem: AppText {
-                dt: canvasArea.dt
-                text: nodeMenuItemHyperlink.text
-                color: nodeMenuItemHyperlink.hovered ? _accent : _textPrimary
-                font.pointSize: dt.labelPt
-                verticalAlignment: Text.AlignVCenter
-                leftPadding: 12
-            }
-            background: Rectangle {
-                color: nodeMenuItemHyperlink.hovered ? _accentSoft : "transparent"
-                radius: _radiusXs
-            }
-            onTriggered: {
-                if (selectedNodeForMenu) {
-                    hyperlinkDialog.open(selectedNodeForMenu.id)
                 }
             }
         }
@@ -1327,136 +1398,4 @@ Item {
         }
     }
 
-    // Issue #790 评论 5875963057: 超链接编辑 Dialog
-    // Issue #796 评论 5886483653: 改用 Qt Quick Controls Popup，不再手搓整屏 Rectangle。
-    Popup {
-        id: hyperlinkDialog
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        width: 340
-        height: 200
-        anchors.centerIn: Overlay.overlay
-        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
-        background: Rectangle {
-            color: _card
-            border.color: _border
-            border.width: 1.5
-            radius: _dialogRadius
-        }
-
-        property string targetNodeId: ""
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 12
-
-            AppText {
-                dt: canvasArea.dt
-                text: qsTr("添加超链接")
-                font.pointSize: dt.fontLgPt
-                font.bold: true
-                color: _textPrimary
-            }
-
-            TextField {
-                id: hyperlinkUrlInput
-                Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
-                font.pointSize: dt.bodyPt
-                placeholderText: qsTr("URL")
-                text: ""
-
-                background: Rectangle {
-                    color: _surfaceContainer
-                    border.color: hyperlinkUrlInput.activeFocus ? _accent : _border
-                    border.width: 1.5
-                    radius: _radiusXs
-                }
-
-                Keys.onReturnPressed: hyperlinkDialog.confirm()
-                Keys.onEscapePressed: hyperlinkDialog.close()
-            }
-
-            TextField {
-                id: hyperlinkLabelInput
-                Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
-                font.pointSize: dt.bodyPt
-                placeholderText: qsTr("标签（可选）")
-                text: ""
-
-                background: Rectangle {
-                    color: _surfaceContainer
-                    border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
-                    border.width: 1.5
-                    radius: _radiusXs
-                }
-
-                Keys.onReturnPressed: hyperlinkDialog.confirm()
-                Keys.onEscapePressed: hyperlinkDialog.close()
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                spacing: 12
-
-                Button {
-                    id: hyperlinkCancelBtn
-                    text: qsTr("取消")
-                    onClicked: hyperlinkDialog.close()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
-                        text: hyperlinkCancelBtn.text
-                        color: _textSecondary
-                        font.pointSize: dt.labelPt
-                    }
-                    background: Rectangle {
-                        color: hyperlinkCancelBtn.hovered ? _surfaceContainer : "transparent"
-                        border.color: _border
-                        radius: _radiusXs
-                    }
-                }
-
-                Button {
-                    id: hyperlinkConfirmBtn
-                    text: qsTr("确定")
-                    onClicked: hyperlinkDialog.confirm()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
-                        text: hyperlinkConfirmBtn.text
-                        color: _onPrimary
-                        font.bold: true
-                        font.pointSize: dt.labelPt
-                    }
-                    background: Rectangle {
-                        color: hyperlinkConfirmBtn.hovered ? _accentHover : _accent
-                        radius: _radiusXs
-                    }
-                }
-            }
-        }
-
-        function open(nodeId) {
-            targetNodeId = nodeId
-            hyperlinkUrlInput.text = ""
-            hyperlinkLabelInput.text = ""
-            visible = true
-            hyperlinkUrlInput.forceActiveFocus()
-        }
-
-        function close() {
-            visible = false
-        }
-
-        function confirm() {
-            if (targetNodeId && hyperlinkUrlInput.text.trim().length > 0) {
-                addHyperlink(targetNodeId, hyperlinkUrlInput.text.trim(), hyperlinkLabelInput.text.trim())
-            }
-            close()
-        }
-    }
 }
