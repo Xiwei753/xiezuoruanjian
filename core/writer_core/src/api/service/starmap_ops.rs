@@ -238,6 +238,27 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 按 `root starmap + 路径段` 解析当前层星图。
+    ///
+    /// 无级星图套星图的当前层身份由 root + segments 决定：逐段走 Core
+    /// resolver（`EnterEmbed` / `EnterPortal`），返回最终星图 ID。
+    /// 解析失败返回错误，平台端不得回退到点击事件传来的裸目标 ID。
+    pub fn resolve_starmap_path(
+        &self,
+        root_starmap_id: &str,
+        segments: Vec<crate::api::types::StarMapPathSegmentDto>,
+    ) -> ApiResult<crate::api::types::StarMapResolvedPathDto> {
+        let segments = segments
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, crate::error::Error>>()
+            .map_err(WriterError::from)?;
+        let resolved = self
+            .core_write()
+            .resolve_starmap_path(root_starmap_id, segments)?;
+        Ok(resolved.into())
+    }
+
     pub fn list_starmaps(&self) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
         self.core_write()
             .list_starmaps()

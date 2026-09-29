@@ -26,7 +26,8 @@ use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
     StarMapEmbedPatchInputDto, StarMapHyperlinkDto, StarMapHyperlinkPatchDto,
     StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
-    StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto, StarMapTargetPathDto,
+    StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto,
+    StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -133,6 +134,24 @@ pub fn update_starmap_node(
 
 pub fn delete_starmap_node(api: &WriterCoreApi, starmap_id: &str, node_id: &str) -> String {
     envelope(api.delete_starmap_node(starmap_id, node_id))
+}
+
+/// 解析 `root starmap + 路径段`，返回最终星图 ID。
+///
+/// `segments_json` 是 `StarMapPathSegmentDto` 数组的 JSON（QML 的
+/// `currentPathSegments`：`enterEmbed{instanceId}` / `enterPortal{nodeId}`）。
+/// 当前层身份由 root + segments 逐段穿越决定，解析失败返回错误 envelope，
+/// 调用方不得回退到点击事件传来的裸目标 ID。
+pub fn resolve_starmap_path(
+    api: &WriterCoreApi,
+    root_starmap_id: &str,
+    segments_json: &str,
+) -> String {
+    let segments: Vec<StarMapPathSegmentDto> = match serde_json::from_str(segments_json) {
+        Ok(s) => s,
+        Err(e) => return envelope_err_str(&format!("Invalid path segments JSON: {}", e)),
+    };
+    envelope(api.resolve_starmap_path(root_starmap_id, segments))
 }
 
 pub fn create_starmap_edge(

@@ -278,20 +278,57 @@ impl super::WriterCore {
         })
     }
 
+    /// 按 `root starmap + 路径段` 解析当前层星图。
+    ///
+    /// 这是"同一画布里的无级星图套星图"的当前层加载入口：层级身份由
+    /// root starmap 与逐段穿越（`EnterEmbed` / `EnterPortal`）决定，
+    /// 而不是由界面点击事件传来的裸目标 ID 决定。解析失败时返回 `Err`，
+    /// 调用方不得回退到裸 target id 继续加载。
+    ///
+    /// 起点星图先 `ensure_fully_loaded`，这样它尚未 flush 的 Embed/Portal
+    /// 变更会作为 overlay 进入 resolver；其余已全量加载的 Store 同样作为
+    /// overlay，避免读到旧磁盘状态。
+    pub fn resolve_starmap_path(
+        &self,
+        root_starmap_id: &str,
+        segments: Vec<crate::starmap::types::reference::StarMapPathSegment>,
+    ) -> Result<crate::starmap::graph::resolve::ResolvedTarget> {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        {
+            let store = stores
+                .entry(root_starmap_id.to_string())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, root_starmap_id));
+            store.ensure_fully_loaded()?;
+        }
+
+        let context = self.build_resolver_context(&stores);
+        // 目标固定为 Starmap：下钻只要求"路径逐段可达，并落在最终星图"，
+        // 不额外要求落到具体节点/锚点。
+        let path = crate::starmap::types::reference::StarMapTargetPath {
+            starmap_id: root_starmap_id.to_string(),
+            segments,
+            target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+        };
+        crate::starmap::graph::resolve::resolve_target(&context, &path)
+            .map_err(|status| crate::error::Error::Other(format!("星图路径解析失败: {status:?}")))
+    }
+
     /// 构建一个 `GraphResolverContext`，包含当前所有已完成后台全量加载的
-    /// Store 的 `to_starmap_graph()` 快照作为 overlays。这样 resolver 在
-    /// 校验 candidate graph 时可以看到其他星图内存中尚未 flush 的变更。
+    /// Store 的 `to_starmap_graph()` 快照作为 overlays。这样 resolver
+    /// 可以看到其他星图内存中尚未 flush 的变更。
     ///
     /// 只把 `current_load_phase == Some(LoadPhase::BackgroundFullLoad)` 的
     /// Store 放进 overlays，避免部分加载的 Store 导致误报 MissingNode/
-    /// MissingEmbed。candidate 永远单独放进去（不管其 phase）。
+    /// MissingEmbed。
     ///
     /// 调用方必须在持有 `starmap_stores` 锁的上下文中调用此方法，
     /// 传入已获取的 stores 引用，避免重复 lock 导致死锁。
-    fn build_resolver_context_from_stores(
+    fn build_resolver_context(
         &self,
         stores: &std::collections::HashMap<String, StarMapStore>,
-        candidate: &crate::starmap::types::StarMapGraph,
     ) -> GraphResolverContext {
         let mut overlays = std::collections::HashMap::new();
         // 只放入已完成后台全量加载的 Store 的图快照，
@@ -301,12 +338,27 @@ impl super::WriterCore {
                 overlays.insert(id.clone(), store.to_starmap_graph());
             }
         }
-        // 最后用 candidate graph 覆盖对应 starmap_id 的 overlay，
-        // 确保 candidate 的最新变更优先于 Store 快照。
-        overlays.insert(candidate.starmap_id.clone(), candidate.clone());
         GraphResolverContext {
             app_data_root: self.app_data_root.clone(),
             overlays,
         }
     }
+
+    /// 构建 candidate 校验用的 `GraphResolverContext`：在通用 overlays 之上
+    /// 用 candidate graph 覆盖其 starmap_id 的 overlay，确保 candidate 的
+    /// 最新变更优先于 Store 快照。
+    fn build_resolver_context_from_stores(
+        &self,
+        stores: &std::collections::HashMap<String, StarMapStore>,
+        candidate: &crate::starmap::types::StarMapGraph,
+    ) -> GraphResolverContext {
+        let mut context = self.build_resolver_context(stores);
+        context
+            .overlays
+            .insert(candidate.starmap_id.clone(), candidate.clone());
+        context
+    }
 }
+
+#[cfg(test)]
+mod tests;

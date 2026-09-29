@@ -1355,6 +1355,10 @@
         <translation>自动布局</translation>
     </message>
     <message>
+        <source>解析星图层级路径失败</source>
+        <translation>解析星图层级路径失败</translation>
+    </message>
+    <message>
         <source>重置视图</source>
         <translation>重置视图</translation>
     </message>

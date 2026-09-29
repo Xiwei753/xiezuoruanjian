@@ -47,6 +47,10 @@ pub struct StarMapBackend {
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
+    resolve_starmap_path_json:
+        qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
+    resolve_starmap_path:
+        qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QJsonObject),
     create_starmap_node_json: qt_method!(
         fn(
             &mut self,
@@ -410,6 +414,26 @@ impl StarMapBackend {
     }
     fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject {
         self.with_app(|app| app.get_starmap_graph(starmap_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn resolve_starmap_path_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QString {
+        self.with_app(|app| app.resolve_starmap_path_json(root_starmap_id, segments_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn resolve_starmap_path(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.resolve_starmap_path(root_starmap_id, segments_json))
             .unwrap_or_else(|_| {
                 crate::backend::json_utils::qjson_object_from_json(
                     &crate::backend::json_utils::borrow_conflict_error_json(),

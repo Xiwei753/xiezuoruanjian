@@ -91,7 +91,6 @@ Item {
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
     signal selectionCleared()
-    signal enterStarmapRequested(string starmapId, string title)
     signal editNodeRequested(var node)
     // Issue #801 评论 5894035036: 层级切换请求上抛给 Workspace。
     //   drillDownRequested: 双击 portal/Embed 或下钻触发
@@ -788,7 +787,6 @@ Item {
                         // 正式 Embed -> EnterEmbed(instanceId)，legacy portal -> EnterPortal(nodeId)。
                         var segment = graphController.embedDrillSegment(ed.instanceId)
                         drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"), segment)
-                        enterStarmapRequested(tgtStarmapId, ed.label || qsTr("未命名"))
                     }
                 }
 
