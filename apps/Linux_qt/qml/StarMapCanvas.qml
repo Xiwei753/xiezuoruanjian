@@ -22,6 +22,10 @@ Item {
     property string starmapId: ""
     required property var dt
 
+    // Issue #801 评论 5894035036: 层级路径栈已移到 Workspace。
+    // Canvas 的 starmapId 是只读输入绑定（由 Workspace.currentStarmapId 驱动），
+    // 不再在内部赋值 starmapId，也不再维护 starmapPathStack。
+
     readonly property color _primary: dt.primary
     readonly property color _onPrimary: dt.onPrimary
     readonly property color _accent: dt.accent
@@ -50,6 +54,20 @@ Item {
     property real panY: 0
     property real zoomLevel: 1.0
 
+    // Issue #801 评论 5894035036: PinchHandler 以手势中心缩放的起点记录。
+    property real _pinchStartZoom: 1.0
+    property real _pinchStartPanX: 0
+    property real _pinchStartPanY: 0
+
+    // Issue #801 评论 5894639734: Pinch 连续 drillUp 去重 + 根星图可缩到最小。
+    // canDrillUp 由 Workspace 绑定（starmapPathStack.length > 0）；
+    // _pinchDrilledUp 在一次 Pinch 内只允许 drillUp 一次。
+    property bool canDrillUp: false
+    property bool _pinchDrilledUp: false
+    // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
+    // 第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
+    property bool _touchInputActive: false
+
     // ---------------------------------------------------------------------------
     // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
     //   pointerMode / connectFrom* / connectMouseX/Y / pressedNodeId / pressedEmbedId
@@ -73,12 +91,25 @@ Item {
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
     signal selectionCleared()
-    signal enterStarmapRequested(string starmapId, string title)
     signal editNodeRequested(var node)
+    // Issue #801 评论 5894035036: 层级切换请求上抛给 Workspace。
+    //   drillDownRequested: 双击 portal/Embed 或下钻触发
+    //   drillUpRequested: 滚轮/Pinch/按钮缩到最小以下触发
+    // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
+    // Workspace 据此维护完整 currentPathSegments（层级身份）。
+    //   正式 Embed -> { type: "enterEmbed", instanceId, nodeId: null }
+    //   legacy portal -> { type: "enterPortal", instanceId: null, nodeId }
+    signal drillDownRequested(string starmapId, string title, var segment)
+    signal drillUpRequested()
 
-    // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态，
+    // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态并重新加载，
     // 不可见 / 离开工作区时也 reset，避免旧 move/connect 状态泄漏。
-    onStarmapIdChanged: resetInteraction()
+    // Issue #801 评论 5894035036: starmapId 现在是只读输入，由 Workspace 驱动；
+    // 切图后 resetInteraction + loadGraph 让新图正确加载。
+    onStarmapIdChanged: {
+        resetInteraction()
+        if (starmapId.length > 0) loadGraph()
+    }
     onVisibleChanged: { if (!visible) resetInteraction() }
 
     // Issue #798: 渲染层直接读 graphController 的模型，不再在 Canvas 维护副本。
@@ -112,6 +143,11 @@ Item {
             edgeCanvas.requestPaint()
         }
     }
+
+    // Issue #801 评论 5894035036: drillDown / drillUp / isAtRootStarmap / starmapTitle
+    // 已移到 Workspace。层级栈由 Workspace 持有，Canvas 只通过 drillDownRequested /
+    // drillUpRequested 信号上抛请求。父级标题由 Workspace 的 currentStarmapTitle 维护，
+    // 不再从 graphController 反查（graphController 没有 starmapTitle 属性）。
 
     // Background Grid
     Rectangle {
@@ -149,19 +185,26 @@ Item {
     // ---------------------------------------------------------------------------
     // 背景交互层：TapHandler 处理点击类，MouseArea 处理 pan 拖动与滚轮
     // TapHandler 与 MouseArea 共存：Handler 独立收到 tap/longPress 信号
+    // Issue #801 评论 5894035036: 鼠标/触屏按 acceptedDevices 拆开：
+    //   - 鼠标空白长按无操作（鼠标用右键打开菜单）
+    //   - 触屏空白长按打开背景菜单
+    //   - 触屏未长按在节点上滑动 → 画布 pan（节点没挂触屏 DragHandler，事件穿透）
+    //   - 触屏长按后移动 → 更新 connect 坐标
     // ---------------------------------------------------------------------------
     Item {
         id: bgInteractionLayer
         anchors.fill: parent
         z: 0
 
-        // 左键单击：边选中或清选区
+        // 鼠标左键单击：边选中或清选区
         // Issue #796 评论 5886483653: 命中顺序统一成 Node/Embed → Edge → 空白，
         // 不让画布背景先吞掉对象点击。
         TapHandler {
-            id: backgroundLeftTap
+            id: bgMouseLeftTap
+            acceptedDevices: PointerDevice.Mouse
             acceptedButtons: Qt.LeftButton
             onSingleTapped: function(eventPoint) {
+                _touchInputActive = false
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
@@ -177,9 +220,53 @@ Item {
                     clearSelection()
                 }
             }
-            // pan 已由 bgDragArea.onPressed 直接处理（#373 桌面规则），
-            // long press 不再负责进入 pan。
+            // 鼠标空白长按无操作（鼠标用右键打开菜单）。
             onLongPressed: {
+            }
+        }
+
+        // 触屏左键单击：边选中或清选区；长按打开背景菜单
+        TapHandler {
+            id: bgTouchLeftTap
+            acceptedDevices: PointerDevice.TouchScreen
+            acceptedButtons: Qt.LeftButton
+            onSingleTapped: function(eventPoint) {
+                _touchInputActive = true
+                var mx = (eventPoint.position.x - panX) / zoomLevel
+                var my = (eventPoint.position.y - panY) / zoomLevel
+                if (findNodeAt(mx, my)) {
+                    return
+                }
+                if (findEmbedAt(mx, my)) {
+                    return
+                }
+                var clickedEdge = graphController.hitTestEdge(mx, my)
+                if (clickedEdge) {
+                    graphController.selectEdge(clickedEdge.id)
+                } else {
+                    clearSelection()
+                }
+            }
+            // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
+            // TapHandler.longPressed 信号无参数，用 point.position 拿当前点
+            // （TapHandler 继承自 SinglePointHandler，有 point 属性）。
+            // Issue #801 评论 5894639734: 长按前先判命中，节点/Embed/边上的长按
+            // 不弹背景菜单（Qt TapHandler 是 passive grab，背景和对象 Handler 会
+            // 同时观察同一个 press，不能假设背景自动收不到）。
+            onLongPressed: {
+                _touchInputActive = true
+                var px = bgTouchLeftTap.point.position.x
+                var py = bgTouchLeftTap.point.position.y
+                var wx = (px - panX) / zoomLevel
+                var wy = (py - panY) / zoomLevel
+
+                if (findNodeAt(wx, wy)) return
+                if (findEmbedAt(wx, wy)) return
+                if (graphController.hitTestEdge(wx, wy)) return
+
+                contextMenuWorldX = wx
+                contextMenuWorldY = wy
+                bgContextMenu.popup(px, py)
             }
         }
 
@@ -187,8 +274,10 @@ Item {
         // Issue #796 评论 5886483653: 命中顺序 Node/Embed → Edge → 空白。
         TapHandler {
             id: backgroundRightTap
+            acceptedDevices: PointerDevice.Mouse
             acceptedButtons: Qt.RightButton
             onSingleTapped: function(eventPoint) {
+                _touchInputActive = false
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
@@ -209,6 +298,114 @@ Item {
             }
         }
 
+        // 触屏背景拖动：触屏未长按在节点上滑动 → 画布 pan；
+        // 触屏长按后移动 → 更新 connect 坐标，超过阈值转 connect。
+        // Issue #801 评论 5894035036: 节点没挂触屏 DragHandler，事件穿透到背景。
+        DragHandler {
+            id: bgTouchDrag
+            acceptedDevices: PointerDevice.TouchScreen
+            acceptedButtons: Qt.LeftButton
+            target: null
+            property real lastTx: 0
+            property real lastTy: 0
+            // Issue #801 评论 5895310100: 标记当前 move 由触屏发起，
+            // 用于 onLeftReleased 区分鼠标 move（nodeDragHandler 驱动）和触屏 move（bgTouchDrag 驱动），
+            // 避免两者重复 commit。
+            property bool _wasTouchMove: false
+            onActiveChanged: {
+                if (active) {
+                    lastTx = 0
+                    lastTy = 0
+                    _touchInputActive = true
+                    // 触屏在 move 模式下开始拖动 → 标记，commit 由 bgTouchDrag 独占
+                    if (interaction.pointerMode === "move") {
+                        _wasTouchMove = true
+                    }
+                } else {
+                    // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
+                    // 鼠标 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
+                    // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
+                    if (_wasTouchMove && interaction.pointerMode === "move") {
+                        if (interaction.pressedNodeId !== "") {
+                            graphController.commitNodeMove(interaction.pressedNodeId, interaction.moveX, interaction.moveY)
+                        } else if (interaction.pressedEmbedId !== "") {
+                            graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
+                        }
+                        interaction.endMove()
+                        graphController.computeEdgeRenders(null)
+                        edgeCanvas.requestPaint()
+                    }
+                    _wasTouchMove = false
+                }
+            }
+            onActiveTranslationChanged: {
+                var dx = activeTranslation.x - lastTx
+                var dy = activeTranslation.y - lastTy
+                lastTx = activeTranslation.x
+                lastTy = activeTranslation.y
+                if (interaction.pointerMode === "idle") {
+                    // 触屏未长按滑动 = 画布 pan（屏幕坐标增量直接加到 panX/panY）
+                    panX += dx
+                    panY += dy
+                } else if (interaction.pointerMode === "contextPending") {
+                    // 触屏长按后移动，更新 connect 坐标（世界坐标，除以 zoomLevel）
+                    interaction.connectMouseX += dx / zoomLevel
+                    interaction.connectMouseY += dy / zoomLevel
+                    // 移动总距离超过阈值则转 connect
+                    if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
+                        interaction.contextPendingToConnect()
+                        // Issue #801 评论 5895310100: 继续移动变连线，关闭长按菜单视觉层
+                        touchContextPreview.hide()
+                    }
+                    edgeCanvas.requestPaint()
+                } else if (interaction.pointerMode === "connect") {
+                    interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
+                    edgeCanvas.requestPaint()
+                } else if (interaction.pointerMode === "move") {
+                    // Issue #801 评论 5895310100: 触屏菜单"移动"后再拖 → 更新 transient 坐标。
+                    // Node/Embed 的 DragHandler 限定 Mouse，触屏拖动穿透到背景层，
+                    // 由 bgTouchDrag 统一驱动 move。delegate 的 x/y binding 自动跟随 moveX/moveY。
+                    interaction.updateMove(interaction.moveX + dx / zoomLevel, interaction.moveY + dy / zoomLevel)
+                    graphController.computeEdgeRenders(currentMoveOverride())
+                    edgeCanvas.requestPaint()
+                }
+            }
+        }
+
+        // Issue #801 评论 5894035036: 触屏双指 Pinch 缩放。
+        PinchHandler {
+            id: canvasPinch
+            acceptedDevices: PointerDevice.TouchScreen
+            target: null
+            onActiveChanged: {
+                if (active) {
+                    _pinchStartZoom = zoomLevel
+                    _pinchStartPanX = panX
+                    _pinchStartPanY = panY
+                    // Issue #801 评论 5894639734: 每次 Pinch 开始时重置去重标记。
+                    _pinchDrilledUp = false
+                    _touchInputActive = true
+                }
+            }
+            onActiveScaleChanged: {
+                var rawZoom = _pinchStartZoom * activeScale
+                // Issue #801 评论 5894639734: 一次 Pinch 只 drillUp 一次，
+                // 避免捏合不松手时连续 pop 多层；根星图（canDrillUp=false）
+                // 时正常 clamp 到 0.35，不 return。
+                if (rawZoom < 0.35 && canDrillUp && !_pinchDrilledUp) {
+                    _pinchDrilledUp = true
+                    drillUpRequested()
+                    return
+                }
+                zoomLevel = Math.max(0.35, Math.min(2.5, rawZoom))
+                // 以手势中心缩放
+                var cx = centroid.position.x
+                var cy = centroid.position.y
+                panX = cx - (cx - _pinchStartPanX) * (zoomLevel / _pinchStartZoom)
+                panY = cy - (cy - _pinchStartPanY) * (zoomLevel / _pinchStartZoom)
+            }
+        }
+
         // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
         MouseArea {
             id: bgDragArea
@@ -220,6 +417,7 @@ Item {
             property real lastY: 0
 
             onPressed: function(mouse) {
+                _touchInputActive = false
                 lastX = mouse.x
                 lastY = mouse.y
                 if (mouse.button === Qt.LeftButton) {
@@ -253,10 +451,17 @@ Item {
             }
 
             onWheel: function(wheel) {
+                _touchInputActive = false
                 var oldZoom = zoomLevel
                 var delta = wheel.angleDelta.y / 120
-                zoomLevel += delta * 0.1
-                zoomLevel = Math.max(0.35, Math.min(2.5, zoomLevel))
+                var newZoom = zoomLevel + delta * 0.1
+                // Issue #801 评论 5894639734: 只有 canDrillUp 时越过下限才返回父级；
+                // 已经在根图就正常 clamp 到 0.35。
+                if (newZoom < 0.35 && canDrillUp) {
+                    drillUpRequested()
+                    return
+                }
+                zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
 
                 var mx = wheel.x
                 var my = wheel.y
@@ -388,11 +593,7 @@ Item {
                 width: nodeData.width
                 height: nodeData.height
                 title: nodeData.title
-                kind: nodeData.kind
                 isSelected: nodeData.isSelected
-                // Issue #793 评论 5884923277: portal 节点展示标记，
-                // 双击仍沿用现有 destinationStarmapId 进入，不另外发明类型。
-                isPortal: !!(nodeData.portal && nodeData.portal.destinationStarmapId)
                 // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
                 wobbleIndex: index
 
@@ -404,33 +605,47 @@ Item {
                 // -------------------------------------------------------------------
                 // 节点上抛信号 → Canvas 状态机决定行为
                 // -------------------------------------------------------------------
+                // Issue #801 评论 5894981235: 鼠标点击 Node 时切回鼠标模式，
+                // 隐藏触屏 +/- 按钮。
+                onMouseInteracted: _touchInputActive = false
+
                 onSingleClicked: {
                     graphController.selectNode(nodeData.id)
                 }
 
                 onDoubleClicked: {
+                    // Issue #801 评论 5895625744: 旧 portal Node 已在 Controller
+                    // buildModels() 归一到 Embed，Node 双击统一走编辑。
                     var nd = nodeData
-                    if (nd.portal && nd.portal.destinationStarmapId) {
-                        enterStarmapRequested(
-                            nd.portal.destinationStarmapId,
-                            nd.title || qsTr("子星图")
-                        )
-                    } else {
-                        graphController.selectNode(nd.id)
-                        editNodeRequested(nd)
-                    }
+                    graphController.selectNode(nd.id)
+                    editNodeRequested(nd)
                 }
 
-                onLongPressed: {
+                // Issue #801 评论 5894035036: 鼠标长按直接进 connect
+                // （#373 鼠标规则：长按后拖 = 拉线）
+                onMouseLongPressed: {
                     var nd = nodeData
-                    // 只允许 idle 时长按进入 connect；避免右键菜单"移动节点"
-                    // 已选 move 后，左键按住稍久被 long press 覆盖成 connect
-                    // （Issue #788 评论 5868205321）。
-                    // Issue #798: 手势状态交给 interaction，Canvas 只驱动状态切换。
                     if (!interaction.beginConnect("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
                     isBeingDragged = true
+                    edgeCanvas.requestPaint()
+                }
+
+                // Issue #801 评论 5894035036: 触屏长按进 contextPending
+                // （不移动则松手弹菜单，移动超过阈值才转 connect）
+                // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（#373：长按先出菜单反馈）。
+                // 不等 onLeftReleased 才 popup；手指继续移动超过阈值时视觉层关闭转 connect，
+                // 手指松开时视觉层关闭并弹出真正可点击的 nodeContextMenu。
+                onTouchLongPressed: {
+                    var nd = nodeData
+                    if (!interaction.beginContextPending("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
+                        return
+                    }
+                    isBeingDragged = true
+                    var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
+                    var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                    touchContextPreview.show("node", sceneX, sceneY)
                     edgeCanvas.requestPaint()
                 }
 
@@ -443,6 +658,19 @@ Item {
                 }
 
                 onMoveDelta: function(dx, dy) {
+                    // Issue #801: contextPending 状态下移动超过阈值则转 connect
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
+                        interaction.connectMouseX += dx
+                        interaction.connectMouseY += dy
+                        var totalDx = interaction.connectMouseX - (nodeData.x + nodeData.width / 2)
+                        var totalDy = interaction.connectMouseY - (nodeData.y + nodeData.height / 2)
+                        if (Math.sqrt(totalDx * totalDx + totalDy * totalDy) > interaction._moveThreshold) {
+                            interaction.contextPendingToConnect()
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
+
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === nodeData.id) {
                         interaction.updateConnect(interaction.connectMouseX + dx, interaction.connectMouseY + dy)
                         edgeCanvas.requestPaint()
@@ -465,8 +693,26 @@ Item {
 
                 onLeftReleased: {
                     // 统一结束当前节点交互：无论长按后拖动还是直接松手，
-                    // 都由此出口闭环 connect/move 状态（Issue #788 评论 5868205321）。
+                    // 都由此出口闭环 connect/move/contextPending 状态（Issue #788 评论 5868205321）。
                     isBeingDragged = false
+                    // Issue #801 评论 5895310100: contextPending 松手不移动，关闭视觉层并弹出可点击菜单
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
+                        touchContextPreview.hide()
+                        var pendingResult = interaction.endContextPending()
+                        if (pendingResult && pendingResult.kind === "node") {
+                            var nd = graphController.getNode(pendingResult.id)
+                            if (nd) {
+                                graphController.selectNode(nd.id)
+                                selectedNodeForMenu = nd
+                                // 用节点中心位置弹出菜单
+                                var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
+                                var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                                nodeContextMenu.popup(sceneX, sceneY)
+                            }
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === nodeData.id) {
                         // Issue #796 评论 5887280405: 松手时 Node 和 Embed 都参与命中，
                         // 用 path 版建边支持 Embed 端点。
@@ -476,16 +722,19 @@ Item {
                         } else {
                             var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                createEdgeWithPaths(interaction.connectFromPath, graphController.embedConnectPath(targetEmbed.instanceId))
                             }
                         }
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
-                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
-                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
-                        graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
-                        interaction.endMove()
+                        // Issue #801 评论 5895310100: 触屏 move 由 bgTouchDrag.onActiveChanged 独占 commit；
+                        // 这里只处理鼠标 move（nodeDragHandler 驱动）。用 _wasTouchMove 区分，
+                        // 无论 onLeftReleased 与 bgTouchDrag.onActiveChanged 的触发顺序如何都不会重复 commit。
+                        if (!bgTouchDrag._wasTouchMove) {
+                            graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
+                            interaction.endMove()
+                        }
                     }
                 }
             }
@@ -519,6 +768,10 @@ Item {
                 onYChanged: edgeCanvas.requestPaint()
 
                 // 单击只选中
+                // Issue #801 评论 5894981235: 鼠标点击 Embed 时切回鼠标模式，
+                // 隐藏触屏 +/- 按钮。
+                onMouseInteracted: _touchInputActive = false
+
                 onClicked: function(instId) {
                     graphController.selectEmbed(instId)
                 }
@@ -527,19 +780,37 @@ Item {
                 onDoubleClicked: function(tgtStarmapId) {
                     if (tgtStarmapId) {
                         var ed = embedData
-                        enterStarmapRequested(tgtStarmapId, ed.label || qsTr("子星图"))
+                        // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace，
+                        // Canvas 不再自己 drillDown。
+                        // Issue #801 评论 5895625744: title fallback 不再用"子星图"。
+                        // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
+                        // 正式 Embed -> EnterEmbed(instanceId)，legacy portal -> EnterPortal(nodeId)。
+                        var segment = graphController.embedDrillSegment(ed.instanceId)
+                        drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"), segment)
                     }
                 }
 
-                // Issue #796 评论 5887280405: Embed 长按进入 connect 模式，
-                // 与 Node 长按对称。源端类型记为 "embed"，path 用 embedPath()。
-                onLongPressed: function(instId) {
+                // Issue #801 评论 5894035036: 鼠标长按直接进 connect
+                onMouseLongPressed: function(instId) {
                     var ed = embedData
-                    // Issue #798: 手势状态交给 interaction，Canvas 只驱动状态切换。
-                    if (!interaction.beginConnect("embed", instId, embedPath(instId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginConnect("embed", instId, graphController.embedConnectPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
+                    edgeCanvas.requestPaint()
+                }
+
+                // Issue #801 评论 5894035036: 触屏长按进 contextPending
+                // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（与 Node 对称）。
+                onTouchLongPressed: function(instId) {
+                    var ed = embedData
+                    if (!interaction.beginContextPending("embed", instId, graphController.embedConnectPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                        return
+                    }
+                    isBeingDragged = true
+                    var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
+                    var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                    touchContextPreview.show("embed", sceneX, sceneY)
                     edgeCanvas.requestPaint()
                 }
 
@@ -554,6 +825,19 @@ Item {
                 // 和 Node 的 onMoveDelta 对称。connect 模式更新预览线终点；
                 // idle 转 move 移动 Embed position。
                 onMoveDelta: function(dx, dy) {
+                    // Issue #801: contextPending 状态下移动超过阈值则转 connect
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
+                        interaction.connectMouseX += dx
+                        interaction.connectMouseY += dy
+                        var totalDx = interaction.connectMouseX - (embedData.x + embedData.width / 2)
+                        var totalDy = interaction.connectMouseY - (embedData.y + embedData.height / 2)
+                        if (Math.sqrt(totalDx * totalDx + totalDy * totalDy) > interaction._moveThreshold) {
+                            interaction.contextPendingToConnect()
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
+
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
                         interaction.updateConnect(interaction.connectMouseX + dx, interaction.connectMouseY + dy)
                         edgeCanvas.requestPaint()
@@ -576,6 +860,24 @@ Item {
 
                 onLeftReleased: {
                     isBeingDragged = false
+                    // Issue #801 评论 5895310100: contextPending 松手不移动，关闭视觉层并弹出可点击菜单
+                    if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
+                        touchContextPreview.hide()
+                        var pendingResult = interaction.endContextPending()
+                        if (pendingResult && pendingResult.kind === "embed") {
+                            var ed = graphController.getEmbed(pendingResult.id)
+                            if (ed) {
+                                graphController.selectEmbed(ed.instanceId)
+                                selectedEmbedForMenu = ed
+                                // 用 Embed 中心位置弹出菜单
+                                var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
+                                var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                                embedContextMenu.popup(sceneX, sceneY)
+                            }
+                        }
+                        edgeCanvas.requestPaint()
+                        return
+                    }
                     // Issue #796 评论 5887280405: connect 模式下松手，Node 和 Embed 都参与命中，
                     // 用 path 版建边；否则走原拖动结束保存位置逻辑。
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
@@ -585,16 +887,18 @@ Item {
                         } else {
                             var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                createEdgeWithPaths(interaction.connectFromPath, graphController.embedConnectPath(targetEmbed.instanceId))
                             }
                         }
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
-                        // Issue #798: 松手一次性提交 transient 坐标给 Controller，
-                        // 由 Controller 持久化并浅拷贝新数组更新 canonical model。
-                        graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
-                        interaction.endMove()
+                        // Issue #801 评论 5895310100: 触屏 move 由 bgTouchDrag.onActiveChanged 独占 commit；
+                        // 这里只处理鼠标 move。用 _wasTouchMove 区分避免重复 commit。
+                        if (!bgTouchDrag._wasTouchMove) {
+                            graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
+                            interaction.endMove()
+                        }
                     }
                 }
             }
@@ -608,6 +912,43 @@ Item {
         color: _textSecondary
         font.pointSize: dt.fontLgPt
         visible: graphController.nodesModel.length === 0 && graphController.embedsModel.length === 0
+    }
+
+    // Issue #801 评论 5894639734: 触屏缩放 +/- 按钮（右下角浮层）。
+    // 按需显示：第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
+    // 不做硬件探测，靠 _touchInputActive 跟踪最近一次输入设备。
+    RowLayout {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 16
+        anchors.bottomMargin: 16
+        spacing: 8
+        z: 50
+        visible: _touchInputActive
+
+        AppButton {
+            dt: canvasArea.dt
+            text: qsTr("+")
+            onClicked: {
+                // 单击放大：直接调到上限，不触发 drillUp
+                zoomLevel = Math.min(2.5, zoomLevel + 0.15)
+            }
+        }
+
+        AppButton {
+            dt: canvasArea.dt
+            text: qsTr("−")
+            onClicked: {
+                var newZoom = zoomLevel - 0.15
+                // Issue #801 评论 5894639734: 只有 canDrillUp 时越过下限才返回父级；
+                // 已经在根图就正常 clamp 到 0.35。
+                if (newZoom < 0.35 && canDrillUp) {
+                    drillUpRequested()
+                    return
+                }
+                zoomLevel = Math.max(0.35, newZoom)
+            }
+        }
     }
 
     Rectangle {
@@ -632,6 +973,76 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: clearError()
+        }
+    }
+
+    // Issue #801 评论 5895310100: 触屏长按菜单视觉层（不抢 pointer grab）。
+    // #373 要求长按时菜单先出现作为视觉反馈；手指继续移动超过阈值则关闭转连线，
+    // 手指松开则关闭视觉层并弹出真正可点击的 Menu。
+    // 此组件纯视觉，无任何 TapHandler/MouseArea/Handler，不会抢走正在进行的触摸手势。
+    Item {
+        id: touchContextPreview
+        visible: false
+        z: 60
+
+        property string previewKind: ""   // "node" / "embed"
+        // 屏幕坐标锚点
+        property real anchorX: 0
+        property real anchorY: 0
+
+        x: anchorX - width / 2
+        y: anchorY + 8
+        width: 150
+        height: 120
+
+        Rectangle {
+            anchors.fill: parent
+            color: _card
+            border.color: _border
+            border.width: 1
+            radius: _radiusSm
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 8
+            spacing: 4
+
+            AppText {
+                dt: canvasArea.dt
+                Layout.fillWidth: true
+                text: touchContextPreview.previewKind === "embed" ? qsTr("编辑名称") : qsTr("编辑")
+                color: _textPrimary
+                font.pointSize: dt.labelPt
+                leftPadding: 4
+            }
+            AppText {
+                dt: canvasArea.dt
+                Layout.fillWidth: true
+                text: qsTr("移动")
+                color: _textPrimary
+                font.pointSize: dt.labelPt
+                leftPadding: 4
+            }
+            AppText {
+                dt: canvasArea.dt
+                Layout.fillWidth: true
+                text: qsTr("删除")
+                color: _textPrimary
+                font.pointSize: dt.labelPt
+                leftPadding: 4
+            }
+        }
+
+        function show(kind, sx, sy) {
+            previewKind = kind
+            anchorX = sx
+            anchorY = sy
+            visible = true
+        }
+
+        function hide() {
+            visible = false
         }
     }
 
@@ -681,11 +1092,6 @@ Item {
         graphController.createSubStarmapAt(title, wx, wy)
     }
 
-    // Issue #790 评论 5875963057: 超链接转发给 graphController
-    function addHyperlink(nodeId, url, label) {
-        graphController.addHyperlink(nodeId, url, label)
-    }
-
     function createEdge(fromId, toId) {
         graphController.createEdge(fromId, toId)
     }
@@ -697,18 +1103,6 @@ Item {
             starmapId: starmapId,
             segments: [],
             target: { type: "node", nodeId: nodeId }
-        }
-    }
-
-    // Issue #796 评论 5887280405: Embed 端点的 StarMapTargetPathDto JS 对象。
-    // segments 用 enterEmbed 段指向 instanceId，target.type 为 "starmap"。
-    function embedPath(instanceId) {
-        return {
-            starmapId: starmapId,
-            segments: [
-                { type: "enterEmbed", instanceId: instanceId, nodeId: null }
-            ],
-            target: { type: "starmap" }
         }
     }
 
@@ -896,28 +1290,6 @@ Item {
             onTriggered: {
                 if (selectedNodeForMenu) {
                     interaction.beginMove(selectedNodeForMenu.id, selectedNodeForMenu.x, selectedNodeForMenu.y)
-                }
-            }
-        }
-
-        MenuItem {
-            id: nodeMenuItemHyperlink
-            text: qsTr("超链接")
-            contentItem: AppText {
-                dt: canvasArea.dt
-                text: nodeMenuItemHyperlink.text
-                color: nodeMenuItemHyperlink.hovered ? _accent : _textPrimary
-                font.pointSize: dt.labelPt
-                verticalAlignment: Text.AlignVCenter
-                leftPadding: 12
-            }
-            background: Rectangle {
-                color: nodeMenuItemHyperlink.hovered ? _accentSoft : "transparent"
-                radius: _radiusXs
-            }
-            onTriggered: {
-                if (selectedNodeForMenu) {
-                    hyperlinkDialog.open(selectedNodeForMenu.id)
                 }
             }
         }
@@ -1327,136 +1699,4 @@ Item {
         }
     }
 
-    // Issue #790 评论 5875963057: 超链接编辑 Dialog
-    // Issue #796 评论 5886483653: 改用 Qt Quick Controls Popup，不再手搓整屏 Rectangle。
-    Popup {
-        id: hyperlinkDialog
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        width: 340
-        height: 200
-        anchors.centerIn: Overlay.overlay
-        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
-        background: Rectangle {
-            color: _card
-            border.color: _border
-            border.width: 1.5
-            radius: _dialogRadius
-        }
-
-        property string targetNodeId: ""
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 12
-
-            AppText {
-                dt: canvasArea.dt
-                text: qsTr("添加超链接")
-                font.pointSize: dt.fontLgPt
-                font.bold: true
-                color: _textPrimary
-            }
-
-            TextField {
-                id: hyperlinkUrlInput
-                Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
-                font.pointSize: dt.bodyPt
-                placeholderText: qsTr("URL")
-                text: ""
-
-                background: Rectangle {
-                    color: _surfaceContainer
-                    border.color: hyperlinkUrlInput.activeFocus ? _accent : _border
-                    border.width: 1.5
-                    radius: _radiusXs
-                }
-
-                Keys.onReturnPressed: hyperlinkDialog.confirm()
-                Keys.onEscapePressed: hyperlinkDialog.close()
-            }
-
-            TextField {
-                id: hyperlinkLabelInput
-                Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
-                font.pointSize: dt.bodyPt
-                placeholderText: qsTr("标签（可选）")
-                text: ""
-
-                background: Rectangle {
-                    color: _surfaceContainer
-                    border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
-                    border.width: 1.5
-                    radius: _radiusXs
-                }
-
-                Keys.onReturnPressed: hyperlinkDialog.confirm()
-                Keys.onEscapePressed: hyperlinkDialog.close()
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignRight
-                spacing: 12
-
-                Button {
-                    id: hyperlinkCancelBtn
-                    text: qsTr("取消")
-                    onClicked: hyperlinkDialog.close()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
-                        text: hyperlinkCancelBtn.text
-                        color: _textSecondary
-                        font.pointSize: dt.labelPt
-                    }
-                    background: Rectangle {
-                        color: hyperlinkCancelBtn.hovered ? _surfaceContainer : "transparent"
-                        border.color: _border
-                        radius: _radiusXs
-                    }
-                }
-
-                Button {
-                    id: hyperlinkConfirmBtn
-                    text: qsTr("确定")
-                    onClicked: hyperlinkDialog.confirm()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
-                        text: hyperlinkConfirmBtn.text
-                        color: _onPrimary
-                        font.bold: true
-                        font.pointSize: dt.labelPt
-                    }
-                    background: Rectangle {
-                        color: hyperlinkConfirmBtn.hovered ? _accentHover : _accent
-                        radius: _radiusXs
-                    }
-                }
-            }
-        }
-
-        function open(nodeId) {
-            targetNodeId = nodeId
-            hyperlinkUrlInput.text = ""
-            hyperlinkLabelInput.text = ""
-            visible = true
-            hyperlinkUrlInput.forceActiveFocus()
-        }
-
-        function close() {
-            visible = false
-        }
-
-        function confirm() {
-            if (targetNodeId && hyperlinkUrlInput.text.trim().length > 0) {
-                addHyperlink(targetNodeId, hyperlinkUrlInput.text.trim(), hyperlinkLabelInput.text.trim())
-            }
-            close()
-        }
-    }
 }

@@ -406,47 +406,4 @@ pub fn hit_test_edge_renders_with_threshold(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_render(id: &str, start: (f32, f32), end: (f32, f32)) -> EdgeRender {
-        EdgeRender {
-            edge_id: id.to_string(),
-            from_cx: start.0,
-            from_cy: start.1,
-            to_cx: end.0,
-            to_cy: end.1,
-            start_x: start.0,
-            start_y: start.1,
-            end_x: end.0,
-            end_y: end.1,
-            offset_x: 0.0,
-            offset_y: 0.0,
-            arrow_tip_x: end.0,
-            arrow_tip_y: end.1,
-            arrow_left_x: end.0,
-            arrow_left_y: end.1,
-            arrow_right_x: end.0,
-            arrow_right_y: end.1,
-            label_x: (start.0 + end.0) / 2.0,
-            label_y: (start.1 + end.1) / 2.0,
-            label: None,
-            has_bidirectional: false,
-        }
-    }
-
-    #[test]
-    fn test_hit_test_edge_render_near() {
-        let renders = vec![make_render("e1", (0.0, 0.0), (200.0, 0.0))];
-        let hit = hit_test_edge_renders(100.0, 5.0, &renders);
-        assert!(hit.is_some());
-        assert_eq!(hit.unwrap(), "e1");
-    }
-
-    #[test]
-    fn test_hit_test_edge_render_far() {
-        let renders = vec![make_render("e1", (0.0, 0.0), (200.0, 0.0))];
-        let hit = hit_test_edge_renders(100.0, 20.0, &renders);
-        assert!(hit.is_none());
-    }
-}
+mod tests;

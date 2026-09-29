@@ -1,10 +1,10 @@
 // =============================================================================
-// StarMapInteractionController.qml — 星图鼠标交互状态机
+// StarMapInteractionController.qml — 星图交互状态机
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：只持有瞬时手势状态（pointerMode / connect 源 / move 目标 / pan），
-//   不读写 Core，不保存节点数据。#373 的鼠标规则只有一套状态机。
+//   不读写 Core，不保存节点数据。#373 的交互规则只有一套状态机。
 // 约束：
 //   - 纯交互状态切换，不触碰 graphController，不持久化任何节点/边
 //   - Canvas 收到状态变化后决定调哪个图操作（建边/提交移动等）
@@ -14,18 +14,31 @@ import QtQuick
 QtObject {
     id: interaction
 
-    // 鼠标状态机：idle / pan / connect / move
-    //   idle    — 无活跃拖拽手势
-    //   pan     — 长按空白或中键后拖动，平移画布
-    //   connect — 长按节点/Embed 后拖动，拉线预览
-    //   move    — 右键菜单"移动"后左键拖动，仅移动指定节点/Embed
+    // 输入来源："" / "mouse" / "touch"
+    //   Canvas 在开始交互时设置此属性，用于区分鼠标和触屏行为
+    property string pointerSource: ""
+
+    // 交互状态机：idle / pan / connect / move / contextPending / connectPending
+    //   idle           — 无活跃拖拽手势
+    //   pan            — 长按空白或中键后拖动，平移画布
+    //   connect        — 长按节点/Embed 后拖动，拉线预览
+    //   move           — 右键菜单"移动"后左键拖动，仅移动指定节点/Embed
+    //   contextPending — 触屏长按后等待：不移动则弹菜单，移动超过阈值则转 connect
+    //   connectPending — 触屏长按后已开始移动，准备进入 connect（过渡态）
     property string pointerMode: "idle"
 
+    // 触屏长按后移动超过此阈值才从 contextPending 转 connect
+    readonly property real _moveThreshold: 10.0
+
     // connect 模式源端
-    property string connectFromKind: ""   // "node" 或 "embed"
-    property string connectFromId: ""     // nodeId 或 instanceId
-    property var connectFromPath: null    // StarMapTargetPathDto JS 对象
-    property string connectFromNodeId: "" // 保留给预览线绘制兼容路径
+    // "node" 或 "embed"
+    property string connectFromKind: ""
+    // nodeId 或 instanceId
+    property string connectFromId: ""
+    // StarMapTargetPathDto JS 对象
+    property var connectFromPath: null
+    // 保留给预览线绘制兼容路径
+    property string connectFromNodeId: ""
     property real connectMouseX: 0
     property real connectMouseY: 0
 
@@ -73,6 +86,42 @@ QtObject {
         connectFromNodeId = ""
     }
 
+    // ── contextPending（触屏长按预备态）──
+    // 触屏长按节点/子星图时进入此状态：不移动则弹菜单，移动超过阈值则转 connect
+    function beginContextPending(kind, id, path, startX, startY) {
+        if (pointerMode !== "idle") return false
+        pointerMode = "contextPending"
+        pointerSource = "touch"
+        connectFromKind = kind
+        connectFromId = id
+        connectFromPath = path
+        connectFromNodeId = kind === "node" ? id : ""
+        connectMouseX = startX
+        connectMouseY = startY
+        return true
+    }
+
+    // 从 contextPending 转为 connect（触屏移动超过阈值后）
+    function contextPendingToConnect() {
+        if (pointerMode !== "contextPending") return false
+        pointerMode = "connect"
+        return true
+    }
+
+    // contextPending 取消（触屏松手，不移动，弹菜单）
+    // 返回之前的状态信息，让 Canvas 知道该弹谁的菜单
+    function endContextPending() {
+        if (pointerMode !== "contextPending") return false
+        var kind = connectFromKind
+        var id = connectFromId
+        pointerMode = "idle"
+        connectFromKind = ""
+        connectFromId = ""
+        connectFromPath = null
+        connectFromNodeId = ""
+        return { kind: kind, id: id }
+    }
+
     // ── move ──
     function beginMove(nodeId, startX, startY) {
         if (pointerMode !== "idle") return false
@@ -108,6 +157,7 @@ QtObject {
     // 统一复位所有瞬时状态（切换星图/失焦等场景调用）
     function reset() {
         pointerMode = "idle"
+        pointerSource = ""
         connectFromKind = ""
         connectFromId = ""
         connectFromPath = null

@@ -522,6 +522,24 @@ impl TryFrom<StarMapPathSegmentDto> for crate::starmap::types::reference::StarMa
     }
 }
 
+/// 路径解析结果 DTO —— `resolve_starmap_path` 的返回值。
+///
+/// `final_starmap_id` 是 `root starmap + segments` 逐段穿越后真正落在的星图 ID，
+/// 平台端据此加载当前层，而不是信任点击事件传来的裸目标 ID。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapResolvedPathDto {
+    pub final_starmap_id: String,
+}
+
+impl From<crate::starmap::graph::resolve::ResolvedTarget> for StarMapResolvedPathDto {
+    fn from(r: crate::starmap::graph::resolve::ResolvedTarget) -> Self {
+        Self {
+            final_starmap_id: r.final_starmap_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapTargetDetailDto {

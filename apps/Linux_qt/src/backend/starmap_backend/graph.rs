@@ -66,6 +66,37 @@ impl AppBackend {
         }
     }
 
+    // AppBackend::resolve_starmap_path_json
+    /// 按 `root starmap + 路径段` 解析当前层星图（无级星图套星图的加载入口）。
+    pub(crate) fn resolve_starmap_path_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QString {
+        let root = root_starmap_id.to_string();
+        let segs = segments_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::resolve_starmap_path(&core, &root, &segs).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::resolve_starmap_path
+    pub(crate) fn resolve_starmap_path(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .resolve_starmap_path_json(root_starmap_id, segments_json)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
     // AppBackend::create_starmap_edge_json
     pub(crate) fn create_starmap_edge_json(
         &mut self,

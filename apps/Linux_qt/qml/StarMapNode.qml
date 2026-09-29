@@ -35,14 +35,10 @@ Item {
     readonly property int _radiusSm: dt.radiusSm
 
     property string title: "Node"
-    property string kind: "Note"
     property bool isSelected: false
 
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
-
-    // Issue #793 评论 5884923277: portal 节点展示标记
-    property bool isPortal: false
 
     // Issue #793 评论 5885482530: wobble 改纯视觉偏移，不影响命中框。
     // 根 Item 的 x/y/width/height 恒定，handler 命中基于稳定几何位置；
@@ -54,26 +50,33 @@ Item {
     property real _wobbleAnimY: 0
 
     // Issue #793 评论 5885482530: 声明时即为最终 binding（不再二次绑定）。
-    // 选中、按下（nodeLeftTap.pressed）、拖动时归零；idle 时跟随 wobble 动画。
-    // nodeLeftTap 在下方定义，QML id 在组件作用域内全局可见，binding 在
-    // 组件 complete 阶段求值，引用后定义的 id 合法。
+    // 选中、按下（nodeMouseTap/nodeTouchTap）、拖动时归零；idle 时跟随 wobble 动画。
+    // Issue #801 评论 5894035036: 鼠标和触屏 TapHandler 拆开，pressed 取并集。
     property real visualOffsetX:
-        (isSelected || isBeingDragged || nodeLeftTap.pressed) ? 0 : _wobbleAnimX
+        (isSelected || isBeingDragged || nodeMouseTap.pressed || nodeTouchTap.pressed) ? 0 : _wobbleAnimX
     property real visualOffsetY:
-        (isSelected || isBeingDragged || nodeLeftTap.pressed) ? 0 : _wobbleAnimY
+        (isSelected || isBeingDragged || nodeMouseTap.pressed || nodeTouchTap.pressed) ? 0 : _wobbleAnimY
 
     // ---------------------------------------------------------------------------
     // 对外信号：节点只上抛事件，由 Canvas 决定后续行为
+    // Issue #801 评论 5894035036: 长按按设备拆分——
+    //   mouseLongPressed: 鼠标长按 → Canvas 进 connect（#373 鼠标规则：长按后拖=拉线）
+    //   touchLongPressed: 触屏长按 → Canvas 进 contextPending（不移动弹菜单，移动转 connect）
     // ---------------------------------------------------------------------------
     signal singleClicked()
     signal doubleClicked()
-    signal longPressed()
+    signal mouseLongPressed()
+    signal touchLongPressed()
     signal contextMenuRequested(real sceneX, real sceneY)
     signal moveDelta(real dx, real dy)
     // 左键 press→release 追踪：由 PointHandler（passive grab）统一上抛，
     // 即使 DragHandler 取得 exclusive grab 也不丢观察链，保证长按后
     // 不拖动直接松开也能结束交互（Issue #788 评论 5868205321）。
     signal leftReleased()
+
+    // Issue #801 评论 5894981235: 鼠标交互上抛信号，通知 Canvas 切回鼠标模式
+    // （隐藏触屏 +/- 按钮）。触屏 TapHandler 不发此信号。
+    signal mouseInteracted()
 
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
@@ -104,28 +107,11 @@ Item {
             visible: !root.isSelected
         }
 
+        // Issue #801: 删除顶部类型标签条，标题成为卡片主体视觉信息
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
-            spacing: 4
-
-            Rectangle {
-                Layout.fillWidth: true
-                height: 16
-                color: getKindColor(root.kind)
-                radius: root._radiusXs
-
-                AppText {
-                    dt: root.dt
-                    anchors.centerIn: parent
-                    // Issue #793 评论 5884923277: portal 节点顶部标签显示"子星图"，
-                    // 普通节点仍显示自己的 kind
-                    text: root.isPortal ? qsTr("子星图") : root.kind
-                    color: root._onPrimary
-                    font.pointSize: root.dt.fontXsPt
-                    font.bold: true
-                }
-            }
+            spacing: 0
 
             AppText {
                 dt: root.dt
@@ -146,15 +132,16 @@ Item {
     //   X: ±0.6px，半周期 7000~9500ms（7000 + (index % 7) * 400）
     //   Y: ±0.4px，半周期 8500~11500ms（8500 + (index % 5) * 300）
     // Issue #793 评论 5885482530: 选中/按下/拖动时动画暂停，idle 时才慢慢漂
+    // Issue #801 评论 5894035036: pressed 取鼠标/触屏并集。
     SequentialAnimation on _wobbleAnimX {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !nodeLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !nodeMouseTap.pressed && !nodeTouchTap.pressed
         NumberAnimation { to: 0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
     }
     SequentialAnimation on _wobbleAnimY {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !nodeLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !nodeMouseTap.pressed && !nodeTouchTap.pressed
         NumberAnimation { to: 0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
     }
@@ -165,19 +152,40 @@ Item {
     // 默认 NotExclusive 时双击会同时触发单击。
     // Issue #793 评论 5885482530: handler 全部挂在稳定 root Item 上，
     // 不放进 visualNode，命中框恒定。
+    // Issue #801 评论 5894035036: 按 acceptedDevices 拆鼠标/触屏——
+    //   鼠标长按 → mouseLongPressed（Canvas 进 connect）
+    //   触屏长按 → touchLongPressed（Canvas 进 contextPending）
     // ---------------------------------------------------------------------------
     TapHandler {
-        id: nodeLeftTap
+        id: nodeMouseTap
+        acceptedDevices: PointerDevice.Mouse
+        acceptedButtons: Qt.LeftButton
+        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+
+        // Issue #801 评论 5894981235: 鼠标按下即通知 Canvas 切回鼠标模式。
+        onPressedChanged: { if (pressed) root.mouseInteracted() }
+
+        onSingleTapped: root.singleClicked()
+        onDoubleTapped: root.doubleClicked()
+        onLongPressed: root.mouseLongPressed()
+    }
+
+    TapHandler {
+        id: nodeTouchTap
+        acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()
-        onLongPressed: root.longPressed()
+        onLongPressed: root.touchLongPressed()
     }
 
     TapHandler {
+        acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.RightButton
+        // Issue #801 评论 5894981235: 右键也是鼠标交互。
+        onPressedChanged: { if (pressed) root.mouseInteracted() }
         onSingleTapped: function(eventPoint) {
             root.contextMenuRequested(eventPoint.scenePosition.x, eventPoint.scenePosition.y)
         }
@@ -190,9 +198,12 @@ Item {
     // DragHandler.active 仅在超过 dragThreshold 后才为 true，长按后不拖动直接松开时
     // onActiveChanged(false) 不会触发，故不能依赖它来结束 connect/move 状态。
     // （Issue #788 评论 5868205321）
+    // Issue #801 评论 5894035036: 只鼠标直接拖 → move；触屏不在节点上 grab 拖动，
+    // 让事件穿透到背景 pan（触屏 connect 移动由背景层 bgTouchDrag 处理）。
     // ---------------------------------------------------------------------------
     DragHandler {
         id: nodeDragHandler
+        acceptedDevices: PointerDevice.Mouse
         target: null
         acceptedButtons: Qt.LeftButton
 
@@ -223,6 +234,7 @@ Item {
     // 这样无论"长按后拖动"还是"长按后直接松手"，都走同一个 leftReleased
     // 出口，由 Canvas 统一结束 connect/move 状态。
     // https://doc.qt.io/qt-6.8/qml-qtquick-pointhandler.html
+    // Issue #801 评论 5894035036: PointHandler 保留鼠标+触屏 release 追踪（passive grab）。
     // ---------------------------------------------------------------------------
     PointHandler {
         id: leftPointTracker
@@ -232,32 +244,6 @@ Item {
             if (!active) {
                 root.leftReleased()
             }
-        }
-    }
-
-    function getKindColor(k) {
-        switch(k) {
-            case "Chapter": return dt.starMapNodeChapter
-            case "Character": return dt.starMapNodeCharacter
-            case "Location": return dt.starMapNodeLocation
-            case "Event": return dt.starMapNodeEvent
-            case "Concept": return dt.starMapNodeConcept
-            default: return _textMuted
-        }
-    }
-
-    function getKindLabel(k) {
-        switch(k) {
-            case "Note": return qsTr("笔记")
-            case "Chapter": return qsTr("章节")
-            case "Character": return qsTr("角色")
-            case "Location": return qsTr("地点")
-            case "Event": return qsTr("事件")
-            case "Concept": return qsTr("概念")
-            case "Project": return qsTr("作品")
-            case "Volume": return qsTr("卷")
-            case "Custom": return qsTr("自定义")
-            default: return k
         }
     }
 }

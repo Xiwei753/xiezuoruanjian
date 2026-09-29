@@ -619,6 +619,14 @@
         <translation>文字与光标同事务协同（各自独立时长）</translation>
     </message>
     <message>
+        <source>光标动画持续时间</source>
+        <translation>光标动画持续时间</translation>
+    </message>
+    <message>
+        <source>文字动画持续时间</source>
+        <translation>文字动画持续时间</translation>
+    </message>
+    <message>
         <source>日志 zip: </source>
         <translation>日志 zip: </translation>
     </message>
@@ -910,6 +918,10 @@
 <context>
     <name>StarMapCanvas</name>
     <message>
+        <source>修改子星图名称</source>
+        <translation>修改子星图名称</translation>
+    </message>
+    <message>
         <source>修改节点标题</source>
         <translation>修改节点标题</translation>
     </message>
@@ -954,6 +966,10 @@
         <translation>移动节点</translation>
     </message>
     <message>
+        <source>编辑名称</source>
+        <translation>编辑名称</translation>
+    </message>
+    <message>
         <source>编辑</source>
         <translation>编辑</translation>
     </message>
@@ -995,10 +1011,6 @@
     <message>
         <source>天前</source>
         <translation>天前</translation>
-    </message>
-    <message>
-        <source>子星图</source>
-        <translation>子星图</translation>
     </message>
     <message>
         <source>小时前</source>
@@ -1055,12 +1067,20 @@
         <translation>保存布局失败</translation>
     </message>
     <message>
+        <source>创建子星图入口失败</source>
+        <translation>创建子星图入口失败</translation>
+    </message>
+    <message>
         <source>创建节点失败</source>
         <translation>创建节点失败</translation>
     </message>
     <message>
         <source>创建连线失败</source>
         <translation>创建连线失败</translation>
+    </message>
+    <message>
+        <source>删除子星图入口失败</source>
+        <translation>删除子星图入口失败</translation>
     </message>
     <message>
         <source>删除节点失败</source>
@@ -1081,6 +1101,14 @@
     <message>
         <source>星图后端未初始化</source>
         <translation>星图后端未初始化</translation>
+    </message>
+    <message>
+        <source>更新子星图入口失败</source>
+        <translation>更新子星图入口失败</translation>
+    </message>
+    <message>
+        <source>更新节点位置失败</source>
+        <translation>更新节点位置失败</translation>
     </message>
     <message>
         <source>更新节点失败</source>
@@ -1124,37 +1152,6 @@
     <message>
         <source>请在左侧选择节点或连线</source>
         <translation>请在左侧选择节点或连线</translation>
-    </message>
-</context>
-<context>
-    <name>StarMapNode</name>
-    <message>
-        <source>卷</source>
-        <translation>卷</translation>
-    </message>
-    <message>
-        <source>概念</source>
-        <translation>概念</translation>
-    </message>
-    <message>
-        <source>章节</source>
-        <translation>章节</translation>
-    </message>
-    <message>
-        <source>笔记</source>
-        <translation>笔记</translation>
-    </message>
-    <message>
-        <source>自定义</source>
-        <translation>自定义</translation>
-    </message>
-    <message>
-        <source>角色</source>
-        <translation>角色</translation>
-    </message>
-    <message>
-        <source>子星图</source>
-        <translation>子星图</translation>
     </message>
 </context>
 <context>
@@ -1356,6 +1353,10 @@
     <message>
         <source>自动布局</source>
         <translation>自动布局</translation>
+    </message>
+    <message>
+        <source>解析星图层级路径失败</source>
+        <translation>解析星图层级路径失败</translation>
     </message>
     <message>
         <source>重置视图</source>

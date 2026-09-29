@@ -6,7 +6,8 @@
 // 职责：单个子星图 Embed 的可视化渲染、选中态展示、上抛点击类交互信号
 // 约束：
 //   - 纯 UI 组件，数据通过 property 传入
-//   - 不伪装成普通 Node：视觉参考 StarMapNode 但顶部标签明确写"子星图"
+//   - Issue #801: 不再用文字标签标注"子星图"，改用 accentSoft 背景色调 +
+//     右下角 ▸ 符号暗示可进入的嵌套空间；label 成为卡片主体视觉信息
 //   - 单击只选中；双击进入 targetStarmapId；右键上抛菜单；拖动只改 Embed position
 //   - 根对象是稳定 Item：x/y/width/height 与命中框恒定，对应 Canvas 的 embedData 坐标；
 //     wobble 只偏移内部视觉 Rectangle（visualEmbed），不影响命中测试。
@@ -40,7 +41,9 @@ Item {
     // Embed 身份与数据
     property string instanceId: ""
     property string targetStarmapId: ""
-    property string label: qsTr("子星图")
+    // Issue #801 评论 5895625744: 不再预设"子星图"类型文字，默认空。
+    // label 由 Controller 传入（含未命名 fallback）。
+    property string label: ""
     property bool isSelected: false
 
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
@@ -51,21 +54,30 @@ Item {
     property real _wobbleAnimX: 0
     property real _wobbleAnimY: 0
 
+    // Issue #801 评论 5894035036: 鼠标和触屏 TapHandler 拆开，pressed 取并集。
     property real visualOffsetX:
-        (isSelected || isBeingDragged || embedLeftTap.pressed) ? 0 : _wobbleAnimX
+        (isSelected || isBeingDragged || embedMouseTap.pressed || embedTouchTap.pressed) ? 0 : _wobbleAnimX
     property real visualOffsetY:
-        (isSelected || isBeingDragged || embedLeftTap.pressed) ? 0 : _wobbleAnimY
+        (isSelected || isBeingDragged || embedMouseTap.pressed || embedTouchTap.pressed) ? 0 : _wobbleAnimY
 
     // ---------------------------------------------------------------------------
     // 对外信号：Embed 只上抛事件，由 Canvas 决定后续行为
+    // Issue #801 评论 5894035036: 长按按设备拆分（与 Node 对称）——
+    //   mouseLongPressed: 鼠标长按 → Canvas 进 connect
+    //   touchLongPressed: 触屏长按 → Canvas 进 contextPending
     // ---------------------------------------------------------------------------
     signal clicked(string instanceId)
     signal doubleClicked(string targetStarmapId)
     signal rightClicked(string instanceId)
     signal moveDelta(real dx, real dy)
-    signal longPressed(string instanceId)
+    signal mouseLongPressed(string instanceId)
+    signal touchLongPressed(string instanceId)
     signal contextMenuRequested(string instanceId, real sceneX, real sceneY)
     signal leftReleased()
+
+    // Issue #801 评论 5894981235: 鼠标交互上抛信号，通知 Canvas 切回鼠标模式
+    // （隐藏触屏 +/- 按钮）。触屏 TapHandler 不发此信号。
+    signal mouseInteracted()
 
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
@@ -75,7 +87,8 @@ Item {
         anchors.fill: parent
 
         radius: root._radiusSm
-        color: root._surfaceContainer
+        // Issue #801: 用 accentSoft 背景色调暗示可进入的嵌套空间（非文字方式）
+        color: root.isSelected ? root._surfaceContainer : root._accentSoft
         // 选中态和 StarMapNode.qml 一样有明确边框
         border.color: root.isSelected ? root._accent : root._border
         border.width: root.isSelected ? 2 : 1
@@ -97,27 +110,11 @@ Item {
             visible: !root.isSelected
         }
 
+        // Issue #801: 删除顶部"子星图"类型标签条，label 成为主体视觉信息
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
-            spacing: 4
-
-            // 顶部标签：明确写"子星图"，不伪装成普通 Node
-            Rectangle {
-                Layout.fillWidth: true
-                height: 16
-                color: root._accent
-                radius: root._radiusXs
-
-                AppText {
-                    dt: root.dt
-                    anchors.centerIn: parent
-                    text: qsTr("子星图")
-                    color: root._onPrimary
-                    font.pointSize: root.dt.fontXsPt
-                    font.bold: true
-                }
-            }
+            spacing: 0
 
             AppText {
                 dt: root.dt
@@ -132,18 +129,32 @@ Item {
                 verticalAlignment: Text.AlignVCenter
             }
         }
+
+        // Issue #801: 右下角 ▸ 符号暗示可进入的嵌套空间（非文字标签方式）
+        AppText {
+            dt: root.dt
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 4
+            anchors.bottomMargin: 2
+            text: "▸"
+            color: root._accent
+            font.pointSize: root.dt.fontSmPt
+            font.bold: true
+        }
     }
 
     // wobble 降速，和 StarMapNode.qml 一致；选中/按下/拖动时动画暂停
+    // Issue #801 评论 5894035036: pressed 取鼠标/触屏并集。
     SequentialAnimation on _wobbleAnimX {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !embedLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !embedMouseTap.pressed && !embedTouchTap.pressed
         NumberAnimation { to: 0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.6; duration: 7000 + (wobbleIndex % 7) * 400; easing.type: Easing.InOutSine }
     }
     SequentialAnimation on _wobbleAnimY {
         loops: Animation.Infinite
-        running: !isSelected && !isBeingDragged && !embedLeftTap.pressed
+        running: !isSelected && !isBeingDragged && !embedMouseTap.pressed && !embedTouchTap.pressed
         NumberAnimation { to: 0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
         NumberAnimation { to: -0.4; duration: 8500 + (wobbleIndex % 5) * 300; easing.type: Easing.InOutSine }
     }
@@ -151,19 +162,38 @@ Item {
     // ---------------------------------------------------------------------------
     // 交互：TapHandler.SingleTap | DoubleTap 互斥（和 StarMapNode.qml 一致）
     // handler 全部挂在稳定 root Item 上，命中框恒定
+    // Issue #801 评论 5894035036: 按 acceptedDevices 拆鼠标/触屏（与 Node 对称）。
     // ---------------------------------------------------------------------------
     TapHandler {
-        id: embedLeftTap
+        id: embedMouseTap
+        acceptedDevices: PointerDevice.Mouse
+        acceptedButtons: Qt.LeftButton
+        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+
+        // Issue #801 评论 5894981235: 鼠标按下即通知 Canvas 切回鼠标模式。
+        onPressedChanged: { if (pressed) root.mouseInteracted() }
+
+        onSingleTapped: root.clicked(root.instanceId)
+        onDoubleTapped: root.doubleClicked(root.targetStarmapId)
+        onLongPressed: root.mouseLongPressed(root.instanceId)
+    }
+
+    TapHandler {
+        id: embedTouchTap
+        acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
         onSingleTapped: root.clicked(root.instanceId)
         onDoubleTapped: root.doubleClicked(root.targetStarmapId)
-        onLongPressed: root.longPressed(root.instanceId)
+        onLongPressed: root.touchLongPressed(root.instanceId)
     }
 
     TapHandler {
+        acceptedDevices: PointerDevice.Mouse
         acceptedButtons: Qt.RightButton
+        // Issue #801 评论 5894981235: 右键也是鼠标交互。
+        onPressedChanged: { if (pressed) root.mouseInteracted() }
         onSingleTapped: function(eventPoint) {
             root.rightClicked(root.instanceId)
             root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -175,9 +205,12 @@ Item {
     // Canvas 根据 pointerMode 决定 moveDelta 的含义（connect 预览线 / move 移动 Embed）
     // DragHandler 只负责拖动增量；交互结束由 PointHandler 的 leftReleased 统一上抛。
     // （和 StarMapNode.qml 对称，Issue #796 评论 5888480054）
+    // Issue #801 评论 5894035036: 只鼠标直接拖 → move；触屏不在 Embed 上 grab 拖动，
+    // 让事件穿透到背景 pan（触屏 connect 移动由背景层 bgTouchDrag 处理）。
     // ---------------------------------------------------------------------------
     DragHandler {
         id: embedDragHandler
+        acceptedDevices: PointerDevice.Mouse
         target: null
         acceptedButtons: Qt.LeftButton
 
@@ -203,6 +236,7 @@ Item {
     }
 
     // 左键 press→release 观察：PointHandler 用 passive grab
+    // Issue #801 评论 5894035036: 保留鼠标+触屏 release 追踪。
     PointHandler {
         id: leftPointTracker
         acceptedButtons: Qt.LeftButton

@@ -47,6 +47,10 @@ pub struct StarMapBackend {
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
+    resolve_starmap_path_json:
+        qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
+    resolve_starmap_path:
+        qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QJsonObject),
     create_starmap_node_json: qt_method!(
         fn(
             &mut self,
@@ -354,21 +358,21 @@ impl StarMapBackend {
         let gj = graph_json.to_string();
         let nj = nodes_json.to_string();
         let ej = embeds_json.to_string();
-        let graph_dto: writer_core::api::types::StarMapGraphDto =
-            match serde_json::from_str(&gj) {
-                Ok(d) => d,
-                Err(e) => {
-                    return crate::backend::json_utils::envelope_error_json(
-                        writer_core::api::WriterError::Other(format!("Invalid graph JSON: {}", e)),
-                    )
-                    .into()
-                }
-            };
+        let graph_dto: writer_core::api::types::StarMapGraphDto = match serde_json::from_str(&gj) {
+            Ok(d) => d,
+            Err(e) => {
+                return crate::backend::json_utils::envelope_error_json(
+                    writer_core::api::WriterError::Other(format!("Invalid graph JSON: {}", e)),
+                )
+                .into()
+            }
+        };
         match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(
             graph_dto,
         ) {
-            Ok(graph) => crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej)
-                .into(),
+            Ok(graph) => {
+                crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej).into()
+            }
             Err(e) => crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other(e.to_string()),
             )
@@ -410,6 +414,26 @@ impl StarMapBackend {
     }
     fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject {
         self.with_app(|app| app.get_starmap_graph(starmap_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn resolve_starmap_path_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QString {
+        self.with_app(|app| app.resolve_starmap_path_json(root_starmap_id, segments_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn resolve_starmap_path(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.resolve_starmap_path(root_starmap_id, segments_json))
             .unwrap_or_else(|_| {
                 crate::backend::json_utils::qjson_object_from_json(
                     &crate::backend::json_utils::borrow_conflict_error_json(),
