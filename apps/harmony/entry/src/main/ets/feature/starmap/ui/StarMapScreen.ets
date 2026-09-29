@@ -1,21 +1,19 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapTargetPath } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { WidthClass, ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
-import { SharePayload } from '../../../platform/share/SharePayload'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
-import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRectFromLayoutNode, hitTest, computeAllEdgeRenders, screenToCanvas } from '../platform/StarMapGeometry'
-import { PlatformLayoutNode, PlatformPoint, NodePositionPatch, buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout, autoGridLayoutNodes, generatePositionPatches } from '../platform/StarMapLayout'
+import { PlatformNodeRect, PlatformEdgeRender, deriveNodeRectFromLayoutNode, hitTest, computeAllEdgeRenders, screenToCanvas, resolveEdgeEndpointAnchor } from '../platform/StarMapGeometry'
+import { PlatformLayoutNode, PlatformPoint, buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout } from '../platform/StarMapLayout'
 import { PlatformMotionConfig, defaultMotionConfig, wobbleXFromProgress, wobbleYFromProgress, MotionPauseTracker, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
@@ -98,9 +96,6 @@ export struct StarMapScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  // 分享服务（碰一碰/隔空传送/系统分享统一入口）。
-  private shareService: HarmonyShareService = HarmonyShareService.getInstance()
-
   async aboutToAppear() {
     hilog.info(0x0000, 'StarMapScreen', 'route name=StarMap')
     const paramsArr = this.navPathStack.getParamByName(Routes.StarMap) as StarMapRouteParams[]
@@ -118,7 +113,7 @@ export struct StarMapScreen {
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.StarMap)
+      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.StarMapDetail)
       if (policy !== null) {
         this.headerActions = policy.actionSlots
       }
@@ -138,8 +133,6 @@ export struct StarMapScreen {
 
     // 启动 wobble 动画：用 Animator onFrame 逐帧回调驱动 motionProgress
     this.startWobbleAnimation()
-
-    void this.startShareLifecycle()
   }
 
   aboutToDisappear() {
@@ -151,7 +144,6 @@ export struct StarMapScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
-    void this.stopShareLifecycle()
   }
 
   /**
@@ -213,36 +205,6 @@ export struct StarMapScreen {
     } finally {
       this.isLoading = false
     }
-
-    this.updateSharePayload()
-  }
-
-  /**
-   * 自动网格布局：调用平台层的 autoGridLayoutNodes，把结果应用到现有节点。
-   * 只在用户明确点"自动布局"按钮时调用；加载页面不排网格。
-   */
-  applyAutoLayout() {
-    if (this.platformLayoutNodes.length === 0 || this.stackWidth === 0) {
-      return
-    }
-    this.platformLayoutNodes = autoGridLayoutNodes(this.platformLayoutNodes, this.stackWidth, this.stackHeight)
-    this.recomputeGeometry()
-    // 自动布局后把结果通过 position patch 写回 Core
-    this.saveAllNodePositions()
-  }
-
-  /**
-   * 保存所有节点位置到 Core（自动布局后批量写回 position patch）。
-   */
-  async saveAllNodePositions() {
-    if (!this.graph) return
-    const patches: NodePositionPatch[] = generatePositionPatches(this.platformLayoutNodes)
-    for (const patch of patches) {
-      const result = await this.bridge.updateStarMapNode(this.starmapId, patch.nodeId, { x: patch.x, y: patch.y })
-      if (!result.success) {
-        hilog.error(0x0000, 'StarMapScreen', `saveAllNodePositions ${patch.nodeId} failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
-      }
-    }
   }
 
   /**
@@ -266,7 +228,7 @@ export struct StarMapScreen {
       rectMap.set(rect.nodeId, rect)
     }
     // 本地计算 edgeRenders
-    this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap)
+    this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap, this.starmapId)
     // 几何重算后主动重画边 Canvas（canvasCtx 可能还未初始化，drawEdges 内部有 null 检查）
     this.drawEdges()
   }
@@ -311,9 +273,10 @@ export struct StarMapScreen {
     return kindNames[kind] || getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_unknown').id)
   }
 
-  selectNode(nodeId: string) {
-    this.selectedNodeId = nodeId
-    this.selectedNode = this.graph?.nodes.find(n => n.id === nodeId) || null
+  selectItem(itemId: string) {
+    this.selectedNodeId = itemId
+    // 只有普通节点才赋值 selectedNode；Embed 选中只做视觉高亮，不弹面板
+    this.selectedNode = this.graph?.nodes.find(n => n.id === itemId) || null
   }
 
   deselectNode() {
@@ -374,7 +337,7 @@ export struct StarMapScreen {
   private getNodeScreenX(nodeId: string): number {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseX = ln ? ln.x : 0
-    const wobbleDx = wobbleXFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+    const wobbleDx = wobbleXFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
     return (baseX + wobbleDx) * this.zoomScale + this.offsetX
   }
 
@@ -384,7 +347,7 @@ export struct StarMapScreen {
   private getNodeScreenY(nodeId: string): number {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseY = ln ? ln.y : 0
-    const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+    const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
     return (baseY + wobbleDy) * this.zoomScale + this.offsetY
   }
 
@@ -491,149 +454,9 @@ export struct StarMapScreen {
     }
   }
 
-  // —— 分享生命周期（保留不变）——
-
-  buildSharePayload(): SharePayload {
-    const title: string = this.starmapTitle
-    let text: string = ''
-    if (this.graph !== null) {
-      const nodeCount: number = this.graph.nodes.length
-      const edgeCount: number = this.graph.edges.length
-      const nodeNames: string[] = []
-      for (let i = 0; i < this.graph.nodes.length; i++) {
-        const node: StarMapNode = this.graph.nodes[i]
-        if (node.title.length > 0) {
-          nodeNames.push(node.title)
-          if (nodeNames.length >= 20) {
-            break
-          }
-        }
-      }
-      text = `\u661f\u56fe\uff1a${title}\n\u8282\u70b9 ${nodeCount} / \u5173\u7cfb ${edgeCount}`
-      if (nodeNames.length > 0) {
-        text = text + '\n' + nodeNames.join('\u3001')
-      }
-    } else {
-      if (title.length > 0) {
-        text = `\u661f\u56fe\uff1a${title}`
-      }
-    }
-    const payload: SharePayload = {
-      kind: 'text',
-      text: text
-    }
-    if (title.length > 0) {
-      payload.title = title
-    }
-    return payload
-  }
-
-  async startShareLifecycle(): Promise<void> {
-    const payload: SharePayload = this.buildSharePayload()
-    try {
-      this.shareService.startTapSharing(payload)
-    } catch (e) {
-    }
-    try {
-      await this.shareService.startAirTransferSharing(payload)
-    } catch (e) {
-    }
-  }
-
-  updateSharePayload(): void {
-    const payload: SharePayload = this.buildSharePayload()
-    try {
-      this.shareService.updateTapPayload(payload)
-      this.shareService.updateAirTransferPayload(payload)
-    } catch (e) {
-    }
-  }
-
-  async stopShareLifecycle(): Promise<void> {
-    try {
-      this.shareService.stopTapSharing()
-    } catch (e) {
-    }
-    try {
-      await this.shareService.stopAirTransferSharing()
-    } catch (e) {
-    }
-    try {
-      this.shareService.updateTapPayload(null)
-      this.shareService.updateAirTransferPayload(null)
-    } catch (e) {
-    }
-  }
-
-  // —— 星图工具条 ——
-
-  @Builder
-  StarMapToolbar() {
-    Row() {
-      // 返回父星图按钮（仅当有父星图时显示）
-      if (this.parentStarmapId.length > 0) {
-        Button($r('app.string.back_to_parent'))
-          .fontSize(12)
-          .height(36)
-          .onClick(() => {
-            this.returnToParent()
-          })
-      }
-
-      Button('−')
-        .width(36)
-        .height(36)
-        .fontSize(18)
-        .onClick(() => {
-          this.zoomOut()
-        })
-
-      Text(`${Math.round(this.zoomScale * 100)}%`)
-        .fontSize(14)
-        .width(60)
-        .textAlign(TextAlign.Center)
-
-      Button('+')
-        .width(36)
-        .height(36)
-        .fontSize(18)
-        .onClick(() => {
-          this.zoomIn()
-        })
-
-      Button($r('app.string.reset'))
-        .fontSize(12)
-        .height(36)
-        .onClick(() => {
-          this.zoomScale = 1
-          this.offsetX = 0
-          this.offsetY = 0
-        })
-
-      Button($r('app.string.auto_layout'))
-        .fontSize(12)
-        .height(36)
-        .onClick(() => {
-          this.applyAutoLayout()
-        })
-
-      Button($r('app.string.share'))
-        .fontSize(12)
-        .height(36)
-        .onClick(() => {
-          void this.shareService.share(this.buildSharePayload(), 'system')
-        })
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .justifyContent(FlexAlign.SpaceEvenly)
-  }
-
   @Builder
   StarMapContent() {
     Column() {
-      this.StarMapToolbar()
-
       if (this.isLoading) {
         Column() {
           LoadingProgress()
@@ -693,16 +516,14 @@ export struct StarMapScreen {
             this.NodeMenu()
           }
 
-          // Node info panel
-          if (this.selectedNode) {
-            this.NodeInfoPanel()
-          }
-
           // Legend
           this.Legend()
 
           // Graph info
           this.GraphInfo()
+
+          // 触屏缩放控件（#373：画布右下角 +/−）
+          this.ZoomControls()
         }
         .layoutWeight(1)
         .width('100%')
@@ -752,7 +573,7 @@ export struct StarMapScreen {
     if (this.useHdsNav) {
       HdsAppDestinationApi23({
         title: this.starmapTitle,
-        screenRole: ScreenRole.StarMap,
+        screenRole: ScreenRole.StarMapDetail,
         screenTabIndex: 1,
         isRoot: false,
         onBack: () => {
@@ -775,20 +596,20 @@ export struct StarMapScreen {
       .title(this.starmapTitle)
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMap, 1)
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMapDetail, 1)
       })
     }
   }
 
   /**
-   * 节点组件：用 GestureGroup(Parallel, LongPress + Pan) 绑定触屏交互。
+   * 节点组件：长按 → 菜单（连线预备态）→ 继续拖动 → connect。
    *
-   * 触屏规则：
+   * 触屏规则（#373）：
    * - 点击节点 → 选中（只改变视觉选中态，不进入手势模式）
-   * - 长按节点 → 弹出节点菜单（nodeMenu 模式）
-   * - 长按后继续移动 → 从 nodeMenu 切到 connect，关闭菜单并显示预览线
-   * - 松手落到另一节点 → 创建关系
-   * - "移动节点"必须从菜单显式进入 moveNode 模式，之后 Pan 才改 node.position
+   * - 长按节点 → 弹出节点菜单（nodeMenu 模式，即连线预备态）
+   * - 长按后继续拖动 → 从 nodeMenu 切到 connect，关闭菜单并显示预览线
+   * - 松手落到另一 item（含 Embed）→ 创建关系
+   * - "移动节点"从菜单显式进入 moveNode 模式，由 parallelGesture 的 Pan 处理
    */
   @Builder
   StarMapNodeItem(node: StarMapNode) {
@@ -798,14 +619,14 @@ export struct StarMapScreen {
         .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
         .strokeWidth(4)
         .shadow({
-          radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id ?
+          radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
             DesignTokens.shadowStrong.radius :
             (this.selectedNodeId === node.id ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
-          color: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id ?
+          color: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
             '#40000000' :
             (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
           offsetX: 0,
-          offsetY: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id ?
+          offsetY: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
             DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
         })
 
@@ -825,37 +646,35 @@ export struct StarMapScreen {
       y: this.getNodeScreenY(node.id)
     })
     .scale(
-      this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeNodeId === node.id
+      this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id
         ? { x: this.motionConfig.dragLiftScale, y: this.motionConfig.dragLiftScale }
         : { x: 1, y: 1 }
     )
     .onClick(() => {
       // 点击节点 → 选中（不进入手势模式）
-      this.selectNode(node.id)
+      this.selectItem(node.id)
     })
     .gesture(
-      GestureGroup(GestureMode.Parallel,
-        // 长按 → 弹出节点菜单
-        LongPressGesture({ repeat: false, duration: 500 })
-          .onAction((event: GestureEvent) => {
-            const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
-            this.gestureTracker.beginNodeMenu(node.id, point.x, point.y)
-            this.gestureMode = 'nodeMenu'
-            this.showNodeMenu = true
-            this.nodeMenuNodeId = node.id
-            this.selectNode(node.id)
-          }),
-        // Pan → 根据当前手势模式处理
-        PanGesture()
-          .onActionStart((event: GestureEvent) => {
-            const state = this.gestureTracker.getState()
-            if (state.mode === 'nodeMenu') {
-              // 长按后继续移动 → 从 nodeMenu 切到 connect
+      // Exclusive 入口：长按序列赢了就是拉线；没长按就是普通 Pan
+      // 只有用户从菜单点了"移动"后，普通 Pan 才移动节点；否则移动画布
+      GestureGroup(GestureMode.Exclusive,
+        // 第一条：明确长按成功后，才允许进入拉线
+        GestureGroup(GestureMode.Sequence,
+          LongPressGesture({ repeat: false, duration: 500 })
+            .onAction((event: GestureEvent) => {
+              const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+              this.gestureTracker.beginNodeMenu(node.id, point.x, point.y)
+              this.gestureMode = 'nodeMenu'
+              this.showNodeMenu = true
+              this.nodeMenuNodeId = node.id
+              this.selectItem(node.id)
+            }),
+          PanGesture()
+            .onActionStart((event: GestureEvent) => {
               const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
               this.gestureTracker.beginConnect(node.id, point.x, point.y)
               this.gestureMode = 'connect'
               this.showNodeMenu = false
-              // 设置预览线起点（节点中心屏幕坐标）
               const ln = this.getPlatformLayoutNode(node.id)
               if (ln) {
                 this.previewLineFrom = {
@@ -864,59 +683,76 @@ export struct StarMapScreen {
                 }
               }
               this.previewLineTo = point
-            } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
-              // 从菜单显式进入 moveNode 后，Pan 改 node.position
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              const state = this.gestureTracker.getState()
+              if (state.mode === 'connect') {
+                this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+                this.drawPreviewLine()
+              }
+            })
+            .onActionEnd(() => {
+              const state = this.gestureTracker.getState()
+              if (state.mode === 'connect') {
+                // connect 松手：命中测试查完整 nodeRects（含 Embed），不过滤
+                const screenX = this.previewLineTo.x
+                const screenY = this.previewLineTo.y
+                const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
+                const targetItemId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
+                if (targetItemId !== null && targetItemId !== node.id) {
+                  void this.createEdge(node.id, targetItemId)
+                }
+              }
+              this.gestureTracker.reset()
+              this.gestureMode = 'idle'
+              this.showNodeMenu = false
+              this.nodeMenuNodeId = ''
+            })
+        ),
+        // 第二条：没有长按成功时的普通滑动
+        PanGesture()
+          .onActionStart((event: GestureEvent) => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveNode' && state.activeItemId === node.id) {
+              // 记录节点移动起点
               this.motionPauseTracker.pauseNode(node.id)
               const ln = this.getPlatformLayoutNode(node.id)
               if (ln) {
                 this.moveNodeStartX = ln.x
                 this.moveNodeStartY = ln.y
               }
+            } else {
+              // 非移动模式：滑动交给画布 Pan
+              const point = this.gestureScreenPoint(event, 0, 0)
+              this.gestureTracker.beginPanCanvas(point.x, point.y)
+              this.gestureMode = 'panCanvas'
+              this.panBaseX = this.offsetX
+              this.panBaseY = this.offsetY
             }
           })
           .onActionUpdate((event: GestureEvent) => {
             const state = this.gestureTracker.getState()
-            if (state.mode === 'connect') {
-              // connect 模式：更新预览线终点（触点相对节点的偏移 + 节点屏幕位置）
-              this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
-              // 预览线跟手重画：onReady 只画一次，手指移动时必须主动重绘
-              this.drawPreviewLine()
-            } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
-              // moveNode 模式：更新节点位置（base+offset 避免重复累加）
+            if (state.mode === 'moveNode' && state.activeItemId === node.id) {
+              // 移动节点
               const newDx = this.moveNodeStartX + event.offsetX / this.zoomScale
               const newDy = this.moveNodeStartY + event.offsetY / this.zoomScale
               const positions = new Map<string, PlatformPoint>()
               positions.set(node.id, { x: newDx, y: newDy })
               this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
               this.recomputeGeometry()
+            } else if (state.mode === 'panCanvas') {
+              this.offsetX = this.panBaseX + event.offsetX
+              this.offsetY = this.panBaseY + event.offsetY
             }
           })
           .onActionEnd(() => {
             const state = this.gestureTracker.getState()
-            if (state.mode === 'connect') {
-              // connect 模式：检查是否落到另一节点，创建关系
-              const screenX = this.previewLineTo.x
-              const screenY = this.previewLineTo.y
-              // 将屏幕坐标转为画布坐标进行命中测试
-              const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
-              // 建边命中只查普通节点 rect，不能把 Embed 当 Node target
-              // （Embed 的 Pan 没有 connect 路径，addStarMapEdge 也只接受 Node ID）
-              const nodeOnlyRects: PlatformNodeRect[] = this.nodeRects.filter((r: PlatformNodeRect) => !this.isEmbed(r.nodeId))
-              const targetNodeId = hitTest(nodeOnlyRects, canvasPoint.x, canvasPoint.y)
-              if (targetNodeId !== null && targetNodeId !== node.id) {
-                // 创建关系：走 Core 的 add_starmap_edge
-                void this.createEdge(node.id, targetNodeId)
-              }
-            } else if (state.mode === 'moveNode' && state.activeNodeId === node.id) {
-              // 移动结束：通过 bridge 的节点更新 API 把 position 写回 Core
+            if (state.mode === 'moveNode' && state.activeItemId === node.id) {
               void this.saveNodePosition(node.id)
               this.motionPauseTracker.resumeNode(node.id)
             }
-            // 重置手势状态
             this.gestureTracker.reset()
             this.gestureMode = 'idle'
-            this.showNodeMenu = false
-            this.nodeMenuNodeId = ''
           })
       )
     )
@@ -941,71 +777,183 @@ export struct StarMapScreen {
     .height(120 * this.zoomScale)
     .borderRadius(12 * this.zoomScale)
     .backgroundColor('#E8E8E8')
-    .border({ width: 2, color: '#CCCCCC' })
+    .border({
+      width: this.selectedNodeId === embed.instanceId ? 3 : 2,
+      color: this.selectedNodeId === embed.instanceId
+        ? this.themeConfig.colors.primary
+        : this.themeConfig.colors.outlineVariant
+    })
     .position({
       x: this.getEmbedScreenX(embed.instanceId),
       y: this.getEmbedScreenY(embed.instanceId)
     })
-    .onClick(() => {
-      // 点击 Embed → 进入子星图
-      this.navigateToEmbed(embed)
-    })
     .gesture(
-      GestureGroup(GestureMode.Parallel,
-        LongPressGesture({ repeat: false, duration: 500 })
-          .onAction((event: GestureEvent) => {
-            const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
-            this.gestureTracker.beginNodeMenu(embed.instanceId, point.x, point.y)
-            this.gestureMode = 'nodeMenu'
-            this.showNodeMenu = true
-            this.nodeMenuNodeId = embed.instanceId
+      // Exclusive 入口：双击进入子星图；单击选中；长按序列拉线；普通 Pan 移动画布/Embed
+      GestureGroup(GestureMode.Exclusive,
+        // 双击 → 进入子星图
+        TapGesture({ count: 2 })
+          .onAction(() => {
+            this.navigateToEmbed(embed)
           }),
+        // 单击 → 选中高亮
+        TapGesture({ count: 1 })
+          .onAction(() => {
+            this.selectItem(embed.instanceId)
+          }),
+        // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
+        GestureGroup(GestureMode.Sequence,
+          LongPressGesture({ repeat: false, duration: 500 })
+            .onAction((event: GestureEvent) => {
+              const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+              this.gestureTracker.beginNodeMenu(embed.instanceId, point.x, point.y)
+              this.gestureMode = 'nodeMenu'
+              this.showNodeMenu = true
+              this.nodeMenuNodeId = embed.instanceId
+            }),
+          PanGesture()
+            .onActionStart((event: GestureEvent) => {
+              const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+              this.gestureTracker.beginConnect(embed.instanceId, point.x, point.y)
+              this.gestureMode = 'connect'
+              this.showNodeMenu = false
+              const ln = this.getPlatformLayoutNode(embed.instanceId)
+              if (ln) {
+                this.previewLineFrom = {
+                  x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
+                  y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
+                }
+              }
+              this.previewLineTo = point
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              const state = this.gestureTracker.getState()
+              if (state.mode === 'connect') {
+                this.previewLineTo = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+                this.drawPreviewLine()
+              }
+            })
+            .onActionEnd(() => {
+              const state = this.gestureTracker.getState()
+              if (state.mode === 'connect') {
+                // 命中测试查完整 nodeRects（含 Embed）
+                const screenX = this.previewLineTo.x
+                const screenY = this.previewLineTo.y
+                const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
+                const targetItemId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
+                if (targetItemId !== null && targetItemId !== embed.instanceId) {
+                  void this.createEdge(embed.instanceId, targetItemId)
+                }
+              }
+              this.gestureTracker.reset()
+              this.gestureMode = 'idle'
+              this.showNodeMenu = false
+              this.nodeMenuNodeId = ''
+            })
+        ),
+        // 没有长按成功时的普通滑动
         PanGesture()
           .onActionStart((event: GestureEvent) => {
             const state = this.gestureTracker.getState()
-            if (state.mode === 'moveEmbed' && state.activeNodeId === embed.instanceId) {
+            if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
+              // 记录 Embed 移动起点
               this.motionPauseTracker.pauseNode(embed.instanceId)
               const ln = this.getPlatformLayoutNode(embed.instanceId)
               if (ln) {
                 this.moveEmbedStartX = ln.x
                 this.moveEmbedStartY = ln.y
               }
+            } else {
+              // 非移动模式：滑动交给画布 Pan
+              const point = this.gestureScreenPoint(event, 0, 0)
+              this.gestureTracker.beginPanCanvas(point.x, point.y)
+              this.gestureMode = 'panCanvas'
+              this.panBaseX = this.offsetX
+              this.panBaseY = this.offsetY
             }
           })
           .onActionUpdate((event: GestureEvent) => {
             const state = this.gestureTracker.getState()
-            if (state.mode === 'moveEmbed' && state.activeNodeId === embed.instanceId) {
-              // moveEmbed 模式：更新 Embed 位置（base+offset 避免重复累加）
+            if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
+              // 移动 Embed
               const newDx = this.moveEmbedStartX + event.offsetX / this.zoomScale
               const newDy = this.moveEmbedStartY + event.offsetY / this.zoomScale
               const positions = new Map<string, PlatformPoint>()
               positions.set(embed.instanceId, { x: newDx, y: newDy })
               this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
               this.recomputeGeometry()
+            } else if (state.mode === 'panCanvas') {
+              this.offsetX = this.panBaseX + event.offsetX
+              this.offsetY = this.panBaseY + event.offsetY
             }
           })
           .onActionEnd(() => {
             const state = this.gestureTracker.getState()
-            if (state.mode === 'moveEmbed') {
-              // 移动结束：通过 bridge 的 Embed update API 把 position 写回 Core
+            if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
               void this.saveEmbedPosition(embed.instanceId)
               this.motionPauseTracker.resumeNode(embed.instanceId)
             }
             this.gestureTracker.reset()
             this.gestureMode = 'idle'
-            this.showNodeMenu = false
-            this.nodeMenuNodeId = ''
           })
       )
     )
   }
 
   /**
-   * 创建关系（边）：通过 bridge 的星图 CRUD API。
+   * 构造 item 的 StarMapTargetPath 端点。
+   * - 普通节点：{ starmapId, segments: [], target: { type: 'node', nodeId, ...null } }
+   * - Embed：{ starmapId, segments: [{ type: 'enterEmbed', instanceId, nodeId: null }], target: { type: 'starmap', ...null } }
    */
-  async createEdge(fromNodeId: string, toNodeId: string) {
-    hilog.info(0x0000, 'StarMapScreen', `createEdge: ${fromNodeId} → ${toNodeId}`)
-    const result = await this.bridge.addStarMapEdge(this.starmapId, fromNodeId, toNodeId, 'RelatedTo', null)
+  private buildItemTargetPath(itemId: string): StarMapTargetPath {
+    if (this.isEmbed(itemId)) {
+      return {
+        starmapId: this.starmapId,
+        segments: [
+          { type: 'enterEmbed', instanceId: itemId, nodeId: null }
+        ],
+        target: {
+          type: 'starmap',
+          nodeId: null,
+          anchorId: null,
+          projectId: null,
+          volumeId: null,
+          chapterId: null,
+          rangeStart: null,
+          rangeEnd: null,
+          entityType: null,
+          entityId: null,
+          uri: null
+        }
+      }
+    }
+    return {
+      starmapId: this.starmapId,
+      segments: [],
+      target: {
+        type: 'node',
+        nodeId: itemId,
+        anchorId: null,
+        projectId: null,
+        volumeId: null,
+        chapterId: null,
+        rangeStart: null,
+        rangeEnd: null,
+        entityType: null,
+        entityId: null,
+        uri: null
+      }
+    }
+  }
+
+  /**
+   * 创建关系（边）：通过 bridge 的星图 CRUD API。
+   * fromItemId/toItemId 可以是普通节点 nodeId 或 Embed instanceId，由 buildItemTargetPath 构造完整端点。
+   */
+  async createEdge(fromItemId: string, toItemId: string) {
+    hilog.info(0x0000, 'StarMapScreen', `createEdge: ${fromItemId} → ${toItemId}`)
+    const from = this.buildItemTargetPath(fromItemId)
+    const to = this.buildItemTargetPath(toItemId)
+    const result = await this.bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null)
     if (result.success) {
       // 重新加载星图以获取新边
       this.loadStarMap()
@@ -1029,8 +977,8 @@ export struct StarMapScreen {
 
   /**
    * 节点菜单：长按节点/Embed后弹出。
-   * 普通节点和 Embed 分开菜单：Embed 只有"移动子星图"，普通节点有"移动节点"和"创建关系"。
-   * Embed 上"移动节点"/"创建关系"会进入无效状态（Embed 的 Pan 不处理 moveNode/connect）。
+   * 普通节点和 Embed 分开菜单：Embed 只有"移动子星图"，普通节点只有"移动节点"。
+   * #373：菜单本身就是连线预备态，长按后继续拖动即 connect，不需要单独的创建关系按钮。
    */
   @Builder
   NodeMenu() {
@@ -1053,7 +1001,7 @@ export struct StarMapScreen {
             this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
           })
       } else {
-        // 普通节点菜单：移动节点 + 创建关系
+        // 普通节点菜单：移动节点（connect 由长按后拖动直接进入）
         Button($r('app.string.move_node'))
           .fontSize(13)
           .height(36)
@@ -1063,25 +1011,6 @@ export struct StarMapScreen {
             this.gestureMode = 'moveNode'
             this.showNodeMenu = false
             this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
-          })
-
-        Button($r('app.string.connect_node'))
-          .fontSize(13)
-          .height(36)
-          .width('100%')
-          .margin({ top: 4 })
-          .onClick(() => {
-            this.gestureTracker.beginConnect(this.nodeMenuNodeId, 0, 0)
-            this.gestureMode = 'connect'
-            this.showNodeMenu = false
-            const ln = this.getPlatformLayoutNode(this.nodeMenuNodeId)
-            if (ln) {
-              this.previewLineFrom = {
-                x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
-                y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
-              }
-            }
-            this.previewLineTo = this.previewLineFrom
           })
       }
 
@@ -1106,96 +1035,6 @@ export struct StarMapScreen {
     .position({
       x: this.getNodeScreenX(this.nodeMenuNodeId) + 80,
       y: this.getNodeScreenY(this.nodeMenuNodeId) - 40
-    })
-  }
-
-  @Builder
-  NodeInfoPanel() {
-    Column() {
-      Row() {
-        Text($r('app.string.node_info'))
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-        Blank()
-
-        Text('✕')
-          .fontSize(18)
-          .onClick(() => {
-            this.deselectNode()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 12 })
-
-      Column() {
-        Row() {
-          Circle({ width: 12, height: 12 })
-            .fill(this.getNodeColor(this.selectedNode!))
-            .margin({ right: 8 })
-
-          Text(this.getNodeTypeName(this.selectedNode!.kind))
-            .fontSize(12)
-        }
-        .margin({ bottom: 12 })
-
-        Text(this.selectedNode!.title)
-          .fontSize(22)
-          .fontWeight(FontWeight.Bold)
-          .margin({ bottom: 8 })
-
-        if (this.selectedNode!.content.summary) {
-          Text(this.selectedNode!.content.summary)
-            .fontSize(14)
-            .margin({ bottom: 12 })
-        }
-
-        // 节点坐标 — 从 platformLayoutNodes 查找
-        Row() {
-          Text(`X: ${Math.round(this.getPlatformLayoutNode(this.selectedNodeId)?.x ?? 0)}`)
-            .fontSize(12)
-            .margin({ right: 16 })
-
-          Text(`Y: ${Math.round(this.getPlatformLayoutNode(this.selectedNodeId)?.y ?? 0)}`)
-            .fontSize(12)
-        }
-        .margin({ bottom: 16 })
-
-        if (this.graph) {
-          Text($r('app.string.related_relations'))
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .margin({ bottom: 8 })
-
-          ForEach(this.graph.edges.filter(e =>
-            e.from.target.nodeId === this.selectedNodeId || e.to.target.nodeId === this.selectedNodeId
-          ), (edge: StarMapEdge) => {
-            Row() {
-              Circle({ width: 8, height: 8 })
-                .margin({ right: 8 })
-
-              Column() {
-                Text(edge.label || getContext(this).resourceManager.getStringSync($r('app.string.unnamed_relation').id))
-                  .fontSize(13)
-                Text(this.getEdgeTypeName(edge.kind))
-                  .fontSize(11)
-              }
-              .layoutWeight(1)
-
-              Text(edge.from.target.nodeId === this.selectedNodeId ? '→' : '←')
-                .fontSize(14)
-            }
-            .margin({ bottom: 8 })
-          }, (edge: StarMapEdge) => edge.id)
-        }
-      }
-    }
-    .width(300)
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
-    .position({
-      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 300 - 16 : 16,
-      y: 16
     })
   }
 
@@ -1254,7 +1093,38 @@ export struct StarMapScreen {
     .padding(8)
     .borderRadius(DesignTokens.radiusXs)
     .shadow({ radius: 2, offsetX: 0, offsetY: 1 })
-    .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 })
+    .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 - 56 })
+  }
+
+  @Builder
+  ZoomControls() {
+    Row() {
+      Button('−')
+        .width(40)
+        .height(40)
+        .fontSize(20)
+        .borderRadius(20)
+        .backgroundColor('#FFFFFF')
+        .margin({ right: 8 })
+        .onClick(() => {
+          this.zoomOut()
+        })
+
+      Button('+')
+        .width(40)
+        .height(40)
+        .fontSize(20)
+        .borderRadius(20)
+        .backgroundColor('#FFFFFF')
+        .onClick(() => {
+          this.zoomIn()
+        })
+    }
+    .position({
+      x: this.stackWidth - 96 - 16,
+      y: this.stackHeight - 40 - 16
+    })
+    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
   }
 
   // —— Canvas 绘制 ——
@@ -1286,8 +1156,8 @@ export struct StarMapScreen {
     const progress = this.motionProgress
     const wobbleMap = new Map<string, WobbleOffset>()
     for (const node of this.graph.nodes) {
-      const dx = wobbleXFromProgress(node.id, progress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
-      const dy = wobbleYFromProgress(node.id, progress, this.motionConfig, this.gestureTracker.getState().activeNodeId)
+      const dx = wobbleXFromProgress(node.id, progress, this.motionConfig, this.gestureTracker.getState().activeItemId)
+      const dy = wobbleYFromProgress(node.id, progress, this.motionConfig, this.gestureTracker.getState().activeItemId)
       wobbleMap.set(node.id, { dx, dy })
     }
 
@@ -1295,8 +1165,8 @@ export struct StarMapScreen {
       const graphEdge = this.graph.edges.find(e => e.id === edge.edgeId)
       if (!graphEdge) continue
 
-      const fromId = graphEdge.from.target.nodeId || ''
-      const toId = graphEdge.to.target.nodeId || ''
+      const fromId = resolveEdgeEndpointAnchor(graphEdge.from, this.starmapId) ?? ''
+      const toId = resolveEdgeEndpointAnchor(graphEdge.to, this.starmapId) ?? ''
       const defaultWobble: WobbleOffset = { dx: 0, dy: 0 }
       const fromWobble = wobbleMap.get(fromId) || defaultWobble
       const toWobble = wobbleMap.get(toId) || defaultWobble

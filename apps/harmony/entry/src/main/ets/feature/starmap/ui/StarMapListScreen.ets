@@ -303,27 +303,28 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListPane() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
-      Scroll() {
-        Column() {
-          if (this.starMaps.length === 0) {
-            this.EmptyState()
-          } else {
-            ForEach(this.starMaps, (starmap: StarMapMeta) => {
-              this.StarMapCard(starmap)
-            }, (starmap: StarMapMeta) => starmap.starmapId)
-          }
+    Scroll() {
+      Column() {
+        if (this.starMaps.length === 0) {
+          this.EmptyState()
+        } else {
+          ForEach(this.starMaps, (starmap: StarMapMeta) => {
+            this.StarMapCard(starmap)
+          }, (starmap: StarMapMeta) => starmap.starmapId)
         }
-        .width('100%')
-        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-        .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 16 })
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .align(Alignment.Top)
+      .width('100%')
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({
+        left: this.adaptiveState.pagePadding,
+        right: this.adaptiveState.pagePadding,
+        top: 8,
+        bottom: 16
+      })
     }
     .width('100%')
     .height('100%')
+    .scrollBar(BarState.Off)
   }
 
   // ── 加载中 ──
