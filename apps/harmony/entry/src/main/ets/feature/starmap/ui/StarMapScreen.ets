@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapTargetPath } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapTargetPath, StarMapPoint } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -67,10 +67,25 @@ export struct StarMapScreen {
   @State previewLineFrom: PlatformPoint = { x: 0, y: 0 }
   @State previewLineTo: PlatformPoint = { x: 0, y: 0 }
 
+  // 新建节点/子星图菜单
+  @State showCreateMenu: boolean = false
+  @State createMenuPosition: PlatformPoint = { x: 0, y: 0 }
+  @State createMenuCanvasPosition: PlatformPoint = { x: 0, y: 0 }
+  @State showCreateNodeDialog: boolean = false
+  @State showCreateEmbedDialog: boolean = false
+  @State newNodeTitle: string = ''
+  @State newNodeKind: string = 'Character'
+  @State newEmbedTitle: string = ''
+
   // 动画驱动：用 Animator onFrame 逐帧回调驱动 motionProgress ∈ [0, 1]
   // progress 直接映射到 wobble 的 sin/cos 相位，每帧更新节点位置和 Canvas 边
   @State @Watch('onMotionProgressChange') motionProgress: number = 0
   private wobbleAnimator: AnimatorResult | null = null
+
+  // Canvas 生命周期状态
+  @State canvasActive: boolean = false
+  @State canvasReady: boolean = false
+  @State previewCanvasReady: boolean = false
 
   // 双指缩放的基准比例（手势开始时记录）
   private pinchBaseScale: number = 1
@@ -131,13 +146,24 @@ export struct StarMapScreen {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
+    // Canvas 激活：在启动 wobble 之前设置
+    this.canvasActive = true
+
     // 启动 wobble 动画：用 Animator onFrame 逐帧回调驱动 motionProgress
     this.startWobbleAnimation()
   }
 
   aboutToDisappear() {
-    // 页面退出时 cancel Animator，避免动画继续持有页面状态
+    // 先置 inactive，再 cancel animator、reset gesture/menu
+    this.canvasActive = false
+    this.canvasReady = false
+    this.previewCanvasReady = false
     this.stopWobbleAnimation()
+    this.gestureTracker.reset()
+    this.gestureMode = 'idle'
+    this.showNodeMenu = false
+    this.showCreateMenu = false
+    this.nodeMenuNodeId = ''
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -488,6 +514,7 @@ export struct StarMapScreen {
             .width('100%')
             .height('100%')
             .onReady(() => {
+              this.canvasReady = true
               this.drawEdges()
             })
 
@@ -507,6 +534,7 @@ export struct StarMapScreen {
               .width('100%')
               .height('100%')
               .onReady(() => {
+                this.previewCanvasReady = true
                 this.drawPreviewLine()
               })
           }
@@ -516,14 +544,23 @@ export struct StarMapScreen {
             this.NodeMenu()
           }
 
-          // Legend
-          this.Legend()
-
-          // Graph info
-          this.GraphInfo()
+          // 新建菜单（空白区域长按后显示）
+          if (this.showCreateMenu) {
+            this.CreateMenu()
+          }
 
           // 触屏缩放控件（#373：画布右下角 +/−）
           this.ZoomControls()
+
+          // 新建节点对话框
+          if (this.showCreateNodeDialog) {
+            this.CreateNodeDialog()
+          }
+
+          // 新建子星图对话框
+          if (this.showCreateEmbedDialog) {
+            this.CreateEmbedDialog()
+          }
         }
         .layoutWeight(1)
         .width('100%')
@@ -559,6 +596,17 @@ export struct StarMapScreen {
               .onActionEnd(() => {
                 this.gestureTracker.reset()
                 this.gestureMode = 'idle'
+              }),
+            LongPressGesture({ repeat: false, duration: 500 })
+              .onAction((event: GestureEvent) => {
+                const point = this.gestureScreenPoint(event, 0, 0)
+                const canvasPoint = screenToCanvas(point.x, point.y, this.zoomScale, this.offsetX, this.offsetY)
+                const hitItemId = hitTest(this.nodeRects, canvasPoint.x, canvasPoint.y)
+                if (hitItemId === null) {
+                  this.showCreateMenu = true
+                  this.createMenuPosition = { x: point.x, y: point.y }
+                  this.createMenuCanvasPosition = { x: canvasPoint.x, y: canvasPoint.y }
+                }
               })
           )
         )
@@ -975,6 +1023,49 @@ export struct StarMapScreen {
     }
   }
 
+  async performCreateNode() {
+    if (this.newNodeTitle.trim().length === 0) return
+    this.showCreateNodeDialog = false
+    const position: StarMapPoint = {
+      x: this.createMenuCanvasPosition.x,
+      y: this.createMenuCanvasPosition.y
+    }
+    const result = await this.bridge.addStarMapNode(this.starmapId, this.newNodeTitle.trim(), this.newNodeKind, position)
+    if (result.success && result.data) {
+      this.loadStarMap()
+      this.selectItem(result.data.id)
+    } else {
+      hilog.error(0x0000, 'StarMapScreen', `addStarMapNode failed: ${result.errorCode}, ${result.userMessage}`)
+    }
+    this.newNodeTitle = ''
+  }
+
+  async performCreateEmbed() {
+    if (this.newEmbedTitle.trim().length === 0) return
+    this.showCreateEmbedDialog = false
+    const createResult = await this.bridge.createStarMap(this.newEmbedTitle.trim(), '')
+    if (!createResult.success || !createResult.data) {
+      hilog.error(0x0000, 'StarMapScreen', `createStarMap for embed failed: ${createResult.errorCode}, ${createResult.userMessage}`)
+      return
+    }
+    const targetStarmapId = createResult.data.starmapId
+    const position: StarMapPoint = {
+      x: this.createMenuCanvasPosition.x,
+      y: this.createMenuCanvasPosition.y
+    }
+    const embedResult = await this.bridge.addStarMapEmbed(this.starmapId, targetStarmapId, this.newEmbedTitle.trim(), position)
+    if (embedResult.success) {
+      this.loadStarMap()
+    } else {
+      hilog.error(0x0000, 'StarMapScreen', `addStarMapEmbed failed, cleaning up orphan starmap: ${embedResult.errorCode}`)
+      const deleteResult = await this.bridge.deleteStarMap(targetStarmapId)
+      if (!deleteResult.success) {
+        hilog.error(0x0000, 'StarMapScreen', `cleanup orphan starmap failed: ${deleteResult.errorCode}`)
+      }
+    }
+    this.newEmbedTitle = ''
+  }
+
   /**
    * 节点菜单：长按节点/Embed后弹出。
    * 普通节点和 Embed 分开菜单：Embed 只有"移动子星图"，普通节点只有"移动节点"。
@@ -1039,92 +1130,187 @@ export struct StarMapScreen {
   }
 
   @Builder
-  Legend() {
-    Column() {
-      Text($r('app.string.legend'))
-        .fontSize(12)
-        .margin({ bottom: 8 })
-
-      Row() {
-        this.LegendItem('#4A90D9', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_character').id))
-        this.LegendItem('#F39C12', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_location').id))
-        this.LegendItem('#9B59B6', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_event').id))
-        this.LegendItem('#2ECC71', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_theme').id))
-      }
-      .margin({ bottom: 4 })
-
-      Row() {
-        this.LegendItem('#E74C3C', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_plot').id))
-        this.LegendItem('#1ABC9C', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_item').id))
-        this.LegendItem('#3498DB', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_organization').id))
-        this.LegendItem('#95A5A6', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_custom').id))
-      }
-    }
-    .padding(12)
-    .borderRadius(DesignTokens.radiusSm)
-    .shadow({ radius: DesignTokens.shadowLight.radius, offsetX: 0, offsetY: DesignTokens.shadowLight.offsetY })
-    .position({
-      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 200 - 16 : 16,
-      y: this.stackHeight - 120 - 16
-    })
-  }
-
-  @Builder
-  LegendItem(color: string, label: string) {
-    Row() {
-      Circle({ width: 10, height: 10 })
-        .fill(color)
-        .margin({ right: 4 })
-
-      Text(label)
-        .fontSize(11)
-    }
-    .margin({ right: 12 })
-  }
-
-  @Builder
-  GraphInfo() {
-    Column() {
-      if (this.graph) {
-        Text(getContext(this).resourceManager.getStringSync($r('app.string.nodes_edges_format').id).replace('%s', `${this.graph.nodes.length}`).replace('%s', `${this.graph.edges.length}`))
-          .fontSize(12)
-      }
-    }
-    .padding(8)
-    .borderRadius(DesignTokens.radiusXs)
-    .shadow({ radius: 2, offsetX: 0, offsetY: 1 })
-    .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 - 56 })
-  }
-
-  @Builder
   ZoomControls() {
-    Row() {
-      Button('−')
-        .width(40)
-        .height(40)
-        .fontSize(20)
-        .borderRadius(20)
-        .backgroundColor('#FFFFFF')
-        .margin({ right: 8 })
+    Row({ space: 8 }) {
+      Button({ type: ButtonType.Circle, stateEffect: true }) {
+        SymbolGlyph($r('sys.symbol.minus'))
+          .fontSize(20)
+      }
+      .width(40)
+      .height(40)
+      .onClick(() => this.zoomOut())
+
+      Button({ type: ButtonType.Circle, stateEffect: true }) {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(20)
+      }
+      .width(40)
+      .height(40)
+      .onClick(() => this.zoomIn())
+    }
+    .align(Alignment.BottomEnd)
+    .margin({ right: 16, bottom: 16 })
+  }
+
+  @Builder
+  CreateMenu() {
+    Column() {
+      Button('新建节点')
+        .fontSize(13)
+        .height(36)
+        .width('100%')
         .onClick(() => {
-          this.zoomOut()
+          this.showCreateMenu = false
+          this.showCreateNodeDialog = true
+          this.newNodeTitle = ''
+          this.newNodeKind = 'Character'
         })
 
-      Button('+')
-        .width(40)
-        .height(40)
-        .fontSize(20)
-        .borderRadius(20)
-        .backgroundColor('#FFFFFF')
+      Button('新建子星图')
+        .fontSize(13)
+        .height(36)
+        .width('100%')
+        .margin({ top: 4 })
         .onClick(() => {
-          this.zoomIn()
+          this.showCreateMenu = false
+          this.showCreateEmbedDialog = true
+          this.newEmbedTitle = ''
+        })
+
+      Button($r('app.string.cancel'))
+        .fontSize(13)
+        .height(36)
+        .width('100%')
+        .margin({ top: 4 })
+        .onClick(() => {
+          this.showCreateMenu = false
         })
     }
-    .position({
-      x: this.stackWidth - 96 - 16,
-      y: this.stackHeight - 40 - 16
-    })
+    .width(160)
+    .padding(12)
+    .borderRadius(DesignTokens.radiusMd)
     .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .position({
+      x: this.createMenuPosition.x,
+      y: this.createMenuPosition.y
+    })
+  }
+
+  @Builder
+  CreateNodeDialog() {
+    Column() {
+      Column() {
+        Text('新建节点')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .margin({ bottom: 16 })
+
+        TextInput({ placeholder: '请输入节点名称' })
+          .width('100%')
+          .height(40)
+          .fontSize(16)
+          .onChange((value: string) => {
+            this.newNodeTitle = value
+          })
+
+        // 节点类型选择
+        Row() {
+          ForEach(['Character', 'Location', 'Event', 'Theme', 'Plot', 'Item', 'Organization', 'Custom'], (kind: string) => {
+            Button(this.getNodeTypeName(kind))
+              .fontSize(12)
+              .height(32)
+              .margin({ right: 4 })
+              .backgroundColor(this.newNodeKind === kind ? $r('sys.color.ohos_id_color_activated') : $r('sys.color.ohos_id_color_button_normal'))
+              .onClick(() => {
+                this.newNodeKind = kind
+              })
+          }, (kind: string) => kind)
+        }
+        .width('100%')
+        .margin({ top: 12 })
+
+        Row() {
+          Button($r('app.string.cancel'))
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.showCreateNodeDialog = false
+              this.newNodeTitle = ''
+            })
+
+          Blank()
+
+          Button($r('app.string.create'))
+            .fontSize(14)
+            .height(36)
+            .enabled(this.newNodeTitle.trim().length > 0)
+            .onClick(() => {
+              this.performCreateNode()
+            })
+        }
+        .width('100%')
+        .margin({ top: 16 })
+      }
+      .width('80%')
+      .padding(20)
+      .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#80000000')
+    .justifyContent(FlexAlign.Center)
+  }
+
+  @Builder
+  CreateEmbedDialog() {
+    Column() {
+      Column() {
+        Text('新建子星图')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .margin({ bottom: 16 })
+
+        TextInput({ placeholder: '请输入子星图名称' })
+          .width('100%')
+          .height(40)
+          .fontSize(16)
+          .onChange((value: string) => {
+            this.newEmbedTitle = value
+          })
+
+        Row() {
+          Button($r('app.string.cancel'))
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.showCreateEmbedDialog = false
+              this.newEmbedTitle = ''
+            })
+
+          Blank()
+
+          Button($r('app.string.create'))
+            .fontSize(14)
+            .height(36)
+            .enabled(this.newEmbedTitle.trim().length > 0)
+            .onClick(() => {
+              this.performCreateEmbed()
+            })
+        }
+        .width('100%')
+        .margin({ top: 16 })
+      }
+      .width('80%')
+      .padding(20)
+      .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#80000000')
+    .justifyContent(FlexAlign.Center)
   }
 
   // —— Canvas 绘制 ——
@@ -1147,7 +1333,7 @@ export struct StarMapScreen {
    * wobble 偏移在节点位置计算中已包含，此处只需应用 zoom/offset 变换。
    */
   drawEdges() {
-    if (!this.canvasCtx || !this.graph) return
+    if (!this.canvasActive || !this.canvasReady || !this.canvasCtx || !this.graph) return
     const ctx = this.canvasCtx
 
     ctx.clearRect(0, 0, ctx.width, ctx.height)
@@ -1226,7 +1412,7 @@ export struct StarMapScreen {
    * 绘制预览连线：connect 模式下从源节点到当前手指位置。
    */
   drawPreviewLine() {
-    if (!this.previewCanvasCtx) return
+    if (!this.canvasActive || !this.previewCanvasReady || !this.previewCanvasCtx) return
     const ctx = this.previewCanvasCtx
 
     ctx.clearRect(0, 0, ctx.width, ctx.height)

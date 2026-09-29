@@ -1,5 +1,5 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeArray } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
@@ -26,6 +26,35 @@ interface StarMapEdgeAddBody {
   kind: string
   label: string | null
   payload: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+/** StarMapNodeDto 请求体：完整节点 JSON，由平台端构造。 */
+interface StarMapNodeAddBody {
+  id: string
+  title: string
+  kind: string
+  payload: string | null
+  tags: string[]
+  content: StarMapNodeContent
+  anchors: StarMapAnchor[]
+  portal: StarMapPortal | null
+  position: StarMapPoint
+  style: StarMapNodeStyle
+  provenance: StarMapProvenance
+  createdAt: number
+  updatedAt: number
+}
+
+/** StarMapEmbedDto 请求体：完整 Embed JSON。 */
+interface StarMapEmbedAddBody {
+  instanceId: string
+  targetStarmapId: string
+  label: string | null
+  position: StarMapPoint
+  hostPath: StarMapTargetPath
+  provenance: StarMapProvenance
   createdAt: number
   updatedAt: number
 }
@@ -122,5 +151,52 @@ export class NativeStarMapBridge {
       const jsonStr: string = this.core.getNativeModule().nativeAddStarMapEdge(starmapId, JSON.stringify(body))
       return this.core.decodeEnvelope<StarMapEdge>(jsonStr, decodeStarMapEdge)
     } catch (e) { return nativeError<StarMapEdge>(e) }
+  }
+
+  async addStarMapNode(starmapId: string, title: string, kind: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
+    try {
+      const now = Date.now()
+      const nodeId = `n_${util.generateRandomUUID(false)}`
+      const body: StarMapNodeAddBody = {
+        id: nodeId,
+        title: title,
+        kind: kind,
+        payload: null,
+        tags: [],
+        content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null, label: null },
+        anchors: [],
+        portal: null,
+        position: position,
+        style: { fillColor: null },
+        provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
+        createdAt: now,
+        updatedAt: now
+      }
+      const jsonStr: string = this.core.getNativeModule().nativeAddStarMapNode(starmapId, JSON.stringify(body), position.x, position.y)
+      return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)
+    } catch (e) { return nativeError<StarMapNode>(e) }
+  }
+
+  async addStarMapEmbed(starmapId: string, targetStarmapId: string, label: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>> {
+    try {
+      const now = Date.now()
+      const embedId = `em_${util.generateRandomUUID(false)}`
+      const body: StarMapEmbedAddBody = {
+        instanceId: embedId,
+        targetStarmapId: targetStarmapId,
+        label: label,
+        position: position,
+        hostPath: {
+          starmapId: starmapId,
+          segments: [],
+          target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null }
+        },
+        provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
+        createdAt: now,
+        updatedAt: now
+      }
+      const jsonStr: string = this.core.getNativeModule().nativeAddStarMapEmbed(starmapId, JSON.stringify(body))
+      return this.core.decodeEnvelope<StarMapEmbed>(jsonStr, decodeStarMapEmbed)
+    } catch (e) { return nativeError<StarMapEmbed>(e) }
   }
 }

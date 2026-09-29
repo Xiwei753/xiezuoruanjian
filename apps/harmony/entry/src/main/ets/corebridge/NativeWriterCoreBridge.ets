@@ -236,6 +236,14 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.starMapBridge.updateStarMapEmbed(starmapId, instanceId, position)
   }
 
+  async addStarMapNode(starmapId: string, title: string, kind: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
+    return this.starMapBridge.addStarMapNode(starmapId, title, kind, position)
+  }
+
+  async addStarMapEmbed(starmapId: string, targetStarmapId: string, label: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>> {
+    return this.starMapBridge.addStarMapEmbed(starmapId, targetStarmapId, label, position)
+  }
+
   // ── Settings ──
 
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {

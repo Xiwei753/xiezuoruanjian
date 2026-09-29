@@ -356,9 +356,10 @@ export class HarmonyDiagnosticsCheckpoint {
   // 安全删除文件 — 如果文件不存在，不抛异常。
   private safeDelete(filePath: string): void {
     try {
-      fs.unlinkSync(filePath)
+      if (fs.accessSync(filePath)) {
+        fs.unlinkSync(filePath)
+      }
     } catch (_) {
-      // 文件不存在是正常情况
     }
   }
 

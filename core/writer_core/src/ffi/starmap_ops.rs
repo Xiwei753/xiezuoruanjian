@@ -2,7 +2,8 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 use crate::api::{
-    StarMapEdgeDto, StarMapEmbedPatchInputDto, StarMapMetaDto, StarMapNodePatchInputDto,
+    StarMapEdgeDto, StarMapEmbedDto, StarMapEmbedPatchInputDto, StarMapMetaDto, StarMapNodeDto,
+    StarMapNodePatchInputDto,
 };
 
 #[no_mangle]
@@ -343,6 +344,94 @@ pub unsafe extern "C" fn writer_core_add_starmap_edge(
     match with_app_service(|svc| {
         let result = svc
             .add_starmap_edge(sid, edge)
+            .map_err(|e| format!("{}", e))?;
+        Ok(result)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id` and `node_json` both point to valid,
+/// null-terminated C strings. Passing null pointers or invalid pointers is
+/// undefined behavior.
+pub unsafe extern "C" fn writer_core_add_starmap_node(
+    starmap_id: *const c_char,
+    node_json: *const c_char,
+    x: f32,
+    y: f32,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
+    };
+    let node_str = match c_str_to_rust(node_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid node_json: error {}", e),
+            )
+        }
+    };
+    let node = match serde_json::from_str::<StarMapNodeDto>(&node_str) {
+        Ok(n) => n,
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse node_json: {}", e)),
+    };
+    match with_app_service(|svc| {
+        let result = svc
+            .add_starmap_node(sid, node, x, y)
+            .map_err(|e| format!("{}", e))?;
+        Ok(result)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `starmap_id` and `embed_json` both point to valid,
+/// null-terminated C strings. Passing null pointers or invalid pointers is
+/// undefined behavior.
+pub unsafe extern "C" fn writer_core_add_starmap_embed(
+    starmap_id: *const c_char,
+    embed_json: *const c_char,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
+    };
+    let embed_str = match c_str_to_rust(embed_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid embed_json: error {}", e),
+            )
+        }
+    };
+    let embed = match serde_json::from_str::<StarMapEmbedDto>(&embed_str) {
+        Ok(e) => e,
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse embed_json: {}", e)),
+    };
+    match with_app_service(|svc| {
+        let result = svc
+            .add_starmap_embed(sid, embed)
             .map_err(|e| format!("{}", e))?;
         Ok(result)
     }) {

@@ -100,6 +100,8 @@ char*  writer_core_delete_starmap(const char* starmap_id);
 char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title);
 char*  writer_core_update_starmap_node(const char* starmap_id, const char* node_id, const char* patch_json);
 char*  writer_core_add_starmap_edge(const char* starmap_id, const char* edge_json);
+char*  writer_core_add_starmap_node(const char* starmap_id, const char* node_json, float x, float y);
+char*  writer_core_add_starmap_embed(const char* starmap_id, const char* embed_json);
 char*  writer_core_update_starmap_embed(const char* starmap_id, const char* instance_id, const char* patch_json);
 
 // ── Sync ──

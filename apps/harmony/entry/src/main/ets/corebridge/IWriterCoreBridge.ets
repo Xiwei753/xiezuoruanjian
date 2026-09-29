@@ -48,6 +48,8 @@ export interface IWriterCoreBridge {
   updateStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>>
   addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>>
   updateStarMapEmbed(starmapId: string, instanceId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>>
+  addStarMapNode(starmapId: string, title: string, kind: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>>
+  addStarMapEmbed(starmapId: string, targetStarmapId: string, label: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>>
 
   // Settings
   getLocalSettings(): Promise<ResultEnvelope<LocalSettings>>

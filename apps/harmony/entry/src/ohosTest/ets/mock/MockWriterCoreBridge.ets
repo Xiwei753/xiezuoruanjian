@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, LayoutMetrics, ScreenPolicy, ActionSlot
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -481,6 +481,51 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     }
     this.mockStarMapGraph.edges.push(edge)
     return this.success(edge)
+  }
+
+  async addStarMapNode(starmapId: string, title: string, kind: string,
+    position: { x: number, y: number }): Promise<ResultEnvelope<StarMapNode>> {
+    await this.delay(200)
+    const now = Date.now()
+    const node: StarMapNode = {
+      id: `n_${now}`,
+      title: title,
+      kind: kind as NodeType,
+      payload: null,
+      tags: [],
+      content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null, label: null },
+      anchors: [],
+      portal: null,
+      position: { x: position.x, y: position.y },
+      style: { fillColor: null },
+      provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
+      createdAt: now,
+      updatedAt: now
+    }
+    this.mockStarMapGraph.nodes.push(node)
+    return this.success(node)
+  }
+
+  async addStarMapEmbed(starmapId: string, targetStarmapId: string, label: string,
+    position: { x: number, y: number }): Promise<ResultEnvelope<StarMapEmbed>> {
+    await this.delay(200)
+    const now = Date.now()
+    const embed: StarMapEmbed = {
+      instanceId: `em_${now}`,
+      targetStarmapId: targetStarmapId,
+      label: label,
+      position: { x: position.x, y: position.y },
+      hostPath: {
+        starmapId: starmapId,
+        segments: [],
+        target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null }
+      },
+      provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
+      createdAt: now,
+      updatedAt: now
+    }
+    this.mockStarMapGraph.embeds.push(embed)
+    return this.success(embed)
   }
 
   // Settings methods

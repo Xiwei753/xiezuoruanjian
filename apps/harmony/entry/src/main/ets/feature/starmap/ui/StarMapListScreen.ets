@@ -224,7 +224,7 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListContent() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
+    Stack({ alignContent: Alignment.TopStart }) {
       Column() {
         if (this.isLoading) {
           this.LoadingView()
@@ -236,6 +236,7 @@ export struct StarMapListScreen {
       }
       .width('100%')
       .height('100%')
+      .align(Alignment.TopStart)
 
       // ── FAB 层：新建星图浮动按钮 ──
       if (!this.isLoading && !this.errorMessage) {
@@ -245,6 +246,7 @@ export struct StarMapListScreen {
         }
         .width(PRIMARY_FAB_SIZE_VP)
         .height(PRIMARY_FAB_SIZE_VP)
+        .align(Alignment.BottomEnd)
         .margin({
           right: this.adaptiveState.pagePadding,
           bottom: PRIMARY_FAB_BOTTOM_INSET_VP
