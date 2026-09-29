@@ -352,7 +352,8 @@ QtObject {
             target: { type: "node", nodeId: nodeId }
         };
         var hl = {
-            hyperlinkId: "",  // Core 生成
+            // hyperlinkId 由 Core 生成
+            hyperlinkId: "",
             source: source,
             targetUri: url,
             label: label || null,

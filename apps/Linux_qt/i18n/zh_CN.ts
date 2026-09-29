@@ -611,6 +611,10 @@
         <translation>Qt 桌面客户端</translation>
     </message>
     <message>
+        <source>切换到另一个工作区目录</source>
+        <translation>切换到另一个工作区目录</translation>
+    </message>
+    <message>
         <source>文字与光标同事务协同（各自独立时长）</source>
         <translation>文字与光标同事务协同（各自独立时长）</translation>
     </message>
@@ -914,12 +918,48 @@
         <translation>修改连线标签</translation>
     </message>
     <message>
+        <source>入口节点</source>
+        <translation>入口节点</translation>
+    </message>
+    <message>
+        <source>写入子星图入口失败</source>
+        <translation>写入子星图入口失败</translation>
+    </message>
+    <message>
+        <source>创建入口节点失败</source>
+        <translation>创建入口节点失败</translation>
+    </message>
+    <message>
+        <source>右键空白处新建节点或子星图</source>
+        <translation>右键空白处新建节点或子星图</translation>
+    </message>
+    <message>
         <source>新建节点</source>
         <translation>新建节点</translation>
     </message>
     <message>
+        <source>标签（可选）</source>
+        <translation>标签（可选）</translation>
+    </message>
+    <message>
+        <source>添加超链接</source>
+        <translation>添加超链接</translation>
+    </message>
+    <message>
+        <source>移动</source>
+        <translation>移动</translation>
+    </message>
+    <message>
         <source>移动节点</source>
         <translation>移动节点</translation>
+    </message>
+    <message>
+        <source>编辑</source>
+        <translation>编辑</translation>
+    </message>
+    <message>
+        <source>超链接</source>
+        <translation>超链接</translation>
     </message>
     <message>
         <source>还没有节点，点击新增节点开始构建星图</source>
@@ -1045,6 +1085,10 @@
     <message>
         <source>更新连线失败</source>
         <translation>更新连线失败</translation>
+    </message>
+    <message>
+        <source>添加超链接失败</source>
+        <translation>添加超链接失败</translation>
     </message>
     <message>
         <source>自动布局失败</source>
@@ -2336,6 +2380,13 @@
     <message>
         <source>采用远端</source>
         <translation>采用远端</translation>
+    </message>
+</context>
+<context>
+    <name>GlobalTopActions</name>
+    <message>
+        <source>搜索</source>
+        <translation>搜索</translation>
     </message>
 </context>
 </TS>
