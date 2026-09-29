@@ -21,6 +21,7 @@ use writer_core::storage::git_repo_layout::GitRepoLayout;
 use writer_core::storage::journal::starmap_child_embed::{
     ack_child_embed_history, recover_pending_child_embed_transactions, CHILD_EMBED_JOURNAL_PREFIX,
 };
+use writer_core::storage::workspace_git::record_workspace_change_set;
 use writer_core::storage::{ensure_workspace_repo, git_runtime};
 
 // ---------------------------------------------------------------------------
@@ -86,10 +87,12 @@ fn list_child_embed_journals(app_data_root: &std::path::Path) -> Vec<std::path::
 
 /// 端到端闭环：`create_starmap_child_embed` 在 history 失败时返回 `pending: true`，
 /// journal 保留在 `EmbedAdded`；随后 `recover_pending_child_embed_transactions` 读到
-/// 该 journal 并返回待补 history 的 change-set；`ack_child_embed_history` 推进 journal
-/// 到 `Completed` 并删除 journal 文件。
+/// 该 journal 并返回待补 history 的 change-set；模拟"下次启动 Git 已恢复"，
+/// 对 change-set 真正调用 `record_workspace_change_set()` 补记 history；
+/// 成功后 `ack_child_embed_history` 推进 journal 到 `Completed` 并删除 journal 文件。
 ///
-/// 这是 Issue #802 评论 5899359012 的核心闭环验证。
+/// 这是 Issue #802 评论 5899359012 的核心闭环验证，也是评论 5901121699 要求补齐的
+/// "history 失败 → 重启补 history → ack"完整端到端测试。
 #[test]
 fn history_failure_retains_journal_then_recovery_and_ack_complete_cycle() {
     let (tmp, api) = make_api_without_git();
@@ -141,7 +144,24 @@ fn history_failure_retains_journal_then_recovery_and_ack_complete_cycle() {
         journal_token,
     );
 
-    // ack：推进 journal 到 Completed 并清理 journal 文件。
+    // 模拟"下次启动 Git 已恢复"：创建 GitRepoLayout 并初始化 workspace git 仓库。
+    let layout = GitRepoLayout::new(app_data_root.to_path_buf());
+    ensure_workspace_repo(&layout).unwrap();
+
+    // 对 recovery 返回的 change-set 真正调用 record_workspace_change_set 补记 history。
+    let commit_result = record_workspace_change_set(
+        &layout,
+        &recovered[0].changes,
+        "recover_child_embed_history",
+    )
+    .unwrap();
+    assert!(
+        commit_result.oid.is_some(),
+        "record_workspace_change_set 应成功产生 commit (staged_count={})",
+        commit_result.staged_count,
+    );
+
+    // history 已补记成功，ack：推进 journal 到 Completed 并清理 journal 文件。
     ack_child_embed_history(app_data_root, &journal_token).unwrap();
     assert!(
         !journal_path.exists(),
