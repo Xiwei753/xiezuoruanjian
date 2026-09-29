@@ -554,7 +554,9 @@ ApplicationWindow {
                 starmapTitle: appController.starmapTitle
                 appState: window.appState
                 onBackClicked: {
-                    appController.openHub();
+                    // Issue #796 评论 5886483653: 从 StarMapWorkspace 左上角返回时
+                    // 调 openHub(1)，回"星图列表"，不是回作品页。
+                    appController.openHub(1);
                 }
                 onEnterStarmapRequested: function(smId, smTitle) {
                     appController.openStarmap(smId, smTitle);
@@ -586,6 +588,8 @@ ApplicationWindow {
             editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
                 starMapController: globalStarMapController
+                // Issue #796 评论 5886483653: 传 appControllerRef，Hub tab 由 hubTab 驱动。
+                appControllerRef: appController
                 appState: window.appState
                 tree: window.appState.tree || []
                 aiCapable: settingsBackend.ai_available
@@ -668,7 +672,8 @@ ApplicationWindow {
                 onProjectReady: window.applyPendingConflictPath()
 
                 onBackToProjects: {
-                    appController.openHub();
+                    // Issue #796 评论 5886483653: 从写作区返回仍回 openHub(0)（作品页）。
+                    appController.openHub(0);
                     window.debugLog("workspace", "exit_writing_mode", "");
                 }
 

@@ -25,11 +25,14 @@ QtObject {
     property var nodesModel: []
     property var edgesModel: []
     property var edgeRenders: []
+    // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
+    property var embedsModel: []
 
     signal graphChanged()
     signal selectionCleared()
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
+    signal embedSelected(var embed)
 
     onGraphChanged: invalidateEdgeRenders()
 
@@ -110,6 +113,27 @@ QtObject {
         }
         edgesModel = newEdges;
 
+        // Issue #796 评论 5886483653: 从 graphData.embeds 构造 embedsModel。
+        // 位置只读 embed.position，宽高继续属于 Linux 显示层（用默认值，和 node 一致）。
+        var newEmbeds = [];
+        var graphEmbeds = graphData && graphData.embeds ? graphData.embeds : [];
+        for (var k = 0; k < graphEmbeds.length; k++) {
+            var gem = graphEmbeds[k];
+            var epos = gem.position || { x: 0, y: 0 };
+            newEmbeds.push({
+                instanceId: gem.instanceId,
+                targetStarmapId: gem.targetStarmapId || "",
+                label: gem.label || qsTr("子星图"),
+                x: epos.x,
+                y: epos.y,
+                width: 150,
+                height: 60,
+                isSelected: false,
+                hostPath: gem.hostPath || null
+            });
+        }
+        embedsModel = newEmbeds;
+
         if (nodesModel.length > 0 && (!layoutData || !layoutData.nodes || layoutData.nodes.length === 0)) autoLayout();
         graphChanged();
     }
@@ -176,6 +200,7 @@ QtObject {
 
     // Issue #793 评论 5884923277: 选中状态用浅拷贝重新构造数组，
     // 不再原地改普通 JS 对象，保证 delegate 绑定的 nodeData.isSelected 有独立 notify。
+    // Issue #796 评论 5886483653: applySelection 同时管理 node / embed / edge。
     function copyObject(src) {
         var dst = {}
         for (var key in src)
@@ -183,7 +208,7 @@ QtObject {
         return dst
     }
 
-    function applySelection(nodeId, edgeId) {
+    function applySelection(nodeId, edgeId, embedId) {
         var nextNodes = []
         for (var i = 0; i < nodesModel.length; i++) {
             var n = copyObject(nodesModel[i])
@@ -198,31 +223,71 @@ QtObject {
             nextEdges.push(e)
         }
 
+        var nextEmbeds = []
+        for (var m = 0; m < embedsModel.length; m++) {
+            var em = copyObject(embedsModel[m])
+            em.isSelected = embedId !== "" && em.instanceId === embedId
+            nextEmbeds.push(em)
+        }
+
         nodesModel = nextNodes
         edgesModel = nextEdges
+        embedsModel = nextEmbeds
         graphChanged()
     }
 
     function clearSelection() {
-        applySelection("", "")
+        applySelection("", "", "")
         selectionCleared()
     }
 
     function selectNode(nodeId) {
-        applySelection(nodeId, "")
+        applySelection(nodeId, "", "")
         var node = getNode(nodeId)
         if (node) nodeSelected(node)
         return node
     }
 
     function selectEdge(edgeId) {
-        applySelection("", edgeId)
+        applySelection("", edgeId, "")
         var edge = null
         for (var i = 0; i < edgesModel.length; i++) {
             if (edgesModel[i].id === edgeId) { edge = edgesModel[i]; break }
         }
         if (edge) edgeSelected(edge)
         return edge
+    }
+
+    // Issue #796 评论 5886483653: Embed 选中。
+    function selectEmbed(instanceId) {
+        applySelection("", "", instanceId)
+        var embed = getEmbed(instanceId)
+        if (embed) embedSelected(embed)
+        return embed
+    }
+
+    function getEmbed(instanceId) {
+        for (var i = 0; i < embedsModel.length; i++) {
+            if (embedsModel[i].instanceId === instanceId) return embedsModel[i]
+        }
+        return null
+    }
+
+    // Issue #796 评论 5886483653: 按世界坐标命中 Embed。
+    // 复用 hit_test_nodes 后端能力（embed 几何与 node 同构）。
+    function findEmbedAt(wx, wy) {
+        if (!ensureBackend()) return null;
+        var layoutEmbeds = [];
+        for (var i = 0; i < embedsModel.length; i++) {
+            var em = embedsModel[i];
+            layoutEmbeds.push({ nodeId: em.instanceId, x: em.x, y: em.y, width: em.width, height: em.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
+        }
+        if (layoutEmbeds.length === 0) return null;
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes(JSON.stringify(layoutEmbeds), wx, wy), "");
+        if (res.success && res.data) {
+            return getEmbed(res.data);
+        }
+        return null;
     }
 
     // Issue #793 评论 5884923277: createNode 接收 title，不再写死"新节点"。
@@ -320,6 +385,43 @@ QtObject {
             clearSelection();
         } else {
             setError(backendErrorText(res, qsTr("删除连线失败")));
+        }
+    }
+
+    // Issue #796 评论 5886483653: Embed 增删改（后端 create_starmap_embed /
+    // update_starmap_embed / delete_starmap_embed 由 Canvas 在 createSubStarmapAt
+    // 里直接调，这里提供 update/delete 供右键菜单复用）。
+    function updateEmbed(instanceId, patch) {
+        if (!ensureBackend()) return;
+        var res = normalizeBackendResult(starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(patch)), qsTr("更新子星图入口失败"));
+        if (res.success) {
+            clearError();
+            for (var i = 0; i < embedsModel.length; i++) {
+                if (embedsModel[i].instanceId === instanceId) {
+                    if (patch.label !== undefined) embedsModel[i].label = patch.label;
+                    if (patch.position !== undefined) {
+                        embedsModel[i].x = patch.position.x;
+                        embedsModel[i].y = patch.position.y;
+                    }
+                    embedsModelChanged();
+                    graphChanged();
+                    break;
+                }
+            }
+        } else {
+            setError(backendErrorText(res, qsTr("更新子星图入口失败")));
+        }
+    }
+
+    function deleteEmbed(instanceId) {
+        if (!ensureBackend()) return;
+        var res = normalizeBackendResult(starmapBackendRef.delete_starmap_embed(starmapId, instanceId), qsTr("删除子星图入口失败"));
+        if (res.success) {
+            clearError();
+            loadGraph();
+            clearSelection();
+        } else {
+            setError(backendErrorText(res, qsTr("删除子星图入口失败")));
         }
     }
 

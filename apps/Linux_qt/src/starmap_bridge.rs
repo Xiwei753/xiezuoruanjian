@@ -16,9 +16,10 @@
 // =============================================================================
 
 use writer_core::api::types::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapGraphDto, StarMapHyperlinkDto,
-    StarMapHyperlinkPatchDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
-    StarMapNodePatchDto, StarMapPointDto, StarMapTargetDetailDto, StarMapTargetPathDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
+    StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchDto,
+    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
+    StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -130,6 +131,15 @@ pub fn delete_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
 pub fn get_starmap_graph_and_layout(api: &WriterCoreApi, starmap_id: &str) -> String {
     match api.get_starmap_graph(starmap_id) {
         Ok(g) => {
+            // 真正有用的图快照日志：记录各类图元数量，便于排查"图空了""embed 丢失"等问题。
+            log::debug!(
+                "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={}",
+                starmap_id,
+                g.nodes.len(),
+                g.edges.len(),
+                g.embeds.len(),
+                g.hyperlinks.len()
+            );
             let layout = layout_from_graph(&g);
             envelope_ok(serde_json::json!({ "graph": g, "layout": layout }))
         }
@@ -250,6 +260,80 @@ pub fn delete_starmap_edge(api: &WriterCoreApi, starmap_id: &str, edge_id: &str)
     envelope(api.delete_starmap_edge(starmap_id, edge_id))
 }
 
+// -----------------------------------------------------------------------------
+// 星图子星图嵌入（embed）envelope 接口
+// -----------------------------------------------------------------------------
+//
+// 子星图改回正式 Embed 语义：Core 的 StarMapEmbedDto 是嵌入的唯一真相源。
+// bridge 层只负责生成 instance_id（`em_{uuid}`，与节点 `n_{uuid}` 模式一致）、
+// 组装 host_path（指向当前星图）、调用 Core API，不复制业务状态机。
+
+/// 创建子星图嵌入。
+///
+/// - `starmap_id`：宿主星图 id（当前星图）。
+/// - `target_starmap_id`：被嵌入的子星图 id（由调用方先建好子星图再传入）。
+/// - `label`：用户输入的子星图名称；空字符串存为 None。
+/// - `x` / `y`：右键放置位置（宿主星图坐标系）。
+///
+/// `host_path` 指向当前星图（segments 空，target 用 Default），provenance 用默认值。
+pub fn create_starmap_embed(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    target_starmap_id: &str,
+    label: &str,
+    x: f64,
+    y: f64,
+) -> String {
+    let now = now_ms();
+    let embed = StarMapEmbedDto {
+        instance_id: format!("em_{}", uuid::Uuid::new_v4()),
+        target_starmap_id: target_starmap_id.to_string(),
+        label: if label.is_empty() {
+            None
+        } else {
+            Some(label.to_string())
+        },
+        position: StarMapPointDto {
+            x: x as f32,
+            y: y as f32,
+        },
+        host_path: StarMapTargetPathDto {
+            starmap_id: starmap_id.to_string(),
+            segments: vec![],
+            target: StarMapTargetDetailDto::default(),
+        },
+        provenance: StarMapProvenanceDto::default(),
+        created_at: now,
+        updated_at: now,
+    };
+
+    envelope(api.add_starmap_embed(starmap_id, embed))
+}
+
+/// 更新子星图嵌入。
+///
+/// `patch_json` 按 `StarMapEmbedPatchInputDto` 格式（label/clearLabel/position/hostPath），
+/// 反序列化后 `Into<StarMapEmbedPatchDto>` 再调 Core。
+pub fn update_starmap_embed(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    instance_id: &str,
+    patch_json: &str,
+) -> String {
+    let input: StarMapEmbedPatchInputDto = match serde_json::from_str(patch_json) {
+        Ok(p) => p,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let patch: StarMapEmbedPatchDto = input.into();
+
+    envelope(api.update_starmap_embed(starmap_id, instance_id, patch))
+}
+
+/// 删除子星图嵌入。
+pub fn delete_starmap_embed(api: &WriterCoreApi, starmap_id: &str, instance_id: &str) -> String {
+    envelope(api.delete_starmap_embed(starmap_id, instance_id))
+}
+
 /// 保存布局：把前端算好的节点坐标写回 Core 的 `StarMapNode.position`。
 ///
 /// Core 收口后没有 `save_starmap_layout` 这样的独立布局存储，节点坐标的唯一
@@ -365,7 +449,10 @@ pub fn compute_edge_renders_json(
         &layout,
         &EdgeRenderParams::default(),
     );
-    log::debug!("compute_edge_renders diagnostics: {:?}", batch.diagnostics);
+    // 只有 diagnostics 非空时才写日志，避免高频调用产生无意义的空日志噪声。
+    if !batch.diagnostics.is_empty() {
+        log::debug!("compute_edge_renders diagnostics: {:?}", batch.diagnostics);
+    }
     envelope_ok(batch.renders)
 }
 
@@ -447,4 +534,67 @@ pub fn delete_starmap_hyperlink(
 
 pub fn list_starmap_hyperlinks(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.list_starmap_hyperlinks(starmap_id))
+}
+
+// -----------------------------------------------------------------------------
+// 一级星图页：只列根星图
+// -----------------------------------------------------------------------------
+//
+// 一级星图列表只展示"没有被任何星图嵌入的根星图"。判断依据：
+// 1. 扫描所有星图的 graph.embeds[].targetStarmapId，这些目标不进入一级列表。
+// 2. 兼容旧版"伪子星图"：旧实现用 Note 节点 + portal（destinationTarget=null）
+//    + 节点标题等于目标星图标题 来模拟子星图嵌入。只把明确符合该旧生成签名的
+//    节点对应的星图隐藏，不要把所有普通 Portal 目标一刀切隐藏。
+
+/// 列出根星图（未被嵌入且非 legacy child 的星图），envelope 格式。
+pub fn list_root_starmaps_json(api: &WriterCoreApi) -> String {
+    let all_starmaps = match api.list_starmaps() {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&e.to_string()),
+    };
+
+    // title → starmap_id 列表：用于 legacy child 按 title 匹配。
+    // 多个星图可能同名，全部收集。
+    let mut title_to_ids: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for sm in &all_starmaps {
+        title_to_ids
+            .entry(sm.title.clone())
+            .or_default()
+            .push(sm.starmap_id.clone());
+    }
+
+    // 收集所有应从一级列表排除的 starmap_id（embed 目标 + legacy child）。
+    let mut excluded: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for sm in &all_starmaps {
+        // 某个图读取失败时跳过它——不影响其他图的扫描，该图本身仍参与根列表过滤。
+        if let Ok(g) = api.get_starmap_graph(&sm.starmap_id) {
+            // 正式 Embed：target_starmap_id 是子星图，排除。
+            for embed in &g.embeds {
+                excluded.insert(embed.target_starmap_id.clone());
+            }
+            // Legacy child：Note + portal 非空 + destination_target 为 null
+            // + 节点标题匹配某星图标题 → 被匹配的星图是旧实现的伪子星图，排除。
+            for node in &g.nodes {
+                if node.kind == StarMapNodeKindDto::Note {
+                    if let Some(portal) = &node.portal {
+                        if portal.destination_target.is_none() {
+                            if let Some(target_ids) = title_to_ids.get(&node.title) {
+                                for tid in target_ids {
+                                    excluded.insert(tid.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let roots: Vec<_> = all_starmaps
+        .into_iter()
+        .filter(|sm| !excluded.contains(&sm.starmap_id))
+        .collect();
+
+    envelope_ok(roots)
 }

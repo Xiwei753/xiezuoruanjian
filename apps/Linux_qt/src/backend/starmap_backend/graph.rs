@@ -158,4 +158,68 @@ impl AppBackend {
             .to_string();
         qjson_object_from_json(&raw)
     }
+
+    // -------------------------------------------------------------------------
+    // 星图子星图嵌入（embed）— Embed 是图元，放在 graph.rs
+    // -------------------------------------------------------------------------
+
+    // AppBackend::create_starmap_embed_json
+    pub(crate) fn create_starmap_embed_json(
+        &mut self,
+        starmap_id: QString,
+        target_starmap_id: QString,
+        label: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let tid = target_starmap_id.to_string();
+        let l = label.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::create_starmap_embed(&core, &sid, &tid, &l, x, y).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::update_starmap_embed_json
+    pub(crate) fn update_starmap_embed_json(
+        &mut self,
+        starmap_id: QString,
+        instance_id: QString,
+        patch_json: QString,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let iid = instance_id.to_string();
+        let p = patch_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::update_starmap_embed(&core, &sid, &iid, &p).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::delete_starmap_embed_json
+    pub(crate) fn delete_starmap_embed_json(
+        &mut self,
+        starmap_id: QString,
+        instance_id: QString,
+    ) -> QString {
+        let sid = starmap_id.to_string();
+        let iid = instance_id.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::delete_starmap_embed(&core, &sid, &iid).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
 }

@@ -35,6 +35,9 @@ QtObject {
     property string starmapId: ""
     property string starmapTitle: ""
     property string errorMessage: ""
+    // Issue #796 评论 5886483653: 持久的 hubTab 属性，记录 Hub 一级页要回到哪个 tab。
+    // 0=作品, 1=星图, 2=统计。Loader 重建后不会丢，避免永远回默认 0。
+    property int hubTab: 0
 
     readonly property bool inWriting: route === "writing"
     readonly property bool inStarmap: route === "starmap"
@@ -202,7 +205,12 @@ QtObject {
         saveNavigationState();
     }
 
-    function openHub() {
+    // Issue #796 评论 5886483653: openHub(tabIndex) 可指定要回到作品/星图/统计哪个一级页。
+    // 不传参数时保持现有行为（回到 hub，tab 由 hubTab 属性驱动）。
+    function openHub(tabIndex) {
+        if (tabIndex !== undefined && tabIndex !== null) {
+            hubTab = tabIndex;
+        }
         route = "hub";
         writingProjectId = "";
         writingProjectTitle = "";

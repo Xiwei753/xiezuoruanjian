@@ -51,18 +51,13 @@ Rectangle {
         anchors.fill: parent
         dt: root.dt
 
-        // 顶部 header：返回按钮 + 标题 + 新建星图按钮
+        // 顶部 header：标题 + 新建星图按钮
+        // Issue #796 评论 5886483653: 删除一级星图页自己的"← 返回"按钮。
+        // 它已经在 Hub 的一级 Tab 里，当前 root.visible=false 只会把自己藏掉，属于错误路由。
         headerData: RowLayout {
             spacing: dt.sp12
             Layout.fillWidth: true
             Layout.fillHeight: true
-
-            AppButton {
-                dt: root.dt
-                variant: "text"
-                text: qsTr("← 返回")
-                onClicked: root.visible = false
-            }
 
             AppText {
                 dt: root.dt

@@ -443,6 +443,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapCanvas.qml");
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");
     println!("cargo:rerun-if-changed=qml/StarMapNode.qml");
+    // Issue #796 评论 5886483653: 子星图 Embed 组件
+    println!("cargo:rerun-if-changed=qml/StarMapEmbed.qml");
     println!("cargo:rerun-if-changed=qml/StarMapInspector.qml");
     println!("cargo:rerun-if-changed=qml/WritingWorkspace.qml");
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");

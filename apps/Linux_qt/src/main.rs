@@ -138,6 +138,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapCanvas.qml" as "StarMapCanvas.qml",
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     "qml/StarMapNode.qml" as "StarMapNode.qml",
+    // Issue #796 评论 5886483653: 子星图 Embed 组件
+    "qml/StarMapEmbed.qml" as "StarMapEmbed.qml",
     "qml/StarMapInspector.qml" as "StarMapInspector.qml",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",

@@ -23,7 +23,10 @@ Rectangle {
     property var starMapController: null
     property var appState: ({})
     property var tree: []
-    property int currentTab: 0
+    // Issue #796 评论 5886483653: Hub tab 由 appController.hubTab 驱动，
+    // 不要 Loader 重建后永远回默认 0。
+    property var appControllerRef: null
+    property int currentTab: appControllerRef ? appControllerRef.hubTab : 0
     property bool aiCapable: false
     property bool aiEnabled: false
     property var layoutPlan: null
@@ -110,7 +113,15 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.currentTab = modelData.idx
+                                // Issue #796 评论 5886483653: 点击改 appControllerRef.hubTab，
+                                // currentTab 由绑定跟随，Loader 重建后不丢。
+                                onClicked: {
+                                    if (root.appControllerRef) {
+                                        root.appControllerRef.hubTab = modelData.idx
+                                    } else {
+                                        root.currentTab = modelData.idx
+                                    }
+                                }
                             }
                         }
                     }

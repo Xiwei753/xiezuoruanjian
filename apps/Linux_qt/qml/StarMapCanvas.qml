@@ -66,6 +66,8 @@ Item {
     // 上下文菜单辅助状态
     property var selectedNodeForMenu: null
     property var selectedEdgeForMenu: null
+    // Issue #796 评论 5886483653: Embed 右键菜单辅助状态
+    property var selectedEmbedForMenu: null
     property real contextMenuWorldX: 0
     property real contextMenuWorldY: 0
 
@@ -84,6 +86,8 @@ Item {
     // Model data
     property var nodesModel: []
     property var edgesModel: []
+    // Issue #796 评论 5886483653: Embed 显示模型，从 graphController 同步。
+    property var embedsModel: []
 
     StarMapGraphController {
         id: graphController
@@ -92,6 +96,7 @@ Item {
         onGraphChanged: {
             canvasArea.nodesModel = graphController.nodesModel
             canvasArea.edgesModel = graphController.edgesModel
+            canvasArea.embedsModel = graphController.embedsModel
             edgeCanvas.requestPaint()
         }
         onSelectionCleared: canvasArea.selectionCleared()
@@ -145,6 +150,8 @@ Item {
         z: 0
 
         // 左键单击：边选中或清选区
+        // Issue #796 评论 5886483653: 命中顺序统一成 Node/Embed → Edge → 空白，
+        // 不让画布背景先吞掉对象点击。
         TapHandler {
             id: backgroundLeftTap
             acceptedButtons: Qt.LeftButton
@@ -152,6 +159,9 @@ Item {
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
+                    return
+                }
+                if (findEmbedAt(mx, my)) {
                     return
                 }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
@@ -168,6 +178,7 @@ Item {
         }
 
         // 右键单击：边菜单或画布菜单
+        // Issue #796 评论 5886483653: 命中顺序 Node/Embed → Edge → 空白。
         TapHandler {
             id: backgroundRightTap
             acceptedButtons: Qt.RightButton
@@ -175,6 +186,9 @@ Item {
                 var mx = (eventPoint.position.x - panX) / zoomLevel
                 var my = (eventPoint.position.y - panY) / zoomLevel
                 if (findNodeAt(mx, my)) {
+                    return
+                }
+                if (findEmbedAt(mx, my)) {
                     return
                 }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
@@ -205,7 +219,7 @@ Item {
                 if (mouse.button === Qt.LeftButton) {
                     var wx = (mouse.x - panX) / zoomLevel
                     var wy = (mouse.y - panY) / zoomLevel
-                    if (!findNodeAt(wx, wy)) {
+                    if (!findNodeAt(wx, wy) && !findEmbedAt(wx, wy)) {
                         pointerMode = "pan"
                     }
                 }
@@ -456,6 +470,75 @@ Item {
                 }
             }
         }
+
+        // Issue #796 评论 5886483653: Embed Repeater，用 StarMapEmbed.qml 渲染 embedsModel。
+        // Node 和 Embed 都走同一套画布坐标转换（都在 container 里，受 panX/panY/zoomLevel 影响）。
+        Repeater {
+            model: embedsModel.length
+            delegate: StarMapEmbed {
+                dt: canvasArea.dt
+                property var embedData: embedsModel[index]
+
+                x: embedData.x
+                y: embedData.y
+                width: embedData.width
+                height: embedData.height
+                instanceId: embedData.instanceId
+                targetStarmapId: embedData.targetStarmapId
+                label: embedData.label
+                isSelected: embedData.isSelected
+                wobbleIndex: index
+
+                onXChanged: {
+                    if (embedData) {
+                        embedData.x = x
+                    }
+                    edgeCanvas.requestPaint()
+                }
+
+                onYChanged: {
+                    if (embedData) {
+                        embedData.y = y
+                    }
+                    edgeCanvas.requestPaint()
+                }
+
+                // 单击只选中
+                onClicked: function(instId) {
+                    graphController.selectEmbed(instId)
+                }
+
+                // 双击进入 targetStarmapId
+                onDoubleClicked: function(tgtStarmapId) {
+                    if (tgtStarmapId) {
+                        var ed = embedsModel[index]
+                        enterStarmapRequested(tgtStarmapId, ed.label || qsTr("子星图"))
+                    }
+                }
+
+                // 右键上抛菜单
+                onContextMenuRequested: function(instId, sceneX, sceneY) {
+                    graphController.selectEmbed(instId)
+                    selectedEmbedForMenu = graphController.getEmbed(instId)
+                    embedContextMenu.popup(sceneX, sceneY)
+                }
+
+                // 拖动只改 Embed 的 position
+                onDragged: function(instId, newX, newY) {
+                    isBeingDragged = true
+                    edgeCanvas.requestPaint()
+                }
+
+                onLeftReleased: {
+                    isBeingDragged = false
+                    // 拖动结束后保存 Embed 新位置到后端
+                    var ed = embedsModel[index]
+                    if (ed) {
+                        graphController.updateEmbed(ed.instanceId, { position: { x: ed.x, y: ed.y } })
+                    }
+                }
+            }
+        }
     }
 
     AppText {
@@ -527,14 +610,17 @@ Item {
         graphController.clearSelection()
     }
 
-    // Issue #790 评论 5875963057 / #793 评论 5884923277: 新建子星图（右键空白处）
+    // Issue #796 评论 5886483653: 新建子星图改回正式 Embed 语义。
+    // 流程：create_starmap → create_starmap_embed；失败时删除刚创建的目标 StarMap，
+    // 成功后 reload graph 并选中新 Embed。
+    // 旧 portal Node 仍按已有数据正常显示/进入，不再用它创建新的子星图。
     // title 由 createDialog 收集后传入，不再写死默认名。
     function createSubStarmapAt(title, wx, wy) {
         if (!starmapBackendRef) {
             graphController.setError(qsTr("星图后端未初始化"))
             return
         }
-        // 1. 创建目标星图（QJsonObject 版，返回 {success, data:{id,...}}）
+        // 1. 创建目标子星图
         var createRes = graphController.normalizeBackendResult(
             starmapBackendRef.create_starmap(title, "", ""),
             qsTr("创建子星图失败")
@@ -543,44 +629,29 @@ Item {
             graphController.setError(graphController.backendErrorText(createRes, qsTr("创建子星图失败")))
             return
         }
-        var targetStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : ""
-        if (!targetStarmapId) {
+        var newStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : ""
+        if (!newStarmapId) {
             graphController.setError(qsTr("创建子星图失败"))
             return
         }
-        // 2. 在当前星图创建入口节点（标题沿用用户输入）
-        var nodeRes = graphController.normalizeBackendResult(
-            starmapBackendRef.create_starmap_node(starmapId, title, "Note", wx, wy),
-            qsTr("创建入口节点失败")
+        // 2. 在当前星图创建 Embed，指向新子星图
+        var embedRes = graphController.normalizeBackendResult(
+            starmapBackendRef.create_starmap_embed(starmapId, newStarmapId, title, wx, wy),
+            qsTr("创建子星图入口失败")
         )
-        if (!nodeRes.success) {
-            // 回滚：删掉刚创建的目标星图，不留孤儿
-            starmapBackendRef.delete_starmap(targetStarmapId)
-            graphController.setError(graphController.backendErrorText(nodeRes, qsTr("创建入口节点失败")))
+        if (!embedRes.success) {
+            // 3. create_starmap_embed 失败，删除刚创建的目标 StarMap 清理
+            starmapBackendRef.delete_starmap(newStarmapId)
+            graphController.setError(graphController.backendErrorText(embedRes, qsTr("创建子星图入口失败")))
             return
         }
-        var nodeId = nodeRes.data && nodeRes.data.id ? nodeRes.data.id : ""
-        if (!nodeId) {
-            starmapBackendRef.delete_starmap(targetStarmapId)
-            graphController.setError(qsTr("创建入口节点失败"))
-            return
-        }
-        // 3. 写 portal，指向目标星图
-        var portalPatch = { portal: { destinationStarmapId: targetStarmapId, destinationTarget: null } }
-        var updateRes = graphController.normalizeBackendResult(
-            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(portalPatch)),
-            qsTr("写入子星图入口失败")
-        )
-        if (!updateRes.success) {
-            starmapBackendRef.delete_starmap_node(starmapId, nodeId)
-            starmapBackendRef.delete_starmap(targetStarmapId)
-            graphController.setError(graphController.backendErrorText(updateRes, qsTr("写入子星图入口失败")))
-            return
-        }
-        // 4. 成功，刷新并选中新入口节点（画布上出现用户输入的子星图名字）
+        var instanceId = embedRes.data && embedRes.data.instanceId ? embedRes.data.instanceId : ""
+        // 4. 成功，reload graph 并选中新 Embed
         graphController.clearError()
         graphController.loadGraph()
-        graphController.selectNode(nodeId)
+        if (instanceId) {
+            graphController.selectEmbed(instanceId)
+        }
     }
 
     // Issue #790 评论 5875963057: 超链接转发给 graphController
@@ -615,6 +686,20 @@ Item {
     // Helper function to find a node at world coordinates
     function findNodeAt(wx, wy) {
         return graphController.findNodeAt(wx, wy)
+    }
+
+    // Issue #796 评论 5886483653: 按世界坐标命中 Embed
+    function findEmbedAt(wx, wy) {
+        return graphController.findEmbedAt(wx, wy)
+    }
+
+    // Issue #796 评论 5886483653: Embed 增删改转发给 graphController
+    function updateEmbedFromInspector(instanceId, patch) {
+        graphController.updateEmbed(instanceId, patch)
+    }
+
+    function deleteEmbedFromInspector(instanceId) {
+        graphController.deleteEmbed(instanceId)
     }
 
     // Issue #793 评论 5884923277: 新节点落点选择，避免压在已有节点上。
@@ -866,99 +951,155 @@ Item {
         }
     }
 
-    // 简易美观的重命名 Dialog
-    Rectangle {
+    // Issue #796 评论 5886483653: Embed 右键菜单：编辑名称 / 移动 / 删除
+    Menu {
+        id: embedContextMenu
+
+        background: Rectangle {
+            implicitWidth: 150
+            color: _card
+            border.color: _border
+            border.width: 1
+            radius: _radiusSm
+        }
+
+        MenuItem {
+            id: embedMenuItemRename
+            text: qsTr("编辑名称")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: embedMenuItemRename.text
+                color: embedMenuItemRename.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: embedMenuItemRename.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                if (selectedEmbedForMenu) {
+                    renameDialog.open("embed", selectedEmbedForMenu.instanceId, selectedEmbedForMenu.label || "")
+                }
+            }
+        }
+
+        MenuItem {
+            id: embedMenuItemDelete
+            text: qsTr("删除")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: embedMenuItemDelete.text
+                color: embedMenuItemDelete.hovered ? _danger : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: embedMenuItemDelete.hovered ? _dangerContainer : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                if (selectedEmbedForMenu) {
+                    deleteEmbedFromInspector(selectedEmbedForMenu.instanceId)
+                }
+            }
+        }
+    }
+
+    // Issue #796 评论 5886483653: 弹窗改 Qt Quick Controls Popup，不再手搓整屏 Rectangle。
+    // modal + focus + closePolicy 交给 Popup，遮罩用 Overlay.modal 做半透明 dim。
+    Popup {
         id: renameDialog
-        anchors.fill: parent
-        color: _scrim
-        visible: false
-        z: 9999
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: 300
+        height: 160
+        anchors.centerIn: Overlay.overlay
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
+        background: Rectangle {
+            color: _card
+            border.color: _border
+            border.width: 1.5
+            radius: _dialogRadius
+        }
 
         property string targetType: "" // "node" or "edge"
         property string targetId: ""
         property string initialText: ""
 
-        // Prevent mouse clicks from propagating to canvas
-        MouseArea { anchors.fill: parent }
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 16
 
-        Rectangle {
-            width: 300
-            height: 160
-            color: _card
-            border.color: _border
-            border.width: 1.5
-            radius: _dialogRadius
-            anchors.centerIn: parent
+            AppText {
+                dt: canvasArea.dt
+                text: renameDialog.targetType === "node" ? qsTr("修改节点标题")
+                     : renameDialog.targetType === "embed" ? qsTr("修改子星图名称")
+                     : qsTr("修改连线标签")
+                font.pointSize: dt.fontLgPt
+                font.bold: true
+                color: _textPrimary
+            }
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 20
-                spacing: 16
+            TextField {
+                id: renameInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                focus: renameDialog.visible
+                text: renameDialog.initialText
 
-                AppText {
-                    dt: canvasArea.dt
-                    text: renameDialog.targetType === "node" ? qsTr("修改节点标题") : qsTr("修改连线标签")
-                    font.pointSize: dt.fontLgPt
-                    font.bold: true
-                    color: _textPrimary
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: renameInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
                 }
 
-                TextField {
-                    id: renameInput
-                    Layout.fillWidth: true
-                    height: 36
-                    color: _textPrimary
-                    font.pointSize: dt.bodyPt
-                    focus: renameDialog.visible
-                    text: renameDialog.initialText
+                Keys.onReturnPressed: renameDialog.confirm()
+                Keys.onEscapePressed: renameDialog.close()
+            }
 
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 12
+
+                Button {
+                    id: cancelBtn
+                    text: qsTr("取消")
+                    onClicked: renameDialog.close()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: cancelBtn.text
+                        color: _textSecondary
+                        font.pointSize: dt.labelPt
+                    }
                     background: Rectangle {
-                        color: _surfaceContainer
-                        border.color: renameInput.activeFocus ? _accent : _border
-                        border.width: 1.5
+                        color: cancelBtn.hovered ? _surfaceContainer : "transparent"
+                        border.color: _border
                         radius: _radiusXs
                     }
-
-                    Keys.onReturnPressed: renameDialog.confirm()
-                    Keys.onEscapePressed: renameDialog.close()
                 }
 
-                RowLayout {
-                    Layout.alignment: Qt.AlignRight
-                    spacing: 12
-
-                    Button {
-                        id: cancelBtn
-                        text: qsTr("取消")
-                        onClicked: renameDialog.close()
-                        contentItem: AppText {
-                            dt: canvasArea.dt
-                            text: cancelBtn.text
-                            color: _textSecondary
-                            font.pointSize: dt.labelPt
-                        }
-                        background: Rectangle {
-                            color: cancelBtn.hovered ? _surfaceContainer : "transparent"
-                            border.color: _border
-                            radius: _radiusXs
-                        }
+                Button {
+                    id: confirmBtn
+                    text: qsTr("确定")
+                    onClicked: renameDialog.confirm()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: confirmBtn.text
+                        color: _onPrimary
+                        font.bold: true
+                        font.pointSize: dt.labelPt
                     }
-
-                    Button {
-                        id: confirmBtn
-                        text: qsTr("确定")
-                        onClicked: renameDialog.confirm()
-                        contentItem: AppText {
-                            dt: canvasArea.dt
-                            text: confirmBtn.text
-                            color: _onPrimary
-                            font.bold: true
-                            font.pointSize: dt.labelPt
-                        }
-                        background: Rectangle {
-                            color: confirmBtn.hovered ? _accentHover : _accent
-                            radius: _radiusXs
-                        }
+                    background: Rectangle {
+                        color: confirmBtn.hovered ? _accentHover : _accent
+                        radius: _radiusXs
                     }
                 }
             }
@@ -982,103 +1123,101 @@ Item {
                 updateNodeFromInspector(targetId, { title: renameInput.text })
             } else if (targetType === "edge") {
                 updateEdgeFromInspector(targetId, { label: renameInput.text })
+            } else if (targetType === "embed") {
+                updateEmbedFromInspector(targetId, { label: renameInput.text })
             }
             close()
         }
     }
 
     // Issue #793 评论 5884923277: 新建节点/子星图 Dialog
+    // Issue #796 评论 5886483653: 改用 Qt Quick Controls Popup，不再手搓整屏 Rectangle。
     // 右键空白处不再直接创建，先收集名字再写 Core。
-    // 样式照 renameDialog：scrim + MouseArea 防穿透 + _card + ColumnLayout + TextField + RowLayout。
-    Rectangle {
+    Popup {
         id: createDialog
-        anchors.fill: parent
-        color: _scrim
-        visible: false
-        z: 9999
-
-        // Prevent mouse clicks from propagating to canvas
-        MouseArea { anchors.fill: parent }
-
-        Rectangle {
-            width: 300
-            height: 160
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: 300
+        height: 160
+        anchors.centerIn: Overlay.overlay
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
+        background: Rectangle {
             color: _card
             border.color: _border
             border.width: 1.5
             radius: _dialogRadius
-            anchors.centerIn: parent
+        }
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 20
-                spacing: 16
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 16
 
-                AppText {
-                    dt: canvasArea.dt
-                    text: createMode === "starmap" ? qsTr("新建子星图") : qsTr("新建节点")
-                    font.pointSize: dt.fontLgPt
-                    font.bold: true
-                    color: _textPrimary
+            AppText {
+                dt: canvasArea.dt
+                text: createMode === "starmap" ? qsTr("新建子星图") : qsTr("新建节点")
+                font.pointSize: dt.fontLgPt
+                font.bold: true
+                color: _textPrimary
+            }
+
+            TextField {
+                id: createInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("名称")
+                focus: createDialog.visible
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: createInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
                 }
 
-                TextField {
-                    id: createInput
-                    Layout.fillWidth: true
-                    height: 36
-                    color: _textPrimary
-                    font.pointSize: dt.bodyPt
-                    placeholderText: qsTr("名称")
-                    focus: createDialog.visible
-                    text: ""
+                Keys.onReturnPressed: createDialog.confirm()
+                Keys.onEscapePressed: createDialog.close()
+            }
 
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 12
+
+                Button {
+                    id: createCancelBtn
+                    text: qsTr("取消")
+                    onClicked: createDialog.close()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: createCancelBtn.text
+                        color: _textSecondary
+                        font.pointSize: dt.labelPt
+                    }
                     background: Rectangle {
-                        color: _surfaceContainer
-                        border.color: createInput.activeFocus ? _accent : _border
-                        border.width: 1.5
+                        color: createCancelBtn.hovered ? _surfaceContainer : "transparent"
+                        border.color: _border
                         radius: _radiusXs
                     }
-
-                    Keys.onReturnPressed: createDialog.confirm()
-                    Keys.onEscapePressed: createDialog.close()
                 }
 
-                RowLayout {
-                    Layout.alignment: Qt.AlignRight
-                    spacing: 12
-
-                    Button {
-                        id: createCancelBtn
-                        text: qsTr("取消")
-                        onClicked: createDialog.close()
-                        contentItem: AppText {
-                            dt: canvasArea.dt
-                            text: createCancelBtn.text
-                            color: _textSecondary
-                            font.pointSize: dt.labelPt
-                        }
-                        background: Rectangle {
-                            color: createCancelBtn.hovered ? _surfaceContainer : "transparent"
-                            border.color: _border
-                            radius: _radiusXs
-                        }
+                Button {
+                    id: createConfirmBtn
+                    text: qsTr("确定")
+                    onClicked: createDialog.confirm()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: createConfirmBtn.text
+                        color: _onPrimary
+                        font.bold: true
+                        font.pointSize: dt.labelPt
                     }
-
-                    Button {
-                        id: createConfirmBtn
-                        text: qsTr("确定")
-                        onClicked: createDialog.confirm()
-                        contentItem: AppText {
-                            dt: canvasArea.dt
-                            text: createConfirmBtn.text
-                            color: _onPrimary
-                            font.bold: true
-                            font.pointSize: dt.labelPt
-                        }
-                        background: Rectangle {
-                            color: createConfirmBtn.hovered ? _accentHover : _accent
-                            radius: _radiusXs
-                        }
+                    background: Rectangle {
+                        color: createConfirmBtn.hovered ? _accentHover : _accent
+                        radius: _radiusXs
                     }
                 }
             }
@@ -1115,116 +1254,113 @@ Item {
     }
 
     // Issue #790 评论 5875963057: 超链接编辑 Dialog
-    Rectangle {
+    // Issue #796 评论 5886483653: 改用 Qt Quick Controls Popup，不再手搓整屏 Rectangle。
+    Popup {
         id: hyperlinkDialog
-        anchors.fill: parent
-        color: _scrim
-        visible: false
-        z: 9999
-
-        property string targetNodeId: ""
-
-        // Prevent mouse clicks from propagating to canvas
-        MouseArea { anchors.fill: parent }
-
-        Rectangle {
-            width: 340
-            height: 200
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: 340
+        height: 200
+        anchors.centerIn: Overlay.overlay
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
+        background: Rectangle {
             color: _card
             border.color: _border
             border.width: 1.5
             radius: _dialogRadius
-            anchors.centerIn: parent
+        }
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 20
+        property string targetNodeId: ""
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 12
+
+            AppText {
+                dt: canvasArea.dt
+                text: qsTr("添加超链接")
+                font.pointSize: dt.fontLgPt
+                font.bold: true
+                color: _textPrimary
+            }
+
+            TextField {
+                id: hyperlinkUrlInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("URL")
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: hyperlinkUrlInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
+                }
+
+                Keys.onReturnPressed: hyperlinkDialog.confirm()
+                Keys.onEscapePressed: hyperlinkDialog.close()
+            }
+
+            TextField {
+                id: hyperlinkLabelInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("标签（可选）")
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
+                }
+
+                Keys.onReturnPressed: hyperlinkDialog.confirm()
+                Keys.onEscapePressed: hyperlinkDialog.close()
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
                 spacing: 12
 
-                AppText {
-                    dt: canvasArea.dt
-                    text: qsTr("添加超链接")
-                    font.pointSize: dt.fontLgPt
-                    font.bold: true
-                    color: _textPrimary
-                }
-
-                TextField {
-                    id: hyperlinkUrlInput
-                    Layout.fillWidth: true
-                    height: 36
-                    color: _textPrimary
-                    font.pointSize: dt.bodyPt
-                    placeholderText: qsTr("URL")
-                    text: ""
-
+                Button {
+                    id: hyperlinkCancelBtn
+                    text: qsTr("取消")
+                    onClicked: hyperlinkDialog.close()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hyperlinkCancelBtn.text
+                        color: _textSecondary
+                        font.pointSize: dt.labelPt
+                    }
                     background: Rectangle {
-                        color: _surfaceContainer
-                        border.color: hyperlinkUrlInput.activeFocus ? _accent : _border
-                        border.width: 1.5
+                        color: hyperlinkCancelBtn.hovered ? _surfaceContainer : "transparent"
+                        border.color: _border
                         radius: _radiusXs
                     }
-
-                    Keys.onReturnPressed: hyperlinkDialog.confirm()
-                    Keys.onEscapePressed: hyperlinkDialog.close()
                 }
 
-                TextField {
-                    id: hyperlinkLabelInput
-                    Layout.fillWidth: true
-                    height: 36
-                    color: _textPrimary
-                    font.pointSize: dt.bodyPt
-                    placeholderText: qsTr("标签（可选）")
-                    text: ""
-
+                Button {
+                    id: hyperlinkConfirmBtn
+                    text: qsTr("确定")
+                    onClicked: hyperlinkDialog.confirm()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hyperlinkConfirmBtn.text
+                        color: _onPrimary
+                        font.bold: true
+                        font.pointSize: dt.labelPt
+                    }
                     background: Rectangle {
-                        color: _surfaceContainer
-                        border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
-                        border.width: 1.5
+                        color: hyperlinkConfirmBtn.hovered ? _accentHover : _accent
                         radius: _radiusXs
-                    }
-
-                    Keys.onReturnPressed: hyperlinkDialog.confirm()
-                    Keys.onEscapePressed: hyperlinkDialog.close()
-                }
-
-                RowLayout {
-                    Layout.alignment: Qt.AlignRight
-                    spacing: 12
-
-                    Button {
-                        id: hyperlinkCancelBtn
-                        text: qsTr("取消")
-                        onClicked: hyperlinkDialog.close()
-                        contentItem: AppText {
-                            dt: canvasArea.dt
-                            text: hyperlinkCancelBtn.text
-                            color: _textSecondary
-                            font.pointSize: dt.labelPt
-                        }
-                        background: Rectangle {
-                            color: hyperlinkCancelBtn.hovered ? _surfaceContainer : "transparent"
-                            border.color: _border
-                            radius: _radiusXs
-                        }
-                    }
-
-                    Button {
-                        id: hyperlinkConfirmBtn
-                        text: qsTr("确定")
-                        onClicked: hyperlinkDialog.confirm()
-                        contentItem: AppText {
-                            dt: canvasArea.dt
-                            text: hyperlinkConfirmBtn.text
-                            color: _onPrimary
-                            font.bold: true
-                            font.pointSize: dt.labelPt
-                        }
-                        background: Rectangle {
-                            color: hyperlinkConfirmBtn.hovered ? _accentHover : _accent
-                            radius: _radiusXs
-                        }
                     }
                 }
             }

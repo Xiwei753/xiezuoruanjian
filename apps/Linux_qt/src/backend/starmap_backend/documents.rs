@@ -26,6 +26,25 @@ impl AppBackend {
         }
     }
 
+    // AppBackend::list_root_starmaps_json
+    /// 一级星图页：只列根星图（未被嵌入且非 legacy child）。
+    pub(crate) fn list_root_starmaps_json(&self) -> QString {
+        if let Some(core) = self.core_api() {
+            starmap_bridge::list_root_starmaps_json(&core).into()
+        } else {
+            "[]".into()
+        }
+    }
+
+    // AppBackend::list_root_starmaps
+    pub(crate) fn list_root_starmaps(&self) -> QJsonArray {
+        if let Some(core) = self.core_api() {
+            qjson_array_data_from_json(&starmap_bridge::list_root_starmaps_json(&core))
+        } else {
+            QJsonArray::default()
+        }
+    }
+
     // AppBackend::list_starmaps_for_project_json
     pub(crate) fn list_starmaps_for_project_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();

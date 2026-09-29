@@ -25,11 +25,14 @@ QtObject {
         return appController.handleMutationResult(res, fallbackMessage);
     }
 
+    // Issue #796 评论 5886483653: 一级页只列根星图，调 list_root_starmaps_json。
+    // 后端返回过滤掉子星图后的根星图列表；父星图里的 Embed 负责进入子星图，
+    // 子星图不再和根星图并排出现在这里。
     function listStarmaps() {
         var api = starmapApi();
         if (!api || !appController) return [];
         try {
-            var res = appController.parseJson(api.list_starmaps_json(), qsTr("加载星图列表失败"));
+            var res = appController.parseJson(api.list_root_starmaps_json(), qsTr("加载星图列表失败"));
             if (!res) return [];
             if (res.success) return res.data || [];
             appController.emitError(qsTr("加载星图列表失败"));
