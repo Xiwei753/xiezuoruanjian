@@ -182,6 +182,32 @@ static napi_value NativeAddStarMapEmbed(napi_env env, napi_callback_info info) {
     return result;
 }
 
+static napi_value NativeCreateStarMapChildEmbed(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char host_starmap_id[256] = {0};
+    char title[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], host_starmap_id, sizeof(host_starmap_id), nullptr);
+    if (argc >= 2) napi_get_value_string_utf8(env, args[1], title, sizeof(title), nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env, writer_core_create_starmap_child_embed(host_starmap_id, title, json));
+    delete[] json;
+    return result;
+}
+
 static napi_value NativeUpdateStarMapEmbed(napi_env env, napi_callback_info info) {
     size_t argc = 3;
     napi_value args[3];
@@ -221,6 +247,7 @@ napi_property_descriptor* getStarMapDescriptors(size_t* count) {
         {"nativeAddStarMapEdge", nullptr, NativeAddStarMapEdge, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapNode", nullptr, NativeAddStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapEmbed", nullptr, NativeAddStarMapEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCreateStarMapChildEmbed", nullptr, NativeCreateStarMapChildEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeUpdateStarMapEmbed", nullptr, NativeUpdateStarMapEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCreateStarMap", nullptr, NativeCreateStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeDeleteStarMap", nullptr, NativeDeleteStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},

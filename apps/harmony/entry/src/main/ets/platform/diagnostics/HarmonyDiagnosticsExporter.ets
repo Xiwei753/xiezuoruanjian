@@ -289,6 +289,9 @@ export class HarmonyDiagnosticsExporter {
     // editor_runtime_sanitized.json — Issue #768 编辑器运行时快照
     this.addEditorRuntimeAttachment(attachments)
 
+    // crash fault stack — Issue #802
+    await this.addLatestCrashAttachments(attachments)
+
     return attachments
   }
 
@@ -431,6 +434,67 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
+  // crash fault stack — Issue #802
+  // 从 filesDir/diagnostics/crashes/ 目录找最近一次 crash 事件目录，
+  // 把 params.json 和已保存的 external crash log 装入诊断包。
+  // 如果 crashes 目录不存在或没有事件目录，静默跳过（不报错）。
+  private async addLatestCrashAttachments(attachments: AttachmentItem[]): Promise<void> {
+    try {
+      if (this.abilityContext === null) {
+        return
+      }
+      const filesDir = this.abilityContext.filesDir
+      const crashesDir = `${filesDir}/${DIAGNOSTICS_DIR}/crashes`
+
+      // crashes 目录不存在时静默跳过
+      if (!fs.accessSync(crashesDir)) {
+        return
+      }
+
+      // 遍历 crashes 目录，找到最近修改的事件子目录
+      const entries = fs.listFileSync(crashesDir)
+      let latestEventKey: string | null = null
+      let latestMtime: number = 0
+
+      for (const entry of entries) {
+        const eventDirPath = `${crashesDir}/${entry}`
+        try {
+          const stat = fs.statSync(eventDirPath)
+          if (stat.isDirectory() && stat.mtime > latestMtime) {
+            latestMtime = stat.mtime
+            latestEventKey = entry
+          }
+        } catch (_) {
+          // 单个目录 stat 失败不影响其他目录
+        }
+      }
+
+      if (latestEventKey === null) {
+        return
+      }
+
+      // 读取最新 crash 事件目录中的所有文件（params.json + crash log）
+      const eventDirPath = `${crashesDir}/${latestEventKey}`
+      const eventFiles = fs.listFileSync(eventDirPath)
+
+      for (const fileName of eventFiles) {
+        const filePath = `${eventDirPath}/${fileName}`
+        try {
+          const content = this.readFileContent(filePath)
+          if (content.length > 0) {
+            attachments.push(this.makeAttachment(`crashes/${latestEventKey}/${fileName}`, content))
+          }
+        } catch (_) {
+          // 单个文件读取失败不影响其他文件
+        }
+      }
+
+      hilog.info(0x0000, LOG_TAG, 'Added crash attachments from event: %{public}s', latestEventKey)
+    } catch (e) {
+      hilog.error(0x0000, LOG_TAG, 'addLatestCrashAttachments failed: %{public}s', String(e))
+    }
+  }
+
   // ── 工具方法 ──────────────────────────────────────────────────
 
   // 读取 logDir 下所有 .log 文件内容，合并为一个字符串。
@@ -463,6 +527,25 @@ export class HarmonyDiagnosticsExporter {
       }
       return combined
     } catch (_) {
+      return ''
+    }
+  }
+
+  // 读取单个文件内容为字符串 — 用于 crash 附件收集。
+  private readFileContent(filePath: string): string {
+    try {
+      const fd = fs.openSync(filePath, fs.OpenMode.READ_ONLY)
+      try {
+        const stat = fs.statSync(filePath)
+        const buf = new ArrayBuffer(stat.size)
+        fs.readSync(fd.fd, buf)
+        const textDecoder = new util.TextDecoder('utf-8')
+        return textDecoder.decodeWithStream(new Uint8Array(buf))
+      } finally {
+        fs.closeSync(fd)
+      }
+    } catch (e) {
+      hilog.warn(0x0000, LOG_TAG, 'readFileContent failed for %{public}s: %{public}s', filePath, String(e))
       return ''
     }
   }

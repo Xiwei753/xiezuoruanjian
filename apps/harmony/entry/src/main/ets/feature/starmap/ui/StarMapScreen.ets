@@ -91,8 +91,13 @@ export struct StarMapScreen {
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
 
-  // 双指缩放的基准比例（手势开始时记录）
+  // 双指缩放状态：onActionStart 记录基准值和锚点，onActionUpdate 围绕锚点缩放
   private pinchBaseScale: number = 1
+  private pinchBaseOffsetX: number = 0
+  private pinchBaseOffsetY: number = 0
+  private pinchAnchorCanvasX: number = 0
+  private pinchAnchorCanvasY: number = 0
+  private pinchDrilledUp: boolean = false
 
   // 画布拖动基准（onActionStart 记录，onActionUpdate 用 base+offset 避免重复累加）
   private panBaseX: number = 0
@@ -109,6 +114,9 @@ export struct StarMapScreen {
   // Stack 容器尺寸（用于 position 数值计算）
   @State stackWidth: number = 0
   @State stackHeight: number = 0
+  // 画布尺寸（用于 zoomAround 计算可视中心）
+  @State canvasWidth: number = 0
+  @State canvasHeight: number = 0
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -444,27 +452,35 @@ export struct StarMapScreen {
     }
   }
 
-  /** 放大一级（工具栏 +） */
-  zoomIn() {
-    this.zoomScale = Math.min(MAX_ZOOM, this.zoomScale + ZOOM_STEP)
+  /**
+   * 统一缩放函数：围绕指定屏幕点缩放，保持该点对应的画布坐标不变。
+   */
+  private zoomAround(screenX: number, screenY: number, nextScale: number) {
+    // 将屏幕点换算为画布坐标锚点
+    const anchorCanvasX = (screenX - this.offsetX) / this.zoomScale
+    const anchorCanvasY = (screenY - this.offsetY) / this.zoomScale
+    // 围绕锚点缩放
+    this.offsetX = screenX - anchorCanvasX * nextScale
+    this.offsetY = screenY - anchorCanvasY * nextScale
+    this.zoomScale = nextScale
   }
 
-  /** 缩小一级（工具栏 −）；已经缩到最小时缩出当前层，回到父星图 */
+  /** 放大一级（工具栏 +）：以可视画布中心为锚点 */
+  zoomIn() {
+    const centerX = this.canvasWidth / 2
+    const centerY = this.canvasHeight / 2
+    this.zoomAround(centerX, centerY, Math.min(MAX_ZOOM, this.zoomScale + ZOOM_STEP))
+  }
+
+  /** 缩小一级（工具栏 −）：已经缩到最小时缩出当前层，回到父星图 */
   zoomOut() {
     if (this.zoomScale - ZOOM_STEP < MIN_ZOOM && this.layerStack.length > 0) {
       this.returnToParent()
       return
     }
-    this.zoomScale = Math.max(MIN_ZOOM, this.zoomScale - ZOOM_STEP)
-  }
-
-  /** 双指缩放：比例低于 MIN_ZOOM 时同样退出当前层回到父星图 */
-  private applyPinchScale(scale: number) {
-    if (scale < MIN_ZOOM && this.layerStack.length > 0) {
-      this.returnToParent()
-      return
-    }
-    this.zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale))
+    const centerX = this.canvasWidth / 2
+    const centerY = this.canvasHeight / 2
+    this.zoomAround(centerX, centerY, Math.max(MIN_ZOOM, this.zoomScale - ZOOM_STEP))
   }
 
   /**
@@ -474,8 +490,7 @@ export struct StarMapScreen {
     // 压入当前层 frame
     this.layerStack = pushLayer(
       this.layerStack,
-      createLayerFrame(this.starmapId, this.starmapTitle, this.zoomScale, this.offsetX, this.offsetY),
-      createLayerFrame(embed.targetStarmapId, embed.label ?? embed.targetStarmapId, 1, 0, 0)
+      createLayerFrame(this.starmapId, this.starmapTitle, this.zoomScale, this.offsetX, this.offsetY)
     )
     // 切换到子层
     this.starmapId = embed.targetStarmapId
@@ -503,11 +518,17 @@ export struct StarMapScreen {
 
   @Builder
   StarMapContent() {
-    Stack() {
-      // Canvas 常驻：只跟 StarMapScreen 生命周期走
+    RelativeContainer() {
+      // Canvas 常驻：锚定四边，填满容器
       Canvas(this.canvasCtx)
         .width('100%')
         .height('100%')
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
+          left: { anchor: '__container__', align: HorizontalAlign.Start },
+          right: { anchor: '__container__', align: HorizontalAlign.End }
+        })
         .onReady(() => {
           this.canvasReady = true
           this.drawEdges()
@@ -530,6 +551,12 @@ export struct StarMapScreen {
         Canvas(this.previewCanvasCtx)
           .width('100%')
           .height('100%')
+          .alignRules({
+            top: { anchor: '__container__', align: VerticalAlign.Top },
+            bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
+            left: { anchor: '__container__', align: HorizontalAlign.Start },
+            right: { anchor: '__container__', align: HorizontalAlign.End }
+          })
           .onReady(() => {
             this.previewCanvasReady = true
             this.drawPreviewLine()
@@ -546,7 +573,7 @@ export struct StarMapScreen {
         this.CreateMenu()
       }
 
-      // 缩放控件
+      // 缩放控件：独立锚定右下角
       this.ZoomControls()
 
       // 新建节点对话框
@@ -559,7 +586,7 @@ export struct StarMapScreen {
         this.CreateEmbedDialog()
       }
 
-      // Loading 盖层
+      // Loading 盖层：锚定四边
       if (this.isLoading) {
         Column() {
           LoadingProgress()
@@ -573,9 +600,15 @@ export struct StarMapScreen {
         .height('100%')
         .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.background_secondary'))
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
+          left: { anchor: '__container__', align: HorizontalAlign.Start },
+          right: { anchor: '__container__', align: HorizontalAlign.End }
+        })
       }
 
-      // Error 盖层
+      // Error 盖层：锚定四边
       if (this.errorMessage) {
         Column() {
           Text(this.errorMessage)
@@ -588,6 +621,12 @@ export struct StarMapScreen {
         .height('100%')
         .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.background_secondary'))
+        .alignRules({
+          top: { anchor: '__container__', align: VerticalAlign.Top },
+          bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
+          left: { anchor: '__container__', align: HorizontalAlign.Start },
+          right: { anchor: '__container__', align: HorizontalAlign.End }
+        })
       }
     }
     .layoutWeight(1)
@@ -596,13 +635,55 @@ export struct StarMapScreen {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.stackWidth = Number(newArea.width)
       this.stackHeight = Number(newArea.height)
+      this.canvasWidth = Number(newArea.width)
+      this.canvasHeight = Number(newArea.height)
     })
     .gesture(
       GestureGroup(GestureMode.Parallel,
         PinchGesture({ fingers: 2 })
-          .onActionStart(() => { this.pinchBaseScale = this.zoomScale })
+          .onActionStart((event: GestureEvent) => {
+            this.pinchBaseScale = this.zoomScale
+            this.pinchBaseOffsetX = this.offsetX
+            this.pinchBaseOffsetY = this.offsetY
+            this.pinchDrilledUp = false
+            // 读取双指中心点（屏幕坐标），换算成画布坐标锚点
+            const fingers: FingerInfo[] = event.fingerList
+            if (fingers && fingers.length >= 2) {
+              const centerX = (fingers[0].localX + fingers[1].localX) / 2
+              const centerY = (fingers[0].localY + fingers[1].localY) / 2
+              this.pinchAnchorCanvasX = (centerX - this.offsetX) / this.zoomScale
+              this.pinchAnchorCanvasY = (centerY - this.offsetY) / this.zoomScale
+            } else {
+              // 防御性 fallback：用画布中心
+              this.pinchAnchorCanvasX = (this.canvasWidth / 2 - this.offsetX) / this.zoomScale
+              this.pinchAnchorCanvasY = (this.canvasHeight / 2 - this.offsetY) / this.zoomScale
+            }
+          })
           .onActionUpdate((event: GestureEvent) => {
-            this.applyPinchScale(this.pinchBaseScale * event.scale)
+            const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.pinchBaseScale * event.scale))
+            // 重新读取双指中心点（手指可能移动了）
+            const fingers: FingerInfo[] = event.fingerList
+            let centerX: number
+            let centerY: number
+            if (fingers && fingers.length >= 2) {
+              centerX = (fingers[0].localX + fingers[1].localX) / 2
+              centerY = (fingers[0].localY + fingers[1].localY) / 2
+            } else {
+              centerX = this.canvasWidth / 2
+              centerY = this.canvasHeight / 2
+            }
+            // 围绕锚点缩放：保持 pinchAnchorCanvasX/Y 对应的屏幕点不动
+            this.offsetX = centerX - this.pinchAnchorCanvasX * nextScale
+            this.offsetY = centerY - this.pinchAnchorCanvasY * nextScale
+            this.zoomScale = nextScale
+            // 缩到 MIN_ZOOM 以下且未触发过 returnToParent → 退回父层
+            if (nextScale <= MIN_ZOOM && this.layerStack.length > 0 && !this.pinchDrilledUp) {
+              this.pinchDrilledUp = true
+              this.returnToParent()
+            }
+          })
+          .onActionEnd(() => {
+            this.pinchDrilledUp = false
           }),
         PanGesture()
           .onActionStart((event: GestureEvent) => {
@@ -1099,26 +1180,20 @@ export struct StarMapScreen {
   async performCreateEmbed() {
     if (this.newEmbedTitle.trim().length === 0) return
     this.showCreateEmbedDialog = false
-    const createResult = await this.bridge.createStarMap(this.newEmbedTitle.trim(), '')
-    if (!createResult.success || !createResult.data) {
-      hilog.error(0x0000, 'StarMapScreen', `createStarMap for embed failed: ${createResult.errorCode}, ${createResult.userMessage}`)
-      return
-    }
-    const targetStarmapId = createResult.data.starmapId
     const position: StarMapPoint = {
       x: this.createMenuCanvasPosition.x,
       y: this.createMenuCanvasPosition.y
     }
-    const embedResult = await this.bridge.addStarMapEmbed(this.starmapId, targetStarmapId, this.newEmbedTitle.trim(), position)
-    if (embedResult.success && embedResult.data) {
-      // 直接 append 到当前 graph，不再 loadStarMap
+    const result = await this.bridge.createStarmapChildEmbed(this.starmapId, this.newEmbedTitle.trim(), position)
+    if (result.success && result.data) {
+      // 把返回的 Embed 直接加进当前层 graph.embeds
       if (this.graph) {
         this.graph = {
           schemaVersion: this.graph.schemaVersion,
           starmapId: this.graph.starmapId,
           nodes: this.graph.nodes,
           edges: this.graph.edges,
-          embeds: [...this.graph.embeds, embedResult.data],
+          embeds: [...this.graph.embeds, result.data.embed],
           links: this.graph.links,
           hyperlinks: this.graph.hyperlinks
         }
@@ -1126,11 +1201,7 @@ export struct StarMapScreen {
         this.recomputeGeometry()
       }
     } else {
-      hilog.error(0x0000, 'StarMapScreen', `addStarMapEmbed failed, cleaning up orphan starmap: ${embedResult.errorCode}`)
-      const deleteResult = await this.bridge.deleteStarMap(targetStarmapId)
-      if (!deleteResult.success) {
-        hilog.error(0x0000, 'StarMapScreen', `cleanup orphan starmap failed: ${deleteResult.errorCode}`)
-      }
+      hilog.error(0x0000, 'StarMapScreen', `createStarmapChildEmbed failed: ${result.errorCode ?? 'unknown'}`)
     }
     this.newEmbedTitle = ''
   }
@@ -1217,7 +1288,10 @@ export struct StarMapScreen {
       .height(40)
       .onClick(() => this.zoomIn())
     }
-    .align(Alignment.BottomEnd)
+    .alignRules({
+      right: { anchor: '__container__', align: HorizontalAlign.End },
+      bottom: { anchor: '__container__', align: VerticalAlign.Bottom }
+    })
     .margin({ right: 16, bottom: 16 })
   }
 

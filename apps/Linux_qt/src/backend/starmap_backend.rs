@@ -354,21 +354,21 @@ impl StarMapBackend {
         let gj = graph_json.to_string();
         let nj = nodes_json.to_string();
         let ej = embeds_json.to_string();
-        let graph_dto: writer_core::api::types::StarMapGraphDto =
-            match serde_json::from_str(&gj) {
-                Ok(d) => d,
-                Err(e) => {
-                    return crate::backend::json_utils::envelope_error_json(
-                        writer_core::api::WriterError::Other(format!("Invalid graph JSON: {}", e)),
-                    )
-                    .into()
-                }
-            };
+        let graph_dto: writer_core::api::types::StarMapGraphDto = match serde_json::from_str(&gj) {
+            Ok(d) => d,
+            Err(e) => {
+                return crate::backend::json_utils::envelope_error_json(
+                    writer_core::api::WriterError::Other(format!("Invalid graph JSON: {}", e)),
+                )
+                .into()
+            }
+        };
         match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(
             graph_dto,
         ) {
-            Ok(graph) => crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej)
-                .into(),
+            Ok(graph) => {
+                crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej).into()
+            }
             Err(e) => crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other(e.to_string()),
             )

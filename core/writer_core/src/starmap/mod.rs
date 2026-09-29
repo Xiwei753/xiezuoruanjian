@@ -714,6 +714,236 @@ pub(crate) fn filter_root_starmaps(
         .collect()
 }
 
+/// 孤儿子图识别的时间窗口（毫秒）。
+///
+/// 旧版本两段式创建失败时，子星图的创建时间与宿主星图中 Note 节点的创建时间
+/// 应该非常接近。60 秒窗口足够覆盖两段式创建的正常延迟，同时不会把
+/// 用户隔很久手动创建的同名星图误判为孤儿。
+const ORPHAN_TIME_WINDOW_MS: u64 = 60_000;
+
+/// 识别可能是孤儿子图的星图 — 即没有任何 Embed 指向它，
+/// 但其创建时间非常近（在一定窗口内），且标题匹配某个已知星图中的 Note 节点 portal 标题。
+/// 这些星图可能是旧版本两段式创建失败留下的孤儿。
+/// 返回的列表只包含能明确判断为未完成子图的数据，不会误删正常用户创建的根星图。
+///
+/// 识别逻辑（保守策略，宁可漏识别也不误判）：
+/// 1. 收集所有 Embed target ID（这些是正常的子星图，不是孤儿）
+/// 2. 收集所有 Note 节点的 portal destination_starmap_id（这些也是正常的子星图引用）
+/// 3. 对于不在以上两个集合中的星图，检查：
+///    - 是否有任何其他星图的 Note 节点标题与该星图标题完全一致
+///    - 且该星图的 `created_at` 与那个 Note 节点的宿主星图的 `created_at` 非常接近（在 60 秒窗口内）
+///    - 且该星图没有任何节点、边、embed、link、hyperlink（即完全空白的星图）
+/// 4. 只有同时满足以上所有条件的星图才被识别为可能的孤儿
+pub(crate) fn identify_orphan_starmaps(
+    all_starmaps: &[StarMapMeta],
+    graphs: &[crate::starmap::types::StarMapGraph],
+) -> Vec<StarMapMeta> {
+    // 1. 收集所有 Embed target ID — 这些是正常的子星图，不是孤儿。
+    let mut embed_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for graph in graphs {
+        for embed in &graph.embeds {
+            embed_targets.insert(embed.target_starmap_id.clone());
+        }
+    }
+
+    // 2. 收集所有 Note 节点的 portal destination_starmap_id — 这些也是正常的子星图引用。
+    let mut portal_targets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for graph in graphs {
+        for node in &graph.nodes {
+            if node.kind == crate::starmap::types::StarMapNodeKind::Note {
+                if let Some(portal) = &node.portal {
+                    portal_targets.insert(portal.destination_starmap_id.clone());
+                }
+            }
+        }
+    }
+
+    // 构建 starmap_id → meta 的查找表。
+    let meta_by_id: std::collections::HashMap<String, &StarMapMeta> = all_starmaps
+        .iter()
+        .map(|sm| (sm.starmap_id.clone(), sm))
+        .collect();
+
+    // 构建 starmap_id → graph 的查找表。
+    let graph_by_id: std::collections::HashMap<String, &crate::starmap::types::StarMapGraph> =
+        graphs.iter().map(|g| (g.starmap_id.clone(), g)).collect();
+
+    // 3. 对于不在 embed_targets 和 portal_targets 中的星图，检查是否为孤儿。
+    let mut orphans = Vec::new();
+
+    for sm in all_starmaps {
+        // 如果该星图被 Embed 或 portal 引用，则不是孤儿。
+        if embed_targets.contains(&sm.starmap_id) || portal_targets.contains(&sm.starmap_id) {
+            continue;
+        }
+
+        // 该星图必须完全空白（没有任何节点、边、embed、link、hyperlink）。
+        let graph_empty = graph_by_id
+            .get(&sm.starmap_id)
+            .map(|g| {
+                g.nodes.is_empty()
+                    && g.edges.is_empty()
+                    && g.embeds.is_empty()
+                    && g.links.is_empty()
+                    && g.hyperlinks.is_empty()
+            })
+            .unwrap_or(true); // 没有 graph 数据视为空（新创建的星图可能还没有 graph 目录）
+
+        if !graph_empty {
+            continue;
+        }
+
+        // 检查是否有其他星图的 Note 节点标题与该星图标题完全一致，
+        // 且创建时间在窗口内。
+        let mut found_host = false;
+        for graph in graphs {
+            if graph.starmap_id == sm.starmap_id {
+                continue; // 不检查自身
+            }
+
+            // 获取宿主星图的 meta。
+            let Some(host_meta) = meta_by_id.get(&graph.starmap_id) else {
+                continue;
+            };
+
+            // 检查宿主星图的 created_at 与候选孤儿的 created_at 是否在窗口内。
+            let time_diff = sm.created_at.abs_diff(host_meta.created_at);
+            if time_diff > ORPHAN_TIME_WINDOW_MS {
+                continue;
+            }
+
+            // 检查宿主星图中是否有 Note 节点标题与候选孤儿标题完全一致。
+            for node in &graph.nodes {
+                if node.kind == crate::starmap::types::StarMapNodeKind::Note
+                    && node.title == sm.title
+                {
+                    found_host = true;
+                    break;
+                }
+            }
+
+            if found_host {
+                break;
+            }
+        }
+
+        if found_host {
+            orphans.push(sm.clone());
+        }
+    }
+
+    orphans
+}
+
+/// 安全迁移孤儿子图：对于能明确判断为未完成子图的星图，
+/// 创建从宿主星图到孤儿星图的 Embed 关系，使其不再出现在根列表中。
+/// 不能明确判断的星图保留不动，不做任何猜测性操作。
+///
+/// 迁移逻辑：
+/// 1. 加载所有星图 meta 和 graph
+/// 2. 调用 `identify_orphan_starmaps` 识别孤儿
+/// 3. 对于每个识别出的孤儿：
+///    - 找到宿主星图（标题匹配的 Note 节点所在星图）
+///    - 在宿主星图中创建一个 Embed 指向孤儿星图
+///    - 这样孤儿星图就不再是"根"星图，不会出现在 `listRootStarMaps()` 结果中
+/// 4. 返回成功迁移的星图 ID 列表
+pub fn safe_migrate_orphan_starmaps(base_dir: &Path) -> Result<Vec<String>> {
+    let all_starmaps = list_starmaps(base_dir)?;
+
+    let mut graphs = Vec::with_capacity(all_starmaps.len());
+    let mut stores: Vec<crate::starmap::store::StarMapStore> =
+        Vec::with_capacity(all_starmaps.len());
+
+    for sm in &all_starmaps {
+        let mut store = crate::starmap::store::StarMapStore::new(base_dir, &sm.starmap_id);
+        store.load_full()?;
+        graphs.push(store.to_starmap_graph());
+        stores.push(store);
+    }
+
+    let orphans = identify_orphan_starmaps(&all_starmaps, &graphs);
+
+    if orphans.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 为每个孤儿找到宿主星图并创建 Embed。
+    let mut migrated = Vec::new();
+
+    // 构建 starmap_id → meta 的查找表。
+    let meta_by_id: std::collections::HashMap<String, &StarMapMeta> = all_starmaps
+        .iter()
+        .map(|sm| (sm.starmap_id.clone(), sm))
+        .collect();
+
+    for orphan in &orphans {
+        // 找到宿主星图：标题匹配的 Note 节点所在星图，且创建时间在窗口内。
+        let mut host_id: Option<String> = None;
+
+        for graph in &graphs {
+            if graph.starmap_id == orphan.starmap_id {
+                continue;
+            }
+
+            let Some(host_meta) = meta_by_id.get(&graph.starmap_id) else {
+                continue;
+            };
+
+            let time_diff = orphan.created_at.abs_diff(host_meta.created_at);
+            if time_diff > ORPHAN_TIME_WINDOW_MS {
+                continue;
+            }
+
+            for node in &graph.nodes {
+                if node.kind == crate::starmap::types::StarMapNodeKind::Note
+                    && node.title == orphan.title
+                {
+                    host_id = Some(graph.starmap_id.clone());
+                    break;
+                }
+            }
+
+            if host_id.is_some() {
+                break;
+            }
+        }
+
+        let Some(host_starmap_id) = host_id else {
+            // 找不到宿主星图，跳过这个孤儿（保守策略，不做猜测）。
+            continue;
+        };
+
+        // 在宿主星图中创建 Embed 指向孤儿星图。
+        let now = now_epoch();
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: format!("em_{}", uuid::Uuid::new_v4()),
+            target_starmap_id: orphan.starmap_id.clone(),
+            label: Some(orphan.title.clone()),
+            position: crate::starmap::types::StarMapPoint::default(),
+            host_path: crate::starmap::types::StarMapTargetPath {
+                starmap_id: host_starmap_id.clone(),
+                segments: Vec::new(),
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        // 找到宿主星图的 store 索引并添加 embed。
+        let host_idx = stores
+            .iter()
+            .position(|s| s.starmap_id() == host_starmap_id);
+        if let Some(idx) = host_idx {
+            stores[idx].upsert_embed(embed);
+            stores[idx].flush()?;
+            migrated.push(orphan.starmap_id.clone());
+        }
+    }
+
+    Ok(migrated)
+}
+
 /// 列出根星图（未被任何星图嵌入且非 legacy child 的星图）。
 ///
 /// 此函数从磁盘加载星图数据。facade 层（`WriterCore::list_root_starmaps`）

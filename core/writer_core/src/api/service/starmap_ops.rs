@@ -87,6 +87,64 @@ impl WriterCoreApi {
         Ok(result.into())
     }
 
+    /// 原子组合操作：创建子星图并嵌入父图。
+    ///
+    /// 调用 facade 的 `create_starmap_child_embed`，将领域类型转换为 DTO，
+    /// 更新搜索索引（对新创建的 starmap 和 embed 都做 Upsert），
+    /// 记录本地 Git history。
+    pub fn create_starmap_child_embed(
+        &self,
+        host_starmap_id: &str,
+        title: &str,
+        position: crate::api::types::StarMapPointDto,
+    ) -> ApiResult<crate::api::types::CreateStarMapChildEmbedResultDto> {
+        let core_position: crate::starmap::types::StarMapPoint = position.into();
+        let (starmap_meta, embed) = self
+            .core_write()
+            .create_starmap_child_embed(host_starmap_id, title, core_position)
+            .map_err(WriterError::from)?;
+
+        let starmap_id = starmap_meta.starmap_id.clone();
+        let project_id = starmap_meta.project_id.as_deref().map(|s| s.to_string());
+
+        // 更新搜索索引：新创建的 starmap title
+        let starmap_entry = crate::search::extractor::extract_starmap_title_entry(
+            &starmap_id,
+            project_id.as_deref(),
+            &starmap_meta.title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: starmap_entry.object_id.clone(),
+            scope: starmap_entry.scope,
+            title: starmap_entry.title.clone(),
+            body: starmap_entry.body.clone(),
+            target: Some(starmap_entry.target.clone()),
+        });
+
+        // 更新搜索索引：新创建的 embed
+        let embed_entry = crate::search::extractor::extract_starmap_embed_entry(
+            host_starmap_id,
+            &embed.instance_id,
+            project_id.as_deref(),
+            &embed.label.clone().unwrap_or_default(),
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: embed_entry.object_id.clone(),
+            scope: embed_entry.scope,
+            title: embed_entry.title.clone(),
+            body: embed_entry.body.clone(),
+            target: Some(embed_entry.target.clone()),
+        });
+
+        Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
+            starmap: starmap_meta.into(),
+            embed: embed.into(),
+            pending: false,
+        })
+    }
+
     pub fn update_starmap_embed(
         &self,
         starmap_id: &str,

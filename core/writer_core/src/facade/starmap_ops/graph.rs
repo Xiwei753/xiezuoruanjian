@@ -582,6 +582,66 @@ impl super::super::WriterCore {
         store.acknowledge_deletions(acknowledged_revision)
     }
 
+    /// 原子组合操作：创建子星图并嵌入父图。
+    ///
+    /// 内部顺序：
+    /// 1. `create_starmap(title, "", DEFAULT_ACCENT_COLOR)` 创建目标 StarMap
+    /// 2. 构造 StarMapEmbed 并调用 `add_starmap_embed` 在宿主图创建 Embed
+    /// 3. 第二步失败时在 Core 内回滚刚创建的目标 StarMap
+    ///
+    /// 锁顺序：`create_starmap` 不持 `starmap_stores` 锁（纯磁盘操作），
+    /// `add_starmap_embed` 持锁。两步之间无锁竞争，不会死锁。
+    pub fn create_starmap_child_embed(
+        &self,
+        host_starmap_id: &str,
+        title: &str,
+        position: crate::starmap::types::StarMapPoint,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::starmap::types::StarMapEmbed,
+    )> {
+        // Step 1: 创建子星图（无锁，纯磁盘操作）
+        let child_meta = self.create_starmap(title, "", None)?;
+
+        // Step 2: 构造 Embed 并添加到宿主图
+        let now = crate::starmap::now_epoch();
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: format!("em_{}", uuid::Uuid::new_v4()),
+            target_starmap_id: child_meta.starmap_id.clone(),
+            label: None,
+            position,
+            host_path: crate::starmap::types::StarMapTargetPath {
+                starmap_id: host_starmap_id.to_string(),
+                segments: Vec::new(),
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        match self.add_starmap_embed(host_starmap_id, embed) {
+            Ok(created_embed) => Ok((child_meta, created_embed)),
+            Err(e) => {
+                // Step 3: 回滚——删除刚创建的子星图
+                log::warn!(
+                    "create_starmap_child_embed: add_starmap_embed failed, rolling back \
+                     created starmap {}: {}",
+                    child_meta.starmap_id,
+                    e
+                );
+                if let Err(rollback_err) = self.delete_starmap(&child_meta.starmap_id) {
+                    log::error!(
+                        "create_starmap_child_embed: rollback failed for starmap {}: {}",
+                        child_meta.starmap_id,
+                        rollback_err
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
     pub fn find_starmap_references(
         &self,
         target_starmap_id: &str,

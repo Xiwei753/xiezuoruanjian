@@ -1,5 +1,19 @@
 use super::*;
 
+/// 创建子星图并嵌入父图的原子组合操作结果。
+///
+/// `starmap` 是新创建的子星图元数据，`embed` 是建立的 Embed 关系，
+/// `pending` 标识刚创建的子图是否处于"待完成"状态——原子操作成功时
+/// `pending` 为 `false`（Embed 已建立），为将来处理旧版孤儿数据提供基础。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateStarMapChildEmbedResultDto {
+    pub starmap: StarMapMetaDto,
+    pub embed: StarMapEmbedDto,
+    #[serde(default)]
+    pub pending: bool,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedDto {
