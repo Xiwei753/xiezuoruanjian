@@ -107,6 +107,9 @@ export struct StarMapScreen {
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
 
+  // 层级切换事务序号：防止快速连续下钻/返回时异步竞态导致 path 和 layerStack 不一致
+  private layerResolveGeneration: number = 0
+
   // 按完整 path 独立保存 viewport：进入某层恢复该 path 自己的 viewport，首次用默认值。
   // pathKey 用 JSON.stringify(currentPathSegments)（根层是 '[]'）。
   // 纯平台状态，非 @State，不参与渲染驱动。
@@ -197,6 +200,8 @@ export struct StarMapScreen {
   aboutToDisappear() {
     // 先置 inactive，再 cancel animator、reset gesture/menu
     this.canvasActive = false
+    // 让进行中的异步切层 resolver 失效，避免页面离开后异步结果回来继续改状态
+    this.layerResolveGeneration++
     this.deactivatePreviewCanvas()
     this.stopWobbleAnimation()
     this.gestureTracker.reset()
@@ -514,9 +519,20 @@ export struct StarMapScreen {
       this.navPathStack.pop()
       return
     }
+    const generation = ++this.layerResolveGeneration
+    const sourcePathKey = this.currentPathKey()
+    const sourceStarmapId = this.starmapId
     this.saveCurrentViewport()
     const parentSegments = this.currentPathSegments.slice(0, this.currentPathSegments.length - 1)
     const result = await this.bridge.resolveStarMapPath(this.rootStarmapId, parentSegments)
+    // 竞态保护：await 期间如果已经有新的切层事务或状态已变，丢弃本次结果
+    if (
+      generation !== this.layerResolveGeneration ||
+      sourcePathKey !== this.currentPathKey() ||
+      sourceStarmapId !== this.starmapId
+    ) {
+      return
+    }
     if (!result.success || !result.data || !result.data.finalStarmapId) {
       this.layerResolveError = '解析星图层级路径失败' + (result.errorCode ? '(' + result.errorCode + ')' : '')
       promptAction.showToast({ message: '解析星图层级路径失败', duration: 2000 })
@@ -554,7 +570,7 @@ export struct StarMapScreen {
 
   /** 缩小一级（工具栏 −）：已经缩到最小时缩出当前层，回到父星图 */
   zoomOut() {
-    if (this.zoomScale - ZOOM_STEP < MIN_ZOOM && this.layerStack.length > 0) {
+    if (this.zoomScale - ZOOM_STEP < MIN_ZOOM && this.currentPathSegments.length > 0) {
       this.returnToParent()
       return
     }
@@ -570,11 +586,22 @@ export struct StarMapScreen {
    * → 失败停在当前层 toast 报错，不回退裸 embed.targetStarmapId。
    */
   async navigateToEmbed(embed: StarMapEmbed) {
+    const generation = ++this.layerResolveGeneration
+    const sourcePathKey = this.currentPathKey()
+    const sourceStarmapId = this.starmapId
     const nextSegments: StarMapPathSegment[] = [
       ...this.currentPathSegments,
       { type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null }
     ]
     const result = await this.bridge.resolveStarMapPath(this.rootStarmapId, nextSegments)
+    // 竞态保护：await 期间如果已经有新的切层事务或状态已变，丢弃本次结果
+    if (
+      generation !== this.layerResolveGeneration ||
+      sourcePathKey !== this.currentPathKey() ||
+      sourceStarmapId !== this.starmapId
+    ) {
+      return
+    }
     if (!result.success || !result.data || !result.data.finalStarmapId) {
       this.layerResolveError = '解析星图层级路径失败' + (result.errorCode ? '(' + result.errorCode + ')' : '')
       promptAction.showToast({ message: '解析星图层级路径失败', duration: 2000 })
@@ -639,7 +666,7 @@ export struct StarMapScreen {
         })
 
       // 层级 breadcrumb：层级路径属于 Canvas 自己，不进 NavDestination 标题
-      if (this.layerStack.length > 0) {
+      if (this.currentPathSegments.length > 0) {
         Text(this.buildBreadcrumb())
           .fontSize(12)
           .fontColor('#888888')
@@ -783,7 +810,7 @@ export struct StarMapScreen {
             if (this.pinchDrilledUp) return
             // 用未 clamp 的 rawScale 先判断是否越过返回阈值
             const rawScale = this.pinchBaseScale * event.scale
-            if (rawScale <= MIN_ZOOM && this.layerStack.length > 0 && !this.pinchDrilledUp) {
+            if (rawScale <= MIN_ZOOM && this.currentPathSegments.length > 0 && !this.pinchDrilledUp) {
               this.pinchDrilledUp = true
               this.returnToParent()
               return
@@ -852,11 +879,12 @@ export struct StarMapScreen {
   }
 
   /**
-   * Canvas 内 breadcrumb：根标题 › 层1 › 层2 ... › 当前层。
-   * 根层时 layerStack 为空，breadcrumb 不显示（由调用方 if 判断）。
+   * Canvas 内 breadcrumb：层1 › 层2 ... › 当前层。
+   * layerStack 已保存每级父层标题，不需要再额外塞一次 root。
+   * 根层时 currentPathSegments 为空，breadcrumb 不显示（由调用方 if 判断）。
    */
   private buildBreadcrumb(): string {
-    let parts: string[] = [this.rootStarmapTitle]
+    const parts: string[] = []
     for (const frame of this.layerStack) {
       parts.push(frame.title)
     }
@@ -872,7 +900,7 @@ export struct StarMapScreen {
         screenTabIndex: 1,
         isRoot: false,
         onBack: () => {
-          if (this.layerStack.length > 0) {
+          if (this.currentPathSegments.length > 0) {
             this.returnToParent()
             return true
           }
@@ -889,7 +917,7 @@ export struct StarMapScreen {
       .hideTitleBar(false)
       .hideBackButton(false)
       .onBackPressed(() => {
-        if (this.layerStack.length > 0) {
+        if (this.currentPathSegments.length > 0) {
           this.returnToParent()
           return true
         }

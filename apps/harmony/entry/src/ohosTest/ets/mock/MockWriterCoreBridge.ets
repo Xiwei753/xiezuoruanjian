@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, LayoutMetrics, ScreenPolicy, ActionSlot
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -531,6 +531,65 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     }
     this.mockStarMapGraph.embeds.push(embed)
     return this.success(embed)
+  }
+
+  async createStarmapChildEmbed(hostStarmapId: string, title: string,
+    position: { x: number, y: number }): Promise<ResultEnvelope<CreateStarmapChildEmbedResult>> {
+    await this.delay(200)
+    const now = Date.now()
+    const newStarmapId = `starmap-child-${now}`
+    const newStarMap: StarMapMeta = {
+      starmapId: newStarmapId,
+      title: title,
+      description: '',
+      projectId: null,
+      accentColor: '#4A90D9',
+      createdAt: now,
+      updatedAt: now
+    }
+    this.mockStarMaps.push(newStarMap)
+    const embed: StarMapEmbed = {
+      instanceId: `em_${now}`,
+      targetStarmapId: newStarmapId,
+      label: title,
+      position: { x: position.x, y: position.y },
+      hostPath: {
+        starmapId: hostStarmapId,
+        segments: [],
+        target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null }
+      },
+      provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
+      createdAt: now,
+      updatedAt: now
+    }
+    this.mockStarMapGraph.embeds.push(embed)
+    const result: CreateStarmapChildEmbedResult = {
+      starmap: newStarMap,
+      embed: embed,
+      pending: false
+    }
+    return this.success(result)
+  }
+
+  async resolveStarMapPath(rootStarmapId: string,
+    segments: StarMapPathSegment[]): Promise<ResultEnvelope<StarMapResolvedPath>> {
+    await this.delay(100)
+    // 逐段按 enterEmbed.instanceId 查当前 graph/embed 并返回最终 finalStarmapId
+    let currentStarmapId: string = rootStarmapId
+    for (const segment of segments) {
+      if (segment.type === 'enterEmbed' && segment.instanceId !== null) {
+        // 在当前 graph 的 embeds 中查找匹配的 instanceId
+        const embed = this.mockStarMapGraph.embeds.find(e => e.instanceId === segment.instanceId)
+        if (!embed) {
+          return this.error('STARMAP_NOT_FOUND', 'Embed 不存在: ' + segment.instanceId)
+        }
+        currentStarmapId = embed.targetStarmapId
+      }
+    }
+    const resolved: StarMapResolvedPath = {
+      finalStarmapId: currentStarmapId
+    }
+    return this.success(resolved)
   }
 
   // Settings methods
