@@ -131,8 +131,10 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
 
     // ── 2. 模拟同步完成：把星图文件路径加入 SyncState.known_files ──
     //    known_files 记录上次同步后的共识哈希；这是同步成功的正常基线状态。
-    let mut state = SyncState::default();
-    state.device_id = "test-device-805".to_string();
+    let mut state = SyncState {
+        device_id: "test-device-805".to_string(),
+        ..Default::default()
+    };
     for rel in &starmap_files {
         state
             .known_files
@@ -141,22 +143,16 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
     }
     SyncService::save_sync_state(&app_data_root, &state).unwrap();
 
-    // ── 3. 删除星图（走 plan/apply 事务） ──
-    //   starmap::delete_starmap 已收窄为 pub(crate)，这里直接走
-    // plan_delete_starmap + apply_planned_delete_starmap（pub 入口），
-    // 验证相同的核心事务逻辑。
-    let device_id = SyncService::load_sync_state(&app_data_root)
-        .map(|s| s.device_id)
-        .unwrap_or_default();
-    let (_change_set, planned) =
-        writer_core::storage::journal::plan_delete_starmap(&app_data_root, &starmap_id, &device_id)
-            .unwrap();
-    writer_core::storage::journal::apply_planned_delete_starmap(
-        &app_data_root,
-        &starmap_id,
-        &planned,
-    )
-    .unwrap();
+    // ── 3. 删除星图（走 WriterCoreApi::delete_starmap 完整事务） ──
+    //   starmap_delete 的 plan/apply 已收窄为 pub(crate)，外部通过
+    // WriterCoreApi::delete_starmap 走完整 durable journal 事务
+    //（plan + save_pending + apply + tombstone + history）。
+    // 先确保 workspace git repo 存在，使 history 能成功记录。
+    let layout = writer_core::storage::git_repo_layout::GitRepoLayout::new(app_data_root.clone());
+    writer_core::storage::workspace_git::ensure_workspace_repo(&layout).unwrap();
+    let projects_root = app_data_root.join("projects");
+    let api = writer_core::api::WriterCoreApi::new(&app_data_root, &projects_root);
+    api.delete_starmap(&starmap_id).unwrap();
 
     // 确认星图文件已从磁盘删除（移到 trash，原路径不存在）。
     for rel in &starmap_files {
@@ -228,8 +224,10 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     assert!(!starmap_files.is_empty());
 
     // 模拟同步基线。
-    let mut state = SyncState::default();
-    state.device_id = "test-device-805b".to_string();
+    let mut state = SyncState {
+        device_id: "test-device-805b".to_string(),
+        ..Default::default()
+    };
     for rel in &starmap_files {
         state
             .known_files
@@ -238,26 +236,16 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     }
     SyncService::save_sync_state(&app_data_root, &state).unwrap();
 
-    // 走 delete_starmap_with_changes 路径（现在走 plan/apply 事务）。
-    //   starmap::delete_starmap_with_changes 已收窄为 pub(crate)，这里直接走
-    // plan_delete_starmap + apply_planned_delete_starmap（pub 入口）。
-    let device_id = SyncService::load_sync_state(&app_data_root)
-        .map(|s| s.device_id)
-        .unwrap_or_default();
-    let (change_set, planned) =
-        writer_core::storage::journal::plan_delete_starmap(&app_data_root, &starmap_id, &device_id)
-            .unwrap();
-    writer_core::storage::journal::apply_planned_delete_starmap(
-        &app_data_root,
-        &starmap_id,
-        &planned,
-    )
-    .unwrap();
-    // 变更集应包含 meta 删除 + 对象目录删除树。
-    assert!(
-        !change_set.is_empty(),
-        "前置：delete_starmap_with_changes 应返回非空变更集"
-    );
+    // 走 WriterCoreApi::delete_starmap 路径（完整 durable journal 事务）。
+    //   starmap::delete_starmap_with_changes 已收窄为 pub(crate)，
+    // starmap_delete 的 plan/apply 已收窄为 pub(crate)，外部统一通过
+    // WriterCoreApi::delete_starmap 走完整事务。
+    // 先确保 workspace git repo 存在，使 history 能成功记录。
+    let layout = writer_core::storage::git_repo_layout::GitRepoLayout::new(app_data_root.clone());
+    writer_core::storage::workspace_git::ensure_workspace_repo(&layout).unwrap();
+    let projects_root = app_data_root.join("projects");
+    let api = writer_core::api::WriterCoreApi::new(&app_data_root, &projects_root);
+    api.delete_starmap(&starmap_id).unwrap();
 
     // tombstone 应全部补齐。
     let state_after = SyncService::load_sync_state(&app_data_root).unwrap();

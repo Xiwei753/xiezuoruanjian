@@ -10,6 +10,27 @@ fn setup_temp_dir() -> tempfile::TempDir {
     dir
 }
 
+///   test 专用：走底层 plan/apply 删除星图（不走 durable journal history）。
+/// 底层 `starmap::delete_starmap` 已删除（被 `WriterCoreApi::delete_starmap`
+/// 替代），unit test 直接调 `starmap_delete::plan_delete_starmap` +
+/// `apply_planned_delete_starmap` 验证同样的物理删除 + tombstone 行为。
+fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
+    let device_id = crate::sync::SyncService::load_sync_state(app_data_root)
+        .map(|s| s.device_id)
+        .unwrap_or_default();
+    let (_change_set, planned) = crate::storage::journal::starmap_delete::plan_delete_starmap(
+        app_data_root,
+        starmap_id,
+        &device_id,
+    )?;
+    crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
+        app_data_root,
+        starmap_id,
+        &planned,
+    )?;
+    Ok(())
+}
+
 #[test]
 fn test_create_and_list_starmaps() {
     let dir = setup_temp_dir();

@@ -134,9 +134,26 @@ impl PlannedStarMapObjectDelete {
     /// durable 写入 journal 文件（原子写入）。
     ///
     /// 在执行任何 `rename()` 之前调用，确保崩溃后能恢复。
-    /// 覆盖该星图已有的 journal（正常情况下不应有，除非上一轮事务未完成）。
+    ///
+    /// # 不变量：拒绝静默覆盖已有活跃 journal
+    ///
+    /// 如果该星图已存在活跃 journal（`{starmap_id}.json` 已存在），返回 `Err`。
+    /// 调用方必须先 `load` 已有 journal 并 resume（复用其 `trash_token`/
+    /// `trash_rel_path`/`objects`/`sync_delete_facts`），不得生成新 token
+    /// 覆盖旧 journal——否则旧 token 对应的 trash 路径里的文件会变成孤儿，
+    /// 且旧恢复事实被覆盖，重启恢复会指向不存在的新 trash 位置。
+    ///
+    /// 正常流程中 `flush_save_queue` 在生成新 plan 前会先检查已有 journal，
+    /// 有则 resume 而不调 `save_planned`，所以这里拒绝覆盖是安全的。
     pub fn save_planned(app_data_root: &Path, plan: &Self) -> Result<()> {
         let path = Self::journal_file_path(app_data_root, &plan.starmap_id);
+        if path.exists() {
+            return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                "PlannedStarMapObjectDelete::save_planned: active journal already exists \
+                 for starmap {} — must resume, not overwrite",
+                plan.starmap_id
+            ))));
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }

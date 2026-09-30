@@ -102,40 +102,6 @@ impl super::WriterCore {
         crate::starmap::rename_starmap_with_changes(&self.app_data_root, starmap_id, new_title)
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
-    pub fn delete_starmap(&self, starmap_id: &str) -> Result<()> {
-        // Fix 6: 引用扫描前必须 flush 所有 dirty starmap stores，否则
-        // find_starmap_references 读到的磁盘数据可能不含刚写入的引用，
-        // 导致误删。先 flush 全部，再移除待删 store，最后落盘删除。
-        self.flush_all_starmap_stores()?;
-        {
-            let mut stores = self
-                .starmap_stores
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            stores.remove(starmap_id);
-        }
-        crate::starmap::delete_starmap(&self.app_data_root, starmap_id)
-    }
-
-    ///   delete_starmap 的变更集版本。
-    pub fn delete_starmap_with_changes(
-        &self,
-        starmap_id: &str,
-    ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        // 先 flush 全部 dirty stores（与 delete_starmap 同样的前置逻辑），
-        // 再移除缓存并落盘删除。
-        self.flush_all_starmap_stores()?;
-        self.remove_starmap_store(starmap_id);
-        crate::starmap::delete_starmap_with_changes(&self.app_data_root, starmap_id)
-    }
-
     /// 从缓存中移除指定 starmap store（内部 helper）。
     pub(crate) fn remove_starmap_store(&self, starmap_id: &str) {
         let mut stores = self

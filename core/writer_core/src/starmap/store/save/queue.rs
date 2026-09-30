@@ -209,154 +209,182 @@ impl StarMapStore {
         let mut object_delete_facts_for_tombstone: Vec<SyncDeleteFact> = Vec::new();
 
         if has_object_deletes {
-            // 1. 从 deleted_*_ids 固定本轮删除集合，计算 original_path（不碰磁盘）。
-            //    original_path 格式与 package_storage::delete_*_file_to_trash 返回的
-            //    orig_rel 一致，供 SyncState.known_files 查找 hash。
-            let starmap_id = &self.starmap_id;
-            let mut targets: Vec<StarMapObjectDeleteTarget> = Vec::new();
-            for node_id in &self.deleted_node_ids {
-                let rel = format!(
-                    "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
-                    package_storage::bucket_for_id(node_id)
-                );
-                targets.push(StarMapObjectDeleteTarget {
-                    kind: StarMapObjectKind::Node,
-                    id: node_id.clone(),
-                    original_path: rel,
-                });
-            }
-            for edge_id in &self.deleted_edge_ids {
-                let rel = format!(
-                    "starmaps/{starmap_id}/edges/{}/{edge_id}.json",
-                    package_storage::bucket_for_id(edge_id)
-                );
-                targets.push(StarMapObjectDeleteTarget {
-                    kind: StarMapObjectKind::Edge,
-                    id: edge_id.clone(),
-                    original_path: rel,
-                });
-            }
-            for instance_id in &self.deleted_embed_ids {
-                let rel = format!(
-                    "starmaps/{starmap_id}/embeds/{}/{instance_id}.json",
-                    package_storage::bucket_for_id(instance_id)
-                );
-                targets.push(StarMapObjectDeleteTarget {
-                    kind: StarMapObjectKind::Embed,
-                    id: instance_id.clone(),
-                    original_path: rel,
-                });
-            }
-            for link_id in &self.deleted_link_ids {
-                let rel = format!(
-                    "starmaps/{starmap_id}/links/{}/{link_id}.json",
-                    package_storage::bucket_for_id(link_id)
-                );
-                targets.push(StarMapObjectDeleteTarget {
-                    kind: StarMapObjectKind::Link,
-                    id: link_id.clone(),
-                    original_path: rel,
-                });
-            }
-            for hl_id in &self.deleted_hyperlink_ids {
-                let rel = format!(
-                    "starmaps/{starmap_id}/hyperlinks/{}/{hl_id}.json",
-                    package_storage::bucket_for_id(hl_id)
-                );
-                targets.push(StarMapObjectDeleteTarget {
-                    kind: StarMapObjectKind::Hyperlink,
-                    id: hl_id.clone(),
-                    original_path: rel,
-                });
-            }
+            //   同进程重试改为 resume：先检查已有 journal。有则复用其
+            // trash_token/trash_rel_path/sync_delete_facts，不生成新 token，
+            // 不覆盖 journal（save_planned 也拒绝静默覆盖）。没有才生成新 plan。
+            // 这避免第一次 flush 落盘旧 token journal、文件移到旧 trash、
+            // tombstone 写失败后，同进程再次 flush 生成新 token 覆盖旧 journal、
+            // 新 plan 指向不存在的新 trash 位置、旧恢复事实被覆盖。
+            let existing_journal =
+                PlannedStarMapObjectDelete::load(&self.app_data_root, &self.starmap_id)?;
 
-            // 2. 一次加载 SyncState，用 known_files 填真实 original_hash，
-            //    用真实 device_id 填 deleted_by。生成固定 trash path。
-            //    不再用空字符串填 original_hash 和 deleted_by。
-            let trash_token = format!(
-                "{}_{}_objects",
-                chrono::Utc::now().timestamp_millis(),
-                uuid::Uuid::new_v4()
-            );
-            let trash_rel_path = format!("sync/trash/{trash_token}");
+            let trash_rel_path: String;
 
-            let (sync_facts, plan_prepared) =
-                match crate::sync::SyncService::load_sync_state(&self.app_data_root) {
-                    Ok(state) => {
-                        let device_id = state.device_id.clone();
-                        let now = chrono::Utc::now().timestamp();
-                        let facts: Vec<SyncDeleteFact> = targets
-                            .iter()
-                            .map(|t| {
-                                let original_hash = state
-                                    .known_files
-                                    .get(&t.original_path)
-                                    .cloned()
-                                    .unwrap_or_default();
-                                let trash_path = format!("{trash_rel_path}/{}", t.original_path);
-                                SyncDeleteFact {
-                                    original_path: t.original_path.clone(),
-                                    original_hash,
-                                    deleted_at: now,
-                                    deleted_by: device_id.clone(),
-                                    trash_path,
-                                }
-                            })
-                            .collect();
-                        (facts, true)
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "flush_save_queue: load_sync_state failed for starmap {}: {} \
-                             — cannot prepare object delete facts, skipping deletes",
-                            self.starmap_id,
-                            e
-                        );
-                        self.recovery_log.push(LoadDiagnostic {
-                            kind: LoadDiagnosticKind::Corrupt,
-                            object_type: "sync_state".to_string(),
-                            object_id: self.starmap_id.clone(),
-                            detail: format!(
-                                "load_sync_state for object delete plan failed: {:?}",
+            if let Some(existing) = existing_journal {
+                // resume：用 existing 的固定 trash 路径和 facts，不生成新 token。
+                log::debug!(
+                    "flush_save_queue: resuming existing object delete journal for starmap {} \
+                     (token={}, phase={:?}) — reusing fixed trash path and facts, not \
+                     overwriting",
+                    self.starmap_id,
+                    existing.token,
+                    existing.phase
+                );
+                trash_rel_path = existing.trash_rel_path.clone();
+                object_delete_journal_active = true;
+                object_delete_facts_for_tombstone = existing.sync_delete_facts.clone();
+            } else {
+                // 没有已有 journal，生成新 plan。
+                // 1. 从 deleted_*_ids 固定本轮删除集合，计算 original_path（不碰磁盘）。
+                //    original_path 格式与 package_storage::delete_*_file_to_trash 返回的
+                //    orig_rel 一致，供 SyncState.known_files 查找 hash。
+                let starmap_id = &self.starmap_id;
+                let mut targets: Vec<StarMapObjectDeleteTarget> = Vec::new();
+                for node_id in &self.deleted_node_ids {
+                    let rel = format!(
+                        "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
+                        package_storage::bucket_for_id(node_id)
+                    );
+                    targets.push(StarMapObjectDeleteTarget {
+                        kind: StarMapObjectKind::Node,
+                        id: node_id.clone(),
+                        original_path: rel,
+                    });
+                }
+                for edge_id in &self.deleted_edge_ids {
+                    let rel = format!(
+                        "starmaps/{starmap_id}/edges/{}/{edge_id}.json",
+                        package_storage::bucket_for_id(edge_id)
+                    );
+                    targets.push(StarMapObjectDeleteTarget {
+                        kind: StarMapObjectKind::Edge,
+                        id: edge_id.clone(),
+                        original_path: rel,
+                    });
+                }
+                for instance_id in &self.deleted_embed_ids {
+                    let rel = format!(
+                        "starmaps/{starmap_id}/embeds/{}/{instance_id}.json",
+                        package_storage::bucket_for_id(instance_id)
+                    );
+                    targets.push(StarMapObjectDeleteTarget {
+                        kind: StarMapObjectKind::Embed,
+                        id: instance_id.clone(),
+                        original_path: rel,
+                    });
+                }
+                for link_id in &self.deleted_link_ids {
+                    let rel = format!(
+                        "starmaps/{starmap_id}/links/{}/{link_id}.json",
+                        package_storage::bucket_for_id(link_id)
+                    );
+                    targets.push(StarMapObjectDeleteTarget {
+                        kind: StarMapObjectKind::Link,
+                        id: link_id.clone(),
+                        original_path: rel,
+                    });
+                }
+                for hl_id in &self.deleted_hyperlink_ids {
+                    let rel = format!(
+                        "starmaps/{starmap_id}/hyperlinks/{}/{hl_id}.json",
+                        package_storage::bucket_for_id(hl_id)
+                    );
+                    targets.push(StarMapObjectDeleteTarget {
+                        kind: StarMapObjectKind::Hyperlink,
+                        id: hl_id.clone(),
+                        original_path: rel,
+                    });
+                }
+
+                // 2. 一次加载 SyncState，用 known_files 填真实 original_hash，
+                //    用真实 device_id 填 deleted_by。生成固定 trash path。
+                //    不再用空字符串填 original_hash 和 deleted_by。
+                let trash_token = format!(
+                    "{}_{}_objects",
+                    chrono::Utc::now().timestamp_millis(),
+                    uuid::Uuid::new_v4()
+                );
+                trash_rel_path = format!("sync/trash/{trash_token}");
+
+                let (sync_facts, plan_prepared) =
+                    match crate::sync::SyncService::load_sync_state(&self.app_data_root) {
+                        Ok(state) => {
+                            let device_id = state.device_id.clone();
+                            let now = chrono::Utc::now().timestamp();
+                            let facts: Vec<SyncDeleteFact> = targets
+                                .iter()
+                                .map(|t| {
+                                    let original_hash = state
+                                        .known_files
+                                        .get(&t.original_path)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    let trash_path =
+                                        format!("{trash_rel_path}/{}", t.original_path);
+                                    SyncDeleteFact {
+                                        original_path: t.original_path.clone(),
+                                        original_hash,
+                                        deleted_at: now,
+                                        deleted_by: device_id.clone(),
+                                        trash_path,
+                                    }
+                                })
+                                .collect();
+                            (facts, true)
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "flush_save_queue: load_sync_state failed for starmap {}: {} \
+                                 — cannot prepare object delete facts, skipping deletes",
+                                self.starmap_id,
                                 e
-                            ),
-                        });
-                        failed_types.push("ObjectDeletePlan".to_string());
-                        (Vec::new(), false)
-                    }
-                };
+                            );
+                            self.recovery_log.push(LoadDiagnostic {
+                                kind: LoadDiagnosticKind::Corrupt,
+                                object_type: "sync_state".to_string(),
+                                object_id: self.starmap_id.clone(),
+                                detail: format!(
+                                    "load_sync_state for object delete plan failed: {:?}",
+                                    e
+                                ),
+                            });
+                            failed_types.push("ObjectDeletePlan".to_string());
+                            (Vec::new(), false)
+                        }
+                    };
 
-            // 3. durable 写 journal（phase=Planned），然后才逐个 durable_rename。
-            //    不再在 rename 后临时构造 SyncDeleteFact，而是在 rename 前就
-            //    构造好完整 facts 并 durable 写入 journal。
-            if plan_prepared && !sync_facts.is_empty() {
-                let plan = PlannedStarMapObjectDelete {
-                    token: trash_token.clone(),
-                    starmap_id: self.starmap_id.clone(),
-                    trash_rel_path: trash_rel_path.clone(),
-                    objects: targets.clone(),
-                    sync_delete_facts: sync_facts.clone(),
-                    phase: StarMapObjectDeletePhase::Planned,
-                };
-                match PlannedStarMapObjectDelete::save_planned(&self.app_data_root, &plan) {
-                    Ok(()) => {
-                        object_delete_journal_active = true;
-                        object_delete_facts_for_tombstone = sync_facts.clone();
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "flush_save_queue: save_planned journal failed for starmap {}: {} \
-                             — cannot guarantee durable delete, skipping deletes",
-                            self.starmap_id,
-                            e
-                        );
-                        self.recovery_log.push(LoadDiagnostic {
-                            kind: LoadDiagnosticKind::Corrupt,
-                            object_type: "object_delete_journal".to_string(),
-                            object_id: self.starmap_id.clone(),
-                            detail: format!("save_planned failed: {:?}", e),
-                        });
-                        failed_types.push("ObjectDeleteJournal".to_string());
+                // 3. durable 写 journal（phase=Planned），然后才逐个 durable_rename。
+                //    不再在 rename 后临时构造 SyncDeleteFact，而是在 rename 前就
+                //    构造好完整 facts 并 durable 写入 journal。
+                if plan_prepared && !sync_facts.is_empty() {
+                    let plan = PlannedStarMapObjectDelete {
+                        token: trash_token.clone(),
+                        starmap_id: self.starmap_id.clone(),
+                        trash_rel_path: trash_rel_path.clone(),
+                        objects: targets.clone(),
+                        sync_delete_facts: sync_facts.clone(),
+                        phase: StarMapObjectDeletePhase::Planned,
+                    };
+                    match PlannedStarMapObjectDelete::save_planned(&self.app_data_root, &plan) {
+                        Ok(()) => {
+                            object_delete_journal_active = true;
+                            object_delete_facts_for_tombstone = sync_facts.clone();
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "flush_save_queue: save_planned journal failed for starmap {}: \
+                                 {} — cannot guarantee durable delete, skipping deletes",
+                                self.starmap_id,
+                                e
+                            );
+                            self.recovery_log.push(LoadDiagnostic {
+                                kind: LoadDiagnosticKind::Corrupt,
+                                object_type: "object_delete_journal".to_string(),
+                                object_id: self.starmap_id.clone(),
+                                detail: format!("save_planned failed: {:?}", e),
+                            });
+                            failed_types.push("ObjectDeleteJournal".to_string());
+                        }
                     }
                 }
             }

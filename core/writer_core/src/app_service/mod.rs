@@ -285,7 +285,14 @@ impl WriterAppService {
     }
 
     pub fn delete_starmap_raw(&self, starmap_id: &str) -> crate::error::Result<()> {
-        self.api.core_write().delete_starmap(starmap_id)
+        //   走完整的 durable journal 事务（plan + save_pending + apply + history），
+        // 而非 facade 层的直接物理删除（core_write().delete_starmap）。
+        // facade 的 delete_starmap 已收窄为 pub(crate)，外部入口必须经
+        // WriterCoreApi::delete_starmap 才能保证 tombstone/history 补齐。
+        self.api
+            .delete_starmap(starmap_id)
+            .map(|_| ())
+            .map_err(|e| crate::error::Error::Other(format!("{e}")))
     }
 
     pub fn save_device_info_raw(

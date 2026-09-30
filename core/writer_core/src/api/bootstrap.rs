@@ -220,15 +220,18 @@ fn recover_single_starmap_object_delete(
 
     match plan.phase {
         StarMapObjectDeletePhase::Planned => {
-            // plan/facts 已 durable 但 rename 未开始。清掉 journal，让下一轮
-            // flush 重新处理（deleted_*_ids 集合如果还在内存中会被重新 plan；
-            // 如果已不在，对象文件仍在原路径，下次 flush 不会重复删除）。
+            // plan/facts 已 durable，local apply 可能尚未开始，也可能已部分完成。
+            //   必须重放整个 local apply（rename + tombstone + GraphMeta），
+            // 不能 clear——clear 会丢掉 durable facts，导致原路径没文件、
+            // tombstone 也没有、durable facts 被清，同步报 "known file missing
+            // without tombstone"。重放使用 journal 里固定的 trash_rel_path，
+            // 不重新生成 trash token。
             log::debug!(
                 "recover_single_starmap_object_delete: starmap {} phase=Planned — \
-                 clearing journal, next flush will reprocess",
+                 replaying local apply with fixed trash path from journal",
                 starmap_id
             );
-            PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
+            recover_starmap_object_delete_replay_local_apply(app_data_root, starmap_id, plan)?;
         }
         StarMapObjectDeletePhase::Tombstoned => {
             // 文件已进 trash、tombstone 已写，但 GraphMeta 没完成。
@@ -247,6 +250,131 @@ fn recover_single_starmap_object_delete(
             PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
         }
     }
+    Ok(())
+}
+
+/// 重放 Planned 阶段的整个 local apply（rename + tombstone + GraphMeta）。
+///
+/// 在 `Planned` 阶段恢复时调用：facts 已 durable 写入 journal，但 local apply
+///（rename + tombstone + GraphMeta）可能尚未开始或已部分完成。此函数幂等重放：
+///
+/// 1. 遍历 `plan.objects`，用 journal 里固定的 `trash_rel_path`（**不重新生成
+///    trash token**）对每个对象调对应的 `package_storage::delete_*_file_to_trash`。
+///    原文件不存在返回 `Ok(None)`，视为该步已完成，跳过不报错。
+/// 2. 所有对象处理完后，用 journal 自带 `sync_delete_facts` 调
+///    `ensure_sync_tombstones_from_facts`。
+/// 3. tombstone 成功后推进 `phase=Tombstoned`。
+/// 4. 再调 `recover_starmap_object_delete_graph_meta` 补 GraphMeta。
+/// 5. GraphMeta 成功后推进 `phase=GraphMetaWritten`，最后清 journal。
+///
+/// tombstone 失败时返回 Err，不清 journal，不推进 phase（保留 Planned，下次
+/// 启动重试）。GraphMeta 失败时返回 Err，不清 journal（保留 Tombstoned，
+/// 下次启动走 Tombstoned 分支）。
+fn recover_starmap_object_delete_replay_local_apply(
+    app_data_root: &Path,
+    starmap_id: &str,
+    plan: &crate::storage::journal::starmap_object_delete::PlannedStarMapObjectDelete,
+) -> std::result::Result<(), WriterError> {
+    use crate::starmap::package_storage;
+    use crate::storage::journal::starmap_object_delete::{
+        PlannedStarMapObjectDelete, StarMapObjectDeletePhase, StarMapObjectKind,
+    };
+    use crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts;
+
+    let trash_root = app_data_root.join(&plan.trash_rel_path);
+
+    // 1. 重放 rename：对每个对象用 journal 里固定的 trash_rel_path 调对应的
+    //    delete_*_file_to_trash。Ok(None) 表示原文件不存在（该步可能已完成），
+    //    跳过不报错。
+    for target in &plan.objects {
+        match target.kind {
+            StarMapObjectKind::Node => {
+                package_storage::delete_node_file_to_trash(
+                    app_data_root,
+                    &plan.starmap_id,
+                    &target.id,
+                    &trash_root,
+                    &plan.trash_rel_path,
+                )?;
+            }
+            StarMapObjectKind::Edge => {
+                package_storage::delete_edge_file_to_trash(
+                    app_data_root,
+                    &plan.starmap_id,
+                    &target.id,
+                    &trash_root,
+                    &plan.trash_rel_path,
+                )?;
+            }
+            StarMapObjectKind::Embed => {
+                package_storage::delete_embed_file_to_trash(
+                    app_data_root,
+                    &plan.starmap_id,
+                    &target.id,
+                    &trash_root,
+                    &plan.trash_rel_path,
+                )?;
+            }
+            StarMapObjectKind::Link => {
+                package_storage::delete_link_file_to_trash(
+                    app_data_root,
+                    &plan.starmap_id,
+                    &target.id,
+                    &trash_root,
+                    &plan.trash_rel_path,
+                )?;
+            }
+            StarMapObjectKind::Hyperlink => {
+                package_storage::delete_hyperlink_file_to_trash(
+                    app_data_root,
+                    &plan.starmap_id,
+                    &target.id,
+                    &trash_root,
+                    &plan.trash_rel_path,
+                )?;
+            }
+        }
+    }
+
+    // 2. 写 tombstone（用 journal 自带 sync_delete_facts）。
+    //    tombstone 失败时返回 Err，不清 journal，不推进 phase。
+    ensure_sync_tombstones_from_facts(app_data_root, &plan.sync_delete_facts)?;
+
+    // 3. tombstone 成功，推进 phase=Tombstoned。
+    //    若 update_phase 失败（best-effort），tombstone 已 durable，下次启动
+    //    会重放 rename（幂等）+ tombstone（幂等覆盖）再推进。
+    if let Err(e) = PlannedStarMapObjectDelete::update_phase(
+        app_data_root,
+        starmap_id,
+        StarMapObjectDeletePhase::Tombstoned,
+    ) {
+        log::warn!(
+            "recover_starmap_object_delete_replay_local_apply: update_phase to Tombstoned \
+             failed for starmap {}: {} — tombstone already persisted, retry next startup",
+            starmap_id,
+            e
+        );
+    }
+
+    // 4. 补 GraphMeta。失败时返回 Err，不清 journal（保留 Tombstoned）。
+    recover_starmap_object_delete_graph_meta(app_data_root, starmap_id, plan)?;
+
+    // 5. GraphMeta 成功，推进 phase=GraphMetaWritten，清 journal。
+    if let Err(e) = PlannedStarMapObjectDelete::update_phase(
+        app_data_root,
+        starmap_id,
+        StarMapObjectDeletePhase::GraphMetaWritten,
+    ) {
+        log::warn!(
+            "recover_starmap_object_delete_replay_local_apply: update_phase to \
+             GraphMetaWritten failed for starmap {}: {} — GraphMeta already persisted, \
+             journal cleanup is best-effort",
+            starmap_id,
+            e
+        );
+    }
+    PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
+
     Ok(())
 }
 
@@ -285,41 +413,67 @@ fn recover_starmap_object_delete_graph_meta(
         ))
     })?;
 
+    // 幂等恢复：先对每个 target 执行幂等的 retain/remove（这些本身幂等），
+    // 再检查 `deleted_since_last_sync.entries` 是否已存在同一
+    // `object_type + object_id` 的条目。只对不存在的 target 执行 add_entry。
+    // 只有至少一个对象确实需要补记录时才增加一次 package_revision；
+    // 如果没有需要补的，不涨 revision，不写文件（直接返回 Ok）。
     let next_revision = meta.package_revision.wrapping_add(1);
+    let mut needs_new_entry = false;
     for target in &plan.objects {
+        let (type_str,): (&str,) = match target.kind {
+            StarMapObjectKind::Node => ("node",),
+            StarMapObjectKind::Edge => ("edge",),
+            StarMapObjectKind::Embed => ("embed",),
+            StarMapObjectKind::Link => ("link",),
+            StarMapObjectKind::Hyperlink => ("hyperlink",),
+        };
+        // 先做幂等的 retain/remove（这些本身幂等）。
         match target.kind {
             StarMapObjectKind::Node => {
                 meta.node_ids.retain(|id| id != &target.id);
                 meta.node_revisions.remove(&target.id);
-                meta.deleted_since_last_sync
-                    .add_entry("node", &target.id, next_revision);
             }
             StarMapObjectKind::Edge => {
                 meta.edge_ids.retain(|id| id != &target.id);
                 meta.edge_revisions.remove(&target.id);
-                meta.deleted_since_last_sync
-                    .add_entry("edge", &target.id, next_revision);
             }
             StarMapObjectKind::Embed => {
                 meta.embed_instance_ids.retain(|id| id != &target.id);
                 meta.embed_revisions.remove(&target.id);
-                meta.deleted_since_last_sync
-                    .add_entry("embed", &target.id, next_revision);
             }
             StarMapObjectKind::Link => {
                 meta.link_ids.retain(|id| id != &target.id);
                 meta.link_revisions.remove(&target.id);
-                meta.deleted_since_last_sync
-                    .add_entry("link", &target.id, next_revision);
             }
             StarMapObjectKind::Hyperlink => {
                 meta.hyperlink_ids.retain(|id| id != &target.id);
                 meta.hyperlink_revisions.remove(&target.id);
-                meta.deleted_since_last_sync
-                    .add_entry("hyperlink", &target.id, next_revision);
             }
         }
+        // 检查是否已有同 object_type + object_id 的 deletion entry。
+        let already_logged = meta
+            .deleted_since_last_sync
+            .entries
+            .iter()
+            .any(|e| e.object_type == type_str && e.object_id == target.id);
+        if !already_logged {
+            meta.deleted_since_last_sync
+                .add_entry(type_str, &target.id, next_revision);
+            needs_new_entry = true;
+        }
     }
+
+    if !needs_new_entry {
+        // 所有 entry 已存在，无需写盘。
+        log::debug!(
+            "recover_starmap_object_delete_graph_meta: starmap {} — all deletion entries \
+             already logged, skip write",
+            starmap_id
+        );
+        return Ok(());
+    }
+
     meta.package_revision = next_revision;
     meta.updated_at = crate::starmap::now_epoch();
 
