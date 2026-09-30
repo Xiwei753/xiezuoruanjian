@@ -95,7 +95,7 @@ impl LineSnapshotBuilder {
                 .iter()
                 .find(|p| p.paragraph_document_byte_start == line.para_start);
 
-            let (mut image, clusters) = if let Some(canonical) = canonical_para {
+            let (image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
@@ -109,13 +109,13 @@ impl LineSnapshotBuilder {
             // Issue #785 评论 5857451442: 防御性诊断——不伪造字符几何。
             // 如果 canonical line 已有 image 但 clusters 为空且该行含可见字符，
             // 说明 animation visuals 注入链漏了该行的 clusters（image 注入了但 clusters 没注入）。
-            // 计诊断事件让诊断包直接看出，不在 builder 里伪造 cluster 几何。
             //
-            // Issue #785 评论 5857873894 修改 4: 不仅打 debug_warn，还要确保不生成
-            // "image 有、clusters 空"的 PreparedLineSnapshot 进入动画事务构建。
+            // Issue #808 评论 5916391891 修改 2: 不仅打 debug_warn，还不 push 该行——
+            // 不生成 "image 有、clusters 空"的 PreparedLineSnapshot 进入动画事务构建。
             // 没有 cluster 的 image 无法参与动画（InsertReveal 按 cluster 匹配 inserted range），
-            // 保留 image 会让 transaction_builder 看到该行像正常路径但 InsertReveal 为 0。
-            // 把 image 也设为 None，明确标记该行动画视觉不可用。
+            // 保留该行会让 transaction_builder 看到该行像正常路径但 InsertReveal 为 0。
+            // 跳过该行让上游自然跳过 InsertReveal 构造，不创建 units=0 的伪动画事务。
+            // 不破坏正常的非 inserted 行：只有 "image 有但 clusters 空且含可见字符" 才跳过。
             if image.is_some()
                 && clusters.is_empty()
                 && line
@@ -125,12 +125,12 @@ impl LineSnapshotBuilder {
             {
                 crate::backend::app_backend::debug_warn_static(
                     "line_snapshot_builder",
-                    "canonical_line_image_but_clusters_empty",
+                    "canonical_line_image_but_clusters_empty_skip_line",
                     &format!(
                         "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} — \
                          canonical line has image but clusters empty and line contains visible chars, \
-                         animation visuals injection incomplete for this line, dropping image to \
-                         prevent empty-cluster animation snapshot",
+                         animation visuals injection incomplete for this line, skipping this line to \
+                         prevent empty-cluster animation snapshot (InsertReveal units=0 pseudo transaction)",
                         revision.0,
                         line.para_start,
                         line.qtextline_idx,
@@ -138,7 +138,9 @@ impl LineSnapshotBuilder {
                         line.byte_end,
                     ),
                 );
-                image = None;
+                // 跳过该行：不 push PreparedLineSnapshot，让上游自然跳过 InsertReveal 构造。
+                visual_line_ordinal += 1;
+                continue;
             }
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);

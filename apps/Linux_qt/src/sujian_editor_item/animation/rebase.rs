@@ -404,27 +404,14 @@ impl LinuxEditorAnimationCoordinator {
                         sampled_line_bottom: line_bottom,
                     })
                 }
-                (Some(sampled), None) => {
-                    // 旧事务没有 caret track（理论上正文事务都应有，防御性 fallback）：
-                    // 用事务 timeline 剩余时长估算。
-                    let tx_remaining = tx
-                        .timeline
-                        .duration_ms
-                        .saturating_sub(
-                            now.duration_since(tx.timeline.effective_start().unwrap_or(now))
-                                .as_millis() as u64,
-                        )
-                        .max(1);
-                    Some(RebaseCaretHandoff {
-                        sampled,
-                        remaining_duration_ms: tx_remaining,
-                        // 无 track 时行 id 和行几何未知。
-                        sampled_visual_line_id: None,
-                        sampled_line_top: 0.0,
-                        sampled_line_bottom: 0.0,
-                    })
-                }
-                (None, _) => None,
+                // Issue #808 评论 5916391891 修改 3: 删除 (Some(sampled), None) handoff fallback。
+                // 没有真实 cursor track，就没有 cursor handoff。text-only 事务永远不能
+                // 生成、保存、交棒插值 cursor；光标直接由 canonical/Snap 接管。
+                // 下一笔如果需要 cursor 动画，但上一笔没有 cursor track，就从当时
+                // canonical cursor 开始，不从文字事务时间线补造轨迹。
+                // sample_coordinated_cursor_rect_at 在无 track 时已返回 None，
+                // 这里防御性覆盖所有剩余分支。
+                _ => None,
             };
             caret_handoff_candidates.push((old_key, tx.cursor_owner_epoch, caret_handoff));
             emit_transaction_diagnostic(tx, "editor.anim.rebase", reason);
@@ -466,8 +453,10 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         now: Instant,
     ) -> Option<PreparedRebaseHandoff> {
-        // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
-        // - coordinated=true 时：走协同路径，文字与光标绑死，要求有效 caret motion。
+        // Issue #756 / Issue #808 评论 5916391891 修改 3: 协同=同一次编辑同时开两条
+        // 独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。
+        // - coordinated=true 时：走协同路径，文字与光标各自独立 timeline，额外启用
+        //   按 caret 锚点做遮罩的吞吐语义。
         // - coordinated=false 时：typing_animation_enabled 只决定文字动画
         //   （Reflow + InsertReveal/DeleteConceal），smooth_cursor_enabled 只决定光标动画
         //   （caret motion track）。两者互相独立，同时为 true 不等于协同。
@@ -481,9 +470,9 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        // Issue #756: valid_caret_motion_track 检查。
-        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务
-        //   （文字动画也不启动）。
+        // Issue #756 / Issue #808 评论 5916391891 修改 3: valid_caret_motion_track 检查。
+        // - coordinated=true 时：协同模式要求有效 caret motion（两条独立时间线 + caret
+        //   锚点遮罩语义），否则不创建事务（文字动画也不启动）。
         // - coordinated=false 时：缺少 caret motion 只意味着没有 caret track / 没有
         //   CaretDriven units（Issue #727 约束 5），文字动画（Reflow）照常播放。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();

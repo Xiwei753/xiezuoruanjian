@@ -130,18 +130,26 @@ impl VisualUnitTiming {
         }
     }
 
-    /// Issue #756 / Issue #785: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
+    /// Issue #756 / Issue #785 / Issue #808 评论 5916391891 修改 4: 按 `coordinated` 决定
+    /// InsertReveal/DeleteConceal 的计时语义。
     ///
-    /// Issue #785 后：`coordinated` 参数保留在签名里但**不再影响 timing 选择**。
-    /// 无论 coordinated true/false，所有 kind 都返回 `Timed`。协同只表示
-    /// 同事务/同首帧/同 rebase，不表示同速度——文字与 caret 各自按自己的
-    /// duration 推进，拥有独立 started_at / duration_ms / progress。
+    /// Issue #808 评论 5916391891 修改 4: `coordinated` 不再影响 timing 选择（所有 kind
+    /// 都返回 `Timed`），但**不再被完全忽略**——coordinated 的遮罩语义通过 slice 的
+    /// `is_caret_line` / `caret_anchor_x` 字段体现（在 `build_insert_reveal_slices` /
+    /// `build_delete_conceal_slices` 中设置）：
+    /// - coordinated=true：slice 的 caret_anchor_x 取真实 caret x，is_caret_line=true
+    ///   （文字从 caret 处吐出/被 caret 吞进）。
+    /// - coordinated=false：slice 的 caret_anchor_x 取文字自己的边缘，is_caret_line=false
+    ///   （遮罩从文字边缘展开，不用 caret 锚点）。
+    /// timing 本身不需要区分 coordinated——文字与 caret 各自按自己的 duration 推进，
+    /// 拥有独立 started_at / duration_ms / progress。
     pub(crate) fn default_for_kind_with_coordinated(
         kind: AnimatedSliceKind,
         duration_ms: u64,
         coordinated: bool,
     ) -> Self {
-        // coordinated 仅用于协同语义（同事务/同首帧/同 rebase），不再切换 timing 变体。
+        // coordinated 的遮罩语义通过 slice 字段体现（见上方文档注释），timing 不分叉。
+        // 保留参数签名避免大量调用点编译错误；`let _ = coordinated` 明确标记不在此处使用。
         let _ = coordinated;
         Self::default_for_kind(kind, duration_ms)
     }

@@ -333,8 +333,9 @@ impl CompositionState {
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub smooth_cursor_enabled: bool,
-    /// Issue #756: 协同动画显式模式开关。
-    /// true 时文字与光标绑死，要求有效 caret motion 否则文字动画也不启动；
+    /// Issue #756 / Issue #808 评论 5916391891 修改 3: 协同动画显式模式开关。
+    /// 协同=同一次编辑同时开两条独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。
+    /// true 时文字与光标各自独立 timeline，额外启用按 caret 锚点做遮罩的吞吐语义；
     /// false 时 typing/smooth 两个独立开关各自决定文字/光标动画。
     pub coordinated_animation_enabled: bool,
     pub is_scrolling: bool,
@@ -1092,9 +1093,10 @@ impl LinuxEditorPipeline {
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
     ) -> Option<PreparedEditMotion> {
-        // Issue #756: 文字动画与光标动画互相独立，不再把"两个独立开关同时开启"当协同：
-        // - coordinated=true：文字与光标绑死，要求有效 caret motion（在
-        //   transaction_builder 内部检查），caret motion 建不起来时文字动画也不启动。
+        // Issue #756 / Issue #808 评论 5916391891 修改 3: 协同=同一次编辑同时开两条
+        // 独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。文字与光标不再"绑死"：
+        // - coordinated=true：文字和光标各自独立 timeline，额外启用按 caret 锚点
+        //   做遮罩的吞吐语义（文字从 caret 处吐出/被 caret 吞进）。
         // - coordinated=false：typing_animation_enabled 只决定文字动画，
         //   smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
         //  （文字动画需要排版 old/new，光标动画需要 motion 的 caret track）。
@@ -1352,13 +1354,34 @@ impl LinuxEditorPipeline {
                     ctx.dpr,
                     &ctx.text_color,
                 );
-                // Issue #785 评论 5857873894 修改 3 + 2b: 检查 + 注入 + 诊断收口到辅助函数，
-                // 避免 prepare_edit_motion 函数体过长（静态守卫测试用 32000 字符窗口）。
-                inject_new_animation_visuals_with_diagnostics(
+                // Issue #785 评论 5857873894 修改 3 + 2b / Issue #808 评论 5916391891 修改 2:
+                // 检查 + 注入 + 诊断收口到辅助函数，避免 prepare_edit_motion 函数体过长
+                //（静态守卫测试用 32000 字符窗口）。返回注入状态结构体，上游据此知道
+                // 是否有行动画视觉不可用。line_snapshot_builder 已跳过这些行（不 push），
+                // transaction_builder 自然不会为这些行创建 InsertReveal。
+                let inject_status = inject_new_animation_visuals_with_diagnostics(
                     &mut new_doc_snapshot,
                     new_line_snapshots,
                     motion.inserted_range,
                 );
+                if inject_status.has_unavailable_lines {
+                    let ins_range_label = inject_status.inserted_range.as_ref().map_or(
+                        "none".to_string(),
+                        |r| format!("[{}..{})", r.start().value(), r.end().value()),
+                    );
+                    super::editor_animation_debug_log(&format!(
+                        "prepare_edit_motion: animation visuals inject has unavailable lines \
+                         inserted_range={} checked={} prepare_miss={} clusters_empty={} ok={} \
+                         expected_inject={} actual_inject={}",
+                        ins_range_label,
+                        inject_status.checked_line_count,
+                        inject_status.prepare_miss_count,
+                        inject_status.clusters_empty_count,
+                        inject_status.ok_count,
+                        inject_status.expected_inject_count,
+                        inject_status.actual_inject_count,
+                    ));
+                }
 
                 // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
                 // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
@@ -1681,25 +1704,53 @@ fn make_cursor_rect_from_caret_doc(
     }
 }
 
-/// Issue #785 评论 5857873894 修改 3 + 2b: 检查 prepare_animation_visuals_from_layout
-/// 返回的 new_line_snapshots 是否覆盖 inserted_range 所在行，然后注入并验证注入结果。
+/// Issue #808 评论 5916391891 修改 2: inject_new_animation_visuals 的状态返回。
+///
+/// `inject_new_animation_visuals_with_diagnostics` 不再返回 `()`，而是返回此结构体，
+/// 让上游明确知道每个 inserted visible line 的提取/注入状态。任意一步失败时，
+/// 上游可以据此跳过该行的 InsertReveal 构造，不创建 units=0 的伪动画事务。
+#[derive(Clone, Debug)]
+pub(crate) struct AnimationVisualsInjectStatus {
+    /// inserted range（如有）。供诊断日志输出，让上游明确知道哪段 range 的注入出了问题。
+    pub inserted_range: Option<Utf8ByteRange>,
+    /// 检查的 inserted visible line 数量。
+    pub checked_line_count: usize,
+    /// prepare 未命中的行数（new_line_snapshots 中找不到对应行）。
+    pub prepare_miss_count: usize,
+    /// prepare 命中但 clusters 为空的行数。
+    pub clusters_empty_count: usize,
+    /// prepare 命中且 clusters 非空的行数（正常）。
+    pub ok_count: usize,
+    /// inject 期望行数。
+    pub expected_inject_count: usize,
+    /// inject 实际注入行数。
+    pub actual_inject_count: usize,
+    /// 是否有任意行动画视觉不可用（prepare_miss + clusters_empty > 0 或 inject 不完整）。
+    pub has_unavailable_lines: bool,
+}
+
+/// Issue #785 评论 5857873894 修改 3 + 2b + Issue #808 评论 5916391891 修改 2:
+/// 检查 prepare_animation_visuals_from_layout 返回的 new_line_snapshots 是否覆盖
+/// inserted_range 所在行，然后注入并验证注入结果。
 ///
 /// 提取成独立函数避免 `prepare_edit_motion` 函数体过长（静态守卫测试用 32000 字符窗口
 /// 检查 `self.layout_revision = new_revision;` 的位置）。
 ///
-/// 诊断逻辑：
-/// - 针对 inserted_range 相交且含可见字符的视觉行，检查 new_line_snapshots 中是否有
-///   对应行（按稳定行身份 paragraph_document_byte_start + qtextline_idx）、clusters 是否非空。
-/// - 注入后检查返回的成功注入行数是否与输入数量一致。
-/// - 找不到目标行或 clusters 为空时记录 debug_warn，明确报告是提取还是注入环节失败。
+/// Issue #808 评论 5916391891 修改 2: 返回 `AnimationVisualsInjectStatus` 而非 `()`，
+/// 包含每个 inserted visible line 的提取/注入状态。上游据此跳过动画不可用行的
+/// InsertReveal 构造，不创建 units=0 的伪动画事务。
 fn inject_new_animation_visuals_with_diagnostics(
     new_doc_snapshot: &mut layout::CanonicalDocumentVisualSnapshot,
     new_line_snapshots: Vec<layout::CanonicalLineSnapshot>,
     inserted_range: Option<Utf8ByteRange>,
-) {
+) -> AnimationVisualsInjectStatus {
+    let mut checked_line_count = 0usize;
+    let mut prepare_miss_count = 0usize;
+    let mut clusters_empty_count = 0usize;
+    let mut ok_count = 0usize;
+
     // 修改 3: 在 prepare 返回后、inject 之前，针对 inserted_range 检查
     // new_line_snapshots 中是否有对应行、clusters 是否非空。
-    // 不再猜"行没进 raster ids"——评论已证明本轮新增的 raster-id 并入循环是 no-op。
     if let Some(range) = inserted_range {
         let ins_start = range.start().value();
         let ins_end = range.end().value();
@@ -1716,6 +1767,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                 if !has_visible_char {
                     continue;
                 }
+                checked_line_count += 1;
                 // 在 new_line_snapshots 中找该行（按稳定行身份）
                 let snap = new_line_snapshots.iter().find(|s| {
                     s.paragraph_document_byte_start == vl.para_start
@@ -1723,6 +1775,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                 });
                 match snap {
                     None => {
+                        prepare_miss_count += 1;
                         crate::backend::app_backend::debug_warn_static(
                             "pipeline",
                             "prepare_animation_visuals_missing_for_inserted_line",
@@ -1743,6 +1796,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                         );
                     }
                     Some(s) if s.clusters.is_empty() => {
+                        clusters_empty_count += 1;
                         crate::backend::app_backend::debug_warn_static(
                             "pipeline",
                             "prepare_animation_visuals_clusters_empty_for_inserted_line",
@@ -1750,7 +1804,8 @@ fn inject_new_animation_visuals_with_diagnostics(
                                 "inserted_range=[{}..{}) visual_line_idx={} \
                                  para_start={} qtextline_idx={} byte_start={} \
                                  byte_end={} — prepare returned snapshot but clusters \
-                                 empty, animation visuals extraction incomplete",
+                                 empty, animation visuals extraction incomplete, \
+                                 this line's InsertReveal will be skipped",
                                 ins_start,
                                 ins_end,
                                 i,
@@ -1762,7 +1817,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                         );
                     }
                     Some(_) => {
-                        // 该行有 snapshot 且 clusters 非空，提取环节正常。
+                        ok_count += 1;
                     }
                 }
             }
@@ -1783,6 +1838,19 @@ fn inject_new_animation_visuals_with_diagnostics(
                 expected_inject_count, actual_inject_count,
             ),
         );
+    }
+    let has_unavailable_lines = prepare_miss_count > 0
+        || clusters_empty_count > 0
+        || actual_inject_count < expected_inject_count;
+    AnimationVisualsInjectStatus {
+        inserted_range,
+        checked_line_count,
+        prepare_miss_count,
+        clusters_empty_count,
+        ok_count,
+        expected_inject_count,
+        actual_inject_count,
+        has_unavailable_lines,
     }
 }
 

@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
 use super::rebase::RebaseCaretHandoff;
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
 use crate::sujian_editor_item::animation::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, TextVisualOperationKind,
     TextVisualTransactionState,
@@ -66,30 +66,29 @@ pub(crate) fn sample_coordinated_cursor_rect_at(
     now: Instant,
 ) -> Option<CursorRect> {
     // 保留 old_cursor_rect 的 early return 语义：旧事务没有 old caret 时不参与交棒。
-    let old_rect = tx.old_cursor_rect.as_ref()?;
+    let _old_rect = tx.old_cursor_rect.as_ref()?;
     let new_rect = tx.new_cursor_rect.as_ref()?;
     let h = new_rect.bottom - new_rect.top;
     let op = tx.operation_kind;
 
     // Issue #808: 光标只采样光标自己的 track，不再保留"文字效果跟着光标边界"旧语义。
     // - 有 cursor_visual_track 时：直接 sample track（光标自己的 ease_out_cubic）。
-    // - 没有 track 时（首次事务未经过 rebase）：按事务 progress 插值 old/new cursor rect。
+    // - 没有 track 时：返回 None——不再用 tx.progress(now) fallback 伪造轨迹。
+    //   text-only 事务永远不能生成插值 cursor；光标直接由 canonical/Snap 接管。
     // 文字的 InsertReveal/DeleteConceal 裁切由文字自己的 timeline 驱动，不消费本帧 caret 位置。
-    let sample_caret_position = || -> (f64, f64) {
+    let sample_caret_position = || -> Option<(f64, f64)> {
         match tx.cursor_visual_track.as_ref() {
             Some(track) => {
                 // Issue #808: 光标位置由 caret track 自己的 timeline + ease_out_cubic 决定。
                 // 文字与光标各自按自己的 duration/easing 推进，不共用同一条曲线。
                 let r = track.sampled_rect_at_progress(track.progress(now));
-                (r.x, r.top)
+                Some((r.x, r.top))
             }
             None => {
-                // 首次事务没有 caret track：用 old/new cursor rect 按事务 progress 插值。
-                let progress = tx.progress(now);
-                let eased = AnimatedSlice::ease_out_cubic(progress);
-                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-                (x, y)
+                // Issue #808 评论 5916391891 修改 3: 没有 cursor_visual_track 就返回 None。
+                // 不再用 tx.progress(now) fallback 伪造光标轨迹——text-only 事务
+                // 不交棒插值 cursor，光标由 canonical/Snap 接管。
+                None
             }
         }
     };
@@ -98,7 +97,7 @@ pub(crate) fn sample_coordinated_cursor_rect_at(
     // 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"或"光标去追文字动画"
     // 的旧语义。文字和光标是两条独立的动画，协同只表示同事务/同首帧/同 rebase。
     let _ = op;
-    let (cx, cy) = sample_caret_position();
+    let (cx, cy) = sample_caret_position()?;
 
     Some(CursorRect {
         x: cx,

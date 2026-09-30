@@ -83,12 +83,19 @@ impl PreparedVisualUnit {
         Self { slice, timing }
     }
 
-    /// Issue #756 / Issue #785 / Issue #808: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
+    /// Issue #756 / Issue #785 / Issue #808 评论 5916391891 修改 4: 按 `coordinated` 决定
+    /// InsertReveal/DeleteConceal 的计时语义。
     ///
-    /// Issue #808: `coordinated` 不再切到 CaretDriven，也不再让文字与光标共用同一条
-    /// easing。始终调用 `default_for_kind_with_coordinated`（后者也不分叉）。文字 unit
-    /// 始终保存自己的 timing（Timed + `ease_out_quad`），与 caret（`ease_out_cubic`）
-    /// 各自独立推进。协同只表示同事务/同首帧/同 rebase，不表示同速度/同曲线。
+    /// Issue #808 评论 5916391891 修改 4: `coordinated` 不再切到 CaretDriven，也不再让
+    /// 文字与光标共用同一条 easing。始终调用 `default_for_kind_with_coordinated`（后者
+    /// 也不分叉 timing）。文字 unit 始终保存自己的 timing（Timed + `ease_out_quad`），
+    /// 与 caret（`ease_out_cubic`）各自独立推进。
+    ///
+    /// coordinated 的遮罩语义通过 slice 的 `is_caret_line` / `caret_anchor_x` 字段体现
+    ///（在 `build_insert_reveal_slices` / `build_delete_conceal_slices` 中设置）：
+    /// - coordinated=true：遮罩从 caret 锚点展开/收拢（第三种模式——协同动画）。
+    /// - coordinated=false：遮罩从文字自己的边缘展开/收拢（独立文字动画）。
+    /// 协同=同一次编辑同时开两条独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。
     pub fn wrap_with_coordinated(
         slice: AnimatedSlice,
         duration_ms: u64,

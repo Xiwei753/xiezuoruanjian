@@ -103,6 +103,18 @@ pub(crate) struct AnimatedSlice {
     /// 仍来自文字自己的 timeline（`current_visible_fraction`）。
     pub caret_anchor_x: f64,
     pub caret_anchor_y: f64,
+    /// Issue #808 评论 5916391891 修改 1: 该 slice 是否属于 caret 所在视觉行。
+    ///
+    /// `true` 表示该 slice 在 caret 所在视觉行上，`compute_frame` 用 `caret_anchor_x`
+    /// 做吞吐遮罩锚点——文字真正"从 caret 处吐出来 / 被 caret 吞进去"。
+    /// `false` 表示该 slice 不在 caret 所在行（跨行编辑的其他行），`compute_frame`
+    /// 用行首/行尾做锚点——insert 时从行首展开，delete 时向行尾/行首收拢。
+    ///
+    /// 在 `build_insert_reveal_slices` / `build_delete_conceal_slices` 中，
+    /// 比较 `new_line.visual_line_id` 与传入的 caret visual_line_id 来设置此字段。
+    /// 一次编辑的 caret 只在一个位置，跨行时只有 caret 所在那行的 slice 为 true。
+    /// ReflowMove/ReflowCrossFade 不使用此字段（false）。
+    pub is_caret_line: bool,
     /// Issue #722 评论 5748596920 问题2: 该 slice 所属视觉行的 id（来自 VisualLine.id）。
     ///
     /// 用于跨软换行裁切判断：caret 和 slice 在同一视觉行时才用 caret.x 做横向裁切；
@@ -201,6 +213,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             caret_anchor_x: cursor_x,
             caret_anchor_y: cursor_y,
+            is_caret_line: true,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -248,6 +261,7 @@ impl AnimatedSlice {
             conceal_to_left_edge,
             caret_anchor_x: cursor_x,
             caret_anchor_y: cursor_y,
+            is_caret_line: true,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -301,6 +315,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
+            is_caret_line: false,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -354,6 +369,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
+            is_caret_line: false,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -400,6 +416,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
+            is_caret_line: false,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -459,29 +476,45 @@ impl AnimatedSlice {
         let visible = visible.clamp(0.0, 1.0);
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                // Issue #808: 遮罩从旧 caret 所在侧开始打开。
-                // caret_anchor_x 是旧 caret 位置（吐字起点）。
-                // caret 在文字左半：从左向右展开（正常 Insert 场景，caret 在新字左边）。
-                // caret 在文字右半：从右向左展开。
+                // Issue #808 评论 5916391891 修改 1: 遮罩从 caret_anchor_x 开始打开。
+                // is_caret_line=true 时用 caret_anchor_x 做锚点（文字从 caret 处吐出来）；
+                // is_caret_line=false 时用行首 text_left 做锚点（跨行其他行从行首展开）。
+                // caret 在文字左半：从 caret_anchor_x 向右展开。
+                // caret 在文字右半：从 caret_anchor_x 向左展开。
+                // frame_x/frame_w/src_x/src_w 都基于 anchor_x 计算，不是基于 text_left/text_right。
                 let text_left = self.to_document_rect.x;
                 let text_right = self.to_document_rect.x + self.to_document_rect.w;
                 let text_w = self.to_document_rect.w;
                 let frame_h = self.to_document_rect.h;
-                let reveal_from_right = self.caret_anchor_x > text_left + text_w * 0.5;
-                let (frame_x, frame_w, src_x, src_w) = if !reveal_from_right {
-                    let w = text_w * visible;
-                    (
-                        text_left,
-                        w,
-                        self.source_rect.x,
-                        self.source_rect.w * visible,
-                    )
+
+                let anchor_x = if self.is_caret_line {
+                    self.caret_anchor_x.clamp(text_left, text_right)
                 } else {
-                    let w = text_w * visible;
-                    let x = text_right - w;
-                    let sw = self.source_rect.w * visible;
-                    let sx = self.source_rect.x + self.source_rect.w - sw;
-                    (x, w, sx, sw)
+                    text_left
+                };
+
+                let (frame_x, frame_w, src_x, src_w) = if text_w <= 0.0 {
+                    (text_left, 0.0, self.source_rect.x, 0.0)
+                } else {
+                    let reveal_from_right = anchor_x > text_left + text_w * 0.5;
+                    if !reveal_from_right {
+                        // 从 anchor_x 向右展开到 text_right
+                        let full_extent = (text_right - anchor_x).max(0.0);
+                        let w = full_extent * visible;
+                        let sx = self.source_rect.x
+                            + (anchor_x - text_left) / text_w * self.source_rect.w;
+                        let sw = self.source_rect.w * (full_extent / text_w) * visible;
+                        (anchor_x, w, sx, sw)
+                    } else {
+                        // 从 anchor_x 向左展开到 text_left
+                        let full_extent = (anchor_x - text_left).max(0.0);
+                        let w = full_extent * visible;
+                        let x = anchor_x - w;
+                        let sw = self.source_rect.w * (full_extent / text_w) * visible;
+                        let sx = self.source_rect.x
+                            + (full_extent - w) / text_w * self.source_rect.w;
+                        (x, w, sx, sw)
+                    }
                 };
                 let frame_source_rect = SourceRect {
                     x: src_x,
@@ -500,41 +533,54 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                // Issue #808: 遮罩向最终 caret 所在侧（caret_anchor_x）收拢。
-                // conceal_to_left_edge=true（Backspace）：new caret 在文字左侧，
-                //   遮罩向左收拢，右段先消失（保留左段）。
-                // conceal_to_left_edge=false（Delete 键）：new caret 在文字右侧，
-                //   遮罩向右收拢，左段先消失（保留右段）。
+                // Issue #808 评论 5916391891 修改 1: 遮罩向 caret_anchor_x 收拢。
+                // is_caret_line=true 时用 caret_anchor_x 做锚点（文字被 caret 吞进去）；
+                // is_caret_line=false 时用行首/行尾做锚点（跨行其他行向行首/行尾收拢）。
+                // conceal_to_left_edge=true：可见区域左边界固定在 from_left，
+                //   右边界从 from_right 收向 anchor_x。
+                // conceal_to_left_edge=false：可见区域右边界固定在 from_right，
+                //   左边界从 from_left 收向 anchor_x。
+                let from_left = self.from_document_rect.x;
+                let from_right = self.from_document_rect.x + self.from_document_rect.w;
+                let from_w = self.from_document_rect.w;
                 let frame_h = self.from_document_rect.h;
-                let (caret_clip_boundary, frame_x, src_x) = if self.conceal_to_left_edge {
-                    let caret_b = self.from_document_rect.x + self.from_document_rect.w * visible;
-                    (caret_b, self.from_document_rect.x, self.source_rect.x)
+
+                let anchor_x = if self.is_caret_line {
+                    self.caret_anchor_x.clamp(from_left, from_right)
+                } else if self.conceal_to_left_edge {
+                    from_left
                 } else {
-                    let caret_b =
-                        self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible);
-                    (
-                        caret_b,
-                        self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible),
-                        self.source_rect.x + self.source_rect.w * (1.0 - visible),
-                    )
+                    from_right
                 };
-                let conceal_from_caret = if self.conceal_to_left_edge {
-                    (caret_clip_boundary - self.from_document_rect.x)
-                        .clamp(0.0, self.from_document_rect.w)
+
+                let (frame_x, frame_w, src_x, src_w) = if from_w <= 0.0 {
+                    (from_left, 0.0, self.source_rect.x, 0.0)
+                } else if self.conceal_to_left_edge {
+                    // 可见区域左边界固定在 from_left，右边界从 from_right 收向 anchor_x
+                    let right_boundary = anchor_x + (from_right - anchor_x) * visible;
+                    let fw = (right_boundary - from_left).max(0.0);
+                    let sx = self.source_rect.x;
+                    let sw = self.source_rect.w * (fw / from_w);
+                    (from_left, fw, sx, sw)
                 } else {
-                    (self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary)
-                        .clamp(0.0, self.from_document_rect.w)
+                    // 可见区域右边界固定在 from_right，左边界从 from_left 收向 anchor_x
+                    let left_boundary = anchor_x + (from_left - anchor_x) * visible;
+                    let fw = (from_right - left_boundary).max(0.0);
+                    let sx = self.source_rect.x
+                        + (left_boundary - from_left) / from_w * self.source_rect.w;
+                    let sw = self.source_rect.w * (fw / from_w);
+                    (left_boundary, fw, sx, sw)
                 };
                 let frame_source_rect = SourceRect {
                     x: src_x,
                     y: self.source_rect.y,
-                    w: self.source_rect.w * visible,
+                    w: src_w,
                     h: self.source_rect.h,
                 };
                 AnimatedSliceFrame {
                     x: frame_x,
                     y: self.from_document_rect.y,
-                    w: conceal_from_caret,
+                    w: frame_w,
                     h: frame_h,
                     opacity: 1.0,
                     source_rect: frame_source_rect,

@@ -153,6 +153,9 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                 (i_start, i_end),
                 // Issue #808: 传旧 caret 作为吐字遮罩锚点。
                 spec.old_cursor_rect.as_ref(),
+                // Issue #808 评论 5916391891 修改 4: coordinated 决定是否用 caret 锚点做遮罩。
+                spec.coordinated_animation_enabled,
+                spec.old_cursor_visual_line_id,
             ));
         }
         for &(d_start, d_end) in &spec.deleted_ranges {
@@ -163,6 +166,8 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                 spec.old_cursor_rect.as_ref(),
                 // Issue #808: 传新 caret 作为吞字遮罩锚点。
                 spec.new_cursor_rect.as_ref(),
+                spec.coordinated_animation_enabled,
+                spec.new_cursor_visual_line_id,
             ));
         }
     }
@@ -540,6 +545,7 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         // 同一行的相邻 slice 共享同一 caret 锚点（行内插入/删除），取首个即可。
         caret_anchor_x: a.caret_anchor_x,
         caret_anchor_y: a.caret_anchor_y,
+        is_caret_line: a.is_caret_line,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
         static_hidden_document_rects: a

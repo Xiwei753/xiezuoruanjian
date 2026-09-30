@@ -784,7 +784,7 @@ fn test_delete_conceal_direction_cursor_near_right_is_backspace() {
     // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
     // old cluster [0,3) 是被删除的范围。
     // Issue #808: new_cursor_rect 是吞字遮罩锚点，本测试只验证收拢方向，传 None。
-    let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor), None);
+    let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor), None, false, None);
     let delete_slices: Vec<_> = slices
         .iter()
         .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -814,7 +814,7 @@ fn test_delete_conceal_direction_cursor_near_left_is_delete() {
     // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
     // old cluster [0,3) 是被删除的范围。
     // Issue #808: new_cursor_rect 是吞字遮罩锚点，本测试只验证收拢方向，传 None。
-    let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor), None);
+    let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor), None, false, None);
     let delete_slices: Vec<_> = slices
         .iter()
         .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)

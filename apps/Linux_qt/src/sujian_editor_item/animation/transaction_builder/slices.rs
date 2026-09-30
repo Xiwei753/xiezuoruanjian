@@ -18,6 +18,8 @@ pub(crate) fn build_insert_reveal_slices(
     new_snapshot: &EditorLayoutSnapshot,
     inserted_range: (usize, usize),
     old_cursor_rect: Option<&CursorRect>,
+    coordinated: bool,
+    caret_visual_line_id: Option<usize>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = inserted_range;
@@ -110,15 +112,20 @@ pub(crate) fn build_insert_reveal_slices(
                 }
             };
             let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+            // Issue #808 评论 5916391891 修改 1+4: 按 coordinated 和 visual_line_id
+            // 决定遮罩锚点。coordinated=true 且本行是 caret 所在行时用真实 caret x；
+            // 否则用行首 text_left（纯文字动画或跨行其他行从行首展开）。
+            let is_caret_line = coordinated
+                && caret_visual_line_id.map_or(true, |cid| new_line.visual_line_id == cid);
+            let anchor_x = if is_caret_line { caret_x } else { new_doc.x };
+            let anchor_y = if is_caret_line { caret_y } else { new_doc.y };
             let mut slice = AnimatedSlice::insert_reveal(
                 key,
                 new_line.id,
                 new_sr.clone(),
                 new_doc.clone(),
-                // Issue #808: 传旧 caret 位置作为遮罩锚点（吐字起点），
-                // 不再传 0.0/0.0。文字从 caret 处吐出来，不是从文字左边展开。
-                caret_x,
-                caret_y,
+                anchor_x,
+                anchor_y,
                 slice_byte_start,
                 slice_byte_end,
                 Some(new_cluster.shaping_identity.clone()),
@@ -127,6 +134,7 @@ pub(crate) fn build_insert_reveal_slices(
                 // managed_new_clusters/patches_by_line 的局部索引。
                 Some(new_line.visual_line_id),
             );
+            slice.is_caret_line = is_caret_line;
             // Issue #727 评论 5755858583 问题2: 直接在 slice 上写 canonical 独占区域，
             // 不再生成 StaticLinePatch。AnimatedSlice 成为唯一事实源。
             slice.static_hidden_document_rects = vec![new_doc];
@@ -144,6 +152,8 @@ pub(crate) fn build_delete_conceal_slices(
     deleted_range: (usize, usize),
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
+    coordinated: bool,
+    caret_visual_line_id: Option<usize>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = deleted_range;
@@ -168,14 +178,27 @@ pub(crate) fn build_delete_conceal_slices(
                 let left = old_doc.x;
                 let right = old_doc.x + old_doc.w;
                 let conceal_to_left_edge = (old_cx - right).abs() <= (old_cx - left).abs();
-                // Issue #808: new caret 是吞字终点（遮罩锚点），old caret 只决定收拢方向。
-                slices.push(AnimatedSlice::delete_conceal(
+                // Issue #808 评论 5916391891 修改 1+4: 按 coordinated 和 visual_line_id
+                // 决定遮罩锚点。coordinated=true 且本行是 caret 所在行时用真实 new caret x；
+                // 否则用行首/行尾（纯文字动画或跨行其他行向行首/行尾收拢）。
+                let is_caret_line = coordinated
+                    && caret_visual_line_id
+                        .map_or(true, |cid| old_line.visual_line_id == cid);
+                let anchor_x = if is_caret_line {
+                    new_cx
+                } else if conceal_to_left_edge {
+                    left
+                } else {
+                    right
+                };
+                let anchor_y = if is_caret_line { new_cy } else { old_doc.y };
+                let mut slice = AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,
                     old_sr,
                     old_doc,
-                    new_cx,
-                    new_cy,
+                    anchor_x,
+                    anchor_y,
                     old_cluster.byte_start,
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
@@ -183,7 +206,9 @@ pub(crate) fn build_delete_conceal_slices(
                     // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
                     // 不是 line_snapshots 的局部数组下标。
                     Some(old_line.visual_line_id),
-                ));
+                );
+                slice.is_caret_line = is_caret_line;
+                slices.push(slice);
             }
         }
     }
