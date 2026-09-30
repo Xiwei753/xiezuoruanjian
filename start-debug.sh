@@ -205,10 +205,10 @@ SUJIAN_STARTUP_DIR="$SUJIAN_DIAG_DIR/startup"
 SUJIAN_STARTUP_HISTORY_DIR="$SUJIAN_STARTUP_DIR/history"
 mkdir -p "$SUJIAN_STARTUP_HISTORY_DIR" "$SUJIAN_DIAG_DIR/runtime" "$SUJIAN_DIAG_DIR/crash" "$SUJIAN_DIAG_DIR/exports"
 
-# 清理旧 startup 日志文件，保留最近 20 个。
+# 清理旧 startup 日志文件，保留最近 30 个。
 # 用 find -delete 删除单个文件，规避裸 rm/rm -rf（只删 .log 文件，不删目录）。
 find "$SUJIAN_STARTUP_HISTORY_DIR" -maxdepth 1 -name "startup-*.log" -type f -printf '%T@ %p\n' 2>/dev/null \
-    | sort -rn | tail -n +21 | cut -d' ' -f2- | while IFS= read -r f; do
+    | sort -rn | tail -n +31 | cut -d' ' -f2- | while IFS= read -r f; do
         [ -f "$f" ] && find "$f" -delete 2>/dev/null || true
     done
 
@@ -221,6 +221,12 @@ LATEST_LOG="$SUJIAN_STARTUP_DIR/latest.log"
     echo "--- begin output ---"
 } > "$LATEST_LOG"
 cp "$LATEST_LOG" "$LOG_FILE"
+# Issue #803 评论 5905373722：导出 session 环境变量给 cargo run 子进程，
+# 使 Rust begin_startup_diagnostics() 走"外部已建 session"分支复用同一份日志，
+# 不再新建第二份 history 也不覆盖 latest.log。
+export SUJIAN_STARTUP_SESSION_LOG="$LOG_FILE"
+export SUJIAN_STARTUP_LATEST_LOG="$LATEST_LOG"
+export SUJIAN_STARTED_BY_LAUNCHER=1
 
 # Mirror all subsequent debug output into history + latest log, including build failures.
 exec > >(tee -a "$LOG_FILE" | tee -a "$LATEST_LOG") 2>&1

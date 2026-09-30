@@ -472,7 +472,19 @@ fn main() {
     // 必须是 main 的第一行：早于 configure_qpa_and_input_method /
     // init_default_config_store / create_platform_services / resolve_platform_init /
     // writer_diagnostics::init。建立诊断目录、写 session 头、安装 panic hook。
-    let startup_diag = writer_platform_linux::begin_startup_diagnostics();
+    //
+    // Issue #803 评论 5905373722：先初始化运行时有效 build identity（只读环境变量
+    // APPIMAGE 和编译期常量 BUILD_KEY/PACKAGE_TYPE，不依赖 Qt/QML/Core），确保
+    // 启动头里的 build_key/package_type 是真实值而非 unknown/debug。
+    diagnostics::init_build_identity();
+    let app_version = env!("CARGO_PKG_VERSION");
+    let effective_build_key = diagnostics::effective_build_key().to_string();
+    let effective_package_type = diagnostics::effective_package_type().to_string();
+    let startup_diag = writer_platform_linux::begin_startup_diagnostics(
+        app_version,
+        &effective_build_key,
+        &effective_package_type,
+    );
     startup_diag.mark("process_enter", "entered Rust main");
     // 把句柄 move 进全局 OnceLock，之后通过 startup_mark / startup_mark_ready /
     // startup_mark_exit 访问（包括 Qt message handler）。
@@ -526,10 +538,10 @@ fn main() {
         .ok();
 
     // ===== 最早期初始化：初始化统一诊断后端 =====
-    // #665 评论 5643315523：先初始化运行时有效 build identity（根据 APPIMAGE 环境变量
-    // 收口 packageType/buildKey），确保后续所有日志写入和 manifest 字段使用同一份有效值。
+    // #665 评论 5643315523：运行时有效 build identity 已在 main 最早期通过
+    // diagnostics::init_build_identity() 初始化（见上方 Issue #803 评论 5905373722），
+    // 此处只标记 writer_diagnostics init 阶段。
     startup_mark("shared_diagnostics_begin", "init writer_diagnostics");
-    diagnostics::init_build_identity();
     // 初始化共享 Rust 诊断后端（接管 log::* 和 panic 落盘）。
     // 日志目录、平台名、设备 ID 等由 PlatformInit 决定，build_key 用运行时有效值。
     let platform_init = writer_platform_linux::resolve_platform_init();

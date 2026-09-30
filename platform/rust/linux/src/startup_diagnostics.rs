@@ -52,8 +52,21 @@ pub struct StartupDiagnostics {
 /// （`history/startup-YYYYMMDD-HHMMSS-PID.log`），并把 `latest.log` 更新为本次
 /// 启动日志（原子写：先写临时文件再 rename 覆盖）。同时安装 panic hook。
 ///
+/// `app_version` / `build_key` / `package_type` 由调用方（main.rs）传入，确保
+/// startup header 反映真实 build identity，而非本 crate 编译期的 option_env! 猜测
+/// （本 crate 无 build.rs 注入，option_env! 恒为 None）。见 Issue #803 评论 5905373722。
+///
 /// 该函数应在 `main` 最早期调用，早于任何 Qt/QML/Core 初始化。
-pub fn begin_startup_diagnostics() -> StartupDiagnostics {
+pub fn begin_startup_diagnostics(
+    app_version: &str,
+    build_key: &str,
+    package_type: &str,
+) -> StartupDiagnostics {
+    // 在创建新 session 之前，检查上一次启动遗留的 pending marker。
+    // 如果存在，说明上次启动 panic 后进程未正常退出（既没有 mark_exit(0) 也没有
+    // mark_exit(non-zero)），把 pending 指向的 session 提升为 last_failed.log。
+    promote_pending_last_failed();
+
     let startup_dir = startup_diagnostics_dir();
     let history_dir = startup_dir.join("history");
     let _ = std::fs::create_dir_all(&history_dir);
@@ -61,34 +74,31 @@ pub fn begin_startup_diagnostics() -> StartupDiagnostics {
 
     let latest = startup_dir.join("latest.log");
 
-    // 检测 launcher 是否已建立 session（统一 session，避免 launcher/Rust 两套 history）。
-    let launched_by_launcher = std::env::var_os("SUJIAN_STARTED_BY_LAUNCHER")
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    // 检测外部是否已建立 session（launcher 或开发脚本已创建 history 和 latest.log）。
+    // 以两个路径环境变量同时存在为准，不再依赖 SUJIAN_STARTED_BY_LAUNCHER 名字。
+    let external_session_log = std::env::var_os("SUJIAN_STARTUP_SESSION_LOG").map(PathBuf::from);
+    let external_latest_log = std::env::var_os("SUJIAN_STARTUP_LATEST_LOG").map(PathBuf::from);
+    let has_external_session = external_session_log.is_some() && external_latest_log.is_some();
 
-    let (session_log, latest_log) = if launched_by_launcher {
-        // launcher 已创建唯一 history 和 latest.log，直接复用，不新建不覆盖。
-        let session = std::env::var_os("SUJIAN_STARTUP_SESSION_LOG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| history_dir.join("startup-launcher.log"));
-        let latest_from_env = std::env::var_os("SUJIAN_STARTUP_LATEST_LOG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| latest.clone());
-        // 追加 Rust startup header（append，不覆盖 launcher 已写的内容）。
+    let (session_log, latest_log) = if has_external_session {
+        // 外部已创建唯一 history 和 latest.log，直接复用，不新建不覆盖。
+        let session = external_session_log.unwrap();
+        let latest_from_env = external_latest_log.unwrap();
+        // 追加 Rust startup header（append，不覆盖外部已写的内容）。
         let (ts_file, ts_human) = current_timestamp();
         let _ = ts_file;
         let pid = std::process::id();
-        let header = format_startup_header(&ts_human, pid);
+        let header = format_startup_header(&ts_human, pid, app_version, build_key, package_type);
         append_and_flush(&session, &header);
         append_and_flush(&latest_from_env, &header);
         (session, latest_from_env)
     } else {
-        // 直接执行真实 ELF（无 launcher），自己建 session。
+        // 直接执行真实 ELF（无外部 session），自己建 session。
         let (ts_file, ts_human) = current_timestamp();
         let pid = std::process::id();
         let session_log = history_dir.join(format!("startup-{}-{}.log", ts_file, pid));
 
-        let header = format_startup_header(&ts_human, pid);
+        let header = format_startup_header(&ts_human, pid, app_version, build_key, package_type);
         let _ = std::fs::write(&session_log, &header);
         atomic_write(&latest, &header);
 
@@ -127,10 +137,21 @@ impl StartupDiagnostics {
     }
 
     /// 标记进程退出。写入 `stage=process_exit message=exit_code=<code>` 并 flush。
+    ///
+    /// Issue #803 评论 5905373722：把"记录 panic"和"认定本次启动失败"分开。
+    /// - 非 0 退出 = 确认失败，提升当前 session 为 last_failed.log，并清掉 pending。
+    /// - 正常退出（code == 0）：如果有 pending（之前 panic 被 catch_unwind 恢复），
+    ///   清掉 pending，不覆盖 last_failed.log。
     pub fn mark_exit(&self, code: i32) {
         self.mark("process_exit", &format!("exit_code={}", code));
+        let pending = startup_diagnostics_dir().join("last_failed.pending");
         if code != 0 {
+            // 非 0 退出 = 确认失败，提升当前 session 为 last_failed.log。
             update_last_failed_log(&self.session_log);
+            let _ = std::fs::remove_file(&pending);
+        } else {
+            // 正常退出：如果有 pending（之前 panic 被恢复），清掉，不覆盖 last_failed.log。
+            let _ = std::fs::remove_file(&pending);
         }
     }
 }
@@ -151,6 +172,37 @@ fn update_last_failed_log(session_log: &PathBuf) {
         let last_failed = startup_diagnostics_dir().join("last_failed.log");
         let _ = std::fs::write(&last_failed, &content);
     }
+}
+
+/// 写 pending marker：记录"上一次启动发生了 panic，尚未确认最终退出码"。
+/// 内容为当前 session log 路径。IO 错误静默忽略。
+///
+/// Issue #803 评论 5905373722：panic hook 不再立刻覆盖 last_failed.log，
+/// 改由 `mark_exit` 根据真实退出码决定是否提升。
+fn write_pending_last_failed(session_log: &PathBuf) {
+    let pending = startup_diagnostics_dir().join("last_failed.pending");
+    let _ = std::fs::write(&pending, session_log.to_string_lossy().as_bytes());
+}
+
+/// 检查上一次启动遗留的 pending marker。如果存在，把指向的 session 提升为
+/// `last_failed.log`。IO 错误静默忽略。
+///
+/// 在 `begin_startup_diagnostics` 最早期调用：如果上次启动 panic 后进程未正常退出
+/// （既没有 `mark_exit(0)` 也没有 `mark_exit(non-zero)`），pending 仍残留，
+/// 说明那次启动确实失败了，提升为 last_failed.log。
+fn promote_pending_last_failed() {
+    let pending = startup_diagnostics_dir().join("last_failed.pending");
+    if let Ok(session_path_bytes) = std::fs::read(&pending) {
+        let session_path =
+            PathBuf::from(String::from_utf8_lossy(&session_path_bytes).to_string());
+        if session_path.exists() {
+            if let Ok(content) = std::fs::read(&session_path) {
+                let last_failed = startup_diagnostics_dir().join("last_failed.log");
+                let _ = std::fs::write(&last_failed, &content);
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&pending);
 }
 
 /// history 轮转：保留最近 `keep` 份 startup-*.log，删除更旧的。
@@ -254,18 +306,26 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) {
             ts_human, location, payload, crash_path.display(),
         );
         append_and_flush(session_log, &summary);
-        // panic 也是失败启动，更新 last_failed.log。
-        update_last_failed_log(session_log);
+        // Issue #803 评论 5905373722：panic 不立刻认定本次启动失败。
+        // 写 pending marker，由后续 mark_exit 根据真实退出码决定是否提升为 last_failed.log。
+        write_pending_last_failed(session_log);
     }
 }
 
 /// 格式化启动头信息。包含时间、PID、版本/build key/package type、环境检测。
 ///
+/// `app_version` / `build_key` / `package_type` 由调用方传入，确保反映真实
+/// build identity（见 Issue #803 评论 5905373722），而非本 crate 编译期的
+/// option_env! 猜测（本 crate 无 build.rs 注入，option_env! 恒为 None）。
+///
 /// 严格不写 token、正文、仓库地址。
-fn format_startup_header(ts_human: &str, pid: u32) -> String {
-    let app_version = env!("CARGO_PKG_VERSION");
-    let build_key = option_env!("SUJIAN_BUILD_KEY").unwrap_or("unknown");
-    let package_type = option_env!("PACKAGE_TYPE").unwrap_or("debug");
+fn format_startup_header(
+    ts_human: &str,
+    pid: u32,
+    app_version: &str,
+    build_key: &str,
+    package_type: &str,
+) -> String {
     let is_appimage = std::env::var_os("APPIMAGE").is_some();
     let xdg_session_type = env_or_unset("XDG_SESSION_TYPE");
     let wayland_display = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
