@@ -1648,3 +1648,260 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
              选最新拥有 coordinated caret 的一笔 FIXED"
     );
 }
+
+/// Issue #808 评论 5920712056: 两个 InsertReveal 共享 line_mask 时，
+/// rebase frame 的完成判断和 visible_fraction 必须直接用 timeline
+/// visible_fraction，不能从本 slice 的局部 clip 宽度反推。
+///
+/// 场景：
+/// - A rect = [0,10]，B rect = [10,20]，共享 line_mask=[0,20]
+/// - 两个 unit 的 timeline visible 都是 0.5
+/// - 此时 A 的 frame.w=10（boundary 扫到 x=10，A 完整显示）、B 的 frame.w=0
+/// - 调 collect_rebase_frame_for_unit_without_caret() 后：
+///   - A/B 都必须仍然产生 RebaseFrame（不能因 frame.w==完整宽度而跳过）
+///   - 两个 frame.visible_fraction 都必须是 0.5
+/// - 把这两个 frame 交给新 unit 后，两边 start_fraction 也都必须是 0.5
+#[test]
+fn issue808_rebase_frame_uses_timeline_visible_fraction_for_shared_line_mask_insert_reveal() {
+    let now = Instant::now();
+    let duration_ms = 100u64;
+    let target_visible = 0.5f64;
+    // visible = ease_out_quad(progress) = 1-(1-p)^2 = 0.5 → p = 1-sqrt(0.5)
+    let progress_for_half = 1.0 - (1.0 - target_visible).sqrt();
+    let elapsed_for_half = (progress_for_half * duration_ms as f64).round() as u64;
+
+    // A rect = [0,10]，B rect = [10,20]
+    let mut slice_a = reveal_slice(0, 3, 0.0, 10.0);
+    let mut slice_b = reveal_slice(3, 6, 10.0, 10.0);
+    // 共享 line_mask=[0,20]
+    slice_a.line_mask_left = 0.0;
+    slice_a.line_mask_right = 20.0;
+    slice_b.line_mask_left = 0.0;
+    slice_b.line_mask_right = 20.0;
+
+    let unit_a = elapsed_unit(slice_a, elapsed_for_half, duration_ms, now);
+    let unit_b = elapsed_unit(slice_b, elapsed_for_half, duration_ms, now);
+
+    // 用实际 timeline visible_fraction 作为比较基准。
+    // 注意：progress() 用 as_millis()（整数毫秒）计算 elapsed，会截断小数毫秒，
+    // 所以 visible_fraction 不会精确等于 0.5（约 0.4959）。这不影响测试意图——
+    // 核心是验证 rebase frame.visible_fraction == timeline visible_fraction，
+    // 而非 visible_fraction 恰好是 0.5。
+    let vis_a = unit_a.current_visible_fraction(now);
+    let vis_b = unit_b.current_visible_fraction(now);
+
+    // 前置：两个 unit 同样 elapsed/duration，visible_fraction 应相同，且在非终态区间。
+    assert!(
+        (vis_a - vis_b).abs() < 1e-9,
+        "前置：两个 unit 的 visible_fraction 应相同，got A={} B={}",
+        vis_a,
+        vis_b
+    );
+    assert!(
+        vis_a > 1e-3 && vis_a < 1.0 - 1e-3,
+        "前置：visible_fraction 应在非终态区间（约 {}），got {}",
+        target_visible,
+        vis_a
+    );
+
+    // 前置：A 的 frame.w > 0（boundary 扫到 A 内部，A 部分显示），
+    //       B 的 frame.w == 0（boundary 还没到 B）。
+    // 这是 bug 场景的关键：旧完成判断用 frame.w，B 会因 frame.w<=0.001 被跳过，
+    // 但 timeline visible_fraction 还没到终态，不该跳过；旧 effective_fraction 用
+    // frame.w/to_rect.w 反推，A/B 会拿到不同进度。
+    let frame_a = unit_a.slice.compute_frame(vis_a);
+    let frame_b = unit_b.slice.compute_frame(vis_b);
+    assert!(
+        frame_a.w > 0.0,
+        "前置：A 的 frame.w 应 > 0（boundary 扫到 A 内部，A 部分显示），got {}",
+        frame_a.w
+    );
+    assert!(
+        frame_b.w.abs() < 1e-6,
+        "前置：B 的 frame.w 应为 0（boundary 还没到 B），got {}",
+        frame_b.w
+    );
+
+    // 调 collect_rebase_frame_for_unit_without_caret()
+    let rebase_a = collect_rebase_frame_for_unit_without_caret(&unit_a, None, 0, now);
+    let rebase_b = collect_rebase_frame_for_unit_without_caret(&unit_b, None, 0, now);
+
+    // A/B 都必须仍然产生 RebaseFrame（B 不能因 frame.w==0 而跳过）
+    let rebase_a = rebase_a.expect("A 必须产生 RebaseFrame");
+    let rebase_b = rebase_b.expect("B 必须产生 RebaseFrame（不能因 frame.w==0 而跳过）");
+
+    // 核心：rebase frame.visible_fraction 必须等于 timeline visible_fraction
+    assert!(
+        (rebase_a.visible_fraction - vis_a).abs() < 1e-6,
+        "A 的 rebase frame.visible_fraction 应为 {}（timeline visible_fraction），got {}",
+        vis_a,
+        rebase_a.visible_fraction
+    );
+    assert!(
+        (rebase_b.visible_fraction - vis_b).abs() < 1e-6,
+        "B 的 rebase frame.visible_fraction 应为 {}（timeline visible_fraction），got {}",
+        vis_b,
+        rebase_b.visible_fraction
+    );
+
+    // 把这两个 frame 交给新 unit 后，两边 start_fraction 都必须等于 timeline visible_fraction
+    let mut new_units = wrap_units(vec![
+        reveal_slice(0, 3, 0.0, 10.0),
+        reveal_slice(3, 6, 10.0, 10.0),
+    ]);
+    new_units[0].rebase_from_frame(&rebase_a);
+    new_units[1].rebase_from_frame(&rebase_b);
+    let start_a = new_units[0].timing.start_fraction();
+    let start_b = new_units[1].timing.start_fraction();
+    assert!(
+        (start_a - vis_a).abs() < 1e-6,
+        "新 unit A 的 start_fraction 应为 {}，got {}",
+        vis_a,
+        start_a
+    );
+    assert!(
+        (start_b - vis_b).abs() < 1e-6,
+        "新 unit B 的 start_fraction 应为 {}，got {}",
+        vis_b,
+        start_b
+    );
+
+    println!(
+        "[BUGFIX_VERIFY] Issue #808 评论 5920712056: InsertReveal 共享 line_mask \
+             rebase frame 用 timeline visible_fraction FIXED"
+    );
+}
+
+/// Issue #808 评论 5920712056: DeleteConceal 镜像用例。
+/// 两个 DeleteConceal 共享 line_mask 时，rebase frame 的完成判断和
+/// visible_fraction 必须直接用 timeline visible_fraction。
+#[test]
+fn issue808_rebase_frame_uses_timeline_visible_fraction_for_shared_line_mask_delete_conceal() {
+    let now = Instant::now();
+    let duration_ms = 100u64;
+    let target_visible = 0.5f64;
+    let progress_for_half = 1.0 - (1.0 - target_visible).sqrt();
+    let elapsed_for_half = (progress_for_half * duration_ms as f64).round() as u64;
+
+    // 构造 DeleteConceal slice。from_document_rect 是文字所在位置。
+    let make_delete_slice = |byte_start: usize, byte_end: usize, x: f64, w: f64| {
+        AnimatedSlice::delete_conceal(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
+            SourceRect {
+                x,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
+            x,
+            0.0,
+            byte_start,
+            byte_end,
+            None,
+            false,
+            None,
+        )
+    };
+    // A rect = [0,10]，B rect = [10,20]
+    let mut slice_a = make_delete_slice(0, 3, 0.0, 10.0);
+    let mut slice_b = make_delete_slice(3, 6, 10.0, 10.0);
+    // 共享 line_mask=[0,20]
+    slice_a.line_mask_left = 0.0;
+    slice_a.line_mask_right = 20.0;
+    slice_b.line_mask_left = 0.0;
+    slice_b.line_mask_right = 20.0;
+
+    let unit_a = elapsed_unit(slice_a, elapsed_for_half, duration_ms, now);
+    let unit_b = elapsed_unit(slice_b, elapsed_for_half, duration_ms, now);
+
+    // 用实际 timeline visible_fraction 作为比较基准（progress() 用 as_millis() 截断，
+    // visible_fraction 约 0.5041 而非精确 0.5；不影响测试意图）。
+    let vis_a = unit_a.current_visible_fraction(now);
+    let vis_b = unit_b.current_visible_fraction(now);
+
+    // 前置：两个 unit 同样 elapsed/duration，visible_fraction 应相同，且在非终态区间。
+    assert!(
+        (vis_a - vis_b).abs() < 1e-9,
+        "前置：两个 unit 的 visible_fraction 应相同，got A={} B={}",
+        vis_a,
+        vis_b
+    );
+    assert!(
+        vis_a > 1e-3 && vis_a < 1.0 - 1e-3,
+        "前置：visible_fraction 应在非终态区间（约 {}），got {}",
+        target_visible,
+        vis_a
+    );
+
+    // 前置：A 的 frame.w 很小（A 几乎消失），B 的 frame.w 接近完整（B 还显示）。
+    // 这是 bug 场景的关键：旧 effective_fraction = frame.w / from_rect.w，A 会得到
+    // 接近 0 的进度、B 会得到接近 1 的进度——同一 boundary 的两个 slice 拿到不同
+    // 进度，rebase 后跳字/突然补全。
+    let frame_a = unit_a.slice.compute_frame(vis_a);
+    let frame_b = unit_b.slice.compute_frame(vis_b);
+    assert!(
+        frame_a.w < 1.0,
+        "前置：A 的 frame.w 应很小（A 几乎消失），got {}",
+        frame_a.w
+    );
+    assert!(
+        frame_b.w > 9.0,
+        "前置：B 的 frame.w 应接近完整（B 还显示），got {}",
+        frame_b.w
+    );
+
+    // 调 collect_rebase_frame_for_unit_without_caret()
+    let rebase_a = collect_rebase_frame_for_unit_without_caret(&unit_a, None, 0, now);
+    let rebase_b = collect_rebase_frame_for_unit_without_caret(&unit_b, None, 0, now);
+
+    let rebase_a = rebase_a.expect("A 必须产生 RebaseFrame");
+    let rebase_b = rebase_b.expect("B 必须产生 RebaseFrame");
+
+    // 核心：rebase frame.visible_fraction 必须等于 timeline visible_fraction
+    assert!(
+        (rebase_a.visible_fraction - vis_a).abs() < 1e-6,
+        "A 的 rebase frame.visible_fraction 应为 {}（timeline visible_fraction），got {}",
+        vis_a,
+        rebase_a.visible_fraction
+    );
+    assert!(
+        (rebase_b.visible_fraction - vis_b).abs() < 1e-6,
+        "B 的 rebase frame.visible_fraction 应为 {}（timeline visible_fraction），got {}",
+        vis_b,
+        rebase_b.visible_fraction
+    );
+
+    // 把这两个 frame 交给新 unit 后，两边 start_fraction 都必须等于 timeline visible_fraction
+    let mut new_units = wrap_units(vec![
+        make_delete_slice(0, 3, 0.0, 10.0),
+        make_delete_slice(3, 6, 10.0, 10.0),
+    ]);
+    new_units[0].rebase_from_frame(&rebase_a);
+    new_units[1].rebase_from_frame(&rebase_b);
+    let start_a = new_units[0].timing.start_fraction();
+    let start_b = new_units[1].timing.start_fraction();
+    assert!(
+        (start_a - vis_a).abs() < 1e-6,
+        "新 unit A 的 start_fraction 应为 {}，got {}",
+        vis_a,
+        start_a
+    );
+    assert!(
+        (start_b - vis_b).abs() < 1e-6,
+        "新 unit B 的 start_fraction 应为 {}，got {}",
+        vis_b,
+        start_b
+    );
+
+    println!(
+        "[BUGFIX_VERIFY] Issue #808 评论 5920712056: DeleteConceal 共享 line_mask \
+             rebase frame 用 timeline visible_fraction FIXED"
+    );
+}

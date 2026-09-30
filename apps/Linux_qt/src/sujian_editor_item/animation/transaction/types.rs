@@ -626,7 +626,7 @@ impl PreparedTextVisualTransaction {
     ///
     /// Issue #722 评论 5749164244 问题3: 生产路径（take_rebase_frames）不再调用此方法，
     /// 改用 `animation_coordinator::collect_rebase_frame_for_unit_without_caret` 对 Reveal/Conceal
-    /// 从 caret track progress 推导 visible_fraction。此方法保留供 #690 测试验证 per-unit progress 行为。
+    /// 统一从自己的 Timed 文字 timeline 取 visible_fraction。此方法保留供 #690 测试验证 per-unit progress 行为。
     ///
     /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算 visible_fraction 和
     /// remaining_duration_ms。不再有 CaretDriven 分支。

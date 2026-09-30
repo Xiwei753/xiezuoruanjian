@@ -94,7 +94,7 @@ pub(crate) fn conflicting_units_are_untouched(
     // current_old_text 是当前事务应用前的文本（current-old 坐标系）。
     let tx_new_text = tx.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
     // Issue #727 约束 4: 不再自己采样 caret geometry（删除 sample_caret_geometry_for_caret_driven_clip）。
-    // 对 Reveal/Conceal 从 caret track progress 推导 visible_fraction 判断存活。
+    // Reveal/Conceal 统一从自己的 Timed 文字 timeline 取 visible_fraction 判断存活。
     let caret_track_progress = tx
         .cursor_visual_track
         .as_ref()
@@ -208,12 +208,12 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
     // 按真实帧判断终态。
     match unit.slice.kind {
         AnimatedSliceKind::InsertReveal => {
-            if frame.w >= unit.slice.to_document_rect.w.max(0.0) - 0.001 {
+            if visible_fraction >= 1.0 - 1e-3 {
                 return None;
             }
         }
         AnimatedSliceKind::DeleteConceal => {
-            if frame.w <= 0.001 {
+            if visible_fraction <= 1e-3 {
                 return None;
             }
         }
@@ -223,17 +223,11 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
             }
         }
     }
-    let effective_fraction = match unit.slice.kind {
-        AnimatedSliceKind::InsertReveal => {
-            let w = unit.slice.to_document_rect.w.max(1.0);
-            (frame.w / w).clamp(0.0, 1.0)
-        }
-        AnimatedSliceKind::DeleteConceal => {
-            let w = unit.slice.from_document_rect.w.max(1.0);
-            (frame.w / w).clamp(0.0, 1.0)
-        }
-        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => visible_fraction,
-    };
+    // Issue #808 评论 5920712056: 多个 slice 共用一条行级 boundary 后，
+    // effective_fraction 必须直接用 timeline visible_fraction，不能从本 slice
+    // 的局部 clip 宽度反推——否则同一组 slice 在 rebase 后会拿到不同进度，
+    // 出现跳字/突然补全/重新吐一遍。
+    let effective_fraction = visible_fraction;
     let (elapsed_ms, duration_ms) = match &unit.timing {
         VisualUnitTiming::Timed {
             started_at,
@@ -318,7 +312,7 @@ impl LinuxEditorAnimationCoordinator {
             }
             // 受影响：采集 rebase frames（frame.byte_start/end 属于该旧事务 new 坐标系）。
             // Issue #727 约束 4: 不再自己采样 caret geometry（删除 sample_caret_geometry_for_caret_driven_clip）。
-            // Reveal/Conceal 的 rebase frame 从 caret track progress 推导 visible_fraction，
+            // Reveal/Conceal 统一从自己的 Timed 文字 timeline 取 visible_fraction，
             // 用 slice.compute_frame 构造，不依赖 caret geometry。
             // ReflowMove/ReflowCrossFade 继续用 compute_frame。
             let caret_track_progress = tx
