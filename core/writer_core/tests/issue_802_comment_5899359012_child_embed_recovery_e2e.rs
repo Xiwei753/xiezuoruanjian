@@ -11,10 +11,16 @@
 //! 完整生命周期，现有单元测试只覆盖各阶段独立行为，service 层集成测试
 //! (`issue_802_comment_5899311341_child_embed_pending`) 只验证 `create` 返回值，
 //! 均未验证后续 recovery 闭环。
+//!
+//! 第三条测试走真实生产入口 `bootstrap_workspace()`，验证启动恢复自动补记 history，
+//! 并断言 recovery change-set 中的真实文件路径确实进入本地 Git commit tree。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::PathBuf;
+
 use tempfile::TempDir;
+use writer_core::api::bootstrap::bootstrap_workspace;
 use writer_core::api::types::{CreateStarMapChildEmbedResultDto, StarMapPointDto};
 use writer_core::api::WriterCoreApi;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
@@ -22,7 +28,9 @@ use writer_core::storage::journal::starmap_child_embed::{
     ack_child_embed_history, recover_pending_child_embed_transactions, CHILD_EMBED_JOURNAL_PREFIX,
 };
 use writer_core::storage::workspace_git::record_workspace_change_set;
-use writer_core::storage::{ensure_workspace_repo, git_runtime};
+use writer_core::storage::{
+    ensure_workspace_repo, git_runtime, list_workspace_history, open_workspace_repo,
+};
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -79,6 +87,46 @@ fn list_child_embed_journals(app_data_root: &std::path::Path) -> Vec<std::path::
             }
         })
         .collect()
+}
+
+/// 在 `starmaps/{host}/embeds/` 下定位指定 embed 实例的真实文件，
+/// 返回相对 workspace 根目录的路径（用于校验补记 commit 的 tree）。
+fn find_embed_file_rel(
+    app_data_root: &std::path::Path,
+    host_starmap_id: &str,
+    embed_instance_id: &str,
+) -> PathBuf {
+    let file_name = format!("{}.json", embed_instance_id);
+    let embeds_dir = app_data_root
+        .join("starmaps")
+        .join(host_starmap_id)
+        .join("embeds");
+    let mut stack = vec![embeds_dir.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .file_name()
+                .map(|n| n == file_name.as_str())
+                .unwrap_or(false)
+            {
+                return path
+                    .strip_prefix(app_data_root)
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or(path);
+            }
+        }
+    }
+    panic!(
+        "未找到 embed 文件 {}/{}（create 成功后应已 flush 到磁盘）",
+        embeds_dir.display(),
+        file_name,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -210,4 +258,96 @@ fn history_success_completes_journal_and_recovery_is_idle() {
         recovered.is_empty(),
         "正常路径完成后 recover 应无待处理 journal",
     );
+}
+
+// ---------------------------------------------------------------------------
+// 3. 生产入口闭环：bootstrap_workspace() 自动补 history 并 ack
+// ---------------------------------------------------------------------------
+
+/// 真实生产入口闭环：`bootstrap_workspace()`（`open_app_service` 与 Linux_Qt
+/// `create_core_api` 共用的启动入口）在下次启动时自动执行
+/// "recover child embed journal → record_workspace_change_set → ack_child_embed_history"，
+/// 不需要测试手工拼调用顺序。
+///
+/// 与第一条测试的区别：第一条按评论 5901121699 的步骤手工调用各函数验证顺序；
+/// 本测试走真实 bootstrap，防止测试步骤与生产顺序（history 成功后才 ack）漂移，
+/// 并断言 recovery change-set 中的真实文件路径确实进入本地 Git commit tree——
+/// 即使 change-set 路径有误、history 根本记不进去，本测试会直接失败。
+#[test]
+fn bootstrap_workspace_recovers_pending_child_embed_into_real_history() {
+    let (tmp, api) = make_api_without_git();
+    let app_data_root = tmp.path();
+
+    // 先创建宿主星图，再在无 Git 环境创建 child：pending=true，journal 留盘。
+    let host = api
+        .create_starmap("宿主星图", "bootstrap 闭环宿主", None)
+        .unwrap();
+    let result: CreateStarMapChildEmbedResultDto = api
+        .create_starmap_child_embed(&host.starmap_id, "子星图", sample_position())
+        .unwrap();
+    assert!(
+        result.pending,
+        "无 Git 环境创建 child 应返回 pending=true (embed_instance_id={})",
+        result.embed.instance_id,
+    );
+    let journals = list_child_embed_journals(app_data_root);
+    assert_eq!(
+        journals.len(),
+        1,
+        "history 失败后应恰好保留 1 个 journal 文件，实际 {:?}",
+        journals,
+    );
+    let journal_path = journals[0].clone();
+
+    // 下次启动：真实生产入口。
+    let layout = bootstrap_workspace(app_data_root).unwrap();
+
+    // 生产代码应已补 history 并 ack：journal 删除，磁盘无残留。
+    assert!(
+        !journal_path.exists(),
+        "bootstrap_workspace 应自动补 history 并 ack 清理 journal",
+    );
+    assert!(
+        list_child_embed_journals(app_data_root).is_empty(),
+        "bootstrap 后不应残留 child embed journal",
+    );
+
+    // 再次 recover 幂等为空。
+    let recovered_again = recover_pending_child_embed_transactions(app_data_root).unwrap();
+    assert!(
+        recovered_again.is_empty(),
+        "bootstrap 后再次 recover 应无待处理 journal",
+    );
+
+    // 本地 Git history 真的记下了 recovery commit。
+    let history = list_workspace_history(&layout, 10).unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|commit| commit.message == "recover_starmap_child_embed"),
+        "history 应包含 message=recover_starmap_child_embed 的补记 commit，实际 {:?}",
+        history
+            .iter()
+            .map(|commit| commit.message.as_str())
+            .collect::<Vec<_>>(),
+    );
+
+    // change-set 中的真实文件路径真的进入 commit tree。
+    let repo = open_workspace_repo(&layout).unwrap();
+    let head_tree = repo.head().unwrap().peel_to_tree().unwrap();
+    let expected_paths = [
+        PathBuf::from("starmaps").join("index.json"),
+        PathBuf::from("starmaps").join(format!("{}.meta.json", result.starmap.starmap_id)),
+        PathBuf::from("starmaps")
+            .join(&host.starmap_id)
+            .join("graph.json"),
+        find_embed_file_rel(app_data_root, &host.starmap_id, &result.embed.instance_id),
+    ];
+    for rel in &expected_paths {
+        assert!(
+            head_tree.get_path(rel).is_ok(),
+            "补记 commit tree 应包含 {}",
+            rel.display(),
+        );
+    }
 }
