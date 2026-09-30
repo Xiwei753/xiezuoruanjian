@@ -33,6 +33,44 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Issue #803 评论 5904340835：统一启动诊断目录
+# 开发启动也用 ~/.sujianxiezuo/diagnostics/startup/，把 build/run 的
+# stdout/stderr 镜像到本次 startup log，便于诊断"Rust main() 都没进去"的失败。
+SUJIAN_HOME_DIR="${HOME:-}"
+if [ -z "$SUJIAN_HOME_DIR" ]; then
+    SUJIAN_HOME_DIR="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)"
+fi
+if [ -n "$SUJIAN_HOME_DIR" ]; then
+    SUJIAN_DIAG_DIR="$SUJIAN_HOME_DIR/.sujianxiezuo/diagnostics"
+    SUJIAN_STARTUP_DIR="$SUJIAN_DIAG_DIR/startup"
+    SUJIAN_STARTUP_HISTORY_DIR="$SUJIAN_STARTUP_DIR/history"
+    mkdir -p "$SUJIAN_STARTUP_HISTORY_DIR" "$SUJIAN_DIAG_DIR/runtime" "$SUJIAN_DIAG_DIR/crash" "$SUJIAN_DIAG_DIR/exports"
+    SUJIAN_STARTUP_TS="$(date +%Y%m%d-%H%M%S)"
+    SUJIAN_STARTUP_LOG="$SUJIAN_STARTUP_HISTORY_DIR/startup-${SUJIAN_STARTUP_TS}-$$.log"
+    SUJIAN_STARTUP_LATEST="$SUJIAN_STARTUP_DIR/latest.log"
+    {
+        echo "=== start.sh dev startup ==="
+        echo "timestamp=${SUJIAN_STARTUP_TS} pid=$$"
+        echo "--- begin output ---"
+    } > "$SUJIAN_STARTUP_LATEST"
+    cp "$SUJIAN_STARTUP_LATEST" "$SUJIAN_STARTUP_LOG"
+    # Issue #803 评论 5905373722：导出 session 环境变量给 cargo run 子进程，
+    # 使 Rust begin_startup_diagnostics() 走"外部已建 session"分支复用同一份日志，
+    # 不再新建第二份 history 也不覆盖 latest.log。
+    export SUJIAN_STARTUP_SESSION_LOG="$SUJIAN_STARTUP_LOG"
+    export SUJIAN_STARTUP_LATEST_LOG="$SUJIAN_STARTUP_LATEST"
+    export SUJIAN_STARTED_BY_LAUNCHER=1
+    # history 轮转：保留最近 30 份 startup-*.log，与正式 launcher 统一。
+    # 用 find -delete 删除单个文件，规避裸 rm/rm -rf（只删 .log 文件，不删目录）。
+    find "$SUJIAN_STARTUP_HISTORY_DIR" -maxdepth 1 -name "startup-*.log" -type f -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | tail -n +31 | cut -d' ' -f2- | while IFS= read -r f; do
+            [ -f "$f" ] && find "$f" -delete 2>/dev/null || true
+        done
+    # 后续输出镜像到 history 和 latest 两个日志文件，同时保留终端输出。
+    # exec 重定向后 cargo build/run 的退出码仍由 set -e 正常传递。
+    exec > >(tee -a "$SUJIAN_STARTUP_LOG" | tee -a "$SUJIAN_STARTUP_LATEST") 2>&1
+fi
+
 prepend_path_var() {
     local var_name="$1"
     local path_value="$2"

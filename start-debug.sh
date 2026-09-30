@@ -190,31 +190,54 @@ else
     prepend_path_var QT_PLUGIN_PATH "/usr/lib64/qt6/plugins"
 fi
 
-# Ensure logs directory exists and is writable
-mkdir -p logs
-if [ ! -w logs ]; then
-    echo "Error: Logs directory 'logs/' is not writable." >&2
+# Issue #803 评论 5904340835：统一启动诊断目录到 ~/.sujianxiezuo/diagnostics/startup/
+# 不再写仓库内 logs/，build failure / cargo run failure / Qt stderr 都进同一份 startup log。
+SUJIAN_HOME_DIR="${HOME:-}"
+if [ -z "$SUJIAN_HOME_DIR" ]; then
+    SUJIAN_HOME_DIR="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)"
+fi
+if [ -z "$SUJIAN_HOME_DIR" ]; then
+    echo "Error: cannot determine HOME directory for diagnostics." >&2
     exit 1
 fi
+SUJIAN_DIAG_DIR="$SUJIAN_HOME_DIR/.sujianxiezuo/diagnostics"
+SUJIAN_STARTUP_DIR="$SUJIAN_DIAG_DIR/startup"
+SUJIAN_STARTUP_HISTORY_DIR="$SUJIAN_STARTUP_DIR/history"
+mkdir -p "$SUJIAN_STARTUP_HISTORY_DIR" "$SUJIAN_DIAG_DIR/runtime" "$SUJIAN_DIAG_DIR/crash" "$SUJIAN_DIAG_DIR/exports"
 
-# Clean up older log files (keep 20 most recent)
-if [ -d logs ]; then
-    ls -t logs/sujian-linux-qt-debug-*.log 2>/dev/null | tail -n +21 | xargs rm -f || true
-fi
+# 清理旧 startup 日志文件，保留最近 30 个。
+# 用 find -delete 删除单个文件，规避裸 rm/rm -rf（只删 .log 文件，不删目录）。
+find "$SUJIAN_STARTUP_HISTORY_DIR" -maxdepth 1 -name "startup-*.log" -type f -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +31 | cut -d' ' -f2- | while IFS= read -r f; do
+        [ -f "$f" ] && find "$f" -delete 2>/dev/null || true
+    done
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="logs/sujian-linux-qt-debug-${TIMESTAMP}.log"
-touch "$LOG_FILE"
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+LOG_FILE="$SUJIAN_STARTUP_HISTORY_DIR/startup-${TIMESTAMP}-$$.log"
+LATEST_LOG="$SUJIAN_STARTUP_DIR/latest.log"
+{
+    echo "=== start-debug.sh dev startup ==="
+    echo "timestamp=${TIMESTAMP} pid=$$"
+    echo "--- begin output ---"
+} > "$LATEST_LOG"
+cp "$LATEST_LOG" "$LOG_FILE"
+# Issue #803 评论 5905373722：导出 session 环境变量给 cargo run 子进程，
+# 使 Rust begin_startup_diagnostics() 走"外部已建 session"分支复用同一份日志，
+# 不再新建第二份 history 也不覆盖 latest.log。
+export SUJIAN_STARTUP_SESSION_LOG="$LOG_FILE"
+export SUJIAN_STARTUP_LATEST_LOG="$LATEST_LOG"
+export SUJIAN_STARTED_BY_LAUNCHER=1
 
-# Mirror all subsequent debug output into one log file, including build failures.
-exec > >(tee -a "$LOG_FILE") 2>&1
+# Mirror all subsequent debug output into history + latest log, including build failures.
+exec > >(tee -a "$LOG_FILE" | tee -a "$LATEST_LOG") 2>&1
 
 generate_summary() {
-    # Generate logs/latest-summary.txt
-    SUMMARY_FILE="logs/latest-summary.txt"
+    # Generate latest-summary.txt under the unified diagnostics startup directory.
+    SUMMARY_FILE="$SUJIAN_STARTUP_DIR/latest-summary.txt"
     echo "=== Debug Summary ===" > "$SUMMARY_FILE"
     echo "Generated at: $(date)" >> "$SUMMARY_FILE"
     echo "Log file path: $LOG_FILE" >> "$SUMMARY_FILE"
+    echo "Latest log path: $LATEST_LOG" >> "$SUMMARY_FILE"
     echo "WRITER_DEBUG_MODULES: $WRITER_DEBUG_MODULES" >> "$SUMMARY_FILE"
     echo "WRITER_DEBUG_LEVEL: $WRITER_DEBUG_LEVEL" >> "$SUMMARY_FILE"
     echo "" >> "$SUMMARY_FILE"

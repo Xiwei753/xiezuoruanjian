@@ -60,9 +60,17 @@ export CARGO_TARGET_DIR
 cargo build --release --locked --offline -p sujian-linux-qt
 
 %install
-# 主二进制：安装为 /usr/bin/sujian
+# Issue #803 评论 5904340835：启动诊断层
+# 真实 Rust/Qt ELF 装到 libexec，launcher 装到 bin。
+# /usr/bin/sujian 现在是启动器脚本，负责创建诊断目录并镜像真实二进制
+# 的 stdout/stderr 到 ~/.sujianxiezuo/diagnostics/startup/，即使二进制
+# 因缺动态库/Qt platform plugin/ELF loader 在 main() 前退出也能留下日志。
 : "${CARGO_TARGET_DIR:=target}"
+# 真实 ELF 装到 libexec
 install -Dpm 0755 "${CARGO_TARGET_DIR}/release/sujian-linux-qt" \
+    %{buildroot}%{_libexecdir}/sujian/sujian-linux-qt
+# launcher 装到 bin
+install -Dpm 0755 packaging/linux/sujian-launcher.sh \
     %{buildroot}%{_bindir}/sujian
 
 # Desktop entry
@@ -81,6 +89,7 @@ install -Dpm 0644 packaging/rpm/io.github.Xiwei753.Sujian.metainfo.xml \
 %license LICENSE
 %doc README.md
 %{_bindir}/sujian
+%{_libexecdir}/sujian/sujian-linux-qt
 %{_datadir}/applications/io.github.Xiwei753.Sujian.desktop
 %{_datadir}/icons/hicolor/scalable/apps/io.github.Xiwei753.Sujian.svg
 %{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml

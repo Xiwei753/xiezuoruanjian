@@ -2,13 +2,15 @@
 
 use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
-use super::dirs::{xdg_cache_dir, xdg_config_dir, xdg_state_dir};
+use super::dirs::{runtime_log_dir, xdg_cache_dir, xdg_config_dir, xdg_state_dir};
 
 pub fn resolve_platform_init() -> PlatformInit {
     let config_dir = xdg_config_dir();
     let app_data_dir = config_dir.clone();
     let cache_dir = xdg_cache_dir();
-    let log_dir = cache_dir.join("writer").join("log");
+    // 运行时日志统一落到 ~/.sujianxiezuo/diagnostics/runtime/，避免
+    // xdg_cache_dir()（已是 ~/.cache/writer）再 join("writer") 造成的双重 writer。
+    let log_dir = runtime_log_dir();
 
     PlatformInit {
         platform: PlatformKind::Desktop,

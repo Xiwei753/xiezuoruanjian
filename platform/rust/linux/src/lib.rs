@@ -25,11 +25,16 @@ mod init;
 mod network;
 mod secure_storage;
 mod services;
+mod startup_diagnostics;
 mod transport;
 
-pub use dirs::{xdg_cache_dir, xdg_config_dir};
+pub use dirs::{
+    crash_diagnostics_dir, diagnostics_dir, diagnostics_export_dir, runtime_log_dir,
+    startup_diagnostics_dir, sujian_home_dir, xdg_cache_dir, xdg_config_dir,
+};
 pub use init::{init_default_config_store, init_diagnostics, resolve_platform_init};
 pub use network::{get_cached_network_state, refresh_network_state};
 pub use services::create_platform_services;
+pub use startup_diagnostics::{begin_startup_diagnostics, StartupDiagnostics};
 #[cfg(feature = "github-api")]
 pub use transport::{create_sync_transport, ReqwestSyncTransport};

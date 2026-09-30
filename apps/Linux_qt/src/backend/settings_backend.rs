@@ -132,39 +132,14 @@ pub struct SettingsBackend {
 
 /// 确定诊断包导出目录
 ///
-/// 优先使用 workspace/app-meta/diagnostics，不可写则回退到平台标准目录。
-/// 日志目录由 PlatformInit.log_dir 决定，但导出目录可以放到 workspace 下
-/// 方便用户查找。
-fn determine_export_dir(app_data_root: &std::path::Path) -> std::path::PathBuf {
-    // 1. 尝试 workspace 路径
-    if !app_data_root.as_os_str().is_empty() {
-        let ws_export = app_data_root.join("app-meta/diagnostics");
-        // 尝试创建目录，成功则可用
-        if std::fs::create_dir_all(&ws_export).is_ok() {
-            // 验证可写：尝试创建并删除一个临时文件
-            let test_file = ws_export.join(".write_test");
-            if let Ok(mut f) = std::fs::File::create(&test_file) {
-                use std::io::Write;
-                let _ = f.write_all(b"test");
-                drop(f);
-                let _ = std::fs::remove_file(&test_file);
-                return ws_export;
-            }
-        }
-    }
-
-    // 2. 回退到平台标准目录
-    if cfg!(target_os = "linux") {
-        if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
-            return std::path::PathBuf::from(xdg_data).join("sujian/diagnostics");
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home).join(".local/share/sujian/diagnostics");
-        }
-    }
-
-    // 3. 最终回退
-    std::path::PathBuf::from("/tmp/sujian/diagnostics")
+/// Issue #803: 统一导出到 `~/.sujianxiezuo/diagnostics/exports/`，不再优先 workspace
+/// 路径，也不再回退到 `~/.local/share/sujian/diagnostics`。这样导出包和启动日志、
+/// 运行时日志、崩溃日志同居一个诊断根目录，用户查找和排查更一致。
+///
+/// 参数 `app_data_root` 保留以维持调用方签名（`export_diagnostics_pack` 仍传），
+/// 但不再使用。
+fn determine_export_dir(_app_data_root: &std::path::Path) -> std::path::PathBuf {
+    writer_platform_linux::diagnostics_export_dir()
 }
 
 /// 构造导出附件列表 — 平台采集器提供原始数据，脱敏和打包由 writer_diagnostics::export 接管。
@@ -343,6 +318,27 @@ fn build_export_attachments(
             .unwrap_or_else(|_| "{}".to_string())
             .into_bytes(),
     });
+
+    // Issue #803: 把 startup/latest.log 和最近一次 history 启动日志作为诊断附件，
+    // 交给现有 writer_diagnostics::export 打包，不另造第二套 zip 逻辑。这样导出包
+    // 里直接包含最早期启动阶段记录，排查“启动闪退/卡在某阶段”时无需用户再手动找文件。
+    let startup_dir = writer_platform_linux::startup_diagnostics_dir();
+    let latest_log = startup_dir.join("latest.log");
+    if let Ok(content) = std::fs::read(&latest_log) {
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "startup_latest.log".to_string(),
+            content,
+        });
+    }
+    // Issue #803 评论 5904892041：固定打包 last_failed.log（最近一次失败启动日志），
+    // 不再用 mtime 猜失败。正常退出不覆盖 last_failed.log，所以它只在真正失败时存在。
+    let last_failed_log = startup_dir.join("last_failed.log");
+    if let Ok(content) = std::fs::read(&last_failed_log) {
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "startup_last_failed.log".to_string(),
+            content,
+        });
+    }
 
     attachments
 }
@@ -805,15 +801,16 @@ impl SettingsBackend {
     }
 
     fn open_log_directory(&self) -> QString {
-        // 日志目录由 PlatformInit.log_dir 决定。
-        let log_dir = writer_platform_linux::resolve_platform_init().log_dir;
-        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        // Issue #803: 打开诊断根目录 ~/.sujianxiezuo/diagnostics/，这样用户能看到
+        // startup/runtime/crash/exports 全部子目录，而不是只看到 runtime 子目录。
+        let diag_dir = writer_platform_linux::diagnostics_dir();
+        if let Err(e) = std::fs::create_dir_all(&diag_dir) {
             eprintln!(
-                "[SettingsBackend] open_log_directory: create log dir failed: {}",
+                "[SettingsBackend] open_log_directory: create diag dir failed: {}",
                 e
             );
         }
-        match crate::platform_utils::open_directory(&log_dir.to_string_lossy()) {
+        match crate::platform_utils::open_directory(&diag_dir.to_string_lossy()) {
             Ok(()) => "ok".into(),
             Err(e) => {
                 eprintln!("[SettingsBackend] open_log_directory failed: {}", e);
