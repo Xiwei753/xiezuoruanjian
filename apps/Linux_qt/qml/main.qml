@@ -557,10 +557,6 @@ ApplicationWindow {
                     // Issue #801: Workspace 自己已处理层级返回，只有根星图时才退到 Hub
                     appController.openHub(1);
                 }
-                onEnterStarmapRequested: function(smId, smTitle) {
-                    // Issue #801: Canvas 自己已处理下钻，AppController 不再做页面导航
-                    // 这个信号现在只用于可能的标题同步，不需要额外处理
-                }
                 // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索/设置入口
                 onRequestSync: {
                     if (!window.preSyncBarrier()) return;
