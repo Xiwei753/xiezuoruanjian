@@ -55,8 +55,9 @@ enum EditOp {
 /// 区间收进、candidate 揭示、committed replace range、pending preedit cursor rect
 /// 作为 old caret 起点等 composition 专属语义。
 ///
-/// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`），
-/// 文字显隐/位移和光标位移消费同一个 timeline、同一个 frame progress。
+/// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`）。
+/// Issue #808: 文字显隐/位移和光标位移各自有独立的 timeline / easing / duration，
+/// 不再消费同一个 progress。协同只表示同事务/同首帧/同 rebase，不绑死速度/曲线。
 struct CompositionCommitParams {
     pending_preedit_cursor_rect: Option<CursorRect>,
     preedit_byte_start: usize,
@@ -368,8 +369,8 @@ impl SujianEditorItem {
     ///
     /// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`），
     /// Typing / Delete / TypingCommit / IME commit/replace 都进入同一种
-    /// `VisualTransaction`，文字显隐/位移和光标位移消费同一个 timeline、
-    /// 同一个 frame progress。
+    /// `VisualTransaction`。Issue #808: 文字显隐/位移和光标位移各自有独立的
+    /// timeline / easing / duration，不再消费同一个 progress。
     ///
     /// 返回 `true` 表示编辑已应用并记录事务；`false` 表示 pipeline edit 未应用
     /// （如空删除范围），调用者据此决定是否 `emit_content_changed`。

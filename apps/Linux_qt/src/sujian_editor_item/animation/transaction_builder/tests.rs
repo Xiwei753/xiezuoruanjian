@@ -988,7 +988,7 @@ fn issue756_coordinated_creates_caret_track_and_reveal_together() {
     assert_eq!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
         1,
-        "coordinated=true: 必须建立 InsertReveal（文字与光标绑死）"
+        "coordinated=true: 必须建立 InsertReveal（文字与光标各有独立 timeline）"
     );
     assert!(
         tx.cursor_visual_track.is_some(),
@@ -1176,7 +1176,8 @@ fn issue756_ime_typing_and_smooth_not_coordinated() {
 
 /// Issue #756: 事务创建条件不再把"两个独立开关同时开启"当协同。
 ///
-/// - coordinated=true：文字与光标绑死，必须有有效 caret motion，否则整笔（含文字动画）不创建。
+/// - coordinated=true：文字与光标各有独立 timeline/easing/duration（不绑死），
+///   要求有效 caret motion，否则整笔（含文字动画）不创建。
 /// - coordinated=false：typing/smooth 各自决定文字/光标动画，缺 caret motion 只影响光标动画。
 #[test]
 fn issue756_process_transaction_requires_caret_motion_only_when_coordinated() {

@@ -358,7 +358,8 @@ impl SujianEditorItem {
         }
         self.current_coordinated_animation_enabled = value;
         // Issue #756: 协同模式切换时清活动动画，避免旧事务按旧模式继续播放。
-        // 关闭协同后恢复两个独立开关，开启协同后文字与光标绑死。
+        // Issue #808: 协同不再"绑死"文字与光标——两者各有独立 timeline/easing/duration，
+        // 协同只表示同事务/同首帧/同 rebase，以及吞吐字遮罩锚点取自 caret 位置。
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;

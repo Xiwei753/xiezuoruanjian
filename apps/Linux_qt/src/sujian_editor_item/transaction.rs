@@ -44,9 +44,10 @@ impl SujianEditorItem {
         // Issue #756: 删除"两个独立开关同时开启才走协同"的判断
         // （typing_animation_enabled && smooth_cursor_enabled）。
         // 新逻辑：文字动画与光标动画互相独立，任一需要就构造 motion——
-        // - coordinated=true 时：文字与光标绑死，要求有效 caret motion，
-        //   caret motion 建不起来时这一笔文字动画也不启动（在 pipeline/transaction_builder
-        //   内部检查）。
+        // - coordinated=true 时：文字与光标各有独立 timeline/easing/duration，
+        //   协同只表示同事务/同首帧/同 rebase，不绑死速度/曲线；
+        //   要求有效 caret motion，caret motion 建不起来时这一笔文字动画也不启动
+        //   （在 pipeline/transaction_builder 内部检查）。
         // - coordinated=false 时：typing_animation_enabled 只决定文字动画，
         //   smooth_cursor_enabled 只决定光标动画；任一为 true 都要走 prepare_edit_motion
         //  （文字动画需要 motion 排版 old/new，光标动画需要 motion 的 caret track）。

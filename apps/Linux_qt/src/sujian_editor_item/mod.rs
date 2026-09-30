@@ -243,7 +243,8 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
     /// Issue #756: 协同动画显式模式开关。
-    /// true 时文字与光标绑死，共用 typing_animation_duration_ms 作为 timeline 时长，
+    /// Issue #808: true 时文字与光标各有独立 timeline/easing/duration（不绑死），
+    /// 协同只表示同事务/同首帧/同 rebase，以及吞吐字遮罩锚点取自 caret 位置；
     /// 要求有效 caret motion 否则文字动画也不启动；
     /// false 时 typing_animation_enabled 只决定文字动画，smooth_cursor_enabled 只决定光标动画，
     /// 两者独立，同时为 true 不等于协同。
