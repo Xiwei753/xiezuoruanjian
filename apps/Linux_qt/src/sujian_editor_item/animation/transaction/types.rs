@@ -95,6 +95,7 @@ impl PreparedVisualUnit {
     ///（在 `build_insert_reveal_slices` / `build_delete_conceal_slices` 中设置）：
     /// - coordinated=true：遮罩从 caret 锚点展开/收拢（第三种模式——协同动画）。
     /// - coordinated=false：遮罩从文字自己的边缘展开/收拢（独立文字动画）。
+    ///
     /// 协同=同一次编辑同时开两条独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。
     pub fn wrap_with_coordinated(
         slice: AnimatedSlice,

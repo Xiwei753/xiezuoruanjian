@@ -1356,96 +1356,24 @@ impl LinuxEditorPipeline {
                 );
                 // Issue #785 评论 5857873894 修改 3 + 2b / Issue #808 评论 5916391891 修改 2:
                 // 检查 + 注入 + 诊断收口到辅助函数，避免 prepare_edit_motion 函数体过长
-                //（静态守卫测试用 32000 字符窗口）。返回注入状态结构体，上游据此知道
-                // 是否有行动画视觉不可用。line_snapshot_builder 已跳过这些行（不 push），
-                // transaction_builder 自然不会为这些行创建 InsertReveal。
+                //（静态守卫测试用 32000/33000 byte 窗口）。返回注入状态结构体，上游据此
+                // 知道是否有行动画视觉不可用（不可用时的第一遍诊断日志也在该函数内）。
                 let inject_status = inject_new_animation_visuals_with_diagnostics(
                     &mut new_doc_snapshot,
                     new_line_snapshots,
                     motion.inserted_range,
                 );
-                if inject_status.has_unavailable_lines {
-                    let ins_range_label = inject_status.inserted_range.as_ref().map_or(
-                        "none".to_string(),
-                        |r| format!("[{}..{})", r.start().value(), r.end().value()),
-                    );
-                    super::editor_animation_debug_log(&format!(
-                        "prepare_edit_motion: animation visuals inject has unavailable lines \
-                         inserted_range={} checked={} prepare_miss={} clusters_empty={} ok={} \
-                         expected_inject={} actual_inject={}",
-                        ins_range_label,
-                        inject_status.checked_line_count,
-                        inject_status.prepare_miss_count,
-                        inject_status.clusters_empty_count,
-                        inject_status.ok_count,
-                        inject_status.expected_inject_count,
-                        inject_status.actual_inject_count,
-                    ));
-                }
 
-                // Issue #808 评论 5918236360 问题1: 对失败行做第二次精确重取。
-                // 第一次 prepare/inject 后，failed_lines 收集了所有失败行（prepare miss、
-                // clusters empty、inject miss）。用当前 new_generation 对这些行的
-                // visual_line_idx 再调用一次 prepare_animation_visuals_from_layout，
-                // 只重取失败行，然后 inject。第二次仍失败的行记日志（animation
-                // unavailable），不阻塞事务构造，不伪造文字 unit。
-                if inject_status.has_unavailable_lines && !inject_status.failed_lines.is_empty() {
-                    let failed_indices: Vec<usize> = inject_status
-                        .failed_lines
-                        .iter()
-                        .map(|fl| fl.visual_line_idx)
-                        .collect();
-                    // prepare 需要不可变借用 visual_lines，inject 需要可变借用
-                    // new_doc_snapshot。用内层块隔离 retry_handle 的借用生命周期，
-                    // 块结束时 retry_handle drop，借用释放，随后可以 &mut。
-                    let retry_snapshots = {
-                        let retry_handle = layout::PreparedLayoutHandle {
-                            generation: new_generation,
-                            lines: &new_doc_snapshot.visual_lines,
-                        };
-                        layout::prepare_animation_visuals_from_layout(
-                            &retry_handle,
-                            &failed_indices,
-                            ctx.dpr,
-                            &ctx.text_color,
-                        )
-                    };
-                    let retry_expected = retry_snapshots.len();
-                    let retry_actual = layout::inject_animation_visuals_into_snapshot(
-                        &mut new_doc_snapshot,
-                        retry_snapshots,
-                    );
-                    if retry_actual < retry_expected {
-                        // 记日志时读取 failed_lines 各字段，让诊断明确知道哪些行
-                        // 第二次仍失败（animation unavailable），不伪造文字 unit。
-                        let detail = inject_status
-                            .failed_lines
-                            .iter()
-                            .map(|fl| {
-                                format!(
-                                    "vidx={} para={} qtline={} bytes=[{}..{}) reason={:?}",
-                                    fl.visual_line_idx,
-                                    fl.para_start,
-                                    fl.qtextline_idx,
-                                    fl.byte_start,
-                                    fl.byte_end,
-                                    fl.reason
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; ");
-                        super::editor_animation_debug_log(&format!(
-                            "prepare_edit_motion: animation visuals retry inject still \
-                             incomplete failed_lines={} retry_expected={} retry_actual={} \
-                             detail=[{}] — remaining lines marked animation unavailable, \
-                             not fabricating text units",
-                            inject_status.failed_lines.len(),
-                            retry_expected,
-                            retry_actual,
-                            detail,
-                        ));
-                    }
-                }
+                // Issue #808 评论 5918236360 问题1: 对失败行做第二次精确重取，并在重取后
+                // 再次验证 canonical 行的真实 clusters（重取逻辑见
+                // `retry_failed_animation_visuals`，避免 prepare_edit_motion 函数体过长）。
+                retry_failed_animation_visuals(
+                    &mut new_doc_snapshot,
+                    new_generation,
+                    &inject_status,
+                    ctx.dpr,
+                    &ctx.text_color,
+                );
 
                 // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
                 // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
@@ -1974,18 +1902,9 @@ fn inject_new_animation_visuals_with_diagnostics(
     // 把该行加入 failed_lines，让上游做第二次精确重取。
     let mut inject_miss_count = 0usize;
     for (vidx, para_start, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
-        let injected = new_doc_snapshot
-            .paragraphs
-            .iter()
-            .find_map(|para| {
-                if para.paragraph_document_byte_start == *para_start {
-                    para.lines.get(*qtextline_idx as usize)
-                } else {
-                    None
-                }
-            })
-            .map(|line| !line.clusters.is_empty())
-            .unwrap_or(false);
+        // Issue #808 评论 5918236360 问题1: 直接读回 canonical 行的真实 clusters，
+        // 不用 inject 计数推断（inject 计数只说明行身份被命中，不说明 clusters 非空）。
+        let injected = canonical_line_has_clusters(new_doc_snapshot, *para_start, *qtextline_idx);
         if !injected {
             inject_miss_count += 1;
             failed_lines.push(AnimationVisualsFailedLine {
@@ -2024,10 +1943,16 @@ fn inject_new_animation_visuals_with_diagnostics(
             ),
         );
     }
+    // Issue #808 评论 5918236360 问题1: inject miss 也算动画视觉不可用——
+    // 这类行 prepare 成功但 inject 没命中目标行，必须让上游触发第二次精确重取。
     let has_unavailable_lines = prepare_miss_count > 0
         || clusters_empty_count > 0
+        || inject_miss_count > 0
         || actual_inject_count < expected_inject_count;
-    AnimationVisualsInjectStatus {
+    // Issue #808 评论 5918236360 问题1: 第一遍注入后的失败行摘要日志。
+    // 上游据此知道哪些行需要第二次精确重取；真正"第二次仍失败"的判定在
+    // `retry_failed_animation_visuals` 里按 canonical 行的真实 clusters 给出。
+    let status = AnimationVisualsInjectStatus {
         inserted_range,
         checked_line_count,
         prepare_miss_count,
@@ -2037,44 +1962,162 @@ fn inject_new_animation_visuals_with_diagnostics(
         actual_inject_count,
         has_unavailable_lines,
         failed_lines,
+    };
+    if status.has_unavailable_lines {
+        super::editor_animation_debug_log(&format!(
+            "inject_new_animation_visuals: first pass has unavailable inserted lines {} \
+             — retry_failed_animation_visuals will re-prepare exactly these lines",
+            animation_visuals_status_summary(&status),
+        ));
     }
+    status
 }
 
+/// Issue #808 评论 5918236360 问题1: 把注入状态压成一行诊断文本，供两遍注入的日志共用。
+///
+/// 读取 status 的每个计数与 inserted_range，让诊断包能直接看出第一遍检查了多少行、
+/// 各失败原因各多少行、inject 期望/实际多少行，而不是只有一句"不可用"。
+fn animation_visuals_status_summary(status: &AnimationVisualsInjectStatus) -> String {
+    let ins_range_label = status
+        .inserted_range
+        .as_ref()
+        .map_or("none".to_string(), |r| {
+            format!("[{}..{})", r.start().value(), r.end().value())
+        });
+    format!(
+        "inserted_range={} checked={} prepare_miss={} clusters_empty={} ok={} \
+         expected_inject={} actual_inject={} failed_lines={}",
+        ins_range_label,
+        status.checked_line_count,
+        status.prepare_miss_count,
+        status.clusters_empty_count,
+        status.ok_count,
+        status.expected_inject_count,
+        status.actual_inject_count,
+        status.failed_lines.len(),
+    )
+}
+
+/// Issue #808 评论 5918236360 问题1: 按稳定行身份
+///（paragraph_document_byte_start + qtextline_idx）读回 canonical 行的真实 clusters。
+///
+/// inject 计数只说明行身份被命中，不能说明 clusters 真的非空
+///（`inject_animation_visuals_into_snapshot` 命中目标行即计数，clusters 为空时不清屏也不报错）。
+/// 第一次 prepare/inject 的 inject miss 判定和第二次重取后的再次验证都必须用这个
+/// helper 直接读回 canonical line 的真实 clusters，而不是拿注入计数代替。
+fn canonical_line_has_clusters(
+    doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
+    para_start: usize,
+    qtextline_idx: i32,
+) -> bool {
+    doc_snapshot
+        .paragraphs
+        .iter()
+        .find_map(|para| {
+            if para.paragraph_document_byte_start == para_start {
+                para.lines.get(qtextline_idx as usize)
+            } else {
+                None
+            }
+        })
+        .map(|line| !line.clusters.is_empty())
+        .unwrap_or(false)
+}
+
+/// Issue #808 评论 5918236360 问题1: 对第一次 prepare/inject 失败的行做第二次精确重取。
+///
+/// 流程（对应评论要求 1-6）：
+/// 1. 第一次 prepare/inject 后，`status.failed_lines` 已确定每个 inserted visible line
+///    的最终注入结果（prepare miss / clusters empty / inject miss 都带准确
+///    `visual_line_idx / para_start / qtextline_idx`）；
+/// 2. 用当前 `new_generation` 对失败行的 `visual_line_idx` 再做一次
+///    `prepare_animation_visuals_from_layout`；
+/// 3. 只 inject 这些重取行；
+/// 4. 重取后按稳定行身份再次读回 canonical line 的真实 clusters
+///    （`canonical_line_has_clusters`）：只有第二次该行 clusters 仍为空，才算
+///    animation unavailable，只记诊断日志、不伪造文字 unit，也不阻塞事务构造。
+fn retry_failed_animation_visuals(
+    new_doc_snapshot: &mut layout::CanonicalDocumentVisualSnapshot,
+    generation: u64,
+    status: &AnimationVisualsInjectStatus,
+    dpr: f64,
+    text_color: &str,
+) {
+    if !status.has_unavailable_lines || status.failed_lines.is_empty() {
+        return;
+    }
+    let failed_indices: Vec<usize> = status
+        .failed_lines
+        .iter()
+        .map(|fl| fl.visual_line_idx)
+        .collect();
+    // prepare 需要不可变借用 visual_lines，inject 需要可变借用 new_doc_snapshot。
+    // 用内层块隔离 retry_handle 的借用生命周期，块结束时借用释放，随后可以 &mut。
+    let retry_snapshots = {
+        let retry_handle = layout::PreparedLayoutHandle {
+            generation,
+            lines: &new_doc_snapshot.visual_lines,
+        };
+        layout::prepare_animation_visuals_from_layout(
+            &retry_handle,
+            &failed_indices,
+            dpr,
+            text_color,
+        )
+    };
+    let retry_expected = retry_snapshots.len();
+    let retry_actual =
+        layout::inject_animation_visuals_into_snapshot(new_doc_snapshot, retry_snapshots);
+    // 重取后再次验证 canonical line 的真实 clusters。inject 计数只说明行身份被命中，
+    // 不能说明 clusters 非空，所以这里逐行读回目标行的 clusters。
+    let still_unavailable: Vec<&AnimationVisualsFailedLine> = status
+        .failed_lines
+        .iter()
+        .filter(|fl| {
+            !canonical_line_has_clusters(new_doc_snapshot, fl.para_start, fl.qtextline_idx)
+        })
+        .collect();
+    if still_unavailable.is_empty() {
+        super::editor_animation_debug_log(&format!(
+            "prepare_edit_motion: animation visuals retry recovered all failed lines \
+             retry_expected={} retry_actual={} [{}] — canonical lines now carry real \
+             clusters, InsertReveal can be built for them",
+            retry_expected,
+            retry_actual,
+            animation_visuals_status_summary(status),
+        ));
+        return;
+    }
+    // 第二次仍失败：只有这些行标 animation unavailable，不伪造文字 unit。
+    let detail = still_unavailable
+        .iter()
+        .map(|fl| {
+            format!(
+                "vidx={} para={} qtline={} bytes=[{}..{}) reason={:?}",
+                fl.visual_line_idx,
+                fl.para_start,
+                fl.qtextline_idx,
+                fl.byte_start,
+                fl.byte_end,
+                fl.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    super::editor_animation_debug_log(&format!(
+        "prepare_edit_motion: animation visuals retry still unavailable \
+         still_failed={} of failed_lines={} retry_expected={} retry_actual={} detail=[{}] \
+         — these lines have no clusters after the second precise prepare and stay \
+         animation unavailable (no InsertReveal, no fabricated text unit)",
+        still_unavailable.len(),
+        status.failed_lines.len(),
+        retry_expected,
+        retry_actual,
+        detail,
+    ));
+}
+
+// Issue #808 评论 5918236360: 内嵌测试模块超过生产文件结构上限，测试拆到
+// `pipeline/tests.rs`；本模块仍在 `pipeline` 内部，可直接访问私有条目。
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Issue #683 复现 6（行为测试版）：验证 set_selection 后 mirror.cursor 正确更新，
-    /// 后续 delete_range 能删除旧正文中的字符，而非因光标锁死删除错误位置。
-    ///
-    /// 链路：load "abcdef" → set_selection(3,3) → mirror.cursor == 3 →
-    /// delete_range(2,3) → "abdef"
-    #[test]
-    fn set_selection_updates_mirror_cursor_then_delete_removes_correct_char() {
-        let mut pipeline = LinuxEditorPipeline::new();
-        assert!(pipeline.load_text("abcdef".to_string(), 6));
-
-        // 光标初始在末尾 (6)。
-        assert_eq!(pipeline.mirror().cursor(), 6);
-
-        // 把光标移到 3（'c' 后面）。
-        pipeline.set_selection(3, 3);
-
-        // mirror.cursor 必须跟着更新到 3，否则光标锁死。
-        assert_eq!(
-            pipeline.mirror().cursor(),
-            3,
-            "set_selection(3,3) 后 mirror.cursor 应为 3，实际 {} — 光标锁死",
-            pipeline.mirror().cursor()
-        );
-
-        // 删除 [2,3) 即 'c'，应得到 "abdef"。
-        pipeline.delete_range(2, 3, EditorTransactionCause::Delete);
-        assert_eq!(
-            pipeline.mirror().text(),
-            "abdef",
-            "删除 'c' 后应为 'abdef'，实际 {:?}",
-            pipeline.mirror().text()
-        );
-    }
-}
+mod tests;

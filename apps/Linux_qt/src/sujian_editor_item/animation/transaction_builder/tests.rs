@@ -788,7 +788,15 @@ fn test_delete_conceal_direction_cursor_near_right_is_backspace() {
     // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
     // old cluster [0,3) 是被删除的范围。
     // Issue #808: new_cursor_rect 是吞字遮罩锚点，本测试只验证收拢方向，传 None。
-    let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor), None, false, None);
+    let slices = build_delete_conceal_slices(
+        key,
+        &old_snapshot,
+        (0, 3),
+        Some(&old_cursor),
+        None,
+        false,
+        None,
+    );
     let delete_slices: Vec<_> = slices
         .iter()
         .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -818,7 +826,15 @@ fn test_delete_conceal_direction_cursor_near_left_is_delete() {
     // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
     // old cluster [0,3) 是被删除的范围。
     // Issue #808: new_cursor_rect 是吞字遮罩锚点，本测试只验证收拢方向，传 None。
-    let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor), None, false, None);
+    let slices = build_delete_conceal_slices(
+        key,
+        &old_snapshot,
+        (0, 3),
+        Some(&old_cursor),
+        None,
+        false,
+        None,
+    );
     let delete_slices: Vec<_> = slices
         .iter()
         .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -2165,7 +2181,7 @@ fn issue808_comment5917296533_problem2_forward_delete_conceal_mask_not_shrinking
         Some(0),
     );
     slice.is_caret_line = true; // 模拟协同模式：caret 在删除区域一侧
-    // visible=0：文字应完全被吞掉，frame.w 应为 0
+                                // visible=0：文字应完全被吞掉，frame.w 应为 0
     let frame = slice.compute_frame(0.0);
     // 修复后正确行为：
     //   anchor_x = caret_anchor_x.clamp(100,160) = 100
@@ -2242,7 +2258,7 @@ fn issue808_comment5918236360_problem3_backspace_conceal_mask_symmetric() {
         Some(0),
     );
     slice.is_caret_line = true; // 协同模式：caret 在删除区域一侧
-    // visible=1：文字应完全可见，frame.w 应为 60
+                                // visible=1：文字应完全可见，frame.w 应为 60
     let frame_full = slice.compute_frame(1.0);
     assert!(
         (frame_full.w - 60.0).abs() < 0.5,
@@ -2400,7 +2416,7 @@ fn issue808_comment5917296533_problem3_space_breaks_byte_range_no_shared_boundar
         key,
         &new_snapshot,
         (0, 7),
-        None, // old_cursor_rect
+        None,  // old_cursor_rect
         false, // coordinated
         None,  // caret_visual_line_id
     );
@@ -2496,8 +2512,7 @@ fn issue808_comment5917296533_problem4_composition_bypasses_coordinated_mode_ins
             !s.is_caret_line,
             "问题4 修复后：coordinated=false 时 Composition commit 生成的 InsertReveal[{}] \
              is_caret_line={}（应为 false），只走独立文字动画语义，不偷偷进入协同 caret mask 模式",
-            i,
-            s.is_caret_line
+            i, s.is_caret_line
         );
     }
 }
@@ -2561,8 +2576,7 @@ fn issue808_comment5917296533_problem4_composition_bypasses_coordinated_mode_del
             !s.is_caret_line,
             "问题4 修复后：coordinated=false 时 Composition cancel 生成的 DeleteConceal[{}] \
              is_caret_line={}（应为 false），只走独立文字动画语义，不偷偷进入协同 caret mask 模式",
-            i,
-            s.is_caret_line
+            i, s.is_caret_line
         );
     }
 }
@@ -2626,7 +2640,7 @@ fn issue808_comment5918236360_problem4_composition_multichar_shared_line_mask() 
         3,
         Some(&old_cursor),
         Some(&new_cursor),
-        true,  // coordinated = true
+        true,    // coordinated = true
         Some(0), // caret_visual_line_id = 0
     );
     let insert_reveals: Vec<_> = slices
@@ -2662,4 +2676,285 @@ fn issue808_comment5918236360_problem4_composition_multichar_shared_line_mask() 
             s.to_document_rect.w
         );
     }
+}
+
+/// 问题 2（Issue #808 评论 5918236360）: 非协同 smooth-only（typing=false, smooth=true）
+/// 的普通可见字符 Insert 也必须保留 cursor-only 事务。
+///
+/// 只开平滑光标时 `text_animation_enabled=false`，`units` 天然为空（没有 InsertReveal/
+/// Reflow），但 `caret_animation_enabled=true` 且 old/new caret rect 都存在，
+/// `cursor_visual_track` 是合法的。旧实现按 `units.is_empty()` 直接 return None，
+/// 把平滑光标一起丢掉，只能 canonical snap。
+#[test]
+fn issue808_comment5918236360_problem2_smooth_only_insert_keeps_cursor_only_transaction() {
+    use crate::sujian_editor_item::edit_motion::{EditorAnimationKind, PreparedEditMotion};
+    use writer_core::editor::{EditorCursor, EditorSelection, Utf8ByteRange};
+
+    let sid = issue756_shaping_identity();
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "axb",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    let prepared = PreparedRebaseHandoff::Insert {
+        rebase_frames: vec![],
+        caret_handoff: None,
+        range_start: 1,
+        range_end: 2,
+        insert_offset_map: offset_map,
+        visual_affected_byte_range_old: Some((0, 2)),
+        visual_affected_byte_range_new: Some((0, 3)),
+    };
+    let vt = PreparedEditMotion {
+        kind: EditorAnimationKind::Insert,
+        inserted_range: Some(Utf8ByteRange::from_ordered(1, 2)),
+        deleted_range: None,
+        old_text: "ab".to_string(),
+        new_text: "axb".to_string(),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        old_selection: EditorSelection {
+            anchor: EditorCursor::new("ab", 1),
+            head: EditorCursor::new("ab", 1),
+        },
+        new_selection: EditorSelection {
+            anchor: EditorCursor::new("axb", 2),
+            head: EditorCursor::new("axb", 2),
+        },
+        old_cursor_rect: None,
+        new_cursor_rect: None,
+    };
+    let old_cursor = CursorRect {
+        x: 10.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    let new_cursor = CursorRect {
+        x: 20.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    // coordinated=false, text=false, caret=true（smooth-only）
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let key = coord.create_transaction_from_prepared_handoff(
+        Some(prepared),
+        &vt,
+        false, // text_animation_enabled
+        true,  // caret_animation_enabled
+        false, // coordinated_animation_enabled
+        Some(old_cursor),
+        Some(new_cursor),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        LayoutRevision::initial(),
+    );
+    assert!(
+        key.is_some(),
+        "smooth-only 普通可见字符 Insert：units 为空但有合法 cursor_visual_track，\
+         必须保留 cursor-only 事务（不能按 units.is_empty() 直接丢弃）"
+    );
+    let active = coord.prepared_queue.active_transactions();
+    assert_eq!(active.len(), 1, "cursor-only 事务必须被 enqueue");
+    let tx = &active[0];
+    assert!(
+        tx.units.is_empty(),
+        "typing=false 且非协同：没有文字动画 unit（实际 {:?}）",
+        unit_kind_labels(&tx.units)
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "smooth=true：cursor-only 事务必须带 cursor_visual_track"
+    );
+}
+
+/// 问题 2（Issue #808 评论 5918236360）: 真正的空事务（既没有文字 unit 也没有
+/// cursor_visual_track）仍然不 enqueue，返回 None。
+#[test]
+fn issue808_comment5918236360_problem2_truly_empty_transaction_still_dropped() {
+    use crate::sujian_editor_item::edit_motion::{EditorAnimationKind, PreparedEditMotion};
+    use writer_core::editor::{EditorCursor, EditorSelection, Utf8ByteRange};
+
+    let sid = issue756_shaping_identity();
+    // 空格插入：没有任何可见 glyph，build_insert_reveal_slices 跳过。
+    let old_snapshot = make_test_snapshot("", vec![]);
+    let new_snapshot = make_test_snapshot(" ", vec![(0, 1, 0.0, 0.0, sid)]);
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    let prepared = PreparedRebaseHandoff::Insert {
+        rebase_frames: vec![],
+        caret_handoff: None,
+        range_start: 0,
+        range_end: 1,
+        insert_offset_map: offset_map,
+        visual_affected_byte_range_old: Some((0, 0)),
+        visual_affected_byte_range_new: Some((0, 1)),
+    };
+    let vt = PreparedEditMotion {
+        kind: EditorAnimationKind::Insert,
+        inserted_range: Some(Utf8ByteRange::from_ordered(0, 1)),
+        deleted_range: None,
+        old_text: "".to_string(),
+        new_text: " ".to_string(),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        old_selection: EditorSelection {
+            anchor: EditorCursor::new("", 0),
+            head: EditorCursor::new("", 0),
+        },
+        new_selection: EditorSelection {
+            anchor: EditorCursor::new(" ", 1),
+            head: EditorCursor::new(" ", 1),
+        },
+        old_cursor_rect: None,
+        new_cursor_rect: None,
+    };
+    // coordinated=false, text=true, caret=false：没有文字 unit 也没有 caret track。
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let key = coord.create_transaction_from_prepared_handoff(
+        Some(prepared),
+        &vt,
+        true,  // text_animation_enabled
+        false, // caret_animation_enabled
+        false, // coordinated_animation_enabled
+        None,  // 没有 caret rect → 没有 cursor_visual_track
+        None,
+        Some(0),
+        None,
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        &old_snapshot,
+        &new_snapshot,
+        1,
+        LayoutRevision::initial(),
+    );
+    assert!(
+        key.is_none(),
+        "空格插入且没有 cursor_visual_track：真正的空事务仍然 return None"
+    );
+    assert!(
+        coord.prepared_queue.active_transactions().is_empty(),
+        "空事务不得 enqueue"
+    );
+}
+
+/// 问题 3（Issue #808 评论 5918236360）: Backspace / 前向 Delete 通过真实 builder
+/// 走 coordinated caret mask 时必须对称——visible=1 是完整 deleted extent，
+/// visible=0 严格归零，且收拢方向由 final caret 决定（不是 old caret 推出来的
+/// `conceal_to_left_edge`）。
+///
+/// 场景：被删 cluster document extent=[100,160]。
+/// - Backspace：old caret=160（右侧）→ conceal_to_left_edge=true；final caret=100（左侧）。
+/// - 前向 Delete：old caret=100（左侧）→ conceal_to_left_edge=false；final caret=100。
+#[test]
+fn issue808_comment5918236360_problem3_delete_conceal_mask_symmetric_via_builder() {
+    let sid = issue756_shaping_identity();
+    // cluster (0,6) → source_rect x=100 w=60 → document rect [100,160]
+    let old_snapshot = make_test_snapshot("abcdef", vec![(0, 6, 100.0, 0.0, sid)]);
+    let key = VisualTransactionKey::new(1, 808);
+
+    let build_and_check = |old_caret_x: f64, label: &str| {
+        let old_cursor = CursorRect {
+            x: old_caret_x,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        };
+        // final/new caret = 100（删除后落在 extent 左侧）
+        let new_cursor = CursorRect {
+            x: 100.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        };
+        let slices = build_delete_conceal_slices(
+            key,
+            &old_snapshot,
+            (0, 6),
+            Some(&old_cursor),
+            Some(&new_cursor),
+            true,    // coordinated
+            Some(0), // caret 在这一行
+        );
+        let delete_slices: Vec<&AnimatedSlice> = slices
+            .iter()
+            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+            .collect();
+        assert_eq!(
+            delete_slices.len(),
+            1,
+            "{}: deleted extent [100,160] 应产生 1 个 DeleteConceal",
+            label
+        );
+        let slice = delete_slices[0];
+        assert!(
+            slice.is_caret_line,
+            "{}: coordinated + caret 所在行，is_caret_line 应为 true",
+            label
+        );
+        assert!(
+            (slice.from_document_rect.x - 100.0).abs() < 0.5
+                && (slice.from_document_rect.w - 60.0).abs() < 0.5,
+            "{}: deleted extent 应为 [100,160]，实际 x={} w={}",
+            label,
+            slice.from_document_rect.x,
+            slice.from_document_rect.w
+        );
+        let full = slice.compute_frame(1.0);
+        assert!(
+            (full.w - 60.0).abs() < 0.5,
+            "{}: visible=1 必须是完整 deleted extent（w=60），实际 {}",
+            label,
+            full.w
+        );
+        let gone = slice.compute_frame(0.0);
+        assert!(
+            gone.w.abs() < 0.5,
+            "{}: visible=0 必须严格归零（w=0），实际 {}",
+            label,
+            gone.w
+        );
+        // final caret 在 extent 左半 → 向左收：右边界向 final caret(100) 移动，
+        // 左边界固定在 100。
+        assert!(
+            (gone.x - 100.0).abs() < 0.5,
+            "{}: final caret 在左侧，可见区域左边界应固定在 caret（100），实际 {}",
+            label,
+            gone.x
+        );
+        let half = slice.compute_frame(0.5);
+        assert!(
+            half.x > 99.5 && half.x < 100.5 && half.w > 29.0 && half.w < 31.0,
+            "{}: visible=0.5 时可见区域应从 caret 侧向右展开一半（约 [100,130]），实际 x={} w={}",
+            label,
+            half.x,
+            half.w
+        );
+    };
+
+    // Backspace：old caret=160（右侧）→ conceal_to_left_edge=true，但 final caret=100，
+    // 旧公式会从第一帧就把被删字符完全遮掉。
+    build_and_check(160.0, "Backspace(old caret=160)");
+    // 前向 Delete：old caret=100（左侧）→ conceal_to_left_edge=false，final caret=100。
+    build_and_check(100.0, "Delete(old caret=100)");
 }

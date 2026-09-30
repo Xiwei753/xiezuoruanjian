@@ -519,8 +519,8 @@ impl AnimatedSlice {
                         let w = full_extent * visible;
                         let x = anchor_x - w;
                         let sw = self.source_rect.w * (full_extent / text_w) * visible;
-                        let sx = self.source_rect.x
-                            + (full_extent - w) / text_w * self.source_rect.w;
+                        let sx =
+                            self.source_rect.x + (full_extent - w) / text_w * self.source_rect.w;
                         (x, w, sx, sw)
                     }
                 };

@@ -141,6 +141,7 @@ impl VisualUnitTiming {
     ///   （文字从 caret 处吐出/被 caret 吞进）。
     /// - coordinated=false：slice 的 caret_anchor_x 取文字自己的边缘，is_caret_line=false
     ///   （遮罩从文字边缘展开，不用 caret 锚点）。
+    ///
     /// timing 本身不需要区分 coordinated——文字与 caret 各自按自己的 duration 推进，
     /// 拥有独立 started_at / duration_ms / progress。
     pub(crate) fn default_for_kind_with_coordinated(

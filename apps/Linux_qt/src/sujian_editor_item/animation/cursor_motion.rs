@@ -287,9 +287,9 @@ impl LinuxEditorAnimationCoordinator {
                 visual_line_id,
                 progress,
             }),
-    // Issue #727 评论 5757225958 问题5 / Issue #808: 记录拥有此 caret frame 的事务 key。
-    // 协同只表示同事务/同首帧/同 rebase，不把两条时间线绑成一条。文字 unit 用文字
-    // 自己的 timeline，cursor track 用光标自己的 timeline，各算各的 progress。
+            // Issue #727 评论 5757225958 问题5 / Issue #808: 记录拥有此 caret frame 的事务 key。
+            // 协同只表示同事务/同首帧/同 rebase，不把两条时间线绑成一条。文字 unit 用文字
+            // 自己的 timeline，cursor track 用光标自己的 timeline，各算各的 progress。
             owner_key: Some(key),
         }
     }

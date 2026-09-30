@@ -116,7 +116,7 @@ pub(crate) fn build_insert_reveal_slices(
             // 决定遮罩锚点。coordinated=true 且本行是 caret 所在行时用真实 caret x；
             // 否则用行首 text_left（纯文字动画或跨行其他行从行首展开）。
             let is_caret_line = coordinated
-                && caret_visual_line_id.map_or(true, |cid| new_line.visual_line_id == cid);
+                && caret_visual_line_id.is_none_or(|cid| new_line.visual_line_id == cid);
             let anchor_x = if is_caret_line { caret_x } else { new_doc.x };
             let anchor_y = if is_caret_line { caret_y } else { new_doc.y };
             let mut slice = AnimatedSlice::insert_reveal(
@@ -182,8 +182,7 @@ pub(crate) fn build_delete_conceal_slices(
                 // 决定遮罩锚点。coordinated=true 且本行是 caret 所在行时用真实 new caret x；
                 // 否则用行首/行尾（纯文字动画或跨行其他行向行首/行尾收拢）。
                 let is_caret_line = coordinated
-                    && caret_visual_line_id
-                        .map_or(true, |cid| old_line.visual_line_id == cid);
+                    && caret_visual_line_id.is_none_or(|cid| old_line.visual_line_id == cid);
                 let anchor_x = if is_caret_line {
                     new_cx
                 } else if conceal_to_left_edge {
@@ -543,9 +542,7 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
                     // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
                     let is_caret_line = coordinated
-                        && caret_visual_line_id.map_or(true, |cid| {
-                            old_line.visual_line_id == cid
-                        });
+                        && caret_visual_line_id.is_none_or(|cid| old_line.visual_line_id == cid);
                     let mut slice = AnimatedSlice::delete_conceal(
                         key,
                         old_line.id,
@@ -634,9 +631,7 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
                     // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
                     let is_caret_line = coordinated
-                        && caret_visual_line_id.map_or(true, |cid| {
-                            new_line.visual_line_id == cid
-                        });
+                        && caret_visual_line_id.is_none_or(|cid| new_line.visual_line_id == cid);
                     let mut reveal_slice = AnimatedSlice::insert_reveal(
                         key,
                         new_line.id,
