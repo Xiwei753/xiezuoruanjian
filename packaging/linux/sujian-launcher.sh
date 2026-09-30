@@ -45,13 +45,23 @@ IS_APPIMAGE="no"
     echo "launcherVersion=${LAUNCHER_VERSION}"
     echo "timestamp=${TIMESTAMP}"
     echo "pid=${PID}"
-    echo "home=${HOME_DIR}"
-    echo "realBinary=${REAL_BINARY}"
+    echo "realBinary=$(basename "$REAL_BINARY")"
     echo "appimage=${IS_APPIMAGE}"
-    echo "args=${*:-}"
     echo "--- begin real binary output ---"
 } > "$LATEST_LOG"
 cp "$LATEST_LOG" "$LOG_FILE"
+
+# 导出本次 session 路径给真实 ELF，让 Rust startup recorder 复用同一份 history，
+# 不再新建第二份 history，也不覆盖 latest.log（统一 session）。
+export SUJIAN_STARTUP_SESSION_LOG="$LOG_FILE"
+export SUJIAN_STARTUP_LATEST_LOG="$LATEST_LOG"
+export SUJIAN_STARTED_BY_LAUNCHER=1
+
+# history 轮转：保留最近 30 份 startup-*.log。
+find "$HISTORY_DIR" -maxdepth 1 -name "startup-*.log" -type f -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +31 | cut -d' ' -f2- | while IFS= read -r f; do
+        [ -f "$f" ] && find "$f" -delete 2>/dev/null || true
+    done
 
 # --- 退出码记录 ---
 EXIT_CODE=0
@@ -66,6 +76,10 @@ on_exit() {
         echo "exitCode=${EXIT_CODE}"
         echo "=== launcher exit ==="
     } >> "$LATEST_LOG"
+    # 非 0 退出码 = 失败启动，更新 last_failed.log。正常退出不覆盖。
+    if [ "$EXIT_CODE" -ne 0 ]; then
+        cp "$LOG_FILE" "$STARTUP_DIR/last_failed.log" 2>/dev/null || true
+    fi
 }
 trap on_exit EXIT
 

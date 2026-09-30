@@ -43,6 +43,7 @@ static CURRENT_SESSION_LOG: OnceLock<PathBuf> = OnceLock::new();
 /// [`mark_exit`]: StartupDiagnostics::mark_exit
 pub struct StartupDiagnostics {
     session_log: PathBuf,
+    latest_log: PathBuf,
 }
 
 /// 启动最早期诊断记录，返回本次 session 的句柄。
@@ -58,27 +59,52 @@ pub fn begin_startup_diagnostics() -> StartupDiagnostics {
     let _ = std::fs::create_dir_all(&history_dir);
     let _ = std::fs::create_dir_all(crash_diagnostics_dir());
 
-    let (ts_file, ts_human) = current_timestamp();
-    let pid = std::process::id();
-    let session_log = history_dir.join(format!("startup-{}-{}.log", ts_file, pid));
-
-    // 写启动头信息到 session 文件。
-    let header = format_startup_header(&ts_human, pid);
-    let _ = std::fs::write(&session_log, &header);
-
-    // 原子更新 latest.log：写临时文件再 rename 覆盖。
     let latest = startup_dir.join("latest.log");
-    atomic_write(&latest, &header);
 
-    // 记划之后 mark 也同步追加到 latest.log，所以这里 latest.log 已包含 header。
+    // 检测 launcher 是否已建立 session（统一 session，避免 launcher/Rust 两套 history）。
+    let launched_by_launcher = std::env::var_os("SUJIAN_STARTED_BY_LAUNCHER")
+        .map(|v| v == "1")
+        .unwrap_or(false);
 
-    // 注册当前 session 路径供 panic hook 使用。若已被设置（理论上不会），忽略新值。
+    let (session_log, latest_log) = if launched_by_launcher {
+        // launcher 已创建唯一 history 和 latest.log，直接复用，不新建不覆盖。
+        let session = std::env::var_os("SUJIAN_STARTUP_SESSION_LOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| history_dir.join("startup-launcher.log"));
+        let latest_from_env = std::env::var_os("SUJIAN_STARTUP_LATEST_LOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| latest.clone());
+        // 追加 Rust startup header（append，不覆盖 launcher 已写的内容）。
+        let (ts_file, ts_human) = current_timestamp();
+        let _ = ts_file;
+        let pid = std::process::id();
+        let header = format_startup_header(&ts_human, pid);
+        append_and_flush(&session, &header);
+        append_and_flush(&latest_from_env, &header);
+        (session, latest_from_env)
+    } else {
+        // 直接执行真实 ELF（无 launcher），自己建 session。
+        let (ts_file, ts_human) = current_timestamp();
+        let pid = std::process::id();
+        let session_log = history_dir.join(format!("startup-{}-{}.log", ts_file, pid));
+
+        let header = format_startup_header(&ts_human, pid);
+        let _ = std::fs::write(&session_log, &header);
+        atomic_write(&latest, &header);
+
+        // history 轮转：保留最近 30 份。
+        rotate_history(&history_dir, 30);
+
+        (session_log, latest)
+    };
+
     let _ = CURRENT_SESSION_LOG.set(session_log.clone());
-
-    // 安装 panic hook（只安装一次，重复调用 begin 不会重复 set_hook）。
     install_panic_hook();
 
-    StartupDiagnostics { session_log }
+    StartupDiagnostics {
+        session_log,
+        latest_log,
+    }
 }
 
 impl StartupDiagnostics {
@@ -92,8 +118,7 @@ impl StartupDiagnostics {
         let line = format!("[{} UTC] stage={} message={}\n", ts_human, stage, message);
         append_and_flush(&self.session_log, &line);
 
-        let latest = startup_diagnostics_dir().join("latest.log");
-        append_and_flush(&latest, &line);
+        append_and_flush(&self.latest_log, &line);
     }
 
     /// 标记 GUI 事件循环已就绪。等价于 `mark("gui_ready", "event loop ready")`。
@@ -104,6 +129,9 @@ impl StartupDiagnostics {
     /// 标记进程退出。写入 `stage=process_exit message=exit_code=<code>` 并 flush。
     pub fn mark_exit(&self, code: i32) {
         self.mark("process_exit", &format!("exit_code={}", code));
+        if code != 0 {
+            update_last_failed_log(&self.session_log);
+        }
     }
 }
 
@@ -113,6 +141,40 @@ fn append_and_flush(path: &PathBuf, line: &str) {
     if let Ok(mut file) = std::fs::OpenOptions::new().append(true).create(true).open(path) {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
+    }
+}
+
+/// 把当前 session 日志复制到 `last_failed.log`，记录最近一次失败启动。
+/// IO 错误静默忽略。
+fn update_last_failed_log(session_log: &PathBuf) {
+    if let Ok(content) = std::fs::read(session_log) {
+        let last_failed = startup_diagnostics_dir().join("last_failed.log");
+        let _ = std::fs::write(&last_failed, &content);
+    }
+}
+
+/// history 轮转：保留最近 `keep` 份 startup-*.log，删除更旧的。
+/// IO 错误静默忽略。
+fn rotate_history(history_dir: &PathBuf, keep: usize) {
+    use std::time::SystemTime;
+    let entries = match std::fs::read_dir(history_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut files: Vec<(SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "log") {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                files.push((mtime, path));
+            }
+        }
+    }
+    // 按 mtime 降序排列，保留最新的 `keep` 份，删除其余。
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in files.iter().skip(keep) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -192,6 +254,8 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) {
             ts_human, location, payload, crash_path.display(),
         );
         append_and_flush(session_log, &summary);
+        // panic 也是失败启动，更新 last_failed.log。
+        update_last_failed_log(session_log);
     }
 }
 

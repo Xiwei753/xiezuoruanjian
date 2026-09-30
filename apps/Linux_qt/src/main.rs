@@ -243,6 +243,8 @@ fn fail_if_not_qt6() {
     }
     if version.starts_with("5.") {
         eprintln!("Linux binary requires Qt6; Qt5 is no longer supported.");
+        startup_mark("qt_runtime_probe_failed", "Qt5 detected, Qt6 required");
+        startup_mark_exit(1);
         std::process::exit(1);
     }
     if !version.starts_with("6.") {
@@ -493,19 +495,26 @@ fn main() {
     startup_mark("platform_store_ready", "default config store initialized");
 
     startup_mark("platform_services_begin", "create platform services");
-    if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services)
-    {
-        if let Some(factory) = services.sync_transport_factory {
-            sujian_linux_qt::backend::app_backend::set_linux_sync_transport_factory(factory);
+    match std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
+        Ok(services) => {
+            if let Some(factory) = services.sync_transport_factory {
+                sujian_linux_qt::backend::app_backend::set_linux_sync_transport_factory(factory);
+            }
+            if let Some(secure_storage) = services.secure_storage {
+                sujian_linux_qt::backend::app_backend::set_linux_secure_storage(
+                    std::sync::Arc::from(secure_storage),
+                );
+            }
+            // 初始网络状态已在 create_platform_services 内缓存
+            startup_mark("platform_services_ready", "platform services initialized");
         }
-        if let Some(secure_storage) = services.secure_storage {
-            sujian_linux_qt::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(
-                secure_storage,
-            ));
+        Err(_) => {
+            startup_mark(
+                "platform_services_failed",
+                "create_platform_services panicked",
+            );
         }
-        // 初始网络状态已在 create_platform_services 内缓存
     }
-    startup_mark("platform_services_ready", "platform services initialized");
 
     // 启动后台线程定时刷新网络状态（每 30 秒）
     std::thread::Builder::new()
@@ -630,8 +639,8 @@ fn main() {
     startup_mark("qml_load_begin", &format!("load QML: {}", qml_path));
     engine.load_file(qml_path.into());
     install_message_handler(prev_handler);
-    startup_mark("qml_load_ready", "QML loaded");
 
+    // 先判断失败：失败写 qml_load_failed + exit(1)；只有成功后才写 qml_load_ready。
     if QML_LOAD_FAILED.load(Ordering::SeqCst) {
         let last_error = last_qml_load_error();
         eprintln!("QML load failed for {}", qml_path);
@@ -644,10 +653,11 @@ fn main() {
             "qml_load_failed",
             &format!("QML load failed for {}: {}", qml_path, last_error),
         );
-        // 记录失败退出码后退出。
+        startup_mark("qml_load_failed", &format!("QML load failed: {}", last_error));
         startup_mark_exit(1);
         std::process::exit(1);
     }
+    startup_mark("qml_load_ready", "QML loaded");
 
     debug_log_static(
         "app",

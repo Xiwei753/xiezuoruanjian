@@ -330,29 +330,14 @@ fn build_export_attachments(
             content,
         });
     }
-    // 最近一次 history 日志（按修改时间最新的 startup-*.log），即上一次启动的完整记录。
-    let history_dir = startup_dir.join("history");
-    if let Ok(entries) = std::fs::read_dir(&history_dir) {
-        let mut latest_history: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "log") {
-                if let Ok(meta) = std::fs::metadata(&path) {
-                    let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    if latest_history.as_ref().map_or(true, |(t, _)| mtime > *t) {
-                        latest_history = Some((mtime, path));
-                    }
-                }
-            }
-        }
-        if let Some((_, path)) = latest_history {
-            if let Ok(content) = std::fs::read(&path) {
-                attachments.push(writer_diagnostics::PlatformAttachment {
-                    relative_path: "startup_last_history.log".to_string(),
-                    content,
-                });
-            }
-        }
+    // Issue #803 评论 5904892041：固定打包 last_failed.log（最近一次失败启动日志），
+    // 不再用 mtime 猜失败。正常退出不覆盖 last_failed.log，所以它只在真正失败时存在。
+    let last_failed_log = startup_dir.join("last_failed.log");
+    if let Ok(content) = std::fs::read(&last_failed_log) {
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "startup_last_failed.log".to_string(),
+            content,
+        });
     }
 
     attachments
