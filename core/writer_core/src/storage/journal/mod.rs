@@ -4,11 +4,15 @@
 
 pub mod project_delete;
 pub mod starmap_child_embed;
+pub mod starmap_delete;
 pub mod workspace_change;
 
 pub use project_delete::*;
 pub use starmap_child_embed::*;
+pub use starmap_delete::{
+    apply_planned_delete_starmap, plan_delete_starmap, PlannedStarmapDelete,
+};
 pub use workspace_change::{
-    recover_unfinished, RecoveredWorkspaceChange, WorkspaceChangeJournal, WorkspaceChangeOpType,
-    WorkspaceChangePhase,
+    ensure_sync_tombstones_from_facts, recover_unfinished, RecoveredWorkspaceChange,
+    WorkspaceChangeJournal, WorkspaceChangeOpType, WorkspaceChangePhase,
 };

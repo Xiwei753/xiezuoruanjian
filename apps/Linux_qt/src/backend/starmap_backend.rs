@@ -151,6 +151,12 @@ pub struct StarMapBackend {
             y: f64,
         ) -> QJsonObject
     ),
+    create_starmap_child_embed_json: qt_method!(
+        fn(&mut self, host_starmap_id: QString, title: QString, x: f64, y: f64) -> QString
+    ),
+    create_starmap_child_embed: qt_method!(
+        fn(&mut self, host_starmap_id: QString, title: QString, x: f64, y: f64) -> QJsonObject
+    ),
     update_starmap_embed_json: qt_method!(
         fn(&mut self, starmap_id: QString, instance_id: QString, patch_json: QString) -> QString
     ),
@@ -642,6 +648,30 @@ impl StarMapBackend {
             .create_starmap_embed_json(starmap_id, target_starmap_id, label, x, y)
             .to_string();
         Self::log_starmap_envelope("create_starmap_embed", &sid, "", &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn create_starmap_child_embed_json(
+        &mut self,
+        host_starmap_id: QString,
+        title: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        self.with_app_mut(|app| app.create_starmap_child_embed_json(host_starmap_id, title, x, y))
+            .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn create_starmap_child_embed(
+        &mut self,
+        host_starmap_id: QString,
+        title: QString,
+        x: f64,
+        y: f64,
+    ) -> QJsonObject {
+        let hid = host_starmap_id.to_string();
+        let raw = self
+            .create_starmap_child_embed_json(host_starmap_id, title, x, y)
+            .to_string();
+        Self::log_starmap_envelope("create_starmap_child_embed", &hid, "", &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
     fn update_starmap_embed_json(

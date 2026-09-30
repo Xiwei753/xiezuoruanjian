@@ -90,11 +90,6 @@ fn starmaps_index_rel_path() -> std::path::PathBuf {
     std::path::PathBuf::from("starmaps").join("index.json")
 }
 
-///   starmaps/{id}/ 目录的 workspace-relative 路径。
-fn starmap_dir_rel_path(starmap_id: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from("starmaps").join(starmap_id)
-}
-
 ///   构造单个 starmap meta index 的变更集。
 fn change_set_for_meta_and_index(
     starmap_id: &str,
@@ -157,14 +152,6 @@ fn load_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<StarMapMe
     let content = fs::read_to_string(&path)?;
     let meta: StarMapMeta = serde_json::from_str(&content)?;
     Ok(meta)
-}
-
-fn delete_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<()> {
-    let path = starmap_meta_path(app_data_root, starmap_id);
-    if path.exists() {
-        fs::remove_file(&path)?;
-    }
-    Ok(())
 }
 
 pub fn list_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
@@ -307,61 +294,72 @@ pub fn rename_starmap_with_changes(
 /// 先检查是否有外部引用（embed/link/edge 指向此星图），有则拒绝删除。
 /// 自引用（星图内部的边/嵌入指向自身）不阻止删除。
 ///
-/// 写盘顺序：先断 index 引用 → 删对象目录 → 删 meta 真相。
-/// 任何中途失败最多留下"index 已不引用的孤儿文件"，
+/// # Issue #805 修复
+///
+/// 本函数现在走 plan/apply 事务（`storage::journal::starmap_delete`）：
+/// 1. `plan_delete_starmap`：枚举 meta + graph dir 全部文件 → 生成
+///    `SyncDeleteFact`（不修改磁盘）；
+/// 2. `apply_planned_delete_starmap`：断 index 引用 → 移动 graph 文件到
+///    trash → 移动 meta 到 trash → 写 `SyncState` tombstones。
+///
+/// 之前本函数直接 `fs::remove_dir_all` 删文件且不接触 `SyncState`/tombstone，
+/// 导致删除星图后 `SyncState.tombstones` 缺失，`snapshot_local_records_read_only`
+/// 因 "known file missing + no tombstone" 返回 Err（Issue #805）。
+///
+/// 写盘顺序：先断 index 引用 → 移动对象目录到 trash → 移动 meta 到 trash →
+/// 写 SyncState tombstone。任何中途失败最多留下"index 已不引用的孤儿文件"，
 /// 不会留下"有效 index 指向不存在 meta"的 dangling 状态。
-/// 再次调用 delete 能继续清理孤儿文件：index 已不引用该 id 时 retain 是 no-op，
-/// 后续删除对象目录和 meta 仍会执行。
 pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
-    // Before deleting, check if it's referenced by any EXTERNAL StarMap.
-    let refs = find_starmap_references(app_data_root, starmap_id)?;
-    let external_refs: Vec<_> = refs
-        .into_iter()
-        .filter(|r| r.host_starmap_id != starmap_id)
-        .collect();
-    if !external_refs.is_empty() {
-        return Err(crate::error::Error::Io(std::io::Error::other(format!(
-            "Cannot delete StarMap because it is referenced by {} external places.",
-            external_refs.len()
-        ))));
-    }
-
-    // 写盘顺序：先断 index 引用，再删对象目录，最后删 meta 真相。
-    // 任何中途失败最多留下 index 已不引用的孤儿文件，
-    // 不会留下"有效 index 指向不存在 meta"的 dangling 状态。
-    // 再次调用 delete 能继续清理孤儿文件：index 已不引用该 id 时 retain 是 no-op，
-    // 后续删除对象目录和 meta 仍会执行。
-    let mut idx = load_index(app_data_root)?;
-    idx.starmap_ids.retain(|id| id != starmap_id);
-    idx.main_starmap_by_project.retain(|_, v| v != starmap_id);
-    idx.updated_at = now_epoch();
-    save_index(app_data_root, &idx)?;
-
-    // 删除对象目录。失败时最多留下 index 已不引用的孤儿目录。
-    let graph_dir = starmaps_dir(app_data_root).join(starmap_id);
-    if graph_dir.exists() {
-        fs::remove_dir_all(&graph_dir)?;
-    }
-
-    // 最后删除 meta 真相。失败时最多留下 index 已不引用的孤儿 meta。
-    delete_starmap_meta(app_data_root, starmap_id)?;
-
+    // 获取 device_id（用于 tombstone deleted_by）。SyncState 不存在时用空字符串，
+    // ensure_sync_tombstones_from_facts 会用 state.device_id 兜底。
+    let device_id = crate::sync::SyncService::load_sync_state(app_data_root)
+        .map(|s| s.device_id)
+        .unwrap_or_default();
+    let (_change_set, planned) =
+        crate::storage::journal::starmap_delete::plan_delete_starmap(
+            app_data_root,
+            starmap_id,
+            &device_id,
+        )?;
+    crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
+        app_data_root,
+        starmap_id,
+        &planned,
+    )?;
     Ok(())
 }
 
 ///   delete_starmap 的变更集版本。
 ///
+/// 走 plan/apply 事务：`plan_delete_starmap` 构造变更集 + 删除计划，
+/// `apply_planned_delete_starmap` 执行物理删除 + 写 SyncState tombstone。
+///
 /// 变更集：`Delete(starmaps/{id}.meta.json) + DeleteTree(starmaps/{id}) +
 /// Upsert(starmaps/index.json)`。
+///
+/// # Issue #805 修复
+///
+/// 之前本函数先调 `delete_starmap` 删文件再组装 `WorkspaceChangeSet`，全程
+/// 不调用 `ensure_tombstones_from_facts` 补 LWW tombstone。现在改为
+/// plan/apply：plan 阶段构造 facts，apply 阶段在物理删除后写 tombstone。
 pub fn delete_starmap_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-    delete_starmap(app_data_root, starmap_id)?;
-    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
-        .add_delete(starmap_meta_rel_path(starmap_id))
-        .add_delete_tree(starmap_dir_rel_path(starmap_id))
-        .add_upsert(starmaps_index_rel_path());
+    let device_id = crate::sync::SyncService::load_sync_state(app_data_root)
+        .map(|s| s.device_id)
+        .unwrap_or_default();
+    let (change_set, planned) =
+        crate::storage::journal::starmap_delete::plan_delete_starmap(
+            app_data_root,
+            starmap_id,
+            &device_id,
+        )?;
+    crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
+        app_data_root,
+        starmap_id,
+        &planned,
+    )?;
     Ok(change_set)
 }
 

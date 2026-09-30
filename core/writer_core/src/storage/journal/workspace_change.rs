@@ -115,6 +115,55 @@ pub struct PlannedWorkspaceDelete {
     pub sync_delete_facts: Vec<SyncDeleteFact>,
 }
 
+/// 根据 `sync_delete_facts` 幂等补齐 `sync_root` 的 SyncState tombstone。
+///
+/// 这是卷/章节/星图删除事务共用的 LWW tombstone 落盘能力。
+/// 已存在的 tombstone（按 `original_path + trash_path` 匹配）跳过，保证幂等。
+///
+/// 物理删除完成后，必须先确保 SyncState.tombstones 持久化成功，API 才能返回成功。
+/// 崩溃恢复时如果已删文件但 tombstone 未写完，从 journal 的 facts 幂等补齐。
+///
+/// 之前该能力以 `volume::ensure_tombstones_from_facts` 的 `pub(crate)` 形式存在，
+/// 现提升为 `pub` 共用能力，供 StarMap 删除事务（`storage/journal/starmap_delete.rs`）
+/// 与卷/章节删除事务统一调用。
+pub fn ensure_sync_tombstones_from_facts(
+    sync_root: &Path,
+    facts: &[SyncDeleteFact],
+) -> crate::error::Result<()> {
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
+    let mut changed = false;
+    for fact in facts {
+        let exists = state
+            .tombstones
+            .iter()
+            .any(|t| t.original_path == fact.original_path && t.trash_path == fact.trash_path);
+        if exists {
+            continue;
+        }
+        state.tombstones.push(crate::sync::Tombstone {
+            original_path: fact.original_path.clone(),
+            trash_path: fact.trash_path.clone(),
+            deleted_at: fact.deleted_at,
+            purge_after: fact.deleted_at + 30 * 24 * 3600,
+            deleted_by: if fact.deleted_by.is_empty() {
+                state.device_id.clone()
+            } else {
+                fact.deleted_by.clone()
+            },
+            original_hash: fact.original_hash.clone(),
+            kind: "local_delete".to_string(),
+        });
+        changed = true;
+    }
+    if changed {
+        crate::sync::SyncService::save_sync_state(sync_root, &state)?;
+    }
+    Ok(())
+}
+
 impl PlannedWorkspaceDelete {
     /// 在源目录还存在时遍历所有待删文件，提前构造 `SyncDeleteFact` 列表。
     ///

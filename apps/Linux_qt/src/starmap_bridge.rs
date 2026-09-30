@@ -308,6 +308,35 @@ pub fn create_starmap_embed(
     envelope(api.add_starmap_embed(starmap_id, embed))
 }
 
+/// 原子创建子星图并嵌入父图（Issue #805 评论 5907045450 第 5 部分）。
+///
+/// 调用 Core 的 `WriterCoreApi::create_starmap_child_embed`，一次性完成：
+/// 1. 创建子星图 meta + index；
+/// 2. 在父图添加 Embed；
+/// 3. 记录 workspace history。
+///
+/// 替代 QML 侧 `create_starmap -> create_starmap_embed -> 失败时 delete_starmap`
+/// 的非原子拼接。Core 侧通过 `starmap_child_embed` journal 保证 crash-safe。
+///
+/// - `host_starmap_id`：宿主星图 id（当前星图）。
+/// - `title`：子星图标题。
+/// - `x` / `y`：Embed 在宿主图中的位置（宿主星图坐标系）。
+///
+/// 返回 `CreateStarMapChildEmbedResultDto` 的 JSON envelope。
+pub fn create_starmap_child_embed(
+    api: &WriterCoreApi,
+    host_starmap_id: &str,
+    title: &str,
+    x: f64,
+    y: f64,
+) -> String {
+    let position = StarMapPointDto {
+        x: x as f32,
+        y: y as f32,
+    };
+    envelope(api.create_starmap_child_embed(host_starmap_id, title, position))
+}
+
 /// 更新子星图嵌入。
 ///
 /// `patch_json` 按 `StarMapEmbedPatchInputDto` 格式（label/clearLabel/position/hostPath），

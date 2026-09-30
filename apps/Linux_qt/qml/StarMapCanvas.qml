@@ -59,11 +59,17 @@ Item {
     property real _pinchStartPanX: 0
     property real _pinchStartPanY: 0
 
-    // Issue #801 评论 5894639734: Pinch 连续 drillUp 去重 + 根星图可缩到最小。
-    // canDrillUp 由 Workspace 绑定（starmapPathStack.length > 0）；
-    // _pinchDrilledUp 在一次 Pinch 内只允许 drillUp 一次。
-    property bool canDrillUp: false
-    property bool _pinchDrilledUp: false
+    // Issue #805 评论 5907045450 第 1/2 部分：删掉"下钻换整页 graph"模型。
+    // 不再有 canDrillUp / drillUpRequested / drillDownRequested。
+    // 递归渲染由 StarMapScene + Embed 内部 Loader 处理。
+    // 滚轮/Pinch 缩到最小时只 clamp，不再触发返回父层。
+
+    // Issue #805 评论 5907045450 第 2 部分：递归渲染上下文。
+    // rootStarmapId / pathSegments 传给 Embed delegate，Embed 的 contentViewport
+    // 用这些构造子 Scene 的 pathSegments。
+    property string rootStarmapId: ""
+    property var pathSegments: []
+
     // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
     // 第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
     property bool _touchInputActive: false
@@ -92,15 +98,8 @@ Item {
     signal edgeSelected(var edge)
     signal selectionCleared()
     signal editNodeRequested(var node)
-    // Issue #801 评论 5894035036: 层级切换请求上抛给 Workspace。
-    //   drillDownRequested: 双击 portal/Embed 或下钻触发
-    //   drillUpRequested: 滚轮/Pinch/按钮缩到最小以下触发
-    // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
-    // Workspace 据此维护完整 currentPathSegments（层级身份）。
-    //   正式 Embed -> { type: "enterEmbed", instanceId, nodeId: null }
-    //   legacy portal -> { type: "enterPortal", instanceId: null, nodeId }
-    signal drillDownRequested(string starmapId, string title, var segment)
-    signal drillUpRequested()
+    // Issue #805 评论 5907045450 第 1 部分：删掉 drillDownRequested / drillUpRequested。
+    // 递归渲染由 StarMapScene 处理，Canvas 不再上抛层级切换请求。
 
     // Issue #798: Canvas 自身 starmapId 改变时清瞬时交互状态并重新加载，
     // 不可见 / 离开工作区时也 reset，避免旧 move/connect 状态泄漏。
@@ -382,21 +381,13 @@ Item {
                     _pinchStartZoom = zoomLevel
                     _pinchStartPanX = panX
                     _pinchStartPanY = panY
-                    // Issue #801 评论 5894639734: 每次 Pinch 开始时重置去重标记。
-                    _pinchDrilledUp = false
                     _touchInputActive = true
                 }
             }
             onActiveScaleChanged: {
                 var rawZoom = _pinchStartZoom * activeScale
-                // Issue #801 评论 5894639734: 一次 Pinch 只 drillUp 一次，
-                // 避免捏合不松手时连续 pop 多层；根星图（canDrillUp=false）
-                // 时正常 clamp 到 0.35，不 return。
-                if (rawZoom < 0.35 && canDrillUp && !_pinchDrilledUp) {
-                    _pinchDrilledUp = true
-                    drillUpRequested()
-                    return
-                }
+                // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
+                // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
                 zoomLevel = Math.max(0.35, Math.min(2.5, rawZoom))
                 // 以手势中心缩放
                 var cx = centroid.position.x
@@ -455,12 +446,8 @@ Item {
                 var oldZoom = zoomLevel
                 var delta = wheel.angleDelta.y / 120
                 var newZoom = zoomLevel + delta * 0.1
-                // Issue #801 评论 5894639734: 只有 canDrillUp 时越过下限才返回父级；
-                // 已经在根图就正常 clamp 到 0.35。
-                if (newZoom < 0.35 && canDrillUp) {
-                    drillUpRequested()
-                    return
-                }
+                // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
+                // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
                 zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
 
                 var mx = wheel.x
@@ -762,6 +749,13 @@ Item {
                 isSelected: embedData.isSelected
                 wobbleIndex: index
 
+                // Issue #805 评论 5907045450 第 2 部分：递归渲染上下文。
+                // 传 rootStarmapId / pathSegments / starmapBackendRef 给 Embed，
+                // Embed 的 contentViewport 用这些构造子 Scene 的 pathSegments。
+                rootStarmapId: canvasArea.rootStarmapId
+                parentPathSegments: canvasArea.pathSegments
+                starmapBackendRef: canvasArea.starmapBackendRef
+
                 // Issue #798: 不再原地篡改 embedData.x/y，拖动用 StarMapEmbed 自己的 x/y
                 // 作为临时显示坐标，松手提交 Controller。
                 onXChanged: edgeCanvas.requestPaint()
@@ -776,19 +770,9 @@ Item {
                     graphController.selectEmbed(instId)
                 }
 
-                // 双击进入 targetStarmapId
-                onDoubleClicked: function(tgtStarmapId) {
-                    if (tgtStarmapId) {
-                        var ed = embedData
-                        // Issue #801 评论 5894035036: 上抛 drillDownRequested 给 Workspace，
-                        // Canvas 不再自己 drillDown。
-                        // Issue #801 评论 5895625744: title fallback 不再用"子星图"。
-                        // Issue #801 评论 5897793716: 下钻事件携带具体 segment，
-                        // 正式 Embed -> EnterEmbed(instanceId)，legacy portal -> EnterPortal(nodeId)。
-                        var segment = graphController.embedDrillSegment(ed.instanceId)
-                        drillDownRequested(tgtStarmapId, ed.label || qsTr("未命名"), segment)
-                    }
-                }
+                // Issue #805 评论 5907045450 第 1/3 部分：双击不再 drillDown。
+                // Embed 内部递归渲染子 StarMapScene，不需要"双击进入"语义。
+                // onDoubleClicked 信号已从 StarMapEmbed 删除。
 
                 // Issue #801 评论 5894035036: 鼠标长按直接进 connect
                 onMouseLongPressed: function(instId) {
@@ -940,12 +924,8 @@ Item {
             text: qsTr("−")
             onClicked: {
                 var newZoom = zoomLevel - 0.15
-                // Issue #801 评论 5894639734: 只有 canDrillUp 时越过下限才返回父级；
-                // 已经在根图就正常 clamp 到 0.35。
-                if (newZoom < 0.35 && canDrillUp) {
-                    drillUpRequested()
-                    return
-                }
+                // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
+                // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
                 zoomLevel = Math.max(0.35, newZoom)
             }
         }

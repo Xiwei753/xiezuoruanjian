@@ -446,42 +446,17 @@ pub fn apply_planned_delete_volume(
 /// 根据 sync_delete_facts 幂等补齐 project_root 的 SyncState tombstone。
 ///
 /// 已存在的 tombstone（按 original_path + trash_path 匹配）跳过，保证幂等。
+///
+/// 实现已提升为共用能力
+/// [`crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts`]，
+/// 本函数保留为 `pub(crate)` thin wrapper 供卷/章节删除链路向后兼容调用。
 pub(crate) fn ensure_tombstones_from_facts(
     project_root: &Path,
     facts: &[crate::storage::journal::workspace_change::SyncDeleteFact],
 ) -> Result<()> {
-    if facts.is_empty() {
-        return Ok(());
-    }
-    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
-    let mut changed = false;
-    for fact in facts {
-        let exists = state
-            .tombstones
-            .iter()
-            .any(|t| t.original_path == fact.original_path && t.trash_path == fact.trash_path);
-        if exists {
-            continue;
-        }
-        state.tombstones.push(crate::sync::Tombstone {
-            original_path: fact.original_path.clone(),
-            trash_path: fact.trash_path.clone(),
-            deleted_at: fact.deleted_at,
-            purge_after: fact.deleted_at + 30 * 24 * 3600,
-            deleted_by: if fact.deleted_by.is_empty() {
-                state.device_id.clone()
-            } else {
-                fact.deleted_by.clone()
-            },
-            original_hash: fact.original_hash.clone(),
-            kind: "local_delete".to_string(),
-        });
-        changed = true;
-    }
-    if changed {
-        crate::sync::SyncService::save_sync_state(project_root, &state)?;
-    }
-    Ok(())
+    crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts(
+        project_root, facts,
+    )
 }
 
 ///   reorder_volumes 的变更集版本。

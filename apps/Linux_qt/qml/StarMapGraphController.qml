@@ -498,37 +498,24 @@ QtObject {
     }
 
     // Issue #798: 从 StarMapCanvas 移入，Controller 成为图操作唯一入口。
-    // 流程：create_starmap 建子星图 → create_starmap_embed 嵌入当前图；
-    // 失败回滚 delete_starmap；成功后 loadGraph 刷新模型并选中新 Embed。
+    // Issue #805 评论 5907045450 第 5 部分：改走 Core 原子接口
+    // create_starmap_child_embed，不再用 create_starmap → create_starmap_embed →
+    // 失败时 delete_starmap 的非原子拼接。Core 侧通过 starmap_child_embed
+    // journal 保证 crash-safe，QML 不再需要回滚。
     function createSubStarmapAt(title, wx, wy) {
         if (!ensureBackend()) return;
-        // 1. 创建目标子星图
-        var createRes = normalizeBackendResult(
-            starmapBackendRef.create_starmap(title, "", ""),
+        // 原子创建子星图并嵌入当前图，Core 一次性完成 meta + embed + history。
+        var res = normalizeBackendResult(
+            starmapBackendRef.create_starmap_child_embed(starmapId, title, wx, wy),
             qsTr("创建子星图失败")
         );
-        if (!createRes.success) {
-            setError(backendErrorText(createRes, qsTr("创建子星图失败")));
+        if (!res.success) {
+            setError(backendErrorText(res, qsTr("创建子星图失败")));
             return;
         }
-        var newStarmapId = createRes.data && createRes.data.starmapId ? createRes.data.starmapId : "";
-        if (!newStarmapId) {
-            setError(qsTr("创建子星图失败"));
-            return;
-        }
-        // 2. 在当前星图创建 Embed，指向新子星图
-        var embedRes = normalizeBackendResult(
-            starmapBackendRef.create_starmap_embed(starmapId, newStarmapId, title, wx, wy),
-            qsTr("创建子星图入口失败")
-        );
-        if (!embedRes.success) {
-            // 3. create_starmap_embed 失败，删除刚创建的目标 StarMap 清理
-            starmapBackendRef.delete_starmap(newStarmapId);
-            setError(backendErrorText(embedRes, qsTr("创建子星图入口失败")));
-            return;
-        }
-        var instanceId = embedRes.data && embedRes.data.instanceId ? embedRes.data.instanceId : "";
-        // 4. 成功，reload graph 并选中新 Embed
+        var instanceId = res.data && res.data.embed && res.data.embed.instanceId
+            ? res.data.embed.instanceId : "";
+        // 成功，reload graph 并选中新 Embed
         clearError();
         loadGraph();
         if (instanceId) {

@@ -229,6 +229,28 @@ impl AppBackend {
         }
     }
 
+    // AppBackend::create_starmap_child_embed_json
+    // 原子创建子星图并嵌入父图（Issue #805 评论 5907045450 第 5 部分）。
+    // 替代 QML 侧 create_starmap -> create_starmap_embed -> 失败时 delete_starmap 拼接。
+    pub(crate) fn create_starmap_child_embed_json(
+        &mut self,
+        host_starmap_id: QString,
+        title: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        let hid = host_starmap_id.to_string();
+        let t = title.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::create_starmap_child_embed(&core, &hid, &t, x, y).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
     // AppBackend::delete_starmap_embed_json
     pub(crate) fn delete_starmap_embed_json(
         &mut self,
