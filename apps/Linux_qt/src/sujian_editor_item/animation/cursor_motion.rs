@@ -71,25 +71,22 @@ pub(crate) fn sample_coordinated_cursor_rect_at(
     let h = new_rect.bottom - new_rect.top;
     let op = tx.operation_kind;
 
-    // Issue #722 评论 5747719529: 光标是吞字/吐字的视觉边界。
-    // caret 位置只由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
-    // 插值决定，不再从文字 glyph 切片反推。
-    // - 有 cursor_visual_track 时：直接 sample track（caret_driven_clip）。
+    // Issue #808: 光标只采样光标自己的 track，不再保留"文字效果跟着光标边界"旧语义。
+    // - 有 cursor_visual_track 时：直接 sample track（光标自己的 ease_out_cubic）。
     // - 没有 track 时（首次事务未经过 rebase）：按事务 progress 插值 old/new cursor rect。
-    // 文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧 coordinated caret 的位置。
+    // 文字的 InsertReveal/DeleteConceal 裁切由文字自己的 timeline 驱动，不消费本帧 caret 位置。
     let sample_caret_position = || -> (f64, f64) {
         match tx.cursor_visual_track.as_ref() {
             Some(track) => {
-                // caret_driven_clip: 光标位置由 caret track 插值决定。
-                // 用 sampled_rect_at_progress(progress(now)) 与 sampled_rect(now) 等价，
-                // 显式表达"caret 与文字使用同一个 frame_now 和 from→to 几何轨迹"。
+                // Issue #808: 光标位置由 caret track 自己的 timeline + ease_out_cubic 决定。
+                // 文字与光标各自按自己的 duration/easing 推进，不共用同一条曲线。
                 let r = track.sampled_rect_at_progress(track.progress(now));
                 (r.x, r.top)
             }
             None => {
                 // 首次事务没有 caret track：用 old/new cursor rect 按事务 progress 插值。
                 let progress = tx.progress(now);
-                let eased = AnimatedSlice::ease_out_quad(progress);
+                let eased = AnimatedSlice::ease_out_cubic(progress);
                 let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
                 let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
                 (x, y)
@@ -97,10 +94,9 @@ pub(crate) fn sample_coordinated_cursor_rect_at(
         }
     };
 
-    // Issue #722 评论 5747719529: 所有操作类型（Insert/Delete/Reflow/CompositionUpdate/
-    // Commit/Cursor）统一使用 caret track 插值决定光标位置。不再按操作类型分支从文字
-    // glyph 切片反推。光标给吞了就是吞了，光标给吐出来就是吐出来。文字效果跟着光标
-    // 边界，不是光标去追文字动画。
+    // Issue #808: 所有操作类型统一使用 caret track 插值决定光标位置。
+    // 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"或"光标去追文字动画"
+    // 的旧语义。文字和光标是两条独立的动画，协同只表示同事务/同首帧/同 rebase。
     let _ = op;
     let (cx, cy) = sample_caret_position();
 
@@ -292,8 +288,9 @@ impl LinuxEditorAnimationCoordinator {
                 visual_line_id,
                 progress,
             }),
-            // Issue #727 评论 5757225958 问题5: 记录拥有此 caret frame 的事务 key，
-            // 只有同 key 的 CaretDriven unit 能消费。
+    // Issue #727 评论 5757225958 问题5 / Issue #808: 记录拥有此 caret frame 的事务 key。
+    // 协同只表示同事务/同首帧/同 rebase，不把两条时间线绑成一条。文字 unit 用文字
+    // 自己的 timeline，cursor track 用光标自己的 timeline，各算各的 progress。
             owner_key: Some(key),
         }
     }
@@ -355,18 +352,15 @@ impl LinuxEditorAnimationCoordinator {
         let op = tx.operation_kind;
         let frame_now = sample.frame_now;
 
-        // Issue #722 评论 5747719529: 光标是吞字/吐字的视觉边界。
-        // caret 位置只由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
-        // 插值决定，不再从文字 glyph 切片反推（删除 rightmost_x.max() / conceal_edge.min()）。
-        // - 有 cursor_visual_track 时：用 sampled_rect(frame_now) 插值（caret_driven_clip）。
+        // Issue #808: 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"旧语义。
+        // - 有 cursor_visual_track 时：用 sampled_rect(frame_now) 插值（光标自己的 ease_out_cubic）。
         // - 没有 track 时：无有效 caret motion，返回 None 走 CursorOnly 路径。
-        // 文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧 coordinated caret 的位置。
+        // 文字的 InsertReveal/DeleteConceal 裁切由文字自己的 timeline 驱动，不消费本帧 caret 位置。
         let sample_caret_driven_clip = || -> Option<(f64, f64)> {
             match tx.cursor_visual_track.as_ref() {
                 Some(track) => {
-                    // caret_driven_clip: 光标位置由 caret track 插值决定。
-                    // 用 sampled_rect_at_progress(progress(frame_now)) 与 sampled_rect(frame_now) 等价，
-                    // 显式表达"caret 与文字使用同一个 frame_now 和 from→to 几何轨迹"。
+                    // Issue #808: 光标位置由 caret track 自己的 timeline + ease_out_cubic 决定。
+                    // 文字与光标各自按自己的 duration/easing 推进，不共用同一条曲线。
                     let r = track.sampled_rect_at_progress(track.progress(frame_now));
                     Some((r.x, r.top))
                 }
@@ -379,9 +373,9 @@ impl LinuxEditorAnimationCoordinator {
             }
         };
 
-        // Issue #722 评论 5747719529: 所有操作类型统一使用 caret track 插值决定光标位置。
-        // 不再按操作类型分支从文字 glyph 切片反推。光标给吞了就是吞了，光标给吐出来
-        // 就是吐出来。文字效果跟着光标边界，不是光标去追文字动画。
+        // Issue #808: 所有操作类型统一使用 caret track 插值决定光标位置。
+        // 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"或"光标去追文字动画"
+        // 的旧语义。文字和光标是两条独立的动画，协同只表示同事务/同首帧/同 rebase。
         //
         // 唯一例外：前向 Delete（conceal_to_left_edge=false）逻辑光标本来不移动，
         // 固定在 new_cursor_rect，只让右侧文字向光标方向收掉。

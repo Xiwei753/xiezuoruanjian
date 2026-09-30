@@ -89,6 +89,20 @@ pub(crate) struct AnimatedSlice {
     pub byte_end: usize,
     pub shaping_identity: Option<ShapingIdentity>,
     pub conceal_to_left_edge: bool,
+    /// Issue #808: 吞吐字遮罩的光标锚点（文档坐标）。
+    ///
+    /// `insert_reveal` 保存旧 caret 位置（吐字起点），`delete_conceal` 保存
+    /// 新 caret 位置（吞字终点）。`compute_frame` 用这个锚点决定遮罩从哪一侧
+    /// 打开/收拢，而不是简单从 `to_document_rect.x` / `from_document_rect.x`
+    /// 开始——这样文字真正"从 caret 处吐出来 / 被 caret 吞进去"。
+    ///
+    /// 跨行时每个 slice 带自己的 caret 锚点（按 visual_line_id 分段），
+    /// 不能拿上一行的 x 去裁下一行。ReflowMove/ReflowCrossFade 不使用此字段（0.0）。
+    ///
+    /// "caret 只决定遮罩的空间锚点/方向"，不能决定文字动画进度——文字 progress
+    /// 仍来自文字自己的 timeline（`current_visible_fraction`）。
+    pub caret_anchor_x: f64,
+    pub caret_anchor_y: f64,
     /// Issue #722 评论 5748596920 问题2: 该 slice 所属视觉行的 id（来自 VisualLine.id）。
     ///
     /// 用于跨软换行裁切判断：caret 和 slice 在同一视觉行时才用 caret.x 做横向裁切；
@@ -128,28 +142,44 @@ pub(crate) struct AnimatedSlice {
 }
 
 impl AnimatedSlice {
-    /// Issue #690 评论 5675007226 步骤 2: 协同动画唯一 easing 函数。
+    /// Issue #690 评论 5675007226 步骤 2: 文字动画的 easing 函数。
     ///
-    /// Reveal、Conceal、Reflow 的逐帧进度，以及协调光标（跟随文字吞吐边界）共用它，
-    /// 保证文字和光标沿同一条 ease-out quadratic 曲线运动，不再出现"文字甩开光标"。
-    /// 普通 CursorOnly（方向键、Home/End、鼠标点选后的平滑移动）仍保留自己的平滑曲线，
-    /// 不调用本函数。
+    /// Issue #808: 此 easing 只属于文字 reveal/conceal/reflow 的逐帧进度。
+    /// 光标 track 不再共用这条曲线——光标用自己的 [`ease_out_cubic`]，
+    /// duration 不同、曲线也允许不同。文字和光标各自按自己的时间线推进，
+    /// 不再出现"文字甩开光标"或"两个动画共一套曲线"的旧耦合。
     pub(crate) fn ease_out_quad(p: f64) -> f64 {
         let p = p.clamp(0.0, 1.0);
         1.0 - (1.0 - p).powi(2)
     }
 
+    /// Issue #808: 光标 track 专用 easing 函数。
+    ///
+    /// 光标轨迹从文字的 `ease_out_quad` 解开：cursor track 用自己的
+    /// ease-out cubic 曲线，与文字 reveal/conceal 的 ease-out quadratic
+    /// 区分开。文字 progress 只来自文字自己的 timeline，光标 progress
+    /// 只来自 cursor track；duration 不同、曲线也允许不同。
+    /// 普通 CursorOnly（方向键、Home/End、鼠标点选后的平滑移动）也保留
+    /// 自己的平滑曲线，不调用本函数。
+    pub(crate) fn ease_out_cubic(p: f64) -> f64 {
+        let p = p.clamp(0.0, 1.0);
+        1.0 - (1.0 - p).powi(3)
+    }
+
     /// 创建 Insert 吐字切片。
     ///
     /// 文字始终在 `to_document_rect` 位置，动画进度控制可见纹理宽度从 0 → 100%。
-    /// `cursor_x`/`cursor_y` 保留在签名中以减少调用方改动，但不再用于动画起点。
+    /// Issue #808: `cursor_x`/`cursor_y` 是旧 caret 位置（吐字起点），保存为
+    /// `caret_anchor_x`/`caret_anchor_y`。`compute_frame` 用这个锚点决定遮罩
+    /// 从哪一侧打开——文字真正"从 caret 处吐出来"，而不是简单从文字左边展开。
+    /// 跨行时每个 slice 带自己的 caret 锚点，不能拿上一行的 x 去裁下一行。
     pub fn insert_reveal(
         _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
         to_document_rect: SourceRect,
-        _cursor_x: f64,
-        _cursor_y: f64,
+        cursor_x: f64,
+        cursor_y: f64,
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
@@ -169,6 +199,8 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
+            caret_anchor_x: cursor_x,
+            caret_anchor_y: cursor_y,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -183,14 +215,17 @@ impl AnimatedSlice {
     /// 文字始终在 `from_document_rect` 位置，动画进度控制可见纹理宽度从 100% → 0%。
     /// `conceal_to_left_edge` 决定收进方向：true 向左边缘收缩（保留左段，Backspace），
     /// false 向右边缘收缩（保留右段，Delete 键）。
-    /// `cursor_x`/`cursor_y` 保留在签名中以减少调用方改动，但不再用于动画终点。
+    /// Issue #808: `cursor_x`/`cursor_y` 是新 caret 位置（吞字终点），保存为
+    /// `caret_anchor_x`/`caret_anchor_y`。`compute_frame` 用这个锚点决定遮罩
+    /// 向哪一侧收拢——文字真正"被 caret 吞进去"。Backspace/Delete 两个方向按
+    /// 新旧 caret 与 glyph 的相对位置决定收拢侧。
     pub fn delete_conceal(
         _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
         from_document_rect: SourceRect,
-        _cursor_x: f64,
-        _cursor_y: f64,
+        cursor_x: f64,
+        cursor_y: f64,
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
@@ -211,6 +246,8 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge,
+            caret_anchor_x: cursor_x,
+            caret_anchor_y: cursor_y,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -262,6 +299,8 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
+            caret_anchor_x: 0.0,
+            caret_anchor_y: 0.0,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -313,6 +352,8 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
+            caret_anchor_x: 0.0,
+            caret_anchor_y: 0.0,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -357,6 +398,8 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
+            caret_anchor_x: 0.0,
+            caret_anchor_y: 0.0,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -401,36 +444,55 @@ impl AnimatedSlice {
     /// 纯插值计算：根据"最终可见比例" `visible`（0..1）计算当前帧的 destination rect
     /// 和 source rect。
     ///
-    /// Issue #722 评论 5747719529 核心语义 / Issue #785: 所有文字 unit（含协同模式
-    /// InsertReveal/DeleteConceal）统一用 `Timed` timing，拥有独立 started_at /
-    /// duration_ms / progress。`visible` 由 unit 自己的时间线算出
-    ///（`start_fraction + (target - start) * ease_out_quad(progress)`），不再由
-    /// caret frame 驱动。caret 与文字各自按自己的 duration 推进。
+    /// Issue #808 核心语义: 文字本体固定在 canonical 最终/旧位置，动画只改变
+    /// clip/mask。`visible` 由文字自己的时间线算出
+    ///（`start_fraction + (target - start) * ease_out_quad(progress)`），
+    /// 不再由 caret frame 驱动。caret 只决定遮罩的空间锚点/方向，不能决定文字
+    /// 动画进度。
     ///
-    /// InsertReveal/DeleteConceal 的裁切范围从文字自己的 `visible_fraction` 算
-    ///（即 start_fraction + (target-start)*ease(progress)），吞字方向、吐字方向
-    /// 几何语义保留不变，只改"谁驱动进度"。
+    /// InsertReveal: 遮罩从旧 caret 所在侧（`caret_anchor_x`）开始打开，字符像
+    /// 从 caret 后面吐出来。跨行时按 visual_line_id 分段，每个 slice 带自己的
+    /// caret 锚点，不能拿上一行的 x 去裁下一行。
+    /// DeleteConceal: 遮罩向最终 caret 所在侧收拢，字符像被 caret 吞进去。
+    /// Backspace/Delete 两个方向按 `conceal_to_left_edge` 决定收拢侧。
     pub fn compute_frame(&self, visible: f64) -> AnimatedSliceFrame {
         let visible = visible.clamp(0.0, 1.0);
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                // Issue #785: 文字 unit 用独立 Timed timing，visible 来自
-                // unit.current_visible_fraction(frame_now)，不再由 caret frame 驱动。
-                let caret_clip_boundary =
-                    self.to_document_rect.x + self.to_document_rect.w * visible;
-                let reveal_from_caret = (caret_clip_boundary - self.to_document_rect.x)
-                    .clamp(0.0, self.to_document_rect.w);
+                // Issue #808: 遮罩从旧 caret 所在侧开始打开。
+                // caret_anchor_x 是旧 caret 位置（吐字起点）。
+                // caret 在文字左半：从左向右展开（正常 Insert 场景，caret 在新字左边）。
+                // caret 在文字右半：从右向左展开。
+                let text_left = self.to_document_rect.x;
+                let text_right = self.to_document_rect.x + self.to_document_rect.w;
+                let text_w = self.to_document_rect.w;
                 let frame_h = self.to_document_rect.h;
+                let reveal_from_right = self.caret_anchor_x > text_left + text_w * 0.5;
+                let (frame_x, frame_w, src_x, src_w) = if !reveal_from_right {
+                    let w = text_w * visible;
+                    (
+                        text_left,
+                        w,
+                        self.source_rect.x,
+                        self.source_rect.w * visible,
+                    )
+                } else {
+                    let w = text_w * visible;
+                    let x = text_right - w;
+                    let sw = self.source_rect.w * visible;
+                    let sx = self.source_rect.x + self.source_rect.w - sw;
+                    (x, w, sx, sw)
+                };
                 let frame_source_rect = SourceRect {
-                    x: self.source_rect.x,
+                    x: src_x,
                     y: self.source_rect.y,
-                    w: self.source_rect.w * visible,
+                    w: src_w,
                     h: self.source_rect.h,
                 };
                 AnimatedSliceFrame {
-                    x: self.to_document_rect.x,
+                    x: frame_x,
                     y: self.to_document_rect.y,
-                    w: reveal_from_caret,
+                    w: frame_w,
                     h: frame_h,
                     opacity: 1.0,
                     source_rect: frame_source_rect,
@@ -438,8 +500,11 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                // Issue #785: 文字 unit 用独立 Timed timing，visible 来自
-                // unit.current_visible_fraction(frame_now)，不再由 caret frame 驱动。
+                // Issue #808: 遮罩向最终 caret 所在侧（caret_anchor_x）收拢。
+                // conceal_to_left_edge=true（Backspace）：new caret 在文字左侧，
+                //   遮罩向左收拢，右段先消失（保留左段）。
+                // conceal_to_left_edge=false（Delete 键）：new caret 在文字右侧，
+                //   遮罩向右收拢，左段先消失（保留右段）。
                 let frame_h = self.from_document_rect.h;
                 let (caret_clip_boundary, frame_x, src_x) = if self.conceal_to_left_edge {
                     let caret_b = self.from_document_rect.x + self.from_document_rect.w * visible;

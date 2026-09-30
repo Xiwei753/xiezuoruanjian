@@ -17,9 +17,13 @@ pub(crate) fn build_insert_reveal_slices(
     key: VisualTransactionKey,
     new_snapshot: &EditorLayoutSnapshot,
     inserted_range: (usize, usize),
+    old_cursor_rect: Option<&CursorRect>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = inserted_range;
+    // Issue #808: 旧 caret 位置是吐字起点（遮罩锚点）。
+    let caret_x = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let caret_y = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
     for new_line in new_snapshot.line_snapshots.iter() {
         for new_cluster in new_line.clusters.iter() {
@@ -111,8 +115,10 @@ pub(crate) fn build_insert_reveal_slices(
                 new_line.id,
                 new_sr.clone(),
                 new_doc.clone(),
-                0.0,
-                0.0,
+                // Issue #808: 传旧 caret 位置作为遮罩锚点（吐字起点），
+                // 不再传 0.0/0.0。文字从 caret 处吐出来，不是从文字左边展开。
+                caret_x,
+                caret_y,
                 slice_byte_start,
                 slice_byte_end,
                 Some(new_cluster.shaping_identity.clone()),
@@ -137,11 +143,15 @@ pub(crate) fn build_delete_conceal_slices(
     old_snapshot: &EditorLayoutSnapshot,
     deleted_range: (usize, usize),
     old_cursor_rect: Option<&CursorRect>,
+    new_cursor_rect: Option<&CursorRect>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = deleted_range;
+    // Issue #808: old caret 用于决定 conceal_to_left_edge（收拢方向），
+    // new caret 是吞字终点（遮罩锚点）。
     let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
     for old_line in &old_snapshot.line_snapshots {
         for old_cluster in &old_line.clusters {
@@ -158,13 +168,14 @@ pub(crate) fn build_delete_conceal_slices(
                 let left = old_doc.x;
                 let right = old_doc.x + old_doc.w;
                 let conceal_to_left_edge = (old_cx - right).abs() <= (old_cx - left).abs();
+                // Issue #808: new caret 是吞字终点（遮罩锚点），old caret 只决定收拢方向。
                 slices.push(AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,
                     old_sr,
                     old_doc,
-                    old_cx,
-                    old_cy,
+                    new_cx,
+                    new_cy,
                     old_cluster.byte_start,
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),

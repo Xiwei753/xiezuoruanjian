@@ -247,11 +247,12 @@ fn issue690_render_plan_cursor_sits_on_reveal_boundary_of_same_frame() {
         "本帧文字右边界应为 100 + 60*0.75，got {}",
         text_right_edge
     );
+    // Issue #808: 光标用 ease_out_cubic 独立推进，不再落在文字边界上。
+    // ease_out_cubic(0.5) = 0.875 → cursor.x = 100 + 60*0.875 = 152.5
     assert!(
-        (plan.cursor.x - text_right_edge).abs() < 1e-6,
-        "光标必须落在同一帧的文字吞吐边界上，got cursor={} text_right={}",
-        plan.cursor.x,
-        text_right_edge
+        (plan.cursor.x - 152.5).abs() < 1e-6,
+        "Issue #808: 光标用 ease_out_cubic 独立推进，应为 152.5，got {}",
+        plan.cursor.x
     );
     assert!(
         (plan.cursor.x - 1234.5).abs() > 1.0,
@@ -376,15 +377,20 @@ fn issue690_backspace_cursor_tracks_shrinking_conceal_edge() {
         0,
         0.0,
     );
+    // Issue #808: 光标用 ease_out_cubic 独立推进。
+    // ease_out_cubic(0.5) = 0.875 → cursor.x = 160 + (100-160)*0.875 = 107.5
     assert!(
-        (plan.cursor.x - 115.0).abs() < 1e-6,
-        "Backspace 光标跟着正在被吞掉的右边界（100 + 60*0.25），got {}",
+        (plan.cursor.x - 107.5).abs() < 1e-6,
+        "Issue #808: Backspace 光标用 ease_out_cubic 独立推进，应为 107.5，got {}",
         plan.cursor.x
     );
     let glyph = &plan.text_animation.glyphs[0];
+    // Issue #808: 光标与文字各有独立 easing，不再来自同一个采样点。
     assert!(
-        (plan.cursor.x - (glyph.x + glyph.w)).abs() < 1e-6,
-        "光标与文字帧来自同一个采样点"
+        (plan.cursor.x - (glyph.x + glyph.w)).abs() > 1e-6,
+        "Issue #808: 光标与文字各自独立 easing，不应相等（cursor={} glyph_right={}）",
+        plan.cursor.x,
+        glyph.x + glyph.w
     );
     assert!(
         plan.cursor.opacity < 1e-6,
@@ -496,16 +502,16 @@ fn issue690_cursor_without_boundary_glyph_uses_reflow_easing() {
         0,
         0.0,
     );
-    // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
-    // → x = 100 + 100*0.75 = 175
+    // Issue #808: caret track 用 ease_out_cubic。
+    // progress 0.5 → ease_out_cubic = 0.875 → x = 100 + 100*0.875 = 187.5
     assert!(
-        (plan.cursor.x - 175.0).abs() < 1e-6,
-        "无边界 glyph 时用 caret track 的 progress 插值，got {}",
+        (plan.cursor.x - 187.5).abs() < 1e-6,
+        "Issue #808: 无边界 glyph 时用 caret track 的 ease_out_cubic 插值，got {}",
         plan.cursor.x
     );
     assert!(
-        (plan.cursor.y - 30.0).abs() < 1e-6,
-        "y 同一条曲线（0 + 40*0.75 = 30），got {}",
+        (plan.cursor.y - 35.0).abs() < 1e-6,
+        "Issue #808: y 同一条曲线（0 + 40*0.875 = 35），got {}",
         plan.cursor.y
     );
     assert!(
@@ -546,15 +552,15 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
         50,
     ));
 
-    // 前置断言：旧事务当前屏幕光标 = 190
+    // 前置断言：旧事务当前屏幕光标 = 205（Issue #808: ease_out_cubic(0.5) = 0.875）
     let mut old_sample = AnimationFrameSample::new(now);
     old_sample.set_progress(old_key, 0.5);
     let (cx_old, _, _) = coord
         .compute_coordinated_cursor_position(&old_sample, 0)
         .expect("旧事务应能算出协同光标");
     assert!(
-        (cx_old - 190.0).abs() < 1e-6,
-        "前置：旧事务屏幕光标应在 190（reflow progress 0.5 → eased 0.75），got {}",
+        (cx_old - 205.0).abs() < 1e-6,
+        "前置：旧事务屏幕光标应在 205（reflow progress 0.5 → ease_out_cubic 0.875），got {}",
         cx_old
     );
 
@@ -573,8 +579,8 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
     );
     let sampled_cursor = sampled_cursor.expect("rebase 交棒应采样到旧事务屏幕光标");
     assert!(
-        (sampled_cursor.sampled.x - 190.0).abs() < 1e-6,
-        "sampled_cursor_rect 应为旧事务屏幕光标 190，got {}",
+        (sampled_cursor.sampled.x - 205.0).abs() < 1e-6,
+        "Issue #808: sampled_cursor 应为旧事务屏幕光标 205（ease_out_cubic），got {}",
         sampled_cursor.sampled.x
     );
 
@@ -649,11 +655,11 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
         text_x
     );
 
-    // 光标 reflow：修复后从 cursor_visual_from.x = 190 起步（屏幕光标不跳）。
+    // 光标 reflow：Issue #808 后从 cursor_visual_from.x = 205 起步（屏幕光标不跳）。
     let cx_new = plan.cursor.x;
     assert!(
-        (cx_new - 190.0).abs() < 1e-6,
-        "Issue #690 评论 5680276931: rebase 交棒后 reflow 光标应从上一帧屏幕光标 190 起步，\
+        (cx_new - 205.0).abs() < 1e-6,
+        "Issue #690/#808: rebase 交棒后 reflow 光标应从上一帧屏幕光标 205 起步，\
              修复后 cursor_visual_from 同步 rebase，第一帧光标不跳（got cursor.x={}）",
         cx_new
     );
@@ -704,8 +710,8 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
     coord.prepared_queue.enqueue(tx_b);
 
     // 前置断言：compute_coordinated_cursor_position 已修复用 visual track，
-    // 事务 B 当前屏幕光标 = 62.5。
-    let expected_screen_cursor = 190.0 + (20.0 - 190.0) * AnimatedSlice::ease_out_quad(0.5);
+    // Issue #808: 事务 B 当前屏幕光标用 ease_out_cubic。
+    let expected_screen_cursor = 190.0 + (20.0 - 190.0) * AnimatedSlice::ease_out_cubic(0.5);
     let mut sample_b = AnimationFrameSample::new(now);
     sample_b.set_progress(key_b, 0.5);
     let (cx_b, _, _) = coord
@@ -726,7 +732,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
         coord.take_rebase_frames(&[key_b], "rebased_by_second_input", now, None, "abc", 0);
     let sampled_cursor = sampled_cursor.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
 
-    let buggy_value = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+    let buggy_value = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_cubic(0.5);
     assert!(
         (sampled_cursor.sampled.x - expected_screen_cursor).abs() < 1e-6,
         "Issue #690 评论 5681206040 问题1: 连续交棒第二次 sampled_cursor 应为事务 B \
@@ -801,7 +807,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
 
     // ── 旧事务 A：caret 100→220，reflow unit 播到中间 ──
     // reflow unit: from_x=100, to_x=220, duration=100ms, 已播 50ms → progress 0.5
-    // ease_out_quad(0.5) = 0.75 → 屏幕光标 = 100 + (220-100)*0.75 = 190
+    // Issue #808: ease_out_cubic(0.5) = 0.875 → 屏幕光标 = 100 + (220-100)*0.875 = 205
     let key_a = VisualTransactionKey::new(1, 1);
     let mut tx_a = rendering_tx(
         key_a,
@@ -828,8 +834,8 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     });
     coord.prepared_queue.enqueue(tx_a);
 
-    // 验证事务 A 当前屏幕光标 = 190
-    let expected_a = 100.0 + (220.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+    // 验证事务 A 当前屏幕光标 = 205
+    let expected_a = 100.0 + (220.0 - 100.0) * AnimatedSlice::ease_out_cubic(0.5);
     let mut sample_a = AnimationFrameSample::new(now);
     sample_a.set_progress(key_a, 0.5);
     let (cx_a, _, _) = coord
@@ -854,7 +860,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     );
 
     // ── 新事务 B：用 handoff_a 构造 cursor_visual_track ──
-    // from = 190（sampled），to = 20（new_cursor_rect），duration = handoff_a.remaining_duration_ms
+    // Issue #808: from = expected_a（sampled cursor，用 ease_out_cubic），to = 20（new_cursor_rect）
     let key_b = VisualTransactionKey::new(2, 2);
     let mut new_units_b = wrap_units(vec![reflow_slice(0, 3, 190.0, 20.0)]);
     let offset_map = OffsetMap::build("abc", "abc");
@@ -883,13 +889,12 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     });
     coord.prepared_queue.enqueue(tx_b);
 
-    // ── 事务 B 播一段：50ms 后 ──
-    // caret track: from=190, to=20, started_at=now, duration=50ms（handoff remaining）
-    // progress = 50/50 = 1.0 → eased = 1.0 → caret = 20
-    // 但我们要测"再播一段"不是"播完"，所以用 25ms → progress = 25/50 = 0.5
-    // ease_out_quad(0.5) = 0.75 → 屏幕光标 = 190 + (20-190)*0.75 = 62.5
+    // ── 事务 B 播一段：25ms 后 ──
+    // Issue #808: caret track 用 ease_out_cubic。
+    // from=expected_a, to=20, progress = 25/50 = 0.5
+    // ease_out_cubic(0.5) = 0.875 → 屏幕光标 = expected_a + (20-expected_a)*0.875
     let now_after_b = now + Duration::from_millis(25);
-    let expected_b = 190.0 + (20.0 - 190.0) * AnimatedSlice::ease_out_quad(0.5);
+    let expected_b = expected_a + (20.0 - expected_a) * AnimatedSlice::ease_out_cubic(0.5);
     let mut sample_b = AnimationFrameSample::new(now_after_b);
     sample_b.set_progress(key_b, 0.5);
     let (cx_b, _, _) = coord
@@ -918,7 +923,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     );
 
     // 额外验证：第二次 sampled caret 不等于按逻辑 old/new caret 重算的值
-    let logical_recalc = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+    let logical_recalc = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_cubic(0.5);
     assert!(
         (handoff_b.sampled.x - logical_recalc).abs() > 1e-6,
         "第二次 sampled caret 不应等于按逻辑 old/new caret 重算的值 {}",
@@ -934,9 +939,9 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
 
     // 事务 D：有两个不同 started_at/duration_ms 的 reflow unit，有 cursor_visual_track。
     // caret track: from=0, to=200, started_at=now-40ms, duration=200ms
-    // 已播 40ms → progress = 40/200 = 0.2 → ease_out_quad(0.2) = 0.36
-    // 屏幕光标 = 0 + (200-0)*0.36 = 72
-    let expected_d = 0.0 + (200.0 - 0.0) * AnimatedSlice::ease_out_quad(0.2);
+    // Issue #808: 已播 40ms → progress = 40/200 = 0.2 → ease_out_cubic(0.2) = 0.488
+    // 屏幕光标 = 0 + (200-0)*0.488 = 97.6
+    let expected_d = 0.0 + (200.0 - 0.0) * AnimatedSlice::ease_out_cubic(0.2);
 
     // unit1: duration=100ms, 已播 100ms → progress=1.0（已播完）
     // unit2: duration=200ms, 已播 40ms → progress=0.2（仍在播）

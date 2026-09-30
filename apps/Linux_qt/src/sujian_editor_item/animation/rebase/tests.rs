@@ -1623,10 +1623,10 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
 
     // caret handoff 应来自 tx2（transaction_id=200 更大）
     // tx2 的 caret track: from=200, to=260, started_at=now-50ms, duration=100ms
-    // progress = 50/100 = 0.5 → eased = 0.75
-    // sampled.x = 200 + (260-200)*0.75 = 200 + 45 = 245
+    // Issue #808: progress = 50/100 = 0.5 → ease_out_cubic = 0.875
+    // sampled.x = 200 + (260-200)*0.875 = 200 + 52.5 = 252.5
     let handoff = caret_handoff.expect("应采样到 caret handoff");
-    let expected_tx2_cursor = 200.0 + (260.0 - 200.0) * AnimatedSlice::ease_out_quad(0.5);
+    let expected_tx2_cursor = 200.0 + (260.0 - 200.0) * AnimatedSlice::ease_out_cubic(0.5);
     assert!(
         (handoff.sampled.x - expected_tx2_cursor).abs() < 1e-6,
         "Issue #710 评论 5733833897: caret handoff 应选 tx2（transaction_id=200 更大），\
@@ -1636,7 +1636,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
     );
 
     // 额外验证：不等于 tx1 的屏幕光标
-    let expected_tx1_cursor = 100.0 + (160.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+    let expected_tx1_cursor = 100.0 + (160.0 - 100.0) * AnimatedSlice::ease_out_cubic(0.5);
     assert!(
         (handoff.sampled.x - expected_tx1_cursor).abs() > 1e-6,
         "caret handoff 不应选 tx1（transaction_id=100 更小），tx1 屏幕光标为 {}",

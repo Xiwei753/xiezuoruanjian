@@ -107,10 +107,10 @@ pub(crate) struct VisualEditSpec {
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
     /// Issue #756 评论 5821042551: 文字 unit（InsertReveal/DeleteConceal/Reflow）的时长。
-    /// 非协同时 = typing_animation_duration_ms；协同时 = typing_animation_duration_ms（共享 timeline）。
+    /// Issue #808: 文字始终拥有独立 timeline，协同时也不再共享。
     pub(crate) text_duration_ms: u64,
     /// Issue #756 评论 5821042551: cursor visual track 的时长。
-    /// 非协同时 = cursor_animation_duration_ms；协同时 = typing_animation_duration_ms（共享 timeline）。
+    /// Issue #808: 光标始终拥有独立 timeline，协同时也不再共享。
     pub(crate) caret_duration_ms: u64,
     /// Issue #756: 文字动画开关（ReflowMove/ReflowCrossFade + InsertReveal/DeleteConceal）。
     /// coordinated=true 或 typing_animation_enabled=true 时为 true。
@@ -118,10 +118,12 @@ pub(crate) struct VisualEditSpec {
     /// Issue #756: 光标动画开关（caret motion track）。
     /// coordinated=true 或 smooth_cursor_enabled=true 时为 true。
     pub(crate) caret_animation_enabled: bool,
-    /// Issue #756: 协同动画显式模式。决定吞吐字（InsertReveal/DeleteConceal）是否由
-    /// caret 驱动。coordinated=true 时吞吐字走 caret-driven（消费
-    /// CoordinatedMotionFrame.caret），coordinated=false 时吞吐字用 typing timeline
-    /// 自己推进（不消费 caret frame）。
+    /// Issue #756: 协同动画显式模式。决定吞吐字（InsertReveal/DeleteConceal）的遮罩
+    /// 锚点是否取自 caret 位置。Issue #808 后协同不再把文字与光标绑死：
+    /// - coordinated=true：吞吐字遮罩从 caret 位置展开/收拢（视觉上从光标处吐出/被光标吞进），
+    ///   但文字动画按自己的 timeline + easing 推进，不消费 caret frame。
+    /// - coordinated=false：吞吐字用 typing timeline 自己推进，遮罩锚点取默认值。
+    /// 三种语义彻底分开：文字动画、光标动画、协同动画（遮罩锚点选择）。
     pub(crate) coordinated_animation_enabled: bool,
     pub(crate) composition_commit_crossfade: Option<CompositionCommitCrossfadeSpec>,
 }
@@ -137,18 +139,20 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     // 1a. InsertReveal / DeleteConceal（文字动画）
     //
     // Issue #756: 吞吐字是否存在由 text_animation_enabled 决定（coordinated || typing）。
-    // 吞吐字是否由 caret 驱动由 coordinated_animation_enabled 决定：
-    // - coordinated=true：吞吐字走 caret-driven（CaretDriven timing，消费
-    //   CoordinatedMotionFrame.caret），文字与光标绑死。
-    // - coordinated=false：吞吐字用 typing timeline 自己推进（Timed timing，
-    //   compute_frame(visible)），不消费 caret frame。这样 coordinated=false +
-    //   typing=true + smooth=false 时仍有吐字（Issue #756 问题 2）。
+    // Issue #808: 吞吐字始终用 Timed timing（独立 timeline + 自己的 easing）。
+    // - coordinated=true：遮罩锚点取 caret 位置（视觉上从光标处吐出/被光标吞进），
+    //   但文字 progress 不消费 caret frame，文字与光标不再绑死。
+    // - coordinated=false：遮罩锚点取默认值，文字用 typing timeline 自己推进。
+    // 三种语义彻底分开：文字动画（timeline+easing）、光标动画（timeline+easing）、
+    // 协同动画（遮罩锚点选择）。
     if spec.text_animation_enabled {
         for &(i_start, i_end) in &spec.inserted_ranges {
             slices.extend(build_insert_reveal_slices(
                 spec.key,
                 &spec.new_snapshot,
                 (i_start, i_end),
+                // Issue #808: 传旧 caret 作为吐字遮罩锚点。
+                spec.old_cursor_rect.as_ref(),
             ));
         }
         for &(d_start, d_end) in &spec.deleted_ranges {
@@ -157,6 +161,8 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                 &spec.old_snapshot,
                 (d_start, d_end),
                 spec.old_cursor_rect.as_ref(),
+                // Issue #808: 传新 caret 作为吞字遮罩锚点。
+                spec.new_cursor_rect.as_ref(),
             ));
         }
     }
@@ -530,6 +536,10 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         byte_end,
         shaping_identity: head_shaping,
         conceal_to_left_edge: a.conceal_to_left_edge,
+        // Issue #808: 合并后的 slice 取首个 slice 的 caret 锚点。
+        // 同一行的相邻 slice 共享同一 caret 锚点（行内插入/删除），取首个即可。
+        caret_anchor_x: a.caret_anchor_x,
+        caret_anchor_y: a.caret_anchor_y,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
         static_hidden_document_rects: a

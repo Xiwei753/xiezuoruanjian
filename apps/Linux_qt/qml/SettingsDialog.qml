@@ -360,8 +360,8 @@ Dialog {
                     onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
                     ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }
                 }
-                // Issue #785: 两个独立 duration 滑块始终可见（onClosed 分别写）。
-                // Issue #756: 协同开启时隐藏"打字动画/平滑光标"两个独立开关，duration 文案改成协同语义。
+                // Issue #808: 协同开启时整组隐藏（开关 + duration 滑块一起消失）。
+                // Issue #785: 两个独立 duration 各自保存（onClosed 分别写），不互相覆盖。
                 SettingsRow {
                     visible: !coordinatedAnim.checked
                     dt: root.dt
@@ -375,8 +375,9 @@ Dialog {
                     id: typingAnimDuration
                     Layout.fillWidth: true
                     dt: root.dt
-                    // 协同开启时文案为"文字动画持续时间"，关闭时恢复"打字动画持续时间"。
-                    label: coordinatedAnim.checked ? qsTr("文字动画持续时间") : qsTr("打字动画持续时间")
+                    // Issue #808: 协同开启时整组隐藏，duration 不再改名兜底。
+                    visible: !coordinatedAnim.checked
+                    label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
                     // range from Core settings_presentation: min=30, max=1000, step=10
                     from: 30
@@ -398,8 +399,9 @@ Dialog {
                     id: smoothCursorDuration
                     Layout.fillWidth: true
                     dt: root.dt
-                    // 协同开启时文案为"光标动画持续时间"，关闭时恢复"平滑光标持续时间"。
-                    label: coordinatedAnim.checked ? qsTr("光标动画持续时间") : qsTr("平滑光标持续时间")
+                    // Issue #808: 协同开启时整组隐藏，duration 不再改名兜底。
+                    visible: !coordinatedAnim.checked
+                    label: qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
                     // range from Core settings_presentation: min=30, max=1000, step=10
                     from: 30

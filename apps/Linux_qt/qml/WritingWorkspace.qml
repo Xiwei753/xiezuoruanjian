@@ -724,8 +724,6 @@ Rectangle {
                     }
                 }
                 onFormatOneClick: editorController.formatText()
-                onLinkToStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
-                onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
                 onOpenSettings: root.openSettings()
                 onRequestSync: root.requestSync()
                 onRequestSearch: root.requestSearch()

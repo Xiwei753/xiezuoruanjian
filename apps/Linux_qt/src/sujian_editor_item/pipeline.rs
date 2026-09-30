@@ -1537,14 +1537,16 @@ impl LinuxEditorPipeline {
             // 新 canonical basis revision，直接传给 coordinator。
             //
             // Issue #738 评论 5796693007 问题1: 正文编辑路径必须先采 rebase frame/handoff
-            // 再 retire CaretDriven。prepare_rebase_handoff_for_edit 在旧事务还活着时
+            // 再 retire 旧事务。prepare_rebase_handoff_for_edit 在旧事务还活着时
             // 采样 rebase frame + caret handoff（采到的是真实当前帧，不是终态），
             // 取消真正被覆盖的冲突事务。reconcile 之后再 create 新事务。
             // 顺序：prepare → reconcile → create。
-            // - prepare 采到的是旧事务真实当前帧（CaretDriven 还没被推到终态）。
-            // - reconcile retire 旧事务 CaretDriven + rebind Timed Reflow。rebase frame 已采好，
+            // - prepare 采到的是旧事务真实当前帧（还没被推到终态）。
+            // - reconcile retire 旧事务 + rebind Timed Reflow。rebase frame 已采好，
             //   此时 retire 不影响已采的 frame。
             // - create 用保存的 handoff 创建新事务。
+            // Issue #808: 所有 unit 统一 Timed，文字与光标各自独立 timeline + easing，
+            // 协同只控制遮罩锚点，不再有 CaretDriven timing 变体。
             // 用一个统一的 edit_now，保证 prepare 和 reconcile 用同一时刻采样。
             let edit_now = Instant::now();
             let prepared_handoff = self.animation_coordinator.prepare_rebase_handoff_for_edit(

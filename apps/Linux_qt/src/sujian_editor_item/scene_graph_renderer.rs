@@ -204,7 +204,7 @@ fn render_text_animation_layer(
 
     for glyph in &plan.text_animation.glyphs {
         // Issue #736 评论 5778543593 修改1: 缺该 snapshot_id 的纹理时，这个
-        // CaretDriven frame 不进入 glyph_data。缺纹理直接 continue 跳过整个
+        // 文字动画 frame 不进入 glyph_data。缺纹理直接 continue 跳过整个
         // glyph，不再塞 1×1 空图把"DeleteConceal 已生成但纹理没拿到"伪装成
         // "动画层正常执行只是什么也看不到"。有纹理时才 push 四个 vec，这样
         // 四个 vec 长度始终一致，glyph_count == glyph_images.len() 自然通过。

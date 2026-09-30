@@ -58,11 +58,12 @@ impl LinuxEditorAnimationCoordinator {
         // - `has_active_for_blink`：不看 epoch，只要文字动画还在播就 suppress blink。
         // - `has_active_for_coordinated`：看 epoch，只有 epoch 一致的事务才驱动
         //   coordinated caret。
-        // Issue #735 评论 5773604666 问题3: epoch 不一致时 CaretDriven units 已在
+        // Issue #735 评论 5773604666 问题3: epoch 不一致时文字 units 已在
         //   `find_cursor_transaction_for_target` / `build_text_animation_plan_with_sample`
         //   中收口（start_fraction 设为 target_fraction，caret_motion_retired = true），
         //   不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
         //   reflow track 继续。纯光标移动可走 Tween。
+        //   Issue #808: 所有 unit 都是 Timed，文字与光标各自独立 timeline + easing。
         let has_active_for_coordinated = self
             .active_text_transaction_key_with_epoch(cursor_owner_epoch, layout_basis_revision)
             .is_some();
@@ -238,7 +239,7 @@ impl LinuxEditorAnimationCoordinator {
                 // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
                 // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
                 // Issue #727 约束 2: 通过 VisualUnitTiming::mark_started 统一处理。
-                // CaretDriven unit 无独立时间线，mark_started 是 no-op。
+                // Issue #808: 所有 unit 都是 Timed，各自拥有独立时间线。
                 for unit in &mut tx.units {
                     unit.timing.mark_started(frame_now);
                 }
@@ -313,12 +314,10 @@ impl LinuxEditorAnimationCoordinator {
         // 里的事务。既然这一帧已经不画 overlay（build_text_animation_plan_with_sample
         // 完成帧 continue 跳过 glyph 生成），就必须同帧释放 static ownership，让 canonical
         // 最终正文立即显示，避免"glyph 无、clip 有"的一帧文字消失/闪烁。
-        // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集 CaretDriven units
+        // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集文字 unit
         // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
-        // ownership），避免空洞。
-        // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集 CaretDriven units
-        // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
-        // ownership），避免空洞。
+        // ownership），避免空洞。Issue #808: 所有 unit 都是 Timed，不再有
+        // CaretDriven 分支，文字 clip 收集不受 caret frame 影响。
         let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> =
             Vec::new();
         for tx in self.prepared_queue.active_transactions() {
@@ -333,9 +332,9 @@ impl LinuxEditorAnimationCoordinator {
             {
                 let has_caret_frame = coordinated_motion_frame.caret.is_some();
                 // Issue #727 评论 5760020833 问题1: 还要判断本事务是否是 caret motion 的
-                // owner。当旧 CaretDriven 事务 owner 已丢失（epoch 切换/新事务抢占），
+                // owner。当旧事务 owner 已丢失（epoch 切换/新事务抢占），
                 // 即使全局有新事务的 caret frame，旧事务的 static_hidden_document_rects
-                // 也不能继续裁 canonical 正文——非 owner 的 CaretDriven 已 Snap 到 canonical，
+                // 也不能继续裁 canonical 正文——非 owner 的事务已 Snap 到 canonical，
                 // 再藏 canonical 会挖出文字空洞。
                 let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
                 // Issue #785: 所有文字 unit 都是 Timed，不再因 caret-driven 跳过 clip_rects 收集。
@@ -375,7 +374,7 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
         // Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时
         // compute_coordinated_cursor_position 返回 None，事务立刻失去 caret motion
-        // ownership，CaretDriven units 已落到 canonical final state（不再继续播放）。
+        // ownership，文字 units 已落到 canonical final state（不再继续播放）。
         // 改走 CursorOnly/点击位置。
         if let Some((cx, cy_doc, ch)) =
             self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
@@ -520,16 +519,15 @@ impl LinuxEditorAnimationCoordinator {
             // 立刻视为完成，避免旧事务回跳。
             let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
 
-            // caret_driven_active = owns_caret && caret.is_some()。false 时整笔
-            // CaretDriven motion 直接 canonical 收口。
+            // caret_driven_active = owns_caret && caret.is_some()。Issue #808: 所有 unit
+            // 都是 Timed，has_caret_driven_units 始终为 false，此分支不再执行。
             let caret_driven_active = owns_caret && coordinated_motion_frame.caret.is_some();
 
             // InsertReveal/DeleteConceal 完成条件跟视觉边界一致。
-            // Issue #756: 按 timing 判断是否 caret-driven。coordinated=false 的吞吐字
-            // 是 Timed（typing-driven），不参与 caret motion retire 逻辑。
+            // Issue #785/#808: 所有 unit 都是 Timed，is_caret_driven() 始终返回 false。
             let has_caret_driven_units = tx.units.iter().any(|u| u.timing.is_caret_driven());
             // has_caret_driven_units && !caret_driven_active 时退休 caret motion，
-            // 收口 CaretDriven units 到终态。之后永远跳过此事务不再给 owner_key。
+            // 收口 units 到终态。Issue #808 后此条件恒为 false，保留用于历史诊断。
             if has_caret_driven_units && !caret_driven_active {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
@@ -548,9 +546,10 @@ impl LinuxEditorAnimationCoordinator {
             } else {
                 tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)
             };
-            // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成，
-            // 不再仅限于 CaretDriven 事务。非协同 typing+smooth 没有 CaretDriven unit，
-            // 但 smooth cursor duration 可能比 typing 更长，caret track 不能被提前丢弃。
+            // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成。
+            // Issue #808: 文字与光标各自独立 timeline，非协同 typing+smooth 也有
+            // cursor_visual_track，smooth cursor duration 可能比 typing 更长，
+            // caret track 不能被提前丢弃。
             let caret_track_complete =
                 tx.cursor_visual_track.is_none() || tx.caret_motion_retired || caret_track_done;
 

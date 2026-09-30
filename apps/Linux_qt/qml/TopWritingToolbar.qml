@@ -3,7 +3,7 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：字号/行距/首行缩进控制、一键排版、星图链接入口
+// 职责：字号/行距/首行缩进控制、一键排版
 // 约束：
 //   - 只发出信号，不直接修改 backend
 //   - 所有设置变更通过 signal 传递给 EditorController
@@ -30,8 +30,6 @@ Rectangle {
     signal lineSpacingChanged(real spacing)
     signal firstLineIndentToggled()
     signal formatOneClick()
-    signal linkToStarMap()
-    signal openStats()
     signal openSettings()
     // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
     signal requestSync()
@@ -253,70 +251,6 @@ Rectangle {
         }
 
         Item { Layout.fillWidth: true }
-
-        // Star map button
-        Rectangle {
-            visible: true
-            width: starRow.implicitWidth + dt.sp12
-            height: 32
-            radius: dt.radiusPill
-            color: starHover.containsMouse ? dt.surfaceVariant : "transparent"
-            border.color: dt.border
-            border.width: 1
-
-            Row {
-                id: starRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: qsTr("星图")
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-            }
-
-            MouseArea {
-                id: starHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.linkToStarMap()
-            }
-        }
-
-        // Stats button
-        Rectangle {
-            visible: true
-            width: statsRow.implicitWidth + dt.sp12
-            height: 32
-            radius: dt.radiusPill
-            color: statsHover.containsMouse ? dt.surfaceVariant : "transparent"
-            border.color: dt.border
-            border.width: 1
-
-            Row {
-                id: statsRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: qsTr("统计")
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-            }
-
-            MouseArea {
-                id: statsHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.openStats()
-            }
-        }
 
         // Save status
         AppText {

@@ -4,6 +4,9 @@ use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind
 
 /// 统一事务时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress。
 ///
+/// Issue #808: 文字动画继续单独算 `current_visible_fraction()`，不要恢复 CaretDriven，
+/// 也不要从 cursor track progress 推文字 visible fraction。文字自己的 easing
+///（`ease_out_quad`）留在文字 timeline 里；光标 track 用自己的 easing（`ease_out_cubic`）。
 /// Choreographer 和 Qt update 只负责请求帧，不得给光标维护独立开始时间。
 /// Paused 状态必须返回暂停瞬间的 progress，不能返回 0。
 /// resume 后从暂停进度继续。
@@ -86,16 +89,19 @@ impl TransactionTimeline {
     }
 }
 
-/// Issue #727 评论 5754041813 约束 2: 视觉单元的计时语义拆分。
+/// Issue #727 评论 5754041813 约束 2 / Issue #808: 视觉单元的计时语义。
 ///
-/// Issue #785: 删除 `CaretDriven` 变体。所有文字 unit（含协同模式
+/// Issue #808: 文字动画继续单独算 `current_visible_fraction()`，不要恢复 CaretDriven，
+/// 也不要从 cursor track progress 推文字 visible fraction。文字自己的 easing
+///（`ease_out_quad`）留在文字 timeline 里。所有文字 unit（含协同模式
 /// InsertReveal/DeleteConceal）统一用 `Timed` timing，拥有独立
 /// started_at / duration_ms / progress。协同只表示同事务/同首帧/同 rebase，
-/// 不表示同速度——文字与 caret 各自按自己的 duration 推进。
+/// 不表示同速度/同曲线——文字与 caret 各自按自己的 duration/easing 推进。
 #[derive(Clone, Debug)]
 pub(crate) enum VisualUnitTiming {
     /// 所有视觉单元（InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）
-    /// 统一使用独立时间线。Issue #785 后不再有 CaretDriven 变体。
+    /// 统一使用独立时间线。Issue #808: 文字用 `ease_out_quad`，光标 track 用 `ease_out_cubic`，
+    /// 两条时间线完全独立。协同不再切 CaretDriven，不再共用同一条 easing。
     Timed {
         started_at: Option<Instant>,
         duration_ms: u64,

@@ -49,10 +49,14 @@ pub(crate) enum TextVisualOperationKind {
 
 /// Issue #690 评论 5675007226 步骤 3: 单个视觉单元，拥有自己的动画生命期。
 ///
-/// Issue #722 评论 5747719529 核心语义：光标本身就是吞字/吐字的视觉边界。
-/// 文字不能再维护一套会和 caret 分叉的"自己什么时候完全出现/完全消失"的位置/
-/// 可见度进度。真正决定当前 reveal/conceal 截止位置的是这一帧的 caret geometry
-/// （caret_geometry_determines_clip / clip_from_coordinated_caret）。
+/// Issue #808 核心语义：文字动画和光标动画是两条独立的动画。
+/// - 文字动画：只负责 InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade，
+///   用文字自己的 timeline（`ease_out_quad`）和 duration。
+/// - 光标动画：只负责 cursor visual track，用光标自己的 timeline（`ease_out_cubic`）
+///   和 duration。
+/// - 协同动画：同时创建文字视觉单元和 cursor track，但两者不是同一个动画，
+///   也不能互相拿 progress。`coordinated=true` 只强制这笔编辑同时拥有文字和光标
+///   两条轨迹，文字 progress 只来自文字 timeline，光标 progress 只来自 cursor track。
 ///
 /// Issue #727 评论 5754041813 约束 2 / Issue #785: 计时语义统一为 `VisualUnitTiming::Timed`。
 /// - 所有 kind（含 InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）
@@ -79,11 +83,12 @@ impl PreparedVisualUnit {
         Self { slice, timing }
     }
 
-    /// Issue #756 / Issue #785: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
+    /// Issue #756 / Issue #785 / Issue #808: 按 `coordinated` 决定 InsertReveal/DeleteConceal 的计时语义。
     ///
-    /// Issue #785 后：`coordinated` 不再切到 CaretDriven。始终调用
-    /// `default_for_kind_with_coordinated`（后者也不再分叉）。文字 unit 始终
-    /// 保存自己的 timing（Timed），与 caret 各自独立推进。
+    /// Issue #808: `coordinated` 不再切到 CaretDriven，也不再让文字与光标共用同一条
+    /// easing。始终调用 `default_for_kind_with_coordinated`（后者也不分叉）。文字 unit
+    /// 始终保存自己的 timing（Timed + `ease_out_quad`），与 caret（`ease_out_cubic`）
+    /// 各自独立推进。协同只表示同事务/同首帧/同 rebase，不表示同速度/同曲线。
     pub fn wrap_with_coordinated(
         slice: AnimatedSlice,
         duration_ms: u64,
@@ -178,22 +183,21 @@ pub(crate) struct RebaseFrame {
     pub remaining_duration_ms: u64,
 }
 
-/// Issue #690 评论 5681206040: coordinated caret 的正式视觉 track。
+/// Issue #690 评论 5681206040 / Issue #808: coordinated caret 的正式视觉 track。
 ///
-/// 之前 `cursor_visual_from` / `cursor_visual_to` 只是 `CursorRect` 端点，没有自己的
-/// 时间状态（`started_at` / `duration_ms`），所以 `compute_coordinated_cursor_position`
-/// 不得不借第一个 reflow unit 的 progress，`sample_coordinated_cursor_rect_at` 干脆
-/// 不读这两个字段、固定用 `old_cursor_rect` / `new_cursor_rect`。连续交棒时第二次
-/// rebase 采样到的光标回到逻辑 old caret 起算，与旧事务当前屏幕光标不一致。
+/// Issue #808: 光标轨迹从文字的 `ease_out_quad` 解开。cursor track 用光标自己的
+/// `ease_out_cubic` easing；文字 reveal/conceal 用文字自己的 `ease_out_quad`。
+/// duration 不同、曲线也允许不同。文字 progress 只来自文字自己的 timeline，
+/// 光标 progress 只来自 cursor track。
 ///
-/// 收成为一个完整 caret track 后，两处问题一起消失：
+/// 收成为一个完整 caret track 后：
 /// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
 ///   `started_at = now`，`duration_ms = 事务时长`。
 /// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
 ///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，`started_at = now`，
 ///   `duration_ms` 用旧 track 剩余时长，不再借任何文字 unit 的 progress。
-/// - InsertReveal / Backspace 有明确文字边界时，最终屏幕 x/y 仍直接取文字边界；
-///   Enter、删除换行、软换行、纯 reflow 等没有明确边界时，直接 sample 这个 caret track。
+/// - `sample_coordinated_cursor_rect_at` 只采样光标，不再保留"文字效果跟着光标边界"
+///   这种旧注释/旧语义。
 /// - 下一次 rebase 再从同一个 caret track 采样，不能回头使用逻辑 `old_cursor_rect`。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedCursorVisualTrack {
@@ -264,7 +268,8 @@ impl PreparedCursorVisualTrack {
                 if f_id == t_id {
                     return Some(f_id);
                 }
-                let eased = AnimatedSlice::ease_out_quad(progress.clamp(0.0, 1.0));
+                // Issue #808: 光标 track 用自己的 ease_out_cubic，不再共用文字的 ease_out_quad。
+                let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
                 let caret_y = self.from.top + (self.to.top - self.from.top) * eased;
                 // from 行 y 范围 [from_line_top, from_line_bottom)，
                 // to 行 [to_line_top, to_line_bottom)。
@@ -304,14 +309,13 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// Issue #702: 用外部传入的 progress（来自文字 unit 的可见进度）采样 caret rect，
-    /// 而非 caret track 自己的 timeline。消除删除事务里 caret track 与 DeleteConceal
-    /// unit 帧基准分叉导致的"光标先完成、旧字晚消失"错拍。
-    /// Issue #722 评论 5747719529: 此方法是 caret track 的主路径 API，
-    /// `sample_caret_driven_clip` 和 `sample_coordinated_cursor_rect_at` 均通过
-    /// `sampled_rect_at_progress(progress(now))` 调用。
+    /// Issue #702: 用外部传入的 progress（来自光标 track 自己的 timeline）采样 caret rect。
+    /// Issue #808: 光标 track 用自己的 `ease_out_cubic` easing，不再共用文字的
+    /// `ease_out_quad`。文字 reveal/conceal 用文字自己的 easing；duration 不同、
+    /// 曲线也允许不同。此方法只采样光标，不保留"文字效果跟着光标边界"的旧语义。
+    /// `sample_coordinated_cursor_rect_at` 通过 `sampled_rect_at_progress(progress(now))` 调用。
     pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
-        let eased = AnimatedSlice::ease_out_quad(progress.clamp(0.0, 1.0));
+        let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
         let x = self.from.x + (self.to.x - self.from.x) * eased;
         let top = self.from.top + (self.to.top - self.from.top) * eased;
         let h = self.to.bottom - self.to.top;
@@ -396,9 +400,9 @@ impl PreparedCursorVisualTrack {
 /// 块中被 `rebase_to` 调用，主路径改用 `sampled_rect_at_progress(progress(now))`。
 #[cfg(test)]
 impl PreparedCursorVisualTrack {
-    /// 与文字帧同一条 easing（`AnimatedSlice::ease_out_quad`）。
+    /// Issue #808: 光标 track 用自己的 `ease_out_cubic` easing，不再共用文字的 `ease_out_quad`。
     pub fn eased(&self, now: Instant) -> f64 {
-        AnimatedSlice::ease_out_quad(self.progress(now))
+        AnimatedSlice::ease_out_cubic(self.progress(now))
     }
 
     /// 在 `now` 时刻按 `from -> to` 插值采样当前屏幕 caret rect。
@@ -457,17 +461,18 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub units: Vec<PreparedVisualUnit>,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
-    /// Issue #690 评论 5681206040: coordinated caret 的正式视觉 track。
+    /// Issue #690 评论 5681206040 / Issue #808: coordinated caret 的正式视觉 track。
     ///
     /// 替代之前的 `cursor_visual_from` / `cursor_visual_to`（只有端点没有时间状态）。
     /// 自带 `started_at` / `duration_ms`，不再借任何文字 unit 的 progress。
+    /// Issue #808: 光标 track 用自己的 `ease_out_cubic` easing，文字用 `ease_out_quad`，
+    /// 两条时间线完全独立。协同只表示同事务/同首帧/同 rebase，不表示同速度/同曲线。
     ///
     /// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`。
     /// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
     ///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，
     ///   `started_at = now`，`duration_ms` 用旧 track 剩余时长。
-    /// - InsertReveal / Backspace 有明确文字边界时，最终屏幕 x/y 仍直接取文字边界；
-    ///   纯 reflow 等没有明确边界时，直接 sample 这个 caret track。
+    /// - `sample_coordinated_cursor_rect_at` 只采样光标，不保留"文字效果跟着光标边界"旧语义。
     /// - `None` 表示本事务没有视觉 caret track（CursorOnly 或无 old/new cursor rect）。
     pub cursor_visual_track: Option<PreparedCursorVisualTrack>,
     pub cancel_reason: Option<String>,
