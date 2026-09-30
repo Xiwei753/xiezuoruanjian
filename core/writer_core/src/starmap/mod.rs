@@ -309,7 +309,11 @@ pub fn rename_starmap_with_changes(
 /// 写盘顺序：先断 index 引用 → 移动对象目录到 trash → 移动 meta 到 trash →
 /// 写 SyncState tombstone。任何中途失败最多留下"index 已不引用的孤儿文件"，
 /// 不会留下"有效 index 指向不存在 meta"的 dangling 状态。
-pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
+///
+///   只供 crate 内部使用。完整删除只允许从 `WriterCoreApi::delete_starmap`
+/// / service 进入（走 durable journal 流程）。facade 调本函数做不带 journal
+/// 的轻量删除，外部 crate 不得直接调用。
+pub(crate) fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     // 获取 device_id（用于 tombstone deleted_by）。SyncState 不存在时用空字符串，
     // ensure_sync_tombstones_from_facts 会用 state.device_id 兜底。
     let device_id = crate::sync::SyncService::load_sync_state(app_data_root)
@@ -346,7 +350,10 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
 /// 供 facade 等不走 journal 的调用方使用。`WriterCoreApi::delete_starmap`
 /// 走完整 durable journal 流程（plan→save_pending→apply→mark→history→clear），
 /// 不经过本函数。
-pub fn delete_starmap_with_changes(
+///
+///   只供 crate 内部使用。完整删除只允许从 `WriterCoreApi::delete_starmap`
+/// / service 进入。外部 crate 不得直接调用，应改用 WriterCoreApi 入口。
+pub(crate) fn delete_starmap_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {

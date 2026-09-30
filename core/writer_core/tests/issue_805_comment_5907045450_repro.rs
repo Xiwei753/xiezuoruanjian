@@ -141,8 +141,22 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
     }
     SyncService::save_sync_state(&app_data_root, &state).unwrap();
 
-    // ── 3. 删除星图（走 delete_starmap，现在走 plan/apply 事务） ──
-    starmap::delete_starmap(&app_data_root, &starmap_id).unwrap();
+    // ── 3. 删除星图（走 plan/apply 事务） ──
+    //   starmap::delete_starmap 已收窄为 pub(crate)，这里直接走
+    // plan_delete_starmap + apply_planned_delete_starmap（pub 入口），
+    // 验证相同的核心事务逻辑。
+    let device_id = SyncService::load_sync_state(&app_data_root)
+        .map(|s| s.device_id)
+        .unwrap_or_default();
+    let (_change_set, planned) =
+        writer_core::storage::journal::plan_delete_starmap(&app_data_root, &starmap_id, &device_id)
+            .unwrap();
+    writer_core::storage::journal::apply_planned_delete_starmap(
+        &app_data_root,
+        &starmap_id,
+        &planned,
+    )
+    .unwrap();
 
     // 确认星图文件已从磁盘删除（移到 trash，原路径不存在）。
     for rel in &starmap_files {
@@ -225,7 +239,20 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     SyncService::save_sync_state(&app_data_root, &state).unwrap();
 
     // 走 delete_starmap_with_changes 路径（现在走 plan/apply 事务）。
-    let change_set = starmap::delete_starmap_with_changes(&app_data_root, &starmap_id).unwrap();
+    //   starmap::delete_starmap_with_changes 已收窄为 pub(crate)，这里直接走
+    // plan_delete_starmap + apply_planned_delete_starmap（pub 入口）。
+    let device_id = SyncService::load_sync_state(&app_data_root)
+        .map(|s| s.device_id)
+        .unwrap_or_default();
+    let (change_set, planned) =
+        writer_core::storage::journal::plan_delete_starmap(&app_data_root, &starmap_id, &device_id)
+            .unwrap();
+    writer_core::storage::journal::apply_planned_delete_starmap(
+        &app_data_root,
+        &starmap_id,
+        &planned,
+    )
+    .unwrap();
     // 变更集应包含 meta 删除 + 对象目录删除树。
     assert!(
         !change_set.is_empty(),

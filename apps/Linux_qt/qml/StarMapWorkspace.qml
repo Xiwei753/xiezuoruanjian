@@ -118,7 +118,11 @@ Item {
                     // Issue #805 评论 5908703621 问题 5：editNodeRequested 带
                     // owner 上下文（ownerStarmapId/ownerPathKey），设置 Inspector
                     // 的 owner 后 open，更新/删除回到 owner Scene。
-                    onEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
+                    // Issue #805 评论 5912394108：ownerScene 是真正拥有该节点的
+                    // Scene 引用，存到 inspectorPopup 供 Inspector 回写直接调用，
+                    // 不再写死 rootScene，确保第二层及更深节点回写打到对应子 Scene。
+                    onEditNodeRequested: function(ownerScene, ownerStarmapId, ownerPathKey, node) {
+                        inspectorPopup.ownerScene = ownerScene
                         inspectorPopup.ownerStarmapId = ownerStarmapId
                         inspectorPopup.ownerPathKey = ownerPathKey
                         inspectorPopup.selectedNode = node
@@ -139,6 +143,10 @@ Item {
 
             // Issue #805 评论 5908703621 问题 5：Inspector 绑定 owner 上下文，
             // 更新/删除回到 owner Scene，不再写死根 starmapId。
+            // Issue #805 评论 5912394108：ownerScene 持有真正拥有该节点的 Scene
+            // 引用，Inspector 回写直接调 ownerScene.updateNodeFromInspector /
+            // deleteNodeFromInspector，路由到对应子 Scene 的 Controller。
+            property var ownerScene: null
             property string ownerStarmapId: ""
             property string ownerPathKey: ""
             property var selectedNode: null
@@ -152,20 +160,28 @@ Item {
                 selectedEdge: null
 
                 onNodeUpdated: function(nodeId, patch) {
-                    // Issue #805 评论 5908703621 问题 5：实际调用 rootScene
-                    // 转发到对应层的 Canvas。StarMapScene 暴露
-                    // updateNodeFromInspector 转发到内部 Canvas。
-                    rootScene.updateNodeFromInspector(nodeId, patch)
+                    // Issue #805 评论 5912394108：用 ownerScene 直接回写到真正拥有
+                    // 该节点的 Scene，StarMapScene 暴露 updateNodeFromInspector
+                    // 转发到内部 Canvas。不再写死 rootScene，第二层及更深节点的
+                    // 更新打到对应子 Scene 的 Controller。
+                    if (inspectorPopup.ownerScene)
+                        inspectorPopup.ownerScene.updateNodeFromInspector(nodeId, patch)
                 }
                 onNodeDeleted: function(nodeId) {
-                    // Issue #805 评论 5908703621 问题 5：实际调用 rootScene
-                    // 转发到对应层的 Canvas 删除节点。
-                    rootScene.deleteNodeFromInspector(nodeId)
+                    // Issue #805 评论 5912394108：用 ownerScene 直接删除真正拥有
+                    // 该节点的 Scene 中的节点，StarMapScene 暴露
+                    // deleteNodeFromInspector 转发到内部 Canvas。
+                    if (inspectorPopup.ownerScene)
+                        inspectorPopup.ownerScene.deleteNodeFromInspector(nodeId)
                     inspectorPopup.close()
                 }
             }
 
             onClosed: {
+                // Issue #805 评论 5912394108：关闭时清掉 ownerScene 引用，
+                // 避免持有已销毁的子 Scene（Loader 切换 active 时 child Scene
+                // 可能被回收），防止下次 open 误用到旧引用。
+                ownerScene = null
                 ownerStarmapId = ""
                 ownerPathKey = ""
                 selectedNode = null

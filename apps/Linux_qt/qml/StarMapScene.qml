@@ -58,7 +58,10 @@ Item {
     // 对外信号
     // Issue #805 评论 5908703621 问题 5：editNodeRequested 带 owner 上下文，
     // 让 Inspector 知道节点属于哪一层星图，更新/删除回到 owner Scene。
-    signal editNodeRequested(string ownerStarmapId, string ownerPathKey, var node)
+    // Issue #805 评论 5912394108：ownerScene(var) 携带真正拥有该节点的 Scene
+    // 引用，Workspace 用它直接调 updateNodeFromInspector/deleteNodeFromInspector，
+    // 不再写死 rootScene，确保第二层及更深节点的回写打到对应子 Scene 的 Controller。
+    signal editNodeRequested(var ownerScene, string ownerStarmapId, string ownerPathKey, var node)
     signal nodeSelected(var node)
     signal selectionCleared()
 
@@ -142,13 +145,16 @@ Item {
 
         // Issue #805 评论 5908703621 问题 5：本层 Canvas 上抛 editNodeRequested(var node)，
         // Scene 用 finalStarmapId/pathKey 包装成带 owner 上下文的三参数信号上抛。
+        // Issue #805 评论 5912394108：本层节点属于这块 Scene，ownerScene 传 scene 自身。
         onEditNodeRequested: function(node) {
-            scene.editNodeRequested(scene.finalStarmapId, scene.pathKey, node)
+            scene.editNodeRequested(scene, scene.finalStarmapId, scene.pathKey, node)
         }
         // Issue #805 评论 5908703621 问题 5：child Scene 经 Embed 冒泡上来的
         // editNodeRequested 已经带正确的 owner 上下文，原样转发不再重新包装。
-        onChildEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
-            scene.editNodeRequested(ownerStarmapId, ownerPathKey, node)
+        // Issue #805 评论 5912394108：ownerScene 也原样转发，保持指向真正拥有
+        // 该节点的子 Scene，不被本层 Scene 替换。
+        onChildEditNodeRequested: function(ownerScene, ownerStarmapId, ownerPathKey, node) {
+            scene.editNodeRequested(ownerScene, ownerStarmapId, ownerPathKey, node)
         }
         onNodeSelected: function(node) { scene.nodeSelected(node) }
         onSelectionCleared: { scene.selectionCleared() }

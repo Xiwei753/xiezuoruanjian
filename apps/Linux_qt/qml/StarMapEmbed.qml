@@ -94,7 +94,9 @@ Item {
     signal mouseInteracted()
     // Issue #805 评论 5908703621 问题 5：child Scene 的节点编辑请求向上冒泡。
     // 已带 owner 上下文（ownerStarmapId/ownerPathKey），Canvas 接收后转发给 Scene。
-    signal editNodeRequested(string ownerStarmapId, string ownerPathKey, var node)
+    // Issue #805 评论 5912394108：ownerScene(var) 携带真正拥有该节点的子 Scene 引用，
+    // 原样冒泡保持指向不变，Workspace 据此直接回写到对应子 Scene 的 Controller。
+    signal editNodeRequested(var ownerScene, string ownerStarmapId, string ownerPathKey, var node)
 
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
@@ -460,8 +462,10 @@ Item {
 
             // Issue #805 评论 5908703621 问题 5：child Scene 的 editNodeRequested
             // 继续向父 Scene / Workspace 冒泡。已带正确的 owner 上下文，原样转发。
-            onEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
-                root.editNodeRequested(ownerStarmapId, ownerPathKey, node)
+            // Issue #805 评论 5912394108：ownerScene 一并原样转发，保持指向真正
+            // 拥有该节点的子 Scene，不被 Embed / 父 Scene 替换。
+            onEditNodeRequested: function(ownerScene, ownerStarmapId, ownerPathKey, node) {
+                root.editNodeRequested(ownerScene, ownerStarmapId, ownerPathKey, node)
             }
         }
     }

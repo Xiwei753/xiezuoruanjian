@@ -103,7 +103,9 @@ Item {
     signal editNodeRequested(var node)
     // Issue #805 评论 5908703621 问题 5：child Scene 经 Embed 冒泡上来的节点编辑请求，
     // 已带正确的 owner 上下文（ownerStarmapId/ownerPathKey），原样转发给 Scene 不重新包装。
-    signal childEditNodeRequested(string ownerStarmapId, string ownerPathKey, var node)
+    // Issue #805 评论 5912394108：ownerScene(var) 携带真正拥有该节点的子 Scene 引用，
+    // 原样转发保持指向不变，Workspace 据此直接回写到对应子 Scene 的 Controller。
+    signal childEditNodeRequested(var ownerScene, string ownerStarmapId, string ownerPathKey, var node)
     // Issue #805 评论 5907045450 第 1 部分：删掉 drillDownRequested / drillUpRequested。
     // 递归渲染由 StarMapScene 处理，Canvas 不再上抛层级切换请求。
 
@@ -785,8 +787,10 @@ Item {
 
                 // Issue #805 评论 5908703621 问题 5：child Scene 经 Embed 冒泡上来的
                 // 节点编辑请求，转发到 Canvas 的 childEditNodeRequested，Scene 原样上抛。
-                onEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
-                    canvasArea.childEditNodeRequested(ownerStarmapId, ownerPathKey, node)
+                // Issue #805 评论 5912394108：ownerScene 一并原样转发，保持指向真正
+                // 拥有该节点的子 Scene，不被本层 Canvas/Scene 替换。
+                onEditNodeRequested: function(ownerScene, ownerStarmapId, ownerPathKey, node) {
+                    canvasArea.childEditNodeRequested(ownerScene, ownerStarmapId, ownerPathKey, node)
                 }
 
                 // Issue #801 评论 5894035036: 鼠标长按直接进 connect

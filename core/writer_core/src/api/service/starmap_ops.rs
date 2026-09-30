@@ -490,16 +490,11 @@ impl WriterCoreApi {
         // 再 apply planned delete（rename + 写 tombstone），再推进 journal 阶段。
         // 只有 save_pending 成功后才允许动本地文件，保证删除事实在物理删除前已持久化。
         // history 失败时保留 journal 并返回错误，与 delete_volume/delete_chapter 对称。
-        for prefix in &[
-            format!("starmap:{}", starmap_id),
-            format!("starmap_node:{}:", starmap_id),
-            format!("starmap_edge:{}:", starmap_id),
-            format!("starmap_hyperlink:{}:", starmap_id),
-            format!("starmap_link:{}:", starmap_id),
-            format!("starmap_embed:{}:", starmap_id),
-        ] {
-            self.remove_search_index_by_prefix(prefix);
-        }
+        //
+        //   搜索索引是派生数据，必须在删除事实 durable 成功后才删除。
+        // 之前一进函数就删搜索索引，如果 plan_delete_starmap 因外部引用拒绝删除、
+        // 或 save_pending 失败，星图还在但搜索索引已经没了。现在把搜索索引删除
+        // 移到 apply_planned_delete_starmap 成功 + mark_local_applied 之后。
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|i| i.device_id)
             .unwrap_or_default();
@@ -550,6 +545,18 @@ impl WriterCoreApi {
                 "delete_starmap: mark_local_applied failed: {} — journal retained for recovery",
                 e
             );
+        }
+        //   搜索索引删除：本地删除已 durable 成功（apply + mark_local_applied），
+        // 现在才清派生搜索索引。搜索索引是派生数据，不能先于删除事实改变。
+        for prefix in &[
+            format!("starmap:{}", starmap_id),
+            format!("starmap_node:{}:", starmap_id),
+            format!("starmap_edge:{}:", starmap_id),
+            format!("starmap_hyperlink:{}:", starmap_id),
+            format!("starmap_link:{}:", starmap_id),
+            format!("starmap_embed:{}:", starmap_id),
+        ] {
+            self.remove_search_index_by_prefix(prefix);
         }
         // 写 workspace history，成功后清 journal；失败时 journal 保留供下次 bootstrap 补记。
         // 不再丢弃 history 错误（把 `let _ =` 改成实际错误处理）。

@@ -127,6 +127,208 @@ fn recover_storage_transactions(
         }
     }
 
+    // 恢复星图对象级删除事务（starmap_object_delete journal）。
+    //   恢复失败时 log::warn 但不阻塞启动（best-effort），journal 保留供下次重试。
+    if let Err(e) = recover_starmap_object_delete_transactions(app_data_root) {
+        log::warn!(
+            "recover_storage_transactions: starmap_object_delete recover failed: {} — \
+             journals retained, will retry on next startup",
+            e
+        );
+    }
+
+    Ok(())
+}
+
+/// 恢复星图对象级删除事务（starmap_object_delete journal）。
+///
+/// 枚举 `app-meta/starmap-object-delete-journals/` 下所有 journal，按阶段处理：
+/// - `Planned`：plan/facts 已 durable 但 rename 未开始。清掉 journal，让下一轮
+///   flush 重新处理（deleted_*_ids 集合如果还在内存中会被重新 plan）。
+/// - `Tombstoned`：文件已进 trash、tombstone 已写，但 GraphMeta 没完成。
+///   按 journal 里的 objects 补 GraphMeta 删除记录（移除成员 id + 补
+///   deleted_since_last_sync 条目），GraphMeta 补完后清 journal。
+/// - `GraphMetaWritten`：全部完成，直接清 journal。
+///
+/// 恢复失败时 log::warn 但不阻塞启动（best-effort），journal 保留供下次重试。
+fn recover_starmap_object_delete_transactions(
+    app_data_root: &Path,
+) -> std::result::Result<(), WriterError> {
+    use crate::storage::journal::starmap_object_delete::PlannedStarMapObjectDelete;
+
+    let journals_dir = app_data_root.join("app-meta/starmap-object-delete-journals");
+    if !journals_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&journals_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name() else {
+            continue;
+        };
+        let file_name = file_name.to_string_lossy();
+        if !file_name.ends_with(".json") {
+            continue;
+        }
+        // 从文件名提取 starmap_id（去掉 .json 后缀）。
+        let starmap_id = file_name.strip_suffix(".json").unwrap_or(&file_name);
+
+        match PlannedStarMapObjectDelete::load(app_data_root, starmap_id) {
+            Ok(Some(plan)) => {
+                if let Err(e) =
+                    recover_single_starmap_object_delete(app_data_root, starmap_id, &plan)
+                {
+                    log::warn!(
+                        "recover_starmap_object_delete_transactions: failed to recover \
+                         journal for starmap {}: {} — journal retained",
+                        starmap_id,
+                        e
+                    );
+                }
+            }
+            Ok(None) => {
+                // journal 不存在（可能已被其他流程清理），跳过。
+            }
+            Err(e) => {
+                log::warn!(
+                    "recover_starmap_object_delete_transactions: failed to load journal for \
+                     starmap {}: {} — journal retained",
+                    starmap_id,
+                    e
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 恢复单个 starmap_object_delete journal。
+///
+/// 按 `plan.phase` 决定恢复动作，成功后清 journal。
+fn recover_single_starmap_object_delete(
+    app_data_root: &Path,
+    starmap_id: &str,
+    plan: &crate::storage::journal::starmap_object_delete::PlannedStarMapObjectDelete,
+) -> std::result::Result<(), WriterError> {
+    use crate::storage::journal::starmap_object_delete::{
+        PlannedStarMapObjectDelete, StarMapObjectDeletePhase,
+    };
+
+    match plan.phase {
+        StarMapObjectDeletePhase::Planned => {
+            // plan/facts 已 durable 但 rename 未开始。清掉 journal，让下一轮
+            // flush 重新处理（deleted_*_ids 集合如果还在内存中会被重新 plan；
+            // 如果已不在，对象文件仍在原路径，下次 flush 不会重复删除）。
+            log::debug!(
+                "recover_single_starmap_object_delete: starmap {} phase=Planned — \
+                 clearing journal, next flush will reprocess",
+                starmap_id
+            );
+            PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
+        }
+        StarMapObjectDeletePhase::Tombstoned => {
+            // 文件已进 trash、tombstone 已写，但 GraphMeta 没完成。
+            // 按 journal 里的 objects 补 GraphMeta 删除记录。
+            recover_starmap_object_delete_graph_meta(app_data_root, starmap_id, plan)?;
+            // GraphMeta 补完，清 journal。
+            PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
+        }
+        StarMapObjectDeletePhase::GraphMetaWritten => {
+            // 全部完成，直接清 journal。
+            log::debug!(
+                "recover_single_starmap_object_delete: starmap {} phase=GraphMetaWritten — \
+                 clearing journal",
+                starmap_id
+            );
+            PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// 补 GraphMeta 删除记录：移除已删对象 id + 补 deleted_since_last_sync 条目。
+///
+/// 直接读写 `starmaps/{id}/graph.json`（与 starmap_delete.rs 中直接操作
+/// index.json 的做法对称）。graph.json 不存在时视为星图已被整体删除，
+/// 无需补 GraphMeta，直接返回 Ok。
+fn recover_starmap_object_delete_graph_meta(
+    app_data_root: &Path,
+    starmap_id: &str,
+    plan: &crate::storage::journal::starmap_object_delete::PlannedStarMapObjectDelete,
+) -> std::result::Result<(), WriterError> {
+    use crate::starmap::store::meta::GraphMeta;
+    use crate::storage::journal::starmap_object_delete::StarMapObjectKind;
+
+    let graph_json_path = app_data_root
+        .join("starmaps")
+        .join(starmap_id)
+        .join("graph.json");
+    if !graph_json_path.exists() {
+        // 星图 graph.json 不存在（可能已被整体删除），无需补 GraphMeta。
+        log::debug!(
+            "recover_starmap_object_delete_graph_meta: starmap {} graph.json absent — \
+             nothing to patch",
+            starmap_id
+        );
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&graph_json_path)?;
+    let mut meta: GraphMeta = serde_json::from_str(&content).map_err(|e| {
+        WriterError::Other(format!(
+            "recover_starmap_object_delete_graph_meta: parse {}: {e}",
+            graph_json_path.display()
+        ))
+    })?;
+
+    let next_revision = meta.package_revision.wrapping_add(1);
+    for target in &plan.objects {
+        match target.kind {
+            StarMapObjectKind::Node => {
+                meta.node_ids.retain(|id| id != &target.id);
+                meta.node_revisions.remove(&target.id);
+                meta.deleted_since_last_sync
+                    .add_entry("node", &target.id, next_revision);
+            }
+            StarMapObjectKind::Edge => {
+                meta.edge_ids.retain(|id| id != &target.id);
+                meta.edge_revisions.remove(&target.id);
+                meta.deleted_since_last_sync
+                    .add_entry("edge", &target.id, next_revision);
+            }
+            StarMapObjectKind::Embed => {
+                meta.embed_instance_ids.retain(|id| id != &target.id);
+                meta.embed_revisions.remove(&target.id);
+                meta.deleted_since_last_sync
+                    .add_entry("embed", &target.id, next_revision);
+            }
+            StarMapObjectKind::Link => {
+                meta.link_ids.retain(|id| id != &target.id);
+                meta.link_revisions.remove(&target.id);
+                meta.deleted_since_last_sync
+                    .add_entry("link", &target.id, next_revision);
+            }
+            StarMapObjectKind::Hyperlink => {
+                meta.hyperlink_ids.retain(|id| id != &target.id);
+                meta.hyperlink_revisions.remove(&target.id);
+                meta.deleted_since_last_sync
+                    .add_entry("hyperlink", &target.id, next_revision);
+            }
+        }
+    }
+    meta.package_revision = next_revision;
+    meta.updated_at = crate::starmap::now_epoch();
+
+    let new_content = serde_json::to_string_pretty(&meta).map_err(|e| {
+        WriterError::Other(format!(
+            "recover_starmap_object_delete_graph_meta: serialize: {e}"
+        ))
+    })?;
+    crate::storage::atomic_write_string(&graph_json_path, &new_content)?;
     Ok(())
 }
 
@@ -694,6 +896,10 @@ fn recover_starmap_no_target(
 ///
 /// 要求 change_set 中存在 `Delete(starmaps/{id}.meta.json)`，提取 `id`。
 /// 否则返回 `None`（无法无歧义迁移）。
+///
+///   路径 `starmaps/{id}.meta.json` 用 `/` split 只有两段：
+/// `["starmaps", "{id}.meta.json"]`。之前误用 `parts.len() == 3` 解析，
+/// 永远匹配不到。改为从第二段去掉 `.meta.json` 后缀提取 id。
 fn migrate_starmap_target_from_change_set(
     change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
 ) -> Option<String> {
@@ -703,9 +909,10 @@ fn migrate_starmap_target_from_change_set(
         if let WorkspaceHistoryChange::Delete(path) = change {
             let path_str = path.to_string_lossy();
             let parts: Vec<&str> = path_str.split('/').collect();
-            // 路径格式：starmaps/{id}.meta.json
-            if parts.len() == 3 && parts[0] == "starmaps" && parts[2] == "meta.json" {
-                return Some(parts[1].to_string());
+            // 路径格式：starmaps/{id}.meta.json → split('/') 得 ["starmaps", "{id}.meta.json"]
+            if parts.len() == 2 && parts[0] == "starmaps" && parts[1].ends_with(".meta.json") {
+                let id = parts[1].strip_suffix(".meta.json").unwrap_or(parts[1]);
+                return Some(id.to_string());
             }
         }
     }
