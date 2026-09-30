@@ -471,3 +471,135 @@ fn delete_link_flush_save_queue_persists_via_save_queue() {
         "link_id must persist in graph.json after flush"
     );
 }
+
+/// Issue #805 评论 5914308327：resume 旧 journal 时必须严格使用
+/// `existing.objects` 遍历 rename，不能遍历当前 `deleted_*_ids`。
+///
+/// 场景：
+/// - 事务 A 的 journal 残留：objects=[A], facts=[A]，A 已进 trash
+/// - 同进程又删除了 B，deleted_node_ids = {A, B}
+/// - resume flush 应只处理 A，不把 B 移到事务 A 的 trash
+/// - A 完成后 B 仍 pending，下一轮为 B 建新事务
+#[test]
+fn flush_resume_journal_only_processes_journal_objects_not_all_pending() {
+    use crate::starmap::package_storage;
+    use crate::storage::journal::starmap_object_delete::{
+        PlannedStarMapObjectDelete, StarMapObjectDeletePhase, StarMapObjectDeleteTarget,
+        StarMapObjectKind,
+    };
+    use crate::storage::journal::workspace_change::SyncDeleteFact;
+    use crate::sync::SyncService;
+
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+    let starmap_id = &meta.starmap_id;
+
+    // 1. upsert node A + node B，flush 让两者落盘
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    store.upsert_node(make_test_node("nA", "NodeA"));
+    store.upsert_node(make_test_node("nB", "NodeB"));
+    store.flush().unwrap();
+
+    // 2. 计算 A/B 原文件路径
+    let bucket_a = package_storage::bucket_for_id("nA");
+    let bucket_b = package_storage::bucket_for_id("nB");
+    let orig_rel_a = format!("starmaps/{starmap_id}/nodes/{bucket_a}/nA.json");
+    let orig_rel_b = format!("starmaps/{starmap_id}/nodes/{bucket_b}/nB.json");
+    let orig_abs_a = dir.path().join(&orig_rel_a);
+    let orig_abs_b = dir.path().join(&orig_rel_b);
+    assert!(orig_abs_a.exists(), "A 原文件应存在");
+    assert!(orig_abs_b.exists(), "B 原文件应存在");
+
+    // 3. 重新加载完整 store，remove A + B，使 deleted_node_ids = {nA, nB}。
+    //    此时 A/B 文件仍在原位，load_full 不会失败。
+    let mut store = StarMapStore::new(dir.path(), starmap_id);
+    store.load_full().unwrap();
+    store.remove_node("nA");
+    store.remove_node("nB");
+    assert!(store.deleted_node_ids.contains("nA"));
+    assert!(store.deleted_node_ids.contains("nB"));
+
+    // 4. 模拟事务 A 的 journal 残留：objects=[A], facts=[A], phase=Planned。
+    //    先把 A 原文件手动移到 journal 的 trash 路径（模拟 A 已进 trash，
+    //    tombstone 未写），这样 resume 时 delete_node_file_to_trash 对 A 返回
+    //    Ok(None)（幂等跳过）。
+    let trash_rel_path = "sync/trash/test_resume_token".to_string();
+    let trash_abs_a = dir.path().join(&trash_rel_path).join(&orig_rel_a);
+    std::fs::create_dir_all(trash_abs_a.parent().unwrap()).unwrap();
+    std::fs::rename(&orig_abs_a, &trash_abs_a).unwrap();
+    assert!(!orig_abs_a.exists(), "A 原文件已移到 trash");
+    assert!(trash_abs_a.exists(), "A trash 文件应存在");
+
+    let fact_a = SyncDeleteFact {
+        original_path: orig_rel_a.clone(),
+        original_hash: String::new(),
+        deleted_at: 1000,
+        deleted_by: "test_device".to_string(),
+        trash_path: format!("{trash_rel_path}/{orig_rel_a}"),
+    };
+    let plan = PlannedStarMapObjectDelete {
+        token: "test_resume_token".to_string(),
+        starmap_id: starmap_id.clone(),
+        trash_rel_path: trash_rel_path.clone(),
+        objects: vec![StarMapObjectDeleteTarget {
+            kind: StarMapObjectKind::Node,
+            id: "nA".to_string(),
+            original_path: orig_rel_a.clone(),
+        }],
+        sync_delete_facts: vec![fact_a.clone()],
+        phase: StarMapObjectDeletePhase::Planned,
+    };
+    PlannedStarMapObjectDelete::save_planned(dir.path(), &plan).unwrap();
+
+    // 5. resume flush —— 只处理 A（journal.objects），不碰 B。
+    store.flush_save_queue().unwrap();
+
+    // 6. 断言：B 原文件仍在原位（核心断言）。
+    assert!(
+        orig_abs_b.exists(),
+        "B 原文件应仍在原位——resume 不应处理 journal.objects 之外的对象"
+    );
+    // A 的事务完成后 journal 应清除。
+    assert!(
+        PlannedStarMapObjectDelete::load(dir.path(), starmap_id)
+            .unwrap()
+            .is_none(),
+        "A 的事务完成后 journal 应清除"
+    );
+    // deleted_node_ids：A 已完成移除，B 仍 pending 保留。
+    assert!(
+        !store.deleted_node_ids.contains("nA"),
+        "A 已完成，应从 deleted_node_ids 移除"
+    );
+    assert!(
+        store.deleted_node_ids.contains("nB"),
+        "B 仍 pending，应留在 deleted_node_ids"
+    );
+    // tombstones 只含 A，不含 B。
+    let sync_state = SyncService::load_sync_state(dir.path()).unwrap();
+    let has_a_tomb = sync_state
+        .tombstones
+        .iter()
+        .any(|t| t.original_path == orig_rel_a);
+    let has_b_tomb = sync_state
+        .tombstones
+        .iter()
+        .any(|t| t.original_path == orig_rel_b);
+    assert!(has_a_tomb, "A 应有 tombstone");
+    assert!(!has_b_tomb, "B 不应有 tombstone");
+
+    // 7. 下一轮 flush 为 B 新建新事务，B 被处理。
+    store.flush_save_queue().unwrap();
+    assert!(!orig_abs_b.exists(), "B 原文件应已被移到 trash");
+    assert!(
+        !store.deleted_node_ids.contains("nB"),
+        "B 完成后应从 deleted_node_ids 移除"
+    );
+    let sync_state2 = SyncService::load_sync_state(dir.path()).unwrap();
+    let has_b_tomb2 = sync_state2
+        .tombstones
+        .iter()
+        .any(|t| t.original_path == orig_rel_b);
+    assert!(has_b_tomb2, "B 应有 tombstone");
+}

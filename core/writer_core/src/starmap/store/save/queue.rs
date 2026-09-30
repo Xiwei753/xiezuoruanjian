@@ -219,6 +219,13 @@ impl StarMapStore {
                 PlannedStarMapObjectDelete::load(&self.app_data_root, &self.starmap_id)?;
 
             let trash_rel_path: String;
+            // 本轮对象删除事务的固定目标集合。
+            // - resume 旧 journal 时严格使用 existing.objects，避免误把当前
+            //   deleted_*_ids 里不属于本事务的对象（如崩溃后同进程新增的删除）
+            //   移到旧事务的 trash。
+            // - 新建 journal 时从 deleted_*_ids snapshot 出来，两者一致。
+            // rename 循环只遍历 transaction_objects，不再遍历整个 deleted_*_ids。
+            let transaction_objects: Vec<StarMapObjectDeleteTarget>;
 
             if let Some(existing) = existing_journal {
                 // resume：用 existing 的固定 trash 路径和 facts，不生成新 token。
@@ -233,6 +240,7 @@ impl StarMapStore {
                 trash_rel_path = existing.trash_rel_path.clone();
                 object_delete_journal_active = true;
                 object_delete_facts_for_tombstone = existing.sync_delete_facts.clone();
+                transaction_objects = existing.objects.clone();
             } else {
                 // 没有已有 journal，生成新 plan。
                 // 1. 从 deleted_*_ids 固定本轮删除集合，计算 original_path（不碰磁盘）。
@@ -387,163 +395,135 @@ impl StarMapStore {
                         }
                     }
                 }
+
+                // 新建分支：本轮 transaction objects 就是 plan 阶段 snapshot 的 targets。
+                transaction_objects = targets;
             }
 
             // 4. 逐个 durable_rename（只有 journal 写成功才执行）。
             if object_delete_journal_active {
                 let trash_root = self.app_data_root.join(&trash_rel_path);
 
-                if !self.deleted_node_ids.is_empty() {
-                    let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
-                    let mut succeeded = true;
-                    for node_id in &ids {
-                        match package_storage::delete_node_file_to_trash(
-                            &self.app_data_root,
-                            &self.starmap_id,
-                            node_id,
-                            &trash_root,
-                            &trash_rel_path,
-                        ) {
-                            Ok(Some((orig_rel, _))) => {
-                                changed_paths.push(PathBuf::from(&orig_rel));
-                                successful_deletes.deleted_nodes.insert(node_id.clone());
-                            }
-                            Ok(None) => {
-                                successful_deletes.deleted_nodes.insert(node_id.clone());
-                            }
-                            Err(e) => {
-                                self.record_delete_failure("node", node_id, &e);
-                                succeeded = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !succeeded {
-                        failed_types.push("DeleteNode".to_string());
-                    }
-                }
-
-                if !self.deleted_edge_ids.is_empty() {
-                    let ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
-                    let mut succeeded = true;
-                    for edge_id in &ids {
-                        match package_storage::delete_edge_file_to_trash(
-                            &self.app_data_root,
-                            &self.starmap_id,
-                            edge_id,
-                            &trash_root,
-                            &trash_rel_path,
-                        ) {
-                            Ok(Some((orig_rel, _))) => {
-                                changed_paths.push(PathBuf::from(&orig_rel));
-                                successful_deletes.deleted_edges.insert(edge_id.clone());
-                            }
-                            Ok(None) => {
-                                successful_deletes.deleted_edges.insert(edge_id.clone());
-                            }
-                            Err(e) => {
-                                self.record_delete_failure("edge", edge_id, &e);
-                                succeeded = false;
-                                break;
+                // 按 kind 分组遍历 transaction_objects，而非整个 deleted_*_ids。
+                // resume 旧 journal 时 transaction_objects == existing.objects，
+                // 严格只处理本事务记录的对象，不误移同进程新增的 pending 删除。
+                // 任一 rename 失败即 break，后续 rename_failed 判断仍有效。
+                for target in &transaction_objects {
+                    match target.kind {
+                        StarMapObjectKind::Node => {
+                            match package_storage::delete_node_file_to_trash(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                &target.id,
+                                &trash_root,
+                                &trash_rel_path,
+                            ) {
+                                Ok(Some((orig_rel, _))) => {
+                                    changed_paths.push(PathBuf::from(&orig_rel));
+                                    successful_deletes.deleted_nodes.insert(target.id.clone());
+                                }
+                                Ok(None) => {
+                                    successful_deletes.deleted_nodes.insert(target.id.clone());
+                                }
+                                Err(e) => {
+                                    self.record_delete_failure("node", &target.id, &e);
+                                    failed_types.push("DeleteNode".to_string());
+                                    break;
+                                }
                             }
                         }
-                    }
-                    if !succeeded {
-                        failed_types.push("DeleteEdge".to_string());
-                    }
-                }
-
-                if !self.deleted_embed_ids.is_empty() {
-                    let ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
-                    let mut succeeded = true;
-                    for instance_id in &ids {
-                        match package_storage::delete_embed_file_to_trash(
-                            &self.app_data_root,
-                            &self.starmap_id,
-                            instance_id,
-                            &trash_root,
-                            &trash_rel_path,
-                        ) {
-                            Ok(Some((orig_rel, _))) => {
-                                changed_paths.push(PathBuf::from(&orig_rel));
-                                successful_deletes
-                                    .deleted_embeds
-                                    .insert(instance_id.clone());
-                            }
-                            Ok(None) => {
-                                successful_deletes
-                                    .deleted_embeds
-                                    .insert(instance_id.clone());
-                            }
-                            Err(e) => {
-                                self.record_delete_failure("embed", instance_id, &e);
-                                succeeded = false;
-                                break;
+                        StarMapObjectKind::Edge => {
+                            match package_storage::delete_edge_file_to_trash(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                &target.id,
+                                &trash_root,
+                                &trash_rel_path,
+                            ) {
+                                Ok(Some((orig_rel, _))) => {
+                                    changed_paths.push(PathBuf::from(&orig_rel));
+                                    successful_deletes.deleted_edges.insert(target.id.clone());
+                                }
+                                Ok(None) => {
+                                    successful_deletes.deleted_edges.insert(target.id.clone());
+                                }
+                                Err(e) => {
+                                    self.record_delete_failure("edge", &target.id, &e);
+                                    failed_types.push("DeleteEdge".to_string());
+                                    break;
+                                }
                             }
                         }
-                    }
-                    if !succeeded {
-                        failed_types.push("DeleteEmbed".to_string());
-                    }
-                }
-
-                if !self.deleted_link_ids.is_empty() {
-                    let ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
-                    let mut succeeded = true;
-                    for link_id in &ids {
-                        match package_storage::delete_link_file_to_trash(
-                            &self.app_data_root,
-                            &self.starmap_id,
-                            link_id,
-                            &trash_root,
-                            &trash_rel_path,
-                        ) {
-                            Ok(Some((orig_rel, _))) => {
-                                changed_paths.push(PathBuf::from(&orig_rel));
-                                successful_deletes.deleted_links.insert(link_id.clone());
-                            }
-                            Ok(None) => {
-                                successful_deletes.deleted_links.insert(link_id.clone());
-                            }
-                            Err(e) => {
-                                self.record_delete_failure("link", link_id, &e);
-                                succeeded = false;
-                                break;
+                        StarMapObjectKind::Embed => {
+                            match package_storage::delete_embed_file_to_trash(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                &target.id,
+                                &trash_root,
+                                &trash_rel_path,
+                            ) {
+                                Ok(Some((orig_rel, _))) => {
+                                    changed_paths.push(PathBuf::from(&orig_rel));
+                                    successful_deletes.deleted_embeds.insert(target.id.clone());
+                                }
+                                Ok(None) => {
+                                    successful_deletes.deleted_embeds.insert(target.id.clone());
+                                }
+                                Err(e) => {
+                                    self.record_delete_failure("embed", &target.id, &e);
+                                    failed_types.push("DeleteEmbed".to_string());
+                                    break;
+                                }
                             }
                         }
-                    }
-                    if !succeeded {
-                        failed_types.push("DeleteLink".to_string());
-                    }
-                }
-
-                if !self.deleted_hyperlink_ids.is_empty() {
-                    let ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
-                    let mut succeeded = true;
-                    for hl_id in &ids {
-                        match package_storage::delete_hyperlink_file_to_trash(
-                            &self.app_data_root,
-                            &self.starmap_id,
-                            hl_id,
-                            &trash_root,
-                            &trash_rel_path,
-                        ) {
-                            Ok(Some((orig_rel, _))) => {
-                                changed_paths.push(PathBuf::from(&orig_rel));
-                                successful_deletes.deleted_hyperlinks.insert(hl_id.clone());
-                            }
-                            Ok(None) => {
-                                successful_deletes.deleted_hyperlinks.insert(hl_id.clone());
-                            }
-                            Err(e) => {
-                                self.record_delete_failure("hyperlink", hl_id, &e);
-                                succeeded = false;
-                                break;
+                        StarMapObjectKind::Link => {
+                            match package_storage::delete_link_file_to_trash(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                &target.id,
+                                &trash_root,
+                                &trash_rel_path,
+                            ) {
+                                Ok(Some((orig_rel, _))) => {
+                                    changed_paths.push(PathBuf::from(&orig_rel));
+                                    successful_deletes.deleted_links.insert(target.id.clone());
+                                }
+                                Ok(None) => {
+                                    successful_deletes.deleted_links.insert(target.id.clone());
+                                }
+                                Err(e) => {
+                                    self.record_delete_failure("link", &target.id, &e);
+                                    failed_types.push("DeleteLink".to_string());
+                                    break;
+                                }
                             }
                         }
-                    }
-                    if !succeeded {
-                        failed_types.push("DeleteHyperlink".to_string());
+                        StarMapObjectKind::Hyperlink => {
+                            match package_storage::delete_hyperlink_file_to_trash(
+                                &self.app_data_root,
+                                &self.starmap_id,
+                                &target.id,
+                                &trash_root,
+                                &trash_rel_path,
+                            ) {
+                                Ok(Some((orig_rel, _))) => {
+                                    changed_paths.push(PathBuf::from(&orig_rel));
+                                    successful_deletes
+                                        .deleted_hyperlinks
+                                        .insert(target.id.clone());
+                                }
+                                Ok(None) => {
+                                    successful_deletes
+                                        .deleted_hyperlinks
+                                        .insert(target.id.clone());
+                                }
+                                Err(e) => {
+                                    self.record_delete_failure("hyperlink", &target.id, &e);
+                                    failed_types.push("DeleteHyperlink".to_string());
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
 
