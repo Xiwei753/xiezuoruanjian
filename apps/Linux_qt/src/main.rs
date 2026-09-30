@@ -197,6 +197,33 @@ static QML_LOAD_FAILED: AtomicBool = AtomicBool::new(false);
 static QML_HUB_HEADER_MISSING: AtomicBool = AtomicBool::new(false);
 static QML_LAST_LOAD_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
+// ===== Issue #803: 最早期启动诊断全局句柄 =====
+// `StartupDiagnostics` 只含 `PathBuf`（Send+Sync），放进 OnceLock 不需要手写
+// unsafe impl Send/Sync。main 最早期 `begin_startup_diagnostics()` 后立刻 set，
+// 之后所有 mark（包括 Qt message handler）都通过 helper 访问。
+static STARTUP_DIAG: OnceLock<writer_platform_linux::StartupDiagnostics> = OnceLock::new();
+
+/// 记录一个启动阶段到启动诊断日志。若全局句柄尚未设置（极早期或未初始化），静默跳过。
+fn startup_mark(stage: &str, message: &str) {
+    if let Some(d) = STARTUP_DIAG.get() {
+        d.mark(stage, message);
+    }
+}
+
+/// 标记 GUI 事件循环已就绪。
+fn startup_mark_ready() {
+    if let Some(d) = STARTUP_DIAG.get() {
+        d.mark_ready();
+    }
+}
+
+/// 标记进程退出码。
+fn startup_mark_exit(code: i32) {
+    if let Some(d) = STARTUP_DIAG.get() {
+        d.mark_exit(code);
+    }
+}
+
 fn qt_runtime_version() -> String {
     app_main_cpp::qt_runtime_version()
 }
@@ -265,6 +292,9 @@ extern "C" fn qml_load_error_handler(
             "qml_warning_critical",
             &s,
         );
+        // Issue #803: 同步写入启动诊断日志，QML import / Qt plugin / QPA 初始化
+        // 出问题时 latest.log 里直接能看到。
+        startup_mark("qt_warning_critical", &s);
         if s.contains("qrc:/main.qml")
             || s.contains("QQmlApplicationEngine failed")
             || s.contains("failed to load component")
@@ -436,17 +466,33 @@ fn install_translator() {
 }
 
 fn main() {
+    // ===== Issue #803: 最早期启动诊断 — 在一切之前 =====
+    // 必须是 main 的第一行：早于 configure_qpa_and_input_method /
+    // init_default_config_store / create_platform_services / resolve_platform_init /
+    // writer_diagnostics::init。建立诊断目录、写 session 头、安装 panic hook。
+    let startup_diag = writer_platform_linux::begin_startup_diagnostics();
+    startup_diag.mark("process_enter", "entered Rust main");
+    // 把句柄 move 进全局 OnceLock，之后通过 startup_mark / startup_mark_ready /
+    // startup_mark_exit 访问（包括 Qt message handler）。
+    let _ = STARTUP_DIAG.set(startup_diag);
+
     // ===== Issue #729 评论 5762596831 第 1 部分：收口到原生 Wayland 运行环境 =====
     // 在任何 Qt/QML 初始化之前统一设置 QPA 平台和输入法环境变量，
     // 避免误跑 XWayland/xcb。幂等：不覆盖用户已显式设置的环境变量。
+    startup_mark("runtime_env_begin", "configure QPA and input method");
     let runtime_env_config =
         sujian_linux_qt::platform::linux_qt::runtime_environment::configure_qpa_and_input_method();
     // 此时尚未初始化 diagnostics 后端，用 eprintln 输出最早期环境收口信息，
     // 后续 debug_log_static 会由 diagnostics 后端接管落盘。
     eprintln!("[RuntimeEnv] {}", runtime_env_config.summary());
+    startup_mark("runtime_env_ready", &runtime_env_config.summary());
 
     // ===== 平台适配层初始化：注入配置存储和同步传输 =====
+    startup_mark("platform_store_begin", "init default config store");
     writer_platform_linux::init_default_config_store();
+    startup_mark("platform_store_ready", "default config store initialized");
+
+    startup_mark("platform_services_begin", "create platform services");
     if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services)
     {
         if let Some(factory) = services.sync_transport_factory {
@@ -459,6 +505,7 @@ fn main() {
         }
         // 初始网络状态已在 create_platform_services 内缓存
     }
+    startup_mark("platform_services_ready", "platform services initialized");
 
     // 启动后台线程定时刷新网络状态（每 30 秒）
     std::thread::Builder::new()
@@ -472,6 +519,7 @@ fn main() {
     // ===== 最早期初始化：初始化统一诊断后端 =====
     // #665 评论 5643315523：先初始化运行时有效 build identity（根据 APPIMAGE 环境变量
     // 收口 packageType/buildKey），确保后续所有日志写入和 manifest 字段使用同一份有效值。
+    startup_mark("shared_diagnostics_begin", "init writer_diagnostics");
     diagnostics::init_build_identity();
     // 初始化共享 Rust 诊断后端（接管 log::* 和 panic 落盘）。
     // 日志目录、平台名、设备 ID 等由 PlatformInit 决定，build_key 用运行时有效值。
@@ -486,6 +534,7 @@ fn main() {
         true,
         true,
     );
+    startup_mark("shared_diagnostics_ready", "writer_diagnostics initialized");
 
     debug_log_static("app", "app_startup", "Sujian application starting...");
     log::info!(target: "app", "app_startup: Sujian application starting...");
@@ -501,6 +550,7 @@ fn main() {
     }
 
     // 注入 Qt 运行时版本到 diagnostics 模块（避免运行时调用 qmake 命令）
+    startup_mark("qt_runtime_probe_begin", "probe Qt runtime");
     let qt_ver = qt_runtime_version();
     diagnostics::set_qt_version(&qt_ver);
     debug_log_static(
@@ -519,6 +569,7 @@ fn main() {
         0,
         c"SujianEditorItem",
     );
+    startup_mark("qt_runtime_probe_ready", "Qt runtime probed");
 
     let qml_path = "qrc:/main.qml";
     debug_log_static(
@@ -529,6 +580,7 @@ fn main() {
 
     QML_LOAD_FAILED.store(false, Ordering::SeqCst);
     remember_qml_load_error("");
+    startup_mark("qml_engine_begin", "create QML engine");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
     // Issue #736 评论 5777408243 问题3: 运行时 profile 的 Qt/QPA 采样必须在
@@ -573,9 +625,12 @@ fn main() {
 
     let backend_runtime = BackendRuntime::new();
     backend_runtime.register_context_properties(&mut engine);
+    startup_mark("qml_engine_ready", "QML engine created");
 
+    startup_mark("qml_load_begin", &format!("load QML: {}", qml_path));
     engine.load_file(qml_path.into());
     install_message_handler(prev_handler);
+    startup_mark("qml_load_ready", "QML loaded");
 
     if QML_LOAD_FAILED.load(Ordering::SeqCst) {
         let last_error = last_qml_load_error();
@@ -589,6 +644,8 @@ fn main() {
             "qml_load_failed",
             &format!("QML load failed for {}: {}", qml_path, last_error),
         );
+        // 记录失败退出码后退出。
+        startup_mark_exit(1);
         std::process::exit(1);
     }
 
@@ -597,5 +654,10 @@ fn main() {
         "event_loop_enter",
         "QML engine started, entering event loop",
     );
+    // GUI 事件循环已就绪：标记 gui_ready，随后进入 Qt 事件循环。
+    startup_mark_ready();
     engine.exec();
+    // qmetaobject 0.2.10 的 QmlEngine::exec 返回 ()，Qt 事件循环正常退出按 0 处理。
+    startup_mark_exit(0);
+    std::process::exit(0);
 }
