@@ -500,6 +500,11 @@ pub(crate) fn build_composition_commit_crossfade_slices(
     candidate_byte_end: usize,
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
+    // Issue #808 评论 5917296533 问题4: Composition 路径统一协同模式参数。
+    // coordinated=false 时 composition 的 reveal/conceal 只走独立文字动画语义；
+    // coordinated=true 才启用 caret 空间锚点。
+    coordinated: bool,
+    caret_visual_line_id: Option<usize>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
@@ -534,7 +539,14 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     let left = from_doc.x;
                     let right = from_doc.x + from_doc.w;
                     let conceal_to_left_edge = (shrink_x - right).abs() <= (shrink_x - left).abs();
-                    slices.push(AnimatedSlice::delete_conceal(
+                    // Issue #808 评论 5917296533 问题4: 按 coordinated 和 visual_line_id
+                    // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
+                    // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
+                    let is_caret_line = coordinated
+                        && caret_visual_line_id.map_or(true, |cid| {
+                            old_line.visual_line_id == cid
+                        });
+                    let mut slice = AnimatedSlice::delete_conceal(
                         key,
                         old_line.id,
                         old_sr,
@@ -547,7 +559,9 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                         conceal_to_left_edge,
                         // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
                         Some(old_line.visual_line_id),
-                    ));
+                    );
+                    slice.is_caret_line = is_caret_line;
+                    slices.push(slice);
                 }
             } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
                 if let Some((new_line, new_cluster)) = new_snapshot
@@ -616,6 +630,13 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                 {
                     let to_doc = new_line.source_rect_to_document_rect(&new_sr);
                     let to_doc_for_hide = to_doc.clone();
+                    // Issue #808 评论 5917296533 问题4: 按 coordinated 和 visual_line_id
+                    // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
+                    // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
+                    let is_caret_line = coordinated
+                        && caret_visual_line_id.map_or(true, |cid| {
+                            new_line.visual_line_id == cid
+                        });
                     let mut reveal_slice = AnimatedSlice::insert_reveal(
                         key,
                         new_line.id,
@@ -629,6 +650,7 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                         // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
                         Some(new_line.visual_line_id),
                     );
+                    reveal_slice.is_caret_line = is_caret_line;
                     reveal_slice.static_hidden_document_rects = vec![to_doc_for_hide];
                     slices.push(reveal_slice);
                 }

@@ -213,7 +213,11 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             caret_anchor_x: cursor_x,
             caret_anchor_y: cursor_y,
-            is_caret_line: true,
+            // Issue #808 评论 5917296533 问题4: 构造函数默认 is_caret_line=false。
+            // 调用方（build_insert_reveal_slices / build_composition_commit_crossfade_slices）
+            // 按 coordinated 和 visual_line_id 显式设置此字段。
+            // 默认 false 避免 Composition 路径偷偷进入协同 caret mask 模式。
+            is_caret_line: false,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -261,7 +265,11 @@ impl AnimatedSlice {
             conceal_to_left_edge,
             caret_anchor_x: cursor_x,
             caret_anchor_y: cursor_y,
-            is_caret_line: true,
+            // Issue #808 评论 5917296533 问题4: 构造函数默认 is_caret_line=false。
+            // 调用方（build_delete_conceal_slices / build_composition_commit_crossfade_slices）
+            // 按 coordinated 和 visual_line_id 显式设置此字段。
+            // 默认 false 避免 Composition 路径偷偷进入协同 caret mask 模式。
+            is_caret_line: false,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -555,7 +563,39 @@ impl AnimatedSlice {
 
                 let (frame_x, frame_w, src_x, src_w) = if from_w <= 0.0 {
                     (from_left, 0.0, self.source_rect.x, 0.0)
+                } else if self.is_caret_line {
+                    // Issue #808 评论 5917296533 问题2: 前向 Delete 遮罩公式修复。
+                    // caret 在删除区域一侧时，整段遮罩向 caret 收拢，最终宽度归零。
+                    // 旧公式 left_boundary = anchor_x + (from_left - anchor_x) * visible
+                    // 在 anchor_x == from_left（Delete 键，新 caret 在被删字符左边）时
+                    // 恒等于 from_left，frame_w 不变，文字几乎不缩。
+                    //
+                    // 按评论要求按"最终 caret 在删除区域哪一侧"决定整段遮罩向哪边收：
+                    // - conceal_to_left_edge=false（Delete 键，caret 靠左）：
+                    //   左边界固定在 caret anchor，右边界从 from_right 收向 anchor。
+                    //   visible=0 → w=0，visible=1 → w=from_right-anchor。
+                    // - conceal_to_left_edge=true（Backspace，caret 靠右）：
+                    //   右边界固定在 caret anchor，左边界从 from_left 收向 anchor。
+                    //   visible=0 → w=0，visible=1 → w=anchor-from_left。
+                    if !self.conceal_to_left_edge {
+                        let left_boundary = anchor_x;
+                        let right_boundary = anchor_x + (from_right - anchor_x) * visible;
+                        let fw = (right_boundary - left_boundary).max(0.0);
+                        let sx = self.source_rect.x
+                            + (left_boundary - from_left) / from_w * self.source_rect.w;
+                        let sw = self.source_rect.w * (fw / from_w);
+                        (left_boundary, fw, sx, sw)
+                    } else {
+                        let right_boundary = anchor_x;
+                        let left_boundary = anchor_x - (anchor_x - from_left) * visible;
+                        let fw = (right_boundary - left_boundary).max(0.0);
+                        let sx = self.source_rect.x
+                            + (left_boundary - from_left) / from_w * self.source_rect.w;
+                        let sw = self.source_rect.w * (fw / from_w);
+                        (left_boundary, fw, sx, sw)
+                    }
                 } else if self.conceal_to_left_edge {
+                    // 跨行（is_caret_line=false）：向行首收，原公式保持。
                     // 可见区域左边界固定在 from_left，右边界从 from_right 收向 anchor_x
                     let right_boundary = anchor_x + (from_right - anchor_x) * visible;
                     let fw = (right_boundary - from_left).max(0.0);
@@ -563,6 +603,7 @@ impl AnimatedSlice {
                     let sw = self.source_rect.w * (fw / from_w);
                     (from_left, fw, sx, sw)
                 } else {
+                    // 跨行（is_caret_line=false）：向行尾收，原公式保持。
                     // 可见区域右边界固定在 from_right，左边界从 from_left 收向 anchor_x
                     let left_boundary = anchor_x + (from_left - anchor_x) * visible;
                     let fw = (from_right - left_boundary).max(0.0);

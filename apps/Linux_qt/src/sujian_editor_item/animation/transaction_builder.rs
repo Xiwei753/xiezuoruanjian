@@ -192,6 +192,10 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
                 crossfade.candidate_byte_end,
                 spec.old_cursor_rect.as_ref(),
                 spec.new_cursor_rect.as_ref(),
+                // Issue #808 评论 5917296533 问题4: Composition 路径统一协同模式参数。
+                // coordinated=false 时只走独立文字动画语义；coordinated=true 才启用 caret 锚点。
+                spec.coordinated_animation_enabled,
+                spec.new_cursor_visual_line_id,
             ));
         }
     }
@@ -475,22 +479,30 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
     if a.snapshot_id != b.snapshot_id {
         return false;
     }
-    // 条件 3：相邻 byte range
-    if a.byte_end != b.byte_start {
-        return false;
-    }
+    // 条件 3：相邻 byte range（Reflow 仍要求；InsertReveal/DeleteConceal 放宽为同 visual_line_id）
     // 条件 4：同方向
     match a.kind {
         AnimatedSliceKind::InsertReveal => {
-            // 同一行吐字：from_document_rect 的 y 相同
-            (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
+            // Issue #808 评论 5917296533 问题3: 同一行的 slice 即使 byte range
+            // 不连续（中间被空格/tab 断开）也合并为行级共同 extent，避免"多个字块
+            // 同时冒出来"。条件从 byte range 相邻放宽为同 visual_line_id。
+            // 合并后取 union rect 作为行级共同 boundary，compute_frame 对整行展开。
+            a.visual_line_id.is_some()
+                && a.visual_line_id == b.visual_line_id
+                && (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
         }
         AnimatedSliceKind::DeleteConceal => {
-            // 同一行吞字且同方向：from_document_rect 的 y 相同，conceal_to_left_edge 相同
-            (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
+            // Issue #808 评论 5917296533 问题3: 同上，DeleteConceal 也按 visual_line_id 合并。
+            a.visual_line_id.is_some()
+                && a.visual_line_id == b.visual_line_id
+                && (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
                 && a.conceal_to_left_edge == b.conceal_to_left_edge
         }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+            // Reflow 仍要求 byte range 相邻，不跨空格合并。
+            if a.byte_end != b.byte_start {
+                return false;
+            }
             // 移动向量相同：dx = to.x - from.x, dy = to.y - from.y
             let a_dx = a.to_document_rect.x - a.from_document_rect.x;
             let a_dy = a.to_document_rect.y - a.from_document_rect.y;
@@ -582,7 +594,9 @@ impl LinuxEditorAnimationCoordinator {
         // （coordinated || smooth）由调用方按同一份设置算出，两者互相独立。
         text_animation_enabled: bool,
         caret_animation_enabled: bool,
-        // Issue #756: 协同动画显式模式。决定吞吐字是否由 caret 驱动。
+        // Issue #808 评论 5917296533: 协同动画显式模式。决定吞吐字遮罩锚点是否取自
+        // caret 位置。协同不再把文字与光标绑死：文字动画按自己的 timeline 推进，
+        // caret 只决定遮罩的空间锚点/方向。
         coordinated_animation_enabled: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
@@ -650,6 +664,22 @@ impl LinuxEditorAnimationCoordinator {
                 };
                 let prepared_tx = build_prepared_transaction(spec);
 
+                // Issue #808 评论 5917296533 问题1: 空 units 不 enqueue。
+                // 可见 Insert + 请求文字动画，但没有任何 InsertReveal（如 inserted_range
+                // 只含空格被跳过），不能 enqueue 一个 units=0 的 Insert 文字事务。
+                // 非协同且 smooth cursor 单独开启时由 Cursor 操作分支处理，不在此伪装。
+                // 协同模式要求这一笔同时有真实文字视觉 + cursor track；文字视觉拿不到
+                // 时不要伪装成协同事务。
+                if prepared_tx.units.is_empty() {
+                    editor_animation_debug_log(&format!(
+                        "anim_event: key={:?} op=Insert inserted={:?} skipped: \
+                         prepared_tx.units empty (no InsertReveal/Reflow generated), \
+                         not enqueueing empty text transaction",
+                        key, inserted_range_tuple,
+                    ));
+                    return None;
+                }
+
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
                 editor_animation_debug_log(&format!(
@@ -714,6 +744,17 @@ impl LinuxEditorAnimationCoordinator {
                     composition_commit_crossfade: None,
                 };
                 let prepared_tx = build_prepared_transaction(spec);
+
+                // Issue #808 评论 5917296533 问题1: 空 units 不 enqueue（同 Insert 分支）。
+                if prepared_tx.units.is_empty() {
+                    editor_animation_debug_log(&format!(
+                        "anim_event: key={:?} op=Delete deleted={:?} skipped: \
+                         prepared_tx.units empty (no DeleteConceal/Reflow generated), \
+                         not enqueueing empty text transaction",
+                        key, deleted_ranges_log,
+                    ));
+                    return None;
+                }
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");

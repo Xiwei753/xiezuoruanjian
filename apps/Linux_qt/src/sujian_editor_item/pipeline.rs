@@ -1604,8 +1604,9 @@ impl LinuxEditorPipeline {
                     prepared_handoff,
                     &motion,
                     // Issue #756: 文字动画 = coordinated || typing，光标动画 = coordinated || smooth。
-                    // 协同模式下文字与光标绑死，caret track 必须生成；coordinated=false 时由
-                    // smooth 单独决定（这就是"平滑光标"在正文编辑期间的光标动画）。
+                    // Issue #808 评论 5917296533: 协同不再把文字与光标绑死——文字动画按自己的
+                    // timeline 推进，caret 只决定遮罩的空间锚点/方向。coordinated=false 时由
+                    // smooth 单独决定光标动画（"平滑光标"在正文编辑期间的光标动画）。
                     text_animation_enabled,
                     caret_animation_enabled,
                     ctx.coordinated_animation_enabled,
@@ -1727,6 +1728,34 @@ pub(crate) struct AnimationVisualsInjectStatus {
     pub actual_inject_count: usize,
     /// 是否有任意行动画视觉不可用（prepare_miss + clusters_empty > 0 或 inject 不完整）。
     pub has_unavailable_lines: bool,
+    /// Issue #808 评论 5917296533 问题1: 具体失败的行集合。
+    ///
+    /// 返回每个失败 inserted visible line 的 `visual_line_id / para_start / qtextline_idx`，
+    /// 让上游可以精确重取失败行，而不是只拿到一个计数。
+    pub failed_lines: Vec<AnimationVisualsFailedLine>,
+}
+
+/// Issue #808 评论 5917296533 问题1: 单个失败 inserted visible line 的身份信息。
+///
+/// 上游据此用当前 `new_generation` + 准确 line id 再调用一次
+/// `prepare_animation_visuals_from_layout`，只重取失败行。
+#[derive(Clone, Debug)]
+pub(crate) struct AnimationVisualsFailedLine {
+    pub visual_line_idx: usize,
+    pub para_start: usize,
+    pub qtextline_idx: i32,
+    pub byte_start: usize,
+    pub byte_end: usize,
+    /// 失败原因：prepare 未命中 / clusters 为空。
+    pub reason: AnimationVisualsFailedReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AnimationVisualsFailedReason {
+    /// prepare_animation_visuals_from_layout 未返回该行的 snapshot。
+    PrepareMiss,
+    /// prepare 返回了 snapshot 但 clusters 为空。
+    ClustersEmpty,
 }
 
 /// Issue #785 评论 5857873894 修改 3 + 2b + Issue #808 评论 5916391891 修改 2:
@@ -1748,6 +1777,8 @@ fn inject_new_animation_visuals_with_diagnostics(
     let mut prepare_miss_count = 0usize;
     let mut clusters_empty_count = 0usize;
     let mut ok_count = 0usize;
+    // Issue #808 评论 5917296533 问题1: 收集具体失败行集合。
+    let mut failed_lines: Vec<AnimationVisualsFailedLine> = Vec::new();
 
     // 修改 3: 在 prepare 返回后、inject 之前，针对 inserted_range 检查
     // new_line_snapshots 中是否有对应行、clusters 是否非空。
@@ -1776,6 +1807,14 @@ fn inject_new_animation_visuals_with_diagnostics(
                 match snap {
                     None => {
                         prepare_miss_count += 1;
+                        failed_lines.push(AnimationVisualsFailedLine {
+                            visual_line_idx: i,
+                            para_start: vl.para_start,
+                            qtextline_idx: vl.qtextline_idx,
+                            byte_start: vl.byte_start,
+                            byte_end: vl.byte_end,
+                            reason: AnimationVisualsFailedReason::PrepareMiss,
+                        });
                         crate::backend::app_backend::debug_warn_static(
                             "pipeline",
                             "prepare_animation_visuals_missing_for_inserted_line",
@@ -1797,6 +1836,14 @@ fn inject_new_animation_visuals_with_diagnostics(
                     }
                     Some(s) if s.clusters.is_empty() => {
                         clusters_empty_count += 1;
+                        failed_lines.push(AnimationVisualsFailedLine {
+                            visual_line_idx: i,
+                            para_start: vl.para_start,
+                            qtextline_idx: vl.qtextline_idx,
+                            byte_start: vl.byte_start,
+                            byte_end: vl.byte_end,
+                            reason: AnimationVisualsFailedReason::ClustersEmpty,
+                        });
                         crate::backend::app_backend::debug_warn_static(
                             "pipeline",
                             "prepare_animation_visuals_clusters_empty_for_inserted_line",
@@ -1851,6 +1898,7 @@ fn inject_new_animation_visuals_with_diagnostics(
         expected_inject_count,
         actual_inject_count,
         has_unavailable_lines,
+        failed_lines,
     }
 }
 

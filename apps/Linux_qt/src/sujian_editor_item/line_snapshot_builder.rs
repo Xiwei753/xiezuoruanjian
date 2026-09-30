@@ -110,14 +110,11 @@ impl LineSnapshotBuilder {
             // 如果 canonical line 已有 image 但 clusters 为空且该行含可见字符，
             // 说明 animation visuals 注入链漏了该行的 clusters（image 注入了但 clusters 没注入）。
             //
-            // Issue #808 评论 5916391891 修改 2: 不仅打 debug_warn，还不 push 该行——
-            // 不生成 "image 有、clusters 空"的 PreparedLineSnapshot 进入动画事务构建。
-            // 没有 cluster 的 image 无法参与动画（InsertReveal 按 cluster 匹配 inserted range），
-            // 保留该行会让 transaction_builder 看到该行像正常路径但 InsertReveal 为 0。
+            // Issue #808 评论 5917296533 问题1: 放宽跳过条件——不仅 image 有但 clusters 空，
+            // image=None + clusters=[] 且含可见字符也跳过（prepare_miss / inject miss 场景）。
+            // 不破坏正常的非 inserted 行：只有"clusters 空且含可见字符"才跳过。
             // 跳过该行让上游自然跳过 InsertReveal 构造，不创建 units=0 的伪动画事务。
-            // 不破坏正常的非 inserted 行：只有 "image 有但 clusters 空且含可见字符" 才跳过。
-            if image.is_some()
-                && clusters.is_empty()
+            if clusters.is_empty()
                 && line
                     .para_text
                     .chars()
@@ -125,10 +122,10 @@ impl LineSnapshotBuilder {
             {
                 crate::backend::app_backend::debug_warn_static(
                     "line_snapshot_builder",
-                    "canonical_line_image_but_clusters_empty_skip_line",
+                    "canonical_line_clusters_empty_skip_line",
                     &format!(
-                        "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} — \
-                         canonical line has image but clusters empty and line contains visible chars, \
+                        "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} \
+                         image={} — clusters empty and line contains visible chars, \
                          animation visuals injection incomplete for this line, skipping this line to \
                          prevent empty-cluster animation snapshot (InsertReveal units=0 pseudo transaction)",
                         revision.0,
@@ -136,6 +133,7 @@ impl LineSnapshotBuilder {
                         line.qtextline_idx,
                         line.byte_start,
                         line.byte_end,
+                        image.is_some(),
                     ),
                 );
                 // 跳过该行：不 push PreparedLineSnapshot，让上游自然跳过 InsertReveal 构造。
