@@ -664,17 +664,18 @@ impl LinuxEditorAnimationCoordinator {
                 };
                 let prepared_tx = build_prepared_transaction(spec);
 
-                // Issue #808 评论 5917296533 问题1: 空 units 不 enqueue。
-                // 可见 Insert + 请求文字动画，但没有任何 InsertReveal（如 inserted_range
-                // 只含空格被跳过），不能 enqueue 一个 units=0 的 Insert 文字事务。
-                // 非协同且 smooth cursor 单独开启时由 Cursor 操作分支处理，不在此伪装。
-                // 协同模式要求这一笔同时有真实文字视觉 + cursor track；文字视觉拿不到
-                // 时不要伪装成协同事务。
-                if prepared_tx.units.is_empty() {
+                // Issue #808 评论 5918236360 问题2: 不能按 units.is_empty() 猜暴判断。
+                // 合法的非可见输入（空格/tab/换行）本来就可以没有 InsertReveal；
+                // 如果有合法 cursor_visual_track，必须保留 cursor-only transaction。
+                // 非协同 smooth cursor 开启时尤其必须如此。coordinated 模式遇到没有
+                // 可见 glyph 的输入，也不能因为没有文字 unit 就把正常 caret track 一起扔掉。
+                // 只有当既没有文字 unit 也没有光标 track 时才是真正的空事务，才 return None。
+                if prepared_tx.units.is_empty() && prepared_tx.cursor_visual_track.is_none() {
                     editor_animation_debug_log(&format!(
                         "anim_event: key={:?} op=Insert inserted={:?} skipped: \
-                         prepared_tx.units empty (no InsertReveal/Reflow generated), \
-                         not enqueueing empty text transaction",
+                         prepared_tx.units empty and no cursor_visual_track (no \
+                         InsertReveal/Reflow and no caret track), not enqueueing \
+                         empty transaction",
                         key, inserted_range_tuple,
                     ));
                     return None;
@@ -745,12 +746,16 @@ impl LinuxEditorAnimationCoordinator {
                 };
                 let prepared_tx = build_prepared_transaction(spec);
 
-                // Issue #808 评论 5917296533 问题1: 空 units 不 enqueue（同 Insert 分支）。
-                if prepared_tx.units.is_empty() {
+                // Issue #808 评论 5918236360 问题2: 同 Insert 分支，不能按
+                // units.is_empty() 猜暴判断。如果有合法 cursor_visual_track，
+                // 必须保留 cursor-only transaction。只有当既没有文字 unit 也没有
+                // 光标 track 时才是真正的空事务，才 return None。
+                if prepared_tx.units.is_empty() && prepared_tx.cursor_visual_track.is_none() {
                     editor_animation_debug_log(&format!(
                         "anim_event: key={:?} op=Delete deleted={:?} skipped: \
-                         prepared_tx.units empty (no DeleteConceal/Reflow generated), \
-                         not enqueueing empty text transaction",
+                         prepared_tx.units empty and no cursor_visual_track (no \
+                         DeleteConceal/Reflow and no caret track), not enqueueing \
+                         empty transaction",
                         key, deleted_ranges_log,
                     ));
                     return None;

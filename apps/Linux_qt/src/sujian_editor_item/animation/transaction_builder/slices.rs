@@ -740,5 +740,17 @@ pub(crate) fn build_composition_commit_crossfade_slices(
         }
     }
 
+    // Issue #808 评论 5918236360 问题4: Composition 多字候选也要进入同一套
+    // 按 visual_line_id 的行级共同 mask。普通 Insert/Delete 路径已经有
+    // merge_adjacent_slices 按视觉行合并同行的 slice，形成行级共同 extent。
+    // Composition 路径之前直接返回 slices，没有调用 merge_adjacent_slices，
+    // 导致中文 IME 一次上屏多 cluster 时每个 InsertReveal 各自拿同一个 caret anchor，
+    // 但 compute_frame 把 anchor clamp 到各自 cluster rect，第二三个 cluster 仍会
+    // 从自己的边缘同时展开。调用 merge_adjacent_slices 让同一 visual_line_id 的
+    // 多个 cluster 合并成行级共同 extent，compute_frame 的 anchor clamp 就会
+    // clamp 到整行 extent 而非各自 cluster rect。
+    // merge_adjacent_slices 的 can_merge 只对 InsertReveal/DeleteConceal 合并，
+    // ReflowCrossFade/ReflowMove 不合并，所以不影响 reflow slice。
+    let slices = merge_adjacent_slices(slices);
     slices
 }

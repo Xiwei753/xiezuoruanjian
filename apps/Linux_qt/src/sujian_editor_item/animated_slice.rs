@@ -570,14 +570,21 @@ impl AnimatedSlice {
                     // 在 anchor_x == from_left（Delete 键，新 caret 在被删字符左边）时
                     // 恒等于 from_left，frame_w 不变，文字几乎不缩。
                     //
-                    // 按评论要求按"最终 caret 在删除区域哪一侧"决定整段遮罩向哪边收：
-                    // - conceal_to_left_edge=false（Delete 键，caret 靠左）：
-                    //   左边界固定在 caret anchor，右边界从 from_right 收向 anchor。
-                    //   visible=0 → w=0，visible=1 → w=from_right-anchor。
-                    // - conceal_to_left_edge=true（Backspace，caret 靠右）：
-                    //   右边界固定在 caret anchor，左边界从 from_left 收向 anchor。
-                    //   visible=0 → w=0，visible=1 → w=anchor-from_left。
-                    if !self.conceal_to_left_edge {
+                    // Issue #808 评论 5918236360 问题3: coordinated 模式下不能用
+                    // old caret 推出来的 conceal_to_left_edge 决定收拢侧。Backspace 时
+                    // old caret=160（靠右）→ conceal_to_left_edge=true，但 final caret=100
+                    // （靠左）应该向左收，用 true 分支公式会导致 visible=1 时 fw=0
+                    // （文字从第一帧就完全不可见）。
+                    // 修复：用 anchor_x（final/new caret）相对 deleted extent 中点决定方向。
+                    // - final caret 在左半（anchor_x <= from_left + from_w * 0.5）→ 向左收：
+                    //   左边界固定在 anchor_x，右边界从 from_right 收向 anchor。
+                    //   visible=1 → w=from_right-anchor，visible=0 → w=0。
+                    // - final caret 在右半 → 向右收：
+                    //   右边界固定在 anchor_x，左边界从 from_left 收向 anchor。
+                    //   visible=1 → w=anchor-from_left，visible=0 → w=0。
+                    let shrink_to_left = anchor_x <= from_left + from_w * 0.5;
+                    if shrink_to_left {
+                        // final caret 在左半 → 向左收
                         let left_boundary = anchor_x;
                         let right_boundary = anchor_x + (from_right - anchor_x) * visible;
                         let fw = (right_boundary - left_boundary).max(0.0);
@@ -586,6 +593,7 @@ impl AnimatedSlice {
                         let sw = self.source_rect.w * (fw / from_w);
                         (left_boundary, fw, sx, sw)
                     } else {
+                        // final caret 在右半 → 向右收
                         let right_boundary = anchor_x;
                         let left_boundary = anchor_x - (anchor_x - from_left) * visible;
                         let fw = (right_boundary - left_boundary).max(0.0);

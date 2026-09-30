@@ -546,15 +546,19 @@ fn test_commit_separate_preedit_and_committed_replace_ranges() {
         !old_preedit_slices.is_empty(),
         "preedit range should have animated slices"
     );
+    // Issue #808 评论 5918236360 问题4: Composition 多字候选按 visual_line_id
+    // 合并为行级共同 extent。candidate range [3,5) 的 slice 与 [5,8) 的 slice
+    // 合并后 byte range 变成 [3,8)，测试应检查合并后的 slice 覆盖 candidate range。
     let new_candidate_slices: Vec<&AnimatedSlice> = tx
         .units
         .iter()
-        .filter(|u| u.slice.byte_start >= 3 && u.slice.byte_end <= 5)
+        .filter(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
+        .filter(|u| u.slice.byte_start <= 3 && u.slice.byte_end >= 5)
         .map(|u| &u.slice)
         .collect();
     assert!(
         !new_candidate_slices.is_empty(),
-        "candidate range should have animated slices"
+        "candidate range [3,5) should have animated slice (merged to byte range covering [3,5))"
     );
 }
 
@@ -2192,11 +2196,85 @@ fn issue808_comment5917296533_problem2_forward_delete_conceal_mask_not_shrinking
     );
 }
 
-/// 问题 1: InsertReveal 丢失链——create_transaction_from_prepared_handoff 空 units 不 enqueue。
+/// 问题 3（Issue #808 评论 5918236360）: Backspace 遮罩对称性。
+///
+/// Backspace 场景：extent=[100,160], old caret=160, new/final caret=100。
+/// `build_delete_conceal_slices` 用 old caret 算 `conceal_to_left_edge`：
+/// `(160-160).abs() <= (160-100).abs()` → `0 <= 60` → `true`。
+/// 旧代码 is_caret_line=true 分支用 `conceal_to_left_edge` 选 true 分支：
+/// `right_boundary=anchor_x=100, left_boundary=100-(100-100)*visible=100`
+/// → visible=1 时 fw=0，文字从第一帧就完全不可见。
+///
+/// Issue #808 评论 5918236360 问题3 修复后：is_caret_line=true 分支不再用
+/// `conceal_to_left_edge`（old caret 推出来的），改用 `anchor_x`（final caret）
+/// 相对 deleted extent 中点决定收拢方向。final caret=100 在 [100,160] 左半
+/// → 向左收 → visible=1 时 w=60（完整），visible=0 时 w=0（归零）。
+#[test]
+fn issue808_comment5918236360_problem3_backspace_conceal_mask_symmetric() {
+    let key = VisualTransactionKey::new(1, 1);
+    let snapshot_id = LineSnapshotId::new(1, 0, 0);
+    // 被删区域 document rect [100,160]，source rect 与 document rect 一致（dpr=1, origin=0）
+    let from_doc = SourceRect {
+        x: 100.0,
+        y: 0.0,
+        w: 60.0,
+        h: 20.0,
+    };
+    let source = SourceRect {
+        x: 100.0,
+        y: 0.0,
+        w: 60.0,
+        h: 20.0,
+    };
+    // Backspace: old caret=160（靠右）→ conceal_to_left_edge=true
+    // new/final caret=100（靠左）→ anchor_x=100
+    let mut slice = AnimatedSlice::delete_conceal(
+        key,
+        snapshot_id,
+        source,
+        from_doc,
+        100.0, // caret_anchor_x = final/new caret = 100 = from_left
+        0.0,
+        0,
+        1,
+        None,
+        true, // conceal_to_left_edge = true（old caret=160 推出来的）
+        Some(0),
+    );
+    slice.is_caret_line = true; // 协同模式：caret 在删除区域一侧
+    // visible=1：文字应完全可见，frame.w 应为 60
+    let frame_full = slice.compute_frame(1.0);
+    assert!(
+        (frame_full.w - 60.0).abs() < 0.5,
+        "问题3 修复后：Backspace visible=1 时 frame.w={}（应为 60），\
+         遮罩完全打开，文字完全可见",
+        frame_full.w
+    );
+    // visible=0：文字应完全被吞掉，frame.w 应为 0
+    let frame = slice.compute_frame(0.0);
+    assert!(
+        frame.w.abs() < 0.5,
+        "问题3 修复后：Backspace visible=0 时 frame.w={}（应为 0），\
+         遮罩完全收拢，文字被完全吞掉",
+        frame.w
+    );
+    // 验证 visible 0→1 有显著变化（遮罩动画有效，不是从第一帧就不可见）
+    assert!(
+        (frame_full.w - frame.w).abs() > 50.0,
+        "问题3 修复后：Backspace visible=0 时 w={} 与 visible=1 时 w={} 差异显著，\
+         遮罩动画有效，不是从第一帧就完全不可见",
+        frame.w,
+        frame_full.w
+    );
+}
+
+/// 问题 1→2: InsertReveal 丢失链——空格输入 + caret 动画开启时保留 cursor-only 事务。
 ///
 /// 当 inserted_range 只含空格时，`build_insert_reveal_slices` 跳过空格（whitespace 跳过）
-/// 返回空 slices，`prepared_tx.units` 为空。Issue #808 评论 5917296533 修复后：
-/// `create_transaction_from_prepared_handoff` 检查 units 为空则不 enqueue，返回 None。
+/// 返回空 slices，`prepared_tx.units` 为空。Issue #808 评论 5918236360 问题2 修复后：
+/// `create_transaction_from_prepared_handoff` 不再仅按 `units.is_empty()` 丢弃事务。
+/// 空格是合法的非可见输入，本来就可以没有 InsertReveal；当 `caret_animation_enabled=true`
+/// 且有合法 `cursor_visual_track` 时，必须保留 cursor-only 事务（有光标 track，units 可以为空）。
 #[test]
 fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_whitespace() {
     use crate::sujian_editor_item::edit_motion::{EditorAnimationKind, PreparedEditMotion};
@@ -2269,18 +2347,32 @@ fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_white
         1,
         LayoutRevision::initial(),
     );
-    // 问题 1 修复后：空 units 事务不被创建，key 为 None
+    // Issue #808 评论 5918236360 问题2 修复后：空格输入 + caret_animation_enabled=true
+    // 产生 cursor-only 事务（有 cursor_visual_track，units 可以为空），key 为 Some。
     assert!(
-        key.is_none(),
-        "问题1 修复后：inserted_range 只含空格 → build_insert_reveal_slices 返回空 → \
-         prepared_tx.units 为空，create_transaction_from_prepared_handoff 不 enqueue，返回 None"
+        key.is_some(),
+        "问题2 修复后：inserted_range 只含空格 + caret_animation_enabled=true → \
+         build_insert_reveal_slices 返回空 → prepared_tx.units 为空，但有合法 \
+         cursor_visual_track，create_transaction_from_prepared_handoff 保留 \
+         cursor-only 事务，返回 Some(key)"
     );
-    // 确认没有空事务被 enqueue
-    let has_any_tx = !coord.prepared_queue.active_transactions().is_empty();
+    // 确认 cursor-only 事务被 enqueue：units 为空但 cursor_visual_track 为 Some
+    let active = coord.prepared_queue.active_transactions();
     assert!(
-        !has_any_tx,
-        "问题1 修复后：空格 inserted_range 不应产生任何事务，\
-         prepared_queue 应为空"
+        !active.is_empty(),
+        "问题2 修复后：空格 inserted_range + caret 动画应产生 cursor-only 事务，\
+         prepared_queue 不应为空"
+    );
+    let tx = &active[0];
+    assert!(
+        tx.units.is_empty(),
+        "问题2 修复后：空格输入不产生 InsertReveal，units 应为空（实际 {} 个）",
+        tx.units.len()
+    );
+    assert!(
+        tx.cursor_visual_track.is_some(),
+        "问题2 修复后：caret_animation_enabled=true + 有 new_cursor_rect → \
+         必须有 cursor_visual_track，保留 cursor-only 事务"
     );
 }
 
@@ -2471,6 +2563,103 @@ fn issue808_comment5917296533_problem4_composition_bypasses_coordinated_mode_del
              is_caret_line={}（应为 false），只走独立文字动画语义，不偷偷进入协同 caret mask 模式",
             i,
             s.is_caret_line
+        );
+    }
+}
+
+/// 问题 4（Issue #808 评论 5918236360）: Composition 多字候选按 visual_line_id
+/// 形成行级共同 mask 边界。
+///
+/// 中文 IME 一次上屏多 cluster（如 "abc" 三个字）时，每个 InsertReveal 都拿同一个
+/// caret anchor（insert_cx），但 compute_frame 会把 anchor clamp 到**各自 cluster rect**；
+/// 第二三个 cluster 仍会从自己的边缘同时展开。
+///
+/// Issue #808 评论 5918236360 问题4 修复后：`build_composition_commit_crossfade_slices`
+/// 返回前调用 `merge_adjacent_slices`，让同一 visual_line_id 的多个 cluster 合并成
+/// 行级共同 extent。这样 compute_frame 的 anchor clamp 就会 clamp 到整行 extent
+/// 而非各自 cluster rect，形成一条共同吐字边界。
+#[test]
+fn issue808_comment5918236360_problem4_composition_multichar_shared_line_mask() {
+    let sid = ShapingIdentity {
+        text_content_hash: 810,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 810,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    // old preedit 为空，new candidate 为 "abc"（3 个 cluster [0,1) [1,2) [2,3)）
+    // 同一 visual_line_id=0，同一 y=0.0
+    let old_snapshot = make_test_snapshot("", vec![]);
+    let new_snapshot = make_test_snapshot(
+        "abc",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    let key = VisualTransactionKey::new(1, 1);
+    let old_cursor = CursorRect {
+        x: 0.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    let new_cursor = CursorRect {
+        x: 30.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    // preedit 范围 [0,0)（空），candidate 范围 [0,3)（"abc"）
+    // coordinated=true → is_caret_line=true（caret 所在行）
+    let slices = build_composition_commit_crossfade_slices(
+        key,
+        &old_snapshot,
+        &new_snapshot,
+        &offset_map,
+        0,
+        0,
+        0,
+        3,
+        Some(&old_cursor),
+        Some(&new_cursor),
+        true,  // coordinated = true
+        Some(0), // caret_visual_line_id = 0
+    );
+    let insert_reveals: Vec<_> = slices
+        .iter()
+        .filter(|s| s.kind == AnimatedSliceKind::InsertReveal)
+        .collect();
+    assert!(
+        !insert_reveals.is_empty(),
+        "应至少产生一个 InsertReveal slice（new candidate \"abc\" 在 old 中无匹配）"
+    );
+    // 问题 4 修复后：同一 visual_line_id 的 3 个 cluster 合并为 1 个行级共同 extent slice
+    assert!(
+        insert_reveals.len() == 1,
+        "问题4 修复后：\"abc\" 3 个 cluster 同 visual_line_id 应合并为 1 个行级共同 \
+         extent InsertReveal（实际 {} 个），不再各自从自己边缘同时展开",
+        insert_reveals.len()
+    );
+    // 验证合并后的 slice 覆盖整行（byte range [0,3)）
+    if insert_reveals.len() == 1 {
+        let s = insert_reveals[0];
+        assert!(
+            s.byte_start == 0 && s.byte_end == 3,
+            "问题4 修复后：合并后 slice byte range 应为 [0,3)（实际 [{},{})），\
+             覆盖整行 abc",
+            s.byte_start,
+            s.byte_end
+        );
+        // 验证合并后的 to_document_rect 覆盖整行宽度（3 个 cluster 各 10.0 → 30.0）
+        assert!(
+            (s.to_document_rect.w - 30.0).abs() < 0.5,
+            "问题4 修复后：合并后 slice to_document_rect.w 应为 30.0（3 个 cluster \
+             各 10.0，实际 {}），形成行级共同 extent",
+            s.to_document_rect.w
         );
     }
 }

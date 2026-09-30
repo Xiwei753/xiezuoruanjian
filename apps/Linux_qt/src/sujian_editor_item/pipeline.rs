@@ -1383,6 +1383,70 @@ impl LinuxEditorPipeline {
                     ));
                 }
 
+                // Issue #808 评论 5918236360 问题1: 对失败行做第二次精确重取。
+                // 第一次 prepare/inject 后，failed_lines 收集了所有失败行（prepare miss、
+                // clusters empty、inject miss）。用当前 new_generation 对这些行的
+                // visual_line_idx 再调用一次 prepare_animation_visuals_from_layout，
+                // 只重取失败行，然后 inject。第二次仍失败的行记日志（animation
+                // unavailable），不阻塞事务构造，不伪造文字 unit。
+                if inject_status.has_unavailable_lines && !inject_status.failed_lines.is_empty() {
+                    let failed_indices: Vec<usize> = inject_status
+                        .failed_lines
+                        .iter()
+                        .map(|fl| fl.visual_line_idx)
+                        .collect();
+                    // prepare 需要不可变借用 visual_lines，inject 需要可变借用
+                    // new_doc_snapshot。用内层块隔离 retry_handle 的借用生命周期，
+                    // 块结束时 retry_handle drop，借用释放，随后可以 &mut。
+                    let retry_snapshots = {
+                        let retry_handle = layout::PreparedLayoutHandle {
+                            generation: new_generation,
+                            lines: &new_doc_snapshot.visual_lines,
+                        };
+                        layout::prepare_animation_visuals_from_layout(
+                            &retry_handle,
+                            &failed_indices,
+                            ctx.dpr,
+                            &ctx.text_color,
+                        )
+                    };
+                    let retry_expected = retry_snapshots.len();
+                    let retry_actual = layout::inject_animation_visuals_into_snapshot(
+                        &mut new_doc_snapshot,
+                        retry_snapshots,
+                    );
+                    if retry_actual < retry_expected {
+                        // 记日志时读取 failed_lines 各字段，让诊断明确知道哪些行
+                        // 第二次仍失败（animation unavailable），不伪造文字 unit。
+                        let detail = inject_status
+                            .failed_lines
+                            .iter()
+                            .map(|fl| {
+                                format!(
+                                    "vidx={} para={} qtline={} bytes=[{}..{}) reason={:?}",
+                                    fl.visual_line_idx,
+                                    fl.para_start,
+                                    fl.qtextline_idx,
+                                    fl.byte_start,
+                                    fl.byte_end,
+                                    fl.reason
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        super::editor_animation_debug_log(&format!(
+                            "prepare_edit_motion: animation visuals retry inject still \
+                             incomplete failed_lines={} retry_expected={} retry_actual={} \
+                             detail=[{}] — remaining lines marked animation unavailable, \
+                             not fabricating text units",
+                            inject_status.failed_lines.len(),
+                            retry_expected,
+                            retry_actual,
+                            detail,
+                        ));
+                    }
+                }
+
                 // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
                 // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
                 // 用 new VisualLine 的 x/y 生成 reflow_move 终点。
@@ -1756,6 +1820,10 @@ pub(crate) enum AnimationVisualsFailedReason {
     PrepareMiss,
     /// prepare 返回了 snapshot 但 clusters 为空。
     ClustersEmpty,
+    /// Issue #808 评论 5918236360 问题1: prepare 成功且 clusters 非空，但
+    /// inject_animation_visuals_into_snapshot 未将该行注入 doc_snapshot
+    ///（稳定行身份在目标 snapshot 中找不到匹配行）。
+    InjectMiss,
 }
 
 /// Issue #785 评论 5857873894 修改 3 + 2b + Issue #808 评论 5916391891 修改 2:
@@ -1779,6 +1847,10 @@ fn inject_new_animation_visuals_with_diagnostics(
     let mut ok_count = 0usize;
     // Issue #808 评论 5917296533 问题1: 收集具体失败行集合。
     let mut failed_lines: Vec<AnimationVisualsFailedLine> = Vec::new();
+    // Issue #808 评论 5918236360 问题1: 收集 prepare 成功且 clusters 非空的行身份，
+    // inject 后用于检测 inject miss（prepare 成功但 inject 未命中目标行）。
+    let mut prepared_ok_lines: Vec<(usize, usize, i32, usize, usize)> = Vec::new();
+    // (visual_line_idx, para_start, qtextline_idx, byte_start, byte_end)
 
     // 修改 3: 在 prepare 返回后、inject 之前，针对 inserted_range 检查
     // new_line_snapshots 中是否有对应行、clusters 是否非空。
@@ -1865,6 +1937,15 @@ fn inject_new_animation_visuals_with_diagnostics(
                     }
                     Some(_) => {
                         ok_count += 1;
+                        // Issue #808 评论 5918236360 问题1: 记录 prepare 成功且
+                        // clusters 非空的行身份，inject 后用于检测 inject miss。
+                        prepared_ok_lines.push((
+                            i,
+                            vl.para_start,
+                            vl.qtextline_idx,
+                            vl.byte_start,
+                            vl.byte_end,
+                        ));
                     }
                 }
             }
@@ -1883,6 +1964,63 @@ fn inject_new_animation_visuals_with_diagnostics(
                 "expected={} actual={} — some new line snapshots were not injected \
                  (see canonical_snapshot::inject_animation_visuals_line_not_found)",
                 expected_inject_count, actual_inject_count,
+            ),
+        );
+    }
+    // Issue #808 评论 5918236360 问题1: 检测 inject miss。
+    // prepare 成功且 clusters 非空的行，inject 后应在 new_doc_snapshot.paragraphs 中
+    // 对应行（按 paragraph_document_byte_start + qtextline_idx 匹配）有非空 clusters。
+    // 如果仍为空，说明 inject 未命中目标行（稳定行身份在目标 snapshot 中找不到匹配），
+    // 把该行加入 failed_lines，让上游做第二次精确重取。
+    let mut inject_miss_count = 0usize;
+    for (vidx, para_start, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
+        let injected = new_doc_snapshot
+            .paragraphs
+            .iter()
+            .find_map(|para| {
+                if para.paragraph_document_byte_start == *para_start {
+                    para.lines.get(*qtextline_idx as usize)
+                } else {
+                    None
+                }
+            })
+            .map(|line| !line.clusters.is_empty())
+            .unwrap_or(false);
+        if !injected {
+            inject_miss_count += 1;
+            failed_lines.push(AnimationVisualsFailedLine {
+                visual_line_idx: *vidx,
+                para_start: *para_start,
+                qtextline_idx: *qtextline_idx,
+                byte_start: *byte_start,
+                byte_end: *byte_end,
+                reason: AnimationVisualsFailedReason::InjectMiss,
+            });
+            crate::backend::app_backend::debug_warn_static(
+                "pipeline",
+                "inject_animation_visuals_inject_miss_for_inserted_line",
+                &format!(
+                    "visual_line_idx={} para_start={} qtextline_idx={} \
+                     byte_start={} byte_end={} — prepare succeeded with non-empty \
+                     clusters but inject_animation_visuals_into_snapshot did not \
+                     inject this line (stable line identity not found in target \
+                     snapshot), animation visuals injection missed this line",
+                    vidx, para_start, qtextline_idx, byte_start, byte_end,
+                ),
+            );
+        }
+    }
+    // Issue #808 评论 5918236360 问题1: inject miss 汇总日志，让上游明确知道
+    // 有多少行 prepare 成功但 inject 未命中。
+    if inject_miss_count > 0 {
+        crate::backend::app_backend::debug_warn_static(
+            "pipeline",
+            "inject_animation_visuals_inject_miss_summary",
+            &format!(
+                "inject_miss_count={} — these lines had successful prepare with \
+                 non-empty clusters but inject did not find matching target line, \
+                 added to failed_lines for retry",
+                inject_miss_count,
             ),
         );
     }
