@@ -103,6 +103,7 @@ char*  writer_core_update_starmap_node(const char* starmap_id, const char* node_
 char*  writer_core_add_starmap_edge(const char* starmap_id, const char* edge_json);
 char*  writer_core_add_starmap_node(const char* starmap_id, const char* node_json, float x, float y);
 char*  writer_core_add_starmap_embed(const char* starmap_id, const char* embed_json);
+char*  writer_core_create_starmap_child_embed(const char* host_starmap_id, const char* title, const char* position_json);
 char*  writer_core_update_starmap_embed(const char* starmap_id, const char* instance_id, const char* patch_json);
 
 // ── Sync ──

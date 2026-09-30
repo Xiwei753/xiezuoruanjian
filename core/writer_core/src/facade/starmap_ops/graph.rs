@@ -582,6 +582,124 @@ impl super::super::WriterCore {
         store.acknowledge_deletions(acknowledged_revision)
     }
 
+    /// 原子组合操作：创建子星图并嵌入父图（crash-safe）。
+    ///
+    /// 使用 journal 事务确保 crash-safe：
+    /// 1. 先生成确定的 child_starmap_id
+    /// 2. 写 pending journal（原子写盘）
+    /// 3. 用确定 ID 创建 child meta/index
+    /// 4. 在 host Store 写 Embed
+    /// 5. flush host Store，确认 Embed 已落盘
+    ///
+    /// **不** complete/cleanup journal——把 tx_id 返回给调用方，
+    /// 由调用方在 `record_workspace_change_set_history` 成功后
+    /// 调 `ack_child_embed_history` 推进 journal 到 Completed 并清理。
+    ///
+    /// 返回 `(StarMapMeta, StarMapEmbed, WorkspaceChangeSet, tx_id)`，
+    /// WorkspaceChangeSet 包含 child meta 路径、starmap index 路径、host Embed/graph meta 路径。
+    pub fn create_starmap_child_embed(
+        &self,
+        host_starmap_id: &str,
+        title: &str,
+        position: crate::starmap::types::StarMapPoint,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::starmap::types::StarMapEmbed,
+        crate::storage::workspace_git::WorkspaceChangeSet,
+        String,
+    )> {
+        // Step 1: 生成确定的 child_starmap_id
+        let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
+
+        // Step 2: 写 pending journal（原子写盘）
+        let mut tx = crate::storage::journal::StarMapChildEmbedTransaction::new(
+            host_starmap_id,
+            &child_starmap_id,
+            title,
+            position.clone(),
+            &self.app_data_root,
+        );
+        tx.prepare()?;
+
+        // Step 3: 用确定 ID 创建 child meta/index
+        let child_meta = match crate::starmap::create_starmap_with_id(
+            &self.app_data_root,
+            &child_starmap_id,
+            title,
+            "",
+            None,
+        ) {
+            Ok(meta) => meta,
+            Err(e) => {
+                // 创建失败：清 journal（child 未创建，Pending phase）
+                log::warn!(
+                    "create_starmap_child_embed: create_starmap_with_id failed, \
+                     clearing journal tx_id={}: {}",
+                    tx.tx_id(),
+                    e
+                );
+                // journal 在 Pending phase，恢复时会清除
+                return Err(e);
+            }
+        };
+        tx.mark_child_created()?;
+
+        // Step 4: 构造 Embed 并添加到宿主图（使用 journal 中预生成的 embed_instance_id）
+        let now = crate::starmap::now_epoch();
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: tx.embed_instance_id().to_string(),
+            target_starmap_id: child_meta.starmap_id.clone(),
+            label: Some(title.to_string()),
+            position,
+            host_path: crate::starmap::types::StarMapTargetPath {
+                starmap_id: host_starmap_id.to_string(),
+                segments: Vec::new(),
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let created_embed = match self.add_starmap_embed(host_starmap_id, embed) {
+            Ok(embed) => embed,
+            Err(e) => {
+                // Embed 添加失败：journal 保留在 ChildCreated phase，
+                // 下次启动恢复时会补 Embed 或清理。
+                log::warn!(
+                    "create_starmap_child_embed: add_starmap_embed failed, \
+                     journal retained at ChildCreated tx_id={}: {}",
+                    tx.tx_id(),
+                    e
+                );
+                return Err(e);
+            }
+        };
+
+        // Step 5: flush host Store，确认 Embed 已落盘
+        let host_changed_paths = self.flush_starmap_store(host_starmap_id)?;
+        tx.mark_embed_added()?;
+
+        // 不 complete/cleanup journal——由调用方在 history 记录成功后 ack。
+        let tx_id = tx.tx_id().to_string();
+
+        // 构造 WorkspaceChangeSet：
+        // - child meta 路径 + starmap index 路径（create_starmap_with_id 写的）
+        // - host changed paths（add_starmap_embed + flush 写的真实文件路径）
+        let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+            .add_upsert(
+                std::path::PathBuf::from("starmaps")
+                    .join(format!("{}.meta.json", child_meta.starmap_id)),
+            )
+            .add_upsert(std::path::PathBuf::from("starmaps").join("index.json"));
+
+        for path in host_changed_paths {
+            change_set = change_set.add_upsert(path);
+        }
+
+        Ok((child_meta, created_embed, change_set, tx_id))
+    }
+
     pub fn find_starmap_references(
         &self,
         target_starmap_id: &str,

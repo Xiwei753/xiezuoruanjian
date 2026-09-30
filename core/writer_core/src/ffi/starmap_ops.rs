@@ -3,7 +3,7 @@ use std::os::raw::c_char;
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 use crate::api::{
     StarMapEdgeDto, StarMapEmbedDto, StarMapEmbedPatchInputDto, StarMapMetaDto, StarMapNodeDto,
-    StarMapNodePatchInputDto,
+    StarMapNodePatchInputDto, StarMapPointDto,
 };
 
 #[no_mangle]
@@ -447,6 +447,59 @@ pub unsafe extern "C" fn writer_core_add_starmap_embed(
     match with_app_service(|svc| {
         let result = svc
             .add_starmap_embed(sid, embed)
+            .map_err(|e| format!("{}", e))?;
+        Ok(result)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `host_starmap_id`, `title`, and `position_json` all point to
+/// valid, null-terminated C strings. Passing null pointers or invalid pointers is
+/// undefined behavior.
+pub unsafe extern "C" fn writer_core_create_starmap_child_embed(
+    host_starmap_id: *const c_char,
+    title: *const c_char,
+    position_json: *const c_char,
+) -> *mut c_char {
+    let host_id = match c_str_to_rust(host_starmap_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid host_starmap_id: error {}", e),
+            )
+        }
+    };
+    let title_str = match c_str_to_rust(title) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid title: error {}", e)),
+    };
+    let position_str = match c_str_to_rust(position_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid position_json: error {}", e),
+            )
+        }
+    };
+    let position = match serde_json::from_str::<StarMapPointDto>(&position_str) {
+        Ok(p) => p,
+        Err(e) => {
+            return err_json(
+                "PARSE_ERROR",
+                &format!("Failed to parse position_json: {}", e),
+            )
+        }
+    };
+    match with_app_service(|svc| {
+        let result = svc
+            .create_starmap_child_embed(host_id, title_str, position)
             .map_err(|e| format!("{}", e))?;
         Ok(result)
     }) {

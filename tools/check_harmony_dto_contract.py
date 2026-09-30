@@ -141,6 +141,7 @@ DECODER_MAP: dict[str, str] = {
     "decodeStarMapHyperlink": "StarMapHyperlinkDto",
     "decodeStarMapGraph": "StarMapGraphDto",
     "decodeStarMapMeta": "StarMapMetaDto",
+    "decodeCreateStarmapChildEmbedResult": "CreateStarMapChildEmbedResultDto",
     "decodeProviderConfig": "ProviderConfigDto",
     "decodeProviderSecrets": "ProviderSecretsDto",
     "decodeSyncSecrets": "SyncSecretsDto",

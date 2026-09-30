@@ -216,3 +216,10 @@ export interface StarMapMeta {
   createdAt: number
   updatedAt: number
 }
+
+// CreateStarMapChildEmbedResultDto（Issue #802：组合操作返回新星图 + 内嵌）
+export interface CreateStarmapChildEmbedResult {
+  starmap: StarMapMeta
+  embed: StarMapEmbed
+  pending: boolean
+}

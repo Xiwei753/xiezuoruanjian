@@ -191,15 +191,22 @@ pub fn get_starmap(app_data_root: &Path, starmap_id: &str) -> Result<StarMapMeta
     load_starmap_meta(app_data_root, starmap_id)
 }
 
-pub fn create_starmap(
+/// 用预先生成的 starmap_id 创建星图。
+///
+/// 与 `create_starmap()` 不同，此函数接受一个已经生成的 `starmap_id`，
+/// 而不是内部生成 UUID。供 journal 事务在创建文件之前就知道 child ID 的场景使用。
+///
+/// 创建 meta 文件和 index 记录，返回 StarMapMeta。
+pub fn create_starmap_with_id(
     app_data_root: &Path,
+    starmap_id: &str,
     title: &str,
     description: &str,
     accent_color: Option<&str>,
 ) -> Result<StarMapMeta> {
     let now = now_epoch();
     let meta = StarMapMeta {
-        starmap_id: format!("sm_{}", uuid::Uuid::new_v4()),
+        starmap_id: starmap_id.to_string(),
         title: title.to_string(),
         description: description.to_string(),
         project_id: None,
@@ -213,6 +220,35 @@ pub fn create_starmap(
     idx.updated_at = now;
     save_index(app_data_root, &idx)?;
     Ok(meta)
+}
+
+pub fn create_starmap(
+    app_data_root: &Path,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> Result<StarMapMeta> {
+    let starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
+    create_starmap_with_id(app_data_root, &starmap_id, title, description, accent_color)
+}
+
+///   create_starmap_with_id 的变更集版本。
+///
+/// 返回 `(StarMapMeta, WorkspaceChangeSet)`，变更集包含
+/// `Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
+pub fn create_starmap_with_id_with_changes(
+    app_data_root: &Path,
+    starmap_id: &str,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> Result<(
+    StarMapMeta,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    let meta = create_starmap_with_id(app_data_root, starmap_id, title, description, accent_color)?;
+    let change_set = change_set_for_meta_and_index(&meta.starmap_id);
+    Ok((meta, change_set))
 }
 
 ///   create_starmap 的变更集版本。

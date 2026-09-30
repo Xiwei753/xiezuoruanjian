@@ -27,13 +27,11 @@ export interface PopLayerResult {
  *
  * @param stack 当前层级栈
  * @param currentFrame 当前层的 frame（即将被压入栈中保存）
- * @param newFrame 即将进入的子层 frame（仅用于语义说明，不压入栈）
  * @returns 新栈，包含被压入的 currentFrame
  */
 export function pushLayer(
   stack: StarMapLayerFrame[],
-  currentFrame: StarMapLayerFrame,
-  newFrame: StarMapLayerFrame
+  currentFrame: StarMapLayerFrame
 ): StarMapLayerFrame[] {
   const newStack: StarMapLayerFrame[] = [...stack, currentFrame]
   return newStack

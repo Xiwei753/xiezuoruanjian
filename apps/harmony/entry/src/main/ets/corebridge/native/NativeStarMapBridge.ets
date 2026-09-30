@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeCreateStarmapChildEmbedResult, decodeArray } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
@@ -206,5 +206,13 @@ export class NativeStarMapBridge {
       const jsonStr: string = this.core.getNativeModule().nativeAddStarMapEmbed(starmapId, JSON.stringify(body))
       return this.core.decodeEnvelope<StarMapEmbed>(jsonStr, decodeStarMapEmbed)
     } catch (e) { return nativeError<StarMapEmbed>(e) }
+  }
+
+  async createStarmapChildEmbed(hostStarmapId: string, title: string, position: StarMapPoint): Promise<ResultEnvelope<CreateStarmapChildEmbedResult>> {
+    try {
+      const positionJson: string = JSON.stringify({ x: position.x, y: position.y })
+      const jsonStr: string = this.core.getNativeModule().nativeCreateStarMapChildEmbed(hostStarmapId, title, positionJson)
+      return this.core.decodeEnvelope<CreateStarmapChildEmbedResult>(jsonStr, decodeCreateStarmapChildEmbedResult)
+    } catch (e) { return nativeError<CreateStarmapChildEmbedResult>(e) }
   }
 }

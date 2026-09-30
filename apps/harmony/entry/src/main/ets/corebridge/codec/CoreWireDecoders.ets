@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics } from '../dto/PlatformDtos'
@@ -648,6 +648,28 @@ export function decodeStarMapMeta(data: Object): DecodeResult<StarMapMeta> {
     updatedAt: updatedAt
   }
   return ok<StarMapMeta>(value)
+}
+
+export function decodeCreateStarmapChildEmbedResult(data: Object): DecodeResult<CreateStarmapChildEmbedResult> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<CreateStarmapChildEmbedResult>('CreateStarmapChildEmbedResult: expected object')
+  }
+  const starmapObj: Object | null = reqObj(data, 'starmap')
+  if (starmapObj === null) { return err<CreateStarmapChildEmbedResult>('starmap missing or not object') }
+  const starmapR: DecodeResult<StarMapMeta> = decodeStarMapMeta(starmapObj)
+  if (!starmapR.ok || starmapR.value === undefined) { return err<CreateStarmapChildEmbedResult>(`starmap: ${starmapR.error ?? 'decode failed'}`) }
+  const embedObj: Object | null = reqObj(data, 'embed')
+  if (embedObj === null) { return err<CreateStarmapChildEmbedResult>('embed missing or not object') }
+  const embedR: DecodeResult<StarMapEmbed> = decodeStarMapEmbed(embedObj)
+  if (!embedR.ok || embedR.value === undefined) { return err<CreateStarmapChildEmbedResult>(`embed: ${embedR.error ?? 'decode failed'}`) }
+  const pending: boolean | null = reqBool(data, 'pending')
+  if (pending === null) { return err<CreateStarmapChildEmbedResult>('pending missing or not boolean') }
+  const value: CreateStarmapChildEmbedResult = {
+    starmap: starmapR.value,
+    embed: embedR.value,
+    pending: pending
+  }
+  return ok<CreateStarmapChildEmbedResult>(value)
 }
 
 function decodeStarMapNodeContent(data: Object): DecodeResult<import('../dto/StarMapDtos').StarMapNodeContent> {

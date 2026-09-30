@@ -1,8 +1,9 @@
 use crate::api::{
-    StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto,
-    StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto, StarMapLinkDto,
-    StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNodeDto, StarMapNodePatchInputDto,
-    StarMapPhasedSnapshotDto, StarMapReferenceDto, WriterError,
+    CreateStarMapChildEmbedResultDto, StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEmbedDto,
+    StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
+    StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNodeDto,
+    StarMapNodePatchInputDto, StarMapPhasedSnapshotDto, StarMapPointDto, StarMapReferenceDto,
+    WriterError,
 };
 
 impl super::WriterAppService {
@@ -86,6 +87,16 @@ impl super::WriterAppService {
         embed: StarMapEmbedDto,
     ) -> Result<StarMapEmbedDto, WriterError> {
         self.api.add_starmap_embed(&starmap_id, embed)
+    }
+
+    pub fn create_starmap_child_embed(
+        &self,
+        host_starmap_id: String,
+        title: String,
+        position: StarMapPointDto,
+    ) -> Result<CreateStarMapChildEmbedResultDto, WriterError> {
+        self.api
+            .create_starmap_child_embed(&host_starmap_id, &title, position)
     }
 
     pub fn update_starmap_embed(
