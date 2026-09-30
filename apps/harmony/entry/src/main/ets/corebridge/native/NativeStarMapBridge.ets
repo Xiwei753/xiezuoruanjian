@@ -1,5 +1,5 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeCreateStarmapChildEmbedResult, decodeArray } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
@@ -214,5 +214,36 @@ export class NativeStarMapBridge {
       const jsonStr: string = this.core.getNativeModule().nativeCreateStarMapChildEmbed(hostStarmapId, title, positionJson)
       return this.core.decodeEnvelope<CreateStarmapChildEmbedResult>(jsonStr, decodeCreateStarmapChildEmbedResult)
     } catch (e) { return nativeError<CreateStarmapChildEmbedResult>(e) }
+  }
+
+  // resolve_starmap_path：把 root + segments 交给 Core 逐段穿越，拿回真正落在的星图 ID。
+  // StarMapResolvedPathDto 是单字段 DTO，这里手动校验 finalStarmapId 类型，避免依赖额外 decoder。
+  async resolveStarMapPath(rootStarmapId: string, segments: StarMapPathSegment[]): Promise<ResultEnvelope<StarMapResolvedPath>> {
+    try {
+      const segmentsJson: string = JSON.stringify(segments)
+      const jsonStr: string = this.core.getNativeModule().nativeResolveStarMapPath(rootStarmapId, segmentsJson)
+      const raw = this.core.parseRawEnvelope(jsonStr)
+      if (!raw.success) {
+        const errResult: ResultEnvelope<StarMapResolvedPath> = {
+          success: false,
+          errorCode: raw.errorCode,
+          userMessage: raw.userMessage
+        }
+        return errResult
+      }
+      if (raw.data === undefined || raw.data === null) {
+        return this.core.schemaMismatch<StarMapResolvedPath>('data is null or undefined')
+      }
+      const data = raw.data as Record<string, Object>
+      const finalStarmapId: Object | undefined = data['finalStarmapId']
+      if (typeof finalStarmapId !== 'string' || finalStarmapId === '') {
+        return this.core.schemaMismatch<StarMapResolvedPath>('finalStarmapId missing or not a non-empty string')
+      }
+      const result: ResultEnvelope<StarMapResolvedPath> = {
+        success: true,
+        data: { finalStarmapId: finalStarmapId }
+      }
+      return result
+    } catch (e) { return nativeError<StarMapResolvedPath>(e) }
   }
 }

@@ -4,7 +4,7 @@ import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, CreateStarmapChildEmbedResult } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
@@ -250,6 +250,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async createStarmapChildEmbed(hostStarmapId: string, title: string, position: StarMapPoint): Promise<ResultEnvelope<CreateStarmapChildEmbedResult>> {
     return this.starMapBridge.createStarmapChildEmbed(hostStarmapId, title, position)
+  }
+
+  async resolveStarMapPath(rootStarmapId: string, segments: StarMapPathSegment[]): Promise<ResultEnvelope<StarMapResolvedPath>> {
+    return this.starMapBridge.resolveStarMapPath(rootStarmapId, segments)
   }
 
   // ── Settings ──

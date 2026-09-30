@@ -3,7 +3,7 @@ use std::os::raw::c_char;
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 use crate::api::{
     StarMapEdgeDto, StarMapEmbedDto, StarMapEmbedPatchInputDto, StarMapMetaDto, StarMapNodeDto,
-    StarMapNodePatchInputDto, StarMapPointDto,
+    StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPointDto,
 };
 
 #[no_mangle]
@@ -558,5 +558,53 @@ pub unsafe extern "C" fn writer_core_update_starmap_embed(
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `root_starmap_id` and `segments_json` both point to valid,
+/// null-terminated C strings. Passing null pointers or invalid pointers is
+/// undefined behavior.
+pub unsafe extern "C" fn writer_core_resolve_starmap_path(
+    root_starmap_id: *const c_char,
+    segments_json: *const c_char,
+) -> *mut c_char {
+    let root = match c_str_to_rust(root_starmap_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid root_starmap_id: error {}", e),
+            )
+        }
+    };
+    let segments_str = match c_str_to_rust(segments_json) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid segments_json: error {}", e),
+            )
+        }
+    };
+    let segments = match serde_json::from_str::<Vec<StarMapPathSegmentDto>>(&segments_str) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "PARSE_ERROR",
+                &format!("Failed to parse segments_json: {}", e),
+            )
+        }
+    };
+    match with_app_service(|svc| {
+        let resolved = svc
+            .resolve_starmap_path(&root, segments)
+            .map_err(|e| format!("{}", e))?;
+        Ok(resolved)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_RESOLVE_ERROR", &e),
     }
 }

@@ -72,6 +72,11 @@ export interface StarMapPathSegment {
   nodeId: string | null
 }
 
+// StarMapResolvedPathDto — resolve_starmap_path 的返回值，finalStarmapId 是逐段穿越后真正落在的星图 ID。
+export interface StarMapResolvedPath {
+  finalStarmapId: string
+}
+
 // StarMapTargetDetailDto
 export interface StarMapTargetDetail {
   type: string  // "starmap" | "node" | "anchor" | "chapterRange" | "entity" | "external"

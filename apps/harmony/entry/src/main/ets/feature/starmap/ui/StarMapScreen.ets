@@ -1,7 +1,8 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
+import { promptAction } from '@kit.ArkUI'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapTargetPath, StarMapPoint } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapTargetPath, StarMapPoint, StarMapPathSegment, StarMapResolvedPath } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { getBridge } from '../../../app/AppContext'
@@ -25,6 +26,13 @@ interface WobbleOffset {
   dy: number
 }
 
+/** 某一层的 viewport 快照：按完整 path 独立保存恢复。 */
+interface StarMapViewport {
+  zoomScale: number
+  offsetX: number
+  offsetY: number
+}
+
 // 缩放边界：缩到 MIN 之下即视为"退出当前层"，回到父星图（#789：缩放返回父层）
 const MIN_ZOOM: number = 0.3
 const MAX_ZOOM: number = 3
@@ -36,6 +44,13 @@ export struct StarMapScreen {
   @State starmapId: string = ''
   @State starmapTitle: string = ''
   @State rootStarmapTitle: string = ''
+  // 根星图 ID：整个 StarMapScreen 生命周期内不变（除非外部切换星图，那是新页面）。
+  // 子层 starmapId 由 Core resolve_starmap_path 决定，不再用裸 embed.targetStarmapId。
+  @State rootStarmapId: string = ''
+  // 当前层级路径段：由 Core resolve_starmap_path 解析，root + currentPathSegments 决定嵌套身份。
+  @State currentPathSegments: StarMapPathSegment[] = []
+  // 层级解析错误提示（resolver 失败时在 Canvas 顶部显示）。
+  @State layerResolveError: string = ''
   @State parentStarmapId: string = ''
   @State parentStarmapTitle: string = ''
   @State layerStack: StarMapLayerFrame[] = []
@@ -92,6 +107,11 @@ export struct StarMapScreen {
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
 
+  // 按完整 path 独立保存 viewport：进入某层恢复该 path 自己的 viewport，首次用默认值。
+  // pathKey 用 JSON.stringify(currentPathSegments)（根层是 '[]'）。
+  // 纯平台状态，非 @State，不参与渲染驱动。
+  private viewportByPath: Map<string, StarMapViewport> = new Map()
+
   // 双指缩放状态：onActionStart 记录基准值和锚点，onActionUpdate 围绕锚点缩放
   private pinchBaseScale: number = 1
   private pinchBaseOffsetX: number = 0
@@ -134,6 +154,8 @@ export struct StarMapScreen {
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
       this.starmapId = params.starmapId
+      this.rootStarmapId = params.starmapId
+      this.currentPathSegments = []
       this.starmapTitle = params.starmapTitle
       this.rootStarmapTitle = params.starmapTitle
       this.parentStarmapId = params.parentStarmapId ?? ''
@@ -451,25 +473,63 @@ export struct StarMapScreen {
   }
 
   /**
+   * 当前层级路径的序列化 key，用于 viewportByPath Map 索引。
+   * 根层返回 '[]'，子层返回段数组的 JSON。
+   */
+  private currentPathKey(): string {
+    return JSON.stringify(this.currentPathSegments)
+  }
+
+  /** 保存当前层 viewport 到 Map（按 currentPathSegments 作 key）。 */
+  private saveCurrentViewport() {
+    this.viewportByPath.set(this.currentPathKey(), {
+      zoomScale: this.zoomScale,
+      offsetX: this.offsetX,
+      offsetY: this.offsetY
+    })
+  }
+
+  /** 恢复指定 pathSegments 对应的 viewport；首次进入（Map 无记录）用默认值 zoom=1,offset=0。 */
+  private restoreViewportFor(segments: StarMapPathSegment[]) {
+    const key = JSON.stringify(segments)
+    const saved = this.viewportByPath.get(key)
+    if (saved) {
+      this.zoomScale = saved.zoomScale
+      this.offsetX = saved.offsetX
+      this.offsetY = saved.offsetY
+    } else {
+      this.zoomScale = 1
+      this.offsetX = 0
+      this.offsetY = 0
+    }
+  }
+
+  /**
    * 返回父层：弹出 frame，恢复父层的 starmapId 和 viewport。
    * 根层（layerStack 为空）返回才退出 StarMapScreen（navPathStack.pop）。
+   * 父层 starmapId 由 Core resolve_starmap_path 重新解析，不依赖 frame 缓存。
    */
-  returnToParent() {
-    if (this.layerStack.length > 0) {
-      const result = popLayer(this.layerStack)
-      this.layerStack = result.stack
-      if (result.frame) {
-        // 恢复父层的 starmapId 和 viewport
-        this.starmapId = result.frame.hostStarmapId
-        this.starmapTitle = result.frame.title
-        this.zoomScale = result.frame.zoomScale
-        this.offsetX = result.frame.offsetX
-        this.offsetY = result.frame.offsetY
-        this.loadStarMap()
-      }
-    } else {
+  async returnToParent() {
+    if (this.currentPathSegments.length === 0) {
       this.navPathStack.pop()
+      return
     }
+    this.saveCurrentViewport()
+    const parentSegments = this.currentPathSegments.slice(0, this.currentPathSegments.length - 1)
+    const result = await this.bridge.resolveStarMapPath(this.rootStarmapId, parentSegments)
+    if (!result.success || !result.data || !result.data.finalStarmapId) {
+      this.layerResolveError = '解析星图层级路径失败' + (result.errorCode ? '(' + result.errorCode + ')' : '')
+      promptAction.showToast({ message: '解析星图层级路径失败', duration: 2000 })
+      return
+    }
+    const popResult = popLayer(this.layerStack)
+    this.layerStack = popResult.stack
+    this.currentPathSegments = parentSegments
+    this.starmapId = result.data.finalStarmapId
+    this.starmapTitle = popResult.frame ? popResult.frame.title : this.rootStarmapTitle
+    this.layerResolveError = ''
+    this.restoreViewportFor(parentSegments)
+    this.loadStarMap()
   }
 
   /**
@@ -505,28 +565,45 @@ export struct StarMapScreen {
 
   /**
    * 导航到子星图（Embed 的目标星图）
-   * 同一画布层级切换：压入当前层 frame（含 hostStarmapId/embedInstanceId），
-   * 切换到子层 targetStarmapId，但保留当前 viewport（同一画布，不是新页面）。
+   * 嵌套层级身份由 Core resolve_starmap_path 决定：append segment → 调 resolver
+   * → 成功才更新 segments/starmapId 并按 path 恢复 viewport（首次默认）
+   * → 失败停在当前层 toast 报错，不回退裸 embed.targetStarmapId。
    */
-  navigateToEmbed(embed: StarMapEmbed) {
-    // 压入当前层 frame：记录宿主星图、Embed 入口、当前 viewport
+  async navigateToEmbed(embed: StarMapEmbed) {
+    const nextSegments: StarMapPathSegment[] = [
+      ...this.currentPathSegments,
+      { type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null }
+    ]
+    const result = await this.bridge.resolveStarMapPath(this.rootStarmapId, nextSegments)
+    if (!result.success || !result.data || !result.data.finalStarmapId) {
+      this.layerResolveError = '解析星图层级路径失败' + (result.errorCode ? '(' + result.errorCode + ')' : '')
+      promptAction.showToast({ message: '解析星图层级路径失败', duration: 2000 })
+      return
+    }
+    // 保存当前层 viewport（按当前 path 作 key）
+    this.saveCurrentViewport()
+    // 压入当前层 frame：保留 layerStack 用于 breadcrumb 标题和父层判断；
+    // frame 的 viewport 字段不再用于恢复（改用 viewportByPath Map），但保留填充不破坏接口。
     this.layerStack = pushLayer(
       this.layerStack,
       createLayerFrame(
         this.starmapId,
         embed.instanceId,
-        embed.targetStarmapId,
+        result.data.finalStarmapId,
         this.starmapTitle,
         this.zoomScale,
         this.offsetX,
         this.offsetY
       )
     )
-    // 切换到子层：只换 starmapId，保留当前 viewport（同一画布层级切换）
-    this.starmapId = embed.targetStarmapId
-    // 标题保持根星图标题，附加子层信息
-    this.starmapTitle = embed.label ?? embed.targetStarmapId
-    // 不重置 zoom/offset：同一画布的层级切换，不是进入新页面
+    this.currentPathSegments = nextSegments
+    // 用 resolver 结果，不是裸 embed.targetStarmapId
+    this.starmapId = result.data.finalStarmapId
+    // 当前层标题，用于 Canvas 内 breadcrumb
+    this.starmapTitle = embed.label ?? result.data.finalStarmapId
+    this.layerResolveError = ''
+    // 恢复子层 viewport，首次进入用默认值
+    this.restoreViewportFor(nextSegments)
     this.loadStarMap()
   }
 
@@ -560,6 +637,34 @@ export struct StarMapScreen {
           this.canvasReady = true
           this.drawEdges()
         })
+
+      // 层级 breadcrumb：层级路径属于 Canvas 自己，不进 NavDestination 标题
+      if (this.layerStack.length > 0) {
+        Text(this.buildBreadcrumb())
+          .fontSize(12)
+          .fontColor('#888888')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          .alignRules({
+            top: { anchor: '__container__', align: VerticalAlign.Top },
+            left: { anchor: '__container__', align: HorizontalAlign.Start }
+          })
+          .margin({ top: 8, left: 8 })
+      }
+
+      // 层级解析错误提示：resolver 失败时在 Canvas 顶部右侧显示
+      if (this.layerResolveError) {
+        Text(this.layerResolveError)
+          .fontSize(12)
+          .fontColor('#E74C3C')
+          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+          .alignRules({
+            top: { anchor: '__container__', align: VerticalAlign.Top },
+            right: { anchor: '__container__', align: HorizontalAlign.End }
+          })
+          .margin({ top: 8, right: 8 })
+      }
 
       // 节点层
       if (this.graph) {
@@ -739,13 +844,24 @@ export struct StarMapScreen {
   }
 
   /**
-   * 显示标题：根层显示根星图标题，子层附加当前层信息（不替换根标题）。
+   * 顶层 NavDestination 标题：固定为根星图标题，只表示星图功能页，不跟子层变化。
+   * 层级路径在 Canvas 内 breadcrumb 渲染（见 buildBreadcrumb）。
    */
   private getDisplayTitle(): string {
-    if (this.layerStack.length > 0) {
-      return `${this.rootStarmapTitle} › ${this.starmapTitle}`
-    }
     return this.rootStarmapTitle
+  }
+
+  /**
+   * Canvas 内 breadcrumb：根标题 › 层1 › 层2 ... › 当前层。
+   * 根层时 layerStack 为空，breadcrumb 不显示（由调用方 if 判断）。
+   */
+  private buildBreadcrumb(): string {
+    let parts: string[] = [this.rootStarmapTitle]
+    for (const frame of this.layerStack) {
+      parts.push(frame.title)
+    }
+    parts.push(this.starmapTitle)
+    return parts.join(' › ')
   }
 
   build() {

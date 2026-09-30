@@ -105,6 +105,7 @@ char*  writer_core_add_starmap_node(const char* starmap_id, const char* node_jso
 char*  writer_core_add_starmap_embed(const char* starmap_id, const char* embed_json);
 char*  writer_core_create_starmap_child_embed(const char* host_starmap_id, const char* title, const char* position_json);
 char*  writer_core_update_starmap_embed(const char* starmap_id, const char* instance_id, const char* patch_json);
+char*  writer_core_resolve_starmap_path(const char* root_starmap_id, const char* segments_json);
 
 // ── Sync ──
 // All sync functions use JSON-in/JSON-out via ResultEnvelope.

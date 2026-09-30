@@ -2,8 +2,8 @@ use crate::api::{
     CreateStarMapChildEmbedResultDto, StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEmbedDto,
     StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
     StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNodeDto,
-    StarMapNodePatchInputDto, StarMapPhasedSnapshotDto, StarMapPointDto, StarMapReferenceDto,
-    WriterError,
+    StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto, StarMapPointDto,
+    StarMapReferenceDto, StarMapResolvedPathDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -25,6 +25,18 @@ impl super::WriterAppService {
 
     pub fn get_starmap_graph(&self, starmap_id: String) -> Result<StarMapGraphDto, WriterError> {
         self.api.get_starmap_graph(&starmap_id)
+    }
+
+    /// 按 `root starmap + 路径段` 解析当前层星图，转发到 Core API。
+    ///
+    /// 层级身份由 root + segments 逐段穿越决定，解析失败返回 `Err`，
+    /// 调用方（FFI / 平台端）不得回退到点击事件传来的裸目标 ID。
+    pub fn resolve_starmap_path(
+        &self,
+        root_starmap_id: &str,
+        segments: Vec<StarMapPathSegmentDto>,
+    ) -> Result<StarMapResolvedPathDto, WriterError> {
+        self.api.resolve_starmap_path(root_starmap_id, segments)
     }
 
     pub fn add_starmap_node(
