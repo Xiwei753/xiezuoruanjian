@@ -608,6 +608,9 @@ fn build_split_replacement_units(
             kind: AnimatedSliceKind::ReflowMove,
             snapshot_id: anchor.snapshot_id,
             source_rect: anchor.source_rect.clone(),
+            // Reflow 不使用行级 mask；保持等于自己的 from rect（Issue #808 评论 5919641249）。
+            line_mask_left: current_rect.x,
+            line_mask_right: current_rect.x + current_rect.w,
             from_document_rect: current_rect.clone(),
             to_document_rect: target_rect.clone(),
             opacity_from: unit.slice.opacity_from,
@@ -694,6 +697,9 @@ fn build_crossfade_split_replacement_units(
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id: anchor.snapshot_id,
             source_rect: anchor.source_rect.clone(),
+            // Reflow 不使用行级 mask；保持等于自己的 from rect（Issue #808 评论 5919641249）。
+            line_mask_left: current_rect.x,
+            line_mask_right: current_rect.x + current_rect.w,
             from_document_rect: current_rect.clone(),
             to_document_rect: target_rect.clone(),
             // Issue #738 评论 5795950264 问题2: opacity_from 用当前帧透明度接住，

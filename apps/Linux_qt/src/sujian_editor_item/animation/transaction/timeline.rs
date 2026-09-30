@@ -2,7 +2,13 @@ use std::time::Instant;
 
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 
-/// 统一事务时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress。
+/// 事务级时钟 — 只提供事务层级的时间推进/pause 语义。
+///
+/// Issue #808 评论 5919641249 修改 2: 文字切片、光标、预输入装饰**不消费同一个
+/// progress**。每个文字 unit（`VisualUnitTiming::Timed`）有自己的
+/// started_at / duration_ms / progress，光标 track 有自己的 timeline/easing
+///（`ease_out_cubic`），两者独立推进；本事务 timeline 只服务
+/// "事务级状态/完成判断"（例如 units 为空的 cursor-only 事务）。
 ///
 /// Issue #808: 文字动画继续单独算 `current_visible_fraction()`，不要恢复 CaretDriven，
 /// 也不要从 cursor track progress 推文字 visible fraction。文字自己的 easing

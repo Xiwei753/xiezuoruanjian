@@ -2392,13 +2392,19 @@ fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_white
     );
 }
 
-/// 问题 3: 同一行共用一条吞吐边界。
+/// 问题 3（Issue #808 评论 5917296533 → 评论 5919641249 修改 1）: 同一行共用一条
+/// 行级吞吐边界。
 ///
-/// Issue #808 评论 5917296533 修复后：`can_merge` 对 InsertReveal 放宽合并条件，
-/// 同一 `visual_line_id` 且同 y 即可合并，不要求 byte range 相邻。空格/tab 被跳过后，
-/// abc[0,3) 和 def[4,7) 虽 byte range 不连续但同 visual_line_id，合并为 1 个行级共同 extent。
+/// 旧实现：`can_merge` 对 InsertReveal 放宽合并条件，同一 `visual_line_id` 且同 y
+/// 即可合并，靠 union `source_rect` 成一个大 slice 来表达"行级共同 extent"。
+/// 这会在中间夹着保留字符时把保留字符一起画进动画层。
+///
+/// 修复后：空格断开的两段各自保留自己的 slice（真实 source/document rect 和
+/// byte range），只通过 `line_mask_left/right` 共享同一条行级 boundary；
+/// `compute_frame` 用行级 boundary 与各自 rect 求交。visible 递增时只有一条
+/// 边界从左向右扫过，不会出现"多个字块同时冒出来"。
 #[test]
-fn issue808_comment5917296533_problem3_space_breaks_byte_range_no_shared_boundary() {
+fn issue808_comment5919641249_problem1_space_separated_shared_boundary_without_union() {
     let sid = issue756_shaping_identity();
     // "abc def"：cluster 划分 abc[0,3) 空格[3,4) def[4,7)
     let new_snapshot = make_test_snapshot(
@@ -2420,31 +2426,82 @@ fn issue808_comment5917296533_problem3_space_breaks_byte_range_no_shared_boundar
         false, // coordinated
         None,  // caret_visual_line_id
     );
-    // 收集所有 InsertReveal slice
     let reveal_slices: Vec<_> = slices
         .iter()
         .filter(|s| s.kind == AnimatedSliceKind::InsertReveal)
         .collect();
-    // 问题 3 修复后：空格 [3,4) 被跳过，但 abc[0,3) 和 def[4,7) 同 visual_line_id，
-    // can_merge 放宽条件后合并为 1 个行级共同 extent slice
-    assert!(
-        reveal_slices.len() == 1,
-        "问题3 修复后：\"abc def\" 输入时空格虽断开 byte range，但同 visual_line_id \
-         的 slice 合并为 1 个行级共同 extent（实际 {} 个），\
-         不再出现\"多个字块同时冒出来\"",
+    // 修复后：空格 [3,4) 被跳过，abc[0,3) 和 def[4,7) 是两个 slice，
+    // 不再 union 成一个大 slice。
+    assert_eq!(
+        reveal_slices.len(),
+        2,
+        "修复后：\"abc def\" 输入时空格虽断开 byte range，但两段仍各自保留自己的 \
+         slice（不再 union 成一个大矩形），实际 {} 个",
         reveal_slices.len()
     );
-    // 验证合并后的 slice 覆盖整行（byte range [0,7)）
-    if reveal_slices.len() == 1 {
-        let s = reveal_slices[0];
+    // 每个 slice 保留自己真实的 byte range 和 rect（中间空格 30..40 不被覆盖）
+    assert!(
+        reveal_slices[0].byte_start == 0 && reveal_slices[0].byte_end == 3,
+        "第一段应保留自己的 byte range [0,3)，实际 [{},{})",
+        reveal_slices[0].byte_start,
+        reveal_slices[0].byte_end
+    );
+    assert!(
+        (reveal_slices[0].to_document_rect.x - 0.0).abs() < 0.5
+            && (reveal_slices[0].to_document_rect.w - 30.0).abs() < 0.5,
+        "第一段 rect 应为 [0,30]，实际 x={} w={}",
+        reveal_slices[0].to_document_rect.x,
+        reveal_slices[0].to_document_rect.w
+    );
+    assert!(
+        reveal_slices[1].byte_start == 4 && reveal_slices[1].byte_end == 7,
+        "第二段应保留自己的 byte range [4,7)，实际 [{},{})",
+        reveal_slices[1].byte_start,
+        reveal_slices[1].byte_end
+    );
+    assert!(
+        (reveal_slices[1].to_document_rect.x - 40.0).abs() < 0.5
+            && (reveal_slices[1].to_document_rect.w - 30.0).abs() < 0.5,
+        "第二段 rect 应为 [40,70]，实际 x={} w={}",
+        reveal_slices[1].to_document_rect.x,
+        reveal_slices[1].to_document_rect.w
+    );
+    // 两段共享同一条行级 boundary [0,70]
+    for s in &reveal_slices {
         assert!(
-            s.byte_start == 0 && s.byte_end == 7,
-            "问题3 修复后：合并后 slice byte range 应为 [0,7)（实际 [{},{})），\
-             覆盖整行 abc def",
-            s.byte_start,
-            s.byte_end
+            (s.line_mask_left - 0.0).abs() < 0.5 && (s.line_mask_right - 70.0).abs() < 0.5,
+            "两段必须共享行级共同 boundary [0,70]，实际 [{},{}]",
+            s.line_mask_left,
+            s.line_mask_right
         );
     }
+    // 单一 boundary 从左向右扫过：
+    // visible=0.4 → boundary=28：第一段部分显示（28/30），第二段完全未出现。
+    let left_at_04 = reveal_slices[0].compute_frame(0.4);
+    let right_at_04 = reveal_slices[1].compute_frame(0.4);
+    assert!(
+        (left_at_04.w - 28.0).abs() < 0.5,
+        "visible=0.4 时第一段应显示出 boundary 前的 28 宽，实际 w={}",
+        left_at_04.w
+    );
+    assert!(
+        right_at_04.w.abs() < 0.5,
+        "visible=0.4 时第二段必须完全不可见（boundary 还没扫到 40），实际 w={}",
+        right_at_04.w
+    );
+    // visible=0.6 → boundary=42：第一段完整（30），第二段只显示出前 2（boundary-40）。
+    let left_at_06 = reveal_slices[0].compute_frame(0.6);
+    let right_at_06 = reveal_slices[1].compute_frame(0.6);
+    assert!(
+        (left_at_06.w - 30.0).abs() < 0.5,
+        "visible=0.6 时第一段应完整显示（w=30），实际 w={}",
+        left_at_06.w
+    );
+    assert!(
+        (right_at_06.w - 2.0).abs() < 0.5,
+        "visible=0.6 时第二段只应显示出 boundary 扫过的前 2 宽，实际 w={}",
+        right_at_06.w
+    );
 }
 
 /// 问题 4: Composition 路径统一协同模式参数。
@@ -2581,17 +2638,12 @@ fn issue808_comment5917296533_problem4_composition_bypasses_coordinated_mode_del
     }
 }
 
-/// 问题 4（Issue #808 评论 5918236360）: Composition 多字候选按 visual_line_id
-/// 形成行级共同 mask 边界。
+/// 问题 4（Issue #808 评论 5918236360 → 评论 5919641249 修改 1）: Composition
+/// 多字候选按 visual_line_id 形成行级共同 mask 边界。
 ///
 /// 中文 IME 一次上屏多 cluster（如 "abc" 三个字）时，每个 InsertReveal 都拿同一个
-/// caret anchor（insert_cx），但 compute_frame 会把 anchor clamp 到**各自 cluster rect**；
-/// 第二三个 cluster 仍会从自己的边缘同时展开。
-///
-/// Issue #808 评论 5918236360 问题4 修复后：`build_composition_commit_crossfade_slices`
-/// 返回前调用 `merge_adjacent_slices`，让同一 visual_line_id 的多个 cluster 合并成
-/// 行级共同 extent。这样 compute_frame 的 anchor clamp 就会 clamp 到整行 extent
-/// 而非各自 cluster rect，形成一条共同吐字边界。
+/// caret anchor（insert_cx）。旧实现把同一 visual_line_id 的多个 cluster union 成
+/// 一个大 slice；修复后每个 cluster 保留自己的 slice/rect，只共享行级共同 boundary。
 #[test]
 fn issue808_comment5918236360_problem4_composition_multichar_shared_line_mask() {
     let sid = ShapingIdentity {
@@ -2647,35 +2699,278 @@ fn issue808_comment5918236360_problem4_composition_multichar_shared_line_mask() 
         .iter()
         .filter(|s| s.kind == AnimatedSliceKind::InsertReveal)
         .collect();
-    assert!(
-        !insert_reveals.is_empty(),
-        "应至少产生一个 InsertReveal slice（new candidate \"abc\" 在 old 中无匹配）"
-    );
-    // 问题 4 修复后：同一 visual_line_id 的 3 个 cluster 合并为 1 个行级共同 extent slice
-    assert!(
-        insert_reveals.len() == 1,
-        "问题4 修复后：\"abc\" 3 个 cluster 同 visual_line_id 应合并为 1 个行级共同 \
-         extent InsertReveal（实际 {} 个），不再各自从自己边缘同时展开",
+    // 修复后：3 个 cluster 各自保留自己的 InsertReveal slice（不再 union 成 1 个）
+    assert_eq!(
+        insert_reveals.len(),
+        3,
+        "修复后：\"abc\" 3 个 cluster 同 visual_line_id 仍各自保留自己的 InsertReveal \
+         slice（实际 {} 个），只共享行级 boundary，不再 union 成一个大纹理块",
         insert_reveals.len()
     );
-    // 验证合并后的 slice 覆盖整行（byte range [0,3)）
-    if insert_reveals.len() == 1 {
-        let s = insert_reveals[0];
+    // 每个 slice 保留自己真实的 rect
+    for (i, s) in insert_reveals.iter().enumerate() {
+        let expected_x = i as f64 * 10.0;
         assert!(
-            s.byte_start == 0 && s.byte_end == 3,
-            "问题4 修复后：合并后 slice byte range 应为 [0,3)（实际 [{},{})），\
-             覆盖整行 abc",
-            s.byte_start,
-            s.byte_end
-        );
-        // 验证合并后的 to_document_rect 覆盖整行宽度（3 个 cluster 各 10.0 → 30.0）
-        assert!(
-            (s.to_document_rect.w - 30.0).abs() < 0.5,
-            "问题4 修复后：合并后 slice to_document_rect.w 应为 30.0（3 个 cluster \
-             各 10.0，实际 {}），形成行级共同 extent",
+            (s.to_document_rect.x - expected_x).abs() < 0.5
+                && (s.to_document_rect.w - 10.0).abs() < 0.5,
+            "第 {} 个 cluster 应保留自己的 rect x={} w=10，实际 x={} w={}",
+            i,
+            expected_x,
+            s.to_document_rect.x,
             s.to_document_rect.w
         );
+        assert!(
+            (s.source_rect.x - expected_x).abs() < 0.5 && (s.source_rect.w - 10.0).abs() < 0.5,
+            "第 {} 个 cluster 应保留自己的 source rect x={} w=10，实际 x={} w={}",
+            i,
+            expected_x,
+            s.source_rect.x,
+            s.source_rect.w
+        );
     }
+    // 三个 cluster 共享同一条行级共同 boundary [0,30]（caret 在行首 → 从左向右扫）
+    for s in &insert_reveals {
+        assert!(
+            (s.line_mask_left - 0.0).abs() < 0.5 && (s.line_mask_right - 30.0).abs() < 0.5,
+            "3 个 cluster 必须共享行级共同 boundary [0,30]，实际 [{},{}]",
+            s.line_mask_left,
+            s.line_mask_right
+        );
+    }
+    // 单一 boundary 扫过：visible=0.5 → boundary=15
+    //   cluster0 [0,10] 完整、cluster1 [10,20] 显示前 5、cluster2 [20,30] 未出现。
+    let f0 = insert_reveals[0].compute_frame(0.5);
+    let f1 = insert_reveals[1].compute_frame(0.5);
+    let f2 = insert_reveals[2].compute_frame(0.5);
+    assert!(
+        (f0.w - 10.0).abs() < 0.5,
+        "visible=0.5 时 cluster0 应完整显示（w=10），实际 w={}",
+        f0.w
+    );
+    assert!(
+        (f1.w - 5.0).abs() < 0.5,
+        "visible=0.5 时 cluster1 应只显示 boundary 扫过的前 5，实际 w={}",
+        f1.w
+    );
+    assert!(
+        f2.w.abs() < 0.5,
+        "visible=0.5 时 cluster2 必须完全不可见，实际 w={}",
+        f2.w
+    );
+    // visible=1.0 时三个 cluster 都完整（终态不丢字）
+    for (i, s) in insert_reveals.iter().enumerate() {
+        let frame = s.compute_frame(1.0);
+        assert!(
+            (frame.w - 10.0).abs() < 0.5,
+            "visible=1.0 时 cluster{} 应完整显示（w=10），实际 w={}",
+            i,
+            frame.w
+        );
+    }
+}
+
+/// Issue #808 评论 5919641249 修改 1 回归: 混合候选（中间夹保留字符）不得被
+/// union 大矩形覆盖。
+///
+/// old = `abcde` → new = `axcye`（替换 b→x、d→y；中间 c 保留）。
+/// x / y 是新的候选字符 → InsertReveal；中间 c 的 shaping/位置没变 →
+/// 不生成动画 slice，继续由 canonical 静态正文画。
+///
+/// 修复前：x、y 两个 InsertReveal 在 `Vec` 里相邻，`can_merge()` 把它们合成一个
+/// 从 x 到 y 的大 `source_rect`，union 区域把中间的 c 像素一起画进动画层
+///（而 `static_hidden_document_rects` 只隐藏 x、y 自己的 rect，不隐藏 c）→
+/// 动画层与 canonical 静态层都把 c 画一遍，变粗/重影。
+///
+/// 修复后：x / y 各自保留自己的 source rect，任何动画 frame/source rect 都不能
+/// 覆盖中间保留的 c；两者只共享同一条行级 boundary。
+#[test]
+fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cluster() {
+    let sid_common = ShapingIdentity {
+        text_content_hash: 42,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 100,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let sid_candidate_x = ShapingIdentity {
+        text_content_hash: 810,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 810,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    let sid_candidate_y = ShapingIdentity {
+        text_content_hash: 811,
+        raw_font_fingerprint: "font".into(),
+        glyph_indexes_hash: 811,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 0,
+    };
+    // old = abcde：a[0,1) b[1,2) c[2,3) d[3,4) e[4,5)，每 cluster 宽 10
+    let old_snapshot = make_test_snapshot(
+        "abcde",
+        vec![
+            (0, 1, 0.0, 0.0, sid_common.clone()),
+            (1, 2, 10.0, 0.0, sid_common.clone()),
+            (2, 3, 20.0, 0.0, sid_common.clone()),
+            (3, 4, 30.0, 0.0, sid_common.clone()),
+            (4, 5, 40.0, 0.0, sid_common.clone()),
+        ],
+    );
+    // new = axcye：x[1,2) y[3,4) 是新候选；a/c/e 保留（同 shaping、同几何）
+    let new_snapshot = make_test_snapshot(
+        "axcye",
+        vec![
+            (0, 1, 0.0, 0.0, sid_common.clone()),
+            (1, 2, 10.0, 0.0, sid_candidate_x),
+            (2, 3, 20.0, 0.0, sid_common.clone()),
+            (3, 4, 30.0, 0.0, sid_candidate_y),
+            (4, 5, 40.0, 0.0, sid_common),
+        ],
+    );
+    // 两段 inserted range [1,2) 与 [3,4)（x / y），中间 c[2,3) 不改动。
+    // 整笔编辑走唯一的事务构造入口 build_prepared_transaction：
+    // 两个 range 各自建出 InsertReveal，事务级 assign_shared_line_masks 把同一
+    // visual_line_id 的两段并成同一条行级 boundary。
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    let old_cursor = CursorRect {
+        x: 10.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    let new_cursor = CursorRect {
+        x: 40.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    let spec = VisualEditSpec {
+        key: VisualTransactionKey::new(1, 1),
+        operation_kind: TextVisualOperationKind::Insert,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: vec![(1, 2), (3, 4)],
+        deleted_ranges: vec![],
+        offset_map,
+        old_cursor_rect: Some(old_cursor),
+        new_cursor_rect: Some(new_cursor),
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        rebase_frames: Vec::new(),
+        caret_handoff: None,
+        visual_affected_byte_range_old: Some((0, 5)),
+        visual_affected_byte_range_new: Some((0, 5)),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: None,
+    };
+    let tx = build_prepared_transaction(spec);
+
+    // 中间保留的 c 的 rect 区间 (20,30)：任何动画 source/frame rect 都不得覆盖它。
+    let covers_retained_c = |x: f64, w: f64| -> bool {
+        let right = x + w;
+        x < 30.0 - 0.5 && right > 20.0 + 0.5
+    };
+
+    let insert_reveals: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
+        .map(|u| &u.slice)
+        .collect();
+    assert_eq!(
+        insert_reveals.len(),
+        2,
+        "x / y 两个新候选应各产生一个 InsertReveal，实际 {} 个",
+        insert_reveals.len()
+    );
+    // x / y 各自保留自己的 source rect，都不覆盖中间保留的 c
+    for (i, s) in insert_reveals.iter().enumerate() {
+        assert!(
+            !covers_retained_c(s.source_rect.x, s.source_rect.w),
+            "InsertReveal[{}] 的 source_rect 不得覆盖中间保留的 c：x={} w={}",
+            i,
+            s.source_rect.x,
+            s.source_rect.w
+        );
+        assert!(
+            !covers_retained_c(s.to_document_rect.x, s.to_document_rect.w),
+            "InsertReveal[{}] 的 to_document_rect 不得覆盖中间保留的 c：x={} w={}",
+            i,
+            s.to_document_rect.x,
+            s.to_document_rect.w
+        );
+        for (j, rect) in s.static_hidden_document_rects.iter().enumerate() {
+            assert!(
+                !covers_retained_c(rect.x, rect.w),
+                "InsertReveal[{}] 的 static_hidden_document_rects[{}] 不得覆盖中间保留的 c：\
+                 x={} w={}",
+                i,
+                j,
+                rect.x,
+                rect.w
+            );
+        }
+    }
+    // x / y 共享同一条行级 boundary [10,40]
+    for (i, s) in insert_reveals.iter().enumerate() {
+        assert!(
+            (s.line_mask_left - 10.0).abs() < 0.5 && (s.line_mask_right - 40.0).abs() < 0.5,
+            "InsertReveal[{}] 应与另一候选共享行级 boundary [10,40]，实际 [{},{}]",
+            i,
+            s.line_mask_left,
+            s.line_mask_right
+        );
+    }
+    // 任取若干 visible：每个动画帧 rect 都不得覆盖中间保留的 c
+    for visible in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        for (i, s) in insert_reveals.iter().enumerate() {
+            let frame = s.compute_frame(visible);
+            assert!(
+                !covers_retained_c(frame.x, frame.w),
+                "visible={} 时 InsertReveal[{}] 的 frame [x={} w={}] 不得覆盖中间保留的 c",
+                visible,
+                i,
+                frame.x,
+                frame.w
+            );
+        }
+    }
+    // 共享 boundary 语义：anchor=old caret=10（行首侧）→ 从左向右扫。
+    // visible=0.5 → boundary=25：x 完整（10），y 未出现（其左边缘 30 > 25）。
+    // visible=0.75 → boundary=32.5：y 从自己的左边缘开始显示前 2.5。
+    let x_half = insert_reveals[0].compute_frame(0.5);
+    let y_half = insert_reveals[1].compute_frame(0.5);
+    assert!(
+        (x_half.w - 10.0).abs() < 0.5,
+        "visible=0.5 时 x 应完整显示（w=10），实际 w={}",
+        x_half.w
+    );
+    assert!(
+        y_half.w.abs() < 0.5,
+        "visible=0.5 时 y 必须完全不可见（boundary 未扫到），实际 w={}",
+        y_half.w
+    );
+    let y_late = insert_reveals[1].compute_frame(0.75);
+    assert!(
+        (y_late.x - 30.0).abs() < 0.5 && (y_late.w - 2.5).abs() < 0.5,
+        "visible=0.75 时 y 应从自己的左边缘 30 显示前 2.5，实际 x={} w={}",
+        y_late.x,
+        y_late.w
+    );
 }
 
 /// 问题 2（Issue #808 评论 5918236360）: 非协同 smooth-only（typing=false, smooth=true）

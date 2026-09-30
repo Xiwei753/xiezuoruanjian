@@ -13,6 +13,78 @@ struct ReflowClusterRef {
     byte_end: usize,
 }
 
+/// Issue #808 评论 5919641249 修改 1: 按 `visual_line_id` 给同一视觉行的
+/// InsertReveal/DeleteConceal 计算行级共同吞吐边界（`line_mask_left/right`）。
+///
+/// 每个 slice 保留自己真实的 source/document rect（不再 union 成一个大 slice，
+/// 因此中间保留的字符不会被卷进动画层）；这里只把同组共同的行级 mask extent
+/// 写回每个成员，`AnimatedSlice::compute_frame` 再用「行级 boundary ∩ 本 slice rect」
+/// 得到自己的 clip。
+///
+/// 分组键：kind + visual_line_id + is_caret_line + y（DeleteConceal 的非 caret 行
+/// 再按 `conceal_to_left_edge` 分方向）。`visual_line_id` 未知（None）或 kind 不是
+/// InsertReveal/DeleteConceal 的 slice 不分组，保持构造时的默认 mask（等于自己的 rect）。
+///
+/// 由 `build_prepared_transaction` 在全部文字 slice 收集完成后统一调用一次；
+/// 单个 builder 也各自调用，保证直接使用 builder 的路径同样带有行级 mask。
+/// 重复调用是幂等的（mask 每次从成员 rect 重新计算）。
+pub(crate) fn assign_shared_line_masks(slices: &mut [AnimatedSlice]) {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..slices.len() {
+        let slice = &slices[i];
+        if !matches!(
+            slice.kind,
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+        ) {
+            continue;
+        }
+        let Some(line_id) = slice.visual_line_id else {
+            continue;
+        };
+        let mut target: Option<usize> = None;
+        for (group_idx, members) in groups.iter().enumerate() {
+            let head = &slices[members[0]];
+            let same_kind = head.kind == slice.kind;
+            let same_line = head.visual_line_id == Some(line_id);
+            let same_caret_line = head.is_caret_line == slice.is_caret_line;
+            let same_y = (line_mask_rect(head).y - line_mask_rect(slice).y).abs() < 0.5;
+            let same_direction = slice.kind != AnimatedSliceKind::DeleteConceal
+                || head.conceal_to_left_edge == slice.conceal_to_left_edge;
+            if same_kind && same_line && same_caret_line && same_y && same_direction {
+                target = Some(group_idx);
+                break;
+            }
+        }
+        match target {
+            Some(group_idx) => groups[group_idx].push(i),
+            None => groups.push(vec![i]),
+        }
+    }
+
+    for members in &groups {
+        let mut mask_left = f64::INFINITY;
+        let mut mask_right = f64::NEG_INFINITY;
+        for &i in members {
+            let rect = line_mask_rect(&slices[i]);
+            mask_left = mask_left.min(rect.x);
+            mask_right = mask_right.max(rect.x + rect.w);
+        }
+        for &i in members {
+            slices[i].line_mask_left = mask_left;
+            slices[i].line_mask_right = mask_right;
+        }
+    }
+}
+
+/// 行级 mask 用哪个 document rect 参与分组和 extent 计算：
+/// InsertReveal 用新侧位置（to），DeleteConceal 用旧侧位置（from）。
+fn line_mask_rect(slice: &AnimatedSlice) -> &SourceRect {
+    match slice.kind {
+        AnimatedSliceKind::InsertReveal => &slice.to_document_rect,
+        _ => &slice.from_document_rect,
+    }
+}
+
 pub(crate) fn build_insert_reveal_slices(
     key: VisualTransactionKey,
     new_snapshot: &EditorLayoutSnapshot,
@@ -142,7 +214,10 @@ pub(crate) fn build_insert_reveal_slices(
         }
     }
 
-    let slices = merge_adjacent_slices(slices);
+    // Issue #808 评论 5919641249 修改 1: 不再 union 合并成一个大 slice。
+    // 同一 visual_line_id 的 InsertReveal 只共享行级共同 mask（line_mask_left/right），
+    // 每个 slice 保留自己真实的 source/document rect——中间保留的字符不会被卷进来。
+    assign_shared_line_masks(&mut slices);
     slices
 }
 
@@ -214,7 +289,10 @@ pub(crate) fn build_delete_conceal_slices(
 
     // Delete 不生成 StaticLinePatch：删除后的 canonical new text 可以立即作为背景，
     // 旧字只由 overlay 吞掉。
-    let slices = merge_adjacent_slices(slices);
+    // Issue #808 评论 5919641249 修改 1: 同 Insert——同一 visual_line_id 的
+    // DeleteConceal 只共享行级共同 mask，不 union 成一个大 slice（否则中间保留的
+    // cluster 会被卷进旧文字吞字层）。
+    assign_shared_line_masks(&mut slices);
     slices
 }
 
@@ -735,17 +813,15 @@ pub(crate) fn build_composition_commit_crossfade_slices(
         }
     }
 
-    // Issue #808 评论 5918236360 问题4: Composition 多字候选也要进入同一套
-    // 按 visual_line_id 的行级共同 mask。普通 Insert/Delete 路径已经有
-    // merge_adjacent_slices 按视觉行合并同行的 slice，形成行级共同 extent。
-    // Composition 路径之前直接返回 slices，没有调用 merge_adjacent_slices，
-    // 导致中文 IME 一次上屏多 cluster 时每个 InsertReveal 各自拿同一个 caret anchor，
-    // 但 compute_frame 把 anchor clamp 到各自 cluster rect，第二三个 cluster 仍会
-    // 从自己的边缘同时展开。调用 merge_adjacent_slices 让同一 visual_line_id 的
-    // 多个 cluster 合并成行级共同 extent，compute_frame 的 anchor clamp 就会
-    // clamp 到整行 extent 而非各自 cluster rect。
-    // merge_adjacent_slices 的 can_merge 只对 InsertReveal/DeleteConceal 合并，
-    // ReflowCrossFade/ReflowMove 不合并，所以不影响 reflow slice。
+    // Issue #808 评论 5919641249 修改 1: Composition 多字候选也进入同一套按
+    // visual_line_id 的行级共同 mask——但不再通过 union source rect 合并 slice。
+    // assign_shared_line_masks 只写共同 mask extent，x/y 各自保留自己的
+    // source/document rect；compute_frame 用行级 boundary 与各自 rect 求交。
+    // 中间保留（不参与动画）的 cluster 仍由 canonical 静态正文画，动画层不会重画它。
+    //
+    // merge_adjacent_slices 只剩 ReflowMove/ReflowCrossFade 会命中（can_merge 对
+    // InsertReveal/DeleteConceal 返回 false），保持 reflow 的既有相邻合并行为。
+    assign_shared_line_masks(&mut slices);
     let slices = merge_adjacent_slices(slices);
     slices
 }

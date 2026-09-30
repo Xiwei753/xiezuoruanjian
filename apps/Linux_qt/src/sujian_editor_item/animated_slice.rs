@@ -103,6 +103,23 @@ pub(crate) struct AnimatedSlice {
     /// 仍来自文字自己的 timeline（`current_visible_fraction`）。
     pub caret_anchor_x: f64,
     pub caret_anchor_y: f64,
+    /// Issue #808 评论 5919641249 修改 1: 行级共同吞吐边界（文档坐标）。
+    ///
+    /// 同一 `visual_line_id` 的 InsertReveal/DeleteConceal 在构造阶段由
+    /// [`super::animation::transaction_builder::assign_shared_line_masks`] 分成
+    /// 同一组，组内所有 slice 共享同一条 `line_mask_left/right`。
+    /// `compute_frame` 先用文字自己的 progress 算这一帧的行级共同 boundary，
+    /// 再让每个 slice 用自己的 rect 与 boundary 求交得到自己的 frame/source clip。
+    ///
+    /// 这样每个 slice 保留自己真实的 source/document rect（中间保留的字符绝不会
+    /// 被卷入别人的大图块），但同一行只有一个吞吐边界——不再用 union `source_rect`
+    /// 合并成一个大 slice 来表达共同 mask。
+    ///
+    /// 未分组的单 slice（含直接构造）默认等于自己的 rect（insert 用
+    /// `to_document_rect`，delete 用 `from_document_rect`），行为与分组前一致。
+    /// ReflowMove/ReflowCrossFade 不使用此字段（等于自己的 from rect）。
+    pub line_mask_left: f64,
+    pub line_mask_right: f64,
     /// Issue #808 评论 5916391891 修改 1: 该 slice 是否属于 caret 所在视觉行。
     ///
     /// `true` 表示该 slice 在 caret 所在视觉行上，`compute_frame` 用 `caret_anchor_x`
@@ -202,6 +219,10 @@ impl AnimatedSlice {
             snapshot_id,
             source_rect,
             from_document_rect: to_document_rect.clone(),
+            // Issue #808 评论 5919641249: 单 slice 默认自己是整条行级 mask，
+            // 分组由 assign_shared_line_masks 在构造阶段写回。
+            line_mask_left: to_document_rect.x,
+            line_mask_right: to_document_rect.x + to_document_rect.w,
             to_document_rect,
             opacity_from: 1.0,
             opacity_to: 1.0,
@@ -254,6 +275,8 @@ impl AnimatedSlice {
             snapshot_id,
             source_rect,
             to_document_rect: from_document_rect.clone(),
+            line_mask_left: from_document_rect.x,
+            line_mask_right: from_document_rect.x + from_document_rect.w,
             from_document_rect,
             opacity_from: 1.0,
             opacity_to: 1.0,
@@ -311,6 +334,9 @@ impl AnimatedSlice {
             kind: AnimatedSliceKind::ReflowMove,
             snapshot_id: old_snapshot_id,
             source_rect: old_source_rect,
+            // Reflow 不使用行级 mask；保持等于自己的 from rect。
+            line_mask_left: from_document_rect.x,
+            line_mask_right: from_document_rect.x + from_document_rect.w,
             from_document_rect,
             to_document_rect,
             opacity_from: 1.0,
@@ -365,6 +391,9 @@ impl AnimatedSlice {
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
             source_rect,
+            // Reflow 不使用行级 mask；保持等于自己的 from rect。
+            line_mask_left: from_document_rect.x,
+            line_mask_right: from_document_rect.x + from_document_rect.w,
             from_document_rect,
             to_document_rect,
             opacity_from: 1.0,
@@ -412,6 +441,9 @@ impl AnimatedSlice {
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
             source_rect,
+            // Reflow 不使用行级 mask；保持等于自己的 from rect。
+            line_mask_left: from_document_rect.x,
+            line_mask_right: from_document_rect.x + from_document_rect.w,
             from_document_rect,
             to_document_rect,
             opacity_from: 0.0,
@@ -466,6 +498,35 @@ impl AnimatedSlice {
         }
     }
 
+    /// Issue #808 评论 5919641249 修改 5: 用自己的 rect 与行级共同 boundary 求交，
+    /// 得到本 slice 这一帧的 frame rect 和 source clip。
+    ///
+    /// 关键点：boundary 是同一 `visual_line_id` 整行共同的（`line_mask_left/right`），
+    /// 但参与求交的永远是这个 slice 自己的 `slice_rect`/`source_rect`——不是把同组
+    /// 多个 cluster union 出来的大矩形。因此中间保留（不参与吞吐动画）的字符
+    /// 永远不会被卷进动画层，也不会与 canonical 静态正文重影。
+    fn clip_to_line_boundary(
+        slice_rect: &SourceRect,
+        source_rect: &SourceRect,
+        boundary_left: f64,
+        boundary_right: f64,
+    ) -> (f64, f64, f64, f64) {
+        let slice_left = slice_rect.x;
+        let slice_right = slice_rect.x + slice_rect.w;
+        let left = slice_left.max(boundary_left).min(slice_right);
+        let right = slice_right.min(boundary_right).max(slice_left);
+        let w = (right - left).max(0.0);
+        let (src_x, src_w) = if slice_rect.w > 0.0 {
+            (
+                source_rect.x + (left - slice_left) / slice_rect.w * source_rect.w,
+                source_rect.w * (w / slice_rect.w),
+            )
+        } else {
+            (source_rect.x, 0.0)
+        };
+        (left, w, src_x, src_w)
+    }
+
     /// 纯插值计算：根据"最终可见比例" `visible`（0..1）计算当前帧的 destination rect
     /// 和 source rect。
     ///
@@ -475,55 +536,45 @@ impl AnimatedSlice {
     /// 不再由 caret frame 驱动。caret 只决定遮罩的空间锚点/方向，不能决定文字
     /// 动画进度。
     ///
-    /// InsertReveal: 遮罩从旧 caret 所在侧（`caret_anchor_x`）开始打开，字符像
-    /// 从 caret 后面吐出来。跨行时按 visual_line_id 分段，每个 slice 带自己的
-    /// caret 锚点，不能拿上一行的 x 去裁下一行。
-    /// DeleteConceal: 遮罩向最终 caret 所在侧收拢，字符像被 caret 吞进去。
-    /// Backspace/Delete 两个方向按 `conceal_to_left_edge` 决定收拢侧。
+    /// Issue #808 评论 5919641249: InsertReveal/DeleteConceal 不再按每个 cluster
+    /// 自己的矩形边缘缩放，也不 union 成大图块。同一行先按文字自己的 progress
+    /// 算一条行级共同吞吐 boundary（由 `line_mask_left/right` + 锚点决定），
+    /// 每个 slice 用自己的 rect 与这条 boundary 求交。
+    ///
+    /// InsertReveal: 锚点取旧 caret（caret 行）或行首（跨行其他行），字符像从
+    /// caret 后面吐出来；跨行时按 visual_line_id 分段，每行一条自己的 boundary。
+    /// DeleteConceal: 锚点取最终 caret（caret 行）或行级 extent 对应边缘，
+    /// 字符像被 caret 吞进去；收拢侧由锚点相对行级 extent 的位置决定。
     pub fn compute_frame(&self, visible: f64) -> AnimatedSliceFrame {
         let visible = visible.clamp(0.0, 1.0);
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                // Issue #808 评论 5916391891 修改 1: 遮罩从 caret_anchor_x 开始打开。
-                // is_caret_line=true 时用 caret_anchor_x 做锚点（文字从 caret 处吐出来）；
-                // is_caret_line=false 时用行首 text_left 做锚点（跨行其他行从行首展开）。
-                // caret 在文字左半：从 caret_anchor_x 向右展开。
-                // caret 在文字右半：从 caret_anchor_x 向左展开。
-                // frame_x/frame_w/src_x/src_w 都基于 anchor_x 计算，不是基于 text_left/text_right。
-                let text_left = self.to_document_rect.x;
-                let text_right = self.to_document_rect.x + self.to_document_rect.w;
-                let text_w = self.to_document_rect.w;
+                // 先算行级共同 boundary，再与本 slice 自己的 to_document_rect 求交。
+                // is_caret_line=true：锚点是真实 caret（clamp 到行级 extent）；
+                // is_caret_line=false：锚点是行级 extent 左边缘（其他行从行首展开）。
+                // 锚点在行级 extent 左半 → 从锚点向右展开；右半 → 从锚点向左展开。
                 let frame_h = self.to_document_rect.h;
-
+                let mask_left = self.line_mask_left;
+                let mask_right = self.line_mask_right;
                 let anchor_x = if self.is_caret_line {
-                    self.caret_anchor_x.clamp(text_left, text_right)
+                    self.caret_anchor_x.clamp(mask_left, mask_right)
                 } else {
-                    text_left
+                    mask_left
                 };
-
-                let (frame_x, frame_w, src_x, src_w) = if text_w <= 0.0 {
-                    (text_left, 0.0, self.source_rect.x, 0.0)
-                } else {
-                    let reveal_from_right = anchor_x > text_left + text_w * 0.5;
-                    if !reveal_from_right {
-                        // 从 anchor_x 向右展开到 text_right
-                        let full_extent = (text_right - anchor_x).max(0.0);
-                        let w = full_extent * visible;
-                        let sx = self.source_rect.x
-                            + (anchor_x - text_left) / text_w * self.source_rect.w;
-                        let sw = self.source_rect.w * (full_extent / text_w) * visible;
-                        (anchor_x, w, sx, sw)
+                let (boundary_left, boundary_right) =
+                    if anchor_x > mask_left + (mask_right - mask_left) * 0.5 {
+                        // 从锚点向左展开到行级 extent 左边缘
+                        (anchor_x - (anchor_x - mask_left) * visible, anchor_x)
                     } else {
-                        // 从 anchor_x 向左展开到 text_left
-                        let full_extent = (anchor_x - text_left).max(0.0);
-                        let w = full_extent * visible;
-                        let x = anchor_x - w;
-                        let sw = self.source_rect.w * (full_extent / text_w) * visible;
-                        let sx =
-                            self.source_rect.x + (full_extent - w) / text_w * self.source_rect.w;
-                        (x, w, sx, sw)
-                    }
-                };
+                        // 从锚点向右展开到行级 extent 右边缘
+                        (anchor_x, anchor_x + (mask_right - anchor_x) * visible)
+                    };
+                let (frame_x, frame_w, src_x, src_w) = Self::clip_to_line_boundary(
+                    &self.to_document_rect,
+                    &self.source_rect,
+                    boundary_left,
+                    boundary_right,
+                );
                 let frame_source_rect = SourceRect {
                     x: src_x,
                     y: self.source_rect.y,
@@ -541,85 +592,42 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                // Issue #808 评论 5916391891 修改 1: 遮罩向 caret_anchor_x 收拢。
-                // is_caret_line=true 时用 caret_anchor_x 做锚点（文字被 caret 吞进去）；
-                // is_caret_line=false 时用行首/行尾做锚点（跨行其他行向行首/行尾收拢）。
-                // conceal_to_left_edge=true：可见区域左边界固定在 from_left，
-                //   右边界从 from_right 收向 anchor_x。
-                // conceal_to_left_edge=false：可见区域右边界固定在 from_right，
-                //   左边界从 from_left 收向 anchor_x。
-                let from_left = self.from_document_rect.x;
-                let from_right = self.from_document_rect.x + self.from_document_rect.w;
-                let from_w = self.from_document_rect.w;
+                // 先算行级共同 boundary，再与本 slice 自己的 from_document_rect 求交。
+                // is_caret_line=true：锚点是 final/new caret（clamp 到行级 extent）；
+                // is_caret_line=false：锚点取行级 extent 对应边缘
+                //（conceal_to_left_edge=true 取左边缘，false 取右边缘）。
+                //
+                // Issue #808 评论 5918236360 问题3: 收拢侧由锚点相对行级 extent 中点
+                // 决定（Backspace 的 final caret 在左半 → 向左收），不再用 old caret
+                // 推出来的 conceal_to_left_edge 选 caret 行分支：
+                // - 锚点在左半：左边界固定在锚点，右边界从 extent 右边收向锚点。
+                //   visible=1 → 完整 extent，visible=0 → w=0。
+                // - 锚点在右半：右边界固定在锚点，左边界从 extent 左边收向锚点。
+                //   visible=1 → 完整 extent，visible=0 → w=0。
                 let frame_h = self.from_document_rect.h;
-
+                let mask_left = self.line_mask_left;
+                let mask_right = self.line_mask_right;
                 let anchor_x = if self.is_caret_line {
-                    self.caret_anchor_x.clamp(from_left, from_right)
+                    self.caret_anchor_x.clamp(mask_left, mask_right)
                 } else if self.conceal_to_left_edge {
-                    from_left
+                    mask_left
                 } else {
-                    from_right
+                    mask_right
                 };
-
-                let (frame_x, frame_w, src_x, src_w) = if from_w <= 0.0 {
-                    (from_left, 0.0, self.source_rect.x, 0.0)
-                } else if self.is_caret_line {
-                    // Issue #808 评论 5917296533 问题2: 前向 Delete 遮罩公式修复。
-                    // caret 在删除区域一侧时，整段遮罩向 caret 收拢，最终宽度归零。
-                    // 旧公式 left_boundary = anchor_x + (from_left - anchor_x) * visible
-                    // 在 anchor_x == from_left（Delete 键，新 caret 在被删字符左边）时
-                    // 恒等于 from_left，frame_w 不变，文字几乎不缩。
-                    //
-                    // Issue #808 评论 5918236360 问题3: coordinated 模式下不能用
-                    // old caret 推出来的 conceal_to_left_edge 决定收拢侧。Backspace 时
-                    // old caret=160（靠右）→ conceal_to_left_edge=true，但 final caret=100
-                    // （靠左）应该向左收，用 true 分支公式会导致 visible=1 时 fw=0
-                    // （文字从第一帧就完全不可见）。
-                    // 修复：用 anchor_x（final/new caret）相对 deleted extent 中点决定方向。
-                    // - final caret 在左半（anchor_x <= from_left + from_w * 0.5）→ 向左收：
-                    //   左边界固定在 anchor_x，右边界从 from_right 收向 anchor。
-                    //   visible=1 → w=from_right-anchor，visible=0 → w=0。
-                    // - final caret 在右半 → 向右收：
-                    //   右边界固定在 anchor_x，左边界从 from_left 收向 anchor。
-                    //   visible=1 → w=anchor-from_left，visible=0 → w=0。
-                    let shrink_to_left = anchor_x <= from_left + from_w * 0.5;
-                    if shrink_to_left {
-                        // final caret 在左半 → 向左收
-                        let left_boundary = anchor_x;
-                        let right_boundary = anchor_x + (from_right - anchor_x) * visible;
-                        let fw = (right_boundary - left_boundary).max(0.0);
-                        let sx = self.source_rect.x
-                            + (left_boundary - from_left) / from_w * self.source_rect.w;
-                        let sw = self.source_rect.w * (fw / from_w);
-                        (left_boundary, fw, sx, sw)
+                let (boundary_left, boundary_right) =
+                    if anchor_x <= mask_left + (mask_right - mask_left) * 0.5 {
+                        // 锚点在左半 → 向左收（右段先消失）
+                        (anchor_x, anchor_x + (mask_right - anchor_x) * visible)
                     } else {
-                        // final caret 在右半 → 向右收
-                        let right_boundary = anchor_x;
-                        let left_boundary = anchor_x - (anchor_x - from_left) * visible;
-                        let fw = (right_boundary - left_boundary).max(0.0);
-                        let sx = self.source_rect.x
-                            + (left_boundary - from_left) / from_w * self.source_rect.w;
-                        let sw = self.source_rect.w * (fw / from_w);
-                        (left_boundary, fw, sx, sw)
-                    }
-                } else if self.conceal_to_left_edge {
-                    // 跨行（is_caret_line=false）：向行首收，原公式保持。
-                    // 可见区域左边界固定在 from_left，右边界从 from_right 收向 anchor_x
-                    let right_boundary = anchor_x + (from_right - anchor_x) * visible;
-                    let fw = (right_boundary - from_left).max(0.0);
-                    let sx = self.source_rect.x;
-                    let sw = self.source_rect.w * (fw / from_w);
-                    (from_left, fw, sx, sw)
-                } else {
-                    // 跨行（is_caret_line=false）：向行尾收，原公式保持。
-                    // 可见区域右边界固定在 from_right，左边界从 from_left 收向 anchor_x
-                    let left_boundary = anchor_x + (from_left - anchor_x) * visible;
-                    let fw = (from_right - left_boundary).max(0.0);
-                    let sx = self.source_rect.x
-                        + (left_boundary - from_left) / from_w * self.source_rect.w;
-                    let sw = self.source_rect.w * (fw / from_w);
-                    (left_boundary, fw, sx, sw)
-                };
+                        // 锚点在右半 → 向右收（左段先消失）
+                        (anchor_x - (anchor_x - mask_left) * visible, anchor_x)
+                    };
+                let (frame_x, frame_w, src_x, src_w) = Self::clip_to_line_boundary(
+                    &self.from_document_rect,
+                    &self.source_rect,
+                    boundary_left,
+                    boundary_right,
+                );
                 let frame_source_rect = SourceRect {
                     x: src_x,
                     y: self.source_rect.y,

@@ -100,9 +100,9 @@ pub(crate) fn conflicting_units_are_untouched(
         .as_ref()
         .map(|track| track.progress(now));
     for unit in &tx.units {
-        // Issue #756: 按 timing 判断是否 caret-driven。
-        // - CaretDriven（coordinated=true 吞吐字）：visible 从 caret track progress 推导。
-        // - Timed（Reflow + coordinated=false typing-driven 吞吐字）：看 unit progress。
+        // Issue #808 评论 5919641249: `is_caret_driven()` 已恒为 false——所有文字
+        // unit（含 coordinated 吞吐字）统一 Timed，visible 只来自自己的时间线。
+        // 下面的 CaretDriven 分支是保留的历史路径，不再被任何 kind 走到。
         let still_playing = if unit.timing.is_caret_driven() {
             // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
             let progress = caret_track_progress.unwrap_or(0.0);

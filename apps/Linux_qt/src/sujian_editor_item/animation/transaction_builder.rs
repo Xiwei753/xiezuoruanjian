@@ -164,11 +164,23 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         ));
     }
 
+    // 1d. 行级共同 mask 分组
+    //
+    // Issue #808 评论 5919641249 修改 1: 全部文字 slice 收集完成后，按 visual_line_id
+    // 统一写 `line_mask_left/right`。builder 内部各自分过一次组；这里再分一次，保证
+    // 跨 builder（普通 Insert/Delete 与 Composition commit）以及跨多个
+    // inserted/deleted range 落在同一行的 slice 也共享同一条行级 boundary。
+    // 分组只写 mask extent，不动各 slice 自己的 source/document rect。
+    // ReflowMove/ReflowCrossFade 不参与分组，保持等于自己 from rect 的默认值。
+    assign_shared_line_masks(&mut slices);
+
     // 2. Wrap units
     //
-    // Issue #756: InsertReveal/DeleteConceal 的 timing 由 coordinated_animation_enabled
-    // 决定（coordinated=true → CaretDriven，coordinated=false → Timed）。
-    // ReflowMove/ReflowCrossFade 永远 Timed，与 coordinated 无关。
+    // Issue #808 评论 5919641249 修改 2: 文字单元统一 Timed，coordinated 不再改 timing。
+    // InsertReveal/DeleteConceal 的文字 progress 只来自文字自己的 timeline（`ease_out_quad`）；
+    // coordinated=true 只在 slice 上体现吞吐 mask 语义（`is_caret_line` /
+    // `caret_anchor_x` / `line_mask_left/right`），不再有 CaretDriven，也不与光标绑死。
+    // ReflowMove/ReflowCrossFade 同样 Timed，与 coordinated 无关。
     let mut units: Vec<PreparedVisualUnit> = slices
         .into_iter()
         .map(|s| match s.kind {
@@ -384,7 +396,7 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
 pub(crate) mod slices;
 
 pub(crate) use slices::{
-    build_cluster_reflow_slices, build_composition_commit_crossfade_slices,
+    assign_shared_line_masks, build_cluster_reflow_slices, build_composition_commit_crossfade_slices,
     build_delete_conceal_slices, build_insert_reveal_slices,
 };
 
@@ -417,24 +429,15 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
     if a.snapshot_id != b.snapshot_id {
         return false;
     }
-    // 条件 3：相邻 byte range（Reflow 仍要求；InsertReveal/DeleteConceal 放宽为同 visual_line_id）
-    // 条件 4：同方向
     match a.kind {
-        AnimatedSliceKind::InsertReveal => {
-            // Issue #808 评论 5917296533 问题3: 同一行的 slice 即使 byte range
-            // 不连续（中间被空格/tab 断开）也合并为行级共同 extent，避免"多个字块
-            // 同时冒出来"。条件从 byte range 相邻放宽为同 visual_line_id。
-            // 合并后取 union rect 作为行级共同 boundary，compute_frame 对整行展开。
-            a.visual_line_id.is_some()
-                && a.visual_line_id == b.visual_line_id
-                && (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
-        }
-        AnimatedSliceKind::DeleteConceal => {
-            // Issue #808 评论 5917296533 问题3: 同上，DeleteConceal 也按 visual_line_id 合并。
-            a.visual_line_id.is_some()
-                && a.visual_line_id == b.visual_line_id
-                && (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
-                && a.conceal_to_left_edge == b.conceal_to_left_edge
+        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+            // Issue #808 评论 5919641249 修改 1/6: InsertReveal/DeleteConceal 不再用
+            // union source_rect 合并成一个大 slice 来表达"行级共同 mask"。
+            // union 出来的大矩形会把中间保留（不参与吞吐动画）的字符一起画进动画层，
+            // 与 canonical 静态正文重影。共同边界改由 assign_shared_line_masks 写
+            // line_mask_left/right 表达：每个 slice 保留自己的 rect，compute_frame
+            // 再用行级 boundary 与本 slice rect 求交，所以这里不再合并。
+            false
         }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
             // Reflow 仍要求 byte range 相邻，不跨空格合并。
@@ -481,6 +484,11 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         kind: a.kind,
         snapshot_id: a.snapshot_id,
         source_rect: merged_source,
+        // 只有 ReflowMove/ReflowCrossFade 会走到这里（InsertReveal/DeleteConceal
+        // 已改由 assign_shared_line_masks 表达行级共同 mask）。行级 mask 字段
+        // 对 Reflow 不参与 compute_frame，取首个 slice 的值即可。
+        line_mask_left: a.line_mask_left,
+        line_mask_right: a.line_mask_right,
         from_document_rect: merged_from,
         to_document_rect: merged_to,
         opacity_from: a.opacity_from,
@@ -744,9 +752,12 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
-        // Issue #756: 删除把"两个独立开关同时开启"等价成"协同动画"的逻辑。
-        // - coordinated=true 时：文字与光标绑死，要求有效 caret motion，否则不创建事务
-        //   （文字动画也不启动）。
+        // Issue #808 评论 5919641249 修改 2: coordinated 不是"文字与光标绑死"。
+        // - coordinated=true 时：同一次编辑同时创建文字视觉单元和 cursor track，
+        //   文字 progress 只来自文字 timeline，光标 progress 只来自 cursor track，
+        //   两条独立动画；协同只额外决定吞吐 mask 的 caret 空间锚点。这里仍要求
+        //   有效 caret motion（old/new cursor rect 都在），否则不为这笔编辑建立
+        //   协同光标轨迹，直接不创建事务。
         // - coordinated=false 时：typing_animation_enabled 只决定文字动画
         //   （Reflow + InsertReveal/DeleteConceal），smooth_cursor_enabled 只决定光标动画
         //   （caret motion track）。两者互相独立，同时为 true 不等于协同：
@@ -761,11 +772,12 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        // Issue #756: valid_caret_motion_track 检查。
-        // - coordinated=true 时：文字和光标绑死，必须有有效 caret motion，否则不创建事务。
+        // Issue #808 评论 5919641249 修改 2: valid_caret_motion_track 检查。
+        // - coordinated=true 时：协同动画要求这笔编辑同时拥有文字和光标两条轨迹，
+        //   必须有有效 caret motion，否则不创建事务（不是"文字与光标绑死"）。
         // - coordinated=false 时：不把缺少 caret motion 当成"整笔不播"——文字动画（Reflow）
-        //   与 cursor track 各自按自己的开关决定（无 caret motion 时只是没有 CaretDriven
-        //   units 与 cursor track，与 Issue #727 约束 5 一致）。
+        //   与 cursor track 各自按自己的开关决定（无 caret motion 时只是没有 cursor
+        //   track，文字 unit 仍走自己的 Timed 时间线，与 Issue #727 约束 5 一致）。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
         if coordinated_animation_enabled && !valid_caret_motion_track {
             return None;
