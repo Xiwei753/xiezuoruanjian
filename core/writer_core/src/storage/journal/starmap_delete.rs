@@ -31,10 +31,19 @@
 //!
 //! ## 与 WorkspaceChangeJournal 的关系
 //!
-//! 本模块自包含 plan/apply，不接入 `WorkspaceChangeJournal`（那个绑定
-//! `DeleteTarget` 枚举，没有 StarMap 变体）。StarMap 删除的 workspace history
-//! 由 `delete_starmap_with_changes` 返回的 `WorkspaceChangeSet` 处理，
-//! tombstone 由本模块的 `apply_planned_delete_starmap` 处理。
+//! 本模块的 plan/apply 接入统一 durable workspace journal
+//! （`WorkspaceChangeJournal`，op_type=`DeleteStarMap`，
+//! delete_target=`StarMap{starmap_id}`）。`delete_starmap` 的完整流程为：
+//! 1. `plan_delete_starmap`：构造变更集 + `PlannedStarmapDelete`（不修改磁盘）；
+//! 2. `WorkspaceChangeJournal::save_pending`：在 apply 前把完整 plan 落盘；
+//! 3. `apply_planned_delete_starmap`：断 index → 移动 graph/meta 到 trash →
+//!    写 `SyncState` tombstones；
+//! 4. `mark_local_applied` → `record_workspace_change_set_history` →
+//!    `mark_history_recorded` → `clear_journal`。
+//!
+//! 这样进程死在 apply 和写 tombstone 之间，重启后 bootstrap 能根据 journal 的
+//! `sync_delete_facts` 幂等补齐 tombstone，不再得到 "known file missing
+//! without tombstone"。history 失败也保留 journal，下次启动补记。
 //!
 //! ## 与 GraphMeta.deleted_since_last_sync 的关系
 //!
@@ -49,7 +58,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 
 use crate::storage::journal::workspace_change::{
-    ensure_sync_tombstones_from_facts, SyncDeleteFact,
+    ensure_sync_tombstones_from_facts, DeleteTarget, PlannedWorkspaceDelete, SyncDeleteFact,
 };
 use crate::storage::workspace_git::WorkspaceChangeSet;
 
@@ -74,6 +83,23 @@ pub struct PlannedStarmapDelete {
     pub sync_delete_facts: Vec<SyncDeleteFact>,
 }
 
+impl PlannedStarmapDelete {
+    /// 转成统一 journal 使用的 `PlannedWorkspaceDelete`。
+    ///
+    /// `delete_target` 设为 `DeleteTarget::StarMap { starmap_id }`，
+    /// `trash_rel_path` 和 `sync_delete_facts` 直接复用，供
+    /// `WorkspaceChangeJournal::save_pending` 落盘。
+    pub fn to_workspace_planned(&self) -> PlannedWorkspaceDelete {
+        PlannedWorkspaceDelete {
+            delete_target: DeleteTarget::StarMap {
+                starmap_id: self.starmap_id.clone(),
+            },
+            trash_rel_path: self.trash_rel_path.clone(),
+            sync_delete_facts: self.sync_delete_facts.clone(),
+        }
+    }
+}
+
 /// 构造星图删除计划（不修改磁盘）。
 ///
 /// 在任何物理删除之前：
@@ -86,7 +112,7 @@ pub struct PlannedStarmapDelete {
 ///    Upsert(starmaps/index.json)`。
 ///
 /// 返回 `(WorkspaceChangeSet, PlannedStarmapDelete)`，供
-/// `delete_starmap_with_changes` 先落盘 journal/直接 apply。
+/// `delete_starmap` 先 `save_pending` 落盘 journal 再 apply。
 ///
 /// `device_id` 用真实设备 ID，不写固定 `"local"`。
 pub fn plan_delete_starmap(
@@ -115,7 +141,10 @@ pub fn plan_delete_starmap(
     if !meta_abs.exists() {
         return Err(crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("plan_delete_starmap: StarMap meta not found: {}", starmap_id),
+            format!(
+                "plan_delete_starmap: StarMap meta not found: {}",
+                starmap_id
+            ),
         )));
     }
 
@@ -276,7 +305,11 @@ fn build_starmap_delete_facts(
 
     // ── meta 文件 ──
     let meta_rel = format!("starmaps/{starmap_id}.meta.json");
-    let meta_hash = state.known_files.get(&meta_rel).cloned().unwrap_or_default();
+    let meta_hash = state
+        .known_files
+        .get(&meta_rel)
+        .cloned()
+        .unwrap_or_default();
     let meta_trash = format!("{trash_rel_path}/{starmap_id}.meta.json");
     facts.push(SyncDeleteFact {
         original_path: meta_rel,

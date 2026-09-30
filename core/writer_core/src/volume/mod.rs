@@ -455,7 +455,8 @@ pub(crate) fn ensure_tombstones_from_facts(
     facts: &[crate::storage::journal::workspace_change::SyncDeleteFact],
 ) -> Result<()> {
     crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts(
-        project_root, facts,
+        project_root,
+        facts,
     )
 }
 

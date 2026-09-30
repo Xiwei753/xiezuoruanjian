@@ -48,6 +48,33 @@ pub(crate) fn bucket_for_id(id: &str) -> &str {
     }
 }
 
+/// 通用对象文件 durable rename 到 trash 的 helper。
+///
+/// `object_abs`：对象文件绝对路径。
+/// `object_rel`：对象文件相对于 app_data_root 的正斜杠路径（与 sync scanner 一致）。
+/// `trash_root`：trash 目录绝对路径（如 `app_data_root/sync/trash/{token}`）。
+/// `trash_rel_prefix`：trash 目录相对于 app_data_root 的正斜杠路径。
+///
+/// 文件不存在时返回 `Ok(None)`（幂等）。存在时 durable rename 到
+/// `{trash_root}/{object_rel}`，返回 `(object_rel, "{trash_rel_prefix}/{object_rel}")`。
+fn delete_object_file_to_trash(
+    object_abs: &Path,
+    object_rel: &str,
+    trash_root: &Path,
+    trash_rel_prefix: &str,
+) -> Result<Option<(String, String)>> {
+    if !object_abs.exists() {
+        return Ok(None);
+    }
+    let trash_abs = trash_root.join(object_rel);
+    if let Some(parent) = trash_abs.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    crate::storage::durable_rename(object_abs, &trash_abs)?;
+    let trash_rel = format!("{trash_rel_prefix}/{object_rel}");
+    Ok(Some((object_rel.to_string(), trash_rel)))
+}
+
 fn node_path(dir: &Path, node_id: &str) -> PathBuf {
     dir.join("nodes")
         .join(bucket_for_id(node_id))
@@ -109,6 +136,30 @@ pub fn delete_node_file(
     Ok(changed)
 }
 
+/// 把节点文件 durable rename 到 trash 目录，返回 `(original_rel_path, trash_rel_path)`。
+///
+/// `trash_root` 是绝对路径（如 `app_data_root/sync/trash/{token}`）。
+/// `trash_rel_prefix` 是 trash 目录相对于 app_data_root 的正斜杠路径（如 `sync/trash/{token}`）。
+/// 文件不存在时返回 `Ok(None)`。
+///
+/// 与 `delete_node_file` 的区别：不直接 unlink，而是 durable rename 到 trash，
+/// 供 queue 层生成 `SyncDeleteFact` 并写 LWW tombstone。
+pub fn delete_node_file_to_trash(
+    app_data_root: &Path,
+    starmap_id: &str,
+    node_id: &str,
+    trash_root: &Path,
+    trash_rel_prefix: &str,
+) -> Result<Option<(String, String)>> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let abs = node_path(&dir, node_id);
+    let rel = format!(
+        "starmaps/{starmap_id}/nodes/{}/{node_id}.json",
+        bucket_for_id(node_id)
+    );
+    delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
+}
+
 pub fn save_edge(app_data_root: &Path, starmap_id: &str, edge: &StarMapEdge) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("edges").join(bucket_for_id(&edge.id)))?;
@@ -138,6 +189,25 @@ pub fn delete_edge_file(
         );
     }
     Ok(changed)
+}
+
+/// 把边文件 durable rename 到 trash 目录，返回 `(original_rel_path, trash_rel_path)`。
+///
+/// 语义与 [`delete_node_file_to_trash`] 对称。
+pub fn delete_edge_file_to_trash(
+    app_data_root: &Path,
+    starmap_id: &str,
+    edge_id: &str,
+    trash_root: &Path,
+    trash_rel_prefix: &str,
+) -> Result<Option<(String, String)>> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let abs = edge_path(&dir, edge_id);
+    let rel = format!(
+        "starmaps/{starmap_id}/edges/{}/{edge_id}.json",
+        bucket_for_id(edge_id)
+    );
+    delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
 }
 
 pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<PathBuf> {
@@ -171,6 +241,25 @@ pub fn delete_embed_file(
     Ok(changed)
 }
 
+/// 把嵌入文件 durable rename 到 trash 目录，返回 `(original_rel_path, trash_rel_path)`。
+///
+/// 语义与 [`delete_node_file_to_trash`] 对称。
+pub fn delete_embed_file_to_trash(
+    app_data_root: &Path,
+    starmap_id: &str,
+    instance_id: &str,
+    trash_root: &Path,
+    trash_rel_prefix: &str,
+) -> Result<Option<(String, String)>> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let abs = embed_path(&dir, instance_id);
+    let rel = format!(
+        "starmaps/{starmap_id}/embeds/{}/{instance_id}.json",
+        bucket_for_id(instance_id)
+    );
+    delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
+}
+
 pub fn save_link(app_data_root: &Path, starmap_id: &str, link: &StarMapLink) -> Result<PathBuf> {
     let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("links").join(bucket_for_id(&link.link_id)))?;
@@ -200,6 +289,25 @@ pub fn delete_link_file(
         );
     }
     Ok(changed)
+}
+
+/// 把链接文件 durable rename 到 trash 目录，返回 `(original_rel_path, trash_rel_path)`。
+///
+/// 语义与 [`delete_node_file_to_trash`] 对称。
+pub fn delete_link_file_to_trash(
+    app_data_root: &Path,
+    starmap_id: &str,
+    link_id: &str,
+    trash_root: &Path,
+    trash_rel_prefix: &str,
+) -> Result<Option<(String, String)>> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let abs = link_path(&dir, link_id);
+    let rel = format!(
+        "starmaps/{starmap_id}/links/{}/{link_id}.json",
+        bucket_for_id(link_id)
+    );
+    delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
 }
 
 pub fn save_hyperlink(
@@ -235,6 +343,25 @@ pub fn delete_hyperlink_file(
         );
     }
     Ok(changed)
+}
+
+/// 把超链接文件 durable rename 到 trash 目录，返回 `(original_rel_path, trash_rel_path)`。
+///
+/// 语义与 [`delete_node_file_to_trash`] 对称。
+pub fn delete_hyperlink_file_to_trash(
+    app_data_root: &Path,
+    starmap_id: &str,
+    hyperlink_id: &str,
+    trash_root: &Path,
+    trash_rel_prefix: &str,
+) -> Result<Option<(String, String)>> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
+    let abs = hyperlink_path(&dir, hyperlink_id);
+    let rel = format!(
+        "starmaps/{starmap_id}/hyperlinks/{}/{hyperlink_id}.json",
+        bucket_for_id(hyperlink_id)
+    );
+    delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
 }
 
 #[cfg(test)]

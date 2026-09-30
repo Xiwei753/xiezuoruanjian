@@ -27,6 +27,12 @@ QtObject {
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
     property var embedsModel: []
 
+    // Issue #805 评论 5908703621 问题 3：Embed chrome 命中区域几何常量。
+    // 与 StarMapEmbed.qml 的 _chromeHeight / _borderSlop 保持一致。
+    // findEmbedChromeAt 只判断标题条 + 四条 border，内部矩形返回 null。
+    readonly property int _chromeHeight: 24
+    readonly property int _borderSlop: 6
+
     signal graphChanged()
     signal selectionCleared()
     signal nodeSelected(var node)
@@ -253,53 +259,48 @@ QtObject {
         return null
     }
 
-    // Issue #801 评论 5895878756: Embed 拉线端点路径由 Controller 统一构造，
-    // Canvas 不再直接访问 legacyPortalNodeId 分流。
-    function embedConnectPath(instanceId) {
-        var embed = getEmbed(instanceId);
+    // Issue #805 评论 5908703621 问题 4：Controller 不再自己生成完整路径，
+    // 只返回当前 Embed 的一个 segment。Canvas 的 embedPath() 用 pathSegments.concat
+    // 拼完整路径，这样第 N 层连线端点不会退化成第一层。
+    function embedPathSegment(instanceId) {
+        var embed = getEmbed(instanceId)
         if (embed && embed.legacyPortalNodeId) {
             return {
-                starmapId: starmapId,
-                segments: [
-                    { type: "enterPortal", instanceId: null, nodeId: embed.legacyPortalNodeId }
-                ],
-                target: { type: "starmap" }
-            };
+                type: "enterPortal",
+                instanceId: null,
+                nodeId: embed.legacyPortalNodeId
+            }
         }
         return {
-            starmapId: starmapId,
-            segments: [
-                { type: "enterEmbed", instanceId: instanceId, nodeId: null }
-            ],
-            target: { type: "starmap" }
-        };
-    }
-
-    // Issue #801 评论 5895878756: Embed 下钻 segment 由 Controller 统一构造，
-    // Canvas 不再直接访问 legacyPortalNodeId 分流。
-    function embedDrillSegment(instanceId) {
-        var embed = getEmbed(instanceId);
-        if (embed && embed.legacyPortalNodeId) {
-            return { type: "enterPortal", instanceId: null, nodeId: embed.legacyPortalNodeId };
+            type: "enterEmbed",
+            instanceId: instanceId,
+            nodeId: null
         }
-        return { type: "enterEmbed", instanceId: instanceId, nodeId: null };
     }
 
-    // Issue #796 评论 5886483653: 按世界坐标命中 Embed。
-    // 复用 hit_test_nodes 后端能力（embed 几何与 node 同构）。
-    function findEmbedAt(wx, wy) {
-        if (!ensureBackend()) return null;
-        var layoutEmbeds = [];
+    // Issue #805 评论 5908703621 问题 3：findEmbedChromeAt 只判断 chrome 命中区域
+    // （标题条矩形 + 四条 border 矩形），内部矩形返回 null。
+    // 父 Canvas 不再把整个 Embed 矩形判成命中，内部事件不会被父场景截走。
+    // 纯本地几何判断，不需要后端。
+    function _rectContains(rx, ry, rw, rh, px, py) {
+        return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh
+    }
+
+    function findEmbedChromeAt(wx, wy) {
         for (var i = 0; i < embedsModel.length; i++) {
-            var em = embedsModel[i];
-            layoutEmbeds.push({ nodeId: em.instanceId, x: em.x, y: em.y, width: em.width, height: em.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
+            var em = embedsModel[i]
+            // 标题条矩形（顶部 _chromeHeight 高度）
+            if (_rectContains(em.x, em.y, em.width, _chromeHeight, wx, wy)) return em
+            // borderTop
+            if (_rectContains(em.x, em.y, em.width, _borderSlop, wx, wy)) return em
+            // borderBottom
+            if (_rectContains(em.x, em.y + em.height - _borderSlop, em.width, _borderSlop, wx, wy)) return em
+            // borderLeft（标题条下方到 borderBottom 上方）
+            if (_rectContains(em.x, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) return em
+            // borderRight
+            if (_rectContains(em.x + em.width - _borderSlop, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) return em
         }
-        if (layoutEmbeds.length === 0) return null;
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes(JSON.stringify(layoutEmbeds), wx, wy), "");
-        if (res.success && res.data) {
-            return getEmbed(res.data);
-        }
-        return null;
+        return null
     }
 
     // Issue #793 评论 5884923277: createNode 接收 title，不再写死"新节点"。

@@ -52,6 +52,7 @@ pub enum WorkspaceChangeOpType {
     DeleteProject,
     DeleteVolume,
     DeleteChapter,
+    DeleteStarMap,
 }
 
 /// 明确的删除目标，供恢复阶段幂等执行本地删除。
@@ -72,6 +73,9 @@ pub enum DeleteTarget {
         project_id: String,
         volume_id: String,
         chapter_id: String,
+    },
+    StarMap {
+        starmap_id: String,
     },
 }
 
@@ -103,7 +107,7 @@ pub struct SyncDeleteFact {
 /// - `trash_rel_path` 在 plan 阶段生成，apply/recover 阶段不得重新生成。
 /// - `sync_delete_facts` 在 plan 阶段（源目录还存在时）遍历构造，
 ///   apply/recover 阶段直接消费，不重新扫描磁盘。
-/// - 对 `DeleteVolume/DeleteChapter`，`sync_delete_facts` 不允许为空。
+/// - 对 `DeleteVolume/DeleteChapter/DeleteStarMap`，`sync_delete_facts` 不允许为空。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlannedWorkspaceDelete {
     /// 删除目标。
@@ -268,7 +272,7 @@ pub struct WorkspaceChangeJournal {
     /// 完整的删除计划（固定 trash 路径 + 完整 facts），供 apply/recover 阶段
     /// 幂等执行本地删除。
     ///
-    /// 新格式 journal（DeleteVolume/DeleteChapter）必须携带此字段；
+    /// 新格式 journal（DeleteVolume/DeleteChapter/DeleteStarMap）必须携带此字段；
     /// 旧 journal（无此字段）反序列化为 None，恢复时按向后兼容逻辑处理。
     #[serde(default)]
     pub planned_delete: Option<PlannedWorkspaceDelete>,
@@ -310,7 +314,7 @@ impl WorkspaceChangeJournal {
     /// `planned_delete` 携带固定的 trash 路径和完整 `sync_delete_facts`，
     /// 供 apply/recover 阶段消费。
     ///
-    /// 对 `DeleteVolume/DeleteChapter`：
+    /// 对 `DeleteVolume/DeleteChapter/DeleteStarMap`：
     /// - 必须提供 `planned_delete`（`None` 视为编程错误）。
     /// - `planned_delete.sync_delete_facts` 不允许为空——空 facts 会落一个
     ///   无法恢复的 Pending journal（恢复时无法补齐 tombstone），直接返回错误。
@@ -327,10 +331,12 @@ impl WorkspaceChangeJournal {
         delete_target: Option<DeleteTarget>,
         planned_delete: Option<PlannedWorkspaceDelete>,
     ) -> Result<Self> {
-        // 校验：DeleteVolume/DeleteChapter 必须携带非空 planned_delete + 非空 facts。
+        // 校验：DeleteVolume/DeleteChapter/DeleteStarMap 必须携带非空 planned_delete + 非空 facts。
         let sync_delete_facts: Vec<SyncDeleteFact> = match (&op_type, &planned_delete) {
             (
-                WorkspaceChangeOpType::DeleteVolume | WorkspaceChangeOpType::DeleteChapter,
+                WorkspaceChangeOpType::DeleteVolume
+                | WorkspaceChangeOpType::DeleteChapter
+                | WorkspaceChangeOpType::DeleteStarMap,
                 Some(plan),
             ) => {
                 if plan.sync_delete_facts.is_empty() {
@@ -348,7 +354,12 @@ impl WorkspaceChangeJournal {
                 }
                 plan.sync_delete_facts.clone()
             }
-            (WorkspaceChangeOpType::DeleteVolume | WorkspaceChangeOpType::DeleteChapter, None) => {
+            (
+                WorkspaceChangeOpType::DeleteVolume
+                | WorkspaceChangeOpType::DeleteChapter
+                | WorkspaceChangeOpType::DeleteStarMap,
+                None,
+            ) => {
                 return Err(crate::error::Error::Other(format!(
                     "save_pending: {op_type:?} requires planned_delete — \
                      refusing to write an unrecoverable Pending journal"

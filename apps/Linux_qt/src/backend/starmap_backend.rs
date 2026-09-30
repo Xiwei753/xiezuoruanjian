@@ -658,7 +658,9 @@ impl StarMapBackend {
         y: f64,
     ) -> QString {
         self.with_app_mut(|app| app.create_starmap_child_embed_json(host_starmap_id, title, x, y))
-            .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn create_starmap_child_embed(
         &mut self,

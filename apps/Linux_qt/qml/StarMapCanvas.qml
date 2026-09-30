@@ -69,6 +69,9 @@ Item {
     // 用这些构造子 Scene 的 pathSegments。
     property string rootStarmapId: ""
     property var pathSegments: []
+    // Issue #805 评论 5908703621 问题 1：本 Scene 实例的唯一 key，
+    // 传给 Embed delegate 用于构造 child Scene 的 pathKey。
+    property string pathKey: "root"
 
     // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
     // 第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
@@ -98,6 +101,9 @@ Item {
     signal edgeSelected(var edge)
     signal selectionCleared()
     signal editNodeRequested(var node)
+    // Issue #805 评论 5908703621 问题 5：child Scene 经 Embed 冒泡上来的节点编辑请求，
+    // 已带正确的 owner 上下文（ownerStarmapId/ownerPathKey），原样转发给 Scene 不重新包装。
+    signal childEditNodeRequested(string ownerStarmapId, string ownerPathKey, var node)
     // Issue #805 评论 5907045450 第 1 部分：删掉 drillDownRequested / drillUpRequested。
     // 递归渲染由 StarMapScene 处理，Canvas 不再上抛层级切换请求。
 
@@ -209,7 +215,7 @@ Item {
                 if (findNodeAt(mx, my)) {
                     return
                 }
-                if (findEmbedAt(mx, my)) {
+                if (findEmbedChromeAt(mx, my)) {
                     return
                 }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
@@ -236,7 +242,7 @@ Item {
                 if (findNodeAt(mx, my)) {
                     return
                 }
-                if (findEmbedAt(mx, my)) {
+                if (findEmbedChromeAt(mx, my)) {
                     return
                 }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
@@ -260,7 +266,7 @@ Item {
                 var wy = (py - panY) / zoomLevel
 
                 if (findNodeAt(wx, wy)) return
-                if (findEmbedAt(wx, wy)) return
+                if (findEmbedChromeAt(wx, wy)) return
                 if (graphController.hitTestEdge(wx, wy)) return
 
                 contextMenuWorldX = wx
@@ -282,7 +288,7 @@ Item {
                 if (findNodeAt(mx, my)) {
                     return
                 }
-                if (findEmbedAt(mx, my)) {
+                if (findEmbedChromeAt(mx, my)) {
                     return
                 }
                 var clickedEdge = graphController.hitTestEdge(mx, my)
@@ -414,7 +420,7 @@ Item {
                 if (mouse.button === Qt.LeftButton) {
                     var wx = (mouse.x - panX) / zoomLevel
                     var wy = (mouse.y - panY) / zoomLevel
-                    if (!findNodeAt(wx, wy) && !findEmbedAt(wx, wy)) {
+                    if (!findNodeAt(wx, wy) && !findEmbedChromeAt(wx, wy)) {
                         interaction.beginPan()
                     }
                 }
@@ -707,9 +713,9 @@ Item {
                         if (targetNode && targetNode.id !== interaction.connectFromId) {
                             createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
                         } else {
-                            var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
+                            var targetEmbed = findEmbedChromeAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, graphController.embedConnectPath(targetEmbed.instanceId))
+                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
                             }
                         }
                         interaction.endConnect()
@@ -754,6 +760,9 @@ Item {
                 // Embed 的 contentViewport 用这些构造子 Scene 的 pathSegments。
                 rootStarmapId: canvasArea.rootStarmapId
                 parentPathSegments: canvasArea.pathSegments
+                // Issue #805 评论 5908703621 问题 1：传 pathKey 给 Embed，
+                // Embed 用它构造 child Scene 的 pathKey（父路径 + "/embed_<instanceId>"）。
+                parentPathKey: canvasArea.pathKey
                 starmapBackendRef: canvasArea.starmapBackendRef
 
                 // Issue #798: 不再原地篡改 embedData.x/y，拖动用 StarMapEmbed 自己的 x/y
@@ -774,10 +783,16 @@ Item {
                 // Embed 内部递归渲染子 StarMapScene，不需要"双击进入"语义。
                 // onDoubleClicked 信号已从 StarMapEmbed 删除。
 
+                // Issue #805 评论 5908703621 问题 5：child Scene 经 Embed 冒泡上来的
+                // 节点编辑请求，转发到 Canvas 的 childEditNodeRequested，Scene 原样上抛。
+                onEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
+                    canvasArea.childEditNodeRequested(ownerStarmapId, ownerPathKey, node)
+                }
+
                 // Issue #801 评论 5894035036: 鼠标长按直接进 connect
                 onMouseLongPressed: function(instId) {
                     var ed = embedData
-                    if (!interaction.beginConnect("embed", instId, graphController.embedConnectPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginConnect("embed", instId, embedPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -788,7 +803,7 @@ Item {
                 // Issue #801 评论 5895310100: 触屏长按当场显示菜单视觉层（与 Node 对称）。
                 onTouchLongPressed: function(instId) {
                     var ed = embedData
-                    if (!interaction.beginContextPending("embed", instId, graphController.embedConnectPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
+                    if (!interaction.beginContextPending("embed", instId, embedPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
                     isBeingDragged = true
@@ -869,9 +884,9 @@ Item {
                         if (targetNode && targetNode.id !== interaction.connectFromId) {
                             createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
                         } else {
-                            var targetEmbed = findEmbedAt(interaction.connectMouseX, interaction.connectMouseY)
+                            var targetEmbed = findEmbedChromeAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, graphController.embedConnectPath(targetEmbed.instanceId))
+                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
                             }
                         }
                         interaction.endConnect()
@@ -1078,11 +1093,27 @@ Item {
 
     // Issue #796 评论 5887280405: Node 端点的 StarMapTargetPathDto JS 对象。
     // JSON 字段名遵循 DTO serde rename：starmapId（camelCase）、segments、target.type/nodeId。
+    // Issue #805 评论 5908703621 问题 4：nodePath 由 Scene 上下文构造，
+    // starmapId 用 rootStarmapId，segments 用 pathSegments.slice(0)，
+    // 这样第 N 层连线端点不会退化成第一层。
     function nodePath(nodeId) {
         return {
-            starmapId: starmapId,
-            segments: [],
+            starmapId: rootStarmapId,
+            segments: pathSegments.slice(0),
             target: { type: "node", nodeId: nodeId }
+        }
+    }
+
+    // Issue #805 评论 5908703621 问题 4：Embed 端点的完整路径由 Canvas 拼接。
+    // Controller 的 embedPathSegment 只返回当前 Embed 的一个 segment，
+    // Canvas 用 pathSegments.concat 拼完整路径，starmapId 用 rootStarmapId。
+    function embedPath(instanceId) {
+        return {
+            starmapId: rootStarmapId,
+            segments: pathSegments.concat([
+                graphController.embedPathSegment(instanceId)
+            ]),
+            target: { type: "starmap" }
         }
     }
 
@@ -1112,9 +1143,11 @@ Item {
         return graphController.findNodeAt(wx, wy)
     }
 
-    // Issue #796 评论 5886483653: 按世界坐标命中 Embed
-    function findEmbedAt(wx, wy) {
-        return graphController.findEmbedAt(wx, wy)
+    // Issue #805 评论 5908703621 问题 3：findEmbedChromeAt 只判断 chrome 命中区域
+    // （标题条 + 四条 border），内部矩形返回 null。父 Canvas 不再把整个 Embed
+    // 矩形判成命中，内部事件不会被父场景截走。
+    function findEmbedChromeAt(wx, wy) {
+        return graphController.findEmbedChromeAt(wx, wy)
     }
 
     // Issue #796 评论 5886483653: Embed 增删改转发给 graphController

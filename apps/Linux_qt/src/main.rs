@@ -665,7 +665,10 @@ fn main() {
             "qml_load_failed",
             &format!("QML load failed for {}: {}", qml_path, last_error),
         );
-        startup_mark("qml_load_failed", &format!("QML load failed: {}", last_error));
+        startup_mark(
+            "qml_load_failed",
+            &format!("QML load failed: {}", last_error),
+        );
         startup_mark_exit(1);
         std::process::exit(1);
     }

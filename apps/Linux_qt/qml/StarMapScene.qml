@@ -56,7 +56,9 @@ Item {
     property string resolveError: ""
 
     // 对外信号
-    signal editNodeRequested(var node)
+    // Issue #805 评论 5908703621 问题 5：editNodeRequested 带 owner 上下文，
+    // 让 Inspector 知道节点属于哪一层星图，更新/删除回到 owner Scene。
+    signal editNodeRequested(string ownerStarmapId, string ownerPathKey, var node)
     signal nodeSelected(var node)
     signal selectionCleared()
 
@@ -131,14 +133,23 @@ Item {
         starmapId: scene.finalStarmapId
         starmapBackendRef: scene.starmapBackendRef
 
-        // 递归渲染上下文：传给 Canvas，Canvas 再传给 Embed delegate，
-        // Embed 的 contentViewport 用这些构造子 Scene 的 pathSegments。
-        // Issue #805 评论 5907045450 第 2 部分：Embed 内部用 Loader 创建
-        // 下一层 StarMapScene（childPath = parent.pathSegments + EnterEmbed(instanceId)）。
-        // 这些属性在 Canvas 上声明，供 Embed delegate 读取。
-        // （StarMapCanvas 需要新增 rootStarmapId / pathSegments 属性）
+        // Issue #805 评论 5908703621 问题 1：递归渲染上下文必须传给 Canvas，
+        // Canvas 再传给 Embed delegate，否则 childSceneLoader 的 active 条件
+        // （rootStarmapId.length > 0）不满足，子场景不会加载。
+        rootStarmapId: scene.rootStarmapId
+        pathSegments: scene.pathSegments
+        pathKey: scene.pathKey
 
-        onEditNodeRequested: function(node) { scene.editNodeRequested(node) }
+        // Issue #805 评论 5908703621 问题 5：本层 Canvas 上抛 editNodeRequested(var node)，
+        // Scene 用 finalStarmapId/pathKey 包装成带 owner 上下文的三参数信号上抛。
+        onEditNodeRequested: function(node) {
+            scene.editNodeRequested(scene.finalStarmapId, scene.pathKey, node)
+        }
+        // Issue #805 评论 5908703621 问题 5：child Scene 经 Embed 冒泡上来的
+        // editNodeRequested 已经带正确的 owner 上下文，原样转发不再重新包装。
+        onChildEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
+            scene.editNodeRequested(ownerStarmapId, ownerPathKey, node)
+        }
         onNodeSelected: function(node) { scene.nodeSelected(node) }
         onSelectionCleared: { scene.selectionCleared() }
     }
@@ -147,5 +158,18 @@ Item {
     function resetInteraction() {
         if (scene.finalStarmapId.length > 0)
             sceneCanvas.resetInteraction()
+    }
+
+    // Issue #805 评论 5908703621 问题 5：Inspector 更新/删除必须回到 owner Scene。
+    // Scene 暴露 updateNodeFromInspector/deleteNodeFromInspector 转发到内部 Canvas，
+    // Workspace 按 ownerPathKey 找到对应 Scene 实例调用。
+    function updateNodeFromInspector(nodeId, patch) {
+        if (scene.finalStarmapId.length > 0)
+            sceneCanvas.updateNodeFromInspector(nodeId, patch)
+    }
+
+    function deleteNodeFromInspector(nodeId) {
+        if (scene.finalStarmapId.length > 0)
+            sceneCanvas.deleteNodeFromInspector(nodeId)
     }
 }

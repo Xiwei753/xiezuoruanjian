@@ -485,8 +485,11 @@ impl WriterCoreApi {
     }
 
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
-        //   用 _with_changes 版本记录本地历史。
-        let change_set = self.core_write().delete_starmap_with_changes(starmap_id)?;
+        //   durable 删除事务：先 plan（不碰磁盘，构造完整 PlannedStarmapDelete
+        // 含固定 trash 路径和完整 sync_delete_facts），再 save_pending 落盘 journal，
+        // 再 apply planned delete（rename + 写 tombstone），再推进 journal 阶段。
+        // 只有 save_pending 成功后才允许动本地文件，保证删除事实在物理删除前已持久化。
+        // history 失败时保留 journal 并返回错误，与 delete_volume/delete_chapter 对称。
         for prefix in &[
             format!("starmap:{}", starmap_id),
             format!("starmap_node:{}:", starmap_id),
@@ -497,7 +500,79 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        let _ = self.record_workspace_change_set_history(&change_set, "delete_starmap");
+        let device_id = crate::settings::load_device_info(&self.app_data_root)
+            .map(|i| i.device_id)
+            .unwrap_or_default();
+        // 先 flush 全部 dirty starmap stores，确保引用扫描读到最新磁盘数据。
+        self.core_write().flush_all_starmap_stores()?;
+        self.core_write().remove_starmap_store(starmap_id);
+        let (change_set, planned) = crate::storage::journal::starmap_delete::plan_delete_starmap(
+            &self.app_data_root,
+            starmap_id,
+            &device_id,
+        )
+        .map_err(WriterError::from)?;
+        // 先落盘 journal（phase=Pending，包含完整 facts/固定 trash path），确保崩溃后能恢复。
+        let planned_workspace = planned.to_workspace_planned();
+        let journal =
+            crate::storage::journal::workspace_change::WorkspaceChangeJournal::save_pending(
+                &self.app_data_root,
+                &change_set,
+                &device_id,
+                crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteStarMap,
+                Some(planned_workspace.delete_target.clone()),
+                Some(planned_workspace.clone()),
+            )
+            .map_err(|e| {
+                log::warn!(
+                    "delete_starmap: save_pending journal failed: {} — aborting before physical delete",
+                    e
+                );
+                WriterError::Other(format!("delete_starmap: save_pending journal failed: {e}"))
+            })?;
+        // journal 落盘成功，执行物理删除（消费 plan 中固定的 trash 路径和 facts）。
+        if let Err(e) = crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
+            &self.app_data_root,
+            starmap_id,
+            &planned,
+        )
+        .map_err(WriterError::from)
+        {
+            log::warn!(
+                "delete_starmap: physical delete failed: {} — journal retained for recovery",
+                e
+            );
+            return Err(e);
+        }
+        // 本地删除已完成，推进到 LocalApplied。
+        if let Err(e) = journal.mark_local_applied(&self.app_data_root) {
+            log::warn!(
+                "delete_starmap: mark_local_applied failed: {} — journal retained for recovery",
+                e
+            );
+        }
+        // 写 workspace history，成功后清 journal；失败时 journal 保留供下次 bootstrap 补记。
+        // 不再丢弃 history 错误（把 `let _ =` 改成实际错误处理）。
+        match self.record_workspace_change_set_history(&change_set, "delete_starmap") {
+            Ok(()) => {
+                if let Err(e) = journal.mark_history_recorded(&self.app_data_root) {
+                    log::warn!(
+                        "delete_starmap: mark_history_recorded failed: {} — journal retained",
+                        e
+                    );
+                } else if let Err(e) = journal.clear_journal(&self.app_data_root) {
+                    log::warn!("delete_starmap: clear_journal failed: {}", e);
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "delete_starmap: record_workspace_change_set_history failed: {} — \
+                     journal retained for recovery, history will be补 on next startup",
+                    e
+                );
+                return Err(WriterError::from(e));
+            }
+        }
         Ok(true)
     }
 

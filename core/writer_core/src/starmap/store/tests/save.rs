@@ -164,10 +164,12 @@ fn flush_delete_failure_returns_error_and_retains_id() {
 
     let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
     store2.load_full().unwrap();
-    // load_full 成功后再把 node 文件变成目录，模拟 flush 删除时 IO 失败。
+    // load_full 成功后再把 sync/trash 变成文件，模拟 flush 删除时无法创建 trash 目录。
     // （修复后 load_full 对坏 node 文件会 Err，所以必须在 load_full 之后破坏文件。）
-    std::fs::remove_file(&node_path).unwrap();
-    std::fs::create_dir_all(&node_path).unwrap();
+    // 对象级删除现在走 durable rename to trash，需要 create_dir_all(sync/trash/...)；
+    // 把 sync/trash 变成文件会让 create_dir_all 失败，触发删除错误路径。
+    std::fs::create_dir_all(dir.path().join("sync")).unwrap();
+    std::fs::write(dir.path().join("sync").join("trash"), "blocker").unwrap();
     store2.remove_node("n1");
     assert!(store2.has_pending_deletes());
 

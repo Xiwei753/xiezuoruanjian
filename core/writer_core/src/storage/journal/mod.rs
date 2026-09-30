@@ -9,9 +9,7 @@ pub mod workspace_change;
 
 pub use project_delete::*;
 pub use starmap_child_embed::*;
-pub use starmap_delete::{
-    apply_planned_delete_starmap, plan_delete_starmap, PlannedStarmapDelete,
-};
+pub use starmap_delete::{apply_planned_delete_starmap, plan_delete_starmap, PlannedStarmapDelete};
 pub use workspace_change::{
     ensure_sync_tombstones_from_facts, recover_unfinished, RecoveredWorkspaceChange,
     WorkspaceChangeJournal, WorkspaceChangeOpType, WorkspaceChangePhase,

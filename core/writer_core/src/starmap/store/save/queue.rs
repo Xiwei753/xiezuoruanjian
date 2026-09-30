@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::starmap::package_storage;
+use crate::storage::journal::workspace_change::{
+    ensure_sync_tombstones_from_facts, SyncDeleteFact,
+};
 
 use super::super::types::*;
 use super::super::StarMapStore;
@@ -179,17 +182,59 @@ impl StarMapStore {
             }
         }
 
+        // ── 对象级删除接 LWW tombstone ──
+        // 在执行任何 delete_*_file 前，生成固定 trash 路径和完整 SyncDeleteFact，
+        // 先 durable rename 到 trash（不直接 unlink），再幂等写 SyncState.tombstones。
+        // 这样删一个节点，只要它之前进过 known_files，flush 后不会重新触发
+        // "known file missing without tombstone"。
+        let has_object_deletes = !self.deleted_node_ids.is_empty()
+            || !self.deleted_edge_ids.is_empty()
+            || !self.deleted_embed_ids.is_empty()
+            || !self.deleted_link_ids.is_empty()
+            || !self.deleted_hyperlink_ids.is_empty();
+
+        let mut object_delete_facts: Vec<SyncDeleteFact> = Vec::new();
+        let object_delete_trash_prefix: Option<String> = if has_object_deletes {
+            let token = format!(
+                "{}_{}_objects",
+                chrono::Utc::now().timestamp_millis(),
+                uuid::Uuid::new_v4()
+            );
+            Some(format!("sync/trash/{token}"))
+        } else {
+            None
+        };
+
         if !self.deleted_node_ids.is_empty() {
             let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
+            let trash_prefix = object_delete_trash_prefix.as_ref().ok_or_else(|| {
+                crate::error::Error::Other(
+                    "flush_save_queue: trash prefix missing for node deletes".to_string(),
+                )
+            })?;
+            let trash_root = self.app_data_root.join(trash_prefix);
             let mut succeeded = true;
             for node_id in &ids {
-                match package_storage::delete_node_file(
+                match package_storage::delete_node_file_to_trash(
                     &self.app_data_root,
                     &self.starmap_id,
                     node_id,
+                    &trash_root,
+                    trash_prefix,
                 ) {
-                    Ok(paths) => {
-                        changed_paths.extend(paths);
+                    Ok(Some((orig_rel, trash_rel))) => {
+                        changed_paths.push(PathBuf::from(&orig_rel));
+                        object_delete_facts.push(SyncDeleteFact {
+                            original_path: orig_rel,
+                            original_hash: String::new(),
+                            deleted_at: chrono::Utc::now().timestamp(),
+                            deleted_by: String::new(),
+                            trash_path: trash_rel,
+                        });
+                        successful_deletes.deleted_nodes.insert(node_id.clone());
+                    }
+                    Ok(None) => {
+                        // 文件已不存在，视为成功（幂等）。
                         successful_deletes.deleted_nodes.insert(node_id.clone());
                     }
                     Err(e) => {
@@ -206,15 +251,33 @@ impl StarMapStore {
 
         if !self.deleted_edge_ids.is_empty() {
             let ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
+            let trash_prefix = object_delete_trash_prefix.as_ref().ok_or_else(|| {
+                crate::error::Error::Other(
+                    "flush_save_queue: trash prefix missing for edge deletes".to_string(),
+                )
+            })?;
+            let trash_root = self.app_data_root.join(trash_prefix);
             let mut succeeded = true;
             for edge_id in &ids {
-                match package_storage::delete_edge_file(
+                match package_storage::delete_edge_file_to_trash(
                     &self.app_data_root,
                     &self.starmap_id,
                     edge_id,
+                    &trash_root,
+                    trash_prefix,
                 ) {
-                    Ok(paths) => {
-                        changed_paths.extend(paths);
+                    Ok(Some((orig_rel, trash_rel))) => {
+                        changed_paths.push(PathBuf::from(&orig_rel));
+                        object_delete_facts.push(SyncDeleteFact {
+                            original_path: orig_rel,
+                            original_hash: String::new(),
+                            deleted_at: chrono::Utc::now().timestamp(),
+                            deleted_by: String::new(),
+                            trash_path: trash_rel,
+                        });
+                        successful_deletes.deleted_edges.insert(edge_id.clone());
+                    }
+                    Ok(None) => {
                         successful_deletes.deleted_edges.insert(edge_id.clone());
                     }
                     Err(e) => {
@@ -231,15 +294,35 @@ impl StarMapStore {
 
         if !self.deleted_embed_ids.is_empty() {
             let ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
+            let trash_prefix = object_delete_trash_prefix.as_ref().ok_or_else(|| {
+                crate::error::Error::Other(
+                    "flush_save_queue: trash prefix missing for embed deletes".to_string(),
+                )
+            })?;
+            let trash_root = self.app_data_root.join(trash_prefix);
             let mut succeeded = true;
             for instance_id in &ids {
-                match package_storage::delete_embed_file(
+                match package_storage::delete_embed_file_to_trash(
                     &self.app_data_root,
                     &self.starmap_id,
                     instance_id,
+                    &trash_root,
+                    trash_prefix,
                 ) {
-                    Ok(paths) => {
-                        changed_paths.extend(paths);
+                    Ok(Some((orig_rel, trash_rel))) => {
+                        changed_paths.push(PathBuf::from(&orig_rel));
+                        object_delete_facts.push(SyncDeleteFact {
+                            original_path: orig_rel,
+                            original_hash: String::new(),
+                            deleted_at: chrono::Utc::now().timestamp(),
+                            deleted_by: String::new(),
+                            trash_path: trash_rel,
+                        });
+                        successful_deletes
+                            .deleted_embeds
+                            .insert(instance_id.clone());
+                    }
+                    Ok(None) => {
                         successful_deletes
                             .deleted_embeds
                             .insert(instance_id.clone());
@@ -258,15 +341,33 @@ impl StarMapStore {
 
         if !self.deleted_link_ids.is_empty() {
             let ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
+            let trash_prefix = object_delete_trash_prefix.as_ref().ok_or_else(|| {
+                crate::error::Error::Other(
+                    "flush_save_queue: trash prefix missing for link deletes".to_string(),
+                )
+            })?;
+            let trash_root = self.app_data_root.join(trash_prefix);
             let mut succeeded = true;
             for link_id in &ids {
-                match package_storage::delete_link_file(
+                match package_storage::delete_link_file_to_trash(
                     &self.app_data_root,
                     &self.starmap_id,
                     link_id,
+                    &trash_root,
+                    trash_prefix,
                 ) {
-                    Ok(paths) => {
-                        changed_paths.extend(paths);
+                    Ok(Some((orig_rel, trash_rel))) => {
+                        changed_paths.push(PathBuf::from(&orig_rel));
+                        object_delete_facts.push(SyncDeleteFact {
+                            original_path: orig_rel,
+                            original_hash: String::new(),
+                            deleted_at: chrono::Utc::now().timestamp(),
+                            deleted_by: String::new(),
+                            trash_path: trash_rel,
+                        });
+                        successful_deletes.deleted_links.insert(link_id.clone());
+                    }
+                    Ok(None) => {
                         successful_deletes.deleted_links.insert(link_id.clone());
                     }
                     Err(e) => {
@@ -283,15 +384,33 @@ impl StarMapStore {
 
         if !self.deleted_hyperlink_ids.is_empty() {
             let ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
+            let trash_prefix = object_delete_trash_prefix.as_ref().ok_or_else(|| {
+                crate::error::Error::Other(
+                    "flush_save_queue: trash prefix missing for hyperlink deletes".to_string(),
+                )
+            })?;
+            let trash_root = self.app_data_root.join(trash_prefix);
             let mut succeeded = true;
             for hl_id in &ids {
-                match package_storage::delete_hyperlink_file(
+                match package_storage::delete_hyperlink_file_to_trash(
                     &self.app_data_root,
                     &self.starmap_id,
                     hl_id,
+                    &trash_root,
+                    trash_prefix,
                 ) {
-                    Ok(paths) => {
-                        changed_paths.extend(paths);
+                    Ok(Some((orig_rel, trash_rel))) => {
+                        changed_paths.push(PathBuf::from(&orig_rel));
+                        object_delete_facts.push(SyncDeleteFact {
+                            original_path: orig_rel,
+                            original_hash: String::new(),
+                            deleted_at: chrono::Utc::now().timestamp(),
+                            deleted_by: String::new(),
+                            trash_path: trash_rel,
+                        });
+                        successful_deletes.deleted_hyperlinks.insert(hl_id.clone());
+                    }
+                    Ok(None) => {
                         successful_deletes.deleted_hyperlinks.insert(hl_id.clone());
                     }
                     Err(e) => {
@@ -303,6 +422,29 @@ impl StarMapStore {
             }
             if !succeeded {
                 failed_types.push("DeleteHyperlink".to_string());
+            }
+        }
+
+        // 幂等写 SyncState.tombstones：对象文件已 durable rename 到 trash，
+        // 现在补 LWW tombstone，避免 "known file missing without tombstone"。
+        // tombstone 写入失败不算 flush 失败（tombstone 可由后续 sync 补齐），
+        // 但记入 recovery_log 供诊断。
+        if !object_delete_facts.is_empty() {
+            if let Err(e) =
+                ensure_sync_tombstones_from_facts(&self.app_data_root, &object_delete_facts)
+            {
+                log::warn!(
+                    "flush_save_queue: ensure_sync_tombstones_from_facts failed for starmap {}: {} \
+                     — object files moved to trash but tombstone not persisted; sync may report missing files",
+                    self.starmap_id,
+                    e
+                );
+                self.recovery_log.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::Corrupt,
+                    object_type: "tombstone".to_string(),
+                    object_id: self.starmap_id.clone(),
+                    detail: format!("ensure_sync_tombstones_from_facts failed: {:?}", e),
+                });
             }
         }
 

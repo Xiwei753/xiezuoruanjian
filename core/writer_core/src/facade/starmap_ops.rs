@@ -137,7 +137,7 @@ impl super::WriterCore {
     }
 
     /// 从缓存中移除指定 starmap store（内部 helper）。
-    fn remove_starmap_store(&self, starmap_id: &str) {
+    pub(crate) fn remove_starmap_store(&self, starmap_id: &str) {
         let mut stores = self
             .starmap_stores
             .lock()

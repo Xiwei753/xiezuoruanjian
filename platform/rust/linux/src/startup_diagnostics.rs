@@ -159,7 +159,11 @@ impl StartupDiagnostics {
 /// 以 append 模式打开文件写入一行并 flush。任何 IO 错误都静默忽略。
 fn append_and_flush(path: &PathBuf, line: &str) {
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).create(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+    {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
     }
@@ -193,8 +197,7 @@ fn write_pending_last_failed(session_log: &PathBuf) {
 fn promote_pending_last_failed() {
     let pending = startup_diagnostics_dir().join("last_failed.pending");
     if let Ok(session_path_bytes) = std::fs::read(&pending) {
-        let session_path =
-            PathBuf::from(String::from_utf8_lossy(&session_path_bytes).to_string());
+        let session_path = PathBuf::from(String::from_utf8_lossy(&session_path_bytes).to_string());
         if session_path.exists() {
             if let Ok(content) = std::fs::read(&session_path) {
                 let last_failed = startup_diagnostics_dir().join("last_failed.log");
@@ -270,7 +273,10 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) {
         .location()
         .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
         .unwrap_or_else(|| "<unknown>".to_string());
-    let payload = info.payload().downcast_ref::<&str>().map(|s| s.to_string())
+    let payload = info
+        .payload()
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "<non-string panic payload>".to_string());
 
@@ -303,7 +309,10 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) {
     if let Some(session_log) = CURRENT_SESSION_LOG.get() {
         let summary = format!(
             "[{} UTC] stage=panic message=location={} payload={} crash_file={}\n",
-            ts_human, location, payload, crash_path.display(),
+            ts_human,
+            location,
+            payload,
+            crash_path.display(),
         );
         append_and_flush(session_log, &summary);
         // Issue #803 评论 5905373722：panic 不立刻认定本次启动失败。

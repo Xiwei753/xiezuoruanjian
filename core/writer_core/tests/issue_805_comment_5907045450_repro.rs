@@ -111,8 +111,7 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
     std::fs::create_dir_all(app_data_root.join("projects")).unwrap();
 
     // ── 1. 创建星图（含 node 对象文件） ──
-    let meta =
-        starmap::create_starmap(&app_data_root, "测试星图", "验证 #805 修复", None).unwrap();
+    let meta = starmap::create_starmap(&app_data_root, "测试星图", "验证 #805 修复", None).unwrap();
     let starmap_id = meta.starmap_id.clone();
 
     let mut store = StarMapStore::new(&app_data_root, &starmap_id);
@@ -121,10 +120,7 @@ fn verify_issue_805_delete_starmap_tombstone_present_sync_ok() {
 
     // 收集星图相关文件相对路径（meta + 对象文件）。
     let starmap_files = collect_starmap_sync_files(&app_data_root, &starmap_id);
-    assert!(
-        !starmap_files.is_empty(),
-        "前置：应至少有 meta 文件"
-    );
+    assert!(!starmap_files.is_empty(), "前置：应至少有 meta 文件");
     // 确认对象文件确实落盘（含 node）。
     let has_node_file = starmap_files.iter().any(|p| p.contains("/nodes/"));
     assert!(
@@ -206,9 +202,8 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     let app_data_root = tmp.path().to_path_buf();
     std::fs::create_dir_all(app_data_root.join("projects")).unwrap();
 
-    let meta =
-        starmap::create_starmap(&app_data_root, "测试星图2", "验证 #805 with_changes", None)
-            .unwrap();
+    let meta = starmap::create_starmap(&app_data_root, "测试星图2", "验证 #805 with_changes", None)
+        .unwrap();
     let starmap_id = meta.starmap_id.clone();
 
     let mut store = StarMapStore::new(&app_data_root, &starmap_id);
@@ -230,8 +225,7 @@ fn verify_issue_805_delete_starmap_with_changes_tombstone_present_sync_ok() {
     SyncService::save_sync_state(&app_data_root, &state).unwrap();
 
     // 走 delete_starmap_with_changes 路径（现在走 plan/apply 事务）。
-    let change_set =
-        starmap::delete_starmap_with_changes(&app_data_root, &starmap_id).unwrap();
+    let change_set = starmap::delete_starmap_with_changes(&app_data_root, &starmap_id).unwrap();
     // 变更集应包含 meta 删除 + 对象目录删除树。
     assert!(
         !change_set.is_empty(),

@@ -169,6 +169,7 @@ fn recover_message_for_op_type(
         WorkspaceChangeOpType::DeleteProject => "recover_delete_project",
         WorkspaceChangeOpType::DeleteVolume => "recover_delete_volume",
         WorkspaceChangeOpType::DeleteChapter => "recover_delete_chapter",
+        WorkspaceChangeOpType::DeleteStarMap => "recover_delete_starmap",
     }
 }
 
@@ -374,6 +375,79 @@ fn apply_chapter_delete_or_upgrade(
     }
 }
 
+/// 源文件还在时重放 StarMap 删除：有 `planned_delete` 直接 apply，无则先升级 journal 再 apply。
+///
+/// 新格式 journal（有 `planned_delete`）直接调 `apply_planned_delete_starmap`。
+/// 旧格式 journal（无 `planned_delete`）走"重新 plan + 回写 durable Pending + 统一 apply"。
+fn apply_starmap_delete_or_upgrade(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+    starmap_id: &str,
+) -> std::result::Result<(), WriterError> {
+    if let Some(planned_workspace) = &rec.planned_delete {
+        // 从 PlannedWorkspaceDelete 构造 PlannedStarmapDelete 供 apply。
+        let planned_starmap = crate::storage::journal::starmap_delete::PlannedStarmapDelete {
+            starmap_id: starmap_id.to_string(),
+            trash_rel_path: planned_workspace.trash_rel_path.clone(),
+            sync_delete_facts: planned_workspace.sync_delete_facts.clone(),
+        };
+        crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
+            app_data_root,
+            starmap_id,
+            &planned_starmap,
+        )
+        .map_err(WriterError::from)
+    } else {
+        log::debug!(
+            "recover_pending_local_delete: old-format journal, upgrading plan for starmap {}",
+            starmap_id
+        );
+        let (_new_change_set, planned) =
+            crate::storage::journal::starmap_delete::plan_delete_starmap(
+                app_data_root,
+                starmap_id,
+                &rec.device_id,
+            )
+            .map_err(WriterError::from)?;
+        let planned_workspace = planned.to_workspace_planned();
+        crate::storage::journal::workspace_change::upgrade_pending_plan(
+            app_data_root,
+            rec,
+            planned_workspace.clone(),
+        )
+        .map_err(WriterError::from)?;
+        crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
+            app_data_root,
+            starmap_id,
+            &planned,
+        )
+        .map_err(WriterError::from)
+    }
+}
+
+/// 根据 sync_delete_facts 幂等补齐 app_data_root（StarMap 同步根）的 tombstone。
+///
+/// StarMap 在 App scope 下同步，tombstone 写到 `app_data_root` 的 SyncState。
+/// `facts.is_empty()` 是不可完成的事务——返回错误，调用方保留 journal。
+fn ensure_starmap_tombstones_persisted(
+    app_data_root: &Path,
+    facts: &[crate::storage::journal::workspace_change::SyncDeleteFact],
+) -> std::result::Result<(), WriterError> {
+    if facts.is_empty() {
+        return Err(WriterError::Other(
+            "ensure_starmap_tombstones_persisted: empty sync_delete_facts — \
+             cannot complete delete transaction without durable facts; \
+             journal retained for manual inspection"
+                .to_string(),
+        ));
+    }
+    crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts(
+        app_data_root,
+        facts,
+    )
+    .map_err(WriterError::from)
+}
+
 /// 幂等完成 Pending 阶段的本地删除。
 ///
 /// 重放同一个 planned delete：
@@ -460,6 +534,26 @@ fn recover_pending_local_delete(
                  journal {} — should use project_delete journal; journal retained",
                 project_id, rec.journal_token
             )))
+        }
+        Some(DeleteTarget::StarMap { starmap_id }) => {
+            // StarMap 删除恢复。
+            // - 源文件还在（meta 或 graph dir 存在）：调 apply_planned_delete_starmap 重放。
+            // - graph/meta 已经被移动：根据 journal 里的 sync_delete_facts 幂等补
+            //   SyncState.tombstones（调 ensure_sync_tombstones_from_facts）。
+            // - tombstone 没补成功就不能推进 history（返回 Err 保留 journal）。
+            let meta_abs = app_data_root.join(format!("starmaps/{starmap_id}.meta.json"));
+            let graph_dir = app_data_root.join("starmaps").join(starmap_id);
+            if !meta_abs.exists() && !graph_dir.exists() {
+                log::debug!(
+                    "recover_pending_local_delete: starmap {} already absent — ensuring tombstones persisted",
+                    starmap_id
+                );
+                // graph/meta 已被移动，根据 sync_delete_facts 幂等补齐 tombstone。
+                ensure_starmap_tombstones_persisted(app_data_root, &rec.sync_delete_facts)?;
+                return Ok(());
+            }
+            // 源文件还在：重放 planned delete。
+            apply_starmap_delete_or_upgrade(app_data_root, rec, starmap_id)
         }
         None => {
             // 旧 journal 无 delete_target，尝试从 change_set 无歧义迁移。
@@ -560,7 +654,62 @@ fn recover_pending_local_delete_no_target(
              — should use project_delete journal; journal retained",
             rec.journal_token
         ))),
+        WorkspaceChangeOpType::DeleteStarMap => recover_starmap_no_target(app_data_root, rec),
     }
+}
+
+/// 处理旧格式 journal（无 delete_target）的 StarMap Pending 阶段恢复。
+///
+/// 从 change_set 提取 `starmap_id`（`Delete(starmaps/{id}.meta.json)`），
+/// 源文件还在时调 `apply_starmap_delete_or_upgrade`，已消失时返回错误。
+fn recover_starmap_no_target(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+) -> std::result::Result<(), WriterError> {
+    let starmap_id = migrate_starmap_target_from_change_set(&rec.changes).ok_or_else(|| {
+        WriterError::Other(format!(
+            "recover_pending_local_delete: cannot unambiguously migrate \
+             delete_target from change_set for journal {} — journal retained",
+            rec.journal_token
+        ))
+    })?;
+    let meta_abs = app_data_root.join(format!("starmaps/{starmap_id}.meta.json"));
+    let graph_dir = app_data_root.join("starmaps").join(&starmap_id);
+    if !meta_abs.exists() && !graph_dir.exists() {
+        return Err(WriterError::Other(format!(
+            "recover_pending_local_delete: old-format journal {} — starmap {} \
+             already absent but no sync_delete_facts to ensure tombstones; \
+             journal retained",
+            rec.journal_token, starmap_id
+        )));
+    }
+    log::debug!(
+        "recover_pending_local_delete: migrated delete_target from change_set for starmap {}",
+        starmap_id
+    );
+    apply_starmap_delete_or_upgrade(app_data_root, rec, &starmap_id)
+}
+
+/// 从旧格式 change_set 中无歧义地提取 StarMap delete target。
+///
+/// 要求 change_set 中存在 `Delete(starmaps/{id}.meta.json)`，提取 `id`。
+/// 否则返回 `None`（无法无歧义迁移）。
+fn migrate_starmap_target_from_change_set(
+    change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+) -> Option<String> {
+    use crate::storage::workspace_git::WorkspaceHistoryChange;
+
+    for change in &change_set.changes {
+        if let WorkspaceHistoryChange::Delete(path) = change {
+            let path_str = path.to_string_lossy();
+            let parts: Vec<&str> = path_str.split('/').collect();
+            // 路径格式：starmaps/{id}.meta.json
+            if parts.len() == 3 && parts[0] == "starmaps" && parts[2] == "meta.json" {
+                return Some(parts[1].to_string());
+            }
+        }
+    }
+    None
 }
 
 /// 从旧格式 change_set 中无歧义地提取 Volume delete target。

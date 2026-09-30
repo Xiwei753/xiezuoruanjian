@@ -315,12 +315,11 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     let device_id = crate::sync::SyncService::load_sync_state(app_data_root)
         .map(|s| s.device_id)
         .unwrap_or_default();
-    let (_change_set, planned) =
-        crate::storage::journal::starmap_delete::plan_delete_starmap(
-            app_data_root,
-            starmap_id,
-            &device_id,
-        )?;
+    let (_change_set, planned) = crate::storage::journal::starmap_delete::plan_delete_starmap(
+        app_data_root,
+        starmap_id,
+        &device_id,
+    )?;
     crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
         app_data_root,
         starmap_id,
@@ -342,6 +341,11 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
 /// 之前本函数先调 `delete_starmap` 删文件再组装 `WorkspaceChangeSet`，全程
 /// 不调用 `ensure_tombstones_from_facts` 补 LWW tombstone。现在改为
 /// plan/apply：plan 阶段构造 facts，apply 阶段在物理删除后写 tombstone。
+///
+/// 注意：本函数不接 `WorkspaceChangeJournal`（没有 layout/device_id 上下文），
+/// 供 facade 等不走 journal 的调用方使用。`WriterCoreApi::delete_starmap`
+/// 走完整 durable journal 流程（plan→save_pending→apply→mark→history→clear），
+/// 不经过本函数。
 pub fn delete_starmap_with_changes(
     app_data_root: &Path,
     starmap_id: &str,
@@ -349,12 +353,11 @@ pub fn delete_starmap_with_changes(
     let device_id = crate::sync::SyncService::load_sync_state(app_data_root)
         .map(|s| s.device_id)
         .unwrap_or_default();
-    let (change_set, planned) =
-        crate::storage::journal::starmap_delete::plan_delete_starmap(
-            app_data_root,
-            starmap_id,
-            &device_id,
-        )?;
+    let (change_set, planned) = crate::storage::journal::starmap_delete::plan_delete_starmap(
+        app_data_root,
+        starmap_id,
+        &device_id,
+    )?;
     crate::storage::journal::starmap_delete::apply_planned_delete_starmap(
         app_data_root,
         starmap_id,

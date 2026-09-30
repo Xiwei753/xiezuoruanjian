@@ -13,7 +13,7 @@
 //   - contentViewport：父 Embed 不挂 TapHandler/DragHandler/MouseArea，
 //     事件直接给 child Scene。
 //   - 删除 doubleClicked(targetStarmapId) 信号和右下角"▸ 进入"语义。
-//   - 不用 findEmbedAt() 把整个矩形都判成 Embed 命中。
+//   - 不用 findEmbedChromeAt() 把整个矩形都判成 Embed 命中。
 //
 // Issue #805 评论 5907045450 第 2 部分：递归渲染
 //   contentViewport 内部用 Loader 创建下一层 StarMapScene
@@ -67,6 +67,9 @@ Item {
     property string rootStarmapId: ""
     property var parentPathSegments: []
     property var starmapBackendRef: null
+    // Issue #805 评论 5908703621 问题 1：父路径 key，由 Canvas 传入，
+    // 用于构造 child Scene 的 pathKey（父路径 + "/embed_<instanceId>"）。
+    property string parentPathKey: ""
 
     // Issue #805 评论 5907045450 第 3 部分：chrome 命中区域高度 + 边框 hit slop。
     readonly property int _chromeHeight: 24
@@ -89,6 +92,9 @@ Item {
     signal contextMenuRequested(string instanceId, real sceneX, real sceneY)
     signal leftReleased()
     signal mouseInteracted()
+    // Issue #805 评论 5908703621 问题 5：child Scene 的节点编辑请求向上冒泡。
+    // 已带 owner 上下文（ownerStarmapId/ownerPathKey），Canvas 接收后转发给 Scene。
+    signal editNodeRequested(string ownerStarmapId, string ownerPathKey, var node)
 
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
@@ -122,6 +128,9 @@ Item {
         // ── Issue #805 评论 5907045450 第 3 部分：chrome 区域 ──
         // 标题条（顶部 _chromeHeight 高度），挂 TapHandler/DragHandler。
         // 命中标题条：选择/移动/右键/长按都作用于 Embed。
+        // Issue #805 评论 5908703621 问题 2：Handler 直接放进 titleBar 内部，
+        // parent Item 就是 titleBar，命中范围限定在标题条。
+        // 不靠 target: titleBar 做事件隔离。
         Rectangle {
             id: titleBar
             anchors.left: parent.left
@@ -142,10 +151,71 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
+
+            TapHandler {
+                id: chromeMouseTap
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.LeftButton
+                exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.mouseLongPressed(root.instanceId)
+            }
+
+            TapHandler {
+                id: chromeTouchTap
+                acceptedDevices: PointerDevice.TouchScreen
+                acceptedButtons: Qt.LeftButton
+                exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.touchLongPressed(root.instanceId)
+            }
+
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.RightButton
+                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onSingleTapped: function(eventPoint) {
+                    root.rightClicked(root.instanceId)
+                    root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+                }
+            }
+
+            DragHandler {
+                id: titleDragHandler
+                acceptedDevices: PointerDevice.Mouse
+                target: null
+                acceptedButtons: Qt.LeftButton
+                grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                property real lastTx: 0
+                property real lastTy: 0
+                onActiveChanged: {
+                    if (active) { lastTx = 0; lastTy = 0 }
+                }
+                onActiveTranslationChanged: {
+                    var dx = activeTranslation.x - lastTx
+                    var dy = activeTranslation.y - lastTy
+                    lastTx = activeTranslation.x
+                    lastTy = activeTranslation.y
+                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    root.moveDelta(dx / zoom, dy / zoom)
+                }
+            }
+
+            PointHandler {
+                id: titlePointTracker
+                acceptedButtons: Qt.LeftButton
+                onActiveChanged: {
+                    if (!active) root.leftReleased()
+                }
+            }
         }
 
         // ── Issue #805 评论 5907045450 第 3 部分：四条边框命中区域 ──
         // 边框有少量 hit slop，命中时选择/移动作用于 Embed。
+        // Issue #805 评论 5908703621 问题 2：每条 border 内部放一套与 titleBar
+        // 对称的 handler（单击选择 + 长按拉线 + 右键菜单 + 拖动移动 + press→release）。
+        // Handler 声明在 border 内部，命中范围就是那条 border。
         Rectangle {
             id: borderTop
             anchors.left: parent.left
@@ -153,6 +223,49 @@ Item {
             anchors.top: parent.top
             height: root._borderSlop
             color: "transparent"
+
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.LeftButton
+                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.mouseLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.TouchScreen
+                acceptedButtons: Qt.LeftButton
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.touchLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.RightButton
+                onSingleTapped: function(eventPoint) {
+                    root.rightClicked(root.instanceId)
+                    root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+                }
+            }
+            DragHandler {
+                acceptedDevices: PointerDevice.Mouse
+                target: null
+                acceptedButtons: Qt.LeftButton
+                grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                property real lastTx: 0
+                property real lastTy: 0
+                onActiveChanged: { if (active) { lastTx = 0; lastTy = 0 } }
+                onActiveTranslationChanged: {
+                    var dx = activeTranslation.x - lastTx
+                    var dy = activeTranslation.y - lastTy
+                    lastTx = activeTranslation.x
+                    lastTy = activeTranslation.y
+                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    root.moveDelta(dx / zoom, dy / zoom)
+                }
+            }
+            PointHandler {
+                acceptedButtons: Qt.LeftButton
+                onActiveChanged: { if (!active) root.leftReleased() }
+            }
         }
         Rectangle {
             id: borderBottom
@@ -161,6 +274,49 @@ Item {
             anchors.bottom: parent.bottom
             height: root._borderSlop
             color: "transparent"
+
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.LeftButton
+                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.mouseLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.TouchScreen
+                acceptedButtons: Qt.LeftButton
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.touchLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.RightButton
+                onSingleTapped: function(eventPoint) {
+                    root.rightClicked(root.instanceId)
+                    root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+                }
+            }
+            DragHandler {
+                acceptedDevices: PointerDevice.Mouse
+                target: null
+                acceptedButtons: Qt.LeftButton
+                grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                property real lastTx: 0
+                property real lastTy: 0
+                onActiveChanged: { if (active) { lastTx = 0; lastTy = 0 } }
+                onActiveTranslationChanged: {
+                    var dx = activeTranslation.x - lastTx
+                    var dy = activeTranslation.y - lastTy
+                    lastTx = activeTranslation.x
+                    lastTy = activeTranslation.y
+                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    root.moveDelta(dx / zoom, dy / zoom)
+                }
+            }
+            PointHandler {
+                acceptedButtons: Qt.LeftButton
+                onActiveChanged: { if (!active) root.leftReleased() }
+            }
         }
         Rectangle {
             id: borderLeft
@@ -169,6 +325,49 @@ Item {
             anchors.bottom: parent.bottom
             width: root._borderSlop
             color: "transparent"
+
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.LeftButton
+                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.mouseLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.TouchScreen
+                acceptedButtons: Qt.LeftButton
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.touchLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.RightButton
+                onSingleTapped: function(eventPoint) {
+                    root.rightClicked(root.instanceId)
+                    root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+                }
+            }
+            DragHandler {
+                acceptedDevices: PointerDevice.Mouse
+                target: null
+                acceptedButtons: Qt.LeftButton
+                grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                property real lastTx: 0
+                property real lastTy: 0
+                onActiveChanged: { if (active) { lastTx = 0; lastTy = 0 } }
+                onActiveTranslationChanged: {
+                    var dx = activeTranslation.x - lastTx
+                    var dy = activeTranslation.y - lastTy
+                    lastTx = activeTranslation.x
+                    lastTy = activeTranslation.y
+                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    root.moveDelta(dx / zoom, dy / zoom)
+                }
+            }
+            PointHandler {
+                acceptedButtons: Qt.LeftButton
+                onActiveChanged: { if (!active) root.leftReleased() }
+            }
         }
         Rectangle {
             id: borderRight
@@ -177,6 +376,49 @@ Item {
             anchors.bottom: parent.bottom
             width: root._borderSlop
             color: "transparent"
+
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.LeftButton
+                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.mouseLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.TouchScreen
+                acceptedButtons: Qt.LeftButton
+                onSingleTapped: root.clicked(root.instanceId)
+                onLongPressed: root.touchLongPressed(root.instanceId)
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.Mouse
+                acceptedButtons: Qt.RightButton
+                onSingleTapped: function(eventPoint) {
+                    root.rightClicked(root.instanceId)
+                    root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
+                }
+            }
+            DragHandler {
+                acceptedDevices: PointerDevice.Mouse
+                target: null
+                acceptedButtons: Qt.LeftButton
+                grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                property real lastTx: 0
+                property real lastTy: 0
+                onActiveChanged: { if (active) { lastTx = 0; lastTy = 0 } }
+                onActiveTranslationChanged: {
+                    var dx = activeTranslation.x - lastTx
+                    var dy = activeTranslation.y - lastTy
+                    lastTx = activeTranslation.x
+                    lastTy = activeTranslation.y
+                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    root.moveDelta(dx / zoom, dy / zoom)
+                }
+            }
+            PointHandler {
+                acceptedButtons: Qt.LeftButton
+                onActiveChanged: { if (!active) root.leftReleased() }
+            }
         }
 
         // ── Issue #805 评论 5907045450 第 3 部分：contentViewport ──
@@ -212,7 +454,15 @@ Item {
             pathSegments: root.parentPathSegments.concat([
                 { type: "enterEmbed", instanceId: root.instanceId, nodeId: null }
             ])
-            pathKey: root.instanceId
+            // Issue #805 评论 5908703621 问题 1：child Scene 的 pathKey 不能只写
+            // root.instanceId，要用父路径继续拼，保证全局唯一且体现层级。
+            pathKey: root.parentPathKey + "/embed_" + root.instanceId
+
+            // Issue #805 评论 5908703621 问题 5：child Scene 的 editNodeRequested
+            // 继续向父 Scene / Workspace 冒泡。已带正确的 owner 上下文，原样转发。
+            onEditNodeRequested: function(ownerStarmapId, ownerPathKey, node) {
+                root.editNodeRequested(ownerStarmapId, ownerPathKey, node)
+            }
         }
     }
 
@@ -231,111 +481,9 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // Issue #805 评论 5907045450 第 3 部分：交互 handler 只挂在 chrome 区域。
-    // contentViewport 不挂 handler，事件穿透给 child Scene。
+    // Issue #805 评论 5908703621 问题 2：所有 PointerHandler 已移进 titleBar /
+    // border 内部（parent Item 决定命中范围）。根 Item 和 contentViewport 祖先链
+    // 上不再有任何 TapHandler / DragHandler / MouseArea / PointHandler，
+    // 内部事件直接给 child Scene，不会被父 Embed 截走。
     // ---------------------------------------------------------------------------
-    TapHandler {
-        id: chromeMouseTap
-        acceptedDevices: PointerDevice.Mouse
-        acceptedButtons: Qt.LeftButton
-        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
-        target: titleBar
-
-        onPressedChanged: { if (pressed) root.mouseInteracted() }
-
-        onSingleTapped: root.clicked(root.instanceId)
-        onLongPressed: root.mouseLongPressed(root.instanceId)
-    }
-
-    TapHandler {
-        id: chromeTouchTap
-        acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
-        target: titleBar
-
-        onSingleTapped: root.clicked(root.instanceId)
-        onLongPressed: root.touchLongPressed(root.instanceId)
-    }
-
-    TapHandler {
-        acceptedDevices: PointerDevice.Mouse
-        acceptedButtons: Qt.RightButton
-        target: titleBar
-        onPressedChanged: { if (pressed) root.mouseInteracted() }
-        onSingleTapped: function(eventPoint) {
-            root.rightClicked(root.instanceId)
-            root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
-        }
-    }
-
-    // 边框命中：单击选择 Embed（与标题条对称）
-    TapHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        target: borderTop
-        onSingleTapped: root.clicked(root.instanceId)
-    }
-    TapHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        target: borderBottom
-        onSingleTapped: root.clicked(root.instanceId)
-    }
-    TapHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        target: borderLeft
-        onSingleTapped: root.clicked(root.instanceId)
-    }
-    TapHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        target: borderRight
-        onSingleTapped: root.clicked(root.instanceId)
-    }
-
-    // ---------------------------------------------------------------------------
-    // 拖动跟踪：DragHandler 只挂在 chrome 区域，只上抛原始移动增量。
-    // contentViewport 内的拖动由 child Scene 处理（子图 pan）。
-    // ---------------------------------------------------------------------------
-    DragHandler {
-        id: embedDragHandler
-        acceptedDevices: PointerDevice.Mouse
-        target: null
-        acceptedButtons: Qt.LeftButton
-        grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
-
-        property real lastTx: 0
-        property real lastTy: 0
-
-        onActiveChanged: {
-            if (active) {
-                lastTx = 0
-                lastTy = 0
-            }
-        }
-
-        onActiveTranslationChanged: {
-            var dx = activeTranslation.x - lastTx
-            var dy = activeTranslation.y - lastTy
-            lastTx = activeTranslation.x
-            lastTy = activeTranslation.y
-            var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-            root.moveDelta(dx / zoom, dy / zoom)
-        }
-    }
-
-    // 左键 press→release 观察：PointHandler 用 passive grab（挂在 chrome）
-    PointHandler {
-        id: leftPointTracker
-        acceptedButtons: Qt.LeftButton
-        target: titleBar
-
-        onActiveChanged: {
-            if (!active) {
-                root.leftReleased()
-            }
-        }
-    }
 }
