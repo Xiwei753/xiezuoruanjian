@@ -16,7 +16,7 @@ import { HarmonyThemeAdapter, ThemeUpdateParams } from '../../../ui/theme/Harmon
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { getAppContext } from '../../../app/AppContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
-import { HarmonyDiagnosticsExporter } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
+import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
@@ -507,7 +507,8 @@ export class SettingsViewModel {
   // Issue #784：设置页按钮是用户主动导出，使用 DocumentViewPicker.save() 让用户选择保存位置，
   // 将诊断 zip 文件保存到用户可见的本地目录，而非拉起分享面板。
   // export() 继续给内部快照使用；exportAndShare() 保留给以后可能的"分享诊断包"功能。
-  async exportDiagnostics(): Promise<boolean> {
+  // Issue #804：返回 DiagnosticsSaveResult 区分成功 / 用户取消 / 真失败，让 UI 能给出明确反馈。
+  async exportDiagnostics(): Promise<DiagnosticsSaveResult> {
     try {
       if (this.diagnosticsExporter === null) {
         this.diagnosticsExporter = new HarmonyDiagnosticsExporter()
@@ -519,7 +520,7 @@ export class SettingsViewModel {
       return await this.diagnosticsExporter.exportAndSaveToUserFile()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `exportDiagnostics failed: ${err}`)
-      return false
+      return { status: 'failed', error: String(err) }
     }
   }
 

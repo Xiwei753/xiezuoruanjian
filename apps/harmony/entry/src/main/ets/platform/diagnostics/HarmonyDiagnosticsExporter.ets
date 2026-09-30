@@ -33,6 +33,14 @@ interface AttachmentItem {
   content: string
 }
 
+// Issue #804：诊断导出保存结果 — 区分成功 / 用户取消 / 真失败，让 UI 能给出明确反馈。
+export interface DiagnosticsSaveResult {
+  status: 'success' | 'cancelled' | 'failed'
+  fileName?: string
+  uri?: string
+  error?: string
+}
+
 // app_settings_sanitized.json 附件 DTO。
 interface AppSettingsAttachment {
   themeMode: string
@@ -199,22 +207,23 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // 导出并保存到用户文件 — 使用 DocumentViewPicker.save() 让用户选择保存位置。
-  // 返回 true 表示保存成功；false 表示导出失败或用户取消。
+  // Issue #804：返回 DiagnosticsSaveResult 区分成功 / 用户取消 / 真失败，让 UI 能给出明确反馈。
   // 与 exportAndShare() 的区别：exportAndShare 拉起系统分享面板，exportAndSaveToUserFile 让用户选择本地保存位置。
-  async exportAndSaveToUserFile(): Promise<boolean> {
+  async exportAndSaveToUserFile(): Promise<DiagnosticsSaveResult> {
     const zipPath = await this.export()
     if (zipPath === null || this.abilityContext === null) {
-      return false
+      return { status: 'failed', error: '导出诊断包失败' }
     }
 
     try {
       const options = new picker.DocumentSaveOptions()
-      options.newFileNames = [this.buildExportFileName()]
+      const fileName = this.buildExportFileName()
+      options.newFileNames = [fileName]
 
       const documentPicker = new picker.DocumentViewPicker(this.abilityContext)
       const uris: string[] = await documentPicker.save(options)
       if (uris.length === 0) {
-        return false
+        return { status: 'cancelled' }
       }
 
       const src = fs.openSync(zipPath, fs.OpenMode.READ_ONLY)
@@ -239,10 +248,10 @@ export class HarmonyDiagnosticsExporter {
         fs.closeSync(src)
         fs.closeSync(dst)
       }
-      return true
+      return { status: 'success', fileName: fileName, uri: uris[0] }
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'save diagnostics failed: %{public}s', String(e))
-      return false
+      return { status: 'failed', error: String(e) }
     }
   }
 

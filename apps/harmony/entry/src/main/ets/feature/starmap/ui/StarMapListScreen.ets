@@ -236,8 +236,6 @@ export struct StarMapListScreen {
             this.StarMapListPane()
           }
         }
-        .width('100%')
-        .height('100%')
         .alignRules({
           top: { anchor: '__container__', align: VerticalAlign.Top },
           left: { anchor: '__container__', align: HorizontalAlign.Start },

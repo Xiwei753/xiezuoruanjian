@@ -35,6 +35,7 @@ export struct StarMapScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
   @State starmapId: string = ''
   @State starmapTitle: string = ''
+  @State rootStarmapTitle: string = ''
   @State parentStarmapId: string = ''
   @State parentStarmapTitle: string = ''
   @State layerStack: StarMapLayerFrame[] = []
@@ -134,6 +135,7 @@ export struct StarMapScreen {
     if (params) {
       this.starmapId = params.starmapId
       this.starmapTitle = params.starmapTitle
+      this.rootStarmapTitle = params.starmapTitle
       this.parentStarmapId = params.parentStarmapId ?? ''
       this.parentStarmapTitle = params.parentStarmapTitle ?? ''
       this.loadStarMap()
@@ -334,12 +336,24 @@ export struct StarMapScreen {
    * GestureEvent 本身没有 x/y：触点坐标在 `fingerList[0].localX/localY`（相对触发组件
    * 左上角），加上组件自身的屏幕位置才是屏幕坐标。
    */
-  private gestureScreenPoint(event: GestureEvent, anchorX: number, anchorY: number): PlatformPoint {
-    const fingers: FingerInfo[] = event.fingerList
-    if (fingers && fingers.length > 0) {
-      return { x: anchorX + fingers[0].localX, y: anchorY + fingers[0].localY }
+  private gestureScreenPoint(
+    event: GestureEvent | undefined,
+    anchorX: number,
+    anchorY: number
+  ): PlatformPoint {
+    if (!event || !event.fingerList || event.fingerList.length === 0) {
+      return { x: anchorX, y: anchorY }
     }
-    return { x: anchorX, y: anchorY }
+
+    const finger = event.fingerList[0]
+    if (!finger) {
+      return { x: anchorX, y: anchorY }
+    }
+
+    return {
+      x: anchorX + finger.localX,
+      y: anchorY + finger.localY
+    }
   }
 
   /**
@@ -437,14 +451,16 @@ export struct StarMapScreen {
   }
 
   /**
-   * 导航到父星图（"返回父星图"入口与"缩放返回父层"共用同一条路径）。
+   * 返回父层：弹出 frame，恢复父层的 starmapId 和 viewport。
+   * 根层（layerStack 为空）返回才退出 StarMapScreen（navPathStack.pop）。
    */
   returnToParent() {
     if (this.layerStack.length > 0) {
       const result = popLayer(this.layerStack)
       this.layerStack = result.stack
       if (result.frame) {
-        this.starmapId = result.frame.starmapId
+        // 恢复父层的 starmapId 和 viewport
+        this.starmapId = result.frame.hostStarmapId
         this.starmapTitle = result.frame.title
         this.zoomScale = result.frame.zoomScale
         this.offsetX = result.frame.offsetX
@@ -489,19 +505,28 @@ export struct StarMapScreen {
 
   /**
    * 导航到子星图（Embed 的目标星图）
+   * 同一画布层级切换：压入当前层 frame（含 hostStarmapId/embedInstanceId），
+   * 切换到子层 targetStarmapId，但保留当前 viewport（同一画布，不是新页面）。
    */
   navigateToEmbed(embed: StarMapEmbed) {
-    // 压入当前层 frame
+    // 压入当前层 frame：记录宿主星图、Embed 入口、当前 viewport
     this.layerStack = pushLayer(
       this.layerStack,
-      createLayerFrame(this.starmapId, this.starmapTitle, this.zoomScale, this.offsetX, this.offsetY)
+      createLayerFrame(
+        this.starmapId,
+        embed.instanceId,
+        embed.targetStarmapId,
+        this.starmapTitle,
+        this.zoomScale,
+        this.offsetX,
+        this.offsetY
+      )
     )
-    // 切换到子层
+    // 切换到子层：只换 starmapId，保留当前 viewport（同一画布层级切换）
     this.starmapId = embed.targetStarmapId
+    // 标题保持根星图标题，附加子层信息
     this.starmapTitle = embed.label ?? embed.targetStarmapId
-    this.zoomScale = 1
-    this.offsetX = 0
-    this.offsetY = 0
+    // 不重置 zoom/offset：同一画布的层级切换，不是进入新页面
     this.loadStarMap()
   }
 
@@ -525,8 +550,6 @@ export struct StarMapScreen {
     RelativeContainer() {
       // Canvas 常驻：锚定四边，填满容器
       Canvas(this.canvasCtx)
-        .width('100%')
-        .height('100%')
         .alignRules({
           top: { anchor: '__container__', align: VerticalAlign.Top },
           bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
@@ -553,8 +576,6 @@ export struct StarMapScreen {
       // 预览连线
       if (this.gestureMode === 'connect') {
         Canvas(this.previewCanvasCtx)
-          .width('100%')
-          .height('100%')
           .alignRules({
             top: { anchor: '__container__', align: VerticalAlign.Top },
             bottom: { anchor: '__container__', align: VerticalAlign.Bottom },
@@ -600,8 +621,6 @@ export struct StarMapScreen {
             .fontSize(14)
             .margin({ top: 12 })
         }
-        .width('100%')
-        .height('100%')
         .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.background_secondary'))
         .alignRules({
@@ -621,8 +640,6 @@ export struct StarMapScreen {
           Button($r('app.string.retry'))
             .onClick(() => this.loadStarMap())
         }
-        .width('100%')
-        .height('100%')
         .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.background_secondary'))
         .alignRules({
@@ -721,10 +738,20 @@ export struct StarMapScreen {
     )
   }
 
+  /**
+   * 显示标题：根层显示根星图标题，子层附加当前层信息（不替换根标题）。
+   */
+  private getDisplayTitle(): string {
+    if (this.layerStack.length > 0) {
+      return `${this.rootStarmapTitle} › ${this.starmapTitle}`
+    }
+    return this.rootStarmapTitle
+  }
+
   build() {
     if (this.useHdsNav) {
       HdsAppDestinationApi23({
-        title: this.starmapTitle,
+        title: this.getDisplayTitle(),
         screenRole: ScreenRole.StarMapDetail,
         screenTabIndex: 1,
         isRoot: false,
@@ -753,7 +780,7 @@ export struct StarMapScreen {
         this.navPathStack.pop()
         return true
       })
-      .title(this.starmapTitle)
+      .title(this.getDisplayTitle())
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {
         NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMapDetail, 1)

@@ -8,6 +8,7 @@
 // 页面只读取 viewModel 的 @Trace 字段和派发事件，不维护状态副本。
 
 import hilog from '@ohos.hilog'
+import { promptAction } from '@kit.ArkUI'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -1078,10 +1079,11 @@ export struct SettingsScreen {
       // 导出诊断包
       Column({ space: 12 }) {
         this.SettingsNeutralAction('导出诊断包', async () => {
-          const ok = await this.viewModel.exportDiagnostics()
-          if (!ok) {
-            this.copyMessage = '导出失败'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
+          const result = await this.viewModel.exportDiagnostics()
+          if (result.status === 'success') {
+            promptAction.showToast({ message: '诊断包已导出' })
+          } else if (result.status === 'failed') {
+            promptAction.showToast({ message: '诊断包导出失败' })
           }
         })
 
@@ -1792,10 +1794,11 @@ export struct SettingsScreen {
       // 导出诊断包
       Column({ space: 12 }) {
         this.SettingsNeutralAction('导出诊断包', async () => {
-          const ok = await this.viewModel.exportDiagnostics()
-          if (!ok) {
-            this.copyMessage = '导出失败'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
+          const result = await this.viewModel.exportDiagnostics()
+          if (result.status === 'success') {
+            promptAction.showToast({ message: '诊断包已导出' })
+          } else if (result.status === 'failed') {
+            promptAction.showToast({ message: '诊断包导出失败' })
           }
         })
 

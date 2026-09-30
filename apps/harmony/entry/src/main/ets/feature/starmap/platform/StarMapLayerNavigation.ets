@@ -6,7 +6,9 @@
 
 /** 层级 frame：保存某一层的星图 ID、标题、缩放和偏移，用于层级切换时恢复状态。 */
 export interface StarMapLayerFrame {
-  starmapId: string
+  hostStarmapId: string
+  embedInstanceId: string
+  targetStarmapId: string
   title: string
   zoomScale: number
   offsetX: number
@@ -63,7 +65,9 @@ export function popLayer(
 /**
  * 创建层级 frame。
  *
- * @param starmapId 星图 ID
+ * @param hostStarmapId 宿主星图 ID（当前层星图，包含此 Embed）
+ * @param embedInstanceId Embed 实例 ID（双击进入子层的入口）
+ * @param targetStarmapId 目标星图 ID（子层星图）
  * @param title 层级标题
  * @param zoomScale 缩放比例
  * @param offsetX X 方向偏移
@@ -71,14 +75,18 @@ export function popLayer(
  * @returns 新的 StarMapLayerFrame
  */
 export function createLayerFrame(
-  starmapId: string,
+  hostStarmapId: string,
+  embedInstanceId: string,
+  targetStarmapId: string,
   title: string,
   zoomScale: number,
   offsetX: number,
   offsetY: number
 ): StarMapLayerFrame {
   return {
-    starmapId: starmapId,
+    hostStarmapId: hostStarmapId,
+    embedInstanceId: embedInstanceId,
+    targetStarmapId: targetStarmapId,
     title: title,
     zoomScale: zoomScale,
     offsetX: offsetX,
