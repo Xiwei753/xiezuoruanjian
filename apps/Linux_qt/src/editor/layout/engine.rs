@@ -179,24 +179,34 @@ cpp! {{
     thread_local std::vector<CanonicalClusterGlyphEntry> g_canonical_cluster_glyph_buf;
     thread_local std::vector<QImage> g_canonical_line_images;
 
-    // Issue #658 评论 5624570557 问题 1+2: 从已有 QTextLine 提取动画视觉。
-    // 不创建新的 QTextLayout，直接从已排好的 line 提取 QImage/glyphRuns/cluster。
+    // Issue #810 评论 5933167246 问题1: 动画 raster-only 提取的独立 buffer。
+    // 与 g_canonical_* 完全分离，避免动画阶段污染基础 canonical 排版产物。
+    // cluster 几何由基础 canonical 排版（editor_prepare_paragraph_visual_snapshot）
+    // 一次产出，动画阶段只生成 QImage，不需要 cluster。
+    thread_local std::vector<QImage> g_animation_raster_images;
+    thread_local std::vector<int> g_animation_raster_phys_w;
+    thread_local std::vector<int> g_animation_raster_phys_h;
+
+    // Issue #810 评论 5933167246 问题1: 纯 raster 提取 helper。
+    // 动画阶段只需要 QImage（纹理），不需要 cluster 几何。cluster 由基础
+    // canonical 排版（editor_prepare_paragraph_visual_snapshot）一次产出，
+    // 本函数只从已排好的 QTextLine 做 line.draw() 到 QImage，存入独立的
+    // g_animation_raster_* buffer，不碰 g_canonical_cluster_buf /
+    // g_canonical_cluster_glyph_buf / g_canonical_line_buf / g_cursor_x_map_buf，
+    // 也不调用 sujianGlyphRuns()。这样"canonical 排版生成 cluster"和
+    // "动画阶段只生成 QImage"两条职责彻底分开。
     // 按 (generation, cache_slot, qtextline_idx) 读取现成 QTextLine，
     // 避免动画 old 帧重新排版。
-    // 返回提取的 line 数据到 g_canonical_line_buf/g_canonical_cluster_buf/g_canonical_cluster_glyph_buf。
-    static void extract_animation_visuals_from_existing_line(
+    static void extract_animation_raster_from_existing_line(
         uint64_t gen, int slot, int qtextline_idx,
         double dpr, const QColor& textColor
     ) {
         // Issue #785 评论 5857873894 修改 1: clear 必须在所有 early-return 之前。
-        // 之前 clear 在 get_paragraph_layout / qtextline 有效性检查之后，
-        // 一旦 early-return 命中，上次残留的 g_canonical_line_buf 不会被清空，
-        // Rust 侧 `!g_canonical_line_buf.empty()` 会把上次残留数据当成本次成功，
-        // 导致普通可见字符输入时 InsertReveal 动画数量为 0。
-        g_canonical_line_buf.clear();
-        g_canonical_cluster_buf.clear();
-        g_canonical_cluster_glyph_buf.clear();
-        g_canonical_line_images.clear();
+        // 一旦 early-return 命中，上次残留的 buffer 不会被清空，
+        // Rust 侧 `!g_animation_raster_images.empty()` 会把上次残留数据当成本次成功。
+        g_animation_raster_images.clear();
+        g_animation_raster_phys_w.clear();
+        g_animation_raster_phys_h.clear();
 
         QTextLayout* layout = get_paragraph_layout(gen, slot);
         if (!layout) return;
@@ -205,24 +215,12 @@ cpp! {{
         QTextLine line = layout->lineAt(qtextline_idx);
         if (!line.isValid()) return;
 
-        CanonicalLineEntry entry;
-        entry.qcharStart = line.textStart();
-        entry.qcharEnd = line.textStart() + line.textLength();
-        entry.xPos = line.x();
-        entry.width = line.naturalTextWidth();
-        entry.height = line.height();
-        entry.ascent = line.ascent();
-        entry.descent = line.descent();
-        entry.y = line.y();
-        entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading) - line.x();
-        entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing) - line.x();
-
         double logical_w = line.naturalTextWidth();
         double logical_h = line.height();
         int phys_w = (int)ceil(logical_w * dpr);
         int phys_h = (int)ceil(logical_h * dpr);
 
-        // 1. 绘制到 QImage
+        // 绘制到 QImage（与 editor_prepare_paragraph_visual_snapshot 中一致）。
         if (phys_w > 0 && phys_h > 0 && phys_w <= 8192 && phys_h <= 4096) {
             QImage img(phys_w, phys_h, QImage::Format_ARGB32_Premultiplied);
             img.setDevicePixelRatio(dpr);
@@ -234,191 +232,14 @@ cpp! {{
             QPointF pos(-line.x(), -line.y());
             line.draw(&painter, pos);
 
-            entry.imagePhysW = phys_w;
-            entry.imagePhysH = phys_h;
-            g_canonical_line_images.push_back(img);
+            g_animation_raster_images.push_back(img);
+            g_animation_raster_phys_w.push_back(phys_w);
+            g_animation_raster_phys_h.push_back(phys_h);
         } else {
-            entry.imagePhysW = 0;
-            entry.imagePhysH = 0;
-            g_canonical_line_images.push_back(QImage());
+            g_animation_raster_images.push_back(QImage());
+            g_animation_raster_phys_w.push_back(0);
+            g_animation_raster_phys_h.push_back(0);
         }
-
-        int clusterStartIdx = (int)g_canonical_cluster_buf.size();
-
-        // 2. 提取 glyphRuns 和 clusters
-        const auto glyphRuns = sujianGlyphRuns(line);
-
-        // Issue #724 评论 5750911834 问题 1: 引入全行 logicalStarts。
-        // 收集全行所有 glyph run 的 stringIndexes，用行内真实 cluster 边界
-        // 计算 qcharStart/qcharEnd，不再用相邻 cluster 的 qcharVal 猜。
-        // 这修复了跨 glyph run / ligature 的行边界错误，使 cluster 范围精确。
-        std::vector<int> lineLogicalStarts;
-        for (const auto& run : glyphRuns) {
-            const auto& si = run.stringIndexes();
-            for (int i = 0; i < (int)si.size(); i++) {
-                if (si[i] >= 0) lineLogicalStarts.push_back(si[i]);
-            }
-        }
-        std::sort(lineLogicalStarts.begin(), lineLogicalStarts.end());
-        lineLogicalStarts.erase(
-            std::unique(lineLogicalStarts.begin(), lineLogicalStarts.end()),
-            lineLogicalStarts.end());
-
-        for (const auto& run : glyphRuns) {
-            const auto& positions = run.positions();
-            const auto& glyphIndexes = run.glyphIndexes();
-            const auto& stringIndexes = run.stringIndexes();
-            int count = positions.size();
-            if (count == 0) continue;
-
-            QRawFont rawFont = run.rawFont();
-            QString rawFontFamily = rawFont.familyName();
-            QByteArray rawFontKeyBytes = rawFontFamily.toUtf8();
-
-            int glyphBufStart = (int)g_canonical_cluster_glyph_buf.size();
-
-            for (int gi = 0; gi < count; gi++) {
-                unsigned int gIdx = (gi < glyphIndexes.size()) ? glyphIndexes[gi] : 0;
-                double gx = positions[gi].x();
-                double gy = positions[gi].y();
-                int si = (gi < stringIndexes.size()) ? stringIndexes[gi] : -1;
-
-                CanonicalClusterGlyphEntry ge;
-                ge.glyphIndex = gIdx;
-                ge.positionX = gx;
-                ge.positionY = gy;
-                ge.stringIndex = si;
-                g_canonical_cluster_glyph_buf.push_back(ge);
-            }
-
-            // Cluster 提取逻辑（与 editor_prepare_paragraph_visual_snapshot 中相同）
-            struct TempCluster {
-                int qcharVal;
-                int glyphStart;
-                int glyphEnd;
-                double visMinX, visMinY, visMaxX, visMaxY;
-            };
-            std::vector<TempCluster> tempClusters;
-
-            if (count > 0) {
-                int curQchar = g_canonical_cluster_glyph_buf[glyphBufStart].stringIndex;
-                int clStart = 0;
-                double clMinX = 1e9, clMinY = 1e9, clMaxX = -1e9, clMaxY = -1e9;
-
-                for (int gi = 0; gi <= count; gi++) {
-                    int si = (gi < count)
-                        ? g_canonical_cluster_glyph_buf[glyphBufStart + gi].stringIndex
-                        : INT_MAX;
-
-                    if (gi == count || si != curQchar) {
-                        if (curQchar >= 0) {
-                            TempCluster tc;
-                            tc.qcharVal = curQchar;
-                            tc.glyphStart = clStart;
-                            tc.glyphEnd = gi;
-                            tc.visMinX = clMinX;
-                            tc.visMinY = clMinY;
-                            tc.visMaxX = clMaxX;
-                            tc.visMaxY = clMaxY;
-                            tempClusters.push_back(tc);
-                        }
-                        if (gi < count) {
-                            curQchar = si;
-                            clStart = gi;
-                            clMinX = 1e9; clMinY = 1e9;
-                            clMaxX = -1e9; clMaxY = -1e9;
-                        }
-                    }
-
-                    if (gi < count && si == curQchar) {
-                        unsigned int gIdx2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].glyphIndex;
-                        double gx2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].positionX;
-                        double gy2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].positionY;
-                        QRectF gb = rawFont.boundingRect(gIdx2);
-                        double gl = gx2 + gb.left();
-                        double gr = gx2 + gb.right();
-                        double gt = gy2 + gb.top();
-                        double gbo = gy2 + gb.bottom();
-                        if (gl < clMinX) clMinX = gl;
-                        if (gr > clMaxX) clMaxX = gr;
-                        if (gt < clMinY) clMinY = gt;
-                        if (gbo > clMaxY) clMaxY = gbo;
-                    }
-                }
-            }
-
-            double aaMargin = 1.0;
-            for (int ci = 0; ci < (int)tempClusters.size(); ci++) {
-                const TempCluster& tc = tempClusters[ci];
-                if (tc.qcharVal < 0) continue;
-
-                int qcharStart = tc.qcharVal;
-                int qcharEnd;
-                // Issue #724 评论 5750911834 问题 1: 用全行 logicalStarts 计算真实
-                // cluster 边界，不再用相邻 cluster 的 qcharVal 猜。这修复了跨
-                // glyph run / ligature 的行边界错误，cluster 范围精确。
-                auto lsIt = std::upper_bound(
-                    lineLogicalStarts.begin(), lineLogicalStarts.end(), tc.qcharVal);
-                if (lsIt != lineLogicalStarts.end()) {
-                    qcharEnd = *lsIt;
-                } else {
-                    qcharEnd = entry.qcharEnd;
-                }
-                if (qcharEnd <= qcharStart) qcharEnd = qcharStart + 1;
-
-                double srcX = (tc.visMinX - aaMargin) - line.x();
-                double srcY = (tc.visMinY - aaMargin) - line.y();
-                double srcW = (tc.visMaxX - tc.visMinX) + aaMargin * 2.0;
-                double srcH = (tc.visMaxY - tc.visMinY) + aaMargin * 2.0;
-
-                if (srcW < 0.01) srcW = 10.0;
-                if (srcH < 0.01) srcH = line.height();
-
-                if (srcX < 0) { srcW += srcX; srcX = 0; }
-                if (srcY < 0) { srcH += srcY; srcY = 0; }
-                if (srcX + srcW > logical_w) srcW = logical_w - srcX;
-                if (srcY + srcH > logical_h) srcH = logical_h - srcY;
-
-                CanonicalClusterEntry ce;
-                ce.qcharStart = qcharStart;
-                ce.qcharEnd = qcharEnd;
-                ce.sourceRectX = srcX * dpr;
-                ce.sourceRectY = srcY * dpr;
-                ce.sourceRectW = srcW * dpr;
-                ce.sourceRectH = srcH * dpr;
-                ce.glyphCount = tc.glyphEnd - tc.glyphStart;
-                ce.glyphStartIndex = glyphBufStart + tc.glyphStart;
-                memset(ce.rawFontFingerprint, 0, sizeof(ce.rawFontFingerprint));
-                if (rawFontKeyBytes.size() > 0) {
-                    int copyLen = rawFontKeyBytes.size();
-                    if (copyLen > (int)sizeof(ce.rawFontFingerprint) - 1)
-                        copyLen = (int)sizeof(ce.rawFontFingerprint) - 1;
-                    memcpy(ce.rawFontFingerprint, rawFontKeyBytes.constData(), copyLen);
-                }
-                ce.isRTL = run.isRightToLeft();
-                ce.firstGlyphIndex = (tc.glyphStart < count)
-                    ? g_canonical_cluster_glyph_buf[glyphBufStart + tc.glyphStart].glyphIndex
-                    : 0;
-
-                g_canonical_cluster_buf.push_back(ce);
-            }
-        }
-
-        entry.clusterStartIndex = clusterStartIdx;
-        entry.clusterCount = (int)g_canonical_cluster_buf.size() - clusterStartIdx;
-
-        entry.cursorXMapStart = (int)g_cursor_x_map_buf.size();
-        entry.cursorXMapCount = 0;
-        for (int qpos = entry.qcharStart; qpos <= entry.qcharEnd; qpos++) {
-            CursorXMapEntry me;
-            me.qcharPos = qpos;
-            me.xLeading = line.cursorToX(qpos, QTextLine::Leading) - line.x();
-            me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing) - line.x();
-            g_cursor_x_map_buf.push_back(me);
-            entry.cursorXMapCount++;
-        }
-
-        g_canonical_line_buf.push_back(entry);
     }
 
     void editor_prepare_paragraph_visual_snapshot(

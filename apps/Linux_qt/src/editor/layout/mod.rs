@@ -31,8 +31,8 @@ pub use canonical_snapshot::{
     assemble_document_visual_snapshot_from_lines, inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
-    CanonicalClusterSnapshot, CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot,
-    CanonicalParagraphSnapshot, CursorXMapEntry,
+    AnimationRasterVisual, CanonicalClusterSnapshot, CanonicalDocumentVisualSnapshot,
+    CanonicalLineSnapshot, CanonicalParagraphSnapshot, CursorXMapEntry,
 };
 pub use diff::{compare_old_new_visual_lines, compute_affected_paragraph_ranges, VisualLineDiff};
 pub use engine::{

@@ -141,14 +141,16 @@ fn fix1f_record_composition_commit_uses_helper_with_canonical() {
 // =========================================================================
 
 /// 守卫2a: `build_editor_layout_snapshot_with_canonical` helper 存在，返回
-/// `(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)`。
+/// `Result<(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot), String>`。
+/// Issue #810 评论 5934658350: 返回类型跨多行（`-> Result<` 后换行 `(`），守卫改为
+/// 检查 `-> Result<` 而非 `-> (` 单行子串。
 #[test]
 fn fix2a_helper_build_editor_layout_snapshot_with_canonical_exists() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
     let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
     assert!(
-        window.contains("-> ("),
-        "修复后 build_editor_layout_snapshot_with_canonical 应返回 tuple。"
+        window.contains("-> Result<"),
+        "修复后 build_editor_layout_snapshot_with_canonical 应返回 Result tuple。"
     );
     assert!(
         window.contains("EditorLayoutSnapshot"),
@@ -170,8 +172,10 @@ fn fix2b_build_editor_layout_snapshot_calls_helper() {
     let pos = src
         .find(marker)
         .unwrap_or_else(|| panic!("{} 必须存在", marker));
-    // 取原函数体前 600 字符（wrapper 应该很短）。
-    let window_end = (pos + 600).min(src.len());
+    // 取原函数体前 800 字符（wrapper 应该很短）。
+    // Issue #810 评论 5934658350: build_editor_layout_snapshot 增加注释和
+    // canonical_text_revision 参数使函数体变长，窗口从 600 扩到 800 以容纳 .map(|p| p.0)。
+    let window_end = (pos + 800).min(src.len());
     let window = &src[pos..window_end];
     assert!(
         window.contains("build_editor_layout_snapshot_with_canonical"),

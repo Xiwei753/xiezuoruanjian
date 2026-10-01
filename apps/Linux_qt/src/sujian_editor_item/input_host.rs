@@ -265,28 +265,66 @@ impl EditorInputHost for SujianEditorItem {
                 // Issue #722 评论 5750218208 问题3: old/new caret 都从对应 snapshot 的
                 // caret_rect_doc 取，不再统一从 current_layout_snapshot 取。
 
+                // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot 现在返回 Result。
+                // old_snapshot 是 fallback（active_composition_new_snapshot 和
+                // current_layout_snapshot 都没有时才用）。Err 时记录诊断并跳过本次 cancel 动画。
                 let old_snapshot = self
                     .pipeline
                     .animation_coordinator()
                     .active_composition_new_snapshot()
                     .cloned()
-                    .unwrap_or_else(|| {
-                        self.pipeline
-                            .current_layout_snapshot()
-                            .clone()
-                            .unwrap_or_else(|| {
-                                self.build_editor_layout_snapshot(
-                                    width,
-                                    false,
-                                    Some((old_affected_start, old_affected_end)),
-                                )
-                            })
+                    .or_else(|| self.pipeline.current_layout_snapshot().clone())
+                    .or_else(|| {
+                        match self.build_editor_layout_snapshot(
+                            width,
+                            false,
+                            Some((old_affected_start, old_affected_end)),
+                        ) {
+                            Ok(snap) => Some(snap),
+                            Err(err) => {
+                                crate::backend::app_backend::debug_error_static(
+                                    "input_host",
+                                    "clear_preedit_old_snapshot_invariant_failure",
+                                    &format!(
+                                        "{} — skipping cancel animation (Issue #810 评论 5933167246)",
+                                        err
+                                    ),
+                                );
+                                None
+                            }
+                        }
                     });
-                let new_snapshot = self.build_editor_layout_snapshot(
-                    width,
-                    false,
-                    Some((new_affected_start, new_affected_end)),
-                );
+                let new_snapshot = match old_snapshot {
+                    Some(old) => match self.build_editor_layout_snapshot(
+                        width,
+                        false,
+                        Some((new_affected_start, new_affected_end)),
+                    ) {
+                        Ok(new) => Some((old, new)),
+                        Err(err) => {
+                            crate::backend::app_backend::debug_error_static(
+                                "input_host",
+                                "clear_preedit_new_snapshot_invariant_failure",
+                                &format!(
+                                    "{} — skipping cancel animation (Issue #810 评论 5933167246)",
+                                    err
+                                ),
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                let (old_snapshot, new_snapshot) = match new_snapshot {
+                    Some(pair) => pair,
+                    None => {
+                        // old/new snapshot 不可用，跳过本次 cancel 动画，
+                        // 但仍清 composition session 和更新 IME cursor（函数末尾逻辑）。
+                        self.pipeline.composition_mut().clear();
+                        self.update_ime_cursor_for_preedit();
+                        return;
+                    }
+                };
 
                 // Issue #722 评论 5750218208 问题3: old/new caret 都从对应 snapshot 的
                 // caret_rect_doc 取，不再统一从 current_layout_snapshot 取——cancel 恢复
@@ -411,37 +449,88 @@ impl EditorInputHost for SujianEditorItem {
                 let new_composition_range =
                     Some((data.new_preedit_byte_start, data.new_preedit_byte_end));
 
+                // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot /
+                // build_virtual_layout_snapshot 现在返回 Result。Err 时记录诊断并
+                // 跳过本次 preedit 动画（走静态 fallback）。
                 let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width, false, old_composition_range)
+                        .or_else(|| {
+                            match self.build_editor_layout_snapshot(
+                                width,
+                                false,
+                                old_composition_range,
+                            ) {
+                                Ok(snap) => Some(snap),
+                                Err(err) => {
+                                    crate::backend::app_backend::debug_error_static(
+                                        "input_host",
+                                        "set_preedit_old_snapshot_invariant_failure",
+                                        &format!(
+                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
+                                            err
+                                        ),
+                                    );
+                                    None
+                                }
+                            }
                         })
                 } else {
                     self.pipeline
                         .animation_coordinator()
                         .active_composition_new_snapshot()
                         .cloned()
-                        .unwrap_or_else(|| {
-                            self.pipeline
-                                .current_layout_snapshot()
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    self.build_editor_layout_snapshot(
-                                        width,
-                                        false,
-                                        old_composition_range,
-                                    )
-                                })
+                        .or_else(|| self.pipeline.current_layout_snapshot().clone())
+                        .or_else(|| {
+                            match self.build_editor_layout_snapshot(
+                                width,
+                                false,
+                                old_composition_range,
+                            ) {
+                                Ok(snap) => Some(snap),
+                                Err(err) => {
+                                    crate::backend::app_backend::debug_error_static(
+                                        "input_host",
+                                        "set_preedit_old_snapshot_invariant_failure",
+                                        &format!(
+                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
+                                            err
+                                        ),
+                                    );
+                                    None
+                                }
+                            }
                         })
                 };
-
-                let new_snapshot = self.build_virtual_layout_snapshot(
+                let new_snapshot = match self.build_virtual_layout_snapshot(
                     &data.virtual_text,
                     width,
                     new_composition_range,
-                );
+                ) {
+                    Ok(snap) => Some(snap),
+                    Err(err) => {
+                        crate::backend::app_backend::debug_error_static(
+                            "input_host",
+                            "set_preedit_new_snapshot_invariant_failure",
+                            &format!(
+                                "{} — skipping preedit animation (Issue #810 评论 5933167246)",
+                                err
+                            ),
+                        );
+                        None
+                    }
+                };
+                let (old_snapshot, new_snapshot) = match (old_snapshot, new_snapshot) {
+                    (Some(old), Some(new)) => (old, new),
+                    _ => {
+                        // old/new snapshot 不可用，走静态 fallback。
+                        self.update_preedit_visual_state();
+                        self.update_ime_cursor_for_preedit();
+                        self.request_static_repaint();
+                        return;
+                    }
+                };
 
                 // Issue #722 评论 5749791161 问题2+3: IME 路径使用文档坐标的 caret_rect_doc，
                 // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
@@ -563,37 +652,88 @@ impl EditorInputHost for SujianEditorItem {
                 let new_composition_range =
                     Some((data.new_preedit_byte_start, data.new_preedit_byte_end));
 
+                // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot /
+                // build_virtual_layout_snapshot 现在返回 Result。Err 时记录诊断并
+                // 跳过本次 preedit 动画（走静态 fallback）。
                 let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width, false, old_composition_range)
+                        .or_else(|| {
+                            match self.build_editor_layout_snapshot(
+                                width,
+                                false,
+                                old_composition_range,
+                            ) {
+                                Ok(snap) => Some(snap),
+                                Err(err) => {
+                                    crate::backend::app_backend::debug_error_static(
+                                        "input_host",
+                                        "set_preedit_old_snapshot_invariant_failure",
+                                        &format!(
+                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
+                                            err
+                                        ),
+                                    );
+                                    None
+                                }
+                            }
                         })
                 } else {
                     self.pipeline
                         .animation_coordinator()
                         .active_composition_new_snapshot()
                         .cloned()
-                        .unwrap_or_else(|| {
-                            self.pipeline
-                                .current_layout_snapshot()
-                                .clone()
-                                .unwrap_or_else(|| {
-                                    self.build_editor_layout_snapshot(
-                                        width,
-                                        false,
-                                        old_composition_range,
-                                    )
-                                })
+                        .or_else(|| self.pipeline.current_layout_snapshot().clone())
+                        .or_else(|| {
+                            match self.build_editor_layout_snapshot(
+                                width,
+                                false,
+                                old_composition_range,
+                            ) {
+                                Ok(snap) => Some(snap),
+                                Err(err) => {
+                                    crate::backend::app_backend::debug_error_static(
+                                        "input_host",
+                                        "set_preedit_old_snapshot_invariant_failure",
+                                        &format!(
+                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
+                                            err
+                                        ),
+                                    );
+                                    None
+                                }
+                            }
                         })
                 };
-
-                let new_snapshot = self.build_virtual_layout_snapshot(
+                let new_snapshot = match self.build_virtual_layout_snapshot(
                     &data.virtual_text,
                     width,
                     new_composition_range,
-                );
+                ) {
+                    Ok(snap) => Some(snap),
+                    Err(err) => {
+                        crate::backend::app_backend::debug_error_static(
+                            "input_host",
+                            "set_preedit_new_snapshot_invariant_failure",
+                            &format!(
+                                "{} — skipping preedit animation (Issue #810 评论 5933167246)",
+                                err
+                            ),
+                        );
+                        None
+                    }
+                };
+                let (old_snapshot, new_snapshot) = match (old_snapshot, new_snapshot) {
+                    (Some(old), Some(new)) => (old, new),
+                    _ => {
+                        // old/new snapshot 不可用，走静态 fallback。
+                        self.update_preedit_visual_state();
+                        self.update_ime_cursor_for_preedit();
+                        self.request_static_repaint();
+                        return;
+                    }
+                };
 
                 // Issue #722 评论 5749791161 问题2+3: IME 路径使用文档坐标的 caret_rect_doc，
                 // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
