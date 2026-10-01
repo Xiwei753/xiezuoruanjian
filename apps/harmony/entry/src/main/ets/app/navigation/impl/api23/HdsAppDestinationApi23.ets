@@ -1,12 +1,12 @@
 // HdsAppDestinationApi23 — API23+ Home/StarMap/Stats 共享根页面壳。
 // Issue #784 评论 5857397503 第 1 点：Home 删除旧顶栏后没有新标题栏接上，
 // 新建此共享根页面壳，让 Home / StarMap / Stats 共用 HdsNavDestination + 标题栏。
-// 通过 ScreenPolicyBridge 异步加载 ActionSlot[]，用 buildHdsMenuItems 生成菜单，
-// 不再在平台端硬编码"同步/搜索/设置"三个 item。
+// 通过 ScreenPolicyBridge 异步加载 ActionSlot[]，交给 HeaderTitleBarStack 自绘
+// 标题 + 页头动作胶囊，不再在平台端硬编码"同步/搜索/设置"三个 item。
 // onShown 时通过 NavigationChromeStore.reportScreenRole 上报当前 ScreenRole + tabIndex。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
-import { buildHdsMenuItems } from './HdsHeaderActionMenu'
+import { HeaderTitleBarStack } from './HeaderTitleBarStack'
 import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from '../../NavigationChromeStore'
 import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
@@ -30,6 +30,18 @@ export struct HdsAppDestinationApi23 {
     if (policy !== null) {
       this.headerActions = policy.actionSlots
     }
+  }
+
+  // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。
+  // 直接在箭头函数体里写 HeaderTitleBarStack({...}) 会被当普通函数调用，运行时崩：
+  // TypeError: class constructor cannot called without 'new'。
+  @Builder
+  headerTitleBar() {
+    HeaderTitleBarStack({
+      title: this.title,
+      headerActions: this.headerActions,
+      showBackButton: !this.isRoot
+    })
   }
 
   build() {
@@ -56,14 +68,23 @@ export struct HdsAppDestinationApi23 {
       // 本文件只在 API >= 23 渲染（见各 Screen 的 useHdsNav 判定），该字段 API 20+ 恒可用。
       avoidLayoutSafeArea: true,
       content: {
-        title: { mainTitle: this.title },
-        menu: {
-          value: buildHdsMenuItems(this.headerActions)
+        // mainTitle 传空串：标题文字改由 stackBuilder 自绘，才能和动作胶囊排在同一行。
+        // 标题栏自绘的三个坑（内边距、返回按钮不避让、返回按钮自带 label）都在
+        // HeaderTitleBarStack 里统一处理了。
+        title: { mainTitle: '' },
+        backIcon: { label: '' },
+        stackBuilder: (): void => {
+          this.headerTitleBar()
         }
       },
       style: {
+        // 官方《沉浸光感》（ui-design-hds-component-material）示例用的是
+        // MaterialType.ADAPTIVE，不是 IMMERSIVE：ADAPTIVE 表示自适应系统材质，
+        // 材质等级 ADAPTIVE 表示生效策略由系统按设备算力自适应决定。
+        // 之前这里写 IMMERSIVE，与底栏一致，但底栏那圈跟手的光只在 HDS 自己
+        // 渲染的 bar 上出现，标题栏实测按与不按都没有变化。
         systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
         }
       }

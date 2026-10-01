@@ -347,6 +347,66 @@
 - 语义边界：`MaterialState` 对应的是应用 `module.json5` 里的材质配置状态，只说明"应用级材质开关配成了什么"，**不证明**某个 HdsTabs / HdsNavDestination 已经实际渲染了沉浸光感。诊断包因此分开记录应用级配置（`appMaterialState` / `appMaterialType`）与 HDS 请求值（`hdsRequestedMaterialType` / `hdsRequestedMaterialLevel`），不再用 `state !== DISABLE` 推导 `immersiveMaterialSupported`。
 - 说明：本机 SDK d.ts `/opt/devecostudio/sdk/default/openharmony/ets/api/@ohos.arkui.uiMaterial.d.ts`（`MaterialState`：*states of the application-level immersive system material configuration*）。官方文档：https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/arkts-immersive-light-sense-enable
 
+## 沉浸式系统材质（uiMaterial.ImmersiveMaterial / hdsMaterial）
+
+**生效范围一句话结论：页面内容流不生效，标题栏与底部页签生效。** 内容流里挂 `systemMaterial()` 会被 ArkUI 拒绝并打
+`Ace: Material inactive: out of scope. Use component in navigation title bar or Tabbar.`；
+把组件从 Button 换成外层 `Stack` 日志不变 → **按位置判定，不是按组件类型**。
+
+### 生效三要素（缺一不可，实机逐一验证）
+
+| 项 | 值 | 踩坑 |
+|---|---|---|
+| 材质类型 | `MaterialType.ADAPTIVE` | 写 `IMMERSIVE` 标题栏不出光（底栏的 IMMERSIVE 不能照抄到标题栏） |
+| 挂载方式 | 通用属性 `.systemMaterial()` + `uiMaterial.ImmersiveMaterial` | HDS 专属的 `systemMaterialEffect` 只作用于 HDS 自己渲染的节点 |
+| 摘掉遮挡 | `backgroundColor` / `backgroundBlurStyle` / `border` / `shadow` 全清 | 官方明确这些属性会盖在材质层上，导致光看不见 |
+
+### 实现
+
+- Kit：`@kit.ArkUI`（`uiMaterial` 模块）
+- 接口：`uiMaterial.isImmersiveMaterialSupported()`、`new uiMaterial.ImmersiveMaterial(ImmersiveOptions)`、`ImmersiveOptions { style, materialColor, colorInvert, applyShadow, interactive, lightEffect }`、`LightEffectOptions { color }`、通用属性 `CommonMethod.systemMaterial(material: SystemUiMaterial | undefined)`（均 since 26.0.0）
+- 最低 API：26
+- SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`
+- 权限：无
+- ACL：否
+- 实现文件：`material/impl/api26/ImmersiveMaterialApi26.ets`、`material/HarmonyMaterialService.ets`
+- **典型使用**：`app/navigation/impl/api23/HeaderActionCapsule.ets` —— 标题栏 `stackBuilder` 自绘的页头动作胶囊。胶囊与「手指下的光」是同一个材质层同时给出的两件事，不是二选一（这一点实测纠正过一次错误判断）。
+  - 光效形态：整颗胶囊从手指位置向两侧漫开变亮（手指处 +169 级，两端递减），不是三个圆各自亮。原生 `content.menu.value` 按钮则每按钮各挂一块、圆与圆之间不受影响。
+  - 静止态亮度由材质层决定（实测 20 级 → 55 级），不要再自己叠半透明白面。
+- **官方文档原文**（《沉浸光感》`ui-design-hds-component-material`）：「HDS导航：通过设置 `TitleBarStyleOptions` 的 `systemMaterialEffect` 参数，可为标题栏按钮设置沉浸光感视效。HDS底部页签：通过设置 `HdsTabsFloatingStyle` 的 `systemMaterialEffect` 参数，可为底部页签设置沉浸光感视效。」两处示例都用 `ADAPTIVE`。
+- 底栏那圈「手指下的光」已定位到确切来源：`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets` 的 `buildFloatingStyle()` 里
+  `systemMaterialEffect: { materialType: hdsMaterial.MaterialType.IMMERSIVE, materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE }`。
+  把这一块注释掉重新装机，按住底栏光斑**完全消失**（只剩一层均匀暗面），加回来恢复 —— 因果确认。
+  光斑跟随手指而非绑定某个 tab：按统计 tab、按星图 tab、按两个 tab 中间的空隙，光斑都精确落在手指下方。
+  走的是 HdsTabs **专属**属性 → `hdsMaterial.SystemMaterialParams`（`@kit.UIDesignKit`，6.1.0(23)），与通用属性那条路不是同一套实现。
+- 标题栏另有一条 HDS 专属入口：`HdsNavigationTitleBarOptions.style.systemMaterialEffect`（`TitleBarStyleOptions`，同一文件 1399 行起）。官方《沉浸光感》明确「可为标题栏按钮设置沉浸光感视效」，实测对 **HDS 原生 `content.menu.value` 按钮**有效（工作区/写作页三个独立圆，按住最近最亮、两侧递减），对 `stackBuilder` 自绘节点**无效** —— 自绘节点要走通用属性 `systemMaterial`。
+- 页面内按钮拿定点光的其它候选也都试过，均不可用：
+  - `hdsEffect.pointLight`（`@kit.UIDesignKit`，20.0.0，`SystemCapability.UIDesign.HDSComponent.Core`）：语义是光源照亮**周围**组件，本就不是单组件按压反馈；且本机 ArkTS 侧构造成功、能力检查通过（`apiLevel=26 hdsCore=true effect=true`），native 层每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，enum 成员/字面量 int/只留两字段/去掉 options 全被拒。
+  - `hdsEffect.pressShadow(PressShadowType)`：只支持 Button，官方定义为「按压交互时自动计算背景色变化」的视效，`BLEND_GRADIENT` 是**叠白**（中心 85% 白、边缘 100% 白），实测是由内向外递增的整面高光，不是跟随手指的定点光；白底上还会削顶到 255 什么也看不出来。官方示例要求 Button 配 `stateEffect: false`，否则内建压暗与按压阴影互盖。
+  - `CommonMethod.lightUpEffect(0..1)`（common.d.ts:21813-21845）：只有整体亮度一个参数，**无位置参数**。
+  - `HdsVisualComponent`：只有 `DUAL_EDGE_FLOW_LIGHT_WITH_BACKGROUND_MASK` 一个场景，无悬浮按钮场景。HDS 组件库里没有任何悬浮按钮类组件。
+- 页面内悬浮按钮的现行做法：`ui/components/PrimaryFab.ets` 用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + Button 内建 `stateEffect`，与底栏胶囊的观感对齐（`barBackgroundBlurStyle` 就是 Tabs 对 `backgroundBlurStyle` 的专有封装）。内容流拿不到材质，悬浮感靠模糊 + 投影，不靠光感。
+  - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
+  - 别再设 `border`：深色模式下受光组件自带的 border 会覆盖点光源效果；FAB 的边界靠背景模糊与背景色差自然形成。
+- 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。
+- 应用级开关：`entry/src/main/module.json5` 已配 `ohos.arkui.UIMaterial.state = "enable"`；ENABLE 下 Button 不会默认开启，必须显式传 `systemMaterial`。
+- 说明：声明位于本机 SDK `openharmony/ets/api/@ohos.arkui.uiMaterial.d.ts`（`ImmersiveStyle { ULTRA_THIN=0, THIN=1, REGULAR=2 }`）与 `hms/ets/api/@hms.hds.hdsMaterial.d.ets`（`MaterialType { NONE=0, ADAPTIVE=100, IMMERSIVE=101 }`、`MaterialLevel { EXQUISITE=0, GENTLE=1, SMOOTH=2, ADAPTIVE=10 }`）。官方文档 docId：`开发指南/ArkUI_方舟UI框架/UI开发_ArkTS声明式开发范式/沉浸光感/沉浸光感开发指导/组件适配沉浸光感/arkts-immersive-light-sense-component-adaptation`、`…/沉浸光感常见问题/arkts-immersive-light-sense-faq`、`开发指南/UI_Design_Kit_UI设计套件/沉浸光感/ui-design-hds-component-material`、`FAQ/UI框架/UI界面/HarmonyOS下HdsNavigation与HdsTabs实现滚动模糊及沉浸光感材质效果的解决方案/faqs-arkui-1095`
+
+### stackBuilder 自绘区的两个坑（`HdsAppDestinationApi23.ets` 实测）
+
+- **HDS 返回按钮不会因为 stackBuilder 存在就自动避让**。它画在标题栏自己的层上，直接压住自绘标题（实测返回按钮面占 x 50~174px，星图详情页标题被完全盖住）。非根页必须自己让出槽位：`.padding({ left: isRoot ? 16 : 60, right: 16 })`（16 内边距 + 40 返回按钮 + 4 间距）。
+- **返回按钮自带 label**：HDS 会把目标页标题当返回按钮文案画在圆形按钮里，标题一长就被裁成一两个字（实测星图详情页返回按钮里露出「1」）。置 `content.backIcon = { label: '' }` 清掉。
+- stackBuilder 是自绘区域，**不吃 HDS 给 `mainTitle` 准备的内边距**，左右 16vp 要自己补，否则标题顶到屏幕左边缘（实测左边界 53px → 3px）。
+- `stackBuilder` 的类型是 `CustomBuilder`，**里面的组件调用必须写在 `@Builder` 里**。直接在箭头函数体里写 `SomeComponent({...})` 会在运行时抛 `TypeError: class constructor cannot called without 'new'`（ArkTS 把它当普通函数调用了）。这条对所有 `CustomBuilder` 字段通用（`@BuilderParam`、`stackBuilder`、类型为 `CustomBuilder` 的属性）。
+
+### 页面内容流里的材质与阴影（实测）
+
+- 材质挂到内容流的 Button 上，**hilog 会打 `Material inactive: out of scope`，但材质仍然有响应**。不要只凭这条日志判定材质没生效：作品页 FAB 实测静止 0 级 → 按住 109 级。判断必须以像素测量为准。
+- 深色模式纯黑底上，材质静止态几乎全透明（0 级，与背景同色），圆盘边界看不见；这是材质本身的特性，不是属性被谁删了。
+- **材质阴影与自定义 shadow 在深色纯黑底上都不显**：材质背景层透明，`shadow` 按组件自身背景形状外投，背景透明则无物可投。
+- 官方对替换关系的明确表述只覆盖阴影：「沉浸式系统材质默认自带阴影效果（`applyShadow` 为 true），优先于 `shadow` 通用属性，此时自定义的 `shadow` 设置不会生效。如需使用自定义阴影，将 `applyShadow` 置为 false 后再设置 `shadow`。」**`border` 没有对应的替换通道**，自定义 `border` 会盖在材质层之上。
+- `materialColor` 的官方语义：「对所有档位的算力设备均生效。在高算力和中算力设备上，该参数为材质滤镜再混合一层纯色效果；在低算力设备上，该参数作为背景色 backgroundColor 属性值。」给它不透明纯色会遮挡材质滤镜（实测页头胶囊传 `#33FFFFFF` 糊成一片发灰起雾的乳白，与底栏的通透感差 3 倍以上）。
+
 ## 应用共享目录 / 捐献沙箱目录（shareFiles profile）
 
 - Kit：无独立 Kit（`module.json5` 的 `shareFiles` 标签 + `resources/base/profile/share_files.json`）

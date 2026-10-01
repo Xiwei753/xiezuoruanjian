@@ -10,10 +10,11 @@
 // - .onBackPressed 只调用 onSystemBack 并消费本次系统返回（return true）。
 //
 // Issue #784 评论5857397503：移除硬编码的三个 menu item（同步/搜索/设置），
-// 改为通过 ScreenPolicyBridge 异步加载 ActionSlot[]，用 buildHdsMenuItems 生成菜单。
+// 改为通过 ScreenPolicyBridge 异步加载 ActionSlot[]，交给 HeaderTitleBarStack
+// 自绘标题 + 页头动作胶囊。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
-import { buildHdsMenuItems } from './HdsHeaderActionMenu'
+import { HeaderTitleBarStack } from './HeaderTitleBarStack'
 import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
 import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
 
@@ -38,6 +39,18 @@ export struct HdsWritingDestinationApi23 {
     }
   }
 
+  // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。
+  // 直接在箭头函数体里写 HeaderTitleBarStack({...}) 会被当普通函数调用，运行时崩：
+  // TypeError: class constructor cannot called without 'new'。
+  @Builder
+  headerTitleBar() {
+    HeaderTitleBarStack({
+      title: this.title,
+      headerActions: this.headerActions,
+      showBackButton: true
+    })
+  }
+
   build() {
     HdsNavDestination() {
       this.contentBuilder()
@@ -50,11 +63,15 @@ export struct HdsWritingDestinationApi23 {
       // 本文件只在 API >= 23 渲染（见各 Screen 的 useHdsNav 判定），该字段 API 20+ 恒可用。
       avoidLayoutSafeArea: true,
       content: {
-        title: { mainTitle: this.title },
+        // 标题与页头动作胶囊改由 stackBuilder 自绘，与根页面壳和工作区壳同一观感。
+        // 原因见 HeaderTitleBarStack 顶部注释：HDS 的 menu.value 每项都是独立圆面，
+        // 渲染不出「一个胶囊包住三个动作」。
+        title: { mainTitle: '' },
         // Issue #783 评论5856245403：使用 HDS 标题栏原生 backIcon，
         // 点击只调用 onTitleBack（退出页面），不和系统返回手势共用回调。
+        // label 置空：HDS 会把文案画进返回按钮的圆形里，标题栏里已有自绘标题。
         backIcon: {
-          label: '返回',
+          label: '',
           icon: $r('sys.symbol.chevron_left'),
           isEnabled: true,
           action: () => {
@@ -63,15 +80,14 @@ export struct HdsWritingDestinationApi23 {
             }
           }
         },
-        // Issue #784 评论5857397503：菜单项由 buildHdsMenuItems 从 ActionSlot[] 动态生成，
-        // 不再硬编码"同步/搜索/设置"三个 item。
-        menu: {
-          value: buildHdsMenuItems(this.headerActions)
+        stackBuilder: (): void => {
+          this.headerTitleBar()
         }
       },
       style: {
+        // ADAPTIVE 是官方《沉浸光感》示例里的值，标题栏的按压光要靠它。
         systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
         }
       }
