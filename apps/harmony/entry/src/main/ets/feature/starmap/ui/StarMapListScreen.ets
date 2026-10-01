@@ -246,15 +246,14 @@ export struct StarMapListScreen {
         // ── FAB 层：新建星图浮动按钮 ──
         if (!this.isLoading && !this.errorMessage) {
           Stack() {
-            Button({ type: ButtonType.Circle, stateEffect: true }) {}
+            // 与 HomeScreen / WorkspaceScreen 一致：用原生 ButtonType.Circle 的系统圆形面
+            // 跟随系统强调色，不再用 themeConfig.colors.primary 写死颜色（浅色主题下是纯黑）。
+            Button({ type: ButtonType.Circle, stateEffect: true }) {
+              SymbolGlyph($r('sys.symbol.plus'))
+                .fontSize(28)
+            }
               .width(PRIMARY_FAB_SIZE_VP)
               .height(PRIMARY_FAB_SIZE_VP)
-              .backgroundColor(this.themeConfig.colors.primary)
-
-            SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize(28)
-              .fontColor([this.themeConfig.colors.onPrimary])
-              .hitTestBehavior(HitTestMode.None)
           }
           .width(PRIMARY_FAB_SIZE_VP)
           .height(PRIMARY_FAB_SIZE_VP)
