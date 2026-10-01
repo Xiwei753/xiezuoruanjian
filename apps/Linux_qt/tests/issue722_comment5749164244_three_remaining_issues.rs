@@ -156,28 +156,35 @@ fn issue1_build_slices_pass_some_line_idx() {
 // 问题3: 快速输入/删除 rebase 仍然采的不是屏幕上真正那一帧
 // =========================================================================
 
-/// 问题3 守卫1: take_rebase_frames 不再调 tx.collect_rebase_frames，
-/// 而是用 collect_rebase_frame_for_unit 逐 unit 采集 rebase 帧（#785 后全部走 Timed 时间线）。
+/// 问题3 守卫1: take_rebase_frames 走两条独立交棒路径（#785 后文字 Timed + caret 独立）。
+/// - 文字交棒：collect_rebase_frame_for_unit_without_caret(...)，文字进度来自 Timed unit。
+/// - caret 交棒：sample_coordinated_cursor_rect_at(tx, now)，只负责独立 caret handoff。
+/// 旧的 sample_caret_geometry_for_caret_driven_clip 已删除，不应复活。
 #[test]
-fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
+fn issue3_take_rebase_frames_uses_timed_text_and_coordinated_caret_handoff() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
-    let window = function_window(&src, "fn take_rebase_frames", 4000);
+    let window = function_window(&src, "fn take_rebase_frames", 8000);
     // 修复后：不应调 tx.collect_rebase_frames(now)
     let has_old_collect = window.contains("tx.collect_rebase_frames(now)");
     assert!(
         !has_old_collect,
         "take_rebase_frames 不应再调 tx.collect_rebase_frames(now)，\
-         应改用 collect_rebase_frame_for_unit 逐 unit 采集 rebase 帧"
+         应改用 collect_rebase_frame_for_unit_without_caret 逐 unit 采集 rebase 帧"
     );
-    // 应使用 sample_caret_geometry_for_caret_driven_clip 采样 caret
+    // 文字交棒路径：应使用 collect_rebase_frame_for_unit_without_caret(
     assert!(
-        window.contains("sample_caret_geometry_for_caret_driven_clip"),
-        "take_rebase_frames 应使用 sample_caret_geometry_for_caret_driven_clip 采样 caret geometry"
+        window.contains("collect_rebase_frame_for_unit_without_caret("),
+        "take_rebase_frames 应使用 collect_rebase_frame_for_unit_without_caret( 采集文字 rebase 帧（文字进度来自 Timed unit）"
     );
-    // 应使用 collect_rebase_frame_for_unit
+    // caret 交棒路径：应使用 sample_coordinated_cursor_rect_at(tx, now)
     assert!(
-        window.contains("collect_rebase_frame_for_unit"),
-        "take_rebase_frames 应使用 collect_rebase_frame_for_unit 逐 unit 采集 rebase 帧"
+        window.contains("sample_coordinated_cursor_rect_at(tx, now)"),
+        "take_rebase_frames 应使用 sample_coordinated_cursor_rect_at(tx, now) 采样独立 caret handoff"
+    );
+    // 旧机制不复活：函数体里不应有真正的 sample_caret_geometry_for_caret_driven_clip( 调用
+    assert!(
+        !window.contains("sample_caret_geometry_for_caret_driven_clip("),
+        "take_rebase_frames 不应再调用已删除的 sample_caret_geometry_for_caret_driven_clip(（旧 caret 驱动裁切机制不应复活）"
     );
 }
 
@@ -208,8 +215,9 @@ fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
 }
 
 /// 问题3 守卫3: sample_caret_geometry_for_caret_driven_clip 已被删除（Issue #727 约束 4）。
-/// InsertReveal/DeleteConceal 现在统一从 CoordinatedMotionFrame.caret 消费 x/y/visual_line_id。
-/// Reveal/Conceal 使用 compute_frame_caret_driven，Reflow 使用 compute_frame(visible_fraction)。
+/// 文字 unit（InsertReveal/DeleteConceal/Reflow）不消费 caret frame，统一走
+/// current_visible_fraction + compute_frame（Timed 时间线）。caret frame 只负责画/交棒 caret，
+/// 不驱动文字。协同只传递"同事务协同"语义，不再把 caret duration 强绑到 typing duration。
 #[test]
 fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
     let cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
