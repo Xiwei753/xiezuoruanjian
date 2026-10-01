@@ -440,6 +440,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StatsPreviewPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapWorkspace.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapScene.qml");
     println!("cargo:rerun-if-changed=qml/StarMapCanvas.qml");
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");
     // Issue #798: 星图鼠标交互状态机
