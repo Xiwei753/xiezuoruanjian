@@ -182,7 +182,9 @@ export class StarMapGestureStateTracker {
       mode: this.state.mode,
       activeItemId: this.state.activeItemId,
       activeItemKind: this.state.activeItemKind,
-      ownerScenePath: this.state.ownerScenePath.map(seg => ({ ...seg })),
+      ownerScenePath: this.state.ownerScenePath.map((seg: StarMapPathSegment): StarMapPathSegment => ({
+        type: seg.type, instanceId: seg.instanceId, nodeId: seg.nodeId
+      })),
       startPoint: { x: this.state.startPoint.x, y: this.state.startPoint.y },
       currentPoint: { x: this.state.currentPoint.x, y: this.state.currentPoint.y },
       targetItemId: this.state.targetItemId
