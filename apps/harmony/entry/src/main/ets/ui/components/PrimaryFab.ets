@@ -22,7 +22,8 @@
 //     能接上系统材质而保留的，不是当前深色边界的成因。
 //   外层单独做一个「边缘层」：1vp 淡描边兜住深色静止态的最低轮廓。
 //     本轮真正解决深色模式可见性的是这一圈描边，不是内容流里的 lightEffect。
-//   描边不压在 Button 的 systemMaterial 上，两个节点互不遮挡。
+//   描边作为独立节点绘制，不把 border modifier 挂到 systemMaterial 的 Button 本体上；
+//   边缘层 zIndex(1)，始终优先保证 1vp 最低轮廓可见。
 //   为什么不再用普通 shadow 承担边界：材质背景层在纯黑底上是全透明的，
 //   没有可投的实体，自定义 shadow 一并消失（实测静止态 0 级、无任何渐变）。
 //   Issue 里还建议给边缘层挂 hdsEffect 点光源的 DEFAULT_FEATHERING_BORDER 做动态反光，
@@ -69,7 +70,8 @@ export struct PrimaryFab {
   build() {
     Stack() {
       // 边缘层：深色静止态的最低轮廓，1vp 淡描边（实测灰度 38，与 #22FFFFFF 的 13% 白相符）。
-      // 单独一层、不压在 Button 上，两个节点互不遮挡，材质层不会被挡掉。
+      // 作为独立节点绘制，border 不挂到 systemMaterial 的 Button 本体上；zIndex(1) 保证
+      // 这圈轮廓始终画在 Button 之上，不依赖材质是否渲染成功。
       // hitTestBehavior(None)：这一层只画边不吃触摸，按钮的点击与手势锁不受影响。
       Row()
         .width(PRIMARY_FAB_SIZE_VP)

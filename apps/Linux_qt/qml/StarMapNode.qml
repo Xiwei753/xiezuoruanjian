@@ -152,13 +152,18 @@ Item {
     // 默认 NotExclusive 时双击会同时触发单击。
     // Issue #793 评论 5885482530: handler 全部挂在稳定 root Item 上，
     // 不放进 visualNode，命中框恒定。
-    // Issue #801 评论 5894035036: 按 acceptedDevices 拆鼠标/触屏——
-    //   鼠标长按 → mouseLongPressed（Canvas 进 connect）
+    // Issue #801 评论 5894035036: 按 acceptedDevices 拆桌面指针/触屏——
+    //   桌面指针长按 → mouseLongPressed（Canvas 进 connect）
     //   触屏长按 → touchLongPressed（Canvas 进 contextPending）
+    //
+    // Issue #812: 桌面语义一律 Mouse | TouchPad，不能只写 Mouse。acceptedDevices
+    // 是硬过滤，设备类型不匹配时 Handler 根本不参与该事件；Wayland 的桌面
+    // pointer 路径不能可靠还原成 Mouse，只写 Mouse 会让实体鼠标的单击选中、
+    // 右键菜单、直接拖动全部失效。触屏语义保持 TouchScreen 独立。
     // ---------------------------------------------------------------------------
     TapHandler {
         id: nodeMouseTap
-        acceptedDevices: PointerDevice.Mouse
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.LeftButton
         exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
@@ -182,7 +187,7 @@ Item {
     }
 
     TapHandler {
-        acceptedDevices: PointerDevice.Mouse
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
         // Issue #801 评论 5894981235: 右键也是鼠标交互。
         onPressedChanged: { if (pressed) root.mouseInteracted() }
@@ -198,12 +203,12 @@ Item {
     // DragHandler.active 仅在超过 dragThreshold 后才为 true，长按后不拖动直接松开时
     // onActiveChanged(false) 不会触发，故不能依赖它来结束 connect/move 状态。
     // （Issue #788 评论 5868205321）
-    // Issue #801 评论 5894035036: 只鼠标直接拖 → move；触屏不在节点上 grab 拖动，
+    // Issue #801 评论 5894035036: 只有桌面指针直接拖 → move；触屏不在节点上 grab 拖动，
     // 让事件穿透到背景 pan（触屏 connect 移动由背景层 bgTouchDrag 处理）。
     // ---------------------------------------------------------------------------
     DragHandler {
         id: nodeDragHandler
-        acceptedDevices: PointerDevice.Mouse
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         target: null
         acceptedButtons: Qt.LeftButton
 

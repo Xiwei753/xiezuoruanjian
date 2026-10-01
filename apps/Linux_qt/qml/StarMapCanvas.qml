@@ -202,11 +202,20 @@ Item {
     // ---------------------------------------------------------------------------
     // 背景交互层：TapHandler 处理点击类，MouseArea 处理 pan 拖动与滚轮
     // TapHandler 与 MouseArea 共存：Handler 独立收到 tap/longPress 信号
-    // Issue #801 评论 5894035036: 鼠标/触屏按 acceptedDevices 拆开：
-    //   - 鼠标空白长按无操作（鼠标用右键打开菜单）
+    // Issue #801 评论 5894035036: 桌面指针/触屏按 acceptedDevices 拆开：
+    //   - 桌面指针空白长按无操作（用右键打开菜单）
     //   - 触屏空白长按打开背景菜单
     //   - 触屏未长按在节点上滑动 → 画布 pan（节点没挂触屏 DragHandler，事件穿透）
     //   - 触屏长按后移动 → 更新 connect 坐标
+    //
+    // Issue #812: 桌面指针的 acceptedDevices 必须是 Mouse | TouchPad，
+    // 不能只写 Mouse。Qt 的 acceptedDevices 是硬过滤，设备类型不匹配时
+    // Handler 根本不参与这个事件；而 Wayland 的桌面 pointer 路径不能可靠把
+    // 实际硬件还原成 Mouse，于是只写 Mouse 会让实体鼠标的单击/右键/拖动
+    // 全部被静默丢弃。画布平移用的是没有设备过滤的 MouseArea，所以会留下
+    // "能拖动画布、但左右键都点不动" 的半套状态。
+    // 约定：桌面语义（单击选中/双击编辑/右键菜单/直接拖动）= Mouse | TouchPad；
+    // 触屏语义（长按/滑动）= TouchScreen，两者不混。
     //
     // Issue #806 评论 5907045450: 这些 handler 必须直接挂在 canvasArea 上。
     // 之前它们被包在一个独立的 sibling Item（bgInteractionLayer）里，而 Qt 的
@@ -219,7 +228,7 @@ Item {
     // 不让画布背景先吞掉对象点击。
     TapHandler {
         id: bgMouseLeftTap
-        acceptedDevices: PointerDevice.Mouse
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.LeftButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = false
@@ -292,7 +301,7 @@ Item {
     // Issue #796 评论 5886483653: 命中顺序 Node/Embed → Edge → 空白。
     TapHandler {
         id: backgroundRightTap
-        acceptedDevices: PointerDevice.Mouse
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = false
@@ -341,7 +350,7 @@ Item {
                 }
             } else {
                 // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
-                // 鼠标 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
+                // 桌面指针 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
                 // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
                 if (_wasTouchMove && interaction.pointerMode === "move") {
                     if (interaction.pressedNodeId !== "") {

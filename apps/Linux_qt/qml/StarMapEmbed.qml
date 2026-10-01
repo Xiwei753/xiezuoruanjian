@@ -203,6 +203,15 @@ Item {
         // Issue #805 评论 5908703621 问题 2：Handler 直接放进 titleBar 内部，
         // parent Item 就是 titleBar，命中范围限定在标题条。
         // 不靠 target: titleBar 做事件隔离。
+        //
+        // Issue #812: 本文件所有桌面语义 Handler（标题条与四条边框上的
+        // TapHandler/DragHandler）的 acceptedDevices 一律 Mouse | TouchPad，
+        // 不能只写 Mouse。acceptedDevices 是硬过滤，设备类型不匹配时 Handler
+        // 根本不参与该事件；Wayland 的桌面 pointer 路径不能可靠还原成 Mouse，
+        // 只写 Mouse 会让实体鼠标在这些区域完全点不动。
+        // 触屏语义（TouchScreen 长按/滑动）保持 TouchScreen 独立，不混进来。
+        // 新增 chrome 区域 Handler 时必须照此约定，否则会出现
+        // "标题能点、边框还是死" 的半套状态。
         Rectangle {
             id: titleBar
             anchors.left: parent.left
@@ -227,7 +236,7 @@ Item {
 
             TapHandler {
                 id: chromeMouseTap
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
                 onPressedChanged: { if (pressed) root.mouseInteracted() }
@@ -245,7 +254,7 @@ Item {
             }
 
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
                 onPressedChanged: { if (pressed) root.mouseInteracted() }
                 onSingleTapped: function(eventPoint) {
@@ -256,7 +265,7 @@ Item {
 
             DragHandler {
                 id: titleDragHandler
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 target: null
                 acceptedButtons: Qt.LeftButton
                 grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
@@ -298,7 +307,7 @@ Item {
             color: "transparent"
 
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 onPressedChanged: { if (pressed) root.mouseInteracted() }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -311,7 +320,7 @@ Item {
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
@@ -319,7 +328,7 @@ Item {
                 }
             }
             DragHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 target: null
                 acceptedButtons: Qt.LeftButton
                 grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
@@ -349,7 +358,7 @@ Item {
             color: "transparent"
 
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 onPressedChanged: { if (pressed) root.mouseInteracted() }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -362,7 +371,7 @@ Item {
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
@@ -370,7 +379,7 @@ Item {
                 }
             }
             DragHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 target: null
                 acceptedButtons: Qt.LeftButton
                 grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
@@ -400,7 +409,7 @@ Item {
             color: "transparent"
 
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 onPressedChanged: { if (pressed) root.mouseInteracted() }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -413,7 +422,7 @@ Item {
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
@@ -421,7 +430,7 @@ Item {
                 }
             }
             DragHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 target: null
                 acceptedButtons: Qt.LeftButton
                 grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType
@@ -451,7 +460,7 @@ Item {
             color: "transparent"
 
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 onPressedChanged: { if (pressed) root.mouseInteracted() }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -464,7 +473,7 @@ Item {
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
@@ -472,7 +481,7 @@ Item {
                 }
             }
             DragHandler {
-                acceptedDevices: PointerDevice.Mouse
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 target: null
                 acceptedButtons: Qt.LeftButton
                 grabPermissions: PointerHandler.CanTakeOverFromHandlersOfDifferentType

@@ -386,7 +386,8 @@
   - `CommonMethod.lightUpEffect(0..1)`（common.d.ts:21813-21845）：只有整体亮度一个参数，**无位置参数**。
   - `HdsVisualComponent`：只有 `DUAL_EDGE_FLOW_LIGHT_WITH_BACKGROUND_MASK` 一个场景，无悬浮按钮场景。HDS 组件库里没有任何悬浮按钮类组件。
 - 页面内悬浮按钮的**现行做法**见下文「让 FAB 在深色模式有可见边界：试过的全部路径」一节：`Stack { Row(独立 1vp 描边, zIndex 1); Button(ImmersiveMaterial, stateEffect false) }`。下面两条是当时的中间尝试，**已废弃**，留在这里只为避免以后重新踩：
-  - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + Button 内建 `stateEffect`~~（曾与底栏胶囊观感对齐）：材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见。
+  - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边~~（曾与底栏胶囊观感对齐）：**它本身能正常显示**，实测圆盘 20~22 级、边界清晰、阴影 3 级，稳定可读。废弃原因是没有沉浸材质高光 / 跟手按压光，而且已被独立描边层方案替代。
+  - ~~`systemMaterial(floatingMaterial(false))` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)`~~：**这一条才是**「材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见」的原因（材质接管阴影后 `applyShadow` 传 false，改回自定义 shadow 也没有可投实体）。
   - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
   - **描边不是不能用，而是不能压在 systemMaterial 的 Button 本体上**。挂 `border` 到受光的 Button 会盖掉材质层；放到独立节点（`hitTestBehavior(HitTestMode.None)` + `zIndex(1)`）就没有这个冲突，而且不依赖材质是否渲染成功。
 - 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。
