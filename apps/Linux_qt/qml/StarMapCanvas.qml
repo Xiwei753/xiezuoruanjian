@@ -757,6 +757,23 @@ Item {
                 isSelected: embedData.isSelected
                 wobbleIndex: index
 
+                // 递归子 Scene 只在这个 Embed 的投影矩形进入当前 Canvas 视口时激活。
+                // 不能像旧实现那样只看 targetStarmapId 就递归展开所有子图，否则恢复
+                // 星图页面时会在首帧同步构造整棵引用树。留 64px 预取边距，拖动/缩放
+                // 接近视口时先开始异步创建，避免刚进入屏幕才闪一下。
+                readonly property real projectedLeft: x * canvasArea.zoomLevel + canvasArea.panX
+                readonly property real projectedTop: y * canvasArea.zoomLevel + canvasArea.panY
+                readonly property real projectedRight: projectedLeft + width * canvasArea.zoomLevel
+                readonly property real projectedBottom: projectedTop + height * canvasArea.zoomLevel
+                childSceneInViewport: {
+                    var margin = 64
+                    return canvasArea.visible
+                            && projectedRight >= -margin
+                            && projectedBottom >= -margin
+                            && projectedLeft <= canvasArea.width + margin
+                            && projectedTop <= canvasArea.height + margin
+                }
+
                 // Issue #805 评论 5907045450 第 2 部分：递归渲染上下文。
                 // 传 rootStarmapId / pathSegments / starmapBackendRef 给 Embed，
                 // Embed 的 contentViewport 用这些构造子 Scene 的 pathSegments。
