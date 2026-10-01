@@ -385,9 +385,10 @@
   - `hdsEffect.pressShadow(PressShadowType)`：只支持 Button，官方定义为「按压交互时自动计算背景色变化」的视效，`BLEND_GRADIENT` 是**叠白**（中心 85% 白、边缘 100% 白），实测是由内向外递增的整面高光，不是跟随手指的定点光；白底上还会削顶到 255 什么也看不出来。官方示例要求 Button 配 `stateEffect: false`，否则内建压暗与按压阴影互盖。
   - `CommonMethod.lightUpEffect(0..1)`（common.d.ts:21813-21845）：只有整体亮度一个参数，**无位置参数**。
   - `HdsVisualComponent`：只有 `DUAL_EDGE_FLOW_LIGHT_WITH_BACKGROUND_MASK` 一个场景，无悬浮按钮场景。HDS 组件库里没有任何悬浮按钮类组件。
-- 页面内悬浮按钮的现行做法：`ui/components/PrimaryFab.ets` 用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + Button 内建 `stateEffect`，与底栏胶囊的观感对齐（`barBackgroundBlurStyle` 就是 Tabs 对 `backgroundBlurStyle` 的专有封装）。内容流拿不到材质，悬浮感靠模糊 + 投影，不靠光感。
+- 页面内悬浮按钮的**现行做法**见下文「让 FAB 在深色模式有可见边界：试过的全部路径」一节：`Stack { Row(独立 1vp 描边, zIndex 1); Button(ImmersiveMaterial, stateEffect false) }`。下面两条是当时的中间尝试，**已废弃**，留在这里只为避免以后重新踩：
+  - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + Button 内建 `stateEffect`~~（曾与底栏胶囊观感对齐）：材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见。
   - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
-  - 别再设 `border`：深色模式下受光组件自带的 border 会覆盖点光源效果；FAB 的边界靠背景模糊与背景色差自然形成。
+  - **描边不是不能用，而是不能压在 systemMaterial 的 Button 本体上**。挂 `border` 到受光的 Button 会盖掉材质层；放到独立节点（`hitTestBehavior(HitTestMode.None)` + `zIndex(1)`）就没有这个冲突，而且不依赖材质是否渲染成功。
 - 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。
 - 应用级开关：`entry/src/main/module.json5` 已配 `ohos.arkui.UIMaterial.state = "enable"`；ENABLE 下 Button 不会默认开启，必须显式传 `systemMaterial`。
 - 说明：声明位于本机 SDK `openharmony/ets/api/@ohos.arkui.uiMaterial.d.ts`（`ImmersiveStyle { ULTRA_THIN=0, THIN=1, REGULAR=2 }`）与 `hms/ets/api/@hms.hds.hdsMaterial.d.ets`（`MaterialType { NONE=0, ADAPTIVE=100, IMMERSIVE=101 }`、`MaterialLevel { EXQUISITE=0, GENTLE=1, SMOOTH=2, ADAPTIVE=10 }`）。官方文档 docId：`开发指南/ArkUI_方舟UI框架/UI开发_ArkTS声明式开发范式/沉浸光感/沉浸光感开发指导/组件适配沉浸光感/arkts-immersive-light-sense-component-adaptation`、`…/沉浸光感常见问题/arkts-immersive-light-sense-faq`、`开发指南/UI_Design_Kit_UI设计套件/沉浸光感/ui-design-hds-component-material`、`FAQ/UI框架/UI界面/HarmonyOS下HdsNavigation与HdsTabs实现滚动模糊及沉浸光感材质效果的解决方案/faqs-arkui-1095`

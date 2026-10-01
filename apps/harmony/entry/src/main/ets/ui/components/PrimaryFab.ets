@@ -16,8 +16,12 @@
 //   这四个属性会盖在材质层之上，材质滤镜、折射、高光、阴影就全被挡住。
 //
 // 圆盘边界分两层处理（Issue #811）：
-//   内层 Button 只负责 ImmersiveMaterial + lightEffect（手指跟随光感），本体不画任何边。
+//   内层 Button 保留 ImmersiveMaterial + lightEffect，本体不画任何边。
+//     注意：本机（OpenHarmony 7.0.0.105 / API 26）内容流里材质实际没有渲染出来，
+//     静止和按住都是 0 级，这两个属性是为系统能力变化 / 组件进入受支持范围后
+//     能接上系统材质而保留的，不是当前深色边界的成因。
 //   外层单独做一个「边缘层」：1vp 淡描边兜住深色静止态的最低轮廓。
+//     本轮真正解决深色模式可见性的是这一圈描边，不是内容流里的 lightEffect。
 //   描边不压在 Button 的 systemMaterial 上，两个节点互不遮挡。
 //   为什么不再用普通 shadow 承担边界：材质背景层在纯黑底上是全透明的，
 //   没有可投的实体，自定义 shadow 一并消失（实测静止态 0 级、无任何渐变）。
@@ -37,8 +41,10 @@
 //   以及 Slider/Toggle/Select 上生效。本组件挂在页面内容流，ArkUI 会打
 //   `Material inactive: out of scope. Use component in navigation title bar or Tabbar.`
 //   （改成挂外层容器是同一条日志，判定按位置不按组件类型）。
-//   但这条日志与实际渲染不完全一致：实测内容流里的材质仍然响应（静止 0 级 → 按住 61 级），
-//   不能只凭日志判定材质没生效，要以像素测量为准。
+//   但本轮实测已经确认：内容流里的 systemMaterial 并没有真正渲染出来，
+//   静止态和按住态都是 0 级，ArkUI 这条 out of scope 日志是准的。
+//   （之前一度报过「静止 0 级 → 按住 61 级」，那是测量假象：对话框遮罩把整屏抬亮、
+//   以及 uinput 按下未配对抬起导致组件停在按压态。抓帧纪律见 API_MATRIX。）
 //   底栏那圈跟手的光另走 HdsTabs 专属属性 systemMaterialEffect，
 //   见 app/navigation/impl/api23/HdsPrimaryTabsApi23.ets。
 //   完整实测矩阵见 platform/API_MATRIX.md「沉浸式系统材质（uiMaterial.ImmersiveMaterial）」。
@@ -71,8 +77,12 @@ export struct PrimaryFab {
         .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
         .border({ width: 1, color: '#22FFFFFF' })
         .hitTestBehavior(HitTestMode.None)
+        // 明确提到 Button 之上：这圈描边的职责是「无论材质是否工作都保证轮廓可见」，
+        // 不能依赖当前系统恰好不渲染材质。Stack 默认后加入的 Button 在上层，
+        // 一旦系统放开内容流材质，Button 会把底下的兜底描边压住。Button 保持默认层级即可。
+        .zIndex(1)
 
-      // 本体：只负责 ImmersiveMaterial + lightEffect，手指跟随光感由材质出，本体不画任何边。
+      // 本体：保留 ImmersiveMaterial + lightEffect，本体不画任何边。
       // stateEffect 置 false：材质开了 lightEffect 后内建按压态会与材质的光感反馈互盖，
       // 官方《组件适配沉浸光感》的 Button 示例也是这么写的。
       Button({ type: ButtonType.Circle, stateEffect: false }) {
