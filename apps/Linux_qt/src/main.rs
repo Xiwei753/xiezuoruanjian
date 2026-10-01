@@ -135,6 +135,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapCard.qml" as "StarMapCard.qml",
     "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
+    "qml/StarMapScene.qml" as "StarMapScene.qml",
     "qml/StarMapCanvas.qml" as "StarMapCanvas.qml",
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     // Issue #798: 星图鼠标交互状态机（瞬时手势状态，不读写 Core）
