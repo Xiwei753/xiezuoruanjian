@@ -1,10 +1,9 @@
 use cpp::cpp;
-use qmetaobject::QString;
 
-use super::engine::{
-    get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot,
-    qchar_offset_to_byte_offset,
-};
+// Issue #810 评论 5932233052 问题1: qchar_offset_to_byte_offset 和 QString 不再在此
+// 模块使用（prepare_animation_visuals_from_layout 改为 raster-only，不再做 QChar→byte
+// 转换，也不再从 C++ buffer 读取 cluster raw_font_fingerprint 返回 QString）。
+use super::engine::{get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot};
 use super::types::{CaretAffinity, CaretRect, VisualLine};
 
 // ── Qt 文本布局模块：Canonical document visual snapshot ──
@@ -62,6 +61,23 @@ pub struct CanonicalParagraphSnapshot {
     pub paragraph_document_byte_start: usize,
     pub lines: Vec<CanonicalLineSnapshot>,
     pub index_map: crate::editor::paragraph_index_map::ParagraphIndexMap,
+}
+
+/// Issue #810 评论 5932233052 问题1: 动画 raster 视觉 — 只携带 QImage 和稳定行身份，
+/// 不携带 cluster。
+///
+/// 从类型上断掉"动画提取复用 CanonicalLineSnapshot 顺手把 cluster 填回去"的路。
+/// cluster 几何现在由基础 canonical 排版直接产出（engine.rs 中 cluster 提取始终执行），
+/// `prepare_animation_visuals_from_layout` 只负责提取可延迟的 QImage/纹理，
+/// `inject_animation_visuals_into_snapshot` 只注入 image，不再覆盖 cluster。
+///
+/// `paragraph_document_byte_start` + `qtextline_idx` 是稳定行身份，用于 inject 时
+/// 精确匹配目标行（与 `CanonicalLineSnapshot` 同源）。
+#[derive(Clone)]
+pub struct AnimationRasterVisual {
+    pub image: Option<qmetaobject::QImage>,
+    pub paragraph_document_byte_start: usize,
+    pub qtextline_idx: i32,
 }
 
 #[derive(Clone)]
@@ -331,9 +347,12 @@ impl CanonicalDocumentVisualSnapshot {
 }
 
 // 本文件只留 snapshot 的数据结构与其构造方法；
-//   - ffi.rs：thread_local 排版缓冲的取值 shim（26 个）
+//   - ffi.rs：thread_local 排版缓冲的取值 shim（image 物理尺寸）
 //   - prepare.rs：五条 snapshot 组装入口 + 动画纹理注入
 // prepare.rs 里的公开入口在这里重导出，`layout/mod.rs` 的 re-export 不用改。
+// Issue #810 评论 5932233052 问题1: prepare_animation_visuals_from_layout 改为
+// raster-only 后，ffi.rs 只保留 image 物理尺寸读取 shim，cluster/cursor_x_map
+// 读取 shim 已删除（被新实现替代的旧入口直接删除，AGENTS.md）。
 mod ffi;
 mod prepare;
 
@@ -342,3 +361,5 @@ pub use prepare::{
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
 };
+// Issue #810 评论 5932233052 问题1: AnimationRasterVisual 定义在本模块（pub struct），
+// 外部通过 canonical_snapshot::AnimationRasterVisual 访问，无需额外 re-export。

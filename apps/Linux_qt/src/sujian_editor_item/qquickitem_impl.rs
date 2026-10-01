@@ -479,7 +479,17 @@ impl SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    /// Issue #810 评论 问题2: 统一的选择手势结束路径。
+    /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期入口。
+    ///
+    /// QML TapHandler.onLongPressed 调用，设置 `selection_gesture_active = true`，
+    /// 让 render_plan_builder 在长按选词期间走 hard_snap，不用 Core has_selection 代替。
+    /// 与鼠标 MouseButtonPress 的 `selection_gesture_active = false`（先清旧手势）不同：
+    /// 长按是明确的选择手势开始，直接置 true。
+    pub(crate) fn begin_selection_gesture(&mut self) {
+        self.selection_gesture_active = true;
+    }
+
+    /// Issue #810 评论 5932233052 问题3: 统一的选择手势结束路径。
     ///
     /// 由 `mouse_event` 的 `MouseButtonRelease` 调用，替代旧的
     /// `self.pointer_drag_selecting = false`。负责：
@@ -499,5 +509,13 @@ impl SujianEditorItem {
         // visual_x/visual_y 是最后一次拖选的 cursor 位置（selection head）。
         // 选区收起后从此位置恢复 Tween。
         self.cursor_ctrl.record_selection_head_rect();
+    }
+
+    /// Issue #810 评论 5932233052 问题3: QML 暴露的选择手势结束入口。
+    ///
+    /// QML TapHandler onPressedChanged / onCanceled 在触屏/手写笔长按释放时调用，
+    /// 委托到私有 `end_selection_gesture`，与鼠标 MouseButtonRelease 走统一路径。
+    pub(crate) fn end_selection_gesture_qml(&mut self) {
+        self.end_selection_gesture();
     }
 }

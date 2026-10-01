@@ -228,10 +228,11 @@ impl SujianEditorItem {
                 ids
             };
             if !line_ids.is_empty() {
-                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
                 //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
                 // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-                // QImage/纹理，不再为动画单独补 cluster。inject 不覆盖已有 cluster。
+                // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
+                // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
@@ -254,13 +255,36 @@ impl SujianEditorItem {
         let caret_doc = doc_snapshot.cursor_rect_doc(cursor_byte, self.cursor_ctrl.affinity);
 
         let mut snapshot =
-            super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+            match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
                 revision,
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
                 committed_text,
-            );
+            ) {
+                Ok(snap) => snap,
+                Err(err) => {
+                    // Issue #810 评论 5932233052 问题2: build_from_canonical_document 返回 Err
+                    // 表示 canonical 排版有 invariant failure。记录 error 并 fallback 到
+                    // 空 snapshot，不 panic、不伪造 cluster。
+                    crate::backend::app_backend::debug_error_static(
+                        "layout_ops",
+                        "build_from_canonical_document_invariant_failure",
+                        &format!(
+                            "{} — falling back to empty snapshot (Issue #810)",
+                            err
+                        ),
+                    );
+                    EditorLayoutSnapshot {
+                        revision,
+                        line_snapshots: Vec::new(),
+                        caret_rect: None,
+                        caret_rect_doc: None,
+                        caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+                        virtual_text: committed_text.to_owned(),
+                    }
+                }
+            };
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
@@ -396,10 +420,11 @@ impl SujianEditorItem {
                 ids
             };
             if !line_ids.is_empty() {
-                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
                 //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
                 // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-                // QImage/纹理，不再为动画单独补 cluster。inject 不覆盖已有 cluster。
+                // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
+                // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
@@ -437,13 +462,36 @@ impl SujianEditorItem {
         );
 
         let mut snapshot =
-            super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+            match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
                 revision,
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
                 virtual_text,
-            );
+            ) {
+                Ok(snap) => snap,
+                Err(err) => {
+                    // Issue #810 评论 5932233052 问题2: build_from_canonical_document 返回 Err
+                    // 表示 canonical 排版有 invariant failure。记录 error 并 fallback 到
+                    // 空 snapshot，不 panic、不伪造 cluster。
+                    crate::backend::app_backend::debug_error_static(
+                        "layout_ops",
+                        "build_from_canonical_document_invariant_failure",
+                        &format!(
+                            "{} — falling back to empty snapshot (Issue #810)",
+                            err
+                        ),
+                    );
+                    EditorLayoutSnapshot {
+                        revision,
+                        line_snapshots: Vec::new(),
+                        caret_rect: None,
+                        caret_rect_doc: None,
+                        caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+                        virtual_text: virtual_text.to_owned(),
+                    }
+                }
+            };
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;

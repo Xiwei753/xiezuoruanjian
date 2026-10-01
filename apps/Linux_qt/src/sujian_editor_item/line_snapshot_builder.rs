@@ -27,13 +27,18 @@ use crate::editor::paragraph_index_map::ParagraphIndexMap;
 pub(crate) struct LineSnapshotBuilder;
 
 impl LineSnapshotBuilder {
+    /// Issue #810 评论 5932233052 问题2: 返回 `Result<EditorLayoutSnapshot, String>`。
+    ///
+    /// 可见正文出现空 clusters 时返回 `Err`，包含诊断信息（revision、para_start、
+    /// qtextline_idx 等），不再产出带空 cluster 的成功对象。调用方据此 fallback
+    /// 到空 snapshot 或跳过本次动画事务，不 panic、不伪造 cluster。
     pub fn build_from_canonical_document(
         revision: LayoutRevision,
         doc_snapshot: &CanonicalDocumentVisualSnapshot,
         scroll_y: f64,
         viewport_h: f64,
         virtual_text: &str,
-    ) -> EditorLayoutSnapshot {
+    ) -> Result<EditorLayoutSnapshot, String> {
         let mut line_snapshots = Vec::new();
         let mut paragraph_id: u64 = 0;
         let mut prev_para_start: Option<usize> = None;
@@ -106,13 +111,11 @@ impl LineSnapshotBuilder {
                 (None, Vec::new())
             };
 
-            // Issue #810 评论 问题1: cluster 数据流重构——canonical 排版现在直接产出
-            // cluster 几何（engine.rs 中 cluster 提取始终执行），"有可见正文但 clusters
-            // 为空"不再是合法 canonical 状态。此处只作为 invariant failure 记录 error
-            // 级别诊断，不再 skip line——半残 snapshot 不能继续进入动画事务，但也不应
-            // 静默跳过让上游漏掉该行。不伪造 cluster：clusters 保持为空，让上游知道
-            // 这是 invariant failure。由于 canonical 排版保证产出 cluster，此分支
-            // 理论上不应触发；若触发说明 engine.rs 排版路径有 bug 需要排查。
+            // Issue #810 评论 5932233052 问题2: cluster 数据流重构——canonical 排版现在
+            // 直接产出 cluster 几何（engine.rs 中 cluster 提取始终执行），"有可见正文但
+            // clusters 为空"不再是合法 canonical 状态。此处返回 Err，不再产出带空 cluster
+            // 的半残 snapshot 往下传。由于 canonical 排版保证产出 cluster，此分支理论上
+            // 不应触发；若触发说明 engine.rs 排版路径有 bug 需要排查。
             if clusters.is_empty()
                 && line
                     .para_text
@@ -126,8 +129,8 @@ impl LineSnapshotBuilder {
                         "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} \
                          image={} — clusters empty and line contains visible chars, \
                          this is an invariant failure: canonical layout should always produce \
-                         clusters (Issue #810). Building PreparedLineSnapshot with empty clusters \
-                         to surface the failure upstream, not skipping line.",
+                         clusters (Issue #810). Returning Err to surface the failure upstream, \
+                         not producing a half-built snapshot.",
                         revision.0,
                         line.para_start,
                         line.qtextline_idx,
@@ -136,8 +139,15 @@ impl LineSnapshotBuilder {
                         image.is_some(),
                     ),
                 );
-                // Issue #810: 不 skip line，继续构建 PreparedLineSnapshot（用空 clusters），
-                // 让上游知道这是 invariant failure，而不是静默漏掉该行。
+                return Err(format!(
+                    "canonical_line_clusters_empty_invariant_failure: \
+                     revision={} para_start={} qtextline_idx={} byte_start={} byte_end={}",
+                    revision.0,
+                    line.para_start,
+                    line.qtextline_idx,
+                    line.byte_start,
+                    line.byte_end,
+                ));
             }
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
@@ -166,7 +176,7 @@ impl LineSnapshotBuilder {
             visual_line_ordinal += 1;
         }
 
-        EditorLayoutSnapshot {
+        Ok(EditorLayoutSnapshot {
             revision,
             line_snapshots,
             caret_rect: None,
@@ -175,9 +185,13 @@ impl LineSnapshotBuilder {
             // Issue #736 评论 5777408243 问题1: canonical snapshot 必须携带正文事实，
             // 不再允许"有全文 byte offset 但 virtual_text 为空"的半截快照。
             virtual_text: virtual_text.to_owned(),
-        }
+        })
     }
 
+    /// Issue #810 评论 5932233052 问题2: 返回
+    /// `Result<(EditorLayoutSnapshot, EditorLayoutSnapshot), String>`。
+    ///
+    /// old 或 new 任一构建失败时返回 `Err`，调用方据此 fallback。
     pub fn build_old_new_from_canonical(
         old_doc: &CanonicalDocumentVisualSnapshot,
         new_doc: &CanonicalDocumentVisualSnapshot,
@@ -187,22 +201,22 @@ impl LineSnapshotBuilder {
         viewport_h: f64,
         old_text: &str,
         new_text: &str,
-    ) -> (EditorLayoutSnapshot, EditorLayoutSnapshot) {
+    ) -> Result<(EditorLayoutSnapshot, EditorLayoutSnapshot), String> {
         let old_layout = Self::build_from_canonical_document(
             old_revision,
             old_doc,
             scroll_y,
             viewport_h,
             old_text,
-        );
+        )?;
         let new_layout = Self::build_from_canonical_document(
             new_revision,
             new_doc,
             scroll_y,
             viewport_h,
             new_text,
-        );
-        (old_layout, new_layout)
+        )?;
+        Ok((old_layout, new_layout))
     }
 
     fn build_clusters_from_canonical(

@@ -366,6 +366,14 @@ pub struct SujianEditorItem {
     tick_cursor_animation: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期入口。
+    /// QML 在 onLongPressed 时调用，设置 selection_gesture_active = true。
+    #[allow(dead_code)]
+    begin_selection_gesture: qt_method!(fn(&mut self)),
+    /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期出口。
+    /// QML 在指针释放/取消时调用，委托到私有 end_selection_gesture。
+    #[allow(dead_code)]
+    end_selection_gesture_qml: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     #[allow(dead_code)]
@@ -530,6 +538,9 @@ impl Default for SujianEditorItem {
             flush_content_height: Default::default(),
             tick_cursor_animation: Default::default(),
             long_press_at: Default::default(),
+            // Issue #810 评论 5932233052 问题3: 触屏长按 selection gesture 生命周期方法。
+            begin_selection_gesture: Default::default(),
+            end_selection_gesture_qml: Default::default(),
             select_word_at: Default::default(),
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),

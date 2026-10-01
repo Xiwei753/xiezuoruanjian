@@ -570,10 +570,11 @@ impl LinuxEditorPipeline {
         // Issue #738 评论 5792244119 问题 1: 从已有 layout 提取所有行的动画视觉
         //（QImage/glyphRuns/clusters）注入到新 canonical，使 rebind 路径
         // find_clusters_in_canonical 能找到 cluster。
-        // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+        // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
         //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
         // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-        // QImage/纹理，不再为 rebind 补 cluster。inject 不覆盖已有 cluster。
+        // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），不再为 rebind 补 cluster。
+        // inject 只注入 image，不覆盖已有 cluster。
         let mut doc_snap = snapshot;
         let visuals_gen = prepared_handle
             .as_ref()
@@ -1278,44 +1279,42 @@ impl LinuxEditorPipeline {
                         .map(|_| (old_affected_start, old_affected_end)),
                 );
 
-                // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）
-                // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
-                // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
-                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出。
-                // old_doc_snapshot 用 assemble_document_visual_snapshot_from_lines 组装
-                //（clusters 初始为空），inject 仍为组装路径填充 cluster；对已有 cluster
-                // 的行 inject 不覆盖。此处同时提取 QImage 供动画纹理使用。
-                let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
+                // Issue #810 评论 5932233052 问题1: old_doc_snapshot 优先使用
+                // current_canonical_snapshot（已包含完整 clusters，由上一次编辑的
+                // 基础 canonical 排版产出）。如果 current_canonical_snapshot 为 None
+                //（首次编辑），fallback 到 assemble_document_visual_snapshot_from_lines
+                //（clusters 为空，但首次编辑没有 old 动画行需要 cluster）。
+                let mut doc_snap = if let Some(ref cached) = self.current_canonical_snapshot {
+                    cached.clone()
+                } else {
+                    layout::assemble_document_visual_snapshot_from_lines(
+                        handle.lines,
+                        0,
+                        ctx.font_pixel_size,
+                        &ctx.font_family,
+                        ctx.line_spacing,
+                        ctx.text_indent,
+                        ctx.padding,
+                        ctx.bounding_width,
+                        ctx.dpr,
+                    )
+                };
+
+                // 从 old prepared layout 只提取 QImage（raster），注入到 old_doc_snapshot。
+                // Issue #810 评论 5932233052 问题1: cluster 已由 current_canonical_snapshot
+                // 自带（基础 canonical 排版产出），不需要再提取/注入 cluster。
+                // prepare_animation_visuals_from_layout 现在返回 AnimationRasterVisual
+                //（只携带 QImage + 稳定行身份），inject 只注入 image。
+                let old_raster_visuals = layout::prepare_animation_visuals_from_layout(
                     handle,
                     &diff.old_raster_line_ids,
                     ctx.dpr,
                     &ctx.text_color,
                 );
-
-                // 构建最小化的 old_doc_snapshot，仅用于 cursor_rect 计算
-                // Issue #658 评论 5625515748 问题 2: 不再调 prepare_document_visual_snapshot
-                // 重新排版整篇 old text（false 只跳过 QImage/glyph 生成，不跳过
-                // QTextLayout beginLayout/createLine）。改为从已有 VisualLine 组装
-                // CanonicalDocumentVisualSnapshot（只填 Rust 几何数据，不调 QTextLayout），
-                // 再由 inject_animation_visuals_into_snapshot 注入动画视觉。
-                let mut doc_snap = layout::assemble_document_visual_snapshot_from_lines(
-                    handle.lines,
-                    0,
-                    ctx.font_pixel_size,
-                    &ctx.font_family,
-                    ctx.line_spacing,
-                    ctx.text_indent,
-                    ctx.padding,
-                    ctx.bounding_width,
-                    ctx.dpr,
-                );
-
-                // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
-                // （QImage/clusters）注入到 old_doc_snapshot，使动画纹理可用。
                 // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
                 let _ = layout::inject_animation_visuals_into_snapshot(
                     &mut doc_snap,
-                    old_line_snapshots,
+                    old_raster_visuals,
                 );
 
                 // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
@@ -1394,29 +1393,24 @@ impl LinuxEditorPipeline {
                 );
 
                 // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
-                // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
-                // 用 new VisualLine 的 x/y 生成 reflow_move 终点。
+                // 只是 x/y 文档位置变化的行。复用 old 行已有 image，用 new VisualLine 的 x/y
+                // 生成 reflow_move 终点。
                 //
                 // 修复点 1 (Issue #658 评论 5627327573): 之前只把旧纹理改 byte range 后
                 // 注入 new_doc_snapshot，old snapshot 这一侧没有 image/clusters，导致
                 // animation_coordinator 生成 reflow_move 时 old 侧
                 // source_rect_for_byte_range 返回 None，reflow_move 建不出来。
                 //
-                // 改法：对每个 reusable_move_pair(old_idx, new_idx) 只从 old prepared layout
-                // 提取一次视觉资源（prepare_animation_visuals_from_layout），然后分成两份：
-                // - 第一份：保持原始 byte range / old VisualLine 几何（不改 document_byte_start/end、
-                //   不改 cluster byte range），注入 doc_snap（old snapshot）。
-                // - 第二份：复用同一张 QImage 和同一套 cluster source rect，只把 document byte range
-                //   映射到 new（document_byte_start=new_line.byte_start, document_byte_end=new_line.byte_end，
-                //   cluster 按 byte_delta 偏移），注入 new_doc_snapshot。
-                // QImage clone 是浅拷贝（引用计数），不会重画。完成后 old/new 两边都有 source rect。
-                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出。
-                // 此处仍需提取 QImage 供 reflow_move 动画纹理复用；cluster 对 old snapshot
-                //（assemble 路径，clusters 为空）由 inject 填充，对 new snapshot
-                //（已有 cluster）inject 不覆盖。
+                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出。
+                // old snapshot（doc_snap）来自 current_canonical_snapshot，已自带完整 clusters；
+                // new snapshot（new_doc_snapshot）由基础排版产出，也已自带完整 clusters。
+                // 此处只需提取 QImage 供 reflow_move 动画纹理复用，inject 只注入 image，
+                // 不覆盖已有 cluster。reflow_move 直接从 old/new snapshot 的已有 cluster
+                // source rect 构建，不需要从 anim_line 携带 cluster。
+                // QImage clone 是浅拷贝（引用计数），不会重画。
                 if !diff.reusable_move_pairs.is_empty() {
-                    let mut old_move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
-                    let mut move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
+                    let mut old_move_visuals: Vec<layout::AnimationRasterVisual> = Vec::new();
+                    let mut move_visuals: Vec<layout::AnimationRasterVisual> = Vec::new();
                     for &(old_idx, new_idx) in &diff.reusable_move_pairs {
                         if old_idx >= handle.lines.len()
                             || new_idx >= new_doc_snapshot.visual_lines.len()
@@ -1430,30 +1424,21 @@ impl LinuxEditorPipeline {
                             &ctx.text_color,
                         );
                         if let Some(snap) = old_snaps.into_iter().next() {
-                            // 第一份：保持原始 old byte range，注入 old snapshot (doc_snap)
+                            // 第一份：保持原始 old 行身份，注入 old snapshot (doc_snap) 的 image
                             old_move_visuals.push(snap.clone());
 
-                            // 第二份：复用同一张 QImage 和 cluster source rect，
-                            // 只把 document byte range 映射到 new 行
-                            let new_line = &new_doc_snapshot.visual_lines[new_idx];
-                            let byte_delta: isize =
-                                new_line.byte_start as isize - snap.document_byte_start as isize;
-                            let mut new_snap = snap.clone();
-                            new_snap.document_byte_start = new_line.byte_start;
-                            new_snap.document_byte_end = new_line.byte_end;
-                            // Issue #785 评论 5858151780: reusable move 的 new_snap 必须把稳定行身份
-                            // 一起切到 new layout，否则 inject 仍按旧段落起点 + 旧 qtextline_idx 匹配，
+                            // 第二份：复用同一张 QImage，行身份切到 new layout，
+                            // 注入 new snapshot 的 image。
+                            // Issue #785 评论 5858151780: reusable move 的行身份必须切到
+                            // new layout，否则 inject 仍按旧段落起点 + 旧 qtextline_idx 匹配，
                             // 跨段落位移时会掉进旧身份 fallback 或命中错误的新行。
-                            new_snap.paragraph_document_byte_start = new_line.para_start;
-                            new_snap.qtextline_idx = new_line.qtextline_idx;
-                            for cluster in &mut new_snap.clusters {
-                                cluster.document_byte_start = cluster
-                                    .document_byte_start
-                                    .saturating_add_signed(byte_delta);
-                                cluster.document_byte_end =
-                                    cluster.document_byte_end.saturating_add_signed(byte_delta);
-                            }
-                            move_visuals.push(new_snap);
+                            // cluster 已由基础排版产出，byte range 正确，不需要偏移。
+                            let new_line = &new_doc_snapshot.visual_lines[new_idx];
+                            move_visuals.push(layout::AnimationRasterVisual {
+                                image: snap.image.clone(),
+                                paragraph_document_byte_start: new_line.para_start,
+                                qtextline_idx: new_line.qtextline_idx,
+                            });
                         }
                     }
                     if !old_move_visuals.is_empty() {
@@ -1554,19 +1539,54 @@ impl LinuxEditorPipeline {
             let old_revision = self.layout_revision;
             let new_revision = LayoutRevision::next();
 
-            let (old_snap, new_snap) = LineSnapshotBuilder::build_old_new_from_canonical(
-                &old_doc_snapshot,
-                &new_doc_snapshot,
-                old_revision,
-                new_revision,
-                ctx.scroll_y,
-                ctx.viewport_height,
-                // Issue #736 评论 5777408243 问题1: cluster 的 document byte range
-                // 和 snapshot 的 virtual_text 必须属于同一 revision，否则
-                // animation_coordinator 取 cluster 文本会得到空串，InsertReveal 全被跳过。
-                &motion.old_text,
-                &motion.new_text,
-            );
+            let (old_snap, new_snap) =
+                match LineSnapshotBuilder::build_old_new_from_canonical(
+                    &old_doc_snapshot,
+                    &new_doc_snapshot,
+                    old_revision,
+                    new_revision,
+                    ctx.scroll_y,
+                    ctx.viewport_height,
+                    // Issue #736 评论 5777408243 问题1: cluster 的 document byte range
+                    // 和 snapshot 的 virtual_text 必须属于同一 revision，否则
+                    // animation_coordinator 取 cluster 文本会得到空串，InsertReveal 全被跳过。
+                    &motion.old_text,
+                    &motion.new_text,
+                ) {
+                    Ok(pair) => pair,
+                    Err(err) => {
+                        // Issue #810 评论 5932233052 问题2: build_old_new_from_canonical 返回 Err
+                        // 表示 canonical 排版有 invariant failure（可见正文 clusters 为空）。
+                        // 记录 error 日志并 fallback 到空 snapshot，跳过本次动画事务。
+                        // 不 panic、不伪造 cluster。
+                        crate::backend::app_backend::debug_error_static(
+                            "pipeline",
+                            "build_old_new_from_canonical_invariant_failure",
+                            &format!(
+                                "{} — falling back to empty snapshots, skipping animation \
+                                 for this edit transaction (Issue #810)",
+                                err
+                            ),
+                        );
+                        let empty_old = EditorLayoutSnapshot {
+                            revision: old_revision,
+                            line_snapshots: Vec::new(),
+                            caret_rect: None,
+                            caret_rect_doc: None,
+                            caret_affinity: layout::CaretAffinity::Downstream,
+                            virtual_text: motion.old_text.clone(),
+                        };
+                        let empty_new = EditorLayoutSnapshot {
+                            revision: new_revision,
+                            line_snapshots: Vec::new(),
+                            caret_rect: None,
+                            caret_rect_doc: None,
+                            caret_affinity: layout::CaretAffinity::Downstream,
+                            virtual_text: motion.new_text.clone(),
+                        };
+                        (empty_old, empty_new)
+                    }
+                };
 
             // Issue #738 评论 5787277777: 在 new_doc_snapshot 已完成、创建本次新事务之前，
             // 先把所有旧活动事务从"上一份 canonical 几何"重绑到这份新 canonical，
@@ -1788,7 +1808,7 @@ pub(crate) enum AnimationVisualsFailedReason {
 /// InsertReveal 构造，不创建 units=0 的伪动画事务。
 fn inject_new_animation_visuals_with_diagnostics(
     new_doc_snapshot: &mut layout::CanonicalDocumentVisualSnapshot,
-    new_line_snapshots: Vec<layout::CanonicalLineSnapshot>,
+    new_line_snapshots: Vec<layout::AnimationRasterVisual>,
     inserted_range: Option<Utf8ByteRange>,
 ) -> AnimationVisualsInjectStatus {
     let mut checked_line_count = 0usize;
@@ -1804,6 +1824,9 @@ fn inject_new_animation_visuals_with_diagnostics(
 
     // 修改 3: 在 prepare 返回后、inject 之前，针对 inserted_range 检查
     // new_line_snapshots 中是否有对应行、clusters 是否非空。
+    // Issue #810 评论 5932233052 问题1: AnimationRasterVisual 不携带 clusters，
+    // clusters 是否非空改为直接读回 new_doc_snapshot 中该行的 clusters
+    //（基础 canonical 排版产出）。
     if let Some(range) = inserted_range {
         let ins_start = range.start().value();
         let ins_end = range.end().value();
@@ -1856,46 +1879,55 @@ fn inject_new_animation_visuals_with_diagnostics(
                             ),
                         );
                     }
-                    Some(s) if s.clusters.is_empty() => {
-                        clusters_empty_count += 1;
-                        failed_lines.push(AnimationVisualsFailedLine {
-                            visual_line_idx: i,
-                            para_start: vl.para_start,
-                            qtextline_idx: vl.qtextline_idx,
-                            byte_start: vl.byte_start,
-                            byte_end: vl.byte_end,
-                            reason: AnimationVisualsFailedReason::ClustersEmpty,
-                        });
-                        crate::backend::app_backend::debug_warn_static(
-                            "pipeline",
-                            "prepare_animation_visuals_clusters_empty_for_inserted_line",
-                            &format!(
-                                "inserted_range=[{}..{}) visual_line_idx={} \
-                                 para_start={} qtextline_idx={} byte_start={} \
-                                 byte_end={} — prepare returned snapshot but clusters \
-                                 empty, animation visuals extraction incomplete, \
-                                 this line's InsertReveal will be skipped",
-                                ins_start,
-                                ins_end,
+                    Some(_) => {
+                        // Issue #810 评论 5932233052 问题1: cluster 由基础 canonical 排版
+                        // 直接产出，AnimationRasterVisual 不携带 clusters。
+                        // 直接读回 new_doc_snapshot 中该行的 clusters 判断是否非空。
+                        let has_clusters = canonical_line_has_clusters(
+                            new_doc_snapshot,
+                            vl.para_start,
+                            vl.qtextline_idx,
+                        );
+                        if !has_clusters {
+                            clusters_empty_count += 1;
+                            failed_lines.push(AnimationVisualsFailedLine {
+                                visual_line_idx: i,
+                                para_start: vl.para_start,
+                                qtextline_idx: vl.qtextline_idx,
+                                byte_start: vl.byte_start,
+                                byte_end: vl.byte_end,
+                                reason: AnimationVisualsFailedReason::ClustersEmpty,
+                            });
+                            crate::backend::app_backend::debug_warn_static(
+                                "pipeline",
+                                "prepare_animation_visuals_clusters_empty_for_inserted_line",
+                                &format!(
+                                    "inserted_range=[{}..{}) visual_line_idx={} \
+                                     para_start={} qtextline_idx={} byte_start={} \
+                                     byte_end={} — canonical line clusters empty, \
+                                     animation visuals incomplete, \
+                                     this line's InsertReveal will be skipped",
+                                    ins_start,
+                                    ins_end,
+                                    i,
+                                    vl.para_start,
+                                    vl.qtextline_idx,
+                                    vl.byte_start,
+                                    vl.byte_end,
+                                ),
+                            );
+                        } else {
+                            ok_count += 1;
+                            // Issue #808 评论 5918236360 问题1: 记录 prepare 成功且
+                            // clusters 非空的行身份，inject 后用于检测 inject miss。
+                            prepared_ok_lines.push((
                                 i,
                                 vl.para_start,
                                 vl.qtextline_idx,
                                 vl.byte_start,
                                 vl.byte_end,
-                            ),
-                        );
-                    }
-                    Some(_) => {
-                        ok_count += 1;
-                        // Issue #808 评论 5918236360 问题1: 记录 prepare 成功且
-                        // clusters 非空的行身份，inject 后用于检测 inject miss。
-                        prepared_ok_lines.push((
-                            i,
-                            vl.para_start,
-                            vl.qtextline_idx,
-                            vl.byte_start,
-                            vl.byte_end,
-                        ));
+                            ));
+                        }
                     }
                 }
             }
