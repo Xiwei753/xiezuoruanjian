@@ -41,7 +41,6 @@ jobs:
             rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel \
             qt6-qtbase-devel \
             qt6-qtdeclarative-devel \
-            qt6-qtquickcontrols2-devel \
             qt6-qttools-devel
 
       - name: Cache Rust artifacts

@@ -12,7 +12,7 @@
 # 依赖 (Fedora/RHEL):
 #   sudo dnf install rpm-build rpmdevtools \
 #       qt6-qtbase-devel qt6-qtdeclarative-devel \
-#       qt6-qtquickcontrols2-devel qt6-qttools-devel \
+#       qt6-qttools-devel \
 #       rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel
 #
 set -euo pipefail
@@ -45,7 +45,7 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
     echo "    sudo dnf install rpm-build rpmdevtools" >&2
     echo "  构建依赖:" >&2
     echo "    sudo dnf install qt6-qtbase-devel qt6-qtdeclarative-devel \\" >&2
-    echo "        qt6-qtquickcontrols2-devel qt6-qttools-devel \\" >&2
+    echo "        qt6-qttools-devel \\" >&2
     echo "        rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel" >&2
     exit 1
 fi

@@ -17,8 +17,9 @@ Source0:        %{name}-%{version}.tar.gz
 
 # 构建依赖：Qt 6.7+ 开发包 + Rust 工具链 + 基础构建工具
 BuildRequires:  qt6-qtbase-devel >= 6.7
+# QtQuick/Controls 与 QtQuick.Controls.Material 由 qt6-qtdeclarative 提供，
+# Fedora 没有独立的 qt6-qtquickcontrols2(-devel) 包，不要写这条。
 BuildRequires:  qt6-qtdeclarative-devel >= 6.7
-BuildRequires:  qt6-qtquickcontrols2-devel >= 6.7
 BuildRequires:  qt6-qttools-devel
 BuildRequires:  rust
 BuildRequires:  cargo
@@ -31,7 +32,6 @@ BuildRequires:  pkgconf-pkg-config
 # 运行时依赖：系统 Qt 6.7+ 运行库
 Requires:       qt6-qtbase >= 6.7
 Requires:       qt6-qtdeclarative >= 6.7
-Requires:       qt6-qtquickcontrols2 >= 6.7
 # Issue #729 评论 5762596831 第 1 部分：收口到原生 Wayland 运行环境
 # qt6-qtwayland 提供 Wayland QPA 插件，避免回退到 xcb/XWayland；
 # fcitx5-qt6 提供 fcitx5 Qt6 输入法插件，供中文输入法在 Wayland 下工作。

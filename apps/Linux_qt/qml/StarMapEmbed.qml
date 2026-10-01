@@ -84,6 +84,61 @@ Item {
     Component.onCompleted: {
         if (childSceneInViewport)
             childSceneActivated = true
+        _syncChildScene()
+    }
+
+    // ---------------------------------------------------------------------------
+    // 递归 child Scene 的输入（原来写在静态 Component 里，现在改成运行时构造参数）。
+    // dt / starmapBackendRef / rootStarmapId 在一次运行内由 Canvas 恒定传入；
+    // pathSegments / pathKey 只依赖 parentPathSegments（每个 Canvas 恒定）
+    // 与 instanceId，所以 childScenePathKey 就是子 Scene 的身份标识。
+    // ---------------------------------------------------------------------------
+    readonly property bool childSceneWanted:
+        childSceneActivated && targetStarmapId.length > 0 && rootStarmapId.length > 0
+    readonly property var childScenePathSegments: parentPathSegments.concat([
+        { type: "enterEmbed", instanceId: instanceId, nodeId: null }
+    ])
+    readonly property string childScenePathKey: parentPathKey + "/embed_" + instanceId
+
+    // setSource 是命令式的，需要一个内部状态避免重复请求同一份 child Scene。
+    property bool _childSceneRequested: false
+
+    // Issue #805 评论 5914170620：Embed 不得静态引用 StarMapScene 类型。
+    // StarMapScene → StarMapCanvas → StarMapEmbed 已是一条静态编译边，
+    // Embed 再静态引用 StarMapScene 就构成编译期环 Scene → Canvas → Embed → Scene，
+    // Qt type loader 会主线程与 QQmlThread 互等死锁，整个 QML 树
+    // （含 main.qml 的根 ApplicationWindow）永远停在 Loading，进程只剩空事件循环。
+    // 递归边因此必须落到运行时按 URL 解析。
+    function _syncChildScene() {
+        if (!childSceneWanted) {
+            _childSceneRequested = false
+            childSceneLoader.active = false
+            return
+        }
+        if (_childSceneRequested)
+            return
+        _childSceneRequested = true
+        childSceneLoader.active = true
+        // setSource 带 initialProperties：一次性满足 StarMapScene 的 required
+        // property dt，避免「先建空对象再补值」触发
+        // Required property 'dt' was not initialized。
+        childSceneLoader.setSource(Qt.resolvedUrl("StarMapScene.qml"), {
+            "dt": dt,
+            "starmapBackendRef": starmapBackendRef,
+            "rootStarmapId": rootStarmapId,
+            "pathSegments": childScenePathSegments,
+            "pathKey": childScenePathKey
+        })
+    }
+    onChildSceneWantedChanged: _syncChildScene()
+    // Repeater 复用 delegate 时 instanceId 可能变；身份变了子 Scene 必须重建。
+    // 正在异步加载中也一样重发，避免用旧 pathKey 建出子 Scene。
+    onChildScenePathKeyChanged: {
+        if (!_childSceneRequested)
+            return
+        _childSceneRequested = false
+        childSceneLoader.active = false
+        _syncChildScene()
     }
 
     // Issue #805 评论 5907045450 第 3 部分：chrome 命中区域高度 + 边框 hit slop。
@@ -157,6 +212,7 @@ Item {
             color: "transparent"
 
             AppText {
+                dt: root.dt
                 anchors.fill: parent
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
@@ -457,35 +513,22 @@ Item {
                 anchors.fill: parent
                 // 只在该 Embed 真正进入父 Scene 视口后才创建递归 child Scene。
                 // asynchronous 避免一帧里同步构造多层 QML 对象树把 GUI 线程堵死。
-                active: root.childSceneActivated
-                        && root.targetStarmapId.length > 0
-                        && root.rootStarmapId.length > 0
+                // active / source 都由 root._syncChildScene() 命令式驱动：
+                // source 必须是运行时 URL，静态 sourceComponent 会把
+                // StarMapScene 变成 Embed 的编译期类型依赖，从而形成环。
+                active: false
                 asynchronous: true
-                sourceComponent: starmapSceneComponent
             }
-        }
-    }
-
-    // Issue #805 评论 5907045450 第 2 部分：子 StarMapScene 组件。
-    Component {
-        id: starmapSceneComponent
-        StarMapScene {
-            dt: root.dt
-            starmapBackendRef: root.starmapBackendRef
-            rootStarmapId: root.rootStarmapId
-            pathSegments: root.parentPathSegments.concat([
-                { type: "enterEmbed", instanceId: root.instanceId, nodeId: null }
-            ])
-            // Issue #805 评论 5908703621 问题 1：child Scene 的 pathKey 不能只写
-            // root.instanceId，要用父路径继续拼，保证全局唯一且体现层级。
-            pathKey: root.parentPathKey + "/embed_" + root.instanceId
 
             // Issue #805 评论 5908703621 问题 5：child Scene 的 editNodeRequested
             // 继续向父 Scene / Workspace 冒泡。已带正确的 owner 上下文，原样转发。
             // Issue #805 评论 5912394108：ownerScene 一并原样转发，保持指向真正
             // 拥有该节点的子 Scene，不被 Embed / 父 Scene 替换。
-            onEditNodeRequested: function(ownerScene, ownerStarmapId, ownerPathKey, node) {
-                root.editNodeRequested(ownerScene, ownerStarmapId, ownerPathKey, node)
+            Connections {
+                target: childSceneLoader.item
+                function onEditNodeRequested(ownerScene, ownerStarmapId, ownerPathKey, node) {
+                    root.editNodeRequested(ownerScene, ownerStarmapId, ownerPathKey, node)
+                }
             }
         }
     }

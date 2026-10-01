@@ -12,7 +12,6 @@ CI 侧不受本文影响：`.github/workflows/` 里的 `Linux Qt Clippy` job 跑
 sudo dnf install -y \
   qt6-qtbase-devel \
   qt6-qtdeclarative-devel \
-  qt6-qtquickcontrols2-devel \
   qt6-qttools-devel \
   zlib-devel \
   gcc-c++ \

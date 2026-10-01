@@ -184,7 +184,6 @@ jobs:
             gcc-c++ pkgconf-pkg-config openssl-devel \
             qt6-qtbase-devel \
             qt6-qtdeclarative-devel \
-            qt6-qtquickcontrols2-devel \
             qt6-qttools-devel
 
       - name: Checkout repository

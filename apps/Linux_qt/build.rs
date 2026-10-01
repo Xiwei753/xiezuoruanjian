@@ -278,7 +278,7 @@ fn select_qt6_build_info() -> Qt6BuildInfo {
 
     panic!(
         "Qt 6.7+ development files were not found. QSGTextNode public API requires Qt 6.7+. \
-         Install qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel \
+         Install qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qttools-devel \
          and gcc-c++ on Fedora (Fedora 40+ provides Qt 6.7+)."
     );
 }

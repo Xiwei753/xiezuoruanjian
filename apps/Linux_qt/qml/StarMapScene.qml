@@ -107,6 +107,7 @@ Item {
 
     // ── 错误态 ──
     AppText {
+        dt: scene.dt
         anchors.centerIn: parent
         visible: scene.resolveError.length > 0
         text: scene.resolveError
@@ -118,6 +119,7 @@ Item {
 
     // ── 等待解析 ──
     AppText {
+        dt: scene.dt
         anchors.centerIn: parent
         visible: scene.rootStarmapId !== "" && scene.finalStarmapId === "" && scene.resolveError === ""
         text: qsTr("加载中…")
