@@ -27,10 +27,12 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use super::dirs::{crash_diagnostics_dir, startup_diagnostics_dir};
+use super::dirs::{crash_diagnostics_dir, startup_diagnostics_dir, sujian_home_dir};
 
 /// 当前启动 session 的日志路径，供 panic hook 访问。
 static CURRENT_SESSION_LOG: OnceLock<PathBuf> = OnceLock::new();
+
+const SUPPORT_README: &str = "素笺写作 Linux 支持目录说明\n\n如果软件打不开，不用一个个翻文件。按下面顺序找：\n\n1. diagnostics/startup/latest.log\n   最近一次启动记录。软件打不开时，优先把这个文件发给开发者。\n   如果程序还卡在后台没有退出，这个文件可能还没有写完。\n\n2. diagnostics/startup/last_failed.log\n   最近一次“已经确认启动失败”的记录。这个文件存在时，和 latest.log 一起发。\n\n3. diagnostics/crash/\n   崩溃记录。里面如果有和刚才启动时间接近的文件，也一起发。\n\n其他目录：\n- diagnostics/startup/history/：过去每一次启动的历史记录，一般不用自己翻。\n- diagnostics/runtime/：软件成功运行以后产生的运行日志。\n- diagnostics/exports/：在软件里点“导出诊断”后生成的诊断包。\n- diagnostics/startup/last_failed.pending：程序内部临时标记，不用管，也不用发。\n\n最简单的做法：\n软件打不开 -> 先发 diagnostics/startup/latest.log；\n如果有 last_failed.log 或刚生成的 crash 文件，再一起发。\n";
 
 /// 启动诊断句柄。持有本次 session 的日志文件路径。
 ///
@@ -71,6 +73,7 @@ pub fn begin_startup_diagnostics(
     let history_dir = startup_dir.join("history");
     let _ = std::fs::create_dir_all(&history_dir);
     let _ = std::fs::create_dir_all(crash_diagnostics_dir());
+    write_support_readme();
 
     let latest = startup_dir.join("latest.log");
 
@@ -167,6 +170,12 @@ fn append_and_flush(path: &PathBuf, line: &str) {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
     }
+}
+
+fn write_support_readme() {
+    let root = sujian_home_dir();
+    let _ = std::fs::create_dir_all(&root);
+    let _ = std::fs::write(root.join("说明.txt"), SUPPORT_README);
 }
 
 /// 把当前 session 日志复制到 `last_failed.log`，记录最近一次失败启动。
