@@ -175,6 +175,11 @@ export struct StarMapScene {
   private moveEmbedStartY: number = 0
   private pinchActive: boolean = false
   private panActive: boolean = false
+  private pinchBaseScale: number = 1
+  private pinchBaseOffsetX: number = 0
+  private pinchBaseOffsetY: number = 0
+  private pinchAnchorCanvasX: number = 0
+  private pinchAnchorCanvasY: number = 0
 
   // ─── Canvas 上下文 ───
   private canvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
@@ -191,7 +196,10 @@ export struct StarMapScene {
 
   aboutToDisappear() {
     this.canvasActive = false
-    this.gestureTracker.reset()
+    // 只 reset 属于当前 Scene 的手势状态，不要 reset 别层正在进行的手势
+    if (this.gestureTracker.isOwnedByScene(this.scenePath)) {
+      this.gestureTracker.reset()
+    }
     this.gestureMode = 'idle'
     this.showNodeMenu = false
     this.showCreateMenu = false
@@ -695,6 +703,7 @@ export struct StarMapScene {
               this.previewLineTo = point
             })
             .onActionUpdate((event: GestureEvent) => {
+              if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
               const state = this.gestureTracker.getState()
               if (state.mode === 'connect') {
                 this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
@@ -702,6 +711,7 @@ export struct StarMapScene {
               }
             })
             .onActionEnd(() => {
+              if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
               const state = this.gestureTracker.getState()
               if (state.mode === 'connect') {
                 const screenX = this.previewLineTo.x
@@ -709,7 +719,11 @@ export struct StarMapScene {
                 const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
                 const targetItemId = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
                 if (targetItemId !== null && targetItemId.objectId !== node.id) {
-                  void this.createEdge(node.id, targetItemId.objectId)
+                  if (targetItemId.objectKind === 'embedInnerContent') {
+                    // 父 Scene 不创建 edge，留给 child Scene 处理
+                  } else {
+                    void this.createEdge(node.id, targetItemId.objectId)
+                  }
                 }
               }
               this.gestureTracker.reset()
@@ -741,6 +755,7 @@ export struct StarMapScene {
             }
           })
           .onActionUpdate((event: GestureEvent) => {
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveNode' && state.activeItemId === node.id) {
               const newDx = this.moveNodeStartX + event.offsetX / this.zoomScale
@@ -755,6 +770,7 @@ export struct StarMapScene {
             }
           })
           .onActionEnd(() => {
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveNode' && state.activeItemId === node.id) {
               void this.saveNodePosition(node.id)
@@ -777,7 +793,7 @@ export struct StarMapScene {
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
     Column() {
-      // ── Embed title 条：负责选中、菜单、连线、移动 ──
+      // ── Embed title 条 ──
       Row() {
         Text(embed.label ?? embed.targetStarmapId)
           .fontSize(14 * this.zoomScale)
@@ -790,121 +806,16 @@ export struct StarMapScene {
       .padding({ left: 8 * this.zoomScale, right: 8 * this.zoomScale })
       .justifyContent(FlexAlign.Start)
       .alignItems(VerticalAlign.Center)
-      .gesture(
-        GestureGroup(GestureMode.Exclusive,
-          // 单击 → 选中 Embed
-          TapGesture({ count: 1 })
-            .onAction(() => {
-              this.selectedNodeId = embed.instanceId
-              this.onSelectItem(this.scenePath, embed.instanceId)
-            }),
-          // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
-          GestureGroup(GestureMode.Sequence,
-            LongPressGesture({ repeat: false, duration: 500 })
-              .onAction((event: GestureEvent) => {
-                const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
-                this.gestureTracker.beginNodeMenu(this.scenePath, embed.instanceId, point.x, point.y)
-                this.gestureMode = 'nodeMenu'
-                this.showNodeMenu = true
-                this.nodeMenuNodeId = embed.instanceId
-              }),
-            PanGesture()
-              .onActionStart((event: GestureEvent) => {
-                const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
-                this.gestureTracker.beginConnect(this.scenePath, embed.instanceId, point.x, point.y)
-                this.previewCanvasReady = false
-                this.gestureMode = 'connect'
-                this.showNodeMenu = false
-                const ln = this.getPlatformLayoutNode(embed.instanceId)
-                if (ln) {
-                  this.previewLineFrom = {
-                    x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
-                    y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
-                  }
-                }
-                this.previewLineTo = point
-              })
-              .onActionUpdate((event: GestureEvent) => {
-                const state = this.gestureTracker.getState()
-                if (state.mode === 'connect') {
-                  this.previewLineTo = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
-                  this.drawPreviewLine()
-                }
-              })
-              .onActionEnd(() => {
-                const state = this.gestureTracker.getState()
-                if (state.mode === 'connect') {
-                  const screenX = this.previewLineTo.x
-                  const screenY = this.previewLineTo.y
-                  const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
-                  const targetItemId = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
-                  if (targetItemId !== null && targetItemId.objectId !== embed.instanceId) {
-                    void this.createEdge(embed.instanceId, targetItemId.objectId)
-                  }
-                }
-                this.gestureTracker.reset()
-                this.deactivatePreviewCanvas()
-                this.gestureMode = 'idle'
-                this.showNodeMenu = false
-                this.nodeMenuNodeId = ''
-              })
-          ),
-          // 没有长按成功时的普通滑动（移动 Embed 或画布拖动）
-          PanGesture()
-            .onActionStart((event: GestureEvent) => {
-              const state = this.gestureTracker.getState()
-              if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
-                this.motionPauseTracker.pauseNode(embed.instanceId)
-                const ln = this.getPlatformLayoutNode(embed.instanceId)
-                if (ln) {
-                  this.moveEmbedStartX = ln.x
-                  this.moveEmbedStartY = ln.y
-                }
-              } else {
-                if (this.pinchActive) return
-                this.panActive = true
-                const point = this.gestureScreenPoint(event, 0, 0)
-                this.gestureTracker.beginPanCanvas(this.scenePath, point.x, point.y)
-                this.gestureMode = 'panCanvas'
-                this.panBaseX = this.offsetX
-                this.panBaseY = this.offsetY
-              }
-            })
-            .onActionUpdate((event: GestureEvent) => {
-              const state = this.gestureTracker.getState()
-              if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
-                const newDx = this.moveEmbedStartX + event.offsetX / this.zoomScale
-                const newDy = this.moveEmbedStartY + event.offsetY / this.zoomScale
-                const positions = new Map<string, PlatformPoint>()
-                positions.set(embed.instanceId, { x: newDx, y: newDy })
-                this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
-                this.recomputeGeometry()
-              } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
-                this.offsetX = this.panBaseX + event.offsetX
-                this.offsetY = this.panBaseY + event.offsetY
-              }
-            })
-            .onActionEnd(() => {
-              const state = this.gestureTracker.getState()
-              if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
-                void this.saveEmbedPosition(embed.instanceId)
-                this.motionPauseTracker.resumeNode(embed.instanceId)
-              }
-              this.panActive = false
-              this.gestureTracker.reset()
-              this.gestureMode = 'idle'
-            })
-        )
-      )
 
       // ── Embed innerContent 区域：递归渲染子星图 ──
       // 不附加任何手势，事件穿透到 child StarMapScene
+      // scenePath 传原始路径，由 EmbedScene 生成 childScenePath（含 enterEmbed segment）
       Column() {
         StarMapEmbedScene({
           rootStarmapId: this.rootStarmapId,
-          scenePath: [...this.scenePath, { type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null }],
+          scenePath: this.scenePath,
           embed: embed,
-          sceneDepth: this.sceneDepth + 1,
+          sceneDepth: this.sceneDepth,
           themeConfig: this.themeConfig,
           motionConfig: this.motionConfig,
           motionProgress: this.motionProgress,
@@ -931,6 +842,122 @@ export struct StarMapScene {
       y: this.getEmbedScreenY(embed.instanceId)
     })
     .clip(true)
+    // 外层 Column 手势：title 和 border 区域走"选中/菜单/连线/移动"语义
+    // innerContent 区域通过 hitTestBehavior(HitTestMode.Default) 让事件穿透到 child Scene
+    .gesture(
+      GestureGroup(GestureMode.Exclusive,
+        // 单击 → 选中 Embed
+        TapGesture({ count: 1 })
+          .onAction(() => {
+            this.selectedNodeId = embed.instanceId
+            this.onSelectItem(this.scenePath, embed.instanceId)
+          }),
+        // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
+        GestureGroup(GestureMode.Sequence,
+          LongPressGesture({ repeat: false, duration: 500 })
+            .onAction((event: GestureEvent) => {
+              const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+              this.gestureTracker.beginNodeMenu(this.scenePath, embed.instanceId, point.x, point.y)
+              this.gestureMode = 'nodeMenu'
+              this.showNodeMenu = true
+              this.nodeMenuNodeId = embed.instanceId
+            }),
+          PanGesture()
+            .onActionStart((event: GestureEvent) => {
+              const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+              this.gestureTracker.beginConnect(this.scenePath, embed.instanceId, point.x, point.y)
+              this.previewCanvasReady = false
+              this.gestureMode = 'connect'
+              this.showNodeMenu = false
+              const ln = this.getPlatformLayoutNode(embed.instanceId)
+              if (ln) {
+                this.previewLineFrom = {
+                  x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
+                  y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
+                }
+              }
+              this.previewLineTo = point
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
+              const state = this.gestureTracker.getState()
+              if (state.mode === 'connect') {
+                this.previewLineTo = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+                this.drawPreviewLine()
+              }
+            })
+            .onActionEnd(() => {
+              if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
+              const state = this.gestureTracker.getState()
+              if (state.mode === 'connect') {
+                const screenX = this.previewLineTo.x
+                const screenY = this.previewLineTo.y
+                const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
+                const targetItemId = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
+                if (targetItemId !== null && targetItemId.objectId !== embed.instanceId) {
+                  if (targetItemId.objectKind === 'embedInnerContent') {
+                    // 父 Scene 不创建 edge，留给 child Scene 处理
+                  } else {
+                    void this.createEdge(embed.instanceId, targetItemId.objectId)
+                  }
+                }
+              }
+              this.gestureTracker.reset()
+              this.deactivatePreviewCanvas()
+              this.gestureMode = 'idle'
+              this.showNodeMenu = false
+              this.nodeMenuNodeId = ''
+            })
+        ),
+        // 没有长按成功时的普通滑动（移动 Embed 或画布拖动）
+        PanGesture()
+          .onActionStart((event: GestureEvent) => {
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
+              this.motionPauseTracker.pauseNode(embed.instanceId)
+              const ln = this.getPlatformLayoutNode(embed.instanceId)
+              if (ln) {
+                this.moveEmbedStartX = ln.x
+                this.moveEmbedStartY = ln.y
+              }
+            } else {
+              if (this.pinchActive) return
+              this.panActive = true
+              const point = this.gestureScreenPoint(event, 0, 0)
+              this.gestureTracker.beginPanCanvas(this.scenePath, point.x, point.y)
+              this.gestureMode = 'panCanvas'
+              this.panBaseX = this.offsetX
+              this.panBaseY = this.offsetY
+            }
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
+              const newDx = this.moveEmbedStartX + event.offsetX / this.zoomScale
+              const newDy = this.moveEmbedStartY + event.offsetY / this.zoomScale
+              const positions = new Map<string, PlatformPoint>()
+              positions.set(embed.instanceId, { x: newDx, y: newDy })
+              this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
+              this.recomputeGeometry()
+            } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
+              this.offsetX = this.panBaseX + event.offsetX
+              this.offsetY = this.panBaseY + event.offsetY
+            }
+          })
+          .onActionEnd(() => {
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
+            const state = this.gestureTracker.getState()
+            if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
+              void this.saveEmbedPosition(embed.instanceId)
+              this.motionPauseTracker.resumeNode(embed.instanceId)
+            }
+            this.panActive = false
+            this.gestureTracker.reset()
+            this.gestureMode = 'idle'
+          })
+      )
+    )
   }
 
   // ─── @Builder：节点菜单 ───
@@ -977,7 +1004,9 @@ export struct StarMapScene {
         .width('100%')
         .margin({ top: 4 })
         .onClick(() => {
-          this.gestureTracker.reset()
+          if (this.gestureTracker.isOwnedByScene(this.scenePath)) {
+            this.gestureTracker.reset()
+          }
           this.gestureMode = 'idle'
           this.showNodeMenu = false
           this.nodeMenuNodeId = ''
@@ -1217,8 +1246,45 @@ export struct StarMapScene {
     .width('100%')
     .height('100%')
     .gesture(
-      // 空白区域手势：Pan（画布拖动）+ LongPress（长按新建）
+      // 空白区域手势：Pinch（双指缩放）+ Pan（画布拖动）+ LongPress（长按新建）
       GestureGroup(GestureMode.Parallel,
+        PinchGesture()
+          .onActionStart((event: GestureEvent) => {
+            this.pinchActive = true
+            this.panActive = false
+            this.pinBaseScale = this.zoomScale
+            this.pinBaseOffsetX = this.offsetX
+            this.pinBaseOffsetY = this.offsetY
+            // 计算双指中心的画布坐标作为缩放锚点
+            if (event.fingerList && event.fingerList.length >= 2) {
+              const f0 = event.fingerList[0]
+              const f1 = event.fingerList[1]
+              if (f0 && f1) {
+                const centerX = (f0.localX + f1.localX) / 2
+                const centerY = (f0.localY + f1.localY) / 2
+                const canvasPoint = screenToCanvas(centerX, centerY, this.zoomScale, this.offsetX, this.offsetY)
+                this.pinchAnchorCanvasX = canvasPoint.x
+                this.pinchAnchorCanvasY = canvasPoint.y
+              }
+            }
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            if (!this.pinchActive) return
+            const rawScale = this.pinchBaseScale * event.scale
+            const MIN_ZOOM = 0.3
+            const MAX_ZOOM = 3.0
+            const nextScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawScale))
+            // 围绕锚点缩放：保持锚点在屏幕上的位置不变
+            // centerX = anchorCanvasX * nextScale + offsetX → offsetX = centerX - anchorCanvasX * nextScale
+            // 但我们没有 centerX（双指中心可能移动了），用 pinchBaseOffsetX 对应的屏幕中心
+            // 简化：使用组件中心作为参考点
+            this.zoomScale = nextScale
+            this.offsetX = this.pinchBaseOffsetX - this.pinchAnchorCanvasX * (nextScale - this.pinchBaseScale)
+            this.offsetY = this.pinchBaseOffsetY - this.pinchAnchorCanvasY * (nextScale - this.pinchBaseScale)
+          })
+          .onActionEnd(() => {
+            this.pinchActive = false
+          }),
         PanGesture()
           .onActionStart((event: GestureEvent) => {
             if (this.pinchActive) return
@@ -1230,6 +1296,7 @@ export struct StarMapScene {
             this.panBaseY = this.offsetY
           })
           .onActionUpdate((event: GestureEvent) => {
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             if (!this.panActive || this.pinchActive) return
             if (this.gestureMode === 'panCanvas') {
               this.offsetX = this.panBaseX + event.offsetX
@@ -1237,6 +1304,7 @@ export struct StarMapScene {
             }
           })
           .onActionEnd(() => {
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             this.panActive = false
             this.gestureTracker.reset()
             this.gestureMode = 'idle'

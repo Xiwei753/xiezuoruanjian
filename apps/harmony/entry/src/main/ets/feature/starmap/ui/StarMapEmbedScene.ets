@@ -109,6 +109,10 @@ export struct StarMapEmbedScene {
   @State isLoading: boolean = true
   /** 加载错误信息 */
   @State errorMessage: string = ''
+  /** child scene 的路径（含 enterEmbed segment，由 EmbedScene 生成一次） */
+  @State childScenePath: StarMapPathSegment[] = []
+  /** resolver 解析出的最终 starmapId（用于加载子图和传给 child StarMapScene） */
+  @State finalStarmapId: string = ''
 
   // ─── 生命周期 ───
 
@@ -123,8 +127,19 @@ export struct StarMapEmbedScene {
       this.errorMessage = 'No target starmap'
       return
     }
+    // 生成 childScenePath（由 EmbedScene 生成一次 enterEmbed segment）
+    this.childScenePath = [...this.scenePath, { type: 'enterEmbed', instanceId: this.embed.instanceId, nodeId: null }]
     try {
-      const result = await this.bridge.getStarMapGraph(this.embed.targetStarmapId)
+      // 先用 resolver 解析路径，得到 finalStarmapId
+      const resolveResult = await this.bridge.resolveStarMapPath(this.rootStarmapId, this.childScenePath)
+      if (!resolveResult.success || !resolveResult.data || !resolveResult.data.finalStarmapId) {
+        this.isLoading = false
+        this.errorMessage = '解析子星图路径失败'
+        return
+      }
+      this.finalStarmapId = resolveResult.data.finalStarmapId
+      // 用 finalStarmapId 加载子图
+      const result = await this.bridge.getStarMapGraph(this.finalStarmapId)
       if (result.success && result.data) {
         this.childGraph = result.data
       } else {
@@ -163,10 +178,11 @@ export struct StarMapEmbedScene {
       .alignItems(HorizontalAlign.Center)
     } else if (this.childGraph) {
       // 递归创建 child StarMapScene
+      // childScenePath 由 EmbedScene 生成一次 enterEmbed segment
       StarMapScene({
         rootStarmapId: this.rootStarmapId,
-        scenePath: [...this.scenePath, { type: 'enterEmbed', instanceId: this.embed.instanceId, nodeId: null }],
-        starmapId: this.embed.targetStarmapId,
+        scenePath: this.childScenePath,
+        starmapId: this.finalStarmapId,
         graph: $childGraph,
         zoomScale: $childZoomScale,
         offsetX: $childOffsetX,
