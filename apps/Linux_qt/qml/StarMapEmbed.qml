@@ -714,6 +714,12 @@ Item {
         // ── Issue #805 评论 5907045450 第 3 部分：contentViewport ──
         // 中间区域，父 Embed 不挂 TapHandler/DragHandler/MouseArea，
         // 事件直接给 child Scene。
+        //
+        // Issue #814 评论 5935346839：contentViewport 上唯一允许的 handler 是
+        // passive grab 的 PointHandler，它只观察 press 事件并记录
+        // embed_child_content_routed 边界日志，不拦截事件传递给 child Scene。
+        // 这不违反 Issue #805 "事件直接给 child Scene" 的设计约束——
+        // passive grab 不会取得 exclusive grab，事件流不受影响。
         Item {
             id: contentViewport
             anchors.left: borderLeft.right
@@ -721,6 +727,25 @@ Item {
             anchors.top: titleBar.bottom
             anchors.bottom: borderBottom.top
             clip: true
+
+            // Issue #814 评论 5935346839: embed_child_content_routed 边界日志。
+            // PointHandler 用 passive grab 观察 press，不抢事件，不影响 child Scene。
+            // 下一次点子星图内部，就能看出事件到底给了父 Embed chrome，
+            // 还是确实进入 child Scene。
+            PointHandler {
+                id: contentViewportPressObserver
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onActiveChanged: {
+                    if (active) {
+                        root.logEmbedInteraction("embed_child_content_routed", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId
+                        })
+                    }
+                }
+            }
 
             // Issue #805 评论 5907045450 第 2 部分：递归渲染子 StarMapScene。
             // childPath = parent.pathSegments + EnterEmbed(embed.instanceId)。
@@ -767,7 +792,10 @@ Item {
     // ---------------------------------------------------------------------------
     // Issue #805 评论 5908703621 问题 2：所有 PointerHandler 已移进 titleBar /
     // border 内部（parent Item 决定命中范围）。根 Item 和 contentViewport 祖先链
-    // 上不再有任何 TapHandler / DragHandler / MouseArea / PointHandler，
+    // 上不再有任何 TapHandler / DragHandler / MouseArea / exclusive-grab PointHandler，
     // 内部事件直接给 child Scene，不会被父 Embed 截走。
+    // Issue #814 评论 5935346839：contentViewport 上新增 passive-grab PointHandler
+    // （contentViewportPressObserver），只观察 press 记录 embed_child_content_routed
+    // 边界日志，不取得 exclusive grab，不影响事件传递给 child Scene。
     // ---------------------------------------------------------------------------
 }
