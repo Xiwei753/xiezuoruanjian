@@ -211,13 +211,6 @@ fn startup_mark(stage: &str, message: &str) {
     }
 }
 
-/// 标记 GUI 事件循环已就绪。
-fn startup_mark_ready() {
-    if let Some(d) = STARTUP_DIAG.get() {
-        d.mark_ready();
-    }
-}
-
 /// 标记进程退出码。
 fn startup_mark_exit(code: i32) {
     if let Some(d) = STARTUP_DIAG.get() {
@@ -487,8 +480,8 @@ fn main() {
         &effective_package_type,
     );
     startup_diag.mark("process_enter", "entered Rust main");
-    // 把句柄 move 进全局 OnceLock，之后通过 startup_mark / startup_mark_ready /
-    // startup_mark_exit 访问（包括 Qt message handler）。
+    // 把句柄 move 进全局 OnceLock，之后通过 startup_mark / startup_mark_exit
+    // 访问（包括 Qt message handler）。
     let _ = STARTUP_DIAG.set(startup_diag);
 
     // ===== Issue #729 评论 5762596831 第 1 部分：收口到原生 Wayland 运行环境 =====
@@ -675,13 +668,20 @@ fn main() {
     }
     startup_mark("qml_load_ready", "QML loaded");
 
+    // QML 成功加载不等于窗口已经显示。旧逻辑在 engine.exec() 之前就写 gui_ready，
+    // 会把“即将进入事件循环”误报成“GUI 已就绪”。改为只记录 event_loop_enter，
+    // 并让 Qt 在事件循环真正运行 750ms 后把顶层窗口 visible/exposed/geometry
+    // 直接输出到 stderr；RPM launcher 会同步收进 startup 日志。
+    app_main_cpp::install_window_state_probe();
     debug_log_static(
         "app",
         "event_loop_enter",
-        "QML engine started, entering event loop",
+        "QML loaded; entering Qt event loop, window visibility not yet confirmed",
     );
-    // GUI 事件循环已就绪：标记 gui_ready，随后进入 Qt 事件循环。
-    startup_mark_ready();
+    startup_mark(
+        "event_loop_enter",
+        "entering Qt event loop; window visibility not yet confirmed",
+    );
     engine.exec();
     // qmetaobject 0.2.10 的 QmlEngine::exec 返回 ()，Qt 事件循环正常退出按 0 处理。
     startup_mark_exit(0);
