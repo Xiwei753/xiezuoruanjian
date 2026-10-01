@@ -16,6 +16,10 @@ use crate::backend::diagnostics;
 
 cpp! {{
     #include <QCoreApplication>
+    #include <QWindow>
+    #include <QTimer>
+    #include <QScreen>
+    #include <QDebug>
     #include <QFile>
     #include <QFileInfo>
     #include <QGuiApplication>
@@ -110,6 +114,45 @@ pub fn qt_platform_name() -> String {
         return QGuiApplication::platformName();
     });
     platform_name.to_string()
+}
+
+/// 在 Qt 事件循环真正开始后延迟采样顶层窗口状态。
+///
+/// 输出走 Qt 默认 stderr，RPM launcher 会把它镜像进 startup/latest.log。
+/// 这样“QML 已加载但没有窗口”的情况能区分：窗口根本没创建、创建但不可见、
+/// 已 visible 但没有 exposed、或者窗口几何/屏幕异常。
+pub fn install_window_state_probe() {
+    cpp!(unsafe [] {
+        QTimer::singleShot(750, [] {
+            const QWindowList windows = QGuiApplication::topLevelWindows();
+            QStringList states;
+            for (int i = 0; i < windows.size(); ++i) {
+                QWindow* w = windows.at(i);
+                if (!w) {
+                    continue;
+                }
+                const QRect g = w->geometry();
+                const QString screenName =
+                    w->screen() ? w->screen()->name() : QStringLiteral("<none>");
+                states << QStringLiteral(
+                    "index=%1 visible=%2 exposed=%3 active=%4 geometry=%5,%6,%7x%8 screen=%9"
+                )
+                    .arg(i)
+                    .arg(w->isVisible() ? QStringLiteral("true") : QStringLiteral("false"))
+                    .arg(w->isExposed() ? QStringLiteral("true") : QStringLiteral("false"))
+                    .arg(w->isActive() ? QStringLiteral("true") : QStringLiteral("false"))
+                    .arg(g.x())
+                    .arg(g.y())
+                    .arg(g.width())
+                    .arg(g.height())
+                    .arg(screenName);
+            }
+            qInfo().noquote()
+                << "[SujianWindowProbe]"
+                << "topLevelCount=" << windows.size()
+                << states.join(QStringLiteral(" | "));
+        });
+    });
 }
 
 pub fn collect_system_info() -> diagnostics::SystemInfo {
