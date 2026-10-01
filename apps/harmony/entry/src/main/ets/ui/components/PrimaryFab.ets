@@ -14,9 +14,17 @@
 //
 // 摘掉 backgroundColor / backgroundBlurStyle / border / shadow 是官方硬性要求，不是洁癖：
 //   这四个属性会盖在材质层之上，材质滤镜、折射、高光、阴影就全被挡住。
-//   材质自己接管背景、边框、阴影，所以之前手写的半透明面和发丝描边全部撤掉，
-//   不再叠第二套效果。阴影是唯一例外：官方允许关掉材质阴影后换回自定义 shadow
-//   （见下面 applyShadow 那段），深色模式下的圆盘边界就靠它。
+//
+// 圆盘边界分两层处理（Issue #811）：
+//   内层 Button 只负责 ImmersiveMaterial + lightEffect（手指跟随光感），本体不画任何边。
+//   外层单独做一个「边缘层」：1vp 淡描边兜住深色静止态的最低轮廓。
+//   描边不压在 Button 的 systemMaterial 上，两个节点互不遮挡。
+//   为什么不再用普通 shadow 承担边界：材质背景层在纯黑底上是全透明的，
+//   没有可投的实体，自定义 shadow 一并消失（实测静止态 0 级、无任何渐变）。
+//   Issue 里还建议给边缘层挂 hdsEffect 点光源的 DEFAULT_FEATHERING_BORDER 做动态反光，
+//   但本机（OpenHarmony 7.0.0.105 / API 26）native 层每次都拒收该调用，
+//   hilog 打 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，
+//   且不出任何高光。实测证据记在 platform/API_MATRIX.md，因此这里只保留描边。
 //
 // 按压反馈：材质开了 lightEffect 之后，Button 内建的点击态/悬浮态反馈由材质接管，
 //   所以 stateEffect 置 false，避免两套按压效果互盖（官方示例同样这么写）。
@@ -53,53 +61,60 @@ export struct PrimaryFab {
   @Local downY: number = 0
 
   build() {
-    // stateEffect 置 false：材质开了 lightEffect 后内建按压态会与材质的光感反馈互盖，
-    // 官方《组件适配沉浸光感》的 Button 示例也是这么写的。
-    Button({ type: ButtonType.Circle, stateEffect: false }) {
-      SymbolGlyph($r('sys.symbol.plus'))
-        .fontSize(28)
-        .fontColor([$r('sys.color.icon_primary')])
-    }
-    .width(PRIMARY_FAB_SIZE_VP)
-    .height(PRIMARY_FAB_SIZE_VP)
-    .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
-    // 背景色必须是 Transparent：官方说明开了沉浸光感后再设 backgroundColor 会盖住材质层。
-    // 模糊、描边、投影同理，一律不设，材质自己接管。
-    .backgroundColor(Color.Transparent)
-    // applyShadow 传 false：官方《沉浸式系统材质视效》写明材质默认自带阴影且优先于
-    // shadow 通用属性，要用自定义阴影必须先关掉材质阴影。这是官方唯一允许的替换通道 ——
-    // border 没有。自定义 border 会盖在材质层上把高光挡掉，而材质自带的边框跟着
-    // THIN 样式走，在深色模式纯黑底上几乎看不见（实测静止态表面 0 级，与背景同色）。
-    // 所以边界改由投影承担，材质负责高光与按压光。
-    .systemMaterial(HarmonyMaterialService.getInstance().floatingMaterial(false))
-    .shadow(ShadowStyle.OUTER_DEFAULT_XS)
-    .onTouch((event: TouchEvent) => {
-      const touch = event.touches[0]
-      if (event.type === TouchType.Down) {
-        this.dragged = false
-        this.downX = touch.x
-        this.downY = touch.y
-        PrimaryTabGestureLock.getInstance().setLocked(true)
-        event.stopPropagation()
-        return
+    Stack() {
+      // 边缘层：深色静止态的最低轮廓，1vp 淡描边（实测灰度 38，与 #22FFFFFF 的 13% 白相符）。
+      // 单独一层、不压在 Button 上，两个节点互不遮挡，材质层不会被挡掉。
+      // hitTestBehavior(None)：这一层只画边不吃触摸，按钮的点击与手势锁不受影响。
+      Row()
+        .width(PRIMARY_FAB_SIZE_VP)
+        .height(PRIMARY_FAB_SIZE_VP)
+        .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
+        .border({ width: 1, color: '#22FFFFFF' })
+        .hitTestBehavior(HitTestMode.None)
+
+      // 本体：只负责 ImmersiveMaterial + lightEffect，手指跟随光感由材质出，本体不画任何边。
+      // stateEffect 置 false：材质开了 lightEffect 后内建按压态会与材质的光感反馈互盖，
+      // 官方《组件适配沉浸光感》的 Button 示例也是这么写的。
+      Button({ type: ButtonType.Circle, stateEffect: false }) {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(28)
+          .fontColor([$r('sys.color.icon_primary')])
       }
-      if (event.type === TouchType.Move) {
-        if (Math.abs(touch.x - this.downX) > DRAG_SLOP_VP ||
-          Math.abs(touch.y - this.downY) > DRAG_SLOP_VP) {
-          this.dragged = true
+      .width(PRIMARY_FAB_SIZE_VP)
+      .height(PRIMARY_FAB_SIZE_VP)
+      .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
+      // 背景色必须是 Transparent：官方说明开了沉浸光感后再设 backgroundColor 会盖住材质层。
+      .backgroundColor(Color.Transparent)
+      // applyShadow 传 true：阴影交回材质自己出，不再用普通 shadow 补边界。
+      .systemMaterial(HarmonyMaterialService.getInstance().floatingMaterial(true))
+      .onTouch((event: TouchEvent) => {
+        const touch = event.touches[0]
+        if (event.type === TouchType.Down) {
+          this.dragged = false
+          this.downX = touch.x
+          this.downY = touch.y
+          PrimaryTabGestureLock.getInstance().setLocked(true)
+          event.stopPropagation()
+          return
         }
-        return
-      }
-      PrimaryTabGestureLock.getInstance().setLocked(false)
-    })
-    .onClick(() => {
-      if (this.dragged) {
-        this.dragged = false
-        return
-      }
-      if (this.onTap) {
-        this.onTap()
-      }
-    })
+        if (event.type === TouchType.Move) {
+          if (Math.abs(touch.x - this.downX) > DRAG_SLOP_VP ||
+            Math.abs(touch.y - this.downY) > DRAG_SLOP_VP) {
+            this.dragged = true
+          }
+          return
+        }
+        PrimaryTabGestureLock.getInstance().setLocked(false)
+      })
+      .onClick(() => {
+        if (this.dragged) {
+          this.dragged = false
+          return
+        }
+        if (this.onTap) {
+          this.onTap()
+        }
+      })
+    }
   }
 }

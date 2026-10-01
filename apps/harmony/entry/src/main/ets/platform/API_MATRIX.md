@@ -401,11 +401,33 @@
 
 ### 页面内容流里的材质与阴影（实测）
 
-- 材质挂到内容流的 Button 上，**hilog 会打 `Material inactive: out of scope`，但材质仍然有响应**。不要只凭这条日志判定材质没生效：作品页 FAB 实测静止 0 级 → 按住 109 级。判断必须以像素测量为准。
-- 深色模式纯黑底上，材质静止态几乎全透明（0 级，与背景同色），圆盘边界看不见；这是材质本身的特性，不是属性被谁删了。
+- 材质挂到内容流的 Button 上，**hilog 会打 `Material inactive: out of scope`，且深色模式下材质确实不渲染**。干净对照（重启 app、无对话框、无触摸）：作品页 FAB 静止 0 级（圆盘内部与纯黑背景同色，只有加号字形 219），按住同为 0 级。**即内容流里拿不到材质的折射/高光，也没有按压光。**
+- **「按压有响应」是测量假象，不要再当结论**：早前几轮测到的 0→61 / 0→109，实际来源是「新建作品」对话框的遮罩把整个 FAB 抬到 109 级，以及 `uinput -T -d` 未配对 `-u` 造成的卡住按压态（同样是 109）。判据：值在整个圆盘内均匀、与页面其它元素同步变化 → 是遮罩不是按压光。
+- **抓帧必须用 PNG**：`devecocli ui screenshot` 出 PNG；`hdc shell snapshot_display` 出的是 JPEG，在纯黑底上会在字形周围产生 100~110 级的压缩振铃，看起来像材质亮起（`hilog | grep` 之外还要看这一步）。按住用 `uinput -T -d x y` 后台 + `uinput -T -u x y` 收尾，漏掉 `-u` 会让组件停在按压态。
+- 深色模式纯黑底上，材质静止态几乎全透明，圆盘边界看不见；这是材质本身的特性，不是属性被谁删了。
 - **材质阴影与自定义 shadow 在深色纯黑底上都不显**：材质背景层透明，`shadow` 按组件自身背景形状外投，背景透明则无物可投。
 - 官方对替换关系的明确表述只覆盖阴影：「沉浸式系统材质默认自带阴影效果（`applyShadow` 为 true），优先于 `shadow` 通用属性，此时自定义的 `shadow` 设置不会生效。如需使用自定义阴影，将 `applyShadow` 置为 false 后再设置 `shadow`。」**`border` 没有对应的替换通道**，自定义 `border` 会盖在材质层之上。
 - `materialColor` 的官方语义：「对所有档位的算力设备均生效。在高算力和中算力设备上，该参数为材质滤镜再混合一层纯色效果；在低算力设备上，该参数作为背景色 backgroundColor 属性值。」给它不透明纯色会遮挡材质滤镜（实测页头胶囊传 `#33FFFFFF` 糊成一片发灰起雾的乳白，与底栏的通透感差 3 倍以上）。
+
+### 让 FAB 在深色模式有可见边界：试过的全部路径
+
+`ui/components/PrimaryFab.ets`。按尝试顺序，每条都有实机数据：
+
+| 方案 | 实测结果 | 结论 |
+|---|---|---|
+| `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边 | 圆盘 20~22 级，边界清晰，阴影 3 级与底栏胶囊一致 | 稳定可读，但无材质高光、无按压光 |
+| `systemMaterial(floatingMaterial(false))` + 自定义 `shadow(OUTER_DEFAULT_XS)` | 静止 0 级、圆盘不可见；`shadow` 完全没出来 | 材质背景层透明 → 无物可投 |
+| `systemMaterial(floatingMaterial(true))`（材质自带阴影） | 静止 0 级，材质阴影在纯黑底上不显 | 同上 |
+| `systemMaterial(...)` + `stateEffect: false` | 按压无响应（干净对照） | 内容流拿不到按压光 |
+| `materialColor: '#33FFFFFF'` | 页头胶囊糊成发灰起雾的乳白，比底栏差 3 倍以上 | 违反「materialColor 必须透明」 |
+| `hdsEffect.pointLight`（`PointLightSourceType` / `PointLightIlluminatedType` 全枚举） | native 每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，无任何光 | 本机不可用，别再试 |
+| `hdsEffect.pressShadow(BLEND_GRADIENT)` | 整面叠白（中心 85% 白、边缘 100% 白），白底上削顶到 255 看不出；深色底上整颗刷白、白字消失 | 不是跟随手指的光 |
+| `lightUpEffect(0..1)` | 只有整体亮度，无位置参数 | 死路 |
+| **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 现行方案）** | 描边像素值 38，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | **可用**，唯一在深色模式下给出可见轮廓的手段 |
+
+现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
+
+**Issue #811 里建议的边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 未采纳**：本机 native 层拒收该调用（见上表），加上去只会每次刷一条 `Wrong argument type` 而没有光。
 
 ## 应用共享目录 / 捐献沙箱目录（shareFiles profile）
 
