@@ -283,6 +283,7 @@ export struct StarMapScreen {
         .height('100%')
       }
     }
+    .alignContent(Alignment.BottomEnd)
     .layoutWeight(1)
     .width('100%')
     .backgroundColor($r('sys.color.background_secondary'))
@@ -311,7 +312,7 @@ export struct StarMapScreen {
       .height(40)
       .onClick(() => this.zoomIn())
     }
-    .margin({ right: 16, bottom: 16 })
+    .margin({ right: 16, bottom: 32 })
   }
 
   build() {
