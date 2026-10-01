@@ -104,8 +104,16 @@ impl SujianEditorItem {
         promote: bool,
         composition_range: Option<(usize, usize)>,
     ) -> Result<EditorLayoutSnapshot, String> {
-        self.build_editor_layout_snapshot_with_canonical(width, promote, composition_range)
-            .map(|p| p.0)
+        // Issue #810 评论 5934658350: 显式传入 canonical text revision，不再让 helper
+        // 自己猜 pipeline.text_revision()。普通"当前正文快照"路径传当前 revision。
+        let canonical_text_revision = self.pipeline.text_revision();
+        self.build_editor_layout_snapshot_with_canonical(
+            width,
+            promote,
+            composition_range,
+            canonical_text_revision,
+        )
+        .map(|p| p.0)
     }
 
     /// Issue #738 评论 5797637204: 共用 helper，返回
@@ -123,6 +131,7 @@ impl SujianEditorItem {
         width: f64,
         promote: bool,
         composition_range: Option<(usize, usize)>,
+        canonical_text_revision: u64,
     ) -> Result<
         (
             EditorLayoutSnapshot,
@@ -161,7 +170,7 @@ impl SujianEditorItem {
         let committed_text = self.pipeline.committed_text();
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             committed_text,
-            self.pipeline.text_revision(),
+            canonical_text_revision,
             font_size,
             font_family,
             line_spacing,

@@ -209,10 +209,16 @@ impl SujianEditorItem {
         // 一次排版同时产出两份视图，不再单独排一次 canonical。
         // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot_with_canonical
         // 现在返回 Result。Err 时记录诊断并 return，结束本次视觉事务构造，不伪装成功。
+        // Issue #810 评论 5934658350: composition commit 在 Core 已提交 new text 后调用，
+        // 此时 pipeline.text_revision() 仍是 emit 前的 old revision。new canonical 必须带
+        // next text revision（old + 1），与即将 emit_content_changed bump 后的正文 revision
+        // 对齐，避免 set_current_canonical_snapshot 后因 revision 错位重排一次。
+        let canonical_text_revision = self.pipeline.text_revision().wrapping_add(1);
         let (new_snapshot, new_canonical) = match self.build_editor_layout_snapshot_with_canonical(
             width,
             true,
             new_composition_range,
+            canonical_text_revision,
         ) {
             Ok(pair) => pair,
             Err(err) => {
@@ -834,6 +840,9 @@ impl SujianEditorItem {
 
     pub(crate) fn undo(&mut self) {
         let old = self.pipeline.snapshot();
+        // Issue #810 评论 5934658350: Undo 会修改 committed text 并可能生成文字动画，
+        // 必须在 Core 修改前固定 old canonical（与 Insert/Delete/Replace 同一不变量）。
+        self.ensure_current_canonical_before_edit();
         if let Some(result) = self.pipeline.perform_undo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.pipeline.snapshot();
@@ -844,6 +853,8 @@ impl SujianEditorItem {
 
     pub(crate) fn redo(&mut self) {
         let old = self.pipeline.snapshot();
+        // Issue #810 评论 5934658350: Redo 同 Undo，在 Core 修改前固定 old canonical。
+        self.ensure_current_canonical_before_edit();
         if let Some(result) = self.pipeline.perform_redo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.pipeline.snapshot();
