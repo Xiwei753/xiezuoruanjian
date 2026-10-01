@@ -790,9 +790,10 @@ export struct StarMapScene {
   // ─── Embed 手势组 ───
 
   /**
-   * Embed 手势组：选中/菜单/连线/移动（不含画布拖动）。
+   * Embed 手势组：选中/菜单/连线/移动/画布拖动。
    * title Row 和边框命中条共享此手势组。
-   * Pan 手势只处理 moveEmbed，不处理画布拖动——只有空白区域才应该触发画布拖动。
+   * Pan 手势：moveEmbed 模式时移动 Embed，否则按 #373 规则拖动当前 Scene 画布。
+   * innerContent 不挂父手势，由 child Scene 自己处理。
    * 所有 onActionStart 检查 isOwnedByScene，防止别层正在用手势时覆盖 owner。
    */
   private embedGestureGroup(embed: StarMapEmbed): GestureGroup {
@@ -862,10 +863,9 @@ export struct StarMapScene {
             this.nodeMenuNodeId = ''
           })
       ),
-      // 没有长按成功时的普通滑动（只处理 moveEmbed，不处理画布拖动）
+      // 没有长按成功时的普通滑动（moveEmbed 或画布拖动，与 #373 规则一致）
       PanGesture()
         .onActionStart((event: GestureEvent) => {
-          if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
           const state = this.gestureTracker.getState()
           if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
             this.motionPauseTracker.pauseNode(embed.instanceId)
@@ -874,6 +874,15 @@ export struct StarMapScene {
               this.moveEmbedStartX = ln.x
               this.moveEmbedStartY = ln.y
             }
+          } else {
+            if (this.pinchActive) return
+            if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
+            this.panActive = true
+            const point = this.gestureScreenPoint(event, 0, 0)
+            this.gestureTracker.beginPanCanvas(this.scenePath, point.x, point.y)
+            this.gestureMode = 'panCanvas'
+            this.panBaseX = this.offsetX
+            this.panBaseY = this.offsetY
           }
         })
         .onActionUpdate((event: GestureEvent) => {
@@ -886,6 +895,9 @@ export struct StarMapScene {
             positions.set(embed.instanceId, { x: newDx, y: newDy })
             this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
             this.recomputeGeometry()
+          } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
+            this.offsetX = this.panBaseX + event.offsetX
+            this.offsetY = this.panBaseY + event.offsetY
           }
         })
         .onActionEnd(() => {
@@ -895,6 +907,7 @@ export struct StarMapScene {
             void this.saveEmbedPosition(embed.instanceId)
             this.motionPauseTracker.resumeNode(embed.instanceId)
           }
+          this.panActive = false
           this.gestureTracker.reset()
           this.gestureMode = 'idle'
         })
@@ -1305,10 +1318,11 @@ export struct StarMapScene {
       )
       .hitTestBehavior(HitTestMode.Default)
 
-      // 1. Canvas：绘制当前层的边
+      // 1. Canvas：绘制当前层的边（只负责画，不参与触摸测试）
       Canvas(this.canvasCtx)
         .width('100%')
         .height('100%')
+        .hitTestBehavior(HitTestMode.None)
         .onReady(() => {
           this.canvasReady = true
           this.drawEdges()
@@ -1326,11 +1340,12 @@ export struct StarMapScene {
         }, (embed: StarMapEmbed) => embed.instanceId)
       }
 
-      // 4. 预览连线 Canvas（connect 模式）
+      // 4. 预览连线 Canvas（connect 模式，只负责画，不参与触摸测试）
       if (this.gestureMode === 'connect') {
         Canvas(this.previewCanvasCtx)
           .width('100%')
           .height('100%')
+          .hitTestBehavior(HitTestMode.None)
           .onReady(() => {
             this.previewCanvasReady = true
             this.drawPreviewLine()
