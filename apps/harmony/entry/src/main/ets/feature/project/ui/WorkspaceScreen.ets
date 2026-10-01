@@ -3,7 +3,8 @@ import hilog from '@ohos.hilog'
 import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_SIZE_VP, PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
@@ -521,23 +522,17 @@ export struct WorkspaceScreen {
       .alignItems(HorizontalAlign.Center)
 
       // ── FAB 层：新建卷浮动按钮 ──
-      // Issue #783 评论5855754605：恢复真正的圆形沉浸光感 Button。
-      // ButtonType.Circle + stateEffect: true，系统提供沉浸光感圆形按钮表面，
-      // 不再用 ButtonType.Normal + backgroundColor(Color.Transparent) 导致实机只剩裸 +。
       // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
+      // 配色/材质统一到 PrimaryFab，与作品页、星图页同源。
       if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        Button({ type: ButtonType.Circle, stateEffect: true }) {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(28)
-        }
-        .width(PRIMARY_FAB_SIZE_VP)
-        .height(PRIMARY_FAB_SIZE_VP)
+        PrimaryFab({
+          onTap: () => {
+            this.handleCreateVolume()
+          }
+        })
         .margin({
           right: this.adaptiveState.pagePadding,
           bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-        })
-        .onClick(() => {
-          this.handleCreateVolume()
         })
       }
     }

@@ -30,6 +30,7 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } fr
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
+import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
 
@@ -74,6 +75,9 @@ export struct PrimaryTabShell {
   // Issue #774 评论5847638284 第2项：交互锁——异步查 policy 期间禁止切 tab，
   // 但不触发 @Watch 导致底栏无意义 hide→show。与视觉显示分开。
   @State currentPrimaryNavInteractive: boolean = true
+  // 按住主操作悬浮按钮期间的手势锁。与上面的 policy 交互锁语义不同（那个是「能否离开当前页」，
+  // 这个纯粹是「手指按在按钮上时别让 Tabs 抢走滑动」），两者取与后传给 Tabs，互不覆盖。
+  @State primaryTabGestureLocked: boolean = false
 
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
@@ -87,6 +91,7 @@ export struct PrimaryTabShell {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private navChromeObserver: ((role: ScreenRole) => void) | null = null
+  private gestureLockObserver: ((locked: boolean) => void) | null = null
 
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
@@ -134,6 +139,12 @@ export struct PrimaryTabShell {
       self.updateShowPrimaryNav(role)
     }
     NavigationChromeStore.getInstance().subscribe(this.navChromeObserver!)
+
+    // 订阅主操作按钮的手势锁：按住 FAB 时把一级 Tabs 的横向滑动关掉。
+    this.gestureLockObserver = (locked: boolean) => {
+      self.primaryTabGestureLocked = locked
+    }
+    PrimaryTabGestureLock.getInstance().subscribe(this.gestureLockObserver)
   }
 
   aboutToDisappear(): void {
@@ -145,6 +156,9 @@ export struct PrimaryTabShell {
     }
     if (this.navChromeObserver) {
       NavigationChromeStore.getInstance().unsubscribe(this.navChromeObserver)
+    }
+    if (this.gestureLockObserver) {
+      PrimaryTabGestureLock.getInstance().unsubscribe(this.gestureLockObserver)
     }
     // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终注销三个栈，不再因 useHdsTabs 跳过。
     // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
@@ -284,7 +298,7 @@ export struct PrimaryTabShell {
         statsStack: this.statsStack,
         safeBottomVp: this.adaptiveState.safeBottomVp,
         currentShowPrimaryNav: this.currentShowPrimaryNav,
-        currentPrimaryNavInteractive: this.currentPrimaryNavInteractive
+        currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked
       })
     } else {
       Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
@@ -324,10 +338,12 @@ export struct PrimaryTabShell {
       .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
       // Issue #774 评论5847638284 第2项：scrollable 用交互锁而非视觉显示，
       // 避免 @Watch 触发底栏 hide→show 动画。
-      .scrollable(this.currentPrimaryNavInteractive)
+      // 再取与手势锁：手指按在主操作悬浮按钮上时，一级页签的横向滑动要停掉，
+      // 否则按住 + 号左右拖动会把整页拖走（实机复现过）。
+      .scrollable(this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked)
       .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
         // Issue #774 评论5847638284 第2项：用交互锁判断，而非视觉显示。
-        if (!this.currentPrimaryNavInteractive) {
+        if (!this.currentPrimaryNavInteractive || this.primaryTabGestureLocked) {
           return false
         }
         return true

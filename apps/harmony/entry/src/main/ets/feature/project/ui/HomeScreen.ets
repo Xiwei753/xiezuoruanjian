@@ -15,7 +15,8 @@ import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDto
 import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_SIZE_VP, PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ProjectListViewModel } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -659,24 +660,18 @@ export struct HomeScreen {
       .height('100%')
 
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
-      // Issue #783 评论5855754605：恢复真正的圆形沉浸光感 Button。
-      // ButtonType.Circle + stateEffect: true，系统提供沉浸光感圆形按钮表面，
-      // 不再用 ButtonType.Normal + backgroundColor(Color.Transparent) 导致实机只剩裸 +。
       // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
+      // 配色/材质统一到 PrimaryFab，与工作区页、星图页同源。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
-        Button({ type: ButtonType.Circle, stateEffect: true }) {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(28)
-        }
-        .width(PRIMARY_FAB_SIZE_VP)
-        .height(PRIMARY_FAB_SIZE_VP)
+        PrimaryFab({
+          onTap: () => {
+            this.viewModel.showCreateDialog = true
+            this.viewModel.newProjectName = ''
+          }
+        })
         .margin({
           right: this.adaptiveState.pagePadding,
           bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-        })
-        .onClick(() => {
-          this.viewModel.showCreateDialog = true
-          this.viewModel.newProjectName = ''
         })
       }
     }

@@ -12,7 +12,8 @@ import { StarMapMeta } from '../../../corebridge/dto/StarMapDtos'
 import { getBridge } from '../../../app/AppContext'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_SIZE_VP, PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
@@ -244,19 +245,15 @@ export struct StarMapListScreen {
         })
 
         // ── FAB 层：新建星图浮动按钮 ──
+        // 配色/材质统一到 PrimaryFab，与作品页、工作区页同源。
         if (!this.isLoading && !this.errorMessage) {
-          Stack() {
-            // 与 HomeScreen / WorkspaceScreen 一致：用原生 ButtonType.Circle 的系统圆形面
-            // 跟随系统强调色，不再用 themeConfig.colors.primary 写死颜色（浅色主题下是纯黑）。
-            Button({ type: ButtonType.Circle, stateEffect: true }) {
-              SymbolGlyph($r('sys.symbol.plus'))
-                .fontSize(28)
+          PrimaryFab({
+            onTap: () => {
+              this.showCreateDialog = true
+              this.newStarMapName = ''
+              this.newStarMapDescription = ''
             }
-              .width(PRIMARY_FAB_SIZE_VP)
-              .height(PRIMARY_FAB_SIZE_VP)
-          }
-          .width(PRIMARY_FAB_SIZE_VP)
-          .height(PRIMARY_FAB_SIZE_VP)
+          })
           .alignRules({
             right: { anchor: '__container__', align: HorizontalAlign.End },
             bottom: { anchor: '__container__', align: VerticalAlign.Bottom }
@@ -264,11 +261,6 @@ export struct StarMapListScreen {
           .margin({
             right: this.adaptiveState.pagePadding,
             bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-          })
-          .onClick(() => {
-            this.showCreateDialog = true
-            this.newStarMapName = ''
-            this.newStarMapDescription = ''
           })
         }
       }
@@ -344,6 +336,10 @@ export struct StarMapListScreen {
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
+    // Scroll 的 align 默认是 Alignment.Center，星图数量少、内容不满一屏时
+    // 整列会被垂直居中，卡片悬在页面中间。这里与 HomeScreen / WorkspaceScreen 对齐，
+    // 显式顶到上方，内容超出后仍正常滚动。
+    .align(Alignment.Top)
   }
 
   // ── 加载中 ──
