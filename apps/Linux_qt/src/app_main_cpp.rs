@@ -15,6 +15,8 @@ use crate::backend::app_backend::debug_log_static;
 use crate::backend::diagnostics;
 
 cpp! {{
+    #include <cstdio>
+    #include <QByteArray>
     #include <QCoreApplication>
     #include <QWindow>
     #include <QTimer>
@@ -123,7 +125,7 @@ pub fn qt_platform_name() -> String {
 /// 已 visible 但没有 exposed、或者窗口几何/屏幕异常。
 pub fn install_window_state_probe() {
     cpp!(unsafe [] {
-        QTimer::singleShot(750, [] {
+        auto probe = [] {
             const QWindowList windows = QGuiApplication::topLevelWindows();
             QStringList states;
             for (int i = 0; i < windows.size(); ++i) {
@@ -147,11 +149,19 @@ pub fn install_window_state_probe() {
                     .arg(g.height())
                     .arg(screenName);
             }
-            qInfo().noquote()
-                << "[SujianWindowProbe]"
-                << "topLevelCount=" << windows.size()
-                << states.join(QStringLiteral(" | "));
-        });
+            const QByteArray stateBytes =
+                states.join(QStringLiteral(" | ")).toUtf8();
+            std::fprintf(
+                stderr,
+                "[SujianWindowProbe] topLevelCount=%d %s\n",
+                windows.size(),
+                stateBytes.constData()
+            );
+            std::fflush(stderr);
+        };
+        // 0ms 用来确认事件循环至少开始处理事件；750ms 再确认窗口是否真正 exposed。
+        QTimer::singleShot(0, probe);
+        QTimer::singleShot(750, probe);
     });
 }
 
