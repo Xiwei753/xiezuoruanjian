@@ -81,6 +81,10 @@ Item {
         if (childSceneInViewport)
             childSceneActivated = true
     }
+    Component.onCompleted: {
+        if (childSceneInViewport)
+            childSceneActivated = true
+    }
 
     // Issue #805 评论 5907045450 第 3 部分：chrome 命中区域高度 + 边框 hit slop。
     readonly property int _chromeHeight: 24
