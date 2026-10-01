@@ -71,6 +71,17 @@ Item {
     // 用于构造 child Scene 的 pathKey（父路径 + "/embed_<instanceId>"）。
     property string parentPathKey: ""
 
+    // 递归 Scene 不再无条件一次性展开整棵引用树。
+    // Canvas 只把“当前视口内的 Embed”置为 true；第一次进入视口后锁存为已激活，
+    // 这样滚动离开后不会销毁 child Scene，也不会丢掉该 Scene 自己的 pan/zoom/手势状态。
+    // 层级仍不设固定上限，下一层继续按它自己的视口决定何时实例化。
+    property bool childSceneInViewport: false
+    property bool childSceneActivated: false
+    onChildSceneInViewportChanged: {
+        if (childSceneInViewport)
+            childSceneActivated = true
+    }
+
     // Issue #805 评论 5907045450 第 3 部分：chrome 命中区域高度 + 边框 hit slop。
     readonly property int _chromeHeight: 24
     readonly property int _borderSlop: 6
@@ -440,7 +451,12 @@ Item {
             Loader {
                 id: childSceneLoader
                 anchors.fill: parent
-                active: root.targetStarmapId.length > 0 && root.rootStarmapId.length > 0
+                // 只在该 Embed 真正进入父 Scene 视口后才创建递归 child Scene。
+                // asynchronous 避免一帧里同步构造多层 QML 对象树把 GUI 线程堵死。
+                active: root.childSceneActivated
+                        && root.targetStarmapId.length > 0
+                        && root.rootStarmapId.length > 0
+                asynchronous: true
                 sourceComponent: starmapSceneComponent
             }
         }
