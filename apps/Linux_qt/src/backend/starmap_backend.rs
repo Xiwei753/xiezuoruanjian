@@ -197,6 +197,22 @@ pub struct StarMapBackend {
     delete_starmap_hyperlink:
         qt_method!(fn(&mut self, starmap_id: QString, hyperlink_id: QString) -> QJsonObject),
     list_starmap_hyperlinks: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
+    // Issue #814 评论 5935346839: QML 星图交互边界日志入口。
+    // QML 在手势边界（press/release/begin/end/popup）调用此方法落盘结构化
+    // 诊断事件，让诊断包能看到"鼠标到底发生了什么"。origin=User，事件名
+    // starmap.* 前缀，target=linux_qt.starmap，不受 WRITER_DEBUG_QML 控制
+    // （writer_diagnostics 内部根据 enabled 配置决定落盘）。
+    record_interaction: qt_method!(
+        fn(
+            &self,
+            event: QString,
+            scene_path_key: QString,
+            starmap_id: QString,
+            item_kind: QString,
+            item_id: QString,
+            fields_json: QString,
+        )
+    ),
     app: AppRef,
 }
 
@@ -760,6 +776,82 @@ impl StarMapBackend {
                     &crate::backend::json_utils::borrow_conflict_error_json(),
                 )
             })
+    }
+
+    /// Issue #814 评论 5935346839: QML 星图交互边界日志入口。
+    ///
+    /// QML 在手势边界（pointer_press / pan_begin / pan_end / move_begin /
+    /// move_end / connect_begin / connect_end / selection_changed /
+    /// context_menu_open / scene_resolved / scene_resolve_failed /
+    /// embed_chrome_press / embed_child_scene_activated 等）调用此方法，
+    /// 把结构化事件交给 `writer_diagnostics::record_event` 落盘。
+    ///
+    /// - `origin = User`：用户主动交互
+    /// - `event` 统一加 `starmap.` 前缀
+    /// - `target = linux_qt.starmap`
+    /// - 不受 `WRITER_DEBUG_QML` 环境变量控制；writer_diagnostics 内部根据
+    ///   enabled 配置决定是否落盘，用户在设置里开启"诊断日志"时正常落盘。
+    /// - `fields_json` 解析失败或不是 Object 时插入 `fieldsParseError: true`，
+    ///   解析失败不影响交互本身（不 panic、不返回错误）。
+    fn record_interaction(
+        &self,
+        event: QString,
+        scene_path_key: QString,
+        starmap_id: QString,
+        item_kind: QString,
+        item_id: QString,
+        fields_json: QString,
+    ) {
+        let event_name = format!("starmap.{}", event.to_string());
+        let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+            std::collections::BTreeMap::new();
+        fields.insert(
+            "scenePathKey".to_string(),
+            serde_json::Value::String(scene_path_key.to_string()),
+        );
+        fields.insert(
+            "starmapId".to_string(),
+            serde_json::Value::String(starmap_id.to_string()),
+        );
+        fields.insert(
+            "itemKind".to_string(),
+            serde_json::Value::String(item_kind.to_string()),
+        );
+        fields.insert(
+            "itemId".to_string(),
+            serde_json::Value::String(item_id.to_string()),
+        );
+        // 合并 QML 传入的自定义字段。解析失败或不是 Object 时记一个标记，
+        // 不影响交互本身。
+        let extra = fields_json.to_string();
+        if !extra.is_empty() {
+            match serde_json::from_str::<serde_json::Value>(&extra) {
+                Ok(v) if v.is_object() => {
+                    if let Some(obj) = v.as_object() {
+                        for (k, val) in obj {
+                            fields.insert(k.clone(), val.clone());
+                        }
+                    }
+                }
+                _ => {
+                    fields.insert(
+                        "fieldsParseError".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                }
+            }
+        }
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::User,
+            event: event_name,
+            target: "linux_qt.starmap".to_string(),
+            message: None,
+            fields,
+        });
     }
 }
 

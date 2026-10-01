@@ -12,6 +12,8 @@
 //     wobble 只偏移内部视觉 Rectangle（visualNode），不影响命中测试。
 //     TapHandler/DragHandler/PointHandler 全部挂在稳定 root Item 上。
 //   - 使用 DesignTokens 统一样式
+//   - Issue #814 评论 5935346839：节点不自己直接落盘诊断日志，交互边界日志
+//     统一由 Canvas 的 logInteraction 写，避免 Node、Canvas 两层把同一次点击各记一份。
 // =============================================================================
 
 import QtQuick

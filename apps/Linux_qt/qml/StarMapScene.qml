@@ -85,16 +85,47 @@ Item {
             resolveError = qsTr("解析星图层级路径失败")
                     + (res && res.errorCode ? " (" + res.errorCode + ")" : "")
             finalStarmapId = ""
+            // Issue #814 评论 5935346839: scene_resolve_failed 边界日志。
+            if (starmapBackendRef) {
+                starmapBackendRef.record_interaction(
+                    "scene_resolve_failed", pathKey, rootStarmapId, "scene", "",
+                    JSON.stringify({
+                        "pathKey": pathKey,
+                        "errorCode": (res && res.errorCode) ? res.errorCode : "",
+                        "rootStarmapId": rootStarmapId
+                    }))
+            }
             return
         }
         var finalId = res.data && res.data.finalStarmapId ? res.data.finalStarmapId : ""
         if (finalId === "") {
             resolveError = qsTr("解析星图层级路径失败")
             finalStarmapId = ""
+            // Issue #814 评论 5935346839: scene_resolve_failed 边界日志（finalId 为空）。
+            if (starmapBackendRef) {
+                starmapBackendRef.record_interaction(
+                    "scene_resolve_failed", pathKey, rootStarmapId, "scene", "",
+                    JSON.stringify({
+                        "pathKey": pathKey,
+                        "errorCode": "empty_final_id",
+                        "rootStarmapId": rootStarmapId
+                    }))
+            }
             return
         }
         resolveError = ""
         finalStarmapId = finalId
+        // Issue #814 评论 5935346839: scene_resolved 边界日志。
+        if (starmapBackendRef) {
+            starmapBackendRef.record_interaction(
+                "scene_resolved", pathKey, rootStarmapId, "scene", finalId,
+                JSON.stringify({
+                    "pathKey": pathKey,
+                    "rootStarmapId": rootStarmapId,
+                    "finalStarmapId": finalId,
+                    "depth": pathSegments.length
+                }))
+        }
     }
 
     onRootStarmapIdChanged: resolvePath()

@@ -87,6 +87,19 @@ Item {
     // 第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
     property bool _touchInputActive: false
 
+    // Issue #814 评论 5935346839: pan 手势起点记录，用于 pan_end 边界日志。
+    property real _panBeginX: 0
+    property real _panBeginY: 0
+
+    // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
+    // 只在手势边界（press/release/begin/end/popup）调用，不进热路径。
+    // starmapBackendRef 为 null 时静默跳过（不报错）。
+    function logInteraction(event, itemKind, itemId, fields) {
+        if (!starmapBackendRef) return
+        var fj = fields ? JSON.stringify(fields) : ""
+        starmapBackendRef.record_interaction(event, pathKey, starmapId, itemKind, itemId, fj)
+    }
+
     // ---------------------------------------------------------------------------
     // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
     //   pointerMode / connectFrom* / connectMouseX/Y / pressedNodeId / pressedEmbedId
@@ -243,8 +256,16 @@ Item {
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 graphController.selectEdge(clickedEdge.id)
+                // Issue #814 评论 5935346839: selection_changed 边界日志（edge）。
+                logInteraction("selection_changed", "edge", clickedEdge.id, {
+                    "device": "mouse"
+                })
             } else {
                 clearSelection()
+                // Issue #814 评论 5935346839: selection_changed 边界日志（none）。
+                logInteraction("selection_changed", "none", "", {
+                    "device": "mouse"
+                })
             }
         }
         // 鼠标空白长按无操作（鼠标用右键打开菜单）。
@@ -259,6 +280,27 @@ Item {
         acceptedButtons: Qt.LeftButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = true
+            // Issue #814 评论 5935346839: pointer_press 边界日志（touch 设备）。
+            var _mx0 = (eventPoint.position.x - panX) / zoomLevel
+            var _my0 = (eventPoint.position.y - panY) / zoomLevel
+            var _hitNode0 = findNodeAt(_mx0, _my0)
+            var _hitEmbed0 = findEmbedChromeAt(_mx0, _my0)
+            var _hitEdge0 = graphController.hitTestEdge(_mx0, _my0)
+            var _hk0 = "empty"
+            var _hi0 = ""
+            if (_hitNode0) { _hk0 = "node"; _hi0 = _hitNode0.id }
+            else if (_hitEmbed0) { _hk0 = "embed"; _hi0 = _hitEmbed0.instanceId }
+            else if (_hitEdge0) { _hk0 = "edge"; _hi0 = _hitEdge0.id }
+            logInteraction("pointer_press", _hk0, _hi0, {
+                "device": "touch",
+                "screenX": eventPoint.position.x,
+                "screenY": eventPoint.position.y,
+                "worldX": _mx0,
+                "worldY": _my0,
+                "panX": panX,
+                "panY": panY,
+                "zoomLevel": zoomLevel
+            })
             var mx = (eventPoint.position.x - panX) / zoomLevel
             var my = (eventPoint.position.y - panY) / zoomLevel
             if (findNodeAt(mx, my)) {
@@ -270,8 +312,16 @@ Item {
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 graphController.selectEdge(clickedEdge.id)
+                // Issue #814 评论 5935346839: selection_changed 边界日志（edge, touch）。
+                logInteraction("selection_changed", "edge", clickedEdge.id, {
+                    "device": "touch"
+                })
             } else {
                 clearSelection()
+                // Issue #814 评论 5935346839: selection_changed 边界日志（none, touch）。
+                logInteraction("selection_changed", "none", "", {
+                    "device": "touch"
+                })
             }
         }
         // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
@@ -287,12 +337,38 @@ Item {
             var wx = (px - panX) / zoomLevel
             var wy = (py - panY) / zoomLevel
 
+            // Issue #814 评论 5935346839: pointer_press 边界日志（touch 长按入口）。
+            var _hn = findNodeAt(wx, wy)
+            var _he = findEmbedChromeAt(wx, wy)
+            var _hd = graphController.hitTestEdge(wx, wy)
+            var _lk = "empty"
+            var _li = ""
+            if (_hn) { _lk = "node"; _li = _hn.id }
+            else if (_he) { _lk = "embed"; _li = _he.instanceId }
+            else if (_hd) { _lk = "edge"; _li = _hd.id }
+            logInteraction("pointer_press", _lk, _li, {
+                "device": "touch",
+                "screenX": px,
+                "screenY": py,
+                "worldX": wx,
+                "worldY": wy,
+                "panX": panX,
+                "panY": panY,
+                "zoomLevel": zoomLevel
+            })
+
             if (findNodeAt(wx, wy)) return
             if (findEmbedChromeAt(wx, wy)) return
             if (graphController.hitTestEdge(wx, wy)) return
 
             contextMenuWorldX = wx
             contextMenuWorldY = wy
+            // Issue #814 评论 5935346839: context_menu_open 边界日志（bg）。
+            logInteraction("context_menu_open", "empty", "", {
+                "menuKind": "bg",
+                "worldX": wx,
+                "worldY": wy
+            })
             bgContextMenu.popup(px, py)
         }
     }
@@ -316,10 +392,22 @@ Item {
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 selectedEdgeForMenu = clickedEdge
+                // Issue #814 评论 5935346839: context_menu_open 边界日志（edge）。
+                logInteraction("context_menu_open", "edge", clickedEdge.id, {
+                    "menuKind": "edge",
+                    "worldX": mx,
+                    "worldY": my
+                })
                 edgeContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
             } else {
                 contextMenuWorldX = mx
                 contextMenuWorldY = my
+                // Issue #814 评论 5935346839: context_menu_open 边界日志（bg, 右键）。
+                logInteraction("context_menu_open", "empty", "", {
+                    "menuKind": "bg",
+                    "worldX": mx,
+                    "worldY": my
+                })
                 bgContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
             }
         }
@@ -358,6 +446,15 @@ Item {
                     } else if (interaction.pressedEmbedId !== "") {
                         graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
                     }
+                    // Issue #814 评论 5935346839: move_end 边界日志（touch）。
+                    var _mk = interaction.pressedNodeId !== "" ? "node" : (interaction.pressedEmbedId !== "" ? "embed" : "")
+                    var _mid = interaction.pressedNodeId !== "" ? interaction.pressedNodeId : interaction.pressedEmbedId
+                    logInteraction("move_end", _mk, _mid, {
+                        "toX": interaction.moveX,
+                        "toY": interaction.moveY,
+                        "commitSuccess": true,
+                        "device": "touch"
+                    })
                     interaction.endMove()
                     graphController.computeEdgeRenders(null)
                     edgeCanvas.requestPaint()
@@ -438,16 +535,52 @@ Item {
             _touchInputActive = false
             lastX = mouse.x
             lastY = mouse.y
+            // Issue #814 评论 5935346839: pointer_press 边界日志（mouse 设备）。
+            var _wx = (mouse.x - panX) / zoomLevel
+            var _wy = (mouse.y - panY) / zoomLevel
+            var _hitNode = findNodeAt(_wx, _wy)
+            var _hitEmbed = findEmbedChromeAt(_wx, _wy)
+            var _hitEdge = graphController.hitTestEdge(_wx, _wy)
+            var _hitKind = "empty"
+            var _hitId = ""
+            if (_hitNode) { _hitKind = "node"; _hitId = _hitNode.id }
+            else if (_hitEmbed) { _hitKind = "embed"; _hitId = _hitEmbed.instanceId }
+            else if (_hitEdge) { _hitKind = "edge"; _hitId = _hitEdge.id }
+            logInteraction("pointer_press", _hitKind, _hitId, {
+                "button": mouse.button === Qt.LeftButton ? "left" : (mouse.button === Qt.MiddleButton ? "middle" : "other"),
+                "device": "mouse",
+                "screenX": mouse.x,
+                "screenY": mouse.y,
+                "worldX": _wx,
+                "worldY": _wy,
+                "panX": panX,
+                "panY": panY,
+                "zoomLevel": zoomLevel
+            })
             if (mouse.button === Qt.LeftButton) {
                 var wx = (mouse.x - panX) / zoomLevel
                 var wy = (mouse.y - panY) / zoomLevel
                 if (!findNodeAt(wx, wy) && !findEmbedChromeAt(wx, wy)) {
                     interaction.beginPan()
+                    // Issue #814 评论 5935346839: pan_begin 边界日志。
+                    _panBeginX = panX
+                    _panBeginY = panY
+                    logInteraction("pan_begin", "empty", "", {
+                        "startPanX": panX,
+                        "startPanY": panY
+                    })
                 }
             }
             // 中键直接进入 pan（不依赖长按）
             if (mouse.button === Qt.MiddleButton) {
                 interaction.beginPan()
+                // Issue #814 评论 5935346839: pan_begin 边界日志（中键）。
+                _panBeginX = panX
+                _panBeginY = panY
+                logInteraction("pan_begin", "empty", "", {
+                    "startPanX": panX,
+                    "startPanY": panY
+                })
             }
         }
 
@@ -464,6 +597,13 @@ Item {
         onReleased: function(mouse) {
             if (interaction.pointerMode === "pan") {
                 interaction.endPan()
+                // Issue #814 评论 5935346839: pan_end 边界日志。
+                logInteraction("pan_end", "empty", "", {
+                    "startPanX": _panBeginX,
+                    "startPanY": _panBeginY,
+                    "endPanX": panX,
+                    "endPanY": panY
+                })
             }
         }
 
@@ -637,6 +777,10 @@ Item {
 
                 onSingleClicked: {
                     graphController.selectNode(nodeData.id)
+                    // Issue #814 评论 5935346839: selection_changed 边界日志（node）。
+                    logInteraction("selection_changed", "node", nodeData.id, {
+                        "device": "mouse"
+                    })
                 }
 
                 onDoubleClicked: {
@@ -654,6 +798,13 @@ Item {
                     if (!interaction.beginConnect("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
+                    // Issue #814 评论 5935346839: connect_begin 边界日志（node）。
+                    logInteraction("connect_begin", "node", nd.id, {
+                        "kind": "node",
+                        "fromId": nd.id,
+                        "fromX": nd.x + nd.width / 2,
+                        "fromY": nd.y + nd.height / 2
+                    })
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
@@ -680,6 +831,14 @@ Item {
                     graphController.selectNode(nd.id)
                     selectedNodeForMenu = nd
                     // sceneX/sceneY 是场景坐标，菜单用屏幕坐标
+                    // Issue #814 评论 5935346839: context_menu_open 边界日志（node）。
+                    var _wx = (sceneX - panX) / zoomLevel
+                    var _wy = (sceneY - panY) / zoomLevel
+                    logInteraction("context_menu_open", "node", nd.id, {
+                        "menuKind": "node",
+                        "worldX": _wx,
+                        "worldY": _wy
+                    })
                     nodeContextMenu.popup(sceneX, sceneY)
                 }
 
@@ -705,6 +864,12 @@ Item {
 
                     if (interaction.pointerMode === "idle") {
                         interaction.beginMove(nodeData.id, x, y)
+                        // Issue #814 评论 5935346839: move_begin 边界日志（node）。
+                        logInteraction("move_begin", "node", nodeData.id, {
+                            "kind": "node",
+                            "fromX": x,
+                            "fromY": y
+                        })
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
@@ -733,6 +898,12 @@ Item {
                                 // 用节点中心位置弹出菜单
                                 var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
                                 var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                                // Issue #814 评论 5935346839: context_menu_open 边界日志（node, touch 长按）。
+                                logInteraction("context_menu_open", "node", nd.id, {
+                                    "menuKind": "node",
+                                    "worldX": nd.x + nd.width / 2,
+                                    "worldY": nd.y + nd.height / 2
+                                })
                                 nodeContextMenu.popup(sceneX, sceneY)
                             }
                         }
@@ -743,14 +914,30 @@ Item {
                         // Issue #796 评论 5887280405: 松手时 Node 和 Embed 都参与命中，
                         // 用 path 版建边支持 Embed 端点。
                         var targetNode = findNodeAt(interaction.connectMouseX, interaction.connectMouseY)
+                        var _connectSuccess = false
+                        var _connectCancel = false
+                        var _toPath = null
                         if (targetNode && targetNode.id !== interaction.connectFromId) {
-                            createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
+                            _toPath = nodePath(targetNode.id)
+                            createEdgeWithPaths(interaction.connectFromPath, _toPath)
+                            _connectSuccess = true
                         } else {
                             var targetEmbed = findEmbedChromeAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                _toPath = embedPath(targetEmbed.instanceId)
+                                createEdgeWithPaths(interaction.connectFromPath, _toPath)
+                                _connectSuccess = true
+                            } else {
+                                _connectCancel = true
                             }
                         }
+                        // Issue #814 评论 5935346839: connect_end 边界日志（node 端）。
+                        logInteraction("connect_end", "node", nodeData.id, {
+                            "fromPath": JSON.stringify(interaction.connectFromPath),
+                            "toPath": _toPath ? JSON.stringify(_toPath) : "",
+                            "success": _connectSuccess,
+                            "cancel": _connectCancel
+                        })
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
@@ -759,6 +946,13 @@ Item {
                         // 无论 onLeftReleased 与 bgTouchDrag.onActiveChanged 的触发顺序如何都不会重复 commit。
                         if (!bgTouchDrag._wasTouchMove) {
                             graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
+                            // Issue #814 评论 5935346839: move_end 边界日志（node, mouse）。
+                            logInteraction("move_end", "node", nodeData.id, {
+                                "toX": interaction.moveX,
+                                "toY": interaction.moveY,
+                                "commitSuccess": true,
+                                "device": "mouse"
+                            })
                             interaction.endMove()
                         }
                     }
@@ -827,6 +1021,10 @@ Item {
 
                 onClicked: function(instId) {
                     graphController.selectEmbed(instId)
+                    // Issue #814 评论 5935346839: selection_changed 边界日志（embed）。
+                    logInteraction("selection_changed", "embed", instId, {
+                        "device": "mouse"
+                    })
                 }
 
                 // Issue #805 评论 5907045450 第 1/3 部分：双击不再 drillDown。
@@ -847,6 +1045,13 @@ Item {
                     if (!interaction.beginConnect("embed", instId, embedPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
+                    // Issue #814 评论 5935346839: connect_begin 边界日志（embed）。
+                    logInteraction("connect_begin", "embed", instId, {
+                        "kind": "embed",
+                        "fromId": instId,
+                        "fromX": ed.x + ed.width / 2,
+                        "fromY": ed.y + ed.height / 2
+                    })
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
@@ -869,6 +1074,14 @@ Item {
                 onContextMenuRequested: function(instId, sceneX, sceneY) {
                     graphController.selectEmbed(instId)
                     selectedEmbedForMenu = graphController.getEmbed(instId)
+                    // Issue #814 评论 5935346839: context_menu_open 边界日志（embed）。
+                    var _ewx = (sceneX - panX) / zoomLevel
+                    var _ewy = (sceneY - panY) / zoomLevel
+                    logInteraction("context_menu_open", "embed", instId, {
+                        "menuKind": "embed",
+                        "worldX": _ewx,
+                        "worldY": _ewy
+                    })
                     embedContextMenu.popup(sceneX, sceneY)
                 }
 
@@ -897,6 +1110,12 @@ Item {
 
                     if (interaction.pointerMode === "idle") {
                         interaction.beginEmbedMove(embedData.instanceId, x, y)
+                        // Issue #814 评论 5935346839: move_begin 边界日志（embed）。
+                        logInteraction("move_begin", "embed", embedData.instanceId, {
+                            "kind": "embed",
+                            "fromX": x,
+                            "fromY": y
+                        })
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
@@ -923,6 +1142,12 @@ Item {
                                 // 用 Embed 中心位置弹出菜单
                                 var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
                                 var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                                // Issue #814 评论 5935346839: context_menu_open 边界日志（embed, touch 长按）。
+                                logInteraction("context_menu_open", "embed", ed.instanceId, {
+                                    "menuKind": "embed",
+                                    "worldX": ed.x + ed.width / 2,
+                                    "worldY": ed.y + ed.height / 2
+                                })
                                 embedContextMenu.popup(sceneX, sceneY)
                             }
                         }
@@ -933,14 +1158,30 @@ Item {
                     // 用 path 版建边；否则走原拖动结束保存位置逻辑。
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
                         var targetNode = findNodeAt(interaction.connectMouseX, interaction.connectMouseY)
+                        var _eSuccess = false
+                        var _eCancel = false
+                        var _eToPath = null
                         if (targetNode && targetNode.id !== interaction.connectFromId) {
-                            createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
+                            _eToPath = nodePath(targetNode.id)
+                            createEdgeWithPaths(interaction.connectFromPath, _eToPath)
+                            _eSuccess = true
                         } else {
                             var targetEmbed = findEmbedChromeAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                _eToPath = embedPath(targetEmbed.instanceId)
+                                createEdgeWithPaths(interaction.connectFromPath, _eToPath)
+                                _eSuccess = true
+                            } else {
+                                _eCancel = true
                             }
                         }
+                        // Issue #814 评论 5935346839: connect_end 边界日志（embed 端）。
+                        logInteraction("connect_end", "embed", embedData.instanceId, {
+                            "fromPath": JSON.stringify(interaction.connectFromPath),
+                            "toPath": _eToPath ? JSON.stringify(_eToPath) : "",
+                            "success": _eSuccess,
+                            "cancel": _eCancel
+                        })
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
@@ -948,6 +1189,13 @@ Item {
                         // 这里只处理鼠标 move。用 _wasTouchMove 区分避免重复 commit。
                         if (!bgTouchDrag._wasTouchMove) {
                             graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
+                            // Issue #814 评论 5935346839: move_end 边界日志（embed, mouse）。
+                            logInteraction("move_end", "embed", embedData.instanceId, {
+                                "toX": interaction.moveX,
+                                "toY": interaction.moveY,
+                                "commitSuccess": true,
+                                "device": "mouse"
+                            })
                             interaction.endMove()
                         }
                     }

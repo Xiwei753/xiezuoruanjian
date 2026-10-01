@@ -87,6 +87,26 @@ Item {
         _syncChildScene()
     }
 
+    // Issue #814 评论 5935346839: Embed 自己的事件分层边界日志入口。
+    // starmapBackendRef 为 null 时静默跳过。不记录连续移动。
+    function logEmbedInteraction(event, fields) {
+        if (!starmapBackendRef) return
+        var fj = fields ? JSON.stringify(fields) : ""
+        starmapBackendRef.record_interaction(event, parentPathKey, targetStarmapId, "embed", instanceId, fj)
+    }
+
+    // Issue #814 评论 5935346839: embed_child_scene_activated 边界日志。
+    onChildSceneActivatedChanged: {
+        if (childSceneActivated) {
+            logEmbedInteraction("embed_child_scene_activated", {
+                "parentPathKey": parentPathKey,
+                "childScenePathKey": childScenePathKey,
+                "instanceId": instanceId,
+                "targetStarmapId": targetStarmapId
+            })
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // 递归 child Scene 的输入（原来写在静态 Component 里，现在改成运行时构造参数）。
     // dt / starmapBackendRef / rootStarmapId 在一次运行内由 Canvas 恒定传入；
@@ -239,7 +259,20 @@ Item {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, mouse）。
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "title",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
@@ -249,6 +282,19 @@ Item {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
                 exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+                onPressedChanged: {
+                    if (pressed) {
+                        // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, touch）。
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "title",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
@@ -256,7 +302,21 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, right）。
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "title",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -309,19 +369,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderTop",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderTop",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderTop",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -360,19 +457,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderBottom",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderBottom",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderBottom",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -411,19 +545,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderLeft",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderLeft",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderLeft",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -462,19 +633,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderRight",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderRight",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderRight",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
