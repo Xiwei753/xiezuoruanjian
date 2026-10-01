@@ -796,7 +796,7 @@ export struct StarMapScene {
    * innerContent 不挂父手势，由 child Scene 自己处理。
    * 所有 onActionStart 检查 isOwnedByScene，防止别层正在用手势时覆盖 owner。
    */
-  private embedGestureGroup(embed: StarMapEmbed): GestureGroup {
+  private embedGestureGroup(embed: StarMapEmbed): GestureGroupInterface {
     return GestureGroup(GestureMode.Exclusive,
       // 单击 → 选中 Embed
       TapGesture({ count: 1 })
