@@ -50,9 +50,19 @@ Item {
     property string errorMessage: graphController.errorMessage
 
     // View transform properties
+    // Issue #806 评论 5907045450: pan 只能向左/上，不能向右/下。
+    // container 的局部矩形是 [0, width] 且 x: panX，可见世界坐标范围是
+    // [-panX/zoomLevel, (W-panX)/zoomLevel]。panX > 0 会让可见世界坐标出现负值，
+    // 落在 container 矩形之外 → 那部分节点进不了 hit-test 链，点了没反应。
+    // 世界原点在左上角，所以这里把 pan clamp 到 ≤ 0。
     property real panX: 0
     property real panY: 0
     property real zoomLevel: 1.0
+
+    function applyPan(nextX, nextY) {
+        panX = Math.min(0, nextX)
+        panY = Math.min(0, nextY)
+    }
 
     // Issue #801 评论 5894035036: PinchHandler 以手势中心缩放的起点记录。
     property real _pinchStartZoom: 1.0
@@ -197,272 +207,270 @@ Item {
     //   - 触屏空白长按打开背景菜单
     //   - 触屏未长按在节点上滑动 → 画布 pan（节点没挂触屏 DragHandler，事件穿透）
     //   - 触屏长按后移动 → 更新 connect 坐标
+    //
+    // Issue #806 评论 5907045450: 这些 handler 必须直接挂在 canvasArea 上。
+    // 之前它们被包在一个独立的 sibling Item（bgInteractionLayer）里，而 Qt 的
+    // 事件只投递给「命中点所在最深 item」及其祖先链上的 handler，兄弟节点收不到。
+    // 结果空白处的右键菜单、滚轮缩放、拖拽平移全部失效。
     // ---------------------------------------------------------------------------
-    Item {
-        id: bgInteractionLayer
+
+    // 鼠标左键单击：边选中或清选区
+    // Issue #796 评论 5886483653: 命中顺序统一成 Node/Embed → Edge → 空白，
+    // 不让画布背景先吞掉对象点击。
+    TapHandler {
+        id: bgMouseLeftTap
+        acceptedDevices: PointerDevice.Mouse
+        acceptedButtons: Qt.LeftButton
+        onSingleTapped: function(eventPoint) {
+            _touchInputActive = false
+            var mx = (eventPoint.position.x - panX) / zoomLevel
+            var my = (eventPoint.position.y - panY) / zoomLevel
+            if (findNodeAt(mx, my)) {
+                return
+            }
+            if (findEmbedChromeAt(mx, my)) {
+                return
+            }
+            var clickedEdge = graphController.hitTestEdge(mx, my)
+            if (clickedEdge) {
+                graphController.selectEdge(clickedEdge.id)
+            } else {
+                clearSelection()
+            }
+        }
+        // 鼠标空白长按无操作（鼠标用右键打开菜单）。
+        onLongPressed: {
+        }
+    }
+
+    // 触屏左键单击：边选中或清选区；长按打开背景菜单
+    TapHandler {
+        id: bgTouchLeftTap
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        onSingleTapped: function(eventPoint) {
+            _touchInputActive = true
+            var mx = (eventPoint.position.x - panX) / zoomLevel
+            var my = (eventPoint.position.y - panY) / zoomLevel
+            if (findNodeAt(mx, my)) {
+                return
+            }
+            if (findEmbedChromeAt(mx, my)) {
+                return
+            }
+            var clickedEdge = graphController.hitTestEdge(mx, my)
+            if (clickedEdge) {
+                graphController.selectEdge(clickedEdge.id)
+            } else {
+                clearSelection()
+            }
+        }
+        // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
+        // TapHandler.longPressed 信号无参数，用 point.position 拿当前点
+        // （TapHandler 继承自 SinglePointHandler，有 point 属性）。
+        // Issue #801 评论 5894639734: 长按前先判命中，节点/Embed/边上的长按
+        // 不弹背景菜单（Qt TapHandler 是 passive grab，背景和对象 Handler 会
+        // 同时观察同一个 press，不能假设背景自动收不到）。
+        onLongPressed: {
+            _touchInputActive = true
+            var px = bgTouchLeftTap.point.position.x
+            var py = bgTouchLeftTap.point.position.y
+            var wx = (px - panX) / zoomLevel
+            var wy = (py - panY) / zoomLevel
+
+            if (findNodeAt(wx, wy)) return
+            if (findEmbedChromeAt(wx, wy)) return
+            if (graphController.hitTestEdge(wx, wy)) return
+
+            contextMenuWorldX = wx
+            contextMenuWorldY = wy
+            bgContextMenu.popup(px, py)
+        }
+    }
+
+    // 右键单击：边菜单或画布菜单
+    // Issue #796 评论 5886483653: 命中顺序 Node/Embed → Edge → 空白。
+    TapHandler {
+        id: backgroundRightTap
+        acceptedDevices: PointerDevice.Mouse
+        acceptedButtons: Qt.RightButton
+        onSingleTapped: function(eventPoint) {
+            _touchInputActive = false
+            var mx = (eventPoint.position.x - panX) / zoomLevel
+            var my = (eventPoint.position.y - panY) / zoomLevel
+            if (findNodeAt(mx, my)) {
+                return
+            }
+            if (findEmbedChromeAt(mx, my)) {
+                return
+            }
+            var clickedEdge = graphController.hitTestEdge(mx, my)
+            if (clickedEdge) {
+                selectedEdgeForMenu = clickedEdge
+                edgeContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
+            } else {
+                contextMenuWorldX = mx
+                contextMenuWorldY = my
+                bgContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
+            }
+        }
+    }
+
+    // 触屏背景拖动：触屏未长按在节点上滑动 → 画布 pan；
+    // 触屏长按后移动 → 更新 connect 坐标，超过阈值转 connect。
+    // Issue #801 评论 5894035036: 节点没挂触屏 DragHandler，事件穿透到背景。
+    DragHandler {
+        id: bgTouchDrag
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        target: null
+        property real lastTx: 0
+        property real lastTy: 0
+        // Issue #801 评论 5895310100: 标记当前 move 由触屏发起，
+        // 用于 onLeftReleased 区分鼠标 move（nodeDragHandler 驱动）和触屏 move（bgTouchDrag 驱动），
+        // 避免两者重复 commit。
+        property bool _wasTouchMove: false
+        onActiveChanged: {
+            if (active) {
+                lastTx = 0
+                lastTy = 0
+                _touchInputActive = true
+                // 触屏在 move 模式下开始拖动 → 标记，commit 由 bgTouchDrag 独占
+                if (interaction.pointerMode === "move") {
+                    _wasTouchMove = true
+                }
+            } else {
+                // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
+                // 鼠标 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
+                // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
+                if (_wasTouchMove && interaction.pointerMode === "move") {
+                    if (interaction.pressedNodeId !== "") {
+                        graphController.commitNodeMove(interaction.pressedNodeId, interaction.moveX, interaction.moveY)
+                    } else if (interaction.pressedEmbedId !== "") {
+                        graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
+                    }
+                    interaction.endMove()
+                    graphController.computeEdgeRenders(null)
+                    edgeCanvas.requestPaint()
+                }
+                _wasTouchMove = false
+            }
+        }
+        onActiveTranslationChanged: {
+            var dx = activeTranslation.x - lastTx
+            var dy = activeTranslation.y - lastTy
+            lastTx = activeTranslation.x
+            lastTy = activeTranslation.y
+            if (interaction.pointerMode === "idle") {
+                // 触屏未长按滑动 = 画布 pan（屏幕坐标增量直接加到 panX/panY）
+                applyPan(panX + dx, panY + dy)
+            } else if (interaction.pointerMode === "contextPending") {
+                // 触屏长按后移动，更新 connect 坐标（世界坐标，除以 zoomLevel）
+                interaction.connectMouseX += dx / zoomLevel
+                interaction.connectMouseY += dy / zoomLevel
+                // 移动总距离超过阈值则转 connect
+                if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
+                    interaction.contextPendingToConnect()
+                    // Issue #801 评论 5895310100: 继续移动变连线，关闭长按菜单视觉层
+                    touchContextPreview.hide()
+                }
+                edgeCanvas.requestPaint()
+            } else if (interaction.pointerMode === "connect") {
+                interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
+                edgeCanvas.requestPaint()
+            } else if (interaction.pointerMode === "move") {
+                // Issue #801 评论 5895310100: 触屏菜单"移动"后再拖 → 更新 transient 坐标。
+                // Node/Embed 的 DragHandler 限定 Mouse，触屏拖动穿透到背景层，
+                // 由 bgTouchDrag 统一驱动 move。delegate 的 x/y binding 自动跟随 moveX/moveY。
+                interaction.updateMove(interaction.moveX + dx / zoomLevel, interaction.moveY + dy / zoomLevel)
+                graphController.computeEdgeRenders(currentMoveOverride())
+                edgeCanvas.requestPaint()
+            }
+        }
+    }
+
+    // Issue #801 评论 5894035036: 触屏双指 Pinch 缩放。
+    PinchHandler {
+        id: canvasPinch
+        acceptedDevices: PointerDevice.TouchScreen
+        target: null
+        onActiveChanged: {
+            if (active) {
+                _pinchStartZoom = zoomLevel
+                _pinchStartPanX = panX
+                _pinchStartPanY = panY
+                _touchInputActive = true
+            }
+        }
+        onActiveScaleChanged: {
+            var rawZoom = _pinchStartZoom * activeScale
+            // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
+            // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
+            zoomLevel = Math.max(0.35, Math.min(2.5, rawZoom))
+            // 以手势中心缩放
+            var cx = centroid.position.x
+            var cy = centroid.position.y
+            applyPan(cx - (cx - _pinchStartPanX) * (zoomLevel / _pinchStartZoom),
+                     cy - (cy - _pinchStartPanY) * (zoomLevel / _pinchStartZoom))
+        }
+    }
+
+    // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
+    MouseArea {
+        id: bgDragArea
         anchors.fill: parent
-        z: 0
+        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+        hoverEnabled: true
 
-        // 鼠标左键单击：边选中或清选区
-        // Issue #796 评论 5886483653: 命中顺序统一成 Node/Embed → Edge → 空白，
-        // 不让画布背景先吞掉对象点击。
-        TapHandler {
-            id: bgMouseLeftTap
-            acceptedDevices: PointerDevice.Mouse
-            acceptedButtons: Qt.LeftButton
-            onSingleTapped: function(eventPoint) {
-                _touchInputActive = false
-                var mx = (eventPoint.position.x - panX) / zoomLevel
-                var my = (eventPoint.position.y - panY) / zoomLevel
-                if (findNodeAt(mx, my)) {
-                    return
-                }
-                if (findEmbedChromeAt(mx, my)) {
-                    return
-                }
-                var clickedEdge = graphController.hitTestEdge(mx, my)
-                if (clickedEdge) {
-                    graphController.selectEdge(clickedEdge.id)
-                } else {
-                    clearSelection()
-                }
-            }
-            // 鼠标空白长按无操作（鼠标用右键打开菜单）。
-            onLongPressed: {
-            }
-        }
+        property real lastX: 0
+        property real lastY: 0
 
-        // 触屏左键单击：边选中或清选区；长按打开背景菜单
-        TapHandler {
-            id: bgTouchLeftTap
-            acceptedDevices: PointerDevice.TouchScreen
-            acceptedButtons: Qt.LeftButton
-            onSingleTapped: function(eventPoint) {
-                _touchInputActive = true
-                var mx = (eventPoint.position.x - panX) / zoomLevel
-                var my = (eventPoint.position.y - panY) / zoomLevel
-                if (findNodeAt(mx, my)) {
-                    return
-                }
-                if (findEmbedChromeAt(mx, my)) {
-                    return
-                }
-                var clickedEdge = graphController.hitTestEdge(mx, my)
-                if (clickedEdge) {
-                    graphController.selectEdge(clickedEdge.id)
-                } else {
-                    clearSelection()
-                }
-            }
-            // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
-            // TapHandler.longPressed 信号无参数，用 point.position 拿当前点
-            // （TapHandler 继承自 SinglePointHandler，有 point 属性）。
-            // Issue #801 评论 5894639734: 长按前先判命中，节点/Embed/边上的长按
-            // 不弹背景菜单（Qt TapHandler 是 passive grab，背景和对象 Handler 会
-            // 同时观察同一个 press，不能假设背景自动收不到）。
-            onLongPressed: {
-                _touchInputActive = true
-                var px = bgTouchLeftTap.point.position.x
-                var py = bgTouchLeftTap.point.position.y
-                var wx = (px - panX) / zoomLevel
-                var wy = (py - panY) / zoomLevel
-
-                if (findNodeAt(wx, wy)) return
-                if (findEmbedChromeAt(wx, wy)) return
-                if (graphController.hitTestEdge(wx, wy)) return
-
-                contextMenuWorldX = wx
-                contextMenuWorldY = wy
-                bgContextMenu.popup(px, py)
-            }
-        }
-
-        // 右键单击：边菜单或画布菜单
-        // Issue #796 评论 5886483653: 命中顺序 Node/Embed → Edge → 空白。
-        TapHandler {
-            id: backgroundRightTap
-            acceptedDevices: PointerDevice.Mouse
-            acceptedButtons: Qt.RightButton
-            onSingleTapped: function(eventPoint) {
-                _touchInputActive = false
-                var mx = (eventPoint.position.x - panX) / zoomLevel
-                var my = (eventPoint.position.y - panY) / zoomLevel
-                if (findNodeAt(mx, my)) {
-                    return
-                }
-                if (findEmbedChromeAt(mx, my)) {
-                    return
-                }
-                var clickedEdge = graphController.hitTestEdge(mx, my)
-                if (clickedEdge) {
-                    selectedEdgeForMenu = clickedEdge
-                    edgeContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
-                } else {
-                    contextMenuWorldX = mx
-                    contextMenuWorldY = my
-                    bgContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
-                }
-            }
-        }
-
-        // 触屏背景拖动：触屏未长按在节点上滑动 → 画布 pan；
-        // 触屏长按后移动 → 更新 connect 坐标，超过阈值转 connect。
-        // Issue #801 评论 5894035036: 节点没挂触屏 DragHandler，事件穿透到背景。
-        DragHandler {
-            id: bgTouchDrag
-            acceptedDevices: PointerDevice.TouchScreen
-            acceptedButtons: Qt.LeftButton
-            target: null
-            property real lastTx: 0
-            property real lastTy: 0
-            // Issue #801 评论 5895310100: 标记当前 move 由触屏发起，
-            // 用于 onLeftReleased 区分鼠标 move（nodeDragHandler 驱动）和触屏 move（bgTouchDrag 驱动），
-            // 避免两者重复 commit。
-            property bool _wasTouchMove: false
-            onActiveChanged: {
-                if (active) {
-                    lastTx = 0
-                    lastTy = 0
-                    _touchInputActive = true
-                    // 触屏在 move 模式下开始拖动 → 标记，commit 由 bgTouchDrag 独占
-                    if (interaction.pointerMode === "move") {
-                        _wasTouchMove = true
-                    }
-                } else {
-                    // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
-                    // 鼠标 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
-                    // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
-                    if (_wasTouchMove && interaction.pointerMode === "move") {
-                        if (interaction.pressedNodeId !== "") {
-                            graphController.commitNodeMove(interaction.pressedNodeId, interaction.moveX, interaction.moveY)
-                        } else if (interaction.pressedEmbedId !== "") {
-                            graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
-                        }
-                        interaction.endMove()
-                        graphController.computeEdgeRenders(null)
-                        edgeCanvas.requestPaint()
-                    }
-                    _wasTouchMove = false
-                }
-            }
-            onActiveTranslationChanged: {
-                var dx = activeTranslation.x - lastTx
-                var dy = activeTranslation.y - lastTy
-                lastTx = activeTranslation.x
-                lastTy = activeTranslation.y
-                if (interaction.pointerMode === "idle") {
-                    // 触屏未长按滑动 = 画布 pan（屏幕坐标增量直接加到 panX/panY）
-                    panX += dx
-                    panY += dy
-                } else if (interaction.pointerMode === "contextPending") {
-                    // 触屏长按后移动，更新 connect 坐标（世界坐标，除以 zoomLevel）
-                    interaction.connectMouseX += dx / zoomLevel
-                    interaction.connectMouseY += dy / zoomLevel
-                    // 移动总距离超过阈值则转 connect
-                    if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
-                        interaction.contextPendingToConnect()
-                        // Issue #801 评论 5895310100: 继续移动变连线，关闭长按菜单视觉层
-                        touchContextPreview.hide()
-                    }
-                    edgeCanvas.requestPaint()
-                } else if (interaction.pointerMode === "connect") {
-                    interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
-                    edgeCanvas.requestPaint()
-                } else if (interaction.pointerMode === "move") {
-                    // Issue #801 评论 5895310100: 触屏菜单"移动"后再拖 → 更新 transient 坐标。
-                    // Node/Embed 的 DragHandler 限定 Mouse，触屏拖动穿透到背景层，
-                    // 由 bgTouchDrag 统一驱动 move。delegate 的 x/y binding 自动跟随 moveX/moveY。
-                    interaction.updateMove(interaction.moveX + dx / zoomLevel, interaction.moveY + dy / zoomLevel)
-                    graphController.computeEdgeRenders(currentMoveOverride())
-                    edgeCanvas.requestPaint()
-                }
-            }
-        }
-
-        // Issue #801 评论 5894035036: 触屏双指 Pinch 缩放。
-        PinchHandler {
-            id: canvasPinch
-            acceptedDevices: PointerDevice.TouchScreen
-            target: null
-            onActiveChanged: {
-                if (active) {
-                    _pinchStartZoom = zoomLevel
-                    _pinchStartPanX = panX
-                    _pinchStartPanY = panY
-                    _touchInputActive = true
-                }
-            }
-            onActiveScaleChanged: {
-                var rawZoom = _pinchStartZoom * activeScale
-                // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
-                // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
-                zoomLevel = Math.max(0.35, Math.min(2.5, rawZoom))
-                // 以手势中心缩放
-                var cx = centroid.position.x
-                var cy = centroid.position.y
-                panX = cx - (cx - _pinchStartPanX) * (zoomLevel / _pinchStartZoom)
-                panY = cy - (cy - _pinchStartPanY) * (zoomLevel / _pinchStartZoom)
-            }
-        }
-
-        // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
-        MouseArea {
-            id: bgDragArea
-            anchors.fill: parent
-            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
-            hoverEnabled: true
-
-            property real lastX: 0
-            property real lastY: 0
-
-            onPressed: function(mouse) {
-                _touchInputActive = false
-                lastX = mouse.x
-                lastY = mouse.y
-                if (mouse.button === Qt.LeftButton) {
-                    var wx = (mouse.x - panX) / zoomLevel
-                    var wy = (mouse.y - panY) / zoomLevel
-                    if (!findNodeAt(wx, wy) && !findEmbedChromeAt(wx, wy)) {
-                        interaction.beginPan()
-                    }
-                }
-                // 中键直接进入 pan（不依赖长按）
-                if (mouse.button === Qt.MiddleButton) {
+        onPressed: function(mouse) {
+            _touchInputActive = false
+            lastX = mouse.x
+            lastY = mouse.y
+            if (mouse.button === Qt.LeftButton) {
+                var wx = (mouse.x - panX) / zoomLevel
+                var wy = (mouse.y - panY) / zoomLevel
+                if (!findNodeAt(wx, wy) && !findEmbedChromeAt(wx, wy)) {
                     interaction.beginPan()
                 }
             }
-
-            onPositionChanged: function(mouse) {
-                if (interaction.pointerMode === "pan") {
-                    var dx = mouse.x - lastX
-                    var dy = mouse.y - lastY
-                    panX += dx
-                    panY += dy
-                    lastX = mouse.x
-                    lastY = mouse.y
-                }
+            // 中键直接进入 pan（不依赖长按）
+            if (mouse.button === Qt.MiddleButton) {
+                interaction.beginPan()
             }
+        }
 
-            onReleased: function(mouse) {
-                if (interaction.pointerMode === "pan") {
-                    interaction.endPan()
-                }
+        onPositionChanged: function(mouse) {
+            if (interaction.pointerMode === "pan") {
+                var dx = mouse.x - lastX
+                var dy = mouse.y - lastY
+                applyPan(panX + dx, panY + dy)
+                lastX = mouse.x
+                lastY = mouse.y
             }
+        }
 
-            onWheel: function(wheel) {
-                _touchInputActive = false
-                var oldZoom = zoomLevel
-                var delta = wheel.angleDelta.y / 120
-                var newZoom = zoomLevel + delta * 0.1
-                // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
-                // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
-                zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
-
-                var mx = wheel.x
-                var my = wheel.y
-                panX = mx - (mx - panX) * (zoomLevel / oldZoom)
-                panY = my - (my - panY) * (zoomLevel / oldZoom)
+        onReleased: function(mouse) {
+            if (interaction.pointerMode === "pan") {
+                interaction.endPan()
             }
+        }
+
+        onWheel: function(wheel) {
+            _touchInputActive = false
+            var oldZoom = zoomLevel
+            var delta = wheel.angleDelta.y / 120
+            var newZoom = zoomLevel + delta * 0.1
+            // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
+            // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
+            zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
+
+            var mx = wheel.x
+            var my = wheel.y
+            applyPan(mx - (mx - panX) * (zoomLevel / oldZoom),
+                     my - (my - panY) * (zoomLevel / oldZoom))
         }
     }
 
@@ -563,6 +571,18 @@ Item {
     }
 
     // Main transform container
+    //
+    // Issue #806 评论 5907045450：这里必须显式给 width/height。
+    // container 用 x/y + scale + transformOrigin 做视图变换，不是 anchors 布局，
+    // QML 默认 width/height 为 0，于是自身是个 0×0 矩形。Qt 的 hit-test 递归要求
+    // 父 Item 自己 contains(point) 才下降到子节点，0×0 矩形永远不含任何点 →
+    // 所有 StarMapNode / StarMapEmbed delegate 都进不了命中链，左右键全部失效。
+    //
+    // 尺寸按世界坐标给：container 外层套了 scale=zoomLevel，父级可视区换算到
+    // 世界坐标要除以 zoomLevel。container 的局部矩形是 [0, width]，而可见世界
+    // 坐标范围是 [-panX/zoomLevel, (W-panX)/zoomLevel]，只有 panX ≤ 0 时下界
+    // 才 ≥ 0。所以 pan 一律 clamp 到 ≤ 0（世界原点在左上角，见 applyPan），
+    // 此时可视区恰好被这个矩形覆盖。
     Item {
         id: container
         x: panX
@@ -570,6 +590,8 @@ Item {
         scale: zoomLevel
         transformOrigin: Item.TopLeft
         z: 2
+        width: canvasArea.width / zoomLevel
+        height: canvasArea.height / zoomLevel
 
         Repeater {
             model: graphController.nodesModel
@@ -1732,5 +1754,6 @@ Item {
             close()
         }
     }
+
 
 }
