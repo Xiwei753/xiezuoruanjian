@@ -321,9 +321,8 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
         // 调 active_text_transaction_key() 取活动事务后，检查其 cursor_owner_epoch
         // 是否等于 current_cursor_epoch。epoch 不一致时返回 None。
-        // Issue #735 评论 5773604666 问题3: epoch 不一致时 CaretDriven units 已在
-        // find_cursor_transaction_for_target / build_text_animation_plan_with_sample
-        // 中收口（落到终态），不再继续播自己的 glyph。
+        // Issue #808: epoch 不一致时事务失去 caret motion ownership，但文字 Timed unit
+        // 继续自己的时间线（与 caret track 独立），不因 caret motion 失效而收口。
         let key = self.active_text_transaction_key()?;
         let tx = self
             .prepared_queue
@@ -332,9 +331,8 @@ impl LinuxEditorAnimationCoordinator {
             .find(|t| t.key == key)?;
 
         // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
-        // Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时返回 None——
-        // 事务立刻失去 caret motion ownership，CaretDriven units 已落到 canonical
-        // final state（不再继续播放）。
+        // Issue #808: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
+        // 但文字 Timed unit 继续自己的时间线，不因 caret motion 失效而收口。
         if tx.cursor_owner_epoch != current_cursor_epoch {
             return None;
         }

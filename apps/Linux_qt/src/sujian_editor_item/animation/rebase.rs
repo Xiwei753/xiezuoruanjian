@@ -469,7 +469,7 @@ impl LinuxEditorAnimationCoordinator {
         // - coordinated=true 时：协同模式要求有效 caret motion（两条独立时间线 + caret
         //   锚点遮罩语义），否则不创建事务（文字动画也不启动）。
         // - coordinated=false 时：缺少 caret motion 只意味着没有 caret track / 没有
-        //   CaretDriven units（Issue #727 约束 5），文字动画（Reflow）照常播放。
+        //   文字 Timed unit 与 caret track 独立（Issue #808），文字动画照常播放。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
         if coordinated_animation_enabled && !valid_caret_motion_track {
             return None;
@@ -509,7 +509,7 @@ impl LinuxEditorAnimationCoordinator {
                 );
                 // 纯插入在 old 文档里就是 range_start 这一个位置点。
                 // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样，
-                // 旧事务还活着，采到的是真实当前帧（CaretDriven 还没被推到终态）。
+                // 旧事务还活着，采到的是真实当前帧（文字 Timed unit 与 caret track 独立）。
                 let (rebase_frames, caret_handoff) = self.take_rebase_frames(
                     &conflicting,
                     "rebased_by_insert",

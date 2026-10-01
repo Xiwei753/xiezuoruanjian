@@ -229,8 +229,8 @@ fn elapsed_unit(
 
 /// 手工装配一笔处于 Rendering 的正文事务。事务 timeline 从 `tx_elapsed_ms` 起算，
 /// 与单元各自的 `elapsed_ms` 故意取不同值，用来验证两者不再互相顶替。
-/// Issue #727 约束 3: 自动创建 `cursor_visual_track`，使 CaretDriven unit 可以
-/// 从 caret track progress 推导可见比例。`started_at` 与事务 timeline 同步。
+/// Issue #808: 自动创建 `cursor_visual_track`，但文字 Timed unit 有自己的时间线，
+/// 与 caret track 独立。`started_at` 与事务 timeline 同步仅用于 caret track。
 fn rendering_tx(
     key: VisualTransactionKey,
     operation_kind: TextVisualOperationKind,
@@ -242,8 +242,8 @@ fn rendering_tx(
 ) -> PreparedTextVisualTransaction {
     let mut timeline = TransactionTimeline::new(100);
     timeline.rendering_started_at = Some(now - Duration::from_millis(tx_elapsed_ms));
-    // Issue #727 约束 3: CaretDriven unit 依赖 caret motion track。
-    // 测试辅助函数自动创建 cursor_visual_track，使 CaretDriven unit 可以生成 glyph。
+    // Issue #808: 文字 Timed unit 与 caret track 独立。
+    // 测试辅助函数自动创建 cursor_visual_track，caret track 有自己的时间线。
     let cursor_visual_track = Some(PreparedCursorVisualTrack {
         from: old_cursor.clone(),
         to: new_cursor.clone(),
@@ -945,13 +945,12 @@ fn issue690_collect_rebase_frames_uses_per_unit_progress() {
         VisualTransactionKey::new(1, 1),
         TextVisualOperationKind::Insert,
         vec![
-            // CaretDriven unit（InsertReveal）：可见比例从 caret track progress 推导。
-            // caret track progress = 0.5 → ease_out_quad(0.5) = 0.75
-            elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now),
+            // 文字 Timed unit（InsertReveal）：可见比例从 unit 自己的时间线推导。
+            // unit elapsed 40ms / duration 100ms → progress = 0.4 → ease_out_quad(0.4) = 0.64。
+            // 与 caret track progress（0.5 → 0.75）故意不同，锁死两条时间线独立。
+            elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 40, 100, now),
             // Timed unit（ReflowMove）：有自己的时间线，elapsed 500ms > duration 100ms
             // → progress >= 1.0 → is_finished() = true → 已播完不交棒。
-            // Issue #727 约束 2: CaretDriven unit 共享 caret track，不能独立"已播完"，
-            // 所以用 Timed unit 验证"已播完的单元不交棒"。
             elapsed_unit(reflow_slice(3, 6, 160.0, 220.0), 500, 100, now),
         ],
         caret(100.0),
@@ -959,8 +958,8 @@ fn issue690_collect_rebase_frames_uses_per_unit_progress() {
         now,
         50,
     );
-    // 事务级 progress = 0.5（eased 0.75）。CaretDriven unit 的可见比例从 caret track
-    // progress 推导：start + (target - start) * ease_out_quad(0.5) = 0.75。
+    // 事务级 caret track progress = 0.5（eased 0.75），但文字 unit 的可见比例从
+    // unit 自己的时间线推导：ease_out_quad(0.4) = 0.64，不消费 caret track progress。
     tx.timeline.rendering_started_at = Some(now - Duration::from_millis(50));
 
     let frames = tx.collect_rebase_frames(now);
@@ -972,19 +971,19 @@ fn issue690_collect_rebase_frames_uses_per_unit_progress() {
     );
     let frame = &frames[0];
     assert!(
-        (frame.visible_fraction - 0.75).abs() < 1e-6,
-        "交棒帧必须按单元自己的 progress 计算可见比例（期望 0.75，按事务 progress 会得 0.19）",
+        (frame.visible_fraction - 0.64).abs() < 1e-6,
+        "交棒帧必须按单元自己的 progress 计算可见比例（期望 0.64，按 caret track progress 会得 0.75）",
     );
     assert_eq!((frame.byte_start, frame.byte_end), (0, 3));
     assert!((frame.x - 100.0).abs() < 1e-6);
     // Issue #690 评论 5679744253 问题 1: 采集时计算剩余时长，不再沿用旧起始时间。
-    // 旧单元演了 50ms，总时长 100ms，剩余 50ms。
-    assert_eq!(frame.remaining_duration_ms, 50);
+    // 旧单元演了 40ms，总时长 100ms，剩余 60ms。
+    assert_eq!(frame.remaining_duration_ms, 60);
     assert_eq!(frame.sampled_at, now);
-    // 采集到的比例必须与文字帧同一个几何结果（右边界 100 + 60*0.75 = 145）
+    // 采集到的比例必须与文字帧同一个几何结果（右边界 100 + 60*0.64 = 138.4）
     let edge = reveal_slice(0, 3, 100.0, 60.0).compute_frame(frame.visible_fraction);
     assert!(
-        (edge.x + edge.w - 145.0).abs() < 1e-6,
+        (edge.x + edge.w - 138.4).abs() < 1e-6,
         "可见比例应还原出同一帧的文字右边界，got {}",
         edge.x + edge.w
     );
@@ -994,9 +993,9 @@ fn issue690_collect_rebase_frames_uses_per_unit_progress() {
 fn issue690_match_rebase_frames_continues_unit_timeline() {
     let now = Instant::now();
     let old_unit = elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now);
-    // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track progress 推导。
-    // start_fraction=0, target_fraction=1, progress=0.5 → visible = 0 + (1-0)*ease_out_quad(0.5) = 0.75
-    let visible_fraction = 0.0 + (1.0 - 0.0) * AnimatedSlice::ease_out_quad(0.5);
+    // Issue #808: 文字 Timed unit 的 visible_fraction 从 unit 自己的时间线推导。
+    // unit elapsed 50ms / duration 100ms → progress = 0.5 → ease_out_quad(0.5) = 0.75。
+    let visible_fraction = old_unit.current_visible_fraction(now);
     let frame = old_unit.slice.compute_frame(visible_fraction);
     // Issue #690 评论 5679744253 问题 1: RebaseFrame 携带 sampled_at 和
     // remaining_duration_ms，retarget 时从当前帧重新起段。
@@ -1104,7 +1103,7 @@ fn issue690_take_rebase_frames_keeps_transaction_when_units_are_untouched() {
     coord.prepared_queue.enqueue(rendering_tx(
         old_key,
         TextVisualOperationKind::Insert,
-        vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+        vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 40, 100, now)],
         caret(100.0),
         caret(160.0),
         now,
@@ -1135,21 +1134,13 @@ fn issue690_take_rebase_frames_keeps_transaction_when_units_are_untouched() {
         "保留的单元起点不能被改写，got {}",
         start_fraction
     );
-    // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track progress 推导。
-    // 保留的单元的 caret track progress = 50/100 = 0.5
-    // → visible = 0 + (1-0)*ease_out_quad(0.5) = 0.75
-    let tx_ref = &coord.prepared_queue.active_transactions()[0];
-    let caret_progress = tx_ref
-        .cursor_visual_track
-        .as_ref()
-        .map(|track| track.progress(now))
-        .unwrap_or(0.0);
-    let visible = start_fraction
-        + (unit.timing.target_fraction() - start_fraction)
-            * AnimatedSlice::ease_out_quad(caret_progress);
+    // Issue #808: 文字 Timed unit 的 visible_fraction 从 unit 自己的时间线推导，
+    // 与 caret track 独立。unit elapsed 40ms / duration 100ms → progress = 0.4
+    // → visible = ease_out_quad(0.4) = 0.64（caret track progress = 0.5 → 0.75，故意不同）。
+    let visible = unit.current_visible_fraction(now);
     assert!(
-        (visible - 0.75).abs() < 1e-6,
-        "保留的单元沿 caret track 继续，不因新事务 id 归零重播，got {}",
+        (visible - 0.64).abs() < 1e-6,
+        "保留的单元沿自己的时间线继续，不因新事务 id 归零重播，got {}",
         visible
     );
 }
