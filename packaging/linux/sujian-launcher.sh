@@ -28,6 +28,37 @@ STARTUP_DIR="$DIAG_DIR/startup"
 HISTORY_DIR="$STARTUP_DIR/history"
 mkdir -p "$HISTORY_DIR" "$DIAG_DIR/crash" "$DIAG_DIR/runtime" "$DIAG_DIR/exports"
 
+
+# --- 给用户看的目录说明：打开 ~/.sujianxiezuo 就能知道该拿哪个文件 ---
+# 这个文件只做说明，不参与程序运行；写失败不能阻止应用启动。
+{
+    cat <<'EOF'
+素笺写作 Linux 支持目录说明
+
+如果软件打不开，不用一个个翻文件。按下面顺序找：
+
+1. diagnostics/startup/latest.log
+   最近一次启动记录。软件打不开时，优先把这个文件发给开发者。
+   如果程序还卡在后台没有退出，这个文件可能还没有写完。
+
+2. diagnostics/startup/last_failed.log
+   最近一次“已经确认启动失败”的记录。这个文件存在时，和 latest.log 一起发。
+
+3. diagnostics/crash/
+   崩溃记录。里面如果有和刚才启动时间接近的文件，也一起发。
+
+其他目录：
+- diagnostics/startup/history/：过去每一次启动的历史记录，一般不用自己翻。
+- diagnostics/runtime/：软件成功运行以后产生的运行日志。
+- diagnostics/exports/：在软件里点“导出诊断”后生成的诊断包。
+- diagnostics/startup/last_failed.pending：程序内部临时标记，不用管，也不用发。
+
+最简单的做法：
+软件打不开 -> 先发 diagnostics/startup/latest.log；
+如果有 last_failed.log 或刚生成的 crash 文件，再一起发。
+EOF
+} > "$HOME_DIR/.sujianxiezuo/说明.txt" 2>/dev/null || true
+
 # --- 本次启动日志文件名 ---
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 PID="$$"
