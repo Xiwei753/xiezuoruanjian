@@ -197,6 +197,92 @@ function buildEdgeJson(starmapId, fromNodeId, toNodeId, kind, label, uuid, now) 
   })
 }
 
+// ── 常量（与 StarMapGeometry.ets 一致）──
+const EMBED_TITLE_HEIGHT = 24
+const EMBED_BORDER_WIDTH = 3
+
+// ── 被测规格：hitTestWithScene (StarMapGeometry.ets) ──
+function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds) {
+  for (let i = rects.length - 1; i >= 0; i--) {
+    const r = rects[i]
+    if (screenX >= r.x && screenX <= r.x + r.width &&
+        screenY >= r.y && screenY <= r.y + r.height) {
+      const isEmbed = embedInstanceIds.has(r.nodeId)
+      if (!isEmbed) {
+        return { scenePath, objectKind: 'node', objectId: r.nodeId, hitRegion: 'body' }
+      }
+      const titleBottom = r.y + EMBED_TITLE_HEIGHT
+      const borderRight = r.x + EMBED_BORDER_WIDTH
+      const borderLeftInner = r.x + r.width - EMBED_BORDER_WIDTH
+      const borderBottomInner = r.y + r.height - EMBED_BORDER_WIDTH
+      if (screenY <= titleBottom) {
+        return { scenePath, objectKind: 'embedTitle', objectId: r.nodeId, hitRegion: 'title' }
+      }
+      if (screenX <= borderRight || screenX >= borderLeftInner || screenY >= borderBottomInner) {
+        return { scenePath, objectKind: 'embedBorder', objectId: r.nodeId, hitRegion: 'border' }
+      }
+      const innerContentTop = titleBottom + EMBED_BORDER_WIDTH
+      if (screenY <= innerContentTop) {
+        return { scenePath, objectKind: 'embedBorder', objectId: r.nodeId, hitRegion: 'border' }
+      }
+      return { scenePath, objectKind: 'embedInnerContent', objectId: r.nodeId, hitRegion: 'innerContent' }
+    }
+  }
+  return null
+}
+
+// ── 被测规格：StarMapGestureStateTracker (StarMapGestureState.ets) ──
+function createGestureStateTracker() {
+  let state = {
+    mode: 'idle', activeItemId: '', activeItemKind: 'node',
+    ownerScenePath: [], startPoint: { x: 0, y: 0 },
+    currentPoint: { x: 0, y: 0 }, targetItemId: ''
+  }
+  return {
+    beginPanCanvas(ownerScenePath, startX, startY) {
+      state = { mode: 'panCanvas', activeItemId: '', activeItemKind: 'node',
+        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
+        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+    },
+    beginNodeMenu(ownerScenePath, nodeId, startX, startY) {
+      state = { mode: 'nodeMenu', activeItemId: nodeId, activeItemKind: 'node',
+        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
+        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+    },
+    beginConnect(ownerScenePath, nodeId, startX, startY) {
+      state = { mode: 'connect', activeItemId: nodeId, activeItemKind: 'node',
+        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
+        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+    },
+    beginMoveNode(ownerScenePath, nodeId, startX, startY) {
+      state = { mode: 'moveNode', activeItemId: nodeId, activeItemKind: 'node',
+        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
+        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+    },
+    beginMoveEmbed(ownerScenePath, embedInstanceId, startX, startY) {
+      state = { mode: 'moveEmbed', activeItemId: embedInstanceId, activeItemKind: 'embed',
+        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
+        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+    },
+    reset() {
+      state = { mode: 'idle', activeItemId: '', activeItemKind: 'node',
+        ownerScenePath: [], startPoint: { x: 0, y: 0 },
+        currentPoint: { x: 0, y: 0 }, targetItemId: '' }
+    },
+    isOwnedByScene(scenePath) {
+      const owner = state.ownerScenePath
+      if (owner.length !== scenePath.length) return false
+      for (let i = 0; i < owner.length; i++) {
+        if (owner[i].type !== scenePath[i].type ||
+            owner[i].instanceId !== scenePath[i].instanceId ||
+            owner[i].nodeId !== scenePath[i].nodeId) return false
+      }
+      return true
+    },
+    getState() { return JSON.parse(JSON.stringify(state)) }
+  }
+}
+
 // ── 断言工具 ──
 let passed = 0
 let failed = 0
@@ -348,6 +434,214 @@ console.log('8. 关系写入 JSON：id/时间戳平台端生成，target detail 
     'from/to 指向真实节点')
   assert(edge.from.target.type === 'node' && edge.from.target.anchorId === null,
     'type=node，未用字段显式 null')
+}
+
+console.log('9. hitTestWithScene：普通节点命中 → node/body')
+{
+  const rects = [
+    { nodeId: 'n1', x: 0, y: 0, width: 160, height: 80 },
+    { nodeId: 'n2', x: 200, y: 100, width: 160, height: 80 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set()
+  const hit = hitTestWithScene(rects, 50, 40, scenePath, embedIds)
+  assert(hit !== null, '命中节点返回非 null')
+  assert(hit.objectKind === 'node', 'objectKind = node')
+  assert(hit.hitRegion === 'body', 'hitRegion = body')
+  assert(hit.objectId === 'n1', 'objectId = n1')
+  assert(eq(hit.scenePath, scenePath), 'scenePath 正确传递')
+}
+
+console.log('10. hitTestWithScene：Embed title 命中 → embedTitle/title')
+{
+  const rects = [
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 120 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set(['emb1'])
+  // title 区域：y ∈ [50, 50+24=74]
+  const hit = hitTestWithScene(rects, 150, 60, scenePath, embedIds)
+  assert(hit !== null, '命中 Embed title 区域返回非 null')
+  assert(hit.objectKind === 'embedTitle', 'objectKind = embedTitle')
+  assert(hit.hitRegion === 'title', 'hitRegion = title')
+  assert(hit.objectId === 'emb1', 'objectId = emb1')
+  assert(eq(hit.scenePath, scenePath), 'scenePath 正确传递')
+}
+
+console.log('11. hitTestWithScene：Embed border 命中 → embedBorder/border')
+{
+  const rects = [
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 120 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set(['emb1'])
+  // 左边框：x ∈ [100, 100+3=103]，y > titleBottom(74)
+  const hitLeft = hitTestWithScene(rects, 101, 90, scenePath, embedIds)
+  assert(hitLeft !== null, '命中 Embed 左边框返回非 null')
+  assert(hitLeft.objectKind === 'embedBorder', '左边框 objectKind = embedBorder')
+  assert(hitLeft.hitRegion === 'border', '左边框 hitRegion = border')
+  // 右边框：x >= 100+200-3=297
+  const hitRight = hitTestWithScene(rects, 298, 90, scenePath, embedIds)
+  assert(hitRight !== null, '命中 Embed 右边框返回非 null')
+  assert(hitRight.objectKind === 'embedBorder', '右边框 objectKind = embedBorder')
+  assert(hitRight.hitRegion === 'border', '右边框 hitRegion = border')
+  // 下边框：y >= 50+120-3=167
+  const hitBottom = hitTestWithScene(rects, 150, 168, scenePath, embedIds)
+  assert(hitBottom !== null, '命中 Embed 下边框返回非 null')
+  assert(hitBottom.objectKind === 'embedBorder', '下边框 objectKind = embedBorder')
+  assert(hitBottom.hitRegion === 'border', '下边框 hitRegion = border')
+  // title 与 innerContent 之间的横向 border：y ∈ (74, 74+3=77]
+  const hitMidBorder = hitTestWithScene(rects, 150, 76, scenePath, embedIds)
+  assert(hitMidBorder !== null, '命中 title 下方 border 返回非 null')
+  assert(hitMidBorder.objectKind === 'embedBorder', 'title 下方 border objectKind = embedBorder')
+  assert(hitMidBorder.hitRegion === 'border', 'title 下方 border hitRegion = border')
+}
+
+console.log('12. hitTestWithScene：Embed innerContent 命中 → embedInnerContent/innerContent')
+{
+  const rects = [
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 120 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set(['emb1'])
+  // innerContent 区域：x ∈ (103, 297)，y ∈ (77, 167)
+  const hit = hitTestWithScene(rects, 150, 100, scenePath, embedIds)
+  assert(hit !== null, '命中 Embed innerContent 返回非 null')
+  assert(hit.objectKind === 'embedInnerContent', 'objectKind = embedInnerContent')
+  assert(hit.hitRegion === 'innerContent', 'hitRegion = innerContent')
+  assert(hit.objectId === 'emb1', 'objectId = emb1')
+}
+
+console.log('13. hitTestWithScene：未命中 → null')
+{
+  const rects = [
+    { nodeId: 'n1', x: 0, y: 0, width: 160, height: 80 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set()
+  const hit = hitTestWithScene(rects, 500, 500, scenePath, embedIds)
+  assert(hit === null, '点击在所有 rect 之外 → null')
+}
+
+console.log('14. hitTestWithScene：后绘制（数组末尾）的 rect 优先命中')
+{
+  const rects = [
+    { nodeId: 'n1', x: 0, y: 0, width: 200, height: 200 },
+    { nodeId: 'n2', x: 0, y: 0, width: 200, height: 200 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set()
+  const hit = hitTestWithScene(rects, 100, 100, scenePath, embedIds)
+  assert(hit.objectId === 'n2', '后绘制的 n2 优先命中（zIndex 更高）')
+}
+
+console.log('15. GestureState：beginPanCanvas 传入 ownerScenePath')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginPanCanvas(scenePath, 10, 20)
+  const s = tracker.getState()
+  assert(s.mode === 'panCanvas', 'mode = panCanvas')
+  assert(eq(s.ownerScenePath, scenePath), 'ownerScenePath 正确')
+  assert(s.activeItemId === '', 'panCanvas 无 activeItemId')
+  assert(s.activeItemKind === 'node', 'panCanvas activeItemKind = node')
+  assert(eq(s.startPoint, { x: 10, y: 20 }), 'startPoint 正确')
+}
+
+console.log('16. GestureState：beginNodeMenu 传入 ownerScenePath')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginNodeMenu(scenePath, 'n1', 30, 40)
+  const s = tracker.getState()
+  assert(s.mode === 'nodeMenu', 'mode = nodeMenu')
+  assert(eq(s.ownerScenePath, scenePath), 'ownerScenePath 正确')
+  assert(s.activeItemId === 'n1', 'activeItemId = n1')
+  assert(s.activeItemKind === 'node', 'activeItemKind = node')
+}
+
+console.log('17. GestureState：beginConnect 传入 ownerScenePath')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginConnect(scenePath, 'n2', 50, 60)
+  const s = tracker.getState()
+  assert(s.mode === 'connect', 'mode = connect')
+  assert(eq(s.ownerScenePath, scenePath), 'ownerScenePath 正确')
+  assert(s.activeItemId === 'n2', 'activeItemId = n2')
+  assert(s.activeItemKind === 'node', 'activeItemKind = node')
+}
+
+console.log('18. GestureState：beginMoveNode 传入 ownerScenePath')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginMoveNode(scenePath, 'n3', 70, 80)
+  const s = tracker.getState()
+  assert(s.mode === 'moveNode', 'mode = moveNode')
+  assert(eq(s.ownerScenePath, scenePath), 'ownerScenePath 正确')
+  assert(s.activeItemId === 'n3', 'activeItemId = n3')
+  assert(s.activeItemKind === 'node', 'activeItemKind = node')
+}
+
+console.log('19. GestureState：beginMoveEmbed 传入 ownerScenePath')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginMoveEmbed(scenePath, 'emb1', 90, 100)
+  const s = tracker.getState()
+  assert(s.mode === 'moveEmbed', 'mode = moveEmbed')
+  assert(eq(s.ownerScenePath, scenePath), 'ownerScenePath 正确')
+  assert(s.activeItemId === 'emb1', 'activeItemId = emb1')
+  assert(s.activeItemKind === 'embed', 'activeItemKind = embed')
+}
+
+console.log('20. GestureState：activeItemKind 区分 node vs embed')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginMoveNode(scenePath, 'n1', 0, 0)
+  assert(tracker.getState().activeItemKind === 'node', 'beginMoveNode → activeItemKind = node')
+  tracker.beginMoveEmbed(scenePath, 'emb1', 0, 0)
+  assert(tracker.getState().activeItemKind === 'embed', 'beginMoveEmbed → activeItemKind = embed')
+  tracker.beginNodeMenu(scenePath, 'n2', 0, 0)
+  assert(tracker.getState().activeItemKind === 'node', 'beginNodeMenu → activeItemKind = node')
+  tracker.beginConnect(scenePath, 'n3', 0, 0)
+  assert(tracker.getState().activeItemKind === 'node', 'beginConnect → activeItemKind = node')
+  tracker.beginPanCanvas(scenePath, 0, 0)
+  assert(tracker.getState().activeItemKind === 'node', 'beginPanCanvas → activeItemKind = node')
+}
+
+console.log('21. GestureState：reset() 清空 ownerScenePath 和 activeItemKind')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  tracker.beginMoveEmbed(scenePath, 'emb1', 10, 20)
+  assert(tracker.getState().ownerScenePath.length === 1, 'reset 前有 ownerScenePath')
+  assert(tracker.getState().activeItemKind === 'embed', 'reset 前 activeItemKind = embed')
+  tracker.reset()
+  const s = tracker.getState()
+  assert(s.mode === 'idle', 'reset 后 mode = idle')
+  assert(eq(s.ownerScenePath, []), 'reset 后 ownerScenePath 为空数组')
+  assert(s.activeItemKind === 'node', 'reset 后 activeItemKind 回到默认 node')
+  assert(s.activeItemId === '', 'reset 后 activeItemId 为空')
+}
+
+console.log('22. GestureState：isOwnedByScene 正确比较路径')
+{
+  const tracker = createGestureStateTracker()
+  const scenePath1 = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const scenePath2 = [{ type: 'starmap', instanceId: 'sm2', nodeId: '' }]
+  const scenePath3 = [
+    { type: 'starmap', instanceId: 'sm1', nodeId: '' },
+    { type: 'embed', instanceId: 'emb1', nodeId: 'n1' }
+  ]
+  tracker.beginMoveNode(scenePath1, 'n1', 0, 0)
+  assert(tracker.isOwnedByScene(scenePath1) === true, '相同路径 → true')
+  assert(tracker.isOwnedByScene(scenePath2) === false, '不同 instanceId → false')
+  assert(tracker.isOwnedByScene(scenePath3) === false, '不同长度路径 → false')
+  tracker.reset()
+  assert(tracker.isOwnedByScene(scenePath1) === false, 'reset 后空路径不匹配任何路径')
 }
 
 console.log('')

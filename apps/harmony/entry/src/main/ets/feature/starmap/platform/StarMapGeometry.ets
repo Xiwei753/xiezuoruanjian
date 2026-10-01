@@ -4,7 +4,8 @@
 
 import {
   StarMapEdge,
-  StarMapTargetPath
+  StarMapTargetPath,
+  StarMapPathSegment
 } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformLayoutNode, PlatformPoint } from './StarMapLayout'
 
@@ -38,11 +39,27 @@ export interface PlatformEdgeRender {
   label: string | null
 }
 
+/** 命中测试结果：包含 scene 作用域信息，区分命中对象类型和区域。 */
+export interface HitTestResult {
+  /** 命中对象所属的 scene 路径（从根星图到当前 scene 的穿越路径） */
+  scenePath: StarMapPathSegment[]
+  /** 命中对象类型 */
+  objectKind: 'node' | 'embed' | 'embedTitle' | 'embedBorder' | 'embedInnerContent'
+  /** 命中对象 ID（nodeId 或 embed instanceId） */
+  objectId: string
+  /** 命中区域 */
+  hitRegion: 'body' | 'title' | 'border' | 'innerContent'
+}
+
 // ─── 常量 ───
 
 const ARROW_SIZE: number = 10
 const ARROW_ANGLE: number = Math.PI / 6 // 30°
 const LABEL_OFFSET: number = 8
+
+// Embed 命中区域尺寸定义（vp）
+const EMBED_TITLE_HEIGHT: number = 24   // Embed title 条高度
+const EMBED_BORDER_WIDTH: number = 3    // Embed 边框宽度
 
 // ─── 节点矩形派生 ───
 
@@ -87,6 +104,115 @@ export function hitTest(
     if (screenX >= r.x && screenX <= r.x + r.width &&
       screenY >= r.y && screenY <= r.y + r.height) {
       return r.nodeId
+    }
+  }
+  return null
+}
+
+/**
+ * 带 scene 作用域的命中测试。
+ * 在现有 hitTest 基础上，返回包含 scene 路径、对象类型和命中区域的详细结果。
+ *
+ * Embed 命中区域区分：
+ * - title（顶部 EMBED_TITLE_HEIGHT 高度区域）→ objectKind='embedTitle'，表示"选中 Embed"
+ * - border（四周 EMBED_BORDER_WIDTH 宽度区域，不含 title）→ objectKind='embedBorder'，表示"选中 Embed"
+ * - innerContent（排除 title 和 border 后的内部区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
+ *
+ * 普通节点命中 → objectKind='node'，hitRegion='body'
+ *
+ * @param rects 节点矩形列表
+ * @param screenX 屏幕 X 坐标
+ * @param screenY 屏幕 Y 坐标
+ * @param scenePath 当前 scene 的路径段（从根星图到当前 scene 的穿越路径）
+ * @param embedInstanceIds Embed 实例 ID 集合，用于区分 rect 是普通节点还是 Embed
+ * @returns 命中测试结果，或 null
+ */
+export function hitTestWithScene(
+  rects: PlatformNodeRect[],
+  screenX: number,
+  screenY: number,
+  scenePath: StarMapPathSegment[],
+  embedInstanceIds: Set<string>
+): HitTestResult | null {
+  // 从后往前遍历：后绘制的节点在上层，优先命中
+  for (let i = rects.length - 1; i >= 0; i--) {
+    const r = rects[i]
+    if (screenX >= r.x && screenX <= r.x + r.width &&
+      screenY >= r.y && screenY <= r.y + r.height) {
+      const isEmbed: boolean = embedInstanceIds.has(r.nodeId)
+
+      if (!isEmbed) {
+        // 普通节点命中
+        return {
+          scenePath: scenePath,
+          objectKind: 'node',
+          objectId: r.nodeId,
+          hitRegion: 'body'
+        }
+      }
+
+      // Embed 命中：区分 title / border / innerContent
+      const titleBottom: number = r.y + EMBED_TITLE_HEIGHT
+      const borderRight: number = r.x + EMBED_BORDER_WIDTH
+      const borderLeftInner: number = r.x + r.width - EMBED_BORDER_WIDTH
+      const borderBottomInner: number = r.y + r.height - EMBED_BORDER_WIDTH
+
+      // title 区域：顶部 EMBED_TITLE_HEIGHT 高度
+      if (screenY <= titleBottom) {
+        return {
+          scenePath: scenePath,
+          objectKind: 'embedTitle',
+          objectId: r.nodeId,
+          hitRegion: 'title'
+        }
+      }
+
+      // border 区域：四周 EMBED_BORDER_WIDTH 宽度（不含 title 区域）
+      // 左边框
+      if (screenX <= borderRight) {
+        return {
+          scenePath: scenePath,
+          objectKind: 'embedBorder',
+          objectId: r.nodeId,
+          hitRegion: 'border'
+        }
+      }
+      // 右边框
+      if (screenX >= borderLeftInner) {
+        return {
+          scenePath: scenePath,
+          objectKind: 'embedBorder',
+          objectId: r.nodeId,
+          hitRegion: 'border'
+        }
+      }
+      // 下边框
+      if (screenY >= borderBottomInner) {
+        return {
+          scenePath: scenePath,
+          objectKind: 'embedBorder',
+          objectId: r.nodeId,
+          hitRegion: 'border'
+        }
+      }
+      // title 下方与 innerContent 上方之间的边框条（title 底部到 innerContent 顶部）
+      const innerContentTop: number = titleBottom + EMBED_BORDER_WIDTH
+      if (screenY <= innerContentTop) {
+        return {
+          scenePath: scenePath,
+          objectKind: 'embedBorder',
+          objectId: r.nodeId,
+          hitRegion: 'border'
+        }
+      }
+
+      // innerContent 区域：排除 title 和 border 后的内部内容区
+      return {
+        scenePath: scenePath,
+        objectKind: 'embedInnerContent',
+        objectId: r.nodeId,
+        hitRegion: 'innerContent'
+      }
     }
   }
   return null

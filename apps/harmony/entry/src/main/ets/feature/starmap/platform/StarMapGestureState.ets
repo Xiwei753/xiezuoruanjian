@@ -16,6 +16,7 @@
  */
 
 import { PlatformPoint } from './StarMapLayout'
+import { StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 
 /** 手势模式枚举 */
 export type StarMapGestureMode = 'idle' | 'panCanvas' | 'nodeMenu' | 'connect' | 'moveNode' | 'moveEmbed'
@@ -26,6 +27,10 @@ export interface GestureState {
   mode: StarMapGestureMode
   /** 当前操作的 item ID（普通节点 nodeId 或 Embed instanceId，空字符串表示无） */
   activeItemId: string
+  /** 当前操作的 item 类型（'node' 或 'embed'，idle/panCanvas 时为 'node'） */
+  activeItemKind: 'node' | 'embed'
+  /** 当前手势所属的 scene 路径（根 scene 为空数组 []） */
+  ownerScenePath: StarMapPathSegment[]
   /** 手势起点（画布坐标） */
   startPoint: PlatformPoint
   /** 当前点（画布坐标） */
@@ -45,6 +50,8 @@ export class StarMapGestureStateTracker {
   private state: GestureState = {
     mode: 'idle',
     activeItemId: '',
+    activeItemKind: 'node',
+    ownerScenePath: [],
     startPoint: { x: 0, y: 0 },
     currentPoint: { x: 0, y: 0 },
     targetItemId: ''
@@ -55,6 +62,8 @@ export class StarMapGestureStateTracker {
     this.state = {
       mode: 'idle',
       activeItemId: '',
+      activeItemKind: 'node',
+      ownerScenePath: [],
       startPoint: { x: 0, y: 0 },
       currentPoint: { x: 0, y: 0 },
       targetItemId: ''
@@ -62,10 +71,12 @@ export class StarMapGestureStateTracker {
   }
 
   /** 进入画布拖动模式 */
-  beginPanCanvas(startX: number, startY: number): void {
+  beginPanCanvas(ownerScenePath: StarMapPathSegment[], startX: number, startY: number): void {
     this.state = {
       mode: 'panCanvas',
       activeItemId: '',
+      activeItemKind: 'node',
+      ownerScenePath: [...ownerScenePath],
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
       targetItemId: ''
@@ -73,10 +84,12 @@ export class StarMapGestureStateTracker {
   }
 
   /** 长按节点弹出菜单 */
-  beginNodeMenu(nodeId: string, startX: number, startY: number): void {
+  beginNodeMenu(ownerScenePath: StarMapPathSegment[], nodeId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'nodeMenu',
       activeItemId: nodeId,
+      activeItemKind: 'node',
+      ownerScenePath: [...ownerScenePath],
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
       targetItemId: ''
@@ -84,10 +97,12 @@ export class StarMapGestureStateTracker {
   }
 
   /** 从菜单态切到连线模式 */
-  beginConnect(nodeId: string, startX: number, startY: number): void {
+  beginConnect(ownerScenePath: StarMapPathSegment[], nodeId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'connect',
       activeItemId: nodeId,
+      activeItemKind: 'node',
+      ownerScenePath: [...ownerScenePath],
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
       targetItemId: ''
@@ -95,10 +110,12 @@ export class StarMapGestureStateTracker {
   }
 
   /** 从菜单显式进入移动节点模式 */
-  beginMoveNode(nodeId: string, startX: number, startY: number): void {
+  beginMoveNode(ownerScenePath: StarMapPathSegment[], nodeId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'moveNode',
       activeItemId: nodeId,
+      activeItemKind: 'node',
+      ownerScenePath: [...ownerScenePath],
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
       targetItemId: ''
@@ -106,10 +123,12 @@ export class StarMapGestureStateTracker {
   }
 
   /** 从菜单显式进入移动 Embed 模式 */
-  beginMoveEmbed(embedInstanceId: string, startX: number, startY: number): void {
+  beginMoveEmbed(ownerScenePath: StarMapPathSegment[], embedInstanceId: string, startX: number, startY: number): void {
     this.state = {
       mode: 'moveEmbed',
       activeItemId: embedInstanceId,
+      activeItemKind: 'embed',
+      ownerScenePath: [...ownerScenePath],
       startPoint: { x: startX, y: startY },
       currentPoint: { x: startX, y: startY },
       targetItemId: ''
@@ -141,11 +160,29 @@ export class StarMapGestureStateTracker {
     return this.state.mode === 'connect'
   }
 
+  /** 判断当前手势是否属于指定 scene（路径深度比较） */
+  isOwnedByScene(scenePath: StarMapPathSegment[]): boolean {
+    const owner = this.state.ownerScenePath
+    if (owner.length !== scenePath.length) {
+      return false
+    }
+    for (let i = 0; i < owner.length; i++) {
+      if (owner[i].type !== scenePath[i].type ||
+        owner[i].instanceId !== scenePath[i].instanceId ||
+        owner[i].nodeId !== scenePath[i].nodeId) {
+        return false
+      }
+    }
+    return true
+  }
+
   /** 获取当前状态快照（返回只读副本，外部不应修改） */
   getState(): GestureState {
     return {
       mode: this.state.mode,
       activeItemId: this.state.activeItemId,
+      activeItemKind: this.state.activeItemKind,
+      ownerScenePath: this.state.ownerScenePath.map(seg => ({ ...seg })),
       startPoint: { x: this.state.startPoint.x, y: this.state.startPoint.y },
       currentPoint: { x: this.state.currentPoint.x, y: this.state.currentPoint.y },
       targetItemId: this.state.targetItemId
