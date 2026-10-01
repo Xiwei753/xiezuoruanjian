@@ -384,6 +384,33 @@ impl SujianEditorItem {
         self.transaction_created();
     }
 
+    /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证
+    /// old/current canonical 已建立且属于当前 text revision。
+    ///
+    /// 调用顺序是 `old = snapshot -> Core edit -> new = snapshot -> record_transaction
+    /// -> prepare_edit_motion`。进入 prepare_edit_motion 时 `self.mirror.text()` 已是
+    /// new text，此时再补 canonical 拿到的是 new canonical 却被当 old canonical 使用。
+    ///
+    /// 本 helper 在 Core edit 之前调用，此时 `mirror.text()` 是 old text、
+    /// `text_revision` 是 old revision，构造的 canonical 描述 old 正文、记录 old revision。
+    ///
+    /// 不变量：`current_canonical_snapshot == Some` 不代表有效；必须同时满足
+    /// `canonical.text_revision == pipeline.text_revision()` 且描述当前 committed text。
+    /// 不一致（stale，例如动画关闭路径上一笔没走 prepare_edit_motion 但正文已变）就重建。
+    fn ensure_current_canonical_before_edit(&mut self) {
+        let needs_rebuild = match self.pipeline.current_canonical_snapshot() {
+            None => true,
+            Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
+        };
+        if needs_rebuild {
+            let ctx = self.build_visual_transaction_context();
+            let snap = self
+                .pipeline
+                .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
+            self.pipeline.set_current_canonical_snapshot(Some(snap));
+        }
+    }
+
     /// Issue #701 评论 5699573227 第三阶段: 统一编辑事务入口。
     ///
     /// `insert_text_with_cause` / `delete_backward` / `delete_forward` /
@@ -418,6 +445,11 @@ impl SujianEditorItem {
         composition: Option<CompositionCommitParams>,
     ) -> bool {
         let old = self.pipeline.snapshot();
+
+        // Issue #810 评论 5934060933 问题1: 在 Core edit command 之前保证
+        // old/current canonical 已建立且属于当前 text revision。此时 mirror.text()
+        // 是 old text、text_revision 是 old revision，构造的 canonical 描述 old 正文。
+        self.ensure_current_canonical_before_edit();
 
         let edit_result: Option<writer_core::editor::EditorEditResult> = match op {
             EditOp::Insert {

@@ -746,14 +746,19 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
-        // Issue #810 评论 5933167246 问题2: promote prepared layout 之后，若
-        // current_canonical_snapshot 为 None（章节 load/reset 后第一次布局完成），
-        // 用 build_canonical_snapshot_for_current_layout 构造完整 canonical 并提交给 Pipeline。
-        // 这样章节 load/reset 后第一次布局完成就把 canonical 存进去，None 状态根本不存在，
-        // 后续 prepare_edit_motion 不需要再补齐。不在 reconcile_after_layout_change 中重复
-        // ——它已通过 reconcile_active_transactions_with_new_canonical 设置了
-        // current_canonical_snapshot。
-        if self.pipeline.current_canonical_snapshot().is_none() {
+        // Issue #810 评论 5934060933 问题1: bump text revision 后，判断 canonical
+        // 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表有效；
+        // 必须同时满足 canonical.text_revision == pipeline.text_revision() 且描述当前
+        // committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径不会走
+        // prepare_edit_motion，正文仍会修改并 bump revision，但 canonical 停在上一版，
+        // 此处必须按当前 EditorLayout/current text 重建并替换。
+        // 不在 reconcile_after_layout_change 中重复——它已通过
+        // reconcile_active_transactions_with_new_canonical 设置了 current_canonical_snapshot。
+        let canonical_needs_rebuild = match self.pipeline.current_canonical_snapshot() {
+            None => true,
+            Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
+        };
+        if canonical_needs_rebuild {
             let ctx = self.build_visual_transaction_context();
             let snap = self
                 .pipeline

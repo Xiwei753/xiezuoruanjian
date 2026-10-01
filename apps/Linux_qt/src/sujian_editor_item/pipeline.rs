@@ -1126,18 +1126,6 @@ impl LinuxEditorPipeline {
         if (!text_animation_enabled && !caret_animation_enabled) || ctx.is_scrolling {
             return None;
         }
-        // Issue #810 评论 5933167246 问题2: 当前正文 revision 一旦进入可编辑状态，
-        // 就必须已经有完整 canonical clusters。`current_canonical_snapshot=None` 是
-        // 真实可达状态（Pipeline 初始化、reset_document_visual_state 清成 None），
-        // 但第一笔编辑如果是 Delete/DeleteSelection，DeleteConceal 正要从 old text
-        // 的 cluster/glyph 几何生成吞字动画，old canonical 不能为空。
-        // 在构造事务前，若 current_canonical_snapshot 为 None，从当前 EditorLayout
-        // generation 构造完整 canonical 并存为 current_canonical_snapshot，之后
-        // old snapshot 只从 current_canonical_snapshot 取（保证非 None）。
-        if self.current_canonical_snapshot.is_none() {
-            let snap = self.build_canonical_snapshot_for_current_layout(ctx, editor_layout);
-            self.current_canonical_snapshot = Some(snap);
-        }
         // Issue #756 评论 5821042551 / Issue #785: 文字与光标各自独立的时长。
         // Issue #785: 协同只传递"同事务协同"语义（同首帧/同 rebase），不再修改两个 duration。
         // 文字用 typing duration、光标用 smooth cursor duration，始终独立。
@@ -1264,7 +1252,7 @@ impl LinuxEditorPipeline {
             // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
             let mut new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
                 &new.text,
-                0,
+                self.text_revision.wrapping_add(1),
                 ctx.font_pixel_size,
                 &ctx.font_family,
                 ctx.line_spacing,
@@ -1308,16 +1296,18 @@ impl LinuxEditorPipeline {
                 // 不再用 assemble_document_visual_snapshot_from_lines fallback
                 // ——该 fallback 产出的 clusters 为空，第一笔 Delete/DeleteSelection
                 // 的 DeleteConceal 吞字动画拿不到 old cluster/glyph 几何。
+                // Issue #810 评论 5934060933 问题1: old canonical 必须属于当前 old
+                // text revision。editing.rs ensure_current_canonical_before_edit 已在
+                // Core edit 之前保证一致，到这里不一致说明有 bug（stale canonical），
+                // 防御性 return None，不拿错 revision 的 canonical 当 old 用。
                 let mut doc_snap = match self.current_canonical_snapshot.clone() {
-                    Some(snap) => snap,
-                    None => {
-                        // 逻辑不可达：prepare_edit_motion 开头已保证非 None。
-                        // 保留防御性 return None，不用 unwrap/expect。
+                    Some(snap) if snap.text_revision == self.text_revision => snap,
+                    _ => {
                         crate::backend::app_backend::debug_error_static(
                             "pipeline",
-                            "prepare_edit_motion_current_canonical_unexpected_none",
-                            "current_canonical_snapshot is None despite prefix guarantee \
-                             (Issue #810 评论 5933167246)",
+                            "prepare_edit_motion_current_canonical_stale",
+                            "current_canonical_snapshot is None or stale (revision mismatch) \
+                             despite ensure_current_canonical_before_edit (Issue #810 评论 5934060933)",
                         );
                         return None;
                     }
@@ -1490,7 +1480,7 @@ impl LinuxEditorPipeline {
                 let prev_new_snapshot = self.current_canonical_snapshot.as_ref();
                 layout::prepare_affected_paragraphs_visual_snapshot(
                     &motion.old_text,
-                    0,
+                    self.text_revision,
                     ctx.font_pixel_size,
                     &ctx.font_family,
                     ctx.line_spacing,
