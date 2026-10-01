@@ -224,10 +224,13 @@ pub(crate) fn collect_rebase_frame_for_unit_without_caret(
             }
         }
     }
-    // Issue #808 评论 5920712056: 多个 slice 共用一条行级 boundary 后，
+    // Issue #808 评论 5920712056 / 5921417659: 多个 slice 共用一条行级 boundary 后，
     // effective_fraction 必须直接用 timeline visible_fraction，不能从本 slice
     // 的局部 clip 宽度反推——否则同一组 slice 在 rebase 后会拿到不同进度，
     // 出现跳字/突然补全/重新吐一遍。
+    // 评论 5921417659 确认：Reveal/Conceal 完成判断（上方 match 分支）与
+    // RebaseFrame.visible_fraction 均直接用 unit.current_visible_fraction(now)，
+    // 不再从局部 frame.w 反推共享 mask 进度。
     let effective_fraction = visible_fraction;
     let (elapsed_ms, duration_ms) = match &unit.timing {
         VisualUnitTiming::Timed {
