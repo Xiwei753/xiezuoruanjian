@@ -45,19 +45,33 @@ impl QQuickItem for SujianEditorItem {
         let pos = event.position();
         match event.event_type() {
             qmetaobject::QMouseEventType::MouseButtonPress => {
+                // Issue #810 评论 问题2: press 开始一个新指针手势窗口。
+                // 旧的拖选/选择手势状态必须清除，避免上一轮手势的 Snap/隐藏
+                // 状态污染本次点击。click_at 内部会根据 hit_test 结果决定是否
+                // bump epoch / 清选区。
                 self.pointer_drag_selecting = false;
+                self.selection_gesture_active = false;
                 self.click_at(pos.x as f32, pos.y as f32, false);
                 let obj_ptr = self.get_cpp_object();
                 input::focus_item(obj_ptr);
             }
             qmetaobject::QMouseEventType::MouseMove => {
                 if is_left_button_pressed(&event) {
+                    // Issue #810 评论 问题2: 拖选期间选择手势明确 active。
+                    // selection_gesture_active 决定 render_plan_builder 的 hard_snap，
+                    // 不再用 Core has_selection（选区是否存在）代替手势状态。
                     self.pointer_drag_selecting = true;
+                    self.selection_gesture_active = true;
                     self.drag_select_at(pos.x as f32, pos.y as f32);
                 }
             }
             qmetaobject::QMouseEventType::MouseButtonRelease => {
-                self.pointer_drag_selecting = false;
+                // Issue #810 评论 问题2: release 走统一的手势结束路径，
+                // 不只做 pointer_drag_selecting = false。end_selection_gesture 负责：
+                // 1) 清 pointer_drag_selecting / selection_gesture_active
+                // 2) 告诉 cursor controller 手势结束，保留当前 selection head visual rect
+                //    供选区收起后恢复光标运动。
+                self.end_selection_gesture();
             }
             _ => {}
         }
@@ -461,5 +475,29 @@ impl SujianEditorItem {
                 self.cursor_ctrl.visual_h = ch;
             }
         }
+    }
+}
+
+impl SujianEditorItem {
+    /// Issue #810 评论 问题2: 统一的选择手势结束路径。
+    ///
+    /// 由 `mouse_event` 的 `MouseButtonRelease` 调用，替代旧的
+    /// `self.pointer_drag_selecting = false`。负责：
+    /// 1. 清 `pointer_drag_selecting` / `selection_gesture_active`
+    /// 2. 告诉 cursor controller 手势结束，保留当前 selection head 的 visual rect，
+    ///    供选区收起后从该位置恢复 Tween（而非 Snap 瞬移）。
+    ///
+    /// 与 Core `has_selection` 的关系：本方法不改变 Core 选区状态（选区仍存在），
+    /// 只结束平台手势状态。选区收起由后续的 click_at / 键盘导航 / delete 等操作触发，
+    /// 那时 `selection_gesture_active` 已为 false，build_cursor_plan 不再强制 Snap，
+    /// 从 `selection_head_rect`（= visual_x/visual_y）建 Tween 到新 cursor 位置。
+    fn end_selection_gesture(&mut self) {
+        self.pointer_drag_selecting = false;
+        self.selection_gesture_active = false;
+        // 记录当前 selection head 的 visual rect。
+        // 手势结束时光标因 has_selection 隐藏（should_be_visible=false），
+        // visual_x/visual_y 是最后一次拖选的 cursor 位置（selection head）。
+        // 选区收起后从此位置恢复 Tween。
+        self.cursor_ctrl.record_selection_head_rect();
     }
 }

@@ -382,6 +382,22 @@ pub struct SujianEditorItem {
     /// Issue #714: 鼠标拖选状态标志。MouseButtonPress 时置 true，
     /// MouseButtonRelease 时置 false。用于区分拖选和普通点击。
     pointer_drag_selecting: bool,
+    /// Issue #810 评论 问题2: 平台 selection gesture 生命周期标志。
+    ///
+    /// 与 `pointer_drag_selecting` 的区别：
+    /// - `pointer_drag_selecting` 只在 MouseMove 拖选期间为 true（press/release 之间且移动了）。
+    /// - `selection_gesture_active` 覆盖整个选择手势生命周期：从 press 开始拖选到
+    ///   release 结束的明确窗口，包括长按/选词手势。
+    ///
+    /// 与 Core `has_selection` 的区别：
+    /// - `pipeline.has_selection()` 是 Core 业务真相：选区是否存在（anchor != cursor）。
+    /// - `selection_gesture_active` 是平台手势状态：用户当前是否正在用指针进行选择手势。
+    ///
+    /// 两者必须分离：长按/拖选结束后选区仍然存在（has_selection=true），
+    /// 但手势已结束（selection_gesture_active=false），此时普通 caret 应恢复运动，
+    /// 不再强制 Snap。反之手势进行中即使 has_selection 暂时为 false（如点击同一位置）
+    /// 也应保持 Snap 避免光标跳动。
+    selection_gesture_active: bool,
     current_font_pixel_size: f32,
     current_font_family: QString,
     current_line_spacing: f32,
@@ -524,6 +540,8 @@ impl Default for SujianEditorItem {
             content_height_dirty: Cell::new(false),
             current_editor_enabled: true,
             pointer_drag_selecting: false,
+            // Issue #810 评论 问题2: 初始无选择手势。
+            selection_gesture_active: false,
             current_font_pixel_size: 22.0,
             current_font_family: QString::from("Noto Sans CJK SC"),
             current_line_spacing: 1.5,

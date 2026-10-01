@@ -494,6 +494,10 @@ impl LinuxEditorPipeline {
     ///（QImage/glyphRuns/clusters）注入**，使 rebind 路径 `find_clusters_in_canonical`
     /// 能找到 cluster，布局变化后 Timed Reflow 能继续播放而非全部 Snap 回 canonical。
     ///
+    /// Issue #810 评论 问题1: cluster 现在由基础 canonical 排版直接产出，本函数中
+    /// `prepare_animation_visuals_from_layout` + `inject` 仅用于提取可延迟的 QImage/纹理，
+    /// 不再承担"给 canonical 补 cluster"的职责。
+    ///
     /// 供 `geometry_changed` / `layout_property_changed` 在新排版完成后调
     /// `reconcile_active_transactions_with_new_canonical` 使用。
     ///
@@ -566,6 +570,10 @@ impl LinuxEditorPipeline {
         // Issue #738 评论 5792244119 问题 1: 从已有 layout 提取所有行的动画视觉
         //（QImage/glyphRuns/clusters）注入到新 canonical，使 rebind 路径
         // find_clusters_in_canonical 能找到 cluster。
+        // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+        //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
+        // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
+        // QImage/纹理，不再为 rebind 补 cluster。inject 不覆盖已有 cluster。
         let mut doc_snap = snapshot;
         let visuals_gen = prepared_handle
             .as_ref()
@@ -1273,6 +1281,10 @@ impl LinuxEditorPipeline {
                 // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）
                 // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
                 // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
+                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出。
+                // old_doc_snapshot 用 assemble_document_visual_snapshot_from_lines 组装
+                //（clusters 初始为空），inject 仍为组装路径填充 cluster；对已有 cluster
+                // 的行 inject 不覆盖。此处同时提取 QImage 供动画纹理使用。
                 let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
                     handle,
                     &diff.old_raster_line_ids,
@@ -1309,6 +1321,9 @@ impl LinuxEditorPipeline {
                 // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
                 // new_doc_snapshot 已完成基础排版（QTextLayout 存入 new_generation），
                 // 从已有 QTextLine 只提取受影响行的 QImage/glyph/cluster。
+                // Issue #810 评论 问题1: new_doc_snapshot 由基础 canonical 排版产出，
+                // 已自带 cluster 几何。此处 prepare_animation_visuals_from_layout + inject
+                // 仅用于提取可延迟的 QImage/纹理，inject 不覆盖已有 cluster。
                 let new_handle = layout::PreparedLayoutHandle {
                     generation: new_generation,
                     lines: &new_doc_snapshot.visual_lines,
@@ -1367,6 +1382,9 @@ impl LinuxEditorPipeline {
                 // Issue #808 评论 5918236360 问题1: 对失败行做第二次精确重取，并在重取后
                 // 再次验证 canonical 行的真实 clusters（重取逻辑见
                 // `retry_failed_animation_visuals`，避免 prepare_edit_motion 函数体过长）。
+                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出，
+                // "clusters 为空"不再是合法状态。retry 主要用于重取失败的 QImage/纹理；
+                // 若 cluster 仍为空，说明基础排版路径有 bug（invariant failure）。
                 retry_failed_animation_visuals(
                     &mut new_doc_snapshot,
                     new_generation,
@@ -1392,6 +1410,10 @@ impl LinuxEditorPipeline {
                 //   映射到 new（document_byte_start=new_line.byte_start, document_byte_end=new_line.byte_end，
                 //   cluster 按 byte_delta 偏移），注入 new_doc_snapshot。
                 // QImage clone 是浅拷贝（引用计数），不会重画。完成后 old/new 两边都有 source rect。
+                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出。
+                // 此处仍需提取 QImage 供 reflow_move 动画纹理复用；cluster 对 old snapshot
+                //（assemble 路径，clusters 为空）由 inject 填充，对 new snapshot
+                //（已有 cluster）inject 不覆盖。
                 if !diff.reusable_move_pairs.is_empty() {
                     let mut old_move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
                     let mut move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();

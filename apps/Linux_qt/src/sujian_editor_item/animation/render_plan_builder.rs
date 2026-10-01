@@ -26,7 +26,7 @@ impl LinuxEditorAnimationCoordinator {
         has_selection: bool,
         viewport_height: f64,
         is_scrolling: bool,
-        is_selecting: bool,
+        selection_gesture_active: bool,
         is_preediting: bool,
         smooth_cursor_enabled: bool,
         smooth_cursor_duration_ms: u32,
@@ -84,6 +84,9 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #727 评论 5757225958 问题1: scroll_y 现在用于 in_viewport 判断
         //（cursor_y 是文档坐标），不再丢弃。
         let _ = is_scrolling;
+        // Issue #810 评论 问题2: old_visible 不再驱动 hard_snap（删除 !old_visible 条件）。
+        // 保留参数供 API 清晰和未来调试，显式消费避免 unused warning。
+        let _ = old_visible;
 
         // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
         // 改为按 CursorMoveSource 决定跨行是否允许 Tween。
@@ -109,7 +112,18 @@ impl LinuxEditorAnimationCoordinator {
         // 旧逻辑 `force_snap_next || is_scrolling || is_selecting || !old_visible`
         // 导致滚动时强制 Snap，滚动结束时光标动画被 snap 到终态。
         // 滚动的暂停和恢复由 set_is_scrolling() 单独控制，不影响 hard_snap。
-        let hard_snap = force_snap_next || is_selecting || !old_visible;
+        // Issue #810 评论 问题2: 删除 !old_visible 作为通用 hard-snap 条件，
+        // is_selecting 改为 selection_gesture_active（只在手势进行中才 Snap）。
+        // 旧逻辑 `force_snap_next || is_selecting || !old_visible` 有两个问题：
+        // 1) is_selecting 用 Core has_selection（选区是否存在）代替手势状态，
+        //    导致选区存在但手势已结束（长按/拖选 release 后）仍强制 Snap，
+        //    普通光标移动无法 Tween。
+        // 2) !old_visible 把"光标从隐藏恢复"和"首次出现"都当 Snap，导致选区收起后
+        //    光标瞬移而非从 selection head 位置 Tween。
+        // 新逻辑：hard_snap 只由 force_snap_next（一次性标记）和
+        // selection_gesture_active（手势进行中）决定。选区收起后手势已结束，
+        // 走正常 Tween 判断，从 old_visual_x/old_visual_y（= selection head 位置）Tween。
+        let hard_snap = force_snap_next || selection_gesture_active;
 
         // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
         // 不再用 driver_key.is_some() 决定 can_tween。纯光标只要满足 smooth cursor
@@ -224,6 +238,10 @@ impl LinuxEditorAnimationCoordinator {
             cursor_y,
             cursor_h,
             cursor_baseline_y,
+            // Issue #810 评论 问题2: 只有因 has_selection 导致的隐藏才标记 hidden_by_selection，
+            // 让 apply_plan 保留 visual rect 供恢复 Tween。editor disabled / 不在视口的
+            // 隐藏维持原行为（visual 落到 target、Uninitialized）。
+            hidden_by_selection: has_selection && !should_be_visible,
         }
     }
 

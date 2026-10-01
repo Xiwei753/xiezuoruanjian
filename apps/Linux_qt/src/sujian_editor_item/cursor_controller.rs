@@ -50,6 +50,22 @@ pub enum CursorMoveSource {
     TextTransaction,
 }
 
+/// Issue #810 评论 问题2: 光标可见性状态 — 区分"从未可见"、"正常可见"、"因选区暂时隐藏"。
+///
+/// 旧实现只用 `visible: bool`，无法区分"因选区隐藏"和"首次出现/不在视口隐藏"。
+/// 这导致选区收起后 `!old_visible` 触发 hard_snap，光标瞬移而非 Tween。
+///
+/// - `Uninitialized`：从未可见，没有可信的 visual position
+/// - `Visible`：正常可见，visual_x/visual_y 是当前绘制位置
+/// - `HiddenBySelection`：因 has_selection 隐藏，但 visual_x/visual_y 保留为
+///   选区 head 的视觉位置，选区收起后从此位置恢复 Tween
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorVisibilityState {
+    Uninitialized,
+    Visible,
+    HiddenBySelection,
+}
+
 /// 光标状态 — 跟踪光标位置、动画和闪烁。
 ///
 /// - `target_x/y`：光标应到达的位置（布局引擎计算结果）
@@ -94,6 +110,15 @@ pub struct CursorController {
     /// Issue #712: 光标移动来源，决定跨行移动时走 Snap 还是 Tween。
     /// 默认 LayoutChange（安全默认值，首次出现走 Snap）。
     pub last_move_source: CursorMoveSource,
+    /// Issue #810 评论 问题2: 光标可见性状态。
+    /// 区分"因选区隐藏"和"首次出现/不在视口隐藏"，选区收起后从保留位置恢复 Tween。
+    pub visibility_state: CursorVisibilityState,
+    /// Issue #810 评论 问题2: 选区结束时 selection head 的 visual rect (x, y, h, baseline_y)。
+    ///
+    /// 手势结束（end_selection_gesture）时保存当前 visual rect。
+    /// 选区收起后（has_selection 从 true 变 false），从该位置恢复 Tween，
+    /// 而非因 `!old_visible` 强制 Snap 瞬移。
+    pub selection_head_rect: Option<(f64, f64, f64, f64)>,
 }
 
 impl Default for CursorController {
@@ -124,6 +149,9 @@ impl CursorController {
             blink_reset_requested: false,
             cursor_owner_epoch: 0,
             last_move_source: CursorMoveSource::LayoutChange,
+            // Issue #810 评论 问题2: 初始未可见，无保存的 selection head rect。
+            visibility_state: CursorVisibilityState::Uninitialized,
+            selection_head_rect: None,
         }
     }
 
@@ -142,6 +170,25 @@ impl CursorController {
     /// 但遵守 AGENTS.md "不用 unwrap/expect 代替错误处理" 的安全边界）。
     pub fn bump_cursor_owner_epoch(&mut self) {
         self.cursor_owner_epoch = self.cursor_owner_epoch.wrapping_add(1);
+    }
+
+    /// Issue #810 评论 问题2: 记录选择手势结束时的 selection head visual rect。
+    ///
+    /// 由 `SujianEditorItem::end_selection_gesture()` 在 pointer release 时调用。
+    /// 保存当前 visual_x/visual_y/visual_h/visual_baseline_y，选区收起后
+    /// （has_selection 从 true 变 false）从该位置恢复 Tween，而非 Snap 瞬移。
+    ///
+    /// 注意：此方法只保存位置，不清 `force_snap_next`。`force_snap_next` 的清理
+    /// 由 `take_force_snap_next()` 在下一次 `apply_plan()` 时统一处理。
+    /// 手势结束后 `selection_gesture_active=false`，build_cursor_plan 不再因
+    /// 手势强制 Snap，`force_snap_next` 只在仍有残留时生效一次。
+    pub fn record_selection_head_rect(&mut self) {
+        self.selection_head_rect = Some((
+            self.visual_x,
+            self.visual_y,
+            self.visual_h,
+            self.visual_baseline_y,
+        ));
     }
 
     /// Issue #724 评论 5750911834 问题 2: 取出并立即重置 force_snap_next。
@@ -207,11 +254,50 @@ impl CursorController {
         let visibility_changed = old_visible != plan.should_be_visible;
 
         if !plan.should_be_visible {
+            // Issue #810 评论 问题2: 区分光标隐藏原因。
+            //
+            // 旧实现不区分隐藏原因，should_be_visible=false 时一律 visual 落到 target、
+            // 清 animation。这导致选区收起后 old_visible=false 触发 build_cursor_plan
+            // 的 !old_visible hard_snap，光标瞬移而非 Tween。
+            //
+            // 新逻辑：
+            // - hidden_by_selection（因 has_selection 隐藏）：visual_x/visual_y 更新到
+            //   plan.cursor_x/cursor_y（= selection head 位置，保持有效值），设
+            //   HiddenBySelection 状态。选区收起后 build_cursor_plan 不再因 !old_visible
+            //   强制 Snap，从 old_visual_x/old_visual_y（= selection head 位置）建 Tween。
+            // - 非选区原因隐藏（editor disabled / 不在视口）：维持原行为。
+            if plan.hidden_by_selection {
+                self.visibility_state = CursorVisibilityState::HiddenBySelection;
+                // visual 更新到当前 cursor 位置（selection head），保持有效值。
+                // 不把 visual_x/visual_y 丢弃为无意义值，供恢复时作为 Tween 起点。
+                self.visual_x = plan.cursor_x;
+                self.visual_y = plan.cursor_y;
+                self.visual_baseline_y = plan.cursor_baseline_y;
+                // 清 animation：选区期间光标不绘制，不需要动画推进。
+                // 恢复时从 visual_x/visual_y（selection head 位置）建新 Tween，
+                // 不走旧 animation 的 finished/rebase 分支避免跳到旧 target。
+                self.animation = None;
+                if old_visible {
+                    self.dirty = true;
+                }
+                let position_changed =
+                    (old_x - plan.cursor_x).abs() > 0.01 || (old_y - plan.cursor_y).abs() > 0.01;
+                return CursorUpdateResult {
+                    ime_needs_update: position_changed,
+                    needs_repaint: old_visible,
+                    visibility_changed,
+                    blink_changed: false,
+                    visual_position_changed: position_changed,
+                };
+            }
+
             self.animation = None;
             self.visual_x = plan.cursor_x;
             self.visual_y = plan.cursor_y;
             self.visual_baseline_y = plan.cursor_baseline_y;
             self.blink_visible = true;
+            // Issue #810 评论 问题2: 非选区原因隐藏，重置为 Uninitialized。
+            self.visibility_state = CursorVisibilityState::Uninitialized;
             if old_visible {
                 self.dirty = true;
             }
@@ -225,6 +311,17 @@ impl CursorController {
                 visual_position_changed: position_changed,
             };
         }
+
+        // Issue #810 评论 问题2: 光标可见时设 Visible 状态。
+        // 从 HiddenBySelection 恢复到 Visible 时，build_cursor_plan 已不再因
+        // !old_visible 强制 Snap（render_plan_builder 改动），走正常 Tween 判断，
+        // 从 old_visual_x/old_visual_y（= selection head 位置）Tween 到新 target。
+        if self.visibility_state == CursorVisibilityState::HiddenBySelection {
+            // 从选区隐藏恢复：清除 selection_head_rect（已通过 visual_x/visual_y
+            // 传递给 build_cursor_plan 作为 Tween 起点），标记恢复发生。
+            self.selection_head_rect = None;
+        }
+        self.visibility_state = CursorVisibilityState::Visible;
 
         match &plan.transition {
             CursorTransition::Snap => {

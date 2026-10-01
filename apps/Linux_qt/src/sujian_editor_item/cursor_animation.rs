@@ -36,4 +36,11 @@ pub(crate) struct CursorAnimationPlan {
     /// 替代旧的 `cursor_h * 0.8` 估算。由 `build_cursor_plan()` 从
     /// `layout_res.baseline_y` 传入，`apply_plan()` 据此维护 `visual_baseline_y`。
     pub cursor_baseline_y: f64,
+    /// Issue #810 评论 问题2: 光标隐藏是否因选区（has_selection）导致。
+    ///
+    /// `should_be_visible = false` 有多种原因：editor disabled、不在视口、has_selection。
+    /// 只有因 has_selection 隐藏时才需要保留 visual rect 供选区收起后恢复 Tween；
+    /// 其它原因隐藏时维持原行为（visual 落到 target、清 animation）。
+    /// 由 `build_cursor_plan()` 设置：`has_selection && !should_be_visible`。
+    pub hidden_by_selection: bool,
 }

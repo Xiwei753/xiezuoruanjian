@@ -127,7 +127,20 @@ impl SujianEditorItem {
         let visual_line_id = layout_res.visual_line_id;
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
-        let is_selecting = self.pipeline.selection_anchor() != self.pipeline.cursor();
+        // Issue #810 评论 问题2: 分离 Core selection 状态与平台 selection gesture 状态。
+        //
+        // 旧逻辑：`let is_selecting = self.pipeline.selection_anchor() != self.pipeline.cursor();`
+        // 把"选区存在"（Core 业务真相）直接当成"用户正在拖选"（平台手势状态），
+        // 传给 build_cursor_plan 的 is_selecting 参数驱动 hard_snap。
+        // 问题：长按/拖选 release 后选区仍存在，is_selecting 仍为 true，普通光标
+        // 移动被强制 Snap，无法 Tween。
+        //
+        // 新逻辑：
+        // - has_selection（Core 真相）：只决定普通 caret 当前是否显示（should_be_visible）。
+        // - selection_gesture_active（平台手势）：只决定拖选期间是否强制 Snap。
+        // 两者分离：选区存在但手势已结束 → caret 隐藏但不强制 Snap，恢复时 Tween。
+        let has_selection = self.pipeline.has_selection();
+        let selection_gesture_active = self.selection_gesture_active;
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
         // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
@@ -175,10 +188,10 @@ impl SujianEditorItem {
             cursor_y,
             cursor_h,
             self.current_editor_enabled,
-            self.pipeline.has_selection(),
+            has_selection,
             vp_h,
             self.current_is_scrolling,
-            is_selecting,
+            selection_gesture_active,
             is_preediting,
             self.current_smooth_cursor_enabled,
             self.current_cursor_animation_duration_ms,

@@ -228,6 +228,10 @@ impl SujianEditorItem {
                 ids
             };
             if !line_ids.is_empty() {
+                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
+                // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
+                // QImage/纹理，不再为动画单独补 cluster。inject 不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
@@ -392,6 +396,10 @@ impl SujianEditorItem {
                 ids
             };
             if !line_ids.is_empty() {
+                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
+                // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
+                // QImage/纹理，不再为动画单独补 cluster。inject 不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,

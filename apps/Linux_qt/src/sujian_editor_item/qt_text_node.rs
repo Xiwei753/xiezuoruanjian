@@ -135,6 +135,18 @@ cpp! {{
         // - clip_count == 0：创建一个完整正文 QSGTextNode（无动画接管）
         // - clip_count > 0：不创建完整正文节点，只按每条 visual line 的 complement
         //   区间生成 QSGClipNode + QSGTextNode，被动画接管的区域真的从静态层消失。
+        //
+        // Issue #810 评论 第11点 渲染层语义契约（本函数即该契约的实现）:
+        // - 使用 canonical cluster 输出真正的吞字/吐字 clip/mask。clip 数据来自
+        //   AnimatedSlice.static_hidden_document_rects（slice 创建时直接写入 canonical
+        //   cluster 的 document rect，见 transaction_builder/slices.rs），由
+        //   render_plan_builder 收集为 AnimationClipRect 传入本函数。
+        // - 被动画接管的区域必须**从静态正文层隐藏**，再由动画层绘制。本函数
+        //   clip_count > 0 分支不创建完整正文节点，只按 complement 区间生成
+        //   clip+text 节点——静态层只画 complement（未被动画接管的区域）。
+        // - **不允许静态正文先完整画出，再叠一层动画**。旧实现（Issue #709 之前）
+        //   先画完整 newTextNode 再叠 complement clip，导致 InsertReveal 的新字
+        //   早就在完整正文里画出来了。本函数的互斥路径彻底消除这一类重影。
         QSGTextNode *newTextNode = nullptr;
         QColor textColor(color_q);
 

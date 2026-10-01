@@ -10,6 +10,11 @@ use super::*;
 /// 不重新排版，直接 line.draw() 到 QImage 并提取 glyphRuns/clusters。
 /// 返回完整的 CanonicalLineSnapshot 列表。
 ///
+/// Issue #810 评论 问题1: cluster 几何现在由基础 canonical 排版直接产出
+///（engine.rs 中 cluster 提取始终执行），本函数不再承担"给 canonical 补 cluster"
+/// 的职责。保留本函数仅用于需要 QImage/raster 的场景（动画纹理延迟生成）。
+/// inject_animation_visuals_into_snapshot 也只注入 image，不再覆盖 cluster。
+///
 /// Issue #658 评论 5625515748 问题 1: 移除统一的 `paragraph_text` / `paragraph_document_byte_start`
 /// 参数，改为从每个 VisualLine 自身的 `para_text` / `para_start` 取段落级文本与文档起点。
 /// qchar_start/qchar_end 来自各段落自己的 QTextLayout，是段落内 QChar offset，
@@ -271,6 +276,10 @@ pub use full::{
 /// Issue #785 评论 5857873894 修改 2b: 按 (paragraph_document_byte_start, qtextline_idx)
 /// 稳定行身份匹配目标行，不再只按 document_byte_start 猜。返回成功注入的行数，
 /// 找不到目标行时通过 debug_warn 明确报告，不静默跳过，让调用方知道注入失败。
+///
+/// Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出，本函数只注入
+/// 可延迟的 image/texture，不再覆盖 cluster。canonical 排版一次就带 cluster 几何，
+/// 不再需要二次提取/注入补齐 cluster。
 pub fn inject_animation_visuals_into_snapshot(
     doc_snapshot: &mut CanonicalDocumentVisualSnapshot,
     animation_visuals: Vec<CanonicalLineSnapshot>,
@@ -291,8 +300,14 @@ pub fn inject_animation_visuals_into_snapshot(
             // qtextline_idx 是段落内视觉行索引，与 para.lines 的索引一致。
             let line_idx = anim_line.qtextline_idx as usize;
             if let Some(line) = para.lines.get_mut(line_idx) {
+                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                //（engine.rs 中 cluster 提取不再受 generate_animation_visuals 控制）。
+                // inject 只注入可延迟的 image/texture，不覆盖基础排版已产出的 cluster。
+                // 仅当目标行 clusters 为空（assemble_document_visual_snapshot_from_lines
+                // 组装的快照，不经过基础排版）时才填充 cluster——这是组装路径的唯一
+                // cluster 来源，不是"给 canonical 补 cluster"。
                 line.image = anim_line.image.take();
-                if !anim_line.clusters.is_empty() {
+                if line.clusters.is_empty() && !anim_line.clusters.is_empty() {
                     line.clusters = std::mem::take(&mut anim_line.clusters);
                 }
                 injected_count += 1;

@@ -106,28 +106,28 @@ impl LineSnapshotBuilder {
                 (None, Vec::new())
             };
 
-            // Issue #785 评论 5857451442: 防御性诊断——不伪造字符几何。
-            // 如果 canonical line 已有 image 但 clusters 为空且该行含可见字符，
-            // 说明 animation visuals 注入链漏了该行的 clusters（image 注入了但 clusters 没注入）。
-            //
-            // Issue #808 评论 5917296533 问题1: 放宽跳过条件——不仅 image 有但 clusters 空，
-            // image=None + clusters=[] 且含可见字符也跳过（prepare_miss / inject miss 场景）。
-            // 不破坏正常的非 inserted 行：只有"clusters 空且含可见字符"才跳过。
-            // 跳过该行让上游自然跳过 InsertReveal 构造，不创建 units=0 的伪动画事务。
+            // Issue #810 评论 问题1: cluster 数据流重构——canonical 排版现在直接产出
+            // cluster 几何（engine.rs 中 cluster 提取始终执行），"有可见正文但 clusters
+            // 为空"不再是合法 canonical 状态。此处只作为 invariant failure 记录 error
+            // 级别诊断，不再 skip line——半残 snapshot 不能继续进入动画事务，但也不应
+            // 静默跳过让上游漏掉该行。不伪造 cluster：clusters 保持为空，让上游知道
+            // 这是 invariant failure。由于 canonical 排版保证产出 cluster，此分支
+            // 理论上不应触发；若触发说明 engine.rs 排版路径有 bug 需要排查。
             if clusters.is_empty()
                 && line
                     .para_text
                     .chars()
                     .any(|c| !c.is_whitespace() && !c.is_control())
             {
-                crate::backend::app_backend::debug_warn_static(
+                crate::backend::app_backend::debug_error_static(
                     "line_snapshot_builder",
-                    "canonical_line_clusters_empty_skip_line",
+                    "canonical_line_clusters_empty_invariant_failure",
                     &format!(
                         "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} \
                          image={} — clusters empty and line contains visible chars, \
-                         animation visuals injection incomplete for this line, skipping this line to \
-                         prevent empty-cluster animation snapshot (InsertReveal units=0 pseudo transaction)",
+                         this is an invariant failure: canonical layout should always produce \
+                         clusters (Issue #810). Building PreparedLineSnapshot with empty clusters \
+                         to surface the failure upstream, not skipping line.",
                         revision.0,
                         line.para_start,
                         line.qtextline_idx,
@@ -136,9 +136,8 @@ impl LineSnapshotBuilder {
                         image.is_some(),
                     ),
                 );
-                // 跳过该行：不 push PreparedLineSnapshot，让上游自然跳过 InsertReveal 构造。
-                visual_line_ordinal += 1;
-                continue;
+                // Issue #810: 不 skip line，继续构建 PreparedLineSnapshot（用空 clusters），
+                // 让上游知道这是 invariant failure，而不是静默漏掉该行。
             }
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);

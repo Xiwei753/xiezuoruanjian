@@ -536,6 +536,20 @@ impl AnimatedSlice {
     /// 不再由 caret frame 驱动。caret 只决定遮罩的空间锚点/方向，不能决定文字
     /// 动画进度。
     ///
+    /// Issue #810 评论 第10点 渲染层语义契约（本方法即该契约的实现）:
+    /// - InsertReveal / DeleteConceal 采用真正的 clip/mask 语义：文字本体固定在
+    ///   canonical 位置，动画只改变可见纹理宽度（clip），不做位移/缩放/淡入淡出。
+    /// - caret 只提供空间锚点（`caret_anchor_x/y`）和方向（`conceal_to_left_edge`、
+    ///   `is_caret_line`），**不提供 progress**。progress 由文字自己的 Timed timeline
+    ///   算出后作为 `visible` 参数传入本方法。
+    /// - **不允许因当前没有 caret Tween 就取消文字动画**。本方法是纯函数，不检查
+    ///   caret Tween 是否存在；消费方（render_plan_builder）对所有 Timed unit 一律
+    ///   调用 `compute_frame(unit.current_visible_fraction(now))`，文字动画独立于
+    ///   caret ownership/epoch 推进。
+    /// - 跨行按 visual line 分别处理遮罩锚点：每个 slice 带自己的 `visual_line_id`
+    ///   和 `is_caret_line`，`is_caret_line=false` 时用本行级 extent 边缘做锚点，
+    ///   不拿上一行的 x 裁下一行。
+    ///
     /// Issue #808 评论 5919641249: InsertReveal/DeleteConceal 不再按每个 cluster
     /// 自己的矩形边缘缩放，也不 union 成大图块。同一行先按文字自己的 progress
     /// 算一条行级共同吞吐 boundary（由 `line_mask_left/right` + 锚点决定），

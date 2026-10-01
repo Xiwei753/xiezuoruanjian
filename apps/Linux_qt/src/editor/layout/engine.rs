@@ -509,7 +509,12 @@ cpp! {{
 
             int clusterStartIdx = (int)g_canonical_cluster_buf.size();
 
-            if (generate_animation_visuals) {
+            // Issue #810 评论 问题1: cluster 几何始终在基础排版阶段提取，
+            // 不再受 generate_animation_visuals 控制——只有 QImage/纹理延迟生成。
+            // 这样 canonical 排版一次就带 cluster，InsertReveal/DeleteConceal
+            // 不再依赖二次提取/注入补 cluster，消除"有可见正文但 clusters 为空"
+            // 的半残 canonical 状态。
+            {
                 const auto glyphRuns = sujianGlyphRuns(line);
 
             // Issue #724 评论 5750911834 问题 1: 引入全行 logicalStarts。
@@ -664,7 +669,7 @@ cpp! {{
                     g_canonical_cluster_buf.push_back(ce);
                 }
             }
-            } // end if (generate_animation_visuals)
+            } // end cluster extraction block (Issue #810: 始终提取 cluster)
 
             entry.clusterStartIndex = clusterStartIdx;
             entry.clusterCount = (int)g_canonical_cluster_buf.size() - clusterStartIdx;
