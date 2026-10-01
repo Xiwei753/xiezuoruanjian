@@ -182,8 +182,10 @@ fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
 }
 
 /// 问题3 守卫2: collect_rebase_frame_for_unit_without_caret 对所有类型统一使用
-/// compute_frame(visible_fraction)，visible_fraction 对 Reveal/Conceal 从
-/// caret_track_progress 派生，对 Reflow 从 unit.current_visible_fraction 派生。
+/// compute_frame(visible_fraction)，visible_fraction 直接取 unit.current_visible_fraction(now)，
+/// effective_fraction 也直接等于 visible_fraction——不再从局部 frame 宽度反推。
+/// Issue #808 评论 5921324618: 多个 slice 共用 line_mask 后，从 frame.w / slice.w
+/// 反推会把统一 timeline 进度拆成不同局部进度，导致跳变。
 #[test]
 fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
@@ -193,10 +195,15 @@ fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
         window.contains("compute_frame(visible_fraction)"),
         "collect_rebase_frame_for_unit_without_caret 必须用 compute_frame(visible_fraction)"
     );
-    // visible_fraction 从真实显示帧反算
+    // Issue #808 评论 5921324618: visible_fraction 直接取 timeline，effective_fraction = visible_fraction
     assert!(
-        window.contains("frame.w / w"),
-        "collect_rebase_frame_for_unit_without_caret 必须从真实显示帧反算 visible_fraction（frame.w / w）"
+        window.contains("let effective_fraction = visible_fraction;"),
+        "collect_rebase_frame_for_unit_without_caret 的 effective_fraction 必须直接等于 visible_fraction（timeline），不从 frame.w 反推"
+    );
+    // 不应再从 frame.w / w 反推
+    assert!(
+        !window.contains("frame.w / w"),
+        "collect_rebase_frame_for_unit_without_caret 不应再从 frame.w / w 反推 visible_fraction（Issue #808 评论 5921324618）"
     );
 }
 
