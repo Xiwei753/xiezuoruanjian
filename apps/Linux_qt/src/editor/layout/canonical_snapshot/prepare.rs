@@ -9,7 +9,7 @@ use super::*;
 /// 按 (generation, cache_slot, qtextline_idx) 读取现成 QTextLine，
 /// 不重新排版，直接 line.draw() 到 QImage。
 ///
-/// Issue #810 评论 5932233052 问题1: 本函数现在是 **raster-only** 提取，
+/// Issue #810 评论 5933167246 问题1: 本函数现在是 **raster-only** 提取，
 /// 返回 `Vec<AnimationRasterVisual>`，只携带 QImage 和稳定行身份
 ///（paragraph_document_byte_start + qtextline_idx），**不携带 cluster**。
 ///
@@ -52,18 +52,19 @@ pub fn prepare_animation_visuals_from_layout(
             dpr as "double",
             color as "QColor"
         ] -> bool as "bool" {
-            extract_animation_visuals_from_existing_line(gen, slot, qtextline_idx, dpr, color);
-            return !g_canonical_line_buf.empty();
+            extract_animation_raster_from_existing_line(gen, slot, qtextline_idx, dpr, color);
+            return !g_animation_raster_images.empty();
         });
 
         if !success {
             continue;
         }
 
-        // Issue #810 评论 5932233052 问题1: 只提取 image，不再提取 clusters/cursor_x_map。
+        // Issue #810 评论 5933167246 问题1: 只提取 image，不再提取 clusters/cursor_x_map。
         // cluster 几何由基础 canonical 排版直接产出，本函数只负责可延迟的 QImage/纹理。
-        let image_phys_w = get_canonical_line_image_phys_w(0);
-        let image_phys_h = get_canonical_line_image_phys_h(0);
+        // 尺寸和 image 都从独立的 g_animation_raster_* buffer 读，不依赖 g_canonical_*。
+        let image_phys_w = get_animation_raster_image_phys_w(0);
+        let image_phys_h = get_animation_raster_image_phys_h(0);
 
         let image = if image_phys_w > 0 && image_phys_h > 0 {
             let mut img = qmetaobject::QImage::new(
@@ -75,8 +76,8 @@ pub fn prepare_animation_visuals_from_layout(
             );
             let img_ptr = &mut img as *mut qmetaobject::QImage;
             cpp::cpp!(unsafe [img_ptr as "QImage*"] {
-                if (!g_canonical_line_images.empty()) {
-                    *img_ptr = g_canonical_line_images[0];
+                if (!g_animation_raster_images.empty()) {
+                    *img_ptr = g_animation_raster_images[0];
                 }
             });
             Some(img)
@@ -231,8 +232,7 @@ pub fn inject_animation_visuals_into_snapshot(
                 &format!(
                     "paragraph_document_byte_start={} qtextline_idx={} — \
                      target line not found in doc_snapshot, animation raster visual dropped",
-                    anim_line.paragraph_document_byte_start,
-                    anim_line.qtextline_idx,
+                    anim_line.paragraph_document_byte_start, anim_line.qtextline_idx,
                 ),
             );
         }

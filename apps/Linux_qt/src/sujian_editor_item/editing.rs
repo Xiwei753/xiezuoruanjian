@@ -161,19 +161,35 @@ impl SujianEditorItem {
             );
         let old_composition_range = Some((old_affected_start, old_affected_end));
         let new_composition_range = Some((new_affected_start, new_affected_end));
+        // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot 现在返回 Result。
+        // 这是 fallback 路径（active_composition_new_snapshot 和 current_layout_snapshot
+        // 都没有时才用）。Err 时记录诊断并 return，结束本次 commit，不伪装成功。
         let old_snapshot = self
             .pipeline
             .animation_coordinator()
             .active_composition_new_snapshot()
             .cloned()
-            .unwrap_or_else(|| {
-                self.pipeline
-                    .current_layout_snapshot()
-                    .clone()
-                    .unwrap_or_else(|| {
-                        self.build_editor_layout_snapshot(width, false, old_composition_range)
-                    })
+            .or_else(|| self.pipeline.current_layout_snapshot().clone())
+            .or_else(|| {
+                match self.build_editor_layout_snapshot(width, false, old_composition_range) {
+                    Ok(snap) => Some(snap),
+                    Err(err) => {
+                        crate::backend::app_backend::debug_error_static(
+                            "editing",
+                            "record_composition_commit_old_snapshot_invariant_failure",
+                            &format!(
+                                "{} — aborting composition commit (Issue #810 评论 5933167246)",
+                                err
+                            ),
+                        );
+                        None
+                    }
+                }
             });
+        let old_snapshot = match old_snapshot {
+            Some(snap) => snap,
+            None => return,
+        };
 
         // Issue #735: EditorEngine 已删除，不再调用 create_transaction。
         // composition commit 的动画由 handle_composition_commit_or_cancel 直接处理，
@@ -191,8 +207,26 @@ impl SujianEditorItem {
         // 让 composition commit 路径能把新 canonical 提交到 Pipeline.current_canonical_snapshot
         // 并作为 reconcile_active_transactions_with_canonical 的新 canonical 几何。
         // 一次排版同时产出两份视图，不再单独排一次 canonical。
-        let (new_snapshot, new_canonical) =
-            self.build_editor_layout_snapshot_with_canonical(width, true, new_composition_range);
+        // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot_with_canonical
+        // 现在返回 Result。Err 时记录诊断并 return，结束本次视觉事务构造，不伪装成功。
+        let (new_snapshot, new_canonical) = match self.build_editor_layout_snapshot_with_canonical(
+            width,
+            true,
+            new_composition_range,
+        ) {
+            Ok(pair) => pair,
+            Err(err) => {
+                crate::backend::app_backend::debug_error_static(
+                    "editing",
+                    "record_composition_commit_new_snapshot_invariant_failure",
+                    &format!(
+                        "{} — aborting composition commit (Issue #810 评论 5933167246)",
+                        err
+                    ),
+                );
+                return;
+            }
+        };
         // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
         // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
         let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {

@@ -1009,6 +1009,16 @@ impl LinuxEditorPipeline {
         self.current_canonical_snapshot = snapshot;
     }
 
+    /// Issue #810 评论 5933167246 问题2: 当前 canonical snapshot 的只读访问器。
+    /// 供 `emit_content_changed` 在 promote prepared layout 之后检查是否为 None，
+    /// 若为 None 则构造完整 canonical 并提交，使章节 load/reset 后第一次布局完成
+    /// 就把 canonical 存进去，None 状态根本不存在。
+    pub fn current_canonical_snapshot(
+        &self,
+    ) -> Option<&crate::editor::layout::CanonicalDocumentVisualSnapshot> {
+        self.current_canonical_snapshot.as_ref()
+    }
+
     /// Issue #658 评论 5622829886 问题 1: 取出 record_visual_transaction 产生的
     /// pending promoted layout，由 record_transaction 交给 EditorLayout::promote_prepared_layout。
     pub fn take_pending_promoted_layout(
@@ -1115,6 +1125,18 @@ impl LinuxEditorPipeline {
             ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled;
         if (!text_animation_enabled && !caret_animation_enabled) || ctx.is_scrolling {
             return None;
+        }
+        // Issue #810 评论 5933167246 问题2: 当前正文 revision 一旦进入可编辑状态，
+        // 就必须已经有完整 canonical clusters。`current_canonical_snapshot=None` 是
+        // 真实可达状态（Pipeline 初始化、reset_document_visual_state 清成 None），
+        // 但第一笔编辑如果是 Delete/DeleteSelection，DeleteConceal 正要从 old text
+        // 的 cluster/glyph 几何生成吞字动画，old canonical 不能为空。
+        // 在构造事务前，若 current_canonical_snapshot 为 None，从当前 EditorLayout
+        // generation 构造完整 canonical 并存为 current_canonical_snapshot，之后
+        // old snapshot 只从 current_canonical_snapshot 取（保证非 None）。
+        if self.current_canonical_snapshot.is_none() {
+            let snap = self.build_canonical_snapshot_for_current_layout(ctx, editor_layout);
+            self.current_canonical_snapshot = Some(snap);
         }
         // Issue #756 评论 5821042551 / Issue #785: 文字与光标各自独立的时长。
         // Issue #785: 协同只传递"同事务协同"语义（同首帧/同 rebase），不再修改两个 duration。
@@ -1279,25 +1301,26 @@ impl LinuxEditorPipeline {
                         .map(|_| (old_affected_start, old_affected_end)),
                 );
 
-                // Issue #810 评论 5932233052 问题1: old_doc_snapshot 优先使用
-                // current_canonical_snapshot（已包含完整 clusters，由上一次编辑的
-                // 基础 canonical 排版产出）。如果 current_canonical_snapshot 为 None
-                //（首次编辑），fallback 到 assemble_document_visual_snapshot_from_lines
-                //（clusters 为空，但首次编辑没有 old 动画行需要 cluster）。
-                let mut doc_snap = if let Some(ref cached) = self.current_canonical_snapshot {
-                    cached.clone()
-                } else {
-                    layout::assemble_document_visual_snapshot_from_lines(
-                        handle.lines,
-                        0,
-                        ctx.font_pixel_size,
-                        &ctx.font_family,
-                        ctx.line_spacing,
-                        ctx.text_indent,
-                        ctx.padding,
-                        ctx.bounding_width,
-                        ctx.dpr,
-                    )
+                // Issue #810 评论 5933167246 问题2: old_doc_snapshot 只从
+                // current_canonical_snapshot 取。prepare_edit_motion 开头已保证
+                // current_canonical_snapshot 非 None（若为 None 则先从当前
+                // EditorLayout generation 构造完整 canonical 并存入）。
+                // 不再用 assemble_document_visual_snapshot_from_lines fallback
+                // ——该 fallback 产出的 clusters 为空，第一笔 Delete/DeleteSelection
+                // 的 DeleteConceal 吞字动画拿不到 old cluster/glyph 几何。
+                let mut doc_snap = match self.current_canonical_snapshot.clone() {
+                    Some(snap) => snap,
+                    None => {
+                        // 逻辑不可达：prepare_edit_motion 开头已保证非 None。
+                        // 保留防御性 return None，不用 unwrap/expect。
+                        crate::backend::app_backend::debug_error_static(
+                            "pipeline",
+                            "prepare_edit_motion_current_canonical_unexpected_none",
+                            "current_canonical_snapshot is None despite prefix guarantee \
+                             (Issue #810 评论 5933167246)",
+                        );
+                        return None;
+                    }
                 };
 
                 // 从 old prepared layout 只提取 QImage（raster），注入到 old_doc_snapshot。
@@ -1539,54 +1562,42 @@ impl LinuxEditorPipeline {
             let old_revision = self.layout_revision;
             let new_revision = LayoutRevision::next();
 
-            let (old_snap, new_snap) =
-                match LineSnapshotBuilder::build_old_new_from_canonical(
-                    &old_doc_snapshot,
-                    &new_doc_snapshot,
-                    old_revision,
-                    new_revision,
-                    ctx.scroll_y,
-                    ctx.viewport_height,
-                    // Issue #736 评论 5777408243 问题1: cluster 的 document byte range
-                    // 和 snapshot 的 virtual_text 必须属于同一 revision，否则
-                    // animation_coordinator 取 cluster 文本会得到空串，InsertReveal 全被跳过。
-                    &motion.old_text,
-                    &motion.new_text,
-                ) {
-                    Ok(pair) => pair,
-                    Err(err) => {
-                        // Issue #810 评论 5932233052 问题2: build_old_new_from_canonical 返回 Err
-                        // 表示 canonical 排版有 invariant failure（可见正文 clusters 为空）。
-                        // 记录 error 日志并 fallback 到空 snapshot，跳过本次动画事务。
-                        // 不 panic、不伪造 cluster。
-                        crate::backend::app_backend::debug_error_static(
-                            "pipeline",
-                            "build_old_new_from_canonical_invariant_failure",
-                            &format!(
-                                "{} — falling back to empty snapshots, skipping animation \
-                                 for this edit transaction (Issue #810)",
-                                err
-                            ),
-                        );
-                        let empty_old = EditorLayoutSnapshot {
-                            revision: old_revision,
-                            line_snapshots: Vec::new(),
-                            caret_rect: None,
-                            caret_rect_doc: None,
-                            caret_affinity: layout::CaretAffinity::Downstream,
-                            virtual_text: motion.old_text.clone(),
-                        };
-                        let empty_new = EditorLayoutSnapshot {
-                            revision: new_revision,
-                            line_snapshots: Vec::new(),
-                            caret_rect: None,
-                            caret_rect_doc: None,
-                            caret_affinity: layout::CaretAffinity::Downstream,
-                            virtual_text: motion.new_text.clone(),
-                        };
-                        (empty_old, empty_new)
-                    }
-                };
+            // Issue #810 评论 5933167246 问题3: build_old_new_from_canonical 返回 Err
+            // 表示 canonical 排版有 invariant failure（可见正文 clusters 为空）。
+            // 记录诊断日志后提前 return None，结束本次 prepare_edit_motion，不创建事务。
+            // 不创建 fake empty old/new snapshot，不把失败 revision 安装进
+            // current_layout_snapshot / previous_layout_snapshot / current_canonical_snapshot。
+            // 当前 canonical 的更新只能发生在完整 snapshot 成功构造之后。
+            let (old_snap, new_snap) = match LineSnapshotBuilder::build_old_new_from_canonical(
+                &old_doc_snapshot,
+                &new_doc_snapshot,
+                old_revision,
+                new_revision,
+                ctx.scroll_y,
+                ctx.viewport_height,
+                // Issue #736 评论 5777408243 问题1: cluster 的 document byte range
+                // 和 snapshot 的 virtual_text 必须属于同一 revision，否则
+                // animation_coordinator 取 cluster 文本会得到空串，InsertReveal 全被跳过。
+                &motion.old_text,
+                &motion.new_text,
+            ) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    crate::backend::app_backend::debug_error_static(
+                        "pipeline",
+                        "build_old_new_from_canonical_invariant_failure",
+                        &format!(
+                            "{} — skipping this edit transaction, no fake snapshot \
+                                 installed (Issue #810 评论 5933167246)",
+                            err
+                        ),
+                    );
+                    // fallback_old_generation_opt 已在上方释放，不再重复释放。
+                    // 释放 new_generation，避免泄漏（成功路径由 pending_promoted_layout 接管）。
+                    layout::clear_layout_generation(new_generation);
+                    return None;
+                }
+            };
 
             // Issue #738 评论 5787277777: 在 new_doc_snapshot 已完成、创建本次新事务之前，
             // 先把所有旧活动事务从"上一份 canonical 几何"重绑到这份新 canonical，

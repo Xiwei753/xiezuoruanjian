@@ -746,6 +746,20 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
+        // Issue #810 评论 5933167246 问题2: promote prepared layout 之后，若
+        // current_canonical_snapshot 为 None（章节 load/reset 后第一次布局完成），
+        // 用 build_canonical_snapshot_for_current_layout 构造完整 canonical 并提交给 Pipeline。
+        // 这样章节 load/reset 后第一次布局完成就把 canonical 存进去，None 状态根本不存在，
+        // 后续 prepare_edit_motion 不需要再补齐。不在 reconcile_after_layout_change 中重复
+        // ——它已通过 reconcile_active_transactions_with_new_canonical 设置了
+        // current_canonical_snapshot。
+        if self.pipeline.current_canonical_snapshot().is_none() {
+            let ctx = self.build_visual_transaction_context();
+            let snap = self
+                .pipeline
+                .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
+            self.pipeline.set_current_canonical_snapshot(Some(snap));
+        }
         // Issue #658 评论 5623746506 问题 1: promote 之后 EditorLayout cache 已是
         // new text 的有效 cache，此时调 adjust_affinity_at_wrap_boundary ->
         // ensure_layout_cached -> editor_layout.snapshot cache hit，不再触发排版 A。

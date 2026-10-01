@@ -142,11 +142,7 @@ impl LineSnapshotBuilder {
                 return Err(format!(
                     "canonical_line_clusters_empty_invariant_failure: \
                      revision={} para_start={} qtextline_idx={} byte_start={} byte_end={}",
-                    revision.0,
-                    line.para_start,
-                    line.qtextline_idx,
-                    line.byte_start,
-                    line.byte_end,
+                    revision.0, line.para_start, line.qtextline_idx, line.byte_start, line.byte_end,
                 ));
             }
 
