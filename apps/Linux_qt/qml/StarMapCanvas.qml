@@ -100,6 +100,36 @@ Item {
         starmapBackendRef.record_interaction(event, pathKey, starmapId, itemKind, itemId, fj)
     }
 
+    // Issue #814 评论 5935346839: pointer_press 是完整手势的起点边界。
+    // 不能挂在背景 MouseArea.onPressed 上：按到 Node/Embed 时对象的 TapHandler
+    // 先取得 exclusive grab，背景 MouseArea 根本收不到 press，而"按在对象上
+    // 没反应"恰恰是最需要诊断的场景。统一由根节点上的 passive-grab PointHandler
+    // 观察 press：不抢事件，命中的对象照常拿到完整交互；hitKind/hitId 在按下
+    // 当场按世界坐标重算，能直接区分"坐标换算错"和"事件路由断"。
+    function logPointerPress(button, device, point) {
+        var wx = (point.position.x - panX) / zoomLevel
+        var wy = (point.position.y - panY) / zoomLevel
+        var hitNode = findNodeAt(wx, wy)
+        var hitEmbed = findEmbedChromeAt(wx, wy)
+        var hitEdge = graphController.hitTestEdge(wx, wy)
+        var hitKind = "empty"
+        var hitId = ""
+        if (hitNode) { hitKind = "node"; hitId = hitNode.id }
+        else if (hitEmbed) { hitKind = "embed"; hitId = hitEmbed.instanceId }
+        else if (hitEdge) { hitKind = "edge"; hitId = hitEdge.id }
+        logInteraction("pointer_press", hitKind, hitId, {
+            "button": button,
+            "device": device,
+            "screenX": point.position.x,
+            "screenY": point.position.y,
+            "worldX": wx,
+            "worldY": wy,
+            "panX": panX,
+            "panY": panY,
+            "zoomLevel": zoomLevel
+        })
+    }
+
     // ---------------------------------------------------------------------------
     // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
     //   pointerMode / connectFrom* / connectMouseX/Y / pressedNodeId / pressedEmbedId
@@ -280,27 +310,6 @@ Item {
         acceptedButtons: Qt.LeftButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = true
-            // Issue #814 评论 5935346839: pointer_press 边界日志（touch 设备）。
-            var _mx0 = (eventPoint.position.x - panX) / zoomLevel
-            var _my0 = (eventPoint.position.y - panY) / zoomLevel
-            var _hitNode0 = findNodeAt(_mx0, _my0)
-            var _hitEmbed0 = findEmbedChromeAt(_mx0, _my0)
-            var _hitEdge0 = graphController.hitTestEdge(_mx0, _my0)
-            var _hk0 = "empty"
-            var _hi0 = ""
-            if (_hitNode0) { _hk0 = "node"; _hi0 = _hitNode0.id }
-            else if (_hitEmbed0) { _hk0 = "embed"; _hi0 = _hitEmbed0.instanceId }
-            else if (_hitEdge0) { _hk0 = "edge"; _hi0 = _hitEdge0.id }
-            logInteraction("pointer_press", _hk0, _hi0, {
-                "device": "touch",
-                "screenX": eventPoint.position.x,
-                "screenY": eventPoint.position.y,
-                "worldX": _mx0,
-                "worldY": _my0,
-                "panX": panX,
-                "panY": panY,
-                "zoomLevel": zoomLevel
-            })
             var mx = (eventPoint.position.x - panX) / zoomLevel
             var my = (eventPoint.position.y - panY) / zoomLevel
             if (findNodeAt(mx, my)) {
@@ -336,26 +345,6 @@ Item {
             var py = bgTouchLeftTap.point.position.y
             var wx = (px - panX) / zoomLevel
             var wy = (py - panY) / zoomLevel
-
-            // Issue #814 评论 5935346839: pointer_press 边界日志（touch 长按入口）。
-            var _hn = findNodeAt(wx, wy)
-            var _he = findEmbedChromeAt(wx, wy)
-            var _hd = graphController.hitTestEdge(wx, wy)
-            var _lk = "empty"
-            var _li = ""
-            if (_hn) { _lk = "node"; _li = _hn.id }
-            else if (_he) { _lk = "embed"; _li = _he.instanceId }
-            else if (_hd) { _lk = "edge"; _li = _hd.id }
-            logInteraction("pointer_press", _lk, _li, {
-                "device": "touch",
-                "screenX": px,
-                "screenY": py,
-                "worldX": wx,
-                "worldY": wy,
-                "panX": panX,
-                "panY": panY,
-                "zoomLevel": zoomLevel
-            })
 
             if (findNodeAt(wx, wy)) return
             if (findEmbedChromeAt(wx, wy)) return
@@ -427,6 +416,9 @@ Item {
         // 用于 onLeftReleased 区分鼠标 move（nodeDragHandler 驱动）和触屏 move（bgTouchDrag 驱动），
         // 避免两者重复 commit。
         property bool _wasTouchMove: false
+        // Issue #814 评论 5935346839: 标记当前手势是触屏画布 pan，
+        // 用于在拖动手势真正开始时记 pan_begin、结束时记 pan_end。
+        property bool _wasTouchPan: false
         onActiveChanged: {
             if (active) {
                 lastTx = 0
@@ -436,7 +428,30 @@ Item {
                 if (interaction.pointerMode === "move") {
                     _wasTouchMove = true
                 }
+                // Issue #814 评论 5935346839: 触屏画布 pan 的 begin 边界
+                // （鼠标 pan_begin 在 bgDragArea.onPressed 记）。
+                if (interaction.pointerMode === "idle") {
+                    _wasTouchPan = true
+                    _panBeginX = panX
+                    _panBeginY = panY
+                    logInteraction("pan_begin", "empty", "", {
+                        "startPanX": panX,
+                        "startPanY": panY,
+                        "device": "touch"
+                    })
+                }
             } else {
+                if (_wasTouchPan) {
+                    // Issue #814 评论 5935346839: 触屏画布 pan 的 end 边界。
+                    logInteraction("pan_end", "empty", "", {
+                        "startPanX": _panBeginX,
+                        "startPanY": _panBeginY,
+                        "endPanX": panX,
+                        "endPanY": panY,
+                        "device": "touch"
+                    })
+                    _wasTouchPan = false
+                }
                 // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
                 // 桌面指针 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
                 // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
@@ -476,7 +491,17 @@ Item {
                 interaction.connectMouseY += dy / zoomLevel
                 // 移动总距离超过阈值则转 connect
                 if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
-                    interaction.contextPendingToConnect()
+                    if (interaction.contextPendingToConnect()) {
+                        // Issue #814 评论 5935346839: connect_begin 边界日志
+                        // （触屏长按后拖过阈值转连线；鼠标连接在 onMouseLongPressed 记）。
+                        logInteraction("connect_begin", interaction.connectFromKind, interaction.connectFromId, {
+                            "kind": interaction.connectFromKind,
+                            "fromId": interaction.connectFromId,
+                            "fromX": interaction.connectMouseX,
+                            "fromY": interaction.connectMouseY,
+                            "device": "touch"
+                        })
+                    }
                     // Issue #801 评论 5895310100: 继续移动变连线，关闭长按菜单视觉层
                     touchContextPreview.hide()
                 }
@@ -521,6 +546,43 @@ Item {
         }
     }
 
+    // Issue #814 评论 5935346839: press 边界观察器。
+    // PointHandler 只取 passive grab，不参与 exclusive grab 竞争：Node/Embed
+    // 自己的 TapHandler/DragHandler 照常拿到完整手势。四个 handler 分别绑定
+    // 具体的 button，避免依赖未公开的 point.pressedButtons。
+    PointHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.LeftButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("left", "mouse", point)
+        }
+    }
+    PointHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.MiddleButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("middle", "mouse", point)
+        }
+    }
+    PointHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.RightButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("right", "mouse", point)
+        }
+    }
+    PointHandler {
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("left", "touch", point)
+        }
+    }
+
     // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
     MouseArea {
         id: bgDragArea
@@ -535,28 +597,6 @@ Item {
             _touchInputActive = false
             lastX = mouse.x
             lastY = mouse.y
-            // Issue #814 评论 5935346839: pointer_press 边界日志（mouse 设备）。
-            var _wx = (mouse.x - panX) / zoomLevel
-            var _wy = (mouse.y - panY) / zoomLevel
-            var _hitNode = findNodeAt(_wx, _wy)
-            var _hitEmbed = findEmbedChromeAt(_wx, _wy)
-            var _hitEdge = graphController.hitTestEdge(_wx, _wy)
-            var _hitKind = "empty"
-            var _hitId = ""
-            if (_hitNode) { _hitKind = "node"; _hitId = _hitNode.id }
-            else if (_hitEmbed) { _hitKind = "embed"; _hitId = _hitEmbed.instanceId }
-            else if (_hitEdge) { _hitKind = "edge"; _hitId = _hitEdge.id }
-            logInteraction("pointer_press", _hitKind, _hitId, {
-                "button": mouse.button === Qt.LeftButton ? "left" : (mouse.button === Qt.MiddleButton ? "middle" : "other"),
-                "device": "mouse",
-                "screenX": mouse.x,
-                "screenY": mouse.y,
-                "worldX": _wx,
-                "worldY": _wy,
-                "panX": panX,
-                "panY": panY,
-                "zoomLevel": zoomLevel
-            })
             if (mouse.button === Qt.LeftButton) {
                 var wx = (mouse.x - panX) / zoomLevel
                 var wy = (mouse.y - panY) / zoomLevel
@@ -567,7 +607,8 @@ Item {
                     _panBeginY = panY
                     logInteraction("pan_begin", "empty", "", {
                         "startPanX": panX,
-                        "startPanY": panY
+                        "startPanY": panY,
+                        "device": "mouse"
                     })
                 }
             }
@@ -579,7 +620,9 @@ Item {
                 _panBeginY = panY
                 logInteraction("pan_begin", "empty", "", {
                     "startPanX": panX,
-                    "startPanY": panY
+                    "startPanY": panY,
+                    "button": "middle",
+                    "device": "mouse"
                 })
             }
         }
@@ -602,7 +645,8 @@ Item {
                     "startPanX": _panBeginX,
                     "startPanY": _panBeginY,
                     "endPanX": panX,
-                    "endPanY": panY
+                    "endPanY": panY,
+                    "device": "mouse"
                 })
             }
         }
@@ -778,9 +822,9 @@ Item {
                 onSingleClicked: {
                     graphController.selectNode(nodeData.id)
                     // Issue #814 评论 5935346839: selection_changed 边界日志（node）。
-                    logInteraction("selection_changed", "node", nodeData.id, {
-                        "device": "mouse"
-                    })
+                    // singleClicked 由鼠标/触屏两个 TapHandler 共用，这里不猜 device；
+                    // 设备在 pointer_press / pan / move 边界日志里已经明确。
+                    logInteraction("selection_changed", "node", nodeData.id, {})
                 }
 
                 onDoubleClicked: {
@@ -1022,9 +1066,8 @@ Item {
                 onClicked: function(instId) {
                     graphController.selectEmbed(instId)
                     // Issue #814 评论 5935346839: selection_changed 边界日志（embed）。
-                    logInteraction("selection_changed", "embed", instId, {
-                        "device": "mouse"
-                    })
+                    // clicked 由鼠标/触屏两个 TapHandler 共用，不猜 device。
+                    logInteraction("selection_changed", "embed", instId, {})
                 }
 
                 // Issue #805 评论 5907045450 第 1/3 部分：双击不再 drillDown。

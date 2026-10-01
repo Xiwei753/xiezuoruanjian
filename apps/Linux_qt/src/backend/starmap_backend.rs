@@ -791,7 +791,7 @@ impl StarMapBackend {
     /// - `target = linux_qt.starmap`
     /// - 不受 `WRITER_DEBUG_QML` 环境变量控制；writer_diagnostics 内部根据
     ///   enabled 配置决定是否落盘，用户在设置里开启"诊断日志"时正常落盘。
-    /// - `fields_json` 解析失败或不是 Object 时插入 `fieldsParseError: true`，
+    /// - `fields_json` 解析失败或不是 Object 时插入 `fields_parse_error: true`，
     ///   解析失败不影响交互本身（不 panic、不返回错误）。
     fn record_interaction(
         &self,
@@ -802,42 +802,21 @@ impl StarMapBackend {
         item_id: QString,
         fields_json: QString,
     ) {
-        let event_name = format!("starmap.{}", event.to_string());
+        let event_name = format!("starmap.{event}");
         let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
             std::collections::BTreeMap::new();
-        fields.insert(
-            "scenePathKey".to_string(),
-            serde_json::Value::String(scene_path_key.to_string()),
-        );
-        fields.insert(
-            "starmapId".to_string(),
-            serde_json::Value::String(starmap_id.to_string()),
-        );
-        fields.insert(
-            "itemKind".to_string(),
-            serde_json::Value::String(item_kind.to_string()),
-        );
-        fields.insert(
-            "itemId".to_string(),
-            serde_json::Value::String(item_id.to_string()),
-        );
-        // 合并 QML 传入的自定义字段。解析失败或不是 Object 时记一个标记，
-        // 不影响交互本身。
+        fields.insert("scenePathKey".into(), scene_path_key.to_string().into());
+        fields.insert("starmapId".into(), starmap_id.to_string().into());
+        fields.insert("itemKind".into(), item_kind.to_string().into());
+        fields.insert("itemId".into(), item_id.to_string().into());
+        // 合并 QML 传入的自定义字段。解析失败或不是 JSON Object 时只记一个
+        // 标记，不影响交互本身。
         let extra = fields_json.to_string();
         if !extra.is_empty() {
-            match serde_json::from_str::<serde_json::Value>(&extra) {
-                Ok(v) if v.is_object() => {
-                    if let Some(obj) = v.as_object() {
-                        for (k, val) in obj {
-                            fields.insert(k.clone(), val.clone());
-                        }
-                    }
-                }
-                _ => {
-                    fields.insert(
-                        "fieldsParseError".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
+            match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&extra) {
+                Ok(obj) => fields.extend(obj),
+                Err(_) => {
+                    fields.insert("fields_parse_error".into(), true.into());
                 }
             }
         }
@@ -861,7 +840,7 @@ impl StarMapBackend {
 //   - graph.rs：graph 读取、节点与边增删改、坐标布局落盘
 //   - hyperlinks.rs：超链接增删改查
 // 本文件保留 QObject 桥接层（`StarMapBackend` 的 qt_method 实现）与共享的
-// with_app / with_app_mut / log_starmap_envelope 工具方法。
+// with_app / with_app_mut / log_starmap_envelope / record_interaction 工具方法。
 // 本模块在 app_backend.rs 里是用 `#[path = "starmap_backend.rs"]` 声明的，
 // 这种声明下子模块默认被解析到 backend/ 同级目录，所以这里必须显式写 #[path]。
 #[path = "starmap_backend/documents.rs"]
