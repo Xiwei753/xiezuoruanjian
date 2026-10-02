@@ -217,10 +217,14 @@ export struct StarMapScreen {
    * 任意一层的单指画布拖动都汇到这里，改的是唯一的全局相机（#818 复审）。
    *
    * 子星图不是独立窗口：手指落在根空白、子星图内部空白、二层子星图内部空白，
-   * 拖的都是整张星图的视角，所以这里只认"屏幕位移 dx/dy"，不关心是哪一层发起的。
+   * 拖的都是整张星图的视角，所以这里不关心是哪一层发起的。
+   *
+   * 注意是**目标值**不是增量：ArkUI PanGesture 的 event.offsetX/Y 是相对手势起点的
+   * 累计位移，Scene 层已经算好了"起手基准 + 累计位移"，这里整份覆盖相机 offset。
+   * 如果这里再写成 `cameraOffsetX + offsetX`，同一次手势的每一帧都会被叠加一遍。
    */
-  panCamera(dx: number, dy: number) {
-    this.applyCamera(this.cameraScale, this.cameraOffsetX + dx, this.cameraOffsetY + dy)
+  panCameraTo(offsetX: number, offsetY: number) {
+    this.applyCamera(this.cameraScale, offsetX, offsetY)
   }
 
   /**
@@ -270,8 +274,8 @@ export struct StarMapScreen {
           this.applyCamera(scale, offsetX, offsetY)
         },
         // 任意一层空白处的单指拖动都汇回根相机（#818 复审：子星图不是独立窗口）
-        onCameraPan: (dx: number, dy: number) => {
-          this.panCamera(dx, dy)
+        onCameraPanTo: (offsetX: number, offsetY: number) => {
+          this.panCameraTo(offsetX, offsetY)
         },
         sceneDepth: 0,
         bridge: this.bridge,

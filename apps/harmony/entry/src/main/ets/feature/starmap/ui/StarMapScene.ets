@@ -47,14 +47,25 @@
 //     所有单指回调入口统一先 `if (this.gestureTracker.isPinching()) return`，
 //     否则晚到的单指回调会重新选中对象、弹菜单或起连线。
 // 17. 子星图**不是独立窗口**（#818 复审），没有自己的平移相机。任意一层空白处的
-//     普通单指拖动都只改根全局相机：child Scene 把屏幕位移通过 onCameraPan 回传给根。
+//     普通单指拖动都只改根全局相机：child Scene 把目标 offset 通过 onCameraPanTo 回传给根。
 //     fitOffsetX/Y 只允许由 fitView / syncFitToSceneSize 写，不进任何用户交互写路径。
 //     之前 child 能自己写 fitOffset，拖出去的内容又被 clip(true) 裁掉，真机上表现为
 //     "子星图里的东西突然看不见"。
+//     回传的是**目标值**不是增量：PanGesture 的 event.offsetX/Y 是相对手势起点的累计位移，
+//     起手时记一份 panBaseCameraOffsetX/Y，更新时算 基准 + 累计值，根整份覆盖相机 offset；
+//     写成 `camera += event.offsetX` 会把同一手势的每一帧叠加一遍，越拖越远。
 // 18. 子星图里的对象不能被拖到圆外（#818 复审）：sceneDepth > 0 时 moveNode / moveEmbed
 //     的候选坐标先过 `clampItemToEmbedSafeArea()`（复用 CIRCLE_INNER_SAFE_RATIO），
 //     再进 applyFreeformLayout、再存进 Core —— 存进数据的也必须是夹好的那份坐标，
 //     不能只在显示层夹住然后靠 clip 藏错误。根层对象仍然自由移动。
+// 19. 新建也要守边界（#818 复审）：performCreateNode / performCreateEmbed 写 Core 之前
+//     先过 `clampItemToLocalSafeArea()`（尺寸取 StarMapLayout 导出的
+//     DEFAULT_NODE_WIDTH/HEIGHT、DEFAULT_EMBED_DIAMETER，UI 侧不手写）。
+//     clamp 之外还必须 `refitAfterContentAdded()`：空子星图首次 fitView() 时没有内容，
+//     fitScale 会停在 1 且 hasFittedView 已为 true，之后第一次新建时 maybeFitView 不再跑，
+//     新对象会比当前安全区还大。重算的是 local fit，不是 global camera，
+//     所以不会把用户双指缩放好的视角打回初始大小。
+//     移动已有对象不重算，继续每帧 clamp 即可。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -80,7 +91,7 @@ import {
 import {
   PlatformLayoutNode, PlatformPoint,
   buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
-  DEFAULT_EMBED_DIAMETER
+  DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT
 } from '../platform/StarMapLayout'
 import {
   PlatformMotionConfig,
@@ -219,10 +230,13 @@ export struct StarMapScene {
    * 拖动画布的回调：只改根全局相机（#818 复审）。
    *
    * 子星图不是独立窗口，手指在子星图空白里拖，动的也是整张星图的视角。
-   * 所以 child Scene 不写自己的 fitOffset，而是把屏幕位移交给根 Scene。
+   * 所以 child Scene 不写自己的 fitOffset，而是把目标 offset 交给根 Scene。
+   *
+   * 传的是**目标值**不是增量：PanGesture 的 event.offsetX/Y 是相对手势起点的
+   * 累计位移，根 Scene 必须整份覆盖相机 offset，不能拿它再相加。
    */
-  onCameraPan: (dx: number, dy: number) => void =
-    (_dx: number, _dy: number) => {}
+  onCameraPanTo: (offsetX: number, offsetY: number) => void =
+    (_offsetX: number, _offsetY: number) => {}
 
   /**
    * 全树唯一选中态。根 Scene 持有唯一一份，沿组件树传到每个子 Scene。
@@ -302,10 +316,23 @@ export struct StarMapScene {
   private moveEmbedStartX: number = 0
   private moveEmbedStartY: number = 0
   private panActive: boolean = false
+  /**
+   * 本次"拖画布"起手时的全局相机 offset。
+   *
+   * ArkUI 的 PanGesture event.offsetX/Y 是相对手势起点的累计位移，不是每帧增量，
+   * 所以必须留一份基准：更新时算 基准 + 累计位移 得到目标 offset，整份交给根。
+   * 直接 `camera += event.offsetX` 会把同一次手势里的每一帧都叠加一遍，越拖越远（#818 复审）。
+   */
+  private panBaseCameraOffsetX: number = 0
+  private panBaseCameraOffsetY: number = 0
   /** 本 Scene 自己的区域尺寸（vp），用于算子图适配比例 */
   private sceneWidth: number = 0
   private sceneHeight: number = 0
-  /** 是否已经算过一次 fit view。子图加节点/移动节点不再重算，只有首次加载和显式 fit view 才算（#816） */
+  /**
+   * 是否已经算过一次 fit view。
+   * 首次加载后不自动重算；只有容器局部尺寸变化、或子层新建内容时显式 fitView() 才会重算（#816 / #818 复审）。
+   * 移动已有对象不走这里——移动每帧 clamp 就够了，不需要整体重新适配。
+   */
   private hasFittedView: boolean = false
   // 上次适配时 Scene 的宽度，用来判断容器尺寸变化是不是父层缩放带来的
   private lastFittedSceneSize: number = 0
@@ -526,8 +553,9 @@ export struct StarMapScene {
   /**
    * 首次布局完成时算一次 fit view。
    *
-   * 只在"还没有算过"时算：子图后来加节点、移动节点都不再重算，
-   * 否则用户刚双指放大好的视图会被一次内容变化打回初始大小（#816 明确要求）。
+   * 只在"还没有算过"时算：移动已有对象不重算（每帧 clamp 就够了）。
+   * 子层新建内容会走 refitAfterContentAdded() 显式重算一次——那是 local fit，
+   * 和用户双指改的 global camera 是两回事，不会把用户缩放好的视角打回初始大小（#816 / #818 复审）。
    * 根 Scene 恒不自动适配（整屏显示，行为与之前一致）。
    */
   private maybeFitView(): void {
@@ -648,16 +676,23 @@ export struct StarMapScene {
   /**
    * 拖动画布 = 拖全局相机，任意一层都是（#818 复审）。
    *
-   * 根 Scene 直接改全局相机；子 Scene 自己没有相机，把屏幕位移原样回传给根。
+   * 根 Scene 直接改全局相机；子 Scene 自己没有相机，把目标 offset 原样回传给根。
    * 子星图是父星图里的一个嵌入区域，不是独立窗口——手指在子图空白里拖，
    * 动的同样是整张星图的视角，所以这里不存在"改 child fitOffset"这条路径。
+   *
+   * 注意这里是"目标值"而不是"每帧增量"：ArkUI 的 PanGesture event.offsetX/Y
+   * 是相对手势起点的累计位移，同一次手势里每帧都会重发从起点算起的总值
+   * （华为官方示例也是 `offsetX = positionX + event.offsetX`）。
+   * 如果这里写成 `camera += event.offsetX`，拖得越久累计得越离谱。
+   * 正确写法是起手时记一份本次 Pan 的基准（panBaseCameraOffsetX/Y），
+   * 更新时用 基准 + 累计位移 得到目标 offset。
    */
-  private applyCameraPan(dx: number, dy: number): void {
+  private applyCameraPanTo(offsetX: number, offsetY: number): void {
     if (this.isCameraScene()) {
-      this.applyCameraTransform(this.cameraScale, this.cameraOffsetX + dx, this.cameraOffsetY + dy)
+      this.applyCameraTransform(this.cameraScale, offsetX, offsetY)
       return
     }
-    this.onCameraPan(dx, dy)
+    this.onCameraPanTo(offsetX, offsetY)
   }
 
   /**
@@ -682,6 +717,28 @@ export struct StarMapScene {
       this.fitScale, this.fitOffsetX, this.fitOffsetY,
       localSceneSize, EMBED_FIT_PADDING_VP
     )
+  }
+
+  /**
+ * 子 Scene 新增内容后重算一次 local fit（#818 复审）。
+ *
+ * 为什么只有 clamp 还不够：空子星图首次 fitView() 时没有内容，fitScale 会停在 1
+ * 且 hasFittedView 已经是 true，之后第一次新建节点 / 二级子星图时
+ * maybeFitView() 不会再跑，于是新对象可能比当前安全区还大。
+ * 这里显式重算一次，把整张子内容重新塞回父 Embed 的安全区：
+ *
+ * - 空子星图第一次建节点 → local fit 缩小，节点不会被裁；
+ * - 空子星图第一次建二级子星图 → 显示尺寸严格小于父 Embed；
+ * - 已有内容再加 → 必要时整体缩小。
+ *
+ * 根 Scene 不需要：它的画布是整屏，没有圆壳，也没有 local fit。
+ * 全局相机完全不受影响——用户双指改的是 global camera，这里改的是 local fit，
+ * 两者不是一回事，所以不存在"重新 fit 会把用户缩放重置掉"的顾虑。
+ */
+private refitAfterContentAdded(): void {
+    if (!this.isCameraScene()) {
+      this.fitView()
+    }
   }
 
   /**
@@ -1391,14 +1448,20 @@ export struct StarMapScene {
   /**
    * 执行新建节点：通过 bridge API 创建，使用 this.starmapId。
    * 标题由窗口层级的对话框通过参数传入。
+   *
+   * 新建点同样要过安全区（#818 复审）：在子星图边缘长按新建，菜单锚点虽然在圆内，
+   * 但 160×80 的整块节点可能已经伸出圆外被 clip 掉；存进 Core 的也必须是夹好的坐标。
    */
   async performCreateNode(title: string) {
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     if (!this.bridge) return
+    const candidate = this.createMenuCanvasPosition
+    const clampedNode = this.clampItemToLocalSafeArea(candidate.x, candidate.y,
+      DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT)
     const position: StarMapPoint = {
-      x: this.createMenuCanvasPosition.x,
-      y: this.createMenuCanvasPosition.y
+      x: clampedNode.x,
+      y: clampedNode.y
     }
     const result = await this.bridge.addStarMapNode(this.starmapId, trimmed, 'Custom', position)
     if (result.success && result.data) {
@@ -1414,6 +1477,9 @@ export struct StarMapScene {
         }
         this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
         this.recomputeGeometry()
+        // 子层新增内容后重算 local fit：空子星图首次 fitView 时没有内容，fitScale = 1，
+        // 新建的节点 / 子星图会大过当前安全区。全局相机不受影响（#818 复审）
+        this.refitAfterContentAdded()
       }
       this.selectItem('node', result.data.id)
       this.onCreateNode(this.scenePath, this.starmapId, trimmed, position)
@@ -1429,14 +1495,20 @@ export struct StarMapScene {
   /**
    * 执行新建子星图：通过 bridge API 创建，使用 this.starmapId。
    * 标题由窗口层级的对话框通过参数传入。
+   *
+   * 新建点同样要过安全区（#818 复审）：二级子星图直径就是 DEFAULT_EMBED_DIAMETER，
+   * 在父圆边缘直接出生会大到顶满父圆甚至被裁掉，必须夹进圆内接正方形并让 local fit 缩小。
    */
   async performCreateEmbed(title: string) {
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     if (!this.bridge) return
+    const candidate = this.createMenuCanvasPosition
+    const clampedEmbed = this.clampItemToLocalSafeArea(candidate.x, candidate.y,
+      DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
     const position: StarMapPoint = {
-      x: this.createMenuCanvasPosition.x,
-      y: this.createMenuCanvasPosition.y
+      x: clampedEmbed.x,
+      y: clampedEmbed.y
     }
     const result = await this.bridge.createStarmapChildEmbed(this.starmapId, trimmed, position)
     if (result.success && result.data) {
@@ -1452,6 +1524,8 @@ export struct StarMapScene {
         }
         this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
         this.recomputeGeometry()
+        // 子层新增内容后重算 local fit，让整棵子内容重新塞进父圆的安全区（#818 复审）
+        this.refitAfterContentAdded()
       }
       this.onCreateEmbed(this.scenePath, this.starmapId, trimmed, position)
       logCreateResult('create_embed', describeScenePath(this.scenePath), this.starmapId,
@@ -1782,6 +1856,8 @@ export struct StarMapScene {
               const point = this.gestureScreenPoint(event, 0, 0)
               this.gestureTracker.beginPanCanvas(this.scenePath, point.x, point.y)
               this.gestureMode = 'panCanvas'
+              this.panBaseCameraOffsetX = this.cameraOffsetX
+              this.panBaseCameraOffsetY = this.cameraOffsetY
             }
           })
           .onActionUpdate((event: GestureEvent) => {
@@ -1801,8 +1877,9 @@ export struct StarMapScene {
               this.recomputeGeometry()
             } else if (state.mode === 'panCanvas' && this.panActive &&
               this.gestureTracker.isPanOwnedByScene(this.scenePath) && this.canMutateViewport()) {
-              // 拖的是整张星图的视角，子层也只是把位移回传给根（#818 复审）
-              this.applyCameraPan(event.offsetX, event.offsetY)
+              // 拖的是整张星图的视角；event.offset 是累计位移，所以用起手基准 + 累计值算目标（#818 复审）
+              this.applyCameraPanTo(this.panBaseCameraOffsetX + event.offsetX,
+                this.panBaseCameraOffsetY + event.offsetY)
             }
           })
           .onActionEnd(() => {
@@ -1904,6 +1981,8 @@ export struct StarMapScene {
             const point = this.gestureScreenPoint(event, 0, 0)
             this.gestureTracker.beginPanCanvas(this.scenePath, point.x, point.y)
             this.gestureMode = 'panCanvas'
+            this.panBaseCameraOffsetX = this.cameraOffsetX
+            this.panBaseCameraOffsetY = this.cameraOffsetY
           }
         })
         .onActionUpdate((event: GestureEvent) => {
@@ -1924,8 +2003,9 @@ export struct StarMapScene {
             this.recomputeGeometry()
           } else if (state.mode === 'panCanvas' && this.panActive &&
             this.gestureTracker.isPanOwnedByScene(this.scenePath) && this.canMutateViewport()) {
-            // 拖的是整张星图的视角，子层也只是把位移回传给根（#818 复审）
-            this.applyCameraPan(event.offsetX, event.offsetY)
+            // 拖的是整张星图的视角；event.offset 是累计位移，所以用起手基准 + 累计值算目标（#818 复审）
+            this.applyCameraPanTo(this.panBaseCameraOffsetX + event.offsetX,
+              this.panBaseCameraOffsetY + event.offsetY)
           }
         })
         .onActionEnd(() => {
@@ -1980,7 +2060,7 @@ export struct StarMapScene {
           cameraOffsetY: this.cameraOffsetY,
           onCameraChanged: this.onCameraChanged,
           // 空白拖动继续往下传：子星图里拖动的也是整张星图的视角（#818 复审）
-          onCameraPan: this.onCameraPan,
+          onCameraPanTo: this.onCameraPanTo,
           // 祖先累计比例：子 Scene 的有效比例 = 它的 fitScale × 这一份（#818 复审）
           inheritedScale: this.viewportScaleValue(),
         })
@@ -2286,6 +2366,8 @@ export struct StarMapScene {
               const point = this.gestureScreenPoint(event, 0, 0)
               this.gestureTracker.beginPanCanvas(this.scenePath, point.x, point.y)
               this.gestureMode = 'panCanvas'
+              this.panBaseCameraOffsetX = this.cameraOffsetX
+              this.panBaseCameraOffsetY = this.cameraOffsetY
             })
             .onActionUpdate((event: GestureEvent) => {
               if (this.gestureTracker.isPinching()) return
@@ -2293,8 +2375,9 @@ export struct StarMapScene {
               if (!this.panActive) return
               if (!this.canMutateViewport()) return
               if (this.gestureMode === 'panCanvas') {
-                // 拖的是整张星图的视角，子层空白也只是把位移回传给根（#818 复审）
-                this.applyCameraPan(event.offsetX, event.offsetY)
+                // 拖的是整张星图的视角；event.offset 是累计位移，根相机整份覆盖而不是叠加（#818 复审）
+                this.applyCameraPanTo(this.panBaseCameraOffsetX + event.offsetX,
+                  this.panBaseCameraOffsetY + event.offsetY)
               }
             })
             .onActionEnd(() => {

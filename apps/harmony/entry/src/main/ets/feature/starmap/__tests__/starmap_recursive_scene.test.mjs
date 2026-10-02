@@ -40,9 +40,11 @@
 //         (StarMapGestureState.ets)
 //
 //   5c. 子星图不是独立窗口，没有自己的平移相机（#818 复审）：任意一层空白处的普通
-//      单指拖动都只改根全局相机，子 Scene 把屏幕位移通过 onCameraPan 回传给根，
-//      自己的 fitOffsetX/Y 一个像素都不动（那只由 fitView / syncFitToSceneSize 写）
-//      —— applyCameraPan (ui/StarMapScene.ets)
+//      单指拖动都只改根全局相机，子 Scene 把目标 offset 通过 onCameraPanTo 回传给根，
+//      自己的 fitOffsetX/Y 一个像素都不动（那只由 fitView / syncFitToSceneSize 写）。
+//      传的是目标值不是增量：起手记 panBaseCameraOffsetX/Y，更新时算 基准 + event.offset，
+//      根整份覆盖；写成 camera += event.offset 会把同一手势的每一帧叠加一遍。
+//      —— applyCameraPanTo (ui/StarMapScene.ets) / panCameraTo (ui/StarMapScreen.ets)
 //
 //   5d. 子星图里的对象不能被拖到圆外（#818 复审）：写入前夹进圆的内接正方形安全区，
 //      夹完的坐标既进布局也存进 Core。复用 fitView 的可用区口径，不另造安全区常量
@@ -74,6 +76,9 @@ const EMBED_FIT_PADDING_VP = 8
 const EMBED_TITLE_HIT_HEIGHT = 24
 const EMBED_BORDER_HIT_WIDTH = 12
 const DEFAULT_EMBED_DIAMETER = 200
+// 与 platform/StarMapLayout.ets 导出的常量保持一致（UI 侧不手写尺寸）
+const DEFAULT_NODE_WIDTH = 160
+const DEFAULT_NODE_HEIGHT = 80
 
 function computeContentBounds(rects) {
   if (rects.length === 0) { return null }
@@ -1010,16 +1015,20 @@ function createSceneView(opts) {
       }
       return true
     },
-    // #818 复审：拖画布 = 拖全局相机。根 Scene 直接改相机；
-    // 子 Scene 自己没有相机，只把屏幕位移回传给根（onCameraPan），
+    // #818 复审：拖画布 = 拖全局相机。根 Scene 直接整份改相机；
+    // 子 Scene 自己没有相机，只把目标 offset 回传给根（onCameraPanTo），
     // 它的 fitOffsetX/Y 不再出现在任何用户交互写路径里。
-    applyCameraPan(dx, dy, onCameraPan) {
+    //
+    // PanGesture 的 event.offsetX/Y 是相对手势起点的累计位移，不是每帧增量，
+    // 所以调用方必须在起手时记一份基准（panBaseCameraOffsetX/Y），
+    // 用 基准 + 累计位移 算出目标 offset 传进来；这里只负责整份覆盖，不能再相加。
+    applyCameraPanTo(offsetX, offsetY, onCameraPanTo) {
       if (v.isCameraScene()) {
-        v.cameraOffsetX += dx
-        v.cameraOffsetY += dy
+        v.cameraOffsetX = offsetX
+        v.cameraOffsetY = offsetY
         return
       }
-      onCameraPan(dx, dy)
+      onCameraPanTo(offsetX, offsetY)
     },
     // #818 复审：子 Scene 里的对象不能被拖到圆外。写入前夹进圆内接正方形，
     // 夹完的这份坐标既进布局也存进 Core。
@@ -1031,6 +1040,16 @@ function createSceneView(opts) {
         v.fitScale, v.fitOffsetX, v.fitOffsetY,
         localSceneSize, EMBED_FIT_PADDING_VP
       )
+    },
+    // #818 复审：新建也要守边界。光 clamp 不够 —— 空子星图首次 fitView 时没有内容，
+    // fitScale 停在 1 且 hasFittedView 已为 true，之后 maybeFitView 不再跑，
+    // 新对象会比当前安全区还大。所以新建成功后显式重算一次 local fit。
+    // 根 Scene 不做（整屏，没有圆壳也没有 local fit）。
+    // 重算的是 local fit 而不是 global camera，用户双指缩放好的视角不会被重置。
+    refitAfterContentAdded(rects) {
+      if (v.isCameraScene()) { return false }
+      v.fitView(rects)
+      return true
     },
     // 写进 Scene 注册表快照的就是累计有效比例 / 累计偏移
     sceneSourceSnapshot() {
@@ -1875,23 +1894,23 @@ console.log('24c. 子图在相机 1 和相机 2 下打开，局部 fit 必须一
 
 console.log('24d. 任意一层空白拖动都只改全局相机：子 Scene 不再有独立平移相机（#818 复审）')
 {
-  // 子星图不是独立窗口。手指在子图空白里拖，位移原样回传给根，
+  // 子星图不是独立窗口。手指在子图空白里拖，目标 offset 原样回传给根，
   // 子 Scene 的 fitOffsetX/Y 一个像素都不动。
   const view = createSceneView({ sceneDepth: 1, inheritedScale: 2, sceneWidth: 400, sceneHeight: 400 })
   view.fitView([{ nodeId: 'n', x: 0, y: 0, width: 100, height: 100, radius: 0 }])
   const fitOffsetBefore = { x: view.fitOffsetX, y: view.fitOffsetY }
   let forwarded = null
-  view.applyCameraPan(20, -10, (dx, dy) => { forwarded = { dx, dy } })
-  assert(forwarded !== null && forwarded.dx === 20 && forwarded.dy === -10,
-    '子 Scene 不改自己的偏移，把屏幕位移交给根（onCameraPan）')
+  view.applyCameraPanTo(20, -10, (offsetX, offsetY) => { forwarded = { offsetX, offsetY } })
+  assert(forwarded !== null && forwarded.offsetX === 20 && forwarded.offsetY === -10,
+    '子 Scene 不改自己的偏移，把目标 offset 交给根（onCameraPanTo）')
   assert(view.fitOffsetX === fitOffsetBefore.x && view.fitOffsetY === fitOffsetBefore.y,
     '子 Scene 的 fitOffsetX/Y 在拖动画布时完全不变（它只由 fitView / syncFitToSceneSize 写）')
   assert(near(view.viewportOffsetX(), fitOffsetBefore.x * 2),
     '屏幕偏移仍等于局部 fitOffset × 祖先累计比例')
 
-  // 根 Scene 自己拖：直接改全局相机，不做换算
+  // 根 Scene 自己拖：直接整份改全局相机，不做换算
   const root = createSceneView({ sceneDepth: 0 })
-  root.applyCameraPan(20, -10, () => { throw new Error('根 Scene 不该回传 onCameraPan') })
+  root.applyCameraPanTo(20, -10, () => { throw new Error('根 Scene 不该回传 onCameraPanTo') })
   assert(near(root.cameraOffsetX, 20) && near(root.cameraOffsetY, -10), '根 Scene 改的是全局相机，不做换算')
 
   // 祖先比例为 0 时的兜底：不能把整棵子树的尺寸算成 0
@@ -1989,6 +2008,125 @@ console.log('24f. 双指 > 所有单指：pinch 认领后单指 begin* 一律改
   t.endPinch()
   t.beginPanCanvas(PATH_A, 0, 0)
   assert(t.getState().mode === 'panCanvas', '双指抬起后单指恢复写状态')
+}
+
+console.log('24g. 拖画布必须按"起手基准 + 累计位移"算目标，不能把每帧当成增量（#818 复审）')
+{
+  // ArkUI 的 PanGesture event.offsetX/Y 是相对手势起点的累计位移。
+  // 真实手指只拖了 15vp；如果 camera += event.offsetX，
+  // 5 / 10 / 15 三帧会被叠成 30vp，拖得越久越离谱。
+  const root = createSceneView({ sceneDepth: 0, cameraOffsetX: 100, cameraOffsetY: 40 })
+  // 根 Scene 自己拖：起手记基准，每帧算 基准 + 累计位移
+  const panRoot = (baseX, baseY, frames) => {
+    root.cameraOffsetX = baseX
+    root.cameraOffsetY = baseY
+    for (const frame of frames) {
+      root.applyCameraPanTo(panBaseCameraOffsetX + frame.dx, panBaseCameraOffsetY + frame.dy, () => {
+        throw new Error('根 Scene 不该回传')
+      })
+    }
+  }
+  let panBaseCameraOffsetX = 100
+  let panBaseCameraOffsetY = 40
+  panRoot(100, 40, [{ dx: 5, dy: 5 }, { dx: 10, dy: 10 }, { dx: 15, dy: 15 }])
+  assert(near(root.cameraOffsetX, 115) && near(root.cameraOffsetY, 55),
+    '根 Scene：base 100 + 累计 15 = 115（不是 5+10+15=130）')
+
+  // 子 Scene 拖空白：目标 offset 同样按 基准 + 累计位移 算好再回传给根
+  const child = createSceneView({
+    sceneDepth: 1, inheritedScale: 2, sceneWidth: 400, sceneHeight: 400,
+    cameraOffsetX: 100, cameraOffsetY: 40
+  })
+  child.fitView([{ nodeId: 'n', x: 0, y: 0, width: 100, height: 100, radius: 0 }])
+  const childFitBefore = { x: child.fitOffsetX, y: child.fitOffsetY }
+  const rootCamera = createSceneView({ sceneDepth: 0, cameraOffsetX: 100, cameraOffsetY: 40 })
+  const onCameraPanTo = (offsetX, offsetY) => {
+    rootCamera.applyCameraPanTo(offsetX, offsetY, () => { throw new Error('根 Scene 不该回传') })
+  }
+  panBaseCameraOffsetX = child.cameraOffsetX
+  panBaseCameraOffsetY = child.cameraOffsetY
+  for (const frame of [{ dx: 5, dy: 5 }, { dx: 10, dy: 10 }, { dx: 15, dy: 15 }]) {
+    child.applyCameraPanTo(panBaseCameraOffsetX + frame.dx, panBaseCameraOffsetY + frame.dy, onCameraPanTo)
+  }
+  assert(near(rootCamera.cameraOffsetX, 115) && near(rootCamera.cameraOffsetY, 55),
+    '子 Scene：累计位移一样只算一次，回传给根的目标也是 115')
+  assert(near(child.fitOffsetX, childFitBefore.x) && near(child.fitOffsetY, childFitBefore.y),
+    '子 Scene 的局部 fit 偏移在整个拖动过程里一动不动')
+
+  // 第二次拖动必须以上一次结束的位置为新基准，而不是接着上次继续累加
+  panBaseCameraOffsetX = rootCamera.cameraOffsetX
+  panBaseCameraOffsetY = rootCamera.cameraOffsetY
+  for (const frame of [{ dx: 5, dy: 0 }, { dx: 8, dy: 0 }]) {
+    rootCamera.applyCameraPanTo(panBaseCameraOffsetX + frame.dx, panBaseCameraOffsetY + frame.dy, () => {})
+  }
+  assert(near(rootCamera.cameraOffsetX, 123), '第二次拖动从 115 出发，8vp 后是 123')
+}
+
+console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整体重新 local fit（#818 复审）')
+{
+  // 场景：空 child 首次 fitView() 时没有内容 → fitScale = 1 且 hasFittedView = true，
+  // 之后 maybeFitView 不再跑。少了重新 fit，新建的 160×80 节点会直接大于当前安全区。
+  const safeSize = 200 * CIRCLE_INNER_SAFE_RATIO - 2 * EMBED_FIT_PADDING_VP
+  const center = 100
+  const minEdge = center - safeSize / 2
+  const maxEdge = center + safeSize / 2
+
+  const view = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: 200, sceneHeight: 200 })
+  view.fitView([])
+  assert(near(view.fitScale, 1) && view.hasFittedView === true,
+    '空子星图首次 fit：没有内容 → fitScale 停在 1，且已经算过一次')
+
+  // 在圆边缘长按新建：160×80 比当前安全区（125.4）还宽，clamp 只能把它居中，
+  // 这正是"只 clamp 不够"的场景——真正让它完整进圆的是后面的重新 local fit。
+  const nodeCandidate = { x: 196, y: 196 }
+  const clampedNode = view.clampItemToLocalSafeArea(
+    nodeCandidate.x, nodeCandidate.y, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT)
+  assert(near(clampedNode.x + DEFAULT_NODE_WIDTH / 2, center),
+  '比安全区还宽的新建节点在 X 方向被居中（放不下时夹不到边界，只能居中）')
+  assert(near(clampedNode.y + DEFAULT_NODE_HEIGHT, maxEdge),
+  '放得下的 Y 方向仍被夹到安全区下边界，不再往圆外落')
+
+  // 新建成功后重新 local fit：160×80 的内容会缩到刚好塞进安全区
+  const nodeRects = [{ nodeId: 'n1', x: clampedNode.x, y: clampedNode.y, width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT, radius: 0 }]
+  const fitBeforeCreate = view.fitScale
+  assert(view.refitAfterContentAdded(nodeRects) === true && !near(view.fitScale, fitBeforeCreate),
+    '新建节点后重新 local fit，fitScale 从 1 缩小')
+  const displayWidth = DEFAULT_NODE_WIDTH * view.fitScale
+  assert(displayWidth <= safeSize, '缩放后节点完整宽度小于等于安全区边长')
+  const nodeLeft = clampedNode.x * view.fitScale + view.fitOffsetX
+  const nodeRight = nodeLeft + displayWidth
+  assert(nodeLeft >= minEdge - 0.5 && nodeRight <= maxEdge + 0.5,
+    '重新 fit 后节点完整显示矩形落在安全区内，不会被父圆裁掉')
+
+  // 空子星图新建二级子星图：200 的圆不能顶满父圆
+  const embedChild = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: 200, sceneHeight: 200 })
+  embedChild.fitView([])
+  const embedCandidate = { x: 195, y: 195 }
+  const clampedEmbed = embedChild.clampItemToLocalSafeArea(
+    embedCandidate.x, embedCandidate.y, DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
+  const embedRects = [{
+    nodeId: 'e1', x: clampedEmbed.x, y: clampedEmbed.y,
+    width: DEFAULT_EMBED_DIAMETER, height: DEFAULT_EMBED_DIAMETER, radius: DEFAULT_EMBED_DIAMETER / 2
+  }]
+  assert(embedChild.refitAfterContentAdded(embedRects) === true && embedChild.fitScale < 1,
+    '新建二级子星图后 local fit 自动缩小')
+  assert(DEFAULT_EMBED_DIAMETER * embedChild.fitScale < DEFAULT_EMBED_DIAMETER,
+    '二级子星图的显示尺寸严格小于父 Embed')
+  assert(DEFAULT_EMBED_DIAMETER * embedChild.fitScale <= safeSize + 0.5,
+    '二级子星图完整落在父圆内接正方形里，不被 clip 裁掉')
+
+  // 全局相机不能被重新 local fit 影响
+  const camBefore = { scale: view.cameraScale, offsetX: view.cameraOffsetX, offsetY: view.cameraOffsetY }
+  view.refitAfterContentAdded(nodeRects)
+  assert(view.cameraScale === camBefore.scale && view.cameraOffsetX === camBefore.offsetX &&
+    view.cameraOffsetY === camBefore.offsetY,
+  '重新 local fit 不碰全局相机，用户双指缩放好的视角不会被重置')
+
+  // 根 Scene 不做 local fit：整屏显示，没有圆壳
+  const root = createSceneView({ sceneDepth: 0 })
+  assert(root.refitAfterContentAdded(nodeRects) === false, '根 Scene 不需要重新 local fit')
+  assert(eq(root.clampItemToLocalSafeArea(9999, -9999, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT), { x: 9999, y: -9999 }),
+    '根 Scene 的新建位置不夹，自由落点')
 }
 
 console.log('')

@@ -33,8 +33,13 @@ export interface NodePositionPatch {
 
 // ─── 常量 ───
 
-const DEFAULT_NODE_WIDTH: number = 160
-const DEFAULT_NODE_HEIGHT: number = 80
+/**
+ * 节点在画布坐标系里的显示尺寸（vp）。
+ * 和 DEFAULT_EMBED_DIAMETER 一样导出：子星图里新建 / 移动节点要拿真实尺寸去过安全区
+ * clamp（#818 复审），UI 侧禁止再手写 160 / 80。
+ */
+export const DEFAULT_NODE_WIDTH: number = 160
+export const DEFAULT_NODE_HEIGHT: number = 80
 const DEFAULT_NODE_RADIUS: number = 16
 const DEFAULT_NODE_ZINDEX: number = 0
 /**

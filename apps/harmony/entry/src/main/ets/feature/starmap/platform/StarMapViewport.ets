@@ -40,6 +40,20 @@
 //    外层 Embed 有 clip(true)，圆外的内容会被直接裁掉，所以"移动节点 / 移动子星图"
 //    写入前必须过 clampItemToEmbedSafeArea（复用 CIRCLE_INNER_SAFE_RATIO，不另造常量），
 //    并且写进 Core 的坐标就是夹好的那一份，数据里不留圆外位置。
+//
+// 5) 画布拖动传的是**目标值**，不是每帧增量。
+//    ArkUI PanGesture 的 event.offsetX/Y 是相对手势起点的累计位移（华为官方示例也是
+//    `offsetX = positionX + event.offsetX`）。所以 Scene 层在起手时记一份基准，
+//    更新时算 基准 + 累计位移 得到目标 offset，根整份覆盖相机 offset。
+//    写成 `camera += event.offsetX` 会把同一次手势的每一帧都叠一遍，越拖越远。
+//
+// 6) 新建同样要守边界，而且光 clamp 不够。
+//    performCreateNode / performCreateEmbed 写 Core 前也要过安全区 clamp
+//    （尺寸取 StarMapLayout 导出的 DEFAULT_NODE_WIDTH/HEIGHT、DEFAULT_EMBED_DIAMETER）。
+//    但空子星图首次 fitView() 时没有内容，fitScale 会停在 1 且 hasFittedView 已为 true，
+//    之后 maybeFitView 不再跑——新对象可能比当前安全区还大。
+//    所以新建成功后还要显式重算一次 local fit：重算的是 local fit，不是 global camera，
+//    用户双指缩放好的视角不会被重置。移动已有对象不重算，继续每帧 clamp 即可。
 
 import { StarMapTargetPath, StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformPoint } from './StarMapLayout'
