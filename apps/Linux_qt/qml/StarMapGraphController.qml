@@ -27,11 +27,24 @@ QtObject {
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
     property var embedsModel: []
 
+    // Issue #814 评论 5935285879: 共享选中控制器与本 Scene 的 pathKey。
+    // selectNode/selectEdge/selectEmbed/clearSelection 改成调用共享 selectionController，
+    // 选择身份带当前 pathKey。nodesModel/edgesModel/embedsModel 只保存图数据，
+    // 不再把 isSelected 当模型状态反复浅拷贝。
+    property var selectionController: null
+    property string pathKey: "root"
+
     // Issue #805 评论 5908703621 问题 3：Embed chrome 命中区域几何常量。
     // 与 StarMapEmbed.qml 的 _chromeHeight / _borderSlop 保持一致。
     // findEmbedChromeAt 只判断标题条 + 四条 border，内部矩形返回 null。
     readonly property int _chromeHeight: 24
     readonly property int _borderSlop: 6
+
+    // Issue #814 评论 5935285879: Embed 独立显示尺寸常量，不再复用 node 尺寸 150×60。
+    // 与 StarMapEmbed.qml 的 _embedDefaultWidth/Height 保持一致。内容区（标题 24px、
+    // 底边 6px 后）要有足够高度容纳子画布。
+    readonly property int _embedDefaultWidth: 240
+    readonly property int _embedDefaultHeight: 220
 
     signal graphChanged()
     signal selectionCleared()
@@ -107,8 +120,8 @@ QtObject {
                     label: gn.title || qsTr("未命名"),
                     x: pos.x,
                     y: pos.y,
-                    width: 150,
-                    height: 60,
+                    width: _embedDefaultWidth,
+                    height: _embedDefaultHeight,
                     isSelected: false,
                     hostPath: null
                 });
@@ -152,8 +165,8 @@ QtObject {
                 label: gem.label || qsTr("未命名"),
                 x: epos.x,
                 y: epos.y,
-                width: 150,
-                height: 60,
+                width: _embedDefaultWidth,
+                height: _embedDefaultHeight,
                 isSelected: false,
                 hostPath: gem.hostPath || null
             });
@@ -184,9 +197,7 @@ QtObject {
         return null;
     }
 
-    // Issue #793 评论 5884923277: 选中状态用浅拷贝重新构造数组，
-    // 不再原地改普通 JS 对象，保证 delegate 绑定的 nodeData.isSelected 有独立 notify。
-    // Issue #796 评论 5886483653: applySelection 同时管理 node / embed / edge。
+    // Issue #793 评论 5884923277: copyObject 保留供其它需要浅拷贝的路径使用。
     function copyObject(src) {
         var dst = {}
         for (var key in src)
@@ -194,48 +205,41 @@ QtObject {
         return dst
     }
 
+    // Issue #814 评论 5935285879: applySelection 数组重建已删除。
+    // nodesModel/edgesModel/embedsModel 只保存图数据，不再把 isSelected 当模型
+    // 状态反复浅拷贝。选中状态统一由共享 selectionController 维护，
+    // Node/Embed/Edge 的 isSelected 从 selectionController.matches 派生。
+    // 保留空 applySelection 仅为兼容可能的外部调用，不再重建数组。
     function applySelection(nodeId, edgeId, embedId) {
-        var nextNodes = []
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = copyObject(nodesModel[i])
-            n.isSelected = nodeId !== "" && n.id === nodeId
-            nextNodes.push(n)
+        if (selectionController) {
+            if (nodeId !== "")
+                selectionController.select(pathKey, "node", nodeId)
+            else if (edgeId !== "")
+                selectionController.select(pathKey, "edge", edgeId)
+            else if (embedId !== "")
+                selectionController.select(pathKey, "embed", embedId)
+            else
+                selectionController.clear()
         }
-
-        var nextEdges = []
-        for (var j = 0; j < edgesModel.length; j++) {
-            var e = copyObject(edgesModel[j])
-            e.isSelected = edgeId !== "" && e.id === edgeId
-            nextEdges.push(e)
-        }
-
-        var nextEmbeds = []
-        for (var m = 0; m < embedsModel.length; m++) {
-            var em = copyObject(embedsModel[m])
-            em.isSelected = embedId !== "" && em.instanceId === embedId
-            nextEmbeds.push(em)
-        }
-
-        nodesModel = nextNodes
-        edgesModel = nextEdges
-        embedsModel = nextEmbeds
-        graphChanged()
     }
 
     function clearSelection() {
-        applySelection("", "", "")
+        if (selectionController)
+            selectionController.clear()
         selectionCleared()
     }
 
     function selectNode(nodeId) {
-        applySelection(nodeId, "", "")
+        if (selectionController)
+            selectionController.select(pathKey, "node", nodeId)
         var node = getNode(nodeId)
         if (node) nodeSelected(node)
         return node
     }
 
     function selectEdge(edgeId) {
-        applySelection("", edgeId, "")
+        if (selectionController)
+            selectionController.select(pathKey, "edge", edgeId)
         var edge = null
         for (var i = 0; i < edgesModel.length; i++) {
             if (edgesModel[i].id === edgeId) { edge = edgesModel[i]; break }
@@ -246,7 +250,8 @@ QtObject {
 
     // Issue #796 评论 5886483653: Embed 选中。
     function selectEmbed(instanceId) {
-        applySelection("", "", instanceId)
+        if (selectionController)
+            selectionController.select(pathKey, "embed", instanceId)
         var embed = getEmbed(instanceId)
         if (embed) embedSelected(embed)
         return embed
@@ -303,6 +308,27 @@ QtObject {
         return null
     }
 
+    // Issue #814 评论 5945557717 问题 1: findEmbedContentAt 判断"整个 Embed
+    // 矩形内、但不在 chrome 的区域"——即子星图 contentViewport 的命中区域。
+    // 父 Scene 的 pointer_press 据此把合法的子场景内部点击记成 childContent，
+    // 不再冒充 empty（empty 应只表示坐标/命中错误）。带 instanceId。
+    // 纯本地几何判断，不需要后端。
+    function findEmbedContentAt(wx, wy) {
+        for (var i = 0; i < embedsModel.length; i++) {
+            var em = embedsModel[i]
+            // 先要求落在整个 Embed 矩形内
+            if (!_rectContains(em.x, em.y, em.width, em.height, wx, wy)) continue
+            // 排除 chrome 区域（标题条 + 四条 border），命中 chrome 不算 content
+            if (_rectContains(em.x, em.y, em.width, _chromeHeight, wx, wy)) continue
+            if (_rectContains(em.x, em.y, em.width, _borderSlop, wx, wy)) continue
+            if (_rectContains(em.x, em.y + em.height - _borderSlop, em.width, _borderSlop, wx, wy)) continue
+            if (_rectContains(em.x, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) continue
+            if (_rectContains(em.x + em.width - _borderSlop, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) continue
+            return em
+        }
+        return null
+    }
+
     // Issue #793 评论 5884923277: createNode 接收 title，不再写死"新节点"。
     function createNode(title, wx, wy) {
         if (!ensureBackend()) return;
@@ -330,8 +356,10 @@ QtObject {
     // Issue #796 评论 5887280405: 用 fromPath/toPath 建边（path 版），
     // 支持 Node 和 Embed 作为端点。fromPath/toPath 是 StarMapTargetPathDto 的 JS 对象，
     // 由 StarMapCanvas.nodePath()/embedPath() 构造，这里 JSON.stringify 后传给后端。
+    // Issue #814 评论 5945557717 问题 3: createEdgeWithPaths 返回 true/false，
+    // Canvas 的 connect_end.success 必须使用这个真实后端结果，不再无条件写 true。
     function createEdgeWithPaths(fromPath, toPath) {
-        if (!ensureBackend()) return;
+        if (!ensureBackend()) return false;
         var res = normalizeBackendResult(
             starmapBackendRef.create_starmap_edge_with_paths(
                 starmapId,
@@ -345,8 +373,10 @@ QtObject {
         if (res.success) {
             clearError();
             loadGraph();
+            return true;
         } else {
             setError(backendErrorText(res, qsTr("创建连线失败")));
+            return false;
         }
     }
 

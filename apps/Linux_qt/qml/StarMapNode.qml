@@ -42,6 +42,10 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
+    // Issue #814 评论 5935285879: Canvas 明确传当前 zoomLevel，Node 不再靠
+    // 父项 scale 猜缩放（sceneLayer scale=1 会破坏旧换算）。
+    property real canvasZoomLevel: 1.0
+
     // Issue #793 评论 5885482530: wobble 改纯视觉偏移，不影响命中框。
     // 根 Item 的 x/y/width/height 恒定，handler 命中基于稳定几何位置；
     // 视觉偏移只作用在内部 visualNode Rectangle 的 transform 上。
@@ -229,8 +233,9 @@ Item {
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
-            // 转成世界坐标增量（除以父项 scale，container.scale === zoomLevel）
-            var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+            // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
+            // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
+            var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
             root.moveDelta(dx / zoom, dy / zoom)
         }
     }

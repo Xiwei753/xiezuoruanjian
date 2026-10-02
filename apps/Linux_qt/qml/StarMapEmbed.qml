@@ -56,6 +56,13 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
+    // Issue #814 评论 5935285879: Canvas 明确传当前 zoomLevel，Embed 不再靠
+    // 父项 scale 猜缩放（sceneLayer scale=1 会破坏旧换算）。
+    property real canvasZoomLevel: 1.0
+
+    // Issue #814 评论 5935285879: 共享选中控制器，由 Canvas 传入，传给 child Scene。
+    property var selectionController: null
+
     // wobble 改纯视觉偏移，不影响命中框
     property int wobbleIndex: 0
     property real _wobbleAnimX: 0
@@ -147,7 +154,9 @@ Item {
             "starmapBackendRef": starmapBackendRef,
             "rootStarmapId": rootStarmapId,
             "pathSegments": childScenePathSegments,
-            "pathKey": childScenePathKey
+            "pathKey": childScenePathKey,
+            // Issue #814 评论 5935285879: 共享选中控制器逐层下传，子 Scene 沿用同一个。
+            "selectionController": selectionController
         })
     }
     onChildSceneWantedChanged: _syncChildScene()
@@ -164,6 +173,14 @@ Item {
     // Issue #805 评论 5907045450 第 3 部分：chrome 命中区域高度 + 边框 hit slop。
     readonly property int _chromeHeight: 24
     readonly property int _borderSlop: 6
+
+    // Issue #814 评论 5935285879: Embed 独立显示尺寸常量，不再复用 node 尺寸 150×60。
+    // 尺寸仍放 Linux_Qt 显示层，不进 Core。内容区（标题 24px、底边 6px 后）要有
+    // 足够高度容纳真正能拖动、缩放、放节点的子画布。
+    // _embedDefaultWidth/Height 是默认尺寸，实际 width/height 由 delegate 传入
+    // （GraphController buildModels 用同样常量初始化）。
+    readonly property int _embedDefaultWidth: 240
+    readonly property int _embedDefaultHeight: 220
 
     property real visualOffsetX:
         (isSelected || isBeingDragged || chromeMouseTap.pressed || chromeTouchTap.pressed) ? 0 : _wobbleAnimX
@@ -339,7 +356,9 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
+                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
+                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
                     root.moveDelta(dx / zoom, dy / zoom)
                 }
             }
@@ -437,7 +456,9 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
+                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
+                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
                     root.moveDelta(dx / zoom, dy / zoom)
                 }
             }
@@ -525,7 +546,9 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
+                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
+                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
                     root.moveDelta(dx / zoom, dy / zoom)
                 }
             }
@@ -613,7 +636,9 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
+                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
+                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
                     root.moveDelta(dx / zoom, dy / zoom)
                 }
             }
@@ -701,7 +726,9 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
+                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
+                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
                     root.moveDelta(dx / zoom, dy / zoom)
                 }
             }

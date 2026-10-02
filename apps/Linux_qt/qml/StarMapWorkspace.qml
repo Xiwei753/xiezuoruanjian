@@ -38,6 +38,13 @@ Item {
     signal requestSearch()
     signal openSettings()
 
+    // Issue #814 评论 5935285879: 整棵递归树共享的唯一选中状态控制器。
+    // 由 Workspace 创建，传给根 StarMapScene，子 Scene 沿用同一个实例。
+    // 不再让每层 GraphController 各自保存一份 isSelected。
+    StarMapSelectionController {
+        id: sharedSelectionController
+    }
+
     Rectangle {
         anchors.fill: parent
         color: dt.bg
@@ -114,6 +121,8 @@ Item {
                     rootStarmapId: root.starmapId
                     pathSegments: []
                     pathKey: "root"
+                    // Issue #814 评论 5935285879: 传共享选中控制器给根 Scene。
+                    selectionController: sharedSelectionController
 
                     // Issue #805 评论 5908703621 问题 5：editNodeRequested 带
                     // owner 上下文（ownerStarmapId/ownerPathKey），设置 Inspector
