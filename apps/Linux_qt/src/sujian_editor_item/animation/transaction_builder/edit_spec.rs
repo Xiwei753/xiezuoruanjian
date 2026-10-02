@@ -120,3 +120,26 @@ pub(crate) fn skip_fields<'a>(
         generation: spec.key.generation,
     }
 }
+
+/// `editor.anim.insert_reveal_not_generated` 的开发期辅助文本。
+///
+/// 正式诊断是上面那条 `writer_diagnostics` 事件；这里只是把排查线索拼成一行，
+/// 免得拼字符串的样板把 `transaction_builder.rs` 撑成 god-file。
+pub(crate) fn insert_reveal_not_generated_debug_message(
+    spec: &VisualEditSpec,
+    intersecting_lines: usize,
+    intersecting_clusters: usize,
+    whitespace_skip_count: usize,
+) -> String {
+    format!(
+        "anim_diagnostic: InsertReveal_not_generated inserted_ranges={:?} snapshot_revision={} \
+         intersecting_lines={} intersecting_clusters={} whitespace_skip={} — possible causes: \
+         animation visuals injection missed the inserted line, no non-whitespace cluster in \
+         range, or all clusters skipped as whitespace",
+        spec.inserted_ranges,
+        spec.new_snapshot.revision.0,
+        intersecting_lines,
+        intersecting_clusters,
+        whitespace_skip_count,
+    )
+}

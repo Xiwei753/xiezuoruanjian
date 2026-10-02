@@ -64,8 +64,12 @@ pub(crate) fn emit_transaction_diagnostic(
 }
 
 pub(crate) mod edit_spec;
+pub(crate) mod ingest_route;
 
-pub(crate) use edit_spec::{skip_fields, CompositionCommitCrossfadeSpec, VisualEditSpec};
+pub(crate) use edit_spec::{
+    insert_reveal_not_generated_debug_message, skip_fields, CompositionCommitCrossfadeSpec,
+    VisualEditSpec,
+};
 
 /// Issue #747 评论 5813540976: 全仓库唯一创建 `PreparedTextVisualTransaction` 的完整入口。
 ///
@@ -202,6 +206,29 @@ pub(crate) fn build_prepared_transaction(
     // ReflowMove/ReflowCrossFade 不参与分组，保持等于自己 from rect 的默认值。
     assign_shared_line_masks(&mut slices);
 
+    // 1e. caret 吞吐路径（Issue #815 评论 5949097065 问题3）
+    //
+    // 必须在 `assign_shared_line_masks` **之后**、建 track **之前**：那时每一行的真实
+    // 吞吐范围（`line_mask_left/right`）和行几何（`ingest_line_top/bottom`）都已经由
+    // **本侧** canonical 写好，路径只能从这些同侧数据生成。
+    //
+    // 之前把跨软换行当成 `old rect → new rect` 一条直线，那条线是从右上飞到左下的对角线，
+    // 文字拿到的是对角线上的某个 x，而不是"这一行上 caret 走到了哪里"。现在改成按行分段：
+    // `LayoutHandoff`（跨 layout 换位，不吞吐）/ `IngestLine`（沿某行横扫，那一行的 x 才
+    // 是吞吐边界）/ `RowHandoff`（行间换位）。
+    //
+    // IME commit 的 composition crossfade 同时产出 new 侧 InsertReveal 与 old 侧
+    // DeleteConceal，行序分属两套 canonical，合并进同一条路径就必须跨 revision 比行号——
+    // 维护者明令禁止，所以那一路不建路径（见 `ingest_route.rs` 顶部说明）。
+    let ingest_route_segments = if spec.caret_animation_enabled
+        && spec.composition_commit_crossfade.is_none()
+        && spec.coordinated_animation_enabled
+    {
+        ingest_route::build_ingest_route(&spec, &slices)
+    } else {
+        Vec::new()
+    };
+
     // 2. Cursor visual track
     //
     // Issue #756: caret motion track 就是正文编辑期间的光标动画，由
@@ -223,6 +250,7 @@ pub(crate) fn build_prepared_transaction(
             spec.new_cursor_line_bottom,
             spec.caret_handoff.clone(),
             spec.caret_duration_ms,
+            ingest_route_segments,
         )
     } else {
         None
@@ -388,14 +416,8 @@ pub(crate) fn build_prepared_transaction(
                     });
                 }
                 // 保留 env-gated debug log 作为开发时辅助，正式诊断走上面的 writer_diagnostics 事件。
-                editor_animation_debug_log(&format!(
-                    "anim_diagnostic: InsertReveal_not_generated inserted_ranges={:?} \
-                     snapshot_revision={} intersecting_lines={} intersecting_clusters={} \
-                     whitespace_skip={} — possible causes: animation visuals injection missed \
-                     the inserted line, no non-whitespace cluster in range, or all clusters \
-                     skipped as whitespace",
-                    spec.inserted_ranges,
-                    spec.new_snapshot.revision.0,
+                editor_animation_debug_log(&insert_reveal_not_generated_debug_message(
+                    &spec,
                     intersecting_lines,
                     intersecting_clusters,
                     whitespace_skip_count,
@@ -471,6 +493,11 @@ pub(crate) fn build_prepared_transaction(
 // slice 合并与 coordinator 方法。
 pub(crate) mod slices;
 
+/// Issue #815 评论 5949097065 问题3: 由**同侧** slice 几何生成 caret 吞吐路径。
+///
+/// 唯一入口：形状判定、行范围收集、以及 Insert / Delete 两条路径的装配都收在这里，
+/// `build_prepared_transaction` 只在 `assign_shared_line_masks` 之后调一次。
+///
 pub(crate) use slices::{
     assign_shared_line_masks, build_cluster_reflow_slices,
     build_composition_commit_crossfade_slices, build_delete_conceal_slices,

@@ -127,6 +127,26 @@ fn line_ordinal_for_visual_line_id(
         .position(|line| line.visual_line_id == visual_line_id)
 }
 
+/// Issue #815 评论 5949097065 问题1/2: 在**同一份 snapshot** 内解析某逻辑位置
+/// （`inserted_range.start` / `deleted_range.start`）的横向 x。
+///
+/// 用的是 snapshot 里真实 cluster 的 source rect 经 `source_rect_to_document_rect`
+/// 换算出的文档坐标，**不按字节比例猜**（维护者明令禁止）。返回该逻辑位置所在
+/// cluster 集合的最小 x —— 即"编辑前 caret 在这一侧排版里待的地方"。
+fn same_side_start_x(
+    snapshot: &EditorLayoutSnapshot,
+    line_ord: Option<usize>,
+    byte_offset: usize,
+) -> Option<f64> {
+    let line_ord = line_ord?;
+    let line = snapshot.line_snapshots.get(line_ord)?;
+    line.clusters_in_byte_range(byte_offset, byte_offset.saturating_add(1))
+        .iter()
+        .filter_map(|cluster| line.source_rect_for_byte_range(cluster.byte_start, cluster.byte_end))
+        .map(|source_rect| line.source_rect_to_document_rect(&source_rect).x)
+        .reduce(f64::min)
+}
+
 pub(crate) fn build_insert_reveal_slices(
     key: VisualTransactionKey,
     new_snapshot: &EditorLayoutSnapshot,
@@ -136,9 +156,16 @@ pub(crate) fn build_insert_reveal_slices(
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = inserted_range;
-    // Issue #808: 旧 caret 位置是吐字起点（遮罩锚点）。
-    let caret_x = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let caret_y = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    // Issue #815 评论 5949097065 问题1: 吐字起点必须是 **new snapshot 自己的**
+    // `inserted_range.start` 坐标，不能再拿 `old_cursor_rect.x`（**旧** canonical 坐标）。
+    //
+    // 维护者给的例子：旧 caret 在 line0 x=500；输入一个字后 inserted_range.start 落到
+    // new line1 x=0，新字符 rect 是 [0,20]，新 caret x=20。若锚点仍写 500，路径
+    // 500 → 20，裁切窗口是 `[caret.x, 500]` 而文字在 [0,20]，交集恒为 0 ——
+    // 「输入一个字恰好自动换行」这种最常见的情况从头到尾一个字都不显示。
+    // 旧 caret y 只作为拿不到同侧 cluster rect 时的兜底。
+    let fallback_caret_x = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let fallback_caret_y = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
     // Issue #815 评论 5946701331 问题2: 吐字的吞吐路径在 **new snapshot 内**建立。
     // 起点 = inserted_range.start 所在的新侧视觉行（编辑前 caret 在新排版里的行），
     // 终点 = inserted_range.end 所在的新侧视觉行（新 caret 所在行）。
@@ -146,6 +173,15 @@ pub(crate) fn build_insert_reveal_slices(
     let ingest_from_line_ord = line_ordinal_for_byte(new_snapshot, range_start);
     let ingest_to_line_ord =
         line_ordinal_for_byte(new_snapshot, range_end.saturating_sub(1).max(range_start));
+    // Issue #815 评论 5949097065 问题1: 吐字起点的同侧 x（见上）。取不到时退回旧
+    // caret 坐标，至少不会比跨 layout 混坐标更差。
+    let ingest_start_x = same_side_start_x(new_snapshot, ingest_from_line_ord, range_start)
+        .unwrap_or(fallback_caret_x);
+    let ingest_start_y = new_snapshot
+        .line_snapshots
+        .get(ingest_from_line_ord.unwrap_or(usize::MAX))
+        .map(|line| line.visual_line_top)
+        .unwrap_or(fallback_caret_y);
 
     for (line_ord, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for new_cluster in new_line.clusters.iter() {
@@ -241,8 +277,17 @@ pub(crate) fn build_insert_reveal_slices(
             // 重新编号，一旦这笔编辑改变了软换行数量，同数字就是不同视觉行。
             // Insert 的真实锚点是「吐字起点」，就是 new snapshot 里的 ingest 起点行。
             let is_caret_line = coordinated && ingest_from_line_ord == Some(line_ord);
-            let anchor_x = if is_caret_line { caret_x } else { new_doc.x };
-            let anchor_y = if is_caret_line { caret_y } else { new_doc.y };
+            // Issue #815 评论 5949097065 问题1: 锚点来自 new 侧，不来自 old caret。
+            let anchor_x = if is_caret_line {
+                ingest_start_x
+            } else {
+                new_doc.x
+            };
+            let anchor_y = if is_caret_line {
+                ingest_start_y
+            } else {
+                new_doc.y
+            };
             let mut slice = AnimatedSlice::insert_reveal(
                 key,
                 new_line.id,
@@ -298,8 +343,13 @@ pub(crate) fn build_delete_conceal_slices(
     // Issue #808: old caret 用于决定 conceal_to_left_edge（收拢方向），
     // new caret 是吞字终点（遮罩锚点）。
     let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    // Issue #815 评论 5949097065 问题2: `new_cx` / `new_cy` 只作兜底。
+    // 吞字终点的**权威**坐标是 old snapshot 里 `deleted_range.start` 的 x —— DeleteConceal
+    // 的 slice 活在旧排版里，锚点必须同侧；`new_cursor_rect.x` 是**新**排版坐标，
+    // 软换行数量一变就是另一个位置。终态正确的一半（final caret）由
+    // `IngestBoundaryDriver::DeleteForwardBoundary` / row 左端给出，这里只定锚点行。
+    let fallback_new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let fallback_new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
     // Issue #815 评论 5946701331 问题2: 吞字的吞吐路径在 **old snapshot 内**建立。
     // 终点 = deleted_range.start 所在视觉行。Backspace 跨行时 from > to，方向由符号
     // 给出而不是写死"向前走"。
@@ -311,6 +361,14 @@ pub(crate) fn build_delete_conceal_slices(
     let ingest_from_line_ord =
         line_ordinal_for_visual_line_id(old_snapshot, old_cursor_visual_line_id);
     let ingest_to_line_ord = line_ordinal_for_byte(old_snapshot, range_start);
+    // Issue #815 评论 5949097065 问题2: 吞字终点的同侧 x（见上）。
+    let ingest_end_x =
+        same_side_start_x(old_snapshot, ingest_to_line_ord, range_start).unwrap_or(fallback_new_cx);
+    let ingest_end_y = old_snapshot
+        .line_snapshots
+        .get(ingest_to_line_ord.unwrap_or(usize::MAX))
+        .map(|line| line.visual_line_top)
+        .unwrap_or(fallback_new_cy);
     // Issue #815 评论 5946701331 问题1: Delete 键的吞字起点 = 被删区间在 old snapshot
     // 内、**本 slice 所在行**的右端。逐行算，不共用事务级最大值——跨行删除时每行
     // 都从自己的右端朝 caret 收拢，不会拿最右一行的右端去裁别的行。
@@ -353,14 +411,19 @@ pub(crate) fn build_delete_conceal_slices(
                 // 相位共用同一套 old snapshot 行身份，不跨 snapshot 比 line id。
                 // Delete 的真实锚点是「吞字终点」，就是 old snapshot 里的 ingest 终点行。
                 let is_caret_line = coordinated && ingest_to_line_ord == Some(line_ord);
+                // Issue #815 评论 5949097065 问题2: 锚点来自 old 侧，不来自 new caret。
                 let anchor_x = if is_caret_line {
-                    new_cx
+                    ingest_end_x
                 } else if conceal_to_left_edge {
                     left
                 } else {
                     right
                 };
-                let anchor_y = if is_caret_line { new_cy } else { old_doc.y };
+                let anchor_y = if is_caret_line {
+                    ingest_end_y
+                } else {
+                    old_doc.y
+                };
                 let mut slice = AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,

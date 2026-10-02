@@ -3,9 +3,9 @@ use super::*;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, IngestBoundaryDriver};
 use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
 use crate::sujian_editor_item::animation::rebase::match_rebase_frames;
+use crate::sujian_editor_item::animation::transaction::types::PreparedCursorVisualTrack;
 use crate::sujian_editor_item::animation::{
-    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit,
-    TransactionTimeline, VisualUnitTiming,
+    PreparedTextVisualTransaction, PreparedVisualUnit, TransactionTimeline, VisualUnitTiming,
 };
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, SourceRect};
@@ -192,6 +192,7 @@ fn rendering_tx(
         started_at: Some(now - Duration::from_millis(tx_elapsed_ms)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     PreparedTextVisualTransaction {
         key,
@@ -499,6 +500,7 @@ fn issue690_cursor_without_boundary_glyph_uses_reflow_easing() {
         started_at: Some(now - Duration::from_millis(50)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(tx);
 
@@ -641,6 +643,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
         started_at: Some(now),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(new_tx);
 
@@ -717,6 +720,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
         started_at: Some(now - Duration::from_millis(50)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -842,6 +846,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         started_at: Some(now - Duration::from_millis(50)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(tx_a);
 
@@ -897,6 +902,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         started_at: Some(now),
         duration_ms: handoff_a.remaining_duration_ms,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -988,6 +994,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         started_at: Some(now - Duration::from_millis(40)),
         duration_ms: 200,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord1.prepared_queue.enqueue(tx_d1);
 
@@ -1033,6 +1040,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         started_at: Some(now - Duration::from_millis(40)),
         duration_ms: 200,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord2.prepared_queue.enqueue(tx_d2);
 
@@ -1352,6 +1360,7 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         started_at: Some(now - Duration::from_millis(50)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     };
     let old_key = VisualTransactionKey::new(7, 7);
     let mut old_tx = rendering_tx(

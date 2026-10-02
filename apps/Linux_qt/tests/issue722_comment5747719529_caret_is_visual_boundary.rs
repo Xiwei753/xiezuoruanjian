@@ -351,7 +351,7 @@ fn repro_e_no_glyph_inference_in_caret_sampling_entry() {
     }
     assert!(
         window.contains("sampled_rect_at_progress")
-            && window.contains("sampled_visual_line_id_at_progress"),
+            && window.contains("sampled_ingest_at_progress"),
         "Issue #815 评论 6042062633 修改 3: sample_caret_track_frame 必须同时给出 caret rect \
          和 visual_line_id，文字吞吐层直接用 caret.x 当边界，不再自己算 0..1 进度。"
     );

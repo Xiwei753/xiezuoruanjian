@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
 use super::rebase::RebaseCaretHandoff;
-use crate::sujian_editor_item::animation::{PreparedCursorVisualTrack, TextVisualTransactionState};
+use crate::sujian_editor_item::animation::transaction::types::{
+    CaretTrackSegment, PreparedCursorVisualTrack,
+};
+use crate::sujian_editor_item::animation::TextVisualTransactionState;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::render_plan::SampledCaretFrame;
@@ -19,6 +22,9 @@ pub(crate) fn build_cursor_visual_track(
     new_cursor_line_bottom: f64,
     handoff: Option<RebaseCaretHandoff>,
     tx_duration_ms: u64,
+    // Issue #815 评论 5949097065 问题3: 正式的运动路径，由调用方在 slice 建完、
+    // `assign_shared_line_masks` 之后按**同侧** slice 几何生成。
+    ingest_segments: Vec<CaretTrackSegment>,
 ) -> Option<PreparedCursorVisualTrack> {
     let to = new_cursor_rect?;
     match handoff {
@@ -40,6 +46,7 @@ pub(crate) fn build_cursor_visual_track(
             started_at: None,
             duration_ms: h.remaining_duration_ms,
             pause_start: None,
+            segments: ingest_segments,
         }),
         None => {
             let from = old_cursor_rect?;
@@ -54,6 +61,10 @@ pub(crate) fn build_cursor_visual_track(
                 new_cursor_line_bottom,
                 tx_duration_ms,
             ))
+            .map(|mut track| {
+                track.set_segments(ingest_segments);
+                track
+            })
         }
     }
 }
@@ -76,12 +87,19 @@ pub(crate) fn sample_caret_track_frame(
 ) -> SampledCaretFrame {
     let progress = track.progress(frame_now);
     let rect = track.sampled_rect_at_progress(progress);
+    // Issue #815 评论 5949097065 问题3: 本帧的吞吐行与是否处于吞吐段，和 x/y/rect
+    // 出自**同一次**路线采样。文字层直接消费这里给出的 ingest_line_ord /
+    // is_ingest_segment，不再用 caret.y 猜行序、也不把换位段的对角线 x 当吞吐边界。
+    let (visual_line_id, ingest_line_ord, is_ingest_segment) =
+        track.sampled_ingest_at_progress(progress);
     SampledCaretFrame {
         x: rect.x,
         y: rect.top,
-        visual_line_id: track.sampled_visual_line_id_at_progress(progress),
+        visual_line_id,
         progress,
         rect,
+        ingest_line_ord,
+        is_ingest_segment,
     }
 }
 

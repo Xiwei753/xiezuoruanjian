@@ -191,6 +191,26 @@ pub(crate) struct SampledCaretFrame {
     /// 和 x/y/visual_line_id/progress 出自同一次 track 采样，光标层直接用它画 caret，
     /// 不再自己重新采样一次 track 算位置/高度。
     pub rect: CursorRect,
+    /// Issue #815 评论 5949097065 问题3: 本帧 caret 运动轨迹**当前所在吞吐行**的
+    /// canonical 行序（由 `PreparedCursorVisualTrack::sampled_ingest_at_progress`
+    /// 从分段路线采样给出）。
+    ///
+    /// 这是跨行吞吐相位的**权威来源**：文字层不再用 caret.y 去猜「我现在在哪一行」，
+    /// 更不会拿上一行的 caret.x 去裁下一行。
+    ///
+    /// - `None`：当前处于 `LayoutHandoff`（跨 layout 几何换位）或路线退化为
+    ///   from→to 直线（IME composition crossfade）。此时所有吞吐字保持上一帧状态，
+    ///   不得用这条轨迹上的对角线 x 裁任何一行。
+    /// - `Some(ord)`：当前位于 canonical 第 `ord` 行的 `IngestLine` / `RowHandoff`
+    ///   段上。
+    pub ingest_line_ord: Option<usize>,
+    /// Issue #815 评论 5949097065 问题3: 本帧是否正处在这条轨迹的**吞吐段**
+    /// （`CaretTrackSegmentKind::IngestLine`）。
+    ///
+    /// - `true`：`rect.x` 就是 `ingest_line_ord` 那一行的吞吐边界，文字按它裁。
+    /// - `false`：处于换位段（`LayoutHandoff` / `RowHandoff`），`rect.x` 只是
+    ///   换位过程中的几何值，**不得**当吞吐边界。
+    pub is_ingest_segment: bool,
 }
 
 impl Default for SampledCaretFrame {
@@ -206,6 +226,8 @@ impl Default for SampledCaretFrame {
                 bottom: 0.0,
                 baseline_y: 0.0,
             },
+            ingest_line_ord: None,
+            is_ingest_segment: false,
         }
     }
 }

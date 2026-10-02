@@ -102,6 +102,12 @@ enum IngestLinePhase {
     OnCurrentLine,
     /// 边界还没走到本行：Insert 全隐 / Delete 全保留。
     NotReached,
+    /// Issue #815 评论 5949097065 问题3: 轨迹还没进入吞吐路径——本帧处在跨 layout
+    /// 几何换位段（`LayoutHandoff`），或路线退化为 from→to 直线。全部吞吐字保持初态。
+    RouteBeforeStart,
+    /// 拿不到权威行序（`sampled_ingest_line_ord` 为 None 且未走换位段）时，
+    /// 降级用本帧 `caret_y` 与本行行范围判断相位（Issue #815 评论 5947728704）。
+    FallbackFromCaretY,
 }
 
 /// 一次动画切片的完整描述。
@@ -880,11 +886,28 @@ impl AnimatedSlice {
     /// `caret_y` 是当前帧真实 caret 的 y（用它判断"走到哪一条视觉行"），
     /// `caret_progress` **只**留给 `DeleteForwardBoundary` 这种真实 caret 不动、
     /// 必须从同一 cursor track 取推进量的特殊情况——progress 不再负责推导行序。
+    ///
+    /// Issue #815 评论 5949097065 问题3：`sampled_ingest_line_ord` /
+    /// `is_ingest_segment` 来自 `SampledCaretFrame`，即 caret track **分段路线**
+    /// 本帧所在段的信息。它是跨行相位的权威来源：
+    /// - `sampled_ingest_line_ord = Some(ord)`：本帧位于 canonical 第 `ord` 行。
+    ///   本 slice 就在这一行 → 用 `caret_x` 裁（仅当 `is_ingest_segment`，也就是
+    ///   这确实是在该行上扫过的那一段）；已经在它后面 → 终态；还在它前面 → 初态。
+    /// - `sampled_ingest_line_ord = None`：当前处于跨 layout 换位段
+    ///   （`LayoutHandoff`）或路线退化为 from→to 直线（IME composition crossfade）。
+    ///   此时轨迹上的 x 是**几何换位值**，不是吞吐边界，所有吞吐字一律保持初态，
+    ///   绝不拿这条对角线去裁任何一行。
+    ///
+    /// `caret_y` + `ingest_line_top/bottom` 的行范围判断保留为**降级路径**：
+    /// 只有在拿不到权威行序时才用它，避免"文本层再推导一份 caret 运动"。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compute_frame_by_caret_ingest(
         &self,
         caret_x: f64,
         caret_y: f64,
         caret_progress: f64,
+        sampled_ingest_line_ord: Option<usize>,
+        is_ingest_segment: bool,
     ) -> AnimatedSliceFrame {
         // ReflowMove/ReflowCrossFade 始终是独立 Timed（见
         // `VisualUnitTiming::default_for_kind_with_coordinated`），不会走到这个入口；
@@ -909,20 +932,49 @@ impl AnimatedSlice {
                 from_x + (caret_x - from_x) * progress
             }
         };
-        // 吞吐路径的另一端（构造期写入）：
-        // - CaretPosition：InsertReveal 是编辑前 caret；Backspace DeleteConceal 是
-        //   删除后的最终 caret。
-        // - DeleteForwardBoundary：Delete 键的最终 caret 固定在被删区间左端，
-        //   所以另一端就是本帧的 `caret_x` 本身。边界从被删区间右端朝它收拢，
-        //   收拢量由 `caret_progress` 驱动——不是把静止 caret 当进度，
-        //   也不是回到独立文字 timeline（轨迹仍由本事务 cursor track 的 progress 定义）。
+        // 吞吐路径的另一端：始终是本行 mask 的一端，让 `min/max` 归一化后裁出来的
+        // 区间只由本帧边界 `boundary_x` 决定。
+        //
+        // Issue #815 评论 5949097065 问题1/问题3：
+        // - InsertReveal：吐字自左向右生长 → 另一端 = `line_mask_left`，
+        //   裁出 `[line_mask_left, boundary_x]`。
+        // - DeleteConceal：吞字自右向左收拢 → 另一端 = `line_mask_right`，
+        //   裁出 `[boundary_x, line_mask_right]`。
+        //
+        // 不再用 `caret_anchor_x`：那是跨 layout 的几何锚点，与本帧轨迹无关，
+        // 正是维护者报的"anchor=500 / 文字在 [0,20] ⇒ 全程 0 宽"的根因。
         let path_other_end_x = match self.ingest_boundary_driver {
-            IngestBoundaryDriver::CaretPosition => self.caret_anchor_x,
+            IngestBoundaryDriver::CaretPosition => {
+                // - InsertReveal：吐字自左向右生长 → 裁出 `[line_mask_left, boundary_x]`。
+                // - Backspace DeleteConceal（`conceal_to_left_edge`）：caret 往左走，
+                //   右边那段被吞掉 → 裁出 `[boundary_x, ...]` 的另一端同样是左边缘，
+                //   即 `[line_mask_left, boundary_x]`。
+                // - Delete 键 DeleteConceal：被吞的是左端 → 另一端是右边缘
+                //   `line_mask_right`（这条路径实际走 `DeleteForwardBoundary`，
+                //   这里保留分支只为防御）。
+                let from_left = match self.kind {
+                    AnimatedSliceKind::DeleteConceal => self.conceal_to_left_edge,
+                    _ => true,
+                };
+                if from_left {
+                    mask_left
+                } else {
+                    mask_right
+                }
+            }
             IngestBoundaryDriver::DeleteForwardBoundary => caret_x,
         };
 
-        // Issue #815 评论 5946701331 问题2: 同侧行序 + 方向感知的跨行相位。
-        let phase = self.ingest_line_phase(caret_y);
+        // Issue #815 评论 5949097065 问题3: 跨行相位的权威来源是 caret track 的
+        // 分段路线采样；只有拿不到行序时才降级到 caret.y + 本行行范围。
+        let phase = match sampled_ingest_line_ord {
+            Some(sampled_ord) => self.ingest_phase_from_route_ord(sampled_ord, is_ingest_segment),
+            // 拿不到权威行序，但 x 仍是可信吞吐边界（退化路线）⇒ 降级用 caret.y。
+            None if is_ingest_segment => IngestLinePhase::FallbackFromCaretY,
+            // None + 非吞吐段 = 跨 layout 几何换位段：轨迹上的 x 是几何换位值，
+            // 不是吞吐边界，全部吞吐字保持初态。
+            None => IngestLinePhase::RouteBeforeStart,
+        };
         let (boundary_left, boundary_right) = match phase {
             IngestLinePhase::Passed => {
                 if fully_shown {
@@ -942,8 +994,95 @@ impl AnimatedSlice {
                 path_other_end_x.min(boundary_x),
                 path_other_end_x.max(boundary_x),
             ),
+            // Issue #815 评论 5949097065 问题3: 轨迹尚未进入吞吐路径（跨 layout
+            // 几何换位段），或本帧处在换位段上——一律保持初态，不得拿对角线 x 裁行。
+            IngestLinePhase::RouteBeforeStart => {
+                if fully_shown {
+                    (mask_left, mask_left)
+                } else {
+                    (mask_left, mask_right)
+                }
+            }
+            // 拿不到权威行序时降级：用 caret.y 与本行行范围判断相位（Issue #815 评论 5947728704）。
+            IngestLinePhase::FallbackFromCaretY => {
+                let fallback = self.ingest_line_phase(caret_y);
+                match fallback {
+                    IngestLinePhase::Passed => {
+                        if fully_shown {
+                            (mask_left, mask_right)
+                        } else {
+                            (mask_left, mask_left)
+                        }
+                    }
+                    IngestLinePhase::NotReached => {
+                        if fully_shown {
+                            (mask_left, mask_left)
+                        } else {
+                            (mask_left, mask_right)
+                        }
+                    }
+                    IngestLinePhase::OnCurrentLine => (
+                        path_other_end_x.min(boundary_x),
+                        path_other_end_x.max(boundary_x),
+                    ),
+                    // `ingest_line_phase` 只产出前三态，这里兜底为初态。
+                    IngestLinePhase::RouteBeforeStart | IngestLinePhase::FallbackFromCaretY => {
+                        if fully_shown {
+                            (mask_left, mask_left)
+                        } else {
+                            (mask_left, mask_right)
+                        }
+                    }
+                }
+            }
         };
         self.clip_ingest_frame(slice_rect, boundary_left, boundary_right)
+    }
+
+    /// Issue #815 评论 5949097065 问题3: 用 caret track 采样给出的**权威行序**
+    /// 判断本 slice 相对本帧轨迹的相位。
+    ///
+    /// 方向仍取同一侧 canonical 的 `ingest_to_line_ord` 与 `ingest_from_line_ord`
+    /// 的大小关系（forward = 向下走）；比较的两端也都是同侧行序，绝不跨 snapshot。
+    ///
+    /// `is_ingest_segment == false` 表示本帧处在 `RowHandoff`（行间下行/上行换位），
+    /// 此时 `caret_x` 是换位中的几何值而不是该行的吞吐边界，因此当前行直接收口到
+    /// 终态——它已经被扫完了。
+    fn ingest_phase_from_route_ord(
+        &self,
+        sampled_ord: usize,
+        is_ingest_segment: bool,
+    ) -> IngestLinePhase {
+        let (Some(slice_ord), Some(from_ord), Some(to_ord)) = (
+            self.ingest_line_ord,
+            self.ingest_from_line_ord,
+            self.ingest_to_line_ord,
+        ) else {
+            // 没有同侧行序就退化成"本行正在被扫"，只用边界 x 裁本行。
+            return IngestLinePhase::OnCurrentLine;
+        };
+        if from_ord == to_ord {
+            return IngestLinePhase::OnCurrentLine;
+        }
+        let forward = to_ord > from_ord;
+        if slice_ord == sampled_ord {
+            if is_ingest_segment {
+                IngestLinePhase::OnCurrentLine
+            } else {
+                IngestLinePhase::Passed
+            }
+        } else {
+            let behind = if forward {
+                slice_ord < sampled_ord
+            } else {
+                slice_ord > sampled_ord
+            };
+            if behind {
+                IngestLinePhase::Passed
+            } else {
+                IngestLinePhase::NotReached
+            }
+        }
     }
 
     /// Issue #815 评论 5947728704 问题1: 本帧吞字/吐字边界相对本 slice 所在行的相位。

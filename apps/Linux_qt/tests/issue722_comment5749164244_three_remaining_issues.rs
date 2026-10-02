@@ -83,7 +83,7 @@ fn issue1_visual_line_id_is_option_not_usize() {
 #[test]
 fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
     let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 10000);
+    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 14000);
     // Issue #727 约束 3: 不应有 `(r.x, r.top, 0usize)` 或 `(x, y, 0usize)` 等硬编码
     let has_hardcoded_zero = window.contains("(r.x, r.top, 0usize)")
         || window.contains("(x, y, 0usize)")
@@ -126,16 +126,20 @@ fn issue1_build_slices_pass_some_line_idx() {
     // slice 构造已拆到 transaction_builder/slices.rs（见该文件头注释）
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
     // 函数体较大，取 8000 字符确保覆盖完整调用
-    let insert_window = function_window(&src, "fn build_insert_reveal_slices", 8000);
-    let delete_window = function_window(&src, "fn build_delete_conceal_slices", 8000);
-    // 修复后：传 Some(new_line.visual_line_id) / Some(old_line.visual_line_id)
+    let insert_window = function_window(&src, "fn build_insert_reveal_slices", 10600);
+    let delete_window = function_window(&src, "fn build_delete_conceal_slices", 9000);
+    // Issue #815 评论 5949097065: 行身份只认当前这侧的 canonical 行序。
+    // Insert 用 new snapshot 自己的 inserted_range.start 行序；Delete 用 old
+    // snapshot 自己的 old caret 行序，绝不跨 snapshot 比大小。
     assert!(
-        insert_window.contains("Some(new_line.visual_line_id)"),
-        "build_insert_reveal_slices 必须传 Some(new_line.visual_line_id)（全文视觉行 id）而非 Some(line_idx)（局部下标）"
+        insert_window
+            .contains("same_side_start_x(new_snapshot, ingest_from_line_ord, range_start)"),
+        "build_insert_reveal_slices 的吐字起点必须来自 new snapshot 自己的行序与 x"
     );
     assert!(
-        delete_window.contains("Some(old_line.visual_line_id)"),
-        "build_delete_conceal_slices 必须传 Some(old_line.visual_line_id)（全文视觉行 id）而非 Some(line_idx)（局部下标）"
+        delete_window
+            .contains("line_ordinal_for_visual_line_id(old_snapshot, old_cursor_visual_line_id)"),
+        "build_delete_conceal_slices 的吞字起点行序必须来自 old snapshot 自己的 visual_line_id"
     );
     // 不应再用 Some(line_idx)（局部下标，视口裁剪后和全文行号不一致）
     assert!(
@@ -246,11 +250,18 @@ fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
     let btap_window = function_window(
         &render_plan,
         "fn build_text_animation_plan_with_sample",
-        8000,
+        14000,
+    );
+    // Issue #815 评论 5949097065: 两条路径并存但分工明确——协同吞吐字吃
+    // cursor track 当前帧（compute_frame_by_caret_ingest），非协同文字动画与
+    // Reflow 才走 Timed 路径（current_visible_fraction）。
+    assert!(
+        btap_window.contains("compute_frame_by_caret_ingest("),
+        "build_text_animation_plan_with_sample 必须让协同吞吐字吃 cursor track 当前帧"
     );
     assert!(
         btap_window.contains("current_visible_fraction"),
-        "build_text_animation_plan_with_sample 应走 Timed 路径（current_visible_fraction），不消费 caret_frame"
+        "build_text_animation_plan_with_sample 必须让非协同 Timed unit 走自己的 visible fraction"
     );
 }
 

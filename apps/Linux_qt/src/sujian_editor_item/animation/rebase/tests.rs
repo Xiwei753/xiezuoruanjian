@@ -1,9 +1,10 @@
 use super::super::coordinator::LinuxEditorAnimationCoordinator;
 use super::*;
 use crate::sujian_editor_item::animated_slice::AnimatedSlice;
+use crate::sujian_editor_item::animation::transaction::types::PreparedCursorVisualTrack;
 use crate::sujian_editor_item::animation::{
-    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame,
-    TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline, VisualUnitTiming,
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
+    TextVisualTransactionState, TransactionTimeline, VisualUnitTiming,
 };
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
@@ -252,6 +253,7 @@ fn rendering_tx(
         started_at: Some(now - Duration::from_millis(tx_elapsed_ms)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     PreparedTextVisualTransaction {
         key,
@@ -1564,6 +1566,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         started_at: Some(now - Duration::from_millis(50)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(tx1);
 
@@ -1593,6 +1596,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         started_at: Some(now - Duration::from_millis(50)),
         duration_ms: 100,
         pause_start: None,
+        segments: Vec::new(),
     });
     coord.prepared_queue.enqueue(tx2);
 

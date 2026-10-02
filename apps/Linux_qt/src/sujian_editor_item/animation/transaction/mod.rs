@@ -6,6 +6,6 @@ pub(crate) mod types;
 pub(crate) use queue::PreparedTransactionQueue;
 pub(crate) use timeline::{TransactionTimeline, VisualUnitTiming};
 pub(crate) use types::{
-    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame,
-    TextVisualOperationKind, TextVisualTransactionState,
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
+    TextVisualTransactionState,
 };

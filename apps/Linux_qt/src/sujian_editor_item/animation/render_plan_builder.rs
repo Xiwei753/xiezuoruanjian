@@ -618,10 +618,17 @@ impl LinuxEditorAnimationCoordinator {
                         // Issue #815 评论 5947728704 问题1: 三者必须来自同一份
                         // SampledCaretFrame——x 是当前行横向边界、y 是当前走到哪条
                         // 视觉行、progress 只留给 DeleteForwardBoundary。
-                        unit.slice
-                            .compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)
+                        unit.slice.compute_frame_by_caret_ingest(
+                            caret.x,
+                            caret.y,
+                            caret.progress,
+                            caret.ingest_line_ord,
+                            caret.is_ingest_segment,
+                        )
                     })
                 } else {
+                    // 非协同文字动画（独立「打字动画」）与 Reflow 才走这条
+                    // Timed 路径；协同吞吐字在上面由 caret 当前帧驱动。
                     let visible = unit.current_visible_fraction(sample.frame_now);
                     Some(unit.slice.compute_frame(visible))
                 };

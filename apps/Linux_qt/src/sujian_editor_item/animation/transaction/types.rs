@@ -213,6 +213,46 @@ pub(crate) struct RebaseFrame {
 ///   `duration_ms` 用旧 track 剩余时长，不再借任何文字 unit 的 progress。
 /// - 文字层与光标层消费同一次 `sample_coordinated_motion_frame` 采样。
 /// - 下一次 rebase 再从同一个 caret track 采样，不能回头使用逻辑 `old_cursor_rect`。
+///
+/// Issue #815 评论 5949097065 问题3: caret 运动轨迹的一段。
+///
+/// #815 第 1–5 轮把 cursor track 当成"old rect → new rect 一条直线"，
+/// 跨软换行时那条直线是从右上飞到左下的对角线，文字拿到的是这条对角线上的
+/// 某个 x 而不是"这一行上 caret 走到了哪里"。这里把轨迹正式拆成有序段，
+/// 每段声明它是"换 layout 位置"还是"沿某一行真正扫过"。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaretTrackSegmentKind {
+    /// 跨 layout 的几何换位：同一个逻辑位置在两套 canonical 之间重新安放。
+    /// 出现在吞吐路径**之前**（Insert 从旧 caret 换到新快照的吐字起点）。
+    /// 这一段只移动 caret，不吞吐任何文字——协同吞吐字保持初始状态
+    /// （Insert 尚未吐出 / Delete 尚未吞掉）。绝不能拿这一段的对角线 x 去裁字。
+    LayoutHandoff,
+    /// 沿某个视觉行真正扫过：这一段的 x 就是该行的吞吐边界，
+    /// 文字层与光标层消费同一个 x。
+    IngestLine,
+    /// 跨行 / 跨 layout 的几何换位，出现在吞吐路径**之外**：
+    /// - 行与行之间的下潜或上移（Insert 换到下一行、Delete 换到上一行）；
+    /// - Delete 吞吐完之后从旧快照的 `deleted_range.start` 换到新快照的最终 caret。
+    ///
+    /// 这一段只移动 caret，不吞吐任何文字：`ingest_line_ord` 指向刚扫完的那一行，
+    /// 该行保持终态，更后面的行仍保持初始态。
+    RowHandoff,
+}
+
+/// 一段 caret 轨迹。`from`/`to` 都是**本段所属那侧 canonical** 的文档坐标，
+/// 绝不跨 layout 混用。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CaretTrackSegment {
+    pub kind: CaretTrackSegmentKind,
+    pub from: CursorRect,
+    pub to: CursorRect,
+    /// 仅 `IngestLine` 有值：本段正在扫的那一行在**本侧 canonical** 里的行序。
+    /// 文字层用它判断"我是不是当前这一行"，不再靠 caret.y 反推。
+    pub ingest_line_ord: Option<usize>,
+    /// 本段所属那侧 canonical 的 `visual_line_id`（只用于光标层画 caret）。
+    pub visual_line_id: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedCursorVisualTrack {
     pub from: CursorRect,
@@ -244,6 +284,13 @@ pub(crate) struct PreparedCursorVisualTrack {
     pub duration_ms: u64,
     /// 暂停起点；`Some` 表示当前处于暂停中，`resume` 时把 `started_at` 推前暂停时长。
     pub pause_start: Option<Instant>,
+    /// Issue #815 评论 5949097065 问题3: 正式的运动路径。
+    ///
+    /// 整体 progress 按段均分：第 i 段占 `[i/n, (i+1)/n]`，
+    /// 段内再用 `ease_out_cubic` 走 `from` → `to`。
+    /// `from`/`to` 字段保留为整段运动的起点/终点（给高度、epoch 判断等用），
+    /// 但逐帧几何一律走 `segments`。
+    pub segments: Vec<CaretTrackSegment>,
 }
 
 impl PreparedCursorVisualTrack {
@@ -262,87 +309,103 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// Issue #722 评论 5749164244 问题1: 按 progress 采样当前 caret 所在视觉行 id。
+    /// Issue #815 评论 5949097065 问题3: 按整段 progress 定位当前所在的轨迹段。
     ///
-    /// Issue #722 评论 5749572808 问题2: 不再用 `progress < 0.5` 硬切 from/to 行。
-    /// 改为按采样后的 caret y 与 from/to 行真实 top/bottom 判断：caret y 落在
-    /// from 行 y 范围内 → 还在 from 行；落在 to 行 y 范围内 → 已到 to 行；
-    /// 过渡中间空隙按 y 方向（向下/向上移动）判断。这样跨软换行交棒时
-    /// 不会因 progress 过 0.5 就提前认为 caret 已进入 to 行。
+    /// 返回 `(段下标, 段内 eased 进度)`。整体 progress 按段**均分**：
+    /// 第 i 段占 `[i/n, (i+1)/n]`，段内再用 `ease_out_cubic`。
+    /// 均分而不是按长度加权，是为了让"这一帧在第几行"对测试可预测。
     ///
-    /// Issue #722 评论 5749791161: 行 y 范围用 `from_line_top/bottom` 和
-    /// `to_line_top/bottom`（真实视觉行边界），不用 `self.from.top/bottom` 和
-    /// `self.to.top/bottom`（caret 自己的细矩形边界）。向下跨软换行时，
-    /// caret top 只要离开旧 caret 细矩形就可能直接切成 to 行，但这并不等于
-    /// caret 已进入下一条视觉行。用真实行边界判断才能正确反映 caret 所在行。
-    /// `None` 表示 from/to 行 id 未知（fallback 路径），调用方走 y fallback。
-    pub fn sampled_visual_line_id_at_progress(&self, progress: f64) -> Option<usize> {
-        match (self.from_visual_line_id, self.to_visual_line_id) {
-            (Some(f_id), Some(t_id)) => {
-                if f_id == t_id {
-                    return Some(f_id);
-                }
-                // Issue #808: 光标 track 用自己的 ease_out_cubic，不再共用文字的 ease_out_quad。
-                let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
-                let caret_y = self.from.top + (self.to.top - self.from.top) * eased;
-                // from 行 y 范围 [from_line_top, from_line_bottom)，
-                // to 行 [to_line_top, to_line_bottom)。
-                if caret_y >= self.from_line_top && caret_y < self.from_line_bottom {
-                    Some(f_id)
-                } else if caret_y >= self.to_line_top && caret_y < self.to_line_bottom {
-                    Some(t_id)
-                } else {
-                    // 过渡中间空隙：按 y 方向判断。
-                    if self.to_line_top > self.from_line_top {
-                        // 向下移动：caret_y >= from_line_bottom 说明已离开 from 行，归 to。
-                        if caret_y >= self.from_line_bottom {
-                            Some(t_id)
-                        } else {
-                            Some(f_id)
-                        }
-                    } else if self.to_line_top < self.from_line_top {
-                        // 向上移动：caret_y <= to_line_bottom 说明已进入 to 行。
-                        if caret_y <= self.to_line_bottom {
-                            Some(t_id)
-                        } else {
-                            Some(f_id)
-                        }
-                    } else {
-                        // to_line_top == from_line_top：fallback 用 progress < 0.5。
-                        if progress < 0.5 {
-                            Some(f_id)
-                        } else {
-                            Some(t_id)
-                        }
+    /// `segments` 为空（未构建路径的 fallback 路径）时返回 `None`。
+    fn sampled_segment_at_progress(&self, progress: f64) -> Option<(usize, f64)> {
+        let count = self.segments.len();
+        if count == 0 {
+            return None;
+        }
+        let scaled = progress.clamp(0.0, 1.0) * count as f64;
+        let mut index = scaled.floor() as usize;
+        if index >= count {
+            index = count - 1;
+        }
+        let local = (scaled - index as f64).clamp(0.0, 1.0);
+        Some((index, AnimatedSlice::ease_out_cubic(local)))
+    }
+
+    /// Issue #815 评论 5949097065 问题3: 本帧吞吐采样。
+    ///
+    /// 返回 `(本帧 caret 所在视觉行 id, 本段 ingest 行序, 是否处于吞吐段)`。
+    ///
+    /// - `IngestLine` 段：三个值分别是 `(段上的 visual_line_id, Some(ingest_line_ord), true)`。
+    ///   文字层看到 `true` 就必须用 `ingest_line_ord` 判行、用 `rect.x` 裁本行。
+    /// - `LayoutHandoff`（吞吐路径之前的换位）：`(visual_line_id, None, false)`。
+    ///   文字层看到 `false` 且行序为 `None` ⇒ 保持**初始**状态，一个字都不吞吐。
+    /// - `RowHandoff`（行间/跨 layout 换位）：`(visual_line_id, Some(刚扫完那行的行序), false)`。
+    ///   文字层看到 `false` 且行序有值 ⇒ 该行保持**终**状态，更后面的行仍是初始态。
+    pub fn sampled_ingest_at_progress(
+        &self,
+        progress: f64,
+    ) -> (Option<usize>, Option<usize>, bool) {
+        match self.sampled_segment_at_progress(progress) {
+            // 退化路线（没有分段，IME composition crossfade 走的就是这条）：
+            // x 仍然是一条可信的裁切边界，只是拿不到权威行序 ⇒ 交给文字层降级用
+            // caret.y + 本行行范围判断相位。这与"有分段但正处在 LayoutHandoff
+            // 换位段"必须区分：后者 x 是几何换位值，不能当吞吐边界。
+            None => (self.from_visual_line_id, None, true),
+            Some((index, _)) => {
+                let segment = &self.segments[index];
+                match segment.kind {
+                    CaretTrackSegmentKind::IngestLine => {
+                        (segment.visual_line_id, segment.ingest_line_ord, true)
+                    }
+                    CaretTrackSegmentKind::LayoutHandoff => (segment.visual_line_id, None, false),
+                    CaretTrackSegmentKind::RowHandoff => {
+                        (segment.visual_line_id, segment.ingest_line_ord, false)
                     }
                 }
             }
-            (Some(f_id), None) => Some(f_id),
-            (None, Some(t_id)) => Some(t_id),
-            (None, None) => None,
         }
     }
 
-    /// Issue #702: 用外部传入的 progress（来自光标 track 自己的 timeline）采样 caret rect。
-    /// Issue #815 评论 5947728704 问题2: 本方法给出的是**已经 easing 过的真实屏幕几何**
-    /// （`ease_out_cubic`），这正是文字跨行相位必须消费的同一个 y。
-    ///
+    /// Issue #815 评论 5949097065 问题3: 按 progress 采样当前 caret 所在视觉行 id。
+    /// Issue #702: 用外部传入的 progress 采样 caret rect。
+    /// Issue #815 评论 5947728704 问题2: 本方法给出的是**已经 easing 过的真实屏幕几何**，
     /// 协同 InsertReveal/DeleteConceal 与光标共同消费 `sample_caret_track_frame` 的
-    /// 同一份采样（x / y / visual_line_id / progress / rect），文字不再拿 raw progress
-    /// 另推一套位置；只有非协同 Timed 文字才有自己的 `ease_out_quad`。
-    /// `sample_caret_track_frame` 通过 `sampled_rect_at_progress(progress(now))` 调用。
+    /// 同一份采样；只有非协同 Timed 文字才有自己的 `ease_out_quad`。
+    ///
+    /// Issue #815 评论 5949097065 问题3: 逐帧几何走 `segments`，不再用
+    /// `from.x → to.x` / `from.top → to.top` 一条直线——跨软换行时那条直线是
+    /// 从右上飞到左下的对角线，文字拿到的是对角线上的某个 x，而不是
+    /// "这一行上 caret 走到了哪里"。
     pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
-        let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
-        let x = self.from.x + (self.to.x - self.from.x) * eased;
-        let top = self.from.top + (self.to.top - self.from.top) * eased;
-        let h = self.to.bottom - self.to.top;
-        CursorRect {
-            x,
-            top,
-            bottom: top + h,
-            // Issue #712 评论 5739517945 第 2 项: baseline_y 从 from 到 to 插值，
-            // 不再直接取 to.baseline_y，消除垂直动画跳终点。
-            baseline_y: self.from.baseline_y + (self.to.baseline_y - self.from.baseline_y) * eased,
+        match self.sampled_segment_at_progress(progress) {
+            None => {
+                // fallback：没有正式路径时退回旧的 from→to 直线（仅非协同 cursor-only）。
+                let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
+                let x = self.from.x + (self.to.x - self.from.x) * eased;
+                let top = self.from.top + (self.to.top - self.from.top) * eased;
+                let h = self.to.bottom - self.to.top;
+                CursorRect {
+                    x,
+                    top,
+                    bottom: top + h,
+                    baseline_y: self.from.baseline_y
+                        + (self.to.baseline_y - self.from.baseline_y) * eased,
+                }
+            }
+            Some((index, eased)) => {
+                let segment = &self.segments[index];
+                let x = segment.from.x + (segment.to.x - segment.from.x) * eased;
+                let top = segment.from.top + (segment.to.top - segment.from.top) * eased;
+                let h = segment.to.bottom - segment.to.top;
+                CursorRect {
+                    x,
+                    top,
+                    bottom: top + h,
+                    // Issue #712 评论 5739517945 第 2 项: baseline_y 段内插值，
+                    // 不直接取 to.baseline_y，消除垂直动画跳终点。
+                    baseline_y: segment.from.baseline_y
+                        + (segment.to.baseline_y - segment.from.baseline_y) * eased,
+                }
+            }
         }
     }
 
@@ -364,6 +427,7 @@ impl PreparedCursorVisualTrack {
     /// Issue #722 评论 5749791161: `from_line_top/bottom` 和 `to_line_top/bottom`
     /// 来自对应 `VisualLine.y` 和 `VisualLine.y + VisualLine.height`，
     /// 是真实视觉行边界，不是 caret 自己的细矩形边界。
+    #[allow(clippy::too_many_arguments)]
     pub fn new_first(
         from: CursorRect,
         to: CursorRect,
@@ -387,7 +451,20 @@ impl PreparedCursorVisualTrack {
             started_at: None,
             duration_ms,
             pause_start: None,
+            // Issue #815 评论 5949097065 问题3: `new_first` 是没有吞吐单元的
+            // cursor-only 事务（只有光标要平滑移动），不存在"文字以 caret 为吞吐边界"，
+            // 因此不建吞吐路径，逐帧几何走 `from → to` fallback。
+            segments: Vec::new(),
         }
+    }
+
+    /// Issue #815 评论 5949097065 问题3: 写入正式的运动路径。
+    ///
+    /// 调用方（`transaction_builder`）在 slice 建完、`assign_shared_line_masks`
+    /// 之后才调它：那时每一行的真实吞吐范围才已知，路径必须由**同侧**的 slice
+    /// 几何生成，不能拿另一侧 canonical 的坐标凑。
+    pub fn set_segments(&mut self, segments: Vec<CaretTrackSegment>) {
+        self.segments = segments;
     }
 
     /// Issue #690 评论 5682867529: caret track 跟文字视觉单元一起暂停/恢复，
@@ -444,12 +521,18 @@ impl PreparedCursorVisualTrack {
     /// Issue #722 评论 5749791161: 行几何字段在 rebase 时用 0.0/0.0（测试专用方法，
     /// 生产代码走 `build_cursor_visual_track` 的 handoff 分支，由 handoff 传递行几何）。
     pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
+        let progress = self.progress(now);
         let sampled = self.sampled_rect(now);
         let remaining = self.remaining_duration_ms(now).max(1);
+        // Issue #815 评论 5949097065 问题3: rebase 落在中间行时，新 track 必须接住
+        // 本帧**实际**的行身份与几何，不能退回逻辑 old 行，也不能只记 from/to 两个 id。
+        let (sampled_line_id, _, _) = self.sampled_ingest_at_progress(progress);
+        // 未走完的那一段从本帧实际位置起跳，后续段原样保留。
+        let remaining_segments = self.remaining_segments_from(progress, new_to);
         Self {
             from: sampled,
             to: new_to,
-            from_visual_line_id: self.to_visual_line_id,
+            from_visual_line_id: sampled_line_id.or(self.to_visual_line_id),
             to_visual_line_id: self.to_visual_line_id,
             from_line_top: 0.0,
             from_line_bottom: 0.0,
@@ -458,7 +541,61 @@ impl PreparedCursorVisualTrack {
             started_at: None,
             duration_ms: remaining,
             pause_start: None,
+            segments: remaining_segments,
         }
+    }
+
+    /// Issue #815 评论 5949097065 问题3: 取本帧之后的剩余段，并把当前段的终点
+    /// 接到新目标上。
+    ///
+    /// 本帧已经走过的部分不再重播；第一段从**本帧实际采样位置**出发（不是逻辑旧端点）。
+    /// 当前段若还在吞吐中，剩余段的第一段必须仍然是 `IngestLine` 且行身份不变——
+    /// 这正是"rebase 恰好发生在中间行"必须被保住的行身份与几何。
+    fn remaining_segments_from(&self, progress: f64, new_to: CursorRect) -> Vec<CaretTrackSegment> {
+        if self.segments.is_empty() {
+            return Vec::new();
+        }
+        let count = self.segments.len();
+        let scaled = progress.clamp(0.0, 1.0) * count as f64;
+        let index = (scaled.floor() as usize).min(count - 1);
+        let local = (scaled - index as f64).clamp(0.0, 1.0);
+        let eased = AnimatedSlice::ease_out_cubic(local);
+        let current = &self.segments[index];
+        let current_end = CursorRect {
+            x: current.from.x + (current.to.x - current.from.x) * eased,
+            top: current.from.top + (current.to.top - current.from.top) * eased,
+            bottom: 0.0,
+            baseline_y: current.from.baseline_y
+                + (current.to.baseline_y - current.from.baseline_y) * eased,
+        };
+        let current_end = CursorRect {
+            bottom: current_end.top + (current.to.bottom - current.to.top),
+            ..current_end
+        };
+        let mut segments = Vec::new();
+        let continue_same_ingest_row =
+            current.kind == CaretTrackSegmentKind::IngestLine && local < 1.0;
+        if continue_same_ingest_row {
+            // 本行还没扫完：把本行剩余路程接上新目标 caret。
+            segments.push(CaretTrackSegment {
+                kind: CaretTrackSegmentKind::IngestLine,
+                from: current_end,
+                to: new_to,
+                ingest_line_ord: current.ingest_line_ord,
+                visual_line_id: current.visual_line_id,
+            });
+        }
+        segments.extend(self.segments[index + 1..].iter().copied());
+        if segments.is_empty() {
+            segments.push(CaretTrackSegment {
+                kind: CaretTrackSegmentKind::RowHandoff,
+                from: current_end,
+                to: new_to,
+                ingest_line_ord: current.ingest_line_ord,
+                visual_line_id: current.visual_line_id,
+            });
+        }
+        segments
     }
 }
 

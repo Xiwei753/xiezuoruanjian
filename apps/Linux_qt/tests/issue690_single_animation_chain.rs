@@ -150,7 +150,7 @@ fn issue690_cursor_sits_on_text_reveal_and_conceal_boundary() {
         "步骤2: caret 位置由 PreparedCursorVisualTrack 的 sampled_rect 插值决定"
     );
     assert!(
-        sample_fn.contains("sampled_visual_line_id_at_progress"),
+        sample_fn.contains("sampled_ingest_at_progress"),
         "步骤2: 本帧 caret 的 visual_line_id 与 caret 位置来自同一次采样"
     );
     // Issue #815: 光标高度取自 canonical new caret rect（前向 Delete 不回抽）。

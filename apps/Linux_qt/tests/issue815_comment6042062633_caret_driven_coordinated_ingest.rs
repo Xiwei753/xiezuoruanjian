@@ -155,7 +155,7 @@ fn issue815_modify3_cursor_track_is_the_single_sampling_entry() {
     let sample_window = function_window(&src, "pub(crate) fn sample_caret_track_frame", 1500);
     for marker in [
         "sampled_rect_at_progress",
-        "sampled_visual_line_id_at_progress",
+        "sampled_ingest_at_progress",
         "progress(",
     ] {
         assert!(
@@ -205,7 +205,7 @@ fn issue815_modify5_ingest_clip_is_driven_by_current_caret_frame() {
          不能把协同吞吐换算成独立 0..1 visible fraction。"
     );
 
-    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 3400);
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 6000);
     assert!(
         window.contains("caret_x: f64"),
         "Issue #815 评论 6042062633 修改 5: 本帧边界就是本帧的 caret.x，必须作为参数传进来。"
@@ -292,7 +292,7 @@ fn issue815_review1_delete_forward_has_its_own_ingest_boundary() {
     let slices_delete_window = function_window(
         &slices_src,
         "pub(crate) fn build_delete_conceal_slices",
-        9000,
+        8800,
     );
     assert!(
         slices_delete_window.contains("if conceal_to_left_edge")
@@ -320,7 +320,7 @@ fn issue815_review2_cross_line_uses_same_side_line_ordinals() {
     let insert_window = function_window(
         &slices_src,
         "pub(crate) fn build_insert_reveal_slices",
-        4000,
+        10400,
     );
     assert!(
         insert_window.contains("line_ordinal_for_byte(new_snapshot"),
@@ -331,7 +331,7 @@ fn issue815_review2_cross_line_uses_same_side_line_ordinals() {
     let delete_window = function_window(
         &slices_src,
         "pub(crate) fn build_delete_conceal_slices",
-        4000,
+        8800,
     );
     assert!(
         delete_window.contains("line_ordinal_for_visual_line_id(old_snapshot")
@@ -579,7 +579,7 @@ fn issue815_review6_cross_line_phase_consumes_real_caret_y() {
 fn issue815_review6_ingest_frame_uses_one_sample_for_x_y_progress() {
     let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     assert!(
-        src.contains("compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)"),
+        src.contains("caret.ingest_line_ord,"),
         "Issue #815 评论 5947728704 问题1: render plan 必须把同一份 SampledCaretFrame 的 \
          x（横向边界）/ y（当前行）/ progress（只给 DeleteForwardBoundary 用）一起传下去。"
     );
@@ -588,18 +588,26 @@ fn issue815_review6_ingest_frame_uses_one_sample_for_x_y_progress() {
     let ingest_window = function_window(
         &ingest_src,
         "pub(crate) fn compute_frame_by_caret_ingest",
-        3400,
+        6000,
     );
-    for param in ["caret_x: f64", "caret_y: f64", "caret_progress: f64"] {
+    for param in [
+        "caret_x: f64",
+        "caret_y: f64",
+        "caret_progress: f64",
+        "sampled_ingest_line_ord: Option<usize>",
+        "is_ingest_segment: bool",
+    ] {
         assert!(
             ingest_window.contains(param),
-            "Issue #815 评论 5947728704 问题1: 入口签名必须同时收 x / y / progress，缺少 {}。",
+            "Issue #815 评论 5949097065: 入口签名必须同时收 x / y / progress 以及采样的 \
+             ingest_line_ord / is_ingest_segment，缺少 {}。",
             param
         );
     }
     assert!(
-        ingest_window.contains("self.ingest_line_phase(caret_y)"),
-        "Issue #815 评论 5947728704 问题1: 相位必须由 caret.y 决定，progress 不得再推导行序。"
+        ingest_window.contains("self.ingest_phase_from_route_ord(")
+            || ingest_window.contains("self.ingest_line_phase(caret_y)"),
+        "Issue #815 评论 5949097065: 相位必须优先由采样得到的权威 ingest_line_ord 决定，\n         caret.y 只是拿不到行序时的降级；progress 不得再推导行序。"
     );
 }
 
@@ -608,14 +616,14 @@ fn issue815_review6_ingest_frame_uses_one_sample_for_x_y_progress() {
 fn issue815_review6_all_three_builders_write_same_side_line_geometry() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
 
-    let insert_window = function_window(&src, "pub(crate) fn build_insert_reveal_slices", 9200);
+    let insert_window = function_window(&src, "pub(crate) fn build_insert_reveal_slices", 10400);
     assert!(
         insert_window.contains("ingest_line_top = Some(new_line.visual_line_top)")
             && insert_window.contains("ingest_line_bottom = Some(new_line.visual_line_bottom)"),
         "Issue #815 评论 5947728704 问题1: InsertReveal 必须写 new snapshot 侧的行几何。"
     );
 
-    let delete_window = function_window(&src, "pub(crate) fn build_delete_conceal_slices", 7800);
+    let delete_window = function_window(&src, "pub(crate) fn build_delete_conceal_slices", 8800);
     assert!(
         delete_window.contains("ingest_line_top = Some(old_line.visual_line_top)")
             && delete_window.contains("ingest_line_bottom = Some(old_line.visual_line_bottom)"),
@@ -974,7 +982,7 @@ fn issue815_review4_line_identity_never_crosses_snapshot_sides() {
     let insert_window = function_window(
         &slices_src,
         "pub(crate) fn build_insert_reveal_slices",
-        9000,
+        10400,
     );
     assert!(
         insert_window.contains("ingest_from_line_ord == Some(line_ord)"),
@@ -990,7 +998,7 @@ fn issue815_review4_line_identity_never_crosses_snapshot_sides() {
     let delete_window = function_window(
         &slices_src,
         "pub(crate) fn build_delete_conceal_slices",
-        9000,
+        8800,
     );
     assert!(
         delete_window.contains("ingest_to_line_ord == Some(line_ord)"),
@@ -1063,5 +1071,155 @@ fn issue815_review4_builder_call_sites_pass_same_side_ids() {
         !delete_ctx.contains("spec.new_cursor_visual_line_id"),
         "Issue #815 评论 5947230558 问题1: build_delete_conceal_slices 不得再传 \
          spec.new_cursor_visual_line_id（new 侧 id 进 old 侧比较）。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5949097065：跨 snapshot 的空间坐标也必须同侧
+// =========================================================================
+
+/// 复核评论 5949097065 问题3：CursorTrack 不再是「from → to 一条直线」。
+#[test]
+fn issue815_review7_cursor_track_carries_formal_route_segments() {
+    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
+    assert!(
+        src.contains("pub(crate) enum CaretTrackSegmentKind"),
+        "Issue #815 评论 5949097065 问题3: CursorTrack 必须有正式的路由段类型，\\
+         跨 layout 编辑不能表达成 from.x -> to.x 一条直线。"
+    );
+    for kind in ["LayoutHandoff", "IngestLine", "RowHandoff"] {
+        assert!(
+            src.contains(kind),
+            "Issue #815 评论 5949097065 问题3: 缺少路由段种类 {}。",
+            kind
+        );
+    }
+    assert!(
+        src.contains("pub(crate) struct CaretTrackSegment"),
+        "Issue #815 评论 5949097065 问题3: 缺少路由段数据结构。"
+    );
+    for field in [
+        "pub kind: CaretTrackSegmentKind",
+        "pub from: CursorRect",
+        "pub to: CursorRect",
+        "pub ingest_line_ord: Option<usize>",
+    ] {
+        assert!(
+            src.contains(field),
+            "Issue #815 评论 5949097065 问题3: CaretTrackSegment 缺少字段 {}。",
+            field
+        );
+    }
+    assert!(
+        src.contains("pub segments: Vec<CaretTrackSegment>"),
+        "Issue #815 评论 5949097065 问题3: PreparedCursorVisualTrack 必须持有路由段。"
+    );
+    assert!(
+        src.contains("pub fn sampled_ingest_at_progress"),
+        "Issue #815 评论 5949097065 问题3: 采样必须按路由累计进度给出当前行序，\\
+         不能再用只懂 from/to 的 sampled_visual_line_id_at_progress。"
+    );
+    assert!(
+        !src.contains("fn sampled_visual_line_id_at_progress("),
+        "Issue #815 评论 5949097065 问题3: sampled_visual_line_id_at_progress 只懂 from/to，\\
+         三行以上会把「已经过的中间行」全部误判成 to，必须删除。"
+    );
+
+    // render plan 必须把行序透传给文字层。
+    let plan_src = read_src("src/sujian_editor_item/render_plan.rs");
+    for field in [
+        "pub ingest_line_ord: Option<usize>",
+        "pub is_ingest_segment: bool",
+    ] {
+        assert!(
+            plan_src.contains(field),
+            "Issue #815 评论 5949097065 问题3: SampledCaretFrame 必须带 {}，\\
+             文字层不该再自己从 y 猜「我在不在当前吞吐行」。",
+            field
+        );
+    }
+}
+
+/// 复核评论 5949097065 问题1/问题2：吞吐几何必须来自 slice 自己那侧的 snapshot。
+#[test]
+fn issue815_review7_ingest_geometry_comes_from_the_slices_own_side() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
+    assert!(
+        src.contains("fn same_side_start_x("),
+        "Issue #815 评论 5949097065 问题1/2: 吞吐锚点必须从本侧 snapshot 的真实 cluster \\
+         rect 解出来，禁止按字节比例猜。"
+    );
+    let insert_window = function_window(&src, "pub(crate) fn build_insert_reveal_slices", 10400);
+    assert!(
+        insert_window
+            .contains("same_side_start_x(new_snapshot, ingest_from_line_ord, range_start)"),
+        "Issue #815 评论 5949097065 问题1: Insert 的吐字起点必须用 new snapshot 自己的 \\
+         inserted_range.start 位置，不能塞 old_cursor_rect.x。"
+    );
+    let delete_window = function_window(&src, "pub(crate) fn build_delete_conceal_slices", 8800);
+    assert!(
+        delete_window.contains("same_side_start_x(old_snapshot, ingest_to_line_ord, range_start)"),
+        "Issue #815 评论 5949097065 问题2: Delete 的吞字终点必须用 old snapshot 自己的 \\
+         deleted_range.start 位置，不能拿 new_cursor_rect.x 当旧布局的锚点。"
+    );
+
+    // 事务构造顺序：切片 → assign_shared_line_masks → 生成路由 → 建 track。
+    let builder_src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    assert!(
+        builder_src.contains("pub(crate) mod ingest_route;"),
+        "Issue #815 评论 5949097065 问题3: 必须有独立的路由生成模块。"
+    );
+    let route_src =
+        read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        route_src.contains("pub(crate) fn build_ingest_route("),
+        "Issue #815 评论 5949097065 问题3: 必须在建 track 之前由同侧切片生成 caret 路由。"
+    );
+    let route_pos = builder_src
+        .find("let ingest_route_segments =")
+        .expect("build_prepared_transaction 必须先算路由");
+    let track_pos = builder_src
+        .find("build_cursor_visual_track(")
+        .expect("build_prepared_transaction 必须建 track");
+    assert!(
+        route_pos < track_pos,
+        "Issue #815 评论 5949097065 问题3: 路由必须在 build_cursor_visual_track 之前生成，\\
+         否则 track 又会退回 from -> to 直线。"
+    );
+}
+
+/// 复核评论 5949097065 问题1：换位段不得冒充吞吐。
+#[test]
+fn issue815_review7_layout_handoff_does_not_fake_ingest() {
+    let src = read_src("src/sujian_editor_item/animated_slice.rs");
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 6000);
+    assert!(
+        window.contains("IngestLinePhase::RouteBeforeStart"),
+        "Issue #815 评论 5949097065 问题3: 拿不到权威行序（换位段）时，吞字/吐字切片必须\\
+         保持初始状态，绝不能用换位的 x 去裁任何一行。"
+    );
+    assert!(
+        window.contains("IngestLinePhase::FallbackFromCaretY"),
+        "Issue #815 评论 5949097065 问题3: 退化路线（没有路由段）才允许降级用 caret.y。"
+    );
+    let phase_window = function_window(&src, "fn ingest_phase_from_route_ord", 2000);
+    assert!(
+        phase_window.contains("is_ingest_segment"),
+        "Issue #815 评论 5949097065 问题3: 采样明确落在吞吐段上时该行才是当前行；\\
+         落在换位段上时该行已收口，文字必须停在终态。"
+    );
+    // 只在「另一端怎么取」那一段里禁止 caret_anchor_x；整段窗口仍会因为
+    // AnimatedSlice 的字段定义 / 构造函数 doc 出现该名字。
+    let other_end_pos = window
+        .find("let path_other_end_x")
+        .expect("compute_frame_by_caret_ingest 必须计算吞吐路径的另一端");
+    let other_end_end = window[other_end_pos..]
+        .find("let phase =")
+        .map(|i| other_end_pos + i)
+        .unwrap_or(window.len());
+    assert!(
+        !window[other_end_pos..other_end_end].contains("caret_anchor_x"),
+        "Issue #815 评论 5949097065 问题1: 吞吐路径的另一端必须来自行级 mask 与本帧 boundary，\
+         不能再用跨 snapshot 写进来的 caret_anchor_x。"
     );
 }

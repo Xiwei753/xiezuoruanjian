@@ -3011,25 +3011,27 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
             );
         }
     }
-    // 共享 boundary 语义：anchor=old caret=10（行首侧）→ 从左向右扫。
-    // visible=0.5 → boundary=25：x 完整（10），y 未出现（其左边缘 30 > 25）。
-    // visible=0.75 → boundary=32.5：y 从自己的左边缘开始显示前 2.5。
-    let x_half = insert_reveals[0].compute_frame(0.5);
-    let y_half = insert_reveals[1].compute_frame(0.5);
+    // 共享 boundary 语义（Issue #815 评论 5949097065）：coordinated 下逐帧边界
+    // 是「本帧采样到的同一个 caret.x」配合行级 mask，不是每个 slice 各自的
+    // caret_anchor_x。caret 扫到 25 → 第一个候选完整、第二个还没出现；
+    // caret 扫到 32.5 → 第二个候选从自己的左边缘 30 开始显示前 2.5。
+    let x_half = insert_reveals[0].compute_frame_by_caret_ingest(25.0, 10.0, 0.5, None, true);
+    let y_half = insert_reveals[1].compute_frame_by_caret_ingest(25.0, 10.0, 0.5, None, true);
+    // 第一个候选自身只有 [10,20) 这 10px，boundary=25 已越过它的右边缘 ⇒ 完整。
     assert!(
         (x_half.w - 10.0).abs() < 0.5,
-        "visible=0.5 时 x 应完整显示（w=10），实际 w={}",
+        "caret 扫到 25 时第一个候选应完整显示（自身宽 10），实际 w={}",
         x_half.w
     );
     assert!(
         y_half.w.abs() < 0.5,
-        "visible=0.5 时 y 必须完全不可见（boundary 未扫到），实际 w={}",
+        "caret 扫到 25 时第二个候选必须完全不可见，实际 w={}",
         y_half.w
     );
-    let y_late = insert_reveals[1].compute_frame(0.75);
+    let y_late = insert_reveals[1].compute_frame_by_caret_ingest(32.5, 10.0, 0.75, None, true);
     assert!(
         (y_late.x - 30.0).abs() < 0.5 && (y_late.w - 2.5).abs() < 0.5,
-        "visible=0.75 时 y 应从自己的左边缘 30 显示前 2.5，实际 x={} w={}",
+        "caret 扫到 32.5 时第二个候选应从自己的左边缘 30 显示前 2.5，实际 x={} w={}",
         y_late.x,
         y_late.w
     );
@@ -3779,7 +3781,7 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     // caret_y = 25 ⇒ 已越过新 line 1（y ∈ [0,20)），还在新 line 2（y ∈ [20,40)）上。
     let l1_mid = line1[0]
         .slice
-        .compute_frame_by_caret_ingest(0.0, 25.0, 0.75);
+        .compute_frame_by_caret_ingest(0.0, 25.0, 0.75, None, true);
     assert!(
         l1_mid.w > 0.0,
         "边界越过新 line 1 后它必须已完整吐出，实际 w={}",
@@ -3788,7 +3790,7 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     // 同一帧下 line2 还在被 caret 扫过：给一个刚到行首的 caret.x，它应几乎为 0。
     let l2_mid = line2[0]
         .slice
-        .compute_frame_by_caret_ingest(0.0, 25.0, 0.75);
+        .compute_frame_by_caret_ingest(0.0, 25.0, 0.75, None, true);
     assert!(
         l2_mid.w.abs() < 0.5,
         "caret 还在新 line 2 行首时，line 2 不该提前吐出，实际 w={}",
@@ -3797,10 +3799,10 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     // 终帧：caret 走完，两行都完整。
     let l1_end = line1[0]
         .slice
-        .compute_frame_by_caret_ingest(30.0, 40.0, 1.0);
+        .compute_frame_by_caret_ingest(30.0, 40.0, 1.0, None, true);
     let l2_end = line2[0]
         .slice
-        .compute_frame_by_caret_ingest(30.0, 40.0, 1.0);
+        .compute_frame_by_caret_ingest(30.0, 40.0, 1.0, None, true);
     assert!(
         l1_end.w > 0.0 && l2_end.w > 0.0,
         "终帧两行都必须完整：line1 w={} line2 w={}",
@@ -3813,11 +3815,13 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
 /// 已经走过的旧行在末帧必须全隐。
 #[test]
 fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
-    // old = "abcdEF"，preedit 覆盖第 2 行（[4,6)）；old caret 在第 2 行末尾。
+    // old = "abcdEF"：第 1 行 [0,4) 在 y∈[0,20)，第 2 行 [4,6) 在 y∈[20,40)。
     let old_snapshot =
         make_multiline_snapshot("abcdEF", &[(0, 0, 4, 0.0, 20.0), (1, 4, 6, 20.0, 40.0)]);
-    // new = "abcd"，preedit 被替换成第 1 行末尾的候选（单行）。
+    // new = "abcd"：preedit 被换成第 1 行末尾的候选（单行）。
     let new_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
+    // Issue #815 评论 5949097065: preedit 必须落在**起点行之外**，这样 Backspace
+    // 方向的吞吐路径才是真正的跨行（old ingest 1 → 0），而不是 from == to 的单行。
     let spec = issue815_composition_spec(
         old_snapshot,
         new_snapshot,
@@ -3829,7 +3833,7 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
         40.0,
         0.0,
         20.0,
-        (4, 5),
+        (2, 3),
         (3, 4),
     );
     let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
@@ -3844,16 +3848,33 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
     assert_eq!(slice.ingest_from_line_ord, Some(1), "起点 = old caret 行");
     assert_eq!(
         slice.ingest_to_line_ord,
-        Some(1),
-        "终点 = preedit_byte_start 所在行"
+        Some(0),
+        "终点 = preedit_byte_start 所在行，必须与起点不同行"
     );
 
-    // 单行吞字（from == to）由本帧 caret.x 直接驱动，方向无关。
-    let at_end = slice.compute_frame_by_caret_ingest(20.0, 10.0, 1.0);
+    // caret 还在第 2 行（y=30，尚未走过本行）⇒ 旧字完整可见。
+    // Backspace 方向（to=0 < from=1）：caret_y >= line_bottom ⇒ NotReached。
+    let before = slice.compute_frame_by_caret_ingest(20.0, 30.0, 0.0, None, true);
     assert!(
-        at_end.w.abs() < 0.5,
-        "caret 到达最终位置后旧 preedit 必须全隐，实际 w={}",
-        at_end.w
+        before.w > 19.5,
+        "caret 还没走过本行时旧字必须完整可见，实际 w={}",
+        before.w
+    );
+
+    // caret 落到第 1 行（y=10 落在本行 line_top..line_bottom 内）⇒ 本行成为
+    // 当前行，逐帧由本帧 caret.x 裁切（不是上一行的 x）。
+    //
+    // Issue #815 评论 5949097065: IME commit crossfade 故意不给路由段——它的
+    // InsertReveal 行序来自 new snapshot、DeleteConceal 行序来自 old snapshot，
+    // 跨 revision 比大小正是本轮禁止的。所以这条路径拿不到 `ingest_line_ord`，
+    // 只能退回 caret.y 相位；「本行彻底吞完后不重画」由带真实路由的
+    // `animated_slice::ingest_tests::real_track_phase` 用例覆盖。
+    let on_current = slice.compute_frame_by_caret_ingest(20.0, 10.0, 1.0, None, true);
+    assert!(
+        on_current.w < before.w,
+        "caret 落到本行后应由本帧 caret.x 开始裁切（未到达时 w={}，到达后 w={}）",
+        before.w,
+        on_current.w
     );
 }
 
@@ -3902,14 +3923,18 @@ fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
              右端作为收拢起点，不能留 None（否则会退回 line_mask_right 猜测）"
         );
         // 首帧必须完整显示旧字，不能是 0 宽（静止 caret 的经典 bug）。
-        let first = unit.slice.compute_frame_by_caret_ingest(0.0, 10.0, 0.0);
+        let first = unit
+            .slice
+            .compute_frame_by_caret_ingest(0.0, 10.0, 0.0, None, true);
         assert!(
             first.w > 0.0,
             "前删首帧必须显示完整旧字，实际 w={}",
             first.w
         );
         // 末帧必须完全吞掉。
-        let last = unit.slice.compute_frame_by_caret_ingest(0.0, 10.0, 1.0);
+        let last = unit
+            .slice
+            .compute_frame_by_caret_ingest(0.0, 10.0, 1.0, None, true);
         assert!(
             last.w.abs() < 0.5,
             "前删末帧必须完全吞掉旧字，实际 w={}",
