@@ -674,7 +674,7 @@ mod production_route {
     use super::super::{AnimatedSlice, AnimatedSliceKind};
     use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
     use crate::sujian_editor_item::animation::transaction::types::{
-        CaretTrackSegmentKind, PreparedCursorVisualTrack,
+        CaretTrackSegmentKind, IngestSnapshotSide, PreparedCursorVisualTrack,
     };
     use crate::sujian_editor_item::animation::transaction_builder::ingest_route::{
         build_delete_route, build_insert_route, IngestRow,
@@ -1338,6 +1338,128 @@ mod production_route {
             assert!(
                 frame.w <= 60.0 + 1e-6,
                 "Issue #815 评论 5954004872 问题2: 第 {step} 帧裁出了超过本行右端的宽度 {}",
+                frame.w
+            );
+        }
+    }
+
+    // =====================================================================
+    // Issue #815 评论 5954588641：tail segment 的「刚完成到哪一行」身份
+    // =====================================================================
+
+    /// Issue #815 评论 5954588641 问题1。
+    ///
+    /// 多行 Insert（ord 0 → 1 都吐完）之后末尾还有一个换行要换位到 line 2 的
+    /// caret，于是 route 最后是一段 tail `RowHandoff`。这一段发生在**所有** Insert 行
+    /// 都已吐完之后，"刚扫完的行"必须是 `rows.last()`（ord 1）。原来标成 `first`
+    /// （ord 0）时，tail frame 会把 line 1 判成 `NotReached` ⇒ 刚吐完的 line 1
+    /// 在末尾重新隐藏，形成可见闪回。
+    #[test]
+    fn insert_tail_segment_reports_the_last_revealed_row() {
+        let rows = vec![row(0, 0.0, 40.0), row(1, 0.0, 30.0)];
+        let screen_caret = caret_rect(40.0, ROW_H);
+        // 末尾换行 ⇒ 新 caret 落到第 2 行行首，强制生成 tail RowHandoff。
+        let new_caret = caret_rect(0.0, 2.0 * ROW_H);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+
+        let tail = segments.last().expect("route 非空");
+        assert_eq!(
+            tail.kind,
+            CaretTrackSegmentKind::RowHandoff,
+            "末尾换行必须由 tail RowHandoff 承担"
+        );
+        assert_eq!(
+            tail.ingest_line_ord,
+            Some(1),
+            "Issue #815 评论 5954588641 问题1: tail 段必须报告**最后吐完的行** \
+             （rows.last() = ord 1），标成 first 会让 line 1 在末尾被判 NotReached \
+             而重新隐藏"
+        );
+        assert_eq!(tail.visual_line_id, Some(1));
+        assert_eq!(tail.ingest_side, Some(IngestSnapshotSide::New));
+
+        // 逐帧不变量：在 tail 段中间采样时，两行都已吐完的文字必须保持终态宽度。
+        let started = Instant::now();
+        let track = track_from(segments, screen_caret, new_caret, started);
+        let line_0 = reveal_on_row(0, 0, 1, 0.0, 40.0);
+        let line_1 = reveal_on_row(1, 0, 1, 0.0, 30.0);
+        let seg_count = track.segments.len();
+        let probe = ((seg_count - 1) as f64 + 0.5) / seg_count as f64;
+        let now = started + Duration::from_millis((100.0 * probe) as u64);
+        let caret = sample_caret_track_frame(&track, now);
+        assert_eq!(caret.ingest_side, Some(IngestSnapshotSide::New));
+        assert_eq!(caret.ingest_line_ord, Some(1), "采样帧应落在 tail 段上");
+
+        for (label, slice, full) in [("line 0", &line_0, 40.0), ("line 1", &line_1, 30.0)] {
+            let frame = slice.compute_frame_by_caret_ingest(
+                caret.x,
+                caret.y,
+                caret.ingest_line_ord,
+                caret.is_ingest_segment,
+                caret.ingest_side,
+                caret.ingest_progress,
+            );
+            assert!(
+                (frame.w - full).abs() < 1e-6,
+                "Issue #815 评论 5954588641 问题1: tail 换位阶段 {label} 必须保持终态 \
+                 宽度 {full}（已吐完不能退回初态），实际 w={}",
+                frame.w
+            );
+        }
+    }
+
+    /// Issue #815 评论 5954588641 问题2。
+    ///
+    /// Delete 从**大行序往小行序**吞：`start_row = rows.last()` 是最开始吞的那一行。
+    /// 全部吞完之后真正刚扫完的是 `rows.first()`。原来 tail 标 `start_row`（最大
+    /// 行序）时，对方向 `2 -> 0`，line 1 / 0 会被判成 `NotReached` ⇒ 已吞掉的旧字
+    /// 在末尾重新出现。
+    #[test]
+    fn delete_tail_segment_reports_the_first_swallowed_row() {
+        let rows = vec![row(0, 0.0, 40.0), row(1, 0.0, 30.0), row(2, 0.0, 20.0)];
+        // 旧 caret 在最高行（Backspace 起点）。
+        let old_caret = caret_rect(20.0, 2.0 * ROW_H);
+        // new caret 与 old 侧吞完位置不同 ⇒ 强制生成 tail RowHandoff。
+        let new_caret = caret_rect(40.0, 3.0 * ROW_H);
+        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret));
+
+        let tail = segments.last().expect("route 非空");
+        assert_eq!(tail.kind, CaretTrackSegmentKind::RowHandoff);
+        assert_eq!(
+            tail.ingest_line_ord,
+            Some(0),
+            "Issue #815 评论 5954588641 问题2: tail 段必须报告**最终吞到的第一行** \
+             （rows.first() = ord 0），标成 start_row（最大行序）会让低行序旧字在末尾 \
+             被判 NotReached 而重新出现"
+        );
+        assert_eq!(tail.visual_line_id, Some(0));
+        assert_eq!(tail.ingest_side, Some(IngestSnapshotSide::Old));
+        assert_route_is_continuous(&segments, "三行退格 + tail 的 route");
+
+        // 逐帧不变量：在 tail 段中间采样时，三行旧字都必须保持终态（宽度 0）。
+        let started = Instant::now();
+        let track = track_from(segments, old_caret, new_caret, started);
+        let seg_count = track.segments.len();
+        let probe = ((seg_count - 1) as f64 + 0.5) / seg_count as f64;
+        let now = started + Duration::from_millis((100.0 * probe) as u64);
+        let caret = sample_caret_track_frame(&track, now);
+        assert_eq!(caret.ingest_side, Some(IngestSnapshotSide::Old));
+        assert_eq!(caret.ingest_line_ord, Some(0));
+
+        for ord in 0..3usize {
+            let slice = conceal_on_row(ord, 2, 0, 0.0, 40.0 - 10.0 * ord as f64, true);
+            let frame = slice.compute_frame_by_caret_ingest(
+                caret.x,
+                caret.y,
+                caret.ingest_line_ord,
+                caret.is_ingest_segment,
+                caret.ingest_side,
+                caret.ingest_progress,
+            );
+            assert!(
+                frame.w < 1e-6,
+                "Issue #815 评论 5954588641 问题2: tail 换位阶段 ord {ord} 的旧字必须 \
+                 保持终态（已吞完不能再出现），实际 w={}",
                 frame.w
             );
         }

@@ -307,13 +307,22 @@ pub(crate) fn build_insert_route(
         .map(|segment| segment.to)
         .unwrap_or(ingest_start);
     if !same_rect(&row_end, new_caret) {
+        // Issue #815 评论 5954588641 问题1: 这段 tail handoff 发生在**所有** Insert 行
+        // 都已吐完之后，"刚扫完的行"是 `rows.last()`，不是 `rows.first()`。
+        //
+        // 原来标成 `first.line_ord` 时，多行 Insert（0 → 1 都吐完，末尾换行再换位到
+        // line 2 的 caret）的 tail frame 会报告 `sampled_ingest_line_ord = 0`，
+        // `ingest_phase_from_route_ord()` 于是把 line 1 判成还在 row 0「前面」
+        // ⇒ `NotReached` ⇒ **刚吐完的 line 1 在最后 handoff 阶段重新隐藏**，
+        // 到事务 retire 才又跳回最终静态内容，形成末尾闪回。
+        let final_row = rows.last().copied().expect("rows 非空");
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::RowHandoff,
             from: row_end,
             to: *new_caret,
-            ingest_line_ord: Some(first.line_ord),
+            ingest_line_ord: Some(final_row.line_ord),
             ingest_side: Some(IngestSnapshotSide::New),
-            visual_line_id: first.visual_line_id,
+            visual_line_id: final_row.visual_line_id,
         });
     }
     segments
@@ -404,13 +413,25 @@ pub(crate) fn build_delete_route(
         .unwrap_or(*screen_caret);
     if let Some(tail_target) = tail {
         if !same_rect(&swallow_end, tail_target) {
+            // Issue #815 评论 5954588641 问题2: Delete 是从**大行序往小行序**吞，
+            // `start_row = rows.last()` 是**最开始吞的那一行**，不是最后吞完的。
+            // 全部 Delete 行吞完之后，真正刚扫完的是 `rows.first()`。
+            //
+            // 原来标成 `start_row.line_ord` 时，Backspace 从 line 2 一路吞到 line 0
+            // 再换位到 new caret 的 tail frame 会报告 sampled old ord = 2；对方向
+            // `2 -> 0`，`ingest_phase_from_route_ord()` 把 line 1 / 0 判成
+            // `NotReached` ⇒ **已经吞掉的低行序旧字在最终 handoff 阶段重新出现**。
+            //
+            // 注意：`swallow_end` 继续取 `segments.last().to` 是对的，只改 tail 的
+            // phase identity，不退回重算几何。
+            let final_row = rows.first().copied().expect("rows 非空");
             segments.push(CaretTrackSegment {
                 kind: CaretTrackSegmentKind::RowHandoff,
                 from: swallow_end,
                 to: *tail_target,
-                ingest_line_ord: Some(start_row.line_ord),
+                ingest_line_ord: Some(final_row.line_ord),
                 ingest_side: Some(IngestSnapshotSide::Old),
-                visual_line_id: start_row.visual_line_id,
+                visual_line_id: final_row.visual_line_id,
             });
         }
     }

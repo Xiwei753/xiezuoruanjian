@@ -1153,6 +1153,52 @@ fn issue815_review11_driver_conflict_has_a_formal_event() {
 }
 
 // =========================================================================
+// 复核评论 5954588641：tail segment 的「刚完成到哪一行」身份
+// =========================================================================
+
+/// 复核评论 5954588641。
+///
+/// 这两个 tail segment 都是几何连续的（`segments[i].to == segments[i+1].from`
+/// 成立），所以连续性守卫抓不到它们——真正的问题是 tail 帧报告的
+/// `ingest_line_ord` 写反了行，`ingest_phase_from_route_ord()` 于是把已经吐完 /
+/// 吞完的行判成 `NotReached`，末尾出现闪回。
+#[test]
+fn issue815_review12_tail_segments_carry_the_just_finished_row() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+
+    let insert = function_window(&src, "pub(crate) fn build_insert_route", 4600);
+    assert!(
+        insert.contains("let final_row = rows.last()"),
+        "Issue #815 评论 5954588641 问题1: Insert 的 tail handoff 发生在所有行吐完之后，\
+         「刚扫完的行」是 rows.last()，不是 rows.first()。"
+    );
+    assert!(
+        !insert.contains("ingest_line_ord: Some(first.line_ord)"),
+        "Issue #815 评论 5954588641 问题1: Insert tail 不得再标 first 行——那会让刚吐完的 \
+         最后一行在末尾 handoff 阶段被判 NotReached 而重新隐藏（末尾闪回）。"
+    );
+
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 7000);
+    assert!(
+        delete.contains("let final_row = rows.first()"),
+        "Issue #815 评论 5954588641 问题2: Delete 从大行序往小行序吞，start_row 是\
+         **最先**吞的那一行；全部吞完后刚完成的是 rows.first()。"
+    );
+    assert!(
+        !delete.contains("ingest_line_ord: Some(start_row.line_ord)"),
+        "Issue #815 评论 5954588641 问题2: Delete tail 不得再标 start_row——那会让已吞掉的\
+         低行序旧字在最终 handoff 阶段重新出现。"
+    );
+    // `swallow_end` 必须继续取上一段真实的 to，不退回重算几何。
+    assert!(
+        delete.contains("let swallow_end = segments")
+            && delete.contains(".unwrap_or(*screen_caret);"),
+        "Issue #815 评论 5954588641 问题2: 只改 tail 的 phase identity，吞字终点仍取\
+         segments.last().to，不退回重算 first_row.left。"
+    );
+}
+
+// =========================================================================
 // 修改点 6：每帧每事务只采样一次，完成条件两类分开
 // =========================================================================
 
