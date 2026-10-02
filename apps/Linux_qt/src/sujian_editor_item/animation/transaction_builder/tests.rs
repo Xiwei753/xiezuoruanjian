@@ -1,16 +1,13 @@
 use super::super::coordinator::LinuxEditorAnimationCoordinator;
 use super::*;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::rebase::match_rebase_frames;
 use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
-    TransactionTimeline, VisualUnitTiming,
+    PreparedTextVisualTransaction, TextVisualOperationKind, VisualUnitTiming,
 };
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
-use crate::sujian_editor_item::render_plan::SelectionPreeditPlan;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-use writer_core::editor::{OffsetMap, Utf8ByteOffset};
+use writer_core::editor::OffsetMap;
 
 fn make_test_snapshot(
     virtual_text: &str,
@@ -984,7 +981,8 @@ fn issue756_count_kind(tx: &PreparedTextVisualTransaction, kind: AnimatedSliceKi
 #[test]
 fn issue756_coordinated_creates_caret_track_and_reveal_together() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true))
+        .expect("issue756 transaction must be built");
     assert_eq!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
         1,
@@ -1002,7 +1000,8 @@ fn issue756_coordinated_creates_caret_track_and_reveal_together() {
 fn issue756_typing_only_creates_text_without_caret_track() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=false：只有文字动画。
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true))
+        .expect("issue756 transaction must be built");
     // Issue #756 问题 2: 打字动画开启时必须有吐字（用 typing timeline 推进，不消费 caret frame）。
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
@@ -1024,7 +1023,8 @@ fn issue756_typing_only_creates_text_without_caret_track() {
 #[test]
 fn issue756_smooth_only_creates_caret_track_without_text_animation() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true))
+        .expect("issue756 transaction must be built");
     assert!(
         tx.units.is_empty(),
         "打字动画关闭且非协同：不得生成任何文字动画 unit，实际 {:?}",
@@ -1045,7 +1045,8 @@ fn issue756_smooth_only_creates_caret_track_without_text_animation() {
 fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false，但建不出 caret motion（无 old/new caret rect）。
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, false));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, false))
+        .expect("issue756 transaction must be built");
     assert!(
         tx.cursor_visual_track.is_none(),
         "没有 caret rect 时自然没有 caret track"
@@ -1060,7 +1061,8 @@ fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
 #[test]
 fn issue756_all_disabled_produces_no_units_and_no_track() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, false, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, false, true))
+        .expect("issue756 transaction must be built");
     assert!(tx.units.is_empty(), "两个开关都关闭且非协同：没有文字动画");
     assert!(
         tx.cursor_visual_track.is_none(),
@@ -1078,7 +1080,8 @@ fn issue756_all_disabled_produces_no_units_and_no_track() {
 fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=true, 有 caret rect。
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true))
+        .expect("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "typing=true: 必须有 InsertReveal（文字动画）"
@@ -1098,12 +1101,14 @@ fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
 /// composition 的 VisualEditSpec 构造，传入不同的 coordinated/typing/smooth 组合。
 
 /// coordinated=true + typing=false + smooth=false：协同仍正常
-///（text=true, caret=true, coordinated=true，吞吐字 Timed 独立时间线）。
-/// Issue #785: 协同不再切 CaretDriven，吞吐字用 Timed timing。
+///（text=true, caret=true, coordinated=true）。
+/// Issue #815 评论 6042062633 修改 4: 协同吞吐字切 `CaretTrack`，由本事务的
+/// cursor track 当前帧驱动；Reflow 仍是独立 `Timed`。
 #[test]
 fn issue756_ime_coordinated_only() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true))
+        .expect("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "coordinated=true: 必须有 InsertReveal"
@@ -1113,8 +1118,25 @@ fn issue756_ime_coordinated_only() {
         "coordinated=true: 必须有 caret track"
     );
     assert!(
-        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
-        "Issue #785: coordinated=true: 吞吐字用 Timed timing（独立时间线），不是 CaretDriven"
+        tx.units
+            .iter()
+            .filter(|u| u.timing.is_caret_track())
+            .count()
+            > 0,
+        "Issue #815: coordinated=true: InsertReveal/DeleteConceal 必须切 CaretTrack，\
+         由 cursor track 当前帧驱动"
+    );
+    assert!(
+        tx.units.iter().any(|u| {
+            matches!(
+                u.slice.kind,
+                AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade
+            ) && !u.timing.is_caret_track()
+        }) || !tx.units.iter().any(|u| matches!(
+            u.slice.kind,
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade
+        )),
+        "Issue #815: coordinated=true: Reflow 必须保持独立 Timed，不被 caret track 接管"
     );
 }
 
@@ -1123,7 +1145,8 @@ fn issue756_ime_coordinated_only() {
 #[test]
 fn issue756_ime_typing_only() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true))
+        .expect("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "typing=true: 必须有 InsertReveal"
@@ -1143,7 +1166,8 @@ fn issue756_ime_typing_only() {
 #[test]
 fn issue756_ime_smooth_only() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true))
+        .expect("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) == 0,
         "typing=false 且非协同: 没有 InsertReveal"
@@ -1159,7 +1183,8 @@ fn issue756_ime_smooth_only() {
 #[test]
 fn issue756_ime_typing_and_smooth_not_coordinated() {
     let key = VisualTransactionKey::new(1, 756);
-    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true));
+    let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true))
+        .expect("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "typing=true: 必须有 InsertReveal"
@@ -1382,7 +1407,8 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
     // coordinated=false, typing=true, smooth=true, typing=100ms, smooth=300ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 100, 300,
-    ));
+    ))
+    .expect("issue756 transaction must be built");
     // 文字 unit 用 typing duration (100ms)
     // Issue #785: 所有 unit 都是 Timed。
     for unit in &tx.units {
@@ -1392,6 +1418,10 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
                     duration_ms, 100,
                     "非协同: Timed 文字 unit 必须用 typing duration (100ms)，不是 smooth (300ms)"
                 );
+            }
+            // Issue #815: 非协同吞吐字保持独立 Timed；协同时才切 CaretTrack。
+            VisualUnitTiming::CaretTrack { .. } => {
+                panic!("非协同吞吐字不应由 caret track 驱动")
             }
         }
     }
@@ -1414,7 +1444,8 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
     // coordinated=false, typing=true, smooth=true, typing=300ms, smooth=100ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 300, 100,
-    ));
+    ))
+    .expect("issue756 transaction must be built");
     // 文字 unit 用 typing duration (300ms)
     // Issue #785: 所有 unit 都是 Timed。
     for unit in &tx.units {
@@ -1424,6 +1455,10 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
                     duration_ms, 300,
                     "非协同: Timed 文字 unit 必须用 typing duration (300ms)，不是 smooth (100ms)"
                 );
+            }
+            // Issue #815: 非协同吞吐字保持独立 Timed；协同时才切 CaretTrack。
+            VisualUnitTiming::CaretTrack { .. } => {
+                panic!("非协同吞吐字不应由 caret track 驱动")
             }
         }
     }
@@ -1438,9 +1473,9 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
     );
 }
 
-/// Issue #756 评论 5821042551 / Issue #785: 协同时两个 duration 各自独立。
-/// 协同只表示同事务/同首帧/同 rebase，不共享 duration。
-/// 文字用 typing duration，光标用 smooth cursor duration。
+/// Issue #756 评论 5821042551 / Issue #815 评论 6042062633 修改 4: 协同时，
+/// 吞吐字不再拥有自己的 duration —— 它由 cursor track 当前帧驱动；Reflow 仍然
+/// 按 `text_duration_ms`（typing duration）独立播放，光标 track 仍用 smooth duration。
 #[test]
 fn issue756_comment5821042551_coordinated_shares_typing_duration() {
     let key = VisualTransactionKey::new(1, 756);
@@ -1448,20 +1483,38 @@ fn issue756_comment5821042551_coordinated_shares_typing_duration() {
     // Issue #785: 协同时 caret_duration_ms 始终独立（用 smooth=300ms），不再共享 typing=100ms。
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, true, false, false, true, 100, 300,
-    ));
-    // Issue #785: 协同: 吞吐字是 Timed（独立时间线），不是 CaretDriven。
-    assert!(
-        tx.units.iter().all(|u| !u.timing.is_caret_driven()),
-        "Issue #785: 协同: 吞吐字用 Timed timing（独立时间线），不是 CaretDriven"
-    );
-    // Issue #785: 协同: cursor_visual_track 用 smooth cursor duration (300ms)，始终独立。
+    ))
+    .expect("issue756 transaction must be built");
+    // Issue #815: 协同吞吐字切 CaretTrack（没有自己的 duration），Reflow 保持 Timed(typing)。
+    for unit in &tx.units {
+        match (&unit.slice.kind, &unit.timing) {
+            (AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal, timing) => {
+                assert!(
+                    timing.is_caret_track(),
+                    "Issue #815: 协同: 吞吐字必须是 CaretTrack（由 cursor track 当前帧驱动），                     不再有自己的 text_duration_ms 时间线"
+                );
+            }
+            (AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade, timing) => {
+                match timing {
+                    VisualUnitTiming::Timed { duration_ms, .. } => assert_eq!(
+                        *duration_ms, 100,
+                        "Issue #815: 协同: Reflow 保持独立 Timed，用 typing duration (100ms)"
+                    ),
+                    VisualUnitTiming::CaretTrack { .. } => {
+                        panic!("Issue #815: 协同: Reflow 不得由 caret track 驱动")
+                    }
+                }
+            }
+        }
+    }
+    // Issue #815: cursor_visual_track 用 smooth cursor duration (300ms)，始终独立。
     let track = tx
         .cursor_visual_track
         .as_ref()
         .expect("coordinated=true: 必须有 cursor_visual_track");
     assert_eq!(
         track.duration_ms, 300,
-        "Issue #785: 协同: cursor_visual_track 用 smooth cursor duration (300ms)，始终独立，不再共享 typing (100ms)"
+        "Issue #815: 协同: cursor_visual_track 用 smooth cursor duration (300ms)，始终独立，不共享 typing (100ms)"
     );
 }
 
@@ -1473,7 +1526,8 @@ fn issue756_comment5821042551_smooth_only_has_independent_caret_duration() {
     // coordinated=false, typing=false, smooth=true, typing=100ms, smooth=300ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, false, true, true, 100, 300,
-    ));
+    ))
+    .expect("issue756 transaction must be built");
     // smooth-only: 没有文字 unit
     assert!(tx.units.is_empty(), "smooth-only: 没有文字动画 unit");
     // caret track 用 smooth cursor duration (300ms)
@@ -1502,7 +1556,8 @@ fn issue756_comment5821042551_transaction_has_caret_track_must_wait_for_completi
     // coordinated=false, typing=true, smooth=true, typing=100ms, smooth=300ms
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 100, 300,
-    ));
+    ))
+    .expect("issue756 transaction must be built");
 
     // 事务必须有 cursor_visual_track（smooth=true）
     assert!(
@@ -2056,7 +2111,7 @@ fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_create
         now,
     );
     // 旧 composition update 事务在队列里，is_composition() 为 true → conflicting 非空
-    // 旧事务有 old/new cursor rect → sample_coordinated_cursor_rect_at 返回 Some
+    // 旧事务有 old/new cursor rect → cursor track 可采样
     // cursor_owner_epoch 一致 → caret_handoff 被选中 → Some
     assert!(
         prepared_handoff.caret_handoff.is_some(),
@@ -2878,7 +2933,7 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
         coordinated_animation_enabled: true,
         composition_commit_crossfade: None,
     };
-    let tx = build_prepared_transaction(spec);
+    let tx = build_prepared_transaction(spec).expect("issue756 transaction must be built");
 
     // 中间保留的 c 的 rect 区间 (20,30)：任何动画 source/frame rect 都不得覆盖它。
     let covers_retained_c = |x: f64, w: f64| -> bool {

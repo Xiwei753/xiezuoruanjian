@@ -4,6 +4,7 @@
 //! 事务构造入口 [`super::build_prepared_transaction`] 仍是唯一创建
 //! `PreparedTextVisualTransaction` 的地方；本模块只承载「归一化编辑事件」的数据形状，
 //! 让 transaction_builder.rs 回到生产文件结构上限以内（god-file 800 行）。
+use crate::sujian_editor_item::AnimationSkipFields;
 
 use crate::sujian_editor_item::animation::rebase::RebaseCaretHandoff;
 use crate::sujian_editor_item::animation::{RebaseFrame, TextVisualOperationKind};
@@ -76,4 +77,40 @@ pub(crate) struct VisualEditSpec {
     /// 三种语义彻底分开：文字动画、光标动画、协同动画（遮罩锚点选择）。
     pub(crate) coordinated_animation_enabled: bool,
     pub(crate) composition_commit_crossfade: Option<CompositionCommitCrossfadeSpec>,
+}
+
+/// Issue #815 评论 6042062633 修改 8: 把一笔 `VisualEditSpec` 的动画开关/光标几何/
+/// 单元种类翻译成 `editor.anim.transaction_skipped` 事件字段。
+///
+/// 放在 spec 模块而不是 builder 里：事件描述的全部内容都来自 spec 本身，
+/// builder 只需要给出 `cause` 和它自己才知道的两个事实
+/// （cursor track 是否存在、插入区间）。
+pub(crate) fn skip_fields<'a>(
+    cause: &'a str,
+    spec: &VisualEditSpec,
+    unit_kinds: &'a str,
+    cursor_track_present: bool,
+    inserted_range: Option<(usize, usize)>,
+) -> AnimationSkipFields<'a> {
+    AnimationSkipFields {
+        cause,
+        operation_kind:
+            crate::sujian_editor_item::animation::transaction_builder::operation_kind_label(
+                spec.operation_kind,
+            ),
+        typing_animation_enabled: spec.text_animation_enabled
+            && !spec.coordinated_animation_enabled,
+        smooth_cursor_enabled: spec.caret_animation_enabled && !spec.coordinated_animation_enabled,
+        coordinated_animation_enabled: spec.coordinated_animation_enabled,
+        old_caret_present: spec.old_cursor_rect.is_some(),
+        new_caret_present: spec.new_cursor_rect.is_some(),
+        inserted_range,
+        unit_kinds,
+        cursor_track_present,
+        is_scrolling: false,
+        is_loading: false,
+        is_applying_format: false,
+        transaction_id: Some(spec.key.transaction_id),
+        generation: spec.key.generation,
+    }
 }

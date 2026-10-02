@@ -47,25 +47,26 @@ pub(crate) enum TextVisualOperationKind {
     CompositionCommitOrCancel,
 }
 
-/// Issue #690 评论 5675007226 步骤 3: 单个视觉单元，拥有自己的动画生命期。
+/// Issue #690 评论 5675007226 步骤 3: 单个视觉单元。
 ///
-/// Issue #808 核心语义：文字动画和光标动画是两条独立的动画。
-/// - 文字动画：只负责 InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade，
-///   用文字自己的 timeline（`ease_out_quad`）和 duration。
-/// - 光标动画：只负责 cursor visual track，用光标自己的 timeline（`ease_out_cubic`）
-///   和 duration。
-/// - 协同动画：同时创建文字视觉单元和 cursor track，但两者不是同一个动画，
-///   也不能互相拿 progress。`coordinated=true` 只强制这笔编辑同时拥有文字和光标
-///   两条轨迹，文字 progress 只来自文字 timeline，光标 progress 只来自 cursor track。
+/// Issue #815 评论 6042062633 修改 2: 计时驱动分成两种（见 [`VisualUnitTiming`]）。
+/// - 非协同 InsertReveal/DeleteConceal、以及全部 ReflowMove/ReflowCrossFade：
+///   `VisualUnitTiming::Timed`，用文字自己的 `ease_out_quad` + `text_duration_ms`。
+/// - 协同 InsertReveal/DeleteConceal：`VisualUnitTiming::CaretTrack`，**没有自己的
+///   时间线**。逐帧吞吐边界直接来自同一笔事务 cursor track 的当前帧
+///   （`AnimatedSlice::compute_frame_by_caret_ingest`），文字层与光标层消费同一次
+///   采样。
 ///
-/// Issue #727 评论 5754041813 约束 2 / Issue #785: 计时语义统一为 `VisualUnitTiming::Timed`。
-/// - 所有 kind（含 InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）
-///   都拥有独立 started_at / duration_ms / progress。
-/// - 协同只表示同事务/同首帧/同 rebase，不表示同速度——文字与 caret 各自按自己的
-///   duration 推进。
+/// 协同模式 = 一条 caret 运动轨迹 + 文字以 caret 当前帧为吞吐边界 + Reflow 可独立。
+/// 不再是"两条互不相干的时间线，只在起点位置看起来碰巧挨着"。
 ///
-/// 快速连续输入时，旧事务被 cancel 并 rebase：匹配的旧 unit 通过 `rebase_from_frame`
-/// 把当前 `visible_fraction` 写入 `start_fraction`，文字从"已经吐/吞到一半"的位置继续。
+/// 快速连续输入时，旧事务被 cancel 并 rebase：
+///
+/// - `Timed` unit 通过 `rebase_from_frame` 把当前 `visible_fraction` 写入
+///   `start_fraction`，从"已经吐/吞到一半"的位置继续。
+/// - `CaretTrack` unit 的连续性由 `RebaseCaretHandoff` 承担：先采样旧 track 的
+///   当前 caret，新 track 从这个当前 caret 连到新的目标 caret。
+///
 /// 只有被新编辑实际覆盖的 unit 才结束/替换。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedVisualUnit {
@@ -77,26 +78,26 @@ impl PreparedVisualUnit {
     /// 把一个 `AnimatedSlice` 包成拥有独立生命期的视觉单元。
     ///
     /// `duration_ms` 取自事务（与 `TransactionTimeline::duration_ms` 一致）。
-    /// Issue #785: 所有 kind 统一 Timed timing。
+    /// Issue #815: 本入口只用于 ReflowMove/ReflowCrossFade，始终独立 Timed timing。
     pub fn wrap(slice: AnimatedSlice, duration_ms: u64) -> Self {
         let timing = VisualUnitTiming::default_for_kind(slice.kind, duration_ms);
         Self { slice, timing }
     }
 
-    /// Issue #756 / Issue #785 / Issue #808 评论 5916391891 修改 4: 按 `coordinated` 决定
-    /// InsertReveal/DeleteConceal 的计时语义。
+    /// Issue #756 / Issue #815 评论 6042062633 修改 2: 按 `coordinated` 决定
+    /// InsertReveal/DeleteConceal 的计时驱动。
     ///
-    /// Issue #808 评论 5916391891 修改 4: `coordinated` 不再切到 CaretDriven，也不再让
-    /// 文字与光标共用同一条 easing。始终调用 `default_for_kind_with_coordinated`（后者
-    /// 也不分叉 timing）。文字 unit 始终保存自己的 timing（Timed + `ease_out_quad`），
-    /// 与 caret（`ease_out_cubic`）各自独立推进。
+    /// Issue #815 评论 6042062633 修改 2：`coordinated=true` 时返回
+    /// [`VisualUnitTiming::CaretTrack`]——吞吐字不再拥有自己的
+    /// `ease_out_quad + text_duration_ms` progress，逐帧边界直接来自本事务
+    /// cursor track 的当前帧。`coordinated=false` 时仍是独立 `Timed`。
     ///
-    /// coordinated 的遮罩语义通过 slice 的 `is_caret_line` / `caret_anchor_x` 字段体现
-    ///（在 `build_insert_reveal_slices` / `build_delete_conceal_slices` 中设置）：
-    /// - coordinated=true：遮罩从 caret 锚点展开/收拢（第三种模式——协同动画）。
-    /// - coordinated=false：遮罩从文字自己的边缘展开/收拢（独立文字动画）。
+    /// ReflowMove / ReflowCrossFade 走 [`PreparedVisualUnit::wrap`]，始终独立 `Timed`。
     ///
-    /// 协同=同一次编辑同时开两条独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。
+    /// `is_caret_line` / `caret_anchor_x` 仍表达遮罩锚点与方向（构造阶段写入），
+    /// 但锚点只是几何参考——真正决定每帧边界的是当前 caret.x。
+    ///
+    /// 协同=一条 caret 运动轨迹 + 文字以 caret 当前帧为吞吐边界 + Reflow 可独立。
     pub fn wrap_with_coordinated(
         slice: AnimatedSlice,
         duration_ms: u64,
@@ -111,22 +112,23 @@ impl PreparedVisualUnit {
     }
 
     /// 从自己的时间线计算当前 progress（0..1）。
-    /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算 progress。
+    /// Issue #815: `Timed` 从自己的时间线算；`CaretTrack` 没有自己的时间线，
+    /// 未 retired 时返回 0，retired 后返回 1。
     pub fn progress(&self, now: Instant) -> f64 {
         self.timing.progress(now)
     }
 
-    /// Issue #785: 判断单元是否已到达终态（不应再交棒）。
-    /// 所有 unit 都是 Timed：`progress >= 1.0` 表示已播完。
+    /// 判断单元是否已到达终态（不应再交棒）。
+    /// `Timed`：`progress >= 1.0` 表示已播完。`CaretTrack`：只在 retired 后为 true。
     #[cfg(test)]
     pub fn is_finished(&self, now: Instant) -> bool {
         self.timing.progress(now) >= 1.0
     }
 
-    /// 单元在 `now` 时刻的真实可见比例（0..1）。
+    /// 单元在 `now` 时刻的**独立**可见比例（0..1）。
     ///
-    /// Issue #785: 所有 unit 都是 Timed，统一走 timing.current_visible_fraction
-    ///（`start_fraction + (target - start) * ease_out_quad(progress)`）。
+    /// Issue #815: 只有 `Timed` unit 允许消费这个值去算逐帧 clip。`CaretTrack` unit
+    /// 的边界是 caret.x 本身，必须走 `AnimatedSlice::compute_frame_by_caret_ingest`。
     pub fn current_visible_fraction(&self, now: Instant) -> f64 {
         self.timing.current_visible_fraction(now)
     }
@@ -136,8 +138,8 @@ impl PreparedVisualUnit {
     /// Issue #690 评论 5675007226 步骤 3: 可见比例成为新单元的起点。
     /// Issue #690 评论 5683759796: started_at 留 None，等进入 Rendering 再用
     /// sample.frame_now 启动，不再用 frame.sampled_at 提前计时。
-    /// Issue #785: 对 InsertReveal/DeleteConceal，timing_start_fraction =
-    /// frame.visible_fraction（从当前可见比例继续，不从 0 重播）。
+    /// Issue #815: `CaretTrack` unit 直接 return——它的连续性由 cursor track 的
+    /// handoff 承担（先采样旧 track 当前帧，新 track 从这个当前 caret 连到新目标）。
     pub fn rebase_from_frame(&mut self, frame: &RebaseFrame) {
         self.slice
             .rebase_from(frame.x, frame.y, frame.opacity, frame.visible_fraction);
@@ -151,6 +153,11 @@ impl PreparedVisualUnit {
             AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => 0.0,
             _ => frame.visible_fraction,
         };
+        // Issue #815: CaretTrack unit 没有独立时间线，start_fraction 不参与逐帧 clip；
+        // 它的连续性由 RebaseCaretHandoff 承担（新 track 从旧 track 当前帧连到新目标）。
+        if self.timing.is_caret_track() {
+            return;
+        }
         self.timing
             .rebase_from_frame(timing_start_fraction, frame.remaining_duration_ms);
     }
@@ -191,21 +198,20 @@ pub(crate) struct RebaseFrame {
     pub remaining_duration_ms: u64,
 }
 
-/// Issue #690 评论 5681206040 / Issue #808: coordinated caret 的正式视觉 track。
+/// Issue #690 评论 5681206040 / Issue #815: coordinated caret 的正式视觉 track。
 ///
-/// Issue #808: 光标轨迹从文字的 `ease_out_quad` 解开。cursor track 用光标自己的
-/// `ease_out_cubic` easing；文字 reveal/conceal 用文字自己的 `ease_out_quad`。
-/// duration 不同、曲线也允许不同。文字 progress 只来自文字自己的 timeline，
-/// 光标 progress 只来自 cursor track。
+/// Issue #815 评论 6042062633 修改 3: 这条 track 是协同动画的唯一运动事实源。
+/// cursor track 走自己的 `ease_out_cubic`；协同 InsertReveal/DeleteConceal 的逐帧
+/// 吞吐边界直接用本 track 当前帧的 caret.x 算出，不再拥有自己的时间线。
+/// 非协同文字动画（独立"打字动画"）和 Reflow 仍走自己的 `ease_out_quad` 时间线。
 ///
 /// 收成为一个完整 caret track 后：
 /// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
-///   `started_at = now`，`duration_ms = 事务时长`。
+///   `started_at = None`，`duration_ms = 事务时长`。
 /// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
 ///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，`started_at = now`，
 ///   `duration_ms` 用旧 track 剩余时长，不再借任何文字 unit 的 progress。
-/// - `sample_coordinated_cursor_rect_at` 只采样光标，不再保留"文字效果跟着光标边界"
-///   这种旧注释/旧语义。
+/// - 文字层与光标层消费同一次 `sample_coordinated_motion_frame` 采样。
 /// - 下一次 rebase 再从同一个 caret track 采样，不能回头使用逻辑 `old_cursor_rect`。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedCursorVisualTrack {
@@ -321,7 +327,7 @@ impl PreparedCursorVisualTrack {
     /// Issue #808: 光标 track 用自己的 `ease_out_cubic` easing，不再共用文字的
     /// `ease_out_quad`。文字 reveal/conceal 用文字自己的 easing；duration 不同、
     /// 曲线也允许不同。此方法只采样光标，不保留"文字效果跟着光标边界"的旧语义。
-    /// `sample_coordinated_cursor_rect_at` 通过 `sampled_rect_at_progress(progress(now))` 调用。
+    /// `sample_caret_track_frame` 通过 `sampled_rect_at_progress(progress(now))` 调用。
     pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
         let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
         let x = self.from.x + (self.to.x - self.from.x) * eased;
@@ -473,15 +479,17 @@ pub(crate) struct PreparedTextVisualTransaction {
     ///
     /// 替代之前的 `cursor_visual_from` / `cursor_visual_to`（只有端点没有时间状态）。
     /// 自带 `started_at` / `duration_ms`，不再借任何文字 unit 的 progress。
-    /// Issue #808: 光标 track 用自己的 `ease_out_cubic` easing，文字用 `ease_out_quad`，
-    /// 两条时间线完全独立。协同只表示同事务/同首帧/同 rebase，不表示同速度/同曲线。
+    /// Issue #815 评论 6042062633 修改 3: 协同动画里这条 track 是**唯一**的运动事实源。
+    /// 每帧只采样一次（`sample_coordinated_motion_frame`），采到的 caret x/y/
+    /// visual_line_id/progress/rect 同时喂给文字吞吐层和光标层，文字不再自己算一次时间。
     ///
     /// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`。
     /// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
     ///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，
-    ///   `started_at = now`，`duration_ms` 用旧 track 剩余时长。
-    /// - `sample_coordinated_cursor_rect_at` 只采样光标，不保留"文字效果跟着光标边界"旧语义。
+    ///   `started_at = None`，`duration_ms` 用旧 track 剩余时长。绝不能退回逻辑旧 caret。
     /// - `None` 表示本事务没有视觉 caret track（CursorOnly 或无 old/new cursor rect）。
+    ///   协同模式下这笔事务会被 builder 拒绝入队并记 `editor.anim.transaction_skipped`，
+    ///   不允许退化成"文字自己播、光标不动"。
     pub cursor_visual_track: Option<PreparedCursorVisualTrack>,
     pub cancel_reason: Option<String>,
     pub texture_prepared: bool,
@@ -494,10 +502,11 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// `CursorController::cursor_owner_epoch`，使本事务的 `cursor_owner_epoch`
     /// 不再等于当前 epoch。
     ///
-    /// Issue #735 评论 5773604666 问题3 / Issue #785: 失去 caret ownership 时，
-    /// 只退休 cursor motion ownership（`caret_motion_retired = true`），
-    /// 不再把 InsertReveal/DeleteConceal 推到终态——文字 unit 有独立时间线，
-    /// 按自己的 Timed timing 继续播完。ReflowMove/ReflowCrossFade 同样继续。
+    /// Issue #735 评论 5773604666 问题3 / Issue #815: 失去 caret ownership 时，
+    /// 退休本事务的 caret motion（`caret_motion_retired = true` +
+    /// `retire_caret_driven_units()`），协同 InsertReveal/DeleteConceal（CaretTrack）
+    /// 立刻收口到终态——它们的边界来自这条 track，track 不再推进就不能停在半路。
+    /// `Timed` unit（ReflowMove/ReflowCrossFade、非协同吞吐字）按自己的时间线继续播完。
     /// 不再存在"同一笔正文吞吐 transaction 还活着，但 caret_owner 已经不是它"
     /// 的状态。
     pub cursor_owner_epoch: u64,
@@ -508,15 +517,14 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// && !owns_caret`（本帧有 CaretDriven units 但不是 owner），或在
     /// `find_cursor_transaction_for_target` 中发现 epoch 不一致时，此字段置 true。
     ///
-    /// Issue #785 后：`retire_caret_driven_units` 改为 no-op，文字 unit 有独立
-    /// 时间线不被推到终态。`caret_motion_retired = true` 只表示不再拥有
-    /// caret motion（caret track 不再推进），文字 unit 按自己 Timed 时间线继续播完。
+    /// Issue #815: `retire_caret_driven_units()` 把所有 CaretTrack unit 置 retired，
+    /// 协同吞吐字立刻收口到终态；`Timed` unit 不受影响，按自己的时间线继续播完。
     ///
     /// 之后 `active_text_transaction_key_with_epoch` 永远跳过此事务，
     /// `sample_coordinated_motion_frame` 不会再给它 `owner_key`，
     /// 已 Snap 回 canonical 的旧 caret 轨迹不会重新接管。
-    /// ReflowMove/ReflowCrossFade / InsertReveal/DeleteConceal 作为独立 Timed track
-    /// 继续播完，事务只等剩余 Timed unit 完成。
+    /// ReflowMove/ReflowCrossFade 和非协同 InsertReveal/DeleteConceal 作为独立 Timed
+    /// track 继续播完，事务只等剩余 Timed unit 与 cursor track 完成。
     pub caret_motion_retired: bool,
     /// Issue #710 评论 5731145076 症状五/六 / 评论 5732160521 问题 3:
     /// 事务的视觉 affected byte range，分 old/new 两侧保存。
@@ -580,21 +588,31 @@ impl PreparedTextVisualTransaction {
         self.timeline.progress(now)
     }
 
-    /// Issue #735 评论 5773604666 问题3 / Issue #785: 收口本事务的 CaretDriven units。
+    /// Issue #735 评论 5773604666 问题3 / Issue #815: 收口本事务的 CaretTrack units。
     ///
-    /// Issue #785 后：文字 unit（InsertReveal/DeleteConceal）有独立时间线，
-    /// 不需要 caret 收口。此方法改为 **no-op** 保留方法签名避免调用点编译错误。
-    /// 真正的 cursor motion ownership 退休由 `caret_motion_retired = true`
-    /// 标记（在 coordinator.rs / render_plan_builder.rs 中处理），文字 unit 按
-    /// 自己的 Timed 时间线继续播完。
+    /// 协同 InsertReveal/DeleteConceal 的逐帧边界来自本事务的 cursor track。
+    /// 一旦失去 caret motion ownership（epoch 切换 / layout basis 过期，由
+    /// `caret_motion_retired = true` 在 coordinator.rs / render_plan_builder.rs
+    /// 中标记），这条 track 不再推进，吞吐字必须立刻收口到终态。
+    /// `Timed` unit（ReflowMove/ReflowCrossFade、非协同吞吐字）不受影响，
+    /// 按自己的时间线播完。
     pub(crate) fn retire_caret_driven_units(&mut self) {
-        // Issue #785: no-op。文字 unit 有独立时间线，不需要 caret 收口。
+        // Issue #815 评论 6042062633 修改 3: 协同 InsertReveal/DeleteConceal 是
+        // `VisualUnitTiming::CaretTrack`，逐帧边界来自本事务的 cursor track。
+        // 失去 caret motion ownership（epoch 切换 / layout basis 过期）后，这条
+        // track 不再推进，吞吐字必须立刻收口到终态，不能停在半路等一条死掉的轨迹。
+        // `retired` 之后 `progress()` 返回 1.0，事务完成判断也不再等它。
+        // `Timed` unit（ReflowMove/ReflowCrossFade、非协同吞吐字）不受影响，
+        // 按自己的时间线播完。
+        for unit in &mut self.units {
+            unit.timing.retire_caret_motion();
+        }
     }
 
     /// Issue #735 评论 5773604666 问题3: 判断本事务是否还有未播完的 Timed unit
     ///（ReflowMove/ReflowCrossFade）。
     ///
-    /// 供测试验证收口语义：`retire_caret_driven_units` 后，
+    /// 供测试验证收口语义：`retire_caret_driven_units` 只收口 CaretTrack unit，Timed unit 不受影响，
     /// - 返回 `false`：没有 Timed unit 或 Timed unit 已全部播完，事务可立即 Completed。
     /// - 返回 `true`：还有 Timed unit 在播，事务需等它们播完再 Completed。
     #[cfg(test)]
@@ -607,13 +625,21 @@ impl PreparedTextVisualTransaction {
         })
     }
 
-    /// Issue #735 评论 5773604666 问题3 / Issue #785: 判断本事务是否含 CaretDriven units
-    ///（InsertReveal/DeleteConceal）。
+    /// Issue #735 评论 5773604666 问题3 / Issue #815: 判断本事务是否还有**未被收口**的
+    /// CaretTrack units（协同 InsertReveal/DeleteConceal）。
     ///
-    /// Issue #785 后：不再有 CaretDriven 变体，始终返回 `false`。保留方法签名
-    /// 避免大量调用点编译错误；调用方拿到 false 后会跳过 CaretDriven 相关分支。
+    /// 已被 `retire_caret_driven_units` 收口的单元返回 false。
     pub(crate) fn has_caret_driven_units(&self) -> bool {
-        false
+        self.units.iter().any(|u| u.timing.is_caret_driven())
+    }
+
+    /// Issue #815 评论 6042062633 修改 6: 本事务是否还有**任何** CaretTrack unit
+    /// （含已 retire 的）。
+    ///
+    /// 完成判断用它区分两类 unit：CaretTrack unit 随 cursor track 一起结束，
+    /// 不参与"每条 unit 自己的 progress 都 >= 1"的等待。
+    pub(crate) fn has_caret_track_units(&self) -> bool {
+        self.units.iter().any(|u| u.timing.is_caret_track())
     }
 
     /// 采集本事务中尚未播完的视觉单元当前帧，交棒给下一个事务。
@@ -628,8 +654,9 @@ impl PreparedTextVisualTransaction {
     /// 改用 `animation_coordinator::collect_rebase_frame_for_unit_without_caret` 对 Reveal/Conceal
     /// 统一从自己的 Timed 文字 timeline 取 visible_fraction。此方法保留供 #690 测试验证 per-unit progress 行为。
     ///
-    /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算 visible_fraction 和
-    /// remaining_duration_ms。不再有 CaretDriven 分支。
+    /// Issue #815: `Timed` unit 从自己的时间线算 visible_fraction 和
+    /// remaining_duration_ms；`CaretTrack` unit 没有独立时间线（elapsed/duration 都为 0），
+    /// 它的 rebase 连续性由 cursor track 的 handoff 承担。
     #[cfg(test)]
     pub fn collect_rebase_frames(&self, now: Instant) -> Vec<RebaseFrame> {
         self.units
@@ -638,7 +665,7 @@ impl PreparedTextVisualTransaction {
             .map(|unit| {
                 let visible_fraction = unit.current_visible_fraction(now);
                 let frame = unit.slice.compute_frame(visible_fraction);
-                // Issue #785: 所有 unit 都是 Timed，从自己的时间线算 elapsed/duration。
+                // Issue #815: Timed 从自己的时间线算 elapsed/duration；CaretTrack 无独立时间线。
                 let (elapsed_ms, duration_ms) = match &unit.timing {
                     VisualUnitTiming::Timed {
                         started_at,
@@ -651,6 +678,9 @@ impl PreparedTextVisualTransaction {
                         };
                         (elapsed, *duration_ms)
                     }
+                    // Issue #815: CaretTrack 没有自己的时间线。协同吞吐字的 rebase 连续性
+                    // 由 cursor track 的 handoff 承担，不靠这里的 visible_fraction 交棒。
+                    VisualUnitTiming::CaretTrack { .. } => (0, 0),
                 };
                 let remaining_duration_ms = duration_ms.saturating_sub(elapsed_ms);
                 RebaseFrame {

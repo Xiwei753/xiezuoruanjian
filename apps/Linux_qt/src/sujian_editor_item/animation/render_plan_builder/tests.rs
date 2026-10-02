@@ -1,23 +1,32 @@
 use super::super::coordinator::LinuxEditorAnimationCoordinator;
 use super::*;
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::cursor_motion::sample_coordinated_cursor_rect_at;
+use crate::sujian_editor_item::animated_slice::AnimatedSlice;
+use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
 use crate::sujian_editor_item::animation::rebase::match_rebase_frames;
-use crate::sujian_editor_item::animation::transaction_builder::build_delete_conceal_slices;
 use crate::sujian_editor_item::animation::{
-    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame,
+    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit,
     TransactionTimeline, VisualUnitTiming,
 };
-use crate::sujian_editor_item::animation_mode::AnimationMode;
 use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
+use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, SourceRect};
 use crate::sujian_editor_item::render_plan::{
-    CoordinatedMotionFrame, CursorRenderState, CursorStyle, FrameContext, SampledCaretFrame,
-    SelectionPreeditPlan, SelectionPreeditStyle,
+    CoordinatedMotionFrame, CursorRenderState, CursorStyle, FrameContext, SelectionPreeditPlan,
+    SelectionPreeditStyle,
 };
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use std::time::Duration;
-use writer_core::editor::{OffsetMap, Utf8ByteOffset};
+use writer_core::editor::OffsetMap;
+
+/// Issue #815 评论 6042062633 修改 6: 文字层与光标层消费同一次 caret 采样。
+/// 测试里 `compute_coordinated_cursor_position` 需要的就是这份采样，
+/// 所以这里统一走 `sample_coordinated_motion_frame` 造出同一份 motion frame。
+fn test_coordinated_motion(
+    coord: &LinuxEditorAnimationCoordinator,
+    sample: &AnimationFrameSample,
+    cursor_owner_epoch: u64,
+) -> CoordinatedMotionFrame {
+    coord.sample_coordinated_motion_frame(sample, cursor_owner_epoch, LayoutRevision::initial())
+}
 
 /// `match_rebase_frames` 现在作用在视觉单元上（Issue #690 评论 5675007226 步骤 3）。
 fn wrap_units(slices: Vec<AnimatedSlice>) -> Vec<PreparedVisualUnit> {
@@ -148,6 +157,8 @@ fn elapsed_unit(
         VisualUnitTiming::Timed { started_at, .. } => {
             *started_at = Some(now - Duration::from_millis(elapsed_ms));
         }
+        // Issue #815: CaretTrack 没有自己的时间线，起点在 cursor track 上。
+        VisualUnitTiming::CaretTrack { .. } => {}
     }
     unit
 }
@@ -556,7 +567,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
     let mut old_sample = AnimationFrameSample::new(now);
     old_sample.set_progress(old_key, 0.5);
     let (cx_old, _, _) = coord
-        .compute_coordinated_cursor_position(&old_sample, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord, &old_sample, 0))
         .expect("旧事务应能算出协同光标");
     assert!(
         (cx_old - 205.0).abs() < 1e-6,
@@ -665,7 +676,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
     );
 }
 
-/// 评论 5681206040 问题 1：`sample_coordinated_cursor_rect_at()` 没有采样旧事务
+/// 评论 5681206040 问题 1：`sample_caret_track_frame()` 没有采样旧事务
 /// 自己的 visual caret track（`tx.cursor_visual_from` / `tx.cursor_visual_to`），
 /// 仍然固定用 `old_cursor_rect / new_cursor_rect`。连续交棒（第二次 rebase）时
 /// 采样到的光标会回到逻辑 old caret 起算，与旧事务当前屏幕光标不一致，
@@ -715,7 +726,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
     let mut sample_b = AnimationFrameSample::new(now);
     sample_b.set_progress(key_b, 0.5);
     let (cx_b, _, _) = coord
-        .compute_coordinated_cursor_position(&sample_b, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord, &sample_b, 0))
         .expect("事务 B 应能算出协同光标");
     assert!(
         (cx_b - expected_screen_cursor).abs() < 1e-6,
@@ -725,7 +736,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
     );
 
     // ── 第二次 rebase：take_rebase_frames 采样事务 B 的屏幕光标 ──
-    // sample_coordinated_cursor_rect_at(B, now) 应返回事务 B 当前屏幕光标 62.5。
+    // sample_caret_track_frame(B_track, now) 应返回事务 B 当前屏幕光标 62.5。
     // 当前缺陷：reflow 分支用 old_cursor_rect=100, new_cursor_rect=20
     //   → 100 + (20-100)*0.75 = 40，而非屏幕上的 62.5。
     let (_rebase_frames, sampled_cursor) =
@@ -745,7 +756,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
 }
 
 /// 评论 5681206040 问题 2：cursor reflow 仍然"随便拿第一个 reflow unit 的 progress"。
-/// `sample_coordinated_cursor_rect_at()` 和 `compute_coordinated_cursor_position()` 里
+/// `sample_caret_track_frame()` 和 `compute_coordinated_cursor_position()` 里
 /// `reflow_progress()` 遍历 `tx.units`，遇到第一个 `ReflowMove/ReflowCrossFade` 就直接
 /// 返回它的 progress。视觉单元各自持有 `started_at / duration_ms`，rebase 后不同 unit
 /// 可能有不同剩余时长。第一个 reflow unit 可能已经到 1.0，另一个与当前 caret 更相关的
@@ -780,7 +791,7 @@ fn issue690_comment5681206040_reflow_progress_should_not_take_first_unit() {
     let mut sample_c = AnimationFrameSample::new(now);
     sample_c.set_progress(key_c, 0.2);
     let (cx_c, _, _) = coord
-        .compute_coordinated_cursor_position(&sample_c, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord, &sample_c, 0))
         .expect("事务 C 应能算出协同光标");
 
     // 期望：unit2 还在 progress=0.2，事务未完成，光标不应已到 new_cursor_rect.x=200。
@@ -839,7 +850,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     let mut sample_a = AnimationFrameSample::new(now);
     sample_a.set_progress(key_a, 0.5);
     let (cx_a, _, _) = coord
-        .compute_coordinated_cursor_position(&sample_a, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord, &sample_a, 0))
         .expect("事务 A 应能算出协同光标");
     assert!(
         (cx_a - expected_a).abs() < 1e-6,
@@ -898,7 +909,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     let mut sample_b = AnimationFrameSample::new(now_after_b);
     sample_b.set_progress(key_b, 0.5);
     let (cx_b, _, _) = coord
-        .compute_coordinated_cursor_position(&sample_b, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord, &sample_b, 0))
         .expect("事务 B 应能算出协同光标");
     assert!(
         (cx_b - expected_b).abs() < 1e-6,
@@ -983,7 +994,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
     let mut sample_d1 = AnimationFrameSample::new(now);
     sample_d1.set_progress(key_d1, 0.2);
     let (cx_d1, _, _) = coord1
-        .compute_coordinated_cursor_position(&sample_d1, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord1, &sample_d1, 0))
         .expect("事务 D1 应能算出协同光标");
 
     assert!(
@@ -1028,7 +1039,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
     let mut sample_d2 = AnimationFrameSample::new(now);
     sample_d2.set_progress(key_d2, 0.2);
     let (cx_d2, _, _) = coord2
-        .compute_coordinated_cursor_position(&sample_d2, 0)
+        .compute_coordinated_cursor_position(0, &test_coordinated_motion(&coord2, &sample_d2, 0))
         .expect("事务 D2 应能算出协同光标");
 
     assert!(
@@ -1048,38 +1059,44 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         cx_d2
     );
 
-    // ── 额外验证：sample_coordinated_cursor_rect_at 也不依赖 units 顺序 ──
-    let sampled1 = sample_coordinated_cursor_rect_at(
+    // ── 额外验证：sample_caret_track_frame 也不依赖 units 顺序 ──
+    let sampled1 = sample_caret_track_frame(
         coord1
             .prepared_queue
             .active_transactions()
             .iter()
             .find(|t| t.key == key_d1)
-            .unwrap(),
+            .unwrap()
+            .cursor_visual_track
+            .as_ref()
+            .expect("事务 D1 应有 cursor track"),
         now,
     )
-    .expect("事务 D1 应能采样到光标");
-    let sampled2 = sample_coordinated_cursor_rect_at(
+    .rect;
+    let sampled2 = sample_caret_track_frame(
         coord2
             .prepared_queue
             .active_transactions()
             .iter()
             .find(|t| t.key == key_d2)
-            .unwrap(),
+            .unwrap()
+            .cursor_visual_track
+            .as_ref()
+            .expect("事务 D2 应有 cursor track"),
         now,
     )
-    .expect("事务 D2 应能采样到光标");
+    .rect;
 
     assert!(
         (sampled1.x - sampled2.x).abs() < 1e-6,
-        "Issue #690 评论 5681206040: sample_coordinated_cursor_rect_at 也不应依赖 units 顺序，\
+        "Issue #690 评论 5681206040: sample_caret_track_frame 也不应依赖 units 顺序，\
              但 got sampled1.x={} vs sampled2.x={}",
         sampled1.x,
         sampled2.x
     );
     assert!(
         (sampled1.x - expected_d).abs() < 1e-6,
-        "sample_coordinated_cursor_rect_at 结果应为 {}，got {}",
+        "sample_caret_track_frame 结果应为 {}，got {}",
         expected_d,
         sampled1.x
     );
@@ -1383,6 +1400,8 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             );
             (started_at.is_none(), *duration_ms)
         }
+        // Issue #815: CaretTrack 没有自己的时间线，不做 rebase 交棒。
+        VisualUnitTiming::CaretTrack { .. } => (true, 0),
     };
     assert!(
         new_started_at_is_none,
@@ -1487,15 +1506,6 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
     sample_0.set_progress(new_key, 0.0);
     // Issue #727 约束 3: InsertReveal/DeleteConceal 需要 CoordinatedMotionFrame.caret
     // 不为 None 才能生成 glyph。第一帧 caret track progress = 0，caret 在 from = (100, 0)。
-    let coordinated_frame_0 = CoordinatedMotionFrame {
-        caret: Some(SampledCaretFrame {
-            x: 100.0,
-            y: 0.0,
-            visual_line_id: None,
-            progress: 0.0,
-        }),
-        owner_key: Some(new_key),
-    };
     let (plan_0, _, _) =
         coord.build_text_animation_plan_with_sample(&sample_0, 0, LayoutRevision::initial());
 
@@ -1531,6 +1541,8 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
                          应等于第一帧 frame_now"
                 );
             }
+            // Issue #815: CaretTrack 的起点在 cursor track 上，不由 unit 的 started_at 决定。
+            VisualUnitTiming::CaretTrack { .. } => {}
         }
         let track_progress = track.progress(frame_now_0);
         let unit_progress = tx_ref.units[0].progress(frame_now_0);
@@ -1565,15 +1577,6 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
     sample_mid.set_progress(new_key, 0.5);
     // 推进 25ms 后 caret track progress = 0.5，eased = 0.75，
     // caret 在 100 + (220-100)*0.75 = 190。
-    let coordinated_frame_mid = CoordinatedMotionFrame {
-        caret: Some(SampledCaretFrame {
-            x: 190.0,
-            y: 0.0,
-            visual_line_id: None,
-            progress: 0.5,
-        }),
-        owner_key: Some(new_key),
-    };
     let (_plan_mid, _, _) =
         coord.build_text_animation_plan_with_sample(&sample_mid, 0, LayoutRevision::initial());
     {
@@ -1615,15 +1618,6 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
     let mut sample_1 = AnimationFrameSample::new(frame_now_1);
     sample_1.set_progress(new_key, 1.0);
     // 推进 50ms 后 caret track progress = 1.0，caret 在 to = (220, 0)。
-    let coordinated_frame_1 = CoordinatedMotionFrame {
-        caret: Some(SampledCaretFrame {
-            x: 220.0,
-            y: 0.0,
-            visual_line_id: None,
-            progress: 1.0,
-        }),
-        owner_key: Some(new_key),
-    };
     let (_plan_1, _, _) =
         coord.build_text_animation_plan_with_sample(&sample_1, 0, LayoutRevision::initial());
     {

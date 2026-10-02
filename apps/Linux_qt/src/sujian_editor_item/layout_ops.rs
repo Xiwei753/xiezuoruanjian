@@ -277,19 +277,20 @@ impl SujianEditorItem {
         // Issue #810 评论 5934060933 问题2: 不要在 generation 已分配后直接对
         // build_from_canonical_document 用裸 `?`。Err 时 generation 还没有交给
         // pending promoted layout，必须由当前函数释放，避免泄漏 C++ QTextLayout generation。
-        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-            revision,
-            &doc_snapshot,
-            scroll_y,
-            viewport_h,
-            committed_text,
-        ) {
-            Ok(s) => s,
-            Err(err) => {
-                crate::editor::layout::clear_layout_generation(generation);
-                return Err(err);
-            }
-        };
+        let mut snapshot =
+            match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+                revision,
+                &doc_snapshot,
+                scroll_y,
+                viewport_h,
+                committed_text,
+            ) {
+                Ok(s) => s,
+                Err(err) => {
+                    crate::editor::layout::clear_layout_generation(generation);
+                    return Err(err);
+                }
+            };
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
@@ -473,19 +474,20 @@ impl SujianEditorItem {
         // Issue #810 评论 5934060933 问题2: 不要在 generation 已分配后直接对
         // build_from_canonical_document 用裸 `?`。Err 时 generation 还没释放，
         // 必须由当前函数释放，避免泄漏 C++ QTextLayout generation。
-        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-            revision,
-            &doc_snapshot,
-            scroll_y,
-            viewport_h,
-            virtual_text,
-        ) {
-            Ok(s) => s,
-            Err(err) => {
-                crate::editor::layout::clear_layout_generation(generation);
-                return Err(err);
-            }
-        };
+        let mut snapshot =
+            match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+                revision,
+                &doc_snapshot,
+                scroll_y,
+                viewport_h,
+                virtual_text,
+            ) {
+                Ok(s) => s,
+                Err(err) => {
+                    crate::editor::layout::clear_layout_generation(generation);
+                    return Err(err);
+                }
+            };
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;

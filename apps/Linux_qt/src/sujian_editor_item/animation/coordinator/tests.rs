@@ -1,11 +1,8 @@
 use super::*;
-use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit, TextVisualOperationKind,
-    TransactionTimeline, VisualUnitTiming,
+    PreparedTextVisualTransaction, TextVisualOperationKind, TransactionTimeline,
 };
 use crate::sujian_editor_item::animation_mode::AnimationMode;
-use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 /// 构造一笔处于 Pending 状态（活跃，非 Completed/Cancelled）的最小事务，

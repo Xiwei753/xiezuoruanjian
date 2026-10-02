@@ -195,11 +195,14 @@ fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
         src.contains(init_marker_a) && src.contains(init_marker_b),
         "修复点4: build_render_plan_full 应初始化 cursor_sample_outcome = Idle"
     );
-    // Issue #727 约束 6: compute_coordinated_cursor_position 现在接收 cursor_owner_epoch 参数
-    let coord_call = "self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)";
+    // Issue #727 约束 6: compute_coordinated_cursor_position 接收 cursor_owner_epoch 参数。
+    // Issue #815 评论 6042062633 修改 6: 同时接收文字层已经采好的 CoordinatedMotionFrame，
+    // 光标层不再自己按 frame_sample 重新采样一次 track。
+    let coord_call =
+        "self.compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)";
     assert!(
         src.contains(coord_call),
-        "修复点4: build_render_plan_full 应调用 compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)"
+        "修复点4: build_render_plan_full 应调用 compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)"
     );
     // 关键：compute_coordinated_cursor_position 成功分支（Some((cx, cy_doc, ch))）内
     // 应把 cursor_sample_outcome 设为 Coordinated。

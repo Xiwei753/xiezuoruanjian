@@ -440,8 +440,8 @@ impl LinuxEditorAnimationCoordinator {
     ///
     /// Issue #735 评论 5773604666 问题3: epoch 不一致时不再只是 fall through，
     /// 而是触发收口逻辑——调用 `retire_caret_driven_units_for_transaction` 把
-    /// CaretDriven units（InsertReveal/DeleteConceal）的 `start_fraction` 设为
-    /// `target_fraction`（终态），并置 `caret_motion_retired = true`。
+    /// CaretTrack units（协同 InsertReveal/DeleteConceal）收口到终态，并置
+    /// `caret_motion_retired = true`。
     /// ReflowMove/ReflowCrossFade 保留不动，作为独立 passive reflow track 继续。
     /// 不再存在"同一笔正文吞吐 transaction 还活着，但 caret_owner 已经不是它"
     /// 的状态。
@@ -449,17 +449,17 @@ impl LinuxEditorAnimationCoordinator {
     /// 和 `active_text_transaction_key_with_epoch` 一样跳过 basis 不一致的事务。
     /// 旧事务即使 cursor_owner_epoch 一致，若 layout basis 已过期，也不能继续拥有
     /// coordinated caret——否则旧事务用旧 caret track 驱动光标，与 canonical 新布局分叉。
-    /// Issue #735 评论 5773604666 问题3 / Issue #785: 收口指定事务的 caret motion ownership。
     ///
-    /// Issue #785 后：文字 unit（InsertReveal/DeleteConceal）有独立时间线，epoch 失效
-    /// 只退休 cursor motion ownership（`caret_motion_retired = true`），**不把文字动画
-    /// 推到终态**。文字 unit 按自己的 Timed 时间线继续播完/rebase。
+    /// Issue #815 评论 6042062633 修改 3: 协同 InsertReveal/DeleteConceal 的逐帧边界
+    /// 就是本事务那条 cursor track 的当前帧。epoch 失效意味着 track 不再推进，
+    /// 这些吞吐字必须**立刻收口到终态**（`retire_caret_driven_units()`），不能停在半路。
+    /// `Timed` unit（ReflowMove/ReflowCrossFade、非协同吞吐字）不受影响，按自己的
+    /// 时间线继续播完。
     ///
     /// 调用后：
     /// - `active_text_transaction_key_with_epoch` / `active_text_transaction_key`
     ///   永远跳过此事务（`caret_motion_retired == true`），不再给它 owner_key。
-    /// - 文字 unit（InsertReveal/DeleteConceal/ReflowMove/ReflowCrossFade）保留独立时间线
-    ///   继续播完，事务只等剩余 Timed unit 完成。
+    /// - 事务只等剩余 Timed unit 与 cursor track 完成。
     ///
     /// 幂等：对已 retired 的事务再次调用是 no-op。
     pub(crate) fn retire_caret_driven_units_for_transaction(&mut self, key: VisualTransactionKey) {
@@ -476,11 +476,12 @@ impl LinuxEditorAnimationCoordinator {
         if tx.caret_motion_retired {
             return;
         }
-        // Issue #785: 文字 unit 有独立时间线，epoch 失效只退休 cursor motion ownership，
-        // 不把文字动画推到终态。文字按自己时间线继续/rebase。
+        // Issue #815 评论 6042062633 修改 3: 协同吞吐字的边界来自这条即将失效的 track，
+        // 必须同时收口到终态；Timed unit（Reflow / 非协同吞吐字）保持自己的时间线。
+        tx.retire_caret_driven_units();
         tx.caret_motion_retired = true;
         editor_animation_debug_log(&format!(
-            "retire_caret_motion: key={:?} op={:?} units={} — cursor motion retired, text units continue independently",
+            "retire_caret_motion: key={:?} op={:?} units={} — caret motion retired, coordinated ingest units collapsed to terminal state, Timed units continue independently",
             tx.key,
             tx.operation_kind,
             tx.units.len(),

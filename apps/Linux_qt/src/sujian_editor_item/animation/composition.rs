@@ -134,21 +134,12 @@ impl LinuxEditorAnimationCoordinator {
             coordinated_animation_enabled,
             composition_commit_crossfade: None,
         };
-        let prepared = build_prepared_transaction(spec);
-
-        // Issue #756 评论 5822051193: coordinated 模式下，IME composition update 路径
-        // 也必须有有效 caret motion。普通 Insert/Delete 在 process_transaction 里用
-        // old/new rect.is_some() 做门禁，但 IME 不走 process_transaction，且 composition
-        // commit 可能通过 caret_handoff 仍构造出有效 track。最稳妥的收口是构造完 prepared
-        // 后按最终结果判断：coordinated=true 但 cursor_visual_track 为 None → 不 enqueue，
-        // 直接返回 None，不允许任何文字 unit 单独留下继续播放。
-        if coordinated_animation_enabled && prepared.cursor_visual_track.is_none() {
-            editor_animation_debug_log(&format!(
-                "anim_event: key={:?} op=CompositionUpdate skipped: coordinated=true but cursor_visual_track is None",
-                key,
-            ));
-            return None;
-        }
+        // Issue #815 评论 6042062633 修改 9: IME composition update 与普通 Insert 用同一条
+        // 规则。builder 内部已经做门禁：协同模式下 InsertReveal/DeleteConceal 被标记成
+        // `VisualUnitTiming::CaretTrack`，逐帧吞吐边界与本事务的 commit caret 来自同一次
+        // cursor track 采样；拿不到 track 时 builder 自己记 `editor.anim.transaction_skipped`
+        // 并返回 None，不允许退回"IME 自己一条文字时间线、光标另走一条"。
+        let prepared = build_prepared_transaction(spec)?;
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -352,17 +343,11 @@ impl LinuxEditorAnimationCoordinator {
             coordinated_animation_enabled,
             composition_commit_crossfade,
         };
-        let prepared = build_prepared_transaction(spec);
-
-        // Issue #756 评论 5822051193: coordinated 模式下，IME composition commit/cancel 路径
-        // 也必须有有效 caret motion，与 handle_composition_update 收口一致。
-        if coordinated_animation_enabled && prepared.cursor_visual_track.is_none() {
-            editor_animation_debug_log(&format!(
-                "anim_event: key={:?} op=CompositionCommitOrCancel skipped: coordinated=true but cursor_visual_track is None",
-                key,
-            ));
-            return None;
-        }
+        // Issue #815 评论 6042062633 修改 9: IME composition commit 的候选 InsertReveal、
+        // 必需的 DeleteConceal 与 commit 光标共享同一条 cursor track 的当前帧，
+        // 不再让 IME commit 留在独立文字时间线上。拿不到 track 时 builder 自己记
+        // `editor.anim.transaction_skipped` 并返回 None。
+        let prepared = build_prepared_transaction(spec)?;
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");

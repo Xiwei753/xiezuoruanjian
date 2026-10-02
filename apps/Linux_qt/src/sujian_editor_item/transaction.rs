@@ -43,21 +43,34 @@ impl SujianEditorItem {
 
         // Issue #756: 删除"两个独立开关同时开启才走协同"的判断
         // （typing_animation_enabled && smooth_cursor_enabled）。
-        // 新逻辑：文字动画与光标动画互相独立，任一需要就构造 motion——
-        // - coordinated=true 时：文字与光标各有独立 timeline/easing/duration，
-        //   协同只表示同事务/同首帧/同 rebase，不绑死速度/曲线；
-        //   要求有效 caret motion，caret motion 建不起来时这一笔文字动画也不启动
-        //   （在 pipeline/transaction_builder 内部检查）。
-        // - coordinated=false 时：typing_animation_enabled 只决定文字动画，
-        //   smooth_cursor_enabled 只决定光标动画；任一为 true 都要走 prepare_edit_motion
-        //  （文字动画需要 motion 排版 old/new，光标动画需要 motion 的 caret track）。
+        // Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 + 文字以 caret
+        // 当前帧为吞吐边界；非协同时文字动画与光标动画互相独立。
         // 即 coordinated || typing || smooth 时才调用 prepare_edit_motion。
         let mut motion: Option<PreparedEditMotion> = None;
-        if (self.current_coordinated_animation_enabled
+        let animations_requested = self.current_coordinated_animation_enabled
             || self.current_typing_animation_enabled
-            || self.current_smooth_cursor_enabled)
-            && !self.current_is_scrolling
-        {
+            || self.current_smooth_cursor_enabled;
+        if animations_requested && self.current_is_scrolling {
+            // Issue #815 评论 6042062633 修改 8: 滚动期间抑制动画是显式规则，但这是输入
+            // 路径上"编辑发生了却完全没有动画"的第一个也是最常见的入口，必须记事件。
+            editor_animation_transaction_skipped_event(&AnimationSkipFields {
+                cause: "suppressed_by_scrolling",
+                operation_kind: editor_operation_kind_label(result.operation_kind),
+                typing_animation_enabled: self.current_typing_animation_enabled,
+                smooth_cursor_enabled: self.current_smooth_cursor_enabled,
+                coordinated_animation_enabled: self.current_coordinated_animation_enabled,
+                old_caret_present: false,
+                new_caret_present: false,
+                inserted_range: None,
+                unit_kinds: "",
+                cursor_track_present: false,
+                is_scrolling: true,
+                is_loading: self.current_is_loading,
+                is_applying_format: self.current_is_applying_format,
+                transaction_id: None,
+                generation: 0,
+            });
+        } else if animations_requested {
             motion = self.pipeline.prepare_edit_motion(
                 &ctx,
                 result,
@@ -66,6 +79,9 @@ impl SujianEditorItem {
                 &self.editor_layout,
                 self.cursor_ctrl.cursor_owner_epoch,
             );
+            // Issue #815 评论 6042062633 修改 8: prepare_edit_motion 内部的每一个跳过点
+            // （stale canonical / canonical invariant / caret 几何缺失 / 协同拿不到
+            // cursor track / builder 空事务）都已经记过正式事件，这里不再重复报。
         }
         // Issue #658 评论 5622188166 问题 1: 动画关闭/滚动抑制时不再走
         // fill_visual_transaction_coords_legacy 生成 old/new 动画坐标。
@@ -106,5 +122,20 @@ impl SujianEditorItem {
         // 纹理准备完成后，静态层裁剪区域变化，需要重建 Scene Graph。
         // 布局未变，不需要重新排版，只需要 scene rebuild。
         self.request_scene_rebuild();
+    }
+}
+
+/// Issue #815 评论 6042062633 修改 8: Core 编辑操作类型 -> 动画诊断里的 operation_kind 短名。
+fn editor_operation_kind_label(kind: writer_core::editor::EditorOperationKind) -> &'static str {
+    match kind {
+        writer_core::editor::EditorOperationKind::Insert => "Insert",
+        writer_core::editor::EditorOperationKind::Delete => "Delete",
+        writer_core::editor::EditorOperationKind::Replace => "Replace",
+        writer_core::editor::EditorOperationKind::CursorOnly => "CursorOnly",
+        writer_core::editor::EditorOperationKind::CompositionUpdate => "CompositionUpdate",
+        writer_core::editor::EditorOperationKind::CompositionCommit => "CompositionCommit",
+        writer_core::editor::EditorOperationKind::CompositionCancel => "CompositionCancel",
+        writer_core::editor::EditorOperationKind::Load => "Load",
+        writer_core::editor::EditorOperationKind::Format => "Format",
     }
 }

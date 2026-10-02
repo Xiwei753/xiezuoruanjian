@@ -17,7 +17,7 @@ use super::render_plan::{
     SelectionPreeditStyle,
 };
 use super::*;
-use crate::editor::layout::{run_on_qt_thread, EditorLayout, LayoutParams};
+use crate::editor::layout::{run_on_qt_thread, LayoutParams};
 use qmetaobject::QString;
 use std::time::Instant;
 
@@ -831,9 +831,10 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
 
         // 同一个正文事务应仍在队列中（move 不取消事务），但因 epoch 不一致
         // 已被 `find_cursor_transaction_for_target` 触发收口（caret_motion_retired = true）。
-        // Issue #735 评论 5773604666 问题3 / Issue #785: 新行为——epoch 不一致时
-        // 只退休 cursor motion ownership（caret_motion_retired = true），文字 unit
-        // 有独立 Timed 时间线，不被推到终态，按自己时间线继续。事务 retired，
+        // Issue #735 评论 5773604666 问题3 / Issue #815 评论 6042062633 修改 3:
+        // epoch 不一致时退休 cursor motion ownership（caret_motion_retired = true）。
+        // 协同吞吐字的逐帧边界来自那条已经不再推进的 track，必须收口到终态；
+        // 独立 Timed unit（Reflow / 非协同吞吐字）按自己时间线继续。事务 retired，
         // active_text_transaction_key() 不再返回它。
         let tx_still_in_queue = item
             .pipeline
@@ -860,24 +861,31 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             "Issue #735 评论 5773604666 问题3 / Issue #785: epoch 不一致后事务应被 retired\
              （caret_motion_retired = true，cursor motion 已退休）"
         );
-        // Issue #785: 文字 unit 有独立 Timed 时间线，epoch 失效不把文字推到终态。
-        // 不再断言 start_fraction == target_fraction。文字 unit 按自己时间线继续播完。
-        // 这里只验证 unit 仍是 Timed（独立时间线完好）。
+        // Issue #815 评论 6042062633 修改 3: 协同吞吐字（CaretTrack）失去 owner 后
+        // 必须收口到终态 —— 它的边界就是那条不再推进的 track，停在半路就是"文字被切开"。
+        // 独立 Timed unit（Reflow / 非协同吞吐字）不受影响，继续按自己的时间线播完。
         for unit in &tx_ref.units {
             use super::animated_slice::AnimatedSliceKind;
             use super::animation::VisualUnitTiming;
-            if matches!(
-                unit.slice.kind,
-                AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+            match (
+                matches!(
+                    unit.slice.kind,
+                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+                ),
+                &unit.timing,
             ) {
-                assert!(
-                    matches!(unit.timing, VisualUnitTiming::Timed { .. }),
-                    "Issue #785: epoch 失效后文字 unit 应仍是 Timed（独立时间线不被破坏）"
-                );
+                (true, VisualUnitTiming::CaretTrack { retired }) => assert!(
+                    *retired,
+                    "Issue #815: 协同吞吐字失去 caret ownership 后必须收口到终态（retired=true）"
+                ),
+                (_, VisualUnitTiming::CaretTrack { .. }) => {
+                    panic!("Issue #815: Reflow 不由 caret track 驱动")
+                }
+                (_, VisualUnitTiming::Timed { .. }) => {}
             }
         }
         println!(
-            "[BEHAVIOR_VERIFY] 阶段4: 事务 {:?} 已 retired，cursor motion 已退休，文字 unit 独立时间线继续",
+            "[BEHAVIOR_VERIFY] 阶段4: 事务 {:?} 已 retired，caret ownership 已退休，协同吞吐字收口、Timed unit 独立时间线继续",
             tx_key
         );
         // 验证 has_active_timed_units 语义：收口后事务是否还有活跃 Timed unit

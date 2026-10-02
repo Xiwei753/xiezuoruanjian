@@ -201,6 +201,119 @@ pub(crate) fn editor_animation_diagnostic_event(
     });
 }
 
+/// Issue #815 评论 6042062633 修改 7/8: "编辑发生了但没有动画" 的正式跳过事件字段。
+///
+/// 诊断包里只看 `cause` 就知道是哪一类跳过；但真正的实现要求在
+/// [`editor_animation_transaction_skipped_event`] 的各个调用点已经闭环：
+/// **开启协同动画时，可见字符 Insert 必须拿到 cursor track，
+/// InsertReveal 必须由这同一条 track 驱动。** 拿不到就记事件并跳过，
+/// 不允许退化成"文字自己播、光标不动"。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnimationSkipFields<'a> {
+    /// 跳过原因短码，例如 `suppressed_by_context` / `caret_geometry_missing` /
+    /// `missing_inserted_range` / `coordinated_without_cursor_track` /
+    /// `empty_units_and_cursor_track` / `composition_commit_build_failed`。
+    pub cause: &'a str,
+    pub operation_kind: &'a str,
+    pub typing_animation_enabled: bool,
+    pub smooth_cursor_enabled: bool,
+    pub coordinated_animation_enabled: bool,
+    pub old_caret_present: bool,
+    pub new_caret_present: bool,
+    pub inserted_range: Option<(usize, usize)>,
+    pub unit_kinds: &'a str,
+    pub cursor_track_present: bool,
+    pub is_scrolling: bool,
+    pub is_loading: bool,
+    pub is_applying_format: bool,
+    pub transaction_id: Option<u64>,
+    pub generation: u64,
+}
+
+/// Issue #815 评论 6042062633 修改 7/8: 记录 `editor.anim.transaction_skipped` 正式诊断事件。
+///
+/// 以前这些跳过点都是静默 `return None`（或只有 env-gated debug log），诊断包里看到的是
+/// "只有 Delete 没有 Insert"，完全猜不出原因。现在每一个跳过点都必须报出原因。
+pub(crate) fn editor_animation_transaction_skipped_event(fields: &AnimationSkipFields<'_>) {
+    use std::collections::BTreeMap;
+    let mut f = BTreeMap::new();
+    if let Some(id) = fields.transaction_id {
+        f.insert("transaction_id".to_string(), serde_json::json!(id));
+    }
+    f.insert(
+        "generation".to_string(),
+        serde_json::json!(fields.generation),
+    );
+    f.insert(
+        "cause".to_string(),
+        serde_json::Value::String(fields.cause.to_string()),
+    );
+    f.insert(
+        "operation_kind".to_string(),
+        serde_json::Value::String(fields.operation_kind.to_string()),
+    );
+    f.insert(
+        "typing_animation_enabled".to_string(),
+        serde_json::json!(fields.typing_animation_enabled),
+    );
+    f.insert(
+        "smooth_cursor_enabled".to_string(),
+        serde_json::json!(fields.smooth_cursor_enabled),
+    );
+    f.insert(
+        "coordinated_animation_enabled".to_string(),
+        serde_json::json!(fields.coordinated_animation_enabled),
+    );
+    f.insert(
+        "old_caret_present".to_string(),
+        serde_json::json!(fields.old_caret_present),
+    );
+    f.insert(
+        "new_caret_present".to_string(),
+        serde_json::json!(fields.new_caret_present),
+    );
+    f.insert(
+        "inserted_range".to_string(),
+        match fields.inserted_range {
+            Some((s, e)) => serde_json::json!([s, e]),
+            None => serde_json::Value::Null,
+        },
+    );
+    f.insert(
+        "unit_kinds".to_string(),
+        serde_json::Value::String(fields.unit_kinds.to_string()),
+    );
+    f.insert(
+        "cursor_track_present".to_string(),
+        serde_json::json!(fields.cursor_track_present),
+    );
+    f.insert(
+        "is_scrolling".to_string(),
+        serde_json::json!(fields.is_scrolling),
+    );
+    f.insert(
+        "is_loading".to_string(),
+        serde_json::json!(fields.is_loading),
+    );
+    f.insert(
+        "is_applying_format".to_string(),
+        serde_json::json!(fields.is_applying_format),
+    );
+
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Warn,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "editor.anim.transaction_skipped".to_string(),
+        target: "editor.anim".to_string(),
+        // 日志只暴露 cause —— 其余字段用于确认"是不是被哪个开关关掉了"。
+        message: Some(fields.cause.to_string()),
+        fields: f,
+    });
+}
+
 #[derive(QObject)]
 pub struct SujianEditorItem {
     #[allow(dead_code)]

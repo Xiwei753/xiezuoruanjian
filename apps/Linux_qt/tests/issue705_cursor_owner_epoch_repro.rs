@@ -163,18 +163,22 @@ fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
 fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
     let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn compute_coordinated_cursor_position", 2200);
-    // 前提:函数确实基于 active_text_transaction_key 取事务
-    let uses_active_key = window.contains("self.active_text_transaction_key()");
+    // Issue #815 评论 6042062633 修改 3/6: 光标位置改由文字层已经采好的
+    // CoordinatedMotionFrame 提供（owner_key + caret 本帧采样），不再自己
+    // active_text_transaction_key() 重新找一遍事务。
+    // 前提:函数消费 owner_key 取事务
+    let uses_owner_key = window.contains("motion.owner_key");
+    let uses_sampled_caret = window.contains("motion.caret");
     let uses_old_new_rect =
-        window.contains("old_cursor_rect") && window.contains("new_cursor_rect");
+        window.contains("new_cursor_rect") || window.contains("old_cursor_rect");
     println!(
-        "[BUGFIX_REPRO_TRACE] B compute_coordinated: uses_active_key={} uses_old_new_rect={}",
-        uses_active_key, uses_old_new_rect
+        "[BUGFIX_REPRO_TRACE] B compute_coordinated: uses_owner_key={} uses_sampled_caret={} uses_old_new_rect={}",
+        uses_owner_key, uses_sampled_caret, uses_old_new_rect
     );
     assert!(
-        uses_active_key && uses_old_new_rect,
-        "前提:compute_coordinated_cursor_position 必须基于 active_text_transaction_key \
-         和事务 old/new cursor rect 计算位置"
+        uses_owner_key && uses_sampled_caret && uses_old_new_rect,
+        "前提:compute_coordinated_cursor_position 必须基于本帧 CoordinatedMotionFrame \
+         (owner_key + caret) 与事务 new cursor rect 计算位置"
     );
     // 复现断言:计算前应有 cursor owner epoch / 所有权失效检查。
     // 当前代码没有 → FAIL → 复现。

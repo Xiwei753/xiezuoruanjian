@@ -1,3 +1,4 @@
+use super::edit_motion::CursorRect;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::qt_text_node::AnimationClipRect;
@@ -166,12 +167,15 @@ impl Default for CursorSampleOutcome {
 
 /// Issue #727 评论 5754041813 约束 3: 一帧采样的 caret geometry。
 ///
-/// 由 `build_render_plan_full` 在入口处统一采样一次，供 cursor layer 和文字
-/// reveal/conceal 共享同一份 caret geometry。文字层不再自己重新采样 caret。
+/// 协同模式每帧的**唯一** caret 采样。由 `sample_coordinated_motion_frame` 在
+/// 同一个 `frame_now` 上采样 owner 事务的 cursor track 一次得到。
+///
+/// Issue #815 评论 6042062633 修改 3: cursor layer 和文字层（InsertReveal/DeleteConceal
+/// 的吞吐 clip）消费的是同一份采样。文字层不准再自己算一次时间，也不准把 caret track
+/// 的 progress 换算成独立 0..1 visible fraction。
 ///
 /// `None` 表示本帧无有效 caret motion track（无活跃正文事务 / epoch 不一致 /
-/// 无 cursor_visual_track），InsertReveal / DeleteConceal 不应生成动画 glyph，
-/// static canonical text 直接完整显示。
+/// 无 cursor_visual_track）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SampledCaretFrame {
     /// caret 在文档坐标系的 x（横向裁切边界）。
@@ -181,8 +185,12 @@ pub(crate) struct SampledCaretFrame {
     /// caret 所在 visual line id（跨行裁切判断）。
     pub visual_line_id: Option<usize>,
     /// Issue #727 约束 3: caret track 的当前 progress（0..1）。
-    /// CaretDriven unit 的可见比例从这里推导，不再由 unit 自己的时间线驱动。
     pub progress: f64,
+    /// Issue #815 评论 6042062633 修改 3: 本帧 caret 的完整 rect（文档坐标）。
+    ///
+    /// 和 x/y/visual_line_id/progress 出自同一次 track 采样，光标层直接用它画 caret，
+    /// 不再自己重新采样一次 track 算位置/高度。
+    pub rect: CursorRect,
 }
 
 impl Default for SampledCaretFrame {
@@ -192,39 +200,31 @@ impl Default for SampledCaretFrame {
             y: 0.0,
             visual_line_id: None,
             progress: 0.0,
+            rect: CursorRect {
+                x: 0.0,
+                top: 0.0,
+                bottom: 0.0,
+                baseline_y: 0.0,
+            },
         }
     }
 }
 
-/// Issue #727 评论 5754041813 约束 3: 一帧的统一协同运动结果。
+/// Issue #815 评论 6042062633 修改 3: 一帧的统一协同运动结果。
 ///
-/// `build_render_plan_full` 入口处先采样 caret motion 得到一份 `SampledCaretFrame`，
-/// 有才让 InsertReveal / DeleteConceal 用它的 x/y/visual_line_id 裁文字。
-/// 没有 caret frame 就不生成 reveal/conceal glyph，static canonical text 直接完整显示。
-/// RenderPlan 里同一份 `SampledCaretFrame` 同时喂 cursor layer 和文字 reveal/conceal，
-/// 不能文字自己再推导一份 caret。
+/// 每帧每笔 owner 事务只采样一次 caret track，得到一份 `SampledCaretFrame`；
+/// 这同一份采样同时喂给光标层和文字吞吐层。文字层不得再推导一份 caret，
+/// 也不得自己再按 `frame_now` 算一次时间。
 ///
-/// Issue #727 评论 5757225958 问题5: 携带 `owner_key` 字段，只有同 key 的
-/// CaretDriven unit 能消费此 caret frame。其它失去 ownership 的 CaretDriven unit
-/// 直接回 canonical，只允许 Timed Reflow 继续。避免 editor.anim.keep 保留旧事务时
-/// 旧 CaretDriven unit 消费新事务的 caret。
+/// `owner_key` 标记这份采样属于哪笔事务：只有同 key 的 `CaretTrack` unit 才能消费。
+/// 其它失去 ownership 的 `CaretTrack` unit 立刻收口到终态，只允许 `Timed` Reflow
+/// 继续播完。避免 editor.anim.keep 保留旧事务时旧事务消费新事务的 caret。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct CoordinatedMotionFrame {
     /// Issue #727 问题5: owner tx key; only same-key CaretDriven unit consumes.
     pub owner_key: Option<VisualTransactionKey>,
     /// 本帧采样的 caret geometry。`None` 表示无有效 caret motion track。
     pub caret: Option<SampledCaretFrame>,
-}
-
-impl CoordinatedMotionFrame {
-    /// Issue #727 评论 5757225958 问题5: 构造带 owner_key 的 frame。
-    #[cfg(test)]
-    pub fn with_owner_key(
-        owner_key: Option<VisualTransactionKey>,
-        caret: Option<SampledCaretFrame>,
-    ) -> Self {
-        Self { owner_key, caret }
-    }
 }
 
 #[derive(Clone, Debug, Default)]

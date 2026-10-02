@@ -1075,9 +1075,14 @@ Rectangle {
                         TapHandler {
                             id: touchLongPressHandler
                             acceptedButtons: Qt.LeftButton
-                            // Issue #714: 限制长按只对触屏/手写笔生效，不对桌面鼠标生效
-                            // 桌面鼠标的长按等同于右键菜单，不需要触发 long_press_at
-                            acceptedDevices: PointerDevice.TouchScreen | PointerDevice.Stylus
+                            // Issue #815 评论 6042062633 修改 1: 恢复桌面鼠标左键长按选词。
+                            // Issue #714 当时把鼠标排除在外，理由是「桌面鼠标长按 == 右键菜单」，
+                            // 但右键菜单本来就走上面那个独立的 Qt.RightButton TapHandler，
+                            // 左键长按与右键菜单是两个不同输入，不该互相排除。
+                            acceptedDevices: PointerDevice.Mouse
+                                          | PointerDevice.TouchPad
+                                          | PointerDevice.TouchScreen
+                                          | PointerDevice.Stylus
 
                             // Issue #810 评论 5932233052 问题3: 跟踪是否真正进入了
                             // long-press selection 状态。只有 onLongPressed 触发后才会在

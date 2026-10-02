@@ -4,16 +4,12 @@ use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind
 
 /// 事务级时钟 — 只提供事务层级的时间推进/pause 语义。
 ///
-/// Issue #808 评论 5919641249 修改 2: 文字切片、光标、预输入装饰**不消费同一个
-/// progress**。每个文字 unit（`VisualUnitTiming::Timed`）有自己的
-/// started_at / duration_ms / progress，光标 track 有自己的 timeline/easing
-///（`ease_out_cubic`），两者独立推进；本事务 timeline 只服务
-/// "事务级状态/完成判断"（例如 units 为空的 cursor-only 事务）。
+/// Issue #815 评论 6042062633 修改 2: 事务级时钟不驱动任何具体视觉单元。
+/// 协同模式下 InsertReveal/DeleteConceal 的逐帧边界来自同一笔事务的 cursor track
+/// 当前帧（见 [`VisualUnitTiming::CaretTrack`]），非协同文字动画和 Reflow 来自各自
+/// `VisualUnitTiming::Timed` 时间线，光标来自 `PreparedCursorVisualTrack`。
+/// 本事务 timeline 只服务"事务级状态/完成判断"（例如 units 为空的 cursor-only 事务）。
 ///
-/// Issue #808: 文字动画继续单独算 `current_visible_fraction()`，不要恢复 CaretDriven，
-/// 也不要从 cursor track progress 推文字 visible fraction。文字自己的 easing
-///（`ease_out_quad`）留在文字 timeline 里；光标 track 用自己的 easing（`ease_out_cubic`）。
-/// Choreographer 和 Qt update 只负责请求帧，不得给光标维护独立开始时间。
 /// Paused 状态必须返回暂停瞬间的 progress，不能返回 0。
 /// resume 后从暂停进度继续。
 #[derive(Clone, Debug)]
@@ -95,30 +91,44 @@ impl TransactionTimeline {
     }
 }
 
-/// Issue #727 评论 5754041813 约束 2 / Issue #808: 视觉单元的计时语义。
+/// Issue #815 评论 6042062633 修改 2: 视觉单元的计时语义分成两种驱动。
 ///
-/// Issue #808: 文字动画继续单独算 `current_visible_fraction()`，不要恢复 CaretDriven，
-/// 也不要从 cursor track progress 推文字 visible fraction。文字自己的 easing
-///（`ease_out_quad`）留在文字 timeline 里。所有文字 unit（含协同模式
-/// InsertReveal/DeleteConceal）统一用 `Timed` timing，拥有独立
-/// started_at / duration_ms / progress。协同只表示同事务/同首帧/同 rebase，
-/// 不表示同速度/同曲线——文字与 caret 各自按自己的 duration/easing 推进。
+/// 协同模式 = 一条 caret 运动轨迹 + 文字以 caret 当前帧为吞吐边界 + Reflow 可独立。
+/// 不再是"两条互不相干的时间线，只在起点位置看起来碰巧挨着"。
+///
+/// - [`VisualUnitTiming::Timed`]：单元自带 started_at / duration_ms / progress，用
+///   文字自己的 `ease_out_quad` 推进。覆盖：
+///   - 非协同的 InsertReveal/DeleteConceal（跟随「打字动画」设置）
+///   - ReflowMove / ReflowCrossFade（始终独立播放，不被 caret 轨迹接管）
+/// - [`VisualUnitTiming::CaretTrack`]：单元**没有自己的时间线**。本帧的吞吐边界
+///   完全来自同一笔事务 cursor track 的当前帧（`sample_coordinated_motion_frame`
+///   的唯一一次采样），文字层与光标层消费同一份采样，文字不再自己算一次时间。
+///   覆盖协同模式的 InsertReveal/DeleteConceal。
 #[derive(Clone, Debug)]
 pub(crate) enum VisualUnitTiming {
-    /// 所有视觉单元（InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）
-    /// 统一使用独立时间线。Issue #808: 文字用 `ease_out_quad`，光标 track 用 `ease_out_cubic`，
-    /// 两条时间线完全独立。协同不再切 CaretDriven，不再共用同一条 easing。
+    /// 独立时间线驱动。文字用 `ease_out_quad`，光标 track 用 `ease_out_cubic`。
     Timed {
         started_at: Option<Instant>,
         duration_ms: u64,
         start_fraction: f64,
         target_fraction: f64,
     },
+    /// Issue #815 评论 6042062633 修改 2: 协同模式的吞吐字。
+    ///
+    /// 没有 started_at / duration_ms——协同吞吐字不再拥有独立 progress。
+    /// 逐帧 clip 由 `AnimatedSlice::compute_frame_by_caret_ingest` 直接用 cursor
+    /// track 当前帧的 caret.x 算出，不经过 0..1 visible fraction。
+    ///
+    /// `retired` 表示这笔事务已经失去 caret motion ownership（epoch 切换 / layout
+    /// basis 过期）。retired 后本单元立即收口到终态：`progress` 返回 1.0，让事务
+    /// 的完成判断不再等一条已经不推进的 caret track。
+    CaretTrack { retired: bool },
 }
 
 impl VisualUnitTiming {
     /// 从 `AnimatedSliceKind` 推断默认计时语义。
-    /// Issue #785: 所有 kind 统一返回 `Timed`（含 InsertReveal/DeleteConceal）。
+    /// 所有 kind 都返回 `Timed`（要 caret 驱动必须走
+    /// [`VisualUnitTiming::default_for_kind_with_coordinated`]）。
     pub(crate) fn default_for_kind(kind: AnimatedSliceKind, duration_ms: u64) -> Self {
         let target_fraction = match kind {
             AnimatedSliceKind::DeleteConceal => 0.0,
@@ -136,43 +146,66 @@ impl VisualUnitTiming {
         }
     }
 
-    /// Issue #756 / Issue #785 / Issue #808 评论 5916391891 修改 4: 按 `coordinated` 决定
-    /// InsertReveal/DeleteConceal 的计时语义。
+    /// Issue #815 评论 6042062633 修改 2: 按 `coordinated` 决定 InsertReveal/DeleteConceal
+    /// 的计时驱动。
     ///
-    /// Issue #808 评论 5916391891 修改 4: `coordinated` 不再影响 timing 选择（所有 kind
-    /// 都返回 `Timed`），但**不再被完全忽略**——coordinated 的遮罩语义通过 slice 的
-    /// `is_caret_line` / `caret_anchor_x` 字段体现（在 `build_insert_reveal_slices` /
-    /// `build_delete_conceal_slices` 中设置）：
-    /// - coordinated=true：slice 的 caret_anchor_x 取真实 caret x，is_caret_line=true
-    ///   （文字从 caret 处吐出/被 caret 吞进）。
-    /// - coordinated=false：slice 的 caret_anchor_x 取文字自己的边缘，is_caret_line=false
-    ///   （遮罩从文字边缘展开，不用 caret 锚点）。
-    ///
-    /// timing 本身不需要区分 coordinated——文字与 caret 各自按自己的 duration 推进，
-    /// 拥有独立 started_at / duration_ms / progress。
+    /// - `coordinated=true`：InsertReveal/DeleteConceal 返回
+    ///   [`VisualUnitTiming::CaretTrack`]，不再拥有自己的 `ease_out_quad + text_duration_ms`
+    ///   progress，也不再调用 `current_visible_fraction(now)` 决定吞吐边界。它们与光标
+    ///   共用同一笔 `cursor_visual_track` 的当前帧。
+    /// - `coordinated=false`：仍是独立 `Timed`，按「打字动画」设置自己推进
+    ///   （`is_caret_line`/`caret_anchor_x` 仍表达遮罩锚点）。
+    /// - ReflowMove / ReflowCrossFade：**始终**独立 `Timed`，协同模式也不接管，
+    ///   继续按 `text_duration_ms` 播放。
     pub(crate) fn default_for_kind_with_coordinated(
         kind: AnimatedSliceKind,
         duration_ms: u64,
         coordinated: bool,
     ) -> Self {
-        // coordinated 的遮罩语义通过 slice 字段体现（见上方文档注释），timing 不分叉。
-        // 保留参数签名避免大量调用点编译错误；`let _ = coordinated` 明确标记不在此处使用。
-        let _ = coordinated;
+        if coordinated
+            && matches!(
+                kind,
+                AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+            )
+        {
+            return VisualUnitTiming::CaretTrack { retired: false };
+        }
         Self::default_for_kind(kind, duration_ms)
     }
 
-    /// Issue #785: 是否为 CaretDriven（由 caret frame 驱动裁切的吞吐字）。
-    ///
-    /// 删除 CaretDriven 变体后始终返回 `false`。保留方法签名避免大量调用点
-    /// 编译错误；调用方拿到 false 后会走 Timed 路径（独立时间线驱动裁切）。
+    /// 是否仍由 caret track 当前帧驱动吞吐边界（未被 retire 的 CaretTrack unit）。
     pub(crate) fn is_caret_driven(&self) -> bool {
-        false
+        matches!(self, VisualUnitTiming::CaretTrack { retired: false })
+    }
+
+    /// 是否是 CaretTrack 单元（不管有没有被 retire）。
+    ///
+    /// 完成判断、rebase 交棒、静态守卫都用这个：retired 的 CaretTrack 单元
+    /// 同样没有独立时间线，不能对它调 `rebase_from_frame` 重置 duration。
+    pub(crate) fn is_caret_track(&self) -> bool {
+        matches!(self, VisualUnitTiming::CaretTrack { .. })
+    }
+
+    /// Issue #815: 事务失去 caret motion ownership 时收口所有 CaretTrack 单元。
+    pub(crate) fn retire_caret_motion(&mut self) {
+        if let VisualUnitTiming::CaretTrack { retired } = self {
+            *retired = true;
+        }
     }
 
     /// 获取 `start_fraction`（rebase 交棒载体）。
     pub fn start_fraction(&self) -> f64 {
         match self {
             VisualUnitTiming::Timed { start_fraction, .. } => *start_fraction,
+            // CaretTrack 没有自己的进度载体：retired 给终态，未 retired 给起始态。
+            // 两者都不会被用来驱动逐帧 clip。
+            VisualUnitTiming::CaretTrack { retired } => {
+                if *retired {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
@@ -182,11 +215,12 @@ impl VisualUnitTiming {
             VisualUnitTiming::Timed {
                 target_fraction, ..
             } => *target_fraction,
+            VisualUnitTiming::CaretTrack { .. } => 1.0,
         }
     }
 
     /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
-    /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算 progress。
+    /// Issue #815: CaretTrack 没有自己的时间线；未 retired 时返回 0，retired 后返回 1。
     pub fn progress(&self, now: Instant) -> f64 {
         match self {
             VisualUnitTiming::Timed {
@@ -203,13 +237,21 @@ impl VisualUnitTiming {
                     (elapsed / *duration_ms as f64).clamp(0.0, 1.0)
                 }
             },
+            VisualUnitTiming::CaretTrack { retired } => {
+                if *retired {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
-    /// 单元在 `now` 时刻的真实可见比例（0..1）。
+    /// 单元在 `now` 时刻的独立可见比例（0..1）。
     ///
-    /// Issue #785: 所有 unit 都是 Timed，统一从自己的时间线算可见比例：
-    /// `start_fraction + (target_fraction - start_fraction) * ease_out_quad(progress)`。
+    /// Issue #815: 只有 `Timed` 会用这个值驱动逐帧 clip
+    ///（`start_fraction + (target_fraction - start_fraction) * ease_out_quad(progress)`）。
+    /// `CaretTrack` 不允许消费它——协同吞吐字的边界是 caret.x 本身。
     pub fn current_visible_fraction(&self, now: Instant) -> f64 {
         match self {
             VisualUnitTiming::Timed {
@@ -220,23 +262,32 @@ impl VisualUnitTiming {
                 let eased = AnimatedSlice::ease_out_quad(self.progress(now));
                 (start_fraction + (target_fraction - start_fraction) * eased).clamp(0.0, 1.0)
             }
+            VisualUnitTiming::CaretTrack { retired } => {
+                if *retired {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
     /// Issue #690 评论 5683759796: 在事务进入 Rendering 时打上统一起始时间。
-    /// Issue #785: 所有 unit 都是 Timed，统一设置 started_at。
+    /// Issue #815: 只有 `Timed` 设置 started_at；`CaretTrack` 的起点在 cursor track 上。
     pub fn mark_started(&mut self, frame_now: Instant) {
-        let VisualUnitTiming::Timed { started_at, .. } = self;
-        if started_at.is_none() {
-            *started_at = Some(frame_now);
+        if let VisualUnitTiming::Timed { started_at, .. } = self {
+            if started_at.is_none() {
+                *started_at = Some(frame_now);
+            }
         }
     }
 
-    /// Issue #690 评论 5683759796 / Issue #785: rebase 交棒时更新可见比例载体。
+    /// Issue #690 评论 5683759796 / Issue #815: rebase 交棒时更新可见比例载体。
     ///
-    /// 所有 unit 都是 Timed：更新 start_fraction + 重置时间线
-    ///（started_at = None, duration = remaining）。文字从当前 `visible_fraction`
-    /// 继续，不从 0 重播。
+    /// 只有 `Timed` 更新 start_fraction + 重置时间线（started_at = None,
+    /// duration = remaining）。`CaretTrack` 是 no-op：它的连续性由
+    /// `RebaseCaretHandoff` 承担（先采样旧 track 当前帧，新 track 从这个当前
+    /// caret 连到新的目标 caret，不退回逻辑旧 caret）。
     pub fn rebase_from_frame(&mut self, visible_fraction: f64, remaining_duration_ms: u64) {
         match self {
             VisualUnitTiming::Timed {
@@ -249,6 +300,7 @@ impl VisualUnitTiming {
                 *started_at = None;
                 *duration_ms = remaining_duration_ms.max(1);
             }
+            VisualUnitTiming::CaretTrack { .. } => {}
         }
     }
 }

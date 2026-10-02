@@ -90,7 +90,9 @@ fn fix1b_prepare_rebase_handoff_for_edit_exists_with_outer_now() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     // Issue #756: prepare_rebase_handoff_for_edit 增加 coordinated_animation_enabled 参数，
     // 函数体变长，窗口从 4000 增到 5000 以覆盖 take_rebase_frames 调用。
-    let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 5000);
+    // Issue #815 评论 6042062633 修改 7: 协同缺 caret 几何不再静默 return None，
+    // 改为记 editor.anim.transaction_skipped，函数体变长，窗口再增大。
+    let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 7500);
     assert!(
         window.contains("now: Instant"),
         "修复后 prepare_rebase_handoff_for_edit 签名应含 now: Instant 参数（用外层统一 now 采样）。"
@@ -133,7 +135,7 @@ fn fix1c_create_transaction_from_prepared_handoff_exists() {
 #[test]
 fn fix1d_prepare_called_before_reconcile_in_prepare_edit_motion() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(&src, "fn prepare_edit_motion", 32000);
+    let window = function_window(&src, "fn prepare_edit_motion", 40000);
 
     let prepare_marker = "prepare;"; // .prepare_rebase_handoff_for_edit( 调用
     let reconcile_marker = "reconcile_active_transactions_with_canonical";
@@ -183,7 +185,7 @@ fn fix1d_prepare_called_before_reconcile_in_prepare_edit_motion() {
 #[test]
 fn fix1e_unified_edit_now_passed_to_prepare_and_reconcile() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(&src, "fn prepare_edit_motion", 32000);
+    let window = function_window(&src, "fn prepare_edit_motion", 40000);
 
     assert!(
         window.contains("let edit_now = Instant::now();"),

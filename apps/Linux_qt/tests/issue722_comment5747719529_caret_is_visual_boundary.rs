@@ -321,44 +321,39 @@ fn repro_d_compute_coordinated_cursor_uses_conceal_edge_min_to_infer_cursor() {
 }
 
 // =========================================================================
-// 复现 E：sample_coordinated_cursor_rect_at 同样用 glyph 反推光标
+// 复现 E：caret 唯一采样入口不得用 glyph 反推光标
 // =========================================================================
 
-/// 复现 E：`sample_coordinated_cursor_rect_at()`（animation_coordinator.rs:300）
-/// 与 `compute_coordinated_cursor_position` 同源，同样在 Insert 分支用
-/// `rightmost_x.max()`、Delete 分支用 `conceal_edge.min()` 从 glyph 反推光标。
-/// 这是另一条调用路径上的同源违规。
+/// 复现 E：光标位置不允许从 glyph 切片反推。
+///
+/// Issue #722 评论 5747719529 当时锁定的是 `sample_coordinated_cursor_rect_at()`，
+/// 该入口在 Issue #815 评论 6042062633 修改 3 中被删除：现在光标只有一条采样入口
+/// `sample_caret_track_frame()`，文字吞吐层与光标层消费同一次采样。
+///
+/// 回归守卫：老入口必须已经消失；新入口只能读 cursor track，
+/// 不得出现 `rightmost_x.max()` / `conceal_edge.min()` 这类 glyph 反推。
 #[test]
-fn repro_e_sample_coordinated_cursor_rect_at_uses_glyph_inference() {
+fn repro_e_no_glyph_inference_in_caret_sampling_entry() {
     let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    // sample_coordinated_cursor_rect_at 从第 300 行起，Insert 分支 ~331 行，
-    // Delete 分支 ~369 行，需足够大窗口覆盖两个分支。
-    let window = function_window(&src, "fn sample_coordinated_cursor_rect_at", 9000);
-    // 前提：函数确实用 glyph 反推
-    let has_rightmost_x = window.contains("let mut rightmost_x: Option<f64> = None;");
-    let has_conceal_edge = window.contains("let mut conceal_edge: Option<f64> = None;");
-    let has_max = window.contains("prev.max(edge_x)");
-    let has_min = window.contains("prev.min(edge)");
-    println!(
-        "[BUGFIX_REPRO_TRACE] E sample_coordinated: has_rightmost_x={} has_conceal_edge={} has_max={} has_min={}",
-        has_rightmost_x, has_conceal_edge, has_max, has_min
-    );
-    // Issue #722 修复后回归守卫：glyph 反推已删除时直接通过。
-    if !(has_rightmost_x && has_conceal_edge && has_max && has_min) {
-        return;
-    }
-    // 复现断言：不应从 glyph 切片反推光标。
-    let has_caret_driven = has_caret_driven_clip_guard(&window);
-    println!(
-        "[BUGFIX_REPRO_TRACE] E sample_coordinated has_caret_driven_clip: {}",
-        has_caret_driven
-    );
     assert!(
-        has_caret_driven,
-        "Issue #722 评论 5747719529 复现 E: sample_coordinated_cursor_rect_at 同样在 Insert 分支\
-         用 rightmost_x.max()、Delete 分支用 conceal_edge.min() 从文字 glyph 切片反推光标。\
-         这是 compute_coordinated_cursor_position 之外另一条调用路径上的同源违规，\
-         会导致两条路径上光标都被文字反推，与 caret 分叉。"
+        !src.contains("fn sample_coordinated_cursor_rect_at"),
+        "Issue #815 评论 6042062633 修改 3: sample_coordinated_cursor_rect_at 必须删除，\
+         光标只能有 sample_caret_track_frame 一个采样入口，文字层与光标层共用它。"
+    );
+    let window = function_window(&src, "fn sample_caret_track_frame", 2000);
+    for pattern in ["rightmost_x", "conceal_edge", "prev.max(", "prev.min("] {
+        assert!(
+            !window.contains(pattern),
+            "Issue #722 评论 5747719529 复现 E: 唯一 caret 采样入口不得用 {} 从文字 glyph \
+             切片反推光标——光标必须由 cursor track 自己给出，文字反过来推光标就会与 caret 分叉。",
+            pattern
+        );
+    }
+    assert!(
+        window.contains("sampled_rect_at_progress")
+            && window.contains("sampled_visual_line_id_at_progress"),
+        "Issue #815 评论 6042062633 修改 3: sample_caret_track_frame 必须同时给出 caret rect \
+         和 visual_line_id，文字吞吐层直接用 caret.x 当边界，不再自己算 0..1 进度。"
     );
 }
 

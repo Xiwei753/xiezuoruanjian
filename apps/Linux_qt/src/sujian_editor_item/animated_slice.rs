@@ -540,12 +540,13 @@ impl AnimatedSlice {
     /// - InsertReveal / DeleteConceal 采用真正的 clip/mask 语义：文字本体固定在
     ///   canonical 位置，动画只改变可见纹理宽度（clip），不做位移/缩放/淡入淡出。
     /// - caret 只提供空间锚点（`caret_anchor_x/y`）和方向（`conceal_to_left_edge`、
-    ///   `is_caret_line`），**不提供 progress**。progress 由文字自己的 Timed timeline
+    ///   `is_caret_line`），**不提供 progress**。progress 由 unit 自己的 Timed timeline
     ///   算出后作为 `visible` 参数传入本方法。
-    /// - **不允许因当前没有 caret Tween 就取消文字动画**。本方法是纯函数，不检查
-    ///   caret Tween 是否存在；消费方（render_plan_builder）对所有 Timed unit 一律
-    ///   调用 `compute_frame(unit.current_visible_fraction(now))`，文字动画独立于
-    ///   caret ownership/epoch 推进。
+    /// - Issue #815 评论 6042062633 修改 5：本入口只服务 `VisualUnitTiming::Timed` 的
+    ///   unit——即非协同 InsertReveal/DeleteConceal 和全部 Reflow。协同模式的
+    ///   InsertReveal/DeleteConceal 是 `VisualUnitTiming::CaretTrack`，**不准**把 caret
+    ///   track 的进度换算成独立 0..1 再喂进这里，必须走
+    ///   [`AnimatedSlice::compute_frame_by_caret_ingest`]。
     /// - 跨行按 visual line 分别处理遮罩锚点：每个 slice 带自己的 `visual_line_id`
     ///   和 `is_caret_line`，`is_caret_line=false` 时用本行级 extent 边缘做锚点，
     ///   不拿上一行的 x 裁下一行。
@@ -693,6 +694,106 @@ impl AnimatedSlice {
                     snapshot_id: self.snapshot_id,
                 }
             }
+        }
+    }
+
+    /// Issue #815 评论 6042062633 修改 5: 按"当前 caret 帧"算吞吐 clip。
+    ///
+    /// 协同模式的 InsertReveal/DeleteConceal **没有自己的 0..1 visible fraction**。
+    /// 本方法里这一帧的边界就是这一帧 caret track 采样出来的 `caret_x` 本身，
+    /// 不是 `anchor + extent * text_progress`。
+    ///
+    /// 同一视觉行：
+    /// - InsertReveal：`caret_anchor_x` 是编辑前的 caret（起点），`caret_x` 是本帧 caret
+    ///   （边界）。只显示 caret 已经扫过的 `[anchor, caret]`。
+    /// - DeleteConceal：`caret_anchor_x` 是删除后的最终 caret（终点），`caret_x` 是本帧
+    ///   caret（边界）。只保留还没被吞掉的 `[caret, final]`。
+    ///
+    /// 两种 kind 都用 `min/max` 归一化前后顺序，所以前删（final 在左）和前插
+    /// （final 在右）都走同一条公式。
+    ///
+    /// 跨软换行/跨段：按本 slice 的 `visual_line_id` 与本帧采样到的 caret 行比较
+    /// （`VisualLine.id` 在同一份 canonical basis 内按文档顺序单调递增）：
+    /// - caret 已经走过本行（`slice_line < caret_line`）：Insert 整段显示，Delete 整段隐藏。
+    /// - caret 还没走到本行（`slice_line > caret_line`）：Insert 整段隐藏，Delete 整段保留。
+    /// - 绝不能用上一行的 caret.x 去裁下一行。
+    ///
+    /// `caret_visual_line_id` 缺失（拿不到行 id）时防御性地按同一行处理，只用
+    /// `caret_x` 裁本行——这仍然比退化成独立 0..1 进度更接近协同语义。
+    pub(crate) fn compute_frame_by_caret_ingest(
+        &self,
+        caret_x: f64,
+        caret_visual_line_id: Option<usize>,
+    ) -> AnimatedSliceFrame {
+        // ReflowMove/ReflowCrossFade 始终是独立 Timed（见
+        // `VisualUnitTiming::default_for_kind_with_coordinated`），不会走到这个入口；
+        // 这里按初始帧防御。
+        let (slice_rect, fully_shown) = match self.kind {
+            AnimatedSliceKind::InsertReveal => (&self.to_document_rect, true),
+            AnimatedSliceKind::DeleteConceal => (&self.from_document_rect, false),
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                return self.compute_frame(0.0);
+            }
+        };
+        let mask_left = self.line_mask_left;
+        let mask_right = self.line_mask_right;
+        let (boundary_left, boundary_right) = match (self.visual_line_id, caret_visual_line_id) {
+            (Some(slice_line), Some(caret_line)) if slice_line > caret_line => {
+                // caret 还没走到本行。
+                if fully_shown {
+                    (mask_left, mask_left)
+                } else {
+                    (mask_left, mask_right)
+                }
+            }
+            (Some(slice_line), Some(caret_line)) if slice_line < caret_line => {
+                // caret 已经走过本行。
+                if fully_shown {
+                    (mask_left, mask_right)
+                } else {
+                    (mask_left, mask_left)
+                }
+            }
+            _ => {
+                // 同一行：本帧边界就是本帧 caret.x，另一端是构造期写入的锚点
+                // （InsertReveal 是编辑前 caret，DeleteConceal 是删除后最终 caret）。
+                let anchor = self.caret_anchor_x;
+                (anchor.min(caret_x), anchor.max(caret_x))
+            }
+        };
+        self.clip_ingest_frame(slice_rect, boundary_left, boundary_right)
+    }
+
+    /// Issue #815 评论 6042062633 修改 5: 用行级 boundary 与本 slice 自己的 rect 求交，
+    /// 得到本 slice 这一帧的 frame rect 与 source clip。
+    ///
+    /// 与 [`AnimatedSlice::clip_to_line_boundary`] 同样的语义（永远只裁自己的 rect，
+    /// 不 union 同组 cluster），只是顺手组装出完整 `AnimatedSliceFrame`。
+    fn clip_ingest_frame(
+        &self,
+        slice_rect: &SourceRect,
+        boundary_left: f64,
+        boundary_right: f64,
+    ) -> AnimatedSliceFrame {
+        let (frame_x, frame_w, src_x, src_w) = Self::clip_to_line_boundary(
+            slice_rect,
+            &self.source_rect,
+            boundary_left,
+            boundary_right,
+        );
+        AnimatedSliceFrame {
+            x: frame_x,
+            y: slice_rect.y,
+            w: frame_w,
+            h: slice_rect.h,
+            opacity: 1.0,
+            source_rect: SourceRect {
+                x: src_x,
+                y: self.source_rect.y,
+                w: src_w,
+                h: self.source_rect.h,
+            },
+            snapshot_id: self.snapshot_id,
         }
     }
 

@@ -156,9 +156,10 @@ fn issue1_build_slices_pass_some_line_idx() {
 // 问题3: 快速输入/删除 rebase 仍然采的不是屏幕上真正那一帧
 // =========================================================================
 
-/// 问题3 守卫1: take_rebase_frames 走两条独立交棒路径（#785 后文字 Timed + caret 独立）。
+/// 问题3 守卫1: take_rebase_frames 走两条交棒路径（#815 后文字 Timed + caret track 统一采样）。
 /// - 文字交棒：collect_rebase_frame_for_unit_without_caret(...)，文字进度来自 Timed unit。
-/// - caret 交棒：sample_coordinated_cursor_rect_at(tx, now)，只负责独立 caret handoff。
+/// - caret 交棒：sample_caret_track_frame(track, now)，拿到本帧 caret 的 x/y/visual_line_id/
+///   rect，新 track 从这个**当前** caret 连到新目标 caret，不退回逻辑旧 caret。
 /// 旧的 sample_caret_geometry_for_caret_driven_clip 已删除，不应复活。
 #[test]
 fn issue3_take_rebase_frames_uses_timed_text_and_coordinated_caret_handoff() {
@@ -176,10 +177,15 @@ fn issue3_take_rebase_frames_uses_timed_text_and_coordinated_caret_handoff() {
         window.contains("collect_rebase_frame_for_unit_without_caret("),
         "take_rebase_frames 应使用 collect_rebase_frame_for_unit_without_caret( 采集文字 rebase 帧（文字进度来自 Timed unit）"
     );
-    // caret 交棒路径：应使用 sample_coordinated_cursor_rect_at(tx, now)
+    // caret 交棒路径：应使用 Issue #815 的统一采样入口 sample_caret_track_frame(
     assert!(
-        window.contains("sample_coordinated_cursor_rect_at(tx, now)"),
-        "take_rebase_frames 应使用 sample_coordinated_cursor_rect_at(tx, now) 采样独立 caret handoff"
+        window.contains("sample_caret_track_frame("),
+        "take_rebase_frames 应使用 sample_caret_track_frame( 采样本帧 caret handoff"
+    );
+    // Issue #815: 新 track 从采样到的当前 caret 起算，不得退回逻辑旧 caret
+    assert!(
+        window.contains("let sampled = frame.rect;"),
+        "take_rebase_frames 的 caret handoff 起点必须是本帧采样到的 caret rect"
     );
     // 旧机制不复活：函数体里不应有真正的 sample_caret_geometry_for_caret_driven_clip( 调用
     assert!(

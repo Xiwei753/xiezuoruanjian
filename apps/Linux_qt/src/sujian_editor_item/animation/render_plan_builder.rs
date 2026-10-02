@@ -296,17 +296,15 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
         // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务再采样 caret motion。
-        let (text_animation, keys_to_complete, _coordinated_motion_frame) = self
+        // Issue #815 评论 6042062633 修改 6: 本帧的 caret 采样**只在这里做一次**
+        // （build_text_animation_plan_with_sample 内部采样），下面直接复用它的返回值。
+        // 文字层与光标层拿同一份 SampledCaretFrame。
+        let (text_animation, keys_to_complete, coordinated_motion_frame) = self
             .build_text_animation_plan_with_sample(
                 &frame_sample,
                 cursor_owner_epoch,
                 frame_context.layout_basis_revision,
             );
-        let coordinated_motion_frame = self.sample_coordinated_motion_frame(
-            &frame_sample,
-            cursor_owner_epoch,
-            frame_context.layout_basis_revision,
-        );
         // Issue #727 评论 5757225958 问题3: 先构建 keys_to_complete_set，
         // 供 clip_rects 收集时跳过本帧即将完成的事务，避免"glyph 无、clip 有"
         // 的一帧文字消失/闪烁。
@@ -334,8 +332,7 @@ impl LinuxEditorAnimationCoordinator {
         // 最终正文立即显示，避免"glyph 无、clip 有"的一帧文字消失/闪烁。
         // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集文字 unit
         // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
-        // ownership），避免空洞。Issue #808: 所有 unit 都是 Timed，不再有
-        // CaretDriven 分支，文字 clip 收集不受 caret frame 影响。
+        // ownership），避免空洞。
         let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> =
             Vec::new();
         for tx in self.prepared_queue.active_transactions() {
@@ -348,17 +345,15 @@ impl LinuxEditorAnimationCoordinator {
                 && !keys_to_complete_set.contains(&tx.key)
                 && tx.layout_basis_revision == frame_context.layout_basis_revision
             {
-                let has_caret_frame = coordinated_motion_frame.caret.is_some();
-                // Issue #727 评论 5760020833 问题1: 还要判断本事务是否是 caret motion 的
-                // owner。当旧事务 owner 已丢失（epoch 切换/新事务抢占），
-                // 即使全局有新事务的 caret frame，旧事务的 static_hidden_document_rects
-                // 也不能继续裁 canonical 正文——非 owner 的事务已 Snap 到 canonical，
-                // 再藏 canonical 会挖出文字空洞。
+                // Issue #815 评论 6042062633 修改 6: 非 caret owner 的事务不再收集
+                // static_hidden_document_rects。协同吞吐字的可见性由 caret 采样决定，
+                // 一旦失去 ownership 它们被 retire 到终态（不再停在半路），此时继续隐藏
+                // canonical 正文只会挖出空洞。
+                // Timed unit（Reflow / 非协同吞吐字）不依赖 caret ownership，仍然收集。
                 let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
-                // Issue #785: 所有文字 unit 都是 Timed，不再因 caret-driven 跳过 clip_rects 收集。
-                // caret frame 只负责画 caret，不驱动文字。has_caret_frame / owns_caret 保留
-                // 供后续 caret 渲染判断，但不再影响文字 clip 收集。
-                let _ = (has_caret_frame, owns_caret);
+                if !owns_caret && tx.has_caret_track_units() {
+                    continue;
+                }
                 for unit in &tx.units {
                     for doc_rect in &unit.slice.static_hidden_document_rects {
                         if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
@@ -394,8 +389,10 @@ impl LinuxEditorAnimationCoordinator {
         // compute_coordinated_cursor_position 返回 None，事务立刻失去 caret motion
         // ownership，文字 units 已落到 canonical final state（不再继续播放）。
         // 改走 CursorOnly/点击位置。
+        // Issue #815 评论 6042062633 修改 3/6: 光标层消费文字层已经采好的那一份 caret 帧，
+        // 不再自己重新采样一次 track。
         if let Some((cx, cy_doc, ch)) =
-            self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
+            self.compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)
         {
             // Issue #727 评论 5755858583 问题1: cursor_render_state.y 保存文档坐标（cy_doc），
             // 不再提前减 scroll_y 转成视口 y。cursor layer 的 QSGTransformNode 统一做
@@ -533,41 +530,46 @@ impl LinuxEditorAnimationCoordinator {
 
             // Prepared→Rendering 状态切换已由 begin_rendering_transactions 完成。
 
-            // owns_caret: 本事务是否拥有 caret ownership。失去 owner 时 caret 部分
-            // 立刻视为完成，避免旧事务回跳。
+            // owns_caret: 本事务是否拥有本帧那一次 caret 采样。
             let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
 
-            // caret_driven_active = owns_caret && caret.is_some()。Issue #808: 所有 unit
-            // 都是 Timed，has_caret_driven_units 始终为 false，此分支不再执行。
-            let caret_driven_active = owns_caret && coordinated_motion_frame.caret.is_some();
+            // Issue #815 评论 6042062633 修改 6: 本帧的 caret 采样。只有 owns_caret 的事务
+            // 才拿得到同一个 SampledCaretFrame；这个对象同时喂给本事务的 CaretTrack 吞吐字
+            // 和上层的光标层，文字层不准再自己按 frame_now 算一次时间。
+            let caret_sample = if owns_caret {
+                coordinated_motion_frame.caret
+            } else {
+                None
+            };
 
-            // InsertReveal/DeleteConceal 完成条件跟视觉边界一致。
-            // Issue #785/#808: 所有 unit 都是 Timed，is_caret_driven() 始终返回 false。
-            let has_caret_driven_units = tx.units.iter().any(|u| u.timing.is_caret_driven());
-            // has_caret_driven_units && !caret_driven_active 时退休 caret motion，
-            // 收口 units 到终态。Issue #808 后此条件恒为 false，保留用于历史诊断。
-            if has_caret_driven_units && !caret_driven_active {
+            // Issue #815 评论 6042062633 修改 3: 本事务没有拿到本帧 caret 采样
+            // （不是 owner，或 owner track 缺失）时，把 CaretTrack 吞吐字收口到终态——
+            // 它们的逐帧边界来自那条 track，track 不再推进就不能停在半路。
+            // Timed unit（Reflow / 非协同吞吐字）不受影响。
+            if tx.has_caret_driven_units() && caret_sample.is_none() {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
             }
             // Issue #756 评论 5821042551: 只要本事务存在需要播放的 cursor_visual_track，
-            // 事务完成就必须同时等待它结束；协同与非协同只决定文字是否消费这个 track，
-            // 不决定 track 是否属于事务生命周期。
+            // 事务完成就必须同时等待它结束。
             let caret_track_done = match tx.cursor_visual_track.as_ref() {
                 Some(track) => track.progress(sample.frame_now) >= 1.0,
                 None => true,
             };
-            // Issue #785: 所有 unit 都是 Timed，完成判断统一用 progress >= 1.0。
-            // 不再有 CaretDriven 分支。
+            // Issue #815 评论 6042062633 修改 6: 完成条件分两类。
+            // - CaretTrack unit（协同 InsertReveal/DeleteConceal）没有独立时间线，
+            //   它们随 cursor track 一起结束，不参与"每条 unit 自己 progress >= 1"的等待。
+            // - Timed unit（ReflowMove/ReflowCrossFade、非协同吞吐字）按自己的时间线播完。
+            let timed_units_done = tx
+                .units
+                .iter()
+                .filter(|u| !u.timing.is_caret_track())
+                .all(|u| u.progress(sample.frame_now) >= 1.0);
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)
+                timed_units_done
             };
-            // Issue #756 评论 5821042551: 只要存在 cursor_visual_track 就必须等待完成。
-            // Issue #808: 文字与光标各自独立 timeline，非协同 typing+smooth 也有
-            // cursor_visual_track，smooth cursor duration 可能比 typing 更长，
-            // caret track 不能被提前丢弃。
             let caret_track_complete =
                 tx.cursor_visual_track.is_none() || tx.caret_motion_retired || caret_track_done;
 
@@ -585,11 +587,25 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // Issue #785: 所有文字 unit 统一走 Timed 路径——用自己的时间线算 visible，
-                // 走 compute_frame(visible)，不消费 caret frame。caret frame 只负责画 caret，
-                // 不驱动文字。即使 cursor ownership/epoch 发生切换，文字动画也不会凭空消失。
-                let visible = unit.current_visible_fraction(sample.frame_now);
-                let frame = unit.slice.compute_frame(visible);
+                // Issue #815 评论 6042062633 修改 6: 文字层与光标层消费**同一个** caret 采样。
+                // - CaretTrack unit（协同 InsertReveal/DeleteConceal）：本帧的吞吐边界就是
+                //   本帧的 caret.x，不经过任何 0..1 visible fraction，也不自己再算一次时间。
+                // - Timed unit（Reflow / 非协同吞吐字）：仍按自己的时间线算 visible。
+                //   协同模式不接管 Reflow。
+                let frame = if unit.timing.is_caret_track() {
+                    match caret_sample {
+                        Some(caret) => unit
+                            .slice
+                            .compute_frame_by_caret_ingest(caret.x, caret.visual_line_id),
+                        // caret_sample 为 None 只可能是本事务刚被判 retire（没有 owner，
+                        // 或 owner track 缺失）。这时 unit 处于终态：InsertReveal 全部
+                        // 吐出、DeleteConceal 全部吞掉，直接用 terminal visible = 1.0。
+                        None => unit.slice.compute_frame(1.0),
+                    }
+                } else {
+                    let visible = unit.current_visible_fraction(sample.frame_now);
+                    unit.slice.compute_frame(visible)
+                };
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,
                     y: frame.y,

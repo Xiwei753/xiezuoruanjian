@@ -1,4 +1,5 @@
 use super::animation::LinuxEditorAnimationCoordinator;
+// Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
@@ -8,6 +9,7 @@ use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::TextureCache;
 use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
+use super::{editor_animation_transaction_skipped_event, AnimationSkipFields};
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use std::time::Instant;
@@ -1112,23 +1114,42 @@ impl LinuxEditorPipeline {
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
     ) -> Option<PreparedEditMotion> {
-        // Issue #756 / Issue #808 评论 5916391891 修改 3: 协同=同一次编辑同时开两条
-        // 独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。文字与光标不再"绑死"：
-        // - coordinated=true：文字和光标各自独立 timeline，额外启用按 caret 锚点
-        //   做遮罩的吞吐语义（文字从 caret 处吐出/被 caret 吞进）。
-        // - coordinated=false：typing_animation_enabled 只决定文字动画，
-        //   smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
-        //  （文字动画需要排版 old/new，光标动画需要 motion 的 caret track）。
+        // Issue #756 / Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 +
+        // 文字以 caret 当前帧为吞吐边界；非协同时 typing_animation_enabled 只决定文字动画，
+        // smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
+        // （文字动画需要排版 old/new，光标动画需要 motion 的 caret track）。
         let text_animation_enabled =
             ctx.coordinated_animation_enabled || ctx.typing_animation_enabled;
         let caret_animation_enabled =
             ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled;
-        if (!text_animation_enabled && !caret_animation_enabled) || ctx.is_scrolling {
+        if ctx.is_scrolling || ctx.is_loading || ctx.is_applying_format {
+            // Issue #815 评论 6042062633 修改 8: 滚动/加载/套用格式期间抑制动画是显式规则，
+            // 但必须留下正式事件，否则诊断包里"编辑发生了却没有动画"没有任何线索。
+            editor_animation_transaction_skipped_event(&AnimationSkipFields {
+                cause: "suppressed_by_context",
+                operation_kind: "Insert",
+                typing_animation_enabled: ctx.typing_animation_enabled,
+                smooth_cursor_enabled: ctx.smooth_cursor_enabled,
+                coordinated_animation_enabled: ctx.coordinated_animation_enabled,
+                old_caret_present: false,
+                new_caret_present: false,
+                inserted_range: None,
+                unit_kinds: "",
+                cursor_track_present: false,
+                is_scrolling: ctx.is_scrolling,
+                is_loading: ctx.is_loading,
+                is_applying_format: ctx.is_applying_format,
+                transaction_id: None,
+                generation: 0,
+            });
             return None;
         }
-        // Issue #756 评论 5821042551 / Issue #785: 文字与光标各自独立的时长。
-        // Issue #785: 协同只传递"同事务协同"语义（同首帧/同 rebase），不再修改两个 duration。
-        // 文字用 typing duration、光标用 smooth cursor duration，始终独立。
+        if !text_animation_enabled && !caret_animation_enabled {
+            return None;
+        }
+        // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
+        // Issue #815: 协同模式下 InsertReveal/DeleteConceal 不再各自拥有独立 progress，
+        // 这两个 duration 只喂 Reflow（文字）和 cursor track（光标）。
         let text_duration_ms = self.typing_animation_duration_ms;
         let caret_duration_ms = self.cursor_animation_duration_ms;
         let mut motion = PreparedEditMotion::from_edit_result(
@@ -1309,6 +1330,26 @@ impl LinuxEditorPipeline {
                             "current_canonical_snapshot is None or stale (revision mismatch) \
                              despite ensure_current_canonical_before_edit (Issue #810 评论 5934060933)",
                         );
+                        // Issue #815 评论 6042062633 修改 8: stale canonical 直接掐断整条
+                        // "Core edit -> old/new canonical caret -> cursor_visual_track ->
+                        // InsertReveal" 链，必须报出来而不是只留一条 debug log。
+                        editor_animation_transaction_skipped_event(&AnimationSkipFields {
+                            cause: "stale_current_canonical",
+                            operation_kind: "Insert",
+                            typing_animation_enabled: ctx.typing_animation_enabled,
+                            smooth_cursor_enabled: ctx.smooth_cursor_enabled,
+                            coordinated_animation_enabled: ctx.coordinated_animation_enabled,
+                            old_caret_present: false,
+                            new_caret_present: false,
+                            inserted_range: None,
+                            unit_kinds: "",
+                            cursor_track_present: false,
+                            is_scrolling: ctx.is_scrolling,
+                            is_loading: ctx.is_loading,
+                            is_applying_format: ctx.is_applying_format,
+                            transaction_id: None,
+                            generation: 0,
+                        });
                         return None;
                     }
                 };
@@ -1582,6 +1623,25 @@ impl LinuxEditorPipeline {
                             err
                         ),
                     );
+                    // Issue #815 评论 6042062633 修改 8: canonical invariant 失败同样
+                    // 掐断动画链，记正式跳过事件。
+                    editor_animation_transaction_skipped_event(&AnimationSkipFields {
+                        cause: "canonical_invariant_failure",
+                        operation_kind: "Insert",
+                        typing_animation_enabled: ctx.typing_animation_enabled,
+                        smooth_cursor_enabled: ctx.smooth_cursor_enabled,
+                        coordinated_animation_enabled: ctx.coordinated_animation_enabled,
+                        old_caret_present: false,
+                        new_caret_present: false,
+                        inserted_range: None,
+                        unit_kinds: "",
+                        cursor_track_present: false,
+                        is_scrolling: ctx.is_scrolling,
+                        is_loading: ctx.is_loading,
+                        is_applying_format: ctx.is_applying_format,
+                        transaction_id: None,
+                        generation: 0,
+                    });
                     // fallback_old_generation_opt 已在上方释放，不再重复释放。
                     // 释放 new_generation，避免泄漏（成功路径由 pending_promoted_layout 接管）。
                     layout::clear_layout_generation(new_generation);

@@ -161,6 +161,8 @@ impl SujianEditorItem {
             );
         let old_composition_range = Some((old_affected_start, old_affected_end));
         let new_composition_range = Some((new_affected_start, new_affected_end));
+        // Issue #815 评论 6042062633 修改 8: 跳过事件要带 candidate range。
+        let candidate_range = (candidate_byte_start, candidate_byte_end);
         // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot 现在返回 Result。
         // 这是 fallback 路径（active_composition_new_snapshot 和 current_layout_snapshot
         // 都没有时才用）。Err 时记录诊断并 return，结束本次 commit，不伪装成功。
@@ -188,7 +190,16 @@ impl SujianEditorItem {
             });
         let old_snapshot = match old_snapshot {
             Some(snap) => snap,
-            None => return,
+            None => {
+                // Issue #815 评论 6042062633 修改 8: IME commit 构造失败是"编辑发生了
+                // 但没有动画"的正式跳过点，必须记事件而不是静默 return。
+                record_composition_commit_skip(
+                    self,
+                    "composition_commit_old_snapshot_unavailable",
+                    Some(candidate_range),
+                );
+                return;
+            }
         };
 
         // Issue #735: EditorEngine 已删除，不再调用 create_transaction。
@@ -229,6 +240,12 @@ impl SujianEditorItem {
                         "{} — aborting composition commit (Issue #810 评论 5933167246)",
                         err
                     ),
+                );
+                // Issue #815 评论 6042062633 修改 8: 同上，记正式跳过事件。
+                record_composition_commit_skip(
+                    self,
+                    "composition_commit_new_snapshot_invariant_failure",
+                    Some(candidate_range),
                 );
                 return;
             }
@@ -1278,4 +1295,31 @@ fn compute_word_bounds(text: &str, index: usize) -> Option<(usize, usize)> {
     let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
     let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
     Some((byte_start, byte_end))
+}
+
+/// Issue #815 评论 6042062633 修改 8: IME composition commit 的正式跳过事件。
+///
+/// 日志只暴露 `cause`；三个动画开关字段用来确认"是不是被哪个开关关掉了"。
+fn record_composition_commit_skip(
+    item: &SujianEditorItem,
+    cause: &str,
+    candidate_range: Option<(usize, usize)>,
+) {
+    editor_animation_transaction_skipped_event(&AnimationSkipFields {
+        cause,
+        operation_kind: "CompositionCommitOrCancel",
+        typing_animation_enabled: item.current_typing_animation_enabled,
+        smooth_cursor_enabled: item.current_smooth_cursor_enabled,
+        coordinated_animation_enabled: item.current_coordinated_animation_enabled,
+        old_caret_present: false,
+        new_caret_present: false,
+        inserted_range: candidate_range,
+        unit_kinds: "",
+        cursor_track_present: false,
+        is_scrolling: item.current_is_scrolling,
+        is_loading: item.current_is_loading,
+        is_applying_format: item.current_is_applying_format,
+        transaction_id: None,
+        generation: 0,
+    });
 }

@@ -23,6 +23,7 @@ use crate::sujian_editor_item::animation_mode::AnimationMode;
 use crate::sujian_editor_item::edit_motion::{diff_plain_text, EditorAnimationKind};
 use crate::sujian_editor_item::edit_motion::{CursorRect, PreparedEditMotion};
 use crate::sujian_editor_item::editor_animation_debug_log;
+use crate::sujian_editor_item::editor_animation_transaction_skipped_event;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{
     ClusterInsertRelation, EditorLayoutSnapshot, SourceRect,
@@ -64,14 +65,16 @@ pub(crate) fn emit_transaction_diagnostic(
 
 pub(crate) mod edit_spec;
 
-pub(crate) use edit_spec::{CompositionCommitCrossfadeSpec, VisualEditSpec};
+pub(crate) use edit_spec::{skip_fields, CompositionCommitCrossfadeSpec, VisualEditSpec};
 
 /// Issue #747 评论 5813540976: 全仓库唯一创建 `PreparedTextVisualTransaction` 的完整入口。
 ///
 /// 接收归一化后的 [`VisualEditSpec`]，内部统一完成 slice 构造、unit wrap、rebase 匹配、
 /// cursor track 构建、timeline 初始化。其它模块（含 `composition.rs` 与普通 Insert/Delete
 /// 路径）都经由本函数创建事务，从而保证「只允许这里创建 `PreparedTextVisualTransaction`」。
-pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVisualTransaction {
+pub(crate) fn build_prepared_transaction(
+    spec: VisualEditSpec,
+) -> Option<PreparedTextVisualTransaction> {
     let mut slices: Vec<AnimatedSlice> = Vec::new();
 
     // 1a. InsertReveal / DeleteConceal（文字动画）
@@ -174,38 +177,15 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     // ReflowMove/ReflowCrossFade 不参与分组，保持等于自己 from rect 的默认值。
     assign_shared_line_masks(&mut slices);
 
-    // 2. Wrap units
-    //
-    // Issue #808 评论 5919641249 修改 2: 文字单元统一 Timed，coordinated 不再改 timing。
-    // InsertReveal/DeleteConceal 的文字 progress 只来自文字自己的 timeline（`ease_out_quad`）；
-    // coordinated=true 只在 slice 上体现吞吐 mask 语义（`is_caret_line` /
-    // `caret_anchor_x` / `line_mask_left/right`），不再有 CaretDriven，也不与光标绑死。
-    // ReflowMove/ReflowCrossFade 同样 Timed，与 coordinated 无关。
-    let mut units: Vec<PreparedVisualUnit> = slices
-        .into_iter()
-        .map(|s| match s.kind {
-            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                PreparedVisualUnit::wrap_with_coordinated(
-                    s,
-                    spec.text_duration_ms,
-                    spec.coordinated_animation_enabled,
-                )
-            }
-            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                PreparedVisualUnit::wrap(s, spec.text_duration_ms)
-            }
-        })
-        .collect();
-
-    // 3. Rebase frame 匹配
-    match_rebase_frames(&spec.rebase_frames, &mut units, &spec.offset_map);
-
-    // 4. Cursor visual track
+    // 2. Cursor visual track
     //
     // Issue #756: caret motion track 就是正文编辑期间的光标动画，由
     // caret_animation_enabled 决定（coordinated=true 或 smooth_cursor_enabled=true）。
     // 关闭时本事务不拥有 caret motion，光标位置由 canonical caret 接管（Snap），
     // 不会在用户关掉"平滑光标"后仍然沿 track 滑动。
+    //
+    // Issue #815 评论 6042062633 修改 4: 这条 track 必须**先于** Wrap units 构造，
+    // 因为协同 InsertReveal/DeleteConceal 要用它来决定自己是不是 CaretTrack 驱动。
     let cursor_visual_track = if spec.caret_animation_enabled {
         build_cursor_visual_track(
             spec.old_cursor_rect.as_ref(),
@@ -222,6 +202,40 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
     } else {
         None
     };
+
+    // Issue #815 评论 6042062633 修改 4: 协同模式必须同时拿到 cursor track。
+    // 有吞吐字却拿不到 track 时**不允许**把这两种吞吐字退回独立 Timed —— 那正是
+    // "文字在光标附近被切开"而不是"跟着光标吞吐"的根因。这样的事务直接跳过并记
+    // `editor.anim.transaction_skipped`，不做静默降级。
+    let coordinated_ingest = spec.coordinated_animation_enabled && cursor_visual_track.is_some();
+
+    // 3. Wrap units
+    //
+    // Issue #815 评论 6042062633 修改 4: 计时驱动分两类。
+    // - 协同（`coordinated_ingest`）InsertReveal/DeleteConceal → `VisualUnitTiming::CaretTrack`，
+    //   没有自己的 `ease_out_quad + text_duration_ms` progress；逐帧吞吐边界直接来自
+    //   上面那条 `cursor_visual_track` 的当前帧。
+    // - 非协同 InsertReveal/DeleteConceal → 独立 `Timed`，跟随「打字动画」设置。
+    // - ReflowMove/ReflowCrossFade → **始终**独立 `Timed`，协同也不接管，
+    //   继续按 `text_duration_ms` 播放。
+    let mut units: Vec<PreparedVisualUnit> = slices
+        .into_iter()
+        .map(|s| match s.kind {
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                PreparedVisualUnit::wrap_with_coordinated(
+                    s,
+                    spec.text_duration_ms,
+                    coordinated_ingest,
+                )
+            }
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                PreparedVisualUnit::wrap(s, spec.text_duration_ms)
+            }
+        })
+        .collect();
+
+    // 4. Rebase frame 匹配
+    match_rebase_frames(&spec.rebase_frames, &mut units, &spec.offset_map);
 
     // 5. 诊断日志
     editor_animation_debug_log(&format!(
@@ -365,8 +379,45 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         }
     }
 
+    // Issue #815 评论 6042062633 修改 8: builder 收口时的两个显式跳过点。
+    // 这里只暴露 `cause`；真正的实现要求是上面的 `coordinated_ingest`——
+    // 协同吞吐字要么拿到 cursor track 由它驱动，要么整笔事务跳过，绝不静默降级。
+    let unit_kind_labels = unit_kind_labels(&units);
+    let unit_kinds = unit_kind_labels.join(",");
+    if spec.coordinated_animation_enabled && cursor_visual_track.is_none() {
+        // Issue #815 评论 6042062633 修改 8: 协同模式拿不到 cursor track 时整笔跳过。
+        // old/new caret 几何缺失（或 caret 动画被关掉）都会走到这里；这里没有"文字照播、
+        // 光标不动"的分支——那正是 #815 要删掉的静默降级。
+        editor_animation_transaction_skipped_event(&skip_fields(
+            "coordinated_without_cursor_track",
+            &spec,
+            &unit_kinds,
+            cursor_visual_track.is_some(),
+            spec.inserted_ranges.first().copied(),
+        ));
+        return None;
+    }
+
+    if units.is_empty()
+        && cursor_visual_track.is_none()
+        && (spec.text_animation_enabled || spec.caret_animation_enabled)
+    {
+        // Issue #815 评论 6042062633 修改 8: 调用方要求动画，builder 却既没有 unit
+        // 也没有 cursor track —— 这一笔编辑不会有任何动画。
+        // 三个动画开关全关时不记事件（正常路径在 rebase 层就已 return None，
+        // 根本不会走到 builder）。
+        editor_animation_transaction_skipped_event(&skip_fields(
+            "empty_units_and_cursor_track",
+            &spec,
+            &unit_kinds,
+            cursor_visual_track.is_some(),
+            spec.inserted_ranges.first().copied(),
+        ));
+        return None;
+    }
+
     // 6. 唯一 PreparedTextVisualTransaction struct literal
-    PreparedTextVisualTransaction {
+    Some(PreparedTextVisualTransaction {
         key: spec.key,
         state: TextVisualTransactionState::Pending,
         operation_kind: spec.operation_kind,
@@ -388,7 +439,7 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
         visual_affected_byte_range_old: spec.visual_affected_byte_range_old,
         visual_affected_byte_range_new: spec.visual_affected_byte_range_new,
         layout_basis_revision: spec.layout_basis_revision,
-    }
+    })
 }
 
 // 四类动画 slice 的构造按编辑语义拆到 slices.rs，本文件保留事务装配、
@@ -541,9 +592,9 @@ impl LinuxEditorAnimationCoordinator {
         // （coordinated || smooth）由调用方按同一份设置算出，两者互相独立。
         text_animation_enabled: bool,
         caret_animation_enabled: bool,
-        // Issue #808 评论 5917296533: 协同动画显式模式。决定吞吐字遮罩锚点是否取自
-        // caret 位置。协同不再把文字与光标绑死：文字动画按自己的 timeline 推进，
-        // caret 只决定遮罩的空间锚点/方向。
+        // Issue #815 评论 6042062633 修改 4: 协同动画显式模式。协同打开时，
+        // InsertReveal/DeleteConceal 由本事务的 `cursor_visual_track` 当前帧驱动，
+        // 文字层与光标层消费同一次采样；Reflow 仍独立播放。
         coordinated_animation_enabled: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
@@ -609,24 +660,11 @@ impl LinuxEditorAnimationCoordinator {
                     coordinated_animation_enabled,
                     composition_commit_crossfade: None,
                 };
-                let prepared_tx = build_prepared_transaction(spec);
-
-                // Issue #808 评论 5918236360 问题2: 不能按 units.is_empty() 猜暴判断。
-                // 合法的非可见输入（空格/tab/换行）本来就可以没有 InsertReveal；
-                // 如果有合法 cursor_visual_track，必须保留 cursor-only transaction。
-                // 非协同 smooth cursor 开启时尤其必须如此。coordinated 模式遇到没有
-                // 可见 glyph 的输入，也不能因为没有文字 unit 就把正常 caret track 一起扔掉。
-                // 只有当既没有文字 unit 也没有光标 track 时才是真正的空事务，才 return None。
-                if prepared_tx.units.is_empty() && prepared_tx.cursor_visual_track.is_none() {
-                    editor_animation_debug_log(&format!(
-                        "anim_event: key={:?} op=Insert inserted={:?} skipped: \
-                         prepared_tx.units empty and no cursor_visual_track (no \
-                         InsertReveal/Reflow and no caret track), not enqueueing \
-                         empty transaction",
-                        key, inserted_range_tuple,
-                    ));
-                    return None;
-                }
+                // Issue #815 评论 6042062633 修改 8: builder 自己收口所有跳过点并记
+                // `editor.anim.transaction_skipped`（协同模式拿不到 cursor track、
+                // 有可见字符变化却既无 unit 又无 track）。合法的非可见输入
+                // （空格/tab/换行）没有 InsertReveal 是正常行为，不记事件。
+                let prepared_tx = build_prepared_transaction(spec)?;
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
@@ -691,22 +729,8 @@ impl LinuxEditorAnimationCoordinator {
                     coordinated_animation_enabled,
                     composition_commit_crossfade: None,
                 };
-                let prepared_tx = build_prepared_transaction(spec);
-
-                // Issue #808 评论 5918236360 问题2: 同 Insert 分支，不能按
-                // units.is_empty() 猜暴判断。如果有合法 cursor_visual_track，
-                // 必须保留 cursor-only transaction。只有当既没有文字 unit 也没有
-                // 光标 track 时才是真正的空事务，才 return None。
-                if prepared_tx.units.is_empty() && prepared_tx.cursor_visual_track.is_none() {
-                    editor_animation_debug_log(&format!(
-                        "anim_event: key={:?} op=Delete deleted={:?} skipped: \
-                         prepared_tx.units empty and no cursor_visual_track (no \
-                         DeleteConceal/Reflow and no caret track), not enqueueing \
-                         empty transaction",
-                        key, deleted_ranges_log,
-                    ));
-                    return None;
-                }
+                // Issue #815 评论 6042062633 修改 8: 同 Insert 分支，由 builder 收口跳过点。
+                let prepared_tx = build_prepared_transaction(spec)?;
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
@@ -865,7 +889,8 @@ impl LinuxEditorAnimationCoordinator {
                         coordinated_animation_enabled,
                         composition_commit_crossfade: None,
                     };
-                    let prepared = build_prepared_transaction(spec);
+                    // Issue #815: 跳过点已由 builder 自己记正式事件，这里只传播 None。
+                    let prepared = build_prepared_transaction(spec)?;
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                     emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -970,7 +995,8 @@ impl LinuxEditorAnimationCoordinator {
                     coordinated_animation_enabled,
                     composition_commit_crossfade: None,
                 };
-                let prepared = build_prepared_transaction(spec);
+                // Issue #815: 同 Insert 分支。
+                let prepared = build_prepared_transaction(spec)?;
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");

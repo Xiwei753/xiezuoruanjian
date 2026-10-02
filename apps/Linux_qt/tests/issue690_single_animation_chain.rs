@@ -100,17 +100,28 @@ fn issue690_frame_sample_drives_text_and_cursor() {
         !cursor.contains("Instant::now()"),
         "步骤1: 协同光标不得再独立采样时间（否则仍是两套时钟）"
     );
+    // Issue #815 评论 6042062633 修改 3/6: 光标层消费文字层已经采好的那一份 caret 帧，
+    // 连 frame_now 都不再自己拿，直接吃 CoordinatedMotionFrame。
     assert!(
-        cursor.contains("sample.frame_now"),
-        "步骤1: 协同光标与文字共用同一个采样点"
+        cursor.contains("motion: &crate::sujian_editor_item::render_plan::CoordinatedMotionFrame"),
+        "步骤1: 协同光标接收文字层同帧采好的 CoordinatedMotionFrame，不再自己采样"
+    );
+    assert!(
+        !cursor.contains("frame_now"),
+        "步骤1: 协同光标不得再按 frame_now 重新采样 track（否则又变成两套时钟）"
     );
     let render_plan = method_body(&render_src, "fn build_render_plan_full(");
-    // Issue #727 约束 3+6: compute_coordinated_cursor_position 现在接收 cursor_owner_epoch 参数
     assert!(
         render_plan.contains(
-            "self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)"
+            "self.compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)"
         ),
-        "步骤1: 最终 CursorRenderState 在 build_render_plan_full 内由同一 sample + epoch 算出"
+        "步骤1: 最终 CursorRenderState 在 build_render_plan_full 内由同一帧采样 + epoch 算出"
+    );
+    // Issue #815 修改 6: 本帧只采样一次 caret track。build_render_plan_full 必须复用
+    // build_text_animation_plan_with_sample 的返回值，不得再单独采一次。
+    assert!(
+        !render_plan.contains("self.sample_coordinated_motion_frame("),
+        "步骤1: build_render_plan_full 不得重复采样 caret track（文字层与光标层共用一次）"
     );
     println!("[BUGFIX_690_VERIFY] 步骤1 文字与光标共用帧采样 (FIXED)");
 }
@@ -125,22 +136,27 @@ fn issue690_cursor_sits_on_text_reveal_and_conceal_boundary() {
     let cursor = method_body(&src, "fn compute_coordinated_cursor_position(");
     // Issue #722 评论 5747719529 修正：光标本身就是吞字/吐字的视觉边界。
     // 不再从文字 glyph 切片反推光标位置（删除 frame.x + frame.w / rightmost_x.max()）。
-    // 光标位置由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
-    // 插值决定（sampled_rect / caret_driven_clip）。
+    //
+    // Issue #815 评论 6042062633 修改 3：插值统一收敛到 sample_caret_track_frame
+    // （PreparedCursorVisualTrack 的 sampled_rect_at_progress / progress）。
+    // 光标层与文字层消费同一次采样，光标层自己不再插值一次。
     assert!(
-        cursor.contains("sampled_rect_at_progress") || cursor.contains("sampled_rect"),
-        "步骤2: 光标位置由 PreparedCursorVisualTrack 的 sampled_rect 插值决定"
+        cursor.contains("caret.x") && cursor.contains("caret.y"),
+        "步骤2: 光标位置直接取本帧采样得到的 caret 坐标，不再自己插值"
+    );
+    let sample_fn = method_body(&src, "pub(crate) fn sample_caret_track_frame(");
+    assert!(
+        sample_fn.contains("sampled_rect_at_progress") && sample_fn.contains("progress("),
+        "步骤2: caret 位置由 PreparedCursorVisualTrack 的 sampled_rect 插值决定"
     );
     assert!(
-        cursor.contains("new_rect.x"),
-        "步骤2: 前向 Delete 光标固定在 new_cursor_rect.x，不回抽"
+        sample_fn.contains("sampled_visual_line_id_at_progress"),
+        "步骤2: 本帧 caret 的 visual_line_id 与 caret 位置来自同一次采样"
     );
-    // Issue #727: easing 不再直接出现在 compute_coordinated_cursor_position 中，
-    // 而是通过 PreparedCursorVisualTrack.progress() 内部应用。
-    // 验证 track 被使用即可。
+    // Issue #815: 光标高度取自 canonical new caret rect（前向 Delete 不回抽）。
     assert!(
-        cursor.contains("cursor_visual_track") || cursor.contains("track"),
-        "步骤2: 光标由 cursor_visual_track 插值（easing 在 track 内部应用）"
+        cursor.contains("new_cursor_rect"),
+        "步骤2: 光标高度取自 canonical new_cursor_rect"
     );
     println!("[BUGFIX_690_VERIFY] 步骤2 光标跟随吞吐边界 (FIXED)");
 }

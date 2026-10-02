@@ -1,20 +1,14 @@
 use super::super::coordinator::LinuxEditorAnimationCoordinator;
 use super::*;
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::cursor_motion::sample_coordinated_cursor_rect_at;
-use crate::sujian_editor_item::animation::transaction_builder::build_delete_conceal_slices;
+use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::animation::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame,
     TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline, VisualUnitTiming,
 };
-use crate::sujian_editor_item::animation_mode::AnimationMode;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect,
-};
-use crate::sujian_editor_item::render_plan::{
-    CoordinatedMotionFrame, CursorRenderState, SampledCaretFrame,
 };
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use std::time::Duration;
@@ -223,6 +217,8 @@ fn elapsed_unit(
         VisualUnitTiming::Timed { started_at, .. } => {
             *started_at = Some(now - Duration::from_millis(elapsed_ms));
         }
+        // Issue #815: CaretTrack 没有自己的时间线，起点在 cursor track 上。
+        VisualUnitTiming::CaretTrack { .. } => {}
     }
     unit
 }
@@ -1030,6 +1026,8 @@ fn issue690_match_rebase_frames_continues_unit_timeline() {
             started_at,
             ..
         } => (*start_fraction, started_at.is_none()),
+        // Issue #815: CaretTrack 没有独立时间线，rebase 连续性由 cursor handoff 承担。
+        VisualUnitTiming::CaretTrack { retired } => (if *retired { 1.0 } else { 0.0 }, true),
     };
     assert!(
         (start_fraction - 0.75).abs() < 1e-6,

@@ -89,10 +89,12 @@ fn issue1_layout_property_changed_must_reconcile_not_just_bump() {
     );
 }
 
-/// 问题1 守卫3: build_render_plan_full 先 sample_coordinated_motion_frame，
-/// 之后才在 build_text_animation_plan_with_sample 检查 layout_basis_revision。
-/// 修复后应先按 layout basis 过滤/收口旧事务，再采样 caret motion，
-/// 或让 caret owner 选择看 layout basis。
+/// 问题1 守卫3: 必须先按 layout basis 过滤/收口旧事务，再采样 caret motion。
+///
+/// Issue #815 评论 6042062633 修改 6：build_render_plan_full 不再自己单独采一次
+/// `sample_coordinated_motion_frame`（那正是"basis 守卫只挡 glyph/clip 不挡 caret"
+/// 的根因）。唯一的采样发生在 `build_text_animation_plan_with_sample` 内部，且在
+/// layout basis 收口循环之后。
 #[test]
 fn issue1_build_render_plan_full_samples_caret_before_basis_check() {
     let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
@@ -100,26 +102,42 @@ fn issue1_build_render_plan_full_samples_caret_before_basis_check() {
     let plan_pos = src
         .find(plan_marker)
         .expect("build_render_plan_full 必须存在");
-    // 取 build_render_plan_full 函数体前 3000 字符窗口
     let plan_window = &src[plan_pos..plan_pos.saturating_add(3000).min(src.len())];
 
-    let sample_pos = plan_window
-        .find("sample_coordinated_motion_frame")
-        .expect("sample_coordinated_motion_frame 调用必须存在");
-    let build_anim_pos = plan_window
-        .find("build_text_animation_plan_with_sample")
-        .expect("build_text_animation_plan_with_sample 调用必须存在");
-
-    // 当前缺陷：sample_coordinated_motion_frame 在 build_text_animation_plan_with_sample 之前
-    // （即先采样 caret motion，后才检查 layout_basis_revision）
-    let samples_caret_before_basis_check = sample_pos < build_anim_pos;
+    // build_render_plan_full 只消费 build_text_animation_plan_with_sample 的返回值，
+    // 不得再单独调用一次 sample_coordinated_motion_frame。
     assert!(
-        !samples_caret_before_basis_check,
-        "build_render_plan_full 先调用 sample_coordinated_motion_frame（位置 {}），\
-         之后才调用 build_text_animation_plan_with_sample（位置 {}）检查 \
-         layout_basis_revision。caret motion 在 basis 检查之前采样，旧事务的 caret \
-         track 已被采样喂给 cursor layer，basis 守卫只挡 glyph/clip 不挡 caret。",
-        sample_pos, build_anim_pos
+        !plan_window.contains("self.sample_coordinated_motion_frame("),
+        "build_render_plan_full 不得自己再采一次 caret track（文字层与光标层共用一次采样）"
+    );
+    assert!(
+        plan_window.contains("build_text_animation_plan_with_sample"),
+        "build_render_plan_full 必须经由 build_text_animation_plan_with_sample 取得 caret 帧"
+    );
+
+    // 采样必须落在 basis 收口之后
+    let text_marker = "fn build_text_animation_plan_with_sample";
+    let text_pos = src
+        .find(text_marker)
+        .expect("build_text_animation_plan_with_sample 必须存在");
+    let mut text_end = (text_pos + 6000).min(src.len());
+    while !src.is_char_boundary(text_end) {
+        text_end -= 1;
+    }
+    let text_window = &src[text_pos..text_end];
+    let retire_pos = text_window
+        .find("retire_caret_driven_units()")
+        .expect("必须先按 layout basis 收口旧事务的 caret motion");
+    // 只认真正的调用点，不认文档注释里提到的名字。
+    let sample_pos = text_window
+        .find("self.sample_coordinated_motion_frame(")
+        .expect("sample_coordinated_motion_frame 调用必须存在");
+    assert!(
+        retire_pos < sample_pos,
+        "build_text_animation_plan_with_sample 必须先按 layout basis 收口旧事务（位置 {}），\
+         再采样 caret motion（位置 {}）",
+        retire_pos,
+        sample_pos
     );
 }
 

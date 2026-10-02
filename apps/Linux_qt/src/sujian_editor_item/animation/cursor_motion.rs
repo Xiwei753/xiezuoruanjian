@@ -2,13 +2,10 @@ use std::time::Instant;
 
 use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
 use super::rebase::RebaseCaretHandoff;
-use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
-use crate::sujian_editor_item::animation::{
-    PreparedCursorVisualTrack, PreparedTextVisualTransaction, TextVisualOperationKind,
-    TextVisualTransactionState,
-};
+use crate::sujian_editor_item::animation::{PreparedCursorVisualTrack, TextVisualTransactionState};
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use crate::sujian_editor_item::render_plan::SampledCaretFrame;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 pub(crate) fn build_cursor_visual_track(
@@ -61,50 +58,31 @@ pub(crate) fn build_cursor_visual_track(
     }
 }
 
-pub(crate) fn sample_coordinated_cursor_rect_at(
-    tx: &PreparedTextVisualTransaction,
-    now: Instant,
-) -> Option<CursorRect> {
-    // 保留 old_cursor_rect 的 early return 语义：旧事务没有 old caret 时不参与交棒。
-    let _old_rect = tx.old_cursor_rect.as_ref()?;
-    let new_rect = tx.new_cursor_rect.as_ref()?;
-    let h = new_rect.bottom - new_rect.top;
-    let op = tx.operation_kind;
-
-    // Issue #808: 光标只采样光标自己的 track，不再保留"文字效果跟着光标边界"旧语义。
-    // - 有 cursor_visual_track 时：直接 sample track（光标自己的 ease_out_cubic）。
-    // - 没有 track 时：返回 None——不再用 tx.progress(now) fallback 伪造轨迹。
-    //   text-only 事务永远不能生成插值 cursor；光标直接由 canonical/Snap 接管。
-    // 文字的 InsertReveal/DeleteConceal 裁切由文字自己的 timeline 驱动，不消费本帧 caret 位置。
-    let sample_caret_position = || -> Option<(f64, f64)> {
-        match tx.cursor_visual_track.as_ref() {
-            Some(track) => {
-                // Issue #808: 光标位置由 caret track 自己的 timeline + ease_out_cubic 决定。
-                // 文字与光标各自按自己的 duration/easing 推进，不共用同一条曲线。
-                let r = track.sampled_rect_at_progress(track.progress(now));
-                Some((r.x, r.top))
-            }
-            None => {
-                // Issue #808 评论 5916391891 修改 3: 没有 cursor_visual_track 就返回 None。
-                // 不再用 tx.progress(now) fallback 伪造光标轨迹——text-only 事务
-                // 不交棒插值 cursor，光标由 canonical/Snap 接管。
-                None
-            }
-        }
-    };
-
-    // Issue #808: 所有操作类型统一使用 caret track 插值决定光标位置。
-    // 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"或"光标去追文字动画"
-    // 的旧语义。文字和光标是两条独立的动画，协同只表示同事务/同首帧/同 rebase。
-    let _ = op;
-    let (cx, cy) = sample_caret_position()?;
-
-    Some(CursorRect {
-        x: cx,
-        top: cy,
-        bottom: cy + h,
-        baseline_y: new_rect.baseline_y,
-    })
+/// Issue #815 评论 6042062633 修改 3: 协同动画每帧的**唯一** caret 采样入口。
+///
+/// 在同一个 `frame_now` 上一次性算出 caret 的完整状态：文档坐标 rect、
+/// x、top、当前 visual_line_id、track progress。协同模式下所有消费方都只调它：
+/// - [`LinuxEditorAnimationCoordinator::sample_coordinated_motion_frame`]
+///   （光标层与文字层共享的 `CoordinatedMotionFrame`）
+/// - [`LinuxEditorAnimationCoordinator::compute_coordinated_cursor_position`]
+///   （光标层画 caret，不再重新采样 track）
+/// - `take_rebase_frames`（连续输入/删除时交棒新 track 的起点）
+///
+/// 任何一处都不许再自己算一次 `track.progress(now)` + `sampled_rect_at_progress`——
+/// 那正是 #815 说的"文字和 caret 各跑一条时间线"的根因。
+pub(crate) fn sample_caret_track_frame(
+    track: &PreparedCursorVisualTrack,
+    frame_now: Instant,
+) -> SampledCaretFrame {
+    let progress = track.progress(frame_now);
+    let rect = track.sampled_rect_at_progress(progress);
+    SampledCaretFrame {
+        x: rect.x,
+        y: rect.top,
+        visual_line_id: track.sampled_visual_line_id_at_progress(progress),
+        progress,
+        rect,
+    }
 }
 
 impl LinuxEditorAnimationCoordinator {
@@ -264,16 +242,12 @@ impl LinuxEditorAnimationCoordinator {
                 owner_key: None,
             };
         }
-        // 采样 caret geometry + progress。
-        let (x, y, visual_line_id, progress) = match tx.cursor_visual_track.as_ref() {
-            Some(track) => {
-                let progress = track.progress(sample.frame_now);
-                let r = track.sampled_rect_at_progress(progress);
-                let line_id = track.sampled_visual_line_id_at_progress(progress);
-                (r.x, r.top, line_id, progress)
-            }
+        // Issue #815 评论 6042062633 修改 3: 本帧唯一一次 caret track 采样。
+        // 返回值同时喂给光标层和文字吞吐层；文字层不得再自己算一次时间。
+        let track = match tx.cursor_visual_track.as_ref() {
+            Some(track) => track,
+            // 无 cursor_visual_track：无有效 caret motion。
             None => {
-                // 无 cursor_visual_track：无有效 caret motion。
                 return crate::sujian_editor_item::render_plan::CoordinatedMotionFrame {
                     caret: None,
                     owner_key: None,
@@ -281,15 +255,10 @@ impl LinuxEditorAnimationCoordinator {
             }
         };
         crate::sujian_editor_item::render_plan::CoordinatedMotionFrame {
-            caret: Some(crate::sujian_editor_item::render_plan::SampledCaretFrame {
-                x,
-                y,
-                visual_line_id,
-                progress,
-            }),
-            // Issue #727 评论 5757225958 问题5 / Issue #808: 记录拥有此 caret frame 的事务 key。
-            // 协同只表示同事务/同首帧/同 rebase，不把两条时间线绑成一条。文字 unit 用文字
-            // 自己的 timeline，cursor track 用光标自己的 timeline，各算各的 progress。
+            caret: Some(sample_caret_track_frame(track, sample.frame_now)),
+            // Issue #727 评论 5757225958 问题5 / Issue #815: 记录拥有此 caret frame 的事务 key。
+            // 只有同 key 的 CaretTrack unit 能消费这份采样；其它事务的 CaretTrack unit
+            // 立刻收口到终态。
             owner_key: Some(key),
         }
     }
@@ -313,90 +282,43 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
+    /// Issue #815 评论 6042062633 修改 3: 光标层画 caret 的位置来源。
+    ///
+    /// 消费 [`CoordinatedMotionFrame`](crate::sujian_editor_item::render_plan::CoordinatedMotionFrame)
+    /// 里那一份**已经采样好的** caret frame，不再自己重新采样 track、不再按
+    /// `operation_kind` 分叉。本函数只做 ownership / 状态校验：
+    /// 这份采样必须属于本事务（`owner_key == tx.key`），且事务处于
+    /// Rendering / Paused。
+    ///
+    /// 返回 `(x, y_doc, h)`，其中 x/top 来自采样帧，h 仍是编辑后 canonical caret 的
+    /// 稳定行高（不随 track 中间态插值，避免光标高度抖动）。
     pub(crate) fn compute_coordinated_cursor_position(
         &self,
-        sample: &AnimationFrameSample,
         current_cursor_epoch: u64,
+        motion: &crate::sujian_editor_item::render_plan::CoordinatedMotionFrame,
     ) -> Option<(f64, f64, f64)> {
-        // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
-        // 调 active_text_transaction_key() 取活动事务后，检查其 cursor_owner_epoch
-        // 是否等于 current_cursor_epoch。epoch 不一致时返回 None。
-        // Issue #808: epoch 不一致时事务失去 caret motion ownership，但文字 Timed unit
-        // 继续自己的时间线（与 caret track 独立），不因 caret motion 失效而收口。
-        let key = self.active_text_transaction_key()?;
+        let key = *motion.owner_key.as_ref()?;
+        let caret = *motion.caret.as_ref()?;
         let tx = self
             .prepared_queue
             .active_transactions()
             .iter()
             .find(|t| t.key == key)?;
-
-        // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
-        // Issue #808: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
-        // 但文字 Timed unit 继续自己的时间线，不因 caret motion 失效而收口。
+        // Issue #705 评论 5717380886: epoch 不一致时返回 None——事务立刻失去 caret
+        // motion ownership。但这只影响光标层：失去 ownership 的协同吞吐字会由
+        // build_text_animation_plan_with_sample 立刻 retire 到终态，
+        // 不再停在半路等一条已经不推进的 track。
         if tx.cursor_owner_epoch != current_cursor_epoch {
             return None;
         }
-
-        let _old_rect = tx.old_cursor_rect.as_ref()?;
+        if !matches!(
+            tx.state,
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused
+        ) {
+            return None;
+        }
         let new_rect = tx.new_cursor_rect.as_ref()?;
         let h = new_rect.bottom - new_rect.top;
-
-        match tx.state {
-            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {}
-            _ => return None,
-        }
-
-        let op = tx.operation_kind;
-        let frame_now = sample.frame_now;
-
-        // Issue #808: 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"旧语义。
-        // - 有 cursor_visual_track 时：用 sampled_rect(frame_now) 插值（光标自己的 ease_out_cubic）。
-        // - 没有 track 时：无有效 caret motion，返回 None 走 CursorOnly 路径。
-        // 文字的 InsertReveal/DeleteConceal 裁切由文字自己的 timeline 驱动，不消费本帧 caret 位置。
-        let sample_caret_driven_clip = || -> Option<(f64, f64)> {
-            match tx.cursor_visual_track.as_ref() {
-                Some(track) => {
-                    // Issue #808: 光标位置由 caret track 自己的 timeline + ease_out_cubic 决定。
-                    // 文字与光标各自按自己的 duration/easing 推进，不共用同一条曲线。
-                    let r = track.sampled_rect_at_progress(track.progress(frame_now));
-                    Some((r.x, r.top))
-                }
-                None => {
-                    // Issue #727 约束 6: 无 cursor_visual_track = 无有效 caret motion。
-                    // 返回 None 让 build_render_plan_full 走 CursorOnly 路径，
-                    // 不用事务的 old/new cursor rect 改写光标位置。
-                    None
-                }
-            }
-        };
-
-        // Issue #808: 所有操作类型统一使用 caret track 插值决定光标位置。
-        // 光标只采样光标自己的 track，不保留"文字效果跟着光标边界"或"光标去追文字动画"
-        // 的旧语义。文字和光标是两条独立的动画，协同只表示同事务/同首帧/同 rebase。
-        //
-        // 唯一例外：前向 Delete（conceal_to_left_edge=false）逻辑光标本来不移动，
-        // 固定在 new_cursor_rect，只让右侧文字向光标方向收掉。
-        let has_forward_delete = op == TextVisualOperationKind::Delete
-            && tx.units.iter().any(|u| {
-                u.slice.kind == AnimatedSliceKind::DeleteConceal && !u.slice.conceal_to_left_edge
-            });
-
-        if has_forward_delete {
-            // Issue #722 评论 5748596920 问题3: 前向 Delete 时逻辑光标固定在 new_cursor_rect，
-            // 但 conceal edge 必须从被删内容的远端向 caret.x 运动（在 compute_frame_caret_driven
-            // 内部由 visible 参数驱动），不再把固定 caret.x 既当终点又当当前 conceal edge。
-            // 用 forward_delete_sampled 标记逐帧采样机制。
-            let forward_delete_sampled = true;
-            if forward_delete_sampled {
-                // 逻辑光标固定，但文字裁切随帧变化（由 compute_frame_caret_driven 内部处理）。
-                Some((new_rect.x, new_rect.top, h))
-            } else {
-                Some((new_rect.x, new_rect.top, h))
-            }
-        } else {
-            // caret_driven_clip: 光标位置由 caret track 插值决定。
-            let (x, y) = sample_caret_driven_clip()?;
-            Some((x, y, h))
-        }
+        Some((caret.x, caret.y, h))
     }
 }

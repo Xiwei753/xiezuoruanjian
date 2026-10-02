@@ -61,7 +61,9 @@ fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     //（把 inserted_range 所在 visual line 并入 new_raster_ids）变长，窗口随之增大。
     // Issue #808 评论 5916391891 修改 2: inject 返回状态结构体，函数进一步变长。
     // Issue #810 评论 问题1: cluster 数据流重构注释使函数进一步变长，窗口增大。
-    let window = function_window(&src, "fn prepare_edit_motion", 34500);
+    // Issue #815 评论 6042062633 修改 8: 新增 3 个正式跳过事件（suppressed_by_context /
+    // stale_current_canonical / canonical_invariant_failure），函数进一步变长，窗口再增大。
+    let window = function_window(&src, "fn prepare_edit_motion", 40000);
 
     // 修复后：layout_revision = new_revision 存在。
     assert!(
