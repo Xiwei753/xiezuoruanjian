@@ -11,6 +11,10 @@
 //   2b. Embed 命中按圆判断：圆外不命中（含外接矩形的方形角），圆内再分 title /
 //      圆环 border / innerContent；边端点落在真实圆周上而不是矩形边
 //      —— hitTestWithScene / lineCircleIntersection (StarMapGeometry.ets, #813)
+//   2c. title / 圆环的交互热区尺寸只有一份真相（StarMapGeometry 导出的
+//      EMBED_TITLE_HIT_HEIGHT / EMBED_BORDER_HIT_WIDTH，UI 侧必须 import 同一份）；
+//      圆形 responseRegion 按"最大带高"分带，丢弃的圆帽高度不随 zoom 放大
+//      —— buildCircleResponseBands (StarMapGeometry.ets, #813)
 //   3. 自动布局只在用户显式点击时调用，且保留 nodeId/尺寸；
 //      结果通过 position patch 写回 —— autoGridLayoutNodes / generatePositionPatches
 //   4. 节点/Embed 拖动：屏幕位移 ÷ zoomScale 落到布局坐标，返回新数组
@@ -199,8 +203,10 @@ function buildEdgeJson(starmapId, fromNodeId, toNodeId, kind, label, uuid, now) 
 }
 
 // ── 常量（与 StarMapGeometry.ets 一致）──
-const EMBED_TITLE_HEIGHT = 24
-const EMBED_BORDER_WIDTH = 3
+// Embed 命中规格：几何层唯一真相源，UI 层必须 import 同一份。
+// EMBED_BORDER_HIT_WIDTH 是*交互热区*宽度（12vp），不是视觉描边宽度（1/3vp）。
+const EMBED_TITLE_HIT_HEIGHT = 24
+const EMBED_BORDER_HIT_WIDTH = 12
 
 // ── 被测规格：pointInEmbedCircle (StarMapGeometry.ets) ──
 function pointInEmbedCircle(rect, x, y) {
@@ -220,12 +226,12 @@ function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds) 
     const isEmbed = embedInstanceIds.has(r.nodeId)
     if (isEmbed) {
       if (!pointInEmbedCircle(r, screenX, screenY)) continue
-      if (screenY <= r.y + EMBED_TITLE_HEIGHT) {
+      if (screenY <= r.y + EMBED_TITLE_HIT_HEIGHT) {
         return { scenePath, objectKind: 'embedTitle', objectId: r.nodeId, hitRegion: 'title' }
       }
       const cx = r.x + r.width / 2
       const cy = r.y + r.height / 2
-      const inner = Math.max(0, r.width / 2 - EMBED_BORDER_WIDTH)
+      const inner = Math.max(0, r.width / 2 - EMBED_BORDER_HIT_WIDTH)
       const dist = Math.sqrt((screenX - cx) * (screenX - cx) + (screenY - cy) * (screenY - cy))
       if (dist >= inner) {
         return { scenePath, objectKind: 'embedBorder', objectId: r.nodeId, hitRegion: 'border' }
@@ -303,7 +309,12 @@ function computeEdgeEndpoints(fromRect, toRect, fromIsEmbed, toIsEmbed) {
 // ── 被测规格：buildCircleResponseBands (StarMapGeometry.ets) ──
 // ArkUI 组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区，
 // 圆形子视图必须自己把热区切成若干水平带逼近圆。
-const DEFAULT_CIRCLE_RESPONSE_BANDS = 32
+//
+// 每条带的半宽取上下两条边所在高度处圆半宽的较小值（内切），
+// 保证永远不会把圆外的点算成圆内；极点处宽度为 0 的带直接丢弃。
+// 带数按 ceil(直径 / 最大带高) 推导，不写死：写死会让丢弃的圆帽高度
+// （= 带高）随 zoom 一起放大（3x、直径 600、32 带 → 上下各 18.75vp 点不到）。
+const MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP = 3
 
 function circleHalfWidthAtY(r, y) {
   const dy = y - r
@@ -311,12 +322,11 @@ function circleHalfWidthAtY(r, y) {
   return Math.sqrt(r * r - dy * dy)
 }
 
-// 每条带的半宽取上下两条边所在高度处圆半宽的较小值（内切），
-// 保证永远不会把圆外的点算成圆内；极点处宽度为 0 的带直接丢弃。
-function buildCircleResponseBands(diameter, bands = DEFAULT_CIRCLE_RESPONSE_BANDS) {
+function buildCircleResponseBands(diameter, maxBandHeight = MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP) {
   const result = []
-  if (diameter <= 0 || bands <= 0) return result
+  if (diameter <= 0 || maxBandHeight <= 0) return result
   const r = diameter / 2
+  const bands = Math.max(1, Math.ceil(diameter / maxBandHeight))
   const bandHeight = diameter / bands
   for (let i = 0; i < bands; i++) {
     const y = i * bandHeight
@@ -557,7 +567,7 @@ console.log('10. hitTestWithScene：Embed title 命中 → embedTitle/title')
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
-  // title 区域：圆内顶部 EMBED_TITLE_HEIGHT(24) 高度，y ∈ [50, 74]
+  // title 区域：圆内顶部 EMBED_TITLE_HIT_HEIGHT(24) 高度，y ∈ [50, 74]
   const hit = hitTestWithScene(rects, 200, 60, scenePath, embedIds)
   assert(hit !== null, '命中 Embed title 区域返回非 null')
   assert(hit.objectKind === 'embedTitle', 'objectKind = embedTitle')
@@ -573,7 +583,7 @@ console.log('11. hitTestWithScene：Embed 圆环 border 命中 → embedBorder/b
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
-  // 圆环：到圆心距离 >= 半径 - EMBED_BORDER_WIDTH = 97
+  // 圆环：到圆心距离 >= 半径 - EMBED_BORDER_HIT_WIDTH = 88
   // 正左：圆心正左 100 → 距离 100（圆周）
   const hitLeft = hitTestWithScene(rects, 100, 150, scenePath, embedIds)
   assert(hitLeft !== null && hitLeft.objectKind === 'embedBorder' && hitLeft.hitRegion === 'border',
@@ -582,10 +592,19 @@ console.log('11. hitTestWithScene：Embed 圆环 border 命中 → embedBorder/b
   const hitBottom = hitTestWithScene(rects, 200, 250, scenePath, embedIds)
   assert(hitBottom !== null && hitBottom.objectKind === 'embedBorder' && hitBottom.hitRegion === 'border',
     '圆周正下点 → embedBorder/border')
-  // 斜向圆环：圆心 + (70, 70) → 距离 ≈ 98.99，落在 [97, 100] 圆环内
+  // 斜向圆环：圆心 + (70, 70) → 距离 ≈ 98.99，落在 [88, 100] 圆环内
   const hitDiagonal = hitTestWithScene(rects, 270, 220, scenePath, embedIds)
   assert(hitDiagonal !== null && hitDiagonal.objectKind === 'embedBorder' && hitDiagonal.hitRegion === 'border',
     '斜向圆周点 → embedBorder/border（不是矩形边）')
+  // 交互热区 12vp：距离 89 的点（正好在内切圆环内侧一点）仍算边框，
+  // 说明热区比视觉描边（1/3vp）宽得多，手指点得到
+  const hitInsideRing = hitTestWithScene(rects, 200, 239, scenePath, embedIds)
+  assert(hitInsideRing !== null && hitInsideRing.objectKind === 'embedBorder',
+    '距离 89（圆环内侧）→ 仍是 embedBorder，交互热区 12vp 宽于视觉描边')
+  // 圆环内切边界再往里一点：距离 87 已经是子图内部
+  const hitInnerEdge = hitTestWithScene(rects, 200, 237, scenePath, embedIds)
+  assert(hitInnerEdge !== null && hitInnerEdge.objectKind === 'embedInnerContent',
+    '距离 87（越过圆环内切）→ embedInnerContent')
 }
 
 console.log('12. hitTestWithScene：圆外方形角不再命中 Embed')
@@ -613,7 +632,7 @@ console.log('13. hitTestWithScene：Embed innerContent 命中 → embedInnerCont
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
-  // 圆心附近：y > 74（title 之下）且到圆心距离 < 97（不在圆环上）
+  // 圆心附近：y > 74（title 之下）且到圆心距离 < 88（不在圆环上）
   const hit = hitTestWithScene(rects, 200, 150, scenePath, embedIds)
   assert(hit !== null, '命中 Embed innerContent 返回非 null')
   assert(hit.objectKind === 'embedInnerContent', 'objectKind = embedInnerContent')
@@ -720,9 +739,13 @@ console.log('20. 拉线预览起点：与正式边共用 edgeEndpointBoundaryPoi
 console.log('21. buildCircleResponseBands：热区分带覆盖整个圆且不越出圆外')
 {
   const bands = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER)
+  const expectedBands = Math.ceil(DEFAULT_EMBED_DIAMETER / MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP)
   // 内切方案会丢掉极点处宽度为 0 的两条带
-  assert(bands.length === DEFAULT_CIRCLE_RESPONSE_BANDS - 2,
-    `默认 ${DEFAULT_CIRCLE_RESPONSE_BANDS} 带中丢弃 2 条极点带（实际 ${bands.length}）`)
+  assert(bands.length === expectedBands - 2,
+    `按最大带高 ${MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP}vp 分 ${expectedBands} 带，丢弃 2 条极点带（实际 ${bands.length}）`)
+  // 每条带高都不超过最大带高
+  assert(bands.every(b => b.height <= MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP + 1e-9),
+    '每条带高不超过 MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP')
   // 所有带必须落在 [0, 直径] 内，且水平居中于圆心 x=100
   let inside = true
   let centered = true
@@ -760,13 +783,13 @@ console.log('22. buildCircleResponseBands：圆外方角不再属于热区')
   assert(inResponseRegion(100, 100), '圆心在热区内')
   assert(inResponseRegion(1, 100) && inResponseRegion(199, 100),
     '左右边界中点都在热区内')
-  // 内切方案下极点处宽度为 0，最上和最下各有一条带被丢弃（约一带高）。
   // 圆外远处明确不可点
   assert(!inResponseRegion(0, 0) && !inResponseRegion(-1, 100),
     '圆外点不在热区内')
-  // 刻意的取舍：宁可漏掉圆极点一条带，也不能把圆外的点算成圆内。
-  // 圆顶/圆底中点按两带高内缩后必须可点，证明丢的只是极点窄条而不是整段。
-  const bandHeight = DEFAULT_EMBED_DIAMETER / DEFAULT_CIRCLE_RESPONSE_BANDS
+  // 内切方案下极点处宽度为 0，最上和最下各有一条带被丢弃（各一条带高）。
+  // 刻意的取舍：宁可漏掉极点一条窄带，也不能把圆外的点算成圆内。
+  const bandHeight = DEFAULT_EMBED_DIAMETER /
+    Math.ceil(DEFAULT_EMBED_DIAMETER / MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP)
   const polarInset = 2 * bandHeight
   assert(inResponseRegion(100, polarInset) && inResponseRegion(100, DEFAULT_EMBED_DIAMETER - polarInset),
     `圆顶/圆底内缩 ${polarInset.toFixed(2)}vp 后可点`)
@@ -778,14 +801,39 @@ console.log('22. buildCircleResponseBands：圆外方角不再属于热区')
     `最底一条带的半宽 ${(all[all.length - 1].width / 2).toFixed(2)}vp 仍明显小于半径`)
 }
 
-console.log('23. buildCircleResponseBands：退化输入不产生热区')
+console.log('23. buildCircleResponseBands：丢弃的圆帽高度不随缩放放大')
+{
+  // 写死带数时圆帽高度 = 直径/带数，3x 时会涨到 18.75vp（看得见点不到）。
+  // 按最大带高分带后，无论缩放多少，圆帽都只有一个固定上限。
+  for (const zoom of [0.3, 1, 2, 3]) {
+    const diameter = DEFAULT_EMBED_DIAMETER * zoom
+    const bands = buildCircleResponseBands(diameter)
+    // 圆帽高度 = 第一条带的 y（极点那条被丢弃）
+    const capHeight = bands[0].y
+    assert(capHeight <= MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP + 1e-9,
+      `zoom=${zoom}（直径 ${diameter}）圆帽高度 ${capHeight.toFixed(3)}vp <= 上限 ${MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP}vp`)
+    // 对比：旧算法（固定 32 带）在 3x 时圆帽高达 18.75vp
+    if (zoom === 3) {
+      const legacyCap = diameter / 32
+      assert(legacyCap > MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP * 4,
+        `对照：固定 32 带在 3x 时圆帽 ${legacyCap.toFixed(2)}vp，远超上限`)
+    }
+  }
+  // 带数随直径线性增长是已知代价，明确记录一下量级
+  const at3x = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER * 3).length
+  assert(at3x === Math.ceil(DEFAULT_EMBED_DIAMETER * 3 / MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP) - 2,
+    `3x 下带数 ${at3x} 条（直径/最大带高 − 2 条极点带）`)
+}
+
+console.log('24. buildCircleResponseBands：退化输入不产生热区')
 {
   assert(buildCircleResponseBands(0).length === 0, '直径 0 不产生热区')
   assert(buildCircleResponseBands(-10).length === 0, '负直径不产生热区')
-  assert(buildCircleResponseBands(200, 0).length === 0, '分带数 0 不产生热区')
+  assert(buildCircleResponseBands(200, 0).length === 0, '最大带高 0 不产生热区')
+  assert(buildCircleResponseBands(200, -3).length === 0, '负最大带高不产生热区')
 }
 
-console.log('24. 预览端点与正式边端点在同一形状上一致')
+console.log('25. 预览端点与正式边端点在同一形状上一致')
 {
   // 同一个 Embed、同一个目标：预览用的 edgeEndpointBoundaryPoint
   // 与正式边 computeEdgeRender 里的端点必须完全相同，不存在两套算法
@@ -797,7 +845,7 @@ console.log('24. 预览端点与正式边端点在同一形状上一致')
     `预览起点与正式边终点同源（预览 ${JSON.stringify(preview)}，正式 ${JSON.stringify(formal.end)}）`)
 }
 
-console.log('25. GestureState：beginPanCanvas 传入 ownerScenePath')
+console.log('26. GestureState：beginPanCanvas 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -810,7 +858,7 @@ console.log('25. GestureState：beginPanCanvas 传入 ownerScenePath')
   assert(eq(s.startPoint, { x: 10, y: 20 }), 'startPoint 正确')
 }
 
-console.log('26. GestureState：beginNodeMenu 传入 ownerScenePath')
+console.log('27. GestureState：beginNodeMenu 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -822,7 +870,7 @@ console.log('26. GestureState：beginNodeMenu 传入 ownerScenePath')
   assert(s.activeItemKind === 'node', 'activeItemKind = node')
 }
 
-console.log('27. GestureState：beginConnect 传入 ownerScenePath')
+console.log('28. GestureState：beginConnect 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -834,7 +882,7 @@ console.log('27. GestureState：beginConnect 传入 ownerScenePath')
   assert(s.activeItemKind === 'node', 'activeItemKind = node')
 }
 
-console.log('28. GestureState：beginMoveNode 传入 ownerScenePath')
+console.log('29. GestureState：beginMoveNode 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -846,7 +894,7 @@ console.log('28. GestureState：beginMoveNode 传入 ownerScenePath')
   assert(s.activeItemKind === 'node', 'activeItemKind = node')
 }
 
-console.log('29. GestureState：beginMoveEmbed 传入 ownerScenePath')
+console.log('30. GestureState：beginMoveEmbed 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -858,7 +906,7 @@ console.log('29. GestureState：beginMoveEmbed 传入 ownerScenePath')
   assert(s.activeItemKind === 'embed', 'activeItemKind = embed')
 }
 
-console.log('30. GestureState：activeItemKind 区分 node vs embed')
+console.log('31. GestureState：activeItemKind 区分 node vs embed')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -874,7 +922,7 @@ console.log('30. GestureState：activeItemKind 区分 node vs embed')
   assert(tracker.getState().activeItemKind === 'node', 'beginPanCanvas → activeItemKind = node')
 }
 
-console.log('31. GestureState：reset() 清空 ownerScenePath 和 activeItemKind')
+console.log('32. GestureState：reset() 清空 ownerScenePath 和 activeItemKind')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -889,7 +937,7 @@ console.log('31. GestureState：reset() 清空 ownerScenePath 和 activeItemKind
   assert(s.activeItemId === '', 'reset 后 activeItemId 为空')
 }
 
-console.log('32. GestureState：isOwnedByScene 正确比较路径')
+console.log('33. GestureState：isOwnedByScene 正确比较路径')
 {
   const tracker = createGestureStateTracker()
   const scenePath1 = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]

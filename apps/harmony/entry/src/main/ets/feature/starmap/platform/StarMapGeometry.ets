@@ -57,9 +57,22 @@ const ARROW_SIZE: number = 10
 const ARROW_ANGLE: number = Math.PI / 6 // 30°
 const LABEL_OFFSET: number = 8
 
-// Embed 命中区域尺寸定义（vp）
-const EMBED_TITLE_HEIGHT: number = 24   // Embed title 条高度
-const EMBED_BORDER_WIDTH: number = 3    // Embed 边框宽度
+/**
+ * Embed 命中规格（vp）——**唯一真相源**。
+ *
+ * 这里定义的是*交互热区*，不是视觉描边宽度：
+ * - 产品规则是"点文字/边框选中子星图，点内部编辑子星图"；
+ * - 视觉描边只有 1vp（未选中）/ 3vp（选中），那是给人看的；
+ * - 手指点圆环时按视觉宽度命中只有 1~3vp，远窄于手指精度，所以交互热区单独取值。
+ *
+ * StarMapScene 的 title 层高度和 onTouchIntercept 的圆环判定都 import 这两个常量，
+ * 不允许在 UI 侧再抄一份：一旦两边不一致，就会出现"手指按这里算外层边框、
+ * 拉线松手到同一点却算子图内部"的错位（Issue #813 复审）。
+ *
+ * 任何调整只改这里一处，命中测试与真实触摸就必然一致。
+ */
+export const EMBED_TITLE_HIT_HEIGHT: number = 24
+export const EMBED_BORDER_HIT_WIDTH: number = 12
 
 // ─── 节点矩形派生 ───
 
@@ -133,8 +146,8 @@ export function pointInEmbedCircle(rect: PlatformNodeRect, x: number, y: number)
  *
  * Embed 是正圆，所以命中判断先走圆：(x-cx)^2 + (y-cy)^2 <= r^2，不在圆内直接跳过该 Embed。
  * 圆内再区分：
- * - title（顶部 EMBED_TITLE_HEIGHT 高度区域）→ objectKind='embedTitle'，表示"选中 Embed"
- * - border（半径方向最后 EMBED_BORDER_WIDTH 的圆环）→ objectKind='embedBorder'，表示"选中 Embed"
+ * - title（顶部 EMBED_TITLE_HIT_HEIGHT 高度区域）→ objectKind='embedTitle'，表示"选中 Embed"
+ * - border（半径方向最后 EMBED_BORDER_HIT_WIDTH 的圆环）→ objectKind='embedBorder'，表示"选中 Embed"
  * - innerContent（其余圆内区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
  *
  * @param rects 节点矩形列表
@@ -162,8 +175,8 @@ export function hitTestWithScene(
         continue
       }
 
-      // title 区域：圆内顶部 EMBED_TITLE_HEIGHT 高度
-      if (screenY <= r.y + EMBED_TITLE_HEIGHT) {
+      // title 区域：圆内顶部 EMBED_TITLE_HIT_HEIGHT 高度
+      if (screenY <= r.y + EMBED_TITLE_HIT_HEIGHT) {
         return {
           scenePath: scenePath,
           objectKind: 'embedTitle',
@@ -172,11 +185,11 @@ export function hitTestWithScene(
         }
       }
 
-      // border 区域：圆心到命中点距离落在最外侧 EMBED_BORDER_WIDTH 宽度的圆环内
+      // border 区域：圆心到命中点距离落在最外侧 EMBED_BORDER_HIT_WIDTH 宽度的圆环内
       const cx: number = r.x + r.width / 2
       const cy: number = r.y + r.height / 2
       const outer: number = r.width / 2
-      const inner: number = Math.max(0, outer - EMBED_BORDER_WIDTH)
+      const inner: number = Math.max(0, outer - EMBED_BORDER_HIT_WIDTH)
       const dx: number = screenX - cx
       const dy: number = screenY - cy
       const dist: number = Math.sqrt(dx * dx + dy * dy)
@@ -222,8 +235,19 @@ export interface CircleResponseBand {
   height: number
 }
 
-/** 默认水平分带数：带高 = 直径 / bands，带数越多越贴合圆，代价是热区矩形数量线性增长。 */
-export const DEFAULT_CIRCLE_RESPONSE_BANDS: number = 32
+/**
+ * 单条热区带的最大高度（vp，屏幕坐标）。
+ *
+ * 分带数由"直径 / 该值"推导，而不是写死带数：内切算法必然丢掉最上和最下各一条
+ * （极点处半宽为 0），丢掉的圆帽高度就等于带高。如果写死带数，圆帽高度会
+ * `直径/带数` 随 zoom 一起放大——3x 时直径 600、带数 32，圆顶和圆底各有
+ * 18.75vp 看得见却点不到，其中顶部本来就是 title 选中区（Issue #813 复审）。
+ * 固定最大带高后，无论 zoom 是 0.3、1 还是 3，圆帽都只有这一个固定上限。
+ *
+ * 取 3 而不是 1：带高越小越贴合圆，但热区矩形数量按 `直径/带高` 线性增长，
+ * 3x 缩放下 1vp 会是 600 条。3vp 已远小于手指精度。
+ */
+export const MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP: number = 3
 
 /**
  * 把正圆切成若干条水平矩形热区带。
@@ -232,25 +256,27 @@ export const DEFAULT_CIRCLE_RESPONSE_BANDS: number = 32
  * 不会把热区变成圆。所以圆形子视图必须自己声明热区，否则圆外四个方角仍然可点
  * （Issue #813 复审）。
  *
- * 每条带的半宽取该带**上下两条边所在高度处**圆半宽的较小值（内切），而不是带中心高度：
+ * 每条带的半宽取该带**上下两条边所在高度处**圆半宽的较小值（内切），不是带中心高度：
  * - 取带中心会让最上和最下两条带在极点附近明显外凸（直径 200、24 带时可达 28vp），
  *   于是"点在圆外却选中了子星图"，正是要消灭的那类错位；
  * - 取内切值则永远不会把圆外的点算成圆内，代价只是极点附近最外侧一条带被丢弃
- *   （默认 32 带下约 6vp 高），手指精度下可以忽略。
+ *   （高度不超过 MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP，手指精度下可以忽略）。
  *
- * @param diameter 圆的直径（组件局部坐标）
- * @param bands 水平分带数
+ * @param diameter 圆的直径（组件局部坐标，已含 zoom）
+ * @param maxBandHeight 单条带的最大高度（vp）
  * @returns 热区带列表，按 y 从小到大排列；极点处宽度为 0 的带不输出
  */
 export function buildCircleResponseBands(
   diameter: number,
-  bands: number = DEFAULT_CIRCLE_RESPONSE_BANDS
+  maxBandHeight: number = MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP
 ): CircleResponseBand[] {
   const result: CircleResponseBand[] = []
-  if (diameter <= 0 || bands <= 0) {
+  if (diameter <= 0 || maxBandHeight <= 0) {
     return result
   }
   const r: number = diameter / 2
+  // 带高向上取整到 ceil(直径/上限) 条，保证每条带高都 <= 上限
+  const bands: number = Math.max(1, Math.ceil(diameter / maxBandHeight))
   const bandHeight: number = diameter / bands
   for (let i = 0; i < bands; i++) {
     const y: number = i * bandHeight

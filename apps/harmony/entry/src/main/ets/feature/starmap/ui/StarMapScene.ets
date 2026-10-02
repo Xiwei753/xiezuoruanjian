@@ -37,7 +37,8 @@ import {
   deriveNodeRectFromLayoutNode,
   hitTestWithScene, computeAllEdgeRenders,
   screenToCanvas, resolveEdgeEndpointAnchor,
-  edgeEndpointBoundaryPoint, buildCircleResponseBands
+  edgeEndpointBoundaryPoint, buildCircleResponseBands,
+  EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH
 } from '../platform/StarMapGeometry'
 import {
   PlatformLayoutNode, PlatformPoint,
@@ -60,18 +61,10 @@ interface WobbleOffset {
 
 
 
-// ─── Embed 命中区尺寸（vp） ───
-
-/**
- * Embed title 命中条高度。与 StarMapGeometry 的 EMBED_TITLE_HEIGHT 对齐：
- * 命中测试认为顶部这一条属于 title，UI 也必须把同一条区域留给 title 手势层。
- */
-const EMBED_TITLE_HIT_HEIGHT: number = 24
-/**
- * Embed 圆环命中厚度：外层 Stack 的 onTouchIntercept 用它把"离圆心 >= 半径 - 该值"的区域
- * 判成 embedBorder。和 StarMapGeometry 的 EMBED_BORDER_WIDTH 对齐。
- */
-const EMBED_BORDER_HIT_WIDTH: number = 4
+// ─── Embed 命中区尺寸 ───
+// EMBED_TITLE_HIT_HEIGHT / EMBED_BORDER_HIT_WIDTH 直接 import 自 StarMapGeometry，
+// 不在本文件再抄一份。命中测试和真实触摸必须用同一份数值：曾经几何用 3vp、
+// UI 用 4vp，于是手指按这一圈会判成外层边框，而把线拖到同一点松手却判成子图内部。
 
 /**
  * 星图选中描边色。普通节点和 Embed 共用这一个值。

@@ -468,6 +468,10 @@
   - `Block`：当前组件参加，**同时挡掉子节点、兄弟节点和祖先节点**。产品语义定死"这块区域只归父组件"时必须用它。
   - `None`：当前组件和子节点都不参加，也不影响祖先 —— 事件继续往下/往外传。
   - 圆形 Embed 的实际分流：圆外 `None`、圆内 title/圆环 `Block`、圆内其余 `None`。
+- 实现约束：`onTouchIntercept` 里 title/圆环的判定阈值必须 import
+  `StarMapGeometry` 导出的 `EMBED_TITLE_HIT_HEIGHT` / `EMBED_BORDER_HIT_WIDTH`，不许在 UI 侧另抄一份。
+  两份数值一旦不同，就会出现"手指按这一圈是父级边框、把线拖到同一点松手却判成子图内部"的
+  命中与几何错位。这两个常量定义的是**交互热区**（圆环 12vp），不是视觉描边宽度（1/3vp）。
 - 实现文件：`feature/starmap/ui/StarMapScene.ets`（Embed 圆形外壳的 title / 圆环分流）
 
 ## 自定义触摸热区（responseRegion）
@@ -482,9 +486,15 @@
 - 用途：非矩形（圆、圆角、多边形）子视图必须自己声明真实热区。`borderRadius` + `clip(true)`
   **只裁视觉、不裁热区**，不声明的话圆外四个方角依然可点，会出现"看起来是圆、实际整块方块都能选中"。
   官方文档同时说明：父组件 `clip(true)` 时子组件响应受**父组件触摸热区**限制，所以父级裁剪区也应当是真实形状。
-- 实现方式：把圆按水平带切成若干矩形，每条带在带中心 y 处取该高度处圆的精确半宽 `sqrt(r² - dy²)`；
-  带角相对圆的最大外凸约 `r*(1-cos(π/bands))`。纯几何在
-  `feature/starmap/platform/StarMapGeometry.ets` 的 `buildCircleResponseBands`（可测），UI 只做 `Rectangle` 转换。
+- 实现方式：把圆按水平带切成若干矩形，每条带的半宽取该带**上下两条边所在高度处**圆半宽
+  `sqrt(r² - dy²)` 的**较小值**（内切），不是带中心高度：
+  - 取带中心会在极点附近外凸（直径 200、24 带时可达 28vp），等于"点在圆外却选中了子星图"，
+    和不声明热区是同一类错位；
+  - 取内切值保证永外不越界，代价是极点处半宽为 0 的最外侧一条被丢弃，圆帽高度 = 带高。
+  - 带数按 `ceil(直径 / MAX_CIRCLE_RESPONSE_BAND_HEIGHT_VP)` 推导，**不写死带数**：
+    写死会让圆帽高度 `直径/带数` 随 zoom 放大（3x、直径 600、32 带 → 上下各 18.75vp 看得见点不到）。
+    固定最大带高后，0.3x / 1x / 3x 的圆帽都只有这一个固定上限。热区矩形数量随缩放线性增长是已知代价。
+  - 纯几何在 `feature/starmap/platform/StarMapGeometry.ets` 的 `buildCircleResponseBands`（可测），UI 只做 `Rectangle` 转换。
 - 实现文件：`feature/starmap/ui/StarMapScene.ets`（`buildEmbedCircleResponseRegions`）
 
 ## 自定义对话框（ComponentContent + openCustomDialog）
