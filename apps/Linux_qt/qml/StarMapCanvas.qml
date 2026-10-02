@@ -104,6 +104,14 @@ Item {
     property real _panBeginX: 0
     property real _panBeginY: 0
 
+    // Issue #814 评论 5946366104: 父层手势所有权状态。
+    // 手势开始时通过 findEmbedContentAt(screenToWorldX(...), screenToWorldY(...))
+    // 判定起点是否落在子星图 contentViewport 内。若是，父 bgTouchDrag / canvasPinch
+    // 不修改父 panX/panY/zoomLevel，让 child Scene 独占该手势。bgTouchDrag 与
+    // canvasPinch 不会同时 active（单指 vs 双指），共用一个状态变量；在每个手势
+    // onActiveChanged 时重设、inactive 时清除。
+    property bool _gestureOwnedByChildContent: false
+
     // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
     // 只在手势边界（press/release/begin/end/popup）调用，不进热路径。
     // starmapBackendRef 为 null 时静默跳过（不报错）。
@@ -302,6 +310,11 @@ Item {
             if (findEmbedChromeAt(mx, my)) {
                 return
             }
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的点击归 child Scene，
+            // 父层不得当成空白 clearSelection() 吞掉子场景选中。
+            if (findEmbedContentAt(mx, my)) {
+                return
+            }
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 graphController.selectEdge(clickedEdge.id)
@@ -337,6 +350,10 @@ Item {
             if (findEmbedChromeAt(mx, my)) {
                 return
             }
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的点击归 child Scene。
+            if (findEmbedContentAt(mx, my)) {
+                return
+            }
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 graphController.selectEdge(clickedEdge.id)
@@ -367,6 +384,7 @@ Item {
 
             if (findNodeAt(wx, wy)) return
             if (findEmbedChromeAt(wx, wy)) return
+            if (findEmbedContentAt(wx, wy)) return
             if (graphController.hitTestEdge(wx, wy)) return
 
             contextMenuWorldX = wx
@@ -395,6 +413,10 @@ Item {
                 return
             }
             if (findEmbedChromeAt(mx, my)) {
+                return
+            }
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的右键归 child Scene。
+            if (findEmbedContentAt(mx, my)) {
                 return
             }
             var clickedEdge = graphController.hitTestEdge(mx, my)
@@ -440,6 +462,14 @@ Item {
         property bool _wasTouchPan: false
         onActiveChanged: {
             if (active) {
+                // Issue #814 评论 5946366104: 判定本次拖动起点是否落在子星图 contentViewport。
+                // 若是，父层不参与，由 child Scene 独占该手势（child 自己改 panX/panY）。
+                var _gsx = bgTouchDrag.point.position.x
+                var _gsy = bgTouchDrag.point.position.y
+                _gestureOwnedByChildContent = findEmbedContentAt(screenToWorldX(_gsx), screenToWorldY(_gsy)) !== null
+                if (_gestureOwnedByChildContent) {
+                    return
+                }
                 lastTx = 0
                 lastTy = 0
                 _touchInputActive = true
@@ -460,6 +490,11 @@ Item {
                     })
                 }
             } else {
+                if (_gestureOwnedByChildContent) {
+                    // Issue #814 评论 5946366104: 子星图 contentViewport 内的手势结束，清所有权。
+                    _gestureOwnedByChildContent = false
+                    return
+                }
                 if (_wasTouchPan) {
                     // Issue #814 评论 5935346839: 触屏画布 pan 的 end 边界。
                     logInteraction("pan_end", "empty", "", {
@@ -498,6 +533,8 @@ Item {
             }
         }
         onActiveTranslationChanged: {
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的拖动归 child Scene。
+            if (_gestureOwnedByChildContent) return
             var dx = activeTranslation.x - lastTx
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
@@ -547,13 +584,27 @@ Item {
         target: null
         onActiveChanged: {
             if (active) {
+                // Issue #814 评论 5946366104: 判定本次双指缩放中心是否落在子星图 contentViewport。
+                var _psx = centroid.position.x
+                var _psy = centroid.position.y
+                _gestureOwnedByChildContent = findEmbedContentAt(screenToWorldX(_psx), screenToWorldY(_psy)) !== null
+                if (_gestureOwnedByChildContent) {
+                    return
+                }
                 _pinchStartZoom = zoomLevel
                 _pinchStartPanX = panX
                 _pinchStartPanY = panY
                 _touchInputActive = true
+            } else {
+                // Issue #814 评论 5946366104: 子星图 contentViewport 内的 pinch 结束，清所有权。
+                if (_gestureOwnedByChildContent) {
+                    _gestureOwnedByChildContent = false
+                }
             }
         }
         onActiveScaleChanged: {
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的缩放归 child Scene。
+            if (_gestureOwnedByChildContent) return
             var rawZoom = _pinchStartZoom * activeScale
             // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
             // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
