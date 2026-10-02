@@ -56,10 +56,6 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
-    // Issue #814 评论 5935285879: Canvas 明确传当前 zoomLevel，Embed 不再靠
-    // 父项 scale 猜缩放（sceneLayer scale=1 会破坏旧换算）。
-    property real canvasZoomLevel: 1.0
-
     // Issue #814 评论 5935285879: 共享选中控制器，由 Canvas 传入，传给 child Scene。
     property var selectionController: null
 
@@ -356,10 +352,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
-                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
-                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
 
@@ -456,10 +452,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
-                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
-                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -546,10 +542,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
-                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
-                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -636,10 +632,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
-                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
-                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -726,10 +722,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    // Issue #814 评论 5935285879: 用 Canvas 传的 canvasZoomLevel 把屏幕像素
-                    // 增量转成世界坐标增量，不再靠父项 scale 猜缩放。
-                    var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {

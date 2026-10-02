@@ -72,6 +72,29 @@ Item {
     function screenToWorldX(sx) { return (sx - panX) / zoomLevel }
     function screenToWorldY(sy) { return (sy - panY) / zoomLevel }
 
+    // Issue #814 评论 5947740838: 递归子星图坐标统一映射。
+    // Qt DragHandler(target:null) 的 activeTranslation 是 scene 坐标增量，
+    // 不是本层 Canvas 坐标。嵌套 Scene 处在父 Embed 缩放下时，只除本层 zoomLevel
+    // 会漏掉祖先 scale，节点按祖先缩放比例漂移。统一用 mapFromItem(null,...)
+    // 把 scene 坐标映射到本 Canvas local，再除 zoomLevel 转 world。
+    // 根层无祖先 scale 时 mapFromItem(null) 退化成恒等，行为不变。
+    function sceneToCanvas(sx, sy) {
+        return canvasArea.mapFromItem(null, sx, sy)
+    }
+    function sceneDeltaToCanvas(dx, dy) {
+        var o = canvasArea.mapFromItem(null, 0, 0)
+        var p = canvasArea.mapFromItem(null, dx, dy)
+        return { x: p.x - o.x, y: p.y - o.y }
+    }
+    function sceneDeltaToWorld(dx, dy) {
+        var d = sceneDeltaToCanvas(dx, dy)
+        return { x: d.x / zoomLevel, y: d.y / zoomLevel }
+    }
+    function sceneToWorld(sx, sy) {
+        var p = sceneToCanvas(sx, sy)
+        return { x: screenToWorldX(p.x), y: screenToWorldY(p.y) }
+    }
+
     // Issue #801 评论 5894035036: PinchHandler 以手势中心缩放的起点记录。
     property real _pinchStartZoom: 1.0
     property real _pinchStartPanX: 0
@@ -542,18 +565,21 @@ Item {
             }
         }
         onActiveTranslationChanged: {
-            var dx = activeTranslation.x - lastTx
-            var dy = activeTranslation.y - lastTy
+            var rawDx = activeTranslation.x - lastTx
+            var rawDy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
+            // Issue #814 评论 5947740838: activeTranslation 是 scene 增量，
+            // 映射到本 Canvas local 再用。根层无祖先 scale 时退化成恒等。
+            var cd = sceneDeltaToCanvas(rawDx, rawDy)
             if (interaction.pointerMode === "idle") {
-                // 触屏未长按滑动 = 画布 pan（屏幕坐标增量直接加到 panX/panY）
-                applyPan(panX + dx, panY + dy)
+                // 触屏未长按滑动 = 画布 pan
+                applyPan(panX + cd.x, panY + cd.y)
             } else if (interaction.pointerMode === "contextPending") {
-                // 触屏长按后移动，更新 connect 坐标（世界坐标，除以 zoomLevel）
-                interaction.connectMouseX += dx / zoomLevel
-                interaction.connectMouseY += dy / zoomLevel
-                // 移动总距离超过阈值则转 connect
+                // 触屏长按后移动，更新 connect 坐标（世界坐标）
+                interaction.connectMouseX += cd.x / zoomLevel
+                interaction.connectMouseY += cd.y / zoomLevel
+                // 移动总距离超过阈值则转 connect（阈值用 scene 原始位移判定）
                 if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
                     if (interaction.contextPendingToConnect()) {
                         // Issue #814 评论 5935346839: connect_begin 边界日志
@@ -571,13 +597,13 @@ Item {
                 }
                 edgeCanvas.requestPaint()
             } else if (interaction.pointerMode === "connect") {
-                interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
+                interaction.updateConnect(interaction.connectMouseX + cd.x / zoomLevel, interaction.connectMouseY + cd.y / zoomLevel)
                 edgeCanvas.requestPaint()
             } else if (interaction.pointerMode === "move") {
                 // Issue #801 评论 5895310100: 触屏菜单"移动"后再拖 → 更新 transient 坐标。
                 // Node/Embed 的 DragHandler 限定 Mouse，触屏拖动穿透到背景层，
                 // 由 bgTouchDrag 统一驱动 move。delegate 的 x/y binding 自动跟随 moveX/moveY。
-                interaction.updateMove(interaction.moveX + dx / zoomLevel, interaction.moveY + dy / zoomLevel)
+                interaction.updateMove(interaction.moveX + cd.x / zoomLevel, interaction.moveY + cd.y / zoomLevel)
                 graphController.computeEdgeRenders(currentMoveOverride())
                 edgeCanvas.requestPaint()
             }
@@ -918,9 +944,6 @@ Item {
                 isSelected: selectionController ? selectionController.matches(pathKey, "node", nodeData.id) : false
                 // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
                 wobbleIndex: index
-                // Issue #814 评论 5935285879: 明确传当前 zoomLevel 给 Node，
-                // Node 不再靠 root.parent.scale 猜缩放（sceneLayer scale=1 会破坏旧换算）。
-                canvasZoomLevel: zoomLevel
 
                 // Issue #798: 不再原地篡改 nodeData.x/y，拖动用 StarMapNode 自己的 x/y
                 // 作为临时显示坐标（命令式赋值打破初始绑定），松手提交 Controller。
@@ -990,19 +1013,24 @@ Item {
                     var nd = nodeData
                     graphController.selectNode(nd.id)
                     selectedNodeForMenu = nd
-                    // sceneX/sceneY 是屏幕坐标，菜单直接用；日志要世界坐标
-                    // Issue #814 评论 5935346839: context_menu_open 边界日志（node）。
-                    var _wx = screenToWorldX(sceneX)
-                    var _wy = screenToWorldY(sceneY)
+                    // Issue #814 评论 5947740838: sceneX/sceneY 是 scene 坐标，
+                    // 映射到本 Canvas local 弹菜单、映射到 world 记日志。
+                    var cp = sceneToCanvas(sceneX, sceneY)
+                    var wp = sceneToWorld(sceneX, sceneY)
                     logInteraction("context_menu_open", "node", nd.id, {
                         "menuKind": "node",
-                        "worldX": _wx,
-                        "worldY": _wy
+                        "worldX": wp.x,
+                        "worldY": wp.y
                     })
-                    nodeContextMenu.popup(sceneX, sceneY)
+                    nodeContextMenu.popup(cp.x, cp.y)
                 }
 
                 onMoveDelta: function(dx, dy) {
+                    // Issue #814 评论 5947740838: Node 上抛的是 raw scene delta，
+                    // 统一映射成 world delta，后面 moveX/moveY/connectMouse* 只存 world。
+                    var wd = sceneDeltaToWorld(dx, dy)
+                    dx = wd.x
+                    dy = wd.y
                     // Issue #801: contextPending 状态下移动超过阈值则转 connect
                     if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
                         interaction.connectMouseX += dx
@@ -1149,9 +1177,6 @@ Item {
                 // 不再读 embedData.isSelected（GraphController 不再维护 isSelected）。
                 isSelected: selectionController ? selectionController.matches(pathKey, "embed", embedData.instanceId) : false
                 wobbleIndex: index
-                // Issue #814 评论 5935285879: 明确传当前 zoomLevel 给 Embed，
-                // Embed 不再靠 root.parent.scale 猜缩放。
-                canvasZoomLevel: zoomLevel
 
                 // 递归子 Scene 只在这个 Embed 的投影矩形进入当前 Canvas 视口时激活。
                 // 不能像旧实现那样只看 targetStarmapId 就递归展开所有子图，否则恢复
@@ -1250,21 +1275,26 @@ Item {
                 onContextMenuRequested: function(instId, sceneX, sceneY) {
                     graphController.selectEmbed(instId)
                     selectedEmbedForMenu = graphController.getEmbed(instId)
-                    // Issue #814 评论 5935346839: context_menu_open 边界日志（embed）。
-                    var _ewx = screenToWorldX(sceneX)
-                    var _ewy = screenToWorldY(sceneY)
+                    // Issue #814 评论 5947740838: scene 坐标映射到 Canvas local 弹菜单、world 记日志。
+                    var cp = sceneToCanvas(sceneX, sceneY)
+                    var wp = sceneToWorld(sceneX, sceneY)
                     logInteraction("context_menu_open", "embed", instId, {
                         "menuKind": "embed",
-                        "worldX": _ewx,
-                        "worldY": _ewy
+                        "worldX": wp.x,
+                        "worldY": wp.y
                     })
-                    embedContextMenu.popup(sceneX, sceneY)
+                    embedContextMenu.popup(cp.x, cp.y)
                 }
 
                 // Issue #796 评论 5888480054: Embed 拖动改上抛 moveDelta 增量，
                 // 和 Node 的 onMoveDelta 对称。connect 模式更新预览线终点；
                 // idle 转 move 移动 Embed position。
                 onMoveDelta: function(dx, dy) {
+                    // Issue #814 评论 5947740838: Embed 上抛的是 raw scene delta，
+                    // 统一映射成 world delta，后面 moveX/moveY/connectMouse* 只存 world。
+                    var wd = sceneDeltaToWorld(dx, dy)
+                    dx = wd.x
+                    dy = wd.y
                     // Issue #801: contextPending 状态下移动超过阈值则转 connect
                     if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
                         interaction.connectMouseX += dx
