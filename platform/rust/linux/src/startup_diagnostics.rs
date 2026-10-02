@@ -24,7 +24,7 @@
 //! - panic hook 里不能再 panic：所有 IO 错误都静默忽略。
 //! - `mark` 每次以 append 模式重新打开文件写入，即使 panic 也不会丢数据。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use super::dirs::{crash_diagnostics_dir, startup_diagnostics_dir, sujian_home_dir};
@@ -81,34 +81,37 @@ pub fn begin_startup_diagnostics(
     // 以两个路径环境变量同时存在为准，不再依赖 SUJIAN_STARTED_BY_LAUNCHER 名字。
     let external_session_log = std::env::var_os("SUJIAN_STARTUP_SESSION_LOG").map(PathBuf::from);
     let external_latest_log = std::env::var_os("SUJIAN_STARTUP_LATEST_LOG").map(PathBuf::from);
-    let has_external_session = external_session_log.is_some() && external_latest_log.is_some();
 
-    let (session_log, latest_log) = if has_external_session {
-        // 外部已创建唯一 history 和 latest.log，直接复用，不新建不覆盖。
-        let session = external_session_log.unwrap();
-        let latest_from_env = external_latest_log.unwrap();
-        // 追加 Rust startup header（append，不覆盖外部已写的内容）。
-        let (ts_file, ts_human) = current_timestamp();
-        let _ = ts_file;
-        let pid = std::process::id();
-        let header = format_startup_header(&ts_human, pid, app_version, build_key, package_type);
-        append_and_flush(&session, &header);
-        append_and_flush(&latest_from_env, &header);
-        (session, latest_from_env)
-    } else {
-        // 直接执行真实 ELF（无外部 session），自己建 session。
-        let (ts_file, ts_human) = current_timestamp();
-        let pid = std::process::id();
-        let session_log = history_dir.join(format!("startup-{}-{}.log", ts_file, pid));
+    // Issue #810 评论 5933167246: 用 match 替代 unwrap，避免 clippy::unwrap_used。
+    let (session_log, latest_log) = match (external_session_log, external_latest_log) {
+        (Some(session), Some(latest_from_env)) => {
+            // 外部已创建唯一 history 和 latest.log，直接复用，不新建不覆盖。
+            // 追加 Rust startup header（append，不覆盖外部已写的内容）。
+            let (ts_file, ts_human) = current_timestamp();
+            let _ = ts_file;
+            let pid = std::process::id();
+            let header =
+                format_startup_header(&ts_human, pid, app_version, build_key, package_type);
+            append_and_flush(&session, &header);
+            append_and_flush(&latest_from_env, &header);
+            (session, latest_from_env)
+        }
+        _ => {
+            // 直接执行真实 ELF（无外部 session），自己建 session。
+            let (ts_file, ts_human) = current_timestamp();
+            let pid = std::process::id();
+            let session_log = history_dir.join(format!("startup-{}-{}.log", ts_file, pid));
 
-        let header = format_startup_header(&ts_human, pid, app_version, build_key, package_type);
-        let _ = std::fs::write(&session_log, &header);
-        atomic_write(&latest, &header);
+            let header =
+                format_startup_header(&ts_human, pid, app_version, build_key, package_type);
+            let _ = std::fs::write(&session_log, &header);
+            atomic_write(&latest, &header);
 
-        // history 轮转：保留最近 30 份。
-        rotate_history(&history_dir, 30);
+            // history 轮转：保留最近 30 份。
+            rotate_history(&history_dir, 30);
 
-        (session_log, latest)
+            (session_log, latest)
+        }
     };
 
     let _ = CURRENT_SESSION_LOG.set(session_log.clone());
@@ -192,7 +195,7 @@ fn update_last_failed_log(session_log: &PathBuf) {
 ///
 /// Issue #803 评论 5905373722：panic hook 不再立刻覆盖 last_failed.log，
 /// 改由 `mark_exit` 根据真实退出码决定是否提升。
-fn write_pending_last_failed(session_log: &PathBuf) {
+fn write_pending_last_failed(session_log: &Path) {
     let pending = startup_diagnostics_dir().join("last_failed.pending");
     let _ = std::fs::write(&pending, session_log.to_string_lossy().as_bytes());
 }
@@ -236,7 +239,7 @@ fn rotate_history(history_dir: &PathBuf, keep: usize) {
         }
     }
     // 按 mtime 降序排列，保留最新的 `keep` 份，删除其余。
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|b| std::cmp::Reverse(b.0));
     for (_, path) in files.iter().skip(keep) {
         let _ = std::fs::remove_file(path);
     }
@@ -416,7 +419,7 @@ fn current_timestamp() -> (String, String) {
 /// 使用 Howard Hinnant 的 days-from-civil 逆算法，正确处理闰年，不处理闰秒。
 /// 返回 `(year, month, day, hour, minute, second)`，均为公历 UTC。
 fn epoch_to_civil(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let days = (secs / 86_400) as i64;
+    let days = (secs / 86_400).cast_signed();
     let time = secs % 86_400;
     let hour = time / 3600;
     let minute = (time % 3600) / 60;
@@ -426,16 +429,16 @@ fn epoch_to_civil(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     // 参考：http://howardhinnant.github.io/date_algorithms.html#civil_from_days
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let doe = (z - era * 146_097).cast_unsigned(); // [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe as i64 + era * 400;
+    let y = yoe.cast_signed() + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
     let mp = (5 * doy + 2) / 153; // [0, 11]
     let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let year = if m <= 2 { y + 1 } else { y };
 
-    (year as u64, m, d, hour, minute, second)
+    (year.cast_unsigned(), m, d, hour, minute, second)
 }
 
 #[cfg(test)]

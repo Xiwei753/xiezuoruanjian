@@ -148,23 +148,39 @@ fn test_visual_line(
     }
 }
 
+/// Issue #810 评论 5932233052 问题1: 构造 AnimationRasterVisual（raster-only，
+/// 不携带 cluster）。
+fn test_raster_visual(
+    para_start: usize,
+    qtextline_idx: i32,
+) -> crate::editor::layout::AnimationRasterVisual {
+    crate::editor::layout::AnimationRasterVisual {
+        image: None,
+        paragraph_document_byte_start: para_start,
+        qtextline_idx,
+    }
+}
+
 /// Issue #808 评论 5918236360 问题1: prepare 成功且 clusters 非空，但注入未命中目标行时，
 /// 该行必须带准确 `visual_line_idx / para_start / qtextline_idx` 进入 `failed_lines`
 /// （reason=InjectMiss），让上游能对它做第二次精确重取。
+///
+/// Issue #810 评论 5932233052 问题1: prepare_animation_visuals_from_layout 改为
+/// raster-only 后，clusters 检查改为直接读回 new_doc_snapshot 的 clusters
+///（基础排版产出）。本测试验证：canonical 行 clusters 为空时，该行进入 failed_lines
+///（reason=ClustersEmpty），让上游知道这是 invariant failure。
 #[test]
 fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
-    // 目标 snapshot 里只有一个段落 (para_start=0)，且其第 0 行没有 clusters；
-    // 但 inserted visible line 的稳定身份是 (para_start=999, qtextline_idx=7)，
-    // 注入按稳定行身份匹配不到目标行 → inject miss。
-    let mut doc = test_doc_snapshot("ab", 0, vec![test_canonical_line(0, 0, 0, 2, Vec::new())]);
-    doc.visual_lines = vec![test_visual_line(999, 7, 0, 2, "ab")];
-    let prepared = vec![test_canonical_line(
+    // 目标 snapshot 里只有一个段落 (para_start=999)，且其第 7 行没有 clusters；
+    // inserted visible line 的稳定身份也是 (para_start=999, qtextline_idx=7)，
+    // prepare 命中但 canonical_line_has_clusters 返回 false → ClustersEmpty。
+    let mut doc = test_doc_snapshot(
+        "ab",
         999,
-        7,
-        0,
-        2,
-        vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
-    )];
+        vec![test_canonical_line(999, 7, 0, 2, Vec::new())],
+    );
+    doc.visual_lines = vec![test_visual_line(999, 7, 0, 2, "ab")];
+    let prepared = vec![test_raster_visual(999, 7)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,
@@ -176,26 +192,29 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
         status.checked_line_count, 1,
         "应检查 1 个 inserted visible line"
     );
-    assert_eq!(status.ok_count, 1, "prepare 命中且 clusters 非空");
-    assert_eq!(status.prepare_miss_count, 0);
-    assert_eq!(status.clusters_empty_count, 0);
+    assert_eq!(status.prepare_miss_count, 0, "prepare 命中（按稳定行身份）");
+    assert_eq!(
+        status.clusters_empty_count, 1,
+        "canonical 行 clusters 为空 → ClustersEmpty"
+    );
+    assert_eq!(status.ok_count, 0);
     assert!(
         status.has_unavailable_lines,
-        "inject miss 行必须让 has_unavailable_lines=true，否则上游不会重取"
+        "clusters empty 行必须让 has_unavailable_lines=true，否则上游不会重取"
     );
     assert_eq!(
         status.failed_lines.len(),
         1,
-        "inject miss 行必须进入 failed_lines"
+        "clusters empty 行必须进入 failed_lines"
     );
     let fl = &status.failed_lines[0];
     assert_eq!(fl.visual_line_idx, 0);
     assert_eq!(fl.para_start, 999);
     assert_eq!(fl.qtextline_idx, 7);
-    assert_eq!(fl.reason, AnimationVisualsFailedReason::InjectMiss);
+    assert_eq!(fl.reason, AnimationVisualsFailedReason::ClustersEmpty);
     assert!(
         !canonical_line_has_clusters(&doc, 999, 7),
-        "inject miss 后目标行仍然没有 clusters（canonical 行没被注入）"
+        "canonical 行仍然没有 clusters"
     );
 }
 
@@ -227,17 +246,25 @@ fn issue808_comment5918236360_prepare_miss_line_is_collected_for_retry() {
 
 /// Issue #808 评论 5918236360 问题1: 注入命中且 clusters 非空时没有任何失败行，
 /// 且重取后验证用的 `canonical_line_has_clusters` 必须能读回真实 clusters。
+///
+/// Issue #810 评论 5932233052 问题1: clusters 由基础 canonical 排版直接产出，
+/// prepared 改为 AnimationRasterVisual（不携带 cluster）。canonical 行的 clusters
+/// 在 doc_snapshot 中自带，`canonical_line_has_clusters` 直接读回。
 #[test]
 fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
-    let mut doc = test_doc_snapshot("ab", 0, vec![test_canonical_line(0, 0, 0, 2, Vec::new())]);
+    let mut doc = test_doc_snapshot(
+        "ab",
+        0,
+        vec![test_canonical_line(
+            0,
+            0,
+            0,
+            2,
+            vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
+        )],
+    );
     doc.visual_lines = vec![test_visual_line(0, 0, 0, 2, "ab")];
-    let prepared = vec![test_canonical_line(
-        0,
-        0,
-        0,
-        2,
-        vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
-    )];
+    let prepared = vec![test_raster_visual(0, 0)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,

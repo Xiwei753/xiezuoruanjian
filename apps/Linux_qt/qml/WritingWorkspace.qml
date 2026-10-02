@@ -1073,12 +1073,41 @@ Rectangle {
                         }
 
                         TapHandler {
+                            id: touchLongPressHandler
                             acceptedButtons: Qt.LeftButton
                             // Issue #714: 限制长按只对触屏/手写笔生效，不对桌面鼠标生效
                             // 桌面鼠标的长按等同于右键菜单，不需要触发 long_press_at
                             acceptedDevices: PointerDevice.TouchScreen | PointerDevice.Stylus
+
+                            // Issue #810 评论 5932233052 问题3: 跟踪是否真正进入了
+                            // long-press selection 状态。只有 onLongPressed 触发后才会在
+                            // 释放时调 end，普通轻点不误记 selection head。
+                            property bool inLongPressSelection: false
+
                             onLongPressed: {
+                                // Issue #810 评论 5932233052 问题3: 先 begin selection gesture，
+                                // 再 long_press_at。begin 设置 selection_gesture_active = true，
+                                // 让 render_plan_builder 在长按选词期间走 hard_snap。
+                                sujianEditor.begin_selection_gesture()
+                                inLongPressSelection = true
                                 sujianEditor.long_press_at(point.position.x, point.position.y)
+                            }
+
+                            // TapHandler 自带 pressed 属性，用 onPressedChanged 判断释放
+                            onPressedChanged: {
+                                if (!pressed && inLongPressSelection) {
+                                    // 释放时 end selection gesture，与鼠标 release 走统一路径
+                                    sujianEditor.end_selection_gesture_qml()
+                                    inLongPressSelection = false
+                                }
+                            }
+
+                            // 取消路径收尾
+                            onCanceled: {
+                                if (inLongPressSelection) {
+                                    sujianEditor.end_selection_gesture_qml()
+                                    inLongPressSelection = false
+                                }
                             }
                         }
 

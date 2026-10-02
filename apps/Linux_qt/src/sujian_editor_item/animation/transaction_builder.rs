@@ -396,8 +396,9 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> PreparedTextVi
 pub(crate) mod slices;
 
 pub(crate) use slices::{
-    assign_shared_line_masks, build_cluster_reflow_slices, build_composition_commit_crossfade_slices,
-    build_delete_conceal_slices, build_insert_reveal_slices,
+    assign_shared_line_masks, build_cluster_reflow_slices,
+    build_composition_commit_crossfade_slices, build_delete_conceal_slices,
+    build_insert_reveal_slices,
 };
 
 pub(crate) fn merge_adjacent_slices(slices: Vec<AnimatedSlice>) -> Vec<AnimatedSlice> {

@@ -94,14 +94,26 @@ impl SujianEditorItem {
     /// 闭环。抽共用 helper 同时返回 `(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot)`，
     /// 让 composition commit 路径能把新 canonical 提交到 Pipeline.current_canonical_snapshot
     /// 并 reconcile 旧活动事务。原 `build_editor_layout_snapshot` 保留签名，内部调本 helper 取 `.0`。
+    ///
+    /// Issue #810 评论 5933167246 问题3: 改返回 `Result<EditorLayoutSnapshot, String>`，
+    /// `build_from_canonical_document` 返回 Err 时向上传播，不再 fallback 到空 snapshot。
+    /// 调用方必须显式处理 Err（invariant failure 时结束本次视觉事务构造，不伪装成功）。
     pub(crate) fn build_editor_layout_snapshot(
         &mut self,
         width: f64,
         promote: bool,
         composition_range: Option<(usize, usize)>,
-    ) -> EditorLayoutSnapshot {
-        self.build_editor_layout_snapshot_with_canonical(width, promote, composition_range)
-            .0
+    ) -> Result<EditorLayoutSnapshot, String> {
+        // Issue #810 评论 5934658350: 显式传入 canonical text revision，不再让 helper
+        // 自己猜 pipeline.text_revision()。普通"当前正文快照"路径传当前 revision。
+        let canonical_text_revision = self.pipeline.text_revision();
+        self.build_editor_layout_snapshot_with_canonical(
+            width,
+            promote,
+            composition_range,
+            canonical_text_revision,
+        )
+        .map(|p| p.0)
     }
 
     /// Issue #738 评论 5797637204: 共用 helper，返回
@@ -110,15 +122,23 @@ impl SujianEditorItem {
     /// composition commit 路径提交到 `Pipeline.current_canonical_snapshot` 并作为
     /// `reconcile_active_transactions_with_canonical` 的新 canonical 几何。
     /// 一次排版同时产出两份视图，避免 composition commit 再单独排一次 canonical。
+    ///
+    /// Issue #810 评论 5933167246 问题3: 改返回
+    /// `Result<(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot), String>`，
+    /// `build_from_canonical_document` 返回 Err 时向上传播，不再 fallback 到空 snapshot。
     pub(crate) fn build_editor_layout_snapshot_with_canonical(
         &mut self,
         width: f64,
         promote: bool,
         composition_range: Option<(usize, usize)>,
-    ) -> (
-        EditorLayoutSnapshot,
-        crate::editor::layout::CanonicalDocumentVisualSnapshot,
-    ) {
+        canonical_text_revision: u64,
+    ) -> Result<
+        (
+            EditorLayoutSnapshot,
+            crate::editor::layout::CanonicalDocumentVisualSnapshot,
+        ),
+        String,
+    > {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -150,7 +170,7 @@ impl SujianEditorItem {
         let committed_text = self.pipeline.committed_text();
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             committed_text,
-            self.pipeline.text_revision(),
+            canonical_text_revision,
             font_size,
             font_family,
             line_spacing,
@@ -228,10 +248,11 @@ impl SujianEditorItem {
                 ids
             };
             if !line_ids.is_empty() {
-                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
                 //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
                 // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-                // QImage/纹理，不再为动画单独补 cluster。inject 不覆盖已有 cluster。
+                // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
+                // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
@@ -253,14 +274,22 @@ impl SujianEditorItem {
         // Issue #722 评论 5749791161: 同时生成文档坐标的 caret，供 VisualTransaction / caret track 使用。
         let caret_doc = doc_snapshot.cursor_rect_doc(cursor_byte, self.cursor_ctrl.affinity);
 
-        let mut snapshot =
-            super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-                revision,
-                &doc_snapshot,
-                scroll_y,
-                viewport_h,
-                committed_text,
-            );
+        // Issue #810 评论 5934060933 问题2: 不要在 generation 已分配后直接对
+        // build_from_canonical_document 用裸 `?`。Err 时 generation 还没有交给
+        // pending promoted layout，必须由当前函数释放，避免泄漏 C++ QTextLayout generation。
+        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+            revision,
+            &doc_snapshot,
+            scroll_y,
+            viewport_h,
+            committed_text,
+        ) {
+            Ok(s) => s,
+            Err(err) => {
+                crate::editor::layout::clear_layout_generation(generation);
+                return Err(err);
+            }
+        };
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
@@ -298,18 +327,22 @@ impl SujianEditorItem {
         // Issue #738 评论 5797637204: 同时返回 doc_snapshot，供 composition commit 路径
         // 提交到 Pipeline.current_canonical_snapshot 并 reconcile 旧活动事务。
         // build_from_canonical_document 接收 &doc_snapshot（借用），此处 doc_snapshot 仍有效。
-        (snapshot, doc_snapshot)
+        // Issue #810 评论 5933167246 问题3: 包成 Ok，函数改返回 Result。
+        Ok((snapshot, doc_snapshot))
     }
 
     /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围
     /// 提取动画视觉。`None` 表示全篇（fallback 语义），`Some((start, end))` 表示只提取
     /// 与该 byte range 相交的行。virtual text 路径用临时 generation，用完即 clear。
+    ///
+    /// Issue #810 评论 5933167246 问题3: 改返回 `Result<EditorLayoutSnapshot, String>`，
+    /// `build_from_canonical_document` 返回 Err 时向上传播，不再 fallback 到空 snapshot。
     pub(crate) fn build_virtual_layout_snapshot(
         &mut self,
         virtual_text: &str,
         width: f64,
         composition_range: Option<(usize, usize)>,
-    ) -> EditorLayoutSnapshot {
+    ) -> Result<EditorLayoutSnapshot, String> {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -396,10 +429,11 @@ impl SujianEditorItem {
                 ids
             };
             if !line_ids.is_empty() {
-                // Issue #810 评论 问题1: cluster 已由基础 canonical 排版直接产出
+                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
                 //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
                 // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-                // QImage/纹理，不再为动画单独补 cluster。inject 不覆盖已有 cluster。
+                // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
+                // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
@@ -436,14 +470,22 @@ impl SujianEditorItem {
             self.cursor_ctrl.affinity,
         );
 
-        let mut snapshot =
-            super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-                revision,
-                &doc_snapshot,
-                scroll_y,
-                viewport_h,
-                virtual_text,
-            );
+        // Issue #810 评论 5934060933 问题2: 不要在 generation 已分配后直接对
+        // build_from_canonical_document 用裸 `?`。Err 时 generation 还没释放，
+        // 必须由当前函数释放，避免泄漏 C++ QTextLayout generation。
+        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+            revision,
+            &doc_snapshot,
+            scroll_y,
+            viewport_h,
+            virtual_text,
+        ) {
+            Ok(s) => s,
+            Err(err) => {
+                crate::editor::layout::clear_layout_generation(generation);
+                return Err(err);
+            }
+        };
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
@@ -455,7 +497,7 @@ impl SujianEditorItem {
         // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
         crate::editor::layout::clear_layout_generation(generation);
 
-        snapshot
+        Ok(snapshot)
     }
 
     pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
@@ -557,7 +599,11 @@ impl SujianEditorItem {
 
     /// Issue #738 评论 5789470425 问题1: 构造当前排版参数的 VisualTransactionContext。
     /// 供 `reconcile_after_layout_change` 构造新 canonical snapshot 使用。
-    fn build_visual_transaction_context(&self) -> super::pipeline::VisualTransactionContext {
+    /// Issue #810 评论 5933167246 问题2: 改为 pub(crate)，供 `emit_content_changed`
+    /// 在 promote prepared layout 后构造 canonical snapshot 使用。
+    pub(crate) fn build_visual_transaction_context(
+        &self,
+    ) -> super::pipeline::VisualTransactionContext {
         super::pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
             smooth_cursor_enabled: self.current_smooth_cursor_enabled,

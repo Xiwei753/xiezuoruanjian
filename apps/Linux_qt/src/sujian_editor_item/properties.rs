@@ -746,6 +746,25 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
+        // Issue #810 评论 5934060933 问题1: bump text revision 后，判断 canonical
+        // 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表有效；
+        // 必须同时满足 canonical.text_revision == pipeline.text_revision() 且描述当前
+        // committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径不会走
+        // prepare_edit_motion，正文仍会修改并 bump revision，但 canonical 停在上一版，
+        // 此处必须按当前 EditorLayout/current text 重建并替换。
+        // 不在 reconcile_after_layout_change 中重复——它已通过
+        // reconcile_active_transactions_with_new_canonical 设置了 current_canonical_snapshot。
+        let canonical_needs_rebuild = match self.pipeline.current_canonical_snapshot() {
+            None => true,
+            Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
+        };
+        if canonical_needs_rebuild {
+            let ctx = self.build_visual_transaction_context();
+            let snap = self
+                .pipeline
+                .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
+            self.pipeline.set_current_canonical_snapshot(Some(snap));
+        }
         // Issue #658 评论 5623746506 问题 1: promote 之后 EditorLayout cache 已是
         // new text 的有效 cache，此时调 adjust_affinity_at_wrap_boundary ->
         // ensure_layout_cached -> editor_layout.snapshot cache hit，不再触发排版 A。
