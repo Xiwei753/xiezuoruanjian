@@ -1548,10 +1548,16 @@ fn issue815_review14_non_coordinated_keeps_independent_durations() {
     }
 }
 
-/// Issue #815 评论 5955090551：CursorOnly（鼠标点击 / 纯光标移动）不是正文吞吐协同，
-/// 即使协同开着也必须继续走平滑光标时长。
+/// Issue #815 评论 5955676896 更名：原名 `..._cursor_only_stays_on_smooth_cursor_duration`
+/// 会让人误以为这里真的跑过 `EditorOperationKind::CursorOnly`。实际上并没有——
+/// 下面的 spec 仍然是 `TextVisualOperationKind::Insert`，只是 `inserted_ranges` 为空，
+/// 所以没有吐字 unit，但 cursor track 仍然建立。真正的 CursorOnly 分流在
+/// `pipeline.rs::prepare_edit_motion()`（`is_body_ingest_edit`），由静态源码守卫锁定。
+///
+/// 本测试现在只锁 builder 侧的不变量：没有可吞吐文字时，builder 仍然透传调用方给的
+/// track 时长，不会自己改写成打字动画时长。
 #[test]
-fn issue815_review14_cursor_only_stays_on_smooth_cursor_duration() {
+fn issue815_review14_no_reveal_units_still_keeps_caller_supplied_track_duration() {
     // 「CursorOnly」不是动画层的事务类型：`TextVisualOperationKind` 只有
     // Insert / Delete / CompositionUpdate / CompositionCommitOrCancel，
     // CursorOnly 是 **Core** 的 `EditorOperationKind`，在

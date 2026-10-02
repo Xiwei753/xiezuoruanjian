@@ -39,6 +39,12 @@ Dialog {
     property var beforeSyncHook: null
     property var dt: theme
     property bool updatingValues: false
+    // Issue #815 评论 5955676896: 「打字动画持续时间」和「协同动画时长」是同一个设置项
+    // `setting_typing_animation_duration_ms`。它们必须只有**一份**状态：
+    // #815 之后协同吞吐字是 CaretTrack，没有自己的 duration，整段协同动画的速度
+    // 就是这条 track 的时长，而 pipeline.rs 传的就是打字动画时长。两个滑块各持一份
+    // 旧值会在切协同开关时被 onClosed 用另一个的旧值覆盖回去。
+    property real textAnimationDurationValue: 100
     property bool settingsDirty: false
     property var _saveTimer: null
     signal settingsChanged()
@@ -73,14 +79,28 @@ Dialog {
         root.settingsDirty = true
         debouncedSave()
     }
-    // Issue #756 / Issue #785: 协同动画开关。协同只表示同事务/同首帧/同 rebase，
-    // 不再共享 duration。文字与光标各自独立 duration，切协同时不互相覆盖。
+    // Issue #815 评论 5955676896: 协同动画开关。协同开时，同一笔 cursor track 同时
+    // 驱动文字吞吐与光标位移，**没有两条独立 duration**——协同动画时长就是
+    // 「打字动画持续时间」这一个设置项（下面的 textAnimationDurationValue）。
+    // 协同关时，文字与光标才各自走独立 duration。
     function setCoordinatedAnimation(value) {
         coordinatedAnim.checked = value
         if (!settingsBackendRef || updatingValues) return
         settingsBackendRef.setting_coordinated_text_cursor_animation_enabled = value
         root.settingsDirty = true
         debouncedSave()
+    }
+
+    // Issue #815 评论 5955676896: 打字动画时长 / 协同动画时长的**唯一**写入口。
+    // 两个滑块都调它，backend 与另一个滑块同时同步，避免两份状态互相回滚。
+    function setTextAnimationDuration(value) {
+        if (updatingValues) return
+        root.textAnimationDurationValue = value
+        if (coordinatedAnimDuration.value !== value) coordinatedAnimDuration.value = value
+        if (typingAnimDuration.value !== value) typingAnimDuration.value = value
+        if (!settingsBackendRef) return
+        settingsBackendRef.setting_typing_animation_duration_ms = value
+        root.settingsDirty = true
     }
     function updateValues() {
         if (!settingsBackendRef) return
@@ -96,10 +116,11 @@ Dialog {
         lineSpacingSlider.value = settingsBackendRef.setting_line_spacing || 1.5
         autoIndent.checked = settingsBackendRef.setting_auto_indent_enabled
         autoIndentWidth.value = settingsBackendRef.setting_auto_indent_width || 2.0
-        typingAnimDuration.value = settingsBackendRef.setting_typing_animation_duration_ms || 100
-        // Issue #815 评论 5955090551: 协同动画时长与打字动画时长是同一个设置项，
-        // 两个滑块读同一份值。
-        coordinatedAnimDuration.value = settingsBackendRef.setting_typing_animation_duration_ms || 100
+        // Issue #815 评论 5955090551 + 5955676896: 协同动画时长与打字动画时长是同
+        // 一个设置项，两个滑块读同一份共享值，而不是各存一份。
+        root.textAnimationDurationValue = settingsBackendRef.setting_typing_animation_duration_ms || 100
+        typingAnimDuration.value = root.textAnimationDurationValue
+        coordinatedAnimDuration.value = root.textAnimationDurationValue
         smoothCursorDuration.value = settingsBackendRef.setting_smooth_cursor_duration_ms || 80
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
@@ -148,10 +169,10 @@ Dialog {
             settingsBackendRef.setting_auto_indent_width = autoIndentWidth.value
         settingsBackendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
         // Issue #785: 始终分别写两个独立 duration，不再因协同共享。
-        // Issue #815 评论 5955090551: 打字动画时长同时就是协同动画时长，两个滑块写同一项。
-        settingsBackendRef.setting_typing_animation_duration_ms = coordinatedAnim.checked
-            ? coordinatedAnimDuration.value
-            : typingAnimDuration.value
+        // Issue #815 评论 5955090551: 打字动画时长同时就是协同动画时长。
+        // Issue #815 评论 5955676896: 只写这一份共享值，不再根据协同开关从两个滑块
+        // 二选一——那会让隐藏滑块的旧值在切开关后覆盖掉刚调好的新值。
+        settingsBackendRef.setting_typing_animation_duration_ms = root.textAnimationDurationValue
         settingsBackendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
         root.settingsDirty = true
         }
@@ -390,11 +411,12 @@ Dialog {
                     from: 30
                     to: 1000
                     stepSize: 10
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
+                    onMoved: function() { root.setTextAnimationDuration(value) }
+                    onCommitted: function() { root.setTextAnimationDuration(value); root.debouncedSave() }
                 }
                 // Issue #808: 协同开启时整组隐藏（开关 + duration 滑块一起消失）。
-                // Issue #785: 两个独立 duration 各自保存（onClosed 分别写），不互相覆盖。
+                // Issue #815 评论 5955676896: 打字动画时长与上面的协同动画时长是同一个
+                // 设置项，共用 root.textAnimationDurationValue，不各存一份。
                 SettingsRow {
                     visible: !coordinatedAnim.checked
                     dt: root.dt
@@ -416,8 +438,8 @@ Dialog {
                     from: 30
                     to: 1000
                     stepSize: 10
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
+                    onMoved: function() { root.setTextAnimationDuration(value) }
+                    onCommitted: function() { root.setTextAnimationDuration(value); root.debouncedSave() }
                 }
                 SettingsRow {
                     visible: !coordinatedAnim.checked

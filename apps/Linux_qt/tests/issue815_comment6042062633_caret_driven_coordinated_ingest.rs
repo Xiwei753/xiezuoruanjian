@@ -1268,6 +1268,83 @@ fn issue815_review14_settings_expose_coordinated_duration() {
 }
 
 // =========================================================================
+// 复核评论 5955676896：同一 setting 不得在两个滑块上各留一份状态
+// =========================================================================
+
+/// 复核评论 5955676896。
+///
+/// 「打字动画持续时间」和「协同动画时长」写的是同一个设置项
+/// `setting_typing_animation_duration_ms`。若两个滑块各持一份 `value`，切协同开关后
+/// 隐藏滑块的旧值会被 `onClosed` 写回去，把刚调好的时长覆盖掉。
+#[test]
+fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
+    let src = read_src("qml/SettingsDialog.qml");
+
+    assert!(
+        src.contains("property real textAnimationDurationValue: 100"),
+        "Issue #815 评论 5955676896: 必须有唯一一份共享值 textAnimationDurationValue。"
+    );
+    assert!(
+        src.contains("function setTextAnimationDuration(value)"),
+        "Issue #815 评论 5955676896: 两个滑块必须走同一个写入口，\
+         由它同时同步 backend 和另一个滑块。"
+    );
+    let setter = function_window(&src, "function setTextAnimationDuration(value)", 1400);
+    for line in [
+        "root.textAnimationDurationValue = value",
+        "if (coordinatedAnimDuration.value !== value) coordinatedAnimDuration.value = value",
+        "if (typingAnimDuration.value !== value) typingAnimDuration.value = value",
+        "settingsBackendRef.setting_typing_animation_duration_ms = value",
+    ] {
+        assert!(
+            setter.contains(line),
+            "Issue #815 评论 5955676896: 共享写入口必须同时更新共享值、两个滑块和 backend，\
+             缺少 `{}`",
+            line
+        );
+    }
+
+    // onClosed 只能写这一份共享值，不能再按协同开关二选一。
+    let closed = function_window(&src, "onClosed: {", 2400);
+    assert!(
+        closed.contains(
+            "settingsBackendRef.setting_typing_animation_duration_ms = root.textAnimationDurationValue"
+        ),
+        "Issue #815 评论 5955676896: onClosed 只写共享值，\
+         不得 `coordinatedAnim.checked ? coordinatedAnimDuration.value : typingAnimDuration.value`。"
+    );
+    assert!(
+        !closed.contains("coordinatedAnim.checked ? coordinatedAnimDuration.value"),
+        "Issue #815 评论 5955676896: onClosed 按协同开关二选一正是回滚根因——\
+         隐藏滑块可能还是旧值。"
+    );
+
+    // 两个滑块的写入口都必须收口到共享 setter，不能各自直接写 backend。
+    // 整个文件里只允许共享 setter 内部出现这一次直写（setter 自己的那一行），
+    // 两个滑块都不得再各自直写 backend。
+    assert_eq!(
+        src.matches("settingsBackendRef.setting_typing_animation_duration_ms = value")
+            .count(),
+        1,
+        "Issue #815 评论 5955676896: 滑块不得再各自直写 backend，必须走共享 setter；\
+         唯一允许的直写在共享 setter 内部。"
+    );
+    assert_eq!(
+        src.matches("onMoved: function() { root.setTextAnimationDuration(value) }")
+            .count(),
+        2,
+        "两个时长滑块的 onMoved 都必须收口到共享 setter。"
+    );
+
+    // 旧的「协同不共享 duration」注释与 #815 实际实现相反，必须改掉。
+    assert!(
+        !src.contains("协同只表示同事务/同首帧/同 rebase"),
+        "Issue #815 评论 5955676896: setCoordinatedAnimation 上方的旧注释说协同不共享 \
+         duration，已被 #815 推翻，必须删掉。"
+    );
+}
+
+// =========================================================================
 // 修改点 6：每帧每事务只采样一次，完成条件两类分开
 // =========================================================================
 
