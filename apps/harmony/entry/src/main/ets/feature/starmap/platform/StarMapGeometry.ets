@@ -1131,7 +1131,10 @@ export function hitTestEdge(
     const distance: number = pointToSegmentDistance(
       x, y, edge.startX, edge.startY, edge.endX, edge.endY
     )
-    if (distance <= bestDistance) {
+    // 严格小于：完全同距离时保留先遍历到的那条，和上面写的注释一致。
+    // 写成 <= 会让后面那条直接覆盖掉先遍历到的，实际效果和注释正好相反
+    //（#816 复审第 8 条）。
+    if (distance < bestDistance) {
       bestDistance = distance
       best = edge
     }

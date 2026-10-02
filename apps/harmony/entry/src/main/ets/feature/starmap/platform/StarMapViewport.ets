@@ -262,6 +262,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   private applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void
   private fitViewFn: () => void
   private createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>
+  private redrawEdgesFn: () => void
 
   constructor(
     scenePath: StarMapPathSegment[],
@@ -273,7 +274,8 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     ) => void,
     applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void,
     fitViewFn: () => void,
-    createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>
+    createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>,
+    redrawEdgesFn: () => void
   ) {
     this.scenePath = scenePath
     this.starmapId = starmapId
@@ -282,6 +284,18 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     this.applyZoomFn = applyZoomFn
     this.fitViewFn = fitViewFn
     this.createEdgeFn = createEdgeFn
+    this.redrawEdgesFn = redrawEdgesFn
+  }
+
+  /**
+   * 让本层重画一遍边的 Canvas。
+   *
+   * 选中是整棵树共享的一份：选中子层的边时，别的层也要把上一条高亮擦掉。
+   * ArkUI 的 Canvas onReady 只在首次准备好时触发一次，外部状态变化后不会自动
+   * 重放之前的绘图命令，所以画边的高亮必须由 Scene 自己在状态变化时重画。
+   */
+  redrawEdges(): void {
+    this.redrawEdgesFn()
   }
 
   /** 把最新的布局与视口快照到记录上。 */
@@ -398,5 +412,18 @@ export class StarMapSceneRegistry {
   /** 当前已注册的 Scene 数量（诊断和测试用）。 */
   size(): number {
     return this.handles.size
+  }
+
+  /**
+   * 让**所有**已注册的 Scene 重画边的 Canvas。
+   *
+   * 共享选中是整棵树唯一一份，选中态一变，每一层的边都可能要改：选中子层的边时
+   * 兄弟层的旧高亮要擦掉，点根层节点时子层那条高亮也要消失。所以只重画当前这层
+   * 是不够的（#816 复审第 8 条）。
+   */
+  redrawAllEdges(): void {
+    this.handles.forEach((handle: StarMapSceneNode) => {
+      handle.redrawEdges()
+    })
   }
 }

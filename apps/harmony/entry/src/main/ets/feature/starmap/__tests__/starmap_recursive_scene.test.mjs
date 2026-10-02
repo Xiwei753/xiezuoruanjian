@@ -331,7 +331,8 @@ function hitTestEdge(edges, x, y, tolerance) {
   let bestDistance = tolerance
   for (const edge of edges) {
     const distance = pointToSegmentDistance(x, y, edge.startX, edge.startY, edge.endX, edge.endY)
-    if (distance <= bestDistance) { bestDistance = distance; best = edge }
+    // 严格小于：完全同距离时保留先遍历到的那条，和上面写的注释一致
+    if (distance < bestDistance) { bestDistance = distance; best = edge }
   }
   return best
 }
@@ -786,6 +787,7 @@ function computePinchRatio(baseDistance, fingerPoints) {
  * 不主动 sync 的话，缩放一次之后所有递归命中都在拿过期视口算。
  */
 function createSceneNode(scenePath, starmapId, opts) {
+  const redraws = []
   const node = {
     scenePath, starmapId,
     rects: opts.rects || [],
@@ -810,9 +812,33 @@ function createSceneNode(scenePath, starmapId, opts) {
     },
     applyUserZoom(userScale, offsetX, offsetY) { return opts.applyZoomFn(userScale, offsetX, offsetY) },
     fitView() { return opts.fitViewFn() },
-    async createEdgeBetween(from, to) { return opts.createEdgeFn(from, to) }
+    async createEdgeBetween(from, to) { return opts.createEdgeFn(from, to) },
+    redrawEdges() { redraws.push(node.scenePath); return opts.redrawEdgesFn() }
   }
   return node
+}
+
+/**
+ * StarMapSceneRegistry 的镜像。
+ * redrawAllEdges 必须遍历**所有**已注册的 Scene：共享选中是整棵树唯一一份，
+ * 选中态一变，每一层的边都可能要改（#816 复审第 8 条）。
+ */
+function createSceneRegistry() {
+  const handles = new Map()
+  return {
+    register(handle) { handles.set(describeScenePath(handle.scenePath), handle) },
+    unregister(scenePath) { handles.delete(describeScenePath(scenePath)) },
+    find(scenePath) {
+      const h = handles.get(describeScenePath(scenePath))
+      return h === undefined ? null : h
+    },
+    getRoot() {
+      const h = handles.get('root')
+      return h === undefined ? null : h
+    },
+    size() { return handles.size },
+    redrawAllEdges() { handles.forEach((handle) => { handle.redrawEdges() }) }
+  }
 }
 
 /**
@@ -2013,6 +2039,147 @@ const SRC = { starmapId: 'sm-root', segments: [], target: { type: 'node', nodeId
 
   assert(eq(logEnd.length, 0), '没有 pinch 接管时不该写 superseded_by_pinch')
   assert(t.isConnecting(), '自己的 connect 还在，不该被误清')
+}
+
+console.log('')
+console.log('31. 评审回归 ⑪：边不是连线的合法端点，不能拿 edgeId 去建边')
+
+// 复现 finishConnect 的端点收窄。老写法把 edge 落进 else 分支当成 node。
+function buildConnectTargetLike(rootCtx, screenX, screenY) {
+  const hit = resolveRecursiveHit(rootCtx, screenX, screenY)
+  if (hit.target === null) { return { rejected: 'blank_target' } }
+  if (hit.target.objectKind === 'edge') { return { rejected: 'edge_target' } }
+  return {
+    kind: hit.target.objectKind === 'embed' ? 'embed' : 'node',
+    itemId: hit.target.objectId
+  }
+}
+
+// 31.1 根层的边：从节点拉线松手落在边命中范围内 → 必须被拒
+{
+  const tree = makeTree()
+  tree.edges = [mkEdge('edge-root', 250, 150, 350, 150)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  const result = buildConnectTargetLike(ctx, 300, 150)
+  assert(eq(result.rejected, 'edge_target'), '根层边被拒绝为连线端点')
+  assert(result.kind === undefined, '不会产出 kind=node 的端点')
+}
+
+// 31.2 老写法会产出什么：拿 edgeId 冒充 nodeId
+{
+  const tree = makeTree()
+  tree.edges = [mkEdge('edge-root', 250, 150, 350, 150)]
+  const ctx = buildRecursiveSceneContext(tree)
+  const hit = resolveRecursiveHit(ctx, 300, 150)
+
+  const legacyKind = hit.target.objectKind === 'embed' ? 'embed' : 'node'
+  assert(eq(legacyKind, 'node'), '老写法：edge 落进 else 分支被当成 node（回归点）')
+  assert(eq(hit.target.objectId, 'edge-root'), '老写法：edgeId 被原样当成了 nodeId')
+}
+
+// 31.3 子层的边同样必须被拒
+{
+  const tree = makeTree()
+  tree.getChildEmbeds()[0].edges = [mkEdge('edge-a', 100, 160, 220, 160)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  assert(eq(buildConnectTargetLike(ctx, 490, 90).rejected, 'edge_target'),
+    '子层边也被拒绝为连线端点')
+}
+
+// 31.4 拒绝边之后，节点和 Embed 仍然是合法端点（别把口子收过头）
+{
+  const tree = makeTree()
+  tree.edges = [mkEdge('edge-root', 250, 150, 350, 150)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  assert(eq(buildConnectTargetLike(ctx, 50, 40).itemId, 'n-root'), '节点仍是合法端点')
+  assert(eq(buildConnectTargetLike(ctx, 500, 20).kind, 'embed'), 'Embed 仍是合法端点')
+  assert(eq(buildConnectTargetLike(ctx, 300, 220).rejected, 'blank_target'), '真空白仍是 blank_target')
+}
+
+console.log('')
+console.log('32. 评审回归 ⑫：选中一变，所有已注册的 Scene 都要重画边')
+
+// 复现 redrawAllSceneEdges：共享选中是整棵树唯一一份。
+const redraws = []
+const registry = createSceneRegistry()
+function regScene(scenePath, starmapId) {
+  return createSceneNode(scenePath, starmapId, {
+    redrawEdgesFn() { redraws.push(describeScenePath(scenePath)) }
+  })
+}
+registry.register(regScene([], 'sm-root'))
+registry.register(regScene(PATH_A, 'sm-a'))
+registry.register(regScene(PATH_B, 'sm-b'))
+const selection = createSelectionState()
+
+// 32.1 root + childA + childB 都在册时，redrawAllEdges 要打到三层
+{
+  assert(eq(registry.size(), 3), '注册了 root / childA / childB 三层')
+  redraws.length = 0
+  registry.redrawAllEdges()
+  assert(eq(redraws.length, 3), '一次重画打到全部三层')
+  assert(eq(redraws[0], 'root'), '包含根层')
+  assert(eq(redraws[1], 'root/embed:emb-a'), '包含子层 A')
+  assert(eq(redraws[2], 'root/embed:emb-b'), '包含子层 B')
+}
+
+// 32.2 选中子层 A 的边：子层 A 该按 selected 画，其余层不该
+{
+  selection.select(PATH_A, 'edge', 'edge-a')
+  redraws.length = 0
+  registry.redrawAllEdges()
+  assert(eq(redraws.length, 3), '选子层边也要三层全重画（旧高亮在别的层）')
+
+  // 重画后 childA 认这条高亮，别的层不认
+  assert(selection.isSelected(PATH_A, 'edge', 'edge-a'), 'childA 按 selected 画这条边')
+  assert(!selection.isSelected([], 'edge', 'edge-a'), '根层不把它画成选中')
+  assert(!selection.isSelected(PATH_B, 'edge', 'edge-a'), 'childB 不把它画成选中')
+}
+
+// 32.3 改选根层节点：childA 必须不再按选中边画，而且它也得收到重画
+{
+  selection.select([], 'node', 'n-root')
+  redraws.length = 0
+  registry.redrawAllEdges()
+  assert(eq(redraws.length, 3), '改选根层节点也是三层全重画')
+  assert(!selection.isSelected(PATH_A, 'edge', 'edge-a'), 'childA 不再按选中边画（高亮被擦掉）')
+  assert(selection.isSelected([], 'node', 'n-root'), '根层按选中节点画')
+}
+
+// 32.4 清空选中同样要三层重画
+{
+  selection.clear()
+  redraws.length = 0
+  registry.redrawAllEdges()
+  assert(eq(redraws.length, 3), '清空选中也要三层全重画')
+  assert(!selection.hasSelection(), '确实清空了')
+}
+
+// 32.5 已注销的层不该再被重画（否则回调打在已销毁的 Canvas 上）
+{
+  registry.unregister(PATH_B)
+  redraws.length = 0
+  registry.redrawAllEdges()
+  assert(eq(redraws.length, 2), '注销后只剩两层重画')
+  assert(!redraws.includes('root/embed:emb-b'), '已注销的层不再被重画')
+}
+
+console.log('')
+console.log('33. 评审回归 ⑬：同距离的边取先遍历到的那条')
+{
+  const first = mkEdge('first', 0, 0, 100, 0)
+  const second = mkEdge('second', 0, 0, 100, 0)
+  assert(eq(hitTestEdge([first, second], 50, 0, EDGE_HIT_TOLERANCE_VP).edgeId, 'first'),
+    '同距离时取先遍历到的（写成 <= 会让后面的覆盖前面的）')
+  assert(eq(hitTestEdge([second, first], 50, 0, EDGE_HIT_TOLERANCE_VP).edgeId, 'second'),
+    '交换顺序则取另一条：规则是"先遍历到的"，不是"某条固定的"')
+  const near = mkEdge('near', 250, 150, 350, 150)
+  const far = mkEdge('far', 250, 140, 350, 140)
+  assert(eq(hitTestEdge([far, near], 300, 150, EDGE_HIT_TOLERANCE_VP).edgeId, 'near'),
+    '不同距离时仍然取更近的，与遍历顺序无关')
 }
 
 console.log('')

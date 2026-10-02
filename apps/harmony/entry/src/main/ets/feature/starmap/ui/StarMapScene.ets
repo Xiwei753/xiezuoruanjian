@@ -383,6 +383,9 @@ export struct StarMapScene {
         },
         (from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> => {
           return this.createEdgeBetween(from, to)
+        },
+        (): void => {
+          this.drawEdges()
         }
       )
     }
@@ -790,6 +793,27 @@ export struct StarMapScene {
   private selectItem(kind: 'node' | 'embed' | 'edge', itemId: string): void {
     logSelectionChanged(describeScenePath(this.scenePath), kind, itemId)
     this.selectionState.select(this.scenePath, kind, itemId)
+    this.redrawAllSceneEdges()
+  }
+
+  /**
+   * 共享选中一变就让**每一层**重画边。
+   *
+   * 边的高亮是 drawEdges 里读 selectionState 画的，而 ArkUI 的 Canvas onReady 只在
+   * 首次准备好时触发一次，外部状态变化之后不会自动重放之前的绘图命令。原来能触发
+   * 重画的只有视口变化、动画帧、图更新和首次 onReady —— 选中边以后如果动画是关的
+   * （reduce motion / shouldAnimate 为 false），线可以一直停在旧颜色旧线宽，直到下一次
+   * 缩放或平移才被改对。
+   * 更要紧的是选中是整棵树共享的一份：先选子层的边再点根层的节点，子层那条高亮也得
+   * 擦掉，所以只重画当前这层不够，必须遍历注册表里所有已注册的 Scene。
+   */
+  private redrawAllSceneEdges(): void {
+    if (this.sceneRegistry === null) {
+      // 没有注册表（独立使用本组件时）只能重画自己
+      this.drawEdges()
+      return
+    }
+    this.sceneRegistry.redrawAllEdges()
   }
 
   /**
@@ -819,6 +843,7 @@ export struct StarMapScene {
     logSelectionChanged(
       describeScenePath(hit.target.scenePath), hit.target.objectKind, hit.target.objectId
     )
+    this.redrawAllSceneEdges()
   }
 
   /** 点空白：清空全树选中。 */
@@ -828,6 +853,7 @@ export struct StarMapScene {
     }
     logSelectionChanged(describeScenePath(this.scenePath), 'none', '')
     this.selectionState.clear()
+    this.redrawAllSceneEdges()
   }
 
   // ─── @Watch 处理 ───
@@ -1074,6 +1100,13 @@ export struct StarMapScene {
     if (hit.target.objectKind === 'embed' && hit.target.hitRegion === 'innerContent' &&
       this.isSamePath(hit.target.scenePath, this.scenePath) && hit.target.objectId === this.connectSourceId) {
       logConnectEnd(sourcePath, null, '', false, 'self')
+      return
+    }
+    // 递归命中现在能返回 edge，但边不是合法的连线端点：把 edgeId 当成 nodeId 递给
+    // Core 就是拿一条不存在的节点去建边。统一命中可以共用，可命中的对象集合却不能
+    // 直接当成连线的合法端点集合（#816 复审第 8 条）。
+    if (hit.target.objectKind === 'edge') {
+      logConnectEnd(sourcePath, null, '', false, 'edge_target')
       return
     }
 
