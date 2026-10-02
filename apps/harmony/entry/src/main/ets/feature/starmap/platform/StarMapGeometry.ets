@@ -734,7 +734,7 @@ export interface RecursiveSceneSource {
   embedInstanceIds: Set<string>
   /** 本 Scene 画布坐标下的全部边（#816：边也要能被点到，递归命中才有 edge 这一类） */
   edges: PlatformEdgeRender[]
-  /** 本 Scene 的有效缩放（= fitScale * userZoomScale） */
+  /** 本 Scene 的画布 → 局部屏幕比例：根层是全局相机比例，子层是局部适配比例（#818） */
   scale: number
   /** 本 Scene 的 X 偏移 */
   offsetX: number

@@ -5,12 +5,13 @@
 //
 // 职责：
 // - 加载子星图 graph（通过 bridge.getStarMapGraph）
-// - 持有子场景的**用户缩放倍数**（userZoomScale，默认 1）
+// - 把全局相机原样传给 child StarMapScene
 // - 将子 StarMapScene 嵌入 Embed 的 innerContent 区域
 //
-// #816 之后这里不再自己算缩放：
-// 初始适配（fitScale）和居中偏移由 child StarMapScene 自己在首次布局完成时算，
-// 这里只留"用户拧了多少倍"这一份状态，缩放 = fitScale × userZoomScale。
+// #818 之后这里不再持有任何缩放状态：
+// 用户缩放只有一台全局相机（在 StarMapScreen 上），子 Scene 是相机里的内容，
+// 没有"这个子图被用户拧了几倍"这回事。子 Scene 的 fitScale 和居中偏移由它自己
+// 按父 Embed 的可用区域算一次，属于布局适配，用户改不了。
 // 同样也不再持有子场景的选中状态：全树共用父层传下来的 selectionState。
 
 import hilog from '@ohos.hilog'
@@ -105,24 +106,21 @@ export struct StarMapEmbedScene {
    * @State 持有 @Observed 对象：值只建一次，往下传的是同一个引用。
    */
   @State selectionState: StarMapSelectionState = new StarMapSelectionState()
-  /** 全树共用的 Scene 注册表：统一手势入口靠它找到归属层和最近公共祖先 */
+  /** 全树共用的 Scene 注册表：跨层连线和递归命中靠它 */
   sceneRegistry: StarMapSceneRegistry | null = null
+  /** 全局相机比例：原样往下传，子 Scene 只是相机里的内容（#818） */
+  cameraScale: number = 1
+  /** 全局相机 X 偏移：原样往下传 */
+  cameraOffsetX: number = 0
+  /** 全局相机 Y 偏移：原样往下传 */
+  cameraOffsetY: number = 0
+  /** 改全局相机的回调：原样往下传 */
+  onCameraChanged: (scale: number, offsetX: number, offsetY: number) => void =
+    (_scale: number, _offsetX: number, _offsetY: number) => {}
 
   // ─── @State：子场景状态 ───
   /** 子星图 graph */
   @State childGraph: StarMapGraph | null = null
-  /**
-   * 子场景的用户缩放倍数（默认 1）。
-   * 这是本层唯一独立保存的缩放量：初始适配比例由 child StarMapScene 算 fitScale，
-   * 最终比例 = fitScale × childUserZoomScale。
-   * 子图后来加节点、移动节点都不动它——只有首次加载或显式"适配视图"才重算 fitScale，
-   * 否则用户刚双指放大好的子图会被一次内容变化打回原大小。
-   */
-  @State childUserZoomScale: number = 1
-  /** 子场景 X 偏移（首次适配时由 child StarMapScene 居中写入） */
-  @State childOffsetX: number = 0
-  /** 子场景 Y 偏移（同上） */
-  @State childOffsetY: number = 0
   /** 是否正在加载子星图 */
   @State isLoading: boolean = true
   /** 加载错误信息 */
@@ -202,9 +200,11 @@ export struct StarMapEmbedScene {
         scenePath: this.childScenePath,
         starmapId: this.finalStarmapId,
         graph: $childGraph,
-        userZoomScale: $childUserZoomScale,
-        offsetX: $childOffsetX,
-        offsetY: $childOffsetY,
+        // 全局相机原样透传：子 Scene 自己算 fitScale，没有可改的用户缩放（#818）
+        cameraScale: this.cameraScale,
+        cameraOffsetX: this.cameraOffsetX,
+        cameraOffsetY: this.cameraOffsetY,
+        onCameraChanged: this.onCameraChanged,
         sceneDepth: this.sceneDepth + 1,
         bridge: this.bridge,
         themeConfig: this.themeConfig,

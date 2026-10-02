@@ -16,12 +16,13 @@
  *
  * 递归手势归属（Issue #816）：
  * 之前只有一个 ownerScenePath 跟着"当前 mode"走，于是"这层是不是空闲"实际承担了
- * 归属仲裁的职责——双指落在子图上时，父层会看到自己不是 idle 就退出，但这既不准确
- * （父层本来就没参与）也不彻底（父子可以同时非 idle，归属就在中间漂）。
- * 现在把归属按手势类型分开记：pinch / pan / connect / 当前操作对象各有一条独立的 owner 路径，
- * 且**手势归属一旦定下就不改**，只有对应的结束事件能清掉。
- * 父层看到子层的 pinch 时只能观察（isPinchOwnedByScene 为 false），
- * 不允许顺手改自己的 offset——改了就变成父子一起缩放。
+ * 归属仲裁的职责。现在把归属按手势类型分开记：pan / connect / 当前操作对象
+ * 各有一条独立的 owner 路径，且**手势归属一旦定下就不改**，只有对应的结束事件能清掉。
+ *
+ * pinch 不再有归属（Issue #818）：
+ * 双指只有一台全局相机，"这一层是不是 owner"对缩放已经没有意义——双指落在节点上、
+ * 落在子星图上、落在二层子星图上，缩的都是整棵树。因此 pinch 只记一个进行中的标志，
+ * 相机状态由 StarMapScreen 持有，不存在"缩放某个子 Scene"这条路径了。
  */
 
 import { PlatformPoint } from './StarMapLayout'
@@ -45,8 +46,6 @@ export interface GestureState {
   activeItemScenePath: StarMapPathSegment[] | null
   /** panCanvas 的归属 scene；没有正在拖画布时为 null */
   panOwnerScenePath: StarMapPathSegment[] | null
-  /** pinch 的归属 scene；没有正在双指缩放时为 null。定下之后不换人，直到双指抬起 */
-  pinchOwnerScenePath: StarMapPathSegment[] | null
   /** connect 的归属 scene；没有正在连线时为 null */
   connectOwnerScenePath: StarMapPathSegment[] | null
   /** connect 源对象所在 scene 的路径（#816 跨层连线的起点依据） */
@@ -70,7 +69,6 @@ function emptyState(): GestureState {
     ownerScenePath: [],
     activeItemScenePath: null,
     panOwnerScenePath: null,
-    pinchOwnerScenePath: null,
     connectOwnerScenePath: null,
     connectSourceScenePath: null,
     startPoint: { x: 0, y: 0 },
@@ -168,32 +166,27 @@ export class StarMapGestureStateTracker {
   }
 
   /**
-   * 双指缩放归属到某层 Scene。
+   * 双指开始缩放整棵星图（#818）。
    *
-   * 归属只在"还没有人认领"时才能定下（isPinchOwnedByScene / canClaimPinch 做这件事）：
-   * 一次双指从落下到抬起之间如果改归属，父子两层会轮流被缩放，
-   * 屏幕上表现为缩放抖动、子图突然跳位（#816 真机症状）。
+   * 没有 owner 参数：全局相机只有一台，双指落在哪一层都不改变缩放目标。
+   * 这里只负责把 mode 切成 pinch，让"有别的 Scene 正在拖画布/连线"这件事能被观察到。
    */
-  beginPinch(ownerScenePath: StarMapPathSegment[], centerX: number, centerY: number): void {
+  beginPinch(centerX: number, centerY: number): void {
     const next = emptyState()
     next.mode = 'pinch'
-    next.ownerScenePath = copyPath(ownerScenePath)
-    next.pinchOwnerScenePath = copyPath(ownerScenePath)
+    // 双指只在根 Scene 的 Stack 上统一接收，归属恒为根（空路径）。
+    next.ownerScenePath = []
     next.startPoint = { x: centerX, y: centerY }
     next.currentPoint = { x: centerX, y: centerY }
     this.state = next
   }
 
-  /**
-   * 双指缩放结束。
-   * 只有归属层会走到这里，父层保持 observe（自己的 offset 一个都不动）。
-   */
+  /** 双指缩放结束，回到 idle。 */
   endPinch(): void {
-    if (this.state.pinchOwnerScenePath === null) {
+    if (this.state.mode !== 'pinch') {
       return
     }
-    const next = emptyState()
-    this.state = next
+    this.state = emptyState()
   }
 
   /** 更新当前点（画布坐标） */
@@ -226,31 +219,9 @@ export class StarMapGestureStateTracker {
     return this.state.mode === 'connect'
   }
 
-  /** 当前是否有任何一层 Scene 正在被双指缩放（无论归属是谁） */
+  /** 当前是否有双指正在缩放整棵星图（#818：无归属，只有进行中与否） */
   isPinching(): boolean {
-    return this.state.pinchOwnerScenePath !== null
-  }
-
-  /**
-   * 双指缩放是否归属指定 Scene。
-   * 归属层返回 true 才可以改自己的视口；其余层一律只能观察。
-   */
-  isPinchOwnedByScene(scenePath: StarMapPathSegment[]): boolean {
-    if (this.state.pinchOwnerScenePath === null) {
-      return false
-    }
-    return isSameScenePath(this.state.pinchOwnerScenePath, scenePath)
-  }
-
-  /**
-   * 指定 Scene 能否认领双指缩放。
-   * 还没人认领时才能认领；已归属别人时返回 false，归属就不会中途漂移。
-   */
-  canClaimPinch(scenePath: StarMapPathSegment[]): boolean {
-    if (this.state.pinchOwnerScenePath === null) {
-      return true
-    }
-    return isSameScenePath(this.state.pinchOwnerScenePath, scenePath)
+    return this.state.mode === 'pinch'
   }
 
   /**
@@ -342,7 +313,6 @@ export class StarMapGestureStateTracker {
       ownerScenePath: copyPath(s.ownerScenePath),
       activeItemScenePath: s.activeItemScenePath !== null ? copyPath(s.activeItemScenePath) : null,
       panOwnerScenePath: s.panOwnerScenePath !== null ? copyPath(s.panOwnerScenePath) : null,
-      pinchOwnerScenePath: s.pinchOwnerScenePath !== null ? copyPath(s.pinchOwnerScenePath) : null,
       connectOwnerScenePath: s.connectOwnerScenePath !== null ? copyPath(s.connectOwnerScenePath) : null,
       connectSourceScenePath: s.connectSourceScenePath !== null ? copyPath(s.connectSourceScenePath) : null,
       startPoint: { x: s.startPoint.x, y: s.startPoint.y },

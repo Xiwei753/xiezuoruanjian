@@ -44,25 +44,64 @@ function fmt(value: number | undefined | null, digits: number): string {
   return value.toFixed(digits)
 }
 
-/** 双指缩放开始：归属哪一层、双指中心在哪、起始比例多少。 */
-export function logPinchBegin(
-  ownerScenePath: string,
-  centerX: number,
-  centerY: number,
-  baseScale: number
-): void {
+/** 双指缩放开始：两指中心在哪、起始相机比例多少（#818 没有归属层了）。 */
+export function logPinchBegin(centerX: number, centerY: number, baseScale: number): void {
   hilog.info(
     DOMAIN, TAG,
-    `${PREFIX} pinch_begin ownerScenePath=${ownerScenePath} centerX=${fmt(centerX, 1)} ` +
+    `${PREFIX} pinch_begin centerX=${fmt(centerX, 1)} ` +
     `centerY=${fmt(centerY, 1)} baseScale=${fmt(baseScale, 3)}`
   )
 }
 
-/** 双指缩放结束：归属哪一层、最终比例多少。 */
-export function logPinchEnd(ownerScenePath: string, finalScale: number): void {
+/** 双指缩放结束：全局相机最终比例。 */
+export function logPinchEnd(finalScale: number): void {
   hilog.info(
     DOMAIN, TAG,
-    `${PREFIX} pinch_end ownerScenePath=${ownerScenePath} finalScale=${fmt(finalScale, 3)}`
+    `${PREFIX} pinch_end finalScale=${fmt(finalScale, 3)}`
+  )
+}
+
+/**
+ * 相机自检：把双指落下那一刻的相机原值打出来（#818）。
+ *
+ * 存在的理由：pinch_begin 里只有一个合成出来的 baseScale。真机上它打出
+ * `none`，光看它无法判断是比例还是偏移在缩放链上坏了。这里逐个原样打，
+ * 并用 String() 包一层：undefined / null 也能显示，而且绝不会二次抛错。
+ */
+export function logViewportState(
+  cameraScale: number | undefined | null,
+  cameraOffsetX: number | undefined | null,
+  cameraOffsetY: number | undefined | null
+): void {
+  hilog.info(
+    DOMAIN, TAG,
+    `${PREFIX} viewport_state cameraScale=${String(cameraScale)} ` +
+    `cameraOffsetX=${String(cameraOffsetX)} cameraOffsetY=${String(cameraOffsetY)}`
+  )
+}
+
+/**
+ * 新建节点 / 新建子星图的结果。
+ *
+ * 这一条以前完全没有日志，导致真机上报「新建失败、画面没变化」时，
+ * 日志里只剩 Core 侧的 PARSE_ERROR，看不出平台到底递了什么坐标。
+ * 这里把 starmapId 和实际下发的 position 一起打出来。
+ */
+export function logCreateResult(
+  kind: string,
+  scenePath: string,
+  starmapId: string,
+  title: string,
+  posX: number | undefined | null,
+  posY: number | undefined | null,
+  success: boolean,
+  detail: string
+): void {
+  hilog.info(
+    DOMAIN, TAG,
+    `${PREFIX} ${kind} scenePath=${scenePath} starmapId=${starmapId} ` +
+    `title="${title}" x=${String(posX)} y=${String(posY)} ` +
+    `${success ? 'success' : 'fail'} ${detail}`
   )
 }
 

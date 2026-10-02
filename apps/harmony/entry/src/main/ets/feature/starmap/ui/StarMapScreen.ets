@@ -14,13 +14,16 @@ import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { PlatformMotionConfig, defaultMotionConfig, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
-import { StarMapSceneRegistry } from '../platform/StarMapViewport'
+import {
+  StarMapSceneRegistry,
+  CAMERA_SCALE_MIN,
+  CAMERA_SCALE_MAX,
+  computeCameraZoomAround
+} from '../platform/StarMapViewport'
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import { StarMapScene } from './StarMapScene'
 
-// 缩放边界
-const MIN_ZOOM: number = 0.3
-const MAX_ZOOM: number = 3
+// 缩放边界：比例上下限来自 StarMapViewport 的相机常量，这里只留工具栏的步长
 const ZOOM_STEP: number = 0.1
 
 @Component
@@ -37,11 +40,12 @@ export struct StarMapScreen {
   @State isLoading: boolean = true
   @State errorMessage: string = ''
 
-  // 根 Scene viewport（与 StarMapScene 双向绑定）
-  // 根 Scene 的用户缩放倍数。工具栏 +/- 只作用在这一层，子 Scene 各自双指缩放。
-  @State userZoomScale: number = 1
-  @State offsetX: number = 0
-  @State offsetY: number = 0
+  // 全局视角相机（#818）：整棵递归星图只有这一台相机。
+  // 工具栏 +/- 和画布双指捏合改的都是它；节点、子星图、嵌套子星图都只是相机里的内容，
+  // 不存在"单独缩放某个子星图"这条路径。
+  @State cameraScale: number = 1
+  @State cameraOffsetX: number = 0
+  @State cameraOffsetY: number = 0
 
   // 主题和适配
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
@@ -72,7 +76,8 @@ export struct StarMapScreen {
   private gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
   // 全树唯一的选中状态（#816）：根和所有子 Scene 共用，选中身份是 scenePath + kind + itemId
   @State selectionState: StarMapSelectionState = new StarMapSelectionState()
-  // 全树唯一的 Scene 注册表：统一双指入口按 scenePath 找归属层，跨层连线按它求最近公共祖先
+  // 全树唯一的 Scene 注册表：双指入口按 scenePath 找归属层已作废（#818），
+  // 这里只服务跨层连线（求最近公共祖先）和递归命中
   private sceneRegistry: StarMapSceneRegistry = new StarMapSceneRegistry()
 
   async aboutToAppear() {
@@ -200,31 +205,38 @@ export struct StarMapScreen {
   }
 
   /**
-   * 根 Scene 的缩放：围绕指定屏幕点缩放，保持该点对应的画布坐标不变。
-   *
-   * 只管根这一层（#816）：工具栏不是"当前子星图的缩放管理器"，
-   * 子 Scene 的缩放一律由双指在它自己的层里完成。
+   * 改全局相机。Scene 层（根或子）都通过根 Scene 的回调调到这里。
    */
-  private zoomAround(screenX: number, screenY: number, nextScale: number) {
-    const anchorCanvasX = (screenX - this.offsetX) / this.userZoomScale
-    const anchorCanvasY = (screenY - this.offsetY) / this.userZoomScale
-    this.offsetX = screenX - anchorCanvasX * nextScale
-    this.offsetY = screenY - anchorCanvasY * nextScale
-    this.userZoomScale = nextScale
+  applyCamera(scale: number, offsetX: number, offsetY: number) {
+    this.cameraScale = scale
+    this.cameraOffsetX = offsetX
+    this.cameraOffsetY = offsetY
+  }
+
+  /**
+   * 工具栏缩放：围绕可视画布中心改全局相机（#818）。
+   *
+   * 工具栏作用的是整棵树，不是"当前看进去的那张子星图"。
+   */
+  private zoomAround(centerX: number, centerY: number, nextScale: number) {
+    const next = computeCameraZoomAround({
+      scale: this.cameraScale,
+      offsetX: this.cameraOffsetX,
+      offsetY: this.cameraOffsetY
+    }, centerX, centerY, nextScale)
+    this.applyCamera(next.scale, next.offsetX, next.offsetY)
   }
 
   /** 放大一级（工具栏 +）：以可视画布中心为锚点 */
   zoomIn() {
-    const centerX = this.canvasWidth / 2
-    const centerY = this.canvasHeight / 2
-    this.zoomAround(centerX, centerY, Math.min(MAX_ZOOM, this.userZoomScale + ZOOM_STEP))
+    this.zoomAround(this.canvasWidth / 2, this.canvasHeight / 2,
+      Math.min(CAMERA_SCALE_MAX, this.cameraScale + ZOOM_STEP))
   }
 
   /** 缩小一级（工具栏 −） */
   zoomOut() {
-    const centerX = this.canvasWidth / 2
-    const centerY = this.canvasHeight / 2
-    this.zoomAround(centerX, centerY, Math.max(MIN_ZOOM, this.userZoomScale - ZOOM_STEP))
+    this.zoomAround(this.canvasWidth / 2, this.canvasHeight / 2,
+      Math.max(CAMERA_SCALE_MIN, this.cameraScale - ZOOM_STEP))
   }
 
   onMotionProgressChange() {
@@ -240,9 +252,13 @@ export struct StarMapScreen {
         scenePath: [],  // 根 scene 的 path 为空
         starmapId: this.starmapId,
         graph: $graph,
-        userZoomScale: $userZoomScale,
-        offsetX: $offsetX,
-        offsetY: $offsetY,
+        // 全局相机：根 Scene 是相机本体（#818）
+        cameraScale: this.cameraScale,
+        cameraOffsetX: this.cameraOffsetX,
+        cameraOffsetY: this.cameraOffsetY,
+        onCameraChanged: (scale: number, offsetX: number, offsetY: number) => {
+          this.applyCamera(scale, offsetX, offsetY)
+        },
         sceneDepth: 0,
         bridge: this.bridge,
         themeConfig: this.themeConfig,

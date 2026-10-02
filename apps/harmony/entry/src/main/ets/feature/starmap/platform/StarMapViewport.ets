@@ -4,12 +4,22 @@
 //
 // 这一层是纯计算，不依赖 ArkUI 组件，不依赖 corebridge，所有函数都能在 node 里直接跑。
 //
-// 比例的语义（#816 明确要求）：
-//   最终比例 = fitScale × userZoomScale
-// - fitScale 由"内容包围盒"和"父 Embed 的可用圆形内容区"算出来，只算一次（首次加载 / 显式 fit view）；
-// - userZoomScale 是用户自己双指缩放出来的倍数，默认 1，独立于 fitScale 保存；
-// - 任何一层都不允许用"每深一层乘 0.6"这种写死系数，那会让嵌套子图越深越小到看不见，
-//   也无法解释用户双指放大后为什么还是比父图大。
+// 变换只有两种（#818 明确要求，取代 #816 的 fitScale × userZoomScale）：
+//
+// 1) Global Camera Transform（全局视角相机）
+//    整棵递归星图只有**一台**相机：`{ scale, offsetX, offsetY }`，由 StarMapScreen 持有。
+//    只有用户手势能改它 —— 画布双指捏合、工具栏的 +/−、空白处拖动。
+//    节点、子星图、嵌套子星图都只是这台相机里的内容，不存在"单独缩放某个子星图"。
+//    旧方向"双指中心落在哪一层 → 找最深 ownerScenePath → 缩放那个 Scene"已经作废。
+//
+// 2) Embed Local Fit Transform（子星图局部适配）
+//    每个子 Scene 有一份自己的 `fitScale + 居中偏移`，由"内容包围盒"和"父 Embed 的
+//    可用圆形内容区"算出。它是**布局适配**，不是相机：用户改不了，也不在相机语义里。
+//    每一层都按自己的父 Embed 尺寸各算一次，所以嵌套深度不会让子图越深越小到看不见。
+//
+// 一张子星图里的点，从局部画布到最终屏幕要依次经过：
+//   子 Scene 局部 → 父 Embed 局部适配 → 更上层 Embed 局部适配 → 根 world → 全局相机 → 屏幕
+// 子层没有任何"用户缩放"可以混进这条链。
 
 import { StarMapTargetPath, StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformPoint } from './StarMapLayout'
@@ -56,12 +66,95 @@ export function computeContentBounds(rects: PlatformNodeRect[]): ContentBounds |
 
 // ─── 比例与偏移 ───
 
-/** 一个 Scene 的视口参数。 */
+/** 一个 Scene 的**局部适配**结果：内容铺进父 Embed 后的比例与偏移（#818 布局用，不是相机）。 */
 export interface Viewport {
-  /** 有效比例（fitScale × userZoomScale） */
   zoomScale: number
   offsetX: number
   offsetY: number
+}
+
+// ─── 全局视角相机（#818）───
+
+/**
+ * 整棵递归星图唯一的相机。
+ *
+ * 屏幕坐标 = 根画布坐标 × scale + offset。只有用户手势改它。
+ */
+export interface GlobalCameraTransform {
+  scale: number
+  offsetX: number
+  offsetY: number
+}
+
+/** 相机比例下限。再小整棵树就糊成一点。 */
+export const CAMERA_SCALE_MIN: number = 0.3
+
+/** 相机比例上限。再大就只能看到局部。 */
+export const CAMERA_SCALE_MAX: number = 3
+
+/** 把相机比例夹在合法区间内；非有限值或非正数一律退回 1。 */
+export function clampCameraScale(scale: number): number {
+  if (!isFinite(scale) || scale <= 0) {
+    return 1
+  }
+  return Math.max(CAMERA_SCALE_MIN, Math.min(CAMERA_SCALE_MAX, scale))
+}
+
+/**
+ * 双指捏合时相机的新状态（#818 公式）：
+ *   anchorWorldX = (centerX - offsetX) / cameraScale
+ *   anchorWorldY = (centerY - offsetY) / cameraScale
+ *   nextScale    = clamp(baseScale * pinchRatio)
+ *   offsetX      = centerX - anchorWorldX * nextScale
+ *   offsetY      = centerY - anchorWorldY * nextScale
+ *
+ * 收 baseScale 而不是上一帧的比例：手势起手时的比例固定下来，两指每一帧都从它算，
+ * 否则 100 → 110 → 120 会变成 1.00×1.1×1.2 = 1.32 而不是 1.20。
+ *
+ * @param camera 手势起手时的相机状态
+ * @param baseScale 手势起手时的相机比例
+ * @param baseDistance 手势起手时的两指距离
+ * @param currentDistance 当前两指距离
+ * @param centerX 当前两指中心的屏幕坐标 X
+ * @param centerY 当前两指中心的屏幕坐标 Y
+ * @returns 新的相机状态
+ */
+export function computeCameraPinch(
+  camera: GlobalCameraTransform,
+  baseScale: number,
+  baseDistance: number,
+  currentDistance: number,
+  centerX: number,
+  centerY: number
+): GlobalCameraTransform {
+  const ratio: number = baseDistance > 0 ? currentDistance / baseDistance : 1
+  const nextScale: number = clampCameraScale(baseScale * ratio)
+  const anchorWorldX: number = (centerX - camera.offsetX) / camera.scale
+  const anchorWorldY: number = (centerY - camera.offsetY) / camera.scale
+  return {
+    scale: nextScale,
+    offsetX: centerX - anchorWorldX * nextScale,
+    offsetY: centerY - anchorWorldY * nextScale
+  }
+}
+
+/**
+ * 工具栏 +/− 这类"没有起手锚点"的缩放，围绕屏幕中心改相机。
+ */
+export function computeCameraZoomAround(
+  camera: GlobalCameraTransform,
+  centerX: number,
+  centerY: number,
+  nextScale: number
+): GlobalCameraTransform {
+  const clamped: number = clampCameraScale(nextScale)
+  const anchorWorldX: number = (centerX - camera.offsetX) / camera.scale
+  const anchorWorldY: number = (centerY - camera.offsetY) / camera.scale
+  return {
+    scale: clamped,
+    offsetX: centerX - anchorWorldX * clamped,
+    offsetY: centerY - anchorWorldY * clamped
+  }
 }
 
 /**
@@ -162,42 +255,6 @@ export function computeFittedViewport(
   }
 }
 
-/** 最终比例 = fitScale × userZoomScale。 */
-export function effectiveScale(fitScale: number, userZoomScale: number): number {
-  return fitScale * userZoomScale
-}
-
-/** 把用户缩放倍数夹在合法区间内。 */
-export function clampUserZoom(userZoomScale: number, minZoom: number, maxZoom: number): number {
-  if (!isFinite(userZoomScale) || userZoomScale <= 0) {
-    return 1
-  }
-  return Math.max(minZoom, Math.min(maxZoom, userZoomScale))
-}
-
-/**
- * 围绕屏幕锚点缩放时的偏移。
- *
- * 锚点画布坐标 anchorCanvas 固定，屏幕锚点 anchorScreen 固定，
- * 缩到 nextScale 后要让 anchorCanvas 仍落在 anchorScreen 上：
- *   offset = anchorScreen - anchorCanvas * nextScale
- *
- * @param anchorCanvas 锚点在**该 Scene 画布坐标**里的位置
- * @param anchorScreen 锚点在**该 Scene 局部屏幕坐标**里的位置
- * @param nextScale 缩放后的有效比例
- * @returns 新的 Scene 局部偏移
- */
-export function computeZoomAroundOffset(
-  anchorCanvas: PlatformPoint,
-  anchorScreen: PlatformPoint,
-  nextScale: number
-): PlatformPoint {
-  return {
-    x: anchorScreen.x - anchorCanvas.x * nextScale,
-    y: anchorScreen.y - anchorCanvas.y * nextScale
-  }
-}
-
 // ─── 坐标互转 ───
 
 /**
@@ -233,10 +290,12 @@ export function canvasToSceneLocal(
 /**
  * 一层 Scene 在注册表里的记录。
  *
- * 几何字段（rects / scale / offset / fitScale）是递归命中要读的快照，
+ * 几何字段（rects / scale / offset）是递归命中要读的快照，
  * 由 Scene 在重算几何和视口变化后 sync 一次；命令方法让"统一手势入口"
- * 可以隔着层级调用最深那一层：双指缩放只能改归属 Scene 的视口，
- * 连线只能落在宿主 Scene 上，靠的就是这几条命令而不是"父层顺手改一改"（#816）。
+ * 可以隔着层级调用最深那一层：连线只能落在宿主 Scene 上，
+ * 靠的就是这几条命令而不是"父层顺手改一改"（#816）。
+ *
+ * 缩放**不在**这里（#818）：双指只改全局相机，句柄上不保留任何用户缩放状态。
  *
  * 构造函数直接收函数而不是收一个对象：ArkTS 不允许在结构体里就地构造
  * 带函数字段的对象字面量，函数参数就没有这个限制。
@@ -248,19 +307,12 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   embedInstanceIds: Set<string> = new Set<string>()
   /** 本层画布坐标下的全部边。递归命中要靠它才能返回 edge 这一类目标（#816）。 */
   edges: PlatformEdgeRender[] = []
+  /** 本层画布 → 本层局部屏幕的比例。根层是全局相机比例，子层是局部适配比例（#818）。 */
   scale: number = 1
   offsetX: number = 0
   offsetY: number = 0
-  /** 适配比例。最终比例 = fitScale × userZoomScale。 */
-  fitScale: number = 1
 
   private getChildren: () => RecursiveSceneSource[]
-  private zoomToScaleFn: (
-    anchorCanvasX: number, anchorCanvasY: number,
-    anchorLocalX: number, anchorLocalY: number, requestedScale: number
-  ) => void
-  private applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void
-  private fitViewFn: () => void
   private createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>
   private redrawEdgesFn: () => void
 
@@ -268,21 +320,12 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     scenePath: StarMapPathSegment[],
     starmapId: string,
     getChildren: () => RecursiveSceneSource[],
-    zoomToScaleFn: (
-      anchorCanvasX: number, anchorCanvasY: number,
-      anchorLocalX: number, anchorLocalY: number, requestedScale: number
-    ) => void,
-    applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void,
-    fitViewFn: () => void,
     createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>,
     redrawEdgesFn: () => void
   ) {
     this.scenePath = scenePath
     this.starmapId = starmapId
     this.getChildren = getChildren
-    this.zoomToScaleFn = zoomToScaleFn
-    this.applyZoomFn = applyZoomFn
-    this.fitViewFn = fitViewFn
     this.createEdgeFn = createEdgeFn
     this.redrawEdgesFn = redrawEdgesFn
   }
@@ -305,8 +348,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     edges: PlatformEdgeRender[],
     scale: number,
     offsetX: number,
-    offsetY: number,
-    fitScale: number
+    offsetY: number
   ): void {
     this.rects = rects
     this.embedInstanceIds = embedInstanceIds
@@ -314,42 +356,10 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     this.scale = scale
     this.offsetX = offsetX
     this.offsetY = offsetY
-    this.fitScale = fitScale
   }
 
   getChildEmbeds(): RecursiveSceneSource[] {
     return this.getChildren()
-  }
-
-  /**
-   * 以锚点为中心，缩到**绝对**总比例 requestedScale。
-   *
-   * 这里收绝对值而不是"相对上一帧放大几倍"：统一入口每帧都会发一次命令，
-   * 收相对量的话每一帧都拿上一帧的结果再乘一次，两指 100 → 110 → 120
-   * 就会变成 1.00×1.1×1.2 = 1.32，而不是 1.20。手势起手时是什么比例、
-   * 现在两指捏到几倍，由统一入口算好后传进来。
-   *
-   * 锚点同时给"画布坐标"和"局部屏幕坐标"，因为 `屏幕 = 画布 × scale + offset`
-   * 只在 Scene 自己的局部空间成立：统一入口给的两指中心是根坐标，必须先换算到本层，
-   * 画布锚点也必须留在本层坐标系里。夹取范围、最终比例怎么由 fitScale 合成，
-   * 都由 Scene 自己算，父层只发命令。
-   */
-  zoomToScale(
-    anchorCanvasX: number,
-    anchorCanvasY: number,
-    anchorLocalX: number,
-    anchorLocalY: number,
-    requestedScale: number
-  ): void {
-    this.zoomToScaleFn(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, requestedScale)
-  }
-
-  applyUserZoom(userScale: number, offsetX: number, offsetY: number): void {
-    this.applyZoomFn(userScale, offsetX, offsetY)
-  }
-
-  fitView(): void {
-    this.fitViewFn()
   }
 
   /**
@@ -367,9 +377,12 @@ export class StarMapSceneNode implements RecursiveSceneSource {
 /**
  * 递归 Scene 注册表：以 describeScenePath 为主键，记录当前挂载的每一层 Scene。
  *
- * 存在的理由：双指到底属于哪一层、connect 松手落在谁身上、跨层连线宿主是谁，
- * 这三个判断都需要"从根往下看整棵树"，而这些判断发生在根 Scene 的手势入口里，
+ * 存在的理由：connect 松手落在谁身上、跨层连线宿主是谁，
+ * 这些判断都需要"从根往下看整棵树"，而这些判断发生在根 Scene 的手势入口里，
  * 根 Scene 拿不到子组件实例。注册表就是这层间接访问的唯一通道。
+ *
+ * 双指缩放**不**用注册表（#818）：全局相机只有一台，由 StarMapScreen 持有，
+ * 不需要查"这一层是哪一层"。
  *
  * StarMapScreen 持有唯一一份，沿组件树一路传下去；每层 StarMapScene 在
  * aboutToAppear 注册、aboutToDisappear 注销，句柄上的几何字段由 Scene 自己同步。

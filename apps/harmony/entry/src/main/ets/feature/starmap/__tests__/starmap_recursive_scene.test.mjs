@@ -4,12 +4,12 @@
 //   node apps/harmony/entry/src/main/ets/feature/starmap/__tests__/starmap_recursive_scene.test.mjs
 //
 // 本评论要求的行为契约（对应实现文件）：
-//   1. 子图初始比例来自"内容包围盒 × 父 Embed 圆形可用区"，最终比例 = fitScale × userZoomScale；
-//      不允许出现"每深一层乘 0.6"这种写死系数
-//      —— computeContentBounds / computeFitScale / computeFittedViewport / effectiveScale
-//         (StarMapViewport.ets)
-//   2. 双指缩放的锚点必须落在**归属 Scene 自己的局部坐标**里，父层不能拿自己的坐标算子层锚点
-//      —— computeZoomAroundOffset / sceneLocalToCanvas (StarMapViewport.ets)
+//   1. 子图初始比例来自"内容包围盒 × 父 Embed 圆形可用区"，这是**布局适配**（局部 fit），
+//      不是用户缩放；不允许出现"每深一层乘 0.6"这种写死系数
+//      —— computeContentBounds / computeFitScale / computeFittedViewport (StarMapViewport.ets)
+//   2. 缩放只有一台相机：双指捏合与工具栏 +/− 都只改**全局视角相机**，整棵递归星图一起缩放；
+//      锚点按 #818 的公式落在根画布的世界坐标里，任何一层都不允许单独被缩放
+//      —— clampCameraScale / computeCameraPinch / computeCameraZoomAround (StarMapViewport.ets)
 //
 //   3. 递归 Scene 之间的坐标换算必须扣掉 Embed 矩形自己的原点。
 //      子 Scene 的画布坐标是它自己那张图的 node.position，和父画布没有共同数值范围——
@@ -22,9 +22,9 @@
 //      子图未加载停在本层（目标仍是 Embed）；空白则 target 为 null
 //      —— resolveRecursiveHit / buildRecursiveSceneContext (StarMapGeometry.ets)
 //
-//   5. 双指归属一旦定下就不换人，直到双指抬起；父层只能观察不能改自己视口
-//      —— StarMapGestureStateTracker.beginPinch / canClaimPinch / isPinchOwnedByScene
-//         (StarMapGestureState.ets)
+//   5. 双指不再需要归属：捏合状态只有一个"进行中"标志，相机由 StarMapScreen 独占。
+//      递归命中只服务选中 / 拖拽 / 连线 / 长按菜单，绝不参与决定缩放目标（#818）
+//      —— StarMapGestureStateTracker.beginPinch (StarMapGestureState.ets)
 //
 //   6. 全树唯一选中态：选中身份 = scenePath + kind + itemId。
 //      选中子节点时父 Embed 立刻失选；同名 item 在不同层不互相命中
@@ -45,8 +45,8 @@
 const CIRCLE_INNER_SAFE_RATIO = 1 / Math.SQRT2
 const MIN_FIT_SCALE = 0.02
 const MAX_FIT_SCALE = 4
-const USER_ZOOM_MIN = 0.3
-const USER_ZOOM_MAX = 3
+const CAMERA_SCALE_MIN = 0.3
+const CAMERA_SCALE_MAX = 3
 const EMBED_FIT_PADDING_VP = 8
 const EMBED_TITLE_HIT_HEIGHT = 24
 const EMBED_BORDER_HIT_WIDTH = 12
@@ -91,15 +91,34 @@ function computeFittedViewport(bounds, availableWidth, availableHeight, paddingV
   return { zoomScale: fitScale, offsetX: offset.x, offsetY: offset.y }
 }
 
-function effectiveScale(fitScale, userZoomScale) { return fitScale * userZoomScale }
+// ─── 全局视角相机（#818）───
 
-function clampUserZoom(userZoomScale, minZoom, maxZoom) {
-  if (!isFinite(userZoomScale) || userZoomScale <= 0) { return 1 }
-  return Math.max(minZoom, Math.min(maxZoom, userZoomScale))
+function clampCameraScale(scale) {
+  if (!isFinite(scale) || scale <= 0) { return 1 }
+  return Math.max(CAMERA_SCALE_MIN, Math.min(CAMERA_SCALE_MAX, scale))
 }
 
-function computeZoomAroundOffset(anchorCanvas, anchorScreen, nextScale) {
-  return { x: anchorScreen.x - anchorCanvas.x * nextScale, y: anchorScreen.y - anchorCanvas.y * nextScale }
+function computeCameraPinch(camera, baseScale, baseDistance, currentDistance, centerX, centerY) {
+  const ratio = baseDistance > 0 ? currentDistance / baseDistance : 1
+  const nextScale = clampCameraScale(baseScale * ratio)
+  const anchorWorldX = (centerX - camera.offsetX) / camera.scale
+  const anchorWorldY = (centerY - camera.offsetY) / camera.scale
+  return {
+    scale: nextScale,
+    offsetX: centerX - anchorWorldX * nextScale,
+    offsetY: centerY - anchorWorldY * nextScale
+  }
+}
+
+function computeCameraZoomAround(camera, centerX, centerY, nextScale) {
+  const clamped = clampCameraScale(nextScale)
+  const anchorWorldX = (centerX - camera.offsetX) / camera.scale
+  const anchorWorldY = (centerY - camera.offsetY) / camera.scale
+  return {
+    scale: clamped,
+    offsetX: centerX - anchorWorldX * clamped,
+    offsetY: centerY - anchorWorldY * clamped
+  }
 }
 
 function sceneLocalToCanvas(x, y, scale, offsetX, offsetY) {
@@ -500,7 +519,7 @@ function planCrossLayerEdge(root, sourcePath, targetPath) {
 function createGestureStateTracker() {
   const emptyState = () => ({
     mode: 'idle', activeItemId: '', activeItemKind: 'node', ownerScenePath: [],
-    activeItemScenePath: null, panOwnerScenePath: null, pinchOwnerScenePath: null,
+    activeItemScenePath: null, panOwnerScenePath: null,
     connectOwnerScenePath: null, connectSourceScenePath: null,
     startPoint: { x: 0, y: 0 }, currentPoint: { x: 0, y: 0 },
     targetItemId: '', targetItemScenePath: null
@@ -564,31 +583,22 @@ function createGestureStateTracker() {
       n.currentPoint = { x: sx, y: sy }
       state = n
     },
-    beginPinch(ownerScenePath, cx, cy) {
+    // #818：双指没有归属层，只有"进行中"标志；相机在 StarMapScreen 上独占
+    beginPinch(cx, cy) {
       const n = emptyState()
       n.mode = 'pinch'
-      n.ownerScenePath = copyPath(ownerScenePath)
-      n.pinchOwnerScenePath = copyPath(ownerScenePath)
       n.startPoint = { x: cx, y: cy }
       n.currentPoint = { x: cx, y: cy }
       state = n
     },
     endPinch() {
-      if (state.pinchOwnerScenePath === null) { return }
+      if (state.mode !== 'pinch') { return }
       state = emptyState()
     },
     setTargetItemScenePath(scenePath) { state.targetItemScenePath = copyPath(scenePath) },
     isIdle() { return state.mode === 'idle' },
     isConnecting() { return state.mode === 'connect' },
-    isPinching() { return state.pinchOwnerScenePath !== null },
-    isPinchOwnedByScene(scenePath) {
-      if (state.pinchOwnerScenePath === null) { return false }
-      return isSameScenePath(state.pinchOwnerScenePath, scenePath)
-    },
-    canClaimPinch(scenePath) {
-      if (state.pinchOwnerScenePath === null) { return true }
-      return isSameScenePath(state.pinchOwnerScenePath, scenePath)
-    },
+    isPinching() { return state.mode === 'pinch' },
     isConnectOwnedByScene(scenePath) {
       if (state.connectOwnerScenePath === null) { return false }
       return isSameScenePath(state.connectOwnerScenePath, scenePath)
@@ -633,8 +643,7 @@ function createGestureStateTracker() {
         ownerScenePath: copyPath(s.ownerScenePath),
         activeItemScenePath: s.activeItemScenePath !== null ? copyPath(s.activeItemScenePath) : null,
         panOwnerScenePath: s.panOwnerScenePath !== null ? copyPath(s.panOwnerScenePath) : null,
-        pinchOwnerScenePath: s.pinchOwnerScenePath !== null ? copyPath(s.pinchOwnerScenePath) : null,
-        connectOwnerScenePath: s.connectOwnerScenePath !== null ? copyPath(s.connectOwnerScenePath) : null,
+                connectOwnerScenePath: s.connectOwnerScenePath !== null ? copyPath(s.connectOwnerScenePath) : null,
         connectSourceScenePath: s.connectSourceScenePath !== null ? copyPath(s.connectSourceScenePath) : null,
         startPoint: { x: s.startPoint.x, y: s.startPoint.y },
         currentPoint: { x: s.currentPoint.x, y: s.currentPoint.y },
@@ -796,22 +805,16 @@ function createSceneNode(scenePath, starmapId, opts) {
     scale: opts.scale === undefined ? 1 : opts.scale,
     offsetX: opts.offsetX || 0,
     offsetY: opts.offsetY || 0,
-    fitScale: opts.fitScale === undefined ? 1 : opts.fitScale,
     getChildEmbeds() { return opts.getChildEmbeds ? opts.getChildEmbeds() : [] },
-    sync(rects, embedInstanceIds, edges, scale, offsetX, offsetY, fitScale) {
+    // #818：句柄里不再有任何缩放入口，scale/offset 只是根相机或本层局部 fit 的快照
+    sync(rects, embedInstanceIds, edges, scale, offsetX, offsetY) {
       node.rects = rects
       node.embedInstanceIds = new Set(embedInstanceIds)
       node.edges = edges
       node.scale = scale
       node.offsetX = offsetX
       node.offsetY = offsetY
-      node.fitScale = fitScale
     },
-    zoomToScale(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, requestedScale) {
-      return opts.zoomToScaleFn(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, requestedScale)
-    },
-    applyUserZoom(userScale, offsetX, offsetY) { return opts.applyZoomFn(userScale, offsetX, offsetY) },
-    fitView() { return opts.fitViewFn() },
     async createEdgeBetween(from, to) { return opts.createEdgeFn(from, to) },
     redrawEdges() { redraws.push(node.scenePath); return opts.redrawEdgesFn() }
   }
@@ -842,18 +845,45 @@ function createSceneRegistry() {
 }
 
 /**
- * zoomToScaleLocal 的镜像（ui/StarMapScene.ets）。
+ * begin/updateUnifiedPinch 的镜像（ui/StarMapScene.ets，#818）。
  *
- * 收的是**绝对**目标比例，不是"相对上一帧放大几倍"。
- * 这是本轮修掉的数学 bug：统一入口每帧都会发一次命令，
- * 收相对量的话每帧都拿上一帧的结果再乘一次，
- * 两指 100 → 110 → 120 会变成 1.00×1.1×1.2 = 1.32，而不是 1.20。
+ * 双指手势只改一台全局相机。起手记下 camera 的比例、偏移和两指距离，
+ * 之后每帧都从**起手那一帧**重算，所以 100 → 110 → 120 是 1.20 而不是 1.32。
+ *
+ * `touchCenter` 传进来只是为了演示"两指中心落在哪一层都一样"：
+ * 这里完全不查递归命中，落在节点 / 子星图 / 二层子星图上算出的相机完全相同。
  */
-function zoomToScaleLocal(view, requestedScale, userZoomMin, userZoomMax) {
-  const fit = view.fitScale > 0 ? view.fitScale : 1
-  const nextUser = clampUserZoom(requestedScale / fit, userZoomMin, userZoomMax)
-  view.userZoomScale = nextUser
-  return effectiveScale(fit, nextUser)
+function createGlobalCameraPinch(camera) {
+  const st = {
+    camera: { scale: camera.scale, offsetX: camera.offsetX, offsetY: camera.offsetY },
+    baseScale: 0, baseOffsetX: 0, baseOffsetY: 0, baseDistance: 0, wasActive: false,
+    begin(fingerPoints) {
+      st.wasActive = true
+      st.baseScale = st.camera.scale > 0 ? st.camera.scale : 1
+      st.baseOffsetX = st.camera.offsetX
+      st.baseOffsetY = st.camera.offsetY
+      st.baseDistance = fingerPoints.length >= 2 ? fingerDistance(fingerPoints[0], fingerPoints[1]) : 0
+    },
+    update(fingerPoints, centerX, centerY) {
+      if (fingerPoints.length < 2) { return }
+      const dist = fingerDistance(fingerPoints[0], fingerPoints[1])
+      st.camera = computeCameraPinch(
+        { scale: st.baseScale, offsetX: st.baseOffsetX, offsetY: st.baseOffsetY },
+        st.baseScale,
+        st.baseDistance,
+        dist,
+        centerX,
+        centerY
+      )
+    },
+    end() { st.wasActive = false }
+  }
+  return st
+}
+
+/** 工具栏 +/− 的镜像（ui/StarMapScreen.ets）：围绕画布中心改同一台相机。 */
+function zoomCameraAroundCenter(camera, centerX, centerY, nextScale) {
+  return computeCameraZoomAround(camera, centerX, centerY, nextScale)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -891,7 +921,7 @@ console.log('1. computeContentBounds：并集包围盒，空列表返回 null')
 }
 
 // ══════════════════════════════════════════════════════════════
-// 2. fitScale / userZoomScale 合成
+// 2. fitScale（布局适配）与全局相机
 // ══════════════════════════════════════════════════════════════
 
 console.log('2. fitScale 来自内容与可用区，不是"每层乘 0.6"')
@@ -918,14 +948,11 @@ console.log('2. fitScale 来自内容与可用区，不是"每层乘 0.6"')
   assert(near(computeFitScale(vast, available, available, EMBED_FIT_PADDING_VP), MIN_FIT_SCALE),
     '内容极大时 fit 有下限，不会变成 0')
 
-  // 最终比例 = fitScale × userZoomScale
+  // #818：fit 只是布局适配，不再和用户缩放相乘。子 Scene 的比例就是 fit，
+  // 用户缩放全部集中在根那一台相机上。
   const fit = 0.4
-  assert(near(effectiveScale(fit, 1), 0.4), 'userZoomScale = 1 → 最终比例就是 fitScale')
-  assert(near(effectiveScale(fit, 2.5), 1.0), 'userZoomScale = 2.5 → 0.4 × 2.5 = 1')
-  assert(near(effectiveScale(fit, clampUserZoom(99, USER_ZOOM_MIN, USER_ZOOM_MAX)), 1.2),
-    'userZoomScale 先夹到上限 3，最终比例 1.2')
-  assert(near(clampUserZoom(0.01, USER_ZOOM_MIN, USER_ZOOM_MAX), USER_ZOOM_MIN), 'userZoomScale 有下限')
-  assert(near(clampUserZoom(NaN, USER_ZOOM_MIN, USER_ZOOM_MAX), 1), '非法 userZoomScale 退回 1')
+  assert(near(fit, 0.4), '子 Scene 的最终比例就是它自己的 fitScale（布局适配，用户碰不到）')
+  assert(!('userZoomScale' in { fitScale: fit }), '不存在 fitScale × userZoomScale 这条合成路径（#818 已删除）')
 }
 
 console.log('3. computeFittedViewport：缩放按可用区算，偏移按 Scene 自己的尺寸算')
@@ -978,22 +1005,75 @@ console.log('3. computeFittedViewport：缩放按可用区算，偏移按 Scene 
 // 4. 双指锚点
 // ══════════════════════════════════════════════════════════════
 
-console.log('4. 缩放锚点：锚点画布坐标固定，屏幕锚点跟着两指中心走')
+console.log('4. 全局相机（#818）：只有一台，锚点钉在两指中心，落在哪一层都一样')
 {
-  const scale = 0.5, offsetX = 10, offsetY = 10
+  const camera = { scale: 0.5, offsetX: 10, offsetY: 10 }
   const center = { x: 260, y: 60 }
-  const anchorCanvas = sceneLocalToCanvas(center.x, center.y, scale, offsetX, offsetY)
-  assert(nearPt(anchorCanvas, 500, 100), '两指中心 → 画布锚点（归属 Scene 自己的坐标系）')
-  for (const next of [0.25, 0.5, 1.0, 2.0]) {
-    const off = computeZoomAroundOffset(anchorCanvas, center, next)
-    const still = canvasToScreen(anchorCanvas.x, anchorCanvas.y, next, off.x, off.y)
-    assert(nearPt(still, center.x, center.y, 1e-9), `缩到 ${next} 倍后锚点仍钉在两指中心`)
-  }
-  // 父层不能拿自己的坐标算子层锚点
-  const rootAnchor = sceneLocalToCanvas(center.x, center.y, 1, 0, 0)
-  assert(!near(rootAnchor.x, anchorCanvas.x),
-    '用父层视口算出的"锚点"和用归属层算出的是两个值（这正是必须换算的原因）')
+  const anchorWorld = screenToCanvas(center.x, center.y, camera.scale, camera.offsetX, camera.offsetY)
+  assert(nearPt(anchorWorld, 500, 100), '两指中心 → 根画布的世界坐标（相机自己的一套坐标系）')
+
+  // 双指：起手 100 宽，捏到 200 宽
+  const next = computeCameraPinch(camera, camera.scale, 100, 200, center.x, center.y)
+  assert(near(next.scale, 1.0), '两指张开一倍 → 相机比例 ×2（0.5 → 1.0）')
+  const still = canvasToScreen(anchorWorld.x, anchorWorld.y, next.scale, next.offsetX, next.offsetY)
+  assert(nearPt(still, center.x, center.y, 1e-9), '捏合后世界锚点仍钉在两指中心')
+
+  // 逐帧都从起手那一帧算，不能自乘
+  const pinch = createGlobalCameraPinch({ scale: 1, offsetX: 0, offsetY: 0 })
+  pinch.begin([{ x: 0, y: 0 }, { x: 100, y: 0 }])
+  pinch.update([{ x: 0, y: 0 }, { x: 110, y: 0 }], 55, 0)
+  pinch.update([{ x: 0, y: 0 }, { x: 120, y: 0 }], 60, 0)
+  assert(near(pinch.camera.scale, 1.2), '两指 100 → 110 → 120 得到 1.20，不是 1.00×1.1×1.2 = 1.32')
+
+  // 夹取
+  assert(near(clampCameraScale(99), CAMERA_SCALE_MAX), '相机比例夹在上限 3')
+  assert(near(clampCameraScale(0.01), CAMERA_SCALE_MIN), '相机比例有下限 0.3')
+  assert(near(clampCameraScale(NaN), 1), '非法相机比例退回 1')
+  assert(near(clampCameraScale(0), 1), '0 不是合法相机比例，退回 1（不能除零）')
+
+  // 工具栏围绕画布中心缩放
+  const bar = zoomCameraAroundCenter({ scale: 1, offsetX: 0, offsetY: 0 }, 500, 500, 2)
+  assert(near(bar.scale, 2), '工具栏 + 把相机比例改到 2')
+  const centerStill = canvasToScreen(500, 500, bar.scale, bar.offsetX, bar.offsetY)
+  assert(nearPt(centerStill, 500, 500, 1e-9), '工具栏缩放也钉在画布中心')
+
   assert(near(sceneLocalToCanvas(10, 10, 0.5, 10, 10).x, 0), 'sceneLocalToCanvas / canvasToSceneLocal 互为逆运算')
+}
+
+console.log('4b. 双指落在哪一层都只改同一台全局相机（#818 退役方向）')
+{
+  const base = { scale: 1, offsetX: 30, offsetY: -20 }
+  const ctx = buildRecursiveSceneContext(makeTree())
+
+  // 两指中心分别落在根层节点上、子星图内部、二层子星图内部。
+  // 递归命中仍然解析（选中/拖拽/连线要用），但捏合目标完全不看它。
+  const centers = [{ x: 80, y: 40 }, { x: 500, y: 100 }]
+  const depths = centers.map(c => resolveRecursiveHit(ctx, c.x, c.y).ownerScenePath.length)
+  assert(depths.join(',') === '0,1',
+    `两个两指中心分别命中第 ${depths.join(' / ')} 层（递归命中结果确实不同，缩放目标却不能跟着变）`)
+
+  // 关键：不管命中哪一层，算出来的相机都是"以全局相机为基准"的那一个。
+  // 偏移里只有全局相机的锚点 world 坐标和当前两指中心，没有任何层的信息。
+  for (const center of centers) {
+    const pinch = createGlobalCameraPinch(base)
+    // 起手 100 宽，张开到 200 宽 → ×2
+    pinch.begin([{ x: center.x - 50, y: center.y }, { x: center.x + 50, y: center.y }])
+    pinch.update([{ x: center.x - 100, y: center.y }, { x: center.x + 100, y: center.y }], center.x, center.y)
+    const anchorWorldX = (center.x - base.offsetX) / base.scale
+    const anchorWorldY = (center.y - base.offsetY) / base.scale
+    assert(near(pinch.camera.scale, 2),
+      `两指中心 (${center.x},${center.y})：相机 ×2（缩的是整棵树，不是那一层）`)
+    assert(near(pinch.camera.offsetX, center.x - anchorWorldX * 2) &&
+      near(pinch.camera.offsetY, center.y - anchorWorldY * 2),
+    '偏移只由全局相机锚点和两指中心决定，与命中层级无关')
+  }
+
+  // 对照：老实现会把偏移算成"按归属层视口反推的锚点"，落点完全不同
+  const childScale = 0.4
+  const legacyAnchor = screenToCanvas(500, 100, childScale, 0, 0)
+  const correctAnchor = screenToCanvas(500, 100, base.scale, base.offsetX, base.offsetY)
+  assert(!near(500 - legacyAnchor.x * 2, 500 - correctAnchor.x * 2),
+    '用子层视口算锚点会得到另一个值（这正是 #818 要退役的"缩那一层"）')
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1183,26 +1263,25 @@ console.log('8. 端点路径反解：node 落在哪一层由 target.type 决定�
 // 7. 手势归属
 // ══════════════════════════════════════════════════════════════
 
-console.log('9. 双指归属：一次双指期间不换人，父层只能观察')
+console.log('9. 双指不再有归属（#818）：只有一个进行中标志，相机在根上')
 {
   const tracker = createGestureStateTracker()
-  assert(tracker.canClaimPinch([]) && tracker.canClaimPinch(PATH_A), '没人认领时任何层都能认领')
+  assert(tracker.isPinching() === false, '初始没有双指')
 
-  tracker.beginPinch(PATH_A, 460, 60)
+  tracker.beginPinch(460, 60)
   assert(tracker.isPinching(), 'beginPinch 后处于双指缩放中')
-  assert(tracker.isPinchOwnedByScene(PATH_A), '归属层 isPinchOwnedByScene 为 true')
-  assert(tracker.isPinchOwnedByScene([]) === false, '父层 isPinchOwnedByScene 为 false（只能观察）')
-  assert(tracker.canClaimPinch(PATH_A), '归属层自己可以继续认领')
-  assert(tracker.canClaimPinch([]) === false, '父层不能中途抢走归属（否则一次缩放前后半段缩不同层）')
-  assert(tracker.canClaimPinch(PATH_B) === false, '兄弟层也不能抢')
-
-  // 归属层看到的 mode 不会因为父层空闲而改变
-  assert(tracker.getState().mode === 'pinch', '归属层 mode = pinch，不靠"某层是否 idle"判断递归归属')
+  const st = tracker.getState()
+  assert(st.mode === 'pinch', 'mode = pinch')
+  assert(eq(st.ownerScenePath, []), '双指归属根 Scene（相机在根，不存在"归属层"这回事）')
+  assert(!('pinchOwnerScenePath' in st), '状态里没有 pinchOwnerScenePath（#818 已删）')
   assert(tracker.isIdle() === false, '双指中不是 idle')
+  assert(!('isPinchOwnedByScene' in tracker) && !('canClaimPinch' in tracker),
+    'isPinchOwnedByScene / canClaimPinch 已删除：任何一层都不能声称自己拥有缩放目标')
 
   tracker.endPinch()
   assert(tracker.isPinching() === false, '双指抬起后不再处于缩放中')
-  assert(tracker.canClaimPinch([]), '下一次双指父层可以重新认领')
+  tracker.endPinch()
+  assert(tracker.isIdle(), '重复 endPinch 不会把别的 mode 清掉')
 }
 
 console.log('10. connect 归属与起点路径各记各的')
@@ -1431,36 +1510,39 @@ console.log('20. 评审回归 ②：注册表里的视口必须跟着 UI 主动 
   assert(stale.target === null, '不 sync 的话，注册表按旧视口算，真实命中被判成空白')
 
   // 主动 sync 之后同一个点就命中了
-  node.sync(rects, [], 2, 100, 200, 1)
+  node.sync(rects, [], [], 2, 100, 200)
   ctx = buildRecursiveSceneContext(node)
   const fresh = resolveRecursiveHit(ctx, 250, 240)
   assert(fresh.target !== null && fresh.target.objectId === 'n-root',
     'sync 之后同一个屏幕点重新命中（syncSceneHandle 就是补这一下）')
 
-  // fitScale 变了也要 sync：子 Scene 的真实比例是 fitScale × userScale
-  node.sync(rects, [], 0.5, 0, 0, 0.5)
+  // 相机比例变了也要 sync：子 Scene 存的是父相机同步下来的那一份
+  node.sync(rects, [], [], 0.5, 0, 0)
   ctx = buildRecursiveSceneContext(node)
   const refit = resolveRecursiveHit(ctx, 40, 20)
   assert(refit.target !== null && refit.target.objectId === 'n-root',
-    'fitView 改完 fitScale 后 sync，子 Scene 的视口也跟着变（屏幕 (40,20) → 画布 (80,40)）')
+    '相机改完比例后 sync，句柄里的视口也跟着变（屏幕 (40,20) → 画布 (80,40)）')
+  assert(node.zoomToScale === undefined && node.applyUserZoom === undefined && node.fitView === undefined,
+    '句柄上没有任何缩放入口（#818）：缩放只走相机，不走 Scene 句柄')
 }
 
-console.log('21. 评审回归 ③：单指平移看 pan 归属，不看 pinch 归属')
+console.log('21. 评审回归 ③：单指平移看 pan 归属，双指期间任何层都不能改视口（#818）')
 {
   const tracker = createGestureStateTracker()
-  // 普通单指拖动画布：没有 pinch 归属人
+  // 普通单指拖动画布
   tracker.beginPanCanvas(PATH_A, 100, 100)
   assert(tracker.isPanOwnedByScene(PATH_A), '平移归属发起层')
-  assert(tracker.isPinching() === false, '单指平移期间没有 pinch 归属人')
-  // UI 的守卫条件：mode 是 panCanvas、panActive、pan 归属是自己、且本层可以改视口
-  const canPanCanvas = !tracker.isPinching() || tracker.isPinchOwnedByScene(PATH_A)
-  assert(canPanCanvas, '没有 pinch 归属冲突时本层可以平移（老代码查 isPinchOwnedByScene 恒为 false，永远拖不动）')
+  assert(tracker.isPinching() === false, '单指平移期间没有双指')
+  // UI 的守卫条件：mode 是 panCanvas、panActive、pan 归属是自己、且本层可以改视口。
+  // #818 之后 canMutateViewport 只剩 !isPinching()：相机是全局唯一的，
+  // 双指期间任何一层平移都会和相机打架。
+  const canPanCanvas = !tracker.isPinching()
+  assert(canPanCanvas, '没有双指时本层可以平移')
   assert(tracker.isPanOwnedByScene([]) === false, '父层不归属这次平移')
 
-  // 换成 pinch 归属冲突时，父层要能自我否决
-  tracker.beginPinch(PATH_A, 100, 100)
-  const parentCanPan = !tracker.isPinching() || tracker.isPinchOwnedByScene([])
-  assert(parentCanPan === false, '子层在缩放时父层自我否决，不会跟着一起动')
+  tracker.beginPinch(100, 100)
+  const parentCanPan = !tracker.isPinching()
+  assert(parentCanPan === false, '双指期间任何一层都自我否决平移，不会和相机同时改视口')
 }
 
 console.log('22. 评审回归 ④：连线结果必须回传，connect_end 才分得清失败原因')
@@ -1478,38 +1560,35 @@ console.log('22. 评审回归 ④：连线结果必须回传，connect_end 才�
   assert(plan.hostStarmapId === 'sm-root', '宿主 starmapId 一并带进诊断字段')
 }
 
-console.log('23. 评审回归 ⑤：捏合连着两帧，比例不能帧间自乘')
+console.log('23. 评审回归 ⑤：捏合连着两帧，比例不能帧间自乘（#818 每帧从起手相机重算）')
 {
   // 起手比例 1、两指距离 100。三帧：距离 110、120、130。
   const baseDistance = 100
-  const baseScale = 1
-  const view = { fitScale: 1, userZoomScale: 1 }
+  const pinch = createGlobalCameraPinch({ scale: 1, offsetX: 0, offsetY: 0 })
+  pinch.begin([{ x: 0, y: 0 }, { x: baseDistance, y: 0 }])
 
   const applied = []
   for (const dist of [110, 120, 130]) {
-    const ratio = computePinchRatio(baseDistance, [{ x: 0, y: 0 }, { x: dist, y: 0 }])
-    applied.push(zoomToScaleLocal(view, baseScale * ratio, USER_ZOOM_MIN, USER_ZOOM_MAX))
+    pinch.update([{ x: 0, y: 0 }, { x: dist, y: 0 }], dist / 2, 0)
+    applied.push(pinch.camera.scale)
   }
 
   assert(near(applied[0], 1.1), '第一帧 100→110：1.00 × 1.1 = 1.10')
   assert(near(applied[1], 1.2), '第二帧 110→120：1.20，不是 1.10×1.2 = 1.32')
   assert(near(applied[2], 1.3), '第三帧 120→130：1.30，不是 1.716')
-  assert(near(view.userZoomScale, 1.3), '落回 userZoomScale 的也是绝对值')
+  assert(near(pinch.camera.scale, 1.3), '落在相机上的也是绝对值')
 
   // 反面对照：老写法"当前比例 × 本帧比例"就是这个发散结果
   const compounding = 1 * (110 / 100) * (120 / 100) * (130 / 100)
   assert(!near(applied[2], compounding, 1e-3), '收相对量会指数发散，绝对量不会')
 
-  // fitScale 不是 1 时，比例要在 userZoom 上换算
-  const fittedView = { fitScale: 0.5, userZoomScale: 1 }
-  const fitted = zoomToScaleLocal(fittedView, 0.5 * 2, USER_ZOOM_MIN, USER_ZOOM_MAX)
-  assert(near(fitted, 1.0) && near(fittedView.userZoomScale, 2),
-    '目标总比例 ÷ fitScale 才是 userZoom（fitScale=0.5、总比例 1.0 → userZoom 2）')
+  // #818：子 Scene 的 fitScale 不再参与这条链路，相机就是相机
+  assert(near(applied[2], clampCameraScale(1 * 1.3)), '相机比例独立于任何子层 fitScale')
 }
 
-console.log('24. 评审回归 ⑥：父层缩放带动容器变化，子内容要同比跟上且不重置用户缩放')
+console.log('24. 评审回归 ⑥：相机缩放带动容器变化，子内容只重新居中、不改 fitScale（#818）')
 {
-  // 首次适配：直径 200 的圆，内容缩到 fitScale 0.7 并居中
+  // 首次适配：直径 200 的圆，内容按内容包围盒算出 fitScale 并居中
   const rects = [
     { nodeId: 'a', x: 0, y: 0, width: 100, height: 100, radius: 0 },
     { nodeId: 'b', x: 100, y: 0, width: 100, height: 100, radius: 0 }
@@ -1520,34 +1599,47 @@ console.log('24. 评审回归 ⑥：父层缩放带动容器变化，子内容�
 
   const view = {
     fitScale: fitted.zoomScale,
-    offsetX: fitted.offsetX,
-    offsetY: fitted.offsetY,
-    userZoomScale: 2,   // 用户刚在子 Scene 里双指捏到了 2 倍
+    fitOffsetX: fitted.offsetX,
+    fitOffsetY: fitted.offsetY,
     lastFittedSceneSize: 200
   }
-  assert(near(view.userZoomScale, 2), '前置状态：用户自己捏到了 2 倍')
 
-  // 父层放大 2 倍 → 容器 200 → 400。syncFitToSceneSize 按 k=2 同比放大
-  const k = 400 / view.lastFittedSceneSize
-  view.fitScale = view.fitScale * k
-  view.offsetX = view.offsetX * k
-  view.offsetY = view.offsetY * k
-  view.lastFittedSceneSize = 400
+  // 相机放大 2 倍 → 容器在屏幕上 200 → 400。
+  // syncFitToSceneSize 只重算居中偏移（ui/StarMapScene.ets）。
+  const nextSize = 400
+  view.lastFittedSceneSize = nextSize
+  const recentered = computeCenteredOffset(bounds, view.fitScale, nextSize, nextSize)
+  view.fitOffsetX = recentered.x
+  view.fitOffsetY = recentered.y
 
-  assert(near(view.fitScale, fitted.zoomScale * 2), '父层 2 倍 → 子 fitScale 也变 2 倍（圆壳和内容同一体系）')
-  assert(near(view.offsetX, fitted.offsetX * 2) && near(view.offsetY, fitted.offsetY * 2),
-    '偏移同比放大：同一个视图被等比放大，不是重新居中（用户的平移不丢）')
-  assert(near(view.userZoomScale, 2), '用户自己捏的 userZoomScale 没被重置（#816 硬要求）')
-  assert(near(effectiveScale(view.fitScale, view.userZoomScale), fitted.zoomScale * 4),
-    '总比例 = 父层 2 倍 × 用户 2 倍')
+  assert(near(view.fitScale, fitted.zoomScale),
+    'fitScale 不变（#818：容器在屏幕上已经跟着相机放大了，再乘尺寸比会把相机的缩放抵消掉）')
+  const boundsCenterX = bounds.minX + bounds.width / 2
+  const boundsCenterY = bounds.minY + bounds.height / 2
+  assert(near(view.fitOffsetX, nextSize / 2 - boundsCenterX * view.fitScale) &&
+    near(view.fitOffsetY, nextSize / 2 - boundsCenterY * view.fitScale),
+  '偏移按新容器尺寸重新对了一次中心（computeCenteredOffset）')
+
+  // 屏幕上最终呈现 = 局部 fit 之后再乘相机。相机围绕父画布中心放大 2 倍，
+  // 子内容跟着圆壳一起长大，圆心仍然钉在两指/工具栏给的中心上。
+  const camBefore = { scale: 1, offsetX: 0, offsetY: 0 }
+  const camAfter = computeCameraZoomAround(camBefore, 200, 200, 2)
+  const childToScreen = (cx, cy, fit, fitOffX, fitOffY, cam) =>
+    canvasToScreen(canvasToSceneLocal(cx, cy, fit, fitOffX, fitOffY).x,
+      canvasToSceneLocal(cx, cy, fit, fitOffX, fitOffY).y,
+      cam.scale, cam.offsetX, cam.offsetY)
+  const before = childToScreen(boundsCenterX, boundsCenterY, fitted.zoomScale, fitted.offsetX, fitted.offsetY, camBefore)
+  const after = childToScreen(boundsCenterX, boundsCenterY, view.fitScale, view.fitOffsetX, view.fitOffsetY, camAfter)
+  assert(near(before.x, 100) && near(before.y, 100), '缩放前内容中心在 200×200 圆壳的中心 (100,100)')
+  assert(near(after.x, 200) && near(after.y, 200),
+    '相机 ×2 后内容中心跟着圆壳走到 (200,200)（局部 fit 不变，屏幕上同比放大）')
 
   // 缩小同样成立
-  const shrinkK = 200 / view.lastFittedSceneSize
-  view.fitScale = view.fitScale * shrinkK
-  view.offsetX = view.offsetX * shrinkK
-  view.lastFittedSceneSize = 200
-  assert(near(view.fitScale, fitted.zoomScale), '父层缩回 1 倍 → 子 fitScale 回到原值')
-  assert(near(view.userZoomScale, 2), '缩小也不重置用户缩放')
+  const back = computeCenteredOffset(bounds, view.fitScale, 200, 200)
+  view.fitOffsetX = back.x
+  view.fitOffsetY = back.y
+  assert(near(view.fitScale, fitted.zoomScale) && near(view.fitOffsetX, fitted.offsetX),
+    '容器缩回 200 → fitScale 和偏移都回到原值')
 }
 
 console.log('')
@@ -1562,10 +1654,10 @@ console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领�
 {
   const t = createGestureStateTracker()
   t.beginPanCanvas(PATH_A, 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
-  assert(t.isOwnedByScene(PATH_A),
-    '老判定：beginPinch 后 ownerScenePath 仍是子层，isOwnedByScene 照样为 true（这正是误伤根源）')
-  // 老代码在这里 reset() → pinch 被清掉
+  t.beginPinch(0, 0)
+  assert(t.isOwnedByScene(PATH_A) === false,
+    '新判定：beginPinch 不再把 ownerScenePath 写成任何子层，旧 Pan 的 isOwnedByScene 已经为 false')
+  // 老代码在这里无条件 reset() → pinch 被清掉
   t.reset()
   assert(!t.isPinching(), '老写法 reset() 之后 pinch 没了（这就是 #816 的症状来源）')
 }
@@ -1574,22 +1666,21 @@ console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领�
 {
   const t = createGestureStateTracker()
   t.beginPanCanvas(PATH_A, 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   const cleared = t.clearIfOwnedBy('panCanvas', PATH_A)
   assert(!cleared, 'mode 已是 pinch → clearIfOwnedBy(panCanvas) 拒绝清空')
   assert(t.isPinching(), '旧 Pan 的收尾之后 pinch 仍然活着')
   assert(t.getState().mode === 'pinch', 'mode 仍是 pinch')
-  assert(eq(t.getState().pinchOwnerScenePath.length, 1), 'pinchOwnerScenePath 仍是子层')
-  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
+  assert(eq(t.getState().ownerScenePath, []), 'pinch 归属根（相机在根）')
 }
 
-// 25.3 同一层、父层都要验：归属别人时也不能清
+// 25.3 父层的旧 Pan 同样要验：mode 不匹配就不能清别人的手势
 {
   const t = createGestureStateTracker()
   t.beginPanCanvas(PATH_A, 0, 0)
-  t.beginPinch(PATH_B, 0, 0)
-  assert(!t.clearIfOwnedBy('panCanvas', PATH_A), 'pinch 归属别的层时，父层旧 Pan 不能清')
-  assert(t.isPinchOwnedByScene(PATH_B), 'pinch 归属没被破坏')
+  t.beginPinch(0, 0)
+  assert(!t.clearIfOwnedBy('panCanvas', PATH_A), '双指进行中，旧 Pan 收尾不能清 pinch')
+  assert(t.isPinching(), 'pinch 没被破坏')
 }
 
 // 25.4 没有被接管时，正常收尾仍然要清干净（不能修过头）
@@ -1604,10 +1695,9 @@ console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领�
 {
   const t = createGestureStateTracker()
   t.beginConnect(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   assert(!t.clearIfOwnedBy('connect', PATH_A), 'mode 已是 pinch → 旧 connect 收尾只能清预览')
   assert(t.isPinching(), '旧 connect 的 onActionEnd 之后 pinch 仍然活着')
-  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
 }
 
 // 25.6 旧 connect 正常收尾仍然要清
@@ -1622,7 +1712,7 @@ console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领�
 {
   const t = createGestureStateTracker()
   t.beginNodeMenu(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   assert(!t.clearIfOwnedBy('nodeMenu', PATH_A), 'mode 已是 pinch → 菜单消失回调不能清 pinch')
   assert(t.isPinching(), 'onNodeMenuDisappear 之后 pinch 仍然活着')
 }
@@ -1631,7 +1721,7 @@ console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领�
 {
   const t = createGestureStateTracker()
   t.beginMoveNode(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   const state = t.getState()
   const owns = state.mode === 'moveNode' && state.activeItemId === 'n-a1' &&
     t.isActiveItemInScene(PATH_A)
@@ -1656,12 +1746,11 @@ console.log('26. 取消路径回归 ⑧：Cancel 不能把 tracker 卡在旧 mod
 {
   const t = createGestureStateTracker()
   t.beginConnect(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   const cleared = t.clearIfOwnedBy('connect', PATH_A)
   assert(!cleared, '已被 pinch 接管 → 取消收尾拒绝清全局')
   assert(t.isPinching(), '取消旧 connect 之后 pinch 仍然活着')
   assert(t.getState().mode === 'pinch', 'mode 仍是 pinch')
-  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
 }
 
 // 26.3 取消后别层手势不会被挡住：idle 时任何一层都能起手
@@ -1680,10 +1769,10 @@ console.log('26. 取消路径回归 ⑧：Cancel 不能把 tracker 卡在旧 mod
 {
   const t = createGestureStateTracker()
   t.beginPanCanvas(PATH_A, 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   const cleared = t.clearIfOwnedBy('panCanvas', PATH_A)
   // 新写法：不管清没清掉，本地旧模式都结束
-  assert(!cleared, '全局没被清（归属已漂到 pinch）')
+  assert(!cleared, '全局没被清（mode 已经切成 pinch）')
   assert(t.getState().mode === 'pinch', '全局仍是 pinch')
   assert(t.isPinching(), 'pinch 存活；本地旧 pan 模式此时已经收尾，不会再影响新手势')
 }
@@ -1748,8 +1837,8 @@ const PATH_C = [embedSegment('emb-c')]
 // 27.5 owner 在根，任意子 Scene 退场都不清（根层手势不能被子层卸载打断）
 {
   const t = createGestureStateTracker()
-  t.beginPinch(PATH_ROOT, 0, 0)
-  assert(!t.isOwnedBySceneSubtree(PATH_A), 'owner 在根时，子 Scene 退场不清')
+  t.beginPinch(0, 0)
+  assert(!t.isOwnedBySceneSubtree(PATH_A), 'pinch 的 owner 是根，不在子层子树里')
   assert(t.isPinching(), '根层 pinch 不会被无关子 Scene 卸载打断')
 }
 
@@ -1832,10 +1921,9 @@ console.log('28. 时序回归 ⑧：Pan 收尾必须按本地起手模式分流�
 {
   const t = createGestureStateTracker()
   t.beginPanCanvas(PATH_A, 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   finishNodePanLike(t, 'panCanvas', 'n-a1', false)
   assert(t.isPinching(), '旧 panCanvas 的 End 到达后 pinch 仍然活着')
-  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
   assert(t.getState().mode === 'pinch', '全局 mode 仍是 pinch')
 }
 
@@ -1988,12 +2076,11 @@ const SRC = { starmapId: 'sm-root', segments: [], target: { type: 'node', nodeId
   const logEnd = []
   let sourcePath = SRC
   t.beginConnect(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   // pinch 接管后，旧 connect 的 End 才到
   finishConnectLike(t, sourcePath, logEnd)
 
   assert(t.isPinching(), 'pinch 仍然存活（被接管的旧 connect 绝不能 reset 它）')
-  assert(t.isPinchOwnedByScene(PATH_A), 'pinch 归属没变')
   assert(eq(logEnd.length, 1), '补了一条 connect_end')
   assert(eq(logEnd[0].reason, 'superseded_by_pinch'), '原因是 superseded_by_pinch 而不是 completed')
   sourcePath = closeSupersededConnectIfNeededLike(t, sourcePath, logEnd)
@@ -2004,7 +2091,7 @@ const SRC = { starmapId: 'sm-root', segments: [], target: { type: 'node', nodeId
   const t = createGestureStateTracker()
   const logEnd = []
   t.beginConnect(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   // clearIfOwnedBy('connect') 返回 false → 走 superseded 分支
   const cleared = t.clearIfOwnedBy('connect', PATH_A)
   if (!cleared) { closeSupersededConnectIfNeededLike(t, SRC, logEnd) }
@@ -2020,7 +2107,7 @@ const SRC = { starmapId: 'sm-root', segments: [], target: { type: 'node', nodeId
   const t = createGestureStateTracker()
   const logEnd = []
   t.beginConnect(PATH_A, 'n-a1', 0, 0)
-  t.beginPinch(PATH_A, 0, 0)
+  t.beginPinch(0, 0)
   // 模拟源码：把 connectSourcePath 置空，保证只会记一次
   let sourcePath = SRC
   sourcePath = closeSupersededConnectIfNeededLike(t, sourcePath, logEnd)

@@ -357,7 +357,7 @@ function createGestureStateTracker() {
     return {
       mode: 'idle', activeItemId: '', activeItemKind: 'node',
       ownerScenePath: [], activeItemScenePath: null,
-      panOwnerScenePath: null, pinchOwnerScenePath: null,
+      panOwnerScenePath: null,
       connectOwnerScenePath: null, connectSourceScenePath: null,
       startPoint: { x: 0, y: 0 }, currentPoint: { x: 0, y: 0 },
       targetItemId: '', targetItemScenePath: null
@@ -420,17 +420,17 @@ function createGestureStateTracker() {
       next.currentPoint = { x: startX, y: startY }
       state = next
     },
-    beginPinch(ownerScenePath, centerX, centerY) {
+    beginPinch(centerX, centerY) {
       const next = emptyState()
       next.mode = 'pinch'
-      next.ownerScenePath = copyPath(ownerScenePath)
-      next.pinchOwnerScenePath = copyPath(ownerScenePath)
+      // #818：双指只有一台全局相机，没有 owner 参数，归属恒为根
+      next.ownerScenePath = []
       next.startPoint = { x: centerX, y: centerY }
       next.currentPoint = { x: centerX, y: centerY }
       state = next
     },
     endPinch() {
-      if (state.pinchOwnerScenePath === null) return
+      if (state.mode !== 'pinch') return
       state = emptyState()
     },
     updateCurrent(x, y) { state.currentPoint = { x, y } },
@@ -440,15 +440,7 @@ function createGestureStateTracker() {
     isIdle() { return state.mode === 'idle' },
     isDraggingNode() { return state.mode === 'moveNode' || state.mode === 'moveEmbed' },
     isConnecting() { return state.mode === 'connect' },
-    isPinching() { return state.pinchOwnerScenePath !== null },
-    isPinchOwnedByScene(scenePath) {
-      if (state.pinchOwnerScenePath === null) return false
-      return sameScenePath(state.pinchOwnerScenePath, scenePath)
-    },
-    canClaimPinch(scenePath) {
-      if (state.pinchOwnerScenePath === null) return true
-      return sameScenePath(state.pinchOwnerScenePath, scenePath)
-    },
+    isPinching() { return state.mode === 'pinch' },
     isPanOwnedByScene(scenePath) {
       if (state.panOwnerScenePath === null) return false
       return sameScenePath(state.panOwnerScenePath, scenePath)
@@ -1031,29 +1023,24 @@ console.log('33. GestureState：isOwnedByScene 正确比较路径')
   assert(tracker.isOwnedByScene(scenePath1) === false, 'reset 后空路径不匹配任何路径')
 }
 
-console.log('34. GestureState：归属按手势类型分开记（#816 递归归属）')
+console.log('34. GestureState：归属按手势类型分开记（#818 pinch 无归属）')
 {
   const tracker = createGestureStateTracker()
   const root = []
   const child = [{ type: 'enterEmbed', instanceId: 'emb1', nodeId: null }]
 
-  // #816 之前只有一条 ownerScenePath 跟着 mode 走，父层靠"自己是不是 idle"判断
-  // 该不该退出——父层本来就没参与，是 observe 而不是抢。
-  tracker.beginPinch(child, 100, 100)
+  // #818：双指只有一台全局相机，没有 owner 参数，缩放目标不随手指落点变化。
+  tracker.beginPinch(100, 100)
   assert(tracker.isPinching() === true, 'beginPinch → isPinching')
-  assert(tracker.isPinchOwnedByScene(child) === true, '归属层认领')
-  assert(tracker.isPinchOwnedByScene(root) === false, '父层不是归属层，只能观察')
-  assert(tracker.isPanOwnedByScene(child) === false, 'pinch 归属不串到 pan 归属')
-  assert(tracker.isConnectOwnedByScene(child) === false, 'pinch 归属不串到 connect 归属')
+  assert(eq(tracker.getState().ownerScenePath, root), 'pinch 归属恒为根（统一入口在根 Stack）')
+  assert(tracker.isPanOwnedByScene(child) === false, 'pinch 不串到 pan 归属')
+  assert(tracker.isConnectOwnedByScene(child) === false, 'pinch 不串到 connect 归属')
   assert(tracker.isActiveItemInScene(child) === false, 'pinch 没有操作对象')
+  assert(tracker.getState().pinchOwnerScenePath === undefined, '状态里不再有 pinchOwnerScenePath')
 
-  // 父层不能因为自己不是 pinch 归属层就去改自己的视口
-  assert(tracker.canClaimPinch(root) === false, '父层不能中途抢归属（否则一次缩放前后半段缩不同层）')
-  assert(tracker.canClaimPinch(child) === true, '归属层可以继续持有')
-
-  // 非 pinch 的手势不影响 pinch 归属判断
+  // 双指进行中：任何一层都不该顺手改视口（相机唯一，改了就是和 pinch 打架）
   tracker.endPinch()
-  assert(tracker.isPinching() === false && tracker.canClaimPinch(root), '双指抬起后归属释放')
+  assert(tracker.isPinching() === false, '双指抬起后结束')
 
   tracker.beginConnect(child, 'n1', 0, 0)
   assert(tracker.isConnectOwnedByScene(child) === true, 'connect 归属发起层')
