@@ -37,9 +37,11 @@ const DEFAULT_NODE_WIDTH: number = 160
 const DEFAULT_NODE_HEIGHT: number = 80
 const DEFAULT_NODE_RADIUS: number = 16
 const DEFAULT_NODE_ZINDEX: number = 0
-const DEFAULT_EMBED_WIDTH: number = 200
-const DEFAULT_EMBED_HEIGHT: number = 120
-const DEFAULT_EMBED_RADIUS: number = 12
+/**
+ * 子星图 Embed 的显示直径（vp）。Embed 的 width / height / borderRadius 全部从这一个值推导，
+ * 保证 UI 与几何计算看到的永远是同一个圆。UI 侧禁止再手写 200 / 120 / 12 这类尺寸。
+ */
+export const DEFAULT_EMBED_DIAMETER: number = 200
 const GRID_HORIZONTAL_SPACING: number = 200
 const GRID_VERTICAL_SPACING: number = 120
 
@@ -72,7 +74,7 @@ export function buildFreeformLayout(nodes: StarMapNode[]): PlatformLayoutNode[] 
 
 /**
  * 从 graph.embeds 构建 Embed 布局节点。
- * Embed 位置只读 embed.position，宽高/圆角由平台层定义。
+ * Embed 位置只读 embed.position，宽高/圆角由平台层定义（正圆：宽高等于直径，圆角等于半径）。
  *
  * @param embeds 星图内嵌列表
  * @returns 平台层布局节点列表（用于 Embed 渲染）
@@ -84,9 +86,9 @@ export function buildEmbedLayoutNodes(embeds: StarMapEmbed[]): PlatformLayoutNod
       nodeId: embed.instanceId,
       x: embed.position.x,
       y: embed.position.y,
-      width: DEFAULT_EMBED_WIDTH,
-      height: DEFAULT_EMBED_HEIGHT,
-      radius: DEFAULT_EMBED_RADIUS,
+      width: DEFAULT_EMBED_DIAMETER,
+      height: DEFAULT_EMBED_DIAMETER,
+      radius: DEFAULT_EMBED_DIAMETER / 2,
       zIndex: DEFAULT_NODE_ZINDEX + 1,
       collapsed: false
     })

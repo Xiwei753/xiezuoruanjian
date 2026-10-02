@@ -6,8 +6,11 @@
 // 本评论要求的行为契约（对应实现文件）：
 //   1. freeform 布局直接用 node.position，position 是唯一真相；
 //      加载页面不许重新排网格 —— buildFreeformLayout (StarMapLayout.ets)
-//   2. Embed 位置只读 embed.position，宽高/圆角由平台层定义；
+//   2. Embed 位置只读 embed.position；Embed 是正圆，宽 = 高 = 直径，圆角 = 直径 / 2；
 //      zIndex 在普通节点之上 —— buildEmbedLayoutNodes (StarMapLayout.ets)
+//   2b. Embed 命中按圆判断：圆外不命中（含外接矩形的方形角），圆内再分 title /
+//      圆环 border / innerContent；边端点落在真实圆周上而不是矩形边
+//      —— hitTestWithScene / lineCircleIntersection (StarMapGeometry.ets, #813)
 //   3. 自动布局只在用户显式点击时调用，且保留 nodeId/尺寸；
 //      结果通过 position patch 写回 —— autoGridLayoutNodes / generatePositionPatches
 //   4. 节点/Embed 拖动：屏幕位移 ÷ zoomScale 落到布局坐标，返回新数组
@@ -24,9 +27,7 @@ const DEFAULT_NODE_WIDTH = 160
 const DEFAULT_NODE_HEIGHT = 80
 const DEFAULT_NODE_RADIUS = 16
 const DEFAULT_NODE_ZINDEX = 0
-const DEFAULT_EMBED_WIDTH = 200
-const DEFAULT_EMBED_HEIGHT = 120
-const DEFAULT_EMBED_RADIUS = 12
+const DEFAULT_EMBED_DIAMETER = 200
 const GRID_HORIZONTAL_SPACING = 200
 const GRID_VERTICAL_SPACING = 120
 
@@ -61,9 +62,9 @@ function buildEmbedLayoutNodes(embeds) {
       nodeId: embed.instanceId,
       x: embed.position.x,
       y: embed.position.y,
-      width: DEFAULT_EMBED_WIDTH,
-      height: DEFAULT_EMBED_HEIGHT,
-      radius: DEFAULT_EMBED_RADIUS,
+      width: DEFAULT_EMBED_DIAMETER,
+      height: DEFAULT_EMBED_DIAMETER,
+      radius: DEFAULT_EMBED_DIAMETER / 2,
       zIndex: DEFAULT_NODE_ZINDEX + 1,
       collapsed: false
     })
@@ -201,34 +202,101 @@ function buildEdgeJson(starmapId, fromNodeId, toNodeId, kind, label, uuid, now) 
 const EMBED_TITLE_HEIGHT = 24
 const EMBED_BORDER_WIDTH = 3
 
+// ── 被测规格：pointInEmbedCircle (StarMapGeometry.ets) ──
+function pointInEmbedCircle(rect, x, y) {
+  const cx = rect.x + rect.width / 2
+  const cy = rect.y + rect.height / 2
+  const dx = x - cx
+  const dy = y - cy
+  return dx * dx + dy * dy <= (rect.width / 2) * (rect.width / 2)
+}
+
 // ── 被测规格：hitTestWithScene (StarMapGeometry.ets) ──
+// Embed 是正圆：先做圆内判断，不在圆内跳过该 Embed（继续看更下层 rect）；
+// 圆内再按顶部 title 条 / 最外侧圆环 border / 其余 innerContent 区分。
 function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds) {
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]
-    if (screenX >= r.x && screenX <= r.x + r.width &&
-        screenY >= r.y && screenY <= r.y + r.height) {
-      const isEmbed = embedInstanceIds.has(r.nodeId)
-      if (!isEmbed) {
-        return { scenePath, objectKind: 'node', objectId: r.nodeId, hitRegion: 'body' }
-      }
-      const titleBottom = r.y + EMBED_TITLE_HEIGHT
-      const borderRight = r.x + EMBED_BORDER_WIDTH
-      const borderLeftInner = r.x + r.width - EMBED_BORDER_WIDTH
-      const borderBottomInner = r.y + r.height - EMBED_BORDER_WIDTH
-      if (screenY <= titleBottom) {
+    const isEmbed = embedInstanceIds.has(r.nodeId)
+    if (isEmbed) {
+      if (!pointInEmbedCircle(r, screenX, screenY)) continue
+      if (screenY <= r.y + EMBED_TITLE_HEIGHT) {
         return { scenePath, objectKind: 'embedTitle', objectId: r.nodeId, hitRegion: 'title' }
       }
-      if (screenX <= borderRight || screenX >= borderLeftInner || screenY >= borderBottomInner) {
-        return { scenePath, objectKind: 'embedBorder', objectId: r.nodeId, hitRegion: 'border' }
-      }
-      const innerContentTop = titleBottom + EMBED_BORDER_WIDTH
-      if (screenY <= innerContentTop) {
+      const cx = r.x + r.width / 2
+      const cy = r.y + r.height / 2
+      const inner = Math.max(0, r.width / 2 - EMBED_BORDER_WIDTH)
+      const dist = Math.sqrt((screenX - cx) * (screenX - cx) + (screenY - cy) * (screenY - cy))
+      if (dist >= inner) {
         return { scenePath, objectKind: 'embedBorder', objectId: r.nodeId, hitRegion: 'border' }
       }
       return { scenePath, objectKind: 'embedInnerContent', objectId: r.nodeId, hitRegion: 'innerContent' }
     }
+    if (screenX >= r.x && screenX <= r.x + r.width &&
+        screenY >= r.y && screenY <= r.y + r.height) {
+      return { scenePath, objectKind: 'node', objectId: r.nodeId, hitRegion: 'body' }
+    }
   }
   return null
+}
+
+// ── 被测规格：lineCircleIntersection (StarMapGeometry.ets) ──
+function lineCircleIntersection(cx, cy, radius, tx, ty) {
+  const dx = tx - cx
+  const dy = ty - cy
+  const distSq = dx * dx + dy * dy
+  if (distSq === 0) return { x: cx, y: cy }
+  const dist = Math.sqrt(distSq)
+  const t = radius / dist
+  return { x: cx + dx * t, y: cy + dy * t }
+}
+
+// ── 被测规格：lineRectIntersection (StarMapGeometry.ets) ──
+function lineRectIntersection(cx, cy, tx, ty, rectX, rectY, rectW, rectH) {
+  const dx = tx - cx
+  const dy = ty - cy
+  if (dx === 0 && dy === 0) return { x: cx, y: cy }
+  let tMin = Infinity
+  const tryT = (t, ok) => { if (t > 0 && ok) tMin = Math.min(tMin, t) }
+  if (dx !== 0) {
+    const t = (rectX - cx) / dx
+    const iy = cy + t * dy
+    tryT(t, iy >= rectY && iy <= rectY + rectH)
+    const t2 = (rectX + rectW - cx) / dx
+    const iy2 = cy + t2 * dy
+    tryT(t2, iy2 >= rectY && iy2 <= rectY + rectH)
+  }
+  if (dy !== 0) {
+    const t = (rectY - cy) / dy
+    const ix = cx + t * dx
+    tryT(t, ix >= rectX && ix <= rectX + rectW)
+    const t2 = (rectY + rectH - cy) / dy
+    const ix2 = cx + t2 * dx
+    tryT(t2, ix2 >= rectX && ix2 <= rectX + rectW)
+  }
+  if (tMin === Infinity) return { x: cx, y: cy }
+  return { x: cx + tMin * dx, y: cy + tMin * dy }
+}
+
+// ── 被测规格：endpointBoundaryPoint (StarMapGeometry.ets) ──
+// 普通节点走矩形边界，Embed 走圆周边界，两者不能共用一套算法。
+function endpointBoundaryPoint(rect, isEmbed, tx, ty) {
+  const cx = rect.x + rect.width / 2
+  const cy = rect.y + rect.height / 2
+  if (isEmbed) return lineCircleIntersection(cx, cy, rect.width / 2, tx, ty)
+  return lineRectIntersection(cx, cy, tx, ty, rect.x, rect.y, rect.width, rect.height)
+}
+
+// ── 被测规格：computeEdgeRender 端点 (StarMapGeometry.ets) ──
+function computeEdgeEndpoints(fromRect, toRect, fromIsEmbed, toIsEmbed) {
+  const fromCx = fromRect.x + fromRect.width / 2
+  const fromCy = fromRect.y + fromRect.height / 2
+  const toCx = toRect.x + toRect.width / 2
+  const toCy = toRect.y + toRect.height / 2
+  return {
+    start: endpointBoundaryPoint(fromRect, fromIsEmbed, toCx, toCy),
+    end: endpointBoundaryPoint(toRect, toIsEmbed, fromCx, fromCy)
+  }
 }
 
 // ── 被测规格：StarMapGestureStateTracker (StarMapGestureState.ets) ──
@@ -360,7 +428,7 @@ console.log('4. position patch 写回：nodeId + 新坐标')
     '自动布局/保存走同一份 position patch')
 }
 
-console.log('5. Embed 布局：只读 embed.position，平台层定义宽高')
+console.log('5. Embed 布局：只读 embed.position，平台层定义正圆尺寸')
 {
   const embeds = [
     { instanceId: 'emb1', targetStarmapId: 'sm2', label: '支线', position: { x: 640, y: 48 } }
@@ -369,8 +437,9 @@ console.log('5. Embed 布局：只读 embed.position，平台层定义宽高')
   assert(layout.length === 1, '嵌入进布局')
   assert(layout[0].nodeId === 'emb1', 'Embed 布局 id 用 instanceId')
   assert(layout[0].x === 640 && layout[0].y === 48, 'Embed 位置来自 embed.position')
-  assert(layout[0].width === 200 && layout[0].height === 120 && layout[0].radius === 12,
-    'Embed 宽高圆角由平台层定义')
+  assert(layout[0].width === DEFAULT_EMBED_DIAMETER && layout[0].height === DEFAULT_EMBED_DIAMETER,
+    'Embed 宽高都是同一个直径（正圆）')
+  assert(layout[0].radius === DEFAULT_EMBED_DIAMETER / 2, 'Embed 圆角 = 直径 / 2')
   assert(layout[0].zIndex === 1, 'Embed 层级在普通节点之上')
 }
 
@@ -454,13 +523,14 @@ console.log('9. hitTestWithScene：普通节点命中 → node/body')
 
 console.log('10. hitTestWithScene：Embed title 命中 → embedTitle/title')
 {
+  // Embed 是正圆：外接矩形 (100, 50, 200×200)，圆心 (200, 150)，半径 100
   const rects = [
-    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 120 }
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 200 }
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
-  // title 区域：y ∈ [50, 50+24=74]
-  const hit = hitTestWithScene(rects, 150, 60, scenePath, embedIds)
+  // title 区域：圆内顶部 EMBED_TITLE_HEIGHT(24) 高度，y ∈ [50, 74]
+  const hit = hitTestWithScene(rects, 200, 60, scenePath, embedIds)
   assert(hit !== null, '命中 Embed title 区域返回非 null')
   assert(hit.objectKind === 'embedTitle', 'objectKind = embedTitle')
   assert(hit.hitRegion === 'title', 'hitRegion = title')
@@ -468,51 +538,62 @@ console.log('10. hitTestWithScene：Embed title 命中 → embedTitle/title')
   assert(eq(hit.scenePath, scenePath), 'scenePath 正确传递')
 }
 
-console.log('11. hitTestWithScene：Embed border 命中 → embedBorder/border')
+console.log('11. hitTestWithScene：Embed 圆环 border 命中 → embedBorder/border')
 {
   const rects = [
-    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 120 }
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 200 }
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
-  // 左边框：x ∈ [100, 100+3=103]，y > titleBottom(74)
-  const hitLeft = hitTestWithScene(rects, 101, 90, scenePath, embedIds)
-  assert(hitLeft !== null, '命中 Embed 左边框返回非 null')
-  assert(hitLeft.objectKind === 'embedBorder', '左边框 objectKind = embedBorder')
-  assert(hitLeft.hitRegion === 'border', '左边框 hitRegion = border')
-  // 右边框：x >= 100+200-3=297
-  const hitRight = hitTestWithScene(rects, 298, 90, scenePath, embedIds)
-  assert(hitRight !== null, '命中 Embed 右边框返回非 null')
-  assert(hitRight.objectKind === 'embedBorder', '右边框 objectKind = embedBorder')
-  assert(hitRight.hitRegion === 'border', '右边框 hitRegion = border')
-  // 下边框：y >= 50+120-3=167
-  const hitBottom = hitTestWithScene(rects, 150, 168, scenePath, embedIds)
-  assert(hitBottom !== null, '命中 Embed 下边框返回非 null')
-  assert(hitBottom.objectKind === 'embedBorder', '下边框 objectKind = embedBorder')
-  assert(hitBottom.hitRegion === 'border', '下边框 hitRegion = border')
-  // title 与 innerContent 之间的横向 border：y ∈ (74, 74+3=77]
-  const hitMidBorder = hitTestWithScene(rects, 150, 76, scenePath, embedIds)
-  assert(hitMidBorder !== null, '命中 title 下方 border 返回非 null')
-  assert(hitMidBorder.objectKind === 'embedBorder', 'title 下方 border objectKind = embedBorder')
-  assert(hitMidBorder.hitRegion === 'border', 'title 下方 border hitRegion = border')
+  // 圆环：到圆心距离 >= 半径 - EMBED_BORDER_WIDTH = 97
+  // 正左：圆心正左 100 → 距离 100（圆周）
+  const hitLeft = hitTestWithScene(rects, 100, 150, scenePath, embedIds)
+  assert(hitLeft !== null && hitLeft.objectKind === 'embedBorder' && hitLeft.hitRegion === 'border',
+    '圆周正左点 → embedBorder/border')
+  // 正下：圆心正下 100 → 距离 100
+  const hitBottom = hitTestWithScene(rects, 200, 250, scenePath, embedIds)
+  assert(hitBottom !== null && hitBottom.objectKind === 'embedBorder' && hitBottom.hitRegion === 'border',
+    '圆周正下点 → embedBorder/border')
+  // 斜向圆环：圆心 + (70, 70) → 距离 ≈ 98.99，落在 [97, 100] 圆环内
+  const hitDiagonal = hitTestWithScene(rects, 270, 220, scenePath, embedIds)
+  assert(hitDiagonal !== null && hitDiagonal.objectKind === 'embedBorder' && hitDiagonal.hitRegion === 'border',
+    '斜向圆周点 → embedBorder/border（不是矩形边）')
 }
 
-console.log('12. hitTestWithScene：Embed innerContent 命中 → embedInnerContent/innerContent')
+console.log('12. hitTestWithScene：圆外方形角不再命中 Embed')
 {
   const rects = [
-    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 120 }
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 200 }
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
-  // innerContent 区域：x ∈ (103, 297)，y ∈ (77, 167)
-  const hit = hitTestWithScene(rects, 150, 100, scenePath, embedIds)
+  // 外接矩形的左上角 (100, 50) 离圆心 √(100²+100²) > 100，不在圆内
+  assert(hitTestWithScene(rects, 100, 50, scenePath, embedIds) === null,
+    '正方形角（矩形内、圆外）不命中 Embed')
+  // 外接矩形右下角同理
+  assert(hitTestWithScene(rects, 300, 250, scenePath, embedIds) === null,
+    '右下角（矩形内、圆外）不命中 Embed')
+  // 矩形外侧更远处也不命中
+  assert(hitTestWithScene(rects, 320, 150, scenePath, embedIds) === null,
+    '矩形右侧外部不命中 Embed')
+}
+
+console.log('13. hitTestWithScene：Embed innerContent 命中 → embedInnerContent/innerContent')
+{
+  const rects = [
+    { nodeId: 'emb1', x: 100, y: 50, width: 200, height: 200 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set(['emb1'])
+  // 圆心附近：y > 74（title 之下）且到圆心距离 < 97（不在圆环上）
+  const hit = hitTestWithScene(rects, 200, 150, scenePath, embedIds)
   assert(hit !== null, '命中 Embed innerContent 返回非 null')
   assert(hit.objectKind === 'embedInnerContent', 'objectKind = embedInnerContent')
   assert(hit.hitRegion === 'innerContent', 'hitRegion = innerContent')
   assert(hit.objectId === 'emb1', 'objectId = emb1')
 }
 
-console.log('13. hitTestWithScene：未命中 → null')
+console.log('14. hitTestWithScene：未命中 → null')
 {
   const rects = [
     { nodeId: 'n1', x: 0, y: 0, width: 160, height: 80 }
@@ -523,7 +604,7 @@ console.log('13. hitTestWithScene：未命中 → null')
   assert(hit === null, '点击在所有 rect 之外 → null')
 }
 
-console.log('14. hitTestWithScene：后绘制（数组末尾）的 rect 优先命中')
+console.log('15. hitTestWithScene：后绘制（数组末尾）的 rect 优先命中')
 {
   const rects = [
     { nodeId: 'n1', x: 0, y: 0, width: 200, height: 200 },
@@ -535,7 +616,63 @@ console.log('14. hitTestWithScene：后绘制（数组末尾）的 rect 优先�
   assert(hit.objectId === 'n2', '后绘制的 n2 优先命中（zIndex 更高）')
 }
 
-console.log('15. GestureState：beginPanCanvas 传入 ownerScenePath')
+console.log('16. hitTestWithScene：上层 Embed 圆外时穿透到下层节点')
+{
+  // emb1 圆形覆盖了 n1 的一部分；emb1 圆外的点应命中下层 n1
+  const rects = [
+    { nodeId: 'n1', x: 0, y: 0, width: 300, height: 300 },
+    { nodeId: 'emb1', x: 100, y: 100, width: 200, height: 200 }
+  ]
+  const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
+  const embedIds = new Set(['emb1'])
+  // (200, 200) 在 emb1 圆内 → 命中 emb1
+  assert(hitTestWithScene(rects, 200, 200, scenePath, embedIds).objectId === 'emb1',
+    '圆内点命中上层 Embed')
+  // (10, 10) 在 emb1 圆外但仍在 n1 矩形内 → 命中 n1
+  const hit = hitTestWithScene(rects, 10, 10, scenePath, embedIds)
+  assert(hit !== null && hit.objectId === 'n1',
+    'Embed 圆外不再吞掉事件，穿透命中下层节点 n1')
+}
+
+console.log('17. 边端点：Embed 端点落在圆周上，不是矩形边')
+{
+  // 左侧普通节点 (0, 0, 160×80)，中心 (80, 40)
+  // 右侧圆形 Embed (400, 0, 200×200)，中心 (500, 100)，半径 100
+  const nodeRect = { nodeId: 'n1', x: 0, y: 0, width: 160, height: 80 }
+  const embedRect = { nodeId: 'emb1', x: 400, y: 0, width: 200, height: 200 }
+  const pts = computeEdgeEndpoints(nodeRect, embedRect, false, true)
+  // 终点必须在圆周上：到圆心距离 == 半径
+  const dEnd = Math.hypot(pts.end.x - 500, pts.end.y - 100)
+  assert(Math.abs(dEnd - 100) < 1e-6, `Embed 端点在圆周上（距离 ${dEnd.toFixed(3)} ≈ 100）`)
+  // 圆周边的斜向点：y 必然大于矩形上边 y=100 之下？不，矩形上边是 y=0，
+  // 关键断言：终点的 y 落在圆周上，而矩形边界交点会落在 y=0 或 x=400 上
+  assert(pts.end.y > 0, `Embed 端点不在矩形上边 y=0（y=${pts.end.y.toFixed(2)}）`)
+  // 起点仍是普通节点的矩形边界：到节点中心的连线与矩形相交
+  assert(pts.start.x === 160, `普通节点端点仍在矩形右边 x=160（x=${pts.start.x}）`)
+}
+
+console.log('18. 边端点：Embed → Embed 两侧都在圆周上')
+{
+  const embedA = { nodeId: 'embA', x: 0, y: 0, width: 200, height: 200 }
+  const embedB = { nodeId: 'embB', x: 600, y: 400, width: 200, height: 200 }
+  const pts = computeEdgeEndpoints(embedA, embedB, true, true)
+  const dStart = Math.hypot(pts.start.x - 100, pts.start.y - 100)
+  const dEnd = Math.hypot(pts.end.x - 700, pts.end.y - 500)
+  assert(Math.abs(dStart - 100) < 1e-6, `起点在 embA 圆周上（距离 ${dStart.toFixed(3)} ≈ 100）`)
+  assert(Math.abs(dEnd - 100) < 1e-6, `终点在 embB 圆周上（距离 ${dEnd.toFixed(3)} ≈ 100）`)
+}
+
+console.log('19. lineCircleIntersection：目标在圆内也拉到圆周，方向不变')
+{
+  // 目标点比半径近：应沿同方向推到圆周
+  const near = lineCircleIntersection(100, 100, 100, 120, 100)
+  assert(near.x === 200 && near.y === 100, '圆内目标拉到圆周 (200, 100)')
+  // 目标点与圆心重合：没有方向，返回圆心
+  const same = lineCircleIntersection(100, 100, 100, 100, 100)
+  assert(same.x === 100 && same.y === 100, '目标与圆心重合时返回圆心')
+}
+
+console.log('20. GestureState：beginPanCanvas 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -548,7 +685,7 @@ console.log('15. GestureState：beginPanCanvas 传入 ownerScenePath')
   assert(eq(s.startPoint, { x: 10, y: 20 }), 'startPoint 正确')
 }
 
-console.log('16. GestureState：beginNodeMenu 传入 ownerScenePath')
+console.log('21. GestureState：beginNodeMenu 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -560,7 +697,7 @@ console.log('16. GestureState：beginNodeMenu 传入 ownerScenePath')
   assert(s.activeItemKind === 'node', 'activeItemKind = node')
 }
 
-console.log('17. GestureState：beginConnect 传入 ownerScenePath')
+console.log('22. GestureState：beginConnect 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -572,7 +709,7 @@ console.log('17. GestureState：beginConnect 传入 ownerScenePath')
   assert(s.activeItemKind === 'node', 'activeItemKind = node')
 }
 
-console.log('18. GestureState：beginMoveNode 传入 ownerScenePath')
+console.log('23. GestureState：beginMoveNode 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -584,7 +721,7 @@ console.log('18. GestureState：beginMoveNode 传入 ownerScenePath')
   assert(s.activeItemKind === 'node', 'activeItemKind = node')
 }
 
-console.log('19. GestureState：beginMoveEmbed 传入 ownerScenePath')
+console.log('24. GestureState：beginMoveEmbed 传入 ownerScenePath')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -596,7 +733,7 @@ console.log('19. GestureState：beginMoveEmbed 传入 ownerScenePath')
   assert(s.activeItemKind === 'embed', 'activeItemKind = embed')
 }
 
-console.log('20. GestureState：activeItemKind 区分 node vs embed')
+console.log('25. GestureState：activeItemKind 区分 node vs embed')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -612,7 +749,7 @@ console.log('20. GestureState：activeItemKind 区分 node vs embed')
   assert(tracker.getState().activeItemKind === 'node', 'beginPanCanvas → activeItemKind = node')
 }
 
-console.log('21. GestureState：reset() 清空 ownerScenePath 和 activeItemKind')
+console.log('26. GestureState：reset() 清空 ownerScenePath 和 activeItemKind')
 {
   const tracker = createGestureStateTracker()
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
@@ -627,7 +764,7 @@ console.log('21. GestureState：reset() 清空 ownerScenePath 和 activeItemKind
   assert(s.activeItemId === '', 'reset 后 activeItemId 为空')
 }
 
-console.log('22. GestureState：isOwnedByScene 正确比较路径')
+console.log('27. GestureState：isOwnedByScene 正确比较路径')
 {
   const tracker = createGestureStateTracker()
   const scenePath1 = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]

@@ -7,8 +7,12 @@
 // 2. 所有 bridge mutation 调用使用 this.starmapId（当前 scene 的 starmapId）
 // 3. Embed 的 title/border 区域负责选中 Embed；innerContent 区域让事件穿透到 child StarMapScene
 // 4. 递归结构：StarMapScene → StarMapEmbedScene → child StarMapScene
+// 5. 菜单和对话框都不属于 Scene 的 Stack：菜单用 ArkUI 程序化 bindMenu（由系统定位、自动避让屏幕边缘），
+//    对话框用 openCustomDialog 挂到窗口层级。否则菜单会被圆形 Embed 的 clip(true) 裁掉（Issue #813）。
 
 import hilog from '@ohos.hilog'
+import { ComponentContent } from '@kit.ArkUI'
+import { CreateTitleDialogArgs, createTitleDialogContent } from './CreateTitleDialog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import {
   StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed,
@@ -24,7 +28,8 @@ import {
 } from '../platform/StarMapGeometry'
 import {
   PlatformLayoutNode, PlatformPoint,
-  buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout
+  buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
+  DEFAULT_EMBED_DIAMETER
 } from '../platform/StarMapLayout'
 import {
   PlatformMotionConfig,
@@ -39,6 +44,18 @@ interface WobbleOffset {
   dx: number
   dy: number
 }
+
+
+
+// ─── Embed 命中区尺寸（vp） ───
+
+/**
+ * Embed title 命中条高度。与 StarMapGeometry 的 EMBED_TITLE_HEIGHT 对齐：
+ * 命中测试认为顶部这一条属于 title，UI 也必须把同一条区域留给 title 手势层。
+ */
+const EMBED_TITLE_HIT_HEIGHT: number = 24
+/** Embed 边框命中条厚度：左右下三条透明窄条，靠外层圆角 clip 裁成圆环 */
+const EMBED_BORDER_HIT_WIDTH: number = 4
 
 @Component
 export struct StarMapScene {
@@ -146,18 +163,8 @@ export struct StarMapScene {
   @State previewLineTo: PlatformPoint = { x: 0, y: 0 }
   /** 是否显示新建菜单 */
   @State showCreateMenu: boolean = false
-  /** 新建菜单位置（屏幕坐标） */
-  @State createMenuPosition: PlatformPoint = { x: 0, y: 0 }
-  /** 新建菜单位置（画布坐标） */
+  /** 新建菜单位置（画布坐标）：新建项落在哪张星图的哪个位置 */
   @State createMenuCanvasPosition: PlatformPoint = { x: 0, y: 0 }
-  /** 是否显示新建节点对话框 */
-  @State showCreateNodeDialog: boolean = false
-  /** 是否显示新建子星图对话框 */
-  @State showCreateEmbedDialog: boolean = false
-  /** 新节点标题 */
-  @State newNodeTitle: string = ''
-  /** 新子星图标题 */
-  @State newEmbedTitle: string = ''
   /** Canvas 是否就绪 */
   @State canvasReady: boolean = false
   /** 预览 Canvas 是否就绪 */
@@ -180,6 +187,12 @@ export struct StarMapScene {
   private pinchBaseOffsetY: number = 0
   private pinchAnchorCanvasX: number = 0
   private pinchAnchorCanvasY: number = 0
+
+  // ─── 对话框宿主（窗口层级，不参与 Scene Stack 布局） ───
+  /** 新建节点对话框的 ComponentContent：openCustomDialog 需要它来关闭对话框 */
+  private createNodeDialogContent: ComponentContent<CreateTitleDialogArgs> | null = null
+  /** 新建子星图对话框的 ComponentContent */
+  private createEmbedDialogContent: ComponentContent<CreateTitleDialogArgs> | null = null
 
   // ─── Canvas 上下文 ───
   private canvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
@@ -204,6 +217,7 @@ export struct StarMapScene {
     this.showNodeMenu = false
     this.showCreateMenu = false
     this.nodeMenuNodeId = ''
+    this.closeCreateDialogs()
   }
 
   // ─── @Watch 处理 ───
@@ -259,7 +273,7 @@ export struct StarMapScene {
     for (const rect of this.nodeRects) {
       rectMap.set(rect.nodeId, rect)
     }
-    this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap, this.starmapId)
+    this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap, this.starmapId, this.getEmbedInstanceIds())
     this.drawEdges()
   }
 
@@ -387,6 +401,12 @@ export struct StarMapScene {
     const to = this.buildItemTargetPath(toItemId)
     const result = await this.bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null)
     if (result.success && result.data) {
+      // 成功分支必须留痕：Issue #813 的诊断包里只有 create_starmap_child_embed，
+      // 无法判断是"没画线"还是"画了线但没落库"。这条日志同时覆盖普通节点和 Embed 端点。
+      hilog.info(
+        0x0000, 'StarMapScene',
+        `createEdge ok: starmapId=${this.starmapId}, from=${fromItemId}, to=${toItemId}, edgeId=${result.data.id}`
+      )
       if (this.graph) {
         this.graph = {
           schemaVersion: this.graph.schemaVersion,
@@ -437,16 +457,17 @@ export struct StarMapScene {
 
   /**
    * 执行新建节点：通过 bridge API 创建，使用 this.starmapId。
+   * 标题由窗口层级的对话框通过参数传入。
    */
-  async performCreateNode() {
-    if (this.newNodeTitle.trim().length === 0) return
-    this.showCreateNodeDialog = false
+  async performCreateNode(title: string) {
+    const trimmed: string = title.trim()
+    if (trimmed.length === 0) return
     if (!this.bridge) return
     const position: StarMapPoint = {
       x: this.createMenuCanvasPosition.x,
       y: this.createMenuCanvasPosition.y
     }
-    const result = await this.bridge.addStarMapNode(this.starmapId, this.newNodeTitle.trim(), 'Custom', position)
+    const result = await this.bridge.addStarMapNode(this.starmapId, trimmed, 'Custom', position)
     if (result.success && result.data) {
       if (this.graph) {
         this.graph = {
@@ -463,25 +484,25 @@ export struct StarMapScene {
       }
       this.selectedNodeId = result.data.id
       this.onSelectItem(this.scenePath, result.data.id)
-      this.onCreateNode(this.scenePath, this.starmapId, this.newNodeTitle.trim(), position)
+      this.onCreateNode(this.scenePath, this.starmapId, trimmed, position)
     } else {
       hilog.error(0x0000, 'StarMapScene', `addStarMapNode failed: ${result.errorCode}, ${result.userMessage}`)
     }
-    this.newNodeTitle = ''
   }
 
   /**
    * 执行新建子星图：通过 bridge API 创建，使用 this.starmapId。
+   * 标题由窗口层级的对话框通过参数传入。
    */
-  async performCreateEmbed() {
-    if (this.newEmbedTitle.trim().length === 0) return
-    this.showCreateEmbedDialog = false
+  async performCreateEmbed(title: string) {
+    const trimmed: string = title.trim()
+    if (trimmed.length === 0) return
     if (!this.bridge) return
     const position: StarMapPoint = {
       x: this.createMenuCanvasPosition.x,
       y: this.createMenuCanvasPosition.y
     }
-    const result = await this.bridge.createStarmapChildEmbed(this.starmapId, this.newEmbedTitle.trim(), position)
+    const result = await this.bridge.createStarmapChildEmbed(this.starmapId, trimmed, position)
     if (result.success && result.data) {
       if (this.graph) {
         this.graph = {
@@ -496,11 +517,89 @@ export struct StarMapScene {
         this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
         this.recomputeGeometry()
       }
-      this.onCreateEmbed(this.scenePath, this.starmapId, this.newEmbedTitle.trim(), position)
+      this.onCreateEmbed(this.scenePath, this.starmapId, trimmed, position)
     } else {
       hilog.error(0x0000, 'StarMapScene', `createStarmapChildEmbed failed: ${result.errorCode ?? 'unknown'}`)
     }
-    this.newEmbedTitle = ''
+  }
+
+  // ─── 窗口层级对话框 ───
+
+  /**
+   * 打开标题输入对话框。
+   * 对话框挂在窗口层级（openCustomDialog），所以不会被圆形 Embed 的 clip(true) 裁掉。
+   * 连续点击时先关掉旧对话框，避免叠多层。
+   */
+  private openCreateDialog(args: CreateTitleDialogArgs, isEmbedDialog: boolean) {
+    const content: ComponentContent<CreateTitleDialogArgs> = createTitleDialogContent(this.getUIContext(), args)
+    if (isEmbedDialog) {
+      if (this.createEmbedDialogContent !== null) {
+        this.getUIContext().getPromptAction().closeCustomDialog(this.createEmbedDialogContent)
+      }
+      this.createEmbedDialogContent = content
+    } else {
+      if (this.createNodeDialogContent !== null) {
+        this.getUIContext().getPromptAction().closeCustomDialog(this.createNodeDialogContent)
+      }
+      this.createNodeDialogContent = content
+    }
+    // openCustomDialog 的 ComponentContent 版本完全跟随内容样式（等价 customStyle=true），
+    // 对话框本身不画背景，遮罩由 maskColor 控制。
+    this.getUIContext().getPromptAction().openCustomDialog(content, {
+      alignment: DialogAlignment.Center,
+      maskColor: '#80000000',
+      autoCancel: true,
+      onDidDisappear: () => {
+        if (this.createNodeDialogContent === content) {
+          this.createNodeDialogContent = null
+        }
+        if (this.createEmbedDialogContent === content) {
+          this.createEmbedDialogContent = null
+        }
+      }
+    })
+  }
+
+  /** 关闭本 Scene 打开的所有对话框（Scene 消失时也调用）。 */
+  private closeCreateDialogs() {
+    if (this.createNodeDialogContent !== null) {
+      this.getUIContext().getPromptAction().closeCustomDialog(this.createNodeDialogContent)
+      this.createNodeDialogContent = null
+    }
+    if (this.createEmbedDialogContent !== null) {
+      this.getUIContext().getPromptAction().closeCustomDialog(this.createEmbedDialogContent)
+      this.createEmbedDialogContent = null
+    }
+  }
+
+  /** 打开新建节点对话框。 */
+  private openCreateNodeDialog() {
+    this.openCreateDialog({
+      title: '新建节点',
+      placeholder: '请输入节点名称',
+      onConfirm: (title: string) => {
+        this.closeCreateDialogs()
+        void this.performCreateNode(title)
+      },
+      onCancel: () => {
+        this.closeCreateDialogs()
+      }
+    }, false)
+  }
+
+  /** 打开新建子星图对话框。 */
+  private openCreateEmbedDialog() {
+    this.openCreateDialog({
+      title: '新建子星图',
+      placeholder: '请输入子星图名称',
+      onConfirm: (title: string) => {
+        this.closeCreateDialogs()
+        void this.performCreateEmbed(title)
+      },
+      onCancel: () => {
+        this.closeCreateDialogs()
+      }
+    }, true)
   }
 
   // ─── Canvas 绘制 ───
@@ -672,6 +771,9 @@ export struct StarMapScene {
       this.selectedNodeId = node.id
       this.onSelectItem(this.scenePath, node.id)
     })
+    // 程序化菜单：长按只翻转 showNodeMenu，是否真的弹出由这里交给 ArkUI 定位（不会越界、不会被父级裁剪）。
+    // 菜单项内容通过 this.nodeMenuNodeId 判断当前是节点还是 Embed。
+    .bindMenu(this.showNodeMenu && this.nodeMenuNodeId === node.id, this.NodeMenuContent)
     .gesture(
       GestureGroup(GestureMode.Exclusive,
         // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
@@ -682,8 +784,9 @@ export struct StarMapScene {
               const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
               this.gestureTracker.beginNodeMenu(this.scenePath, node.id, point.x, point.y)
               this.gestureMode = 'nodeMenu'
-              this.showNodeMenu = true
+              // 先记录目标再翻显示标记：菜单内容要在 showNodeMenu 变 true 时就读到 nodeMenuNodeId
               this.nodeMenuNodeId = node.id
+              this.showNodeMenu = true
               this.selectedNodeId = node.id
               this.onSelectItem(this.scenePath, node.id)
             }),
@@ -812,8 +915,9 @@ export struct StarMapScene {
             const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
             this.gestureTracker.beginNodeMenu(this.scenePath, embed.instanceId, point.x, point.y)
             this.gestureMode = 'nodeMenu'
-            this.showNodeMenu = true
+            // 菜单内容在 showNodeMenu 翻 true 的同一帧就要读到 nodeMenuNodeId，所以先赋值再翻标记
             this.nodeMenuNodeId = embed.instanceId
+            this.showNodeMenu = true
           }),
         PanGesture()
           .onActionStart((event: GestureEvent) => {
@@ -917,11 +1021,16 @@ export struct StarMapScene {
   // ─── @Builder：Embed 组件 ───
 
   /**
-   * Embed 组件：使用 Stack 分离命中层。
-   * - innerContent（底层）：放 child StarMapEmbedScene，不挂任何父手势
-   * - title Row（上层）：挂 Embed 手势（选中/菜单/连线/移动）
-   * - 左/右/下边框命中条（上层）：透明窄条，挂相同 Embed 手势
-   * Stack 中后声明的组件在视觉和触摸测试中优先级更高，确保 title/边框优先于 innerContent。
+   * Embed 组件：黑色正圆，画布上唯一的外接形状是圆。
+   *
+   * 尺寸只有一个来源：DEFAULT_EMBED_DIAMETER（见 StarMapLayout），
+   * 宽=高=直径，圆角=直径/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
+   *
+   * 命中分层（Stack 后声明的组件触摸优先级更高）：
+   * - innerContent（底层）：child StarMapEmbedScene，不挂父手势，圆内其余区域交给子 Scene
+   * - title Row（上层）：顶部条，负责选中 Embed + 长按菜单/连线
+   * - 左/右/下边框命中条（上层）：透明窄条，只负责选中 Embed 和长按手势
+   * 外层 Stack 的 clip(true) + borderRadius 把这些条裁成圆环，视觉和命中都在圆上。
    */
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
@@ -945,48 +1054,52 @@ export struct StarMapScene {
       .height('100%')
 
       // 2. title Row（顶部条，挂 Embed 手势：选中/菜单/连线/移动）
+      // 菜单挂在 title 上：程序化 bindMenu 由系统定位，跨过圆形 clip 也不会被裁掉（Issue #813）
       Row() {
         Text(embed.label ?? embed.targetStarmapId)
           .fontSize(14 * this.zoomScale)
           .fontWeight(FontWeight.Medium)
+          .fontColor('#FFFFFF')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
       .width('100%')
-      .height(24 * this.zoomScale)
+      .height(EMBED_TITLE_HIT_HEIGHT * this.zoomScale)
       .padding({ left: 8 * this.zoomScale, right: 8 * this.zoomScale })
       .justifyContent(FlexAlign.Start)
       .alignItems(VerticalAlign.Center)
       .position({ x: 0, y: 0 })
+      .bindMenu(this.showNodeMenu && this.nodeMenuNodeId === embed.instanceId, this.NodeMenuContent)
       .gesture(this.embedGestureGroup(embed))
 
       // 3. 左边框命中条（透明窄条，只接收手势事件）
       Row() {}
-      .width(4)
+      .width(EMBED_BORDER_HIT_WIDTH)
       .height('100%')
       .position({ x: 0, y: 0 })
       .gesture(this.embedGestureGroup(embed))
 
       // 4. 右边框命中条（透明窄条，只接收手势事件）
       Row() {}
-      .width(4)
+      .width(EMBED_BORDER_HIT_WIDTH)
       .height('100%')
-      .position({ x: 200 * this.zoomScale - 4, y: 0 })
+      .position({ x: DEFAULT_EMBED_DIAMETER * this.zoomScale - EMBED_BORDER_HIT_WIDTH, y: 0 })
       .gesture(this.embedGestureGroup(embed))
 
       // 5. 下边框命中条（透明窄条，只接收手势事件）
       Row() {}
       .width('100%')
-      .height(4)
-      .position({ x: 0, y: 120 * this.zoomScale - 4 })
+      .height(EMBED_BORDER_HIT_WIDTH)
+      .position({ x: 0, y: DEFAULT_EMBED_DIAMETER * this.zoomScale - EMBED_BORDER_HIT_WIDTH })
       .gesture(this.embedGestureGroup(embed))
     }
-    .width(200 * this.zoomScale)
-    .height(120 * this.zoomScale)
-    .borderRadius(12 * this.zoomScale)
-    .backgroundColor('#E8E8E8')
+    .width(DEFAULT_EMBED_DIAMETER * this.zoomScale)
+    .height(DEFAULT_EMBED_DIAMETER * this.zoomScale)
+    .borderRadius(DEFAULT_EMBED_DIAMETER / 2 * this.zoomScale)
+    .backgroundColor('#000000')
+    // 未选中也要有一条细描边，否则黑圆在深色画布上看不出边界；选中时加粗并用主题色
     .border({
-      width: this.selectedNodeId === embed.instanceId ? 3 : 2,
+      width: this.selectedNodeId === embed.instanceId ? 3 : 1,
       color: this.selectedNodeId === embed.instanceId
         ? this.themeConfig.colors.primary
         : this.themeConfig.colors.outlineVariant
@@ -995,28 +1108,26 @@ export struct StarMapScene {
       x: this.getEmbedScreenX(embed.instanceId),
       y: this.getEmbedScreenY(embed.instanceId)
     })
+    // 子 Scene 必须真正被裁到圆内，否则内部会溢出圆外看起来还是方形
     .clip(true)
   }
 
-  // ─── @Builder：节点菜单 ───
+  // ─── @Builder：节点菜单（bindMenu 内容） ───
 
   /**
-   * 节点菜单：长按节点/Embed 后弹出。
-   * 普通节点和 Embed 分开菜单：Embed 只有"移动子星图"，普通节点只有"移动节点"。
+   * 节点/Embed 菜单内容：交给 ArkUI 程序化 bindMenu 渲染。
+   * 不再用 Column + Button + .position() 自绘弹层：自绘弹层是递归 Scene 的普通子组件，
+   * 会被圆形 Embed 的 clip(true) 裁掉，也会因为用 Scene 局部坐标定位而越出屏幕（Issue #813）。
+   * 程序化 bindMenu 由系统定位并自动避让屏幕边缘，菜单挂在哪个组件上就出现在哪附近。
+   *
+   * bindMenu 只负责"显示"：长按和后续 Pan 仍然由 GestureGroup 状态机负责，
+   * 所以 #373 的"长按出菜单、继续移动拉线"不受影响。
    */
   @Builder
-  NodeMenu() {
-    Column() {
-      Text(this.getPlatformLayoutNode(this.nodeMenuNodeId)?.nodeId ?? '')
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 8 })
-
+  NodeMenuContent() {
+    Menu() {
       if (this.isEmbed(this.nodeMenuNodeId)) {
-        Button($r('app.string.move_embed'))
-          .fontSize(13)
-          .height(36)
-          .width('100%')
+        MenuItem({ content: $r('app.string.move_embed') })
           .onClick(() => {
             this.gestureTracker.beginMoveEmbed(this.scenePath, this.nodeMenuNodeId, 0, 0)
             this.gestureMode = 'moveEmbed'
@@ -1024,10 +1135,7 @@ export struct StarMapScene {
             this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
           })
       } else {
-        Button($r('app.string.move_node'))
-          .fontSize(13)
-          .height(36)
-          .width('100%')
+        MenuItem({ content: $r('app.string.move_node') })
           .onClick(() => {
             this.gestureTracker.beginMoveNode(this.scenePath, this.nodeMenuNodeId, 0, 0)
             this.gestureMode = 'moveNode'
@@ -1035,180 +1143,30 @@ export struct StarMapScene {
             this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
           })
       }
-
-      Button($r('app.string.cancel'))
-        .fontSize(13)
-        .height(36)
-        .width('100%')
-        .margin({ top: 4 })
-        .onClick(() => {
-          if (this.gestureTracker.isOwnedByScene(this.scenePath)) {
-            this.gestureTracker.reset()
-          }
-          this.gestureMode = 'idle'
-          this.showNodeMenu = false
-          this.nodeMenuNodeId = ''
-        })
     }
-    .width(160)
-    .padding(12)
-    .borderRadius(DesignTokens.radiusMd)
-    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
-    .backgroundColor('#FFFFFF')
-    .position({
-      x: this.getNodeScreenX(this.nodeMenuNodeId) + 80,
-      y: this.getNodeScreenY(this.nodeMenuNodeId) - 40
-    })
   }
 
-  // ─── @Builder：新建菜单 ───
+  // ─── @Builder：新建菜单（bindMenu 内容） ───
 
+  /**
+   * 空白处新建菜单内容：只有"新建节点"和"新建子星图"两项。
+   * 点击后先关菜单，再打开窗口层级的对话框（不会被 Embed 的 clip 裁掉）。
+   */
   @Builder
-  CreateMenu() {
-    Column() {
-      Button('新建节点')
-        .fontSize(13)
-        .height(36)
-        .width('100%')
+  CreateMenuContent() {
+    Menu() {
+      MenuItem({ content: $r('app.string.create_node') })
         .onClick(() => {
           this.showCreateMenu = false
-          this.showCreateNodeDialog = true
-          this.newNodeTitle = ''
+          this.openCreateNodeDialog()
         })
 
-      Button('新建子星图')
-        .fontSize(13)
-        .height(36)
-        .width('100%')
-        .margin({ top: 4 })
+      MenuItem({ content: $r('app.string.create_embed') })
         .onClick(() => {
           this.showCreateMenu = false
-          this.showCreateEmbedDialog = true
-          this.newEmbedTitle = ''
-        })
-
-      Button($r('app.string.cancel'))
-        .fontSize(13)
-        .height(36)
-        .width('100%')
-        .margin({ top: 4 })
-        .onClick(() => {
-          this.showCreateMenu = false
+          this.openCreateEmbedDialog()
         })
     }
-    .width(160)
-    .padding(12)
-    .borderRadius(DesignTokens.radiusMd)
-    .shadow({ radius: DesignTokens.shadowMedium.radius, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .position({
-      x: this.createMenuPosition.x,
-      y: this.createMenuPosition.y
-    })
-  }
-
-  // ─── @Builder：新建节点对话框 ───
-
-  @Builder
-  CreateNodeDialog() {
-    Column() {
-      Column() {
-        Text('新建节点')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ placeholder: '请输入节点名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.newNodeTitle = value
-          })
-
-        Row() {
-          Button($r('app.string.cancel'))
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.showCreateNodeDialog = false
-              this.newNodeTitle = ''
-            })
-
-          Blank()
-
-          Button('创建')
-            .fontSize(14)
-            .height(36)
-            .enabled(this.newNodeTitle.trim().length > 0)
-            .onClick(() => {
-              void this.performCreateNode()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('80%')
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ─── @Builder：新建子星图对话框 ───
-
-  @Builder
-  CreateEmbedDialog() {
-    Column() {
-      Column() {
-        Text('新建子星图')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ placeholder: '请输入子星图名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.newEmbedTitle = value
-          })
-
-        Row() {
-          Button($r('app.string.cancel'))
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.showCreateEmbedDialog = false
-              this.newEmbedTitle = ''
-            })
-
-          Blank()
-
-          Button('创建')
-            .fontSize(14)
-            .height(36)
-            .enabled(this.newEmbedTitle.trim().length > 0)
-            .onClick(() => {
-              void this.performCreateEmbed()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('80%')
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
   }
 
   // ─── 辅助方法 ───
@@ -1307,16 +1265,17 @@ export struct StarMapScene {
               const point = this.gestureScreenPoint(event, 0, 0)
               const canvasPoint = screenToCanvas(point.x, point.y, this.zoomScale, this.offsetX, this.offsetY)
               const hitResult = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
-              // 空白区域长按 → 弹出新建菜单
+              // 空白区域长按 → 弹出新建菜单。
+              // 菜单挂在下面这个背景命中层上（程序化 bindMenu），系统自己定位，不会越出屏幕。
               if (hitResult === null) {
-                this.showCreateMenu = true
-                this.createMenuPosition = { x: point.x, y: point.y }
                 this.createMenuCanvasPosition = { x: canvasPoint.x, y: canvasPoint.y }
+                this.showCreateMenu = true
               }
             })
         )
       )
       .hitTestBehavior(HitTestMode.Default)
+      .bindMenu(this.showCreateMenu, this.CreateMenuContent)
 
       // 1. Canvas：绘制当前层的边（只负责画，不参与触摸测试）
       Canvas(this.canvasCtx)
@@ -1352,25 +1311,10 @@ export struct StarMapScene {
           })
       }
 
-      // 5. 节点菜单
-      if (this.showNodeMenu) {
-        this.NodeMenu()
-      }
-
-      // 6. 新建菜单
-      if (this.showCreateMenu) {
-        this.CreateMenu()
-      }
-
-      // 7. 新建节点对话框
-      if (this.showCreateNodeDialog) {
-        this.CreateNodeDialog()
-      }
-
-      // 8. 新建子星图对话框
-      if (this.showCreateEmbedDialog) {
-        this.CreateEmbedDialog()
-      }
+      // 菜单和对话框都不在这里：
+      // 节点菜单 / Embed 菜单挂在各自的组件上（程序化 bindMenu），
+      // 空白新建菜单挂在上面的背景命中层上，新建对话框走 openCustomDialog 的窗口层级。
+      // 自绘弹层放回这个 Stack 就会被圆形 Embed 的 clip(true) 裁掉（Issue #813）。
     }
     .width('100%')
     .height('100%')

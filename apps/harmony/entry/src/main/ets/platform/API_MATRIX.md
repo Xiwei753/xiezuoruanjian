@@ -39,6 +39,8 @@
 | ComponentObserver (inspector) | @kit.ArkUI (inspector) | 12（on('layout') 回调） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/editor/ui/SujianEditor.ets |
 | 沉浸光感材质运行态 | @kit.ArkUI (uiMaterial) | 26 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | material/impl/api26/HarmonyMaterialRuntimeApi26.ets |
 | 应用共享目录 / 捐献沙箱目录 | 无独立 Kit（module.json5 shareFiles profile） | 23（共享目录 scopes）/ 26.0.0（捐献目录 sharingOS*） | 无独立 SystemCapability（模块级配置） | 无 | 否 | entry/src/main/resources/base/profile/share_files.json（工程资源，不在 platform/ 下） |
+| 菜单 / 气泡菜单 | @kit.ArkUI (bindMenu / bindContextMenu) | 12（声明式）/ 11（程序化 bindMenu(isShow, ...)） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/starmap/ui/StarMapScene.ets, feature/starmap/ui/StarMapListScreen.ets, feature/project/ui/HomeScreen.ets |
+| 自定义对话框 | @kit.ArkUI (ComponentContent / PromptAction.openCustomDialog) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/CreateTitleDialog.ets, feature/starmap/ui/StarMapScene.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -430,6 +432,39 @@
 现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
 
 **Issue #811 里建议的边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 未采纳**：本机 native 层拒收该调用（见上表），加上去只会每次刷一条 `Wrong argument type` 而没有光。
+
+## 菜单 / 气泡菜单（bindMenu）
+
+- Kit：`@kit.ArkUI`
+- 接口：
+  - 声明式：`.bindMenu(content: Array<MenuElement> | CustomBuilder, options?: MenuOptions)`
+  - 程序化：`.bindMenu(isShow: boolean, content: Array<MenuElement> | CustomBuilder, options?: MenuOptions)`
+- 最低 API：声明式 12（随 UI 组件基础能力），程序化重载 11
+- SystemCapability：无独立声明（随 `@kit.ArkUI` 整体可用）
+- 权限 / ACL：无
+- fallback：无 fallback 路径（最低安装基线 API12 已覆盖声明式重载）
+- 实现文件：`feature/starmap/ui/StarMapScene.ets`、`feature/starmap/ui/StarMapListScreen.ets`、`feature/project/ui/HomeScreen.ets`
+- 用法约束（Issue #813）：
+  - 递归 UI 里（星图 Scene 层层嵌套、圆形 Embed 带 `clip(true)`）**不要**用 `Column + Button + .position()` 自绘菜单：自绘弹层是 Scene 的普通子组件，会被祖先的 `clip(true)` 裁掉，也会因为用 Scene 局部坐标定位而越出屏幕。改用程序化 `bindMenu(isShow, ...)`，由系统定位并自动避让屏幕边缘。
+  - **不要**用 `bindContextMenu(isShown, ...)`：官方文档说明程序化 `bindContextMenu` 不支持"长按后继续拖动"，会破坏"长按出菜单、继续移动拉线"的连线交互（见 #373）。`bindMenu` 只负责显示，长按与后续 Pan 仍由业务自己的 `GestureGroup` 状态机负责，两者互不冲突。
+  - 菜单上下文（如"当前长按的是哪个节点"）通过组件字段传给无参 `CustomBuilder`，不要给 `@Builder` 加参数。
+
+## 自定义对话框（ComponentContent + openCustomDialog）
+
+- Kit：`@kit.ArkUI`
+- 接口：
+  - `new ComponentContent<T>(uiContext: UIContext, builder: WrappedBuilder<[T]>, args: T)`
+  - `UIContext.getPromptAction().openCustomDialog(content: ComponentContent<T>, options?: promptAction.BaseDialogOptions)`
+  - `UIContext.getPromptAction().closeCustomDialog(content: ComponentContent<T>)`
+- 最低 API：12（`stagemodelonly`；DevEco Previewer 不支持）
+- SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`
+- 权限 / ACL：无
+- fallback：无 fallback 路径（最低安装基线 API12 即为该 API 的 since 版本）
+- 实现文件：`feature/starmap/ui/CreateTitleDialog.ets`（对话框 UI + `createTitleDialogContent` 工厂）、`feature/starmap/ui/StarMapScene.ets`（打开 / 关闭与生命周期清理）
+- 用法约束（Issue #813）：
+  - 递归 UI 里被祖先 `clip(true)` 裁掉、或需要脱离 Scene 局部坐标定位的对话框，挂到窗口层级：`getPromptAction().openCustomDialog(...)`，不要作为 Scene `Stack` 的普通子组件。
+  - `wrapBuilder(...)` 收到的不接受 `this.xxx` 形式的 `@Builder` 成员方法引用（ArkTS 报 "The wrapBuilder's parameter should be '@Builder' function"）。要用**文件级** `@Builder function`，在函数体里转交给一个独立 `@Component` 组件，由组件自己持有输入状态；关闭时用同一个 `ComponentContent` 实例调 `closeCustomDialog`。
+  - `promptAction.BaseDialogOptions` 没有 `backgroundColor` / `width` / `height` 字段：对话框内容完全跟随自定义组件样式，背景与遮罩分别由内容自身的 `backgroundColor` 和 `maskColor` 控制。
 
 ## 应用共享目录 / 捐献沙箱目录（shareFiles profile）
 

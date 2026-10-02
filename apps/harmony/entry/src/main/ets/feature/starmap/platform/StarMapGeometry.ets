@@ -110,15 +110,32 @@ export function hitTest(
 }
 
 /**
+ * 判断点是否落在以 Embed 外接矩形为基准的正圆内。
+ *
+ * @param rect Embed 的外接矩形（宽高相等，圆心为几何中心）
+ * @param x 命中点 X
+ * @param y 命中点 Y
+ * @returns 命中点在圆内（含圆周）时为 true
+ */
+export function pointInEmbedCircle(rect: PlatformNodeRect, x: number, y: number): boolean {
+  const cx: number = rect.x + rect.width / 2
+  const cy: number = rect.y + rect.height / 2
+  const dx: number = x - cx
+  const dy: number = y - cy
+  return dx * dx + dy * dy <= (rect.width / 2) * (rect.width / 2)
+}
+
+/**
  * 带 scene 作用域的命中测试。
  * 在现有 hitTest 基础上，返回包含 scene 路径、对象类型和命中区域的详细结果。
  *
- * Embed 命中区域区分：
- * - title（顶部 EMBED_TITLE_HEIGHT 高度区域）→ objectKind='embedTitle'，表示"选中 Embed"
- * - border（四周 EMBED_BORDER_WIDTH 宽度区域，不含 title）→ objectKind='embedBorder'，表示"选中 Embed"
- * - innerContent（排除 title 和 border 后的内部区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
+ * 普通节点命中 → objectKind='node'，hitRegion='body'（矩形判断，与 Embed 无关）。
  *
- * 普通节点命中 → objectKind='node'，hitRegion='body'
+ * Embed 是正圆，所以命中判断先走圆：(x-cx)^2 + (y-cy)^2 <= r^2，不在圆内直接跳过该 Embed。
+ * 圆内再区分：
+ * - title（顶部 EMBED_TITLE_HEIGHT 高度区域）→ objectKind='embedTitle'，表示"选中 Embed"
+ * - border（半径方向最后 EMBED_BORDER_WIDTH 的圆环）→ objectKind='embedBorder'，表示"选中 Embed"
+ * - innerContent（其余圆内区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
  *
  * @param rects 节点矩形列表
  * @param screenX 屏幕 X 坐标
@@ -137,28 +154,16 @@ export function hitTestWithScene(
   // 从后往前遍历：后绘制的节点在上层，优先命中
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]
-    if (screenX >= r.x && screenX <= r.x + r.width &&
-      screenY >= r.y && screenY <= r.y + r.height) {
-      const isEmbed: boolean = embedInstanceIds.has(r.nodeId)
+    const isEmbed: boolean = embedInstanceIds.has(r.nodeId)
 
-      if (!isEmbed) {
-        // 普通节点命中
-        return {
-          scenePath: scenePath,
-          objectKind: 'node',
-          objectId: r.nodeId,
-          hitRegion: 'body'
-        }
+    if (isEmbed) {
+      // Embed 是圆：先做圆内判断，不在圆内不算命中，继续看更下层的 rect
+      if (!pointInEmbedCircle(r, screenX, screenY)) {
+        continue
       }
 
-      // Embed 命中：区分 title / border / innerContent
-      const titleBottom: number = r.y + EMBED_TITLE_HEIGHT
-      const borderRight: number = r.x + EMBED_BORDER_WIDTH
-      const borderLeftInner: number = r.x + r.width - EMBED_BORDER_WIDTH
-      const borderBottomInner: number = r.y + r.height - EMBED_BORDER_WIDTH
-
-      // title 区域：顶部 EMBED_TITLE_HEIGHT 高度
-      if (screenY <= titleBottom) {
+      // title 区域：圆内顶部 EMBED_TITLE_HEIGHT 高度
+      if (screenY <= r.y + EMBED_TITLE_HEIGHT) {
         return {
           scenePath: scenePath,
           objectKind: 'embedTitle',
@@ -167,37 +172,15 @@ export function hitTestWithScene(
         }
       }
 
-      // border 区域：四周 EMBED_BORDER_WIDTH 宽度（不含 title 区域）
-      // 左边框
-      if (screenX <= borderRight) {
-        return {
-          scenePath: scenePath,
-          objectKind: 'embedBorder',
-          objectId: r.nodeId,
-          hitRegion: 'border'
-        }
-      }
-      // 右边框
-      if (screenX >= borderLeftInner) {
-        return {
-          scenePath: scenePath,
-          objectKind: 'embedBorder',
-          objectId: r.nodeId,
-          hitRegion: 'border'
-        }
-      }
-      // 下边框
-      if (screenY >= borderBottomInner) {
-        return {
-          scenePath: scenePath,
-          objectKind: 'embedBorder',
-          objectId: r.nodeId,
-          hitRegion: 'border'
-        }
-      }
-      // title 下方与 innerContent 上方之间的边框条（title 底部到 innerContent 顶部）
-      const innerContentTop: number = titleBottom + EMBED_BORDER_WIDTH
-      if (screenY <= innerContentTop) {
+      // border 区域：圆心到命中点距离落在最外侧 EMBED_BORDER_WIDTH 宽度的圆环内
+      const cx: number = r.x + r.width / 2
+      const cy: number = r.y + r.height / 2
+      const outer: number = r.width / 2
+      const inner: number = Math.max(0, outer - EMBED_BORDER_WIDTH)
+      const dx: number = screenX - cx
+      const dy: number = screenY - cy
+      const dist: number = Math.sqrt(dx * dx + dy * dy)
+      if (dist >= inner) {
         return {
           scenePath: scenePath,
           objectKind: 'embedBorder',
@@ -206,12 +189,23 @@ export function hitTestWithScene(
         }
       }
 
-      // innerContent 区域：排除 title 和 border 后的内部内容区
+      // innerContent 区域：圆内剩余部分，事件交给 child Scene
       return {
         scenePath: scenePath,
         objectKind: 'embedInnerContent',
         objectId: r.nodeId,
         hitRegion: 'innerContent'
+      }
+    }
+
+    // 普通节点命中：矩形判断
+    if (screenX >= r.x && screenX <= r.x + r.width &&
+      screenY >= r.y && screenY <= r.y + r.height) {
+      return {
+        scenePath: scenePath,
+        objectKind: 'node',
+        objectId: r.nodeId,
+        hitRegion: 'body'
       }
     }
   }
@@ -355,39 +349,96 @@ function lineRectIntersection(
 }
 
 /**
+ * 计算线段与圆周边界的交点。
+ * 从圆心向目标点画线，找到线与圆周的真实交点，使连线端点落在圆形 Embed 的圆边上，
+ * 而不是落在已经不存在的矩形边上。
+ *
+ * @param cx 圆心 X
+ * @param cy 圆心 Y
+ * @param radius 半径
+ * @param tx 目标点 X
+ * @param ty 目标点 Y
+ * @returns 圆周上的交点坐标
+ */
+export function lineCircleIntersection(
+  cx: number,
+  cy: number,
+  radius: number,
+  tx: number,
+  ty: number
+): PlatformPoint {
+  const dx: number = tx - cx
+  const dy: number = ty - cy
+  const distSq: number = dx * dx + dy * dy
+
+  if (distSq === 0) {
+    // 目标点与圆心重合：没有方向，直接返回圆心
+    return { x: cx, y: cy }
+  }
+
+  const dist: number = Math.sqrt(distSq)
+  // 目标在圆内时，按目标方向推到圆周；目标在圆外时拉回到圆周
+  const t: number = radius / dist
+  return { x: cx + dx * t, y: cy + dy * t }
+}
+
+/**
+ * 计算单个端点所在形状的边界交点。
+ * 普通节点是矩形，Embed 是正圆，两者不能共用一套边界算法。
+ *
+ * @param rect 端点所在的矩形（Embed 时宽高相等）
+ * @param isEmbed 该端点是否为 Embed
+ * @param tx 另一个端点的中心 X
+ * @param ty 另一个端点的中心 Y
+ * @returns 边界交点坐标
+ */
+function endpointBoundaryPoint(
+  rect: PlatformNodeRect,
+  isEmbed: boolean,
+  tx: number,
+  ty: number
+): PlatformPoint {
+  const cx: number = rect.x + rect.width / 2
+  const cy: number = rect.y + rect.height / 2
+  if (isEmbed) {
+    return lineCircleIntersection(cx, cy, rect.width / 2, tx, ty)
+  }
+  return lineRectIntersection(cx, cy, tx, ty, rect.x, rect.y, rect.width, rect.height)
+}
+
+/**
  * 根据边的 from/to 节点矩形计算连线的几何信息。
  *
- * 起点：fromRect 中心到 toRect 中心的连线与 fromRect 边界的交点。
- * 终点：toRect 中心到 fromRect 中心的连线与 toRect 边界的交点。
+ * 起点：from 端形状中心到 to 端形状中心的连线与 from 边界的交点。
+ * 终点：to 端形状中心到 from 端形状中心的连线与 to 边界的交点。
+ * from/to 各自按自身形状取边界：普通节点用矩形，Embed 用圆周。
  * 箭头：在终点处沿连线方向画三角形。
  * 标签：连线中点，略偏上方。
  *
  * @param edge 边数据
  * @param fromRect 起点 node 的矩形
  * @param toRect 终点 node 的矩形
+ * @param fromIsEmbed 起点是否为 Embed（决定用圆还是矩形求交点）
+ * @param toIsEmbed 终点是否为 Embed（决定用圆还是矩形求交点）
  * @returns 边渲染几何
  */
 export function computeEdgeRender(
   edge: StarMapEdge,
   fromRect: PlatformNodeRect,
-  toRect: PlatformNodeRect
+  toRect: PlatformNodeRect,
+  fromIsEmbed: boolean,
+  toIsEmbed: boolean
 ): PlatformEdgeRender {
   const fromCx: number = fromRect.x + fromRect.width / 2
   const fromCy: number = fromRect.y + fromRect.height / 2
   const toCx: number = toRect.x + toRect.width / 2
   const toCy: number = toRect.y + toRect.height / 2
 
-  // 起点：fromRect 边界上指向 toRect 的交点
-  const start: PlatformPoint = lineRectIntersection(
-    fromCx, fromCy, toCx, toCy,
-    fromRect.x, fromRect.y, fromRect.width, fromRect.height
-  )
+  // 起点：from 边界上指向 to 中心的交点
+  const start: PlatformPoint = endpointBoundaryPoint(fromRect, fromIsEmbed, toCx, toCy)
 
-  // 终点：toRect 边界上指向 fromRect 的交点
-  const end: PlatformPoint = lineRectIntersection(
-    toCx, toCy, fromCx, fromCy,
-    toRect.x, toRect.y, toRect.width, toRect.height
-  )
+  // 终点：to 边界上指向 from 中心的交点
+  const end: PlatformPoint = endpointBoundaryPoint(toRect, toIsEmbed, fromCx, fromCy)
 
   // 箭头几何
   const dx: number = end.x - start.x
@@ -508,15 +559,20 @@ export function resolveEdgeEndpointAnchor(
 /**
  * 批量计算所有边的渲染几何。
  *
+ * 每个端点都要先判断是普通节点还是 Embed：普通节点用矩形求交点，Embed 用圆周求交点，
+ * 否则连线端点会停在不存在的矩形边上。
+ *
  * @param edges 边列表
  * @param rectMap nodeId → PlatformNodeRect 的映射
  * @param currentStarmapId 当前画布星图 ID，用于解析边端点在当前画布的可见锚点
+ * @param embedInstanceIds 当前星图的 Embed instanceId 集合
  * @returns 边渲染几何列表
  */
 export function computeAllEdgeRenders(
   edges: StarMapEdge[],
   rectMap: Map<string, PlatformNodeRect>,
-  currentStarmapId: string
+  currentStarmapId: string,
+  embedInstanceIds: Set<string>
 ): PlatformEdgeRender[] {
   const renders: PlatformEdgeRender[] = []
 
@@ -535,7 +591,13 @@ export function computeAllEdgeRenders(
       continue
     }
 
-    renders.push(computeEdgeRender(edge, fromRect, toRect))
+    renders.push(computeEdgeRender(
+      edge,
+      fromRect,
+      toRect,
+      embedInstanceIds.has(fromId),
+      embedInstanceIds.has(toId)
+    ))
   }
 
   return renders

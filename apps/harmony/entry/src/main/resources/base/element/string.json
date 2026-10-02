@@ -799,6 +799,14 @@
     {
       "name": "auto_layout",
       "value": "自动布局"
+    },
+    {
+      "name": "create_node",
+      "value": "新建节点"
+    },
+    {
+      "name": "create_embed",
+      "value": "新建子星图"
     }
   ]
 }
