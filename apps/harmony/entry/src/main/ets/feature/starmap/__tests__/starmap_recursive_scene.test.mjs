@@ -33,6 +33,22 @@
 //      递归命中只服务选中 / 拖拽 / 连线 / 长按菜单，绝不参与决定缩放目标（#818）
 //      —— StarMapGestureStateTracker.beginPinch (StarMapGestureState.ets)
 //
+//   5b. 双指 > 所有单指（#818 复审）：真机上第一根手指落下时单指识别器已经先在竞争，
+//      第二根手指才让高优先级 Pinch 认领，所以晚到的单指回调不能再改写 mode。
+//      状态机里每个单指 begin* 都要拒绝在 pinch 期间改状态（isPinchingState 守卫）
+//      —— beginPanCanvas / beginNodeMenu / beginConnect / beginMoveNode / beginMoveEmbed
+//         (StarMapGestureState.ets)
+//
+//   5c. 子星图不是独立窗口，没有自己的平移相机（#818 复审）：任意一层空白处的普通
+//      单指拖动都只改根全局相机，子 Scene 把屏幕位移通过 onCameraPan 回传给根，
+//      自己的 fitOffsetX/Y 一个像素都不动（那只由 fitView / syncFitToSceneSize 写）
+//      —— applyCameraPan (ui/StarMapScene.ets)
+//
+//   5d. 子星图里的对象不能被拖到圆外（#818 复审）：写入前夹进圆的内接正方形安全区，
+//      夹完的坐标既进布局也存进 Core。复用 fitView 的可用区口径，不另造安全区常量
+//      —— clampItemToEmbedSafeArea / clampItemToLocalSafeArea
+//         (StarMapViewport.ets / ui/StarMapScene.ets)
+//
 //   6. 全树唯一选中态：选中身份 = scenePath + kind + itemId。
 //      选中子节点时父 Embed 立刻失选；同名 item 在不同层不互相命中
 //      —— StarMapSelectionState (StarMapSelectionState.ets)
@@ -126,6 +142,31 @@ function computeCameraZoomAround(camera, centerX, centerY, nextScale) {
     offsetX: centerX - anchorWorldX * clamped,
     offsetY: centerY - anchorWorldY * clamped
   }
+}
+
+// ─── 子星图内容安全区（#818 复审）───
+// 把 item 的完整显示矩形限制在圆的内接正方形里。复用 fitView 的可用区口径，
+// 不另造第三套安全区常量。
+function clampItemToEmbedSafeArea(x, y, width, height, scale, offsetX, offsetY, localSceneSize, paddingVp) {
+  const fitScale = scale > 0 ? scale : 1
+  if (!isFinite(x) || !isFinite(y) || localSceneSize <= 0) { return { x, y } }
+  const itemWidth = width * fitScale
+  const itemHeight = height * fitScale
+  if (!isFinite(itemWidth) || !isFinite(itemHeight)) { return { x, y } }
+  const safeSize = Math.max(0, localSceneSize * CIRCLE_INNER_SAFE_RATIO - paddingVp * 2)
+  const center = localSceneSize / 2
+  const halfSafe = safeSize / 2
+  const minLeft = center - halfSafe
+  const maxLeft = center + halfSafe - itemWidth
+  const minTop = center - halfSafe
+  const maxTop = center + halfSafe - itemHeight
+  const clampedLeft = maxLeft < minLeft
+    ? center - itemWidth / 2
+    : Math.max(minLeft, Math.min(maxLeft, x * fitScale + offsetX))
+  const clampedTop = maxTop < minTop
+    ? center - itemHeight / 2
+    : Math.max(minTop, Math.min(maxTop, y * fitScale + offsetY))
+  return { x: (clampedLeft - offsetX) / fitScale, y: (clampedTop - offsetY) / fitScale }
 }
 
 function sceneLocalToCanvas(x, y, scale, offsetX, offsetY) {
@@ -533,9 +574,12 @@ function createGestureStateTracker() {
   })
   const copyPath = p => p.map(seg => ({ type: seg.type, instanceId: seg.instanceId, nodeId: seg.nodeId }))
   let state = emptyState()
+  // #818 复审：双指 > 所有单指。pinch 认领之后晚到的单指 begin* 一律不许改写 mode。
+  const isPinchingState = () => state.mode === 'pinch'
   return {
     reset() { state = emptyState() },
     beginPanCanvas(ownerScenePath, sx, sy) {
+      if (isPinchingState()) { return }
       const n = emptyState()
       n.mode = 'panCanvas'
       n.ownerScenePath = copyPath(ownerScenePath)
@@ -545,6 +589,7 @@ function createGestureStateTracker() {
       state = n
     },
     beginConnect(ownerScenePath, itemId, sx, sy) {
+      if (isPinchingState()) { return }
       const n = emptyState()
       n.mode = 'connect'
       n.activeItemId = itemId
@@ -558,6 +603,7 @@ function createGestureStateTracker() {
       state = n
     },
     beginNodeMenu(ownerScenePath, nodeId, sx, sy) {
+      if (isPinchingState()) { return }
       const n = emptyState()
       n.mode = 'nodeMenu'
       n.activeItemId = nodeId
@@ -569,6 +615,7 @@ function createGestureStateTracker() {
       state = n
     },
     beginMoveNode(ownerScenePath, nodeId, sx, sy) {
+      if (isPinchingState()) { return }
       const n = emptyState()
       n.mode = 'moveNode'
       n.activeItemId = nodeId
@@ -580,6 +627,7 @@ function createGestureStateTracker() {
       state = n
     },
     beginMoveEmbed(ownerScenePath, embedInstanceId, sx, sy) {
+      if (isPinchingState()) { return }
       const n = emptyState()
       n.mode = 'moveEmbed'
       n.activeItemId = embedInstanceId
@@ -962,14 +1010,27 @@ function createSceneView(opts) {
       }
       return true
     },
-    // 入参是屏幕上的累计像素，写回局部数据前要除掉祖先累计比例
-    setViewportOffset(offsetX, offsetY) {
+    // #818 复审：拖画布 = 拖全局相机。根 Scene 直接改相机；
+    // 子 Scene 自己没有相机，只把屏幕位移回传给根（onCameraPan），
+    // 它的 fitOffsetX/Y 不再出现在任何用户交互写路径里。
+    applyCameraPan(dx, dy, onCameraPan) {
       if (v.isCameraScene()) {
-        v.cameraScale = v.cameraScale; v.cameraOffsetX = offsetX; v.cameraOffsetY = offsetY
+        v.cameraOffsetX += dx
+        v.cameraOffsetY += dy
         return
       }
-      v.fitOffsetX = offsetX / v.parentScale()
-      v.fitOffsetY = offsetY / v.parentScale()
+      onCameraPan(dx, dy)
+    },
+    // #818 复审：子 Scene 里的对象不能被拖到圆外。写入前夹进圆内接正方形，
+    // 夹完的这份坐标既进布局也存进 Core。
+    clampItemToLocalSafeArea(x, y, width, height) {
+      if (v.isCameraScene()) { return { x, y } }
+      const localSceneSize = Math.min(v.localSceneWidth(), v.localSceneHeight())
+      return clampItemToEmbedSafeArea(
+        x, y, width, height,
+        v.fitScale, v.fitOffsetX, v.fitOffsetY,
+        localSceneSize, EMBED_FIT_PADDING_VP
+      )
     },
     // 写进 Scene 注册表快照的就是累计有效比例 / 累计偏移
     sceneSourceSnapshot() {
@@ -1812,22 +1873,122 @@ console.log('24c. 子图在相机 1 和相机 2 下打开，局部 fit 必须一
   assert(near(resized.fitScale, fitBefore), '重新居中只动偏移，不动 fitScale')
 }
 
-console.log('24d. 子 Scene 内单指平移：屏幕位移要除掉祖先累计比例再存（#818 复审）')
+console.log('24d. 任意一层空白拖动都只改全局相机：子 Scene 不再有独立平移相机（#818 复审）')
 {
-  const view = createSceneView({ sceneDepth: 1, inheritedScale: 2 })
-  view.setViewportOffset(20, -10)
-  assert(near(view.fitOffsetX, 10) && near(view.fitOffsetY, -5), '局部数据存的是屏幕位移 ÷ 2')
-  assert(near(view.viewportOffsetX(), 20) && near(view.viewportOffsetY(), -10),
-    '再乘回祖先累计比例，屏幕上还是原来那个位移')
+  // 子星图不是独立窗口。手指在子图空白里拖，位移原样回传给根，
+  // 子 Scene 的 fitOffsetX/Y 一个像素都不动。
+  const view = createSceneView({ sceneDepth: 1, inheritedScale: 2, sceneWidth: 400, sceneHeight: 400 })
+  view.fitView([{ nodeId: 'n', x: 0, y: 0, width: 100, height: 100, radius: 0 }])
+  const fitOffsetBefore = { x: view.fitOffsetX, y: view.fitOffsetY }
+  let forwarded = null
+  view.applyCameraPan(20, -10, (dx, dy) => { forwarded = { dx, dy } })
+  assert(forwarded !== null && forwarded.dx === 20 && forwarded.dy === -10,
+    '子 Scene 不改自己的偏移，把屏幕位移交给根（onCameraPan）')
+  assert(view.fitOffsetX === fitOffsetBefore.x && view.fitOffsetY === fitOffsetBefore.y,
+    '子 Scene 的 fitOffsetX/Y 在拖动画布时完全不变（它只由 fitView / syncFitToSceneSize 写）')
+  assert(near(view.viewportOffsetX(), fitOffsetBefore.x * 2),
+    '屏幕偏移仍等于局部 fitOffset × 祖先累计比例')
 
+  // 根 Scene 自己拖：直接改全局相机，不做换算
   const root = createSceneView({ sceneDepth: 0 })
-  root.setViewportOffset(20, -10)
+  root.applyCameraPan(20, -10, () => { throw new Error('根 Scene 不该回传 onCameraPan') })
   assert(near(root.cameraOffsetX, 20) && near(root.cameraOffsetY, -10), '根 Scene 改的是全局相机，不做换算')
 
   // 祖先比例为 0 时的兜底：不能把整棵子树的尺寸算成 0
   const broken = createSceneView({ sceneDepth: 1, inheritedScale: 0 })
   assert(near(broken.parentScale(), 1) && near(broken.viewportScaleValue(), broken.fitScale),
     'inheritedScale 传成 0 时兜回 1，不让子树塌成 0 倍')
+}
+
+console.log('24e. 子星图里的节点 / 子星图不能被拖到圆外：写入前夹进圆内接正方形（#818 复审）')
+{
+  // 直径 200 的圆：内接正方形 200/√2 ≈ 141.4，再扣掉两边留白 16 → 安全区 ≈ 125.4
+  const safeSize = 200 * CIRCLE_INNER_SAFE_RATIO - EMBED_FIT_PADDING_VP * 2
+  const center = 100
+  const minEdge = center - safeSize / 2
+  const maxEdge = center + safeSize / 2
+  // 用能整个塞进安全区的 item（40×40），边界好手算核对
+  const item = 40
+
+  // fitScale = 1 / 偏移 0 时最容易直接手算核对
+  const draggedFar = clampItemToEmbedSafeArea(9999, -9999, item, item, 1, 0, 0, 200, EMBED_FIT_PADDING_VP)
+  assert(near(draggedFar.x, maxEdge - item) && near(draggedFar.y, minEdge),
+    '往右下拖到底：item 完整贴住安全区右下角')
+  assert(near(draggedFar.x, minEdge) || draggedFar.x > minEdge, '横向被夹在安全区内')
+  assert(draggedFar.x + item <= maxEdge + 1e-9 && draggedFar.y >= minEdge - 1e-9,
+    '显示矩形完整落在安全区里，一像素都不出圆')
+
+  // 在安全区内的正常坐标不该被改动
+  const inside = clampItemToEmbedSafeArea(80, 85, item, item, 1, 0, 0, 200, EMBED_FIT_PADDING_VP)
+  assert(near(inside.x, 80) && near(inside.y, 85), '本来就在安全区内的坐标原样返回')
+
+  // item 比整个安全区还大时那一轴没有合法区间，退回居中（默认 160 宽的节点就属于这种：
+  // 200 直径的圆扣掉留白后安全区只有 ~125，宽 160 放不下）
+  const tooWide = clampItemToEmbedSafeArea(9999, 9999, 160, 80, 1, 0, 0, 200, EMBED_FIT_PADDING_VP)
+  assert(near(tooWide.x + 80, center), '宽度超过安全区时横向退回居中，不会贴着一侧溢出')
+  assert(near(tooWide.y + 80, maxEdge), '纵向仍有合法区间，照常夹到安全区下沿')
+
+  // 圆形 Embed 同样不出圆（按直径算完整显示矩形）
+  const embed = clampItemToEmbedSafeArea(5000, 5000, item, item, 1, 0, 0, 200, EMBED_FIT_PADDING_VP)
+  assert(near(embed.x, maxEdge - item) && near(embed.y, maxEdge - item),
+    '子星图本身也不能被拖到只剩半个圆壳在区内')
+
+  // fitScale / fitOffset 不为 1/0 时，换算往返仍然闭合
+  const withFit = clampItemToEmbedSafeArea(300, 300, item, item, 0.5, 20, 30, 200, EMBED_FIT_PADDING_VP)
+  const displayLeft = withFit.x * 0.5 + 20
+  const displayTop = withFit.y * 0.5 + 30
+  assert(displayLeft >= minEdge - 1e-9 && displayLeft + item * 0.5 <= maxEdge + 1e-9,
+    '带局部适配时，夹的是换算到局部显示坐标之后的矩形')
+  assert(displayTop >= minEdge - 1e-9 && displayTop + item * 0.5 <= maxEdge + 1e-9,
+    '纵向同理')
+
+  // 容器还没量出来时原样返回，不在这里把坐标改成 NaN
+  const noSize = clampItemToEmbedSafeArea(123, 456, item, item, 1, 0, 0, 0, EMBED_FIT_PADDING_VP)
+  assert(noSize.x === 123 && noSize.y === 456, 'localSceneSize 还是 0 时原样返回，不改数据')
+  const nanIn = clampItemToEmbedSafeArea(NaN, 0, item, item, 1, 0, 0, 200, EMBED_FIT_PADDING_VP)
+  assert(Number.isNaN(nanIn.x), '输入坐标坏掉时原样返回')
+
+  // Scene 视角：根层自由移动，子层走安全区
+  const rootView = createSceneView({ sceneDepth: 0, sceneWidth: 400, sceneHeight: 400 })
+  const freeMove = rootView.clampItemToLocalSafeArea(5000, -5000, item, item)
+  assert(freeMove.x === 5000 && freeMove.y === -5000, '根 Scene 的对象仍然自由移动（整屏画布没有圆壳）')
+
+  const childView = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: 200, sceneHeight: 200 })
+  childView.fitView([{ nodeId: 'n', x: 0, y: 0, width: 100, height: 100, radius: 0 }])
+  const clampedMove = childView.clampItemToLocalSafeArea(5000, -5000, item, item)
+  assert(clampedMove.x !== 5000 && clampedMove.y !== -5000,
+    '子 Scene 的同一份拖动被夹回圆内：显示矩形跟着本层 fitScale / fitOffset 走')
+
+  // 祖先累计比例变了（相机缩放）也不影响夹出来的结果，因为全程用局部数据
+  const childAt2x = createSceneView({ sceneDepth: 1, inheritedScale: 2, sceneWidth: 400, sceneHeight: 400 })
+  childAt2x.fitView([{ nodeId: 'n', x: 0, y: 0, width: 100, height: 100, radius: 0 }])
+  const clampedAt2x = childAt2x.clampItemToLocalSafeArea(5000, -5000, item, item)
+  assert(near(clampedAt2x.x, clampedMove.x) && near(clampedAt2x.y, clampedMove.y),
+    '相机放大两倍后夹出来的局部坐标一模一样（安全区是局部数据，与相机无关）')
+}
+
+console.log('24f. 双指 > 所有单指：pinch 认领后单指 begin* 一律改不动 mode（#818 复审）')
+{
+  const t = createGestureStateTracker()
+  t.beginPinch(460, 60)
+  t.beginPanCanvas(PATH_A, 0, 0)
+  assert(t.getState().mode === 'pinch', 'pinch 进行中，晚到的 beginPanCanvas 不能改写 mode')
+  t.beginNodeMenu(PATH_A, 'n1', 0, 0)
+  assert(t.getState().mode === 'pinch', 'beginNodeMenu 同样改不动')
+  t.beginConnect(PATH_A, 'n1', 0, 0)
+  assert(t.getState().mode === 'pinch', 'beginConnect 同样改不动')
+  t.beginMoveNode(PATH_A, 'n1', 0, 0)
+  assert(t.getState().mode === 'pinch', 'beginMoveNode 同样改不动')
+  t.beginMoveEmbed(PATH_A, 'e1', 0, 0)
+  assert(t.getState().mode === 'pinch', 'beginMoveEmbed 同样改不动')
+  assert(t.getState().activeItemId === '', 'activeItemId 也没被单指写进来')
+  assert(t.getState().panOwnerScenePath === null && t.getState().connectOwnerScenePath === null,
+    'pan / connect 归属都没被单指占用')
+
+  // pinch 结束之后单指才重新能写状态
+  t.endPinch()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  assert(t.getState().mode === 'panCanvas', '双指抬起后单指恢复写状态')
 }
 
 console.log('')

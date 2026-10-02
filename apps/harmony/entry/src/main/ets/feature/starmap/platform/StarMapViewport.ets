@@ -29,6 +29,17 @@
 //   孙：camera × fit₁ × fit₂
 // Scene 注册表 sync() 写进去的 scale / offset 就是这个累计值（见 ui/StarMapScene
 // 的 viewportScaleValue() / viewportOffsetX()），递归命中那套换算才能和画面一致。
+//
+// 两条由此推出的硬约束（#818 复审）：
+//
+// 3) 子 Scene 不是独立窗口，没有自己的平移相机。
+//    用户在任何一层空白处单指拖动，拖的都是**根的全局相机**（拖整张星图的视角），
+//    子 Scene 的 fitOffset 只有 fitView / syncFitToSceneSize 会写。
+//
+// 4) 子星图里的对象不能被拖到圆外。
+//    外层 Embed 有 clip(true)，圆外的内容会被直接裁掉，所以"移动节点 / 移动子星图"
+//    写入前必须过 clampItemToEmbedSafeArea（复用 CIRCLE_INNER_SAFE_RATIO，不另造常量），
+//    并且写进 Core 的坐标就是夹好的那一份，数据里不留圆外位置。
 
 import { StarMapTargetPath, StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformPoint } from './StarMapLayout'
@@ -261,6 +272,79 @@ export function computeFittedViewport(
     zoomScale: fitScale,
     offsetX: offset.x,
     offsetY: offset.y
+  }
+}
+
+// ─── 子星图内容安全区（#818 复审）───
+
+/**
+ * 把一个画布坐标的 item 夹回父 Embed 圆形内容区的安全区内。
+ *
+ * 为什么需要：子 Scene 是父 Embed 圆里的一个正方形盒子，外层有 `clip(true)`，
+ * 跑出圆外的内容不是"显示小了"，是**直接被裁掉看不见**。真机上表现就是
+ * "在子星图里拖节点，节点拖到边上就消失了"。
+ * 以前的做法是给 child Scene 留一套自己的平移相机把内容拖回来 —— 那是把
+ * 子星图当独立窗口在用，和"子星图 = 父星图里的嵌入区域"矛盾（#818 复审）。
+ *
+ * 正确做法：child 的 `fitScale / fitOffset` 只由布局算，用户碰不到；
+ * 用户显式移动节点 / 移动子星图时，把候选坐标限制在圆的内接正方形里，
+ * **写进 Core 之前就夹好**，数据里不留圆外坐标。
+ *
+ * 坐标口径：全部是**本层局部数据**（即扣掉祖先累计比例之后的那一份，
+ * 与 fitView / syncFitToSceneSize 同一口径），所以这里的 scale / offset
+ * 就是本层的 fitScale / fitOffsetX / fitOffsetY。
+ *
+ * @param x item 画布坐标（左上角 X）
+ * @param y item 画布坐标（左上角 Y）
+ * @param width item 画布宽度
+ * @param height item 画布高度
+ * @param scale 本层局部适配比例
+ * @param offsetX 本层局部适配偏移 X
+ * @param offsetY 本层局部适配偏移 Y
+ * @param localSceneSize 本层局部尺寸（圆形内容区的边长）
+ * @param paddingVp 安全区四边留白（vp），与 fitView 用同一份
+ * @returns 夹好之后的画布坐标
+ */
+export function clampItemToEmbedSafeArea(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  scale: number,
+  offsetX: number,
+  offsetY: number,
+  localSceneSize: number,
+  paddingVp: number
+): PlatformPoint {
+  const fitScale: number = scale > 0 ? scale : 1
+  // 尺寸非法（容器还没量出来 / 坐标算坏了）时原样返回，不在这里把数据改成 NaN。
+  if (!isFinite(x) || !isFinite(y) || localSceneSize <= 0) {
+    return { x, y }
+  }
+  const itemWidth: number = width * fitScale
+  const itemHeight: number = height * fitScale
+  if (!isFinite(itemWidth) || !isFinite(itemHeight)) {
+    return { x, y }
+  }
+  // 安全区 = 圆的内接正方形再扣掉留白，与 fitView 的可用区口径完全一致：
+  // 这样 fit 刚算完时内容一定在区内，用户拖出去的距离才会被夹回来而不是"先越界再回弹"。
+  const safeSize: number = Math.max(0, localSceneSize * CIRCLE_INNER_SAFE_RATIO - paddingVp * 2)
+  const center: number = localSceneSize / 2
+  const halfSafe: number = safeSize / 2
+  const minLeft: number = center - halfSafe
+  const maxLeft: number = center + halfSafe - itemWidth
+  const minTop: number = center - halfSafe
+  const maxTop: number = center + halfSafe - itemHeight
+  // item 比整个安全区还大时没有合法区间，退回居中（至少不会贴着一侧溢出）。
+  const clampedLeft: number = maxLeft < minLeft
+    ? center - itemWidth / 2
+    : Math.max(minLeft, Math.min(maxLeft, x * fitScale + offsetX))
+  const clampedTop: number = maxTop < minTop
+    ? center - itemHeight / 2
+    : Math.max(minTop, Math.min(maxTop, y * fitScale + offsetY))
+  return {
+    x: (clampedLeft - offsetX) / fitScale,
+    y: (clampedTop - offsetY) / fitScale
   }
 }
 

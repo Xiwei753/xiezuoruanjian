@@ -23,6 +23,13 @@
  * 双指只有一台全局相机，"这一层是不是 owner"对缩放已经没有意义——双指落在节点上、
  * 落在子星图上、落在二层子星图上，缩的都是整棵树。因此 pinch 只记一个进行中的标志，
  * 相机状态由 StarMapScreen 持有，不存在"缩放某个子 Scene"这条路径了。
+ *
+ * 双指 > 所有单指（Issue #818 复审）：
+ * 真机上第一根手指落下时，Tap/Pan/LongPress 这些单指识别器已经先进入识别，
+ * 第二根手指才让高优先级 Pinch 认领。所以单指回调会晚到、也会在 pinch 期间继续到。
+ * 这里给所有单指 begin* 统一加了 pinch 守卫：pinch 进行中不接受单指改写 mode。
+ * 反过来 pinch 认领时 beginPinch() 走的是同一条路径（emptyState() 重建整个状态），
+ * 原子覆盖掉当时的 pan / 菜单 / 连线 / 移动，不会出现两套状态并存。
  */
 
 import { PlatformPoint } from './StarMapLayout'
@@ -100,8 +107,23 @@ export class StarMapGestureStateTracker {
     this.state = emptyState()
   }
 
+  /**
+   * 是否正在双指缩放。
+   *
+   * 双指优先级高于所有单指手势（#818 复审）：第一根手指落下时 ArkUI 的
+   * Tap/Pan/LongPress 已经在竞争，第二根手指才让 Pinch 认领。那些先行的
+   * 单指回调会晚到，所以状态机这一层必须兜住——pinch 进行中不接受任何
+   * 单指 begin* 改写 mode，否则会把 pinch 覆盖掉、或者反过来抢走相机控制权。
+   */
+  private isPinchingState(): boolean {
+    return this.state.mode === 'pinch'
+  }
+
   /** 进入画布拖动模式 */
   beginPanCanvas(ownerScenePath: StarMapPathSegment[], startX: number, startY: number): void {
+    if (this.isPinchingState()) {
+      return
+    }
     const next = emptyState()
     next.mode = 'panCanvas'
     next.ownerScenePath = copyPath(ownerScenePath)
@@ -113,6 +135,9 @@ export class StarMapGestureStateTracker {
 
   /** 长按节点弹出菜单 */
   beginNodeMenu(ownerScenePath: StarMapPathSegment[], nodeId: string, startX: number, startY: number): void {
+    if (this.isPinchingState()) {
+      return
+    }
     const next = emptyState()
     next.mode = 'nodeMenu'
     next.activeItemId = nodeId
@@ -126,6 +151,9 @@ export class StarMapGestureStateTracker {
 
   /** 从菜单态切到连线模式 */
   beginConnect(ownerScenePath: StarMapPathSegment[], nodeId: string, startX: number, startY: number): void {
+    if (this.isPinchingState()) {
+      return
+    }
     const next = emptyState()
     next.mode = 'connect'
     next.activeItemId = nodeId
@@ -141,6 +169,9 @@ export class StarMapGestureStateTracker {
 
   /** 从菜单显式进入移动节点模式 */
   beginMoveNode(ownerScenePath: StarMapPathSegment[], nodeId: string, startX: number, startY: number): void {
+    if (this.isPinchingState()) {
+      return
+    }
     const next = emptyState()
     next.mode = 'moveNode'
     next.activeItemId = nodeId
@@ -154,6 +185,9 @@ export class StarMapGestureStateTracker {
 
   /** 从菜单显式进入移动 Embed 模式 */
   beginMoveEmbed(ownerScenePath: StarMapPathSegment[], embedInstanceId: string, startX: number, startY: number): void {
+    if (this.isPinchingState()) {
+      return
+    }
     const next = emptyState()
     next.mode = 'moveEmbed'
     next.activeItemId = embedInstanceId

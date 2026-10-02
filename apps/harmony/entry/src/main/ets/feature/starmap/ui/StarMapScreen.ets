@@ -214,6 +214,16 @@ export struct StarMapScreen {
   }
 
   /**
+   * 任意一层的单指画布拖动都汇到这里，改的是唯一的全局相机（#818 复审）。
+   *
+   * 子星图不是独立窗口：手指落在根空白、子星图内部空白、二层子星图内部空白，
+   * 拖的都是整张星图的视角，所以这里只认"屏幕位移 dx/dy"，不关心是哪一层发起的。
+   */
+  panCamera(dx: number, dy: number) {
+    this.applyCamera(this.cameraScale, this.cameraOffsetX + dx, this.cameraOffsetY + dy)
+  }
+
+  /**
    * 工具栏缩放：围绕可视画布中心改全局相机（#818）。
    *
    * 工具栏作用的是整棵树，不是"当前看进去的那张子星图"。
@@ -258,6 +268,10 @@ export struct StarMapScreen {
         cameraOffsetY: this.cameraOffsetY,
         onCameraChanged: (scale: number, offsetX: number, offsetY: number) => {
           this.applyCamera(scale, offsetX, offsetY)
+        },
+        // 任意一层空白处的单指拖动都汇回根相机（#818 复审：子星图不是独立窗口）
+        onCameraPan: (dx: number, dy: number) => {
+          this.panCamera(dx, dy)
         },
         sceneDepth: 0,
         bridge: this.bridge,

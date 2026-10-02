@@ -126,6 +126,14 @@ export struct StarMapEmbedScene {
    * 少了它，相机放大时只有 Embed 圆壳变大，圆里的节点不跟着放大。
    */
   @Prop inheritedScale: number = 1
+  /**
+   * 拖动画布的回调：原样往下传，最终只改根全局相机（#818 复审）。
+   *
+   * 子星图不是独立窗口，手指在这个子星图的空白里拖，动的也应该是整张星图的视角，
+   * 所以这里不新增平移状态，只把屏幕位移一路回传给根。
+   */
+  onCameraPan: (dx: number, dy: number) => void =
+    (_dx: number, _dy: number) => {}
 
   // ─── @State：子场景状态 ───
   /** 子星图 graph */
@@ -214,6 +222,8 @@ export struct StarMapEmbedScene {
         cameraOffsetX: this.cameraOffsetX,
         cameraOffsetY: this.cameraOffsetY,
         onCameraChanged: this.onCameraChanged,
+        // 空白拖动原样往下传，最终只改根全局相机（#818 复审）
+        onCameraPan: this.onCameraPan,
         // 祖先累计比例原样往下传：第二层的累计 = camera × 第一层 fit × 第二层 fit（#818 复审）
         inheritedScale: this.inheritedScale,
         sceneDepth: this.sceneDepth + 1,
