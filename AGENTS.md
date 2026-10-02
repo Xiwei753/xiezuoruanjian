@@ -32,6 +32,8 @@ Rust workspace 以根目录 `Cargo.toml` 为准，不要自行猜 crate 关系�
 
 长期架构以 `docs/TECHNICAL_ROUTE.md` 为准；数据目录、设置、同步、星图语义分别看对应文档。一次性迁移步骤和文件级改法写 Issue，不写进长期文档。
 
+用户要求出打包日志（构建、安装、真机运行输出等）时，日志一律落盘到仓库内的 `logs/` 目录，不要只贴在对话里；`logs/` 已在 `.gitignore` 中，保持不跟踪，也不要 `git add -f`。
+
 ## Rust 安全边界
 
 - 不为通过编译手写 `unsafe impl Send/Sync`。
