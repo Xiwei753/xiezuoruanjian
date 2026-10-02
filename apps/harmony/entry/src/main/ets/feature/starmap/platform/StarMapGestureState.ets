@@ -282,6 +282,30 @@ export class StarMapGestureStateTracker {
     return isSameScenePath(this.state.ownerScenePath, scenePath)
   }
 
+  /**
+   * 只在"当前全局状态确实还是我发起的那种手势"时才清空（#816）。
+   *
+   * 单指手势的收尾回调可能晚于新手势的起手到达：
+   * 第一根手指已经让某一层认领了 panCanvas，第二根手指落下后根 Scene 会把
+   * 全局状态切成 pinch。这时旧 pan 的 onActionEnd / onActionCancel 如果只判断
+   * "ownerScenePath 是不是我这层"（beginPinch 会把 ownerScenePath 也写成归属层，
+   * 于是同一层的旧 pan 依然判定为 true），就会把刚认领的 pinch 一起 reset 掉，
+   * 屏幕上表现为双指刚开始就失效（#816 真机症状）。
+   *
+   * 所以清空前必须同时核对 mode 和归属，两者都匹配才允许清。
+   * 匹配则清空并返回 true；否则什么都不做并返回 false。
+   */
+  clearIfOwnedBy(expectedMode: StarMapGestureMode, scenePath: StarMapPathSegment[]): boolean {
+    if (this.state.mode !== expectedMode) {
+      return false
+    }
+    if (!isSameScenePath(this.state.ownerScenePath, scenePath)) {
+      return false
+    }
+    this.reset()
+    return true
+  }
+
   /** 获取当前状态快照（返回只读副本，外部不应修改） */
   getState(): GestureState {
     const s: GestureState = this.state

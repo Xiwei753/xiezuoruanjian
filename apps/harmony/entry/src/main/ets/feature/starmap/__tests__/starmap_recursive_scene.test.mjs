@@ -474,6 +474,28 @@ function createGestureStateTracker() {
       n.currentPoint = { x: sx, y: sy }
       state = n
     },
+    beginNodeMenu(ownerScenePath, nodeId, sx, sy) {
+      const n = emptyState()
+      n.mode = 'nodeMenu'
+      n.activeItemId = nodeId
+      n.activeItemKind = 'node'
+      n.ownerScenePath = copyPath(ownerScenePath)
+      n.activeItemScenePath = copyPath(ownerScenePath)
+      n.startPoint = { x: sx, y: sy }
+      n.currentPoint = { x: sx, y: sy }
+      state = n
+    },
+    beginMoveNode(ownerScenePath, nodeId, sx, sy) {
+      const n = emptyState()
+      n.mode = 'moveNode'
+      n.activeItemId = nodeId
+      n.activeItemKind = 'node'
+      n.ownerScenePath = copyPath(ownerScenePath)
+      n.activeItemScenePath = copyPath(ownerScenePath)
+      n.startPoint = { x: sx, y: sy }
+      n.currentPoint = { x: sx, y: sy }
+      state = n
+    },
     beginMoveEmbed(ownerScenePath, embedInstanceId, sx, sy) {
       const n = emptyState()
       n.mode = 'moveEmbed'
@@ -517,6 +539,20 @@ function createGestureStateTracker() {
     isPanOwnedByScene(scenePath) {
       if (state.panOwnerScenePath === null) { return false }
       return isSameScenePath(state.panOwnerScenePath, scenePath)
+    },
+    isActiveItemInScene(scenePath) {
+      if (state.activeItemScenePath === null) { return false }
+      return isSameScenePath(state.activeItemScenePath, scenePath)
+    },
+    isOwnedByScene(scenePath) {
+      return isSameScenePath(state.ownerScenePath, scenePath)
+    },
+    // 只有 mode 和归属都匹配才清全局（对应 StarMapGestureState.clearIfOwnedBy）
+    clearIfOwnedBy(expectedMode, scenePath) {
+      if (state.mode !== expectedMode) { return false }
+      if (!isSameScenePath(state.ownerScenePath, scenePath)) { return false }
+      state = emptyState()
+      return true
     },
     getState() {
       const s = state
@@ -1414,6 +1450,95 @@ console.log('24. 评审回归 ⑥：父层缩放带动容器变化，子内容�
   view.lastFittedSceneSize = 200
   assert(near(view.fitScale, fitted.zoomScale), '父层缩回 1 倍 → 子 fitScale 回到原值')
   assert(near(view.userZoomScale, 2), '缩小也不重置用户缩放')
+}
+
+console.log('')
+console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领的 Pinch 一起清掉')
+
+// 这正是用户最早报的"只要有一根手指按在子星图上，双指就容易缩放不了"：
+// 第一根手指先让子层 Pan 认领，第二根手指落下后根 Scene 把全局切成 pinch，
+// 旧 Pan 的 onActionEnd / onActionCancel 如果无条件 reset，就把新 Pinch 一起清了。
+
+// 25.1 老写法必然误伤：beginPinch 把 ownerScenePath 也写成归属层，
+//      于是同一层的旧 Pan 用 isOwnedByScene 判定仍然是 true。
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  assert(t.isOwnedByScene(PATH_A),
+    '老判定：beginPinch 后 ownerScenePath 仍是子层，isOwnedByScene 照样为 true（这正是误伤根源）')
+  // 老代码在这里 reset() → pinch 被清掉
+  t.reset()
+  assert(!t.isPinching(), '老写法 reset() 之后 pinch 没了（这就是 #816 的症状来源）')
+}
+
+// 25.2 新写法：mode-aware 清空，旧 Pan 收尾时 mode 已经不是 panCanvas，拒绝清
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  const cleared = t.clearIfOwnedBy('panCanvas', PATH_A)
+  assert(!cleared, 'mode 已是 pinch → clearIfOwnedBy(panCanvas) 拒绝清空')
+  assert(t.isPinching(), '旧 Pan 的收尾之后 pinch 仍然活着')
+  assert(t.getState().mode === 'pinch', 'mode 仍是 pinch')
+  assert(eq(t.getState().pinchOwnerScenePath.length, 1), 'pinchOwnerScenePath 仍是子层')
+  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
+}
+
+// 25.3 同一层、父层都要验：归属别人时也不能清
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  t.beginPinch(PATH_B, 0, 0)
+  assert(!t.clearIfOwnedBy('panCanvas', PATH_A), 'pinch 归属别的层时，父层旧 Pan 不能清')
+  assert(t.isPinchOwnedByScene(PATH_B), 'pinch 归属没被破坏')
+}
+
+// 25.4 没有被接管时，正常收尾仍然要清干净（不能修过头）
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  assert(t.clearIfOwnedBy('panCanvas', PATH_A), '没人接管时旧 Pan 收尾照常清空')
+  assert(t.isIdle(), '清空后回到 idle')
+}
+
+// 25.5 旧 connect 的收尾同样不能误伤 pinch
+{
+  const t = createGestureStateTracker()
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  assert(!t.clearIfOwnedBy('connect', PATH_A), 'mode 已是 pinch → 旧 connect 收尾只能清预览')
+  assert(t.isPinching(), '旧 connect 的 onActionEnd 之后 pinch 仍然活着')
+  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
+}
+
+// 25.6 旧 connect 正常收尾仍然要清
+{
+  const t = createGestureStateTracker()
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  assert(t.clearIfOwnedBy('connect', PATH_A), '没人接管时旧 connect 收尾照常清空')
+  assert(t.isIdle(), '清空后回到 idle')
+}
+
+// 25.7 菜单消失回调同理：本地标记可能是旧值，必须靠全局 mode 把关
+{
+  const t = createGestureStateTracker()
+  t.beginNodeMenu(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  assert(!t.clearIfOwnedBy('nodeMenu', PATH_A), 'mode 已是 pinch → 菜单消失回调不能清 pinch')
+  assert(t.isPinching(), 'onNodeMenuDisappear 之后 pinch 仍然活着')
+}
+
+// 25.8 moveNode 被取消时不落盘，但动画必须恢复；且不能误伤 pinch
+{
+  const t = createGestureStateTracker()
+  t.beginMoveNode(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  const state = t.getState()
+  const owns = state.mode === 'moveNode' && state.activeItemId === 'n-a1' &&
+    t.isActiveItemInScene(PATH_A)
+  assert(!owns, '被 pinch 接管后 moveNode 不再归自己 → 不落盘')
+  assert(t.isPinching(), '取消移动不影响 pinch')
 }
 
 console.log('')
