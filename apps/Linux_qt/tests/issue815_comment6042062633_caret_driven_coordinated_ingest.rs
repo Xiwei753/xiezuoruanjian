@@ -1199,6 +1199,75 @@ fn issue815_review12_tail_segments_carry_the_just_finished_row() {
 }
 
 // =========================================================================
+// 复核评论 5955090551：协同速度由「打字动画时长」决定，且设置里可调
+// =========================================================================
+
+/// 复核评论 5955090551（推翻上一条关闭结论）。
+///
+/// #815 把协同吞吐字改成 `VisualUnitTiming::CaretTrack`，它**没有自己的时长**，
+/// 逐帧进度完全跟随 `cursor_visual_track`。而 `prepare_edit_motion()` 当时仍写死
+/// `caret_duration_ms = cursor_animation_duration_ms`，于是真正决定协同速度的
+/// 变成了「平滑光标时长」（80–120ms）——实机上表现为 204/212/205ms 甚至 28ms，
+/// 「快得看不见」，看起来像动画丢了。
+#[test]
+fn issue815_review14_coordinated_ingest_uses_typing_duration() {
+    let pipeline = read_src("src/sujian_editor_item/pipeline.rs");
+    assert!(
+        pipeline.contains("ctx.coordinated_animation_enabled && is_body_ingest_edit"),
+        "Issue #815 评论 5955090551: 协同正文吞吐的 caret_duration_ms 必须取 \
+         typing_animation_duration_ms，不能再无条件取 cursor_animation_duration_ms。"
+    );
+    assert!(
+        pipeline.contains(
+            "is_body_ingest_edit = result.operation_kind != EditorOperationKind::CursorOnly"
+        ),
+        "Issue #815 评论 5955090551: CursorOnly / 鼠标点击 / 纯光标移动仍是「平滑光标」 \
+         领域，不能被协同时长接管。"
+    );
+
+    let composition = read_src("src/sujian_editor_item/animation/composition.rs");
+    // 两处：composition update 与 composition commit 都要套用协同规则。
+    assert_eq!(
+        composition
+            .matches("caret_duration_ms: u64::from(if coordinated_animation_enabled")
+            .count(),
+        2,
+        "Issue #815 评论 5955090551: IME 的 composition update 与 composition commit \
+         两处的 caret_duration_ms 都必须按协同规则选择时长。"
+    );
+    assert!(
+        !composition.contains("caret_duration_ms: u64::from(self.cursor_animation_duration_ms)"),
+        "Issue #815 评论 5955090551: composition.rs 不得再无条件把平滑光标时长当协同速度。"
+    );
+}
+
+/// 设置里必须有一个真正驱动协同速度的可调项。
+#[test]
+fn issue815_review14_settings_expose_coordinated_duration() {
+    let qml = read_src("qml/SettingsDialog.qml");
+    assert!(
+        qml.contains("qsTr(\"协同动画时长\")"),
+        "Issue #815 评论 5955090551: 协同开启时必须单独给一个「协同动画时长」，\
+         否则真正驱动协同吞吐的时长被藏起来，用户无处可调。"
+    );
+    assert!(
+        qml.contains("setting_typing_animation_duration_ms = coordinatedAnimDuration.value")
+            || qml.contains("coordinatedAnimDuration.value"),
+        "Issue #815 评论 5955090551: 「协同动画时长」必须绑定 setting_typing_animation_duration_ms。"
+    );
+    assert!(
+        qml.contains("visible: coordinatedAnim.checked"),
+        "Issue #815 评论 5955090551: 「协同动画时长」只在协同开启时显示；\
+         协同关闭时仍是独立的打字动画时长与平滑光标时长。"
+    );
+    assert!(
+        !qml.contains("setting_smooth_cursor_duration_ms = coordinatedAnimDuration.value"),
+        "Issue #815 评论 5955090551: 绝不能把协同速度绑到平滑光标时长——那正是本轮 \
+         实机「快得看不见」的根因。"
+    );
+}
+
+// =========================================================================
 // 修改点 6：每帧每事务只采样一次，完成条件两类分开
 // =========================================================================
 

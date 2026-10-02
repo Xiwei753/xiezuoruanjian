@@ -15,7 +15,7 @@ use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use std::time::Instant;
 use writer_core::editor::{
     DisplayPatch, EditorChange, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
-    EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
+    EditorOperationKind, EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
 };
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
@@ -1148,10 +1148,25 @@ impl LinuxEditorPipeline {
             return None;
         }
         // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
-        // Issue #815: 协同模式下 InsertReveal/DeleteConceal 不再各自拥有独立 progress，
-        // 这两个 duration 只喂 Reflow（文字）和 cursor track（光标）。
+        //
+        // Issue #815 评论 5955090551: 但那条「各自独立」只适用于**非协同**。
+        // 协同模式下 InsertReveal/DeleteConceal 是 `VisualUnitTiming::CaretTrack`
+        // —— 它们没有自己的 duration，逐帧吞吐完全跟着 `cursor_visual_track` 走。
+        // 于是真正驱动整个协同动画速度的是 track 的 duration，而它之前被无条件
+        // 设成 `cursor_animation_duration_ms`（平滑光标时长，通常 80–120ms）。
+        // 实机表现就是「吞吐动画快得看不见」，而且设置里协同时把打字时长和
+        // 光标时长都隐藏了，用户无处可调。
+        //
+        // 所以：**正文吞吐协同**（Insert/Delete/Replace/IME commit）用打字动画时长
+        // 作为整段协同动画的速度；纯 caret 移动（CursorOnly：鼠标点击、方向键移动、
+        // 拖选）仍然属于「平滑光标」，不受影响。
         let text_duration_ms = self.typing_animation_duration_ms;
-        let caret_duration_ms = self.cursor_animation_duration_ms;
+        let is_body_ingest_edit = result.operation_kind != EditorOperationKind::CursorOnly;
+        let caret_duration_ms = if ctx.coordinated_animation_enabled && is_body_ingest_edit {
+            self.typing_animation_duration_ms
+        } else {
+            self.cursor_animation_duration_ms
+        };
         let mut motion = PreparedEditMotion::from_edit_result(
             result,
             &old.text,

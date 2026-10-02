@@ -97,6 +97,9 @@ Dialog {
         autoIndent.checked = settingsBackendRef.setting_auto_indent_enabled
         autoIndentWidth.value = settingsBackendRef.setting_auto_indent_width || 2.0
         typingAnimDuration.value = settingsBackendRef.setting_typing_animation_duration_ms || 100
+        // Issue #815 评论 5955090551: 协同动画时长与打字动画时长是同一个设置项，
+        // 两个滑块读同一份值。
+        coordinatedAnimDuration.value = settingsBackendRef.setting_typing_animation_duration_ms || 100
         smoothCursorDuration.value = settingsBackendRef.setting_smooth_cursor_duration_ms || 80
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
@@ -145,7 +148,10 @@ Dialog {
             settingsBackendRef.setting_auto_indent_width = autoIndentWidth.value
         settingsBackendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
         // Issue #785: 始终分别写两个独立 duration，不再因协同共享。
-        settingsBackendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+        // Issue #815 评论 5955090551: 打字动画时长同时就是协同动画时长，两个滑块写同一项。
+        settingsBackendRef.setting_typing_animation_duration_ms = coordinatedAnim.checked
+            ? coordinatedAnimDuration.value
+            : typingAnimDuration.value
         settingsBackendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
         root.settingsDirty = true
         }
@@ -350,15 +356,42 @@ Dialog {
                     onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value; root.debouncedSave() }
                 }
                 // Issue #756 / Issue #785: 协同动画（吞字/吐字）显式模式开关。
-                // true 时文字与光标同事务/同首帧/同 rebase，但各自独立 duration；
-                // false 时 typing/smooth 两个独立开关各自决定文字/光标动画。
+                // Issue #815 评论 5955090551: true 时文字与光标是**同一条** caret track，
+                // 吞吐字（CaretTrack）自己没有时长，整段协同动画速度就是这条 track 的
+                // 时长，所以由下面的「协同动画时长」统一控制（绑定打字动画时长）。
+                // false 时 typing/smooth 两个独立开关与各自时长仍然分开。
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("协同动画（吞字/吐字）")
-                    description: qsTr("文字与光标同事务协同（各自独立时长）")
+                    description: qsTr("文字与光标同事务协同，速度统一见下方「协同动画时长」")
                     clickable: true
                     onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
                     ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }
+                }
+                // Issue #815 评论 5955090551: 协同动画时长。
+                //
+                // #815 之后协同模式下 InsertReveal / DeleteConceal 是
+                // `VisualUnitTiming::CaretTrack`，自己**没有时长**，逐帧边界完全跟随
+                // 同一笔 cursor track。也就是说：协同动画速度 = 这条 track 的时长。
+                //
+                // 而这条 track 的时长在 pipeline.rs 里取的是「打字动画时长」，所以这个
+                // 滑块直接绑定 setting_typing_animation_duration_ms。绝不能绑定被隐藏的
+                // setting_smooth_cursor_duration_ms——那正是实机上「动画快得看不见」的根因。
+                //
+                // 协同关闭时不显示，此时文字与光标各自独立时长（下面的两个滑块）。
+                AppSlider {
+                    id: coordinatedAnimDuration
+                    Layout.fillWidth: true
+                    dt: root.dt
+                    visible: coordinatedAnim.checked
+                    label: qsTr("协同动画时长")
+                    valueText: Math.round(value) + " ms"
+                    // 与打字动画时长同一个区间（Core settings_presentation: min=30, max=1000, step=10）
+                    from: 30
+                    to: 1000
+                    stepSize: 10
+                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value }
+                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
                 // Issue #808: 协同开启时整组隐藏（开关 + duration 滑块一起消失）。
                 // Issue #785: 两个独立 duration 各自保存（onClosed 分别写），不互相覆盖。

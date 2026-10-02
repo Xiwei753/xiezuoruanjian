@@ -126,8 +126,19 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             text_duration_ms: u64::from(self.typing_animation_duration_ms),
-            // Issue #785: caret duration 始终独立，不再因 coordinated 共享 typing duration。
-            caret_duration_ms: u64::from(self.cursor_animation_duration_ms),
+            // Issue #815 评论 5955090551: #815 之后协同吞吐字是 `VisualUnitTiming::CaretTrack`，
+            // 自己没有时长，**完全跟着 cursor track 走**。所以协同模式下决定整段协同
+            // 动画速度的就是这条 track 的时长，必须取「打字动画时长」，否则中文上屏
+            // 会被「平滑光标时长」（通常 80–120ms）拖得异常快。
+            //
+            // 非协同模式维持原样：文字走打字时长、光标走平滑光标时长，各自独立。
+            // 这不是恢复 #808 的「两条独立时间线」——那是协同模式下两条各跑各的；
+            // 这里恰恰相反，协同模式只有一条 track，时长就是协同速度本身。
+            caret_duration_ms: u64::from(if coordinated_animation_enabled {
+                self.typing_animation_duration_ms
+            } else {
+                self.cursor_animation_duration_ms
+            }),
             // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
             text_animation_enabled,
             caret_animation_enabled,
@@ -335,8 +346,19 @@ impl LinuxEditorAnimationCoordinator {
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             text_duration_ms: u64::from(self.typing_animation_duration_ms),
-            // Issue #785: caret duration 始终独立，不再因 coordinated 共享 typing duration。
-            caret_duration_ms: u64::from(self.cursor_animation_duration_ms),
+            // Issue #815 评论 5955090551: #815 之后协同吞吐字是 `VisualUnitTiming::CaretTrack`，
+            // 自己没有时长，**完全跟着 cursor track 走**。所以协同模式下决定整段协同
+            // 动画速度的就是这条 track 的时长，必须取「打字动画时长」，否则中文上屏
+            // 会被「平滑光标时长」（通常 80–120ms）拖得异常快。
+            //
+            // 非协同模式维持原样：文字走打字时长、光标走平滑光标时长，各自独立。
+            // 这不是恢复 #808 的「两条独立时间线」——那是协同模式下两条各跑各的；
+            // 这里恰恰相反，协同模式只有一条 track，时长就是协同速度本身。
+            caret_duration_ms: u64::from(if coordinated_animation_enabled {
+                self.typing_animation_duration_ms
+            } else {
+                self.cursor_animation_duration_ms
+            }),
             // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
             text_animation_enabled,
             caret_animation_enabled,

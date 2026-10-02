@@ -897,8 +897,18 @@ fn issue756_insert_spec(
 }
 
 /// Issue #756 评论 5821042551: 支持独立的 text/caret duration。
-/// 非协同时 text_duration_ms = typing duration，caret_duration_ms = smooth cursor duration。
-/// 协同时两者都用 typing duration（共享 timeline）。
+///
+/// Issue #815 评论 5955090551 修正本函数的真实语义（此前注释自相矛盾）：
+/// - **非协同**：`text_duration_ms = typing duration`，`caret_duration_ms = smooth
+///   cursor duration`，两者真正独立。
+/// - **协同**：#815 之后协同的 InsertReveal / DeleteConceal 是
+///   `VisualUnitTiming::CaretTrack`，**自己没有时长**，逐帧边界完全跟随同一笔
+///   cursor track。所以协同模式下整段协同动画速度 = 这条 track 的时长，
+///   而这条 track 的时长由 pipeline.rs / composition.rs 传入，值取
+///   `typing_animation_duration_ms`（`caret_duration_ms` 参数）。设置界面里的
+///   「协同动画时长」也绑定同一项。
+/// - **非正文编辑**（CursorOnly / 鼠标点击 / 纯光标移动）永远用 smooth cursor
+///   duration —— 那是「平滑光标」，不是正文吞吐协同。
 fn issue756_insert_spec_with_durations(
     key: VisualTransactionKey,
     coordinated_animation_enabled: bool,
@@ -910,8 +920,10 @@ fn issue756_insert_spec_with_durations(
 ) -> VisualEditSpec {
     let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
     let caret_animation_enabled = coordinated_animation_enabled || smooth_cursor_enabled;
-    // Issue #756 评论 5821042551 / Issue #785: 文字与光标各自独立 duration。
-    // 协同只表示同事务/同首帧/同 rebase，不共享 duration。
+    // Issue #756 评论 5821042551 / Issue #785: 非协同时文字与光标各自独立 duration。
+    // Issue #815 评论 5955090551: 协同时 caret_duration_ms 由调用方按「打字动画时长」
+    // 传入（见上），因为 CaretTrack 吞吐字没有自己的时长，整段协同速度就是 track 的
+    // 时长。这里不做任何替换，只如实透传两个入参。
     let actual_text_duration = text_duration_ms;
     let actual_caret_duration = caret_duration_ms;
     let sid = issue756_shaping_identity();
@@ -1409,7 +1421,9 @@ fn issue756_process_transaction_typing_only_still_creates_transaction() {
 // 非协同时 text_duration_ms 和 caret_duration_ms 必须各自独立：
 // - Timed 文字 unit 用 typing duration
 // - cursor_visual_track 用 smooth cursor duration
-// 协同时两者都用 typing duration（共享 timeline）。
+// Issue #815 评论 5955090551: 协同时 CaretTrack 吞吐字没有自己的时长，整段协同动画
+// 速度就是 cursor_visual_track 的时长；pipeline.rs / composition.rs 在协同正文编辑
+// 时把 caret_duration_ms 传成 typing duration，所以本函数如实透传即可。
 //
 // 事务完成条件：只要存在 cursor_visual_track 就必须等待它结束，
 // 不再仅限于 CaretDriven 事务。
@@ -1448,6 +1462,123 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
     assert_eq!(
         track.duration_ms, 300,
         "非协同: cursor_visual_track 必须用 smooth cursor duration (300ms)，不是 typing (100ms)"
+    );
+}
+
+// ── Issue #815 评论 5955090551：协同动画速度 = cursor track 的时长 ──
+
+/// Issue #815 评论 5955090551 问题2（协同正文编辑）。
+///
+/// #815 之后协同的 InsertReveal / DeleteConceal 是 `VisualUnitTiming::CaretTrack`，
+/// 自己**没有时长**，逐帧边界完全跟随同一笔 cursor track。所以
+/// pipeline.rs / composition.rs 在协同正文编辑时把 `caret_duration_ms` 传成
+/// `typing_animation_duration_ms`——整段协同动画速度就是这条 track 的时长。
+///
+/// 修复前这里取的是「平滑光标时长」（典型 80–120ms），这就是实机上「协同动画快得
+/// 看不见」（实测 create→complete 约 28ms）的根因。
+#[test]
+fn issue815_review14_coordinated_ingest_follows_typing_duration_track() {
+    let key = VisualTransactionKey::new(1, 815);
+    // coordinated=true；pipeline 在协同正文编辑时传 typing=500 作为 caret_duration。
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key, true, true, true, true, 500, 500,
+    ))
+    .expect("协同 Insert 必须建出事务");
+
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同 Insert 必须有 cursor track");
+    assert_eq!(
+        track.duration_ms, 500,
+        "Issue #815 评论 5955090551: 协同模式下整段动画速度就是 cursor track 的时长，\
+         必须等于打字动画时长（500ms），不能是平滑光标时长"
+    );
+
+    // 协同吞吐字确实是 CaretTrack（没有自己的时长，只跟随 track）。
+    let ingest_units: Vec<&PreparedVisualUnit> = tx
+        .units
+        .iter()
+        .filter(|unit| {
+            matches!(
+                unit.slice.kind,
+                AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+            )
+        })
+        .collect();
+    assert!(
+        !ingest_units.is_empty(),
+        "Issue #815 评论 5955090551: 协同 Insert 必须产出吞吐字"
+    );
+    for unit in ingest_units {
+        assert!(
+            unit.timing.is_caret_track(),
+            "Issue #815 评论 5955090551: 协同吞吐字必须是 CaretTrack，\
+             它的逐帧边界只能来自这条 {}-ms 的 track",
+            track.duration_ms
+        );
+    }
+}
+
+/// Issue #815 评论 5955090551：非协同仍保持「文字用打字时长、光标用平滑光标时长」
+/// 的真正独立语义，不能被上面的协同规则误伤。
+#[test]
+fn issue815_review14_non_coordinated_keeps_independent_durations() {
+    let key = VisualTransactionKey::new(2, 815);
+    let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
+        key, false, true, true, true, 120, 400,
+    ))
+    .expect("非协同 Insert 必须建出事务");
+
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("smooth=true: 必须有 cursor track");
+    assert_eq!(
+        track.duration_ms, 400,
+        "Issue #815 评论 5955090551: 非协同时光标仍走平滑光标时长（400ms）"
+    );
+    for unit in &tx.units {
+        if let VisualUnitTiming::Timed { duration_ms, .. } = &unit.timing {
+            assert_eq!(
+                *duration_ms, 120,
+                "Issue #815 评论 5955090551: 非协同文字仍走打字动画时长（120ms）"
+            );
+        }
+    }
+}
+
+/// Issue #815 评论 5955090551：CursorOnly（鼠标点击 / 纯光标移动）不是正文吞吐协同，
+/// 即使协同开着也必须继续走平滑光标时长。
+#[test]
+fn issue815_review14_cursor_only_stays_on_smooth_cursor_duration() {
+    // 「CursorOnly」不是动画层的事务类型：`TextVisualOperationKind` 只有
+    // Insert / Delete / CompositionUpdate / CompositionCommitOrCancel，
+    // CursorOnly 是 **Core** 的 `EditorOperationKind`，在
+    // `pipeline.rs::prepare_edit_motion()` 里用来判定「这不是正文吞吐编辑」。
+    //
+    // 所以这里验证 builder 侧的不变量：builder 不自己决定时长，只透传调用方给的值；
+    // 协同正文吞吐的时长选择（协同 ⇒ 打字时长，否则 ⇒ 平滑光标时长）完全在
+    // `pipeline.rs` / `composition.rs` 那一层，由静态守卫 `issue815_review14_*` 锁定。
+    let key = VisualTransactionKey::new(3, 815);
+    let mut spec = issue756_insert_spec_with_durations(key, true, true, true, true, 500, 500);
+    // 没有 inserted_ranges ⇒ 没有任何吞吐字，只剩光标 track。
+    spec.inserted_ranges = Vec::new();
+
+    let tx = build_prepared_transaction(spec).expect("无正文吞吐时仍会建出光标事务");
+    assert!(
+        tx.units
+            .iter()
+            .all(|unit| !matches!(unit.slice.kind, AnimatedSliceKind::InsertReveal)),
+        "没有 inserted_ranges 就不该产出 InsertReveal"
+    );
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("caret_animation_enabled=true: 必须有 cursor track");
+    assert_eq!(
+        track.duration_ms, 500,
+        "builder 只透传调用方给的时长，不自己改"
     );
 }
 
