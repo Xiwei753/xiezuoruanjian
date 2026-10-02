@@ -641,28 +641,27 @@ Item {
                 canvasArea.logPointerPress("right", "mouse", point)
         }
     }
-    PointHandler {
-        acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        onActiveChanged: {
-            if (active)
-                canvasArea.logPointerPress("left", "touch", point)
-        }
-    }
-
-    // Issue #814 评论 5946795049: touch press-time 所有权观察器（前两根手指）。
+    // Issue #814 评论 5946795049 / 5947130795: touch press-time 所有权观察器（前两根手指）。
     // PointHandler 只取 passive grab，不参与 exclusive grab 竞争。Qt 对同 parent 的多个
-    // PointHandler 会把不同 touchpoint 分配给不同实例。press 时记录该手指所属 child Embed，
+    // PointHandler 会把不同 touchpoint 分配给不同实例：第一根手指进 touchOwnerA，第二根进
+    // touchOwnerB。press 时同时记录 pointer_press 边界日志 + 该手指所属 child Embed，
     // release 时清空。父层 bgTouchDrag / canvasPinch 通过 enabled 绑定这些属性在 grab 之前让出。
+    // Issue #814 评论 5947130795: 不再保留第三个独立 TouchScreen PointHandler 日志观察器——
+    // 同 parent 下多个 PointHandler 组成分配组，一个触点被某个 sibling 取得 passive grab 后
+    // 其他 sibling 不再选择该触点；独立的日志观察器会把第一根手指分走，导致 touchOwnerA/B
+    // 凑不齐两根、press-time ownership 在最普通的一指/两指场景里失效。日志合并进 A/B 后
+    // 两根触点都能记录 pointer_press，且不破坏 ownership。
     PointHandler {
         id: touchOwnerA
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         onActiveChanged: {
-            if (active)
+            if (active) {
+                canvasArea.logPointerPress("left", "touch", point)
                 _touchOwnerA = childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)
-            else
+            } else {
                 _touchOwnerA = ""
+            }
         }
     }
     PointHandler {
@@ -670,10 +669,12 @@ Item {
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         onActiveChanged: {
-            if (active)
+            if (active) {
+                canvasArea.logPointerPress("left", "touch", point)
                 _touchOwnerB = childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)
-            else
+            } else {
                 _touchOwnerB = ""
+            }
         }
     }
 

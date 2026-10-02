@@ -146,3 +146,63 @@ fn old_shared_gesture_owned_bool_removed() {
         "StarMapCanvas 不得再保留旧的 _gestureOwnedByChildContent 共用 bool"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 7. Issue #814 评论 5947130795 — TouchScreen PointHandler 只能是 owner A/B
+//    上一轮在 touchOwnerA/B 之外还留了一个独立 TouchScreen PointHandler 日志观察器。
+//    Qt 对同 parent 下多个 PointHandler 组成分配组，独立观察器会把第一根手指分走，
+//    导致 touchOwnerA/B 凑不齐两根、press-time ownership 在一指/两指场景里失效。
+//    本测试锁住：TouchScreen PointHandler 只能有 touchOwnerA/touchOwnerB 两个，
+//    且两者的 active 分支都记录 pointer_press touch 日志。
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 收集源码中所有 `PointHandler {` 块（按花括号深度匹配到对应 `}`）。
+fn point_handler_blocks(src: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut rest = src;
+    while let Some(idx) = rest.find("PointHandler {") {
+        let body_start = idx + "PointHandler {".len();
+        let mut depth = 1usize;
+        let mut end = body_start;
+        for (i, c) in rest[body_start..].char_indices() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = body_start + i + 1;
+                    break;
+                }
+            }
+        }
+        blocks.push(rest[idx..end].to_string());
+        rest = &rest[end..];
+    }
+    blocks
+}
+
+#[test]
+fn touch_screen_point_handlers_are_only_owner_a_and_b() {
+    let src = read_src(CANVAS);
+    let blocks = point_handler_blocks(&src);
+    let touch_blocks: Vec<_> = blocks
+        .iter()
+        .filter(|b| b.contains("PointerDevice.TouchScreen"))
+        .collect();
+    assert_eq!(
+        touch_blocks.len(),
+        2,
+        "TouchScreen PointHandler 只能有 touchOwnerA 和 touchOwnerB 两个，实际 {:?}",
+        touch_blocks
+    );
+    for b in &touch_blocks {
+        assert!(
+            b.contains("id: touchOwnerA") || b.contains("id: touchOwnerB"),
+            "TouchScreen PointHandler 必须是 touchOwnerA 或 touchOwnerB，实际:\n{b}"
+        );
+        assert!(
+            b.contains("canvasArea.logPointerPress(\"left\", \"touch\", point)"),
+            "touchOwnerA/B 的 active 分支必须包含 canvasArea.logPointerPress(\"left\", \"touch\", point)，实际:\n{b}"
+        );
+    }
+}
