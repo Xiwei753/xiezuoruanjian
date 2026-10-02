@@ -654,7 +654,9 @@ Item {
     PointHandler {
         id: touchOwnerA
         acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
+        // Issue #814 评论 5947395841: 触屏无按钮。acceptedButtons 用 NoButton 而非 LeftButton，
+        // 避免 synthetic mouse 的 LeftButton 反激活 owner、清掉 press-time ownership。
+        acceptedButtons: Qt.NoButton
         onActiveChanged: {
             if (active) {
                 canvasArea.logPointerPress("left", "touch", point)
@@ -667,7 +669,9 @@ Item {
     PointHandler {
         id: touchOwnerB
         acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
+        // Issue #814 评论 5947395841: 同 touchOwnerA — 触屏无按钮，用 NoButton
+        // 避免 synthetic mouse 的 LeftButton 反激活 owner 清掉 press-time ownership。
+        acceptedButtons: Qt.NoButton
         onActiveChanged: {
             if (active) {
                 canvasArea.logPointerPress("left", "touch", point)

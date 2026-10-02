@@ -68,6 +68,13 @@ fn pinch_belongs_to_child_requires_both_in_same_child() {
 
 // ─────────────────────────────────────────────────────────────────────────
 // 3. 两个 passive PointHandler 在 press 时用 pressPosition 记录 owner
+//
+//    Issue #814 评论 5947395841: owner A/B 的 acceptedButtons 必须是 Qt.NoButton，
+//    不得再是 Qt.LeftButton。触屏本身没有按钮；保留 Qt.LeftButton 时触屏设备
+//    允许生成的 synthetic mouse event 通常也带 LeftButton，会临时反激活正在跟踪
+//    真实 touch eventPoint 的 owner Handler，onActiveChanged(false) 立即清空
+//    _touchOwnerA/B，父层 bgTouchDrag/canvasPinch 在手指还没松开时被重新打开，
+//    press-time ownership 被自己清掉。Qt 官方对此场景明确建议 Qt.NoButton。
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -75,8 +82,12 @@ fn touch_owner_point_handlers_record_press_position() {
     let src = read_src(CANVAS);
     let wa = function_window(&src, "id: touchOwnerA", 600);
     assert!(
-        wa.contains("PointerDevice.TouchScreen") && wa.contains("Qt.LeftButton"),
-        "touchOwnerA 必须限定 TouchScreen + LeftButton"
+        wa.contains("PointerDevice.TouchScreen") && wa.contains("Qt.NoButton"),
+        "touchOwnerA 必须限定 TouchScreen + NoButton（触屏无按钮，避免 synthetic mouse LeftButton 反激活 owner 清掉 press-time ownership）"
+    );
+    assert!(
+        !wa.contains("Qt.LeftButton"),
+        "touchOwnerA 不得再写 acceptedButtons: Qt.LeftButton：synthetic mouse 事件带 LeftButton 会让 owner Handler 中途失活，press-time ownership 在手指未松开时被自己清掉"
     );
     assert!(
         wa.contains("childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)"),
@@ -84,8 +95,12 @@ fn touch_owner_point_handlers_record_press_position() {
     );
     let wb = function_window(&src, "id: touchOwnerB", 600);
     assert!(
-        wb.contains("PointerDevice.TouchScreen") && wb.contains("Qt.LeftButton"),
-        "touchOwnerB 必须限定 TouchScreen + LeftButton"
+        wb.contains("PointerDevice.TouchScreen") && wb.contains("Qt.NoButton"),
+        "touchOwnerB 必须限定 TouchScreen + NoButton（触屏无按钮，避免 synthetic mouse LeftButton 反激活 owner 清掉 press-time ownership）"
+    );
+    assert!(
+        !wb.contains("Qt.LeftButton"),
+        "touchOwnerB 不得再写 acceptedButtons: Qt.LeftButton：synthetic mouse 事件带 LeftButton 会让 owner Handler 中途失活，press-time ownership 在手指未松开时被自己清掉"
     );
     assert!(
         wb.contains("childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)"),
