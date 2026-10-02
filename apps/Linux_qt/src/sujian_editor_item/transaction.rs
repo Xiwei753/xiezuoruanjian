@@ -1,5 +1,6 @@
 use super::edit_motion::PreparedEditMotion;
 use super::*;
+use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use writer_core::editor::EditorEditResult;
 
 impl SujianEditorItem {
@@ -8,13 +9,19 @@ impl SujianEditorItem {
     /// Core 已删除 `EditorEngine`、`EditorVisualTransaction`。平台端从
     /// `EditorEditResult`（含 `cause`、`operation_kind`、`offset_map`、`content_delta`）
     /// 直接派生动画策略，不再经过 Core 的视觉事务工厂。
+    ///
+    /// Issue #819 评论 5956495850 第 1 节：返回值从 `Option<PreparedEditMotion>` 改成
+    /// `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>`，第二个元素是真正
+    /// 创建的视觉事务 key（`None` 表示动画被抑制或 builder 跳过了事务创建）。
+    /// `apply_edit_with_visuals` 据此返回 `Created(key)` / `Skipped(reason)`，
+    /// 不再让调用方拿裸 `Option`。
     pub(crate) fn record_transaction(
         &mut self,
         old: EditorSnapshot,
         new: EditorSnapshot,
         result: &EditorEditResult,
         emit: bool,
-    ) -> Option<PreparedEditMotion> {
+    ) -> Option<(PreparedEditMotion, Option<VisualTransactionKey>)> {
         let ctx = pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
             smooth_cursor_enabled: self.current_smooth_cursor_enabled,
@@ -46,7 +53,7 @@ impl SujianEditorItem {
         // Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 + 文字以 caret
         // 当前帧为吞吐边界；非协同时文字动画与光标动画互相独立。
         // 即 coordinated || typing || smooth 时才调用 prepare_edit_motion。
-        let mut motion: Option<PreparedEditMotion> = None;
+        let mut motion: Option<(PreparedEditMotion, Option<VisualTransactionKey>)> = None;
         let animations_requested = self.current_coordinated_animation_enabled
             || self.current_typing_animation_enabled
             || self.current_smooth_cursor_enabled;
@@ -71,6 +78,10 @@ impl SujianEditorItem {
                 generation: 0,
             });
         } else if animations_requested {
+            // Issue #819 评论 5956495850 第 1 节：`prepare_edit_motion` 返回
+            // `(PreparedEditMotion, Option<VisualTransactionKey>)`，key 是真正创建的
+            // 视觉事务 key（None 表示 builder 跳过了事务创建）。`apply_edit_with_visuals`
+            // 据此返回 `Created(key)` / `Skipped(reason)`，不再让调用方拿裸 Option。
             motion = self.pipeline.prepare_edit_motion(
                 &ctx,
                 result,

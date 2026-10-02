@@ -1072,46 +1072,64 @@ Rectangle {
                             }
                         }
 
+                        // Issue #819 评论 5956495850 第 6/7 节：左键长按选词改用
+                        // TapHandler + Timer，不再用 TapHandler.onLongPressed。
+                        //
+                        // 设计：
+                        // - TapHandler 只负责检测左键 press，press 时启动 Timer，
+                        //   release/cancel 时停 Timer。
+                        // - Timer 到点时调 sujianEditor.activate_pointer_long_press(x, y)，
+                        //   Rust 侧状态机 activate_long_press + long_press_at 选词。
+                        // - Timer 不接管 pointer grab，不处理 MouseMove/Release。
+                        // - 左键长按只负责选择，不弹菜单（菜单只由右键 TapHandler 触发）。
+                        //
+                        // 旧 touchLongPressHandler (TapHandler.onLongPressed) 已删除：
+                        // 它同时绑了 onLongPressed/onPressedChanged/onCanceled，把
+                        // pointer grab、selection gesture 生命周期和菜单混在一起。
+                        // Issue #815 评论 6042062633 修改 1 恢复的鼠标左键长按选词
+                        // 语义保留（Mouse/TouchPad/TouchScreen/Stylus 全接受），
+                        // 但实现改成 Timer 调 activate_pointer_long_press。
                         TapHandler {
-                            id: touchLongPressHandler
+                            id: leftButtonLongPressHandler
                             acceptedButtons: Qt.LeftButton
-                            // Issue #815 评论 6042062633 修改 1: 恢复桌面鼠标左键长按选词。
-                            // Issue #714 当时把鼠标排除在外，理由是「桌面鼠标长按 == 右键菜单」，
-                            // 但右键菜单本来就走上面那个独立的 Qt.RightButton TapHandler，
-                            // 左键长按与右键菜单是两个不同输入，不该互相排除。
                             acceptedDevices: PointerDevice.Mouse
                                           | PointerDevice.TouchPad
                                           | PointerDevice.TouchScreen
                                           | PointerDevice.Stylus
 
-                            // Issue #810 评论 5932233052 问题3: 跟踪是否真正进入了
-                            // long-press selection 状态。只有 onLongPressed 触发后才会在
-                            // 释放时调 end，普通轻点不误记 selection head。
-                            property bool inLongPressSelection: false
+                            // 长按阈值（ms）。与 Qt TapHandler 默认 longPressThreshold
+                            // 保持一致（约 800ms）。
+                            property int longPressInterval: 800
 
-                            onLongPressed: {
-                                // Issue #810 评论 5932233052 问题3: 先 begin selection gesture，
-                                // 再 long_press_at。begin 设置 selection_gesture_active = true，
-                                // 让 render_plan_builder 在长按选词期间走 hard_snap。
-                                sujianEditor.begin_selection_gesture()
-                                inLongPressSelection = true
-                                sujianEditor.long_press_at(point.position.x, point.position.y)
-                            }
-
-                            // TapHandler 自带 pressed 属性，用 onPressedChanged 判断释放
                             onPressedChanged: {
-                                if (!pressed && inLongPressSelection) {
-                                    // 释放时 end selection gesture，与鼠标 release 走统一路径
+                                if (pressed) {
+                                    // press 时记录位置并启动 Timer。
+                                    // point.position 在 press 时已可用。
+                                    leftButtonLongPressTimer.pendingX = point.position.x
+                                    leftButtonLongPressTimer.pendingY = point.position.y
+                                    leftButtonLongPressTimer.start()
+                                } else {
+                                    // release/cancel 时停 Timer 并结束选择手势。
+                                    leftButtonLongPressTimer.stop()
                                     sujianEditor.end_selection_gesture_qml()
-                                    inLongPressSelection = false
                                 }
                             }
 
-                            // 取消路径收尾
                             onCanceled: {
-                                if (inLongPressSelection) {
-                                    sujianEditor.end_selection_gesture_qml()
-                                    inLongPressSelection = false
+                                leftButtonLongPressTimer.stop()
+                                sujianEditor.end_selection_gesture_qml()
+                            }
+
+                            Timer {
+                                id: leftButtonLongPressTimer
+                                interval: leftButtonLongPressHandler.longPressInterval
+                                repeat: false
+                                // Timer 到点时调 activate_pointer_long_press，
+                                // 不接管 pointer grab，不处理 MouseMove/Release。
+                                property real pendingX: 0
+                                property real pendingY: 0
+                                onTriggered: {
+                                    sujianEditor.activate_pointer_long_press(pendingX, pendingY)
                                 }
                             }
                         }

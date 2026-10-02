@@ -1,75 +1,8 @@
 use super::animation::find_line_geometry_in_snapshot;
+use super::edit_flow::{CompositionCommitParams, EditOp};
 use super::layout_revision::LayoutRevision;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
-
-/// Issue #701 评论 5699573227 第三阶段: 统一编辑操作描述。
-///
-/// `record_edit_transaction` 内部根据此枚举执行一次 pipeline edit command。
-/// 所有普通输入、删除、IME commit/replace 都收口到这同一个入口，
-/// 不再各自直接调 `pipeline.insert_text` / `pipeline.replace_range` /
-/// `pipeline.delete_range`。
-///
-/// `pipeline_cause` 是传给 Core pipeline 的事务分类（用于 undo/redo 栈语义），
-/// 与 `record_edit_transaction` 的 `visual_cause`（用于视觉事务分类）分离。
-/// 多数场景两者相同，但 `clipboard_paste` 走 `insert_text_with_cause` 时
-/// `pipeline_cause` 仍是 `Typing`/`TypingCommit`，`visual_cause` 是 `Paste`。
-enum EditOp {
-    Insert {
-        cursor: usize,
-        text: String,
-        pipeline_cause: EditorTransactionCause,
-    },
-    Replace {
-        start: usize,
-        end: usize,
-        text: String,
-        pipeline_cause: EditorTransactionCause,
-    },
-    Delete {
-        start: usize,
-        end: usize,
-        pipeline_cause: EditorTransactionCause,
-    },
-    /// Issue #701 评论 5702675971: IME commit 的 Qt 两步语义。
-    ///
-    /// 调用一次 Core `ImeCommit` 原子命令（三段语义），在 Core 内部顺序执行两步
-    /// 正文修改，只产生一个 Core revision 推进和一个 UndoEntry：
-    /// 1. 第一步：删 selection（在 committed text 上），
-    ///    `selection_byte_range` 为 `None` 或零长度时跳过（传 (0, 0)）；
-    /// 2. 第二步：在删 selection 后的文本（base_text）上做 replacement/insert，
-    ///    `replacement_byte_range` 是 base_text 坐标。
-    ImeCommit {
-        selection_byte_range: Option<(usize, usize)>,
-        replacement_byte_range: (usize, usize),
-        inserted_text: String,
-        pipeline_cause: EditorTransactionCause,
-    },
-}
-
-/// Issue #701 评论 5699573227 第三阶段: IME composition commit 参数。
-///
-/// 仅在 `record_edit_transaction` 处理 composition commit/replace 时提供。
-/// 普通输入/删除传 `None`，走 `record_transaction` 路径。
-/// 带 `Some` 时走 `record_composition_commit_transaction` 路径，处理 preedit
-/// 区间收进、candidate 揭示、committed replace range、pending preedit cursor rect
-/// 作为 old caret 起点等 composition 专属语义。
-///
-/// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`）。
-/// Issue #808: 文字显隐/位移和光标位移各自有独立的 timeline / easing / duration，
-/// 不再消费同一个 progress。协同只表示同事务/同首帧/同 rebase，不绑死速度/曲线。
-struct CompositionCommitParams {
-    pending_preedit_cursor_rect: Option<CursorRect>,
-    preedit_byte_start: usize,
-    preedit_byte_end: usize,
-    saved_virtual_text: String,
-    candidate_byte_start: usize,
-    candidate_byte_end: usize,
-    committed_replace_start: usize,
-    committed_replace_end: usize,
-    cancel_reason: &'static str,
-    summary_tag: &'static str,
-}
 
 impl SujianEditorItem {
     pub(crate) fn flush_content_height(&mut self) {
@@ -123,8 +56,10 @@ impl SujianEditorItem {
     /// **不再**覆盖提交后的 target caret 或 `cursor_ctrl.visual_x/visual_y`。
     /// 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
     /// 由 `emit_content_changed` → `update_cursor_visual_position` 统一计算。
+    /// Issue #819 评论 5956495850 第 1 节：返回值从 `()` 改成 `Option<VisualTransactionKey>`，
+    /// `apply_edit_with_visuals` 据此返回 `Created(key)` / `Skipped(reason)`。
     #[allow(clippy::too_many_arguments)]
-    fn record_composition_commit_transaction(
+    pub(crate) fn record_composition_commit_transaction(
         &mut self,
         old: &EditorSnapshot,
         new: &EditorSnapshot,
@@ -141,7 +76,7 @@ impl SujianEditorItem {
         committed_replace_end: usize,
         cancel_reason: &str,
         summary_tag: &str,
-    ) {
+    ) -> Option<VisualTransactionKey> {
         let width = self.bounding_width();
         // Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系。
         // old_snapshot 只接 old virtualText range（preedit 在 old virtualText 中的范围）；
@@ -198,7 +133,7 @@ impl SujianEditorItem {
                     "composition_commit_old_snapshot_unavailable",
                     Some(candidate_range),
                 );
-                return;
+                return None;
             }
         };
 
@@ -247,7 +182,7 @@ impl SujianEditorItem {
                     "composition_commit_new_snapshot_invariant_failure",
                     Some(candidate_range),
                 );
-                return;
+                return None;
             }
         };
         // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
@@ -405,6 +340,8 @@ impl SujianEditorItem {
         ));
 
         self.transaction_created();
+        // Issue #819 评论 5956495850 第 1 节：返回真正创建的视觉事务 key。
+        key
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证
@@ -420,7 +357,7 @@ impl SujianEditorItem {
     /// 不变量：`current_canonical_snapshot == Some` 不代表有效；必须同时满足
     /// `canonical.text_revision == pipeline.text_revision()` 且描述当前 committed text。
     /// 不一致（stale，例如动画关闭路径上一笔没走 prepare_edit_motion 但正文已变）就重建。
-    fn ensure_current_canonical_before_edit(&mut self) {
+    pub(crate) fn ensure_current_canonical_before_edit(&mut self) {
         let needs_rebuild = match self.pipeline.current_canonical_snapshot() {
             None => true,
             Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
@@ -432,123 +369,6 @@ impl SujianEditorItem {
                 .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
             self.pipeline.set_current_canonical_snapshot(Some(snap));
         }
-    }
-
-    /// Issue #701 评论 5699573227 第三阶段: 统一编辑事务入口。
-    ///
-    /// `insert_text_with_cause` / `delete_backward` / `delete_forward` /
-    /// `ime_replace_and_insert` / `delete_selection` 全部收口到这一个 helper。
-    /// 固定做：
-    /// 1. 保存 old text/selection/caret（`self.pipeline.snapshot()`）；
-    /// 2. 调一次 pipeline edit command（由 `op` 描述，不再由调用者各自直调）；
-    /// 3. 读取 new text/selection/caret（通过 pipeline 只读投影 API）；
-    /// 4. 生成一对 old/new layout snapshot 并创建一次视觉事务。
-    ///
-    /// - `op$` 不带 composition commit 参数（`composition == None`）时走
-    ///   `record_transaction`，由 `pipeline.record_visual_transaction` 内部
-    ///   排版 old/new 并 `process_transaction`。
-    /// - 带 `CompositionCommitParams` 时走 `record_composition_commit_transaction`，
-    ///   处理 preedit 区间收进、candidate 揭示、committed replace range、
-    ///   `pending_preedit_cursor_rect` 作为 old caret 起点等 composition 专属语义。
-    ///
-    /// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`），
-    /// Typing / Delete / TypingCommit / IME commit/replace 都进入同一种
-    /// `VisualTransaction`。Issue #808: 文字显隐/位移和光标位移各自有独立的
-    /// timeline / easing / duration，不再消费同一个 progress。
-    ///
-    /// 返回 `true` 表示编辑已应用并记录事务；`false` 表示 pipeline edit 未应用
-    /// （如空删除范围），调用者据此决定是否 `emit_content_changed`。
-    /// `insert_text_with_cause` 总是 `emit_content_changed`（保持原行为），
-    /// `delete_backward` / `delete_forward` / `delete_selection` 仅在 `true` 时
-    /// `emit_content_changed`。
-    fn record_edit_transaction(
-        &mut self,
-        op: EditOp,
-        visual_cause: EditorTransactionCause,
-        composition: Option<CompositionCommitParams>,
-    ) -> bool {
-        let old = self.pipeline.snapshot();
-
-        // Issue #810 评论 5934060933 问题1: 在 Core edit command 之前保证
-        // old/current canonical 已建立且属于当前 text revision。此时 mirror.text()
-        // 是 old text、text_revision 是 old revision，构造的 canonical 描述 old 正文。
-        self.ensure_current_canonical_before_edit();
-
-        let edit_result: Option<writer_core::editor::EditorEditResult> = match op {
-            EditOp::Insert {
-                cursor,
-                text,
-                pipeline_cause,
-            } => self.pipeline.insert_text(cursor, &text, pipeline_cause),
-            EditOp::Replace {
-                start,
-                end,
-                text,
-                pipeline_cause,
-            } => self
-                .pipeline
-                .replace_range(start, end, &text, pipeline_cause),
-            EditOp::Delete {
-                start,
-                end,
-                pipeline_cause,
-            } => self.pipeline.delete_range(start, end, pipeline_cause),
-            EditOp::ImeCommit {
-                selection_byte_range,
-                replacement_byte_range,
-                inserted_text,
-                pipeline_cause,
-            } => {
-                // Issue #701 评论 5704110106: 调用一次 Core ImeCommit 原子命令
-                // （三段语义），Core 内部顺序执行两步正文修改，只产生一个
-                // revision 推进和一个 UndoEntry。
-                // selection_byte_range 为 None 或零长度时传 (0, 0)（零长度 range，
-                // Core 不会删除）。
-                let (sel_start, sel_end) = selection_byte_range.unwrap_or((0, 0));
-                let (rep_start, rep_end) = replacement_byte_range;
-                self.pipeline.ime_commit(
-                    sel_start,
-                    sel_end,
-                    rep_start,
-                    rep_end,
-                    &inserted_text,
-                    pipeline_cause,
-                )
-            }
-        };
-        let applied = edit_result.is_some();
-        if !applied {
-            return false;
-        }
-        // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
-        // adjust_affinity_at_wrap_boundary（会触发 ensure_layout_cached 排版 A，
-        // 与 record_visual_transaction 排版 B 重复）。affinity 调整移到
-        // emit_content_changed 内部 promote 之后（cache hit 不排版）。
-        let new = self.pipeline.snapshot();
-
-        if let Some(params) = composition {
-            self.record_composition_commit_transaction(
-                &old,
-                &new,
-                visual_cause,
-                params.pending_preedit_cursor_rect,
-                params.preedit_byte_start,
-                params.preedit_byte_end,
-                &params.saved_virtual_text,
-                params.candidate_byte_start,
-                params.candidate_byte_end,
-                params.committed_replace_start,
-                params.committed_replace_end,
-                params.cancel_reason,
-                params.summary_tag,
-            );
-        } else {
-            let result = edit_result
-                .as_ref()
-                .expect("edit_result is Some when applied is true");
-            let _vt = self.record_transaction(old, new, result, true);
-        }
-        true
     }
 
     pub(crate) fn insert_text(&mut self, text: QString) {
@@ -642,10 +462,10 @@ impl SujianEditorItem {
             }
         };
 
-        // Issue #701 评论 5699573227 第三阶段: 普通输入与 IME commit 共用
-        // record_edit_transaction 统一入口。insert_text_with_cause 总是
+        // Issue #819 评论 5956495850 第 1 节: 普通输入与 IME commit 共用
+        // apply_edit_with_visuals 统一入口。insert_text_with_cause 总是
         // emit_content_changed（保持原行为，即使 pipeline edit 未应用）。
-        let _applied = self.record_edit_transaction(op, visual_cause, composition);
+        let _outcome = self.apply_edit_with_visuals(op, visual_cause, composition);
 
         self.pipeline.finish_composition_commit();
 
@@ -751,9 +571,9 @@ impl SujianEditorItem {
             pipeline_cause: visual_cause,
         };
 
-        // Issue #701 评论 5699573227 第三阶段: IME replace+commit 与普通输入/删除
-        // 共用 record_edit_transaction 统一入口。
-        let _applied = self.record_edit_transaction(op, visual_cause, composition);
+        // Issue #819 评论 5956495850 第 1 节: IME replace+commit 与普通输入/删除
+        // 共用 apply_edit_with_visuals 统一入口。
+        let _outcome = self.apply_edit_with_visuals(op, visual_cause, composition);
 
         self.pipeline.finish_composition_commit();
 
@@ -783,8 +603,8 @@ impl SujianEditorItem {
             (prev, cursor)
         };
 
-        // Issue #701 评论 5699573227 第三阶段: 普通删除与普通输入/IME commit
-        // 共用 record_edit_transaction 统一入口。跨行删除的 old/new caret 都从
+        // Issue #819 评论 5956495850 第 1 节: 普通删除与普通输入/IME commit
+        // 共用 apply_edit_with_visuals 统一入口。跨行删除的 old/new caret 都从
         // 同一对 snapshot 读取（record_transaction 内部排版 old/new 后取 caret），
         // 解决删除到上一行时回抽/跳一下。
         let op = EditOp::Delete {
@@ -792,7 +612,8 @@ impl SujianEditorItem {
             end,
             pipeline_cause: EditorTransactionCause::Delete,
         };
-        if self.record_edit_transaction(op, EditorTransactionCause::Delete, None) {
+        let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Delete, None);
+        if outcome.applied {
             self.emit_content_changed();
         }
     }
@@ -818,7 +639,8 @@ impl SujianEditorItem {
             end,
             pipeline_cause: EditorTransactionCause::Delete,
         };
-        if self.record_edit_transaction(op, EditorTransactionCause::Delete, None) {
+        let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Delete, None);
+        if outcome.applied {
             self.emit_content_changed();
         }
     }
@@ -834,7 +656,8 @@ impl SujianEditorItem {
             end,
             pipeline_cause: EditorTransactionCause::Delete,
         };
-        if self.record_edit_transaction(op, EditorTransactionCause::Delete, None) {
+        let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Delete, None);
+        if outcome.applied {
             self.emit_content_changed();
         }
     }
@@ -863,7 +686,7 @@ impl SujianEditorItem {
         if let Some(result) = self.pipeline.perform_undo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.pipeline.snapshot();
-            self.record_transaction(old, new, &result, true);
+            let _ = self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
         }
     }
@@ -875,7 +698,7 @@ impl SujianEditorItem {
         if let Some(result) = self.pipeline.perform_redo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.pipeline.snapshot();
-            self.record_transaction(old, new, &result, true);
+            let _ = self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
         }
     }
@@ -995,7 +818,9 @@ impl SujianEditorItem {
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
-        self.context_menu_requested(x, y);
+        // Issue #819 评论 5956495850 第 6 节：左键长按只负责选择，不弹菜单。
+        // 旧的 self.context_menu_requested(x, y) 已删除——右键菜单只由右键
+        // TapHandler (acceptedButtons: Qt.RightButton) 触发，不再由左键长按触发。
     }
 
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {

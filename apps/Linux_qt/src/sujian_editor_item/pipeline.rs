@@ -335,10 +335,10 @@ impl CompositionState {
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub smooth_cursor_enabled: bool,
-    /// Issue #756 / Issue #808 评论 5916391891 修改 3: 协同动画显式模式开关。
-    /// 协同=同一次编辑同时开两条独立时间线 + 按 caret 空间锚点做吞吐 mask 语义。
-    /// true 时文字与光标各自独立 timeline，额外启用按 caret 锚点做遮罩的吞吐语义；
-    /// false 时 typing/smooth 两个独立开关各自决定文字/光标动画。
+    /// Issue #819 评论 5956495850: 协同动画显式模式开关。
+    /// 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track 的当前帧。
+    /// true 时文字吞吐与光标运动共享同一条 cursor track；false 时 typing/smooth
+    /// 两个独立开关各自决定文字/光标动画（独立文字 timeline + 独立 smooth cursor）。
     pub coordinated_animation_enabled: bool,
     pub is_scrolling: bool,
     pub is_loading: bool,
@@ -1113,7 +1113,7 @@ impl LinuxEditorPipeline {
         new: &EditorSnapshot,
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
-    ) -> Option<PreparedEditMotion> {
+    ) -> Option<(PreparedEditMotion, Option<VisualTransactionKey>)> {
         // Issue #756 / Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 +
         // 文字以 caret 当前帧为吞吐边界；非协同时 typing_animation_enabled 只决定文字动画，
         // smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
@@ -1174,6 +1174,10 @@ impl LinuxEditorPipeline {
             u64::from(text_duration_ms),
             u64::from(caret_duration_ms),
         );
+        // Issue #819 评论 5956495850 第 1 节：本函数创建的视觉事务 key，
+        // 供调用方返回 `EditVisualOutcome::Created(key)`。`None` 表示动画被抑制
+        // 或 builder 跳过了事务创建。
+        let mut created_key: Option<VisualTransactionKey> = None;
         {
             let (raw_byte_start, raw_byte_end) = motion
                 .inserted_range
@@ -1678,8 +1682,8 @@ impl LinuxEditorPipeline {
             // - reconcile retire 旧事务 + rebind Timed Reflow。rebase frame 已采好，
             //   此时 retire 不影响已采的 frame。
             // - create 用保存的 handoff 创建新事务。
-            // Issue #808: 所有 unit 统一 Timed，文字与光标各自独立 timeline + easing，
-            // 协同只控制遮罩锚点，不再有 CaretDriven timing 变体。
+            // Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
+            // 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
             // 用一个统一的 edit_now，保证 prepare 和 reconcile 用同一时刻采样。
             let edit_now = Instant::now();
             let prepared_handoff = self.animation_coordinator.prepare_rebase_handoff_for_edit(
@@ -1733,6 +1737,10 @@ impl LinuxEditorPipeline {
                     cursor_owner_epoch,
                     new_revision,
                 );
+            // Issue #819 评论 5956495850 第 1 节：保存创建的事务 key 副本，
+            // 供 `apply_edit_with_visuals` 返回 `EditVisualOutcome::Created(key)`。
+            // `VisualTransactionKey` 是 Copy，这里零成本复制。
+            created_key = key;
             // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
             // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
             // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 None，
@@ -1787,7 +1795,7 @@ impl LinuxEditorPipeline {
                 ));
         }
 
-        Some(motion)
+        Some((motion, created_key))
     }
 }
 

@@ -6,8 +6,8 @@
 //! 让 transaction_builder.rs 回到生产文件结构上限以内（god-file 800 行）。
 use crate::sujian_editor_item::AnimationSkipFields;
 
-use crate::sujian_editor_item::animation::rebase::RebaseCaretHandoff;
-use crate::sujian_editor_item::animation::{RebaseFrame, TextVisualOperationKind};
+use crate::sujian_editor_item::animation::rebase::RebaseVisualState;
+use crate::sujian_editor_item::animation::TextVisualOperationKind;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
@@ -52,8 +52,9 @@ pub(crate) struct VisualEditSpec {
     pub(crate) new_cursor_line_bottom: f64,
     pub(crate) cursor_owner_epoch: u64,
     pub(crate) layout_basis_revision: LayoutRevision,
-    pub(crate) rebase_frames: Vec<RebaseFrame>,
-    pub(crate) caret_handoff: Option<RebaseCaretHandoff>,
+    /// Issue #819 评论 5956495850 第 4 节：rebase 交棒的完整视觉状态
+    ///（rebase frames + caret handoff 合一）。
+    pub(crate) visual_state: RebaseVisualState,
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
     /// Issue #756 评论 5821042551: 文字 unit（InsertReveal/DeleteConceal/Reflow）的时长。

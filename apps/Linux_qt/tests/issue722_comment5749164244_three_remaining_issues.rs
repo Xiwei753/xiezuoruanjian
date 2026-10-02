@@ -160,11 +160,11 @@ fn issue1_build_slices_pass_some_line_idx() {
 // 问题3: 快速输入/删除 rebase 仍然采的不是屏幕上真正那一帧
 // =========================================================================
 
-/// 问题3 守卫1: take_rebase_frames 走两条交棒路径（#815 后文字 Timed + caret track 统一采样）。
-/// - 文字交棒：collect_rebase_frame_for_unit_without_caret(...)，文字进度来自 Timed unit。
-/// - caret 交棒：sample_caret_track_frame(track, now)，拿到本帧 caret 的 x/y/visual_line_id/
-///   rect，新 track 从这个**当前** caret 连到新目标 caret，不退回逻辑旧 caret。
-/// 旧的 sample_caret_geometry_for_caret_driven_clip 已删除，不应复活。
+/// 问题3 守卫1（#819 重写后）: take_rebase_frames 用唯一采样入口
+/// `sample_transaction_visual_state(tx, now)` 采样当前屏幕帧，从
+/// `SampledEditVisualState` 构造 `RebaseVisualState`，再 cancel 旧事务。
+/// 旧的 `collect_rebase_frame_for_unit_without_caret` 和
+/// `sample_caret_geometry_for_caret_driven_clip` 都已删除，不应复活。
 #[test]
 fn issue3_take_rebase_frames_uses_timed_text_and_coordinated_caret_handoff() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
@@ -173,23 +173,17 @@ fn issue3_take_rebase_frames_uses_timed_text_and_coordinated_caret_handoff() {
     let has_old_collect = window.contains("tx.collect_rebase_frames(now)");
     assert!(
         !has_old_collect,
-        "take_rebase_frames 不应再调 tx.collect_rebase_frames(now)，\
-         应改用 collect_rebase_frame_for_unit_without_caret 逐 unit 采集 rebase 帧"
+        "take_rebase_frames 不应再调 tx.collect_rebase_frames(now)"
     );
-    // 文字交棒路径：应使用 collect_rebase_frame_for_unit_without_caret(
+    // #819: 应使用 sample_transaction_visual_state 统一采样入口
     assert!(
-        window.contains("collect_rebase_frame_for_unit_without_caret("),
-        "take_rebase_frames 应使用 collect_rebase_frame_for_unit_without_caret( 采集文字 rebase 帧（文字进度来自 Timed unit）"
+        window.contains("sample_transaction_visual_state"),
+        "take_rebase_frames 应使用 sample_transaction_visual_state 采样当前屏幕帧（#819 唯一采样入口）"
     );
-    // caret 交棒路径：应使用 Issue #815 的统一采样入口 sample_caret_track_frame(
+    // 旧机制不复活：不应再调用 collect_rebase_frame_for_unit_without_caret(
     assert!(
-        window.contains("sample_caret_track_frame("),
-        "take_rebase_frames 应使用 sample_caret_track_frame( 采样本帧 caret handoff"
-    );
-    // Issue #815: 新 track 从采样到的当前 caret 起算，不得退回逻辑旧 caret
-    assert!(
-        window.contains("let sampled = frame.rect;"),
-        "take_rebase_frames 的 caret handoff 起点必须是本帧采样到的 caret rect"
+        !window.contains("collect_rebase_frame_for_unit_without_caret("),
+        "take_rebase_frames 不应再调用已删除的 collect_rebase_frame_for_unit_without_caret(（#819 已用统一采样入口取代）"
     );
     // 旧机制不复活：函数体里不应有真正的 sample_caret_geometry_for_caret_driven_clip( 调用
     assert!(
@@ -198,29 +192,28 @@ fn issue3_take_rebase_frames_uses_timed_text_and_coordinated_caret_handoff() {
     );
 }
 
-/// 问题3 守卫2: collect_rebase_frame_for_unit_without_caret 对所有类型统一使用
-/// compute_frame(visible_fraction)，visible_fraction 直接取 unit.current_visible_fraction(now)，
-/// effective_fraction 也直接等于 visible_fraction——不再从局部 frame 宽度反推。
-/// Issue #808 评论 5921324618: 多个 slice 共用 line_mask 后，从 frame.w / slice.w
-/// 反推会把统一 timeline 进度拆成不同局部进度，导致跳变。
+/// 问题3 守卫2（#819 重写后）: `collect_rebase_frame_for_unit_without_caret` 已被删除，
+/// 不应复活。唯一采样入口是 `sample_transaction_visual_state`，它统一处理
+/// CaretTrack/Timed unit 的帧采样。文字与光标交棒合成一个 `RebaseVisualState`，
+/// 不再分别拥有状态。
 #[test]
 fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
-    let window = function_window(&src, "fn collect_rebase_frame_for_unit_without_caret", 3000);
-    // Issue #727 约束 4: 统一使用 compute_frame(visible_fraction)
+    // 旧机制不复活：collect_rebase_frame_for_unit_without_caret 应已删除
     assert!(
-        window.contains("compute_frame(visible_fraction)"),
-        "collect_rebase_frame_for_unit_without_caret 必须用 compute_frame(visible_fraction)"
+        !src.contains("fn collect_rebase_frame_for_unit_without_caret"),
+        "collect_rebase_frame_for_unit_without_caret 应已被删除（#819 用 sample_transaction_visual_state 取代）"
     );
-    // Issue #808 评论 5921324618: visible_fraction 直接取 timeline，effective_fraction = visible_fraction
+    // #819: RebaseVisualState 应存在，合成文字与光标交棒
     assert!(
-        window.contains("let effective_fraction = visible_fraction;"),
-        "collect_rebase_frame_for_unit_without_caret 的 effective_fraction 必须直接等于 visible_fraction（timeline），不从 frame.w 反推"
+        src.contains("struct RebaseVisualState"),
+        "rebase.rs 应定义 RebaseVisualState（#819 合成文字与光标交棒）"
     );
-    // 不应再从 frame.w / w 反推
+    // #819: sample.rs 应存在唯一采样入口
+    let sample_src = read_src("src/sujian_editor_item/animation/sample.rs");
     assert!(
-        !window.contains("frame.w / w"),
-        "collect_rebase_frame_for_unit_without_caret 不应再从 frame.w / w 反推 visible_fraction（Issue #808 评论 5921324618）"
+        sample_src.contains("fn sample_transaction_visual_state"),
+        "sample.rs 应定义 sample_transaction_visual_state 唯一采样入口"
     );
 }
 
@@ -292,14 +285,20 @@ fn all_three_remaining_issues_fixed() {
     );
     let rebase = read_src("src/sujian_editor_item/animation/rebase.rs");
     assert!(
-        rebase.contains("unit.slice.compute_frame(visible_fraction)"),
-        "所有 unit（含 Reveal/Conceal）都应从自己的时间线取 visible 并调 compute_frame"
+        rebase.contains("sample_transaction_visual_state"),
+        "take_rebase_frames 应通过 sample_transaction_visual_state 统一采样当前屏幕帧（#819）"
+    );
+    assert!(
+        !rebase.contains("fn collect_rebase_frame_for_unit_without_caret"),
+        "collect_rebase_frame_for_unit_without_caret 应已删除（#819 用统一采样入口取代）"
     );
 
-    // 问题3: take_rebase_frames 用 collect_rebase_frame_for_unit
+    // 问题3（#819 重写后）: take_rebase_frames 用 sample_transaction_visual_state
+    // 统一采样，collect_rebase_frame_for_unit_without_caret 已删除。
     let reb_window = function_window(&anim_coord, "fn take_rebase_frames", 5000);
     assert!(!reb_window.contains("tx.collect_rebase_frames(now)"));
-    assert!(reb_window.contains("collect_rebase_frame_for_unit"));
+    assert!(reb_window.contains("sample_transaction_visual_state"));
+    assert!(!reb_window.contains("collect_rebase_frame_for_unit_without_caret("));
 
     println!("[BUGFIX_VERIFY] Issue #722 评论 5749164244: 3 个剩余问题全部修复验证通过");
 }

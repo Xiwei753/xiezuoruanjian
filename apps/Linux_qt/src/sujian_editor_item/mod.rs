@@ -27,6 +27,7 @@ pub(crate) mod cursor_animation;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
 pub mod cursor_controller;
 pub(crate) mod edit_motion;
+pub(crate) mod edit_flow;
 pub(crate) mod edit_snapshot;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
@@ -37,6 +38,9 @@ pub(crate) mod layout_snapshot;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
 pub(crate) mod pipeline;
+/// Issue #819 评论 5956495850 第 6 节：左键指针手势状态机。
+/// 是 `pointer_drag_selecting` / `selection_gesture_active` 的唯一 owner。
+pub(crate) mod pointer_gesture;
 #[allow(clippy::misnamed_getters)]
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
@@ -355,9 +359,8 @@ pub struct SujianEditorItem {
     typing_animation_enabled: qt_property!(bool; READ typing_animation_enabled WRITE set_typing_animation_enabled NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
-    /// Issue #756: 协同动画显式模式开关。
-    /// Issue #808: true 时文字与光标各有独立 timeline/easing/duration（不绑死），
-    /// 协同只表示同事务/同首帧/同 rebase，以及吞吐字遮罩锚点取自 caret 位置；
+    /// Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
+    /// 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
     /// 要求有效 caret motion 否则文字动画也不启动；
     /// false 时 typing_animation_enabled 只决定文字动画，smooth_cursor_enabled 只决定光标动画，
     /// 两者独立，同时为 true 不等于协同。
@@ -479,6 +482,11 @@ pub struct SujianEditorItem {
     tick_cursor_animation: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    /// Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点时调用。
+    /// 调 pointer_gesture 状态机的 activate_long_press，再调 long_press_at 选词。
+    /// 左键长按只负责选择，不弹菜单（菜单只由右键入口触发）。
+    #[allow(dead_code)]
+    activate_pointer_long_press: qt_method!(fn(&mut self, x: f32, y: f32)),
     /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期入口。
     /// QML 在 onLongPressed 时调用，设置 selection_gesture_active = true。
     #[allow(dead_code)]
@@ -519,6 +527,12 @@ pub struct SujianEditorItem {
     /// 不再强制 Snap。反之手势进行中即使 has_selection 暂时为 false（如点击同一位置）
     /// 也应保持 Snap 避免光标跳动。
     selection_gesture_active: bool,
+    /// Issue #819 评论 5956495850 第 6 节：左键指针手势状态机。
+    /// 是 `pointer_drag_selecting` / `selection_gesture_active` 的唯一 owner。
+    /// 上面两个 bool 字段保留（render_plan_builder / rendering 仍读它们），
+    /// 但其值由状态机维护：每次状态机 transition 后，把状态机的
+    /// `pointer_drag_selecting()` / `selection_gesture_active()` 同步回这两个字段。
+    pointer_gesture: pointer_gesture::PointerGestureState,
     current_font_pixel_size: f32,
     current_font_family: QString,
     current_line_spacing: f32,
@@ -651,6 +665,8 @@ impl Default for SujianEditorItem {
             flush_content_height: Default::default(),
             tick_cursor_animation: Default::default(),
             long_press_at: Default::default(),
+            // Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点调用。
+            activate_pointer_long_press: Default::default(),
             // Issue #810 评论 5932233052 问题3: 触屏长按 selection gesture 生命周期方法。
             begin_selection_gesture: Default::default(),
             end_selection_gesture_qml: Default::default(),
@@ -666,6 +682,8 @@ impl Default for SujianEditorItem {
             pointer_drag_selecting: false,
             // Issue #810 评论 问题2: 初始无选择手势。
             selection_gesture_active: false,
+            // Issue #819 评论 5956495850 第 6 节：状态机初始 Idle。
+            pointer_gesture: pointer_gesture::PointerGestureState::default(),
             current_font_pixel_size: 22.0,
             current_font_family: QString::from("Noto Sans CJK SC"),
             current_line_spacing: 1.5,

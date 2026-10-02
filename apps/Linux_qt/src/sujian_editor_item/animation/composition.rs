@@ -58,7 +58,7 @@ impl LinuxEditorAnimationCoordinator {
         );
         // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
         let now = Instant::now();
-        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+        let visual_state = self.take_rebase_frames(
             &conflicting,
             "rebased_by_composition_update",
             now,
@@ -102,7 +102,7 @@ impl LinuxEditorAnimationCoordinator {
         };
 
         // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
-        let carried_rebase = rebase_frames.len();
+        let carried_rebase = visual_state.rebase_frames.len();
         let spec = VisualEditSpec {
             key,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
@@ -121,8 +121,7 @@ impl LinuxEditorAnimationCoordinator {
             new_cursor_line_bottom,
             cursor_owner_epoch,
             layout_basis_revision,
-            rebase_frames,
-            caret_handoff,
+            visual_state,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             text_duration_ms: u64::from(self.typing_animation_duration_ms),
@@ -213,7 +212,7 @@ impl LinuxEditorAnimationCoordinator {
             conflict_old_start,
             conflict_old_end,
         );
-        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+        let visual_state = self.take_rebase_frames(
             &conflicting,
             "rebased_by_composition_commit",
             now,
@@ -222,8 +221,7 @@ impl LinuxEditorAnimationCoordinator {
             cursor_owner_epoch,
         );
         PreparedCompositionCommitHandoff {
-            rebase_frames,
-            caret_handoff,
+            visual_state,
             offset_map,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
@@ -278,8 +276,7 @@ impl LinuxEditorAnimationCoordinator {
             ),
         };
         let PreparedCompositionCommitHandoff {
-            rebase_frames,
-            caret_handoff,
+            visual_state,
             offset_map,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
@@ -322,7 +319,7 @@ impl LinuxEditorAnimationCoordinator {
         // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
         // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
         // 扩段落得到。
-        let carried_rebase = rebase_frames.len();
+        let carried_rebase = visual_state.rebase_frames.len();
         let spec = VisualEditSpec {
             key,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
@@ -341,8 +338,7 @@ impl LinuxEditorAnimationCoordinator {
             new_cursor_line_bottom,
             cursor_owner_epoch,
             layout_basis_revision,
-            rebase_frames,
-            caret_handoff,
+            visual_state,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
             text_duration_ms: u64::from(self.typing_animation_duration_ms),

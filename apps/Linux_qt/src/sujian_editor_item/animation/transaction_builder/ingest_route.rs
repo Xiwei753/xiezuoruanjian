@@ -452,6 +452,7 @@ pub(crate) fn build_ingest_route(
     // `sampled_rect_at_progress()` 根本不读 `track.from`，读的是 `segments[0].from`
     // —— 于是快速连续输入时渲染又跳回逻辑 old caret。
     let screen_caret = spec
+        .visual_state
         .caret_handoff
         .as_ref()
         .map(|handoff| &handoff.sampled)

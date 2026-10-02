@@ -63,7 +63,8 @@ impl LinuxEditorAnimationCoordinator {
         //   中收口（start_fraction 设为 target_fraction，caret_motion_retired = true），
         //   不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
         //   reflow track 继续。纯光标移动可走 Tween。
-        //   Issue #808: 所有 unit 都是 Timed，文字与光标各自独立 timeline + easing。
+        //   Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
+        //   的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
         let has_active_for_coordinated = self
             .active_text_transaction_key_with_epoch(cursor_owner_epoch, layout_basis_revision)
             .is_some();
@@ -257,7 +258,7 @@ impl LinuxEditorAnimationCoordinator {
                 // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
                 // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
                 // Issue #727 约束 2: 通过 VisualUnitTiming::mark_started 统一处理。
-                // Issue #808: 所有 unit 都是 Timed，各自拥有独立时间线。
+                // Issue #819: 协同 unit 是 CaretTrack（边界来自 cursor track），非协同 unit 是 Timed（独立时间线）。
                 for unit in &mut tx.units {
                     unit.timing.mark_started(frame_now);
                 }

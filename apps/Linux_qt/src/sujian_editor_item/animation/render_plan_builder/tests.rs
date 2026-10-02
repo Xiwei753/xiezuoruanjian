@@ -578,8 +578,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
     );
 
     // ── rebase 交棒：take_rebase_frames 现在同时采集文字单元和屏幕光标 ──
-    let (rebase_frames, sampled_cursor) =
-        coord.take_rebase_frames(&[old_key], "rebased_by_enter", now, None, "abc", 0);
+    let visual_state = coord.take_rebase_frames(&[old_key], "rebased_by_enter", now, None, "abc", 0); let rebase_frames = visual_state.rebase_frames.clone(); let sampled_cursor = visual_state.caret_handoff.clone();
     assert_eq!(
         rebase_frames.len(),
         1,
@@ -743,8 +742,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
     // sample_caret_track_frame(B_track, now) 应返回事务 B 当前屏幕光标 62.5。
     // 当前缺陷：reflow 分支用 old_cursor_rect=100, new_cursor_rect=20
     //   → 100 + (20-100)*0.75 = 40，而非屏幕上的 62.5。
-    let (_rebase_frames, sampled_cursor) =
-        coord.take_rebase_frames(&[key_b], "rebased_by_second_input", now, None, "abc", 0);
+    let visual_state = coord.take_rebase_frames(&[key_b], "rebased_by_second_input", now, None, "abc", 0); let _rebase_frames = visual_state.rebase_frames.clone(); let sampled_cursor = visual_state.caret_handoff.clone();
     let sampled_cursor = sampled_cursor.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
 
     let buggy_value = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_cubic(0.5);
@@ -865,8 +863,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     );
 
     // ── 第一次 rebase：take_rebase_frames 采集事务 A 的屏幕光标 ──
-    let (rebase_frames_a, handoff_a) =
-        coord.take_rebase_frames(&[key_a], "first_rebase", now, None, "abc", 0);
+    let visual_state = coord.take_rebase_frames(&[key_a], "first_rebase", now, None, "abc", 0); let rebase_frames_a = visual_state.rebase_frames.clone(); let handoff_a = visual_state.caret_handoff.clone();
     let handoff_a = handoff_a.expect("第一次 rebase 应采样到事务 A 的屏幕光标");
     assert!(
         (handoff_a.sampled.x - expected_a).abs() < 1e-6,
@@ -925,8 +922,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     );
 
     // ── 第二次 rebase：take_rebase_frames 采样事务 B 的屏幕光标 ──
-    let (_rebase_frames_b, handoff_b) =
-        coord.take_rebase_frames(&[key_b], "second_rebase", now_after_b, None, "abc", 0);
+    let visual_state = coord.take_rebase_frames(&[key_b], "second_rebase", now_after_b, None, "abc", 0); let _rebase_frames_b = visual_state.rebase_frames.clone(); let handoff_b = visual_state.caret_handoff.clone();
     let handoff_b = handoff_b.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
 
     // 断言：第二次 sampled caret 精确等于第二次 rebase 前

@@ -248,7 +248,7 @@ pub(crate) fn build_prepared_transaction(
             spec.old_cursor_line_bottom,
             spec.new_cursor_line_top,
             spec.new_cursor_line_bottom,
-            spec.caret_handoff.clone(),
+            spec.visual_state.caret_handoff.clone(),
             spec.caret_duration_ms,
             ingest_route_segments,
         )
@@ -288,7 +288,7 @@ pub(crate) fn build_prepared_transaction(
         .collect();
 
     // 4. Rebase frame 匹配
-    match_rebase_frames(&spec.rebase_frames, &mut units, &spec.offset_map);
+    match_rebase_frames(&spec.visual_state.rebase_frames, &mut units, &spec.offset_map);
 
     // 5. 诊断日志
     editor_animation_debug_log(&format!(
@@ -298,8 +298,8 @@ pub(crate) fn build_prepared_transaction(
         units.len(),
         spec.inserted_ranges.len(),
         spec.deleted_ranges.len(),
-        spec.rebase_frames.len(),
-        spec.caret_handoff.is_some(),
+        spec.visual_state.rebase_frames.len(),
+        spec.visual_state.caret_handoff.is_some(),
         spec.cursor_owner_epoch,
         spec.text_animation_enabled,
         spec.caret_animation_enabled,
@@ -673,8 +673,7 @@ impl LinuxEditorAnimationCoordinator {
         let prepared = prepared?;
         match prepared {
             PreparedRebaseHandoff::Insert {
-                rebase_frames,
-                caret_handoff,
+                visual_state,
                 range_start,
                 range_end,
                 insert_offset_map,
@@ -691,7 +690,7 @@ impl LinuxEditorAnimationCoordinator {
                 // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
                 // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
                 // (range_start, range_start)，new 侧是 inserted_range。
-                let carried_rebase = rebase_frames.len();
+                let carried_rebase = visual_state.rebase_frames.len();
                 let spec = VisualEditSpec {
                     key,
                     operation_kind: TextVisualOperationKind::Insert,
@@ -710,8 +709,7 @@ impl LinuxEditorAnimationCoordinator {
                     new_cursor_line_bottom,
                     cursor_owner_epoch,
                     layout_basis_revision,
-                    rebase_frames,
-                    caret_handoff,
+                    visual_state,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                     text_duration_ms: vt.text_duration_ms,
@@ -742,8 +740,7 @@ impl LinuxEditorAnimationCoordinator {
                 Some(key)
             }
             PreparedRebaseHandoff::Delete {
-                rebase_frames,
-                caret_handoff,
+                visual_state,
                 deleted_ranges,
                 delete_offset_map,
                 visual_affected_byte_range_old,
@@ -759,7 +756,7 @@ impl LinuxEditorAnimationCoordinator {
                 // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
                 // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
                 // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
-                let carried_rebase = rebase_frames.len();
+                let carried_rebase = visual_state.rebase_frames.len();
                 let deleted_ranges_log = deleted_ranges.clone();
                 let spec = VisualEditSpec {
                     key,
@@ -779,8 +776,7 @@ impl LinuxEditorAnimationCoordinator {
                     new_cursor_line_bottom,
                     cursor_owner_epoch,
                     layout_basis_revision,
-                    rebase_frames,
-                    caret_handoff,
+                    visual_state,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                     text_duration_ms: vt.text_duration_ms,
@@ -903,7 +899,7 @@ impl LinuxEditorAnimationCoordinator {
                     );
                     // 纯插入在 old 文档里就是 range_start 这一个位置点。
                     let now = Instant::now();
-                    let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                    let visual_state = self.take_rebase_frames(
                         &conflicting,
                         "rebased_by_insert",
                         now,
@@ -922,7 +918,7 @@ impl LinuxEditorAnimationCoordinator {
                     // 不再把 typing && smooth 当成协同。
                     // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
                     // (range_start, range_start)，new 侧是 inserted_range。
-                    let carried_rebase = rebase_frames.len();
+                    let carried_rebase = visual_state.rebase_frames.len();
                     let spec = VisualEditSpec {
                         key,
                         operation_kind: TextVisualOperationKind::Insert,
@@ -941,8 +937,7 @@ impl LinuxEditorAnimationCoordinator {
                         new_cursor_line_bottom,
                         cursor_owner_epoch,
                         layout_basis_revision,
-                        rebase_frames,
-                        caret_handoff,
+                        visual_state,
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
                         text_duration_ms: vt.text_duration_ms,
@@ -1009,7 +1004,7 @@ impl LinuxEditorAnimationCoordinator {
                     conflict_old_end,
                 );
                 let now = Instant::now();
-                let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                let visual_state = self.take_rebase_frames(
                     &conflicting,
                     "rebased_by_delete",
                     now,
@@ -1028,7 +1023,7 @@ impl LinuxEditorAnimationCoordinator {
                 // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
                 // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
                 // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
-                let carried_rebase = rebase_frames.len();
+                let carried_rebase = visual_state.rebase_frames.len();
                 let spec = VisualEditSpec {
                     key,
                     operation_kind: TextVisualOperationKind::Delete,
@@ -1047,8 +1042,7 @@ impl LinuxEditorAnimationCoordinator {
                     new_cursor_line_bottom,
                     cursor_owner_epoch,
                     layout_basis_revision,
-                    rebase_frames,
-                    caret_handoff,
+                    visual_state,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                     text_duration_ms: vt.text_duration_ms,

@@ -37,9 +37,22 @@ const CLOSING_DEFINITION: &str =
 fn issue815_modify1_qml_restores_mouse_left_long_press() {
     let src = read_src("qml/WritingWorkspace.qml");
 
+    // Issue #819 评论 5956495850 第 6/7 节：旧 touchLongPressHandler 已删除，
+    // 改用 TapHandler + Timer 调 activate_pointer_long_press。
+    // 本测试验证新实现仍保留 Issue #815 评论 6042062633 修改 1 的语义：
+    // 左键长按选词恢复、所有设备接受、右键菜单独立 handler。
+
+    // 旧 touchLongPressHandler 必须已删除。
+    assert!(
+        !src.contains("id: touchLongPressHandler"),
+        "Issue #819 评论 5956495850 第 6 节: 旧 touchLongPressHandler 必须删除，\
+         改用 TapHandler + Timer 调 activate_pointer_long_press。"
+    );
+
+    // 新 leftButtonLongPressHandler 必须存在。
     let handler_pos = src
-        .find("id: touchLongPressHandler")
-        .expect("Issue #815: WritingWorkspace.qml 必须保留长按选中 handler");
+        .find("id: leftButtonLongPressHandler")
+        .expect("Issue #819 评论 5956495850 第 6 节: WritingWorkspace.qml 必须有新的左键长按 handler");
     let window_start = src[..handler_pos].rfind("TapHandler {").unwrap_or(0);
     // 取到下一个 TapHandler 之前，即本 handler 的完整范围（按字符边界回退）。
     let window_end = src[handler_pos..]
@@ -66,18 +79,24 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
         );
     }
 
-    // 长按 → 选词手势的现有链路不能被改掉。
-    for marker in [
-        "begin_selection_gesture",
-        "long_press_at",
-        "end_selection_gesture_qml",
-    ] {
-        assert!(
-            window.contains(marker),
-            "Issue #815 评论 6042062633 修改 1: 长按选中链路 {} 必须保留。",
-            marker
-        );
-    }
+    // Issue #819 评论 5956495850 第 6/7 节：新链路用 Timer 调
+    // activate_pointer_long_press（Rust 状态机 activate_long_press + long_press_at）。
+    assert!(
+        window.contains("activate_pointer_long_press"),
+        "Issue #819 评论 5956495850 第 6 节: 新长按 handler 必须通过 Timer 调\
+         activate_pointer_long_press。"
+    );
+    assert!(
+        window.contains("Timer"),
+        "Issue #819 评论 5956495850 第 6 节: 新长按 handler 必须用 Timer 触发长按。"
+    );
+
+    // end_selection_gesture_qml 仍必须在 release/cancel 时调用。
+    assert!(
+        window.contains("end_selection_gesture_qml"),
+        "Issue #815 评论 6042062633 修改 1: 长按释放/取消时仍必须调\
+         end_selection_gesture_qml 结束选择手势。"
+    );
 
     // 右键菜单继续由独立的 Qt.RightButton TapHandler 处理。
     assert!(

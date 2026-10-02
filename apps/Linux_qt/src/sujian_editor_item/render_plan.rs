@@ -1,5 +1,3 @@
-use super::animation::transaction::types::IngestSnapshotSide;
-use super::edit_motion::CursorRect;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::qt_text_node::AnimationClipRect;
@@ -166,90 +164,10 @@ impl Default for CursorSampleOutcome {
     }
 }
 
-/// Issue #727 评论 5754041813 约束 3: 一帧采样的 caret geometry。
-///
-/// 协同模式每帧的**唯一** caret 采样。由 `sample_coordinated_motion_frame` 在
-/// 同一个 `frame_now` 上采样 owner 事务的 cursor track 一次得到。
-///
-/// Issue #815 评论 6042062633 修改 3: cursor layer 和文字层（InsertReveal/DeleteConceal
-/// 的吞吐 clip）消费的是同一份采样。文字层不准再自己算一次时间，也不准把 caret track
-/// 的 progress 换算成独立 0..1 visible fraction。
-///
-/// `None` 表示本帧无有效 caret motion track（无活跃正文事务 / epoch 不一致 /
-/// 无 cursor_visual_track）。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct SampledCaretFrame {
-    /// caret 在文档坐标系的 x（横向裁切边界）。
-    pub x: f64,
-    /// caret 在文档坐标系的 y（跨行裁切判断）。
-    pub y: f64,
-    /// caret 所在 visual line id（跨行裁切判断）。
-    pub visual_line_id: Option<usize>,
-    /// Issue #727 约束 3: caret track 的当前 progress（0..1）。
-    pub progress: f64,
-    /// Issue #815 评论 6042062633 修改 3: 本帧 caret 的完整 rect（文档坐标）。
-    ///
-    /// 和 x/y/visual_line_id/progress 出自同一次 track 采样，光标层直接用它画 caret，
-    /// 不再自己重新采样一次 track 算位置/高度。
-    pub rect: CursorRect,
-    /// Issue #815 评论 5949097065 问题3: 本帧 caret 运动轨迹**当前所在吞吐行**的
-    /// canonical 行序（由 `PreparedCursorVisualTrack::sampled_ingest_at_progress`
-    /// 从分段路线采样给出）。
-    ///
-    /// 这是跨行吞吐相位的**权威来源**：文字层不再用 caret.y 去猜「我现在在哪一行」，
-    /// 更不会拿上一行的 caret.x 去裁下一行。
-    ///
-    /// - `None`：当前处于 `LayoutHandoff`（跨 layout 几何换位）或路线退化为
-    ///   from→to 直线（IME composition crossfade）。此时所有吞吐字保持上一帧状态，
-    ///   不得用这条轨迹上的对角线 x 裁任何一行。
-    /// - `Some(ord)`：当前位于 canonical 第 `ord` 行的 `IngestLine` / `RowHandoff`
-    ///   段上。
-    pub ingest_line_ord: Option<usize>,
-    /// Issue #815 评论 5949097065 问题3: 本帧是否正处在这条轨迹的**吞吐段**
-    /// （`CaretTrackSegmentKind::IngestLine`）。
-    ///
-    /// - `true`：`rect.x` 就是 `ingest_line_ord` 那一行的吞吐边界，文字按它裁。
-    /// - `false`：处于换位段（`LayoutHandoff` / `RowHandoff`），`rect.x` 只是
-    ///   换位过程中的几何值，**不得**当吞吐边界。
-    pub is_ingest_segment: bool,
-    /// Issue #815 评论 5950887715: 本帧吞吐边界属于哪一侧 canonical。
-    ///
-    /// old/new 的 `VisualLine.id` 每次排版都从 0 重编，是两套互不相干的坐标系，
-    /// 绝不能互相比大小。文字层用这个 side 判断"我这一侧现在该不该动"：
-    /// sampled side = `Old` 时 new 侧 `InsertReveal` 保持初态，= `New` 时 old 侧
-    /// `DeleteConceal` 保持终态。`None` 表示还没有进入任何一侧的吞吐（最前置
-    /// 纯几何换位），两侧都保持初态。
-    pub ingest_side: Option<IngestSnapshotSide>,
-    /// Issue #815 评论 5953049681 问题1: 本帧所处**路由段**的局部进度（0..1）。
-    ///
-    /// 与 `progress` 出自同一次采样：`progress` 是整条 track 的全局进度，只用于
-    /// 生命周期/完成判断；吞吐边界（尤其 `DeleteForwardBoundary` 的边界收拢）必须
-    /// 用这个局部进度，否则在多段 route（如 IME Mixed 的
-    /// `Old 前删段 → handoff → New 吐字段`）里某一行只能拿到整笔事务的几分之一，
-    /// 剩下的部分会在 side 切换那一帧突然消失。
-    pub ingest_progress: f64,
-}
-
-impl Default for SampledCaretFrame {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            visual_line_id: None,
-            progress: 0.0,
-            rect: CursorRect {
-                x: 0.0,
-                top: 0.0,
-                bottom: 0.0,
-                baseline_y: 0.0,
-            },
-            ingest_line_ord: None,
-            is_ingest_segment: false,
-            ingest_side: None,
-            ingest_progress: 0.0,
-        }
-    }
-}
+/// Issue #819 评论 5956495850 第 2 节：`SampledCaretFrame` 的定义已收口到
+/// `animation::frame_state`，让「屏幕画的帧」和「rebase 交棒的帧」是同一份类型。
+/// 这里 re-export 保留旧引用路径（`render_plan::SampledCaretFrame`）。
+pub(crate) use super::animation::frame_state::SampledCaretFrame;
 
 /// Issue #815 评论 6042062633 修改 3: 一帧的统一协同运动结果。
 ///

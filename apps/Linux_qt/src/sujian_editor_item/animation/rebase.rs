@@ -102,12 +102,13 @@ pub(crate) fn conflicting_units_are_untouched(
         .as_ref()
         .map(|track| track.progress(now));
     for unit in &tx.units {
-        // Issue #808 评论 5919641249: `is_caret_driven()` 已恒为 false——所有文字
-        // unit（含 coordinated 吞吐字）统一 Timed，visible 只来自自己的时间线。
-        // 下面的 CaretDriven 分支是保留的历史路径，不再被任何 kind 走到。
+        // Issue #819 评论 5956495850: 协同 InsertReveal/DeleteConceal 的空间边界直接来自
+        // 同一笔 cursor track 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
+        // is_caret_driven() 恒为 false（CaretTrack unit 走 is_caret_track()），
+        // 下面的分支是保留的历史路径，不再被任何 kind 走到。
         let still_playing = if unit.timing.is_caret_driven() {
-            // 历史保留分支：is_caret_driven() 恒为 false（见上方注释），不再走到。
-            // 所有 unit 统一 Timed，visible 只来自自己的时间线。
+            // 历史保留分支：is_caret_driven() 恒为 false，不再走到。
+            // Issue #819: 协同吞吐字是 CaretTrack（不是 CaretDriven），逐帧边界来自 cursor track。
             let progress = caret_track_progress.unwrap_or(0.0);
             let eased = AnimatedSlice::ease_out_quad(progress);
             let start = unit.timing.start_fraction();
@@ -165,11 +166,21 @@ pub(crate) struct RebaseCaretHandoff {
     pub(crate) sampled_line_bottom: f64,
 }
 
+/// Issue #819 评论 5956495850 第 4 节：rebase 交棒的完整视觉状态。
+///
+/// 合成旧的 `(Vec<RebaseFrame>, Option<RebaseCaretHandoff>)` 二元组，
+/// 由 `take_rebase_frames` 从 `SampledEditVisualState` 构造。
+/// coordinator 的所有 handoff 只接受本类型，不再分别传 frames 和 caret。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RebaseVisualState {
+    pub(crate) rebase_frames: Vec<RebaseFrame>,
+    pub(crate) caret_handoff: Option<RebaseCaretHandoff>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum PreparedRebaseHandoff {
     Insert {
-        rebase_frames: Vec<RebaseFrame>,
-        caret_handoff: Option<RebaseCaretHandoff>,
+        visual_state: RebaseVisualState,
         range_start: usize,
         range_end: usize,
         insert_offset_map: OffsetMap,
@@ -177,8 +188,7 @@ pub(crate) enum PreparedRebaseHandoff {
         visual_affected_byte_range_new: Option<(usize, usize)>,
     },
     Delete {
-        rebase_frames: Vec<RebaseFrame>,
-        caret_handoff: Option<RebaseCaretHandoff>,
+        visual_state: RebaseVisualState,
         deleted_ranges: Vec<(usize, usize)>,
         delete_offset_map: OffsetMap,
         visual_affected_byte_range_old: Option<(usize, usize)>,
@@ -188,84 +198,18 @@ pub(crate) enum PreparedRebaseHandoff {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedCompositionCommitHandoff {
-    pub(crate) rebase_frames: Vec<RebaseFrame>,
-    pub(crate) caret_handoff: Option<RebaseCaretHandoff>,
+    pub(crate) visual_state: RebaseVisualState,
     pub(crate) offset_map: OffsetMap,
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
 }
 
-pub(crate) fn collect_rebase_frame_for_unit_without_caret(
-    unit: &PreparedVisualUnit,
-    caret_track_progress: Option<f64>,
-    caret_remaining_ms: u64,
-    now: Instant,
-) -> Option<RebaseFrame> {
-    // Issue #756 / Issue #785: 所有 unit 都是 Timed，visible_fraction 从自己的时间线算。
-    // 不再有 CaretDriven 分支。caret_track_progress / caret_remaining_ms 保留在签名里
-    // 供调用方兼容，但 Issue #785 后不再使用。
-    let _ = (caret_track_progress, caret_remaining_ms);
-    let visible_fraction = unit.current_visible_fraction(now);
-    // Issue #727 约束 4: 不依赖 caret geometry，统一用 compute_frame。
-    let frame = unit.slice.compute_frame(visible_fraction);
-    // 按真实帧判断终态。
-    match unit.slice.kind {
-        AnimatedSliceKind::InsertReveal => {
-            if visible_fraction >= 1.0 - 1e-3 {
-                return None;
-            }
-        }
-        AnimatedSliceKind::DeleteConceal => {
-            if visible_fraction <= 1e-3 {
-                return None;
-            }
-        }
-        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-            if unit.progress(now) >= 1.0 {
-                return None;
-            }
-        }
-    }
-    // Issue #808 评论 5920712056 / 5921417659: 多个 slice 共用一条行级 boundary 后，
-    // effective_fraction 必须直接用 timeline visible_fraction，不能从本 slice
-    // 的局部 clip 宽度反推——否则同一组 slice 在 rebase 后会拿到不同进度，
-    // 出现跳字/突然补全/重新吐一遍。
-    // 评论 5921417659 确认：Reveal/Conceal 完成判断（上方 match 分支）与
-    // RebaseFrame.visible_fraction 均直接用 unit.current_visible_fraction(now)，
-    // 不再从局部 frame.w 反推共享 mask 进度。
-    let effective_fraction = visible_fraction;
-    // Issue #815 评论 6042062633 修改 3: `CaretTrack` 没有自己的时间线，
-    // 协同吞吐字的 rebase 连续性由 `RebaseCaretHandoff`（先采样旧 track 当前帧）
-    // 承担，不在这里交棒。
-    let (elapsed_ms, duration_ms) = match &unit.timing {
-        VisualUnitTiming::Timed {
-            started_at,
-            duration_ms,
-            ..
-        } => {
-            let elapsed = match started_at {
-                Some(start) => now.duration_since(*start).as_millis() as u64,
-                None => 0,
-            };
-            (elapsed, *duration_ms)
-        }
-        VisualUnitTiming::CaretTrack { .. } => (0, 0),
-    };
-    let remaining_duration_ms = duration_ms.saturating_sub(elapsed_ms);
-    Some(RebaseFrame {
-        byte_start: unit.slice.byte_start,
-        byte_end: unit.slice.byte_end,
-        x: frame.x,
-        y: frame.y,
-        opacity: frame.opacity,
-        shaping_identity: unit.slice.shaping_identity.clone(),
-        visible_fraction: effective_fraction,
-        sampled_at: now,
-        remaining_duration_ms,
-    })
-}
-
 impl LinuxEditorAnimationCoordinator {
+    /// Issue #819 评论 5956495850 第 4 节：重写 `take_rebase_frames`。
+    ///
+    /// 旧事务还活着时调 `sample_transaction_visual_state(tx, now)` 采样当前屏幕帧，
+    /// 从 `SampledEditVisualState` 构造 `RebaseVisualState`，再 cancel 旧事务。
+    /// 不再自己逐 unit 调 `collect_rebase_frame_for_unit_without_caret`。
     pub(crate) fn take_rebase_frames(
         &mut self,
         conflicting: &[VisualTransactionKey],
@@ -274,9 +218,9 @@ impl LinuxEditorAnimationCoordinator {
         preserve: Option<(&[(usize, usize)], &OffsetMap)>,
         current_old_text: &str,
         current_cursor_epoch: u64,
-    ) -> (Vec<RebaseFrame>, Option<RebaseCaretHandoff>) {
+    ) -> RebaseVisualState {
         if conflicting.is_empty() {
-            return (Vec::new(), None);
+            return RebaseVisualState::default();
         }
         let mut all_rebase_frames: Vec<RebaseFrame> = Vec::new();
         // (key, cursor_owner_epoch, handoff) 候选，cancel 之后再从中选 handoff。
@@ -320,30 +264,44 @@ impl LinuxEditorAnimationCoordinator {
                 ));
                 continue;
             }
-            // 受影响：采集 rebase frames（frame.byte_start/end 属于该旧事务 new 坐标系）。
-            // Issue #727 约束 4: 不再自己采样 caret geometry（删除 sample_caret_geometry_for_caret_driven_clip）。
-            // Reveal/Conceal 统一从自己的 Timed 文字 timeline 取 visible_fraction，
-            // 用 slice.compute_frame 构造，不依赖 caret geometry。
-            // ReflowMove/ReflowCrossFade 继续用 compute_frame。
-            let caret_track_progress = tx
-                .cursor_visual_track
-                .as_ref()
-                .map(|track| track.progress(now));
-            let caret_remaining_ms = tx
-                .cursor_visual_track
-                .as_ref()
-                .map(|track| track.remaining_duration_ms(now))
-                .unwrap_or(0);
-            let frames: Vec<RebaseFrame> = tx
-                .units
+            // 受影响：用 sample_transaction_visual_state 采样当前屏幕帧。
+            // Issue #819 评论 5956495850 第 4 节：不再逐 unit 调
+            // collect_rebase_frame_for_unit_without_caret，统一走采样入口。
+            let sampled = super::sample::sample_transaction_visual_state(tx, now);
+            // 从 SampledSliceFrame 构造 RebaseFrame，做终态过滤 + 坐标系映射。
+            let frames: Vec<RebaseFrame> = sampled
+                .slices
                 .iter()
-                .filter_map(|unit| {
-                    collect_rebase_frame_for_unit_without_caret(
-                        unit,
-                        caret_track_progress,
-                        caret_remaining_ms,
-                        now,
-                    )
+                .filter_map(|slice| {
+                    // 终态过滤：已播完的 unit 不交棒。
+                    match slice.kind {
+                        AnimatedSliceKind::InsertReveal => {
+                            if slice.visible_fraction >= 1.0 - 1e-3 {
+                                return None;
+                            }
+                        }
+                        AnimatedSliceKind::DeleteConceal => {
+                            if slice.visible_fraction <= 1e-3 {
+                                return None;
+                            }
+                        }
+                        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                            if slice.progress >= 1.0 {
+                                return None;
+                            }
+                        }
+                    }
+                    Some(RebaseFrame {
+                        byte_start: slice.byte_start,
+                        byte_end: slice.byte_end,
+                        x: slice.dest_rect.x,
+                        y: slice.dest_rect.y,
+                        opacity: slice.opacity,
+                        shaping_identity: slice.shaping_identity.clone(),
+                        visible_fraction: slice.visible_fraction,
+                        sampled_at: now,
+                        remaining_duration_ms: slice.remaining_duration_ms,
+                    })
                 })
                 .collect();
             // 坐标系映射：把每个 frame 的 byte_start/byte_end 映射到 current-old 坐标系。
@@ -371,27 +329,17 @@ impl LinuxEditorAnimationCoordinator {
                     Some(frame)
                 })
                 .collect();
-            // 在 cancel 之前采样 caret，构造 RebaseCaretHandoff 候选。
-            // Issue #690 评论 5680276931 + 5681206040: 用同一个 now 采样旧事务这一帧
-            // 正在屏幕上显示的 coordinated cursor rect，并取旧 caret track 的剩余时长。
-            // Issue #727 约束 4: 不再调 sample_caret_geometry_for_caret_driven_clip，
-            // 直接从 caret track 采样 visual_line_id 供 RebaseCaretHandoff 使用。
-            // Issue #815 评论 6042062633 修改 3: 连续输入/删除时，先用统一采样入口取旧
-            // cursor track 在**同一个 now** 的当前帧（rect + visual_line_id 出自同一次
-            // 采样），新 track 的 from 端就从这个当前 caret 连到新的目标 caret。
-            // 绝不能退回逻辑 old_cursor_rect——那会让快速连打时文字/光标各跳回起点。
-            let old_track_frame = tx
-                .cursor_visual_track
-                .as_ref()
-                .map(|track| sample_caret_track_frame(track, now));
-            let caret_handoff = match (old_track_frame, tx.cursor_visual_track.as_ref()) {
-                (Some(frame), Some(track)) => {
-                    let sampled = frame.rect;
+            // 在 cancel 之前从 sampled.caret 构造 RebaseCaretHandoff 候选。
+            // Issue #819 评论 5956495850 第 4 节：caret 帧已由 sample_transaction_visual_state
+            // 采好，直接从 SampledCaretFrame 构造 handoff，不再单独调 sample_caret_track_frame。
+            let caret_handoff = match (sampled.caret, tx.cursor_visual_track.as_ref()) {
+                (Some(caret_frame), Some(track)) => {
+                    let sampled = caret_frame.rect;
                     // Issue #722 评论 5749791161: 采样到的行几何从旧 track 的
                     // from_line/to_line 字段中选取。caret_line_id 等于 from 行 id
                     // 时用 from 行几何，等于 to 行 id 时用 to 行几何，否则用 from 行
                     // 几何作 fallback（caret 通常还在过渡中间，偏向 from 行更安全）。
-                    let caret_line_id = frame.visual_line_id;
+                    let caret_line_id = caret_frame.visual_line_id;
                     let (line_top, line_bottom) = match caret_line_id {
                         Some(id) if Some(id) == track.to_visual_line_id => {
                             (track.to_line_top, track.to_line_bottom)
@@ -401,19 +349,13 @@ impl LinuxEditorAnimationCoordinator {
                     Some(RebaseCaretHandoff {
                         sampled,
                         remaining_duration_ms: track.remaining_duration_ms(now).max(1),
-                        // Issue #722 评论 5749572808 问题2 / Issue #815: 复用同一 now 时刻
-                        // 同一次采样得到的 caret_line_id，保证 x/y 和行 id 来自同一帧同一 track。
                         sampled_visual_line_id: caret_line_id,
                         sampled_line_top: line_top,
                         sampled_line_bottom: line_bottom,
                     })
                 }
-                // Issue #808 评论 5916391891 修改 3: 删除 (Some(sampled), None) handoff fallback。
-                // 没有真实 cursor track，就没有 cursor handoff。text-only 事务永远不能
-                // 生成、保存、交棒插值 cursor；光标直接由 canonical/Snap 接管。
-                // 下一笔如果需要 cursor 动画，但上一笔没有 cursor track，就从当时
-                // canonical cursor 开始，不从文字事务时间线补造轨迹。
-                // 无 cursor track 时没有可交棒的当前帧，这里防御性覆盖所有剩余分支。
+                // Issue #808 评论 5916391891 修改 3: 没有真实 cursor track，就没有 cursor handoff。
+                // text-only 事务永远不能生成、保存、交棒插值 cursor；光标直接由 canonical/Snap 接管。
                 _ => None,
             };
             caret_handoff_candidates.push((old_key, tx.cursor_owner_epoch, caret_handoff));
@@ -439,7 +381,10 @@ impl LinuxEditorAnimationCoordinator {
             all_rebase_frames.len(),
             selected_caret_handoff.is_some(),
         ));
-        (all_rebase_frames, selected_caret_handoff)
+        RebaseVisualState {
+            rebase_frames: all_rebase_frames,
+            caret_handoff: selected_caret_handoff,
+        }
     }
 
     pub(crate) fn prepare_rebase_handoff_for_edit(
@@ -551,7 +496,7 @@ impl LinuxEditorAnimationCoordinator {
                     // 纯插入在 old 文档里就是 range_start 这一个位置点。
                     // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样，
                     // 旧事务还活着，采到的是真实当前帧（文字 Timed unit 与 caret track 独立）。
-                    let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+                    let visual_state = self.take_rebase_frames(
                         &conflicting,
                         "rebased_by_insert",
                         now,
@@ -560,8 +505,7 @@ impl LinuxEditorAnimationCoordinator {
                         cursor_owner_epoch,
                     );
                     Some(PreparedRebaseHandoff::Insert {
-                        rebase_frames,
-                        caret_handoff,
+                        visual_state,
                         range_start,
                         range_end,
                         insert_offset_map,
@@ -620,7 +564,7 @@ impl LinuxEditorAnimationCoordinator {
                 conflict_old_end,
             );
             // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样。
-            let (rebase_frames, caret_handoff) = self.take_rebase_frames(
+            let visual_state = self.take_rebase_frames(
                 &conflicting,
                 "rebased_by_delete",
                 now,
@@ -629,8 +573,7 @@ impl LinuxEditorAnimationCoordinator {
                 cursor_owner_epoch,
             );
             Some(PreparedRebaseHandoff::Delete {
-                rebase_frames,
-                caret_handoff,
+                visual_state,
                 deleted_ranges,
                 delete_offset_map,
                 visual_affected_byte_range_old,

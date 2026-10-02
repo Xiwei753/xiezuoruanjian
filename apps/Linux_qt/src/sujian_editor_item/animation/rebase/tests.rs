@@ -46,6 +46,61 @@ fn wrap_units(slices: Vec<AnimatedSlice>) -> Vec<PreparedVisualUnit> {
         .collect()
 }
 
+/// Issue #819 评论 5956495850 第 4 节：test-only helper，内联已删除的
+/// `collect_rebase_frame_for_unit_without_caret` 的逻辑，供白盒测试验证
+/// rebase frame 的 visible_fraction / 终态过滤行为。
+fn collect_rebase_frame_for_unit(
+    unit: &PreparedVisualUnit,
+    now: Instant,
+) -> Option<RebaseFrame> {
+    let visible_fraction = unit.current_visible_fraction(now);
+    let frame = unit.slice.compute_frame(visible_fraction);
+    match unit.slice.kind {
+        crate::sujian_editor_item::animated_slice::AnimatedSliceKind::InsertReveal => {
+            if visible_fraction >= 1.0 - 1e-3 {
+                return None;
+            }
+        }
+        crate::sujian_editor_item::animated_slice::AnimatedSliceKind::DeleteConceal => {
+            if visible_fraction <= 1e-3 {
+                return None;
+            }
+        }
+        crate::sujian_editor_item::animated_slice::AnimatedSliceKind::ReflowMove
+        | crate::sujian_editor_item::animated_slice::AnimatedSliceKind::ReflowCrossFade => {
+            if unit.progress(now) >= 1.0 {
+                return None;
+            }
+        }
+    }
+    let (elapsed_ms, duration_ms) = match &unit.timing {
+        VisualUnitTiming::Timed {
+            started_at,
+            duration_ms,
+            ..
+        } => {
+            let elapsed = match started_at {
+                Some(start) => now.duration_since(*start).as_millis() as u64,
+                None => 0,
+            };
+            (elapsed, *duration_ms)
+        }
+        VisualUnitTiming::CaretTrack { .. } => (0, 0),
+    };
+    let remaining_duration_ms = duration_ms.saturating_sub(elapsed_ms);
+    Some(RebaseFrame {
+        byte_start: unit.slice.byte_start,
+        byte_end: unit.slice.byte_end,
+        x: frame.x,
+        y: frame.y,
+        opacity: frame.opacity,
+        shaping_identity: unit.slice.shaping_identity.clone(),
+        visible_fraction,
+        sampled_at: now,
+        remaining_duration_ms,
+    })
+}
+
 fn make_test_snapshot(
     virtual_text: &str,
     line_clusters: Vec<(usize, usize, f64, f64, ShapingIdentity)>,
@@ -1082,15 +1137,14 @@ fn issue690_take_rebase_frames_carries_frames_and_cancels_old_transaction() {
         50,
     ));
 
-    let (frames, _) =
-        coord.take_rebase_frames(&[old_key], "rebased_by_insert", now, None, "abc", 0);
+    let visual_state = coord.take_rebase_frames(&[old_key], "rebased_by_insert", now, None, "abc", 0); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
     assert_eq!(frames.len(), 1, "旧事务的未播完单元要全部交棒");
     assert!((frames[0].visible_fraction - 0.75).abs() < 1e-6);
     assert!(
         coord.prepared_queue.is_empty(),
         "交棒后旧事务必须取消，snapshot/纹理资源归新事务所有"
     );
-    let (no_frames, _) = coord.take_rebase_frames(&[], "rebased_by_insert", now, None, "abc", 0);
+    let visual_state = coord.take_rebase_frames(&[], "rebased_by_insert", now, None, "abc", 0); let no_frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
     assert!(no_frames.is_empty(), "无冲突事务时不产生交棒帧");
 }
 
@@ -1112,14 +1166,14 @@ fn issue690_take_rebase_frames_keeps_transaction_when_units_are_untouched() {
 
     // 在 "abc" 末尾插入 "d"：old 坐标里只是位置 3 这一个点，前面的单元没被覆盖。
     let offset_map = OffsetMap::build("abc", "abcd");
-    let (frames, _) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &[old_key],
         "rebased_by_insert",
         now,
         Some((&[(3, 3)], &offset_map)),
         "abc",
         0,
-    );
+    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
 
     assert!(frames.is_empty(), "未覆盖的单元不该交棒，旧事务自己播完");
     assert_eq!(
@@ -1161,14 +1215,14 @@ fn issue690_take_rebase_frames_cancels_when_edit_covers_playing_unit() {
     ));
 
     let offset_map = OffsetMap::build("abc", "ab");
-    let (frames, _) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &[old_key],
         "rebased_by_delete",
         now,
         Some((&[(2, 3)], &offset_map)),
         "abc",
         0,
-    );
+    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
 
     assert_eq!(frames.len(), 1, "被编辑覆盖的单元必须交棒给新事务");
     assert!(coord.prepared_queue.is_empty(), "覆盖后旧事务结束生命期");
@@ -1191,14 +1245,14 @@ fn issue690_take_rebase_frames_cancels_when_unit_offsets_shift() {
 
     // 在开头插入：old 单元 0..3 在新文档里变成 1..4，几何位置变了必须重排。
     let offset_map = OffsetMap::build("abc", "xabc");
-    let (frames, _) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &[old_key],
         "rebased_by_insert",
         now,
         Some((&[(0, 0)], &offset_map)),
         "abc",
         0,
-    );
+    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
 
     assert_eq!(frames.len(), 1, "偏移被平移的单元仍属被影响范围，要交棒");
     assert!(coord.prepared_queue.is_empty());
@@ -1220,14 +1274,14 @@ fn issue690_take_rebase_frames_cancels_finished_transaction_without_frames() {
     ));
 
     let offset_map = OffsetMap::build("abc", "abcd");
-    let (frames, _) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &[old_key],
         "rebased_by_insert",
         now,
         Some((&[(3, 3)], &offset_map)),
         "abc",
         0,
-    );
+    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
 
     assert!(frames.is_empty(), "已播完的单元是稳定终态，不该再交棒");
     assert!(
@@ -1317,14 +1371,14 @@ fn issue710_take_rebase_frames_handles_multiple_conflicting_transactions() {
     // ── 调用 take_rebase_frames 处理全部冲突事务 ──
     // conflicting = [tx1_key, tx2_key]（模拟 find_conflicting_transaction 返回全部）
     let conflicting = vec![tx1_key, tx2_key];
-    let (rebase_frames, _caret_handoff) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &conflicting,
         "rebased_by_delete",
         now,
         Some((&changed_old_ranges, &offset_map)),
         current_old_text,
         0,
-    );
+    ); let rebase_frames = visual_state.rebase_frames.clone(); let _caret_handoff = visual_state.caret_handoff.clone();
 
     // ── 断言 1: tx1 留在队列里（keep）──
     let active = coord.prepared_queue.active_transactions();
@@ -1428,14 +1482,14 @@ fn issue710_take_rebase_frames_drops_frame_on_mapping_failure() {
 
     // ── 调用 take_rebase_frames 处理冲突事务 ──
     let conflicting = vec![tx_key];
-    let (rebase_frames, _caret_handoff) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &conflicting,
         "rebased_by_replace",
         now,
         Some((&changed_old_ranges, &offset_map)),
         current_old_text,
         0,
-    );
+    ); let rebase_frames = visual_state.rebase_frames.clone(); let _caret_handoff = visual_state.caret_handoff.clone();
 
     // ── 断言 1: rebase_frames 为空（映射失败的 frame 被丢弃）──
     assert!(
@@ -1602,14 +1656,14 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
 
     // 两笔都被覆盖，都应被取消。caret handoff 应选 tx2（transaction_id=200 更大）。
     let conflicting = vec![tx1_key, tx2_key];
-    let (_rebase_frames, caret_handoff) = coord.take_rebase_frames(
+    let visual_state = coord.take_rebase_frames(
         &conflicting,
         "rebased_by_delete",
         now,
         Some((&changed_old_ranges, &offset_map)),
         current_old_text,
         0, // current_cursor_epoch = 0，两笔 tx 都匹配
-    );
+    ); let _rebase_frames = visual_state.rebase_frames.clone(); let caret_handoff = visual_state.caret_handoff.clone();
 
     // 两笔都应被取消
     assert!(coord.prepared_queue.is_empty(), "两笔冲突事务都应被取消");
@@ -1716,8 +1770,8 @@ fn issue808_rebase_frame_uses_timeline_visible_fraction_for_shared_line_mask_ins
     );
 
     // 调 collect_rebase_frame_for_unit_without_caret()
-    let rebase_a = collect_rebase_frame_for_unit_without_caret(&unit_a, None, 0, now);
-    let rebase_b = collect_rebase_frame_for_unit_without_caret(&unit_b, None, 0, now);
+    let rebase_a = collect_rebase_frame_for_unit(&unit_a, now);
+    let rebase_b = collect_rebase_frame_for_unit(&unit_b, now);
 
     // A/B 都必须仍然产生 RebaseFrame（B 不能因 frame.w==0 而跳过）
     let rebase_a = rebase_a.expect("A 必须产生 RebaseFrame");
@@ -1851,8 +1905,8 @@ fn issue808_rebase_frame_uses_timeline_visible_fraction_for_shared_line_mask_del
     );
 
     // 调 collect_rebase_frame_for_unit_without_caret()
-    let rebase_a = collect_rebase_frame_for_unit_without_caret(&unit_a, None, 0, now);
-    let rebase_b = collect_rebase_frame_for_unit_without_caret(&unit_b, None, 0, now);
+    let rebase_a = collect_rebase_frame_for_unit(&unit_a, now);
+    let rebase_b = collect_rebase_frame_for_unit(&unit_b, now);
 
     let rebase_a = rebase_a.expect("A 必须产生 RebaseFrame");
     let rebase_b = rebase_b.expect("B 必须产生 RebaseFrame");

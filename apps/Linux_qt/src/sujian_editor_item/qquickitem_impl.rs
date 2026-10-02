@@ -1,6 +1,7 @@
 use super::input_host::is_left_button_pressed;
 use super::*;
 
+use super::pointer_gesture::MoveOutcome;
 use super::render_plan::{CursorStyle, FrameContext, SelectionPreeditStyle};
 use super::scene_graph_renderer::StaticTextParams;
 use std::time::Instant;
@@ -45,32 +46,49 @@ impl QQuickItem for SujianEditorItem {
         let pos = event.position();
         match event.event_type() {
             qmetaobject::QMouseEventType::MouseButtonPress => {
-                // Issue #810 评论 问题2: press 开始一个新指针手势窗口。
-                // 旧的拖选/选择手势状态必须清除，避免上一轮手势的 Snap/隐藏
-                // 状态污染本次点击。click_at 内部会根据 hit_test 结果决定是否
-                // bump epoch / 清选区。
-                self.pointer_drag_selecting = false;
-                self.selection_gesture_active = false;
+                // Issue #819 评论 5956495850 第 6 节：左键 press 通过状态机驱动。
+                // 先 hit_test 得到 hit_index 作为拖选 anchor，再 click_at 设置 cursor。
+                // 状态机 press 会清除上一轮手势的残留状态（pointer_drag_selecting /
+                // selection_gesture_active），避免上一轮手势的 Snap/隐藏状态污染本次点击。
+                let (hit_index, _) = self.hit_test(f64::from(pos.x), f64::from(pos.y));
+                self.pointer_gesture
+                    .press((pos.x as f32, pos.y as f32), hit_index, Instant::now());
+                self.sync_pointer_gesture_flags();
                 self.click_at(pos.x as f32, pos.y as f32, false);
                 let obj_ptr = self.get_cpp_object();
                 input::focus_item(obj_ptr);
             }
             qmetaobject::QMouseEventType::MouseMove => {
                 if is_left_button_pressed(&event) {
-                    // Issue #810 评论 问题2: 拖选期间选择手势明确 active。
+                    // Issue #819 评论 5956495850 第 6 节：move 通过状态机驱动。
+                    // 状态机决定是否进入/继续 DragSelecting / LongPressSelecting。
                     // selection_gesture_active 决定 render_plan_builder 的 hard_snap，
                     // 不再用 Core has_selection（选区是否存在）代替手势状态。
-                    self.pointer_drag_selecting = true;
-                    self.selection_gesture_active = true;
-                    self.drag_select_at(pos.x as f32, pos.y as f32);
+                    let outcome = self.pointer_gesture.move_pos((pos.x as f32, pos.y as f32));
+                    self.sync_pointer_gesture_flags();
+                    match outcome {
+                        MoveOutcome::StartedDragSelect { .. }
+                        | MoveOutcome::ContinueDragSelect { .. }
+                        | MoveOutcome::ContinueLongPressSelect { .. } => {
+                            // 从 anchor 持续扩选到当前位置。
+                            // drag_select_at 内部用 Core selection_anchor() 作为 anchor，
+                            // 与状态机 anchor 一致（press 时 click_at 设置
+                            // selection(hit_index, hit_index)）。
+                            self.drag_select_at(pos.x as f32, pos.y as f32);
+                        }
+                        MoveOutcome::StillPressed | MoveOutcome::Ignored => {
+                            // 未超过拖动阈值或无 press，不扩选。
+                        }
+                    }
                 }
             }
             qmetaobject::QMouseEventType::MouseButtonRelease => {
-                // Issue #810 评论 问题2: release 走统一的手势结束路径，
-                // 不只做 pointer_drag_selecting = false。end_selection_gesture 负责：
-                // 1) 清 pointer_drag_selecting / selection_gesture_active
-                // 2) 告诉 cursor controller 手势结束，保留当前 selection head visual rect
-                //    供选区收起后恢复光标运动。
+                // Issue #819 评论 5956495850 第 6 节：release 走统一的手势结束路径。
+                // 状态机 release 清 pointer_drag_selecting / selection_gesture_active，
+                // end_selection_gesture 额外告诉 cursor controller 手势结束，保留当前
+                // selection head visual rect 供选区收起后恢复光标运动。
+                self.pointer_gesture.release();
+                self.sync_pointer_gesture_flags();
                 self.end_selection_gesture();
             }
             _ => {}
@@ -479,14 +497,49 @@ impl SujianEditorItem {
 }
 
 impl SujianEditorItem {
+    /// Issue #819 评论 5956495850 第 6 节：把状态机的两个布尔值同步回
+    /// `self.pointer_drag_selecting` / `self.selection_gesture_active`。
+    ///
+    /// render_plan_builder / rendering 仍读 `self.selection_gesture_active` 字段
+    /// （保留字段不破坏它们），但字段的值由状态机维护。每次状态机 transition
+    /// 后调此方法同步。
+    pub(crate) fn sync_pointer_gesture_flags(&mut self) {
+        self.pointer_drag_selecting = self.pointer_gesture.pointer_drag_selecting();
+        self.selection_gesture_active = self.pointer_gesture.selection_gesture_active();
+    }
+
+    /// Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点时调用。
+    ///
+    /// 调状态机 `activate_long_press`，若成功激活（返回 true）则调
+    /// `long_press_at` 选词。左键长按只负责选择，不弹菜单
+    /// （菜单只由右键 TapHandler 触发）。
+    ///
+    /// 与旧 `begin_selection_gesture + long_press_at` 链路的区别：
+    /// - 旧链路：QML onLongPressed 调 begin_selection_gesture（置
+    ///   selection_gesture_active=true）+ long_press_at（选词 + 弹菜单）。
+    /// - 新链路：QML Timer 到点调 activate_pointer_long_press，内部状态机
+    ///   activate_long_press（置 selection_gesture_active=true +
+    ///   pointer_drag_selecting=true）+ long_press_at（只选词，不弹菜单）。
+    pub(crate) fn activate_pointer_long_press(&mut self, x: f32, y: f32) {
+        let activated = self.pointer_gesture.activate_long_press();
+        self.sync_pointer_gesture_flags();
+        if activated {
+            // 只在成功激活时选词。已在 DragSelecting 时忽略（拖选优先于长按）。
+            self.long_press_at(x, y);
+        }
+    }
+
     /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期入口。
     ///
-    /// QML TapHandler.onLongPressed 调用，设置 `selection_gesture_active = true`，
-    /// 让 render_plan_builder 在长按选词期间走 hard_snap，不用 Core has_selection 代替。
-    /// 与鼠标 MouseButtonPress 的 `selection_gesture_active = false`（先清旧手势）不同：
-    /// 长按是明确的选择手势开始，直接置 true。
+    /// 保留供 QML 兼容调用，但内部改成通过状态机驱动：等价于在当前 press 窗口内
+    /// 激活长按。Issue #819 评论 5956495850 第 7 节接线后，QML Timer 改调
+    /// `activate_pointer_long_press`，此方法仅作向后兼容入口。
     pub(crate) fn begin_selection_gesture(&mut self) {
-        self.selection_gesture_active = true;
+        // 状态机 activate_long_press 在 Pressed 状态下会置
+        // selection_gesture_active=true / pointer_drag_selecting=true。
+        // 若当前不在 Pressed（如 QML 在没有 press 的情况下调），则 no-op。
+        let _ = self.pointer_gesture.activate_long_press();
+        self.sync_pointer_gesture_flags();
     }
 
     /// Issue #810 评论 5932233052 问题3: 统一的选择手势结束路径。
@@ -501,9 +554,10 @@ impl SujianEditorItem {
     /// 只结束平台手势状态。选区收起由后续的 click_at / 键盘导航 / delete 等操作触发，
     /// 那时 `selection_gesture_active` 已为 false，build_cursor_plan 不再强制 Snap，
     /// 从 `selection_head_rect`（= visual_x/visual_y）建 Tween 到新 cursor 位置。
+    ///
+    /// Issue #819 评论 5956495850 第 6 节：状态机 flag 同步由调用方
+    /// （mouse_event release 分支）在调本方法前完成。本方法只负责 cursor_ctrl 收尾。
     fn end_selection_gesture(&mut self) {
-        self.pointer_drag_selecting = false;
-        self.selection_gesture_active = false;
         // 记录当前 selection head 的 visual rect。
         // 手势结束时光标因 has_selection 隐藏（should_be_visible=false），
         // visual_x/visual_y 是最后一次拖选的 cursor 位置（selection head）。
@@ -515,7 +569,11 @@ impl SujianEditorItem {
     ///
     /// QML TapHandler onPressedChanged / onCanceled 在触屏/手写笔长按释放时调用，
     /// 委托到私有 `end_selection_gesture`，与鼠标 MouseButtonRelease 走统一路径。
+    ///
+    /// Issue #819 评论 5956495850 第 6 节：同时调状态机 cancel，确保状态机回到 Idle。
     pub(crate) fn end_selection_gesture_qml(&mut self) {
+        self.pointer_gesture.cancel();
+        self.sync_pointer_gesture_flags();
         self.end_selection_gesture();
     }
 }

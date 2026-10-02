@@ -35,7 +35,7 @@ impl SujianEditorItem {
             EditorTransactionCause::Load,
             writer_core::editor::EditorOperationKind::Load,
         );
-        self.record_transaction(old, new, &result, false);
+        let _ = self.record_transaction(old, new, &result, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
         // Issue #715: 章节 Load 的完整视觉状态边界。
@@ -75,7 +75,7 @@ impl SujianEditorItem {
             EditorTransactionCause::Load,
             writer_core::editor::EditorOperationKind::Load,
         );
-        self.record_transaction(old, new, &result, false);
+        let _ = self.record_transaction(old, new, &result, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
         // Issue #715: 章节 Load 的完整视觉状态边界。
@@ -358,8 +358,8 @@ impl SujianEditorItem {
         }
         self.current_coordinated_animation_enabled = value;
         // Issue #756: 协同模式切换时清活动动画，避免旧事务按旧模式继续播放。
-        // Issue #808: 协同不再"绑死"文字与光标——两者各有独立 timeline/easing/duration，
-        // 协同只表示同事务/同首帧/同 rebase，以及吞吐字遮罩锚点取自 caret 位置。
+        // Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
+        // 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
