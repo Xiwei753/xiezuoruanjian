@@ -150,8 +150,11 @@ Item {
 
     // ---------------------------------------------------------------------------
     // 交互：用 TapHandler 上抛点击类信号，节点不自行决定行为
-    // Issue #793 评论 5884923277: 加 exclusiveSignals 真正分清单击/双击，
-    // 默认 NotExclusive 时双击会同时触发单击。
+    // Issue #817 评论 5949494799: 恢复 TapHandler 默认 NotExclusive。
+    // Qt 6.11 对 SingleTap | DoubleTap 的语义是单击和双击都要等双击时间窗
+    // 结束才发；时间窗内连续点到 3 次及以上时两个信号都不发。
+    // 双击节点时可以同时先完成选中（onSingleTapped），再进入编辑（onDoubleTapped），
+    // 符合 #373 的"选中只负责高亮，不改变交互逻辑"。
     // Issue #793 评论 5885482530: handler 全部挂在稳定 root Item 上，
     // 不放进 visualNode，命中框恒定。
     // Issue #801 评论 5894035036: 按 acceptedDevices 拆桌面指针/触屏——
