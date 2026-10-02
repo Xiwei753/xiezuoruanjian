@@ -205,7 +205,7 @@ fn issue815_modify5_ingest_clip_is_driven_by_current_caret_frame() {
          不能把协同吞吐换算成独立 0..1 visible fraction。"
     );
 
-    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 7200);
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 8200);
     assert!(
         window.contains("caret_x: f64"),
         "Issue #815 评论 6042062633 修改 5: 本帧边界就是本帧的 caret.x，必须作为参数传进来。"
@@ -279,7 +279,7 @@ fn issue815_review1_delete_forward_has_its_own_ingest_boundary() {
     let ingest_window = function_window(
         &slice_src,
         "pub(crate) fn compute_frame_by_caret_ingest",
-        7200,
+        8200,
     );
     assert!(
         ingest_window.contains("IngestBoundaryDriver::DeleteForwardBoundary => caret_x"),
@@ -588,22 +588,29 @@ fn issue815_review6_ingest_frame_uses_one_sample_for_x_y_progress() {
     let ingest_window = function_window(
         &ingest_src,
         "pub(crate) fn compute_frame_by_caret_ingest",
-        6000,
+        8200,
     );
     for param in [
         "caret_x: f64",
         "caret_y: f64",
-        "caret_progress: f64",
         "sampled_ingest_line_ord: Option<usize>",
         "is_ingest_segment: bool",
+        // Issue #815 评论 5953049681 问题1: 整条 track 的全局进度已从这个入口删除，
+        // 吞吐边界只吃**段内局部**进度 `ingest_progress`。
+        "ingest_progress: f64",
     ] {
         assert!(
             ingest_window.contains(param),
-            "Issue #815 评论 5949097065: 入口签名必须同时收 x / y / progress 以及采样的 \
-             ingest_line_ord / is_ingest_segment，缺少 {}。",
+            "Issue #815 评论 5953049681 问题1: 入口签名必须同时收 x / y / 段内局部进度 \
+             以及采样的 ingest_line_ord / is_ingest_segment / ingest_side，缺少 {}。",
             param
         );
     }
+    assert!(
+        !ingest_window.contains("caret_progress: f64"),
+        "Issue #815 评论 5953049681 问题1: 全局 caret_progress 必须从这个入口删掉——\
+         它会让某一行吃掉整笔事务的进度，边界只收三分之一就切到下一阶段。"
+    );
     assert!(
         ingest_window.contains("self.ingest_phase_from_route_ord(")
             || ingest_window.contains("self.ingest_line_phase(caret_y)"),
@@ -705,7 +712,11 @@ fn issue815_review7_insert_route_inserts_row_handoff_between_rows() {
 #[test]
 fn issue815_review7_forward_delete_is_a_static_ingest_segment() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
-    let window = function_window(&src, "if is_forward_delete(slices)", 1400);
+    let window = function_window(
+        &src,
+        "if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary",
+        2200,
+    );
     assert!(
         window.contains("CaretTrackSegmentKind::IngestLine"),
         "Issue #815 评论 5950375533 问题2: 前删必须是静止的 IngestLine 段，\
@@ -723,7 +734,11 @@ fn issue815_review7_forward_delete_is_a_static_ingest_segment() {
     // 只在前删分支（窗口取到 is_forward_delete 之前）禁止 LayoutHandoff；
     // 普通退格分支现在**会**产出 LayoutHandoff（5950677031 问题1 要求的
     // 真实屏幕起点换位）。
-    let forward_branch = function_window(&src, "if is_forward_delete(slices)", 1400);
+    let forward_branch = function_window(
+        &src,
+        "if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary",
+        2200,
+    );
     assert!(
         // 用 `kind: ` 前缀匹配，避免命中解释性注释里出现的裸 `LayoutHandoff` 字样。
         !forward_branch.contains("kind: CaretTrackSegmentKind::LayoutHandoff"),
@@ -763,7 +778,7 @@ fn issue815_review7_route_screen_origin_prefers_caret_handoff() {
         "Issue #815 评论 5950375533 问题3: 拿不到 handoff 才退回逻辑 old_cursor_rect。"
     );
     let insert = function_window(&src, "pub(crate) fn build_insert_route", 2200);
-    let delete = function_window(&src, "pub(crate) fn build_delete_route", 3300);
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 7000);
     assert!(
         insert.contains("screen_caret: &CursorRect")
             && delete.contains("screen_caret: &CursorRect"),
@@ -795,7 +810,7 @@ fn issue815_review7_zero_length_segments_are_not_emitted() {
         insert.contains("if !same_rect(&cursor, &ingest_start)"),
         "Issue #815 评论 5950375533 问题4: 屏幕 caret 与吞吐起点相同时不得生成 LayoutHandoff。"
     );
-    let delete = function_window(&src, "pub(crate) fn build_delete_route", 6000);
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 7000);
     assert!(
         delete.contains("if !same_rect(&swallow_end, tail_target)"),
         "Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 相同时不得生成末尾 \
@@ -816,7 +831,7 @@ fn issue815_review7_zero_length_segments_are_not_emitted() {
 #[test]
 fn issue815_review8_backspace_route_consumes_screen_caret() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
-    let window = function_window(&src, "pub(crate) fn build_delete_route", 6200);
+    let window = function_window(&src, "pub(crate) fn build_delete_route", 7000);
     assert!(
         window.contains("let start_row = rows.last().copied()"),
         "Issue #815 评论 5950677031 问题1: 退格 old-side 吞吐起点必须取**最后一条吞字行**。"
@@ -849,7 +864,7 @@ fn issue815_review8_backspace_route_consumes_screen_caret() {
 #[test]
 fn issue815_review8_backspace_row_handoff_lands_on_previous_row_right() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
-    let window = function_window(&src, "pub(crate) fn build_delete_route", 6200);
+    let window = function_window(&src, "pub(crate) fn build_delete_route", 7000);
     assert!(
         window.contains("to: next_up.caret_rect_at(next_up.right)"),
         "Issue #815 评论 5950677031 问题2: 退格行间 RowHandoff 必须落到上一行**右端**，\
@@ -929,7 +944,7 @@ fn issue815_review9_mixed_route_is_built_not_skipped() {
          退回 old→new 一条斜线。"
     );
     assert!(
-        route.contains("build_delete_route(slices, &delete_rows, screen_caret, None)")
+        route.contains("build_delete_route(&delete_rows, screen_caret, None)")
             && route.contains("build_insert_route(&insert_rows, &insert_start, new_caret)"),
         "Issue #815 评论 5950887715: Mixed 路线必须是「先吞旧 preedit（Old 侧，\
          不带末尾换位），再接 new 侧吐字」。"
@@ -962,6 +977,111 @@ fn issue815_review9_slice_isolates_sides_before_line_ordinal() {
             && window.contains("side_rank(sampled_side) > side_rank(slice_side)"),
         "Issue #815 评论 5950887715: 必须按 side 阶段序隔离两侧，绝不让 old / new \
          的 ordinal 互相比较。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5953049681 问题1：前删边界吃本段 local progress
+// =========================================================================
+
+/// 复核评论 5953049681 问题1。
+///
+/// 段均分总时长，所以 Mixed 的第一段结束时全局 progress 只有 ~1/n。若前删边界吃
+/// 全局 progress，边界只收了一小部分，紧接着 side 切 New 后 old slice 因 side
+/// phase 直接变 `Passed` —— 剩下那一大半旧字在一帧内突然消失。
+#[test]
+fn issue815_review10_forward_boundary_uses_segment_local_progress() {
+    let plan = read_src("src/sujian_editor_item/render_plan.rs");
+    assert!(
+        plan.contains("pub ingest_progress: f64"),
+        "Issue #815 评论 5953049681 问题1: SampledCaretFrame 必须带本段 local 进度。"
+    );
+    let types = read_src("src/sujian_editor_item/animation/transaction/types.rs");
+    let sampling = function_window(&types, "pub fn sampled_ingest_at_progress", 2200);
+    assert!(
+        sampling.contains("f64,"),
+        "Issue #815 评论 5953049681 问题1: sampled_ingest_at_progress 的返回值末尾\
+         必须是本段 local eased progress（由 sampled_segment_at_progress 一路传下，不重算）。"
+    );
+    let slice = read_src("src/sujian_editor_item/animated_slice.rs");
+    let ingest = function_window(&slice, "pub(crate) fn compute_frame_by_caret_ingest", 8200);
+    assert!(
+        ingest.contains("ingest_progress: f64"),
+        "Issue #815 评论 5953049681 问题1: 逐帧裁切入口必须接住 local 进度。"
+    );
+    assert!(
+        ingest.contains("let progress = ingest_progress.clamp(0.0, 1.0);"),
+        "Issue #815 评论 5953049681 问题1: DeleteForwardBoundary 必须吃 ingest_progress。"
+    );
+    let forward_branch = function_window(
+        &slice,
+        "IngestBoundaryDriver::DeleteForwardBoundary =>",
+        900,
+    );
+    assert!(
+        !forward_branch.contains("caret_progress.clamp"),
+        "Issue #815 评论 5953049681 问题1: 前删分支不得再吃全局 caret_progress。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5953049681 问题2：Mixed 拼接必须接上一阶段的真实末端
+// =========================================================================
+
+/// 复核评论 5953049681 问题2。
+///
+/// 前删的 old 侧是一条 `from == to == screen_caret` 的静止段，真实终点就是
+/// `screen_caret`；若 Mixed 仍用猜出来的 `first_delete.left` 当下一段起点，
+/// 只要 `screen_caret != first_delete.left` 相邻段就会瞬移。
+#[test]
+fn issue815_review10_mixed_route_joins_previous_stage_end() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        src.contains("segments.last().map(|seg| seg.to).unwrap_or(*screen_caret)"),
+        "Issue #815 评论 5953049681 问题2: Mixed 拼接下一阶段必须接上一阶段的真实末端。"
+    );
+    let mixed = function_window(
+        &src,
+        "build_delete_route(&delete_rows, screen_caret, None)",
+        1600,
+    );
+    assert!(
+        !mixed.contains("let swallow_end = first_delete.caret_rect_at(first_delete.left)"),
+        "Issue #815 评论 5953049681 问题2: 不得再重新猜 old 侧结束几何，\
+         必须取上一阶段 route 的末端。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5953049681 问题3：driver 必须按行决定
+// =========================================================================
+
+/// 复核评论 5953049681 问题3。
+///
+/// composition crossfade 的 `conceal_to_left_edge` 是按**每个 old cluster**
+/// 相对 `new_cursor_rect.x` 单独算的，跨行时同一批 preedit slice 理论上可以同时
+/// 出现 `CaretPosition` 与 `DeleteForwardBoundary`。事务级 `any()` 会把整条
+/// old 侧 route 缩成一个静止段，把其它退格行一起吞掉。
+#[test]
+fn issue815_review10_driver_is_decided_per_row() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        src.contains("pub driver: IngestBoundaryDriver"),
+        "Issue #815 评论 5953049681 问题3: driver 必须收进 IngestRow，按行决定。"
+    );
+    assert!(
+        !src.contains("fn is_forward_delete"),
+        "Issue #815 评论 5953049681 问题3: 事务级 is_forward_delete 的 any() 判定必须删掉。"
+    );
+    assert!(
+        src.contains("driver_conflict"),
+        "Issue #815 评论 5953049681 问题3: 同一行出现两种 driver 必须在构造阶段记\
+         invariant diagnostic，不能静默拿一侧猜。"
+    );
+    let builder = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    assert!(
+        !builder.contains("&& spec.composition_commit_crossfade.is_none()"),
+        "Issue #815 评论 5953049681: composition commit 必须继续走正式 route。"
     );
 }
 
@@ -1492,7 +1612,7 @@ fn issue815_review7_ingest_geometry_comes_from_the_slices_own_side() {
 #[test]
 fn issue815_review7_layout_handoff_does_not_fake_ingest() {
     let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 7200);
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 8200);
     assert!(
         window.contains("IngestLinePhase::RouteBeforeStart"),
         "Issue #815 评论 5949097065 问题3: 拿不到权威行序（换位段）时，吞字/吐字切片必须\\

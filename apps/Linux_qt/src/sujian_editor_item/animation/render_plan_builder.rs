@@ -617,16 +617,16 @@ impl LinuxEditorAnimationCoordinator {
                     caret_sample.map(|caret| {
                         // Issue #815 评论 5947728704 问题1: 三者必须来自同一份
                         // SampledCaretFrame——x 是当前行横向边界、y 是当前走到哪条
-                        // 视觉行、progress 只留给 DeleteForwardBoundary。
+                        // 视觉行、ingest_progress 是段内局部进度。
                         unit.slice.compute_frame_by_caret_ingest(
                             caret.x,
                             caret.y,
-                            caret.progress,
                             caret.ingest_line_ord,
                             caret.is_ingest_segment,
                             // Issue #815 评论 5950887715: side 与 ord 一样出自同一次
                             // 采样，文字层据此把 old / new 两套行序隔离开。
                             caret.ingest_side,
+                            caret.ingest_progress,
                         )
                     })
                 } else {

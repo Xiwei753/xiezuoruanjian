@@ -3029,18 +3029,18 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
     let x_half = insert_reveals[0].compute_frame_by_caret_ingest(
         25.0,
         10.0,
-        0.5,
         None,
         true,
         side_of(&insert_reveals[0]),
+        0.5,
     );
     let y_half = insert_reveals[1].compute_frame_by_caret_ingest(
         25.0,
         10.0,
-        0.5,
         None,
         true,
         side_of(&insert_reveals[1]),
+        0.5,
     );
     // 第一个候选自身只有 [10,20) 这 10px，boundary=25 已越过它的右边缘 ⇒ 完整。
     assert!(
@@ -3056,10 +3056,10 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
     let y_late = insert_reveals[1].compute_frame_by_caret_ingest(
         32.5,
         10.0,
-        0.75,
         None,
         true,
         side_of(&insert_reveals[1]),
+        0.75,
     );
     assert!(
         (y_late.x - 30.0).abs() < 0.5 && (y_late.w - 2.5).abs() < 0.5,
@@ -3814,10 +3814,10 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     let l1_mid = line1[0].slice.compute_frame_by_caret_ingest(
         0.0,
         25.0,
-        0.75,
         None,
         true,
         side_of(&line1[0].slice),
+        0.75,
     );
     assert!(
         l1_mid.w > 0.0,
@@ -3828,10 +3828,10 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     let l2_mid = line2[0].slice.compute_frame_by_caret_ingest(
         0.0,
         25.0,
-        0.75,
         None,
         true,
         side_of(&line2[0].slice),
+        0.75,
     );
     assert!(
         l2_mid.w.abs() < 0.5,
@@ -3842,18 +3842,18 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     let l1_end = line1[0].slice.compute_frame_by_caret_ingest(
         30.0,
         40.0,
-        1.0,
         None,
         true,
         side_of(&line1[0].slice),
+        1.0,
     );
     let l2_end = line2[0].slice.compute_frame_by_caret_ingest(
         30.0,
         40.0,
-        1.0,
         None,
         true,
         side_of(&line2[0].slice),
+        1.0,
     );
     assert!(
         l1_end.w > 0.0 && l2_end.w > 0.0,
@@ -3906,7 +3906,7 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
 
     // caret 还在第 2 行（y=30，尚未走过本行）⇒ 旧字完整可见。
     // Backspace 方向（to=0 < from=1）：caret_y >= line_bottom ⇒ NotReached。
-    let before = slice.compute_frame_by_caret_ingest(20.0, 30.0, 0.0, None, true, side_of(&slice));
+    let before = slice.compute_frame_by_caret_ingest(20.0, 30.0, None, true, side_of(&slice), 0.0);
     assert!(
         before.w > 19.5,
         "caret 还没走过本行时旧字必须完整可见，实际 w={}",
@@ -3922,7 +3922,7 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
     // 只能退回 caret.y 相位；「本行彻底吞完后不重画」由带真实路由的
     // `animated_slice::ingest_tests::real_track_phase` 用例覆盖。
     let on_current =
-        slice.compute_frame_by_caret_ingest(20.0, 10.0, 1.0, None, true, side_of(&slice));
+        slice.compute_frame_by_caret_ingest(20.0, 10.0, None, true, side_of(&slice), 1.0);
     assert!(
         on_current.w < before.w,
         "caret 落到本行后应由本帧 caret.x 开始裁切（未到达时 w={}，到达后 w={}）",
@@ -3979,28 +3979,28 @@ fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
         let first = unit.slice.compute_frame_by_caret_ingest(
             0.0,
             10.0,
-            0.0,
             None,
             true,
             side_of(&unit.slice),
+            0.0,
         );
         assert!(
             first.w > 0.0,
-            "前删首帧必须显示完整旧字，实际 w={}",
+            "前删首帧必须完整显示旧字，实际 w={}",
             first.w
         );
         // 末帧必须完全吞掉。
         let last = unit.slice.compute_frame_by_caret_ingest(
             0.0,
             10.0,
-            1.0,
             None,
             true,
             side_of(&unit.slice),
+            1.0,
         );
         assert!(
             last.w.abs() < 0.5,
-            "前删末帧必须完全吞掉旧字，实际 w={}",
+            "前删末帧必须把旧字完全吞掉，实际 w={}",
             last.w
         );
     }
@@ -4323,18 +4323,18 @@ fn issue815_review9_composition_sides_are_isolated_per_frame() {
         let conceal_frame = conceal.slice.compute_frame_by_caret_ingest(
             caret.x,
             caret.y,
-            caret.progress,
             caret.ingest_line_ord,
             caret.is_ingest_segment,
             caret.ingest_side,
+            caret.ingest_progress,
         );
         let reveal_frame = reveal.slice.compute_frame_by_caret_ingest(
             caret.x,
             caret.y,
-            caret.progress,
             caret.ingest_line_ord,
             caret.is_ingest_segment,
             caret.ingest_side,
+            caret.ingest_progress,
         );
         match caret.ingest_side {
             Some(IngestSnapshotSide::Old) if caret.is_ingest_segment => {
@@ -4360,4 +4360,243 @@ fn issue815_review9_composition_sides_are_isolated_per_frame() {
     }
     assert!(saw_old_ingest, "必须真的采到过 Old 侧吞吐段");
     assert!(saw_new_ingest, "必须真的采到过 New 侧吞吐段");
+}
+
+// ── Issue #815 评论 5953049681 问题1/2：IME 前删型 Mixed 的 route 连续 + local progress ──
+
+/// 组一个 `DeleteForwardBoundary` 的 composition commit fixture：
+/// preedit 落在 new caret **右侧** ⇒ `conceal_to_left_edge = false` ⇒ 前删方向。
+///
+/// 同时刻意让 `caret_handoff.sampled`（真实屏幕 caret）**不等于**
+/// `first_delete.left`：前删的 old 侧是一条 `from == to == screen_caret` 的静止段，
+/// Mixed 拼接下一阶段时若还用猜出来的 `first_delete.left` 当起点，相邻段就会瞬移。
+#[test]
+fn issue815_review10_forward_delete_mixed_route_is_continuous() {
+    let old_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
+    let new_snapshot = make_multiline_snapshot("abWXY", &[(0, 0, 5, 0.0, 20.0)]);
+    let mut spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(40.0, 0.0),
+        // new caret 在 preedit 左侧 ⇒ 前删方向。
+        issue815_caret(10.0, 0.0),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        /* preedit */ (2, 4),
+        /* candidate */ (2, 5),
+    );
+    // 真实屏幕 caret 停在 preedit 中间（x=25），既不等于行左端 0 也不等于行右端。
+    spec.caret_handoff = Some(RebaseCaretHandoff {
+        sampled: CursorRect {
+            x: 25.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        },
+        remaining_duration_ms: 60,
+        sampled_visual_line_id: Some(0),
+        sampled_line_top: 0.0,
+        sampled_line_bottom: 20.0,
+    });
+
+    let tx = build_prepared_transaction(spec).expect("前删型 IME commit 必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("必须有 cursor track");
+    assert!(
+        !track.segments.is_empty(),
+        "Issue #815 评论 5953049681: 前删型 Mixed 也必须建出分段 route"
+    );
+    assert!(
+        track
+            .segments
+            .iter()
+            .any(|seg| seg.ingest_side == Some(IngestSnapshotSide::Old)),
+        "前删型 Mixed 必须含 Old 侧吞字段"
+    );
+
+    // 相邻段必须连续：上一段终点就是下一段起点。
+    for pair in track.segments.windows(2) {
+        assert!(
+            (pair[0].to.x - pair[1].from.x).abs() < 1e-6
+                && (pair[0].to.top - pair[1].from.top).abs() < 1e-6,
+            "Issue #815 评论 5953049681 问题2: route 必须连续，段 {:?}→{:?} 瞬移",
+            (pair[0].to.x, pair[0].to.top),
+            (pair[1].from.x, pair[1].from.top)
+        );
+    }
+}
+
+/// 问题1 的行为回归：前删边界必须吃**本段 local progress**。
+///
+/// 段均分总时长，所以第一段结束时全局 progress 只有 ~1/n。若前删边界吃全局
+/// progress，边界只收了一小部分，紧接着 side 切到 New、old slice 因 side phase
+/// 直接变 `Passed` —— 剩下那一大半旧字会在一帧内突然消失。
+#[test]
+fn issue815_review10_forward_boundary_uses_segment_local_progress() {
+    let old_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
+    let new_snapshot = make_multiline_snapshot("abWXY", &[(0, 0, 5, 0.0, 20.0)]);
+    let mut spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(40.0, 0.0),
+        issue815_caret(10.0, 0.0),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        (2, 4),
+        (2, 5),
+    );
+    spec.caret_handoff = Some(RebaseCaretHandoff {
+        sampled: CursorRect {
+            x: 25.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        },
+        remaining_duration_ms: 60,
+        sampled_visual_line_id: Some(0),
+        sampled_line_top: 0.0,
+        sampled_line_bottom: 20.0,
+    });
+
+    let mut tx = build_prepared_transaction(spec).expect("前删型 IME commit 必须建出事务");
+    let conceal = tx
+        .units
+        .iter()
+        .find(|unit| unit.slice.kind == AnimatedSliceKind::DeleteConceal)
+        .expect("前删型 IME commit 必须有 DeleteConceal");
+    assert_eq!(
+        conceal.slice.ingest_boundary_driver,
+        IngestBoundaryDriver::DeleteForwardBoundary,
+        "fixture 必须真的造出前删方向，否则这条测试证明不了任何事"
+    );
+
+    let started = std::time::Instant::now();
+    tx.cursor_visual_track
+        .as_mut()
+        .expect("必须有 cursor track")
+        .started_at = Some(started);
+    let track = tx.cursor_visual_track.as_ref().expect("必须有 track");
+    let total = track.duration_ms;
+    let seg_count = track.segments.len() as f64;
+    let full_width = conceal.slice.line_mask_right - conceal.slice.line_mask_left;
+
+    // 逐段扫到第一段的末尾之前：本帧的 local progress 应接近 1，而全局 progress
+    // 只到 ~1/n。旧字此刻必须**还没吞完**（局部进度驱动的收拢刚刚结束）。
+    let probe_global = (1.0 / seg_count) - 0.02;
+    let now = started + std::time::Duration::from_millis((total as f64 * probe_global) as u64);
+    let caret = sample_caret_track_frame(track, now);
+    assert_eq!(
+        caret.ingest_side,
+        Some(IngestSnapshotSide::Old),
+        "第一帧应落在 Old 侧吞字段"
+    );
+    assert!(
+        caret.ingest_progress > caret.progress,
+        "Issue #815 评论 5953049681 问题1: 局部进度必须大于全局进度，\
+         ingest_progress={} progress={}",
+        caret.ingest_progress,
+        caret.progress
+    );
+    let frame = conceal.slice.compute_frame_by_caret_ingest(
+        caret.x,
+        caret.y,
+        caret.ingest_line_ord,
+        caret.is_ingest_segment,
+        caret.ingest_side,
+        caret.ingest_progress,
+    );
+    // 反例：若前删边界仍吃全局 progress，同一帧的可见宽度会明显更大。
+    let global_progress_frame = conceal.slice.compute_frame_by_caret_ingest(
+        caret.x,
+        caret.y,
+        caret.ingest_line_ord,
+        caret.is_ingest_segment,
+        caret.ingest_side,
+        caret.progress,
+    );
+    assert!(
+        frame.w < global_progress_frame.w * 0.1,
+        "Issue #815 评论 5953049681 问题1: 前删边界必须吃本段 local progress。         吃 local 时 w={}，吃全局时 w={}，两者应相差一个量级以上",
+        frame.w,
+        global_progress_frame.w
+    );
+    assert!(
+        frame.w < full_width * 0.05,
+        "第一段末尾局部进度接近 1 时旧字必须基本吞完，实际 w={} / full={}",
+        frame.w,
+        full_width
+    );
+}
+
+/// 真正的 `operation_kind = CompositionUpdate`，且 `inserted_ranges` 与
+/// `deleted_ranges` **同时非空**。
+///
+/// 维护者指出这条生产路径测试一直缺位：现有 review9 用例都是 composition commit。
+/// composition update 的 replace（先删旧 preedit 再插新候选）同样会产出
+/// Reveal + Conceal 同帧的 Mixed，必须建出 side-aware 分段 route，而不是退回
+/// old→new 直线。
+#[test]
+fn issue815_review10_composition_update_mixed_route_is_side_aware() {
+    let old_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
+    let new_snapshot = make_multiline_snapshot("abWXY", &[(0, 0, 5, 0.0, 20.0)]);
+    let mut spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(30.0, 0.0),
+        issue815_caret(40.0, 0.0),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        (2, 4),
+        (2, 5),
+    );
+    // 换成 composition update 形态：同一次更新里既有删除也有插入。
+    spec.operation_kind = TextVisualOperationKind::CompositionUpdate;
+    spec.composition_commit_crossfade = None;
+    spec.inserted_ranges = vec![(2, 5)];
+    spec.deleted_ranges = vec![(2, 4)];
+    spec.cursor_owner_epoch = 9;
+
+    let tx = build_prepared_transaction(spec).expect("composition update 必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("composition update 必须有 cursor track");
+    assert!(
+        !track.segments.is_empty(),
+        "Issue #815 评论 5953049681: composition update 同时有 inserted + deleted 时\\
+         也必须建出 side-aware 分段 route，不能退回 from -> to 直线"
+    );
+    let has_old = track
+        .segments
+        .iter()
+        .any(|seg| seg.ingest_side == Some(IngestSnapshotSide::Old));
+    let has_new = track
+        .segments
+        .iter()
+        .any(|seg| seg.ingest_side == Some(IngestSnapshotSide::New));
+    assert!(has_old && has_new, "Mixed route 必须同时含 Old 与 New side");
+
+    for pair in track.segments.windows(2) {
+        assert!(
+            (pair[0].to.x - pair[1].from.x).abs() < 1e-6
+                && (pair[0].to.top - pair[1].from.top).abs() < 1e-6,
+            "Issue #815 评论 5953049681: route 必须连续，段 {:?}→{:?} 瞬移",
+            (pair[0].to.x, pair[0].to.top),
+            (pair[1].from.x, pair[1].from.top)
+        );
+    }
 }

@@ -220,6 +220,14 @@ pub(crate) struct SampledCaretFrame {
     /// `DeleteConceal` 保持终态。`None` 表示还没有进入任何一侧的吞吐（最前置
     /// 纯几何换位），两侧都保持初态。
     pub ingest_side: Option<IngestSnapshotSide>,
+    /// Issue #815 评论 5953049681 问题1: 本帧所处**路由段**的局部进度（0..1）。
+    ///
+    /// 与 `progress` 出自同一次采样：`progress` 是整条 track 的全局进度，只用于
+    /// 生命周期/完成判断；吞吐边界（尤其 `DeleteForwardBoundary` 的边界收拢）必须
+    /// 用这个局部进度，否则在多段 route（如 IME Mixed 的
+    /// `Old 前删段 → handoff → New 吐字段`）里某一行只能拿到整笔事务的几分之一，
+    /// 剩下的部分会在 side 切换那一帧突然消失。
+    pub ingest_progress: f64,
 }
 
 impl Default for SampledCaretFrame {
@@ -238,6 +246,7 @@ impl Default for SampledCaretFrame {
             ingest_line_ord: None,
             is_ingest_segment: false,
             ingest_side: None,
+            ingest_progress: 0.0,
         }
     }
 }

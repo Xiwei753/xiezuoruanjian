@@ -354,7 +354,14 @@ impl PreparedCursorVisualTrack {
 
     /// Issue #815 评论 5949097065 问题3: 本帧吞吐采样。
     ///
-    /// 返回 `(本帧 caret 所在视觉行 id, 本段 ingest 行序, 是否处于吞吐段)`。
+    /// 返回 `(本帧 caret 所在视觉行 id, 本段 ingest 行序, 是否处于吞吐段, 本段 side,
+    /// 本段**局部**进度 0..1)`。
+    ///
+    /// Issue #815 评论 5953049681 问题1: 局部进度直接取
+    /// [`PreparedCursorVisualTrack::sampled_segment_at_progress`] 已经算好的
+    /// local eased progress，**不重算**。全局 `progress` 仍供生命周期/完成判断使用；
+    /// 吞吐边界（尤其 `DeleteForwardBoundary`）必须用局部进度，否则在多段 route
+    /// 里某一行只能拿到整笔事务的几分之一。
     ///
     /// - `IngestLine` 段：三个值分别是 `(段上的 visual_line_id, Some(ingest_line_ord), true)`。
     ///   文字层看到 `true` 就必须用 `ingest_line_ord` 判行、用 `rect.x` 裁本行。
@@ -370,6 +377,7 @@ impl PreparedCursorVisualTrack {
         Option<usize>,
         bool,
         Option<IngestSnapshotSide>,
+        f64,
     ) {
         match self.sampled_segment_at_progress(progress) {
             // 退化路线（完全没有分段）：x 仍然是一条可信的裁切边界，只是拿不到
@@ -379,20 +387,36 @@ impl PreparedCursorVisualTrack {
             //
             // Issue #815 评论 5950887715: side 传 `None`，文字层据此让**两侧**都保持
             // 初态——没有 side 就没有权威行序来源，绝不能让某一侧先动。
-            None => (self.from_visual_line_id, None, true, None),
-            Some((index, _)) => {
+            // Issue #815 评论 5953049681 问题1: 完全没有分段时只有一条隐式轨迹，
+            // 局部进度就是全局进度。
+            None => (
+                self.from_visual_line_id,
+                None,
+                true,
+                None,
+                progress.clamp(0.0, 1.0),
+            ),
+            Some((index, local_progress)) => {
                 let segment = &self.segments[index];
                 let side = segment.ingest_side;
                 match segment.kind {
-                    CaretTrackSegmentKind::IngestLine => {
-                        (segment.visual_line_id, segment.ingest_line_ord, true, side)
-                    }
+                    CaretTrackSegmentKind::IngestLine => (
+                        segment.visual_line_id,
+                        segment.ingest_line_ord,
+                        true,
+                        side,
+                        local_progress,
+                    ),
                     CaretTrackSegmentKind::LayoutHandoff => {
-                        (segment.visual_line_id, None, false, side)
+                        (segment.visual_line_id, None, false, side, local_progress)
                     }
-                    CaretTrackSegmentKind::RowHandoff => {
-                        (segment.visual_line_id, segment.ingest_line_ord, false, side)
-                    }
+                    CaretTrackSegmentKind::RowHandoff => (
+                        segment.visual_line_id,
+                        segment.ingest_line_ord,
+                        false,
+                        side,
+                        local_progress,
+                    ),
                 }
             }
         }
@@ -559,7 +583,7 @@ impl PreparedCursorVisualTrack {
         let remaining = self.remaining_duration_ms(now).max(1);
         // Issue #815 评论 5949097065 问题3: rebase 落在中间行时，新 track 必须接住
         // 本帧**实际**的行身份与几何，不能退回逻辑 old 行，也不能只记 from/to 两个 id。
-        let (sampled_line_id, _, _, _) = self.sampled_ingest_at_progress(progress);
+        let (sampled_line_id, _, _, _, _) = self.sampled_ingest_at_progress(progress);
         // 未走完的那一段从本帧实际位置起跳，后续段原样保留。
         let remaining_segments = self.remaining_segments_from(progress, new_to);
         Self {

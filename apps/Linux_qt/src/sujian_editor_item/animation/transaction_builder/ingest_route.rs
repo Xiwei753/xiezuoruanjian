@@ -41,6 +41,19 @@ pub(crate) struct IngestRow {
     pub right: f64,
     pub line_top: f64,
     pub line_bottom: f64,
+    /// Issue #815 评论 5953049681 问题3: 这一行吞字用哪种驱动，必须**按行**决定。
+    ///
+    /// `CaretPosition`：真实 caret 会横扫这一行。
+    /// `DeleteForwardBoundary`：真实 caret 不动，边界靠本段的 local
+    /// `ingest_progress` 自行收拢。
+    ///
+    /// 之前是事务级 `any()`：只要有一片是前删，整条 old 侧 route 就缩成一个静止段。
+    /// 但 composition crossfade 的 `conceal_to_left_edge` 是按**每个 old cluster**
+    /// 相对 `new_cursor_rect.x` 单独算的，跨行时 x 会从行首重新开始，同一批
+    /// preedit slice 完全可能一行是前删、另一行是退格。
+    pub driver: IngestBoundaryDriver,
+    /// 该行出现 driver 冲突时为 `true`（构造期已记 invariant diagnostic）。
+    pub driver_conflict: bool,
 }
 
 impl IngestRow {
@@ -100,6 +113,13 @@ pub(crate) fn collect_ingest_rows(slices: &[AnimatedSlice]) -> Vec<IngestRow> {
             if existing.visual_line_id.is_none() {
                 existing.visual_line_id = slice.visual_line_id;
             }
+            if existing.driver != slice.ingest_boundary_driver {
+                // Issue #815 评论 5953049681 问题3: 同一行同时出现两种 driver 是
+                // 数据异常（正常情况下同一行的 cluster 方向应当一致）。这里显式
+                // 标记，绝不静默拿任意一侧的结论去驱动整行。
+                existing.driver_conflict = true;
+                record_ingest_row_driver_conflict(existing.line_ord);
+            }
             continue;
         }
         rows.push(IngestRow {
@@ -109,10 +129,20 @@ pub(crate) fn collect_ingest_rows(slices: &[AnimatedSlice]) -> Vec<IngestRow> {
             right: slice.line_mask_right,
             line_top: top,
             line_bottom: bottom,
+            driver: slice.ingest_boundary_driver,
+            driver_conflict: false,
         });
     }
     rows.sort_by_key(|row| row.line_ord);
     rows
+}
+
+/// Issue #815 评论 5953049681 问题3: 同一吞字行同时出现两种 driver 的 invariant
+/// 诊断。日志只暴露原因（`cause`），真实要求仍是"前删与退格各自按行驱动"。
+fn record_ingest_row_driver_conflict(line_ord: usize) {
+    crate::sujian_editor_item::editor_animation_debug_log(&format!(
+        "Issue #815 评论 5953049681 问题3: 吞字行 {line_ord} 同时出现 CaretPosition          与 DeleteForwardBoundary，按行驱动会退化成只听一侧"
+    ));
 }
 
 /// Issue #815 评论 5950887715: 只收 old 侧 `DeleteConceal` 的吞吐行。
@@ -248,7 +278,6 @@ pub(crate) fn build_insert_route(
 ///   ──▶ old deleted_range.start ──RowHandoff──▶ 新快照最终 caret
 /// ```
 pub(crate) fn build_delete_route(
-    slices: &[AnimatedSlice],
     rows: &[IngestRow],
     screen_caret: &CursorRect,
     // Issue #815 评论 5950887715: `None` 表示不接末尾换位段（Mixed 路径下由调用方
@@ -258,7 +287,11 @@ pub(crate) fn build_delete_route(
     let Some(first_row) = rows.first().copied() else {
         return Vec::new();
     };
-    if is_forward_delete(slices) {
+    // Issue #815 评论 5953049681 问题3: 不再用事务级 `any()` 决定整条 old 侧
+    // 路线。composition crossfade 的 `conceal_to_left_edge` 是按每个 old cluster
+    // 单独算的，跨行时 x 会从行首重新开始——同一批 preedit 完全可能一行是前删、
+    // 另一行是退格。只有当**第一行**（Backspace 的起始行）本身是前删时才走静止段。
+    if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary {
         // Issue #815 评论 5950375533 问题2: 前删的真实 caret 本来就不动。
         //
         // 原实现把它做成 `LayoutHandoff(old → new)`，而 `LayoutHandoff` 的正式语义是
@@ -309,9 +342,16 @@ pub(crate) fn build_delete_route(
         });
     }
     for (index, row) in rows.iter().enumerate().rev() {
-        // 起点固定取**本行右端**，绝不继承上一行吞完后的位置。
-        let from = row.caret_rect_at(row.right);
-        let to = row.caret_rect_at(row.left);
+        // Issue #815 评论 5953049681 问题3: 按**行**决定驱动。前删行给一条静止段
+        // （真实 caret 不动，边界靠本段 local `ingest_progress` 收拢）；退格行给
+        // 真实 caret 横扫的一段。
+        let (from, to) = if row.driver == IngestBoundaryDriver::DeleteForwardBoundary {
+            let at = row.caret_rect_at(row.left);
+            (at, at)
+        } else {
+            // 起点固定取**本行右端**，绝不继承上一行吞完后的位置。
+            (row.caret_rect_at(row.right), row.caret_rect_at(row.left))
+        };
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::IngestLine,
             from,
@@ -359,14 +399,6 @@ pub(crate) fn build_delete_route(
     segments
 }
 
-/// 这一批吞吐字是不是"前删"（真实 caret 固定，吞字边界自己收拢）。
-fn is_forward_delete(slices: &[AnimatedSlice]) -> bool {
-    slices.iter().any(|slice| {
-        matches!(slice.kind, AnimatedSliceKind::DeleteConceal)
-            && slice.ingest_boundary_driver == IngestBoundaryDriver::DeleteForwardBoundary
-    })
-}
-
 /// 拿不到 old/new caret 之一时返回空 —— 那种事务本来就建不出 track，
 /// `build_cursor_visual_track` 会返回 `None` 并由调用点记 `editor.anim.transaction_skipped`。
 pub(crate) fn build_ingest_route(
@@ -400,7 +432,7 @@ pub(crate) fn build_ingest_route(
         IngestRouteShape::DeleteOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
             .map(|(screen_caret, new_caret)| {
-                build_delete_route(slices, &delete_rows, screen_caret, Some(new_caret))
+                build_delete_route(&delete_rows, screen_caret, Some(new_caret))
             })
             .unwrap_or_default(),
         // Issue #815 评论 5950887715: Mixed（IME commit 候选 Reveal + 旧 preedit
@@ -425,15 +457,23 @@ pub(crate) fn build_ingest_route(
                 return Vec::new();
             };
             // old 侧吞字（不含末尾换位段，交给下面统一接）。
-            let mut segments = build_delete_route(slices, &delete_rows, screen_caret, None);
+            let mut segments = build_delete_route(&delete_rows, screen_caret, None);
             // old 吞完 → 切到 new 侧 candidate 起点。保留 Old 侧但不是吞吐段：
             // old 侧 DeleteConceal 保持终态，new 侧 InsertReveal 保持初态。
-            let swallow_end = first_delete.caret_rect_at(first_delete.left);
+            // Issue #815 评论 5953049681 问题2: old 侧阶段的真实终点必须取
+            // **上一阶段实际生成 route 的末端**，不能再用
+            // `first_delete.caret_rect_at(first_delete.left)` 去猜。
+            //
+            // 退格时两者恰好相等，但前删时 old 侧是一条静止段
+            // （from == to == screen_caret），真实终点就是 screen_caret；
+            // 只要 screen_caret != first_delete.left，用猜出来的 left 当起点就会
+            // 让相邻段瞬移。
+            let old_route_end = segments.last().map(|seg| seg.to).unwrap_or(*screen_caret);
             let insert_start = first_insert.caret_rect_at(first_insert.left);
-            if !same_rect(&swallow_end, &insert_start) {
+            if !same_rect(&old_route_end, &insert_start) {
                 segments.push(CaretTrackSegment {
                     kind: CaretTrackSegmentKind::RowHandoff,
-                    from: swallow_end,
+                    from: old_route_end,
                     to: insert_start,
                     ingest_line_ord: Some(first_delete.line_ord),
                     ingest_side: Some(IngestSnapshotSide::Old),

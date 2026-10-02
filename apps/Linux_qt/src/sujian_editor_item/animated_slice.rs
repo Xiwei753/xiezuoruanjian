@@ -863,8 +863,10 @@ impl AnimatedSlice {
     /// 本方法的边界是 cursor track 本帧采样出来的坐标，不是
     /// `anchor + extent * text_progress`。
     ///
-    /// `caret_x` / `caret_progress` 必须来自同一笔事务 cursor track 的**同一次**
-    /// 采样（`sample_caret_track_frame`），和光标层共用这一份，文字不自己再算时间。
+    /// `caret_x` / `caret_y` / `ingest_progress` 必须来自同一笔事务 cursor track 的
+    /// **同一次**采样（`sample_caret_track_frame`），和光标层共用这一份，文字不自己
+    /// 再算时间。本方法**不再接收**整条 track 的全局 `progress`：全局进度只服务
+    /// 生命周期与完成判断，吞吐边界一律吃段内局部进度。
     ///
     /// Issue #815 评论 5946701331 问题1（边界驱动）：
     /// - [`IngestBoundaryDriver::CaretPosition`]：边界就是本帧 `caret_x`。
@@ -874,7 +876,7 @@ impl AnimatedSlice {
     ///   若边界仍等于 `caret_x` 则 `anchor == caret_x`、第一帧宽度就是 0，吞字动画
     ///   直接消失。所以边界从被删区间右端（`ingest_boundary_from_x`，回退
     ///   `line_mask_right`）朝 `caret_x` 收拢，收拢量由同一笔事务 track 的
-    ///   `caret_progress` 驱动。
+    ///   `ingest_progress` 驱动。
     ///
     /// 两种驱动都用 `min/max` 归一化前后顺序，所以前删（终点在左）和前插
     /// （终点在右）都走同一条公式。
@@ -888,7 +890,7 @@ impl AnimatedSlice {
     /// 终点行（`ingest_to_line_ord`）和本 slice 自己的行（`ingest_line_ord`）都由
     /// 该侧的 canonical 快照算出——Insert 用 new snapshot，Delete 用 old snapshot。
     /// 方向由 `ingest_to_line_ord - ingest_from_line_ord` 的符号给出（forward /
-    /// backward 都支持），本帧边界走到哪一行由 `caret_progress` 线性插值得到。
+    /// backward 都支持）。
     /// 绝不把 old 的行序和 new 的行序做大小比较，也绝不用上一行的 caret.x
     /// 裁下一行。
     ///
@@ -897,8 +899,9 @@ impl AnimatedSlice {
     ///
     /// Issue #815 评论 5947728704 问题1：`caret_x` 是当前行的横向吞吐边界，
     /// `caret_y` 是当前帧真实 caret 的 y（用它判断"走到哪一条视觉行"），
-    /// `caret_progress` **只**留给 `DeleteForwardBoundary` 这种真实 caret 不动、
-    /// 必须从同一 cursor track 取推进量的特殊情况——progress 不再负责推导行序。
+    /// `ingest_progress` 是当前段的**局部**进度（0→1），`DeleteForwardBoundary`
+    /// 收拢边界只吃它——整条 track 的全局进度在分段路线里会让某一行吃掉整笔事务的
+    /// 进度，边界只收三分之一就切到下一阶段，剩下三分之二一帧消失。
     ///
     /// Issue #815 评论 5949097065 问题3：`sampled_ingest_line_ord` /
     /// `is_ingest_segment` 来自 `SampledCaretFrame`，即 caret track **分段路线**
@@ -918,11 +921,13 @@ impl AnimatedSlice {
         &self,
         caret_x: f64,
         caret_y: f64,
-        caret_progress: f64,
         sampled_ingest_line_ord: Option<usize>,
         is_ingest_segment: bool,
         // Issue #815 评论 5950887715: 本帧吞吐边界属于哪一侧 canonical。
         sampled_ingest_side: Option<IngestSnapshotSide>,
+        // Issue #815 评论 5953049681 问题1: 本段局部进度，供 `DeleteForwardBoundary`
+        // 收拢边界用。整条 track 的全局进度不再传进来。
+        ingest_progress: f64,
     ) -> AnimatedSliceFrame {
         // ReflowMove/ReflowCrossFade 始终是独立 Timed（见
         // `VisualUnitTiming::default_for_kind_with_coordinated`），不会走到这个入口；
@@ -943,7 +948,13 @@ impl AnimatedSlice {
             IngestBoundaryDriver::DeleteForwardBoundary => {
                 // Delete 键：caret 固定，边界从被删区间右端朝 caret.x 收拢。
                 let from_x = self.ingest_boundary_from_x.unwrap_or(mask_right);
-                let progress = caret_progress.clamp(0.0, 1.0);
+                // Issue #815 评论 5953049681 问题1: 必须吃**本段局部**进度，不能吃
+                // 整条 track 的全局 progress。多段 route（如 IME Mixed 的
+                // `Old 前删段 → handoff → New 吐字段`）里全局进度到本段结束只有
+                // 1/3，边界只收三分之一；紧接着 side 切到 New 后本 slice 直接
+                // 变终态，剩下三分之二在一帧里突然消失。普通单段 forward Delete 下
+                // 局部 == 全局，行为不变。
+                let progress = ingest_progress.clamp(0.0, 1.0);
                 from_x + (caret_x - from_x) * progress
             }
         };
