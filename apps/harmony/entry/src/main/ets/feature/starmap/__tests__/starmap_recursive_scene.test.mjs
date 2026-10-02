@@ -245,6 +245,7 @@ function buildRecursiveSceneContext(root) {
     starmapId: root.starmapId,
     rects: root.rects,
     embedInstanceIds: root.embedInstanceIds,
+    edges: root.edges,
     scale: root.scale,
     offsetX: root.offsetX,
     offsetY: root.offsetY,
@@ -296,6 +297,45 @@ function childLocalToParentCanvas(parent, embedInstanceId, childLocalX, childLoc
 
 const MAX_RECURSE_SCENE_DEPTH = 32
 
+/** pointToSegmentDistance 的镜像（原在 StarMapGeometry.ets:330）。 */
+function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const segLenSq = dx * dx + dy * dy
+  if (segLenSq === 0) {
+    const dpx = px - x1
+    const dpy = py - y1
+    return Math.sqrt(dpx * dpx + dpy * dpy)
+  }
+  let t = ((px - x1) * dx + (py - y1) * dy) / segLenSq
+  t = Math.max(0, Math.min(1, t))
+  const projX = x1 + t * dx
+  const projY = y1 + t * dy
+  const distX = px - projX
+  const distY = py - projY
+  return Math.sqrt(distX * distX + distY * distY)
+}
+
+/** 边的命中容差，单位是**画布坐标**（调用方按本层 scale 换算，保证屏幕上粗细一致）。 */
+const EDGE_HIT_TOLERANCE_VP = 10
+
+/**
+ * 复用 pointToSegmentDistance 的纯函数命中。
+ *
+ * 边的优先级**低于**节点和 Embed：resolveRecursiveHit 先测对象，只在整层都没命中时
+ * 才调这个函数。否则端点贴着节点的边会把节点的点击抢走。
+ * 距离相同时取先遍历到的那条，避免重叠的边互相争。
+ */
+function hitTestEdge(edges, x, y, tolerance) {
+  let best = null
+  let bestDistance = tolerance
+  for (const edge of edges) {
+    const distance = pointToSegmentDistance(x, y, edge.startX, edge.startY, edge.endX, edge.endY)
+    if (distance <= bestDistance) { bestDistance = distance; best = edge }
+  }
+  return best
+}
+
 function resolveRecursiveHit(root, x, y) {
   let current = root
   let localX = x
@@ -305,6 +345,22 @@ function resolveRecursiveHit(root, x, y) {
     const canvasPoint = screenToCanvas(localX, localY, current.scale, current.offsetX, current.offsetY)
     const hit = hitTestWithScene(current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds)
     if (hit === null) {
+      const edgeTolerance = current.scale > 0 ? EDGE_HIT_TOLERANCE_VP / current.scale : EDGE_HIT_TOLERANCE_VP
+      const edge = hitTestEdge(current.edges, canvasPoint.x, canvasPoint.y, edgeTolerance)
+      if (edge !== null) {
+        return {
+          ownerScenePath: cloneScenePath(current.scenePath),
+          ownerStarmapId: current.starmapId,
+          target: {
+            scenePath: cloneScenePath(current.scenePath),
+            starmapId: current.starmapId,
+            objectKind: 'edge',
+            objectId: edge.edgeId,
+            hitRegion: 'body'
+          },
+          embedPath: cloneScenePath(embedPath)
+        }
+      }
       return {
         ownerScenePath: cloneScenePath(current.scenePath),
         ownerStarmapId: current.starmapId,
@@ -661,10 +717,11 @@ const PATH_A = [SEG_A]
 const PATH_A1 = [SEG_A, SEG_A1]
 const PATH_B = [SEG_B]
 
-function makeSceneSource(scenePath, starmapId, rects, embedIds, scale, offsetX, offsetY, children) {
+function makeSceneSource(scenePath, starmapId, rects, embedIds, scale, offsetX, offsetY, children, edges) {
   return {
     scenePath, starmapId, rects,
     embedInstanceIds: new Set(embedIds),
+    edges: edges || [],
     scale, offsetX, offsetY,
     getChildEmbeds() { return children }
   }
@@ -733,14 +790,16 @@ function createSceneNode(scenePath, starmapId, opts) {
     scenePath, starmapId,
     rects: opts.rects || [],
     embedInstanceIds: new Set(opts.embedInstanceIds || []),
+    edges: opts.edges || [],
     scale: opts.scale === undefined ? 1 : opts.scale,
     offsetX: opts.offsetX || 0,
     offsetY: opts.offsetY || 0,
     fitScale: opts.fitScale === undefined ? 1 : opts.fitScale,
     getChildEmbeds() { return opts.getChildEmbeds ? opts.getChildEmbeds() : [] },
-    sync(rects, embedInstanceIds, scale, offsetX, offsetY, fitScale) {
+    sync(rects, embedInstanceIds, edges, scale, offsetX, offsetY, fitScale) {
       node.rects = rects
       node.embedInstanceIds = new Set(embedInstanceIds)
+      node.edges = edges
       node.scale = scale
       node.offsetX = offsetX
       node.offsetY = offsetY
@@ -1752,6 +1811,208 @@ console.log('28. 时序回归 ⑧：Pan 收尾必须按本地起手模式分流�
   assert(t.isPinching(), '旧 panCanvas 的 End 到达后 pinch 仍然活着')
   assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
   assert(t.getState().mode === 'pinch', '全局 mode 仍是 pinch')
+}
+
+function mkEdge(edgeId, x1, y1, x2, y2) {
+  return {
+    edgeId, startX: x1, startY: y1, endX: x2, endY: y2,
+    arrowTipX: x2, arrowTipY: y2,
+    labelX: (x1 + x2) / 2, labelY: y1 - 8, label: edgeId
+  }
+}
+
+// 复现 handleBlankTap：同一个递归命中结果，同时驱动选中 edge 和清空选中。
+// 边不是另写一套算法，就是消费 resolveRecursiveHit 的结果。
+function handleBlankTapLike(sel, rootCtx, screenX, screenY) {
+  const hit = resolveRecursiveHit(rootCtx, screenX, screenY)
+  if (hit.target === null) {
+    sel.clear()
+    return null
+  }
+  sel.select(hit.target.scenePath, hit.target.objectKind, hit.target.objectId)
+  return hit.target
+}
+
+console.log('')
+console.log('29. 评审回归 ⑨：边能被选中，且不会抢走节点的点击')
+
+// 29.1 根层的边：能被命中成 edge
+{
+  const tree = makeTree()
+  tree.edges = [mkEdge('edge-root', 250, 150, 350, 150)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  const onEdge = resolveRecursiveHit(ctx, 300, 150)
+  assert(onEdge.target !== null, '根层边被命中')
+  assert(eq(onEdge.target.objectKind, 'edge'), 'objectKind 是 edge（此前类型里根本没有 edge）')
+  assert(eq(onEdge.target.objectId, 'edge-root'), 'objectId 是边 id')
+  assert(eq(describeScenePath(onEdge.target.scenePath), 'root'), '边身份带完整 scenePath')
+}
+
+// 29.2 容差内命中、容差外不算
+{
+  const tree = makeTree()
+  tree.edges = [mkEdge('edge-root', 250, 150, 350, 150)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  assert(resolveRecursiveHit(ctx, 300, 159).target !== null, '容差内的点仍算命中边')
+  assert(resolveRecursiveHit(ctx, 300, 200).target === null, '容差外的点不算边')
+}
+
+// 29.3 子层的边：拿到的必须是子层 scenePath，不能是根层
+{
+  const tree = makeTree()
+  tree.getChildEmbeds()[0].edges = [mkEdge('edge-a', 100, 160, 220, 160)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  const hit = resolveRecursiveHit(ctx, 490, 90)
+  assert(hit.target !== null, '子层边被命中')
+  assert(eq(hit.target.objectKind, 'edge'), '子层边的 kind 也是 edge')
+  assert(eq(hit.target.objectId, 'edge-a'), '子层边的 objectId 是子层自己的边 id')
+  assert(eq(describeScenePath(hit.target.scenePath), 'root/embed:emb-a'),
+    '子层边带的是子层 scenePath，不是根层')
+}
+
+// 29.4 边压在节点上时，节点优先 —— 这是 #813 以来最怕的回归
+{
+  const tree = makeTree()
+  // 一条边从 n-root 中间穿过去
+  tree.edges = [mkEdge('edge-over', 20, 40, 140, 40)]
+  const ctx = buildRecursiveSceneContext(tree)
+
+  const hit = resolveRecursiveHit(ctx, 50, 40)
+  assert(hit.target !== null, '压在节点上的点被命中')
+  assert(eq(hit.target.objectKind, 'node'), '节点优先于边：边不能抢走节点的点击')
+  assert(eq(hit.target.objectId, 'n-root'), '命中的是节点而不是那条边')
+}
+
+// 29.5 真的空白 → target=null；且 blank tap 要把已有选中清掉
+{
+  const tree = makeTree()
+  tree.edges = [mkEdge('edge-root', 250, 150, 350, 150)]
+  const ctx = buildRecursiveSceneContext(tree)
+  const sel = createSelectionState()
+
+  // 先选中那条边
+  handleBlankTapLike(sel, ctx, 300, 150)
+  assert(sel.hasSelection(), '点边之后有选中')
+  assert(eq(sel.selectedKind, 'edge'), '选中的 kind 是 edge')
+  assert(eq(sel.selectedItemId, 'edge-root'), '选中的 id 是那条边')
+
+  // 再点真正的空白 → 必须清空（此前 clearSelection 定义了但没有调用点）
+  const cleared = handleBlankTapLike(sel, ctx, 300, 220)
+  assert(cleared === null, '空白处没有目标')
+  assert(!sel.hasSelection(), '点空白之后选中被清掉（此前根本不会清）')
+}
+
+// 29.6 选中子层的边时，带的是子层 scenePath
+{
+  const tree = makeTree()
+  tree.getChildEmbeds()[0].edges = [mkEdge('edge-a', 100, 160, 220, 160)]
+  const ctx = buildRecursiveSceneContext(tree)
+  const sel = createSelectionState()
+
+  handleBlankTapLike(sel, ctx, 490, 90)
+  assert(eq(describeScenePath(sel.selectedScenePath), 'root/embed:emb-a'),
+    '选中子层边时选中态带子层 scenePath')
+  assert(eq(sel.selectedKind, 'edge'), '选中态 kind 是 edge')
+  // 根层同 id 的边不存在，isSelected 必须按 scenePath+kind+itemId 三者一起比
+  assert(!sel.isSelected([], 'edge', 'edge-a'), '不同 scenePath 的同 id 不算选中')
+}
+
+// 29.7 hitTestEdge 本身：重叠的边取先遍历到的那条
+{
+  const near = mkEdge('edge-near', 250, 150, 350, 150)
+  const far = mkEdge('edge-far', 250, 140, 350, 140)
+  assert(eq(hitTestEdge([near, far], 300, 150, EDGE_HIT_TOLERANCE_VP).edgeId, 'edge-near'),
+    '更近的边命中')
+  assert(eq(hitTestEdge([far, near], 300, 150, EDGE_HIT_TOLERANCE_VP).edgeId, 'edge-near'),
+    '重叠时与遍历顺序无关，取真正更近的那条')
+  assert(hitTestEdge([], 300, 150, EDGE_HIT_TOLERANCE_VP) === null, '没有边时返回 null')
+}
+
+console.log('')
+console.log('30. 评审回归 ⑩：connect 被 pinch 接管后，connect_end 不能缺')
+
+// 复现 closeSupersededConnectIfNeeded：
+// 「能不能 reset 全局 tracker」和「能不能给自己旧 connect 写结束日志」是两回事。
+function closeSupersededConnectIfNeededLike(tracker, connectSourcePath, logEnd) {
+  if (connectSourcePath === null) { return null }
+  if (tracker.getState().mode !== 'pinch') { return null }
+  logEnd.push({ sourcePath: connectSourcePath, reason: 'superseded_by_pinch' })
+  return null
+}
+
+// finishOwnedConnect / cancelOwnedConnect 共用的收尾分支
+function finishConnectLike(tracker, connectSourcePath, logEnd) {
+  const cleared = tracker.clearIfOwnedBy('connect', connectSourcePath.scenePath)
+  if (cleared) {
+    tracker.reset()
+    logEnd.push({ sourcePath: connectSourcePath, reason: 'completed' })
+    return
+  }
+  closeSupersededConnectIfNeededLike(tracker, connectSourcePath, logEnd)
+}
+
+const SRC = { starmapId: 'sm-root', segments: [], target: { type: 'node', nodeId: 'n-root' } }
+
+// 30.1 旧 connect 的 End 迟到：pinch 必须活着，且要补一条 superseded_by_pinch
+{
+  const t = createGestureStateTracker()
+  const logEnd = []
+  let sourcePath = SRC
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  // pinch 接管后，旧 connect 的 End 才到
+  finishConnectLike(t, sourcePath, logEnd)
+
+  assert(t.isPinching(), 'pinch 仍然存活（被接管的旧 connect 绝不能 reset 它）')
+  assert(t.isPinchOwnedByScene(PATH_A), 'pinch 归属没变')
+  assert(eq(logEnd.length, 1), '补了一条 connect_end')
+  assert(eq(logEnd[0].reason, 'superseded_by_pinch'), '原因是 superseded_by_pinch 而不是 completed')
+  sourcePath = closeSupersededConnectIfNeededLike(t, sourcePath, logEnd)
+}
+
+// 30.2 Cancel 路径同样补一条
+{
+  const t = createGestureStateTracker()
+  const logEnd = []
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  // clearIfOwnedBy('connect') 返回 false → 走 superseded 分支
+  const cleared = t.clearIfOwnedBy('connect', PATH_A)
+  if (!cleared) { closeSupersededConnectIfNeededLike(t, SRC, logEnd) }
+
+  assert(!cleared, 'connect 已经不归自己了')
+  assert(t.isPinching(), 'Cancel 迟到也不能动 pinch')
+  assert(eq(logEnd.length, 1), 'Cancel 路径也补了一条 connect_end')
+  assert(eq(logEnd[0].reason, 'superseded_by_pinch'), 'Cancel 路径的原因同样是 superseded_by_pinch')
+}
+
+// 30.3 只记一次：迟到的 End 和迟到的 Cancel 都到，只应有一条
+{
+  const t = createGestureStateTracker()
+  const logEnd = []
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  // 模拟源码：把 connectSourcePath 置空，保证只会记一次
+  let sourcePath = SRC
+  sourcePath = closeSupersededConnectIfNeededLike(t, sourcePath, logEnd)
+  sourcePath = closeSupersededConnectIfNeededLike(t, sourcePath, logEnd)
+
+  assert(eq(logEnd.length, 1), 'End 和 Cancel 都迟到时也只记一条')
+  assert(sourcePath === null, '记完就把 connectSourcePath 置空')
+}
+
+// 30.4 没被 pinch 接管时，不该写 superseded
+{
+  const t = createGestureStateTracker()
+  const logEnd = []
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  closeSupersededConnectIfNeededLike(t, SRC, logEnd)
+
+  assert(eq(logEnd.length, 0), '没有 pinch 接管时不该写 superseded_by_pinch')
+  assert(t.isConnecting(), '自己的 connect 还在，不该被误清')
 }
 
 console.log('')

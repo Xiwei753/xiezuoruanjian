@@ -732,6 +732,8 @@ export interface RecursiveSceneSource {
   rects: PlatformNodeRect[]
   /** 本 Scene 的 Embed instanceId 集合（区分 rect 是普通节点还是 Embed） */
   embedInstanceIds: Set<string>
+  /** 本 Scene 画布坐标下的全部边（#816：边也要能被点到，递归命中才有 edge 这一类） */
+  edges: PlatformEdgeRender[]
   /** 本 Scene 的有效缩放（= fitScale * userZoomScale） */
   scale: number
   /** 本 Scene 的 X 偏移 */
@@ -743,7 +745,7 @@ export interface RecursiveSceneSource {
 }
 
 /** 递归命中的目标类型（Embed 标题/边框/内部统一归到 embed，区域由 hitRegion 区分）。 */
-export type RecursiveHitKind = 'node' | 'embed'
+export type RecursiveHitKind = 'node' | 'embed' | 'edge'
 
 /** 递归命中解析出的真实目标（已带绝对 scenePath）。 */
 export interface RecursiveHitTarget {
@@ -753,7 +755,7 @@ export interface RecursiveHitTarget {
   starmapId: string
   /** 目标类型 */
   objectKind: RecursiveHitKind
-  /** 目标 ID（nodeId 或 Embed instanceId） */
+  /** 目标 ID（nodeId / Embed instanceId / edgeId） */
   objectId: string
   /** 命中区域 */
   hitRegion: 'body' | 'title' | 'border' | 'innerContent'
@@ -781,6 +783,7 @@ export interface RecursiveSceneContext {
   starmapId: string
   rects: PlatformNodeRect[]
   embedInstanceIds: Set<string>
+  edges: PlatformEdgeRender[]
   scale: number
   offsetX: number
   offsetY: number
@@ -977,6 +980,7 @@ export function buildRecursiveSceneContext(root: RecursiveSceneSource): Recursiv
     starmapId: root.starmapId,
     rects: root.rects,
     embedInstanceIds: root.embedInstanceIds,
+    edges: root.edges,
     scale: root.scale,
     offsetX: root.offsetX,
     offsetY: root.offsetY,
@@ -1099,6 +1103,42 @@ export function findSceneContext(
  * @param y 根 Scene 局部屏幕坐标 Y
  * @returns 递归命中结果（永远非 null，空白时 target 为 null）
  */
+/**
+ * 边的命中容差，单位是**画布坐标**（调用方按本层 scale 换算，保证屏幕上粗细一致）。
+ */
+export const EDGE_HIT_TOLERANCE_VP = 10
+
+/**
+ * 在一层 Scene 的边里做命中，返回距离命中点最近的那条。
+ *
+ * 复用现成的 pointToSegmentDistance，不另写一套几何。同一距离上有两条边时取
+ * 先遍历到的那条，避免"重叠的边互相抢点击"这种不稳定行为。
+ *
+ * 边的命中优先级**低于**节点 / Embed：resolveRecursiveHit 先测对象，本层一个都没
+ * 命中时才会走到这里。否则一条端点贴着节点的边会把节点的点击抢走。
+ *
+ * @param tolerance 画布坐标下的容差；不是 vp，调用方负责除以本层 scale。
+ */
+export function hitTestEdge(
+  edges: PlatformEdgeRender[],
+  x: number,
+  y: number,
+  tolerance: number
+): PlatformEdgeRender | null {
+  let best: PlatformEdgeRender | null = null
+  let bestDistance: number = tolerance
+  for (const edge of edges) {
+    const distance: number = pointToSegmentDistance(
+      x, y, edge.startX, edge.startY, edge.endX, edge.endY
+    )
+    if (distance <= bestDistance) {
+      bestDistance = distance
+      best = edge
+    }
+  }
+  return best
+}
+
 export function resolveRecursiveHit(
   root: RecursiveSceneContext,
   x: number,
@@ -1120,6 +1160,27 @@ export function resolveRecursiveHit(
     )
 
     if (hit === null) {
+      // 本层没有任何对象命中，才轮到边。顺序不能反：端点贴着节点的边如果先测，
+      // 就会把节点的点击抢走（#816）。
+      // 容差按本层 scale 换算，缩放得再小边也还是屏幕上那么粗的一根，好点。
+      const edgeTolerance: number = current.scale > 0 ? EDGE_HIT_TOLERANCE_VP / current.scale : EDGE_HIT_TOLERANCE_VP
+      const edge: PlatformEdgeRender | null = hitTestEdge(
+        current.edges, canvasPoint.x, canvasPoint.y, edgeTolerance
+      )
+      if (edge !== null) {
+        return {
+          ownerScenePath: cloneScenePath(current.scenePath),
+          ownerStarmapId: current.starmapId,
+          target: {
+            scenePath: cloneScenePath(current.scenePath),
+            starmapId: current.starmapId,
+            objectKind: 'edge',
+            objectId: edge.edgeId,
+            hitRegion: 'body'
+          },
+          embedPath: cloneScenePath(embedPath)
+        }
+      }
       return {
         ownerScenePath: cloneScenePath(current.scenePath),
         ownerStarmapId: current.starmapId,

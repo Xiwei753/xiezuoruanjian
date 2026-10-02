@@ -387,7 +387,8 @@ export struct StarMapScene {
       )
     }
     this.sceneHandle.sync(
-      this.nodeRects, this.getEmbedInstanceIds(), this.viewportScale, this.offsetX, this.offsetY, this.fitScale
+      this.nodeRects, this.getEmbedInstanceIds(), this.localEdgeRenders,
+      this.viewportScale, this.offsetX, this.offsetY, this.fitScale
     )
     return this.sceneHandle
   }
@@ -540,7 +541,7 @@ export struct StarMapScene {
       return
     }
     this.sceneHandle.sync(
-      this.nodeRects, this.getEmbedInstanceIds(),
+      this.nodeRects, this.getEmbedInstanceIds(), this.localEdgeRenders,
       this.viewportScale, this.offsetX, this.offsetY, this.fitScale
     )
   }
@@ -786,9 +787,38 @@ export struct StarMapScene {
    * 选子图里的节点会立刻让父层那个 Embed 取消选中（因为 scenePath 不同），
    * 选二级子星图的标题也只会选中那一个 Embed。
    */
-  private selectItem(kind: 'node' | 'embed', itemId: string): void {
+  private selectItem(kind: 'node' | 'embed' | 'edge', itemId: string): void {
     logSelectionChanged(describeScenePath(this.scenePath), kind, itemId)
     this.selectionState.select(this.scenePath, kind, itemId)
+  }
+
+  /**
+   * 空白层单击：选中递归命中的目标，没有目标就清掉选中。
+   *
+   * 这一条同时补上了 #816 两个一直没闭环的地方：
+   * - 边以前有选中状态、有选中画法，但**没有任何输入入口**能把它设成选中；
+   * - clearSelection() 以前定义了但全项目没有调用点，点空白不会清选中。
+   *
+   * 两者共用同一个递归命中：点的位置换算到根坐标，resolveRecursiveHit 返回什么
+   * 就选什么（含子层里的边，scenePath 自然是子层路径），返回 null 就清掉。
+   * 节点 / Embed 自己的单击不走这里——它们各自组件在 Stack 上层，事件被它们收走，
+   * 根本到不了背景层。
+   */
+  private handleBlankTap(screenX: number, screenY: number) {
+    const context: RecursiveSceneContext | null = this.getRootContext()
+    if (context === null) {
+      return
+    }
+    const rootPoint: PlatformPoint = convertPointToRoot(context, this.scenePath, screenX, screenY)
+    const hit: RecursiveHit = resolveRecursiveHit(context, rootPoint.x, rootPoint.y)
+    if (hit.target === null) {
+      this.clearSelection()
+      return
+    }
+    this.selectionState.select(hit.target.scenePath, hit.target.objectKind, hit.target.objectId)
+    logSelectionChanged(
+      describeScenePath(hit.target.scenePath), hit.target.objectKind, hit.target.objectId
+    )
   }
 
   /** 点空白：清空全树选中。 */
@@ -1096,8 +1126,39 @@ export struct StarMapScene {
       // 终点在根坐标系里做递归命中，父子跨层的边由最近公共祖先那张图承接
       void this.finishConnect(this.previewLineTo.x, this.previewLineTo.y)
       this.gestureTracker.reset()
+    } else {
+      // 已被 pinch 接管：不动全局，但要把这条 connect 的结束边界补上
+      this.closeSupersededConnectIfNeeded()
     }
     this.clearConnectVisualState()
+  }
+
+  /**
+   * 连线被**新手势接管**（这里只可能是 pinch）时，补齐这条 connect 的结束边界日志。
+   *
+   * #816 要求 connect_begin / connect_end 成对出现。真机上会出现这样的时序：
+   * beginConnect → logConnectBegin → 第二根手指落下 → beginPinch → 旧 connect 的
+   * onActionEnd / onActionCancel 晚到。此时 clearIfOwnedBy('connect') 返回 false，
+   * 只清预览不打日志，诊断包里就只剩一个没有下文的 connect_begin，下一次看诊断
+   * 分不清是"连线卡死"还是"被新手势接管"。
+   *
+   * 这里刻意和"能不能清新 tracker"分成两件事：
+   * - 接管后**绝不能** reset 当前的 pinch，那会把刚认领的缩放一起清掉。
+   * - 但"不碰 tracker"不等于"不能给自己这条旧连线写结束日志"。
+   *
+   * 记完立刻把 connectSourcePath 置空，保证同一次 connect 只记一条；
+   * 迟到的 End 和 Cancel 都可能到达，只该有一条。
+   */
+  private closeSupersededConnectIfNeeded() {
+    const sourcePath: StarMapTargetPath | null = this.connectSourcePath
+    if (sourcePath === null) {
+      return
+    }
+    if (this.gestureTracker.getState().mode !== 'pinch') {
+      return
+    }
+    this.connectSourcePath = null
+    logConnectEnd(sourcePath, null, '', false, 'superseded_by_pinch')
   }
 
   /**
@@ -1110,14 +1171,17 @@ export struct StarMapScene {
    * 边界日志：清掉 connectSourcePath 之前先取快照。真机上系统把手势 Cancel 掉时，
    * 诊断包里原本只会有 connect_begin 后面接一个 connect_end 也看不到的空洞，
    * 分不清是程序卡死、事件没回来，还是系统正常取消。这里补一条 cancelled 记录。
-   * 被 pinch 接管时**不**补：那时这是"旧 connect handler 的迟到 Cancel"，
-   * 当前真正在跑的是 pinch，再记一条 connect_end 只会污染诊断。
+   * 被 pinch 接管时改为补 superseded_by_pinch：同样要成对，但只记边界，不动全局
+   * tracker（当前跑的是 pinch，reset 它等于把刚认领的缩放清掉）。
    */
   private cancelOwnedConnect() {
     const sourcePath: StarMapTargetPath | null = this.connectSourcePath
     const cancelledOwnConnect: boolean = this.gestureTracker.clearIfOwnedBy('connect', this.scenePath)
     if (cancelledOwnConnect && sourcePath !== null) {
       logConnectEnd(sourcePath, null, '', false, 'cancelled')
+    } else {
+      // 已被 pinch 接管：只补旧 connect 的结束日志，不碰全局 tracker
+      this.closeSupersededConnectIfNeeded()
     }
     this.clearConnectVisualState()
   }
@@ -2040,6 +2104,13 @@ export struct StarMapScene {
         // 手指落在子星图上时根本收不到事件，所以双指缩放以前会随机失效。
         // 缩放统一交给根 Scene 栈上的 onTouch，那里能看到所有层的全部手指。
         GestureGroup(GestureMode.Parallel,
+          TapGesture()
+            .onAction((event: GestureEvent) => {
+              // 空白层单击：选中递归命中的目标（含子层里的边），没有目标就清选中。
+              // 节点 / Embed 在 Stack 上层，事件被它们收走，不会走到这里（#816）。
+              const point = this.gestureScreenPoint(event, 0, 0)
+              this.handleBlankTap(point.x, point.y)
+            }),
           PanGesture()
             .onActionStart((event: GestureEvent) => {
               if (this.gestureTracker.isPinching()) return

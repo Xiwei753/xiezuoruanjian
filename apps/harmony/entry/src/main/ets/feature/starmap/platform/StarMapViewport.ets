@@ -13,7 +13,12 @@
 
 import { StarMapTargetPath, StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformPoint } from './StarMapLayout'
-import { PlatformNodeRect, RecursiveSceneSource, describeScenePath } from './StarMapGeometry'
+import {
+  PlatformNodeRect,
+  PlatformEdgeRender,
+  RecursiveSceneSource,
+  describeScenePath
+} from './StarMapGeometry'
 
 // ─── 内容包围盒 ───
 
@@ -241,6 +246,8 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   starmapId: string = ''
   rects: PlatformNodeRect[] = []
   embedInstanceIds: Set<string> = new Set<string>()
+  /** 本层画布坐标下的全部边。递归命中要靠它才能返回 edge 这一类目标（#816）。 */
+  edges: PlatformEdgeRender[] = []
   scale: number = 1
   offsetX: number = 0
   offsetY: number = 0
@@ -281,6 +288,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   sync(
     rects: PlatformNodeRect[],
     embedInstanceIds: Set<string>,
+    edges: PlatformEdgeRender[],
     scale: number,
     offsetX: number,
     offsetY: number,
@@ -288,6 +296,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   ): void {
     this.rects = rects
     this.embedInstanceIds = embedInstanceIds
+    this.edges = edges
     this.scale = scale
     this.offsetX = offsetX
     this.offsetY = offsetY
