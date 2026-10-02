@@ -282,6 +282,9 @@ Item {
         // 一起恢复 canonical，否则节点回去了线还停在拖动位置。
         var wasMove = interaction.pointerMode === "move"
         interaction.reset()
+        // Issue #817 评论 5953678540: 一起清 bgDragArea 的本地 pan 手势状态，
+        // 避免切图/窗口隐藏后 panStarted/pressHitKind 拖留。
+        bgDragArea.resetMouseGesture()
         if (wasMove) {
             graphController.computeEdgeRenders(null)
             edgeCanvas.requestPaint()
@@ -742,6 +745,18 @@ Item {
         property real lastY: 0
         property bool panStarted: false
 
+        // Issue #817 评论 5953678540: 统一清理 pan 手势本地状态。
+        // onReleased 之外（onCanceled / resetInteraction / 切图 / 窗口隐藏）
+        // 也要清 pressHitKind/panStarted，否则脏状态会让普通鼠标移动继续拖动画布。
+        function resetMouseGesture() {
+            pressHitKind = ""
+            pressX = 0
+            pressY = 0
+            lastX = 0
+            lastY = 0
+            panStarted = false
+        }
+
         onPressed: function(mouse) {
             _touchInputActive = false
             var hit = hitPointerAtScreen(mouse.x, mouse.y)
@@ -765,8 +780,12 @@ Item {
             }
 
             // 中键直接进入 pan（不依赖长按/阈值）
+            // Issue #817 评论 5953678540: beginPan() 在非 idle 状态返回 false，
+            // 此时不能设 panStarted=true，否则会制造 panStarted=true / pointerMode!=pan 的矛盾状态。
             if (mouse.button === Qt.MiddleButton) {
-                interaction.beginPan()
+                if (!interaction.beginPan())
+                    return
+
                 pressHitKind = "empty"
                 panStarted = true
                 lastX = mouse.x
@@ -812,7 +831,9 @@ Item {
             }
 
             // panStarted（中键直接 true，或左键已超阈值）：继续 pan
-            if (panStarted) {
+            // Issue #817 评论 5953678540: 同时确认 pointerMode 仍是 pan，
+            // 避免 pan 被 cancel/reset 后本地 panStarted 拖留继续拖动画布。
+            if (panStarted && interaction.pointerMode === "pan") {
                 var dx = mouse.x - lastX
                 var dy = mouse.y - lastY
                 applyPan(panX + dx, panY + dy)
@@ -838,45 +859,53 @@ Item {
             }
             pressHitKind = ""
         }
+
+        // Issue #817 评论 5953678540: 系统取消抓取时也要结束 pan 并清本地状态。
+        onCanceled: {
+            if (interaction.pointerMode === "pan")
+                interaction.endPan()
+            resetMouseGesture()
+        }
     }
 
-    // Issue #817 评论 5949494799: 滚轮缩放改用 WheelHandler。
-    // blocking: false + 父 Scene 命中 childContent 时不接受事件，让滚轮
-    // 继续到子 Scene；最深层 Scene 看到本层 node/edge/empty 后才真正缩放。
+    // Issue #817 评论 5953678540: 滚轮缩放只由根 Scene 唯一处理。
+    // 缩放的是整张星图的相机/视角，不是鼠标落在哪个子星图就单独缩那个子 Scene。
+    // 子 Scene 不再拥有自己的滚轮缩放入口；鼠标哪怕停在第三层子星图内部，
+    // 最终变化的也只是根 Scene 的 zoomLevel/panX/panY，整棵递归树一起缩放。
+    // Qt 的 WheelHandler 真正决定是否挡住后续 handler 的是 blocking；
+    // 根层唯一处理，直接用默认阻塞语义。声明支持 TouchPad 时必须同时读
+    // pixelDelta（触控板平滑滚动只有 pixelDelta，angleDelta 为 0）。
     WheelHandler {
         id: sceneWheel
         target: null
+        enabled: pathKey === "root"
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        blocking: false
+        blocking: true
 
         onWheel: function(event) {
             _touchInputActive = false
-            var hit = hitPointerAtScreen(point.position.x, point.position.y)
 
-            // 当前点属于下一层 Scene：这一层不缩放，也不吃事件。
-            if (hit.kind === "childContent") {
-                event.accepted = false
+            var delta = event.angleDelta.y !== 0
+                ? event.angleDelta.y / 120
+                : event.pixelDelta.y / 120.0
+
+            if (delta === 0)
                 return
-            }
 
             var oldZoom = zoomLevel
-            var delta = event.angleDelta.y / 120
             var newZoom = Math.max(0.35, Math.min(2.5, oldZoom + delta * 0.1))
-
-            if (newZoom === oldZoom) {
-                event.accepted = true
+            if (newZoom === oldZoom)
                 return
-            }
 
             var mx = point.position.x
             var my = point.position.y
+
             zoomLevel = newZoom
             applyPan(
                 mx - (mx - panX) * (zoomLevel / oldZoom),
                 my - (my - panY) * (zoomLevel / oldZoom)
             )
 
-            event.accepted = true
             logInteraction("zoom_wheel", "scene", starmapId, {
                 "oldZoom": oldZoom,
                 "newZoom": zoomLevel,
