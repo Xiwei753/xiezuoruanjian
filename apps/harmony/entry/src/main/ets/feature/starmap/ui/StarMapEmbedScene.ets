@@ -15,6 +15,11 @@
 // 这里只把父层算好的 inheritedScale（累计显示比例）继续往下传，让整棵树的
 // 有效比例是 camera × 各层 fit 的连乘，而不是每层各缩各的。
 // 同样也不再持有子场景的选中状态：全树共用父层传下来的 selectionState。
+//
+// 本组件在相机状态链上的唯一职责是"不弄丢同步"：
+// StarMapScreen @State → 根 StarMapScene @Prop → 本组件 @Prop → child StarMapScene @Prop。
+// 中间任何一层写成普通字段，同步就在那一层断掉；子 Scene 再拿旧 offset 当 Pan
+// 的起手基准，全局相机就会跳回旧位置。所以三个相机数值必须是 @Prop（#818 复审）。
 
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
@@ -100,6 +105,27 @@ export struct StarMapEmbedScene {
   /** 动画进度 */
   @Prop motionProgress: number = 0
 
+  /**
+   * 全局相机比例：原样往下传，子 Scene 只是相机里的内容（#818）。
+   *
+   * 三个相机数值必须是 @Prop，不能退回普通字段。ArkUI V1 只有 @Prop 才是
+   * 父 → 子的单向同步；普通字段只是拿父值做一次初始化，之后父层改了不会同步下来。
+   * 少了这一层同步，子 Scene 读到的 this.cameraOffsetX/Y 会停在初始化时的旧值，
+   * 而"拖画布"正是拿它当本次手势的起手基准：
+   *
+   *   根层先拖到 cameraOffsetX = 100 → 在子星图里起手 Pan（读到旧值 0）
+   *   → event.offsetX = 5 → 目标 0 + 5 = 5 → 全局相机从 100 突然跳回 5
+   *
+   * 而且 Pan 只改 offset、不改 scale，指望 inheritedScale 顺带刷新是不成立的：
+   * offset 和 scale 是两件事。这里不需要 @Watch，本组件自己不按相机值做副作用，
+   * 只负责透传，让父值变化能同步到下面那份 child StarMapScene 就够了。
+   */
+  @Prop cameraScale: number = 1
+  /** 全局相机 X 偏移：必须是 @Prop，否则子层 Pan 起手基准会读到旧值（#818 复审） */
+  @Prop cameraOffsetX: number = 0
+  /** 全局相机 Y 偏移：必须是 @Prop，否则子层 Pan 起手基准会读到旧值（#818 复审） */
+  @Prop cameraOffsetY: number = 0
+
   // ─── 普通属性 ───
   bridge: IWriterCoreBridge | null = null
   gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
@@ -110,12 +136,6 @@ export struct StarMapEmbedScene {
   @State selectionState: StarMapSelectionState = new StarMapSelectionState()
   /** 全树共用的 Scene 注册表：跨层连线和递归命中靠它 */
   sceneRegistry: StarMapSceneRegistry | null = null
-  /** 全局相机比例：原样往下传，子 Scene 只是相机里的内容（#818） */
-  cameraScale: number = 1
-  /** 全局相机 X 偏移：原样往下传 */
-  cameraOffsetX: number = 0
-  /** 全局相机 Y 偏移：原样往下传 */
-  cameraOffsetY: number = 0
   /** 改全局相机的回调：原样往下传 */
   onCameraChanged: (scale: number, offsetX: number, offsetY: number) => void =
     (_scale: number, _offsetX: number, _offsetY: number) => {}

@@ -1,3 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+const __testDir = dirname(fileURLToPath(import.meta.url))
+const STARMAP_DIR = join(__testDir, '..')
+/** 读真实 .ets 源文件，做结构守卫（避免属性装饰器被悄悄改回普通字段） */
+function readStarmapSource(relativePath) {
+  return readFileSync(join(STARMAP_DIR, relativePath), 'utf8')
+}
+
 // starmap_recursive_scene.test.mjs — 星图递归 Scene 层（Issue #816）纯逻辑测试。
 //
 // 纯 JS（.mjs），不依赖 ArkUI / Core bridge，Node 直接运行：
@@ -50,6 +61,15 @@
 //      夹完的坐标既进布局也存进 Core。复用 fitView 的可用区口径，不另造安全区常量
 //      —— clampItemToEmbedSafeArea / clampItemToLocalSafeArea
 //         (StarMapViewport.ets / ui/StarMapScene.ets)
+//
+//   5e. 相机状态链上不能有断点（#818 复审）：ArkUI V1 只有 @Prop 是父 → 子单向同步，
+//      普通字段只是拿父值做一次初始化。StarMapEmbedScene 正处在
+//      Screen @State → 根 Scene @Prop → EmbedScene → child Scene @Prop 这条链的中间，
+//      那一层一旦写成普通字段，子 Scene 读到的 cameraOffset 就停在初始化时的旧值，
+//      而拖画布正是拿它当起手基准 → 全局相机从 100 跳回 5。
+//      行为语义：根层拖到 100，再从任意深度子星图起手 Pan，基准必须是 100，
+//      第一帧 +5 之后全局必须是 105，绝不能跳回 5
+//      —— @Prop cameraScale / cameraOffsetX / cameraOffsetY (ui/StarMapEmbedScene.ets)
 //
 //   6. 全树唯一选中态：选中身份 = scenePath + kind + itemId。
 //      选中子节点时父 Embed 立刻失选；同名 item 在不同层不互相命中
@@ -2127,6 +2147,93 @@ console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整�
   assert(root.refitAfterContentAdded(nodeRects) === false, '根 Scene 不需要重新 local fit')
   assert(eq(root.clampItemToLocalSafeArea(9999, -9999, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT), { x: 9999, y: -9999 }),
     '根 Scene 的新建位置不夹，自由落点')
+}
+
+console.log('')
+console.log('24i. 契约 5e：相机状态链不能断在中间层，子 Scene 起手 Pan 必须读到当前全局 offset（#818 复审）')
+
+// 真机时序：根层先拖到 cameraOffsetX = 100，此时 EmbedScene 的普通字段还停在初始化时的 0；
+// 再在子星图里起手 Pan，panBaseCameraOffsetX 拿到旧值 0，第一帧 +5 就把全局相机写成 5。
+// 模拟这条链：@Prop 是持续同步，普通字段只做一次初始化。
+{
+  const makePropChain = () => {
+    const screen = { cameraScale: 1, cameraOffsetX: 0, cameraOffsetY: 0 }
+    const root = createSceneView({ sceneDepth: 0 })
+    const embedScene = { cameraScale: 1, cameraOffsetX: 0, cameraOffsetY: 0 }
+    const child = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: 200, sceneHeight: 200 })
+    child.fitView([{ nodeId: 'n', x: 0, y: 0, width: 100, height: 100, radius: 0 }])
+    const onCameraPanTo = (offsetX, offsetY) => {
+      screen.cameraOffsetX = offsetX
+      screen.cameraOffsetY = offsetY
+      syncFromScreen()
+    }
+    // @Prop 语义：父值一变，子值跟着变。真实 ArkUI 里这是框架保证的同步，
+    // 这里把它显式建模出来，才能看出中间层写成普通字段会断在哪。
+    const syncFromScreen = () => {
+      root.cameraScale = screen.cameraScale
+      root.cameraOffsetX = screen.cameraOffsetX
+      root.cameraOffsetY = screen.cameraOffsetY
+      embedScene.cameraScale = root.cameraScale
+      embedScene.cameraOffsetX = root.cameraOffsetX
+      embedScene.cameraOffsetY = root.cameraOffsetY
+      child.cameraScale = embedScene.cameraScale
+      child.cameraOffsetX = embedScene.cameraOffsetX
+      child.cameraOffsetY = embedScene.cameraOffsetY
+    }
+    // 模拟"普通字段只拿父值做一次初始化，之后不再同步"的那一层
+    const syncFromScreenBroken = () => {
+      root.cameraScale = screen.cameraScale
+      root.cameraOffsetX = screen.cameraOffsetX
+      root.cameraOffsetY = screen.cameraOffsetY
+      // embedScene 这一层只有初始化，之后父值改了不同步
+      child.cameraScale = embedScene.cameraScale
+      child.cameraOffsetX = embedScene.cameraOffsetX
+      child.cameraOffsetY = embedScene.cameraOffsetY
+    }
+    return { screen, root, embedScene, child, onCameraPanTo, syncFromScreen, syncFromScreenBroken }
+  }
+
+  const panFromChild = (chain, sync) => {
+    let baseX = chain.child.cameraOffsetX
+    let baseY = chain.child.cameraOffsetY
+    for (const frame of [{ dx: 5, dy: 0 }]) {
+      chain.child.applyCameraPanTo(baseX + frame.dx, baseY + frame.dy, chain.onCameraPanTo)
+      sync()
+    }
+  }
+
+  // 正常链：根层先拖到 100，再从子星图起手
+  const ok = makePropChain()
+  ok.screen.cameraOffsetX = 100
+  ok.screen.cameraOffsetY = 60
+  ok.syncFromScreen()
+  assert(ok.child.cameraOffsetX === 100 && ok.child.cameraOffsetY === 60,
+    '中间层是 @Prop：根层拖到 100/60 之后，child 读到的是 100/60')
+  panFromChild(ok, ok.syncFromScreen)
+  assert(ok.screen.cameraOffsetX === 105 && ok.screen.cameraOffsetY === 60,
+    '从子星图起手 Pan +5：全局相机是 105/60，绝不跳回 5')
+
+  // 断链对照：中间层写成普通字段，child 停在初始化时的旧值
+  const broken = makePropChain()
+  broken.screen.cameraOffsetX = 100
+  broken.syncFromScreenBroken()
+  assert(broken.child.cameraOffsetX === 0, '对照：中间层是普通字段 → child 还停在 0（这就是要防的 bug）')
+  panFromChild(broken, broken.syncFromScreenBroken)
+  assert(broken.screen.cameraOffsetX === 5,
+    '对照：旧基准 0 + 5 = 5，全局相机从 100 跳回 5（复现真机症状）')
+
+  // 结构守卫：真实 .ets 里这三个字段必须还是 @Prop，不能退回普通字段
+  const embedSource = readStarmapSource('ui/StarMapEmbedScene.ets')
+  for (const field of ['cameraScale', 'cameraOffsetX', 'cameraOffsetY']) {
+    assert(new RegExp(`@Prop\\s+${field}\\s*:`).test(embedSource),
+      `StarMapEmbedScene.ets 里 ${field} 仍是 @Prop（ArkUI V1 只有 @Prop 才是父→子单向同步）`)
+    assert(!new RegExp(`^\\s{2}${field}\\s*:`, 'm').test(embedSource),
+      `${field} 没有退回成不带装饰器的普通字段`)
+  }
+  assert(embedSource.includes('cameraScale: this.cameraScale'),
+    'EmbedScene 仍然把 cameraScale 透传给 child StarMapScene')
+  assert(/onCameraPanTo[\s\S]*offsetX: number, offsetY: number/.test(embedSource),
+    'onCameraPanTo 保持普通字段即可：它是稳定引用，不是每帧变化的状态')
 }
 
 console.log('')
