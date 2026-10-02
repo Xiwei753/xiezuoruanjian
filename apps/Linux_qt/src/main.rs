@@ -140,6 +140,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     // Issue #798: 星图鼠标交互状态机（瞬时手势状态，不读写 Core）
     "qml/StarMapInteractionController.qml" as "StarMapInteractionController.qml",
+    // Issue #814 评论 5935285879: 递归树共享选中状态控制器
+    "qml/StarMapSelectionController.qml" as "StarMapSelectionController.qml",
     "qml/StarMapNode.qml" as "StarMapNode.qml",
     // Issue #796 评论 5886483653: 子星图 Embed 组件
     "qml/StarMapEmbed.qml" as "StarMapEmbed.qml",

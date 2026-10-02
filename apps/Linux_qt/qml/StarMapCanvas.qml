@@ -50,18 +50,49 @@ Item {
     property string errorMessage: graphController.errorMessage
 
     // View transform properties
-    // Issue #806 评论 5907045450: pan 只能向左/上，不能向右/下。
-    // container 的局部矩形是 [0, width] 且 x: panX，可见世界坐标范围是
-    // [-panX/zoomLevel, (W-panX)/zoomLevel]。panX > 0 会让可见世界坐标出现负值，
-    // 落在 container 矩形之外 → 那部分节点进不了 hit-test 链，点了没反应。
-    // 世界原点在左上角，所以这里把 pan clamp 到 ≤ 0。
+    // Issue #814 评论 5935285879: 无限画布 — pan 两个方向都不设边界。
+    // 旧实现把 pan clamp 到 ≤ 0 是因为 container 用 width/height = canvas/zoomLevel
+    // 的有限矩形承载世界，panX > 0 会让可见世界坐标出现负值落在 container 矩形外。
+    // 改用始终覆盖视口的 sceneLayer + delegate 直接世界→屏幕映射后，世界坐标
+    // 可以是任意正负值，pan 不再需要 clamp。
     property real panX: 0
     property real panY: 0
     property real zoomLevel: 1.0
 
     function applyPan(nextX, nextY) {
-        panX = Math.min(0, nextX)
-        panY = Math.min(0, nextY)
+        panX = nextX
+        panY = nextY
+    }
+
+    // Issue #814 评论 5935285879: 世界坐标 ↔ 屏幕坐标统一换算入口。
+    // 节点/Embed delegate 直接用世界坐标映射到屏幕坐标，背景交互统一走
+    // screenToWorld*，不再各处分散手写 (x - panX) / zoomLevel。
+    function worldToScreenX(wx) { return panX + wx * zoomLevel }
+    function worldToScreenY(wy) { return panY + wy * zoomLevel }
+    function screenToWorldX(sx) { return (sx - panX) / zoomLevel }
+    function screenToWorldY(sy) { return (sy - panY) / zoomLevel }
+
+    // Issue #814 评论 5947740838: 递归子星图坐标统一映射。
+    // Qt DragHandler(target:null) 的 activeTranslation 是 scene 坐标增量，
+    // 不是本层 Canvas 坐标。嵌套 Scene 处在父 Embed 缩放下时，只除本层 zoomLevel
+    // 会漏掉祖先 scale，节点按祖先缩放比例漂移。统一用 mapFromItem(null,...)
+    // 把 scene 坐标映射到本 Canvas local，再除 zoomLevel 转 world。
+    // 根层无祖先 scale 时 mapFromItem(null) 退化成恒等，行为不变。
+    function sceneToCanvas(sx, sy) {
+        return canvasArea.mapFromItem(null, sx, sy)
+    }
+    function sceneDeltaToCanvas(dx, dy) {
+        var o = canvasArea.mapFromItem(null, 0, 0)
+        var p = canvasArea.mapFromItem(null, dx, dy)
+        return { x: p.x - o.x, y: p.y - o.y }
+    }
+    function sceneDeltaToWorld(dx, dy) {
+        var d = sceneDeltaToCanvas(dx, dy)
+        return { x: d.x / zoomLevel, y: d.y / zoomLevel }
+    }
+    function sceneToWorld(sx, sy) {
+        var p = sceneToCanvas(sx, sy)
+        return { x: screenToWorldX(p.x), y: screenToWorldY(p.y) }
     }
 
     // Issue #801 评论 5894035036: PinchHandler 以手势中心缩放的起点记录。
@@ -83,9 +114,86 @@ Item {
     // 传给 Embed delegate 用于构造 child Scene 的 pathKey。
     property string pathKey: "root"
 
+    // Issue #814 评论 5935285879: 整棵递归树共享的选中状态控制器。
+    // 由 Workspace 创建并逐层下传，子 Scene 沿用同一个实例。
+    // Node/Embed/Edge 的 isSelected 全部从 selectionController.matches 派生。
+    property var selectionController: null
+
     // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
     // 第一次收到 TouchScreen 事件时显示，切回 Mouse 时隐藏。
     property bool _touchInputActive: false
+
+    // Issue #814 评论 5935346839: pan 手势起点记录，用于 pan_end 边界日志。
+    property real _panBeginX: 0
+    property real _panBeginY: 0
+
+    // Issue #814 评论 5946795049: press-time 手势所有权。
+    // 旧实现（5946366104）在 onActiveChanged 之后才用 findEmbedContentAt 判所有权，
+    // 且单指 drag / 双指 pinch 共用一个 ownership bool。问题：
+    //   1. DragHandler 没有 point 属性（只有 centroid），在 DragHandler 上读 point 得 undefined。
+    //   2. active===true 表示 Handler 已取得 exclusive grab，此时 return 只能让父层不动，
+    //      不能把抓取还给 child，会出现"按在子星图里手势没反应"。
+    //   3. 单指转双指时两个 Handler 切换 active，共用 bool 会互相清掉对方的所有权。
+    // 新方案：用两个 passive PointHandler（touchOwnerA/touchOwnerB）在 touch press 时
+    // 记录前两根手指各自属于哪个 child Embed（instanceId，空串=背景/非 content）。
+    // 父层 bgTouchDrag / canvasPinch 在取得 exclusive grab 之前就通过 enabled 让出，
+    // ownership 在 press 时固定，不随手势中位置变化而改判。
+    property string _touchOwnerA: ""
+    property string _touchOwnerB: ""
+
+    // Issue #814 评论 5946795049: 屏幕坐标 → 该点所属 child Embed instanceId（空串=不属于任何 child content）。
+    function childOwnerAtScreen(sx, sy) {
+        var em = findEmbedContentAt(screenToWorldX(sx), screenToWorldY(sy))
+        return em ? em.instanceId : ""
+    }
+
+    // Issue #814 评论 5946795049: pinch 归 child 当且仅当两根手指都在同一个 child Embed 内。
+    // 一根在 child、一根在外时 child 无法独占两点，父 pinch 仍工作（避免"碰到子星图就无法缩放"死区）。
+    readonly property bool _pinchBelongsToChild:
+        touchOwnerA.active && touchOwnerB.active
+        && _touchOwnerA !== ""
+        && _touchOwnerA === _touchOwnerB
+
+    // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
+    // 只在手势边界（press/release/begin/end/popup）调用，不进热路径。
+    // starmapBackendRef 为 null 时静默跳过（不报错）。
+    function logInteraction(event, itemKind, itemId, fields) {
+        if (!starmapBackendRef) return
+        var fj = fields ? JSON.stringify(fields) : ""
+        starmapBackendRef.record_interaction(event, pathKey, starmapId, itemKind, itemId, fj)
+    }
+
+    // Issue #814 评论 5935346839: pointer_press 是完整手势的起点边界。
+    // 不能挂在背景 MouseArea.onPressed 上：按到 Node/Embed 时对象的 TapHandler
+    // 先取得 exclusive grab，背景 MouseArea 根本收不到 press，而"按在对象上
+    // 没反应"恰恰是最需要诊断的场景。统一由根节点上的 passive-grab PointHandler
+    // 观察 press：不抢事件，命中的对象照常拿到完整交互；hitKind/hitId 在按下
+    // 当场按世界坐标重算，能直接区分"坐标换算错"和"事件路由断"。
+    function logPointerPress(button, device, point) {
+        var wx = screenToWorldX(point.position.x)
+        var wy = screenToWorldY(point.position.y)
+        var hitNode = findNodeAt(wx, wy)
+        var hitEmbedChrome = findEmbedChromeAt(wx, wy)
+        var hitEmbedContent = findEmbedContentAt(wx, wy)
+        var hitEdge = graphController.hitTestEdge(wx, wy)
+        var hitKind = "empty"
+        var hitId = ""
+        if (hitNode) { hitKind = "node"; hitId = hitNode.id }
+        else if (hitEmbedChrome) { hitKind = "embedChrome"; hitId = hitEmbedChrome.instanceId }
+        else if (hitEmbedContent) { hitKind = "childContent"; hitId = hitEmbedContent.instanceId }
+        else if (hitEdge) { hitKind = "edge"; hitId = hitEdge.id }
+        logInteraction("pointer_press", hitKind, hitId, {
+            "button": button,
+            "device": device,
+            "screenX": point.position.x,
+            "screenY": point.position.y,
+            "worldX": wx,
+            "worldY": wy,
+            "panX": panX,
+            "panY": panY,
+            "zoomLevel": zoomLevel
+        })
+    }
 
     // ---------------------------------------------------------------------------
     // 鼠标手势状态已拆到 StarMapInteractionController（interaction）：
@@ -136,6 +244,10 @@ Item {
         id: graphController
         starmapId: canvasArea.starmapId
         starmapBackendRef: canvasArea.starmapBackendRef
+        // Issue #814 评论 5935285879: 传 pathKey 和共享 selectionController 给 Controller，
+        // selectNode/selectEdge/selectEmbed/clearSelection 据此调 selectionController。
+        pathKey: canvasArea.pathKey
+        selectionController: canvasArea.selectionController
         onGraphChanged: edgeCanvas.requestPaint()
         onSelectionCleared: canvasArea.selectionCleared()
         onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
@@ -232,19 +344,32 @@ Item {
         acceptedButtons: Qt.LeftButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = false
-            var mx = (eventPoint.position.x - panX) / zoomLevel
-            var my = (eventPoint.position.y - panY) / zoomLevel
+            var mx = screenToWorldX(eventPoint.position.x)
+            var my = screenToWorldY(eventPoint.position.y)
             if (findNodeAt(mx, my)) {
                 return
             }
             if (findEmbedChromeAt(mx, my)) {
                 return
             }
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的点击归 child Scene，
+            // 父层不得当成空白 clearSelection() 吞掉子场景选中。
+            if (findEmbedContentAt(mx, my)) {
+                return
+            }
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 graphController.selectEdge(clickedEdge.id)
+                // Issue #814 评论 5935346839: selection_changed 边界日志（edge）。
+                logInteraction("selection_changed", "edge", clickedEdge.id, {
+                    "device": "mouse"
+                })
             } else {
                 clearSelection()
+                // Issue #814 评论 5935346839: selection_changed 边界日志（none）。
+                logInteraction("selection_changed", "none", "", {
+                    "device": "mouse"
+                })
             }
         }
         // 鼠标空白长按无操作（鼠标用右键打开菜单）。
@@ -259,19 +384,31 @@ Item {
         acceptedButtons: Qt.LeftButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = true
-            var mx = (eventPoint.position.x - panX) / zoomLevel
-            var my = (eventPoint.position.y - panY) / zoomLevel
+            var mx = screenToWorldX(eventPoint.position.x)
+            var my = screenToWorldY(eventPoint.position.y)
             if (findNodeAt(mx, my)) {
                 return
             }
             if (findEmbedChromeAt(mx, my)) {
                 return
             }
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的点击归 child Scene。
+            if (findEmbedContentAt(mx, my)) {
+                return
+            }
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 graphController.selectEdge(clickedEdge.id)
+                // Issue #814 评论 5935346839: selection_changed 边界日志（edge, touch）。
+                logInteraction("selection_changed", "edge", clickedEdge.id, {
+                    "device": "touch"
+                })
             } else {
                 clearSelection()
+                // Issue #814 评论 5935346839: selection_changed 边界日志（none, touch）。
+                logInteraction("selection_changed", "none", "", {
+                    "device": "touch"
+                })
             }
         }
         // Issue #801 评论 5894035036: 触屏空白长按打开背景菜单。
@@ -284,15 +421,22 @@ Item {
             _touchInputActive = true
             var px = bgTouchLeftTap.point.position.x
             var py = bgTouchLeftTap.point.position.y
-            var wx = (px - panX) / zoomLevel
-            var wy = (py - panY) / zoomLevel
+            var wx = screenToWorldX(px)
+            var wy = screenToWorldY(py)
 
             if (findNodeAt(wx, wy)) return
             if (findEmbedChromeAt(wx, wy)) return
+            if (findEmbedContentAt(wx, wy)) return
             if (graphController.hitTestEdge(wx, wy)) return
 
             contextMenuWorldX = wx
             contextMenuWorldY = wy
+            // Issue #814 评论 5935346839: context_menu_open 边界日志（bg）。
+            logInteraction("context_menu_open", "empty", "", {
+                "menuKind": "bg",
+                "worldX": wx,
+                "worldY": wy
+            })
             bgContextMenu.popup(px, py)
         }
     }
@@ -305,21 +449,37 @@ Item {
         acceptedButtons: Qt.RightButton
         onSingleTapped: function(eventPoint) {
             _touchInputActive = false
-            var mx = (eventPoint.position.x - panX) / zoomLevel
-            var my = (eventPoint.position.y - panY) / zoomLevel
+            var mx = screenToWorldX(eventPoint.position.x)
+            var my = screenToWorldY(eventPoint.position.y)
             if (findNodeAt(mx, my)) {
                 return
             }
             if (findEmbedChromeAt(mx, my)) {
                 return
             }
+            // Issue #814 评论 5946366104: 子星图 contentViewport 内的右键归 child Scene。
+            if (findEmbedContentAt(mx, my)) {
+                return
+            }
             var clickedEdge = graphController.hitTestEdge(mx, my)
             if (clickedEdge) {
                 selectedEdgeForMenu = clickedEdge
+                // Issue #814 评论 5935346839: context_menu_open 边界日志（edge）。
+                logInteraction("context_menu_open", "edge", clickedEdge.id, {
+                    "menuKind": "edge",
+                    "worldX": mx,
+                    "worldY": my
+                })
                 edgeContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
             } else {
                 contextMenuWorldX = mx
                 contextMenuWorldY = my
+                // Issue #814 评论 5935346839: context_menu_open 边界日志（bg, 右键）。
+                logInteraction("context_menu_open", "empty", "", {
+                    "menuKind": "bg",
+                    "worldX": mx,
+                    "worldY": my
+                })
                 bgContextMenu.popup(eventPoint.position.x, eventPoint.position.y)
             }
         }
@@ -333,12 +493,18 @@ Item {
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         target: null
+        // Issue #814 评论 5946795049: press-time ownership — 任一手指落在 child content 内时
+        // 父层 drag 不参与，由 child Scene 独占。enabled 在 exclusive grab 之前生效。
+        enabled: _touchOwnerA === "" && _touchOwnerB === ""
         property real lastTx: 0
         property real lastTy: 0
         // Issue #801 评论 5895310100: 标记当前 move 由触屏发起，
         // 用于 onLeftReleased 区分鼠标 move（nodeDragHandler 驱动）和触屏 move（bgTouchDrag 驱动），
         // 避免两者重复 commit。
         property bool _wasTouchMove: false
+        // Issue #814 评论 5935346839: 标记当前手势是触屏画布 pan，
+        // 用于在拖动手势真正开始时记 pan_begin、结束时记 pan_end。
+        property bool _wasTouchPan: false
         onActiveChanged: {
             if (active) {
                 lastTx = 0
@@ -348,16 +514,49 @@ Item {
                 if (interaction.pointerMode === "move") {
                     _wasTouchMove = true
                 }
+                // Issue #814 评论 5935346839: 触屏画布 pan 的 begin 边界
+                // （鼠标 pan_begin 在 bgDragArea.onPressed 记）。
+                if (interaction.pointerMode === "idle") {
+                    _wasTouchPan = true
+                    _panBeginX = panX
+                    _panBeginY = panY
+                    logInteraction("pan_begin", "empty", "", {
+                        "startPanX": panX,
+                        "startPanY": panY,
+                        "device": "touch"
+                    })
+                }
             } else {
+                if (_wasTouchPan) {
+                    // Issue #814 评论 5935346839: 触屏画布 pan 的 end 边界。
+                    logInteraction("pan_end", "empty", "", {
+                        "startPanX": _panBeginX,
+                        "startPanY": _panBeginY,
+                        "endPanX": panX,
+                        "endPanY": panY,
+                        "device": "touch"
+                    })
+                    _wasTouchPan = false
+                }
                 // Issue #801 评论 5895310100: 触屏 move 手势结束 → 提交位置。
                 // 桌面指针 move 不走 bgTouchDrag（acceptedDevices 限定 TouchScreen），
                 // 其 commit 由 Node/Embed 的 onLeftReleased 负责。
                 if (_wasTouchMove && interaction.pointerMode === "move") {
+                    var _touchCommitOk = false
                     if (interaction.pressedNodeId !== "") {
-                        graphController.commitNodeMove(interaction.pressedNodeId, interaction.moveX, interaction.moveY)
+                        _touchCommitOk = graphController.commitNodeMove(interaction.pressedNodeId, interaction.moveX, interaction.moveY)
                     } else if (interaction.pressedEmbedId !== "") {
-                        graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
+                        _touchCommitOk = graphController.commitEmbedMove(interaction.pressedEmbedId, interaction.moveX, interaction.moveY)
                     }
+                    // Issue #814 评论 5935346839: move_end 边界日志（touch）。
+                    var _mk = interaction.pressedNodeId !== "" ? "node" : (interaction.pressedEmbedId !== "" ? "embed" : "")
+                    var _mid = interaction.pressedNodeId !== "" ? interaction.pressedNodeId : interaction.pressedEmbedId
+                    logInteraction("move_end", _mk, _mid, {
+                        "toX": interaction.moveX,
+                        "toY": interaction.moveY,
+                        "commitSuccess": _touchCommitOk,
+                        "device": "touch"
+                    })
                     interaction.endMove()
                     graphController.computeEdgeRenders(null)
                     edgeCanvas.requestPaint()
@@ -366,32 +565,45 @@ Item {
             }
         }
         onActiveTranslationChanged: {
-            var dx = activeTranslation.x - lastTx
-            var dy = activeTranslation.y - lastTy
+            var rawDx = activeTranslation.x - lastTx
+            var rawDy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
+            // Issue #814 评论 5947740838: activeTranslation 是 scene 增量，
+            // 映射到本 Canvas local 再用。根层无祖先 scale 时退化成恒等。
+            var cd = sceneDeltaToCanvas(rawDx, rawDy)
             if (interaction.pointerMode === "idle") {
-                // 触屏未长按滑动 = 画布 pan（屏幕坐标增量直接加到 panX/panY）
-                applyPan(panX + dx, panY + dy)
+                // 触屏未长按滑动 = 画布 pan
+                applyPan(panX + cd.x, panY + cd.y)
             } else if (interaction.pointerMode === "contextPending") {
-                // 触屏长按后移动，更新 connect 坐标（世界坐标，除以 zoomLevel）
-                interaction.connectMouseX += dx / zoomLevel
-                interaction.connectMouseY += dy / zoomLevel
-                // 移动总距离超过阈值则转 connect
+                // 触屏长按后移动，更新 connect 坐标（世界坐标）
+                interaction.connectMouseX += cd.x / zoomLevel
+                interaction.connectMouseY += cd.y / zoomLevel
+                // 移动总距离超过阈值则转 connect（阈值用 scene 原始位移判定）
                 if (Math.sqrt(activeTranslation.x * activeTranslation.x + activeTranslation.y * activeTranslation.y) > interaction._moveThreshold) {
-                    interaction.contextPendingToConnect()
+                    if (interaction.contextPendingToConnect()) {
+                        // Issue #814 评论 5935346839: connect_begin 边界日志
+                        // （触屏长按后拖过阈值转连线；鼠标连接在 onMouseLongPressed 记）。
+                        logInteraction("connect_begin", interaction.connectFromKind, interaction.connectFromId, {
+                            "kind": interaction.connectFromKind,
+                            "fromId": interaction.connectFromId,
+                            "fromX": interaction.connectMouseX,
+                            "fromY": interaction.connectMouseY,
+                            "device": "touch"
+                        })
+                    }
                     // Issue #801 评论 5895310100: 继续移动变连线，关闭长按菜单视觉层
                     touchContextPreview.hide()
                 }
                 edgeCanvas.requestPaint()
             } else if (interaction.pointerMode === "connect") {
-                interaction.updateConnect(interaction.connectMouseX + dx / zoomLevel, interaction.connectMouseY + dy / zoomLevel)
+                interaction.updateConnect(interaction.connectMouseX + cd.x / zoomLevel, interaction.connectMouseY + cd.y / zoomLevel)
                 edgeCanvas.requestPaint()
             } else if (interaction.pointerMode === "move") {
                 // Issue #801 评论 5895310100: 触屏菜单"移动"后再拖 → 更新 transient 坐标。
                 // Node/Embed 的 DragHandler 限定 Mouse，触屏拖动穿透到背景层，
                 // 由 bgTouchDrag 统一驱动 move。delegate 的 x/y binding 自动跟随 moveX/moveY。
-                interaction.updateMove(interaction.moveX + dx / zoomLevel, interaction.moveY + dy / zoomLevel)
+                interaction.updateMove(interaction.moveX + cd.x / zoomLevel, interaction.moveY + cd.y / zoomLevel)
                 graphController.computeEdgeRenders(currentMoveOverride())
                 edgeCanvas.requestPaint()
             }
@@ -403,6 +615,9 @@ Item {
         id: canvasPinch
         acceptedDevices: PointerDevice.TouchScreen
         target: null
+        // Issue #814 评论 5946795049: 两根手指都在同一个 child Embed 内时父层 pinch 不参与。
+        // 一内一外时 child 无法独占两点，父 pinch 仍工作。
+        enabled: !_pinchBelongsToChild
         onActiveChanged: {
             if (active) {
                 _pinchStartZoom = zoomLevel
@@ -424,6 +639,75 @@ Item {
         }
     }
 
+    // Issue #814 评论 5935346839: press 边界观察器。
+    // PointHandler 只取 passive grab，不参与 exclusive grab 竞争：Node/Embed
+    // 自己的 TapHandler/DragHandler 照常拿到完整手势。四个 handler 分别绑定
+    // 具体的 button，避免依赖未公开的 point.pressedButtons。
+    PointHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.LeftButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("left", "mouse", point)
+        }
+    }
+    PointHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.MiddleButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("middle", "mouse", point)
+        }
+    }
+    PointHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.RightButton
+        onActiveChanged: {
+            if (active)
+                canvasArea.logPointerPress("right", "mouse", point)
+        }
+    }
+    // Issue #814 评论 5946795049 / 5947130795: touch press-time 所有权观察器（前两根手指）。
+    // PointHandler 只取 passive grab，不参与 exclusive grab 竞争。Qt 对同 parent 的多个
+    // PointHandler 会把不同 touchpoint 分配给不同实例：第一根手指进 touchOwnerA，第二根进
+    // touchOwnerB。press 时同时记录 pointer_press 边界日志 + 该手指所属 child Embed，
+    // release 时清空。父层 bgTouchDrag / canvasPinch 通过 enabled 绑定这些属性在 grab 之前让出。
+    // Issue #814 评论 5947130795: 不再保留第三个独立 TouchScreen PointHandler 日志观察器——
+    // 同 parent 下多个 PointHandler 组成分配组，一个触点被某个 sibling 取得 passive grab 后
+    // 其他 sibling 不再选择该触点；独立的日志观察器会把第一根手指分走，导致 touchOwnerA/B
+    // 凑不齐两根、press-time ownership 在最普通的一指/两指场景里失效。日志合并进 A/B 后
+    // 两根触点都能记录 pointer_press，且不破坏 ownership。
+    PointHandler {
+        id: touchOwnerA
+        acceptedDevices: PointerDevice.TouchScreen
+        // Issue #814 评论 5947395841: 触屏无按钮。acceptedButtons 用 NoButton 而非 LeftButton，
+        // 避免 synthetic mouse 的 LeftButton 反激活 owner、清掉 press-time ownership。
+        acceptedButtons: Qt.NoButton
+        onActiveChanged: {
+            if (active) {
+                canvasArea.logPointerPress("left", "touch", point)
+                _touchOwnerA = childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)
+            } else {
+                _touchOwnerA = ""
+            }
+        }
+    }
+    PointHandler {
+        id: touchOwnerB
+        acceptedDevices: PointerDevice.TouchScreen
+        // Issue #814 评论 5947395841: 同 touchOwnerA — 触屏无按钮，用 NoButton
+        // 避免 synthetic mouse 的 LeftButton 反激活 owner 清掉 press-time ownership。
+        acceptedButtons: Qt.NoButton
+        onActiveChanged: {
+            if (active) {
+                canvasArea.logPointerPress("left", "touch", point)
+                _touchOwnerB = childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)
+            } else {
+                _touchOwnerB = ""
+            }
+        }
+    }
+
     // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
     MouseArea {
         id: bgDragArea
@@ -439,15 +723,32 @@ Item {
             lastX = mouse.x
             lastY = mouse.y
             if (mouse.button === Qt.LeftButton) {
-                var wx = (mouse.x - panX) / zoomLevel
-                var wy = (mouse.y - panY) / zoomLevel
+                var wx = screenToWorldX(mouse.x)
+                var wy = screenToWorldY(mouse.y)
                 if (!findNodeAt(wx, wy) && !findEmbedChromeAt(wx, wy)) {
                     interaction.beginPan()
+                    // Issue #814 评论 5935346839: pan_begin 边界日志。
+                    _panBeginX = panX
+                    _panBeginY = panY
+                    logInteraction("pan_begin", "empty", "", {
+                        "startPanX": panX,
+                        "startPanY": panY,
+                        "device": "mouse"
+                    })
                 }
             }
             // 中键直接进入 pan（不依赖长按）
             if (mouse.button === Qt.MiddleButton) {
                 interaction.beginPan()
+                // Issue #814 评论 5935346839: pan_begin 边界日志（中键）。
+                _panBeginX = panX
+                _panBeginY = panY
+                logInteraction("pan_begin", "empty", "", {
+                    "startPanX": panX,
+                    "startPanY": panY,
+                    "button": "middle",
+                    "device": "mouse"
+                })
             }
         }
 
@@ -464,6 +765,14 @@ Item {
         onReleased: function(mouse) {
             if (interaction.pointerMode === "pan") {
                 interaction.endPan()
+                // Issue #814 评论 5935346839: pan_end 边界日志。
+                logInteraction("pan_end", "empty", "", {
+                    "startPanX": _panBeginX,
+                    "startPanY": _panBeginY,
+                    "endPanX": panX,
+                    "endPanY": panY,
+                    "device": "mouse"
+                })
             }
         }
 
@@ -496,6 +805,18 @@ Item {
             function onZoomLevelChanged() { edgeCanvas.requestPaint() }
         }
 
+        // Issue #814 评论 5946090360: 共享 selection 变化时 Edge Canvas 立即重绘。
+        // onPaint 里读了 selectionController.matches(pathKey,"edge",edge.id) 派生选中色，
+        // 但 Canvas 不会因 onPaint 内读取的属性自动重画；GraphController.selectEdge 现在
+        // 只改共享 selection 不改 edgesModel、不触发 graphChanged。整棵递归树共用一个
+        // selection 时，每层 Edge Canvas 都要在选中身份变化后立刻刷新。
+        Connections {
+            target: canvasArea.selectionController
+            function onScenePathKeyChanged() { edgeCanvas.requestPaint() }
+            function onKindChanged() { edgeCanvas.requestPaint() }
+            function onItemIdChanged() { edgeCanvas.requestPaint() }
+        }
+
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
@@ -515,7 +836,10 @@ Item {
                 }
                 if (!edge) continue
 
-                var color = edge.isSelected ? _accent : _border
+                // Issue #814 评论 5935285879: edge.isSelected 不再由 GraphController 维护，
+                // 从共享 selectionController 派生。
+                var edgeSelected = selectionController ? selectionController.matches(pathKey, "edge", edge.id) : false
+                var color = edgeSelected ? _accent : _border
 
                 // Draw line
                 ctx.beginPath()
@@ -579,28 +903,20 @@ Item {
         }
     }
 
-    // Main transform container
+    // Main transform layer
     //
-    // Issue #806 评论 5907045450：这里必须显式给 width/height。
-    // container 用 x/y + scale + transformOrigin 做视图变换，不是 anchors 布局，
-    // QML 默认 width/height 为 0，于是自身是个 0×0 矩形。Qt 的 hit-test 递归要求
-    // 父 Item 自己 contains(point) 才下降到子节点，0×0 矩形永远不含任何点 →
-    // 所有 StarMapNode / StarMapEmbed delegate 都进不了命中链，左右键全部失效。
-    //
-    // 尺寸按世界坐标给：container 外层套了 scale=zoomLevel，父级可视区换算到
-    // 世界坐标要除以 zoomLevel。container 的局部矩形是 [0, width]，而可见世界
-    // 坐标范围是 [-panX/zoomLevel, (W-panX)/zoomLevel]，只有 panX ≤ 0 时下界
-    // 才 ≥ 0。所以 pan 一律 clamp 到 ≤ 0（世界原点在左上角，见 applyPan），
-    // 此时可视区恰好被这个矩形覆盖。
+    // Issue #814 评论 5935285879: 无限画布 — 不再用"viewport 大小的 container +
+    // container 自身 x/y/scale"承载整个世界。改成一个始终和视口同尺寸的稳定
+    // sceneLayer，节点和 Embed 直接把世界坐标映射到屏幕坐标。
+    //   - sceneLayer 始终覆盖整个视口（anchors.fill: parent），Qt 命中链不会
+    //     因为节点跑到负世界坐标就断掉。
+    //   - delegate 的 x/y = worldToScreen(worldX/worldY)，scale = zoomLevel，
+    //     transformOrigin = TopLeft。世界坐标可以是任意正负值。
+    //   - edgeCanvas 自己 translate/scale，不受 sceneLayer 影响。
     Item {
-        id: container
-        x: panX
-        y: panY
-        scale: zoomLevel
-        transformOrigin: Item.TopLeft
+        id: sceneLayer
+        anchors.fill: parent
         z: 2
-        width: canvasArea.width / zoomLevel
-        height: canvasArea.height / zoomLevel
 
         Repeater {
             model: graphController.nodesModel
@@ -612,14 +928,20 @@ Item {
                 dt: canvasArea.dt
                 property var nodeData: modelData
 
-                // Issue #798: 显示坐标从 transient 状态派生，不再被命令式赋值打断 binding。
-                // 当前节点处于 move 时读 interaction.moveX/moveY，否则读 canonical nodeData.x/y。
-                x: interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveX : nodeData.x
-                y: interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveY : nodeData.y
+                // Issue #814 评论 5935285879: delegate 直接把世界坐标映射到屏幕坐标。
+                // 当前节点处于 move 时读 interaction.moveX/moveY（世界坐标），
+                // 否则读 canonical nodeData.x/y（世界坐标），再 worldToScreen。
+                x: worldToScreenX(interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveX : nodeData.x)
+                y: worldToScreenY(interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id ? interaction.moveY : nodeData.y)
+                // scale 把世界尺寸（nodeData.width/height）缩放到屏幕尺寸
+                scale: zoomLevel
+                transformOrigin: Item.TopLeft
                 width: nodeData.width
                 height: nodeData.height
                 title: nodeData.title
-                isSelected: nodeData.isSelected
+                // Issue #814 评论 5935285879: isSelected 从共享 selectionController 派生，
+                // 不再读 nodeData.isSelected（GraphController 不再维护 isSelected）。
+                isSelected: selectionController ? selectionController.matches(pathKey, "node", nodeData.id) : false
                 // wobble 交给 StarMapNode 内部驱动，用 index 错开 phase
                 wobbleIndex: index
 
@@ -637,6 +959,10 @@ Item {
 
                 onSingleClicked: {
                     graphController.selectNode(nodeData.id)
+                    // Issue #814 评论 5935346839: selection_changed 边界日志（node）。
+                    // singleClicked 由鼠标/触屏两个 TapHandler 共用，这里不猜 device；
+                    // 设备在 pointer_press / pan / move 边界日志里已经明确。
+                    logInteraction("selection_changed", "node", nodeData.id, {})
                 }
 
                 onDoubleClicked: {
@@ -654,6 +980,13 @@ Item {
                     if (!interaction.beginConnect("node", nd.id, nodePath(nd.id), nd.x + nd.width / 2, nd.y + nd.height / 2)) {
                         return
                     }
+                    // Issue #814 评论 5935346839: connect_begin 边界日志（node）。
+                    logInteraction("connect_begin", "node", nd.id, {
+                        "kind": "node",
+                        "fromId": nd.id,
+                        "fromX": nd.x + nd.width / 2,
+                        "fromY": nd.y + nd.height / 2
+                    })
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
@@ -669,8 +1002,9 @@ Item {
                         return
                     }
                     isBeingDragged = true
-                    var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
-                    var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                    // Issue #814 评论 5935285879: 节点中心世界坐标 → 屏幕坐标
+                    var sceneX = worldToScreenX(nd.x + nd.width / 2)
+                    var sceneY = worldToScreenY(nd.y + nd.height / 2)
                     touchContextPreview.show("node", sceneX, sceneY)
                     edgeCanvas.requestPaint()
                 }
@@ -679,11 +1013,24 @@ Item {
                     var nd = nodeData
                     graphController.selectNode(nd.id)
                     selectedNodeForMenu = nd
-                    // sceneX/sceneY 是场景坐标，菜单用屏幕坐标
-                    nodeContextMenu.popup(sceneX, sceneY)
+                    // Issue #814 评论 5947740838: sceneX/sceneY 是 scene 坐标，
+                    // 映射到本 Canvas local 弹菜单、映射到 world 记日志。
+                    var cp = sceneToCanvas(sceneX, sceneY)
+                    var wp = sceneToWorld(sceneX, sceneY)
+                    logInteraction("context_menu_open", "node", nd.id, {
+                        "menuKind": "node",
+                        "worldX": wp.x,
+                        "worldY": wp.y
+                    })
+                    nodeContextMenu.popup(cp.x, cp.y)
                 }
 
                 onMoveDelta: function(dx, dy) {
+                    // Issue #814 评论 5947740838: Node 上抛的是 raw scene delta，
+                    // 统一映射成 world delta，后面 moveX/moveY/connectMouse* 只存 world。
+                    var wd = sceneDeltaToWorld(dx, dy)
+                    dx = wd.x
+                    dy = wd.y
                     // Issue #801: contextPending 状态下移动超过阈值则转 connect
                     if (interaction.pointerMode === "contextPending" && interaction.connectFromId === nodeData.id) {
                         interaction.connectMouseX += dx
@@ -704,7 +1051,15 @@ Item {
                     }
 
                     if (interaction.pointerMode === "idle") {
-                        interaction.beginMove(nodeData.id, x, y)
+                        // Issue #814 评论 5935285879: transient move 永远保存世界坐标，
+                        // 不再拿 delegate 的屏幕 x/y 去 beginMove。
+                        interaction.beginMove(nodeData.id, nodeData.x, nodeData.y)
+                        // Issue #814 评论 5935346839: move_begin 边界日志（node）。
+                        logInteraction("move_begin", "node", nodeData.id, {
+                            "kind": "node",
+                            "fromX": nodeData.x,
+                            "fromY": nodeData.y
+                        })
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
@@ -730,9 +1085,15 @@ Item {
                             if (nd) {
                                 graphController.selectNode(nd.id)
                                 selectedNodeForMenu = nd
-                                // 用节点中心位置弹出菜单
-                                var sceneX = (nd.x + nd.width / 2) * zoomLevel + panX
-                                var sceneY = (nd.y + nd.height / 2) * zoomLevel + panY
+                                // 用节点中心世界坐标 → 屏幕坐标弹出菜单
+                                var sceneX = worldToScreenX(nd.x + nd.width / 2)
+                                var sceneY = worldToScreenY(nd.y + nd.height / 2)
+                                // Issue #814 评论 5935346839: context_menu_open 边界日志（node, touch 长按）。
+                                logInteraction("context_menu_open", "node", nd.id, {
+                                    "menuKind": "node",
+                                    "worldX": nd.x + nd.width / 2,
+                                    "worldY": nd.y + nd.height / 2
+                                })
                                 nodeContextMenu.popup(sceneX, sceneY)
                             }
                         }
@@ -743,14 +1104,28 @@ Item {
                         // Issue #796 评论 5887280405: 松手时 Node 和 Embed 都参与命中，
                         // 用 path 版建边支持 Embed 端点。
                         var targetNode = findNodeAt(interaction.connectMouseX, interaction.connectMouseY)
+                        var _connectSuccess = false
+                        var _connectCancel = false
+                        var _toPath = null
                         if (targetNode && targetNode.id !== interaction.connectFromId) {
-                            createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
+                            _toPath = nodePath(targetNode.id)
+                            _connectSuccess = createEdgeWithPaths(interaction.connectFromPath, _toPath)
                         } else {
                             var targetEmbed = findEmbedChromeAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                _toPath = embedPath(targetEmbed.instanceId)
+                                _connectSuccess = createEdgeWithPaths(interaction.connectFromPath, _toPath)
+                            } else {
+                                _connectCancel = true
                             }
                         }
+                        // Issue #814 评论 5935346839: connect_end 边界日志（node 端）。
+                        logInteraction("connect_end", "node", nodeData.id, {
+                            "fromPath": JSON.stringify(interaction.connectFromPath),
+                            "toPath": _toPath ? JSON.stringify(_toPath) : "",
+                            "success": _connectSuccess,
+                            "cancel": _connectCancel
+                        })
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedNodeId === nodeData.id) {
@@ -758,7 +1133,14 @@ Item {
                         // 这里只处理鼠标 move（nodeDragHandler 驱动）。用 _wasTouchMove 区分，
                         // 无论 onLeftReleased 与 bgTouchDrag.onActiveChanged 的触发顺序如何都不会重复 commit。
                         if (!bgTouchDrag._wasTouchMove) {
-                            graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
+                            var _nodeCommitOk = graphController.commitNodeMove(nodeData.id, interaction.moveX, interaction.moveY)
+                            // Issue #814 评论 5935346839: move_end 边界日志（node, mouse）。
+                            logInteraction("move_end", "node", nodeData.id, {
+                                "toX": interaction.moveX,
+                                "toY": interaction.moveY,
+                                "commitSuccess": _nodeCommitOk,
+                                "device": "mouse"
+                            })
                             interaction.endMove()
                         }
                     }
@@ -767,7 +1149,8 @@ Item {
         }
 
         // Issue #796 评论 5886483653: Embed Repeater，用 StarMapEmbed.qml 渲染。
-        // Node 和 Embed 都走同一套画布坐标转换（都在 container 里，受 panX/panY/zoomLevel 影响）。
+        // Issue #814 评论 5935285879: Embed 和 Node 一样直接把世界坐标映射到屏幕坐标，
+        // 不再依赖 container.x/y/scale。
         Repeater {
             model: graphController.embedsModel
             delegate: StarMapEmbed {
@@ -777,25 +1160,35 @@ Item {
                 dt: canvasArea.dt
                 property var embedData: modelData
 
-                // Issue #798: 显示坐标从 transient 状态派生，不再被命令式赋值打断 binding。
-                x: interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveX : embedData.x
-                y: interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveY : embedData.y
+                // Issue #814 评论 5935285879: delegate 直接把世界坐标映射到屏幕坐标。
+                // 当前 Embed 处于 move 时读 interaction.moveX/moveY（世界坐标），
+                // 否则读 canonical embedData.x/y（世界坐标），再 worldToScreen。
+                x: worldToScreenX(interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveX : embedData.x)
+                y: worldToScreenY(interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveY : embedData.y)
+                // scale 把世界尺寸（embedData.width/height）缩放到屏幕尺寸
+                scale: zoomLevel
+                transformOrigin: Item.TopLeft
                 width: embedData.width
                 height: embedData.height
                 instanceId: embedData.instanceId
                 targetStarmapId: embedData.targetStarmapId
                 label: embedData.label
-                isSelected: embedData.isSelected
+                // Issue #814 评论 5935285879: isSelected 从共享 selectionController 派生，
+                // 不再读 embedData.isSelected（GraphController 不再维护 isSelected）。
+                isSelected: selectionController ? selectionController.matches(pathKey, "embed", embedData.instanceId) : false
                 wobbleIndex: index
 
                 // 递归子 Scene 只在这个 Embed 的投影矩形进入当前 Canvas 视口时激活。
                 // 不能像旧实现那样只看 targetStarmapId 就递归展开所有子图，否则恢复
                 // 星图页面时会在首帧同步构造整棵引用树。留 64px 预取边距，拖动/缩放
                 // 接近视口时先开始异步创建，避免刚进入屏幕才闪一下。
-                readonly property real projectedLeft: x * canvasArea.zoomLevel + canvasArea.panX
-                readonly property real projectedTop: y * canvasArea.zoomLevel + canvasArea.panY
-                readonly property real projectedRight: projectedLeft + width * canvasArea.zoomLevel
-                readonly property real projectedBottom: projectedTop + height * canvasArea.zoomLevel
+                // Issue #814 评论 5935285879: delegate x/y 已是屏幕坐标，projected*
+                // 直接用 x/y，不再 *zoomLevel+panX。width/height 是世界尺寸，要 *scale
+                // （scale===zoomLevel）换算到屏幕尺寸。
+                readonly property real projectedLeft: x
+                readonly property real projectedTop: y
+                readonly property real projectedRight: projectedLeft + width * scale
+                readonly property real projectedBottom: projectedTop + height * scale
                 childSceneInViewport: {
                     var margin = 64
                     return canvasArea.visible
@@ -814,6 +1207,8 @@ Item {
                 // Embed 用它构造 child Scene 的 pathKey（父路径 + "/embed_<instanceId>"）。
                 parentPathKey: canvasArea.pathKey
                 starmapBackendRef: canvasArea.starmapBackendRef
+                // Issue #814 评论 5935285879: 共享选中控制器逐层下传，子 Scene 沿用同一个。
+                selectionController: canvasArea.selectionController
 
                 // Issue #798: 不再原地篡改 embedData.x/y，拖动用 StarMapEmbed 自己的 x/y
                 // 作为临时显示坐标，松手提交 Controller。
@@ -827,6 +1222,9 @@ Item {
 
                 onClicked: function(instId) {
                     graphController.selectEmbed(instId)
+                    // Issue #814 评论 5935346839: selection_changed 边界日志（embed）。
+                    // clicked 由鼠标/触屏两个 TapHandler 共用，不猜 device。
+                    logInteraction("selection_changed", "embed", instId, {})
                 }
 
                 // Issue #805 评论 5907045450 第 1/3 部分：双击不再 drillDown。
@@ -847,6 +1245,13 @@ Item {
                     if (!interaction.beginConnect("embed", instId, embedPath(ed.instanceId), ed.x + ed.width / 2, ed.y + ed.height / 2)) {
                         return
                     }
+                    // Issue #814 评论 5935346839: connect_begin 边界日志（embed）。
+                    logInteraction("connect_begin", "embed", instId, {
+                        "kind": "embed",
+                        "fromId": instId,
+                        "fromX": ed.x + ed.width / 2,
+                        "fromY": ed.y + ed.height / 2
+                    })
                     isBeingDragged = true
                     edgeCanvas.requestPaint()
                 }
@@ -859,8 +1264,9 @@ Item {
                         return
                     }
                     isBeingDragged = true
-                    var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
-                    var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                    // Issue #814 评论 5935285879: Embed 中心世界坐标 → 屏幕坐标
+                    var sceneX = worldToScreenX(ed.x + ed.width / 2)
+                    var sceneY = worldToScreenY(ed.y + ed.height / 2)
                     touchContextPreview.show("embed", sceneX, sceneY)
                     edgeCanvas.requestPaint()
                 }
@@ -869,13 +1275,26 @@ Item {
                 onContextMenuRequested: function(instId, sceneX, sceneY) {
                     graphController.selectEmbed(instId)
                     selectedEmbedForMenu = graphController.getEmbed(instId)
-                    embedContextMenu.popup(sceneX, sceneY)
+                    // Issue #814 评论 5947740838: scene 坐标映射到 Canvas local 弹菜单、world 记日志。
+                    var cp = sceneToCanvas(sceneX, sceneY)
+                    var wp = sceneToWorld(sceneX, sceneY)
+                    logInteraction("context_menu_open", "embed", instId, {
+                        "menuKind": "embed",
+                        "worldX": wp.x,
+                        "worldY": wp.y
+                    })
+                    embedContextMenu.popup(cp.x, cp.y)
                 }
 
                 // Issue #796 评论 5888480054: Embed 拖动改上抛 moveDelta 增量，
                 // 和 Node 的 onMoveDelta 对称。connect 模式更新预览线终点；
                 // idle 转 move 移动 Embed position。
                 onMoveDelta: function(dx, dy) {
+                    // Issue #814 评论 5947740838: Embed 上抛的是 raw scene delta，
+                    // 统一映射成 world delta，后面 moveX/moveY/connectMouse* 只存 world。
+                    var wd = sceneDeltaToWorld(dx, dy)
+                    dx = wd.x
+                    dy = wd.y
                     // Issue #801: contextPending 状态下移动超过阈值则转 connect
                     if (interaction.pointerMode === "contextPending" && interaction.connectFromId === embedData.instanceId) {
                         interaction.connectMouseX += dx
@@ -896,7 +1315,15 @@ Item {
                     }
 
                     if (interaction.pointerMode === "idle") {
-                        interaction.beginEmbedMove(embedData.instanceId, x, y)
+                        // Issue #814 评论 5935285879: transient move 永远保存世界坐标，
+                        // 不再拿 delegate 的屏幕 x/y 去 beginEmbedMove。
+                        interaction.beginEmbedMove(embedData.instanceId, embedData.x, embedData.y)
+                        // Issue #814 评论 5935346839: move_begin 边界日志（embed）。
+                        logInteraction("move_begin", "embed", embedData.instanceId, {
+                            "kind": "embed",
+                            "fromX": embedData.x,
+                            "fromY": embedData.y
+                        })
                     }
 
                     if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
@@ -920,9 +1347,15 @@ Item {
                             if (ed) {
                                 graphController.selectEmbed(ed.instanceId)
                                 selectedEmbedForMenu = ed
-                                // 用 Embed 中心位置弹出菜单
-                                var sceneX = (ed.x + ed.width / 2) * zoomLevel + panX
-                                var sceneY = (ed.y + ed.height / 2) * zoomLevel + panY
+                                // 用 Embed 中心世界坐标 → 屏幕坐标弹出菜单
+                                var sceneX = worldToScreenX(ed.x + ed.width / 2)
+                                var sceneY = worldToScreenY(ed.y + ed.height / 2)
+                                // Issue #814 评论 5935346839: context_menu_open 边界日志（embed, touch 长按）。
+                                logInteraction("context_menu_open", "embed", ed.instanceId, {
+                                    "menuKind": "embed",
+                                    "worldX": ed.x + ed.width / 2,
+                                    "worldY": ed.y + ed.height / 2
+                                })
                                 embedContextMenu.popup(sceneX, sceneY)
                             }
                         }
@@ -933,21 +1366,42 @@ Item {
                     // 用 path 版建边；否则走原拖动结束保存位置逻辑。
                     if (interaction.pointerMode === "connect" && interaction.connectFromId === embedData.instanceId) {
                         var targetNode = findNodeAt(interaction.connectMouseX, interaction.connectMouseY)
+                        var _eSuccess = false
+                        var _eCancel = false
+                        var _eToPath = null
                         if (targetNode && targetNode.id !== interaction.connectFromId) {
-                            createEdgeWithPaths(interaction.connectFromPath, nodePath(targetNode.id))
+                            _eToPath = nodePath(targetNode.id)
+                            _eSuccess = createEdgeWithPaths(interaction.connectFromPath, _eToPath)
                         } else {
                             var targetEmbed = findEmbedChromeAt(interaction.connectMouseX, interaction.connectMouseY)
                             if (targetEmbed && targetEmbed.instanceId !== interaction.connectFromId) {
-                                createEdgeWithPaths(interaction.connectFromPath, embedPath(targetEmbed.instanceId))
+                                _eToPath = embedPath(targetEmbed.instanceId)
+                                _eSuccess = createEdgeWithPaths(interaction.connectFromPath, _eToPath)
+                            } else {
+                                _eCancel = true
                             }
                         }
+                        // Issue #814 评论 5935346839: connect_end 边界日志（embed 端）。
+                        logInteraction("connect_end", "embed", embedData.instanceId, {
+                            "fromPath": JSON.stringify(interaction.connectFromPath),
+                            "toPath": _eToPath ? JSON.stringify(_eToPath) : "",
+                            "success": _eSuccess,
+                            "cancel": _eCancel
+                        })
                         interaction.endConnect()
                         edgeCanvas.requestPaint()
                     } else if (interaction.pointerMode === "move" && interaction.pressedEmbedId === embedData.instanceId) {
                         // Issue #801 评论 5895310100: 触屏 move 由 bgTouchDrag.onActiveChanged 独占 commit；
                         // 这里只处理鼠标 move。用 _wasTouchMove 区分避免重复 commit。
                         if (!bgTouchDrag._wasTouchMove) {
-                            graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
+                            var _embedCommitOk = graphController.commitEmbedMove(embedData.instanceId, interaction.moveX, interaction.moveY)
+                            // Issue #814 评论 5935346839: move_end 边界日志（embed, mouse）。
+                            logInteraction("move_end", "embed", embedData.instanceId, {
+                                "toX": interaction.moveX,
+                                "toY": interaction.moveY,
+                                "commitSuccess": _embedCommitOk,
+                                "device": "mouse"
+                            })
                             interaction.endMove()
                         }
                     }
@@ -1113,9 +1567,9 @@ Item {
     }
 
     function getNode(id) {
-        if (container) {
-            for (var i = 0; i < container.children.length; i++) {
-                var child = container.children[i];
+        if (sceneLayer) {
+            for (var i = 0; i < sceneLayer.children.length; i++) {
+                var child = sceneLayer.children[i];
                 if (child && child.nodeData && child.nodeData.id === id) {
                     return child;
                 }
@@ -1170,8 +1624,9 @@ Item {
     }
 
     // Issue #796 评论 5887280405: 用 fromPath/toPath 建边，支持 Node 和 Embed 端点。
+    // Issue #814 评论 5945557717 问题 3: 返回后端真实结果，connect_end.success 用它。
     function createEdgeWithPaths(fromPath, toPath) {
-        graphController.createEdgeWithPaths(fromPath, toPath)
+        return graphController.createEdgeWithPaths(fromPath, toPath)
     }
 
     function updateNodeFromInspector(nodeId, patch) {
@@ -1200,6 +1655,13 @@ Item {
     // 矩形判成命中，内部事件不会被父场景截走。
     function findEmbedChromeAt(wx, wy) {
         return graphController.findEmbedChromeAt(wx, wy)
+    }
+
+    // Issue #814 评论 5945557717 问题 1: findEmbedContentAt 判断整个 Embed 矩形内、
+    // 但不在 chrome 的区域（子星图 contentViewport）。pointer_press 据此把合法的
+    // 子场景内部点击记成 childContent，不再冒充 empty。
+    function findEmbedContentAt(wx, wy) {
+        return graphController.findEmbedContentAt(wx, wy)
     }
 
     // Issue #796 评论 5886483653: Embed 增删改转发给 graphController
