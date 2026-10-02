@@ -21,6 +21,18 @@
 //    "自己和子节点都参加"，父 Embed 和 child Scene 会一起进手势竞争（Issue #813 复审）。
 // 10. 预览连线的起点和正式边共用 geometry 的 edgeEndpointBoundaryPoint：
 //     预览从对象边界出发，不要从中心出发，否则松手前后会跳变。
+// 11. 双指缩放挂在**根 Scene 的最外层 Stack**（统一手势入口），不再挂在最底下那个空白 Column：
+//     空白 Column 只是 Stack 里的一个兄弟节点，手指一旦落在子星图上就不会经过它，
+//     于是"一指在子图上、一指在空白上"时双指缩放直接失效（#816 真机症状）。
+//     祖先节点的 onTouch 一定收得到子节点的触摸，所以在根 Stack 上监听就覆盖了所有落点。
+// 12. 双指缩放的归属在"两指落下"那一刻由两指中心的递归命中一次定下，直到双指抬起都不换人；
+//     父层看到子层归属的 pinch 时只观察，不许改自己的 offset（改了就父子一起缩放，表现为缩放抖动）。
+// 13. 比例拆成 fitScale × userZoomScale：fitScale 由子图内容包围盒和 Embed 圆形可用区算出，
+//     userZoomScale 是用户自己缩出来的倍数。禁止再用"每深一层乘 0.6"这种写死系数。
+// 14. 选中态全树只有一份（StarMapSelectionState），身份是 scenePath + kind + itemId。
+//     每层各存一份 selectedNodeId 的话，父子两层会同时亮，且分不清选中的是哪一层的哪个东西。
+// 15. 选中、connect 松手、菜单归属、双指归属全部走 geometry 的递归命中一个入口，
+//     不再各写一份"点在不在这一层"的判断。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -34,10 +46,13 @@ import { ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import {
   PlatformNodeRect, PlatformEdgeRender,
+  RecursiveSceneContext, RecursiveSceneSource, RecursiveHit,
   deriveNodeRectFromLayoutNode,
-  hitTestWithScene, computeAllEdgeRenders,
-  screenToCanvas, resolveEdgeEndpointAnchor,
+  computeAllEdgeRenders,
+  screenToCanvas, canvasToScreen, resolveEdgeEndpointAnchor,
   edgeEndpointBoundaryPoint, buildCircleResponseBands,
+  buildRecursiveSceneContext, resolveRecursiveHit, convertPointToRoot, resolveSceneLocalPoint,
+  buildTargetPathForHost, planCrossLayerEdge, describeScenePath,
   EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH
 } from '../platform/StarMapGeometry'
 import {
@@ -51,6 +66,17 @@ import {
   MotionPauseTracker
 } from '../platform/StarMapMotion'
 import { StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { StarMapSelectionState } from '../platform/StarMapSelectionState'
+import {
+  StarMapSceneNode, StarMapSceneRegistry, Viewport,
+  ContentBounds, computeContentBounds, computeFittedViewport, computeZoomAroundOffset,
+  effectiveScale, clampUserZoom, sceneLocalToCanvas,
+  CIRCLE_INNER_SAFE_RATIO
+} from '../platform/StarMapViewport'
+import {
+  logPinchBegin, logPinchEnd, logRecursiveHit,
+  logSelectionChanged, logConnectBegin, logConnectEnd
+} from '../platform/StarMapDiagnostics'
 import { StarMapEmbedScene } from './StarMapEmbedScene'
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
@@ -72,6 +98,20 @@ interface WobbleOffset {
  * 而子星图背景也是黑色，选中描边会变成"黑边贴黑圆"，选中态直接消失（Issue #813 复审）。
  */
 const STARMAP_SELECTED_STROKE_COLOR: string = '#FF6B6B'
+
+// ─── 视口常量 ───
+
+/** 用户缩放倍数的下限/上限（相对 fitScale 的倍数，不是最终比例）。 */
+const USER_ZOOM_MIN: number = 0.3
+const USER_ZOOM_MAX: number = 3
+
+/** 子图内容适配到 Embed 圆形可用区时，四边留白（vp）。 */
+const EMBED_FIT_PADDING_VP: number = 8
+
+/** 两指中心：缩放锚点和手势归属的判定点都用它（#816）。 */
+function twoFingerCenter(a: PlatformPoint, b: PlatformPoint): PlatformPoint {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+}
 
 @Component
 export struct StarMapScene {
@@ -131,22 +171,34 @@ export struct StarMapScene {
   // ─── @Link：与父组件双向绑定 ───
   /** 当前星图的图数据 */
   @Link @Watch('onGraphChange') graph: StarMapGraph | null
-  /** 当前 scene 的缩放 */
-  @Link @Watch('onTransformChange') zoomScale: number
-  /** 当前 scene 的 X 偏移 */
+  /**
+   * 当前 scene 的用户缩放倍数（相对 fitScale 的倍数，默认 1）。
+   * 之前这个 @Link 直接叫 zoomScale 并被当成最终比例用，于是子 Scene 必须猜一个
+   * "父层已经缩过了所以我乘 0.6"之类的系数。拆成倍数 + 适配比例之后，
+   * 适配比例由内容包围盒算出来，用户倍数独立保存，两者相乘才是最终比例。
+   */
+  @Link @Watch('onTransformChange') userZoomScale: number
+  /** 当前 scene 的 X 偏移（Scene 局部屏幕坐标） */
   @Link @Watch('onTransformChange') offsetX: number
-  /** 当前 scene 的 Y 偏移 */
+  /** 当前 scene 的 Y 偏移（Scene 局部屏幕坐标） */
   @Link @Watch('onTransformChange') offsetY: number
-  /** 当前选中对象 ID */
-  @Link @Watch('onTransformChange') selectedNodeId: string
+
+  /**
+   * 全树唯一选中态。根 Scene 持有唯一一份，沿组件树传到每个子 Scene。
+   * @ObjectLink 而不是 @State：它是共享对象，@State 会在每层各存一份拷贝。
+   */
+  @ObjectLink selectionState: StarMapSelectionState
 
   // ─── 普通属性：共享对象和回调 ───
   /** Core bridge（用于 mutation） */
   bridge: IWriterCoreBridge | null = null
   /** 手势状态追踪器（共享） */
   gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
-  /** 选中回调 */
-  onSelectItem: (scenePath: StarMapPathSegment[], itemId: string) => void = (_path, _id) => {}
+  /**
+   * 递归 Scene 注册表（共享）。统一手势入口靠它从根往下找 Scene 句柄。
+   * 没有注册表（比如单测或脱离 StarMapScreen 复用）时退化成"只有本层"。
+   */
+  sceneRegistry: StarMapSceneRegistry | null = null
   /** 新建节点回调 */
   onCreateNode: (scenePath: StarMapPathSegment[], starmapId: string, title: string, position: StarMapPoint) => void = (_path, _id, _title, _pos) => {}
   /** 新建子星图回调 */
@@ -159,6 +211,11 @@ export struct StarMapScene {
   onMoveEmbed: (scenePath: StarMapPathSegment[], starmapId: string, embedInstanceId: string, position: StarMapPoint) => void = (_path, _id, _embedId, _pos) => {}
 
   // ─── @State：场景局部状态 ───
+  /**
+   * 适配比例：由本 Scene 的内容包围盒 + 可用区域算出来。
+   * 根 Scene 恒为 1（整屏显示，不做自动适配）；子 Scene 在首次加载完成时算一次。
+   */
+  @State fitScale: number = 1
   /** 平台层布局节点（普通节点） */
   @State platformLayoutNodes: PlatformLayoutNode[] = []
   /** 平台层布局节点（Embed） */
@@ -200,13 +257,43 @@ export struct StarMapScene {
   private moveNodeStartY: number = 0
   private moveEmbedStartX: number = 0
   private moveEmbedStartY: number = 0
-  private pinchActive: boolean = false
   private panActive: boolean = false
+  /** 本 Scene 自己的区域尺寸（vp），用于算子图适配比例 */
+  private sceneWidth: number = 0
+  private sceneHeight: number = 0
+  /** 是否已经算过一次 fit view。子图加节点/移动节点不再重算，只有首次加载和显式 fit view 才算（#816） */
+  private hasFittedView: boolean = false
+  /** 注册到 sceneRegistry 的本层句柄 */
+  private sceneHandle: StarMapSceneNode | null = null
+
+  // ─── 统一双指缩放状态（只在根 Scene 上被改） ───
+  /** 本次双指缩放的归属句柄：两指落下时定一次，直到双指抬起都不换 */
+  private pinchOwnerHandle: StarMapSceneNode | null = null
+  /** 两指抬起到只剩 0 指 */
+  private pinchWasActive: boolean = false
+  /** 本次双指缩放的起始有效比例 */
   private pinchBaseScale: number = 1
+  /** 起始有效偏移 */
   private pinchBaseOffsetX: number = 0
   private pinchBaseOffsetY: number = 0
+  /** 缩放锚点在归属 Scene 画布坐标里的位置（两指中心，双指落下那一刻定下） */
   private pinchAnchorCanvasX: number = 0
   private pinchAnchorCanvasY: number = 0
+  /** 缩放锚点在归属 Scene 局部屏幕坐标里的位置（每帧用两指中心更新） */
+  private pinchAnchorScreenX: number = 0
+  private pinchAnchorScreenY: number = 0
+  /** 当前按下的手指：fingerId → Scene 局部屏幕坐标 */
+  private fingerMap: Map<number, PlatformPoint> = new Map<number, PlatformPoint>()
+  /** 当前按下的手指坐标快照（顺序不保证，取前两个即可） */
+  private fingerPoints: PlatformPoint[] = []
+
+  // ─── 跨层连线状态 ───
+  /** connect 起点：相对根星图的完整 StarMapTargetPath（#816 跨层连线靠它） */
+  private connectSourcePath: StarMapTargetPath | null = null
+  /** connect 起点在本 Scene 的对象 ID（日志用） */
+  private connectSourceId: string = ''
+  /** connect 起点类型 */
+  private connectSourceKind: string = 'node'
 
   // ─── 对话框宿主（窗口层级，不参与 Scene Stack 布局） ───
   /** 新建节点对话框的 ComponentContent：openCustomDialog 需要它来关闭对话框 */
@@ -225,6 +312,8 @@ export struct StarMapScene {
   aboutToAppear() {
     this.canvasActive = true
     this.recomputeLayoutAndGeometry()
+    this.registerSceneHandle()
+    this.maybeFitView()
   }
 
   aboutToDisappear() {
@@ -233,11 +322,392 @@ export struct StarMapScene {
     if (this.gestureTracker.isOwnedByScene(this.scenePath)) {
       this.gestureTracker.reset()
     }
+    this.unregisterSceneHandle()
     this.gestureMode = 'idle'
     this.showNodeMenu = false
     this.showCreateMenu = false
     this.nodeMenuNodeId = ''
     this.closeCreateDialogs()
+  }
+
+  /**
+   * 本 Scene 的最终有效比例 = fitScale × userZoomScale。
+   * 渲染、命中、边几何全部用这个值，界面上不允许再直接读 userZoomScale 当比例用。
+   */
+  private get viewportScale(): number {
+    return effectiveScale(this.fitScale, this.userZoomScale)
+  }
+
+  /**
+   * 本 Scene 现在能不能改自己的 offset。
+   *
+   * 有人正在双指缩放时，只有归属层能改自己的视口；其他层（父层观察子层的 pinch、
+   * 或反过来）必须一动不动——父子一起改 offset 就是 #816 里"缩放抖一下"的直接原因。
+   */
+  private canMutateViewport(): boolean {
+    if (!this.gestureTracker.isPinching()) {
+      return true
+    }
+    return this.gestureTracker.isPinchOwnedByScene(this.scenePath)
+  }
+
+  // ─── 递归 Scene 句柄与注册表 ───
+
+  /**
+   * 构造本 Scene 在注册表里的记录。
+   *
+   * 记录上的几何字段是**快照**：递归命中要读 rects / scale / offset，
+   * 所以每次重算几何都重新 sync 一次，否则统一手势入口拿到的是上一次布局的旧数据，
+   * 会把手指判到别的对象上。
+   */
+  private buildSceneHandle(): StarMapSceneNode {
+    if (this.sceneHandle === null) {
+      this.sceneHandle = new StarMapSceneNode(
+        this.scenePath,
+        this.starmapId,
+        (): RecursiveSceneSource[] => this.collectChildEmbeds(),
+        (aCanvasX: number, aCanvasY: number, aLocalX: number, aLocalY: number, ratio: number): void => {
+          this.zoomAroundLocal(aCanvasX, aCanvasY, aLocalX, aLocalY, ratio)
+        },
+        (userScale: number, newOffsetX: number, newOffsetY: number): void => {
+          this.applyUserZoom(userScale, newOffsetX, newOffsetY)
+        },
+        (): void => {
+          this.fitView()
+        },
+        (from: StarMapTargetPath, to: StarMapTargetPath): void => {
+          void this.createEdgeBetween(from, to)
+        }
+      )
+    }
+    this.sceneHandle.sync(
+      this.nodeRects, this.getEmbedInstanceIds(), this.viewportScale, this.offsetX, this.offsetY, this.fitScale
+    )
+    return this.sceneHandle
+  }
+
+  private registerSceneHandle(): void {
+    if (this.sceneRegistry === null) {
+      return
+    }
+    this.sceneRegistry.register(this.buildSceneHandle())
+  }
+
+  private unregisterSceneHandle(): void {
+    if (this.sceneRegistry !== null) {
+      this.sceneRegistry.unregister(this.scenePath)
+    }
+    this.sceneHandle = null
+  }
+
+  /**
+   * 本层所有**已加载完成**的子 Scene 句柄。
+   * 子图还没加载完就没有对应项，此时递归命中会停在"点在这个 Embed 上"，
+   * 行为等价于"点子星图标题选中它"，不会退化成选空白。
+   */
+  private collectChildEmbeds(): RecursiveSceneSource[] {
+    const out: RecursiveSceneSource[] = []
+    if (this.sceneRegistry === null || !this.graph) {
+      return out
+    }
+    for (const embed of this.graph.embeds) {
+      const child: StarMapSceneNode | null =
+        this.sceneRegistry.findChildEmbed(this.scenePath, embed.instanceId)
+      if (child !== null) {
+        out.push(child)
+      }
+    }
+    return out
+  }
+
+  /**
+   * 取整棵 Scene 树的递归上下文。统一手势入口用它做命中和坐标换算。
+   * 没有注册表（脱离 StarMapScreen 单独复用）时返回 null，调用方退回本层行为。
+   */
+  private getRootContext(): RecursiveSceneContext | null {
+    if (this.sceneRegistry === null) {
+      return null
+    }
+    const root: StarMapSceneNode | null = this.sceneRegistry.getRoot()
+    if (root === null) {
+      return null
+    }
+    return buildRecursiveSceneContext(root)
+  }
+
+  // ─── 视口适配（fit view） ───
+
+  /**
+   * 首次布局完成时算一次 fit view。
+   *
+   * 只在"还没有算过"时算：子图后来加节点、移动节点都不再重算，
+   * 否则用户刚双指放大好的视图会被一次内容变化打回初始大小（#816 明确要求）。
+   * 根 Scene 恒不自动适配（整屏显示，行为与之前一致）。
+   */
+  private maybeFitView(): void {
+    if (this.hasFittedView) {
+      return
+    }
+    // 根 Scene 不自动适配：它本来就整屏显示，工具栏 +/- 直接作用在它身上，
+    // 自动适配会改掉这层一直以来的初始视图。
+    if (this.sceneDepth === 0) {
+      return
+    }
+    if (this.sceneWidth <= 0 || this.sceneHeight <= 0 || !this.graph) {
+      return
+    }
+    this.fitView()
+  }
+
+  /**
+   * 按当前内容重新适配视口（首次加载 / 显式 fit view）。
+   *
+   * 可用区域取父 Embed 圆形内容区里"手能可靠点到"的内接正方形边长：
+   * 子 Scene 的布局是正方形，四角会超出圆被父层 clip 裁掉，
+   * 所以按 1/√2 折算，内容不会铺到圆外被切掉。
+   */
+  fitView(): void {
+    this.hasFittedView = true
+    this.userZoomScale = 1
+    const bounds: ContentBounds | null = computeContentBounds(this.nodeRects)
+    if (bounds === null) {
+      this.fitScale = 1
+      this.offsetX = 0
+      this.offsetY = 0
+      return
+    }
+    const available: number = Math.min(this.sceneWidth, this.sceneHeight) * CIRCLE_INNER_SAFE_RATIO
+    const fitted: Viewport = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP)
+    this.fitScale = fitted.zoomScale
+    this.offsetX = fitted.offsetX
+    this.offsetY = fitted.offsetY
+  }
+
+  /** 直接写用户倍数和偏移（统一入口和工具栏都用它，保证 fitScale 不被误改）。 */
+  applyUserZoom(userScale: number, newOffsetX: number, newOffsetY: number): void {
+    this.userZoomScale = clampUserZoom(userScale, USER_ZOOM_MIN, USER_ZOOM_MAX)
+    this.offsetX = newOffsetX
+    this.offsetY = newOffsetY
+  }
+
+  /**
+   * 以本 Scene 内的锚点为中心缩放 ratio 倍。
+   *
+   * 锚点画布坐标在缩放前后不变，于是 offset = 屏幕锚点 − 画布锚点 × 新比例，
+   * 两指中心在屏幕上看起来就钉住不动。比例最终还是要拆回用户倍数：
+   * 用户倍数才是这份视口里真正独立保存的那一份。
+   */
+  private zoomAroundLocal(
+    anchorCanvasX: number,
+    anchorCanvasY: number,
+    anchorLocalX: number,
+    anchorLocalY: number,
+    ratio: number
+  ): void {
+    if (!isFinite(ratio) || ratio <= 0) {
+      return
+    }
+    const fitScale: number = this.fitScale > 0 ? this.fitScale : 1
+    const nextScale: number = this.viewportScale * ratio
+    const nextUser: number = clampUserZoom(nextScale / fitScale, USER_ZOOM_MIN, USER_ZOOM_MAX)
+    const applied: number = effectiveScale(fitScale, nextUser)
+    const offset: PlatformPoint = computeZoomAroundOffset(
+      { x: anchorCanvasX, y: anchorCanvasY },
+      { x: anchorLocalX, y: anchorLocalY },
+      applied
+    )
+    this.applyUserZoom(nextUser, offset.x, offset.y)
+  }
+
+  // ─── 统一双指缩放入口（只在根 Scene 上生效） ───
+
+  /**
+   * 根 Scene 统一手势入口：原始触摸事件。
+   *
+   * 用 onTouch 而不是 PinchGesture 的原因：
+   * 1. PinchGesture 要参加手势竞争，落在子星图上的那根手指会被子 Scene 先吃掉；
+   *    而 onTouch 是**冒泡**事件，祖先节点一定收得到子节点的触摸。
+   * 2. 挂在最底下那个空白 Column 上只覆盖"手指落在空白"的情况，空白 Column 只是
+   *    Stack 里的一个兄弟节点，手指一旦落在子星图上就绕开它了（#816 真机症状）。
+   *
+   * 两指缩放的手势归属、锚点、是否允许改视口，全部由这里统一决定。
+   */
+  private onSceneTouch(event: TouchEvent): void {
+    // 只有根 Scene 是统一入口。子 Scene 观察到的是根层分发下来的 pinchOwner 状态，
+    // 自己不重复起手势，否则父子两层会同时缩放。
+    if (this.sceneDepth !== 0) {
+      return
+    }
+    this.trackFinger(event)
+    if (this.fingerPoints.length >= 2) {
+      const center: PlatformPoint = twoFingerCenter(this.fingerPoints[0], this.fingerPoints[1])
+      if (!this.pinchWasActive) {
+        this.beginUnifiedPinch(center)
+      }
+      if (this.pinchWasActive) {
+        this.updateUnifiedPinch(center)
+      }
+    } else if (this.pinchWasActive) {
+      this.endUnifiedPinch()
+    }
+  }
+
+  /**
+   * 用 changedTouches 维护当前按下的手指集合。
+   * 不用 event.touches 是因为抬手那一帧 touches 的组成各家实现不一致，
+   * 而 changedTouches 一定只含"这一帧发生变化"的手指。
+   */
+  private trackFinger(event: TouchEvent): void {
+    const changed: TouchObject[] = event.changedTouches !== undefined && event.changedTouches !== null
+      ? event.changedTouches
+      : []
+    for (const touch of changed) {
+      if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.fingerMap.delete(touch.id)
+      } else {
+        this.fingerMap.set(touch.id, { x: touch.x, y: touch.y })
+      }
+    }
+    this.fingerPoints = []
+    this.fingerMap.forEach((point: PlatformPoint) => {
+      this.fingerPoints.push(point)
+    })
+  }
+
+  /**
+   * 两指落下：定死归属层。
+   *
+   * 归属由两指中心的递归命中一次决定：中心落在子星图内部就归子 Scene，
+   * 落在空白、父层节点、Embed 标题/圆环上就归本层。定完之后到双指抬起为止都不换人——
+   * 中途换人会让一次缩放前半段缩子图、后半段缩父图，看起来就是"抖一下"。
+   */
+  private beginUnifiedPinch(rootCenter: PlatformPoint): void {
+    const context: RecursiveSceneContext | null = this.getRootContext()
+    let ownerScenePath: StarMapPathSegment[] = []
+    if (context !== null) {
+      const hit: RecursiveHit = resolveRecursiveHit(context, rootCenter.x, rootCenter.y)
+      ownerScenePath = hit.ownerScenePath
+      logRecursiveHit(hit)
+    }
+    const owner: StarMapSceneNode | null = this.findSceneHandle(ownerScenePath)
+    this.pinchOwnerHandle = owner
+    this.pinchWasActive = true
+    this.pinchBaseScale = owner !== null ? owner.scale : this.viewportScale
+    this.pinchBaseOffsetX = owner !== null ? owner.offsetX : this.offsetX
+    this.pinchBaseOffsetY = owner !== null ? owner.offsetY : this.offsetY
+    this.gestureTracker.beginPinch(ownerScenePath, rootCenter.x, rootCenter.y)
+    // 锚点画布坐标必须落在归属层的坐标系里，之后每帧都用它算 offset
+    const anchorCanvas: PlatformPoint = this.toOwnerCanvas(rootCenter)
+    this.pinchAnchorCanvasX = anchorCanvas.x
+    this.pinchAnchorCanvasY = anchorCanvas.y
+    this.pinchAnchorScreenX = rootCenter.x
+    this.pinchAnchorScreenY = rootCenter.y
+    logPinchBegin(describeScenePath(ownerScenePath), rootCenter.x, rootCenter.y, this.pinchBaseScale)
+  }
+
+  /**
+   * 两指移动：只改归属层的视口。
+   *
+   * ratio 相对两指落下那一刻的比例算，避免帧间累积误差；
+   * 锚点是"两指中心"本身，所以缩放时手指下面的内容跟着走。
+   */
+  private updateUnifiedPinch(rootCenter: PlatformPoint): void {
+    const owner: StarMapSceneNode | null = this.pinchOwnerHandle
+    if (owner === null) {
+      this.pinchAnchorScreenX = rootCenter.x
+      this.pinchAnchorScreenY = rootCenter.y
+      return
+    }
+    const baseScale: number = this.pinchBaseScale > 0 ? this.pinchBaseScale : 1
+    const ratio: number = owner.scale / baseScale
+    if (!isFinite(ratio) || ratio <= 0) {
+      return
+    }
+    // 锚点画布坐标不变，屏幕锚点每帧跟随两指中心
+    const ownerLocal: PlatformPoint = this.toOwnerLocal(rootCenter)
+    owner.zoomAround(
+      this.pinchAnchorCanvasX, this.pinchAnchorCanvasY,
+      ownerLocal.x, ownerLocal.y,
+      ratio
+    )
+    this.pinchAnchorScreenX = rootCenter.x
+    this.pinchAnchorScreenY = rootCenter.y
+  }
+
+  /** 双指抬起：清空归属，避免下次沿用上一次的比例基准。 */
+  private endUnifiedPinch(): void {
+    if (!this.pinchWasActive) {
+      return
+    }
+    const finalScale: number = this.pinchOwnerHandle !== null ? this.pinchOwnerHandle.scale : this.viewportScale
+    const ownerScenePath: StarMapPathSegment[] = this.gestureTracker.getState().pinchOwnerScenePath ?? []
+    logPinchEnd(describeScenePath(ownerScenePath), finalScale)
+    this.pinchOwnerHandle = null
+    this.pinchWasActive = false
+    this.gestureTracker.endPinch()
+  }
+
+  /** 按绝对路径查 Scene 句柄；查不到退回本层句柄。 */
+  private findSceneHandle(scenePath: StarMapPathSegment[]): StarMapSceneNode | null {
+    if (this.sceneRegistry === null) {
+      return this.buildSceneHandle()
+    }
+    const found: StarMapSceneNode | null = this.sceneRegistry.find(scenePath)
+    return found !== null ? found : this.buildSceneHandle()
+  }
+
+  /** 根坐标 → 归属层局部坐标。 */
+  private toOwnerLocal(rootPoint: PlatformPoint): PlatformPoint {
+    if (this.pinchOwnerHandle === null) {
+      return rootPoint
+    }
+    const context: RecursiveSceneContext | null = this.getRootContext()
+    if (context === null) {
+      return rootPoint
+    }
+    return resolveSceneLocalPoint(context, this.pinchOwnerHandle.scenePath, rootPoint.x, rootPoint.y)
+  }
+
+  /** 根坐标 → 归属层画布坐标（缩放锚点）。 */
+  private toOwnerCanvas(rootPoint: PlatformPoint): PlatformPoint {
+    if (this.pinchOwnerHandle === null) {
+      return sceneLocalToCanvas(rootPoint.x, rootPoint.y, this.viewportScale, this.offsetX, this.offsetY)
+    }
+    const local: PlatformPoint = this.toOwnerLocal(rootPoint)
+    return sceneLocalToCanvas(
+      local.x, local.y, this.pinchOwnerHandle.scale, this.pinchOwnerHandle.offsetX, this.pinchOwnerHandle.offsetY
+    )
+  }
+
+  // ─── 选中态 ───
+
+  private isNodeSelected(nodeId: string): boolean {
+    return this.selectionState.isSelected(this.scenePath, 'node', nodeId)
+  }
+
+  private isEmbedSelected(instanceId: string): boolean {
+    return this.selectionState.isSelected(this.scenePath, 'embed', instanceId)
+  }
+
+  /**
+   * 选中一个对象。
+   *
+   * 全树只有一份状态，且身份是 scenePath + kind + itemId：
+   * 选子图里的节点会立刻让父层那个 Embed 取消选中（因为 scenePath 不同），
+   * 选二级子星图的标题也只会选中那一个 Embed。
+   */
+  private selectItem(kind: 'node' | 'embed', itemId: string): void {
+    logSelectionChanged(describeScenePath(this.scenePath), kind, itemId)
+    this.selectionState.select(this.scenePath, kind, itemId)
+  }
+
+  /** 点空白：清空全树选中。 */
+  private clearSelection(): void {
+    if (!this.selectionState.hasSelection()) {
+      return
+    }
+    logSelectionChanged(describeScenePath(this.scenePath), 'none', '')
+    this.selectionState.clear()
   }
 
   // ─── @Watch 处理 ───
@@ -255,6 +725,8 @@ export struct StarMapScene {
 
   onGraphChange() {
     this.recomputeLayoutAndGeometry()
+    // 图第一次到位时布局区可能已经有尺寸了，onAreaChange 不一定还会再来一次
+    this.maybeFitView()
   }
 
   // ─── 布局与几何计算 ───
@@ -294,6 +766,8 @@ export struct StarMapScene {
       rectMap.set(rect.nodeId, rect)
     }
     this.localEdgeRenders = computeAllEdgeRenders(this.graph.edges, rectMap, this.starmapId, this.getEmbedInstanceIds())
+    // 布局变了就同步快照：递归命中要读的是最新 rects
+    this.buildSceneHandle()
     this.drawEdges()
   }
 
@@ -314,7 +788,7 @@ export struct StarMapScene {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseX = ln ? ln.x : 0
     const wobbleDx = wobbleXFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
-    return (baseX + wobbleDx) * this.zoomScale + this.offsetX
+    return (baseX + wobbleDx) * this.viewportScale + this.offsetX
   }
 
   /**
@@ -324,7 +798,7 @@ export struct StarMapScene {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseY = ln ? ln.y : 0
     const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
-    return (baseY + wobbleDy) * this.zoomScale + this.offsetY
+    return (baseY + wobbleDy) * this.viewportScale + this.offsetY
   }
 
   /**
@@ -343,14 +817,14 @@ export struct StarMapScene {
     if (!ln) return
     const rect: PlatformNodeRect = deriveNodeRectFromLayoutNode(ln)
     const pointerCanvas: PlatformPoint = screenToCanvas(
-      pointerScreen.x, pointerScreen.y, this.zoomScale, this.offsetX, this.offsetY
+      pointerScreen.x, pointerScreen.y, this.viewportScale, this.offsetX, this.offsetY
     )
     const start: PlatformPoint = edgeEndpointBoundaryPoint(
       rect, this.isEmbed(sourceId), pointerCanvas.x, pointerCanvas.y
     )
     this.previewLineFrom = {
-      x: start.x * this.zoomScale + this.offsetX,
-      y: start.y * this.zoomScale + this.offsetY
+      x: start.x * this.viewportScale + this.offsetX,
+      y: start.y * this.viewportScale + this.offsetY
     }
   }
 
@@ -360,7 +834,7 @@ export struct StarMapScene {
   private getEmbedScreenX(embedId: string): number {
     const ln = this.getPlatformLayoutNode(embedId)
     const baseX = ln ? ln.x : 0
-    return baseX * this.zoomScale + this.offsetX
+    return baseX * this.viewportScale + this.offsetX
   }
 
   /**
@@ -369,7 +843,7 @@ export struct StarMapScene {
   private getEmbedScreenY(embedId: string): number {
     const ln = this.getPlatformLayoutNode(embedId)
     const baseY = ln ? ln.y : 0
-    return baseY * this.zoomScale + this.offsetY
+    return baseY * this.viewportScale + this.offsetY
   }
 
   /**
@@ -406,53 +880,140 @@ export struct StarMapScene {
   // ─── Mutation 方法 ───
 
   /**
-   * 构造 item 的 StarMapTargetPath 端点。
+   * 构造 item 的 StarMapTargetPath 端点，**统一相对根星图**。
+   *
+   * 之前这里是以"当前 Scene 的 starmapId + 空 segments"起手，于是每层的端点路径
+   * 只在自己那一层里有效，"父节点拖到子节点上"这种跨层连线根本无法表达。
+   * 现在起点统一相对根星图：segments 就是本 Scene 的绝对路径（Embed 再追加一段 enterEmbed），
+   * 之后 planCrossLayerEdge 负责把它换算到真正的宿主 Scene。
    */
   private buildItemTargetPath(itemId: string): StarMapTargetPath {
-    if (this.isEmbed(itemId)) {
-      return {
-        starmapId: this.starmapId,
-        segments: [
-          { type: 'enterEmbed', instanceId: itemId, nodeId: null }
-        ],
-        target: {
-          type: 'starmap',
-          nodeId: null, anchorId: null,
-          projectId: null, volumeId: null, chapterId: null,
-          rangeStart: null, rangeEnd: null,
-          entityType: null, entityId: null, uri: null
-        }
-      }
-    }
-    return {
+    return buildTargetPathForHost(this.rootStarmapId, [], {
+      scenePath: this.scenePath,
       starmapId: this.starmapId,
-      segments: [],
-      target: {
-        type: 'node',
-        nodeId: itemId, anchorId: null,
-        projectId: null, volumeId: null, chapterId: null,
-        rangeStart: null, rangeEnd: null,
-        entityType: null, entityId: null, uri: null
-      }
-    }
+      kind: this.isEmbed(itemId) ? 'embed' : 'node',
+      itemId: itemId
+    })
+  }
+
+  // ─── 跨层连线 ───
+
+  /**
+   * 开始连线：记下起点相对**根星图**的完整路径。
+   *
+   * 起点必须存完整路径而不是"本层的 itemId"：跨层连线要靠它和终点的路径
+   * 求最近公共祖先，宿主是父层还是祖父层完全由这两条路径决定。
+   */
+  beginConnectFrom(itemId: string, point: PlatformPoint) {
+    const sourcePath: StarMapTargetPath = this.buildItemTargetPath(itemId)
+    this.gestureTracker.beginConnect(this.scenePath, itemId, point.x, point.y)
+    this.connectSourcePath = sourcePath
+    this.connectSourceId = itemId
+    this.connectSourceKind = this.isEmbed(itemId) ? 'embed' : 'node'
+    this.previewCanvasReady = false
+    this.gestureMode = 'connect'
+    this.showNodeMenu = false
+    this.updatePreviewLineFrom(itemId, point)
+    this.previewLineTo = point
+    logConnectBegin(sourcePath)
   }
 
   /**
-   * 创建关系（边）：通过 bridge 的星图 CRUD API。
-   * 使用 this.starmapId（当前 scene 的 starmapId）。
+   * 结束连线：用递归命中解析终点，再按最近公共祖先决定边落在哪张图上。
+   *
+   * 五种情形（#816 明确要求覆盖）都收敛到同一条规则：
+   * 父 Node → 子 Node、子 Node → 父 Node、同一 Embed 里的两个子 Node、
+   * 两个不同 Embed 里的 Node、子 Node → 更深一层的子 Embed/Node。
+   * 同层连线算出来的方案和之前完全一致，所以不需要第二套分支。
    */
-  async createEdge(fromItemId: string, toItemId: string) {
-    hilog.info(0x0000, 'StarMapScene', `createEdge: ${fromItemId} → ${toItemId}`)
+  async finishConnect(localScreenX: number, localScreenY: number) {
+    const sourcePath: StarMapTargetPath | null = this.connectSourcePath
+    if (sourcePath === null) {
+      return
+    }
+    const context: RecursiveSceneContext | null = this.getRootContext()
+    if (context === null) {
+      logConnectEnd(sourcePath, null, '', false, 'no_scene_context')
+      return
+    }
+
+    // 本 Scene 局部坐标 → 根 Scene 局部坐标，递归命中只能在根坐标系里做
+    const rootPoint: PlatformPoint = convertPointToRoot(
+      context, this.scenePath, localScreenX, localScreenY
+    )
+    const hit: RecursiveHit = resolveRecursiveHit(context, rootPoint.x, rootPoint.y)
+    logRecursiveHit(hit)
+
+    if (hit.target === null) {
+      logConnectEnd(sourcePath, null, '', false, 'blank_target')
+      return
+    }
+    if (hit.target.objectKind === 'embed' && hit.target.hitRegion === 'innerContent' &&
+      this.isSamePath(hit.target.scenePath, this.scenePath) && hit.target.objectId === this.connectSourceId) {
+      logConnectEnd(sourcePath, null, '', false, 'self')
+      return
+    }
+
+    const targetPath: StarMapTargetPath = buildTargetPathForHost(this.rootStarmapId, [], {
+      scenePath: hit.target.scenePath,
+      starmapId: hit.target.starmapId,
+      kind: hit.target.objectKind === 'embed' ? 'embed' : 'node',
+      itemId: hit.target.objectId
+    })
+    const plan = planCrossLayerEdge(context, sourcePath, targetPath)
+    if (plan === null) {
+      logConnectEnd(sourcePath, targetPath, '', false, 'same_object')
+      return
+    }
+
+    // 边只能落在宿主 Scene 上：把两条相对宿主的端点路径交给它去写 Core
+    const hostHandle: StarMapSceneNode | null = this.findSceneHandle(plan.hostScenePath)
+    if (hostHandle === null) {
+      logConnectEnd(sourcePath, targetPath, plan.hostStarmapId, false, 'no_host_scene')
+      return
+    }
+    hostHandle.createEdgeBetween(plan.from, plan.to)
+  }
+
+  private isSamePath(a: StarMapPathSegment[], b: StarMapPathSegment[]): boolean {
+    if (a.length !== b.length) {
+      return false
+    }
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].type !== b[i].type || a[i].instanceId !== b[i].instanceId || a[i].nodeId !== b[i].nodeId) {
+        return false
+      }
+    }
+    return true
+  }
+
+  /** 连线结束后的统一收尾（清状态、关预览）。 */
+  private clearConnectState() {
+    this.connectSourcePath = null
+    this.connectSourceId = ''
+    this.gestureTracker.reset()
+    this.deactivatePreviewCanvas()
+    this.gestureMode = 'idle'
+    this.showNodeMenu = false
+    this.nodeMenuNodeId = ''
+  }
+
+  /**
+   * 落一条边：通过 bridge 的星图 CRUD API 写回**宿主 Scene**的图。
+   *
+   * 端点路径已经由 planCrossLayerEdge 换算成相对本 Scene，所以这里直接透传，
+   * 不再做任何坐标或层级判断。边一定存进宿主那张图，这是 Core 的既有语义
+   * （facade/starmap_ops/graph.rs::add_starmap_edge 把边写进 starmap_id 自己的图）。
+   */
+  async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath) {
     if (!this.bridge) return
-    const from = this.buildItemTargetPath(fromItemId)
-    const to = this.buildItemTargetPath(toItemId)
     const result = await this.bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null)
     if (result.success && result.data) {
       // 成功分支必须留痕：Issue #813 的诊断包里只有 create_starmap_child_embed，
       // 无法判断是"没画线"还是"画了线但没落库"。这条日志同时覆盖普通节点和 Embed 端点。
       hilog.info(
         0x0000, 'StarMapScene',
-        `createEdge ok: starmapId=${this.starmapId}, from=${fromItemId}, to=${toItemId}, edgeId=${result.data.id}`
+        `createEdge ok: starmapId=${this.starmapId}, edgeId=${result.data.id}`
       )
       if (this.graph) {
         this.graph = {
@@ -466,7 +1027,7 @@ export struct StarMapScene {
         }
         this.recomputeGeometry()
       }
-      this.onCreateEdge(this.scenePath, this.starmapId, fromItemId, toItemId)
+      this.onCreateEdge(this.scenePath, this.starmapId, from.target.nodeId ?? '', to.target.nodeId ?? '')
     } else {
       hilog.error(0x0000, 'StarMapScene', `createEdge failed: ${result.errorCode}, ${result.userMessage}`)
     }
@@ -529,8 +1090,7 @@ export struct StarMapScene {
         this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
         this.recomputeGeometry()
       }
-      this.selectedNodeId = result.data.id
-      this.onSelectItem(this.scenePath, result.data.id)
+      this.selectItem('node', result.data.id)
       this.onCreateNode(this.scenePath, this.starmapId, trimmed, position)
     } else {
       hilog.error(0x0000, 'StarMapScene', `addStarMapNode failed: ${result.errorCode}, ${result.userMessage}`)
@@ -683,12 +1243,14 @@ export struct StarMapScene {
       const fromWobble = wobbleMap.get(fromId) || defaultWobble
       const toWobble = wobbleMap.get(toId) || defaultWobble
 
-      const sx = (edge.startX + fromWobble.dx) * this.zoomScale + this.offsetX
-      const sy = (edge.startY + fromWobble.dy) * this.zoomScale + this.offsetY
-      const ex = (edge.endX + toWobble.dx) * this.zoomScale + this.offsetX
-      const ey = (edge.endY + toWobble.dy) * this.zoomScale + this.offsetY
+      const sx = (edge.startX + fromWobble.dx) * this.viewportScale + this.offsetX
+      const sy = (edge.startY + fromWobble.dy) * this.viewportScale + this.offsetY
+      const ex = (edge.endX + toWobble.dx) * this.viewportScale + this.offsetX
+      const ey = (edge.endY + toWobble.dy) * this.viewportScale + this.offsetY
 
-      const isSelected = this.selectedNodeId === fromId || this.selectedNodeId === toId
+      // 选中的边用 (scenePath, kind, itemId) 判定，不看端点 id：
+      // 同层里"起点是我选中的节点"和"这条边本身被选中"是两件事。
+      const isSelected = this.selectionState.isSelected(this.scenePath, 'edge', graphEdge.id)
 
       ctx.beginPath()
       ctx.moveTo(sx, sy)
@@ -705,12 +1267,12 @@ export struct StarMapScene {
       ctx.setLineDash([])
 
       // 箭头
-      const atx = (edge.arrowTipX + toWobble.dx) * this.zoomScale + this.offsetX
-      const aty = (edge.arrowTipY + toWobble.dy) * this.zoomScale + this.offsetY
-      const alx = (edge.arrowLeftX + toWobble.dx) * this.zoomScale + this.offsetX
-      const aly = (edge.arrowLeftY + toWobble.dy) * this.zoomScale + this.offsetY
-      const arx = (edge.arrowRightX + toWobble.dx) * this.zoomScale + this.offsetX
-      const ary = (edge.arrowRightY + toWobble.dy) * this.zoomScale + this.offsetY
+      const atx = (edge.arrowTipX + toWobble.dx) * this.viewportScale + this.offsetX
+      const aty = (edge.arrowTipY + toWobble.dy) * this.viewportScale + this.offsetY
+      const alx = (edge.arrowLeftX + toWobble.dx) * this.viewportScale + this.offsetX
+      const aly = (edge.arrowLeftY + toWobble.dy) * this.viewportScale + this.offsetY
+      const arx = (edge.arrowRightX + toWobble.dx) * this.viewportScale + this.offsetX
+      const ary = (edge.arrowRightY + toWobble.dy) * this.viewportScale + this.offsetY
 
       ctx.beginPath()
       ctx.moveTo(atx, aty)
@@ -723,8 +1285,8 @@ export struct StarMapScene {
 
       // 边标签
       if (graphEdge.label && edge.labelX !== undefined && edge.labelY !== undefined) {
-        const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * this.zoomScale + this.offsetX
-        const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * this.zoomScale + this.offsetY
+        const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * this.viewportScale + this.offsetX
+        const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * this.viewportScale + this.offsetY
         ctx.font = '11px HarmonyOS Sans'
         ctx.fillStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.onSurfaceVariant
         ctx.textAlign = 'center'
@@ -778,32 +1340,32 @@ export struct StarMapScene {
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
-      Circle({ width: 56 * this.zoomScale, height: 56 * this.zoomScale })
+      Circle({ width: 56 * this.viewportScale, height: 56 * this.viewportScale })
         .fill(this.getNodeColor(node))
-        .stroke(this.selectedNodeId === node.id ? STARMAP_SELECTED_STROKE_COLOR : 'transparent')
+        .stroke(this.isNodeSelected(node.id) ? STARMAP_SELECTED_STROKE_COLOR : 'transparent')
         .strokeWidth(4)
         .shadow({
           radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
             DesignTokens.shadowStrong.radius :
-            (this.selectedNodeId === node.id ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
+            (this.isNodeSelected(node.id) ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
           color: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
             '#40000000' :
-            (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
+            (this.isNodeSelected(node.id) ? '#40FF6B6B' : '#20000000'),
           offsetX: 0,
           offsetY: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
             DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
         })
 
       Text(node.title)
-        .fontSize(13 * this.zoomScale)
-        .fontWeight(this.selectedNodeId === node.id ? FontWeight.Bold : FontWeight.Normal)
-        .margin({ top: 6 * this.zoomScale })
+        .fontSize(13 * this.viewportScale)
+        .fontWeight(this.isNodeSelected(node.id) ? FontWeight.Bold : FontWeight.Normal)
+        .margin({ top: 6 * this.viewportScale })
         .maxLines(2)
         .textAlign(TextAlign.Center)
-        .width(80 * this.zoomScale)
+        .width(80 * this.viewportScale)
     }
-    .width(160 * this.zoomScale)
-    .height(80 * this.zoomScale)
+    .width(160 * this.viewportScale)
+    .height(80 * this.viewportScale)
     .justifyContent(FlexAlign.Center)
     .position({
       x: this.getNodeScreenX(node.id),
@@ -815,8 +1377,7 @@ export struct StarMapScene {
         : { x: 1, y: 1 }
     )
     .onClick(() => {
-      this.selectedNodeId = node.id
-      this.onSelectItem(this.scenePath, node.id)
+      this.selectItem('node', node.id)
     })
     // 菜单不挂在本 Column 上：bindMenu 按被绑定组件定位，节点本体位置会随节点移动而变化，
     // 而且 Scene 栈里的 1vp 锚点才能让菜单贴着实际长按的手指位置弹出（见 build() 的锚点）。
@@ -836,19 +1397,14 @@ export struct StarMapScene {
               // 锚点记手指实际位置，菜单从这儿弹出而不是从节点中心弹出
               this.nodeMenuAnchor = { x: point.x, y: point.y }
               this.showNodeMenu = true
-              this.selectedNodeId = node.id
-              this.onSelectItem(this.scenePath, node.id)
+              this.selectItem('node', node.id)
             }),
           PanGesture()
             .onActionStart((event: GestureEvent) => {
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
-              this.gestureTracker.beginConnect(this.scenePath, node.id, point.x, point.y)
-              this.previewCanvasReady = false
-              this.gestureMode = 'connect'
-              this.showNodeMenu = false
-              this.updatePreviewLineFrom(node.id, point)
-              this.previewLineTo = point
+              // 起点存完整路径，跨层连线要靠它和终点求最近公共祖先（#816）
+              this.beginConnectFrom(node.id, point)
             })
             .onActionUpdate((event: GestureEvent) => {
               if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
@@ -864,23 +1420,10 @@ export struct StarMapScene {
               if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
               const state = this.gestureTracker.getState()
               if (state.mode === 'connect') {
-                const screenX = this.previewLineTo.x
-                const screenY = this.previewLineTo.y
-                const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
-                const targetItemId = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
-                if (targetItemId !== null && targetItemId.objectId !== node.id) {
-                  if (targetItemId.objectKind === 'embedInnerContent') {
-                    // 父 Scene 不创建 edge，留给 child Scene 处理
-                  } else {
-                    void this.createEdge(node.id, targetItemId.objectId)
-                  }
-                }
+                // 终点在根坐标系里做递归命中，父子跨层的边由最近公共祖先那张图承接
+                void this.finishConnect(this.previewLineTo.x, this.previewLineTo.y)
               }
-              this.gestureTracker.reset()
-              this.deactivatePreviewCanvas()
-              this.gestureMode = 'idle'
-              this.showNodeMenu = false
-              this.nodeMenuNodeId = ''
+              this.clearConnectState()
             })
         ),
         // 没有长按成功时的普通滑动
@@ -895,7 +1438,7 @@ export struct StarMapScene {
                 this.moveNodeStartY = ln.y
               }
             } else {
-              if (this.pinchActive) return
+              if (this.gestureTracker.isPinching()) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               this.panActive = true
               const point = this.gestureScreenPoint(event, 0, 0)
@@ -909,13 +1452,13 @@ export struct StarMapScene {
             if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveNode' && state.activeItemId === node.id) {
-              const newDx = this.moveNodeStartX + event.offsetX / this.zoomScale
-              const newDy = this.moveNodeStartY + event.offsetY / this.zoomScale
+              const newDx = this.moveNodeStartX + event.offsetX / this.viewportScale
+              const newDy = this.moveNodeStartY + event.offsetY / this.viewportScale
               const positions = new Map<string, PlatformPoint>()
               positions.set(node.id, { x: newDx, y: newDy })
               this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
               this.recomputeGeometry()
-            } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
+            } else if (state.mode === 'panCanvas' && this.panActive && this.gestureTracker.isPinchOwnedByScene(this.scenePath)) {
               this.offsetX = this.panBaseX + event.offsetX
               this.offsetY = this.panBaseY + event.offsetY
             }
@@ -943,14 +1486,22 @@ export struct StarMapScene {
    * Pan 手势：moveEmbed 模式时移动 Embed，否则按 #373 规则拖动当前 Scene 画布。
    * innerContent 不挂父手势，由 child Scene 自己处理。
    * 所有 onActionStart 检查 isOwnedByScene，防止别层正在用手势时覆盖 owner。
+   *
+   * 单击和双击都必须落在同一个 Embed 选中上（#816）：双击声明在单击之前，
+   * 双击的第二次按下不触发单击识别，所以单击不会被双击抢走。
+   * 两者都只是选中这个 Embed，都不开新页面。
    */
   private embedGestureGroup(embed: StarMapEmbed): GestureGroupInterface {
     return GestureGroup(GestureMode.Exclusive,
+      // 双击 → 选中 Embed（和单击同一个结果）
+      TapGesture({ count: 2 })
+        .onAction(() => {
+          this.selectItem('embed', embed.instanceId)
+        }),
       // 单击 → 选中 Embed
       TapGesture({ count: 1 })
         .onAction(() => {
-          this.selectedNodeId = embed.instanceId
-          this.onSelectItem(this.scenePath, embed.instanceId)
+          this.selectItem('embed', embed.instanceId)
         }),
       // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
       GestureGroup(GestureMode.Sequence,
@@ -970,12 +1521,7 @@ export struct StarMapScene {
           .onActionStart((event: GestureEvent) => {
             if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
             const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
-            this.gestureTracker.beginConnect(this.scenePath, embed.instanceId, point.x, point.y)
-            this.previewCanvasReady = false
-            this.gestureMode = 'connect'
-            this.showNodeMenu = false
-            this.updatePreviewLineFrom(embed.instanceId, point)
-            this.previewLineTo = point
+            this.beginConnectFrom(embed.instanceId, point)
           })
           .onActionUpdate((event: GestureEvent) => {
             if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
@@ -991,23 +1537,10 @@ export struct StarMapScene {
             if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             const state = this.gestureTracker.getState()
             if (state.mode === 'connect') {
-              const screenX = this.previewLineTo.x
-              const screenY = this.previewLineTo.y
-              const canvasPoint = screenToCanvas(screenX, screenY, this.zoomScale, this.offsetX, this.offsetY)
-              const targetItemId = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
-              if (targetItemId !== null && targetItemId.objectId !== embed.instanceId) {
-                if (targetItemId.objectKind === 'embedInnerContent') {
-                  // 父 Scene 不创建 edge，留给 child Scene 处理
-                } else {
-                  void this.createEdge(embed.instanceId, targetItemId.objectId)
-                }
-              }
+              // 终点在根坐标系里做递归命中：父 Node 拖到子 Node 上也走这一条路径
+              void this.finishConnect(this.previewLineTo.x, this.previewLineTo.y)
             }
-            this.gestureTracker.reset()
-            this.deactivatePreviewCanvas()
-            this.gestureMode = 'idle'
-            this.showNodeMenu = false
-            this.nodeMenuNodeId = ''
+            this.clearConnectState()
           })
       ),
       // 没有长按成功时的普通滑动（moveEmbed 或画布拖动，与 #373 规则一致）
@@ -1022,7 +1555,7 @@ export struct StarMapScene {
               this.moveEmbedStartY = ln.y
             }
           } else {
-            if (this.pinchActive) return
+            if (this.gestureTracker.isPinching()) return
             if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
             this.panActive = true
             const point = this.gestureScreenPoint(event, 0, 0)
@@ -1036,13 +1569,13 @@ export struct StarMapScene {
           if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
           const state = this.gestureTracker.getState()
           if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
-            const newDx = this.moveEmbedStartX + event.offsetX / this.zoomScale
-            const newDy = this.moveEmbedStartY + event.offsetY / this.zoomScale
+            const newDx = this.moveEmbedStartX + event.offsetX / this.viewportScale
+            const newDy = this.moveEmbedStartY + event.offsetY / this.viewportScale
             const positions = new Map<string, PlatformPoint>()
             positions.set(embed.instanceId, { x: newDx, y: newDy })
             this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
             this.recomputeGeometry()
-          } else if (state.mode === 'panCanvas' && this.panActive && !this.pinchActive) {
+          } else if (state.mode === 'panCanvas' && this.panActive && this.gestureTracker.isPinchOwnedByScene(this.scenePath)) {
             this.offsetX = this.panBaseX + event.offsetX
             this.offsetY = this.panBaseY + event.offsetY
           }
@@ -1087,12 +1620,16 @@ export struct StarMapScene {
           rootStarmapId: this.rootStarmapId,
           scenePath: this.scenePath,
           embed: embed,
-          sceneDepth: this.sceneDepth,
+          // 子 Scene 的深度是父层 +1：只有根 Scene 承接统一双指缩放
+          sceneDepth: this.sceneDepth + 1,
           themeConfig: this.themeConfig,
           motionConfig: this.motionConfig,
           motionProgress: this.motionProgress,
           bridge: this.bridge,
           gestureTracker: this.gestureTracker,
+          // 全树共用的选中状态和 Scene 注册表：选中要跨层唯一，缩放要能顺着路径找到宿主
+          selectionState: this.selectionState,
+          sceneRegistry: this.sceneRegistry,
         })
       }
       .width('100%')
@@ -1104,32 +1641,32 @@ export struct StarMapScene {
       // 位置会被节点本体绑死，点圆环时菜单不从按下处弹出）。
       Row() {
         Text(embed.label ?? embed.targetStarmapId)
-          .fontSize(14 * this.zoomScale)
+          .fontSize(14 * this.viewportScale)
           .fontWeight(FontWeight.Medium)
           .fontColor('#FFFFFF')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           // 圆顶部的可见宽度远小于直径：左对齐 + padding 的文字前半截会被圆裁掉，必须居中
-          .width(80 * this.zoomScale)
+          .width(80 * this.viewportScale)
           .textAlign(TextAlign.Center)
       }
       .width('100%')
-      .height(EMBED_TITLE_HIT_HEIGHT * this.zoomScale)
+      .height(EMBED_TITLE_HIT_HEIGHT * this.viewportScale)
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .position({ x: 0, y: 0 })
       .hitTestBehavior(HitTestMode.None)
     }
-    .width(DEFAULT_EMBED_DIAMETER * this.zoomScale)
-    .height(DEFAULT_EMBED_DIAMETER * this.zoomScale)
-    .borderRadius(DEFAULT_EMBED_DIAMETER / 2 * this.zoomScale)
+    .width(DEFAULT_EMBED_DIAMETER * this.viewportScale)
+    .height(DEFAULT_EMBED_DIAMETER * this.viewportScale)
+    .borderRadius(DEFAULT_EMBED_DIAMETER / 2 * this.viewportScale)
     .backgroundColor('#000000')
     // 未选中也要有一条细描边，否则黑圆在深色画布上看不出边界；选中时加粗。
     // 选中色用 STARMAP_SELECTED_STROKE_COLOR（和普通节点一致），不能用 themeConfig.colors.primary：
     // LightTheme 的 primary 是 #000000，黑圆选中后会变成"黑边贴黑圆"。
     .border({
-      width: this.selectedNodeId === embed.instanceId ? 3 : 1,
-      color: this.selectedNodeId === embed.instanceId
+      width: this.isEmbedSelected(embed.instanceId) ? 3 : 1,
+      color: this.isEmbedSelected(embed.instanceId)
         ? STARMAP_SELECTED_STROKE_COLOR
         : this.themeConfig.colors.outlineVariant
     })
@@ -1153,7 +1690,7 @@ export struct StarMapScene {
       if (!touch) {
         return HitTestMode.None
       }
-      const diameter: number = DEFAULT_EMBED_DIAMETER * this.zoomScale
+      const diameter: number = DEFAULT_EMBED_DIAMETER * this.viewportScale
       const radius: number = diameter / 2
       const dx: number = touch.x - radius
       const dy: number = touch.y - radius
@@ -1161,8 +1698,8 @@ export struct StarMapScene {
       if (dist > radius) {
         return HitTestMode.None
       }
-      const inTitle: boolean = touch.y <= EMBED_TITLE_HIT_HEIGHT * this.zoomScale
-      const inBorder: boolean = dist >= radius - EMBED_BORDER_HIT_WIDTH * this.zoomScale
+      const inTitle: boolean = touch.y <= EMBED_TITLE_HIT_HEIGHT * this.viewportScale
+      const inBorder: boolean = dist >= radius - EMBED_BORDER_HIT_WIDTH * this.viewportScale
       return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None
     })
   }
@@ -1173,7 +1710,7 @@ export struct StarMapScene {
    * 这里只负责转成 ArkUI 的 Rectangle。
    */
   private buildEmbedCircleResponseRegions(): Rectangle[] {
-    const bands = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER * this.zoomScale)
+    const bands = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER * this.viewportScale)
     const regions: Rectangle[] = []
     for (const band of bands) {
       regions.push({
@@ -1294,49 +1831,15 @@ export struct StarMapScene {
       .width('100%')
       .height('100%')
       .gesture(
-        // 空白区域手势：Pinch（双指缩放）+ Pan（画布拖动）+ LongPress（长按新建）
+        // 空白区域手势：Pan（画布拖动）+ LongPress（长按新建）
+        //
+        // Pinch 不在这里（#816）：这个 Column 只是 Stack 里的一个兄弟节点，
+        // 手指落在子星图上时根本收不到事件，所以双指缩放以前会随机失效。
+        // 缩放统一交给根 Scene 栈上的 onTouch，那里能看到所有层的全部手指。
         GestureGroup(GestureMode.Parallel,
-          PinchGesture()
-            .onActionStart((event: GestureEvent) => {
-              this.pinchActive = true
-              this.panActive = false
-              this.pinchBaseScale = this.zoomScale
-              this.pinchBaseOffsetX = this.offsetX
-              this.pinchBaseOffsetY = this.offsetY
-              // 计算双指中心的画布坐标作为缩放锚点
-              if (event.fingerList && event.fingerList.length >= 2) {
-                const f0 = event.fingerList[0]
-                const f1 = event.fingerList[1]
-                if (f0 && f1) {
-                  const centerX = (f0.localX + f1.localX) / 2
-                  const centerY = (f0.localY + f1.localY) / 2
-                  const canvasPoint = screenToCanvas(centerX, centerY, this.zoomScale, this.offsetX, this.offsetY)
-                  this.pinchAnchorCanvasX = canvasPoint.x
-                  this.pinchAnchorCanvasY = canvasPoint.y
-                }
-              }
-            })
-            .onActionUpdate((event: GestureEvent) => {
-              if (!this.pinchActive) return
-              const rawScale = this.pinchBaseScale * event.scale
-              const MIN_ZOOM = 0.3
-              const MAX_ZOOM = 3.0
-              const nextScale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawScale))
-              // 跟随双指中心：使用 event.pinchCenterX/Y 作为屏幕参考点
-              // offsetX = centerX - anchorCanvasX * nextScale
-              // offsetY = centerY - anchorCanvasY * nextScale
-              const centerX = event.pinchCenterX
-              const centerY = event.pinchCenterY
-              this.offsetX = centerX - this.pinchAnchorCanvasX * nextScale
-              this.offsetY = centerY - this.pinchAnchorCanvasY * nextScale
-              this.zoomScale = nextScale
-            })
-            .onActionEnd(() => {
-              this.pinchActive = false
-            }),
           PanGesture()
             .onActionStart((event: GestureEvent) => {
-              if (this.pinchActive) return
+              if (this.gestureTracker.isPinching()) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               this.panActive = true
               const point = this.gestureScreenPoint(event, 0, 0)
@@ -1347,7 +1850,8 @@ export struct StarMapScene {
             })
             .onActionUpdate((event: GestureEvent) => {
               if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
-              if (!this.panActive || this.pinchActive) return
+              if (!this.panActive || this.gestureTracker.isPinching()) return
+              if (!this.canMutateViewport()) return
               if (this.gestureMode === 'panCanvas') {
                 this.offsetX = this.panBaseX + event.offsetX
                 this.offsetY = this.panBaseY + event.offsetY
@@ -1363,13 +1867,19 @@ export struct StarMapScene {
             .onAction((event: GestureEvent) => {
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               const point = this.gestureScreenPoint(event, 0, 0)
-              const canvasPoint = screenToCanvas(point.x, point.y, this.zoomScale, this.offsetX, this.offsetY)
-              const hitResult = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
+              const canvasPoint = screenToCanvas(point.x, point.y, this.viewportScale, this.offsetX, this.offsetY)
+              // 空白判定和选中/连线共用同一个递归命中：点在子星图内部时父 Scene 不该弹新建菜单
+              const context: RecursiveSceneContext | null = this.getRootContext()
+              let isBlank: boolean = false
+              if (context !== null) {
+                const rootPoint: PlatformPoint = convertPointToRoot(context, this.scenePath, point.x, point.y)
+                isBlank = resolveRecursiveHit(context, rootPoint.x, rootPoint.y).target === null
+              }
               // 空白区域长按 → 弹出新建菜单。
               // 菜单挂在 Scene 栈里的 1vp 锚点上（不挂在本背景层）：
               // bindMenu 按被绑定组件定位，挂全屏背景层会让菜单相对整张 Scene 放，
               // 不再相对手指长按的位置放（Issue #813 复审）。
-              if (hitResult === null) {
+              if (isBlank) {
                 this.createMenuAnchor = { x: point.x, y: point.y }
                 this.createMenuCanvasPosition = { x: canvasPoint.x, y: canvasPoint.y }
                 this.showCreateMenu = true
@@ -1445,5 +1955,16 @@ export struct StarMapScene {
     }
     .width('100%')
     .height('100%')
+    // onTouch 只挂在根 Scene 的栈上（#816）：
+    // 子 Scene 的栈同样会收到事件，但 sceneDepth !== 0 的分支直接 return，
+    // 所有双指逻辑都在这一处发生，父层不可能绕过 owner 改自己的视口。
+    .onTouch((event: TouchEvent) => {
+      this.onSceneTouch(event)
+    })
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      this.sceneWidth = Number(newArea.width)
+      this.sceneHeight = Number(newArea.height)
+      this.maybeFitView()
+    })
   }
 }

@@ -338,53 +338,130 @@ function buildCircleResponseBands(diameter, maxBandHeight = MAX_CIRCLE_RESPONSE_
 }
 
 // ── 被测规格：StarMapGestureStateTracker (StarMapGestureState.ets) ──
-function createGestureStateTracker() {
-  let state = {
-    mode: 'idle', activeItemId: '', activeItemKind: 'node',
-    ownerScenePath: [], startPoint: { x: 0, y: 0 },
-    currentPoint: { x: 0, y: 0 }, targetItemId: ''
+// 与 .ets 里的实现逐字段对齐：#816 之后归属按手势类型分开记（pinch/pan/connect/操作对象），
+// 且 gestureTracker 只有一个实例，由根 Scene 持有、各 Scene 共享。
+function copyPath(path) {
+  return path.map((seg) => ({ type: seg.type, instanceId: seg.instanceId, nodeId: seg.nodeId }))
+}
+function sameScenePath(a, b) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].type !== b[i].type ||
+        a[i].instanceId !== b[i].instanceId ||
+        a[i].nodeId !== b[i].nodeId) return false
   }
+  return true
+}
+function createGestureStateTracker() {
+  function emptyState() {
+    return {
+      mode: 'idle', activeItemId: '', activeItemKind: 'node',
+      ownerScenePath: [], activeItemScenePath: null,
+      panOwnerScenePath: null, pinchOwnerScenePath: null,
+      connectOwnerScenePath: null, connectSourceScenePath: null,
+      startPoint: { x: 0, y: 0 }, currentPoint: { x: 0, y: 0 },
+      targetItemId: '', targetItemScenePath: null
+    }
+  }
+  let state = emptyState()
   return {
     beginPanCanvas(ownerScenePath, startX, startY) {
-      state = { mode: 'panCanvas', activeItemId: '', activeItemKind: 'node',
-        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
-        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+      const next = emptyState()
+      next.mode = 'panCanvas'
+      next.ownerScenePath = copyPath(ownerScenePath)
+      next.panOwnerScenePath = copyPath(ownerScenePath)
+      next.startPoint = { x: startX, y: startY }
+      next.currentPoint = { x: startX, y: startY }
+      state = next
     },
     beginNodeMenu(ownerScenePath, nodeId, startX, startY) {
-      state = { mode: 'nodeMenu', activeItemId: nodeId, activeItemKind: 'node',
-        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
-        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+      const next = emptyState()
+      next.mode = 'nodeMenu'
+      next.activeItemId = nodeId
+      next.activeItemKind = 'node'
+      next.ownerScenePath = copyPath(ownerScenePath)
+      next.activeItemScenePath = copyPath(ownerScenePath)
+      next.startPoint = { x: startX, y: startY }
+      next.currentPoint = { x: startX, y: startY }
+      state = next
     },
     beginConnect(ownerScenePath, nodeId, startX, startY) {
-      state = { mode: 'connect', activeItemId: nodeId, activeItemKind: 'node',
-        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
-        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+      const next = emptyState()
+      next.mode = 'connect'
+      next.activeItemId = nodeId
+      next.activeItemKind = 'node'
+      next.ownerScenePath = copyPath(ownerScenePath)
+      next.activeItemScenePath = copyPath(ownerScenePath)
+      next.connectOwnerScenePath = copyPath(ownerScenePath)
+      next.connectSourceScenePath = copyPath(ownerScenePath)
+      next.startPoint = { x: startX, y: startY }
+      next.currentPoint = { x: startX, y: startY }
+      state = next
     },
     beginMoveNode(ownerScenePath, nodeId, startX, startY) {
-      state = { mode: 'moveNode', activeItemId: nodeId, activeItemKind: 'node',
-        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
-        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+      const next = emptyState()
+      next.mode = 'moveNode'
+      next.activeItemId = nodeId
+      next.activeItemKind = 'node'
+      next.ownerScenePath = copyPath(ownerScenePath)
+      next.activeItemScenePath = copyPath(ownerScenePath)
+      next.startPoint = { x: startX, y: startY }
+      next.currentPoint = { x: startX, y: startY }
+      state = next
     },
     beginMoveEmbed(ownerScenePath, embedInstanceId, startX, startY) {
-      state = { mode: 'moveEmbed', activeItemId: embedInstanceId, activeItemKind: 'embed',
-        ownerScenePath: [...ownerScenePath], startPoint: { x: startX, y: startY },
-        currentPoint: { x: startX, y: startY }, targetItemId: '' }
+      const next = emptyState()
+      next.mode = 'moveEmbed'
+      next.activeItemId = embedInstanceId
+      next.activeItemKind = 'embed'
+      next.ownerScenePath = copyPath(ownerScenePath)
+      next.activeItemScenePath = copyPath(ownerScenePath)
+      next.startPoint = { x: startX, y: startY }
+      next.currentPoint = { x: startX, y: startY }
+      state = next
     },
-    reset() {
-      state = { mode: 'idle', activeItemId: '', activeItemKind: 'node',
-        ownerScenePath: [], startPoint: { x: 0, y: 0 },
-        currentPoint: { x: 0, y: 0 }, targetItemId: '' }
+    beginPinch(ownerScenePath, centerX, centerY) {
+      const next = emptyState()
+      next.mode = 'pinch'
+      next.ownerScenePath = copyPath(ownerScenePath)
+      next.pinchOwnerScenePath = copyPath(ownerScenePath)
+      next.startPoint = { x: centerX, y: centerY }
+      next.currentPoint = { x: centerX, y: centerY }
+      state = next
     },
-    isOwnedByScene(scenePath) {
-      const owner = state.ownerScenePath
-      if (owner.length !== scenePath.length) return false
-      for (let i = 0; i < owner.length; i++) {
-        if (owner[i].type !== scenePath[i].type ||
-            owner[i].instanceId !== scenePath[i].instanceId ||
-            owner[i].nodeId !== scenePath[i].nodeId) return false
-      }
-      return true
+    endPinch() {
+      if (state.pinchOwnerScenePath === null) return
+      state = emptyState()
     },
+    updateCurrent(x, y) { state.currentPoint = { x, y } },
+    setTargetItem(itemId) { state.targetItemId = itemId },
+    setTargetItemScenePath(scenePath) { state.targetItemScenePath = copyPath(scenePath) },
+    reset() { state = emptyState() },
+    isIdle() { return state.mode === 'idle' },
+    isDraggingNode() { return state.mode === 'moveNode' || state.mode === 'moveEmbed' },
+    isConnecting() { return state.mode === 'connect' },
+    isPinching() { return state.pinchOwnerScenePath !== null },
+    isPinchOwnedByScene(scenePath) {
+      if (state.pinchOwnerScenePath === null) return false
+      return sameScenePath(state.pinchOwnerScenePath, scenePath)
+    },
+    canClaimPinch(scenePath) {
+      if (state.pinchOwnerScenePath === null) return true
+      return sameScenePath(state.pinchOwnerScenePath, scenePath)
+    },
+    isPanOwnedByScene(scenePath) {
+      if (state.panOwnerScenePath === null) return false
+      return sameScenePath(state.panOwnerScenePath, scenePath)
+    },
+    isConnectOwnedByScene(scenePath) {
+      if (state.connectOwnerScenePath === null) return false
+      return sameScenePath(state.connectOwnerScenePath, scenePath)
+    },
+    isActiveItemInScene(scenePath) {
+      if (state.activeItemScenePath === null) return false
+      return sameScenePath(state.activeItemScenePath, scenePath)
+    },
+    isOwnedByScene(scenePath) { return sameScenePath(state.ownerScenePath, scenePath) },
     getState() { return JSON.parse(JSON.stringify(state)) }
   }
 }
@@ -952,6 +1029,42 @@ console.log('33. GestureState：isOwnedByScene 正确比较路径')
   assert(tracker.isOwnedByScene(scenePath3) === false, '不同长度路径 → false')
   tracker.reset()
   assert(tracker.isOwnedByScene(scenePath1) === false, 'reset 后空路径不匹配任何路径')
+}
+
+console.log('34. GestureState：归属按手势类型分开记（#816 递归归属）')
+{
+  const tracker = createGestureStateTracker()
+  const root = []
+  const child = [{ type: 'enterEmbed', instanceId: 'emb1', nodeId: null }]
+
+  // #816 之前只有一条 ownerScenePath 跟着 mode 走，父层靠"自己是不是 idle"判断
+  // 该不该退出——父层本来就没参与，是 observe 而不是抢。
+  tracker.beginPinch(child, 100, 100)
+  assert(tracker.isPinching() === true, 'beginPinch → isPinching')
+  assert(tracker.isPinchOwnedByScene(child) === true, '归属层认领')
+  assert(tracker.isPinchOwnedByScene(root) === false, '父层不是归属层，只能观察')
+  assert(tracker.isPanOwnedByScene(child) === false, 'pinch 归属不串到 pan 归属')
+  assert(tracker.isConnectOwnedByScene(child) === false, 'pinch 归属不串到 connect 归属')
+  assert(tracker.isActiveItemInScene(child) === false, 'pinch 没有操作对象')
+
+  // 父层不能因为自己不是 pinch 归属层就去改自己的视口
+  assert(tracker.canClaimPinch(root) === false, '父层不能中途抢归属（否则一次缩放前后半段缩不同层）')
+  assert(tracker.canClaimPinch(child) === true, '归属层可以继续持有')
+
+  // 非 pinch 的手势不影响 pinch 归属判断
+  tracker.endPinch()
+  assert(tracker.isPinching() === false && tracker.canClaimPinch(root), '双指抬起后归属释放')
+
+  tracker.beginConnect(child, 'n1', 0, 0)
+  assert(tracker.isConnectOwnedByScene(child) === true, 'connect 归属发起层')
+  assert(eq(tracker.getState().connectSourceScenePath, child), 'connect 起点 Scene 单独记一份')
+  tracker.setTargetItemScenePath(root)
+  assert(eq(tracker.getState().targetItemScenePath, root), '终点 Scene 单独记一份（终点可能在父层）')
+
+  tracker.beginMoveEmbed(child, 'emb1', 5, 5)
+  assert(tracker.isActiveItemInScene(child) === true, '操作对象归属所在层')
+  assert(tracker.getState().activeItemKind === 'embed', '操作对象类型是 embed')
+  assert(tracker.isDraggingNode() === true, 'moveEmbed 属于拖拽节点')
 }
 
 console.log('')

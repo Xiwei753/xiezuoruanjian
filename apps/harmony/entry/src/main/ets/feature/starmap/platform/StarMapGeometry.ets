@@ -5,6 +5,7 @@
 import {
   StarMapEdge,
   StarMapTargetPath,
+  StarMapTargetDetail,
   StarMapPathSegment
 } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformLayoutNode, PlatformPoint } from './StarMapLayout'
@@ -56,6 +57,12 @@ export interface HitTestResult {
 const ARROW_SIZE: number = 10
 const ARROW_ANGLE: number = Math.PI / 6 // 30°
 const LABEL_OFFSET: number = 8
+
+/**
+ * 递归 Scene 层级深度上限（Issue #816）。
+ * 与 Core 侧 resolve_target 的深度限制对齐；病态自引用数据也不会把递归打爆。
+ */
+export const MAX_RECURSE_SCENE_DEPTH: number = 32
 
 /**
  * Embed 命中规格（vp）——**唯一真相源**。
@@ -699,6 +706,674 @@ export function computeAllEdgeRenders(
   }
 
   return renders
+}
+
+// ─── 递归 Scene 上下文与递归命中（Issue #816） ───
+
+/**
+ * 递归 Scene 的几何数据源（结构化契约，不依赖 ArkUI 组件）。
+ *
+ * StarMapScene 把自己注册成这个形状的对象放进 StarMapSceneRegistry，
+ * 平台层递归命中只需要这五个几何量 + 子 Embed 列表，所以整个递归命中
+ * 可以在没有 ArkUI 的情况下纯函数测试。
+ *
+ * 坐标约定（全局统一，#816）：
+ * - `rects` 是**本 Scene 画布坐标**（与 node.position / embed.position 同一坐标系），
+ *   不是屏幕坐标。hitTestWithScene 的参数名叫 screenX/screenY 是历史遗留，
+ *   实际一直传的是画布坐标，这里沿用同一约定，避免两套算法混用。
+ * - `scale / offsetX / offsetY` 是本 Scene 的视口换算：屏幕坐标 = 画布坐标 * scale + offset。
+ */
+export interface RecursiveSceneSource {
+  /** 本 Scene 的绝对路径（从根星图到本 Scene 的 enterEmbed 序列） */
+  scenePath: StarMapPathSegment[]
+  /** 本 Scene 对应的星图 ID */
+  starmapId: string
+  /** 本 Scene 画布坐标下的全部矩形（普通节点 + Embed） */
+  rects: PlatformNodeRect[]
+  /** 本 Scene 的 Embed instanceId 集合（区分 rect 是普通节点还是 Embed） */
+  embedInstanceIds: Set<string>
+  /** 本 Scene 的有效缩放（= fitScale * userZoomScale） */
+  scale: number
+  /** 本 Scene 的 X 偏移 */
+  offsetX: number
+  /** 本 Scene 的 Y 偏移 */
+  offsetY: number
+  /** 本 Scene 直接子代的 Scene 列表（子图未加载完时就没有对应项） */
+  getChildEmbeds(): RecursiveSceneSource[]
+}
+
+/** 递归命中的目标类型（Embed 标题/边框/内部统一归到 embed，区域由 hitRegion 区分）。 */
+export type RecursiveHitKind = 'node' | 'embed'
+
+/** 递归命中解析出的真实目标（已带绝对 scenePath）。 */
+export interface RecursiveHitTarget {
+  /** 目标所属 Scene 的绝对路径 */
+  scenePath: StarMapPathSegment[]
+  /** 目标所属 Scene 的星图 ID */
+  starmapId: string
+  /** 目标类型 */
+  objectKind: RecursiveHitKind
+  /** 目标 ID（nodeId 或 Embed instanceId） */
+  objectId: string
+  /** 命中区域 */
+  hitRegion: 'body' | 'title' | 'border' | 'innerContent'
+}
+
+/** 递归命中的完整结果。 */
+export interface RecursiveHit {
+  /**
+   * 手势归属 Scene：这一层就是"手指所在的画布"。
+   * 命中普通节点、命中 Embed 标题/边框、子图未加载时，都归属本层；
+   * 命中 Embed 内部且子图已加载时，归属子 Scene。
+   */
+  ownerScenePath: StarMapPathSegment[]
+  /** 归属 Scene 的星图 ID */
+  ownerStarmapId: string
+  /** 真实命中的对象；null 表示归属 Scene 内的空白 */
+  target: RecursiveHitTarget | null
+  /** 从根到归属 Scene 之间的 Embed 路径（不含归属 Scene 自身） */
+  embedPath: StarMapPathSegment[]
+}
+
+/** 递归 Scene 上下文：把 Registry 提供的 SceneSource 展开成可递归查找的树。 */
+export interface RecursiveSceneContext {
+  scenePath: StarMapPathSegment[]
+  starmapId: string
+  rects: PlatformNodeRect[]
+  embedInstanceIds: Set<string>
+  scale: number
+  offsetX: number
+  offsetY: number
+  /** Embed instanceId → 子 Scene 上下文（子图加载完成才有） */
+  children: Map<string, RecursiveSceneContext>
+}
+
+/** item 引用：一个可被选中/连线的对象，带绝对路径和宿主星图。 */
+export interface StarMapItemRef {
+  /** 容纳该 item 的 Scene 绝对路径 */
+  scenePath: StarMapPathSegment[]
+  /** 容纳该 item 的 Scene 的星图 ID */
+  starmapId: string
+  /** item 类型 */
+  kind: 'node' | 'embed'
+  /** item ID */
+  itemId: string
+}
+
+/** 跨层连线的落点方案：宿主 Scene + 两条相对宿主的端点路径。 */
+export interface CrossLayerEdgePlan {
+  /** 宿主 Scene（两端的最近公共祖先）的绝对路径 */
+  hostScenePath: StarMapPathSegment[]
+  /** 宿主 Scene 的星图 ID，也就是 addStarMapEdge 的 starmapId */
+  hostStarmapId: string
+  /** 起点，相对宿主 Scene 的 StarMapTargetPath */
+  from: StarMapTargetPath
+  /** 终点，相对宿主 Scene 的 StarMapTargetPath */
+  to: StarMapTargetPath
+}
+
+// ─── Scene 路径工具 ───
+
+/** 深拷贝路径段。 */
+export function cloneScenePath(path: StarMapPathSegment[]): StarMapPathSegment[] {
+  const out: StarMapPathSegment[] = []
+  for (const seg of path) {
+    out.push({ type: seg.type, instanceId: seg.instanceId, nodeId: seg.nodeId })
+  }
+  return out
+}
+
+/** 逐段比较两条 Scene 路径是否完全相同。 */
+export function isSameScenePath(a: StarMapPathSegment[], b: StarMapPathSegment[]): boolean {
+  if (a.length !== b.length) {
+    return false
+  }
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].type !== b[i].type ||
+      a[i].instanceId !== b[i].instanceId ||
+      a[i].nodeId !== b[i].nodeId) {
+      return false
+    }
+  }
+  return true
+}
+
+/** 两条 Scene 路径的最长公共前缀。 */
+export function commonScenePathPrefix(
+  a: StarMapPathSegment[],
+  b: StarMapPathSegment[]
+): StarMapPathSegment[] {
+  const out: StarMapPathSegment[] = []
+  const max: number = Math.min(a.length, b.length)
+  for (let i = 0; i < max; i++) {
+    if (a[i].type !== b[i].type ||
+      a[i].instanceId !== b[i].instanceId ||
+      a[i].nodeId !== b[i].nodeId) {
+      break
+    }
+    out.push({ type: a[i].type, instanceId: a[i].instanceId, nodeId: a[i].nodeId })
+  }
+  return out
+}
+
+/** 生成单个 enterEmbed 路径段。 */
+export function embedSegment(instanceId: string): StarMapPathSegment {
+  return { type: 'enterEmbed', instanceId: instanceId, nodeId: null }
+}
+
+/**
+ * Scene 路径的可读描述，用作 Registry 主键和日志字段。
+ * 根 Scene 是 `root`，进入子星图后是 `root/embed:<instanceId>`，逐层追加。
+ */
+export function describeScenePath(path: StarMapPathSegment[]): string {
+  if (path.length === 0) {
+    return 'root'
+  }
+  let out: string = 'root'
+  for (const seg of path) {
+    if (seg.type === 'enterEmbed') {
+      out += `/embed:${seg.instanceId ?? ''}`
+    } else if (seg.type === 'enterPortal') {
+      out += `/portal:${seg.nodeId ?? ''}`
+    } else {
+      out += `/${seg.type}:${seg.instanceId ?? ''}`
+    }
+  }
+  return out
+}
+
+/** 构造空 target 详情的骨架（Core DTO 的每个字段都是必填 + null）。 */
+function emptyTargetDetail(type: string, nodeId: string | null): StarMapTargetDetail {
+  return {
+    type: type,
+    nodeId: nodeId,
+    anchorId: null,
+    projectId: null,
+    volumeId: null,
+    chapterId: null,
+    rangeStart: null,
+    rangeEnd: null,
+    entityType: null,
+    entityId: null,
+    uri: null
+  }
+}
+
+/**
+ * 构造 item 相对某个宿主 Scene 的 StarMapTargetPath。
+ *
+ * Core 的语义（starmap/types/reference.rs）：`starmapId` 是"这条引用从哪张图出发"，
+ * `segments` 是从这张图出发逐层穿越的步骤，`target` 是最终落点。
+ * 所以宿主选最近公共祖先、segments 只带宿主之后的那几段，Core 就能自己走完。
+ *
+ * @param hostStarmapId 宿主 Scene 的星图 ID
+ * @param hostScenePath 宿主 Scene 的绝对路径
+ * @param itemRef 目标 item
+ * @returns 相对宿主的 StarMapTargetPath
+ */
+export function buildTargetPathForHost(
+  hostStarmapId: string,
+  hostScenePath: StarMapPathSegment[],
+  itemRef: StarMapItemRef
+): StarMapTargetPath {
+  const segments: StarMapPathSegment[] = itemRef.scenePath.slice(hostScenePath.length)
+    .map((seg: StarMapPathSegment): StarMapPathSegment => ({
+      type: seg.type, instanceId: seg.instanceId, nodeId: seg.nodeId
+    }))
+  if (itemRef.kind === 'embed') {
+    segments.push(embedSegment(itemRef.itemId))
+    return {
+      starmapId: hostStarmapId,
+      segments: segments,
+      target: emptyTargetDetail('starmap', null)
+    }
+  }
+  return {
+    starmapId: hostStarmapId,
+    segments: segments,
+    target: emptyTargetDetail('node', itemRef.itemId)
+  }
+}
+
+/** 两条端点路径是否描述同一个对象（用于去掉自环）。 */
+export function isSameTargetPath(a: StarMapTargetPath, b: StarMapTargetPath): boolean {
+  if (a.starmapId !== b.starmapId) {
+    return false
+  }
+  if (!isSameScenePath(a.segments, b.segments)) {
+    return false
+  }
+  return a.target.type === b.target.type && a.target.nodeId === b.target.nodeId
+}
+
+/** 端点路径的可读描述（日志用）。 */
+export function describeTargetPath(path: StarMapTargetPath): string {
+  return `${describeScenePath(path.segments)}#${path.target.type}:${path.target.nodeId ?? ''}`
+}
+
+// ─── 递归命中 ───
+
+/**
+ * 把 SceneSource 树展开成递归上下文树。
+ *
+ * 只在 gesture 边界（pinch 开始、connect 松手、选择）调用一次，
+ * 不在渲染帧里调用，所以每次重建整棵树的成本可以接受。
+ *
+ * @param root 根 SceneSource（来自 StarMapSceneRegistry）
+ * @returns 递归上下文树
+ */
+export function buildRecursiveSceneContext(root: RecursiveSceneSource): RecursiveSceneContext {
+  const children: Map<string, RecursiveSceneContext> = new Map<string, RecursiveSceneContext>()
+  const sourceChildren: RecursiveSceneSource[] = root.getChildEmbeds()
+  for (const child of sourceChildren) {
+    const instanceId: string = describeLastEmbedInstanceId(child.scenePath)
+    if (instanceId === '') {
+      continue
+    }
+    children.set(instanceId, buildRecursiveSceneContext(child))
+  }
+  return {
+    scenePath: cloneScenePath(root.scenePath),
+    starmapId: root.starmapId,
+    rects: root.rects,
+    embedInstanceIds: root.embedInstanceIds,
+    scale: root.scale,
+    offsetX: root.offsetX,
+    offsetY: root.offsetY,
+    children: children
+  }
+}
+
+/**
+ * 找出某个 Embed 在本 Scene 画布坐标里的矩形。
+ * 找不到（Embed 还没进布局）返回 null，调用方按"圆心在原点"兜底。
+ */
+function findEmbedRect(context: RecursiveSceneContext, instanceId: string): PlatformNodeRect | null {
+  for (const rect of context.rects) {
+    if (rect.nodeId === instanceId) {
+      return rect
+    }
+  }
+  return null
+}
+
+/**
+ * 父 Scene 画布坐标 → 某个 Embed 内部的子 Scene 局部屏幕坐标。
+ *
+ * 必须**先扣掉 Embed 矩形自己的原点**：子 Scene 的局部坐标是相对 Embed 那个
+ * 直径见方的盒子左上角量的，不是相对父画布原点量的。
+ * 而子 Scene 的画布坐标又是它自己那张图的 node.position，和父画布完全没有
+ * 共同的数值范围——直接把父画布坐标塞进子视口换算，缩放中心会跑到子图外面去，
+ * 这正是"嵌套子星图比父图大、双指缩放看起来没反应"的根因（#816）。
+ *
+ * @param parent 父 Scene 上下文
+ * @param embedInstanceId 该 Embed 的 instanceId
+ * @param parentCanvasX 父 Scene 画布坐标 X
+ * @param parentCanvasY 父 Scene 画布坐标 Y
+ * @param child 子 Scene 上下文（提供子视口）
+ * @returns 子 Scene 局部屏幕坐标
+ */
+export function embedParentCanvasToChildLocal(
+  parent: RecursiveSceneContext,
+  embedInstanceId: string,
+  parentCanvasX: number,
+  parentCanvasY: number,
+  child: RecursiveSceneContext
+): PlatformPoint {
+  const rect: PlatformNodeRect | null = findEmbedRect(parent, embedInstanceId)
+  const originX: number = rect !== null ? rect.x : 0
+  const originY: number = rect !== null ? rect.y : 0
+  return canvasToScreen(
+    parentCanvasX - originX, parentCanvasY - originY, child.scale, child.offsetX, child.offsetY
+  )
+}
+
+/**
+ * 某个 Embed 内部子 Scene 的局部屏幕坐标 → 父 Scene 画布坐标。
+ * embedParentCanvasToChildLocal 的逆运算。
+ */
+export function childLocalToParentCanvas(
+  parent: RecursiveSceneContext,
+  embedInstanceId: string,
+  childLocalX: number,
+  childLocalY: number,
+  child: RecursiveSceneContext
+): PlatformPoint {
+  const childCanvas: PlatformPoint = screenToCanvas(
+    childLocalX, childLocalY, child.scale, child.offsetX, child.offsetY
+  )
+  const rect: PlatformNodeRect | null = findEmbedRect(parent, embedInstanceId)
+  const originX: number = rect !== null ? rect.x : 0
+  const originY: number = rect !== null ? rect.y : 0
+  return { x: childCanvas.x + originX, y: childCanvas.y + originY }
+}
+
+/** 取路径最后一段 enterEmbed 的 instanceId；不是 enterEmbed 或为空时返回 ''。 */
+function describeLastEmbedInstanceId(path: StarMapPathSegment[]): string {
+  if (path.length === 0) {
+    return ''
+  }
+  const last: StarMapPathSegment = path[path.length - 1]
+  if (last.type !== 'enterEmbed' || last.instanceId === null) {
+    return ''
+  }
+  return last.instanceId
+}
+
+/** 按绝对路径在上下文树里找 Scene；找不到返回 null。 */
+export function findSceneContext(
+  root: RecursiveSceneContext,
+  scenePath: StarMapPathSegment[]
+): RecursiveSceneContext | null {
+  if (scenePath.length === 0) {
+    return root
+  }
+  const seg: StarMapPathSegment = scenePath[0]
+  if (seg.type !== 'enterEmbed' || seg.instanceId === null) {
+    return null
+  }
+  const child: RecursiveSceneContext | undefined = root.children.get(seg.instanceId)
+  if (child === undefined) {
+    return null
+  }
+  return findSceneContext(child, scenePath.slice(1))
+}
+
+/**
+ * 递归命中：从根 Scene 一路向下解析到最深的真实目标。
+ *
+ * 终止规则（#816）：
+ * - 命中普通节点 → 停在当前层，目标是这个节点，归属也是当前层。
+ * - 命中 Embed 标题 / 边框 → 停在当前层，目标是这个 Embed，归属也是当前层
+ *   （Embed 本身属于父层，点它就是"选中这个子星图"，不该算进子图）。
+ * - 命中 Embed 内部且子图已加载 → 把点换算到子 Scene 局部坐标继续递归，
+ *   归属跟着下沉，直到命中真实目标或子图空白。
+ * - 命中 Embed 内部但子图还没加载 → 停在当前层，目标是这个 Embed。
+ * - 当前层空白 → 停在当前层，target 为 null。
+ *
+ * 选中、connect 松手、菜单归属、双指归属全部走这一个入口，
+ * 不允许再各写一份命中判断（#816）。
+ *
+ * @param root 根 Scene 上下文
+ * @param x 根 Scene 局部屏幕坐标 X
+ * @param y 根 Scene 局部屏幕坐标 Y
+ * @returns 递归命中结果（永远非 null，空白时 target 为 null）
+ */
+export function resolveRecursiveHit(
+  root: RecursiveSceneContext,
+  x: number,
+  y: number
+): RecursiveHit {
+  let current: RecursiveSceneContext = root
+  let localX: number = x
+  let localY: number = y
+  const embedPath: StarMapPathSegment[] = []
+
+  // 递归深度上限：Core 侧 resolve_target 也是 32，这里多给一层余量后硬性兜底，
+  // 避免病态数据（自引用 Embed）把栈打爆。
+  for (let depth = 0; depth <= MAX_RECURSE_SCENE_DEPTH; depth++) {
+    const canvasPoint: PlatformPoint = screenToCanvas(
+      localX, localY, current.scale, current.offsetX, current.offsetY
+    )
+    const hit: HitTestResult | null = hitTestWithScene(
+      current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds
+    )
+
+    if (hit === null) {
+      return {
+        ownerScenePath: cloneScenePath(current.scenePath),
+        ownerStarmapId: current.starmapId,
+        target: null,
+        embedPath: cloneScenePath(embedPath)
+      }
+    }
+
+    if (hit.objectKind !== 'embedInnerContent') {
+      // 普通节点 / Embed 标题 / Embed 边框：本层就是终点
+      const kind: RecursiveHitKind =
+        hit.objectKind === 'embedTitle' ? 'embed' :
+          (hit.objectKind === 'embedBorder' ? 'embed' : 'node')
+      return {
+        ownerScenePath: cloneScenePath(current.scenePath),
+        ownerStarmapId: current.starmapId,
+        target: {
+          scenePath: cloneScenePath(current.scenePath),
+          starmapId: current.starmapId,
+          objectKind: kind,
+          objectId: hit.objectId,
+          hitRegion: hit.hitRegion
+        },
+        embedPath: cloneScenePath(embedPath)
+      }
+    }
+
+    // Embed 内部：换算到子 Scene 局部坐标继续下探
+    const child: RecursiveSceneContext | undefined = current.children.get(hit.objectId)
+    if (child === undefined) {
+      return {
+        ownerScenePath: cloneScenePath(current.scenePath),
+        ownerStarmapId: current.starmapId,
+        target: {
+          scenePath: cloneScenePath(current.scenePath),
+          starmapId: current.starmapId,
+          objectKind: 'embed',
+          objectId: hit.objectId,
+          hitRegion: 'innerContent'
+        },
+        embedPath: cloneScenePath(embedPath)
+      }
+    }
+
+    const childLocal: PlatformPoint = embedParentCanvasToChildLocal(
+      current, hit.objectId, canvasPoint.x, canvasPoint.y, child
+    )
+    embedPath.push(embedSegment(hit.objectId))
+    current = child
+    localX = childLocal.x
+    localY = childLocal.y
+  }
+
+  // 深度兜底：返回最深一层的归属，不做命中
+  return {
+    ownerScenePath: cloneScenePath(current.scenePath),
+    ownerStarmapId: current.starmapId,
+    target: null,
+    embedPath: cloneScenePath(embedPath)
+  }
+}
+
+/**
+ * 把某 Scene 局部坐标里的点换算到根 Scene 局部坐标。
+ * 路径在上下文树里找不到时按最深匹配处理（走到哪层算哪层），不抛错。
+ *
+ * @param root 根 Scene 上下文
+ * @param scenePath 点所在的 Scene 绝对路径
+ * @param x Scene 局部屏幕坐标 X
+ * @param y Scene 局部屏幕坐标 Y
+ * @returns 根 Scene 局部屏幕坐标
+ */
+export function convertPointToRoot(
+  root: RecursiveSceneContext,
+  scenePath: StarMapPathSegment[],
+  x: number,
+  y: number
+): PlatformPoint {
+  let localX: number = x
+  let localY: number = y
+  // 从最深的一段往外走：点本来就在最深 Scene 的局部坐标里，
+  // 必须先退出最深那层，再退出它的父层——顺序反了就会拿错层的视口去套坐标。
+  for (let index = scenePath.length - 1; index >= 0; index--) {
+    const seg: StarMapPathSegment = scenePath[index]
+    if (seg.type !== 'enterEmbed' || seg.instanceId === null) {
+      break
+    }
+    const parent: RecursiveSceneContext | null =
+      index === 0 ? root : findSceneContext(root, scenePath.slice(0, index))
+    if (parent === null) {
+      break
+    }
+    const child: RecursiveSceneContext | undefined = parent.children.get(seg.instanceId)
+    if (child === undefined) {
+      break
+    }
+    // 向上走一层：子 Scene 局部 → 子画布 → 加回 Embed 矩形原点 → 父画布 → 父局部
+    const parentCanvas: PlatformPoint = childLocalToParentCanvas(
+      parent, seg.instanceId, localX, localY, child
+    )
+    const parentLocal: PlatformPoint = canvasToScreen(
+      parentCanvas.x, parentCanvas.y, parent.scale, parent.offsetX, parent.offsetY
+    )
+    localX = parentLocal.x
+    localY = parentLocal.y
+  }
+  return { x: localX, y: localY }
+}
+
+/**
+ * 把根 Scene 局部坐标里的点换算到某 Scene 的局部坐标（convertPointToRoot 的逆运算）。
+ *
+ * 双指缩放的锚点必须落在**归属 Scene 的局部坐标**里再用：`屏幕 = 画布 × scale + offset`
+ * 这条式子只在 Scene 自己的局部空间成立。归属层在两指落下那一刻定死之后，每一帧都要把
+ * 两指中心换算到它自己的局部坐标；父层拿自己的坐标去算子层的锚点，缩放就会朝错的方向跑。
+ *
+ * @param root 根 Scene 上下文
+ * @param scenePath 目标 Scene 的绝对路径
+ * @param x 根 Scene 局部屏幕坐标 X
+ * @param y 根 Scene 局部屏幕坐标 Y
+ * @returns 目标 Scene 局部屏幕坐标；路径走不下去时按已走到的最深层返回
+ */
+export function resolveSceneLocalPoint(
+  root: RecursiveSceneContext,
+  scenePath: StarMapPathSegment[],
+  x: number,
+  y: number
+): PlatformPoint {
+  let current: RecursiveSceneContext = root
+  let localX: number = x
+  let localY: number = y
+  let index = 0
+  while (index < scenePath.length) {
+    const seg: StarMapPathSegment = scenePath[index]
+    if (seg.type !== 'enterEmbed' || seg.instanceId === null) {
+      break
+    }
+    const child: RecursiveSceneContext | undefined = current.children.get(seg.instanceId)
+    if (child === undefined) {
+      break
+    }
+    // 向下走：父 Scene 局部 → 父画布 → 扣掉 Embed 矩形原点 → 子 Scene 局部
+    const parentCanvas: PlatformPoint = screenToCanvas(
+      localX, localY, current.scale, current.offsetX, current.offsetY
+    )
+    const childLocal: PlatformPoint = embedParentCanvasToChildLocal(
+      current, seg.instanceId, parentCanvas.x, parentCanvas.y, child
+    )
+    current = child
+    localX = childLocal.x
+    localY = childLocal.y
+    index++
+  }
+  return { x: localX, y: localY }
+}
+
+/**
+ * 解析"相对根星图的端点路径"对应的 item 引用（含容纳它的 Scene 的 starmapId）。
+ *
+ * @param root 根 Scene 上下文
+ * @param path 相对根星图的 StarMapTargetPath
+ * @returns item 引用；解析不出来（Portal 段 / Scene 未加载）时返回 null
+ */
+export function resolveItemRefFromTargetPath(
+  root: RecursiveSceneContext,
+  path: StarMapTargetPath
+): StarMapItemRef | null {
+  if (path.segments.length === 0) {
+    if (path.target.type === 'node' && path.target.nodeId !== null) {
+      return { scenePath: [], starmapId: root.starmapId, kind: 'node', itemId: path.target.nodeId }
+    }
+    return null
+  }
+  if (path.target.type === 'node' && path.target.nodeId !== null) {
+    // node 端点：segments 全是"走到所在 Scene"的穿越步骤，节点就在末段到达的那张图里
+    const holder: RecursiveSceneContext | null = findSceneContext(root, path.segments)
+    if (holder === null) {
+      return null
+    }
+    return {
+      scenePath: cloneScenePath(path.segments),
+      starmapId: holder.starmapId,
+      kind: 'node',
+      itemId: path.target.nodeId
+    }
+  }
+  // Embed 端点：最后一段就是被引用的那个 Embed 自身，它属于**上一段**到达的 Scene
+  const last: StarMapPathSegment = path.segments[path.segments.length - 1]
+  if (last.type !== 'enterEmbed' || last.instanceId === null) {
+    // enterPortal 不是 Embed 容器，跨层连线暂不支持（Core 侧也只把 enterEmbed 当层级）
+    return null
+  }
+  const containerPath: StarMapPathSegment[] = path.segments.slice(0, path.segments.length - 1)
+  const container: RecursiveSceneContext | null = findSceneContext(root, containerPath)
+  if (container === null) {
+    return null
+  }
+  return {
+    scenePath: cloneScenePath(containerPath),
+    starmapId: container.starmapId,
+    kind: 'embed',
+    itemId: last.instanceId
+  }
+}
+
+/**
+ * 规划一条跨层连线应该落在哪张图上。
+ *
+ * 规则（#816）：宿主 = 两个端点所在 Scene 的最近公共祖先。
+ * 于是这五种情形都自动落到 Core 能接受的形状：
+ * - 父 Node → 子 Node：宿主 = 父 Scene，to = [enterEmbed(...)] + node
+ * - 子 Node → 父 Node：宿主 = 父 Scene，from = [enterEmbed(...)] + node
+ * - 同一 Embed 里的两个子 Node：宿主 = 该 Embed 的 Scene，两端 segments 都为空
+ * - 两个不同 Embed 里的 Node：宿主 = 根 Scene，两端各带一段 enterEmbed
+ * - 子 Node → 更深一层的子 Embed/Node：宿主 = 两者的最近公共 Embed Scene
+ *
+ * 同一层的连线走这里得到的结果和原来的 buildItemTargetPath 完全一致（segments 为空 / 一段 enterEmbed）。
+ *
+ * @param root 根 Scene 上下文
+ * @param sourcePath 起点（相对根星图）
+ * @param targetPath 终点（相对根星图）
+ * @returns 落点方案；自环或解析失败时返回 null
+ */
+export function planCrossLayerEdge(
+  root: RecursiveSceneContext,
+  sourcePath: StarMapTargetPath,
+  targetPath: StarMapTargetPath
+): CrossLayerEdgePlan | null {
+  const from: StarMapItemRef | null = resolveItemRefFromTargetPath(root, sourcePath)
+  const to: StarMapItemRef | null = resolveItemRefFromTargetPath(root, targetPath)
+  if (from === null || to === null) {
+    return null
+  }
+  if (from.kind === to.kind && from.itemId === to.itemId &&
+    isSameScenePath(from.scenePath, to.scenePath)) {
+    return null
+  }
+  const hostScenePath: StarMapPathSegment[] = commonScenePathPrefix(from.scenePath, to.scenePath)
+  const host: RecursiveSceneContext | null = findSceneContext(root, hostScenePath)
+  if (host === null) {
+    return null
+  }
+  const hostStarmapId: string = host.starmapId
+  const planFrom: StarMapTargetPath = buildTargetPathForHost(hostStarmapId, hostScenePath, from)
+  const planTo: StarMapTargetPath = buildTargetPathForHost(hostStarmapId, hostScenePath, to)
+  if (isSameTargetPath(planFrom, planTo)) {
+    return null
+  }
+  return {
+    hostScenePath: hostScenePath,
+    hostStarmapId: hostStarmapId,
+    from: planFrom,
+    to: planTo
+  }
 }
 
 // ─── 坐标互转 ───

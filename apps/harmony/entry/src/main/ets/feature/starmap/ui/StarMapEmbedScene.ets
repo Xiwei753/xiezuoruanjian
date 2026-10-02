@@ -5,8 +5,13 @@
 //
 // 职责：
 // - 加载子星图 graph（通过 bridge.getStarMapGraph）
-// - 维护子场景的 viewport 状态（zoomScale、offsetX、offsetY、selectedNodeId）
+// - 持有子场景的**用户缩放倍数**（userZoomScale，默认 1）
 // - 将子 StarMapScene 嵌入 Embed 的 innerContent 区域
+//
+// #816 之后这里不再自己算缩放：
+// 初始适配（fitScale）和居中偏移由 child StarMapScene 自己在首次布局完成时算，
+// 这里只留"用户拧了多少倍"这一份状态，缩放 = fitScale × userZoomScale。
+// 同样也不再持有子场景的选中状态：全树共用父层传下来的 selectionState。
 
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
@@ -16,6 +21,8 @@ import {
 import { ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
 import { PlatformMotionConfig } from '../platform/StarMapMotion'
 import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { StarMapSceneRegistry } from '../platform/StarMapViewport'
+import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import { StarMapScene } from './StarMapScene'
 
 @Component
@@ -93,18 +100,29 @@ export struct StarMapEmbedScene {
   // ─── 普通属性 ───
   bridge: IWriterCoreBridge | null = null
   gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
+  /**
+   * 全树共用的选中状态（#816：不再每层各存一份 selectedNodeId）。
+   * @State 持有 @Observed 对象：值只建一次，往下传的是同一个引用。
+   */
+  @State selectionState: StarMapSelectionState = new StarMapSelectionState()
+  /** 全树共用的 Scene 注册表：统一手势入口靠它找到归属层和最近公共祖先 */
+  sceneRegistry: StarMapSceneRegistry | null = null
 
   // ─── @State：子场景状态 ───
   /** 子星图 graph */
   @State childGraph: StarMapGraph | null = null
-  /** 子场景缩放 */
-  @State childZoomScale: number = 1
-  /** 子场景 X 偏移 */
+  /**
+   * 子场景的用户缩放倍数（默认 1）。
+   * 这是本层唯一独立保存的缩放量：初始适配比例由 child StarMapScene 算 fitScale，
+   * 最终比例 = fitScale × childUserZoomScale。
+   * 子图后来加节点、移动节点都不动它——只有首次加载或显式"适配视图"才重算 fitScale，
+   * 否则用户刚双指放大好的子图会被一次内容变化打回原大小。
+   */
+  @State childUserZoomScale: number = 1
+  /** 子场景 X 偏移（首次适配时由 child StarMapScene 居中写入） */
   @State childOffsetX: number = 0
-  /** 子场景 Y 偏移 */
+  /** 子场景 Y 偏移（同上） */
   @State childOffsetY: number = 0
-  /** 子场景选中对象 ID */
-  @State childSelectedNodeId: string = ''
   /** 是否正在加载子星图 */
   @State isLoading: boolean = true
   /** 加载错误信息 */
@@ -184,17 +202,18 @@ export struct StarMapEmbedScene {
         scenePath: this.childScenePath,
         starmapId: this.finalStarmapId,
         graph: $childGraph,
-        zoomScale: $childZoomScale,
+        userZoomScale: $childUserZoomScale,
         offsetX: $childOffsetX,
         offsetY: $childOffsetY,
         sceneDepth: this.sceneDepth + 1,
-        selectedNodeId: $childSelectedNodeId,
         bridge: this.bridge,
         themeConfig: this.themeConfig,
         motionConfig: this.motionConfig,
         motionProgress: this.motionProgress,
         gestureTracker: this.gestureTracker,
-        onSelectItem: (_path: StarMapPathSegment[], _itemId: string) => {},
+        // 选中和 Scene 注册都从根 Scene 一路传下来，子层不再自己存一份真相
+        selectionState: this.selectionState,
+        sceneRegistry: this.sceneRegistry,
         onCreateNode: (_path: StarMapPathSegment[], _starmapId: string, _title: string, _position: StarMapPoint) => {},
         onCreateEmbed: (_path: StarMapPathSegment[], _starmapId: string, _title: string, _position: StarMapPoint) => {},
         onCreateEdge: (_path: StarMapPathSegment[], _starmapId: string, _fromItemId: string, _toItemId: string) => {},

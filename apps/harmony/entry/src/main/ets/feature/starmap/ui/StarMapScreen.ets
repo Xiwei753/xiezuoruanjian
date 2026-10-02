@@ -14,6 +14,8 @@ import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { PlatformMotionConfig, defaultMotionConfig, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
+import { StarMapSceneRegistry } from '../platform/StarMapViewport'
+import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import { StarMapScene } from './StarMapScene'
 
 // 缩放边界
@@ -36,10 +38,10 @@ export struct StarMapScreen {
   @State errorMessage: string = ''
 
   // 根 Scene viewport（与 StarMapScene 双向绑定）
-  @State zoomScale: number = 1
+  // 根 Scene 的用户缩放倍数。工具栏 +/- 只作用在这一层，子 Scene 各自双指缩放。
+  @State userZoomScale: number = 1
   @State offsetX: number = 0
   @State offsetY: number = 0
-  @State selectedNodeId: string = ''
 
   // 主题和适配
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
@@ -68,6 +70,10 @@ export struct StarMapScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private gestureTracker: StarMapGestureStateTracker = new StarMapGestureStateTracker()
+  // 全树唯一的选中状态（#816）：根和所有子 Scene 共用，选中身份是 scenePath + kind + itemId
+  @State selectionState: StarMapSelectionState = new StarMapSelectionState()
+  // 全树唯一的 Scene 注册表：统一双指入口按 scenePath 找归属层，跨层连线按它求最近公共祖先
+  private sceneRegistry: StarMapSceneRegistry = new StarMapSceneRegistry()
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StarMapScreen', 'route name=StarMap')
@@ -194,28 +200,31 @@ export struct StarMapScreen {
   }
 
   /**
-   * 统一缩放函数：围绕指定屏幕点缩放，保持该点对应的画布坐标不变。
+   * 根 Scene 的缩放：围绕指定屏幕点缩放，保持该点对应的画布坐标不变。
+   *
+   * 只管根这一层（#816）：工具栏不是"当前子星图的缩放管理器"，
+   * 子 Scene 的缩放一律由双指在它自己的层里完成。
    */
   private zoomAround(screenX: number, screenY: number, nextScale: number) {
-    const anchorCanvasX = (screenX - this.offsetX) / this.zoomScale
-    const anchorCanvasY = (screenY - this.offsetY) / this.zoomScale
+    const anchorCanvasX = (screenX - this.offsetX) / this.userZoomScale
+    const anchorCanvasY = (screenY - this.offsetY) / this.userZoomScale
     this.offsetX = screenX - anchorCanvasX * nextScale
     this.offsetY = screenY - anchorCanvasY * nextScale
-    this.zoomScale = nextScale
+    this.userZoomScale = nextScale
   }
 
   /** 放大一级（工具栏 +）：以可视画布中心为锚点 */
   zoomIn() {
     const centerX = this.canvasWidth / 2
     const centerY = this.canvasHeight / 2
-    this.zoomAround(centerX, centerY, Math.min(MAX_ZOOM, this.zoomScale + ZOOM_STEP))
+    this.zoomAround(centerX, centerY, Math.min(MAX_ZOOM, this.userZoomScale + ZOOM_STEP))
   }
 
   /** 缩小一级（工具栏 −） */
   zoomOut() {
     const centerX = this.canvasWidth / 2
     const centerY = this.canvasHeight / 2
-    this.zoomAround(centerX, centerY, Math.max(MIN_ZOOM, this.zoomScale - ZOOM_STEP))
+    this.zoomAround(centerX, centerY, Math.max(MIN_ZOOM, this.userZoomScale - ZOOM_STEP))
   }
 
   onMotionProgressChange() {
@@ -231,17 +240,18 @@ export struct StarMapScreen {
         scenePath: [],  // 根 scene 的 path 为空
         starmapId: this.starmapId,
         graph: $graph,
-        zoomScale: $zoomScale,
+        userZoomScale: $userZoomScale,
         offsetX: $offsetX,
         offsetY: $offsetY,
         sceneDepth: 0,
-        selectedNodeId: $selectedNodeId,
         bridge: this.bridge,
         themeConfig: this.themeConfig,
         motionConfig: this.motionConfig,
         motionProgress: this.motionProgress,
         gestureTracker: this.gestureTracker,
-        onSelectItem: (_path: StarMapPathSegment[], itemId: string) => { this.selectedNodeId = itemId },
+        // 全树共用的选中状态和 Scene 注册表：从根一路传到每个子 Scene（#816）
+        selectionState: this.selectionState,
+        sceneRegistry: this.sceneRegistry,
         onCreateNode: (_path: StarMapPathSegment[], _starmapId: string, _title: string, _pos: StarMapPoint) => {},
         onCreateEmbed: (_path: StarMapPathSegment[], _starmapId: string, _title: string, _pos: StarMapPoint) => {},
         onCreateEdge: (_path: StarMapPathSegment[], _starmapId: string, _from: string, _to: string) => {},
