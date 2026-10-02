@@ -3,6 +3,8 @@ use super::*;
 use crate::sujian_editor_item::animated_slice::{
     AnimatedSlice, AnimatedSliceKind, IngestBoundaryDriver,
 };
+use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
+use crate::sujian_editor_item::animation::rebase::RebaseCaretHandoff;
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, TextVisualOperationKind, VisualUnitTiming,
 };
@@ -3941,4 +3943,66 @@ fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
             last.w
         );
     }
+}
+
+// ── Issue #815 评论 5950375533 问题3：正式 rebase 路径不得跳回逻辑 old caret ──
+
+/// 走**生产**路径验证 rebase 交棒：`build_prepared_transaction` 拿到
+/// `VisualEditSpec { caret_handoff: Some(..) }` 后，新事务第一帧采样到的 caret
+/// 必须就是 `handoff.sampled`（上一帧真正画出来的位置），而不是逻辑
+/// `old_cursor_rect`。
+///
+/// 旧实现把 handoff 只写进顶层 `track.from`，而 `segments` 非空时
+/// `sampled_rect_at_progress()` 根本不读 `track.from`，读的是 `segments[0].from`
+/// —— 渲染于是又跳回逻辑 old caret。这正是 #815 最核心的
+/// 「rebase 从上一帧真正画出来的位置继续」在正式 route 路径里没成立的原因。
+#[test]
+fn issue815_review7_production_rebase_starts_from_handoff_sampled_caret() {
+    let key = VisualTransactionKey::new(81, 815);
+    let mut spec = issue756_insert_spec(key, true, false, false, true);
+    // 逻辑 old caret 在 x=10（spec 自带）；真实屏幕 caret 在上一帧动画中途 x=13.5。
+    let handoff_sampled = CursorRect {
+        x: 13.5,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    spec.caret_handoff = Some(RebaseCaretHandoff {
+        sampled: handoff_sampled,
+        remaining_duration_ms: 60,
+        sampled_visual_line_id: Some(0),
+        sampled_line_top: 0.0,
+        sampled_line_bottom: 20.0,
+    });
+
+    let tx = build_prepared_transaction(spec).expect("协同 Insert 必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同 Insert 必须有 cursor track");
+    assert!(
+        !track.segments.is_empty(),
+        "协同 Insert 必须建出吞吐 route，生产 builder 不该产出空 segments"
+    );
+
+    // `started_at` 在第一帧由 `begin_rendering_transactions` 打上，建事务时还是
+    // `None`，所以 `progress(now)` 返回 0.0 —— 正好就是"新事务第一帧"。
+    let first_frame = sample_caret_track_frame(track, std::time::Instant::now());
+    assert!(
+        first_frame.progress < 1e-6,
+        "新事务第一帧进度必须为 0，实际 {}",
+        first_frame.progress
+    );
+    assert!(
+        (first_frame.x - handoff_sampled.x).abs() < 1e-6,
+        "第一帧 caret 必须从 handoff.sampled.x={} 起步，实际 x={}",
+        handoff_sampled.x,
+        first_frame.x
+    );
+    let logical_old_x = tx.old_cursor_rect.map(|rect| rect.x).unwrap_or_default();
+    assert!(
+        (first_frame.x - logical_old_x).abs() > 1e-6 || logical_old_x == handoff_sampled.x,
+        "handoff 采样位置必须真的覆盖逻辑 old caret.x={}，否则这条测试证明不了任何事",
+        logical_old_x
+    );
 }

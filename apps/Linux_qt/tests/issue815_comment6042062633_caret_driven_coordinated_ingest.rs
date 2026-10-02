@@ -666,6 +666,134 @@ fn issue815_review6_sampled_rect_doc_no_longer_claims_independent_text_easing() 
 }
 
 // =========================================================================
+// 复核评论 5950375533 问题1：多行 Insert route 必须真的插 RowHandoff
+// =========================================================================
+
+/// 复核评论 5950375533 问题1。
+///
+/// 原实现扫完第一行后，让第二行的 `IngestLine` 从第一行右端连到本行右端/新 caret，
+/// 把一条行间斜线标成 `IngestLine(本行)`——正是第 6 轮禁止的行为。
+#[test]
+fn issue815_review7_insert_route_inserts_row_handoff_between_rows() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    let window = function_window(&src, "pub(crate) fn build_insert_route", 4200);
+    assert!(
+        window.contains("CaretTrackSegmentKind::RowHandoff"),
+        "Issue #815 评论 5950375533 问题1: build_insert_route 必须显式 push RowHandoff，\
+         否则行间斜线 x 会冒充本行吞吐边界。"
+    );
+    assert!(
+        window.contains("to: next.caret_rect_at(next.left)"),
+        "Issue #815 评论 5950375533 问题1: RowHandoff 必须落到下一行**左端**，\
+         下一条 IngestLine 才能从本行左端起步。"
+    );
+    assert!(
+        window.contains("cursor = row.caret_rect_at(row.left);"),
+        "Issue #815 评论 5950375533 问题1: 每条 IngestLine 的起点必须重置为本行左端，\
+         绝不继承上一行右端。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5950375533 问题2：前删必须是静止吞吐段，不是 LayoutHandoff
+// =========================================================================
+
+/// 复核评论 5950375533 问题2。
+///
+/// `LayoutHandoff` 语义是 `ingest_line_ord = None` ⇒ 文字层永远进不到边界收拢逻辑，
+/// 旧字整段动画期间保持完整。前删必须给 `is_ingest_segment=true` 的静止吞吐段。
+#[test]
+fn issue815_review7_forward_delete_is_a_static_ingest_segment() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    let window = function_window(&src, "if is_forward_delete(slices)", 1400);
+    assert!(
+        window.contains("CaretTrackSegmentKind::IngestLine"),
+        "Issue #815 评论 5950375533 问题2: 前删必须是静止的 IngestLine 段，\
+         不能是 LayoutHandoff——否则 DeleteForwardBoundary 永远收不到 progress。"
+    );
+    assert!(
+        window.contains("from: *screen_caret") && window.contains("to: *screen_caret"),
+        "Issue #815 评论 5950375533 问题2: 前删真实 caret 不动，from/to 都取屏幕 caret。"
+    );
+    assert!(
+        window.contains("ingest_line_ord: Some(first_row.line_ord)"),
+        "Issue #815 评论 5950375533 问题2: 前删段必须带上当前删除行的行序，\
+         否则吞吐 slice 认不出自己就是当前行。"
+    );
+    let guard = function_window(&src, "pub(crate) fn build_delete_route", 6000);
+    assert!(
+        !guard.contains("CaretTrackSegmentKind::LayoutHandoff"),
+        "Issue #815 评论 5950375533 问题2: build_delete_route 不得再产出 LayoutHandoff。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5950375533 问题3：route 的屏幕起点必须来自 handoff
+// =========================================================================
+
+/// 复核评论 5950375533 问题3。
+///
+/// 旧实现固定用 `spec.old_cursor_rect` 当屏幕起点，handoff 只写进顶层 `track.from`，
+/// 而 `segments` 非空时渲染读的是 `segments[0].from` —— 快速连续输入会跳回逻辑
+/// old caret。
+#[test]
+fn issue815_review7_route_screen_origin_prefers_caret_handoff() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        src.contains("spec\n        .caret_handoff")
+            || src.contains(".caret_handoff\n        .as_ref()"),
+        "Issue #815 评论 5950375533 问题3: route 的屏幕起点必须优先取 caret_handoff。"
+    );
+    assert!(
+        src.contains("map(|handoff| &handoff.sampled)"),
+        "Issue #815 评论 5950375533 问题3: 必须用 handoff.sampled（上一帧真正画出来的位置）。"
+    );
+    assert!(
+        src.contains(".or(spec.old_cursor_rect.as_ref())"),
+        "Issue #815 评论 5950375533 问题3: 拿不到 handoff 才退回逻辑 old_cursor_rect。"
+    );
+    let insert = function_window(&src, "pub(crate) fn build_insert_route", 2200);
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 3300);
+    assert!(
+        insert.contains("screen_caret: &CursorRect")
+            && delete.contains("screen_caret: &CursorRect"),
+        "Issue #815 评论 5950375533 问题3: Insert / Delete 两条路都必须接同一个屏幕起点参数。"
+    );
+    assert!(
+        !insert.contains("old_cursor_rect") && !delete.contains("old_cursor_rect"),
+        "Issue #815 评论 5950375533 问题3: route builder 内部不得再直接读逻辑 old_cursor_rect。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5950375533 问题4：0 长度 segment 不得白占一半时长
+// =========================================================================
+
+/// 复核评论 5950375533 问题4。
+///
+/// 所有 segment 均分总时长，一个 0 长度 segment 会让最普通的同行输入
+/// 前一半时间一个字都不吐。
+#[test]
+fn issue815_review7_zero_length_segments_are_not_emitted() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        src.contains("fn same_rect("),
+        "Issue #815 评论 5950375533 问题4: 需要一个几何比较来识别 0 长度 segment。"
+    );
+    let insert = function_window(&src, "pub(crate) fn build_insert_route", 4200);
+    assert!(
+        insert.contains("if !same_rect(&cursor, &ingest_start)"),
+        "Issue #815 评论 5950375533 问题4: 屏幕 caret 与吞吐起点相同时不得生成 LayoutHandoff。"
+    );
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 6000);
+    assert!(
+        delete.contains("if !same_rect(&swallow_end, new_caret)"),
+        "Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 相同时不得生成末尾 \
+         RowHandoff。"
+    );
+}
+
+// =========================================================================
 // 修改点 6：每帧每事务只采样一次，完成条件两类分开
 // =========================================================================
 

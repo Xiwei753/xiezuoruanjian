@@ -128,38 +128,56 @@ pub(crate) fn ingest_route_shape(slices: &[AnimatedSlice]) -> IngestRouteShape {
     }
 }
 
+/// 两个 caret 位置的几何是否完全相同。
+///
+/// Issue #815 评论 5950375533 问题4: 所有 segment 均分总时长，所以一个 0 长度的
+/// segment 会白白吃掉一半动画——普通同行输入前一半时间一个字都不吐，
+/// 体感就是"打字慢半拍"。几何相同就不该生成这个 segment。
+fn same_rect(a: &CursorRect, b: &CursorRect) -> bool {
+    a.x == b.x && a.top == b.top && a.bottom == b.bottom
+}
+
 /// 生成 Insert 的吞吐路径（全部坐标来自 new snapshot）。
 ///
 /// ```
-/// 当前屏幕 caret ──LayoutHandoff──▶ 新起始行左端
-///   ──IngestLine 扫本行──▶ RowHandoff 到下一行 ──IngestLine 扫本行──▶ … ──▶ 新 caret
+/// 当前屏幕 caret ──LayoutHandoff（仅在跨 layout 时）──▶ 新起始行左端
+///   ──IngestLine 扫本行──▶ RowHandoff 到下一行左端 ──IngestLine 扫本行──▶ …
 /// ```
 ///
-/// 开头的 `LayoutHandoff` 是跨 layout 换位（旧坐标 → 新坐标），只移动 caret，
-/// 文字一个字都不吞吐；维护者点名的"输入一个字恰好自动换行"就靠它不被裁成对角线。
+/// Issue #815 评论 5950375533 问题1: 原实现扫完第一行后，让第二行的 `IngestLine`
+/// 直接从上一行右端连到本行右端/新 caret，把一条**行间斜线**标成了
+/// `IngestLine(本行)` —— 正是第 6 轮明令禁止的"行间斜线 x 冒充本行吞吐边界"。
+/// 现在每个非最后一行扫完后都显式 push 一个 `RowHandoff`，下一条 `IngestLine`
+/// 的起点固定取**本行左端**，绝不继承上一行右端。
+///
+/// Issue #815 评论 5950375533 问题4: `screen_caret` 与吞吐起点几何相同时
+/// 不生成 0 长度的 `LayoutHandoff`，直接从 `IngestLine` 开始。
 pub(crate) fn build_insert_route(
     rows: &[IngestRow],
     screen_caret: &CursorRect,
     new_caret: &CursorRect,
 ) -> Vec<CaretTrackSegment> {
-    if rows.is_empty() {
+    let Some(first) = rows.first().copied() else {
         return Vec::new();
-    }
-    let mut segments = Vec::new();
-    let first = rows[0];
+    };
     let ingest_start = first.caret_rect_at(first.left);
-    segments.push(CaretTrackSegment {
-        kind: CaretTrackSegmentKind::LayoutHandoff,
-        from: *screen_caret,
-        to: ingest_start,
-        ingest_line_ord: None,
-        visual_line_id: first.visual_line_id,
-    });
-    let mut cursor = ingest_start;
+    let mut segments = Vec::new();
+    let mut cursor = *screen_caret;
+    if !same_rect(&cursor, &ingest_start) {
+        segments.push(CaretTrackSegment {
+            kind: CaretTrackSegmentKind::LayoutHandoff,
+            from: cursor,
+            to: ingest_start,
+            ingest_line_ord: None,
+            visual_line_id: first.visual_line_id,
+        });
+    }
     for (index, row) in rows.iter().enumerate() {
         let is_last = index + 1 == rows.len();
-        // 最后一行的终点直接用 **new snapshot 的新 caret**：插入文本的终点就是 caret。
+        // 每条 IngestLine 的起点必须是**本行左端**。
+        cursor = row.caret_rect_at(row.left);
         let to = if is_last {
+            // 最后一行的终点直接用 **new snapshot 的新 caret**：插入文本的终点就是 caret。
             *new_caret
         } else {
             row.caret_rect_at(row.right)
@@ -171,49 +189,63 @@ pub(crate) fn build_insert_route(
             ingest_line_ord: Some(row.line_ord),
             visual_line_id: row.visual_line_id,
         });
-        cursor = to;
+        if !is_last {
+            let next = rows[index + 1];
+            segments.push(CaretTrackSegment {
+                kind: CaretTrackSegmentKind::RowHandoff,
+                from: to,
+                to: next.caret_rect_at(next.left),
+                // 刚扫完的行 → 该行保持终态，后面的行还没被碰到。
+                ingest_line_ord: Some(row.line_ord),
+                visual_line_id: row.visual_line_id,
+            });
+        }
     }
     segments
 }
 
-/// 生成 Delete 的吞吐路径（全部坐标来自 old snapshot，最后一段换位到 new caret）。
+/// 生成 Delete 的吞吐路径（吞字坐标来自 old snapshot，最后一段换位到 new caret）。
 ///
 /// ```
-/// 旧 caret ──IngestLine 吞本行──▶ RowHandoff 到上一行 ──IngestLine 吞本行──▶ …
+/// 旧屏幕 caret ──IngestLine 吞本行──▶ RowHandoff 到上一行左端 ──IngestLine 吞本行──▶ …
 ///   ──▶ old deleted_range.start ──RowHandoff──▶ 新快照最终 caret
 /// ```
 pub(crate) fn build_delete_route(
     slices: &[AnimatedSlice],
     rows: &[IngestRow],
-    old_caret: &CursorRect,
+    screen_caret: &CursorRect,
     new_caret: &CursorRect,
 ) -> Vec<CaretTrackSegment> {
-    if rows.is_empty() {
+    let Some(first_row) = rows.first().copied() else {
         return Vec::new();
-    }
+    };
     if is_forward_delete(slices) {
-        // 维护者明确要求：前删的真实 caret 本来就不动，不许伪装成"caret 横向移动"。
-        // 前删的吞字边界由 `IngestBoundaryDriver::DeleteForwardBoundary` 按本笔 track
-        // 的 progress 自己收拢，这里只给光标一段换位路径。
+        // Issue #815 评论 5950375533 问题2: 前删的真实 caret 本来就不动。
+        //
+        // 原实现把它做成 `LayoutHandoff(old → new)`，而 `LayoutHandoff` 的正式语义是
+        // `is_ingest_segment=false + ingest_line_ord=None ⇒ RouteBeforeStart ⇒
+        // 所有吞吐 slice 保持初态`。于是虽然 `DeleteForwardBoundary` 和 track
+        // progress 都还在，文字层根本进不到边界收拢逻辑，旧字整段动画期间保持完整，
+        // track 结束后才突然被 retire 收掉。
+        //
+        // 现在给它一条**静止的吞吐段**：`from == to == 屏幕 caret`，
+        // `ingest_line_ord = 当前删除行` ⇒ `is_ingest_segment=true`，
+        // `DeleteForwardBoundary` 才能消费 track progress 把边界从被删区右端
+        // 收拢到 caret。
         return vec![CaretTrackSegment {
-            kind: CaretTrackSegmentKind::LayoutHandoff,
-            from: *old_caret,
-            to: *new_caret,
-            ingest_line_ord: None,
-            visual_line_id: rows.first().and_then(|row| row.visual_line_id),
+            kind: CaretTrackSegmentKind::IngestLine,
+            from: *screen_caret,
+            to: *screen_caret,
+            ingest_line_ord: Some(first_row.line_ord),
+            visual_line_id: first_row.visual_line_id,
         }];
     }
-    // 退格：路径从**旧 caret 本身**起步（旧快照坐标，不需要换位），
+    // 退格：路径从**当前屏幕 caret** 起步（旧快照坐标，不需要跨 layout 换位），
     // 按行序从大到小逐行吞到 deleted_range.start 所在行。
     let mut segments = Vec::new();
-    let mut cursor = *old_caret;
     for (index, row) in rows.iter().enumerate().rev() {
-        let from = if index == rows.len() - 1 {
-            // 起始行：吞字从旧 caret 处开始（被删文字在 caret 左侧）。
-            cursor
-        } else {
-            row.caret_rect_at(row.right)
-        };
+        // 起点固定取**本行右端**，绝不继承上一行吞完后的位置。
+        let from = row.caret_rect_at(row.right);
         let to = row.caret_rect_at(row.left);
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::IngestLine,
@@ -223,27 +255,29 @@ pub(crate) fn build_delete_route(
             visual_line_id: row.visual_line_id,
         });
         if index > 0 {
-            // 行与行之间的换位：只移动 caret，上一行保持终态。
+            // 行与行之间的换位：只移动 caret，刚吞完的行保持终态。
             let next_up = &rows[index - 1];
-            let step_to = next_up.caret_rect_at(next_up.right);
             segments.push(CaretTrackSegment {
                 kind: CaretTrackSegmentKind::RowHandoff,
                 from: to,
-                to: step_to,
+                to: next_up.caret_rect_at(next_up.left),
                 ingest_line_ord: Some(row.line_ord),
                 visual_line_id: row.visual_line_id,
             });
         }
-        cursor = to;
     }
-    let last_ord = rows.first().map(|row| row.line_ord);
-    segments.push(CaretTrackSegment {
-        kind: CaretTrackSegmentKind::RowHandoff,
-        from: cursor,
-        to: *new_caret,
-        ingest_line_ord: last_ord,
-        visual_line_id: rows.first().and_then(|row| row.visual_line_id),
-    });
+    // Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 完全相同时
+    // 不生成这一段，否则普通单字符退格会白白把一半时长花在 0 位移上。
+    let swallow_end = first_row.caret_rect_at(first_row.left);
+    if !same_rect(&swallow_end, new_caret) {
+        segments.push(CaretTrackSegment {
+            kind: CaretTrackSegmentKind::RowHandoff,
+            from: swallow_end,
+            to: *new_caret,
+            ingest_line_ord: Some(first_row.line_ord),
+            visual_line_id: first_row.visual_line_id,
+        });
+    }
     segments
 }
 
@@ -265,18 +299,28 @@ pub(crate) fn build_ingest_route(
     if rows.is_empty() {
         return Vec::new();
     }
+    // Issue #815 评论 5950375533 问题3: 路径的**屏幕起点**必须优先用 handoff
+    // （上一帧真正画出来的 caret 位置），拿不到才退回逻辑 `old_cursor_rect`。
+    //
+    // 原实现固定用 `spec.old_cursor_rect`，而 `build_cursor_visual_track` 拿到的
+    // `handoff.sampled` 只写进顶层 `track.from`；只要 `segments` 非空，
+    // `sampled_rect_at_progress()` 根本不读 `track.from`，读的是 `segments[0].from`
+    // —— 于是快速连续输入时渲染又跳回逻辑 old caret。
+    let screen_caret = spec
+        .caret_handoff
+        .as_ref()
+        .map(|handoff| &handoff.sampled)
+        .or(spec.old_cursor_rect.as_ref());
     match ingest_route_shape(slices) {
-        IngestRouteShape::InsertOnly => spec
-            .old_cursor_rect
-            .as_ref()
+        IngestRouteShape::InsertOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
-            .map(|(old_caret, new_caret)| build_insert_route(&rows, old_caret, new_caret))
+            .map(|(screen_caret, new_caret)| build_insert_route(&rows, screen_caret, new_caret))
             .unwrap_or_default(),
-        IngestRouteShape::DeleteOnly => spec
-            .old_cursor_rect
-            .as_ref()
+        IngestRouteShape::DeleteOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
-            .map(|(old_caret, new_caret)| build_delete_route(slices, &rows, old_caret, new_caret))
+            .map(|(screen_caret, new_caret)| {
+                build_delete_route(slices, &rows, screen_caret, new_caret)
+            })
             .unwrap_or_default(),
         // Mixed（IME commit composition crossfade）：行序分属两套 canonical，不建路径。
         IngestRouteShape::Mixed => Vec::new(),
