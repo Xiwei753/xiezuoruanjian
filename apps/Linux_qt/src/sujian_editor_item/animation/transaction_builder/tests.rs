@@ -5,7 +5,9 @@ use crate::sujian_editor_item::animated_slice::{
 };
 use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
 use crate::sujian_editor_item::animation::rebase::RebaseCaretHandoff;
-use crate::sujian_editor_item::animation::transaction::types::IngestSnapshotSide;
+use crate::sujian_editor_item::animation::transaction::types::{
+    CaretTrackSegmentKind, IngestSnapshotSide,
+};
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, TextVisualOperationKind, VisualUnitTiming,
 };
@@ -4492,7 +4494,19 @@ fn issue815_review10_forward_boundary_uses_segment_local_progress() {
 
     // 逐段扫到第一段的末尾之前：本帧的 local progress 应接近 1，而全局 progress
     // 只到 ~1/n。旧字此刻必须**还没吞完**（局部进度驱动的收拢刚刚结束）。
-    let probe_global = (1.0 / seg_count) - 0.02;
+    // Issue #815 评论 5954004872 问题1/2: 起始行是 `rows.last()`，而前删行的吞吐
+    // 起点是**本行左端**。当 handoff 采到的屏幕 caret 还在途中（x=25）时，builder
+    // 会先补一段纯几何 `LayoutHandoff` 把 caret 走到本行左端——所以第一段不再是
+    // 吞字段。这里直接定位到**第一段 Old 侧吞吐**的末尾前一帧再探。
+    let first_ingest = track
+        .segments
+        .iter()
+        .position(|segment| {
+            segment.ingest_side == Some(IngestSnapshotSide::Old)
+                && segment.kind == CaretTrackSegmentKind::IngestLine
+        })
+        .expect("前删 Mixed 必须有 Old 侧吞吐段");
+    let probe_global = ((first_ingest as f64 + 1.0) / seg_count) - 0.02;
     let now = started + std::time::Duration::from_millis((total as f64 * probe_global) as u64);
     let caret = sample_caret_track_frame(track, now);
     assert_eq!(

@@ -712,45 +712,29 @@ fn issue815_review7_insert_route_inserts_row_handoff_between_rows() {
 #[test]
 fn issue815_review7_forward_delete_is_a_static_ingest_segment() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
-    let window = function_window(
-        &src,
-        "if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary",
-        2200,
+    // Issue #815 评论 5954004872 问题1: 事务级早退已删除；前删行的静止语义现在
+    // 由 `row_ingest_start` 表达——`DeleteForwardBoundary` 行从 `row.left` 起手，
+    // 因此它的 IngestLine 是 start == end 的静止段。
+    assert!(
+        src.contains("IngestBoundaryDriver::DeleteForwardBoundary => row.caret_rect_at(row.left)"),
+        "Issue #815 评论 5954004872 问题1: DeleteForwardBoundary 行的吞吐起点必须是 \
+         row.left（静止吞字），CaretPosition 行才是 row.right。"
+    );
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 7000);
+    assert!(
+        delete.contains("from: row_ingest_start(row)")
+            && delete.contains("to: row_ingest_end(row)"),
+        "Issue #815 评论 5954004872 问题1: 每行 IngestLine 必须按行级 driver 取起止点。"
     );
     assert!(
-        window.contains("CaretTrackSegmentKind::IngestLine"),
-        "Issue #815 评论 5950375533 问题2: 前删必须是静止的 IngestLine 段，\
-         不能是 LayoutHandoff——否则 DeleteForwardBoundary 永远收不到 progress。"
-    );
-    assert!(
-        window.contains("from: *screen_caret") && window.contains("to: *screen_caret"),
-        "Issue #815 评论 5950375533 问题2: 前删真实 caret 不动，from/to 都取屏幕 caret。"
-    );
-    assert!(
-        window.contains("ingest_line_ord: Some(first_row.line_ord)"),
-        "Issue #815 评论 5950375533 问题2: 前删段必须带上当前删除行的行序，\
-         否则吞吐 slice 认不出自己就是当前行。"
-    );
-    // 只在前删分支（窗口取到 is_forward_delete 之前）禁止 LayoutHandoff；
-    // 普通退格分支现在**会**产出 LayoutHandoff（5950677031 问题1 要求的
-    // 真实屏幕起点换位）。
-    let forward_branch = function_window(
-        &src,
-        "if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary",
-        2200,
-    );
-    assert!(
-        // 用 `kind: ` 前缀匹配，避免命中解释性注释里出现的裸 `LayoutHandoff` 字样。
-        !forward_branch.contains("kind: CaretTrackSegmentKind::LayoutHandoff"),
-        "Issue #815 评论 5950375533 问题2: 前删分支不得再产出 LayoutHandoff。"
-    );
-    let backspace_branch = function_window(&src, "let start_row = rows.last().copied()", 1200);
-    assert!(
-        backspace_branch.contains("kind: CaretTrackSegmentKind::LayoutHandoff"),
-        "Issue #815 评论 5950677031 问题1: 普通退格分支需要一段几何换位把上一帧真实 \
-         caret 接到本次删除起点。"
+        delete.contains("kind: CaretTrackSegmentKind::IngestLine"),
+        "前删行仍然要产出吞吐段，否则 DeleteForwardBoundary 收不到 ingest_progress。"
     );
 }
+
+// =========================================================================
+// 复核评论 5950375533 问题2：前删必须是静止吞吐段，不是 LayoutHandoff
+// =========================================================================
 
 // =========================================================================
 // 复核评论 5950375533 问题3：route 的屏幕起点必须来自 handoff
@@ -778,7 +762,7 @@ fn issue815_review7_route_screen_origin_prefers_caret_handoff() {
         "Issue #815 评论 5950375533 问题3: 拿不到 handoff 才退回逻辑 old_cursor_rect。"
     );
     let insert = function_window(&src, "pub(crate) fn build_insert_route", 2200);
-    let delete = function_window(&src, "pub(crate) fn build_delete_route", 7000);
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 2400);
     assert!(
         insert.contains("screen_caret: &CursorRect")
             && delete.contains("screen_caret: &CursorRect"),
@@ -786,7 +770,8 @@ fn issue815_review7_route_screen_origin_prefers_caret_handoff() {
     );
     assert!(
         !insert.contains("old_cursor_rect") && !delete.contains("old_cursor_rect"),
-        "Issue #815 评论 5950375533 问题3: route builder 内部不得再直接读逻辑 old_cursor_rect。"
+        "Issue #815 评论 5950375533 问题3: route builder 内部不得再直接读逻辑 \
+         old_cursor_rect，屏幕起点只能由调用方传进来。"
     );
 }
 
@@ -866,9 +851,10 @@ fn issue815_review8_backspace_row_handoff_lands_on_previous_row_right() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
     let window = function_window(&src, "pub(crate) fn build_delete_route", 7000);
     assert!(
-        window.contains("to: next_up.caret_rect_at(next_up.right)"),
-        "Issue #815 评论 5950677031 问题2: 退格行间 RowHandoff 必须落到上一行**右端**，\
-         下一条 IngestLine 才好从同一位置起步。"
+        window.contains("to: row_ingest_start(next_up)"),
+        "Issue #815 评论 5950677031 问题2 / Issue #815 评论 5954004872 问题1: \
+         退格行间 RowHandoff 必须落到下一段的**实际起点** row_ingest_start(next_up)，\
+         这样前删行（从 left 起手）也不会瞬移。"
     );
     assert!(
         !window.contains("to: next_up.caret_rect_at(next_up.left)"),
@@ -1082,6 +1068,87 @@ fn issue815_review10_driver_is_decided_per_row() {
     assert!(
         !builder.contains("&& spec.composition_commit_crossfade.is_none()"),
         "Issue #815 评论 5953049681: composition commit 必须继续走正式 route。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5954004872 问题1/2：Delete 按行 driver、Insert 末段不跨行
+// =========================================================================
+
+/// 复核评论 5954004872 问题1。
+///
+/// 行级 driver 下沉后，`build_delete_route` 仍按"全是 Backspace"拼：事务级早退、
+/// 行间换位硬编码 `next_up.right`、吞完位置重算。现在统一走 `row_ingest_start/end`。
+#[test]
+fn issue815_review11_delete_route_is_driven_per_row() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        src.contains("fn row_ingest_start(row: &IngestRow) -> CursorRect")
+            && src.contains("fn row_ingest_end(row: &IngestRow) -> CursorRect"),
+        "Issue #815 评论 5954004872 问题1: 必须抽出 row_ingest_start / row_ingest_end \
+         两个行级 helper，所有地方都调它们，不在三个地方各猜一次。"
+    );
+    assert!(
+        !src.contains("if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary"),
+        "Issue #815 评论 5954004872 问题1: 事务级早退必须删掉——它会把除首个 row \
+         之外的所有 old-side 行一起吞掉。"
+    );
+    let delete = function_window(&src, "pub(crate) fn build_delete_route", 7000);
+    assert!(
+        delete.contains("to: row_ingest_start(next_up)"),
+        "Issue #815 评论 5954004872 问题1: 行间 RowHandoff 的终点必须是下一段实际的 \
+         起点 row_ingest_start(next_up)，不能硬编码 next_up.right——前删行的下一段 \
+         是从 next_up.left 起手的，写死 right 会让相邻两段瞬移。"
+    );
+    assert!(
+        delete.contains("let swallow_end = segments")
+            && delete.contains(".unwrap_or(*screen_caret);"),
+        "Issue #815 评论 5954004872 问题1: 末尾换位的起点必须取上一段真实的 to，\
+         不能重算 first_row.left。"
+    );
+}
+
+/// 复核评论 5954004872 问题2。
+///
+/// `build_insert_reveal_slices` 会跳过纯空格 / 换行，所以「最后一个可见字符所在行」
+/// 不等于「最终 caret 所在行」。`if is_last { *new_caret }` 会把跨行的对角线标成
+/// 吞吐段。
+#[test]
+fn issue815_review11_insert_last_ingest_line_stays_in_its_row() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    let insert = function_window(&src, "pub(crate) fn build_insert_route", 4600);
+    assert!(
+        !insert.contains("if is_last"),
+        "Issue #815 评论 5954004872 问题2: 最后一条 IngestLine 不得直接连到 new_caret \
+         ——末尾是换行时那是下一行的坐标。"
+    );
+    assert!(
+        insert.contains("to: row.caret_rect_at(row.right)"),
+        "Issue #815 评论 5954004872 问题2: 每条 IngestLine 只能在**本行内**运动，\
+         终点固定取本行右端。"
+    );
+    assert!(
+        insert.contains("if !same_rect(&row_end, new_caret)")
+            && insert.contains("kind: CaretTrackSegmentKind::RowHandoff"),
+        "Issue #815 评论 5954004872 问题2: 本行右端与最终 caret 不同时，必须追加一条 \
+         RowHandoff 承担跨行；相同时才跳过，不白占时长。"
+    );
+}
+
+/// 同一行内出现两种 driver 属于 invariant 违例，必须有正式事件，不只是 debug log。
+#[test]
+fn issue815_review11_driver_conflict_has_a_formal_event() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    let window = function_window(&src, "fn record_ingest_row_driver_conflict", 1800);
+    assert!(
+        window.contains("editor.anim.ingest_row_driver_conflict")
+            && window.contains("record_event"),
+        "Issue #815 评论 5954004872 问题1: 同行 driver 冲突必须记进正式 writer_diagnostics \
+         事件，只打 debug log 不算 invariant 记录。"
+    );
+    assert!(
+        window.contains("serde_json::json!(line_ord)"),
+        "Issue #815 评论 5954004872 问题1: 事件要带冲突行的 line_ord。"
     );
 }
 

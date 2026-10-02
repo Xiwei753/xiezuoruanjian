@@ -140,8 +140,36 @@ pub(crate) fn collect_ingest_rows(slices: &[AnimatedSlice]) -> Vec<IngestRow> {
 /// Issue #815 评论 5953049681 问题3: 同一吞字行同时出现两种 driver 的 invariant
 /// 诊断。日志只暴露原因（`cause`），真实要求仍是"前删与退格各自按行驱动"。
 fn record_ingest_row_driver_conflict(line_ord: usize) {
+    // Issue #815 评论 5954004872: 这是一条 **invariant** 违例，光打 debug log 不算
+    // 说过——必须进正式 `writer_diagnostics`，否则事后没人能查得到"哪一行退化成
+    // 只听一侧 driver"。保留第一个 driver 作为异常兜底（行为上退化成听一侧），
+    // 但事件里必须留下事实。
+    let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    fields.insert("line_ord".to_string(), serde_json::json!(line_ord));
+    fields.insert(
+        "drivers".to_string(),
+        serde_json::json!(format!(
+            "{:?}+{:?}",
+            IngestBoundaryDriver::CaretPosition,
+            IngestBoundaryDriver::DeleteForwardBoundary
+        )),
+    );
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Warn,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "editor.anim.ingest_row_driver_conflict".to_string(),
+        target: "editor.anim".to_string(),
+        message: Some(format!(
+            "Issue #815 评论 5954004872: 吞字行 {line_ord} 同时出现 CaretPosition 与 DeleteForwardBoundary，按行驱动会退化成只听一侧"
+        )),
+        fields,
+    });
     crate::sujian_editor_item::editor_animation_debug_log(&format!(
-        "Issue #815 评论 5953049681 问题3: 吞字行 {line_ord} 同时出现 CaretPosition          与 DeleteForwardBoundary，按行驱动会退化成只听一侧"
+        "Issue #815 评论 5954004872: 吞字行 {line_ord} driver 冲突，已按第一个 driver 兜底并记 editor.anim.ingest_row_driver_conflict"
     ));
 }
 
@@ -238,28 +266,31 @@ pub(crate) fn build_insert_route(
         });
     }
     for (index, row) in rows.iter().enumerate() {
-        let is_last = index + 1 == rows.len();
         // 每条 IngestLine 的起点必须是**本行左端**。
         cursor = row.caret_rect_at(row.left);
-        let to = if is_last {
-            // 最后一行的终点直接用 **new snapshot 的新 caret**：插入文本的终点就是 caret。
-            *new_caret
-        } else {
-            row.caret_rect_at(row.right)
-        };
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::IngestLine,
             from: cursor,
-            to,
+            // Issue #815 评论 5954004872 问题2: IngestLine **只能在本行内移动**，
+            // 终点固定是本行右端。
+            //
+            // 原来最后一行直接 `to = *new_caret`，这只在「最后一个可见字符和最终
+            // caret 同一行」时成立。而 `build_insert_reveal_slices()` 会跳过纯空格 /
+            // 制表 / 换行 / 控制字符——比如粘贴 `abc\n`：`abc` 在当前行产生最后一条
+            // 可见 InsertReveal，`\n` 不产生任何 slice，而 `new_caret` 已经在下一行行首。
+            // 于是原实现发出 `IngestLine(当前行): 当前行 left -> 下一行 new_caret`，
+            // 把一条跨行的斜线/竖直换位标成了吞吐段，文字层会把这个 x 当成本行的吞吐
+            // 边界——正是前几轮反复禁止的那件事。
+            to: row.caret_rect_at(row.right),
             ingest_line_ord: Some(row.line_ord),
             ingest_side: Some(IngestSnapshotSide::New),
             visual_line_id: row.visual_line_id,
         });
-        if !is_last {
+        if index + 1 < rows.len() {
             let next = rows[index + 1];
             segments.push(CaretTrackSegment {
                 kind: CaretTrackSegmentKind::RowHandoff,
-                from: to,
+                from: row.caret_rect_at(row.right),
                 to: next.caret_rect_at(next.left),
                 // 刚扫完的行 → 该行保持终态，后面的行还没被碰到。
                 ingest_line_ord: Some(row.line_ord),
@@ -267,6 +298,23 @@ pub(crate) fn build_insert_route(
                 visual_line_id: row.visual_line_id,
             });
         }
+    }
+    // Issue #815 评论 5954004872 问题2: 吞完最后一行后若 `new_caret` 不在本行
+    // （例如粘贴末尾是换行），补一段 `RowHandoff` 走完剩余几何；几何相同时不生成
+    // 0 长度段。删除那条「最后一条可见 slice == 最终 caret 所在行」的隐含假设。
+    let row_end = segments
+        .last()
+        .map(|segment| segment.to)
+        .unwrap_or(ingest_start);
+    if !same_rect(&row_end, new_caret) {
+        segments.push(CaretTrackSegment {
+            kind: CaretTrackSegmentKind::RowHandoff,
+            from: row_end,
+            to: *new_caret,
+            ingest_line_ord: Some(first.line_ord),
+            ingest_side: Some(IngestSnapshotSide::New),
+            visual_line_id: first.visual_line_id,
+        });
     }
     segments
 }
@@ -277,59 +325,41 @@ pub(crate) fn build_insert_route(
 /// 旧屏幕 caret ──IngestLine 吞本行──▶ RowHandoff 到上一行左端 ──IngestLine 吞本行──▶ …
 ///   ──▶ old deleted_range.start ──RowHandoff──▶ 新快照最终 caret
 /// ```
+/// Issue #815 评论 5954004872 问题1: 一行吞字的**段起点**。
+///
+/// `CaretPosition`（Backspace）真实 caret 自己横扫本行，从本行右端起步；
+/// `DeleteForwardBoundary`（Delete 键）真实 caret 不动，边界从被删区左端起收，
+/// 所以段起点就是本行左端。两处推断必须走同一个入口，不能各写各的。
+fn row_ingest_start(row: &IngestRow) -> CursorRect {
+    match row.driver {
+        IngestBoundaryDriver::CaretPosition => row.caret_rect_at(row.right),
+        IngestBoundaryDriver::DeleteForwardBoundary => row.caret_rect_at(row.left),
+    }
+}
+
+/// Issue #815 评论 5954004872 问题1: 一行吞字的段终点。两种 driver 都收拢到本行左端。
+fn row_ingest_end(row: &IngestRow) -> CursorRect {
+    row.caret_rect_at(row.left)
+}
+
 pub(crate) fn build_delete_route(
     rows: &[IngestRow],
     screen_caret: &CursorRect,
-    // Issue #815 评论 5950887715: `None` 表示不接末尾换位段（Mixed 路径下由调用方
-    // 接到 new 侧吞吐起点），`Some` 才是普通删除接到新快照最终 caret。
     tail: Option<&CursorRect>,
 ) -> Vec<CaretTrackSegment> {
-    let Some(first_row) = rows.first().copied() else {
+    if rows.is_empty() {
         return Vec::new();
-    };
-    // Issue #815 评论 5953049681 问题3: 不再用事务级 `any()` 决定整条 old 侧
-    // 路线。composition crossfade 的 `conceal_to_left_edge` 是按每个 old cluster
-    // 单独算的，跨行时 x 会从行首重新开始——同一批 preedit 完全可能一行是前删、
-    // 另一行是退格。只有当**第一行**（Backspace 的起始行）本身是前删时才走静止段。
-    if first_row.driver == IngestBoundaryDriver::DeleteForwardBoundary {
-        // Issue #815 评论 5950375533 问题2: 前删的真实 caret 本来就不动。
-        //
-        // 原实现把它做成 `LayoutHandoff(old → new)`，而 `LayoutHandoff` 的正式语义是
-        // `is_ingest_segment=false + ingest_line_ord=None ⇒ RouteBeforeStart ⇒
-        // 所有吞吐 slice 保持初态`。于是虽然 `DeleteForwardBoundary` 和 track
-        // progress 都还在，文字层根本进不到边界收拢逻辑，旧字整段动画期间保持完整，
-        // track 结束后才突然被 retire 收掉。
-        //
-        // 现在给它一条**静止的吞吐段**：`from == to == 屏幕 caret`，
-        // `ingest_line_ord = 当前删除行` ⇒ `is_ingest_segment=true`，
-        // `DeleteForwardBoundary` 才能消费 track progress 把边界从被删区右端
-        // 收拢到 caret。
-        return vec![CaretTrackSegment {
-            kind: CaretTrackSegmentKind::IngestLine,
-            from: *screen_caret,
-            to: *screen_caret,
-            ingest_line_ord: Some(first_row.line_ord),
-            ingest_side: Some(IngestSnapshotSide::Old),
-            visual_line_id: first_row.visual_line_id,
-        }];
     }
-    // 退格：路径从**当前屏幕 caret** 起步，按行序从大到小逐行吞到
-    // deleted_range.start 所在行。
-    //
-    // Issue #815 评论 5950677031 问题1: 原来这里直接 `for ... in rows.iter().enumerate().rev()`，
-    // 第一条 `IngestLine` 的起点固定写成 `row.caret_rect_at(row.right)`，
-    // `screen_caret` 参数完全没被消费。于是 `build_ingest_route()` 虽然已经正确优先选了
-    // `caret_handoff.sampled`，传进来以后又被丢掉：
-    // `handoff.sampled -> build_delete_route(screen_caret=真实位置) -> 第一段仍从逻辑
-    // 删除区 row.right 起步` —— 快速连续退格仍然会从上一帧真实 caret 瞬移回去。
-    //
-    // 现在：真正的 old-side 吞吐起点是**最后一条吞字行**（Backspace 起始行）的
-    // `row.right`。`screen_caret` 与它不同就先插一段纯几何换位 `LayoutHandoff`
-    // （`ingest_line_ord = None` / `is_ingest_segment = false`，不吞字）；
-    // 相同就直接从第一条 `IngestLine` 开始，不白占时长。
-    let start_row = rows.last().copied().unwrap_or(first_row);
-    let ingest_start = start_row.caret_rect_at(start_row.right);
     let mut segments = Vec::new();
+    // Issue #815 评论 5954004872 问题1: 退格的**起始行**是行序最大的那行
+    // （`rows` 按 `line_ord` 升序），不是 `rows.first()`。
+    //
+    // 原实现先判 `first_row.driver == DeleteForwardBoundary` 就整条早退成一段静止
+    // 段，把 old 侧其余所有行一起吞掉；而且 `first_row` 与注释里写的
+    // 「第一行（Backspace 的起始行）」本来就是反的概念。现在没有早退：每一行都按
+    // 自己的 driver 决定从哪起步，往上逐行吞。
+    let start_row = rows.last().copied().expect("rows 非空");
+    let ingest_start = row_ingest_start(&start_row);
     if !same_rect(screen_caret, &ingest_start) {
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::LayoutHandoff,
@@ -342,57 +372,45 @@ pub(crate) fn build_delete_route(
         });
     }
     for (index, row) in rows.iter().enumerate().rev() {
-        // Issue #815 评论 5953049681 问题3: 按**行**决定驱动。前删行给一条静止段
-        // （真实 caret 不动，边界靠本段 local `ingest_progress` 收拢）；退格行给
-        // 真实 caret 横扫的一段。
-        let (from, to) = if row.driver == IngestBoundaryDriver::DeleteForwardBoundary {
-            let at = row.caret_rect_at(row.left);
-            (at, at)
-        } else {
-            // 起点固定取**本行右端**，绝不继承上一行吞完后的位置。
-            (row.caret_rect_at(row.right), row.caret_rect_at(row.left))
-        };
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::IngestLine,
-            from,
-            to,
+            from: row_ingest_start(row),
+            to: row_ingest_end(row),
             ingest_line_ord: Some(row.line_ord),
             ingest_side: Some(IngestSnapshotSide::Old),
             visual_line_id: row.visual_line_id,
         });
         if index > 0 {
-            // 行与行之间的换位：只移动 caret，刚吞完的行保持终态。
             let next_up = &rows[index - 1];
+            // Issue #815 评论 5954004872 问题1: 行间换位的终点必须等于**下一段实际的
+            // from**，也就是 `row_ingest_start(next_up)`。原来写死 `next_up.right`，
+            // 而下一行的 `IngestLine` 在 `next_up` 是 DeleteForwardBoundary 时从
+            // `next_up.left` 起步 —— 相邻两段会瞬移。
             segments.push(CaretTrackSegment {
                 kind: CaretTrackSegmentKind::RowHandoff,
-                from: to,
-                // Issue #815 评论 5950677031 问题2: 终点必须是上一行**右端**。
-                // 原来写成 `next_up.left`，而紧接着的 `IngestLine(next_up)` 从
-                // `next_up.right` 起步 —— 两段在边界处不连续，采样切过去那一帧会
-                // 从上一行左端瞬移到右端。正确的退格路线是
-                // `当前行 right -> left (IngestLine)`、
-                // `当前行 left -> 上一行 right (RowHandoff)`、
-                // `上一行 right -> left (IngestLine)`。
-                to: next_up.caret_rect_at(next_up.right),
+                from: row_ingest_end(row),
+                to: row_ingest_start(next_up),
                 ingest_line_ord: Some(row.line_ord),
                 ingest_side: Some(IngestSnapshotSide::Old),
                 visual_line_id: row.visual_line_id,
             });
         }
     }
-    // Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 完全相同时
-    // 不生成这一段，否则普通单字符退格会白白把一半时长花在 0 位移上。
-    let swallow_end = first_row.caret_rect_at(first_row.left);
+    // Issue #815 评论 5954004872 问题1: 末尾换位必须接**最后一条实际生成段的终点**，
+    // 不再重算 `first_row.left`。
+    let swallow_end = segments
+        .last()
+        .map(|segment| segment.to)
+        .unwrap_or(*screen_caret);
     if let Some(tail_target) = tail {
         if !same_rect(&swallow_end, tail_target) {
             segments.push(CaretTrackSegment {
                 kind: CaretTrackSegmentKind::RowHandoff,
                 from: swallow_end,
                 to: *tail_target,
-                ingest_line_ord: Some(first_row.line_ord),
-                // old 已完成、new 尚未开始 ⇒ 保留 Old 侧但不是吞吐段。
+                ingest_line_ord: Some(start_row.line_ord),
                 ingest_side: Some(IngestSnapshotSide::Old),
-                visual_line_id: first_row.visual_line_id,
+                visual_line_id: start_row.visual_line_id,
             });
         }
     }

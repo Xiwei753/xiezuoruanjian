@@ -972,8 +972,10 @@ mod production_route {
     fn production_insert_route_skips_zero_length_layout_handoff() {
         let rows = vec![row(0, 20.0, 60.0)];
         // 编辑前 caret 就在第 0 行、吞吐起点处 —— 典型同行输入。
+        // 同行插入的可见文字一直延伸到新 caret，所以本行吞吐终点就是新 caret，
+        // 不会多出一段 0 长度的 RowHandoff。
         let screen_caret = caret_rect(20.0, 0.0);
-        let new_caret = caret_rect(40.0, 0.0);
+        let new_caret = caret_rect(60.0, 0.0);
         let segments = build_insert_route(&rows, &screen_caret, &new_caret);
         assert_eq!(
             segments.len(),
@@ -1180,5 +1182,164 @@ mod production_route {
         assert_eq!(segments[0].from.top, 0.0);
         let _ = std::any::type_name::<RebaseCaretHandoff>();
         let _ = std::any::type_name::<VisualEditSpec>();
+    }
+
+    // =====================================================================
+    // Issue #815 评论 5954004872 问题1/2：Delete 按行 driver、Insert 末段不跨行
+    // =====================================================================
+
+    /// 问题1(a)：下层行 `CaretPosition`、上层行 `DeleteForwardBoundary` 时，
+    /// 行间 `RowHandoff` 必须落在**下一段实际起点** `next_up.left`，
+    /// 而不是硬编码的 `next_up.right` —— 否则相邻两段瞬移。
+    #[test]
+    fn row_handoff_lands_on_the_next_segments_real_start() {
+        let rows = vec![forward_row(1, 0.0, 30.0), row(0, 0.0, 40.0)];
+        let old_caret = caret_rect(30.0, ROW_H);
+        let segments = build_delete_route(&rows, &old_caret, None);
+
+        let handoff = segments
+            .iter()
+            .find(|segment| segment.kind == CaretTrackSegmentKind::RowHandoff)
+            .expect("跨行必须有 RowHandoff");
+        assert_eq!(
+            handoff.to.x, 0.0,
+            "Issue #815 评论 5954004872 问题1: 上层行是 DeleteForwardBoundary 时，\
+             行间换位必须落到它的 left（= 该行吞字段起点），实际落到 {}",
+            handoff.to.x
+        );
+        assert_route_is_continuous(&segments, "混合 driver 的退格 route");
+    }
+
+    /// 问题1(b)：`rows.first()` 是前删行、但确实还有第二个行时，**不得**早退成
+    /// 单段把第二行丢掉。
+    #[test]
+    fn forward_first_row_does_not_drop_the_second_row() {
+        let rows = vec![forward_row(0, 0.0, 30.0), row(1, 0.0, 20.0)];
+        let old_caret = caret_rect(30.0, 0.0);
+        let segments = build_delete_route(&rows, &old_caret, None);
+
+        let ingest_lines = segments
+            .iter()
+            .filter(|segment| segment.kind == CaretTrackSegmentKind::IngestLine)
+            .count();
+        assert_eq!(
+            ingest_lines, 2,
+            "Issue #815 评论 5954004872 问题1: 事务级早退必须删掉，两行 Delete \
+             必须各有一条吞字段"
+        );
+        assert_route_is_continuous(&segments, "首行前删的两行 route");
+    }
+
+    /// 问题1(c)：任意 driver 组合的 Delete route 都必须连续。
+    #[test]
+    fn every_driver_combination_yields_a_continuous_route() {
+        let combos: [(&str, Vec<IngestRow>); 4] = [
+            ("全 Backspace", vec![row(0, 0.0, 40.0), row(1, 0.0, 30.0)]),
+            (
+                "上行前删",
+                vec![forward_row(1, 0.0, 30.0), row(0, 0.0, 40.0)],
+            ),
+            (
+                "下行前删",
+                vec![row(1, 0.0, 30.0), forward_row(0, 0.0, 40.0)],
+            ),
+            (
+                "两行都前删",
+                vec![forward_row(1, 0.0, 30.0), forward_row(0, 0.0, 40.0)],
+            ),
+        ];
+        for (label, rows) in combos {
+            let start = rows.last().copied().expect("非空");
+            let old_caret = caret_rect(
+                match start.driver {
+                    IngestBoundaryDriver::DeleteForwardBoundary => start.left,
+                    IngestBoundaryDriver::CaretPosition => start.right,
+                },
+                start.line_top,
+            );
+            let segments = build_delete_route(&rows, &old_caret, None);
+            assert_route_is_continuous(&segments, label);
+        }
+    }
+
+    /// 问题2：Insert 的最后一条 `IngestLine` 只允许在本行内运动。
+    ///
+    /// `build_insert_reveal_slices` 会跳过纯空格 / 制表 / 换行，所以「最后一个可见
+    /// 字符所在行」不等于「最终 caret 所在行」。旧代码 `if is_last { *new_caret }`
+    /// 会把跨行的对角线标成 `IngestLine`。
+    #[test]
+    fn insert_last_ingest_line_stays_inside_its_own_row() {
+        let rows = vec![row(0, 0.0, 60.0)];
+        let screen_caret = caret_rect(0.0, 0.0);
+        // 粘贴 `abc\n`：最后可见字符在第 0 行，但新 caret 已经在第 1 行行首。
+        let new_caret = caret_rect(0.0, ROW_H);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+
+        let last_ingest = segments
+            .iter()
+            .filter(|segment| segment.kind == CaretTrackSegmentKind::IngestLine)
+            .next_back()
+            .expect("必须有一条吞吐段");
+        assert_eq!(
+            last_ingest.from.top, last_ingest.to.top,
+            "Issue #815 评论 5954004872 问题2: 最后一条 IngestLine 不得跨视觉行，\
+             from.top={} to.top={}",
+            last_ingest.from.top, last_ingest.to.top
+        );
+        assert_eq!(last_ingest.to.x, 60.0, "吞吐终点应是本行右端");
+        assert_eq!(
+            segments.last().map(|segment| segment.kind),
+            Some(CaretTrackSegmentKind::RowHandoff),
+            "Issue #815 评论 5954004872 问题2: 跨到下一行 caret 必须由末尾的 \
+             RowHandoff 承担，不能冒充吞吐段"
+        );
+        assert_route_is_continuous(&segments, "粘贴末尾换行后的 route");
+
+        // 同行输入不受影响：吞吐终点就是新 caret，不生成 0 长度的末尾换位段。
+        let same_line = build_insert_route(&rows, &screen_caret, &caret_rect(60.0, 0.0));
+        assert_eq!(same_line.len(), 1, "同行输入不该多出末尾 RowHandoff");
+    }
+
+    /// 端到端不变量：真实 track 上采样时，吞吐段的几何不得越出本行。
+    #[test]
+    fn sampled_insert_route_never_sweeps_across_rows() {
+        let rows = vec![row(0, 0.0, 60.0)];
+        let screen_caret = caret_rect(0.0, 0.0);
+        let new_caret = caret_rect(0.0, ROW_H);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let started = Instant::now();
+        let track = track_from(segments, screen_caret, new_caret, started);
+        let row_0 = reveal_on_row(0, 0, 0, 0.0, 60.0);
+        for step in 0..=20u64 {
+            let now = started + Duration::from_millis(100 * step / 20);
+            let caret = sample_caret_track_frame(&track, now);
+            if !caret.is_ingest_segment {
+                continue;
+            }
+            let frame = row_0.compute_frame_by_caret_ingest(
+                caret.x,
+                caret.y,
+                caret.ingest_line_ord,
+                caret.is_ingest_segment,
+                caret.ingest_side,
+                caret.ingest_progress,
+            );
+            // 行内部分宽是正常的（本帧 caret 就在本行中间）。真正的约束是画出来的
+            // 几何**不越出本行的 y 带** —— 旧代码把跨行对角线标成 IngestLine 时，
+            // 这一帧的 x 会取到下一行 caret 的值，吞/吐边界直接跳行。
+            assert!(
+                frame.y >= -1e-6 && frame.y + frame.h <= ROW_H + 1e-6,
+                "Issue #815 评论 5954004872 问题2: 第 {step} 帧的吞吐几何越出了本行 \
+                 y 带（y={} h={}，本行 [0,{})）",
+                frame.y,
+                frame.h,
+                ROW_H
+            );
+            assert!(
+                frame.w <= 60.0 + 1e-6,
+                "Issue #815 评论 5954004872 问题2: 第 {step} 帧裁出了超过本行右端的宽度 {}",
+                frame.w
+            );
+        }
     }
 }
