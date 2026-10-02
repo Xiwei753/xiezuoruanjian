@@ -554,6 +554,19 @@ function createGestureStateTracker() {
       state = emptyState()
       return true
     },
+    // 当前手势是否归属在指定 Scene 的子树里（含它自己）
+    isOwnedBySceneSubtree(scenePath) {
+      const owner = state.ownerScenePath
+      if (owner.length < scenePath.length) { return false }
+      for (let i = 0; i < scenePath.length; i++) {
+        if (owner[i].type !== scenePath[i].type ||
+          owner[i].instanceId !== scenePath[i].instanceId ||
+          owner[i].nodeId !== scenePath[i].nodeId) {
+          return false
+        }
+      }
+      return true
+    },
     getState() {
       const s = state
       return {
@@ -1539,6 +1552,120 @@ console.log('25. 时序回归 ⑦：旧单指手势的收尾不能把刚认领�
     t.isActiveItemInScene(PATH_A)
   assert(!owns, '被 pinch 接管后 moveNode 不再归自己 → 不落盘')
   assert(t.isPinching(), '取消移动不影响 pinch')
+}
+
+console.log('')
+console.log('26. 取消路径回归 ⑧：Cancel 不能把 tracker 卡在旧 mode，也不能留下本地残值')
+
+// 26.1 connect 被取消且仍是自己 → 必须清回 idle，
+//     否则 tracker 卡在 connect，后续别层手势会被"不是 idle、owner 也不是我"全部挡住
+{
+  const t = createGestureStateTracker()
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  const cleared = t.clearIfOwnedBy('connect', PATH_A)
+  assert(cleared, '仍是自己的 connect → 取消收尾清回 idle')
+  assert(t.isIdle(), '取消后 tracker 回到 idle，不会卡在 connect')
+}
+
+// 26.2 connect 被取消但已被 pinch 接管 → 只清预览，pinch 必须活着
+{
+  const t = createGestureStateTracker()
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  const cleared = t.clearIfOwnedBy('connect', PATH_A)
+  assert(!cleared, '已被 pinch 接管 → 取消收尾拒绝清全局')
+  assert(t.isPinching(), '取消旧 connect 之后 pinch 仍然活着')
+  assert(t.getState().mode === 'pinch', 'mode 仍是 pinch')
+  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
+}
+
+// 26.3 取消后别层手势不会被挡住：idle 时任何一层都能起手
+{
+  const t = createGestureStateTracker()
+  t.beginConnect(PATH_A, 'n-a1', 0, 0)
+  t.clearIfOwnedBy('connect', PATH_A)
+  assert(t.isIdle(), '取消后是 idle')
+  t.beginPanCanvas(PATH_B, 0, 0)
+  assert(t.isPanOwnedByScene(PATH_B), '取消后兄弟 Scene 能正常起手（没被卡住）')
+}
+
+// 26.4 本地 gestureMode 必须无条件收回：被 pinch 接管时也一样
+//     老写法 `if (cleared) { gestureMode = 'idle' }` 会让本地停在 panCanvas，
+//     造成 global=pinch / local=panCanvas 的分叉。
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  const cleared = t.clearIfOwnedBy('panCanvas', PATH_A)
+  // 新写法：不管清没清掉，本地旧模式都结束
+  assert(!cleared, '全局没被清（归属已漂到 pinch）')
+  assert(t.getState().mode === 'pinch', '全局仍是 pinch')
+  assert(t.isPinching(), 'pinch 存活；本地旧 pan 模式此时已经收尾，不会再影响新手势')
+}
+
+// 26.5 没人接管时旧 move 收尾：落盘 + 清全局 + 收回本地
+{
+  const t = createGestureStateTracker()
+  t.beginMoveNode(PATH_A, 'n-a1', 0, 0)
+  const state = t.getState()
+  const owns = state.mode === 'moveNode' && state.activeItemId === 'n-a1' &&
+    t.isActiveItemInScene(PATH_A)
+  assert(owns, '没人接管时 moveNode 仍归自己 → 落盘')
+  assert(t.clearIfOwnedBy('moveNode', PATH_A), '落盘后清全局')
+  assert(t.isIdle(), '回到 idle')
+}
+
+console.log('')
+console.log('27. 生命周期回归 ⑨：无关 Scene 退场不能清掉全树唯一的 tracker')
+
+// 树里所有 Scene 共用同一个 tracker。子 Scene 因为 Embed 被删、childGraph 重载、
+// loading/error 分支切换而单独 aboutToDisappear 时，不能把别人的手势清掉。
+const PATH_ROOT = []
+const PATH_C = [embedSegment('emb-c')]
+
+// 27.1 owner 在 emb-a，emb-c 的 Scene 退场 → tracker 不变
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  const shouldReset = PATH_C.length === 0 || t.isOwnedBySceneSubtree(PATH_C)
+  assert(!shouldReset, 'owner 在 emb-a 时，emb-c 的 Scene 退场不清 tracker')
+  assert(!t.isIdle(), '兄弟子树的 pan 仍然活着')
+  assert(t.isPanOwnedByScene(PATH_A), '归属层没被误清')
+}
+
+// 27.2 owner 在 emb-a/emb-a1（孙层），emb-a 的 Scene 退场 → 必须清
+//     这条锁的是"子树前缀"而不是"完全相等"：owner 不是 emb-a 本身
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A1, 0, 0)
+  assert(!t.isOwnedByScene(PATH_A), '孙层的 owner 不等于父 Scene 本身')
+  assert(t.isOwnedBySceneSubtree(PATH_A), '但 owner 确实在 emb-a 的子树里')
+  const shouldReset = t.isOwnedBySceneSubtree(PATH_A)
+  assert(shouldReset, '父 Scene 退场时 owner 属于自己子树 → 清 tracker')
+}
+
+// 27.3 根 Scene 退场 → 无条件清（sceneDepth === 0 走这一条）
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A1, 0, 0)
+  const shouldReset = true // sceneDepth === 0
+  assert(shouldReset, '根 Scene 整页退场无条件清空')
+  assert(t.isOwnedBySceneSubtree(PATH_ROOT), '任何 owner 都算根的子树（前缀长度 0）')
+}
+
+// 27.4 子树前缀不能跨兄弟：owner 在 emb-a，emb-b 的 Scene 退场不清
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  assert(!t.isOwnedBySceneSubtree(PATH_B), '兄弟 emb-b 不算 emb-a 的子树')
+}
+
+// 27.5 owner 在根，任意子 Scene 退场都不清（根层手势不能被子层卸载打断）
+{
+  const t = createGestureStateTracker()
+  t.beginPinch(PATH_ROOT, 0, 0)
+  assert(!t.isOwnedBySceneSubtree(PATH_A), 'owner 在根时，子 Scene 退场不清')
+  assert(t.isPinching(), '根层 pinch 不会被无关子 Scene 卸载打断')
 }
 
 console.log('')

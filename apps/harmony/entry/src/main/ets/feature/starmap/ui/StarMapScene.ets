@@ -320,10 +320,13 @@ export struct StarMapScene {
   aboutToDisappear() {
     this.canvasActive = false
     this.unregisterSceneHandle()
-    // Scene 整体退场，允许把全局手势状态清回 idle。
-    // 逐个手势的收尾回调不走这里：它们必须用 mode-aware 的 clearIfOwnedBy，
-    // 否则旧手势的收尾会误清刚认领的新手势（#816）。
-    this.gestureTracker.reset()
+    // 树里所有 Scene 共用一个 tracker。根 Scene 整页退出可以无条件清空；
+    // 子 Scene 退出（Embed 被删、childGraph 重载、loading/error 分支切换）时，
+    // 只有当前手势确实属于自己这棵子树才允许清，否则会把兄弟子树或根层
+    // 正在进行的手势一起清掉（#816）。
+    if (this.sceneDepth === 0 || this.gestureTracker.isOwnedBySceneSubtree(this.scenePath)) {
+      this.gestureTracker.reset()
+    }
     this.panActive = false
     this.gestureMode = 'idle'
     this.showNodeMenu = false
@@ -1098,6 +1101,18 @@ export struct StarMapScene {
   }
 
   /**
+   * 连线被**取消**（触摸被系统取消，不是抬手）时的收尾。
+   *
+   * 取消时如果全局仍然是自己发起的 connect，必须把 tracker 清回 idle ——
+   * 否则 tracker 会卡在 connect，后续别层手势会因为"不是 idle、owner 也不是我"
+   * 被全部挡住。已经被 pinch 接管时 clearIfOwnedBy 返回 false，只清旧预览。
+   */
+  private cancelOwnedConnect() {
+    this.gestureTracker.clearIfOwnedBy('connect', this.scenePath)
+    this.clearConnectVisualState()
+  }
+
+  /**
    * 只清连线预览的本地痕迹（起点路径、预览画布、菜单标记）。
    * 这里刻意不碰 gestureTracker：手势可能已经被 pinch 接管。
    */
@@ -1113,23 +1128,25 @@ export struct StarMapScene {
   /**
    * 单指拖动画布的收尾。
    *
-   * 关键是不能拿"ownerScenePath 是不是我这层"当清空全局状态的充分条件：
-   * beginPinch 会把 ownerScenePath 也写成归属层，同一层的旧 pan 到这里
-   * 仍然判定为已归属，于是会把刚认领的 pinch 一起 reset。
-   * 所以必须先核对 mode 还是不是我发起的那种，再核对归属（#816）。
-   * 无论清不清得掉，本层的 panActive 都要收掉。
+   * 分两件事看：
+   * - 「清不清全局 tracker」需要看 ownership。beginPinch 会把 ownerScenePath
+   *   也写成归属层，同一层的旧 pan 到这里 isOwnedByScene 仍是 true，所以光靠
+   *   owner 判断挡不住，必须靠 clearIfOwnedBy 的 mode 核对（#816）。
+   * - 「本层 UI 状态收不收」不看 ownership。旧 handler 已经结束了，本地
+   *   gestureMode 没有任何理由继续停在 panCanvas，否则全局是 pinch、本地还是
+   *   panCanvas，两边分叉。
    */
   private finishOwnedPan() {
     this.panActive = false
-    const cleared: boolean = this.gestureTracker.clearIfOwnedBy('panCanvas', this.scenePath)
-    if (cleared) {
-      this.gestureMode = 'idle'
-    }
+    this.gestureTracker.clearIfOwnedBy('panCanvas', this.scenePath)
+    this.gestureMode = 'idle'
   }
 
   /**
    * 移动节点 / 移动 Embed 的收尾。
-   * 只有 mode 和操作对象都还是自己时才落盘；被 pinch 接管时只恢复动画，不落盘也不清全局。
+   *
+   * 只有 mode 和操作对象都还是自己时才落盘；被 pinch 接管时只恢复动画，不落盘
+   * 也不清全局。但本层 gestureMode 一定要收回 idle，理由同 finishOwnedPan。
    */
   private finishOwnedMove(moveMode: StarMapGestureMode, itemId: string, saveFn: () => void) {
     const state: GestureState = this.gestureTracker.getState()
@@ -1138,13 +1155,11 @@ export struct StarMapScene {
     this.panActive = false
     if (owns) {
       saveFn()
-      this.motionPauseTracker.resumeNode(itemId)
       this.gestureTracker.reset()
-      this.gestureMode = 'idle'
-      return
     }
-    // 被新手势接管：动画一定要恢复，否则节点会一直停在 pause 状态
+    // 动画一定要恢复，否则节点会一直停在 pause 状态（取消路径尤其容易漏）
     this.motionPauseTracker.resumeNode(itemId)
+    this.gestureMode = 'idle'
   }
 
   /**
@@ -1573,8 +1588,8 @@ export struct StarMapScene {
               this.finishOwnedConnect()
             })
             .onActionCancel(() => {
-              // 触摸被系统取消：连线没走完，只清预览（#816）
-              this.clearConnectVisualState()
+              // 触摸被系统取消：仍是自己的 connect 就清回 idle，已被 pinch 接管就只清预览（#816）
+              this.cancelOwnedConnect()
             })
         ),
         // 没有长按成功时的普通滑动
@@ -1689,7 +1704,8 @@ export struct StarMapScene {
             this.finishOwnedConnect()
           })
           .onActionCancel(() => {
-            this.clearConnectVisualState()
+            // 与 Node 的 connect 走同一条取消收尾
+            this.cancelOwnedConnect()
           })
       ),
       // 没有长按成功时的普通滑动（moveEmbed 或画布拖动，与 #373 规则一致）

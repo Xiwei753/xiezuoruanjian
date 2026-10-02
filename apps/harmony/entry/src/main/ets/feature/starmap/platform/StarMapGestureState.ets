@@ -253,6 +253,32 @@ export class StarMapGestureStateTracker {
     return isSameScenePath(this.state.pinchOwnerScenePath, scenePath)
   }
 
+  /**
+   * 当前手势是否归属在指定 Scene 的**子树**里（含它自己）。
+   *
+   * 树里所有 Scene 共用同一个 tracker。父层 child Scene 被卸载（Embed 被删、
+   * childGraph 重新加载、loading/error 分支切换）时，aboutToDisappear 只能清
+   * 属于自己子树的手势：手势可能实际属于根 Scene 或兄弟子树，无关 Scene 退场
+   * 把全树唯一的 tracker 清掉，正在进行的缩放/拖动就断了。
+   *
+   * 必须比 isOwnedByScene 更宽：父 Scene 退场时真正的 owner 可能是它里面
+   * 更深一层的孙 Scene，所以要按路径前缀逐段比较，而不是要求完全相等。
+   */
+  isOwnedBySceneSubtree(scenePath: StarMapPathSegment[]): boolean {
+    const owner = this.state.ownerScenePath
+    if (owner.length < scenePath.length) {
+      return false
+    }
+    for (let i = 0; i < scenePath.length; i++) {
+      if (owner[i].type !== scenePath[i].type ||
+        owner[i].instanceId !== scenePath[i].instanceId ||
+        owner[i].nodeId !== scenePath[i].nodeId) {
+        return false
+      }
+    }
+    return true
+  }
+
   /** pan 是否归属指定 Scene */
   isPanOwnedByScene(scenePath: StarMapPathSegment[]): boolean {
     if (this.state.panOwnerScenePath === null) {
