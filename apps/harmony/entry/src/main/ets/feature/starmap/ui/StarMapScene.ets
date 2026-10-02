@@ -1106,9 +1106,19 @@ export struct StarMapScene {
    * 取消时如果全局仍然是自己发起的 connect，必须把 tracker 清回 idle ——
    * 否则 tracker 会卡在 connect，后续别层手势会因为"不是 idle、owner 也不是我"
    * 被全部挡住。已经被 pinch 接管时 clearIfOwnedBy 返回 false，只清旧预览。
+   *
+   * 边界日志：清掉 connectSourcePath 之前先取快照。真机上系统把手势 Cancel 掉时，
+   * 诊断包里原本只会有 connect_begin 后面接一个 connect_end 也看不到的空洞，
+   * 分不清是程序卡死、事件没回来，还是系统正常取消。这里补一条 cancelled 记录。
+   * 被 pinch 接管时**不**补：那时这是"旧 connect handler 的迟到 Cancel"，
+   * 当前真正在跑的是 pinch，再记一条 connect_end 只会污染诊断。
    */
   private cancelOwnedConnect() {
-    this.gestureTracker.clearIfOwnedBy('connect', this.scenePath)
+    const sourcePath: StarMapTargetPath | null = this.connectSourcePath
+    const cancelledOwnConnect: boolean = this.gestureTracker.clearIfOwnedBy('connect', this.scenePath)
+    if (cancelledOwnConnect && sourcePath !== null) {
+      logConnectEnd(sourcePath, null, '', false, 'cancelled')
+    }
     this.clearConnectVisualState()
   }
 
@@ -1160,6 +1170,39 @@ export struct StarMapScene {
     // 动画一定要恢复，否则节点会一直停在 pause 状态（取消路径尤其容易漏）
     this.motionPauseTracker.resumeNode(itemId)
     this.gestureMode = 'idle'
+  }
+
+  /**
+   * Node 上那个 PanGesture 的收尾入口。
+   *
+   * 这一个 handler 有两条起手路径：菜单选了"移动"走 moveNode，否则走 panCanvas
+   * 拖画布。结束时不能再固定当成 moveNode 收 —— 真走的是 panCanvas 时
+   * finishOwnedMove('moveNode', ...) 会 owns=false，tracker 就永远卡在 panCanvas，
+   * 之后别层交互全被"不是 idle、owner 也不是我"挡住。
+   *
+   * 分流看**本层**的 gestureMode，不用当前全局 mode：全局可能已经被 pinch 接管，
+   * 那时读全局只会猜不出"当初这个 handler 走的是哪条路"。本层 gestureMode 才是
+   * 起手时自己写下的，是唯一可靠的来源（#816）。
+   */
+  private finishNodePan(nodeId: string, cancelled: boolean) {
+    if (this.gestureMode === 'moveNode') {
+      this.finishOwnedMove('moveNode', nodeId, cancelled ? () => {} : () => {
+        void this.saveNodePosition(nodeId)
+      })
+      return
+    }
+    this.finishOwnedPan()
+  }
+
+  /** Embed 上那个 PanGesture 的收尾入口，分流理由同 finishNodePan。 */
+  private finishEmbedPan(embedInstanceId: string, cancelled: boolean) {
+    if (this.gestureMode === 'moveEmbed') {
+      this.finishOwnedMove('moveEmbed', embedInstanceId, cancelled ? () => {} : () => {
+        void this.saveEmbedPosition(embedInstanceId)
+      })
+      return
+    }
+    this.finishOwnedPan()
   }
 
   /**
@@ -1631,14 +1674,11 @@ export struct StarMapScene {
             }
           })
           .onActionEnd(() => {
-            // mode 和操作对象都还是自己才落盘并清全局；被 pinch 接管时只收本层的标记
-            this.finishOwnedMove('moveNode', node.id, () => {
-              void this.saveNodePosition(node.id)
-            })
+            // 起手可能是移动节点，也可能是拖画布，按本地 gestureMode 分流收尾
+            this.finishNodePan(node.id, false)
           })
           .onActionCancel(() => {
-            // 取消的移动不落盘，但动画一定要恢复，否则节点会一直停在 pause 状态
-            this.finishOwnedMove('moveNode', node.id, () => {})
+            this.finishNodePan(node.id, true)
           })
       )
     )
@@ -1747,13 +1787,11 @@ export struct StarMapScene {
           }
         })
         .onActionEnd(() => {
-          // 与 Node 同一条收尾：mode 和操作对象都还是自己才落盘
-          this.finishOwnedMove('moveEmbed', embed.instanceId, () => {
-            void this.saveEmbedPosition(embed.instanceId)
-          })
+          // 与 Node 同一个分流：起手可能是移动 Embed，也可能是拖画布
+          this.finishEmbedPan(embed.instanceId, false)
         })
         .onActionCancel(() => {
-          this.finishOwnedMove('moveEmbed', embed.instanceId, () => {})
+          this.finishEmbedPan(embed.instanceId, true)
         })
     )
   }

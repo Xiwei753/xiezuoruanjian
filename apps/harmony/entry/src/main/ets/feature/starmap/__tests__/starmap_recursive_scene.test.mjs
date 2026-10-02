@@ -1668,6 +1668,92 @@ const PATH_C = [embedSegment('emb-c')]
   assert(t.isPinching(), '根层 pinch 不会被无关子 Scene 卸载打断')
 }
 
+// 复现 Node / Embed 那个 PanGesture 的双分支收尾。
+// 这一个 handler 起手有两条路：菜单选了"移动"走 move，否则走 panCanvas 拖画布。
+// 收尾若固定当成 move 收，真走 panCanvas 时 owns 永远是 false，tracker 卡在 panCanvas。
+function finishNodePanLike(tracker, localGestureMode, nodeId, cancelled) {
+  if (localGestureMode === 'moveNode') {
+    const state = tracker.getState()
+    const owns = state.mode === 'moveNode' && state.activeItemId === nodeId &&
+      tracker.isActiveItemInScene(PATH_A)
+    if (owns) {
+      if (!cancelled) { savedNodes.push(nodeId) }
+      tracker.reset()
+    }
+    return 'moveNode'
+  }
+  tracker.clearIfOwnedBy('panCanvas', PATH_A)
+  return 'panCanvas'
+}
+
+const savedNodes = []
+
+console.log('')
+console.log('28. 时序回归 ⑧：Pan 收尾必须按本地起手模式分流，不能固定当成 move')
+
+// 28.1 老写法：把 panCanvas 的收尾当成 moveNode 收 → tracker 卡死
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)   // 本层 gestureMode = 'panCanvas'
+  // 老写法：finishOwnedMove('moveNode', ...) 固定按 move 收
+  const state = t.getState()
+  const owns = state.mode === 'moveNode' && state.activeItemId === 'n-a1'
+  assert(!owns, '老写法：真走 panCanvas 时按 moveNode 收 → owns=false')
+  // 不 reset，tracker 就卡在这儿
+  assert(t.getState().mode === 'panCanvas', '老写法之后 tracker 卡在 panCanvas（回归点）')
+  assert(!t.isIdle(), '卡住的 tracker 挡住后续所有层的手势')
+}
+
+// 28.2 新写法：Node 上起手 panCanvas → End → tracker 回到 idle
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  const branch = finishNodePanLike(t, 'panCanvas', 'n-a1', false)
+  assert(eq(branch, 'panCanvas'), '本地 gestureMode=panCanvas → 走 panCanvas 分支')
+  assert(t.isIdle(), 'Node 拖画布后 tracker 回到 idle（不再卡在 panCanvas）')
+}
+
+// 28.3 Embed 同理，Cancel 也要回 idle
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_B, 0, 0)
+  t.clearIfOwnedBy('panCanvas', PATH_B)
+  assert(t.isIdle(), 'Embed 拖画布被取消后 tracker 回到 idle')
+}
+
+// 28.4 Node 移动：End 要落盘 + 回 idle
+{
+  const t = createGestureStateTracker()
+  t.beginMoveNode(PATH_A, 'n-a1', 0, 0)
+  const branch = finishNodePanLike(t, 'moveNode', 'n-a1', false)
+  assert(eq(branch, 'moveNode'), '本地 gestureMode=moveNode → 走 moveNode 分支')
+  assert(eq(savedNodes.length, 1), '移动成功要落盘一次')
+  assert(eq(savedNodes[0], 'n-a1'), '落盘的是被移动的那个节点')
+  assert(t.isIdle(), '移动结束后 tracker 回到 idle')
+}
+
+// 28.5 Node 移动被取消：不落盘，但 tracker 照样要回 idle
+{
+  const t = createGestureStateTracker()
+  t.beginMoveNode(PATH_A, 'n-a1', 0, 0)
+  const before = savedNodes.length
+  finishNodePanLike(t, 'moveNode', 'n-a1', true)
+  assert(eq(savedNodes.length, before), '取消的移动不落盘')
+  assert(t.isIdle(), '取消移动后 tracker 回到 idle')
+}
+
+// 28.6 关键时序：panCanvas → pinch → 旧 Pan 的 End 到达
+// 分流看本地 gestureMode（起手时写下的），pinch 仍须存活
+{
+  const t = createGestureStateTracker()
+  t.beginPanCanvas(PATH_A, 0, 0)
+  t.beginPinch(PATH_A, 0, 0)
+  finishNodePanLike(t, 'panCanvas', 'n-a1', false)
+  assert(t.isPinching(), '旧 panCanvas 的 End 到达后 pinch 仍然活着')
+  assert(t.isPinchOwnedByScene(PATH_A), '归属层仍是子层')
+  assert(t.getState().mode === 'pinch', '全局 mode 仍是 pinch')
+}
+
 console.log('')
 console.log(`结果: ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)
