@@ -212,6 +212,75 @@ export function hitTestWithScene(
   return null
 }
 
+// ─── 圆形触摸热区 ───
+
+/** 一条水平热区带（组件局部坐标）。UI 层转成 ArkUI 的 Rectangle 交给 responseRegion。 */
+export interface CircleResponseBand {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** 默认水平分带数：带高 = 直径 / bands，带数越多越贴合圆，代价是热区矩形数量线性增长。 */
+export const DEFAULT_CIRCLE_RESPONSE_BANDS: number = 32
+
+/**
+ * 把正圆切成若干条水平矩形热区带。
+ *
+ * ArkUI 组件的默认触摸热区是整个矩形，`borderRadius` + `clip(true)` 只负责视觉裁剪，
+ * 不会把热区变成圆。所以圆形子视图必须自己声明热区，否则圆外四个方角仍然可点
+ * （Issue #813 复审）。
+ *
+ * 每条带的半宽取该带**上下两条边所在高度处**圆半宽的较小值（内切），而不是带中心高度：
+ * - 取带中心会让最上和最下两条带在极点附近明显外凸（直径 200、24 带时可达 28vp），
+ *   于是"点在圆外却选中了子星图"，正是要消灭的那类错位；
+ * - 取内切值则永远不会把圆外的点算成圆内，代价只是极点附近最外侧一条带被丢弃
+ *   （默认 32 带下约 6vp 高），手指精度下可以忽略。
+ *
+ * @param diameter 圆的直径（组件局部坐标）
+ * @param bands 水平分带数
+ * @returns 热区带列表，按 y 从小到大排列；极点处宽度为 0 的带不输出
+ */
+export function buildCircleResponseBands(
+  diameter: number,
+  bands: number = DEFAULT_CIRCLE_RESPONSE_BANDS
+): CircleResponseBand[] {
+  const result: CircleResponseBand[] = []
+  if (diameter <= 0 || bands <= 0) {
+    return result
+  }
+  const r: number = diameter / 2
+  const bandHeight: number = diameter / bands
+  for (let i = 0; i < bands; i++) {
+    const y: number = i * bandHeight
+    const topY: number = y
+    const bottomY: number = y + bandHeight
+    const halfTop: number = circleHalfWidthAtY(r, topY)
+    const halfBottom: number = circleHalfWidthAtY(r, bottomY)
+    const half: number = Math.min(halfTop, halfBottom)
+    if (half <= 0) {
+      continue
+    }
+    result.push({
+      x: r - half,
+      y: topY,
+      width: half * 2,
+      height: bandHeight
+    })
+  }
+  return result
+}
+
+/** 圆在给定 y 高度处的半宽（超出圆顶/圆底返回 0）。 */
+function circleHalfWidthAtY(r: number, y: number): number {
+  const dy: number = y - r
+  if (dy <= -r || dy >= r) {
+    return 0
+  }
+  return Math.sqrt(r * r - dy * dy)
+}
+
 // ─── 点到线段距离 ───
 
 /**
@@ -386,13 +455,16 @@ export function lineCircleIntersection(
  * 计算单个端点所在形状的边界交点。
  * 普通节点是矩形，Embed 是正圆，两者不能共用一套边界算法。
  *
+ * 这是端点几何的唯一入口：正式边的渲染端点和拉线时的预览端点都必须走它，
+ * 否则会出现"预览从圆心出发、松手后正式边却贴在圆周"的跳变（Issue #813 复审）。
+ *
  * @param rect 端点所在的矩形（Embed 时宽高相等）
  * @param isEmbed 该端点是否为 Embed
- * @param tx 另一个端点的中心 X
- * @param ty 另一个端点的中心 Y
- * @returns 边界交点坐标
+ * @param tx 另一个端点的目标 X（画布坐标；普通节点可传目标中心）
+ * @param ty 另一个端点的目标 Y（画布坐标；普通节点可传目标中心）
+ * @returns 边界交点坐标（画布坐标）
  */
-function endpointBoundaryPoint(
+export function edgeEndpointBoundaryPoint(
   rect: PlatformNodeRect,
   isEmbed: boolean,
   tx: number,
@@ -435,10 +507,10 @@ export function computeEdgeRender(
   const toCy: number = toRect.y + toRect.height / 2
 
   // 起点：from 边界上指向 to 中心的交点
-  const start: PlatformPoint = endpointBoundaryPoint(fromRect, fromIsEmbed, toCx, toCy)
+  const start: PlatformPoint = edgeEndpointBoundaryPoint(fromRect, fromIsEmbed, toCx, toCy)
 
   // 终点：to 边界上指向 from 中心的交点
-  const end: PlatformPoint = endpointBoundaryPoint(toRect, toIsEmbed, fromCx, fromCy)
+  const end: PlatformPoint = edgeEndpointBoundaryPoint(toRect, toIsEmbed, fromCx, fromCy)
 
   // 箭头几何
   const dx: number = end.x - start.x

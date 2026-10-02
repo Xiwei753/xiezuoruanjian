@@ -41,6 +41,7 @@
 | 应用共享目录 / 捐献沙箱目录 | 无独立 Kit（module.json5 shareFiles profile） | 23（共享目录 scopes）/ 26.0.0（捐献目录 sharingOS*） | 无独立 SystemCapability（模块级配置） | 无 | 否 | entry/src/main/resources/base/profile/share_files.json（工程资源，不在 platform/ 下） |
 | 菜单 / 气泡菜单 | @kit.ArkUI (bindMenu / bindContextMenu) | 12（声明式）/ 11（程序化 bindMenu(isShow, ...)） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/starmap/ui/StarMapScene.ets, feature/starmap/ui/StarMapListScreen.ets, feature/project/ui/HomeScreen.ets |
 | 触摸事件拦截 | @kit.ArkUI (onTouchIntercept) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
+| 自定义触摸热区 | @kit.ArkUI (responseRegion) | 8 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
 | 自定义对话框 | @kit.ArkUI (ComponentContent / PromptAction.openCustomDialog) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/CreateTitleDialog.ets, feature/starmap/ui/StarMapScene.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
@@ -461,8 +462,30 @@
 - SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`
 - 权限 / ACL：无
 - 用途：父组件按自己的几何形状动态决定"哪些区域我吃掉、哪些区域放给子组件"。
-  典型场景是圆形子视图 —— 用若干根矩形窄条 + `clip(true)` 裁圆环是**不成立**的：裁出来的只是圆内几段直线，斜着点边框（例如 45°）既不在窄条上也不在标题条上，事件会掉进子视图，出现"几何算出来命中父级、实际却进了子级"的错位。改成返回 `HitTestMode.Default` / `HitTestMode.None` 做整圆判定。
+  典型场景是圆形子视图 —— 用若干根矩形窄条 + `clip(true)` 裁圆环是**不成立**的：裁出来的只是圆内几段直线，斜着点边框（例如 45°）既不在窄条上也不在标题条上，事件会掉进子视图，出现"几何算出来命中父级、实际却进了子级"的错位。
+- **返回值语义**（SDK `enums.d.ts` 原文，务必区分）：
+  - `Default`：当前组件**和它的子节点都参加**触摸测试，只挡兄弟节点，不影响祖先。父 Embed 用它等于"父和 child Scene 一起进手势竞争"，**不是**独占。
+  - `Block`：当前组件参加，**同时挡掉子节点、兄弟节点和祖先节点**。产品语义定死"这块区域只归父组件"时必须用它。
+  - `None`：当前组件和子节点都不参加，也不影响祖先 —— 事件继续往下/往外传。
+  - 圆形 Embed 的实际分流：圆外 `None`、圆内 title/圆环 `Block`、圆内其余 `None`。
 - 实现文件：`feature/starmap/ui/StarMapScene.ets`（Embed 圆形外壳的 title / 圆环分流）
+
+## 自定义触摸热区（responseRegion）
+
+- Kit：`@kit.ArkUI`
+- 接口：`.responseRegion(value: Array<Rectangle> | Rectangle): T`
+  - `Rectangle` 的 `x / y / width / height` 都是 `Length`，含义是**相对组件左上角**的坐标
+  - **默认值就是整个组件**（`{x: 0, y: 0, width: '100%', height: '100%'}`）
+- 最低 API：8
+- SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`
+- 权限 / ACL：无
+- 用途：非矩形（圆、圆角、多边形）子视图必须自己声明真实热区。`borderRadius` + `clip(true)`
+  **只裁视觉、不裁热区**，不声明的话圆外四个方角依然可点，会出现"看起来是圆、实际整块方块都能选中"。
+  官方文档同时说明：父组件 `clip(true)` 时子组件响应受**父组件触摸热区**限制，所以父级裁剪区也应当是真实形状。
+- 实现方式：把圆按水平带切成若干矩形，每条带在带中心 y 处取该高度处圆的精确半宽 `sqrt(r² - dy²)`；
+  带角相对圆的最大外凸约 `r*(1-cos(π/bands))`。纯几何在
+  `feature/starmap/platform/StarMapGeometry.ets` 的 `buildCircleResponseBands`（可测），UI 只做 `Rectangle` 转换。
+- 实现文件：`feature/starmap/ui/StarMapScene.ets`（`buildEmbedCircleResponseRegions`）
 
 ## 自定义对话框（ComponentContent + openCustomDialog）
 

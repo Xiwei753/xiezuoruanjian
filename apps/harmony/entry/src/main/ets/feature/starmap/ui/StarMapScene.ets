@@ -16,6 +16,11 @@
 //    不写回的话第二次长按同一对象会因为状态没变化而弹不出来（Issue #813 复审）。
 // 8. Embed 的 title / 圆环由外层 Stack 的 onTouchIntercept 动态分流，不再用三根矩形窄条：
 //    矩形条被 clip(true) 裁出来的只是圆内几段直线，斜着点边框会掉进 child Scene（Issue #813 复审）。
+// 9. 圆形子视图必须同时声明圆形热区（responseRegion）并用 HitTestMode.Block 独占 title / 圆环：
+//    组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区；HitTestMode.Default 是
+//    "自己和子节点都参加"，父 Embed 和 child Scene 会一起进手势竞争（Issue #813 复审）。
+// 10. 预览连线的起点和正式边共用 geometry 的 edgeEndpointBoundaryPoint：
+//     预览从对象边界出发，不要从中心出发，否则松手前后会跳变。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -31,7 +36,8 @@ import {
   PlatformNodeRect, PlatformEdgeRender,
   deriveNodeRectFromLayoutNode,
   hitTestWithScene, computeAllEdgeRenders,
-  screenToCanvas, resolveEdgeEndpointAnchor
+  screenToCanvas, resolveEdgeEndpointAnchor,
+  edgeEndpointBoundaryPoint, buildCircleResponseBands
 } from '../platform/StarMapGeometry'
 import {
   PlatformLayoutNode, PlatformPoint,
@@ -326,6 +332,33 @@ export struct StarMapScene {
     const baseY = ln ? ln.y : 0
     const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
     return (baseY + wobbleDy) * this.zoomScale + this.offsetY
+  }
+
+  /**
+   * 把预览连线的起点更新到"源对象边界上朝向手指的那个点"。
+   *
+   * 必须复用 geometry 的 edgeEndpointBoundaryPoint（正式边渲染也走它）：
+   * 早期版本这里直接取对象中心当起点，导致拉线预览从黑圆正中心出发，
+   * 松手后正式边又落在圆周，中间跳一下（Issue #813 复审）。
+   * 普通节点和 Embed 统一走这个入口，两种形状的边界算法由 geometry 决定。
+   *
+   * @param sourceId 连线源对象 ID（普通节点或 Embed）
+   * @param pointerScreen 当前手指位置的屏幕坐标
+   */
+  private updatePreviewLineFrom(sourceId: string, pointerScreen: PlatformPoint) {
+    const ln = this.getPlatformLayoutNode(sourceId)
+    if (!ln) return
+    const rect: PlatformNodeRect = deriveNodeRectFromLayoutNode(ln)
+    const pointerCanvas: PlatformPoint = screenToCanvas(
+      pointerScreen.x, pointerScreen.y, this.zoomScale, this.offsetX, this.offsetY
+    )
+    const start: PlatformPoint = edgeEndpointBoundaryPoint(
+      rect, this.isEmbed(sourceId), pointerCanvas.x, pointerCanvas.y
+    )
+    this.previewLineFrom = {
+      x: start.x * this.zoomScale + this.offsetX,
+      y: start.y * this.zoomScale + this.offsetY
+    }
   }
 
   /**
@@ -821,13 +854,7 @@ export struct StarMapScene {
               this.previewCanvasReady = false
               this.gestureMode = 'connect'
               this.showNodeMenu = false
-              const ln = this.getPlatformLayoutNode(node.id)
-              if (ln) {
-                this.previewLineFrom = {
-                  x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
-                  y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
-                }
-              }
+              this.updatePreviewLineFrom(node.id, point)
               this.previewLineTo = point
             })
             .onActionUpdate((event: GestureEvent) => {
@@ -835,6 +862,8 @@ export struct StarMapScene {
               const state = this.gestureTracker.getState()
               if (state.mode === 'connect') {
                 this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+                // 起点随手指方向实时重算，始终贴在源对象边界上
+                this.updatePreviewLineFrom(node.id, this.previewLineTo)
                 this.drawPreviewLine()
               }
             })
@@ -952,13 +981,7 @@ export struct StarMapScene {
             this.previewCanvasReady = false
             this.gestureMode = 'connect'
             this.showNodeMenu = false
-            const ln = this.getPlatformLayoutNode(embed.instanceId)
-            if (ln) {
-              this.previewLineFrom = {
-                x: (ln.x + ln.width / 2) * this.zoomScale + this.offsetX,
-                y: (ln.y + ln.height / 2) * this.zoomScale + this.offsetY
-              }
-            }
+            this.updatePreviewLineFrom(embed.instanceId, point)
             this.previewLineTo = point
           })
           .onActionUpdate((event: GestureEvent) => {
@@ -966,6 +989,8 @@ export struct StarMapScene {
             const state = this.gestureTracker.getState()
             if (state.mode === 'connect') {
               this.previewLineTo = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+              // Embed 起点同样走圆周交点，不会再从黑圆中心拉出虚线
+              this.updatePreviewLineFrom(embed.instanceId, this.previewLineTo)
               this.drawPreviewLine()
             }
           })
@@ -1053,10 +1078,11 @@ export struct StarMapScene {
    *
    * 命中分层不再用"三根矩形窄条 + clip 裁圆环"：clip(true) 只会把矩形条裁成圆内的几段直线，
    * 斜着点边框（例如 45° 方向）既不在 title 也不在任何窄条上，事件会掉进 child Scene，
-   * 于是"几何算出来是 embedBorder、实际却进了子图"。现在由外层 Stack 的 onTouchIntercept
-   * 按真实圆距离动态分流：
-   * - title 条或真实圆环 → HitTestMode.Default，父 Embed 手势拿走（选中/长按菜单/连线/移动）
-   * - 圆内部其余区域   → HitTestMode.None，事件继续交给 child StarMapScene
+   * 于是"几何算出来是 embedBorder、实际却进了子图"。现在两层一起改：
+   * - responseRegion 把真实触摸热区切成圆（默认热区是整个矩形，clip 不裁热区）
+   * - 外层 Stack 的 onTouchIntercept 按真实圆距离动态分流：
+   *   title 条或真实圆环 → HitTestMode.Block，只给外层 Embed，child Scene 不参与
+   *   圆外 / 圆内其余区域 → HitTestMode.None，事件落回父星图或交给 child StarMapScene
    */
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
@@ -1120,22 +1146,51 @@ export struct StarMapScene {
     })
     // 子 Scene 必须真正被裁到圆内，否则内部会溢出圆外看起来还是方形
     .clip(true)
+    // 圆形热区：ArkUI 组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区，
+    // 不显式声明的话圆外四个方角依然可点。切成若干条水平带逼近圆（见 buildCircleResponseBands）。
+    .responseRegion(this.buildEmbedCircleResponseRegions())
     .gesture(this.embedGestureGroup(embed))
-    // 动态事件分流：title / 真实圆环留给父 Embed，其余圆内区域放给 child Scene。
-    // 触摸坐标是相对本组件的局部坐标，圆心即 (直径/2, 直径/2)。
+    // 动态事件分流（坐标是相对本组件的局部坐标，圆心即 直径/2）：
+    // - 圆外：不属于 Embed，热区已排除，这里再兜一层，事件落回父星图
+    // - 圆内 title / 真实圆环：Block，只给外层 Embed，不再让 child Scene 参与手势竞争
+    //   （Default 是"自己和子节点都参加"，父 Embed 和 child Scene 会一起进竞争）
+    // - 圆内其余：None，交给 child StarMapScene
     .onTouchIntercept((event: TouchEvent): HitTestMode => {
       const touch = event.changedTouches[0]
       if (!touch) {
         return HitTestMode.None
       }
       const diameter: number = DEFAULT_EMBED_DIAMETER * this.zoomScale
-      const dx: number = touch.x - diameter / 2
-      const dy: number = touch.y - diameter / 2
+      const radius: number = diameter / 2
+      const dx: number = touch.x - radius
+      const dy: number = touch.y - radius
       const dist: number = Math.sqrt(dx * dx + dy * dy)
+      if (dist > radius) {
+        return HitTestMode.None
+      }
       const inTitle: boolean = touch.y <= EMBED_TITLE_HIT_HEIGHT * this.zoomScale
-      const inBorder: boolean = dist >= diameter / 2 - EMBED_BORDER_HIT_WIDTH * this.zoomScale
-      return (inTitle || inBorder) ? HitTestMode.Default : HitTestMode.None
+      const inBorder: boolean = dist >= radius - EMBED_BORDER_HIT_WIDTH * this.zoomScale
+      return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None
     })
+  }
+
+  /**
+   * 生成 Embed 圆形的真实触摸热区：把圆切成若干条水平矩形带。
+   * 几何在 StarMapGeometry.buildCircleResponseBands（纯函数，可测），
+   * 这里只负责转成 ArkUI 的 Rectangle。
+   */
+  private buildEmbedCircleResponseRegions(): Rectangle[] {
+    const bands = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER * this.zoomScale)
+    const regions: Rectangle[] = []
+    for (const band of bands) {
+      regions.push({
+        x: band.x,
+        y: band.y,
+        width: band.width,
+        height: band.height
+      })
+    }
+    return regions
   }
 
   // ─── 菜单显示状态回写 ───
