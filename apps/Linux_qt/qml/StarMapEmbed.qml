@@ -271,7 +271,6 @@ Item {
                 id: chromeMouseTap
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
                 onPressedChanged: {
                     if (pressed) {
                         root.mouseInteracted()
@@ -294,7 +293,6 @@ Item {
                 id: chromeTouchTap
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
-                exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
                 onPressedChanged: {
                     if (pressed) {
                         // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, touch）。

@@ -167,7 +167,6 @@ Item {
         id: nodeMouseTap
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.LeftButton
-        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
         // Issue #801 评论 5894981235: 鼠标按下即通知 Canvas 切回鼠标模式。
         onPressedChanged: { if (pressed) root.mouseInteracted() }
@@ -181,7 +180,6 @@ Item {
         id: nodeTouchTap
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
-        exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
 
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()

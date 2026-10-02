@@ -163,6 +163,32 @@ Item {
         starmapBackendRef.record_interaction(event, pathKey, starmapId, itemKind, itemId, fj)
     }
 
+    // Issue #817 评论 5949494799: 统一命中判断入口。
+    // logPointerPress()、空白点击、拖动画布、滚轮全部共用，
+    // 不再各处分散手写 findNodeAt/findEmbedChromeAt/findEmbedContentAt/hitTestEdge。
+    function hitPointerAtScreen(sx, sy) {
+        var wx = screenToWorldX(sx)
+        var wy = screenToWorldY(sy)
+
+        var node = findNodeAt(wx, wy)
+        if (node)
+            return { kind: "node", id: node.id }
+
+        var chrome = findEmbedChromeAt(wx, wy)
+        if (chrome)
+            return { kind: "embedChrome", id: chrome.instanceId }
+
+        var content = findEmbedContentAt(wx, wy)
+        if (content)
+            return { kind: "childContent", id: content.instanceId }
+
+        var edge = graphController.hitTestEdge(wx, wy)
+        if (edge)
+            return { kind: "edge", id: edge.id }
+
+        return { kind: "empty", id: "" }
+    }
+
     // Issue #814 评论 5935346839: pointer_press 是完整手势的起点边界。
     // 不能挂在背景 MouseArea.onPressed 上：按到 Node/Embed 时对象的 TapHandler
     // 先取得 exclusive grab，背景 MouseArea 根本收不到 press，而"按在对象上
@@ -170,25 +196,14 @@ Item {
     // 观察 press：不抢事件，命中的对象照常拿到完整交互；hitKind/hitId 在按下
     // 当场按世界坐标重算，能直接区分"坐标换算错"和"事件路由断"。
     function logPointerPress(button, device, point) {
-        var wx = screenToWorldX(point.position.x)
-        var wy = screenToWorldY(point.position.y)
-        var hitNode = findNodeAt(wx, wy)
-        var hitEmbedChrome = findEmbedChromeAt(wx, wy)
-        var hitEmbedContent = findEmbedContentAt(wx, wy)
-        var hitEdge = graphController.hitTestEdge(wx, wy)
-        var hitKind = "empty"
-        var hitId = ""
-        if (hitNode) { hitKind = "node"; hitId = hitNode.id }
-        else if (hitEmbedChrome) { hitKind = "embedChrome"; hitId = hitEmbedChrome.instanceId }
-        else if (hitEmbedContent) { hitKind = "childContent"; hitId = hitEmbedContent.instanceId }
-        else if (hitEdge) { hitKind = "edge"; hitId = hitEdge.id }
-        logInteraction("pointer_press", hitKind, hitId, {
+        var hit = hitPointerAtScreen(point.position.x, point.position.y)
+        logInteraction("pointer_press", hit.kind, hit.id, {
             "button": button,
             "device": device,
             "screenX": point.position.x,
             "screenY": point.position.y,
-            "worldX": wx,
-            "worldY": wy,
+            "worldX": screenToWorldX(point.position.x),
+            "worldY": screenToWorldY(point.position.y),
             "panX": panX,
             "panY": panY,
             "zoomLevel": zoomLevel
@@ -708,38 +723,54 @@ Item {
         }
     }
 
-    // pan 拖动 + 滚轮缩放：只在 pan 模式时处理拖动，滚轮始终处理
+    // Issue #817 评论 5949494799: pan 拖动改为 press-time 手势归属 + 拖动阈值。
+    // 按下时先用 hitPointerAtScreen 判命中：node/embedChrome/childContent 时
+    // mouse.accepted = false 让事件穿透给对应对象/子 Scene；只有 empty/edge
+    // 才记录 pressHitKind，左键等移动超过 dragThreshold 后才真正 beginPan。
+    // 中键仍直接 beginPan。滚轮已移到独立 WheelHandler（sceneWheel）。
     MouseArea {
         id: bgDragArea
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
         hoverEnabled: true
 
+        // Issue #817 评论 5949494799: press-time 手势归属。
+        property string pressHitKind: ""
+        property real pressX: 0
+        property real pressY: 0
         property real lastX: 0
         property real lastY: 0
+        property bool panStarted: false
 
         onPressed: function(mouse) {
             _touchInputActive = false
-            lastX = mouse.x
-            lastY = mouse.y
+            var hit = hitPointerAtScreen(mouse.x, mouse.y)
+
             if (mouse.button === Qt.LeftButton) {
-                var wx = screenToWorldX(mouse.x)
-                var wy = screenToWorldY(mouse.y)
-                if (!findNodeAt(wx, wy) && !findEmbedChromeAt(wx, wy)) {
-                    interaction.beginPan()
-                    // Issue #814 评论 5935346839: pan_begin 边界日志。
-                    _panBeginX = panX
-                    _panBeginY = panY
-                    logInteraction("pan_begin", "empty", "", {
-                        "startPanX": panX,
-                        "startPanY": panY,
-                        "device": "mouse"
-                    })
+                // Issue #817 评论 5949494799: 命中 node/embedChrome/childContent 时
+                // 不接受事件，让对应对象/子 Scene 处理；父 Scene 不进入 pan。
+                if (hit.kind === "node"
+                        || hit.kind === "embedChrome"
+                        || hit.kind === "childContent") {
+                    mouse.accepted = false
+                    return
                 }
+                pressHitKind = hit.kind
+                pressX = mouse.x
+                pressY = mouse.y
+                lastX = mouse.x
+                lastY = mouse.y
+                panStarted = false
+                return
             }
-            // 中键直接进入 pan（不依赖长按）
+
+            // 中键直接进入 pan（不依赖长按/阈值）
             if (mouse.button === Qt.MiddleButton) {
                 interaction.beginPan()
+                pressHitKind = "empty"
+                panStarted = true
+                lastX = mouse.x
+                lastY = mouse.y
                 // Issue #814 评论 5935346839: pan_begin 边界日志（中键）。
                 _panBeginX = panX
                 _panBeginY = panY
@@ -753,7 +784,35 @@ Item {
         }
 
         onPositionChanged: function(mouse) {
-            if (interaction.pointerMode === "pan") {
+            if (pressHitKind !== "empty")
+                return
+
+            // 左键且尚未 panStarted：检查是否超过拖动阈值
+            if (!panStarted && (mouse.buttons & Qt.LeftButton)) {
+                var dx0 = mouse.x - pressX
+                var dy0 = mouse.y - pressY
+                if (Math.hypot(dx0, dy0) < bgMouseLeftTap.dragThreshold)
+                    return
+
+                if (!interaction.beginPan())
+                    return
+
+                panStarted = true
+                lastX = mouse.x
+                lastY = mouse.y
+                _panBeginX = panX
+                _panBeginY = panY
+                // Issue #814 评论 5935346839: pan_begin 边界日志。
+                logInteraction("pan_begin", "empty", "", {
+                    "startPanX": panX,
+                    "startPanY": panY,
+                    "device": "mouse"
+                })
+                return
+            }
+
+            // panStarted（中键直接 true，或左键已超阈值）：继续 pan
+            if (panStarted) {
                 var dx = mouse.x - lastX
                 var dy = mouse.y - lastY
                 applyPan(panX + dx, panY + dy)
@@ -763,7 +822,9 @@ Item {
         }
 
         onReleased: function(mouse) {
-            if (interaction.pointerMode === "pan") {
+            // Issue #817 评论 5949494799: 只在 panStarted 时结束 pan。
+            // 没有超过阈值就是普通点击，由 bgMouseLeftTap 处理 clearSelection。
+            if (panStarted) {
                 interaction.endPan()
                 // Issue #814 评论 5935346839: pan_end 边界日志。
                 logInteraction("pan_end", "empty", "", {
@@ -773,22 +834,55 @@ Item {
                     "endPanY": panY,
                     "device": "mouse"
                 })
+                panStarted = false
             }
+            pressHitKind = ""
         }
+    }
 
-        onWheel: function(wheel) {
+    // Issue #817 评论 5949494799: 滚轮缩放改用 WheelHandler。
+    // blocking: false + 父 Scene 命中 childContent 时不接受事件，让滚轮
+    // 继续到子 Scene；最深层 Scene 看到本层 node/edge/empty 后才真正缩放。
+    WheelHandler {
+        id: sceneWheel
+        target: null
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        blocking: false
+
+        onWheel: function(event) {
             _touchInputActive = false
-            var oldZoom = zoomLevel
-            var delta = wheel.angleDelta.y / 120
-            var newZoom = zoomLevel + delta * 0.1
-            // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
-            // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
-            zoomLevel = Math.max(0.35, Math.min(2.5, newZoom))
+            var hit = hitPointerAtScreen(point.position.x, point.position.y)
 
-            var mx = wheel.x
-            var my = wheel.y
-            applyPan(mx - (mx - panX) * (zoomLevel / oldZoom),
-                     my - (my - panY) * (zoomLevel / oldZoom))
+            // 当前点属于下一层 Scene：这一层不缩放，也不吃事件。
+            if (hit.kind === "childContent") {
+                event.accepted = false
+                return
+            }
+
+            var oldZoom = zoomLevel
+            var delta = event.angleDelta.y / 120
+            var newZoom = Math.max(0.35, Math.min(2.5, oldZoom + delta * 0.1))
+
+            if (newZoom === oldZoom) {
+                event.accepted = true
+                return
+            }
+
+            var mx = point.position.x
+            var my = point.position.y
+            zoomLevel = newZoom
+            applyPan(
+                mx - (mx - panX) * (zoomLevel / oldZoom),
+                my - (my - panY) * (zoomLevel / oldZoom)
+            )
+
+            event.accepted = true
+            logInteraction("zoom_wheel", "scene", starmapId, {
+                "oldZoom": oldZoom,
+                "newZoom": zoomLevel,
+                "screenX": mx,
+                "screenY": my
+            })
         }
     }
 
