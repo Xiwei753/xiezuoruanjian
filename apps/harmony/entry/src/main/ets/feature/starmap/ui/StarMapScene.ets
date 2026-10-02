@@ -261,6 +261,11 @@ export struct StarMapScene {
   /** 本 Scene 自己的区域尺寸（vp），用于算子图适配比例 */
   private sceneWidth: number = 0
   private sceneHeight: number = 0
+  /** 本 Scene 在屏幕上的原点，用来把 screenX / screenY 换算成 Scene 局部坐标。 */
+  private sceneGlobalX: number = 0
+  private sceneGlobalY: number = 0
+  /** 触摸点四种坐标全缺时只打一次日志，避免刷屏。 */
+  private hasLoggedBadTouch: boolean = false
   /** 是否已经算过一次 fit view。子图加节点/移动节点不再重算，只有首次加载和显式 fit view 才算（#816） */
   private hasFittedView: boolean = false
   // 上次适配时 Scene 的宽度，用来判断容器尺寸变化是不是父层缩放带来的
@@ -636,13 +641,49 @@ export struct StarMapScene {
       if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
         this.fingerMap.delete(touch.id)
       } else {
-        this.fingerMap.set(touch.id, { x: touch.x, y: touch.y })
+        this.fingerMap.set(touch.id, this.resolveTouchLocalPoint(touch))
       }
     }
     this.fingerPoints = []
     this.fingerMap.forEach((point: PlatformPoint) => {
       this.fingerPoints.push(point)
     })
+  }
+
+  /**
+   * 把一个触摸点换算成本 Scene 的局部坐标。
+   *
+   * 真机上不能只认 \`touch.x / touch.y\`：#816 首轮复测在"双指一缩放就闪退"，
+   * 异常栈是 \`logPinchBegin\` 里对可能为 undefined 的坐标调 \`.toFixed()\`。
+   * 相对坐标字段并不总是有值——ArkUI 只保证 \`screenX / screenY\` 是屏幕绝对坐标。
+   *
+   * 这里优先用相对坐标（它是 Scene 组件内布局真正用的口径），只有在它不是有限数
+   * 时才退回绝对坐标减掉本 Scene 在屏幕上的原点。两条路都拿不到就记 0，并留一条
+   * error 日志把触摸点的原始字段全打出来——下次再出问题可以直接从日志定位，
+   * 不用再靠猜。
+   */
+  private resolveTouchLocalPoint(touch: TouchObject): PlatformPoint {
+    const relativeX: number = touch.x
+    const relativeY: number = touch.y
+    if (Number.isFinite(relativeX) && Number.isFinite(relativeY)) {
+      return { x: relativeX, y: relativeY }
+    }
+    const screenX: number = touch.screenX
+    const screenY: number = touch.screenY
+    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
+      return { x: screenX - this.sceneGlobalX, y: screenY - this.sceneGlobalY }
+    }
+    if (!this.hasLoggedBadTouch) {
+      this.hasLoggedBadTouch = true
+      hilog.error(
+        0x0000, 'StarMapGesture',
+        `#816 touch_without_any_coordinate id=${touch.id} touchType=${touch.type} ` +
+        `x=${String(relativeX)} y=${String(relativeY)} ` +
+        `screenX=${String(screenX)} screenY=${String(screenY)} ` +
+        `sceneGlobalX=${this.sceneGlobalX} sceneGlobalY=${this.sceneGlobalY}`
+      )
+    }
+    return { x: 0, y: 0 }
   }
 
   /** 两指之间的屏幕距离（捏合幅度的度量）。 */
@@ -1989,15 +2030,22 @@ export struct StarMapScene {
       if (!touch) {
         return HitTestMode.None
       }
+      // 和 trackFinger 同一个坑：相对坐标字段在真机上不总是有值，
+      // 这里也只吃有限数，缺了就直接放行，不要拿 NaN 去算圆环命中。
+      const localX: number = touch.x
+      const localY: number = touch.y
+      if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
+        return HitTestMode.None
+      }
       const diameter: number = DEFAULT_EMBED_DIAMETER * this.viewportScale
       const radius: number = diameter / 2
-      const dx: number = touch.x - radius
-      const dy: number = touch.y - radius
+      const dx: number = localX - radius
+      const dy: number = localY - radius
       const dist: number = Math.sqrt(dx * dx + dy * dy)
       if (dist > radius) {
         return HitTestMode.None
       }
-      const inTitle: boolean = touch.y <= EMBED_TITLE_HIT_HEIGHT * this.viewportScale
+      const inTitle: boolean = localY <= EMBED_TITLE_HIT_HEIGHT * this.viewportScale
       const inBorder: boolean = dist >= radius - EMBED_BORDER_HIT_WIDTH * this.viewportScale
       return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None
     })
@@ -2272,6 +2320,13 @@ export struct StarMapScene {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.sceneWidth = Number(newArea.width)
       this.sceneHeight = Number(newArea.height)
+      // 记下本 Scene 在屏幕上的原点：ArkUI 只保证 screenX / screenY 有值，
+      // 触摸点的相对坐标字段在真机上并不总是有值，缺了就得靠这个原点换算回来。
+      const globalPosition: Position | undefined = newArea.globalPosition
+      if (globalPosition !== undefined && globalPosition !== null) {
+        this.sceneGlobalX = Number(globalPosition.x)
+        this.sceneGlobalY = Number(globalPosition.y)
+      }
       // 第一次到位 = 首次适配；之后尺寸变化 = 父层缩放带动容器变大变小，
       // 要把已有适配同比带过去，而不是重新适配（重新适配会重置用户刚捏出来的缩放）
       if (this.hasFittedView) {

@@ -19,6 +19,31 @@ const TAG: string = 'StarMapGesture'
 /** 统一前缀，方便在 hilog 里按 Issue #816 过滤。 */
 const PREFIX: string = '#816'
 
+/**
+ * 数字格式化，全函数（total）。
+ *
+ * 这一层是**纯诊断**，它的存在是为了"出问题时不崩"，不是"自己也能把 App 崩了"。
+ * 真机上 double-touch 的第一帧里，某些触摸点的相对坐标字段并不总是有值——
+ * #816 首轮真机复测就是这么崩的：\`logPinchBegin\` 直接对可能为 undefined 的
+ * 坐标调 \`.toFixed()\`，一个 TypeError 打断 pinch_begin，导致双指一缩放就闪退。
+ *
+ * 所以这里对 undefined / null / NaN / Infinity 一律返回可读占位符，绝不抛。
+ * 真出问题时日志里会看到 \`none\` / \`nan\`，这本身就是有用的信号，
+ * 比整个 App 挂掉要好得多。
+ */
+function fmt(value: number | undefined | null, digits: number): string {
+  if (value === undefined || value === null) {
+    return 'none'
+  }
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 'nan'
+  }
+  if (!Number.isFinite(value)) {
+    return 'inf'
+  }
+  return value.toFixed(digits)
+}
+
 /** 双指缩放开始：归属哪一层、双指中心在哪、起始比例多少。 */
 export function logPinchBegin(
   ownerScenePath: string,
@@ -28,8 +53,8 @@ export function logPinchBegin(
 ): void {
   hilog.info(
     DOMAIN, TAG,
-    `${PREFIX} pinch_begin ownerScenePath=${ownerScenePath} centerX=${centerX.toFixed(1)} ` +
-    `centerY=${centerY.toFixed(1)} baseScale=${baseScale.toFixed(3)}`
+    `${PREFIX} pinch_begin ownerScenePath=${ownerScenePath} centerX=${fmt(centerX, 1)} ` +
+    `centerY=${fmt(centerY, 1)} baseScale=${fmt(baseScale, 3)}`
   )
 }
 
@@ -37,7 +62,7 @@ export function logPinchBegin(
 export function logPinchEnd(ownerScenePath: string, finalScale: number): void {
   hilog.info(
     DOMAIN, TAG,
-    `${PREFIX} pinch_end ownerScenePath=${ownerScenePath} finalScale=${finalScale.toFixed(3)}`
+    `${PREFIX} pinch_end ownerScenePath=${ownerScenePath} finalScale=${fmt(finalScale, 3)}`
   )
 }
 
