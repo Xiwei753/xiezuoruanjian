@@ -40,6 +40,7 @@
 | 沉浸光感材质运行态 | @kit.ArkUI (uiMaterial) | 26 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | material/impl/api26/HarmonyMaterialRuntimeApi26.ets |
 | 应用共享目录 / 捐献沙箱目录 | 无独立 Kit（module.json5 shareFiles profile） | 23（共享目录 scopes）/ 26.0.0（捐献目录 sharingOS*） | 无独立 SystemCapability（模块级配置） | 无 | 否 | entry/src/main/resources/base/profile/share_files.json（工程资源，不在 platform/ 下） |
 | 菜单 / 气泡菜单 | @kit.ArkUI (bindMenu / bindContextMenu) | 12（声明式）/ 11（程序化 bindMenu(isShow, ...)） | 无独立 SystemCapability（随 @kit.ArkUI 整体可用） | 无 | 否 | feature/starmap/ui/StarMapScene.ets, feature/starmap/ui/StarMapListScreen.ets, feature/project/ui/HomeScreen.ets |
+| 触摸事件拦截 | @kit.ArkUI (onTouchIntercept) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
 | 自定义对话框 | @kit.ArkUI (ComponentContent / PromptAction.openCustomDialog) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/CreateTitleDialog.ets, feature/starmap/ui/StarMapScene.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
@@ -448,6 +449,20 @@
   - 递归 UI 里（星图 Scene 层层嵌套、圆形 Embed 带 `clip(true)`）**不要**用 `Column + Button + .position()` 自绘菜单：自绘弹层是 Scene 的普通子组件，会被祖先的 `clip(true)` 裁掉，也会因为用 Scene 局部坐标定位而越出屏幕。改用程序化 `bindMenu(isShow, ...)`，由系统定位并自动避让屏幕边缘。
   - **不要**用 `bindContextMenu(isShown, ...)`：官方文档说明程序化 `bindContextMenu` 不支持"长按后继续拖动"，会破坏"长按出菜单、继续移动拉线"的连线交互（见 #373）。`bindMenu` 只负责显示，长按与后续 Pan 仍由业务自己的 `GestureGroup` 状态机负责，两者互不冲突。
   - 菜单上下文（如"当前长按的是哪个节点"）通过组件字段传给无参 `CustomBuilder`，不要给 `@Builder` 加参数。
+  - `bindMenu(isShow, ...)` 按**被绑定组件**定位。要让菜单贴着用户手指弹出，就在场景里放一个 1vp×1vp、`hitTestBehavior(HitTestMode.None)` 的透明锚点，长按时把锚点 `position()` 移到手指的屏幕坐标，再把 `bindMenu` 挂在这个锚点上。直接把 `bindMenu` 挂全屏背景层会让菜单相对整张场景定位，长按位置的信息就丢了（Issue #813 复审）。
+  - 程序化 `bindMenu` 的 `isShow` **不会**自动双向回写。必须传 `MenuOptions.onDisappear` 把显示标记写回 `@State`，否则用户点菜单外部关掉菜单后状态仍是 `true`，下一次长按同一对象因为状态没变化而弹不出来。`onDisappear` 里不要无脑 reset 业务手势：长按后继续拖动（进 connect）和点"移动"（进 moveNode/moveEmbed）也会主动关菜单，只在业务仍处于"菜单待选"状态时才收尾（Issue #813 复审）。
+
+## 触摸事件拦截（onTouchIntercept）
+
+- Kit：`@kit.ArkUI`
+- 接口：`.onTouchIntercept(callback: Callback<TouchEvent, HitTestMode>): T`，在命中测试阶段决定本组件的命中行为
+- `TouchEvent.changedTouches: TouchObject[]`，`TouchObject.x / y` 是**相对本组件**的局部坐标
+- 最低 API：12
+- SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`
+- 权限 / ACL：无
+- 用途：父组件按自己的几何形状动态决定"哪些区域我吃掉、哪些区域放给子组件"。
+  典型场景是圆形子视图 —— 用若干根矩形窄条 + `clip(true)` 裁圆环是**不成立**的：裁出来的只是圆内几段直线，斜着点边框（例如 45°）既不在窄条上也不在标题条上，事件会掉进子视图，出现"几何算出来命中父级、实际却进了子级"的错位。改成返回 `HitTestMode.Default` / `HitTestMode.None` 做整圆判定。
+- 实现文件：`feature/starmap/ui/StarMapScene.ets`（Embed 圆形外壳的 title / 圆环分流）
 
 ## 自定义对话框（ComponentContent + openCustomDialog）
 

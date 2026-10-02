@@ -9,6 +9,13 @@
 // 4. 递归结构：StarMapScene → StarMapEmbedScene → child StarMapScene
 // 5. 菜单和对话框都不属于 Scene 的 Stack：菜单用 ArkUI 程序化 bindMenu（由系统定位、自动避让屏幕边缘），
 //    对话框用 openCustomDialog 挂到窗口层级。否则菜单会被圆形 Embed 的 clip(true) 裁掉（Issue #813）。
+// 6. bindMenu 按"被绑定组件"定位，所以菜单不能直接挂在全屏背景层或节点本体上：
+//    Scene 栈里只放 1vp×1vp 的透明锚点，锚点位置在长按时记成手指的屏幕坐标，
+//    这样菜单既贴着手指出现，又不会被父级 clip 裁掉（Issue #813 复审）。
+// 7. 菜单必须接 onDisappear 把显示标记写回状态：程序化 bindMenu 的 isShow 不会自动双向同步，
+//    不写回的话第二次长按同一对象会因为状态没变化而弹不出来（Issue #813 复审）。
+// 8. Embed 的 title / 圆环由外层 Stack 的 onTouchIntercept 动态分流，不再用三根矩形窄条：
+//    矩形条被 clip(true) 裁出来的只是圆内几段直线，斜着点边框会掉进 child Scene（Issue #813 复审）。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -54,8 +61,18 @@ interface WobbleOffset {
  * 命中测试认为顶部这一条属于 title，UI 也必须把同一条区域留给 title 手势层。
  */
 const EMBED_TITLE_HIT_HEIGHT: number = 24
-/** Embed 边框命中条厚度：左右下三条透明窄条，靠外层圆角 clip 裁成圆环 */
+/**
+ * Embed 圆环命中厚度：外层 Stack 的 onTouchIntercept 用它把"离圆心 >= 半径 - 该值"的区域
+ * 判成 embedBorder。和 StarMapGeometry 的 EMBED_BORDER_WIDTH 对齐。
+ */
 const EMBED_BORDER_HIT_WIDTH: number = 4
+
+/**
+ * 星图选中描边色。普通节点和 Embed 共用这一个值。
+ * 不能用 themeConfig.colors.primary：LightTheme 的 primary 就是 #000000，
+ * 而子星图背景也是黑色，选中描边会变成"黑边贴黑圆"，选中态直接消失（Issue #813 复审）。
+ */
+const STARMAP_SELECTED_STROKE_COLOR: string = '#FF6B6B'
 
 @Component
 export struct StarMapScene {
@@ -157,12 +174,16 @@ export struct StarMapScene {
   @State showNodeMenu: boolean = false
   /** 节点菜单对应的 nodeId */
   @State nodeMenuNodeId: string = ''
+  /** 节点菜单锚点（Scene 局部屏幕坐标）：长按时手指所在处，菜单从这儿弹出 */
+  @State nodeMenuAnchor: PlatformPoint = { x: 0, y: 0 }
   /** 预览连线起点 */
   @State previewLineFrom: PlatformPoint = { x: 0, y: 0 }
   /** 预览连线终点 */
   @State previewLineTo: PlatformPoint = { x: 0, y: 0 }
   /** 是否显示新建菜单 */
   @State showCreateMenu: boolean = false
+  /** 新建菜单锚点（Scene 局部屏幕坐标）：空白长按时手指所在处，菜单从这儿弹出 */
+  @State createMenuAnchor: PlatformPoint = { x: 0, y: 0 }
   /** 新建菜单位置（画布坐标）：新建项落在哪张星图的哪个位置 */
   @State createMenuCanvasPosition: PlatformPoint = { x: 0, y: 0 }
   /** Canvas 是否就绪 */
@@ -733,7 +754,7 @@ export struct StarMapScene {
     Column() {
       Circle({ width: 56 * this.zoomScale, height: 56 * this.zoomScale })
         .fill(this.getNodeColor(node))
-        .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
+        .stroke(this.selectedNodeId === node.id ? STARMAP_SELECTED_STROKE_COLOR : 'transparent')
         .strokeWidth(4)
         .shadow({
           radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
@@ -771,9 +792,9 @@ export struct StarMapScene {
       this.selectedNodeId = node.id
       this.onSelectItem(this.scenePath, node.id)
     })
-    // 程序化菜单：长按只翻转 showNodeMenu，是否真的弹出由这里交给 ArkUI 定位（不会越界、不会被父级裁剪）。
-    // 菜单项内容通过 this.nodeMenuNodeId 判断当前是节点还是 Embed。
-    .bindMenu(this.showNodeMenu && this.nodeMenuNodeId === node.id, this.NodeMenuContent)
+    // 菜单不挂在本 Column 上：bindMenu 按被绑定组件定位，节点本体位置会随节点移动而变化，
+    // 而且 Scene 栈里的 1vp 锚点才能让菜单贴着实际长按的手指位置弹出（见 build() 的锚点）。
+    // 这里只负责翻转 showNodeMenu 并记下锚点，菜单内容通过 this.nodeMenuNodeId 区分节点 / Embed。
     .gesture(
       GestureGroup(GestureMode.Exclusive,
         // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
@@ -786,6 +807,8 @@ export struct StarMapScene {
               this.gestureMode = 'nodeMenu'
               // 先记录目标再翻显示标记：菜单内容要在 showNodeMenu 变 true 时就读到 nodeMenuNodeId
               this.nodeMenuNodeId = node.id
+              // 锚点记手指实际位置，菜单从这儿弹出而不是从节点中心弹出
+              this.nodeMenuAnchor = { x: point.x, y: point.y }
               this.showNodeMenu = true
               this.selectedNodeId = node.id
               this.onSelectItem(this.scenePath, node.id)
@@ -917,6 +940,8 @@ export struct StarMapScene {
             this.gestureMode = 'nodeMenu'
             // 菜单内容在 showNodeMenu 翻 true 的同一帧就要读到 nodeMenuNodeId，所以先赋值再翻标记
             this.nodeMenuNodeId = embed.instanceId
+            // 和普通节点共用同一个锚点：长按点边框时菜单也从实际按下处弹出
+            this.nodeMenuAnchor = { x: point.x, y: point.y }
             this.showNodeMenu = true
           }),
         PanGesture()
@@ -1026,17 +1051,18 @@ export struct StarMapScene {
    * 尺寸只有一个来源：DEFAULT_EMBED_DIAMETER（见 StarMapLayout），
    * 宽=高=直径，圆角=直径/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
    *
-   * 命中分层（Stack 后声明的组件触摸优先级更高）：
-   * - innerContent（底层）：child StarMapEmbedScene，不挂父手势，圆内其余区域交给子 Scene
-   * - title Row（上层）：顶部条，负责选中 Embed + 长按菜单/连线
-   * - 左/右/下边框命中条（上层）：透明窄条，只负责选中 Embed 和长按手势
-   * 外层 Stack 的 clip(true) + borderRadius 把这些条裁成圆环，视觉和命中都在圆上。
+   * 命中分层不再用"三根矩形窄条 + clip 裁圆环"：clip(true) 只会把矩形条裁成圆内的几段直线，
+   * 斜着点边框（例如 45° 方向）既不在 title 也不在任何窄条上，事件会掉进 child Scene，
+   * 于是"几何算出来是 embedBorder、实际却进了子图"。现在由外层 Stack 的 onTouchIntercept
+   * 按真实圆距离动态分流：
+   * - title 条或真实圆环 → HitTestMode.Default，父 Embed 手势拿走（选中/长按菜单/连线/移动）
+   * - 圆内部其余区域   → HitTestMode.None，事件继续交给 child StarMapScene
    */
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
     Stack() {
       // 1. innerContent 区域（占满整个 Embed 内容区，放 child StarMapEmbedScene）
-      // 不挂任何手势，事件穿透到 child Scene
+      // 不挂任何手势，能不能收到事件由下面的 onTouchIntercept 决定
       Column() {
         StarMapEmbedScene({
           rootStarmapId: this.rootStarmapId,
@@ -1053,8 +1079,10 @@ export struct StarMapScene {
       .width('100%')
       .height('100%')
 
-      // 2. title Row（顶部条，挂 Embed 手势：选中/菜单/连线/移动）
-      // 菜单挂在 title 上：程序化 bindMenu 由系统定位，跨过圆形 clip 也不会被裁掉（Issue #813）
+      // 2. title 视觉层（纯显示，不挂手势也不挂菜单）
+      // 手势统一由外层 Stack 的 embedGestureGroup + onTouchIntercept 分流，
+      // 菜单由 Scene 栈里的 1vp 锚点承载（菜单若挂在这个 title 上，
+      // 位置会被节点本体绑死，点圆环时菜单不从按下处弹出）。
       Row() {
         Text(embed.label ?? embed.targetStarmapId)
           .fontSize(14 * this.zoomScale)
@@ -1062,46 +1090,28 @@ export struct StarMapScene {
           .fontColor('#FFFFFF')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
+          // 圆顶部的可见宽度远小于直径：左对齐 + padding 的文字前半截会被圆裁掉，必须居中
+          .width(80 * this.zoomScale)
+          .textAlign(TextAlign.Center)
       }
       .width('100%')
       .height(EMBED_TITLE_HIT_HEIGHT * this.zoomScale)
-      .padding({ left: 8 * this.zoomScale, right: 8 * this.zoomScale })
-      .justifyContent(FlexAlign.Start)
+      .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .position({ x: 0, y: 0 })
-      .bindMenu(this.showNodeMenu && this.nodeMenuNodeId === embed.instanceId, this.NodeMenuContent)
-      .gesture(this.embedGestureGroup(embed))
-
-      // 3. 左边框命中条（透明窄条，只接收手势事件）
-      Row() {}
-      .width(EMBED_BORDER_HIT_WIDTH)
-      .height('100%')
-      .position({ x: 0, y: 0 })
-      .gesture(this.embedGestureGroup(embed))
-
-      // 4. 右边框命中条（透明窄条，只接收手势事件）
-      Row() {}
-      .width(EMBED_BORDER_HIT_WIDTH)
-      .height('100%')
-      .position({ x: DEFAULT_EMBED_DIAMETER * this.zoomScale - EMBED_BORDER_HIT_WIDTH, y: 0 })
-      .gesture(this.embedGestureGroup(embed))
-
-      // 5. 下边框命中条（透明窄条，只接收手势事件）
-      Row() {}
-      .width('100%')
-      .height(EMBED_BORDER_HIT_WIDTH)
-      .position({ x: 0, y: DEFAULT_EMBED_DIAMETER * this.zoomScale - EMBED_BORDER_HIT_WIDTH })
-      .gesture(this.embedGestureGroup(embed))
+      .hitTestBehavior(HitTestMode.None)
     }
     .width(DEFAULT_EMBED_DIAMETER * this.zoomScale)
     .height(DEFAULT_EMBED_DIAMETER * this.zoomScale)
     .borderRadius(DEFAULT_EMBED_DIAMETER / 2 * this.zoomScale)
     .backgroundColor('#000000')
-    // 未选中也要有一条细描边，否则黑圆在深色画布上看不出边界；选中时加粗并用主题色
+    // 未选中也要有一条细描边，否则黑圆在深色画布上看不出边界；选中时加粗。
+    // 选中色用 STARMAP_SELECTED_STROKE_COLOR（和普通节点一致），不能用 themeConfig.colors.primary：
+    // LightTheme 的 primary 是 #000000，黑圆选中后会变成"黑边贴黑圆"。
     .border({
       width: this.selectedNodeId === embed.instanceId ? 3 : 1,
       color: this.selectedNodeId === embed.instanceId
-        ? this.themeConfig.colors.primary
+        ? STARMAP_SELECTED_STROKE_COLOR
         : this.themeConfig.colors.outlineVariant
     })
     .position({
@@ -1110,6 +1120,48 @@ export struct StarMapScene {
     })
     // 子 Scene 必须真正被裁到圆内，否则内部会溢出圆外看起来还是方形
     .clip(true)
+    .gesture(this.embedGestureGroup(embed))
+    // 动态事件分流：title / 真实圆环留给父 Embed，其余圆内区域放给 child Scene。
+    // 触摸坐标是相对本组件的局部坐标，圆心即 (直径/2, 直径/2)。
+    .onTouchIntercept((event: TouchEvent): HitTestMode => {
+      const touch = event.changedTouches[0]
+      if (!touch) {
+        return HitTestMode.None
+      }
+      const diameter: number = DEFAULT_EMBED_DIAMETER * this.zoomScale
+      const dx: number = touch.x - diameter / 2
+      const dy: number = touch.y - diameter / 2
+      const dist: number = Math.sqrt(dx * dx + dy * dy)
+      const inTitle: boolean = touch.y <= EMBED_TITLE_HIT_HEIGHT * this.zoomScale
+      const inBorder: boolean = dist >= diameter / 2 - EMBED_BORDER_HIT_WIDTH * this.zoomScale
+      return (inTitle || inBorder) ? HitTestMode.Default : HitTestMode.None
+    })
+  }
+
+  // ─── 菜单显示状态回写 ───
+
+  /**
+   * 节点/Embed 菜单消失后的状态回写（MenuOptions.onDisappear）。
+   *
+   * 程序化 bindMenu(isShow, ...) 的 isShow 不会自动双向同步：用户点菜单外部关掉菜单后，
+   * showNodeMenu 可能还停在 true。下一次长按同一个对象再赋一次 true，状态没有变化，
+   * 菜单就可能不再重新打开。所以必须在这里把状态写回。
+   *
+   * 不能无脑 reset 手势：长按后继续拖动（进 connect）和点"移动"（进 moveNode/moveEmbed）
+   * 也会主动关菜单，这两种情况下 gestureMode 已经不是 nodeMenu，所以只在 nodeMenu 态才 reset。
+   */
+  private onNodeMenuDisappear() {
+    this.showNodeMenu = false
+    if (this.gestureMode === 'nodeMenu' && this.gestureTracker.isOwnedByScene(this.scenePath)) {
+      this.gestureTracker.reset()
+      this.gestureMode = 'idle'
+    }
+    this.nodeMenuNodeId = ''
+  }
+
+  /** 新建菜单消失后的状态回写（MenuOptions.onDisappear）。 */
+  private onCreateMenuDisappear() {
+    this.showCreateMenu = false
   }
 
   // ─── @Builder：节点菜单（bindMenu 内容） ───
@@ -1266,8 +1318,11 @@ export struct StarMapScene {
               const canvasPoint = screenToCanvas(point.x, point.y, this.zoomScale, this.offsetX, this.offsetY)
               const hitResult = hitTestWithScene(this.nodeRects, canvasPoint.x, canvasPoint.y, this.scenePath, this.getEmbedInstanceIds())
               // 空白区域长按 → 弹出新建菜单。
-              // 菜单挂在下面这个背景命中层上（程序化 bindMenu），系统自己定位，不会越出屏幕。
+              // 菜单挂在 Scene 栈里的 1vp 锚点上（不挂在本背景层）：
+              // bindMenu 按被绑定组件定位，挂全屏背景层会让菜单相对整张 Scene 放，
+              // 不再相对手指长按的位置放（Issue #813 复审）。
               if (hitResult === null) {
+                this.createMenuAnchor = { x: point.x, y: point.y }
                 this.createMenuCanvasPosition = { x: canvasPoint.x, y: canvasPoint.y }
                 this.showCreateMenu = true
               }
@@ -1275,7 +1330,6 @@ export struct StarMapScene {
         )
       )
       .hitTestBehavior(HitTestMode.Default)
-      .bindMenu(this.showCreateMenu, this.CreateMenuContent)
 
       // 1. Canvas：绘制当前层的边（只负责画，不参与触摸测试）
       Canvas(this.canvasCtx)
@@ -1311,10 +1365,35 @@ export struct StarMapScene {
           })
       }
 
-      // 菜单和对话框都不在这里：
-      // 节点菜单 / Embed 菜单挂在各自的组件上（程序化 bindMenu），
-      // 空白新建菜单挂在上面的背景命中层上，新建对话框走 openCustomDialog 的窗口层级。
-      // 自绘弹层放回这个 Stack 就会被圆形 Embed 的 clip(true) 裁掉（Issue #813）。
+      // 5. 菜单锚点：1vp×1vp 透明锚点，hitTestBehavior(None) 保证它自己不吃事件，
+      // 只用来给 bindMenu 提供"贴着手指弹出"的定位基准。
+      // 菜单浮层由系统绘制并自动避让屏幕边缘，锚点本身在圆形 Embed 内也不会被 clip(true) 裁掉。
+      // onDisappear 必须回写显示标记：程序化 bindMenu 的 isShow 不会自动同步，
+      // 不回写的话第二次长按同一对象会因状态没变化而弹不出来（Issue #813 复审）。
+      Row() {}
+        .width(1)
+        .height(1)
+        .position({ x: this.nodeMenuAnchor.x, y: this.nodeMenuAnchor.y })
+        .hitTestBehavior(HitTestMode.None)
+        .bindMenu(this.showNodeMenu, this.NodeMenuContent, {
+          onDisappear: () => {
+            this.onNodeMenuDisappear()
+          }
+        })
+
+      Row() {}
+        .width(1)
+        .height(1)
+        .position({ x: this.createMenuAnchor.x, y: this.createMenuAnchor.y })
+        .hitTestBehavior(HitTestMode.None)
+        .bindMenu(this.showCreateMenu, this.CreateMenuContent, {
+          onDisappear: () => {
+            this.onCreateMenuDisappear()
+          }
+        })
+
+      // 对话框不走这里：新建对话框挂在窗口层级（openCustomDialog）。
+      // 菜单和对话框本体都不放进这个 Stack，自绘弹层会被圆形 Embed 的 clip(true) 裁掉（Issue #813）。
     }
     .width('100%')
     .height('100%')
