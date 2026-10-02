@@ -263,9 +263,13 @@ pub(crate) fn build_insert_reveal_slices(
             // （编辑前 caret 向新 caret 展开），不需要单独的吞字边界轨迹。
             slice.ingest_boundary_driver = IngestBoundaryDriver::CaretPosition;
             // Issue #815 评论 5946701331 问题2: 写 new snapshot 内的同侧行序。
+            // Issue #815 评论 5947728704 问题1: 行几何也必须来自同一侧 snapshot，
+            // 跨行相位拿本帧真实 caret.y 与它比大小，不用 raw progress 推位置。
             slice.ingest_line_ord = Some(line_ord);
             slice.ingest_from_line_ord = ingest_from_line_ord;
             slice.ingest_to_line_ord = ingest_to_line_ord;
+            slice.ingest_line_top = Some(new_line.visual_line_top);
+            slice.ingest_line_bottom = Some(new_line.visual_line_bottom);
             // Issue #727 评论 5755858583 问题2: 直接在 slice 上写 canonical 独占区域，
             // 不再生成 StaticLinePatch。AnimatedSlice 成为唯一事实源。
             slice.static_hidden_document_rects = vec![new_doc];
@@ -389,9 +393,13 @@ pub(crate) fn build_delete_conceal_slices(
                 slice.ingest_boundary_from_x =
                     deleted_right_by_line.get(line_ord).copied().flatten();
                 // Issue #815 评论 5946701331 问题2: 写 old snapshot 内的同侧行序。
+                // Issue #815 评论 5947728704 问题1: 行几何同样取 old snapshot，
+                // 与行序、行身份同源。
                 slice.ingest_line_ord = Some(line_ord);
                 slice.ingest_from_line_ord = ingest_from_line_ord;
                 slice.ingest_to_line_ord = ingest_to_line_ord;
+                slice.ingest_line_top = Some(old_line.visual_line_top);
+                slice.ingest_line_bottom = Some(old_line.visual_line_bottom);
                 slices.push(slice);
             }
         }
@@ -804,6 +812,9 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     slice.ingest_line_ord = old_line_ord;
                     slice.ingest_from_line_ord = old_ingest_from_line_ord;
                     slice.ingest_to_line_ord = old_ingest_to_line_ord;
+                    // Issue #815 评论 5947728704 问题1: Conceal 的行几何取 old 侧。
+                    slice.ingest_line_top = Some(old_line.visual_line_top);
+                    slice.ingest_line_bottom = Some(old_line.visual_line_bottom);
                     if ingest_boundary_driver == IngestBoundaryDriver::DeleteForwardBoundary {
                         // Issue #815 评论 5947443780 问题1: forward 方向的起点必须是
                         // old 快照**本行**被移除区的右端，不能留 None（那会退化成
@@ -911,6 +922,9 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     reveal_slice.ingest_line_ord = new_line_ord;
                     reveal_slice.ingest_from_line_ord = new_ingest_from_line_ord;
                     reveal_slice.ingest_to_line_ord = new_ingest_to_line_ord;
+                    // Issue #815 评论 5947728704 问题1: Reveal 的行几何取 new 侧。
+                    reveal_slice.ingest_line_top = Some(new_line.visual_line_top);
+                    reveal_slice.ingest_line_bottom = Some(new_line.visual_line_bottom);
                     slices.push(reveal_slice);
                 }
             } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {

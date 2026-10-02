@@ -237,9 +237,9 @@ fn issue815_modify5_ingest_clip_is_driven_by_current_caret_frame() {
          Backspace（to < from）方向相反，不能只按 slice_line > caret_line 判。"
     );
     assert!(
-        phase_window.contains("to_ord as i64 - from_ord as i64"),
-        "Issue #815 评论 5946701331 问题2: Backspace 跨行时 to_ord < from_ord，\
-         行序差必须用有符号类型，usize 相减会下溢 panic。"
+        phase_window.contains("let forward = to_ord > from_ord"),
+        "Issue #815 评论 5946701331 问题2: 跨行相位必须按同一侧行序的符号判定方向——\
+         Backspace（to < from）方向与 Insert 相反。"
     );
     for phase in ["Passed", "OnCurrentLine", "NotReached"] {
         assert!(
@@ -525,6 +525,135 @@ fn issue815_review5_stale_two_independent_timeline_wording_is_gone() {
         !spec_src.contains("三种语义彻底分开"),
         "Issue #815 评论 5947443780 问题3: edit_spec.rs 的 coordinated_animation_enabled \
          字段文档还写着「三种语义彻底分开」，是 #815 之前的定义，必须删掉。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5947728704 问题1：跨行相位必须吃本帧真实 caret.y，不能再吃 raw progress
+// =========================================================================
+
+/// 复核评论 5947728704 问题1。
+///
+/// `sampled_rect_at_progress()` 走 `ease_out_cubic`，屏幕 `caret.x/y` 已经是
+/// easing 后的几何。若跨行相位再用线性 `from_ord + span * progress` 推算边界行，
+/// 同一个 `SampledCaretFrame` 里就会藏着两条不同的运动。
+#[test]
+fn issue815_review6_cross_line_phase_consumes_real_caret_y() {
+    let src = read_src("src/sujian_editor_item/animated_slice.rs");
+
+    assert!(
+        src.contains("pub ingest_line_top: Option<f64>")
+            && src.contains("pub ingest_line_bottom: Option<f64>"),
+        "Issue #815 评论 5947728704 问题1: AnimatedSlice 必须带本 slice 自己那一侧 \
+         canonical 的行 top/bottom，跨行相位要拿它和本帧 caret.y 比。"
+    );
+
+    let phase_window = function_window(&src, "fn ingest_line_phase", 2600);
+    assert!(
+        phase_window.contains("fn ingest_line_phase(&self, caret_y: f64)"),
+        "Issue #815 评论 5947728704 问题1: 跨行相位入口必须改成吃本帧真实 caret.y。"
+    );
+    for stale in ["boundary_ord", "span as f64", "let delta"] {
+        assert!(
+            !phase_window.contains(stale),
+            "Issue #815 评论 5947728704 问题1: 跨行相位不得再用 `{}` 从 raw progress \
+             线性推边界行——那会让同一份 SampledCaretFrame 里藏着两条运动。",
+            stale
+        );
+    }
+    assert!(
+        phase_window.contains("ingest_line_top") && phase_window.contains("ingest_line_bottom"),
+        "Issue #815 评论 5947728704 问题1: 相位判定必须真的用上本侧行几何。"
+    );
+
+    // 0.5 行序容差会让相邻两行在同一帧同时成为当前行，等于拿上一行的 caret.x 裁下一行。
+    assert!(
+        !phase_window.contains("0.5"),
+        "Issue #815 评论 5947728704 问题1: 不得再用 0.5 行序容差判定当前行——\
+         from=0/to=1 时 progress==0.5 会让两行同时 OnCurrentLine。"
+    );
+}
+
+/// 复核评论 5947728704 问题1：三个参数必须来自同一份 `SampledCaretFrame`。
+#[test]
+fn issue815_review6_ingest_frame_uses_one_sample_for_x_y_progress() {
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    assert!(
+        src.contains("compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)"),
+        "Issue #815 评论 5947728704 问题1: render plan 必须把同一份 SampledCaretFrame 的 \
+         x（横向边界）/ y（当前行）/ progress（只给 DeleteForwardBoundary 用）一起传下去。"
+    );
+
+    let ingest_src = read_src("src/sujian_editor_item/animated_slice.rs");
+    let ingest_window = function_window(
+        &ingest_src,
+        "pub(crate) fn compute_frame_by_caret_ingest",
+        3400,
+    );
+    for param in ["caret_x: f64", "caret_y: f64", "caret_progress: f64"] {
+        assert!(
+            ingest_window.contains(param),
+            "Issue #815 评论 5947728704 问题1: 入口签名必须同时收 x / y / progress，缺少 {}。",
+            param
+        );
+    }
+    assert!(
+        ingest_window.contains("self.ingest_line_phase(caret_y)"),
+        "Issue #815 评论 5947728704 问题1: 相位必须由 caret.y 决定，progress 不得再推导行序。"
+    );
+}
+
+/// 复核评论 5947728704 问题1：三个 builder 都要写本侧行几何。
+#[test]
+fn issue815_review6_all_three_builders_write_same_side_line_geometry() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
+
+    let insert_window = function_window(&src, "pub(crate) fn build_insert_reveal_slices", 9200);
+    assert!(
+        insert_window.contains("ingest_line_top = Some(new_line.visual_line_top)")
+            && insert_window.contains("ingest_line_bottom = Some(new_line.visual_line_bottom)"),
+        "Issue #815 评论 5947728704 问题1: InsertReveal 必须写 new snapshot 侧的行几何。"
+    );
+
+    let delete_window = function_window(&src, "pub(crate) fn build_delete_conceal_slices", 7800);
+    assert!(
+        delete_window.contains("ingest_line_top = Some(old_line.visual_line_top)")
+            && delete_window.contains("ingest_line_bottom = Some(old_line.visual_line_bottom)"),
+        "Issue #815 评论 5947728704 问题1: DeleteConceal 必须写 old snapshot 侧的行几何。"
+    );
+
+    let crossfade_window = function_window(
+        &src,
+        "pub(crate) fn build_composition_commit_crossfade_slices",
+        13000,
+    );
+    assert_eq!(
+        crossfade_window.matches("ingest_line_top = Some(").count(),
+        2,
+        "Issue #815 评论 5947728704 问题1: IME commit 交叉淡化必须两侧都写行几何——\
+         Reveal 用 new、Conceal 用 old。"
+    );
+}
+
+/// 复核评论 5947728704 问题2：`sampled_rect_at_progress()` 的注释仍是 #808 旧语义。
+#[test]
+fn issue815_review6_sampled_rect_doc_no_longer_claims_independent_text_easing() {
+    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
+    for stale in [
+        "文字 reveal/conceal 用文字自己的 easing",
+        "不保留\"文字效果跟着光标边界\"",
+    ] {
+        assert!(
+            !src.contains(stale),
+            "Issue #815 评论 5947728704 问题2: sampled_rect_at_progress 的文档仍在说 {}, \
+             这与 #815 的「文字与光标消费同一份采样」直接冲突。",
+            stale
+        );
+    }
+    assert!(
+        src.contains("协同 InsertReveal/DeleteConceal") && src.contains("sample_caret_track_frame"),
+        "Issue #815 评论 5947728704 问题2: 必须写明协同吞吐字与光标消费同一份 \
+         sample_caret_track_frame 采样，只有非协同 Timed 文字才有自己的 easing。"
     );
 }
 

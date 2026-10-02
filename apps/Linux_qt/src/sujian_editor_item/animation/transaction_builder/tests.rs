@@ -3775,23 +3775,32 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
     }
     assert!(!line2.is_empty(), "候选跨行时第 2 行也必须有吐字切片");
 
-    // 边界行序 = 0 + (1 - 0) * progress。progress 0.75 ⇒ 边界已越过 line1。
-    let l1_mid = line1[0].slice.compute_frame_by_caret_ingest(0.0, 0.75);
+    // Issue #815 评论 5947728704 问题1: 相位吃本帧真实 caret.y，不再吃 raw progress。
+    // caret_y = 25 ⇒ 已越过新 line 1（y ∈ [0,20)），还在新 line 2（y ∈ [20,40)）上。
+    let l1_mid = line1[0]
+        .slice
+        .compute_frame_by_caret_ingest(0.0, 25.0, 0.75);
     assert!(
         l1_mid.w > 0.0,
         "边界越过新 line 1 后它必须已完整吐出，实际 w={}",
         l1_mid.w
     );
     // 同一帧下 line2 还在被 caret 扫过：给一个刚到行首的 caret.x，它应几乎为 0。
-    let l2_mid = line2[0].slice.compute_frame_by_caret_ingest(0.0, 0.75);
+    let l2_mid = line2[0]
+        .slice
+        .compute_frame_by_caret_ingest(0.0, 25.0, 0.75);
     assert!(
         l2_mid.w.abs() < 0.5,
         "caret 还在新 line 2 行首时，line 2 不该提前吐出，实际 w={}",
         l2_mid.w
     );
     // 终帧：caret 走完，两行都完整。
-    let l1_end = line1[0].slice.compute_frame_by_caret_ingest(30.0, 1.0);
-    let l2_end = line2[0].slice.compute_frame_by_caret_ingest(30.0, 1.0);
+    let l1_end = line1[0]
+        .slice
+        .compute_frame_by_caret_ingest(30.0, 40.0, 1.0);
+    let l2_end = line2[0]
+        .slice
+        .compute_frame_by_caret_ingest(30.0, 40.0, 1.0);
     assert!(
         l1_end.w > 0.0 && l2_end.w > 0.0,
         "终帧两行都必须完整：line1 w={} line2 w={}",
@@ -3840,7 +3849,7 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
     );
 
     // 单行吞字（from == to）由本帧 caret.x 直接驱动，方向无关。
-    let at_end = slice.compute_frame_by_caret_ingest(20.0, 1.0);
+    let at_end = slice.compute_frame_by_caret_ingest(20.0, 10.0, 1.0);
     assert!(
         at_end.w.abs() < 0.5,
         "caret 到达最终位置后旧 preedit 必须全隐，实际 w={}",
@@ -3893,14 +3902,14 @@ fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
              右端作为收拢起点，不能留 None（否则会退回 line_mask_right 猜测）"
         );
         // 首帧必须完整显示旧字，不能是 0 宽（静止 caret 的经典 bug）。
-        let first = unit.slice.compute_frame_by_caret_ingest(0.0, 0.0);
+        let first = unit.slice.compute_frame_by_caret_ingest(0.0, 10.0, 0.0);
         assert!(
             first.w > 0.0,
             "前删首帧必须显示完整旧字，实际 w={}",
             first.w
         );
         // 末帧必须完全吞掉。
-        let last = unit.slice.compute_frame_by_caret_ingest(0.0, 1.0);
+        let last = unit.slice.compute_frame_by_caret_ingest(0.0, 10.0, 1.0);
         assert!(
             last.w.abs() < 0.5,
             "前删末帧必须完全吞掉旧字，实际 w={}",

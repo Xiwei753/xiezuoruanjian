@@ -588,6 +588,8 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         ingest_line_ord: a.ingest_line_ord,
         ingest_from_line_ord: a.ingest_from_line_ord,
         ingest_to_line_ord: a.ingest_to_line_ord,
+        ingest_line_top: a.ingest_line_top,
+        ingest_line_bottom: a.ingest_line_bottom,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
         static_hidden_document_rects: a

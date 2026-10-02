@@ -83,7 +83,7 @@ fn forward_delete_with_static_caret_still_swallows_per_frame() {
     // caret 一动不动，只有 track progress 推进。
     let widths: Vec<f64> = [0.0, 0.25, 0.5, 0.75, 1.0]
         .iter()
-        .map(|p| slice.compute_frame_by_caret_ingest(100.0, *p).w)
+        .map(|p| slice.compute_frame_by_caret_ingest(100.0, 10.0, *p).w)
         .collect();
 
     assert_eq!(
@@ -135,7 +135,7 @@ fn forward_delete_would_vanish_under_caret_position_driver() {
         IngestBoundaryDriver::CaretPosition
     );
     assert_eq!(
-        slice.compute_frame_by_caret_ingest(100.0, 0.0).w,
+        slice.compute_frame_by_caret_ingest(100.0, 10.0, 0.0).w,
         0.0,
         "反例前提：CaretPosition + 静止 caret 会让首帧宽度为 0"
     );
@@ -149,48 +149,17 @@ fn forward_delete_would_vanish_under_caret_position_driver() {
 ///
 /// 这里在 **old snapshot 同一侧** 建立行序：起点行 ord=1（old caret 行），
 /// 终点行 ord=0（deleted_range 所在行），本 slice 行 ord=1。
-#[test]
-fn backspace_across_lines_2_to_1_fully_hides_old_line_2() {
-    let doc = old_text_rect(100.0, 20.0, 40.0);
-    let mut slice = AnimatedSlice::delete_conceal(
-        key(),
-        snapshot_id(),
-        doc.clone(),
-        doc,
-        /* 最终 caret 落在下一行，x = 被删区间左端 */ 100.0,
-        0.0,
-        0,
-        1,
-        None,
-        /* conceal_to_left_edge = true → Backspace */ true,
-        Some(1),
-    );
-    slice.ingest_from_line_ord = Some(1); // 起点：old caret 行
-    slice.ingest_to_line_ord = Some(0); // 终点：被删区间所在行
-    slice.ingest_line_ord = Some(1); // 本 slice 在 old line ord 1
-
-    // progress 0：边界还在 old line 1（编辑前 caret 在旧字右端 140），旧字完整可见。
-    assert_eq!(
-        slice.compute_frame_by_caret_ingest(140.0, 0.0).w,
-        40.0,
-        "跨行吞字起点必须完整显示旧 line 2 的字"
-    );
-    // progress 1：边界已落到 ord 0，旧 line 2 已被 caret 走过，必须全隐。
-    assert_eq!(
-        slice.compute_frame_by_caret_ingest(100.0, 1.0).w,
-        0.0,
-        "Backspace 跨行 2→1 后，旧 line 2 必须全隐（方向感知，不能反）"
-    );
-}
 
 // ── 行为 (c): Insert 跨行，new line 1 → new line 2 ──
 
-/// Issue #815 评论 5946701331 问题2：Insert 跨软换行时方向相反（向后走）。
-/// 在 **new snapshot 同一侧** 建立行序：起点行 ord=0（inserted_range.start 所在行），
-/// 终点行 ord=1（new caret 行）。新 line 1 必须先吐完，新 line 2 最后吐。
+/// Issue #815 评论 5947728704 问题1：Insert 跨软换行（向下走）时，
+/// 「当前在哪一行」必须来自**本帧真实 caret.y**，不能再用 raw progress 推。
+///
+/// 两行几何：line ord 0 = y ∈ [0, 20)，line ord 1 = y ∈ [20, 40)。
+/// 吞吐路径 0 → 1。
 #[test]
-fn insert_across_lines_1_to_2_reveals_in_order() {
-    let make_insert = |y: f64| {
+fn insert_across_lines_uses_current_caret_y_for_phase() {
+    let make_insert = |line_ord: usize, y: f64| {
         let doc = old_text_rect(100.0, y, 40.0);
         let mut slice = AnimatedSlice::insert_reveal(
             key(),
@@ -206,33 +175,123 @@ fn insert_across_lines_1_to_2_reveals_in_order() {
         );
         slice.ingest_from_line_ord = Some(0); // 起点：inserted_range 所在新行
         slice.ingest_to_line_ord = Some(1); // 终点：new caret 行
+        slice.ingest_line_ord = Some(line_ord);
+        // Issue #815 评论 5947728704 问题1: 行几何来自本侧 snapshot。
+        slice.ingest_line_top = Some(y);
+        slice.ingest_line_bottom = Some(y + 20.0);
         slice
     };
-    let mut line_1 = make_insert(0.0);
-    let mut line_2 = make_insert(20.0);
-    line_2.ingest_line_ord = Some(1);
-    line_1.ingest_line_ord = Some(0);
+    let line_1 = make_insert(0, 0.0);
+    let line_2 = make_insert(1, 20.0);
 
-    // progress 0：两行都还没吐出来。
-    assert_eq!(line_1.compute_frame_by_caret_ingest(100.0, 0.0).w, 0.0);
-    assert_eq!(line_2.compute_frame_by_caret_ingest(100.0, 0.0).w, 0.0);
-
-    // progress 0.75：边界已越过新 line 1、还在新 line 2 上。
-    // → line 1 已走过 → 完整吐出；line 2 正在被 caret 扫过 → 按 caret.x 裁。
+    // caret 仍在 line 1 内（y = 10）：line 1 正在被扫过，line 2 还没走到。
     assert_eq!(
-        line_1.compute_frame_by_caret_ingest(100.0, 0.75).w,
-        40.0,
-        "新 line 1 必须先吐完"
+        line_1.compute_frame_by_caret_ingest(120.0, 10.0, 0.0).w,
+        20.0
     );
     assert_eq!(
-        line_2.compute_frame_by_caret_ingest(100.0, 0.75).w,
+        line_2.compute_frame_by_caret_ingest(120.0, 10.0, 0.0).w,
         0.0,
-        "新 line 2 此时还没被 caret 扫到，不该提前吐出"
+        "caret 还没进入新 line 2，不能提前吐出"
     );
 
-    // progress 1：终点行是 new line 2，caret 已到 140，两行都完整。
-    assert_eq!(line_1.compute_frame_by_caret_ingest(140.0, 1.0).w, 40.0);
-    assert_eq!(line_2.compute_frame_by_caret_ingest(140.0, 1.0).w, 40.0);
+    // caret 刚到新 line 2 上沿（y = 20）：line 1 完整；line 2 判定为"当前行"
+    // （向下走时 `caret_y < line_top` 才是 NotReached，等于上沿就已经进来了）。
+    assert_eq!(
+        line_1.compute_frame_by_caret_ingest(120.0, 20.0, 0.0).w,
+        40.0,
+        "caret 越过本行底边后新 line 1 必须完整"
+    );
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 20.0, 0.0).w,
+        20.0,
+        "caret 到新 line 2 上沿时该行成为当前行，按 caret.x 裁切"
+    );
+    // caret 还没到新 line 2（y = 19）：line 2 仍是 NotReached，不提前吐出。
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 19.0, 0.0).w,
+        0.0,
+        "caret 未进入新 line 2，不能提前吐出"
+    );
+
+    // caret 进入 line 2（y = 30）：只有 line 2 在被扫过。
+    assert_eq!(
+        line_1.compute_frame_by_caret_ingest(120.0, 30.0, 0.0).w,
+        40.0
+    );
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 30.0, 0.0).w,
+        20.0
+    );
+}
+
+/// Issue #815 评论 5947728704 问题1 反向用例：Backspace 跨行（向上走）。
+/// 方向由同侧行序符号给出，判定仍用真实 caret.y。
+#[test]
+fn backspace_across_lines_uses_current_caret_y_for_phase() {
+    let make_conceal = |line_ord: usize, y: f64| {
+        let doc = old_text_rect(100.0, y, 40.0);
+        let mut slice = AnimatedSlice::delete_conceal(
+            key(),
+            snapshot_id(),
+            doc.clone(),
+            doc,
+            /* 最终 caret 在上一行 */ 100.0,
+            0.0,
+            0,
+            1,
+            None,
+            /* conceal_to_left_edge = true → Backspace */ true,
+            Some(line_ord),
+        );
+        slice.ingest_from_line_ord = Some(1); // 起点：old caret 行
+        slice.ingest_to_line_ord = Some(0); // 终点：被删区间所在行
+        slice.ingest_line_ord = Some(line_ord);
+        slice.ingest_line_top = Some(y);
+        slice.ingest_line_bottom = Some(y + 20.0);
+        slice
+    };
+    let line_1 = make_conceal(0, 0.0);
+    let line_2 = make_conceal(1, 20.0);
+
+    // caret 仍在 line 2 内（y = 30）：line 1 NotReached（保留），line 2 正在被吞。
+    assert_eq!(
+        line_1.compute_frame_by_caret_ingest(120.0, 30.0, 0.0).w,
+        40.0,
+        "caret 还没往上走到新 line 1，旧 line 1 必须保持完整"
+    );
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 30.0, 0.0).w,
+        20.0
+    );
+
+    // caret 越过 line 2 上沿（y = 19 < line_top = 20）：line 2 已走过 → 全隐。
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 19.0, 0.0).w,
+        0.0,
+        "caret 已走过旧 line 2，必须全隐"
+    );
+    // caret 正好在 line 2 上沿（y = 20）：向上走时 `>= line_bottom` 才是 NotReached，
+    // 等于上沿时 line 2 仍是当前行。
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 20.0, 0.0).w,
+        20.0
+    );
+    // caret 进入 line 1（y = 19）：line 1 正在被吞。
+    assert_eq!(
+        line_1.compute_frame_by_caret_ingest(120.0, 19.0, 0.0).w,
+        20.0
+    );
+
+    // caret 进入 line 1（y = 10）：line 2 全隐，line 1 继续被吞。
+    assert_eq!(
+        line_2.compute_frame_by_caret_ingest(120.0, 10.0, 0.0).w,
+        0.0
+    );
+    assert_eq!(
+        line_1.compute_frame_by_caret_ingest(120.0, 10.0, 0.0).w,
+        20.0
+    );
 }
 
 /// 补充：Insert 单行时边界就是本帧 caret.x（InsertReveal 始终 CaretPosition）。
@@ -251,8 +310,14 @@ fn insert_single_line_boundary_is_current_caret_x() {
         None,
         None,
     );
-    assert_eq!(slice.compute_frame_by_caret_ingest(130.0, 0.0).w, 30.0);
-    assert_eq!(slice.compute_frame_by_caret_ingest(160.0, 0.0).w, 60.0);
+    assert_eq!(
+        slice.compute_frame_by_caret_ingest(130.0, 10.0, 0.0).w,
+        30.0
+    );
+    assert_eq!(
+        slice.compute_frame_by_caret_ingest(160.0, 10.0, 0.0).w,
+        60.0
+    );
 }
 
 /// 单行 Backspace：真实 caret track 往左走，直接驱动吞字边界。
@@ -261,9 +326,286 @@ fn backspace_single_line_boundary_is_current_caret_x() {
     // 旧字 [100, 160)，编辑前 caret 在 160（右侧），删除后 caret 落到 100。
     let slice = single_line_conceal(100.0, 60.0);
     // caret 还没动（仍在 160）：完整可见。
-    assert_eq!(slice.compute_frame_by_caret_ingest(160.0, 0.0).w, 60.0);
+    assert_eq!(
+        slice.compute_frame_by_caret_ingest(160.0, 10.0, 0.0).w,
+        60.0
+    );
     // caret 走到中点 130：吞掉从右往左的一半。
-    assert_eq!(slice.compute_frame_by_caret_ingest(130.0, 0.5).w, 30.0);
+    assert_eq!(
+        slice.compute_frame_by_caret_ingest(130.0, 10.0, 0.5).w,
+        30.0
+    );
     // caret 到达终点 100：全吞。
-    assert_eq!(slice.compute_frame_by_caret_ingest(100.0, 1.0).w, 0.0);
+    assert_eq!(slice.compute_frame_by_caret_ingest(100.0, 10.0, 1.0).w, 0.0);
+}
+
+// ── Issue #815 评论 5947728704 问题1/3：真实 cursor track 驱动的跨行相位 ──
+
+/// 跨行吞吐必须和屏幕上的 caret 用**同一份采样**。
+///
+/// 这一组测试不再手工填 `caret_progress`：它建一条真实的 `PreparedCursorVisualTrack`，
+/// 用 `sample_caret_track_frame` 在同一个 `frame_now` 取出 `caret.x` / `caret.y` /
+/// `progress`，然后把这一份采样同时喂给上下两行的切片。
+///
+/// 维护者点名的旧 bug 正是「两行在 progress==0.5 时同时被判成 OnCurrentLine，
+/// 于是同一帧里上一行的 caret.x 拿去裁了下一行」。所以断言是：
+/// 任意一帧最多只有**一行**是 OnCurrentLine。
+mod real_track_phase {
+    use super::super::IngestLinePhase;
+    use super::*;
+    use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
+    use crate::sujian_editor_item::animation::transaction::types::PreparedCursorVisualTrack;
+    use crate::sujian_editor_item::edit_motion::CursorRect;
+    use std::time::{Duration, Instant};
+
+    /// 本帧该切片是否落在「caret 当前所在的那一行」。
+    ///
+    /// 直接调 `AnimatedSlice::ingest_line_phase`——测试与
+    /// `compute_frame_by_caret_ingest` 走的是同一条判定。
+    fn is_current_line(slice: &AnimatedSlice, caret_y: f64) -> bool {
+        matches!(
+            slice.ingest_line_phase(caret_y),
+            IngestLinePhase::OnCurrentLine
+        )
+    }
+
+    const DURATION_MS: u64 = 100;
+
+    fn caret_rect(x: f64, top: f64) -> CursorRect {
+        CursorRect {
+            x,
+            top,
+            bottom: top + 20.0,
+            baseline_y: top + 16.0,
+        }
+    }
+
+    /// 一条从 `from_row` 行走到 `to_row` 行的真实 caret track。
+    ///
+    /// 行的几何按 20px 行高排布：第 n 行 y ∈ [n*20, n*20+20)。
+    fn track_from_row_to_row(
+        from_row: usize,
+        to_row: usize,
+        started_at: Instant,
+    ) -> PreparedCursorVisualTrack {
+        let top = |row: usize| row as f64 * 20.0;
+        PreparedCursorVisualTrack {
+            from: caret_rect(100.0, top(from_row)),
+            to: caret_rect(100.0, top(to_row)),
+            from_visual_line_id: Some(from_row),
+            to_visual_line_id: Some(to_row),
+            from_line_top: top(from_row),
+            from_line_bottom: top(from_row) + 20.0,
+            to_line_top: top(to_row),
+            to_line_bottom: top(to_row) + 20.0,
+            started_at: Some(started_at),
+            duration_ms: DURATION_MS,
+            pause_start: None,
+        }
+    }
+
+    /// 行 `row` 上的一行字（InsertReveal：吐字起点是编辑前 caret x = 100）。
+    fn reveal_on_row(row: usize, from_ord: usize, to_ord: usize) -> AnimatedSlice {
+        let top = row as f64 * 20.0;
+        let doc = SourceRect {
+            x: 100.0,
+            y: top,
+            w: 40.0,
+            h: 20.0,
+        };
+        let mut slice = AnimatedSlice::insert_reveal(
+            key(),
+            LineSnapshotId::new(1, 0, row as u32),
+            doc.clone(),
+            doc,
+            100.0,
+            top,
+            0,
+            1,
+            None,
+            None,
+        );
+        slice.ingest_line_ord = Some(row);
+        slice.ingest_from_line_ord = Some(from_ord);
+        slice.ingest_to_line_ord = Some(to_ord);
+        slice.ingest_line_top = Some(top);
+        slice.ingest_line_bottom = Some(top + 20.0);
+        slice
+    }
+
+    /// 行 `row` 上的旧字（DeleteConceal：吞字终点是删除后的最终 caret x = 100）。
+    fn conceal_on_row(row: usize, from_ord: usize, to_ord: usize) -> AnimatedSlice {
+        let top = row as f64 * 20.0;
+        let doc = SourceRect {
+            x: 100.0,
+            y: top,
+            w: 40.0,
+            h: 20.0,
+        };
+        let mut slice = AnimatedSlice::delete_conceal(
+            key(),
+            LineSnapshotId::new(1, 0, row as u32),
+            doc.clone(),
+            doc,
+            100.0,
+            top,
+            0,
+            1,
+            None,
+            true,
+            None,
+        );
+        slice.ingest_line_ord = Some(row);
+        slice.ingest_from_line_ord = Some(from_ord);
+        slice.ingest_to_line_ord = Some(to_ord);
+        slice.ingest_line_top = Some(top);
+        slice.ingest_line_bottom = Some(top + 20.0);
+        slice
+    }
+
+    /// 把 `progress` 换算成该帧的 `frame_now`（track 从 started_at 起跑）。
+    fn frame_now(started_at: Instant, progress: f64) -> Instant {
+        started_at + Duration::from_millis((DURATION_MS as f64 * progress) as u64)
+    }
+
+    /// Insert 向下跨行（0 → 1）：任意一帧最多一行是当前行。
+    #[test]
+    fn insert_downward_at_most_one_row_is_current_in_any_frame() {
+        let started = Instant::now();
+        let track = track_from_row_to_row(0, 1, started);
+        let row_0 = reveal_on_row(0, 0, 1);
+        let row_1 = reveal_on_row(1, 0, 1);
+
+        for step in 0..=20u64 {
+            let progress = step as f64 / 20.0;
+            let now = frame_now(started, progress);
+            // 这一份采样同时喂给光标层和两行文字层。
+            let caret = sample_caret_track_frame(&track, now);
+            let current_rows = [
+                is_current_line(&row_0, caret.y),
+                is_current_line(&row_1, caret.y),
+            ]
+            .iter()
+            .filter(|c| **c)
+            .count();
+            assert!(
+                current_rows <= 1,
+                "progress={} caret.y={} 时有 {} 行同时是当前行，\\
+                 这就是「拿上一行的 caret.x 去裁下一行」",
+                progress,
+                caret.y,
+                current_rows
+            );
+        }
+    }
+
+    /// Backspace 向上跨行（1 → 0）：同样任意一帧最多一行是当前行。
+    #[test]
+    fn backspace_upward_at_most_one_row_is_current_in_any_frame() {
+        let started = Instant::now();
+        let track = track_from_row_to_row(1, 0, started);
+        let row_0 = conceal_on_row(0, 1, 0);
+        let row_1 = conceal_on_row(1, 1, 0);
+
+        for step in 0..=20u64 {
+            let progress = step as f64 / 20.0;
+            let now = frame_now(started, progress);
+            let caret = sample_caret_track_frame(&track, now);
+            let current_rows = [
+                is_current_line(&row_0, caret.y),
+                is_current_line(&row_1, caret.y),
+            ]
+            .iter()
+            .filter(|c| **c)
+            .count();
+            assert!(
+                current_rows <= 1,
+                "progress={} caret.y={} 时有 {} 行同时是当前行（向上跨行），\\
+                 这就是「拿上一行的 caret.x 去裁下一行」",
+                progress,
+                caret.y,
+                current_rows
+            );
+        }
+    }
+
+    /// Insert 向下跨行：下一行不能提前吐字，上一行不能提前吐完。
+    ///
+    /// 判定标准不是宽度而是相位：只要 caret 还没进下一行（`caret.y < row1.top`），
+    /// 下一行必须是 NotReached（完全不画）；只要 caret 已经越过上一行下沿
+    /// （`caret.y >= row0.bottom`），上一行必须已经 Passed（完整显示）。
+    #[test]
+    fn insert_downward_next_row_cannot_reveal_early() {
+        let started = Instant::now();
+        let track = track_from_row_to_row(0, 1, started);
+        let row_0 = reveal_on_row(0, 0, 1);
+        let row_1 = reveal_on_row(1, 0, 1);
+
+        for step in 0..=20u64 {
+            let progress = step as f64 / 20.0;
+            let caret = sample_caret_track_frame(&track, frame_now(started, progress));
+            if caret.y < 20.0 {
+                assert!(
+                    !is_current_line(&row_1, caret.y)
+                        && row_1
+                            .compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)
+                            .w
+                            == 0.0,
+                    "progress={} caret.y={} 还没进下一行，下一行不该吐字",
+                    progress,
+                    caret.y
+                );
+            }
+            if caret.y >= 20.0 {
+                assert_eq!(
+                    row_0
+                        .compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)
+                        .w,
+                    40.0,
+                    "progress={} caret.y={} 已越过第 0 行下沿，第 0 行必须完整显示",
+                    progress,
+                    caret.y
+                );
+            }
+        }
+    }
+
+    /// Backspace 向上跨行：上一行（已走过的那一行）不能提前吞完。
+    #[test]
+    fn backspace_upward_passed_row_completes_early_but_not_late() {
+        let started = Instant::now();
+        let track = track_from_row_to_row(1, 0, started);
+        let row_0 = conceal_on_row(0, 1, 0);
+        let row_1 = conceal_on_row(1, 1, 0);
+
+        for step in 0..=20u64 {
+            let progress = step as f64 / 20.0;
+            let caret = sample_caret_track_frame(&track, frame_now(started, progress));
+            if caret.y < 0.0 {
+                // 已经走到第 0 行上方之外 —— 第 1 行必须已被完全吞掉。
+                assert_eq!(
+                    row_1
+                        .compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)
+                        .w,
+                    0.0,
+                    "progress={} caret.y={} 已离开第 1 行，旧字必须全隐",
+                    progress,
+                    caret.y
+                );
+            }
+            if caret.y >= 20.0 {
+                // caret 还没离开第 1 行 —— 终点行第 0 行的旧字必须保持完整
+                // （未到达 ⇒ 吞字保持原样），不能提前被裁。
+                assert_eq!(
+                    row_0
+                        .compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)
+                        .w,
+                    40.0,
+                    "progress={} caret.y={} 还没走到第 0 行，第 0 行旧字必须保持完整",
+                    progress,
+                    caret.y
+                );
+            }
+        }
+    }
 }

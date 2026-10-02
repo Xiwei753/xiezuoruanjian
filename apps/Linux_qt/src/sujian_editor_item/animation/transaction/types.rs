@@ -324,9 +324,12 @@ impl PreparedCursorVisualTrack {
     }
 
     /// Issue #702: 用外部传入的 progress（来自光标 track 自己的 timeline）采样 caret rect。
-    /// Issue #808: 光标 track 用自己的 `ease_out_cubic` easing，不再共用文字的
-    /// `ease_out_quad`。文字 reveal/conceal 用文字自己的 easing；duration 不同、
-    /// 曲线也允许不同。此方法只采样光标，不保留"文字效果跟着光标边界"的旧语义。
+    /// Issue #815 评论 5947728704 问题2: 本方法给出的是**已经 easing 过的真实屏幕几何**
+    /// （`ease_out_cubic`），这正是文字跨行相位必须消费的同一个 y。
+    ///
+    /// 协同 InsertReveal/DeleteConceal 与光标共同消费 `sample_caret_track_frame` 的
+    /// 同一份采样（x / y / visual_line_id / progress / rect），文字不再拿 raw progress
+    /// 另推一套位置；只有非协同 Timed 文字才有自己的 `ease_out_quad`。
     /// `sample_caret_track_frame` 通过 `sampled_rect_at_progress(progress(now))` 调用。
     pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
         let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));

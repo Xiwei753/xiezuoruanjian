@@ -615,8 +615,11 @@ impl LinuxEditorAnimationCoordinator {
                 // glyph 循环会把 DeleteConceal 的旧字重新画成完整宽度。
                 let frame = if unit.timing.is_caret_track() {
                     caret_sample.map(|caret| {
+                        // Issue #815 评论 5947728704 问题1: 三者必须来自同一份
+                        // SampledCaretFrame——x 是当前行横向边界、y 是当前走到哪条
+                        // 视觉行、progress 只留给 DeleteForwardBoundary。
                         unit.slice
-                            .compute_frame_by_caret_ingest(caret.x, caret.progress)
+                            .compute_frame_by_caret_ingest(caret.x, caret.y, caret.progress)
                     })
                 } else {
                     let visible = unit.current_visible_fraction(sample.frame_now);

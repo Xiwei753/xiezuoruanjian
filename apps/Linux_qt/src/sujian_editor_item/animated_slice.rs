@@ -205,6 +205,13 @@ pub(crate) struct AnimatedSlice {
     ///   即新 caret 所在视觉行。
     /// - DeleteConceal（old snapshot）：`deleted_range.start` 所在视觉行。
     pub ingest_to_line_ord: Option<usize>,
+    /// Issue #815 评论 5947728704 问题1: 本 slice 所在视觉行在**本侧** canonical
+    /// 里的真实 y 范围。
+    ///
+    /// 跨行相位必须拿当前帧真实 `caret.y` 与这个范围比大小，而不是用 raw
+    /// `progress` 重新推一遍行序——那样造出的位置和屏幕上的 caret 不是同一帧几何。
+    pub ingest_line_top: Option<f64>,
+    pub ingest_line_bottom: Option<f64>,
     /// Issue #722 评论 5748596920 问题2: 该 slice 所属视觉行的 id（来自 VisualLine.id）。
     ///
     /// 用于跨软换行裁切判断：caret 和 slice 在同一视觉行时才用 caret.x 做横向裁切；
@@ -322,6 +329,8 @@ impl AnimatedSlice {
             ingest_line_ord: None,
             ingest_from_line_ord: None,
             ingest_to_line_ord: None,
+            ingest_line_top: None,
+            ingest_line_bottom: None,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -386,6 +395,8 @@ impl AnimatedSlice {
             ingest_line_ord: None,
             ingest_from_line_ord: None,
             ingest_to_line_ord: None,
+            ingest_line_top: None,
+            ingest_line_bottom: None,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -453,6 +464,8 @@ impl AnimatedSlice {
             ingest_line_ord: None,
             ingest_from_line_ord: None,
             ingest_to_line_ord: None,
+            ingest_line_top: None,
+            ingest_line_bottom: None,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -520,6 +533,8 @@ impl AnimatedSlice {
             ingest_line_ord: None,
             ingest_from_line_ord: None,
             ingest_to_line_ord: None,
+            ingest_line_top: None,
+            ingest_line_bottom: None,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -580,6 +595,8 @@ impl AnimatedSlice {
             ingest_line_ord: None,
             ingest_from_line_ord: None,
             ingest_to_line_ord: None,
+            ingest_line_top: None,
+            ingest_line_bottom: None,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -858,9 +875,15 @@ impl AnimatedSlice {
     ///
     /// 行序缺失（拿不到同侧行）时防御性地按同一行处理，只用边界 x 裁本行——
     /// 这仍然比退化成独立 0..1 进度更接近协同语义。
+    ///
+    /// Issue #815 评论 5947728704 问题1：`caret_x` 是当前行的横向吞吐边界，
+    /// `caret_y` 是当前帧真实 caret 的 y（用它判断"走到哪一条视觉行"），
+    /// `caret_progress` **只**留给 `DeleteForwardBoundary` 这种真实 caret 不动、
+    /// 必须从同一 cursor track 取推进量的特殊情况——progress 不再负责推导行序。
     pub(crate) fn compute_frame_by_caret_ingest(
         &self,
         caret_x: f64,
+        caret_y: f64,
         caret_progress: f64,
     ) -> AnimatedSliceFrame {
         // ReflowMove/ReflowCrossFade 始终是独立 Timed（见
@@ -899,7 +922,7 @@ impl AnimatedSlice {
         };
 
         // Issue #815 评论 5946701331 问题2: 同侧行序 + 方向感知的跨行相位。
-        let phase = self.ingest_line_phase(caret_progress);
+        let phase = self.ingest_line_phase(caret_y);
         let (boundary_left, boundary_right) = match phase {
             IngestLinePhase::Passed => {
                 if fully_shown {
@@ -923,23 +946,28 @@ impl AnimatedSlice {
         self.clip_ingest_frame(slice_rect, boundary_left, boundary_right)
     }
 
-    /// Issue #815 评论 5946701331 问题2: 本帧吞字/吐字边界相对本 slice 所在行的相位。
+    /// Issue #815 评论 5947728704 问题1: 本帧吞字/吐字边界相对本 slice 所在行的相位。
     ///
-    /// 三个行序（`ingest_line_ord` / `ingest_from_line_ord` / `ingest_to_line_ord`）
-    /// 都来自**同一份 canonical snapshot**（Insert 用 new、Delete 用 old），
-    /// 所以它们可以安全地互相比较，不会出现拿 old 行号和 new 行号做大小关系。
+    /// **当前在哪一条视觉行，来自本帧真实 `caret_y`**——屏幕上的 caret 是
+    /// `ease_out_cubic(progress)` 之后的几何，如果这里再用 raw `progress` 推一遍行序，
+    /// 就会造出第二套和 caret 不一致的隐藏运动（上一轮修掉的老毛病换了个地方出现）。
     ///
-    /// 本帧边界所在行序 = `from + (to - from) * progress`，然后按符号判断方向：
-    /// - `to > from`（向后走，如 Insert）：本 slice 行序 < 边界行序 = 已走过，
-    ///   > = 还没走到。
-    /// - `to < from`（向前走，如 Backspace 跨行）：符号相反。
-    /// - `to == from`（单行）或行序缺失：返回 [`IngestLinePhase::OnCurrentLine`]，
-    ///   退回按本帧边界 x 裁本行。
-    fn ingest_line_phase(&self, caret_progress: f64) -> IngestLinePhase {
-        let (Some(slice_ord), Some(from_ord), Some(to_ord)) = (
-            self.ingest_line_ord,
+    /// 同侧行序（`ingest_from_line_ord` / `ingest_to_line_ord`）只提供**方向**：
+    /// - `to_ord > from_ord`（向下走，如 Insert / 跨行前进）
+    /// - `to_ord < from_ord`（向上走，如 Backspace 跨行）
+    ///
+    /// 判定用的是本 slice 在**同一侧** canonical 里的真实行范围
+    /// （`ingest_line_top` / `ingest_line_bottom`），所以任意一帧最多只有一行是
+    /// `OnCurrentLine`——不会出现两行同时拿同一个 caret.x 裁切。
+    ///
+    /// 行序或行几何缺失、或 `from_ord == to_ord`（单行）时返回
+    /// [`IngestLinePhase::OnCurrentLine`]，退回按本帧边界 x 裁本行。
+    fn ingest_line_phase(&self, caret_y: f64) -> IngestLinePhase {
+        let (Some(from_ord), Some(to_ord), Some(line_top), Some(line_bottom)) = (
             self.ingest_from_line_ord,
             self.ingest_to_line_ord,
+            self.ingest_line_top,
+            self.ingest_line_bottom,
         ) else {
             return IngestLinePhase::OnCurrentLine;
         };
@@ -947,26 +975,17 @@ impl AnimatedSlice {
             return IngestLinePhase::OnCurrentLine;
         }
         let forward = to_ord > from_ord;
-        let progress = caret_progress.clamp(0.0, 1.0);
-        // 用浮点行序 + 0.5 容差判定"边界已经落到本行之上/之下"，
-        // 避免整数行序在边界正好落行首时抖一帧。
-        //
-        // Issue #815 评论 5946701331 问题2：Backspace 跨行时 `to_ord < from_ord`，
-        // 这里必须用有符号差值，`usize` 相减会下溢 panic。
-        let span = to_ord as i64 - from_ord as i64;
-        let boundary_ord = from_ord as f64 + span as f64 * progress;
-        let delta = boundary_ord - slice_ord as f64;
         if forward {
-            if delta > 0.5 {
+            if caret_y >= line_bottom {
                 IngestLinePhase::Passed
-            } else if delta < -0.5 {
+            } else if caret_y < line_top {
                 IngestLinePhase::NotReached
             } else {
                 IngestLinePhase::OnCurrentLine
             }
-        } else if delta < -0.5 {
+        } else if caret_y < line_top {
             IngestLinePhase::Passed
-        } else if delta > 0.5 {
+        } else if caret_y >= line_bottom {
             IngestLinePhase::NotReached
         } else {
             IngestLinePhase::OnCurrentLine
