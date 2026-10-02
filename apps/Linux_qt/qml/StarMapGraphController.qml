@@ -122,7 +122,6 @@ QtObject {
                     y: pos.y,
                     width: _embedDefaultWidth,
                     height: _embedDefaultHeight,
-                    isSelected: false,
                     hostPath: null
                 });
             } else {
@@ -134,7 +133,6 @@ QtObject {
                     y: pos.y,
                     width: 150,
                     height: 60,
-                    isSelected: false,
                     payload: gn.payload,
                     tags: gn.tags
                 });
@@ -147,7 +145,7 @@ QtObject {
         for (var j = 0; j < graphEdges.length; j++) {
             var ge = graphEdges[j];
             // from/to 现在是 StarMapTargetPathDto 路径对象，保留完整路径供 Core 统一解析。
-            newEdges.push({ id: ge.id, fromPath: ge.from, toPath: ge.to, kind: ge.kind, label: ge.label, isSelected: false });
+            newEdges.push({ id: ge.id, fromPath: ge.from, toPath: ge.to, kind: ge.kind, label: ge.label });
         }
         edgesModel = newEdges;
 
@@ -167,7 +165,6 @@ QtObject {
                 y: epos.y,
                 width: _embedDefaultWidth,
                 height: _embedDefaultHeight,
-                isSelected: false,
                 hostPath: gem.hostPath || null
             });
         }

@@ -700,6 +700,18 @@ Item {
             function onZoomLevelChanged() { edgeCanvas.requestPaint() }
         }
 
+        // Issue #814 评论 5946090360: 共享 selection 变化时 Edge Canvas 立即重绘。
+        // onPaint 里读了 selectionController.matches(pathKey,"edge",edge.id) 派生选中色，
+        // 但 Canvas 不会因 onPaint 内读取的属性自动重画；GraphController.selectEdge 现在
+        // 只改共享 selection 不改 edgesModel、不触发 graphChanged。整棵递归树共用一个
+        // selection 时，每层 Edge Canvas 都要在选中身份变化后立刻刷新。
+        Connections {
+            target: canvasArea.selectionController
+            function onScenePathKeyChanged() { edgeCanvas.requestPaint() }
+            function onKindChanged() { edgeCanvas.requestPaint() }
+            function onItemIdChanged() { edgeCanvas.requestPaint() }
+        }
+
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
