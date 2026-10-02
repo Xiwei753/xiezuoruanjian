@@ -104,13 +104,32 @@ Item {
     property real _panBeginX: 0
     property real _panBeginY: 0
 
-    // Issue #814 评论 5946366104: 父层手势所有权状态。
-    // 手势开始时通过 findEmbedContentAt(screenToWorldX(...), screenToWorldY(...))
-    // 判定起点是否落在子星图 contentViewport 内。若是，父 bgTouchDrag / canvasPinch
-    // 不修改父 panX/panY/zoomLevel，让 child Scene 独占该手势。bgTouchDrag 与
-    // canvasPinch 不会同时 active（单指 vs 双指），共用一个状态变量；在每个手势
-    // onActiveChanged 时重设、inactive 时清除。
-    property bool _gestureOwnedByChildContent: false
+    // Issue #814 评论 5946795049: press-time 手势所有权。
+    // 旧实现（5946366104）在 onActiveChanged 之后才用 findEmbedContentAt 判所有权，
+    // 且单指 drag / 双指 pinch 共用一个 ownership bool。问题：
+    //   1. DragHandler 没有 point 属性（只有 centroid），在 DragHandler 上读 point 得 undefined。
+    //   2. active===true 表示 Handler 已取得 exclusive grab，此时 return 只能让父层不动，
+    //      不能把抓取还给 child，会出现"按在子星图里手势没反应"。
+    //   3. 单指转双指时两个 Handler 切换 active，共用 bool 会互相清掉对方的所有权。
+    // 新方案：用两个 passive PointHandler（touchOwnerA/touchOwnerB）在 touch press 时
+    // 记录前两根手指各自属于哪个 child Embed（instanceId，空串=背景/非 content）。
+    // 父层 bgTouchDrag / canvasPinch 在取得 exclusive grab 之前就通过 enabled 让出，
+    // ownership 在 press 时固定，不随手势中位置变化而改判。
+    property string _touchOwnerA: ""
+    property string _touchOwnerB: ""
+
+    // Issue #814 评论 5946795049: 屏幕坐标 → 该点所属 child Embed instanceId（空串=不属于任何 child content）。
+    function childOwnerAtScreen(sx, sy) {
+        var em = findEmbedContentAt(screenToWorldX(sx), screenToWorldY(sy))
+        return em ? em.instanceId : ""
+    }
+
+    // Issue #814 评论 5946795049: pinch 归 child 当且仅当两根手指都在同一个 child Embed 内。
+    // 一根在 child、一根在外时 child 无法独占两点，父 pinch 仍工作（避免"碰到子星图就无法缩放"死区）。
+    readonly property bool _pinchBelongsToChild:
+        touchOwnerA.active && touchOwnerB.active
+        && _touchOwnerA !== ""
+        && _touchOwnerA === _touchOwnerB
 
     // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
     // 只在手势边界（press/release/begin/end/popup）调用，不进热路径。
@@ -451,6 +470,9 @@ Item {
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         target: null
+        // Issue #814 评论 5946795049: press-time ownership — 任一手指落在 child content 内时
+        // 父层 drag 不参与，由 child Scene 独占。enabled 在 exclusive grab 之前生效。
+        enabled: _touchOwnerA === "" && _touchOwnerB === ""
         property real lastTx: 0
         property real lastTy: 0
         // Issue #801 评论 5895310100: 标记当前 move 由触屏发起，
@@ -462,14 +484,6 @@ Item {
         property bool _wasTouchPan: false
         onActiveChanged: {
             if (active) {
-                // Issue #814 评论 5946366104: 判定本次拖动起点是否落在子星图 contentViewport。
-                // 若是，父层不参与，由 child Scene 独占该手势（child 自己改 panX/panY）。
-                var _gsx = bgTouchDrag.point.position.x
-                var _gsy = bgTouchDrag.point.position.y
-                _gestureOwnedByChildContent = findEmbedContentAt(screenToWorldX(_gsx), screenToWorldY(_gsy)) !== null
-                if (_gestureOwnedByChildContent) {
-                    return
-                }
                 lastTx = 0
                 lastTy = 0
                 _touchInputActive = true
@@ -490,11 +504,6 @@ Item {
                     })
                 }
             } else {
-                if (_gestureOwnedByChildContent) {
-                    // Issue #814 评论 5946366104: 子星图 contentViewport 内的手势结束，清所有权。
-                    _gestureOwnedByChildContent = false
-                    return
-                }
                 if (_wasTouchPan) {
                     // Issue #814 评论 5935346839: 触屏画布 pan 的 end 边界。
                     logInteraction("pan_end", "empty", "", {
@@ -533,8 +542,6 @@ Item {
             }
         }
         onActiveTranslationChanged: {
-            // Issue #814 评论 5946366104: 子星图 contentViewport 内的拖动归 child Scene。
-            if (_gestureOwnedByChildContent) return
             var dx = activeTranslation.x - lastTx
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
@@ -582,29 +589,18 @@ Item {
         id: canvasPinch
         acceptedDevices: PointerDevice.TouchScreen
         target: null
+        // Issue #814 评论 5946795049: 两根手指都在同一个 child Embed 内时父层 pinch 不参与。
+        // 一内一外时 child 无法独占两点，父 pinch 仍工作。
+        enabled: !_pinchBelongsToChild
         onActiveChanged: {
             if (active) {
-                // Issue #814 评论 5946366104: 判定本次双指缩放中心是否落在子星图 contentViewport。
-                var _psx = centroid.position.x
-                var _psy = centroid.position.y
-                _gestureOwnedByChildContent = findEmbedContentAt(screenToWorldX(_psx), screenToWorldY(_psy)) !== null
-                if (_gestureOwnedByChildContent) {
-                    return
-                }
                 _pinchStartZoom = zoomLevel
                 _pinchStartPanX = panX
                 _pinchStartPanY = panY
                 _touchInputActive = true
-            } else {
-                // Issue #814 评论 5946366104: 子星图 contentViewport 内的 pinch 结束，清所有权。
-                if (_gestureOwnedByChildContent) {
-                    _gestureOwnedByChildContent = false
-                }
             }
         }
         onActiveScaleChanged: {
-            // Issue #814 评论 5946366104: 子星图 contentViewport 内的缩放归 child Scene。
-            if (_gestureOwnedByChildContent) return
             var rawZoom = _pinchStartZoom * activeScale
             // Issue #805 评论 5907045450 第 1 部分：缩到最小时只 clamp，
             // 不再触发 drillUp（递归渲染由 StarMapScene 处理）。
@@ -651,6 +647,33 @@ Item {
         onActiveChanged: {
             if (active)
                 canvasArea.logPointerPress("left", "touch", point)
+        }
+    }
+
+    // Issue #814 评论 5946795049: touch press-time 所有权观察器（前两根手指）。
+    // PointHandler 只取 passive grab，不参与 exclusive grab 竞争。Qt 对同 parent 的多个
+    // PointHandler 会把不同 touchpoint 分配给不同实例。press 时记录该手指所属 child Embed，
+    // release 时清空。父层 bgTouchDrag / canvasPinch 通过 enabled 绑定这些属性在 grab 之前让出。
+    PointHandler {
+        id: touchOwnerA
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        onActiveChanged: {
+            if (active)
+                _touchOwnerA = childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)
+            else
+                _touchOwnerA = ""
+        }
+    }
+    PointHandler {
+        id: touchOwnerB
+        acceptedDevices: PointerDevice.TouchScreen
+        acceptedButtons: Qt.LeftButton
+        onActiveChanged: {
+            if (active)
+                _touchOwnerB = childOwnerAtScreen(point.pressPosition.x, point.pressPosition.y)
+            else
+                _touchOwnerB = ""
         }
     }
 
