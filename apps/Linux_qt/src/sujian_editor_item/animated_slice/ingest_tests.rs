@@ -797,6 +797,35 @@ mod production_route {
         started_at + Duration::from_millis((DURATION_MS as f64 * progress).round() as u64)
     }
 
+    /// Issue #815 评论 5950677031 问题2: route 必须**逐段连续** ——
+    /// `segments[i].to == segments[i + 1].from`。
+    ///
+    /// 这比逐个断言某个 x 靠谱：段与段之间只要有一处写反（例如行间 RowHandoff
+    /// 落到上一行 left、下一段却从上一行 right 起步），采样切过去那一帧就会瞬移，
+    /// 而单点 x 断言很容易把断开的 route 也判成"通过"。
+    fn assert_route_is_continuous(
+        segments: &[crate::sujian_editor_item::animation::transaction::types::CaretTrackSegment],
+        label: &str,
+    ) {
+        for pair in segments.windows(2) {
+            assert_eq!(
+                pair[0].to.x,
+                pair[1].from.x,
+                "{}：第 {} 段终点 x 与下一段起点 x 不连续（route 被拼断了）",
+                label,
+                segments
+                    .iter()
+                    .position(|s| std::ptr::eq(s, &pair[0]))
+                    .unwrap_or(0)
+            );
+            assert_eq!(
+                pair[0].to.top, pair[1].from.top,
+                "{}：相邻两段的行几何不连续",
+                label
+            );
+        }
+    }
+
     /// 问题1：多行 Insert 的 route 必须显式在行与行之间插 `RowHandoff`。
     ///
     /// 旧实现扫完第 0 行后，让第 1 行的 `IngestLine` 从第 0 行右端（x=40）连到
@@ -1006,21 +1035,24 @@ mod production_route {
                 CaretTrackSegmentKind::IngestLine,
             ],
             "退格跨行必须有行间 RowHandoff；末尾 RowHandoff 只在 old 侧终点与 new caret \
-             不同时才生成（这里两者都是 (0,0)，所以被正确省掉）"
+             不同时才生成（这里两者都是 (0,0)，所以被正确省掉）。old caret 恰好等于 \
+             old-side 吞吐起点，所以也不该有前置 LayoutHandoff。"
         );
         assert_eq!(segments[0].from.x, 30.0, "起始行吞字从本行右端开始");
         assert_eq!(segments[0].to.x, 0.0, "起始行吞到本行左端");
         assert_eq!(
-            segments[1].to.x, 0.0,
-            "行间换位落到上一行**左端**，下一条 IngestLine 才好从本行左端起步"
+            segments[1].to.x, 40.0,
+            "行间换位必须落到上一行**右端**，下一条 IngestLine 才从那里起步"
         );
         assert_eq!(segments[2].from.x, 40.0, "第二行吞字从本行右端开始");
         assert_eq!(segments[2].to.x, 0.0);
+        assert_route_is_continuous(&segments, "退格跨行");
 
         let with_tail = build_delete_route(&slices, &rows, &old_caret, &caret_rect(0.0, ROW_H));
         assert_eq!(with_tail.len(), 4, "终点不同时才生成末尾 RowHandoff");
         assert_eq!(with_tail[3].kind, CaretTrackSegmentKind::RowHandoff);
         assert_eq!(with_tail[3].from.x, 0.0);
+        assert_route_is_continuous(&with_tail, "退格跨行 + 末尾换位");
     }
 
     /// 问题4 的另一半：old 侧吞字终点与 new caret 完全相同时不生成末尾 RowHandoff。
@@ -1038,6 +1070,50 @@ mod production_route {
             "old 侧终点等于 new caret 时不该再占一个 segment"
         );
         assert_eq!(segments[0].kind, CaretTrackSegmentKind::IngestLine);
+    }
+
+    /// 问题1：普通退格分支必须真正消费 `screen_caret`。
+    ///
+    /// 屏幕 caret 落在删除起点左侧（模拟上一帧退格只吞了一半）时，必须先插一段
+    /// 纯几何 `LayoutHandoff` 把上一帧真实 caret 接到本次删除起点；这段
+    /// `ingest_line_ord = None`，不吞字。屏幕 caret 已经在删除起点时则不生成。
+    #[test]
+    fn production_backspace_route_leads_with_layout_handoff_from_screen_caret() {
+        let slices = vec![conceal_on_row(1, 1, 1, 0.0, 30.0, true)];
+        let rows = vec![row(1, 0.0, 30.0)];
+        // 屏幕 caret 在本行中段 18（旧退格动画中途的位置）。
+        let screen_caret = caret_rect(18.0, ROW_H);
+        let new_caret = caret_rect(0.0, 0.0);
+
+        let segments = build_delete_route(&slices, &rows, &screen_caret, &new_caret);
+        assert_eq!(
+            segments[0].kind,
+            CaretTrackSegmentKind::LayoutHandoff,
+            "屏幕 caret 不等于 old-side 吞吐起点时必须先补一段几何换位"
+        );
+        assert_eq!(
+            segments[0].from.x, 18.0,
+            "换位段必须从上一帧**真实**屏幕 caret 起步"
+        );
+        assert_eq!(
+            segments[0].to.x, 30.0,
+            "换位终点是 old-side 吞吐起点（起始行右端）"
+        );
+        assert_eq!(
+            segments[0].ingest_line_ord, None,
+            "几何换位段不冒充吞吐（is_ingest_segment 必须是 false）"
+        );
+        assert_eq!(segments[1].kind, CaretTrackSegmentKind::IngestLine);
+        assert_eq!(segments[1].from.x, 30.0);
+        assert_route_is_continuous(&segments, "退格前置换位");
+
+        // 屏幕 caret 已经在删除起点：不生成 0 长度的换位段。
+        let same = build_delete_route(&slices, &rows, &caret_rect(30.0, ROW_H), &new_caret);
+        assert_eq!(
+            same[0].kind,
+            CaretTrackSegmentKind::IngestLine,
+            "几何相同时不该白占一个 segment"
+        );
     }
 
     /// 问题3：退格 route 的屏幕起点必须来自 handoff 的**真实 caret**，而不是逻辑

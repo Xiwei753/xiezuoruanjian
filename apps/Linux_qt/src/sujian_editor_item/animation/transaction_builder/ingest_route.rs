@@ -240,9 +240,32 @@ pub(crate) fn build_delete_route(
             visual_line_id: first_row.visual_line_id,
         }];
     }
-    // 退格：路径从**当前屏幕 caret** 起步（旧快照坐标，不需要跨 layout 换位），
-    // 按行序从大到小逐行吞到 deleted_range.start 所在行。
+    // 退格：路径从**当前屏幕 caret** 起步，按行序从大到小逐行吞到
+    // deleted_range.start 所在行。
+    //
+    // Issue #815 评论 5950677031 问题1: 原来这里直接 `for ... in rows.iter().enumerate().rev()`，
+    // 第一条 `IngestLine` 的起点固定写成 `row.caret_rect_at(row.right)`，
+    // `screen_caret` 参数完全没被消费。于是 `build_ingest_route()` 虽然已经正确优先选了
+    // `caret_handoff.sampled`，传进来以后又被丢掉：
+    // `handoff.sampled -> build_delete_route(screen_caret=真实位置) -> 第一段仍从逻辑
+    // 删除区 row.right 起步` —— 快速连续退格仍然会从上一帧真实 caret 瞬移回去。
+    //
+    // 现在：真正的 old-side 吞吐起点是**最后一条吞字行**（Backspace 起始行）的
+    // `row.right`。`screen_caret` 与它不同就先插一段纯几何换位 `LayoutHandoff`
+    // （`ingest_line_ord = None` / `is_ingest_segment = false`，不吞字）；
+    // 相同就直接从第一条 `IngestLine` 开始，不白占时长。
+    let start_row = rows.last().copied().unwrap_or(first_row);
+    let ingest_start = start_row.caret_rect_at(start_row.right);
     let mut segments = Vec::new();
+    if !same_rect(screen_caret, &ingest_start) {
+        segments.push(CaretTrackSegment {
+            kind: CaretTrackSegmentKind::LayoutHandoff,
+            from: *screen_caret,
+            to: ingest_start,
+            ingest_line_ord: None,
+            visual_line_id: start_row.visual_line_id,
+        });
+    }
     for (index, row) in rows.iter().enumerate().rev() {
         // 起点固定取**本行右端**，绝不继承上一行吞完后的位置。
         let from = row.caret_rect_at(row.right);
@@ -260,7 +283,14 @@ pub(crate) fn build_delete_route(
             segments.push(CaretTrackSegment {
                 kind: CaretTrackSegmentKind::RowHandoff,
                 from: to,
-                to: next_up.caret_rect_at(next_up.left),
+                // Issue #815 评论 5950677031 问题2: 终点必须是上一行**右端**。
+                // 原来写成 `next_up.left`，而紧接着的 `IngestLine(next_up)` 从
+                // `next_up.right` 起步 —— 两段在边界处不连续，采样切过去那一帧会
+                // 从上一行左端瞬移到右端。正确的退格路线是
+                // `当前行 right -> left (IngestLine)`、
+                // `当前行 left -> 上一行 right (RowHandoff)`、
+                // `上一行 right -> left (IngestLine)`。
+                to: next_up.caret_rect_at(next_up.right),
                 ingest_line_ord: Some(row.line_ord),
                 visual_line_id: row.visual_line_id,
             });

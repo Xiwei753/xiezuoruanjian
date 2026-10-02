@@ -720,10 +720,20 @@ fn issue815_review7_forward_delete_is_a_static_ingest_segment() {
         "Issue #815 评论 5950375533 问题2: 前删段必须带上当前删除行的行序，\
          否则吞吐 slice 认不出自己就是当前行。"
     );
-    let guard = function_window(&src, "pub(crate) fn build_delete_route", 6000);
+    // 只在前删分支（窗口取到 is_forward_delete 之前）禁止 LayoutHandoff；
+    // 普通退格分支现在**会**产出 LayoutHandoff（5950677031 问题1 要求的
+    // 真实屏幕起点换位）。
+    let forward_branch = function_window(&src, "if is_forward_delete(slices)", 1400);
     assert!(
-        !guard.contains("CaretTrackSegmentKind::LayoutHandoff"),
-        "Issue #815 评论 5950375533 问题2: build_delete_route 不得再产出 LayoutHandoff。"
+        // 用 `kind: ` 前缀匹配，避免命中解释性注释里出现的裸 `LayoutHandoff` 字样。
+        !forward_branch.contains("kind: CaretTrackSegmentKind::LayoutHandoff"),
+        "Issue #815 评论 5950375533 问题2: 前删分支不得再产出 LayoutHandoff。"
+    );
+    let backspace_branch = function_window(&src, "let start_row = rows.last().copied()", 1200);
+    assert!(
+        backspace_branch.contains("kind: CaretTrackSegmentKind::LayoutHandoff"),
+        "Issue #815 评论 5950677031 问题1: 普通退格分支需要一段几何换位把上一帧真实 \
+         caret 接到本次删除起点。"
     );
 }
 
@@ -790,6 +800,89 @@ fn issue815_review7_zero_length_segments_are_not_emitted() {
         delete.contains("if !same_rect(&swallow_end, new_caret)"),
         "Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 相同时不得生成末尾 \
          RowHandoff。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5950677031 问题1：普通退格分支必须消费 screen_caret
+// =========================================================================
+
+/// 复核评论 5950677031 问题1。
+///
+/// 旧实现签名虽然已经接了 `screen_caret`，但普通退格分支直接进
+/// `for ... in rows.iter().enumerate().rev()`，第一条 `IngestLine` 的起点固定写成
+/// `row.caret_rect_at(row.right)`，参数完全没被消费 —— 于是 `build_ingest_route()`
+/// 选好的 `caret_handoff.sampled` 传进来又被丢掉。
+#[test]
+fn issue815_review8_backspace_route_consumes_screen_caret() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    let window = function_window(&src, "pub(crate) fn build_delete_route", 5200);
+    assert!(
+        window.contains("let start_row = rows.last().copied()"),
+        "Issue #815 评论 5950677031 问题1: 退格 old-side 吞吐起点必须取**最后一条吞字行**。"
+    );
+    assert!(
+        window.contains("if !same_rect(screen_caret, &ingest_start)"),
+        "Issue #815 评论 5950677031 问题1: 屏幕 caret 与吞吐起点不同时先补一段几何换位；\
+         相同则不白占时长。"
+    );
+    assert!(
+        window.contains("kind: CaretTrackSegmentKind::LayoutHandoff")
+            && window.contains("from: *screen_caret"),
+        "Issue #815 评论 5950677031 问题1: 换位段必须从上一帧**真实**屏幕 caret 起步。"
+    );
+    assert!(
+        window.contains("to: ingest_start") && window.contains("ingest_line_ord: None"),
+        "Issue #815 评论 5950677031 问题1: 换位段是纯几何，ingest_line_ord 必须为 None \
+         （is_ingest_segment = false），不冒充吞吐。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5950677031 问题2：退格 route 必须逐段连续
+// =========================================================================
+
+/// 复核评论 5950677031 问题2。
+///
+/// 行间 `RowHandoff` 原来落到上一行 **left**，而紧接着的 `IngestLine(next_up)` 从
+/// 上一行 **right** 起步 —— 两段在边界处不连续，采样切过去那一帧会瞬移。
+#[test]
+fn issue815_review8_backspace_row_handoff_lands_on_previous_row_right() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    let window = function_window(&src, "pub(crate) fn build_delete_route", 5200);
+    assert!(
+        window.contains("to: next_up.caret_rect_at(next_up.right)"),
+        "Issue #815 评论 5950677031 问题2: 退格行间 RowHandoff 必须落到上一行**右端**，\
+         下一条 IngestLine 才好从同一位置起步。"
+    );
+    assert!(
+        !window.contains("to: next_up.caret_rect_at(next_up.left)"),
+        "Issue #815 评论 5950677031 问题2: 落到上一行 left 会让 route 在段边界断开。"
+    );
+    // 行为测试必须断言逐段连续，而不是逐个看 x。
+    let tests = read_src("src/sujian_editor_item/animated_slice/ingest_tests.rs");
+    assert!(
+        tests.contains("fn assert_route_is_continuous("),
+        "Issue #815 评论 5950677031 问题2: 需要一个断言 segments[i].to == segments[i+1].from \
+         的辅助函数——逐段连续比逐个看 x 靠谱，否则段拼断了也会被判成通过。"
+    );
+    assert!(
+        tests.contains("assert_route_is_continuous(&segments")
+            && tests.contains("assert_route_is_continuous(&with_tail"),
+        "Issue #815 评论 5950677031 问题2: 退格 route 的每一条路径都要过连续性断言。"
+    );
+    // 生产路径必须有退格的 handoff 覆盖（现有那个用的是 insert spec）。
+    let builder_tests = read_src("src/sujian_editor_item/animation/transaction_builder/tests.rs");
+    assert!(
+        builder_tests.contains(
+            "fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_caret"
+        ),
+        "Issue #815 评论 5950677031 问题1: 必须补**退格**的生产路径 handoff 测试，\
+         现有的 review7 测试用的是 insert spec，只覆盖 Insert。"
+    );
+    assert!(
+        builder_tests.contains("TextVisualOperationKind::Delete"),
+        "Issue #815 评论 5950677031 问题1: 退格生产测试必须真的走 Delete 事务。"
     );
 }
 

@@ -4006,3 +4006,109 @@ fn issue815_review7_production_rebase_starts_from_handoff_sampled_caret() {
         logical_old_x
     );
 }
+
+/// 走**生产**路径验证退格的 rebase 交棒。
+///
+/// Issue #815 评论 5950677031 问题1: 维护者明确指出
+/// `issue815_review7_production_rebase_starts_from_handoff_sampled_caret()` 用的是
+/// `issue756_insert_spec`，只覆盖 Insert；退格必须单独覆盖——因为
+/// `build_delete_route()` 的普通退格分支曾经完全不消费 `screen_caret`，
+/// 于是 `handoff.sampled` 传进去以后被丢掉。
+#[test]
+fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_caret() {
+    let key = VisualTransactionKey::new(82, 815);
+    let sid = issue756_shaping_identity();
+    // 旧快照单行 "abc"，被删区间 (1,2) 的 old caret 在 x=20（右侧）。
+    let old_snapshot = make_test_snapshot(
+        "abc",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "ac",
+        vec![(0, 1, 0.0, 0.0, sid.clone()), (1, 2, 20.0, 0.0, sid)],
+    );
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    // 上一帧退格动画中途，真实屏幕 caret 已经走到 x=15。
+    let handoff_sampled = CursorRect {
+        x: 15.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+    let spec = VisualEditSpec {
+        key,
+        operation_kind: TextVisualOperationKind::Delete,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: Vec::new(),
+        deleted_ranges: vec![(1, 2)],
+        offset_map,
+        // 逻辑 old caret 在 x=20，new caret 落在 x=10。
+        old_cursor_rect: Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        new_cursor_rect: Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        rebase_frames: Vec::new(),
+        caret_handoff: Some(RebaseCaretHandoff {
+            sampled: handoff_sampled,
+            remaining_duration_ms: 60,
+            sampled_visual_line_id: Some(0),
+            sampled_line_top: 0.0,
+            sampled_line_bottom: 20.0,
+        }),
+        visual_affected_byte_range_old: Some((0, 3)),
+        visual_affected_byte_range_new: Some((0, 2)),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: None,
+    };
+
+    let tx = build_prepared_transaction(spec).expect("协同退格必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同退格必须有 cursor track");
+    assert!(!track.segments.is_empty(), "协同退格必须建出吞吐 route");
+    assert_eq!(
+        track.segments[0].from.x, handoff_sampled.x,
+        "退格 route 第一段必须从 handoff.sampled.x={} 起步，而不是逻辑 old caret.x=20",
+        handoff_sampled.x
+    );
+    assert_ne!(
+        track.segments[0].from.x,
+        tx.old_cursor_rect.map(|rect| rect.x).unwrap_or_default(),
+        "生产 rebase 不允许跳回逻辑 old caret"
+    );
+
+    // 第一帧采样也必须是 handoff 位置。
+    let first_frame = sample_caret_track_frame(track, std::time::Instant::now());
+    assert!(
+        (first_frame.x - handoff_sampled.x).abs() < 1e-6,
+        "新事务第一帧 caret 必须从 handoff.sampled.x={} 起步，实际 x={}",
+        handoff_sampled.x,
+        first_frame.x
+    );
+}
