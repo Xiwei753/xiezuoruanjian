@@ -697,9 +697,29 @@ function createSceneNode(scenePath, starmapId, opts) {
       node.offsetY = offsetY
       node.fitScale = fitScale
     },
+    zoomToScale(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, requestedScale) {
+      return opts.zoomToScaleFn(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, requestedScale)
+    },
+    applyUserZoom(userScale, offsetX, offsetY) { return opts.applyZoomFn(userScale, offsetX, offsetY) },
+    fitView() { return opts.fitViewFn() },
     async createEdgeBetween(from, to) { return opts.createEdgeFn(from, to) }
   }
   return node
+}
+
+/**
+ * zoomToScaleLocal 的镜像（ui/StarMapScene.ets）。
+ *
+ * 收的是**绝对**目标比例，不是"相对上一帧放大几倍"。
+ * 这是本轮修掉的数学 bug：统一入口每帧都会发一次命令，
+ * 收相对量的话每帧都拿上一帧的结果再乘一次，
+ * 两指 100 → 110 → 120 会变成 1.00×1.1×1.2 = 1.32，而不是 1.20。
+ */
+function zoomToScaleLocal(view, requestedScale, userZoomMin, userZoomMax) {
+  const fit = view.fitScale > 0 ? view.fitScale : 1
+  const nextUser = clampUserZoom(requestedScale / fit, userZoomMin, userZoomMax)
+  view.userZoomScale = nextUser
+  return effectiveScale(fit, nextUser)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1322,6 +1342,78 @@ console.log('22. 评审回归 ④：连线结果必须回传，connect_end 才�
   assert((await badNode.createEdgeBetween(from, to)) === false,
     'Core 拒绝 → 回传 false，connect_end 记 core_failed（和"没找到目标"区分得开）')
   assert(plan.hostStarmapId === 'sm-root', '宿主 starmapId 一并带进诊断字段')
+}
+
+console.log('23. 评审回归 ⑤：捏合连着两帧，比例不能帧间自乘')
+{
+  // 起手比例 1、两指距离 100。三帧：距离 110、120、130。
+  const baseDistance = 100
+  const baseScale = 1
+  const view = { fitScale: 1, userZoomScale: 1 }
+
+  const applied = []
+  for (const dist of [110, 120, 130]) {
+    const ratio = computePinchRatio(baseDistance, [{ x: 0, y: 0 }, { x: dist, y: 0 }])
+    applied.push(zoomToScaleLocal(view, baseScale * ratio, USER_ZOOM_MIN, USER_ZOOM_MAX))
+  }
+
+  assert(near(applied[0], 1.1), '第一帧 100→110：1.00 × 1.1 = 1.10')
+  assert(near(applied[1], 1.2), '第二帧 110→120：1.20，不是 1.10×1.2 = 1.32')
+  assert(near(applied[2], 1.3), '第三帧 120→130：1.30，不是 1.716')
+  assert(near(view.userZoomScale, 1.3), '落回 userZoomScale 的也是绝对值')
+
+  // 反面对照：老写法"当前比例 × 本帧比例"就是这个发散结果
+  const compounding = 1 * (110 / 100) * (120 / 100) * (130 / 100)
+  assert(!near(applied[2], compounding, 1e-3), '收相对量会指数发散，绝对量不会')
+
+  // fitScale 不是 1 时，比例要在 userZoom 上换算
+  const fittedView = { fitScale: 0.5, userZoomScale: 1 }
+  const fitted = zoomToScaleLocal(fittedView, 0.5 * 2, USER_ZOOM_MIN, USER_ZOOM_MAX)
+  assert(near(fitted, 1.0) && near(fittedView.userZoomScale, 2),
+    '目标总比例 ÷ fitScale 才是 userZoom（fitScale=0.5、总比例 1.0 → userZoom 2）')
+}
+
+console.log('24. 评审回归 ⑥：父层缩放带动容器变化，子内容要同比跟上且不重置用户缩放')
+{
+  // 首次适配：直径 200 的圆，内容缩到 fitScale 0.7 并居中
+  const rects = [
+    { nodeId: 'a', x: 0, y: 0, width: 100, height: 100, radius: 0 },
+    { nodeId: 'b', x: 100, y: 0, width: 100, height: 100, radius: 0 }
+  ]
+  const bounds = computeContentBounds(rects)
+  const available = 200 * CIRCLE_INNER_SAFE_RATIO
+  const fitted = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP, 200, 200)
+
+  const view = {
+    fitScale: fitted.zoomScale,
+    offsetX: fitted.offsetX,
+    offsetY: fitted.offsetY,
+    userZoomScale: 2,   // 用户刚在子 Scene 里双指捏到了 2 倍
+    lastFittedSceneSize: 200
+  }
+  assert(near(view.userZoomScale, 2), '前置状态：用户自己捏到了 2 倍')
+
+  // 父层放大 2 倍 → 容器 200 → 400。syncFitToSceneSize 按 k=2 同比放大
+  const k = 400 / view.lastFittedSceneSize
+  view.fitScale = view.fitScale * k
+  view.offsetX = view.offsetX * k
+  view.offsetY = view.offsetY * k
+  view.lastFittedSceneSize = 400
+
+  assert(near(view.fitScale, fitted.zoomScale * 2), '父层 2 倍 → 子 fitScale 也变 2 倍（圆壳和内容同一体系）')
+  assert(near(view.offsetX, fitted.offsetX * 2) && near(view.offsetY, fitted.offsetY * 2),
+    '偏移同比放大：同一个视图被等比放大，不是重新居中（用户的平移不丢）')
+  assert(near(view.userZoomScale, 2), '用户自己捏的 userZoomScale 没被重置（#816 硬要求）')
+  assert(near(effectiveScale(view.fitScale, view.userZoomScale), fitted.zoomScale * 4),
+    '总比例 = 父层 2 倍 × 用户 2 倍')
+
+  // 缩小同样成立
+  const shrinkK = 200 / view.lastFittedSceneSize
+  view.fitScale = view.fitScale * shrinkK
+  view.offsetX = view.offsetX * shrinkK
+  view.lastFittedSceneSize = 200
+  assert(near(view.fitScale, fitted.zoomScale), '父层缩回 1 倍 → 子 fitScale 回到原值')
+  assert(near(view.userZoomScale, 2), '缩小也不重置用户缩放')
 }
 
 console.log('')

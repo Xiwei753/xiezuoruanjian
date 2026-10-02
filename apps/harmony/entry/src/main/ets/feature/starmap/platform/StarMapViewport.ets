@@ -248,9 +248,9 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   fitScale: number = 1
 
   private getChildren: () => RecursiveSceneSource[]
-  private zoomFn: (
+  private zoomToScaleFn: (
     anchorCanvasX: number, anchorCanvasY: number,
-    anchorLocalX: number, anchorLocalY: number, ratio: number
+    anchorLocalX: number, anchorLocalY: number, requestedScale: number
   ) => void
   private applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void
   private fitViewFn: () => void
@@ -260,9 +260,9 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     scenePath: StarMapPathSegment[],
     starmapId: string,
     getChildren: () => RecursiveSceneSource[],
-    zoomFn: (
+    zoomToScaleFn: (
       anchorCanvasX: number, anchorCanvasY: number,
-      anchorLocalX: number, anchorLocalY: number, ratio: number
+      anchorLocalX: number, anchorLocalY: number, requestedScale: number
     ) => void,
     applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void,
     fitViewFn: () => void,
@@ -271,7 +271,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     this.scenePath = scenePath
     this.starmapId = starmapId
     this.getChildren = getChildren
-    this.zoomFn = zoomFn
+    this.zoomToScaleFn = zoomToScaleFn
     this.applyZoomFn = applyZoomFn
     this.fitViewFn = fitViewFn
     this.createEdgeFn = createEdgeFn
@@ -299,21 +299,26 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   }
 
   /**
-   * 以锚点为中心缩放。
+   * 以锚点为中心，缩到**绝对**总比例 requestedScale。
+   *
+   * 这里收绝对值而不是"相对上一帧放大几倍"：统一入口每帧都会发一次命令，
+   * 收相对量的话每一帧都拿上一帧的结果再乘一次，两指 100 → 110 → 120
+   * 就会变成 1.00×1.1×1.2 = 1.32，而不是 1.20。手势起手时是什么比例、
+   * 现在两指捏到几倍，由统一入口算好后传进来。
    *
    * 锚点同时给"画布坐标"和"局部屏幕坐标"，因为 `屏幕 = 画布 × scale + offset`
    * 只在 Scene 自己的局部空间成立：统一入口给的两指中心是根坐标，必须先换算到本层，
    * 画布锚点也必须留在本层坐标系里。夹取范围、最终比例怎么由 fitScale 合成，
    * 都由 Scene 自己算，父层只发命令。
    */
-  zoomAround(
+  zoomToScale(
     anchorCanvasX: number,
     anchorCanvasY: number,
     anchorLocalX: number,
     anchorLocalY: number,
-    ratio: number
+    requestedScale: number
   ): void {
-    this.zoomFn(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, ratio)
+    this.zoomToScaleFn(anchorCanvasX, anchorCanvasY, anchorLocalX, anchorLocalY, requestedScale)
   }
 
   applyUserZoom(userScale: number, offsetX: number, offsetY: number): void {

@@ -263,6 +263,8 @@ export struct StarMapScene {
   private sceneHeight: number = 0
   /** 是否已经算过一次 fit view。子图加节点/移动节点不再重算，只有首次加载和显式 fit view 才算（#816） */
   private hasFittedView: boolean = false
+  // 上次适配时 Scene 的宽度，用来判断容器尺寸变化是不是父层缩放带来的
+  private lastFittedSceneSize: number = 0
   /** 注册到 sceneRegistry 的本层句柄 */
   private sceneHandle: StarMapSceneNode | null = null
 
@@ -365,8 +367,9 @@ export struct StarMapScene {
         this.scenePath,
         this.starmapId,
         (): RecursiveSceneSource[] => this.collectChildEmbeds(),
-        (aCanvasX: number, aCanvasY: number, aLocalX: number, aLocalY: number, ratio: number): void => {
-          this.zoomAroundLocal(aCanvasX, aCanvasY, aLocalX, aLocalY, ratio)
+        (aCanvasX: number, aCanvasY: number, aLocalX: number, aLocalY: number,
+          requestedScale: number): void => {
+          this.zoomToScaleLocal(aCanvasX, aCanvasY, aLocalX, aLocalY, requestedScale)
         },
         (userScale: number, newOffsetX: number, newOffsetY: number): void => {
           this.applyUserZoom(userScale, newOffsetX, newOffsetY)
@@ -473,6 +476,7 @@ export struct StarMapScene {
       this.fitScale = 1
       this.offsetX = 0
       this.offsetY = 0
+      this.lastFittedSceneSize = this.sceneWidth
       this.syncSceneHandle()
       return
     }
@@ -486,7 +490,37 @@ export struct StarMapScene {
     this.fitScale = fitted.zoomScale
     this.offsetX = fitted.offsetX
     this.offsetY = fitted.offsetY
+    this.lastFittedSceneSize = this.sceneWidth
     // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
+    this.syncSceneHandle()
+  }
+
+  /**
+   * 父 Scene 缩放导致 Embed 容器尺寸变化时，把已有适配按比例带过去。
+   *
+   * 父层放大 2 倍，圆壳从 200vp 变 400vp，子 Scene 组件跟着变大，
+   * 但子内容用的是子 Scene 自己的 fitScale，不跟着变——结果就是
+   * "外壳和内部内容不在同一个缩放体系"（#816 最初报的现象）。
+   *
+   * 这里按尺寸比 k 同比放大 fitScale 和偏移：偏移一起缩放，
+   * 用户已经平移到的位置在放大后仍然是同一个位置（同一个视图，只是不一样了）。
+   * 缩小（k < 1）同样成立。
+   *
+   * **不能改 userZoomScale**：那是用户自己刚双指捏出来的，
+   * 容器尺寸变化不该把它重置掉（#816 明确要求）。
+   */
+  private syncFitToSceneSize(): void {
+    if (!this.hasFittedView || this.lastFittedSceneSize <= 0) {
+      return
+    }
+    if (Math.abs(this.sceneWidth - this.lastFittedSceneSize) <= 0.5) {
+      return
+    }
+    const k: number = this.sceneWidth / this.lastFittedSceneSize
+    this.fitScale = this.fitScale * k
+    this.offsetX = this.offsetX * k
+    this.offsetY = this.offsetY * k
+    this.lastFittedSceneSize = this.sceneWidth
     this.syncSceneHandle()
   }
 
@@ -515,25 +549,30 @@ export struct StarMapScene {
   }
 
   /**
-   * 以本 Scene 内的锚点为中心缩放 ratio 倍。
+   * 把本 Scene 缩放到指定的**绝对**总比例 requestedScale，锚点保持不动。
+   *
+   * 这里必须收绝对值，不能收"相对上一帧放大几倍"。双指手势每帧都会调一次：
+   * 若这一帧再乘一次当前比例，两指从 100 走到 110 再走到 120，就会得到
+   * 1.00×1.1×1.2 = 1.32 而不是 1.20——每帧都在前一轮的结果上再放大一次，越捏越快。
+   * 调用方（根 Scene 的 updateUnifiedPinch）负责用"起手比例 × 当前两指距离比例"
+   * 算出这个绝对值，这条链才接得完。
    *
    * 锚点画布坐标在缩放前后不变，于是 offset = 屏幕锚点 − 画布锚点 × 新比例，
    * 两指中心在屏幕上看起来就钉住不动。比例最终还是要拆回用户倍数：
    * 用户倍数才是这份视口里真正独立保存的那一份。
    */
-  private zoomAroundLocal(
+  private zoomToScaleLocal(
     anchorCanvasX: number,
     anchorCanvasY: number,
     anchorLocalX: number,
     anchorLocalY: number,
-    ratio: number
+    requestedScale: number
   ): void {
-    if (!isFinite(ratio) || ratio <= 0) {
+    if (!isFinite(requestedScale) || requestedScale <= 0) {
       return
     }
     const fitScale: number = this.fitScale > 0 ? this.fitScale : 1
-    const nextScale: number = this.viewportScale * ratio
-    const nextUser: number = clampUserZoom(nextScale / fitScale, USER_ZOOM_MIN, USER_ZOOM_MAX)
+    const nextUser: number = clampUserZoom(requestedScale / fitScale, USER_ZOOM_MIN, USER_ZOOM_MAX)
     const applied: number = effectiveScale(fitScale, nextUser)
     const offset: PlatformPoint = computeZoomAroundOffset(
       { x: anchorCanvasX, y: anchorCanvasY },
@@ -662,12 +701,20 @@ export struct StarMapScene {
     if (!isFinite(ratio) || ratio <= 0) {
       return
     }
+    // 关键：把比例换算成**绝对**总比例再交给归属层。
+    // 传相对量的话，归属层每帧都会再乘一次上一帧的结果，
+    // 两指 100 → 110 → 120 就会放大成 1.00×1.1×1.2 = 1.32，而不是 1.20。
+    const baseScale: number = this.pinchBaseScale > 0 ? this.pinchBaseScale : 1
+    const requestedScale: number = baseScale * ratio
+    if (!isFinite(requestedScale) || requestedScale <= 0) {
+      return
+    }
     // 锚点画布坐标不变，屏幕锚点每帧跟随两指中心
     const ownerLocal: PlatformPoint = this.toOwnerLocal(rootCenter)
-    owner.zoomAround(
+    owner.zoomToScale(
       this.pinchAnchorCanvasX, this.pinchAnchorCanvasY,
       ownerLocal.x, ownerLocal.y,
-      ratio
+      requestedScale
     )
     this.pinchAnchorScreenX = rootCenter.x
     this.pinchAnchorScreenY = rootCenter.y
@@ -2014,7 +2061,13 @@ export struct StarMapScene {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.sceneWidth = Number(newArea.width)
       this.sceneHeight = Number(newArea.height)
-      this.maybeFitView()
+      // 第一次到位 = 首次适配；之后尺寸变化 = 父层缩放带动容器变大变小，
+      // 要把已有适配同比带过去，而不是重新适配（重新适配会重置用户刚捏出来的缩放）
+      if (this.hasFittedView) {
+        this.syncFitToSceneSize()
+      } else {
+        this.maybeFitView()
+      }
     })
   }
 }
