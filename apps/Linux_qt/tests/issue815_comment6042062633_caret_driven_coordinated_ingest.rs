@@ -205,7 +205,7 @@ fn issue815_modify5_ingest_clip_is_driven_by_current_caret_frame() {
          不能把协同吞吐换算成独立 0..1 visible fraction。"
     );
 
-    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 6000);
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 7200);
     assert!(
         window.contains("caret_x: f64"),
         "Issue #815 评论 6042062633 修改 5: 本帧边界就是本帧的 caret.x，必须作为参数传进来。"
@@ -279,7 +279,7 @@ fn issue815_review1_delete_forward_has_its_own_ingest_boundary() {
     let ingest_window = function_window(
         &slice_src,
         "pub(crate) fn compute_frame_by_caret_ingest",
-        3400,
+        7200,
     );
     assert!(
         ingest_window.contains("IngestBoundaryDriver::DeleteForwardBoundary => caret_x"),
@@ -797,7 +797,7 @@ fn issue815_review7_zero_length_segments_are_not_emitted() {
     );
     let delete = function_window(&src, "pub(crate) fn build_delete_route", 6000);
     assert!(
-        delete.contains("if !same_rect(&swallow_end, new_caret)"),
+        delete.contains("if !same_rect(&swallow_end, tail_target)"),
         "Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 相同时不得生成末尾 \
          RowHandoff。"
     );
@@ -816,7 +816,7 @@ fn issue815_review7_zero_length_segments_are_not_emitted() {
 #[test]
 fn issue815_review8_backspace_route_consumes_screen_caret() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
-    let window = function_window(&src, "pub(crate) fn build_delete_route", 5200);
+    let window = function_window(&src, "pub(crate) fn build_delete_route", 6200);
     assert!(
         window.contains("let start_row = rows.last().copied()"),
         "Issue #815 评论 5950677031 问题1: 退格 old-side 吞吐起点必须取**最后一条吞字行**。"
@@ -849,7 +849,7 @@ fn issue815_review8_backspace_route_consumes_screen_caret() {
 #[test]
 fn issue815_review8_backspace_row_handoff_lands_on_previous_row_right() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
-    let window = function_window(&src, "pub(crate) fn build_delete_route", 5200);
+    let window = function_window(&src, "pub(crate) fn build_delete_route", 6200);
     assert!(
         window.contains("to: next_up.caret_rect_at(next_up.right)"),
         "Issue #815 评论 5950677031 问题2: 退格行间 RowHandoff 必须落到上一行**右端**，\
@@ -883,6 +883,85 @@ fn issue815_review8_backspace_row_handoff_lands_on_previous_row_right() {
     assert!(
         builder_tests.contains("TextVisualOperationKind::Delete"),
         "Issue #815 评论 5950677031 问题1: 退格生产测试必须真的走 Delete 事务。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5950887715：IME Mixed 路径必须有 snapshot side，不再退回直线
+// =========================================================================
+
+/// 复核评论 5950887715。
+///
+/// root cause 不是「old/new 行号不能比较所以没法建 route」，而是 segment 只有
+/// `ingest_line_ord` 却没有说明它属于哪一侧。加上 side 之后行序只在同一 side 内比较，
+/// Mixed 就能建出「先吞旧 preedit、再吐新 candidate」的分段路线。
+#[test]
+fn issue815_review9_segments_carry_snapshot_side() {
+    let types = read_src("src/sujian_editor_item/animation/transaction/types.rs");
+    assert!(
+        types.contains("pub(crate) enum IngestSnapshotSide"),
+        "Issue #815 评论 5950887715: 必须有 IngestSnapshotSide（含 Old / New 两个变体）。"
+    );
+    assert!(
+        types.contains("pub ingest_side: Option<IngestSnapshotSide>"),
+        "Issue #815 评论 5950887715: CaretTrackSegment 必须带 ingest_side。"
+    );
+    let plan = read_src("src/sujian_editor_item/render_plan.rs");
+    assert!(
+        plan.contains("pub ingest_side: Option<IngestSnapshotSide>"),
+        "Issue #815 评论 5950887715: SampledCaretFrame 必须把 side 带给文字层。"
+    );
+}
+
+/// Mixed 不得再返回空 route，且两侧必须分开收行。
+#[test]
+fn issue815_review9_mixed_route_is_built_not_skipped() {
+    let route = read_src("src/sujian_editor_item/animation/transaction_builder/ingest_route.rs");
+    assert!(
+        route.contains("pub(crate) fn collect_delete_rows(")
+            && route.contains("pub(crate) fn collect_insert_rows("),
+        "Issue #815 评论 5950887715: Reveal / Conceal 必须分开收行，各自的 ordinal \
+         只来自自己那侧 canonical。"
+    );
+    assert!(
+        !route.contains("IngestRouteShape::Mixed => Vec::new()"),
+        "Issue #815 评论 5950887715: Mixed 不得再直接返回空 route——那会让 IME \
+         退回 old→new 一条斜线。"
+    );
+    assert!(
+        route.contains("build_delete_route(slices, &delete_rows, screen_caret, None)")
+            && route.contains("build_insert_route(&insert_rows, &insert_start, new_caret)"),
+        "Issue #815 评论 5950887715: Mixed 路线必须是「先吞旧 preedit（Old 侧，\
+         不带末尾换位），再接 new 侧吐字」。"
+    );
+
+    // transaction_builder 里那道 composition_commit_crossfade.is_none() 的门必须删掉。
+    let builder = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    assert!(
+        !builder.contains("&& spec.composition_commit_crossfade.is_none()"),
+        "Issue #815 评论 5950887715: 必须删掉 composition_commit_crossfade.is_none() \
+         这道门，否则 IME commit 根本不会走正式 route。"
+    );
+}
+
+/// 文字层必须先按 side 隔离，再谈行序。
+#[test]
+fn issue815_review9_slice_isolates_sides_before_line_ordinal() {
+    let src = read_src("src/sujian_editor_item/animated_slice.rs");
+    let window = function_window(&src, "let slice_side = match self.kind", 2600);
+    assert!(
+        window.contains("AnimatedSliceKind::DeleteConceal => IngestSnapshotSide::Old"),
+        "Issue #815 评论 5950887715: DeleteConceal 属于 old snapshot 侧。"
+    );
+    assert!(
+        window.contains("IngestSnapshotSide::New"),
+        "Issue #815 评论 5950887715: InsertReveal 属于 new snapshot 侧。"
+    );
+    assert!(
+        window.contains("side_rank(sampled_side) < side_rank(slice_side)")
+            && window.contains("side_rank(sampled_side) > side_rank(slice_side)"),
+        "Issue #815 评论 5950887715: 必须按 side 阶段序隔离两侧，绝不让 old / new \
+         的 ordinal 互相比较。"
     );
 }
 
@@ -1413,7 +1492,7 @@ fn issue815_review7_ingest_geometry_comes_from_the_slices_own_side() {
 #[test]
 fn issue815_review7_layout_handoff_does_not_fake_ingest() {
     let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 6000);
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 7200);
     assert!(
         window.contains("IngestLinePhase::RouteBeforeStart"),
         "Issue #815 评论 5949097065 问题3: 拿不到权威行序（换位段）时，吞字/吐字切片必须\\

@@ -90,7 +90,9 @@ pub(crate) fn sample_caret_track_frame(
     // Issue #815 评论 5949097065 问题3: 本帧的吞吐行与是否处于吞吐段，和 x/y/rect
     // 出自**同一次**路线采样。文字层直接消费这里给出的 ingest_line_ord /
     // is_ingest_segment，不再用 caret.y 猜行序、也不把换位段的对角线 x 当吞吐边界。
-    let (visual_line_id, ingest_line_ord, is_ingest_segment) =
+    // Issue #815 评论 5950887715: side 也出自同一次采样，文字层据此决定
+    // "我这一侧现在该不该动"，避免 old/new 两套行号互相比较。
+    let (visual_line_id, ingest_line_ord, is_ingest_segment, ingest_side) =
         track.sampled_ingest_at_progress(progress);
     SampledCaretFrame {
         x: rect.x,
@@ -100,6 +102,7 @@ pub(crate) fn sample_caret_track_frame(
         rect,
         ingest_line_ord,
         is_ingest_segment,
+        ingest_side,
     }
 }
 

@@ -9,9 +9,20 @@
 //! 单独成文件是为了让 `animated_slice.rs` 保持在 god-file 上限之内
 //! （与 `animation/render_plan_builder.rs` + `render_plan_builder/tests.rs` 同模式）。
 
-use super::{AnimatedSlice, IngestBoundaryDriver, SourceRect};
+use super::{
+    AnimatedSlice, AnimatedSliceKind, IngestBoundaryDriver, IngestSnapshotSide, SourceRect,
+};
 use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
+
+/// Issue #815 评论 5950887715: 本 slice 属于哪一侧 canonical，由 kind 决定。
+/// `DeleteConceal` 吞 old snapshot 的字，`InsertReveal` 吐 new snapshot 的字。
+fn side_of(slice: &AnimatedSlice) -> Option<IngestSnapshotSide> {
+    Some(match slice.kind {
+        AnimatedSliceKind::DeleteConceal => IngestSnapshotSide::Old,
+        _ => IngestSnapshotSide::New,
+    })
+}
 
 fn snapshot_id() -> LineSnapshotId {
     LineSnapshotId::new(1, 1, 1)
@@ -85,7 +96,7 @@ fn forward_delete_with_static_caret_still_swallows_per_frame() {
         .iter()
         .map(|p| {
             slice
-                .compute_frame_by_caret_ingest(100.0, 10.0, *p, None, true)
+                .compute_frame_by_caret_ingest(100.0, 10.0, *p, None, true, side_of(&slice))
                 .w
         })
         .collect();
@@ -155,13 +166,13 @@ fn insert_across_lines_uses_current_caret_y_for_phase() {
     // caret 仍在 line 1 内（y = 10）：line 1 正在被扫过，line 2 还没走到。
     assert_eq!(
         line_1
-            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true, side_of(&line_1))
             .w,
         20.0
     );
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true, side_of(&line_2))
             .w,
         0.0,
         "caret 还没进入新 line 2，不能提前吐出"
@@ -171,14 +182,14 @@ fn insert_across_lines_uses_current_caret_y_for_phase() {
     // （向下走时 `caret_y < line_top` 才是 NotReached，等于上沿就已经进来了）。
     assert_eq!(
         line_1
-            .compute_frame_by_caret_ingest(120.0, 20.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 20.0, 0.0, None, true, side_of(&line_1))
             .w,
         40.0,
         "caret 越过本行底边后新 line 1 必须完整"
     );
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 20.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 20.0, 0.0, None, true, side_of(&line_2))
             .w,
         20.0,
         "caret 到新 line 2 上沿时该行成为当前行，按 caret.x 裁切"
@@ -186,7 +197,7 @@ fn insert_across_lines_uses_current_caret_y_for_phase() {
     // caret 还没到新 line 2（y = 19）：line 2 仍是 NotReached，不提前吐出。
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 19.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 19.0, 0.0, None, true, side_of(&line_2))
             .w,
         0.0,
         "caret 未进入新 line 2，不能提前吐出"
@@ -195,13 +206,13 @@ fn insert_across_lines_uses_current_caret_y_for_phase() {
     // caret 进入 line 2（y = 30）：只有 line 2 在被扫过。
     assert_eq!(
         line_1
-            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true, side_of(&line_1))
             .w,
         40.0
     );
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true, side_of(&line_2))
             .w,
         20.0
     );
@@ -239,14 +250,14 @@ fn backspace_across_lines_uses_current_caret_y_for_phase() {
     // caret 仍在 line 2 内（y = 30）：line 1 NotReached（保留），line 2 正在被吞。
     assert_eq!(
         line_1
-            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true, side_of(&line_1))
             .w,
         40.0,
         "caret 还没往上走到新 line 1，旧 line 1 必须保持完整"
     );
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 30.0, 0.0, None, true, side_of(&line_2))
             .w,
         20.0
     );
@@ -254,7 +265,7 @@ fn backspace_across_lines_uses_current_caret_y_for_phase() {
     // caret 越过 line 2 上沿（y = 19 < line_top = 20）：line 2 已走过 → 全隐。
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 19.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 19.0, 0.0, None, true, side_of(&line_2))
             .w,
         0.0,
         "caret 已走过旧 line 2，必须全隐"
@@ -263,14 +274,14 @@ fn backspace_across_lines_uses_current_caret_y_for_phase() {
     // 等于上沿时 line 2 仍是当前行。
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 20.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 20.0, 0.0, None, true, side_of(&line_2))
             .w,
         20.0
     );
     // caret 进入 line 1（y = 19）：line 1 正在被吞。
     assert_eq!(
         line_1
-            .compute_frame_by_caret_ingest(120.0, 19.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 19.0, 0.0, None, true, side_of(&line_1))
             .w,
         20.0
     );
@@ -278,13 +289,13 @@ fn backspace_across_lines_uses_current_caret_y_for_phase() {
     // caret 进入 line 1（y = 10）：line 2 全隐，line 1 继续被吞。
     assert_eq!(
         line_2
-            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true, side_of(&line_2))
             .w,
         0.0
     );
     assert_eq!(
         line_1
-            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(120.0, 10.0, 0.0, None, true, side_of(&line_1))
             .w,
         20.0
     );
@@ -308,13 +319,13 @@ fn insert_single_line_boundary_is_current_caret_x() {
     );
     assert_eq!(
         slice
-            .compute_frame_by_caret_ingest(130.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(130.0, 10.0, 0.0, None, true, side_of(&slice))
             .w,
         30.0
     );
     assert_eq!(
         slice
-            .compute_frame_by_caret_ingest(160.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(160.0, 10.0, 0.0, None, true, side_of(&slice))
             .w,
         60.0
     );
@@ -328,21 +339,21 @@ fn backspace_single_line_boundary_is_current_caret_x() {
     // caret 还没动（仍在 160）：完整可见。
     assert_eq!(
         slice
-            .compute_frame_by_caret_ingest(160.0, 10.0, 0.0, None, true)
+            .compute_frame_by_caret_ingest(160.0, 10.0, 0.0, None, true, side_of(&slice))
             .w,
         60.0
     );
     // caret 走到中点 130：吞掉从右往左的一半。
     assert_eq!(
         slice
-            .compute_frame_by_caret_ingest(130.0, 10.0, 0.5, None, true)
+            .compute_frame_by_caret_ingest(130.0, 10.0, 0.5, None, true, side_of(&slice))
             .w,
         30.0
     );
     // caret 到达终点 100：全吞。
     assert_eq!(
         slice
-            .compute_frame_by_caret_ingest(100.0, 10.0, 1.0, None, true)
+            .compute_frame_by_caret_ingest(100.0, 10.0, 1.0, None, true, side_of(&slice))
             .w,
         0.0
     );
@@ -564,6 +575,7 @@ mod real_track_phase {
                                 caret.progress,
                                 caret.ingest_line_ord,
                                 caret.is_ingest_segment,
+                                caret.ingest_side,
                             )
                             .w
                             == 0.0,
@@ -581,6 +593,7 @@ mod real_track_phase {
                             caret.progress,
                             caret.ingest_line_ord,
                             caret.is_ingest_segment,
+                            caret.ingest_side,
                         )
                         .w,
                     40.0,
@@ -613,6 +626,7 @@ mod real_track_phase {
                             caret.progress,
                             caret.ingest_line_ord,
                             caret.is_ingest_segment,
+                            caret.ingest_side,
                         )
                         .w,
                     0.0,
@@ -632,6 +646,7 @@ mod real_track_phase {
                             caret.progress,
                             caret.ingest_line_ord,
                             caret.is_ingest_segment,
+                            caret.ingest_side,
                         )
                         .w,
                     40.0,
@@ -893,6 +908,7 @@ mod production_route {
                     caret.progress,
                     caret.ingest_line_ord,
                     caret.is_ingest_segment,
+                    caret.ingest_side,
                 )
                 .w;
             let w1 = row1
@@ -902,6 +918,7 @@ mod production_route {
                     caret.progress,
                     caret.ingest_line_ord,
                     caret.is_ingest_segment,
+                    caret.ingest_side,
                 )
                 .w;
             assert!(
@@ -959,7 +976,7 @@ mod production_route {
         let rows = vec![row(0, 0.0, 10.0)];
         let old_caret = caret_rect(0.0, 0.0);
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&slices, &rows, &old_caret, &new_caret);
+        let segments = build_delete_route(&slices, &rows, &old_caret, Some(&new_caret));
 
         assert_eq!(segments.len(), 1);
         assert_eq!(
@@ -978,7 +995,7 @@ mod production_route {
         let rows = vec![row(0, 0.0, 10.0)];
         let old_caret = caret_rect(0.0, 0.0);
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&slices, &rows, &old_caret, &new_caret);
+        let segments = build_delete_route(&slices, &rows, &old_caret, Some(&new_caret));
         let started_at = Instant::now();
         let track = track_from(segments, old_caret, new_caret, started_at);
 
@@ -994,6 +1011,7 @@ mod production_route {
                 first.progress,
                 first.ingest_line_ord,
                 first.is_ingest_segment,
+                first.ingest_side,
             )
             .w;
         let last = sample_caret_track_frame(&track, frame_now(started_at, 1.0));
@@ -1004,6 +1022,7 @@ mod production_route {
                 last.progress,
                 last.ingest_line_ord,
                 last.is_ingest_segment,
+                last.ingest_side,
             )
             .w;
 
@@ -1025,7 +1044,7 @@ mod production_route {
         // 旧 caret 在第 1 行右端；吞到第 0 行左端（deleted_range.start）。
         let old_caret = caret_rect(30.0, ROW_H);
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&slices, &rows, &old_caret, &new_caret);
+        let segments = build_delete_route(&slices, &rows, &old_caret, Some(&new_caret));
         let kinds: Vec<CaretTrackSegmentKind> = segments.iter().map(|s| s.kind).collect();
         assert_eq!(
             kinds,
@@ -1048,7 +1067,8 @@ mod production_route {
         assert_eq!(segments[2].to.x, 0.0);
         assert_route_is_continuous(&segments, "退格跨行");
 
-        let with_tail = build_delete_route(&slices, &rows, &old_caret, &caret_rect(0.0, ROW_H));
+        let with_tail =
+            build_delete_route(&slices, &rows, &old_caret, Some(&caret_rect(0.0, ROW_H)));
         assert_eq!(with_tail.len(), 4, "终点不同时才生成末尾 RowHandoff");
         assert_eq!(with_tail[3].kind, CaretTrackSegmentKind::RowHandoff);
         assert_eq!(with_tail[3].from.x, 0.0);
@@ -1063,7 +1083,7 @@ mod production_route {
         let old_caret = caret_rect(40.0, 0.0);
         // 单字符退格：吞字终点就是 new caret。
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&slices, &rows, &old_caret, &new_caret);
+        let segments = build_delete_route(&slices, &rows, &old_caret, Some(&new_caret));
         assert_eq!(
             segments.len(),
             1,
@@ -1085,7 +1105,7 @@ mod production_route {
         let screen_caret = caret_rect(18.0, ROW_H);
         let new_caret = caret_rect(0.0, 0.0);
 
-        let segments = build_delete_route(&slices, &rows, &screen_caret, &new_caret);
+        let segments = build_delete_route(&slices, &rows, &screen_caret, Some(&new_caret));
         assert_eq!(
             segments[0].kind,
             CaretTrackSegmentKind::LayoutHandoff,
@@ -1108,7 +1128,7 @@ mod production_route {
         assert_route_is_continuous(&segments, "退格前置换位");
 
         // 屏幕 caret 已经在删除起点：不生成 0 长度的换位段。
-        let same = build_delete_route(&slices, &rows, &caret_rect(30.0, ROW_H), &new_caret);
+        let same = build_delete_route(&slices, &rows, &caret_rect(30.0, ROW_H), Some(&new_caret));
         assert_eq!(
             same[0].kind,
             CaretTrackSegmentKind::IngestLine,

@@ -11,15 +11,20 @@
 //! （`ingest_line_top` / `ingest_line_bottom`）都已由**本侧** canonical 写好，
 //! 路径只能从这些同侧数据生成，绝不跨 layout 混用坐标。
 //!
-//! 已知边界：IME commit 的 composition crossfade 同时产出 new 侧 InsertReveal 与
-//! old 侧 DeleteConceal，两者的行序分属两套 canonical。把它们放进同一条路径就必须
-//! 拿两套 revision 的行号互相比较——这正是维护者明令禁止的。因此 composition 这一路
-//! 不建路径，逐帧几何继续走 `from → to` fallback，行为与本轮改动前完全一致。
+//! Issue #815 评论 5950887715: IME commit 的 composition crossfade 同时产出
+//! new 侧 `InsertReveal` 与 old 侧 `DeleteConceal`。此前这里直接放弃（返回空
+//! route），理由是两套 canonical 的行号不能互相比大小——于是 IME 又退回 old→new
+//! 一条斜线，正是前几轮刚从普通 Insert/Delete 里删掉的旧问题。
+//!
+//! 现在的解法不是放弃，而是给每段加 `IngestSnapshotSide`：old 侧段带 `Old`、
+//! new 侧段带 `New`、最前置纯几何换位带 `None`。行序只在**同一 side 内**比较，
+//! Mixed 路径按「先吞旧 preedit（Old），再吐新 candidate（New）」分段拼接，
+//! 全程不产生跨 snapshot ordinal 比较。
 
 use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::animated_slice::{AnimatedSliceKind, IngestBoundaryDriver};
 use crate::sujian_editor_item::animation::transaction::types::{
-    CaretTrackSegment, CaretTrackSegmentKind,
+    CaretTrackSegment, CaretTrackSegmentKind, IngestSnapshotSide,
 };
 use crate::sujian_editor_item::animation::transaction_builder::VisualEditSpec;
 use crate::sujian_editor_item::edit_motion::CursorRect;
@@ -110,6 +115,34 @@ pub(crate) fn collect_ingest_rows(slices: &[AnimatedSlice]) -> Vec<IngestRow> {
     rows
 }
 
+/// Issue #815 评论 5950887715: 只收 old 侧 `DeleteConceal` 的吞吐行。
+///
+/// 行序来自 **old snapshot**。Mixed（IME 同时 Reveal + Conceal）路径下
+/// old / new 的 `VisualLine.id` 每次排版都从 0 重编、是两套互不相干的坐标系，
+/// 绝不能互相比较，所以两侧必须分开收集。
+pub(crate) fn collect_delete_rows(slices: &[AnimatedSlice]) -> Vec<IngestRow> {
+    collect_ingest_rows(
+        &slices
+            .iter()
+            .filter(|slice| slice.kind == AnimatedSliceKind::DeleteConceal)
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Issue #815 评论 5950887715: 只收 new 侧 `InsertReveal` 的吞吐行。
+///
+/// 行序来自 **new snapshot**。
+pub(crate) fn collect_insert_rows(slices: &[AnimatedSlice]) -> Vec<IngestRow> {
+    collect_ingest_rows(
+        &slices
+            .iter()
+            .filter(|slice| slice.kind == AnimatedSliceKind::InsertReveal)
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// 判定这一批吞吐 slice 的形状。
 pub(crate) fn ingest_route_shape(slices: &[AnimatedSlice]) -> IngestRouteShape {
     let mut reveal = false;
@@ -169,6 +202,8 @@ pub(crate) fn build_insert_route(
             from: cursor,
             to: ingest_start,
             ingest_line_ord: None,
+            // 最前置的纯几何换位还没进入任何一侧的吞吐。
+            ingest_side: None,
             visual_line_id: first.visual_line_id,
         });
     }
@@ -187,6 +222,7 @@ pub(crate) fn build_insert_route(
             from: cursor,
             to,
             ingest_line_ord: Some(row.line_ord),
+            ingest_side: Some(IngestSnapshotSide::New),
             visual_line_id: row.visual_line_id,
         });
         if !is_last {
@@ -197,6 +233,7 @@ pub(crate) fn build_insert_route(
                 to: next.caret_rect_at(next.left),
                 // 刚扫完的行 → 该行保持终态，后面的行还没被碰到。
                 ingest_line_ord: Some(row.line_ord),
+                ingest_side: Some(IngestSnapshotSide::New),
                 visual_line_id: row.visual_line_id,
             });
         }
@@ -214,7 +251,9 @@ pub(crate) fn build_delete_route(
     slices: &[AnimatedSlice],
     rows: &[IngestRow],
     screen_caret: &CursorRect,
-    new_caret: &CursorRect,
+    // Issue #815 评论 5950887715: `None` 表示不接末尾换位段（Mixed 路径下由调用方
+    // 接到 new 侧吞吐起点），`Some` 才是普通删除接到新快照最终 caret。
+    tail: Option<&CursorRect>,
 ) -> Vec<CaretTrackSegment> {
     let Some(first_row) = rows.first().copied() else {
         return Vec::new();
@@ -237,6 +276,7 @@ pub(crate) fn build_delete_route(
             from: *screen_caret,
             to: *screen_caret,
             ingest_line_ord: Some(first_row.line_ord),
+            ingest_side: Some(IngestSnapshotSide::Old),
             visual_line_id: first_row.visual_line_id,
         }];
     }
@@ -263,6 +303,8 @@ pub(crate) fn build_delete_route(
             from: *screen_caret,
             to: ingest_start,
             ingest_line_ord: None,
+            // 纯几何换位，还没进入 old 侧吞吐。
+            ingest_side: None,
             visual_line_id: start_row.visual_line_id,
         });
     }
@@ -275,6 +317,7 @@ pub(crate) fn build_delete_route(
             from,
             to,
             ingest_line_ord: Some(row.line_ord),
+            ingest_side: Some(IngestSnapshotSide::Old),
             visual_line_id: row.visual_line_id,
         });
         if index > 0 {
@@ -292,6 +335,7 @@ pub(crate) fn build_delete_route(
                 // `上一行 right -> left (IngestLine)`。
                 to: next_up.caret_rect_at(next_up.right),
                 ingest_line_ord: Some(row.line_ord),
+                ingest_side: Some(IngestSnapshotSide::Old),
                 visual_line_id: row.visual_line_id,
             });
         }
@@ -299,14 +343,18 @@ pub(crate) fn build_delete_route(
     // Issue #815 评论 5950375533 问题4: old 侧吞字终点与 new caret 完全相同时
     // 不生成这一段，否则普通单字符退格会白白把一半时长花在 0 位移上。
     let swallow_end = first_row.caret_rect_at(first_row.left);
-    if !same_rect(&swallow_end, new_caret) {
-        segments.push(CaretTrackSegment {
-            kind: CaretTrackSegmentKind::RowHandoff,
-            from: swallow_end,
-            to: *new_caret,
-            ingest_line_ord: Some(first_row.line_ord),
-            visual_line_id: first_row.visual_line_id,
-        });
+    if let Some(tail_target) = tail {
+        if !same_rect(&swallow_end, tail_target) {
+            segments.push(CaretTrackSegment {
+                kind: CaretTrackSegmentKind::RowHandoff,
+                from: swallow_end,
+                to: *tail_target,
+                ingest_line_ord: Some(first_row.line_ord),
+                // old 已完成、new 尚未开始 ⇒ 保留 Old 侧但不是吞吐段。
+                ingest_side: Some(IngestSnapshotSide::Old),
+                visual_line_id: first_row.visual_line_id,
+            });
+        }
     }
     segments
 }
@@ -325,10 +373,6 @@ pub(crate) fn build_ingest_route(
     spec: &VisualEditSpec,
     slices: &[AnimatedSlice],
 ) -> Vec<CaretTrackSegment> {
-    let rows = collect_ingest_rows(slices);
-    if rows.is_empty() {
-        return Vec::new();
-    }
     // Issue #815 评论 5950375533 问题3: 路径的**屏幕起点**必须优先用 handoff
     // （上一帧真正画出来的 caret 位置），拿不到才退回逻辑 `old_cursor_rect`。
     //
@@ -341,18 +385,65 @@ pub(crate) fn build_ingest_route(
         .as_ref()
         .map(|handoff| &handoff.sampled)
         .or(spec.old_cursor_rect.as_ref());
+    let delete_rows = collect_delete_rows(slices);
+    let insert_rows = collect_insert_rows(slices);
+    if delete_rows.is_empty() && insert_rows.is_empty() {
+        return Vec::new();
+    }
     match ingest_route_shape(slices) {
         IngestRouteShape::InsertOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
-            .map(|(screen_caret, new_caret)| build_insert_route(&rows, screen_caret, new_caret))
+            .map(|(screen_caret, new_caret)| {
+                build_insert_route(&insert_rows, screen_caret, new_caret)
+            })
             .unwrap_or_default(),
         IngestRouteShape::DeleteOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
             .map(|(screen_caret, new_caret)| {
-                build_delete_route(slices, &rows, screen_caret, new_caret)
+                build_delete_route(slices, &delete_rows, screen_caret, Some(new_caret))
             })
             .unwrap_or_default(),
-        // Mixed（IME commit composition crossfade）：行序分属两套 canonical，不建路径。
-        IngestRouteShape::Mixed => Vec::new(),
+        // Issue #815 评论 5950887715: Mixed（IME commit 候选 Reveal + 旧 preedit
+        // Conceal 同帧）**不再是退化路径**。
+        //
+        // 之前这里直接 `Vec::new()`，理由是 old / new 的 `VisualLine.id` 每次排版
+        // 都从 0 重编、不能互相比较。正确的解法不是放弃，而是给每段加 side
+        // （`IngestSnapshotSide::Old / New`），行序只在同一 side 内比较。
+        //
+        // 路线按阶段拼：**先吞旧 preedit（old 侧），再吐新 candidate（new 侧）**。
+        // 每段自带 side，旧侧已终态、新侧初态，完全不产生跨 snapshot ordinal 比较。
+        IngestRouteShape::Mixed => {
+            let Some(new_caret) = spec.new_cursor_rect.as_ref() else {
+                return Vec::new();
+            };
+            let (Some(first_delete), Some(first_insert)) =
+                (delete_rows.first().copied(), insert_rows.first().copied())
+            else {
+                return Vec::new();
+            };
+            let Some(screen_caret) = screen_caret else {
+                return Vec::new();
+            };
+            // old 侧吞字（不含末尾换位段，交给下面统一接）。
+            let mut segments = build_delete_route(slices, &delete_rows, screen_caret, None);
+            // old 吞完 → 切到 new 侧 candidate 起点。保留 Old 侧但不是吞吐段：
+            // old 侧 DeleteConceal 保持终态，new 侧 InsertReveal 保持初态。
+            let swallow_end = first_delete.caret_rect_at(first_delete.left);
+            let insert_start = first_insert.caret_rect_at(first_insert.left);
+            if !same_rect(&swallow_end, &insert_start) {
+                segments.push(CaretTrackSegment {
+                    kind: CaretTrackSegmentKind::RowHandoff,
+                    from: swallow_end,
+                    to: insert_start,
+                    ingest_line_ord: Some(first_delete.line_ord),
+                    ingest_side: Some(IngestSnapshotSide::Old),
+                    visual_line_id: first_delete.visual_line_id,
+                });
+            }
+            // new 侧吐字。`screen_caret` 就是 insert_start，
+            // 所以 `build_insert_route` 不会再生成 0 长度的前置换位段。
+            segments.extend(build_insert_route(&insert_rows, &insert_start, new_caret));
+            segments
+        }
     }
 }

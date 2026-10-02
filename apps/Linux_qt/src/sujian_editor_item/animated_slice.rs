@@ -1,3 +1,4 @@
+use super::animation::transaction::types::IngestSnapshotSide;
 use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::transaction_key::VisualTransactionKey;
 
@@ -254,6 +255,18 @@ pub(crate) struct AnimatedSlice {
     /// 非 ReflowMove/ReflowCrossFade 时为空。merge_two 合并 anchors 列表，
     /// 不丢子 cluster 身份；rebind 逐 anchor 找新 canonical cluster。
     pub reflow_anchors: Vec<ReflowAnchor>,
+}
+
+/// Issue #815 评论 5950887715: 吞吐阶段的先后次序。
+///
+/// IME 的 Mixed 路径固定是「先吞旧 preedit（Old），再吐新 candidate（New）」，
+/// 所以 side 本身就带出阶段序：轨迹当前所在 side 的 rank 更小 ⇒ 这一侧已走完
+/// （终态），rank 更大 ⇒ 还没开始（初态）。
+fn side_rank(side: IngestSnapshotSide) -> u8 {
+    match side {
+        IngestSnapshotSide::Old => 0,
+        IngestSnapshotSide::New => 1,
+    }
 }
 
 impl AnimatedSlice {
@@ -908,6 +921,8 @@ impl AnimatedSlice {
         caret_progress: f64,
         sampled_ingest_line_ord: Option<usize>,
         is_ingest_segment: bool,
+        // Issue #815 评论 5950887715: 本帧吞吐边界属于哪一侧 canonical。
+        sampled_ingest_side: Option<IngestSnapshotSide>,
     ) -> AnimatedSliceFrame {
         // ReflowMove/ReflowCrossFade 始终是独立 Timed（见
         // `VisualUnitTiming::default_for_kind_with_coordinated`），不会走到这个入口；
@@ -967,13 +982,45 @@ impl AnimatedSlice {
 
         // Issue #815 评论 5949097065 问题3: 跨行相位的权威来源是 caret track 的
         // 分段路线采样；只有拿不到行序时才降级到 caret.y + 本行行范围。
-        let phase = match sampled_ingest_line_ord {
-            Some(sampled_ord) => self.ingest_phase_from_route_ord(sampled_ord, is_ingest_segment),
-            // 拿不到权威行序，但 x 仍是可信吞吐边界（退化路线）⇒ 降级用 caret.y。
-            None if is_ingest_segment => IngestLinePhase::FallbackFromCaretY,
-            // None + 非吞吐段 = 跨 layout 几何换位段：轨迹上的 x 是几何换位值，
-            // 不是吞吐边界，全部吞吐字保持初态。
-            None => IngestLinePhase::RouteBeforeStart,
+        // Issue #815 评论 5950887715: 本 slice 属于哪一侧由 kind 直接决定——
+        // `DeleteConceal` 吞的是 old snapshot 的字，`InsertReveal` 吐的是
+        // new snapshot 的字。两侧的 `VisualLine.id` 每次排版都从 0 重编，是两套
+        // 互不相干的坐标系，绝不能互相比较，所以先按 side 隔离，再谈行序。
+        let slice_side = match self.kind {
+            AnimatedSliceKind::DeleteConceal => IngestSnapshotSide::Old,
+            _ => IngestSnapshotSide::New,
+        };
+        let phase = match sampled_ingest_side {
+            // side = None 且**不是**吞吐段 = 最前置的纯几何换位段：还没进入任何
+            // 一侧的吞吐，两侧都保持初态，绝不拿对角线 x 裁任何一行。
+            None if !is_ingest_segment => IngestLinePhase::RouteBeforeStart,
+            // side = None 但**是**吞吐段 = 完全没有分段的退化路线：此时没有权威
+            // side 也没有权威行序，但 x 仍是可信的吞吐边界 ⇒ 降级用 caret.y 判断
+            // 相位。这与上面的几何换位段必须区分。
+            None => match sampled_ingest_line_ord {
+                Some(sampled_ord) => {
+                    self.ingest_phase_from_route_ord(sampled_ord, is_ingest_segment)
+                }
+                None => IngestLinePhase::FallbackFromCaretY,
+            },
+            // 轨迹当前所在的 side 排在我**前面**（Mixed 固定 Old 先 New 后）：
+            // 说明我这一侧还没开始，保持初态。
+            Some(sampled_side) if side_rank(sampled_side) < side_rank(slice_side) => {
+                IngestLinePhase::NotReached
+            }
+            // 轨迹已经走到我这一侧**之后**：我这一侧早已吞/吐完，保持终态。
+            Some(sampled_side) if side_rank(sampled_side) > side_rank(slice_side) => {
+                IngestLinePhase::Passed
+            }
+            Some(_) => match sampled_ingest_line_ord {
+                Some(sampled_ord) => {
+                    self.ingest_phase_from_route_ord(sampled_ord, is_ingest_segment)
+                }
+                // 同侧但没有权威行序：x 若仍是吞吐边界就降级用 caret.y，
+                // 否则（几何换位段）保持初态。
+                None if is_ingest_segment => IngestLinePhase::FallbackFromCaretY,
+                None => IngestLinePhase::RouteBeforeStart,
+            },
         };
         let (boundary_left, boundary_right) = match phase {
             IngestLinePhase::Passed => {

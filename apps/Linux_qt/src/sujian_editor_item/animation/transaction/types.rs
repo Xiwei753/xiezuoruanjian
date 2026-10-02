@@ -239,6 +239,20 @@ pub(crate) enum CaretTrackSegmentKind {
     RowHandoff,
 }
 
+/// Issue #815 评论 5950887715: 这一段的 `ingest_line_ord` 属于哪一侧 canonical。
+///
+/// `VisualLine.id` 每次排版都从 0 重新按全文顺序编号，old/new 两份快照的同名
+/// 行号是**两套互不相干的坐标系**。此前只能放弃 Mixed（Reveal + Conceal 同帧）
+/// 路径，退回 old→new 一条斜线——那正是前几轮从普通 Insert/Delete 里删掉的旧问题。
+/// 加上 side 之后，行序只在**同一 side 内**比较，Mixed 也能建出正确分段路线。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IngestSnapshotSide {
+    /// old snapshot（`DeleteConceal` 吞的是旧字）。
+    Old,
+    /// new snapshot（`InsertReveal` 吐的是新字）。
+    New,
+}
+
 /// 一段 caret 轨迹。`from`/`to` 都是**本段所属那侧 canonical** 的文档坐标，
 /// 绝不跨 layout 混用。
 #[derive(Clone, Copy, Debug)]
@@ -249,6 +263,14 @@ pub(crate) struct CaretTrackSegment {
     /// 仅 `IngestLine` 有值：本段正在扫的那一行在**本侧 canonical** 里的行序。
     /// 文字层用它判断"我是不是当前这一行"，不再靠 caret.y 反推。
     pub ingest_line_ord: Option<usize>,
+    /// Issue #815 评论 5950887715: 本段的 `ingest_line_ord` 属于哪一侧快照。
+    ///
+    /// - old 侧 `DeleteConceal` 段：`Old`；
+    /// - new 侧 `InsertReveal` 段：`New`；
+    /// - 最开始纯几何换位（还没进入任何一侧的吞吐）：`None`；
+    /// - old 吞完、准备切到 new 的中间换位：保留 `Old` +
+    ///   `is_ingest_segment = false`，表示 old 已完成、new 尚未开始。
+    pub ingest_side: Option<IngestSnapshotSide>,
     /// 本段所属那侧 canonical 的 `visual_line_id`（只用于光标层画 caret）。
     pub visual_line_id: Option<usize>,
 }
@@ -343,22 +365,33 @@ impl PreparedCursorVisualTrack {
     pub fn sampled_ingest_at_progress(
         &self,
         progress: f64,
-    ) -> (Option<usize>, Option<usize>, bool) {
+    ) -> (
+        Option<usize>,
+        Option<usize>,
+        bool,
+        Option<IngestSnapshotSide>,
+    ) {
         match self.sampled_segment_at_progress(progress) {
-            // 退化路线（没有分段，IME composition crossfade 走的就是这条）：
-            // x 仍然是一条可信的裁切边界，只是拿不到权威行序 ⇒ 交给文字层降级用
-            // caret.y + 本行行范围判断相位。这与"有分段但正处在 LayoutHandoff
-            // 换位段"必须区分：后者 x 是几何换位值，不能当吞吐边界。
-            None => (self.from_visual_line_id, None, true),
+            // 退化路线（完全没有分段）：x 仍然是一条可信的裁切边界，只是拿不到
+            // 权威行序 ⇒ 交给文字层降级用 caret.y + 本行行范围判断相位。
+            // 这与"有分段但正处在 LayoutHandoff 换位段"必须区分：后者 x 是几何
+            // 换位值，不能当吞吐边界。
+            //
+            // Issue #815 评论 5950887715: side 传 `None`，文字层据此让**两侧**都保持
+            // 初态——没有 side 就没有权威行序来源，绝不能让某一侧先动。
+            None => (self.from_visual_line_id, None, true, None),
             Some((index, _)) => {
                 let segment = &self.segments[index];
+                let side = segment.ingest_side;
                 match segment.kind {
                     CaretTrackSegmentKind::IngestLine => {
-                        (segment.visual_line_id, segment.ingest_line_ord, true)
+                        (segment.visual_line_id, segment.ingest_line_ord, true, side)
                     }
-                    CaretTrackSegmentKind::LayoutHandoff => (segment.visual_line_id, None, false),
+                    CaretTrackSegmentKind::LayoutHandoff => {
+                        (segment.visual_line_id, None, false, side)
+                    }
                     CaretTrackSegmentKind::RowHandoff => {
-                        (segment.visual_line_id, segment.ingest_line_ord, false)
+                        (segment.visual_line_id, segment.ingest_line_ord, false, side)
                     }
                 }
             }
@@ -526,7 +559,7 @@ impl PreparedCursorVisualTrack {
         let remaining = self.remaining_duration_ms(now).max(1);
         // Issue #815 评论 5949097065 问题3: rebase 落在中间行时，新 track 必须接住
         // 本帧**实际**的行身份与几何，不能退回逻辑 old 行，也不能只记 from/to 两个 id。
-        let (sampled_line_id, _, _) = self.sampled_ingest_at_progress(progress);
+        let (sampled_line_id, _, _, _) = self.sampled_ingest_at_progress(progress);
         // 未走完的那一段从本帧实际位置起跳，后续段原样保留。
         let remaining_segments = self.remaining_segments_from(progress, new_to);
         Self {
@@ -582,6 +615,7 @@ impl PreparedCursorVisualTrack {
                 from: current_end,
                 to: new_to,
                 ingest_line_ord: current.ingest_line_ord,
+                ingest_side: None,
                 visual_line_id: current.visual_line_id,
             });
         }
@@ -592,6 +626,7 @@ impl PreparedCursorVisualTrack {
                 from: current_end,
                 to: new_to,
                 ingest_line_ord: current.ingest_line_ord,
+                ingest_side: None,
                 visual_line_id: current.visual_line_id,
             });
         }

@@ -217,17 +217,17 @@ pub(crate) fn build_prepared_transaction(
     // `LayoutHandoff`（跨 layout 换位，不吞吐）/ `IngestLine`（沿某行横扫，那一行的 x 才
     // 是吞吐边界）/ `RowHandoff`（行间换位）。
     //
-    // IME commit 的 composition crossfade 同时产出 new 侧 InsertReveal 与 old 侧
-    // DeleteConceal，行序分属两套 canonical，合并进同一条路径就必须跨 revision 比行号——
-    // 维护者明令禁止，所以那一路不建路径（见 `ingest_route.rs` 顶部说明）。
-    let ingest_route_segments = if spec.caret_animation_enabled
-        && spec.composition_commit_crossfade.is_none()
-        && spec.coordinated_animation_enabled
-    {
-        ingest_route::build_ingest_route(&spec, &slices)
-    } else {
-        Vec::new()
-    };
+    // Issue #815 评论 5950887715: 这里原先还带一个
+    // `spec.composition_commit_crossfade.is_none()` 的门，把 IME commit 整条排除在
+    // 正式 route 之外——那等于绕过 #815 早就规定过的「IME 也走同一套 caret-driven
+    // 协同语义」。现在 segment 带 `IngestSnapshotSide`，old / new 行序只在各自
+    // side 内比较，IME 的 Mixed 路径也能建出正确的分段路线，所以这道门删掉。
+    let ingest_route_segments =
+        if spec.caret_animation_enabled && spec.coordinated_animation_enabled {
+            ingest_route::build_ingest_route(&spec, &slices)
+        } else {
+            Vec::new()
+        };
 
     // 2. Cursor visual track
     //

@@ -1,3 +1,4 @@
+use super::animation::transaction::types::IngestSnapshotSide;
 use super::edit_motion::CursorRect;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
@@ -211,6 +212,14 @@ pub(crate) struct SampledCaretFrame {
     /// - `false`：处于换位段（`LayoutHandoff` / `RowHandoff`），`rect.x` 只是
     ///   换位过程中的几何值，**不得**当吞吐边界。
     pub is_ingest_segment: bool,
+    /// Issue #815 评论 5950887715: 本帧吞吐边界属于哪一侧 canonical。
+    ///
+    /// old/new 的 `VisualLine.id` 每次排版都从 0 重编，是两套互不相干的坐标系，
+    /// 绝不能互相比大小。文字层用这个 side 判断"我这一侧现在该不该动"：
+    /// sampled side = `Old` 时 new 侧 `InsertReveal` 保持初态，= `New` 时 old 侧
+    /// `DeleteConceal` 保持终态。`None` 表示还没有进入任何一侧的吞吐（最前置
+    /// 纯几何换位），两侧都保持初态。
+    pub ingest_side: Option<IngestSnapshotSide>,
 }
 
 impl Default for SampledCaretFrame {
@@ -228,6 +237,7 @@ impl Default for SampledCaretFrame {
             },
             ingest_line_ord: None,
             is_ingest_segment: false,
+            ingest_side: None,
         }
     }
 }

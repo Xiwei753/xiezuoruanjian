@@ -624,6 +624,9 @@ impl LinuxEditorAnimationCoordinator {
                             caret.progress,
                             caret.ingest_line_ord,
                             caret.is_ingest_segment,
+                            // Issue #815 评论 5950887715: side 与 ord 一样出自同一次
+                            // 采样，文字层据此把 old / new 两套行序隔离开。
+                            caret.ingest_side,
                         )
                     })
                 } else {
