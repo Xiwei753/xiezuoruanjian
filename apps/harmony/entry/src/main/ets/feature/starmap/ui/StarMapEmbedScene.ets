@@ -12,6 +12,8 @@
 // 用户缩放只有一台全局相机（在 StarMapScreen 上），子 Scene 是相机里的内容，
 // 没有"这个子图被用户拧了几倍"这回事。子 Scene 的 fitScale 和居中偏移由它自己
 // 按父 Embed 的可用区域算一次，属于布局适配，用户改不了。
+// 这里只把父层算好的 inheritedScale（累计显示比例）继续往下传，让整棵树的
+// 有效比例是 camera × 各层 fit 的连乘，而不是每层各缩各的。
 // 同样也不再持有子场景的选中状态：全树共用父层传下来的 selectionState。
 
 import hilog from '@ohos.hilog'
@@ -117,6 +119,13 @@ export struct StarMapEmbedScene {
   /** 改全局相机的回调：原样往下传 */
   onCameraChanged: (scale: number, offsetX: number, offsetY: number) => void =
     (_scale: number, _offsetX: number, _offsetY: number) => {}
+  /**
+   * 祖先累计显示比例：父 StarMapScene 的 viewportScaleValue()（#818 复审）。
+   *
+   * child StarMapScene 的有效比例 = 它的局部 fitScale × 这一份。
+   * 少了它，相机放大时只有 Embed 圆壳变大，圆里的节点不跟着放大。
+   */
+  @Prop inheritedScale: number = 1
 
   // ─── @State：子场景状态 ───
   /** 子星图 graph */
@@ -205,6 +214,8 @@ export struct StarMapEmbedScene {
         cameraOffsetX: this.cameraOffsetX,
         cameraOffsetY: this.cameraOffsetY,
         onCameraChanged: this.onCameraChanged,
+        // 祖先累计比例原样往下传：第二层的累计 = camera × 第一层 fit × 第二层 fit（#818 复审）
+        inheritedScale: this.inheritedScale,
         sceneDepth: this.sceneDepth + 1,
         bridge: this.bridge,
         themeConfig: this.themeConfig,

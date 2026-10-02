@@ -16,10 +16,19 @@
 //    每个子 Scene 有一份自己的 `fitScale + 居中偏移`，由"内容包围盒"和"父 Embed 的
 //    可用圆形内容区"算出。它是**布局适配**，不是相机：用户改不了，也不在相机语义里。
 //    每一层都按自己的父 Embed 尺寸各算一次，所以嵌套深度不会让子图越深越小到看不见。
+//    这份 fit 是**局部数据**：算的时候要先把父层尺寸除掉祖先累计比例还原成本层原始尺寸，
+//    否则同一张子图会因为"打开时相机是多少"而算出不同的 fitScale。
 //
 // 一张子星图里的点，从局部画布到最终屏幕要依次经过：
 //   子 Scene 局部 → 父 Embed 局部适配 → 更上层 Embed 局部适配 → 根 world → 全局相机 → 屏幕
 // 子层没有任何"用户缩放"可以混进这条链。
+//
+// 因此每个 Scene 真正乘在画面上的比例是**累计值**：
+//   根：camera
+//   子：camera × fit₁
+//   孙：camera × fit₁ × fit₂
+// Scene 注册表 sync() 写进去的 scale / offset 就是这个累计值（见 ui/StarMapScene
+// 的 viewportScaleValue() / viewportOffsetX()），递归命中那套换算才能和画面一致。
 
 import { StarMapTargetPath, StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 import { PlatformPoint } from './StarMapLayout'

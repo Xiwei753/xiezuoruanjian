@@ -31,6 +31,10 @@
 // 13. 变换只有两种（#818）：根 Scene 的全局相机（用户可改），和每个子 Scene 的
 //     局部适配 fitScale + 居中偏移（布局用，用户改不了）。禁止再用"每深一层乘 0.6"
 //     这种写死系数，也禁止在子层再存一份用户缩放倍数。
+//     子 Scene 在画面上的有效比例 = `fitScale * inheritedScale`（inheritedScale 是父层
+//     的 viewportScaleValue()），偏移同理要乘 —— 否则相机放大时只有外层圆壳变大，
+//     圆里的节点不跟着放大（#818 复审）。fitScale 本身存的是局部数据，
+//     fitView / syncFitToSceneSize 都必须先除掉 inheritedScale 还原局部尺寸再算。
 // 14. 选中态全树只有一份（StarMapSelectionState），身份是 scenePath + kind + itemId。
 //     每层各存一份 selectedNodeId 的话，父子两层会同时亮，且分不清选中的是哪一层的哪个东西。
 // 15. 选中、connect 松手、菜单归属全部走 geometry 的递归命中一个入口，
@@ -178,6 +182,17 @@ export struct StarMapScene {
   @Prop @Watch('onTransformChange') cameraOffsetX: number = 0
   /** 全局相机 Y 偏移（根 Scene 局部屏幕坐标） */
   @Prop @Watch('onTransformChange') cameraOffsetY: number = 0
+  /**
+   * 祖先累计显示比例：父 Scene 的 viewportScaleValue()。
+   *
+   * 子 Scene 在屏幕上真正显示出来的比例 = `fitScale * inheritedScale`，
+   * 也就是把"父层已经吃下的相机 + 父层局部适配"一起乘进来。
+   * 没有这一份累计值，相机放大时只有外层圆壳变大，圆里的节点还是原尺寸，
+   * 只是在一个更大的圆里重新居中——那不是缩放视角，是放大容器（#818 复审）。
+   *
+   * 根 Scene 不用它：根就是相机本体，比例直接是 cameraScale。
+   */
+  @Prop @Watch('onTransformChange') inheritedScale: number = 1
 
   /**
    * 改全局相机的回调。只有根 Scene 会调，一路传到 StarMapScreen 写回相机。
@@ -344,8 +359,15 @@ export struct StarMapScene {
   }
 
   /**
-   * 本 Scene 的有效比例：根是全局相机比例，子是局部适配比例（#818）。
+   * 本 Scene 的**累计有效比例**：根是全局相机比例，子是 `局部 fit × 祖先累计`。
+   *
    * 渲染、命中、边几何全部用这个值，界面上不允许再直接读 cameraScale / fitScale 当比例用。
+   *
+   * 为什么子 Scene 要乘 inheritedScale：ArkUI 里子 Scene 是父 Embed 盒子的子组件，
+   * 父层写死了 `DEFAULT_EMBED_DIAMETER * viewportScaleValue()`，盒子已经带着祖先比例变大了。
+   * 子 Scene 若只用自己的 fitScale 绘制，圆壳会跟着相机变大、圆里的节点却纹丝不动。
+   * 乘上 inheritedScale 之后，整条链才是
+   * `child local × child fit × parent fit × … × global camera → screen`。
    *
    * 必须是**方法**，不能是 getter：ArkUI 状态管理 V1 的 @Component 不支持 get
    * 访问器，编译器会把它当成一个从没被赋值的普通属性，于是每次读都是 undefined。
@@ -358,22 +380,44 @@ export struct StarMapScene {
    * 只有 @ComponentV2 才支持 getter（HomeScreen.ets 那种写法），这里是 V1，别改回去。
    */
   private viewportScaleValue(): number {
-    return this.isCameraScene() ? this.cameraScale : this.fitScale
+    return this.isCameraScene() ? this.cameraScale : this.fitScale * this.parentScale()
   }
 
-  /** 本 Scene 的视口偏移 X：根用全局相机，子用局部适配。 */
+  /** 本 Scene 的累计视口偏移 X：根用全局相机，子用 `局部 fit 偏移 × 祖先累计`。 */
   private viewportOffsetX(): number {
-    return this.isCameraScene() ? this.cameraOffsetX : this.fitOffsetX
+    return this.isCameraScene() ? this.cameraOffsetX : this.fitOffsetX * this.parentScale()
   }
 
-  /** 本 Scene 的视口偏移 Y：根用全局相机，子用局部适配。 */
+  /** 本 Scene 的累计视口偏移 Y：根用全局相机，子用 `局部 fit 偏移 × 祖先累计`。 */
   private viewportOffsetY(): number {
-    return this.isCameraScene() ? this.cameraOffsetY : this.fitOffsetY
+    return this.isCameraScene() ? this.cameraOffsetY : this.fitOffsetY * this.parentScale()
   }
 
   /** 本 Scene 是不是相机本体（全树只有根 Scene 是）。 */
   private isCameraScene(): boolean {
     return this.sceneDepth === 0
+  }
+
+  /**
+   * 祖先累计比例的兜底取值。
+   *
+   * 0 或负数只会来自上游传错／除零，除掉它会让整棵子树的节点尺寸塌成 0、
+   * 递归命中全部算成 NaN，所以这里兜回 1（等价于"没有祖先缩放"）。
+   */
+  private parentScale(): number {
+    return this.inheritedScale > 0 ? this.inheritedScale : 1
+  }
+
+  /**
+   * 本 Scene 的**局部**尺寸：扣掉祖先累计比例后的原始盒子大小。
+   *
+   * 局部 fit 必须拿局部尺寸算，不能拿屏幕尺寸算：屏幕尺寸本身带着相机缩放，
+   * 子图如果在 camera=2 时第一次加载，算出来的 fitScale 会比 camera=1 时加载小一半，
+   * 同一张子图就会因为"什么时候打开"显示成不同大小（#818 复审）。
+   */
+  private localSceneSize(): number {
+    const parentScale: number = this.parentScale()
+    return this.sceneWidth / parentScale
   }
 
   /**
@@ -495,61 +539,68 @@ export struct StarMapScene {
    * 可用区域取父 Embed 圆形内容区里"手能可靠点到"的内接正方形边长：
    * 子 Scene 的布局是正方形，四角会超出圆被父层 clip 裁掉，
    * 所以按 1/√2 折算，内容不会铺到圆外被切掉。
+   *
+   * 这里算的是**局部** fit：先把 `sceneWidth / sceneHeight` 除掉 inheritedScale
+   * 还原成本层的原始盒子尺寸，再用它算比例和居中偏移。
+   * fitScale / fitOffset 一旦写成局部数据，就与"打开这张子图时相机是多少"无关，
+   * 屏幕上的呈现由 `viewportScaleValue() = fitScale * inheritedScale` 统一乘出来（#818 复审）。
    */
   fitView(): void {
     this.hasFittedView = true
+    const localWidth: number = this.localSceneSize()
+    const localHeight: number = this.sceneHeight / this.parentScale()
     const bounds: ContentBounds | null = computeContentBounds(this.nodeRects)
     if (bounds === null) {
       this.fitScale = 1
       this.fitOffsetX = 0
       this.fitOffsetY = 0
-      this.lastFittedSceneSize = this.sceneWidth
+      this.lastFittedSceneSize = localWidth
       this.syncSceneHandle()
       return
     }
-    const available: number = Math.min(this.sceneWidth, this.sceneHeight) * CIRCLE_INNER_SAFE_RATIO
+    const available: number = Math.min(localWidth, localHeight) * CIRCLE_INNER_SAFE_RATIO
     // 比例按可用区（圆的内接正方形）算，偏移按 Scene 自己的尺寸算：
-    // 子 Scene 组件是铺满整个圆的，中心在 sceneWidth/2、sceneHeight/2。
+    // 子 Scene 组件是铺满整个圆的，中心在局部宽度/2、局部高度/2。
     // 拿内接正方形的左上角当原点会让内容整体偏左上（#816 复审第 4 条）。
     const fitted: Viewport = computeFittedViewport(
-      bounds, available, available, EMBED_FIT_PADDING_VP, this.sceneWidth, this.sceneHeight
+      bounds, available, available, EMBED_FIT_PADDING_VP, localWidth, localHeight
     )
     this.fitScale = fitted.zoomScale
     this.fitOffsetX = fitted.offsetX
     this.fitOffsetY = fitted.offsetY
-    this.lastFittedSceneSize = this.sceneWidth
+    this.lastFittedSceneSize = localWidth
     // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
     this.syncSceneHandle()
   }
 
   /**
-   * Embed 容器尺寸变化时重新居中（#818）。
+   * 局部容器尺寸变化时重新居中（#818）。
    *
-   * 容器变大现在只有一个原因：全局相机缩放了，父 Scene 的比例跟着变，
-   * 圆壳和铺满圆壳的子 Scene 组件一起变大。
+   * 判断依据是**局部**尺寸 `sceneWidth / inheritedScale`，不是屏幕上的 sceneWidth。
+   * 相机从 1 放到 2 时：sceneWidth 从 200 变 400、inheritedScale 从 1 变 2，
+   * 局部尺寸还是 200 → 局部 fit 什么都不用改，屏幕上的呈现由累计比例自然放大。
+   * 只有父 Embed 的基础尺寸真的变了，局部尺寸才会变，这时才重算一次局部居中。
    *
-   * 注意这里**不再同比放大 fitScale**：容器在屏幕上已经跟着相机放大了，
-   * 子内容用的还是同一个 fitScale，屏幕上的呈现就是同比放大——这正是我们要的。
-   * 如果再乘一次尺寸比，等于把相机的缩放抵消掉，用户双指放大整棵树时
-   * 就会出现"外层圆变大、里面内容纹丝不动"。
-   *
-   * 只重算居中偏移：fitScale 保持不变，偏移按新容器尺寸重新对一次中心。
+   * 也不按屏幕尺寸比去缩放 fitScale：那样等于把相机的缩放抵消掉，
+   * 用户双指放大整棵树时就会出现"外层圆变大、里面内容纹丝不动"。
    */
   private syncFitToSceneSize(): void {
     if (!this.hasFittedView || this.lastFittedSceneSize <= 0) {
       return
     }
-    if (Math.abs(this.sceneWidth - this.lastFittedSceneSize) <= 0.5) {
+    const localWidth: number = this.localSceneSize()
+    if (Math.abs(localWidth - this.lastFittedSceneSize) <= 0.5) {
       return
     }
-    this.lastFittedSceneSize = this.sceneWidth
+    this.lastFittedSceneSize = localWidth
+    const localHeight: number = this.sceneHeight / this.parentScale()
     const bounds: ContentBounds | null = computeContentBounds(this.nodeRects)
     if (bounds === null) {
       this.fitOffsetX = 0
       this.fitOffsetY = 0
     } else {
       const offset: PlatformPoint = computeCenteredOffset(
-        bounds, this.fitScale, this.sceneWidth, this.sceneHeight
+        bounds, this.fitScale, localWidth, localHeight
       )
       this.fitOffsetX = offset.x
       this.fitOffsetY = offset.y
@@ -585,14 +636,19 @@ export struct StarMapScene {
   /**
    * 写本 Scene 的视口偏移。
    * 根 Scene 改全局相机；子 Scene 只能改自己的局部适配偏移（用户在子图里平移内容）。
+   *
+   * 入参是屏幕上的累计像素，写进 @State 前要**除掉祖先累计比例**：
+   * fitOffsetX/Y 存的是局部数据（viewportOffsetX() 会再乘一次 parentScale），
+   * 直接把屏幕像素塞进去会让平移幅度随相机缩放而漂移（相机 2 倍时手指动 10px 只动 5px）。
    */
   private setViewportOffset(offsetX: number, offsetY: number): void {
     if (this.isCameraScene()) {
       this.applyCameraTransform(this.cameraScale, offsetX, offsetY)
       return
     }
-    this.fitOffsetX = offsetX
-    this.fitOffsetY = offsetY
+    const parentScale: number = this.parentScale()
+    this.fitOffsetX = offsetX / parentScale
+    this.fitOffsetY = offsetY / parentScale
   }
 
   // ─── 统一双指缩放入口 = 全局相机（只在根 Scene 上生效，#818） ───
@@ -852,6 +908,10 @@ export struct StarMapScene {
     // 不同步的话缩放之后命中判定就一直用的是旧视口（#816 复审第 2 条）。
     this.syncSceneHandle()
     this.drawEdges()
+    // 祖先累计比例变化 = 局部尺寸跟着父层重新算一次。
+    // onAreaChange 和 @Watch 谁先到不保证，先按当前这份比例校一遍局部适配：
+    // 局部尺寸没变就什么都不做（相机缩放的正常情况），变了才重新居中。
+    this.syncFitToSceneSize()
   }
 
   onMotionProgressChange() {
@@ -1891,7 +1951,7 @@ export struct StarMapScene {
   // ─── @Builder：Embed 组件 ───
 
   /**
-   * Embed 组件：黑色正圆，画布上唯一的外接形状是圆。
+   * Embed 组件：主题容器色正圆，画布上唯一的外接形状是圆（#818 底色已跟随主题）。
    *
    * 尺寸只有一个来源：DEFAULT_EMBED_DIAMETER（见 StarMapLayout），
    * 宽=高=直径，圆角=直径/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
@@ -1929,6 +1989,8 @@ export struct StarMapScene {
           cameraOffsetX: this.cameraOffsetX,
           cameraOffsetY: this.cameraOffsetY,
           onCameraChanged: this.onCameraChanged,
+          // 祖先累计比例：子 Scene 的有效比例 = 它的 fitScale × 这一份（#818 复审）
+          inheritedScale: this.viewportScaleValue(),
         })
       }
       .width('100%')

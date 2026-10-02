@@ -734,11 +734,15 @@ export interface RecursiveSceneSource {
   embedInstanceIds: Set<string>
   /** 本 Scene 画布坐标下的全部边（#816：边也要能被点到，递归命中才有 edge 这一类） */
   edges: PlatformEdgeRender[]
-  /** 本 Scene 的画布 → 局部屏幕比例：根层是全局相机比例，子层是局部适配比例（#818） */
+  /**
+   * 本 Scene 的画布 → 局部屏幕**累计**比例（#818）。
+   * 根层 = 全局相机比例；子层 = 局部适配比例 × 祖先累计比例。
+   * 写进来的是"画面上真正乘着的那个数"，命中换算才能和渲染一致。
+   */
   scale: number
-  /** 本 Scene 的 X 偏移 */
+  /** 本 Scene 的累计 X 偏移（子层同样是局部偏移 × 祖先累计） */
   offsetX: number
-  /** 本 Scene 的 Y 偏移 */
+  /** 本 Scene 的累计 Y 偏移（子层同样是局部偏移 × 祖先累计） */
   offsetY: number
   /** 本 Scene 直接子代的 Scene 列表（子图未加载完时就没有对应项） */
   getChildEmbeds(): RecursiveSceneSource[]

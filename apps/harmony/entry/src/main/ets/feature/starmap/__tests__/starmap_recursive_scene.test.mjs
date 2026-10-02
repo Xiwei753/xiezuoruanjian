@@ -5,11 +5,18 @@
 //
 // 本评论要求的行为契约（对应实现文件）：
 //   1. 子图初始比例来自"内容包围盒 × 父 Embed 圆形可用区"，这是**布局适配**（局部 fit），
-//      不是用户缩放；不允许出现"每深一层乘 0.6"这种写死系数
+//      不是用户缩放；不允许出现"每深一层乘 0.6"这种写死系数。
+//      局部 fit 存的是**局部数据**：算之前先把 sceneWidth / sceneHeight 除掉祖先累计比例，
+//      所以同一张子图在相机 1 和相机 2 下打开算出的 fit 完全一样
 //      —— computeContentBounds / computeFitScale / computeFittedViewport (StarMapViewport.ets)
 //   2. 缩放只有一台相机：双指捏合与工具栏 +/− 都只改**全局视角相机**，整棵递归星图一起缩放；
 //      锚点按 #818 的公式落在根画布的世界坐标里，任何一层都不允许单独被缩放
 //      —— clampCameraScale / computeCameraPinch / computeCameraZoomAround (StarMapViewport.ets)
+//   2b. 相机要真的作用到整棵树：子 Scene 的有效比例 = `fitScale × inheritedScale`
+//      （inheritedScale = 父 Scene 的有效比例），偏移同理。
+//      否则相机放大时只有 Embed 圆壳变大，圆里的节点不跟着放大 —— 只是把容器放大，不是缩放视角
+//      —— viewportScaleValue / viewportOffsetX / viewportOffsetY / localSceneSize
+//         (ui/StarMapScene.ets)
 //
 //   3. 递归 Scene 之间的坐标换算必须扣掉 Embed 矩形自己的原点。
 //      子 Scene 的画布坐标是它自己那张图的 node.position，和父画布没有共同数值范围——
@@ -886,6 +893,92 @@ function zoomCameraAroundCenter(camera, centerX, centerY, nextScale) {
   return computeCameraZoomAround(camera, centerX, centerY, nextScale)
 }
 
+/**
+ * StarMapScene 视口的镜像（ui/StarMapScene.ets）。
+ *
+ * 关键点（#818 复审）：子 Scene 在画面上的有效比例是 `fitScale * inheritedScale`，
+ * 偏移同理；而 fitScale / fitOffset 存的是**局部数据**，算的时候要先把
+ * `sceneWidth / sceneHeight` 除掉 inheritedScale 还原成本层原始尺寸。
+ * 于是同一张子图无论在相机 1 还是相机 2 下打开，局部 fit 完全一样，
+ * 而屏幕上的一切都会跟着相机一起放大缩小。
+ */
+function createSceneView(opts) {
+  const v = {
+    sceneDepth: opts.sceneDepth || 0,
+    cameraScale: opts.cameraScale || 1,
+    cameraOffsetX: opts.cameraOffsetX || 0,
+    cameraOffsetY: opts.cameraOffsetY || 0,
+    inheritedScale: opts.inheritedScale || 1,
+    sceneWidth: opts.sceneWidth || 0,
+    sceneHeight: opts.sceneHeight || 0,
+    fitScale: 1,
+    fitOffsetX: 0,
+    fitOffsetY: 0,
+    hasFittedView: false,
+    lastFittedSceneSize: 0,
+    isCameraScene() { return v.sceneDepth === 0 },
+    parentScale() { return v.inheritedScale > 0 ? v.inheritedScale : 1 },
+    localSceneWidth() { return v.sceneWidth / v.parentScale() },
+    localSceneHeight() { return v.sceneHeight / v.parentScale() },
+    viewportScaleValue() {
+      return v.isCameraScene() ? v.cameraScale : v.fitScale * v.parentScale()
+    },
+    viewportOffsetX() {
+      return v.isCameraScene() ? v.cameraOffsetX : v.fitOffsetX * v.parentScale()
+    },
+    viewportOffsetY() {
+      return v.isCameraScene() ? v.cameraOffsetY : v.fitOffsetY * v.parentScale()
+    },
+    fitView(rects) {
+      v.hasFittedView = true
+      const localWidth = v.localSceneWidth()
+      const localHeight = v.localSceneHeight()
+      const bounds = computeContentBounds(rects)
+      if (bounds === null) {
+        v.fitScale = 1; v.fitOffsetX = 0; v.fitOffsetY = 0
+        v.lastFittedSceneSize = localWidth
+        return
+      }
+      const available = Math.min(localWidth, localHeight) * CIRCLE_INNER_SAFE_RATIO
+      const fitted = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP, localWidth, localHeight)
+      v.fitScale = fitted.zoomScale
+      v.fitOffsetX = fitted.offsetX
+      v.fitOffsetY = fitted.offsetY
+      v.lastFittedSceneSize = localWidth
+    },
+    // 局部尺寸没变就什么都不做（相机缩放的正常情况），变了才重新居中
+    syncFitToSceneSize(rects) {
+      if (!v.hasFittedView || v.lastFittedSceneSize <= 0) { return false }
+      const localWidth = v.localSceneWidth()
+      if (Math.abs(localWidth - v.lastFittedSceneSize) <= 0.5) { return false }
+      v.lastFittedSceneSize = localWidth
+      const bounds = computeContentBounds(rects)
+      if (bounds === null) {
+        v.fitOffsetX = 0; v.fitOffsetY = 0
+      } else {
+        const offset = computeCenteredOffset(bounds, v.fitScale, localWidth, v.localSceneHeight())
+        v.fitOffsetX = offset.x
+        v.fitOffsetY = offset.y
+      }
+      return true
+    },
+    // 入参是屏幕上的累计像素，写回局部数据前要除掉祖先累计比例
+    setViewportOffset(offsetX, offsetY) {
+      if (v.isCameraScene()) {
+        v.cameraScale = v.cameraScale; v.cameraOffsetX = offsetX; v.cameraOffsetY = offsetY
+        return
+      }
+      v.fitOffsetX = offsetX / v.parentScale()
+      v.fitOffsetY = offsetY / v.parentScale()
+    },
+    // 写进 Scene 注册表快照的就是累计有效比例 / 累计偏移
+    sceneSourceSnapshot() {
+      return { scale: v.viewportScaleValue(), offsetX: v.viewportOffsetX(), offsetY: v.viewportOffsetY() }
+    }
+  }
+  return v
+}
+
 // ══════════════════════════════════════════════════════════════
 // 断言工具
 // ══════════════════════════════════════════════════════════════
@@ -948,10 +1041,11 @@ console.log('2. fitScale 来自内容与可用区，不是"每层乘 0.6"')
   assert(near(computeFitScale(vast, available, available, EMBED_FIT_PADDING_VP), MIN_FIT_SCALE),
     '内容极大时 fit 有下限，不会变成 0')
 
-  // #818：fit 只是布局适配，不再和用户缩放相乘。子 Scene 的比例就是 fit，
-  // 用户缩放全部集中在根那一台相机上。
+  // #818：fit 只是布局适配，不再和用户缩放相乘。子 Scene 的累计有效比例是
+  // `fitScale × 祖先累计`，其中"用户缩放"只来自根那一台相机。
   const fit = 0.4
-  assert(near(fit, 0.4), '子 Scene 的最终比例就是它自己的 fitScale（布局适配，用户碰不到）')
+  const inherited = 2
+  assert(near(fit * inherited, 0.8), '子 Scene 屏幕上的比例 = fitScale × 祖先累计（这里 0.4 × 2）')
   assert(!('userZoomScale' in { fitScale: fit }), '不存在 fitScale × userZoomScale 这条合成路径（#818 已删除）')
 }
 
@@ -1586,7 +1680,7 @@ console.log('23. 评审回归 ⑤：捏合连着两帧，比例不能帧间自�
   assert(near(applied[2], clampCameraScale(1 * 1.3)), '相机比例独立于任何子层 fitScale')
 }
 
-console.log('24. 评审回归 ⑥：相机缩放带动容器变化，子内容只重新居中、不改 fitScale（#818）')
+console.log('24. 评审回归 ⑥：相机缩放带动容器变化，子 Scene 的局部 fit 完全不动（#818）')
 {
   // 首次适配：直径 200 的圆，内容按内容包围盒算出 fitScale 并居中
   const rects = [
@@ -1597,49 +1691,143 @@ console.log('24. 评审回归 ⑥：相机缩放带动容器变化，子内容�
   const available = 200 * CIRCLE_INNER_SAFE_RATIO
   const fitted = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP, 200, 200)
 
-  const view = {
-    fitScale: fitted.zoomScale,
-    fitOffsetX: fitted.offsetX,
-    fitOffsetY: fitted.offsetY,
-    lastFittedSceneSize: 200
-  }
+  // camera=1 时打开：屏幕尺寸 200，inheritedScale=1，局部尺寸 = 200 / 1 = 200
+  const view = createSceneView({ sceneDepth: 1, sceneWidth: 200, sceneHeight: 200, inheritedScale: 1 })
+  view.fitView(rects)
+  assert(near(view.fitScale, fitted.zoomScale) && near(view.fitOffsetX, fitted.offsetX),
+    'camera=1 时算出的局部 fit 与直接用 200×200 算的一致')
 
-  // 相机放大 2 倍 → 容器在屏幕上 200 → 400。
-  // syncFitToSceneSize 只重算居中偏移（ui/StarMapScene.ets）。
-  const nextSize = 400
-  view.lastFittedSceneSize = nextSize
-  const recentered = computeCenteredOffset(bounds, view.fitScale, nextSize, nextSize)
-  view.fitOffsetX = recentered.x
-  view.fitOffsetY = recentered.y
+  // 相机放到 2 倍 → 圆壳和子 Scene 组件在屏幕上 200 → 400，inheritedScale 同步 1 → 2。
+  // 局部尺寸 = 400 / 2 = 200，没变，所以局部 fit 一个字节都不改（#818 复审）。
+  view.cameraScale = 2
+  view.inheritedScale = 2
+  view.sceneWidth = 400
+  view.sceneHeight = 400
+  const changed = view.syncFitToSceneSize(rects)
+  assert(changed === false, '局部尺寸没变（200/1 → 400/2），syncFitToSceneSize 直接不动')
+  assert(near(view.fitScale, fitted.zoomScale) && near(view.fitOffsetX, fitted.offsetX) &&
+    near(view.fitOffsetY, fitted.offsetY), 'fitScale / fitOffset 全部保持原值')
 
-  assert(near(view.fitScale, fitted.zoomScale),
-    'fitScale 不变（#818：容器在屏幕上已经跟着相机放大了，再乘尺寸比会把相机的缩放抵消掉）')
-  const boundsCenterX = bounds.minX + bounds.width / 2
-  const boundsCenterY = bounds.minY + bounds.height / 2
-  assert(near(view.fitOffsetX, nextSize / 2 - boundsCenterX * view.fitScale) &&
-    near(view.fitOffsetY, nextSize / 2 - boundsCenterY * view.fitScale),
-  '偏移按新容器尺寸重新对了一次中心（computeCenteredOffset）')
-
-  // 屏幕上最终呈现 = 局部 fit 之后再乘相机。相机围绕父画布中心放大 2 倍，
-  // 子内容跟着圆壳一起长大，圆心仍然钉在两指/工具栏给的中心上。
+  // 屏幕上最终呈现 = 局部 fit × 祖先累计 × 全局相机。
+  // 相机围绕父画布中心放大 2 倍，子内容跟着圆壳一起长大，圆心仍钉在中心上。
   const camBefore = { scale: 1, offsetX: 0, offsetY: 0 }
   const camAfter = computeCameraZoomAround(camBefore, 200, 200, 2)
-  const childToScreen = (cx, cy, fit, fitOffX, fitOffY, cam) =>
-    canvasToScreen(canvasToSceneLocal(cx, cy, fit, fitOffX, fitOffY).x,
-      canvasToSceneLocal(cx, cy, fit, fitOffX, fitOffY).y,
-      cam.scale, cam.offsetX, cam.offsetY)
-  const before = childToScreen(boundsCenterX, boundsCenterY, fitted.zoomScale, fitted.offsetX, fitted.offsetY, camBefore)
-  const after = childToScreen(boundsCenterX, boundsCenterY, view.fitScale, view.fitOffsetX, view.fitOffsetY, camAfter)
+  const boundsCenterX = bounds.minX + bounds.width / 2
+  const boundsCenterY = bounds.minY + bounds.height / 2
+  const childToScreen = (cx, cy, sceneView, cam) => {
+    const local = canvasToSceneLocal(
+      cx, cy, sceneView.viewportScaleValue(), sceneView.viewportOffsetX(), sceneView.viewportOffsetY())
+    return canvasToScreen(local.x, local.y, cam.scale, cam.offsetX, cam.offsetY)
+  }
+  const viewBefore = createSceneView({ sceneDepth: 1, sceneWidth: 200, sceneHeight: 200, inheritedScale: 1 })
+  viewBefore.fitView(rects)
+  const before = childToScreen(boundsCenterX, boundsCenterY, viewBefore, camBefore)
+  const after = childToScreen(boundsCenterX, boundsCenterY, view, camAfter)
   assert(near(before.x, 100) && near(before.y, 100), '缩放前内容中心在 200×200 圆壳的中心 (100,100)')
   assert(near(after.x, 200) && near(after.y, 200),
     '相机 ×2 后内容中心跟着圆壳走到 (200,200)（局部 fit 不变，屏幕上同比放大）')
+  assert(near(view.viewportScaleValue(), 2 * fitted.zoomScale),
+    '子 Scene 的有效比例 = fitScale × inheritedScale，随相机一起长大')
 
   // 缩小同样成立
-  const back = computeCenteredOffset(bounds, view.fitScale, 200, 200)
-  view.fitOffsetX = back.x
-  view.fitOffsetY = back.y
-  assert(near(view.fitScale, fitted.zoomScale) && near(view.fitOffsetX, fitted.offsetX),
-    '容器缩回 200 → fitScale 和偏移都回到原值')
+  view.cameraScale = 0.5
+  view.inheritedScale = 0.5
+  view.sceneWidth = 100
+  view.sceneHeight = 100
+  assert(view.syncFitToSceneSize(rects) === false && near(view.fitScale, fitted.zoomScale),
+    '缩回一半：局部尺寸还是 200，fitScale 依旧不动')
+}
+
+console.log('24b. 变换链：camera 1 → 2 时根 / 子 / 孙三层内容全部 ×2（#818 复审）')
+{
+  const childRects = [{ nodeId: 'n2', x: 0, y: 0, width: 56, height: 56, radius: 28 }]
+  const grandRects = [{ nodeId: 'n3', x: 0, y: 0, width: 56, height: 56, radius: 0 }]
+
+  // 建三层：根（相机本体）+ 子 + 孙。盒子尺寸 = DEFAULT_EMBED_DIAMETER × 父层有效比例。
+  const build = (cameraScale) => {
+    const root = createSceneView({ sceneDepth: 0, cameraScale })
+    const child = createSceneView({ sceneDepth: 1, inheritedScale: root.viewportScaleValue() })
+    child.sceneWidth = DEFAULT_EMBED_DIAMETER * root.viewportScaleValue()
+    child.sceneHeight = child.sceneWidth
+    child.fitView(childRects)
+    const grand = createSceneView({ sceneDepth: 2, inheritedScale: child.viewportScaleValue() })
+    grand.sceneWidth = DEFAULT_EMBED_DIAMETER * child.viewportScaleValue()
+    grand.sceneHeight = grand.sceneWidth
+    grand.fitView(grandRects)
+    return { root, child, grand }
+  }
+
+  const a = build(1)
+  const b = build(2)
+
+  assert(near(b.root.viewportScaleValue() / a.root.viewportScaleValue(), 2), '根层比例 1 → 2')
+  assert(near(b.child.viewportScaleValue() / a.child.viewportScaleValue(), 2), '子层节点屏幕尺寸 ×2')
+  assert(near(b.grand.viewportScaleValue() / a.grand.viewportScaleValue(), 2), '二层子星图内节点屏幕尺寸 ×2')
+  assert(near(a.child.fitScale, b.child.fitScale) && near(a.grand.fitScale, b.grand.fitScale),
+    '各层局部 fit 本身保持不变（连乘关系，camera 不会重复进每层）')
+  assert(near(b.grand.viewportScaleValue(), 2 * b.child.fitScale * b.grand.fitScale),
+    '孙层有效比例 = camera × fit₁ × fit₂（camera 没有被重复乘两次）')
+  assert(near(b.child.sceneWidth / b.child.inheritedScale, DEFAULT_EMBED_DIAMETER) &&
+    near(b.grand.sceneWidth / b.grand.inheritedScale, DEFAULT_EMBED_DIAMETER),
+    '还原出的局部尺寸恒等于 Embed 基础直径，不随相机变化')
+
+  // 写进注册表的快照必须是累计值，递归命中那套换算才对得上画面
+  const snap = b.child.sceneSourceSnapshot()
+  assert(near(snap.scale, b.child.viewportScaleValue()) && near(snap.offsetX, b.child.viewportOffsetX()),
+    'sync() 写入的是累计有效比例 / 累计偏移')
+}
+
+console.log('24c. 子图在相机 1 和相机 2 下打开，局部 fit 必须一模一样（#818 复审）')
+{
+  const rects = [
+    { nodeId: 'a', x: 0, y: 0, width: 100, height: 100, radius: 0 },
+    { nodeId: 'b', x: 100, y: 0, width: 100, height: 100, radius: 0 }
+  ]
+  const openAt = (cameraScale) => {
+    // 根层相机 = cameraScale → 子 Scene 屏幕尺寸 = D × cameraScale，inheritedScale 同值
+    const root = createSceneView({ sceneDepth: 0, cameraScale })
+    const child = createSceneView({ sceneDepth: 1, inheritedScale: root.viewportScaleValue() })
+    child.sceneWidth = DEFAULT_EMBED_DIAMETER * root.viewportScaleValue()
+    child.sceneHeight = child.sceneWidth
+    child.fitView(rects)
+    return child
+  }
+  const at1 = openAt(1)
+  const at2 = openAt(2)
+  assert(near(at1.fitScale, at2.fitScale) && near(at1.fitOffsetX, at2.fitOffsetX) &&
+    near(at1.fitOffsetY, at2.fitOffsetY),
+  '同样的内容 + 同样的局部尺寸 → 同样的局部 fit（与打开时的相机无关）')
+  assert(near(at2.viewportScaleValue() / at1.viewportScaleValue(), 2),
+    '但屏幕上的呈现仍然是相机 ×2')
+
+  // 父 Embed 基础尺寸真的变了才重算局部居中
+  const resized = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: 300, sceneHeight: 300 })
+  resized.fitView(rects)
+  const before = resized.fitOffsetX
+  const fitBefore = resized.fitScale
+  resized.sceneWidth = 360
+  resized.sceneHeight = 360
+  assert(resized.syncFitToSceneSize(rects) === true && !near(resized.fitOffsetX, before),
+    '局部尺寸 300 → 360 属于真实容器变化，重新居中')
+  assert(near(resized.fitScale, fitBefore), '重新居中只动偏移，不动 fitScale')
+}
+
+console.log('24d. 子 Scene 内单指平移：屏幕位移要除掉祖先累计比例再存（#818 复审）')
+{
+  const view = createSceneView({ sceneDepth: 1, inheritedScale: 2 })
+  view.setViewportOffset(20, -10)
+  assert(near(view.fitOffsetX, 10) && near(view.fitOffsetY, -5), '局部数据存的是屏幕位移 ÷ 2')
+  assert(near(view.viewportOffsetX(), 20) && near(view.viewportOffsetY(), -10),
+    '再乘回祖先累计比例，屏幕上还是原来那个位移')
+
+  const root = createSceneView({ sceneDepth: 0 })
+  root.setViewportOffset(20, -10)
+  assert(near(root.cameraOffsetX, 20) && near(root.cameraOffsetY, -10), '根 Scene 改的是全局相机，不做换算')
+
+  // 祖先比例为 0 时的兜底：不能把整棵子树的尺寸算成 0
+  const broken = createSceneView({ sceneDepth: 1, inheritedScale: 0 })
+  assert(near(broken.parentScale(), 1) && near(broken.viewportScaleValue(), broken.fitScale),
+    'inheritedScale 传成 0 时兜回 1，不让子树塌成 0 倍')
 }
 
 console.log('')
