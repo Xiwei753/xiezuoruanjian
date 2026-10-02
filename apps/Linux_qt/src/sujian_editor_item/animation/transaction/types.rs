@@ -633,15 +633,6 @@ impl PreparedTextVisualTransaction {
         self.units.iter().any(|u| u.timing.is_caret_driven())
     }
 
-    /// Issue #815 评论 6042062633 修改 6: 本事务是否还有**任何** CaretTrack unit
-    /// （含已 retire 的）。
-    ///
-    /// 完成判断用它区分两类 unit：CaretTrack unit 随 cursor track 一起结束，
-    /// 不参与"每条 unit 自己的 progress 都 >= 1"的等待。
-    pub(crate) fn has_caret_track_units(&self) -> bool {
-        self.units.iter().any(|u| u.timing.is_caret_track())
-    }
-
     /// 采集本事务中尚未播完的视觉单元当前帧，交棒给下一个事务。
     /// Issue #690 评论 5675007226 步骤 3: 逐单元用自己的 `progress`，不再用事务级
     /// timeline progress 一刀切——后者会把"已经吐到 60%"的单元算成事务的 30%，

@@ -345,16 +345,24 @@ impl LinuxEditorAnimationCoordinator {
                 && !keys_to_complete_set.contains(&tx.key)
                 && tx.layout_basis_revision == frame_context.layout_basis_revision
             {
-                // Issue #815 评论 6042062633 修改 6: 非 caret owner 的事务不再收集
-                // static_hidden_document_rects。协同吞吐字的可见性由 caret 采样决定，
-                // 一旦失去 ownership 它们被 retire 到终态（不再停在半路），此时继续隐藏
-                // canonical 正文只会挖出空洞。
-                // Timed unit（Reflow / 非协同吞吐字）不依赖 caret ownership，仍然收集。
                 let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
-                if !owns_caret && tx.has_caret_track_units() {
-                    continue;
-                }
                 for unit in &tx.units {
+                    // Issue #815 评论 6042062633 修改 6 / Issue #815 评论 5946701331 问题3:
+                    // **逐 unit** 判断，不是因为事务里"存在任意 CaretTrack unit"就把
+                    // 整笔事务的 unit 一起跳过。
+                    // - CaretTrack（协同 InsertReveal/DeleteConceal）：可见性由 caret
+                    //   采样决定，失去 ownership 后已被 retire 到终态（不再停在半路），
+                    //   此时继续隐藏 canonical 正文只会挖出空洞，所以只有 owns_caret
+                    //   时才收它自己的 static hidden rect。
+                    // - Timed（ReflowMove/ReflowCrossFade、非协同吞吐字）：不依赖 caret
+                    //   ownership，按自己的生命周期继续收 clip。
+                    //
+                    // 之前这里是 `if !owns_caret && tx.has_caret_track_units() { continue; }`，
+                    // 会把同事务的 Timed Reflow 一起跳过：Reflow overlay 继续画，
+                    // canonical 最终正文也一起画 → 重影。
+                    if unit.timing.is_caret_track() && !owns_caret {
+                        continue;
+                    }
                     for doc_rect in &unit.slice.static_hidden_document_rects {
                         if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
                             clip_rects.push(
@@ -592,19 +600,30 @@ impl LinuxEditorAnimationCoordinator {
                 //   本帧的 caret.x，不经过任何 0..1 visible fraction，也不自己再算一次时间。
                 // - Timed unit（Reflow / 非协同吞吐字）：仍按自己的时间线算 visible。
                 //   协同模式不接管 Reflow。
+                // Issue #815 评论 5946701331 问题1: 边界 x 与收拢量都来自同一份
+                // caret track 采样（caret.x + caret.progress），文字不再自己算时间。
+                //
+                // Issue #815 评论 5946701331 问题3: CaretTrack unit 收口时**不生成
+                // glyph**。caret_sample 为 None 只可能是本事务刚被判 retire（没有
+                // owner，或 owner track 缺失）。这时两种 kind 的终态都是"不画旧字"：
+                // - InsertReveal：整段交还 canonical 文字层。
+                // - DeleteConceal：旧字本就不该再出现在画面上。
+                //
+                // 不能用一个统一的 `compute_frame(1.0)` 去猜终态——DeleteConceal 的
+                // `compute_frame(visible)` 语义里 visible=1 是"旧字完整可见"，
+                // retire 后同事务若还有未播完的 Timed Reflow，事务不会立刻 complete，
+                // glyph 循环会把 DeleteConceal 的旧字重新画成完整宽度。
                 let frame = if unit.timing.is_caret_track() {
-                    match caret_sample {
-                        Some(caret) => unit
-                            .slice
-                            .compute_frame_by_caret_ingest(caret.x, caret.visual_line_id),
-                        // caret_sample 为 None 只可能是本事务刚被判 retire（没有 owner，
-                        // 或 owner track 缺失）。这时 unit 处于终态：InsertReveal 全部
-                        // 吐出、DeleteConceal 全部吞掉，直接用 terminal visible = 1.0。
-                        None => unit.slice.compute_frame(1.0),
-                    }
+                    caret_sample.map(|caret| {
+                        unit.slice
+                            .compute_frame_by_caret_ingest(caret.x, caret.progress)
+                    })
                 } else {
                     let visible = unit.current_visible_fraction(sample.frame_now);
-                    unit.slice.compute_frame(visible)
+                    Some(unit.slice.compute_frame(visible))
+                };
+                let Some(frame) = frame else {
+                    continue;
                 };
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,

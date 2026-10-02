@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::editor::layout::CanonicalDocumentVisualSnapshot;
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animated_slice::{
+    AnimatedSlice, AnimatedSliceKind, IngestBoundaryDriver,
+};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{ShapingIdentity, SourceRect};
 
@@ -624,6 +626,13 @@ fn build_split_replacement_units(
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
             is_caret_line: false,
+            // Issue #815 评论 5946701331: 这里构造的是 Reflow slice，不参与吞字/吐字，
+            // 吞吐字段保持构造默认值（不会走进 `compute_frame_by_caret_ingest`）。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id: anchor.visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: vec![target_rect.clone()],
@@ -719,6 +728,13 @@ fn build_crossfade_split_replacement_units(
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
             is_caret_line: false,
+            // Issue #815 评论 5946701331: 这里构造的是 Reflow slice，不参与吞字/吐字，
+            // 吞吐字段保持构造默认值（不会走进 `compute_frame_by_caret_ingest`）。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id: anchor.visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: vec![target_rect.clone()],

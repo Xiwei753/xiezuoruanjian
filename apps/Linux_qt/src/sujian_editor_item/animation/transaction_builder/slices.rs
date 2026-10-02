@@ -5,6 +5,7 @@
 //! 互相印证口径是否一致。
 
 use super::*;
+use crate::sujian_editor_item::animated_slice::IngestBoundaryDriver;
 
 struct ReflowClusterRef {
     line_idx: usize,
@@ -85,6 +86,50 @@ fn line_mask_rect(slice: &AnimatedSlice) -> &SourceRect {
     }
 }
 
+/// Issue #815 评论 5946701331 问题2: 在**同一份 snapshot 内**按文档 byte 找视觉行序。
+///
+/// 吞吐路径的行序必须来自同一侧 canonical 快照：InsertReveal 的 slice 来自 new
+/// snapshot，DeleteConceal 的 slice 来自 old snapshot。两次排版的 `VisualLine.id`
+/// 都从 0 重新编号，混着比大小必然判断反（Backspace 跨行时方向正好相反）。
+/// 所以这里返回的是同一份 `line_snapshots` 数组内的下标——切片侧和边界侧都用
+/// 同一个函数、同一个数组，行序之间可以直接比较。
+///
+/// 返回 `line_snapshots` 中的下标（视口内局部序，但两侧都取自同一份快照，
+/// 因此自洽）。`byte_offset` 落在所有行之外时返回 `None`（调用方退回同行 x 裁切）。
+fn line_ordinal_for_byte(snapshot: &EditorLayoutSnapshot, byte_offset: usize) -> Option<usize> {
+    snapshot
+        .line_snapshots
+        .iter()
+        .position(|line| byte_offset >= line.byte_start && byte_offset < line.byte_end)
+}
+
+/// Issue #815 评论 5946701331 问题2: 在**同一份 snapshot 内**按视觉行 top 找行序。
+///
+/// Delete 的吞吐路径起点是"删除前的 old caret 所在视觉行"。caret 的几何在
+/// `old_cursor_rect.top` 上，直接按行几何匹配就能落在 old snapshot 自己的行序里，
+/// 不需要也不应该借用 new snapshot 的 `visual_line_id`。
+///
+/// 先按 `[visual_line_top, visual_line_bottom)` 精确命中；未命中时退到 top 最近的行
+/// （空行/行高差异下 caret top 可能落在相邻行边界上）。都找不到返回 `None`。
+fn line_ordinal_for_line_top(snapshot: &EditorLayoutSnapshot, line_top: f64) -> Option<usize> {
+    let hit = snapshot.line_snapshots.iter().position(|line| {
+        line_top >= line.visual_line_top - 0.5 && line_top < line.visual_line_bottom + 0.5
+    });
+    if hit.is_some() {
+        return hit;
+    }
+    snapshot
+        .line_snapshots
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let da = (a.visual_line_top - line_top).abs();
+            let db = (b.visual_line_top - line_top).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(idx, _)| idx)
+}
+
 pub(crate) fn build_insert_reveal_slices(
     key: VisualTransactionKey,
     new_snapshot: &EditorLayoutSnapshot,
@@ -98,8 +143,15 @@ pub(crate) fn build_insert_reveal_slices(
     // Issue #808: 旧 caret 位置是吐字起点（遮罩锚点）。
     let caret_x = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let caret_y = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    // Issue #815 评论 5946701331 问题2: 吐字的吞吐路径在 **new snapshot 内**建立。
+    // 起点 = inserted_range.start 所在的新侧视觉行（编辑前 caret 在新排版里的行），
+    // 终点 = inserted_range.end 所在的新侧视觉行（新 caret 所在行）。
+    // 只在 new snapshot 内取行序，不和 old snapshot 的任何行号比较。
+    let ingest_from_line_ord = line_ordinal_for_byte(new_snapshot, range_start);
+    let ingest_to_line_ord =
+        line_ordinal_for_byte(new_snapshot, range_end.saturating_sub(1).max(range_start));
 
-    for new_line in new_snapshot.line_snapshots.iter() {
+    for (line_ord, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for new_cluster in new_line.clusters.iter() {
             // Issue #724 评论 5751268664 缺口1: 用 Inside/Partial 分类替代 overlap 整块消费。
             // - Inside：cluster 完全在 inserted 范围内，整个 cluster 进入 InsertReveal + static hide。
@@ -207,6 +259,13 @@ pub(crate) fn build_insert_reveal_slices(
                 Some(new_line.visual_line_id),
             );
             slice.is_caret_line = is_caret_line;
+            // Issue #815 评论 5946701331 问题1: Insert 的边界就是本帧真实 caret.x
+            // （编辑前 caret 向新 caret 展开），不需要单独的吞字边界轨迹。
+            slice.ingest_boundary_driver = IngestBoundaryDriver::CaretPosition;
+            // Issue #815 评论 5946701331 问题2: 写 new snapshot 内的同侧行序。
+            slice.ingest_line_ord = Some(line_ord);
+            slice.ingest_from_line_ord = ingest_from_line_ord;
+            slice.ingest_to_line_ord = ingest_to_line_ord;
             // Issue #727 评论 5755858583 问题2: 直接在 slice 上写 canonical 独占区域，
             // 不再生成 StaticLinePatch。AnimatedSlice 成为唯一事实源。
             slice.static_hidden_document_rects = vec![new_doc];
@@ -237,8 +296,35 @@ pub(crate) fn build_delete_conceal_slices(
     let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    // Issue #815 评论 5946701331 问题2: 吞字的吞吐路径在 **old snapshot 内**建立。
+    // 起点 = 删除前 old caret 所在视觉行（按 old_cursor_rect.top 在 old snapshot
+    // 里定位，绝不借用 new snapshot 的 visual_line_id）；终点 = deleted_range.start
+    // 所在视觉行。Backspace 跨行时 from > to，方向由符号给出而不是写死"向前走"。
+    let ingest_from_line_ord = old_cursor_rect
+        .as_ref()
+        .and_then(|caret| line_ordinal_for_line_top(old_snapshot, caret.top));
+    let ingest_to_line_ord = line_ordinal_for_byte(old_snapshot, range_start);
+    // Issue #815 评论 5946701331 问题1: Delete 键的吞字起点 = 被删区间在 old snapshot
+    // 内、**本 slice 所在行**的右端。逐行算，不共用事务级最大值——跨行删除时每行
+    // 都从自己的右端朝 caret 收拢，不会拿最右一行的右端去裁别的行。
+    let deleted_right_by_line: Vec<Option<f64>> = old_snapshot
+        .line_snapshots
+        .iter()
+        .map(|line| {
+            line.clusters
+                .iter()
+                .filter(|cluster| cluster.byte_start < range_end && cluster.byte_end > range_start)
+                .map(|cluster| {
+                    let rect = line.source_rect_to_document_rect(&cluster.source_rect);
+                    rect.x + rect.w
+                })
+                .fold(None::<f64>, |acc, right| {
+                    Some(acc.map_or(right, |prev: f64| prev.max(right)))
+                })
+        })
+        .collect();
 
-    for old_line in &old_snapshot.line_snapshots {
+    for (line_ord, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
         for old_cluster in &old_line.clusters {
             // Issue #724 评论 5750911834 问题 1: cluster 匹配条件改为 overlap 判断，
             // 允许部分落在 deleted_range 边界的 cluster（ligature 拆分、跨行 cluster）。
@@ -282,6 +368,25 @@ pub(crate) fn build_delete_conceal_slices(
                     Some(old_line.visual_line_id),
                 );
                 slice.is_caret_line = is_caret_line;
+                // Issue #815 评论 5946701331 问题1: 用既有 `conceal_to_left_edge`
+                // 语义区分两种删除，不把 Backspace 和 Delete 都强行解释成
+                // "视觉边界一定等于真实 caret 位置"。
+                // - true（caret 在被删文字右侧 → Backspace）：真实 caret track 自己
+                //   会往左走，直接驱动吞字边界。
+                // - false（caret 在被删文字左侧 → Delete 键）：真实 caret 原地不动，
+                //   需要单独的 ingest boundary 从被删区间右端朝 caret 收拢，
+                //   不能拿静止 caret 当动画进度（否则第一帧宽度就是 0，动画直接消失）。
+                slice.ingest_boundary_driver = if conceal_to_left_edge {
+                    IngestBoundaryDriver::CaretPosition
+                } else {
+                    IngestBoundaryDriver::DeleteForwardBoundary
+                };
+                slice.ingest_boundary_from_x =
+                    deleted_right_by_line.get(line_ord).copied().flatten();
+                // Issue #815 评论 5946701331 问题2: 写 old snapshot 内的同侧行序。
+                slice.ingest_line_ord = Some(line_ord);
+                slice.ingest_from_line_ord = ingest_from_line_ord;
+                slice.ingest_to_line_ord = ingest_to_line_ord;
                 slices.push(slice);
             }
         }

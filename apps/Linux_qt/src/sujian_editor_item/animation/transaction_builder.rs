@@ -556,6 +556,13 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         caret_anchor_x: a.caret_anchor_x,
         caret_anchor_y: a.caret_anchor_y,
         is_caret_line: a.is_caret_line,
+        // Issue #815 评论 5946701331: 合并只发生在同一行的 ReflowMove/ReflowCrossFade，
+        // 不涉及吞字/吐字边界；吞吐字段原样取首个 slice。
+        ingest_boundary_driver: a.ingest_boundary_driver,
+        ingest_boundary_from_x: a.ingest_boundary_from_x,
+        ingest_line_ord: a.ingest_line_ord,
+        ingest_from_line_ord: a.ingest_from_line_ord,
+        ingest_to_line_ord: a.ingest_to_line_ord,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
         static_hidden_document_rects: a

@@ -205,15 +205,18 @@ fn issue815_modify5_ingest_clip_is_driven_by_current_caret_frame() {
          不能把协同吞吐换算成独立 0..1 visible fraction。"
     );
 
-    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 2200);
+    let window = function_window(&src, "pub(crate) fn compute_frame_by_caret_ingest", 3400);
     assert!(
         window.contains("caret_x: f64"),
         "Issue #815 评论 6042062633 修改 5: 本帧边界就是本帧的 caret.x，必须作为参数传进来。"
     );
+    // Issue #815 评论 5946701331 问题1: 另一端改名为 path_other_end_x，
+    // Delete 键时是静止 caret，Backspace/Insert 时是构造期锚点。
     assert!(
-        window.contains("anchor.min(caret_x)") && window.contains("anchor.max(caret_x)"),
-        "Issue #815 评论 6042062633 修改 5: 同一行的另一端必须是构造期锚点\
-         （InsertReveal=编辑前 caret，DeleteConceal=删除后最终 caret），并与本帧 caret.x 归一化。"
+        window.contains("path_other_end_x.min(boundary_x)")
+            && window.contains("path_other_end_x.max(boundary_x)"),
+        "Issue #815 评论 5946701331 问题1: 同行吞吐路径的两端必须与本帧 boundary_x 归一化，\
+         不能只比较一个方向。"
     );
     assert!(
         !window.contains("ease_out_quad") && !window.contains("* visible"),
@@ -221,11 +224,181 @@ fn issue815_modify5_ingest_clip_is_driven_by_current_caret_frame() {
          那正是「看起来像被剪开而不是吞吐」的根因。"
     );
 
-    // 跨软换行/跨段：必须靠行 id 判定 caret 是否已经走过本行。
+    // 跨软换行/跨段：必须靠**同侧**行序 + 方向判定，而不是裸的 < / >。
     assert!(
-        window.contains("slice_line > caret_line") && window.contains("slice_line < caret_line"),
-        "Issue #815 评论 6042062633 修改 5: 跨行必须用 cursor track 采到的 visual_line_id 判定\
-         「还没走到 / 正在这一行 / 已经走过」，绝不能用上一行的 caret.x 裁下一行。"
+        !window.contains("slice_line > caret_line") && !window.contains("slice_line < caret_line"),
+        "Issue #815 评论 5946701331 问题2: 裸的行号大小比较把「向前走」写死了，\
+         Backspace 跨行 2→1 时方向完全相反，必须删掉。"
+    );
+    let phase_window = function_window(&src, "fn ingest_line_phase", 1800);
+    assert!(
+        phase_window.contains("let forward = to_ord > from_ord"),
+        "Issue #815 评论 5946701331 问题2: 跨行相位必须独立成入口并按符号判定方向，\
+         Backspace（to < from）方向相反，不能只按 slice_line > caret_line 判。"
+    );
+    assert!(
+        phase_window.contains("to_ord as i64 - from_ord as i64"),
+        "Issue #815 评论 5946701331 问题2: Backspace 跨行时 to_ord < from_ord，\
+         行序差必须用有符号类型，usize 相减会下溢 panic。"
+    );
+    for phase in ["Passed", "OnCurrentLine", "NotReached"] {
+        assert!(
+            phase_window.contains(phase),
+            "Issue #815 评论 5946701331 问题2: 缺少 {:?} 相位判定。",
+            phase
+        );
+    }
+}
+
+// =========================================================================
+// 复核评论 5946701331 问题1：Delete 键必须有独立吞字边界驱动
+// =========================================================================
+
+/// 复核评论 5946701331 问题1。
+///
+/// Delete 键 old/new caret 本来就是同一位置，cursor track 从头到尾不移动。
+/// 若吞字边界无条件等于 caret.x，`anchor == caret_x` 会让首帧裁切宽度就是 0，
+/// DeleteConceal 直接消失。所以必须有显式的 boundary driver 区分两种删除。
+#[test]
+fn issue815_review1_delete_forward_has_its_own_ingest_boundary() {
+    let slice_src = read_src("src/sujian_editor_item/animated_slice.rs");
+    assert!(
+        slice_src.contains("pub(crate) enum IngestBoundaryDriver")
+            && slice_src.contains("CaretPosition")
+            && slice_src.contains("DeleteForwardBoundary"),
+        "Issue #815 评论 5946701331 问题1: 必须给协同吞吐增加明确的 boundary driver，\
+         CaretTrack 不能只表达「必须等于真实 caret.x」。"
+    );
+    let driver_window = function_window(&slice_src, "pub(crate) enum IngestBoundaryDriver", 1200);
+    assert!(
+        !driver_window.contains("Timeline") && !driver_window.contains("duration_ms"),
+        "Issue #815 评论 5946701331 问题1: DeleteForwardBoundary 是这笔删除事务的吞字边界轨迹，\
+         不是旧的独立文字 timeline，不得带 duration_ms。"
+    );
+
+    let ingest_window = function_window(
+        &slice_src,
+        "pub(crate) fn compute_frame_by_caret_ingest",
+        3400,
+    );
+    assert!(
+        ingest_window.contains("IngestBoundaryDriver::DeleteForwardBoundary => caret_x"),
+        "Issue #815 评论 5946701331 问题1: Delete 键的另一端必须是静止 caret 本身，\
+         边界才可能从被删区间右端朝它收拢。"
+    );
+
+    // slices.rs 必须按 conceal_to_left_edge 区分 Backspace / Delete 键。
+    let slices_src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
+    let slices_delete_window = function_window(
+        &slices_src,
+        "pub(crate) fn build_delete_conceal_slices",
+        9000,
+    );
+    assert!(
+        slices_delete_window.contains("if conceal_to_left_edge")
+            && slices_delete_window.contains("IngestBoundaryDriver::CaretPosition")
+            && slices_delete_window.contains("IngestBoundaryDriver::DeleteForwardBoundary"),
+        "Issue #815 评论 5946701331 问题1: build_delete_conceal_slices 必须按 \
+         conceal_to_left_edge 区分 Backspace（CaretPosition）与 Delete 键\
+         （DeleteForwardBoundary），不能都强行解释成「边界等于真实 caret」。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5946701331 问题2：跨行必须同侧行序 + 方向感知
+// =========================================================================
+
+/// 复核评论 5946701331 问题2。
+///
+/// `VisualLine.id` 每次 canonical 排版都从 0 重新编号，InsertReveal 的 slice 来自
+/// new snapshot、DeleteConceal 来自 old snapshot，不能把两份 revision 的行号直接
+/// 做大小比较。必须在**同一份 snapshot 内**建立起点行/终点行行序。
+#[test]
+fn issue815_review2_cross_line_uses_same_side_line_ordinals() {
+    let slices_src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
+    // Insert 侧：起点/终点行都从 new snapshot 查。
+    let insert_window = function_window(
+        &slices_src,
+        "pub(crate) fn build_insert_reveal_slices",
+        4000,
+    );
+    assert!(
+        insert_window.contains("line_ordinal_for_byte(new_snapshot"),
+        "Issue #815 评论 5946701331 问题2: Insert 跨行吞吐必须在 new snapshot 内建立\
+         起点行（inserted_range.start）与终点行，不拿 old 行号比较。"
+    );
+    // Delete 侧：起点/终点行都从 old snapshot 查。
+    let delete_window = function_window(
+        &slices_src,
+        "pub(crate) fn build_delete_conceal_slices",
+        4000,
+    );
+    assert!(
+        delete_window.contains("line_ordinal_for_line_top(old_snapshot")
+            && delete_window.contains("line_ordinal_for_byte(old_snapshot"),
+        "Issue #815 评论 5946701331 问题2: Delete 跨行吞吐必须在 old snapshot 内建立\
+         起点行（old caret line）与终点行（deleted_range 所在行），\
+         不拿 new 行号比较。"
+    );
+    assert!(
+        !delete_window.contains("line_ordinal_for_byte(new_snapshot")
+            && !insert_window.contains("line_ordinal_for_byte(old_snapshot"),
+        "Issue #815 评论 5946701331 问题2: 两侧行序必须同源，禁止跨 snapshot 比大小。"
+    );
+
+    // cursor_motion 不得把两个不同 revision 的 from/to line id 交给 slice 比大小。
+    let cursor_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
+    assert!(
+        !cursor_src.contains("from_visual_line_id <"),
+        "Issue #815 评论 5946701331 问题2: ingest 采样不得把跨 revision 的 \
+         from/to line id 做大小比较。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5946701331 问题3：收口后不再猜终态，clip 逐 unit 判断
+// =========================================================================
+
+/// 复核评论 5946701331 问题3。
+///
+/// DeleteConceal 的 `compute_frame(visible)` 语义是 visible=1 旧字完整可见、
+/// visible=0 旧字全吞。收口后用统一的 `compute_frame(1.0)` 会把旧字重新画成完整宽度。
+#[test]
+fn issue815_review3_retired_ingest_emits_no_glyph_and_clip_is_per_unit() {
+    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let text_window = function_window(&src, "fn build_text_animation_plan_with_sample", 9000);
+
+    let glyph_start = text_window
+        .find("for unit in &tx.units")
+        .unwrap_or_else(|| {
+            panic!("找不到文字 glyph 循环起点");
+        });
+    let glyph_window = &text_window[glyph_start..];
+    assert!(
+        !glyph_window.contains("unit.slice.compute_frame(1.0)"),
+        "Issue #815 评论 5946701331 问题3: CaretTrack unit 收口后不得用 compute_frame(1.0) \
+         猜终态——那会让 DeleteConceal 的旧字整段重现。终态就是不生成 glyph。"
+    );
+    assert!(
+        glyph_window.contains("caret_sample.map(")
+            && glyph_window.contains("let Some(frame) = frame else"),
+        "Issue #815 评论 5946701331 问题3: 本帧没有 owner caret sample 时，\
+         CaretTrack unit 必须得到 None 并直接跳过该 glyph，交还 canonical。"
+    );
+
+    // clip 收集在 build_render_plan_full 里（不在 build_text_animation_plan_with_sample）。
+    let plan_window = function_window(&src, "pub(crate) fn build_render_plan_full", 9000);
+    // 注意：旧写法仍然以注释形式保留在代码里（说明为什么删掉），
+    // 所以这里断言「删除原因写在注释里」+「逐 unit 判断已落地」，而不是断言子串消失。
+    assert!(
+        plan_window.contains("之前这里是"),
+        "Issue #815 评论 5946701331 问题3: 必须写下 clip 收集为何从整笔事务跳过改成逐 unit。"
+    );
+    assert!(
+        plan_window.contains("unit.timing.is_caret_track() && !owns_caret"),
+        "Issue #815 评论 5946701331 问题3: clip 收集必须逐 unit 判断——\
+         CaretTrack 只在本事务 owns caret 时收它自己的 static hidden rect，\
+         Timed Reflow 不依赖 caret ownership，按自己的生命周期继续收。"
     );
 }
 

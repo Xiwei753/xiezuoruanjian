@@ -65,6 +65,45 @@ pub(crate) enum AnimatedSliceKind {
     ReflowCrossFade,
 }
 
+/// Issue #815 评论 5946701331 问题1: 协同吞字/吐字的边界由谁驱动。
+///
+/// 协同模式**仍然只有一条 caret 运动轨迹**（`PreparedCursorVisualTrack`），
+/// 文字边界只是这条轨迹的另一种读法。这里区分的是"边界坐标怎么从这份采样里读"，
+/// 不是给文字新开一条独立时间线。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IngestBoundaryDriver {
+    /// 边界就是本帧真实 caret.x。
+    ///
+    /// - InsertReveal：吐字从编辑前的 caret 向新 caret 展开。
+    /// - Backspace：真实 caret 自己会往左走，吞字边界直接跟着它收拢。
+    CaretPosition,
+    /// Issue #815 评论 5946701331 问题1: Delete 键的吞字边界。
+    ///
+    /// Delete 键时 old caret 在被删文字**左侧**，删除后 caret 原地不动，
+    /// 真实 caret track 从头到尾 progress 都是 0 增量。若边界无条件等于
+    /// caret.x，`anchor == caret_x`，第一帧起裁切宽度就是 0——DeleteConceal
+    /// 直接消失，根本没有"吞进去"的过程。
+    ///
+    /// 所以 Delete 需要自己的吞字边界：它从被删区间的**右端**
+    /// （`ingest_boundary_from_x`，回退 `line_mask_right`）朝 caret.x 收拢。
+    /// 收拢过程由同一笔事务 cursor track 的 progress 驱动（仍是一条轨迹），
+    /// 只是这条轨迹驱动的量是"吞字边界"而不是"真实 caret 位置"。
+    DeleteForwardBoundary,
+}
+
+/// Issue #815 评论 5946701331 问题2: 本帧吞字/吐字边界相对某一行所处阶段的判定结果。
+///
+/// 只在**同一份 canonical snapshot** 的行序内判定，不做 old/new 行号混比。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IngestLinePhase {
+    /// 边界已经走过本行：Insert 全显 / Delete 全隐。
+    Passed,
+    /// 边界就在本行：按本帧边界 x 裁切。
+    OnCurrentLine,
+    /// 边界还没走到本行：Insert 全隐 / Delete 全保留。
+    NotReached,
+}
+
 /// 一次动画切片的完整描述。
 ///
 /// 坐标契约：
@@ -132,6 +171,40 @@ pub(crate) struct AnimatedSlice {
     /// 一次编辑的 caret 只在一个位置，跨行时只有 caret 所在那行的 slice 为 true。
     /// ReflowMove/ReflowCrossFade 不使用此字段（false）。
     pub is_caret_line: bool,
+    /// Issue #815 评论 5946701331 问题1: 本 slice 的吞字/吐字边界驱动。
+    ///
+    /// `InsertReveal` 与 Backspace 的 `DeleteConceal` 用 [`IngestBoundaryDriver::CaretPosition`]；
+    /// Delete 键的 `DeleteConceal` 用 [`IngestBoundaryDriver::DeleteForwardBoundary`]。
+    /// `build_delete_conceal_slices` 按既有 `conceal_to_left_edge` 语义区分：
+    /// true（caret 在被删文字右侧 → Backspace）→ `CaretPosition`；
+    /// false（caret 在被删文字左侧 → Delete 键）→ `DeleteForwardBoundary`。
+    /// ReflowMove/ReflowCrossFade 不使用此字段（`CaretPosition`，不会走到该入口）。
+    pub ingest_boundary_driver: IngestBoundaryDriver,
+    /// Issue #815 评论 5946701331 问题1: Delete 键吞字边界的起点 x（文档坐标）。
+    ///
+    /// 即被删区间在 **old snapshot** 内的右端。Delete 时 caret 不动，吞字边界从
+    /// 这里朝 caret.x 收拢。`None` 时回退 `line_mask_right`（该 slice 所在行的
+    /// 被删文字右端，由 `assign_shared_line_masks` 计算）。
+    pub ingest_boundary_from_x: Option<f64>,
+    /// Issue #815 评论 5946701331 问题2: 本 slice 自己在**同一份 snapshot** 内的行序。
+    ///
+    /// `InsertReveal` 用 **new** snapshot 的 `line_snapshots` 下标；
+    /// `DeleteConceal` 用 **old** snapshot 的 `line_snapshots` 下标。
+    /// 绝不能拿 old 的行序和 new 的行序做大小比较——两次 canonical 排版的
+    /// `VisualLine.id` 都从 0 重新编号，混着比必然判断反。
+    pub ingest_line_ord: Option<usize>,
+    /// Issue #815 评论 5946701331 问题2: 吞吐路径的起点行序（同一份 snapshot 内）。
+    ///
+    /// - InsertReveal（new snapshot）：`inserted_range.start` 所在视觉行，
+    ///   即编辑前 caret 所在的新侧视觉行。
+    /// - DeleteConceal（old snapshot）：删除前 old caret 所在视觉行。
+    pub ingest_from_line_ord: Option<usize>,
+    /// Issue #815 评论 5946701331 问题2: 吞吐路径的终点行序（同一份 snapshot 内）。
+    ///
+    /// - InsertReveal（new snapshot）：`inserted_range.end` 所在视觉行，
+    ///   即新 caret 所在视觉行。
+    /// - DeleteConceal（old snapshot）：`deleted_range.start` 所在视觉行。
+    pub ingest_to_line_ord: Option<usize>,
     /// Issue #722 评论 5748596920 问题2: 该 slice 所属视觉行的 id（来自 VisualLine.id）。
     ///
     /// 用于跨软换行裁切判断：caret 和 slice 在同一视觉行时才用 caret.x 做横向裁切；
@@ -239,6 +312,16 @@ impl AnimatedSlice {
             // 按 coordinated 和 visual_line_id 显式设置此字段。
             // 默认 false 避免 Composition 路径偷偷进入协同 caret mask 模式。
             is_caret_line: false,
+            // Issue #815 评论 5946701331 问题1/2: 默认按真实 caret 位置驱动 +
+            // 无行序信息（退回同行 x 裁切）。InsertReveal / Backspace DeleteConceal
+            // 保持这个默认值；Delete 键的 DeleteConceal 由
+            // `build_delete_conceal_slices` 改成 `DeleteForwardBoundary`，
+            // 行序由两侧各自的 canonical 快照填入。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -293,6 +376,16 @@ impl AnimatedSlice {
             // 按 coordinated 和 visual_line_id 显式设置此字段。
             // 默认 false 避免 Composition 路径偷偷进入协同 caret mask 模式。
             is_caret_line: false,
+            // Issue #815 评论 5946701331 问题1/2: 默认按真实 caret 位置驱动 +
+            // 无行序信息（退回同行 x 裁切）。InsertReveal / Backspace DeleteConceal
+            // 保持这个默认值；Delete 键的 DeleteConceal 由
+            // `build_delete_conceal_slices` 改成 `DeleteForwardBoundary`，
+            // 行序由两侧各自的 canonical 快照填入。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -350,6 +443,16 @@ impl AnimatedSlice {
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
             is_caret_line: false,
+            // Issue #815 评论 5946701331 问题1/2: 默认按真实 caret 位置驱动 +
+            // 无行序信息（退回同行 x 裁切）。InsertReveal / Backspace DeleteConceal
+            // 保持这个默认值；Delete 键的 DeleteConceal 由
+            // `build_delete_conceal_slices` 改成 `DeleteForwardBoundary`，
+            // 行序由两侧各自的 canonical 快照填入。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -407,6 +510,16 @@ impl AnimatedSlice {
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
             is_caret_line: false,
+            // Issue #815 评论 5946701331 问题1/2: 默认按真实 caret 位置驱动 +
+            // 无行序信息（退回同行 x 裁切）。InsertReveal / Backspace DeleteConceal
+            // 保持这个默认值；Delete 键的 DeleteConceal 由
+            // `build_delete_conceal_slices` 改成 `DeleteForwardBoundary`，
+            // 行序由两侧各自的 canonical 快照填入。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -457,6 +570,16 @@ impl AnimatedSlice {
             caret_anchor_x: 0.0,
             caret_anchor_y: 0.0,
             is_caret_line: false,
+            // Issue #815 评论 5946701331 问题1/2: 默认按真实 caret 位置驱动 +
+            // 无行序信息（退回同行 x 裁切）。InsertReveal / Backspace DeleteConceal
+            // 保持这个默认值；Delete 键的 DeleteConceal 由
+            // `build_delete_conceal_slices` 改成 `DeleteForwardBoundary`，
+            // 行序由两侧各自的 canonical 快照填入。
+            ingest_boundary_driver: IngestBoundaryDriver::CaretPosition,
+            ingest_boundary_from_x: None,
+            ingest_line_ord: None,
+            ingest_from_line_ord: None,
+            ingest_to_line_ord: None,
             visual_line_id: None,
             start_fraction: 0.0,
             static_hidden_document_rects: Vec::new(),
@@ -697,33 +820,48 @@ impl AnimatedSlice {
         }
     }
 
-    /// Issue #815 评论 6042062633 修改 5: 按"当前 caret 帧"算吞吐 clip。
+    /// Issue #815 评论 6042062633 修改 5 / Issue #815 评论 5946701331 问题1+2:
+    /// 按"当前 caret 帧"算吞吐 clip。
     ///
     /// 协同模式的 InsertReveal/DeleteConceal **没有自己的 0..1 visible fraction**。
-    /// 本方法里这一帧的边界就是这一帧 caret track 采样出来的 `caret_x` 本身，
-    /// 不是 `anchor + extent * text_progress`。
+    /// 本方法的边界是 cursor track 本帧采样出来的坐标，不是
+    /// `anchor + extent * text_progress`。
     ///
-    /// 同一视觉行：
-    /// - InsertReveal：`caret_anchor_x` 是编辑前的 caret（起点），`caret_x` 是本帧 caret
-    ///   （边界）。只显示 caret 已经扫过的 `[anchor, caret]`。
-    /// - DeleteConceal：`caret_anchor_x` 是删除后的最终 caret（终点），`caret_x` 是本帧
-    ///   caret（边界）。只保留还没被吞掉的 `[caret, final]`。
+    /// `caret_x` / `caret_progress` 必须来自同一笔事务 cursor track 的**同一次**
+    /// 采样（`sample_caret_track_frame`），和光标层共用这一份，文字不自己再算时间。
     ///
-    /// 两种 kind 都用 `min/max` 归一化前后顺序，所以前删（final 在左）和前插
-    /// （final 在右）都走同一条公式。
+    /// Issue #815 评论 5946701331 问题1（边界驱动）：
+    /// - [`IngestBoundaryDriver::CaretPosition`]：边界就是本帧 `caret_x`。
+    ///   InsertReveal 从编辑前的 caret 展开；Backspace 的真实 caret 自己会往左走，
+    ///   吞字边界直接跟着它收拢。
+    /// - [`IngestBoundaryDriver::DeleteForwardBoundary`]：Delete 键时 caret 原地不动，
+    ///   若边界仍等于 `caret_x` 则 `anchor == caret_x`、第一帧宽度就是 0，吞字动画
+    ///   直接消失。所以边界从被删区间右端（`ingest_boundary_from_x`，回退
+    ///   `line_mask_right`）朝 `caret_x` 收拢，收拢量由同一笔事务 track 的
+    ///   `caret_progress` 驱动。
     ///
-    /// 跨软换行/跨段：按本 slice 的 `visual_line_id` 与本帧采样到的 caret 行比较
-    /// （`VisualLine.id` 在同一份 canonical basis 内按文档顺序单调递增）：
-    /// - caret 已经走过本行（`slice_line < caret_line`）：Insert 整段显示，Delete 整段隐藏。
-    /// - caret 还没走到本行（`slice_line > caret_line`）：Insert 整段隐藏，Delete 整段保留。
-    /// - 绝不能用上一行的 caret.x 去裁下一行。
+    /// 两种驱动都用 `min/max` 归一化前后顺序，所以前删（终点在左）和前插
+    /// （终点在右）都走同一条公式。
     ///
-    /// `caret_visual_line_id` 缺失（拿不到行 id）时防御性地按同一行处理，只用
-    /// `caret_x` 裁本行——这仍然比退化成独立 0..1 进度更接近协同语义。
+    /// Issue #815 评论 5946701331 问题2（跨行）：
+    /// 跨软换行/跨段不再用 `slice_line < caret_line` / `>` 这种把"向前走"写死的
+    /// 比较——Backspace 跨行时 caret 是从**较大的** old 行走到**较小的** final 行，
+    /// 那种写法会把方向判断反。
+    ///
+    /// 改为在**同一份 snapshot 内**比较行序：起点行（`ingest_from_line_ord`）、
+    /// 终点行（`ingest_to_line_ord`）和本 slice 自己的行（`ingest_line_ord`）都由
+    /// 该侧的 canonical 快照算出——Insert 用 new snapshot，Delete 用 old snapshot。
+    /// 方向由 `ingest_to_line_ord - ingest_from_line_ord` 的符号给出（forward /
+    /// backward 都支持），本帧边界走到哪一行由 `caret_progress` 线性插值得到。
+    /// 绝不把 old 的行序和 new 的行序做大小比较，也绝不用上一行的 caret.x
+    /// 裁下一行。
+    ///
+    /// 行序缺失（拿不到同侧行）时防御性地按同一行处理，只用边界 x 裁本行——
+    /// 这仍然比退化成独立 0..1 进度更接近协同语义。
     pub(crate) fn compute_frame_by_caret_ingest(
         &self,
         caret_x: f64,
-        caret_visual_line_id: Option<usize>,
+        caret_progress: f64,
     ) -> AnimatedSliceFrame {
         // ReflowMove/ReflowCrossFade 始终是独立 Timed（见
         // `VisualUnitTiming::default_for_kind_with_coordinated`），不会走到这个入口；
@@ -737,31 +875,102 @@ impl AnimatedSlice {
         };
         let mask_left = self.line_mask_left;
         let mask_right = self.line_mask_right;
-        let (boundary_left, boundary_right) = match (self.visual_line_id, caret_visual_line_id) {
-            (Some(slice_line), Some(caret_line)) if slice_line > caret_line => {
-                // caret 还没走到本行。
-                if fully_shown {
-                    (mask_left, mask_left)
-                } else {
-                    (mask_left, mask_right)
-                }
-            }
-            (Some(slice_line), Some(caret_line)) if slice_line < caret_line => {
-                // caret 已经走过本行。
-                if fully_shown {
-                    (mask_left, mask_right)
-                } else {
-                    (mask_left, mask_left)
-                }
-            }
-            _ => {
-                // 同一行：本帧边界就是本帧 caret.x，另一端是构造期写入的锚点
-                // （InsertReveal 是编辑前 caret，DeleteConceal 是删除后最终 caret）。
-                let anchor = self.caret_anchor_x;
-                (anchor.min(caret_x), anchor.max(caret_x))
+
+        // 本帧吞字/吐字边界 x。Issue #815 评论 5946701331 问题1。
+        let boundary_x = match self.ingest_boundary_driver {
+            IngestBoundaryDriver::CaretPosition => caret_x,
+            IngestBoundaryDriver::DeleteForwardBoundary => {
+                // Delete 键：caret 固定，边界从被删区间右端朝 caret.x 收拢。
+                let from_x = self.ingest_boundary_from_x.unwrap_or(mask_right);
+                let progress = caret_progress.clamp(0.0, 1.0);
+                from_x + (caret_x - from_x) * progress
             }
         };
+        // 吞吐路径的另一端（构造期写入）：
+        // - CaretPosition：InsertReveal 是编辑前 caret；Backspace DeleteConceal 是
+        //   删除后的最终 caret。
+        // - DeleteForwardBoundary：Delete 键的最终 caret 固定在被删区间左端，
+        //   所以另一端就是本帧的 `caret_x` 本身。边界从被删区间右端朝它收拢，
+        //   收拢量由 `caret_progress` 驱动——不是把静止 caret 当进度，
+        //   也不是回到独立文字 timeline（轨迹仍由本事务 cursor track 的 progress 定义）。
+        let path_other_end_x = match self.ingest_boundary_driver {
+            IngestBoundaryDriver::CaretPosition => self.caret_anchor_x,
+            IngestBoundaryDriver::DeleteForwardBoundary => caret_x,
+        };
+
+        // Issue #815 评论 5946701331 问题2: 同侧行序 + 方向感知的跨行相位。
+        let phase = self.ingest_line_phase(caret_progress);
+        let (boundary_left, boundary_right) = match phase {
+            IngestLinePhase::Passed => {
+                if fully_shown {
+                    (mask_left, mask_right)
+                } else {
+                    (mask_left, mask_left)
+                }
+            }
+            IngestLinePhase::NotReached => {
+                if fully_shown {
+                    (mask_left, mask_left)
+                } else {
+                    (mask_left, mask_right)
+                }
+            }
+            IngestLinePhase::OnCurrentLine => (
+                path_other_end_x.min(boundary_x),
+                path_other_end_x.max(boundary_x),
+            ),
+        };
         self.clip_ingest_frame(slice_rect, boundary_left, boundary_right)
+    }
+
+    /// Issue #815 评论 5946701331 问题2: 本帧吞字/吐字边界相对本 slice 所在行的相位。
+    ///
+    /// 三个行序（`ingest_line_ord` / `ingest_from_line_ord` / `ingest_to_line_ord`）
+    /// 都来自**同一份 canonical snapshot**（Insert 用 new、Delete 用 old），
+    /// 所以它们可以安全地互相比较，不会出现拿 old 行号和 new 行号做大小关系。
+    ///
+    /// 本帧边界所在行序 = `from + (to - from) * progress`，然后按符号判断方向：
+    /// - `to > from`（向后走，如 Insert）：本 slice 行序 < 边界行序 = 已走过，
+    ///   > = 还没走到。
+    /// - `to < from`（向前走，如 Backspace 跨行）：符号相反。
+    /// - `to == from`（单行）或行序缺失：返回 [`IngestLinePhase::OnCurrentLine`]，
+    ///   退回按本帧边界 x 裁本行。
+    fn ingest_line_phase(&self, caret_progress: f64) -> IngestLinePhase {
+        let (Some(slice_ord), Some(from_ord), Some(to_ord)) = (
+            self.ingest_line_ord,
+            self.ingest_from_line_ord,
+            self.ingest_to_line_ord,
+        ) else {
+            return IngestLinePhase::OnCurrentLine;
+        };
+        if from_ord == to_ord {
+            return IngestLinePhase::OnCurrentLine;
+        }
+        let forward = to_ord > from_ord;
+        let progress = caret_progress.clamp(0.0, 1.0);
+        // 用浮点行序 + 0.5 容差判定"边界已经落到本行之上/之下"，
+        // 避免整数行序在边界正好落行首时抖一帧。
+        //
+        // Issue #815 评论 5946701331 问题2：Backspace 跨行时 `to_ord < from_ord`，
+        // 这里必须用有符号差值，`usize` 相减会下溢 panic。
+        let span = to_ord as i64 - from_ord as i64;
+        let boundary_ord = from_ord as f64 + span as f64 * progress;
+        let delta = boundary_ord - slice_ord as f64;
+        if forward {
+            if delta > 0.5 {
+                IngestLinePhase::Passed
+            } else if delta < -0.5 {
+                IngestLinePhase::NotReached
+            } else {
+                IngestLinePhase::OnCurrentLine
+            }
+        } else if delta < -0.5 {
+            IngestLinePhase::Passed
+        } else if delta > 0.5 {
+            IngestLinePhase::NotReached
+        } else {
+            IngestLinePhase::OnCurrentLine
+        }
     }
 
     /// Issue #815 评论 6042062633 修改 5: 用行级 boundary 与本 slice 自己的 rect 求交，
@@ -848,3 +1057,6 @@ pub(crate) struct AnimatedSliceFrame {
     pub source_rect: SourceRect,
     pub snapshot_id: LineSnapshotId,
 }
+
+#[cfg(test)]
+mod ingest_tests;

@@ -1,6 +1,6 @@
 use super::super::coordinator::LinuxEditorAnimationCoordinator;
 use super::*;
-use crate::sujian_editor_item::animated_slice::AnimatedSlice;
+use crate::sujian_editor_item::animated_slice::{AnimatedSlice, IngestBoundaryDriver};
 use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
 use crate::sujian_editor_item::animation::rebase::match_rebase_frames;
 use crate::sujian_editor_item::animation::{
@@ -1909,5 +1909,148 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
     println!(
         "[BUGFIX_VERIFY] Issue #727 评论 5760650874 / Issue #785: \
          旧事务失去 owner 后文字 unit 按独立时间线继续，可重新获得 owner（正确行为）"
+    );
+}
+
+// ── Issue #815 评论 5946701331 问题3 行为级测试 ──
+
+/// 构造一笔「协同 DeleteConceal（CaretTrack） + Timed ReflowMove」的事务。
+///
+/// - DeleteConceal unit 用 `wrap_with_coordinated(..., coordinated = true)`，
+///   它没有独立时间线；
+/// - ReflowMove unit 用 `wrap(...)`，始终是独立 `Timed`；
+/// - Reflow slice 带 `static_hidden_document_rects`，用于观察静态裁剪收集。
+fn issue815_conceal_plus_reflow_tx(
+    now: Instant,
+    tx_elapsed_ms: u64,
+) -> PreparedTextVisualTransaction {
+    // 旧字 [100, 140)，Delete 键：caret 固定在被删区间左端 100。
+    let mut conceal = conceal_slice(0, 3, 100.0, 40.0, /* conceal_to_left_edge */ false);
+    // Issue #815 评论 5946701331 问题1: Delete 键必须走 DeleteForwardBoundary，
+    // 边界从被删区间右端 140 向静止 caret 100 收拢。
+    conceal.ingest_boundary_driver = IngestBoundaryDriver::DeleteForwardBoundary;
+    conceal.ingest_boundary_from_x = Some(140.0);
+    conceal.ingest_from_line_ord = Some(0);
+    conceal.ingest_to_line_ord = Some(0);
+    conceal.ingest_line_ord = Some(0);
+    conceal.static_hidden_document_rects = Vec::new();
+    let conceal_unit =
+        PreparedVisualUnit::wrap_with_coordinated(conceal, 100, /* coordinated = true */ true);
+    let mut reflow = reflow_slice(3, 6, 40.0, 0.0);
+    // Reflow overlay 覆盖的旧正文矩形——必须被 static clip 隐藏，
+    // 否则 overlay 和 canonical 会重影。
+    reflow.static_hidden_document_rects = vec![SourceRect {
+        x: 0.0,
+        y: 0.0,
+        w: 30.0,
+        h: 20.0,
+    }];
+    let reflow_unit = elapsed_unit(reflow, tx_elapsed_ms / 2, 100, now);
+    rendering_tx(
+        VisualTransactionKey::new(77, 77),
+        TextVisualOperationKind::Delete,
+        vec![conceal_unit, reflow_unit],
+        caret(100.0),
+        caret(100.0),
+        now,
+        tx_elapsed_ms,
+    )
+}
+
+fn issue815_build_plan(
+    coord: &mut LinuxEditorAnimationCoordinator,
+    now: Instant,
+    cursor_owner_epoch: u64,
+) -> crate::sujian_editor_item::render_plan::RenderPlan {
+    coord.build_render_plan_full(
+        stale_cursor_state(),
+        SelectionPreeditPlan::default(),
+        FrameContext::default(),
+        CursorStyle::default(),
+        SelectionPreeditStyle::default(),
+        now,
+        None,
+        cursor_owner_epoch,
+        0.0,
+    )
+}
+
+/// Issue #815 评论 5946701331 问题3：事务拥有 caret 时，协同 DeleteConceal 必须
+/// 按当前 caret 帧吐字——这里只确认前置状态：glyph 有吞字、有 Reflow，
+/// static clip 也同时收了两类 unit。
+#[test]
+fn issue815_problem3_owner_frame_draws_conceal_and_collects_both_clips() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord
+        .prepared_queue
+        .enqueue(issue815_conceal_plus_reflow_tx(now, 50));
+
+    let plan = issue815_build_plan(&mut coord, now, 0);
+
+    assert_eq!(
+        plan.text_animation.glyphs.len(),
+        2,
+        "拥有 caret 时应同时产出 DeleteConceal 与 Reflow 两个 glyph"
+    );
+    assert_eq!(
+        plan.clip_rects.len(),
+        1,
+        "前置状态：Reflow 的 static hidden rect 应被收集，got {:?}",
+        plan.clip_rects
+    );
+}
+
+/// Issue #815 评论 5946701331 问题3 核心回归：
+/// 事务失去 caret ownership（这里用不匹配的 `cursor_owner_epoch` 模拟）
+/// 时，协同 DeleteConceal 收口到终态。
+///
+/// DeleteConceal 的终态是**不画旧字**，不是 `compute_frame(1.0)`（那会把旧字
+/// 重新画成完整宽度）。因此本帧 glyph 里只剩 Reflow。
+#[test]
+fn issue815_problem3_retired_conceal_draws_no_glyph_but_reflow_survives() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord
+        .prepared_queue
+        .enqueue(issue815_conceal_plus_reflow_tx(now, 50));
+
+    // epoch 不匹配 ⇒ 本事务不拥有 caret motion。
+    let plan = issue815_build_plan(&mut coord, now, 999);
+
+    assert_eq!(
+        plan.text_animation.glyphs.len(),
+        1,
+        "CaretTrack unit 收口后不得再生成 glyph（DeleteConceal 终态 = 不画旧字）"
+    );
+    let glyph = &plan.text_animation.glyphs[0];
+    assert!(
+        glyph.source_rect.w > 0.0,
+        "剩下的唯一 glyph 必须是仍在播的 Reflow overlay"
+    );
+}
+
+/// Issue #815 评论 5946701331 问题3 第二层：旧实现按**整笔事务**跳过 clip 收集
+/// （`if !owns_caret && tx.has_caret_track_units() { continue; }`），
+/// 会把同事务里 Timed Reflow 的 static clip 也一起跳过，导致 Reflow overlay
+/// 继续绘制而 canonical 最终正文也绘制 ⇒ 重影。
+///
+/// 现在 clip 收集逐 unit 判断：Reflow 不依赖 caret ownership，clip 必须保留。
+#[test]
+fn issue815_problem3_reflow_static_clip_survives_losing_caret_ownership() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord
+        .prepared_queue
+        .enqueue(issue815_conceal_plus_reflow_tx(now, 50));
+
+    let plan = issue815_build_plan(&mut coord, now, 999);
+
+    assert_eq!(
+        plan.clip_rects.len(),
+        1,
+        "失去 caret ownership 后 Timed Reflow 的 static clip 必须仍然收集，\
+         否则 overlay 与 canonical 重影；got {:?}",
+        plan.clip_rects
     );
 }
