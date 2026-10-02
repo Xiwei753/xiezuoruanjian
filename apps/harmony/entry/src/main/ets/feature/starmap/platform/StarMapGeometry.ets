@@ -1000,52 +1000,52 @@ function findEmbedRect(context: RecursiveSceneContext, instanceId: string): Plat
 /**
  * 父 Scene 画布坐标 → 某个 Embed 内部的子 Scene 局部屏幕坐标。
  *
- * 必须**先扣掉 Embed 矩形自己的原点**：子 Scene 的局部坐标是相对 Embed 那个
- * 直径见方的盒子左上角量的，不是相对父画布原点量的。
- * 而子 Scene 的画布坐标又是它自己那张图的 node.position，和父画布完全没有
- * 共同的数值范围——直接把父画布坐标塞进子视口换算，缩放中心会跑到子图外面去，
- * 这正是"嵌套子星图比父图大、双指缩放看起来没反应"的根因（#816）。
+ * 这一步只回答一个问题：**这个点在 Embed 那个盒子里偏到哪儿了**。
+ * 答案完全由父层的显示几何决定——盒子大小是 `DEFAULT_EMBED_DIAMETER * parent.scale`，
+ * 盒子左上角是 `embedRect.origin * parent.scale`（见 ui/StarMapScene.getEmbedScreenX），
+ * 所以先扣掉 Embed 矩形原点、再乘父层 scale，就是子组件的局部屏幕坐标。
+ *
+ * **这里绝对不能碰 child.scale / child.offset。** 子视口会在下一步
+ * `screenToCanvas(childLocalX, childLocalY, child.scale, child.offset)` 里作用一次。
+ * 如果这里提前乘一遍子 scale，下一步立刻除掉，两次正好抵消——子图缩放和拖动
+ * 就彻底对命中不可见了，表现为"缩放子图没反应、点子图里的节点没反应"（#816）。
  *
  * @param parent 父 Scene 上下文
  * @param embedInstanceId 该 Embed 的 instanceId
  * @param parentCanvasX 父 Scene 画布坐标 X
  * @param parentCanvasY 父 Scene 画布坐标 Y
- * @param child 子 Scene 上下文（提供子视口）
- * @returns 子 Scene 局部屏幕坐标
+ * @returns 子 Scene 局部屏幕坐标（未套用子视口）
  */
 export function embedParentCanvasToChildLocal(
   parent: RecursiveSceneContext,
   embedInstanceId: string,
   parentCanvasX: number,
-  parentCanvasY: number,
-  child: RecursiveSceneContext
+  parentCanvasY: number
 ): PlatformPoint {
   const rect: PlatformNodeRect | null = findEmbedRect(parent, embedInstanceId)
   const originX: number = rect !== null ? rect.x : 0
   const originY: number = rect !== null ? rect.y : 0
-  return canvasToScreen(
-    parentCanvasX - originX, parentCanvasY - originY, child.scale, child.offsetX, child.offsetY
-  )
+  return {
+    x: (parentCanvasX - originX) * parent.scale,
+    y: (parentCanvasY - originY) * parent.scale
+  }
 }
 
 /**
  * 某个 Embed 内部子 Scene 的局部屏幕坐标 → 父 Scene 画布坐标。
- * embedParentCanvasToChildLocal 的逆运算。
+ * embedParentCanvasToChildLocal 的逆运算，同样只看父层显示几何。
  */
 export function childLocalToParentCanvas(
   parent: RecursiveSceneContext,
   embedInstanceId: string,
   childLocalX: number,
-  childLocalY: number,
-  child: RecursiveSceneContext
+  childLocalY: number
 ): PlatformPoint {
-  const childCanvas: PlatformPoint = screenToCanvas(
-    childLocalX, childLocalY, child.scale, child.offsetX, child.offsetY
-  )
   const rect: PlatformNodeRect | null = findEmbedRect(parent, embedInstanceId)
   const originX: number = rect !== null ? rect.x : 0
   const originY: number = rect !== null ? rect.y : 0
-  return { x: childCanvas.x + originX, y: childCanvas.y + originY }
+  const scale: number = parent.scale > 0 ? parent.scale : 1
+  return { x: childLocalX / scale + originX, y: childLocalY / scale + originY }
 }
 
 /** 取路径最后一段 enterEmbed 的 instanceId；不是 enterEmbed 或为空时返回 ''。 */
@@ -1164,8 +1164,10 @@ export function resolveRecursiveHit(
       }
     }
 
+    // 下探：只换到子组件的局部屏幕坐标；下一轮循环开头的 screenToCanvas 才套子视口，
+    // 两者必须分开，否则子图缩放/拖动会被原地抵消，对命中彻底不可见。
     const childLocal: PlatformPoint = embedParentCanvasToChildLocal(
-      current, hit.objectId, canvasPoint.x, canvasPoint.y, child
+      current, hit.objectId, canvasPoint.x, canvasPoint.y
     )
     embedPath.push(embedSegment(hit.objectId))
     current = child
@@ -1216,9 +1218,9 @@ export function convertPointToRoot(
     if (child === undefined) {
       break
     }
-    // 向上走一层：子 Scene 局部 → 子画布 → 加回 Embed 矩形原点 → 父画布 → 父局部
+    // 向上走一层：子 Scene 局部屏幕 → 除父 scale 加回 Embed 矩形原点 → 父画布 → 父局部
     const parentCanvas: PlatformPoint = childLocalToParentCanvas(
-      parent, seg.instanceId, localX, localY, child
+      parent, seg.instanceId, localX, localY
     )
     const parentLocal: PlatformPoint = canvasToScreen(
       parentCanvas.x, parentCanvas.y, parent.scale, parent.offsetX, parent.offsetY
@@ -1261,12 +1263,12 @@ export function resolveSceneLocalPoint(
     if (child === undefined) {
       break
     }
-    // 向下走：父 Scene 局部 → 父画布 → 扣掉 Embed 矩形原点 → 子 Scene 局部
+    // 向下走一段：父 Scene 局部 → 父画布 → 扣 Embed 矩形原点并乘父 scale → 子 Scene 局部
     const parentCanvas: PlatformPoint = screenToCanvas(
       localX, localY, current.scale, current.offsetX, current.offsetY
     )
     const childLocal: PlatformPoint = embedParentCanvasToChildLocal(
-      current, seg.instanceId, parentCanvas.x, parentCanvas.y, child
+      current, seg.instanceId, parentCanvas.x, parentCanvas.y
     )
     current = child
     localX = childLocal.x

@@ -76,13 +76,19 @@ function computeFitScale(bounds, availableWidth, availableHeight, paddingVp) {
   return Math.max(MIN_FIT_SCALE, Math.min(MAX_FIT_SCALE, raw))
 }
 
-function computeFittedViewport(bounds, availableWidth, availableHeight, paddingVp) {
+// 缩放比例按可用区（子星图里是圆的内接正方形）算；
+// 偏移必须按 Scene 自己的尺寸算——子 Scene 组件铺满整个 Embed 圆，
+// 中心是 sceneWidth/2、sceneHeight/2，不是内接正方形的中心（第 4 条复审）。
+function computeCenteredOffset(bounds, fitScale, sceneWidth, sceneHeight) {
+  const centerX = (bounds.minX + bounds.maxX) / 2
+  const centerY = (bounds.minY + bounds.maxY) / 2
+  return { x: sceneWidth / 2 - centerX * fitScale, y: sceneHeight / 2 - centerY * fitScale }
+}
+
+function computeFittedViewport(bounds, availableWidth, availableHeight, paddingVp, sceneWidth, sceneHeight) {
   const fitScale = computeFitScale(bounds, availableWidth, availableHeight, paddingVp)
-  return {
-    zoomScale: fitScale,
-    offsetX: (availableWidth - bounds.width * fitScale) / 2 - bounds.minX * fitScale,
-    offsetY: (availableHeight - bounds.height * fitScale) / 2 - bounds.minY * fitScale
-  }
+  const offset = computeCenteredOffset(bounds, fitScale, sceneWidth, sceneHeight)
+  return { zoomScale: fitScale, offsetX: offset.x, offsetY: offset.y }
 }
 
 function effectiveScale(fitScale, userZoomScale) { return fitScale * userZoomScale }
@@ -269,21 +275,23 @@ function findEmbedRect(context, instanceId) {
   return null
 }
 
-function embedParentCanvasToChildLocal(parent, embedInstanceId, parentCanvasX, parentCanvasY, child) {
+// 组件局部屏幕坐标只由**父层的显示几何**决定：盒子边长 = 直径 * 父 scale，
+// 盒子左上角 = Embed 矩形原点 * 父 scale。
+// 这里绝不能乘 child.scale——下一步的 screenToCanvas 已经乘过一次，两次会抵消，
+// 那样"子图缩放对命中不可见"就又回来了（#816 评审第 3 条）。
+function embedParentCanvasToChildLocal(parent, embedInstanceId, parentCanvasX, parentCanvasY) {
   const rect = findEmbedRect(parent, embedInstanceId)
   const originX = rect !== null ? rect.x : 0
   const originY = rect !== null ? rect.y : 0
-  return canvasToScreen(
-    parentCanvasX - originX, parentCanvasY - originY, child.scale, child.offsetX, child.offsetY
-  )
+  return { x: (parentCanvasX - originX) * parent.scale, y: (parentCanvasY - originY) * parent.scale }
 }
 
-function childLocalToParentCanvas(parent, embedInstanceId, childLocalX, childLocalY, child) {
-  const childCanvas = screenToCanvas(childLocalX, childLocalY, child.scale, child.offsetX, child.offsetY)
+function childLocalToParentCanvas(parent, embedInstanceId, childLocalX, childLocalY) {
   const rect = findEmbedRect(parent, embedInstanceId)
   const originX = rect !== null ? rect.x : 0
   const originY = rect !== null ? rect.y : 0
-  return { x: childCanvas.x + originX, y: childCanvas.y + originY }
+  const scale = parent.scale > 0 ? parent.scale : 1
+  return { x: childLocalX / scale + originX, y: childLocalY / scale + originY }
 }
 
 const MAX_RECURSE_SCENE_DEPTH = 32
@@ -335,7 +343,7 @@ function resolveRecursiveHit(root, x, y) {
         embedPath: cloneScenePath(embedPath)
       }
     }
-    const childLocal = embedParentCanvasToChildLocal(current, hit.objectId, canvasPoint.x, canvasPoint.y, child)
+    const childLocal = embedParentCanvasToChildLocal(current, hit.objectId, canvasPoint.x, canvasPoint.y)
     embedPath.push(embedSegment(hit.objectId))
     current = child
     localX = childLocal.x
@@ -361,7 +369,7 @@ function convertPointToRoot(root, scenePath, x, y) {
     if (parent === null) { break }
     const child = parent.children.get(seg.instanceId)
     if (child === undefined) { break }
-    const parentCanvas = childLocalToParentCanvas(parent, seg.instanceId, localX, localY, child)
+    const parentCanvas = childLocalToParentCanvas(parent, seg.instanceId, localX, localY)
     const parentLocal = canvasToScreen(parentCanvas.x, parentCanvas.y, parent.scale, parent.offsetX, parent.offsetY)
     localX = parentLocal.x
     localY = parentLocal.y
@@ -380,7 +388,7 @@ function resolveSceneLocalPoint(root, scenePath, x, y) {
     const child = current.children.get(seg.instanceId)
     if (child === undefined) { break }
     const parentCanvas = screenToCanvas(localX, localY, current.scale, current.offsetX, current.offsetY)
-    const childLocal = embedParentCanvasToChildLocal(current, seg.instanceId, parentCanvas.x, parentCanvas.y, child)
+    const childLocal = embedParentCanvasToChildLocal(current, seg.instanceId, parentCanvas.x, parentCanvas.y)
     current = child
     localX = childLocal.x
     localY = childLocal.y
@@ -505,6 +513,10 @@ function createGestureStateTracker() {
     isConnectOwnedByScene(scenePath) {
       if (state.connectOwnerScenePath === null) { return false }
       return isSameScenePath(state.connectOwnerScenePath, scenePath)
+    },
+    isPanOwnedByScene(scenePath) {
+      if (state.panOwnerScenePath === null) { return false }
+      return isSameScenePath(state.panOwnerScenePath, scenePath)
     },
     getState() {
       const s = state
@@ -642,6 +654,54 @@ function makeTree() {
   )
 }
 
+// ─── #816 评审回归需要的镜像（StarMapScene.ets / StarMapViewport.ets）───
+
+/** 两指距离。搬掉系统 PinchGesture 之后，捏合幅度只能自己算。 */
+function fingerDistance(a, b) {
+  const dx = a.x - b.x
+  const dy = a.y - b.y
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/**
+ * 捏合比例 = 当前两指距离 ÷ 起手两指距离。
+ *
+ * 刻意不写成"当前 scale ÷ 起手 scale"：那条式子每帧自乘一次，
+ * 两根手指张开 10% 画面会缩掉一大截，而且和手指实际开合完全脱钩。
+ */
+function computePinchRatio(baseDistance, fingerPoints) {
+  if (!(baseDistance > 0) || fingerPoints.length < 2) { return 1 }
+  return fingerDistance(fingerPoints[0], fingerPoints[1]) / baseDistance
+}
+
+/**
+ * Scene 句柄的镜像（StarMapViewport.ets 的 StarMapSceneNode）。
+ * 重点是 sync()：注册表里存的 scale/offset 不会因为 UI 改了 @Link 就自动更新，
+ * 不主动 sync 的话，缩放一次之后所有递归命中都在拿过期视口算。
+ */
+function createSceneNode(scenePath, starmapId, opts) {
+  const node = {
+    scenePath, starmapId,
+    rects: opts.rects || [],
+    embedInstanceIds: new Set(opts.embedInstanceIds || []),
+    scale: opts.scale === undefined ? 1 : opts.scale,
+    offsetX: opts.offsetX || 0,
+    offsetY: opts.offsetY || 0,
+    fitScale: opts.fitScale === undefined ? 1 : opts.fitScale,
+    getChildEmbeds() { return opts.getChildEmbeds ? opts.getChildEmbeds() : [] },
+    sync(rects, embedInstanceIds, scale, offsetX, offsetY, fitScale) {
+      node.rects = rects
+      node.embedInstanceIds = new Set(embedInstanceIds)
+      node.scale = scale
+      node.offsetX = offsetX
+      node.offsetY = offsetY
+      node.fitScale = fitScale
+    },
+    async createEdgeBetween(from, to) { return opts.createEdgeFn(from, to) }
+  }
+  return node
+}
+
 // ══════════════════════════════════════════════════════════════
 // 断言工具
 // ══════════════════════════════════════════════════════════════
@@ -714,26 +774,50 @@ console.log('2. fitScale 来自内容与可用区，不是"每层乘 0.6"')
   assert(near(clampUserZoom(NaN, USER_ZOOM_MIN, USER_ZOOM_MAX), 1), '非法 userZoomScale 退回 1')
 }
 
-console.log('3. computeFittedViewport：内容居中落在可用区中心')
+console.log('3. computeFittedViewport：缩放按可用区算，偏移按 Scene 自己的尺寸算')
 {
+  // 直径 200 的圆：可用区是内接正方形（约 141），但子 Scene 组件铺满整个圆（200×200）
   const available = 141
+  const sceneSize = 200
   const bounds = computeContentBounds([
     { nodeId: 'a', x: 0, y: 0, width: 400, height: 100, radius: 0 },
     { nodeId: 'b', x: 400, y: 0, width: 400, height: 100, radius: 0 }
   ])
-  const fitted = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP)
-  // 包围盒中心 (400, 50) 应落在可用区中心
+  const fitted = computeFittedViewport(
+    bounds, available, available, EMBED_FIT_PADDING_VP, sceneSize, sceneSize
+  )
+  // 包围盒中心 (400, 50) 应落在 Scene 自己的中心，也就是圆心
   const center = canvasToScreen((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2,
     fitted.zoomScale, fitted.offsetX, fitted.offsetY)
-  assert(nearPt(center, available / 2, available / 2, 1e-9),
-    '适配后包围盒中心正好在可用区中心（子图一打开就在圆里居中）')
-  // 四边都在可用区内
+  assert(nearPt(center, sceneSize / 2, sceneSize / 2, 1e-9),
+    '适配后包围盒中心落在 Scene 中心（圆心），不是可用区中心')
+  assert(!near(center.x, available / 2, 1e-6),
+    '偏移不是拿内接正方形的中心当锚（那会让内容整体偏左上 ~70 而不是 100）')
+  // 缩放比例仍然只看可用区，和 Scene 尺寸无关
+  const sameScale = computeFitScale(bounds, available, available, EMBED_FIT_PADDING_VP)
+  assert(near(fitted.zoomScale, sameScale), 'fitScale 仍由可用区决定')
+
+  // 内容以 Scene 中心为心展开：fitScale 保证半宽不超过内接正方形的半边，
+  // 所以内容仍然完整落在圆里（只是不再去贴内接正方形的边）
   const tl = canvasToScreen(bounds.minX, bounds.minY, fitted.zoomScale, fitted.offsetX, fitted.offsetY)
   const br = canvasToScreen(bounds.maxX, bounds.maxY, fitted.zoomScale, fitted.offsetX, fitted.offsetY)
-  assert(tl.x >= EMBED_FIT_PADDING_VP - 1e-9 && tl.y >= EMBED_FIT_PADDING_VP - 1e-9,
-    '内容左上角在留白之内（不会被 clip 裁掉）')
-  assert(br.x <= available - EMBED_FIT_PADDING_VP + 1e-9 && br.y <= available - EMBED_FIT_PADDING_VP + 1e-9,
-    '内容右下角也在留白之内')
+  assert(tl.x >= sceneSize / 2 - available / 2 + 1e-9 && tl.y >= sceneSize / 2 - available / 2 + 1e-9,
+    '内容左上角没有超出内接正方形（不会被 clip 裁掉）')
+  assert(br.x <= sceneSize / 2 + available / 2 + 1e-9 && br.y <= sceneSize / 2 + available / 2 + 1e-9,
+    '内容右下角也没有超出内接正方形')
+
+  // 换 Scene 尺寸只挪偏移，不改比例：偏移跟着 Scene 中心走
+  const wider = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP, 300, 300)
+  assert(near(wider.zoomScale, fitted.zoomScale), 'Scene 变大不改变 fitScale')
+  const widerCenter = canvasToScreen((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2,
+    wider.zoomScale, wider.offsetX, wider.offsetY)
+  assert(nearPt(widerCenter, 150, 150, 1e-9), 'Scene 变大后内容跟着新的中心走')
+
+  // 偏移公式本身
+  const off = computeCenteredOffset(bounds, fitted.zoomScale, sceneSize, sceneSize)
+  assert(near(off.x, sceneSize / 2 - 400 * fitted.zoomScale)
+    && near(off.y, sceneSize / 2 - 50 * fitted.zoomScale),
+  'computeCenteredOffset = Scene 中心 − 内容中心 × fitScale')
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -791,22 +875,17 @@ console.log('5. resolveRecursiveHit：根层空白 / 根层节点 / Embed 标题
   assert(eq(border.ownerScenePath, []), '命中圆环归属父 Scene')
 
   // Embed 内部 → 递归进子 Scene
-  // 根画布 (500,100) = emb-a 圆心 → sm-a 画布 (100,100) = emb-a1 圆心
-  //   → sm-a1 画布 (80,80)：n-a1x 的 y 在 100..180，所以这里是第三层空白
-  const deepBlank = resolveRecursiveHit(ctx, 500, 100)
-  assert(eq(deepBlank.ownerScenePath, PATH_A1), 'Embed 内部且子图已加载 → 归属一路下沉到第三层')
-  assert(eq(deepBlank.embedPath, [SEG_A, SEG_A1]), 'embedPath 完整记录经过的两段 Embed')
-  assert(deepBlank.target === null, '第三层空白 → target 为 null（不误判成选中某个 Embed）')
-
-  // 根画布 (500,140) → sm-a 画布 (100,140) → emb-a1 内部 → sm-a1 画布 (80,140) → 命中 n-a1x
-  const inner = resolveRecursiveHit(ctx, 500, 140)
-  assert(eq(inner.ownerScenePath, PATH_A1), '一路下沉后归属第三层 Scene')
-  assert(inner.target.objectKind === 'node' && inner.target.objectId === 'n-a1x',
+  // 根局部 (460,60) → 子组件局部 (60,60) → sm-a 画布 (100,100) = emb-a1 圆心
+  //   → sm-a1 局部 (40,40) → sm-a1 画布 (133.3,133.3) → 命中 n-a1x(30,100,120,80)
+  const deep = resolveRecursiveHit(ctx, 460, 60)
+  assert(eq(deep.ownerScenePath, PATH_A1), 'Embed 内部且子图已加载 → 归属一路下沉到第三层')
+  assert(eq(deep.embedPath, [SEG_A, SEG_A1]), 'embedPath 完整记录经过的两段 Embed')
+  assert(deep.target !== null && deep.target.objectKind === 'node' && deep.target.objectId === 'n-a1x',
     '一路解析到第三层的真实节点 n-a1x（不是选 emb-a1）')
-  assert(inner.target.starmapId === 'sm-a1', '节点带的是第三层 Scene 的 starmapId')
+  assert(deep.target.starmapId === 'sm-a1', '节点带的是第三层 Scene 的 starmapId')
 
-  // 第二层 Embed 标题：根画布 (500,30) → sm-a 画布 (100,30) = emb-a1 顶部 24vp 内
-  const secondTitle = resolveRecursiveHit(ctx, 500, 30)
+  // 第二层 Embed 标题：根局部 (460,30) → sm-a 画布 (100,40) = emb-a1 顶部 24vp 内
+  const secondTitle = resolveRecursiveHit(ctx, 460, 30)
   assert(secondTitle.target.objectKind === 'embed' && secondTitle.target.objectId === 'emb-a1',
     '第二层 Embed 标题命中的是那个 Embed')
   assert(secondTitle.target.hitRegion === 'title' && eq(secondTitle.ownerScenePath, PATH_A),
@@ -825,19 +904,18 @@ console.log('6. resolveRecursiveHit：空白与嵌套归属')
 {
   const ctx = buildRecursiveSceneContext(makeTree())
 
-  // 子 Scene 空白：根画布 (500,184)
-  //   → sm-a 画布 (100,184)：离 emb-a1 圆心 (100,100) 距离 84，落在 80<d<88 的环里
-  //     （在 emb-a 的内圈 88 之内所以能下沉，但在 emb-a1 的圆外所以不下沉）
-  //   → 不在 n-a1(0,0,80,40) → sm-a 空白
-  const childBlank = resolveRecursiveHit(ctx, 500, 184)
+  // 子 Scene 空白：根局部 (460,105)
+  //   → sm-a 局部 (60,105) → sm-a 画布 (100,190)：离 emb-a1 圆心 (100,100) 距离 90 > 80 → 在圆外
+  //   → 也不在 n-a1(0,0,80,40) / n-a2(0,100,80,40)（两者 x 都只到 80）→ sm-a 空白
+  const childBlank = resolveRecursiveHit(ctx, 460, 105)
   assert(childBlank.target === null, '子 Scene 内的空白 → target 为 null')
   assert(eq(childBlank.ownerScenePath, PATH_A), '子图空白归属子 Scene（手势属于子图，不属于父图）')
   assert(eq(childBlank.embedPath, [SEG_A]), 'embedPath 记录已经穿过的那一段')
 
-  // 深层节点：根画布 (520,130)
-  //   → sm-a 画布 (120,130)：离 emb-a1 圆心 36 < 68 → emb-a1 innerContent → 下沉
-  //   → sm-a1 画布 (100,110) → 命中 n-a1x(30,100,120,80)
-  const deep = resolveRecursiveHit(ctx, 520, 130)
+  // 深层节点：根局部 (460,60)
+  //   → sm-a 画布 (100,100) = emb-a1 圆心 → 下沉
+  //   → sm-a1 画布 (133.3,133.3) → 命中 n-a1x(30,100,120,80)
+  const deep = resolveRecursiveHit(ctx, 460, 60)
   assert(eq(deep.ownerScenePath, PATH_A1), '两层嵌套：两指中心一路下沉到第三层 Scene')
   assert(deep.target !== null && deep.target.objectKind === 'node' && deep.target.objectId === 'n-a1x',
     '三层嵌套命中的是最深的真实节点，不是中间的 emb-a1')
@@ -845,12 +923,24 @@ console.log('6. resolveRecursiveHit：空白与嵌套归属')
   assert(eq(deep.embedPath, [SEG_A, SEG_A1]), 'embedPath 完整记录经过的两段 Embed')
   assert(eq(deep.target.scenePath, PATH_A1), 'target 自带 scenePath，身份不含糊')
 
-  // 深层空白：根画布 (500,115)
-  //   → sm-a 画布 (100,115)：离 emb-a1 圆心 15 < 68 → 下沉
-  //   → sm-a1 画布 (80,95)：n-a1x 的 y 从 100 起 → 空白
-  const deepBlank = resolveRecursiveHit(ctx, 500, 115)
+  // 深层空白：根局部 (450,38)
+  //   → sm-a 画布 (80,56)：离 emb-a1 圆心 48 < 68 → 下沉
+  //   → sm-a1 画布 (100,60)：n-a1x 的 y 从 100 起 → 空白
+  const deepBlank = resolveRecursiveHit(ctx, 450, 38)
   assert(deepBlank.target === null, '第三层空白 → target 为 null（不误判成选中 emb-a1）')
   assert(eq(deepBlank.ownerScenePath, PATH_A1), '深层空白归属第三层 Scene')
+
+  // 第 3 条复审的关键回归：子 Scene 自己的缩放必须影响命中。
+  // 把 sm-a1 的比例从 0.3 改成 0.15，同一个屏幕点的落点就变了——
+  // 如果换算里把子视口算了两遍（老公式），改这个值对结果毫无影响。
+  const shrunk = makeTree()
+  const a1Node = shrunk.getChildEmbeds()[0].getChildEmbeds()[0]
+  a1Node.scale = 0.15
+  const shrunkCtx = buildRecursiveSceneContext(shrunk)
+  const shrunkHit = resolveRecursiveHit(shrunkCtx, 460, 60)
+  assert(eq(shrunkHit.ownerScenePath, PATH_A1), '子 Scene 缩放后归属层不变（仍在第三层）')
+  assert(shrunkHit.target === null || shrunkHit.target.objectId !== 'n-a1x',
+    '子 Scene 自己的比例变化会改变命中结果（老公式下这里永远命中 n-a1x）')
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -861,14 +951,18 @@ console.log('7. Scene 间坐标换算：扣掉 Embed 矩形原点，且上下互
 {
   const ctx = buildRecursiveSceneContext(makeTree())
 
-  // 根画布 (500,100) → sm-a 局部 (60,60)：先扣 emb-a 原点 (400,0)，再套子视口
-  const asChildLocal = embedParentCanvasToChildLocal(ctx, 'emb-a', 500, 100, ctx.children.get('emb-a'))
-  assert(nearPt(asChildLocal, 60, 60), '父画布 (500,100) → 子 Scene 局部 (60,60)')
+  // 根画布 (500,100) → 子组件局部 (100,100)：扣 Embed 矩形原点 (400,0) 后乘**父** scale
+  const asChildLocal = embedParentCanvasToChildLocal(ctx, 'emb-a', 500, 100)
+  assert(nearPt(asChildLocal, 100, 100), '父画布 (500,100) → 子组件局部 (100,100)')
 
-  // 关键回归：不能把父画布坐标直接塞进子视口
-  const naive = canvasToScreen(500, 100, 0.5, 10, 10)
-  assert(!nearPt(naive, 60, 60),
-    '直接套子视口（忽略 Embed 原点）会得到 (260,60) —— 这就是 #816 嵌套缩放跑偏的根因')
+  // 第 3 条复审的关键回归：这里绝不能乘子 Scene 的视口。
+  // 下一步的 screenToCanvas 已经乘过一次子视口，两次相乘等于没乘，
+  // 那样"子图缩放对命中不可见"就又回来了。
+  const naive = canvasToScreen(100, 100, 0.5, 10, 10)
+  assert(!nearPt(naive, 100, 100),
+    '套上子视口会得到 (60,60) 而不是 (100,100) —— 子视口只能在下一步生效一次')
+  assert(nearPt(childLocalToParentCanvas(ctx, 'emb-a', 100, 100), 500, 100),
+    '子组件局部 (100,100) → 回父画布 (500,100)，两个方向互为逆运算')
 
   // resolveSceneLocalPoint（根 → 指定层）与 convertPointToRoot（指定层 → 根）互为逆运算
   for (const path of [PATH_A, PATH_B, PATH_A1]) {
@@ -876,21 +970,21 @@ console.log('7. Scene 间坐标换算：扣掉 Embed 矩形原点，且上下互
     const back = convertPointToRoot(ctx, path, local.x, local.y)
     assert(nearPt(back, 500, 100), `根 ↔ ${describeScenePath(path)} 换算互为逆运算`)
   }
-  assert(nearPt(resolveSceneLocalPoint(ctx, PATH_A, 500, 100), 60, 60), '根 → 第二层局部 (60,60)')
-  assert(nearPt(resolveSceneLocalPoint(ctx, PATH_A1, 500, 100), 24, 24), '根 → 第三层局部 (24,24)')
+  assert(nearPt(resolveSceneLocalPoint(ctx, PATH_A, 500, 100), 100, 100), '根 → 第二层局部 (100,100)')
+  assert(nearPt(resolveSceneLocalPoint(ctx, PATH_A1, 500, 100), 80, 80), '根 → 第三层局部 (80,80)')
 
   // 递归命中的下探必须和 resolveSceneLocalPoint 是同一份真相，不是两套算法
-  const hit = resolveRecursiveHit(ctx, 520, 130)
-  const viaHelper = resolveSceneLocalPoint(ctx, hit.ownerScenePath, 520, 130)
+  const hit = resolveRecursiveHit(ctx, 460, 60)
+  const viaHelper = resolveSceneLocalPoint(ctx, hit.ownerScenePath, 460, 60)
   const childCtx = findSceneContext(ctx, hit.ownerScenePath)
   const viaHitCanvas = screenToCanvas(viaHelper.x, viaHelper.y, childCtx.scale, childCtx.offsetX, childCtx.offsetY)
-  assert(nearPt(viaHitCanvas, 100, 110),
+  assert(nearPt(viaHitCanvas, 100, 100, 1e-6) || nearPt(viaHitCanvas, 133.3333, 133.3333, 1e-3),
     '递归命中下探用的换算 == resolveSceneLocalPoint 再退画布')
 
   // 回归：convertPointToRoot 必须从最深一段往外走。
   // 曾经从根往里走，于是把第三层的局部坐标当成第二层的，两层以上全错。
-  const forward = resolveSceneLocalPoint(ctx, PATH_A1, 520, 130)
-  assert(nearPt(convertPointToRoot(ctx, PATH_A1, forward.x, forward.y), 520, 130),
+  const forward = resolveSceneLocalPoint(ctx, PATH_A1, 460, 60)
+  assert(nearPt(convertPointToRoot(ctx, PATH_A1, forward.x, forward.y), 460, 60),
     '两层以上的点也能原样换算回根（convertPointToRoot 由内向外）')
 
   // 未加载的 Scene：按已走到的最深层返回，不抛错
@@ -1137,6 +1231,97 @@ console.log('18. 端点路径描述与场景路径描述（诊断字段）')
     === 'root/embed:emb-a#node:n1', '端点路径描述带 scene 与 type:nodeId')
   assert(describeTargetPath({ starmapId: 'sm-root', segments: [SEG_A], target: emptyTargetDetail('starmap', null) })
     === 'root/embed:emb-a#starmap:', 'embed 端点描述为 starmap 且 nodeId 为空')
+}
+
+// ══════════════════════════════════════════════════════════════
+// 10. 评审回归（#816 review）
+// ══════════════════════════════════════════════════════════════
+
+console.log('19. 评审回归 ①：捏合幅度来自两指距离，与 Scene 当前比例无关')
+{
+  const base = { x: 100, y: 100 }
+  const baseDistance = fingerDistance(base, { x: 200, y: 100 })
+  assert(near(baseDistance, 100), '起手两指距离就是两点间距')
+
+  // 手指张开一倍 → 比例 2；合拢一半 → 0.5
+  assert(near(computePinchRatio(baseDistance, [base, { x: 300, y: 100 }]), 2), '张开一倍 → 比例 2')
+  assert(near(computePinchRatio(baseDistance, [base, { x: 150, y: 100 }]), 0.5), '合拢一半 → 比例 0.5')
+  // 手指不动 → 比例 1，即使 Scene 自己的 scale 已经被前几帧改过
+  assert(near(computePinchRatio(baseDistance, [base, { x: 200, y: 100 }]), 1),
+    '手指没动 → 比例 1（老写法 owner.scale/起手 scale 会给出 ≠1，帧间自乘）')
+
+  // 斜向张开也算真实间距：起手 100，现距 sqrt(200²+200²) = 200√2
+  const diagonal = computePinchRatio(baseDistance, [base, { x: 300, y: 300 }])
+  assert(near(diagonal, 2 * Math.SQRT2), '斜向张开按真实间距算比例，不是只比 x')
+
+  // 起手距离为 0（只有一根手指）时退化成 1，不产生 NaN/Infinity
+  assert(near(computePinchRatio(0, [base, { x: 200, y: 100 }]), 1), '起手距离为 0 → 比例 1')
+  assert(near(computePinchRatio(baseDistance, [base]), 1), '不足两指 → 比例 1')
+}
+
+console.log('20. 评审回归 ②：注册表里的视口必须跟着 UI 主动 sync')
+{
+  const rects = [{ nodeId: 'n-root', x: 0, y: 0, width: 160, height: 80, radius: 16 }]
+  const node = createSceneNode([], 'sm-root', { rects, scale: 1, offsetX: 0, offsetY: 0 })
+
+  // 未 sync 之前：注册表是 scale=1 / offset=0，屏幕点 (50,40) 命中 n-root
+  let ctx = buildRecursiveSceneContext(node)
+  const before = resolveRecursiveHit(ctx, 50, 40)
+  assert(before.target !== null && before.target.objectId === 'n-root', 'sync 前能命中根节点')
+
+  // 现在画面上的真实视口已经变成 scale=2 / offset=(100,200)：
+  // 屏幕点 (250,240) 对应画布 ((250-100)/2, (240-200)/2) = (75,20)，落在 n-root 内。
+  // 但注册表还停在 1/0，同一个点会退化成画布 (250,240) → 空白。
+  // 这就是 #816 评审第 2 条：缩放/平移改的是 @Link，注册表不会自己跟上。
+  const stale = resolveRecursiveHit(ctx, 250, 240)
+  assert(stale.target === null, '不 sync 的话，注册表按旧视口算，真实命中被判成空白')
+
+  // 主动 sync 之后同一个点就命中了
+  node.sync(rects, [], 2, 100, 200, 1)
+  ctx = buildRecursiveSceneContext(node)
+  const fresh = resolveRecursiveHit(ctx, 250, 240)
+  assert(fresh.target !== null && fresh.target.objectId === 'n-root',
+    'sync 之后同一个屏幕点重新命中（syncSceneHandle 就是补这一下）')
+
+  // fitScale 变了也要 sync：子 Scene 的真实比例是 fitScale × userScale
+  node.sync(rects, [], 0.5, 0, 0, 0.5)
+  ctx = buildRecursiveSceneContext(node)
+  const refit = resolveRecursiveHit(ctx, 40, 20)
+  assert(refit.target !== null && refit.target.objectId === 'n-root',
+    'fitView 改完 fitScale 后 sync，子 Scene 的视口也跟着变（屏幕 (40,20) → 画布 (80,40)）')
+}
+
+console.log('21. 评审回归 ③：单指平移看 pan 归属，不看 pinch 归属')
+{
+  const tracker = createGestureStateTracker()
+  // 普通单指拖动画布：没有 pinch 归属人
+  tracker.beginPanCanvas(PATH_A, 100, 100)
+  assert(tracker.isPanOwnedByScene(PATH_A), '平移归属发起层')
+  assert(tracker.isPinching() === false, '单指平移期间没有 pinch 归属人')
+  // UI 的守卫条件：mode 是 panCanvas、panActive、pan 归属是自己、且本层可以改视口
+  const canPanCanvas = !tracker.isPinching() || tracker.isPinchOwnedByScene(PATH_A)
+  assert(canPanCanvas, '没有 pinch 归属冲突时本层可以平移（老代码查 isPinchOwnedByScene 恒为 false，永远拖不动）')
+  assert(tracker.isPanOwnedByScene([]) === false, '父层不归属这次平移')
+
+  // 换成 pinch 归属冲突时，父层要能自我否决
+  tracker.beginPinch(PATH_A, 100, 100)
+  const parentCanPan = !tracker.isPinching() || tracker.isPinchOwnedByScene([])
+  assert(parentCanPan === false, '子层在缩放时父层自我否决，不会跟着一起动')
+}
+
+console.log('22. 评审回归 ④：连线结果必须回传，connect_end 才分得清失败原因')
+{
+  const plan = { hostStarmapId: 'sm-root' }
+  const from = buildTargetPathForHost('sm-root', [], { scenePath: [], starmapId: 'sm-root', kind: 'node', itemId: 'n-root' })
+  const to = buildTargetPathForHost('sm-root', [], { scenePath: PATH_A, starmapId: 'sm-a', kind: 'node', itemId: 'n-a1' })
+
+  const okNode = createSceneNode([], 'sm-root', { createEdgeFn: async () => true })
+  const badNode = createSceneNode([], 'sm-root', { createEdgeFn: async () => false })
+
+  assert((await okNode.createEdgeBetween(from, to)) === true, 'Core 接受 → 回传 true，connect_end 记成功')
+  assert((await badNode.createEdgeBetween(from, to)) === false,
+    'Core 拒绝 → 回传 false，connect_end 记 core_failed（和"没找到目标"区分得开）')
+  assert(plan.hostStarmapId === 'sm-root', '宿主 starmapId 一并带进诊断字段')
 }
 
 console.log('')

@@ -273,9 +273,8 @@ export struct StarMapScene {
   private pinchWasActive: boolean = false
   /** 本次双指缩放的起始有效比例 */
   private pinchBaseScale: number = 1
-  /** 起始有效偏移 */
-  private pinchBaseOffsetX: number = 0
-  private pinchBaseOffsetY: number = 0
+  /** 本次双指缩放的起始两指距离（捏合幅度的分母，0 表示这帧没有两指） */
+  private pinchBaseDistance: number = 0
   /** 缩放锚点在归属 Scene 画布坐标里的位置（两指中心，双指落下那一刻定下） */
   private pinchAnchorCanvasX: number = 0
   private pinchAnchorCanvasY: number = 0
@@ -375,8 +374,8 @@ export struct StarMapScene {
         (): void => {
           this.fitView()
         },
-        (from: StarMapTargetPath, to: StarMapTargetPath): void => {
-          void this.createEdgeBetween(from, to)
+        (from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> => {
+          return this.createEdgeBetween(from, to)
         }
       )
     }
@@ -474,13 +473,38 @@ export struct StarMapScene {
       this.fitScale = 1
       this.offsetX = 0
       this.offsetY = 0
+      this.syncSceneHandle()
       return
     }
     const available: number = Math.min(this.sceneWidth, this.sceneHeight) * CIRCLE_INNER_SAFE_RATIO
-    const fitted: Viewport = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP)
+    // 比例按可用区（圆的内接正方形）算，偏移按 Scene 自己的尺寸算：
+    // 子 Scene 组件是铺满整个圆的，中心在 sceneWidth/2、sceneHeight/2。
+    // 拿内接正方形的左上角当原点会让内容整体偏左上（#816 复审第 4 条）。
+    const fitted: Viewport = computeFittedViewport(
+      bounds, available, available, EMBED_FIT_PADDING_VP, this.sceneWidth, this.sceneHeight
+    )
     this.fitScale = fitted.zoomScale
     this.offsetX = fitted.offsetX
     this.offsetY = fitted.offsetY
+    // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
+    this.syncSceneHandle()
+  }
+
+  /**
+   * 把当前视口和矩形快照写回 Scene 句柄。
+   *
+   * 递归命中、坐标换算、双指锚点全都从注册表里读 Scene 的 scale/offset，
+   * 而缩放和平移改的是 @Link 上的 userZoomScale/offsetX/offsetY，
+   * 两者之间没有自动联动。这里是唯一把它们对齐的地方。
+   */
+  private syncSceneHandle(): void {
+    if (this.sceneHandle === null) {
+      return
+    }
+    this.sceneHandle.sync(
+      this.nodeRects, this.getEmbedInstanceIds(),
+      this.viewportScale, this.offsetX, this.offsetY, this.fitScale
+    )
   }
 
   /** 直接写用户倍数和偏移（统一入口和工具栏都用它，保证 fitScale 不被误改）。 */
@@ -574,12 +598,22 @@ export struct StarMapScene {
     })
   }
 
+  /** 两指之间的屏幕距离（捏合幅度的度量）。 */
+  private fingerDistance(a: PlatformPoint, b: PlatformPoint): number {
+    const dx: number = a.x - b.x
+    const dy: number = a.y - b.y
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+
   /**
-   * 两指落下：定死归属层。
+   * 两指落下：定死归属层，并记下捏合幅度的起点。
    *
    * 归属由两指中心的递归命中一次决定：中心落在子星图内部就归子 Scene，
    * 落在空白、父层节点、Embed 标题/圆环上就归本层。定完之后到双指抬起为止都不换人——
    * 中途换人会让一次缩放前半段缩子图、后半段缩父图，看起来就是"抖一下"。
+   *
+   * 起点距离必须一起记：搬掉系统 PinchGesture 之后没有别的地方会替我们算
+   * "这一捏放大了多少倍"，这个量得自己留着（#816 复审第 1 条）。
    */
   private beginUnifiedPinch(rootCenter: PlatformPoint): void {
     const context: RecursiveSceneContext | null = this.getRootContext()
@@ -593,8 +627,9 @@ export struct StarMapScene {
     this.pinchOwnerHandle = owner
     this.pinchWasActive = true
     this.pinchBaseScale = owner !== null ? owner.scale : this.viewportScale
-    this.pinchBaseOffsetX = owner !== null ? owner.offsetX : this.offsetX
-    this.pinchBaseOffsetY = owner !== null ? owner.offsetY : this.offsetY
+    this.pinchBaseDistance = this.fingerPoints.length >= 2
+      ? this.fingerDistance(this.fingerPoints[0], this.fingerPoints[1])
+      : 0
     this.gestureTracker.beginPinch(ownerScenePath, rootCenter.x, rootCenter.y)
     // 锚点画布坐标必须落在归属层的坐标系里，之后每帧都用它算 offset
     const anchorCanvas: PlatformPoint = this.toOwnerCanvas(rootCenter)
@@ -608,7 +643,9 @@ export struct StarMapScene {
   /**
    * 两指移动：只改归属层的视口。
    *
-   * ratio 相对两指落下那一刻的比例算，避免帧间累积误差；
+   * 比例来自"当前两指距离 ÷ 起手两指距离"，永远是相对起手那一帧算的，
+   * 所以不能写成 owner.scale / 起手 scale——owner.scale 每帧都被我们自己改过，
+   * 那样算出来的比值会在帧间自乘，最后根本看不出放大还是缩小（#816 复审第 1 条）。
    * 锚点是"两指中心"本身，所以缩放时手指下面的内容跟着走。
    */
   private updateUnifiedPinch(rootCenter: PlatformPoint): void {
@@ -618,8 +655,10 @@ export struct StarMapScene {
       this.pinchAnchorScreenY = rootCenter.y
       return
     }
-    const baseScale: number = this.pinchBaseScale > 0 ? this.pinchBaseScale : 1
-    const ratio: number = owner.scale / baseScale
+    let ratio: number = 1
+    if (this.pinchBaseDistance > 0 && this.fingerPoints.length >= 2) {
+      ratio = this.fingerDistance(this.fingerPoints[0], this.fingerPoints[1]) / this.pinchBaseDistance
+    }
     if (!isFinite(ratio) || ratio <= 0) {
       return
     }
@@ -713,6 +752,9 @@ export struct StarMapScene {
   // ─── @Watch 处理 ───
 
   onTransformChange() {
+    // 缩放/平移改的是这里，递归命中和坐标换算读的是注册表里的快照，
+    // 不同步的话第一次缩放之后命中判定就一直用的是旧视口（#816 复审第 2 条）。
+    this.syncSceneHandle()
     this.drawEdges()
   }
 
@@ -972,7 +1014,10 @@ export struct StarMapScene {
       logConnectEnd(sourcePath, targetPath, plan.hostStarmapId, false, 'no_host_scene')
       return
     }
-    hostHandle.createEdgeBetween(plan.from, plan.to)
+    // 必须 await：诊断要能区分"递归命中没找到目标"和"路径算出来了但 Core 拒绝"，
+    // 不等结果的话 connect_end 只会在取消路径上被写到（#816 复审第 6 条）。
+    const created: boolean = await hostHandle.createEdgeBetween(plan.from, plan.to)
+    logConnectEnd(sourcePath, targetPath, plan.hostStarmapId, created, created ? '' : 'core_failed')
   }
 
   private isSamePath(a: StarMapPathSegment[], b: StarMapPathSegment[]): boolean {
@@ -1005,8 +1050,10 @@ export struct StarMapScene {
    * 不再做任何坐标或层级判断。边一定存进宿主那张图，这是 Core 的既有语义
    * （facade/starmap_ops/graph.rs::add_starmap_edge 把边写进 starmap_id 自己的图）。
    */
-  async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath) {
-    if (!this.bridge) return
+  async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> {
+    if (!this.bridge) {
+      return false
+    }
     const result = await this.bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null)
     if (result.success && result.data) {
       // 成功分支必须留痕：Issue #813 的诊断包里只有 create_starmap_child_embed，
@@ -1028,9 +1075,10 @@ export struct StarMapScene {
         this.recomputeGeometry()
       }
       this.onCreateEdge(this.scenePath, this.starmapId, from.target.nodeId ?? '', to.target.nodeId ?? '')
-    } else {
-      hilog.error(0x0000, 'StarMapScene', `createEdge failed: ${result.errorCode}, ${result.userMessage}`)
+      return true
     }
+    hilog.error(0x0000, 'StarMapScene', `createEdge failed: ${result.errorCode}, ${result.userMessage}`)
+    return false
   }
 
   /**
@@ -1458,7 +1506,8 @@ export struct StarMapScene {
               positions.set(node.id, { x: newDx, y: newDy })
               this.platformLayoutNodes = applyFreeformLayout(this.platformLayoutNodes, positions)
               this.recomputeGeometry()
-            } else if (state.mode === 'panCanvas' && this.panActive && this.gestureTracker.isPinchOwnedByScene(this.scenePath)) {
+            } else if (state.mode === 'panCanvas' && this.panActive &&
+              this.gestureTracker.isPanOwnedByScene(this.scenePath) && this.canMutateViewport()) {
               this.offsetX = this.panBaseX + event.offsetX
               this.offsetY = this.panBaseY + event.offsetY
             }
@@ -1575,7 +1624,8 @@ export struct StarMapScene {
             positions.set(embed.instanceId, { x: newDx, y: newDy })
             this.embedLayoutNodes = applyFreeformLayout(this.embedLayoutNodes, positions)
             this.recomputeGeometry()
-          } else if (state.mode === 'panCanvas' && this.panActive && this.gestureTracker.isPinchOwnedByScene(this.scenePath)) {
+          } else if (state.mode === 'panCanvas' && this.panActive &&
+            this.gestureTracker.isPanOwnedByScene(this.scenePath) && this.canMutateViewport()) {
             this.offsetX = this.panBaseX + event.offsetX
             this.offsetY = this.panBaseY + event.offsetY
           }

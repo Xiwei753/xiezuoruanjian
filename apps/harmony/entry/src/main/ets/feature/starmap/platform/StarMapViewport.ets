@@ -100,28 +100,60 @@ export function computeFitScale(
 }
 
 /**
- * 计算"内容居中铺满可用区域"的初始视口。
+ * 把内容居中到 Scene 的真实中心。
  *
- * 偏移让包围盒中心落在可用区域中心，所以子图一打开就在圆里居中，
- * 不需要用户再手动平移才能看到。
+ * 注意：缩放比例按"可用区"算（子星图里是圆的内接正方形），但偏移必须按
+ * Scene 自己的尺寸算。子 Scene 组件铺满整个 Embed 圆，组件中心是
+ * sceneWidth/2、sceneHeight/2；如果拿内接正方形的中心当锚，内容会整体偏左上
+ * （直径 200 的圆，内接正方形只有约 141，内容会落在 ~70 而不是 100）。
  *
  * @param bounds 内容包围盒（画布坐标）
- * @param availableWidth 可用宽度（vp）
- * @param availableHeight 可用高度（vp）
+ * @param fitScale 已算好的缩放比例
+ * @param sceneWidth Scene 组件真实宽度（vp）
+ * @param sceneHeight Scene 组件真实高度（vp）
+ * @returns 让内容中心与 Scene 中心重合的偏移
+ */
+export function computeCenteredOffset(
+  bounds: ContentBounds,
+  fitScale: number,
+  sceneWidth: number,
+  sceneHeight: number
+): PlatformPoint {
+  const centerX: number = (bounds.minX + bounds.maxX) / 2
+  const centerY: number = (bounds.minY + bounds.maxY) / 2
+  return {
+    x: sceneWidth / 2 - centerX * fitScale,
+    y: sceneHeight / 2 - centerY * fitScale
+  }
+}
+
+/**
+ * 计算"内容居中铺满可用区域"的初始视口。
+ *
+ * 缩放按可用区算，偏移按 Scene 真实中心算，两者分工见 computeCenteredOffset。
+ *
+ * @param bounds 内容包围盒（画布坐标）
+ * @param availableWidth 可用宽度（vp），只参与 fitScale 计算
+ * @param availableHeight 可用高度（vp），只参与 fitScale 计算
  * @param paddingVp 四边留白（vp）
+ * @param sceneWidth Scene 组件真实宽度（vp），用于居中
+ * @param sceneHeight Scene 组件真实高度（vp），用于居中
  * @returns 视口（zoomScale 即 fitScale）
  */
 export function computeFittedViewport(
   bounds: ContentBounds,
   availableWidth: number,
   availableHeight: number,
-  paddingVp: number
+  paddingVp: number,
+  sceneWidth: number,
+  sceneHeight: number
 ): Viewport {
   const fitScale: number = computeFitScale(bounds, availableWidth, availableHeight, paddingVp)
+  const offset: PlatformPoint = computeCenteredOffset(bounds, fitScale, sceneWidth, sceneHeight)
   return {
     zoomScale: fitScale,
-    offsetX: (availableWidth - bounds.width * fitScale) / 2 - bounds.minX * fitScale,
-    offsetY: (availableHeight - bounds.height * fitScale) / 2 - bounds.minY * fitScale
+    offsetX: offset.x,
+    offsetY: offset.y
   }
 }
 
@@ -222,7 +254,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
   ) => void
   private applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void
   private fitViewFn: () => void
-  private createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => void
+  private createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>
 
   constructor(
     scenePath: StarMapPathSegment[],
@@ -234,7 +266,7 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     ) => void,
     applyZoomFn: (userScale: number, offsetX: number, offsetY: number) => void,
     fitViewFn: () => void,
-    createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => void
+    createEdgeFn: (from: StarMapTargetPath, to: StarMapTargetPath) => Promise<boolean>
   ) {
     this.scenePath = scenePath
     this.starmapId = starmapId
@@ -292,8 +324,15 @@ export class StarMapSceneNode implements RecursiveSceneSource {
     this.fitViewFn()
   }
 
-  createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath): void {
-    this.createEdgeFn(from, to)
+  /**
+   * 让宿主 Scene 落一条边，返回 Core 是否真的收下了。
+   *
+   * 必须回传结果：connect 的诊断要能区分"递归命中没找到目标"和
+   * "路径算出来了但 Core 拒绝"。返回 void 的话 connect_end 只会在取消路径上被写到，
+   * 真机上的成功/失败反而没有结构化记录。
+   */
+  async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> {
+    return this.createEdgeFn(from, to)
   }
 }
 
