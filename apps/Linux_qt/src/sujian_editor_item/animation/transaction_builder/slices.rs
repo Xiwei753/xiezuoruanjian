@@ -103,31 +103,27 @@ fn line_ordinal_for_byte(snapshot: &EditorLayoutSnapshot, byte_offset: usize) ->
         .position(|line| byte_offset >= line.byte_start && byte_offset < line.byte_end)
 }
 
-/// Issue #815 评论 5946701331 问题2: 在**同一份 snapshot 内**按视觉行 top 找行序。
+/// Issue #815 评论 5947230558 问题2: 在 **old snapshot 内**按 old 自己的
+/// `visual_line_id` 精确查行序。
 ///
-/// Delete 的吞吐路径起点是"删除前的 old caret 所在视觉行"。caret 的几何在
-/// `old_cursor_rect.top` 上，直接按行几何匹配就能落在 old snapshot 自己的行序里，
-/// 不需要也不应该借用 new snapshot 的 `visual_line_id`。
+/// Delete 的吞吐路径起点是"删除前的 old caret 所在视觉行"。
 ///
-/// 先按 `[visual_line_top, visual_line_bottom)` 精确命中；未命中时退到 top 最近的行
-/// （空行/行高差异下 caret top 可能落在相邻行边界上）。都找不到返回 `None`。
-fn line_ordinal_for_line_top(snapshot: &EditorLayoutSnapshot, line_top: f64) -> Option<usize> {
-    let hit = snapshot.line_snapshots.iter().position(|line| {
-        line_top >= line.visual_line_top - 0.5 && line_top < line.visual_line_bottom + 0.5
-    });
-    if hit.is_some() {
-        return hit;
-    }
+/// 这里曾用 `caret.top` 落在 `[visual_line_top, visual_line_bottom]` 的 y 几何来猜行序。
+/// 注释写的是半开区间，实现却上下都扩了 0.5，而相邻视觉行满足
+/// `line1.bottom == line2.top`：caret top 落在下一行顶部附近时上一行也会命中，
+/// `.position()` 又取第一个，old caret 在第 N 行会被判成第 N-1 行。
+/// 跨行 Backspace 的 `ingest_from_line_ord` 会直接算错。
+///
+/// 行身份只认当前这侧 canonical 自己的数据，不靠 y 容差猜。
+fn line_ordinal_for_visual_line_id(
+    snapshot: &EditorLayoutSnapshot,
+    visual_line_id: Option<usize>,
+) -> Option<usize> {
+    let visual_line_id = visual_line_id?;
     snapshot
         .line_snapshots
         .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            let da = (a.visual_line_top - line_top).abs();
-            let db = (b.visual_line_top - line_top).abs();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(idx, _)| idx)
+        .position(|line| line.visual_line_id == visual_line_id)
 }
 
 pub(crate) fn build_insert_reveal_slices(
@@ -136,7 +132,6 @@ pub(crate) fn build_insert_reveal_slices(
     inserted_range: (usize, usize),
     old_cursor_rect: Option<&CursorRect>,
     coordinated: bool,
-    caret_visual_line_id: Option<usize>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = inserted_range;
@@ -239,8 +234,12 @@ pub(crate) fn build_insert_reveal_slices(
             // Issue #808 评论 5916391891 修改 1+4: 按 coordinated 和 visual_line_id
             // 决定遮罩锚点。coordinated=true 且本行是 caret 所在行时用真实 caret x；
             // 否则用行首 text_left（纯文字动画或跨行其他行从行首展开）。
-            let is_caret_line = coordinated
-                && caret_visual_line_id.is_none_or(|cid| new_line.visual_line_id == cid);
+            // Issue #815 评论 5947230558 问题1: 锚点行的判定必须与跨行相位共用同一套
+            // 行身份（同侧 ordinal），不能拿 old snapshot 的 `visual_line_id` 与 new
+            // snapshot 的 `visual_line_id` 比相等/比大小——两份 canonical 各自从 0
+            // 重新编号，一旦这笔编辑改变了软换行数量，同数字就是不同视觉行。
+            // Insert 的真实锚点是「吐字起点」，就是 new snapshot 里的 ingest 起点行。
+            let is_caret_line = coordinated && ingest_from_line_ord == Some(line_ord);
             let anchor_x = if is_caret_line { caret_x } else { new_doc.x };
             let anchor_y = if is_caret_line { caret_y } else { new_doc.y };
             let mut slice = AnimatedSlice::insert_reveal(
@@ -287,7 +286,7 @@ pub(crate) fn build_delete_conceal_slices(
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
     coordinated: bool,
-    caret_visual_line_id: Option<usize>,
+    old_cursor_visual_line_id: Option<usize>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = deleted_range;
@@ -297,12 +296,15 @@ pub(crate) fn build_delete_conceal_slices(
     let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
     // Issue #815 评论 5946701331 问题2: 吞字的吞吐路径在 **old snapshot 内**建立。
-    // 起点 = 删除前 old caret 所在视觉行（按 old_cursor_rect.top 在 old snapshot
-    // 里定位，绝不借用 new snapshot 的 visual_line_id）；终点 = deleted_range.start
-    // 所在视觉行。Backspace 跨行时 from > to，方向由符号给出而不是写死"向前走"。
-    let ingest_from_line_ord = old_cursor_rect
-        .as_ref()
-        .and_then(|caret| line_ordinal_for_line_top(old_snapshot, caret.top));
+    // 终点 = deleted_range.start 所在视觉行。Backspace 跨行时 from > to，方向由符号
+    // 给出而不是写死"向前走"。
+    //
+    // Issue #815 评论 5947230558 问题2: 起点行用 **old snapshot 自己的**
+    // `old_cursor_visual_line_id` 精确查，不再用 caret.top 的 y 几何猜——相邻视觉行
+    // 满足 `line1.bottom == line2.top`，双侧 ±0.5 容差会让上一行先命中，
+    // `.position()` 取第一个，old caret 在第 N 行会被判成第 N-1 行。
+    let ingest_from_line_ord =
+        line_ordinal_for_visual_line_id(old_snapshot, old_cursor_visual_line_id);
     let ingest_to_line_ord = line_ordinal_for_byte(old_snapshot, range_start);
     // Issue #815 评论 5946701331 问题1: Delete 键的吞字起点 = 被删区间在 old snapshot
     // 内、**本 slice 所在行**的右端。逐行算，不共用事务级最大值——跨行删除时每行
@@ -342,8 +344,10 @@ pub(crate) fn build_delete_conceal_slices(
                 // Issue #808 评论 5916391891 修改 1+4: 按 coordinated 和 visual_line_id
                 // 决定遮罩锚点。coordinated=true 且本行是 caret 所在行时用真实 new caret x；
                 // 否则用行首/行尾（纯文字动画或跨行其他行向行首/行尾收拢）。
-                let is_caret_line = coordinated
-                    && caret_visual_line_id.is_none_or(|cid| old_line.visual_line_id == cid);
+                // Issue #815 评论 5947230558 问题1: 同 Insert——锚点行的判定与跨行
+                // 相位共用同一套 old snapshot 行身份，不跨 snapshot 比 line id。
+                // Delete 的真实锚点是「吞字终点」，就是 old snapshot 里的 ingest 终点行。
+                let is_caret_line = coordinated && ingest_to_line_ord == Some(line_ord);
                 let anchor_x = if is_caret_line {
                     new_cx
                 } else if conceal_to_left_edge {
@@ -686,7 +690,10 @@ pub(crate) fn build_composition_commit_crossfade_slices(
     // coordinated=false 时 composition 的 reveal/conceal 只走独立文字动画语义；
     // coordinated=true 才启用 caret 空间锚点。
     coordinated: bool,
-    caret_visual_line_id: Option<usize>,
+    // Issue #815 评论 5947230558 结语: 行身份只认当前这侧 canonical 自己的数据。
+    // 同一个 `caret_visual_line_id` 拿去同时比 old 行和 new 行，就是跨 revision 比大小。
+    old_cursor_visual_line_id: Option<usize>,
+    new_cursor_visual_line_id: Option<usize>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     // Issue #738 评论 5789470425 问题3: CrossFade group id 分配器（事务内唯一）。
@@ -724,8 +731,13 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     // Issue #808 评论 5917296533 问题4: 按 coordinated 和 visual_line_id
                     // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
                     // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
+                    //
+                    // Issue #815 评论 5947230558 问题1: 这一侧是 **old** 快照的行，
+                    // 只能和 **old** 侧的 caret line id 比。两侧 row id 每次 canonical
+                    // 排版都从 0 重新编号，跨 revision 比大小会把锚点放到错的行上。
                     let is_caret_line = coordinated
-                        && caret_visual_line_id.is_none_or(|cid| old_line.visual_line_id == cid);
+                        && old_cursor_visual_line_id
+                            .is_none_or(|cid| old_line.visual_line_id == cid);
                     let mut slice = AnimatedSlice::delete_conceal(
                         key,
                         old_line.id,
@@ -813,8 +825,12 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     // Issue #808 评论 5917296533 问题4: 按 coordinated 和 visual_line_id
                     // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
                     // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
+                    //
+                    // Issue #815 评论 5947230558 问题1: 这一侧是 **new** 快照的行，
+                    // 只能和 **new** 侧的 caret line id 比。
                     let is_caret_line = coordinated
-                        && caret_visual_line_id.is_none_or(|cid| new_line.visual_line_id == cid);
+                        && new_cursor_visual_line_id
+                            .is_none_or(|cid| new_line.visual_line_id == cid);
                     let mut reveal_slice = AnimatedSlice::insert_reveal(
                         key,
                         new_line.id,

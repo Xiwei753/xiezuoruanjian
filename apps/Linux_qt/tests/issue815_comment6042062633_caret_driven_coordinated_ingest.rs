@@ -334,11 +334,11 @@ fn issue815_review2_cross_line_uses_same_side_line_ordinals() {
         4000,
     );
     assert!(
-        delete_window.contains("line_ordinal_for_line_top(old_snapshot")
+        delete_window.contains("line_ordinal_for_visual_line_id(old_snapshot")
             && delete_window.contains("line_ordinal_for_byte(old_snapshot"),
-        "Issue #815 评论 5946701331 问题2: Delete 跨行吞吐必须在 old snapshot 内建立\
-         起点行（old caret line）与终点行（deleted_range 所在行），\
-         不拿 new 行号比较。"
+        "Issue #815 评论 5946701331 问题2 + 5947230558 问题2: Delete 跨行吞吐必须在\
+         old snapshot 内建立起点行（old caret line）与终点行（deleted_range 所在行），\
+         不拿 new 行号比较。起点行由 old 侧 visual_line_id 精确查，不再靠 y 容差猜。"
     );
     assert!(
         !delete_window.contains("line_ordinal_for_byte(new_snapshot")
@@ -677,4 +677,136 @@ fn issue815_closing_definition_is_preserved_in_comments() {
             CLOSING_DEFINITION
         );
     }
+}
+
+// =========================================================================
+// 复核评论 5947230558 问题1：行身份只认当前这侧 canonical
+// =========================================================================
+
+/// 复核评论 5947230558 问题1。
+///
+/// `VisualLine.id` 每次 canonical 排版都从 0 按全文顺序重新编号。InsertReveal 的
+/// slice 来自 new snapshot、DeleteConceal 来自 old snapshot，跨 revision 比大小
+/// 会把 `caret_anchor_x` 放到错的行上。本测试锁住「行身份只认当前这侧」。
+#[test]
+fn issue815_review4_line_identity_never_crosses_snapshot_sides() {
+    let slices_src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
+
+    // 问题1：不再把另一侧的 caret line id 传进来做锚点判定。
+    assert!(
+        !slices_src.contains("line_ordinal_for_line_top"),
+        "Issue #815 评论 5947230558 问题2: 必须删除 line_ordinal_for_line_top。\
+         相邻行满足 line1.bottom == line2.top，y 容差命中第一行，\
+         .position() 会把 old caret 归到上一行，跨行 Backspace 的起点行整个错掉。"
+    );
+    assert!(
+        slices_src.contains("fn line_ordinal_for_visual_line_id"),
+        "Issue #815 评论 5947230558 问题2: 行序必须由本侧的 visual_line_id 精确查，\
+         不再靠 y 容差猜。"
+    );
+    let ordinal_window = function_window(&slices_src, "fn line_ordinal_for_visual_line_id", 1200);
+    assert!(
+        ordinal_window.contains("line.visual_line_id == visual_line_id"),
+        "Issue #815 评论 5947230558 问题2: 只能在**当前这侧** snapshot 内按 visual_line_id 精确匹配。"
+    );
+    assert!(
+        !ordinal_window.contains("visual_line_top")
+            && !ordinal_window.contains("visual_line_bottom"),
+        "Issue #815 评论 5947230558 结语: 不再靠 y 容差猜行身份。"
+    );
+
+    // 问题1：Insert 锚点 = new 侧 ingest 起点行；Delete 锚点 = old 侧 ingest 终点行。
+    let insert_window = function_window(
+        &slices_src,
+        "pub(crate) fn build_insert_reveal_slices",
+        9000,
+    );
+    assert!(
+        insert_window.contains("ingest_from_line_ord == Some(line_ord)"),
+        "Issue #815 评论 5947230558 问题1: Insert 的 caret 锚点必须是 new snapshot 内\
+         ingest 路径的**起点行**（吐字起点）。"
+    );
+    assert!(
+        !insert_window.contains("caret_visual_line_id"),
+        "Issue #815 评论 5947230558 问题1: build_insert_reveal_slices 不得再接收 \
+         caret_visual_line_id——那是 old 侧的 id，拿来和 new 的行比就是跨 revision 比大小。"
+    );
+
+    let delete_window = function_window(
+        &slices_src,
+        "pub(crate) fn build_delete_conceal_slices",
+        9000,
+    );
+    assert!(
+        delete_window.contains("ingest_to_line_ord == Some(line_ord)"),
+        "Issue #815 评论 5947230558 问题1: Delete 的 caret 锚点必须是 old snapshot 内\
+         ingest 路径的**终点行**（吞字终点）。"
+    );
+    assert!(
+        delete_window
+            .contains("line_ordinal_for_visual_line_id(old_snapshot, old_cursor_visual_line_id)"),
+        "Issue #815 评论 5947230558 问题2: Delete 的 ingest 起点行必须由 old 侧的 \
+         old_cursor_visual_line_id 在 old snapshot 内精确查得。"
+    );
+
+    // Composition crossfade 是同一类 bug：一侧 id 同时比 old 行和 new 行。
+    let crossfade_window = function_window(
+        &slices_src,
+        "pub(crate) fn build_composition_commit_crossfade_slices",
+        9000,
+    );
+    assert!(
+        crossfade_window.contains("old_cursor_visual_line_id"),
+        "Issue #815 评论 5947230558 结语: Composition 路径的 old 侧行只能和 old 侧 \
+         caret line id 比。"
+    );
+    assert!(
+        crossfade_window.contains("new_cursor_visual_line_id"),
+        "Issue #815 评论 5947230558 结语: Composition 路径的 new 侧行只能和 new 侧 \
+         caret line id 比。"
+    );
+    assert!(
+        !crossfade_window.contains("caret_visual_line_id.is_none_or"),
+        "Issue #815 评论 5947230558 结语: 不允许再用一个 id 同时比 old 行和 new 行。"
+    );
+}
+
+/// 复核评论 5947230558：builder 调用点也必须跟上。
+#[test]
+fn issue815_review4_builder_call_sites_pass_same_side_ids() {
+    let builder_src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+
+    // 注意：Rust 字符串切片必须在 char boundary 上，不能直接 `pos + N`。
+    let char_safe_window = |from: usize, bytes: usize| -> String {
+        let mut end = (from + bytes).min(builder_src.len());
+        while !builder_src.is_char_boundary(end) {
+            end -= 1;
+        }
+        builder_src[from..end].to_string()
+    };
+
+    let insert_call = builder_src
+        .find("build_insert_reveal_slices(")
+        .expect("找不到 build_insert_reveal_slices 调用点");
+    let insert_ctx = char_safe_window(insert_call, 1400);
+    assert!(
+        !insert_ctx.contains("spec.old_cursor_visual_line_id"),
+        "Issue #815 评论 5947230558 问题1: build_insert_reveal_slices 不得再传 \
+         spec.old_cursor_visual_line_id（old 侧 id 进 new 侧比较）。"
+    );
+
+    let delete_call = builder_src
+        .find("build_delete_conceal_slices(")
+        .expect("找不到 build_delete_conceal_slices 调用点");
+    let delete_ctx = char_safe_window(delete_call, 1800);
+    assert!(
+        delete_ctx.contains("spec.old_cursor_visual_line_id"),
+        "Issue #815 评论 5947230558 问题2: build_delete_conceal_slices 必须传 \
+         spec.old_cursor_visual_line_id——old 侧的行身份只能来自 old 侧。"
+    );
+    assert!(
+        !delete_ctx.contains("spec.new_cursor_visual_line_id"),
+        "Issue #815 评论 5947230558 问题1: build_delete_conceal_slices 不得再传 \
+         spec.new_cursor_visual_line_id（new 侧 id 进 old 侧比较）。"
+    );
 }

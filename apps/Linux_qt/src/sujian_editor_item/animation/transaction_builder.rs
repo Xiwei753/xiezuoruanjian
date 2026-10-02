@@ -96,7 +96,10 @@ pub(crate) fn build_prepared_transaction(
                 spec.old_cursor_rect.as_ref(),
                 // Issue #808 评论 5916391891 修改 4: coordinated 决定是否用 caret 锚点做遮罩。
                 spec.coordinated_animation_enabled,
-                spec.old_cursor_visual_line_id,
+                // Issue #815 评论 5947230558 问题1: 不再传 old snapshot 的
+                // `old_cursor_visual_line_id`。锚点行改用 new snapshot 自己的 ingest
+                // 起点行序判定（`ingest_from_line_ord == Some(line_ord)`），
+                // 避免 soft-wrap 变化后两个 revision 的同数字 line id 指向不同视觉行。
             ));
         }
         for &(d_start, d_end) in &spec.deleted_ranges {
@@ -108,7 +111,12 @@ pub(crate) fn build_prepared_transaction(
                 // Issue #808: 传新 caret 作为吞字遮罩锚点。
                 spec.new_cursor_rect.as_ref(),
                 spec.coordinated_animation_enabled,
-                spec.new_cursor_visual_line_id,
+                // Issue #815 评论 5947230558 问题1/2: 这里传 **old snapshot 自己的**
+                // `old_cursor_visual_line_id`，而不是 new 那一份：
+                // - 吞字锚点行用 old 侧的 ingest 终点行序判定；
+                // - 吞字起点行序也直接用这个 old line id 精确定位，不再用
+                //   caret.top 的 y 几何猜（相邻行 `bottom == top` 时会误命中上一行）。
+                spec.old_cursor_visual_line_id,
             ));
         }
     }
@@ -136,6 +144,9 @@ pub(crate) fn build_prepared_transaction(
                 // Issue #808 评论 5917296533 问题4: Composition 路径统一协同模式参数。
                 // coordinated=false 时只走独立文字动画语义；coordinated=true 才启用 caret 锚点。
                 spec.coordinated_animation_enabled,
+                // Issue #815 评论 5947230558 问题1: 两侧各传各自的 caret line id，
+                // 跨 revision 比大小会把遮罩锚点放到错的行上。
+                spec.old_cursor_visual_line_id,
                 spec.new_cursor_visual_line_id,
             ));
         }

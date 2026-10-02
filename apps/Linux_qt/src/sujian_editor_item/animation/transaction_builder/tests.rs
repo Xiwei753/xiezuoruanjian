@@ -2478,9 +2478,10 @@ fn issue808_comment5919641249_problem1_space_separated_shared_boundary_without_u
         key,
         &new_snapshot,
         (0, 7),
-        None,  // old_cursor_rect
+        None, // old_cursor_rect
         false, // coordinated
-        None,  // caret_visual_line_id
+              // Issue #815 评论 5947230558 问题1: 跨侧 caret_visual_line_id 参数已删除，
+              // 锚点行改用 new snapshot 自己的 ingest 起点行序判定。
     );
     let reveal_slices: Vec<_> = slices
         .iter()
@@ -2609,7 +2610,8 @@ fn issue808_comment5917296533_problem4_composition_bypasses_coordinated_mode_ins
         Some(&old_cursor),
         Some(&new_cursor),
         false, // coordinated = false
-        None,  // caret_visual_line_id
+        None,  // old_cursor_visual_line_id
+        None,  // new_cursor_visual_line_id
     );
     let insert_reveals: Vec<_> = slices
         .iter()
@@ -2673,7 +2675,8 @@ fn issue808_comment5917296533_problem4_composition_bypasses_coordinated_mode_del
         Some(&old_cursor),
         Some(&new_cursor),
         false, // coordinated = false
-        None,  // caret_visual_line_id
+        None,  // old_cursor_visual_line_id
+        None,  // new_cursor_visual_line_id
     );
     let delete_conceals: Vec<_> = slices
         .iter()
@@ -2749,7 +2752,8 @@ fn issue808_comment5918236360_problem4_composition_multichar_shared_line_mask() 
         Some(&old_cursor),
         Some(&new_cursor),
         true,    // coordinated = true
-        Some(0), // caret_visual_line_id = 0
+        Some(0), // old_cursor_visual_line_id = 0
+        Some(0), // new_cursor_visual_line_id = 0
     );
     let insert_reveals: Vec<_> = slices
         .iter()
@@ -3308,4 +3312,229 @@ fn issue808_comment5918236360_problem3_delete_conceal_mask_symmetric_via_builder
     build_and_check(160.0, "Backspace(old caret=160)");
     // 前向 Delete：old caret=100（左侧）→ conceal_to_left_edge=false，final caret=100。
     build_and_check(100.0, "Delete(old caret=100)");
+}
+
+// ── Issue #815 评论 5947230558 行为级测试：行身份只认当前这侧 canonical ──
+
+/// 造一份多视觉行的 canonical 快照。
+///
+/// 每一项是 `(visual_line_id, byte_start, byte_end, top, bottom)`。
+/// 相邻行满足 `line1.bottom == line2.top`，这正是真实排版的几何，也是
+/// 「按 caret.top 的 y 容差猜行序」会误命中上一行的原因。
+fn make_multiline_snapshot(
+    virtual_text: &str,
+    lines: &[(usize, usize, usize, f64, f64)],
+) -> EditorLayoutSnapshot {
+    use crate::editor::layout::CaretAffinity;
+    use crate::sujian_editor_item::layout_snapshot::{LineClusterSnapshot, PreparedLineSnapshot};
+
+    let line_snapshots: Vec<PreparedLineSnapshot> = lines
+        .iter()
+        .enumerate()
+        .map(
+            |(idx, &(visual_line_id, byte_start, byte_end, top, bottom))| PreparedLineSnapshot {
+                id: LineSnapshotId::new(1, 0, idx as u32),
+                image: None,
+                clusters: vec![LineClusterSnapshot {
+                    byte_start,
+                    byte_end,
+                    source_rect: SourceRect {
+                        x: 0.0,
+                        y: top,
+                        w: (byte_end - byte_start) as f64 * 10.0,
+                        h: bottom - top,
+                    },
+                    shaping_identity: test_shaping_identity(virtual_text, byte_start),
+                }],
+                document_origin_y: 0.0,
+                dpr: 1.0,
+                byte_start,
+                byte_end,
+                visual_x: 0.0,
+                visual_line_id,
+                visual_line_top: top,
+                visual_line_bottom: bottom,
+                cache_slot: 0,
+                qtextline_idx: idx as i32,
+                paragraph_document_byte_start: 0,
+            },
+        )
+        .collect();
+
+    EditorLayoutSnapshot {
+        revision: LayoutRevision::initial(),
+        line_snapshots,
+        caret_rect: None,
+        caret_rect_doc: None,
+        caret_affinity: CaretAffinity::Downstream,
+        virtual_text: virtual_text.to_string(),
+    }
+}
+
+/// Issue #815 评论 5947230558 问题1：编辑后 soft-wrap 数量变化，两个 revision 的
+/// 同数字 line id 指向不同视觉行。
+///
+/// 这里构造 old / new 两份快照，让它们的 `visual_line_id` 数字**错位**：
+/// - old 只有 1 行，`visual_line_id = 5`（byte [0,3)）；
+/// - new 有 2 行，`visual_line_id = 0`（byte [0,2)）与 `1`（byte [2,4)）。
+///
+/// Insert 的真实锚点是「吐字起点」＝ new snapshot 里的 ingest 起点行。
+/// 旧写法拿 `old_cursor_visual_line_id = 5` 去和 new 的行号比，永远命不中任何一行，
+/// 锚点行判定整个失效。修好后锚点必须落在 new 的 ingest 起点行（ordinal 0）。
+#[test]
+fn issue815_review3_insert_anchor_uses_same_side_ingest_start_line() {
+    let old_snapshot = make_multiline_snapshot("abc", &[(5, 0, 3, 0.0, 20.0)]);
+    let new_snapshot =
+        make_multiline_snapshot("abXX", &[(0, 0, 2, 0.0, 20.0), (1, 2, 4, 20.0, 40.0)]);
+    // 前置条件：编辑后软换行数变了，两侧行号完全错位（old 只有 5，new 是 0/1）。
+    assert_eq!(old_snapshot.line_snapshots[0].visual_line_id, 5);
+    assert_eq!(new_snapshot.line_snapshots[0].visual_line_id, 0);
+    assert_ne!(
+        old_snapshot.line_snapshots[0].visual_line_id,
+        new_snapshot.line_snapshots[1].visual_line_id,
+        "两侧 row id 是不同 revision 的坐标系，不能互相比较"
+    );
+    // 插入位置 [2,4) 落在 new snapshot 的 ordinal 1。
+    let slices = build_insert_reveal_slices(
+        VisualTransactionKey::new(1, 1),
+        &new_snapshot,
+        (2, 4),
+        Some(&CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        /* coordinated = true */ true,
+    );
+    assert!(
+        !slices.is_empty(),
+        "前置条件：应生成 InsertReveal 切片，got {}",
+        slices.len()
+    );
+    // ingest 起点行 = inserted_range.start=2 在 new 里的 ordinal = 0。
+    // 锚点行必须是 ordinal 0（[0,2) 那行），不是 ordinal 1。
+    // ingest 起点行 = inserted_range.start=2 在 new 里的 ordinal = 1。
+    assert_eq!(
+        slices[0].ingest_from_line_ord,
+        Some(1),
+        "Insert 的 ingest 起点行必须落在 new snapshot 自己的行序里"
+    );
+    assert_eq!(
+        slices[0].ingest_line_ord,
+        Some(1),
+        "本切片就在 ingest 起点行上"
+    );
+    assert_eq!(
+        slices[0].is_caret_line, true,
+        "Issue #815 评论 5947230558 问题1: Insert 锚点行必须判在 ingest 起点行上。\
+         旧写法拿 old 的 line id=5 去和 new 的 0/1 比，永远命不中，is_caret_line 恒 false。"
+    );
+}
+
+/// Issue #815 评论 5947230558 问题1（Delete 侧）。
+///
+/// Delete 的真实锚点是「吞字终点」＝ old snapshot 里的 ingest 终点行
+/// （`deleted_range.start` 所在行）。旧写法拿 `new_cursor_visual_line_id` 去和
+/// old 的行号比，软换行数量一变就会锚到错误的行、用错 new caret.x。
+#[test]
+fn issue815_review3_delete_anchor_uses_same_side_ingest_end_line() {
+    // old 有 2 行：ordinal 0 (line_id 7) 与 ordinal 1 (line_id 8)。
+    let old_snapshot =
+        make_multiline_snapshot("abXXcdef", &[(7, 0, 4, 0.0, 20.0), (8, 4, 8, 20.0, 40.0)]);
+    // new 只有 1 行，line_id 7 —— 与 old 的 ordinal 0 同数字但不是同一视觉行。
+    let _new_snapshot = make_multiline_snapshot("abcdef", &[(7, 0, 6, 0.0, 20.0)]);
+    // 删除 old snapshot 里的 [2,4)（落在 ordinal 0）。
+    let slices = build_delete_conceal_slices(
+        VisualTransactionKey::new(1, 1),
+        &old_snapshot,
+        (2, 4),
+        Some(&CursorRect {
+            x: 40.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        Some(&CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        /* coordinated = true */ true,
+        /* old_cursor_visual_line_id */ Some(8),
+    );
+    assert!(!slices.is_empty(), "前置条件：应生成 DeleteConceal 切片");
+    // ingest 终点行 = deleted_range.start=2 在 old 里的 ordinal = 0。
+    assert_eq!(
+        slices[0].ingest_to_line_ord,
+        Some(0),
+        "Delete 的 ingest 终点行必须落在 old snapshot 自己的行序里"
+    );
+    assert_eq!(
+        slices[0].ingest_line_ord,
+        Some(0),
+        "本切片就在 ingest 终点行上"
+    );
+    assert_eq!(
+        slices[0].is_caret_line, true,
+        "Delete 的锚点行就是 ingest 终点行；旧写法会用 new 的 line id 判错行"
+    );
+}
+
+/// Issue #815 评论 5947230558 问题2：相邻视觉行 `line1.bottom == line2.top`，
+/// old caret 明确属于 line2，Delete 的 `ingest_from_line_ord` 必须等于 line2
+/// 的 ordinal，不能落到 line1。
+///
+/// 旧实现用 `[visual_line_top - 0.5, visual_line_bottom + 0.5]` 猜行序，
+/// 上下都扩了 0.5：caret top 落在下一行顶部附近时上一行也会命中，
+/// `.position()` 取第一个 ⇒ 第 N 行被判成第 N-1 行。
+#[test]
+fn issue815_review3_delete_start_line_does_not_hit_previous_row_at_boundary() {
+    // 两行紧贴：line1 = [0,20)，line2 = [20,40)。
+    let old_snapshot =
+        make_multiline_snapshot("abcdEF", &[(3, 0, 4, 0.0, 20.0), (4, 4, 6, 20.0, 40.0)]);
+    // old caret 在 line2（top = 20.0），删 line2 的第一个字 [4,5)。
+    let slices = build_delete_conceal_slices(
+        VisualTransactionKey::new(1, 1),
+        &old_snapshot,
+        (4, 5),
+        Some(&CursorRect {
+            x: 10.0,
+            top: 20.0,
+            bottom: 40.0,
+            baseline_y: 36.0,
+        }),
+        Some(&CursorRect {
+            x: 0.0,
+            top: 20.0,
+            bottom: 40.0,
+            baseline_y: 36.0,
+        }),
+        /* coordinated = true */ true,
+        /* old_cursor_visual_line_id = 4 = line2 */ Some(4),
+    );
+    assert!(!slices.is_empty(), "前置条件：应生成 DeleteConceal 切片");
+    assert_eq!(
+        slices[0].ingest_from_line_ord,
+        Some(1),
+        "old caret 在 line2（ordinal 1），起点行序必须是 1，不能因 y 容差落到 line1"
+    );
+    assert_eq!(
+        slices[0].ingest_to_line_ord,
+        Some(1),
+        "deleted_range.start=4 也在 line2"
+    );
+}
+
+/// 行为测试用的固定 shaping 指纹：同一 `(文本, 起点)` 恒等。
+fn test_shaping_identity(text: &str, byte_start: usize) -> ShapingIdentity {
+    ShapingIdentity {
+        text_content_hash: byte_start as u64 ^ text.len() as u64,
+        raw_font_fingerprint: "test-font".to_string(),
+        glyph_indexes_hash: byte_start as u64,
+        cluster_glyph_count: text.len().saturating_sub(byte_start),
+        direction_rtl: false,
+        format_fingerprint: 0,
+    }
 }
