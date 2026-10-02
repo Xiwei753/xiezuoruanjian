@@ -49,6 +49,10 @@ Item {
     // 根 Scene 的 pathKey 为 "root"，子 Scene 为 "root/embed_<instanceId>/..."
     property string pathKey: "root"
 
+    // Issue #814 评论 5935285879: 整棵递归树共享的选中状态控制器。
+    // 由 Workspace 创建并逐层下传，子 Scene 沿用同一个实例，不每层新建。
+    property var selectionController: null
+
     // 解析出的本层星图 ID（由 resolve_starmap_path 得出）
     property string finalStarmapId: ""
 
@@ -85,16 +89,47 @@ Item {
             resolveError = qsTr("解析星图层级路径失败")
                     + (res && res.errorCode ? " (" + res.errorCode + ")" : "")
             finalStarmapId = ""
+            // Issue #814 评论 5935346839: scene_resolve_failed 边界日志。
+            if (starmapBackendRef) {
+                starmapBackendRef.record_interaction(
+                    "scene_resolve_failed", pathKey, rootStarmapId, "scene", "",
+                    JSON.stringify({
+                        "pathKey": pathKey,
+                        "errorCode": (res && res.errorCode) ? res.errorCode : "",
+                        "rootStarmapId": rootStarmapId
+                    }))
+            }
             return
         }
         var finalId = res.data && res.data.finalStarmapId ? res.data.finalStarmapId : ""
         if (finalId === "") {
             resolveError = qsTr("解析星图层级路径失败")
             finalStarmapId = ""
+            // Issue #814 评论 5935346839: scene_resolve_failed 边界日志（finalId 为空）。
+            if (starmapBackendRef) {
+                starmapBackendRef.record_interaction(
+                    "scene_resolve_failed", pathKey, rootStarmapId, "scene", "",
+                    JSON.stringify({
+                        "pathKey": pathKey,
+                        "errorCode": "empty_final_id",
+                        "rootStarmapId": rootStarmapId
+                    }))
+            }
             return
         }
         resolveError = ""
         finalStarmapId = finalId
+        // Issue #814 评论 5935346839: scene_resolved 边界日志。
+        if (starmapBackendRef) {
+            starmapBackendRef.record_interaction(
+                "scene_resolved", pathKey, rootStarmapId, "scene", finalId,
+                JSON.stringify({
+                    "pathKey": pathKey,
+                    "rootStarmapId": rootStarmapId,
+                    "finalStarmapId": finalId,
+                    "depth": pathSegments.length
+                }))
+        }
     }
 
     onRootStarmapIdChanged: resolvePath()
@@ -144,6 +179,8 @@ Item {
         rootStarmapId: scene.rootStarmapId
         pathSegments: scene.pathSegments
         pathKey: scene.pathKey
+        // Issue #814 评论 5935285879: 共享选中控制器逐层下传，子 Scene 沿用同一个。
+        selectionController: scene.selectionController
 
         // Issue #805 评论 5908703621 问题 5：本层 Canvas 上抛 editNodeRequested(var node)，
         // Scene 用 finalStarmapId/pathKey 包装成带 owner 上下文的三参数信号上抛。

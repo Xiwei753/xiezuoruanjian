@@ -56,6 +56,9 @@ Item {
     // 由 Canvas 控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
+    // Issue #814 评论 5935285879: 共享选中控制器，由 Canvas 传入，传给 child Scene。
+    property var selectionController: null
+
     // wobble 改纯视觉偏移，不影响命中框
     property int wobbleIndex: 0
     property real _wobbleAnimX: 0
@@ -85,6 +88,26 @@ Item {
         if (childSceneInViewport)
             childSceneActivated = true
         _syncChildScene()
+    }
+
+    // Issue #814 评论 5935346839: Embed 自己的事件分层边界日志入口。
+    // starmapBackendRef 为 null 时静默跳过。不记录连续移动。
+    function logEmbedInteraction(event, fields) {
+        if (!starmapBackendRef) return
+        var fj = fields ? JSON.stringify(fields) : ""
+        starmapBackendRef.record_interaction(event, parentPathKey, targetStarmapId, "embed", instanceId, fj)
+    }
+
+    // Issue #814 评论 5935346839: embed_child_scene_activated 边界日志。
+    onChildSceneActivatedChanged: {
+        if (childSceneActivated) {
+            logEmbedInteraction("embed_child_scene_activated", {
+                "parentPathKey": parentPathKey,
+                "childScenePathKey": childScenePathKey,
+                "instanceId": instanceId,
+                "targetStarmapId": targetStarmapId
+            })
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -127,7 +150,9 @@ Item {
             "starmapBackendRef": starmapBackendRef,
             "rootStarmapId": rootStarmapId,
             "pathSegments": childScenePathSegments,
-            "pathKey": childScenePathKey
+            "pathKey": childScenePathKey,
+            // Issue #814 评论 5935285879: 共享选中控制器逐层下传，子 Scene 沿用同一个。
+            "selectionController": selectionController
         })
     }
     onChildSceneWantedChanged: _syncChildScene()
@@ -144,6 +169,14 @@ Item {
     // Issue #805 评论 5907045450 第 3 部分：chrome 命中区域高度 + 边框 hit slop。
     readonly property int _chromeHeight: 24
     readonly property int _borderSlop: 6
+
+    // Issue #814 评论 5935285879: Embed 独立显示尺寸常量，不再复用 node 尺寸 150×60。
+    // 尺寸仍放 Linux_Qt 显示层，不进 Core。内容区（标题 24px、底边 6px 后）要有
+    // 足够高度容纳真正能拖动、缩放、放节点的子画布。
+    // _embedDefaultWidth/Height 是默认尺寸，实际 width/height 由 delegate 传入
+    // （GraphController buildModels 用同样常量初始化）。
+    readonly property int _embedDefaultWidth: 240
+    readonly property int _embedDefaultHeight: 220
 
     property real visualOffsetX:
         (isSelected || isBeingDragged || chromeMouseTap.pressed || chromeTouchTap.pressed) ? 0 : _wobbleAnimX
@@ -239,7 +272,20 @@ Item {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
                 exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, mouse）。
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "title",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
@@ -249,6 +295,19 @@ Item {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
                 exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap
+                onPressedChanged: {
+                    if (pressed) {
+                        // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, touch）。
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "title",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
@@ -256,7 +315,21 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        // Issue #814 评论 5935346839: embed_chrome_press 边界日志（title, right）。
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "title",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -279,8 +352,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
 
@@ -309,19 +384,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderTop",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderTop",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderTop",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -340,8 +452,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -360,19 +474,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderBottom",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderBottom",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderBottom",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -391,8 +542,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -411,19 +564,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderLeft",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderLeft",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderLeft",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -442,8 +632,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -462,19 +654,56 @@ Item {
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.LeftButton
-                onPressedChanged: { if (pressed) root.mouseInteracted() }
+                onPressedChanged: {
+                    if (pressed) {
+                        root.mouseInteracted()
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderRight",
+                            "device": "mouse"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.mouseLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderRight",
+                            "device": "touch"
+                        })
+                    }
+                }
                 onSingleTapped: root.clicked(root.instanceId)
                 onLongPressed: root.touchLongPressed(root.instanceId)
             }
             TapHandler {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 acceptedButtons: Qt.RightButton
+                onPressedChanged: {
+                    if (pressed) {
+                        root.logEmbedInteraction("embed_chrome_press", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId,
+                            "chromeRegion": "borderRight",
+                            "device": "mouse",
+                            "button": "right"
+                        })
+                    }
+                }
                 onSingleTapped: function(eventPoint) {
                     root.rightClicked(root.instanceId)
                     root.contextMenuRequested(root.instanceId, eventPoint.scenePosition.x, eventPoint.scenePosition.y)
@@ -493,8 +722,10 @@ Item {
                     var dy = activeTranslation.y - lastTy
                     lastTx = activeTranslation.x
                     lastTy = activeTranslation.y
-                    var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-                    root.moveDelta(dx / zoom, dy / zoom)
+                    // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+                    // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+                    // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+                    root.moveDelta(dx, dy)
                 }
             }
             PointHandler {
@@ -506,6 +737,12 @@ Item {
         // ── Issue #805 评论 5907045450 第 3 部分：contentViewport ──
         // 中间区域，父 Embed 不挂 TapHandler/DragHandler/MouseArea，
         // 事件直接给 child Scene。
+        //
+        // Issue #814 评论 5935346839：contentViewport 上唯一允许的 handler 是
+        // passive grab 的 PointHandler，它只观察 press 事件并记录
+        // embed_child_content_routed 边界日志，不拦截事件传递给 child Scene。
+        // 这不违反 Issue #805 "事件直接给 child Scene" 的设计约束——
+        // passive grab 不会取得 exclusive grab，事件流不受影响。
         Item {
             id: contentViewport
             anchors.left: borderLeft.right
@@ -513,6 +750,25 @@ Item {
             anchors.top: titleBar.bottom
             anchors.bottom: borderBottom.top
             clip: true
+
+            // Issue #814 评论 5935346839: embed_child_content_routed 边界日志。
+            // PointHandler 用 passive grab 观察 press，不抢事件，不影响 child Scene。
+            // 下一次点子星图内部，就能看出事件到底给了父 Embed chrome，
+            // 还是确实进入 child Scene。
+            PointHandler {
+                id: contentViewportPressObserver
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onActiveChanged: {
+                    if (active) {
+                        root.logEmbedInteraction("embed_child_content_routed", {
+                            "parentPathKey": root.parentPathKey,
+                            "childScenePathKey": root.childScenePathKey,
+                            "instanceId": root.instanceId,
+                            "targetStarmapId": root.targetStarmapId
+                        })
+                    }
+                }
+            }
 
             // Issue #805 评论 5907045450 第 2 部分：递归渲染子 StarMapScene。
             // childPath = parent.pathSegments + EnterEmbed(embed.instanceId)。
@@ -559,7 +815,10 @@ Item {
     // ---------------------------------------------------------------------------
     // Issue #805 评论 5908703621 问题 2：所有 PointerHandler 已移进 titleBar /
     // border 内部（parent Item 决定命中范围）。根 Item 和 contentViewport 祖先链
-    // 上不再有任何 TapHandler / DragHandler / MouseArea / PointHandler，
+    // 上不再有任何 TapHandler / DragHandler / MouseArea / exclusive-grab PointHandler，
     // 内部事件直接给 child Scene，不会被父 Embed 截走。
+    // Issue #814 评论 5935346839：contentViewport 上新增 passive-grab PointHandler
+    // （contentViewportPressObserver），只观察 press 记录 embed_child_content_routed
+    // 边界日志，不取得 exclusive grab，不影响事件传递给 child Scene。
     // ---------------------------------------------------------------------------
 }

@@ -12,6 +12,8 @@
 //     wobble 只偏移内部视觉 Rectangle（visualNode），不影响命中测试。
 //     TapHandler/DragHandler/PointHandler 全部挂在稳定 root Item 上。
 //   - 使用 DesignTokens 统一样式
+//   - Issue #814 评论 5935346839：节点不自己直接落盘诊断日志，交互边界日志
+//     统一由 Canvas 的 logInteraction 写，避免 Node、Canvas 两层把同一次点击各记一份。
 // =============================================================================
 
 import QtQuick
@@ -227,9 +229,10 @@ Item {
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
-            // 转成世界坐标增量（除以父项 scale，container.scale === zoomLevel）
-            var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
-            root.moveDelta(dx / zoom, dy / zoom)
+            // Issue #814 评论 5947740838: 只上抛 raw scene delta，
+            // scene→world 映射统一由 Canvas 的 sceneDeltaToWorld 完成，
+            // 不再在本层做 zoom 换算（会漏掉祖先 Embed scale）。
+            root.moveDelta(dx, dy)
         }
     }
 
