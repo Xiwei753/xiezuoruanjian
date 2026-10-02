@@ -80,12 +80,21 @@ pub(crate) fn build_prepared_transaction(
     // 1a. InsertReveal / DeleteConceal（文字动画）
     //
     // Issue #756: 吞吐字是否存在由 text_animation_enabled 决定（coordinated || typing）。
-    // Issue #808: 吞吐字始终用 Timed timing（独立 timeline + 自己的 easing）。
-    // - coordinated=true：遮罩锚点取 caret 位置（视觉上从光标处吐出/被光标吞进），
-    //   但文字 progress 不消费 caret frame，文字与光标不再绑死。
-    // - coordinated=false：遮罩锚点取默认值，文字用 typing timeline 自己推进。
-    // 三种语义彻底分开：文字动画（timeline+easing）、光标动画（timeline+easing）、
-    // 协同动画（遮罩锚点选择）。
+    //
+    // Issue #815 评论 5947443780 问题3: 这里原先写的是 #808 的旧定义
+    // （「吞吐字始终用 Timed timing」「文字 progress 不消费 caret frame」），
+    // 那套定义已被 #815 推翻。
+    //
+    // 现在的定义：**协同模式 = 一条 caret 运动轨迹 + 文字以该轨迹当前帧为吞吐边界
+    // + Reflow 可独立**。
+    // - coordinated=true：InsertReveal/DeleteConceal 走 `VisualUnitTiming::CaretTrack`，
+    //   没有自己的 timeline；逐帧边界直接来自本事务 cursor track 的唯一一次采样
+    //   （`sample_caret_track_frame`），文字层与光标层消费同一份采样。
+    //   Delete 键（caret 固定）额外用 `IngestBoundaryDriver::DeleteForwardBoundary`，
+    //   吞字边界自己从被删区间右端朝静止 caret 收拢。
+    // - coordinated=false：仍是独立 `Timed`，按「打字动画」设置自己推进
+    //   （`ease_out_quad` + `text_duration_ms`）。
+    // - ReflowMove/ReflowCrossFade：**始终**独立 `Timed`，协同模式也不接管。
     if spec.text_animation_enabled {
         for &(i_start, i_end) in &spec.inserted_ranges {
             slices.extend(build_insert_reveal_slices(
@@ -142,7 +151,12 @@ pub(crate) fn build_prepared_transaction(
                 spec.old_cursor_rect.as_ref(),
                 spec.new_cursor_rect.as_ref(),
                 // Issue #808 评论 5917296533 问题4: Composition 路径统一协同模式参数。
-                // coordinated=false 时只走独立文字动画语义；coordinated=true 才启用 caret 锚点。
+                // coordinated=false 时只走独立文字动画语义。
+                //
+                // Issue #815 评论 5947443780 问题1: coordinated=true 时这条路径生成的
+                // InsertReveal/DeleteConceal 与普通 Insert/Delete 一样是 `CaretTrack`，
+                // 所以必须带齐 5 个吞吐元数据字段（行序 + boundary driver + 起点），
+                // builder 内部会写入，不靠这里的锚点标记兜底。
                 spec.coordinated_animation_enabled,
                 // Issue #815 评论 5947230558 问题1: 两侧各传各自的 caret line id，
                 // 跨 revision 比大小会把遮罩锚点放到错的行上。
@@ -795,14 +809,15 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
     ) -> Option<VisualTransactionKey> {
-        // Issue #808 评论 5919641249 修改 2: coordinated 不是"文字与光标绑死"。
-        // - coordinated=true 时：同一次编辑同时创建文字视觉单元和 cursor track，
-        //   文字 progress 只来自文字 timeline，光标 progress 只来自 cursor track，
-        //   两条独立动画；协同只额外决定吞吐 mask 的 caret 空间锚点。这里仍要求
-        //   有效 caret motion（old/new cursor rect 都在），否则不为这笔编辑建立
-        //   协同光标轨迹，直接不创建事务。
-        // - coordinated=false 时：typing_animation_enabled 只决定文字动画
-        //   （Reflow + InsertReveal/DeleteConceal），smooth_cursor_enabled 只决定光标动画
+        // Issue #815 评论 5947443780 问题3: 协同语义 = 一条 caret 运动轨迹 +
+        // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。
+        // - coordinated=true 时：InsertReveal/DeleteConceal 一律是 `CaretTrack`，
+        //   没有自己的 progress，逐帧边界来自本事务 cursor track 的唯一一次采样
+        //   （`sample_caret_track_frame`）；ReflowMove/ReflowCrossFade 仍是独立 `Timed`。
+        //   这里仍要求有效 caret motion（old/new cursor rect 都在）——没有 track 就
+        //   没有吞吐边界来源，协同事务必须拒绝而不是退化成文字自己播。
+        // - coordinated=false 时：InsertReveal/DeleteConceal 退回独立 `Timed`
+        //   （跟随 typing_animation_enabled），smooth_cursor_enabled 只决定光标动画
         //   （caret motion track）。两者互相独立，同时为 true 不等于协同：
         //   只有 coordinated_animation_enabled 才走协同路径。
         let text_animation_enabled = coordinated_animation_enabled || typing_animation_enabled;
@@ -815,9 +830,10 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        // Issue #808 评论 5919641249 修改 2: valid_caret_motion_track 检查。
-        // - coordinated=true 时：协同动画要求这笔编辑同时拥有文字和光标两条轨迹，
-        //   必须有有效 caret motion，否则不创建事务（不是"文字与光标绑死"）。
+        // Issue #815 评论 5947443780 问题3: valid_caret_motion_track 检查。
+        // - coordinated=true 时：吞吐字是 `CaretTrack`，逐帧边界完全来自 cursor track
+        //   的当前帧，所以这笔编辑必须有有效 caret motion，否则不创建事务。
+        //   绝不能退化成"文字按自己的 timeline 播、光标不动"。
         // - coordinated=false 时：不把缺少 caret motion 当成"整笔不播"——文字动画（Reflow）
         //   与 cursor track 各自按自己的开关决定（无 caret motion 时只是没有 cursor
         //   track，文字 unit 仍走自己的 Timed 时间线，与 Issue #727 约束 5 一致）。

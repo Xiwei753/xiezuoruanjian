@@ -1,6 +1,8 @@
 use super::super::coordinator::LinuxEditorAnimationCoordinator;
 use super::*;
-use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animated_slice::{
+    AnimatedSlice, AnimatedSliceKind, IngestBoundaryDriver,
+};
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, TextVisualOperationKind, VisualUnitTiming,
 };
@@ -3536,5 +3538,373 @@ fn test_shaping_identity(text: &str, byte_start: usize) -> ShapingIdentity {
         cluster_glyph_count: text.len().saturating_sub(byte_start),
         direction_rtl: false,
         format_fingerprint: 0,
+    }
+}
+
+// ── Issue #815 评论 5947443780 行为级测试：IME commit 特殊 crossfade 也走 CaretTrack ──
+
+/// 构造一笔带 `composition_commit_crossfade` 的协同 spec（走真实
+/// `build_prepared_transaction` 路径，而不是直接调 slices 构造器）。
+fn issue815_composition_spec(
+    old_snapshot: EditorLayoutSnapshot,
+    new_snapshot: EditorLayoutSnapshot,
+    old_cursor: CursorRect,
+    new_cursor: CursorRect,
+    old_cursor_visual_line_id: Option<usize>,
+    new_cursor_visual_line_id: Option<usize>,
+    old_cursor_line_top: f64,
+    old_cursor_line_bottom: f64,
+    new_cursor_line_top: f64,
+    new_cursor_line_bottom: f64,
+    preedit: (usize, usize),
+    candidate: (usize, usize),
+) -> VisualEditSpec {
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+    VisualEditSpec {
+        key: VisualTransactionKey::new(815, 4),
+        operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: Vec::new(),
+        deleted_ranges: Vec::new(),
+        offset_map,
+        old_cursor_rect: Some(old_cursor),
+        new_cursor_rect: Some(new_cursor),
+        old_cursor_visual_line_id,
+        new_cursor_visual_line_id,
+        old_cursor_line_top,
+        old_cursor_line_bottom,
+        new_cursor_line_top,
+        new_cursor_line_bottom,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        rebase_frames: Vec::new(),
+        caret_handoff: None,
+        visual_affected_byte_range_old: None,
+        visual_affected_byte_range_new: None,
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: Some(CompositionCommitCrossfadeSpec {
+            preedit_byte_start: preedit.0,
+            preedit_byte_end: preedit.1,
+            candidate_byte_start: candidate.0,
+            candidate_byte_end: candidate.1,
+        }),
+    }
+}
+
+fn issue815_caret(x: f64, top: f64) -> CursorRect {
+    CursorRect {
+        x,
+        top,
+        bottom: top + 20.0,
+        baseline_y: top + 16.0,
+    }
+}
+
+/// 问题1：IME commit 的特殊 InsertReveal/DeleteConceal 必须和普通 Insert/Delete
+/// 一样成为 `CaretTrack`，而且必须带完整的 ingest 元数据。
+///
+/// 修复前这些 slice 走构造器默认值（`CaretPosition` + 三个 `None` 行序），
+/// `ingest_line_phase()` 永远退化成 `OnCurrentLine`，跨软换行时每一行都拿同一个
+/// caret.x 当"当前行"边界。
+#[test]
+fn issue815_review5_composition_slices_carry_full_ingest_metadata() {
+    // old = "abXX"（preedit 占第 2 行），new = "abXYZW"（候选跨第 2、3 行）
+    let old_snapshot =
+        make_multiline_snapshot("abXX", &[(0, 0, 2, 0.0, 20.0), (1, 2, 4, 20.0, 40.0)]);
+    let new_snapshot = make_multiline_snapshot(
+        "abXYZW",
+        &[
+            (0, 0, 2, 0.0, 20.0),
+            (1, 2, 4, 20.0, 40.0),
+            (2, 4, 6, 40.0, 60.0),
+        ],
+    );
+    let spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(0.0, 20.0),
+        issue815_caret(20.0, 40.0),
+        Some(1),
+        Some(2),
+        20.0,
+        40.0,
+        40.0,
+        60.0,
+        (2, 4),
+        (2, 6),
+    );
+    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+
+    let ingest_units: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| {
+            u.slice.kind == AnimatedSliceKind::InsertReveal
+                || u.slice.kind == AnimatedSliceKind::DeleteConceal
+        })
+        .collect();
+    assert!(
+        !ingest_units.is_empty(),
+        "IME commit 必须同时产出吞字与吐字切片"
+    );
+    for unit in &ingest_units {
+        assert!(
+            unit.timing.is_caret_track(),
+            "Issue #815 评论 5947443780 问题1: 协同 composition 的 {:?} 必须也是 CaretTrack，\
+             实际 {:?}",
+            unit.slice.kind,
+            unit.timing
+        );
+        assert!(
+            unit.slice.ingest_line_ord.is_some()
+                && unit.slice.ingest_from_line_ord.is_some()
+                && unit.slice.ingest_to_line_ord.is_some(),
+            "Issue #815 评论 5947443780 问题1: {:?} 必须带完整 ingest 行序元数据，\
+             实际 line_ord={:?} from={:?} to={:?}",
+            unit.slice.kind,
+            unit.slice.ingest_line_ord,
+            unit.slice.ingest_from_line_ord,
+            unit.slice.ingest_to_line_ord
+        );
+    }
+
+    // 吐字：起点 = candidate_byte_start=2 在 new 的行序；终点 = new caret 行序。
+    // 锚点行（is_caret_line）必须是**起点行**，不是 new caret 所在行。
+    let reveal: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
+        .collect();
+    assert!(!reveal.is_empty(), "必须有吐字切片");
+    for unit in &reveal {
+        assert_eq!(
+            unit.slice.ingest_from_line_ord,
+            Some(1),
+            "new snapshot 里 candidate_byte_start=2 落在第 2 行（ordinal 1）"
+        );
+        assert_eq!(
+            unit.slice.ingest_to_line_ord,
+            Some(2),
+            "new snapshot 里 new cursor 行序应为 2"
+        );
+        assert_eq!(
+            unit.slice.ingest_boundary_driver,
+            IngestBoundaryDriver::CaretPosition,
+            "吐字边界就是本帧真实 caret.x"
+        );
+        assert_eq!(
+            unit.slice.is_caret_line,
+            unit.slice.ingest_from_line_ord == unit.slice.ingest_line_ord,
+            "吐字锚点行必须是吞吐起点行，不是 new caret 所在行"
+        );
+    }
+
+    // 吞字：起点 = old caret 行序；终点 = preedit_byte_start=2 在 old 的行序。
+    // 锚点行（is_caret_line）必须是**终点行**，不是 old caret 所在行。
+    let conceal: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
+        .collect();
+    assert!(!conceal.is_empty(), "必须有吞字切片");
+    for unit in &conceal {
+        assert_eq!(
+            unit.slice.ingest_from_line_ord,
+            Some(1),
+            "old snapshot 里 old caret 行序应为 1"
+        );
+        assert_eq!(
+            unit.slice.ingest_to_line_ord,
+            Some(1),
+            "old snapshot 里 preedit_byte_start=2 落在第 2 行（ordinal 1）"
+        );
+        assert_eq!(
+            unit.slice.is_caret_line,
+            unit.slice.ingest_to_line_ord == unit.slice.ingest_line_ord,
+            "吞字锚点行必须是吞吐终点行，不是 old caret 所在行"
+        );
+    }
+}
+
+/// 问题2 之一：多行候选的吐字必须是「新 line 先吐完、下一行再跟着当前 caret」。
+#[test]
+fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
+    let old_snapshot = make_multiline_snapshot("ab", &[(0, 0, 2, 0.0, 20.0)]);
+    // 候选 "XYZ" 软换行到第 2 行：new line1 = "ab"，new line2 = "XYZ"
+    let new_snapshot =
+        make_multiline_snapshot("abXYZ", &[(0, 0, 2, 0.0, 20.0), (1, 2, 5, 20.0, 40.0)]);
+    let spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(20.0, 0.0),
+        issue815_caret(30.0, 20.0),
+        Some(0),
+        Some(1),
+        0.0,
+        20.0,
+        20.0,
+        40.0,
+        (2, 2),
+        (2, 5),
+    );
+    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+
+    let line1: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| {
+            u.slice.kind == AnimatedSliceKind::InsertReveal && u.slice.ingest_line_ord == Some(0)
+        })
+        .collect();
+    let line2: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| {
+            u.slice.kind == AnimatedSliceKind::InsertReveal && u.slice.ingest_line_ord == Some(1)
+        })
+        .collect();
+    if line1.is_empty() {
+        // 候选只落在第 2 行时第 1 行不会有吐字切片，只测第 2 行。
+        assert!(!line2.is_empty(), "候选必须落在第 2 行");
+        return;
+    }
+    assert!(!line2.is_empty(), "候选跨行时第 2 行也必须有吐字切片");
+
+    // 边界行序 = 0 + (1 - 0) * progress。progress 0.75 ⇒ 边界已越过 line1。
+    let l1_mid = line1[0].slice.compute_frame_by_caret_ingest(0.0, 0.75);
+    assert!(
+        l1_mid.w > 0.0,
+        "边界越过新 line 1 后它必须已完整吐出，实际 w={}",
+        l1_mid.w
+    );
+    // 同一帧下 line2 还在被 caret 扫过：给一个刚到行首的 caret.x，它应几乎为 0。
+    let l2_mid = line2[0].slice.compute_frame_by_caret_ingest(0.0, 0.75);
+    assert!(
+        l2_mid.w.abs() < 0.5,
+        "caret 还在新 line 2 行首时，line 2 不该提前吐出，实际 w={}",
+        l2_mid.w
+    );
+    // 终帧：caret 走完，两行都完整。
+    let l1_end = line1[0].slice.compute_frame_by_caret_ingest(30.0, 1.0);
+    let l2_end = line2[0].slice.compute_frame_by_caret_ingest(30.0, 1.0);
+    assert!(
+        l1_end.w > 0.0 && l2_end.w > 0.0,
+        "终帧两行都必须完整：line1 w={} line2 w={}",
+        l1_end.w,
+        l2_end.w
+    );
+}
+
+/// 问题2 之二：多行旧 preedit 的跨行吞字（Backspace 方向 1→0），
+/// 已经走过的旧行在末帧必须全隐。
+#[test]
+fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
+    // old = "abcdEF"，preedit 覆盖第 2 行（[4,6)）；old caret 在第 2 行末尾。
+    let old_snapshot =
+        make_multiline_snapshot("abcdEF", &[(0, 0, 4, 0.0, 20.0), (1, 4, 6, 20.0, 40.0)]);
+    // new = "abcd"，preedit 被替换成第 1 行末尾的候选（单行）。
+    let new_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
+    let spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(20.0, 20.0),
+        issue815_caret(20.0, 0.0),
+        Some(1),
+        Some(0),
+        20.0,
+        40.0,
+        0.0,
+        20.0,
+        (4, 5),
+        (3, 4),
+    );
+    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+
+    let conceals: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
+        .collect();
+    assert!(!conceals.is_empty(), "旧 preedit 必须产生吞字切片");
+    let slice = &conceals[0].slice;
+    assert_eq!(slice.ingest_from_line_ord, Some(1), "起点 = old caret 行");
+    assert_eq!(
+        slice.ingest_to_line_ord,
+        Some(1),
+        "终点 = preedit_byte_start 所在行"
+    );
+
+    // 单行吞字（from == to）由本帧 caret.x 直接驱动，方向无关。
+    let at_end = slice.compute_frame_by_caret_ingest(20.0, 1.0);
+    assert!(
+        at_end.w.abs() < 0.5,
+        "caret 到达最终位置后旧 preedit 必须全隐，实际 w={}",
+        at_end.w
+    );
+}
+
+/// 问题2 之三：composition 的前删方向吞字必须拿到 `DeleteForwardBoundary`
+/// 及其 `ingest_boundary_from_x`，不能留 `CaretPosition` 默认值让静止 caret
+/// 把首帧裁成 0 宽。
+#[test]
+fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
+    // 被替换的旧字符占 x∈[0,10)，caret 落在 x=0（左侧）⇒ 前删方向，
+    // `conceal_to_left_edge = (0-10).abs() <= (0-0).abs()` = false。
+    let old_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
+    let new_snapshot = make_multiline_snapshot("abXd", &[(0, 0, 4, 0.0, 20.0)]);
+    let spec = issue815_composition_spec(
+        old_snapshot,
+        new_snapshot,
+        issue815_caret(0.0, 0.0),
+        issue815_caret(0.0, 0.0),
+        Some(0),
+        Some(0),
+        0.0,
+        20.0,
+        0.0,
+        20.0,
+        (2, 3),
+        (2, 3),
+    );
+    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+
+    let conceals: Vec<_> = tx
+        .units
+        .iter()
+        .filter(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
+        .collect();
+    assert!(!conceals.is_empty(), "旧 preedit 必须产生吞字切片");
+    for unit in &conceals {
+        assert_eq!(
+            unit.slice.ingest_boundary_driver,
+            IngestBoundaryDriver::DeleteForwardBoundary,
+            "Issue #815 评论 5947443780 问题1: 前删方向的 composition 吞字必须用 \
+             DeleteForwardBoundary，实际 {:?}",
+            unit.slice.ingest_boundary_driver
+        );
+        assert!(
+            unit.slice.ingest_boundary_from_x.is_some(),
+            "Issue #815 评论 5947443780 问题1: DeleteForwardBoundary 必须写入被移除区间的\
+             右端作为收拢起点，不能留 None（否则会退回 line_mask_right 猜测）"
+        );
+        // 首帧必须完整显示旧字，不能是 0 宽（静止 caret 的经典 bug）。
+        let first = unit.slice.compute_frame_by_caret_ingest(0.0, 0.0);
+        assert!(
+            first.w > 0.0,
+            "前删首帧必须显示完整旧字，实际 w={}",
+            first.w
+        );
+        // 末帧必须完全吞掉。
+        let last = unit.slice.compute_frame_by_caret_ingest(0.0, 1.0);
+        assert!(
+            last.w.abs() < 0.5,
+            "前删末帧必须完全吞掉旧字，实际 w={}",
+            last.w
+        );
     }
 }

@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::sujian_editor_item::animated_slice::IngestBoundaryDriver;
+use crate::sujian_editor_item::layout_snapshot::PreparedLineSnapshot;
 
 struct ReflowClusterRef {
     line_idx: usize,
@@ -675,6 +676,28 @@ pub(crate) fn build_cluster_reflow_slices(
 /// - new 未匹配 → InsertReveal（从 old cursor 位置吐出）
 /// - new 匹配但 shaping 不同 → ReflowCrossFadeNew
 /// - new 匹配且同 shaping 但几何不同 → ReflowMove
+///
+/// Issue #815 评论 5947443780 问题1: old 快照某一视觉行上，被 preedit 移除的区间
+/// 最靠右的文档 x（右端）。
+///
+/// `DeleteForwardBoundary` 的吞字边界从「被删区间右端」朝静止 caret 收拢，
+/// 起点必须按**本行**算，不能留 `None`（那会退化成用行级 mask 右端当起点）。
+/// 跨软换行时每一行的起点不同，逐行重算是必须的。
+fn old_line_removed_right_edge(
+    line: &PreparedLineSnapshot,
+    byte_start: usize,
+    byte_end: usize,
+) -> Option<f64> {
+    line.clusters_in_byte_range(byte_start, byte_end)
+        .iter()
+        .filter_map(|cluster| line.source_rect_for_byte_range(cluster.byte_start, cluster.byte_end))
+        .map(|sr| {
+            let doc = line.source_rect_to_document_rect(&sr);
+            doc.x + doc.w
+        })
+        .reduce(f64::max)
+}
+
 pub(crate) fn build_composition_commit_crossfade_slices(
     key: VisualTransactionKey,
     old_snapshot: &EditorLayoutSnapshot,
@@ -703,7 +726,28 @@ pub(crate) fn build_composition_commit_crossfade_slices(
     let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
+    // Issue #815 评论 5947443780 问题1: IME commit 的特殊 crossfade 也必须带上完整的
+    // caret 驱动吞吐元数据，不能停在 #808 的「半旧实现」。
+    //
+    // 这四个行序端点全部取自**同一侧** canonical：
+    // - old / DeleteConceal：起点 = old caret 行，终点 = preedit 被移除区所在行；
+    // - new / InsertReveal：起点 = 候选字所在行，终点 = new caret 行。
+    //
+    // 不写这四个字段时，`ingest_line_phase()` 会因为行序全 None 永远退化成
+    // `OnCurrentLine`：跨软换行的 IME 上屏会给每一行都套同一个 `caret.x` 当
+    // "当前行"，已经走过的行不会全显/全隐、没走到的行也不会保持初态。
+    let old_ingest_from_line_ord =
+        line_ordinal_for_visual_line_id(old_snapshot, old_cursor_visual_line_id);
+    let old_ingest_to_line_ord = line_ordinal_for_byte(old_snapshot, preedit_byte_start);
+    let new_ingest_from_line_ord = line_ordinal_for_byte(new_snapshot, candidate_byte_start);
+    let new_ingest_to_line_ord =
+        line_ordinal_for_visual_line_id(new_snapshot, new_cursor_visual_line_id);
+
     for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
+        // 行序必须取**快照内**的行下标，不能用过滤后 Vec 的 enumerate：
+        // `lines_in_byte_range` 返回的是过滤结果，它的下标不是 canonical 行序。
+        let old_line_ord =
+            line_ordinal_for_visual_line_id(old_snapshot, Some(old_line.visual_line_id));
         for old_cluster in old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end) {
             let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
             let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
@@ -728,16 +772,19 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     let left = from_doc.x;
                     let right = from_doc.x + from_doc.w;
                     let conceal_to_left_edge = (shrink_x - right).abs() <= (shrink_x - left).abs();
-                    // Issue #808 评论 5917296533 问题4: 按 coordinated 和 visual_line_id
-                    // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
-                    // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
-                    //
-                    // Issue #815 评论 5947230558 问题1: 这一侧是 **old** 快照的行，
-                    // 只能和 **old** 侧的 caret line id 比。两侧 row id 每次 canonical
-                    // 排版都从 0 重新编号，跨 revision 比大小会把锚点放到错的行上。
-                    let is_caret_line = coordinated
-                        && old_cursor_visual_line_id
-                            .is_none_or(|cid| old_line.visual_line_id == cid);
+                    // Issue #815 评论 5947443780 问题1: 锚点行取**吞字终点**行
+                    // （preedit 被移除区所在行），不是 old caret 所在行——old caret 是
+                    // Delete 的运动起点，InsertReveal/DeleteConceal 的锚点分别是
+                    // 吐字起点与吞字终点。这与 `build_delete_conceal_slices` 同口径。
+                    let is_caret_line = coordinated && old_ingest_to_line_ord == old_line_ord;
+                    // Issue #815 评论 5947443780 问题1: Delete 键方向（caret 固定在
+                    // 被删文字左侧）必须给 `DeleteForwardBoundary`，否则静止 caret 会让
+                    // 首帧裁切宽度就是 0，吞字动画直接消失。与普通 Delete 同口径。
+                    let ingest_boundary_driver = if conceal_to_left_edge {
+                        IngestBoundaryDriver::CaretPosition
+                    } else {
+                        IngestBoundaryDriver::DeleteForwardBoundary
+                    };
                     let mut slice = AnimatedSlice::delete_conceal(
                         key,
                         old_line.id,
@@ -753,6 +800,20 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                         Some(old_line.visual_line_id),
                     );
                     slice.is_caret_line = is_caret_line;
+                    slice.ingest_boundary_driver = ingest_boundary_driver;
+                    slice.ingest_line_ord = old_line_ord;
+                    slice.ingest_from_line_ord = old_ingest_from_line_ord;
+                    slice.ingest_to_line_ord = old_ingest_to_line_ord;
+                    if ingest_boundary_driver == IngestBoundaryDriver::DeleteForwardBoundary {
+                        // Issue #815 评论 5947443780 问题1: forward 方向的起点必须是
+                        // old 快照**本行**被移除区的右端，不能留 None（那会退化成
+                        // 用本行 mask 右端当起点）。
+                        slice.ingest_boundary_from_x = old_line_removed_right_edge(
+                            old_line,
+                            preedit_byte_start,
+                            preedit_byte_end,
+                        );
+                    }
                     slices.push(slice);
                 }
             } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -803,6 +864,8 @@ pub(crate) fn build_composition_commit_crossfade_slices(
     }
 
     for new_line in new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end) {
+        let new_line_ord =
+            line_ordinal_for_visual_line_id(new_snapshot, Some(new_line.visual_line_id));
         for new_cluster in new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end)
         {
             let mapped_old_bs = offset_map.map_new_to_old(new_cluster.byte_start);
@@ -822,15 +885,11 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                 {
                     let to_doc = new_line.source_rect_to_document_rect(&new_sr);
                     let to_doc_for_hide = to_doc.clone();
-                    // Issue #808 评论 5917296533 问题4: 按 coordinated 和 visual_line_id
-                    // 决定遮罩锚点。coordinated=false 时 is_caret_line=false（独立文字动画）；
-                    // coordinated=true 且本行是 caret 所在行时 is_caret_line=true。
-                    //
-                    // Issue #815 评论 5947230558 问题1: 这一侧是 **new** 快照的行，
-                    // 只能和 **new** 侧的 caret line id 比。
-                    let is_caret_line = coordinated
-                        && new_cursor_visual_line_id
-                            .is_none_or(|cid| new_line.visual_line_id == cid);
+                    // Issue #815 评论 5947443780 问题1: 锚点行取**吐字起点**行
+                    // （候选字所在行），不是 new caret 所在行——new caret 是吐字终点，
+                    // 而 InsertReveal 的锚点是吐字起点。这与 `build_insert_reveal_slices`
+                    // 同口径，且不再拿 new caret 的行去当锚点行。
+                    let is_caret_line = coordinated && new_ingest_from_line_ord == new_line_ord;
                     let mut reveal_slice = AnimatedSlice::insert_reveal(
                         key,
                         new_line.id,
@@ -846,6 +905,12 @@ pub(crate) fn build_composition_commit_crossfade_slices(
                     );
                     reveal_slice.is_caret_line = is_caret_line;
                     reveal_slice.static_hidden_document_rects = vec![to_doc_for_hide];
+                    // Issue #815 评论 5947443780 问题1: IME 上屏的吐字边界就是本帧
+                    // 真实 caret.x，不需要像 Delete 键那样另找收拢起点。
+                    reveal_slice.ingest_boundary_driver = IngestBoundaryDriver::CaretPosition;
+                    reveal_slice.ingest_line_ord = new_line_ord;
+                    reveal_slice.ingest_from_line_ord = new_ingest_from_line_ord;
+                    reveal_slice.ingest_to_line_ord = new_ingest_to_line_ord;
                     slices.push(reveal_slice);
                 }
             } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {

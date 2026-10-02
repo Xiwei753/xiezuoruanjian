@@ -403,6 +403,132 @@ fn issue815_review3_retired_ingest_emits_no_glyph_and_clip_is_per_unit() {
 }
 
 // =========================================================================
+// 复核评论 5947443780 问题1：IME commit 特殊 crossfade 必须带完整 ingest 元数据
+// =========================================================================
+
+/// 复核评论 5947443780 问题1。
+///
+/// `build_composition_commit_crossfade_slices()` 之前只写 `is_caret_line`，5 个
+/// ingest 元数据字段全是构造器默认值，`ingest_line_phase()` 永远退化成
+/// `OnCurrentLine` —— 跨软换行时每一行都拿同一个 caret.x 当"当前行"边界。
+#[test]
+fn issue815_review5_composition_crossfade_carries_ingest_metadata() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder/slices.rs");
+    let window = function_window(
+        &src,
+        "pub(crate) fn build_composition_commit_crossfade_slices",
+        13000,
+    );
+
+    for endpoint in [
+        "old_ingest_from_line_ord",
+        "old_ingest_to_line_ord",
+        "new_ingest_from_line_ord",
+        "new_ingest_to_line_ord",
+    ] {
+        assert!(
+            window.contains(endpoint),
+            "Issue #815 评论 5947443780 问题1: composition crossfade 必须在各自 snapshot 内\
+             建立吞吐路径两端（{}），否则 ingest_line_phase 永远退化成 OnCurrentLine。",
+            endpoint
+        );
+    }
+    for field in [
+        "ingest_line_ord",
+        "ingest_from_line_ord",
+        "ingest_to_line_ord",
+        "ingest_boundary_driver",
+    ] {
+        assert!(
+            window.contains(field),
+            "Issue #815 评论 5947443780 问题1: composition 切片必须写入 {}，\
+             否则协同下被当成 CaretTrack 却没有同侧行序可判跨行。",
+            field
+        );
+    }
+    assert!(
+        window.contains("old_line_removed_right_edge"),
+        "Issue #815 评论 5947443780 问题1: 前删方向的 composition 吞字必须写入 \
+         ingest_boundary_from_x（旧快照当前行被移除区间的右端），不能留 None。"
+    );
+
+    // 旧的跨 snapshot 锚点选择必须彻底消失。
+    for banned in [
+        "old_cursor_visual_line_id.is_none_or(|cid| old_line.visual_line_id == cid)",
+        "new_cursor_visual_line_id.is_none_or(|cid| new_line.visual_line_id == cid)",
+    ] {
+        assert!(
+            !window.contains(banned),
+            "Issue #815 评论 5947443780 问题1: 不得再用另一侧 line id 选锚点行（{}）。\
+             吐字锚点 = 吞吐起点行，吞字锚点 = 吞吐终点行，都在本侧 snapshot 内算出。",
+            banned
+        );
+    }
+    // 锚点行必须绑到 ingest 端点行序，而不是 caret 所在行。
+    assert!(
+        window.contains("old_ingest_to_line_ord == old_line_ord"),
+        "Issue #815 评论 5947443780 问题1: 吞字锚点行必须是吞吐终点行序。"
+    );
+    assert!(
+        window.contains("new_ingest_from_line_ord == new_line_ord"),
+        "Issue #815 评论 5947443780 问题1: 吐字锚点行必须是吞吐起点行序。"
+    );
+}
+
+// =========================================================================
+// 复核评论 5947443780 问题3：旧的「两条独立动画」定义必须清干净
+// =========================================================================
+
+/// 复核评论 5947443780 问题3。
+///
+/// 顶部注释还写着「吞吐字始终用 Timed timing」「文字 progress 不消费 caret
+/// frame」，与本轮实现（协同 InsertReveal/DeleteConceal 是 CaretTrack，
+/// 一次采样同时驱动文字与光标，Reflow 才是独立 Timed）矛盾。
+#[test]
+fn issue815_review5_stale_two_independent_timeline_wording_is_gone() {
+    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+
+    assert!(
+        src.contains("Issue #815 评论 5947443780 问题3"),
+        "Issue #815 评论 5947443780 问题3: 必须在 builder 顶部写下新的协同定义。"
+    );
+    assert!(
+        src.contains("一条 caret 运动轨迹")
+            && src.contains("以该轨迹当前帧为吞吐边界")
+            && src.contains("Reflow 可独立"),
+        "Issue #815 评论 5947443780 问题3: 必须写成「一条 caret 运动轨迹 + \
+         文字以该轨迹当前帧为吞吐边界 + Reflow 可独立」。"
+    );
+
+    // create_transaction_from_prepared_handoff 里那段旧定义也必须换掉。
+    let handoff = function_window(&src, "fn create_transaction_from_prepared_handoff", 12000);
+    assert!(
+        !handoff.contains("文字 progress 只来自文字 timeline"),
+        "Issue #815 评论 5947443780 问题3: create_transaction_from_prepared_handoff 里\
+         「文字 progress 只来自文字 timeline / 两条独立动画」的定义已被 #815 推翻，必须删掉。"
+    );
+    assert!(
+        !handoff.contains("同时拥有文字和光标两条轨迹"),
+        "Issue #815 评论 5947443780 问题3: 「同时拥有文字和光标两条轨迹」是 #815 之前的说法，\
+         必须换成「吞吐字是 CaretTrack，边界来自 cursor track 当前帧」。"
+    );
+    // 仍然成立的部分要留下：协同必须要求有效 caret motion。
+    assert!(
+        handoff.contains("有效 caret motion"),
+        "Issue #815 评论 5947443780 问题3: 要保留「协同要求有效 caret motion」这句——\
+         没有 track 就没有吞吐边界来源，协同事务必须拒绝而不是退化成文字自己播。"
+    );
+
+    // edit_spec.rs 里的字段文档同样不能留旧定义。
+    let spec_src = read_src("src/sujian_editor_item/animation/transaction_builder/edit_spec.rs");
+    assert!(
+        !spec_src.contains("三种语义彻底分开"),
+        "Issue #815 评论 5947443780 问题3: edit_spec.rs 的 coordinated_animation_enabled \
+         字段文档还写着「三种语义彻底分开」，是 #815 之前的定义，必须删掉。"
+    );
+}
+
+// =========================================================================
 // 修改点 6：每帧每事务只采样一次，完成条件两类分开
 // =========================================================================
 

@@ -57,10 +57,13 @@ pub(crate) struct VisualEditSpec {
     pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
     pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
     /// Issue #756 评论 5821042551: 文字 unit（InsertReveal/DeleteConceal/Reflow）的时长。
-    /// Issue #808: 文字始终拥有独立 timeline，协同时也不再共享。
+    /// Issue #815 评论 5947443780: 协同时只有 ReflowMove/ReflowCrossFade 用这个值走
+    /// 独立 `Timed`；协同 InsertReveal/DeleteConceal 是 `CaretTrack`，逐帧边界来自
+    /// cursor track 的当前帧，不用这个时长。
     pub(crate) text_duration_ms: u64,
     /// Issue #756 评论 5821042551: cursor visual track 的时长。
-    /// Issue #808: 光标始终拥有独立 timeline，协同时也不再共享。
+    /// Issue #815 评论 5947443780: 协同动画里这条 track 是唯一运动事实源，
+    /// 文字吞吐层与光标层消费同一次采样。
     pub(crate) caret_duration_ms: u64,
     /// Issue #756: 文字动画开关（ReflowMove/ReflowCrossFade + InsertReveal/DeleteConceal）。
     /// coordinated=true 或 typing_animation_enabled=true 时为 true。
@@ -68,13 +71,16 @@ pub(crate) struct VisualEditSpec {
     /// Issue #756: 光标动画开关（caret motion track）。
     /// coordinated=true 或 smooth_cursor_enabled=true 时为 true。
     pub(crate) caret_animation_enabled: bool,
-    /// Issue #756: 协同动画显式模式。决定吞吐字（InsertReveal/DeleteConceal）的遮罩
-    /// 锚点是否取自 caret 位置。Issue #808 后协同不再把文字与光标绑死：
-    /// - coordinated=true：吞吐字遮罩从 caret 位置展开/收拢（视觉上从光标处吐出/被光标吞进），
-    ///   但文字动画按自己的 timeline + easing 推进，不消费 caret frame。
-    /// - coordinated=false：吞吐字用 typing timeline 自己推进，遮罩锚点取默认值。
+    /// Issue #756: 协同动画显式模式。
     ///
-    /// 三种语义彻底分开：文字动画、光标动画、协同动画（遮罩锚点选择）。
+    /// Issue #815 评论 5947443780: 协同模式 = 一条 caret 运动轨迹 +
+    /// 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。
+    /// - coordinated=true：InsertReveal/DeleteConceal 一律是 `CaretTrack`，没有自己的
+    ///   progress；逐帧吞吐边界直接取本事务 cursor track 当前帧的 caret.x。吞字另有
+    ///   `DeleteForwardBoundary`（前删时真实 caret 不动，边界自己朝它收拢）。
+    /// - coordinated=false：InsertReveal/DeleteConceal 退回独立 `Timed`，按
+    ///   typing_animation_enabled 自己推进。
+    /// - ReflowMove/ReflowCrossFade 始终独立 `Timed`，两种模式下都不被接管。
     pub(crate) coordinated_animation_enabled: bool,
     pub(crate) composition_commit_crossfade: Option<CompositionCommitCrossfadeSpec>,
 }
