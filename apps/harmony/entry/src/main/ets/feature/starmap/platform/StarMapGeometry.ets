@@ -81,6 +81,100 @@ export const MAX_RECURSE_SCENE_DEPTH: number = 32
 export const EMBED_TITLE_HIT_HEIGHT: number = 24
 export const EMBED_BORDER_HIT_WIDTH: number = 12
 
+/** Embed 选择热区换算到某 Scene 画布坐标后的结果（#818 复审）。 */
+export interface EmbedHitMetrics {
+  /** 顶部标题带高度（本 Scene 画布坐标） */
+  titleHitHeight: number
+  /** 外圈圆环宽度（本 Scene 画布坐标） */
+  borderHitWidth: number
+}
+
+/**
+ * 把屏幕侧的 Embed 选择热区规格换算成某个 Scene 画布坐标下的宽度。
+ *
+ * #818 复审发现的错位：24 / 12 是**手指在屏幕上**能点到的尺寸，
+ * 但 `viewportScaleValue()` 已经把本层 local fit 乘了进去，深一层再乘一层，
+ * 于是"视觉圆变小"的同时"可点的标题 / 圆环"也跟着缩成几 vp，
+ * 到子子星图时 #373 的"点文字 / 边框选中子星图"事实上已经不可操作。
+ *
+ * 画布坐标 = 屏幕坐标 / 本 Scene 累计比例，所以换算就是除一次；
+ * 同时上限卡在半径，避免本层比例极小时热区反过来吃掉整个 innerContent。
+ *
+ * 真实触摸分流（ui/StarMapScene 的 onTouchIntercept）和递归命中
+ * （resolveRecursiveHit → hitTestWithScene）必须都调这一个函数，
+ * 不允许一处自己乘 scale、另一处拿 24 / 12 当画布常量（#818 复审）。
+ *
+ * @param sceneScale 本 Scene 的累计有效比例（根 = camera，子 = camera × fit₁ × …）
+ * @param embedRadius 本 Scene 画布坐标下 Embed 圆的半径
+ * @returns 画布坐标下的标题带高度与圆环宽度
+ */
+export function embedHitMetricsForScene(sceneScale: number, embedRadius: number): EmbedHitMetrics {
+  const scale: number = sceneScale > 0 ? sceneScale : 1
+  const limit: number = embedRadius > 0 ? embedRadius : 0
+  return {
+    titleHitHeight: Math.min(limit, EMBED_TITLE_HIT_HEIGHT / scale),
+    borderHitWidth: Math.min(limit, EMBED_BORDER_HIT_WIDTH / scale)
+  }
+}
+
+/**
+ * Embed 壳上那个承载 child Scene 的输入节点的稳定 id 前缀（#818 复审）。
+ *
+ * `onChildTouchTest` 只看得到**显式设了 .id() 的命名节点**，所以递归 Scene 必须靠这个
+ * 稳定 id 才能被父级的父级分发事件时明确指认，而不是退回 Stack 默认命中顺序。
+ */
+export const EMBED_INPUT_NODE_ID_PREFIX: string = 'starmap_embed_input_'
+
+/**
+ * 某个 Scene 画布里某个 Embed 壳的稳定输入节点 id。
+ *
+ * 必须带 scenePath：同一颗 Embed instanceId 会在每一层父图里各出现一次，
+ * 只用 instanceId 会重名，父级就分不清自己该转发给哪一层。
+ *
+ * @param scenePath 该 Embed 所属 Scene 的路径
+ * @param embedInstanceId 该 Embed 的 instanceId
+ * @returns 稳定输入节点 id
+ */
+export function describeEmbedInputNodeId(
+  scenePath: StarMapPathSegment[],
+  embedInstanceId: string
+): string {
+  return `${EMBED_INPUT_NODE_ID_PREFIX}${describeScenePath(scenePath)}_${embedInstanceId}`
+}
+
+/** 判断一个节点 id 是不是 Embed 输入节点（父级 onChildTouchTest 只转发这类）。 */
+export function isEmbedInputNodeId(nodeId: string): boolean {
+  return nodeId.indexOf(EMBED_INPUT_NODE_ID_PREFIX) === 0
+}
+
+/**
+ * 某个 Scene 自己（不是它内部的 Embed 壳）的稳定输入节点 id。
+ *
+ * 根 Scene 也会拿到一个（`..._root`）；子 Scene 的 id 就是父层那颗 Embed 壳的 id，
+ * 于是"父级要指名发给当前 child"这件事有唯一可查的名字，不再依赖 Stack 默认命中顺序。
+ */
+export function describeSceneInputNodeId(scenePath: StarMapPathSegment[]): string {
+  return `${EMBED_INPUT_NODE_ID_PREFIX}${describeScenePath(scenePath)}`
+}
+
+/**
+ * 从输入节点 id 里取回 instanceId；不是本 Scene 的 Embed 输入节点时返回 null。
+ *
+ * 父级 onChildTouchTest 拿到的是一串命名节点，只有知道它是哪颗 Embed，
+ * 才能算出该往这颗圆的标题带 / 圆环 / 内部继续分发（#818 复审）。
+ */
+export function extractEmbedInstanceIdFromInputNodeId(
+  scenePath: StarMapPathSegment[],
+  nodeId: string
+): string | null {
+  const prefix: string = `${EMBED_INPUT_NODE_ID_PREFIX}${describeScenePath(scenePath)}_`
+  if (nodeId.indexOf(prefix) !== 0) {
+    return null
+  }
+  const instanceId: string = nodeId.substring(prefix.length)
+  return instanceId.length > 0 ? instanceId : null
+}
+
 // ─── 节点矩形派生 ───
 
 /**
@@ -153,8 +247,10 @@ export function pointInEmbedCircle(rect: PlatformNodeRect, x: number, y: number)
  *
  * Embed 是正圆，所以命中判断先走圆：(x-cx)^2 + (y-cy)^2 <= r^2，不在圆内直接跳过该 Embed。
  * 圆内再区分：
- * - title（顶部 EMBED_TITLE_HIT_HEIGHT 高度区域）→ objectKind='embedTitle'，表示"选中 Embed"
- * - border（半径方向最后 EMBED_BORDER_HIT_WIDTH 的圆环）→ objectKind='embedBorder'，表示"选中 Embed"
+ * - title（顶部标题带）→ objectKind='embedTitle'，表示"选中 Embed"
+ * - border（半径方向最外侧的圆环）→ objectKind='embedBorder'，表示"选中 Embed"
+ *   标题带与圆环的屏幕侧规格固定是 EMBED_TITLE_HIT_HEIGHT / EMBED_BORDER_HIT_WIDTH，
+ *   由 embedHitMetricsForScene 按本 Scene 累计比例换算成画布坐标（#818 复审）
  * - innerContent（其余圆内区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
  *
  * @param rects 节点矩形列表
@@ -162,6 +258,8 @@ export function pointInEmbedCircle(rect: PlatformNodeRect, x: number, y: number)
  * @param screenY 屏幕 Y 坐标
  * @param scenePath 当前 scene 的路径段（从根星图到当前 scene 的穿越路径）
  * @param embedInstanceIds Embed 实例 ID 集合，用于区分 rect 是普通节点还是 Embed
+ * @param sceneScale 当前 scene 的累计有效比例；热区按它换算成画布坐标，
+ *        保证"手指在屏幕上能点到的宽度"不随递归深度缩水（#818 复审）
  * @returns 命中测试结果，或 null
  */
 export function hitTestWithScene(
@@ -169,7 +267,8 @@ export function hitTestWithScene(
   screenX: number,
   screenY: number,
   scenePath: StarMapPathSegment[],
-  embedInstanceIds: Set<string>
+  embedInstanceIds: Set<string>,
+  sceneScale: number
 ): HitTestResult | null {
   // 从后往前遍历：后绘制的节点在上层，优先命中
   for (let i = rects.length - 1; i >= 0; i--) {
@@ -182,8 +281,12 @@ export function hitTestWithScene(
         continue
       }
 
-      // title 区域：圆内顶部 EMBED_TITLE_HIT_HEIGHT 高度
-      if (screenY <= r.y + EMBED_TITLE_HIT_HEIGHT) {
+      // 屏幕侧的 24 / 12 换算成本 Scene 画布坐标下的宽度（#818 复审）：
+      // 不换算的话每深一层就再乘一次 local fit，可点宽度会缩到几 vp。
+      const metrics: EmbedHitMetrics = embedHitMetricsForScene(sceneScale, r.width / 2)
+
+      // title 区域：圆内顶部 metrics.titleHitHeight 高度
+      if (screenY <= r.y + metrics.titleHitHeight) {
         return {
           scenePath: scenePath,
           objectKind: 'embedTitle',
@@ -192,11 +295,11 @@ export function hitTestWithScene(
         }
       }
 
-      // border 区域：圆心到命中点距离落在最外侧 EMBED_BORDER_HIT_WIDTH 宽度的圆环内
+      // border 区域：圆心到命中点距离落在最外侧 metrics.borderHitWidth 宽度的圆环内
       const cx: number = r.x + r.width / 2
       const cy: number = r.y + r.height / 2
       const outer: number = r.width / 2
-      const inner: number = Math.max(0, outer - EMBED_BORDER_HIT_WIDTH)
+      const inner: number = Math.max(0, outer - metrics.borderHitWidth)
       const dx: number = screenX - cx
       const dy: number = screenY - cy
       const dist: number = Math.sqrt(dx * dx + dy * dy)
@@ -1162,8 +1265,11 @@ export function resolveRecursiveHit(
     const canvasPoint: PlatformPoint = screenToCanvas(
       localX, localY, current.scale, current.offsetX, current.offsetY
     )
+    // sceneScale 传当前层的累计比例：热区 24 / 12 是屏幕侧规格，
+    // 不按本层比例换算的话，子子星图的可点标题 / 圆环会缩成几 vp（#818 复审）。
     const hit: HitTestResult | null = hitTestWithScene(
-      current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds
+      current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds,
+      current.scale
     )
 
     if (hit === null) {

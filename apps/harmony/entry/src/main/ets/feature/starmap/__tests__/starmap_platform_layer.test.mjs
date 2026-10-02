@@ -220,18 +220,28 @@ function pointInEmbedCircle(rect, x, y) {
 // ── 被测规格：hitTestWithScene (StarMapGeometry.ets) ──
 // Embed 是正圆：先做圆内判断，不在圆内跳过该 Embed（继续看更下层 rect）；
 // 圆内再按顶部 title 条 / 最外侧圆环 border / 其余 innerContent 区分。
-function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds) {
+function embedHitMetricsForScene(sceneScale, embedRadius) {
+  const scale = sceneScale > 0 ? sceneScale : 1
+  const limit = embedRadius > 0 ? embedRadius : 0
+  return {
+    titleHitHeight: Math.min(limit, EMBED_TITLE_HIT_HEIGHT / scale),
+    borderHitWidth: Math.min(limit, EMBED_BORDER_HIT_WIDTH / scale)
+  }
+}
+
+function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds, sceneScale) {
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]
     const isEmbed = embedInstanceIds.has(r.nodeId)
     if (isEmbed) {
       if (!pointInEmbedCircle(r, screenX, screenY)) continue
-      if (screenY <= r.y + EMBED_TITLE_HIT_HEIGHT) {
+      const metrics = embedHitMetricsForScene(sceneScale, r.width / 2)
+      if (screenY <= r.y + metrics.titleHitHeight) {
         return { scenePath, objectKind: 'embedTitle', objectId: r.nodeId, hitRegion: 'title' }
       }
       const cx = r.x + r.width / 2
       const cy = r.y + r.height / 2
-      const inner = Math.max(0, r.width / 2 - EMBED_BORDER_HIT_WIDTH)
+      const inner = Math.max(0, r.width / 2 - metrics.borderHitWidth)
       const dist = Math.sqrt((screenX - cx) * (screenX - cx) + (screenY - cy) * (screenY - cy))
       if (dist >= inner) {
         return { scenePath, objectKind: 'embedBorder', objectId: r.nodeId, hitRegion: 'border' }
@@ -620,7 +630,7 @@ console.log('9. hitTestWithScene：普通节点命中 → node/body')
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set()
-  const hit = hitTestWithScene(rects, 50, 40, scenePath, embedIds)
+  const hit = hitTestWithScene(rects, 50, 40, scenePath, embedIds, 1)
   assert(hit !== null, '命中节点返回非 null')
   assert(hit.objectKind === 'node', 'objectKind = node')
   assert(hit.hitRegion === 'body', 'hitRegion = body')
@@ -637,7 +647,7 @@ console.log('10. hitTestWithScene：Embed title 命中 → embedTitle/title')
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
   // title 区域：圆内顶部 EMBED_TITLE_HIT_HEIGHT(24) 高度，y ∈ [50, 74]
-  const hit = hitTestWithScene(rects, 200, 60, scenePath, embedIds)
+  const hit = hitTestWithScene(rects, 200, 60, scenePath, embedIds, 1)
   assert(hit !== null, '命中 Embed title 区域返回非 null')
   assert(hit.objectKind === 'embedTitle', 'objectKind = embedTitle')
   assert(hit.hitRegion === 'title', 'hitRegion = title')
@@ -654,24 +664,24 @@ console.log('11. hitTestWithScene：Embed 圆环 border 命中 → embedBorder/b
   const embedIds = new Set(['emb1'])
   // 圆环：到圆心距离 >= 半径 - EMBED_BORDER_HIT_WIDTH = 88
   // 正左：圆心正左 100 → 距离 100（圆周）
-  const hitLeft = hitTestWithScene(rects, 100, 150, scenePath, embedIds)
+  const hitLeft = hitTestWithScene(rects, 100, 150, scenePath, embedIds, 1)
   assert(hitLeft !== null && hitLeft.objectKind === 'embedBorder' && hitLeft.hitRegion === 'border',
     '圆周正左点 → embedBorder/border')
   // 正下：圆心正下 100 → 距离 100
-  const hitBottom = hitTestWithScene(rects, 200, 250, scenePath, embedIds)
+  const hitBottom = hitTestWithScene(rects, 200, 250, scenePath, embedIds, 1)
   assert(hitBottom !== null && hitBottom.objectKind === 'embedBorder' && hitBottom.hitRegion === 'border',
     '圆周正下点 → embedBorder/border')
   // 斜向圆环：圆心 + (70, 70) → 距离 ≈ 98.99，落在 [88, 100] 圆环内
-  const hitDiagonal = hitTestWithScene(rects, 270, 220, scenePath, embedIds)
+  const hitDiagonal = hitTestWithScene(rects, 270, 220, scenePath, embedIds, 1)
   assert(hitDiagonal !== null && hitDiagonal.objectKind === 'embedBorder' && hitDiagonal.hitRegion === 'border',
     '斜向圆周点 → embedBorder/border（不是矩形边）')
   // 交互热区 12vp：距离 89 的点（正好在内切圆环内侧一点）仍算边框，
   // 说明热区比视觉描边（1/3vp）宽得多，手指点得到
-  const hitInsideRing = hitTestWithScene(rects, 200, 239, scenePath, embedIds)
+  const hitInsideRing = hitTestWithScene(rects, 200, 239, scenePath, embedIds, 1)
   assert(hitInsideRing !== null && hitInsideRing.objectKind === 'embedBorder',
     '距离 89（圆环内侧）→ 仍是 embedBorder，交互热区 12vp 宽于视觉描边')
   // 圆环内切边界再往里一点：距离 87 已经是子图内部
-  const hitInnerEdge = hitTestWithScene(rects, 200, 237, scenePath, embedIds)
+  const hitInnerEdge = hitTestWithScene(rects, 200, 237, scenePath, embedIds, 1)
   assert(hitInnerEdge !== null && hitInnerEdge.objectKind === 'embedInnerContent',
     '距离 87（越过圆环内切）→ embedInnerContent')
 }
@@ -684,13 +694,13 @@ console.log('12. hitTestWithScene：圆外方形角不再命中 Embed')
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
   // 外接矩形的左上角 (100, 50) 离圆心 √(100²+100²) > 100，不在圆内
-  assert(hitTestWithScene(rects, 100, 50, scenePath, embedIds) === null,
+  assert(hitTestWithScene(rects, 100, 50, scenePath, embedIds, 1) === null,
     '正方形角（矩形内、圆外）不命中 Embed')
   // 外接矩形右下角同理
-  assert(hitTestWithScene(rects, 300, 250, scenePath, embedIds) === null,
+  assert(hitTestWithScene(rects, 300, 250, scenePath, embedIds, 1) === null,
     '右下角（矩形内、圆外）不命中 Embed')
   // 矩形外侧更远处也不命中
-  assert(hitTestWithScene(rects, 320, 150, scenePath, embedIds) === null,
+  assert(hitTestWithScene(rects, 320, 150, scenePath, embedIds, 1) === null,
     '矩形右侧外部不命中 Embed')
 }
 
@@ -702,7 +712,7 @@ console.log('13. hitTestWithScene：Embed innerContent 命中 → embedInnerCont
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
   // 圆心附近：y > 74（title 之下）且到圆心距离 < 88（不在圆环上）
-  const hit = hitTestWithScene(rects, 200, 150, scenePath, embedIds)
+  const hit = hitTestWithScene(rects, 200, 150, scenePath, embedIds, 1)
   assert(hit !== null, '命中 Embed innerContent 返回非 null')
   assert(hit.objectKind === 'embedInnerContent', 'objectKind = embedInnerContent')
   assert(hit.hitRegion === 'innerContent', 'hitRegion = innerContent')
@@ -716,7 +726,7 @@ console.log('14. hitTestWithScene：未命中 → null')
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set()
-  const hit = hitTestWithScene(rects, 500, 500, scenePath, embedIds)
+  const hit = hitTestWithScene(rects, 500, 500, scenePath, embedIds, 1)
   assert(hit === null, '点击在所有 rect 之外 → null')
 }
 
@@ -728,7 +738,7 @@ console.log('15. hitTestWithScene：后绘制（数组末尾）的 rect 优先�
   ]
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set()
-  const hit = hitTestWithScene(rects, 100, 100, scenePath, embedIds)
+  const hit = hitTestWithScene(rects, 100, 100, scenePath, embedIds, 1)
   assert(hit.objectId === 'n2', '后绘制的 n2 优先命中（zIndex 更高）')
 }
 
@@ -742,10 +752,10 @@ console.log('16. hitTestWithScene：上层 Embed 圆外时穿透到下层节点'
   const scenePath = [{ type: 'starmap', instanceId: 'sm1', nodeId: '' }]
   const embedIds = new Set(['emb1'])
   // (200, 200) 在 emb1 圆内 → 命中 emb1
-  assert(hitTestWithScene(rects, 200, 200, scenePath, embedIds).objectId === 'emb1',
+  assert(hitTestWithScene(rects, 200, 200, scenePath, embedIds, 1).objectId === 'emb1',
     '圆内点命中上层 Embed')
   // (10, 10) 在 emb1 圆外但仍在 n1 矩形内 → 命中 n1
-  const hit = hitTestWithScene(rects, 10, 10, scenePath, embedIds)
+  const hit = hitTestWithScene(rects, 10, 10, scenePath, embedIds, 1)
   assert(hit !== null && hit.objectId === 'n1',
     'Embed 圆外不再吞掉事件，穿透命中下层节点 n1')
 }

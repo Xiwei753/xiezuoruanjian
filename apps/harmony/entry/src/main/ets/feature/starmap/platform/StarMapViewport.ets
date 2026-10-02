@@ -36,10 +36,13 @@
 //    用户在任何一层空白处单指拖动，拖的都是**根的全局相机**（拖整张星图的视角），
 //    子 Scene 的 fitOffset 只有 fitView / syncFitToSceneSize 会写。
 //
-// 4) 子星图里的对象不能被拖到圆外。
+// 4) 子星图里的对象不能被拖到圆外，也盖不住父圆的标题 / 边框。
 //    外层 Embed 有 clip(true)，圆外的内容会被直接裁掉，所以"移动节点 / 移动子星图"
 //    写入前必须过 clampItemToEmbedSafeArea（复用 CIRCLE_INNER_SAFE_RATIO，不另造常量），
 //    并且写进 Core 的坐标就是夹好的那一份，数据里不留圆外位置。
+//    这份安全区同时把父 Embed 的标题带与边框热区当"交互壳"扣掉
+//    （computeEmbedInnerContentSafeSide），所以子子星图天然比父子星图小，
+//    而父圆的"点标题 / 边框选中"入口始终露在外面——不用"每深一层乘固定系数"。
 //
 // 5) 画布拖动传的是**目标值**，不是每帧增量。
 //    ArkUI PanGesture 的 event.offsetX/Y 是相对手势起点的累计位移（华为官方示例也是
@@ -61,7 +64,9 @@ import {
   PlatformNodeRect,
   PlatformEdgeRender,
   RecursiveSceneSource,
-  describeScenePath
+  describeScenePath,
+  EMBED_TITLE_HIT_HEIGHT,
+  EMBED_BORDER_HIT_WIDTH
 } from './StarMapGeometry'
 
 // ─── 内容包围盒 ───
@@ -200,6 +205,45 @@ export function computeCameraZoomAround(
  * 不会出现"子图内容铺到圆外被裁掉"。
  */
 export const CIRCLE_INNER_SAFE_RATIO: number = 1 / Math.SQRT2
+
+/**
+ * 父 Embed 自己必须留出来的**交互壳厚度**（#818 复审）。
+ *
+ * 子 Scene 的可用区不能只是圆的内接正方形：父 Embed 的顶部标题带
+ * （EMBED_TITLE_HIT_HEIGHT）和外圈边框热区（EMBED_BORDER_HIT_WIDTH）
+ * 是"选中这个子星图"的入口，内容压上去就等于把入口盖住。
+ *
+ * #373 的规则是"点文字 / 边框选中子星图，点内部编辑子星图"，所以这块壳
+ * 必须始终露在外面、随时可点。取自 StarMapGeometry 的屏幕侧命中规格，
+ * **不另造第三套数字**：几何命中和布局预留用的是同一份来源。
+ */
+export const EMBED_INTERACTION_SHELL_VP: number = EMBED_TITLE_HIT_HEIGHT + EMBED_BORDER_HIT_WIDTH
+
+/**
+ * 子 Scene 真正可用的内容区边长：圆的内接正方形先扣掉父 Embed 的交互壳，再扣留白。
+ *
+ * 这一份同时喂给三处，保证"算出来的"和"允许存在的"永远一致（#818 复审）：
+ * - `ui/StarMapScene.fitView()`：算 local fit 时用它当可用区
+ * - `clampItemToEmbedSafeArea()`：移动 / 新建时的 clamp 安全区
+ * - 新建 Node / Embed 的初始位置约束（走同一个 clamp）
+ *
+ * 效果上，子子星图会比父子星图自然小一截，因为每一层都要让出自己父圆的标题与边框；
+ * 这是几何必然，不是"每深一层乘 0.6"那种拍出来的系数。
+ *
+ * @param localSceneSize 本层局部尺寸（vp，已扣掉祖先累计比例）
+ * @param paddingVp 内容区四边留白（vp）
+ * @returns 可用内容区边长（vp），不小于 0
+ */
+export function computeEmbedInnerContentSafeSide(
+  localSceneSize: number,
+  paddingVp: number
+): number {
+  if (!isFinite(localSceneSize) || localSceneSize <= 0) {
+    return 0
+  }
+  const innerSquare: number = localSceneSize * CIRCLE_INNER_SAFE_RATIO
+  return Math.max(0, innerSquare - EMBED_INTERACTION_SHELL_VP - Math.max(0, paddingVp) * 2)
+}
 
 /** fitScale 的下限。再小就完全看不见了，保留一点下限免得内容糊成一点。 */
 export const MIN_FIT_SCALE: number = 0.02
@@ -340,9 +384,11 @@ export function clampItemToEmbedSafeArea(
   if (!isFinite(itemWidth) || !isFinite(itemHeight)) {
     return { x, y }
   }
-  // 安全区 = 圆的内接正方形再扣掉留白，与 fitView 的可用区口径完全一致：
-  // 这样 fit 刚算完时内容一定在区内，用户拖出去的距离才会被夹回来而不是"先越界再回弹"。
-  const safeSize: number = Math.max(0, localSceneSize * CIRCLE_INNER_SAFE_RATIO - paddingVp * 2)
+  // 安全区 = 圆的内接正方形先扣掉父 Embed 的标题 / 边框交互壳，再扣留白，
+  // 与 fitView 的可用区走同一个函数（computeEmbedInnerContentSafeSide）：
+  // 这样 fit 刚算完时内容一定在区内，用户拖出去的距离才会被夹回来而不是"先越界再回弹"，
+  // 父圆的"点标题 / 边框选中"入口也永远不会被内容盖住（#818 复审）。
+  const safeSize: number = computeEmbedInnerContentSafeSide(localSceneSize, paddingVp)
   const center: number = localSceneSize / 2
   const halfSafe: number = safeSize / 2
   const minLeft: number = center - halfSafe

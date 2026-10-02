@@ -170,15 +170,24 @@ function computeCameraZoomAround(camera, centerX, centerY, nextScale) {
 }
 
 // ─── 子星图内容安全区（#818 复审）───
-// 把 item 的完整显示矩形限制在圆的内接正方形里。复用 fitView 的可用区口径，
-// 不另造第三套安全区常量。
+// 父 Embed 必须留出"标题带 + 圆环"这层交互壳，否则内容一 fit 就贴满内接正方形，
+// 父圆自己的标题和边框既露不出来也点不到。扣掉这层壳之后 fit / clamp / 新建落点
+// 共用同一份可用区，孙层自然小于子层，不靠固定 depth 系数。
+const EMBED_INTERACTION_SHELL_VP = EMBED_TITLE_HIT_HEIGHT + EMBED_BORDER_HIT_WIDTH
+
+function computeEmbedInnerContentSafeSide(localSceneSize, paddingVp) {
+  if (!isFinite(localSceneSize) || localSceneSize <= 0) { return 0 }
+  const padding = paddingVp > 0 ? paddingVp : 0
+  return Math.max(0, localSceneSize * CIRCLE_INNER_SAFE_RATIO - EMBED_INTERACTION_SHELL_VP - padding * 2)
+}
+
 function clampItemToEmbedSafeArea(x, y, width, height, scale, offsetX, offsetY, localSceneSize, paddingVp) {
   const fitScale = scale > 0 ? scale : 1
   if (!isFinite(x) || !isFinite(y) || localSceneSize <= 0) { return { x, y } }
   const itemWidth = width * fitScale
   const itemHeight = height * fitScale
   if (!isFinite(itemWidth) || !isFinite(itemHeight)) { return { x, y } }
-  const safeSize = Math.max(0, localSceneSize * CIRCLE_INNER_SAFE_RATIO - paddingVp * 2)
+  const safeSize = computeEmbedInnerContentSafeSide(localSceneSize, paddingVp)
   const center = localSceneSize / 2
   const halfSafe = safeSize / 2
   const minLeft = center - halfSafe
@@ -297,19 +306,50 @@ function pointInEmbedCircle(rect, x, y) {
   return dx * dx + dy * dy <= (rect.width / 2) * (rect.width / 2)
 }
 
-function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds) {
+function embedHitMetricsForScene(sceneScale, embedRadius) {
+  const scale = sceneScale > 0 ? sceneScale : 1
+  const limit = embedRadius > 0 ? embedRadius : 0
+  return {
+    titleHitHeight: Math.min(limit, EMBED_TITLE_HIT_HEIGHT / scale),
+    borderHitWidth: Math.min(limit, EMBED_BORDER_HIT_WIDTH / scale)
+  }
+}
+
+const EMBED_INPUT_NODE_ID_PREFIX = 'starmap_embed_input_'
+
+function describeEmbedInputNodeId(scenePath, embedInstanceId) {
+  return `${EMBED_INPUT_NODE_ID_PREFIX}${describeScenePath(scenePath)}_${embedInstanceId}`
+}
+
+function isEmbedInputNodeId(nodeId) {
+  return nodeId.indexOf(EMBED_INPUT_NODE_ID_PREFIX) === 0
+}
+
+function describeSceneInputNodeId(scenePath) {
+  return `${EMBED_INPUT_NODE_ID_PREFIX}${describeScenePath(scenePath)}`
+}
+
+function extractEmbedInstanceIdFromInputNodeId(scenePath, nodeId) {
+  const prefix = `${EMBED_INPUT_NODE_ID_PREFIX}${describeScenePath(scenePath)}_`
+  if (nodeId.indexOf(prefix) !== 0) { return null }
+  const instanceId = nodeId.substring(prefix.length)
+  return instanceId.length > 0 ? instanceId : null
+}
+
+function hitTestWithScene(rects, screenX, screenY, scenePath, embedInstanceIds, sceneScale) {
   for (let i = rects.length - 1; i >= 0; i--) {
     const r = rects[i]
     const isEmbed = embedInstanceIds.has(r.nodeId)
     if (isEmbed) {
       if (!pointInEmbedCircle(r, screenX, screenY)) { continue }
-      if (screenY <= r.y + EMBED_TITLE_HIT_HEIGHT) {
+      const metrics = embedHitMetricsForScene(sceneScale, r.width / 2)
+      if (screenY <= r.y + metrics.titleHitHeight) {
         return { scenePath, objectKind: 'embedTitle', objectId: r.nodeId, hitRegion: 'title' }
       }
       const cx = r.x + r.width / 2
       const cy = r.y + r.height / 2
       const outer = r.width / 2
-      const inner = Math.max(0, outer - EMBED_BORDER_HIT_WIDTH)
+      const inner = Math.max(0, outer - metrics.borderHitWidth)
       const dx = screenX - cx
       const dy = screenY - cy
       const dist = Math.sqrt(dx * dx + dy * dy)
@@ -436,7 +476,7 @@ function resolveRecursiveHit(root, x, y) {
   const embedPath = []
   for (let depth = 0; depth <= MAX_RECURSE_SCENE_DEPTH; depth++) {
     const canvasPoint = screenToCanvas(localX, localY, current.scale, current.offsetX, current.offsetY)
-    const hit = hitTestWithScene(current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds)
+    const hit = hitTestWithScene(current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds, current.scale)
     if (hit === null) {
       const edgeTolerance = current.scale > 0 ? EDGE_HIT_TOLERANCE_VP / current.scale : EDGE_HIT_TOLERANCE_VP
       const edge = hitTestEdge(current.edges, canvasPoint.x, canvasPoint.y, edgeTolerance)
@@ -1012,8 +1052,10 @@ function createSceneView(opts) {
         v.lastFittedSceneSize = localWidth
         return
       }
-      const available = Math.min(localWidth, localHeight) * CIRCLE_INNER_SAFE_RATIO
-      const fitted = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP, localWidth, localHeight)
+      // 可用区 = 圆内接正方形 − 父圆要保留的标题/边框交互壳 − 留白。
+      // 留白已经在 computeEmbedInnerContentSafeSide 里扣过，所以 padding 传 0。
+      const available = computeEmbedInnerContentSafeSide(Math.min(localWidth, localHeight), EMBED_FIT_PADDING_VP)
+      const fitted = computeFittedViewport(bounds, available, available, 0, localWidth, localHeight)
       v.fitScale = fitted.zoomScale
       v.fitOffsetX = fitted.offsetX
       v.fitOffsetY = fitted.offsetY
@@ -1351,12 +1393,34 @@ console.log('6. resolveRecursiveHit：空白与嵌套归属')
   assert(eq(deep.embedPath, [SEG_A, SEG_A1]), 'embedPath 完整记录经过的两段 Embed')
   assert(eq(deep.target.scenePath, PATH_A1), 'target 自带 scenePath，身份不含糊')
 
-  // 深层空白：根局部 (450,38)
-  //   → sm-a 画布 (80,56)：离 emb-a1 圆心 48 < 68 → 下沉
-  //   → sm-a1 画布 (100,60)：n-a1x 的 y 从 100 起 → 空白
-  const deepBlank = resolveRecursiveHit(ctx, 450, 38)
+  // 深层空白：根局部 (460,80)
+  //   → sm-a 局部 (60,80) → sm-a 画布 (100,140)：离 emb-a1 圆心 40，
+  //     既不在标题带（画布 y 140 > 20 + 48）也不在圆环（40 < 56）→ 下沉
+  //   → sm-a1 画布 (133.3,200)：n-a1x 的 y 到 180 为止 → 空白
+  //
+  // 这里的点必须重新选：旧点 (450,38) 落在 emb-a1 圆内顶部 18vp，
+  // 正是屏幕侧标题热区（24vp）该覆盖的地方。以前按固定 24 画布单位判，
+  // 缩进一层之后只剩屏幕上 12vp，于是把它误判成 innerContent 继续下沉——
+  // 屏幕上明明点在标题上，却进了子图。判定改成按屏幕换算之后它就该算标题。
+  const deepBlank = resolveRecursiveHit(ctx, 460, 80)
   assert(deepBlank.target === null, '第三层空白 → target 为 null（不误判成选中 emb-a1）')
   assert(eq(deepBlank.ownerScenePath, PATH_A1), '深层空白归属第三层 Scene')
+
+  // 屏幕侧热区在缩进之后仍然是 24vp：同一条边上"离圆顶 12vp"和"离圆顶 18vp"必须分属
+  // title 和 innerContent 两类，而不是都随 local fit 一起缩水。
+  const smTitle = resolveRecursiveHit(ctx, 460, 30)
+  assert(smTitle.target !== null && smTitle.target.objectKind === 'embed' &&
+    smTitle.target.objectId === 'emb-a1' && smTitle.target.hitRegion === 'title',
+  '第 2 层 Embed 的屏幕 12vp 处仍判 title（不是随 fit 缩成几 vp 的 innerContent）')
+  assert(eq(smTitle.ownerScenePath, PATH_A), '命中标题就停在第 2 层，不下沉进子图')
+  const smInner = resolveRecursiveHit(ctx, 480, 60)
+  assert(smInner.target === null || smInner.target.objectId !== 'emb-a1',
+  '离圆顶 36vp 处是 innerContent，不会停在第 2 层把它误判成选中 emb-a1')
+  assert(eq(smInner.ownerScenePath, PATH_A1), 'innerContent 一路下沉到第三层，归属跟着走')
+  const smBorder = resolveRecursiveHit(ctx, 494, 60)
+  assert(smBorder.target !== null && smBorder.target.objectKind === 'embed' &&
+    smBorder.target.objectId === 'emb-a1' && smBorder.target.hitRegion === 'border',
+  '离圆侧边 12vp 处判 border，屏幕宽度不随层数缩水')
 
   // 第 3 条复审的关键回归：子 Scene 自己的缩放必须影响命中。
   // 把 sm-a1 的比例从 0.3 改成 0.15，同一个屏幕点的落点就变了——
@@ -1788,8 +1852,9 @@ console.log('24. 评审回归 ⑥：相机缩放带动容器变化，子 Scene �
     { nodeId: 'b', x: 100, y: 0, width: 100, height: 100, radius: 0 }
   ]
   const bounds = computeContentBounds(rects)
-  const available = 200 * CIRCLE_INNER_SAFE_RATIO
-  const fitted = computeFittedViewport(bounds, available, available, EMBED_FIT_PADDING_VP, 200, 200)
+  // 可用区要扣掉父圆自己的标题/边框交互壳（#818 复审），所以这里和 fitView 用同一份口径
+  const available = computeEmbedInnerContentSafeSide(200, EMBED_FIT_PADDING_VP)
+  const fitted = computeFittedViewport(bounds, available, available, 0, 200, 200)
 
   // camera=1 时打开：屏幕尺寸 200，inheritedScale=1，局部尺寸 = 200 / 1 = 200
   const view = createSceneView({ sceneDepth: 1, sceneWidth: 200, sceneHeight: 200, inheritedScale: 1 })
@@ -1941,8 +2006,9 @@ console.log('24d. 任意一层空白拖动都只改全局相机：子 Scene 不�
 
 console.log('24e. 子星图里的节点 / 子星图不能被拖到圆外：写入前夹进圆内接正方形（#818 复审）')
 {
-  // 直径 200 的圆：内接正方形 200/√2 ≈ 141.4，再扣掉两边留白 16 → 安全区 ≈ 125.4
-  const safeSize = 200 * CIRCLE_INNER_SAFE_RATIO - EMBED_FIT_PADDING_VP * 2
+  // 直径 200 的圆：内接正方形 200/√2 ≈ 141.4，扣掉父圆自己的标题+边框交互壳 36，
+  // 再扣掉两边留白 16 → 安全区 ≈ 89.4
+  const safeSize = computeEmbedInnerContentSafeSide(200, EMBED_FIT_PADDING_VP)
   const center = 100
   const minEdge = center - safeSize / 2
   const maxEdge = center + safeSize / 2
@@ -2086,7 +2152,7 @@ console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整�
 {
   // 场景：空 child 首次 fitView() 时没有内容 → fitScale = 1 且 hasFittedView = true，
   // 之后 maybeFitView 不再跑。少了重新 fit，新建的 160×80 节点会直接大于当前安全区。
-  const safeSize = 200 * CIRCLE_INNER_SAFE_RATIO - 2 * EMBED_FIT_PADDING_VP
+  const safeSize = computeEmbedInnerContentSafeSide(200, EMBED_FIT_PADDING_VP)
   const center = 100
   const minEdge = center - safeSize / 2
   const maxEdge = center + safeSize / 2
@@ -2096,8 +2162,8 @@ console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整�
   assert(near(view.fitScale, 1) && view.hasFittedView === true,
     '空子星图首次 fit：没有内容 → fitScale 停在 1，且已经算过一次')
 
-  // 在圆边缘长按新建：160×80 比当前安全区（125.4）还宽，clamp 只能把它居中，
-  // 这正是"只 clamp 不够"的场景——真正让它完整进圆的是后面的重新 local fit。
+  // 在圆边缘长按新建：160×80 的节点比当前安全区（≈89.4）还宽，X 方向 clamp 只能把它居中；
+  // Y 方向还放得下（80 < 89.4），照常夹到下边界。真正让它完整进圆的是后面的重新 local fit。
   const nodeCandidate = { x: 196, y: 196 }
   const clampedNode = view.clampItemToLocalSafeArea(
     nodeCandidate.x, nodeCandidate.y, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT)
@@ -2861,6 +2927,196 @@ console.log('33. 评审回归 ⑬：同距离的边取先遍历到的那条')
   const far = mkEdge('far', 250, 140, 350, 140)
   assert(eq(hitTestEdge([far, near], 300, 150, EDGE_HIT_TOLERANCE_VP).edgeId, 'near'),
     '不同距离时仍然取更近的，与遍历顺序无关')
+}
+
+console.log('')
+console.log('34. 屏幕侧热区口径：标题 / 边框的手指宽度不随递归层数缩水（#818 复审）')
+
+// 24/12 是**屏幕 vp 规格**。命中测试却是在本 Scene 的画布坐标里跑的，
+// 所以必须先除以本 Scene 的累计比例；否则第 2 层的可点标题就只剩几 vp。
+{
+  const radius = DEFAULT_EMBED_DIAMETER / 2
+
+  // 第一层：累计比例 1 → 画布口径就是屏幕口径
+  const m1 = embedHitMetricsForScene(1, radius)
+  assert(near(m1.titleHitHeight, EMBED_TITLE_HIT_HEIGHT) &&
+    near(m1.borderHitWidth, EMBED_BORDER_HIT_WIDTH),
+  '第 1 层：画布坐标就是屏幕坐标，24 / 12 原样用')
+
+  // 第二层：画布被压到 0.5 → 命中判定用的宽度要翻倍，换到屏幕上才是 24 / 12
+  const m2 = embedHitMetricsForScene(0.5, radius)
+  assert(near(m2.titleHitHeight, 48) && near(m2.borderHitWidth, 24),
+  '第 2 层：画布口径翻倍（24/0.5、12/0.5）')
+  assert(near(m2.titleHitHeight * 0.5, EMBED_TITLE_HIT_HEIGHT) &&
+    near(m2.borderHitWidth * 0.5, EMBED_BORDER_HIT_WIDTH),
+  '第 2 层：乘回屏幕口径仍是 24 / 12，手指宽度没有缩水')
+
+  // 第 10 层：同理，且不会因为除以很小而爆掉
+  const m10 = embedHitMetricsForScene(0.25, radius)
+  assert(near(m10.titleHitHeight * 0.25, EMBED_TITLE_HIT_HEIGHT) &&
+    near(m10.borderHitWidth * 0.25, EMBED_BORDER_HIT_WIDTH),
+  '第 10 层：手指宽度依旧稳定在屏幕 24 / 12')
+
+  // 不能反过来吃掉整个圆：命中带最多就是半径
+  assert(near(embedHitMetricsForScene(0.01, radius).titleHitHeight, radius) &&
+    near(embedHitMetricsForScene(0.01, radius).borderHitWidth, radius),
+  '热区被夹住，不会吃掉整个 innerContent（否则一点就永远是标题）')
+
+  // 比例非法时退回 1，不能返回 NaN / Infinity
+  const bad = embedHitMetricsForScene(0, radius)
+  assert(near(bad.titleHitHeight, EMBED_TITLE_HIT_HEIGHT) && near(bad.borderHitWidth, EMBED_BORDER_HIT_WIDTH),
+    '累计比例 <= 0 时退回 1，命中判定不会整体失效')
+  const noRadius = embedHitMetricsForScene(1, 0)
+  assert(noRadius.titleHitHeight === 0 && noRadius.borderHitWidth === 0,
+    '半径还没量出来时热区为 0，交给上层默认命中')
+
+  // 端到端：第 2 层里，屏幕上距离圆顶 18vp 的点判标题、距离圆顶 30vp 的点判内部。
+  // 命中测试吃的是画布坐标，所以先把屏幕点按本层累计比例换算过去。
+  const sceneScale = 0.5
+  const rects = [{ nodeId: 'e1', x: 0, y: 0, width: DEFAULT_EMBED_DIAMETER, height: DEFAULT_EMBED_DIAMETER, radius: 100 }]
+  const embedIds = new Set(['e1'])
+  const toCanvas = (screenY) => screenToCanvas(100, screenY, sceneScale, 0, 0).y
+  assert(hitTestWithScene(rects, 100, toCanvas(18), PATH_A, embedIds, sceneScale).hitRegion === 'title',
+    '第 2 层：屏幕距圆顶 18vp 仍在标题热区内（画布上 36 <= 48）')
+  assert(hitTestWithScene(rects, 100, toCanvas(30), PATH_A, embedIds, sceneScale).hitRegion === 'innerContent',
+    '第 2 层：屏幕距圆顶 30vp 已经进内部（画布上 60 > 48）')
+
+  // 老写法（固定 24/12 不除 scale）把热区在屏幕上缩成了 24 * 0.5 = 12vp
+  assert(hitTestWithScene(rects, 100, toCanvas(18), PATH_A, embedIds, 1).hitRegion === 'innerContent',
+    '对照：不除累计比例的话第 2 层标题带在屏幕上只剩 12vp，18vp 处就掉进内部 —— 这就是"越来越难选中"')
+}
+
+console.log('')
+console.log('35. 输入节点 id 与 onChildTouchTest：命中的子图继续参加手势竞争（#818 复审）')
+
+// onChildTouchTest 只会看到**显式命名**的节点，所以递归层必须有稳定 id。
+{
+  // id 带上 scenePath：同一个 instanceId 出现在不同深度也不会互相顶掉
+  const idA = describeEmbedInputNodeId(PATH_A, 'emb-a1')
+  const idA1 = describeEmbedInputNodeId(PATH_A1, 'emb-a1')
+  assert(isEmbedInputNodeId(idA) && isEmbedInputNodeId(idA1),
+    'Embed 输入节点 id 带前缀，onChildTouchTest 才认得出')
+  assert(idA !== idA1,
+    '同一 instanceId 在两层不共用 id：父层转发到的必须是本次实际命中的那个 child')
+  assert(eq(extractEmbedInstanceIdFromInputNodeId(PATH_A, idA), 'emb-a1'),
+    '能从 id 反解回 instanceId（父级要靠它定位是哪一个 Embed）')
+  assert(extractEmbedInstanceIdFromInputNodeId(PATH_A, idA1) === null,
+    '别的层的 id 反解不出来，父层不会把事件转给没命中的 child')
+  assert(isEmbedInputNodeId(describeSceneInputNodeId(PATH_A)),
+    'Scene 自己的输入节点 id 也用同一前缀，递归链首尾一致')
+
+  // routeChildTouchTest 的镜像：内接正文转发，标题 / 边框不转发
+  const FORWARD_COMPETITION = 1
+  const DEFAULT = 0
+  const shouldForwardTouchToChild = (children, parentX, parentY) => {
+    const radius = DEFAULT_EMBED_DIAMETER / 2
+    const metrics = embedHitMetricsForScene(1, radius)
+    for (const child of children) {
+      if (!isEmbedInputNodeId(child.id)) continue
+      const dx = parentX - radius
+      const dy = parentY - radius
+      if (Math.sqrt(dx * dx + dy * dy) > radius) continue
+      if (parentY <= metrics.titleHitHeight) continue
+      if (Math.sqrt(dx * dx + dy * dy) >= radius - metrics.borderHitWidth) continue
+      return child.id
+    }
+    return null
+  }
+  const routeChildTouchTest = (children, parentX, parentY) => {
+    const id = shouldForwardTouchToChild(children, parentX, parentY)
+    return id !== null ? { strategy: FORWARD_COMPETITION, id } : { strategy: DEFAULT }
+  }
+
+  const id = describeEmbedInputNodeId(PATH_A, 'emb-a1')
+  const children = [{ id: id, parentX: 100, parentY: 120 }]
+  const inner = routeChildTouchTest(children, 100, 120)
+  assert(inner.strategy === FORWARD_COMPETITION && inner.id === id,
+    '点在子星图内部：FORWARD_COMPETITION 转给命中的 child，子层单指手势继续能赢')
+  const title = routeChildTouchTest(children, 100, 10)
+  assert(title.strategy === DEFAULT,
+    '点在标题带：不转发给 child，交给 onTouchIntercept Block（这一步是"选中这个子星图"）')
+  const border = routeChildTouchTest(children, 100, 100 - (100 - 5))
+  assert(border.strategy === DEFAULT,
+    '点在圆环：不转发给 child，同样只选中这个子星图')
+  const outside = routeChildTouchTest(children, 500, 500)
+  assert(outside.strategy === DEFAULT,
+    '点在圆外：不转发，事件落回父星图')
+  assert(routeChildTouchTest([{ id: 'some_other_component', parentX: 100, parentY: 120 }], 100, 120).strategy === DEFAULT,
+    '命中的是非 Embed 输入节点：不转发，别人的组件不归这条链管')
+
+  // 结构守卫：onTouchIntercept 不许再把屏幕规格乘上累计比例。
+  // 只看 onTouchIntercept 这一段：title Row 的**视觉**高度乘 scale 是对的，
+  // 那是"标题带在屏幕上永远 24vp"，和命中判定是两回事。
+  const sceneSource = readStarmapSource('ui/StarMapScene.ets')
+  const interceptStart = sceneSource.indexOf('.onTouchIntercept(')
+  const interceptEnd = sceneSource.indexOf('.onChildTouchTest(')
+  assert(interceptStart >= 0 && interceptEnd > interceptStart, 'Embed 外层 Stack 同时有 onTouchIntercept 与 onChildTouchTest')
+  const interceptBody = sceneSource.slice(interceptStart, interceptEnd)
+  assert(!/EMBED_TITLE_HIT_HEIGHT\s*\*\s*this\.viewportScaleValue\(\)/.test(interceptBody),
+    'onTouchIntercept 不再把标题热区乘 viewportScaleValue（那一层坐标已经是屏幕 vp）')
+  assert(!/EMBED_BORDER_HIT_WIDTH\s*\*\s*this\.viewportScaleValue\(\)/.test(interceptBody),
+    'onTouchIntercept 不再把边框热区乘 viewportScaleValue')
+  assert(interceptBody.includes('embedHitMetricsForScene('),
+    '真实触摸分流与递归命中调的是同一份 embedHitMetricsForScene，不允许两套口径')
+  assert(sceneSource.includes('onChildTouchTest('),
+    'Embed 外层 Stack 接了 onChildTouchTest，深层触点不会被触摸测试链截断')
+}
+
+console.log('')
+console.log('')
+console.log('36. 局部 fit 给父圆留出交互壳：子子星图自然小于子星图，不靠固定深度系数（#818 复审）')
+
+const sceneSource = readStarmapSource('ui/StarMapScene.ets')
+
+// 之前只按 圆内接正方形 fit，一颗 200 的子 Embed 能拿到 ~0.63，把父圆内部占得很满；
+// 父圆自己的标题 / 边框热区没有任何余量。改成先扣掉交互壳再 fit。
+{
+  assert(EMBED_INTERACTION_SHELL_VP === EMBED_TITLE_HIT_HEIGHT + EMBED_BORDER_HIT_WIDTH,
+    '交互壳就是"标题带 + 边框环"本身，不另造一套数字')
+  const safeSide = computeEmbedInnerContentSafeSide(DEFAULT_EMBED_DIAMETER, EMBED_FIT_PADDING_VP)
+  const oldSafeSide = DEFAULT_EMBED_DIAMETER * CIRCLE_INNER_SAFE_RATIO - EMBED_FIT_PADDING_VP * 2
+  assert(safeSide < oldSafeSide && safeSide > 0,
+    '扣掉交互壳之后可用区确实变小（141.4 - 36 - 16 ≈ 89.4），但仍是正的')
+  assert(computeEmbedInnerContentSafeSide(0, EMBED_FIT_PADDING_VP) === 0 &&
+    computeEmbedInnerContentSafeSide(NaN, EMBED_FIT_PADDING_VP) === 0,
+    '容器尺寸还没量出来时返回 0，不返回 NaN')
+
+  // 两层嵌套：一颗 200×200 的子星图，父圆里 fit 一遍，孙圆自然比父圆小
+  const parentSafeSide = safeSide
+  const parentFit = parentSafeSide / DEFAULT_EMBED_DIAMETER
+  const grandchildDiameter = DEFAULT_EMBED_DIAMETER * parentFit
+  const childOfGrandchildFit = computeEmbedInnerContentSafeSide(grandchildDiameter, EMBED_FIT_PADDING_VP) / grandchildDiameter
+  const greatGrandchildDiameter = grandchildDiameter * childOfGrandchildFit
+  assert(grandchildDiameter < DEFAULT_EMBED_DIAMETER,
+    '子子星图自然小于子星图（父圆里 fit 出来的一份）')
+  assert(greatGrandchildDiameter < grandchildDiameter,
+    '再深一层继续自然收缩，没有任何"每层乘 0.6"之类的固定系数')
+
+  // 每一层的可用区都和它自己的父圆一起缩，没有一处按深度写死
+  const view = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: DEFAULT_EMBED_DIAMETER, sceneHeight: DEFAULT_EMBED_DIAMETER })
+  view.fitView([{ nodeId: 'e', x: 0, y: 0, width: DEFAULT_EMBED_DIAMETER, height: DEFAULT_EMBED_DIAMETER, radius: 100 }])
+  assert(view.fitScale > 0 && view.fitScale < 1,
+    '单颗子星图铺进父圆可用区，比例由内容包围盒和可用区现算')
+
+  // fitView / clamp / 新建三处用的是同一份安全区
+  const viewportSource = readStarmapSource('platform/StarMapViewport.ets')
+  const clampUsesSafeSide = viewportSource.includes('const safeSize: number = computeEmbedInnerContentSafeSide(localSceneSize, paddingVp)')
+  assert(clampUsesSafeSide,
+    'clampItemToEmbedSafeArea 直接调 computeEmbedInnerContentSafeSide，不另写一遍公式')
+  const fitUsesSafeSide = /computeEmbedInnerContentSafeSide\(\s*Math\.min\(localWidth, localHeight\),\s*EMBED_FIT_PADDING_VP\s*\)/.test(sceneSource)
+  assert(fitUsesSafeSide, 'fitView 用的也是同一份可用区')
+  assert(sceneSource.includes('clampItemToEmbedSafeArea('),
+    '移动 / 新建节点与子星图共用这份安全区')
+
+  // fit 出来的内容本来就在区内：安全区是自洽的，不会"先越界再被夹回"
+  const fitted = computeFittedViewport(
+    computeContentBounds([{ nodeId: 'e', x: 0, y: 0, width: DEFAULT_EMBED_DIAMETER, height: DEFAULT_EMBED_DIAMETER, radius: 100 }]),
+    safeSide, safeSide, 0, DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
+  assert(near(fitted.zoomScale, safeSide / DEFAULT_EMBED_DIAMETER),
+    'fit 比例 = 可用区边长 / 内容边长，与安全区完全对齐')
+  const clampedAfterFit = clampItemToEmbedSafeArea(0, 0, DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER, fitted.zoomScale, fitted.offsetX, fitted.offsetY, DEFAULT_EMBED_DIAMETER, EMBED_FIT_PADDING_VP)
+  assert(near(clampedAfterFit.x, 0) && near(clampedAfterFit.y, 0),
+    '刚 fit 完的内容不会被安全区 clamp 挪动 —— fit 和 clamp 是同一套边界')
 }
 
 console.log('')

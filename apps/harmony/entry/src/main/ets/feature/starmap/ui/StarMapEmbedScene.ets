@@ -20,6 +20,13 @@
 // StarMapScreen @State → 根 StarMapScene @Prop → 本组件 @Prop → child StarMapScene @Prop。
 // 中间任何一层写成普通字段，同步就在那一层断掉；子 Scene 再拿旧 offset 当 Pan
 // 的起手基准，全局相机就会跳回旧位置。所以三个相机数值必须是 @Prop（#818 复审）。
+//
+// 输入侧本组件同样不持有任何识别状态（#818 复审）：
+// ArkUI 的 onChildTouchTest 只看得到显式设了 .id() 的命名节点，稳定 id 由父层
+// StarMapScene 用 StarMapGeometry.describeEmbedInputNodeId / describeSceneInputNodeId
+// 生成（带 scenePath，同一个 instanceId 在每层父图里各出现一次也不会重名）。
+// 这里既不新增 Pinch 也不新增 Pan：两指永远只有根 Scene 那一份 PinchGesture，
+// 单指归属永远由 resolveRecursiveHit 决定。
 
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
