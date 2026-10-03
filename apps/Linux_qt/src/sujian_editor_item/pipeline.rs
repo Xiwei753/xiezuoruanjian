@@ -1718,8 +1718,8 @@ impl LinuxEditorPipeline {
                     prepared_handoff,
                     &motion,
                     // Issue #756: 文字动画 = coordinated || typing，光标动画 = coordinated || smooth。
-                    // Issue #808 评论 5917296533: 协同不再把文字与光标绑死——文字动画按自己的
-                    // timeline 推进，caret 只决定遮罩的空间锚点/方向。coordinated=false 时由
+                    // Issue #819: 协同模式下文字与光标共享同一份采样，InsertReveal/DeleteConceal
+                    // 的空间边界直接来自同一笔 cursor track 的当前帧。coordinated=false 时由
                     // smooth 单独决定光标动画（"平滑光标"在正文编辑期间的光标动画）。
                     text_animation_enabled,
                     caret_animation_enabled,

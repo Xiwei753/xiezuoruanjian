@@ -555,9 +555,13 @@ impl LinuxEditorAnimationCoordinator {
             // （不是 owner，或 owner track 缺失）时，把 CaretTrack 吞吐字收口到终态——
             // 它们的逐帧边界来自那条 track，track 不再推进就不能停在半路。
             // Timed unit（Reflow / 非协同吞吐字）不受影响。
+            // Issue #819 评论 5956495850 第 3 节: 同时清除 cursor_visual_track，
+            // 让后续 sample_transaction_visual_state 的 caret 为 None，
+            // CaretTrack unit 自然不产出 slice frame。
             if tx.has_caret_driven_units() && caret_sample.is_none() {
                 tx.retire_caret_driven_units();
                 tx.caret_motion_retired = true;
+                tx.cursor_visual_track = None;
             }
             // Issue #756 评论 5821042551: 只要本事务存在需要播放的 cursor_visual_track，
             // 事务完成就必须同时等待它结束。
@@ -595,58 +599,23 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            for unit in &tx.units {
-                // Issue #815 评论 6042062633 修改 6: 文字层与光标层消费**同一个** caret 采样。
-                // - CaretTrack unit（协同 InsertReveal/DeleteConceal）：本帧的吞吐边界就是
-                //   本帧的 caret.x，不经过任何 0..1 visible fraction，也不自己再算一次时间。
-                // - Timed unit（Reflow / 非协同吞吐字）：仍按自己的时间线算 visible。
-                //   协同模式不接管 Reflow。
-                // Issue #815 评论 5946701331 问题1: 边界 x 与收拢量都来自同一份
-                // caret track 采样（caret.x + caret.progress），文字不再自己算时间。
-                //
-                // Issue #815 评论 5946701331 问题3: CaretTrack unit 收口时**不生成
-                // glyph**。caret_sample 为 None 只可能是本事务刚被判 retire（没有
-                // owner，或 owner track 缺失）。这时两种 kind 的终态都是"不画旧字"：
-                // - InsertReveal：整段交还 canonical 文字层。
-                // - DeleteConceal：旧字本就不该再出现在画面上。
-                //
-                // 不能用一个统一的 `compute_frame(1.0)` 去猜终态——DeleteConceal 的
-                // `compute_frame(visible)` 语义里 visible=1 是"旧字完整可见"，
-                // retire 后同事务若还有未播完的 Timed Reflow，事务不会立刻 complete，
-                // glyph 循环会把 DeleteConceal 的旧字重新画成完整宽度。
-                let frame = if unit.timing.is_caret_track() {
-                    caret_sample.map(|caret| {
-                        // Issue #815 评论 5947728704 问题1: 三者必须来自同一份
-                        // SampledCaretFrame——x 是当前行横向边界、y 是当前走到哪条
-                        // 视觉行、ingest_progress 是段内局部进度。
-                        unit.slice.compute_frame_by_caret_ingest(
-                            caret.x,
-                            caret.y,
-                            caret.ingest_line_ord,
-                            caret.is_ingest_segment,
-                            // Issue #815 评论 5950887715: side 与 ord 一样出自同一次
-                            // 采样，文字层据此把 old / new 两套行序隔离开。
-                            caret.ingest_side,
-                            caret.ingest_progress,
-                        )
-                    })
-                } else {
-                    // 非协同文字动画（独立「打字动画」）与 Reflow 才走这条
-                    // Timed 路径；协同吞吐字在上面由 caret 当前帧驱动。
-                    let visible = unit.current_visible_fraction(sample.frame_now);
-                    Some(unit.slice.compute_frame(visible))
-                };
-                let Some(frame) = frame else {
-                    continue;
-                };
+            // Issue #819 评论 5956495850 第 3 节: 渲染直接消费 sample_transaction_visual_state()
+            // 的结果生成 RenderPlan，不再自己逐 unit 调 compute_frame / compute_frame_by_caret_ingest。
+            // 这样"屏幕画的帧"和"rebase 交棒的帧"天然是同一份算法。
+            // - CaretTrack unit 在 caret 为 None 时不产出 slice frame（retire 时已清除
+            //   cursor_visual_track，sample_transaction_visual_state 内部 caret 为 None）。
+            // - Timed unit 按自己的时间线算 visible_fraction + compute_frame。
+            let sampled_state =
+                super::sample::sample_transaction_visual_state(tx, sample.frame_now);
+            for slice in &sampled_state.slices {
                 glyphs.push(TextAnimationGlyphInfo {
-                    x: frame.x,
-                    y: frame.y,
-                    w: frame.w,
-                    h: frame.h,
-                    opacity: frame.opacity,
-                    snapshot_id: frame.snapshot_id,
-                    source_rect: frame.source_rect,
+                    x: slice.dest_rect.x,
+                    y: slice.dest_rect.y,
+                    w: slice.dest_rect.w,
+                    h: slice.dest_rect.h,
+                    opacity: slice.opacity,
+                    snapshot_id: slice.snapshot_id,
+                    source_rect: slice.source_rect.clone(),
                 });
             }
         }

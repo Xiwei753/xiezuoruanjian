@@ -229,7 +229,7 @@ impl SujianEditorItem {
         //   1. 生成新 LayoutRevision（不再用旧 self.pipeline.layout_revision() 当 basis）；
         //   2. 用统一 edit_now 采样（与普通路径 prepare_edit_motion 行 1398 一致）；
         //   3. cancel_active_composition 已在前面结束旧 composition transaction，
-        //      这里对队列里其余旧活动事务 reconcile 到新 canonical（retire CaretDriven
+        //      这里对队列里其余旧活动事务 reconcile 到新 canonical（retire CaretTrack
         //      + rebind Timed Reflow），让 passive ReflowMove/ReflowCrossFade 全部绑定
         //      committed new canonical；
         //   4. handle_composition_commit_or_cancel 用 new_revision 当新事务 basis；

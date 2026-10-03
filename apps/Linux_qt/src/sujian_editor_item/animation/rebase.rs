@@ -96,7 +96,8 @@ pub(crate) fn conflicting_units_are_untouched(
     // current_old_text 是当前事务应用前的文本（current-old 坐标系）。
     let tx_new_text = tx.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
     // Issue #727 约束 4: 不再自己采样 caret geometry（删除 sample_caret_geometry_for_caret_driven_clip）。
-    // Reveal/Conceal 统一从自己的 Timed 文字 timeline 取 visible_fraction 判断存活。
+    // Reveal/Conceal 的存活判断：CaretTrack unit 从 cursor track 当前帧取边界，
+    // Timed unit 从自己的时间线取 progress。
     let caret_track_progress = tx
         .cursor_visual_track
         .as_ref()
@@ -104,11 +105,10 @@ pub(crate) fn conflicting_units_are_untouched(
     for unit in &tx.units {
         // Issue #819 评论 5956495850: 协同 InsertReveal/DeleteConceal 的空间边界直接来自
         // 同一笔 cursor track 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
-        // is_caret_driven() 恒为 false（CaretTrack unit 走 is_caret_track()），
-        // 下面的分支是保留的历史路径，不再被任何 kind 走到。
+        // is_caret_driven() 对未 retired 的 CaretTrack unit 返回 true，走 cursor track 边界分支；
+        // Timed unit 和已 retired 的 CaretTrack unit 走 else 分支。
         let still_playing = if unit.timing.is_caret_driven() {
-            // 历史保留分支：is_caret_driven() 恒为 false，不再走到。
-            // Issue #819: 协同吞吐字是 CaretTrack（不是 CaretDriven），逐帧边界来自 cursor track。
+            // 协同吞吐字（未 retired 的 CaretTrack）逐帧边界来自 cursor track。
             let progress = caret_track_progress.unwrap_or(0.0);
             let eased = AnimatedSlice::ease_out_quad(progress);
             let start = unit.timing.start_fraction();
