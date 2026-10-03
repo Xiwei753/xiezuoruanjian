@@ -17,9 +17,24 @@
 //   整个摘要热区都属于这个 Embed，不实例化 child Scene，也不再向下递归
 // - hidden：祖先已折叠 / 不需要，压根不创建 Scene 实例（数据仍在 Core 里）
 //
+// Viewport 改大小要真的改**显示预算**，不是只改 coverage（#820 复核）：
+//   视口短边 → viewportDetailScale()（连续比例，有上下限，不是设备断点表）
+//            → expandedEmbedSizeVp() = 基准直径 × 该比例
+//            → 圆内可用空间随之变化 → LOD 跟着变
+// 展开态圆壳因此在大视口下拿到更多真实 vp 空间，child local fit 也自然更宽裕，
+// 深一层才有可能继续 expanded；小视口则反过来。
+//
+// 这份尺寸必须是**同一份显示真相**：LOD、显示边界、布局矩形、渲染盒子全部读
+// `expandedEmbedSizeVp()`，不能出现"LOD 按 320 算、UI 还画 200"的第二套尺寸。
+// 折叠摘要卡不跟着视口无限放大，保持普通节点附近的尺寸。
+//
 // "手机两层、平板三层"这种层数是**小视口自然算出来的结果**，不是常量：
 // 视口小或相机缩得小 → 圆投影小 → 内部可用尺寸不够 → 折叠；
 // 视口大或相机放大 → 展开。同一个设备改窗口大小会就地重算。
+//
+// 视口 resize 只重算显示层级，**不碰视觉焦点**（#820 复核）：
+// 保持 focusScenePath、保持相机，把新视口尺寸往下传，各 Scene 自己重算 LOD。
+// 否则折叠屏展开一下、分屏拖宽一点就会莫名其妙换焦点。
 //
 // 视觉焦点只是"显示参考根"，两组滞回常量都在这一层：
 // - 覆盖率：进入 ≥ 0.70 / 退出 < 0.55
@@ -40,7 +55,8 @@ import {
   DEFAULT_NODE_WIDTH,
   DEFAULT_NODE_HEIGHT,
   DEFAULT_NODE_RADIUS,
-  EmbedDisplayBounds
+  EmbedDisplayBounds,
+  expandedEmbedDisplayBounds
 } from './StarMapLayout'
 import { computeEmbedInnerContentSafeSide } from './StarMapViewport'
 
@@ -106,6 +122,20 @@ export interface FocusCandidate {
   centerRatioY: number
 }
 
+/**
+ * 参考短边（vp）：视口短边达到这个值就按 1.0 的显示预算走。
+ *
+ * 取常见手机竖屏短边。这只是**连续比例的分母**，不是设备断点，
+ * 不判断"这是不是手机 / 平板"，也没有任何机型表。
+ */
+export const VIEWPORT_REFERENCE_SHORT_SIDE_VP: number = 360
+
+/** 视口显示预算的下限：视口再小也按基准尺寸画，不会无限缩小圆壳。 */
+export const MIN_VIEWPORT_DETAIL_SCALE: number = 1.0
+
+/** 视口显示预算的上限：视口再大圆壳也只放大到这里，避免大屏上圆壳糊满屏。 */
+export const MAX_VIEWPORT_DETAIL_SCALE: number = 1.6
+
 // ─── 显示几何统一 ───
 
 /**
@@ -115,21 +145,21 @@ export interface FocusCandidate {
  * 选中描边、边端点、触摸响应区全部读它。否则会出现"画的是 160×80 的摘要卡，
  * 命中和边端点还按 200×200 的圆算"这种错位（#820）。
  *
- * - expanded：正圆，宽高都等于直径，圆角 = 直径 / 2
- * - collapsed：和普通节点同尺寸的摘要卡，圆角与节点一致
+ * - expanded：正圆，宽高都等于**当前 Viewport 下的展开尺寸**
+ *   （`expandedEmbedSizeVp(context)`，不是写死的 200），圆角 = 边长 / 2
+ * - collapsed：和普通节点同尺寸的摘要卡，圆角与节点一致，**不跟着视口无限放大**
  * - hidden：祖先已折叠，本层不渲染；返回摘要卡尺寸作为兜底（不应被用到）
  *
  * @param lod 视觉档位
+ * @param context 根视口上下文（expanded 分支要按它算显示尺寸）
  * @returns 显示边界（局部坐标，不含任何缩放）
  */
-export function embedDisplayBoundsForLod(lod: EmbedLodMode): EmbedDisplayBounds {
+export function embedDisplayBoundsForLod(
+  lod: EmbedLodMode,
+  context: VisualLodContext
+): EmbedDisplayBounds {
   if (lod === 'expanded') {
-    return {
-      width: DEFAULT_EMBED_DIAMETER,
-      height: DEFAULT_EMBED_DIAMETER,
-      radius: DEFAULT_EMBED_DIAMETER / 2,
-      isCircle: true
-    }
+    return expandedEmbedDisplayBounds(expandedEmbedSizeVp(context))
   }
   return {
     width: DEFAULT_NODE_WIDTH,
@@ -137,6 +167,52 @@ export function embedDisplayBoundsForLod(lod: EmbedLodMode): EmbedDisplayBounds 
     radius: DEFAULT_NODE_RADIUS,
     isCircle: false
   }
+}
+
+// ─── 视口显示预算 ───
+
+/** 把比例夹到 [min, max]。 */
+function clampDetailScale(scale: number): number {
+  if (!Number.isFinite(scale)) {
+    return MIN_VIEWPORT_DETAIL_SCALE
+  }
+  return Math.max(MIN_VIEWPORT_DETAIL_SCALE, Math.min(MAX_VIEWPORT_DETAIL_SCALE, scale))
+}
+
+/**
+ * 视口显示预算：一个**连续**比例，输入只有视口短边，不判断设备类型。
+ *
+ * 这是"同一台设备换窗口大小 → 视觉层数自然变化"的闭环所在（#820）：
+ * Viewport 变了 → 显示预算变了 → 展开态圆壳的真实 vp 尺寸变了 →
+ * 圆内可用空间变了 → LOD 档位跟着变。写死 200vp 的话，视口只影响 coverage，
+ * 不影响 LOD，"大屏多展开几层"就永远实现不了。
+ *
+ * 之所以是连续比例而不是断点表：断点表就是变相的设备分类，
+ * 折叠屏展开、半屏、分屏这些中间态全都要单独开一条规则。
+ *
+ * @param context 根视口上下文
+ * @returns 显示预算比例（≥ MIN_VIEWPORT_DETAIL_SCALE，≤ MAX_VIEWPORT_DETAIL_SCALE）
+ */
+export function viewportDetailScale(context: VisualLodContext): number {
+  const shortSide: number = viewportShortSideVp(context)
+  if (shortSide <= 0) {
+    return MIN_VIEWPORT_DETAIL_SCALE
+  }
+  return clampDetailScale(shortSide / VIEWPORT_REFERENCE_SHORT_SIDE_VP)
+}
+
+/**
+ * 当前 Viewport 下展开态 Embed 的**真实显示边长**（局部坐标）。
+ *
+ * 这是全链路的单一尺寸来源：LOD 判定、显示边界、布局矩形、渲染盒子
+ * 都必须读它，不允许任何地方再写死 DEFAULT_EMBED_DIAMETER 当"展开尺寸"，
+ * 否则就会出现"LOD 按 320 算、UI 还画 200"的第二套尺寸。
+ *
+ * @param context 根视口上下文
+ * @returns 展开态圆壳的局部显示边长（vp）
+ */
+export function expandedEmbedSizeVp(context: VisualLodContext): number {
+  return DEFAULT_EMBED_DIAMETER * viewportDetailScale(context)
 }
 
 // ─── 投影 ───
@@ -166,12 +242,16 @@ function effectiveOwnerScale(ownerEffectiveScale: number): number {
  * - `ownerEffectiveScale` 必须是 Embed **所属 Scene** 的最终有效比例，
  *   也就是 `全局相机比例 × 所有祖先 Embed 的局部适配比例`，由
  *   `ui/StarMapScene.viewportScaleValue()` 提供；
- * - `outerSizeVp = DEFAULT_EMBED_DIAMETER × ownerEffectiveScale`，
+ * - `outerSizeVp = embedDisplaySizeVp × ownerEffectiveScale`，
  *   **绝不能**把 Embed 自己 child Scene 的 local fit 乘进去：
  *   那是圆壳"里面"的内容大小，不是外壳大小。乘进去就等于"每深一层外壳就小一截"，
  *   折叠判定会自我实现（越深越折叠），再也展不开。
  *
- * @param embedDisplaySizeVp Embed 外壳的局部显示边长（展开态是 DEFAULT_EMBED_DIAMETER）
+ * `embedDisplaySizeVp` 必须传 `expandedEmbedSizeVp(context)`（当前 Viewport 下的展开尺寸），
+ * 不许写死 DEFAULT_EMBED_DIAMETER：那样 Viewport 只影响 coverage、不影响 LOD，
+ * "同一平台不同屏幕尺寸自然出现不同视觉层数"就落不了地（#820 复核）。
+ *
+ * @param embedDisplaySizeVp Embed 外壳的局部显示边长（展开态用 expandedEmbedSizeVp(context)）
  * @param ownerEffectiveScale Embed 所属 Scene 的最终有效比例（相机 × 祖先 local fit）
  * @param context 根视口上下文
  * @param paddingVp 内容区四边留白（与 fitView / clamp 用同一份）

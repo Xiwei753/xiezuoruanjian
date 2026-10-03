@@ -18,10 +18,9 @@ import {
   RecursiveSceneSource, EmbedFocusProbe,
   buildRecursiveSceneContext, collectEmbedFocusProbes
 } from '../platform/StarMapGeometry'
-import { DEFAULT_EMBED_DIAMETER } from '../platform/StarMapLayout'
 import {
   VisualLodContext, FocusCandidate, ProjectedEmbedMetrics,
-  projectEmbedMetrics, resolveFocusScenePath
+  projectEmbedMetrics, expandedEmbedSizeVp, resolveFocusScenePath
 } from '../platform/StarMapVisualLod'
 import {
   StarMapSceneRegistry,
@@ -264,7 +263,7 @@ export struct StarMapScreen {
     const candidates: FocusCandidate[] = []
     for (const probe of probes) {
       const metrics: ProjectedEmbedMetrics = projectEmbedMetrics(
-        DEFAULT_EMBED_DIAMETER, probe.ownerScale, context, 0
+        expandedEmbedSizeVp(context), probe.ownerScale, context, 0
       )
       candidates.push({
         scenePath: probe.childScenePath,
@@ -410,10 +409,14 @@ export struct StarMapScreen {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.canvasWidth = Number(newArea.width)
       this.canvasHeight = Number(newArea.height)
-      // 视口变了（分屏 / 折叠屏展开 / 横竖屏）：只重算视口与视觉焦点（#820）。
-      // 相机保持不动、focusScenePath 保持不动、不重新 fit 根图 —— 用户不会因为
+      // 视口变了（分屏 / 折叠屏展开 / 横竖屏）：**只**更新视口尺寸。
+      // 相机不动、focusScenePath 不动、不重新 fit 根图 —— 用户不会因为
       // 转个屏就被拽回根层看全局，那等于把正在写的内容从眼前搬走。
-      this.recomputeVisualFocus()
+      //
+      // 这里也**不能**顺手重算视觉焦点（#820 复核）：视口只改"显示预算"，
+      // LOD 由新视口尺寸往下传、各 Scene 自己重算。焦点是"用户在盯哪个子星图"，
+      // 折叠屏展开一下、分屏拖宽一点就换焦点是没有理由的。
+      // 焦点只在相机平移 / 缩放 / 捏合结束时才重算。
     })
   }
 

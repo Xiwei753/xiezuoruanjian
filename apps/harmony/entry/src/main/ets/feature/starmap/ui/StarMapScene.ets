@@ -84,6 +84,11 @@
 //     （embedScenePathLabel(instanceId)），不能传本 Scene 的 scenePath：
 //     传父 Scene 的话焦点 = root/embed:a 时 a/b/c 全被判成"在焦点链上"强制展开，
 //     而初始 focusScenePath = root 更会把根层所有 Embed 全部强制展开，根层 LOD 失效（#820 复核）。
+// 24. 展开尺寸必须是同一份显示真相（#820 复核）：`expandedEmbedSizeVp()` 读当前视口的
+//     显示预算，LOD 判定、显示边界、布局矩形、渲染盒子全部用它。写死 DEFAULT_EMBED_DIAMETER
+//     会让视口只影响 coverage 不影响 LOD，"大屏多展开几层"永远实现不了。
+// 25. Embed 的显示矩形以 authored 中心为锚点派生，展开 / 折叠 / 视口 resize 只改尺寸不挪位置；
+//     移动保存时用 embedAuthoredPositionFromDisplay 把显示左上角反解回 authored 口径再写 Core。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -111,6 +116,7 @@ import {
 import {
   PlatformLayoutNode, PlatformPoint, EmbedDisplayBounds,
   buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
+  embedAuthoredPositionFromDisplay,
   DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_RADIUS
 } from '../platform/StarMapLayout'
 import {
@@ -129,7 +135,7 @@ import {
 } from '../platform/StarMapViewport'
 import {
   EmbedLodMode, VisualLodContext,
-  projectEmbedMetrics, resolveEmbedLodForScene, embedDisplayBoundsForLod
+  projectEmbedMetrics, resolveEmbedLodForScene, embedDisplayBoundsForLod, expandedEmbedSizeVp
 } from '../platform/StarMapVisualLod'
 import {
   logPinchBegin, logPinchEnd, logRecursiveHit, logViewportState, logCreateResult,
@@ -479,18 +485,32 @@ export struct StarMapScene {
   }
 
   /**
+   * 当前 Viewport 下展开态 Embed 的真实显示边长（局部坐标）。
+   *
+   * 全 Scene 唯一的展开尺寸来源（#820）：LOD 判定、显示边界、布局矩形、
+   * 渲染盒子全部读它。不许在渲染里再写死 DEFAULT_EMBED_DIAMETER，
+   * 否则就出现"LOD 按 320 算、UI 画 200"的第二套尺寸。
+   */
+  private expandedEmbedSizeVp(): number {
+    return expandedEmbedSizeVp(this.visualLodContext())
+  }
+
+  /**
    * 某个 Embed 在本 Scene 里的视觉档位。
    *
    * 判据只有一条：它在**屏幕上**的圆内还剩多少真实可用空间
    * （`projectEmbedMetrics` 用本 Scene 的累计比例投影），
    * 放得下一个节点（DEFAULT_NODE_WIDTH）就展开，否则折叠成节点尺寸的摘要卡。
    *
+   * 视口大小通过 `expandedEmbedSizeVp()` 进入判据，所以同一个设备
+   * 改窗口大小会真的换档，而不是只有 coverage 在动（#820 复核）。
+   *
    * ancestorCollapsed 恒为 false：祖先一旦折叠，父层就不会再实例化本 Scene，
    * 能走到这里的 Scene 说明整条祖先链都是展开的。
    */
   private embedLod(embedInstanceId: string): EmbedLodMode {
     const metrics = projectEmbedMetrics(
-      DEFAULT_EMBED_DIAMETER,
+      this.expandedEmbedSizeVp(),
       this.viewportScaleValue(),
       this.visualLodContext(),
       EMBED_FIT_PADDING_VP
@@ -505,7 +525,7 @@ export struct StarMapScene {
 
   /** 某个 Embed 当前档位对应的显示边界（展开=正圆，折叠=节点尺寸摘要卡）。 */
   private embedDisplayBounds(embedInstanceId: string): EmbedDisplayBounds {
-    return embedDisplayBoundsForLod(this.embedLod(embedInstanceId))
+    return embedDisplayBoundsForLod(this.embedLod(embedInstanceId), this.visualLodContext())
   }
 
   /** 本 Scene 全部 Embed 的档位 → 显示边界映射，喂给 buildEmbedLayoutNodes。 */
@@ -543,7 +563,7 @@ export struct StarMapScene {
    * 渲染、命中、边几何全部用这个值，界面上不允许再直接读 cameraScale / fitScale 当比例用。
    *
    * 为什么子 Scene 要乘 inheritedScale：ArkUI 里子 Scene 是父 Embed 盒子的子组件，
-   * 父层写死了 `DEFAULT_EMBED_DIAMETER * viewportScaleValue()`，盒子已经带着祖先比例变大了。
+   * 父层写死了 `expandedEmbedSizeVp() * viewportScaleValue()`，盒子已经带着祖先比例变大了。
    * 子 Scene 若只用自己的 fitScale 绘制，圆壳会跟着相机变大、圆里的节点却纹丝不动。
    * 乘上 inheritedScale 之后，整条链才是
    * `child local × child fit × parent fit × … × global camera → screen`。
@@ -922,7 +942,7 @@ export struct StarMapScene {
    * 于是大部分子星图位置上 FORWARD_COMPETITION 根本走不到（#818 复审）。
    *
    * 圆半径同样直接取 `child.rect`：这个矩形就是这块 innerContent 的实际大小，
-   * 不需要再拿 `DEFAULT_EMBED_DIAMETER * viewportScaleValue()` 反推。
+   * 不需要再拿 `expandedEmbedSizeVp() * viewportScaleValue()` 反推。
    *
    * 标题带与圆环的判定必须和 resolveRecursiveHit 完全一致，所以同样调
    * embedHitMetricsForScene，不在这里再抄一份 24 / 12。
@@ -1737,16 +1757,23 @@ private refitAfterContentAdded(): void {
   /**
    * 保存 Embed 位置：通过 bridge 的 Embed update API 写回。
    * 使用 this.starmapId。
+   *
+   * 布局节点里的 x/y 是**以 authored 中心为锚点派生出来的显示矩形左上角**（#820），
+   * 尺寸也会随 LOD 和视口变。写回 Core 必须先反解回 authored 口径，
+   * 绝不能把 displayX / displayY 直接存成 authored position。
    */
   async saveEmbedPosition(embedId: string) {
     const ln = this.getPlatformLayoutNode(embedId)
     if (!ln || !this.bridge) return
-    hilog.info(0x0000, 'StarMapScene', `saveEmbedPosition: ${embedId} → (${ln.x}, ${ln.y})`)
-    const result = await this.bridge.updateStarMapEmbed(this.starmapId, embedId, { x: ln.x, y: ln.y })
+    const authored = embedAuthoredPositionFromDisplay(ln.x, ln.y, ln.width, ln.height)
+    hilog.info(0x0000, 'StarMapScene',
+      `saveEmbedPosition: ${embedId} → display(${ln.x}, ${ln.y}) → authored(${authored.x}, ${authored.y})`)
+    const result = await this.bridge.updateStarMapEmbed(this.starmapId, embedId,
+      { x: authored.x, y: authored.y })
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveEmbedPosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
     }
-    this.onMoveEmbed(this.scenePath, this.starmapId, embedId, { x: ln.x, y: ln.y })
+    this.onMoveEmbed(this.scenePath, this.starmapId, embedId, { x: authored.x, y: authored.y })
   }
 
   /**
@@ -1808,6 +1835,9 @@ private refitAfterContentAdded(): void {
     if (trimmed.length === 0) return
     if (!this.bridge) return
     const candidate = this.createMenuCanvasPosition
+    // 新建子星图的位置是 **authored 口径**（Core 的 embed.position 定义就是
+    // "DEFAULT_EMBED_DIAMETER 方框的左上角"），所以 clamp 也要用基准直径，
+    // 不能用当前视口下的展开显示尺寸 —— 后者是派生显示矩形的事（#820）。
     const clampedEmbed = this.clampItemToLocalSafeArea(candidate.x, candidate.y,
       DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
     const position: StarMapPoint = {
@@ -2295,7 +2325,7 @@ private refitAfterContentAdded(): void {
           const state = this.gestureTracker.getState()
           if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
             const movingEmbedSize = this.itemCanvasSize(embed.instanceId,
-              DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
+              this.expandedEmbedSizeVp(), this.expandedEmbedSizeVp())
             const newDx = this.moveEmbedStartX + event.offsetX / this.viewportScaleValue()
             const newDy = this.moveEmbedStartY + event.offsetY / this.viewportScaleValue()
             // 子星图里移动 Embed 同样要夹在圆内，否则半个圆壳会被父圆 clip 掉（#818 复审）
@@ -2348,8 +2378,8 @@ private refitAfterContentAdded(): void {
   /**
    * 展开态 Embed：主题容器色正圆，画布上唯一的外接形状是圆（#818 底色已跟随主题）。
    *
-   * 尺寸只有一个来源：DEFAULT_EMBED_DIAMETER（见 StarMapLayout），
-   * 宽=高=直径，圆角=直径/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
+   * 尺寸只有一个来源：`expandedEmbedSizeVp()`（视口显示预算 × 基准直径），
+   * 宽=高=边长，圆角=边长/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
    *
    * 命中分层不再用"三根矩形窄条 + clip 裁圆环"：clip(true) 只会把矩形条裁成圆内的几段直线，
    * 斜着点边框（例如 45° 方向）既不在 title 也不在任何窄条上，事件会掉进 child Scene，
@@ -2424,9 +2454,9 @@ private refitAfterContentAdded(): void {
       .position({ x: 0, y: 0 })
       .hitTestBehavior(HitTestMode.None)
     }
-    .width(projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER, this.viewportScaleValue()))
-    .height(projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER, this.viewportScaleValue()))
-    .borderRadius(projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER / 2, this.viewportScaleValue()))
+    .width(projectLocalLengthToScreen(this.expandedEmbedSizeVp(), this.viewportScaleValue()))
+    .height(projectLocalLengthToScreen(this.expandedEmbedSizeVp(), this.viewportScaleValue()))
+    .borderRadius(projectLocalLengthToScreen(this.expandedEmbedSizeVp() / 2, this.viewportScaleValue()))
     // 跟随主题：写死黑色时浅色主题下整颗子星图是一块黑饼，标题白字也压不出来（#818）
     .backgroundColor(this.themeConfig.colors.surfaceContainer)
     // 未选中也要有一条细描边，否则圆壳在同色底上看不出边界；选中时加粗。
@@ -2465,7 +2495,7 @@ private refitAfterContentAdded(): void {
       if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
         return HitTestMode.None
       }
-      const diameter: number = DEFAULT_EMBED_DIAMETER * this.viewportScaleValue()
+      const diameter: number = this.expandedEmbedSizeVp() * this.viewportScaleValue()
       const radius: number = diameter / 2
       const dx: number = localX - radius
       const dy: number = localY - radius
@@ -2474,7 +2504,7 @@ private refitAfterContentAdded(): void {
         return HitTestMode.None
       }
       // 这里的 touch.x / touch.y 已经是**组件局部坐标**，而组件本身按
-      // `DEFAULT_EMBED_DIAMETER * viewportScaleValue()` 显示，所以这一格
+      // `expandedEmbedSizeVp() * viewportScaleValue()` 显示，所以这一格
       // 1 单位 = 屏幕 1vp。热区规格 24 / 12 是屏幕侧的，除以 1 就是本组件坐标下的值——
       // 再乘一次 viewportScaleValue() 才是错的（#818 复审）：那会让标题带和圆环
       // 随递归 local fit 一起缩水，深一层就少一半。
@@ -2507,7 +2537,7 @@ private refitAfterContentAdded(): void {
    */
   private buildEmbedCircleResponseRegions(): Rectangle[] {
     const bands = buildCircleResponseBands(
-      projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER, this.viewportScaleValue())
+      projectLocalLengthToScreen(this.expandedEmbedSizeVp(), this.viewportScaleValue())
     )
     const regions: Rectangle[] = []
     for (const band of bands) {

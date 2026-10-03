@@ -3224,13 +3224,34 @@ const FOCUS_ENTER_COVERAGE = 0.70
 const FOCUS_EXIT_COVERAGE = 0.55
 const FOCUS_CENTER_ENTER_RATIO = 0.30
 const FOCUS_CENTER_EXIT_RATIO = 0.20
+const VIEWPORT_REFERENCE_SHORT_SIDE_VP = 360
+const MIN_VIEWPORT_DETAIL_SCALE = 1.0
+const MAX_VIEWPORT_DETAIL_SCALE = 1.6
 
-function embedDisplayBoundsForLod(lod) {
+function clampDetailScale(scale) {
+  if (!Number.isFinite(scale)) { return MIN_VIEWPORT_DETAIL_SCALE }
+  return Math.max(MIN_VIEWPORT_DETAIL_SCALE, Math.min(MAX_VIEWPORT_DETAIL_SCALE, scale))
+}
+
+function viewportDetailScale(context) {
+  const w = context.viewportWidthVp
+  const h = context.viewportHeightVp
+  const shortSide = (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) ? 0 : Math.min(w, h)
+  if (shortSide <= 0) { return MIN_VIEWPORT_DETAIL_SCALE }
+  return clampDetailScale(shortSide / VIEWPORT_REFERENCE_SHORT_SIDE_VP)
+}
+
+function expandedEmbedSizeVp(context) {
+  return DEFAULT_EMBED_DIAMETER * viewportDetailScale(context)
+}
+
+function embedDisplayBoundsForLod(lod, context) {
   if (lod === 'expanded') {
+    const diameter = expandedEmbedSizeVp(context)
     return {
-      width: DEFAULT_EMBED_DIAMETER,
-      height: DEFAULT_EMBED_DIAMETER,
-      radius: DEFAULT_EMBED_DIAMETER / 2,
+      width: diameter,
+      height: diameter,
+      radius: diameter / 2,
       isCircle: true
     }
   }
@@ -3773,13 +3794,13 @@ console.log('37e. 焦点候选只来自已实例化的 Scene，屏幕坐标从�
 console.log('')
 console.log('37f. 折叠摘要卡的命中 / 边端点 / 显示几何用同一份边界')
 {
-  const collapsedBounds = embedDisplayBoundsForLod('collapsed')
+  const collapsedBounds = embedDisplayBoundsForLod('collapsed', { viewportWidthVp: 360, viewportHeightVp: 640, focusScenePath: 'root' })
   assert(collapsedBounds.width === DEFAULT_NODE_WIDTH && collapsedBounds.height === DEFAULT_NODE_HEIGHT &&
     collapsedBounds.radius === DEFAULT_NODE_RADIUS && collapsedBounds.isCircle === false,
     '折叠摘要卡用现有节点尺寸，不是另造一套')
-  const expandedBounds = embedDisplayBoundsForLod('expanded')
+  const expandedBounds = embedDisplayBoundsForLod('expanded', { viewportWidthVp: 360, viewportHeightVp: 640, focusScenePath: 'root' })
   assert(expandedBounds.width === DEFAULT_EMBED_DIAMETER && expandedBounds.isCircle === true,
-    '展开态仍是正圆')
+    '展开态仍是正圆（基准视口下就是基准直径）')
   assert(isCircularDisplayRect({ width: 200, height: 200, radius: 100 }) === true,
     '显示边界自己读出形状（展开正圆）')
   assert(isCircularDisplayRect({ width: 160, height: 80, radius: 16 }) === false,
@@ -3927,6 +3948,101 @@ console.log('37g. 只有展开态才实例化 child Scene；LOD 不写回 Core �
     '屏幕长度投影走 Viewport 的同一份变换（UI 侧不再手写 × scale）')
   assert(!/deviceType|isTablet|isPhone|orientation|landscape/.test(viewportSource),
     'Viewport 里同样没有设备 / 横竖屏分支')
+}
+
+console.log('')
+console.log('38. 视口显示预算：Viewport 改大小要真的改 LOD，不只是改 coverage（#820 复核）')
+
+function lodOf(embedScenePath, ownerEffectiveScale, context) {
+  return resolveEmbedLodForScene(
+    projectEmbedMetrics(expandedEmbedSizeVp(context), ownerEffectiveScale, context, 8),
+    embedScenePath, context.focusScenePath, false
+  )
+}
+
+console.log('38a. viewportDetailScale 是连续比例 + 上下限，不是设备断点表')
+{
+  assert(VIEWPORT_REFERENCE_SHORT_SIDE_VP > 0 && MIN_VIEWPORT_DETAIL_SCALE > 0 &&
+    MAX_VIEWPORT_DETAIL_SCALE > MIN_VIEWPORT_DETAIL_SCALE,
+    '显示预算是"参考短边 + min/max clamp"，不是机型表')
+  const ctx = (w, h) => ({ viewportWidthVp: w, viewportHeightVp: h, focusScenePath: 'root' })
+  assert(viewportDetailScale(ctx(360, 800)) === 1,
+    '参考短边处比例 = 1')
+  assert(viewportDetailScale(ctx(180, 800)) === MIN_VIEWPORT_DETAIL_SCALE,
+    '极小视口夹到下限，不会无限缩小圆壳')
+  assert(viewportDetailScale(ctx(4000, 4000)) === MAX_VIEWPORT_DETAIL_SCALE,
+    '极大视口夹到上限，圆壳不会糊满屏')
+  assert(viewportDetailScale(ctx(200, 900)) === viewportDetailScale(ctx(900, 200)),
+    '只看短边，长边不参与（横竖屏之间不会抖）')
+  let prev = 0
+  let monotonic = true
+  for (let shortSide = 200; shortSide <= 1200; shortSide += 20) {
+    const scale = viewportDetailScale(ctx(shortSide, shortSide))
+    if (scale < prev) { monotonic = false }
+    prev = scale
+  }
+  assert(monotonic, '比例随短边单调不减（连续，没有台阶）')
+  assert(viewportDetailScale(ctx(0, 0)) === MIN_VIEWPORT_DETAIL_SCALE &&
+    viewportDetailScale(ctx(NaN, 800)) === MIN_VIEWPORT_DETAIL_SCALE,
+    '视口还没量出来时退回下限，不产生 NaN 尺寸')
+}
+
+console.log('38b. 同 camera / 同 authored graph / 同 focus：小视口折叠，大视口展开')
+{
+  const small = { viewportWidthVp: 360, viewportHeightVp: 640, focusScenePath: 'root' }
+  const large = { viewportWidthVp: 1000, viewportHeightVp: 900, focusScenePath: 'root' }
+  const deep = 'root/embed:a/embed:b'
+  assert(lodOf(deep, 1, small) === 'collapsed',
+    '360×640 小窗：同一颗深层 Embed 折叠')
+  assert(lodOf(deep, 1, large) === 'expanded',
+    '1000×900 大窗：同一颗深层 Embed 展开')
+  // 关键在于 LOD 档位真的变了，而不只是 coverage 分母变了
+  const smallMetrics = projectEmbedMetrics(expandedEmbedSizeVp(small), 1, small, 8)
+  const largeMetrics = projectEmbedMetrics(expandedEmbedSizeVp(large), 1, large, 8)
+  assert(smallMetrics.innerUsableSizeVp < EXPANDED_MIN_INNER_USABLE_VP &&
+    largeMetrics.innerUsableSizeVp >= EXPANDED_MIN_INNER_USABLE_VP,
+    '判据是圆内真实可用空间变了（投影尺寸随视口变），不是 coverage 变了')
+  assert(near(expandedEmbedSizeVp(large), DEFAULT_EMBED_DIAMETER * MAX_VIEWPORT_DETAIL_SCALE),
+    '大窗展开尺寸 = 基准直径 × 上限比例')
+  assert(embedDisplayBoundsForLod('expanded', large).width === expandedEmbedSizeVp(large),
+    '显示边界与 LOD 判定读同一份尺寸（不会出现"LOD 按 320 算、UI 画 200"）')
+  const collapsedLarge = embedDisplayBoundsForLod('collapsed', large)
+  assert(collapsedLarge.width === DEFAULT_NODE_WIDTH && collapsedLarge.height === DEFAULT_NODE_HEIGHT,
+    '折叠摘要卡不跟着视口无限放大，保持节点尺寸')
+}
+
+console.log('38c. 视口 resize 不改焦点；焦点只跟着相机走')
+{
+  const screenSource820 = readStarmapSource('ui/StarMapScreen.ets')
+  const areaBody = screenSource820.slice(screenSource820.indexOf('.onAreaChange('),
+    screenSource820.indexOf('.onAreaChange(') + 900)
+  assert(!areaBody.includes('recomputeVisualFocus'),
+    '纯 onAreaChange 只更新视口尺寸，不重算视觉焦点（折叠屏展开一下不该换焦点）')
+  assert(screenSource820.includes('this.canvasWidth = Number(newArea.width)') &&
+    screenSource820.includes('this.canvasHeight = Number(newArea.height)'),
+    'onAreaChange 更新的是根视口宽高')
+  assert(screenSource820.includes('projectEmbedMetrics(\n        expandedEmbedSizeVp(context)'),
+    '焦点覆盖率也用视口感知的展开尺寸（和画出来的大小一致）')
+  const sceneSource820 = readStarmapSource('ui/StarMapScene.ets')
+  assert(sceneSource820.includes('return expandedEmbedSizeVp(this.visualLodContext())'),
+    'Scene 里只有一份 expandedEmbedSizeVp，LOD / 边界 / 渲染都从它出发')
+  const lodBody820 = sceneSource820.slice(sceneSource820.indexOf('private embedLod('),
+    sceneSource820.indexOf('private embedDisplayBounds('))
+  assert(lodBody820.includes('this.expandedEmbedSizeVp()') && !lodBody820.includes('DEFAULT_EMBED_DIAMETER'),
+    'embedLod 传的是视口感知尺寸，不再写死 200')
+  const renderBody820 = sceneSource820.slice(
+    sceneSource820.indexOf('StarMapExpandedEmbed(embed: StarMapEmbed) {'),
+    sceneSource820.indexOf('private buildEmbedCircleResponseRegions()')
+  )
+  assert(renderBody820.includes('this.expandedEmbedSizeVp()') &&
+    !renderBody820.includes('DEFAULT_EMBED_DIAMETER'),
+    '展开态渲染盒子、圆环命中、热区全部用同一份尺寸')
+  assert(sceneSource820.includes('embedAuthoredPositionFromDisplay(ln.x, ln.y, ln.width, ln.height)') &&
+    sceneSource820.includes('updateStarMapEmbed(this.starmapId, embedId,'),
+    '移动保存把显示矩形反解回 authored 口径再写 Core')
+  assert(sceneSource820.includes('authoredCenterX: number = embed.position.x') === false &&
+    readStarmapSource('platform/StarMapLayout.ets').includes('const authoredCenterX: number = embed.position.x'),
+    '显示矩形以 authored 中心为锚点派生，锚点逻辑留在布局纯函数里')
 }
 
 console.log('')

@@ -1,6 +1,8 @@
 // ─── StarMapLayout.ets ───
 // 平台层显示布局模块：freeform 直接用 node.position、自动网格布局、节点宽高圆角层级、保存时生成 position patch。
 // Embed 的宽高圆角按"当前视觉档位"给（#820），档位判定在 StarMapVisualLod，这里只负责把尺寸落到布局节点上。
+// Embed 的显示矩形以 authored 中心为锚点派生（折叠 / 展开 / 视口 resize 都不挪星图），
+// 写回 Core 时用 embedAuthoredPositionFromDisplay 反解回 authored 口径。
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 
 import { StarMapNode, StarMapEmbed } from '../../../corebridge/dto/StarMapDtos'
@@ -74,13 +76,48 @@ export const DEFAULT_EMBED_DIAMETER: number = 200
 const GRID_HORIZONTAL_SPACING: number = 200
 const GRID_VERTICAL_SPACING: number = 120
 
-/** 展开态 Embed 的显示边界（正圆）。折叠态见 StarMapVisualLod.embedDisplayBoundsForLod。 */
-export function expandedEmbedDisplayBounds(): EmbedDisplayBounds {
+/**
+ * 展开态 Embed 的显示边界（正圆）。
+ *
+ * @param diameterVp 展开态圆的外壳直径（vp）。默认是基准直径；
+ *                   传当前 Viewport 下的显示尺寸即可得到"这一档真的画多大"的边界（#820）。
+ */
+export function expandedEmbedDisplayBounds(diameterVp?: number): EmbedDisplayBounds {
+  const diameter: number = diameterVp !== undefined &&
+    Number.isFinite(diameterVp) && diameterVp > 0 ? diameterVp : DEFAULT_EMBED_DIAMETER
   return {
-    width: DEFAULT_EMBED_DIAMETER,
-    height: DEFAULT_EMBED_DIAMETER,
-    radius: DEFAULT_EMBED_DIAMETER / 2,
+    width: diameter,
+    height: diameter,
+    radius: diameter / 2,
     isCircle: true
+  }
+}
+
+/**
+ * 把派生出来的显示矩形反解回 Core 的 authored position（#820）。
+ *
+ * 显示矩形是**以 authored 中心为锚点**派生的（见 buildEmbedLayoutNodes），
+ * 所以展开 / 折叠 / 视口 resize 只是尺寸在变，中心不动。
+ * 反过来，移动保存时也必须把显示左上角换算回 authored 左上角再写进 Core，
+ * 绝不能把 displayX / displayY 直接存成 authored position。
+ *
+ * @param displayX 显示矩形左上角 x（画布坐标）
+ * @param displayY 显示矩形左上角 y（画布坐标）
+ * @param displayWidth 显示宽度（vp）
+ * @param displayHeight 显示高度（vp）
+ * @returns authored position（Core 的 embed.position 口径）
+ */
+export function embedAuthoredPositionFromDisplay(
+  displayX: number,
+  displayY: number,
+  displayWidth: number,
+  displayHeight: number
+): PlatformPoint {
+  const width: number = Number.isFinite(displayWidth) ? displayWidth : DEFAULT_EMBED_DIAMETER
+  const height: number = Number.isFinite(displayHeight) ? displayHeight : DEFAULT_EMBED_DIAMETER
+  return {
+    x: displayX + (width - DEFAULT_EMBED_DIAMETER) / 2,
+    y: displayY + (height - DEFAULT_EMBED_DIAMETER) / 2
   }
 }
 
@@ -113,15 +150,25 @@ export function buildFreeformLayout(nodes: StarMapNode[]): PlatformLayoutNode[] 
 
 /**
  * 从 graph.embeds 构建 Embed 布局节点。
- * Embed 位置只读 embed.position（位置真相永远在 Core，这里不因缩放或 LOD 回写），
- * 宽高/圆角来自"当前视觉档位的显示边界"：
+ *
+ * Embed 的**位置真相**永远只读 embed.position（Core 的 authored position），
+ * 这里不因缩放、LOD 或视口 resize 回写 Core。
+ *
+ * 但显示矩形是**以 authored 中心为锚点派生**的：
+ *   authoredCenter = authored position + DEFAULT_EMBED_DIAMETER / 2
+ *   displayX/Y     = authoredCenter − 当前显示尺寸 / 2
+ * 这样展开（正圆）↔ 折叠（摘要卡）之间切换、或者视口变大让圆壳变大时，
+ * 都只是尺寸在变，**星图本身不会左右上下跳一下**。
+ *
+ * 宽高 / 圆角来自"当前视觉档位的显示边界"：
  * 展开是正圆（宽高=直径，圆角=半径），折叠是和节点同尺寸的摘要卡（#820）。
  *
- * 不带 displayBounds 就按展开态算 —— 但那会让画出来的是摘要卡、命中和边端点还按圆算，
- * 所以递归渲染时必须由 StarMapScene 把每个 Embed 的 LOD 档位传进来。
+ * 不带 displayBounds 就按基准直径的展开态算 —— 但那会让画出来的是摘要卡、
+ * 命中和边端点还按圆算，所以递归渲染时必须由 StarMapScene 把每个 Embed 的
+ * LOD 档位映射传进来。
  *
  * @param embeds 星图内嵌列表
- * @param displayBounds embed instanceId → 该 Embed 当前档位的显示边界（缺省即展开）
+ * @param displayBounds embed instanceId → 该 Embed 当前档位的显示边界（缺省即基准展开态）
  * @returns 平台层布局节点列表（用于 Embed 渲染）
  */
 export function buildEmbedLayoutNodes(
@@ -134,10 +181,13 @@ export function buildEmbedLayoutNodes(
     const bounds: EmbedDisplayBounds = displayBounds !== undefined
       ? displayBounds.get(embed.instanceId) ?? fallback
       : fallback
+    // 以 authored 中心为锚点派生显示矩形（#820）
+    const authoredCenterX: number = embed.position.x + DEFAULT_EMBED_DIAMETER / 2
+    const authoredCenterY: number = embed.position.y + DEFAULT_EMBED_DIAMETER / 2
     result.push({
       nodeId: embed.instanceId,
-      x: embed.position.x,
-      y: embed.position.y,
+      x: authoredCenterX - bounds.width / 2,
+      y: authoredCenterY - bounds.height / 2,
       width: bounds.width,
       height: bounds.height,
       radius: bounds.radius,

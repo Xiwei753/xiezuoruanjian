@@ -59,13 +59,25 @@ function buildFreeformLayout(nodes) {
 }
 
 // ── 被测规格：buildEmbedLayoutNodes ──
-// displayBounds: Map<instanceId, EmbedDisplayBounds>，缺省按展开圆处理（#820）
-function expandedEmbedDisplayBounds() {
+// displayBounds: Map<instanceId, EmbedDisplayBounds>，缺省按基准直径的展开圆处理（#820）
+function expandedEmbedDisplayBounds(diameterVp) {
+  const diameter = (diameterVp !== undefined && Number.isFinite(diameterVp) && diameterVp > 0)
+    ? diameterVp : DEFAULT_EMBED_DIAMETER
   return {
-    width: DEFAULT_EMBED_DIAMETER,
-    height: DEFAULT_EMBED_DIAMETER,
-    radius: DEFAULT_EMBED_DIAMETER / 2,
+    width: diameter,
+    height: diameter,
+    radius: diameter / 2,
     isCircle: true
+  }
+}
+
+// 显示矩形以 authored 中心为锚点派生；反解回 authored 口径用于写回 Core（#820）
+function embedAuthoredPositionFromDisplay(displayX, displayY, displayWidth, displayHeight) {
+  const width = Number.isFinite(displayWidth) ? displayWidth : DEFAULT_EMBED_DIAMETER
+  const height = Number.isFinite(displayHeight) ? displayHeight : DEFAULT_EMBED_DIAMETER
+  return {
+    x: displayX + (width - DEFAULT_EMBED_DIAMETER) / 2,
+    y: displayY + (height - DEFAULT_EMBED_DIAMETER) / 2
   }
 }
 
@@ -73,10 +85,12 @@ function buildEmbedLayoutNodes(embeds, displayBounds) {
   const result = []
   for (const embed of embeds) {
     const bounds = (displayBounds && displayBounds.get(embed.instanceId)) || expandedEmbedDisplayBounds()
+    const authoredCenterX = embed.position.x + DEFAULT_EMBED_DIAMETER / 2
+    const authoredCenterY = embed.position.y + DEFAULT_EMBED_DIAMETER / 2
     result.push({
       nodeId: embed.instanceId,
-      x: embed.position.x,
-      y: embed.position.y,
+      x: authoredCenterX - bounds.width / 2,
+      y: authoredCenterY - bounds.height / 2,
       width: bounds.width,
       height: bounds.height,
       radius: bounds.radius,
@@ -586,9 +600,38 @@ console.log('5b. Embed 布局尺寸随 LOD 变，但位置永远只读 authored 
   assert(layout[1].width === DEFAULT_NODE_WIDTH && layout[1].height === DEFAULT_NODE_HEIGHT &&
     layout[1].radius === DEFAULT_NODE_RADIUS, '折叠态显示边界 = 节点尺寸（绘制/命中/边锚点同一份）')
   assert(layout[1].collapsed === true, '折叠态 collapsed = true')
-  assert(layout[1].x === 200 && layout[1].y === 300,
-    '折叠不写回 Core authored position（LOD 只改派生显示矩形）')
+  const authoredCenterX = 200 + DEFAULT_EMBED_DIAMETER / 2
+  const authoredCenterY = 300 + DEFAULT_EMBED_DIAMETER / 2
+  assert(layout[1].x + layout[1].width / 2 === authoredCenterX &&
+    layout[1].y + layout[1].height / 2 === authoredCenterY,
+    '折叠态显示矩形仍以 authored 中心为锚点（折叠不挪星图）')
   assert(buildEmbedLayoutNodes(embeds).length === 2, 'displayBounds 可省略')
+}
+
+console.log('5c. 展开尺寸随视口变，但中心锚点不动；移动保存反解回 authored（#820 复核）')
+{
+  const embed = { instanceId: 'emb1', targetStarmapId: 'sm2', position: { x: 640, y: 48 } }
+  const authoredCenterX = 640 + DEFAULT_EMBED_DIAMETER / 2
+  const authoredCenterY = 48 + DEFAULT_EMBED_DIAMETER / 2
+  const base = buildEmbedLayoutNodes([embed])
+  const big = buildEmbedLayoutNodes([embed], new Map([
+    ['emb1', expandedEmbedDisplayBounds(320)]
+  ]))
+  assert(base[0].x === 640 && base[0].y === 48, '基准展开态仍是 authored 左上角（直径没变时两者相等）')
+  assert(big[0].x + big[0].width / 2 === authoredCenterX &&
+    big[0].y + big[0].height / 2 === authoredCenterY,
+    '视口变大 → 圆壳变大，但中心锚点不跳')
+  assert(big[0].x === authoredCenterX - 160 && big[0].y === authoredCenterY - 160,
+    '显示左上角 = authored 中心 − 显示尺寸 / 2')
+
+  // 移动保存：显示左上角反解回 authored 口径再写 Core
+  const authored = embedAuthoredPositionFromDisplay(
+    big[0].x + 30, big[0].y - 20, big[0].width, big[0].height
+  )
+  assert(authored.x === 670 && authored.y === 28,
+    '保存位置时把 displayX/Y 反解回 authored（位移量保持 30 / −20）')
+  assert(Number.isFinite(embedAuthoredPositionFromDisplay(10, 20, NaN, NaN).x),
+    '反解遇到非有限尺寸退回基准直径，不写 NaN 进 Core')
 }
 
 console.log('6. 拖动：屏幕位移 ÷ zoomScale，返回新数组不改原数组')
