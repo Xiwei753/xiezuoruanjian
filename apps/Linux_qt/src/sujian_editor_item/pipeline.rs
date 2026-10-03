@@ -1,3 +1,4 @@
+use super::animation::transaction_builder::HandoffTransactionOutcome;
 use super::animation::LinuxEditorAnimationCoordinator;
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
@@ -6,7 +7,7 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
 use super::line_snapshot_builder::LineSnapshotBuilder;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
-use super::texture_cache::TextureCache;
+use super::texture_cache::{LineSnapshotId, TextureCache};
 use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use super::{editor_animation_transaction_skipped_event, AnimationSkipFields};
@@ -408,6 +409,54 @@ pub(crate) struct LinuxEditorPipeline {
     pending_promoted_layout: Option<crate::editor::layout::PromotedLayout>,
 }
 
+/// Issue #819 评论 5967250411 问题 3：Linux 平台内部的编辑结果分类。
+///
+/// `apply_kernel_outcome` 把 Core `EditorEditOutcome` 拍扁成 `Option<EditorEditResult>`，
+/// 在 `none_on_noop=false` 时对 Applied/NoChange/StaleRevision/InvalidOffset/InvalidRange
+/// 都返回 `Some(result)`，调用方无法区分"真的 Applied"和"NoChange/StaleRevision"。
+/// `edit_flow.rs` 用 `is_some()` 判 Applied 会把 NoChange/StaleRevision 误判成 Applied。
+///
+/// 本枚举保留 Core 的完整分类：只有 `Applied` / `AppliedWithAdjustedSelection` 才算
+/// 真正应用了编辑，`NotApplied` 带上具体的 kind 供 edit_flow 区分跳过原因。
+#[derive(Clone, Debug)]
+pub(crate) enum PipelineEditOutcome {
+    /// Core 真正应用了编辑（Applied / AppliedWithAdjustedSelection）。
+    Applied(EditorEditResult),
+    /// Core 没有应用编辑（NoChange / StaleRevision / InvalidOffset / InvalidRange）。
+    NotApplied {
+        kind: PipelineEditOutcomeKind,
+        result: EditorEditResult,
+    },
+}
+
+/// `PipelineEditOutcome::NotApplied` 的具体原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PipelineEditOutcomeKind {
+    NoChange,
+    StaleRevision,
+    InvalidOffset,
+    InvalidRange,
+}
+
+/// Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 的明确结果。
+///
+/// 替代旧的 `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>`——
+/// 后者让调用方自己猜 skip reason（scrolling -> `ScrollingSuppressed`，
+/// 其它 `None` -> `BuilderEmptyTransaction`），实际跳过原因从 `prepare_edit_motion`
+/// 内部丢失。现在每个跳过点原地返回自己的 `EditVisualSkipReason`，
+/// `record_transaction` / `apply_edit_with_visuals` 只透传不再猜。
+pub(crate) enum VisualPrepareOutcome {
+    /// 视觉事务已创建，`key` 是真正创建的事务 key。
+    ///
+    /// 不再携带 `PreparedEditMotion`——所有消费者只需要 `key`，
+    /// 携带 motion 会让枚举变体大小膨胀到 248 字节（`large_enum_variant`）。
+    Created { key: VisualTransactionKey },
+    /// Core edit 已应用但视觉事务未创建，附带具体跳过原因。
+    Skipped(super::edit_flow::EditVisualSkipReason),
+    /// 动画未请求（三个开关全关），Core edit 已应用但无视觉事务。
+    AnimationDisabled,
+}
+
 impl LinuxEditorPipeline {
     pub fn new() -> Self {
         Self {
@@ -489,6 +538,13 @@ impl LinuxEditorPipeline {
         let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
         self.texture_cache.retain_active_snapshot_ids(&active_ids);
         new_revision
+    }
+
+    /// 在取消旧事务和新事务接管之间，保留仍活跃或正在交棒的纹理。
+    pub(crate) fn retain_handoff_textures(&mut self, carried_ids: &[LineSnapshotId]) {
+        let mut active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+        active_ids.extend_from_slice(carried_ids);
+        self.texture_cache.retain_active_snapshot_ids(&active_ids);
     }
 
     /// Issue #738 评论 5789470425 问题1 / 评论 5792244119 问题 1: 用当前排版参数
@@ -780,6 +836,47 @@ impl LinuxEditorPipeline {
         }
     }
 
+    /// Issue #819 评论 5967250411 问题 3：保留 Core `EditorEditOutcome` 完整分类的
+    /// `apply_kernel_outcome` 变体。返回 `PipelineEditOutcome`，让 edit_flow 能区分
+    /// Applied 和 NoChange/StaleRevision。
+    ///
+    /// mirror 更新逻辑与 `apply_kernel_outcome` 完全一致，只是返回值不拍扁。
+    fn apply_kernel_outcome_typed(&mut self, outcome: EditorEditOutcome) -> PipelineEditOutcome {
+        match outcome {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+                if self.mirror.apply_edit_result(&result).is_err() {
+                    self.reload_mirror_from_kernel();
+                }
+                PipelineEditOutcome::Applied(result)
+            }
+            EditorEditOutcome::NoChange(result) => {
+                if self.mirror.apply_edit_result(&result).is_err() {
+                    self.reload_mirror_from_kernel();
+                }
+                PipelineEditOutcome::NotApplied {
+                    kind: PipelineEditOutcomeKind::NoChange,
+                    result,
+                }
+            }
+            EditorEditOutcome::StaleRevision(result) => {
+                self.reload_mirror_from_kernel();
+                PipelineEditOutcome::NotApplied {
+                    kind: PipelineEditOutcomeKind::StaleRevision,
+                    result,
+                }
+            }
+            EditorEditOutcome::InvalidOffset(result) => PipelineEditOutcome::NotApplied {
+                kind: PipelineEditOutcomeKind::InvalidOffset,
+                result,
+            },
+            EditorEditOutcome::InvalidRange(result) => PipelineEditOutcome::NotApplied {
+                kind: PipelineEditOutcomeKind::InvalidRange,
+                result,
+            },
+        }
+    }
+
     pub fn load_text(&mut self, text: String, cursor: usize) -> bool {
         let normalized = normalize_plain_text(&text);
         let clamped_cursor = clamp_to_char_boundary(&normalized, cursor);
@@ -806,7 +903,7 @@ impl LinuxEditorPipeline {
         byte_offset: usize,
         text: &str,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::Insert {
             byte_offset: Utf8ByteOffset::clamp_rope(self.kernel.rope(), byte_offset),
             text: text.to_string(),
@@ -814,7 +911,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     pub fn delete_range(
@@ -822,7 +919,7 @@ impl LinuxEditorPipeline {
         byte_start: usize,
         byte_end_exclusive: usize,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::Delete {
             byte_range: Utf8ByteRange::clamp_rope(
                 self.kernel.rope(),
@@ -834,7 +931,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     pub fn replace_range(
@@ -843,7 +940,7 @@ impl LinuxEditorPipeline {
         byte_end_exclusive: usize,
         replacement: &str,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::Replace {
             byte_range: Utf8ByteRange::clamp_rope(
                 self.kernel.rope(),
@@ -856,7 +953,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     /// 原子 IME commit — Qt `QInputMethodEvent` 两步语义的原子执行：
@@ -878,7 +975,7 @@ impl LinuxEditorPipeline {
         replacement_byte_end: usize,
         inserted_text: &str,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::ImeCommit {
             selection_byte_range: Utf8ByteRange::clamp_rope(
                 self.kernel.rope(),
@@ -902,7 +999,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     pub fn set_selection(&mut self, anchor: usize, head: usize) -> Option<EditorEditResult> {
@@ -1113,7 +1210,7 @@ impl LinuxEditorPipeline {
         new: &EditorSnapshot,
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
-    ) -> Option<(PreparedEditMotion, Option<VisualTransactionKey>)> {
+    ) -> VisualPrepareOutcome {
         // Issue #756 / Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 +
         // 文字以 caret 当前帧为吞吐边界；非协同时 typing_animation_enabled 只决定文字动画，
         // smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
@@ -1122,7 +1219,19 @@ impl LinuxEditorPipeline {
             ctx.coordinated_animation_enabled || ctx.typing_animation_enabled;
         let caret_animation_enabled =
             ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled;
-        if ctx.is_scrolling || ctx.is_loading || ctx.is_applying_format {
+        // Issue #819 评论 5968931455 问题 2.1: 拆分 scrolling/loading/applying_format，
+        // 各自返回对应的 skip reason，不再共用 ScrollingSuppressed。
+        // 优先级：scrolling > loading > applying_format。
+        let skip_reason = if ctx.is_scrolling {
+            Some(super::edit_flow::EditVisualSkipReason::ScrollingSuppressed)
+        } else if ctx.is_loading {
+            Some(super::edit_flow::EditVisualSkipReason::LoadingSuppressed)
+        } else if ctx.is_applying_format {
+            Some(super::edit_flow::EditVisualSkipReason::FormatApplyingSuppressed)
+        } else {
+            None
+        };
+        if let Some(reason) = skip_reason {
             // Issue #815 评论 6042062633 修改 8: 滚动/加载/套用格式期间抑制动画是显式规则，
             // 但必须留下正式事件，否则诊断包里"编辑发生了却没有动画"没有任何线索。
             editor_animation_transaction_skipped_event(&AnimationSkipFields {
@@ -1142,10 +1251,10 @@ impl LinuxEditorPipeline {
                 transaction_id: None,
                 generation: 0,
             });
-            return None;
+            return VisualPrepareOutcome::Skipped(reason);
         }
         if !text_animation_enabled && !caret_animation_enabled {
-            return None;
+            return VisualPrepareOutcome::AnimationDisabled;
         }
         // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
         //
@@ -1174,10 +1283,12 @@ impl LinuxEditorPipeline {
             u64::from(text_duration_ms),
             u64::from(caret_duration_ms),
         );
-        // Issue #819 评论 5956495850 第 1 节：本函数创建的视觉事务 key，
-        // 供调用方返回 `EditVisualOutcome::Created(key)`。`None` 表示动画被抑制
-        // 或 builder 跳过了事务创建。
-        let mut created_key: Option<VisualTransactionKey> = None;
+        // Issue #819 评论 5968931455 问题 2.2: create_transaction_from_prepared_handoff
+        // 返回 HandoffTransactionOutcome，直接透传 skip reason，不再猜。
+        #[allow(unused_assignments)]
+        let mut handoff_outcome: HandoffTransactionOutcome = HandoffTransactionOutcome::Skipped(
+            super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+        );
         {
             let (raw_byte_start, raw_byte_end) = motion
                 .inserted_range
@@ -1369,7 +1480,9 @@ impl LinuxEditorPipeline {
                             transaction_id: None,
                             generation: 0,
                         });
-                        return None;
+                        return VisualPrepareOutcome::Skipped(
+                            super::edit_flow::EditVisualSkipReason::StaleCanonical,
+                        );
                     }
                 };
 
@@ -1664,7 +1777,9 @@ impl LinuxEditorPipeline {
                     // fallback_old_generation_opt 已在上方释放，不再重复释放。
                     // 释放 new_generation，避免泄漏（成功路径由 pending_promoted_layout 接管）。
                     layout::clear_layout_generation(new_generation);
-                    return None;
+                    return VisualPrepareOutcome::Skipped(
+                        super::edit_flow::EditVisualSkipReason::StaleCanonical,
+                    );
                 }
             };
 
@@ -1709,17 +1824,36 @@ impl LinuxEditorPipeline {
             // Issue #738 评论 5788513592 额外要求: reconcile 删除 unit / 完成事务后同步按
             // 剩余 active snapshot ids 收一次 texture cache，不让已经失去 owner 的纹理一直
             // 挂到后续别的完成路径才释放。
-            let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
-            self.texture_cache.retain_active_snapshot_ids(&active_ids);
+            // Issue #819 评论 5968240881 问题 1：retain 时把 carried_snapshot_ids 也算进
+            // active ids。carried unit 引用旧事务的 snapshot/texture，旧事务 cancel 后
+            // 纹理可能在新事务接管前被回收。把 carried_snapshot_ids 显式算进 active
+            // 集合，让纹理在新事务创建之前不被回收。新事务创建后由它自己持有这些
+            // snapshot ids（carried unit 已 units.push() 进新事务 units），下一次 retain
+            // 会按新 active ids 正常收。
+            let carried_ids = match prepared_handoff.as_ref() {
+                Some(handoff) => match handoff {
+                    super::animation::rebase::PreparedRebaseHandoff::Insert {
+                        visual_state,
+                        ..
+                    } => &visual_state.carried_snapshot_ids,
+                    super::animation::rebase::PreparedRebaseHandoff::Delete {
+                        visual_state,
+                        ..
+                    } => &visual_state.carried_snapshot_ids,
+                }
+                .as_slice(),
+                None => &[],
+            };
+            self.retain_handoff_textures(carried_ids);
 
-            let key = self
+            let outcome = self
                 .animation_coordinator
                 .create_transaction_from_prepared_handoff(
                     prepared_handoff,
                     &motion,
                     // Issue #756: 文字动画 = coordinated || typing，光标动画 = coordinated || smooth。
-                    // Issue #808 评论 5917296533: 协同不再把文字与光标绑死——文字动画按自己的
-                    // timeline 推进，caret 只决定遮罩的空间锚点/方向。coordinated=false 时由
+                    // Issue #819: 协同模式下文字与光标共享同一份采样，InsertReveal/DeleteConceal
+                    // 的空间边界直接来自同一笔 cursor track 的当前帧。coordinated=false 时由
                     // smooth 单独决定光标动画（"平滑光标"在正文编辑期间的光标动画）。
                     text_animation_enabled,
                     caret_animation_enabled,
@@ -1737,19 +1871,18 @@ impl LinuxEditorPipeline {
                     cursor_owner_epoch,
                     new_revision,
                 );
-            // Issue #819 评论 5956495850 第 1 节：保存创建的事务 key 副本，
-            // 供 `apply_edit_with_visuals` 返回 `EditVisualOutcome::Created(key)`。
-            // `VisualTransactionKey` 是 Copy，这里零成本复制。
-            created_key = key;
+            // Issue #819 评论 5968931455 问题 2.2: 透传 HandoffTransactionOutcome，
+            // 不再保存 Option<VisualTransactionKey>。
+            handoff_outcome = outcome;
             // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
             // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
-            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 None，
+            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 Skipped，
             // 但此时 canonical 已推进到 new_revision、旧事务已 reconcile 到 new_revision。
             // 若 layout_revision 停在旧值，basis 守卫（已改为 ==/!=）会把"事务 revision
             // 比 Pipeline 当前 revision 更新"误当合法事务继续画。new_doc_snapshot 一旦成为
             // 当前 canonical，layout_revision 就必须无条件一起提交。
             self.layout_revision = new_revision;
-            if let Some(key) = key {
+            if let HandoffTransactionOutcome::Created(key) = handoff_outcome {
                 self.prepare_transaction_textures(key);
             }
 
@@ -1795,7 +1928,12 @@ impl LinuxEditorPipeline {
                 ));
         }
 
-        Some((motion, created_key))
+        // Issue #819 评论 5968931455 问题 2.2: 直接透传 HandoffTransactionOutcome，
+        // 不再猜 skip reason。
+        match handoff_outcome {
+            HandoffTransactionOutcome::Created(key) => VisualPrepareOutcome::Created { key },
+            HandoffTransactionOutcome::Skipped(reason) => VisualPrepareOutcome::Skipped(reason),
+        }
     }
 }
 

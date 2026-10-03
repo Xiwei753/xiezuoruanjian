@@ -12,8 +12,9 @@
 //! - `SampledEditVisualState`：一笔事务在本帧的完整屏幕状态（transaction key +
 //!   layout basis revision + caret + slices）。
 
-use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
-use crate::sujian_editor_item::animation::transaction::types::IngestSnapshotSide;
+use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animation::transaction::types::{IngestSnapshotSide, IngestStageId};
+use crate::sujian_editor_item::animation::VisualUnitTiming;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
@@ -52,6 +53,12 @@ pub(crate) struct SampledCaretFrame {
     pub ingest_side: Option<IngestSnapshotSide>,
     /// 本帧所处路由段的局部进度（0..1）。
     pub ingest_progress: f64,
+    /// Issue #819 评论 5968931455: 本帧所处路由段的 visual stage id。
+    ///
+    /// 来自当前 segment 的 `ingest_stage_id`。`sample_unit_slice_frame` 据此
+    /// 判断本帧该驱动哪个 unit：只有 stage_id 匹配的 unit 才在当前段被吞吐，
+    /// 其余 unit 保持初态/终态，避免跨事务 carried unit 消费下一笔编辑的 route。
+    pub ingest_stage_id: IngestStageId,
 }
 
 impl Default for SampledCaretFrame {
@@ -71,6 +78,7 @@ impl Default for SampledCaretFrame {
             is_ingest_segment: false,
             ingest_side: None,
             ingest_progress: 0.0,
+            ingest_stage_id: IngestStageId(0),
         }
     }
 }
@@ -89,6 +97,8 @@ impl Default for SampledCaretFrame {
 /// - `None`：`ReflowMove`/`ReflowCrossFade` 不参与吞吐，side 无意义。
 #[derive(Clone, Debug)]
 pub(crate) struct SampledSliceFrame {
+    /// 原视觉单元的阶段身份；同一事务可以包含多个 carried stage。
+    pub unit_stage_id: Option<super::transaction::types::IngestStageId>,
     /// 切片种类（InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）。
     pub kind: AnimatedSliceKind,
     /// 本片字在文本中的字节范围（属于本事务 new 坐标系或 old 坐标系，由 kind 决定）。
@@ -120,6 +130,18 @@ pub(crate) struct SampledSliceFrame {
     /// rebase 终态过滤用（ReflowMove/ReflowCrossFade 用 `progress >= 1.0` 判断终态）。
     /// CaretTrack unit 设 0.0。
     pub progress: f64,
+    /// Issue #819 评论 5967250411 问题 1：本帧本 unit 是否已到达终态。
+    ///
+    /// 这是本帧生命周期的明确判断，不再让 rebase 拿 `visible_fraction` 猜 CaretTrack
+    /// unit 的终态（CaretTrack unit 的 `visible_fraction` 固定 0.0，DeleteConceal 一进入
+    /// rebase 就被 `visible_fraction <= 1e-3` 误判成"已吞完"，文字先消失，光标继续走）。
+    ///
+    /// 设置规则（`sample_unit_slice_frame`）：
+    /// - Timed unit：`unit.timing.progress(now) >= 1.0`。
+    /// - CaretTrack unit：阶段在当前 caret stage 之前时已完成；阶段在后时未开始。
+    ///   同阶段由 `caret.progress >= 1.0` 判断；没有 caret 时不产出采样帧。
+    /// - ReflowMove/ReflowCrossFade：`progress >= 1.0`。
+    pub is_finished: bool,
 }
 
 /// Issue #819 评论 5956495850 第 2 节：协同动画唯一的「当前屏幕帧」。
@@ -138,4 +160,40 @@ pub(crate) struct SampledEditVisualState {
     pub caret: Option<SampledCaretFrame>,
     /// 本帧所有视觉单元的绘制帧。
     pub slices: Vec<SampledSliceFrame>,
+}
+
+/// Issue #819 评论 5968240881 问题 1：rebase 交棒时携带的完整视觉单元。
+///
+/// 上一笔事务 cancel 时本帧仍未到达终态、且在新事务里匹配不到对应 unit 的旧
+/// 视觉单元。连续 Backspace 时第一笔的 C 的 sampled slice 匹配不到第二笔已有
+/// unit，旧事务又被 cancel，以前直接丢掉导致 C 提前消失。
+///
+/// 现在把完整的 [`AnimatedSlice`]（含全部 ingest 元数据：shaping identity、
+/// byte mapping identity、snapshot id / texture owner、caret anchor、行级 mask、
+/// 吞吐边界驱动等）连同本次 sampled frame 与原 timing 一起带走，由 transaction
+/// builder 消费成额外的 visual units 真正 `units.push()` 到新事务，让它们继续
+/// 由新 track/新 handoff 收口，直到真正终态。
+///
+/// 之前只带 `SampledSliceFrame`（几何）不够：几何没有 ingest 元数据就无法
+/// 重建 `AnimatedSlice::compute_frame_by_caret_ingest` 所需的 caret anchor /
+/// line mask / ingest line ord，新事务接管后吞吐边界会从零开始，文字闪一下。
+#[derive(Clone, Debug)]
+pub(crate) struct CarriedVisualUnit {
+    /// 原单元自己的阶段身份，重复交棒时仍然原样保留。
+    pub stage_id: Option<super::transaction::types::IngestStageId>,
+    /// 原 `AnimatedSlice`，保留全部 ingest 元数据（不是只有几何的 `SampledSliceFrame`）。
+    pub slice: AnimatedSlice,
+    /// 本次 sampled frame（几何 + opacity + visible_fraction + remaining_duration）。
+    pub sampled_frame: SampledSliceFrame,
+    /// 原 unit 的 timing（CaretTrack / Timed），新事务继承后按规则续播。
+    pub timing: VisualUnitTiming,
+}
+
+impl CarriedVisualUnit {
+    /// 本 carried unit 引用的 line snapshot id（纹理所有权交棒用）。
+    ///
+    /// 直接取 `slice.snapshot_id`——`AnimatedSlice` 始终持有它引用的纹理来源。
+    pub(crate) fn snapshot_id(&self) -> LineSnapshotId {
+        self.slice.snapshot_id
+    }
 }

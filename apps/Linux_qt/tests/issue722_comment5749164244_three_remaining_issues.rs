@@ -95,10 +95,16 @@ fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
     // Issue #785: 文字 unit 统一走 Timed 路径（current_visible_fraction + compute_frame(visible)），
     // 不再从 caret_frame 消费 visual_line_id。caret frame 只负责画 caret，不驱动文字。
     // 即使 cursor ownership/epoch 发生切换，文字动画也不会凭空消失。
+    // Issue #819 评论 5956495850 第 2 节: 文字帧的可见比例计算从
+    // build_text_animation_plan_with_sample 移到统一采样入口 sample.rs
+    // （sample_transaction_visual_state_with_caret → sample_unit_slice_frame）。
+    // 白盒断言随之更新到 sample.rs，设计意图不变：Timed unit 走
+    // current_visible_fraction + compute_frame(visible)，不从 caret_frame 消费。
+    let sample_src = read_src("src/sujian_editor_item/animation/sample.rs");
     assert!(
-        window.contains("current_visible_fraction")
-            && window.contains("compute_frame(visible)"),
-        "build_text_animation_plan_with_sample 应走 Timed 路径（current_visible_fraction + compute_frame(visible)），不从 caret_frame 消费"
+        sample_src.contains("current_visible_fraction")
+            && sample_src.contains("compute_frame(visible)"),
+        "sample.rs 应走 Timed 路径（current_visible_fraction + compute_frame(visible)），不从 caret_frame 消费"
     );
 }
 
@@ -248,13 +254,17 @@ fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
     // Issue #815 评论 5949097065: 两条路径并存但分工明确——协同吞吐字吃
     // cursor track 当前帧（compute_frame_by_caret_ingest），非协同文字动画与
     // Reflow 才走 Timed 路径（current_visible_fraction）。
+    // Issue #819 评论 5956495850 第 2 节: 协同吞吐字的 compute_frame_by_caret_ingest
+    // 和非协同 Timed 的 current_visible_fraction 都从 build_text_animation_plan_with_sample
+    // 移到统一采样入口 sample.rs。白盒断言随之更新到 sample.rs，设计意图不变。
+    let sample_src = read_src("src/sujian_editor_item/animation/sample.rs");
     assert!(
-        btap_window.contains("compute_frame_by_caret_ingest("),
-        "build_text_animation_plan_with_sample 必须让协同吞吐字吃 cursor track 当前帧"
+        sample_src.contains("compute_frame_by_caret_ingest("),
+        "sample.rs 必须让协同吞吐字吃 cursor track 当前帧"
     );
     assert!(
-        btap_window.contains("current_visible_fraction"),
-        "build_text_animation_plan_with_sample 必须让非协同 Timed unit 走自己的 visible fraction"
+        sample_src.contains("current_visible_fraction"),
+        "sample.rs 必须让非协同 Timed unit 走自己的 visible fraction"
     );
 }
 

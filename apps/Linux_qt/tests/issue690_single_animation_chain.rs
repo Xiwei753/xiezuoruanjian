@@ -90,9 +90,14 @@ fn issue690_frame_sample_drives_text_and_cursor() {
         !text_plan.contains("Instant::now()"),
         "步骤1: 文字 plan 构造路径内不得再次采样时间"
     );
+    // Issue #819 评论 5956495850 第 2 节: 文字帧不再各自从
+    // unit.current_visible_fraction(sample.frame_now) 推一遍，统一收口到
+    // sample_transaction_visual_state_with_caret 一次性采样。白盒断言随之
+    // 更新到统一采样入口，设计意图不变：文字帧的可见比例仍由单元时间线 +
+    // 本帧采样点决定，只是不再在 render_plan_builder 里重复计算。
     assert!(
-        text_plan.contains("unit.current_visible_fraction(sample.frame_now)"),
-        "步骤1: 文字帧的可见比例来自单元时间线 + 本帧采样点"
+        text_plan.contains("sample_transaction_visual_state_with_caret"),
+        "步骤1: 文字帧由统一采样入口 sample_transaction_visual_state_with_caret 构造，不再各自取时间"
     );
     let cursor_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let cursor = method_body(&cursor_src, "fn compute_coordinated_cursor_position(");

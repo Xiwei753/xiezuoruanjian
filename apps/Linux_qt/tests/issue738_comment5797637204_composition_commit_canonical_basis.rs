@@ -68,7 +68,7 @@ const HANDLE_CALL: &str = ".handle_composition_commit_or_cancel(";
 #[test]
 fn fix1a_record_composition_commit_has_layout_revision_next() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         window.contains("LayoutRevision::next()"),
         "修复后 record_composition_commit_transaction 应含 LayoutRevision::next() 生成新 revision。"
@@ -80,7 +80,7 @@ fn fix1a_record_composition_commit_has_layout_revision_next() {
 #[test]
 fn fix1b_record_composition_commit_has_reconcile() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         window.contains(RECONCILE_CALL),
         "修复后 record_composition_commit_transaction 应调 .reconcile_active_transactions_with_canonical( 。"
@@ -92,7 +92,7 @@ fn fix1b_record_composition_commit_has_reconcile() {
 #[test]
 fn fix1c_record_composition_commit_has_set_current_canonical_snapshot() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         window.contains(".set_current_canonical_snapshot("),
         "修复后 record_composition_commit_transaction 应调 .set_current_canonical_snapshot( 提交新 canonical。"
@@ -104,7 +104,7 @@ fn fix1c_record_composition_commit_has_set_current_canonical_snapshot() {
 #[test]
 fn fix1d_record_composition_commit_has_set_layout_revision() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         window.contains(".set_layout_revision("),
         "修复后 record_composition_commit_transaction 应调 .set_layout_revision( 无条件提交新 revision。"
@@ -117,7 +117,7 @@ fn fix1d_record_composition_commit_has_set_layout_revision() {
 #[test]
 fn fix1e_record_composition_commit_no_old_layout_revision_as_basis() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         !window.contains("let layout_basis_revision = self.pipeline.layout_revision()"),
         "修复后 record_composition_commit_transaction 不应再有 let layout_basis_revision = self.pipeline.layout_revision() 旧模式。"
@@ -129,7 +129,7 @@ fn fix1e_record_composition_commit_no_old_layout_revision_as_basis() {
 #[test]
 fn fix1f_record_composition_commit_uses_helper_with_canonical() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         window.contains("build_editor_layout_snapshot_with_canonical"),
         "修复后 record_composition_commit_transaction 应调 build_editor_layout_snapshot_with_canonical 同时拿 new_snapshot 和 new_canonical。"
@@ -217,7 +217,7 @@ fn fix3a_pipeline_has_set_layout_revision_setter() {
 #[test]
 fn fix4a_reconcile_before_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
 
     assert!(
         window.contains(RECONCILE_CALL),
@@ -247,7 +247,7 @@ fn fix4a_reconcile_before_handle_composition_commit() {
 #[test]
 fn fix4b_set_layout_revision_after_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
 
     let set_rev_marker = ".set_layout_revision(";
     let set_canonical_marker = ".set_current_canonical_snapshot(";
@@ -279,7 +279,7 @@ fn fix4b_set_layout_revision_after_handle_composition_commit() {
 #[test]
 fn fix4c_unified_edit_now_in_record_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
         window.contains("let edit_now = std::time::Instant::now();"),
         "修复后 record_composition_commit_transaction 应有 let edit_now = std::time::Instant::now(); 统一时间采样。"

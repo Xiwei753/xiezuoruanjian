@@ -6,7 +6,7 @@ use crate::sujian_editor_item::animated_slice::{
 use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
 use crate::sujian_editor_item::animation::rebase::{RebaseCaretHandoff, RebaseVisualState};
 use crate::sujian_editor_item::animation::transaction::types::{
-    CaretTrackSegmentKind, IngestSnapshotSide,
+    CaretTrackSegmentKind, IngestSnapshotSide, IngestStageId,
 };
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, TextVisualOperationKind, VisualUnitTiming,
@@ -16,7 +16,7 @@ use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, ShapingIdentity
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use writer_core::editor::OffsetMap;
 
-fn make_test_snapshot(
+pub(super) fn make_test_snapshot(
     virtual_text: &str,
     line_clusters: Vec<(usize, usize, f64, f64, ShapingIdentity)>,
 ) -> EditorLayoutSnapshot {
@@ -205,12 +205,18 @@ fn test_commit_same_shaping_different_geometry_creates_move() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let has_move = tx
         .units
@@ -318,12 +324,18 @@ fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let crossfade_count = tx
         .units
@@ -425,12 +437,18 @@ fn test_commit_same_shaping_same_geometry_is_static() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let first_cluster_slices: Vec<&AnimatedSlice> = tx
         .units
@@ -533,12 +551,18 @@ fn test_commit_separate_preedit_and_committed_replace_ranges() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let old_preedit_slices: Vec<&AnimatedSlice> = tx
         .units
@@ -637,12 +661,18 @@ fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let delete_slices: Vec<&AnimatedSlice> = tx
         .units
@@ -979,7 +1009,12 @@ fn issue756_insert_spec_with_durations(
         new_cursor_line_bottom: 20.0,
         cursor_owner_epoch: 1,
         layout_basis_revision: LayoutRevision::initial(),
-        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None },
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: None,
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
         visual_affected_byte_range_old: Some((0, 2)),
         visual_affected_byte_range_new: Some((0, 3)),
         text_duration_ms: actual_text_duration,
@@ -1008,7 +1043,7 @@ fn issue756_count_kind(tx: &PreparedTextVisualTransaction, kind: AnimatedSliceKi
 fn issue756_coordinated_creates_caret_track_and_reveal_together() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert_eq!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal),
         1,
@@ -1027,7 +1062,7 @@ fn issue756_typing_only_creates_text_without_caret_track() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=false：只有文字动画。
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     // Issue #756 问题 2: 打字动画开启时必须有吐字（用 typing timeline 推进，不消费 caret frame）。
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
@@ -1050,7 +1085,7 @@ fn issue756_typing_only_creates_text_without_caret_track() {
 fn issue756_smooth_only_creates_caret_track_without_text_animation() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         tx.units.is_empty(),
         "打字动画关闭且非协同：不得生成任何文字动画 unit，实际 {:?}",
@@ -1072,7 +1107,7 @@ fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false，但建不出 caret motion（无 old/new caret rect）。
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, false))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         tx.cursor_visual_track.is_none(),
         "没有 caret rect 时自然没有 caret track"
@@ -1088,7 +1123,7 @@ fn issue756_typing_and_smooth_are_not_treated_as_coordinated() {
 fn issue756_all_disabled_produces_no_units_and_no_track() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, false, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(tx.units.is_empty(), "两个开关都关闭且非协同：没有文字动画");
     assert!(
         tx.cursor_visual_track.is_none(),
@@ -1107,7 +1142,7 @@ fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
     let key = VisualTransactionKey::new(1, 756);
     // coordinated=false, typing=true, smooth=true, 有 caret rect。
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "typing=true: 必须有 InsertReveal（文字动画）"
@@ -1134,7 +1169,7 @@ fn issue756_typing_and_smooth_with_caret_rect_are_independent() {
 fn issue756_ime_coordinated_only() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, true, false, false, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "coordinated=true: 必须有 InsertReveal"
@@ -1172,7 +1207,7 @@ fn issue756_ime_coordinated_only() {
 fn issue756_ime_typing_only() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, false, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "typing=true: 必须有 InsertReveal"
@@ -1193,7 +1228,7 @@ fn issue756_ime_typing_only() {
 fn issue756_ime_smooth_only() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, false, true, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) == 0,
         "typing=false 且非协同: 没有 InsertReveal"
@@ -1210,7 +1245,7 @@ fn issue756_ime_smooth_only() {
 fn issue756_ime_typing_and_smooth_not_coordinated() {
     let key = VisualTransactionKey::new(1, 756);
     let tx = build_prepared_transaction(issue756_insert_spec(key, false, true, true, true))
-        .expect("issue756 transaction must be built");
+        .expect_created("issue756 transaction must be built");
     assert!(
         issue756_count_kind(&tx, AnimatedSliceKind::InsertReveal) > 0,
         "typing=true: 必须有 InsertReveal"
@@ -1436,7 +1471,7 @@ fn issue756_comment5821042551_independent_durations_typing_short_smooth_long() {
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 100, 300,
     ))
-    .expect("issue756 transaction must be built");
+    .expect_created("issue756 transaction must be built");
     // 文字 unit 用 typing duration (100ms)
     // Issue #785: 所有 unit 都是 Timed。
     for unit in &tx.units {
@@ -1482,7 +1517,7 @@ fn issue815_review14_coordinated_ingest_follows_typing_duration_track() {
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, true, true, true, true, 500, 500,
     ))
-    .expect("协同 Insert 必须建出事务");
+    .expect_created("协同 Insert 必须建出事务");
 
     let track = tx
         .cursor_visual_track
@@ -1527,7 +1562,7 @@ fn issue815_review14_non_coordinated_keeps_independent_durations() {
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 120, 400,
     ))
-    .expect("非协同 Insert 必须建出事务");
+    .expect_created("非协同 Insert 必须建出事务");
 
     let track = tx
         .cursor_visual_track
@@ -1570,7 +1605,7 @@ fn issue815_review14_no_reveal_units_still_keeps_caller_supplied_track_duration(
     // 没有 inserted_ranges ⇒ 没有任何吞吐字，只剩光标 track。
     spec.inserted_ranges = Vec::new();
 
-    let tx = build_prepared_transaction(spec).expect("无正文吞吐时仍会建出光标事务");
+    let tx = build_prepared_transaction(spec).expect_created("无正文吞吐时仍会建出光标事务");
     assert!(
         tx.units
             .iter()
@@ -1596,7 +1631,7 @@ fn issue756_comment5821042551_independent_durations_typing_long_smooth_short() {
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 300, 100,
     ))
-    .expect("issue756 transaction must be built");
+    .expect_created("issue756 transaction must be built");
     // 文字 unit 用 typing duration (300ms)
     // Issue #785: 所有 unit 都是 Timed。
     for unit in &tx.units {
@@ -1635,7 +1670,7 @@ fn issue756_comment5821042551_coordinated_shares_typing_duration() {
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, true, false, false, true, 100, 300,
     ))
-    .expect("issue756 transaction must be built");
+    .expect_created("issue756 transaction must be built");
     // Issue #815: 协同吞吐字切 CaretTrack（没有自己的 duration），Reflow 保持 Timed(typing)。
     for unit in &tx.units {
         match (&unit.slice.kind, &unit.timing) {
@@ -1678,7 +1713,7 @@ fn issue756_comment5821042551_smooth_only_has_independent_caret_duration() {
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, false, true, true, 100, 300,
     ))
-    .expect("issue756 transaction must be built");
+    .expect_created("issue756 transaction must be built");
     // smooth-only: 没有文字 unit
     assert!(tx.units.is_empty(), "smooth-only: 没有文字动画 unit");
     // caret track 用 smooth cursor duration (300ms)
@@ -1708,7 +1743,7 @@ fn issue756_comment5821042551_transaction_has_caret_track_must_wait_for_completi
     let tx = build_prepared_transaction(issue756_insert_spec_with_durations(
         key, false, true, true, true, 100, 300,
     ))
-    .expect("issue756 transaction must be built");
+    .expect_created("issue756 transaction must be built");
 
     // 事务必须有 cursor_visual_track（smooth=true）
     assert!(
@@ -1888,15 +1923,18 @@ fn issue756_comment5821042551_composition_commit_smooth_only_creates_transaction
         true,
         false,
     );
-    assert!(
-        key.is_some(),
-        "smooth-only composition commit: 必须创建事务（coordinated=false + typing=false + smooth=true）"
-    );
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     // smooth-only commit: 必须有 caret track
     assert!(
@@ -1987,15 +2025,18 @@ fn issue756_comment5821793349_composition_commit_typing_enabled_keeps_crossfade_
         true,
         false,
     );
-    assert!(
-        key.is_some(),
-        "typing-enabled composition commit: 必须创建事务"
-    );
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     // typing-enabled commit: 必须有文字 unit（crossfade）
     assert!(
@@ -2113,7 +2154,7 @@ fn issue756_comment5822051193_composition_commit_coordinated_no_cursor_track_ret
     // new_cursor_rect=None, prepared_handoff=None
     // 队列为空 → take_rebase_frames 返回 (vec![], None) → caret_handoff=None
     // build_cursor_visual_track(new_cursor_rect=None) → 返回 None
-    // → cursor_visual_track 为 None → 门禁触发 → 返回 None
+    // → cursor_visual_track 为 None → 门禁触发 → 返回 CursorTrackMissing
     let key = coord.handle_composition_commit_or_cancel(
         &old_snapshot,
         &new_snapshot,
@@ -2148,8 +2189,8 @@ fn issue756_comment5822051193_composition_commit_coordinated_no_cursor_track_ret
         true,
     );
     assert!(
-        key.is_none(),
-        "coordinated=true 且 cursor_visual_track 为 None 时必须返回 None（commit/cancel 路径同样收口）"
+        matches!(key, HandoffTransactionOutcome::Skipped(crate::sujian_editor_item::edit_flow::EditVisualSkipReason::CursorTrackMissing)),
+        "coordinated=true 且 cursor_visual_track 为 None 时必须透传 CursorTrackMissing（commit/cancel 路径同样收口）"
     );
     assert!(
         coord.prepared_queue.active_transactions().is_empty(),
@@ -2231,10 +2272,8 @@ fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_create
         true,
         true,
     );
-    assert!(
-        update_key.is_some(),
-        "前置条件: coordinated=true 且有 old/new cursor rect 的 composition update 必须创建事务"
-    );
+
+    assert!(update_key.is_some(), "composition update must be created");
 
     // 步骤 2: 调 prepare_composition_commit_handoff 产生 handoff
     // commit: "axb" → "aYb"（preedit "x" commit 成 "Y"）
@@ -2310,15 +2349,18 @@ fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_create
         true,
         true,
     );
-    assert!(
-        key.is_some(),
-        "coordinated=true 且有 caret_handoff 且 new_cursor_rect=Some 时必须返回 Some（合法 rebase 场景不能误杀）"
-    );
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     assert!(
         tx.cursor_visual_track.is_some(),
@@ -2511,7 +2553,12 @@ fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_white
 
     let mut coord = LinuxEditorAnimationCoordinator::new();
     let prepared = PreparedRebaseHandoff::Insert {
-        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None },
+        visual_state: RebaseVisualState {
+            rebase_frames: vec![],
+            caret_handoff: None,
+            carried_units: vec![],
+            carried_snapshot_ids: vec![],
+        },
         range_start: 0,
         range_end: 1, // " " 一个空格
         insert_offset_map: offset_map,
@@ -2572,7 +2619,7 @@ fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_white
     // Issue #808 评论 5918236360 问题2 修复后：空格输入 + caret_animation_enabled=true
     // 产生 cursor-only 事务（有 cursor_visual_track，units 可以为空），key 为 Some。
     assert!(
-        key.is_some(),
+        matches!(key, super::HandoffTransactionOutcome::Created(_)),
         "问题2 修复后：inserted_range 只含空格 + caret_animation_enabled=true → \
          build_insert_reveal_slices 返回空 → prepared_tx.units 为空，但有合法 \
          cursor_visual_track，create_transaction_from_prepared_handoff 保留 \
@@ -3076,7 +3123,12 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
         new_cursor_line_bottom: 20.0,
         cursor_owner_epoch: 1,
         layout_basis_revision: LayoutRevision::initial(),
-        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None },
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: None,
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
         visual_affected_byte_range_old: Some((0, 5)),
         visual_affected_byte_range_new: Some((0, 5)),
         text_duration_ms: 100,
@@ -3086,7 +3138,7 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
         coordinated_animation_enabled: true,
         composition_commit_crossfade: None,
     };
-    let tx = build_prepared_transaction(spec).expect("issue756 transaction must be built");
+    let tx = build_prepared_transaction(spec).expect_created("issue756 transaction must be built");
 
     // 中间保留的 c 的 rect 区间 (20,30)：任何动画 source/frame rect 都不得覆盖它。
     let covers_retained_c = |x: f64, w: f64| -> bool {
@@ -3235,7 +3287,12 @@ fn issue808_comment5918236360_problem2_smooth_only_insert_keeps_cursor_only_tran
     );
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
     let prepared = PreparedRebaseHandoff::Insert {
-        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None },
+        visual_state: RebaseVisualState {
+            rebase_frames: vec![],
+            caret_handoff: None,
+            carried_units: vec![],
+            carried_snapshot_ids: vec![],
+        },
         range_start: 1,
         range_end: 2,
         insert_offset_map: offset_map,
@@ -3295,7 +3352,7 @@ fn issue808_comment5918236360_problem2_smooth_only_insert_keeps_cursor_only_tran
         LayoutRevision::initial(),
     );
     assert!(
-        key.is_some(),
+        matches!(key, super::HandoffTransactionOutcome::Created(_)),
         "smooth-only 普通可见字符 Insert：units 为空但有合法 cursor_visual_track，\
          必须保留 cursor-only 事务（不能按 units.is_empty() 直接丢弃）"
     );
@@ -3326,7 +3383,12 @@ fn issue808_comment5918236360_problem2_truly_empty_transaction_still_dropped() {
     let new_snapshot = make_test_snapshot(" ", vec![(0, 1, 0.0, 0.0, sid)]);
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
     let prepared = PreparedRebaseHandoff::Insert {
-        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None },
+        visual_state: RebaseVisualState {
+            rebase_frames: vec![],
+            caret_handoff: None,
+            carried_units: vec![],
+            carried_snapshot_ids: vec![],
+        },
         range_start: 0,
         range_end: 1,
         insert_offset_map: offset_map,
@@ -3374,7 +3436,7 @@ fn issue808_comment5918236360_problem2_truly_empty_transaction_still_dropped() {
         LayoutRevision::initial(),
     );
     assert!(
-        key.is_none(),
+        matches!(key, super::HandoffTransactionOutcome::Skipped(_)),
         "空格插入且没有 cursor_visual_track：真正的空事务仍然 return None"
     );
     assert!(
@@ -3491,7 +3553,7 @@ fn issue808_comment5918236360_problem3_delete_conceal_mask_symmetric_via_builder
 /// 每一项是 `(visual_line_id, byte_start, byte_end, top, bottom)`。
 /// 相邻行满足 `line1.bottom == line2.top`，这正是真实排版的几何，也是
 /// 「按 caret.top 的 y 容差猜行序」会误命中上一行的原因。
-fn make_multiline_snapshot(
+pub(super) fn make_multiline_snapshot(
     virtual_text: &str,
     lines: &[(usize, usize, usize, f64, f64)],
 ) -> EditorLayoutSnapshot {
@@ -3746,7 +3808,12 @@ fn issue815_composition_spec(
         new_cursor_line_bottom,
         cursor_owner_epoch: 1,
         layout_basis_revision: LayoutRevision::initial(),
-        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None },
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: None,
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         text_duration_ms: 100,
@@ -3805,7 +3872,8 @@ fn issue815_review5_composition_slices_carry_full_ingest_metadata() {
         (2, 4),
         (2, 6),
     );
-    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let ingest_units: Vec<_> = tx
         .units
@@ -3919,7 +3987,8 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
         (2, 2),
         (2, 5),
     );
-    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let line1: Vec<_> = tx
         .units
@@ -4021,7 +4090,8 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
         (2, 3),
         (3, 4),
     );
-    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let conceals: Vec<_> = tx
         .units
@@ -4087,7 +4157,8 @@ fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
         (2, 3),
         (2, 3),
     );
-    let tx = build_prepared_transaction(spec).expect("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let conceals: Vec<_> = tx
         .units
@@ -4167,9 +4238,11 @@ fn issue815_review7_production_rebase_starts_from_handoff_sampled_caret() {
         sampled_visual_line_id: Some(0),
         sampled_line_top: 0.0,
         sampled_line_bottom: 20.0,
+        remaining_ingest_segments: Vec::new(),
+        stage_id: IngestStageId(0),
     });
 
-    let tx = build_prepared_transaction(spec).expect("协同 Insert 必须建出事务");
+    let tx = build_prepared_transaction(spec).expect_created("协同 Insert 必须建出事务");
     let track = tx
         .cursor_visual_track
         .as_ref()
@@ -4270,7 +4343,11 @@ fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_care
                 sampled_visual_line_id: Some(0),
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
+                remaining_ingest_segments: Vec::new(),
+                stage_id: IngestStageId(0),
             }),
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
         },
         visual_affected_byte_range_old: Some((0, 3)),
         visual_affected_byte_range_new: Some((0, 2)),
@@ -4282,7 +4359,7 @@ fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_care
         composition_commit_crossfade: None,
     };
 
-    let tx = build_prepared_transaction(spec).expect("协同退格必须建出事务");
+    let tx = build_prepared_transaction(spec).expect_created("协同退格必须建出事务");
     let track = tx
         .cursor_visual_track
         .as_ref()
@@ -4348,7 +4425,7 @@ fn issue815_review9_composition_commit_builds_side_aware_mixed_route() {
         /* candidate */ (4, 6),
     );
 
-    let tx = build_prepared_transaction(spec).expect("IME commit 必须建出事务");
+    let tx = build_prepared_transaction(spec).expect_created("IME commit 必须建出事务");
     let track = tx
         .cursor_visual_track
         .as_ref()
@@ -4421,7 +4498,7 @@ fn issue815_review9_composition_sides_are_isolated_per_frame() {
         (4, 6),
         (4, 6),
     );
-    let mut tx = build_prepared_transaction(spec).expect("IME commit 必须建出事务");
+    let mut tx = build_prepared_transaction(spec).expect_created("IME commit 必须建出事务");
     // `started_at` 要到第一帧才由 `begin_rendering_transactions` 打上；这里手动
     // 打一个，才能按 progress 采样每一段。
     let started = std::time::Instant::now();
@@ -4536,9 +4613,11 @@ fn issue815_review10_forward_delete_mixed_route_is_continuous() {
         sampled_visual_line_id: Some(0),
         sampled_line_top: 0.0,
         sampled_line_bottom: 20.0,
+        remaining_ingest_segments: Vec::new(),
+        stage_id: IngestStageId(0),
     });
 
-    let tx = build_prepared_transaction(spec).expect("前删型 IME commit 必须建出事务");
+    let tx = build_prepared_transaction(spec).expect_created("前删型 IME commit 必须建出事务");
     let track = tx
         .cursor_visual_track
         .as_ref()
@@ -4601,9 +4680,11 @@ fn issue815_review10_forward_boundary_uses_segment_local_progress() {
         sampled_visual_line_id: Some(0),
         sampled_line_top: 0.0,
         sampled_line_bottom: 20.0,
+        remaining_ingest_segments: Vec::new(),
+        stage_id: IngestStageId(0),
     });
 
-    let mut tx = build_prepared_transaction(spec).expect("前删型 IME commit 必须建出事务");
+    let mut tx = build_prepared_transaction(spec).expect_created("前删型 IME commit 必须建出事务");
     let conceal = tx
         .units
         .iter()
@@ -4717,7 +4798,7 @@ fn issue815_review10_composition_update_mixed_route_is_side_aware() {
     spec.deleted_ranges = vec![(2, 4)];
     spec.cursor_owner_epoch = 9;
 
-    let tx = build_prepared_transaction(spec).expect("composition update 必须建出事务");
+    let tx = build_prepared_transaction(spec).expect_created("composition update 必须建出事务");
     let track = tx
         .cursor_visual_track
         .as_ref()
@@ -4746,4 +4827,596 @@ fn issue815_review10_composition_update_mixed_route_is_side_aware() {
             (pair[1].from.x, pair[1].from.top)
         );
     }
+}
+
+// ── Issue #819 评论 5968931455: 连续事务 carried route 合成测试 ──
+
+/// 辅助：构造一个 IngestLine 段。
+fn ingest_line_segment(
+    from_x: f64,
+    to_x: f64,
+    line_ord: usize,
+    side: IngestSnapshotSide,
+    stage_id: IngestStageId,
+) -> crate::sujian_editor_item::animation::transaction::types::CaretTrackSegment {
+    use crate::sujian_editor_item::animation::transaction::types::CaretTrackSegment;
+    CaretTrackSegment {
+        kind: CaretTrackSegmentKind::IngestLine,
+        from: CursorRect {
+            x: from_x,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        },
+        to: CursorRect {
+            x: to_x,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        },
+        ingest_line_ord: Some(line_ord),
+        ingest_side: Some(side),
+        visual_line_id: Some(0),
+        ingest_stage_id: stage_id,
+        duration_weight_ms: 60.0,
+        ingest_start_progress: 0.0,
+    }
+}
+
+/// Issue #819 评论 5968931455: `build_ingest_route` 必须合成旧 carried route 剩余段 + 新 route，
+/// 且相邻段连续、stage_id 各自正确。
+///
+/// 场景：`ABC|`，第一笔删 C 播到 50%（caret 在 x=25），第二笔删 B。
+/// - 旧剩余段：从 x=25 到 x=20（stage_id=A=IngestStageId(100)）
+/// - 新段：从 x=20 到 x=10（stage_id=B=IngestStageId(200)）
+/// - 合成后：[旧剩余段(stage A), 新段(stage B)]，相邻连续（25→20→10）
+#[test]
+fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_new() {
+    let sid = issue756_shaping_identity();
+    let old_stage_id = IngestStageId(100);
+    let new_stage_id = IngestStageId(200);
+
+    // 第一笔删 C 的剩余段：caret 从 x=25（C 中间）走到 x=20（B 后面）。
+    let remaining_segments = vec![ingest_line_segment(
+        25.0,
+        20.0,
+        0,
+        IngestSnapshotSide::Old,
+        old_stage_id,
+    )];
+
+    // 第二笔删 B：文本 `AB`，删除 B（byte range (1,2)）。
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot("a", vec![(0, 1, 0.0, 0.0, sid)]);
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+
+    // handoff.sampled = x=25（第一笔播到 50% 时的 caret 位置）。
+    let handoff_sampled = CursorRect {
+        x: 25.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+
+    let key = VisualTransactionKey::new(200, 819);
+    let spec = VisualEditSpec {
+        key,
+        operation_kind: TextVisualOperationKind::Delete,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: Vec::new(),
+        deleted_ranges: vec![(1, 2)],
+        offset_map,
+        old_cursor_rect: Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        new_cursor_rect: Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: Some(RebaseCaretHandoff {
+                sampled: handoff_sampled,
+                remaining_duration_ms: 50,
+                sampled_visual_line_id: Some(0),
+                sampled_line_top: 0.0,
+                sampled_line_bottom: 20.0,
+                remaining_ingest_segments: remaining_segments.clone(),
+                stage_id: old_stage_id,
+            }),
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
+        visual_affected_byte_range_old: Some((0, 2)),
+        visual_affected_byte_range_new: Some((0, 1)),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: None,
+    };
+
+    let tx = build_prepared_transaction(spec).expect_created("协同退格必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同退格必须有 cursor track");
+
+    // 1. route 非空
+    assert!(
+        !track.segments.is_empty(),
+        "连续退格必须建出非空 route（旧剩余段 + 新段）"
+    );
+
+    // 2. route 包含旧 stage_id 和新 stage_id 的段
+    let has_old_stage = track
+        .segments
+        .iter()
+        .any(|seg| seg.ingest_stage_id == old_stage_id);
+    let has_new_stage = track
+        .segments
+        .iter()
+        .any(|seg| seg.ingest_stage_id == new_stage_id);
+    assert!(
+        has_old_stage,
+        "route 必须包含旧 stage_id={:?} 的剩余段",
+        old_stage_id
+    );
+    assert!(
+        has_new_stage,
+        "route 必须包含新 stage_id={:?} 的段",
+        new_stage_id
+    );
+
+    // 3. 相邻段连续
+    for pair in track.segments.windows(2) {
+        assert!(
+            (pair[0].to.x - pair[1].from.x).abs() < 1e-6,
+            "route 必须连续：段终点 x={} 与下一段起点 x={} 不连续",
+            pair[0].to.x,
+            pair[1].from.x
+        );
+    }
+
+    // 4. 第一段从 handoff.sampled.x=25 起步
+    assert!(
+        (track.segments[0].from.x - 25.0).abs() < 1e-6,
+        "route 第一段必须从 handoff.sampled.x=25 起步，实际 x={}",
+        track.segments[0].from.x
+    );
+
+    // 5. 最后一段到 new_caret.x=10 结束
+    let last_to = track.segments.last().unwrap().to.x;
+    assert!(
+        (last_to - 10.0).abs() < 1e-6,
+        "route 最后一段必须到 new_caret.x=10 结束，实际 x={}",
+        last_to
+    );
+}
+
+/// Issue #819 评论 5968931455: 连续退格——第一笔删 C 播到 50%，第二笔删 B，
+/// 新事务第一帧 caret 必须从 handoff.sampled 位置起步，不能跳回逻辑 old caret。
+#[test]
+fn issue819_comment5968931455_consecutive_delete_carried_c_first_frame_matches_sampled() {
+    let sid = issue756_shaping_identity();
+    let old_stage_id = IngestStageId(100);
+
+    // 第一笔删 C 的剩余段：caret 从 x=25 走到 x=20。
+    let remaining_segments = vec![ingest_line_segment(
+        25.0,
+        20.0,
+        0,
+        IngestSnapshotSide::Old,
+        old_stage_id,
+    )];
+
+    // 第二笔删 B
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot("a", vec![(0, 1, 0.0, 0.0, sid)]);
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+
+    let handoff_sampled = CursorRect {
+        x: 25.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+
+    let key = VisualTransactionKey::new(200, 819);
+    let spec = VisualEditSpec {
+        key,
+        operation_kind: TextVisualOperationKind::Delete,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: Vec::new(),
+        deleted_ranges: vec![(1, 2)],
+        offset_map,
+        old_cursor_rect: Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        new_cursor_rect: Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: Some(RebaseCaretHandoff {
+                sampled: handoff_sampled,
+                remaining_duration_ms: 50,
+                sampled_visual_line_id: Some(0),
+                sampled_line_top: 0.0,
+                sampled_line_bottom: 20.0,
+                remaining_ingest_segments: remaining_segments.clone(),
+                stage_id: old_stage_id,
+            }),
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
+        visual_affected_byte_range_old: Some((0, 2)),
+        visual_affected_byte_range_new: Some((0, 1)),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: None,
+    };
+
+    let tx = build_prepared_transaction(spec).expect_created("协同退格必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同退格必须有 cursor track");
+
+    // 第一帧采样：started_at 为 None，progress=0，caret 必须在 handoff.sampled.x=25。
+    let first_frame = sample_caret_track_frame(track, std::time::Instant::now());
+    assert!(
+        (first_frame.x - handoff_sampled.x).abs() < 1e-6,
+        "新事务第一帧 caret 必须从 handoff.sampled.x={} 起步，实际 x={}",
+        handoff_sampled.x,
+        first_frame.x
+    );
+    assert!(
+        first_frame.progress < 1e-6,
+        "新事务第一帧进度必须为 0，实际 {}",
+        first_frame.progress
+    );
+
+    // 逻辑 old caret 在 x=20，第一帧不能跳回那里。
+    let logical_old_x = tx.old_cursor_rect.map(|r| r.x).unwrap_or_default();
+    assert!(
+        (first_frame.x - logical_old_x).abs() > 1e-6,
+        "第一帧 caret 不能跳回逻辑 old caret.x={}，实际 x={}",
+        logical_old_x,
+        first_frame.x
+    );
+}
+
+/// Issue #819 评论 5968931455: 连续退格——carried C 的可见宽度只能单调下降，
+/// 不能先恢复完整再吞。通过采样多个 progress 点验证 caret x 单调向左移动。
+#[test]
+fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_decreasing() {
+    let sid = issue756_shaping_identity();
+    let old_stage_id = IngestStageId(100);
+
+    let remaining_segments = vec![ingest_line_segment(
+        25.0,
+        20.0,
+        0,
+        IngestSnapshotSide::Old,
+        old_stage_id,
+    )];
+
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot("a", vec![(0, 1, 0.0, 0.0, sid)]);
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+
+    let handoff_sampled = CursorRect {
+        x: 25.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+
+    let key = VisualTransactionKey::new(200, 819);
+    let spec = VisualEditSpec {
+        key,
+        operation_kind: TextVisualOperationKind::Delete,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: Vec::new(),
+        deleted_ranges: vec![(1, 2)],
+        offset_map,
+        old_cursor_rect: Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        new_cursor_rect: Some(CursorRect {
+            x: 10.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: Some(RebaseCaretHandoff {
+                sampled: handoff_sampled,
+                remaining_duration_ms: 50,
+                sampled_visual_line_id: Some(0),
+                sampled_line_top: 0.0,
+                sampled_line_bottom: 20.0,
+                remaining_ingest_segments: remaining_segments.clone(),
+                stage_id: old_stage_id,
+            }),
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
+        visual_affected_byte_range_old: Some((0, 2)),
+        visual_affected_byte_range_new: Some((0, 1)),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: None,
+    };
+
+    let mut tx = build_prepared_transaction(spec).expect_created("协同退格必须建出事务");
+    // `started_at` 要到第一帧才由 `begin_rendering_transactions` 打上；这里手动
+    // 打一个，才能按 progress 采样每一段。
+    let started_at = std::time::Instant::now();
+    tx.cursor_visual_track
+        .as_mut()
+        .expect("协同退格必须有 cursor track")
+        .started_at = Some(started_at);
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同退格必须有 cursor track");
+
+    // track 的 duration_ms = remaining_duration_ms = 50ms（handoff 交棒后剩余时间）。
+    let total_ms = track.duration_ms;
+    assert!(total_ms > 0, "track duration 必须大于 0");
+
+    // 采样多个 progress 点，验证 caret x 单调向左移动（退格 = x 递减）。
+    let mut prev_x = f64::MAX;
+    for frac in [0.0_f64, 0.25, 0.5, 0.75, 1.0] {
+        let now = started_at + std::time::Duration::from_millis((frac * total_ms as f64) as u64);
+        let frame = sample_caret_track_frame(track, now);
+        assert!(
+            frame.x <= prev_x + 1e-6,
+            "caret x 必须单调向左（递减）：prev_x={} > curr_x={} at progress={}",
+            prev_x,
+            frame.x,
+            frac
+        );
+        prev_x = frame.x;
+    }
+
+    // 最终帧必须到 new_caret.x=10
+    let final_frame = sample_caret_track_frame(
+        track,
+        started_at + std::time::Duration::from_millis(total_ms),
+    );
+    assert!(
+        (final_frame.x - 10.0).abs() < 1e-6,
+        "最终帧 caret 必须到 new_caret.x=10，实际 x={}",
+        final_frame.x
+    );
+}
+
+/// Issue #819 评论 5968931455: 连续插入对称用例——第一笔 Insert 半吐，第二笔 Insert，
+/// 新事务第一帧不能重新隐藏/重播已吐出的字。
+///
+/// 场景：`A|`，第一笔插入 B 播到 50%（B 约半个可见，caret 在 x=15），
+/// 第二笔插入 C。carried B 的旧 route 剩余段保留旧 stage_id，
+/// 新事务第一帧 caret 从 handoff.sampled.x=15 起步，不能跳回逻辑 old caret.x=10。
+#[test]
+fn issue819_comment5968931455_consecutive_insert_carried_b_not_replay() {
+    let sid = issue756_shaping_identity();
+    let old_stage_id = IngestStageId(100);
+
+    // 第一笔插入 B 的剩余段：caret 从 x=15（B 半吐）走到 x=20（B 后面）。
+    let remaining_segments = vec![ingest_line_segment(
+        15.0,
+        20.0,
+        0,
+        IngestSnapshotSide::New,
+        old_stage_id,
+    )];
+
+    // 第二笔插入 C：文本 `AB`，插入 C 在末尾。
+    let old_snapshot = make_test_snapshot(
+        "ab",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+        ],
+    );
+    let new_snapshot = make_test_snapshot(
+        "abc",
+        vec![
+            (0, 1, 0.0, 0.0, sid.clone()),
+            (1, 2, 10.0, 0.0, sid.clone()),
+            (2, 3, 20.0, 0.0, sid),
+        ],
+    );
+    let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+
+    let handoff_sampled = CursorRect {
+        x: 15.0,
+        top: 0.0,
+        bottom: 20.0,
+        baseline_y: 16.0,
+    };
+
+    let key = VisualTransactionKey::new(200, 819);
+    let spec = VisualEditSpec {
+        key,
+        operation_kind: TextVisualOperationKind::Insert,
+        old_snapshot,
+        new_snapshot,
+        inserted_ranges: vec![(2, 3)],
+        deleted_ranges: Vec::new(),
+        offset_map,
+        old_cursor_rect: Some(CursorRect {
+            x: 20.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        new_cursor_rect: Some(CursorRect {
+            x: 30.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }),
+        old_cursor_visual_line_id: Some(0),
+        new_cursor_visual_line_id: Some(0),
+        old_cursor_line_top: 0.0,
+        old_cursor_line_bottom: 20.0,
+        new_cursor_line_top: 0.0,
+        new_cursor_line_bottom: 20.0,
+        cursor_owner_epoch: 1,
+        layout_basis_revision: LayoutRevision::initial(),
+        visual_state: RebaseVisualState {
+            rebase_frames: Vec::new(),
+            caret_handoff: Some(RebaseCaretHandoff {
+                sampled: handoff_sampled,
+                remaining_duration_ms: 50,
+                sampled_visual_line_id: Some(0),
+                sampled_line_top: 0.0,
+                sampled_line_bottom: 20.0,
+                remaining_ingest_segments: remaining_segments.clone(),
+                stage_id: old_stage_id,
+            }),
+            carried_units: Vec::new(),
+            carried_snapshot_ids: Vec::new(),
+        },
+        visual_affected_byte_range_old: Some((0, 2)),
+        visual_affected_byte_range_new: Some((0, 3)),
+        text_duration_ms: 100,
+        caret_duration_ms: 100,
+        text_animation_enabled: true,
+        caret_animation_enabled: true,
+        coordinated_animation_enabled: true,
+        composition_commit_crossfade: None,
+    };
+
+    let tx = build_prepared_transaction(spec).expect_created("协同插入必须建出事务");
+    let track = tx
+        .cursor_visual_track
+        .as_ref()
+        .expect("协同插入必须有 cursor track");
+
+    // route 非空
+    assert!(
+        !track.segments.is_empty(),
+        "连续插入必须建出非空 route（旧剩余段 + 新段）"
+    );
+
+    // route 包含旧 stage_id 和新 stage_id 的段
+    let new_stage_id = IngestStageId(200);
+    let has_old_stage = track
+        .segments
+        .iter()
+        .any(|seg| seg.ingest_stage_id == old_stage_id);
+    let has_new_stage = track
+        .segments
+        .iter()
+        .any(|seg| seg.ingest_stage_id == new_stage_id);
+    assert!(
+        has_old_stage,
+        "route 必须包含旧 stage_id={:?} 的剩余段",
+        old_stage_id
+    );
+    assert!(
+        has_new_stage,
+        "route 必须包含新 stage_id={:?} 的段",
+        new_stage_id
+    );
+
+    // 相邻段连续
+    for pair in track.segments.windows(2) {
+        assert!(
+            (pair[0].to.x - pair[1].from.x).abs() < 1e-6,
+            "route 必须连续：段终点 x={} 与下一段起点 x={} 不连续",
+            pair[0].to.x,
+            pair[1].from.x
+        );
+    }
+
+    // 第一帧从 handoff.sampled.x=15 起步，不能跳回逻辑 old caret.x=20
+    let first_frame = sample_caret_track_frame(track, std::time::Instant::now());
+    assert!(
+        (first_frame.x - handoff_sampled.x).abs() < 1e-6,
+        "新事务第一帧 caret 必须从 handoff.sampled.x={} 起步，实际 x={}",
+        handoff_sampled.x,
+        first_frame.x
+    );
+
+    // 逻辑 old caret 在 x=20，第一帧不能跳回那里
+    let logical_old_x = tx.old_cursor_rect.map(|r| r.x).unwrap_or_default();
+    assert!(
+        (first_frame.x - logical_old_x).abs() > 1e-6,
+        "第一帧 caret 不能跳回逻辑 old caret.x={}，实际 x={}（已吐出的 B 不能重新隐藏）",
+        logical_old_x,
+        first_frame.x
+    );
 }

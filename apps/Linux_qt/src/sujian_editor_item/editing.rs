@@ -56,8 +56,9 @@ impl SujianEditorItem {
     /// **不再**覆盖提交后的 target caret 或 `cursor_ctrl.visual_x/visual_y`。
     /// 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
     /// 由 `emit_content_changed` → `update_cursor_visual_position` 统一计算。
-    /// Issue #819 评论 5956495850 第 1 节：返回值从 `()` 改成 `Option<VisualTransactionKey>`，
-    /// `apply_edit_with_visuals` 据此返回 `Created(key)` / `Skipped(reason)`。
+    /// Issue #819 评论 5968931455 问题 2.2: 返回值从 `Option<VisualTransactionKey>` 改成
+    /// `HandoffTransactionOutcome`，`apply_edit_with_visuals` 据此返回 `Created(key)` /
+    /// `Skipped(reason)`，不再猜。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_composition_commit_transaction(
         &mut self,
@@ -76,7 +77,7 @@ impl SujianEditorItem {
         committed_replace_end: usize,
         cancel_reason: &str,
         summary_tag: &str,
-    ) -> Option<VisualTransactionKey> {
+    ) -> super::animation::transaction_builder::HandoffTransactionOutcome {
         let width = self.bounding_width();
         // Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系。
         // old_snapshot 只接 old virtualText range（preedit 在 old virtualText 中的范围）；
@@ -133,7 +134,9 @@ impl SujianEditorItem {
                     "composition_commit_old_snapshot_unavailable",
                     Some(candidate_range),
                 );
-                return None;
+                return super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                    super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
+                );
             }
         };
 
@@ -182,7 +185,9 @@ impl SujianEditorItem {
                     "composition_commit_new_snapshot_invariant_failure",
                     Some(candidate_range),
                 );
-                return None;
+                return super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                    super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
+                );
             }
         };
         // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
@@ -229,7 +234,7 @@ impl SujianEditorItem {
         //   1. 生成新 LayoutRevision（不再用旧 self.pipeline.layout_revision() 当 basis）；
         //   2. 用统一 edit_now 采样（与普通路径 prepare_edit_motion 行 1398 一致）；
         //   3. cancel_active_composition 已在前面结束旧 composition transaction，
-        //      这里对队列里其余旧活动事务 reconcile 到新 canonical（retire CaretDriven
+        //      这里对队列里其余旧活动事务 reconcile 到新 canonical（retire CaretTrack
         //      + rebind Timed Reflow），让 passive ReflowMove/ReflowCrossFade 全部绑定
         //      committed new canonical；
         //   4. handle_composition_commit_or_cancel 用 new_revision 当新事务 basis；
@@ -269,19 +274,14 @@ impl SujianEditorItem {
             );
         // Issue #738 评论 5788513592: reconcile 删除 unit / 完成事务后同步按剩余
         // active snapshot ids 收一次 texture cache，不让失去 owner 的纹理一直挂着。
-        let active_ids = self
-            .pipeline
-            .animation_coordinator()
-            .collect_active_snapshot_ids();
         self.pipeline
-            .texture_cache_mut()
-            .retain_active_snapshot_ids(&active_ids);
+            .retain_handoff_textures(&prepared_handoff.visual_state.carried_snapshot_ids);
 
         // Issue #756: 算出 text/caret/coordinated 三个开关传入 composition 路径。
         let coordinated_anim = self.current_coordinated_animation_enabled;
         let text_anim = coordinated_anim || self.current_typing_animation_enabled;
         let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
-        let key = self
+        let outcome = self
             .pipeline
             .animation_coordinator_mut()
             .handle_composition_commit_or_cancel(
@@ -320,8 +320,10 @@ impl SujianEditorItem {
         self.pipeline
             .set_current_canonical_snapshot(Some(new_canonical));
 
-        if let Some(key) = key {
-            self.prepare_transaction_textures(key);
+        if let super::animation::transaction_builder::HandoffTransactionOutcome::Created(key) =
+            &outcome
+        {
+            self.prepare_transaction_textures(*key);
         }
         self.pipeline
             .set_previous_layout_snapshot(Some(old_snapshot));
@@ -340,8 +342,9 @@ impl SujianEditorItem {
         ));
 
         self.transaction_created();
-        // Issue #819 评论 5956495850 第 1 节：返回真正创建的视觉事务 key。
-        key
+        // Issue #819 评论 5968931455 问题 2.2: 返回 HandoffTransactionOutcome，
+        // 透传 skip reason，不再让 edit_flow.rs 猜。
+        outcome
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证

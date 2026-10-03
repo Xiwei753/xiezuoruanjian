@@ -193,6 +193,7 @@ fn rendering_tx(
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     PreparedTextVisualTransaction {
         key,
@@ -501,6 +502,7 @@ fn issue690_cursor_without_boundary_glyph_uses_reflow_easing() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx);
 
@@ -578,7 +580,10 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
     );
 
     // ── rebase 交棒：take_rebase_frames 现在同时采集文字单元和屏幕光标 ──
-    let visual_state = coord.take_rebase_frames(&[old_key], "rebased_by_enter", now, None, "abc", 0); let rebase_frames = visual_state.rebase_frames.clone(); let sampled_cursor = visual_state.caret_handoff.clone();
+    let visual_state =
+        coord.take_rebase_frames(&[old_key], "rebased_by_enter", now, None, "abc", 0);
+    let rebase_frames = visual_state.rebase_frames.clone();
+    let sampled_cursor = visual_state.caret_handoff.clone();
     assert_eq!(
         rebase_frames.len(),
         1,
@@ -643,6 +648,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(new_tx);
 
@@ -720,6 +726,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -742,7 +749,10 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
     // sample_caret_track_frame(B_track, now) 应返回事务 B 当前屏幕光标 62.5。
     // 当前缺陷：reflow 分支用 old_cursor_rect=100, new_cursor_rect=20
     //   → 100 + (20-100)*0.75 = 40，而非屏幕上的 62.5。
-    let visual_state = coord.take_rebase_frames(&[key_b], "rebased_by_second_input", now, None, "abc", 0); let _rebase_frames = visual_state.rebase_frames.clone(); let sampled_cursor = visual_state.caret_handoff.clone();
+    let visual_state =
+        coord.take_rebase_frames(&[key_b], "rebased_by_second_input", now, None, "abc", 0);
+    let _rebase_frames = visual_state.rebase_frames.clone();
+    let sampled_cursor = visual_state.caret_handoff.clone();
     let sampled_cursor = sampled_cursor.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
 
     let buggy_value = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_cubic(0.5);
@@ -845,6 +855,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_a);
 
@@ -863,7 +874,9 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     );
 
     // ── 第一次 rebase：take_rebase_frames 采集事务 A 的屏幕光标 ──
-    let visual_state = coord.take_rebase_frames(&[key_a], "first_rebase", now, None, "abc", 0); let rebase_frames_a = visual_state.rebase_frames.clone(); let handoff_a = visual_state.caret_handoff.clone();
+    let visual_state = coord.take_rebase_frames(&[key_a], "first_rebase", now, None, "abc", 0);
+    let rebase_frames_a = visual_state.rebase_frames.clone();
+    let handoff_a = visual_state.caret_handoff.clone();
     let handoff_a = handoff_a.expect("第一次 rebase 应采样到事务 A 的屏幕光标");
     assert!(
         (handoff_a.sampled.x - expected_a).abs() < 1e-6,
@@ -900,6 +913,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         duration_ms: handoff_a.remaining_duration_ms,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -922,7 +936,10 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
     );
 
     // ── 第二次 rebase：take_rebase_frames 采样事务 B 的屏幕光标 ──
-    let visual_state = coord.take_rebase_frames(&[key_b], "second_rebase", now_after_b, None, "abc", 0); let _rebase_frames_b = visual_state.rebase_frames.clone(); let handoff_b = visual_state.caret_handoff.clone();
+    let visual_state =
+        coord.take_rebase_frames(&[key_b], "second_rebase", now_after_b, None, "abc", 0);
+    let _rebase_frames_b = visual_state.rebase_frames.clone();
+    let handoff_b = visual_state.caret_handoff.clone();
     let handoff_b = handoff_b.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
 
     // 断言：第二次 sampled caret 精确等于第二次 rebase 前
@@ -991,6 +1008,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         duration_ms: 200,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord1.prepared_queue.enqueue(tx_d1);
 
@@ -1037,6 +1055,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         duration_ms: 200,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord2.prepared_queue.enqueue(tx_d2);
 
@@ -1134,6 +1153,7 @@ fn issue690_comment5682867529_caret_track_starts_with_text_unit_at_rendering() {
         0.0,
         0.0,
         200,
+        super::super::transaction::types::IngestStageId(0),
     );
     let tx = PreparedTextVisualTransaction {
         key,
@@ -1357,6 +1377,7 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     };
     let old_key = VisualTransactionKey::new(7, 7);
     let mut old_tx = rendering_tx(
@@ -1708,6 +1729,7 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         0.0,
         20.0,
         100,
+        super::super::transaction::types::IngestStageId(0),
     );
     let old_tx = PreparedTextVisualTransaction {
         key: old_key,
@@ -1743,6 +1765,7 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         0.0,
         20.0,
         100,
+        super::super::transaction::types::IngestStageId(0),
     );
     let new_tx = PreparedTextVisualTransaction {
         key: new_key,

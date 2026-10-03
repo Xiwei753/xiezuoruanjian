@@ -49,10 +49,7 @@ fn wrap_units(slices: Vec<AnimatedSlice>) -> Vec<PreparedVisualUnit> {
 /// Issue #819 评论 5956495850 第 4 节：test-only helper，内联已删除的
 /// `collect_rebase_frame_for_unit_without_caret` 的逻辑，供白盒测试验证
 /// rebase frame 的 visible_fraction / 终态过滤行为。
-fn collect_rebase_frame_for_unit(
-    unit: &PreparedVisualUnit,
-    now: Instant,
-) -> Option<RebaseFrame> {
+fn collect_rebase_frame_for_unit(unit: &PreparedVisualUnit, now: Instant) -> Option<RebaseFrame> {
     let visible_fraction = unit.current_visible_fraction(now);
     let frame = unit.slice.compute_frame(visible_fraction);
     match unit.slice.kind {
@@ -309,6 +306,7 @@ fn rendering_tx(
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     PreparedTextVisualTransaction {
         key,
@@ -1137,14 +1135,19 @@ fn issue690_take_rebase_frames_carries_frames_and_cancels_old_transaction() {
         50,
     ));
 
-    let visual_state = coord.take_rebase_frames(&[old_key], "rebased_by_insert", now, None, "abc", 0); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
+    let visual_state =
+        coord.take_rebase_frames(&[old_key], "rebased_by_insert", now, None, "abc", 0);
+    let frames = visual_state.rebase_frames.clone();
+    let _ = visual_state.caret_handoff.clone();
     assert_eq!(frames.len(), 1, "旧事务的未播完单元要全部交棒");
     assert!((frames[0].visible_fraction - 0.75).abs() < 1e-6);
     assert!(
         coord.prepared_queue.is_empty(),
         "交棒后旧事务必须取消，snapshot/纹理资源归新事务所有"
     );
-    let visual_state = coord.take_rebase_frames(&[], "rebased_by_insert", now, None, "abc", 0); let no_frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
+    let visual_state = coord.take_rebase_frames(&[], "rebased_by_insert", now, None, "abc", 0);
+    let no_frames = visual_state.rebase_frames.clone();
+    let _ = visual_state.caret_handoff.clone();
     assert!(no_frames.is_empty(), "无冲突事务时不产生交棒帧");
 }
 
@@ -1173,7 +1176,9 @@ fn issue690_take_rebase_frames_keeps_transaction_when_units_are_untouched() {
         Some((&[(3, 3)], &offset_map)),
         "abc",
         0,
-    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
+    );
+    let frames = visual_state.rebase_frames.clone();
+    let _ = visual_state.caret_handoff.clone();
 
     assert!(frames.is_empty(), "未覆盖的单元不该交棒，旧事务自己播完");
     assert_eq!(
@@ -1222,7 +1227,9 @@ fn issue690_take_rebase_frames_cancels_when_edit_covers_playing_unit() {
         Some((&[(2, 3)], &offset_map)),
         "abc",
         0,
-    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
+    );
+    let frames = visual_state.rebase_frames.clone();
+    let _ = visual_state.caret_handoff.clone();
 
     assert_eq!(frames.len(), 1, "被编辑覆盖的单元必须交棒给新事务");
     assert!(coord.prepared_queue.is_empty(), "覆盖后旧事务结束生命期");
@@ -1252,7 +1259,9 @@ fn issue690_take_rebase_frames_cancels_when_unit_offsets_shift() {
         Some((&[(0, 0)], &offset_map)),
         "abc",
         0,
-    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
+    );
+    let frames = visual_state.rebase_frames.clone();
+    let _ = visual_state.caret_handoff.clone();
 
     assert_eq!(frames.len(), 1, "偏移被平移的单元仍属被影响范围，要交棒");
     assert!(coord.prepared_queue.is_empty());
@@ -1281,7 +1290,9 @@ fn issue690_take_rebase_frames_cancels_finished_transaction_without_frames() {
         Some((&[(3, 3)], &offset_map)),
         "abc",
         0,
-    ); let frames = visual_state.rebase_frames.clone(); let _ = visual_state.caret_handoff.clone();
+    );
+    let frames = visual_state.rebase_frames.clone();
+    let _ = visual_state.caret_handoff.clone();
 
     assert!(frames.is_empty(), "已播完的单元是稳定终态，不该再交棒");
     assert!(
@@ -1378,7 +1389,9 @@ fn issue710_take_rebase_frames_handles_multiple_conflicting_transactions() {
         Some((&changed_old_ranges, &offset_map)),
         current_old_text,
         0,
-    ); let rebase_frames = visual_state.rebase_frames.clone(); let _caret_handoff = visual_state.caret_handoff.clone();
+    );
+    let rebase_frames = visual_state.rebase_frames.clone();
+    let _caret_handoff = visual_state.caret_handoff.clone();
 
     // ── 断言 1: tx1 留在队列里（keep）──
     let active = coord.prepared_queue.active_transactions();
@@ -1489,7 +1502,9 @@ fn issue710_take_rebase_frames_drops_frame_on_mapping_failure() {
         Some((&changed_old_ranges, &offset_map)),
         current_old_text,
         0,
-    ); let rebase_frames = visual_state.rebase_frames.clone(); let _caret_handoff = visual_state.caret_handoff.clone();
+    );
+    let rebase_frames = visual_state.rebase_frames.clone();
+    let _caret_handoff = visual_state.caret_handoff.clone();
 
     // ── 断言 1: rebase_frames 为空（映射失败的 frame 被丢弃）──
     assert!(
@@ -1621,6 +1636,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx1);
 
@@ -1651,6 +1667,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx2);
 
@@ -1663,7 +1680,9 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         Some((&changed_old_ranges, &offset_map)),
         current_old_text,
         0, // current_cursor_epoch = 0，两笔 tx 都匹配
-    ); let _rebase_frames = visual_state.rebase_frames.clone(); let caret_handoff = visual_state.caret_handoff.clone();
+    );
+    let _rebase_frames = visual_state.rebase_frames.clone();
+    let caret_handoff = visual_state.caret_handoff.clone();
 
     // 两笔都应被取消
     assert!(coord.prepared_queue.is_empty(), "两笔冲突事务都应被取消");
