@@ -306,6 +306,7 @@ fn rendering_tx(
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     PreparedTextVisualTransaction {
         key,
@@ -1635,6 +1636,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx1);
 
@@ -1665,6 +1667,7 @@ fn issue710_take_rebase_frames_caret_handoff_picks_latest_coordinated_caret() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx2);
 

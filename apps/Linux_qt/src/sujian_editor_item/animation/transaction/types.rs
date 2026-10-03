@@ -72,6 +72,13 @@ pub(crate) enum TextVisualOperationKind {
 pub(crate) struct PreparedVisualUnit {
     pub slice: AnimatedSlice,
     pub timing: VisualUnitTiming,
+    /// Issue #819 评论 5968931455: 本 unit 所属的 visual stage id。
+    ///
+    /// - `None`：不参与 stage_id 过滤（向后兼容，测试构造 / Reflow unit）。
+    /// - `Some(id)`：`sample_unit_slice_frame` 比较本 unit 的 stage_id 与
+    ///   当前 segment 的 stage_id，不匹配时保持初态/终态，避免跨事务 carried unit
+    ///   消费下一笔编辑的 route。
+    pub stage_id: Option<IngestStageId>,
 }
 
 impl PreparedVisualUnit {
@@ -79,9 +86,15 @@ impl PreparedVisualUnit {
     ///
     /// `duration_ms` 取自事务（与 `TransactionTimeline::duration_ms` 一致）。
     /// Issue #815: 本入口只用于 ReflowMove/ReflowCrossFade，始终独立 Timed timing。
+    /// Issue #819 评论 5968931455: `stage_id` 默认 `None`（Reflow 不参与吞吐，
+    /// 不需要 stage_id 过滤）。调用方按需用 `with_stage_id` 设置。
     pub fn wrap(slice: AnimatedSlice, duration_ms: u64) -> Self {
         let timing = VisualUnitTiming::default_for_kind(slice.kind, duration_ms);
-        Self { slice, timing }
+        Self {
+            slice,
+            timing,
+            stage_id: None,
+        }
     }
 
     /// Issue #756 / Issue #815 评论 6042062633 修改 2: 按 `coordinated` 决定
@@ -98,6 +111,7 @@ impl PreparedVisualUnit {
     /// 但锚点只是几何参考——真正决定每帧边界的是当前 caret.x。
     ///
     /// 协同=一条 caret 运动轨迹 + 文字以 caret 当前帧为吞吐边界 + Reflow 可独立。
+    /// Issue #819 评论 5968931455: `stage_id` 默认 `None`，调用方按需设置。
     pub fn wrap_with_coordinated(
         slice: AnimatedSlice,
         duration_ms: u64,
@@ -108,7 +122,21 @@ impl PreparedVisualUnit {
             duration_ms,
             coordinated,
         );
-        Self { slice, timing }
+        Self {
+            slice,
+            timing,
+            stage_id: None,
+        }
+    }
+
+    /// Issue #819 评论 5968931455: 设置本 unit 的 visual stage id。
+    ///
+    /// 协同 InsertReveal/DeleteConceal 在 `build_prepared_transaction` 中
+    /// 调本方法标记自己属于哪个 stage。carried unit 标记旧事务的 stage_id，
+    /// 新事务自己创建的 unit 标记新事务的 stage_id。
+    pub fn with_stage_id(mut self, stage_id: IngestStageId) -> Self {
+        self.stage_id = Some(stage_id);
+        self
     }
 
     /// 从自己的时间线计算当前 progress（0..1）。
@@ -253,6 +281,20 @@ pub(crate) enum IngestSnapshotSide {
     New,
 }
 
+/// Issue #819 评论 5968931455: 跨事务 carried unit 的阶段/快照身份。
+///
+/// 每个 `CaretTrackSegment` 标明自己属于哪个 visual stage，
+/// 避免跨事务 carried unit 的两个 "Old" 被当成同一侧。
+///
+/// 连续 Backspace 例子：`ABC|`，第一笔删 C 播到一半（C 约半个可见，caret 在 25），
+/// 第二笔删 B。carried C 的旧 snapshot 是 stage A，当前 B 的 old snapshot 是 stage B。
+/// 新事务的 route 合成为 `旧剩余段(stage A) + 新段(stage B)`。
+/// `compute_frame_by_caret_ingest` 根据 stage_id 判断哪个 unit 该被当前 segment 驱动：
+/// - 采样到 stage A 段时，只有 carried C（stage A）被驱动，新 B（stage B）保持初态；
+/// - 采样到 stage B 段时，carried C（stage A）保持终态，新 B（stage B）被驱动。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct IngestStageId(pub(crate) u64);
+
 /// 一段 caret 轨迹。`from`/`to` 都是**本段所属那侧 canonical** 的文档坐标，
 /// 绝不跨 layout 混用。
 #[derive(Clone, Copy, Debug)]
@@ -273,6 +315,12 @@ pub(crate) struct CaretTrackSegment {
     pub ingest_side: Option<IngestSnapshotSide>,
     /// 本段所属那侧 canonical 的 `visual_line_id`（只用于光标层画 caret）。
     pub visual_line_id: Option<usize>,
+    /// Issue #819 评论 5968931455: 本段所属的 visual stage id。
+    /// carried route 剩余段保留旧事务的 stage_id；
+    /// 当前新编辑的 route 段用新事务的 stage_id。
+    /// `compute_frame_by_caret_ingest` 据此判断本 segment 该驱动哪个 unit：
+    /// 只有 stage_id 匹配的 unit 才在当前段被吞吐，其余 unit 保持初态/终态。
+    pub ingest_stage_id: IngestStageId,
 }
 
 #[derive(Clone, Debug)]
@@ -313,6 +361,13 @@ pub(crate) struct PreparedCursorVisualTrack {
     /// `from`/`to` 字段保留为整段运动的起点/终点（给高度、epoch 判断等用），
     /// 但逐帧几何一律走 `segments`。
     pub segments: Vec<CaretTrackSegment>,
+    /// Issue #819 评论 5968931455: 本 track 所属的 visual stage id。
+    ///
+    /// 新事务的 track 拥有新 stage_id；它的 segments 可能混合旧 stage_id
+    ///（carried route 剩余段）和新 stage_id（当前新编辑的 route 段）。
+    /// `sampled_ingest_at_progress` 返回当前段 的 stage_id，
+    /// 供 `sample_unit_slice_frame` 做 stage_id 过滤。
+    pub stage_id: IngestStageId,
 }
 
 impl PreparedCursorVisualTrack {
@@ -422,6 +477,15 @@ impl PreparedCursorVisualTrack {
         }
     }
 
+    /// Issue #819 评论 5968931455: 按 progress 采样当前路由段的 visual stage id。
+    ///
+    /// 返回当前 segment 的 `ingest_stage_id`。`segments` 为空（退化路线）时
+    /// 返回 `None`，调用方退回 `track.stage_id`。
+    pub(crate) fn sampled_stage_id_at_progress(&self, progress: f64) -> Option<IngestStageId> {
+        self.sampled_segment_at_progress(progress)
+            .map(|(index, _)| self.segments[index].ingest_stage_id)
+    }
+
     /// Issue #815 评论 5949097065 问题3: 按 progress 采样当前 caret 所在视觉行 id。
     /// Issue #702: 用外部传入的 progress 采样 caret rect。
     /// Issue #815 评论 5947728704 问题2: 本方法给出的是**已经 easing 过的真实屏幕几何**，
@@ -495,6 +559,7 @@ impl PreparedCursorVisualTrack {
         to_line_top: f64,
         to_line_bottom: f64,
         duration_ms: u64,
+        stage_id: IngestStageId,
     ) -> Self {
         Self {
             from,
@@ -512,6 +577,7 @@ impl PreparedCursorVisualTrack {
             // cursor-only 事务（只有光标要平滑移动），不存在"文字以 caret 为吞吐边界"，
             // 因此不建吞吐路径，逐帧几何走 `from → to` fallback。
             segments: Vec::new(),
+            stage_id,
         }
     }
 
@@ -541,6 +607,73 @@ impl PreparedCursorVisualTrack {
             let paused_duration = now.duration_since(pause_start);
             *start += paused_duration;
         }
+    }
+
+    /// Issue #815 评论 5949097065 问题3: 取本帧之后的剩余段，并把当前段的终点
+    /// 接到新目标上。
+    ///
+    /// 本帧已经走过的部分不再重播；第一段从**本帧实际采样位置**出发（不是逻辑旧端点）。
+    /// 当前段若还在吞吐中，剩余段的第一段必须仍然是 `IngestLine` 且行身份不变——
+    /// 这正是"rebase 恰好发生在中间行"必须被保住的行身份与几何。
+    ///
+    /// Issue #819 评论 5968931455: 改为 `pub(crate)` 供 `rebase::take_rebase_frames`
+    /// 提取旧 track 从当前 sampled progress 之后的剩余 segments，让 carried CaretTrack
+    /// unit 在新事务里继续消费自己原来的 route，而不是被迫消费下一笔编辑的 route。
+    pub(crate) fn remaining_segments_from(
+        &self,
+        progress: f64,
+        new_to: CursorRect,
+    ) -> Vec<CaretTrackSegment> {
+        if self.segments.is_empty() {
+            return Vec::new();
+        }
+        let count = self.segments.len();
+        let scaled = progress.clamp(0.0, 1.0) * count as f64;
+        let index = (scaled.floor() as usize).min(count - 1);
+        let local = (scaled - index as f64).clamp(0.0, 1.0);
+        let eased = AnimatedSlice::ease_out_cubic(local);
+        let current = &self.segments[index];
+        let current_end = CursorRect {
+            x: current.from.x + (current.to.x - current.from.x) * eased,
+            top: current.from.top + (current.to.top - current.from.top) * eased,
+            bottom: 0.0,
+            baseline_y: current.from.baseline_y
+                + (current.to.baseline_y - current.from.baseline_y) * eased,
+        };
+        let current_end = CursorRect {
+            bottom: current_end.top + (current.to.bottom - current.to.top),
+            ..current_end
+        };
+        let mut segments = Vec::new();
+        let continue_same_ingest_row =
+            current.kind == CaretTrackSegmentKind::IngestLine && local < 1.0;
+        if continue_same_ingest_row {
+            // 本行还没扫完：把本行剩余路程接上新目标 caret。
+            // Issue #819 评论 5968931455: 保留原 segment 的 ingest_stage_id。
+            segments.push(CaretTrackSegment {
+                kind: CaretTrackSegmentKind::IngestLine,
+                from: current_end,
+                to: new_to,
+                ingest_line_ord: current.ingest_line_ord,
+                ingest_side: None,
+                visual_line_id: current.visual_line_id,
+                ingest_stage_id: current.ingest_stage_id,
+            });
+        }
+        segments.extend(self.segments[index + 1..].iter().copied());
+        if segments.is_empty() {
+            // Issue #819 评论 5968931455: 保留原 segment 的 ingest_stage_id。
+            segments.push(CaretTrackSegment {
+                kind: CaretTrackSegmentKind::RowHandoff,
+                from: current_end,
+                to: new_to,
+                ingest_line_ord: current.ingest_line_ord,
+                ingest_side: None,
+                visual_line_id: current.visual_line_id,
+                ingest_stage_id: current.ingest_stage_id,
+            });
+        }
+        segments
     }
 }
 
@@ -599,62 +732,9 @@ impl PreparedCursorVisualTrack {
             duration_ms: remaining,
             pause_start: None,
             segments: remaining_segments,
+            // Issue #819 评论 5968931455: rebase 保留旧 track 的 stage_id。
+            stage_id: self.stage_id,
         }
-    }
-
-    /// Issue #815 评论 5949097065 问题3: 取本帧之后的剩余段，并把当前段的终点
-    /// 接到新目标上。
-    ///
-    /// 本帧已经走过的部分不再重播；第一段从**本帧实际采样位置**出发（不是逻辑旧端点）。
-    /// 当前段若还在吞吐中，剩余段的第一段必须仍然是 `IngestLine` 且行身份不变——
-    /// 这正是"rebase 恰好发生在中间行"必须被保住的行身份与几何。
-    fn remaining_segments_from(&self, progress: f64, new_to: CursorRect) -> Vec<CaretTrackSegment> {
-        if self.segments.is_empty() {
-            return Vec::new();
-        }
-        let count = self.segments.len();
-        let scaled = progress.clamp(0.0, 1.0) * count as f64;
-        let index = (scaled.floor() as usize).min(count - 1);
-        let local = (scaled - index as f64).clamp(0.0, 1.0);
-        let eased = AnimatedSlice::ease_out_cubic(local);
-        let current = &self.segments[index];
-        let current_end = CursorRect {
-            x: current.from.x + (current.to.x - current.from.x) * eased,
-            top: current.from.top + (current.to.top - current.from.top) * eased,
-            bottom: 0.0,
-            baseline_y: current.from.baseline_y
-                + (current.to.baseline_y - current.from.baseline_y) * eased,
-        };
-        let current_end = CursorRect {
-            bottom: current_end.top + (current.to.bottom - current.to.top),
-            ..current_end
-        };
-        let mut segments = Vec::new();
-        let continue_same_ingest_row =
-            current.kind == CaretTrackSegmentKind::IngestLine && local < 1.0;
-        if continue_same_ingest_row {
-            // 本行还没扫完：把本行剩余路程接上新目标 caret。
-            segments.push(CaretTrackSegment {
-                kind: CaretTrackSegmentKind::IngestLine,
-                from: current_end,
-                to: new_to,
-                ingest_line_ord: current.ingest_line_ord,
-                ingest_side: None,
-                visual_line_id: current.visual_line_id,
-            });
-        }
-        segments.extend(self.segments[index + 1..].iter().copied());
-        if segments.is_empty() {
-            segments.push(CaretTrackSegment {
-                kind: CaretTrackSegmentKind::RowHandoff,
-                from: current_end,
-                to: new_to,
-                ingest_line_ord: current.ingest_line_ord,
-                ingest_side: None,
-                visual_line_id: current.visual_line_id,
-            });
-        }
-        segments
     }
 }
 

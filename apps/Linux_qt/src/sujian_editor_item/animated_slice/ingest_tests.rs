@@ -374,7 +374,9 @@ mod real_track_phase {
     use super::super::IngestLinePhase;
     use super::*;
     use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
-    use crate::sujian_editor_item::animation::transaction::types::PreparedCursorVisualTrack;
+    use crate::sujian_editor_item::animation::transaction::types::{
+        IngestStageId, PreparedCursorVisualTrack,
+    };
     use crate::sujian_editor_item::edit_motion::CursorRect;
     use std::time::{Duration, Instant};
 
@@ -422,6 +424,7 @@ mod real_track_phase {
             duration_ms: DURATION_MS,
             pause_start: None,
             segments: Vec::new(),
+            stage_id: IngestStageId(0),
         }
     }
 
@@ -674,7 +677,7 @@ mod production_route {
     use super::super::{AnimatedSlice, AnimatedSliceKind};
     use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
     use crate::sujian_editor_item::animation::transaction::types::{
-        CaretTrackSegmentKind, IngestSnapshotSide, PreparedCursorVisualTrack,
+        CaretTrackSegmentKind, IngestSnapshotSide, IngestStageId, PreparedCursorVisualTrack,
     };
     use crate::sujian_editor_item::animation::transaction_builder::ingest_route::{
         build_delete_route, build_insert_route, IngestRow,
@@ -828,6 +831,7 @@ mod production_route {
             duration_ms: DURATION_MS,
             pause_start: None,
             segments,
+            stage_id: IngestStageId(0),
         }
     }
 
@@ -874,7 +878,7 @@ mod production_route {
         // 编辑前 caret 在第 2 行末尾（模拟跨三行的插入起点在下方）。
         let screen_caret = caret_rect(25.0, 2.0 * ROW_H);
         let new_caret = caret_rect(25.0, 2.0 * ROW_H);
-        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret, IngestStageId(0));
 
         let kinds: Vec<CaretTrackSegmentKind> = segments.iter().map(|s| s.kind).collect();
         assert_eq!(
@@ -913,7 +917,7 @@ mod production_route {
         let rows = vec![row(0, 0.0, 40.0), row(1, 0.0, 30.0)];
         let screen_caret = caret_rect(30.0, ROW_H);
         let new_caret = caret_rect(30.0, ROW_H);
-        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret, IngestStageId(0));
         let started_at = Instant::now();
         let track = track_from(segments, screen_caret, new_caret, started_at);
         let row0 = reveal_on_row(0, 0, 1, 0.0, 40.0);
@@ -976,7 +980,7 @@ mod production_route {
         // 不会多出一段 0 长度的 RowHandoff。
         let screen_caret = caret_rect(20.0, 0.0);
         let new_caret = caret_rect(60.0, 0.0);
-        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret, IngestStageId(0));
         assert_eq!(
             segments.len(),
             1,
@@ -986,7 +990,7 @@ mod production_route {
         assert_eq!(segments[0].kind, CaretTrackSegmentKind::IngestLine);
 
         // 真正的跨 layout 换位仍然要保留 LayoutHandoff。
-        let wrapped = build_insert_route(&rows, &caret_rect(500.0, 0.0), &new_caret);
+        let wrapped = build_insert_route(&rows, &caret_rect(500.0, 0.0), &new_caret, IngestStageId(0));
         assert_eq!(wrapped[0].kind, CaretTrackSegmentKind::LayoutHandoff);
         assert_eq!(wrapped[0].ingest_line_ord, None);
     }
@@ -1001,7 +1005,7 @@ mod production_route {
         let rows = vec![forward_row(0, 0.0, 10.0)];
         let old_caret = caret_rect(0.0, 0.0);
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret));
+        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret), IngestStageId(0));
 
         assert_eq!(segments.len(), 1);
         assert_eq!(
@@ -1020,7 +1024,7 @@ mod production_route {
         let rows = vec![forward_row(0, 0.0, 10.0)];
         let old_caret = caret_rect(0.0, 0.0);
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret));
+        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret), IngestStageId(0));
         let started_at = Instant::now();
         let track = track_from(segments, old_caret, new_caret, started_at);
 
@@ -1069,7 +1073,7 @@ mod production_route {
         // 旧 caret 在第 1 行右端；吞到第 0 行左端（deleted_range.start）。
         let old_caret = caret_rect(30.0, ROW_H);
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret));
+        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret), IngestStageId(0));
         let kinds: Vec<CaretTrackSegmentKind> = segments.iter().map(|s| s.kind).collect();
         assert_eq!(
             kinds,
@@ -1092,7 +1096,7 @@ mod production_route {
         assert_eq!(segments[2].to.x, 0.0);
         assert_route_is_continuous(&segments, "退格跨行");
 
-        let with_tail = build_delete_route(&rows, &old_caret, Some(&caret_rect(0.0, ROW_H)));
+        let with_tail = build_delete_route(&rows, &old_caret, Some(&caret_rect(0.0, ROW_H)), IngestStageId(0));
         assert_eq!(with_tail.len(), 4, "终点不同时才生成末尾 RowHandoff");
         assert_eq!(with_tail[3].kind, CaretTrackSegmentKind::RowHandoff);
         assert_eq!(with_tail[3].from.x, 0.0);
@@ -1107,7 +1111,7 @@ mod production_route {
         let old_caret = caret_rect(40.0, 0.0);
         // 单字符退格：吞字终点就是 new caret。
         let new_caret = caret_rect(0.0, 0.0);
-        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret));
+        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret), IngestStageId(0));
         assert_eq!(
             segments.len(),
             1,
@@ -1129,7 +1133,7 @@ mod production_route {
         let screen_caret = caret_rect(18.0, ROW_H);
         let new_caret = caret_rect(0.0, 0.0);
 
-        let segments = build_delete_route(&rows, &screen_caret, Some(&new_caret));
+        let segments = build_delete_route(&rows, &screen_caret, Some(&new_caret), IngestStageId(0));
         assert_eq!(
             segments[0].kind,
             CaretTrackSegmentKind::LayoutHandoff,
@@ -1152,7 +1156,7 @@ mod production_route {
         assert_route_is_continuous(&segments, "退格前置换位");
 
         // 屏幕 caret 已经在删除起点：不生成 0 长度的换位段。
-        let same = build_delete_route(&rows, &caret_rect(30.0, ROW_H), Some(&new_caret));
+        let same = build_delete_route(&rows, &caret_rect(30.0, ROW_H), Some(&new_caret), IngestStageId(0));
         assert_eq!(
             same[0].kind,
             CaretTrackSegmentKind::IngestLine,
@@ -1176,7 +1180,7 @@ mod production_route {
         // 改为直接验证「无 handoff 时起点来自 old_cursor_rect」这个不变量，
         // 再由 transaction_builder/tests.rs 的生产路径测试覆盖 handoff 分支。
         let rows = vec![row(1, 0.0, 20.0)];
-        let segments = build_insert_route(&rows, &caret_rect(500.0, 0.0), &caret_rect(20.0, ROW_H));
+        let segments = build_insert_route(&rows, &caret_rect(500.0, 0.0), &caret_rect(20.0, ROW_H), IngestStageId(0));
         assert_eq!(segments[0].kind, CaretTrackSegmentKind::LayoutHandoff);
         assert_eq!(segments[0].from.x, 500.0);
         assert_eq!(segments[0].from.top, 0.0);
@@ -1195,7 +1199,7 @@ mod production_route {
     fn row_handoff_lands_on_the_next_segments_real_start() {
         let rows = vec![forward_row(1, 0.0, 30.0), row(0, 0.0, 40.0)];
         let old_caret = caret_rect(30.0, ROW_H);
-        let segments = build_delete_route(&rows, &old_caret, None);
+        let segments = build_delete_route(&rows, &old_caret, None, IngestStageId(0));
 
         let handoff = segments
             .iter()
@@ -1216,7 +1220,7 @@ mod production_route {
     fn forward_first_row_does_not_drop_the_second_row() {
         let rows = vec![forward_row(0, 0.0, 30.0), row(1, 0.0, 20.0)];
         let old_caret = caret_rect(30.0, 0.0);
-        let segments = build_delete_route(&rows, &old_caret, None);
+        let segments = build_delete_route(&rows, &old_caret, None, IngestStageId(0));
 
         let ingest_lines = segments
             .iter()
@@ -1257,7 +1261,7 @@ mod production_route {
                 },
                 start.line_top,
             );
-            let segments = build_delete_route(&rows, &old_caret, None);
+            let segments = build_delete_route(&rows, &old_caret, None, IngestStageId(0));
             assert_route_is_continuous(&segments, label);
         }
     }
@@ -1273,7 +1277,7 @@ mod production_route {
         let screen_caret = caret_rect(0.0, 0.0);
         // 粘贴 `abc\n`：最后可见字符在第 0 行，但新 caret 已经在第 1 行行首。
         let new_caret = caret_rect(0.0, ROW_H);
-        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret, IngestStageId(0));
 
         let last_ingest = segments
             .iter()
@@ -1296,7 +1300,7 @@ mod production_route {
         assert_route_is_continuous(&segments, "粘贴末尾换行后的 route");
 
         // 同行输入不受影响：吞吐终点就是新 caret，不生成 0 长度的末尾换位段。
-        let same_line = build_insert_route(&rows, &screen_caret, &caret_rect(60.0, 0.0));
+        let same_line = build_insert_route(&rows, &screen_caret, &caret_rect(60.0, 0.0), IngestStageId(0));
         assert_eq!(same_line.len(), 1, "同行输入不该多出末尾 RowHandoff");
     }
 
@@ -1306,7 +1310,7 @@ mod production_route {
         let rows = vec![row(0, 0.0, 60.0)];
         let screen_caret = caret_rect(0.0, 0.0);
         let new_caret = caret_rect(0.0, ROW_H);
-        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret, IngestStageId(0));
         let started = Instant::now();
         let track = track_from(segments, screen_caret, new_caret, started);
         let row_0 = reveal_on_row(0, 0, 0, 0.0, 60.0);
@@ -1360,7 +1364,7 @@ mod production_route {
         let screen_caret = caret_rect(40.0, ROW_H);
         // 末尾换行 ⇒ 新 caret 落到第 2 行行首，强制生成 tail RowHandoff。
         let new_caret = caret_rect(0.0, 2.0 * ROW_H);
-        let segments = build_insert_route(&rows, &screen_caret, &new_caret);
+        let segments = build_insert_route(&rows, &screen_caret, &new_caret, IngestStageId(0));
 
         let tail = segments.last().expect("route 非空");
         assert_eq!(
@@ -1421,7 +1425,7 @@ mod production_route {
         let old_caret = caret_rect(20.0, 2.0 * ROW_H);
         // new caret 与 old 侧吞完位置不同 ⇒ 强制生成 tail RowHandoff。
         let new_caret = caret_rect(40.0, 3.0 * ROW_H);
-        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret));
+        let segments = build_delete_route(&rows, &old_caret, Some(&new_caret), IngestStageId(0));
 
         let tail = segments.last().expect("route 非空");
         assert_eq!(tail.kind, CaretTrackSegmentKind::RowHandoff);

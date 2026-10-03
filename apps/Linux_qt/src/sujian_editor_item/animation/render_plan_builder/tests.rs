@@ -193,6 +193,7 @@ fn rendering_tx(
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     PreparedTextVisualTransaction {
         key,
@@ -501,6 +502,7 @@ fn issue690_cursor_without_boundary_glyph_uses_reflow_easing() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx);
 
@@ -646,6 +648,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(new_tx);
 
@@ -723,6 +726,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -851,6 +855,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_a);
 
@@ -908,6 +913,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         duration_ms: handoff_a.remaining_duration_ms,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -1002,6 +1008,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         duration_ms: 200,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord1.prepared_queue.enqueue(tx_d1);
 
@@ -1048,6 +1055,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         duration_ms: 200,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord2.prepared_queue.enqueue(tx_d2);
 
@@ -1145,6 +1153,7 @@ fn issue690_comment5682867529_caret_track_starts_with_text_unit_at_rendering() {
         0.0,
         0.0,
         200,
+        super::super::transaction::types::IngestStageId(0),
     );
     let tx = PreparedTextVisualTransaction {
         key,
@@ -1368,6 +1377,7 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
+            stage_id: super::super::transaction::types::IngestStageId(0),
     };
     let old_key = VisualTransactionKey::new(7, 7);
     let mut old_tx = rendering_tx(
@@ -1719,6 +1729,7 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         0.0,
         20.0,
         100,
+        super::super::transaction::types::IngestStageId(0),
     );
     let old_tx = PreparedTextVisualTransaction {
         key: old_key,
@@ -1754,6 +1765,7 @@ fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
         0.0,
         20.0,
         100,
+        super::super::transaction::types::IngestStageId(0),
     );
     let new_tx = PreparedTextVisualTransaction {
         key: new_key,

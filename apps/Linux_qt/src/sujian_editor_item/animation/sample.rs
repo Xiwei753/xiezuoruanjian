@@ -113,22 +113,49 @@ fn sample_unit_slice_frame(
         // 协同 InsertReveal/DeleteConceal：逐帧边界来自本帧 caret 采样。
         // DeleteForwardBoundary 的收拢边界也在这里按本帧 ingest_progress 算完。
         let caret = caret?;
-        let frame = slice.compute_frame_by_caret_ingest(
-            caret.x,
-            caret.y,
-            caret.ingest_line_ord,
-            caret.is_ingest_segment,
-            caret.ingest_side,
-            caret.ingest_progress,
-        );
-        let side = slice_side_for_kind(slice.kind);
-        // CaretTrack unit 的 visible_fraction 不被 rebase_from_frame 使用
-        //（rebase_from_frame 对 CaretTrack 直接 return），设 0.0。
-        // Issue #819 评论 5967250411 问题 1：CaretTrack unit 的终态由 caret track
-        // 决定。caret 不存在（track 已结束/retired）或 caret.progress >= 1.0
-        //（track 已到终态）时 is_finished = true。不再用 visible_fraction 判断。
-        let caret_finished = caret.progress >= 1.0;
-        (frame, side, 0.0, caret_finished)
+        // Issue #819 评论 5968931455: stage_id 过滤。
+        // carried unit（旧 stage_id）和新 unit（新 stage_id）在同一条 track 上，
+        // 但 segment 的 stage_id 不同。只有 stage_id 匹配的 unit 才在当前段被吞吐，
+        // 其余 unit 保持初态/终态，避免跨事务 carried unit 消费下一笔编辑的 route。
+        if let Some(unit_stage_id) = unit.stage_id {
+            if unit_stage_id != caret.ingest_stage_id {
+                // stage_id 不匹配：本 unit 不该被当前 segment 驱动。
+                // unit 的 stage 在前（< caret stage）→ 已完成，保持终态；
+                // unit 的 stage 在后（> caret stage）→ 还没开始，保持初态。
+                let unit_passed = unit_stage_id < caret.ingest_stage_id;
+                let (frame, vis) = stage_mismatch_frame(slice, unit_passed);
+                let side = slice_side_for_kind(slice.kind);
+                // stage 不匹配时本 unit 不被驱动，终态判断由 track progress 决定。
+                let caret_finished = caret.progress >= 1.0;
+                (frame, side, vis, caret_finished)
+            } else {
+                // stage_id 匹配：正常消费当前 segment。
+                let frame = slice.compute_frame_by_caret_ingest(
+                    caret.x,
+                    caret.y,
+                    caret.ingest_line_ord,
+                    caret.is_ingest_segment,
+                    caret.ingest_side,
+                    caret.ingest_progress,
+                );
+                let side = slice_side_for_kind(slice.kind);
+                let caret_finished = caret.progress >= 1.0;
+                (frame, side, 0.0, caret_finished)
+            }
+        } else {
+            // unit 没有 stage_id（向后兼容 / 测试构造）：正常消费。
+            let frame = slice.compute_frame_by_caret_ingest(
+                caret.x,
+                caret.y,
+                caret.ingest_line_ord,
+                caret.is_ingest_segment,
+                caret.ingest_side,
+                caret.ingest_progress,
+            );
+            let side = slice_side_for_kind(slice.kind);
+            let caret_finished = caret.progress >= 1.0;
+            (frame, side, 0.0, caret_finished)
+        }
     } else {
         // Timed unit（非协同吞吐字 + ReflowMove/ReflowCrossFade）：
         // 用自己的时间线算 visible_fraction + compute_frame。
@@ -190,4 +217,29 @@ fn slice_side_for_kind(kind: AnimatedSliceKind) -> Option<IngestSnapshotSide> {
         AnimatedSliceKind::InsertReveal => Some(IngestSnapshotSide::New),
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => None,
     }
+}
+
+/// Issue #819 评论 5968931455: stage_id 不匹配时返回初态/终态帧。
+///
+/// - `unit_passed = true`：unit 的 stage 在当前 segment 之前（已完成）→ 终态。
+///   - InsertReveal 终态 = fully shown（visible = 1.0）。
+///   - DeleteConceal 终态 = fully hidden（visible = 0.0）。
+/// - `unit_passed = false`：unit 的 stage 在当前 segment 之后（还没开始）→ 初态。
+///   - InsertReveal 初态 = not shown（visible = 0.0）。
+///   - DeleteConceal 初态 = fully shown（visible = 1.0）。
+///
+/// 返回 `(frame, visible_fraction)`，`visible_fraction` 供 rebase 交棒用。
+fn stage_mismatch_frame(
+    slice: &AnimatedSlice,
+    unit_passed: bool,
+) -> (crate::sujian_editor_item::animated_slice::AnimatedSliceFrame, f64) {
+    let visible = match (slice.kind, unit_passed) {
+        (AnimatedSliceKind::InsertReveal, true) => 1.0, // 终态：完全显示
+        (AnimatedSliceKind::InsertReveal, false) => 0.0, // 初态：不显示
+        (AnimatedSliceKind::DeleteConceal, true) => 0.0, // 终态：完全隐藏
+        (AnimatedSliceKind::DeleteConceal, false) => 1.0, // 初态：完全显示
+        // Reflow 不参与 stage_id 过滤（始终 Timed），这里防御性返回初态。
+        (AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade, _) => 0.0,
+    };
+    (slice.compute_frame(visible), visible)
 }

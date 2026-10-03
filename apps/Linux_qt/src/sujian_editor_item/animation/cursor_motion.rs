@@ -25,6 +25,8 @@ pub(crate) fn build_cursor_visual_track(
     // Issue #815 评论 5949097065 问题3: 正式的运动路径，由调用方在 slice 建完、
     // `assign_shared_line_masks` 之后按**同侧** slice 几何生成。
     ingest_segments: Vec<CaretTrackSegment>,
+    // Issue #819 评论 5968931455: 本 track 所属的 visual stage id。
+    stage_id: super::transaction::types::IngestStageId,
 ) -> Option<PreparedCursorVisualTrack> {
     let to = new_cursor_rect?;
     match handoff {
@@ -47,6 +49,7 @@ pub(crate) fn build_cursor_visual_track(
             duration_ms: h.remaining_duration_ms,
             pause_start: None,
             segments: ingest_segments,
+            stage_id,
         }),
         None => {
             let from = old_cursor_rect?;
@@ -60,6 +63,7 @@ pub(crate) fn build_cursor_visual_track(
                 new_cursor_line_top,
                 new_cursor_line_bottom,
                 tx_duration_ms,
+                stage_id,
             ))
             .map(|mut track| {
                 track.set_segments(ingest_segments);
@@ -94,6 +98,11 @@ pub(crate) fn sample_caret_track_frame(
     // "我这一侧现在该不该动"，避免 old/new 两套行号互相比较。
     let (visual_line_id, ingest_line_ord, is_ingest_segment, ingest_side, ingest_progress) =
         track.sampled_ingest_at_progress(progress);
+    // Issue #819 评论 5968931455: 本帧所处路由段的 visual stage id。
+    // 从当前 segment 的 ingest_stage_id 取，供 sample_unit_slice_frame 做 stage_id 过滤。
+    let ingest_stage_id = track
+        .sampled_stage_id_at_progress(progress)
+        .unwrap_or(track.stage_id);
     SampledCaretFrame {
         x: rect.x,
         y: rect.top,
@@ -104,6 +113,7 @@ pub(crate) fn sample_caret_track_frame(
         is_ingest_segment,
         ingest_side,
         ingest_progress,
+        ingest_stage_id,
     }
 }
 

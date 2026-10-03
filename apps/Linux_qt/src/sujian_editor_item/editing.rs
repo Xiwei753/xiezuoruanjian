@@ -56,8 +56,9 @@ impl SujianEditorItem {
     /// **不再**覆盖提交后的 target caret 或 `cursor_ctrl.visual_x/visual_y`。
     /// 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
     /// 由 `emit_content_changed` → `update_cursor_visual_position` 统一计算。
-    /// Issue #819 评论 5956495850 第 1 节：返回值从 `()` 改成 `Option<VisualTransactionKey>`，
-    /// `apply_edit_with_visuals` 据此返回 `Created(key)` / `Skipped(reason)`。
+    /// Issue #819 评论 5968931455 问题 2.2: 返回值从 `Option<VisualTransactionKey>` 改成
+    /// `HandoffTransactionOutcome`，`apply_edit_with_visuals` 据此返回 `Created(key)` /
+    /// `Skipped(reason)`，不再猜。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_composition_commit_transaction(
         &mut self,
@@ -76,7 +77,7 @@ impl SujianEditorItem {
         committed_replace_end: usize,
         cancel_reason: &str,
         summary_tag: &str,
-    ) -> Option<VisualTransactionKey> {
+    ) -> super::animation::transaction_builder::HandoffTransactionOutcome {
         let width = self.bounding_width();
         // Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系。
         // old_snapshot 只接 old virtualText range（preedit 在 old virtualText 中的范围）；
@@ -133,7 +134,9 @@ impl SujianEditorItem {
                     "composition_commit_old_snapshot_unavailable",
                     Some(candidate_range),
                 );
-                return None;
+                return super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                    super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
+                );
             }
         };
 
@@ -182,7 +185,9 @@ impl SujianEditorItem {
                     "composition_commit_new_snapshot_invariant_failure",
                     Some(candidate_range),
                 );
-                return None;
+                return super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                    super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
+                );
             }
         };
         // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
@@ -340,8 +345,14 @@ impl SujianEditorItem {
         ));
 
         self.transaction_created();
-        // Issue #819 评论 5956495850 第 1 节：返回真正创建的视觉事务 key。
-        key
+        // Issue #819 评论 5968931455 问题 2.2: 返回 HandoffTransactionOutcome，
+        // 透传 skip reason，不再让 edit_flow.rs 猜。
+        match key {
+            Some(k) => super::animation::transaction_builder::HandoffTransactionOutcome::Created(k),
+            None => super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::CompositionCommitBuilderSkipped,
+            ),
+        }
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证

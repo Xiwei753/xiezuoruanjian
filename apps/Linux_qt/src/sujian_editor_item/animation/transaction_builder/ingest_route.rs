@@ -24,7 +24,7 @@
 use crate::sujian_editor_item::animated_slice::AnimatedSlice;
 use crate::sujian_editor_item::animated_slice::{AnimatedSliceKind, IngestBoundaryDriver};
 use crate::sujian_editor_item::animation::transaction::types::{
-    CaretTrackSegment, CaretTrackSegmentKind, IngestSnapshotSide,
+    CaretTrackSegment, CaretTrackSegmentKind, IngestSnapshotSide, IngestStageId,
 };
 use crate::sujian_editor_item::animation::transaction_builder::VisualEditSpec;
 use crate::sujian_editor_item::edit_motion::CursorRect;
@@ -247,6 +247,7 @@ pub(crate) fn build_insert_route(
     rows: &[IngestRow],
     screen_caret: &CursorRect,
     new_caret: &CursorRect,
+    stage_id: IngestStageId,
 ) -> Vec<CaretTrackSegment> {
     let Some(first) = rows.first().copied() else {
         return Vec::new();
@@ -263,6 +264,7 @@ pub(crate) fn build_insert_route(
             // 最前置的纯几何换位还没进入任何一侧的吞吐。
             ingest_side: None,
             visual_line_id: first.visual_line_id,
+            ingest_stage_id: stage_id,
         });
     }
     for (index, row) in rows.iter().enumerate() {
@@ -285,6 +287,7 @@ pub(crate) fn build_insert_route(
             ingest_line_ord: Some(row.line_ord),
             ingest_side: Some(IngestSnapshotSide::New),
             visual_line_id: row.visual_line_id,
+            ingest_stage_id: stage_id,
         });
         if index + 1 < rows.len() {
             let next = rows[index + 1];
@@ -296,25 +299,23 @@ pub(crate) fn build_insert_route(
                 ingest_line_ord: Some(row.line_ord),
                 ingest_side: Some(IngestSnapshotSide::New),
                 visual_line_id: row.visual_line_id,
+                ingest_stage_id: stage_id,
             });
         }
     }
-    // Issue #815 评论 5954004872 问题2: 吞完最后一行后若 `new_caret` 不在本行
-    // （例如粘贴末尾是换行），补一段 `RowHandoff` 走完剩余几何；几何相同时不生成
-    // 0 长度段。删除那条「最后一条可见 slice == 最终 caret 所在行」的隐含假设。
+    // Issue #815 评论 5954588641 问题1: 这段 Tail handoff 发生在**所有** Insert 行
+    // 已吐完之后，"刚扫完的行"是 `rows.last()`，不是 `rows.first()`。
+    //
+    // 原来标成 `first.line_ord` 时，多行 Insert（0 → 1 都吐完，末尾换行再换位到
+    // line 2 的 caret）的 tail frame 会报告 `sampled_ingest_line_ord = 0`，
+    // `ingest_phase_from_route_ord()` 于是把 line 1 判成还在 row 0「前面」
+    // ⇒ `NotReached` ⇒ **刚吐完的 line 1 在最终 handoff 阶段重新隐藏**，
+    // 到事务 retire 才又跳回最终静态内容，形成末尾闪回。
     let row_end = segments
         .last()
         .map(|segment| segment.to)
         .unwrap_or(ingest_start);
     if !same_rect(&row_end, new_caret) {
-        // Issue #815 评论 5954588641 问题1: 这段 tail handoff 发生在**所有** Insert 行
-        // 都已吐完之后，"刚扫完的行"是 `rows.last()`，不是 `rows.first()`。
-        //
-        // 原来标成 `first.line_ord` 时，多行 Insert（0 → 1 都吐完，末尾换行再换位到
-        // line 2 的 caret）的 tail frame 会报告 `sampled_ingest_line_ord = 0`，
-        // `ingest_phase_from_route_ord()` 于是把 line 1 判成还在 row 0「前面」
-        // ⇒ `NotReached` ⇒ **刚吐完的 line 1 在最后 handoff 阶段重新隐藏**，
-        // 到事务 retire 才又跳回最终静态内容，形成末尾闪回。
         let final_row = rows.last().copied().expect("rows 非空");
         segments.push(CaretTrackSegment {
             kind: CaretTrackSegmentKind::RowHandoff,
@@ -323,6 +324,7 @@ pub(crate) fn build_insert_route(
             ingest_line_ord: Some(final_row.line_ord),
             ingest_side: Some(IngestSnapshotSide::New),
             visual_line_id: final_row.visual_line_id,
+            ingest_stage_id: stage_id,
         });
     }
     segments
@@ -355,6 +357,7 @@ pub(crate) fn build_delete_route(
     rows: &[IngestRow],
     screen_caret: &CursorRect,
     tail: Option<&CursorRect>,
+    stage_id: IngestStageId,
 ) -> Vec<CaretTrackSegment> {
     if rows.is_empty() {
         return Vec::new();
@@ -378,6 +381,7 @@ pub(crate) fn build_delete_route(
             // 纯几何换位，还没进入 old 侧吞吐。
             ingest_side: None,
             visual_line_id: start_row.visual_line_id,
+            ingest_stage_id: stage_id,
         });
     }
     for (index, row) in rows.iter().enumerate().rev() {
@@ -388,6 +392,7 @@ pub(crate) fn build_delete_route(
             ingest_line_ord: Some(row.line_ord),
             ingest_side: Some(IngestSnapshotSide::Old),
             visual_line_id: row.visual_line_id,
+            ingest_stage_id: stage_id,
         });
         if index > 0 {
             let next_up = &rows[index - 1];
@@ -402,6 +407,7 @@ pub(crate) fn build_delete_route(
                 ingest_line_ord: Some(row.line_ord),
                 ingest_side: Some(IngestSnapshotSide::Old),
                 visual_line_id: row.visual_line_id,
+                ingest_stage_id: stage_id,
             });
         }
     }
@@ -432,6 +438,7 @@ pub(crate) fn build_delete_route(
                 ingest_line_ord: Some(final_row.line_ord),
                 ingest_side: Some(IngestSnapshotSide::Old),
                 visual_line_id: final_row.visual_line_id,
+                ingest_stage_id: stage_id,
             });
         }
     }
@@ -440,9 +447,18 @@ pub(crate) fn build_delete_route(
 
 /// 拿不到 old/new caret 之一时返回空 —— 那种事务本来就建不出 track，
 /// `build_cursor_visual_track` 会返回 `None` 并由调用点记 `editor.anim.transaction_skipped`。
+///
+/// Issue #819 评论 5968931455: 合成 `旧 carried route 剩余段 -> 当前新 route`，
+/// 让 carried CaretTrack unit 消费自己原来的剩余 route，而不是被迫消费下一笔编辑的 route。
+///
+/// 旧剩余段来自 `spec.visual_state.caret_handoff.remaining_ingest_segments`，
+/// 它们已经带旧 stage_id。新段用 `new_stage_id`。如果旧剩余段非空，保证相邻：
+/// `old_remaining.last().to == new_route.first().from`，如果不等，插入一个
+/// LayoutHandoff 换位段（ingest_side=None, stage_id=旧 stage_id）。
 pub(crate) fn build_ingest_route(
     spec: &VisualEditSpec,
     slices: &[AnimatedSlice],
+    new_stage_id: IngestStageId,
 ) -> Vec<CaretTrackSegment> {
     // Issue #815 评论 5950375533 问题3: 路径的**屏幕起点**必须优先用 handoff
     // （上一帧真正画出来的 caret 位置），拿不到才退回逻辑 `old_cursor_rect`。
@@ -460,30 +476,30 @@ pub(crate) fn build_ingest_route(
     let delete_rows = collect_delete_rows(slices);
     let insert_rows = collect_insert_rows(slices);
     if delete_rows.is_empty() && insert_rows.is_empty() {
-        return Vec::new();
+        // 即使没有新吞吐行，旧剩余段仍需保留，让 carried unit 继续收口。
+        return spec
+            .visual_state
+            .caret_handoff
+            .as_ref()
+            .map(|h| h.remaining_ingest_segments.clone())
+            .unwrap_or_default();
     }
-    match ingest_route_shape(slices) {
+    // 先用现有逻辑构造当前新编辑的 route，所有新段标记 new_stage_id。
+    let new_route = match ingest_route_shape(slices) {
         IngestRouteShape::InsertOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
             .map(|(screen_caret, new_caret)| {
-                build_insert_route(&insert_rows, screen_caret, new_caret)
+                build_insert_route(&insert_rows, screen_caret, new_caret, new_stage_id)
             })
             .unwrap_or_default(),
         IngestRouteShape::DeleteOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
             .map(|(screen_caret, new_caret)| {
-                build_delete_route(&delete_rows, screen_caret, Some(new_caret))
+                build_delete_route(&delete_rows, screen_caret, Some(new_caret), new_stage_id)
             })
             .unwrap_or_default(),
         // Issue #815 评论 5950887715: Mixed（IME commit 候选 Reveal + 旧 preedit
         // Conceal 同帧）**不再是退化路径**。
-        //
-        // 之前这里直接 `Vec::new()`，理由是 old / new 的 `VisualLine.id` 每次排版
-        // 都从 0 重编、不能互相比较。正确的解法不是放弃，而是给每段加 side
-        // （`IngestSnapshotSide::Old / New`），行序只在同一 side 内比较。
-        //
-        // 路线按阶段拼：**先吞旧 preedit（old 侧），再吐新 candidate（new 侧）**。
-        // 每段自带 side，旧侧已终态、新侧初态，完全不产生跨 snapshot ordinal 比较。
         IngestRouteShape::Mixed => {
             let Some(new_caret) = spec.new_cursor_rect.as_ref() else {
                 return Vec::new();
@@ -497,17 +513,8 @@ pub(crate) fn build_ingest_route(
                 return Vec::new();
             };
             // old 侧吞字（不含末尾换位段，交给下面统一接）。
-            let mut segments = build_delete_route(&delete_rows, screen_caret, None);
-            // old 吞完 → 切到 new 侧 candidate 起点。保留 Old 侧但不是吞吐段：
-            // old 侧 DeleteConceal 保持终态，new 侧 InsertReveal 保持初态。
-            // Issue #815 评论 5953049681 问题2: old 侧阶段的真实终点必须取
-            // **上一阶段实际生成 route 的末端**，不能再用
-            // `first_delete.caret_rect_at(first_delete.left)` 去猜。
-            //
-            // 退格时两者恰好相等，但前删时 old 侧是一条静止段
-            // （from == to == screen_caret），真实终点就是 screen_caret；
-            // 只要 screen_caret != first_delete.left，用猜出来的 left 当起点就会
-            // 让相邻段瞬移。
+            let mut segments = build_delete_route(&delete_rows, screen_caret, None, new_stage_id);
+            // old 吞完 → 切到 new 侧 candidate 起点。
             let old_route_end = segments.last().map(|seg| seg.to).unwrap_or(*screen_caret);
             let insert_start = first_insert.caret_rect_at(first_insert.left);
             if !same_rect(&old_route_end, &insert_start) {
@@ -518,12 +525,51 @@ pub(crate) fn build_ingest_route(
                     ingest_line_ord: Some(first_delete.line_ord),
                     ingest_side: Some(IngestSnapshotSide::Old),
                     visual_line_id: first_delete.visual_line_id,
+                    ingest_stage_id: new_stage_id,
                 });
             }
-            // new 侧吐字。`screen_caret` 就是 insert_start，
-            // 所以 `build_insert_route` 不会再生成 0 长度的前置换位段。
-            segments.extend(build_insert_route(&insert_rows, &insert_start, new_caret));
+            // new 侧吐字。
+            segments.extend(build_insert_route(
+                &insert_rows,
+                &insert_start,
+                new_caret,
+                new_stage_id,
+            ));
             segments
         }
+    };
+    // Issue #819 评论 5968931455: 合成旧 carried route 剩余段 + 新 route。
+    // 旧剩余段来自 handoff，已经带旧 stage_id。
+    let old_remaining = spec
+        .visual_state
+        .caret_handoff
+        .as_ref()
+        .map(|h| h.remaining_ingest_segments.clone())
+        .unwrap_or_default();
+    if old_remaining.is_empty() || new_route.is_empty() {
+        // 没有旧剩余段或没有新段：直接返回新 route（或旧剩余段）。
+        if old_remaining.is_empty() {
+            return new_route;
+        }
+        return old_remaining;
     }
+    // Issue #819 评论 5968931455: 新 route 的起点可能从 screen_caret（handoff.sampled）
+    // 出发，而旧剩余段的终点是上一笔 route 的终点。二者不同时，直接拼会在中间产生
+    // 一个回跳的换位段（caret 先退回 sampled 位置再向新目标走），破坏单调性——
+    // 正是"先恢复完整再吞"的根因。
+    //
+    // 修正：把新 route 的起点**平移**到旧剩余段的终点，让 caret 从旧 route 停下
+    // 的地方继续向新目标走，全程不回跳。只平移 from 端（第一段的 from），各段
+    // 的 to 保持不变——后续段的 from 已由前一段的 to 决定，不需要再改。
+    let mut combined = old_remaining.clone();
+    let old_end = combined.last().map(|seg| seg.to);
+    let mut new_route = new_route;
+    if let (Some(old_end), Some(first_seg)) = (old_end, new_route.first_mut()) {
+        if !same_rect(&old_end, &first_seg.from) {
+            // 平移第一段起点到旧剩余段终点，消除回跳。
+            first_seg.from = old_end;
+        }
+    }
+    combined.extend(new_route);
+    combined
 }

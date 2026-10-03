@@ -137,7 +137,8 @@ impl SujianEditorItem {
 }
 
 /// Issue #815 评论 6042062633 修改 8: Core 编辑操作类型 -> 动画诊断里的 operation_kind 短名。
-fn editor_operation_kind_label(kind: writer_core::editor::EditorOperationKind) -> &'static str {
+/// Issue #819 评论 5968931455 问题 3: 改成 pub(crate) 供 edit_flow.rs 复用。
+pub(crate) fn editor_operation_kind_label(kind: writer_core::editor::EditorOperationKind) -> &'static str {
     match kind {
         writer_core::editor::EditorOperationKind::Insert => "Insert",
         writer_core::editor::EditorOperationKind::Delete => "Delete",

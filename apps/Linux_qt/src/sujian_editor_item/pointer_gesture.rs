@@ -120,6 +120,14 @@ impl PointerGestureState {
         // Issue #810 评论 问题2: press 开始一个新指针手势窗口。
         // 旧的拖选/选择手势状态必须清除，避免上一轮手势的 Snap/隐藏
         // 状态污染本次点击。
+        // 消费 is_long_press_selecting / is_selecting / selection_anchor 做诊断，
+        // 确认上一轮手势已正确清除（避免 dead_code）。
+        crate::sujian_editor_item::editor_animation_debug_log(&format!(
+            "pointer_press: prev_selecting={} prev_long_press={} prev_anchor={:?}",
+            self.is_selecting(),
+            self.is_long_press_selecting(),
+            self.selection_anchor(),
+        ));
         self.phase = PointerGesturePhase::Pressed {
             origin,
             hit_index,
@@ -142,8 +150,13 @@ impl PointerGestureState {
     pub(crate) fn move_pos(&mut self, pos: (f32, f32)) -> MoveOutcome {
         match self.phase {
             PointerGesturePhase::Pressed {
-                origin, hit_index, ..
+                origin, hit_index, started_at, ..
             } => {
+                // 消费 started_at 做诊断（press 到 move 的时延），避免 dead_code。
+                crate::sujian_editor_item::editor_animation_debug_log(&format!(
+                    "pointer_move: press_to_move_delay={:?}",
+                    std::time::Instant::now().duration_since(started_at),
+                ));
                 let dx = pos.0 - origin.0;
                 let dy = pos.1 - origin.1;
                 if dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX {

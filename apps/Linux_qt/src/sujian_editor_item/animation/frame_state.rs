@@ -13,7 +13,9 @@
 //!   layout basis revision + caret + slices）。
 
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::transaction::types::IngestSnapshotSide;
+use crate::sujian_editor_item::animation::transaction::types::{
+    IngestSnapshotSide, IngestStageId,
+};
 use crate::sujian_editor_item::animation::VisualUnitTiming;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
@@ -53,6 +55,12 @@ pub(crate) struct SampledCaretFrame {
     pub ingest_side: Option<IngestSnapshotSide>,
     /// 本帧所处路由段的局部进度（0..1）。
     pub ingest_progress: f64,
+    /// Issue #819 评论 5968931455: 本帧所处路由段的 visual stage id。
+    ///
+    /// 来自当前 segment 的 `ingest_stage_id`。`sample_unit_slice_frame` 据此
+    /// 判断本帧该驱动哪个 unit：只有 stage_id 匹配的 unit 才在当前段被吞吐，
+    /// 其余 unit 保持初态/终态，避免跨事务 carried unit 消费下一笔编辑的 route。
+    pub ingest_stage_id: IngestStageId,
 }
 
 impl Default for SampledCaretFrame {
@@ -72,6 +80,7 @@ impl Default for SampledCaretFrame {
             is_ingest_segment: false,
             ingest_side: None,
             ingest_progress: 0.0,
+            ingest_stage_id: IngestStageId(0),
         }
     }
 }

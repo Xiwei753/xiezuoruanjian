@@ -12,7 +12,7 @@ use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
 use crate::sujian_editor_item::animation::transaction_builder::{
     build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels,
-    CompositionCommitCrossfadeSpec, VisualEditSpec,
+    BuildTransactionOutcome, CompositionCommitCrossfadeSpec, VisualEditSpec,
 };
 use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
 use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect};
@@ -149,7 +149,12 @@ impl LinuxEditorAnimationCoordinator {
         // `VisualUnitTiming::CaretTrack`，逐帧吞吐边界与本事务的 commit caret 来自同一次
         // cursor track 采样；拿不到 track 时 builder 自己记 `editor.anim.transaction_skipped`
         // 并返回 None，不允许退回"IME 自己一条文字时间线、光标另走一条"。
-        let prepared = build_prepared_transaction(spec)?;
+        // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
+        // 透传 skip reason，不再用 `?` 吞掉。
+        let prepared = match build_prepared_transaction(spec) {
+            BuildTransactionOutcome::Created(tx) => tx,
+            BuildTransactionOutcome::Skipped(_) => return None,
+        };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -365,7 +370,12 @@ impl LinuxEditorAnimationCoordinator {
         // 必需的 DeleteConceal 与 commit 光标共享同一条 cursor track 的当前帧，
         // 不再让 IME commit 留在独立文字时间线上。拿不到 track 时 builder 自己记
         // `editor.anim.transaction_skipped` 并返回 None。
-        let prepared = build_prepared_transaction(spec)?;
+        // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
+        // 透传 skip reason，不再用 `?` 吞掉。
+        let prepared = match build_prepared_transaction(spec) {
+            BuildTransactionOutcome::Created(tx) => tx,
+            BuildTransactionOutcome::Skipped(_) => return None,
+        };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
         emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");

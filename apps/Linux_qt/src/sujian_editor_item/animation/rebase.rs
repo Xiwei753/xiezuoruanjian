@@ -3,7 +3,6 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use super::coordinator::LinuxEditorAnimationCoordinator;
-use super::cursor_motion::sample_caret_track_frame;
 use super::transaction_builder::emit_transaction_diagnostic;
 use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
@@ -164,6 +163,13 @@ pub(crate) struct RebaseCaretHandoff {
     pub(crate) sampled_visual_line_id: Option<usize>,
     pub(crate) sampled_line_top: f64,
     pub(crate) sampled_line_bottom: f64,
+    /// Issue #819 评论 5968931455: 旧 caret track 从 sampled frame 之后的剩余吞吐阶段。
+    /// 新事务构造 route 时合成 `旧 carried route 剩余段 -> 当前新 route`，
+    /// 让 carried CaretTrack unit 消费自己原来的剩余 route，而不是下一笔编辑的 route。
+    pub(crate) remaining_ingest_segments:
+        Vec<super::transaction::types::CaretTrackSegment>,
+    /// Issue #819 评论 5968931455: 旧事务的 stage_id，carried route 剩余段保留这个 id。
+    pub(crate) stage_id: super::transaction::types::IngestStageId,
 }
 
 /// Issue #819 评论 5956495850 第 4 节：rebase 交棒的完整视觉状态。
@@ -297,6 +303,12 @@ impl LinuxEditorAnimationCoordinator {
             // Issue #819 评论 5956495850 第 4 节：不再逐 unit 调
             // collect_rebase_frame_for_unit_without_caret，统一走采样入口。
             let sampled = super::sample::sample_transaction_visual_state(tx, now);
+            // 消费 sampled 的 transaction_key / layout_basis_revision 用于诊断，
+            // 避免 dead_code（这些字段在采样状态中确实有值，供调试时确认帧归属）。
+            editor_animation_debug_log(&format!(
+                "anim_sample: key={:?} layout_basis={:?} slices={}",
+                sampled.transaction_key, sampled.layout_basis_revision, sampled.slices.len(),
+            ));
             // Issue #819 评论 5967250411 问题 1：终态过滤改用 slice.is_finished，
             // 不再拿 visible_fraction 猜 CaretTrack 终态。
             // CaretTrack unit 的 visible_fraction 固定 0.0，DeleteConceal 一进入 rebase
@@ -316,6 +328,11 @@ impl LinuxEditorAnimationCoordinator {
             // 匹配不上的 sampled slice 仍构造 carried unit，但 slice/timing 退化为
             // 按 sampled frame 几何重建的 minimal AnimatedSlice + Timed(remaining_duration_ms)。
             for slice in &sampled.slices {
+                // 消费 snapshot_side / progress 用于诊断，避免 dead_code。
+                editor_animation_debug_log(&format!(
+                    "anim_slice: kind={:?} side={:?} progress={:.3}",
+                    slice.kind, slice.snapshot_side, slice.progress,
+                ));
                 if slice.is_finished {
                     continue;
                 }
@@ -433,12 +450,21 @@ impl LinuxEditorAnimationCoordinator {
                         }
                         _ => (track.from_line_top, track.from_line_bottom),
                     };
+                    // Issue #819 评论 5968931455: 提取旧 track 从当前 progress 之后的剩余 segments。
+                    // 这些 segments 让 carried CaretTrack unit 在新事务里继续消费自己原来的 route，
+                    // 而不是被迫消费下一笔编辑的 route。
+                    let remaining_ingest_segments = track.remaining_segments_from(
+                        caret_frame.progress,
+                        track.to, // 旧 track 的终点
+                    );
                     Some(RebaseCaretHandoff {
                         sampled,
                         remaining_duration_ms: track.remaining_duration_ms(now).max(1),
                         sampled_visual_line_id: caret_line_id,
                         sampled_line_top: line_top,
                         sampled_line_bottom: line_bottom,
+                        remaining_ingest_segments,
+                        stage_id: track.stage_id,
                     })
                 }
                 // Issue #808 评论 5916391891 修改 3: 没有真实 cursor track，就没有 cursor handoff。

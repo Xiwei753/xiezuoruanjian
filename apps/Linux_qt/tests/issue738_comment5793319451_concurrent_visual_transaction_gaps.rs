@@ -52,8 +52,8 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 // 修复 1a 守卫: pipeline.rs layout_revision 无条件提交
 // =========================================================================
 
-/// 修复后守卫 1a: `self.layout_revision = new_revision;` 在 `if let Some(key) = key`
-/// 之前无条件执行，if let 块内只有 `self.prepare_transaction_textures(key);`。
+/// 修复后守卫 1a: `self.layout_revision = new_revision;` 在条件块之前无条件执行，
+/// 条件块内只有 `self.prepare_transaction_textures(key);`。
 #[test]
 fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
@@ -65,6 +65,8 @@ fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     // stale_current_canonical / canonical_invariant_failure），函数进一步变长，窗口再增大。
     // Issue #819 评论 5968240881 问题 2: prepare_edit_motion 返回 VisualPrepareOutcome 枚举，
     // 新增 Skipped/AnimationDisabled 返回点 + carried_snapshot_ids retain 逻辑，函数进一步变长。
+    // Issue #819 评论 5968931455 问题 2: 条件块从 `if let Some(key) = key` 改成
+    // `if let HandoffTransactionOutcome::Created(key) = handoff_outcome`，函数进一步变长。
     let window = function_window(&src, "fn prepare_edit_motion", 52000);
 
     // 修复后：layout_revision = new_revision 存在。
@@ -73,33 +75,34 @@ fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
         "修复后 prepare_edit_motion 应有 self.layout_revision = new_revision; 无条件提交。"
     );
 
-    // 修复后：layout_revision = new_revision 在 if let Some(key) = key 之前。
+    // 修复后：layout_revision = new_revision 在条件块之前。
+    // Issue #819 评论 5968931455: 条件块改为 match HandoffTransactionOutcome。
     let rev_pos = window
         .find("self.layout_revision = new_revision;")
         .expect("self.layout_revision = new_revision; 必须存在");
     let iflet_pos = window
-        .find("if let Some(key) = key")
-        .expect("if let Some(key) = key 必须存在");
+        .find("if let HandoffTransactionOutcome::Created(key) = handoff_outcome")
+        .expect("if let HandoffTransactionOutcome::Created(key) = handoff_outcome 必须存在");
     assert!(
         rev_pos < iflet_pos,
-        "修复后 self.layout_revision = new_revision; 应在 if let Some(key) = key 之前，\
+        "修复后 self.layout_revision = new_revision; 应在条件块之前，\
          实际 rev_pos={} > iflet_pos={}。",
         rev_pos,
         iflet_pos
     );
 
-    // 修复后：if let Some(key) = key 块内不再包含 layout_revision 赋值。
-    // 取 if let 块之后 400 字符窗口检查不含 layout_revision = new_revision。
+    // 修复后：条件块内不再包含 layout_revision 赋值。
+    // 取条件块之后 400 字符窗口检查不含 layout_revision = new_revision。
     let iflet_block = &window[iflet_pos..iflet_pos + 400];
     assert!(
         !iflet_block.contains("self.layout_revision = new_revision;"),
-        "修复后 if let Some(key) = key 块内不应再包含 self.layout_revision = new_revision;，\
+        "修复后条件块内不应再包含 self.layout_revision = new_revision;，\
          应已移到块外无条件执行。"
     );
-    // 修复后：if let 块内仍有 prepare_transaction_textures。
+    // 修复后：条件块内仍有 prepare_transaction_textures。
     assert!(
         iflet_block.contains("self.prepare_transaction_textures(key);"),
-        "修复后 if let Some(key) = key 块内应保留 self.prepare_transaction_textures(key);。"
+        "修复后条件块内应保留 self.prepare_transaction_textures(key);。"
     );
 }
 

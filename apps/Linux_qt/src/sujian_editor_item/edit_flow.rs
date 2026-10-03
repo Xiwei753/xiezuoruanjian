@@ -95,10 +95,12 @@ pub(crate) struct CompositionCommitParams {
 pub(crate) enum EditVisualSkipReason {
     /// 滚动期间抑制动画（`animations_requested && is_scrolling`）。
     ScrollingSuppressed,
+    /// 加载期间抑制动画（`animations_requested && is_loading`）。
+    LoadingSuppressed,
+    /// 套用格式期间抑制动画（`animations_requested && is_applying_format`）。
+    FormatApplyingSuppressed,
     /// `prepare_edit_motion` 内部检测到 stale canonical / canonical invariant。
     StaleCanonical,
-    /// caret 几何缺失，无法构造动画坐标。
-    CaretGeometryMissing,
     /// 协同模式拿不到 cursor track。
     CursorTrackMissing,
     /// builder 跳过了事务创建（空事务 / 无可视单元）。
@@ -292,19 +294,28 @@ impl SujianEditorItem {
             let result = edit_result
                 .as_ref()
                 .expect("edit_result is Some when applied is true");
+            // Issue #819 评论 5968931455 问题 3: 诊断字段全部来自 Core EditorEditResult，
+            // 不再从平台 EditOp 猜 operation_kind/cause。
+            // - operation_kind 用 Core 的 result.operation_kind（经 editor_operation_kind_label 转短名）。
+            // - cause 用 Core 的 result.cause（Debug 格式）。
+            // - 另加 visual_cause 字段记录平台视觉原因。
+            let core_op_kind_label =
+                super::transaction::editor_operation_kind_label(result.operation_kind);
+            // Issue #819 评论 5968931455 问题 3（多 patch）: 诊断不伪造 final new range，
+            // 直接记录 Core 已经明确给出的 patch 事实：old_replace_range + inserted_bytes。
+            // deleted_ranges 仍用 old 坐标（正确）。
             let mut deleted_ranges: Vec<[usize; 2]> =
                 Vec::with_capacity(result.display_patches.len());
-            let mut inserted_ranges: Vec<[usize; 2]> =
+            let mut display_patches: Vec<serde_json::Value> =
                 Vec::with_capacity(result.display_patches.len());
             for patch in &result.display_patches {
                 let del_start = patch.replace_byte_range.start().value();
                 let del_end = patch.replace_byte_range.end().value();
                 deleted_ranges.push([del_start, del_end]);
-                // inserted_range 是新文本在 new 正文中的范围：
-                // 从 replace_byte_range.start 开始，长度为 inserted_text 的 byte 长度。
-                let ins_start = del_start;
-                let ins_end = ins_start + patch.inserted_text.len();
-                inserted_ranges.push([ins_start, ins_end]);
+                display_patches.push(serde_json::json!({
+                    "old_replace_range": [del_start, del_end],
+                    "inserted_bytes": patch.inserted_text.len(),
+                }));
             }
             writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
@@ -322,12 +333,19 @@ impl SujianEditorItem {
                         "transaction_id".to_string(),
                         serde_json::json!(result.transaction_id),
                     );
+                    // Issue #819 评论 5968931455 问题 3: operation_kind 来自 Core 真相。
                     f.insert(
                         "operation_kind".to_string(),
-                        serde_json::json!(op_kind_label),
+                        serde_json::json!(core_op_kind_label),
                     );
+                    // Issue #819 评论 5968931455 问题 3: cause 来自 Core 真相，
+                    // 另加 visual_cause 记录平台视觉原因。
                     f.insert(
                         "cause".to_string(),
+                        serde_json::json!(format!("{:?}", result.cause)),
+                    );
+                    f.insert(
+                        "visual_cause".to_string(),
                         serde_json::json!(format!("{:?}", visual_cause)),
                     );
                     f.insert(
@@ -352,9 +370,11 @@ impl SujianEditorItem {
                         "deleted_ranges".to_string(),
                         serde_json::json!(deleted_ranges),
                     );
+                    // Issue #819 评论 5968931455 问题 3: display_patches 记录 Core 给出的
+                    // patch 事实（old_replace_range + inserted_bytes），不伪造 final new range。
                     f.insert(
-                        "inserted_ranges".to_string(),
-                        serde_json::json!(inserted_ranges),
+                        "display_patches".to_string(),
+                        serde_json::json!(display_patches),
                     );
                     f
                 },
@@ -376,8 +396,9 @@ impl SujianEditorItem {
         // 7. 调视觉流水线，构造明确的 visual outcome
         let visual = if let Some(params) = composition {
             // composition commit 路径 — record_composition_commit_transaction
-            // 内部自己处理动画开关和跳过事件，返回 Option<VisualTransactionKey>。
-            let key = self.record_composition_commit_transaction(
+            // 内部自己处理动画开关和跳过事件，返回 HandoffTransactionOutcome。
+            // Issue #819 评论 5968931455 问题 2.2: 直接透传 outcome，不再猜。
+            let outcome = self.record_composition_commit_transaction(
                 &old,
                 &new,
                 visual_cause,
@@ -392,15 +413,15 @@ impl SujianEditorItem {
                 params.cancel_reason,
                 params.summary_tag,
             );
-            match key {
-                Some(k) => EditVisualOutcome::Created(k),
-                None => {
-                    if !animations_requested {
-                        EditVisualOutcome::AnimationDisabled
-                    } else {
-                        EditVisualOutcome::Skipped(
-                            EditVisualSkipReason::CompositionCommitBuilderSkipped,
-                        )
+            if !animations_requested {
+                EditVisualOutcome::AnimationDisabled
+            } else {
+                match outcome {
+                    super::animation::transaction_builder::HandoffTransactionOutcome::Created(k) => {
+                        EditVisualOutcome::Created(k)
+                    }
+                    super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(reason) => {
+                        EditVisualOutcome::Skipped(reason)
                     }
                 }
             }

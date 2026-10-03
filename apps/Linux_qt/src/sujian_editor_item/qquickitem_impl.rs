@@ -58,7 +58,7 @@ impl QQuickItem for SujianEditorItem {
                 // 先 hit_test 得到 hit_index 作为拖选 anchor，再 click_at 设置 cursor。
                 // 状态机 press 会清除上一轮手势的残留状态（pointer_drag_selecting /
                 // selection_gesture_active），避免上一轮手势的 Snap/隐藏状态污染本次点击。
-                let (hit_index, _) = self.hit_test(f64::from(pos.x), f64::from(pos.y));
+                let (hit_index, _) = self.hit_test(pos.x, pos.y);
                 self.pointer_gesture
                     .press((pos.x as f32, pos.y as f32), hit_index, Instant::now());
                 self.sync_pointer_gesture_flags();

@@ -13,6 +13,7 @@ use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
 use crate::sujian_editor_item::animation::rebase::{match_rebase_frames, PreparedRebaseHandoff};
+use crate::sujian_editor_item::animation::transaction::types::IngestStageId;
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
     TextVisualTransactionState, TransactionTimeline,
@@ -29,6 +30,44 @@ use crate::sujian_editor_item::layout_snapshot::{
     ClusterInsertRelation, EditorLayoutSnapshot, SourceRect,
 };
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
+
+/// Issue #819 评论 5968931455 问题 2.2: builder 的明确结果。
+///
+/// 替代 `Option<PreparedTextVisualTransaction>`——builder 跳过事务创建时
+/// 必须给出明确的 `EditVisualSkipReason`，不再让调用方猜。
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum BuildTransactionOutcome {
+    /// 事务已创建。
+    Created(PreparedTextVisualTransaction),
+    /// builder 跳过了事务创建，附带具体跳过原因。
+    Skipped(super::super::edit_flow::EditVisualSkipReason),
+}
+
+#[cfg(test)]
+impl BuildTransactionOutcome {
+    /// 测试辅助：unwrap 成 Created，panic 时附带 skip reason。
+    pub(crate) fn expect_created(self, msg: &str) -> PreparedTextVisualTransaction {
+        match self {
+            BuildTransactionOutcome::Created(tx) => tx,
+            BuildTransactionOutcome::Skipped(reason) => {
+                panic!("{}: skipped by {:?}", msg, reason)
+            }
+        }
+    }
+}
+
+/// Issue #819 评论 5968931455 问题 2.2: handoff 路径的明确结果。
+///
+/// 替代 `Option<VisualTransactionKey>`——`create_transaction_from_prepared_handoff`
+/// 跳过时必须给出明确的 `EditVisualSkipReason`，不再让 pipeline 猜。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HandoffTransactionOutcome {
+    /// 事务已创建，`key` 是真正创建的事务 key。
+    Created(VisualTransactionKey),
+    /// 跳过了事务创建，附带具体跳过原因。
+    Skipped(super::super::edit_flow::EditVisualSkipReason),
+}
 
 pub(crate) fn operation_kind_label(kind: TextVisualOperationKind) -> &'static str {
     match kind {
@@ -78,7 +117,7 @@ pub(crate) use edit_spec::{
 /// 路径）都经由本函数创建事务，从而保证「只允许这里创建 `PreparedTextVisualTransaction`」。
 pub(crate) fn build_prepared_transaction(
     spec: VisualEditSpec,
-) -> Option<PreparedTextVisualTransaction> {
+) -> BuildTransactionOutcome {
     let mut slices: Vec<AnimatedSlice> = Vec::new();
 
     // 1a. InsertReveal / DeleteConceal（文字动画）
@@ -222,9 +261,12 @@ pub(crate) fn build_prepared_transaction(
     // 正式 route 之外——那等于绕过 #815 早就规定过的「IME 也走同一套 caret-driven
     // 协同语义」。现在 segment 带 `IngestSnapshotSide`，old / new 行序只在各自
     // side 内比较，IME 的 Mixed 路径也能建出正确的分段路线，所以这道门删掉。
+    // Issue #819 评论 5968931455: 用 transaction_id 作为新事务的 stage_id。
+    // carried route 剩余段保留旧事务的 stage_id；当前新编辑的 route 段用新 stage_id。
+    let new_stage_id = IngestStageId(spec.key.transaction_id);
     let ingest_route_segments =
         if spec.caret_animation_enabled && spec.coordinated_animation_enabled {
-            ingest_route::build_ingest_route(&spec, &slices)
+            ingest_route::build_ingest_route(&spec, &slices, new_stage_id)
         } else {
             Vec::new()
         };
@@ -251,6 +293,7 @@ pub(crate) fn build_prepared_transaction(
             spec.visual_state.caret_handoff.clone(),
             spec.caret_duration_ms,
             ingest_route_segments,
+            new_stage_id,
         )
     } else {
         None
@@ -280,6 +323,8 @@ pub(crate) fn build_prepared_transaction(
                     spec.text_duration_ms,
                     coordinated_ingest,
                 )
+                // Issue #819 评论 5968931455: 新事务自己创建的协同吞吐字标记新 stage_id。
+                .with_stage_id(new_stage_id)
             }
             AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
                 PreparedVisualUnit::wrap(s, spec.text_duration_ms)
@@ -373,9 +418,18 @@ pub(crate) fn build_prepared_transaction(
             // CaretTrack carried unit 从 sampled frame + 新 caret handoff 接着收口；
             // Timed carried unit 从 sampled frame + remaining duration 接着播。
             // 两者都通过 rebase_from_frame 把 sampled frame 几何写入新 slice。
+            // Issue #819 评论 5968931455: carried unit 标记旧事务的 stage_id，
+            // 让它只消费旧 stage 的 route 段，不消费新编辑的 route 段。
+            let old_stage_id = spec
+                .visual_state
+                .caret_handoff
+                .as_ref()
+                .map(|h| h.stage_id)
+                .unwrap_or(new_stage_id);
             let mut new_unit = PreparedVisualUnit {
                 slice: new_slice,
                 timing: unit.timing.clone(),
+                stage_id: Some(old_stage_id),
             };
             let carried_frame = RebaseFrame {
                 byte_start: unit.slice.byte_start,
@@ -545,7 +599,9 @@ pub(crate) fn build_prepared_transaction(
             cursor_visual_track.is_some(),
             spec.inserted_ranges.first().copied(),
         ));
-        return None;
+        return BuildTransactionOutcome::Skipped(
+            super::super::edit_flow::EditVisualSkipReason::CursorTrackMissing,
+        );
     }
 
     if units.is_empty()
@@ -563,11 +619,13 @@ pub(crate) fn build_prepared_transaction(
             cursor_visual_track.is_some(),
             spec.inserted_ranges.first().copied(),
         ));
-        return None;
+        return BuildTransactionOutcome::Skipped(
+            super::super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+        );
     }
 
     // 6. 唯一 PreparedTextVisualTransaction struct literal
-    Some(PreparedTextVisualTransaction {
+    BuildTransactionOutcome::Created(PreparedTextVisualTransaction {
         key: spec.key,
         state: TextVisualTransactionState::Pending,
         operation_kind: spec.operation_kind,
@@ -772,8 +830,15 @@ impl LinuxEditorAnimationCoordinator {
         new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
-    ) -> Option<VisualTransactionKey> {
-        let prepared = prepared?;
+    ) -> HandoffTransactionOutcome {
+        let prepared = match prepared {
+            Some(p) => p,
+            None => {
+                return HandoffTransactionOutcome::Skipped(
+                    super::super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+                );
+            }
+        };
         match prepared {
             PreparedRebaseHandoff::Insert {
                 visual_state,
@@ -826,7 +891,14 @@ impl LinuxEditorAnimationCoordinator {
                 // `editor.anim.transaction_skipped`（协同模式拿不到 cursor track、
                 // 有可见字符变化却既无 unit 又无 track）。合法的非可见输入
                 // （空格/tab/换行）没有 InsertReveal 是正常行为，不记事件。
-                let prepared_tx = build_prepared_transaction(spec)?;
+                // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
+                // 透传 skip reason，不再用 `?` 吞掉。
+                let prepared_tx = match build_prepared_transaction(spec) {
+                    BuildTransactionOutcome::Created(tx) => tx,
+                    BuildTransactionOutcome::Skipped(reason) => {
+                        return HandoffTransactionOutcome::Skipped(reason);
+                    }
+                };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
@@ -840,7 +912,7 @@ impl LinuxEditorAnimationCoordinator {
 
                 self.prepared_queue.enqueue(prepared_tx);
 
-                Some(key)
+                HandoffTransactionOutcome::Created(key)
             }
             PreparedRebaseHandoff::Delete {
                 visual_state,
@@ -890,7 +962,14 @@ impl LinuxEditorAnimationCoordinator {
                     composition_commit_crossfade: None,
                 };
                 // Issue #815 评论 6042062633 修改 8: 同 Insert 分支，由 builder 收口跳过点。
-                let prepared_tx = build_prepared_transaction(spec)?;
+                // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
+                // 透传 skip reason，不再用 `?` 吞掉。
+                let prepared_tx = match build_prepared_transaction(spec) {
+                    BuildTransactionOutcome::Created(tx) => tx,
+                    BuildTransactionOutcome::Skipped(reason) => {
+                        return HandoffTransactionOutcome::Skipped(reason);
+                    }
+                };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
@@ -904,7 +983,7 @@ impl LinuxEditorAnimationCoordinator {
 
                 self.prepared_queue.enqueue(prepared_tx);
 
-                Some(key)
+                HandoffTransactionOutcome::Created(key)
             }
         }
     }
@@ -1051,7 +1130,11 @@ impl LinuxEditorAnimationCoordinator {
                         composition_commit_crossfade: None,
                     };
                     // Issue #815: 跳过点已由 builder 自己记正式事件，这里只传播 None。
-                    let prepared = build_prepared_transaction(spec)?;
+                    // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome。
+                    let prepared = match build_prepared_transaction(spec) {
+                        BuildTransactionOutcome::Created(tx) => tx,
+                        BuildTransactionOutcome::Skipped(_) => return None,
+                    };
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                     emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
@@ -1156,7 +1239,11 @@ impl LinuxEditorAnimationCoordinator {
                     composition_commit_crossfade: None,
                 };
                 // Issue #815: 同 Insert 分支。
-                let prepared = build_prepared_transaction(spec)?;
+                // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome。
+                let prepared = match build_prepared_transaction(spec) {
+                    BuildTransactionOutcome::Created(tx) => tx,
+                    BuildTransactionOutcome::Skipped(_) => return None,
+                };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
                 emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");

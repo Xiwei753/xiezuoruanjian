@@ -1,4 +1,5 @@
 use super::animation::LinuxEditorAnimationCoordinator;
+use super::animation::transaction_builder::HandoffTransactionOutcome;
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
@@ -1211,7 +1212,19 @@ impl LinuxEditorPipeline {
             ctx.coordinated_animation_enabled || ctx.typing_animation_enabled;
         let caret_animation_enabled =
             ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled;
-        if ctx.is_scrolling || ctx.is_loading || ctx.is_applying_format {
+        // Issue #819 评论 5968931455 问题 2.1: 拆分 scrolling/loading/applying_format，
+        // 各自返回对应的 skip reason，不再共用 ScrollingSuppressed。
+        // 优先级：scrolling > loading > applying_format。
+        let skip_reason = if ctx.is_scrolling {
+            Some(super::edit_flow::EditVisualSkipReason::ScrollingSuppressed)
+        } else if ctx.is_loading {
+            Some(super::edit_flow::EditVisualSkipReason::LoadingSuppressed)
+        } else if ctx.is_applying_format {
+            Some(super::edit_flow::EditVisualSkipReason::FormatApplyingSuppressed)
+        } else {
+            None
+        };
+        if let Some(reason) = skip_reason {
             // Issue #815 评论 6042062633 修改 8: 滚动/加载/套用格式期间抑制动画是显式规则，
             // 但必须留下正式事件，否则诊断包里"编辑发生了却没有动画"没有任何线索。
             editor_animation_transaction_skipped_event(&AnimationSkipFields {
@@ -1231,9 +1244,7 @@ impl LinuxEditorPipeline {
                 transaction_id: None,
                 generation: 0,
             });
-            return VisualPrepareOutcome::Skipped(
-                super::edit_flow::EditVisualSkipReason::ScrollingSuppressed,
-            );
+            return VisualPrepareOutcome::Skipped(reason);
         }
         if !text_animation_enabled && !caret_animation_enabled {
             return VisualPrepareOutcome::AnimationDisabled;
@@ -1265,10 +1276,13 @@ impl LinuxEditorPipeline {
             u64::from(text_duration_ms),
             u64::from(caret_duration_ms),
         );
-        // Issue #819 评论 5956495850 第 1 节：本函数创建的视觉事务 key，
-        // 供调用方返回 `EditVisualOutcome::Created(key)`。`None` 表示动画被抑制
-        // 或 builder 跳过了事务创建。
-        let mut created_key: Option<VisualTransactionKey> = None;
+        // Issue #819 评论 5968931455 问题 2.2: create_transaction_from_prepared_handoff
+        // 返回 HandoffTransactionOutcome，直接透传 skip reason，不再猜。
+        #[allow(unused_assignments)]
+        let mut handoff_outcome: HandoffTransactionOutcome =
+            HandoffTransactionOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+            );
         {
             let (raw_byte_start, raw_byte_end) = motion
                 .inserted_range
@@ -1830,7 +1844,7 @@ impl LinuxEditorPipeline {
             }
             self.texture_cache.retain_active_snapshot_ids(&active_ids);
 
-            let key = self
+            let outcome = self
                 .animation_coordinator
                 .create_transaction_from_prepared_handoff(
                     prepared_handoff,
@@ -1855,19 +1869,18 @@ impl LinuxEditorPipeline {
                     cursor_owner_epoch,
                     new_revision,
                 );
-            // Issue #819 评论 5956495850 第 1 节：保存创建的事务 key 副本，
-            // 供 `apply_edit_with_visuals` 返回 `EditVisualOutcome::Created(key)`。
-            // `VisualTransactionKey` 是 Copy，这里零成本复制。
-            created_key = key;
+            // Issue #819 评论 5968931455 问题 2.2: 透传 HandoffTransactionOutcome，
+            // 不再保存 Option<VisualTransactionKey>。
+            handoff_outcome = outcome;
             // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
             // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
-            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 None，
+            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 Skipped，
             // 但此时 canonical 已推进到 new_revision、旧事务已 reconcile 到 new_revision。
             // 若 layout_revision 停在旧值，basis 守卫（已改为 ==/!=）会把"事务 revision
             // 比 Pipeline 当前 revision 更新"误当合法事务继续画。new_doc_snapshot 一旦成为
             // 当前 canonical，layout_revision 就必须无条件一起提交。
             self.layout_revision = new_revision;
-            if let Some(key) = key {
+            if let HandoffTransactionOutcome::Created(key) = handoff_outcome {
                 self.prepare_transaction_textures(key);
             }
 
@@ -1913,29 +1926,11 @@ impl LinuxEditorPipeline {
                 ));
         }
 
-        // Issue #819 评论 5968240881 问题 2：返回明确的 VisualPrepareOutcome，
-        // 不再让调用方猜 skip reason。
-        match created_key {
-            Some(key) => VisualPrepareOutcome::Created { key },
-            None => {
-                // builder 跳过了事务创建。区分协同模式拿不到 cursor track 和其他原因。
-                if ctx.coordinated_animation_enabled
-                    && (motion.old_cursor_rect.is_none() || motion.new_cursor_rect.is_none())
-                {
-                    VisualPrepareOutcome::Skipped(
-                        super::edit_flow::EditVisualSkipReason::CaretGeometryMissing,
-                    )
-                } else if ctx.coordinated_animation_enabled {
-                    // coordinated 模式但 builder 拿不到 cursor track。
-                    VisualPrepareOutcome::Skipped(
-                        super::edit_flow::EditVisualSkipReason::CursorTrackMissing,
-                    )
-                } else {
-                    VisualPrepareOutcome::Skipped(
-                        super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
-                    )
-                }
-            }
+        // Issue #819 评论 5968931455 问题 2.2: 直接透传 HandoffTransactionOutcome，
+        // 不再猜 skip reason。
+        match handoff_outcome {
+            HandoffTransactionOutcome::Created(key) => VisualPrepareOutcome::Created { key },
+            HandoffTransactionOutcome::Skipped(reason) => VisualPrepareOutcome::Skipped(reason),
         }
     }
 }
