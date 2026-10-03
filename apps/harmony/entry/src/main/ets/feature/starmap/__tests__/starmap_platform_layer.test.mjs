@@ -19,8 +19,9 @@
 //      结果通过 position patch 写回 —— autoGridLayoutNodes / generatePositionPatches
 //   4. 节点/Embed 拖动：屏幕位移 ÷ zoomScale 落到布局坐标，返回新数组
 //      —— moveLayoutNode（StarMapScreen.moveNodeBy / moveEmbedBy）
-//   5. 缩放返回父层：缩到 MIN_ZOOM 之下且存在父星图 → 返回父星图；
-//      没有父星图则夹在 MIN_ZOOM —— zoomOut / applyPinchScale
+//   5. 缩放：工具栏按倍数步进、双指连续，边界只防数值事故；
+//      不再有"缩到 MIN 之下自动回父星图"的跳转 —— 子星图由 Deep Zoom 档位
+//      自然显隐（#821）—— zoomIn / zoomOut / applyPinchScale / clampCameraScale
 //   6. 关系写入 JSON 形状：edge id/时间戳平台端生成，target detail 全字段显式
 //      null（Core 侧 serde 要求键存在）—— NativeStarMapBridge.addStarMapEdge
 //
@@ -35,10 +36,10 @@ const DEFAULT_EMBED_DIAMETER = 200
 const GRID_HORIZONTAL_SPACING = 200
 const GRID_VERTICAL_SPACING = 120
 
-// ── 常量（与 StarMapScreen.ets 一致）──
-const MIN_ZOOM = 0.3
-const MAX_ZOOM = 3
-const ZOOM_STEP = 0.1
+// ── 常量（与 StarMapViewport.ets 一致，#821）──
+const CAMERA_SCALE_MIN = 1e-4
+const CAMERA_SCALE_MAX = 1e5
+const ZOOM_FACTOR = 1.2
 
 // ── 被测规格：buildFreeformLayout ──
 function buildFreeformLayout(nodes) {
@@ -59,43 +60,19 @@ function buildFreeformLayout(nodes) {
 }
 
 // ── 被测规格：buildEmbedLayoutNodes ──
-// displayBounds: Map<instanceId, EmbedDisplayBounds>，缺省按基准直径的展开圆处理（#820）
-function expandedEmbedDisplayBounds(diameterVp) {
-  const diameter = (diameterVp !== undefined && Number.isFinite(diameterVp) && diameterVp > 0)
-    ? diameterVp : DEFAULT_EMBED_DIAMETER
-  return {
-    width: diameter,
-    height: diameter,
-    radius: diameter / 2,
-    isCircle: true
-  }
-}
-
-// 显示矩形以 authored 中心为锚点派生；反解回 authored 口径用于写回 Core（#820）
-function embedAuthoredPositionFromDisplay(displayX, displayY, displayWidth, displayHeight) {
-  const width = Number.isFinite(displayWidth) ? displayWidth : DEFAULT_EMBED_DIAMETER
-  const height = Number.isFinite(displayHeight) ? displayHeight : DEFAULT_EMBED_DIAMETER
-  return {
-    x: displayX + (width - DEFAULT_EMBED_DIAMETER) / 2,
-    y: displayY + (height - DEFAULT_EMBED_DIAMETER) / 2
-  }
-}
-
-function buildEmbedLayoutNodes(embeds, displayBounds) {
+// #821：没有显示边界入参了。位置就是 authored position，尺寸恒为基准直径的正圆。
+function buildEmbedLayoutNodes(embeds) {
   const result = []
   for (const embed of embeds) {
-    const bounds = (displayBounds && displayBounds.get(embed.instanceId)) || expandedEmbedDisplayBounds()
-    const authoredCenterX = embed.position.x + DEFAULT_EMBED_DIAMETER / 2
-    const authoredCenterY = embed.position.y + DEFAULT_EMBED_DIAMETER / 2
     result.push({
       nodeId: embed.instanceId,
-      x: authoredCenterX - bounds.width / 2,
-      y: authoredCenterY - bounds.height / 2,
-      width: bounds.width,
-      height: bounds.height,
-      radius: bounds.radius,
+      x: embed.position.x,
+      y: embed.position.y,
+      width: DEFAULT_EMBED_DIAMETER,
+      height: DEFAULT_EMBED_DIAMETER,
+      radius: DEFAULT_EMBED_DIAMETER / 2,
       zIndex: DEFAULT_NODE_ZINDEX + 1,
-      collapsed: !bounds.isCircle
+      collapsed: false
     })
   }
   return result
@@ -173,24 +150,25 @@ function generatePositionPatches(layoutNodes) {
   return patches
 }
 
-// ── 被测规格：缩放策略（StarMapScreen）──
-function zoomOut(zoomScale, parentStarmapId) {
-  if (zoomScale - ZOOM_STEP < MIN_ZOOM && parentStarmapId.length > 0) {
-    return { zoomScale: zoomScale, returnedToParent: true }
+// ── 被测规格：缩放策略（StarMapScreen + StarMapViewport，#821）──
+// 相机范围是数值安全边界，不是产品上限；工具栏用乘法步进，手感与当前档位无关。
+function clampCameraScale(scale) {
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return 1
   }
-  return { zoomScale: Math.max(MIN_ZOOM, zoomScale - ZOOM_STEP), returnedToParent: false }
+  return Math.min(CAMERA_SCALE_MAX, Math.max(CAMERA_SCALE_MIN, scale))
+}
+
+function zoomOut(zoomScale) {
+  return clampCameraScale(zoomScale / ZOOM_FACTOR)
 }
 
 function zoomIn(zoomScale) {
-  return Math.min(MAX_ZOOM, zoomScale + ZOOM_STEP)
+  return clampCameraScale(zoomScale * ZOOM_FACTOR)
 }
 
-function applyPinchScale(pinchBaseScale, gestureScale, parentStarmapId) {
-  const scale = pinchBaseScale * gestureScale
-  if (scale < MIN_ZOOM && parentStarmapId.length > 0) {
-    return { zoomScale: null, returnedToParent: true }
-  }
-  return { zoomScale: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale)), returnedToParent: false }
+function applyPinchScale(pinchBaseScale, gestureScale) {
+  return clampCameraScale(pinchBaseScale * gestureScale)
 }
 
 // ── 被测规格：关系写入 JSON（NativeStarMapBridge）──
@@ -503,6 +481,9 @@ function assert(cond, msg) {
 function eq(a, b) {
   return JSON.stringify(a) === JSON.stringify(b)
 }
+function near(a, b) {
+  return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b))
+}
 function find(nodes, id) {
   return nodes.find(n => n.nodeId === id)
 }
@@ -585,53 +566,45 @@ console.log('5. Embed 布局：只读 embed.position，平台层定义正圆尺�
   assert(layout[0].zIndex === 1, 'Embed 层级在普通节点之上')
 }
 
-console.log('5b. Embed 布局尺寸随 LOD 变，但位置永远只读 authored position（#820）')
+console.log('5b. Embed 布局没有任何档位入口：几何恒定（#821）')
 {
   const embeds = [
     { instanceId: 'emb1', targetStarmapId: 'sm2', label: '支线', position: { x: 640, y: 48 } },
     { instanceId: 'emb2', targetStarmapId: 'sm3', label: '支线二', position: { x: 200, y: 300 } }
   ]
-  const bounds = new Map()
-  bounds.set('emb2', { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT, radius: DEFAULT_NODE_RADIUS, isCircle: false })
-  const layout = buildEmbedLayoutNodes(embeds, bounds)
+  const layout = buildEmbedLayoutNodes(embeds)
+  assert(buildEmbedLayoutNodes.length === 1,
+    'buildEmbedLayoutNodes 只接 embeds 一个入参（没有显示边界 / LOD 入口）')
   assert(layout[0].width === DEFAULT_EMBED_DIAMETER && layout[0].radius === DEFAULT_EMBED_DIAMETER / 2,
-    '没给显示边界的 Embed 仍按展开正圆处理')
-  assert(layout[0].collapsed === false, '展开态 collapsed = false')
-  assert(layout[1].width === DEFAULT_NODE_WIDTH && layout[1].height === DEFAULT_NODE_HEIGHT &&
-    layout[1].radius === DEFAULT_NODE_RADIUS, '折叠态显示边界 = 节点尺寸（绘制/命中/边锚点同一份）')
-  assert(layout[1].collapsed === true, '折叠态 collapsed = true')
-  const authoredCenterX = 200 + DEFAULT_EMBED_DIAMETER / 2
-  const authoredCenterY = 300 + DEFAULT_EMBED_DIAMETER / 2
-  assert(layout[1].x + layout[1].width / 2 === authoredCenterX &&
-    layout[1].y + layout[1].height / 2 === authoredCenterY,
-    '折叠态显示矩形仍以 authored 中心为锚点（折叠不挪星图）')
-  assert(buildEmbedLayoutNodes(embeds).length === 2, 'displayBounds 可省略')
+    '第一颗 Embed 是基准正圆')
+  assert(layout[1].width === DEFAULT_EMBED_DIAMETER && layout[1].height === DEFAULT_EMBED_DIAMETER &&
+    layout[1].radius === DEFAULT_EMBED_DIAMETER / 2,
+    '第二颗 Embed 同样是基准正圆：掉档不改形状')
+  assert(layout[0].collapsed === false && layout[1].collapsed === false,
+    'collapsed 恒为 false（不存在矩形摘要卡）')
+  assert(layout[1].x === 200 && layout[1].y === 300,
+    '位置直接就是 authored position，不再做中心锚点派生')
+  assert(layout[1].x + layout[1].width / 2 === 200 + DEFAULT_EMBED_DIAMETER / 2,
+    '圆心与 authored 圆心重合（派生式退化成恒等）')
 }
 
-console.log('5c. 展开尺寸随视口变，但中心锚点不动；移动保存反解回 authored（#820 复核）')
+console.log('5c. 掉档 / 换档不重建任何布局矩形（#821）')
 {
   const embed = { instanceId: 'emb1', targetStarmapId: 'sm2', position: { x: 640, y: 48 } }
-  const authoredCenterX = 640 + DEFAULT_EMBED_DIAMETER / 2
-  const authoredCenterY = 48 + DEFAULT_EMBED_DIAMETER / 2
-  const base = buildEmbedLayoutNodes([embed])
-  const big = buildEmbedLayoutNodes([embed], new Map([
-    ['emb1', expandedEmbedDisplayBounds(320)]
-  ]))
-  assert(base[0].x === 640 && base[0].y === 48, '基准展开态仍是 authored 左上角（直径没变时两者相等）')
-  assert(big[0].x + big[0].width / 2 === authoredCenterX &&
-    big[0].y + big[0].height / 2 === authoredCenterY,
-    '视口变大 → 圆壳变大，但中心锚点不跳')
-  assert(big[0].x === authoredCenterX - 160 && big[0].y === authoredCenterY - 160,
-    '显示左上角 = authored 中心 − 显示尺寸 / 2')
-
-  // 移动保存：显示左上角反解回 authored 口径再写 Core
-  const authored = embedAuthoredPositionFromDisplay(
-    big[0].x + 30, big[0].y - 20, big[0].width, big[0].height
-  )
-  assert(authored.x === 670 && authored.y === 28,
-    '保存位置时把 displayX/Y 反解回 authored（位移量保持 30 / −20）')
-  assert(Number.isFinite(embedAuthoredPositionFromDisplay(10, 20, NaN, NaN).x),
-    '反解遇到非有限尺寸退回基准直径，不写 NaN 进 Core')
+  const before = buildEmbedLayoutNodes([embed])[0]
+  // Deep Zoom 档位变化（interactive → preview → shell）在布局层完全不可见：
+  // 布局函数不接收档位，也不该因为档位被重新调用出别的矩形。
+  for (const _detail of ['interactive', 'preview', 'shell']) {
+    const after = buildEmbedLayoutNodes([embed])[0]
+    assert(after.x === before.x && after.y === before.y &&
+      after.width === before.width && after.height === before.height &&
+      after.radius === before.radius && after.collapsed === before.collapsed,
+      `档位 ${_detail} 下 Embed 布局矩形一字不改`)
+  }
+  // 缩放不碰布局：唯一改变屏幕尺寸的是显示变换（.scale）
+  const scaled = DEFAULT_EMBED_DIAMETER * 40
+  assert(before.width === DEFAULT_EMBED_DIAMETER && scaled > before.width * 39,
+    '放大 40 倍只发生在显示变换上，布局宽度始终是基准直径（不会撑出巨型缓冲）')
 }
 
 console.log('6. 拖动：屏幕位移 ÷ zoomScale，返回新数组不改原数组')
@@ -653,22 +626,28 @@ console.log('6. 拖动：屏幕位移 ÷ zoomScale，返回新数组不改原数
   assert(moveLayoutNode(layout, 'nope', 10, 10, 1) === layout, '未知 id 原样返回')
 }
 
-console.log('7. 缩放返回父层：缩到 MIN 之下回父星图，无父则夹住')
+console.log('7. 缩放：乘法步进 + 数值安全边界，没有"返回父层"分支（#821）')
 {
-  assert(eq(zoomOut(0.5, 'parent'), { zoomScale: 0.4, returnedToParent: false }),
-    '0.5 → 0.4 正常缩小')
-  assert(eq(zoomOut(0.3, 'parent'), { zoomScale: 0.3, returnedToParent: true }),
-    '已在 MIN(0.3) 再缩小 → 返回父星图，不改缩放')
-  assert(eq(zoomOut(0.3, ''), { zoomScale: 0.3, returnedToParent: false }),
-    '没有父星图时夹在 MIN，不误跳转')
-  assert(zoomIn(2.95) === 3, '放大夹在 MAX')
-  const pinched = applyPinchScale(1, 0.2, 'parent')
-  assert(pinched.returnedToParent === true && pinched.zoomScale === null,
-    '双指缩到 MIN 之下 → 返回父星图')
-  const pinchedClamp = applyPinchScale(1, 0.2, '')
-  assert(pinchedClamp.zoomScale === 0.3 && pinchedClamp.returnedToParent === false,
-    '没有父星图时双指缩放夹在 MIN')
-  assert(applyPinchScale(1, 1.2, '').zoomScale === 1.2, '双指放大按基准比例计算')
+  assert(near(zoomOut(0.5), 0.5 / ZOOM_FACTOR), '0.5 按倍数缩小')
+  assert(near(zoomIn(0.5), 0.5 * ZOOM_FACTOR), '0.5 按倍数放大')
+  // 相对步进一致：加法步长在两端手感完全不同，这是它被换掉的原因
+  assert(near(zoomIn(2) / 2, ZOOM_FACTOR) && near(zoomIn(1) / 1, ZOOM_FACTOR),
+    '放大是相对步进：1× 和 2× 下的增幅比例一致（加法步长做不到这点）')
+  // 边界是数值安全界，不是产品天花板：3× 这种硬顶不再存在
+  assert(zoomIn(3) > 3, '超过旧的 3× 天花板仍可继续放大（#821 核心目标）')
+  assert(zoomIn(1e4) > 1e4, '可以放到 10000× 级别，不会被 3 卡住')
+  assert(zoomOut(1e4) > 1000 && zoomOut(zoomOut(1e4)) > 600,
+    '缩小同样没有地板式硬顶：0.3 那种下限退得回去')
+  // 真正的边界只防数值事故
+  assert(zoomIn(CAMERA_SCALE_MAX) === CAMERA_SCALE_MAX, '放大夹在数值上界')
+  assert(zoomOut(CAMERA_SCALE_MIN) === CAMERA_SCALE_MIN, '缩小夹在数值下界')
+  assert(clampCameraScale(NaN) === 1 && clampCameraScale(0) === 1 && clampCameraScale(-2) === 1,
+    '退化输入退回 1，不把 NaN / 0 / 负数写进相机')
+  // 双指捏合保持连续比例，边界同样交给 clamp
+  assert(near(applyPinchScale(2, 1.5), 3), '双指放大按基准比例 × 手势比例')
+  assert(near(applyPinchScale(2, 0.25), 0.5), '双指缩小同理')
+  assert(applyPinchScale(1, 1e6) === CAMERA_SCALE_MAX, '双指疯捏夹在上界')
+  assert(applyPinchScale(1, 1e-6) === CAMERA_SCALE_MIN, '双指疯开夹在下界')
 }
 
 console.log('8. 关系写入 JSON：id/时间戳平台端生成，target detail 全字段存在')
