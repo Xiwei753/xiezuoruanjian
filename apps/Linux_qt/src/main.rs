@@ -135,7 +135,9 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapCard.qml" as "StarMapCard.qml",
     "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
-    "qml/StarMapScene.qml" as "StarMapScene.qml",
+    // Issue #822: 递归的是星图内容，不是视口。StarMapScene.qml 已删除：
+    // 它"每个 Scene 实例自己有一套 panX/panY/zoomLevel"的定义正是要废掉的抽象。
+    "qml/StarMapSceneContent.qml" as "StarMapSceneContent.qml",
     "qml/StarMapCanvas.qml" as "StarMapCanvas.qml",
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     // Issue #798: 星图鼠标交互状态机（瞬时手势状态，不读写 Core）
@@ -145,7 +147,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapNode.qml" as "StarMapNode.qml",
     // Issue #796 评论 5886483653: 子星图 Embed 组件
     "qml/StarMapEmbed.qml" as "StarMapEmbed.qml",
-    "qml/StarMapInspector.qml" as "StarMapInspector.qml",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",

@@ -4,6 +4,11 @@
 //! 1. Linux_Qt backend 暴露路径解析入口（root starmapId + 路径段 -> finalStarmapId）；
 //! 2. 当前层加载使用解析结果，`currentStarmapId` 不再由点击事件的裸 target id 直接决定；
 //! 3. 路径解析失败直接报错，不再回退到点击事件传来的裸 targetStarmapId。
+//!
+//! #822 更新：`StarMapScene.qml` 已删除，递归层改成 `StarMapSceneContent.qml`，
+//! 根层由 `StarMapCanvas.qml` 直接创建。因此"每层自己解析 root + 自己的路径段、
+//! 只用解析结果加载本层"这条契约现在落在 Content 的 `resolvePath()` 上，
+//! Workspace 不再持有 `currentStarmapId` / 下钻 / 返回栈。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,6 +19,7 @@ use source_guard::{function_window, read_src};
 use writer_core::api::WriterCoreApi;
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
+const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
 const BRIDGE: &str = "src/starmap_bridge.rs";
 const QT_BACKEND: &str = "src/backend/starmap_backend.rs";
@@ -143,98 +149,109 @@ fn backend_resolve_starmap_path_rejects_broken_path() {
 // 接线守卫：QML / backend / Core 都必须走这条解析入口
 // ---------------------------------------------------------------------------
 
-/// 3. Workspace 声明 rootStarmapId 并通过 backend 解析 root + currentPathSegments。
+/// 3. Issue #822：每层 Content 持有自己的 rootStarmapId + pathSegments，
+/// 通过 backend 解析出本层 finalStarmapId；解析失败清空 finalStarmapId 并报错，
+/// 不回退到任何裸 targetStarmapId。
 #[test]
-fn workspace_resolves_current_layer_from_root_plus_segments() {
-    let src = strip_line_comments(&read_src(WORKSPACE));
+fn content_resolves_its_own_layer_from_root_plus_segments() {
+    let src = strip_line_comments(&read_src(CONTENT));
     assert!(
-        src.contains("property string rootStarmapId: \"\""),
-        "Workspace 必须声明 rootStarmapId（层级身份的起点），实际源码缺少"
+        src.contains("required property string rootStarmapId")
+            && src.contains("required property var pathSegments"),
+        "Content 必须声明 rootStarmapId 与 pathSegments（层级身份的起点），实际源码缺少"
     );
-    let func = function_window(&src, "function resolveStarmapPath(", 800);
+    let func = function_window(&src, "function resolvePath(", 2200);
     assert!(
         func.contains(
-            "starmapBackendRef.resolve_starmap_path(rootStarmapId, JSON.stringify(segments))"
+            "starmapBackendRef.resolve_starmap_path(rootStarmapId, JSON.stringify(pathSegments))"
         ),
-        "当前层解析必须调 backend resolve_starmap_path(rootStarmapId, segments)，实际窗口:\n{func}"
+        "本层解析必须调 backend resolve_starmap_path(rootStarmapId, pathSegments)，实际窗口:\n{func}"
     );
     assert!(
         func.contains("res.data && res.data.finalStarmapId"),
         "解析结果必须读 finalStarmapId，实际窗口:\n{func}"
     );
     assert!(
-        func.contains("return \"\""),
-        "解析失败必须返回空 id 让调用方中止，实际窗口:\n{func}"
+        func.contains("finalStarmapId = \"\""),
+        "解析失败必须清空 finalStarmapId 让本层停止加载，实际窗口:\n{func}"
+    );
+    assert!(
+        !func.contains("targetStarmapId"),
+        "本层解析不得回退到点击事件传来的裸 targetStarmapId，实际窗口:\n{func}"
     );
 }
 
-/// 4. currentStarmapId 只写解析结果，不再由点击事件的裸 targetId 直接决定。
+/// 4. 本层 GraphController 的 starmapId 只绑解析结果 `finalStarmapId`，
+/// 不绑点击事件或递归容器带来的任何裸 targetStarmapId。
 #[test]
-fn current_starmap_id_only_comes_from_resolution() {
-    let src = strip_line_comments(&read_src(WORKSPACE));
-
-    let enter = function_window(&src, "function enterChildStarmap(", 900);
+fn layer_starmap_id_only_comes_from_resolution() {
+    let src = strip_line_comments(&read_src(CONTENT));
+    let controller = function_window(&src, "id: graphController", 600);
     assert!(
-        enter.contains("resolveStarmapPath(nextSegments)"),
-        "enterChildStarmap 必须先解析追加后的路径，实际窗口:\n{enter}"
+        controller.contains("starmapId: content.finalStarmapId"),
+        "本层 GraphController 必须只绑解析结果 finalStarmapId，实际窗口:\n{controller}"
     );
     assert!(
-        !enter.contains("currentStarmapId = targetId"),
-        "enterChildStarmap 不得再把点击事件的裸 targetId 写进 currentStarmapId，实际窗口:\n{enter}"
+        !controller.contains("targetStarmapId"),
+        "本层 GraphController 不得绑裸 targetStarmapId，实际窗口:\n{controller}"
     );
+    let changed = function_window(&src, "onFinalStarmapIdChanged:", 200);
     assert!(
-        enter.contains("currentStarmapId = resolvedId"),
-        "enterChildStarmap 必须写解析结果 resolvedId，实际窗口:\n{enter}"
-    );
-    assert!(
-        enter.contains("resolvedId === \"\""),
-        "enterChildStarmap 解析失败必须中止，实际窗口:\n{enter}"
-    );
-
-    let back = function_window(&src, "function returnToParentStarmap(", 900);
-    assert!(
-        back.contains("resolveStarmapPath(parentSegments)"),
-        "returnToParentStarmap 必须解析父层路径，实际窗口:\n{back}"
-    );
-    assert!(
-        back.contains("currentStarmapId = resolvedId"),
-        "returnToParentStarmap 必须写解析结果，实际窗口:\n{back}"
+        changed.contains("graphController.loadGraph()"),
+        "解析出 finalStarmapId 后才加载本层图，实际窗口:\n{changed}"
     );
 }
 
-/// 5. 根层（外部切图 / 初次进入）也走同一条解析入口。
+/// 5. Issue #822：解析入口对根层和子层是同一条 —— rootStarmapId / pathSegments /
+/// backend 三者任一变化都重新解析，完成时也解析一次。
+/// 子层不再"进入/返回"页面，所以没有 enterChildStarmap / returnToParentStarmap。
 #[test]
-fn root_layer_resolution_wired_on_load() {
-    let src = strip_line_comments(&read_src(WORKSPACE));
-    let changed = function_window(&src, "onStarmapIdChanged: {", 400);
+fn resolution_wired_on_load_and_on_every_identity_change() {
+    let src = strip_line_comments(&read_src(CONTENT));
+    for trigger in [
+        "onRootStarmapIdChanged: resolvePath()",
+        "onPathSegmentsChanged: resolvePath()",
+        "Component.onCompleted: resolvePath()",
+    ] {
+        assert!(
+            src.contains(trigger),
+            "Content 必须在 `{trigger}` 触发本层解析"
+        );
+    }
     assert!(
-        changed.contains("rootStarmapId = starmapId"),
-        "onStarmapIdChanged 必须把外部 starmapId 记为 rootStarmapId，实际窗口:\n{changed}"
+        src.contains("onStarmapBackendRefChanged:"),
+        "后端注入时机不保证，backend 到达后必须能补解析一次"
     );
-    assert!(
-        changed.contains("refreshCurrentStarmap()"),
-        "onStarmapIdChanged 必须触发当前层解析，实际窗口:\n{changed}"
-    );
-    let completed = function_window(&src, "Component.onCompleted: {", 300);
-    assert!(
-        completed.contains("refreshCurrentStarmap()"),
-        "Component.onCompleted 必须触发当前层解析，实际窗口:\n{completed}"
-    );
-}
 
-/// 6. Canvas 仍然只加载 Workspace 解析出来的 starmapId。
-#[test]
-fn canvas_loads_resolved_starmap_id() {
     let workspace = strip_line_comments(&read_src(WORKSPACE));
     assert!(
-        workspace.contains("starmapId: root.currentStarmapId"),
-        "Canvas 必须绑定 Workspace 的 currentStarmapId（解析结果）"
+        !workspace.contains("enterChildStarmap")
+            && !workspace.contains("returnToParentStarmap")
+            && !workspace.contains("currentStarmapId"),
+        "Workspace 不得再有下钻/返回导航栈，子星图是就地展开的递归内容"
+    );
+}
+
+/// 6. Issue #822：根 Canvas 把外部 starmapId 作为 rootStarmapId 交给根 Content，
+/// 加载本层图的入口是 Content 的 GraphController。
+#[test]
+fn root_canvas_passes_external_starmap_id_as_root_content_input() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let root_content = function_window(&canvas, "id: rootContent", 900);
+    assert!(
+        root_content.contains("rootStarmapId: canvasArea.starmapId"),
+        "根 Content 必须把外部 starmapId 当作自己的 rootStarmapId，实际窗口:\n{root_content}"
+    );
+    assert!(
+        root_content.contains("scenePathKey: \"root\""),
+        "根层 scenePathKey 必须由根 Canvas 显式写死 root，实际窗口:\n{root_content}"
     );
 
-    let canvas = strip_line_comments(&read_src(CANVAS));
+    let content = strip_line_comments(&read_src(CONTENT));
     assert!(
-        canvas.contains("graphController.loadGraph()"),
-        "Canvas.onStarmapIdChanged 仍须通过 graphController.loadGraph 加载当前层"
+        content.contains("starmapId: content.finalStarmapId")
+            && content.contains("graphController.loadGraph()"),
+        "Content 必须只用解析结果驱动本层 GraphController 加载"
     );
 }
 

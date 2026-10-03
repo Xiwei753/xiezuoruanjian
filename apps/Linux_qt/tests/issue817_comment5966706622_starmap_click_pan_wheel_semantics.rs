@@ -43,7 +43,20 @@ use source_guard::{function_window, read_src};
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
-const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
+const CONTENT: &str = "qml/StarMapSceneContent.qml";
+
+/// 去掉整行 `//` 注释，只留可执行语句。
+/// 守卫断言"代码不再依赖某模式"，注释里作为历史说明提到该模式不算违规。
+fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. 选中 TapHandler 不得重新声明 SingleTap | DoubleTap
@@ -172,20 +185,30 @@ fn bg_drag_area_pan_gating_and_local_state_reset() {
 // 3. sceneWheel 只在 root 启用、bgDragArea 不自己处理 wheel
 // ─────────────────────────────────────────────────────────────────────────
 
-/// 滚轮缩放只由根 Scene 的 `sceneWheel` 处理：`enabled: pathKey === "root"` +
-/// `blocking: true`，不按 childContent 分发到最深子 Scene，也不用 `event.accepted`
-/// 做二次分流。`bgDragArea` 不再自己处理 wheel。
+/// Issue #822：整棵星图只有一个全局相机，`sceneWheel` 无条件接管滚轮并走
+/// `zoomAround` 统一缩放入口 + `blocking: true`，不再按场景身份开关、
+/// 不按 childContent 分发到"最深子 Scene"，也不用 `event.accepted` 做二次分流。
+/// `bgDragArea` 不再自己处理 wheel。
 ///
 /// 不限制 `StarMapCanvas.qml` 里 WheelHandler 的总数——以后新增完全不同用途的
 /// WheelHandler 不应无条件炸掉本守卫；只检查 `sceneWheel` 自身与 `bgDragArea`。
 #[test]
 fn scene_wheel_only_root_and_bg_drag_area_has_no_wheel() {
-    let src = read_src(CANVAS);
+    // 注释里会提到被删掉的 `enabled: pathKey === "root"` 作为历史说明，
+    // 断言的是可执行语句，所以先剥掉整行注释。
+    let src = strip_line_comments(&read_src(CANVAS));
     let wheel = function_window(&src, "id: sceneWheel", 1000);
 
+    // Issue #822：全树只剩一个全局视口，不再有子 Scene/子 Canvas，
+    // 因此 sceneWheel 不再需要按场景身份开关——鼠标停在任何一层节点或子星图上，
+    // 滚轮都调同一个 zoomAround，只改根 zoomLevel/panX/panY。
     assert!(
-        wheel.contains("enabled: pathKey === \"root\""),
-        "sceneWheel 必须只在根 Scene 启用（enabled: pathKey === \"root\"），实际窗口:\n{wheel}"
+        !wheel.contains("enabled:"),
+        "sceneWheel 不得再按场景身份开关（只有根 Canvas 有相机），实际窗口:\n{wheel}"
+    );
+    assert!(
+        wheel.contains("zoomAround("),
+        "sceneWheel 必须走根 Canvas 的 zoomAround 统一缩放入口，实际窗口:\n{wheel}"
     );
     assert!(
         wheel.contains("blocking: true"),
@@ -200,36 +223,52 @@ fn scene_wheel_only_root_and_bg_drag_area_has_no_wheel() {
         "sceneWheel 不得再用 event.accepted 做二次分流（blocking 决定阻塞语义），实际窗口:\n{wheel}"
     );
 
-    let bg = function_window(&src, "id: bgDragArea", 5000);
+    // 用下一个 handler 作右边界，避免固定长度窗口越界吃到 sceneWheel 的 onWheel。
+    let bg = {
+        let start = src.find("id: bgDragArea").unwrap_or_else(|| panic!("missing bgDragArea"));
+        let end = src[start..]
+            .find("id: sceneWheel")
+            .map(|i| start + i)
+            .unwrap_or_else(|| panic!("missing sceneWheel after bgDragArea"));
+        &src[start..end]
+    };
     assert!(
         !bg.contains("onWheel"),
         "bgDragArea 不得再自己处理 wheel（滚轮已移到 sceneWheel），实际窗口:\n{bg}"
     );
 }
 
-/// 根 Scene 的 pathKey 由 Workspace 显式传 "root"，子 Scene 永远不等于 "root"，
-/// 支撑 `sceneWheel` 的 `enabled: pathKey === "root"` 真正只在根 Scene 生效。
+/// Issue #822：根层的 `scenePathKey` 由根 Canvas 显式写死 `"root"`，
+/// 子层的 `scenePathKey` 由父 pathKey + `"/embed_" + instanceId` 拼成并在创建时一次给全。
 ///
-/// 除了拼接函数存在，还必须把 `childScenePathKey` 真正传给子 Scene 的 `pathKey`。
-/// `StarMapScene.pathKey` 默认就是 `"root"`，若有人删掉这行传递，子 Scene 会吃到
-/// 默认 `pathKey: "root"`，`sceneWheel.enabled: pathKey === "root"` 就会在子 Scene
-/// 重新启用，#817 的"只有根 Scene 处理滚轮"直接回归。因此这条接线守卫是必要的。
+/// `StarMapSceneContent.scenePathKey` 是 required property 且**没有** `"root"` 默认值，
+/// 因此不存在"子层先冒充根层再修正"的中间态——这正是诊断包里
+/// `depth=1 + pathKey=root` 的根因。若有人给 scenePathKey 加回默认值，这条守卫立刻失败。
 #[test]
 fn root_scene_path_key_is_root_and_children_are_not() {
-    let workspace = read_src(WORKSPACE);
+    let canvas = read_src(CANVAS);
     assert!(
-        workspace.contains("pathKey: \"root\""),
-        "StarMapWorkspace 必须给根 StarMapScene 传 pathKey: \"root\""
+        canvas.contains("scenePathKey: \"root\""),
+        "根 StarMapSceneContent 必须由 StarMapCanvas 显式传 scenePathKey: \"root\""
+    );
+
+    let content = read_src(CONTENT);
+    assert!(
+        content.contains("required property string scenePathKey"),
+        "StarMapSceneContent 的 scenePathKey 必须是 required property"
+    );
+    assert!(
+        !content.contains("property string scenePathKey: \"root\""),
+        "StarMapSceneContent 的 scenePathKey 不得带 \"root\" 默认值，否则子层会冒充根层"
     );
 
     let embed = read_src(EMBED);
     assert!(
         embed.contains("parentPathKey + \"/embed_\" + instanceId"),
-        "子 Scene pathKey 必须由父 pathKey + \"/embed_\" + instanceId 拼成，永远不等于 \"root\""
+        "子 Content 的 scenePathKey 必须由父 pathKey + \"/embed_\" + instanceId 拼成，永远不等于 \"root\""
     );
     assert!(
-        embed.contains("\"pathKey\": childScenePathKey"),
-        "StarMapEmbed 必须把 childScenePathKey 传给子 Scene，避免子 Scene 回退到默认 root\
-         而让 sceneWheel 在子 Scene 重新启用"
+        embed.contains("\"scenePathKey\": childContentPathKey"),
+        "StarMapEmbed 必须在创建子 Content 时一次给全 scenePathKey，子层不得回退到 root"
     );
 }

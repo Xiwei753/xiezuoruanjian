@@ -10,17 +10,24 @@
 //!    `writer_diagnostics::record_event`，origin=User、事件名 `starmap.` 前缀、
 //!    target=`linux_qt.starmap`，不受 `WRITER_DEBUG_QML` 控制；
 //!    `fields_json` 解析失败只记 `fields_parse_error=true`，不中断事件落盘。
-//! 2. `StarMapCanvas.qml` 有统一 `logInteraction()` helper，且 9 个手势边界
-//!    事件（pointer_press / pan_begin / pan_end / move_begin / move_end /
-//!    connect_begin / connect_end / selection_changed / context_menu_open）都在；
-//!    `pointer_press` 必须能覆盖"按在 Node/Embed 上"的场景（背景 MouseArea
-//!    收不到这类 press），所以挂在根节点的 passive-grab PointHandler 上。
+//! 2. `StarMapCanvas.qml` 与 `StarMapSceneContent.qml` 各有统一 `logInteraction()`
+//!    helper，且 9 个手势边界事件（pointer_press / pan_begin / pan_end /
+//!    move_begin / move_end / connect_begin / connect_end / selection_changed /
+//!    context_menu_open）都在；`pointer_press` 必须能覆盖"按在 Node/Embed 上"的
+//!    场景（背景 MouseArea 收不到这类 press），所以挂在根节点的 passive-grab
+//!    PointHandler 上。
 //! 3. 日志不进 `onPositionChanged` 这类连续移动热路径。
-//! 4. `StarMapScene.qml` 记录 scene_resolved / scene_resolve_failed。
+//! 4. `StarMapSceneContent.qml` 记录 scene_resolved / scene_resolve_failed。
 //! 5. `StarMapEmbed.qml` 只记录事件分层（embed_chrome_press /
-//!    embed_child_content_routed / embed_child_scene_activated），并带
-//!    parentPathKey / childScenePathKey / instanceId / targetStarmapId。
+//!    embed_child_content_routed / embed_child_content_activated），并带
+//!    parentPathKey / childContentPathKey / instanceId / targetStarmapId。
 //! 6. `StarMapNode.qml` 不自己直接落盘，避免同一次点击记两份。
+//!
+//! #822 更新：`StarMapScene.qml` 已删除。根层由 `StarMapCanvas.qml` 直接创建，
+//! 每层递归容器是 `StarMapSceneContent.qml`。pointer_press / pan_begin /
+//! pan_end / selection_changed / context_menu_open 属于全局相机与全局输入，仍在
+//! Canvas；move_begin / move_end / connect_begin / connect_end 属于命中层的手势
+//! 收尾，改由命中层的 Content 记录。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -31,7 +38,7 @@ use source_guard::{function_window, read_src};
 
 const BACKEND: &str = "src/backend/starmap_backend.rs";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
-const SCENE: &str = "qml/StarMapScene.qml";
+const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 
@@ -137,28 +144,48 @@ fn canvas_has_unified_log_interaction_helper() {
     let src = read_src(CANVAS);
     let helper = function_window(&src, "function logInteraction(", 500);
     assert!(
-        helper.contains("starmapBackendRef.record_interaction(event, pathKey, starmapId"),
+        helper.contains("starmapBackendRef.record_interaction(event, scenePathKey === undefined ? \"root\" : scenePathKey,")
+            && helper.contains("starmapId, itemKind, itemId, fj)"),
         "logInteraction 必须把 scenePathKey/starmapId 一并传给 record_interaction，实际窗口:\n{helper}"
     );
 }
 
 #[test]
-fn canvas_logs_all_gesture_boundary_events() {
-    let src = strip_line_comments(&read_src(CANVAS));
+fn content_has_unified_log_interaction_helper() {
+    let src = read_src(CONTENT);
+    let helper = function_window(&src, "function logInteraction(", 500);
+    assert!(
+        helper.contains("starmapBackendRef.record_interaction(event, scenePathKey, finalStarmapId, itemKind, itemId, fj)"),
+        "Content 的 logInteraction 必须用本层 scenePathKey/finalStarmapId 落盘，实际窗口:\n{helper}"
+    );
+}
+
+/// 全局相机类事件记在根 Canvas；命中层的 move/connect 边界记在该层 Content。
+#[test]
+fn canvas_and_content_log_all_gesture_boundary_events() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let content = strip_line_comments(&read_src(CONTENT));
     for event in [
         "pointer_press",
         "pan_begin",
         "pan_end",
-        "move_begin",
-        "move_end",
-        "connect_begin",
-        "connect_end",
         "selection_changed",
         "context_menu_open",
     ] {
         assert!(
-            src.contains(&format!("logInteraction(\"{event}\"")),
+            canvas.contains(&format!("logInteraction(\"{event}\"")),
             "StarMapCanvas 必须记录 {event} 边界日志"
+        );
+    }
+    for event in [
+        "move_begin",
+        "move_end",
+        "connect_begin",
+        "connect_end",
+    ] {
+        assert!(
+            content.contains(&format!("logInteraction(\"{event}\"")),
+            "StarMapSceneContent 必须记录命中层的 {event} 边界日志"
         );
     }
 }
@@ -192,20 +219,26 @@ fn canvas_pointer_press_covers_object_presses_via_passive_handlers() {
 #[test]
 fn canvas_does_not_log_in_continuous_move_hot_path() {
     let src = read_src(CANVAS);
-    let handler = slice_between(&src, "onPositionChanged: function(mouse)", "onReleased:");
+    // 越过阈值后的持续 pan 分支是逐帧热路径，不得落盘。
+    // 阈值之前那次 logInteraction("pan_begin") 是手势边界，只发生一次，允许存在。
+    let hot_path = slice_between(
+        &src,
+        "if (panStarted && interaction.pointerMode === \"pan\") {",
+        "onReleased:",
+    );
     assert!(
-        !handler.contains("logInteraction") && !handler.contains("logPointerPress"),
-        "连续移动 onPositionChanged 不得逐帧落盘，实际窗口:\n{handler}"
+        !hot_path.contains("logInteraction") && !hot_path.contains("logPointerPress"),
+        "持续 pan 分支不得逐帧落盘，实际窗口:\n{hot_path}"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 3. Scene / Embed / Node
+// 3. Content / Embed / Node
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn scene_logs_resolve_success_and_failure() {
-    let src = read_src(SCENE);
+fn content_logs_resolve_success_and_failure() {
+    let src = read_src(CONTENT);
     let resolved = function_window(&src, "\"scene_resolved\"", 400);
     assert!(
         resolved.contains("pathKey")
@@ -231,7 +264,7 @@ fn embed_logs_only_its_own_event_layering() {
     for event in [
         "embed_chrome_press",
         "embed_child_content_routed",
-        "embed_child_scene_activated",
+        "embed_child_content_activated",
     ] {
         let at = src
             .find(&format!("logEmbedInteraction(\"{event}\""))
@@ -239,7 +272,7 @@ fn embed_logs_only_its_own_event_layering() {
         let window = function_window(&src[at..], &format!("logEmbedInteraction(\"{event}\""), 400);
         for field in [
             "parentPathKey",
-            "childScenePathKey",
+            "childContentPathKey",
             "instanceId",
             "targetStarmapId",
         ] {

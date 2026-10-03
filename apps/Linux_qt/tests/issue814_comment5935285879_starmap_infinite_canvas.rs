@@ -2,27 +2,48 @@
 //!
 //! WHITE_BOX 验证：读取 QML 源码，确定性断言无限画布重构的不变量，防止回退。
 //!
+//! Issue #822 更新：整棵星图只剩一个全局视口，delegate 不再画在根 Canvas 里，
+//! 而是画在根层 `StarMapSceneContent` 的**本层局部坐标**里（相机作用在根层
+//! Content 这一张 Item 上）。因此原守卫里"delegate 用 `worldToScreenX/Y` 把世界
+//! 坐标换算成屏幕坐标"的断言整体失效——那正是"每个 Scene 一个视口"的产物。
+//! 换算方向现在反过来：屏幕→世界仍由根 Canvas 的 `screenToWorldX/Y` 负责，
+//! 世界→屏幕不再逐个 delegate 做，而是由相机 transform 一次性承担。
+//!
 //! 锁住的结构：
 //! 1. `applyPan` 不再用 `Math.min(0, ...)` clamp — pan 两个方向都不设边界。
-//! 2. `container` 已改成 `sceneLayer`，`anchors.fill: parent`，始终覆盖视口。
+//! 2. 旧的 `container`（width/height = canvas/zoomLevel）不再存在；相机只作用在
+//!    根层 `StarMapSceneContent` 一张 Item 上，`anchors.fill: parent` 恒定覆盖视口。
 //! 3. `worldToScreenX/Y` 和 `screenToWorldX/Y` 统一坐标换算入口存在。
-//! 4. Node/Embed delegate 的 x/y 用 `worldToScreenX/Y`（世界→屏幕），scale=zoomLevel。
-//! 5. transient move 的 `beginMove`/`beginEmbedMove` 用世界坐标（nodeData.x/y、
-//!    embedData.x/y），不再拿 delegate 的屏幕 x/y。
-//! 6. Node/Embed 不再用 `root.parent.scale` 猜缩放，改用 Canvas 传的 canvasZoomLevel。
+//! 4. Node/Embed delegate 画在本层局部坐标里（相机在祖先 Content 上），
+//!    不再逐个 delegate 做 `worldToScreen` 换算。
+//! 5. transient move 起点用模型里的世界坐标（nodeData.x/y、embedData.x/y），
+//!    且只经共享状态机的 `beginPress` / `pressPendingToMove` 提升。
+//! 6. Node/Embed 不再用 `root.parent.scale` 猜缩放，改用 `mapFromItem` 差分。
 //! 7. 背景交互统一走 `screenToWorld*`，不再各处分散手写 `(x - panX) / zoomLevel`。
-//! 8. `projectedLeft/Top` 用 delegate 屏幕坐标（x/y），不再 `*zoomLevel+panX`。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{function_window, read_src};
+use source_guard::{count_occurrences, function_window, read_src};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
+const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
+
+/// 去掉整行 `//` 注释，只留可执行语句。
+fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. applyPan 不再 clamp
@@ -44,22 +65,38 @@ fn canvas_apply_pan_does_not_clamp_with_math_min() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 2. sceneLayer 存在且 anchors.fill: parent
+// 2. 相机只作用在根层 Content 一张 Item 上
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn canvas_uses_scene_layer_not_container() {
-    let src = read_src(CANVAS);
+fn canvas_mounts_camera_on_root_content_item_only() {
+    let src = strip_line_comments(&read_src(CANVAS));
+
     // 旧的 container（x: panX, y: panY, scale: zoomLevel, width/height = canvas/zoomLevel）
-    // 不应再存在
+    // 不应再存在。
     assert!(
         !src.contains("id: container"),
         "不得再使用旧的 container（x: panX, y: panY, scale: zoomLevel, width/height=canvas/zoomLevel）"
     );
-    // 新的 sceneLayer 必须存在且 anchors.fill: parent
+
+    // 相机 transform 挂在根层 StarMapSceneContent 上，且只有这一处。
     assert!(
-        src.contains("id: sceneLayer") && src.contains("anchors.fill: parent"),
-        "必须使用 sceneLayer 且 anchors.fill: parent，始终覆盖视口"
+        src.contains("x: canvasArea.panX")
+            && src.contains("y: canvasArea.panY")
+            && src.contains("scale: canvasArea.zoomLevel")
+            && src.contains("transformOrigin: Item.TopLeft"),
+        "相机变换必须作用在根层 StarMapSceneContent 这张 Item 上"
+    );
+    assert_eq!(
+        count_occurrences(&src, "scale: canvasArea.zoomLevel"),
+        1,
+        "整棵递归树只能有一处相机 scale：子层不得再建第二个带相机的 Canvas"
+    );
+
+    // delegate 已经搬去内容层，根 Canvas 不再自己铺一层 sceneLayer。
+    assert!(
+        !src.contains("id: sceneLayer") && !src.contains("delegate: StarMapNode {"),
+        "Node/Embed delegate 必须渲染在 StarMapSceneContent 里，根 Canvas 不再重复铺一层"
     );
 }
 
@@ -93,73 +130,97 @@ fn canvas_has_world_to_screen_and_screen_to_world_helpers() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 4. Node/Embed delegate x/y 用 worldToScreen，scale=zoomLevel
+// 4. delegate 画在本层局部坐标（#822 更新：不再逐个 delegate 做 worldToScreen）
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn canvas_node_delegate_uses_world_to_screen() {
-    let src = read_src(CANVAS);
-    // Node delegate 的 x 绑定必须用 worldToScreenX
-    assert!(
-        src.contains("x: worldToScreenX(interaction.pointerMode === \"move\" && interaction.pressedNodeId === nodeData.id ? interaction.moveX : nodeData.x)"),
-        "Node delegate 的 x 必须用 worldToScreenX 映射世界坐标到屏幕坐标"
-    );
-    assert!(
-        src.contains("y: worldToScreenY(interaction.pointerMode === \"move\" && interaction.pressedNodeId === nodeData.id ? interaction.moveY : nodeData.y)"),
-        "Node delegate 的 y 必须用 worldToScreenY 映射世界坐标到屏幕坐标"
-    );
-}
+fn content_delegates_use_local_coordinates() {
+    let src = strip_line_comments(&read_src(CONTENT));
 
-#[test]
-fn canvas_embed_delegate_uses_world_to_screen() {
-    let src = read_src(CANVAS);
+    let node_delegate = function_window(&src, "delegate: StarMapNode {", 1600);
     assert!(
-        src.contains("x: worldToScreenX(interaction.pointerMode === \"move\" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveX : embedData.x)"),
-        "Embed delegate 的 x 必须用 worldToScreenX 映射世界坐标到屏幕坐标"
+        node_delegate.contains(
+            "x: content.isMovingNode(nodeData.id) ? content.interactionController.moveX : nodeData.x"
+        ),
+        "Node delegate 的 x 必须直接用本层局部坐标，不做 worldToScreen 换算，实际片段:\n{node_delegate}"
     );
     assert!(
-        src.contains("y: worldToScreenY(interaction.pointerMode === \"move\" && interaction.pressedEmbedId === embedData.instanceId ? interaction.moveY : embedData.y)"),
-        "Embed delegate 的 y 必须用 worldToScreenY 映射世界坐标到屏幕坐标"
+        node_delegate.contains(
+            "y: content.isMovingNode(nodeData.id) ? content.interactionController.moveY : nodeData.y"
+        ),
+        "Node delegate 的 y 必须直接用本层局部坐标，实际片段:\n{node_delegate}"
     );
-}
 
-// ─────────────────────────────────────────────────────────────────────────
-// 5. transient move 用世界坐标（nodeData.x/y、embedData.x/y）
-// ─────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn canvas_begin_move_uses_world_coordinates() {
-    let src = read_src(CANVAS);
-    // beginMove 必须用 nodeData.x/nodeData.y，不再用 delegate 的 x/y
+    let embed_delegate = function_window(&src, "delegate: StarMapEmbed {", 1800);
     assert!(
-        src.contains("interaction.beginMove(nodeData.id, nodeData.x, nodeData.y)"),
-        "beginMove 必须用世界坐标 nodeData.x/nodeData.y，不再拿 delegate 的屏幕 x/y"
+        embed_delegate.contains(
+            "x: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveX : embedData.x"
+        ),
+        "Embed delegate 的 x 必须直接用本层局部坐标，实际片段:\n{embed_delegate}"
     );
-    // beginEmbedMove 必须用 embedData.x/embedData.y
     assert!(
-        src.contains("interaction.beginEmbedMove(embedData.instanceId, embedData.x, embedData.y)"),
-        "beginEmbedMove 必须用世界坐标 embedData.x/embedData.y，不再拿 delegate 的屏幕 x/y"
+        embed_delegate.contains(
+            "y: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveY : embedData.y"
+        ),
+        "Embed delegate 的 y 必须直接用本层局部坐标，实际片段:\n{embed_delegate}"
+    );
+
+    // delegate 不得自己再做一次相机换算。
+    assert!(
+        !src.contains("worldToScreenX(") && !src.contains("worldToScreenY("),
+        "内容层不得再逐个 delegate 做 worldToScreen：相机由根层 Content 的 transform 一次性承担"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 6. Node/Embed 不再用 root.parent.scale，改用 canvasZoomLevel
+// 5. transient move 用模型里的世界坐标，且只经共享状态机提升
 // ─────────────────────────────────────────────────────────────────────────
 
+#[test]
+fn content_begin_move_uses_model_world_coordinates() {
+    let src = strip_line_comments(&read_src(CONTENT));
+
+    // 按下只登记 pressPending，起点坐标来自模型而不是 delegate 的屏幕 x/y。
+    let promote = function_window(&src, "function promoteToMove(", 700);
+    assert!(
+        promote.contains("graphController.getNode(id)") || promote.contains("graphController.getEmbed(id)"),
+        "promoteToMove 必须从模型取条目，起点用模型世界坐标，实际窗口:\n{promote}"
+    );
+    assert!(
+        promote.contains("item.x") && promote.contains("item.y"),
+        "promoteToMove 必须传模型里的 item.x/item.y 作为起点，实际窗口:\n{promote}"
+    );
+    assert!(
+        promote.contains("interactionController.pressPendingToMove(kind, id, scenePathKey, item.x, item.y)"),
+        "提升必须经 pressPendingToMove 仲裁，不能直接从 DragHandler 进 move，实际窗口:\n{promote}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 6. Node/Embed 不再用 root.parent.scale 猜缩放
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Node/Embed 都不得再用 `root.parent.scale` 反推缩放：根层 Content 自身的
+/// `scale` 就是全局 zoom，再乘一次会双重缩放。位移换算改用 `mapFromItem`
+/// 差分，让 Qt 自己算完祖先链上的累积变换。
 #[test]
 fn node_does_not_use_parent_scale() {
     let src = read_src(NODE);
     assert!(
         !src.contains("root.parent.scale"),
-        "StarMapNode 不得再用 root.parent.scale 猜缩放（sceneLayer scale=1 会破坏旧换算）"
+        "StarMapNode 不得再用 root.parent.scale 猜缩放（会与根层 Content 的 scale 双重缩放）"
     );
     assert!(
-        src.contains("property real canvasZoomLevel: 1.0"),
-        "StarMapNode 必须有 canvasZoomLevel property 接收 Canvas 传的 zoomLevel"
+        !src.contains("canvasZoomLevel"),
+        "StarMapNode 不得再保留 canvasZoomLevel：全局缩放已由祖先 transform 承担"
     );
+    let scene_delta = function_window(&src, "function sceneDelta(", 400);
     assert!(
-        src.contains("var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0"),
-        "StarMapNode 的 onMoveDelta 必须用 canvasZoomLevel 做世界增量换算"
+        scene_delta.contains("root.mapFromItem(null, 0, 0)")
+            && scene_delta.contains("root.mapFromItem(null, dx, dy)")
+            && scene_delta.contains("point.x - origin.x"),
+        "Node 的位移换算必须用 mapFromItem 差分（mapFromItem 只能映射点，\
+         用自身原点做差顺带抵消 wobble 视觉偏移），实际窗口:\n{scene_delta}"
     );
 }
 
@@ -168,19 +229,24 @@ fn embed_does_not_use_parent_scale() {
     let src = read_src(EMBED);
     assert!(
         !src.contains("root.parent.scale"),
-        "StarMapEmbed 不得再用 root.parent.scale 猜缩放（sceneLayer scale=1 会破坏旧换算）"
+        "StarMapEmbed 不得再用 root.parent.scale 猜缩放（会与根层 Content 的 scale 双重缩放）"
     );
     assert!(
-        src.contains("property real canvasZoomLevel: 1.0"),
-        "StarMapEmbed 必须有 canvasZoomLevel property 接收 Canvas 传的 zoomLevel"
+        !src.contains("canvasZoomLevel"),
+        "StarMapEmbed 不得再保留 canvasZoomLevel：全局缩放已由祖先 transform 承担"
     );
-    // 5 处 DragHandler 都应用 canvasZoomLevel
-    let count = src
-        .matches("var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0")
-        .count();
+    let scene_delta = function_window(&src, "function sceneDelta(", 400);
     assert!(
-        count >= 5,
-        "StarMapEmbed 的 5 个 DragHandler 都必须用 canvasZoomLevel，实际 {count} 处"
+        scene_delta.contains("root.mapFromItem(null, 0, 0)")
+            && scene_delta.contains("root.mapFromItem(null, dx, dy)")
+            && scene_delta.contains("point.x - origin.x"),
+        "Embed 的位移换算必须用 mapFromItem 差分，实际窗口:\n{scene_delta}"
+    );
+    // 5 处 DragHandler 都要走同一个 sceneDelta。
+    assert_eq!(
+        count_occurrences(&strip_line_comments(&src), "root.sceneDelta("),
+        5,
+        "标题 + 四条边框共 5 个 DragHandler，必须统一用 root.sceneDelta 换算后再上抛"
     );
 }
 
@@ -192,14 +258,12 @@ fn embed_does_not_use_parent_scale() {
 fn canvas_background_interaction_uses_screen_to_world() {
     let src = read_src(CANVAS);
     // logPointerPress 用 screenToWorldX/Y
-    let lpp = function_window(&src, "function logPointerPress(", 400);
+    let lpp = function_window(&src, "function logPointerPress(", 900);
     assert!(
-        lpp.contains("screenToWorldX(point.position.x)")
-            && lpp.contains("screenToWorldY(point.position.y)"),
+        lpp.contains("screenToWorldX(point.position.x)") && lpp.contains("screenToWorldY(point.position.y)"),
         "logPointerPress 必须用 screenToWorldX/Y，实际窗口:\n{lpp}"
     );
     // 不应再在背景交互里手写 (x - panX) / zoomLevel
-    // （edgeCanvas 的 ctx.translate(panX,panY) 不算背景交互，允许保留）
     assert!(
         !src.contains("(eventPoint.position.x - panX) / zoomLevel"),
         "背景 TapHandler 不得再手写 (eventPoint.position.x - panX) / zoomLevel，统一用 screenToWorldX"
@@ -211,30 +275,7 @@ fn canvas_background_interaction_uses_screen_to_world() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 8. projectedLeft/Top 用 delegate 屏幕坐标
-// ─────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn canvas_projected_uses_delegate_screen_coords() {
-    let src = read_src(CANVAS);
-    // delegate x/y 已是屏幕坐标，projectedLeft/Top 直接用 x/y
-    assert!(
-        src.contains("readonly property real projectedLeft: x"),
-        "projectedLeft 必须直接用 delegate 的屏幕 x，不再 *zoomLevel+panX"
-    );
-    assert!(
-        src.contains("readonly property real projectedTop: y"),
-        "projectedTop 必须直接用 delegate 的屏幕 y，不再 *zoomLevel+panY"
-    );
-    // 不应再保留旧的 * canvasArea.zoomLevel + canvasArea.panX 投影
-    assert!(
-        !src.contains("x * canvasArea.zoomLevel + canvasArea.panX"),
-        "projectedLeft 不得再用 x * canvasArea.zoomLevel + canvasArea.panX（delegate x 已是屏幕坐标）"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// 9. Embed 有独立尺寸常量（不再复用 node 150×60）
+// 8. Embed 有独立尺寸常量（不再复用 node 150×60）
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]

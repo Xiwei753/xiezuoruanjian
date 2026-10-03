@@ -440,7 +440,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StatsPreviewPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapWorkspace.qml");
-    println!("cargo:rerun-if-changed=qml/StarMapScene.qml");
+    // Issue #822: 递归内容容器，替代已删除的 StarMapScene.qml
+    println!("cargo:rerun-if-changed=qml/StarMapSceneContent.qml");
     println!("cargo:rerun-if-changed=qml/StarMapCanvas.qml");
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");
     // Issue #798: 星图鼠标交互状态机
@@ -448,7 +449,6 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapNode.qml");
     // Issue #796 评论 5886483653: 子星图 Embed 组件
     println!("cargo:rerun-if-changed=qml/StarMapEmbed.qml");
-    println!("cargo:rerun-if-changed=qml/StarMapInspector.qml");
     println!("cargo:rerun-if-changed=qml/WritingWorkspace.qml");
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");

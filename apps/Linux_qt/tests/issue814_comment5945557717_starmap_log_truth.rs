@@ -11,8 +11,13 @@
 //!    `"commitSuccess": true`，而是接 `commitNodeMove/commitEmbedMove` 的
 //!    返回值。
 //! 3. **connect_end.success 是真实后端结果**：`createEdgeWithPaths` 返回
-//!    `true/false`，Canvas 的 `connect_end.success` 使用这个返回值，不再
+//!    `true/false`，命中层的 `connect_end.success` 使用这个返回值，不再
 //!    找到目标就写 true。
+//!
+//! #822 更新：根 Canvas 不再持有节点/Embed/连线的业务入口，这三处的落点
+//! 都搬到了递归层容器 `StarMapSceneContent.qml`（Canvas 只剩全局相机与
+//! 全局输入）。Canvas 侧的 `findEmbedContentAt` 转发也换成根递归命中入口
+//! `hitTargetAtScreen` → `hitTargetAtScene`。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -23,6 +28,7 @@ use source_guard::{function_window, read_src};
 
 const CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
+const CONTENT: &str = "qml/StarMapSceneContent.qml";
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1. 子星图内部点击不再冒充 empty
@@ -46,46 +52,51 @@ fn controller_has_find_embed_content_at() {
 }
 
 #[test]
-fn canvas_forwards_find_embed_content_at() {
-    let src = read_src(CANVAS);
-    let window = function_window(&src, "function findEmbedContentAt(", 200);
+fn content_recursive_hit_uses_find_embed_content_at() {
+    let src = read_src(CONTENT);
+    let window = function_window(&src, "function hitTargetAtScene(", 3000);
     assert!(
-        window.contains("graphController.findEmbedContentAt"),
-        "Canvas 必须转发 findEmbedContentAt 到 graphController，实际窗口:\n{window}"
+        window.contains("graphController.findEmbedContentAt("),
+        "Content 的递归命中入口必须调用本层 graphController.findEmbedContentAt，实际窗口:\n{window}"
     );
 }
 
 #[test]
 fn canvas_pointer_press_distinguishes_embed_chrome_and_child_content() {
-    let src = read_src(CANVAS);
-    // Issue #817 评论 5949494799: 命中种类统一由 hitPointerAtScreen 产出
-    // （node / embedChrome / childContent / edge / empty），logPointerPress 只透传
-    // hit.kind。守卫跟随新契约把“种类判定”和“日志透传”分开检查，覆盖不减弱：
-    // embedChrome/childContent 的区分和 findEmbedContentAt 调用仍然必须存在。
-    let hit_window = function_window(&src, "function hitPointerAtScreen(", 900);
+    // Issue #817 评论 5949494799: 命中种类统一由递归命中入口产出
+    // （node / embed / childContent / edge / empty），logPointerPress 只透传
+    // hit.kind。Issue #822 后该入口是 Content 的 hitTargetAtScene，
+    // Canvas 的 hitTargetAtScreen 只做 screen→scene 转换后转发。
+    let canvas = read_src(CANVAS);
+    let screen_window = function_window(&canvas, "function hitTargetAtScreen(", 400);
     assert!(
-        hit_window.contains("\"embedChrome\""),
-        "hitPointerAtScreen 必须把 Embed chrome 命中区分成 embedChrome，实际窗口:\n{hit_window}"
-    );
-    assert!(
-        hit_window.contains("\"childContent\""),
-        "hitPointerAtScreen 必须把子场景内部命中区分成 childContent，实际窗口:\n{hit_window}"
-    );
-    assert!(
-        hit_window.contains("findEmbedContentAt(wx, wy)"),
-        "hitPointerAtScreen 必须调用 findEmbedContentAt 判 childContent，实际窗口:\n{hit_window}"
+        screen_window.contains("rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))"),
+        "hitTargetAtScreen 必须转发到根 Content 的递归命中入口，实际窗口:\n{screen_window}"
     );
 
-    let window = function_window(&src, "function logPointerPress(", 900);
+    let content = read_src(CONTENT);
+    let hit_window = function_window(&content, "function hitTargetAtScene(", 3000);
+    for kind in ["\"node\"", "\"embed\"", "\"childContent\"", "\"edge\"", "\"empty\""] {
+        assert!(
+            hit_window.contains(&format!("kind: {kind}")),
+            "hitTargetAtScene 必须能返回 kind: {kind}，实际窗口:\n{hit_window}"
+        );
+    }
     assert!(
-        window.contains("hitPointerAtScreen(point.position.x, point.position.y)"),
-        "logPointerPress 必须走 hitPointerAtScreen 统一命中入口，实际窗口:\n{window}"
+        hit_window.contains("owner: content"),
+        "hitTargetAtScene 必须返回真正的命中层 owner，菜单/连线/选中都靠它定位，实际窗口:\n{hit_window}"
+    );
+
+    let window = function_window(&canvas, "function logPointerPress(", 900);
+    assert!(
+        window.contains("hitTargetAtScreen(point.position.x, point.position.y)"),
+        "logPointerPress 必须走统一递归命中入口，实际窗口:\n{window}"
     );
     assert!(
-        window.contains("logInteraction(\"pointer_press\", hit.kind,"),
-        "logPointerPress 必须把 hit.kind 原样写进 pointer_press 日志，实际窗口:\n{window}"
+        window.contains("logInteraction(\"pointer_press\", kind,"),
+        "logPointerPress 必须把命中的 kind 原样写进 pointer_press 日志，实际窗口:\n{window}"
     );
-    // 不应再保留旧的单一 "embed" hitKind（应已拆成 embedChrome/childContent）
+    // 不应再保留旧的单一 "embed" hitKind（应已拆成 embed / childContent）
     assert!(
         !window.contains("hitKind = \"embed\""),
         "logPointerPress 不应再使用旧的单一 \"embed\" hitKind，实际窗口:\n{window}"
@@ -107,23 +118,17 @@ fn canvas_move_end_does_not_hardcode_commit_success_true() {
 }
 
 #[test]
-fn canvas_move_end_uses_commit_return_values() {
-    let src = read_src(CANVAS);
-    // 触屏路径：commitNodeMove/commitEmbedMove 返回值赋给变量
+fn content_move_end_uses_commit_return_values() {
+    let src = read_src(CONTENT);
+    let window = function_window(&src, "function finishMove(", 1400);
     assert!(
-        src.contains("_touchCommitOk = graphController.commitNodeMove(")
-            && src.contains("_touchCommitOk = graphController.commitEmbedMove("),
-        "触屏 move_end 必须接 commit 返回值到 _touchCommitOk"
+        window.contains("committed = graphController.commitNodeMove(")
+            && window.contains("committed = graphController.commitEmbedMove("),
+        "命中层的 finishMove 必须接 commitNodeMove/commitEmbedMove 返回值到 committed，实际窗口:\n{window}"
     );
-    // 鼠标 node 路径
     assert!(
-        src.contains("_nodeCommitOk = graphController.commitNodeMove("),
-        "鼠标 node move_end 必须接 commitNodeMove 返回值到 _nodeCommitOk"
-    );
-    // 鼠标 embed 路径
-    assert!(
-        src.contains("_embedCommitOk = graphController.commitEmbedMove("),
-        "鼠标 embed move_end 必须接 commitEmbedMove 返回值到 _embedCommitOk"
+        window.contains("\"commitSuccess\": committed"),
+        "move_end 日志必须写 commitNodeMove/commitEmbedMove 的真实返回值，实际窗口:\n{window}"
     );
 }
 
@@ -147,34 +152,30 @@ fn controller_create_edge_with_paths_returns_bool() {
 }
 
 #[test]
-fn canvas_create_edge_with_paths_forwards_return_value() {
-    let src = read_src(CANVAS);
-    let window = function_window(&src, "function createEdgeWithPaths(", 200);
+fn content_create_edge_with_paths_forwards_return_value() {
+    let src = read_src(CONTENT);
+    let window = function_window(&src, "function createEdgeWithPaths(", 400);
     assert!(
         window.contains("return graphController.createEdgeWithPaths"),
-        "Canvas 的 createEdgeWithPaths 必须返回 graphController 的返回值，实际窗口:\n{window}"
+        "Content 的 createEdgeWithPaths 必须返回 graphController 的返回值，实际窗口:\n{window}"
     );
 }
 
 #[test]
-fn canvas_connect_end_uses_create_edge_return_value() {
-    let src = read_src(CANVAS);
-    // node 端和 embed 端都必须把 createEdgeWithPaths 返回值赋给 success 变量
+fn content_connect_end_uses_create_edge_return_value() {
+    let src = read_src(CONTENT);
+    let window = function_window(&src, "function finishConnect(", 2000);
     assert!(
-        src.contains("_connectSuccess = createEdgeWithPaths("),
-        "node 端 connect_end.success 必须使用 createEdgeWithPaths 返回值"
+        window.contains("success = createEdgeWithPaths(fromPath, toPath)"),
+        "connect_end.success 必须使用 createEdgeWithPaths 返回值，实际窗口:\n{window}"
     );
     assert!(
-        src.contains("_eSuccess = createEdgeWithPaths("),
-        "embed 端 connect_end.success 必须使用 createEdgeWithPaths 返回值"
+        window.contains("\"success\": success"),
+        "connect_end 日志必须写 createEdgeWithPaths 的真实返回值，实际窗口:\n{window}"
     );
-    // 不应再保留"调用后无条件写 true"的旧模式
+    // 建边由源的归属层执行，from/to 都保持完整路径 DTO
     assert!(
-        !src.contains("createEdgeWithPaths(interaction.connectFromPath, _toPath)\n                            _connectSuccess = true"),
-        "node 端不得再调用 createEdgeWithPaths 后无条件写 _connectSuccess = true"
-    );
-    assert!(
-        !src.contains("createEdgeWithPaths(interaction.connectFromPath, _eToPath)\n                                _eSuccess = true"),
-        "embed 端不得再调用 createEdgeWithPaths 后无条件写 _eSuccess = true"
+        window.contains("hit.targetPath") && window.contains("var fromPath = ic.connectFromPath"),
+        "connect_end 必须用完整 StarMapTargetPathDto（from 与 hit.targetPath），不退化成 nodeId-only，实际窗口:\n{window}"
     );
 }

@@ -5,15 +5,18 @@
 //! 锁住的结构：
 //! 1. `StarMapSelectionController.qml` 存在，有 `select/clear/matches` 三个方法，
 //!    选中身份由三元组 (scenePathKey, kind, itemId) 唯一确定。
-//! 2. `StarMapWorkspace.qml` 实例化 `StarMapSelectionController`，传给根 Scene。
-//! 3. `StarMapScene.qml` 有 `selectionController` property，传给内部 Canvas。
-//! 4. `StarMapCanvas.qml` 有 `selectionController` property，传给 GraphController
-//!    和 Embed delegate；Node/Embed/Edge 的 isSelected 从 `selectionController.matches`
-//!    派生。
+//! 2. `StarMapWorkspace.qml` 实例化 `StarMapSelectionController`，传给根 Canvas。
+//! 3. `StarMapCanvas.qml` 有 `selectionController` property，传给根 Content。
+//! 4. `StarMapSceneContent.qml` 有 `selectionController` required property，传给自己的
+//!    GraphController 和 Embed delegate；Node/Embed/Edge 的 isSelected 从
+//!    `selectionController.matches` 派生，且必须带本层 `scenePathKey`。
 //! 5. `StarMapGraphController.qml` 不再用 `applySelection` 数组重建维护 isSelected，
 //!    `selectNode/selectEdge/selectEmbed/clearSelection` 改用共享 selectionController。
-//! 6. `StarMapEmbed.qml` 创建 child Scene 时传 `selectionController`，子 Scene 沿用
+//! 6. `StarMapEmbed.qml` 创建 child Content 时传 `selectionController`，子层沿用
 //!    同一个实例，不每层新建。
+//!
+//! #822 更新：`StarMapScene.qml` 已删除，递归层改为 `StarMapSceneContent.qml`，
+//! 根层由 `StarMapCanvas.qml` 直接创建，共享选中链路少一跳。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -24,7 +27,7 @@ use source_guard::{function_window, read_src};
 
 const CONTROLLER_QML: &str = "qml/StarMapSelectionController.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
-const SCENE: &str = "qml/StarMapScene.qml";
+const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const GRAPH_CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
@@ -80,62 +83,66 @@ fn workspace_instantiates_shared_selection_controller() {
     );
     assert!(
         src.contains("selectionController: sharedSelectionController"),
-        "StarMapWorkspace 必须把共享 selectionController 传给根 Scene"
+        "StarMapWorkspace 必须把共享 selectionController 传给根 Canvas"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 3. Scene 有 selectionController property 并传给 Canvas
+// 3. Canvas 有 selectionController property 并传给根 Content
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn scene_has_selection_controller_property_and_forwards_to_canvas() {
-    let src = read_src(SCENE);
-    assert!(
-        src.contains("property var selectionController: null"),
-        "StarMapScene 必须有 selectionController property"
-    );
-    assert!(
-        src.contains("selectionController: scene.selectionController"),
-        "StarMapScene 必须把 selectionController 传给内部 Canvas"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// 4. Canvas 有 selectionController property，isSelected 从 matches 派生
-// ─────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn canvas_has_selection_controller_and_derives_is_selected() {
+fn canvas_has_selection_controller_and_forwards_to_root_content() {
     let src = read_src(CANVAS);
     assert!(
         src.contains("property var selectionController: null"),
         "StarMapCanvas 必须有 selectionController property"
     );
-    // 传给 GraphController
     assert!(
         src.contains("selectionController: canvasArea.selectionController"),
-        "StarMapCanvas 必须把 selectionController 传给 graphController"
+        "StarMapCanvas 必须把 selectionController 传给根 StarMapSceneContent"
     );
-    // Node isSelected 从 matches 派生
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 4. Content 有 selectionController required property，isSelected 从 matches 派生
+// ─────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn content_has_selection_controller_and_derives_is_selected() {
+    let src = read_src(CONTENT);
     assert!(
-        src.contains("selectionController.matches(pathKey, \"node\", nodeData.id)"),
-        "Node delegate 的 isSelected 必须从 selectionController.matches(pathKey, \"node\", id) 派生"
+        src.contains("required property var selectionController"),
+        "StarMapSceneContent 必须有 selectionController required property"
+    );
+    // 传给本层 GraphController
+    assert!(
+        src.contains("selectionController: content.selectionController"),
+        "StarMapSceneContent 必须把 selectionController 传给本层 graphController"
+    );
+    // Node isSelected 从 matches 派生，且带本层 scenePathKey
+    assert!(
+        src.contains(
+            "content.selectionController.matches(content.scenePathKey, \"node\", nodeData.id)"
+        ),
+        "Node delegate 的 isSelected 必须从 selectionController.matches(content.scenePathKey, \"node\", id) 派生"
     );
     // Embed isSelected 从 matches 派生
     assert!(
-        src.contains("selectionController.matches(pathKey, \"embed\", embedData.instanceId)"),
-        "Embed delegate 的 isSelected 必须从 selectionController.matches(pathKey, \"embed\", instanceId) 派生"
+        src.contains(
+            "content.selectionController.matches(content.scenePathKey, \"embed\", embedData.instanceId)"
+        ),
+        "Embed delegate 的 isSelected 必须从 selectionController.matches(content.scenePathKey, \"embed\", instanceId) 派生"
     );
     // Edge isSelected 从 matches 派生
     assert!(
-        src.contains("selectionController.matches(pathKey, \"edge\", edge.id)"),
-        "Edge 的 isSelected 必须从 selectionController.matches(pathKey, \"edge\", id) 派生"
+        src.contains("selectionController.matches(scenePathKey, \"edge\", edge.id)"),
+        "Edge 的 isSelected 必须从 selectionController.matches(scenePathKey, \"edge\", id) 派生"
     );
     // Embed delegate 传 selectionController
     assert!(
-        src.contains("selectionController: canvasArea.selectionController"),
-        "Embed delegate 必须接收 selectionController（传给 child Scene）"
+        src.contains("selectionController: content.selectionController"),
+        "Embed delegate 必须接收 selectionController（传给 child Content）"
     );
 }
 
@@ -194,11 +201,11 @@ fn graph_controller_select_methods_use_shared_selection_controller() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 6. Embed 创建 child Scene 时传 selectionController
+// 6. Embed 创建 child Content 时传 selectionController
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn embed_passes_selection_controller_to_child_scene() {
+fn embed_passes_selection_controller_to_child_content() {
     let src = read_src(EMBED);
     // Embed 必须有 selectionController property
     assert!(
@@ -206,9 +213,13 @@ fn embed_passes_selection_controller_to_child_scene() {
         "StarMapEmbed 必须有 selectionController property"
     );
     // setSource 时传 selectionController
-    let sync = function_window(&src, "childSceneLoader.setSource(", 600);
+    let sync = function_window(&src, "childContentLoader.setSource(", 800);
+    assert!(
+        sync.contains("Qt.resolvedUrl(\"StarMapSceneContent.qml\")"),
+        "Embed 必须创建 StarMapSceneContent.qml 而不是嵌套 Scene，实际窗口:\n{sync}"
+    );
     assert!(
         sync.contains("\"selectionController\": selectionController"),
-        "Embed 创建 child Scene 时必须传 selectionController，子 Scene 沿用同一个，实际窗口:\n{sync}"
+        "Embed 创建 child Content 时必须传 selectionController，子层沿用同一个，实际窗口:\n{sync}"
     );
 }
