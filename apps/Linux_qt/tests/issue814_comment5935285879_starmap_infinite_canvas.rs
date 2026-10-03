@@ -309,35 +309,51 @@ fn canvas_background_interaction_uses_screen_to_world() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 8. Embed 有独立尺寸常量（不再复用 node 150×60）
+// 8. Embed 是正圆（world 几何恒定，直径 200，不再复用 node 150×60）
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn embed_has_independent_size_constants() {
+fn embed_shell_is_a_circle() {
     let src = read_src(EMBED);
     assert!(
-        src.contains("_embedDefaultWidth") && src.contains("_embedDefaultHeight"),
-        "StarMapEmbed 必须有独立尺寸常量 _embedDefaultWidth/_embedDefaultHeight，不再复用 node 150×60"
+        !src.contains("_embedDefaultWidth") && !src.contains("_embedDefaultHeight"),
+        "StarMapEmbed 不得再有 240×220 的矩形尺寸常量"
+    );
+    let shell = function_window(&src, "id: visualEmbed", 400);
+    assert!(
+        shell.contains("radius: width / 2"),
+        "Embed 外壳必须是正圆（radius = width / 2），实际窗口:\n{shell}"
+    );
+    // 内容区取圆的内接正方形，子内容不溢出圆外。
+    assert!(
+        src.contains("readonly property real _contentSide:")
+            && src.contains("width: root._contentSide")
+            && src.contains("height: root._contentSide"),
+        "contentViewport 必须取圆的内接正方形"
     );
 }
 
 #[test]
-fn controller_uses_embed_independent_size_constants() {
+fn controller_uses_embed_diameter_constant() {
     let src = read_src("qml/StarMapGraphController.qml");
     assert!(
-        src.contains("_embedDefaultWidth") && src.contains("_embedDefaultHeight"),
-        "GraphController 必须有 Embed 独立尺寸常量 _embedDefaultWidth/_embedDefaultHeight"
+        src.contains("readonly property int _embedDiameter: 200"),
+        "GraphController 必须有 Embed 直径常量 _embedDiameter: 200（DEFAULT_EMBED_DIAMETER）"
     );
-    // buildModels 里 Embed 的 width/height 必须用独立常量。
-    // 旧 portal Node 归一到 Embed 和正常 Embed 两处都用 _embedDefaultWidth。
-    let embed_const_count = src.matches("width: _embedDefaultWidth").count();
+    assert!(
+        !src.contains("_embedDefaultWidth") && !src.contains("_embedDefaultHeight"),
+        "GraphController 不得再保留 240×220 的矩形尺寸常量"
+    );
+    // buildModels 里 Embed 的 width/height 必须用直径常量。
+    // 旧 portal Node 归一到 Embed 和正常 Embed 两处都用 _embedDiameter。
+    let embed_const_count = src.matches("width: _embedDiameter").count();
     assert!(
         embed_const_count >= 2,
-        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 width: _embedDefaultWidth，实际 {embed_const_count} 处"
+        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 width: _embedDiameter，实际 {embed_const_count} 处"
     );
-    let embed_height_const_count = src.matches("height: _embedDefaultHeight").count();
+    let embed_height_const_count = src.matches("height: _embedDiameter").count();
     assert!(
         embed_height_const_count >= 2,
-        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 height: _embedDefaultHeight，实际 {embed_height_const_count} 处"
+        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 height: _embedDiameter，实际 {embed_height_const_count} 处"
     );
 }

@@ -76,6 +76,14 @@ Item {
     property real panY: 0
     property real zoomLevel: 1.0
 
+    // Issue #822 评论 5972215936: 相机范围只保留数值安全边界，不设产品硬天花板。
+    // 与 docs/starmap_viewport.md 的 CAMERA_SCALE_MIN/MAX、ZOOM_FACTOR 同一口径：
+    // 乘法步进保证各档手感一致，Deep Zoom 的 coverage 档位由用户能到的真实比例决定
+    // （0.35~2.5 的旧硬上限会让 1080 高窗口里的子星图永远停在 preview）。
+    readonly property real _cameraScaleMin: 1e-4
+    readonly property real _cameraScaleMax: 1e5
+    readonly property real _zoomFactor: 1.2
+
     function applyPan(nextX, nextY) {
         panX = nextX
         panY = nextY
@@ -90,8 +98,9 @@ Item {
 
     // Issue #822: 滚轮和捏合共用同一个缩放入口，只改根 zoomLevel/panX/panY。
     // 鼠标停在节点/子星图/孙星图上都不影响：整棵树一起缩放。
+    // 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），不再有产品缩放上限。
     function zoomAround(screenX, screenY, nextZoom) {
-        var target = Math.max(0.35, Math.min(2.5, nextZoom))
+        var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, nextZoom))
         var oldZoom = zoomLevel
         if (target === oldZoom)
             return
@@ -475,32 +484,23 @@ Item {
 
     // Issue #822: 捏合缩放只有这一处，作用在全局相机上。
     // 不再有"捏合归某个子星图"的判断：整棵树只有一个视口。
+    // 捏合比例相对手势起点，统一交给 zoomAround 做数值夹取 + 以中心缩放，
+    // 不再自己维护第二套 0.35/2.5 夹取和 pan 公式。
     PinchHandler {
         id: canvasPinch
         acceptedDevices: PointerDevice.TouchScreen
         target: null
         property real _pinchStartZoom: 1.0
-        property real _pinchStartPanX: 0
-        property real _pinchStartPanY: 0
         onActiveChanged: {
             if (active) {
                 _pinchStartZoom = zoomLevel
-                _pinchStartPanX = panX
-                _pinchStartPanY = panY
                 _touchInputActive = true
             }
         }
         onActiveScaleChanged: {
-            var rawZoom = _pinchStartZoom * activeScale
-            var target = Math.max(0.35, Math.min(2.5, rawZoom))
             var cx = centroid.position.x
             var cy = centroid.position.y
-            if (target === zoomLevel)
-                return
-            zoomLevel = target
-            // 以手势中心缩放
-            applyPan(cx - (cx - _pinchStartPanX) * (zoomLevel / _pinchStartZoom),
-                     cy - (cy - _pinchStartPanY) * (zoomLevel / _pinchStartZoom))
+            zoomAround(cx, cy, _pinchStartZoom * activeScale)
         }
     }
 
@@ -691,7 +691,9 @@ Item {
                 return
 
             var oldZoom = zoomLevel
-            var newZoom = Math.max(0.35, Math.min(2.5, oldZoom + delta * 0.1))
+            // 乘法步进：每格滚轮 ×/÷ _zoomFactor，各档手感一致、不设产品上限，
+            // 只由 zoomAround 夹数值安全范围（docs/starmap_viewport.md）。
+            var newZoom = oldZoom * Math.pow(_zoomFactor, delta)
             if (newZoom === oldZoom)
                 return
 
@@ -764,13 +766,13 @@ Item {
         AppButton {
             dt: canvasArea.dt
             text: qsTr("+")
-            onClicked: zoomAround(width / 2, height / 2, zoomLevel + 0.15)
+            onClicked: zoomAround(width / 2, height / 2, zoomLevel * _zoomFactor)
         }
 
         AppButton {
             dt: canvasArea.dt
             text: qsTr("−")
-            onClicked: zoomAround(width / 2, height / 2, zoomLevel - 0.15)
+            onClicked: zoomAround(width / 2, height / 2, zoomLevel / _zoomFactor)
         }
     }
 

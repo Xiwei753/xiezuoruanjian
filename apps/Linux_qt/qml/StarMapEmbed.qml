@@ -6,23 +6,24 @@
 // 职责：单个子星图 Embed 的可视化渲染、选中态展示、上抛点击类交互信号
 //
 // 事件分层
-//   Embed → chrome(title hit area + 4条 border hit area) + contentViewport(子星图内容)
+//   Embed → chrome(顶部标题带 + 圆周边框 hit slop) + contentViewport(子星图内容)
 //   - 标题文字命中：选择/移动/右键/长按都作用于 Embed。
-//   - 四条边框命中：同上；边框可以有少量 hit slop。
-//   - contentViewport：父 Embed 不挂 TapHandler/DragHandler/MouseArea，
-//     事件直接给子星图内容。
-//   - 不用 findEmbedChromeAt() 把整个矩形都判成 Embed 命中。
+//   - 圆周边框命中：同上；边框可以有少量 hit slop。
+//   - contentViewport（圆的内接正方形）：父 Embed 不挂 TapHandler/DragHandler/
+//     MouseArea，事件直接给子星图内容。
+//   - findEmbedChromeAt() 先做圆内判定：圆外即使还在外接矩形里也不算 Embed 命中。
 //
-// Issue #822：子星图内容是"内容"，不是"子视口"
+// Issue #822：子星图是正圆，内容是"内容"，不是"子视口"
+//   Embed 外壳 world 几何恒定：width === height（直径 200），radius = width / 2，
+//   任何档位都是同一颗正圆，不再有 240×220 的矩形卡片。
 //   contentViewport 内部懒加载 StarMapSceneContent（不是 StarMapScene）。
 //   子内容没有自己的 pan/zoom，也没有子视口手势状态：
 //   整棵星图只有一个全局 viewport/camera，只在根 StarMapCanvas。
 //   子星图显示多少细节是 Deep Zoom 档位：所属 Scene 的 ownerEffectiveScale
 //   （全局相机 × 祖先 local fit）+ 根视口短边算出覆盖率，档位只决定
 //   contentViewport 里渲染完整交互子内容、轻量 preview 还是只留外壳；
-//   Embed 外壳的 world 几何恒定，档位绝不写回全局相机，也不改
-//   authored position / world bounds。
-//   contentViewport 保持 clip:true，子星图节点不会跑出父 Embed 边框。
+//   档位绝不写回全局相机，也不改 Embed 的 world 几何 / authored position。
+//   contentViewport 取圆的内接正方形并保持 clip:true，子星图节点不会溢出圆外。
 //
 // 约束：
 //   - 纯 UI 组件，数据通过 property 传入
@@ -45,8 +46,6 @@ Item {
     readonly property color _surfaceContainer: dt.surfaceContainer
     readonly property color _shadowLight: dt.shadowLight
     readonly property color _textPrimary: dt.textPrimary
-    readonly property int _radiusXs: dt.radiusXs
-    readonly property int _radiusSm: dt.radiusSm
 
     // Embed 身份与数据
     property string instanceId: ""
@@ -231,9 +230,10 @@ Item {
     readonly property int _chromeHeight: 24
     readonly property int _borderSlop: 6
 
-    // Embed 独立显示尺寸常量，不再复用 node 尺寸 150×60。
-    readonly property int _embedDefaultWidth: 240
-    readonly property int _embedDefaultHeight: 220
+    // Issue #822 评论 5972215936: Embed 外壳是正圆，world 尺寸恒定（模型给
+    // 直径 200，width === height），不再有 240×220 的矩形卡片。
+    // 内容区取圆的内接正方形（再扣掉边框 slop），子内容不会溢出圆外。
+    readonly property real _contentSide: Math.max(0, (width - 2 * _borderSlop) / Math.SQRT2)
 
     // ---------------------------------------------------------------------------
     // Issue #822：Deep Zoom 显示档位（对齐 docs/starmap_viewport.md）。
@@ -301,13 +301,14 @@ Item {
     signal mouseInteracted()
 
     // ---------------------------------------------------------------------------
-    // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
+    // 内部视觉外壳：正圆。只有它承载 transform 偏移，根 Item 几何保持稳定。
+    // 档位、缩放都不改这个圆的 world 几何（直径恒定）。
     // ---------------------------------------------------------------------------
     Rectangle {
         id: visualEmbed
         anchors.fill: parent
 
-        radius: root._radiusSm
+        radius: width / 2
         color: root.isSelected ? root._surfaceContainer : root._accentSoft
         border.color: root.isSelected ? root._accent : root._border
         border.width: root.isSelected ? 2 : 1
@@ -374,8 +375,8 @@ Item {
                             "chromeRegion": "title",
                             "device": "mouse"
                         })
-                        root.itemPressed(chromeMouseTap.point.pressPosition.x,
-                                         chromeMouseTap.point.pressPosition.y)
+                        root.itemPressed(chromeMouseTap.point.scenePressPosition.x,
+                                         chromeMouseTap.point.scenePressPosition.y)
                     }
                 }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -477,8 +478,8 @@ Item {
                             "chromeRegion": "borderTop",
                             "device": "mouse"
                         })
-                        root.itemPressed(borderTopMouseTap.point.pressPosition.x,
-                                         borderTopMouseTap.point.pressPosition.y)
+                        root.itemPressed(borderTopMouseTap.point.scenePressPosition.x,
+                                         borderTopMouseTap.point.scenePressPosition.y)
                     }
                 }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -553,8 +554,8 @@ Item {
                             "chromeRegion": "borderBottom",
                             "device": "mouse"
                         })
-                        root.itemPressed(borderBottomMouseTap.point.pressPosition.x,
-                                         borderBottomMouseTap.point.pressPosition.y)
+                        root.itemPressed(borderBottomMouseTap.point.scenePressPosition.x,
+                                         borderBottomMouseTap.point.scenePressPosition.y)
                     }
                 }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -629,8 +630,8 @@ Item {
                             "chromeRegion": "borderLeft",
                             "device": "mouse"
                         })
-                        root.itemPressed(borderLeftMouseTap.point.pressPosition.x,
-                                         borderLeftMouseTap.point.pressPosition.y)
+                        root.itemPressed(borderLeftMouseTap.point.scenePressPosition.x,
+                                         borderLeftMouseTap.point.scenePressPosition.y)
                     }
                 }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -705,8 +706,8 @@ Item {
                             "chromeRegion": "borderRight",
                             "device": "mouse"
                         })
-                        root.itemPressed(borderRightMouseTap.point.pressPosition.x,
-                                         borderRightMouseTap.point.pressPosition.y)
+                        root.itemPressed(borderRightMouseTap.point.scenePressPosition.x,
+                                         borderRightMouseTap.point.scenePressPosition.y)
                     }
                 }
                 onSingleTapped: root.clicked(root.instanceId)
@@ -760,17 +761,17 @@ Item {
         }
 
         // ── contentViewport ──
-        // 中间区域，父 Embed 不挂 TapHandler/DragHandler/MouseArea，
-        // 事件直接给子星图内容。clip 保留，子星图节点不会跑出父 Embed 边框。
+        // 圆的内接正方形：子内容完全落在圆形外壳内，不会从圆边溢出。
+        // 父 Embed 不挂 TapHandler/DragHandler/MouseArea，事件直接给子星图内容；
+        // clip 保留，子星图节点不会跑出这块内容区。
         //
         // 唯一允许的 handler 是 passive grab 的 PointHandler，它只观察 press 并记录
         // embed_child_content_routed 边界日志，不拦截事件。
         Item {
             id: contentViewport
-            anchors.left: borderLeft.right
-            anchors.right: borderRight.left
-            anchors.top: titleBar.bottom
-            anchors.bottom: borderBottom.top
+            width: root._contentSide
+            height: root._contentSide
+            anchors.centerIn: parent
             clip: true
 
             // embed_child_content_routed 边界日志。

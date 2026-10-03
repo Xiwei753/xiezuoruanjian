@@ -34,17 +34,16 @@ QtObject {
     property var selectionController: null
     property string pathKey: "root"
 
-    // Issue #805 评论 5908703621 问题 3：Embed chrome 命中区域几何常量。
-    // 与 StarMapEmbed.qml 的 _chromeHeight / _borderSlop 保持一致。
-    // findEmbedChromeAt 只判断标题条 + 四条 border，内部矩形返回 null。
+    // Issue #805 评论 5908703621 问题 3 / #822 评论 5972215936：Embed chrome
+    // 命中区域几何常量。与 StarMapEmbed.qml 的 _chromeHeight / _borderSlop 保持一致。
+    // 圆内只有顶部标题带 + 圆周边框算 chrome，圆内其余区域返回 null（childContent）。
     readonly property int _chromeHeight: 24
     readonly property int _borderSlop: 6
 
-    // Issue #814 评论 5935285879: Embed 独立显示尺寸常量，不再复用 node 尺寸 150×60。
-    // 与 StarMapEmbed.qml 的 _embedDefaultWidth/Height 保持一致。内容区（标题 24px、
-    // 底边 6px 后）要有足够高度容纳子画布。
-    readonly property int _embedDefaultWidth: 240
-    readonly property int _embedDefaultHeight: 220
+    // Issue #822 评论 5972215936: Embed 外壳是正圆，world 尺寸恒定 = 直径 200，
+    // 与 docs/starmap_viewport.md 的 DEFAULT_EMBED_DIAMETER 同值。
+    // 不再有 240×220 的矩形卡片尺寸：档位只改渲染细节，不改外壳几何。
+    readonly property int _embedDiameter: 200
 
     signal graphChanged()
     signal selectionCleared()
@@ -120,8 +119,8 @@ QtObject {
                     label: gn.title || qsTr("未命名"),
                     x: pos.x,
                     y: pos.y,
-                    width: _embedDefaultWidth,
-                    height: _embedDefaultHeight,
+                    width: _embedDiameter,
+                    height: _embedDiameter,
                     hostPath: null
                 });
             } else {
@@ -163,8 +162,8 @@ QtObject {
                 label: gem.label || qsTr("未命名"),
                 x: epos.x,
                 y: epos.y,
-                width: _embedDefaultWidth,
-                height: _embedDefaultHeight,
+                width: _embedDiameter,
+                height: _embedDiameter,
                 hostPath: gem.hostPath || null
             });
         }
@@ -280,47 +279,60 @@ QtObject {
         }
     }
 
-    // Issue #805 评论 5908703621 问题 3：findEmbedChromeAt 只判断 chrome 命中区域
-    // （标题条矩形 + 四条 border 矩形），内部矩形返回 null。
-    // 父 Canvas 不再把整个 Embed 矩形判成命中，内部事件不会被父场景截走。
+    // Issue #822 评论 5972215936：Embed 是正圆，命中先做圆内判定：
+    // 圆外哪怕还在外接矩形里，也必须继续判为空白 / 下面的对象。
+    // 圆内再分：顶部标题带、圆周边框 → chrome；其余圆内区域 → childContent。
     // 纯本地几何判断，不需要后端。
-    function _rectContains(rx, ry, rw, rh, px, py) {
-        return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh
+    function _embedCircle(em) {
+        return {
+            cx: em.x + em.width / 2,
+            cy: em.y + em.height / 2,
+            radius: Math.min(em.width, em.height) / 2
+        }
     }
 
+    function _insideEmbedCircle(em, wx, wy) {
+        var c = _embedCircle(em)
+        var dx = wx - c.cx
+        var dy = wy - c.cy
+        return dx * dx + dy * dy <= c.radius * c.radius
+    }
+
+    // 圆周边框：由内半径到圆边之间的一圈（不是外接矩形的四条边）。
+    function _insideEmbedBorderRing(em, wx, wy) {
+        var c = _embedCircle(em)
+        var dx = wx - c.cx
+        var dy = wy - c.cy
+        var inner = c.radius - _borderSlop
+        return dx * dx + dy * dy >= inner * inner
+    }
+
+    // findEmbedChromeAt 只判断 chrome 命中区域（顶部标题带 + 圆周边框），
+    // 圆内其余区域返回 null。父 Canvas 不再把整个 Embed 矩形判成命中。
     function findEmbedChromeAt(wx, wy) {
         for (var i = 0; i < embedsModel.length; i++) {
             var em = embedsModel[i]
-            // 标题条矩形（顶部 _chromeHeight 高度）
-            if (_rectContains(em.x, em.y, em.width, _chromeHeight, wx, wy)) return em
-            // borderTop
-            if (_rectContains(em.x, em.y, em.width, _borderSlop, wx, wy)) return em
-            // borderBottom
-            if (_rectContains(em.x, em.y + em.height - _borderSlop, em.width, _borderSlop, wx, wy)) return em
-            // borderLeft（标题条下方到 borderBottom 上方）
-            if (_rectContains(em.x, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) return em
-            // borderRight
-            if (_rectContains(em.x + em.width - _borderSlop, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) return em
+            if (!_insideEmbedCircle(em, wx, wy)) continue
+            // 顶部标题带（圆内、从圆顶往下 _chromeHeight 高）
+            if (wy <= em.y + _chromeHeight) return em
+            // 圆周边框
+            if (_insideEmbedBorderRing(em, wx, wy)) return em
         }
         return null
     }
 
-    // Issue #814 评论 5945557717 问题 1: findEmbedContentAt 判断"整个 Embed
-    // 矩形内、但不在 chrome 的区域"——即子星图 contentViewport 的命中区域。
+    // Issue #814 评论 5945557717 问题 1: findEmbedContentAt 判断"圆内、
+    // 但不在 chrome 的区域"——即子星图 contentViewport 的命中区域。
     // 父 Scene 的 pointer_press 据此把合法的子场景内部点击记成 childContent，
     // 不再冒充 empty（empty 应只表示坐标/命中错误）。带 instanceId。
     // 纯本地几何判断，不需要后端。
     function findEmbedContentAt(wx, wy) {
         for (var i = 0; i < embedsModel.length; i++) {
             var em = embedsModel[i]
-            // 先要求落在整个 Embed 矩形内
-            if (!_rectContains(em.x, em.y, em.width, em.height, wx, wy)) continue
-            // 排除 chrome 区域（标题条 + 四条 border），命中 chrome 不算 content
-            if (_rectContains(em.x, em.y, em.width, _chromeHeight, wx, wy)) continue
-            if (_rectContains(em.x, em.y, em.width, _borderSlop, wx, wy)) continue
-            if (_rectContains(em.x, em.y + em.height - _borderSlop, em.width, _borderSlop, wx, wy)) continue
-            if (_rectContains(em.x, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) continue
-            if (_rectContains(em.x + em.width - _borderSlop, em.y + _chromeHeight, _borderSlop, em.height - _chromeHeight - _borderSlop, wx, wy)) continue
+            if (!_insideEmbedCircle(em, wx, wy)) continue
+            // 排除 chrome 区域（顶部标题带 + 圆周边框），命中 chrome 不算 content
+            if (wy <= em.y + _chromeHeight) continue
+            if (_insideEmbedBorderRing(em, wx, wy)) continue
             return em
         }
         return null

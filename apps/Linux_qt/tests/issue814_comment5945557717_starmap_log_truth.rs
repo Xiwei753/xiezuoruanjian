@@ -39,10 +39,11 @@ fn controller_has_find_embed_content_at() {
     let src = read_src(CONTROLLER);
     let window = function_window(&src, "function findEmbedContentAt(", 1300);
     assert!(
-        window.contains("_rectContains(em.x, em.y, em.width, em.height, wx, wy)")
+        window.contains("_insideEmbedCircle(em, wx, wy)")
             && window.contains("_chromeHeight")
-            && window.contains("_borderSlop"),
-        "findEmbedContentAt 必须判断整个 Embed 矩形内、排除 chrome 区域，实际窗口:\n{window}"
+            && window.contains("_insideEmbedBorderRing(em, wx, wy)"),
+        "findEmbedContentAt 必须先做圆内判定，再排除 chrome（标题带 + 圆周环），\
+         实际窗口:\n{window}"
     );
     // 必须返回 embed 对象（带 instanceId），不是只返回布尔
     assert!(

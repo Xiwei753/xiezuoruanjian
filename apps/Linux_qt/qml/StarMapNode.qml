@@ -216,8 +216,10 @@ Item {
             if (pressed) {
                 // Issue #801 评论 5894981235: 鼠标按下即通知归属层切回鼠标模式。
                 root.mouseInteracted()
-                root.itemPressed(nodeMouseTap.point.pressPosition.x,
-                                  nodeMouseTap.point.pressPosition.y)
+                // 传真正的 QQuickWindow 坐标：pressPosition 是相对 Handler parent
+                // 的局部坐标，scenePressPosition 才是 scene 坐标。
+                root.itemPressed(nodeMouseTap.point.scenePressPosition.x,
+                                  nodeMouseTap.point.scenePressPosition.y)
             }
         }
 

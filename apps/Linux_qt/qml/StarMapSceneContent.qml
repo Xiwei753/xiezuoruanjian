@@ -20,7 +20,7 @@
 //   - scene 坐标 = 根 Content 的局部坐标（整棵递归树的顶层 world 坐标）。
 //     sceneToLocal / localToScene 一律用 Qt 真实 Item 映射
 //     （worldLayer.mapFromItem/mapToItem(rootContent)）换算：contentViewport 的
-//     边框偏移、每层 local fit、祖先位置全部自动进入同一条坐标链，
+//     布局偏移、每层 local fit、祖先位置全部自动进入同一条坐标链，
 //     不再手工维护 sceneOrigin/sceneScale 矩阵。
 //   - Qt scene 坐标（QQuickWindow 坐标）只出现在 delegate 上抛的信号里，
 //     进来立刻用 mapFromItem 换算掉，不往状态机里存。
@@ -120,8 +120,9 @@ Item {
 
     // ── 坐标换算：只认 Qt 真实 Item 映射 ──
     // scene 坐标 = 根 Content 局部坐标；本层局部坐标 = worldLayer 里的 authored
-    // 坐标。contentViewport 的边框偏移（6/24）、每层 local fit、祖先 Embed 的
-    // 实际变换都在 mapFromItem/mapToItem 里自动算完，不再手工维护矩阵。
+    // 坐标。contentViewport 的布局偏移（子内容区现在是圆的内接正方形）、每层
+    // local fit、祖先 Embed 的实际变换都在 mapFromItem/mapToItem 里自动算完，
+    // 不再手工维护矩阵，也不手抄任何偏移常量。
     function sceneToLocal(sceneX, sceneY) {
         return worldLayer.mapFromItem(rootContent, sceneX, sceneY)
     }
@@ -131,10 +132,20 @@ Item {
 
     // Qt scene（窗口）坐标增量 → 本层局部坐标增量。
     // mapFromItem 只能映射点，不能映射增量；映射两个点再相减。
-    // 这是整条手势链上唯一一次 Qt scene → 本层 local 的换算。
+    // 这是拖动 move 路径上唯一一次 Qt scene → 本层 local 的换算。
     function qtSceneDeltaToLocal(dx, dy) {
         var origin = worldLayer.mapFromItem(null, 0, 0)
         var point = worldLayer.mapFromItem(null, dx, dy)
+        return { x: point.x - origin.x, y: point.y - origin.y }
+    }
+
+    // Qt scene（窗口）坐标增量 → root-world（scene 坐标）增量。
+    // connect / contextPending 的端点存的是 scene 坐标，必须吃这一份换算：
+    // 原始像素直接加到 root-world 上会随全局缩放漂移（zoom=2 时多走一倍）。
+    // 拖动阈值仍吃原始像素，两个口径分开，不混用。
+    function qtSceneDeltaToRootScene(dx, dy) {
+        var origin = rootContent.mapFromItem(null, 0, 0)
+        var point = rootContent.mapFromItem(null, dx, dy)
         return { x: point.x - origin.x, y: point.y - origin.y }
     }
 
@@ -214,8 +225,12 @@ Item {
     }
 
     // 本层局部适配或尺寸变化：子 Embed 据此重算懒加载裁剪。
+    // offset 也是真实显示变换：内容整体平移时 scale/宽高可能不变，只有 offset 变，
+    // 漏掉它就等于子层投影位置变化不通知，懒加载可见性停在旧位置。
     signal transformChanged()
     onLocalFitScaleChanged: transformChanged()
+    onLocalFitOffsetXChanged: transformChanged()
+    onLocalFitOffsetYChanged: transformChanged()
     onWidthChanged: transformChanged()
     onHeightChanged: transformChanged()
     Connections {
@@ -591,17 +606,21 @@ Item {
             return true
         }
         if (ic.pointerMode === "contextPending") {
-            // 长按后拖动：connect 端点存 scene 坐标，原始 Qt scene 增量直接累加；
-            // 转 connect 的阈值同样吃原始像素，与鼠标仲裁同一口径。
-            ic.connectMouseX += dxQtScene
-            ic.connectMouseY += dyQtScene
+            // 长按后拖动：端点存 scene 坐标，必须累加 root-world 增量；
+            // 转 connect 的阈值继续吃原始屏幕像素，两个口径分开。
+            var contextDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
+            ic.connectMouseX += contextDelta.x
+            ic.connectMouseY += contextDelta.y
             ic.noteDragDelta(dxQtScene, dyQtScene)
             if (ic.pressDragDistance > ic.moveThreshold)
                 ic.contextPendingToConnect()
             return true
         }
-        // connect：预览线终点是 scene 坐标，原始 Qt scene 增量直接累加。
-        ic.updateConnect(ic.connectMouseX + dxQtScene, ic.connectMouseY + dyQtScene)
+        // connect：预览线终点是 scene 坐标，只能累加 root-world 增量；
+        // 直接把屏幕像素加进 scene 坐标会随全局缩放漂移。
+        var connectDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
+        ic.updateConnect(ic.connectMouseX + connectDelta.x,
+                         ic.connectMouseY + connectDelta.y)
         return true
     }
 
@@ -956,7 +975,11 @@ Item {
                 var embeds = graphController.embedsModel
                 for (var j = 0; j < embeds.length; j++) {
                     var e = embeds[j]
-                    roundedRectPath(e.x, e.y, e.width, e.height, content._radiusSm)
+                    // 子星图身份是正圆：和 interactive 档同一形状、同一颜色，
+                    // 不因为掉档就从圆变成长方形卡片。
+                    ctx.beginPath()
+                    ctx.arc(e.x + e.width / 2, e.y + e.height / 2,
+                            Math.min(e.width, e.height) / 2, 0, 2 * Math.PI)
                     ctx.fillStyle = content._accentSoft
                     ctx.strokeStyle = content._border
                     ctx.fill()

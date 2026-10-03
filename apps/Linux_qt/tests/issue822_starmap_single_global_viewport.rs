@@ -47,6 +47,7 @@ const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 const INTERACTION: &str = "qml/StarMapInteractionController.qml";
+const CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
 const MAIN_RS: &str = "src/main.rs";
 const BUILD_RS: &str = "build.rs";
@@ -174,10 +175,14 @@ fn only_root_canvas_owns_the_camera_properties() {
 #[test]
 fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
     let src = read_src(CANVAS);
-    let zoom = function_window(&src, "function zoomAround(", 500);
+    let zoom = function_window(&src, "function zoomAround(", 600);
     assert!(
         zoom.contains("zoomLevel = target") && zoom.contains("applyPan("),
         "zoomAround 必须是唯一缩放入口，内部改根 zoomLevel 并 applyPan，实际窗口:\n{zoom}"
+    );
+    assert!(
+        zoom.contains("Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, nextZoom))"),
+        "zoomAround 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），实际窗口:\n{zoom}"
     );
 
     // 滚轮与捏合与 +/- 按钮都必须走同一个入口。
@@ -186,13 +191,57 @@ fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
         "sceneWheel 必须调 zoomAround，不能自己换算 panX/panY"
     );
     assert!(
-        count_occurrences(&src, "applyPan(\n                    screenX - (screenX - panX)")
-            + count_occurrences(&src, "applyPan(cx - (cx - _pinchStartPanX)") >= 1,
-        "zoomAround 内部与 canvasPinch 都必须以手势中心缩放"
+        src.contains("zoomAround(cx, cy, _pinchStartZoom * activeScale)"),
+        "canvasPinch 必须走 zoomAround 统一夹取/以中心缩放，不再自己写第二套 pan 公式"
     );
     assert!(
         count_occurrences(&src, "onClicked: zoomAround(") == 2,
         "触屏 +/- 两个按钮都必须调 zoomAround，不能直接写 zoomLevel"
+    );
+}
+
+/// 相机范围跟 docs/starmap_viewport.md：只保留数值安全边界 + 乘法步进。
+/// 旧的 0.35~2.5 硬上限会让 1080 高窗口里的子星图永远停在 preview（进不了 interactive）。
+#[test]
+fn camera_range_and_steps_follow_the_shared_viewport_spec() {
+    let src = read_src(CANVAS);
+    for constant in [
+        "readonly property real _cameraScaleMin: 1e-4",
+        "readonly property real _cameraScaleMax: 1e5",
+        "readonly property real _zoomFactor: 1.2",
+    ] {
+        assert!(
+            src.contains(constant),
+            "相机常量必须与 docs/starmap_viewport.md 一致：缺 {constant}"
+        );
+    }
+
+    let stripped = strip_line_comments(&src);
+    for forbidden in [
+        "Math.max(0.35",
+        "Math.min(2.5",
+        "zoomLevel + 0.15",
+        "zoomLevel - 0.15",
+    ] {
+        assert!(
+            !stripped.contains(forbidden),
+            "不得再保留旧的产品硬上限/加法步进：{forbidden}"
+        );
+    }
+    let wheel = function_window(&stripped, "onWheel: function(event)", 700);
+    assert!(
+        wheel.contains("oldZoom * Math.pow(_zoomFactor, delta)"),
+        "滚轮必须乘法步进，实际窗口:\n{wheel}"
+    );
+    assert_eq!(
+        count_occurrences(&stripped, "zoomLevel * _zoomFactor"),
+        1,
+        "+ 按钮必须乘法步进"
+    );
+    assert_eq!(
+        count_occurrences(&stripped, "zoomLevel / _zoomFactor"),
+        1,
+        "− 按钮必须乘法步进"
     );
 }
 
@@ -1019,5 +1068,159 @@ fn preview_detail_renders_static_projection_and_passes_hits_through() {
         count_occurrences(&content, "model: content.renderDetail === \"interactive\" ?"),
         2,
         "preview 档不得实例化节点/Embed delegate"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 11. connect 端点：屏幕像素 vs root-world 增量两个口径分开
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 拖动阈值吃原始 Qt scene 像素；connect/contextPending 的端点存 scene 坐标，
+/// 只能累加 qtSceneDeltaToRootScene() 的结果。把屏幕像素直接加到 root-world
+/// 上会随全局缩放漂移（zoom=2 时端点多走一倍）。
+#[test]
+fn connect_endpoints_accumulate_root_world_delta_not_screen_pixels() {
+    let src = strip_line_comments(&read_src(CONTENT));
+    let convert = function_window(&src, "function qtSceneDeltaToRootScene(", 400);
+    assert!(
+        convert.contains("rootContent.mapFromItem(null, 0, 0)")
+            && convert.contains("rootContent.mapFromItem(null, dx, dy)")
+            && convert.contains("point.x - origin.x"),
+        "qtSceneDeltaToRootScene 必须用 rootContent 的真实 Item 映射做两点差分，\
+         实际窗口:\n{convert}"
+    );
+
+    let delta = function_window(&src, "function onSceneDragDelta(", 3200);
+    assert!(
+        delta.contains("ic.noteDragDelta(dxQtScene, dyQtScene)"),
+        "拖动阈值必须继续吃原始 Qt scene 像素，实际窗口:\n{delta}"
+    );
+    assert!(
+        delta.contains("var contextDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)")
+            && delta.contains("ic.connectMouseX += contextDelta.x")
+            && delta.contains("ic.connectMouseY += contextDelta.y"),
+        "contextPending 端点必须累加 root-world 增量，实际窗口:\n{delta}"
+    );
+    assert!(
+        delta.contains("var connectDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)")
+            && delta.contains("ic.updateConnect(ic.connectMouseX + connectDelta.x,")
+            && delta.contains("ic.connectMouseY + connectDelta.y)"),
+        "connect 端点必须累加 root-world 增量，实际窗口:\n{delta}"
+    );
+    assert!(
+        !delta.contains("ic.connectMouseX += dxQtScene")
+            && !delta.contains("ic.connectMouseY += dyQtScene"),
+        "不得再把屏幕像素直接加到 root-world 端点上，实际窗口:\n{delta}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 12. local fit offset 变化也要通知子层；按下归属用真正的 scene 坐标
+// ─────────────────────────────────────────────────────────────────────────
+
+/// offset 也是真实显示变换：内容整体平移时 scale/宽高可能不变，
+/// 只有 offset 变；漏掉它子层投影位置变化就收不到通知。
+#[test]
+fn local_fit_offset_changes_notify_transform_changed() {
+    let src = strip_line_comments(&read_src(CONTENT));
+    let transforms = function_window(&src, "signal transformChanged()", 400);
+    for handler in [
+        "onLocalFitScaleChanged: transformChanged()",
+        "onLocalFitOffsetXChanged: transformChanged()",
+        "onLocalFitOffsetYChanged: transformChanged()",
+        "onWidthChanged: transformChanged()",
+        "onHeightChanged: transformChanged()",
+    ] {
+        assert!(
+            transforms.contains(handler),
+            "显示变换变化必须通知子层重算懒加载裁剪：缺 {handler}，实际窗口:\n{transforms}"
+        );
+    }
+}
+
+/// Qt 的 pressPosition 是相对 Handler parent 的局部坐标，
+/// 真正相对 QQuickWindow 的是 scenePressPosition；归属层只接 scene 坐标。
+#[test]
+fn press_handlers_pass_true_scene_coordinates() {
+    let node = strip_line_comments(&read_src(NODE));
+    assert!(
+        node.contains("nodeMouseTap.point.scenePressPosition.x")
+            && node.contains("nodeMouseTap.point.scenePressPosition.y"),
+        "Node 的按下归属必须用 scenePressPosition，实际源码缺少"
+    );
+
+    let embed = strip_line_comments(&read_src(EMBED));
+    assert_eq!(
+        count_occurrences(&embed, ".point.scenePressPosition.x"),
+        5,
+        "标题 + 四条边框共 5 个 chrome 命中都必须用 scenePressPosition"
+    );
+    assert_eq!(
+        count_occurrences(&embed, ".point.scenePressPosition.y"),
+        5,
+        "标题 + 四条边框共 5 个 chrome 命中都必须用 scenePressPosition"
+    );
+    for (rel, src) in [(NODE, &node), (EMBED, &embed)] {
+        assert!(
+            !src.contains("point.pressPosition"),
+            "{rel} 不得再把 Handler 局部 pressPosition 当 scene 坐标传出去"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 13. Embed 是正圆：圆外但落在外接矩形里的点不能命中 Embed
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Embed 外壳 world 几何恒定 = 直径 200 的正圆；命中先做圆内判定，
+/// 圆外即使还在外接矩形里也必须继续判为空白/下面的对象。
+#[test]
+fn embed_hit_testing_is_circular() {
+    let src = strip_line_comments(&read_src(CONTROLLER));
+
+    let circle = function_window(&src, "function _insideEmbedCircle(", 400);
+    assert!(
+        circle.contains("dx * dx + dy * dy <= c.radius * c.radius"),
+        "圆内判定必须是 dx² + dy² <= r²，实际窗口:\n{circle}"
+    );
+    let ring = function_window(&src, "function _insideEmbedBorderRing(", 400);
+    assert!(
+        ring.contains("var inner = c.radius - _borderSlop")
+            && ring.contains("dx * dx + dy * dy >= inner * inner"),
+        "圆周边框必须是内半径到圆边的一圈，实际窗口:\n{ring}"
+    );
+
+    let chrome = function_window(&src, "function findEmbedChromeAt(", 900);
+    assert!(
+        chrome.contains("if (!_insideEmbedCircle(em, wx, wy)) continue")
+            && chrome.contains("wy <= em.y + _chromeHeight")
+            && chrome.contains("if (_insideEmbedBorderRing(em, wx, wy)) return em"),
+        "findEmbedChromeAt 必须先做圆内判定，再分标题带/圆周环，实际窗口:\n{chrome}"
+    );
+    let content = function_window(&src, "function findEmbedContentAt(", 1200);
+    assert!(
+        content.contains("if (!_insideEmbedCircle(em, wx, wy)) continue")
+            && content.contains("wy <= em.y + _chromeHeight")
+            && content.contains("if (_insideEmbedBorderRing(em, wx, wy)) continue"),
+        "findEmbedContentAt 必须先做圆内判定，再排除标题带/圆周环，实际窗口:\n{content}"
+    );
+
+    // 旧的外接矩形整框命中必须整体消失：圆外不再有任何命中路径。
+    assert!(
+        !src.contains("_rectContains"),
+        "不得再用外接矩形 _rectContains 当 Embed 命中真相"
+    );
+    assert!(
+        !src.contains("_insideEmbedCircle(em, wx, wy) || "),
+        "圆内判定不得被短路绕过"
+    );
+
+    // 预览档也要画圆，不能把子星图画回长方形卡片。
+    let content_src = strip_line_comments(&read_src(CONTENT));
+    let preview = function_window(&content_src, "id: previewCanvas", 3000);
+    assert!(
+        preview.contains("ctx.arc(e.x + e.width / 2, e.y + e.height / 2,")
+            && preview.contains("Math.min(e.width, e.height) / 2"),
+        "preview 档的 Embed 必须用 ctx.arc 画正圆，实际窗口:\n{preview}"
     );
 }
