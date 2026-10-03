@@ -151,7 +151,7 @@ export struct StarMapEmbedPreview {
       const result = await this.bridge.getStarMapGraph(this.finalStarmapId)
       if (result.success && result.data) {
         this.childGraph = result.data
-        this.recomputePreviewGeometry()
+        this.refreshPreview()
       }
     } catch (err) {
       // preview 失败不外显：外壳还是那颗圆壳，只是里面空着。
@@ -162,10 +162,30 @@ export struct StarMapEmbedPreview {
   // ─── 几何 ───
 
   /**
+   * 几何刷新与重绘的唯一出口（#821 复审）。
+   *
+   * 为什么必须有这个出口：子 graph 是**异步**读的，Canvas 的 `onReady` 只在
+   * "画布可以绘制"时触发一次，它不是数据变化后的重绘回调。两条时序都真实存在：
+   * - Canvas 先 ready、graph 后到 → onReady 画了一张空图，之后没人再画一次；
+   * - graph 先到、Canvas 后 ready → onReady 那一次刚好画上最新几何。
+   *
+   * 所以几何更新和 redraw 必须收口到同一个函数，两种时序都补得上；
+   * 空 graph / 空 bounds 分支也走这里，否则旧画面会残留在圆里。
+   */
+  private refreshPreview(): void {
+    this.recomputePreviewGeometry()
+    if (this.canvasReady) {
+      this.drawPreview()
+    }
+  }
+
+  /**
    * 用和 interactive 层同一套只读几何重建缩略图。
    *
    * local fit 的可用区同样走 computeEmbedInnerContentSafeSide：子图内容不会压到
    * 父圆的标题带与圆环上，缩略图和真实子星图的"留白观感"一致。
+   *
+   * 只算几何、不画：绘制统一由 refreshPreview 触发（见那里的时序说明）。
    */
   private recomputePreviewGeometry(): void {
     const graph: StarMapGraph | null = this.childGraph
@@ -337,7 +357,7 @@ export struct StarMapEmbedPreview {
       .hitTestBehavior(HitTestMode.None)
       .onReady(() => {
         this.canvasReady = true
-        this.drawPreview()
+        this.refreshPreview()
       })
   }
 }

@@ -3150,8 +3150,17 @@ console.log('35. 输入节点 id 与 onChildTouchTest：命中的子图继续参
     'onTouchIntercept 不再把标题热区乘 viewportScaleValue（那一层坐标已经是屏幕 vp）')
   assert(!/EMBED_BORDER_HIT_WIDTH\s*\*\s*this\.viewportScaleValue\(\)/.test(interceptBody),
     'onTouchIntercept 不再把边框热区乘 viewportScaleValue')
-  assert(interceptBody.includes('embedHitMetricsForScene('),
-    '真实触摸分流与递归命中调的是同一份 embedHitMetricsForScene，不允许两套口径')
+  // #821 复审：24 / 12vp 是屏幕侧手指尺寸，组件局部坐标必须除一次累计比例。
+  // UI 侧与递归命中共用同一个 embedHitMetricsForScene，不允许再传 1 当地尺寸。
+  assert(interceptBody.includes('this.embedLocalHitMetrics(radius)'),
+    '真实触摸分流走 embedLocalHitMetrics（累计比例口径），不再硬传 scale = 1')
+  assert(!/embedHitMetricsForScene\(\s*1\s*,/.test(sceneSource),
+    'UI 侧不再出现 embedHitMetricsForScene(1, ...)：那会把 24/12vp 当成本地尺寸')
+  assert(sceneSource.includes('private embedLocalHitMetrics(radius: number): EmbedHitMetrics {') &&
+    /private embedLocalHitMetrics\(radius: number\): EmbedHitMetrics \{\s*return embedHitMetricsForScene\(this\.viewportScaleValue\(\), radius\)/.test(sceneSource),
+    'embedLocalHitMetrics 把 viewportScaleValue 交给 embedHitMetricsForScene（和 resolveRecursiveHit 同一个 scale 口径）')
+  assert(predBody.includes('this.embedLocalHitMetrics(radius)'),
+    'shouldForwardTouchToChild 与 onTouchIntercept 共用同一份局部热区口径')
   assert(sceneSource.includes('onChildTouchTest('),
     'Embed 外层 Stack 接了 onChildTouchTest，深层触点不会被触摸测试链截断')
 }
@@ -3877,6 +3886,8 @@ console.log('37g. 档位只换内部渲染器：外壳同一颗圆，不重建�
   const previewTail = previewBranch.slice(previewIdx)
   assert(previewTail.includes('.hitTestBehavior(HitTestMode.None)'),
     'preview 整块 HitTestMode.None，不抢也不挡根 Scene 的 Pinch')
+  assert(/StarMapEmbedPreview\(\{[\s\S]{0,400}bridge: this\.bridge/.test(embedItemBody),
+    'preview 拿得到 bridge：否则 aboutToAppear 直接 return，preview 永远是空圆')
 
   // 外壳几何只有一个来源，任何档位都一样
   assert(embedItemBody.includes('.width(DEFAULT_EMBED_DIAMETER)') &&
@@ -3934,6 +3945,20 @@ console.log('37g. 档位只换内部渲染器：外壳同一颗圆，不重建�
 
   // preview 是独立的轻量渲染器：固定尺寸 Canvas，不注册 Scene、不挂手势
   const previewSrc = readStarmapSource('ui/StarMapEmbedPreview.ets')
+  assert(previewSrc.includes('bridge: IWriterCoreBridge | null = null'),
+    'preview 声明了 bridge 字段')
+  assert(/async aboutToAppear\(\)[\s\S]{0,200}if \(!this\.bridge \|\| !this\.embed\.targetStarmapId\)/.test(previewSrc),
+    'preview 靠 bridge 读子星图：没有 bridge 就直接不画')
+  // Canvas onReady 是"画布可绘制"，不是数据变化后的重绘回调；
+  // 异步 graph 后到时必须有人再画一次，否则圆里永远是空的。
+  assert(previewSrc.includes('private refreshPreview(): void {') &&
+    /private refreshPreview\(\): void \{\s*this\.recomputePreviewGeometry\(\)\s*if \(this\.canvasReady\) \{\s*this\.drawPreview\(\)/.test(previewSrc),
+    '几何刷新与重绘收口到 refreshPreview 一个出口（graph 先到 / Canvas 先到两种时序都补得上）')
+  assert(previewSrc.includes('this.childGraph = result.data') &&
+    /this\.childGraph = result\.data\s*this\.refreshPreview\(\)/.test(previewSrc),
+    '异步加载子 graph 成功后走 refreshPreview，而不是只算几何不重绘')
+  assert(/onReady\(\(\) => \{\s*this\.canvasReady = true\s*this\.refreshPreview\(\)/.test(previewSrc),
+    'onReady 也走 refreshPreview：Canvas 先 ready 时先画一张空图，graph 到了会补画')
   assert(previewSrc.includes('PREVIEW_CANVAS_SIZE') &&
     previewSrc.includes('.width(PREVIEW_CANVAS_SIZE)') && previewSrc.includes('.height(PREVIEW_CANVAS_SIZE)'),
     'preview 用固定尺寸 Canvas（不按父层比例分配缓冲区）')

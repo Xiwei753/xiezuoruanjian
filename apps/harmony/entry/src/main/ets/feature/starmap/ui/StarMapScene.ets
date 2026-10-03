@@ -905,6 +905,33 @@ export struct StarMapScene {
   }
 
   /**
+   * 组件局部坐标下的 Embed 标题带 / 圆环热区规格（#821 复审）。
+   *
+   * 口径只有一条：**24vp / 12vp 是屏幕侧的手指尺寸**，任何缩放下都得是一样宽。
+   * ArkUI 给的 `touch.x / y` 和 `TouchTestInfo.x / y` 是这个组件**布局空间**的
+   * 坐标（组件尺寸恒为本地 DEFAULT_EMBED_DIAMETER，`.scale()` 不参与换算），
+   * 而本组件在屏幕上的累计比例是 `viewportScaleValue()`。所以：
+   *
+   * ```text
+   * 本地热区 = 屏幕热区 / viewportScaleValue()
+   * ```
+   *
+   * 这正是 embedHitMetricsForScene(sceneScale, radius) 干的事 —— 递归命中
+   * （resolveRecursiveHit → hitTestWithScene）传的是同一个 sceneScale。
+   * 之前 UI 侧传 1，等于把 24/12 当成本地尺寸：scale=4 时 UI 圆环在屏幕上
+   * 宽到 48vp，递归命中那边仍按 12vp 算，同一个触点两套结论，
+   * 缩放越大、层级越深偏得越远，#373 的"点标题 / 圆环选中子星图"就漂了。
+   *
+   * UI 和 Geometry 只允许有这一份口径，所以两个调用点都走它。
+   *
+   * @param radius 本组件局部坐标下的 Embed 半径（= 直径 / 2）
+   * @returns 局部坐标下的标题带高度与圆环宽度
+   */
+  private embedLocalHitMetrics(radius: number): EmbedHitMetrics {
+    return embedHitMetricsForScene(this.viewportScaleValue(), radius)
+  }
+
+  /**
    * 这颗 Embed 的内部区域是否应该继续下探到最深 child Scene（#818 复审）。
    *
    * #373 的统一输入规则在这一层落地：
@@ -931,8 +958,8 @@ export struct StarMapScene {
    * 不需要再拿任何缩放因子反推。
    *
    * 标题带与圆环的判定必须和 resolveRecursiveHit 完全一致，所以同样调
-   * embedHitMetricsForScene，不在这里再抄一份 24 / 12；这里传 1，因为
-   * x / y 是组件局部坐标，ArkUI 已经把 .scale() 一起换算掉了。
+   * embedHitMetricsForScene，不在这里再抄一份 24 / 12；累计比例统一由
+   * embedLocalHitMetrics 提供（见那里的口径说明）。
    *
    * @param child 触摸测试命中的那一个 Embed 内壳节点（ArkUI 只收命名节点）
    * @returns 命中内部就 true（可以下探），标题带 / 圆环 / 圆外都 false
@@ -954,7 +981,7 @@ export struct StarMapScene {
     if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
       return false
     }
-    const metrics: EmbedHitMetrics = embedHitMetricsForScene(1, radius)
+    const metrics: EmbedHitMetrics = this.embedLocalHitMetrics(radius)
     const dx: number = localX - radius
     const dy: number = localY - radius
     const dist: number = Math.sqrt(dx * dx + dy * dy)
@@ -2440,7 +2467,9 @@ private refitAfterContentAdded(): void {
             rootStarmapId: this.rootStarmapId,
             scenePath: this.scenePath,
             embed: embed,
-            themeConfig: this.themeConfig
+            themeConfig: this.themeConfig,
+            // preview 只读子星图也要 bridge 才画得出"里面有什么"（#821 复审）
+            bridge: this.bridge
           })
         }
         .width('100%')
@@ -2519,9 +2548,10 @@ private refitAfterContentAdded(): void {
       if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
         return HitTestMode.None
       }
-      // ArkUI 把屏幕触点换算到**组件局部坐标**（#821）：组件布局尺寸恒为
-      // DEFAULT_EMBED_DIAMETER，所以这里 1 单位 = 1 本地单位，
-      // 圆心就是 直径/2，再乘任何缩放因子都是错的。
+      // ArkUI 把屏幕触点换算到**组件布局空间**（#821 复审）：组件布局尺寸恒为
+      // DEFAULT_EMBED_DIAMETER，所以圆心就是 直径/2；但 24vp / 12vp 的热区是
+      // **屏幕侧**手指尺寸，换到本地坐标必须除一次累计比例，
+      // 口径由 embedLocalHitMetrics 统一提供，和递归命中共用同一个函数。
       const radius: number = DEFAULT_EMBED_DIAMETER / 2
       const dx: number = localX - radius
       const dy: number = localY - radius
@@ -2529,10 +2559,7 @@ private refitAfterContentAdded(): void {
       if (dist > radius) {
         return HitTestMode.None
       }
-      // 组件坐标 → 画布坐标的换算封装在 embedHitMetricsForScene 里，
-      // 和 resolveRecursiveHit 用的是同一个函数，两边不可能再各算各的。
-      // 注意这里传 1：屏幕上再大再小，这一格坐标都还是本组件的本地单位。
-      const metrics = embedHitMetricsForScene(1, radius)
+      const metrics = this.embedLocalHitMetrics(radius)
       const inTitle: boolean = localY <= metrics.titleHitHeight
       const inBorder: boolean = dist >= radius - metrics.borderHitWidth
       return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None
