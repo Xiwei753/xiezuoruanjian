@@ -76,6 +76,24 @@ coverage            = projectedDiameterVp / min(rootViewportWidth, rootViewportH
 - `preview` 整块 `HitTestMode.None`：它只回答"里面有什么"，不参与触摸竞争，
   根 Scene 的两指 Pinch 必须完整穿过它。
 
+### preview 与 interactive 是同一张图
+
+`preview` 不是"预览皮肤"，而是**同一张图的静态 Canvas 投影**：低细节用静态表示，
+放大后换成真实组件，表达的对象身份完全一致。跨过 `0.70` 时只应该"由画变组件"，
+不应该"由圆变方"或"换一套颜色"。
+
+因此所有视觉真相集中在 `ui/StarMapVisualTokens.ets`，两层都从它读：
+
+- 节点圆形色块直径 `STARMAP_NODE_GLYPH_DIAMETER`、标题字号 / 宽度 / 行高 / 间距；
+- 圆在 `160×80` 布局矩形里的显式圆心 `STARMAP_NODE_GLYPH_CENTER_X/Y`
+  （标题块高度固定，interactive 的居中排版和 preview 的手绘圆心才可能是同一个值）；
+- `starmapNodeColor(kind)`：kind → 颜色只有一张表；
+- 子 Embed 外壳底色 / 描边：和 interactive 层同取 `surfaceContainer` / `outlineVariant`；
+- `STARMAP_EMBED_FIT_PADDING_VP`：两层的 local fit 留白必须是同一个数。
+
+投影太小时可以省掉文字，但**只省文字**：节点的形状和颜色一个都不改。
+交互态装饰（选中描边、拖拽浮起阴影）属于 interactive，不画进缩略图。
+
 ## 显示变换而不是布局增长
 
 因为所有缩放都发生在**布局之后**，每个 Scene 有两个坐标口径：
@@ -139,6 +157,7 @@ ArkUI 的 `.scale()` 以组件中心缩放，所以视觉左上角 = `canvas × 
 ## 禁止路线
 
 - ❌ 用 LOD 改变对象几何（换形状、换尺寸、换 authored position）。
+- ❌ 在 preview 里另写一套"差不多像"的样式数字（形状、颜色、fit 留白、圆心位置）。
 - ❌ 把缩放乘进 `.width()/.height()/.fontSize()`（导致 RenderService 巨型缓冲）。
 - ❌ 缩放时跑碰撞规避或推开邻居（缩放不是布局变化）。
 - ❌ `opacity(0)` 假装折叠 / "先建好再缩到看不见"。
