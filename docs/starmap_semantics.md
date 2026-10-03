@@ -58,3 +58,7 @@ StarMap 不再是一个强依赖父子拥有权的嵌套树。它是一个**语�
 * **深层可达性**：Link 的目标深层路径不仅不能指向虚无，而且不能发生环路（CycleDetected）或者层级太深（TooDeep）。
 * **级联清理**：调用 `delete_starmap_node` 删除节点时，会自动级联清理连接到该节点的 Edge `from_endpoint/to_endpoint`，以及以该节点为宿主的 Embed `host_endpoint` 和 Link `source`。
 * **删除保护**：调用 `delete_starmap` 时，仅当存在**外部引用**（被其他星图引用）时才阻止删除。自身发出的内部 Link 不会阻碍自身的删除。
+
+## 相关显示规范
+
+StarMap 的 Viewport、全局 camera、Embed local fit、Visual LOD、视觉焦点和不同窗口尺寸下的递归显示规则见 [starmap_viewport.md](starmap_viewport.md)。这些都属于平台显示层，不改变本文定义的 Core 语义对象与引用关系。
