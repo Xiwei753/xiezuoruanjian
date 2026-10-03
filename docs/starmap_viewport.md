@@ -1,209 +1,146 @@
-# StarMap 视口与语义缩放规范 v1.0
-
-Status: active
-Last verified: 2026-10-03
-Truth source: product decision / platform display contract
-Related: [starmap_semantics.md](starmap_semantics.md)
+# 星图视口与 Deep Zoom
 
 ## 目标
 
-StarMap 的语义结构允许无限嵌套，但平台不需要把无限层级同时展开到屏幕上。
+Core 的星图 / 子星图是**无限层级**的树。视图层要做的是同一棵树的三件事：
 
-“当前只看到两层”只能是小视口下的视觉结果，不能成为数据层规则。不同手机、折叠屏、平板、桌面窗口，以及同一设备的横竖屏、分屏和自由窗口，都必须根据 **StarMap 当前实际可用 Viewport** 决定显示多少细节。
+1. 把任意一层的全部内容平铺进父 Scene 的可见区域（每层一次局部适配）。
+2. 让用户用一台全局相机自由缩放、平移、聚焦任意一层。
+3. 让"再往里一层"在任何缩放下都**看得见、点得到、认得出还是一颗子星图**。
+
+第 3 条是本文档的主题。#821 之前它是用"换形状"实现的（展开的圆 / 折叠的矩形摘要卡），
+代价是跨阈值时 Embed 在父 Scene 里的显示矩形会跳、子子星图失去"这是星图"的身份、
+语义缩放被布局变化污染。#821 改成真正的 Deep Zoom：**只降细节，不改几何**。
 
 ## Core 与平台边界
 
-### Core 负责
+- 子星图的嵌入关系、节点/边的 authored position、层级关系全部在 Core。
+- 平台层只负责：布局适配（把内容铺进可用区）、全局相机、Deep Zoom 细节分级、命中与手势。
+- 平台层不回写任何布局数据。缩放、平移、掉档都**不允许**改变 authored position。
+- 分辨率、屏幕尺寸、是否刘海、是否折叠屏，与"某颗 Embed 该画多少细节"的关系只有一条：
+  它通过投影覆盖率间接影响，不直接决定档位。
 
-- StarMap、Node、Embed、Link、Edge 的真实语义关系。
-- Embed 指向哪个独立 StarMap。
-- authored position 和持久化数据。
-- CRUD、引用安全、图校验。
+## 视口的定义
 
-Core 不知道以下概念：
+两个概念必须分开，之前混在一起是 #821 要修的主要问题：
 
-- 手机、平板、折叠屏、桌面。
-- 横屏、竖屏、分屏。
-- “显示两层 / 三层”。
-- 当前窗口宽高。
-- 当前 camera scale。
-- 某个 Embed 此刻是展开、折叠还是不渲染。
-- 某个子星图当前是不是视觉焦点。
+| 名称 | 含义 | 谁在改 |
+| --- | --- | --- |
+| **world 几何** | 对象在它所属那张星图里的 authored 矩形（本地 vp） | 只有 Core / 用户显式创建或移动对象时 |
+| **相机与局部适配** | world 几何怎么被搬到屏幕上 | 用户手势 / 每一层的局部 fit |
 
-### 平台显示层负责
+### 坐标链
 
-- 当前 StarMap 可用 Viewport。
-- 全局 camera。
-- 每层 Embed 的 local fit。
-- 屏幕投影尺寸。
-- Visual LOD（expanded / collapsed / hidden）。
-- 视觉焦点（focus scene）。
-- 命中测试、手势、显示几何和渲染实例生命周期。
-
-这些状态只属于当前客户端视图，不写回 Core。
-
-## Viewport 的定义
-
-Viewport 指 **StarMap 实际可绘制区域**，不是物理屏幕尺寸，也不是设备型号。
-
-顶栏、底栏、安全区或系统窗口占用后的剩余 StarMap 内容区，才是计算依据。
-
-同一台设备只要窗口大小改变，就必须重新计算视觉层级。例如：
-
-- 手机横竖屏切换。
-- 折叠屏展开 / 合拢。
-- Android / HarmonyOS 分屏或自由窗口。
-- Linux_Qt 窗口被拖大或拖小。
-
-不允许用“手机 = 两层、平板 = 三层、桌面 = 四层”作为显示规则。
-
-## 坐标与屏幕投影
-
-递归坐标变换保持以下顺序：
-
-```text
-child local
-→ parent Embed local fit
-→ 更上层 Embed local fit
-→ root world
-→ global camera
-→ screen
+```
+稳定 world geometry
+  → 每层 local fit (fitScale, fitOffset) 逐层向上
+  → root world（根 Scene 画布坐标）
+  → global camera (cameraScale, cameraOffset)
+  → screen
 ```
 
-全局 camera 只有一份。Embed 的 local fit 只负责把子图内容适配进父 Embed，不是独立用户缩放。
+其中：
 
-某个 Scene 的最终有效缩放可以表示为：
+- `effectiveScale(Scene) = globalCameraScale × 所有祖先 EmbedLocalFitScale`
+- 一层 Scene 里的对象，其**屏幕尺寸** = `world 尺寸 × effectiveScale(所属 Scene)`
 
-```text
-effectiveScale
-= globalCameraScale × 所有祖先 EmbedLocalFitScale
+### 覆盖率
+
+```
+projectedDiameterVp = DEFAULT_EMBED_DIAMETER × ownerEffectiveScale
+coverage            = projectedDiameterVp / min(rootViewportWidth, rootViewportHeight)
 ```
 
-判断一个 Embed 在屏幕上有多大时，使用 **它所属 Scene 的 effectiveScale**：
+`coverage` 是唯一的档位输入。它只看"这颗 Embed 在屏幕上到底多大"，
+不看设备类型、不看屏幕尺寸、不看绝对 vp 数。
 
-```text
-projectedEmbedSize
-= embedDisplaySize × ownerSceneEffectiveScale
-```
+## Deep Zoom 细节分级
 
-不要把这个 Embed 自己内部 child Scene 的 local fit 再乘进外壳尺寸，否则会把“容器有多大”和“容器里的内容缩了多少”混在一起。
+三档，只控制**渲染多少细节**和**是否挂载完整可交互组件**：
 
-屏幕占比统一相对于当前 Viewport：
+| 档位 | 条件 | 内部渲染器 | 可交互 |
+| --- | --- | --- | --- |
+| `interactive` | `coverage ≥ 0.70` | `StarMapEmbedScene`（递归 child Scene） | 是 |
+| `preview` | 投影直径 `≥ 48vp`（焦点链上保底） | `StarMapEmbedPreview`（固定尺寸 Canvas 缩略图） | 否 |
+| `shell` | 更小 | 无（只画圆壳） | 否 |
 
-```text
-coverage
-= projectedEmbedSize / min(viewportWidth, viewportHeight)
-```
+滞回带：进入 `interactive` 用 `0.70`，退出用 `0.60`；`preview` 进用 `48vp`，出用 `40vp`。
+中间那段不动，避免在阈值附近抖动。
 
-具体阈值属于平台显示策略，不进入 Core 数据协议。
+**硬约束（#821）：分级绝不改变 Embed 的形状、world bounds 或在父 Scene 里的 authored position。**
 
-## Visual LOD
+- 子星图在任何缩放下都是正圆，尺寸恒为 `DEFAULT_EMBED_DIAMETER × DEFAULT_EMBED_DIAMETER`，
+  圆角 = 半径。永远没有矩形摘要卡。
+- 掉档不重建任何布局矩形，不重算 fit，不写 Core。
+- 缩放只走显示变换（`.scale()`），不许把缩放乘进 `.width()/.height()/.fontSize()`。
+- `preview` 整块 `HitTestMode.None`：它只回答"里面有什么"，不参与触摸竞争，
+  根 Scene 的两指 Pinch 必须完整穿过它。
 
-每个 Embed 在当前视图中只有三种显示状态：
+## 显示变换而不是布局增长
 
-### expanded
+因为所有缩放都发生在**布局之后**，每个 Scene 有两个坐标口径：
 
-- 显示完整 Embed 外壳。
-- 实例化并渲染它的 child StarMap Scene。
-- child 内容可以继续命中、编辑和递归显示。
+- **box 坐标**：本 Scene 自己的盒子。对象布局尺寸恒为本地基准常量，
+  `.scale(boxScale)` + `.position()` 的中心补偿产生视觉位置。
+- **累计屏幕坐标**：box 坐标 × `parentScale()`。几何、命中、注册表只用这一种。
 
-### collapsed
+ArkUI 的 `.scale()` 以组件中心缩放，所以视觉左上角 = `canvas × boxScale + boxOffset`
+对应到组件 `.position()` 时必须补上 `base × (boxScale − 1) / 2`。
 
-- 显示为节点大小附近的子星图摘要。
-- 保留标题、选中态和“这是一个子星图”的视觉区别。
-- 不实例化 child StarMap Scene。
-- 整个摘要区域命中当前 Embed，不把事件继续递归给更深层。
-
-### hidden
-
-- 当前祖先已经 collapsed，或当前视觉策略明确不需要这一层。
-- 不创建对应的递归 Scene。
-- 数据仍然存在于 Core，只有当前视图没有渲染。
-
-因此“视觉两层”应当理解为：
-
-> 当前 Viewport 下，只有当前视觉焦点附近的少数层处于 expanded；更深层自动 collapsed 或 hidden。
-
-更大的 Viewport 可以自然展开更多层，小 Viewport 则自然减少展开层数。层数不是写死常量。
+对象在屏幕上显示多粗、多大，只取决于 `boxScale` 逐层连乘，等价于旧的 `effectiveScale`。
+这条不变式是 #821 的核心：显示结果和 #820 一样，但组件布局尺寸永远是本地常量，
+因此相机放到几十倍也不会让 RenderService 分配巨型缓冲。
 
 ## 视觉焦点
 
-平台可以维护：
+焦点（`focusScenePath`）是"用户当前最关心的那一层"，由覆盖率 + 圆心位置双条件驱动，
+带滞回。它只影响两件事：是否保底 `preview`、以及递归交互时的优先层。
+焦点从不改变任何几何。
 
-```text
-focusScenePath
-```
+"手机两层 / 平板三层"是深度的**结果**，不是常量：层级可见数由各层投影直径是否越过
+阈值自然决定。
 
-它表示“当前把哪一个 Scene 当作主要视觉参考”。
+## 不同屏幕尺寸
 
-focus 变化只改变显示策略，不改变图结构：
+- 屏幕变大变小只改 `min(viewportWidth, viewportHeight)`，即只改 coverage 的分母。
+- 适配尺寸只影响初始 `fitScale` 和 `fitOffset`，属于"看一眼全貌"的起点。
+- 屏幕尺寸变化不重排 authored position，不重建 Embed 矩形（#821）。
 
-- 不修改 StarMap 的真实父子 / Embed 引用。
-- 不把 child StarMap 重挂成 Core 根。
-- 不新开页面。
-- 不创建第二套 camera。
-- 不写入持久化数据。
+## 缩放后的重叠
 
-当一个子星图在屏幕上的投影已经大到足以成为主要编辑对象时，平台可以提升它为 focus；缩小后再退回父层。
+正常相机缩放**不触发任何碰撞规避、不推开邻居**。
 
-提升和退出应使用不同阈值（hysteresis），避免用户停在临界缩放附近时反复闪烁切换。
+- 稳定 world 几何 → 均匀相机变换 → 同层对象同比缩放。这才是"缩放"的语义。
+- 只有当用户真的创建、移动、缩放了某个对象的 world bounds 时，才走局部碰撞规避 / 空位选择。
+- 缩放不是布局变化。
 
-## 不同屏幕尺寸的统一规则
+## 相机范围
 
-各平台都使用同一条产品规则：
-
-> 根据当前实际 Viewport 和屏幕投影尺寸决定 Visual LOD，而不是根据设备身份决定层数。
-
-这意味着：
-
-- 小手机竖屏通常只能完整展开较少层。
-- 大手机横屏可能多展开一层。
-- 折叠屏展开后可以增加可见细节。
-- 平板大窗口可以同时展示更多递归内容。
-- Linux_Qt 全屏和窄窗口可以得到不同 LOD 结果。
-
-同一端、同一设备、同一个 StarMap，只要 Viewport 改变，视觉结果就允许改变。
-
-## Viewport 改变时的连续性
-
-窗口尺寸变化时：
-
-- 保持当前 `focusScenePath`。
-- 保持用户当前 camera 的观察位置和缩放意图。
-- 更新 viewportWidth / viewportHeight。
-- 重新计算各 Embed 的屏幕投影和 LOD。
-- 原来 collapsed 的层可以自然 expanded，原来 expanded 的层也可以自然 collapsed。
-
-不要因为窗口 resize、旋转、折叠展开就重新打开页面或重置整张星图。
+- `CAMERA_SCALE_MIN = 1e-4`，`CAMERA_SCALE_MAX = 1e5`：数值安全边界，不是产品上限。
+- 用户不该感觉到一个硬天花板。#820 的 `3` 是被"组件布局尺寸 × 缩放"逼出来的，
+  显示变换改造之后它没有理由存在。
+- 工具栏用**乘法**步进（`ZOOM_FACTOR = 1.2`），保证各档手感一致。
+- 双指捏合保持连续比例，并保持双指中心下的 world 锚点不动。
 
 ## 渲染与性能
 
-Visual LOD 必须控制真实组件实例数量，而不只是把深层内容画得更小。
-
-当 Embed 为 collapsed 或 hidden 时，不应继续递归创建它下面的完整 Scene 树。
-
-LOD 判断属于高频显示计算，平台应在本地完成；不要为了每一帧缩放跨 UniFFI 调用 Core。
+- 三档的递归深度上限由 `interactive` 档决定；`preview` 不创建 child Scene，
+  也不注册 Scene handle，所以深层内容的开销是真的降下来了。
+- `preview` 用 Canvas 一次性画出子图的节点 / 边 / 子 Embed 圆，
+  不为每个子节点创建 ArkUI 组件，不挂任何手势。
+- 边和文字的线宽 / 字号在 Canvas 里除掉累计缩放，保持屏幕上的恒定粗细。
 
 ## 跨平台一致性
 
-HarmonyOS、Android、Linux_Qt 需要遵守相同语义：
-
-- 无限嵌套属于数据能力。
-- 单一全局 camera 属于视图能力。
-- local fit 只负责容器内部适配。
-- LOD 由实际 Viewport 和屏幕投影决定。
-- focus 只是视觉参考根。
-- 深层 Scene 按需实例化。
-
-各平台可以使用不同 UI 框架和实现方式，但不能把设备类型、固定视觉层数或平台专属窗口尺寸写进 Core。
+- Core 侧的 Embed 语义、层数、authored position 在所有平台完全一致。
+- 覆盖率公式、三档阈值、滞回带是平台层共享常量，不允许各平台各写一套。
+- 平台层不得新增"折叠态矩形卡片"这类与 Android / Linux 不一致的表现。
 
 ## 禁止路线
 
-不得采用以下实现：
-
-- 在 Core 增加“手机只允许显示两层”之类的字段或规则。
-- 按设备型号判断视觉层数。
-- 给每个递归 child Scene 建立独立用户 camera。
-- 为了 focus 改写真实 StarMap / Embed 关系。
-- 所有递归层永远实例化，只靠 scale 把深层内容缩到看不清。
-- Viewport 改变后直接重置 camera 或退出当前编辑位置。
+- ❌ 用 LOD 改变对象几何（换形状、换尺寸、换 authored position）。
+- ❌ 把缩放乘进 `.width()/.height()/.fontSize()`（导致 RenderService 巨型缓冲）。
+- ❌ 缩放时跑碰撞规避或推开邻居（缩放不是布局变化）。
+- ❌ `opacity(0)` 假装折叠 / "先建好再缩到看不见"。
+- ❌ 在 Rust 内部把 DTO 转 JSON 再解析回来。
+- ❌ Core 里出现任何视口、相机、投影、缩放相关的字段。
