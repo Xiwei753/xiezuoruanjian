@@ -272,11 +272,11 @@ fn embed_does_not_self_convert_drag_delta() {
         !stripped.contains("canvasZoomLevel") && !stripped.contains("function sceneDelta("),
         "StarMapEmbed 不得再自己维护位移换算：Qt scene → 本层 local 只允许在归属层做一次"
     );
-    // 标题 + 四条边框共 5 个 DragHandler，全部原样上抛。
+    // 整颗 Embed 只有一层 chrome 输入层的一个 DragHandler，原样上抛。
     assert_eq!(
         count_occurrences(&stripped, "root.moveDelta(dx, dy)"),
-        5,
-        "5 个 DragHandler 必须统一只上抛原始 activeTranslation 增量"
+        1,
+        "chrome 输入层必须只上抛原始 activeTranslation 增量"
     );
     assert!(
         !stripped.contains("root.moveDelta(d.x, d.y)"),
@@ -324,12 +324,17 @@ fn embed_shell_is_a_circle() {
         shell.contains("radius: width / 2"),
         "Embed 外壳必须是正圆（radius = width / 2），实际窗口:\n{shell}"
     );
-    // 内容区取圆的内接正方形，子内容不溢出圆外。
+    // contentViewport 铺满整个圆盒（评论 5972557963：不再用更小的矩形制造死区），
+    // 子内容布局由安全区约束。
+    let viewport = function_window(&src, "id: contentViewport", 200);
     assert!(
-        src.contains("readonly property real _contentSide:")
-            && src.contains("width: root._contentSide")
-            && src.contains("height: root._contentSide"),
-        "contentViewport 必须取圆的内接正方形"
+        viewport.contains("anchors.fill: parent"),
+        "contentViewport 必须铺满圆盒，实际窗口:\n{viewport}"
+    );
+    assert!(
+        src.contains("function contentUsableSideNow()")
+            && src.contains("d * (1 / Math.SQRT2) - _chromeHeight - _borderSlop"),
+        "Embed 必须给子内容提供内接正方形扣交互壳的可用边长（函数现算，避免创建期旧值）"
     );
 }
 

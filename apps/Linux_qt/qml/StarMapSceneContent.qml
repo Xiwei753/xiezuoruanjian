@@ -45,6 +45,7 @@
 // =============================================================================
 
 import QtQuick
+import "StarMapPathPlanner.js" as StarMapPathPlanner
 
 Item {
     id: content
@@ -83,6 +84,13 @@ Item {
     readonly property var viewportRect: ownerSceneContent
             ? ownerSceneContent.viewportRect
             : rootViewportRect
+
+    // 子内容可用边长（由父 Embed 传入）：父圆的内接正方形扣掉交互壳。
+    // 本层再扣自己的留白得到安全区，local fit 与移动/新建 clamp 共用这一份，
+    // 不再一边按内接正方形、一边按整个圆、一边再手写边框偏移。
+    property real contentUsableSide: 0
+    readonly property real _contentSafeSide:
+        Math.max(0, contentUsableSide - _fitPadding * 2)
 
     // 根视口短边（屏幕像素）：coverage 的分母。根内容铺满全局视口，
     // 根 Content 自己的宽高就是视口尺寸。
@@ -157,6 +165,10 @@ Item {
     readonly property real _minFitScale: 0.02
     readonly property real _maxFitScale: 4.0
 
+    // 新建节点的显示尺寸（clamp 用；与 GraphController.buildModels 的显示尺寸一致）。
+    readonly property int _newNodeWidth: 150
+    readonly property int _newNodeHeight: 60
+
     readonly property var contentBounds: {
         var minX = 0
         var minY = 0
@@ -200,9 +212,12 @@ Item {
         var b = contentBounds
         if (!b || b.width <= 0 || b.height <= 0)
             return 1.0
-        var usableW = Math.max(1, content.width - _fitPadding * 2)
-        var usableH = Math.max(1, content.height - _fitPadding * 2)
-        var raw = Math.min(usableW / b.width, usableH / b.height)
+        // 可用区 = 内容安全区（圆的内接正方形扣交互壳再扣留白），
+        // 和移动/新建的 clamp 共用同一份，fit 完的内容天然在安全区内。
+        var available = _contentSafeSide
+        if (!(available > 0))
+            return 1.0
+        var raw = Math.min(available / b.width, available / b.height)
         if (!isFinite(raw) || raw <= 0)
             return _minFitScale
         return Math.max(_minFitScale, Math.min(_maxFitScale, raw))
@@ -222,6 +237,49 @@ Item {
         if (!b)
             return 0
         return content.height / 2 - (b.minY + b.maxY) / 2 * localFitScale
+    }
+
+    // 把本层 authored 坐标的矩形夹回内容安全区（与 local fit 同一份安全区）。
+    // 只对 depth > 0 的圆壳内容生效：根层是无限画布，不做约束。
+    // 返回的就是最终坐标，拖动显示与写 Core 用同一份，不再"显示一份、存另一份"。
+    function clampToContentSafeArea(x, y, width, height) {
+        if (depth === 0 || !(_contentSafeSide > 0))
+            return { x: x, y: y }
+        var fit = localFitScale > 0 ? localFitScale : 1
+        var boxSize = Math.min(content.width, content.height)
+        var center = boxSize / 2
+        var halfSafe = _contentSafeSide / 2
+        var itemWidth = width * fit
+        var itemHeight = height * fit
+        var minLeft = center - halfSafe
+        var maxLeft = center + halfSafe - itemWidth
+        var minTop = center - halfSafe
+        var maxTop = center + halfSafe - itemHeight
+        // item 比整个安全区还大时没有合法区间，退回居中（至少不会贴着一侧溢出）。
+        var left = maxLeft < minLeft
+                ? center - itemWidth / 2
+                : Math.max(minLeft, Math.min(maxLeft, x * fit + localFitOffsetX))
+        var top = maxTop < minTop
+                ? center - itemHeight / 2
+                : Math.max(minTop, Math.min(maxTop, y * fit + localFitOffsetY))
+        return { x: (left - localFitOffsetX) / fit, y: (top - localFitOffsetY) / fit }
+    }
+
+    // 当前 move 目标在模型里的显示尺寸（clamp 用）。
+    function movingItemSize() {
+        if (!interactionController)
+            return { width: 0, height: 0 }
+        var ic = interactionController
+        if (ic.pressedNodeId !== "") {
+            var node = graphController.getNode(ic.pressedNodeId)
+            if (node)
+                return { width: node.width, height: node.height }
+        } else if (ic.pressedEmbedId !== "") {
+            var embed = graphController.getEmbed(ic.pressedEmbedId)
+            if (embed)
+                return { width: embed.width, height: embed.height }
+        }
+        return { width: 0, height: 0 }
     }
 
     // 本层局部适配或尺寸变化：子 Embed 据此重算懒加载裁剪。
@@ -468,6 +526,28 @@ Item {
         return it ? it.childContent() : null
     }
 
+    // 绝对路径段 → SceneContent：从整棵递归树的根开始逐段下钻。
+    // 跨层连线的宿主就是按这条路找出来的（宿主 = 两端 Scene 的 LCA）。
+    // 段语义（enterEmbed / enterPortal 的 UI 映射）统一在 StarMapPathPlanner。
+    function findContentByPathSegments(segments) {
+        var current = rootContent ? rootContent : content
+        for (var i = 0; i < segments.length; i++) {
+            if (!current)
+                return null
+            var instanceId = StarMapPathPlanner.uiInstanceIdOfSegment(segments[i])
+            if (instanceId === "")
+                return null
+            current = current.childContentOf(instanceId)
+        }
+        return current
+    }
+
+    // 宿主图建边入口：由宿主 Content 把边交给自己的 GraphController。
+    // 跨组件不能直接摸对方的 id，所以宿主必须提供这个声明入口。
+    function commitEdgeWithPaths(fromPath, toPath) {
+        return graphController.createEdgeWithPaths(fromPath, toPath)
+    }
+
     // ---------------------------------------------------------------------------
     // 手势仲裁：全局状态机由根 Canvas 唯一创建并逐层共享。
     // 本层只负责"按下去的对象是不是我的"以及把位移换算成自己的局部坐标；
@@ -601,8 +681,15 @@ Item {
             return true
         }
         if (ic.pointerMode === "move") {
+            // 拖动候选位置先夹回内容安全区：显示的就是最终写 Core 的那一份，
+            // 节点/子星图不会被拖到圆外或压住父圆的标题/边框交互壳。
             var localDelta = qtSceneDeltaToLocal(dxQtScene, dyQtScene)
-            ic.updateMove(ic.moveX + localDelta.x, ic.moveY + localDelta.y)
+            var candidateX = ic.moveX + localDelta.x
+            var candidateY = ic.moveY + localDelta.y
+            var movingSize = movingItemSize()
+            var clamped = clampToContentSafeArea(candidateX, candidateY,
+                                                 movingSize.width, movingSize.height)
+            ic.updateMove(clamped.x, clamped.y)
             return true
         }
         if (ic.pointerMode === "contextPending") {
@@ -649,31 +736,42 @@ Item {
         var toPath = null
         var success = false
         var cancelled = true
+        var hostPathKey = ""
+        var hostStarmapId = ""
         if (hit && (hit.kind === "node" || hit.kind === "embed")) {
             var sameTarget = hit.scenePathKey === ic.connectFromScenePathKey && hit.id === fromId
             if (!sameTarget) {
                 toPath = hit.targetPath
-                // 建边由"源的归属层"执行，from/to 都是完整 StarMapTargetPathDto。
-                success = createEdgeWithPaths(fromPath, toPath)
-                cancelled = !success
+                // 宿主 = 两端所在 Scene 的最近公共祖先（照 Harmony 的规划规则）。
+                // 边的 starmapId 必须等于宿主的 finalStarmapId，segments 只保留
+                // "从宿主往下"的部分，Core 才能从宿主图自己走完。
+                var plan = StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)
+                if (plan) {
+                    var host = rootContent
+                            ? rootContent.findContentByPathSegments(plan.hostSegments)
+                            : null
+                    if (host && host.finalStarmapId !== "") {
+                        hostPathKey = host.scenePathKey
+                        hostStarmapId = host.finalStarmapId
+                        plan.from.starmapId = hostStarmapId
+                        plan.to.starmapId = hostStarmapId
+                        success = host.commitEdgeWithPaths(plan.from, plan.to)
+                        cancelled = !success
+                    }
+                }
             }
         }
         logInteraction("connect_end", fromKind, fromId, {
             "fromPath": JSON.stringify(fromPath),
             "toPath": toPath ? JSON.stringify(toPath) : "",
+            "hostPathKey": hostPathKey,
+            "hostStarmapId": hostStarmapId,
             "success": success,
             "cancel": cancelled
         })
         ic.endConnect()
         if (menuHost)
             menuHost.hideTouchPreview()
-    }
-
-    // Issue #822：建边入口保留完整路径，不退化成 nodeId-only。
-    function createEdgeWithPaths(fromPath, toPath) {
-        if (!fromPath || !toPath)
-            return false
-        return graphController.createEdgeWithPaths(fromPath, toPath)
     }
 
     function finishMove() {
@@ -762,16 +860,20 @@ Item {
         return false
     }
 
-    // 菜单归属层用：命名 → 换算到本层局部坐标 → 找不压旧节点的落点 → 写 Core。
+    // 菜单归属层用：命名 → 换算到本层局部坐标 → 找不压旧节点的落点 →
+    // 夹回内容安全区（同一个 clamp）→ 写 Core。
     function createNodeWithName(name, sceneX, sceneY) {
         var p = sceneToLocal(sceneX, sceneY)
         var spawn = findFreeSpawnPoint(p.x, p.y)
-        graphController.createNode(name, spawn.x, spawn.y)
+        var safe = clampToContentSafeArea(spawn.x, spawn.y, _newNodeWidth, _newNodeHeight)
+        graphController.createNode(name, safe.x, safe.y)
     }
     function createSubStarmapWithName(name, sceneX, sceneY) {
         var p = sceneToLocal(sceneX, sceneY)
         var spawn = findFreeSpawnPoint(p.x, p.y)
-        graphController.createSubStarmapAt(name, spawn.x, spawn.y)
+        var diameter = graphController._embedDiameter
+        var safe = clampToContentSafeArea(spawn.x, spawn.y, diameter, diameter)
+        graphController.createSubStarmapAt(name, safe.x, safe.y)
     }
 
     function updateNodeTitle(nodeId, title) { graphController.updateNode(nodeId, { title: title }) }

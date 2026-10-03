@@ -576,11 +576,12 @@ fn blank_right_click_creates_in_the_hit_layer_with_scene_to_local_conversion() {
         create_node.contains("var p = sceneToLocal(sceneX, sceneY)"),
         "归属层必须把 scene 坐标换算成本层局部坐标再写 Core，实际窗口:\n{create_node}"
     );
-    let create_sub = function_window(&src, "function createSubStarmapWithName(", 400);
+    let create_sub = function_window(&src, "function createSubStarmapWithName(", 500);
     assert!(
         create_sub.contains("var p = sceneToLocal(sceneX, sceneY)")
-            && create_sub.contains("graphController.createSubStarmapAt(name, spawn.x, spawn.y)"),
-        "新建子星图必须写归属层自己的 GraphController，实际窗口:\n{create_sub}"
+            && create_sub.contains("graphController.createSubStarmapAt(name, safe.x, safe.y)"),
+        "新建子星图必须把安全区 clamp 后的坐标写进归属层自己的 GraphController，\
+         实际窗口:\n{create_sub}"
     );
 }
 
@@ -784,18 +785,41 @@ fn connect_preview_is_one_global_overlay_line() {
 }
 
 #[test]
-fn connect_end_creates_the_edge_with_full_target_paths() {
+fn connect_end_creates_the_edge_on_the_lca_host() {
     let src = strip_line_comments(&read_src(CONTENT));
-    let finish = function_window(&src, "function finishConnect(", 1800);
+    let finish = function_window(&src, "function finishConnect(", 2800);
     assert!(
         finish.contains("rootContent.hitTargetAtScene(ic.connectMouseX, ic.connectMouseY)"),
         "连线松手必须用递归命中找到落点所在那一层，实际窗口:\n{finish}"
     );
     assert!(
-        finish.contains("toPath = hit.targetPath")
-            && finish.contains("success = createEdgeWithPaths(fromPath, toPath)"),
-        "落点必须是命中层给出的完整 targetPath，source/target 都不得退化成 nodeId-only，\
-         实际窗口:\n{finish}"
+        finish.contains("toPath = hit.targetPath"),
+        "落点必须是命中层给出的完整 targetPath，不得退化成 nodeId-only，实际窗口:\n{finish}"
+    );
+    // 宿主 = 两端 Scene 的最近公共祖先；边写进宿主图，starmapId 必须是宿主的。
+    assert!(
+        finish.contains("StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)"),
+        "建边必须先做跨层宿主规划（宿主 = 最近公共祖先），实际窗口:\n{finish}"
+    );
+    assert!(
+        finish.contains("rootContent.findContentByPathSegments(plan.hostSegments)"),
+        "必须按宿主路径段找到宿主 Content，实际窗口:\n{finish}"
+    );
+    assert!(
+        finish.contains("plan.from.starmapId = hostStarmapId")
+            && finish.contains("plan.to.starmapId = hostStarmapId"),
+        "端点 starmapId 必须等于宿主的 finalStarmapId，实际窗口:\n{finish}"
+    );
+    assert!(
+        finish.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),
+        "边必须写进宿主图的 GraphController（经宿主的 commitEdgeWithPaths 入口），\
+         不能永远写进起点那一层，实际窗口:\n{finish}"
+    );
+    let commit = function_window(&src, "function commitEdgeWithPaths(", 300);
+    assert!(
+        commit.contains("return graphController.createEdgeWithPaths(fromPath, toPath)"),
+        "宿主 Content 的 commitEdgeWithPaths 必须把边交给自己的 GraphController，\
+         实际窗口:\n{commit}"
     );
     assert!(
         finish.contains("\"success\": success"),
@@ -804,6 +828,46 @@ fn connect_end_creates_the_edge_with_full_target_paths() {
     assert!(
         finish.contains("var sameTarget =") && finish.contains("if (!sameTarget)"),
         "自连必须被拒绝，实际窗口:\n{finish}"
+    );
+}
+
+/// 跨层连线的宿主规划必须照搬 Harmony 已验证的规则：
+/// 宿主 = 两端所在 Scene 的最近公共祖先，segments 只保留从宿主往下的部分。
+#[test]
+fn path_planner_ports_harmony_lca_rules() {
+    let planner = read_src("qml/StarMapPathPlanner.js");
+    for expected in [
+        "function commonScenePathPrefix(",
+        "function resolveItemRef(",
+        "function buildTargetPathForHost(",
+        "function planCrossLayerEdge(",
+        "function uiInstanceIdOfSegment(",
+        "itemRef.scenePath.slice(hostSegments.length)",
+        "segments.slice(0, segments.length - 1)",
+        "var hostSegments = commonScenePathPrefix(from.scenePath, to.scenePath)",
+    ] {
+        assert!(
+            planner.contains(expected),
+            "StarMapPathPlanner.js 缺 {expected}：宿主必须是两端 Scene 的最近公共祖先"
+        );
+    }
+    // Embed 端点必须带最后一段 enterEmbed；node 端点不退化成 nodeId-only。
+    assert!(
+        planner.contains("last.type !== \"enterEmbed\"")
+            && planner.contains("segments.push({ type: \"enterEmbed\", instanceId: itemRef.itemId, nodeId: null })"),
+        "Embed 端点必须按 enterEmbed 段重建相对宿主的路径"
+    );
+
+    // 新资源必须进 qrc 和 rerun-if-changed 清单。
+    let main = strip_line_comments(&read_src(MAIN_RS));
+    assert!(
+        main.contains("qml/StarMapPathPlanner.js"),
+        "src/main.rs 必须注册 qml/StarMapPathPlanner.js"
+    );
+    let build = strip_line_comments(&read_src(BUILD_RS));
+    assert!(
+        build.contains("qml/StarMapPathPlanner.js"),
+        "build.rs 的 rerun-if-changed 必须包含 qml/StarMapPathPlanner.js"
     );
 }
 
@@ -1022,9 +1086,10 @@ fn local_fit_is_a_display_transform_on_world_layer() {
     assert!(
         fit.contains("if (depth === 0)")
             && fit.contains("return 1.0")
-            && fit.contains("Math.min(usableW / b.width, usableH / b.height)")
+            && fit.contains("var available = _contentSafeSide")
+            && fit.contains("Math.min(available / b.width, available / b.height)")
             && fit.contains("Math.max(_minFitScale, Math.min(_maxFitScale, raw))"),
-        "根层是相机本体不做 fit；子层按内容包围盒适配并夹在安全范围，实际窗口:\n{fit}"
+        "根层是相机本体不做 fit；子层按内容安全区适配并夹在安全范围，实际窗口:\n{fit}"
     );
 
     // 子层有效比例 = local fit × ownerSceneContent 链（globalZoom × 祖先 local fit）。
@@ -1038,9 +1103,9 @@ fn local_fit_is_a_display_transform_on_world_layer() {
     );
 
     // authored position 没有被改写：delegate 仍直接读 model 的 x/y。
+    // （新建/拖动时的安全区 clamp 是写 Core 前的约束，见 content_safe_area 守卫。）
     assert!(
-        content.contains("nodeData.x") && content.contains("embedData.x")
-            && content.contains("graphController.createNode(name, spawn.x, spawn.y)"),
+        content.contains("nodeData.x") && content.contains("embedData.x"),
         "local fit 只改显示，不得改写 authored position"
     );
 }
@@ -1140,6 +1205,7 @@ fn local_fit_offset_changes_notify_transform_changed() {
 
 /// Qt 的 pressPosition 是相对 Handler parent 的局部坐标，
 /// 真正相对 QQuickWindow 的是 scenePressPosition；归属层只接 scene 坐标。
+/// 局部 pressPosition 只允许喂给同一份圆壳几何（chromeRegionAt）。
 #[test]
 fn press_handlers_pass_true_scene_coordinates() {
     let node = strip_line_comments(&read_src(NODE));
@@ -1148,24 +1214,25 @@ fn press_handlers_pass_true_scene_coordinates() {
             && node.contains("nodeMouseTap.point.scenePressPosition.y"),
         "Node 的按下归属必须用 scenePressPosition，实际源码缺少"
     );
+    assert!(
+        !node.contains("root.itemPressed(nodeMouseTap.point.pressPosition"),
+        "Node 不得把 Handler 局部 pressPosition 当 scene 坐标传出去"
+    );
 
     let embed = strip_line_comments(&read_src(EMBED));
     assert_eq!(
-        count_occurrences(&embed, ".point.scenePressPosition.x"),
-        5,
-        "标题 + 四条边框共 5 个 chrome 命中都必须用 scenePressPosition"
+        count_occurrences(&embed, "root.itemPressed(point.scenePressPosition.x,"),
+        1,
+        "chrome 输入层的按下归属必须用 scenePressPosition 传给 itemPressed"
     );
-    assert_eq!(
-        count_occurrences(&embed, ".point.scenePressPosition.y"),
-        5,
-        "标题 + 四条边框共 5 个 chrome 命中都必须用 scenePressPosition"
+    assert!(
+        !embed.contains("root.itemPressed(point.pressPosition"),
+        "Embed 不得把 Handler 局部 pressPosition 当 scene 坐标传给 itemPressed"
     );
-    for (rel, src) in [(NODE, &node), (EMBED, &embed)] {
-        assert!(
-            !src.contains("point.pressPosition"),
-            "{rel} 不得再把 Handler 局部 pressPosition 当 scene 坐标传出去"
-        );
-    }
+    assert!(
+        embed.contains("chromeRegionAt(point.pressPosition.x, point.pressPosition.y)"),
+        "局部 pressPosition 只允许用于 chromeRegionAt 的圆壳几何判定"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1215,6 +1282,41 @@ fn embed_hit_testing_is_circular() {
         "圆内判定不得被短路绕过"
     );
 
+    // 输入层：整颗 Embed 只有一层 chrome，acceptance 用同一份圆壳几何。
+    let embed_src = strip_line_comments(&read_src(EMBED));
+    assert!(
+        embed_src.contains("id: chromeLayer")
+            && embed_src.contains("containmentMask: chromeMask")
+            && embed_src.contains("containsMode: Shape.FillContains"),
+        "chrome 输入必须只有一层，并用 Shape.contains（FillContains）决定 acceptance"
+    );
+    assert!(
+        embed_src.contains("function isChromeLocalPoint(")
+            && embed_src.contains("_insideCircleAt(")
+            && embed_src.contains("_insideRingAt("),
+        "JS 侧 chrome 判定必须和圆壳几何共用同一组常量"
+    );
+    // 四条矩形边框 + 矩形 titleBar 的 Handler 路线必须整体删除。
+    for forbidden in [
+        "id: titleBar",
+        "id: borderTop",
+        "id: borderBottom",
+        "id: borderLeft",
+        "id: borderRight",
+    ] {
+        assert!(
+            !embed_src.contains(forbidden),
+            "不得再保留矩形 chrome 命中结构 {forbidden}"
+        );
+    }
+
+    // contentViewport 铺满整个圆盒：不再用更小的矩形 Item 制造接不到事件的死区。
+    let viewport_window = function_window(&embed_src, "id: contentViewport", 200);
+    assert!(
+        viewport_window.contains("anchors.fill: parent"),
+        "contentViewport 必须铺满圆盒，实际窗口:\n{viewport_window}"
+    );
+
     // 预览档也要画圆，不能把子星图画回长方形卡片。
     let content_src = strip_line_comments(&read_src(CONTENT));
     let preview = function_window(&content_src, "id: previewCanvas", 3000);
@@ -1222,5 +1324,99 @@ fn embed_hit_testing_is_circular() {
         preview.contains("ctx.arc(e.x + e.width / 2, e.y + e.height / 2,")
             && preview.contains("Math.min(e.width, e.height) / 2"),
         "preview 档的 Embed 必须用 ctx.arc 画正圆，实际窗口:\n{preview}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 14. 网格 LOD / 按钮锚点 / 内容安全区 / 宿主连接（评论 5972557963）
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 相机放开到 1e-4 后，背景网格必须自己抬 world 间距，
+/// 屏幕上实际绘制间距不掉到亚像素，循环次数只跟屏幕尺寸有关。
+#[test]
+fn grid_lod_keeps_screen_spacing_bounded() {
+    let src = strip_line_comments(&read_src(CANVAS));
+    let grid = function_window(&src, "id: gridCanvas", 900);
+    assert!(
+        grid.contains("var worldSpacing = 50")
+            && grid.contains("while (gridSpacing < 16)")
+            && grid.contains("worldSpacing *= 5"),
+        "网格必须按 5 倍档抬 world 间距直到屏幕间距 >= 16px，实际窗口:\n{grid}"
+    );
+    assert!(
+        !grid.contains("var gridSpacing = 50 * zoomLevel\n"),
+        "不得再直接用 50 * zoomLevel 当网格间距（1e-4 时会爆）"
+    );
+}
+
+/// 触屏 +/- 的缩放锚点必须是画布中心，而不是按钮自己的宽高。
+#[test]
+fn zoom_buttons_anchor_at_canvas_center() {
+    let src = strip_line_comments(&read_src(CANVAS));
+    assert_eq!(
+        count_occurrences(&src, "zoomAround(canvasArea.width / 2, canvasArea.height / 2,"),
+        2,
+        "+/- 两个按钮都必须以画布中心为锚点"
+    );
+    assert!(
+        !src.contains("zoomAround(width / 2, height / 2,"),
+        "不得再用按钮自己的宽高当缩放锚点"
+    );
+}
+
+/// local fit 与移动/新建 clamp 必须共用同一份内容安全区：
+/// 安全区来自父圆的内接正方形扣交互壳，fit 完的内容天然合法，
+/// 拖动/新建显示的就是写进 Core 的那一份坐标。
+#[test]
+fn content_safe_area_is_shared_by_fit_move_and_create() {
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        content.contains("property real contentUsableSide: 0")
+            && content.contains("Math.max(0, contentUsableSide - _fitPadding * 2)"),
+        "内容安全区必须来自父 Embed 传入的可用边长再扣留白"
+    );
+    let fit = function_window(&content, "readonly property real localFitScale:", 900);
+    assert!(
+        fit.contains("var available = _contentSafeSide"),
+        "local fit 必须用同一份内容安全区，实际窗口:\n{fit}"
+    );
+    let clamp = function_window(&content, "function clampToContentSafeArea(", 1200);
+    assert!(
+        clamp.contains("var halfSafe = _contentSafeSide / 2")
+            && clamp.contains("Math.max(minLeft, Math.min(maxLeft, x * fit + localFitOffsetX))"),
+        "clamp 必须和 local fit 用同一个安全区与比例，实际窗口:\n{clamp}"
+    );
+
+    // 拖动与新建都要过 clamp。
+    let delta = function_window(&content, "function onSceneDragDelta(", 3200);
+    assert!(
+        delta.contains("var clamped = clampToContentSafeArea(candidateX, candidateY,")
+            && delta.contains("ic.updateMove(clamped.x, clamped.y)"),
+        "拖动候选位置必须先夹回安全区再显示/提交，实际窗口:\n{delta}"
+    );
+    let create_node = function_window(&content, "function createNodeWithName(", 500);
+    assert!(
+        create_node.contains("clampToContentSafeArea(spawn.x, spawn.y, _newNodeWidth, _newNodeHeight)")
+            && create_node.contains("graphController.createNode(name, safe.x, safe.y)"),
+        "新建节点必须走同一个 clamp 再写 Core，实际窗口:\n{create_node}"
+    );
+    let create_sub = function_window(&content, "function createSubStarmapWithName(", 500);
+    assert!(
+        create_sub.contains("var diameter = graphController._embedDiameter")
+            && create_sub.contains("clampToContentSafeArea(spawn.x, spawn.y, diameter, diameter)"),
+        "新建子星图必须按直径走同一个 clamp，实际窗口:\n{create_sub}"
+    );
+
+    // Embed 必须把可用边长沿递归链传给子内容，并在创建完成/尺寸变化时同步，
+    // 避免在创建事务里读到旧值。
+    let embed = strip_line_comments(&read_src(EMBED));
+    assert!(
+        embed.contains("\"contentUsableSide\": contentUsableSideNow()"),
+        "Embed 创建子内容时必须传内容安全区来源（函数现算）"
+    );
+    assert!(
+        embed.contains("function syncChildUsableSide()")
+            && embed.contains("childContentLoader.item.contentUsableSide = contentUsableSideNow()"),
+        "Embed 必须在子内容挂上后同步安全区，实际源码缺少"
     );
 }

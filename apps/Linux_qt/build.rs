@@ -449,6 +449,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapNode.qml");
     // Issue #796 评论 5886483653: 子星图 Embed 组件
     println!("cargo:rerun-if-changed=qml/StarMapEmbed.qml");
+    // Issue #822 评论 5972557963: 跨层连线的宿主规划（纯路径算法）
+    println!("cargo:rerun-if-changed=qml/StarMapPathPlanner.js");
     println!("cargo:rerun-if-changed=qml/WritingWorkspace.qml");
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");

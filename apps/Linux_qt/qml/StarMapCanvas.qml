@@ -292,7 +292,17 @@ Item {
                 ctx.clearRect(0, 0, width, height)
                 ctx.fillStyle = _textMuted
 
-                var gridSpacing = 50 * zoomLevel
+                // 网格自身做 LOD：相机放开到 1e-4 后，50 * zoomLevel 会掉到亚像素，
+                // 双重循环按 1/zoom² 爆炸。按 5 倍档抬 world 间距，屏幕上实际画出来的
+                // 间距永远 >= 16px，循环次数只跟屏幕尺寸有关。
+                if (!(zoomLevel > 0))
+                    return
+                var worldSpacing = 50
+                var gridSpacing = worldSpacing * zoomLevel
+                while (gridSpacing < 16) {
+                    worldSpacing *= 5
+                    gridSpacing = worldSpacing * zoomLevel
+                }
                 var startX = (panX % gridSpacing)
                 var startY = (panY % gridSpacing)
 
@@ -766,13 +776,16 @@ Item {
         AppButton {
             dt: canvasArea.dt
             text: qsTr("+")
-            onClicked: zoomAround(width / 2, height / 2, zoomLevel * _zoomFactor)
+            // 缩放锚点是画布中心：按钮自己的 width/height 不是画布尺寸。
+            onClicked: zoomAround(canvasArea.width / 2, canvasArea.height / 2,
+                                  zoomLevel * _zoomFactor)
         }
 
         AppButton {
             dt: canvasArea.dt
             text: qsTr("−")
-            onClicked: zoomAround(width / 2, height / 2, zoomLevel / _zoomFactor)
+            onClicked: zoomAround(canvasArea.width / 2, canvasArea.height / 2,
+                                  zoomLevel / _zoomFactor)
         }
     }
 

@@ -153,28 +153,29 @@ fn controller_create_edge_with_paths_returns_bool() {
 }
 
 #[test]
-fn content_create_edge_with_paths_forwards_return_value() {
+fn content_connect_end_uses_lca_host_and_real_return_value() {
     let src = read_src(CONTENT);
-    let window = function_window(&src, "function createEdgeWithPaths(", 400);
+    let window = function_window(&src, "function finishConnect(", 2800);
     assert!(
-        window.contains("return graphController.createEdgeWithPaths"),
-        "Content 的 createEdgeWithPaths 必须返回 graphController 的返回值，实际窗口:\n{window}"
+        window.contains("StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)")
+            && window.contains("rootContent.findContentByPathSegments(plan.hostSegments)"),
+        "connect_end 必须先规划宿主（最近公共祖先）再找到宿主 Content，实际窗口:\n{window}"
     );
-}
-
-#[test]
-fn content_connect_end_uses_create_edge_return_value() {
-    let src = read_src(CONTENT);
-    let window = function_window(&src, "function finishConnect(", 2000);
     assert!(
-        window.contains("success = createEdgeWithPaths(fromPath, toPath)"),
-        "connect_end.success 必须使用 createEdgeWithPaths 返回值，实际窗口:\n{window}"
+        window.contains("plan.from.starmapId = hostStarmapId")
+            && window.contains("plan.to.starmapId = hostStarmapId"),
+        "端点 starmapId 必须等于宿主的 finalStarmapId，实际窗口:\n{window}"
+    );
+    assert!(
+        window.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),
+        "connect_end.success 必须使用宿主 Content 的 commitEdgeWithPaths 真实返回值，\
+         实际窗口:\n{window}"
     );
     assert!(
         window.contains("\"success\": success"),
-        "connect_end 日志必须写 createEdgeWithPaths 的真实返回值，实际窗口:\n{window}"
+        "connect_end 日志必须写真实返回值，实际窗口:\n{window}"
     );
-    // 建边由源的归属层执行，from/to 都保持完整路径 DTO
+    // from/to 都保持完整路径 DTO，不退化成 nodeId-only。
     assert!(
         window.contains("hit.targetPath") && window.contains("var fromPath = ic.connectFromPath"),
         "connect_end 必须用完整 StarMapTargetPathDto（from 与 hit.targetPath），不退化成 nodeId-only，实际窗口:\n{window}"

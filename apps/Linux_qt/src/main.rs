@@ -147,6 +147,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapNode.qml" as "StarMapNode.qml",
     // Issue #796 评论 5886483653: 子星图 Embed 组件
     "qml/StarMapEmbed.qml" as "StarMapEmbed.qml",
+    // Issue #822 评论 5972557963: 跨层连线的宿主规划（纯路径算法）
+    "qml/StarMapPathPlanner.js" as "StarMapPathPlanner.js",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",

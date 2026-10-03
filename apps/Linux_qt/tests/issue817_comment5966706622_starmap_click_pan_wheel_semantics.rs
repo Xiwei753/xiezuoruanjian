@@ -38,7 +38,7 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{function_window, read_src};
+use source_guard::{count_occurrences, function_window, read_src};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const NODE: &str = "qml/StarMapNode.qml";
@@ -125,11 +125,28 @@ fn embed_chrome_selection_tap_handlers_not_readd_single_tap_double_tap() {
         start = pos + marker.len();
     }
 
-    // 标题(鼠标+触屏=2) + 四条边框(4×2=8) = 10 个选中回调。
+    // 评论 5972557963：四条矩形边框的 Handler 已删除，chrome 只剩一层输入层
+    // （圆形 acceptance），鼠标 + 触屏各一个选中回调。
     assert!(
-        found >= 10,
-        "必须至少找到 10 个 root.clicked(instanceId) 选中回调\
-         （标题 + 四条边框 × 鼠标/触屏），实际找到 {found} 个"
+        found >= 2,
+        "chrome 输入层的鼠标/触屏选中回调必须存在（标题 + 圆周环共用同一层），\
+         实际找到 {found} 个"
+    );
+    let layer_start = embed.find("id: chromeLayer").expect("必须存在 chromeLayer");
+    let layer_end = embed[layer_start..]
+        .find("id: contentViewport")
+        .map(|i| layer_start + i)
+        .expect("contentViewport 必须排在 chromeLayer 之后");
+    let layer = &embed[layer_start..layer_end];
+    assert_eq!(
+        count_occurrences(layer, marker),
+        2,
+        "鼠标/触屏两个选中回调都必须挂在 chromeLayer 上（不再有四条矩形边框），\
+         实际窗口:\n{layer}"
+    );
+    assert!(
+        layer.contains("containmentMask: chromeMask"),
+        "chromeLayer 的 Handler 必须用 containmentMask 决定 acceptance，实际窗口:\n{layer}"
     );
 }
 
