@@ -213,7 +213,12 @@ export function parentScenePathOf(scenePath: string): string {
 }
 
 /**
- * 某个 scenePath 描述是否在"通往视觉焦点的那条链"上（焦点自身或它的祖先）。
+ * 某个 candidate Embed 的 childScenePath 是否在"通往视觉焦点的那条链"上
+ * （焦点自身或它的祖先）。
+ *
+ * 注意入参是**这颗 Embed 进入之后的路径**，不是它所属的父 Scene：
+ * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层兄弟 b / c 仍按屏幕空间正常折叠；
+ * 传父 Scene 的 `root` 会让初始焦点 `root` 把整层 Embed 全部强制展开，根层 LOD 直接失效（#820 复核）。
  *
  * LOD 判定要用它保住这条链：从根到 `focusScenePath` 的每一层都必须展开，
  * 否则用户捏进去的子星图会因为"里面不够大"自己把自己折起来，
@@ -222,12 +227,12 @@ export function parentScenePathOf(scenePath: string): string {
  * 焦点**之后**的更深层不在这条链上：那几层继续按屏幕空间正常判定，
  * 否则"语义缩放"就退化成"从焦点往下全部展开"，再深也不折叠了。
  *
- * @param scenePath 待判定的 scenePath 描述
+ * @param embedScenePath 待判定的 **candidate Embed 进入之后**的 childScenePath 描述
  * @param focusScenePath 当前视觉焦点的 scenePath 描述
  * @returns true 表示它是焦点自身或焦点的祖先
  */
-export function isOnFocusChain(scenePath: string, focusScenePath: string): boolean {
-  return scenePath === focusScenePath || focusScenePath.startsWith(scenePath + '/')
+export function isOnFocusChain(embedScenePath: string, focusScenePath: string): boolean {
+  return embedScenePath === focusScenePath || focusScenePath.startsWith(embedScenePath + '/')
 }
 
 // ─── LOD 判定 ───
@@ -256,21 +261,21 @@ export function resolveEmbedLod(metrics: ProjectedEmbedMetrics): EmbedLodMode {
  * 带祖先折叠与焦点链判定的完整 LOD 求解。
  *
  * @param metrics 该 Embed 的屏幕投影度量
- * @param scenePath 该 Embed 所属 Scene 的 scenePath 描述
+ * @param embedScenePath 该 Embed 进入之后的 childScenePath 描述（**不是**所属父 Scene 的路径）
  * @param focusScenePath 当前视觉焦点的 scenePath 描述
  * @param ancestorCollapsed 祖先是否已经折叠（折叠后不创建任何后代 Scene）
  * @returns 视觉档位
  */
 export function resolveEmbedLodForScene(
   metrics: ProjectedEmbedMetrics,
-  scenePath: string,
+  embedScenePath: string,
   focusScenePath: string,
   ancestorCollapsed: boolean
 ): EmbedLodMode {
   if (ancestorCollapsed) {
     return 'hidden'
   }
-  if (isOnFocusChain(scenePath, focusScenePath)) {
+  if (isOnFocusChain(embedScenePath, focusScenePath)) {
     return 'expanded'
   }
   return resolveEmbedLod(metrics)

@@ -80,6 +80,10 @@
 //     否则会出现"画的是 160×80 摘要卡、连线端点和命中还按 200×200 的圆算"。
 //     形状由 geometry 的 isCircularDisplayRect 从同一份显示边界读出，不另开参数。
 //     档位切换只改派生矩形，绝不因为用户捏合就回写 Core 的 authored position。
+// 23. 焦点链比对的路径必须是**这颗 Embed 进入之后**的 childScenePath
+//     （embedScenePathLabel(instanceId)），不能传本 Scene 的 scenePath：
+//     传父 Scene 的话焦点 = root/embed:a 时 a/b/c 全被判成"在焦点链上"强制展开，
+//     而初始 focusScenePath = root 更会把根层所有 Embed 全部强制展开，根层 LOD 失效（#820 复核）。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -446,14 +450,23 @@ export struct StarMapScene {
   // ─── 视觉 LOD（#820）───
 
   /**
-   * 本 Scene 的 scenePath 描述（'root' / 'root/embed:xxx'）。
+   * 某个 Embed 进入之后的 childScenePath 描述（'root' / 'root/embed:xxx'）。
    *
    * LOD 的逻辑层级按**它**判，不按 sceneDepth：
    * 递归链是 StarMapScene → StarMapEmbedScene → StarMapScene，
    * 一层嵌套要把 sceneDepth 加两次，用它算"第几层"会把深度翻倍。
+   *
+   * 焦点链比对的是**这颗 Embed 自己进入后的位置**，不是它所属的父 Scene：
+   * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层的 b / c 仍按真实屏幕空间
+   * 正常折叠；传父 Scene 的话初始焦点 `root` 会把整层 Embed 全部强制展开，
+   * 根层 LOD 直接失效（#820 复核）。
    */
-  private scenePathLabel(): string {
-    return describeScenePath(this.scenePath)
+  private embedScenePathLabel(embedInstanceId: string): string {
+    const childSegments: StarMapPathSegment[] = [
+      ...this.scenePath,
+      { type: 'enterEmbed', instanceId: embedInstanceId, nodeId: null }
+    ]
+    return describeScenePath(childSegments)
   }
 
   /** 根视口 + 焦点的 LOD 上下文。整棵递归树共用同一份，子 Scene 不许用自己的圆当视口。 */
@@ -482,7 +495,12 @@ export struct StarMapScene {
       this.visualLodContext(),
       EMBED_FIT_PADDING_VP
     )
-    return resolveEmbedLodForScene(metrics, this.scenePathLabel(), this.focusScenePath, false)
+    return resolveEmbedLodForScene(
+      metrics,
+      this.embedScenePathLabel(embedInstanceId),
+      this.focusScenePath,
+      false
+    )
   }
 
   /** 某个 Embed 当前档位对应的显示边界（展开=正圆，折叠=节点尺寸摘要卡）。 */

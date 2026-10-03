@@ -3269,8 +3269,8 @@ function parentScenePathOf(scenePath) {
   return scenePath.substring(0, idx)
 }
 
-function isOnFocusChain(scenePath, focusScenePath) {
-  return scenePath === focusScenePath || focusScenePath.startsWith(scenePath + '/')
+function isOnFocusChain(embedScenePath, focusScenePath) {
+  return embedScenePath === focusScenePath || focusScenePath.startsWith(embedScenePath + '/')
 }
 
 function resolveEmbedLod(metrics) {
@@ -3279,9 +3279,9 @@ function resolveEmbedLod(metrics) {
   return 'collapsed'
 }
 
-function resolveEmbedLodForScene(metrics, scenePath, focusScenePath, ancestorCollapsed) {
+function resolveEmbedLodForScene(metrics, embedScenePath, focusScenePath, ancestorCollapsed) {
   if (ancestorCollapsed) { return 'hidden' }
-  if (isOnFocusChain(scenePath, focusScenePath)) { return 'expanded' }
+  if (isOnFocusChain(embedScenePath, focusScenePath)) { return 'expanded' }
   return resolveEmbedLod(metrics)
 }
 
@@ -3334,31 +3334,34 @@ function resolveFocusScenePath(currentFocusScenePath, candidates) {
 }
 
 // ── 被测规格：platform/StarMapGeometry.ets 的 collectEmbedFocusProbes ──
-function collectEmbedFocusProbesInScene(context, viewportWidthVp, viewportHeightVp, probes) {
+function collectEmbedFocusProbesInScene(root, context, viewportWidthVp, viewportHeightVp, probes) {
   for (const rect of context.rects) {
     if (!context.embedInstanceIds.has(rect.nodeId)) { continue }
-    const centerScreenX = (rect.x + rect.width / 2) * context.scale + context.offsetX
-    const centerScreenY = (rect.y + rect.height / 2) * context.scale + context.offsetY
+    const localCenterX = rect.x + rect.width / 2
+    const localCenterY = rect.y + rect.height / 2
+    const localScreen = canvasToScreen(localCenterX, localCenterY,
+      context.scale, context.offsetX, context.offsetY)
+    const rootScreen = convertPointToRoot(root, context.scenePath, localScreen.x, localScreen.y)
     const childSegments = [
       ...cloneScenePath(context.scenePath),
       { type: 'enterEmbed', instanceId: rect.nodeId, nodeId: null }
     ]
     probes.push({
       childScenePath: describeScenePath(childSegments),
-      centerRatioX: centerScreenX / viewportWidthVp,
-      centerRatioY: centerScreenY / viewportHeightVp,
+      centerRatioX: rootScreen.x / viewportWidthVp,
+      centerRatioY: rootScreen.y / viewportHeightVp,
       ownerScale: context.scale
     })
   }
   for (const child of context.children.values()) {
-    collectEmbedFocusProbesInScene(child, viewportWidthVp, viewportHeightVp, probes)
+    collectEmbedFocusProbesInScene(root, child, viewportWidthVp, viewportHeightVp, probes)
   }
 }
 
 function collectEmbedFocusProbes(root, viewportWidthVp, viewportHeightVp) {
   const probes = []
   if (viewportWidthVp <= 0 || viewportHeightVp <= 0) { return probes }
-  collectEmbedFocusProbesInScene(root, viewportWidthVp, viewportHeightVp, probes)
+  collectEmbedFocusProbesInScene(root, root, viewportWidthVp, viewportHeightVp, probes)
   return probes
 }
 
@@ -3488,6 +3491,32 @@ console.log('37c. 焦点链上的 Embed 强制展开，折叠后不再往下递�
     parentScenePathOf('root') === 'root',
     '焦点掉出下沿时退回父层，不跳回根')
   assert(!isOnFocusChain('root/embed:a', 'root/embed:b'), '不同分支不同链')
+
+  // 焦点链比对的是 candidate Embed 自己的 childScenePath，不是它所属的父 Scene。
+  // 传父 Scene 的话初始 focus='root' 会把根层每一颗 Embed 都判成"在焦点链上"强制展开，
+  // 根层 LOD 直接失效；focus='root/embed:a' 时同层兄弟也会被一起撑开（#820 复核）。
+  const lodOf = (embedScenePath, focus, metrics = smallMetrics) =>
+    resolveEmbedLodForScene(metrics, embedScenePath, focus, false)
+  assert(lodOf('root/embed:a', 'root/embed:a') === 'expanded' &&
+    lodOf('root/embed:b', 'root/embed:a') === 'collapsed' &&
+    lodOf('root/embed:c', 'root/embed:a') === 'collapsed',
+    'focus=root/embed:a：只有 a 强制展开，同层兄弟 b / c 继续按投影尺寸正常折叠')
+  assert(lodOf('root/embed:a', 'root') === 'collapsed' &&
+    lodOf('root/embed:b', 'root') === 'collapsed',
+    'focus=root：root 下的 Embed 不能因为"所属 Scene 就是 root"被全部强制展开')
+  assert(lodOf('root/embed:a', 'root/embed:a/embed:c') === 'expanded' &&
+    lodOf('root/embed:a/embed:c', 'root/embed:a/embed:c') === 'expanded' &&
+    lodOf('root/embed:a/embed:d', 'root/embed:a/embed:c') === 'collapsed',
+    'focus=root/embed:a/embed:c：只保住真正的 root→a→c 路径，同层兄弟 d 不跟着展开')
+
+  const sceneSrc820 = readStarmapSource('ui/StarMapScene.ets')
+  const lodBody820 = sceneSrc820.slice(sceneSrc820.indexOf('private embedLod('),
+    sceneSrc820.indexOf('private embedLod(') + 700)
+  assert(lodBody820.includes('this.embedScenePathLabel(embedInstanceId)') &&
+    !lodBody820.includes('this.scenePathLabel('),
+    'embedLod 传的是这颗 Embed 的 childScenePath，不是 owner Scene 的 scenePath')
+  assert(/private embedScenePathLabel\(embedInstanceId: string\): string \{[\s\S]{0,400}type: 'enterEmbed', instanceId: embedInstanceId/.test(sceneSrc820),
+    'embedScenePathLabel 按 scenePath + enterEmbed 段拼出 childScenePath')
 }
 
 console.log('')
@@ -3559,9 +3588,106 @@ console.log('37e. 焦点候选只来自已实例化的 Scene，屏幕坐标从�
   const childProbe = probes.find(p => p.childScenePath === 'root/embed:e1/embed:e2')
   assert(childProbe !== undefined && near(childProbe.ownerScale, 0.5),
     '子 Scene 里的候选带的是子 Scene 的累计比例（相机 × 祖先 local fit）')
-  assert(near(childProbe.centerRatioX, (50 * 0.5 + 10) / 400), '深层候选的圆心也换算到同一套根视口坐标')
+  // 深层圆心必须换算回根 Scene 屏幕坐标：
+  // 子图内 (50,50) → 子局部屏幕 (35,45) → 扣掉父 Embed 矩形原点再乘父 scale → 父画布 (35,45)
+  // → 根局部屏幕 (35×1+100, 45×1+200) = (135,245)。少了父层这段偏移就会漂到 (35,45)。
+  assert(near(childProbe.centerRatioX, 135 / 400) && near(childProbe.centerRatioY, 245 / 400),
+    '深层候选的圆心先 canvasToScreen 再 convertPointToRoot，父 Embed 的平移算进去了')
   assert(collectEmbedFocusProbes(buildRecursiveSceneContext(rootNode), 0, 400).length === 0,
     '视口还没量出来时没有候选（焦点保持 root）')
+
+  // 真实递归几何：父 Embed 在根画布明显偏右，子图里的 Embed 靠左。
+  // 只算子层局部偏移的话子 Embed 圆心会落在视口左侧、被误判成"屏幕边缘"，
+  // 70% 的焦点规则就永远选不到它（#820 复核）。
+  const deepRootNode = {
+    scenePath: [],
+    starmapId: 'sm1',
+    rects: [{ nodeId: 'a', x: 500, y: 0, width: 200, height: 200, radius: 100 }],
+    embedInstanceIds: new Set(['a']),
+    edges: [],
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    getChildEmbeds: () => [{
+      scenePath: [{ type: 'enterEmbed', instanceId: 'a', nodeId: null }],
+      starmapId: 'sm2',
+      rects: [{ nodeId: 'b', x: 40, y: 40, width: 100, height: 100, radius: 50 }],
+      embedInstanceIds: new Set(['b']),
+      edges: [],
+      scale: 1,
+      offsetX: 0,
+      offsetY: 0,
+      getChildEmbeds: () => []
+    }]
+  }
+  const deepProbes = collectEmbedFocusProbes(buildRecursiveSceneContext(deepRootNode), 1000, 1000)
+  const deepChild = deepProbes.find(p => p.childScenePath === 'root/embed:a/embed:b')
+  // 子图内圆心 (90,90) → 子局部屏幕 (90,90) → childLocalToParentCanvas 换到父画布
+  // = 90/父scale + 父 Embed 矩形原点 (500,0) = (590,90) → 根局部屏幕 (590,90)。
+  // 旧口径只做 × context.scale + context.offset（子层 scale=1、offset=0），
+  // 算出来还是 (90,90)，父层那 500 整段丢掉。
+  assert(deepChild !== undefined && near(deepChild.centerRatioX, 590 / 1000) &&
+    near(deepChild.centerRatioY, 90 / 1000),
+    '父 Embed 在根画布 x=500、子图内圆心 (90,90) 时，子 Embed 的根圆心是 (590,90)')
+  const withoutParentOffset = (40 + 100 / 2) / 1000
+  assert(!near(deepChild.centerRatioX, withoutParentOffset),
+    `回归：不换算父层平移会算成 ${withoutParentOffset}，父层那 500 整个丢掉`)
+
+  // 旧口径会误选：父 Embed 在根画布 (400,800)、子 Embed 在子图内圆心 (400,400) 时，
+  // 旧口径给 (0.4,0.4) 落在中心区域内 → 有资格抢焦点；
+  // 换算父层后是 (800,1200)/1000 = (0.8,1.2)，正确地被中心区域规则排除。
+  const misleadingProbes = collectEmbedFocusProbes(buildRecursiveSceneContext({
+    ...deepRootNode,
+    rects: [{ nodeId: 'a', x: 400, y: 800, width: 200, height: 200, radius: 100 }],
+    getChildEmbeds: () => [{
+      scenePath: [{ type: 'enterEmbed', instanceId: 'a', nodeId: null }],
+      starmapId: 'sm2',
+      rects: [{ nodeId: 'b', x: 350, y: 350, width: 100, height: 100, radius: 50 }],
+      embedInstanceIds: new Set(['b']),
+      edges: [],
+      scale: 1,
+      offsetX: 0,
+      offsetY: 0,
+      getChildEmbeds: () => []
+    }]
+  }), 1000, 1000)
+  const misleading = misleadingProbes.find(p => p.childScenePath === 'root/embed:a/embed:b')
+  assert(near(misleading.centerRatioX, 0.8) && near(misleading.centerRatioY, 1.2),
+    '父 Embed 在 (400,800) 时子 Embed 的根圆心是 (800,1200) → 比例 (0.8,1.2)')
+  assert(!inCenterRegion({ centerRatioX: misleading.centerRatioX, centerRatioY: misleading.centerRatioY }),
+    '旧口径的 (0.4,0.4) 会被当成"在视口中央"，换算父层后正确排除（焦点不会选到视口外的圆）')
+
+  // 正例：父 Embed 挪到子 Embed 真正落在视口中心的位置，它就该进中心区域
+  const centeredProbes = collectEmbedFocusProbes(buildRecursiveSceneContext({
+    ...deepRootNode,
+    rects: [{ nodeId: 'a', x: 100, y: 100, width: 200, height: 200, radius: 100 }],
+    getChildEmbeds: () => [{
+      scenePath: [{ type: 'enterEmbed', instanceId: 'a', nodeId: null }],
+      starmapId: 'sm2',
+      rects: [{ nodeId: 'b', x: 350, y: 350, width: 100, height: 100, radius: 50 }],
+      embedInstanceIds: new Set(['b']),
+      edges: [],
+      scale: 1,
+      offsetX: 0,
+      offsetY: 0,
+      getChildEmbeds: () => []
+    }]
+  }), 1000, 1000)
+  const centered = centeredProbes.find(p => p.childScenePath === 'root/embed:a/embed:b')
+  assert(near(centered.centerRatioX, 0.5) && near(centered.centerRatioY, 0.5),
+    '父 Embed 在 (100,100) 时子 Embed 的根圆心是 (500,500) → 比例 (0.5,0.5)')
+  assert(inCenterRegion({ centerRatioX: centered.centerRatioX, centerRatioY: centered.centerRatioY }),
+    '圆心落在 1000×1000 视口中心区域里 → 有资格被选为焦点')
+
+  const geometrySrc820 = readStarmapSource('platform/StarMapGeometry.ets')
+  const probesSrc820 = geometrySrc820.slice(geometrySrc820.indexOf('function collectEmbedFocusProbesInScene'))
+  assert(probesSrc820.includes('canvasToScreen(') && probesSrc820.includes('convertPointToRoot('),
+    '焦点候选的圆心先 canvasToScreen 再 convertPointToRoot（复用递归坐标工具，不另写一套）')
+  assert(/function collectEmbedFocusProbesInScene\(\s*root: RecursiveSceneContext,\s*context: RecursiveSceneContext,/.test(
+    geometrySrc820.slice(geometrySrc820.indexOf('function collectEmbedFocusProbesInScene'))),
+    '递归下钻时透传同一份 root，深层 Embed 才知道自己在根画布的哪')
+  assert(probesSrc820.includes('centerRatioX: rootScreen.x / viewportWidthVp'),
+    '比例是根 Scene 屏幕坐标除视口宽高，不是子层局部坐标')
 }
 
 console.log('')

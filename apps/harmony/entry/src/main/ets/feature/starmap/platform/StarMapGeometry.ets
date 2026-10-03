@@ -1177,6 +1177,9 @@ export interface EmbedFocusProbe {
  * 只走已实例化的 Scene 子树：折叠掉的 Embed 根本没有 child Scene 实例，
  * 自然不会进候选（用户看不到里面，也没法"钻进去看"）。
  *
+ * `centerRatioX / centerRatioY` 一律是**根 Scene 屏幕坐标**下的比例，
+ * 深层 Embed 已经把祖先 Embed 的平移算进去（见 collectEmbedFocusProbesInScene）。
+ *
  * @param root 递归 Scene 上下文的根
  * @param viewportWidthVp 根 StarMap 实际可绘制内容区宽度（vp）
  * @param viewportHeightVp 根 StarMap 实际可绘制内容区高度（vp）
@@ -1191,12 +1194,29 @@ export function collectEmbedFocusProbes(
   if (viewportWidthVp <= 0 || viewportHeightVp <= 0) {
     return probes
   }
-  collectEmbedFocusProbesInScene(root, viewportWidthVp, viewportHeightVp, probes)
+  collectEmbedFocusProbesInScene(root, root, viewportWidthVp, viewportHeightVp, probes)
   return probes
 }
 
-/** collectEmbedFocusProbes 的递归实现：先本层 Embed，再下钻子 Scene。 */
+/**
+ * collectEmbedFocusProbes 的递归实现：先本层 Embed，再下钻子 Scene。
+ *
+ * 圆心必须一路换算到**根 Scene 的屏幕坐标**再除视口宽高。
+ * 子 Scene 的 `scale / offset` 只是它自己那层局部适配，管不到父 Embed 在更上层
+ * 画布里的位置：直接拿子层的屏幕中心去除根视口宽高，第二层开始比例就会漂
+ * （父 Embed 在根画布 x=500、子图内部 x=40 时，根层那 500 会被丢掉），
+ * 70% 的焦点规则会选错层甚至一个都选不中（#820 复核）。
+ *
+ * 这里复用既有的 `convertPointToRoot()` 做递归换算，不另写一套坐标规则。
+ *
+ * @param root 递归 Scene 上下文的根（整趟递归透传同一份）
+ * @param context 当前 Scene 上下文
+ * @param viewportWidthVp 根 StarMap 实际可绘制内容区宽度（vp）
+ * @param viewportHeightVp 根 StarMap 实际可绘制内容区高度（vp）
+ * @param probes 输出累加器
+ */
 function collectEmbedFocusProbesInScene(
+  root: RecursiveSceneContext,
   context: RecursiveSceneContext,
   viewportWidthVp: number,
   viewportHeightVp: number,
@@ -1206,24 +1226,32 @@ function collectEmbedFocusProbesInScene(
     if (!context.embedInstanceIds.has(rect.nodeId)) {
       continue
     }
-    // 画布坐标 → 屏幕坐标：屏幕 = 画布 × 本 Scene 累计比例 + 累计偏移。
+    // 本 Scene 画布几何的中心 → 本 Scene 局部屏幕 → 根 Scene 屏幕。
     // 折叠态 Embed 的 rect 已经是摘要卡尺寸（见 embedDisplayBoundsForLod），
     // 圆心仍然是同一块几何的中心，所以这里不用再分档。
-    const centerScreenX: number = (rect.x + rect.width / 2) * context.scale + context.offsetX
-    const centerScreenY: number = (rect.y + rect.height / 2) * context.scale + context.offsetY
+    const localCenterX: number = rect.x + rect.width / 2
+    const localCenterY: number = rect.y + rect.height / 2
+    const localScreen: PlatformPoint = canvasToScreen(
+      localCenterX, localCenterY, context.scale, context.offsetX, context.offsetY
+    )
+    const rootScreen: PlatformPoint = convertPointToRoot(
+      root, context.scenePath, localScreen.x, localScreen.y
+    )
     const childSegments: StarMapPathSegment[] = [
       ...cloneScenePath(context.scenePath),
       { type: 'enterEmbed', instanceId: rect.nodeId, nodeId: null }
     ]
     probes.push({
       childScenePath: describeScenePath(childSegments),
-      centerRatioX: centerScreenX / viewportWidthVp,
-      centerRatioY: centerScreenY / viewportHeightVp,
+      centerRatioX: rootScreen.x / viewportWidthVp,
+      centerRatioY: rootScreen.y / viewportHeightVp,
       ownerScale: context.scale
     })
   }
   for (const child of context.children.values()) {
-    collectEmbedFocusProbesInScene(child, viewportWidthVp, viewportHeightVp, probes)
+    collectEmbedFocusProbesInScene(
+      root, child, viewportWidthVp, viewportHeightVp, probes
+    )
   }
 }
 
