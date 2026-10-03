@@ -1,5 +1,6 @@
 // ─── StarMapLayout.ets ───
 // 平台层显示布局模块：freeform 直接用 node.position、自动网格布局、节点宽高圆角层级、保存时生成 position patch。
+// Embed 的宽高圆角按"当前视觉档位"给（#820），档位判定在 StarMapVisualLod，这里只负责把尺寸落到布局节点上。
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 
 import { StarMapNode, StarMapEmbed } from '../../../corebridge/dto/StarMapDtos'
@@ -31,6 +32,25 @@ export interface NodePositionPatch {
   y: number
 }
 
+/**
+ * 一个 Embed 在某个视觉档位下的显示边界（局部坐标，不含任何缩放）。
+ *
+ * #820：这是"画出来多大"和"按多大算命中"的唯一一份真相。
+ * 布局节点、命中测试、选中描边、边端点、触摸响应区全部读它，
+ * 免得出现"画的是折叠摘要卡 160×80，命中和边端点还按展开的 200×200 圆算"的错位。
+ * 具体档位 → 尺寸的映射见 StarMapVisualLod.embedDisplayBoundsForLod。
+ */
+export interface EmbedDisplayBounds {
+  /** 显示宽度（vp） */
+  width: number
+  /** 显示高度（vp） */
+  height: number
+  /** 圆角 / 圆半径（vp） */
+  radius: number
+  /** true = 按圆处理（命中、边端点走圆逻辑），false = 按矩形处理 */
+  isCircle: boolean
+}
+
 // ─── 常量 ───
 
 /**
@@ -40,15 +60,29 @@ export interface NodePositionPatch {
  */
 export const DEFAULT_NODE_WIDTH: number = 160
 export const DEFAULT_NODE_HEIGHT: number = 80
-const DEFAULT_NODE_RADIUS: number = 16
+/**
+ * 节点圆角（vp）。折叠成摘要卡的 Embed 也用这个圆角（#820），
+ * 所以折叠态看起来和普通节点是一路的。UI 侧禁止再手写 16。
+ */
+export const DEFAULT_NODE_RADIUS: number = 16
 const DEFAULT_NODE_ZINDEX: number = 0
 /**
- * 子星图 Embed 的显示直径（vp）。Embed 的 width / height / borderRadius 全部从这一个值推导，
+ * 子星图 Embed 的显示直径（vp）。Embed 展开态的 width / height / borderRadius 全部从这一个值推导，
  * 保证 UI 与几何计算看到的永远是同一个圆。UI 侧禁止再手写 200 / 120 / 12 这类尺寸。
  */
 export const DEFAULT_EMBED_DIAMETER: number = 200
 const GRID_HORIZONTAL_SPACING: number = 200
 const GRID_VERTICAL_SPACING: number = 120
+
+/** 展开态 Embed 的显示边界（正圆）。折叠态见 StarMapVisualLod.embedDisplayBoundsForLod。 */
+export function expandedEmbedDisplayBounds(): EmbedDisplayBounds {
+  return {
+    width: DEFAULT_EMBED_DIAMETER,
+    height: DEFAULT_EMBED_DIAMETER,
+    radius: DEFAULT_EMBED_DIAMETER / 2,
+    isCircle: true
+  }
+}
 
 // ─── Freeform 布局 ───
 
@@ -79,23 +113,36 @@ export function buildFreeformLayout(nodes: StarMapNode[]): PlatformLayoutNode[] 
 
 /**
  * 从 graph.embeds 构建 Embed 布局节点。
- * Embed 位置只读 embed.position，宽高/圆角由平台层定义（正圆：宽高等于直径，圆角等于半径）。
+ * Embed 位置只读 embed.position（位置真相永远在 Core，这里不因缩放或 LOD 回写），
+ * 宽高/圆角来自"当前视觉档位的显示边界"：
+ * 展开是正圆（宽高=直径，圆角=半径），折叠是和节点同尺寸的摘要卡（#820）。
+ *
+ * 不带 displayBounds 就按展开态算 —— 但那会让画出来的是摘要卡、命中和边端点还按圆算，
+ * 所以递归渲染时必须由 StarMapScene 把每个 Embed 的 LOD 档位传进来。
  *
  * @param embeds 星图内嵌列表
+ * @param displayBounds embed instanceId → 该 Embed 当前档位的显示边界（缺省即展开）
  * @returns 平台层布局节点列表（用于 Embed 渲染）
  */
-export function buildEmbedLayoutNodes(embeds: StarMapEmbed[]): PlatformLayoutNode[] {
+export function buildEmbedLayoutNodes(
+  embeds: StarMapEmbed[],
+  displayBounds?: Map<string, EmbedDisplayBounds>
+): PlatformLayoutNode[] {
+  const fallback: EmbedDisplayBounds = expandedEmbedDisplayBounds()
   const result: PlatformLayoutNode[] = []
   for (const embed of embeds) {
+    const bounds: EmbedDisplayBounds = displayBounds !== undefined
+      ? displayBounds.get(embed.instanceId) ?? fallback
+      : fallback
     result.push({
       nodeId: embed.instanceId,
       x: embed.position.x,
       y: embed.position.y,
-      width: DEFAULT_EMBED_DIAMETER,
-      height: DEFAULT_EMBED_DIAMETER,
-      radius: DEFAULT_EMBED_DIAMETER / 2,
+      width: bounds.width,
+      height: bounds.height,
+      radius: bounds.radius,
       zIndex: DEFAULT_NODE_ZINDEX + 1,
-      collapsed: false
+      collapsed: !bounds.isCircle
     })
   }
   return result

@@ -245,6 +245,41 @@ export function computeEmbedInnerContentSafeSide(
   return Math.max(0, innerSquare - EMBED_INTERACTION_SHELL_VP - Math.max(0, paddingVp) * 2)
 }
 
+/**
+ * 把一段**局部长度**投影成屏幕侧长度（vp）。
+ *
+ * 星图里"这个 Embed 有多大"有两套数字混着：局部坐标（200 直径、24 标题带、
+ * 160 节点宽……）和屏幕上的实际大小（用户捏合、逐层 local fit 之后的结果）。
+ * #820 要求这两者之间只留**这一个**换算口，否则每个地方各乘一次 scale，
+ * 早晚会有一处漏乘或多乘，表现为"画的是摘要卡、命中还按圆算"或者
+ * "折叠阈值随层级漂移"。
+ *
+ * 坐标链（规范原话）：
+ *   child local → 父 Embed local fit → … → root world → 全局相机 → 屏幕
+ * 局部长度要变成屏幕长度，就得乘上**全部**祖先级的累计比例，
+ * 也就是该长度所属 Scene 的 effectiveScale：
+ *   `globalCameraScale × 所有祖先 EmbedLocalFitScale`
+ * 这个值由 `ui/StarMapScene.viewportScaleValue()` 提供（子 Scene 是
+ * `fitScale × parentScale()`，根 Scene 是 cameraScale）。
+ *
+ * 注意：这里**不含**某个 Embed 自己 child Scene 的 local fit。
+ * 那是"圆壳里面的内容大小"，不是外壳大小；混进去会让每深一层外壳就小一截，
+ * 折叠判定自我实现（越深越折叠）而再也展不开。
+ *
+ * @param localLength 局部坐标里的长度（vp）
+ * @param ownerEffectiveScale 该长度所属 Scene 的累计有效比例
+ * @returns 屏幕侧长度（vp）
+ */
+export function projectLocalLengthToScreen(localLength: number, ownerEffectiveScale: number): number {
+  if (!isFinite(localLength)) {
+    return 0
+  }
+  if (!isFinite(ownerEffectiveScale) || ownerEffectiveScale <= 0) {
+    return localLength
+  }
+  return localLength * ownerEffectiveScale
+}
+
 /** fitScale 的下限。再小就完全看不见了，保留一点下限免得内容糊成一点。 */
 export const MIN_FIT_SCALE: number = 0.02
 

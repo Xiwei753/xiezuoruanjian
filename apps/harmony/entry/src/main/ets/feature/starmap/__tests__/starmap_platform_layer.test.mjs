@@ -59,18 +59,29 @@ function buildFreeformLayout(nodes) {
 }
 
 // ── 被测规格：buildEmbedLayoutNodes ──
-function buildEmbedLayoutNodes(embeds) {
+// displayBounds: Map<instanceId, EmbedDisplayBounds>，缺省按展开圆处理（#820）
+function expandedEmbedDisplayBounds() {
+  return {
+    width: DEFAULT_EMBED_DIAMETER,
+    height: DEFAULT_EMBED_DIAMETER,
+    radius: DEFAULT_EMBED_DIAMETER / 2,
+    isCircle: true
+  }
+}
+
+function buildEmbedLayoutNodes(embeds, displayBounds) {
   const result = []
   for (const embed of embeds) {
+    const bounds = (displayBounds && displayBounds.get(embed.instanceId)) || expandedEmbedDisplayBounds()
     result.push({
       nodeId: embed.instanceId,
       x: embed.position.x,
       y: embed.position.y,
-      width: DEFAULT_EMBED_DIAMETER,
-      height: DEFAULT_EMBED_DIAMETER,
-      radius: DEFAULT_EMBED_DIAMETER / 2,
+      width: bounds.width,
+      height: bounds.height,
+      radius: bounds.radius,
       zIndex: DEFAULT_NODE_ZINDEX + 1,
-      collapsed: false
+      collapsed: !bounds.isCircle
     })
   }
   return result
@@ -558,6 +569,26 @@ console.log('5. Embed 布局：只读 embed.position，平台层定义正圆尺�
     'Embed 宽高都是同一个直径（正圆）')
   assert(layout[0].radius === DEFAULT_EMBED_DIAMETER / 2, 'Embed 圆角 = 直径 / 2')
   assert(layout[0].zIndex === 1, 'Embed 层级在普通节点之上')
+}
+
+console.log('5b. Embed 布局尺寸随 LOD 变，但位置永远只读 authored position（#820）')
+{
+  const embeds = [
+    { instanceId: 'emb1', targetStarmapId: 'sm2', label: '支线', position: { x: 640, y: 48 } },
+    { instanceId: 'emb2', targetStarmapId: 'sm3', label: '支线二', position: { x: 200, y: 300 } }
+  ]
+  const bounds = new Map()
+  bounds.set('emb2', { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT, radius: DEFAULT_NODE_RADIUS, isCircle: false })
+  const layout = buildEmbedLayoutNodes(embeds, bounds)
+  assert(layout[0].width === DEFAULT_EMBED_DIAMETER && layout[0].radius === DEFAULT_EMBED_DIAMETER / 2,
+    '没给显示边界的 Embed 仍按展开正圆处理')
+  assert(layout[0].collapsed === false, '展开态 collapsed = false')
+  assert(layout[1].width === DEFAULT_NODE_WIDTH && layout[1].height === DEFAULT_NODE_HEIGHT &&
+    layout[1].radius === DEFAULT_NODE_RADIUS, '折叠态显示边界 = 节点尺寸（绘制/命中/边锚点同一份）')
+  assert(layout[1].collapsed === true, '折叠态 collapsed = true')
+  assert(layout[1].x === 200 && layout[1].y === 300,
+    '折叠不写回 Core authored position（LOD 只改派生显示矩形）')
+  assert(buildEmbedLayoutNodes(embeds).length === 2, 'displayBounds 可省略')
 }
 
 console.log('6. 拖动：屏幕位移 ÷ zoomScale，返回新数组不改原数组')

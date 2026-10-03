@@ -15,6 +15,15 @@ import { PlatformMotionConfig, defaultMotionConfig, shouldAnimate } from '../pla
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 import {
+  RecursiveSceneSource, EmbedFocusProbe,
+  buildRecursiveSceneContext, collectEmbedFocusProbes
+} from '../platform/StarMapGeometry'
+import { DEFAULT_EMBED_DIAMETER } from '../platform/StarMapLayout'
+import {
+  VisualLodContext, FocusCandidate, ProjectedEmbedMetrics,
+  projectEmbedMetrics, resolveFocusScenePath
+} from '../platform/StarMapVisualLod'
+import {
   StarMapSceneRegistry,
   CAMERA_SCALE_MIN,
   CAMERA_SCALE_MAX,
@@ -65,8 +74,22 @@ export struct StarMapScreen {
   private graphLoadGeneration: number = 0
 
   // 画布尺寸（用于 zoomAround 计算可视中心）
+  // 同时也是**根 StarMap 实际视口**（#820）：不是物理屏幕，是这张星图真正能画东西的那块区域。
   @State canvasWidth: number = 0
   @State canvasHeight: number = 0
+
+  /**
+   * 当前视觉焦点的 scenePath 描述（根为 'root'）（#820）。
+   *
+   * 焦点只决定"哪几颗 Embed 保持展开"，它**不是**页面、不是另一台相机、也不落盘：
+   * 整棵树仍然只有一台全局相机，坐标系仍然是 root world → 全局相机 → 屏幕。
+   * 窗口尺寸变化（分屏 / 折叠屏展开 / 横竖屏）时它保持不动，只更新视口宽高重算 LOD，
+   * 不重新 fit 根图，也不把用户拽回根层。
+   *
+   * 只在这几个时机重算：全局相机变化、视口尺寸变化、捏合结束。
+   * 绝不在 build() 或任何组件重建过程中写它（重建里改状态会触发重建死循环）。
+   */
+  @State focusScenePath: string = 'root'
 
   // 共享对象
   private bridge: IWriterCoreBridge = getBridge()
@@ -211,6 +234,49 @@ export struct StarMapScreen {
     this.cameraScale = scale
     this.cameraOffsetX = offsetX
     this.cameraOffsetY = offsetY
+    // 相机变了，每颗 Embed 的屏幕投影都变了，视觉焦点要重新判一次（#820）。
+    // 结果不变时不写 @State，避免每帧捏合都触发一次无谓重建。
+    this.recomputeVisualFocus()
+  }
+
+  /**
+   * 重算视觉焦点（#820）。
+   *
+   * 纯显示行为：读注册表里的 Scene 快照 → 收集候选 Embed 的圆心位置和所属层比例 →
+   * 交给 StarMapVisualLod 的纯函数判（覆盖率过 0.70 进、过 0.55 出，中间那段滞回不动）。
+   *
+   * 全程不写 Core、不新建页面、不动相机、不落盘；只在焦点真的变了时写一次 @State。
+   * 注册表还没建起来（图没加载）时直接返回，保持 'root'。
+   */
+  private recomputeVisualFocus(): void {
+    const rootScene: RecursiveSceneSource | null = this.sceneRegistry.getRoot()
+    if (rootScene === null || this.canvasWidth <= 0 || this.canvasHeight <= 0) {
+      return
+    }
+    const probes: EmbedFocusProbe[] = collectEmbedFocusProbes(
+      buildRecursiveSceneContext(rootScene), this.canvasWidth, this.canvasHeight
+    )
+    const context: VisualLodContext = {
+      viewportWidthVp: this.canvasWidth,
+      viewportHeightVp: this.canvasHeight,
+      focusScenePath: this.focusScenePath
+    }
+    const candidates: FocusCandidate[] = []
+    for (const probe of probes) {
+      const metrics: ProjectedEmbedMetrics = projectEmbedMetrics(
+        DEFAULT_EMBED_DIAMETER, probe.ownerScale, context, 0
+      )
+      candidates.push({
+        scenePath: probe.childScenePath,
+        coverage: metrics.coverage,
+        centerRatioX: probe.centerRatioX,
+        centerRatioY: probe.centerRatioY
+      })
+    }
+    const nextFocus: string = resolveFocusScenePath(this.focusScenePath, candidates)
+    if (nextFocus !== this.focusScenePath) {
+      this.focusScenePath = nextFocus
+    }
   }
 
   /**
@@ -278,6 +344,16 @@ export struct StarMapScreen {
           this.panCameraTo(offsetX, offsetY)
         },
         sceneDepth: 0,
+        // 根视口 + 视觉焦点：从这里原样透传给每一个递归 Scene（#820）。
+        // 子 Scene 不许拿自己那个圆的尺寸当视口，也不许自己判断焦点。
+        rootViewportWidth: this.canvasWidth,
+        rootViewportHeight: this.canvasHeight,
+        focusScenePath: this.focusScenePath,
+        // 捏合结束时再判一次焦点：捏合过程中每帧都会改相机，
+        // 但那一帧的树结构可能还没定形（子 Scene 可能正在重建），手势收尾才是干净的时机。
+        onFocusRecomputeRequested: () => {
+          this.recomputeVisualFocus()
+        },
         bridge: this.bridge,
         themeConfig: this.themeConfig,
         motionConfig: this.motionConfig,
@@ -334,6 +410,10 @@ export struct StarMapScreen {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.canvasWidth = Number(newArea.width)
       this.canvasHeight = Number(newArea.height)
+      // 视口变了（分屏 / 折叠屏展开 / 横竖屏）：只重算视口与视觉焦点（#820）。
+      // 相机保持不动、focusScenePath 保持不动、不重新 fit 根图 —— 用户不会因为
+      // 转个屏就被拽回根层看全局，那等于把正在写的内容从眼前搬走。
+      this.recomputeVisualFocus()
     })
   }
 

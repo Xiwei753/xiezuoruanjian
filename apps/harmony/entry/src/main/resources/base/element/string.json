@@ -125,6 +125,10 @@
       "value": "星图"
     },
     {
+      "name": "starmap_sub_starmap",
+      "value": "子星图"
+    },
+    {
       "name": "settings",
       "value": "设置"
     },

@@ -66,6 +66,20 @@
 //     新对象会比当前安全区还大。重算的是 local fit，不是 global camera，
 //     所以不会把用户双指缩放好的视角打回初始大小。
 //     移动已有对象不重算，继续每帧 clamp 即可。
+// 20. 语义缩放按**实际视口**算，不按"第几层"算（#820）：档位判定全在纯函数模块
+//     StarMapVisualLod 里，输入只有"根视口宽高 + 本 Scene 累计有效比例 + 焦点"，
+//     判据是圆内还剩多少屏幕空间（放得下一个节点就展开），所以小窗自动少展开几层、
+//     大窗多展开几层，同一个设备改窗口大小就地重算。禁止写死"显示两层"这种常量。
+//     根视口宽高由 StarMapScreen 从 onAreaChange 一路透传下来，子 Scene 不许拿自己
+//     那个圆当根视口（那会让"够不够展开"变成自我实现）。
+// 21. 三档渲染（#820）：expanded 才实例化 StarMapEmbedScene；collapsed 只画节点尺寸的
+//     摘要卡（标题 + 子星图身份 + 选中态），整块热区归这个 Embed、不往内递归；
+//     hidden 连摘要卡都不画。折叠态不许 opacity(0) 假装折叠，也不许"先建好再缩"。
+//     LOD 层级按 scenePath 判，不按 sceneDepth——递归链里一层 Embed 要加两次 sceneDepth。
+// 22. LOD 必须同时改**布局矩形**（buildEmbedLayoutNodes 吃档位映射）和渲染，
+//     否则会出现"画的是 160×80 摘要卡、连线端点和命中还按 200×200 的圆算"。
+//     形状由 geometry 的 isCircularDisplayRect 从同一份显示边界读出，不另开参数。
+//     档位切换只改派生矩形，绝不因为用户捏合就回写 Core 的 authored position。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -91,9 +105,9 @@ import {
   EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH, EmbedHitMetrics
 } from '../platform/StarMapGeometry'
 import {
-  PlatformLayoutNode, PlatformPoint,
+  PlatformLayoutNode, PlatformPoint, EmbedDisplayBounds,
   buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
-  DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT
+  DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_RADIUS
 } from '../platform/StarMapLayout'
 import {
   PlatformMotionConfig,
@@ -106,8 +120,13 @@ import {
   StarMapSceneNode, StarMapSceneRegistry, Viewport,
   ContentBounds, computeContentBounds, computeFittedViewport, computeCenteredOffset,
   computeCameraPinch, GlobalCameraTransform,
-  clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO
+  clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO,
+  projectLocalLengthToScreen
 } from '../platform/StarMapViewport'
+import {
+  EmbedLodMode, VisualLodContext,
+  projectEmbedMetrics, resolveEmbedLodForScene, embedDisplayBoundsForLod
+} from '../platform/StarMapVisualLod'
 import {
   logPinchBegin, logPinchEnd, logRecursiveHit, logViewportState, logCreateResult,
   logSelectionChanged, logConnectBegin, logConnectEnd
@@ -153,6 +172,22 @@ export struct StarMapScene {
   @Prop starmapId: string = ''
   /** 当前 scene 的深度（根为 0） */
   @Prop sceneDepth: number = 0
+  /**
+   * 根 StarMap 实际可绘制内容区宽度（vp），整棵递归树共用同一份（#820）。
+   *
+   * LOD 判定必须用**根视口**：子 Scene 拿自己那个圆当视口，
+   * "这层还有多少展开空间"就变成了自我实现的死循环（自己算自己，永远不够）。
+   */
+  @Prop @Watch('onRootViewportChange') rootViewportWidth: number = 0
+  /** 根 StarMap 实际可绘制内容区高度（vp），语义同 rootViewportWidth（#820）。 */
+  @Prop @Watch('onRootViewportChange') rootViewportHeight: number = 0
+  /**
+   * 当前视觉焦点的 scenePath 描述（根为 'root'）（#820）。
+   *
+   * 焦点只决定"哪些 Embed 保持展开"，不新建页面、不换相机、不落盘。
+   * 焦点链上的 Embed 强制展开，否则用户捏进去的子星图会因为"里面不够大"自己折起来。
+   */
+  @Prop @Watch('onFocusScenePathChange') focusScenePath: string = 'root'
   /** 主题配置 */
   @Prop themeConfig: ThemeConfig = {
     mode: 'light',
@@ -239,6 +274,15 @@ export struct StarMapScene {
    */
   onCameraPanTo: (offsetX: number, offsetY: number) => void =
     (_offsetX: number, _offsetY: number) => {}
+
+  /**
+   * 请求根侧重算视觉焦点（#820）。
+   *
+   * 只有根 Scene 会在捏合手势收尾时调它；子 Scene 不调，因为焦点是全树唯一的显示态。
+   * 单独留一个回调而不是让 Scene 自己改 focusScenePath：焦点住在 StarMapScreen，
+   * Scene 只报告"树变了、相机稳了，该重判一次了"。
+   */
+  onFocusRecomputeRequested: () => void = () => {}
 
   /**
    * 全树唯一选中态。根 Scene 持有唯一一份，沿组件树传到每个子 Scene。
@@ -399,8 +443,84 @@ export struct StarMapScene {
     this.closeCreateDialogs()
   }
 
+  // ─── 视觉 LOD（#820）───
+
   /**
-   * 本 Scene 的**累计有效比例**：根是全局相机比例，子是 `局部 fit × 祖先累计`。
+   * 本 Scene 的 scenePath 描述（'root' / 'root/embed:xxx'）。
+   *
+   * LOD 的逻辑层级按**它**判，不按 sceneDepth：
+   * 递归链是 StarMapScene → StarMapEmbedScene → StarMapScene，
+   * 一层嵌套要把 sceneDepth 加两次，用它算"第几层"会把深度翻倍。
+   */
+  private scenePathLabel(): string {
+    return describeScenePath(this.scenePath)
+  }
+
+  /** 根视口 + 焦点的 LOD 上下文。整棵递归树共用同一份，子 Scene 不许用自己的圆当视口。 */
+  private visualLodContext(): VisualLodContext {
+    return {
+      viewportWidthVp: this.rootViewportWidth,
+      viewportHeightVp: this.rootViewportHeight,
+      focusScenePath: this.focusScenePath
+    }
+  }
+
+  /**
+   * 某个 Embed 在本 Scene 里的视觉档位。
+   *
+   * 判据只有一条：它在**屏幕上**的圆内还剩多少真实可用空间
+   * （`projectEmbedMetrics` 用本 Scene 的累计比例投影），
+   * 放得下一个节点（DEFAULT_NODE_WIDTH）就展开，否则折叠成节点尺寸的摘要卡。
+   *
+   * ancestorCollapsed 恒为 false：祖先一旦折叠，父层就不会再实例化本 Scene，
+   * 能走到这里的 Scene 说明整条祖先链都是展开的。
+   */
+  private embedLod(embedInstanceId: string): EmbedLodMode {
+    const metrics = projectEmbedMetrics(
+      DEFAULT_EMBED_DIAMETER,
+      this.viewportScaleValue(),
+      this.visualLodContext(),
+      EMBED_FIT_PADDING_VP
+    )
+    return resolveEmbedLodForScene(metrics, this.scenePathLabel(), this.focusScenePath, false)
+  }
+
+  /** 某个 Embed 当前档位对应的显示边界（展开=正圆，折叠=节点尺寸摘要卡）。 */
+  private embedDisplayBounds(embedInstanceId: string): EmbedDisplayBounds {
+    return embedDisplayBoundsForLod(this.embedLod(embedInstanceId))
+  }
+
+  /** 本 Scene 全部 Embed 的档位 → 显示边界映射，喂给 buildEmbedLayoutNodes。 */
+  private embedDisplayBoundsMap(): Map<string, EmbedDisplayBounds> {
+    const bounds = new Map<string, EmbedDisplayBounds>()
+    if (!this.graph) {
+      return bounds
+    }
+    for (const embed of this.graph.embeds) {
+      bounds.set(embed.instanceId, this.embedDisplayBounds(embed.instanceId))
+    }
+    return bounds
+  }
+
+  /**
+   * 按当前 LOD 重建 Embed 的布局矩形。
+   *
+   * 必须和渲染同步：画的是摘要卡而 rect 还是 200×200 的话，
+   * 连线端点、递归命中、跨层拉线都会按一个不存在的圆算（#820）。
+   *
+   * 只改派生出来的显示矩形，**不回写 Core 的 authored position**：
+   * 语义缩放是显示层的事，用户捏合不应该顺手改掉星图的节点位置。
+   */
+  private refreshEmbedLodLayout(): void {
+    if (!this.graph) {
+      return
+    }
+    this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds, this.embedDisplayBoundsMap())
+    this.recomputeGeometry()
+  }
+
+  /**
+   * 本 Scene 的累计有效比例。
    *
    * 渲染、命中、边几何全部用这个值，界面上不允许再直接读 cameraScale / fitScale 当比例用。
    *
@@ -621,6 +741,8 @@ export struct StarMapScene {
     this.lastFittedSceneSize = localWidth
     // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
     this.syncSceneHandle()
+    // 本 Scene 的累计比例变了 → 它里面的 Embed 该展开还是该折叠要重算（#820）
+    this.refreshEmbedLodLayout()
   }
 
   /**
@@ -656,6 +778,8 @@ export struct StarMapScene {
       this.fitOffsetY = offset.y
     }
     this.syncSceneHandle()
+    // 局部容器尺寸变了：本 Scene 的累计比例跟着变，Embed 的展开/折叠重算（#820）
+    this.refreshEmbedLodLayout()
   }
 
   /**
@@ -966,6 +1090,10 @@ private refitAfterContentAdded(): void {
     logPinchEnd(this.cameraScale)
     this.pinchWasActive = false
     this.gestureTracker.endPinch()
+    // 捏合收尾：投影比例稳下来了，再判一次视觉焦点（#820）。
+    // 捏合过程中每帧都在改相机，但子 Scene 可能正在按新比例重建实例，
+    // 手势结束那一刻注册表里的树才和最终相机一致。
+    this.onFocusRecomputeRequested()
   }
 
   /** 按绝对路径查 Scene 句柄；查不到退回本层句柄。 */
@@ -1075,6 +1203,27 @@ private refitAfterContentAdded(): void {
     // onAreaChange 和 @Watch 谁先到不保证，先按当前这份比例校一遍局部适配：
     // 局部尺寸没变就什么都不做（相机缩放的正常情况），变了才重新居中。
     this.syncFitToSceneSize()
+    // 相机一变，每个 Embed 的屏幕投影就变了，展开/折叠要就地重算（#820）。
+    // 这就是语义缩放：小视口 + 小相机比例 → 折起来；放大 → 自动展开。
+    this.refreshEmbedLodLayout()
+  }
+
+  /**
+   * 视觉焦点变了（#820）：焦点链上的 Embed 强制展开，离链的重新按屏幕空间判。
+   * 焦点只改显示，不动 Core 的 StarMap / Embed 关系，也不改相机。
+   */
+  onFocusScenePathChange() {
+    this.refreshEmbedLodLayout()
+  }
+
+  /**
+   * 根视口尺寸变了（分屏、折叠屏展开、横竖屏切换）（#820）。
+   *
+   * 这里只重算派生显示状态：相机保持不动、focusScenePath 保持不动，
+   * 不重新 fit 根图，也不把用户拉回根层——同一个星图换个窗口大小就该接着看。
+   */
+  onRootViewportChange() {
+    this.refreshEmbedLodLayout()
   }
 
   onMotionProgressChange() {
@@ -1105,7 +1254,7 @@ private refitAfterContentAdded(): void {
       return
     }
     this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
-    this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
+    this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds, this.embedDisplayBoundsMap())
     this.recomputeGeometry()
   }
 
@@ -1659,7 +1808,7 @@ private refitAfterContentAdded(): void {
           links: this.graph.links,
           hyperlinks: this.graph.hyperlinks
         }
-        this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
+        this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds, this.embedDisplayBoundsMap())
         this.recomputeGeometry()
         // 子层新增内容后重算 local fit，让整棵子内容重新塞进父圆的安全区（#818 复审）
         this.refitAfterContentAdded()
@@ -2158,7 +2307,28 @@ private refitAfterContentAdded(): void {
   // ─── @Builder：Embed 组件 ───
 
   /**
-   * Embed 组件：主题容器色正圆，画布上唯一的外接形状是圆（#818 底色已跟随主题）。
+   * Embed 的渲染入口：按视觉 LOD 分派（#820）。
+   *
+   * 档位是**渲染前**算好的（embedLod），这里只负责按档位挂不同的组件树：
+   * - expanded：完整正圆 + StarMapEmbedScene 递归实例化 child Scene
+   * - collapsed：节点尺寸的摘要卡（标题 + 子星图身份 + 选中态），
+   *   **不实例化** child Scene，所以它不占任何递归层级的渲染开销
+   * - hidden：祖先已折叠，本层连摘要卡都不画（数据仍在 Core 里）
+   *
+   * 关键结构：只有 expanded 分支里才出现 StarMapEmbedScene。
+   * 折叠态绝不能"先建好再缩到看不见"（那是白花开销），也不用 opacity(0) 假装折叠。
+   */
+  @Builder
+  StarMapEmbedItem(embed: StarMapEmbed) {
+    if (this.embedLod(embed.instanceId) === 'expanded') {
+      this.StarMapExpandedEmbed(embed)
+    } else if (this.embedLod(embed.instanceId) === 'collapsed') {
+      this.StarMapCollapsedEmbed(embed)
+    }
+  }
+
+  /**
+   * 展开态 Embed：主题容器色正圆，画布上唯一的外接形状是圆（#818 底色已跟随主题）。
    *
    * 尺寸只有一个来源：DEFAULT_EMBED_DIAMETER（见 StarMapLayout），
    * 宽=高=直径，圆角=直径/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
@@ -2172,7 +2342,7 @@ private refitAfterContentAdded(): void {
    *   圆外 / 圆内其余区域 → HitTestMode.None，事件落回父星图或交给 child StarMapScene
    */
   @Builder
-  StarMapEmbedItem(embed: StarMapEmbed) {
+  StarMapExpandedEmbed(embed: StarMapEmbed) {
     Stack() {
       // 1. innerContent 区域（占满整个 Embed 内容区，放 child StarMapEmbedScene）
       // 不挂任何手势，能不能收到事件由下面的 onTouchIntercept 决定
@@ -2198,6 +2368,11 @@ private refitAfterContentAdded(): void {
           onCameraChanged: this.onCameraChanged,
           // 空白拖动继续往下传：子星图里拖动的也是整张星图的视角（#818 复审）
           onCameraPanTo: this.onCameraPanTo,
+          // 根视口与视觉焦点原样透传：整棵递归树共用同一份（#820）。
+          // 子 Scene 不许拿自己那个圆当视口去判 LOD，否则"够不够展开"变成自我实现。
+          rootViewportWidth: this.rootViewportWidth,
+          rootViewportHeight: this.rootViewportHeight,
+          focusScenePath: this.focusScenePath,
           // 祖先累计比例：子 Scene 的有效比例 = 它的 fitScale × 这一份（#818 复审）
           inheritedScale: this.viewportScaleValue(),
         })
@@ -2231,9 +2406,9 @@ private refitAfterContentAdded(): void {
       .position({ x: 0, y: 0 })
       .hitTestBehavior(HitTestMode.None)
     }
-    .width(DEFAULT_EMBED_DIAMETER * this.viewportScaleValue())
-    .height(DEFAULT_EMBED_DIAMETER * this.viewportScaleValue())
-    .borderRadius(DEFAULT_EMBED_DIAMETER / 2 * this.viewportScaleValue())
+    .width(projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER, this.viewportScaleValue()))
+    .height(projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER, this.viewportScaleValue()))
+    .borderRadius(projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER / 2, this.viewportScaleValue()))
     // 跟随主题：写死黑色时浅色主题下整颗子星图是一块黑饼，标题白字也压不出来（#818）
     .backgroundColor(this.themeConfig.colors.surfaceContainer)
     // 未选中也要有一条细描边，否则圆壳在同色底上看不出边界；选中时加粗。
@@ -2313,7 +2488,9 @@ private refitAfterContentAdded(): void {
    * 这里只负责转成 ArkUI 的 Rectangle。
    */
   private buildEmbedCircleResponseRegions(): Rectangle[] {
-    const bands = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER * this.viewportScaleValue())
+    const bands = buildCircleResponseBands(
+      projectLocalLengthToScreen(DEFAULT_EMBED_DIAMETER, this.viewportScaleValue())
+    )
     const regions: Rectangle[] = []
     for (const band of bands) {
       regions.push({
@@ -2324,6 +2501,58 @@ private refitAfterContentAdded(): void {
       })
     }
     return regions
+  }
+
+  /**
+   * 折叠态 Embed：和普通节点同尺寸的摘要卡（#820）。
+   *
+   * 保留三样身份信息：标题、"这是一个子星图"、选中态。
+   * 丢掉的是 child Scene——**不创建**，所以深层递归的渲染开销是真的降下来了，
+   * 而不是"建好了再缩到看不见"。
+   *
+   * 热区整块归这个 Embed：点它就是选中这个子星图，不存在"点进去编辑"这一层
+   * （里面本来就没有 child Scene）。所以这里不用圆形 responseRegion、
+   * 不用 onTouchIntercept 分流，也不用 onChildTouchTest —— 卡里没有子组件参与竞争。
+   *
+   * 位置仍然来自 embed.position（Core 的 authored position）：
+   * 语义缩放只改显示，不回写数据，用户捏合不该顺手改掉星图布局。
+   */
+  @Builder
+  StarMapCollapsedEmbed(embed: StarMapEmbed) {
+    Column() {
+      Text(embed.label ?? embed.targetStarmapId)
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.themeConfig.colors.onSurface)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+        .textAlign(TextAlign.Center)
+
+      Text($r('app.string.starmap_sub_starmap'))
+        .fontSize(11)
+        .fontColor(this.themeConfig.colors.onSurfaceVariant)
+        .maxLines(1)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+    }
+    .width(projectLocalLengthToScreen(DEFAULT_NODE_WIDTH, this.viewportScaleValue()))
+    .height(projectLocalLengthToScreen(DEFAULT_NODE_HEIGHT, this.viewportScaleValue()))
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(this.themeConfig.colors.surfaceContainer)
+    .borderRadius(projectLocalLengthToScreen(DEFAULT_NODE_RADIUS, this.viewportScaleValue()))
+    .border({
+      width: this.isEmbedSelected(embed.instanceId) ? 3 : 1,
+      color: this.isEmbedSelected(embed.instanceId)
+        ? STARMAP_SELECTED_STROKE_COLOR
+        : this.themeConfig.colors.outlineVariant
+    })
+    .position({
+      x: this.getEmbedScreenX(embed.instanceId),
+      y: this.getEmbedScreenY(embed.instanceId)
+    })
+    .clip(true)
+    .gesture(this.embedGestureGroup(embed))
   }
 
   // ─── 菜单显示状态回写 ───
@@ -2440,6 +2669,9 @@ private refitAfterContentAdded(): void {
     } else {
       this.maybeFitView()
     }
+    // 容器尺寸变了：本 Scene 的累计比例变了，Embed 的展开/折叠重算（#820）。
+    // 根视口（rootViewportWidth / Height）的变化另有 onRootViewportChange 接。
+    this.refreshEmbedLodLayout()
   }
 
   build() {

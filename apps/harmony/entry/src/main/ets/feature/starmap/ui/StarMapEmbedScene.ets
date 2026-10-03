@@ -27,6 +27,10 @@
 // 生成（带 scenePath，同一个 instanceId 在每层父图里各出现一次也不会重名）。
 // 这里既不新增 Pinch 也不新增 Pan：两指永远只有根 Scene 那一份 PinchGesture，
 // 单指归属永远由 resolveRecursiveHit 决定。
+//
+// #820：本组件只在父层 LOD 为 expanded 时才存在——父层是 collapsed 时
+// StarMapEmbedItem 的条件渲染根本不挂这个组件（不是挂上再隐藏），
+// 所以深层递归的渲染开销是真的降下来了。子 Scene 的局部 fit 仍然只算一次。
 
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
@@ -132,6 +136,23 @@ export struct StarMapEmbedScene {
   @Prop cameraOffsetX: number = 0
   /** 全局相机 Y 偏移：必须是 @Prop，否则子层 Pan 起手基准会读到旧值（#818 复审） */
   @Prop cameraOffsetY: number = 0
+  /**
+   * 根 StarMap 实际可绘制内容区宽高（vp），原样透传（#820）。
+   *
+   * 必须是 @Prop：LOD 判定读的就是这两个值，写成普通字段等于把子 Scene 的视口
+   * 冻在创建那一刻，分屏 / 折叠屏展开之后子层永远按旧视口判展开。
+   *
+   * 子 Scene **不许**拿自己这个圆当根视口：那样"这层还剩多少展开空间"
+   * 就是自己算自己，永远不够，递归会一路折到底。
+   */
+  @Prop rootViewportWidth: number = 0
+  /** 根视口高度（vp），语义同 rootViewportWidth（#820）。 */
+  @Prop rootViewportHeight: number = 0
+  /**
+   * 当前视觉焦点的 scenePath 描述（#820）：原样透传。
+   * 焦点链上的 Embed 强制展开，子 Scene 靠它知道自己是不是"用户正在看的那一层"。
+   */
+  @Prop focusScenePath: string = 'root'
 
   // ─── 普通属性 ───
   bridge: IWriterCoreBridge | null = null
@@ -254,6 +275,11 @@ export struct StarMapEmbedScene {
         onCameraPanTo: this.onCameraPanTo,
         // 祖先累计比例原样往下传：第二层的累计 = camera × 第一层 fit × 第二层 fit（#818 复审）
         inheritedScale: this.inheritedScale,
+        // 根视口与视觉焦点同样原样往下传（#820）：整棵递归树共用同一份根视口和同一个焦点，
+        // 子 Scene 只按"自己这一层"参与 LOD 判定，不重算根视口、不改焦点。
+        rootViewportWidth: this.rootViewportWidth,
+        rootViewportHeight: this.rootViewportHeight,
+        focusScenePath: this.focusScenePath,
         sceneDepth: this.sceneDepth + 1,
         bridge: this.bridge,
         themeConfig: this.themeConfig,
