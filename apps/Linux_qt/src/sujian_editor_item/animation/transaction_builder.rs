@@ -437,7 +437,9 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransacti
         let mut consumed_carried: Vec<usize> = Vec::new();
         let mut consumed_units: Vec<usize> = Vec::new();
         for (carried_idx, frame) in carried_as_frames.iter().enumerate() {
-            // 协同文字属于原 stage，必须继续旧 route，不能被同 byte range 的新字吸收。
+            // 协同吞吐字不参与同 byte range 的新 unit 匹配：它会走下面的
+            // `detach_caret_track_to_timed`，从当前屏幕帧继续收口到终态，
+            // 既不被同 byte range 的新字吸收，也不重新排队旧 route。
             if spec.visual_state.carried_units[carried_idx]
                 .timing
                 .is_caret_track()

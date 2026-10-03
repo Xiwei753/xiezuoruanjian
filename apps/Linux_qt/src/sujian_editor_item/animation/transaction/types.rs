@@ -76,12 +76,14 @@ pub(crate) enum TextVisualOperationKind {
 pub(crate) struct PreparedVisualUnit {
     pub slice: AnimatedSlice,
     pub timing: VisualUnitTiming,
-    /// Issue #819 评论 5968931455: 本 unit 所属的 visual stage id。
+    /// Issue #819 评论 5968931455 / Issue #824 评论 5972962319:
+    /// 本 unit 所属的 visual stage id。
     ///
-    /// - `None`：不参与 stage_id 过滤（向后兼容，测试构造 / Reflow unit）。
-    /// - `Some(id)`：`sample_unit_slice_frame` 比较本 unit 的 stage_id 与
-    ///   当前 segment 的 stage_id，不匹配时保持初态/终态，避免跨事务 carried unit
-    ///   消费下一笔编辑的 route。
+    /// - `None`：不参与 stage_id 过滤（Reflow unit、retarget / detach 后的
+    ///   `Timed` carried 吞吐 unit、测试构造）。
+    /// - `Some(id)`：`sample_unit_slice_frame` 比较本 unit 的 stage_id 与当前
+    ///   segment 的 stage_id；生产路径上二者同属这一笔 active motion（总是匹配），
+    ///   不匹配只是防御性保护，让 unit 保持初态/终态。
     pub stage_id: Option<IngestStageId>,
 }
 
@@ -133,11 +135,12 @@ impl PreparedVisualUnit {
         }
     }
 
-    /// Issue #819 评论 5968931455: 设置本 unit 的 visual stage id。
+    /// Issue #819 评论 5968931455 / Issue #824 评论 5972962319:
+    /// 设置本 unit 的 visual stage id。
     ///
-    /// 协同 InsertReveal/DeleteConceal 在 `build_prepared_transaction` 中
-    /// 调本方法标记自己属于哪个 stage。carried unit 标记旧事务的 stage_id，
-    /// 新事务自己创建的 unit 标记新事务的 stage_id。
+    /// 协同 InsertReveal/DeleteConceal 在 `build_prepared_transaction` 中调本方法
+    /// 标记自己属于**当前这笔** active motion 的 stage。retarget / detach 后的
+    /// carried 吞吐 unit 是 `Timed`、`stage_id = None`，不再携带历史 stage。
     pub fn with_stage_id(mut self, stage_id: IngestStageId) -> Self {
         self.stage_id = Some(stage_id);
         self
@@ -285,17 +288,20 @@ pub(crate) enum IngestSnapshotSide {
     New,
 }
 
-/// Issue #819 评论 5968931455: 跨事务 carried unit 的阶段/快照身份。
+/// Issue #819 评论 5968931455 / Issue #824 评论 5972962319:
+/// **当前 active motion** 的阶段/快照身份。
 ///
-/// 每个 `CaretTrackSegment` 标明自己属于哪个 visual stage，
-/// 避免跨事务 carried unit 的两个 "Old" 被当成同一侧。
+/// 一条 active route 只属于当前 motion：route 内所有 segment 都使用当前 motion
+/// 的 stage，不再存在“旧 route 剩余段保留旧 stage”的串行拼接。
 ///
-/// 连续 Backspace 例子：`ABC|`，第一笔删 C 播到一半（C 约半个可见，caret 在 25），
-/// 第二笔删 B。carried C 的旧 snapshot 是 stage A，当前 B 的 old snapshot 是 stage B。
-/// 新事务的 route 合成为 `旧剩余段(stage A) + 新段(stage B)`。
-/// `compute_frame_by_caret_ingest` 根据 stage_id 判断哪个 unit 该被当前 segment 驱动：
-/// - 采样到 stage A 段时，只有 carried C（stage A）被驱动，新 B（stage B）保持初态；
-/// - 采样到 stage B 段时，carried C（stage A）保持终态，新 B（stage B）被驱动。
+/// 旧 glyph 如果需要继续显示，会在 retarget / PointerClick detach 时从当前屏幕帧
+/// 转成 `VisualUnitTiming::Timed` carried unit（见
+/// `retarget_motion::detach_caret_track_to_timed`），不会把旧 stage / 旧 route
+/// segment 插回新的 caret track。
+///
+/// `compute_frame_by_caret_ingest` 仍按 stage_id 判断本帧该由哪个 segment 驱动：
+/// 只有 stage_id 与当前 segment 匹配的 unit 才被吞吐。生产路径上 unit 与 segment
+/// 同属这一笔 motion（总是匹配）；不匹配只作为测试构造 / 异常残留的防御性保护。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct IngestStageId(pub(crate) u64);
 
@@ -426,11 +432,13 @@ pub(crate) struct PreparedCursorVisualTrack {
     /// `from`/`to` 字段保留为整条运动的起点/终点（给高度、epoch 判断等用），
     /// 但逐帧几何一律走 `segments`。
     pub segments: Vec<CaretTrackSegment>,
-    /// Issue #819 评论 5968931455: 本 track 所属的 visual stage id。
+    /// Issue #819 评论 5968931455 / Issue #824 评论 5972962319:
+    /// **当前 active motion 的身份**。
     ///
-    /// 新事务的 track 拥有新 stage_id；它的 segments 可能混合旧 stage_id
-    ///（carried route 剩余段）和新 stage_id（当前新编辑的 route 段）。
-    /// `sampled_ingest_at_progress` 返回当前段 的 stage_id，
+    /// 当前 route 的所有 `CaretTrackSegment.ingest_stage_id` 都属于这一笔 motion，
+    /// 不会混合历史 stage：carried glyph 已在 retarget / PointerClick detach 时
+    /// 转成 Timed（`stage_id = None`），不通过旧 stage 驱动。
+    /// `sampled_ingest_at_progress` 返回当前段的 stage_id，
     /// 供 `sample_unit_slice_frame` 做 stage_id 过滤。
     pub stage_id: IngestStageId,
 }

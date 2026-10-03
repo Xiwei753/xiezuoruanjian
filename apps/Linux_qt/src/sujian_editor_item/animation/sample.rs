@@ -113,13 +113,15 @@ fn sample_unit_slice_frame(
         // 协同 InsertReveal/DeleteConceal：逐帧边界来自本帧 caret 采样。
         // DeleteForwardBoundary 的收拢边界也在这里按本帧 ingest_progress 算完。
         let caret = caret?;
-        // Issue #819 评论 5968931455: stage_id 过滤。
-        // carried unit（旧 stage_id）和新 unit（新 stage_id）在同一条 track 上，
-        // 但 segment 的 stage_id 不同。只有 stage_id 匹配的 unit 才在当前段被吞吐，
-        // 其余 unit 保持初态/终态，避免跨事务 carried unit 消费下一笔编辑的 route。
+        // Issue #819 评论 5968931455 / Issue #824 评论 5972962319: stage_id 过滤。
+        // 生产路径上 unit 与当前 segment 同属这一笔 active motion，stage_id 总是
+        // 匹配；旧 glyph 若要继续显示，已在 retarget / detach 时转成 Timed，
+        // 不带历史 stage。因此下面的不匹配分支只是**防御性兼容 / 异常状态保护**
+        // （测试构造、异常残留），不是“旧 stage + 新 stage 共用一条 track”的正常
+        // 架构：不匹配的 unit 保持初态/终态，绝不消费不属于自己的 route 段。
         if let Some(unit_stage_id) = unit.stage_id {
             if unit_stage_id != caret.ingest_stage_id {
-                // stage_id 不匹配：本 unit 不该被当前 segment 驱动。
+                // stage_id 不匹配（防御性）：本 unit 不该被当前 segment 驱动。
                 // unit 的 stage 在前（< caret stage）→ 已完成，保持终态；
                 // unit 的 stage 在后（> caret stage）→ 还没开始，保持初态。
                 let unit_passed = unit_stage_id < caret.ingest_stage_id;
@@ -218,7 +220,12 @@ fn slice_side_for_kind(kind: AnimatedSliceKind) -> Option<IngestSnapshotSide> {
     }
 }
 
-/// Issue #819 评论 5968931455: stage_id 不匹配时返回初态/终态帧。
+/// Issue #819 评论 5968931455 / Issue #824 评论 5972962319: stage_id 不匹配时的
+/// 防御性帧。
+///
+/// 正常生产路径不会走到这里：unit 与当前 segment 同属这一笔 active motion
+/// （stage_id 总是匹配）。只有测试构造或异常残留状态才会不匹配，此时按阶段先后
+/// 返回初态 / 终态，绝不让 unit 消费不属于自己的 route 段。
 ///
 /// - `unit_passed = true`：unit 的 stage 在当前 segment 之前（已完成）→ 终态。
 ///   - InsertReveal 终态 = fully shown（visible = 1.0）。

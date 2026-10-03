@@ -4889,7 +4889,8 @@ fn issue815_review10_composition_update_mixed_route_is_side_aware() {
     }
 }
 
-// ── Issue #819 评论 5968931455: 连续事务 carried route 合成测试 ──
+// ── Issue #819 评论 5968931455 / Issue #824: 连续事务 retarget 与 carried
+//    glyph 收口测试（旧模型「旧剩余段 + 新段」的合成已删除） ──
 
 /// Issue #824 评论 5971089641 第 1/3 节：retarget 只保留「当前屏幕状态 → 最新目标」。
 ///
@@ -5254,8 +5255,9 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_d
 /// 新事务第一帧不能重新隐藏/重播已吐出的字。
 ///
 /// 场景：`A|`，第一笔插入 B 播到 50%（B 约半个可见，caret 在 x=15），
-/// 第二笔插入 C。carried B 的旧 route 剩余段保留旧 stage_id，
-/// 新事务第一帧 caret 从 handoff.sampled.x=15 起步，不能跳回逻辑 old caret.x=10。
+/// 第二笔插入 C。carried B 从当前屏幕帧继续收口（不再排队旧 route、不带旧
+/// stage），新事务第一帧 caret 从 handoff.sampled.x=15 起步，不能跳回逻辑
+/// old caret.x=10。
 #[test]
 fn issue819_comment5968931455_consecutive_insert_carried_b_not_replay() {
     let sid = issue756_shaping_identity();

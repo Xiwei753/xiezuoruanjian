@@ -53,11 +53,13 @@ pub(crate) struct SampledCaretFrame {
     pub ingest_side: Option<IngestSnapshotSide>,
     /// 本帧所处路由段的局部进度（0..1）。
     pub ingest_progress: f64,
-    /// Issue #819 评论 5968931455: 本帧所处路由段的 visual stage id。
+    /// Issue #819 评论 5968931455 / Issue #824 评论 5972962319:
+    /// 本帧所处路由段的 visual stage id。
     ///
-    /// 来自当前 segment 的 `ingest_stage_id`。`sample_unit_slice_frame` 据此
-    /// 判断本帧该驱动哪个 unit：只有 stage_id 匹配的 unit 才在当前段被吞吐，
-    /// 其余 unit 保持初态/终态，避免跨事务 carried unit 消费下一笔编辑的 route。
+    /// 来自当前 segment 的 `ingest_stage_id`。生产路径上一条 route 只属于这一笔
+    /// active motion，unit 与 segment 的 stage_id 总是匹配；`sample_unit_slice_frame`
+    /// 的不匹配分支只是测试构造 / 异常残留的防御性保护（不匹配的 unit 保持
+    /// 初态/终态，绝不消费不属于自己的 route 段）。
     pub ingest_stage_id: IngestStageId,
 }
 
@@ -97,7 +99,10 @@ impl Default for SampledCaretFrame {
 /// - `None`：`ReflowMove`/`ReflowCrossFade` 不参与吞吐，side 无意义。
 #[derive(Clone, Debug)]
 pub(crate) struct SampledSliceFrame {
-    /// 原视觉单元的阶段身份；同一事务可以包含多个 carried stage。
+    /// 本视觉单元的阶段身份。
+    ///
+    /// 生产路径上同一事务的 CaretTrack 吞吐 unit 只有**当前 active motion** 的
+    /// stage；detach / carried retarget 后的 Timed unit 为 `None`，不带历史 stage。
     pub unit_stage_id: Option<super::transaction::types::IngestStageId>,
     /// 切片种类（InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）。
     pub kind: AnimatedSliceKind,
@@ -171,21 +176,24 @@ pub(crate) struct SampledEditVisualState {
 /// 现在把完整的 [`AnimatedSlice`]（含全部 ingest 元数据：shaping identity、
 /// byte mapping identity、snapshot id / texture owner、caret anchor、行级 mask、
 /// 吞吐边界驱动等）连同本次 sampled frame 与原 timing 一起带走，由 transaction
-/// builder 消费成额外的 visual units 真正 `units.push()` 到新事务，让它们继续
-/// 由新 track/新 handoff 收口，直到真正终态。
+/// builder 消费成额外的 visual units 真正 `units.push()` 到新事务：协同吞吐字经
+/// `retarget_motion::detach_caret_track_to_timed` 从当前屏幕帧转成 Timed 继续
+/// 收口，Timed（Reflow）按自己的时间线播完。
 ///
 /// 之前只带 `SampledSliceFrame`（几何）不够：几何没有 ingest 元数据就无法
 /// 重建 `AnimatedSlice::compute_frame_by_caret_ingest` 所需的 caret anchor /
 /// line mask / ingest line ord，新事务接管后吞吐边界会从零开始，文字闪一下。
 #[derive(Clone, Debug)]
 pub(crate) struct CarriedVisualUnit {
-    /// 原单元自己的阶段身份，重复交棒时仍然原样保留。
+    /// 原单元自己的阶段身份（unit 匹配 / 诊断用）；协同吞吐字转成 Timed 后由
+    /// 当前 active motion 驱动，不再使用这个历史 stage。
     pub stage_id: Option<super::transaction::types::IngestStageId>,
     /// 原 `AnimatedSlice`，保留全部 ingest 元数据（不是只有几何的 `SampledSliceFrame`）。
     pub slice: AnimatedSlice,
     /// 本次 sampled frame（几何 + opacity + visible_fraction + remaining_duration）。
     pub sampled_frame: SampledSliceFrame,
-    /// 原 unit 的 timing（CaretTrack / Timed），新事务继承后按规则续播。
+    /// 原 unit 的 timing 采样：`Timed`（Reflow）继承后按自己的时间线播完；
+    /// `CaretTrack`（协同吞吐字）不继承时间线，转成从当前屏幕帧继续的 Timed。
     pub timing: VisualUnitTiming,
 }
 
