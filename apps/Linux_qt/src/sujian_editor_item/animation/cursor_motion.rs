@@ -184,8 +184,10 @@ impl LinuxEditorAnimationCoordinator {
             {
                 if tx.cursor_owner_epoch != current_cursor_epoch {
                     // Issue #735 评论 5773604666 问题3 / Issue #785: 退休这笔事务的
-                    // cursor motion ownership。文字 unit 有独立时间线，不被推到终态，
-                    // 按自己 Timed 时间线继续播完/rebase。
+                    // cursor motion ownership。Issue #819 评论 5967250411 问题 6：
+                    // CaretTrack text unit 没有自己单独的 timeline，逐帧边界来自同一笔
+                    // cursor track；epoch 失效后它们由 build_text_animation_plan_with_sample
+                    // 收口到终态，不停在半路。Timed unit 按自己时间线继续播完/rebase。
                     self.retire_caret_driven_units_for_transaction(key);
                 }
             }

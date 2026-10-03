@@ -1026,7 +1026,9 @@ Rectangle {
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                         typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
                         // Issue #756 / Issue #785: 协同动画显式模式开关。
-                        // 协同只表示同事务/同首帧/同 rebase，不共享 duration。
+                        // Issue #819 评论 5967250411 问题 6：协同 = 一条 caret 运动轨迹 +
+                        // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。CaretTrack unit
+                        // 没有独立时间线，逐帧边界来自同一笔 cursor track 的当前帧。
                         coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
                         scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                         viewport_height: sujianEditor.height
@@ -1072,65 +1074,37 @@ Rectangle {
                             }
                         }
 
-                        // Issue #819 评论 5956495850 第 6/7 节：左键长按选词改用
-                        // TapHandler + Timer，不再用 TapHandler.onLongPressed。
+                        // Issue #819 评论 5967250411 问题 4：左键长按选词改用
+                        // Rust property 驱动的 Timer，不再用 TapHandler 接管 pointer event。
                         //
                         // 设计：
-                        // - TapHandler 只负责检测左键 press，press 时启动 Timer，
-                        //   release/cancel 时停 Timer。
-                        // - Timer 到点时调 sujianEditor.activate_pointer_long_press(x, y)，
-                        //   Rust 侧状态机 activate_long_press + long_press_at 选词。
+                        // - qquickitem_impl mouse_event 是左键 pointer event 的唯一 owner。
+                        //   左键 Press 时 Rust 设 long_press_timer_active = true + 记录 x/y；
+                        //   Release / Move 超阈值时设 false。
+                        // - QML Timer.running 绑定 sujianEditor.long_press_timer_active，
+                        //   到点时调 sujianEditor.activate_pointer_long_press(x, y)。
                         // - Timer 不接管 pointer grab，不处理 MouseMove/Release。
+                        // - release/cancel 的 selection gesture 结束只由 qquickitem_impl
+                        //   mouse_event 做一次，不再从 QML 结束选择手势。
                         // - 左键长按只负责选择，不弹菜单（菜单只由右键 TapHandler 触发）。
                         //
-                        // 旧 touchLongPressHandler (TapHandler.onLongPressed) 已删除：
-                        // 它同时绑了 onLongPressed/onPressedChanged/onCanceled，把
-                        // pointer grab、selection gesture 生命周期和菜单混在一起。
-                        // Issue #815 评论 6042062633 修改 1 恢复的鼠标左键长按选词
-                        // 语义保留（Mouse/TouchPad/TouchScreen/Stylus 全接受），
-                        // 但实现改成 Timer 调 activate_pointer_long_press。
-                        TapHandler {
-                            id: leftButtonLongPressHandler
-                            acceptedButtons: Qt.LeftButton
-                            acceptedDevices: PointerDevice.Mouse
-                                          | PointerDevice.TouchPad
-                                          | PointerDevice.TouchScreen
-                                          | PointerDevice.Stylus
-
-                            // 长按阈值（ms）。与 Qt TapHandler 默认 longPressThreshold
-                            // 保持一致（约 800ms）。
-                            property int longPressInterval: 800
-
-                            onPressedChanged: {
-                                if (pressed) {
-                                    // press 时记录位置并启动 Timer。
-                                    // point.position 在 press 时已可用。
-                                    leftButtonLongPressTimer.pendingX = point.position.x
-                                    leftButtonLongPressTimer.pendingY = point.position.y
-                                    leftButtonLongPressTimer.start()
-                                } else {
-                                    // release/cancel 时停 Timer 并结束选择手势。
-                                    leftButtonLongPressTimer.stop()
-                                    sujianEditor.end_selection_gesture_qml()
-                                }
-                            }
-
-                            onCanceled: {
-                                leftButtonLongPressTimer.stop()
-                                sujianEditor.end_selection_gesture_qml()
-                            }
-
-                            Timer {
-                                id: leftButtonLongPressTimer
-                                interval: leftButtonLongPressHandler.longPressInterval
-                                repeat: false
-                                // Timer 到点时调 activate_pointer_long_press，
-                                // 不接管 pointer grab，不处理 MouseMove/Release。
-                                property real pendingX: 0
-                                property real pendingY: 0
-                                onTriggered: {
-                                    sujianEditor.activate_pointer_long_press(pendingX, pendingY)
-                                }
+                        // 旧 leftButtonLongPressHandler (TapHandler) 已删除：它和
+                        // qquickitem_impl mouse_event 双 owner，且 TapHandler onPressedChanged
+                        // / onCanceled 结束选择手势与 mouse_event release
+                        // 重复结束手势。Issue #815 评论 6042062633 修改 1 恢复的鼠标左键
+                        // 长按选词语义保留（Timer 到点调 activate_pointer_long_press）。
+                        Timer {
+                            id: leftButtonLongPressTimer
+                            // Timer.running 绑定 Rust property，由 mouse_event 控制启停。
+                            running: sujianEditor.long_press_timer_active
+                            interval: 800
+                            repeat: false
+                            // Timer 到点时调 activate_pointer_long_press，
+                            // 不接管 pointer grab，不处理 MouseMove/Release。
+                            onTriggered: {
+                                sujianEditor.activate_pointer_long_press(
+                                    sujianEditor.long_press_pending_x,
+                                    sujianEditor.long_press_pending_y)
                             }
                         }
 

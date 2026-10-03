@@ -49,53 +49,43 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
          改用 TapHandler + Timer 调 activate_pointer_long_press。"
     );
 
-    // 新 leftButtonLongPressHandler 必须存在。
-    let handler_pos = src
-        .find("id: leftButtonLongPressHandler")
-        .expect("Issue #819 评论 5956495850 第 6 节: WritingWorkspace.qml 必须有新的左键长按 handler");
-    let window_start = src[..handler_pos].rfind("TapHandler {").unwrap_or(0);
-    // 取到下一个 TapHandler 之前，即本 handler 的完整范围（按字符边界回退）。
-    let window_end = src[handler_pos..]
-        .find("TapHandler {")
-        .map(|i| handler_pos + i)
-        .unwrap_or(src.len());
-    let window = src[window_start..window_end].to_string();
-
+    // Issue #819 评论 5967250411 问题 4：leftButtonLongPressHandler (TapHandler) 已删除。
+    // 左键 pointer event 的唯一 owner 是 qquickitem_impl mouse_event。
+    // QML 只保留一个不绑 pointer event 的 Timer，由 Rust property 控制启停。
     assert!(
-        window.contains("acceptedButtons: Qt.LeftButton"),
-        "Issue #815 评论 6042062633 修改 1: 长按 handler 仍必须只吃左键，右键菜单走独立 handler。"
+        !src.contains("id: leftButtonLongPressHandler"),
+        "Issue #819 评论 5967250411 问题 4: leftButtonLongPressHandler (TapHandler) \
+         必须删除，左键 pointer event 单一 owner 是 qquickitem_impl mouse_event。"
     );
-    for device in [
-        "PointerDevice.Mouse",
-        "PointerDevice.TouchPad",
-        "PointerDevice.TouchScreen",
-        "PointerDevice.Stylus",
-    ] {
-        assert!(
-            window.contains(device),
-            "Issue #815 评论 6042062633 修改 1: 长按 handler 必须接受 {}，\
-             Issue #714 把鼠标排除在外是错的（左键长按与右键菜单是两个不同输入）。",
-            device
-        );
-    }
 
-    // Issue #819 评论 5956495850 第 6/7 节：新链路用 Timer 调
+    // 新 leftButtonLongPressTimer 必须存在，且不绑 pointer event。
+    assert!(
+        src.contains("id: leftButtonLongPressTimer"),
+        "Issue #819 评论 5967250411 问题 4: WritingWorkspace.qml 必须有 \
+         leftButtonLongPressTimer（不绑 pointer event 的独立 Timer）。"
+    );
+
+    // Timer.running 绑定 Rust property long_press_timer_active。
+    assert!(
+        src.contains("long_press_timer_active"),
+        "Issue #819 评论 5967250411 问题 4: Timer.running 必须绑定 \
+         sujianEditor.long_press_timer_active，由 Rust mouse_event 控制启停。"
+    );
+
+    // Issue #819 评论 5967250411 问题 4：新链路用 Timer 调
     // activate_pointer_long_press（Rust 状态机 activate_long_press + long_press_at）。
     assert!(
-        window.contains("activate_pointer_long_press"),
-        "Issue #819 评论 5956495850 第 6 节: 新长按 handler 必须通过 Timer 调\
+        src.contains("activate_pointer_long_press"),
+        "Issue #819 评论 5967250411 问题 4: QML Timer 必须调 \
          activate_pointer_long_press。"
     );
-    assert!(
-        window.contains("Timer"),
-        "Issue #819 评论 5956495850 第 6 节: 新长按 handler 必须用 Timer 触发长按。"
-    );
 
-    // end_selection_gesture_qml 仍必须在 release/cancel 时调用。
+    // Issue #819 评论 5967250411 问题 4：QML 不再调 end_selection_gesture_qml。
+    // release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次。
     assert!(
-        window.contains("end_selection_gesture_qml"),
-        "Issue #815 评论 6042062633 修改 1: 长按释放/取消时仍必须调\
-         end_selection_gesture_qml 结束选择手势。"
+        !src.contains("end_selection_gesture_qml"),
+        "Issue #819 评论 5967250411 问题 4: QML 不再调 end_selection_gesture_qml，\
+         release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次。"
     );
 
     // 右键菜单继续由独立的 Qt.RightButton TapHandler 处理。

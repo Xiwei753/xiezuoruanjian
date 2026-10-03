@@ -408,6 +408,35 @@ pub(crate) struct LinuxEditorPipeline {
     pending_promoted_layout: Option<crate::editor::layout::PromotedLayout>,
 }
 
+/// Issue #819 评论 5967250411 问题 3：Linux 平台内部的编辑结果分类。
+///
+/// `apply_kernel_outcome` 把 Core `EditorEditOutcome` 拍扁成 `Option<EditorEditResult>`，
+/// 在 `none_on_noop=false` 时对 Applied/NoChange/StaleRevision/InvalidOffset/InvalidRange
+/// 都返回 `Some(result)`，调用方无法区分"真的 Applied"和"NoChange/StaleRevision"。
+/// `edit_flow.rs` 用 `is_some()` 判 Applied 会把 NoChange/StaleRevision 误判成 Applied。
+///
+/// 本枚举保留 Core 的完整分类：只有 `Applied` / `AppliedWithAdjustedSelection` 才算
+/// 真正应用了编辑，`NotApplied` 带上具体的 kind 供 edit_flow 区分跳过原因。
+#[derive(Clone, Debug)]
+pub(crate) enum PipelineEditOutcome {
+    /// Core 真正应用了编辑（Applied / AppliedWithAdjustedSelection）。
+    Applied(EditorEditResult),
+    /// Core 没有应用编辑（NoChange / StaleRevision / InvalidOffset / InvalidRange）。
+    NotApplied {
+        kind: PipelineEditOutcomeKind,
+        result: EditorEditResult,
+    },
+}
+
+/// `PipelineEditOutcome::NotApplied` 的具体原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PipelineEditOutcomeKind {
+    NoChange,
+    StaleRevision,
+    InvalidOffset,
+    InvalidRange,
+}
+
 impl LinuxEditorPipeline {
     pub fn new() -> Self {
         Self {
@@ -780,6 +809,51 @@ impl LinuxEditorPipeline {
         }
     }
 
+    /// Issue #819 评论 5967250411 问题 3：保留 Core `EditorEditOutcome` 完整分类的
+    /// `apply_kernel_outcome` 变体。返回 `PipelineEditOutcome`，让 edit_flow 能区分
+    /// Applied 和 NoChange/StaleRevision。
+    ///
+    /// mirror 更新逻辑与 `apply_kernel_outcome` 完全一致，只是返回值不拍扁。
+    fn apply_kernel_outcome_typed(&mut self, outcome: EditorEditOutcome) -> PipelineEditOutcome {
+        match outcome {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+                if self.mirror.apply_edit_result(&result).is_err() {
+                    self.reload_mirror_from_kernel();
+                }
+                PipelineEditOutcome::Applied(result)
+            }
+            EditorEditOutcome::NoChange(result) => {
+                if self.mirror.apply_edit_result(&result).is_err() {
+                    self.reload_mirror_from_kernel();
+                }
+                PipelineEditOutcome::NotApplied {
+                    kind: PipelineEditOutcomeKind::NoChange,
+                    result,
+                }
+            }
+            EditorEditOutcome::StaleRevision(result) => {
+                self.reload_mirror_from_kernel();
+                PipelineEditOutcome::NotApplied {
+                    kind: PipelineEditOutcomeKind::StaleRevision,
+                    result,
+                }
+            }
+            EditorEditOutcome::InvalidOffset(result) => {
+                PipelineEditOutcome::NotApplied {
+                    kind: PipelineEditOutcomeKind::InvalidOffset,
+                    result,
+                }
+            }
+            EditorEditOutcome::InvalidRange(result) => {
+                PipelineEditOutcome::NotApplied {
+                    kind: PipelineEditOutcomeKind::InvalidRange,
+                    result,
+                }
+            }
+        }
+    }
+
     pub fn load_text(&mut self, text: String, cursor: usize) -> bool {
         let normalized = normalize_plain_text(&text);
         let clamped_cursor = clamp_to_char_boundary(&normalized, cursor);
@@ -806,7 +880,7 @@ impl LinuxEditorPipeline {
         byte_offset: usize,
         text: &str,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::Insert {
             byte_offset: Utf8ByteOffset::clamp_rope(self.kernel.rope(), byte_offset),
             text: text.to_string(),
@@ -814,7 +888,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     pub fn delete_range(
@@ -822,7 +896,7 @@ impl LinuxEditorPipeline {
         byte_start: usize,
         byte_end_exclusive: usize,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::Delete {
             byte_range: Utf8ByteRange::clamp_rope(
                 self.kernel.rope(),
@@ -834,7 +908,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     pub fn replace_range(
@@ -843,7 +917,7 @@ impl LinuxEditorPipeline {
         byte_end_exclusive: usize,
         replacement: &str,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::Replace {
             byte_range: Utf8ByteRange::clamp_rope(
                 self.kernel.rope(),
@@ -856,7 +930,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     /// 原子 IME commit — Qt `QInputMethodEvent` 两步语义的原子执行：
@@ -878,7 +952,7 @@ impl LinuxEditorPipeline {
         replacement_byte_end: usize,
         inserted_text: &str,
         cause: EditorTransactionCause,
-    ) -> Option<EditorEditResult> {
+    ) -> PipelineEditOutcome {
         let command = EditorCommand::ImeCommit {
             selection_byte_range: Utf8ByteRange::clamp_rope(
                 self.kernel.rope(),
@@ -902,7 +976,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        self.apply_kernel_outcome(outcome, false)
+        self.apply_kernel_outcome_typed(outcome)
     }
 
     pub fn set_selection(&mut self, anchor: usize, head: usize) -> Option<EditorEditResult> {

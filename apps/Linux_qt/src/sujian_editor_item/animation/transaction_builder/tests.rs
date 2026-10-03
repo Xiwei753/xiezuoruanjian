@@ -979,7 +979,7 @@ fn issue756_insert_spec_with_durations(
         new_cursor_line_bottom: 20.0,
         cursor_owner_epoch: 1,
         layout_basis_revision: LayoutRevision::initial(),
-        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None },
+        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None, carried_slices: Vec::new() },
         visual_affected_byte_range_old: Some((0, 2)),
         visual_affected_byte_range_new: Some((0, 3)),
         text_duration_ms: actual_text_duration,
@@ -2511,7 +2511,7 @@ fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_white
 
     let mut coord = LinuxEditorAnimationCoordinator::new();
     let prepared = PreparedRebaseHandoff::Insert {
-        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None },
+        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None, carried_slices: vec![] },
         range_start: 0,
         range_end: 1, // " " 一个空格
         insert_offset_map: offset_map,
@@ -3076,7 +3076,7 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
         new_cursor_line_bottom: 20.0,
         cursor_owner_epoch: 1,
         layout_basis_revision: LayoutRevision::initial(),
-        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None },
+        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None, carried_slices: Vec::new() },
         visual_affected_byte_range_old: Some((0, 5)),
         visual_affected_byte_range_new: Some((0, 5)),
         text_duration_ms: 100,
@@ -3235,7 +3235,7 @@ fn issue808_comment5918236360_problem2_smooth_only_insert_keeps_cursor_only_tran
     );
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
     let prepared = PreparedRebaseHandoff::Insert {
-        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None },
+        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None, carried_slices: vec![] },
         range_start: 1,
         range_end: 2,
         insert_offset_map: offset_map,
@@ -3326,7 +3326,7 @@ fn issue808_comment5918236360_problem2_truly_empty_transaction_still_dropped() {
     let new_snapshot = make_test_snapshot(" ", vec![(0, 1, 0.0, 0.0, sid)]);
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
     let prepared = PreparedRebaseHandoff::Insert {
-        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None },
+        visual_state: RebaseVisualState { rebase_frames: vec![], caret_handoff: None, carried_slices: vec![] },
         range_start: 0,
         range_end: 1,
         insert_offset_map: offset_map,
@@ -3746,7 +3746,7 @@ fn issue815_composition_spec(
         new_cursor_line_bottom,
         cursor_owner_epoch: 1,
         layout_basis_revision: LayoutRevision::initial(),
-        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None },
+        visual_state: RebaseVisualState { rebase_frames: Vec::new(), caret_handoff: None, carried_slices: Vec::new() },
         visual_affected_byte_range_old: None,
         visual_affected_byte_range_new: None,
         text_duration_ms: 100,
@@ -4271,6 +4271,7 @@ fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_care
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
             }),
+            carried_slices: Vec::new(),
         },
         visual_affected_byte_range_old: Some((0, 3)),
         visual_affected_byte_range_new: Some((0, 2)),

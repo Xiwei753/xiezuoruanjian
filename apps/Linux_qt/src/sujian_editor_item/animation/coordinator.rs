@@ -207,12 +207,14 @@ impl LinuxEditorAnimationCoordinator {
             .map(|t| t.key)
             .collect();
         for key in keys {
-            // Issue #785: 不再先 retire CaretTrack text units。文字 unit 有独立时间线，
-            // epoch 失效只退休 cursor motion ownership（在 find_cursor_transaction_for_target
-            // / build_text_animation_plan_with_sample 中处理），不把文字推到终态。
-            // 旧文字动画按自己当前帧做 rebase（rebind_timed_units_to_canonical），
-            // 真正被新编辑覆盖的才取消/替换。协同关系在 transaction/rebase 层维护，
-            // 不通过"光标位置裁文字"维护。
+            // Issue #819 评论 5967250411 问题 6：CaretTrack text unit 没有自己单独的
+            // timeline，它们的逐帧边界来自同一笔 cursor track 的当前帧。epoch 失效只
+            // 退休 cursor motion ownership（在 find_cursor_transaction_for_target /
+            // build_text_animation_plan_with_sample 中处理），不把文字推到终态。
+            // 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
+            // 的当前帧；非协同时才是独立文字 timeline + 独立 smooth cursor。rebind
+            // 把 Timed Reflow unit 重绑到当前 canonical，真正被新编辑覆盖的才取消/替换。
+            // 协同关系在 transaction/rebase 层维护，不通过"光标位置裁文字"维护。
             let tx = match self
                 .prepared_queue
                 .active_transactions_mut()

@@ -171,10 +171,21 @@ pub(crate) struct RebaseCaretHandoff {
 /// 合成旧的 `(Vec<RebaseFrame>, Option<RebaseCaretHandoff>)` 二元组，
 /// 由 `take_rebase_frames` 从 `SampledEditVisualState` 构造。
 /// coordinator 的所有 handoff 只接受本类型，不再分别传 frames 和 caret。
+///
+/// Issue #819 评论 5967250411 问题 2：增加 `carried_slices` 字段，收集本帧未到达
+/// 终态、但在新事务里匹配不到对应 unit 的旧 sampled slice。连续 Backspace 时第一笔
+/// 的 C 的 sampled slice 匹配不到第二笔已有 unit，旧事务又被 cancel，以前直接丢掉
+/// 导致 C 提前消失。现在这些 slice 带进 `carried_slices`，由 transaction builder
+/// 消费成额外的 visual units 带进新事务，让它们继续由新 track/新 handoff 收口，
+/// 直到真正终态。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RebaseVisualState {
     pub(crate) rebase_frames: Vec<RebaseFrame>,
     pub(crate) caret_handoff: Option<RebaseCaretHandoff>,
+    /// Issue #819 评论 5967250411 问题 2：未匹配到新事务已有 unit、但本帧仍未到达
+    /// 终态的旧 sampled slice。transaction builder 把它们作为额外的 visual units
+    /// 带进新事务，不让屏幕上还没吞完的旧 slice 因为新正文里没有那个字就被直接扔掉。
+    pub(crate) carried_slices: Vec<super::frame_state::SampledSliceFrame>,
 }
 
 #[derive(Clone, Debug)]
@@ -223,6 +234,8 @@ impl LinuxEditorAnimationCoordinator {
             return RebaseVisualState::default();
         }
         let mut all_rebase_frames: Vec<RebaseFrame> = Vec::new();
+        // Issue #819 评论 5967250411 问题 2：所有冲突事务的未终态、未匹配 slice 汇总。
+        let mut all_carried_slices: Vec<super::frame_state::SampledSliceFrame> = Vec::new();
         // (key, cursor_owner_epoch, handoff) 候选，cancel 之后再从中选 handoff。
         // 这样避免 cancel 后找不到 tx（cancel 调用了 retain 把 tx 从队列移除）。
         let mut caret_handoff_candidates: Vec<(
@@ -268,42 +281,36 @@ impl LinuxEditorAnimationCoordinator {
             // Issue #819 评论 5956495850 第 4 节：不再逐 unit 调
             // collect_rebase_frame_for_unit_without_caret，统一走采样入口。
             let sampled = super::sample::sample_transaction_visual_state(tx, now);
-            // 从 SampledSliceFrame 构造 RebaseFrame，做终态过滤 + 坐标系映射。
-            let frames: Vec<RebaseFrame> = sampled
-                .slices
-                .iter()
-                .filter_map(|slice| {
-                    // 终态过滤：已播完的 unit 不交棒。
-                    match slice.kind {
-                        AnimatedSliceKind::InsertReveal => {
-                            if slice.visible_fraction >= 1.0 - 1e-3 {
-                                return None;
-                            }
-                        }
-                        AnimatedSliceKind::DeleteConceal => {
-                            if slice.visible_fraction <= 1e-3 {
-                                return None;
-                            }
-                        }
-                        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                            if slice.progress >= 1.0 {
-                                return None;
-                            }
-                        }
-                    }
-                    Some(RebaseFrame {
-                        byte_start: slice.byte_start,
-                        byte_end: slice.byte_end,
-                        x: slice.dest_rect.x,
-                        y: slice.dest_rect.y,
-                        opacity: slice.opacity,
-                        shaping_identity: slice.shaping_identity.clone(),
-                        visible_fraction: slice.visible_fraction,
-                        sampled_at: now,
-                        remaining_duration_ms: slice.remaining_duration_ms,
-                    })
-                })
-                .collect();
+            // Issue #819 评论 5967250411 问题 1：终态过滤改用 slice.is_finished，
+            // 不再拿 visible_fraction 猜 CaretTrack 终态。
+            // CaretTrack unit 的 visible_fraction 固定 0.0，DeleteConceal 一进入 rebase
+            // 就被旧逻辑误判成"已吞完"，文字先消失，光标继续走。
+            // is_finished 由 sample_unit_slice_frame 按本帧生命周期明确设置：
+            // - Timed unit：unit.timing.progress(now) >= 1.0
+            // - CaretTrack unit：caret 不存在或 caret.progress >= 1.0
+            // Issue #819 评论 5967250411 问题 2：未终态的 slice 全部收集到 carried_slices，
+            // 由 transaction builder 消费成额外的 visual units 带进新事务，
+            // 不让屏幕上还没吞完的旧 slice 因为新正文里没有那个字就被直接扔掉。
+            let mut frames: Vec<RebaseFrame> = Vec::with_capacity(sampled.slices.len());
+            let mut carried: Vec<super::frame_state::SampledSliceFrame> =
+                Vec::with_capacity(sampled.slices.len());
+            for slice in &sampled.slices {
+                if slice.is_finished {
+                    continue;
+                }
+                carried.push(slice.clone());
+                frames.push(RebaseFrame {
+                    byte_start: slice.byte_start,
+                    byte_end: slice.byte_end,
+                    x: slice.dest_rect.x,
+                    y: slice.dest_rect.y,
+                    opacity: slice.opacity,
+                    shaping_identity: slice.shaping_identity.clone(),
+                    visible_fraction: slice.visible_fraction,
+                    sampled_at: now,
+                    remaining_duration_ms: slice.remaining_duration_ms,
+                });
+            }
             // 坐标系映射：把每个 frame 的 byte_start/byte_end 映射到 current-old 坐标系。
             // 硬约束：进入 match_rebase_frames 的 frame.byte_start/end 必须已经是
             // current-old 坐标。frame 的原值属于旧事务自己的 new_text revision，
@@ -327,6 +334,26 @@ impl LinuxEditorAnimationCoordinator {
                     }
                     // 无 per_tx_map（无 new_snapshot）：保留原 frame（退化为数值比较）。
                     Some(frame)
+                })
+                .collect();
+            // Issue #819 评论 5967250411 问题 2：carried slices 同样做坐标系映射，
+            // 让 transaction builder 能在新事务坐标系里消费它们。映射失败的 carried
+            // slice 仍然保留（退化为原 byte range），因为 carried slice 的几何
+            //（dest_rect/source_rect/opacity）不依赖 byte range 匹配，它作为额外
+            // visual unit 带进新事务后由新 track 收口。
+            let mapped_carried: Vec<super::frame_state::SampledSliceFrame> = carried
+                .into_iter()
+                .map(|mut slice| {
+                    if let Some(ref per_tx_map) = per_tx_map {
+                        if let Some((ms, me)) =
+                            per_tx_map.map_old_range_to_new(slice.byte_start, slice.byte_end)
+                        {
+                            slice.byte_start = ms;
+                            slice.byte_end = me;
+                        }
+                        // 映射失败：保留原 byte range，几何仍有效。
+                    }
+                    slice
                 })
                 .collect();
             // 在 cancel 之前从 sampled.caret 构造 RebaseCaretHandoff 候选。
@@ -361,6 +388,7 @@ impl LinuxEditorAnimationCoordinator {
             caret_handoff_candidates.push((old_key, tx.cursor_owner_epoch, caret_handoff));
             emit_transaction_diagnostic(tx, "editor.anim.rebase", reason);
             all_rebase_frames.extend(mapped_frames);
+            all_carried_slices.extend(mapped_carried);
             // cancel 这笔 tx（retain 会把它从队列移除）。
             self.prepared_queue.cancel(old_key, "rebased");
             cancelled_keys.push(old_key);
@@ -375,15 +403,17 @@ impl LinuxEditorAnimationCoordinator {
             .max_by_key(|(key, _, _)| key.transaction_id)
             .and_then(|(_, _, handoff)| handoff.clone());
         editor_animation_debug_log(&format!(
-            "anim_rebase: cancelled_keys={:?} reason={} carried_units={} carried_cursor={}",
+            "anim_rebase: cancelled_keys={:?} reason={} carried_units={} carried_cursor={} carried_slices={}",
             cancelled_keys,
             reason,
             all_rebase_frames.len(),
             selected_caret_handoff.is_some(),
+            all_carried_slices.len(),
         ));
         RebaseVisualState {
             rebase_frames: all_rebase_frames,
             caret_handoff: selected_caret_handoff,
+            carried_slices: all_carried_slices,
         }
     }
 

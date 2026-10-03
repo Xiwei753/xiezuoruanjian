@@ -599,14 +599,31 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            // Issue #819 评论 5956495850 第 3 节: 渲染直接消费 sample_transaction_visual_state()
+            // Issue #819 评论 5967250411 问题 5: 渲染直接消费 sample_transaction_visual_state()
             // 的结果生成 RenderPlan，不再自己逐 unit 调 compute_frame / compute_frame_by_caret_ingest。
             // 这样"屏幕画的帧"和"rebase 交棒的帧"天然是同一份算法。
             // - CaretTrack unit 在 caret 为 None 时不产出 slice frame（retire 时已清除
             //   cursor_visual_track，sample_transaction_visual_state 内部 caret 为 None）。
             // - Timed unit 按自己的时间线算 visible_fraction + compute_frame。
-            let sampled_state =
-                super::sample::sample_transaction_visual_state(tx, sample.frame_now);
+            //
+            // Issue #819 评论 5967250411 问题 5: 一帧只采一次 caret。
+            // owner transaction（owns_caret=true）用 coordinated_motion_frame.caret
+            // 调 sample_transaction_visual_state_with_caret，不再让 sample_transaction_visual_state
+            // 内部第二次调 sample_caret_track_frame。非 owner 事务传 None（它们的 caret 为 None，
+            // 不会重复采样）。文字和 CoordinatedMotionFrame 消费同一个 SampledCaretFrame 对象。
+            let sampled_state = if owns_caret {
+                super::sample::sample_transaction_visual_state_with_caret(
+                    tx,
+                    sample.frame_now,
+                    caret_sample,
+                )
+            } else {
+                super::sample::sample_transaction_visual_state_with_caret(
+                    tx,
+                    sample.frame_now,
+                    None,
+                )
+            };
             for slice in &sampled_state.slices {
                 glyphs.push(TextAnimationGlyphInfo {
                     x: slice.dest_rect.x,

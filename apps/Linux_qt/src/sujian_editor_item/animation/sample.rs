@@ -67,6 +67,35 @@ pub(crate) fn sample_transaction_visual_state(
     }
 }
 
+/// Issue #819 评论 5967250411 问题 5：接收预先采好的 caret 的采样入口。
+///
+/// 与 [`sample_transaction_visual_state`] 的区别：本函数不自己调 `sample_caret_track_frame`，
+/// 而是接收调用方预先采好的 `caret`。`build_text_animation_plan_with_sample` 先调
+/// `sample_coordinated_motion_frame` 采一次 caret（得到 `CoordinatedMotionFrame`），
+/// 然后对 owner transaction 调本函数传入那份 caret，非 owner 事务传入 `None`。
+/// 这样一帧只采一次 caret，文字和 CoordinatedMotionFrame 消费同一个 `SampledCaretFrame`。
+pub(crate) fn sample_transaction_visual_state_with_caret(
+    tx: &PreparedTextVisualTransaction,
+    now: Instant,
+    caret: Option<SampledCaretFrame>,
+) -> SampledEditVisualState {
+    // 逐 unit 采样 slice frame，使用传入的 caret（不再自己采 track）。
+    let mut slices: Vec<SampledSliceFrame> = Vec::with_capacity(tx.units.len());
+    for unit in &tx.units {
+        let frame = sample_unit_slice_frame(unit, caret, now);
+        if let Some(frame) = frame {
+            slices.push(frame);
+        }
+    }
+
+    SampledEditVisualState {
+        transaction_key: tx.key,
+        layout_basis_revision: tx.layout_basis_revision,
+        caret,
+        slices,
+    }
+}
+
 /// 采样单个视觉单元的本帧 slice frame。
 ///
 /// - `VisualUnitTiming::CaretTrack`：必须有 `caret` 才能采样，否则返回 `None`
@@ -78,7 +107,9 @@ fn sample_unit_slice_frame(
     now: Instant,
 ) -> Option<SampledSliceFrame> {
     let slice = &unit.slice;
-    let (frame, snapshot_side, visible_fraction) = if unit.timing.is_caret_track() {
+    // Issue #819 评论 5967250411 问题 1：本帧本 unit 是否已到达终态。
+    // 不再让 rebase 拿 visible_fraction 猜 CaretTrack 终态。
+    let (frame, snapshot_side, visible_fraction, is_finished) = if unit.timing.is_caret_track() {
         // 协同 InsertReveal/DeleteConceal：逐帧边界来自本帧 caret 采样。
         // DeleteForwardBoundary 的收拢边界也在这里按本帧 ingest_progress 算完。
         let caret = caret?;
@@ -93,14 +124,20 @@ fn sample_unit_slice_frame(
         let side = slice_side_for_kind(slice.kind);
         // CaretTrack unit 的 visible_fraction 不被 rebase_from_frame 使用
         //（rebase_from_frame 对 CaretTrack 直接 return），设 0.0。
-        (frame, side, 0.0)
+        // Issue #819 评论 5967250411 问题 1：CaretTrack unit 的终态由 caret track
+        // 决定。caret 不存在（track 已结束/retired）或 caret.progress >= 1.0
+        //（track 已到终态）时 is_finished = true。不再用 visible_fraction 判断。
+        let caret_finished = caret.progress >= 1.0;
+        (frame, side, 0.0, caret_finished)
     } else {
         // Timed unit（非协同吞吐字 + ReflowMove/ReflowCrossFade）：
         // 用自己的时间线算 visible_fraction + compute_frame。
         let visible = unit.current_visible_fraction(now);
         let frame = slice.compute_frame(visible);
         let side = slice_side_for_kind(slice.kind);
-        (frame, side, visible)
+        // Timed unit 的终态由自己的 timeline progress 决定。
+        let timed_finished = unit.timing.progress(now) >= 1.0;
+        (frame, side, visible, timed_finished)
     };
     // Issue #819 评论 5956495850 第 4 节：算 remaining_duration_ms 供 rebase 交棒。
     // CaretTrack unit 设 0（连续性由 RebaseCaretHandoff 承担）。
@@ -138,6 +175,7 @@ fn sample_unit_slice_frame(
         visible_fraction,
         remaining_duration_ms,
         progress,
+        is_finished,
     })
 }
 

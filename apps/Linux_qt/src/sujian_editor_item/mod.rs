@@ -380,6 +380,17 @@ pub struct SujianEditorItem {
     is_loading: qt_property!(bool; READ is_loading WRITE set_is_loading NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     is_applying_format: qt_property!(bool; READ is_applying_format WRITE set_is_applying_format NOTIFY visual_settings_changed),
+    /// Issue #819 评论 5967250411 问题 4：长按 Timer 是否激活。
+    /// QML Timer.running 绑定本 property。Rust mouse_event 左键 Press 时置 true，
+    /// Release/Cancel/Move 超阈值时置 false。不再用 TapHandler 接管 pointer event。
+    #[allow(dead_code)]
+    long_press_timer_active: qt_property!(bool; READ long_press_timer_active WRITE set_long_press_timer_active NOTIFY long_press_timer_changed),
+    /// Issue #819 评论 5967250411 问题 4：长按待处理位置 x（QML Timer 到点时读）。
+    #[allow(dead_code)]
+    long_press_pending_x: qt_property!(f32; READ long_press_pending_x WRITE set_long_press_pending_x NOTIFY long_press_timer_changed),
+    /// Issue #819 评论 5967250411 问题 4：长按待处理位置 y（QML Timer 到点时读）。
+    #[allow(dead_code)]
+    long_press_pending_y: qt_property!(f32; READ long_press_pending_y WRITE set_long_press_pending_y NOTIFY long_press_timer_changed),
     #[allow(dead_code)]
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
@@ -435,6 +446,11 @@ pub struct SujianEditorItem {
     context_menu_requested: qt_signal!(x: f32, y: f32),
     #[allow(dead_code)]
     hide_context_menu_requested: qt_signal!(),
+    /// Issue #819 评论 5967250411 问题 4：长按 Timer 启停变化通知。
+    /// QML Timer.running 绑定 `long_press_timer_active` property，本 signal 通知 QML
+    /// property 变化。不再用 TapHandler 接管 pointer event——左键 press/release/cancel
+    /// 全部由 qquickitem_impl mouse_event 单一 owner 处理。
+    long_press_timer_changed: qt_signal!(),
 
     #[allow(dead_code)]
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -641,6 +657,7 @@ impl Default for SujianEditorItem {
             explicit_clear_requested: Default::default(),
             context_menu_requested: Default::default(),
             hide_context_menu_requested: Default::default(),
+            long_press_timer_changed: Default::default(),
 
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
@@ -684,6 +701,11 @@ impl Default for SujianEditorItem {
             selection_gesture_active: false,
             // Issue #819 评论 5956495850 第 6 节：状态机初始 Idle。
             pointer_gesture: pointer_gesture::PointerGestureState::default(),
+            // Issue #819 评论 5967250411 问题 4：长按 Timer 初始未激活。
+            // qt_property 宏生成同名字段，这里初始化宏生成的字段。
+            long_press_timer_active: false,
+            long_press_pending_x: 0.0,
+            long_press_pending_y: 0.0,
             current_font_pixel_size: 22.0,
             current_font_family: QString::from("Noto Sans CJK SC"),
             current_line_spacing: 1.5,

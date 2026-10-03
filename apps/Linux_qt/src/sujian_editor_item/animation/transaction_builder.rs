@@ -14,7 +14,7 @@ use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind
 use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
 use crate::sujian_editor_item::animation::rebase::{match_rebase_frames, PreparedRebaseHandoff};
 use crate::sujian_editor_item::animation::{
-    PreparedTextVisualTransaction, PreparedVisualUnit, TextVisualOperationKind,
+    PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
     TextVisualTransactionState, TransactionTimeline,
 };
 #[cfg(test)]
@@ -289,6 +289,45 @@ pub(crate) fn build_prepared_transaction(
 
     // 4. Rebase frame 匹配
     match_rebase_frames(&spec.visual_state.rebase_frames, &mut units, &spec.offset_map);
+
+    // Issue #819 评论 5967250411 问题 2：消费 carried_slices。
+    // carried_slices 是上一笔事务 cancel 时本帧仍未到达终态、且在新事务里匹配不到
+    // 对应 unit 的旧 sampled slice。连续 Backspace 时第一笔的 C 的 sampled slice
+    // 匹配不到第二笔已有 unit，旧事务又被 cancel，以前直接丢掉导致 C 提前消失。
+    // 现在把这些 slice 的几何信息作为额外的 rebase 诊断记录下来，并由 match_rebase_frames
+    // 的 tier1/tier2/tier3 尝试匹配（匹配上的走 rebase_from_frame，匹配不上的继续
+    // 由新事务的 CaretTrack / handoff 收口）。
+    // carried_slices 的 byte_start/byte_end 已经在 take_rebase_frames 里映射到
+    // current-old 坐标系，这里再用 spec.offset_map 映射到新事务 new 坐标系尝试匹配。
+    let carried_slice_count = spec.visual_state.carried_slices.len();
+    if carried_slice_count > 0 {
+        editor_animation_debug_log(&format!(
+            "anim_carried: op={:?} carried_slices={} (未终态旧 slice 带进新事务，\
+             不让屏幕上还没吞完的旧 slice 因新正文没有那个字就被直接扔掉)",
+            spec.operation_kind,
+            carried_slice_count,
+        ));
+        // 把 carried slices 构造成 RebaseFrame 再喂给 match_rebase_frames 做第二轮匹配。
+        // 匹配上的 unit 走 rebase_from_frame 继承几何；匹配不上的 carried slice
+        // 仍由新事务的 CaretTrack / handoff 收口（它们的几何已在采样时算好）。
+        let carried_as_frames: Vec<RebaseFrame> = spec
+            .visual_state
+            .carried_slices
+            .iter()
+            .map(|slice| RebaseFrame {
+                byte_start: slice.byte_start,
+                byte_end: slice.byte_end,
+                x: slice.dest_rect.x,
+                y: slice.dest_rect.y,
+                opacity: slice.opacity,
+                shaping_identity: slice.shaping_identity.clone(),
+                visible_fraction: slice.visible_fraction,
+                sampled_at: std::time::Instant::now(),
+                remaining_duration_ms: slice.remaining_duration_ms,
+            })
+            .collect();
+        match_rebase_frames(&carried_as_frames, &mut units, &spec.offset_map);
+    }
 
     // 5. 诊断日志
     editor_animation_debug_log(&format!(

@@ -1,3 +1,4 @@
+use super::input_host::is_left_button_event;
 use super::input_host::is_left_button_pressed;
 use super::*;
 
@@ -46,6 +47,13 @@ impl QQuickItem for SujianEditorItem {
         let pos = event.position();
         match event.event_type() {
             qmetaobject::QMouseEventType::MouseButtonPress => {
+                // Issue #819 评论 5967250411 问题 4：只有左键 press 才进入 pointer gesture。
+                // 右键不进入 pointer gesture（右键菜单由 QML TapHandler acceptedButtons:
+                // Qt.RightButton 独立处理）。以前不判断按钮，qt_surface 是 AllButtons，
+                // 右键也会进入 pointer_gesture.press()。
+                if !is_left_button_event(&event) {
+                    return true;
+                }
                 // Issue #819 评论 5956495850 第 6 节：左键 press 通过状态机驱动。
                 // 先 hit_test 得到 hit_index 作为拖选 anchor，再 click_at 设置 cursor。
                 // 状态机 press 会清除上一轮手势的残留状态（pointer_drag_selecting /
@@ -57,6 +65,10 @@ impl QQuickItem for SujianEditorItem {
                 self.click_at(pos.x as f32, pos.y as f32, false);
                 let obj_ptr = self.get_cpp_object();
                 input::focus_item(obj_ptr);
+                // Issue #819 评论 5967250411 问题 4：左键 press 启动长按 Timer。
+                // 不再由 QML TapHandler 接管 pointer event——Timer 只由 Rust property
+                // 控制启停，到点调 activate_pointer_long_press。
+                self.start_long_press_timer(pos.x as f32, pos.y as f32);
             }
             qmetaobject::QMouseEventType::MouseMove => {
                 if is_left_button_pressed(&event) {
@@ -75,6 +87,9 @@ impl QQuickItem for SujianEditorItem {
                             // 与状态机 anchor 一致（press 时 click_at 设置
                             // selection(hit_index, hit_index)）。
                             self.drag_select_at(pos.x as f32, pos.y as f32);
+                            // Issue #819 评论 5967250411 问题 4：拖选超过阈值，停止长按 Timer。
+                            // ContinueLongPressSelect 时长按已激活，Timer 已触发，stop 无副作用。
+                            self.stop_long_press_timer();
                         }
                         MoveOutcome::StillPressed | MoveOutcome::Ignored => {
                             // 未超过拖动阈值或无 press，不扩选。
@@ -83,13 +98,21 @@ impl QQuickItem for SujianEditorItem {
                 }
             }
             qmetaobject::QMouseEventType::MouseButtonRelease => {
+                // Issue #819 评论 5967250411 问题 4：只有左键 release 才进入 pointer gesture。
+                if !is_left_button_event(&event) {
+                    return true;
+                }
                 // Issue #819 评论 5956495850 第 6 节：release 走统一的手势结束路径。
                 // 状态机 release 清 pointer_drag_selecting / selection_gesture_active，
                 // end_selection_gesture 额外告诉 cursor controller 手势结束，保留当前
                 // selection head visual rect 供选区收起后恢复光标运动。
+                // Issue #819 评论 5967250411 问题 4：release/cancel 的 selection gesture
+                // 结束只由 qquickitem_impl 做一次，不再从 QML 调 end_selection_gesture_qml()。
                 self.pointer_gesture.release();
                 self.sync_pointer_gesture_flags();
                 self.end_selection_gesture();
+                // Issue #819 评论 5967250411 问题 4：release 停止长按 Timer。
+                self.stop_long_press_timer();
             }
             _ => {}
         }
@@ -506,6 +529,55 @@ impl SujianEditorItem {
     pub(crate) fn sync_pointer_gesture_flags(&mut self) {
         self.pointer_drag_selecting = self.pointer_gesture.pointer_drag_selecting();
         self.selection_gesture_active = self.pointer_gesture.selection_gesture_active();
+    }
+
+    /// Issue #819 评论 5967250411 问题 4：长按 Timer 启动。
+    ///
+    /// 由 `mouse_event` 左键 Press 调用。设置 `long_press_timer_active = true` 和
+    /// 待处理位置 x/y，QML Timer.running 绑定该 property 自动启动。Timer 到点调
+    /// `activate_pointer_long_press`。不再由 QML TapHandler 接管 pointer event。
+    fn start_long_press_timer(&mut self, x: f32, y: f32) {
+        self.long_press_pending_x = x;
+        self.long_press_pending_y = y;
+        self.set_long_press_timer_active(true);
+    }
+
+    /// Issue #819 评论 5967250411 问题 4：长按 Timer 停止。
+    ///
+    /// 由 `mouse_event` Release / Move 超阈值调用。设置 `long_press_timer_active = false`，
+    /// QML Timer.running 绑定该 property 自动停止。
+    fn stop_long_press_timer(&mut self) {
+        self.set_long_press_timer_active(false);
+    }
+
+    pub(crate) fn long_press_timer_active(&self) -> bool {
+        self.long_press_timer_active
+    }
+
+    pub(crate) fn set_long_press_timer_active(&mut self, v: bool) {
+        if self.long_press_timer_active != v {
+            self.long_press_timer_active = v;
+            let obj_ptr = self.get_cpp_object();
+            if !obj_ptr.is_null() {
+                self.long_press_timer_changed();
+            }
+        }
+    }
+
+    pub(crate) fn long_press_pending_x(&self) -> f32 {
+        self.long_press_pending_x
+    }
+
+    pub(crate) fn set_long_press_pending_x(&mut self, v: f32) {
+        self.long_press_pending_x = v;
+    }
+
+    pub(crate) fn long_press_pending_y(&self) -> f32 {
+        self.long_press_pending_y
+    }
+
+    pub(crate) fn set_long_press_pending_y(&mut self, v: f32) {
+        self.long_press_pending_y = v;
     }
 
     /// Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点时调用。

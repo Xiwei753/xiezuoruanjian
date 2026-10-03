@@ -120,6 +120,18 @@ pub(crate) struct SampledSliceFrame {
     /// rebase 终态过滤用（ReflowMove/ReflowCrossFade 用 `progress >= 1.0` 判断终态）。
     /// CaretTrack unit 设 0.0。
     pub progress: f64,
+    /// Issue #819 评论 5967250411 问题 1：本帧本 unit 是否已到达终态。
+    ///
+    /// 这是本帧生命周期的明确判断，不再让 rebase 拿 `visible_fraction` 猜 CaretTrack
+    /// unit 的终态（CaretTrack unit 的 `visible_fraction` 固定 0.0，DeleteConceal 一进入
+    /// rebase 就被 `visible_fraction <= 1e-3` 误判成"已吞完"，文字先消失，光标继续走）。
+    ///
+    /// 设置规则（`sample_unit_slice_frame`）：
+    /// - Timed unit：`unit.timing.progress(now) >= 1.0`。
+    /// - CaretTrack unit：从同一帧的 caret 采样判断——`caret` 不存在（track 已结束/retired）
+    ///   或 `caret.progress >= 1.0`（track 已到终态）时 `is_finished = true`。
+    /// - ReflowMove/ReflowCrossFade：`progress >= 1.0`。
+    pub is_finished: bool,
 }
 
 /// Issue #819 评论 5956495850 第 2 节：协同动画唯一的「当前屏幕帧」。
