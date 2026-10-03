@@ -58,18 +58,32 @@ fn canvas_forwards_find_embed_content_at() {
 #[test]
 fn canvas_pointer_press_distinguishes_embed_chrome_and_child_content() {
     let src = read_src(CANVAS);
-    let window = function_window(&src, "function logPointerPress(", 1200);
+    // Issue #817 评论 5949494799: 命中种类统一由 hitPointerAtScreen 产出
+    // （node / embedChrome / childContent / edge / empty），logPointerPress 只透传
+    // hit.kind。守卫跟随新契约把“种类判定”和“日志透传”分开检查，覆盖不减弱：
+    // embedChrome/childContent 的区分和 findEmbedContentAt 调用仍然必须存在。
+    let hit_window = function_window(&src, "function hitPointerAtScreen(", 900);
     assert!(
-        window.contains("\"embedChrome\""),
-        "logPointerPress 必须把 Embed chrome 命中记成 embedChrome，实际窗口:\n{window}"
+        hit_window.contains("\"embedChrome\""),
+        "hitPointerAtScreen 必须把 Embed chrome 命中区分成 embedChrome，实际窗口:\n{hit_window}"
     );
     assert!(
-        window.contains("\"childContent\""),
-        "logPointerPress 必须把子场景内部命中记成 childContent，实际窗口:\n{window}"
+        hit_window.contains("\"childContent\""),
+        "hitPointerAtScreen 必须把子场景内部命中区分成 childContent，实际窗口:\n{hit_window}"
     );
     assert!(
-        window.contains("findEmbedContentAt(wx, wy)"),
-        "logPointerPress 必须调用 findEmbedContentAt，实际窗口:\n{window}"
+        hit_window.contains("findEmbedContentAt(wx, wy)"),
+        "hitPointerAtScreen 必须调用 findEmbedContentAt 判 childContent，实际窗口:\n{hit_window}"
+    );
+
+    let window = function_window(&src, "function logPointerPress(", 900);
+    assert!(
+        window.contains("hitPointerAtScreen(point.position.x, point.position.y)"),
+        "logPointerPress 必须走 hitPointerAtScreen 统一命中入口，实际窗口:\n{window}"
+    );
+    assert!(
+        window.contains("logInteraction(\"pointer_press\", hit.kind,"),
+        "logPointerPress 必须把 hit.kind 原样写进 pointer_press 日志，实际窗口:\n{window}"
     );
     // 不应再保留旧的单一 "embed" hitKind（应已拆成 embedChrome/childContent）
     assert!(
