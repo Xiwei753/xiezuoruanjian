@@ -85,8 +85,20 @@ export interface ProjectedEmbedMetrics {
   coverage: number
 }
 
-/** 展开所需的下限：圆内可用尺寸至少要放得下一个节点（现有节点宽度就是可编辑下限）。 */
-export const EXPANDED_MIN_INNER_USABLE_VP: number = DEFAULT_NODE_WIDTH
+/**
+ * 展开所需的下限：圆内可用尺寸至少要保留一个**节点高度**级别的可操作空间。
+ *
+ * 这里不能拿节点宽度（160vp）当门槛：child Scene 本来就有自己的 local fit，
+ * 节点宽度会被 fit 缩放适配，用原尺寸去卡会把"第一层子星图"在手机上也全部
+ * 折叠掉 —— 短边小于约 540vp 时 200 圆的 innerUsable 只有 89vp，第一层就没了，
+ * 和"小屏自然形成当前 Scene + 第一层、更深层才折叠"的目标正好相反（#820 复核）。
+ *
+ * 取 80vp（节点高度）之后：200 圆在 camera=1 时 innerUsable ≈ 89vp ≥ 80 →
+ * 第一层 expanded；进到 child Scene 之后 local fit 会把下一层的
+ * ownerEffectiveScale 压下去，子子星图自然跌到阈值以下。大视口给出更多空间，
+ * 下一层才可能重新过线。仍然是"看屏幕真实可用空间"，不是写死两层。
+ */
+export const EXPANDED_MIN_INNER_USABLE_VP: number = DEFAULT_NODE_HEIGHT
 
 /** 进入视觉焦点所需的覆盖率阈值（滞回上沿）。 */
 export const FOCUS_ENTER_COVERAGE: number = 0.70
@@ -355,8 +367,9 @@ export function isOnFocusChain(embedScenePath: string, focusScenePath: string): 
  * 单个 Embed 的视觉档位（只看屏幕上有多少真实空间）。
  *
  * 判据不是"第几层"，而是圆内真正能用的屏幕尺寸：
- * `innerUsableSizeVp >= DEFAULT_NODE_WIDTH`（放得下一个节点）才展开，
- * 否则折叠成节点尺寸的摘要卡。
+ * `innerUsableSizeVp >= EXPANDED_MIN_INNER_USABLE_VP`（至少留一个节点高度级别的
+ * 可操作空间，节点宽度交给 child local fit 适配）才展开，否则折叠成节点尺寸的
+ * 摘要卡。
  *
  * @param metrics 该 Embed 的屏幕投影度量
  * @returns expanded / collapsed

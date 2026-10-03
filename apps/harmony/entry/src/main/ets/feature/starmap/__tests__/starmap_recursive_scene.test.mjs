@@ -1056,12 +1056,14 @@ function createSceneView(opts) {
     },
     fitView(rects) {
       v.hasFittedView = true
-      const localWidth = v.localSceneWidth()
-      const localHeight = v.localSceneHeight()
+      v.applyFittedLocalViewport(rects, v.localSceneWidth(), v.localSceneHeight())
+    },
+    // 局部 fit 的唯一纯计算出口：首次 fit 与"父 Embed 基础尺寸真的变了"共用
+    applyFittedLocalViewport(rects, localWidth, localHeight) {
+      v.lastFittedSceneSize = localWidth
       const bounds = computeContentBounds(rects)
       if (bounds === null) {
         v.fitScale = 1; v.fitOffsetX = 0; v.fitOffsetY = 0
-        v.lastFittedSceneSize = localWidth
         return
       }
       // 可用区 = 圆内接正方形 − 父圆要保留的标题/边框交互壳 − 留白。
@@ -1071,22 +1073,14 @@ function createSceneView(opts) {
       v.fitScale = fitted.zoomScale
       v.fitOffsetX = fitted.offsetX
       v.fitOffsetY = fitted.offsetY
-      v.lastFittedSceneSize = localWidth
     },
-    // 局部尺寸没变就什么都不做（相机缩放的正常情况），变了才重新居中
+    // 局部尺寸没变就什么都不做（相机缩放的正常情况）；
+    // 局部尺寸真变了 = 父 Embed 基础尺寸变了（#820 视口显示预算）→ 重算 fit（#820 复核）
     syncFitToSceneSize(rects) {
       if (!v.hasFittedView || v.lastFittedSceneSize <= 0) { return false }
       const localWidth = v.localSceneWidth()
       if (Math.abs(localWidth - v.lastFittedSceneSize) <= 0.5) { return false }
-      v.lastFittedSceneSize = localWidth
-      const bounds = computeContentBounds(rects)
-      if (bounds === null) {
-        v.fitOffsetX = 0; v.fitOffsetY = 0
-      } else {
-        const offset = computeCenteredOffset(bounds, v.fitScale, localWidth, v.localSceneHeight())
-        v.fitOffsetX = offset.x
-        v.fitOffsetY = offset.y
-      }
+      v.applyFittedLocalViewport(rects, localWidth, v.localSceneHeight())
       return true
     },
     // #818 复审：拖画布 = 拖全局相机。根 Scene 直接整份改相机；
@@ -1977,7 +1971,13 @@ console.log('24c. 子图在相机 1 和相机 2 下打开，局部 fit 必须一
   assert(near(at2.viewportScaleValue() / at1.viewportScaleValue(), 2),
     '但屏幕上的呈现仍然是相机 ×2')
 
-  // 父 Embed 基础尺寸真的变了才重算局部居中
+  // 「父 Embed 基础尺寸真的变了才重算局部 fit」（#820 复核：不能只 recenter）
+  // 把"按某个局部尺寸 fit 一次"的纯计算提出来，测试直接比对它
+  const availableFit = (contentRects, localSize) => {
+    const bounds = computeContentBounds(contentRects)
+    const available = computeEmbedInnerContentSafeSide(localSize, EMBED_FIT_PADDING_VP)
+    return computeFittedViewport(bounds, available, available, 0, localSize, localSize).zoomScale
+  }
   const resized = createSceneView({ sceneDepth: 1, inheritedScale: 1, sceneWidth: 300, sceneHeight: 300 })
   resized.fitView(rects)
   const before = resized.fitOffsetX
@@ -1986,7 +1986,10 @@ console.log('24c. 子图在相机 1 和相机 2 下打开，局部 fit 必须一
   resized.sceneHeight = 360
   assert(resized.syncFitToSceneSize(rects) === true && !near(resized.fitOffsetX, before),
     '局部尺寸 300 → 360 属于真实容器变化，重新居中')
-  assert(near(resized.fitScale, fitBefore), '重新居中只动偏移，不动 fitScale')
+  assert(resized.fitScale > fitBefore,
+    '真实容器变大 → fitScale 必须按新的可用区一起重算（只 recenter 就吃不到新增空间）')
+  assert(near(resized.fitScale, availableFit(rects, 360)),
+    '重算出来的 fitScale 就是"按 360vp 圆重新 fit"的结果')
 }
 
 console.log('24d. 任意一层空白拖动都只改全局相机：子 Scene 不再有独立平移相机（#818 复审）')
@@ -3219,7 +3222,7 @@ console.log('37. 视觉 LOD（#820）：投影 → 折叠档位 → 视觉焦点
 
 // ── 被测规格：platform/StarMapVisualLod.ets ──
 const DEFAULT_NODE_RADIUS = 16
-const EXPANDED_MIN_INNER_USABLE_VP = DEFAULT_NODE_WIDTH
+const EXPANDED_MIN_INNER_USABLE_VP = DEFAULT_NODE_HEIGHT
 const FOCUS_ENTER_COVERAGE = 0.70
 const FOCUS_EXIT_COVERAGE = 0.55
 const FOCUS_CENTER_ENTER_RATIO = 0.30
@@ -3417,25 +3420,24 @@ console.log('37a. 展开下限看"圆内真实可用屏幕尺寸"，不看这是
 {
   // 一颗 200 的 Embed，圆内可用区 ≈ 89.4（141.4 − 36 交互壳 − 16 留白）
   const localSafeSide = computeEmbedInnerContentSafeSide(DEFAULT_EMBED_DIAMETER, EMBED_FIT_PADDING_VP)
-  assert(EXPANDED_MIN_INNER_USABLE_VP === DEFAULT_NODE_WIDTH,
-    '展开下限就是现有节点宽度（放得下一个节点才算可编辑）')
+  assert(EXPANDED_MIN_INNER_USABLE_VP === DEFAULT_NODE_HEIGHT,
+    '展开下限取节点高度（节点宽度由 child local fit 适配，不能拿 160 卡门槛）')
 
-  // 相机 1 → 圆内只有 89.4 < 160，放不下一个节点 → 折叠
+  // 相机 1 → 圆内 89.4 ≥ 80 → 第一层 expanded（手机竖屏也保留"当前 Scene + 第一层"）
   const atScale1 = projectEmbedMetrics(DEFAULT_EMBED_DIAMETER, 1, viewport(400, 800), EMBED_FIT_PADDING_VP)
   assert(near(atScale1.innerUsableSizeVp, localSafeSide) &&
-    resolveEmbedLod(atScale1) === 'collapsed',
-    '相机 1 时圆内放不下一个节点 → collapsed（层数再少也一样）')
+    resolveEmbedLod(atScale1) === 'expanded',
+    '相机 1 时 200 圆仍留得住一个节点高度 → expanded（第一层不会被整批折叠掉）')
 
-  // 相机 1.8 → 圆内 161 > 160 → 展开
-  const atScale18 = projectEmbedMetrics(DEFAULT_EMBED_DIAMETER, 1.8, viewport(400, 800), EMBED_FIT_PADDING_VP)
-  assert(atScale18.innerUsableSizeVp >= DEFAULT_NODE_WIDTH &&
-    resolveEmbedLod(atScale18) === 'expanded',
-    '同一颗 Embed 相机放大到 1.8 → 圆内够放一个节点 → expanded（不是写死层数）')
+  // 相机 0.5 → 圆内 200×0.5/√2 − 52 ≈ 18.7 < 80 → 折叠
+  const atScale05 = projectEmbedMetrics(DEFAULT_EMBED_DIAMETER, 0.5, viewport(400, 800), EMBED_FIT_PADDING_VP)
+  assert(resolveEmbedLod(atScale05) === 'collapsed',
+    '相机缩到 0.5，圆内只剩 18.7vp → collapsed（依然是屏幕空间判据，不是层数）')
 
   // 阈值边界：正好等于下限算展开
-  const exact = resolveEmbedLod({ outerSizeVp: 300, innerUsableSizeVp: DEFAULT_NODE_WIDTH, coverage: 1 })
+  const exact = resolveEmbedLod({ outerSizeVp: 300, innerUsableSizeVp: DEFAULT_NODE_HEIGHT, coverage: 1 })
   assert(exact === 'expanded', 'innerUsableSizeVp 正好等于下限 → expanded（>= 而不是 >）')
-  const below = resolveEmbedLod({ outerSizeVp: 300, innerUsableSizeVp: DEFAULT_NODE_WIDTH - 0.01, coverage: 1 })
+  const below = resolveEmbedLod({ outerSizeVp: 300, innerUsableSizeVp: DEFAULT_NODE_HEIGHT - 0.01, coverage: 1 })
   assert(below === 'collapsed', '差一点点就不展开 → collapsed')
   assert(resolveEmbedLod({ outerSizeVp: NaN, innerUsableSizeVp: NaN, coverage: NaN }) === 'hidden',
     '投影还没算出来（NaN）→ hidden，不去建 Scene 实例')
@@ -3463,10 +3465,10 @@ console.log('37b. 外壳投影只乘 owner 的累计比例，不乘 Embed 自己
     '越深的 Embed 外壳越小完全来自祖先 local fit，不来自 child fit')
 
   // 展开所需的比例门槛是可以算出来的，不是"第几层"的常量：
-  // 圆内可用区 = 200/√2 − 36 交互壳 − 16 留白 ≈ 89.4，要 ≥ 160 就要累计比例 ≈ 1.79。
-  const thresholdScale = DEFAULT_NODE_WIDTH /
+  // 圆内可用区 = 200/√2 − 36 交互壳 − 16 留白 ≈ 89.4，要 ≥ 80 就要累计比例 ≈ 0.89。
+  const thresholdScale = EXPANDED_MIN_INNER_USABLE_VP /
     computeEmbedInnerContentSafeSide(DEFAULT_EMBED_DIAMETER, EMBED_FIT_PADDING_VP)
-  assert(near(thresholdScale, 1.79, 0.01),
+  assert(near(thresholdScale, 0.89, 0.01),
     `累计比例 ${thresholdScale.toFixed(2)} 是展开门槛（现算出来的，不是写死的深度系数）`)
   assert(resolveEmbedLod(projectEmbedMetrics(DEFAULT_EMBED_DIAMETER, thresholdScale - 0.01,
     viewport(400, 800), EMBED_FIT_PADDING_VP)) === 'collapsed' &&
@@ -3486,8 +3488,8 @@ console.log('37b. 外壳投影只乘 owner 的累计比例，不乘 Embed 自己
     }
     return depths
   }
-  assert(depthsExpanded(1, 0.45).length === 0,
-    '相机 1 时连最外层都放不下一个节点 → 全部折叠（用户会先去放大）')
+  assert(depthsExpanded(1, 0.45).length > 0 && depthsExpanded(1, 0.45).length < 8,
+    '相机 1 时第一层仍展开，但再深就折叠（手机竖屏 = 当前 Scene + 第一层）')
   assert(depthsExpanded(3, 0.45).length > depthsExpanded(1.2, 0.45).length,
     '相机放大 → 能展开的层数变多，同一个公式没有任何深度常量')
   assert(depthsExpanded(3, 0.9).length > depthsExpanded(3, 0.45).length,
@@ -3987,21 +3989,53 @@ console.log('38a. viewportDetailScale 是连续比例 + 上下限，不是设备
     '视口还没量出来时退回下限，不产生 NaN 尺寸')
 }
 
-console.log('38b. 同 camera / 同 authored graph / 同 focus：小视口折叠，大视口展开')
+console.log('38b. 真实递归链路：父 Embed 显示尺寸 → child 可用区 → child local fit → 下一层 LOD')
 {
+  // 不再手填 ownerEffectiveScale：按真实链路一级一级算下去。
+  // 每层 child Scene 的局部盒子 = 父 Embed 的展开显示尺寸，
+  // 内容随层数变宽（越深的子星图内容越多），所以累计 fit 会自然把更深层压下去。
+  const contentBoundsAtDepth = (depth) => ({ minX: 0, minY: 0, maxX: 240 * depth, maxY: 120 * depth, width: 240 * depth, height: 120 * depth })
+  const walkChain = (context, depthCount) => {
+    const lods = []
+    const fits = []
+    let ownerEffectiveScale = 1 // 根 Scene：camera = 1，没有祖先 local fit
+    for (let depth = 1; depth <= depthCount; depth++) {
+      const embedScenePath = depth === 1
+        ? 'root/embed:a'
+        : 'root/embed:a' + '/embed:b'.repeat(depth - 1)
+      const lod = lodOf(embedScenePath, ownerEffectiveScale, context)
+      lods.push(lod)
+      if (lod !== 'expanded') { break }
+      // child Scene：局部盒子 = 父 Embed 展开显示尺寸，可用区按圆内接正方形算
+      const childBox = expandedEmbedSizeVp(context)
+      const childAvailable = computeEmbedInnerContentSafeSide(childBox, EMBED_FIT_PADDING_VP)
+      const fitted = computeFittedViewport(contentBoundsAtDepth(depth), childAvailable, childAvailable, 0, childBox, childBox)
+      fits.push(fitted.zoomScale)
+      ownerEffectiveScale = ownerEffectiveScale * fitted.zoomScale
+    }
+    return { lods, fits }
+  }
+
   const small = { viewportWidthVp: 360, viewportHeightVp: 640, focusScenePath: 'root' }
   const large = { viewportWidthVp: 1000, viewportHeightVp: 900, focusScenePath: 'root' }
-  const deep = 'root/embed:a/embed:b'
-  assert(lodOf(deep, 1, small) === 'collapsed',
-    '360×640 小窗：同一颗深层 Embed 折叠')
-  assert(lodOf(deep, 1, large) === 'expanded',
-    '1000×900 大窗：同一颗深层 Embed 展开')
-  // 关键在于 LOD 档位真的变了，而不只是 coverage 分母变了
-  const smallMetrics = projectEmbedMetrics(expandedEmbedSizeVp(small), 1, small, 8)
-  const largeMetrics = projectEmbedMetrics(expandedEmbedSizeVp(large), 1, large, 8)
-  assert(smallMetrics.innerUsableSizeVp < EXPANDED_MIN_INNER_USABLE_VP &&
-    largeMetrics.innerUsableSizeVp >= EXPANDED_MIN_INNER_USABLE_VP,
-    '判据是圆内真实可用空间变了（投影尺寸随视口变），不是 coverage 变了')
+  const smallChain = walkChain(small, 4)
+  const largeChain = walkChain(large, 4)
+  console.log(`     小窗链: ${smallChain.lods.join(' → ')} | 大窗链: ${largeChain.lods.join(' → ')}`)
+
+  assert(smallChain.lods[0] === 'expanded',
+    '360×640 小窗：根星图的第一层子星图仍然是 expanded（不是整批折叠成摘要卡）')
+  assert(smallChain.lods[1] === 'collapsed',
+    '360×640 小窗：第一层的子 Embed 被 child local fit 压到阈值以下 → collapsed（两层）')
+  assert(largeChain.lods[0] === 'expanded' && largeChain.lods[1] === 'expanded',
+    '1000×900 大窗：同一条 authored 链上，第一层和第二层都 expanded（三层）')
+  assert(largeChain.lods[2] === 'collapsed',
+    '大窗继续往下也还是同一套投影规则：累计 fit 变小 → 第三层重新折叠，不会无限递归')
+
+  // 大窗之所以能多一层，是因为父圆变大让 child fit 真的吃到了新增空间
+  assert(largeChain.fits[0] > smallChain.fits[0],
+    '父 Embed 从 200 变 320 → child local fit 变大（不是只把外壳放大）')
+  assert(smallChain.fits[0] * expandedEmbedSizeVp(small) < largeChain.fits[0] * expandedEmbedSizeVp(large),
+    'child 的累计比例在大窗上真的更大')
   assert(near(expandedEmbedSizeVp(large), DEFAULT_EMBED_DIAMETER * MAX_VIEWPORT_DETAIL_SCALE),
     '大窗展开尺寸 = 基准直径 × 上限比例')
   assert(embedDisplayBoundsForLod('expanded', large).width === expandedEmbedSizeVp(large),
@@ -4009,6 +4043,40 @@ console.log('38b. 同 camera / 同 authored graph / 同 focus：小视口折叠�
   const collapsedLarge = embedDisplayBoundsForLod('collapsed', large)
   assert(collapsedLarge.width === DEFAULT_NODE_WIDTH && collapsedLarge.height === DEFAULT_NODE_HEIGHT,
     '折叠摘要卡不跟着视口无限放大，保持节点尺寸')
+}
+
+console.log('38b-2. resize 让父圆变大 → 已存在的 child Scene 必须按新可用区重算 fit（不能只改 offset）')
+{
+  const childBounds = { minX: 0, minY: 0, maxX: 240, maxY: 120, width: 240, height: 120 }
+  const fitInBox = (boxSize) => {
+    const available = computeEmbedInnerContentSafeSide(boxSize, EMBED_FIT_PADDING_VP)
+    return computeFittedViewport(childBounds, available, available, 0, boxSize, boxSize)
+  }
+  const small = { viewportWidthVp: 360, viewportHeightVp: 640, focusScenePath: 'root' }
+  const large = { viewportWidthVp: 1000, viewportHeightVp: 900, focusScenePath: 'root' }
+  const inSmall = fitInBox(expandedEmbedSizeVp(small))
+  const inLarge = fitInBox(expandedEmbedSizeVp(large))
+  assert(inLarge.zoomScale > inSmall.zoomScale,
+    '父圆 200 → 320 后，child fit 应该变大（available 从 89 涨到 174）')
+  const recentredOnly = computeCenteredOffset(childBounds, inSmall.zoomScale, expandedEmbedSizeVp(large), expandedEmbedSizeVp(large))
+  assert(!near(inLarge.offsetX, recentredOnly.x) || !near(inLarge.offsetY, recentredOnly.y),
+    '只 recenter 会把旧的 0.45 比例连同旧偏移一起留在大圆里 —— 正是要修的 bug')
+
+  const sceneSource820b = readStarmapSource('ui/StarMapScene.ets')
+  const syncBody = sceneSource820b.slice(sceneSource820b.indexOf('private syncFitToSceneSize('),
+    sceneSource820b.indexOf('private syncSceneHandle()'))
+  assert(syncBody.includes('this.applyFittedLocalViewport(localWidth, this.sceneHeight / this.parentScale())'),
+    'syncFitToSceneSize 在局部尺寸真变了时走重算 fit 的公共出口')
+  assert(!syncBody.includes('computeCenteredOffset'),
+    'syncFitToSceneSize 不再只 recenter')
+  const fitBody820 = sceneSource820b.slice(sceneSource820b.indexOf('private applyFittedLocalViewport('),
+    sceneSource820b.indexOf('private syncFitToSceneSize()'))
+  assert(fitBody820.includes('computeEmbedInnerContentSafeSide(\n      Math.min(localWidth, localHeight), EMBED_FIT_PADDING_VP\n    )') &&
+    fitBody820.includes('computeFittedViewport('),
+    '重算用的是圆内接正方形可用区（与 clamp / 首次 fit 同一口径）')
+  const firstFitIdx820 = sceneSource820b.indexOf('fitView(): void {')
+  assert(sceneSource820b.slice(firstFitIdx820, firstFitIdx820 + 260).includes('applyFittedLocalViewport('),
+    '首次 fit 也走同一个出口，两条路径不会长歪')
 }
 
 console.log('38c. 视口 resize 不改焦点；焦点只跟着相机走')

@@ -128,7 +128,7 @@ import { GestureState, StarMapGestureMode, StarMapGestureStateTracker } from '..
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import {
   StarMapSceneNode, StarMapSceneRegistry, Viewport,
-  ContentBounds, computeContentBounds, computeFittedViewport, computeCenteredOffset,
+  ContentBounds, computeContentBounds, computeFittedViewport,
   computeCameraPinch, GlobalCameraTransform,
   clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO,
   projectLocalLengthToScreen
@@ -500,7 +500,9 @@ export struct StarMapScene {
    *
    * 判据只有一条：它在**屏幕上**的圆内还剩多少真实可用空间
    * （`projectEmbedMetrics` 用本 Scene 的累计比例投影），
-   * 放得下一个节点（DEFAULT_NODE_WIDTH）就展开，否则折叠成节点尺寸的摘要卡。
+   * 留得下一个节点高度（EXPANDED_MIN_INNER_USABLE_VP）就展开，否则折叠成
+   * 节点尺寸的摘要卡。节点宽度交给 child local fit 适配，所以小屏第一层仍然是
+   * expanded，被压下去的只是更深一层。
    *
    * 视口大小通过 `expandedEmbedSizeVp()` 进入判据，所以同一个设备
    * 改窗口大小会真的换档，而不是只有 coverage 在动（#820 复核）。
@@ -736,6 +738,21 @@ export struct StarMapScene {
   /**
    * 按当前内容重新适配视口（首次加载 / 显式 fit view）。
    *
+   * 纯计算委托给 `applyFittedLocalViewport()`，和"父 Embed 基础尺寸真的变了"
+   * 那条重算路径共用同一份实现，避免两边的可用区口径悄悄长歪（#820 复核）。
+   */
+  fitView(): void {
+    this.hasFittedView = true
+    this.applyFittedLocalViewport(this.localSceneSize(), this.sceneHeight / this.parentScale())
+    // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
+    this.syncSceneHandle()
+    // 本 Scene 的累计比例变了 → 它里面的 Embed 该展开还是该折叠要重算（#820）
+    this.refreshEmbedLodLayout()
+  }
+
+  /**
+   * 按给定的**局部**尺寸重算一次 local fit（fitView / 容器基础尺寸变化共用出口）。
+   *
    * 可用区域取父 Embed 圆形内容区里"手能可靠点到"的内接正方形边长：
    * 子 Scene 的布局是正方形，四角会超出圆被父层 clip 裁掉，
    * 所以按 1/√2 折算，内容不会铺到圆外被切掉。
@@ -745,17 +762,13 @@ export struct StarMapScene {
    * fitScale / fitOffset 一旦写成局部数据，就与"打开这张子图时相机是多少"无关，
    * 屏幕上的呈现由 `viewportScaleValue() = fitScale * inheritedScale` 统一乘出来（#818 复审）。
    */
-  fitView(): void {
-    this.hasFittedView = true
-    const localWidth: number = this.localSceneSize()
-    const localHeight: number = this.sceneHeight / this.parentScale()
+  private applyFittedLocalViewport(localWidth: number, localHeight: number): void {
+    this.lastFittedSceneSize = localWidth
     const bounds: ContentBounds | null = computeContentBounds(this.nodeRects)
     if (bounds === null) {
       this.fitScale = 1
       this.fitOffsetX = 0
       this.fitOffsetY = 0
-      this.lastFittedSceneSize = localWidth
-      this.syncSceneHandle()
       return
     }
     // 可用区 = 圆的内接正方形先扣掉父 Embed 的标题 / 边框交互壳，再扣留白，
@@ -776,23 +789,22 @@ export struct StarMapScene {
     this.fitScale = fitted.zoomScale
     this.fitOffsetX = fitted.offsetX
     this.fitOffsetY = fitted.offsetY
-    this.lastFittedSceneSize = localWidth
-    // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
-    this.syncSceneHandle()
-    // 本 Scene 的累计比例变了 → 它里面的 Embed 该展开还是该折叠要重算（#820）
-    this.refreshEmbedLodLayout()
   }
 
   /**
-   * 局部容器尺寸变化时重新居中（#818）。
+   * 局部容器尺寸真的变了就重算一次 local fit（#818 / #820）。
    *
    * 判断依据是**局部**尺寸 `sceneWidth / inheritedScale`，不是屏幕上的 sceneWidth。
    * 相机从 1 放到 2 时：sceneWidth 从 200 变 400、inheritedScale 从 1 变 2，
-   * 局部尺寸还是 200 → 局部 fit 什么都不用改，屏幕上的呈现由累计比例自然放大。
-   * 只有父 Embed 的基础尺寸真的变了，局部尺寸才会变，这时才重算一次局部居中。
+   * 局部尺寸还是 200 → 这里直接返回，局部 fit 什么都不用改，屏幕上的呈现由
+   * 累计比例自然放大（也不会把用户缩放抵消掉）。
    *
-   * 也不按屏幕尺寸比去缩放 fitScale：那样等于把相机的缩放抵消掉，
-   * 用户双指放大整棵树时就会出现"外层圆变大、里面内容纹丝不动"。
+   * 局部尺寸变了只有一种来源：父 Embed 的基础尺寸真的变了 —— 也就是 #820 的
+   * 视口显示预算：视口变大 → expandedEmbedSize 200 → 320 → 本 Scene 的局部盒子
+   * 从 200 真的长到 320。这时必须**重算 fitScale**（见 applyFittedLocalViewport），
+   * 只 recenter 的话父圆虽然变大、内部内容仍按旧的 0.45 比例挤在里面，
+   * 吃不到新增空间，更深一层的 ownerEffectiveScale 一直偏小，
+   * LOD 就永远多展开不了一层（#820 复核）。
    */
   private syncFitToSceneSize(): void {
     if (!this.hasFittedView || this.lastFittedSceneSize <= 0) {
@@ -802,19 +814,7 @@ export struct StarMapScene {
     if (Math.abs(localWidth - this.lastFittedSceneSize) <= 0.5) {
       return
     }
-    this.lastFittedSceneSize = localWidth
-    const localHeight: number = this.sceneHeight / this.parentScale()
-    const bounds: ContentBounds | null = computeContentBounds(this.nodeRects)
-    if (bounds === null) {
-      this.fitOffsetX = 0
-      this.fitOffsetY = 0
-    } else {
-      const offset: PlatformPoint = computeCenteredOffset(
-        bounds, this.fitScale, localWidth, localHeight
-      )
-      this.fitOffsetX = offset.x
-      this.fitOffsetY = offset.y
-    }
+    this.applyFittedLocalViewport(localWidth, this.sceneHeight / this.parentScale())
     this.syncSceneHandle()
     // 局部容器尺寸变了：本 Scene 的累计比例跟着变，Embed 的展开/折叠重算（#820）
     this.refreshEmbedLodLayout()
