@@ -734,18 +734,28 @@ impl SujianEditorItem {
         let logical_cursor_changed = new_anchor != current_anchor
             || new_head != current_cursor
             || self.cursor_ctrl.affinity != affinity;
-        // Issue #824 评论 5971089641 第 8 节：逻辑 cursor 真正变化时，除了 bump
-        // epoch，还要**明确**把 active text motion 的 caret ownership 交给
-        // PointerClick——旧文字按当前帧收口，旧正文事务不能再移动 caret，
-        // 后续完成时也不会把 caret 拉回旧 target。
+        // Issue #824 评论 5971089641 第 8 节 / 评论 5972388049 第 3 节：逻辑 cursor
+        // 真正变化时，先**在同一帧**把旧正文事务的 caret ownership detach 掉——
+        // 旧吞吐字从当前屏幕帧继续收口（不掐到终态），只有 caret 解绑；
+        // 然后 bump epoch，最后 update_cursor_visual_position() 从保存的当前视觉
+        // 位置 Tween 到点击目标。顺序不能颠倒：先把文字掐到终态再建点击 Tween
+        // 正是本轮要修的问题。
         let caret_target_before = (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y);
-        let released_motion = if logical_cursor_changed {
+        let pointer_detach = if logical_cursor_changed {
+            let pointer_now = std::time::Instant::now();
+            let current_layout_revision = self.pipeline.layout_revision();
+            let detach = self
+                .pipeline
+                .animation_coordinator_mut()
+                .hand_over_caret_ownership_to_pointer_click(
+                    pointer_now,
+                    self.cursor_ctrl.cursor_owner_epoch,
+                    current_layout_revision,
+                );
             // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
             // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
             self.begin_manual_cursor_move();
-            self.pipeline
-                .animation_coordinator_mut()
-                .hand_over_caret_ownership_to_pointer_click()
+            Some(detach)
         } else {
             None
         };
@@ -776,10 +786,11 @@ impl SujianEditorItem {
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
         let _ = self.update_cursor_visual_position();
-        if logical_cursor_changed {
-            // Issue #824 评论 5971089641 第 9 节：点击 + caret 交接写正式诊断事件
-            // （不再是 debug log）：press 坐标、hit_test byte index、old/new cursor、
-            // cursor_owner_epoch、active motion id、retarget 前后 caret target。
+        if let Some(detach) = pointer_detach {
+            // Issue #824 评论 5971089641 第 9 节 / 评论 5972388049 第 4 节：
+            // 点击 + caret 交接写正式诊断事件（不再是 debug log）：press 坐标、
+            // hit_test byte index、old/new cursor、cursor_owner_epoch、active
+            // motion id、retarget 前后 caret target，以及 detach 的结果计数。
             record_pointer_click_caret_handover(
                 x,
                 y,
@@ -787,7 +798,9 @@ impl SujianEditorItem {
                 current_cursor,
                 self.pipeline.cursor(),
                 self.cursor_ctrl.cursor_owner_epoch,
-                released_motion,
+                detach.owner,
+                detach.detached_caret_driven_units,
+                detach.snapped_caret_driven_units,
                 caret_target_before,
                 (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y),
             );
@@ -1162,10 +1175,13 @@ fn compute_word_bounds(text: &str, index: usize) -> Option<(usize, usize)> {
     Some((byte_start, byte_end))
 }
 
-/// Issue #824 评论 5971089641 第 9 节：鼠标点击的正式诊断事件。
+/// Issue #824 评论 5971089641 第 9 节 / 评论 5972388049 第 4 节：
+/// 鼠标点击的正式诊断事件。
 ///
 /// 点击导致逻辑 cursor 变化时记录：pointer press 坐标、hit_test byte index、
-/// old/new cursor、cursor_owner_epoch、active motion id、retarget 前后 caret target。
+/// old/new cursor、cursor_owner_epoch、active motion id、retarget 前后 caret target，
+/// 以及 caret detach 的结果计数（`detached_caret_driven_units` /
+/// `snapped_caret_driven_units`——正常 PointerClick 路径后者必须为 0）。
 /// 写 `writer_diagnostics` 正式事件（诊断包可见），不是 env-gated debug log。
 #[allow(clippy::too_many_arguments)]
 fn record_pointer_click_caret_handover(
@@ -1176,6 +1192,8 @@ fn record_pointer_click_caret_handover(
     new_cursor: usize,
     cursor_owner_epoch: u64,
     active_motion_id: Option<super::transaction_key::VisualTransactionKey>,
+    detached_caret_driven_units: usize,
+    snapped_caret_driven_units: usize,
     caret_target_before: (f64, f64),
     caret_target_after: (f64, f64),
 ) {
@@ -1199,6 +1217,16 @@ fn record_pointer_click_caret_handover(
         "active_motion_id".to_string(),
         serde_json::json!(active_motion_id.map(|key| key.transaction_id)),
     );
+    // Issue #824 评论 5972388049 第 4 节：detach 的结果字段。PointerClick 正常
+    // 路径文字继续（detached ≥ 0、snapped == 0），不允许把吞吐字直接掐到终态。
+    fields.insert(
+        "detached_caret_driven_units".to_string(),
+        serde_json::json!(detached_caret_driven_units),
+    );
+    fields.insert(
+        "snapped_caret_driven_units".to_string(),
+        serde_json::json!(snapped_caret_driven_units),
+    );
     fields.insert(
         "caret_target_before".to_string(),
         serde_json::json!([caret_target_before.0, caret_target_before.1]),
@@ -1216,8 +1244,9 @@ fn record_pointer_click_caret_handover(
         event: "editor.anim.pointer_caret_handover".to_string(),
         target: "editor.anim".to_string(),
         message: Some(format!(
-            "Issue #824 评论 5971089641: pointer click caret ownership 交给 PointerClick，\
-             released motion {active_motion_id:?}"
+            "Issue #824 评论 5971089641/5972388049: pointer click caret ownership 交给 \
+             PointerClick，released motion {active_motion_id:?}，吞吐字 detached={} snapped={}",
+            detached_caret_driven_units, snapped_caret_driven_units,
         )),
         fields,
     });

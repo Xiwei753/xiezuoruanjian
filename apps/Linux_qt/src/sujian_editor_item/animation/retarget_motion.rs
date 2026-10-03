@@ -25,7 +25,10 @@
 //! 每次按键只产生本笔自己的 Reveal/Conceal 加“仍可见旧 glyph 的收口”，
 //! 不产生 `1、2、3……` 个待播放 DeleteConceal，也不存在历史动画队列。
 
+use std::time::Instant;
+
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use crate::sujian_editor_item::animation::frame_state::SampledSliceFrame;
 use crate::sujian_editor_item::animation::transaction::types::{
     CaretTrackSegment, CaretTrackSegmentKind, IngestSnapshotSide, IngestStageId,
 };
@@ -33,6 +36,7 @@ use crate::sujian_editor_item::animation::transaction_builder::ingest_route::{
     build_delete_route, build_insert_route, collect_delete_rows, collect_insert_rows,
     ingest_route_shape, same_rect, IngestRouteShape,
 };
+use crate::sujian_editor_item::animation::VisualUnitTiming;
 use crate::sujian_editor_item::edit_motion::{CursorRect, EditorAnimationKind};
 use crate::sujian_editor_item::editor_animation_debug_log;
 
@@ -223,6 +227,82 @@ pub(crate) fn count_carried_ingest_units(
         }
     }
     (reveal, conceal)
+}
+
+/// Issue #824 评论 5972388049：把仍在由 caret track 驱动的吞吐 slice 转成
+/// 「从当前屏幕帧继续到终态」的 Timed 收口状态。
+///
+/// 两条路径共用本 helper，避免各写一套转换：
+/// - `transaction_builder` 的 carried retarget：旧 glyph 带进新事务继续收口；
+/// - `coordinator` 的 PointerClick caret detach：旧事务原地从 caret 驱动解绑，
+///   文字既不掐到终态、也不从 0 重播。
+///
+/// 语义：
+/// - 就地修正 slice 的遮罩锚点，使 `compute_frame(start_fraction)` 复现采样帧几何；
+/// - `start_fraction` = 当前屏幕可见比例（不是 0，也不是终态）；
+/// - `target_fraction` = Reveal 1 / Conceal 0；
+/// - `started_at` 由调用方给：新事务用 `None`（等 Rendering 与整条 motion 同帧起跑），
+///   mid-flight detach 用 `Some(now)`（从 detach 的同一帧继续）。
+pub(crate) fn detach_caret_track_to_timed(
+    slice: &mut AnimatedSlice,
+    sampled: &SampledSliceFrame,
+    duration_ms: u64,
+    started_at: Option<Instant>,
+) -> VisualUnitTiming {
+    // 旧 `is_caret_line` 让 Timed 的遮罩锚点跟着**旧** caret 走，而 caret-driven
+    // 的锚点由 driver 决定（Backspace 收向行左端 / Delete 键从被删区右端收向静止
+    // caret）。脱离 caret 驱动后按采样帧的固定边重设收拢侧，保证反解出的 visible
+    // 同时复现采样帧的位置与宽度。
+    slice.is_caret_line = false;
+    if slice.kind == AnimatedSliceKind::DeleteConceal {
+        let frame = &sampled.dest_rect;
+        // 固定边相对**本 slice 自己的矩形**判断：行级 mask 通常比 slice 宽，
+        // 直接比 mask 会把「靠 slice 左端」误判成「靠行右端」。
+        let slice_left = slice.from_document_rect.x;
+        let slice_right = slice.from_document_rect.x + slice.from_document_rect.w;
+        let left_gap = (frame.x - slice_left).abs();
+        let right_gap = (frame.x + frame.w - slice_right).abs();
+        slice.conceal_to_left_edge = left_gap <= right_gap;
+    }
+    let start_fraction = caret_track_sampled_visible_fraction(slice, sampled);
+    VisualUnitTiming::Timed {
+        started_at,
+        duration_ms: duration_ms.max(1),
+        start_fraction,
+        target_fraction: match slice.kind {
+            AnimatedSliceKind::DeleteConceal => 0.0,
+            _ => 1.0,
+        },
+    }
+}
+
+/// caret-driven 采样帧的当前可见比例（0..1）。
+///
+/// `SampledSliceFrame.visible_fraction` 对 CaretTrack 单元固定是 0（它的边界来自
+/// caret 几何，不是 0..1 进度）。脱离 caret 驱动的瞬间必须等于「当前屏幕」，所以要
+/// 反解一个 `visible`，使 `compute_frame(visible)` 复现采样帧的绘制宽度。
+/// `compute_frame` 的可见宽度对 `visible` 单调（从锚点向行级 extent 展开），
+/// 因此用二分求逆；48 次二分 → 精度 ~1e-15，与采样帧在 1e-8 容差内一致。
+fn caret_track_sampled_visible_fraction(slice: &AnimatedSlice, sampled: &SampledSliceFrame) -> f64 {
+    match slice.kind {
+        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+            let target_w = sampled.dest_rect.w.max(0.0);
+            let mut low = 0.0f64;
+            let mut high = 1.0f64;
+            for _ in 0..48 {
+                let mid = 0.5 * (low + high);
+                if slice.compute_frame(mid).w < target_w {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            0.5 * (low + high)
+        }
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+            sampled.visible_fraction
+        }
+    }
 }
 
 /// Issue #824 评论 5971089641 第 9 节：正文 retarget 的正式诊断事件。

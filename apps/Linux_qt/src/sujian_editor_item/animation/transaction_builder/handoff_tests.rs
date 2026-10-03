@@ -920,3 +920,309 @@ fn issue819_comment5970185344_composition_commit_preserves_empty_builder_skip_re
     );
     assert!(coord.prepared_queue.active_transactions().is_empty());
 }
+
+// =========================================================================
+// Issue #824 评论 5972388049：PointerClick 只解绑 caret，文字从当前帧继续收口
+// =========================================================================
+
+/// PointerClick detach：旧吞吐字不得被掐到终态，也不得从 0 重播。
+///
+/// 场景：`ABC|` 协同退格到 `AB`，C 吞到一半（50ms/100ms）时点击正文。
+/// - detach 前：C 的 DeleteConceal 宽度严格介于 0 和整片之间；
+/// - detach 后：C 转成 Timed，起点 = 当前屏幕可见比例，detach 瞬间绘制几何不变；
+/// - 之后文字继续单调收口，在一个时长内到达终态；
+/// - 事务失去 caret ownership（track 解绑、`caret_motion_retired`）。
+#[test]
+fn issue824_comment5972388049_pointer_click_detaches_caret_track_without_snapping_glyphs() {
+    use crate::sujian_editor_item::animation::VisualUnitTiming;
+
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let now = Instant::now();
+    let tx = start(
+        build_prepared_transaction(edit_spec(
+            &mut coord,
+            "ABC",
+            "AB",
+            RebaseVisualState::default(),
+        ))
+        .expect_created("delete"),
+        now,
+    );
+    let key = tx.key;
+    let epoch = 1; // edit_spec 固定 cursor_owner_epoch = 1
+    let revision = LayoutRevision::initial();
+    coord.prepared_queue.enqueue(tx);
+
+    let at = now + Duration::from_millis(50);
+    let before = {
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key)
+            .expect("事务在队列中");
+        sample_transaction_visual_state(tx, at)
+    };
+    let conceal_before = before
+        .slices
+        .iter()
+        .find(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+        .expect("退格必须有 DeleteConceal")
+        .clone();
+    assert!(
+        conceal_before.dest_rect.w > 1e-6 && conceal_before.dest_rect.w < 10.0 - 1e-6,
+        "fixture 必须真的吞到一半（0 < w < 10），实际 w={}",
+        conceal_before.dest_rect.w
+    );
+
+    let outcome = coord.hand_over_caret_ownership_to_pointer_click(at, epoch, revision);
+    assert_eq!(outcome.owner, Some(key), "detach 前 owner 必须是这笔事务");
+    assert_eq!(
+        outcome.detached_caret_driven_units, 1,
+        "C 的吞吐 unit 必须走 detach（从当前帧继续），不是直接终态"
+    );
+    assert_eq!(
+        outcome.snapped_caret_driven_units, 0,
+        "正常 PointerClick 路径不允许把吞吐字掐到终态"
+    );
+
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key)
+        .expect("事务仍活跃");
+    assert!(
+        tx.caret_motion_retired,
+        "detach 后必须永久失去 caret ownership"
+    );
+    assert!(
+        tx.cursor_visual_track.is_none(),
+        "detach 后旧事务不再持有 caret track"
+    );
+    let conceal_unit = tx
+        .units
+        .iter()
+        .find(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
+        .expect("退格 unit 仍在");
+    let (start_fraction, target_fraction, duration_ms, started_at) = match &conceal_unit.timing {
+        VisualUnitTiming::Timed {
+            started_at,
+            duration_ms,
+            start_fraction,
+            target_fraction,
+        } => (*start_fraction, *target_fraction, *duration_ms, *started_at),
+        VisualUnitTiming::CaretTrack { .. } => {
+            panic!("detach 后吞吐字必须是 Timed（从当前帧继续），不能仍是 CaretTrack")
+        }
+    };
+    assert_eq!(
+        started_at,
+        Some(at),
+        "detach 从点击的同一帧开始计时，不重播"
+    );
+    assert_eq!(duration_ms, 100, "detach 继续收口用本事务文字时钟预算");
+    assert_eq!(target_fraction, 0.0, "DeleteConceal 的终态是完全吞掉");
+    assert!(
+        start_fraction > 1e-6 && start_fraction < 1.0 - 1e-6,
+        "起点必须是当前屏幕可见比例（不是 0、也不是终态），实际 {start_fraction}"
+    );
+
+    // detach 瞬间不跳变：绘制几何与采样帧一致（含位置和宽度）。
+    let frame_at_detach = sample_transaction_visual_state(tx, at);
+    let conceal_at_detach = frame_at_detach
+        .slices
+        .iter()
+        .find(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+        .expect("detach 瞬间仍应画出当前帧的 C");
+    assert_slice(conceal_at_detach, &conceal_before);
+
+    // 文字继续：宽度单调收口，一个时长后到达终态。
+    let mut width = conceal_at_detach.dest_rect.w;
+    for ms in [10u64, 25, 50, 75] {
+        let frame = sample_transaction_visual_state(tx, at + Duration::from_millis(ms));
+        let w = frame
+            .slices
+            .iter()
+            .find(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+            .map(|s| s.dest_rect.w)
+            .unwrap_or(0.0);
+        assert!(
+            w <= width + 1e-8,
+            "detach 后必须继续吞字（ms={ms}）：prev={width} curr={w}"
+        );
+        width = w;
+    }
+    let final_frame = sample_transaction_visual_state(tx, at + Duration::from_millis(100));
+    let final_w = final_frame
+        .slices
+        .iter()
+        .find(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+        .map(|s| s.dest_rect.w)
+        .unwrap_or(0.0);
+    assert!(final_w < 1e-6, "一个时长后必须收口到终态，实际 w={final_w}");
+}
+
+/// 全局 `retire_caret_driven_units_for_transaction` 的“直接终态”语义保持不变。
+///
+/// 滚动 / layout basis 失效等路径仍需要它：PointerClick 单独走 detach，不得把
+/// 全局路径也改成“从当前帧继续”。
+#[test]
+fn issue824_comment5972388049_global_retire_keeps_snap_semantics() {
+    use crate::sujian_editor_item::animation::VisualUnitTiming;
+
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let now = Instant::now();
+    let tx = start(
+        build_prepared_transaction(edit_spec(
+            &mut coord,
+            "ABC",
+            "AB",
+            RebaseVisualState::default(),
+        ))
+        .expect_created("delete"),
+        now,
+    );
+    let key = tx.key;
+    coord.prepared_queue.enqueue(tx);
+    coord.retire_caret_driven_units_for_transaction(key);
+
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key)
+        .expect("事务仍活跃");
+    assert!(tx.caret_motion_retired);
+    let conceal_unit = tx
+        .units
+        .iter()
+        .find(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
+        .expect("退格 unit 仍在");
+    assert!(
+        matches!(
+            conceal_unit.timing,
+            VisualUnitTiming::CaretTrack { retired: true }
+        ),
+        "全局 retire 必须保持“直接终态”语义（retired=true），不能改成 Timed"
+    );
+    assert_eq!(
+        conceal_unit.timing.progress(now),
+        1.0,
+        "全局 retire 后 unit 立刻到终态"
+    );
+}
+
+/// PointerClick detach 的对称用例：**吐到一半**的 InsertReveal 也要继续吐完。
+///
+/// 场景：`A|` 协同插入 B，B 吐到一半（50ms/100ms）时点击正文。
+/// detach 后 B 从当前可见比例继续 Reveal 到 1.0，宽度单调不减，最终完整显示。
+#[test]
+fn issue824_comment5972388049_pointer_click_detach_continues_midway_reveal() {
+    use crate::sujian_editor_item::animation::VisualUnitTiming;
+
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let now = Instant::now();
+    let tx = start(
+        build_prepared_transaction(edit_spec(
+            &mut coord,
+            "A",
+            "AB",
+            RebaseVisualState::default(),
+        ))
+        .expect_created("insert"),
+        now,
+    );
+    let key = tx.key;
+    coord.prepared_queue.enqueue(tx);
+
+    let at = now + Duration::from_millis(50);
+    let before = {
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key)
+            .expect("事务在队列中");
+        sample_transaction_visual_state(tx, at)
+    };
+    let reveal_before = before
+        .slices
+        .iter()
+        .find(|s| s.kind == AnimatedSliceKind::InsertReveal)
+        .expect("插入必须有 InsertReveal")
+        .clone();
+    assert!(
+        reveal_before.dest_rect.w > 1e-6 && reveal_before.dest_rect.w < 10.0 - 1e-6,
+        "fixture 必须真的吐到一半（0 < w < 10），实际 w={}",
+        reveal_before.dest_rect.w
+    );
+
+    let outcome =
+        coord.hand_over_caret_ownership_to_pointer_click(at, 1, LayoutRevision::initial());
+    assert_eq!(outcome.owner, Some(key));
+    assert_eq!(outcome.detached_caret_driven_units, 1);
+    assert_eq!(outcome.snapped_caret_driven_units, 0);
+
+    let tx = coord
+        .prepared_queue
+        .active_transactions()
+        .iter()
+        .find(|t| t.key == key)
+        .expect("事务仍活跃");
+    let reveal_unit = tx
+        .units
+        .iter()
+        .find(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
+        .expect("插入 unit 仍在");
+    let (start_fraction, target_fraction) = match &reveal_unit.timing {
+        VisualUnitTiming::Timed {
+            start_fraction,
+            target_fraction,
+            ..
+        } => (*start_fraction, *target_fraction),
+        VisualUnitTiming::CaretTrack { .. } => panic!("detach 后必须是 Timed"),
+    };
+    assert!(
+        start_fraction > 1e-6 && start_fraction < 1.0 - 1e-6,
+        "起点必须是当前屏幕可见比例，实际 {start_fraction}"
+    );
+    assert_eq!(target_fraction, 1.0, "InsertReveal 的终态是完整显示");
+
+    // detach 瞬间不跳变。
+    let frame_at_detach = sample_transaction_visual_state(tx, at);
+    let reveal_at_detach = frame_at_detach
+        .slices
+        .iter()
+        .find(|s| s.kind == AnimatedSliceKind::InsertReveal)
+        .expect("detach 瞬间仍应画出当前帧的 B");
+    assert_slice(reveal_at_detach, &reveal_before);
+
+    // 继续吐字：宽度单调不减，一个时长后完整显示。
+    let mut width = reveal_at_detach.dest_rect.w;
+    for ms in [10u64, 25, 50, 75] {
+        let frame = sample_transaction_visual_state(tx, at + Duration::from_millis(ms));
+        let w = frame
+            .slices
+            .iter()
+            .find(|s| s.kind == AnimatedSliceKind::InsertReveal)
+            .map(|s| s.dest_rect.w)
+            .unwrap_or(0.0);
+        assert!(
+            w >= width - 1e-8,
+            "detach 后必须继续吐字（ms={ms}）：prev={width} curr={w}"
+        );
+        width = w;
+    }
+    let final_frame = sample_transaction_visual_state(tx, at + Duration::from_millis(100));
+    let final_w = final_frame
+        .slices
+        .iter()
+        .find(|s| s.kind == AnimatedSliceKind::InsertReveal)
+        .map(|s| s.dest_rect.w)
+        .unwrap_or(0.0);
+    assert!(
+        (final_w - 10.0).abs() < 1e-6,
+        "一个时长后必须完整吐出，实际 w={final_w}"
+    );
+}

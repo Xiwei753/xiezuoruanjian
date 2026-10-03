@@ -14,13 +14,13 @@ use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind
 use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
 use crate::sujian_editor_item::animation::rebase::{match_rebase_frames, PreparedRebaseHandoff};
 use crate::sujian_editor_item::animation::retarget_motion::{
-    count_carried_ingest_units, count_ingest_slices, retarget, RetargetPatchKind, RetargetRequest,
-    RetargetStart, RetargetTarget,
+    count_carried_ingest_units, count_ingest_slices, detach_caret_track_to_timed, retarget,
+    RetargetPatchKind, RetargetRequest, RetargetStart, RetargetTarget,
 };
 use crate::sujian_editor_item::animation::transaction::types::IngestStageId;
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
-    TextVisualTransactionState, TransactionTimeline, VisualUnitTiming,
+    TextVisualTransactionState, TransactionTimeline,
 };
 #[cfg(test)]
 use crate::sujian_editor_item::animation_mode::AnimationMode;
@@ -485,37 +485,31 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransacti
             // 出发，在本笔时长内收口到终态。它和本笔 caret track 同起点同时长，
             // 是同一份 motion 时钟，不是历史时间线。
             // Timed carried unit（Reflow）继续按自己的时间线播完。
+            //
+            // Issue #824 评论 5972388049：这段「当前 CaretTrack 视觉帧 → 脱离 caret
+            // 后的 Timed 收口状态」的转换与 PointerClick detach 共用
+            // `retarget_motion::detach_caret_track_to_timed`，不再各写一套。
             let carried_is_caret_track = unit.timing.is_caret_track();
             let mut new_unit = PreparedVisualUnit {
                 slice: new_slice,
                 timing: unit.timing.clone(),
                 stage_id: unit.stage_id,
             };
-            // CaretTrack 单元的 `SampledSliceFrame.visible_fraction` 固定是 0
-            //（它的边界来自 caret 几何，不是 0..1 进度）。retarget 起点必须等于
-            // 「当前屏幕」，所以用本帧真实绘制宽度 / 整片宽度还原可见比例。
-            let carried_visible_fraction = if carried_is_caret_track {
-                // 旧 `is_caret_line` 让 Timed 的遮罩锚点跟着**旧** caret 走，而
-                // caret-driven 的锚点由 driver 决定（Backspace 收向行左端 /
-                // Delete 键从被删区右端收向静止 caret）。carried 单元已不再属于
-                // 旧 route，按采样帧的固定边重设收拢侧，保证反解出的 visible
-                // 同时复现采样帧的位置与宽度。
-                new_unit.slice.is_caret_line = false;
-                if new_unit.slice.kind == AnimatedSliceKind::DeleteConceal {
-                    let frame = &unit.sampled_frame.dest_rect;
-                    // 固定边相对**本 slice 自己的矩形**判断：行级 mask 通常比
-                    // slice 宽，直接比 mask 会把「靠 slice 左端」误判成「靠行右端」。
-                    let slice_left = new_unit.slice.from_document_rect.x;
-                    let slice_right =
-                        new_unit.slice.from_document_rect.x + new_unit.slice.from_document_rect.w;
-                    let left_gap = (frame.x - slice_left).abs();
-                    let right_gap = (frame.x + frame.w - slice_right).abs();
-                    new_unit.slice.conceal_to_left_edge = left_gap <= right_gap;
-                }
-                carried_sampled_visible_fraction(&new_unit.slice, unit)
+            let detached_timing = if carried_is_caret_track {
+                Some(detach_caret_track_to_timed(
+                    &mut new_unit.slice,
+                    &unit.sampled_frame,
+                    // 新事务：等 Rendering 与整条 motion 同帧起跑。
+                    spec.text_duration_ms,
+                    None,
+                ))
             } else {
-                unit.sampled_frame.visible_fraction
+                None
             };
+            let carried_visible_fraction = detached_timing
+                .as_ref()
+                .map(|timing| timing.start_fraction())
+                .unwrap_or(unit.sampled_frame.visible_fraction);
             let carried_frame = RebaseFrame {
                 byte_start: unit.slice.byte_start,
                 byte_end: unit.slice.byte_end,
@@ -528,21 +522,10 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransacti
                 remaining_duration_ms: unit.sampled_frame.remaining_duration_ms,
             };
             new_unit.rebase_from_frame(&carried_frame);
-            if carried_is_caret_track {
-                // Issue #824 评论 5971089641 第 5 节：旧 CaretTrack timing / stage /
-                // 剩余时长不排进新动画。carried 吞吐字改由**本笔 motion 的时长**
-                // 驱动：起点 = 本帧采样到的可见比例，终点 = 自己的终态。
-                // 它与本笔 caret track 同一 frame_now 起跑、同一时长，是同一份
-                // motion 时钟；不再参与 route 的 stage 过滤（stage_id=None）。
-                new_unit.timing = VisualUnitTiming::Timed {
-                    started_at: None,
-                    duration_ms: spec.text_duration_ms,
-                    start_fraction: carried_visible_fraction,
-                    target_fraction: match new_unit.slice.kind {
-                        AnimatedSliceKind::DeleteConceal => 0.0,
-                        _ => 1.0,
-                    },
-                };
+            if let Some(timing) = detached_timing {
+                // 旧 CaretTrack timing / stage / 剩余时长不排进新动画；
+                // carried 吞吐字不再参与 route 的 stage 过滤（stage_id=None）。
+                new_unit.timing = timing;
                 new_unit.stage_id = None;
             }
             units.push(new_unit);
@@ -891,41 +874,6 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         crossfade_group_id: a.crossfade_group_id,
         crossfade_side: a.crossfade_side,
         reflow_anchors: merged_anchors,
-    }
-}
-
-/// Issue #824 评论 5971089641 第 5 节：carried 吞吐字在交棒瞬间的可见比例。
-///
-/// `SampledSliceFrame.visible_fraction` 对 CaretTrack 单元固定为 0（它的边界来自
-/// caret 几何，不是 0..1 进度）。retarget 需要「从当前屏幕出发」，所以要反解一个
-/// `visible`，使 `compute_frame(visible)` 复现采样帧的绘制宽度。
-///
-/// `compute_frame` 的可见宽度对 `visible` 单调（两边都从锚点向行级 extent 展开），
-/// 因此用二分求逆即可；carried glyph 在交棒瞬间因此不跳变，之后由本笔 motion 的
-/// 时长收口到终态。
-fn carried_sampled_visible_fraction(
-    slice: &AnimatedSlice,
-    unit: &crate::sujian_editor_item::animation::frame_state::CarriedVisualUnit,
-) -> f64 {
-    match slice.kind {
-        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-            let target_w = unit.sampled_frame.dest_rect.w.max(0.0);
-            let mut low = 0.0f64;
-            let mut high = 1.0f64;
-            // 48 次二分 → 精度 ~1e-15，保证复现宽度与采样帧在 1e-8 容差内一致。
-            for _ in 0..48 {
-                let mid = 0.5 * (low + high);
-                if slice.compute_frame(mid).w < target_w {
-                    low = mid;
-                } else {
-                    high = mid;
-                }
-            }
-            0.5 * (low + high)
-        }
-        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-            unit.sampled_frame.visible_fraction
-        }
     }
 }
 

@@ -9,6 +9,7 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
+use crate::sujian_editor_item::animation::retarget_motion::detach_caret_track_to_timed;
 use crate::sujian_editor_item::animation::{
     PreparedTransactionQueue, TextVisualOperationKind, TextVisualTransactionState,
 };
@@ -16,6 +17,21 @@ use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
+
+/// Issue #824 评论 5972388049 第 1 节：PointerClick caret detach 的结果。
+///
+/// 供 `editor.anim.pointer_caret_handover` 正式诊断事件使用：
+/// - `owner`：detach 前真正拥有 caret 的 transaction（active motion id）；
+/// - `detached_caret_driven_units`：从 caret 驱动转成「从当前屏幕帧继续到终态」的
+///   Timed 吞吐 unit 数（文字继续）；
+/// - `snapped_caret_driven_units`：拿不到本帧采样、只能退回“直接终态”的吞吐 unit
+///   数。正常 PointerClick 路径必须为 0。
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PointerCaretDetachOutcome {
+    pub(crate) owner: Option<VisualTransactionKey>,
+    pub(crate) detached_caret_driven_units: usize,
+    pub(crate) snapped_caret_driven_units: usize,
+}
 
 /// Issue #722 评论 5750218208: 从 `EditorLayoutSnapshot` 的 `line_snapshots` 中
 /// 按 `visual_line_id` 查找行几何（文档坐标的 top/bottom）。
@@ -490,22 +506,45 @@ impl LinuxEditorAnimationCoordinator {
         ));
     }
 
-    /// Issue #824 评论 5971089641 第 8 节：鼠标点击的 caret ownership 正式收口。
+    /// Issue #824 评论 5972388049 第 1 节：PointerClick 的 caret ownership detach。
     ///
-    /// 逻辑 cursor 真正变化时调用（在 `bump_cursor_owner_epoch` 之后）：
-    /// - 明确把 active text motion 的 caret ownership 交给 `PointerClick`：
-    ///   所有活动正文事务退休 caret motion（`caret_motion_retired = true`）并把
-    ///   CaretTrack 吞吐字按当前帧收口到终态；
-    /// - 旧正文事务从此不能再驱动 caret，后续完成时也不会把 caret 拉回旧 target；
-    /// - 新 caret 由 `update_cursor_visual_position()` 从当前视觉位置直接 Tween
-    ///   到点击目标。
+    /// 与 [`Self::retire_caret_driven_units_for_transaction`]（epoch / layout basis
+    /// 失效时把文字直接掐到终态）**语义不同**，不能复用：
+    /// - 在同一个 `now` 找到真正拥有 caret 的 transaction，并采样它当前的
+    ///   coordinated caret 与每个 CaretTrack glyph 的当前屏幕帧；
+    /// - 把这些 InsertReveal/DeleteConceal 转成「从当前可见比例继续到终态」的
+    ///   Timed unit（`retarget_motion::detach_caret_track_to_timed`）——
+    ///   文字继续，不从 0 重播、也不直接 progress=1；
+    /// - 之后设置 `caret_motion_retired = true`，让旧事务永久失去 caret ownership；
+    /// - Reflow 等原本就是 Timed 的 unit 保持原时间线。
     ///
-    /// 返回收口前仍是 caret owner 的 active motion id，供正式的
-    /// `editor.anim.pointer_caret_handover` 诊断事件使用。
+    /// 正常路径 `snapped_caret_driven_units == 0`；只有拿不到本帧 caret 采样
+    /// （没有 cursor track 的异常事务）的吞吐 unit 才退回原来的直接终态语义并计数。
+    ///
+    /// 调用方（`editing.rs::click_at`）顺序：先本方法 detach，再 bump epoch，
+    /// 最后 `update_cursor_visual_position()` 从当前视觉位置 Tween 到点击目标。
     pub(crate) fn hand_over_caret_ownership_to_pointer_click(
         &mut self,
-    ) -> Option<VisualTransactionKey> {
-        let owner = self.active_text_transaction_key();
+        now: Instant,
+        current_cursor_epoch: u64,
+        current_layout_revision: LayoutRevision,
+    ) -> PointerCaretDetachOutcome {
+        // 真正拥有 caret 的事务 = 渲染层同款选择逻辑（epoch + layout basis 一致、
+        // 未 retired 的最新事务）。
+        let owner = self
+            .active_text_transaction_key_with_epoch(current_cursor_epoch, current_layout_revision);
+        // 用统一 now 采样 owner 的当前屏幕帧（coordinated caret + CaretTrack glyph）。
+        let sampled = owner.and_then(|key| {
+            self.prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|tx| tx.key == key)
+                .map(|tx| super::sample::sample_transaction_visual_state(tx, now))
+        });
+        let mut outcome = PointerCaretDetachOutcome {
+            owner,
+            ..Default::default()
+        };
         let keys: Vec<VisualTransactionKey> = self
             .prepared_queue
             .active_transactions()
@@ -518,16 +557,79 @@ impl LinuxEditorAnimationCoordinator {
             })
             .map(|tx| tx.key)
             .collect();
-        let relinquished_count = keys.len();
         for key in keys {
-            self.retire_caret_driven_units_for_transaction(key);
+            let Some(tx) = self
+                .prepared_queue
+                .active_transactions_mut()
+                .iter_mut()
+                .find(|t| t.key == key)
+            else {
+                continue;
+            };
+            if Some(key) == owner {
+                // 只对真正拥有 caret 的事务做文字 detach：它的吞吐字此刻正在屏幕上。
+                match sampled.as_ref() {
+                    Some(sampled) => {
+                        let duration_ms = tx.timeline.duration_ms.max(1);
+                        for unit in tx.units.iter_mut() {
+                            if !unit.timing.is_caret_driven() {
+                                continue;
+                            }
+                            let sampled_frame = sampled.slices.iter().find(|slice| {
+                                slice.kind == unit.slice.kind
+                                    && slice.snapshot_id == unit.slice.snapshot_id
+                                    && slice.byte_start == unit.slice.byte_start
+                                    && slice.byte_end == unit.slice.byte_end
+                                    && slice.unit_stage_id == unit.stage_id
+                            });
+                            match sampled_frame {
+                                Some(sampled_frame) => {
+                                    // 从当前屏幕帧继续到终态：文字继续，caret 解绑。
+                                    unit.timing = detach_caret_track_to_timed(
+                                        &mut unit.slice,
+                                        sampled_frame,
+                                        duration_ms,
+                                        // mid-flight detach：从 detach 的同一帧继续计时。
+                                        Some(now),
+                                    );
+                                    // 解绑后不再参与旧 route 的 stage 过滤。
+                                    unit.stage_id = None;
+                                    outcome.detached_caret_driven_units += 1;
+                                }
+                                None => {
+                                    // 异常：拿不到这个 unit 的当前屏幕帧，只能退回
+                                    // 直接终态，并计入诊断。
+                                    unit.timing.retire_caret_motion();
+                                    outcome.snapped_caret_driven_units += 1;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        // 没有 cursor track / 采样不到：退回原“直接终态”语义并计数。
+                        for unit in tx.units.iter_mut() {
+                            if unit.timing.is_caret_driven() {
+                                unit.timing.retire_caret_motion();
+                                outcome.snapped_caret_driven_units += 1;
+                            }
+                        }
+                    }
+                }
+                // 永久失去 caret ownership：连同这条 caret track 一起解绑。
+                tx.caret_motion_retired = true;
+                tx.cursor_visual_track = None;
+            } else {
+                // 不是 caret owner 的事务：只解除 caret ownership（epoch bump 后
+                // 它本来也拿不到 caret），不动它的文字时间线。
+                tx.caret_motion_retired = true;
+            }
         }
         editor_animation_debug_log(&format!(
-            "pointer_caret_handover: owner={:?} relinquished={} — caret ownership 交给 PointerClick，\
-             旧正文事务不再驱动 caret",
-            owner, relinquished_count,
+            "pointer_caret_handover: owner={:?} detached={} snapped={} — caret ownership 交给 \
+             PointerClick，旧吞吐字从当前屏幕帧继续收口，不掐到终态",
+            outcome.owner, outcome.detached_caret_driven_units, outcome.snapped_caret_driven_units,
         ));
-        owner
+        outcome
     }
 
     pub fn has_prepared_or_rendering(&self) -> bool {

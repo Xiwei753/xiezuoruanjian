@@ -97,9 +97,9 @@ fn issue819_block2_rebase_visual_state_has_carried_units() {
         "问题 2 修复：transaction_builder 必须消费 carried_units"
     );
     assert!(
-        builder_src.contains("carried_sampled_visible_fraction"),
-        "Issue #824 评论 5971089641 第 5 节：carried 吞吐字必须从本帧采样几何 \
-         继续（无跳变 retarget），不得重新排队旧 route。"
+        builder_src.contains("detach_caret_track_to_timed("),
+        "Issue #824 评论 5971089641 第 5 节 / 评论 5972388049：carried 吞吐字必须从本帧 \
+         采样几何继续（无跳变 retarget），走共用的 detach helper，不得重新排队旧 route。"
     );
 }
 
