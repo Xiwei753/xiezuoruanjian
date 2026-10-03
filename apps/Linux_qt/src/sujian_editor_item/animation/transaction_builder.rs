@@ -13,10 +13,14 @@ use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use crate::sujian_editor_item::animation::cursor_motion::build_cursor_visual_track;
 use crate::sujian_editor_item::animation::rebase::{match_rebase_frames, PreparedRebaseHandoff};
+use crate::sujian_editor_item::animation::retarget_motion::{
+    count_carried_ingest_units, count_ingest_slices, retarget, RetargetPatchKind, RetargetRequest,
+    RetargetStart, RetargetTarget,
+};
 use crate::sujian_editor_item::animation::transaction::types::IngestStageId;
 use crate::sujian_editor_item::animation::{
     PreparedTextVisualTransaction, PreparedVisualUnit, RebaseFrame, TextVisualOperationKind,
-    TextVisualTransactionState, TransactionTimeline,
+    TextVisualTransactionState, TransactionTimeline, VisualUnitTiming,
 };
 #[cfg(test)]
 use crate::sujian_editor_item::animation_mode::AnimationMode;
@@ -73,6 +77,7 @@ pub(crate) fn operation_kind_label(kind: TextVisualOperationKind) -> &'static st
     match kind {
         TextVisualOperationKind::Insert => "Insert",
         TextVisualOperationKind::Delete => "Delete",
+        TextVisualOperationKind::Replace => "Replace",
         TextVisualOperationKind::CompositionUpdate => "CompositionUpdate",
         TextVisualOperationKind::CompositionCommitOrCancel => "CompositionCommitOrCancel",
     }
@@ -259,12 +264,61 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransacti
     // 正式 route 之外——那等于绕过 #815 早就规定过的「IME 也走同一套 caret-driven
     // 协同语义」。现在 segment 带 `IngestSnapshotSide`，old / new 行序只在各自
     // side 内比较，IME 的 Mixed 路径也能建出正确的分段路线，所以这道门删掉。
-    // Issue #819 评论 5968931455: 用 transaction_id 作为新事务的 stage_id。
-    // carried route 剩余段保留旧事务的 stage_id；当前新编辑的 route 段用新 stage_id。
+    //
+    // Issue #824 评论 5971089641 第 1/3 节：正文运动唯一入口 `retarget(...)`。
+    // 起点来自本帧采样的当前屏幕 caret（handoff.sampled）或首条 motion 的逻辑
+    // old caret；目标是最新 new_cursor_rect。**不**把旧 route 的剩余段拼进来，
+    // 也不按段数均分时长。
     let new_stage_id = IngestStageId(spec.key.transaction_id);
     let ingest_route_segments =
         if spec.caret_animation_enabled && spec.coordinated_animation_enabled {
-            ingest_route::build_ingest_route(&spec, &slices, new_stage_id)
+            let target = spec.new_cursor_rect.map(|caret| RetargetTarget {
+                caret,
+                visual_line_id: spec.new_cursor_visual_line_id,
+            });
+            let start = spec
+                .visual_state
+                .caret_handoff
+                .as_ref()
+                .map(|handoff| RetargetStart {
+                    caret: handoff.sampled,
+                    visual_line_id: handoff.sampled_visual_line_id,
+                    line_top: handoff.sampled_line_top,
+                    line_bottom: handoff.sampled_line_bottom,
+                })
+                .or_else(|| {
+                    spec.old_cursor_rect.map(|caret| RetargetStart {
+                        caret,
+                        visual_line_id: spec.old_cursor_visual_line_id,
+                        line_top: spec.old_cursor_line_top,
+                        line_bottom: spec.old_cursor_line_bottom,
+                    })
+                });
+            match (start, target) {
+                (Some(start), Some(target)) => {
+                    let (new_reveal, new_conceal) = count_ingest_slices(&slices);
+                    let (carried_reveal, carried_conceal) =
+                        count_carried_ingest_units(&spec.visual_state.carried_units);
+                    retarget(RetargetRequest {
+                        start,
+                        target,
+                        slices: &slices,
+                        stage_id: new_stage_id,
+                        patch_kind: RetargetPatchKind::from_kind(spec.patch_kind),
+                        replaced_stage_id: spec
+                            .visual_state
+                            .caret_handoff
+                            .as_ref()
+                            .map(|handoff| handoff.stage_id),
+                        active_reveal_count: new_reveal + carried_reveal,
+                        active_conceal_count: new_conceal + carried_conceal,
+                    })
+                }
+                // 拿不到 old/new caret 之一时返回空：那种事务本来就建不出 track，
+                // `build_cursor_visual_track` 返回 None 并由调用点记
+                // `editor.anim.transaction_skipped`。
+                _ => Vec::new(),
+            }
         } else {
             Vec::new()
         };
@@ -423,12 +477,44 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransacti
             // CaretTrack carried unit 从 sampled frame + 新 caret handoff 接着收口；
             // Timed carried unit 从 sampled frame + remaining duration 接着播。
             // 两者都通过 rebase_from_frame 把 sampled frame 几何写入新 slice。
-            // Issue #819 评论 5968931455: carried unit 标记旧事务的 stage_id，
-            // 让它只消费旧 stage 的 route 段，不消费新编辑的 route 段。
+            //
+            // Issue #824 评论 5971089641 第 5 节：收缩 carried unit 的职责——
+            // 它只保留“本帧还可见的旧 glyph 几何”用于无跳变 retarget；旧
+            // CaretTrack timing、旧 stage、旧剩余时长一律不排进下一笔正文动画。
+            // 协同吞吐字改挂**本笔 motion 的起点/时长**：从采样到的当前可见比例
+            // 出发，在本笔时长内收口到终态。它和本笔 caret track 同起点同时长，
+            // 是同一份 motion 时钟，不是历史时间线。
+            // Timed carried unit（Reflow）继续按自己的时间线播完。
+            let carried_is_caret_track = unit.timing.is_caret_track();
             let mut new_unit = PreparedVisualUnit {
                 slice: new_slice,
                 timing: unit.timing.clone(),
                 stage_id: unit.stage_id,
+            };
+            // CaretTrack 单元的 `SampledSliceFrame.visible_fraction` 固定是 0
+            //（它的边界来自 caret 几何，不是 0..1 进度）。retarget 起点必须等于
+            // 「当前屏幕」，所以用本帧真实绘制宽度 / 整片宽度还原可见比例。
+            let carried_visible_fraction = if carried_is_caret_track {
+                // 旧 `is_caret_line` 让 Timed 的遮罩锚点跟着**旧** caret 走，而
+                // caret-driven 的锚点由 driver 决定（Backspace 收向行左端 /
+                // Delete 键从被删区右端收向静止 caret）。carried 单元已不再属于
+                // 旧 route，按采样帧的固定边重设收拢侧，保证反解出的 visible
+                // 同时复现采样帧的位置与宽度。
+                new_unit.slice.is_caret_line = false;
+                if new_unit.slice.kind == AnimatedSliceKind::DeleteConceal {
+                    let frame = &unit.sampled_frame.dest_rect;
+                    // 固定边相对**本 slice 自己的矩形**判断：行级 mask 通常比
+                    // slice 宽，直接比 mask 会把「靠 slice 左端」误判成「靠行右端」。
+                    let slice_left = new_unit.slice.from_document_rect.x;
+                    let slice_right =
+                        new_unit.slice.from_document_rect.x + new_unit.slice.from_document_rect.w;
+                    let left_gap = (frame.x - slice_left).abs();
+                    let right_gap = (frame.x + frame.w - slice_right).abs();
+                    new_unit.slice.conceal_to_left_edge = left_gap <= right_gap;
+                }
+                carried_sampled_visible_fraction(&new_unit.slice, unit)
+            } else {
+                unit.sampled_frame.visible_fraction
             };
             let carried_frame = RebaseFrame {
                 byte_start: unit.slice.byte_start,
@@ -437,11 +523,28 @@ pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransacti
                 y: unit.sampled_frame.dest_rect.y,
                 opacity: unit.sampled_frame.opacity,
                 shaping_identity: unit.slice.shaping_identity.clone(),
-                visible_fraction: unit.sampled_frame.visible_fraction,
+                visible_fraction: carried_visible_fraction,
                 sampled_at: std::time::Instant::now(),
                 remaining_duration_ms: unit.sampled_frame.remaining_duration_ms,
             };
             new_unit.rebase_from_frame(&carried_frame);
+            if carried_is_caret_track {
+                // Issue #824 评论 5971089641 第 5 节：旧 CaretTrack timing / stage /
+                // 剩余时长不排进新动画。carried 吞吐字改由**本笔 motion 的时长**
+                // 驱动：起点 = 本帧采样到的可见比例，终点 = 自己的终态。
+                // 它与本笔 caret track 同一 frame_now 起跑、同一时长，是同一份
+                // motion 时钟；不再参与 route 的 stage 过滤（stage_id=None）。
+                new_unit.timing = VisualUnitTiming::Timed {
+                    started_at: None,
+                    duration_ms: spec.text_duration_ms,
+                    start_fraction: carried_visible_fraction,
+                    target_fraction: match new_unit.slice.kind {
+                        AnimatedSliceKind::DeleteConceal => 0.0,
+                        _ => 1.0,
+                    },
+                };
+                new_unit.stage_id = None;
+            }
             units.push(new_unit);
         }
     }
@@ -791,6 +894,41 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
     }
 }
 
+/// Issue #824 评论 5971089641 第 5 节：carried 吞吐字在交棒瞬间的可见比例。
+///
+/// `SampledSliceFrame.visible_fraction` 对 CaretTrack 单元固定为 0（它的边界来自
+/// caret 几何，不是 0..1 进度）。retarget 需要「从当前屏幕出发」，所以要反解一个
+/// `visible`，使 `compute_frame(visible)` 复现采样帧的绘制宽度。
+///
+/// `compute_frame` 的可见宽度对 `visible` 单调（两边都从锚点向行级 extent 展开），
+/// 因此用二分求逆即可；carried glyph 在交棒瞬间因此不跳变，之后由本笔 motion 的
+/// 时长收口到终态。
+fn carried_sampled_visible_fraction(
+    slice: &AnimatedSlice,
+    unit: &crate::sujian_editor_item::animation::frame_state::CarriedVisualUnit,
+) -> f64 {
+    match slice.kind {
+        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+            let target_w = unit.sampled_frame.dest_rect.w.max(0.0);
+            let mut low = 0.0f64;
+            let mut high = 1.0f64;
+            // 48 次二分 → 精度 ~1e-15，保证复现宽度与采样帧在 1e-8 容差内一致。
+            for _ in 0..48 {
+                let mid = 0.5 * (low + high);
+                if slice.compute_frame(mid).w < target_w {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            0.5 * (low + high)
+        }
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+            unit.sampled_frame.visible_fraction
+        }
+    }
+}
+
 fn union_source_rect(a: &SourceRect, b: &SourceRect) -> SourceRect {
     let min_x = a.x.min(b.x);
     let min_y = a.y.min(b.y);
@@ -830,161 +968,96 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         layout_basis_revision: LayoutRevision,
     ) -> HandoffTransactionOutcome {
-        let prepared = match prepared {
-            Some(p) => p,
-            None => {
+        let Some(handoff) = prepared else {
+            return HandoffTransactionOutcome::Skipped(
+                super::super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+            );
+        };
+        let PreparedRebaseHandoff {
+            visual_state,
+            inserted_ranges,
+            deleted_ranges,
+            offset_map,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        } = handoff;
+        // Issue #824 评论 5971089641 第 2 节：Insert / Delete / Replace 共用同一段
+        // 事务装配——正文动画种类只由 patches 的 inserted/deleted 事实决定，
+        // 不再有“CompositionCommit 另一套正文动画分类”。
+        let operation_kind = match (inserted_ranges.is_empty(), deleted_ranges.is_empty()) {
+            (false, true) => TextVisualOperationKind::Insert,
+            (true, false) => TextVisualOperationKind::Delete,
+            (false, false) => TextVisualOperationKind::Replace,
+            (true, true) => {
                 return HandoffTransactionOutcome::Skipped(
                     super::super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
                 );
             }
         };
-        match prepared {
-            PreparedRebaseHandoff::Insert {
-                visual_state,
-                range_start,
-                range_end,
-                insert_offset_map,
-                visual_affected_byte_range_old,
-                visual_affected_byte_range_new,
-            } => {
-                let key = self.alloc_key();
-                let inserted_range_tuple = (range_start, range_end);
-                // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
-                // build_prepared_transaction 内部调 build_insert_reveal_slices / build_cluster_reflow_slices
-                // / match_rebase_frames / build_cursor_visual_track 完成全部 slice/unit/track 构造。
-                // Issue #687: Insert 事务 changed range 由 Core 显式拥有，reflow 排除 inserted_range。
-                // Issue #756: InsertReveal 生成由 text_animation_enabled + caret_animation_enabled 决定，
-                // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
-                // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
-                // (range_start, range_start)，new 侧是 inserted_range。
-                let carried_rebase = visual_state.rebase_frames.len();
-                let spec = VisualEditSpec {
-                    key,
-                    operation_kind: TextVisualOperationKind::Insert,
-                    old_snapshot: old_snapshot.clone(),
-                    new_snapshot: new_snapshot.clone(),
-                    inserted_ranges: vec![inserted_range_tuple],
-                    deleted_ranges: vec![],
-                    offset_map: insert_offset_map,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                    old_cursor_visual_line_id,
-                    new_cursor_visual_line_id,
-                    old_cursor_line_top,
-                    old_cursor_line_bottom,
-                    new_cursor_line_top,
-                    new_cursor_line_bottom,
-                    cursor_owner_epoch,
-                    layout_basis_revision,
-                    visual_state,
-                    visual_affected_byte_range_old,
-                    visual_affected_byte_range_new,
-                    text_duration_ms: vt.text_duration_ms,
-                    caret_duration_ms: vt.caret_duration_ms,
-                    text_animation_enabled,
-                    caret_animation_enabled,
-                    coordinated_animation_enabled,
-                    composition_commit_crossfade: None,
-                };
-                // Issue #815 评论 6042062633 修改 8: builder 自己收口所有跳过点并记
-                // `editor.anim.transaction_skipped`（协同模式拿不到 cursor track、
-                // 有可见字符变化却既无 unit 又无 track）。合法的非可见输入
-                // （空格/tab/换行）没有 InsertReveal 是正常行为，不记事件。
-                // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
-                // 透传 skip reason，不再用 `?` 吞掉。
-                let prepared_tx = match build_prepared_transaction(spec) {
-                    BuildTransactionOutcome::Created(tx) => tx,
-                    BuildTransactionOutcome::Skipped(reason) => {
-                        return HandoffTransactionOutcome::Skipped(reason);
-                    }
-                };
-
-                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
-                emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
-                editor_animation_debug_log(&format!(
-                    "anim_event: key={:?} op=Insert inserted={:?} unit_kinds={:?} carried_rebase={}",
-                    key,
-                    inserted_range_tuple,
-                    unit_kind_labels(&prepared_tx.units),
-                    carried_rebase,
-                ));
-
-                self.prepared_queue.enqueue(prepared_tx);
-
-                HandoffTransactionOutcome::Created(key)
+        let key = self.alloc_key();
+        // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+        // build_prepared_transaction 内部调 build_insert_reveal_slices / build_delete_conceal_slices
+        // / build_cluster_reflow_slices / match_rebase_frames / retarget /
+        // build_cursor_visual_track 完成全部 slice/unit/track 构造。
+        let carried_rebase = visual_state.rebase_frames.len();
+        let spec = VisualEditSpec {
+            key,
+            operation_kind,
+            // Issue #824: 正文动画种类来自 patch 事实。
+            patch_kind: vt.kind,
+            old_snapshot: old_snapshot.clone(),
+            new_snapshot: new_snapshot.clone(),
+            inserted_ranges: inserted_ranges.clone(),
+            deleted_ranges: deleted_ranges.clone(),
+            offset_map,
+            old_cursor_rect,
+            new_cursor_rect,
+            old_cursor_visual_line_id,
+            new_cursor_visual_line_id,
+            old_cursor_line_top,
+            old_cursor_line_bottom,
+            new_cursor_line_top,
+            new_cursor_line_bottom,
+            cursor_owner_epoch,
+            layout_basis_revision,
+            visual_state,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+            text_duration_ms: vt.text_duration_ms,
+            caret_duration_ms: vt.caret_duration_ms,
+            text_animation_enabled,
+            caret_animation_enabled,
+            coordinated_animation_enabled,
+            composition_commit_crossfade: None,
+        };
+        // Issue #815 评论 6042062633 修改 8: builder 自己收口所有跳过点并记
+        // `editor.anim.transaction_skipped`（协同模式拿不到 cursor track、
+        // 有可见字符变化却既无 unit 又无 track）。合法的非可见输入
+        // （空格/tab/换行）没有 InsertReveal 是正常行为，不记事件。
+        // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
+        // 透传 skip reason，不再用 `?` 吞掉。
+        let prepared_tx = match build_prepared_transaction(spec) {
+            BuildTransactionOutcome::Created(tx) => tx,
+            BuildTransactionOutcome::Skipped(reason) => {
+                return HandoffTransactionOutcome::Skipped(reason);
             }
-            PreparedRebaseHandoff::Delete {
-                visual_state,
-                deleted_ranges,
-                delete_offset_map,
-                visual_affected_byte_range_old,
-                visual_affected_byte_range_new,
-            } => {
-                let key = self.alloc_key();
+        };
 
-                // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
-                // build_prepared_transaction 内部调 build_cluster_reflow_slices(key, old, new,
-                // offset_map, &deleted_ranges, &[], ...) 排除 deleted_range，
-                // Issue #687: changed range 由 Core 显式拥有。
-                // Issue #756: DeleteConceal 生成由 text_animation_enabled + caret_animation_enabled 决定，
-                // 不再由 smooth_cursor_enabled 单独决定，也不再把 typing && smooth 当成协同。
-                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
-                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
-                let carried_rebase = visual_state.rebase_frames.len();
-                let deleted_ranges_log = deleted_ranges.clone();
-                let spec = VisualEditSpec {
-                    key,
-                    operation_kind: TextVisualOperationKind::Delete,
-                    old_snapshot: old_snapshot.clone(),
-                    new_snapshot: new_snapshot.clone(),
-                    inserted_ranges: vec![],
-                    deleted_ranges,
-                    offset_map: delete_offset_map,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                    old_cursor_visual_line_id,
-                    new_cursor_visual_line_id,
-                    old_cursor_line_top,
-                    old_cursor_line_bottom,
-                    new_cursor_line_top,
-                    new_cursor_line_bottom,
-                    cursor_owner_epoch,
-                    layout_basis_revision,
-                    visual_state,
-                    visual_affected_byte_range_old,
-                    visual_affected_byte_range_new,
-                    text_duration_ms: vt.text_duration_ms,
-                    caret_duration_ms: vt.caret_duration_ms,
-                    text_animation_enabled,
-                    caret_animation_enabled,
-                    coordinated_animation_enabled,
-                    composition_commit_crossfade: None,
-                };
-                // Issue #815 评论 6042062633 修改 8: 同 Insert 分支，由 builder 收口跳过点。
-                // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
-                // 透传 skip reason，不再用 `?` 吞掉。
-                let prepared_tx = match build_prepared_transaction(spec) {
-                    BuildTransactionOutcome::Created(tx) => tx,
-                    BuildTransactionOutcome::Skipped(reason) => {
-                        return HandoffTransactionOutcome::Skipped(reason);
-                    }
-                };
+        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+        emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
+        editor_animation_debug_log(&format!(
+            "anim_event: key={:?} op={} inserted={:?} deleted={:?} unit_kinds={:?} carried_rebase={}",
+            key,
+            operation_kind_label(operation_kind),
+            inserted_ranges,
+            deleted_ranges,
+            unit_kind_labels(&prepared_tx.units),
+            carried_rebase,
+        ));
 
-                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
-                emit_transaction_diagnostic(&prepared_tx, "editor.anim.create", "created");
-                editor_animation_debug_log(&format!(
-                    "anim_event: key={:?} op=Delete deleted={:?} unit_kinds={:?} carried_rebase={}",
-                    key,
-                    deleted_ranges_log,
-                    unit_kind_labels(&prepared_tx.units),
-                    carried_rebase,
-                ));
+        self.prepared_queue.enqueue(prepared_tx);
 
-                self.prepared_queue.enqueue(prepared_tx);
-
-                HandoffTransactionOutcome::Created(key)
-            }
-        }
+        HandoffTransactionOutcome::Created(key)
     }
 
     // process_transaction 只服务本文件的单元测试：正文事务的生产路径已经改成
@@ -1103,6 +1176,7 @@ impl LinuxEditorAnimationCoordinator {
                     let spec = VisualEditSpec {
                         key,
                         operation_kind: TextVisualOperationKind::Insert,
+                        patch_kind: vt.kind,
                         old_snapshot: old_snapshot.clone(),
                         new_snapshot: new_snapshot.clone(),
                         inserted_ranges: vec![inserted_range_tuple],
@@ -1212,6 +1286,7 @@ impl LinuxEditorAnimationCoordinator {
                 let spec = VisualEditSpec {
                     key,
                     operation_kind: TextVisualOperationKind::Delete,
+                    patch_kind: vt.kind,
                     old_snapshot: old_snapshot.clone(),
                     new_snapshot: new_snapshot.clone(),
                     inserted_ranges: vec![],
@@ -1258,7 +1333,92 @@ impl LinuxEditorAnimationCoordinator {
 
                 return Some(key);
             }
-            EditorAnimationKind::Cursor => {
+            EditorAnimationKind::Replace => {
+                // Issue #824 评论 5971089641: Replace（patch 同时含 inserted 与
+                // deleted，例如 IME 选区替换、粘贴覆盖选区）与 Insert/Delete 走
+                // 同一段装配，只是两个 ranges 都非空。全部坐标来自 display patches。
+                let inserted_ranges = vt.inserted_ranges.clone();
+                let deleted_ranges = vt.deleted_ranges.clone();
+                let offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                let old_edit_range = (
+                    deleted_ranges.first().map(|r| r.0).unwrap_or(0),
+                    deleted_ranges.last().map(|r| r.1).unwrap_or(0),
+                );
+                let new_edit_range = (
+                    inserted_ranges.first().map(|r| r.0).unwrap_or(0),
+                    inserted_ranges.last().map(|r| r.1).unwrap_or(0),
+                );
+                let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                    let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                        &vt.old_text,
+                        &vt.new_text,
+                        old_edit_range,
+                        new_edit_range,
+                    );
+                    (Some((old_s, old_e)), Some((new_s, new_e)))
+                };
+                let (conflict_old_start, conflict_old_end) =
+                    visual_affected_byte_range_old.unwrap_or(old_edit_range);
+                let conflicting = self.prepared_queue.find_conflicting_transaction(
+                    &vt.old_text,
+                    conflict_old_start,
+                    conflict_old_end,
+                );
+                let now = Instant::now();
+                let visual_state = self.take_rebase_frames(
+                    &conflicting,
+                    "rebased_by_replace",
+                    now,
+                    Some((&deleted_ranges, &offset_map)),
+                    &vt.old_text,
+                    cursor_owner_epoch,
+                );
+                let key = self.alloc_key();
+                let carried_rebase = visual_state.rebase_frames.len();
+                let spec = VisualEditSpec {
+                    key,
+                    operation_kind: TextVisualOperationKind::Replace,
+                    patch_kind: vt.kind,
+                    old_snapshot: old_snapshot.clone(),
+                    new_snapshot: new_snapshot.clone(),
+                    inserted_ranges,
+                    deleted_ranges,
+                    offset_map,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                    old_cursor_visual_line_id,
+                    new_cursor_visual_line_id,
+                    old_cursor_line_top,
+                    old_cursor_line_bottom,
+                    new_cursor_line_top,
+                    new_cursor_line_bottom,
+                    cursor_owner_epoch,
+                    layout_basis_revision,
+                    visual_state,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
+                    text_duration_ms: vt.text_duration_ms,
+                    caret_duration_ms: vt.caret_duration_ms,
+                    text_animation_enabled,
+                    caret_animation_enabled,
+                    coordinated_animation_enabled,
+                    composition_commit_crossfade: None,
+                };
+                let prepared = match build_prepared_transaction(spec) {
+                    BuildTransactionOutcome::Created(tx) => tx,
+                    BuildTransactionOutcome::Skipped(_) => return None,
+                };
+                emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
+                editor_animation_debug_log(&format!(
+                    "anim_event: key={:?} op=Replace unit_kinds={:?} carried_rebase={}",
+                    key,
+                    unit_kind_labels(&prepared.units),
+                    carried_rebase,
+                ));
+                self.prepared_queue.enqueue(prepared);
+                return Some(key);
+            }
+            EditorAnimationKind::CursorOnly => {
                 // Issue #702: 删除"纯光标移动创建空 Cursor 文字事务"的结构。
                 // 纯光标移动直接维护 CursorAnimationState（由 rendering.rs
                 // update_cursor_visual_position → build_cursor_plan → apply_plan

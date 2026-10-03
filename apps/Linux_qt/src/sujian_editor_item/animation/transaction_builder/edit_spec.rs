@@ -8,7 +8,7 @@ use crate::sujian_editor_item::AnimationSkipFields;
 
 use crate::sujian_editor_item::animation::rebase::RebaseVisualState;
 use crate::sujian_editor_item::animation::TextVisualOperationKind;
-use crate::sujian_editor_item::edit_motion::CursorRect;
+use crate::sujian_editor_item::edit_motion::{CursorRect, EditorAnimationKind};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
@@ -37,6 +37,10 @@ pub(crate) struct CompositionCommitCrossfadeSpec {
 pub(crate) struct VisualEditSpec {
     pub(crate) key: VisualTransactionKey,
     pub(crate) operation_kind: TextVisualOperationKind,
+    /// Issue #824 评论 5971089641 第 2 节：正文动画种类只认 display patches 事实
+    /// （Insert / Delete / Replace / CursorOnly）。普通输入、IME commit、粘贴
+    /// 都从这里派生正文 Reveal/Conceal，不再看 `operation_kind`。
+    pub(crate) patch_kind: EditorAnimationKind,
     pub(crate) old_snapshot: EditorLayoutSnapshot,
     pub(crate) new_snapshot: EditorLayoutSnapshot,
     pub(crate) inserted_ranges: Vec<(usize, usize)>,

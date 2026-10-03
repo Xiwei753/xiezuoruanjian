@@ -24,21 +24,23 @@ pub(crate) fn build_cursor_visual_track(
     tx_duration_ms: u64,
     // Issue #815 评论 5949097065 问题3: 正式的运动路径，由调用方在 slice 建完、
     // `assign_shared_line_masks` 之后按**同侧** slice 几何生成。
+    // Issue #824 评论 5971089641: 这条路径由 `retarget_motion::retarget(...)`
+    // 从当前屏幕采样起点直接面向最新目标重建，不携带任何旧 route 剩余段。
     ingest_segments: Vec<CaretTrackSegment>,
-    // Issue #819 评论 5968931455: 本 track 所属的 visual stage id。
+    // Issue #824 评论 5971089641: 本 track 所属的 visual stage id（本笔 active motion）。
     stage_id: super::transaction::types::IngestStageId,
 ) -> Option<PreparedCursorVisualTrack> {
     let to = new_cursor_rect?;
-    let route_duration_ms = ingest_segments
-        .iter()
-        .map(|segment| segment.duration_weight_ms)
-        .sum::<f64>()
-        .ceil() as u64;
     match handoff {
         Some(h) => {
+            // Issue #824 评论 5971089641 第 6 节：handoff 分支不能再把
+            // `duration_ms = route_duration_ms`（历史 route 总时长）当成剩余预算继续消费。
+            // 新模型直接使用**本笔编辑的单一 motion 时长**：从 retarget motion 的当前
+            // 采样点（`h.sampled`）直接面向最新 caret target（`to`），整条 motion
+            // 只有一份全局 progress/velocity。
             crate::sujian_editor_item::editor_animation_debug_log(&format!(
-                "anim_caret_handoff: sampled_stage={:?} duration_ms={}",
-                h.stage_id, route_duration_ms,
+                "anim_caret_handoff: replaced_stage={:?} duration_ms={} (retarget 到最新 target)",
+                h.stage_id, tx_duration_ms,
             ));
             Some(PreparedCursorVisualTrack {
                 from: h.sampled,
@@ -56,11 +58,9 @@ pub(crate) fn build_cursor_visual_track(
                 to_line_top: new_cursor_line_top,
                 to_line_bottom: new_cursor_line_bottom,
                 started_at: None,
-                duration_ms: if ingest_segments.is_empty() {
-                    h.remaining_duration_ms
-                } else {
-                    route_duration_ms
-                },
+                // Issue #824 评论 5971089641 第 6 节：单一 motion 时长（本笔编辑），
+                // 不消费历史 route 总时长、不消费旧剩余时长。
+                duration_ms: tx_duration_ms,
                 pause_start: None,
                 segments: ingest_segments,
                 stage_id,

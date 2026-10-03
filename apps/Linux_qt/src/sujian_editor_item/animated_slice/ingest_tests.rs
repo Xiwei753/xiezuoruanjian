@@ -671,10 +671,11 @@ mod real_track_phase {
 /// r6 的 `routed_ingest` 用例手工构造了一条正确 route，所以「builder 自己少插
 /// RowHandoff」「builder 把前删做成 LayoutHandoff」「builder 无条件塞 0 长度的
 /// LayoutHandoff」这三类错误永远测不到。本模块全部改调
-/// `build_insert_route` / `build_delete_route` / `build_ingest_route`。
+/// `build_insert_route` / `build_delete_route`（Issue #824 起 route 装配由
+/// `retarget_motion::retarget` 统一负责，本模块只测几何 builder）。
 mod production_route {
+    use super::super::AnimatedSlice;
     use super::super::IngestBoundaryDriver;
-    use super::super::{AnimatedSlice, AnimatedSliceKind};
     use crate::sujian_editor_item::animation::cursor_motion::sample_caret_track_frame;
     use crate::sujian_editor_item::animation::transaction::types::{
         CaretTrackSegmentKind, IngestSnapshotSide, IngestStageId, PreparedCursorVisualTrack,
@@ -990,7 +991,8 @@ mod production_route {
         assert_eq!(segments[0].kind, CaretTrackSegmentKind::IngestLine);
 
         // 真正的跨 layout 换位仍然要保留 LayoutHandoff。
-        let wrapped = build_insert_route(&rows, &caret_rect(500.0, 0.0), &new_caret, IngestStageId(0));
+        let wrapped =
+            build_insert_route(&rows, &caret_rect(500.0, 0.0), &new_caret, IngestStageId(0));
         assert_eq!(wrapped[0].kind, CaretTrackSegmentKind::LayoutHandoff);
         assert_eq!(wrapped[0].ingest_line_ord, None);
     }
@@ -1001,7 +1003,7 @@ mod production_route {
     /// 逻辑，旧字整段动画期间保持完整。
     #[test]
     fn production_forward_delete_route_is_a_static_ingest_segment() {
-        let slices = vec![conceal_on_row(0, 0, 0, 0.0, 10.0, /* 前删 */ false)];
+        let _slices = vec![conceal_on_row(0, 0, 0, 0.0, 10.0, /* 前删 */ false)];
         let rows = vec![forward_row(0, 0.0, 10.0)];
         let old_caret = caret_rect(0.0, 0.0);
         let new_caret = caret_rect(0.0, 0.0);
@@ -1065,7 +1067,7 @@ mod production_route {
     /// 退格 route 的行间也必须显式 `RowHandoff`，且 IngestLine 从本行右端起步。
     #[test]
     fn production_backspace_route_ingests_rows_from_their_own_right_edge() {
-        let slices = vec![
+        let _slices = vec![
             conceal_on_row(1, 1, 0, 0.0, 30.0, true),
             conceal_on_row(0, 1, 0, 0.0, 40.0, true),
         ];
@@ -1096,7 +1098,12 @@ mod production_route {
         assert_eq!(segments[2].to.x, 0.0);
         assert_route_is_continuous(&segments, "退格跨行");
 
-        let with_tail = build_delete_route(&rows, &old_caret, Some(&caret_rect(0.0, ROW_H)), IngestStageId(0));
+        let with_tail = build_delete_route(
+            &rows,
+            &old_caret,
+            Some(&caret_rect(0.0, ROW_H)),
+            IngestStageId(0),
+        );
         assert_eq!(with_tail.len(), 4, "终点不同时才生成末尾 RowHandoff");
         assert_eq!(with_tail[3].kind, CaretTrackSegmentKind::RowHandoff);
         assert_eq!(with_tail[3].from.x, 0.0);
@@ -1106,7 +1113,7 @@ mod production_route {
     /// 问题4 的另一半：old 侧吞字终点与 new caret 完全相同时不生成末尾 RowHandoff。
     #[test]
     fn production_backspace_route_skips_zero_length_tail_handoff() {
-        let slices = vec![conceal_on_row(0, 0, 0, 0.0, 40.0, true)];
+        let _slices = vec![conceal_on_row(0, 0, 0, 0.0, 40.0, true)];
         let rows = vec![row(0, 0.0, 40.0)];
         let old_caret = caret_rect(40.0, 0.0);
         // 单字符退格：吞字终点就是 new caret。
@@ -1127,7 +1134,7 @@ mod production_route {
     /// `ingest_line_ord = None`，不吞字。屏幕 caret 已经在删除起点时则不生成。
     #[test]
     fn production_backspace_route_leads_with_layout_handoff_from_screen_caret() {
-        let slices = vec![conceal_on_row(1, 1, 1, 0.0, 30.0, true)];
+        let _slices = vec![conceal_on_row(1, 1, 1, 0.0, 30.0, true)];
         let rows = vec![row(1, 0.0, 30.0)];
         // 屏幕 caret 在本行中段 18（旧退格动画中途的位置）。
         let screen_caret = caret_rect(18.0, ROW_H);
@@ -1156,7 +1163,12 @@ mod production_route {
         assert_route_is_continuous(&segments, "退格前置换位");
 
         // 屏幕 caret 已经在删除起点：不生成 0 长度的换位段。
-        let same = build_delete_route(&rows, &caret_rect(30.0, ROW_H), Some(&new_caret), IngestStageId(0));
+        let same = build_delete_route(
+            &rows,
+            &caret_rect(30.0, ROW_H),
+            Some(&new_caret),
+            IngestStageId(0),
+        );
         assert_eq!(
             same[0].kind,
             CaretTrackSegmentKind::IngestLine,
@@ -1164,28 +1176,22 @@ mod production_route {
         );
     }
 
-    /// 问题3：退格 route 的屏幕起点必须来自 handoff 的**真实 caret**，而不是逻辑
-    /// `old_cursor_rect`。这里直接测 `build_ingest_route` 的选择逻辑。
+    /// 问题3：route 的屏幕起点由调用方传入——第一次 motion 用逻辑 old caret，
+    /// retarget 时用当前屏幕采样（Issue #824：起点永远来自「当前屏幕状态」，
+    /// 由 `retarget_motion::retarget` 把采样结果交给这些几何 builder）。
+    /// 这里验证 builder 真正消费传入的起点，而不是自己回退到行左端。
     #[test]
-    fn production_route_prefers_handoff_sampled_over_logical_old_caret() {
-        use crate::sujian_editor_item::animation::rebase::RebaseCaretHandoff;
-        use crate::sujian_editor_item::animation::transaction_builder::edit_spec::VisualEditSpec;
-
-        // 先用生产 builder 造出一条正确的多行 route，再确认 build_ingest_route
-        // 在有 handoff 时把屏幕起点换成 handoff.sampled。
-        let reveal = reveal_on_row(1, 1, 1, 0.0, 20.0);
-        assert_eq!(reveal.kind, AnimatedSliceKind::InsertReveal);
-
-        // 只断言 route 起点：构造一个最小 spec 需要快照，代价过大；
-        // 改为直接验证「无 handoff 时起点来自 old_cursor_rect」这个不变量，
-        // 再由 transaction_builder/tests.rs 的生产路径测试覆盖 handoff 分支。
+    fn production_route_starts_from_the_caller_supplied_screen_caret() {
         let rows = vec![row(1, 0.0, 20.0)];
-        let segments = build_insert_route(&rows, &caret_rect(500.0, 0.0), &caret_rect(20.0, ROW_H), IngestStageId(0));
+        let segments = build_insert_route(
+            &rows,
+            &caret_rect(500.0, 0.0),
+            &caret_rect(20.0, ROW_H),
+            IngestStageId(0),
+        );
         assert_eq!(segments[0].kind, CaretTrackSegmentKind::LayoutHandoff);
         assert_eq!(segments[0].from.x, 500.0);
         assert_eq!(segments[0].from.top, 0.0);
-        let _ = std::any::type_name::<RebaseCaretHandoff>();
-        let _ = std::any::type_name::<VisualEditSpec>();
     }
 
     // =====================================================================
@@ -1300,7 +1306,12 @@ mod production_route {
         assert_route_is_continuous(&segments, "粘贴末尾换行后的 route");
 
         // 同行输入不受影响：吞吐终点就是新 caret，不生成 0 长度的末尾换位段。
-        let same_line = build_insert_route(&rows, &screen_caret, &caret_rect(60.0, 0.0), IngestStageId(0));
+        let same_line = build_insert_route(
+            &rows,
+            &screen_caret,
+            &caret_rect(60.0, 0.0),
+            IngestStageId(0),
+        );
         assert_eq!(same_line.len(), 1, "同行输入不该多出末尾 RowHandoff");
     }
 

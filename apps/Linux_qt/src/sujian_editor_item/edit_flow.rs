@@ -399,6 +399,7 @@ impl SujianEditorItem {
             let outcome = self.record_composition_commit_transaction(
                 &old,
                 &new,
+                edit_result.expect("edit_result is Some when applied is true"),
                 visual_cause,
                 params.pending_preedit_cursor_rect,
                 params.preedit_byte_start,
@@ -415,12 +416,12 @@ impl SujianEditorItem {
                 EditVisualOutcome::AnimationDisabled
             } else {
                 match outcome {
-                    super::animation::transaction_builder::HandoffTransactionOutcome::Created(k) => {
-                        EditVisualOutcome::Created(k)
-                    }
-                    super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(reason) => {
-                        EditVisualOutcome::Skipped(reason)
-                    }
+                    super::animation::transaction_builder::HandoffTransactionOutcome::Created(
+                        k,
+                    ) => EditVisualOutcome::Created(k),
+                    super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                        reason,
+                    ) => EditVisualOutcome::Skipped(reason),
                 }
             }
         } else {

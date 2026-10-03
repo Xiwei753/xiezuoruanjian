@@ -43,6 +43,10 @@ impl TextVisualTransactionState {
 pub(crate) enum TextVisualOperationKind {
     Insert,
     Delete,
+    /// Issue #824 评论 5971089641 第 2 节：display patches 同时含 inserted 与
+    /// deleted（IME 选区替换、粘贴覆盖选区）。它和 Insert/Delete 走同一个
+    /// patch → retarget 入口，只是诊断标签不同。
+    Replace,
     CompositionUpdate,
     CompositionCommitOrCancel,
 }
@@ -297,6 +301,14 @@ pub(crate) struct IngestStageId(pub(crate) u64);
 
 /// 一段 caret 轨迹。`from`/`to` 都是**本段所属那侧 canonical** 的文档坐标，
 /// 绝不跨 layout 混用。
+///
+/// Issue #824 评论 5971089641 第 4 节：segment **不再拥有“每段独立 easing”的语义**。
+/// - 整条 active motion 只有一份连续 progress/velocity：全局 progress 只做一次
+///   easing，然后按 `distance_weight` 映射到对应段；
+/// - 段内线性插值，跨 segment 时速度连续（不再每段 `ease_out_cubic(local)` 把
+///   每个段尾速度掉到 0）；
+/// - `distance_weight` 只表达**几何路程/权重**（本段 from→to 的路径长度），
+///   绝不代表“一段独立动画”的时长。
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CaretTrackSegment {
     pub kind: CaretTrackSegmentKind,
@@ -316,15 +328,62 @@ pub(crate) struct CaretTrackSegment {
     /// 本段所属那侧 canonical 的 `visual_line_id`（只用于光标层画 caret）。
     pub visual_line_id: Option<usize>,
     /// Issue #819 评论 5968931455: 本段所属的 visual stage id。
-    /// carried route 剩余段保留旧事务的 stage_id；
-    /// 当前新编辑的 route 段用新事务的 stage_id。
-    /// `compute_frame_by_caret_ingest` 据此判断本 segment 该驱动哪个 unit：
-    /// 只有 stage_id 匹配的 unit 才在当前段被吞吐，其余 unit 保持初态/终态。
+    ///
+    /// Issue #824 评论 5971089641：新模型里一条 route 只属于**当前这笔** active
+    /// motion，所有段都带本笔事务的 stage_id；不再存在“旧 route 剩余段保留旧
+    /// stage_id”的串行拼接。
     pub ingest_stage_id: IngestStageId,
-    /// 本段的播放预算。交棒只扣除当前段已播放的时间，后续段原样保留。
-    pub duration_weight_ms: f64,
-    /// 原吞吐段已完成的 eased 进度，供静止 caret 的前删边界续播。
-    pub ingest_start_progress: f64,
+    /// 本段在整条 motion 里的**路程权重**。只表达几何路程：
+    /// 全局 easing 后的 progress 按累计 `distance_weight` 映射到段，
+    /// 段内线性插值。绝不代表“一段独立动画”的时长。
+    pub distance_weight: f64,
+}
+
+impl CaretTrackSegment {
+    /// 几何路径段构造：`distance_weight` 直接取 from→to 的路程长度。
+    ///
+    /// Issue #824 评论 5971089641 第 3/4 节：`IngestLine / RowHandoff /
+    /// LayoutHandoff` 只描述几何路径，时间推进由整条 active motion 统一管理，
+    /// 所以这里不接收任何时长参数——权重只来自几何。
+    pub(crate) fn new(
+        kind: CaretTrackSegmentKind,
+        from: CursorRect,
+        to: CursorRect,
+        ingest_line_ord: Option<usize>,
+        ingest_side: Option<IngestSnapshotSide>,
+        visual_line_id: Option<usize>,
+        ingest_stage_id: IngestStageId,
+    ) -> Self {
+        Self {
+            kind,
+            from,
+            to,
+            ingest_line_ord,
+            ingest_side,
+            visual_line_id,
+            ingest_stage_id,
+            distance_weight: segment_path_length(&from, &to),
+        }
+    }
+
+    /// 覆盖段的**路程权重**（仍只表达几何，不表达时间）。
+    ///
+    /// 用于 `DeleteForwardBoundary` 这种「caret 不动、吞吐边界自己收拢」的段：
+    /// 段自身的 from→to 长度为零，但它扫过的路程是**本行的吞吐宽度**。
+    /// 时间推进依旧由整条 active motion 统一管理。
+    pub(crate) fn with_distance_weight(mut self, weight: f64) -> Self {
+        self.distance_weight = weight.max(1e-3);
+        self
+    }
+}
+
+/// 一段几何路径的长度（文档坐标，x/top 平面）。
+///
+/// 用 `max(eps)` 兜底：零长度段权重极小，映射时不会被选中，也不会让总权重为 0。
+fn segment_path_length(from: &CursorRect, to: &CursorRect) -> f64 {
+    let dx = to.x - from.x;
+    let dy = to.top - from.top;
+    (dx * dx + dy * dy).sqrt().max(1e-3)
 }
 
 #[derive(Clone, Debug)]
@@ -360,8 +419,11 @@ pub(crate) struct PreparedCursorVisualTrack {
     pub pause_start: Option<Instant>,
     /// Issue #815 评论 5949097065 问题3: 正式的运动路径。
     ///
-    /// 各段按 `duration_weight_ms` 分配时间，段内用 `ease_out_cubic`。
-    /// `from`/`to` 字段保留为整段运动的起点/终点（给高度、epoch 判断等用），
+    /// Issue #824 评论 5971089641 第 4 节：整条 motion 只有**一份**全局
+    /// progress/velocity。全局 progress 只做一次 `ease_out_cubic`，再按
+    /// `distance_weight` 映射到各段，段内线性插值——`segments` 只负责把全局路程
+    /// 映射到几何，不再各自 easing。
+    /// `from`/`to` 字段保留为整条运动的起点/终点（给高度、epoch 判断等用），
     /// 但逐帧几何一律走 `segments`。
     pub segments: Vec<CaretTrackSegment>,
     /// Issue #819 评论 5968931455: 本 track 所属的 visual stage id。
@@ -389,27 +451,37 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// 返回段下标和未 easing 的局部时间进度；采样和剩余预算共用同一次定位。
+    /// 全局 progress → (段下标, 段内**线性**进度)。
+    ///
+    /// Issue #824 评论 5971089641 第 4 节：整条 active motion 只有一份连续
+    /// progress/velocity：
+    /// 1. 全局 progress 只做**一次** `ease_out_cubic`；
+    /// 2. 用 eased 进度乘以总路程权重，按累计 `distance_weight` 定位到段；
+    /// 3. 段内线性插值，**不再对每段二次 easing** —— 那正是每个段尾速度掉到 0
+    ///    的根因。
+    ///
+    /// 由此跨 segment 时速度连续：单位路程的推进速率由全局 easing 决定，段与段
+    /// 之间只改变行进方向，不会在段边界停顿。
     fn segment_at_progress(&self, progress: f64) -> Option<(usize, f64)> {
         if self.segments.is_empty() {
             return None;
         }
-        let total: f64 = self.segments.iter().map(|s| s.duration_weight_ms).sum();
-        let elapsed = progress.clamp(0.0, 1.0) * total;
+        let total: f64 = self.segments.iter().map(|s| s.distance_weight).sum();
+        if total <= 0.0 {
+            return Some((self.segments.len() - 1, 1.0));
+        }
+        let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
+        let travelled = eased * total;
         let mut start = 0.0;
         for (index, segment) in self.segments.iter().enumerate() {
-            let end = start + segment.duration_weight_ms;
-            if elapsed < end {
-                return Some((index, (elapsed - start) / segment.duration_weight_ms));
+            let end = start + segment.distance_weight;
+            if travelled < end {
+                let local = (travelled - start) / segment.distance_weight;
+                return Some((index, local.clamp(0.0, 1.0)));
             }
             start = end;
         }
         Some((self.segments.len() - 1, 1.0))
-    }
-
-    fn sampled_segment_at_progress(&self, progress: f64) -> Option<(usize, f64)> {
-        self.segment_at_progress(progress)
-            .map(|(index, local)| (index, AnimatedSlice::ease_out_cubic(local)))
     }
 
     /// Issue #815 评论 5949097065 问题3: 本帧吞吐采样。
@@ -417,9 +489,9 @@ impl PreparedCursorVisualTrack {
     /// 返回 `(本帧 caret 所在视觉行 id, 本段 ingest 行序, 是否处于吞吐段, 本段 side,
     /// 本段**局部**进度 0..1)`。
     ///
-    /// Issue #815 评论 5953049681 问题1: 局部进度直接取
-    /// [`PreparedCursorVisualTrack::sampled_segment_at_progress`] 已经算好的
-    /// local eased progress，**不重算**。全局 `progress` 仍供生命周期/完成判断使用；
+    /// Issue #824 评论 5971089641 第 4 节：局部进度直接取
+    /// [`PreparedCursorVisualTrack::segment_at_progress`] 已经映射好的段内线性
+    /// 进度，**不重算二次 easing**。全局 `progress` 仍供生命周期/完成判断使用；
     /// 吞吐边界（尤其 `DeleteForwardBoundary`）必须用局部进度，否则在多段 route
     /// 里某一行只能拿到整笔事务的几分之一。
     ///
@@ -439,7 +511,7 @@ impl PreparedCursorVisualTrack {
         Option<IngestSnapshotSide>,
         f64,
     ) {
-        match self.sampled_segment_at_progress(progress) {
+        match self.segment_at_progress(progress) {
             // 退化路线（完全没有分段）：x 仍然是一条可信的裁切边界，只是拿不到
             // 权威行序 ⇒ 交给文字层降级用 caret.y + 本行行范围判断相位。
             // 这与"有分段但正处在 LayoutHandoff 换位段"必须区分：后者 x 是几何
@@ -458,8 +530,6 @@ impl PreparedCursorVisualTrack {
             ),
             Some((index, local_progress)) => {
                 let segment = &self.segments[index];
-                let local_progress = segment.ingest_start_progress
-                    + (1.0 - segment.ingest_start_progress) * local_progress;
                 let side = segment.ingest_side;
                 match segment.kind {
                     CaretTrackSegmentKind::IngestLine => (
@@ -489,7 +559,7 @@ impl PreparedCursorVisualTrack {
     /// 返回当前 segment 的 `ingest_stage_id`。`segments` 为空（退化路线）时
     /// 返回 `None`，调用方退回 `track.stage_id`。
     pub(crate) fn sampled_stage_id_at_progress(&self, progress: f64) -> Option<IngestStageId> {
-        self.sampled_segment_at_progress(progress)
+        self.segment_at_progress(progress)
             .map(|(index, _)| self.segments[index].ingest_stage_id)
     }
 
@@ -504,7 +574,7 @@ impl PreparedCursorVisualTrack {
     /// 从右上飞到左下的对角线，文字拿到的是对角线上的某个 x，而不是
     /// "这一行上 caret 走到了哪里"。
     pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
-        match self.sampled_segment_at_progress(progress) {
+        match self.segment_at_progress(progress) {
             None => {
                 // fallback：没有正式路径时退回旧的 from→to 直线（仅非协同 cursor-only）。
                 let eased = AnimatedSlice::ease_out_cubic(progress.clamp(0.0, 1.0));
@@ -533,18 +603,6 @@ impl PreparedCursorVisualTrack {
                     baseline_y: segment.from.baseline_y
                         + (segment.to.baseline_y - segment.from.baseline_y) * eased,
                 }
-            }
-        }
-    }
-
-    /// 旧 track 剩余的播放时长：`duration - elapsed`，下溢保护为 0。
-    /// `started_at = None`（尚未进入 Rendering）时返回 `duration_ms` 全长。
-    pub fn remaining_duration_ms(&self, now: Instant) -> u64 {
-        match self.started_at {
-            None => self.duration_ms,
-            Some(start) => {
-                let elapsed_ms = now.duration_since(start).as_millis() as u64;
-                self.duration_ms.saturating_sub(elapsed_ms)
             }
         }
     }
@@ -615,26 +673,6 @@ impl PreparedCursorVisualTrack {
             *start += paused_duration;
         }
     }
-
-    /// 旧路线从本帧起的真实剩余部分，保留段终点、阶段、快照侧和时间预算。
-    pub(crate) fn remaining_segments_from(&self, progress: f64) -> Vec<CaretTrackSegment> {
-        let Some((index, local)) = self.segment_at_progress(progress) else {
-            return Vec::new();
-        };
-        let current = self.segments[index];
-        let mut segments = Vec::new();
-        if local < 1.0 {
-            segments.push(CaretTrackSegment {
-                from: self.sampled_rect_at_progress(progress),
-                duration_weight_ms: current.duration_weight_ms * (1.0 - local),
-                ingest_start_progress: current.ingest_start_progress
-                    + (1.0 - current.ingest_start_progress) * AnimatedSlice::ease_out_cubic(local),
-                ..current
-            });
-        }
-        segments.extend(self.segments[index + 1..].iter().copied());
-        segments
-    }
 }
 
 /// Issue #701 评论 5699573227: `rebase_to` 仅在测试中直接调用（生产代码走
@@ -665,20 +703,18 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
-    /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
+    /// 测试专用：从当前帧重新起一段 `from = sampled caret` → `to = new_to`。
     ///
-    /// Issue #722 评论 5749791161: 行几何字段在 rebase 时用 0.0/0.0（测试专用方法，
-    /// 生产代码走 `build_cursor_visual_track` 的 handoff 分支，由 handoff 传递行几何）。
+    /// Issue #824 评论 5971089641：retarget 只保留“当前屏幕状态 → 最新目标”，
+    /// 不携带旧 route 剩余段；这里也不再把旧段排进新 track。
+    /// 生产代码走 `build_cursor_visual_track` 的 handoff 分支（由 retarget_motion
+    /// 重建几何路径），本方法只服务旧测试的连续性断言。
     pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
         let progress = self.progress(now);
         let sampled = self.sampled_rect(now);
-        let remaining = self.remaining_duration_ms(now).max(1);
         // Issue #815 评论 5949097065 问题3: rebase 落在中间行时，新 track 必须接住
         // 本帧**实际**的行身份与几何，不能退回逻辑 old 行，也不能只记 from/to 两个 id。
         let (sampled_line_id, _, _, _, _) = self.sampled_ingest_at_progress(progress);
-        // 未走完的那一段从本帧实际位置起跳，后续段原样保留。
-        let remaining_segments = self.remaining_segments_from(progress);
         Self {
             from: sampled,
             to: new_to,
@@ -689,10 +725,11 @@ impl PreparedCursorVisualTrack {
             to_line_top: 0.0,
             to_line_bottom: 0.0,
             started_at: None,
-            duration_ms: remaining,
+            // Issue #824: 新一段 motion 用完整的单笔时长，不吃旧 route 预算。
+            duration_ms: self.duration_ms.max(1),
             pause_start: None,
-            segments: remaining_segments,
-            // Issue #819 评论 5968931455: rebase 保留旧 track 的 stage_id。
+            // 几何路径由 retarget_motion 重建，不从旧 route 续段。
+            segments: Vec::new(),
             stage_id: self.stage_id,
         }
     }

@@ -72,27 +72,34 @@ fn issue819_block1_caret_track_uses_is_finished_not_visible_fraction() {
 // =========================================================================
 
 #[test]
-fn issue819_block2_rebase_visual_state_has_carried_slices() {
+fn issue819_block2_rebase_visual_state_has_carried_units() {
     let rebase_src = read_src("src/sujian_editor_item/animation/rebase.rs");
 
-    // 1. 确认 RebaseVisualState 有 carried_slices 字段。
+    // 1. 确认 RebaseVisualState 有 carried_units 字段（携带完整 AnimatedSlice
+    //    的未终态旧视觉单元）。
     assert!(
-        rebase_src.contains("carried_slices"),
-        "问题 2 修复：RebaseVisualState 必须有 carried_slices 字段"
+        rebase_src.contains("carried_units"),
+        "问题 2 修复：RebaseVisualState 必须有 carried_units 字段"
     );
 
-    // 2. 确认 take_rebase_frames 收集未终态 slice 到 carried_slices。
+    // 2. 确认 take_rebase_frames 收集未终态 slice 到 carried_units。
     let take_rebase = function_window(&rebase_src, "fn take_rebase_frames", 4000);
     assert!(
-        take_rebase.contains("carried") || take_rebase.contains("carried_slices"),
-        "问题 2 修复：take_rebase_frames 必须收集未终态 slice 到 carried_slices"
+        take_rebase.contains("carried_units"),
+        "问题 2 修复：take_rebase_frames 必须收集未终态 slice 到 carried_units"
     );
 
-    // 3. 确认 transaction_builder 消费 carried_slices。
+    // 3. 确认 transaction_builder 消费 carried_units（Issue #824 第 5 节：只保留
+    //    本帧可见几何 + 本笔 motion 时长，不带旧 timing/stage/剩余时长）。
     let builder_src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     assert!(
-        builder_src.contains("carried_slices"),
-        "问题 2 修复：transaction_builder 必须消费 carried_slices"
+        builder_src.contains("carried_units"),
+        "问题 2 修复：transaction_builder 必须消费 carried_units"
+    );
+    assert!(
+        builder_src.contains("carried_sampled_visible_fraction"),
+        "Issue #824 评论 5971089641 第 5 节：carried 吞吐字必须从本帧采样几何 \
+         继续（无跳变 retarget），不得重新排队旧 route。"
     );
 }
 

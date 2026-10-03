@@ -193,7 +193,7 @@ fn rendering_tx(
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     PreparedTextVisualTransaction {
         key,
@@ -502,7 +502,7 @@ fn issue690_cursor_without_boundary_glyph_uses_reflow_easing() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx);
 
@@ -648,7 +648,7 @@ fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(new_tx);
 
@@ -726,7 +726,7 @@ fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_tra
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -855,7 +855,7 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_a);
 
@@ -910,10 +910,11 @@ fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
         to_line_top: 0.0,
         to_line_bottom: 0.0,
         started_at: Some(now),
-        duration_ms: handoff_a.remaining_duration_ms,
+        // Issue #824: retarget 后的 motion 用本笔单一时长（下面的断言按 25/50 计算）。
+        duration_ms: 50,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord.prepared_queue.enqueue(tx_b);
 
@@ -1008,7 +1009,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         duration_ms: 200,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord1.prepared_queue.enqueue(tx_d1);
 
@@ -1055,7 +1056,7 @@ fn issue690_comment5681206040_caret_track_independent_of_units_order() {
         duration_ms: 200,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     });
     coord2.prepared_queue.enqueue(tx_d2);
 
@@ -1377,7 +1378,7 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         duration_ms: 100,
         pause_start: None,
         segments: Vec::new(),
-            stage_id: super::super::transaction::types::IngestStageId(0),
+        stage_id: super::super::transaction::types::IngestStageId(0),
     };
     let old_key = VisualTransactionKey::new(7, 7);
     let mut old_tx = rendering_tx(
@@ -1446,9 +1447,15 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         new_caret_track.started_at.is_none(),
         "rebase_to 后 caret track started_at 应为 None"
     );
+    // Issue #824 评论 5971089641 第 6 节：retarget 用**本笔单一时长**，不消费旧
+    // route 的剩余时长；旧 route 的剩余段也不排进新 track。
     assert_eq!(
-        new_caret_track.duration_ms, 50,
-        "rebase_to 后 caret track duration_ms 应为剩余时长 50"
+        new_caret_track.duration_ms, 100,
+        "retarget 后 caret track duration_ms 应为本笔单一时长"
+    );
+    assert!(
+        new_caret_track.segments.is_empty(),
+        "retarget 不从旧 route 续段（几何路径由 retarget_motion 重建）"
     );
 
     // ── 5. 把新事务以 Pending 状态入队 ──
@@ -1624,9 +1631,11 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
             "Issue #785: Timed unit 推进 25ms 后 progress 应为 0.5（25/50），got {}",
             unit_progress
         );
+        // Issue #824 评论 5971089641 第 6 节：retarget 后的 caret motion 用**本笔
+        // 单一时长**（100ms），不再消费旧 route 剩余时长（旧行为 50ms）。
         assert!(
-            (track_progress - 0.5).abs() < 1e-9,
-            "推进 25ms 后 caret track progress 应为 0.5（25/50），got {}",
+            (track_progress - 0.25).abs() < 1e-9,
+            "推进 25ms 后 caret track progress 应为 0.25（25/100 单一时长），got {}",
             track_progress
         );
         // Issue #785: Timed unit 的 current_visible_fraction 从 start_fraction=0.75
@@ -1639,11 +1648,11 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         );
     }
 
-    // ── 11. 推进到 50ms，断言 caret track 到 1.0 ──
-    let frame_now_1 = frame_now_0 + Duration::from_millis(50);
+    // ── 11. 推进到 100ms（本笔单一时长），断言 caret track 到 1.0 ──
+    let frame_now_1 = frame_now_0 + Duration::from_millis(100);
     let mut sample_1 = AnimationFrameSample::new(frame_now_1);
     sample_1.set_progress(new_key, 1.0);
-    // 推进 50ms 后 caret track progress = 1.0，caret 在 to = (220, 0)。
+    // 推进 100ms 后 caret track progress = 1.0（Issue #824 单一时长），caret 在 to = (220, 0)。
     let (_plan_1, _, _) =
         coord.build_text_animation_plan_with_sample(&sample_1, 0, LayoutRevision::initial());
     {
@@ -1667,7 +1676,7 @@ fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_ren
         );
         assert!(
             (track_progress - 1.0).abs() < 1e-9,
-            "推进 50ms 后 caret track progress 应为 1.0（50/50），got {}",
+            "推进 100ms 后 caret track progress 应为 1.0（100/100 单一时长），got {}",
             track_progress
         );
         // Issue #785: Timed unit 的 current_visible_fraction 到达 target_fraction=1.0（已播完）。

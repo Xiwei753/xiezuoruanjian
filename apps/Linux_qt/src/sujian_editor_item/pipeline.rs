@@ -1333,6 +1333,11 @@ impl LinuxEditorPipeline {
             //   new 侧是删除后落点 (raw_byte_start, raw_byte_start)。
             // - Replace/Cursor: 保守地两侧都用 (raw_byte_start, raw_byte_end)，
             //   expand_to_paragraph_boundaries 内部会做 char boundary 调整。
+            // Issue #824 评论 5971089641 第 2 节：动画种类来自 patches 事实。
+            // - Insert：old 侧是插入点，new 侧是 inserted range；
+            // - Delete：old 侧是 deleted range，new 侧是删除后落点；
+            // - Replace：old 侧 deleted range、new 侧 inserted range（两个 fact 都有）；
+            // - CursorOnly：没有正文变化，两侧都用同一 range 兜底。
             let (old_edit_range, new_edit_range) = match motion.kind {
                 EditorAnimationKind::Insert => (
                     (raw_byte_start, raw_byte_start),
@@ -1342,7 +1347,11 @@ impl LinuxEditorPipeline {
                     (raw_byte_start, raw_byte_end),
                     (raw_byte_start, raw_byte_start),
                 ),
-                EditorAnimationKind::Cursor => (
+                EditorAnimationKind::Replace => (
+                    (raw_byte_start, raw_byte_end),
+                    (raw_byte_start, raw_byte_end),
+                ),
+                EditorAnimationKind::CursorOnly => (
                     (raw_byte_start, raw_byte_end),
                     (raw_byte_start, raw_byte_end),
                 ),
@@ -1830,18 +1839,10 @@ impl LinuxEditorPipeline {
             // 集合，让纹理在新事务创建之前不被回收。新事务创建后由它自己持有这些
             // snapshot ids（carried unit 已 units.push() 进新事务 units），下一次 retain
             // 会按新 active ids 正常收。
+            // Issue #824 评论 5971089641：所有正文编辑（Insert/Delete/Replace）
+            // 共用同一个 `PreparedRebaseHandoff` 结构。
             let carried_ids = match prepared_handoff.as_ref() {
-                Some(handoff) => match handoff {
-                    super::animation::rebase::PreparedRebaseHandoff::Insert {
-                        visual_state,
-                        ..
-                    } => &visual_state.carried_snapshot_ids,
-                    super::animation::rebase::PreparedRebaseHandoff::Delete {
-                        visual_state,
-                        ..
-                    } => &visual_state.carried_snapshot_ids,
-                }
-                .as_slice(),
+                Some(handoff) => handoff.visual_state.carried_snapshot_ids.as_slice(),
                 None => &[],
             };
             self.retain_handoff_textures(carried_ids);

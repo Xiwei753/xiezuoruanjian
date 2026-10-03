@@ -55,31 +55,31 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 // 问题1守卫: 正文编辑路径先采 rebase frame/handoff 再 retire CaretDriven
 // =========================================================================
 
-/// 守卫1a: `PreparedRebaseHandoff` 枚举存在，含 Insert/Delete 两个变体，
-/// 每个变体携带 rebase_frames、caret_handoff、offset_map、visual_affected_byte_range。
+/// 守卫1a: `PreparedRebaseHandoff` 结构存在（prepare 阶段中间状态），
+/// 携带 rebase 视觉状态、patch 事实 ranges、offset_map、visual_affected_byte_range。
+///
+/// Issue #824 评论 5971089641 第 2/7 节：Insert / Delete / Replace 共用同一个
+/// 结构——正文动画种类只由 display patches 的 inserted/deleted 事实决定，
+/// 不再有 Insert/Delete 两套变体各自分类。
 #[test]
-fn fix1a_prepared_rebase_handoff_enum_exists() {
+fn fix1a_prepared_rebase_handoff_struct_exists() {
     let src = read_src("src/sujian_editor_item/animation/rebase.rs");
     assert!(
-        src.contains("enum PreparedRebaseHandoff"),
-        "修复后应有 PreparedRebaseHandoff 枚举（prepare 阶段中间状态）。"
+        src.contains("struct PreparedRebaseHandoff"),
+        "修复后应有 PreparedRebaseHandoff 结构（prepare 阶段中间状态）。"
     );
     assert!(
-        src.contains("PreparedRebaseHandoff::Insert"),
-        "修复后 PreparedRebaseHandoff 应有 Insert 变体。"
+        src.contains("inserted_ranges: Vec<(usize, usize)>")
+            && src.contains("deleted_ranges: Vec<(usize, usize)>"),
+        "修复后 PreparedRebaseHandoff 应携带 display patches 派生的 inserted/deleted ranges。"
     );
     assert!(
-        src.contains("PreparedRebaseHandoff::Delete"),
-        "修复后 PreparedRebaseHandoff 应有 Delete 变体。"
-    );
-    // 每个变体应携带 rebase_frames 和 caret_handoff。
-    assert!(
-        src.contains("rebase_frames: Vec<RebaseFrame>"),
-        "修复后 PreparedRebaseHandoff 变体应携带 rebase_frames: Vec<RebaseFrame>。"
+        src.contains("visual_state: RebaseVisualState"),
+        "修复后 PreparedRebaseHandoff 应携带 RebaseVisualState（rebase frames + caret handoff）。"
     );
     assert!(
-        src.contains("caret_handoff: Option<RebaseCaretHandoff>"),
-        "修复后 PreparedRebaseHandoff 变体应携带 caret_handoff: Option<RebaseCaretHandoff>。"
+        src.contains("offset_map: OffsetMap"),
+        "修复后 PreparedRebaseHandoff 应携带 offset_map。"
     );
 }
 
@@ -92,7 +92,9 @@ fn fix1b_prepare_rebase_handoff_for_edit_exists_with_outer_now() {
     // 函数体变长，窗口从 4000 增到 5000 以覆盖 take_rebase_frames 调用。
     // Issue #815 评论 6042062633 修改 7: 协同缺 caret 几何不再静默 return None，
     // 改为记 editor.anim.transaction_skipped，函数体变长，窗口再增大。
-    let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 7500);
+    // Issue #824 评论 5971089641：统一 Insert/Delete/Replace 的 handoff 后函数更长，
+    // 窗口加大以覆盖 take_rebase_frames 调用。
+    let window = function_window(&src, "fn prepare_rebase_handoff_for_edit", 14000);
     assert!(
         window.contains("now: Instant"),
         "修复后 prepare_rebase_handoff_for_edit 签名应含 now: Instant 参数（用外层统一 now 采样）。"

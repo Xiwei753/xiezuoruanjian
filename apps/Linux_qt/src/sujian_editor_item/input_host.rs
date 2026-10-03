@@ -388,6 +388,9 @@ impl EditorInputHost for SujianEditorItem {
                         composition_byte_end,
                         false,
                         false,
+                        // Issue #824: cancel 路径没有 Core edit，退回
+                        // “preedit 被取消 = 纯 Delete(preedit range)”。
+                        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges::default(),
                         composition_byte_start,
                         composition_byte_start,
                         committed_replace_start,

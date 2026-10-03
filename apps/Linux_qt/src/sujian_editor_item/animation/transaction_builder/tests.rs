@@ -175,6 +175,10 @@ fn test_commit_same_shaping_different_geometry_creates_move() {
         12,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(0, 12)],
+            deleted: vec![(0, 12)],
+        },
         0,
         12,
         0,
@@ -294,6 +298,10 @@ fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
         12,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(0, 12)],
+            deleted: vec![(0, 12)],
+        },
         0,
         12,
         0,
@@ -407,6 +415,10 @@ fn test_commit_same_shaping_same_geometry_is_static() {
         12,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(0, 12)],
+            deleted: vec![(0, 12)],
+        },
         0,
         12,
         0,
@@ -521,6 +533,10 @@ fn test_commit_separate_preedit_and_committed_replace_ranges() {
         12,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(0, 12)],
+            deleted: vec![(0, 12)],
+        },
         0,
         12,
         0,
@@ -631,6 +647,7 @@ fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
         10,
         false,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges::default(),
         3,
         3,
         3,
@@ -994,6 +1011,7 @@ fn issue756_insert_spec_with_durations(
     VisualEditSpec {
         key,
         operation_kind: TextVisualOperationKind::Insert,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Insert,
         old_snapshot,
         new_snapshot,
         inserted_ranges: vec![(1, 2)],
@@ -1290,7 +1308,9 @@ fn issue756_process_transaction_requires_caret_motion_only_when_coordinated() {
     let vt = PreparedEditMotion {
         kind: EditorAnimationKind::Insert,
         inserted_range: Some(Utf8ByteRange::from_ordered(1, 2)),
+        inserted_ranges: vec![(1, 2)],
         deleted_range: None,
+        deleted_ranges: vec![],
         old_text: "ab".to_string(),
         new_text: "axb".to_string(),
         text_duration_ms: 100,
@@ -1378,7 +1398,9 @@ fn issue756_process_transaction_typing_only_still_creates_transaction() {
     let vt = PreparedEditMotion {
         kind: EditorAnimationKind::Insert,
         inserted_range: Some(Utf8ByteRange::from_ordered(1, 2)),
+        inserted_ranges: vec![(1, 2)],
         deleted_range: None,
+        deleted_ranges: vec![],
         old_text: "ab".to_string(),
         new_text: "axb".to_string(),
         text_duration_ms: 100,
@@ -1892,6 +1914,10 @@ fn issue756_comment5821042551_composition_commit_smooth_only_creates_transaction
         10,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(3, 5)],
+            deleted: vec![(3, 10)],
+        },
         3,
         5,
         3,
@@ -1994,6 +2020,10 @@ fn issue756_comment5821793349_composition_commit_typing_enabled_keeps_crossfade_
         10,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(3, 5)],
+            deleted: vec![(3, 10)],
+        },
         3,
         5,
         3,
@@ -2162,6 +2192,10 @@ fn issue756_comment5822051193_composition_commit_coordinated_no_cursor_track_ret
         10,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(3, 5)],
+            deleted: vec![(3, 10)],
+        },
         3,
         5,
         3,
@@ -2318,6 +2352,10 @@ fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_create
         2,
         true,
         false,
+        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges {
+            inserted: vec![(1, 2)],
+            deleted: vec![(1, 2)],
+        },
         1,
         2,
         1,
@@ -2552,23 +2590,26 @@ fn issue808_comment5917296533_problem1_empty_transaction_still_created_for_white
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
     let mut coord = LinuxEditorAnimationCoordinator::new();
-    let prepared = PreparedRebaseHandoff::Insert {
+    let prepared = PreparedRebaseHandoff {
         visual_state: RebaseVisualState {
             rebase_frames: vec![],
             caret_handoff: None,
             carried_units: vec![],
             carried_snapshot_ids: vec![],
         },
-        range_start: 0,
-        range_end: 1, // " " 一个空格
-        insert_offset_map: offset_map,
+        // Issue #824: 统一 handoff 用 display patches 事实的 ranges。
+        inserted_ranges: vec![(0, 1)], // " " 一个空格
+        deleted_ranges: vec![],
+        offset_map,
         visual_affected_byte_range_old: Some((0, 0)),
         visual_affected_byte_range_new: Some((0, 1)),
     };
     let vt = PreparedEditMotion {
         kind: EditorAnimationKind::Insert,
         inserted_range: Some(Utf8ByteRange::from_ordered(0, 1)),
+        inserted_ranges: vec![(0, 1)],
         deleted_range: None,
+        deleted_ranges: vec![],
         old_text: "".to_string(),
         new_text: " ".to_string(),
         text_duration_ms: 100,
@@ -3108,6 +3149,7 @@ fn issue808_comment5919641249_problem1_mixed_candidates_do_not_cover_retained_cl
     let spec = VisualEditSpec {
         key: VisualTransactionKey::new(1, 1),
         operation_kind: TextVisualOperationKind::Insert,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Insert,
         old_snapshot,
         new_snapshot,
         inserted_ranges: vec![(1, 2), (3, 4)],
@@ -3286,23 +3328,25 @@ fn issue808_comment5918236360_problem2_smooth_only_insert_keeps_cursor_only_tran
         ],
     );
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-    let prepared = PreparedRebaseHandoff::Insert {
+    let prepared = PreparedRebaseHandoff {
         visual_state: RebaseVisualState {
             rebase_frames: vec![],
             caret_handoff: None,
             carried_units: vec![],
             carried_snapshot_ids: vec![],
         },
-        range_start: 1,
-        range_end: 2,
-        insert_offset_map: offset_map,
+        inserted_ranges: vec![(1, 2)],
+        deleted_ranges: vec![],
+        offset_map: offset_map,
         visual_affected_byte_range_old: Some((0, 2)),
         visual_affected_byte_range_new: Some((0, 3)),
     };
     let vt = PreparedEditMotion {
         kind: EditorAnimationKind::Insert,
         inserted_range: Some(Utf8ByteRange::from_ordered(1, 2)),
+        inserted_ranges: vec![(1, 2)],
         deleted_range: None,
+        deleted_ranges: vec![],
         old_text: "ab".to_string(),
         new_text: "axb".to_string(),
         text_duration_ms: 100,
@@ -3382,23 +3426,25 @@ fn issue808_comment5918236360_problem2_truly_empty_transaction_still_dropped() {
     let old_snapshot = make_test_snapshot("", vec![]);
     let new_snapshot = make_test_snapshot(" ", vec![(0, 1, 0.0, 0.0, sid)]);
     let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-    let prepared = PreparedRebaseHandoff::Insert {
+    let prepared = PreparedRebaseHandoff {
         visual_state: RebaseVisualState {
             rebase_frames: vec![],
             caret_handoff: None,
             carried_units: vec![],
             carried_snapshot_ids: vec![],
         },
-        range_start: 0,
-        range_end: 1,
-        insert_offset_map: offset_map,
+        inserted_ranges: vec![(0, 1)],
+        deleted_ranges: vec![],
+        offset_map: offset_map,
         visual_affected_byte_range_old: Some((0, 0)),
         visual_affected_byte_range_new: Some((0, 1)),
     };
     let vt = PreparedEditMotion {
         kind: EditorAnimationKind::Insert,
         inserted_range: Some(Utf8ByteRange::from_ordered(0, 1)),
+        inserted_ranges: vec![(0, 1)],
         deleted_range: None,
+        deleted_ranges: vec![],
         old_text: "".to_string(),
         new_text: " ".to_string(),
         text_duration_ms: 100,
@@ -3793,6 +3839,7 @@ fn issue815_composition_spec(
     VisualEditSpec {
         key: VisualTransactionKey::new(815, 4),
         operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Replace,
         old_snapshot,
         new_snapshot,
         inserted_ranges: Vec::new(),
@@ -3837,6 +3884,26 @@ fn issue815_caret(x: f64, top: f64) -> CursorRect {
         bottom: top + 20.0,
         baseline_y: top + 16.0,
     }
+}
+
+/// Issue #824 评论 5971089641 第 4 节：段不再均分时间。整条 motion 只有一份全局
+/// easing（`distance_fraction = 1 - (1-p)^3`），段按 `distance_weight` 映射路程。
+///
+/// 本 helper 把「第 index 段内 local 比例处」换算成采样时刻（ms）。
+fn distance_weight_elapsed_ms(
+    track: &crate::sujian_editor_item::animation::transaction::types::PreparedCursorVisualTrack,
+    index: usize,
+    local: f64,
+) -> u64 {
+    let total: f64 = track.segments.iter().map(|s| s.distance_weight).sum();
+    let before: f64 = track.segments[..index]
+        .iter()
+        .map(|s| s.distance_weight)
+        .sum();
+    let fraction: f64 =
+        (before + track.segments[index].distance_weight * local.clamp(0.0, 1.0)) / total;
+    let progress = 1.0 - (1.0 - fraction).cbrt();
+    (progress * track.duration_ms as f64) as u64
 }
 
 /// 问题1：IME commit 的特殊 InsertReveal/DeleteConceal 必须和普通 Insert/Delete
@@ -4234,11 +4301,9 @@ fn issue815_review7_production_rebase_starts_from_handoff_sampled_caret() {
     };
     spec.visual_state.caret_handoff = Some(RebaseCaretHandoff {
         sampled: handoff_sampled,
-        remaining_duration_ms: 60,
         sampled_visual_line_id: Some(0),
         sampled_line_top: 0.0,
         sampled_line_bottom: 20.0,
-        remaining_ingest_segments: Vec::new(),
         stage_id: IngestStageId(0),
     });
 
@@ -4309,6 +4374,7 @@ fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_care
     let spec = VisualEditSpec {
         key,
         operation_kind: TextVisualOperationKind::Delete,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Delete,
         old_snapshot,
         new_snapshot,
         inserted_ranges: Vec::new(),
@@ -4339,11 +4405,9 @@ fn issue815_review8_production_backspace_rebase_starts_from_handoff_sampled_care
             rebase_frames: Vec::new(),
             caret_handoff: Some(RebaseCaretHandoff {
                 sampled: handoff_sampled,
-                remaining_duration_ms: 60,
                 sampled_visual_line_id: Some(0),
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
-                remaining_ingest_segments: Vec::new(),
                 stage_id: IngestStageId(0),
             }),
             carried_units: Vec::new(),
@@ -4525,12 +4589,12 @@ fn issue815_review9_composition_sides_are_isolated_per_frame() {
     let seg_count = track.segments.len();
     // 逐段采样：在 Old 段里 InsertReveal 必须保持初态；在 New 段里 DeleteConceal
     // 必须已经终态。
+    // Issue #824：段不再均分时间，采样时刻按距离权重换算（见 helper）。
     let mut saw_old_ingest = false;
     let mut saw_new_ingest = false;
     for index in 0..seg_count {
-        let progress = (index as f64 + 0.5) / seg_count as f64;
         let now = started
-            + std::time::Duration::from_millis((track.duration_ms as f64 * progress) as u64);
+            + std::time::Duration::from_millis(distance_weight_elapsed_ms(track, index, 0.5));
         let caret = sample_caret_track_frame(track, now);
         let conceal_frame = conceal.slice.compute_frame_by_caret_ingest(
             caret.x,
@@ -4609,11 +4673,9 @@ fn issue815_review10_forward_delete_mixed_route_is_continuous() {
             bottom: 20.0,
             baseline_y: 16.0,
         },
-        remaining_duration_ms: 60,
         sampled_visual_line_id: Some(0),
         sampled_line_top: 0.0,
         sampled_line_bottom: 20.0,
-        remaining_ingest_segments: Vec::new(),
         stage_id: IngestStageId(0),
     });
 
@@ -4648,9 +4710,10 @@ fn issue815_review10_forward_delete_mixed_route_is_continuous() {
 
 /// 问题1 的行为回归：前删边界必须吃**本段 local progress**。
 ///
-/// 段均分总时长，所以第一段结束时全局 progress 只有 ~1/n。若前删边界吃全局
-/// progress，边界只收了一小部分，紧接着 side 切到 New、old slice 因 side phase
-/// 直接变 `Passed` —— 剩下那一大半旧字会在一帧内突然消失。
+/// Issue #824 起段不再均分时间：整条 motion 只有一份全局进度，段按路程权重映射。
+/// 若前删边界吃全局 progress（而不是本段 local），边界只收了一小部分，紧接着
+/// side 切到 New、old slice 因 side phase 直接变 `Passed`——剩下那一大半旧字
+/// 会在一帧内突然消失。
 #[test]
 fn issue815_review10_forward_boundary_uses_segment_local_progress() {
     let old_snapshot = make_multiline_snapshot("abcd", &[(0, 0, 4, 0.0, 20.0)]);
@@ -4676,11 +4739,9 @@ fn issue815_review10_forward_boundary_uses_segment_local_progress() {
             bottom: 20.0,
             baseline_y: 16.0,
         },
-        remaining_duration_ms: 60,
         sampled_visual_line_id: Some(0),
         sampled_line_top: 0.0,
         sampled_line_bottom: 20.0,
-        remaining_ingest_segments: Vec::new(),
         stage_id: IngestStageId(0),
     });
 
@@ -4702,8 +4763,6 @@ fn issue815_review10_forward_boundary_uses_segment_local_progress() {
         .expect("必须有 cursor track")
         .started_at = Some(started);
     let track = tx.cursor_visual_track.as_ref().expect("必须有 track");
-    let total = track.duration_ms;
-    let seg_count = track.segments.len() as f64;
     let full_width = conceal.slice.line_mask_right - conceal.slice.line_mask_left;
 
     // 逐段扫到第一段的末尾之前：本帧的 local progress 应接近 1，而全局 progress
@@ -4720,8 +4779,9 @@ fn issue815_review10_forward_boundary_uses_segment_local_progress() {
                 && segment.kind == CaretTrackSegmentKind::IngestLine
         })
         .expect("前删 Mixed 必须有 Old 侧吞吐段");
-    let probe_global = ((first_ingest as f64 + 1.0) / seg_count) - 0.02;
-    let now = started + std::time::Duration::from_millis((total as f64 * probe_global) as u64);
+    // Issue #824：段不再均分时间；用距离权重定位到本段末尾前 2% 路程。
+    let now = started
+        + std::time::Duration::from_millis(distance_weight_elapsed_ms(track, first_ingest, 0.98));
     let caret = sample_caret_track_frame(track, now);
     assert_eq!(
         caret.ingest_side,
@@ -4831,59 +4891,16 @@ fn issue815_review10_composition_update_mixed_route_is_side_aware() {
 
 // ── Issue #819 评论 5968931455: 连续事务 carried route 合成测试 ──
 
-/// 辅助：构造一个 IngestLine 段。
-fn ingest_line_segment(
-    from_x: f64,
-    to_x: f64,
-    line_ord: usize,
-    side: IngestSnapshotSide,
-    stage_id: IngestStageId,
-) -> crate::sujian_editor_item::animation::transaction::types::CaretTrackSegment {
-    use crate::sujian_editor_item::animation::transaction::types::CaretTrackSegment;
-    CaretTrackSegment {
-        kind: CaretTrackSegmentKind::IngestLine,
-        from: CursorRect {
-            x: from_x,
-            top: 0.0,
-            bottom: 20.0,
-            baseline_y: 16.0,
-        },
-        to: CursorRect {
-            x: to_x,
-            top: 0.0,
-            bottom: 20.0,
-            baseline_y: 16.0,
-        },
-        ingest_line_ord: Some(line_ord),
-        ingest_side: Some(side),
-        visual_line_id: Some(0),
-        ingest_stage_id: stage_id,
-        duration_weight_ms: 60.0,
-        ingest_start_progress: 0.0,
-    }
-}
-
-/// Issue #819 评论 5968931455: `build_ingest_route` 必须合成旧 carried route 剩余段 + 新 route，
-/// 且相邻段连续、stage_id 各自正确。
+/// Issue #824 评论 5971089641 第 1/3 节：retarget 只保留「当前屏幕状态 → 最新目标」。
 ///
-/// 场景：`ABC|`，第一笔删 C 播到 50%（caret 在 x=25），第二笔删 B。
-/// - 旧剩余段：从 x=25 到 x=20（stage_id=A=IngestStageId(100)）
-/// - 新段：从 x=20 到 x=10（stage_id=B=IngestStageId(200)）
-/// - 合成后：[旧剩余段(stage A), 新段(stage B)]，相邻连续（25→20→10）
+/// 场景：`ABC|`，第一笔删 C 播到 50%（retarget 采样 caret 在 x=25），第二笔删 B。
+/// - 旧模型：合成 `旧剩余段(stage A) + 新段(stage B)`，route 随按键次数增长；
+/// - 新模型：从采样点 x=25 直接重建到最新目标 x=10，**旧 stage 一段都不留**。
 #[test]
-fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_new() {
+fn issue824_comment5971089641_retarget_replaces_old_route_instead_of_appending() {
     let sid = issue756_shaping_identity();
     let old_stage_id = IngestStageId(100);
     let new_stage_id = IngestStageId(200);
-
-    // 第一笔删 C 的剩余段：caret 从 x=25（C 中间）走到 x=20（B 后面）。
-    let remaining_segments = vec![ingest_line_segment(
-        25.0,
-        20.0,
-        0,
-        IngestSnapshotSide::Old,
-        old_stage_id,
-    )];
 
     // 第二笔删 B：文本 `AB`，删除 B（byte range (1,2)）。
     let old_snapshot = make_test_snapshot(
@@ -4908,6 +4925,7 @@ fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_
     let spec = VisualEditSpec {
         key,
         operation_kind: TextVisualOperationKind::Delete,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Delete,
         old_snapshot,
         new_snapshot,
         inserted_ranges: Vec::new(),
@@ -4937,11 +4955,9 @@ fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_
             rebase_frames: Vec::new(),
             caret_handoff: Some(RebaseCaretHandoff {
                 sampled: handoff_sampled,
-                remaining_duration_ms: 50,
                 sampled_visual_line_id: Some(0),
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
-                remaining_ingest_segments: remaining_segments.clone(),
                 stage_id: old_stage_id,
             }),
             carried_units: Vec::new(),
@@ -4964,29 +4980,17 @@ fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_
         .expect("协同退格必须有 cursor track");
 
     // 1. route 非空
-    assert!(
-        !track.segments.is_empty(),
-        "连续退格必须建出非空 route（旧剩余段 + 新段）"
-    );
+    assert!(!track.segments.is_empty(), "连续退格必须建出非空 route");
 
-    // 2. route 包含旧 stage_id 和新 stage_id 的段
-    let has_old_stage = track
-        .segments
-        .iter()
-        .any(|seg| seg.ingest_stage_id == old_stage_id);
-    let has_new_stage = track
-        .segments
-        .iter()
-        .any(|seg| seg.ingest_stage_id == new_stage_id);
+    // 2. 旧 stage 不再排进新 route：所有段都属于本笔 stage。
     assert!(
-        has_old_stage,
-        "route 必须包含旧 stage_id={:?} 的剩余段",
+        track
+            .segments
+            .iter()
+            .all(|seg| seg.ingest_stage_id == new_stage_id),
+        "retarget 后 route 只能属于本笔 stage={:?}，不得残留旧 stage={:?}",
+        new_stage_id,
         old_stage_id
-    );
-    assert!(
-        has_new_stage,
-        "route 必须包含新 stage_id={:?} 的段",
-        new_stage_id
     );
 
     // 3. 相邻段连续
@@ -4999,10 +5003,10 @@ fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_
         );
     }
 
-    // 4. 第一段从 handoff.sampled.x=25 起步
+    // 4. 第一段从 retarget 采样点 x=25 起步（当前屏幕 → 最新目标）
     assert!(
         (track.segments[0].from.x - 25.0).abs() < 1e-6,
-        "route 第一段必须从 handoff.sampled.x=25 起步，实际 x={}",
+        "route 第一段必须从采样点 x=25 起步，实际 x={}",
         track.segments[0].from.x
     );
 
@@ -5013,6 +5017,9 @@ fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_
         "route 最后一段必须到 new_caret.x=10 结束，实际 x={}",
         last_to
     );
+
+    // 6. 时间预算只来自本笔单一时长，不再按旧剩余 + 新 route 拼接。
+    assert_eq!(track.duration_ms, 100);
 }
 
 /// Issue #819 评论 5968931455: 连续退格——第一笔删 C 播到 50%，第二笔删 B，
@@ -5021,15 +5028,6 @@ fn issue819_comment5968931455_build_ingest_route_synthesizes_old_remaining_plus_
 fn issue819_comment5968931455_consecutive_delete_carried_c_first_frame_matches_sampled() {
     let sid = issue756_shaping_identity();
     let old_stage_id = IngestStageId(100);
-
-    // 第一笔删 C 的剩余段：caret 从 x=25 走到 x=20。
-    let remaining_segments = vec![ingest_line_segment(
-        25.0,
-        20.0,
-        0,
-        IngestSnapshotSide::Old,
-        old_stage_id,
-    )];
 
     // 第二笔删 B
     let old_snapshot = make_test_snapshot(
@@ -5053,6 +5051,7 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_first_frame_matches_s
     let spec = VisualEditSpec {
         key,
         operation_kind: TextVisualOperationKind::Delete,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Delete,
         old_snapshot,
         new_snapshot,
         inserted_ranges: Vec::new(),
@@ -5082,11 +5081,9 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_first_frame_matches_s
             rebase_frames: Vec::new(),
             caret_handoff: Some(RebaseCaretHandoff {
                 sampled: handoff_sampled,
-                remaining_duration_ms: 50,
                 sampled_visual_line_id: Some(0),
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
-                remaining_ingest_segments: remaining_segments.clone(),
                 stage_id: old_stage_id,
             }),
             carried_units: Vec::new(),
@@ -5139,14 +5136,6 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_d
     let sid = issue756_shaping_identity();
     let old_stage_id = IngestStageId(100);
 
-    let remaining_segments = vec![ingest_line_segment(
-        25.0,
-        20.0,
-        0,
-        IngestSnapshotSide::Old,
-        old_stage_id,
-    )];
-
     let old_snapshot = make_test_snapshot(
         "ab",
         vec![
@@ -5168,6 +5157,7 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_d
     let spec = VisualEditSpec {
         key,
         operation_kind: TextVisualOperationKind::Delete,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Delete,
         old_snapshot,
         new_snapshot,
         inserted_ranges: Vec::new(),
@@ -5197,11 +5187,9 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_d
             rebase_frames: Vec::new(),
             caret_handoff: Some(RebaseCaretHandoff {
                 sampled: handoff_sampled,
-                remaining_duration_ms: 50,
                 sampled_visual_line_id: Some(0),
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
-                remaining_ingest_segments: remaining_segments.clone(),
                 stage_id: old_stage_id,
             }),
             carried_units: Vec::new(),
@@ -5230,9 +5218,10 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_d
         .as_ref()
         .expect("协同退格必须有 cursor track");
 
-    // track 的 duration_ms = remaining_duration_ms = 50ms（handoff 交棒后剩余时间）。
+    // Issue #824：retarget 后的 motion 用本笔单一时长（caret_duration_ms=100），
+    // 不再是「旧 route 剩余时间」。
     let total_ms = track.duration_ms;
-    assert!(total_ms > 0, "track duration 必须大于 0");
+    assert_eq!(total_ms, 100, "track duration 必须是本笔单一时长");
 
     // 采样多个 progress 点，验证 caret x 单调向左移动（退格 = x 递减）。
     let mut prev_x = f64::MAX;
@@ -5272,15 +5261,6 @@ fn issue819_comment5968931455_consecutive_insert_carried_b_not_replay() {
     let sid = issue756_shaping_identity();
     let old_stage_id = IngestStageId(100);
 
-    // 第一笔插入 B 的剩余段：caret 从 x=15（B 半吐）走到 x=20（B 后面）。
-    let remaining_segments = vec![ingest_line_segment(
-        15.0,
-        20.0,
-        0,
-        IngestSnapshotSide::New,
-        old_stage_id,
-    )];
-
     // 第二笔插入 C：文本 `AB`，插入 C 在末尾。
     let old_snapshot = make_test_snapshot(
         "ab",
@@ -5310,6 +5290,7 @@ fn issue819_comment5968931455_consecutive_insert_carried_b_not_replay() {
     let spec = VisualEditSpec {
         key,
         operation_kind: TextVisualOperationKind::Insert,
+        patch_kind: crate::sujian_editor_item::edit_motion::EditorAnimationKind::Insert,
         old_snapshot,
         new_snapshot,
         inserted_ranges: vec![(2, 3)],
@@ -5339,11 +5320,9 @@ fn issue819_comment5968931455_consecutive_insert_carried_b_not_replay() {
             rebase_frames: Vec::new(),
             caret_handoff: Some(RebaseCaretHandoff {
                 sampled: handoff_sampled,
-                remaining_duration_ms: 50,
                 sampled_visual_line_id: Some(0),
                 sampled_line_top: 0.0,
                 sampled_line_bottom: 20.0,
-                remaining_ingest_segments: remaining_segments.clone(),
                 stage_id: old_stage_id,
             }),
             carried_units: Vec::new(),
@@ -5366,30 +5345,18 @@ fn issue819_comment5968931455_consecutive_insert_carried_b_not_replay() {
         .expect("协同插入必须有 cursor track");
 
     // route 非空
-    assert!(
-        !track.segments.is_empty(),
-        "连续插入必须建出非空 route（旧剩余段 + 新段）"
-    );
+    assert!(!track.segments.is_empty(), "连续插入必须建出非空 route");
 
-    // route 包含旧 stage_id 和新 stage_id 的段
+    // Issue #824：旧 stage 一段都不留，route 只属于本笔 active motion。
     let new_stage_id = IngestStageId(200);
-    let has_old_stage = track
-        .segments
-        .iter()
-        .any(|seg| seg.ingest_stage_id == old_stage_id);
-    let has_new_stage = track
-        .segments
-        .iter()
-        .any(|seg| seg.ingest_stage_id == new_stage_id);
     assert!(
-        has_old_stage,
-        "route 必须包含旧 stage_id={:?} 的剩余段",
+        track
+            .segments
+            .iter()
+            .all(|seg| seg.ingest_stage_id == new_stage_id),
+        "retarget 后 route 只能属于本笔 stage={:?}，不得残留旧 stage={:?}",
+        new_stage_id,
         old_stage_id
-    );
-    assert!(
-        has_new_stage,
-        "route 必须包含新 stage_id={:?} 的段",
-        new_stage_id
     );
 
     // 相邻段连续

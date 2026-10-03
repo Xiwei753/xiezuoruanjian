@@ -106,9 +106,11 @@ fn issue702_text_visual_operation_kind_no_cursor_variant() {
 #[test]
 fn issue702_cursor_branch_returns_none() {
     let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
-    let cursor_marker = "EditorAnimationKind::Cursor =>";
+    // Issue #824 评论 5971089641：正文动画种类只认 patch 事实，
+    // 纯光标移动（display_patches 两边都空）的分类名是 `CursorOnly`。
+    let cursor_marker = "EditorAnimationKind::CursorOnly =>";
     let window = function_window(&src, cursor_marker, 800);
-    assert!(window.contains("return None"), "Cursor 分支应返回 None");
+    assert!(window.contains("return None"), "CursorOnly 分支应返回 None");
     assert!(
         !window.contains("TextVisualOperationKind::Cursor"),
         "Cursor 分支不应再创建 Cursor 事务"

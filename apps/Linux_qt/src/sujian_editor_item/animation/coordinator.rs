@@ -490,6 +490,46 @@ impl LinuxEditorAnimationCoordinator {
         ));
     }
 
+    /// Issue #824 评论 5971089641 第 8 节：鼠标点击的 caret ownership 正式收口。
+    ///
+    /// 逻辑 cursor 真正变化时调用（在 `bump_cursor_owner_epoch` 之后）：
+    /// - 明确把 active text motion 的 caret ownership 交给 `PointerClick`：
+    ///   所有活动正文事务退休 caret motion（`caret_motion_retired = true`）并把
+    ///   CaretTrack 吞吐字按当前帧收口到终态；
+    /// - 旧正文事务从此不能再驱动 caret，后续完成时也不会把 caret 拉回旧 target；
+    /// - 新 caret 由 `update_cursor_visual_position()` 从当前视觉位置直接 Tween
+    ///   到点击目标。
+    ///
+    /// 返回收口前仍是 caret owner 的 active motion id，供正式的
+    /// `editor.anim.pointer_caret_handover` 诊断事件使用。
+    pub(crate) fn hand_over_caret_ownership_to_pointer_click(
+        &mut self,
+    ) -> Option<VisualTransactionKey> {
+        let owner = self.active_text_transaction_key();
+        let keys: Vec<VisualTransactionKey> = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .filter(|tx| {
+                !matches!(
+                    tx.state,
+                    TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+                )
+            })
+            .map(|tx| tx.key)
+            .collect();
+        let relinquished_count = keys.len();
+        for key in keys {
+            self.retire_caret_driven_units_for_transaction(key);
+        }
+        editor_animation_debug_log(&format!(
+            "pointer_caret_handover: owner={:?} relinquished={} — caret ownership 交给 PointerClick，\
+             旧正文事务不再驱动 caret",
+            owner, relinquished_count,
+        ));
+        owner
+    }
+
     pub fn has_prepared_or_rendering(&self) -> bool {
         self.prepared_queue.active_transactions().iter().any(|t| {
             t.state == TextVisualTransactionState::Prepared

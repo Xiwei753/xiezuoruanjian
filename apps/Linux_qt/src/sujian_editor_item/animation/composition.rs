@@ -16,13 +16,25 @@ use crate::sujian_editor_item::animation::transaction_builder::{
     VisualEditSpec,
 };
 use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
-use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect};
+use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect, EditorAnimationKind};
 use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 use super::coordinator::LinuxEditorAnimationCoordinator;
+
+/// Issue #824 评论 5971089641 第 7 节：IME commit 的正文 Reveal/Conceal 事实源。
+///
+/// 由 `record_composition_commit_transaction` 从 Core
+/// `EditorEditResult.display_patches` 派生（`ranges_from_display_patches`），
+/// 不再由 composition 按 `is_commit` / `visual_text_unchanged` 自行分类。
+/// cancel 路径没有 Core edit，传 `Default`（空），退回“preedit 被取消 = 纯 Delete”。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CompositionCommitBodyRanges {
+    pub inserted: Vec<(usize, usize)>,
+    pub deleted: Vec<(usize, usize)>,
+}
 
 impl LinuxEditorAnimationCoordinator {
     pub fn handle_composition_update(
@@ -103,10 +115,17 @@ impl LinuxEditorAnimationCoordinator {
         };
 
         // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
+        // Issue #824 评论 5971089641 第 7 节：composition update 的正文动画种类
+        // 也从 diff/patches 事实派生，不再单独分类。
+        let patch_kind = EditorAnimationKind::from_patch_facts(
+            !comp_inserted_ranges.is_empty(),
+            !comp_deleted_ranges.is_empty(),
+        );
         let carried_rebase = visual_state.rebase_frames.len();
         let spec = VisualEditSpec {
             key,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
+            patch_kind,
             old_snapshot: old_snapshot.clone(),
             new_snapshot: new_snapshot.clone(),
             inserted_ranges: comp_inserted_ranges,
@@ -242,6 +261,9 @@ impl LinuxEditorAnimationCoordinator {
         preedit_byte_end: usize,
         is_commit: bool,
         visual_text_unchanged: bool,
+        // Issue #824 评论 5971089641 第 7 节：commit 路径的正文 Reveal/Conceal
+        // 只认 Core display_patches 派生的事实。cancel 路径传 `Default`。
+        body_ranges: CompositionCommitBodyRanges,
         candidate_byte_start: usize,
         candidate_byte_end: usize,
         committed_replace_start: usize,
@@ -294,32 +316,69 @@ impl LinuxEditorAnimationCoordinator {
         // composition commit/cancel 的 slice 构造（DeleteConceal/InsertReveal/ReflowCrossFade/
         // ReflowMove/reflow）全部由 build_prepared_transaction 内部统一完成。
         //
-        // 三种情况：
-        // - cancel（!is_commit）：deleted_ranges = preedit range，DeleteConceal 由 1a 生成，
-        //   reflow 排除 preedit（old 侧）。
-        // - commit 且 visual_text_unchanged：无 changed range，无 crossfade，reflow 处理全部。
-        // - commit 且 !visual_text_unchanged：crossfade slice builder 统一构造 preedit→candidate
-        //   形变（DeleteConceal/InsertReveal/ReflowCrossFade/ReflowMove），reflow 排除
-        //   preedit（old）和 candidate（new）。inserted/deleted ranges 留空以避免 1a 与
-        //   crossfade builder 重复生成 Reveal/Conceal。
+        // Issue #824 评论 5971089641 第 7 节：commit 的正文 Reveal/Conceal **不再由
+        // composition 自己分类**，而是直接消费 Core `display_patches` 派生的
+        // `body_ranges`（在 `record_composition_commit_transaction` 里通过
+        // `ranges_from_display_patches` 得到）：
+        // - cancel（!is_commit）：没有 Core edit，preedit 被取消 = 纯 Delete(preedit)
+        //   的 patch 事实，deleted_ranges = preedit range；
+        // - commit 且 patches 两边都有（Replace，典型 IME 候选替换 preedit）：
+        //   crossfade 形变直接使用 patch 的 deleted（preedit）→ inserted（candidate）
+        //   范围，spec 的 inserted/deleted 留空避免与 crossfade 重复生成；
+        // - commit 且只有一侧：直接走 1a 的普通 Insert/Delete 同一条 patch 路径；
+        // - commit 且 patches 为空：正文未变，无 Reveal/Conceal。
+        let body_is_replace = !body_ranges.inserted.is_empty() && !body_ranges.deleted.is_empty();
         let (inserted_ranges, deleted_ranges, composition_commit_crossfade) = if !is_commit {
             // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
             // reflow 只处理 unchanged material。changed range 由显式函数拥有。
             (vec![], vec![(preedit_byte_start, preedit_byte_end)], None)
-        } else if visual_text_unchanged {
-            (vec![], vec![], None)
-        } else {
+        } else if body_is_replace {
+            let deleted_start = body_ranges
+                .deleted
+                .first()
+                .map(|range| range.0)
+                .unwrap_or(preedit_byte_start);
+            let deleted_end = body_ranges
+                .deleted
+                .last()
+                .map(|range| range.1)
+                .unwrap_or(preedit_byte_end);
+            let inserted_start = body_ranges
+                .inserted
+                .first()
+                .map(|range| range.0)
+                .unwrap_or(candidate_byte_start);
+            let inserted_end = body_ranges
+                .inserted
+                .last()
+                .map(|range| range.1)
+                .unwrap_or(candidate_byte_end);
             (
                 vec![],
                 vec![],
                 Some(CompositionCommitCrossfadeSpec {
-                    preedit_byte_start,
-                    preedit_byte_end,
-                    candidate_byte_start,
-                    candidate_byte_end,
+                    preedit_byte_start: deleted_start,
+                    preedit_byte_end: deleted_end,
+                    candidate_byte_start: inserted_start,
+                    candidate_byte_end: inserted_end,
                 }),
             )
+        } else {
+            // 纯 Insert / 纯 Delete / 无变化：直接使用 patch 事实，
+            // 与普通正文编辑走同一条 patch → retarget 入口。
+            (body_ranges.inserted, body_ranges.deleted, None)
         };
+        // Issue #824: 正文动画种类来自 patch 事实（Replace 的 crossfade 路径也一样，
+        // 它只是几何形变，不改变“两个 fact 都有”的分类）。
+        let patch_kind = EditorAnimationKind::from_patch_facts(
+            body_is_replace || !inserted_ranges.is_empty(),
+            body_is_replace || !deleted_ranges.is_empty() || !is_commit,
+        );
+        if is_commit && visual_text_unchanged && !body_is_replace && inserted_ranges.is_empty() {
+            editor_animation_debug_log(
+                "composition_commit: visual_text_unchanged 且无 patch 事实，无正文 Reveal/Conceal",
+            );
+        }
 
         // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
         // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
@@ -329,6 +388,7 @@ impl LinuxEditorAnimationCoordinator {
         let spec = VisualEditSpec {
             key,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
+            patch_kind,
             old_snapshot: old_snapshot.clone(),
             new_snapshot: new_snapshot.clone(),
             inserted_ranges,

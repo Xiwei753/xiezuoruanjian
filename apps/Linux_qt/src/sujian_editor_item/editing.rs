@@ -64,6 +64,9 @@ impl SujianEditorItem {
         &mut self,
         old: &EditorSnapshot,
         new: &EditorSnapshot,
+        // Issue #824 评论 5971089641 第 7 节：Core commit 的 display_patches 是
+        // 正文 Reveal/Conceal 的唯一事实源；composition 不再自己分类。
+        result: &writer_core::editor::EditorEditResult,
         cause: EditorTransactionCause,
         // Issue #722 评论 5749791161 问题2: 不再使用 pending_preedit_cursor_rect，
         // old caret 从 old_snapshot.caret_rect_doc 获取（文档坐标）。
@@ -281,6 +284,14 @@ impl SujianEditorItem {
         let coordinated_anim = self.current_coordinated_animation_enabled;
         let text_anim = coordinated_anim || self.current_typing_animation_enabled;
         let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
+        // Issue #824 评论 5971089641 第 7 节：commit 的正文 Reveal/Conceal 直接使用
+        // Core display_patches 派生的 ranges —— 与普通 Insert/Delete/Replace 同一个
+        // patch → retarget 入口，不再有 composition 专属正文动画分类。
+        let (body_inserted, body_deleted) = super::edit_motion::ranges_from_display_patches(result);
+        let body_ranges = super::animation::composition::CompositionCommitBodyRanges {
+            inserted: body_inserted,
+            deleted: body_deleted,
+        };
         let outcome = self
             .pipeline
             .animation_coordinator_mut()
@@ -291,6 +302,7 @@ impl SujianEditorItem {
                 preedit_byte_end,
                 true,
                 visual_text_unchanged,
+                body_ranges,
                 candidate_byte_start,
                 candidate_byte_end,
                 committed_replace_start,
@@ -719,15 +731,24 @@ impl SujianEditorItem {
         let current_cursor = self.pipeline.cursor();
         let new_anchor = if extend { current_anchor } else { index };
         let new_head = index;
-        // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
-        // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
-        // Issue #705 评论 5718299909: 仅在 anchor/head/affinity 真的改变时 bump。
-        if new_anchor != current_anchor
+        let logical_cursor_changed = new_anchor != current_anchor
             || new_head != current_cursor
-            || self.cursor_ctrl.affinity != affinity
-        {
+            || self.cursor_ctrl.affinity != affinity;
+        // Issue #824 评论 5971089641 第 8 节：逻辑 cursor 真正变化时，除了 bump
+        // epoch，还要**明确**把 active text motion 的 caret ownership 交给
+        // PointerClick——旧文字按当前帧收口，旧正文事务不能再移动 caret，
+        // 后续完成时也不会把 caret 拉回旧 target。
+        let caret_target_before = (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y);
+        let released_motion = if logical_cursor_changed {
+            // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
+            // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
             self.begin_manual_cursor_move();
-        }
+            self.pipeline
+                .animation_coordinator_mut()
+                .hand_over_caret_ownership_to_pointer_click()
+        } else {
+            None
+        };
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 鼠标点击设置 CursorMoveSource::PointerClick，
         // 允许 smooth cursor 开启时跨行 Tween。
@@ -755,6 +776,22 @@ impl SujianEditorItem {
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
         let _ = self.update_cursor_visual_position();
+        if logical_cursor_changed {
+            // Issue #824 评论 5971089641 第 9 节：点击 + caret 交接写正式诊断事件
+            // （不再是 debug log）：press 坐标、hit_test byte index、old/new cursor、
+            // cursor_owner_epoch、active motion id、retarget 前后 caret target。
+            record_pointer_click_caret_handover(
+                x,
+                y,
+                index,
+                current_cursor,
+                self.pipeline.cursor(),
+                self.cursor_ctrl.cursor_owner_epoch,
+                released_motion,
+                caret_target_before,
+                (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y),
+            );
+        }
         self.request_static_repaint();
     }
 
@@ -1123,6 +1160,67 @@ fn compute_word_bounds(text: &str, index: usize) -> Option<(usize, usize)> {
     let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
     let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
     Some((byte_start, byte_end))
+}
+
+/// Issue #824 评论 5971089641 第 9 节：鼠标点击的正式诊断事件。
+///
+/// 点击导致逻辑 cursor 变化时记录：pointer press 坐标、hit_test byte index、
+/// old/new cursor、cursor_owner_epoch、active motion id、retarget 前后 caret target。
+/// 写 `writer_diagnostics` 正式事件（诊断包可见），不是 env-gated debug log。
+#[allow(clippy::too_many_arguments)]
+fn record_pointer_click_caret_handover(
+    pointer_x: f32,
+    pointer_y: f32,
+    hit_test_byte_index: usize,
+    old_cursor: usize,
+    new_cursor: usize,
+    cursor_owner_epoch: u64,
+    active_motion_id: Option<super::transaction_key::VisualTransactionKey>,
+    caret_target_before: (f64, f64),
+    caret_target_after: (f64, f64),
+) {
+    let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    fields.insert(
+        "pointer_press".to_string(),
+        serde_json::json!([pointer_x, pointer_y]),
+    );
+    fields.insert(
+        "hit_test_byte_index".to_string(),
+        serde_json::json!(hit_test_byte_index),
+    );
+    fields.insert("old_cursor".to_string(), serde_json::json!(old_cursor));
+    fields.insert("new_cursor".to_string(), serde_json::json!(new_cursor));
+    fields.insert(
+        "cursor_owner_epoch".to_string(),
+        serde_json::json!(cursor_owner_epoch),
+    );
+    fields.insert(
+        "active_motion_id".to_string(),
+        serde_json::json!(active_motion_id.map(|key| key.transaction_id)),
+    );
+    fields.insert(
+        "caret_target_before".to_string(),
+        serde_json::json!([caret_target_before.0, caret_target_before.1]),
+    );
+    fields.insert(
+        "caret_target_after".to_string(),
+        serde_json::json!([caret_target_after.0, caret_target_after.1]),
+    );
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Info,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "editor.anim.pointer_caret_handover".to_string(),
+        target: "editor.anim".to_string(),
+        message: Some(format!(
+            "Issue #824 评论 5971089641: pointer click caret ownership 交给 PointerClick，\
+             released motion {active_motion_id:?}"
+        )),
+        fields,
+    });
 }
 
 /// Issue #815 评论 6042062633 修改 8: IME composition commit 的正式跳过事件。

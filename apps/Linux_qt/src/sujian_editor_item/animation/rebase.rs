@@ -156,18 +156,21 @@ pub(crate) fn conflicting_units_are_untouched(
     playing_units > 0
 }
 
+/// Issue #824 评论 5971089641 第 5 节：交棒只保留「当前画面连续」所需的信息。
+///
+/// 删除 `remaining_ingest_segments`：连续正文输入不再携带“历史 route 剩余段”。
+/// 新运动的起点就是这里采样到的当前屏幕 caret；旧 `CaretTrack` timing、旧
+/// stage、旧剩余时长都不再排进下一笔正文动画。
 #[derive(Clone, Debug)]
 pub(crate) struct RebaseCaretHandoff {
+    /// 本帧采样到的当前屏幕 caret（新运动起点）。
     pub(crate) sampled: CursorRect,
-    pub(crate) remaining_duration_ms: u64,
     pub(crate) sampled_visual_line_id: Option<usize>,
     pub(crate) sampled_line_top: f64,
     pub(crate) sampled_line_bottom: f64,
-    /// Issue #819 评论 5968931455: 旧 caret track 从 sampled frame 之后的剩余吞吐阶段。
-    /// 新事务构造 route 时合成 `旧 carried route 剩余段 -> 当前新 route`，
-    /// 让 carried CaretTrack unit 消费自己原来的剩余 route，而不是下一笔编辑的 route。
-    pub(crate) remaining_ingest_segments: Vec<super::transaction::types::CaretTrackSegment>,
-    /// Issue #819 评论 5968931455: 旧事务的 stage_id，carried route 剩余段保留这个 id。
+    /// 被替换掉的旧 motion id，仅用于诊断（`editor.anim.retarget` 的
+    /// `replaced_motion_id`）。新运动的 route 不带这个 stage：
+    /// 全新段一律用本笔事务的 stage_id。
     pub(crate) stage_id: super::transaction::types::IngestStageId,
 }
 
@@ -204,23 +207,23 @@ pub(crate) struct RebaseVisualState {
         Vec<crate::sujian_editor_item::layout_snapshot::LineSnapshotId>,
 }
 
+/// Issue #824 评论 5971089641 第 2/7 节：所有正文编辑（Insert/Delete/Replace，
+/// 含 IME commit 与粘贴）共用**同一个** handoff。
+///
+/// `inserted_ranges` / `deleted_ranges` 直接来自 Core
+/// `EditorEditResult.display_patches` 的事实，不再有“CompositionCommit 另一套
+/// 正文动画分类”。`build_prepared_transaction` 对三者走同一个
+/// patch → `retarget_motion::retarget` 入口。
 #[derive(Clone, Debug)]
-pub(crate) enum PreparedRebaseHandoff {
-    Insert {
-        visual_state: RebaseVisualState,
-        range_start: usize,
-        range_end: usize,
-        insert_offset_map: OffsetMap,
-        visual_affected_byte_range_old: Option<(usize, usize)>,
-        visual_affected_byte_range_new: Option<(usize, usize)>,
-    },
-    Delete {
-        visual_state: RebaseVisualState,
-        deleted_ranges: Vec<(usize, usize)>,
-        delete_offset_map: OffsetMap,
-        visual_affected_byte_range_old: Option<(usize, usize)>,
-        visual_affected_byte_range_new: Option<(usize, usize)>,
-    },
+pub(crate) struct PreparedRebaseHandoff {
+    pub(crate) visual_state: RebaseVisualState,
+    /// 新文本坐标系的插入 ranges（来自 display patches）。
+    pub(crate) inserted_ranges: Vec<(usize, usize)>,
+    /// 旧文本坐标系的删除 ranges（来自 display patches）。
+    pub(crate) deleted_ranges: Vec<(usize, usize)>,
+    pub(crate) offset_map: OffsetMap,
+    pub(crate) visual_affected_byte_range_old: Option<(usize, usize)>,
+    pub(crate) visual_affected_byte_range_new: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Debug)]
@@ -455,18 +458,14 @@ impl LinuxEditorAnimationCoordinator {
                         }
                         _ => (track.from_line_top, track.from_line_bottom),
                     };
-                    // Issue #819 评论 5968931455: 提取旧 track 从当前 progress 之后的剩余 segments。
-                    // 这些 segments 让 carried CaretTrack unit 在新事务里继续消费自己原来的 route，
-                    // 而不是被迫消费下一笔编辑的 route。
-                    let remaining_ingest_segments =
-                        track.remaining_segments_from(caret_frame.progress);
+                    // Issue #824 评论 5971089641 第 5 节：不再提取旧 track 的剩余 segments。
+                    // rebase 只负责“当前画面连续”：给出本帧真实采样点；旧 route 的
+                    // 剩余部分不参与下一笔正文动画（不把历史动画排进新 route）。
                     Some(RebaseCaretHandoff {
                         sampled,
-                        remaining_duration_ms: track.remaining_duration_ms(now).max(1),
                         sampled_visual_line_id: caret_line_id,
                         sampled_line_top: line_top,
                         sampled_line_bottom: line_bottom,
-                        remaining_ingest_segments,
                         stage_id: caret_frame.ingest_stage_id,
                     })
                 }
@@ -544,7 +543,8 @@ impl LinuxEditorAnimationCoordinator {
                     operation_kind: match vt.kind {
                         EditorAnimationKind::Insert => "Insert",
                         EditorAnimationKind::Delete => "Delete",
-                        EditorAnimationKind::Cursor => "Cursor",
+                        EditorAnimationKind::Replace => "Replace",
+                        EditorAnimationKind::CursorOnly => "CursorOnly",
                     },
                     typing_animation_enabled,
                     smooth_cursor_enabled,
@@ -591,129 +591,125 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        // Issue #738 评论 5796693007 问题1: 用 if-else 链而不是 match `EditorAnimationKind::Insert =>`，
-        // 避免与 `process_transaction` 的测试锚点（`EditorAnimationKind::Insert/Delete/Cursor =>`）
-        // 冲突。`process_transaction` 保留原内联 match 结构供 issue687/issue702 白盒测试定位。
-        if vt.kind == EditorAnimationKind::Insert {
-            match vt.inserted_range {
-                Some(range) => {
-                    let range_start = range.start().value();
-                    let range_end = range.end().value();
-                    let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                    // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
-                    // 先计算 visual_affected_byte_range 得到 old-side range (old_s, old_e)，
-                    // 再用 old_s/old_e 查冲突。insert_offset_map 仍保留用于 rebase。
-                    let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
-                        let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
-                            &vt.old_text,
-                            &vt.new_text,
-                            (range_start, range_start),
-                            (range_start, range_end),
-                        );
-                        (Some((old_s, old_e)), Some((new_s, new_e)))
-                    };
-                    let (conflict_old_start, conflict_old_end) =
-                        visual_affected_byte_range_old.unwrap_or((range_start, range_start));
-                    let conflicting = self.prepared_queue.find_conflicting_transaction(
-                        &vt.old_text,
-                        conflict_old_start,
-                        conflict_old_end,
-                    );
-                    // 纯插入在 old 文档里就是 range_start 这一个位置点。
-                    // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样，
-                    // 旧事务还活着，采到的是真实当前帧（文字 Timed unit 与 caret track 独立）。
-                    let visual_state = self.take_rebase_frames(
-                        &conflicting,
-                        "rebased_by_insert",
-                        now,
-                        Some((&[(range_start, range_start)], &insert_offset_map)),
-                        &vt.old_text,
-                        cursor_owner_epoch,
-                    );
-                    Some(PreparedRebaseHandoff::Insert {
-                        visual_state,
-                        range_start,
-                        range_end,
-                        insert_offset_map,
-                        visual_affected_byte_range_old,
-                        visual_affected_byte_range_new,
-                    })
-                }
-                // Issue #815 评论 6042062633 修改 8: Insert 事务没有 inserted_range 时，
-                // Core 就没有给出可见插入区间，记正式跳过事件而不是静默丢弃。
-                None => {
-                    skip(
-                        "missing_inserted_range",
-                        old_cursor_rect.is_some(),
-                        new_cursor_rect.is_some(),
-                        None,
-                    );
-                    None
+        // Issue #824 评论 5971089641 第 2 节：正文动画种类只认 patch 事实。
+        // Insert / Delete / Replace 三种都走同一个 handoff 结构，
+        // 由 `build_prepared_transaction` 走同一个 patch → retarget 入口。
+        if vt.kind == EditorAnimationKind::CursorOnly {
+            // 纯光标移动不创建文字事务：直接维护 CursorAnimationState（由
+            // rendering.rs update_cursor_visual_position → build_cursor_plan →
+            // apply_plan 构造），用 Scene Graph 当前帧 frame_now 推进 from→to 动画，
+            // 不再伪装成文字事务（units=空）。
+            return None;
+        }
+
+        let inserted_ranges: Vec<(usize, usize)> = vt.inserted_ranges.clone();
+        let deleted_ranges: Vec<(usize, usize)> = if !vt.deleted_ranges.is_empty() {
+            vt.deleted_ranges.clone()
+        } else {
+            // 兼容 patch 事实为空的旧路径：用本地文本 diff 兜底找删除范围。
+            // 正常 Core 路径一定从 display_patches 直接给出 ranges。
+            let changes = diff_plain_text(&vt.old_text, &vt.new_text);
+            let mut ranges = Vec::new();
+            for change in &changes {
+                if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                    let range_start = index.value();
+                    let range_end = range_start + text.len();
+                    ranges.push((range_start, range_end));
                 }
             }
-        } else if vt.kind == EditorAnimationKind::Delete {
-            let deleted_ranges: Vec<(usize, usize)> = if let Some(range) = vt.deleted_range {
-                vec![(range.start().value(), range.end().value())]
-            } else {
-                let changes = diff_plain_text(&vt.old_text, &vt.new_text);
-                let mut ranges = Vec::new();
-                for change in &changes {
-                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
-                        let range_start = index.value();
-                        let range_end = range_start + text.len();
-                        ranges.push((range_start, range_end));
-                    }
-                }
-                ranges
-            };
+            ranges
+        };
 
-            let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
-            let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
-            let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-            // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
-            // 先计算 visual_affected_byte_range 得到 old-side range (old_s, old_e)，
-            // 再用 old_s/old_e 查冲突。delete_offset_map 仍保留用于 rebase。
-            let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
-                let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
-                    &vt.old_text,
-                    &vt.new_text,
-                    (rebase_byte_start, rebase_byte_end),
-                    (rebase_byte_start, rebase_byte_start),
-                );
-                (Some((old_s, old_e)), Some((new_s, new_e)))
-            };
-            let (conflict_old_start, conflict_old_end) =
-                visual_affected_byte_range_old.unwrap_or((rebase_byte_start, rebase_byte_end));
-            let conflicting = self.prepared_queue.find_conflicting_transaction(
-                &vt.old_text,
-                conflict_old_start,
-                conflict_old_end,
+        // Insert 有 inserted_ranges 但一个 range 都没有时，Core 就没有给出可见插入
+        // 区间，记正式跳过事件而不是静默丢弃。
+        if vt.kind == EditorAnimationKind::Insert && inserted_ranges.is_empty() {
+            skip(
+                "missing_inserted_range",
+                old_cursor_rect.is_some(),
+                new_cursor_rect.is_some(),
+                None,
             );
-            // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样。
-            let visual_state = self.take_rebase_frames(
-                &conflicting,
-                "rebased_by_delete",
-                now,
-                Some((&deleted_ranges, &delete_offset_map)),
-                &vt.old_text,
-                cursor_owner_epoch,
-            );
-            Some(PreparedRebaseHandoff::Delete {
-                visual_state,
-                deleted_ranges,
-                delete_offset_map,
-                visual_affected_byte_range_old,
-                visual_affected_byte_range_new,
-            })
-        } else {
-            // Issue #702: 纯光标移动不创建文字事务（Cursor 分支）。
-            // 纯光标移动直接维护 CursorAnimationState（由 rendering.rs
-            // update_cursor_visual_position → build_cursor_plan → apply_plan
-            // 构造），用 Scene Graph 当前帧 frame_now 推进 from→to 动画，
-            // 不再伪装成文字事务（units=空）。
-            // 此分支不创建任何事务，返回 None。
-            None
+            return None;
         }
+        if deleted_ranges.is_empty() && inserted_ranges.is_empty() {
+            skip(
+                "missing_body_ranges",
+                old_cursor_rect.is_some(),
+                new_cursor_rect.is_some(),
+                None,
+            );
+            return None;
+        }
+
+        let inserted_start = inserted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
+        let inserted_end = inserted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
+        let deleted_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
+        let deleted_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
+
+        let offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+        // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
+        // old 侧 range 取删除范围（纯 Insert 时退化为插入点），
+        // new 侧 range 取插入范围（纯 Delete 时退化为删除后落点）。
+        let old_edit_range = if !deleted_ranges.is_empty() {
+            (deleted_start, deleted_end)
+        } else {
+            (inserted_start, inserted_start)
+        };
+        let new_edit_range = if !inserted_ranges.is_empty() {
+            (inserted_start, inserted_end)
+        } else {
+            (deleted_start, deleted_start)
+        };
+        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                &vt.old_text,
+                &vt.new_text,
+                old_edit_range,
+                new_edit_range,
+            );
+            (Some((old_s, old_e)), Some((new_s, new_e)))
+        };
+        let (conflict_old_start, conflict_old_end) =
+            visual_affected_byte_range_old.unwrap_or(old_edit_range);
+        let conflicting = self.prepared_queue.find_conflicting_transaction(
+            &vt.old_text,
+            conflict_old_start,
+            conflict_old_end,
+        );
+        // 冲突保留判定用的 changed_old_ranges：
+        // - 纯插入在 old 文档里就是一个位置点；
+        // - 有删除（Delete/Replace）时用真实删除范围。
+        let changed_old_ranges: Vec<(usize, usize)> = if !deleted_ranges.is_empty() {
+            deleted_ranges.clone()
+        } else {
+            inserted_ranges
+                .iter()
+                .map(|(start, _)| (*start, *start))
+                .collect()
+        };
+        // Issue #738 评论 5796693007 问题1: 用外层传入的统一 now 采样，
+        // 旧事务还活着，采到的是真实当前帧。
+        let visual_state = self.take_rebase_frames(
+            &conflicting,
+            match vt.kind {
+                EditorAnimationKind::Insert => "rebased_by_insert",
+                EditorAnimationKind::Delete => "rebased_by_delete",
+                EditorAnimationKind::Replace => "rebased_by_replace",
+                EditorAnimationKind::CursorOnly => unreachable!("CursorOnly 已提前返回"),
+            },
+            now,
+            Some((&changed_old_ranges, &offset_map)),
+            &vt.old_text,
+            cursor_owner_epoch,
+        );
+        Some(PreparedRebaseHandoff {
+            visual_state,
+            inserted_ranges,
+            deleted_ranges,
+            offset_map,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        })
     }
 }
 

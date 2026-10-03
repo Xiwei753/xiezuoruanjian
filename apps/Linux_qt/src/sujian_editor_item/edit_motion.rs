@@ -109,34 +109,38 @@ pub(crate) struct CursorRect {
 
 // ── EditorAnimationKind ─────────────────────────────────────────────────────
 
-/// Linux 私有动画类别 — 从 `EditorOperationKind` 派生。
+/// Linux 私有动画类别 — 只从 `EditorEditResult.display_patches` 的
+/// inserted / deleted 事实派生。
 ///
-/// Core 已删除 `EditorAnimationKind`，平台端根据 `EditorEditResult.operation_kind`
-/// 自行推导动画策略。
+/// Issue #824 评论 5971089641 第 2 节：删除
+/// “`EditorOperationKind` → 正文动画种类”这条主判断。CompositionCommit、
+/// 普通 Insert、IME replace、粘贴最终都不能因为 `operation_kind` 不同而走出
+/// 不同的正文动画结果：只要 patch 事实一样，正文 Reveal/Conceal 就一样。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EditorAnimationKind {
+    /// inserted 非空、deleted 为空。
     Insert,
+    /// inserted 为空、deleted 非空。
     Delete,
-    Cursor,
+    /// 两边都有（Replace / IME 选区替换 / 粘贴覆盖选区）。
+    Replace,
+    /// 两边都空 —— 没有正文变化，只有光标移动。
+    CursorOnly,
 }
 
 impl EditorAnimationKind {
-    /// 从 Core 的 `EditorOperationKind` 派生动画类别。
+    /// 从 patch 事实派生动画类别。
     ///
-    /// - `Insert` → `Insert`
-    /// - `Delete` → `Delete`
-    /// - 其他（Replace / CursorOnly / Composition* / Load / Format）→ `Cursor`
-    pub fn from_operation_kind(op: EditorOperationKind) -> Self {
-        match op {
-            EditorOperationKind::Insert => EditorAnimationKind::Insert,
-            EditorOperationKind::Delete => EditorAnimationKind::Delete,
-            EditorOperationKind::Replace
-            | EditorOperationKind::CursorOnly
-            | EditorOperationKind::CompositionUpdate
-            | EditorOperationKind::CompositionCommit
-            | EditorOperationKind::CompositionCancel
-            | EditorOperationKind::Load
-            | EditorOperationKind::Format => EditorAnimationKind::Cursor,
+    /// - inserted 非空、deleted 为空：Insert
+    /// - inserted 为空、deleted 非空：Delete
+    /// - 两边都有：Replace
+    /// - 两边都空：CursorOnly
+    pub fn from_patch_facts(has_inserted: bool, has_deleted: bool) -> Self {
+        match (has_inserted, has_deleted) {
+            (true, false) => EditorAnimationKind::Insert,
+            (false, true) => EditorAnimationKind::Delete,
+            (true, true) => EditorAnimationKind::Replace,
+            (false, false) => EditorAnimationKind::CursorOnly,
         }
     }
 }
@@ -150,9 +154,12 @@ impl EditorAnimationKind {
 /// 消费此结构创建 `PreparedTextVisualTransaction`。
 ///
 /// 字段语义与旧 `EditorVisualTransaction` 对应字段一致：
-/// - `kind`：动画类别（Insert / Delete / Cursor），从 `EditorEditResult.operation_kind` 派生
-/// - `inserted_range`：新文本坐标系中的插入范围，从 `display_patches` 派生
-/// - `deleted_range`：旧文本坐标系中的删除范围，从 `display_patches` 派生
+/// - `kind`：动画类别（Insert / Delete / Replace / CursorOnly），只从
+///   `display_patches` 的 inserted/deleted 事实派生，不再看 `operation_kind`
+/// - `inserted_ranges`：新文本坐标系中的全部插入范围，从 `display_patches` 派生
+/// - `deleted_ranges`：旧文本坐标系中的全部删除范围，从 `display_patches` 派生
+/// - `inserted_range` / `deleted_range`：首个非零范围，供只需要单段连续编辑的
+///   调用方（段落扩展）使用
 /// - `old_text` / `new_text`：编辑前后的纯文本快照
 /// - `text_duration_ms` / `caret_duration_ms`：文字 unit 与 cursor track 的动画时长，
 ///   由 pipeline 从 Qt 设置传入（Issue #756 评论 5821042551 拆分独立 duration）
@@ -161,6 +168,8 @@ impl EditorAnimationKind {
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedEditMotion {
     pub kind: EditorAnimationKind,
+    pub inserted_ranges: Vec<(usize, usize)>,
+    pub deleted_ranges: Vec<(usize, usize)>,
     pub inserted_range: Option<Utf8ByteRange>,
     pub deleted_range: Option<Utf8ByteRange>,
     pub old_text: String,
@@ -187,11 +196,23 @@ impl PreparedEditMotion {
         text_duration_ms: u64,
         caret_duration_ms: u64,
     ) -> Self {
-        let kind = EditorAnimationKind::from_operation_kind(result.operation_kind);
-        let (inserted_range, deleted_range) =
-            derive_ranges_from_patches(result, old_text, new_text);
+        let (inserted_ranges, deleted_ranges) = ranges_from_display_patches(result);
+        // Issue #824 评论 5971089641 第 2 节：动画类别只认 patch 事实，
+        // 不再从 operation_kind 派生（CompositionCommit 也不再有专属分类）。
+        let kind = EditorAnimationKind::from_patch_facts(
+            !inserted_ranges.is_empty(),
+            !deleted_ranges.is_empty(),
+        );
+        let inserted_range = inserted_ranges
+            .first()
+            .map(|&(start, end)| Utf8ByteRange::from_ordered(start, end));
+        let deleted_range = deleted_ranges
+            .first()
+            .map(|&(start, end)| Utf8ByteRange::from_ordered(start, end));
         Self {
             kind,
+            inserted_ranges,
+            deleted_ranges,
             inserted_range,
             deleted_range,
             old_text: old_text.to_string(),
@@ -206,45 +227,38 @@ impl PreparedEditMotion {
     }
 }
 
-/// 从 `EditorEditResult.display_patches` 派生 inserted/deleted range。
+/// 从 `EditorEditResult.display_patches` 派生全部 inserted/deleted ranges。
 ///
 /// `DisplayPatch.replace_byte_range` 是旧文本坐标系中被替换的范围，
 /// `DisplayPatch.inserted_text` 是插入的新文本。
 ///
-/// - `deleted_range` = `replace_byte_range`（旧文本坐标系）
-/// - `inserted_range` = `(replace_byte_range.start, replace_byte_range.start + inserted_text.len())`
+/// - deleted range = `replace_byte_range`（旧文本坐标系）
+/// - inserted range = `(replace_byte_range.start, replace_byte_range.start + inserted_text.len())`
 ///   （新文本坐标系）
 ///
-/// 多 patch 时取首个非零长度 patch 的范围（动画只处理单段连续编辑）。
-fn derive_ranges_from_patches(
+/// Issue #824 评论 5971089641 第 2 节：本函数是正文动画分类的**唯一事实源**。
+/// 普通 Insert/Delete/Replace、IME commit、粘贴都从这里派生 inserted/deleted，
+/// 不再各自按 `operation_kind` 决定正文动画种类。
+///
+/// 这是 `pub(crate)` 而不是私有：`record_composition_commit_transaction`
+/// 必须用同一份 patch 事实构造 commit 的正文 Reveal/Conceal。
+pub(crate) fn ranges_from_display_patches(
     result: &EditorEditResult,
-    _old_text: &str,
-    _new_text: &str,
-) -> (Option<Utf8ByteRange>, Option<Utf8ByteRange>) {
+) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    let mut inserted = Vec::new();
+    let mut deleted = Vec::new();
     for patch in &result.display_patches {
         let replace_start = patch.replace_byte_range.start().value();
         let replace_end = patch.replace_byte_range.end().value();
         let inserted_len = patch.inserted_text.len();
-
-        let deleted_range = if replace_end > replace_start {
-            Some(Utf8ByteRange::from_ordered(replace_start, replace_end))
-        } else {
-            None
-        };
-        let inserted_range = if inserted_len > 0 {
-            Some(Utf8ByteRange::from_ordered(
-                replace_start,
-                replace_start + inserted_len,
-            ))
-        } else {
-            None
-        };
-
-        if deleted_range.is_some() || inserted_range.is_some() {
-            return (inserted_range, deleted_range);
+        if replace_end > replace_start {
+            deleted.push((replace_start, replace_end));
+        }
+        if inserted_len > 0 {
+            inserted.push((replace_start, replace_start + inserted_len));
         }
     }
-    (None, None)
+    (inserted, deleted)
 }
 
 // ── diff_plain_text ─────────────────────────────────────────────────────────
