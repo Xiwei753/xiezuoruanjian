@@ -390,19 +390,43 @@ export function findFocusCandidate(
 }
 
 /**
+ * 过滤出"有资格进入焦点"的候选（覆盖率过滞回上沿）。
+ *
+ * 抽成小纯函数是为了让"根层正常选"和"往当前焦点里面继续钻"两处共用同一套筛选，
+ * 免得两边的进入门槛悄悄长歪。
+ */
+function promotableCandidates(candidates: FocusCandidate[]): FocusCandidate[] {
+  const promotable: FocusCandidate[] = []
+  for (const candidate of candidates) {
+    if (shouldPromoteFocus(candidate.coverage)) {
+      promotable.push(candidate)
+    }
+  }
+  return promotable
+}
+
+/**
  * 一次性解出新的 focusScenePath（纯函数，不写状态）。
  *
- * 两层滞回都在这里：
+ * 这是一个**有记忆的状态机**，不是"每帧从全树重选一个 winner"：
+ *
+ * 1. 根层没有需要保持的旧焦点，正常从全体 promotable 里选；
+ * 2. 非根层时，先看**当前焦点的严格后代**里有没有 promotable —— 有就晋升
+ *    （用户继续往当前子星图里面钻，这是唯一允许的"跳"）；
+ * 3. 没有更深的后代，但当前焦点仍在保持区间（coverage ≥ 0.55 且圆心还在
+ *    20%~80%）就原地保持，**祖先和兄弟不能抢**；
+ * 4. 当前焦点真的掉出保持区间，退到父层。下一轮再从父层正常选，
+ *    不在这一轮里跨分支瞬移到一个兄弟。
+ *
+ * 两层滞回：
  * - **覆盖率**：进入 ≥ 0.70，退出 < 0.55。捏合停在 0.69 附近不会一帧一层地抖。
  * - **位置**：进入要落在 30% ~ 70%，保持窗口是 20% ~ 80%。手指碰边不退出，
  *   真的把对象拖出视野才退出。
  *
- * 顺序很重要：**先按覆盖率过滤出"有资格进焦点"的候选，再在里面比深度**。
- * 反过来（先选最深的、再查它够不够 70%）会让一颗很小的深层候选把合法的父候选
- * 整批否决：a 占 85%、里面那颗 b 只有 40% 时，焦点会一直卡在 root（#820 复核）。
- *
- * 退出同样要看两件事：覆盖率太小，**或者**圆心已经被拖出保持窗口。
- * 只看 coverage 的话，一条已经不在视野里的焦点链会被继续强制展开。
+ * 两条顺序坑（#820 复核）：
+ * - 先选最深的、再查它够不够 70%，会让一颗很小的深层候选把合法父候选整批否决；
+ * - 每帧先从全树重选 winner、最后才判 demote，会让保持区间只在没有别的
+ *   promotable 候选时才生效，深层焦点的滞回等于没有。
  *
  * 焦点只改变"显示参考根"：不改 Core、不新建页面、不换相机、不落盘。
  *
@@ -414,23 +438,26 @@ export function resolveFocusScenePath(
   currentFocusScenePath: string,
   candidates: FocusCandidate[]
 ): string {
-  const promotable: FocusCandidate[] = []
-  for (const candidate of candidates) {
-    if (shouldPromoteFocus(candidate.coverage)) {
-      promotable.push(candidate)
-    }
-  }
-  const winner: FocusCandidate | null = resolveFocusCandidate(promotable)
-  if (winner !== null) {
-    return winner.scenePath
-  }
+  const promotable: FocusCandidate[] = promotableCandidates(candidates)
   if (currentFocusScenePath === 'root') {
-    return 'root'
+    const winner: FocusCandidate | null = resolveFocusCandidate(promotable)
+    return winner !== null ? winner.scenePath : 'root'
   }
   const current: FocusCandidate | null = findFocusCandidate(currentFocusScenePath, candidates)
-  if (current === null || shouldDemoteFocus(current)) {
-    // 当前焦点不够大、或者已经被拖出保持窗口（也包括这轮根本没看见它）→ 退回父层
-    return parentScenePathOf(currentFocusScenePath)
+  const descendants: FocusCandidate[] = []
+  for (const candidate of promotable) {
+    if (candidate.scenePath.startsWith(currentFocusScenePath + '/')) {
+      descendants.push(candidate)
+    }
   }
-  return currentFocusScenePath
+  const deeper: FocusCandidate | null = resolveFocusCandidate(descendants)
+  if (deeper !== null) {
+    return deeper.scenePath
+  }
+  if (current !== null && !shouldDemoteFocus(current)) {
+    // 仍在保持区间内 → 保持，不允许祖先 / 兄弟顶掉
+    return currentFocusScenePath
+  }
+  // 不够大、或已经被拖出保持窗口（也包括这轮根本没看见它）→ 退回父层
+  return parentScenePathOf(currentFocusScenePath)
 }

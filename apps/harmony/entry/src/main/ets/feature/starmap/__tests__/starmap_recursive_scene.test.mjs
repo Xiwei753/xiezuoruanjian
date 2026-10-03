@@ -3331,19 +3331,29 @@ function findFocusCandidate(scenePath, candidates) {
   return null
 }
 
-function resolveFocusScenePath(currentFocusScenePath, candidates) {
+function promotableCandidates(candidates) {
   const promotable = []
   for (const candidate of candidates) {
     if (shouldPromoteFocus(candidate.coverage)) { promotable.push(candidate) }
   }
-  const winner = resolveFocusCandidate(promotable)
-  if (winner !== null) { return winner.scenePath }
-  if (currentFocusScenePath === 'root') { return 'root' }
-  const current = findFocusCandidate(currentFocusScenePath, candidates)
-  if (current === null || shouldDemoteFocus(current)) {
-    return parentScenePathOf(currentFocusScenePath)
+  return promotable
+}
+
+function resolveFocusScenePath(currentFocusScenePath, candidates) {
+  const promotable = promotableCandidates(candidates)
+  if (currentFocusScenePath === 'root') {
+    const winner = resolveFocusCandidate(promotable)
+    return winner !== null ? winner.scenePath : 'root'
   }
-  return currentFocusScenePath
+  const current = findFocusCandidate(currentFocusScenePath, candidates)
+  const descendants = []
+  for (const candidate of promotable) {
+    if (candidate.scenePath.startsWith(currentFocusScenePath + '/')) { descendants.push(candidate) }
+  }
+  const deeper = resolveFocusCandidate(descendants)
+  if (deeper !== null) { return deeper.scenePath }
+  if (current !== null && !shouldDemoteFocus(current)) { return currentFocusScenePath }
+  return parentScenePathOf(currentFocusScenePath)
 }
 
 // ── 被测规格：platform/StarMapGeometry.ets 的 collectEmbedFocusProbes ──
@@ -3593,6 +3603,33 @@ console.log('37d. 视觉焦点：中心区域优先、再比深度、滞回不�
     '根层没有父层可退')
   assert(resolveFocusScenePath('root/embed:a/embed:b', []) === 'root/embed:a',
     '这轮整棵树都没加载到 → 退回一层，不会一路弹回根')
+
+  // ── 保持区间不能被祖先 / 兄弟顶掉（#820 复核第二轮）──
+  assert(resolveFocusScenePath('root/embed:a/embed:b', [
+    cand('root/embed:a', 0.85, 0.5, 0.5),
+    cand('root/embed:a/embed:b', 0.62, 0.5, 0.5)
+  ]) === 'root/embed:a/embed:b',
+    '覆盖率滞回：b=0.62 在 0.55~0.70 之间 → 祖先 a=0.85 不能把它顶回父层')
+  assert(resolveFocusScenePath('root/embed:a/embed:b', [
+    cand('root/embed:a', 0.90, 0.5, 0.5),
+    cand('root/embed:a/embed:b', 0.80, 0.25, 0.5)
+  ]) === 'root/embed:a/embed:b',
+    '位置滞回：b 圆心 0.25 仍在 20%~80% 保持窗口 → 祖先 a 不能顶掉它')
+  assert(resolveFocusScenePath('root/embed:a/embed:b', [
+    cand('root/embed:a/embed:b', 0.62, 0.5, 0.5),
+    cand('root/embed:a/embed:c', 0.90, 0.5, 0.5)
+  ]) === 'root/embed:a/embed:b',
+    '兄弟 c=0.90 更符合进入条件，也不能在 b 合法保持时抢走焦点')
+  assert(resolveFocusScenePath('root/embed:a', [
+    cand('root/embed:a', 0.80, 0.5, 0.5),
+    cand('root/embed:a/embed:b', 0.75, 0.5, 0.5)
+  ]) === 'root/embed:a/embed:b',
+    '真正更深的后代 b=0.75 满足进入条件 → 允许晋升（继续往里钻）')
+  assert(resolveFocusScenePath('root/embed:a/embed:b', [
+    cand('root/embed:a/embed:b', 0.40, 0.5, 0.5),
+    cand('root/embed:a/embed:c', 0.90, 0.5, 0.5)
+  ]) === 'root/embed:a',
+    '当前焦点真失效（0.40）→ 本轮只退一层到父层，不跨分支瞬移到兄弟 c')
 }
 
 console.log('')
@@ -3855,8 +3892,8 @@ console.log('37g. 只有展开态才实例化 child Scene；LOD 不写回 Core �
   assert(focusPathBody.indexOf('shouldPromoteFocus(candidate.coverage)') <
     focusPathBody.indexOf('resolveFocusCandidate(promotable)'),
     '先按覆盖率过滤出 promotable，再交给 resolveFocusCandidate 比深度')
-  assert(focusPathBody.includes('const promotable: FocusCandidate[] = []'),
-    'resolveFocusScenePath 里有独立的 promotable 过滤步骤')
+  assert(focusPathBody.includes('promotableCandidates(candidates)'),
+    'resolveFocusScenePath 走共享的 promotable 过滤，不自己内联一遍覆盖率门槛')
   assert(!/resolveFocusCandidate\(candidates\)[\s\S]{0,200}shouldPromoteFocus\(winner\.coverage\)/.test(focusPathBody),
     '不再保留"先选最深的、再查它够不够 70% 然后否决整批候选"这条路径')
   assert(focusPathBody.includes('shouldDemoteFocus(current)') &&
@@ -3869,6 +3906,21 @@ console.log('37g. 只有展开态才实例化 child Scene；LOD 不写回 Core �
     'shouldDemoteFocus 不再只接一个 coverage 数字（那样看不到位置）')
   assert(lodSource.includes('!Number.isFinite(candidate.coverage)'),
     '非有限 coverage 仍按退出处理（不返回 NaN 焦点）')
+
+  // 焦点转移顺序：先看后代能不能晋升，再判当前是否仍在保持区间
+  const spIdx = focusPathBody.indexOf("startsWith(currentFocusScenePath + '/')")
+  const holdIdx = focusPathBody.indexOf('!shouldDemoteFocus(current)')
+  const parentIdx = focusPathBody.lastIndexOf('parentScenePathOf(currentFocusScenePath)')
+  assert(spIdx > -1 && holdIdx > spIdx && parentIdx > holdIdx,
+    'resolveFocusScenePath 的顺序是：后代晋升 → 当前保持 → 退回父层')
+  assert(focusPathBody.includes("if (currentFocusScenePath === 'root')") &&
+    focusPathBody.indexOf("if (currentFocusScenePath === 'root')") < spIdx,
+    '根层没有需要保持的旧焦点，先正常从全体 promotable 里选')
+  assert(focusPathBody.includes('resolveFocusCandidate(descendants)') &&
+    !/resolveFocusCandidate\(promotable\)[\s\S]{0,400}shouldDemoteFocus\(current\)/.test(focusPathBody),
+    '非根层只在"当前焦点的严格后代"里晋升，不从全树重选 winner')
+  assert(lodSource.includes('function promotableCandidates(candidates: FocusCandidate[]): FocusCandidate[]'),
+    'promotable 过滤抽成共用纯函数，根层与后代晋升走同一套进入门槛')
 
   const viewportSource = readStarmapSource('platform/StarMapViewport.ets')
   assert(viewportSource.includes('export function projectLocalLengthToScreen(localLength: number, ownerEffectiveScale: number): number'),
