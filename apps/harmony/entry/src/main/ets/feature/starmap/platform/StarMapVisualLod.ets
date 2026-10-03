@@ -1,71 +1,71 @@
 // ─── StarMapVisualLod.ets ───
-// 星图视觉 LOD（语义缩放）纯计算模块 —— Issue #820。
+// 星图 Deep Zoom 显示细节档位 + 视觉焦点纯计算模块 —— Issue #821。
 //
 // 这一层是 HarmonyOS **显示层**的东西，不进 writer_core：
 // Core 只知道"这张星图里有这些节点、这些 Embed、这些 authored position"，
-// 完全不知道屏幕、相机、折叠和视觉焦点。这里负责把这些量算出来：
+// 完全不知道屏幕、相机和视觉焦点。这里负责把这些量算出来：
 //
-//   屏幕投影链（#820 规范）：
-//     child local → 父 Embed local fit → … → root world → 全局相机 → 屏幕
+//   屏幕投影链（#821 规范）：
+//     稳定 world geometry → 全局相机 → 每层 local fit → Deep Zoom detail
 //   effectiveScale = globalCameraScale × 所有祖先 EmbedLocalFitScale
-//   projectedEmbedSize = embedDisplaySize × ownerSceneEffectiveScale
-//   coverage = projectedEmbedSize / min(viewportWidth, viewportHeight)
+//   projectedDiameterVp = DEFAULT_EMBED_DIAMETER × ownerEffectiveScale
+//   coverage = projectedDiameterVp / min(viewportWidth, viewportHeight)
 //
-// 三档 LOD 的判定**只看屏幕上有多少真实空间**，不看"这是第几层"：
-// - expanded：完整圆壳 + 实例化 child Scene（内部可命中、可编辑、可继续递归）
-// - collapsed：节点尺寸的摘要卡（标题 + 子星图身份 + 选中态），
-//   整个摘要热区都属于这个 Embed，不实例化 child Scene，也不再向下递归
-// - hidden：祖先已折叠 / 不需要，压根不创建 Scene 实例（数据仍在 Core 里）
+// #821 的核心边界：**Deep Zoom 只决定"渲染多少细节 / 是否挂完整交互组件"，
+// 绝不改 Embed 的形状、world bounds 或它在父 Scene 里的 authored position。**
+// 子星图在任何档位、任何缩放下都还是那颗正圆（DEFAULT_EMBED_DIAMETER，
+// 圆角 = 边长 / 2），不会再变成 160×80 的矩形节点摘要卡。用户缩放只改变视角，
+// 同层所有对象按同一个相机比例等比缩放；只有真正创建 / 移动 / 缩放某个对象的
+// world bounds 时才谈得上避让。缩放不是布局变化。
 //
-// Viewport 改大小要真的改**显示预算**，不是只改 coverage（#820 复核）：
-//   视口短边 → viewportDetailScale()（连续比例，有上下限，不是设备断点表）
-//            → expandedEmbedSizeVp() = 基准直径 × 该比例
-//            → 圆内可用空间随之变化 → LOD 跟着变
-// 展开态圆壳因此在大视口下拿到更多真实 vp 空间，child local fit 也自然更宽裕，
-// 深一层才有可能继续 expanded；小视口则反过来。
+// 三档细节只看屏幕上有多少真实空间：
+// - interactive：实例化 child Scene（内部可命中、可编辑、可继续递归）
+// - preview：轻量 Canvas 缩略图，只回答"里面大概有什么"，不挂交互组件
+// - shell：只画圆壳，连缩略图都不画（数据仍在 Core 里，随时可以再展开）
 //
-// 这份尺寸必须是**同一份显示真相**：LOD、显示边界、布局矩形、渲染盒子全部读
-// `expandedEmbedSizeVp()`，不能出现"LOD 按 320 算、UI 还画 200"的第二套尺寸。
-// 折叠摘要卡不跟着视口无限放大，保持普通节点附近的尺寸。
+// 档位之间用滞回防抖：
+// - interactive 进入 coverage ≥ 0.70 / 退出 ≥ 0.60
+// - preview 进入 projectedDiameterVp ≥ 48vp / 退出 ≥ 40vp
+// 视觉焦点链上的 Embed 至少保底 preview（不会掉到纯圆壳），但**保底的不是形状**，
+// 只是"里面还有东西可看"。
 //
 // "手机两层、平板三层"这种层数是**小视口自然算出来的结果**，不是常量：
-// 视口小或相机缩得小 → 圆投影小 → 内部可用尺寸不够 → 折叠；
-// 视口大或相机放大 → 展开。同一个设备改窗口大小会就地重算。
+// 视口小或相机缩得小 → 圆投影小 → 内部可用尺寸不够 → 掉档；
+// 视口大或相机放大 → 交互层。同一个设备改窗口大小会就地重算。
 //
-// 视口 resize 只重算显示层级，**不碰视觉焦点**（#820 复核）：
-// 保持 focusScenePath、保持相机，把新视口尺寸往下传，各 Scene 自己重算 LOD。
-// 否则折叠屏展开一下、分屏拖宽一点就会莫名其妙换焦点。
+// 视口 resize 与相机缩放都**不碰 authored position、不碰 world 几何**，
+// 只重算显示细节档位，focusScenePath 由 ui/StarMapScreen 的焦点状态机另行维护。
 //
 // 视觉焦点只是"显示参考根"，两组滞回常量都在这一层：
 // - 覆盖率：进入 ≥ 0.70 / 退出 < 0.55
 // - 位置：圆心进入要落在 30%~70%，保持在 20%~80%
 // 两组都只为防抖，不是设备分类。退出必须同时看位置，否则用户把相机拖走之后，
-// 一条已经不在视野里的焦点链会被继续强制展开。
+// 一条已经不在视野里的焦点链会被继续强制保底。
 //
 // 所有函数都是纯函数：不读 Core、不碰 ArkUI、不做 per-frame UniFFI 调用。
-// LOD 是高频显示计算，全部在本地一次算完。
+// Deep Zoom 档位是高频显示计算，全部在本地一次算完。
 //
-// 关于依赖方向：本模块只依赖 StarMapLayout（纯尺寸常量）和 StarMapViewport
-// （投影所需的纯几何），**不依赖 StarMapGeometry**。原因是 Viewport 已经依赖
-// Geometry，再让 Geometry 反向 import 本模块会绕成 platform 模块之间的环，
+// 关于依赖方向：本模块只依赖 StarMapLayout（纯尺寸常量），
+// **不依赖 StarMapViewport**（#820 旧模型要算圆内可用尺寸才需要它，
+// #821 稳定圆壳之后不再需要）。也不依赖 StarMapGeometry：
+// 原因是 Geometry 若反向 import 本模块会绕成 platform 模块之间的环，
 // 而 Viewport 顶层的常量在模块初始化时就要读 Geometry 的常量，环初始化会算成 NaN。
 
-import {
-  DEFAULT_EMBED_DIAMETER,
-  DEFAULT_NODE_WIDTH,
-  DEFAULT_NODE_HEIGHT,
-  DEFAULT_NODE_RADIUS,
-  EmbedDisplayBounds,
-  expandedEmbedDisplayBounds
-} from './StarMapLayout'
-import { computeEmbedInnerContentSafeSide } from './StarMapViewport'
+import { DEFAULT_EMBED_DIAMETER } from './StarMapLayout'
 
 // ─── 类型 ───
 
-/** Embed 的视觉档位。hidden 表示祖先折叠，本层连 Scene 实例都不创建。 */
-export type EmbedLodMode = 'expanded' | 'collapsed' | 'hidden'
+/**
+ * Deep Zoom 细节档位。
+ *
+ * 三档都画同一颗圆、同一份 world geometry，区别只在"圆里渲染多少东西"：
+ * - interactive：挂完整 child Scene，内部节点是真实 ArkUI 组件，可点可拖
+ * - preview：一张固定尺寸 Canvas 缩略图，节点/边/子星图都是画出来的，没有交互组件
+ * - shell：只画圆壳
+ */
+export type DeepZoomDetail = 'interactive' | 'preview' | 'shell'
 
-/** LOD 计算需要的**根**视口上下文。整棵递归树共用同一份，子 Scene 不许拿自己的圆当视口。 */
+/** 档位计算需要的**根**视口上下文。整棵递归树共用同一份，子 Scene 不许拿自己的圆当视口。 */
 export interface VisualLodContext {
   /** 根 StarMap 实际可绘制内容区宽度（vp） */
   viewportWidthVp: number
@@ -75,30 +75,35 @@ export interface VisualLodContext {
   focusScenePath: string
 }
 
-/** 一个 Embed 投影到屏幕上的度量。全部是屏幕侧 vp，与 authored position 无关。 */
+/**
+ * 一个 Embed 投影到屏幕上的度量。全部是屏幕侧 vp，与 authored position 无关。
+ *
+ * #821 起只有这两个字段：外壳尺寸恒为 DEFAULT_EMBED_DIAMETER × 有效比例，
+ * 不再有"外框 / 圆内可用"两套尺寸，也不再有随视口变化的展开尺寸。
+ */
 export interface ProjectedEmbedMetrics {
-  /** Embed 外壳投影后的屏幕边长（vp） */
-  outerSizeVp: number
-  /** 圆内"手能可靠点到"的内容区投影后的屏幕边长（vp） */
-  innerUsableSizeVp: number
-  /** outerSizeVp 占视口短边的比例 */
+  /** 圆壳投影后的屏幕直径（vp） */
+  projectedDiameterVp: number
+  /** projectedDiameterVp 占视口短边的比例 */
   coverage: number
 }
 
+/** 进入 interactive 档所需的覆盖率阈值（滞回上沿）。 */
+export const INTERACTIVE_ENTER_COVERAGE: number = 0.70
+
+/** 保持 interactive 档所需的覆盖率阈值（滞回下沿）。 */
+export const INTERACTIVE_EXIT_COVERAGE: number = 0.60
+
 /**
- * 展开所需的下限：圆内可用尺寸至少要保留一个**节点高度**级别的可操作空间。
+ * 进入 preview 档所需的投影直径下限（vp）。
  *
- * 这里不能拿节点宽度（160vp）当门槛：child Scene 本来就有自己的 local fit，
- * 节点宽度会被 fit 缩放适配，用原尺寸去卡会把"第一层子星图"在手机上也全部
- * 折叠掉 —— 短边小于约 540vp 时 200 圆的 innerUsable 只有 89vp，第一层就没了，
- * 和"小屏自然形成当前 Scene + 第一层、更深层才折叠"的目标正好相反（#820 复核）。
- *
- * 取 80vp（节点高度）之后：200 圆在 camera=1 时 innerUsable ≈ 89vp ≥ 80 →
- * 第一层 expanded；进到 child Scene 之后 local fit 会把下一层的
- * ownerEffectiveScale 压下去，子子星图自然跌到阈值以下。大视口给出更多空间，
- * 下一层才可能重新过线。仍然是"看屏幕真实可用空间"，不是写死两层。
+ * 再小就只剩圆壳：画出来的节点圆和字都糊成一团，比不画更难认。
+ * 48vp 大约能让里面几个节点圆分辨出形状和相对位置 —— 这正是 preview 要回答的问题。
  */
-export const EXPANDED_MIN_INNER_USABLE_VP: number = DEFAULT_NODE_HEIGHT
+export const PREVIEW_MIN_DIAMETER_VP: number = 48
+
+/** 保持 preview 档所需的投影直径下限（vp），防抖用。 */
+export const PREVIEW_EXIT_DIAMETER_VP: number = 40
 
 /** 进入视觉焦点所需的覆盖率阈值（滞回上沿）。 */
 export const FOCUS_ENTER_COVERAGE: number = 0.70
@@ -134,99 +139,6 @@ export interface FocusCandidate {
   centerRatioY: number
 }
 
-/**
- * 参考短边（vp）：视口短边达到这个值就按 1.0 的显示预算走。
- *
- * 取常见手机竖屏短边。这只是**连续比例的分母**，不是设备断点，
- * 不判断"这是不是手机 / 平板"，也没有任何机型表。
- */
-export const VIEWPORT_REFERENCE_SHORT_SIDE_VP: number = 360
-
-/** 视口显示预算的下限：视口再小也按基准尺寸画，不会无限缩小圆壳。 */
-export const MIN_VIEWPORT_DETAIL_SCALE: number = 1.0
-
-/** 视口显示预算的上限：视口再大圆壳也只放大到这里，避免大屏上圆壳糊满屏。 */
-export const MAX_VIEWPORT_DETAIL_SCALE: number = 1.6
-
-// ─── 显示几何统一 ───
-
-/**
- * 一个视觉档位下的 Embed 显示边界。
- *
- * 这是"画出来多大"和"按多大算命中"的**唯一一份真相**：布局节点、命中测试、
- * 选中描边、边端点、触摸响应区全部读它。否则会出现"画的是 160×80 的摘要卡，
- * 命中和边端点还按 200×200 的圆算"这种错位（#820）。
- *
- * - expanded：正圆，宽高都等于**当前 Viewport 下的展开尺寸**
- *   （`expandedEmbedSizeVp(context)`，不是写死的 200），圆角 = 边长 / 2
- * - collapsed：和普通节点同尺寸的摘要卡，圆角与节点一致，**不跟着视口无限放大**
- * - hidden：祖先已折叠，本层不渲染；返回摘要卡尺寸作为兜底（不应被用到）
- *
- * @param lod 视觉档位
- * @param context 根视口上下文（expanded 分支要按它算显示尺寸）
- * @returns 显示边界（局部坐标，不含任何缩放）
- */
-export function embedDisplayBoundsForLod(
-  lod: EmbedLodMode,
-  context: VisualLodContext
-): EmbedDisplayBounds {
-  if (lod === 'expanded') {
-    return expandedEmbedDisplayBounds(expandedEmbedSizeVp(context))
-  }
-  return {
-    width: DEFAULT_NODE_WIDTH,
-    height: DEFAULT_NODE_HEIGHT,
-    radius: DEFAULT_NODE_RADIUS,
-    isCircle: false
-  }
-}
-
-// ─── 视口显示预算 ───
-
-/** 把比例夹到 [min, max]。 */
-function clampDetailScale(scale: number): number {
-  if (!Number.isFinite(scale)) {
-    return MIN_VIEWPORT_DETAIL_SCALE
-  }
-  return Math.max(MIN_VIEWPORT_DETAIL_SCALE, Math.min(MAX_VIEWPORT_DETAIL_SCALE, scale))
-}
-
-/**
- * 视口显示预算：一个**连续**比例，输入只有视口短边，不判断设备类型。
- *
- * 这是"同一台设备换窗口大小 → 视觉层数自然变化"的闭环所在（#820）：
- * Viewport 变了 → 显示预算变了 → 展开态圆壳的真实 vp 尺寸变了 →
- * 圆内可用空间变了 → LOD 档位跟着变。写死 200vp 的话，视口只影响 coverage，
- * 不影响 LOD，"大屏多展开几层"就永远实现不了。
- *
- * 之所以是连续比例而不是断点表：断点表就是变相的设备分类，
- * 折叠屏展开、半屏、分屏这些中间态全都要单独开一条规则。
- *
- * @param context 根视口上下文
- * @returns 显示预算比例（≥ MIN_VIEWPORT_DETAIL_SCALE，≤ MAX_VIEWPORT_DETAIL_SCALE）
- */
-export function viewportDetailScale(context: VisualLodContext): number {
-  const shortSide: number = viewportShortSideVp(context)
-  if (shortSide <= 0) {
-    return MIN_VIEWPORT_DETAIL_SCALE
-  }
-  return clampDetailScale(shortSide / VIEWPORT_REFERENCE_SHORT_SIDE_VP)
-}
-
-/**
- * 当前 Viewport 下展开态 Embed 的**真实显示边长**（局部坐标）。
- *
- * 这是全链路的单一尺寸来源：LOD 判定、显示边界、布局矩形、渲染盒子
- * 都必须读它，不允许任何地方再写死 DEFAULT_EMBED_DIAMETER 当"展开尺寸"，
- * 否则就会出现"LOD 按 320 算、UI 还画 200"的第二套尺寸。
- *
- * @param context 根视口上下文
- * @returns 展开态圆壳的局部显示边长（vp）
- */
-export function expandedEmbedSizeVp(context: VisualLodContext): number {
-  return DEFAULT_EMBED_DIAMETER * viewportDetailScale(context)
-}
-
 // ─── 投影 ───
 
 /** 视口短边（coverage 的分母）。非有限值或非正数时按 0 处理，避免除出 NaN。 */
@@ -250,41 +162,30 @@ function effectiveOwnerScale(ownerEffectiveScale: number): number {
 /**
  * 把一个 Embed 的屏幕投影度量算出来。
  *
- * 口径（#820 规范，评审重点）：
+ * 口径（#821 规范）：
  * - `ownerEffectiveScale` 必须是 Embed **所属 Scene** 的最终有效比例，
  *   也就是 `全局相机比例 × 所有祖先 Embed 的局部适配比例`，由
  *   `ui/StarMapScene.viewportScaleValue()` 提供；
- * - `outerSizeVp = embedDisplaySizeVp × ownerEffectiveScale`，
+ * - 直径恒为 `DEFAULT_EMBED_DIAMETER × ownerEffectiveScale`，
  *   **绝不能**把 Embed 自己 child Scene 的 local fit 乘进去：
- *   那是圆壳"里面"的内容大小，不是外壳大小。乘进去就等于"每深一层外壳就小一截"，
- *   折叠判定会自我实现（越深越折叠），再也展不开。
+ *   那是圆壳"里面"的内容大小，不是外壳大小。
  *
- * `embedDisplaySizeVp` 必须传 `expandedEmbedSizeVp(context)`（当前 Viewport 下的展开尺寸），
- * 不许写死 DEFAULT_EMBED_DIAMETER：那样 Viewport 只影响 coverage、不影响 LOD，
- * "同一平台不同屏幕尺寸自然出现不同视觉层数"就落不了地（#820 复核）。
+ * 之所以不再有 embedDisplaySizeVp 入参：#821 之后外壳尺寸是稳定常量，
+ * 任何地方都不许再传一个"随视口变化的展开尺寸"进来。
  *
- * @param embedDisplaySizeVp Embed 外壳的局部显示边长（展开态用 expandedEmbedSizeVp(context)）
  * @param ownerEffectiveScale Embed 所属 Scene 的最终有效比例（相机 × 祖先 local fit）
  * @param context 根视口上下文
- * @param paddingVp 内容区四边留白（与 fitView / clamp 用同一份）
  * @returns 屏幕投影度量
  */
 export function projectEmbedMetrics(
-  embedDisplaySizeVp: number,
   ownerEffectiveScale: number,
-  context: VisualLodContext,
-  paddingVp: number
+  context: VisualLodContext
 ): ProjectedEmbedMetrics {
   const scale: number = effectiveOwnerScale(ownerEffectiveScale)
-  const size: number = Number.isFinite(embedDisplaySizeVp) && embedDisplaySizeVp > 0
-    ? embedDisplaySizeVp
-    : DEFAULT_EMBED_DIAMETER
-  const outerSizeVp: number = size * scale
-  const innerLocal: number = computeEmbedInnerContentSafeSide(size, paddingVp)
-  const innerUsableSizeVp: number = innerLocal * scale
+  const projectedDiameterVp: number = DEFAULT_EMBED_DIAMETER * scale
   const shortSide: number = viewportShortSideVp(context)
-  const coverage: number = shortSide > 0 ? outerSizeVp / shortSide : 0
-  return { outerSizeVp: outerSizeVp, innerUsableSizeVp: innerUsableSizeVp, coverage: coverage }
+  const coverage: number = shortSide > 0 ? projectedDiameterVp / shortSide : 0
+  return { projectedDiameterVp: projectedDiameterVp, coverage: coverage }
 }
 
 // ─── 视觉焦点 ───
@@ -343,15 +244,13 @@ export function parentScenePathOf(scenePath: string): string {
  * （焦点自身或它的祖先）。
  *
  * 注意入参是**这颗 Embed 进入之后的路径**，不是它所属的父 Scene：
- * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层兄弟 b / c 仍按屏幕空间正常折叠；
- * 传父 Scene 的 `root` 会让初始焦点 `root` 把整层 Embed 全部强制展开，根层 LOD 直接失效（#820 复核）。
+ * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层兄弟 b / c 仍按屏幕空间正常掉档。
  *
- * LOD 判定要用它保住这条链：从根到 `focusScenePath` 的每一层都必须展开，
- * 否则用户捏进去的子星图会因为"里面不够大"自己把自己折起来，
- * 或者它的祖先先折了，用户就地掉出焦点层。
+ * Detail 判定要用它保住这条链：从根到 `focusScenePath` 的每一层至少留住 preview，
+ * 否则用户捏进去的子星图会退化成一颗空圆壳，"里面有什么"就再也看不到了。
  *
  * 焦点**之后**的更深层不在这条链上：那几层继续按屏幕空间正常判定，
- * 否则"语义缩放"就退化成"从焦点往下全部展开"，再深也不折叠了。
+ * 否则"语义缩放"就退化成"从焦点往下全部保底"，再深也不掉档了。
  *
  * @param embedScenePath 待判定的 **candidate Embed 进入之后**的 childScenePath 描述
  * @param focusScenePath 当前视觉焦点的 scenePath 描述
@@ -361,51 +260,65 @@ export function isOnFocusChain(embedScenePath: string, focusScenePath: string): 
   return embedScenePath === focusScenePath || focusScenePath.startsWith(embedScenePath + '/')
 }
 
-// ─── LOD 判定 ───
+// ─── Deep Zoom 档位判定 ───
 
 /**
- * 单个 Embed 的视觉档位（只看屏幕上有多少真实空间）。
+ * 单个 Embed 的 Deep Zoom 细节档位（只看屏幕上有多少真实空间）。
  *
- * 判据不是"第几层"，而是圆内真正能用的屏幕尺寸：
- * `innerUsableSizeVp >= EXPANDED_MIN_INNER_USABLE_VP`（至少留一个节点高度级别的
- * 可操作空间，节点宽度交给 child local fit 适配）才展开，否则折叠成节点尺寸的
- * 摘要卡。
+ * 判据只有两条，都是**连续**的屏幕量，没有"第几层"也没有设备断点：
+ * - `coverage ≥ 0.70` → 圆几乎占满视口短边，里面塞得下真实组件 → interactive
+ * - `projectedDiameterVp ≥ 48` → 还能看出里面大概有什么 → preview
+ * - 再小 → 只剩圆壳
  *
  * @param metrics 该 Embed 的屏幕投影度量
- * @returns expanded / collapsed
+ * @param previousDetail 上一帧的档位（滞回用），首次渲染传 null
+ * @returns interactive / preview / shell
  */
-export function resolveEmbedLod(metrics: ProjectedEmbedMetrics): EmbedLodMode {
-  if (!Number.isFinite(metrics.innerUsableSizeVp)) {
-    return 'hidden'
+export function resolveDeepZoomDetail(
+  metrics: ProjectedEmbedMetrics,
+  previousDetail: DeepZoomDetail | null
+): DeepZoomDetail {
+  if (!Number.isFinite(metrics.projectedDiameterVp) || !Number.isFinite(metrics.coverage)) {
+    return 'shell'
   }
-  if (metrics.innerUsableSizeVp >= EXPANDED_MIN_INNER_USABLE_VP) {
-    return 'expanded'
+  if (metrics.coverage >= INTERACTIVE_ENTER_COVERAGE) {
+    return 'interactive'
   }
-  return 'collapsed'
+  if (previousDetail === 'interactive' && metrics.coverage >= INTERACTIVE_EXIT_COVERAGE) {
+    return 'interactive'
+  }
+  if (metrics.projectedDiameterVp >= PREVIEW_MIN_DIAMETER_VP) {
+    return 'preview'
+  }
+  if (previousDetail === 'preview' && metrics.projectedDiameterVp >= PREVIEW_EXIT_DIAMETER_VP) {
+    return 'preview'
+  }
+  return 'shell'
 }
 
 /**
- * 带祖先折叠与焦点链判定的完整 LOD 求解。
+ * 带焦点链保底的完整档位求解。
+ *
+ * 焦点链上的 Embed 至少保底 preview：用户捏进去的那条链不能退化成空圆壳。
+ * 保底的只是"里面还有东西可看"，**不是形状**——它照样是同一颗正圆。
  *
  * @param metrics 该 Embed 的屏幕投影度量
  * @param embedScenePath 该 Embed 进入之后的 childScenePath 描述（**不是**所属父 Scene 的路径）
  * @param focusScenePath 当前视觉焦点的 scenePath 描述
- * @param ancestorCollapsed 祖先是否已经折叠（折叠后不创建任何后代 Scene）
- * @returns 视觉档位
+ * @param previousDetail 上一帧的档位（滞回用），首次渲染传 null
+ * @returns Deep Zoom 细节档位
  */
-export function resolveEmbedLodForScene(
+export function resolveEmbedDetailForScene(
   metrics: ProjectedEmbedMetrics,
   embedScenePath: string,
   focusScenePath: string,
-  ancestorCollapsed: boolean
-): EmbedLodMode {
-  if (ancestorCollapsed) {
-    return 'hidden'
+  previousDetail: DeepZoomDetail | null
+): DeepZoomDetail {
+  const detail: DeepZoomDetail = resolveDeepZoomDetail(metrics, previousDetail)
+  if (detail === 'shell' && isOnFocusChain(embedScenePath, focusScenePath)) {
+    return 'preview'
   }
-  if (isOnFocusChain(embedScenePath, focusScenePath)) {
-    return 'expanded'
-  }
-  return resolveEmbedLod(metrics)
+  return detail
 }
 
 // ─── 焦点候选与滞回 ───
@@ -413,7 +326,7 @@ export function resolveEmbedLodForScene(
 /**
  * 从候选里挑出"当前视觉焦点应该是谁"。
  *
- * 规则（#820）：
+ * 规则（#820 保留，#821 不改）：
  * 1. 圆心不在**进入窗口**（30% ~ 70%）的一律不看 —— 免得屏幕边缘那颗大圆抢走焦点；
  * 2. 窗口里多个候选时先取层级最深的那一个（用户往里钻得越深，越深那层是焦点），
  *    同层再按覆盖率从大到小；
@@ -458,7 +371,7 @@ export function shouldPromoteFocus(coverage: number): boolean {
  * - 圆心已经离开**保持窗口**（20% ~ 80%）：用户把相机拖走了，它根本不在看的东西里。
  *
  * 只看 coverage 会让"被拖出视口但仍然很大"的焦点永久赖着：
- * 那条已经看不见的链会被继续强制 expanded，LOD 参考根和用户实际在看的区域脱节。
+ * 那条已经看不见的链会被继续保底，焦点参考根和用户实际在看的区域脱节。
  *
  * @param candidate 当前焦点对应的完整候选（含覆盖率与圆心位置）
  * @returns true 表示应当退出焦点（退回父层）
@@ -521,7 +434,8 @@ function promotableCandidates(candidates: FocusCandidate[]): FocusCandidate[] {
  * - 每帧先从全树重选 winner、最后才判 demote，会让保持区间只在没有别的
  *   promotable 候选时才生效，深层焦点的滞回等于没有。
  *
- * 焦点只改变"显示参考根"：不改 Core、不新建页面、不换相机、不落盘。
+ * 焦点只改变"显示参考根"：不改 Core、不新建页面、不换相机、不落盘，
+ * 更不参与任何布局几何计算。
  *
  * @param currentFocusScenePath 当前视觉焦点的 scenePath 描述
  * @param candidates 候选 Embed 列表

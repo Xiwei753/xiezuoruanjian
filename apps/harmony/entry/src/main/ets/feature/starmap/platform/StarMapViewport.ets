@@ -34,7 +34,10 @@
 //
 // 3) 子 Scene 不是独立窗口，没有自己的平移相机。
 //    用户在任何一层空白处单指拖动，拖的都是**根的全局相机**（拖整张星图的视角），
-//    子 Scene 的 fitOffset 只有 fitView / syncFitToSceneSize 会写。
+//    子 Scene 的 fitOffset 只有 fitView 会写。
+//    #821 补充：子 Scene 的布局盒子恒为局部 DEFAULT_EMBED_DIAMETER（放大由父层
+//    `.scale()` 承担），所以 fitView 直接用 onAreaChange 报出来的局部尺寸，
+//    不再"除掉祖先累计比例"去还原——还原那一步已经没有任何东西可还原了。
 //
 // 4) 子星图里的对象不能被拖到圆外，也盖不住父圆的标题 / 边框。
 //    外层 Embed 有 clip(true)，圆外的内容会被直接裁掉，所以"移动节点 / 移动子星图"
@@ -125,11 +128,28 @@ export interface GlobalCameraTransform {
   offsetY: number
 }
 
-/** 相机比例下限。再小整棵树就糊成一点。 */
-export const CAMERA_SCALE_MIN: number = 0.3
+/**
+ * 相机比例下限（#821）。
+ *
+ * #820 取 0.3 是为了让"双指捏到最小"刚好还能认清一整棵树，属于拍出来的经验值；
+ * #821 放开到接近数值安全下界：局部适配比例已经能把深层内容保持成可辨认的尺寸，
+ * 相机只需要管视角，退得远一点是用户的正常需求（看全局结构），不该被硬顶住。
+ */
+export const CAMERA_SCALE_MIN: number = 1e-4
 
-/** 相机比例上限。再大就只能看到局部。 */
-export const CAMERA_SCALE_MAX: number = 3
+/**
+ * 相机比例上限（#821）。
+ *
+ * #820 取 3，真机上很快就会顶到、用户觉得"不能再放大"。
+ *
+ * #821 之所以敢放开到 1e5，是因为**放大不再靠撑大布局矩形**：
+ * 组件宽高恒为局部基准尺寸（Embed 恒为 DEFAULT_EMBED_DIAMETER），
+ * 放大只发生在 `.scale()` 显示变换上。旧模型下把上限调大就会让 RenderService
+ * 按 `baseSize * cameraScale` 去分配超大缓冲区，那才是真正会被顶死的原因。
+ *
+ * 1e5 是纯数值安全边界，不是产品上限：真正能放多大由用户手势和内容决定。
+ */
+export const CAMERA_SCALE_MAX: number = 1e5
 
 /** 把相机比例夹在合法区间内；非有限值或非正数一律退回 1。 */
 export function clampCameraScale(scale: number): number {
@@ -245,41 +265,6 @@ export function computeEmbedInnerContentSafeSide(
   return Math.max(0, innerSquare - EMBED_INTERACTION_SHELL_VP - Math.max(0, paddingVp) * 2)
 }
 
-/**
- * 把一段**局部长度**投影成屏幕侧长度（vp）。
- *
- * 星图里"这个 Embed 有多大"有两套数字混着：局部坐标（200 直径、24 标题带、
- * 160 节点宽……）和屏幕上的实际大小（用户捏合、逐层 local fit 之后的结果）。
- * #820 要求这两者之间只留**这一个**换算口，否则每个地方各乘一次 scale，
- * 早晚会有一处漏乘或多乘，表现为"画的是摘要卡、命中还按圆算"或者
- * "折叠阈值随层级漂移"。
- *
- * 坐标链（规范原话）：
- *   child local → 父 Embed local fit → … → root world → 全局相机 → 屏幕
- * 局部长度要变成屏幕长度，就得乘上**全部**祖先级的累计比例，
- * 也就是该长度所属 Scene 的 effectiveScale：
- *   `globalCameraScale × 所有祖先 EmbedLocalFitScale`
- * 这个值由 `ui/StarMapScene.viewportScaleValue()` 提供（子 Scene 是
- * `fitScale × parentScale()`，根 Scene 是 cameraScale）。
- *
- * 注意：这里**不含**某个 Embed 自己 child Scene 的 local fit。
- * 那是"圆壳里面的内容大小"，不是外壳大小；混进去会让每深一层外壳就小一截，
- * 折叠判定自我实现（越深越折叠）而再也展不开。
- *
- * @param localLength 局部坐标里的长度（vp）
- * @param ownerEffectiveScale 该长度所属 Scene 的累计有效比例
- * @returns 屏幕侧长度（vp）
- */
-export function projectLocalLengthToScreen(localLength: number, ownerEffectiveScale: number): number {
-  if (!isFinite(localLength)) {
-    return 0
-  }
-  if (!isFinite(ownerEffectiveScale) || ownerEffectiveScale <= 0) {
-    return localLength
-  }
-  return localLength * ownerEffectiveScale
-}
-
 /** fitScale 的下限。再小就完全看不见了，保留一点下限免得内容糊成一点。 */
 export const MIN_FIT_SCALE: number = 0.02
 
@@ -383,8 +368,8 @@ export function computeFittedViewport(
  * 用户显式移动节点 / 移动子星图时，把候选坐标限制在圆的内接正方形里，
  * **写进 Core 之前就夹好**，数据里不留圆外坐标。
  *
- * 坐标口径：全部是**本层局部数据**（即扣掉祖先累计比例之后的那一份，
- * 与 fitView / syncFitToSceneSize 同一口径），所以这里的 scale / offset
+ * 坐标口径：全部是**本层局部数据**（即该 Scene 自己的画布坐标，
+ * 与 fitView 同一口径），所以这里的 scale / offset
  * 就是本层的 fitScale / fitOffsetX / fitOffsetY。
  *
  * @param x item 画布坐标（左上角 X）

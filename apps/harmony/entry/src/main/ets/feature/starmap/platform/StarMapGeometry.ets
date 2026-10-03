@@ -2,9 +2,10 @@
 // 纯显示几何计算模块：节点矩形派生、命中测试、点到线段距离、边几何、坐标互转。
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 //
-// #820：Embed 有展开（正圆）与折叠（节点尺寸摘要卡）两副面孔，形状一律从
-// 显示矩形自己读出来（isCircularDisplayRect），所以命中、边端点、响应区
-// 和画出来的那一块永远是同一块几何；具体尺寸见 StarMapVisualLod.embedDisplayBoundsForLod。
+// #821：Embed **永远只有一副面孔** —— 那颗正圆（DEFAULT_EMBED_DIAMETER，
+// 半径 = 直径 / 2）。Deep Zoom 档位只决定圆里渲染多少细节，不改形状、
+// 不改 world bounds、不改 authored position，所以这里没有"按形状分支"的余地：
+// 命中、边端点、响应区和画出来的那一块永远是同一块几何，也永远只需要圆那一条路径。
 
 import {
   StarMapEdge,
@@ -244,39 +245,23 @@ export function pointInEmbedCircle(rect: PlatformNodeRect, x: number, y: number)
 }
 
 /**
- * 这个显示矩形是否要按**正圆**处理（#820）。
- *
- * Embed 有两副面孔（`embedDisplayBoundsForLod`）：
- * - 展开：正圆，宽高都等于直径、圆角 = 直径 / 2
- * - 折叠：和普通节点同尺寸的摘要卡（160×80、圆角 16）
- *
- * 形状不另开一个参数传进来，而是**从同一份显示边界读出来**（宽高相等且圆角盖满宽）。
- * 这样命中测试、边端点、响应区拿到的都是"画出来的那一个矩形"，
- * 不会出现"画的是摘要卡、命中和连线端点还按 200×200 的圆算"的错位（#820）。
- *
- * @param rect 显示矩形
- * @returns true 表示按圆处理
- */
-export function isCircularDisplayRect(rect: PlatformNodeRect): boolean {
-  return rect.width === rect.height && rect.radius * 2 >= rect.width
-}
-
-/**
  * 带 scene 作用域的命中测试。
  * 在现有 hitTest 基础上，返回包含 scene 路径、对象类型和命中区域的详细结果。
  *
  * 普通节点命中 → objectKind='node'，hitRegion='body'（矩形判断，与 Embed 无关）。
  *
- * Embed 折叠成摘要卡时（#820）是一张矩形：整块热区 → objectKind='embed'、hitRegion='body'，
- * 也就是"点它选中这个子星图"，不再往里递归——摘要卡里并没有 child Scene。
- *
- * Embed 展开时是正圆，所以命中判断先走圆：(x-cx)^2 + (y-cy)^2 <= r^2，不在圆内直接跳过该 Embed。
+ * Embed **永远是圆**（#821），所以命中判断先走圆：(x-cx)^2 + (y-cy)^2 <= r^2，
+ * 不在圆内直接跳过该 Embed。
  * 圆内再区分：
  * - title（顶部标题带）→ objectKind='embedTitle'，表示"选中 Embed"
  * - border（半径方向最外侧的圆环）→ objectKind='embedBorder'，表示"选中 Embed"
  *   标题带与圆环的屏幕侧规格固定是 EMBED_TITLE_HIT_HEIGHT / EMBED_BORDER_HIT_WIDTH，
  *   由 embedHitMetricsForScene 按本 Scene 累计比例换算成画布坐标（#818 复审）
  * - innerContent（其余圆内区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
+ *
+ * 注意命中路径和 Deep Zoom 档位**无关**（#821）：preview / shell 档位下圆里并没有
+ * 真实 child Scene 组件，但几何层的形状与热区完全一致，命中结果不因为"现在没渲染
+ * 交互组件"而变松或变紧。是否真的把触摸交给内部预览，是 ui 层的事。
  *
  * @param rects 节点矩形列表
  * @param screenX 屏幕 X 坐标
@@ -301,22 +286,7 @@ export function hitTestWithScene(
     const isEmbed: boolean = embedInstanceIds.has(r.nodeId)
 
     if (isEmbed) {
-      // Embed 折叠成摘要卡时是一张矩形（#820）：整块热区都属于这个 Embed，
-      // 点它就是"选中这个子星图"，不再往内递归（摘要卡里没有 child Scene）。
-      if (!isCircularDisplayRect(r)) {
-        if (screenX >= r.x && screenX <= r.x + r.width &&
-          screenY >= r.y && screenY <= r.y + r.height) {
-          return {
-            scenePath: scenePath,
-            objectKind: 'embed',
-            objectId: r.nodeId,
-            hitRegion: 'body'
-          }
-        }
-        continue
-      }
-
-      // 展开态 Embed 是圆：先做圆内判断，不在圆内不算命中，继续看更下层的 rect
+      // Embed 永远是正圆（#821）：先做圆内判断，不在圆内不算命中，继续看更下层的 rect
       if (!pointInEmbedCircle(r, screenX, screenY)) {
         continue
       }
@@ -629,15 +599,16 @@ export function lineCircleIntersection(
 
 /**
  * 计算单个端点所在形状的边界交点。
- * 普通节点和**折叠态 Embed** 是矩形，**展开态 Embed** 是正圆，不能共用一套边界算法。
+ * 普通节点是矩形，**Embed 永远是正圆**（#821），两者不能共用一套边界算法。
  *
- * 形状同样从显示矩形自己读出来（isCircularDisplayRect），所以 Embed 折叠时连线端点
- * 会贴到摘要卡的矩形边上，而不是贴到它已经不存在的圆周上（#820）。
+ * #821 之前 Embed 要先读形状再决定走圆还是走矩形；现在 Embed 只有圆这一种形状，
+ * 分支直接判 `isEmbed` 就行。Deep Zoom 掉档不会改变这里的边界算法 ——
+ * 连线端点永远贴在用户看得见的那圈圆周上。
  *
  * 这是端点几何的唯一入口：正式边的渲染端点和拉线时的预览端点都必须走它，
  * 否则会出现"预览从圆心出发、松手后正式边却贴在圆周"的跳变（Issue #813 复审）。
  *
- * @param rect 端点所在的矩形（展开态 Embed 时宽高相等）
+ * @param rect 端点所在的矩形（Embed 时宽高相等、半径 = 宽 / 2）
  * @param isEmbed 该端点是否为 Embed
  * @param tx 另一个端点的目标 X（画布坐标；普通节点可传目标中心）
  * @param ty 另一个端点的目标 Y（画布坐标；普通节点可传目标中心）
@@ -651,7 +622,7 @@ export function edgeEndpointBoundaryPoint(
 ): PlatformPoint {
   const cx: number = rect.x + rect.width / 2
   const cy: number = rect.y + rect.height / 2
-  if (isEmbed && isCircularDisplayRect(rect)) {
+  if (isEmbed) {
     return lineCircleIntersection(cx, cy, rect.width / 2, tx, ty)
   }
   return lineRectIntersection(cx, cy, tx, ty, rect.x, rect.y, rect.width, rect.height)
@@ -1227,8 +1198,8 @@ function collectEmbedFocusProbesInScene(
       continue
     }
     // 本 Scene 画布几何的中心 → 本 Scene 局部屏幕 → 根 Scene 屏幕。
-    // 折叠态 Embed 的 rect 已经是摘要卡尺寸（见 embedDisplayBoundsForLod），
-    // 圆心仍然是同一块几何的中心，所以这里不用再分档。
+    // #821：Embed 的 rect 尺寸恒定（DEFAULT_EMBED_DIAMETER 的正圆），
+    // 圆心就是 rect 的中心，这里没有任何档位分支。
     const localCenterX: number = rect.x + rect.width / 2
     const localCenterY: number = rect.y + rect.height / 2
     const localScreen: PlatformPoint = canvasToScreen(
@@ -1260,7 +1231,7 @@ function collectEmbedFocusProbesInScene(
  *
  * 这一步只回答一个问题：**这个点在 Embed 那个盒子里偏到哪儿了**。
  * 答案完全由父层的显示几何决定——盒子大小是 `DEFAULT_EMBED_DIAMETER * parent.scale`，
- * 盒子左上角是 `embedRect.origin * parent.scale`（见 ui/StarMapScene.getEmbedScreenX），
+ * 盒子左上角是 `embedRect.origin * parent.scale`（见 ui/StarMapScene.getEmbedBoxX 换算到累计坐标），
  * 所以先扣掉 Embed 矩形原点、再乘父层 scale，就是子组件的局部屏幕坐标。
  *
  * **这里绝对不能碰 child.scale / child.offset。** 子视口会在下一步
