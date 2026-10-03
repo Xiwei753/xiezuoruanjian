@@ -9,8 +9,10 @@
 //   panX / panY / zoomLevel 只在这里存在，WheelHandler / PinchHandler /
 //   触屏 +/- 按钮也只在这里。鼠标停在任意深度的节点、子星图、孙星图上，
 //   滚轮和捏合都调同一个 zoomAround()，只改根 zoomLevel/panX/panY。
-//   子星图"看起来更大/更小"是纯视觉 LOD，由 StarMapEmbed.visualScale
-//   根据父层传来的 globalZoom/depth/屏幕投影尺寸决定，绝不反写全局相机。
+//   子星图"看起来更大/更小"是 Deep Zoom 显示档位：每层内容做 local fit，
+//   ownerEffectiveScale = globalZoom × 祖先 local fit，再用投影覆盖率决定
+//   子内容是完整交互 / 轻量 preview / 只留外壳。档位绝不反写全局相机，
+//   也不改 Embed 的 world 几何（见 StarMapEmbed / docs/starmap_viewport.md）。
 //
 //   递归的是"内容"不是"视口"：根层内容由 StarMapSceneContent 渲染，
 //   子星图内容在 Embed 内部懒加载下一层 StarMapSceneContent。
@@ -227,35 +229,41 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // 根层内容：整棵递归树的入口。
-    // 相机作用在这一个 Item 上（x/y/scale），子层内容全部在它的局部坐标里。
+    // 相机层 + 根层内容：整棵递归树的入口。
+    // 相机平移/缩放只存在于 cameraLayer 这一张 Item 上（x/y/scale），
+    // rootContent 只用 anchors.fill 占满相机层，绝不自己再拿 x/y 当平移 ——
+    // 一个 Item 上不能同时有 anchors 和相机两套几何来源。
     // ---------------------------------------------------------------------------
-    StarMapSceneContent {
-        id: rootContent
-        anchors.fill: parent
-        dt: canvasArea.dt
-        rootStarmapId: canvasArea.starmapId
-        pathSegments: []
-        // Issue #822: 根层显式传 "root"，不再由默认值冒名顶替。
-        scenePathKey: "root"
-        starmapBackendRef: canvasArea.starmapBackendRef
-        selectionController: canvasArea.selectionController
-        interactionController: canvasArea.sharedInteraction
-        globalZoom: canvasArea.zoomLevel
-        depth: 0
-        rootContent: rootContent
-        viewportRect: canvasArea.viewportSceneRect
-        menuHost: canvasArea
-
-        // 相机变换只发生在这里这一张 Item 上。
+    Item {
+        id: cameraLayer
         x: canvasArea.panX
         y: canvasArea.panY
+        width: canvasArea.width
+        height: canvasArea.height
         scale: canvasArea.zoomLevel
         transformOrigin: Item.TopLeft
 
-        onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
-        onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
-        onSelectionCleared: canvasArea.selectionCleared()
+        StarMapSceneContent {
+            id: rootContent
+            anchors.fill: parent
+            dt: canvasArea.dt
+            rootStarmapId: canvasArea.starmapId
+            pathSegments: []
+            // Issue #822: 根层显式传 "root"，不再由默认值冒名顶替。
+            scenePathKey: "root"
+            starmapBackendRef: canvasArea.starmapBackendRef
+            selectionController: canvasArea.selectionController
+            interactionController: canvasArea.sharedInteraction
+            globalZoom: canvasArea.zoomLevel
+            depth: 0
+            rootContent: rootContent
+            rootViewportRect: canvasArea.viewportSceneRect
+            menuHost: canvasArea
+
+            onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
+            onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
+            onSelectionCleared: canvasArea.selectionCleared()
+        }
     }
 
     // Issue #822: 整棵递归树共享的选中状态控制器，由 Workspace 创建并传入。

@@ -112,13 +112,9 @@ Item {
             root.titleCommitted(next)
     }
 
-    // DragHandler 的 activeTranslation 是 Qt scene 坐标增量，
-    // 换算成同一坐标系的增量再上抛，归属层统一做 scene→局部换算。
-    function sceneDelta(dx, dy) {
-        var origin = root.mapFromItem(null, 0, 0)
-        var point = root.mapFromItem(null, dx, dy)
-        return { x: point.x - origin.x, y: point.y - origin.y }
-    }
+    // 注意：DragHandler.activeTranslation 是 Qt scene 坐标增量。
+    // 这里只上抛原始增量，Qt scene → 本层 local 的换算由归属层
+    // StarMapSceneContent 统一做一次，delegate 不再各自换算。
 
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
@@ -263,11 +259,11 @@ Item {
         }
 
         onActiveTranslationChanged: {
-            var d = root.sceneDelta(activeTranslation.x - lastTx,
-                                    activeTranslation.y - lastTy)
+            var dx = activeTranslation.x - lastTx
+            var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
-            root.moveDelta(d.x, d.y)
+            root.moveDelta(dx, dy)
         }
     }
 

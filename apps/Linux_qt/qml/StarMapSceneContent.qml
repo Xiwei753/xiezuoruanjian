@@ -8,18 +8,28 @@
 // Issue #822：整棵星图只有一个全局 viewport/camera。
 //   panX / panY / zoomLevel 只存在于根 StarMapCanvas；WheelHandler / PinchHandler
 //   也只存在于根 Canvas。本文件是纯内容容器，不含任何相机属性或相机手势。
-//   子星图"看起来更大/更小"只是视觉 LOD（visualScale），由父层根据
-//   globalZoom + depth + 屏幕投影尺寸算出来；本文件不能反写全局相机，
+//   子星图显示多少细节是 Deep Zoom 档位：ownerEffectiveScale = 全局相机 ×
+//   祖先 local fit，coverage = 投影尺寸 / 根视口短边，档位只决定子内容渲染
+//   完整交互还是轻量 preview；本文件不能反写全局相机，
 //   也不能产生自己可独立修改的 zoomLevel。
 //
 // 坐标约定：
-//   - 本层局部坐标 = 该层星图的 world 坐标，节点/连线都画在这里。
+//   - 本层局部坐标 = 该层星图的 world 坐标，节点/连线都画在 worldLayer 里。
+//     每层内容做一次 local fit（worldLayer 的 x/y/scale），只改显示，不改
+//     authored position。
 //   - scene 坐标 = 根 Content 的局部坐标（整棵递归树的顶层 world 坐标）。
-//     sceneToLocal / localToScene / sceneDeltaToLocal 由 sceneOrigin + sceneScale
-//     显式换算，sceneScale 由父 Embed 累积传下来，不依赖 mapToItem，
-//     避免和 wobble 视觉偏移耦合。
+//     sceneToLocal / localToScene 一律用 Qt 真实 Item 映射
+//     （worldLayer.mapFromItem/mapToItem(rootContent)）换算：contentViewport 的
+//     边框偏移、每层 local fit、祖先位置全部自动进入同一条坐标链，
+//     不再手工维护 sceneOrigin/sceneScale 矩阵。
 //   - Qt scene 坐标（QQuickWindow 坐标）只出现在 delegate 上抛的信号里，
 //     进来立刻用 mapFromItem 换算掉，不往状态机里存。
+//
+// 渲染档位（Deep Zoom，见 docs/starmap_viewport.md）：
+//   interactive — 完整节点/Embed delegate，可命中、可编辑、可继续递归
+//   preview     — 只画一张静态投影 Canvas：有形状和颜色，没有交互组件，
+//                 也不再往里递归；只回答"里面大概有什么"
+//   档位只改渲染细节，不改 authored position / world bounds / Embed 外壳几何。
 //
 // 递归命中测试：
 //   hitTargetAtScene(sceneX, sceneY) 先查本层节点 / Embed chrome；落在 Embed
@@ -49,66 +59,169 @@ Item {
     required property var starmapBackendRef
     required property var selectionController
     required property var interactionController
-    required property real globalZoom
+    // 全局相机比例：只对根层（depth 0）有意义，由根 Canvas 绑定注入。
+    // 子层不复制这个标量，有效比例沿 ownerSceneContent 链现算。
+    property real globalZoom: 1.0
     required property int depth
 
     // 根层由根 Canvas 指向自己，子层由父 Embed 原样传下来。
     property var rootContent: null
     // 菜单宿主（根 Canvas）。子层直接回调它，不需要把信号逐层冒泡。
     property var menuHost: null
+    // 本层内容所属的父 SceneContent（根层为 null）。
+    // 子层有效比例 = 本层 local fit × ownerSceneContent.effectiveScale，
+    // 沿链现读，不复制标量：相机或祖先 fit 变化后不会拿到过期值。
+    property var ownerSceneContent: null
 
-    // scene 坐标 → 本层局部坐标 的原点与比例。根层是 (0,0) / 1。
-    property real sceneOriginX: 0
-    property real sceneOriginY: 0
-    property real sceneScale: 1.0
+    // 渲染档位（由父 Embed 的 Deep Zoom 判定传入）：interactive / preview。
+    // 根层永远是 interactive。
+    property string renderDetail: "interactive"
 
-    // 当前可见区域（scene 坐标矩形），根层由 Canvas 按相机算出，逐层原样传下去。
-    property var viewportRect: ({ x: 0, y: 0, width: 0, height: 0 })
+    // 根视口可见区域（scene 坐标）：根层由 Canvas 按全局相机绑定注入；
+    // 子层沿 ownerSceneContent 链读同一份，不复制。
+    property var rootViewportRect: ({ x: 0, y: 0, width: 0, height: 0 })
+    readonly property var viewportRect: ownerSceneContent
+            ? ownerSceneContent.viewportRect
+            : rootViewportRect
+
+    // 根视口短边（屏幕像素）：coverage 的分母。根内容铺满全局视口，
+    // 根 Content 自己的宽高就是视口尺寸。
+    readonly property real viewportShortSide: {
+        var w = rootContent ? rootContent.width : width
+        var h = rootContent ? rootContent.height : height
+        return (w > 0 && h > 0) ? Math.min(w, h) : 0
+    }
+
+    // 本 Scene 的累计有效比例（屏幕口径）：根层是全局相机，
+    // 子层是 local fit × 祖先累计。Deep Zoom 的 coverage 只读这一份，
+    // 命中/渲染仍走真实 Item transform（见 sceneToLocal/localToScene）。
+    readonly property real effectiveScale: {
+        if (depth === 0)
+            return globalZoom
+        var inherited = ownerSceneContent ? ownerSceneContent.effectiveScale : 1
+        if (!(inherited > 0))
+            inherited = 1
+        return localFitScale * inherited
+    }
 
     readonly property color _accent: dt.accent
+    readonly property color _accentSoft: dt.accentSoft
     readonly property color _border: dt.border
     readonly property color _error: dt.error
     readonly property color _surfaceContainer: dt.surfaceContainer
     readonly property color _textPrimary: dt.textPrimary
     readonly property color _textMuted: dt.textMuted
+    readonly property int _radiusSm: dt.radiusSm
 
     // ── 路径解析 ──
     // 解析出的本层星图 ID 只属于这块 Content，不能写回上层。
     property string finalStarmapId: ""
     property string resolveError: ""
 
+    // ── 坐标换算：只认 Qt 真实 Item 映射 ──
+    // scene 坐标 = 根 Content 局部坐标；本层局部坐标 = worldLayer 里的 authored
+    // 坐标。contentViewport 的边框偏移（6/24）、每层 local fit、祖先 Embed 的
+    // 实际变换都在 mapFromItem/mapToItem 里自动算完，不再手工维护矩阵。
     function sceneToLocal(sceneX, sceneY) {
-        var s = sceneScale > 0 ? sceneScale : 1
-        return { x: (sceneX - sceneOriginX) / s, y: (sceneY - sceneOriginY) / s }
+        return worldLayer.mapFromItem(rootContent, sceneX, sceneY)
     }
-    function localToScene(lx, ly) {
-        var s = sceneScale > 0 ? sceneScale : 1
-        return { x: sceneOriginX + lx * s, y: sceneOriginY + ly * s }
-    }
-    // scene 坐标增量 → 本层局部坐标增量。
-    function sceneDeltaToLocal(dx, dy) {
-        var s = sceneScale > 0 ? sceneScale : 1
-        return { x: dx / s, y: dy / s }
-    }
-    // 本层局部坐标增量 → scene 坐标增量（sceneDeltaToLocal 的逆）。
-    function localDeltaToScene(dx, dy) {
-        var s = sceneScale > 0 ? sceneScale : 1
-        return { x: dx * s, y: dy * s }
+    function localToScene(localX, localY) {
+        return worldLayer.mapToItem(rootContent, localX, localY)
     }
 
-    // Qt scene（窗口）坐标 → 本层局部坐标。
-    // 用 mapFromItem 而不是手算比例：祖先链上的累积缩放一次算完。
-    function qtSceneToLocal(qx, qy) {
-        return content.mapFromItem(null, qx, qy)
-    }
-
-    // Qt scene 坐标增量 → 本层局部坐标增量。
-    // mapFromItem 只能映射点，不能映射增量；用 (0,0) 的自身位置做差，
-    // 顺带把 wobble 那种纯平移的视觉偏移抵消掉。
+    // Qt scene（窗口）坐标增量 → 本层局部坐标增量。
+    // mapFromItem 只能映射点，不能映射增量；映射两个点再相减。
+    // 这是整条手势链上唯一一次 Qt scene → 本层 local 的换算。
     function qtSceneDeltaToLocal(dx, dy) {
-        var origin = content.mapFromItem(null, 0, 0)
-        var point = content.mapFromItem(null, dx, dy)
+        var origin = worldLayer.mapFromItem(null, 0, 0)
+        var point = worldLayer.mapFromItem(null, dx, dy)
         return { x: point.x - origin.x, y: point.y - origin.y }
+    }
+
+    // ── 每层 local fit（只改显示，不改 authored position）──
+    // fit 比例由本层内容包围盒 + 本层容器（根是视口，子是 Embed 内容区）算出；
+    // 根层是相机本体，不做 fit（全局相机就是它的显示变换）。
+    // 留白与 Harmony 的 STARMAP_EMBED_FIT_PADDING_VP 同值，跨平台同一个适配口径。
+    readonly property real _fitPadding: 8
+    readonly property real _minFitScale: 0.02
+    readonly property real _maxFitScale: 4.0
+
+    readonly property var contentBounds: {
+        var minX = 0
+        var minY = 0
+        var maxX = 0
+        var maxY = 0
+        var hasContent = false
+        var i
+        var nodes = graphController.nodesModel
+        for (i = 0; i < nodes.length; i++) {
+            var n = nodes[i]
+            if (!hasContent) {
+                minX = n.x; minY = n.y
+                maxX = n.x + n.width; maxY = n.y + n.height
+                hasContent = true
+            } else {
+                minX = Math.min(minX, n.x); minY = Math.min(minY, n.y)
+                maxX = Math.max(maxX, n.x + n.width); maxY = Math.max(maxY, n.y + n.height)
+            }
+        }
+        var embeds = graphController.embedsModel
+        for (i = 0; i < embeds.length; i++) {
+            var e = embeds[i]
+            if (!hasContent) {
+                minX = e.x; minY = e.y
+                maxX = e.x + e.width; maxY = e.y + e.height
+                hasContent = true
+            } else {
+                minX = Math.min(minX, e.x); minY = Math.min(minY, e.y)
+                maxX = Math.max(maxX, e.x + e.width); maxY = Math.max(maxY, e.y + e.height)
+            }
+        }
+        if (!hasContent)
+            return null
+        return { minX: minX, minY: minY, maxX: maxX, maxY: maxY,
+                 width: maxX - minX, height: maxY - minY }
+    }
+
+    readonly property real localFitScale: {
+        if (depth === 0)
+            return 1.0
+        var b = contentBounds
+        if (!b || b.width <= 0 || b.height <= 0)
+            return 1.0
+        var usableW = Math.max(1, content.width - _fitPadding * 2)
+        var usableH = Math.max(1, content.height - _fitPadding * 2)
+        var raw = Math.min(usableW / b.width, usableH / b.height)
+        if (!isFinite(raw) || raw <= 0)
+            return _minFitScale
+        return Math.max(_minFitScale, Math.min(_maxFitScale, raw))
+    }
+    readonly property real localFitOffsetX: {
+        if (depth === 0)
+            return 0
+        var b = contentBounds
+        if (!b)
+            return 0
+        return content.width / 2 - (b.minX + b.maxX) / 2 * localFitScale
+    }
+    readonly property real localFitOffsetY: {
+        if (depth === 0)
+            return 0
+        var b = contentBounds
+        if (!b)
+            return 0
+        return content.height / 2 - (b.minY + b.maxY) / 2 * localFitScale
+    }
+
+    // 本层局部适配或尺寸变化：子 Embed 据此重算懒加载裁剪。
+    signal transformChanged()
+    onLocalFitScaleChanged: transformChanged()
+    onWidthChanged: transformChanged()
+    onHeightChanged: transformChanged()
+    Connections {
+        // 祖先链任何一层的 fit 变化都会平移本层在 scene 坐标里的位置。
+        target: content.ownerSceneContent
+        function onTransformChanged() { content.transformChanged() }
     }
 
     function resolvePath() {
@@ -237,6 +350,10 @@ Item {
     function hitTargetAtScene(sceneX, sceneY) {
         if (finalStarmapId === "")
             return null
+        // preview 档只回答"里面有什么"，不参与命中：返回 null，让父层把这个
+        // 区域当作还没进入交互的子内容区（childContent），而不是假装命中节点。
+        if (renderDetail !== "interactive")
+            return null
         var p = sceneToLocal(sceneX, sceneY)
 
         var node = graphController.findNodeAt(p.x, p.y)
@@ -361,8 +478,8 @@ Item {
     function onItemPressed(kind, id, targetPath, qtSceneX, qtSceneY) {
         if (!interactionController)
             return
-        var lp = qtSceneToLocal(qtSceneX, qtSceneY)
-        var sp = localToScene(lp.x, lp.y)
+        // Qt scene（窗口）坐标 → scene 坐标，一次 mapFromItem 到位。
+        var sp = rootContent.mapFromItem(null, qtSceneX, qtSceneY)
         interactionController.beginPress(kind, id, targetPath, scenePathKey, sp.x, sp.y)
     }
 
@@ -438,7 +555,8 @@ Item {
                 || ic.moveScenePathKey === scenePathKey
     }
 
-    // 触屏拖动位移：由根 Canvas 的触屏 DragHandler 驱动。
+    // 拖动位移：delegate 只上抛原始 activeTranslation 增量（Qt scene 坐标），
+    // 所有 Qt scene → 本层 local 的换算只在这里做一次。
     // 手指起点可能在任意深层的节点上，归属层不一定是根层，
     // 所以从根开始往下找到真正的归属层，返回 true 表示已消费。
     function onSceneDragDelta(dxQtScene, dyQtScene) {
@@ -458,30 +576,32 @@ Item {
             }
             return false
         }
-        var localDelta = qtSceneDeltaToLocal(dxQtScene, dyQtScene)
-        var sceneDelta = localDeltaToScene(localDelta.x, localDelta.y)
 
         // Issue #822: 按下仲裁 —— 先超拖动阈值转 move，先到长按时间转 connect。
+        // noteDragDelta 吃原始 Qt scene 像素，阈值才是屏幕口径，不随全局缩放变形。
         if (ic.pointerMode === "pressPending") {
-            ic.noteDragDelta(sceneDelta.x, sceneDelta.y)
+            ic.noteDragDelta(dxQtScene, dyQtScene)
             if (ic.pressDragDistance >= ic.dragThreshold)
                 promoteToMove(ic.pressKind, ic.pressId)
             return true
         }
         if (ic.pointerMode === "move") {
+            var localDelta = qtSceneDeltaToLocal(dxQtScene, dyQtScene)
             ic.updateMove(ic.moveX + localDelta.x, ic.moveY + localDelta.y)
             return true
         }
         if (ic.pointerMode === "contextPending") {
-            ic.connectMouseX += sceneDelta.x
-            ic.connectMouseY += sceneDelta.y
-            var tdx = ic.connectMouseX - ic.connectFromSceneX
-            var tdy = ic.connectMouseY - ic.connectFromSceneY
-            if (Math.sqrt(tdx * tdx + tdy * tdy) > ic.moveThreshold)
+            // 长按后拖动：connect 端点存 scene 坐标，原始 Qt scene 增量直接累加；
+            // 转 connect 的阈值同样吃原始像素，与鼠标仲裁同一口径。
+            ic.connectMouseX += dxQtScene
+            ic.connectMouseY += dyQtScene
+            ic.noteDragDelta(dxQtScene, dyQtScene)
+            if (ic.pressDragDistance > ic.moveThreshold)
                 ic.contextPendingToConnect()
             return true
         }
-        ic.updateConnect(ic.connectMouseX + sceneDelta.x, ic.connectMouseY + sceneDelta.y)
+        // connect：预览线终点是 scene 坐标，原始 Qt scene 增量直接累加。
+        ic.updateConnect(ic.connectMouseX + dxQtScene, ic.connectMouseY + dyQtScene)
         return true
     }
 
@@ -682,6 +802,7 @@ Item {
     function refreshEdges() {
         graphController.computeEdgeRenders(currentMoveOverride())
         edgeCanvas.requestPaint()
+        previewCanvas.requestPaint()
     }
 
     // 整棵递归树回到 canonical 连线位置（切图/失焦/reset 时用）。
@@ -714,199 +835,261 @@ Item {
         starmapBackendRef.record_interaction(event, scenePathKey, finalStarmapId, itemKind, itemId, fj)
     }
 
-    // ── 本层连线 ──
-    Canvas {
-        id: edgeCanvas
-        anchors.fill: parent
-        z: 0
+    // 本层局部适配变化时，preview 静态投影也要重画。
+    onRenderDetailChanged: previewCanvas.requestPaint()
 
-        Connections {
-            target: content.selectionController
-            function onScenePathKeyChanged() { edgeCanvas.requestPaint() }
-            function onKindChanged() { edgeCanvas.requestPaint() }
-            function onItemIdChanged() { edgeCanvas.requestPaint() }
-        }
+    // ── 本层内容：worldLayer 承载每层 local fit ──
+    // 显示变换（x/y/scale）只在这一层；节点/连线仍然用 authored 坐标摆放。
+    // 根层是相机本体，fit 恒等；子层 fit 由内容包围盒 + 本层容器算出。
+    Item {
+        id: worldLayer
+        width: content.width
+        height: content.height
+        x: content.localFitOffsetX
+        y: content.localFitOffsetY
+        scale: content.localFitScale
+        transformOrigin: Item.TopLeft
 
-        onPaint: {
-            var ctx = getContext("2d")
-            ctx.clearRect(0, 0, width, height)
-            ctx.lineWidth = 2
-            var renders = graphController.edgeRenders
-            for (var i = 0; i < renders.length; i++) {
-                var r = renders[i]
-                var edge = null
-                for (var ei = 0; ei < graphController.edgesModel.length; ei++) {
-                    if (graphController.edgesModel[ei].id === r.edgeId) {
-                        edge = graphController.edgesModel[ei]
-                        break
+        // ── 本层连线 ──
+        Canvas {
+            id: edgeCanvas
+            anchors.fill: parent
+            visible: content.renderDetail !== "preview"
+            z: 0
+
+            Connections {
+                target: content.selectionController
+                function onScenePathKeyChanged() { edgeCanvas.requestPaint() }
+                function onKindChanged() { edgeCanvas.requestPaint() }
+                function onItemIdChanged() { edgeCanvas.requestPaint() }
+            }
+
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                ctx.lineWidth = 2
+                var renders = graphController.edgeRenders
+                for (var i = 0; i < renders.length; i++) {
+                    var r = renders[i]
+                    var edge = null
+                    for (var ei = 0; ei < graphController.edgesModel.length; ei++) {
+                        if (graphController.edgesModel[ei].id === r.edgeId) {
+                            edge = graphController.edgesModel[ei]
+                            break
+                        }
+                    }
+                    if (!edge)
+                        continue
+                    var edgeSelected = selectionController
+                            ? selectionController.matches(scenePathKey, "edge", edge.id)
+                            : false
+                    var color = edgeSelected ? _accent : _border
+
+                    ctx.beginPath()
+                    ctx.moveTo(r.startX, r.startY)
+                    ctx.lineTo(r.endX, r.endY)
+                    ctx.strokeStyle = color
+                    ctx.stroke()
+
+                    ctx.beginPath()
+                    ctx.moveTo(r.arrowTipX, r.arrowTipY)
+                    ctx.lineTo(r.arrowLeftX, r.arrowLeftY)
+                    ctx.lineTo(r.arrowRightX, r.arrowRightY)
+                    ctx.closePath()
+                    ctx.fillStyle = color
+                    ctx.fill()
+
+                    if (edge.label) {
+                        ctx.fillStyle = _surfaceContainer
+                        var tw = ctx.measureText(edge.label).width
+                        ctx.fillRect(r.labelX - tw / 2 - 4, r.labelY - 10, tw + 8, 20)
+                        ctx.fillStyle = _textPrimary
+                        ctx.font = "12px sans-serif"
+                        ctx.textAlign = "center"
+                        ctx.textBaseline = "middle"
+                        ctx.fillText(edge.label, r.labelX, r.labelY)
                     }
                 }
-                if (!edge)
-                    continue
-                var edgeSelected = selectionController
-                        ? selectionController.matches(scenePathKey, "edge", edge.id)
-                        : false
-                var color = edgeSelected ? _accent : _border
-
-                ctx.beginPath()
-                ctx.moveTo(r.startX, r.startY)
-                ctx.lineTo(r.endX, r.endY)
-                ctx.strokeStyle = color
-                ctx.stroke()
-
-                ctx.beginPath()
-                ctx.moveTo(r.arrowTipX, r.arrowTipY)
-                ctx.lineTo(r.arrowLeftX, r.arrowLeftY)
-                ctx.lineTo(r.arrowRightX, r.arrowRightY)
-                ctx.closePath()
-                ctx.fillStyle = color
-                ctx.fill()
-
-                if (edge.label) {
-                    ctx.fillStyle = _surfaceContainer
-                    var tw = ctx.measureText(edge.label).width
-                    ctx.fillRect(r.labelX - tw / 2 - 4, r.labelY - 10, tw + 8, 20)
-                    ctx.fillStyle = _textPrimary
-                    ctx.font = "12px sans-serif"
-                    ctx.textAlign = "center"
-                    ctx.textBaseline = "middle"
-                    ctx.fillText(edge.label, r.labelX, r.labelY)
-                }
             }
         }
-    }
 
-    // ── 本层节点与子星图 ──
-    Item {
-        id: nodeLayer
-        anchors.fill: parent
-        z: 1
+        // ── preview 档的静态投影 ──
+        // 和 interactive 档是同一张图：节点/子星图还是本层的矩形和同一套颜色，
+        // 只省掉交互组件和文字。投影太小时不挂任何手势，也不往里递归。
+        Canvas {
+            id: previewCanvas
+            anchors.fill: parent
+            visible: content.renderDetail === "preview"
+            z: 2
 
-        Repeater {
-            id: nodeRepeater
-            model: graphController.nodesModel
-            delegate: StarMapNode {
-                required property var modelData
-                required property int index
-                dt: content.dt
-                property var nodeData: modelData
-                readonly property string nodeId: nodeData.id
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
 
-                // 本层局部坐标，不再经过 worldToScreen：相机在祖先 Content 上。
-                x: content.isMovingNode(nodeData.id) ? content.interactionController.moveX : nodeData.x
-                y: content.isMovingNode(nodeData.id) ? content.interactionController.moveY : nodeData.y
-                width: nodeData.width
-                height: nodeData.height
-                title: nodeData.title
-                isSelected: content.selectionController
-                        ? content.selectionController.matches(content.scenePathKey, "node", nodeData.id)
-                        : false
-                wobbleIndex: index
-
-                onMouseInteracted: {
-                    if (content.menuHost) content.menuHost.noteMouseInteracted()
+                // 和 interactive 档同一种形状：圆角矩形（半径取同一个 token）。
+                function roundedRectPath(x, y, w, h, radius) {
+                    var rr = Math.max(0, Math.min(radius, w / 2, h / 2))
+                    ctx.beginPath()
+                    ctx.moveTo(x + rr, y)
+                    ctx.lineTo(x + w - rr, y)
+                    ctx.arcTo(x + w, y, x + w, y + rr, rr)
+                    ctx.lineTo(x + w, y + h - rr)
+                    ctx.arcTo(x + w, y + h, x + w - rr, y + h, rr)
+                    ctx.lineTo(x + rr, y + h)
+                    ctx.arcTo(x, y + h, x, y + h - rr, rr)
+                    ctx.lineTo(x, y + rr)
+                    ctx.arcTo(x, y, x + rr, y, rr)
+                    ctx.closePath()
                 }
 
-                // 鼠标按下只登记归属（pressPending），不决定 move 还是 connect。
-                onItemPressed: function(qx, qy) {
-                    content.onItemPressed("node", nodeData.id, content.nodePath(nodeData.id), qx, qy)
+                var renders = graphController.edgeRenders
+                ctx.lineWidth = 2
+                ctx.strokeStyle = content._border
+                for (var i = 0; i < renders.length; i++) {
+                    var r = renders[i]
+                    ctx.beginPath()
+                    ctx.moveTo(r.startX, r.startY)
+                    ctx.lineTo(r.endX, r.endY)
+                    ctx.stroke()
                 }
 
-                onTouchLongPressed: {
-                    content.onItemTouchLongPressed("node", nodeData.id, content.nodePath(nodeData.id))
+                var embeds = graphController.embedsModel
+                for (var j = 0; j < embeds.length; j++) {
+                    var e = embeds[j]
+                    roundedRectPath(e.x, e.y, e.width, e.height, content._radiusSm)
+                    ctx.fillStyle = content._accentSoft
+                    ctx.strokeStyle = content._border
+                    ctx.fill()
+                    ctx.stroke()
                 }
 
-                onMoveDelta: function(dx, dy) {
-                    content.onItemDragDelta("node", nodeData.id, dx, dy)
-                }
-
-                onLeftReleased: content.releaseOwnerGesture()
-
-                // Issue #822：节点自身就是编辑器，双击直接把光标放进节点框。
-                onDoubleClicked: content.beginInlineEdit(nodeData.id)
-
-                onTitleCommitted: function(newTitle) {
-                    content.commitNodeTitle(nodeData.id, newTitle)
+                var nodes = graphController.nodesModel
+                for (var k = 0; k < nodes.length; k++) {
+                    var n = nodes[k]
+                    roundedRectPath(n.x, n.y, n.width, n.height, content._radiusSm)
+                    ctx.fillStyle = content._surfaceContainer
+                    ctx.strokeStyle = content._border
+                    ctx.fill()
+                    ctx.stroke()
                 }
             }
         }
 
-        Repeater {
-            id: embedRepeater
-            model: graphController.embedsModel
-            delegate: StarMapEmbed {
-                required property var modelData
-                required property int index
-                dt: content.dt
-                property var embedData: modelData
+        // ── 本层节点与子星图（只属于 interactive 档）──
+        Item {
+            id: nodeLayer
+            anchors.fill: parent
+            z: 1
 
-                x: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveX : embedData.x
-                y: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveY : embedData.y
-                width: embedData.width
-                height: embedData.height
-                instanceId: embedData.instanceId
-                targetStarmapId: embedData.targetStarmapId
-                label: embedData.label
-                isSelected: content.selectionController
-                        ? content.selectionController.matches(content.scenePathKey, "embed", embedData.instanceId)
-                        : false
-                wobbleIndex: index
+            Repeater {
+                id: nodeRepeater
+                // preview 档只由 previewCanvas 画静态投影，不实例化交互 delegate。
+                model: content.renderDetail === "interactive" ? graphController.nodesModel : []
+                delegate: StarMapNode {
+                    required property var modelData
+                    required property int index
+                    dt: content.dt
+                    property var nodeData: modelData
+                    readonly property string nodeId: nodeData.id
 
-                // Issue #822：子星图"看起来多大"只是视觉 LOD。
-                // 只由父层 globalZoom / depth / 屏幕投影尺寸决定，不能反写全局相机，
-                // 也不能产生独立可修改的 zoomLevel。
-                ancestorScale: content.sceneScale
-                scale: visualScale
+                    // 本层局部坐标，不再经过 worldToScreen：相机在祖先 Content 上。
+                    x: content.isMovingNode(nodeData.id) ? content.interactionController.moveX : nodeData.x
+                    y: content.isMovingNode(nodeData.id) ? content.interactionController.moveY : nodeData.y
+                    width: nodeData.width
+                    height: nodeData.height
+                    title: nodeData.title
+                    isSelected: content.selectionController
+                            ? content.selectionController.matches(content.scenePathKey, "node", nodeData.id)
+                            : false
+                    wobbleIndex: index
 
-                // 递归子星图内容只在投影矩形进入视口后才创建，按需懒加载。
-                // 命中判定与视觉 LOD 无关，纯看投影矩形是否进入当前可见区域。
-                childContentInViewport: {
-                    var margin = 64
-                    var o = content.localToScene(embedData.x, embedData.y)
-                    var s = content.sceneScale * visualScale
-                    var v = content.viewportRect
-                    return o.x + width * s >= v.x - margin
-                            && o.y + height * s >= v.y - margin
-                            && o.x <= v.x + v.width + margin
-                            && o.y <= v.y + v.height + margin
+                    onMouseInteracted: {
+                        if (content.menuHost) content.menuHost.noteMouseInteracted()
+                    }
+
+                    // 鼠标按下只登记归属（pressPending），不决定 move 还是 connect。
+                    onItemPressed: function(qx, qy) {
+                        content.onItemPressed("node", nodeData.id, content.nodePath(nodeData.id), qx, qy)
+                    }
+
+                    onTouchLongPressed: {
+                        content.onItemTouchLongPressed("node", nodeData.id, content.nodePath(nodeData.id))
+                    }
+
+                    onMoveDelta: function(dx, dy) {
+                        content.onItemDragDelta("node", nodeData.id, dx, dy)
+                    }
+
+                    onLeftReleased: content.releaseOwnerGesture()
+
+                    // Issue #822：节点自身就是编辑器，双击直接把光标放进节点框。
+                    onDoubleClicked: content.beginInlineEdit(nodeData.id)
+
+                    onTitleCommitted: function(newTitle) {
+                        content.commitNodeTitle(nodeData.id, newTitle)
+                    }
                 }
+            }
 
-                rootStarmapId: content.rootStarmapId
-                parentPathSegments: content.pathSegments
-                starmapBackendRef: content.starmapBackendRef
-                parentPathKey: content.scenePathKey
-                contentDepth: content.depth + 1
-                globalZoom: content.globalZoom
-                selectionController: content.selectionController
-                interactionController: content.interactionController
-                rootContent: content.rootContent
-                menuHost: content.menuHost
-                viewportRect: content.viewportRect
+            Repeater {
+                id: embedRepeater
+                // preview 档不实例化 Embed delegate，子星图也不再往里递归。
+                model: content.renderDetail === "interactive" ? graphController.embedsModel : []
+                delegate: StarMapEmbed {
+                    required property var modelData
+                    required property int index
+                    dt: content.dt
+                    property var embedData: modelData
 
-                // 子层 scene 换算参数：本 Embed 左上角在 scene 坐标里的位置 + 累积比例。
-                sceneOriginX: content.localToScene(embedData.x, embedData.y).x
-                sceneOriginY: content.localToScene(embedData.x, embedData.y).y
-                sceneScale: content.sceneScale * visualScale
+                    x: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveX : embedData.x
+                    y: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveY : embedData.y
+                    width: embedData.width
+                    height: embedData.height
+                    instanceId: embedData.instanceId
+                    targetStarmapId: embedData.targetStarmapId
+                    label: embedData.label
+                    isSelected: content.selectionController
+                            ? content.selectionController.matches(content.scenePathKey, "embed", embedData.instanceId)
+                            : false
+                    wobbleIndex: index
 
-                onMouseInteracted: {
-                    if (content.menuHost) content.menuHost.noteMouseInteracted()
+                    // Issue #822：子星图显示档位只由 ownerEffectiveScale（全局相机 ×
+                    // 祖先 local fit）+ 根视口短边算出；Embed 外壳的 world 几何恒定，
+                    // 不再用 scale 改整颗 Embed，档位只决定子内容渲染多少细节。
+                    ownerSceneContent: content
+                    ownerEffectiveScale: content.effectiveScale
+                    viewportShortSide: content.viewportShortSide
+
+                    rootStarmapId: content.rootStarmapId
+                    parentPathSegments: content.pathSegments
+                    starmapBackendRef: content.starmapBackendRef
+                    parentPathKey: content.scenePathKey
+                    contentDepth: content.depth + 1
+                    selectionController: content.selectionController
+                    interactionController: content.interactionController
+                    rootContent: content.rootContent
+                    menuHost: content.menuHost
+
+                    onMouseInteracted: {
+                        if (content.menuHost) content.menuHost.noteMouseInteracted()
+                    }
+
+                    onItemPressed: function(qx, qy) {
+                        content.onItemPressed("embed", embedData.instanceId,
+                                              content.embedPath(embedData.instanceId), qx, qy)
+                    }
+
+                    onTouchLongPressed: {
+                        content.onItemTouchLongPressed("embed", embedData.instanceId,
+                                                       content.embedPath(embedData.instanceId))
+                    }
+
+                    onMoveDelta: function(dx, dy) {
+                        content.onItemDragDelta("embed", embedData.instanceId, dx, dy)
+                    }
+
+                    onLeftReleased: content.releaseOwnerGesture()
                 }
-
-                onItemPressed: function(qx, qy) {
-                    content.onItemPressed("embed", embedData.instanceId,
-                                          content.embedPath(embedData.instanceId), qx, qy)
-                }
-
-                onTouchLongPressed: {
-                    content.onItemTouchLongPressed("embed", embedData.instanceId,
-                                                   content.embedPath(embedData.instanceId))
-                }
-
-                onMoveDelta: function(dx, dy) {
-                    content.onItemDragDelta("embed", embedData.instanceId, dx, dy)
-                }
-
-                onLeftReleased: content.releaseOwnerGesture()
             }
         }
     }

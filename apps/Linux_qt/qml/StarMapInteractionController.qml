@@ -55,7 +55,8 @@ QtObject {
     readonly property real dragThreshold: 8.0
     property real longPressInterval: 800
 
-    // 触屏长按后移动超过此阈值才从 contextPending 转 connect
+    // 触屏长按后移动超过此阈值才从 contextPending 转 connect。
+    // 单位是原始 Qt scene 像素，和 dragThreshold 同一口径。
     readonly property real moveThreshold: 10.0
 
     // ── pressPending：按下归属（完整 targetPath + 归属层 pathKey）──
@@ -66,6 +67,11 @@ QtObject {
     property var pressTargetPath: null
     property real pressSceneX: 0
     property real pressSceneY: 0
+    // 按下后累计的屏幕位移分量（原始 Qt scene 像素，不做任何 world/fit 换算）。
+    // pressDragDistance 是"离按下点的直线距离" = |(pressDragX, pressDragY)|；
+    // 不是每次增量的长度累加 —— 连续两次同方向 5px 必须算 10px 而不是 ~7px。
+    property real pressDragX: 0
+    property real pressDragY: 0
     property real pressDragDistance: 0
 
     // 长按计时开关：Timer 必须挂在 Item 下（QtObject 没有默认属性），
@@ -112,17 +118,22 @@ QtObject {
         pressTargetPath = targetPath
         pressSceneX = sceneX
         pressSceneY = sceneY
+        pressDragX = 0
+        pressDragY = 0
         pressDragDistance = 0
         pressTimerActive = true
         return true
     }
 
-    // 累计按下后的位移（scene 像素）。是否超阈值由归属层判断后调用提升。
+    // 累计按下后的位移。dx/dy 必须是原始 Qt scene 像素：阈值 8px 是屏幕口径，
+    // 换算成 world 单位后再判断会随全局缩放放大/缩小。
+    // 是否超阈值由归属层判断后调用提升。
     function noteDragDelta(dx, dy) {
-        if (pointerMode !== "pressPending")
+        if (pointerMode !== "pressPending" && pointerMode !== "contextPending")
             return
-        pressDragDistance = Math.sqrt(
-            pressDragDistance * pressDragDistance + dx * dx + dy * dy)
+        pressDragX += dx
+        pressDragY += dy
+        pressDragDistance = Math.hypot(pressDragX, pressDragY)
     }
 
     // pressPending -> move：先超过拖动阈值。
@@ -169,6 +180,8 @@ QtObject {
         pressKind = ""
         pressId = ""
         pressTargetPath = null
+        pressDragX = 0
+        pressDragY = 0
         pressDragDistance = 0
     }
 
@@ -220,6 +233,9 @@ QtObject {
         connectFromSceneY = centerSceneY
         connectMouseX = centerSceneX
         connectMouseY = centerSceneY
+        pressDragX = 0
+        pressDragY = 0
+        pressDragDistance = 0
         return true
     }
 
@@ -244,6 +260,9 @@ QtObject {
         connectFromPath = null
         connectFromScenePathKey = ""
         connectFromNodeId = ""
+        pressDragX = 0
+        pressDragY = 0
+        pressDragDistance = 0
         return { kind: kind, id: id }
     }
 
@@ -298,6 +317,8 @@ QtObject {
         pressKind = ""
         pressId = ""
         pressTargetPath = null
+        pressDragX = 0
+        pressDragY = 0
         pressDragDistance = 0
         connectFromKind = ""
         connectFromId = ""
