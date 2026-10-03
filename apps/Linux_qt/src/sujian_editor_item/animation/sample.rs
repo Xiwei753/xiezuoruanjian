@@ -125,9 +125,7 @@ fn sample_unit_slice_frame(
                 let unit_passed = unit_stage_id < caret.ingest_stage_id;
                 let (frame, vis) = stage_mismatch_frame(slice, unit_passed);
                 let side = slice_side_for_kind(slice.kind);
-                // stage 不匹配时本 unit 不被驱动，终态判断由 track progress 决定。
-                let caret_finished = caret.progress >= 1.0;
-                (frame, side, vis, caret_finished)
+                (frame, side, vis, unit_passed)
             } else {
                 // stage_id 匹配：正常消费当前 segment。
                 let frame = slice.compute_frame_by_caret_ingest(
@@ -184,6 +182,7 @@ fn sample_unit_slice_frame(
         crate::sujian_editor_item::animation::VisualUnitTiming::CaretTrack { .. } => (0, 0.0),
     };
     Some(SampledSliceFrame {
+        unit_stage_id: unit.stage_id,
         kind: slice.kind,
         byte_start: slice.byte_start,
         byte_end: slice.byte_end,
@@ -232,7 +231,10 @@ fn slice_side_for_kind(kind: AnimatedSliceKind) -> Option<IngestSnapshotSide> {
 fn stage_mismatch_frame(
     slice: &AnimatedSlice,
     unit_passed: bool,
-) -> (crate::sujian_editor_item::animated_slice::AnimatedSliceFrame, f64) {
+) -> (
+    crate::sujian_editor_item::animated_slice::AnimatedSliceFrame,
+    f64,
+) {
     let visible = match (slice.kind, unit_passed) {
         (AnimatedSliceKind::InsertReveal, true) => 1.0, // 终态：完全显示
         (AnimatedSliceKind::InsertReveal, false) => 0.0, // 初态：不显示

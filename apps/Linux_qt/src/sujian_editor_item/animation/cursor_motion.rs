@@ -29,28 +29,43 @@ pub(crate) fn build_cursor_visual_track(
     stage_id: super::transaction::types::IngestStageId,
 ) -> Option<PreparedCursorVisualTrack> {
     let to = new_cursor_rect?;
+    let route_duration_ms = ingest_segments
+        .iter()
+        .map(|segment| segment.duration_weight_ms)
+        .sum::<f64>()
+        .ceil() as u64;
     match handoff {
-        Some(h) => Some(PreparedCursorVisualTrack {
-            from: h.sampled,
-            to: to.clone(),
-            // Issue #722 评论 5749572808 问题2: rebase 交棒时 from 端的 visual_line_id
-            // 用采样到的旧事务屏幕 caret 所在行 id，不能用新事务终点所在行。
-            // 跨软换行交棒时第一帧文字可能认为 caret 已进入新行，把下一行提前吐出来。
-            // to 端是新事务的 new_cursor_rect 行 id。
-            from_visual_line_id: h.sampled_visual_line_id,
-            to_visual_line_id: new_cursor_visual_line_id,
-            // Issue #722 评论 5749791161: from 端行几何用 handoff 采样到的行边界，
-            // to 端行几何用参数传入的 new_cursor 行边界。
-            from_line_top: h.sampled_line_top,
-            from_line_bottom: h.sampled_line_bottom,
-            to_line_top: new_cursor_line_top,
-            to_line_bottom: new_cursor_line_bottom,
-            started_at: None,
-            duration_ms: h.remaining_duration_ms,
-            pause_start: None,
-            segments: ingest_segments,
-            stage_id,
-        }),
+        Some(h) => {
+            crate::sujian_editor_item::editor_animation_debug_log(&format!(
+                "anim_caret_handoff: sampled_stage={:?} duration_ms={}",
+                h.stage_id, route_duration_ms,
+            ));
+            Some(PreparedCursorVisualTrack {
+                from: h.sampled,
+                to: to.clone(),
+                // Issue #722 评论 5749572808 问题2: rebase 交棒时 from 端的 visual_line_id
+                // 用采样到的旧事务屏幕 caret 所在行 id，不能用新事务终点所在行。
+                // 跨软换行交棒时第一帧文字可能认为 caret 已进入新行，把下一行提前吐出来。
+                // to 端是新事务的 new_cursor_rect 行 id。
+                from_visual_line_id: h.sampled_visual_line_id,
+                to_visual_line_id: new_cursor_visual_line_id,
+                // Issue #722 评论 5749791161: from 端行几何用 handoff 采样到的行边界，
+                // to 端行几何用参数传入的 new_cursor 行边界。
+                from_line_top: h.sampled_line_top,
+                from_line_bottom: h.sampled_line_bottom,
+                to_line_top: new_cursor_line_top,
+                to_line_bottom: new_cursor_line_bottom,
+                started_at: None,
+                duration_ms: if ingest_segments.is_empty() {
+                    h.remaining_duration_ms
+                } else {
+                    route_duration_ms
+                },
+                pause_start: None,
+                segments: ingest_segments,
+                stage_id,
+            })
+        }
         None => {
             let from = old_cursor_rect?;
             Some(PreparedCursorVisualTrack::new_first(

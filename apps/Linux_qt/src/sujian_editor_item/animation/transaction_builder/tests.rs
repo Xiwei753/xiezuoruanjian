@@ -16,7 +16,7 @@ use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, ShapingIdentity
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use writer_core::editor::OffsetMap;
 
-fn make_test_snapshot(
+pub(super) fn make_test_snapshot(
     virtual_text: &str,
     line_clusters: Vec<(usize, usize, f64, f64, ShapingIdentity)>,
 ) -> EditorLayoutSnapshot {
@@ -205,12 +205,18 @@ fn test_commit_same_shaping_different_geometry_creates_move() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let has_move = tx
         .units
@@ -318,12 +324,18 @@ fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let crossfade_count = tx
         .units
@@ -425,12 +437,18 @@ fn test_commit_same_shaping_same_geometry_is_static() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let first_cluster_slices: Vec<&AnimatedSlice> = tx
         .units
@@ -533,12 +551,18 @@ fn test_commit_separate_preedit_and_committed_replace_ranges() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let old_preedit_slices: Vec<&AnimatedSlice> = tx
         .units
@@ -637,12 +661,18 @@ fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
         true,
         true,
     );
-    assert!(key.is_some());
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     let delete_slices: Vec<&AnimatedSlice> = tx
         .units
@@ -1893,15 +1923,18 @@ fn issue756_comment5821042551_composition_commit_smooth_only_creates_transaction
         true,
         false,
     );
-    assert!(
-        key.is_some(),
-        "smooth-only composition commit: 必须创建事务（coordinated=false + typing=false + smooth=true）"
-    );
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     // smooth-only commit: 必须有 caret track
     assert!(
@@ -1992,15 +2025,18 @@ fn issue756_comment5821793349_composition_commit_typing_enabled_keeps_crossfade_
         true,
         false,
     );
-    assert!(
-        key.is_some(),
-        "typing-enabled composition commit: 必须创建事务"
-    );
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     // typing-enabled commit: 必须有文字 unit（crossfade）
     assert!(
@@ -2118,7 +2154,7 @@ fn issue756_comment5822051193_composition_commit_coordinated_no_cursor_track_ret
     // new_cursor_rect=None, prepared_handoff=None
     // 队列为空 → take_rebase_frames 返回 (vec![], None) → caret_handoff=None
     // build_cursor_visual_track(new_cursor_rect=None) → 返回 None
-    // → cursor_visual_track 为 None → 门禁触发 → 返回 None
+    // → cursor_visual_track 为 None → 门禁触发 → 返回 CursorTrackMissing
     let key = coord.handle_composition_commit_or_cancel(
         &old_snapshot,
         &new_snapshot,
@@ -2153,8 +2189,8 @@ fn issue756_comment5822051193_composition_commit_coordinated_no_cursor_track_ret
         true,
     );
     assert!(
-        key.is_none(),
-        "coordinated=true 且 cursor_visual_track 为 None 时必须返回 None（commit/cancel 路径同样收口）"
+        matches!(key, HandoffTransactionOutcome::Skipped(crate::sujian_editor_item::edit_flow::EditVisualSkipReason::CursorTrackMissing)),
+        "coordinated=true 且 cursor_visual_track 为 None 时必须透传 CursorTrackMissing（commit/cancel 路径同样收口）"
     );
     assert!(
         coord.prepared_queue.active_transactions().is_empty(),
@@ -2236,10 +2272,8 @@ fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_create
         true,
         true,
     );
-    assert!(
-        update_key.is_some(),
-        "前置条件: coordinated=true 且有 old/new cursor rect 的 composition update 必须创建事务"
-    );
+
+    assert!(update_key.is_some(), "composition update must be created");
 
     // 步骤 2: 调 prepare_composition_commit_handoff 产生 handoff
     // commit: "axb" → "aYb"（preedit "x" commit 成 "Y"）
@@ -2315,15 +2349,18 @@ fn issue756_comment5822051193_composition_commit_coordinated_with_handoff_create
         true,
         true,
     );
-    assert!(
-        key.is_some(),
-        "coordinated=true 且有 caret_handoff 且 new_cursor_rect=Some 时必须返回 Some（合法 rebase 场景不能误杀）"
-    );
+    let key = match key {
+        HandoffTransactionOutcome::Created(key) => key,
+        HandoffTransactionOutcome::Skipped(reason) => {
+            panic!("composition unexpectedly skipped: {reason:?}")
+        }
+    };
+
     let tx = coord
         .prepared_queue
         .active_transactions()
         .iter()
-        .find(|t| t.key == key.unwrap())
+        .find(|t| t.key == key)
         .unwrap();
     assert!(
         tx.cursor_visual_track.is_some(),
@@ -3516,7 +3553,7 @@ fn issue808_comment5918236360_problem3_delete_conceal_mask_symmetric_via_builder
 /// 每一项是 `(visual_line_id, byte_start, byte_end, top, bottom)`。
 /// 相邻行满足 `line1.bottom == line2.top`，这正是真实排版的几何，也是
 /// 「按 caret.top 的 y 容差猜行序」会误命中上一行的原因。
-fn make_multiline_snapshot(
+pub(super) fn make_multiline_snapshot(
     virtual_text: &str,
     lines: &[(usize, usize, usize, f64, f64)],
 ) -> EditorLayoutSnapshot {
@@ -3835,7 +3872,8 @@ fn issue815_review5_composition_slices_carry_full_ingest_metadata() {
         (2, 4),
         (2, 6),
     );
-    let tx = build_prepared_transaction(spec).expect_created("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let ingest_units: Vec<_> = tx
         .units
@@ -3949,7 +3987,8 @@ fn issue815_review5_multiline_candidate_reveals_rows_in_order() {
         (2, 2),
         (2, 5),
     );
-    let tx = build_prepared_transaction(spec).expect_created("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let line1: Vec<_> = tx
         .units
@@ -4051,7 +4090,8 @@ fn issue815_review5_multiline_old_preedit_hides_passed_rows() {
         (2, 3),
         (3, 4),
     );
-    let tx = build_prepared_transaction(spec).expect_created("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let conceals: Vec<_> = tx
         .units
@@ -4117,7 +4157,8 @@ fn issue815_review5_composition_forward_delete_has_boundary_from_x() {
         (2, 3),
         (2, 3),
     );
-    let tx = build_prepared_transaction(spec).expect_created("composition transaction must be built");
+    let tx =
+        build_prepared_transaction(spec).expect_created("composition transaction must be built");
 
     let conceals: Vec<_> = tx
         .units
@@ -4817,6 +4858,8 @@ fn ingest_line_segment(
         ingest_side: Some(side),
         visual_line_id: Some(0),
         ingest_stage_id: stage_id,
+        duration_weight_ms: 60.0,
+        ingest_start_progress: 0.0,
     }
 }
 
@@ -5207,8 +5250,10 @@ fn issue819_comment5968931455_consecutive_delete_carried_c_width_monotonically_d
     }
 
     // 最终帧必须到 new_caret.x=10
-    let final_frame =
-        sample_caret_track_frame(track, started_at + std::time::Duration::from_millis(total_ms));
+    let final_frame = sample_caret_track_frame(
+        track,
+        started_at + std::time::Duration::from_millis(total_ms),
+    );
     assert!(
         (final_frame.x - 10.0).abs() < 1e-6,
         "最终帧 caret 必须到 new_caret.x=10，实际 x={}",

@@ -107,8 +107,6 @@ pub(crate) enum EditVisualSkipReason {
     BuilderEmptyTransaction,
     /// composition commit 路径的 old/new snapshot 构造失败或不可用。
     CompositionCommitSnapshotUnavailable,
-    /// composition commit 路径创建了事务但 key 为 None（builder 跳过）。
-    CompositionCommitBuilderSkipped,
 }
 
 /// Issue #819 评论 5956495850 第 1 节：视觉事务的明确结果。

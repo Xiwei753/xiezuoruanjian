@@ -115,9 +115,7 @@ pub(crate) use edit_spec::{
 /// 接收归一化后的 [`VisualEditSpec`]，内部统一完成 slice 构造、unit wrap、rebase 匹配、
 /// cursor track 构建、timeline 初始化。其它模块（含 `composition.rs` 与普通 Insert/Delete
 /// 路径）都经由本函数创建事务，从而保证「只允许这里创建 `PreparedTextVisualTransaction`」。
-pub(crate) fn build_prepared_transaction(
-    spec: VisualEditSpec,
-) -> BuildTransactionOutcome {
+pub(crate) fn build_prepared_transaction(spec: VisualEditSpec) -> BuildTransactionOutcome {
     let mut slices: Vec<AnimatedSlice> = Vec::new();
 
     // 1a. InsertReveal / DeleteConceal（文字动画）
@@ -385,6 +383,13 @@ pub(crate) fn build_prepared_transaction(
         let mut consumed_carried: Vec<usize> = Vec::new();
         let mut consumed_units: Vec<usize> = Vec::new();
         for (carried_idx, frame) in carried_as_frames.iter().enumerate() {
+            // 协同文字属于原 stage，必须继续旧 route，不能被同 byte range 的新字吸收。
+            if spec.visual_state.carried_units[carried_idx]
+                .timing
+                .is_caret_track()
+            {
+                continue;
+            }
             // tier1: 精确 byte range 匹配（未消费的新 unit）。
             let matched = units.iter_mut().enumerate().find(|(unit_idx, nu)| {
                 !consumed_units.contains(unit_idx)
@@ -420,16 +425,10 @@ pub(crate) fn build_prepared_transaction(
             // 两者都通过 rebase_from_frame 把 sampled frame 几何写入新 slice。
             // Issue #819 评论 5968931455: carried unit 标记旧事务的 stage_id，
             // 让它只消费旧 stage 的 route 段，不消费新编辑的 route 段。
-            let old_stage_id = spec
-                .visual_state
-                .caret_handoff
-                .as_ref()
-                .map(|h| h.stage_id)
-                .unwrap_or(new_stage_id);
             let mut new_unit = PreparedVisualUnit {
                 slice: new_slice,
                 timing: unit.timing.clone(),
-                stage_id: Some(old_stage_id),
+                stage_id: unit.stage_id,
             };
             let carried_frame = RebaseFrame {
                 byte_start: unit.slice.byte_start,
@@ -1275,3 +1274,6 @@ impl LinuxEditorAnimationCoordinator {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod handoff_tests;

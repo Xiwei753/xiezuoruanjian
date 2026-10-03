@@ -321,6 +321,10 @@ pub(crate) struct CaretTrackSegment {
     /// `compute_frame_by_caret_ingest` 据此判断本 segment 该驱动哪个 unit：
     /// 只有 stage_id 匹配的 unit 才在当前段被吞吐，其余 unit 保持初态/终态。
     pub ingest_stage_id: IngestStageId,
+    /// 本段的播放预算。交棒只扣除当前段已播放的时间，后续段原样保留。
+    pub duration_weight_ms: f64,
+    /// 原吞吐段已完成的 eased 进度，供静止 caret 的前删边界续播。
+    pub ingest_start_progress: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -356,8 +360,7 @@ pub(crate) struct PreparedCursorVisualTrack {
     pub pause_start: Option<Instant>,
     /// Issue #815 评论 5949097065 问题3: 正式的运动路径。
     ///
-    /// 整体 progress 按段均分：第 i 段占 `[i/n, (i+1)/n]`，
-    /// 段内再用 `ease_out_cubic` 走 `from` → `to`。
+    /// 各段按 `duration_weight_ms` 分配时间，段内用 `ease_out_cubic`。
     /// `from`/`to` 字段保留为整段运动的起点/终点（给高度、epoch 判断等用），
     /// 但逐帧几何一律走 `segments`。
     pub segments: Vec<CaretTrackSegment>,
@@ -386,25 +389,27 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// Issue #815 评论 5949097065 问题3: 按整段 progress 定位当前所在的轨迹段。
-    ///
-    /// 返回 `(段下标, 段内 eased 进度)`。整体 progress 按段**均分**：
-    /// 第 i 段占 `[i/n, (i+1)/n]`，段内再用 `ease_out_cubic`。
-    /// 均分而不是按长度加权，是为了让"这一帧在第几行"对测试可预测。
-    ///
-    /// `segments` 为空（未构建路径的 fallback 路径）时返回 `None`。
-    fn sampled_segment_at_progress(&self, progress: f64) -> Option<(usize, f64)> {
-        let count = self.segments.len();
-        if count == 0 {
+    /// 返回段下标和未 easing 的局部时间进度；采样和剩余预算共用同一次定位。
+    fn segment_at_progress(&self, progress: f64) -> Option<(usize, f64)> {
+        if self.segments.is_empty() {
             return None;
         }
-        let scaled = progress.clamp(0.0, 1.0) * count as f64;
-        let mut index = scaled.floor() as usize;
-        if index >= count {
-            index = count - 1;
+        let total: f64 = self.segments.iter().map(|s| s.duration_weight_ms).sum();
+        let elapsed = progress.clamp(0.0, 1.0) * total;
+        let mut start = 0.0;
+        for (index, segment) in self.segments.iter().enumerate() {
+            let end = start + segment.duration_weight_ms;
+            if elapsed < end {
+                return Some((index, (elapsed - start) / segment.duration_weight_ms));
+            }
+            start = end;
         }
-        let local = (scaled - index as f64).clamp(0.0, 1.0);
-        Some((index, AnimatedSlice::ease_out_cubic(local)))
+        Some((self.segments.len() - 1, 1.0))
+    }
+
+    fn sampled_segment_at_progress(&self, progress: f64) -> Option<(usize, f64)> {
+        self.segment_at_progress(progress)
+            .map(|(index, local)| (index, AnimatedSlice::ease_out_cubic(local)))
     }
 
     /// Issue #815 评论 5949097065 问题3: 本帧吞吐采样。
@@ -453,6 +458,8 @@ impl PreparedCursorVisualTrack {
             ),
             Some((index, local_progress)) => {
                 let segment = &self.segments[index];
+                let local_progress = segment.ingest_start_progress
+                    + (1.0 - segment.ingest_start_progress) * local_progress;
                 let side = segment.ingest_side;
                 match segment.kind {
                     CaretTrackSegmentKind::IngestLine => (
@@ -609,70 +616,23 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// Issue #815 评论 5949097065 问题3: 取本帧之后的剩余段，并把当前段的终点
-    /// 接到新目标上。
-    ///
-    /// 本帧已经走过的部分不再重播；第一段从**本帧实际采样位置**出发（不是逻辑旧端点）。
-    /// 当前段若还在吞吐中，剩余段的第一段必须仍然是 `IngestLine` 且行身份不变——
-    /// 这正是"rebase 恰好发生在中间行"必须被保住的行身份与几何。
-    ///
-    /// Issue #819 评论 5968931455: 改为 `pub(crate)` 供 `rebase::take_rebase_frames`
-    /// 提取旧 track 从当前 sampled progress 之后的剩余 segments，让 carried CaretTrack
-    /// unit 在新事务里继续消费自己原来的 route，而不是被迫消费下一笔编辑的 route。
-    pub(crate) fn remaining_segments_from(
-        &self,
-        progress: f64,
-        new_to: CursorRect,
-    ) -> Vec<CaretTrackSegment> {
-        if self.segments.is_empty() {
+    /// 旧路线从本帧起的真实剩余部分，保留段终点、阶段、快照侧和时间预算。
+    pub(crate) fn remaining_segments_from(&self, progress: f64) -> Vec<CaretTrackSegment> {
+        let Some((index, local)) = self.segment_at_progress(progress) else {
             return Vec::new();
-        }
-        let count = self.segments.len();
-        let scaled = progress.clamp(0.0, 1.0) * count as f64;
-        let index = (scaled.floor() as usize).min(count - 1);
-        let local = (scaled - index as f64).clamp(0.0, 1.0);
-        let eased = AnimatedSlice::ease_out_cubic(local);
-        let current = &self.segments[index];
-        let current_end = CursorRect {
-            x: current.from.x + (current.to.x - current.from.x) * eased,
-            top: current.from.top + (current.to.top - current.from.top) * eased,
-            bottom: 0.0,
-            baseline_y: current.from.baseline_y
-                + (current.to.baseline_y - current.from.baseline_y) * eased,
         };
-        let current_end = CursorRect {
-            bottom: current_end.top + (current.to.bottom - current.to.top),
-            ..current_end
-        };
+        let current = self.segments[index];
         let mut segments = Vec::new();
-        let continue_same_ingest_row =
-            current.kind == CaretTrackSegmentKind::IngestLine && local < 1.0;
-        if continue_same_ingest_row {
-            // 本行还没扫完：把本行剩余路程接上新目标 caret。
-            // Issue #819 评论 5968931455: 保留原 segment 的 ingest_stage_id。
+        if local < 1.0 {
             segments.push(CaretTrackSegment {
-                kind: CaretTrackSegmentKind::IngestLine,
-                from: current_end,
-                to: new_to,
-                ingest_line_ord: current.ingest_line_ord,
-                ingest_side: None,
-                visual_line_id: current.visual_line_id,
-                ingest_stage_id: current.ingest_stage_id,
+                from: self.sampled_rect_at_progress(progress),
+                duration_weight_ms: current.duration_weight_ms * (1.0 - local),
+                ingest_start_progress: current.ingest_start_progress
+                    + (1.0 - current.ingest_start_progress) * AnimatedSlice::ease_out_cubic(local),
+                ..current
             });
         }
         segments.extend(self.segments[index + 1..].iter().copied());
-        if segments.is_empty() {
-            // Issue #819 评论 5968931455: 保留原 segment 的 ingest_stage_id。
-            segments.push(CaretTrackSegment {
-                kind: CaretTrackSegmentKind::RowHandoff,
-                from: current_end,
-                to: new_to,
-                ingest_line_ord: current.ingest_line_ord,
-                ingest_side: None,
-                visual_line_id: current.visual_line_id,
-                ingest_stage_id: current.ingest_stage_id,
-            });
-        }
         segments
     }
 }
@@ -718,7 +678,7 @@ impl PreparedCursorVisualTrack {
         // 本帧**实际**的行身份与几何，不能退回逻辑 old 行，也不能只记 from/to 两个 id。
         let (sampled_line_id, _, _, _, _) = self.sampled_ingest_at_progress(progress);
         // 未走完的那一段从本帧实际位置起跳，后续段原样保留。
-        let remaining_segments = self.remaining_segments_from(progress, new_to);
+        let remaining_segments = self.remaining_segments_from(progress);
         Self {
             from: sampled,
             to: new_to,
@@ -765,7 +725,7 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`。
     /// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
     ///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，
-    ///   `started_at = None`，`duration_ms` 用旧 track 剩余时长。绝不能退回逻辑旧 caret。
+    ///   `started_at = None`，时长为旧路线剩余预算加本次编辑的完整预算。
     /// - `None` 表示本事务没有视觉 caret track（CursorOnly 或无 old/new cursor rect）。
     ///   协同模式下这笔事务会被 builder 拒绝入队并记 `editor.anim.transaction_skipped`，
     ///   不允许退化成"文字自己播、光标不动"。
@@ -857,8 +817,13 @@ impl PreparedTextVisualTransaction {
             return false;
         };
         let elapsed = now.duration_since(effective_start).as_millis() as u64;
-        let effective_duration =
-            self.timeline.duration_ms + self.timeline.accumulated_paused_duration_ms;
+        // 连续编辑的 caret route 可能跨多笔预算，不能按单笔文字时钟提前过期。
+        let effective_duration = self.timeline.duration_ms.max(
+            self.cursor_visual_track
+                .as_ref()
+                .map(|track| track.duration_ms)
+                .unwrap_or(0),
+        ) + self.timeline.accumulated_paused_duration_ms;
         let timeout = effective_duration * 3 + 500;
         elapsed > timeout
     }

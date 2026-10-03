@@ -265,6 +265,8 @@ pub(crate) fn build_insert_route(
             ingest_side: None,
             visual_line_id: first.visual_line_id,
             ingest_stage_id: stage_id,
+            duration_weight_ms: 1.0,
+            ingest_start_progress: 0.0,
         });
     }
     for (index, row) in rows.iter().enumerate() {
@@ -288,6 +290,8 @@ pub(crate) fn build_insert_route(
             ingest_side: Some(IngestSnapshotSide::New),
             visual_line_id: row.visual_line_id,
             ingest_stage_id: stage_id,
+            duration_weight_ms: 1.0,
+            ingest_start_progress: 0.0,
         });
         if index + 1 < rows.len() {
             let next = rows[index + 1];
@@ -300,6 +304,8 @@ pub(crate) fn build_insert_route(
                 ingest_side: Some(IngestSnapshotSide::New),
                 visual_line_id: row.visual_line_id,
                 ingest_stage_id: stage_id,
+                duration_weight_ms: 1.0,
+                ingest_start_progress: 0.0,
             });
         }
     }
@@ -325,6 +331,8 @@ pub(crate) fn build_insert_route(
             ingest_side: Some(IngestSnapshotSide::New),
             visual_line_id: final_row.visual_line_id,
             ingest_stage_id: stage_id,
+            duration_weight_ms: 1.0,
+            ingest_start_progress: 0.0,
         });
     }
     segments
@@ -382,6 +390,8 @@ pub(crate) fn build_delete_route(
             ingest_side: None,
             visual_line_id: start_row.visual_line_id,
             ingest_stage_id: stage_id,
+            duration_weight_ms: 1.0,
+            ingest_start_progress: 0.0,
         });
     }
     for (index, row) in rows.iter().enumerate().rev() {
@@ -393,6 +403,8 @@ pub(crate) fn build_delete_route(
             ingest_side: Some(IngestSnapshotSide::Old),
             visual_line_id: row.visual_line_id,
             ingest_stage_id: stage_id,
+            duration_weight_ms: 1.0,
+            ingest_start_progress: 0.0,
         });
         if index > 0 {
             let next_up = &rows[index - 1];
@@ -408,6 +420,8 @@ pub(crate) fn build_delete_route(
                 ingest_side: Some(IngestSnapshotSide::Old),
                 visual_line_id: row.visual_line_id,
                 ingest_stage_id: stage_id,
+                duration_weight_ms: 1.0,
+                ingest_start_progress: 0.0,
             });
         }
     }
@@ -439,6 +453,8 @@ pub(crate) fn build_delete_route(
                 ingest_side: Some(IngestSnapshotSide::Old),
                 visual_line_id: final_row.visual_line_id,
                 ingest_stage_id: stage_id,
+                duration_weight_ms: 1.0,
+                ingest_start_progress: 0.0,
             });
         }
     }
@@ -453,25 +469,28 @@ pub(crate) fn build_delete_route(
 ///
 /// 旧剩余段来自 `spec.visual_state.caret_handoff.remaining_ingest_segments`，
 /// 它们已经带旧 stage_id。新段用 `new_stage_id`。如果旧剩余段非空，保证相邻：
-/// `old_remaining.last().to == new_route.first().from`，如果不等，插入一个
-/// LayoutHandoff 换位段（ingest_side=None, stage_id=旧 stage_id）。
+/// `old_remaining.last().to == new_route.first().from`。新 route 从旧终点构建。
 pub(crate) fn build_ingest_route(
     spec: &VisualEditSpec,
     slices: &[AnimatedSlice],
     new_stage_id: IngestStageId,
 ) -> Vec<CaretTrackSegment> {
-    // Issue #815 评论 5950375533 问题3: 路径的**屏幕起点**必须优先用 handoff
-    // （上一帧真正画出来的 caret 位置），拿不到才退回逻辑 `old_cursor_rect`。
-    //
-    // 原实现固定用 `spec.old_cursor_rect`，而 `build_cursor_visual_track` 拿到的
-    // `handoff.sampled` 只写进顶层 `track.from`；只要 `segments` 非空，
-    // `sampled_rect_at_progress()` 根本不读 `track.from`，读的是 `segments[0].from`
-    // —— 于是快速连续输入时渲染又跳回逻辑 old caret。
-    let screen_caret = spec
+    // 先完成旧路线，再从它的终点构造新编辑路线，避免生成零长度换位段。
+    let old_remaining = spec
         .visual_state
         .caret_handoff
         .as_ref()
-        .map(|handoff| &handoff.sampled)
+        .map(|h| h.remaining_ingest_segments.clone())
+        .unwrap_or_default();
+    let screen_caret = old_remaining
+        .last()
+        .map(|segment| &segment.to)
+        .or_else(|| {
+            spec.visual_state
+                .caret_handoff
+                .as_ref()
+                .map(|handoff| &handoff.sampled)
+        })
         .or(spec.old_cursor_rect.as_ref());
     let delete_rows = collect_delete_rows(slices);
     let insert_rows = collect_insert_rows(slices);
@@ -485,7 +504,7 @@ pub(crate) fn build_ingest_route(
             .unwrap_or_default();
     }
     // 先用现有逻辑构造当前新编辑的 route，所有新段标记 new_stage_id。
-    let new_route = match ingest_route_shape(slices) {
+    let mut new_route = match ingest_route_shape(slices) {
         IngestRouteShape::InsertOnly => screen_caret
             .zip(spec.new_cursor_rect.as_ref())
             .map(|(screen_caret, new_caret)| {
@@ -526,6 +545,8 @@ pub(crate) fn build_ingest_route(
                     ingest_side: Some(IngestSnapshotSide::Old),
                     visual_line_id: first_delete.visual_line_id,
                     ingest_stage_id: new_stage_id,
+                    duration_weight_ms: 1.0,
+                    ingest_start_progress: 0.0,
                 });
             }
             // new 侧吐字。
@@ -538,38 +559,12 @@ pub(crate) fn build_ingest_route(
             segments
         }
     };
-    // Issue #819 评论 5968931455: 合成旧 carried route 剩余段 + 新 route。
-    // 旧剩余段来自 handoff，已经带旧 stage_id。
-    let old_remaining = spec
-        .visual_state
-        .caret_handoff
-        .as_ref()
-        .map(|h| h.remaining_ingest_segments.clone())
-        .unwrap_or_default();
-    if old_remaining.is_empty() || new_route.is_empty() {
-        // 没有旧剩余段或没有新段：直接返回新 route（或旧剩余段）。
-        if old_remaining.is_empty() {
-            return new_route;
-        }
-        return old_remaining;
+    // 每笔新编辑保留完整时长，只在它自己的段之间分配。
+    let segment_duration_ms = spec.caret_duration_ms as f64 / new_route.len().max(1) as f64;
+    for segment in &mut new_route {
+        segment.duration_weight_ms = segment_duration_ms;
     }
-    // Issue #819 评论 5968931455: 新 route 的起点可能从 screen_caret（handoff.sampled）
-    // 出发，而旧剩余段的终点是上一笔 route 的终点。二者不同时，直接拼会在中间产生
-    // 一个回跳的换位段（caret 先退回 sampled 位置再向新目标走），破坏单调性——
-    // 正是"先恢复完整再吞"的根因。
-    //
-    // 修正：把新 route 的起点**平移**到旧剩余段的终点，让 caret 从旧 route 停下
-    // 的地方继续向新目标走，全程不回跳。只平移 from 端（第一段的 from），各段
-    // 的 to 保持不变——后续段的 from 已由前一段的 to 决定，不需要再改。
-    let mut combined = old_remaining.clone();
-    let old_end = combined.last().map(|seg| seg.to);
-    let mut new_route = new_route;
-    if let (Some(old_end), Some(first_seg)) = (old_end, new_route.first_mut()) {
-        if !same_rect(&old_end, &first_seg.from) {
-            // 平移第一段起点到旧剩余段终点，消除回跳。
-            first_seg.from = old_end;
-        }
-    }
+    let mut combined = old_remaining;
     combined.extend(new_route);
     combined
 }

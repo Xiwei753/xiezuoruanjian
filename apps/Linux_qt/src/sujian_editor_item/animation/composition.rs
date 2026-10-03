@@ -12,7 +12,8 @@ use crate::editor::layout::compute_affected_paragraph_ranges;
 use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
 use crate::sujian_editor_item::animation::transaction_builder::{
     build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels,
-    BuildTransactionOutcome, CompositionCommitCrossfadeSpec, VisualEditSpec,
+    BuildTransactionOutcome, CompositionCommitCrossfadeSpec, HandoffTransactionOutcome,
+    VisualEditSpec,
 };
 use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
 use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect};
@@ -261,7 +262,7 @@ impl LinuxEditorAnimationCoordinator {
         text_animation_enabled: bool,
         caret_animation_enabled: bool,
         coordinated_animation_enabled: bool,
-    ) -> Option<VisualTransactionKey> {
+    ) -> HandoffTransactionOutcome {
         // Issue #738 评论 5798704669 问题1: 若外层已调 prepare_composition_commit_handoff
         // 采好 handoff（commit 路径），直接用；否则内部 prepare（cancel 路径 / 旧调用方）。
         let handoff = match prepared_handoff {
@@ -369,12 +370,14 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #815 评论 6042062633 修改 9: IME composition commit 的候选 InsertReveal、
         // 必需的 DeleteConceal 与 commit 光标共享同一条 cursor track 的当前帧，
         // 不再让 IME commit 留在独立文字时间线上。拿不到 track 时 builder 自己记
-        // `editor.anim.transaction_skipped` 并返回 None。
+        // `editor.anim.transaction_skipped` 并返回具体的跳过原因。
         // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
         // 透传 skip reason，不再用 `?` 吞掉。
         let prepared = match build_prepared_transaction(spec) {
             BuildTransactionOutcome::Created(tx) => tx,
-            BuildTransactionOutcome::Skipped(_) => return None,
+            BuildTransactionOutcome::Skipped(reason) => {
+                return HandoffTransactionOutcome::Skipped(reason)
+            }
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -387,7 +390,7 @@ impl LinuxEditorAnimationCoordinator {
         ));
 
         self.prepared_queue.enqueue(prepared);
-        Some(key)
+        HandoffTransactionOutcome::Created(key)
     }
 
     pub fn active_composition_new_snapshot(&self) -> Option<&EditorLayoutSnapshot> {

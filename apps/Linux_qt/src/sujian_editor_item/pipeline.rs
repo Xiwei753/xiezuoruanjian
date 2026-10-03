@@ -1,5 +1,5 @@
-use super::animation::LinuxEditorAnimationCoordinator;
 use super::animation::transaction_builder::HandoffTransactionOutcome;
+use super::animation::LinuxEditorAnimationCoordinator;
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
@@ -7,7 +7,7 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
 use super::line_snapshot_builder::LineSnapshotBuilder;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
-use super::texture_cache::TextureCache;
+use super::texture_cache::{LineSnapshotId, TextureCache};
 use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use super::{editor_animation_transaction_skipped_event, AnimationSkipFields};
@@ -538,6 +538,13 @@ impl LinuxEditorPipeline {
         let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
         self.texture_cache.retain_active_snapshot_ids(&active_ids);
         new_revision
+    }
+
+    /// 在取消旧事务和新事务接管之间，保留仍活跃或正在交棒的纹理。
+    pub(crate) fn retain_handoff_textures(&mut self, carried_ids: &[LineSnapshotId]) {
+        let mut active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+        active_ids.extend_from_slice(carried_ids);
+        self.texture_cache.retain_active_snapshot_ids(&active_ids);
     }
 
     /// Issue #738 评论 5789470425 问题1 / 评论 5792244119 问题 1: 用当前排版参数
@@ -1279,10 +1286,9 @@ impl LinuxEditorPipeline {
         // Issue #819 评论 5968931455 问题 2.2: create_transaction_from_prepared_handoff
         // 返回 HandoffTransactionOutcome，直接透传 skip reason，不再猜。
         #[allow(unused_assignments)]
-        let mut handoff_outcome: HandoffTransactionOutcome =
-            HandoffTransactionOutcome::Skipped(
-                super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
-            );
+        let mut handoff_outcome: HandoffTransactionOutcome = HandoffTransactionOutcome::Skipped(
+            super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+        );
         {
             let (raw_byte_start, raw_byte_end) = motion
                 .inserted_range
@@ -1824,9 +1830,8 @@ impl LinuxEditorPipeline {
             // 集合，让纹理在新事务创建之前不被回收。新事务创建后由它自己持有这些
             // snapshot ids（carried unit 已 units.push() 进新事务 units），下一次 retain
             // 会按新 active ids 正常收。
-            let mut active_ids = self.animation_coordinator.collect_active_snapshot_ids();
-            if let Some(ref handoff) = prepared_handoff {
-                let carried_ids = match handoff {
+            let carried_ids = match prepared_handoff.as_ref() {
+                Some(handoff) => match handoff {
                     super::animation::rebase::PreparedRebaseHandoff::Insert {
                         visual_state,
                         ..
@@ -1835,14 +1840,11 @@ impl LinuxEditorPipeline {
                         visual_state,
                         ..
                     } => &visual_state.carried_snapshot_ids,
-                };
-                for id in carried_ids {
-                    if !active_ids.contains(id) {
-                        active_ids.push(*id);
-                    }
                 }
-            }
-            self.texture_cache.retain_active_snapshot_ids(&active_ids);
+                .as_slice(),
+                None => &[],
+            };
+            self.retain_handoff_textures(carried_ids);
 
             let outcome = self
                 .animation_coordinator

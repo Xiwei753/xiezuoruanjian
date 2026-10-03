@@ -166,8 +166,7 @@ pub(crate) struct RebaseCaretHandoff {
     /// Issue #819 评论 5968931455: 旧 caret track 从 sampled frame 之后的剩余吞吐阶段。
     /// 新事务构造 route 时合成 `旧 carried route 剩余段 -> 当前新 route`，
     /// 让 carried CaretTrack unit 消费自己原来的剩余 route，而不是下一笔编辑的 route。
-    pub(crate) remaining_ingest_segments:
-        Vec<super::transaction::types::CaretTrackSegment>,
+    pub(crate) remaining_ingest_segments: Vec<super::transaction::types::CaretTrackSegment>,
     /// Issue #819 评论 5968931455: 旧事务的 stage_id，carried route 剩余段保留这个 id。
     pub(crate) stage_id: super::transaction::types::IngestStageId,
 }
@@ -307,7 +306,9 @@ impl LinuxEditorAnimationCoordinator {
             // 避免 dead_code（这些字段在采样状态中确实有值，供调试时确认帧归属）。
             editor_animation_debug_log(&format!(
                 "anim_sample: key={:?} layout_basis={:?} slices={}",
-                sampled.transaction_key, sampled.layout_basis_revision, sampled.slices.len(),
+                sampled.transaction_key,
+                sampled.layout_basis_revision,
+                sampled.slices.len(),
             ));
             // Issue #819 评论 5967250411 问题 1：终态过滤改用 slice.is_finished，
             // 不再拿 visible_fraction 猜 CaretTrack 终态。
@@ -315,7 +316,7 @@ impl LinuxEditorAnimationCoordinator {
             // 就被旧逻辑误判成"已吞完"，文字先消失，光标继续走。
             // is_finished 由 sample_unit_slice_frame 按本帧生命周期明确设置：
             // - Timed unit：unit.timing.progress(now) >= 1.0
-            // - CaretTrack unit：caret 不存在或 caret.progress >= 1.0
+            // - CaretTrack unit：阶段已被当前 caret 越过，或整条 track 已结束
             // Issue #819 评论 5968240881 问题 1：未终态的 slice 全部收集到 carried_units，
             // 携带完整 AnimatedSlice ingest 元数据 + sampled frame + timing，
             // 由 transaction builder 真正 units.push() 到新事务，
@@ -343,9 +344,12 @@ impl LinuxEditorAnimationCoordinator {
                     u.slice.byte_start == slice.byte_start
                         && u.slice.byte_end == slice.byte_end
                         && u.slice.kind == slice.kind
+                        && u.stage_id == slice.unit_stage_id
+                        && u.slice.snapshot_id == slice.snapshot_id
                 });
                 let carried_unit = match matched_unit {
                     Some(unit) => super::frame_state::CarriedVisualUnit {
+                        stage_id: unit.stage_id,
                         slice: unit.slice.clone(),
                         sampled_frame: slice.clone(),
                         timing: unit.timing.clone(),
@@ -367,6 +371,7 @@ impl LinuxEditorAnimationCoordinator {
                             },
                         };
                         super::frame_state::CarriedVisualUnit {
+                            stage_id: slice.unit_stage_id,
                             slice: rebuilt_slice,
                             sampled_frame: slice.clone(),
                             timing: rebuilt_timing,
@@ -453,10 +458,8 @@ impl LinuxEditorAnimationCoordinator {
                     // Issue #819 评论 5968931455: 提取旧 track 从当前 progress 之后的剩余 segments。
                     // 这些 segments 让 carried CaretTrack unit 在新事务里继续消费自己原来的 route，
                     // 而不是被迫消费下一笔编辑的 route。
-                    let remaining_ingest_segments = track.remaining_segments_from(
-                        caret_frame.progress,
-                        track.to, // 旧 track 的终点
-                    );
+                    let remaining_ingest_segments =
+                        track.remaining_segments_from(caret_frame.progress);
                     Some(RebaseCaretHandoff {
                         sampled,
                         remaining_duration_ms: track.remaining_duration_ms(now).max(1),
@@ -464,7 +467,7 @@ impl LinuxEditorAnimationCoordinator {
                         sampled_line_top: line_top,
                         sampled_line_bottom: line_bottom,
                         remaining_ingest_segments,
-                        stage_id: track.stage_id,
+                        stage_id: caret_frame.ingest_stage_id,
                     })
                 }
                 // Issue #808 评论 5916391891 修改 3: 没有真实 cursor track，就没有 cursor handoff。

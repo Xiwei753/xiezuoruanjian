@@ -13,9 +13,7 @@
 //!   layout basis revision + caret + slices）。
 
 use crate::sujian_editor_item::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use crate::sujian_editor_item::animation::transaction::types::{
-    IngestSnapshotSide, IngestStageId,
-};
+use crate::sujian_editor_item::animation::transaction::types::{IngestSnapshotSide, IngestStageId};
 use crate::sujian_editor_item::animation::VisualUnitTiming;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
@@ -99,6 +97,8 @@ impl Default for SampledCaretFrame {
 /// - `None`：`ReflowMove`/`ReflowCrossFade` 不参与吞吐，side 无意义。
 #[derive(Clone, Debug)]
 pub(crate) struct SampledSliceFrame {
+    /// 原视觉单元的阶段身份；同一事务可以包含多个 carried stage。
+    pub unit_stage_id: Option<super::transaction::types::IngestStageId>,
     /// 切片种类（InsertReveal / DeleteConceal / ReflowMove / ReflowCrossFade）。
     pub kind: AnimatedSliceKind,
     /// 本片字在文本中的字节范围（属于本事务 new 坐标系或 old 坐标系，由 kind 决定）。
@@ -138,8 +138,8 @@ pub(crate) struct SampledSliceFrame {
     ///
     /// 设置规则（`sample_unit_slice_frame`）：
     /// - Timed unit：`unit.timing.progress(now) >= 1.0`。
-    /// - CaretTrack unit：从同一帧的 caret 采样判断——`caret` 不存在（track 已结束/retired）
-    ///   或 `caret.progress >= 1.0`（track 已到终态）时 `is_finished = true`。
+    /// - CaretTrack unit：阶段在当前 caret stage 之前时已完成；阶段在后时未开始。
+    ///   同阶段由 `caret.progress >= 1.0` 判断；没有 caret 时不产出采样帧。
     /// - ReflowMove/ReflowCrossFade：`progress >= 1.0`。
     pub is_finished: bool,
 }
@@ -179,6 +179,8 @@ pub(crate) struct SampledEditVisualState {
 /// line mask / ingest line ord，新事务接管后吞吐边界会从零开始，文字闪一下。
 #[derive(Clone, Debug)]
 pub(crate) struct CarriedVisualUnit {
+    /// 原单元自己的阶段身份，重复交棒时仍然原样保留。
+    pub stage_id: Option<super::transaction::types::IngestStageId>,
     /// 原 `AnimatedSlice`，保留全部 ingest 元数据（不是只有几何的 `SampledSliceFrame`）。
     pub slice: AnimatedSlice,
     /// 本次 sampled frame（几何 + opacity + visible_fraction + remaining_duration）。

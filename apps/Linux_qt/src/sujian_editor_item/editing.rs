@@ -274,19 +274,14 @@ impl SujianEditorItem {
             );
         // Issue #738 评论 5788513592: reconcile 删除 unit / 完成事务后同步按剩余
         // active snapshot ids 收一次 texture cache，不让失去 owner 的纹理一直挂着。
-        let active_ids = self
-            .pipeline
-            .animation_coordinator()
-            .collect_active_snapshot_ids();
         self.pipeline
-            .texture_cache_mut()
-            .retain_active_snapshot_ids(&active_ids);
+            .retain_handoff_textures(&prepared_handoff.visual_state.carried_snapshot_ids);
 
         // Issue #756: 算出 text/caret/coordinated 三个开关传入 composition 路径。
         let coordinated_anim = self.current_coordinated_animation_enabled;
         let text_anim = coordinated_anim || self.current_typing_animation_enabled;
         let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
-        let key = self
+        let outcome = self
             .pipeline
             .animation_coordinator_mut()
             .handle_composition_commit_or_cancel(
@@ -325,8 +320,10 @@ impl SujianEditorItem {
         self.pipeline
             .set_current_canonical_snapshot(Some(new_canonical));
 
-        if let Some(key) = key {
-            self.prepare_transaction_textures(key);
+        if let super::animation::transaction_builder::HandoffTransactionOutcome::Created(key) =
+            &outcome
+        {
+            self.prepare_transaction_textures(*key);
         }
         self.pipeline
             .set_previous_layout_snapshot(Some(old_snapshot));
@@ -347,12 +344,7 @@ impl SujianEditorItem {
         self.transaction_created();
         // Issue #819 评论 5968931455 问题 2.2: 返回 HandoffTransactionOutcome，
         // 透传 skip reason，不再让 edit_flow.rs 猜。
-        match key {
-            Some(k) => super::animation::transaction_builder::HandoffTransactionOutcome::Created(k),
-            None => super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
-                super::edit_flow::EditVisualSkipReason::CompositionCommitBuilderSkipped,
-            ),
-        }
+        outcome
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证
