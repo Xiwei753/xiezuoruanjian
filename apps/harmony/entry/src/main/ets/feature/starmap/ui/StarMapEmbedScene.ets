@@ -28,9 +28,13 @@
 // 这里既不新增 Pinch 也不新增 Pan：两指永远只有根 Scene 那一份 PinchGesture，
 // 单指归属永远由 resolveRecursiveHit 决定。
 //
-// #820：本组件只在父层 LOD 为 expanded 时才存在——父层是 collapsed 时
-// StarMapEmbedItem 的条件渲染根本不挂这个组件（不是挂上再隐藏），
+// #821：本组件只在父层 Deep Zoom detail 为 interactive 时才存在——父层是 preview /
+// shell 时 StarMapEmbedItem 的条件渲染根本不挂这个组件（不是挂上再隐藏），
 // 所以深层递归的渲染开销是真的降下来了。子 Scene 的局部 fit 仍然只算一次。
+//
+// #821：本组件渲染进的是**本地** DEFAULT_EMBED_DIAMETER 见方的盒子（父层 Embed 外壳
+// 的布局尺寸就是它，缩放由父层 .scale() 承担），所以 '100%' 天然等于本地直径，
+// child StarMapScene 的 onAreaChange 报出来的也就是本地尺寸，不用再除任何缩放因子。
 
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
@@ -275,8 +279,8 @@ export struct StarMapEmbedScene {
         onCameraPanTo: this.onCameraPanTo,
         // 祖先累计比例原样往下传：第二层的累计 = camera × 第一层 fit × 第二层 fit（#818 复审）
         inheritedScale: this.inheritedScale,
-        // 根视口与视觉焦点同样原样往下传（#820）：整棵递归树共用同一份根视口和同一个焦点，
-        // 子 Scene 只按"自己这一层"参与 LOD 判定，不重算根视口、不改焦点。
+        // 根视口与视觉焦点同样原样往下传（#820/#821）：整棵递归树共用同一份根视口和同一个焦点，
+        // 子 Scene 只按"自己这一层"参与 Deep Zoom detail 判定，不重算根视口、不改焦点。
         rootViewportWidth: this.rootViewportWidth,
         rootViewportHeight: this.rootViewportHeight,
         focusScenePath: this.focusScenePath,

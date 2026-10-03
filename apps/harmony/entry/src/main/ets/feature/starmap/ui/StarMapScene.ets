@@ -36,8 +36,10 @@
 //     这种写死系数，也禁止在子层再存一份用户缩放倍数。
 //     子 Scene 在画面上的有效比例 = `fitScale * inheritedScale`（inheritedScale 是父层
 //     的 viewportScaleValue()），偏移同理要乘 —— 否则相机放大时只有外层圆壳变大，
-//     圆里的节点不跟着放大（#818 复审）。fitScale 本身存的是局部数据，
-//     fitView / syncFitToSceneSize 都必须先除掉 inheritedScale 还原局部尺寸再算。
+//     圆里的节点不跟着放大（#818 复审）。
+//     #821：这两个值不再互相乘进布局尺寸。Scene 在自己的**盒子坐标系**里渲染，
+//     子树只靠 `.scale(fitScale)` + `.position(fitOffset)` 显示变换，组件宽高恒为局部基准尺寸；
+//     inheritedScale 只是给几何 / 命中 / 注册表换算用的累计比例（viewportScaleValue()）。
 // 14. 选中态全树只有一份（StarMapSelectionState），身份是 scenePath + kind + itemId。
 //     每层各存一份 selectedNodeId 的话，父子两层会同时亮，且分不清选中的是哪一层的哪个东西。
 // 15. 选中、connect 松手、菜单归属全部走 geometry 的递归命中一个入口，
@@ -48,7 +50,7 @@
 //     否则晚到的单指回调会重新选中对象、弹菜单或起连线。
 // 17. 子星图**不是独立窗口**（#818 复审），没有自己的平移相机。任意一层空白处的
 //     普通单指拖动都只改根全局相机：child Scene 把目标 offset 通过 onCameraPanTo 回传给根。
-//     fitOffsetX/Y 只允许由 fitView / syncFitToSceneSize 写，不进任何用户交互写路径。
+//     fitOffsetX/Y 只允许由 fitView 写，不进任何用户交互写路径。
 //     之前 child 能自己写 fitOffset，拖出去的内容又被 clip(true) 裁掉，真机上表现为
 //     "子星图里的东西突然看不见"。
 //     回传的是**目标值**不是增量：PanGesture 的 event.offsetX/Y 是相对手势起点的累计位移，
@@ -66,29 +68,35 @@
 //     新对象会比当前安全区还大。重算的是 local fit，不是 global camera，
 //     所以不会把用户双指缩放好的视角打回初始大小。
 //     移动已有对象不重算，继续每帧 clamp 即可。
-// 20. 语义缩放按**实际视口**算，不按"第几层"算（#820）：档位判定全在纯函数模块
-//     StarMapVisualLod 里，输入只有"根视口宽高 + 本 Scene 累计有效比例 + 焦点"，
-//     判据是圆内还剩多少屏幕空间（放得下一个节点就展开），所以小窗自动少展开几层、
-//     大窗多展开几层，同一个设备改窗口大小就地重算。禁止写死"显示两层"这种常量。
-//     根视口宽高由 StarMapScreen 从 onAreaChange 一路透传下来，子 Scene 不许拿自己
-//     那个圆当根视口（那会让"够不够展开"变成自我实现）。
-// 21. 三档渲染（#820）：expanded 才实例化 StarMapEmbedScene；collapsed 只画节点尺寸的
-//     摘要卡（标题 + 子星图身份 + 选中态），整块热区归这个 Embed、不往内递归；
-//     hidden 连摘要卡都不画。折叠态不许 opacity(0) 假装折叠，也不许"先建好再缩"。
-//     LOD 层级按 scenePath 判，不按 sceneDepth——递归链里一层 Embed 要加两次 sceneDepth。
-// 22. LOD 必须同时改**布局矩形**（buildEmbedLayoutNodes 吃档位映射）和渲染，
-//     否则会出现"画的是 160×80 摘要卡、连线端点和命中还按 200×200 的圆算"。
-//     形状由 geometry 的 isCircularDisplayRect 从同一份显示边界读出，不另开参数。
-//     档位切换只改派生矩形，绝不因为用户捏合就回写 Core 的 authored position。
-// 23. 焦点链比对的路径必须是**这颗 Embed 进入之后**的 childScenePath
+// 20. Deep Zoom 只减细节、不改几何（#821）：子星图在任何档位、任何缩放下都还是那颗正圆
+//     （DEFAULT_EMBED_DIAMETER × DEFAULT_EMBED_DIAMETER，圆角 = 半径）。
+//     禁止在任何档位画成 160×80 的矩形节点卡片，禁止让档位进入 buildEmbedLayoutNodes、
+//     禁止让档位改 layout rect 或 authored position。用户在圆与圆之间看到的比例差
+//     全部来自相机 + 逐层 local fit，不是来自"这一层换了张皮"。
+// 21. 三档渲染（#821）：interactive 挂 StarMapEmbedScene（真实可交互的子 Scene）；
+//     preview 挂 StarMapEmbedPreview（一张固定尺寸 Canvas 缩略图，HitTestMode.None，
+//     绝不抢父层的全局 Pinch）；shell 只画圆壳。档位变化**只换圆里那个渲染器**，
+//     不重建任何布局矩形、不重算 fit。禁止 opacity(0) 假装折叠，也禁止"先建好再缩"。
+//     档位按 scenePath 判，不按 sceneDepth——递归链里一层 Embed 要加两次 sceneDepth。
+// 22. 放大必须走**显示变换**，不许撑大布局（#821）：节点 / Embed 的 `.width()/.height()`
+//     和 `.fontSize()` 一律保持局部基准常量，缩放只通过 `.scale()`（配合 boxPositionX/Y
+//     的中心补偿）实现。旧写法 `.width(160 * viewportScaleValue())` 在相机放大到几十倍时
+//     会让 RenderService 按巨大的组件缓冲去分配，那正是 #820 里 3× 天花板的真正原因。
+// 23. Scene 的盒子尺寸恒等于局部尺寸（#821）：子 Scene 的布局盒子永远是父 Embed 的局部
+//     DEFAULT_EMBED_DIAMETER（放大由父层 `.scale()` 承担），所以 onAreaChange 报出来的
+//     就是本层局部尺寸，`localSceneSize()` 不再除以 parentScale()，也不需要任何
+//     "尺寸变了再重算 fit"的补偿机制。
+// 24. 焦点链比对的路径必须是**这颗 Embed 进入之后**的 childScenePath
 //     （embedScenePathLabel(instanceId)），不能传本 Scene 的 scenePath：
-//     传父 Scene 的话焦点 = root/embed:a 时 a/b/c 全被判成"在焦点链上"强制展开，
-//     而初始 focusScenePath = root 更会把根层所有 Embed 全部强制展开，根层 LOD 失效（#820 复核）。
-// 24. 展开尺寸必须是同一份显示真相（#820 复核）：`expandedEmbedSizeVp()` 读当前视口的
-//     显示预算，LOD 判定、显示边界、布局矩形、渲染盒子全部用它。写死 DEFAULT_EMBED_DIAMETER
-//     会让视口只影响 coverage 不影响 LOD，"大屏多展开几层"永远实现不了。
-// 25. Embed 的显示矩形以 authored 中心为锚点派生，展开 / 折叠 / 视口 resize 只改尺寸不挪位置；
-//     移动保存时用 embedAuthoredPositionFromDisplay 把显示左上角反解回 authored 口径再写 Core。
+//     传父 Scene 的话焦点 = root/embed:a 时 a/b/c 全被判成"在焦点链上"保底，
+//     而初始 focusScenePath = root 更会把根层所有 Embed 全部保底，档位判定失效（#820 复核）。
+//     焦点链的保底只是"至少 preview"（里面还有东西可看），不是形状、也不是强制 interactive。
+// 25. 相机范围放到数值安全边界（#821）：CAMERA_SCALE_MIN/MAX 已经在 StarMapViewport 里
+//     放宽到 1e-4 / 1e5，因为显示变换不再撑大组件缓冲。工具栏 +/− 走乘性 ZOOM_FACTOR，
+//     双指捏合保持连续比例——用户不应该感觉到一个"3× 天花板"。
+// 26. 缩放不是布局变化（#821）：正常相机缩放不触发任何避让、不推开邻居。
+//     同层对象按同一个相机比例等比放大，包括互相重叠也照画。避让 / 找空位只在用户
+//     真的创建、移动、缩放了某个对象的 world bounds 时才发生。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -114,10 +122,9 @@ import {
   EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH, EmbedHitMetrics
 } from '../platform/StarMapGeometry'
 import {
-  PlatformLayoutNode, PlatformPoint, EmbedDisplayBounds,
+  PlatformLayoutNode, PlatformPoint,
   buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
-  embedAuthoredPositionFromDisplay,
-  DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, DEFAULT_NODE_RADIUS
+  DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT
 } from '../platform/StarMapLayout'
 import {
   PlatformMotionConfig,
@@ -130,18 +137,18 @@ import {
   StarMapSceneNode, StarMapSceneRegistry, Viewport,
   ContentBounds, computeContentBounds, computeFittedViewport,
   computeCameraPinch, GlobalCameraTransform,
-  clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO,
-  projectLocalLengthToScreen
+  clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO
 } from '../platform/StarMapViewport'
 import {
-  EmbedLodMode, VisualLodContext,
-  projectEmbedMetrics, resolveEmbedLodForScene, embedDisplayBoundsForLod, expandedEmbedSizeVp
+  DeepZoomDetail, VisualLodContext,
+  projectEmbedMetrics, resolveEmbedDetailForScene
 } from '../platform/StarMapVisualLod'
 import {
   logPinchBegin, logPinchEnd, logRecursiveHit, logViewportState, logCreateResult,
   logSelectionChanged, logConnectBegin, logConnectEnd
 } from '../platform/StarMapDiagnostics'
 import { StarMapEmbedScene } from './StarMapEmbedScene'
+import { StarMapEmbedPreview } from './StarMapEmbedPreview'
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
 interface WobbleOffset {
@@ -390,8 +397,8 @@ export struct StarMapScene {
    * 移动已有对象不走这里——移动每帧 clamp 就够了，不需要整体重新适配。
    */
   private hasFittedView: boolean = false
-  // 上次适配时 Scene 的宽度，用来判断容器尺寸变化是不是父层缩放带来的
-  private lastFittedSceneSize: number = 0
+  // #821：不再保留"上次 fit 时用的尺寸"—— 盒子恒为局部尺寸，不会被父层缩放
+  // 撑大，也就不需要用尺寸变化反推什么时候该重算 fit。
   /** 注册到 sceneRegistry 的本层句柄 */
   private sceneHandle: StarMapSceneNode | null = null
 
@@ -453,19 +460,19 @@ export struct StarMapScene {
     this.closeCreateDialogs()
   }
 
-  // ─── 视觉 LOD（#820）───
+  // ─── Deep Zoom 细节档位与显示变换（#821）───
 
   /**
    * 某个 Embed 进入之后的 childScenePath 描述（'root' / 'root/embed:xxx'）。
    *
-   * LOD 的逻辑层级按**它**判，不按 sceneDepth：
+   * 细节档位的逻辑层级按**它**判，不按 sceneDepth：
    * 递归链是 StarMapScene → StarMapEmbedScene → StarMapScene，
    * 一层嵌套要把 sceneDepth 加两次，用它算"第几层"会把深度翻倍。
    *
    * 焦点链比对的是**这颗 Embed 自己进入后的位置**，不是它所属的父 Scene：
    * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层的 b / c 仍按真实屏幕空间
-   * 正常折叠；传父 Scene 的话初始焦点 `root` 会把整层 Embed 全部强制展开，
-   * 根层 LOD 直接失效（#820 复核）。
+   * 正常掉档；传父 Scene 的话初始焦点 `root` 会把整层 Embed 全部保底，
+   * 档位判定直接失效（#820 复核）。
    */
   private embedScenePathLabel(embedInstanceId: string): string {
     const childSegments: StarMapPathSegment[] = [
@@ -475,7 +482,7 @@ export struct StarMapScene {
     return describeScenePath(childSegments)
   }
 
-  /** 根视口 + 焦点的 LOD 上下文。整棵递归树共用同一份，子 Scene 不许用自己的圆当视口。 */
+  /** 根视口 + 焦点的档位上下文。整棵递归树共用同一份，子 Scene 不许用自己的圆当视口。 */
   private visualLodContext(): VisualLodContext {
     return {
       viewportWidthVp: this.rootViewportWidth,
@@ -485,99 +492,106 @@ export struct StarMapScene {
   }
 
   /**
-   * 当前 Viewport 下展开态 Embed 的真实显示边长（局部坐标）。
+   * 上一帧每个 Embed 的细节档位，作为覆盖率滞回的输入。
    *
-   * 全 Scene 唯一的展开尺寸来源（#820）：LOD 判定、显示边界、布局矩形、
-   * 渲染盒子全部读它。不许在渲染里再写死 DEFAULT_EMBED_DIAMETER，
-   * 否则就出现"LOD 按 320 算、UI 画 200"的第二套尺寸。
+   * 刻意用**普通字段**而不是 @State：档位是在 build 里就地算出来决定挂哪个渲染器的，
+   * 如果它是响应式的，每次改档都会触发一轮无意义的重渲染；真正驱动重渲染的是
+   * cameraScale / focusScenePath / rootViewport 这几个 @State/@Prop。
    */
-  private expandedEmbedSizeVp(): number {
-    return expandedEmbedSizeVp(this.visualLodContext())
-  }
+  private embedDetailCache: Map<string, DeepZoomDetail> = new Map<string, DeepZoomDetail>()
 
   /**
-   * 某个 Embed 在本 Scene 里的视觉档位。
+   * 某个 Embed 当前的 Deep Zoom 细节档位。
    *
-   * 判据只有一条：它在**屏幕上**的圆内还剩多少真实可用空间
-   * （`projectEmbedMetrics` 用本 Scene 的累计比例投影），
-   * 留得下一个节点高度（EXPANDED_MIN_INNER_USABLE_VP）就展开，否则折叠成
-   * 节点尺寸的摘要卡。节点宽度交给 child local fit 适配，所以小屏第一层仍然是
-   * expanded，被压下去的只是更深一层。
+   * 判据只有屏幕上的两项连续量（`projectEmbedMetrics` 用本 Scene 的累计比例投影）：
+   * 覆盖率过 0.70 挂真实子 Scene，投影直径过 48vp 挂 Canvas 缩略图，
+   * 再小就只剩圆壳。视口大小从 rootViewportWidth/Height 进来，所以同一个设备
+   * 改窗口大小会真的换档。
    *
-   * 视口大小通过 `expandedEmbedSizeVp()` 进入判据，所以同一个设备
-   * 改窗口大小会真的换档，而不是只有 coverage 在动（#820 复核）。
-   *
-   * ancestorCollapsed 恒为 false：祖先一旦折叠，父层就不会再实例化本 Scene，
-   * 能走到这里的 Scene 说明整条祖先链都是展开的。
+   * **档位只决定圆里渲染哪个组件**：形状、world bounds、authored position
+   * 一律不变（#821）。所以这里没有任何"重建布局矩形"的副作用，
+   * 缓存只是为了给滞回留上一帧的值。
    */
-  private embedLod(embedInstanceId: string): EmbedLodMode {
-    const metrics = projectEmbedMetrics(
-      this.expandedEmbedSizeVp(),
-      this.viewportScaleValue(),
-      this.visualLodContext(),
-      EMBED_FIT_PADDING_VP
-    )
-    return resolveEmbedLodForScene(
+  private embedDetail(embedInstanceId: string): DeepZoomDetail {
+    const metrics = projectEmbedMetrics(this.viewportScaleValue(), this.visualLodContext())
+    const detail: DeepZoomDetail = resolveEmbedDetailForScene(
       metrics,
       this.embedScenePathLabel(embedInstanceId),
       this.focusScenePath,
-      false
+      this.embedDetailCache.get(embedInstanceId) ?? null
     )
+    this.embedDetailCache.set(embedInstanceId, detail)
+    return detail
   }
 
-  /** 某个 Embed 当前档位对应的显示边界（展开=正圆，折叠=节点尺寸摘要卡）。 */
-  private embedDisplayBounds(embedInstanceId: string): EmbedDisplayBounds {
-    return embedDisplayBoundsForLod(this.embedLod(embedInstanceId), this.visualLodContext())
-  }
-
-  /** 本 Scene 全部 Embed 的档位 → 显示边界映射，喂给 buildEmbedLayoutNodes。 */
-  private embedDisplayBoundsMap(): Map<string, EmbedDisplayBounds> {
-    const bounds = new Map<string, EmbedDisplayBounds>()
-    if (!this.graph) {
-      return bounds
-    }
-    for (const embed of this.graph.embeds) {
-      bounds.set(embed.instanceId, this.embedDisplayBounds(embed.instanceId))
-    }
-    return bounds
-  }
+  // ─── 显示变换（盒子坐标系）───
 
   /**
-   * 按当前 LOD 重建 Embed 的布局矩形。
+   * 本 Scene 在**自己的盒子坐标系**里的显示比例。
    *
-   * 必须和渲染同步：画的是摘要卡而 rect 还是 200×200 的话，
-   * 连线端点、递归命中、跨层拉线都会按一个不存在的圆算（#820）。
-   *
-   * 只改派生出来的显示矩形，**不回写 Core 的 authored position**：
-   * 语义缩放是显示层的事，用户捏合不应该顺手改掉星图的节点位置。
+   * #821：每个 Scene 的组件宽高都是局部基准尺寸不变，缩放一律走 `.scale()`。
+   * 根 Scene 是全局相机，子 Scene 是 local fit —— 这两个值只在显示层用，
+   * 几何 / 命中 / 注册表那一侧仍然读累计值 `viewportScaleValue()`。
    */
-  private refreshEmbedLodLayout(): void {
-    if (!this.graph) {
-      return
-    }
-    this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds, this.embedDisplayBoundsMap())
-    this.recomputeGeometry()
+  private boxScale(): number {
+    return this.isCameraScene() ? this.cameraScale : this.fitScale
+  }
+
+  /** 本 Scene 盒子坐标系的 X 原点（局部坐标）。 */
+  private boxOffsetX(): number {
+    return this.isCameraScene() ? this.cameraOffsetX : this.fitOffsetX
+  }
+
+  /** 本 Scene 盒子坐标系的 Y 原点（局部坐标）。 */
+  private boxOffsetY(): number {
+    return this.isCameraScene() ? this.cameraOffsetY : this.fitOffsetY
   }
 
   /**
-   * 本 Scene 的累计有效比例。
+   * 一"盒子单位"等于多少屏幕 vp。
    *
-   * 渲染、命中、边几何全部用这个值，界面上不允许再直接读 cameraScale / fitScale 当比例用。
+   * 只给 Canvas 的 stroke / font 用：Canvas 画布是本 Scene 的 `100%×100%`，
+   * 随祖先链一起被缩放，所以线宽和字号要除掉这段缩放才能在**屏幕上**保持恒定粗细。
+   * 根 Scene 没有祖先（parentScale = 1），返回 1，行为与旧版一致。
+   */
+  private boxUnitVp(): number {
+    return 1 / this.parentScale()
+  }
+
+  /**
+   * 组件 `.position()` 用的 X：把画布坐标搬进盒子坐标系，并补偿 `.scale()` 的中心缩放。
    *
-   * 为什么子 Scene 要乘 inheritedScale：ArkUI 里子 Scene 是父 Embed 盒子的子组件，
-   * 父层写死了 `expandedEmbedSizeVp() * viewportScaleValue()`，盒子已经带着祖先比例变大了。
-   * 子 Scene 若只用自己的 fitScale 绘制，圆壳会跟着相机变大、圆里的节点却纹丝不动。
-   * 乘上 inheritedScale 之后，整条链才是
-   * `child local × child fit × parent fit × … × global camera → screen`。
+   * ArkUI 的 `.scale()` 是绕组件中心缩放的，而 `.position()` 给的是组件**左上角**，
+   * 所以直接摆 `canvasX * s` 会让组件视觉左上角跑偏 `base * (s - 1) / 2`，
+   * 缩得越大偏得越多。减掉这一项之后，视觉位置恰好等于 `canvasX * s + offset`。
+   *
+   * @param canvasX 本 Scene 画布坐标里的 X（= 布局节点 x）
+   * @param baseWidth 组件的局部布局宽度（常量，不含缩放）
+   */
+  private boxPositionX(canvasX: number, baseWidth: number): number {
+    const scale: number = this.boxScale()
+    return canvasX * scale + this.boxOffsetX() - baseWidth * (scale - 1) / 2
+  }
+
+  /** `boxPositionX` 的 Y 版本。@param baseHeight 组件的局部布局高度（常量） */
+  private boxPositionY(canvasY: number, baseHeight: number): number {
+    const scale: number = this.boxScale()
+    return canvasY * scale + this.boxOffsetY() - baseHeight * (scale - 1) / 2
+  }
+
+  /**
+   * 本 Scene 的**累计**有效比例：相机（或 local fit）× 全部祖先比例。
+   *
+   * 几何、命中、注册表、边渲染换算全部用这个累计值；界面上不允许再直接读
+   * cameraScale / fitScale 当比例用。子 Scene 要乘 inheritedScale，否则相机放大时
+   * 只有外层圆壳变大、圆里的节点纹丝不动。
+   *
+   * #821：`boxScale() × parentScale()` 就是这个累计值的等价形式（telescoping）：
+   * 盒子 → 累计屏幕空间只差一段祖先比例。显示层用 boxScale()，几何层用这里。
    *
    * 必须是**方法**，不能是 getter：ArkUI 状态管理 V1 的 @Component 不支持 get
    * 访问器，编译器会把它当成一个从没被赋值的普通属性，于是每次读都是 undefined。
-   * #816 首轮真机复测就是这么塌的 —— viewportScale 恒为 undefined，往下传出去：
-   *   - syncSceneHandle() 把 undefined 塞进 StarMapSceneNode.scale，递归命中
-   *     读到的比例全是 undefined，screenToCanvas 出来是 NaN，命中全部落空成 blank；
-   *   - computeCameraPinch 拿到 NaN 比例，cameraOffsetX / cameraOffsetY 变成 NaN；
-   *   - 空白处长按换算出来的 createMenuCanvasPosition 是 NaN，序列化成 null，
-   *     Core 解析节点报 PARSE_ERROR，新建节点 / 子星图一律失败。
+   * #816 首轮真机复测就是这么塌的（比例 NaN → 命中全落空 → 新建一律 PARSE_ERROR）。
    * 只有 @ComponentV2 才支持 getter（HomeScreen.ets 那种写法），这里是 V1，别改回去。
    */
   private viewportScaleValue(): number {
@@ -610,15 +624,17 @@ export struct StarMapScene {
   }
 
   /**
-   * 本 Scene 的**局部**尺寸：扣掉祖先累计比例后的原始盒子大小。
+   * 本 Scene 的**局部**尺寸，也就是它自己的布局盒子大小。
    *
-   * 局部 fit 必须拿局部尺寸算，不能拿屏幕尺寸算：屏幕尺寸本身带着相机缩放，
-   * 子图如果在 camera=2 时第一次加载，算出来的 fitScale 会比 camera=1 时加载小一半，
-   * 同一张子图就会因为"什么时候打开"显示成不同大小（#818 复审）。
+   * #821：子 Scene 的盒子恒为父 Embed 的局部 DEFAULT_EMBED_DIAMETER —— 放大是父层
+   * `.scale()` 的显示变换，不会把子组件的布局盒子撑大 —— 所以 `onAreaChange` 报出来的
+   * `sceneWidth` 本身就已经是局部尺寸，不需要再除掉 `parentScale()`。
+   *
+   * 这一点正是"同一张子图不因为什么时候打开而显示成不同大小"的原因（#818 复审）：
+   * 局部 fit 拿到的永远是那份不随相机变的局部盒子。
    */
   private localSceneSize(): number {
-    const parentScale: number = this.parentScale()
-    return this.sceneWidth / parentScale
+    return this.sceneWidth
   }
 
   /**
@@ -743,27 +759,25 @@ export struct StarMapScene {
    */
   fitView(): void {
     this.hasFittedView = true
-    this.applyFittedLocalViewport(this.localSceneSize(), this.sceneHeight / this.parentScale())
+    this.applyFittedLocalViewport(this.sceneWidth, this.sceneHeight)
     // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
     this.syncSceneHandle()
-    // 本 Scene 的累计比例变了 → 它里面的 Embed 该展开还是该折叠要重算（#820）
-    this.refreshEmbedLodLayout()
+    // #821：局部 fit 变了只需要同步句柄。各 Embed 的细节档位是在 build 里
+    // 就地按 @State/@Prop 现算的，不需要"重建布局矩形"这一步 —— 布局矩形恒定。
   }
 
   /**
-   * 按给定的**局部**尺寸重算一次 local fit（fitView / 容器基础尺寸变化共用出口）。
+   * 按本 Scene 的**局部**尺寸重算一次 local fit（只有 fitView 一个调用方）。
    *
    * 可用区域取父 Embed 圆形内容区里"手能可靠点到"的内接正方形边长：
    * 子 Scene 的布局是正方形，四角会超出圆被父层 clip 裁掉，
    * 所以按 1/√2 折算，内容不会铺到圆外被切掉。
    *
-   * 这里算的是**局部** fit：先把 `sceneWidth / sceneHeight` 除掉 inheritedScale
-   * 还原成本层的原始盒子尺寸，再用它算比例和居中偏移。
-   * fitScale / fitOffset 一旦写成局部数据，就与"打开这张子图时相机是多少"无关，
-   * 屏幕上的呈现由 `viewportScaleValue() = fitScale * inheritedScale` 统一乘出来（#818 复审）。
+   * #821：局部尺寸就是 `sceneWidth / sceneHeight` 本身（盒子恒为局部 200），
+   * 不再除掉 inheritedScale；fitScale / fitOffset 与"打开这张子图时相机是多少"无关，
+   * 屏幕上的呈现由 `.scale()` + `viewportScaleValue()` 统一乘出来（#818 复审）。
    */
   private applyFittedLocalViewport(localWidth: number, localHeight: number): void {
-    this.lastFittedSceneSize = localWidth
     const bounds: ContentBounds | null = computeContentBounds(this.nodeRects)
     if (bounds === null) {
       this.fitScale = 1
@@ -789,35 +803,6 @@ export struct StarMapScene {
     this.fitScale = fitted.zoomScale
     this.fitOffsetX = fitted.offsetX
     this.fitOffsetY = fitted.offsetY
-  }
-
-  /**
-   * 局部容器尺寸真的变了就重算一次 local fit（#818 / #820）。
-   *
-   * 判断依据是**局部**尺寸 `sceneWidth / inheritedScale`，不是屏幕上的 sceneWidth。
-   * 相机从 1 放到 2 时：sceneWidth 从 200 变 400、inheritedScale 从 1 变 2，
-   * 局部尺寸还是 200 → 这里直接返回，局部 fit 什么都不用改，屏幕上的呈现由
-   * 累计比例自然放大（也不会把用户缩放抵消掉）。
-   *
-   * 局部尺寸变了只有一种来源：父 Embed 的基础尺寸真的变了 —— 也就是 #820 的
-   * 视口显示预算：视口变大 → expandedEmbedSize 200 → 320 → 本 Scene 的局部盒子
-   * 从 200 真的长到 320。这时必须**重算 fitScale**（见 applyFittedLocalViewport），
-   * 只 recenter 的话父圆虽然变大、内部内容仍按旧的 0.45 比例挤在里面，
-   * 吃不到新增空间，更深一层的 ownerEffectiveScale 一直偏小，
-   * LOD 就永远多展开不了一层（#820 复核）。
-   */
-  private syncFitToSceneSize(): void {
-    if (!this.hasFittedView || this.lastFittedSceneSize <= 0) {
-      return
-    }
-    const localWidth: number = this.localSceneSize()
-    if (Math.abs(localWidth - this.lastFittedSceneSize) <= 0.5) {
-      return
-    }
-    this.applyFittedLocalViewport(localWidth, this.sceneHeight / this.parentScale())
-    this.syncSceneHandle()
-    // 局部容器尺寸变了：本 Scene 的累计比例跟着变，Embed 的展开/折叠重算（#820）
-    this.refreshEmbedLodLayout()
   }
 
   /**
@@ -879,9 +864,9 @@ export struct StarMapScene {
     if (this.isCameraScene()) {
       return { x: x, y: y }
     }
-    const parentScale: number = this.parentScale()
-    const localWidth: number = this.sceneWidth / parentScale
-    const localHeight: number = this.sceneHeight / parentScale
+    // #821：本 Scene 的盒子恒为局部尺寸，不用再除 parentScale
+    const localWidth: number = this.sceneWidth
+    const localHeight: number = this.sceneHeight
     // 圆壳直径取局部宽高中较小的一边：Embed 组件是等宽高的正圆
     const localSceneSize: number = Math.min(localWidth, localHeight)
     return clampItemToEmbedSafeArea(
@@ -942,10 +927,12 @@ export struct StarMapScene {
    * 于是大部分子星图位置上 FORWARD_COMPETITION 根本走不到（#818 复审）。
    *
    * 圆半径同样直接取 `child.rect`：这个矩形就是这块 innerContent 的实际大小，
-   * 不需要再拿 `expandedEmbedSizeVp() * viewportScaleValue()` 反推。
+   * 也就是本地 DEFAULT_EMBED_DIAMETER（#821：外壳几何恒定，缩放走 .scale()），
+   * 不需要再拿任何缩放因子反推。
    *
    * 标题带与圆环的判定必须和 resolveRecursiveHit 完全一致，所以同样调
-   * embedHitMetricsForScene，不在这里再抄一份 24 / 12。
+   * embedHitMetricsForScene，不在这里再抄一份 24 / 12；这里传 1，因为
+   * x / y 是组件局部坐标，ArkUI 已经把 .scale() 一起换算掉了。
    *
    * @param child 触摸测试命中的那一个 Embed 内壳节点（ArkUI 只收命名节点）
    * @returns 命中内部就 true（可以下探），标题带 / 圆环 / 圆外都 false
@@ -1198,7 +1185,8 @@ private refitAfterContentAdded(): void {
    * 节点 / Embed 自己的单击不走这里——它们各自组件在 Stack 上层，事件被它们收走，
    * 根本到不了背景层。
    */
-  private handleBlankTap(screenX: number, screenY: number) {
+  /** 空白层单击：入参是**盒子坐标**（#821），交给 geometry 前先换算到累计屏幕空间。 */
+  private handleBlankTap(boxX: number, boxY: number) {
     // 双指已接管时单击不能再改选中态（#818 复审）
     if (this.gestureTracker.isPinching()) {
       return
@@ -1207,7 +1195,10 @@ private refitAfterContentAdded(): void {
     if (context === null) {
       return
     }
-    const rootPoint: PlatformPoint = convertPointToRoot(context, this.scenePath, screenX, screenY)
+    const viewportPoint: PlatformPoint = this.boxPointToViewport({ x: boxX, y: boxY })
+    const rootPoint: PlatformPoint = convertPointToRoot(
+      context, this.scenePath, viewportPoint.x, viewportPoint.y
+    )
     const hit: RecursiveHit = resolveRecursiveHit(context, rootPoint.x, rootPoint.y)
     if (hit.target === null) {
       this.clearSelection()
@@ -1237,31 +1228,29 @@ private refitAfterContentAdded(): void {
     // 不同步的话缩放之后命中判定就一直用的是旧视口（#816 复审第 2 条）。
     this.syncSceneHandle()
     this.drawEdges()
-    // 祖先累计比例变化 = 局部尺寸跟着父层重新算一次。
-    // onAreaChange 和 @Watch 谁先到不保证，先按当前这份比例校一遍局部适配：
-    // 局部尺寸没变就什么都不做（相机缩放的正常情况），变了才重新居中。
-    this.syncFitToSceneSize()
-    // 相机一变，每个 Embed 的屏幕投影就变了，展开/折叠要就地重算（#820）。
-    // 这就是语义缩放：小视口 + 小相机比例 → 折起来；放大 → 自动展开。
-    this.refreshEmbedLodLayout()
+    // #821：这里**不**再有任何"重建布局矩形"的步骤。
+    // 相机一变，每个 Embed 的屏幕投影跟着变，Deep Zoom 档位在 build 里就地现算
+    // （build 读的就是这几个 @Prop/@State），布局矩形和 authored position 一律不动。
   }
 
   /**
-   * 视觉焦点变了（#820）：焦点链上的 Embed 强制展开，离链的重新按屏幕空间判。
-   * 焦点只改显示，不动 Core 的 StarMap / Embed 关系，也不改相机。
+   * 视觉焦点变了（#821）：焦点链上的 Embed 至少保底 preview，离链的按屏幕空间判。
+   * 焦点只改显示，不动 Core 的 StarMap / Embed 关系，也不改相机、不改布局矩形。
    */
   onFocusScenePathChange() {
-    this.refreshEmbedLodLayout()
+    this.drawEdges()
+    this.syncSceneHandle()
   }
 
   /**
-   * 根视口尺寸变了（分屏、折叠屏展开、横竖屏切换）（#820）。
+   * 根视口尺寸变了（分屏、折叠屏展开、横竖屏切换）（#821）。
    *
    * 这里只重算派生显示状态：相机保持不动、focusScenePath 保持不动，
    * 不重新 fit 根图，也不把用户拉回根层——同一个星图换个窗口大小就该接着看。
    */
   onRootViewportChange() {
-    this.refreshEmbedLodLayout()
+    this.drawEdges()
+    this.syncSceneHandle()
   }
 
   onMotionProgressChange() {
@@ -1292,7 +1281,7 @@ private refitAfterContentAdded(): void {
       return
     }
     this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
-    this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds, this.embedDisplayBoundsMap())
+    this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
     this.recomputeGeometry()
   }
 
@@ -1330,23 +1319,25 @@ private refitAfterContentAdded(): void {
   }
 
   /**
-   * 计算节点在屏幕上的最终 x 坐标（含 zoom、offset、wobble）
+   * 节点在**本 Scene 盒子坐标系**里的 x（含 fit / camera 变换与 wobble）。
+   *
+   * #821：返回盒子坐标而不是累计屏幕坐标。组件用 `.width(常量).scale(boxScale)`
+   * 渲染，`.position()` 要的就是盒子坐标（见 boxPositionX）。
+   * 要累计屏幕坐标时乘一次 `parentScale()`，等价于 `viewportScaleValue()`。
    */
-  private getNodeScreenX(nodeId: string): number {
+  private getNodeBoxX(nodeId: string): number {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseX = ln ? ln.x : 0
     const wobbleDx = wobbleXFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
-    return (baseX + wobbleDx) * this.viewportScaleValue() + this.viewportOffsetX()
+    return (baseX + wobbleDx) * this.boxScale() + this.boxOffsetX()
   }
 
-  /**
-   * 计算节点在屏幕上的最终 y 坐标（含 zoom、offset、wobble）
-   */
-  private getNodeScreenY(nodeId: string): number {
+  /** `getNodeBoxX` 的 Y 版本。 */
+  private getNodeBoxY(nodeId: string): number {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseY = ln ? ln.y : 0
     const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
-    return (baseY + wobbleDy) * this.viewportScaleValue() + this.viewportOffsetY()
+    return (baseY + wobbleDy) * this.boxScale() + this.boxOffsetY()
   }
 
   /**
@@ -1358,40 +1349,39 @@ private refitAfterContentAdded(): void {
    * 普通节点和 Embed 统一走这个入口，两种形状的边界算法由 geometry 决定。
    *
    * @param sourceId 连线源对象 ID（普通节点或 Embed）
-   * @param pointerScreen 当前手指位置的屏幕坐标
+   * @param pointerScreen 当前手指位置的**盒子坐标**（#821）
    */
   private updatePreviewLineFrom(sourceId: string, pointerScreen: PlatformPoint) {
     const ln = this.getPlatformLayoutNode(sourceId)
     if (!ln) return
     const rect: PlatformNodeRect = deriveNodeRectFromLayoutNode(ln)
+    // 手指坐标在盒子坐标系里，几何层的画布坐标在累计屏幕空间：先乘一次 parentScale。
     const pointerCanvas: PlatformPoint = screenToCanvas(
-      pointerScreen.x, pointerScreen.y, this.viewportScaleValue(), this.viewportOffsetX(), this.viewportOffsetY()
+      pointerScreen.x * this.parentScale(), pointerScreen.y * this.parentScale(),
+      this.viewportScaleValue(), this.viewportOffsetX(), this.viewportOffsetY()
     )
     const start: PlatformPoint = edgeEndpointBoundaryPoint(
       rect, this.isEmbed(sourceId), pointerCanvas.x, pointerCanvas.y
     )
+    // previewLineFrom 是预览 Canvas 用的锚点，留在盒子坐标系（#821）
     this.previewLineFrom = {
-      x: start.x * this.viewportScaleValue() + this.viewportOffsetX(),
-      y: start.y * this.viewportScaleValue() + this.viewportOffsetY()
+      x: start.x * this.boxScale() + this.boxOffsetX(),
+      y: start.y * this.boxScale() + this.boxOffsetY()
     }
   }
 
-  /**
-   * 计算 Embed 在屏幕上的 x 坐标（无 wobble）
-   */
-  private getEmbedScreenX(embedId: string): number {
+  /** Embed 在**本 Scene 盒子坐标系**里的 x（无 wobble）。 */
+  private getEmbedBoxX(embedId: string): number {
     const ln = this.getPlatformLayoutNode(embedId)
     const baseX = ln ? ln.x : 0
-    return baseX * this.viewportScaleValue() + this.viewportOffsetX()
+    return baseX * this.boxScale() + this.boxOffsetX()
   }
 
-  /**
-   * 计算 Embed 在屏幕上的 y 坐标
-   */
-  private getEmbedScreenY(embedId: string): number {
+  /** Embed 在**本 Scene 盒子坐标系**里的 y（无 wobble）。 */
+  private getEmbedBoxY(embedId: string): number {
     const ln = this.getPlatformLayoutNode(embedId)
     const baseY = ln ? ln.y : 0
-    return baseY * this.viewportScaleValue() + this.viewportOffsetY()
+    return baseY * this.boxScale() + this.boxOffsetY()
   }
 
   /**
@@ -1405,7 +1395,11 @@ private refitAfterContentAdded(): void {
   // ─── 手势辅助 ───
 
   /**
-   * 手势触点的屏幕坐标。
+   * 手势触点坐标（**盒子坐标系**）。
+   *
+   * ArkUI 的 GestureEvent 是在**绑定手势的那个组件自己的局部坐标**里报的，
+   * `finger.localX / localY` 因此已经是盒子坐标，锚点也必须传盒子坐标
+   * （`getNodeBoxX/Y`、`getEmbedBoxX/Y`）。
    */
   private gestureScreenPoint(
     event: GestureEvent | undefined,
@@ -1423,6 +1417,19 @@ private refitAfterContentAdded(): void {
       x: anchorX + finger.localX,
       y: anchorY + finger.localY
     }
+  }
+
+  /**
+   * 盒子坐标 → 累计屏幕坐标（#821）。
+   *
+   * 几何层（递归命中、convertPointToRoot、跨层连线）统一工作在**累计屏幕空间**，
+   * 而 ArkUI 手势给的是本 Scene 的盒子坐标，两者只差一段祖先累计比例。
+   * 凡是"把手指坐标交给 geometry"的入口都必须先过这里，免得子 Scene 里
+   * 命中判定整体偏掉一个 parentScale 倍（越深的层偏得越多）。
+   */
+  private boxPointToViewport(point: PlatformPoint): PlatformPoint {
+    const scale: number = this.parentScale()
+    return { x: point.x * scale, y: point.y * scale }
   }
 
   // ─── Mutation 方法 ───
@@ -1474,7 +1481,8 @@ private refitAfterContentAdded(): void {
    * 两个不同 Embed 里的 Node、子 Node → 更深一层的子 Embed/Node。
    * 同层连线算出来的方案和之前完全一致，所以不需要第二套分支。
    */
-  async finishConnect(localScreenX: number, localScreenY: number) {
+  /** 入参是**盒子坐标**（#821），内部换算到累计屏幕空间再做递归命中。 */
+  async finishConnect(localBoxX: number, localBoxY: number) {
     const sourcePath: StarMapTargetPath | null = this.connectSourcePath
     if (sourcePath === null) {
       return
@@ -1485,9 +1493,10 @@ private refitAfterContentAdded(): void {
       return
     }
 
-    // 本 Scene 局部坐标 → 根 Scene 局部坐标，递归命中只能在根坐标系里做
+    // 本 Scene 累计屏幕坐标 → 根 Scene 屏幕坐标，递归命中只能在根坐标系里做
+    const viewportPoint: PlatformPoint = this.boxPointToViewport({ x: localBoxX, y: localBoxY })
     const rootPoint: PlatformPoint = convertPointToRoot(
-      context, this.scenePath, localScreenX, localScreenY
+      context, this.scenePath, viewportPoint.x, viewportPoint.y
     )
     const hit: RecursiveHit = resolveRecursiveHit(context, rootPoint.x, rootPoint.y)
     logRecursiveHit(hit)
@@ -1758,22 +1767,21 @@ private refitAfterContentAdded(): void {
    * 保存 Embed 位置：通过 bridge 的 Embed update API 写回。
    * 使用 this.starmapId。
    *
-   * 布局节点里的 x/y 是**以 authored 中心为锚点派生出来的显示矩形左上角**（#820），
-   * 尺寸也会随 LOD 和视口变。写回 Core 必须先反解回 authored 口径，
-   * 绝不能把 displayX / displayY 直接存成 authored position。
+   * #821：布局节点里的 x/y 现在就是 authored position 本身（`buildEmbedLayoutNodes`
+   * 直接读 embed.position，尺寸恒为基准直径），所以直接写回，不需要任何反解。
+   * 用户捏合相机不会走到这里 —— 缩放只改显示变换，不改这里的任何一个数字。
    */
   async saveEmbedPosition(embedId: string) {
     const ln = this.getPlatformLayoutNode(embedId)
     if (!ln || !this.bridge) return
-    const authored = embedAuthoredPositionFromDisplay(ln.x, ln.y, ln.width, ln.height)
     hilog.info(0x0000, 'StarMapScene',
-      `saveEmbedPosition: ${embedId} → display(${ln.x}, ${ln.y}) → authored(${authored.x}, ${authored.y})`)
+      `saveEmbedPosition: ${embedId} → authored(${ln.x}, ${ln.y})`)
     const result = await this.bridge.updateStarMapEmbed(this.starmapId, embedId,
-      { x: authored.x, y: authored.y })
+      { x: ln.x, y: ln.y })
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveEmbedPosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
     }
-    this.onMoveEmbed(this.scenePath, this.starmapId, embedId, { x: authored.x, y: authored.y })
+    this.onMoveEmbed(this.scenePath, this.starmapId, embedId, { x: ln.x, y: ln.y })
   }
 
   /**
@@ -1836,8 +1844,8 @@ private refitAfterContentAdded(): void {
     if (!this.bridge) return
     const candidate = this.createMenuCanvasPosition
     // 新建子星图的位置是 **authored 口径**（Core 的 embed.position 定义就是
-    // "DEFAULT_EMBED_DIAMETER 方框的左上角"），所以 clamp 也要用基准直径，
-    // 不能用当前视口下的展开显示尺寸 —— 后者是派生显示矩形的事（#820）。
+    // "DEFAULT_EMBED_DIAMETER 方框的左上角"），而 #821 之后布局矩形和
+    // authored position 是同一份坐标（不再有派生显示矩形），所以 clamp 用基准直径即可。
     const clampedEmbed = this.clampItemToLocalSafeArea(candidate.x, candidate.y,
       DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
     const position: StarMapPoint = {
@@ -1856,7 +1864,7 @@ private refitAfterContentAdded(): void {
           links: this.graph.links,
           hyperlinks: this.graph.hyperlinks
         }
-        this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds, this.embedDisplayBoundsMap())
+        this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
         this.recomputeGeometry()
         // 子层新增内容后重算 local fit，让整棵子内容重新塞进父圆的安全区（#818 复审）
         this.refitAfterContentAdded()
@@ -1958,7 +1966,12 @@ private refitAfterContentAdded(): void {
 
   /**
    * 绘制边：使用本地 localEdgeRenders。
-   * wobble 偏移在节点位置计算中已包含，此处只需应用 zoom/offset 变换。
+   * wobble 偏移在节点位置计算中已包含，此处只需应用 box 变换。
+   *
+   * #821：Canvas 是本 Scene 的 `100%×100%`，随祖先链一起被 `.scale()` 放大，
+   * 所以坐标用**盒子坐标**（`boxScale()` / `boxOffsetX/Y`）；反过来线宽和字号要除掉
+   * 这段祖先缩放（`boxUnitVp()`），才能在**屏幕上**保持恒定粗细 ——
+   * 否则相机一放大，线条和标签就跟着一起变粗。
    */
   drawEdges() {
     if (!this.canvasActive || !this.canvasReady || !this.graph) return
@@ -1974,6 +1987,11 @@ private refitAfterContentAdded(): void {
       wobbleMap.set(node.id, { dx, dy })
     }
 
+    const boxScale: number = this.boxScale()
+    const boxOffsetX: number = this.boxOffsetX()
+    const boxOffsetY: number = this.boxOffsetY()
+    const unitVp: number = this.boxUnitVp()
+
     for (const edge of this.localEdgeRenders) {
       const graphEdge = this.graph.edges.find(e => e.id === edge.edgeId)
       if (!graphEdge) continue
@@ -1984,10 +2002,10 @@ private refitAfterContentAdded(): void {
       const fromWobble = wobbleMap.get(fromId) || defaultWobble
       const toWobble = wobbleMap.get(toId) || defaultWobble
 
-      const sx = (edge.startX + fromWobble.dx) * this.viewportScaleValue() + this.viewportOffsetX()
-      const sy = (edge.startY + fromWobble.dy) * this.viewportScaleValue() + this.viewportOffsetY()
-      const ex = (edge.endX + toWobble.dx) * this.viewportScaleValue() + this.viewportOffsetX()
-      const ey = (edge.endY + toWobble.dy) * this.viewportScaleValue() + this.viewportOffsetY()
+      const sx = (edge.startX + fromWobble.dx) * boxScale + boxOffsetX
+      const sy = (edge.startY + fromWobble.dy) * boxScale + boxOffsetY
+      const ex = (edge.endX + toWobble.dx) * boxScale + boxOffsetX
+      const ey = (edge.endY + toWobble.dy) * boxScale + boxOffsetY
 
       // 选中的边用 (scenePath, kind, itemId) 判定，不看端点 id：
       // 同层里"起点是我选中的节点"和"这条边本身被选中"是两件事。
@@ -1997,10 +2015,10 @@ private refitAfterContentAdded(): void {
       ctx.moveTo(sx, sy)
       ctx.lineTo(ex, ey)
       ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.outline
-      ctx.lineWidth = isSelected ? 2.5 : 1.5
+      ctx.lineWidth = (isSelected ? 2.5 : 1.5) * unitVp
 
       if (graphEdge.kind === 'DependsOn' || graphEdge.kind === 'ConflictsWith') {
-        ctx.setLineDash([6, 4])
+        ctx.setLineDash([6 * unitVp, 4 * unitVp])
       } else {
         ctx.setLineDash([])
       }
@@ -2008,12 +2026,12 @@ private refitAfterContentAdded(): void {
       ctx.setLineDash([])
 
       // 箭头
-      const atx = (edge.arrowTipX + toWobble.dx) * this.viewportScaleValue() + this.viewportOffsetX()
-      const aty = (edge.arrowTipY + toWobble.dy) * this.viewportScaleValue() + this.viewportOffsetY()
-      const alx = (edge.arrowLeftX + toWobble.dx) * this.viewportScaleValue() + this.viewportOffsetX()
-      const aly = (edge.arrowLeftY + toWobble.dy) * this.viewportScaleValue() + this.viewportOffsetY()
-      const arx = (edge.arrowRightX + toWobble.dx) * this.viewportScaleValue() + this.viewportOffsetX()
-      const ary = (edge.arrowRightY + toWobble.dy) * this.viewportScaleValue() + this.viewportOffsetY()
+      const atx = (edge.arrowTipX + toWobble.dx) * boxScale + boxOffsetX
+      const aty = (edge.arrowTipY + toWobble.dy) * boxScale + boxOffsetY
+      const alx = (edge.arrowLeftX + toWobble.dx) * boxScale + boxOffsetX
+      const aly = (edge.arrowLeftY + toWobble.dy) * boxScale + boxOffsetY
+      const arx = (edge.arrowRightX + toWobble.dx) * boxScale + boxOffsetX
+      const ary = (edge.arrowRightY + toWobble.dy) * boxScale + boxOffsetY
 
       ctx.beginPath()
       ctx.moveTo(atx, aty)
@@ -2021,24 +2039,25 @@ private refitAfterContentAdded(): void {
       ctx.moveTo(atx, aty)
       ctx.lineTo(arx, ary)
       ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.outline
-      ctx.lineWidth = isSelected ? 2.5 : 1.5
+      ctx.lineWidth = (isSelected ? 2.5 : 1.5) * unitVp
       ctx.stroke()
 
       // 边标签
       if (graphEdge.label && edge.labelX !== undefined && edge.labelY !== undefined) {
-        const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * this.viewportScaleValue() + this.viewportOffsetX()
-        const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * this.viewportScaleValue() + this.viewportOffsetY()
-        ctx.font = '11px HarmonyOS Sans'
+        const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * boxScale + boxOffsetX
+        const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * boxScale + boxOffsetY
+        ctx.font = `${11 * unitVp}px HarmonyOS Sans`
         ctx.fillStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.onSurfaceVariant
         ctx.textAlign = 'center'
         ctx.textBaseline = 'bottom'
-        ctx.fillText(graphEdge.label, lx, ly - 6)
+        ctx.fillText(graphEdge.label, lx, ly - 6 * unitVp)
       }
     }
   }
 
   /**
    * 绘制预览连线：connect 模式下从源节点到当前手指位置。
+   * 坐标同样是盒子坐标，线宽除以 boxUnitVp 保持屏幕上恒定（#821）。
    */
   drawPreviewLine() {
     if (!this.canvasActive || !this.previewCanvasReady) return
@@ -2050,8 +2069,8 @@ private refitAfterContentAdded(): void {
     ctx.moveTo(this.previewLineFrom.x, this.previewLineFrom.y)
     ctx.lineTo(this.previewLineTo.x, this.previewLineTo.y)
     ctx.strokeStyle = this.themeConfig.colors.primary
-    ctx.lineWidth = 2
-    ctx.setLineDash([8, 4])
+    ctx.lineWidth = 2 * this.boxUnitVp()
+    ctx.setLineDash([8 * this.boxUnitVp(), 4 * this.boxUnitVp()])
     ctx.stroke()
     ctx.setLineDash([])
   }
@@ -2081,7 +2100,7 @@ private refitAfterContentAdded(): void {
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
-      Circle({ width: 56 * this.viewportScaleValue(), height: 56 * this.viewportScaleValue() })
+      Circle({ width: 56, height: 56 })
         .fill(this.getNodeColor(node))
         .stroke(this.isNodeSelected(node.id) ? STARMAP_SELECTED_STROKE_COLOR : 'transparent')
         .strokeWidth(4)
@@ -2098,24 +2117,26 @@ private refitAfterContentAdded(): void {
         })
 
       Text(node.title)
-        .fontSize(13 * this.viewportScaleValue())
+        .fontSize(13)
         .fontWeight(this.isNodeSelected(node.id) ? FontWeight.Bold : FontWeight.Normal)
-        .margin({ top: 6 * this.viewportScaleValue() })
+        .margin({ top: 6 })
         .maxLines(2)
         .textAlign(TextAlign.Center)
-        .width(80 * this.viewportScaleValue())
+        .width(80)
     }
-    .width(160 * this.viewportScaleValue())
-    .height(80 * this.viewportScaleValue())
+    .width(160)
+    .height(80)
     .justifyContent(FlexAlign.Center)
+    // #821：尺寸全是局部基准常量，缩放只走 .scale()（放大到几十倍也不会撑大布局矩形），
+    // .position() 用盒子坐标 + 中心补偿，见 boxPositionX/Y。
     .position({
-      x: this.getNodeScreenX(node.id),
-      y: this.getNodeScreenY(node.id)
+      x: this.boxPositionX(this.getNodeBoxX(node.id), DEFAULT_NODE_WIDTH),
+      y: this.boxPositionY(this.getNodeBoxY(node.id), DEFAULT_NODE_HEIGHT)
     })
     .scale(
       this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id
-        ? { x: this.motionConfig.dragLiftScale, y: this.motionConfig.dragLiftScale }
-        : { x: 1, y: 1 }
+        ? { x: this.boxScale() * this.motionConfig.dragLiftScale, y: this.boxScale() * this.motionConfig.dragLiftScale }
+        : { x: this.boxScale(), y: this.boxScale() }
     )
     .onClick(() => {
               // 双指已接管时不再改选中态（#818 复审）
@@ -2133,7 +2154,7 @@ private refitAfterContentAdded(): void {
             .onAction((event: GestureEvent) => {
               if (this.gestureTracker.isPinching()) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
-              const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+              const point = this.gestureScreenPoint(event, this.getNodeBoxX(node.id), this.getNodeBoxY(node.id))
               this.gestureTracker.beginNodeMenu(this.scenePath, node.id, point.x, point.y)
               this.gestureMode = 'nodeMenu'
               // 先记录目标再翻显示标记：菜单内容要在 showNodeMenu 变 true 时就读到 nodeMenuNodeId
@@ -2147,7 +2168,7 @@ private refitAfterContentAdded(): void {
             .onActionStart((event: GestureEvent) => {
               if (this.gestureTracker.isPinching()) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
-              const point = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+              const point = this.gestureScreenPoint(event, this.getNodeBoxX(node.id), this.getNodeBoxY(node.id))
               // 起点存完整路径，跨层连线要靠它和终点求最近公共祖先（#816）
               this.beginConnectFrom(node.id, point)
             })
@@ -2156,7 +2177,7 @@ private refitAfterContentAdded(): void {
               if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
               const state = this.gestureTracker.getState()
               if (state.mode === 'connect') {
-                this.previewLineTo = this.gestureScreenPoint(event, this.getNodeScreenX(node.id), this.getNodeScreenY(node.id))
+                this.previewLineTo = this.gestureScreenPoint(event, this.getNodeBoxX(node.id), this.getNodeBoxY(node.id))
                 // 起点随手指方向实时重算，始终贴在源对象边界上
                 this.updatePreviewLineFrom(node.id, this.previewLineTo)
                 this.drawPreviewLine()
@@ -2200,8 +2221,9 @@ private refitAfterContentAdded(): void {
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveNode' && state.activeItemId === node.id) {
               const movingNodeSize = this.itemCanvasSize(node.id, 0, 0)
-              const newDx = this.moveNodeStartX + event.offsetX / this.viewportScaleValue()
-              const newDy = this.moveNodeStartY + event.offsetY / this.viewportScaleValue()
+              // #821：event.offset 是屏幕位移，画布坐标要除的是本 Scene 的盒子比例
+              const newDx = this.moveNodeStartX + event.offsetX / this.boxScale()
+              const newDy = this.moveNodeStartY + event.offsetY / this.boxScale()
               // 子星图里移动节点必须夹在本层圆内接正方形里，否则会被父圆 clip 掉（#818 复审）
               const clamped = this.clampItemToLocalSafeArea(newDx, newDy,
                 movingNodeSize.x, movingNodeSize.y)
@@ -2260,7 +2282,7 @@ private refitAfterContentAdded(): void {
           .onAction((event: GestureEvent) => {
             if (this.gestureTracker.isPinching()) return
             if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
-            const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+            const point = this.gestureScreenPoint(event, this.getEmbedBoxX(embed.instanceId), this.getEmbedBoxY(embed.instanceId))
             this.gestureTracker.beginNodeMenu(this.scenePath, embed.instanceId, point.x, point.y)
             this.gestureMode = 'nodeMenu'
             // 菜单内容在 showNodeMenu 翻 true 的同一帧就要读到 nodeMenuNodeId，所以先赋值再翻标记
@@ -2273,7 +2295,7 @@ private refitAfterContentAdded(): void {
           .onActionStart((event: GestureEvent) => {
             if (this.gestureTracker.isPinching()) return
             if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
-            const point = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+            const point = this.gestureScreenPoint(event, this.getEmbedBoxX(embed.instanceId), this.getEmbedBoxY(embed.instanceId))
             this.beginConnectFrom(embed.instanceId, point)
           })
           .onActionUpdate((event: GestureEvent) => {
@@ -2281,7 +2303,7 @@ private refitAfterContentAdded(): void {
             if (!this.gestureTracker.isOwnedByScene(this.scenePath)) return
             const state = this.gestureTracker.getState()
             if (state.mode === 'connect') {
-              this.previewLineTo = this.gestureScreenPoint(event, this.getEmbedScreenX(embed.instanceId), this.getEmbedScreenY(embed.instanceId))
+              this.previewLineTo = this.gestureScreenPoint(event, this.getEmbedBoxX(embed.instanceId), this.getEmbedBoxY(embed.instanceId))
               // Embed 起点同样走圆周交点，不会再从黑圆中心拉出虚线
               this.updatePreviewLineFrom(embed.instanceId, this.previewLineTo)
               this.drawPreviewLine()
@@ -2325,9 +2347,9 @@ private refitAfterContentAdded(): void {
           const state = this.gestureTracker.getState()
           if (state.mode === 'moveEmbed' && state.activeItemId === embed.instanceId) {
             const movingEmbedSize = this.itemCanvasSize(embed.instanceId,
-              this.expandedEmbedSizeVp(), this.expandedEmbedSizeVp())
-            const newDx = this.moveEmbedStartX + event.offsetX / this.viewportScaleValue()
-            const newDy = this.moveEmbedStartY + event.offsetY / this.viewportScaleValue()
+              DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
+            const newDx = this.moveEmbedStartX + event.offsetX / this.boxScale()
+            const newDy = this.moveEmbedStartY + event.offsetY / this.boxScale()
             // 子星图里移动 Embed 同样要夹在圆内，否则半个圆壳会被父圆 clip 掉（#818 复审）
             const clamped = this.clampItemToLocalSafeArea(newDx, newDy,
               movingEmbedSize.x, movingEmbedSize.y)
@@ -2355,81 +2377,77 @@ private refitAfterContentAdded(): void {
   // ─── @Builder：Embed 组件 ───
 
   /**
-   * Embed 的渲染入口：按视觉 LOD 分派（#820）。
+   * Embed 的渲染入口：外壳只有一个形状，按 Deep Zoom detail 换内部渲染器（#821）。
    *
-   * 档位是**渲染前**算好的（embedLod），这里只负责按档位挂不同的组件树：
-   * - expanded：完整正圆 + StarMapEmbedScene 递归实例化 child Scene
-   * - collapsed：节点尺寸的摘要卡（标题 + 子星图身份 + 选中态），
-   *   **不实例化** child Scene，所以它不占任何递归层级的渲染开销
-   * - hidden：祖先已折叠，本层连摘要卡都不画（数据仍在 Core 里）
+   * 档位是**渲染前**算好的（embedDetail），这里只负责按档位挂不同的内部组件：
+   * - interactive：完整正圆 + StarMapEmbedScene 递归实例化 child Scene，可交互
+   * - preview：同一颗正圆 + StarMapEmbedPreview 的轻量 Canvas 缩略图，只回答"里面有什么"
+   * - shell：同一颗正圆的外壳（标题 + 底色 + 描边），不挂任何子渲染器
    *
-   * 关键结构：只有 expanded 分支里才出现 StarMapEmbedScene。
-   * 折叠态绝不能"先建好再缩到看不见"（那是白花开销），也不用 opacity(0) 假装折叠。
+   * 关键结构（#821）：
+   * - 三档的外壳几何完全相同，都是 DEFAULT_EMBED_DIAMETER 的正圆；
+   *   档位只决定"渲染多少细节"，绝不换形状、换 world bounds、换 authored position。
+   * - 缩放一律走 .scale() 的显示变换，不允许用"改 width/height"去缩小。
+   * - preview 必须 HitTestMode.None：它不参与触摸竞争，根 Scene 的两指 Pinch 不受影响。
    */
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
-    if (this.embedLod(embed.instanceId) === 'expanded') {
-      this.StarMapExpandedEmbed(embed)
-    } else if (this.embedLod(embed.instanceId) === 'collapsed') {
-      this.StarMapCollapsedEmbed(embed)
-    }
-  }
-
-  /**
-   * 展开态 Embed：主题容器色正圆，画布上唯一的外接形状是圆（#818 底色已跟随主题）。
-   *
-   * 尺寸只有一个来源：`expandedEmbedSizeVp()`（视口显示预算 × 基准直径），
-   * 宽=高=边长，圆角=边长/2。这里禁止再出现 200 / 120 / 12 这类手写尺寸。
-   *
-   * 命中分层不再用"三根矩形窄条 + clip 裁圆环"：clip(true) 只会把矩形条裁成圆内的几段直线，
-   * 斜着点边框（例如 45° 方向）既不在 title 也不在任何窄条上，事件会掉进 child Scene，
-   * 于是"几何算出来是 embedBorder、实际却进了子图"。现在两层一起改：
-   * - responseRegion 把真实触摸热区切成圆（默认热区是整个矩形，clip 不裁热区）
-   * - 外层 Stack 的 onTouchIntercept 按真实圆距离动态分流：
-   *   title 条或真实圆环 → HitTestMode.Block，只给外层 Embed，child Scene 不参与
-   *   圆外 / 圆内其余区域 → HitTestMode.None，事件落回父星图或交给 child StarMapScene
-   */
-  @Builder
-  StarMapExpandedEmbed(embed: StarMapEmbed) {
     Stack() {
-      // 1. innerContent 区域（占满整个 Embed 内容区，放 child StarMapEmbedScene）
-      // 不挂任何手势，能不能收到事件由下面的 onTouchIntercept 决定
-      Column() {
-        StarMapEmbedScene({
-          rootStarmapId: this.rootStarmapId,
-          scenePath: this.scenePath,
-          embed: embed,
-          // 子 Scene 的深度是父层 +1：只有根 Scene 是全局相机本体（#818）
-          sceneDepth: this.sceneDepth + 1,
-          themeConfig: this.themeConfig,
-          motionConfig: this.motionConfig,
-          motionProgress: this.motionProgress,
-          bridge: this.bridge,
-          gestureTracker: this.gestureTracker,
-          // 全树共用的选中状态和 Scene 注册表
-          selectionState: this.selectionState,
-          sceneRegistry: this.sceneRegistry,
-          // 全局相机原样透传：子 Scene 是相机里的内容，不持有自己的缩放（#818）
-          cameraScale: this.cameraScale,
-          cameraOffsetX: this.cameraOffsetX,
-          cameraOffsetY: this.cameraOffsetY,
-          onCameraChanged: this.onCameraChanged,
-          // 空白拖动继续往下传：子星图里拖动的也是整张星图的视角（#818 复审）
-          onCameraPanTo: this.onCameraPanTo,
-          // 根视口与视觉焦点原样透传：整棵递归树共用同一份（#820）。
-          // 子 Scene 不许拿自己那个圆当视口去判 LOD，否则"够不够展开"变成自我实现。
-          rootViewportWidth: this.rootViewportWidth,
-          rootViewportHeight: this.rootViewportHeight,
-          focusScenePath: this.focusScenePath,
-          // 祖先累计比例：子 Scene 的有效比例 = 它的 fitScale × 这一份（#818 复审）
-          inheritedScale: this.viewportScaleValue(),
-        })
+      // 1. 内部内容区：只按 detail 换渲染器，外壳形状不动
+      if (this.embedDetail(embed.instanceId) === 'interactive') {
+        // 不挂任何手势，能不能收到事件由下面的 onTouchIntercept 决定
+        Column() {
+          StarMapEmbedScene({
+            rootStarmapId: this.rootStarmapId,
+            scenePath: this.scenePath,
+            embed: embed,
+            // 子 Scene 的深度是父层 +1：只有根 Scene 是全局相机本体（#818）
+            sceneDepth: this.sceneDepth + 1,
+            themeConfig: this.themeConfig,
+            motionConfig: this.motionConfig,
+            motionProgress: this.motionProgress,
+            bridge: this.bridge,
+            gestureTracker: this.gestureTracker,
+            // 全树共用的选中状态和 Scene 注册表
+            selectionState: this.selectionState,
+            sceneRegistry: this.sceneRegistry,
+            // 全局相机原样透传：子 Scene 是相机里的内容，不持有自己的缩放（#818）
+            cameraScale: this.cameraScale,
+            cameraOffsetX: this.cameraOffsetX,
+            cameraOffsetY: this.cameraOffsetY,
+            onCameraChanged: this.onCameraChanged,
+            // 空白拖动继续往下传：子星图里拖动的也是整张星图的视角（#818 复审）
+            onCameraPanTo: this.onCameraPanTo,
+            // 根视口与视觉焦点原样透传：整棵递归树共用同一份（#820）。
+            // 子 Scene 不许拿自己那个圆当视口去判档位，否则"够不够交互"变成自我实现。
+            rootViewportWidth: this.rootViewportWidth,
+            rootViewportHeight: this.rootViewportHeight,
+            focusScenePath: this.focusScenePath,
+            // 祖先累计比例：子 Scene 的有效比例 = 它的 fitScale × 这一份（#818 复审）
+            inheritedScale: this.viewportScaleValue(),
+          })
+        }
+        .width('100%')
+        .height('100%')
+        // 稳定输入节点 id（#818 复审）：onChildTouchTest 只能看到显式设了 .id() 的命名节点，
+        // 没有它父级就分不清该转发给哪一层，只能退回 Stack 默认命中顺序。
+        .id(this.embedInputNodeId(embed.instanceId))
+      } else if (this.embedDetail(embed.instanceId) === 'preview') {
+        // preview 是"看得见里面有什么"的缩略图，不是可交互层：
+        // 整块 HitTestMode.None，不进触摸竞争，父层 Embed 和根 Scene 的手势都拿回完整事件。
+        Column() {
+          StarMapEmbedPreview({
+            rootStarmapId: this.rootStarmapId,
+            scenePath: this.scenePath,
+            embed: embed,
+            themeConfig: this.themeConfig
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .id(this.embedInputNodeId(embed.instanceId))
+        .hitTestBehavior(HitTestMode.None)
       }
-      .width('100%')
-      .height('100%')
-      // 稳定输入节点 id（#818 复审）：onChildTouchTest 只能看到显式设了 .id() 的命名节点，
-      // 没有它父级就分不清该转发给哪一层，只能退回 Stack 默认命中顺序。
-      .id(this.embedInputNodeId(embed.instanceId))
 
       // 2. title 视觉层（纯显示，不挂手势也不挂菜单）
       // 手势统一由外层 Stack 的 embedGestureGroup + onTouchIntercept 分流，
@@ -2437,26 +2455,29 @@ private refitAfterContentAdded(): void {
       // 位置会被节点本体绑死，点圆环时菜单不从按下处弹出）。
       Row() {
         Text(embed.label ?? embed.targetStarmapId)
-          .fontSize(14 * this.viewportScaleValue())
+          .fontSize(14)
           .fontWeight(FontWeight.Medium)
           // 跟随主题：外壳底色已经是主题 surfaceContainer，写死白色在浅色主题下会看不清（#818）
           .fontColor(this.themeConfig.colors.onSurface)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           // 圆顶部的可见宽度远小于直径：左对齐 + padding 的文字前半截会被圆裁掉，必须居中
-          .width(80 * this.viewportScaleValue())
+          .width(80)
           .textAlign(TextAlign.Center)
       }
       .width('100%')
-      .height(EMBED_TITLE_HIT_HEIGHT * this.viewportScaleValue())
+      .height(EMBED_TITLE_HIT_HEIGHT)
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .position({ x: 0, y: 0 })
       .hitTestBehavior(HitTestMode.None)
     }
-    .width(projectLocalLengthToScreen(this.expandedEmbedSizeVp(), this.viewportScaleValue()))
-    .height(projectLocalLengthToScreen(this.expandedEmbedSizeVp(), this.viewportScaleValue()))
-    .borderRadius(projectLocalLengthToScreen(this.expandedEmbedSizeVp() / 2, this.viewportScaleValue()))
+    // 几何只有一个来源：DEFAULT_EMBED_DIAMETER（#821）。
+    // 缩放走 .scale()，不把 boxScale 乘进 width/height——那会让 RenderService
+    // 按 200 × boxScale 分配缓冲区，放大后是巨大的离屏纹理。
+    .width(DEFAULT_EMBED_DIAMETER)
+    .height(DEFAULT_EMBED_DIAMETER)
+    .borderRadius(DEFAULT_EMBED_DIAMETER / 2)
     // 跟随主题：写死黑色时浅色主题下整颗子星图是一块黑饼，标题白字也压不出来（#818）
     .backgroundColor(this.themeConfig.colors.surfaceContainer)
     // 未选中也要有一条细描边，否则圆壳在同色底上看不出边界；选中时加粗。
@@ -2468,11 +2489,14 @@ private refitAfterContentAdded(): void {
         ? STARMAP_SELECTED_STROKE_COLOR
         : this.themeConfig.colors.outlineVariant
     })
+    // 显示变换：.scale() 以组件中心缩放，.position() 补上中心偏移，
+    // 于是视觉左上角正好等于 canvas * boxScale + boxOffset（见 boxPositionX）。
+    .scale({ x: this.boxScale(), y: this.boxScale() })
     .position({
-      x: this.getEmbedScreenX(embed.instanceId),
-      y: this.getEmbedScreenY(embed.instanceId)
+      x: this.boxPositionX(this.getEmbedBoxX(embed.instanceId), DEFAULT_EMBED_DIAMETER),
+      y: this.boxPositionY(this.getEmbedBoxY(embed.instanceId), DEFAULT_EMBED_DIAMETER)
     })
-    // 子 Scene 必须真正被裁到圆内，否则内部会溢出圆外看起来还是方形
+    // 内部必须真正被裁到圆内，否则溢出圆外看起来还是方形
     .clip(true)
     // 圆形热区：ArkUI 组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区，
     // 不显式声明的话圆外四个方角依然可点。切成若干条水平带逼近圆（见 buildCircleResponseBands）。
@@ -2495,21 +2519,19 @@ private refitAfterContentAdded(): void {
       if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
         return HitTestMode.None
       }
-      const diameter: number = this.expandedEmbedSizeVp() * this.viewportScaleValue()
-      const radius: number = diameter / 2
+      // ArkUI 把屏幕触点换算到**组件局部坐标**（#821）：组件布局尺寸恒为
+      // DEFAULT_EMBED_DIAMETER，所以这里 1 单位 = 1 本地单位，
+      // 圆心就是 直径/2，再乘任何缩放因子都是错的。
+      const radius: number = DEFAULT_EMBED_DIAMETER / 2
       const dx: number = localX - radius
       const dy: number = localY - radius
       const dist: number = Math.sqrt(dx * dx + dy * dy)
       if (dist > radius) {
         return HitTestMode.None
       }
-      // 这里的 touch.x / touch.y 已经是**组件局部坐标**，而组件本身按
-      // `expandedEmbedSizeVp() * viewportScaleValue()` 显示，所以这一格
-      // 1 单位 = 屏幕 1vp。热区规格 24 / 12 是屏幕侧的，除以 1 就是本组件坐标下的值——
-      // 再乘一次 viewportScaleValue() 才是错的（#818 复审）：那会让标题带和圆环
-      // 随递归 local fit 一起缩水，深一层就少一半。
       // 组件坐标 → 画布坐标的换算封装在 embedHitMetricsForScene 里，
       // 和 resolveRecursiveHit 用的是同一个函数，两边不可能再各算各的。
+      // 注意这里传 1：屏幕上再大再小，这一格坐标都还是本组件的本地单位。
       const metrics = embedHitMetricsForScene(1, radius)
       const inTitle: boolean = localY <= metrics.titleHitHeight
       const inBorder: boolean = dist >= radius - metrics.borderHitWidth
@@ -2534,11 +2556,12 @@ private refitAfterContentAdded(): void {
    * 生成 Embed 圆形的真实触摸热区：把圆切成若干条水平矩形带。
    * 几何在 StarMapGeometry.buildCircleResponseBands（纯函数，可测），
    * 这里只负责转成 ArkUI 的 Rectangle。
+   *
+   * 尺寸恒为本地 DEFAULT_EMBED_DIAMETER（#821）：热区是组件局部坐标，
+   * ArkUI 会跟着 .scale() 一起放大缩小，所以这里不该再乘任何缩放因子。
    */
   private buildEmbedCircleResponseRegions(): Rectangle[] {
-    const bands = buildCircleResponseBands(
-      projectLocalLengthToScreen(this.expandedEmbedSizeVp(), this.viewportScaleValue())
-    )
+    const bands = buildCircleResponseBands(DEFAULT_EMBED_DIAMETER)
     const regions: Rectangle[] = []
     for (const band of bands) {
       regions.push({
@@ -2549,58 +2572,6 @@ private refitAfterContentAdded(): void {
       })
     }
     return regions
-  }
-
-  /**
-   * 折叠态 Embed：和普通节点同尺寸的摘要卡（#820）。
-   *
-   * 保留三样身份信息：标题、"这是一个子星图"、选中态。
-   * 丢掉的是 child Scene——**不创建**，所以深层递归的渲染开销是真的降下来了，
-   * 而不是"建好了再缩到看不见"。
-   *
-   * 热区整块归这个 Embed：点它就是选中这个子星图，不存在"点进去编辑"这一层
-   * （里面本来就没有 child Scene）。所以这里不用圆形 responseRegion、
-   * 不用 onTouchIntercept 分流，也不用 onChildTouchTest —— 卡里没有子组件参与竞争。
-   *
-   * 位置仍然来自 embed.position（Core 的 authored position）：
-   * 语义缩放只改显示，不回写数据，用户捏合不该顺手改掉星图布局。
-   */
-  @Builder
-  StarMapCollapsedEmbed(embed: StarMapEmbed) {
-    Column() {
-      Text(embed.label ?? embed.targetStarmapId)
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.onSurface)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-        .textAlign(TextAlign.Center)
-
-      Text($r('app.string.starmap_sub_starmap'))
-        .fontSize(11)
-        .fontColor(this.themeConfig.colors.onSurfaceVariant)
-        .maxLines(1)
-        .width('100%')
-        .textAlign(TextAlign.Center)
-    }
-    .width(projectLocalLengthToScreen(DEFAULT_NODE_WIDTH, this.viewportScaleValue()))
-    .height(projectLocalLengthToScreen(DEFAULT_NODE_HEIGHT, this.viewportScaleValue()))
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(this.themeConfig.colors.surfaceContainer)
-    .borderRadius(projectLocalLengthToScreen(DEFAULT_NODE_RADIUS, this.viewportScaleValue()))
-    .border({
-      width: this.isEmbedSelected(embed.instanceId) ? 3 : 1,
-      color: this.isEmbedSelected(embed.instanceId)
-        ? STARMAP_SELECTED_STROKE_COLOR
-        : this.themeConfig.colors.outlineVariant
-    })
-    .position({
-      x: this.getEmbedScreenX(embed.instanceId),
-      y: this.getEmbedScreenY(embed.instanceId)
-    })
-    .clip(true)
-    .gesture(this.embedGestureGroup(embed))
   }
 
   // ─── 菜单显示状态回写 ───
@@ -2706,20 +2677,15 @@ private refitAfterContentAdded(): void {
   /**
    * Scene 尺寸变化时的适配收尾。
    *
-   * 第一次到位 = 首次适配；之后尺寸变化 = 父层缩放带动容器变大变小，
-   * 要把已有适配同比带过去，而不是重新适配（重新适配会重置用户刚捏出来的缩放）。
+   * #821：Scene 的盒子尺寸恒为**本地** DEFAULT_EMBED_DIAMETER（子 Scene）或根视口
+   * （根 Scene）——父层缩放走 .scale()，不会改变布局尺寸，所以这里没有"尺寸变了
+   * 再同比带一次 fit"的补偿路径，onAreaChange 报出来的就是 fitView 该用的本地尺寸。
+   * Deep Zoom 档位同样不需要在这里重算：档位由累计比例内联求值，渲染时直接读。
    */
   private handleSceneAreaChange(newArea: Area): void {
     this.sceneWidth = Number(newArea.width)
     this.sceneHeight = Number(newArea.height)
-    if (this.hasFittedView) {
-      this.syncFitToSceneSize()
-    } else {
-      this.maybeFitView()
-    }
-    // 容器尺寸变了：本 Scene 的累计比例变了，Embed 的展开/折叠重算（#820）。
-    // 根视口（rootViewportWidth / Height）的变化另有 onRootViewportChange 接。
-    this.refreshEmbedLodLayout()
+    this.maybeFitView()
   }
 
   build() {
@@ -2840,12 +2806,15 @@ private refitAfterContentAdded(): void {
               if (this.gestureTracker.isPinching()) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               const point = this.gestureScreenPoint(event, 0, 0)
-              const canvasPoint = screenToCanvas(point.x, point.y, this.viewportScaleValue(), this.viewportOffsetX(), this.viewportOffsetY())
+              // point 是组件局部（box）坐标（#821）：锚点本来就按 .position() 放在
+              // Scene 栈里，所以直接用；换算成画布/累计坐标时才做除乘。
+              const canvasPoint = screenToCanvas(point.x, point.y, this.boxScale(), this.boxOffsetX(), this.boxOffsetY())
               // 空白判定和选中/连线共用同一个递归命中：点在子星图内部时父 Scene 不该弹新建菜单
               const context: RecursiveSceneContext | null = this.getRootContext()
               let isBlank: boolean = false
               if (context !== null) {
-                const rootPoint: PlatformPoint = convertPointToRoot(context, this.scenePath, point.x, point.y)
+                const viewportPoint = this.boxPointToViewport(point)
+                const rootPoint: PlatformPoint = convertPointToRoot(context, this.scenePath, viewportPoint.x, viewportPoint.y)
                 isBlank = resolveRecursiveHit(context, rootPoint.x, rootPoint.y).target === null
               }
               // 空白区域长按 → 弹出新建菜单。

@@ -20,19 +20,24 @@ import {
 } from '../platform/StarMapGeometry'
 import {
   VisualLodContext, FocusCandidate, ProjectedEmbedMetrics,
-  projectEmbedMetrics, expandedEmbedSizeVp, resolveFocusScenePath
+  projectEmbedMetrics, resolveFocusScenePath
 } from '../platform/StarMapVisualLod'
 import {
   StarMapSceneRegistry,
-  CAMERA_SCALE_MIN,
-  CAMERA_SCALE_MAX,
   computeCameraZoomAround
 } from '../platform/StarMapViewport'
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import { StarMapScene } from './StarMapScene'
 
-// 缩放边界：比例上下限来自 StarMapViewport 的相机常量，这里只留工具栏的步长
-const ZOOM_STEP: number = 0.1
+/**
+ * 工具栏每次点击的**倍数**（#821）。
+ *
+ * #820 用 0.1 的加法步长：在 scale=2 时点一下是 2.1，在 scale=0.5 时
+ * 是 0.6 —— 手感在两端完全不同，而且很快撞上原来的相机上限。
+ * 改成乘法之后，每一档的相对变化一致，跨十几倍缩放都有同样的"点一下"体感；
+ * 边界交给 computeCameraZoomAround 内部的 clampCameraScale 处理，这里不重复夹一次。
+ */
+const ZOOM_FACTOR: number = 1.2
 
 @Component
 export struct StarMapScreen {
@@ -239,10 +244,13 @@ export struct StarMapScreen {
   }
 
   /**
-   * 重算视觉焦点（#820）。
+   * 重算视觉焦点（#820/#821）。
    *
    * 纯显示行为：读注册表里的 Scene 快照 → 收集候选 Embed 的圆心位置和所属层比例 →
    * 交给 StarMapVisualLod 的纯函数判（覆盖率过 0.70 进、过 0.55 出，中间那段滞回不动）。
+   *
+   * 覆盖率只依赖 Embed 的投影直径和根视口，与形状无关（#821）：Embed 的 world 尺寸
+   * 恒为 DEFAULT_EMBED_DIAMETER，所以这一层不需要任何 LOD 显示边界入参。
    *
    * 全程不写 Core、不新建页面、不动相机、不落盘；只在焦点真的变了时写一次 @State。
    * 注册表还没建起来（图没加载）时直接返回，保持 'root'。
@@ -262,9 +270,7 @@ export struct StarMapScreen {
     }
     const candidates: FocusCandidate[] = []
     for (const probe of probes) {
-      const metrics: ProjectedEmbedMetrics = projectEmbedMetrics(
-        expandedEmbedSizeVp(context), probe.ownerScale, context, 0
-      )
+      const metrics: ProjectedEmbedMetrics = projectEmbedMetrics(probe.ownerScale, context)
       candidates.push({
         scenePath: probe.childScenePath,
         coverage: metrics.coverage,
@@ -306,16 +312,16 @@ export struct StarMapScreen {
     this.applyCamera(next.scale, next.offsetX, next.offsetY)
   }
 
-  /** 放大一级（工具栏 +）：以可视画布中心为锚点 */
+  /** 放大一级（工具栏 +）：以可视画布中心为锚点，乘法步进（#821） */
   zoomIn() {
     this.zoomAround(this.canvasWidth / 2, this.canvasHeight / 2,
-      Math.min(CAMERA_SCALE_MAX, this.cameraScale + ZOOM_STEP))
+      this.cameraScale * ZOOM_FACTOR)
   }
 
-  /** 缩小一级（工具栏 −） */
+  /** 缩小一级（工具栏 −）：乘法步进，边界由 clampCameraScale 兜（#821） */
   zoomOut() {
     this.zoomAround(this.canvasWidth / 2, this.canvasHeight / 2,
-      Math.max(CAMERA_SCALE_MIN, this.cameraScale - ZOOM_STEP))
+      this.cameraScale / ZOOM_FACTOR)
   }
 
   onMotionProgressChange() {
