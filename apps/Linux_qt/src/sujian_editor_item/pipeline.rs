@@ -437,6 +437,25 @@ pub(crate) enum PipelineEditOutcomeKind {
     InvalidRange,
 }
 
+/// Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 的明确结果。
+///
+/// 替代旧的 `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>`——
+/// 后者让调用方自己猜 skip reason（scrolling -> `ScrollingSuppressed`，
+/// 其它 `None` -> `BuilderEmptyTransaction`），实际跳过原因从 `prepare_edit_motion`
+/// 内部丢失。现在每个跳过点原地返回自己的 `EditVisualSkipReason`，
+/// `record_transaction` / `apply_edit_with_visuals` 只透传不再猜。
+pub(crate) enum VisualPrepareOutcome {
+    /// 视觉事务已创建，`key` 是真正创建的事务 key。
+    ///
+    /// 不再携带 `PreparedEditMotion`——所有消费者只需要 `key`，
+    /// 携带 motion 会让枚举变体大小膨胀到 248 字节（`large_enum_variant`）。
+    Created { key: VisualTransactionKey },
+    /// Core edit 已应用但视觉事务未创建，附带具体跳过原因。
+    Skipped(super::edit_flow::EditVisualSkipReason),
+    /// 动画未请求（三个开关全关），Core edit 已应用但无视觉事务。
+    AnimationDisabled,
+}
+
 impl LinuxEditorPipeline {
     pub fn new() -> Self {
         Self {
@@ -839,18 +858,14 @@ impl LinuxEditorPipeline {
                     result,
                 }
             }
-            EditorEditOutcome::InvalidOffset(result) => {
-                PipelineEditOutcome::NotApplied {
-                    kind: PipelineEditOutcomeKind::InvalidOffset,
-                    result,
-                }
-            }
-            EditorEditOutcome::InvalidRange(result) => {
-                PipelineEditOutcome::NotApplied {
-                    kind: PipelineEditOutcomeKind::InvalidRange,
-                    result,
-                }
-            }
+            EditorEditOutcome::InvalidOffset(result) => PipelineEditOutcome::NotApplied {
+                kind: PipelineEditOutcomeKind::InvalidOffset,
+                result,
+            },
+            EditorEditOutcome::InvalidRange(result) => PipelineEditOutcome::NotApplied {
+                kind: PipelineEditOutcomeKind::InvalidRange,
+                result,
+            },
         }
     }
 
@@ -1187,7 +1202,7 @@ impl LinuxEditorPipeline {
         new: &EditorSnapshot,
         editor_layout: &crate::editor::layout::EditorLayout,
         cursor_owner_epoch: u64,
-    ) -> Option<(PreparedEditMotion, Option<VisualTransactionKey>)> {
+    ) -> VisualPrepareOutcome {
         // Issue #756 / Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 +
         // 文字以 caret 当前帧为吞吐边界；非协同时 typing_animation_enabled 只决定文字动画，
         // smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
@@ -1216,10 +1231,12 @@ impl LinuxEditorPipeline {
                 transaction_id: None,
                 generation: 0,
             });
-            return None;
+            return VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::ScrollingSuppressed,
+            );
         }
         if !text_animation_enabled && !caret_animation_enabled {
-            return None;
+            return VisualPrepareOutcome::AnimationDisabled;
         }
         // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
         //
@@ -1443,7 +1460,9 @@ impl LinuxEditorPipeline {
                             transaction_id: None,
                             generation: 0,
                         });
-                        return None;
+                        return VisualPrepareOutcome::Skipped(
+                            super::edit_flow::EditVisualSkipReason::StaleCanonical,
+                        );
                     }
                 };
 
@@ -1738,7 +1757,9 @@ impl LinuxEditorPipeline {
                     // fallback_old_generation_opt 已在上方释放，不再重复释放。
                     // 释放 new_generation，避免泄漏（成功路径由 pending_promoted_layout 接管）。
                     layout::clear_layout_generation(new_generation);
-                    return None;
+                    return VisualPrepareOutcome::Skipped(
+                        super::edit_flow::EditVisualSkipReason::StaleCanonical,
+                    );
                 }
             };
 
@@ -1783,7 +1804,30 @@ impl LinuxEditorPipeline {
             // Issue #738 评论 5788513592 额外要求: reconcile 删除 unit / 完成事务后同步按
             // 剩余 active snapshot ids 收一次 texture cache，不让已经失去 owner 的纹理一直
             // 挂到后续别的完成路径才释放。
-            let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+            // Issue #819 评论 5968240881 问题 1：retain 时把 carried_snapshot_ids 也算进
+            // active ids。carried unit 引用旧事务的 snapshot/texture，旧事务 cancel 后
+            // 纹理可能在新事务接管前被回收。把 carried_snapshot_ids 显式算进 active
+            // 集合，让纹理在新事务创建之前不被回收。新事务创建后由它自己持有这些
+            // snapshot ids（carried unit 已 units.push() 进新事务 units），下一次 retain
+            // 会按新 active ids 正常收。
+            let mut active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+            if let Some(ref handoff) = prepared_handoff {
+                let carried_ids = match handoff {
+                    super::animation::rebase::PreparedRebaseHandoff::Insert {
+                        visual_state,
+                        ..
+                    } => &visual_state.carried_snapshot_ids,
+                    super::animation::rebase::PreparedRebaseHandoff::Delete {
+                        visual_state,
+                        ..
+                    } => &visual_state.carried_snapshot_ids,
+                };
+                for id in carried_ids {
+                    if !active_ids.contains(id) {
+                        active_ids.push(*id);
+                    }
+                }
+            }
             self.texture_cache.retain_active_snapshot_ids(&active_ids);
 
             let key = self
@@ -1869,7 +1913,30 @@ impl LinuxEditorPipeline {
                 ));
         }
 
-        Some((motion, created_key))
+        // Issue #819 评论 5968240881 问题 2：返回明确的 VisualPrepareOutcome，
+        // 不再让调用方猜 skip reason。
+        match created_key {
+            Some(key) => VisualPrepareOutcome::Created { key },
+            None => {
+                // builder 跳过了事务创建。区分协同模式拿不到 cursor track 和其他原因。
+                if ctx.coordinated_animation_enabled
+                    && (motion.old_cursor_rect.is_none() || motion.new_cursor_rect.is_none())
+                {
+                    VisualPrepareOutcome::Skipped(
+                        super::edit_flow::EditVisualSkipReason::CaretGeometryMissing,
+                    )
+                } else if ctx.coordinated_animation_enabled {
+                    // coordinated 模式但 builder 拿不到 cursor track。
+                    VisualPrepareOutcome::Skipped(
+                        super::edit_flow::EditVisualSkipReason::CursorTrackMissing,
+                    )
+                } else {
+                    VisualPrepareOutcome::Skipped(
+                        super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+                    )
+                }
+            }
+        }
     }
 }
 

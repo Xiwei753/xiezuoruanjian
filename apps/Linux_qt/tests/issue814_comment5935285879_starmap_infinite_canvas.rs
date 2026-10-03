@@ -175,7 +175,9 @@ fn embed_does_not_use_parent_scale() {
         "StarMapEmbed 必须有 canvasZoomLevel property 接收 Canvas 传的 zoomLevel"
     );
     // 5 处 DragHandler 都应用 canvasZoomLevel
-    let count = src.matches("var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0").count();
+    let count = src
+        .matches("var zoom = canvasZoomLevel > 0 ? canvasZoomLevel : 1.0")
+        .count();
     assert!(
         count >= 5,
         "StarMapEmbed 的 5 个 DragHandler 都必须用 canvasZoomLevel，实际 {count} 处"
@@ -192,7 +194,8 @@ fn canvas_background_interaction_uses_screen_to_world() {
     // logPointerPress 用 screenToWorldX/Y
     let lpp = function_window(&src, "function logPointerPress(", 400);
     assert!(
-        lpp.contains("screenToWorldX(point.position.x)") && lpp.contains("screenToWorldY(point.position.y)"),
+        lpp.contains("screenToWorldX(point.position.x)")
+            && lpp.contains("screenToWorldY(point.position.y)"),
         "logPointerPress 必须用 screenToWorldX/Y，实际窗口:\n{lpp}"
     );
     // 不应再在背景交互里手写 (x - panX) / zoomLevel

@@ -26,8 +26,8 @@ pub(crate) mod animation_mode;
 pub(crate) mod cursor_animation;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
 pub mod cursor_controller;
-pub(crate) mod edit_motion;
 pub(crate) mod edit_flow;
+pub(crate) mod edit_motion;
 pub(crate) mod edit_snapshot;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;

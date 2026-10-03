@@ -170,12 +170,14 @@ impl SujianEditorItem {
         // 才算真正应用了编辑，NoChange/StaleRevision/InvalidOffset/InvalidRange 都是 NotApplied。
         // 不再用 `is_some()` 判 Applied——那会把 NoChange/StaleRevision 误判成 Applied。
 
-        // 先从 &op 提取诊断信息（op 后面会被 match 消费）。
-        let (op_kind_label, op_inserted_range, op_deleted_range) = match &op {
-            EditOp::Insert { .. } => ("Insert", None, None),
-            EditOp::Replace { start, end, .. } => ("Replace", Some((*start, *end)), None),
-            EditOp::Delete { start, end, .. } => ("Delete", None, Some((*start, *end))),
-            EditOp::ImeCommit { .. } => ("ImeCommit", None, None),
+        // 先从 &op 提取诊断标签（op 后面会被 match 消费）。
+        // Issue #819 评论 5968240881 问题 3：不再从 &op 提取 inserted_range/deleted_range，
+        // 改成从 EditorEditResult.display_patches 提取（见下方 Applied 路径）。
+        let op_kind_label = match &op {
+            EditOp::Insert { .. } => "Insert",
+            EditOp::Replace { .. } => "Replace",
+            EditOp::Delete { .. } => "Delete",
+            EditOp::ImeCommit { .. } => "ImeCommit",
         };
 
         let edit_outcome: super::pipeline::PipelineEditOutcome = match op {
@@ -218,51 +220,57 @@ impl SujianEditorItem {
 
         // Issue #819 评论 5967250411 问题 3：只有 PipelineEditOutcome::Applied 才进视觉流水线。
         // NotApplied 时不进视觉流水线，返回 applied: false。
-        let (applied, edit_result): (
-            bool,
-            Option<&writer_core::editor::EditorEditResult>,
-        ) = match &edit_outcome {
-            super::pipeline::PipelineEditOutcome::Applied(result) => (true, Some(result)),
-            super::pipeline::PipelineEditOutcome::NotApplied { kind, result } => {
-                // Issue #819 评论 5967250411 问题 3：写 editor.edit.applied 诊断事件。
-                // 记录 Core 没有应用编辑的具体原因（NoChange/StaleRevision/InvalidOffset/InvalidRange）。
-                let kind_label = match kind {
-                    super::pipeline::PipelineEditOutcomeKind::NoChange => "NoChange",
-                    super::pipeline::PipelineEditOutcomeKind::StaleRevision => "StaleRevision",
-                    super::pipeline::PipelineEditOutcomeKind::InvalidOffset => "InvalidOffset",
-                    super::pipeline::PipelineEditOutcomeKind::InvalidRange => "InvalidRange",
-                };
-                writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
-                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                    sequence: 0,
-                    session_id: String::new(),
-                    level: writer_diagnostics::DiagnosticLevel::Info,
-                    origin: writer_diagnostics::DiagnosticOrigin::App,
-                    event: "editor.edit.applied".to_string(),
-                    target: "editor.edit".to_string(),
-                    message: None,
-                    fields: {
-                        let mut f = std::collections::BTreeMap::new();
-                        f.insert("applied".to_string(), serde_json::json!(false));
-                        f.insert("not_applied_kind".to_string(), serde_json::json!(kind_label));
-                        f.insert(
-                            "visual_cause".to_string(),
-                            serde_json::json!(format!("{:?}", visual_cause)),
-                        );
-                        f.insert(
-                            "old_revision".to_string(),
-                            serde_json::json!(self.pipeline.text_revision()),
-                        );
-                        f.insert(
-                            "new_revision".to_string(),
-                            serde_json::json!(result.new_revision),
-                        );
-                        f
-                    },
-                });
-                (false, None)
-            }
-        };
+        let (applied, edit_result): (bool, Option<&writer_core::editor::EditorEditResult>) =
+            match &edit_outcome {
+                super::pipeline::PipelineEditOutcome::Applied(result) => (true, Some(result)),
+                super::pipeline::PipelineEditOutcome::NotApplied { kind, result } => {
+                    // Issue #819 评论 5968240881 问题 3：NotApplied 单独记 editor.edit.not_applied 事件，
+                    // 不再混进 editor.edit.applied。old_revision 用 Core base_revision 而非平台
+                    // text_revision()——后者在 NotApplied 时没有推进，拿它当 old_revision 会和
+                    // Core 的 base_revision 不一致。
+                    let kind_label = match kind {
+                        super::pipeline::PipelineEditOutcomeKind::NoChange => "NoChange",
+                        super::pipeline::PipelineEditOutcomeKind::StaleRevision => "StaleRevision",
+                        super::pipeline::PipelineEditOutcomeKind::InvalidOffset => "InvalidOffset",
+                        super::pipeline::PipelineEditOutcomeKind::InvalidRange => "InvalidRange",
+                    };
+                    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        sequence: 0,
+                        session_id: String::new(),
+                        level: writer_diagnostics::DiagnosticLevel::Info,
+                        origin: writer_diagnostics::DiagnosticOrigin::App,
+                        event: "editor.edit.not_applied".to_string(),
+                        target: "editor.edit".to_string(),
+                        message: None,
+                        fields: {
+                            let mut f = std::collections::BTreeMap::new();
+                            f.insert(
+                                "not_applied_kind".to_string(),
+                                serde_json::json!(kind_label),
+                            );
+                            f.insert(
+                                "operation_kind".to_string(),
+                                serde_json::json!(op_kind_label),
+                            );
+                            f.insert(
+                                "visual_cause".to_string(),
+                                serde_json::json!(format!("{:?}", visual_cause)),
+                            );
+                            f.insert(
+                                "base_revision".to_string(),
+                                serde_json::json!(result.base_revision.value()),
+                            );
+                            f.insert(
+                                "new_revision".to_string(),
+                                serde_json::json!(result.new_revision.value()),
+                            );
+                            f
+                        },
+                    });
+                    (false, None)
+                }
+            };
         if !applied {
             // Core edit 未应用（NoChange/StaleRevision/InvalidOffset/InvalidRange），无编辑无动画。
             return EditApplyOutcome {
@@ -272,12 +280,32 @@ impl SujianEditorItem {
         }
 
         // 4. 记录 editor.edit.applied 诊断事件（Applied 路径）。
-        // Issue #819 评论 5967250411 问题 3：用 writer_diagnostics::record_event 写正式事件，
-        // 带 operation_kind / cause / old_revision / new_revision / inserted/deleted range。
+        // Issue #819 评论 5968240881 问题 3：诊断字段全部来自 Core EditorEditResult，
+        // 不再从平台 EditOp 猜 inserted_range/deleted_range。
+        // - old_revision 用 Core base_revision（编辑前的 revision），而非平台 text_revision()
+        //   （后者在 Core edit 之后已经推进到 new_revision，拿它当 old_revision 是错的）。
+        // - inserted_range / deleted_range 从 display_patches 提取：
+        //   每个 DisplayPatch 的 replace_byte_range 是被替换（删除）的旧文本范围，
+        //   inserted_text 是新插入的文本，inserted_range = (start .. start + inserted_text.len())。
+        // - IME/Replace 多 patch 时记 ranges 数组，单 patch 时记单个 range。
         {
             let result = edit_result
                 .as_ref()
                 .expect("edit_result is Some when applied is true");
+            let mut deleted_ranges: Vec<[usize; 2]> =
+                Vec::with_capacity(result.display_patches.len());
+            let mut inserted_ranges: Vec<[usize; 2]> =
+                Vec::with_capacity(result.display_patches.len());
+            for patch in &result.display_patches {
+                let del_start = patch.replace_byte_range.start().value();
+                let del_end = patch.replace_byte_range.end().value();
+                deleted_ranges.push([del_start, del_end]);
+                // inserted_range 是新文本在 new 正文中的范围：
+                // 从 replace_byte_range.start 开始，长度为 inserted_text 的 byte 长度。
+                let ins_start = del_start;
+                let ins_end = ins_start + patch.inserted_text.len();
+                inserted_ranges.push([ins_start, ins_end]);
+            }
             writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
                 sequence: 0,
@@ -290,25 +318,44 @@ impl SujianEditorItem {
                 fields: {
                     let mut f = std::collections::BTreeMap::new();
                     f.insert("applied".to_string(), serde_json::json!(true));
-                    f.insert("operation_kind".to_string(), serde_json::json!(op_kind_label));
+                    f.insert(
+                        "transaction_id".to_string(),
+                        serde_json::json!(result.transaction_id),
+                    );
+                    f.insert(
+                        "operation_kind".to_string(),
+                        serde_json::json!(op_kind_label),
+                    );
                     f.insert(
                         "cause".to_string(),
                         serde_json::json!(format!("{:?}", visual_cause)),
                     );
                     f.insert(
                         "old_revision".to_string(),
-                        serde_json::json!(self.pipeline.text_revision()),
+                        serde_json::json!(result.base_revision.value()),
                     );
                     f.insert(
                         "new_revision".to_string(),
-                        serde_json::json!(result.new_revision),
+                        serde_json::json!(result.new_revision.value()),
                     );
-                    if let Some((s, e)) = op_inserted_range {
-                        f.insert("inserted_range".to_string(), serde_json::json!([s, e]));
-                    }
-                    if let Some((s, e)) = op_deleted_range {
-                        f.insert("deleted_range".to_string(), serde_json::json!([s, e]));
-                    }
+                    // content_delta：Core 统计的字符增量（inserted/deleted chars）。
+                    f.insert(
+                        "inserted_chars".to_string(),
+                        serde_json::json!(result.content_delta.inserted_chars),
+                    );
+                    f.insert(
+                        "deleted_chars".to_string(),
+                        serde_json::json!(result.content_delta.deleted_chars),
+                    );
+                    // 多 patch 时记数组，单 patch 时也记数组（统一格式，便于消费方解析）。
+                    f.insert(
+                        "deleted_ranges".to_string(),
+                        serde_json::json!(deleted_ranges),
+                    );
+                    f.insert(
+                        "inserted_ranges".to_string(),
+                        serde_json::json!(inserted_ranges),
+                    );
                     f
                 },
             });
@@ -359,32 +406,30 @@ impl SujianEditorItem {
             }
         } else {
             // 普通路径 — record_transaction 总是被调用（做 summary/log/transaction_created）。
-            let result = self.record_transaction(
+            // Issue #819 评论 5968240881 问题 2：record_transaction 返回 VisualPrepareOutcome，
+            // 直接透传，不再用 self.current_is_scrolling 猜 ScrollingSuppressed、
+            // 不再把 None 猜成 BuilderEmptyTransaction。
+            let outcome = self.record_transaction(
                 old,
                 new,
-                edit_result
-                    .expect("edit_result is Some when applied is true"),
+                edit_result.expect("edit_result is Some when applied is true"),
                 true,
             );
             if !animations_requested {
                 EditVisualOutcome::AnimationDisabled
             } else {
-                // 硬约束：animations_requested 时不允许返回裸 None——必须有明确的 Created 或 Skipped。
-                match result {
-                    Some((_, Some(key))) => EditVisualOutcome::Created(key),
-                    Some((_, None)) => {
-                        // builder 跳过了事务创建（空事务 / 无可视单元）。
-                        // prepare_edit_motion 内部已记过正式跳过事件。
-                        EditVisualOutcome::Skipped(EditVisualSkipReason::BuilderEmptyTransaction)
+                match outcome {
+                    super::pipeline::VisualPrepareOutcome::Created { key } => {
+                        EditVisualOutcome::Created(key)
                     }
-                    None => {
-                        // animations_requested 但 motion 为 None。
-                        // 区分滚动抑制和其他跳过原因。
-                        if self.current_is_scrolling {
-                            EditVisualOutcome::Skipped(EditVisualSkipReason::ScrollingSuppressed)
-                        } else {
-                            EditVisualOutcome::Skipped(EditVisualSkipReason::BuilderEmptyTransaction)
-                        }
+                    super::pipeline::VisualPrepareOutcome::Skipped(reason) => {
+                        EditVisualOutcome::Skipped(reason)
+                    }
+                    super::pipeline::VisualPrepareOutcome::AnimationDisabled => {
+                        // prepare_edit_motion 返回 AnimationDisabled 但 animations_requested
+                        // 为 true——这只发生在三个开关全关但 animations_requested 计算为 true
+                        // 的矛盾状态（不应该发生）。保守返回 BuilderEmptyTransaction。
+                        EditVisualOutcome::Skipped(EditVisualSkipReason::BuilderEmptyTransaction)
                     }
                 }
             }

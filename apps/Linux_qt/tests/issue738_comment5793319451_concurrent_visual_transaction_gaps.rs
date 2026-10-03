@@ -63,7 +63,9 @@ fn issue738_comment5793319451_fix1a_layout_revision_unconditional_commit() {
     // Issue #810 评论 问题1: cluster 数据流重构注释使函数进一步变长，窗口增大。
     // Issue #815 评论 6042062633 修改 8: 新增 3 个正式跳过事件（suppressed_by_context /
     // stale_current_canonical / canonical_invariant_failure），函数进一步变长，窗口再增大。
-    let window = function_window(&src, "fn prepare_edit_motion", 40000);
+    // Issue #819 评论 5968240881 问题 2: prepare_edit_motion 返回 VisualPrepareOutcome 枚举，
+    // 新增 Skipped/AnimationDisabled 返回点 + carried_snapshot_ids retain 逻辑，函数进一步变长。
+    let window = function_window(&src, "fn prepare_edit_motion", 52000);
 
     // 修复后：layout_revision = new_revision 存在。
     assert!(

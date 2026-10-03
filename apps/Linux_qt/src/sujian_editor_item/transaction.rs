@@ -1,5 +1,5 @@
-use super::edit_motion::PreparedEditMotion;
 use super::*;
+use crate::sujian_editor_item::pipeline::VisualPrepareOutcome;
 use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use writer_core::editor::EditorEditResult;
 
@@ -10,18 +10,17 @@ impl SujianEditorItem {
     /// `EditorEditResult`（含 `cause`、`operation_kind`、`offset_map`、`content_delta`）
     /// 直接派生动画策略，不再经过 Core 的视觉事务工厂。
     ///
-    /// Issue #819 评论 5956495850 第 1 节：返回值从 `Option<PreparedEditMotion>` 改成
-    /// `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>`，第二个元素是真正
-    /// 创建的视觉事务 key（`None` 表示动画被抑制或 builder 跳过了事务创建）。
-    /// `apply_edit_with_visuals` 据此返回 `Created(key)` / `Skipped(reason)`，
-    /// 不再让调用方拿裸 `Option`。
+    /// Issue #819 评论 5968240881 问题 2：返回值从
+    /// `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>` 改成
+    /// `VisualPrepareOutcome`，只透传 `prepare_edit_motion` 的结果，不再重新猜。
+    /// `apply_edit_with_visuals` 直接消费 `VisualPrepareOutcome`。
     pub(crate) fn record_transaction(
         &mut self,
         old: EditorSnapshot,
         new: EditorSnapshot,
         result: &EditorEditResult,
         emit: bool,
-    ) -> Option<(PreparedEditMotion, Option<VisualTransactionKey>)> {
+    ) -> VisualPrepareOutcome {
         let ctx = pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
             smooth_cursor_enabled: self.current_smooth_cursor_enabled,
@@ -53,7 +52,7 @@ impl SujianEditorItem {
         // Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 + 文字以 caret
         // 当前帧为吞吐边界；非协同时文字动画与光标动画互相独立。
         // 即 coordinated || typing || smooth 时才调用 prepare_edit_motion。
-        let mut motion: Option<(PreparedEditMotion, Option<VisualTransactionKey>)> = None;
+        let mut outcome: VisualPrepareOutcome = VisualPrepareOutcome::AnimationDisabled;
         let animations_requested = self.current_coordinated_animation_enabled
             || self.current_typing_animation_enabled
             || self.current_smooth_cursor_enabled;
@@ -77,12 +76,13 @@ impl SujianEditorItem {
                 transaction_id: None,
                 generation: 0,
             });
+            outcome = VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::ScrollingSuppressed,
+            );
         } else if animations_requested {
-            // Issue #819 评论 5956495850 第 1 节：`prepare_edit_motion` 返回
-            // `(PreparedEditMotion, Option<VisualTransactionKey>)`，key 是真正创建的
-            // 视觉事务 key（None 表示 builder 跳过了事务创建）。`apply_edit_with_visuals`
-            // 据此返回 `Created(key)` / `Skipped(reason)`，不再让调用方拿裸 Option。
-            motion = self.pipeline.prepare_edit_motion(
+            // Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 返回
+            // `VisualPrepareOutcome`，直接透传，不再重新猜 skip reason。
+            outcome = self.pipeline.prepare_edit_motion(
                 &ctx,
                 result,
                 &old,
@@ -103,7 +103,7 @@ impl SujianEditorItem {
         // 动画坐标不生成）。正常光标位置由 cursor controller / 当前正文 snapshot
         // 处理，不依赖 legacy 坐标。
 
-        let has_motion = motion.is_some();
+        let has_motion = matches!(outcome, VisualPrepareOutcome::Created { .. });
         self.last_event_count = if has_motion { 1 } else { 0 };
         self.last_summary = format!(
             "cause={:?};op={:?};motion={};delta_inserted={};delta_deleted={}",
@@ -125,7 +125,7 @@ impl SujianEditorItem {
         if emit {
             self.transaction_created();
         }
-        motion
+        outcome
     }
 
     pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {

@@ -142,9 +142,7 @@ impl PointerGestureState {
     pub(crate) fn move_pos(&mut self, pos: (f32, f32)) -> MoveOutcome {
         match self.phase {
             PointerGesturePhase::Pressed {
-                origin,
-                hit_index,
-                ..
+                origin, hit_index, ..
             } => {
                 let dx = pos.0 - origin.0;
                 let dy = pos.1 - origin.1;

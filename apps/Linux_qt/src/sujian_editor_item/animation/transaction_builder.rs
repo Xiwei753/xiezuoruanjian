@@ -288,45 +288,109 @@ pub(crate) fn build_prepared_transaction(
         .collect();
 
     // 4. Rebase frame 匹配
-    match_rebase_frames(&spec.visual_state.rebase_frames, &mut units, &spec.offset_map);
+    match_rebase_frames(
+        &spec.visual_state.rebase_frames,
+        &mut units,
+        &spec.offset_map,
+    );
 
-    // Issue #819 评论 5967250411 问题 2：消费 carried_slices。
-    // carried_slices 是上一笔事务 cancel 时本帧仍未到达终态、且在新事务里匹配不到
-    // 对应 unit 的旧 sampled slice。连续 Backspace 时第一笔的 C 的 sampled slice
-    // 匹配不到第二笔已有 unit，旧事务又被 cancel，以前直接丢掉导致 C 提前消失。
-    // 现在把这些 slice 的几何信息作为额外的 rebase 诊断记录下来，并由 match_rebase_frames
-    // 的 tier1/tier2/tier3 尝试匹配（匹配上的走 rebase_from_frame，匹配不上的继续
-    // 由新事务的 CaretTrack / handoff 收口）。
-    // carried_slices 的 byte_start/byte_end 已经在 take_rebase_frames 里映射到
+    // Issue #819 评论 5968240881 问题 1：消费 carried_units。
+    // carried_units 是上一笔事务 cancel 时本帧仍未到达终态、且在新事务里匹配不到
+    // 对应 unit 的旧视觉单元（携带完整 AnimatedSlice ingest 元数据 + sampled frame +
+    // timing）。连续 Backspace 时第一笔的 C 的 carried unit 匹配不到第二笔已有 unit，
+    // 旧事务又被 cancel，以前直接丢掉导致 C 提前消失。
+    //
+    // 现在分两步：
+    // 1. 先用 carried unit 的 sampled frame 几何作为 RebaseFrame 喂给 match_rebase_frames，
+    //    匹配上的新 unit 走 rebase_from_frame 继承几何。
+    // 2. 匹配不上的 carried unit 真正 units.push() 到新事务的 units：
+    //    - 用 carried unit 的 AnimatedSlice 构造新的 PreparedVisualUnit，
+    //      timing 从 carried unit 继承。
+    //    - CaretTrack carried unit 从 sampled frame + 新 caret handoff 接着收口。
+    //    - Timed carried unit 从 sampled frame + remaining duration 接着播。
+    //
+    // carried_units 的 byte_start/byte_end 已经在 take_rebase_frames 里映射到
     // current-old 坐标系，这里再用 spec.offset_map 映射到新事务 new 坐标系尝试匹配。
-    let carried_slice_count = spec.visual_state.carried_slices.len();
-    if carried_slice_count > 0 {
+    let carried_unit_count = spec.visual_state.carried_units.len();
+    if carried_unit_count > 0 {
         editor_animation_debug_log(&format!(
-            "anim_carried: op={:?} carried_slices={} (未终态旧 slice 带进新事务，\
+            "anim_carried: op={:?} carried_units={} (未终态旧 unit 带进新事务，\
              不让屏幕上还没吞完的旧 slice 因新正文没有那个字就被直接扔掉)",
-            spec.operation_kind,
-            carried_slice_count,
+            spec.operation_kind, carried_unit_count,
         ));
-        // 把 carried slices 构造成 RebaseFrame 再喂给 match_rebase_frames 做第二轮匹配。
-        // 匹配上的 unit 走 rebase_from_frame 继承几何；匹配不上的 carried slice
-        // 仍由新事务的 CaretTrack / handoff 收口（它们的几何已在采样时算好）。
+        // Step 1: 把 carried units 的 sampled frame 构造成 RebaseFrame 喂给
+        // match_rebase_frames 做第一轮匹配。匹配上的新 unit 走 rebase_from_frame
+        // 继承几何。用 consumed_carried 跟踪哪些 carried unit 被匹配上了。
         let carried_as_frames: Vec<RebaseFrame> = spec
             .visual_state
-            .carried_slices
+            .carried_units
             .iter()
-            .map(|slice| RebaseFrame {
-                byte_start: slice.byte_start,
-                byte_end: slice.byte_end,
-                x: slice.dest_rect.x,
-                y: slice.dest_rect.y,
-                opacity: slice.opacity,
-                shaping_identity: slice.shaping_identity.clone(),
-                visible_fraction: slice.visible_fraction,
+            .map(|unit| RebaseFrame {
+                byte_start: unit.slice.byte_start,
+                byte_end: unit.slice.byte_end,
+                x: unit.sampled_frame.dest_rect.x,
+                y: unit.sampled_frame.dest_rect.y,
+                opacity: unit.sampled_frame.opacity,
+                shaping_identity: unit.slice.shaping_identity.clone(),
+                visible_fraction: unit.sampled_frame.visible_fraction,
                 sampled_at: std::time::Instant::now(),
-                remaining_duration_ms: slice.remaining_duration_ms,
+                remaining_duration_ms: unit.sampled_frame.remaining_duration_ms,
             })
             .collect();
-        match_rebase_frames(&carried_as_frames, &mut units, &spec.offset_map);
+        let mut consumed_carried: Vec<usize> = Vec::new();
+        let mut consumed_units: Vec<usize> = Vec::new();
+        for (carried_idx, frame) in carried_as_frames.iter().enumerate() {
+            // tier1: 精确 byte range 匹配（未消费的新 unit）。
+            let matched = units.iter_mut().enumerate().find(|(unit_idx, nu)| {
+                !consumed_units.contains(unit_idx)
+                    && nu.slice.byte_start == frame.byte_start
+                    && nu.slice.byte_end == frame.byte_end
+            });
+            if let Some((unit_idx, new_unit)) = matched {
+                new_unit.rebase_from_frame(frame);
+                consumed_carried.push(carried_idx);
+                consumed_units.push(unit_idx);
+            }
+        }
+        // Step 2: 匹配不上的 carried unit 真正 units.push() 到新事务的 units。
+        // 用 carried unit 的 AnimatedSlice 构造新的 PreparedVisualUnit，
+        // timing 从 carried unit 继承。
+        for (carried_idx, unit) in spec.visual_state.carried_units.iter().enumerate() {
+            if consumed_carried.contains(&carried_idx) {
+                continue;
+            }
+            // Issue #819 评论 5968240881 问题 1：carried unit 的 AnimatedSlice 已经
+            // 在 take_rebase_frames 里映射到 current-old 坐标系。这里再用
+            // spec.offset_map 映射到新事务 new 坐标系（如果映射失败保留原 byte range）。
+            let mut new_slice = unit.slice.clone();
+            if let Some((ms, me)) = spec
+                .offset_map
+                .map_old_range_to_new(unit.slice.byte_start, unit.slice.byte_end)
+            {
+                new_slice.byte_start = ms;
+                new_slice.byte_end = me;
+            }
+            // CaretTrack carried unit 从 sampled frame + 新 caret handoff 接着收口；
+            // Timed carried unit 从 sampled frame + remaining duration 接着播。
+            // 两者都通过 rebase_from_frame 把 sampled frame 几何写入新 slice。
+            let mut new_unit = PreparedVisualUnit {
+                slice: new_slice,
+                timing: unit.timing.clone(),
+            };
+            let carried_frame = RebaseFrame {
+                byte_start: unit.slice.byte_start,
+                byte_end: unit.slice.byte_end,
+                x: unit.sampled_frame.dest_rect.x,
+                y: unit.sampled_frame.dest_rect.y,
+                opacity: unit.sampled_frame.opacity,
+                shaping_identity: unit.slice.shaping_identity.clone(),
+                visible_fraction: unit.sampled_frame.visible_fraction,
+                sampled_at: std::time::Instant::now(),
+                remaining_duration_ms: unit.sampled_frame.remaining_duration_ms,
+            };
+            new_unit.rebase_from_frame(&carried_frame);
+            units.push(new_unit);
+        }
     }
 
     // 5. 诊断日志
