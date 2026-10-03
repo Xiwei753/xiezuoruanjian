@@ -10,7 +10,13 @@
 //   local fit，保证"里面有什么"在任何缩放下都留在圆里；
 // - 子 Embed 同样是圆，和它们在 interactive 层、在父 Scene 里的几何一致，
 //   不因为掉档就换成方形摘要卡；
-// - 投影太小就不画文字：48vp 的圆上写标题只会糊成一团像素；
+// - **画的是同一张图，不是"预览皮肤"**（#821 复审第二轮）：节点圆形色块的直径、
+//   圆心位置、kind 颜色、子 Embed 底色 / 描边、fit 留白，全部读
+//   ./StarMapVisualTokens —— 和 interactive 层共用同一份常量。
+//   之前这里把 160×80 布局矩形画成灰圆角矩形、用 6vp 留白、子 Embed 用
+//   primaryContainer / outline，结果跨 70% 门槛时整张图"换皮"变形；
+// - 投影太小就不画文字：糊成一团的像素反而降低可辨识度。但**只省文字**，
+//   节点本体的形状和颜色一个都不改；
 // - 不注册 Scene handle、不挂任何手势、整块 HitTestMode.None：
 //   preview 是"看得见"，不是"点得动"。根 Scene 的两指 Pinch 必须完整穿过它，
 //   交互责任属于 interactive 层（coverage ≥ 0.70 时）的 StarMapEmbedScene。
@@ -26,8 +32,7 @@ import {
   PlatformLayoutNode,
   buildFreeformLayout,
   buildEmbedLayoutNodes,
-  DEFAULT_EMBED_DIAMETER,
-  DEFAULT_NODE_RADIUS
+  DEFAULT_EMBED_DIAMETER
 } from '../platform/StarMapLayout'
 import {
   PlatformNodeRect,
@@ -40,18 +45,20 @@ import {
   computeEmbedInnerContentSafeSide,
   computeFittedViewport
 } from '../platform/StarMapViewport'
+import {
+  STARMAP_NODE_GLYPH_RADIUS, STARMAP_NODE_GLYPH_CENTER_X, STARMAP_NODE_GLYPH_CENTER_Y,
+  STARMAP_NODE_LABEL_CENTER_Y, STARMAP_NODE_LABEL_FONT_SIZE,
+  STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP,
+  STARMAP_EMBED_FIT_PADDING_VP, starmapNodeColor
+} from './StarMapVisualTokens'
 
 /** 预览画布的边长：恒为本地 Embed 直径，不随父层缩放变化。 */
 const PREVIEW_CANVAS_SIZE: number = DEFAULT_EMBED_DIAMETER
 
-/** 内容区留白（vp，本地单位）：和 interactive 层 fitView 用同一份量级。 */
-const PREVIEW_PADDING_VP: number = 6
-
-/**
- * 文字最小可读阈值（本地单位下的节点边长）。
- * 低于它就不画标签：缩略图上的文字只会糊成色块，反而降低可辨识度。
- */
-const PREVIEW_LABEL_MIN_SIDE_VP: number = 44
+// 内容区留白、节点直径、圆心位置、kind 颜色都不在这里另立一份：
+// 全部读 StarMapVisualTokens，和 interactive 层共用同一份视觉真相（#821 复审第二轮）。
+// 本地各写一份（曾经是 6vp 留白 + 160×80 灰圆角矩形 + primaryContainer 子 Embed）
+// 的直接后果就是跨 70% 门槛时整张图换皮变形。
 
 @Component
 export struct StarMapEmbedPreview {
@@ -217,7 +224,7 @@ export struct StarMapEmbedPreview {
       this.fitOffsetY = 0
       return
     }
-    const available: number = computeEmbedInnerContentSafeSide(PREVIEW_CANVAS_SIZE, PREVIEW_PADDING_VP)
+    const available: number = computeEmbedInnerContentSafeSide(PREVIEW_CANVAS_SIZE, STARMAP_EMBED_FIT_PADDING_VP)
     const fitted = computeFittedViewport(
       bounds, available, available, 0, PREVIEW_CANVAS_SIZE, PREVIEW_CANVAS_SIZE)
     this.fitZoomScale = fitted.zoomScale
@@ -264,84 +271,77 @@ export struct StarMapEmbedPreview {
       ctx.stroke()
     }
 
-    // 2. 子节点：圆角矩形，和 interactive 层的形状一致
-    ctx.fillStyle = this.themeConfig.colors.surfaceContainerHigh
-    ctx.strokeStyle = this.themeConfig.colors.outlineVariant
-    for (const rect of this.childRects) {
-      if (this.isChildEmbedId(graph, rect.nodeId)) {
+    // 2. 子节点：和 interactive 层一模一样的"56vp 彩色圆 + 下方标题"。
+    //    圆心不是猜的：读 StarMapVisualTokens 里那份显式几何
+    //    （STARMAP_NODE_GLYPH_CENTER_X/Y），和 StarMapScene 的 Column 排版同源。
+    //    这里绝不能再把 160×80 布局矩形画成灰圆角矩形——那就是"换皮"（#821 复审第二轮）。
+    //    选中描边和拖拽浮起阴影是 interactive 的交互态装饰，跟着 selection / drag 每帧变，
+    //    画进缩略图只会让缩略图自己也在闪，所以不画——它们不属于"这张图长什么样"。
+    const labelReadable: boolean =
+      STARMAP_NODE_GLYPH_RADIUS * 2 * this.fitZoomScale >= STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP
+    for (const node of graph.nodes) {
+      const rect = this.rectOf(node.id)
+      if (!rect) {
         continue
       }
-      const r: number = Math.min(DEFAULT_NODE_RADIUS, Math.min(rect.width, rect.height) / 2)
       ctx.beginPath()
-      ctx.moveTo(rect.x + r, rect.y)
-      ctx.lineTo(rect.x + rect.width - r, rect.y)
-      ctx.quadraticCurveTo(rect.x + rect.width, rect.y, rect.x + rect.width, rect.y + r)
-      ctx.lineTo(rect.x + rect.width, rect.y + rect.height - r)
-      ctx.quadraticCurveTo(rect.x + rect.width, rect.y + rect.height, rect.x + rect.width - r, rect.y + rect.height)
-      ctx.lineTo(rect.x + r, rect.y + rect.height)
-      ctx.quadraticCurveTo(rect.x, rect.y + rect.height, rect.x, rect.y + rect.height - r)
-      ctx.lineTo(rect.x, rect.y + r)
-      ctx.quadraticCurveTo(rect.x, rect.y, rect.x + r, rect.y)
+      ctx.arc(
+        rect.x + STARMAP_NODE_GLYPH_CENTER_X,
+        rect.y + STARMAP_NODE_GLYPH_CENTER_Y,
+        STARMAP_NODE_GLYPH_RADIUS, 0, Math.PI * 2
+      )
+      ctx.fillStyle = starmapNodeColor(node.kind)
       ctx.fill()
-      ctx.lineWidth = 1 * unit
-      ctx.stroke()
     }
 
-    // 3. 子 Embed：仍然是圆（#821：任何缩放下子星图都是子星图）
+    // 3. 子 Embed：仍然是圆（#821：任何缩放下子星图都是子星图），
+    //    底色 / 描边也照抄 interactive 层外壳的取值（surfaceContainer + outlineVariant），
+    //    不用 primaryContainer / outline 另造一套预览皮肤。
+    ctx.fillStyle = this.themeConfig.colors.surfaceContainer
+    ctx.strokeStyle = this.themeConfig.colors.outlineVariant
+    ctx.lineWidth = 1 * unit
     for (const embed of graph.embeds) {
-      const rect = this.childRects.find((r: PlatformNodeRect) => r.nodeId === embed.instanceId)
+      const rect = this.rectOf(embed.instanceId)
       if (!rect) {
         continue
       }
       ctx.beginPath()
       ctx.arc(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width / 2, 0, Math.PI * 2)
-      ctx.fillStyle = this.themeConfig.colors.primaryContainer
       ctx.fill()
-      ctx.strokeStyle = this.themeConfig.colors.outline
-      ctx.lineWidth = 1.5 * unit
       ctx.stroke()
     }
 
-    // 4. 文字：投影小到看不清就整层不画（阈值按节点边长 × fit 判定）
-    const shortestSide: number = this.shortestChildSide()
-    if (shortestSide * this.fitZoomScale >= PREVIEW_LABEL_MIN_SIDE_VP) {
+    // 4. 文字：投影小到看不清就整层不画。阈值按"圆的投影直径 × fit"判定——
+    //    只影响写不写文字，不影响上面已经画好的形状和颜色。
+    if (labelReadable) {
       ctx.fillStyle = this.themeConfig.colors.onSurface
-      ctx.font = `${13 * unit}px ${this.themeConfig.fontFamily}`
+      ctx.font = `${STARMAP_NODE_LABEL_FONT_SIZE * unit}px ${this.themeConfig.fontFamily}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       for (const node of graph.nodes) {
-        const rect = this.childRects.find((r: PlatformNodeRect) => r.nodeId === node.id)
+        const rect = this.rectOf(node.id)
         if (!rect) {
           continue
         }
-        ctx.fillText(this.nodeLabel(node.title), rect.x + rect.width / 2, rect.y + rect.height / 2)
+        ctx.fillText(
+          this.nodeLabel(node.title),
+          rect.x + STARMAP_NODE_GLYPH_CENTER_X,
+          rect.y + STARMAP_NODE_LABEL_CENTER_Y
+        )
       }
     }
 
     ctx.restore()
   }
 
-  private isChildEmbedId(graph: StarMapGraph, nodeId: string): boolean {
-    for (const embed of graph.embeds) {
-      if (embed.instanceId === nodeId) {
-        return true
-      }
-    }
-    return false
-  }
-
-  private shortestChildSide(): number {
-    let shortest: number = Number.MAX_VALUE
-    for (const rect of this.childRects) {
-      const side: number = Math.min(rect.width, rect.height)
-      if (side < shortest) {
-        shortest = side
-      }
-    }
-    return shortest === Number.MAX_VALUE ? 0 : shortest
+  /** 按 nodeId 取子图里的布局矩形（子节点和子 Embed 共用同一批 rect）。 */
+  private rectOf(nodeId: string): PlatformNodeRect | undefined {
+    return this.childRects.find((r: PlatformNodeRect) => r.nodeId === nodeId)
   }
 
   private nodeLabel(title: string | null): string {
+    // 截断只影响文字本身，不影响形状和颜色：Canvas 不会自动换行，
+    // 缩略图上写全标题只会糊成一条色带。
     const text: string = title ?? ''
     return text.length > 6 ? text.substring(0, 6) : text
   }

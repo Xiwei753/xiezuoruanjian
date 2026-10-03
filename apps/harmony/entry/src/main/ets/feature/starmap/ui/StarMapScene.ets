@@ -97,6 +97,12 @@
 // 26. 缩放不是布局变化（#821）：正常相机缩放不触发任何避让、不推开邻居。
 //     同层对象按同一个相机比例等比放大，包括互相重叠也照画。避让 / 找空位只在用户
 //     真的创建、移动、缩放了某个对象的 world bounds 时才发生。
+// 27. preview 和 interactive 是**同一张图**（#821 复审第二轮）：节点圆形色块的直径、
+//     标题字号 / 宽度 / 行高 / 间距、kind → 颜色表、Embed fit 留白，全部读
+//     ./StarMapVisualTokens，本文件不再各写一份。圆心位置也必须是共享常量：
+//     本组件是 Column + 居中排版，preview 是 Canvas 手绘，两边如果各算各的，
+//     跨 70% 门槛时缩略图会"变形/跳一下"——那就是换皮，不是视觉缩小。
+//     本地禁止再出现 56 / 13 / 80 / 6 / 8 这类散落的视觉数字副本。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent } from '@kit.ArkUI'
@@ -149,6 +155,12 @@ import {
 } from '../platform/StarMapDiagnostics'
 import { StarMapEmbedScene } from './StarMapEmbedScene'
 import { StarMapEmbedPreview } from './StarMapEmbedPreview'
+import {
+  STARMAP_NODE_GLYPH_DIAMETER, STARMAP_NODE_LABEL_FONT_SIZE,
+  STARMAP_NODE_LABEL_WIDTH, STARMAP_NODE_LABEL_MAX_LINES,
+  STARMAP_NODE_LABEL_BLOCK_HEIGHT, STARMAP_NODE_LABEL_MARGIN_TOP,
+  STARMAP_EMBED_FIT_PADDING_VP, starmapNodeColor
+} from './StarMapVisualTokens'
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
 interface WobbleOffset {
@@ -172,8 +184,9 @@ const STARMAP_SELECTED_STROKE_COLOR: string = '#FF6B6B'
 
 // ─── 视口常量 ───
 
-/** 子图内容适配到 Embed 圆形可用区时，四边留白（vp）。 */
-const EMBED_FIT_PADDING_VP: number = 8
+// 子图内容适配到 Embed 圆形可用区时的四边留白不再本地定义：
+// 它必须和 preview 档的缩略图是同一个数，否则跨 70% 门槛时内容大小会跳一下。
+// 统一读 StarMapVisualTokens（#821 复审第二轮）。
 
 // 缩放锚点不再自己算：改用高优先级 PinchGesture 事件里的 pinchCenterX / pinchCenterY，
 // 它是双指中点在根组件坐标系里的位置（#818 复审）。
@@ -790,12 +803,12 @@ export struct StarMapScene {
     // 只用内接正方形的话内容会一直顶到圆边，子子星图在父圆里占得过满，
     // 父圆的"点标题 / 边框选中"入口也会被内容压住。
     const available: number = computeEmbedInnerContentSafeSide(
-      Math.min(localWidth, localHeight), EMBED_FIT_PADDING_VP
+      Math.min(localWidth, localHeight), STARMAP_EMBED_FIT_PADDING_VP
     )
     // 比例按可用区算，偏移按 Scene 自己的尺寸算：
     // 子 Scene 组件是铺满整个圆的，中心在局部宽度/2、局部高度/2。
     // 拿内接正方形的左上角当原点会让内容整体偏左上（#816 复审第 4 条）。
-    // available 里已经扣过 EMBED_FIT_PADDING_VP，这里再传一次就会重复扣，
+    // available 里已经扣过 STARMAP_EMBED_FIT_PADDING_VP，这里再传一次就会重复扣，
     // 所以 padding 传 0：留白只在 computeEmbedInnerContentSafeSide 里扣一次。
     const fitted: Viewport = computeFittedViewport(
       bounds, available, available, 0, localWidth, localHeight
@@ -872,7 +885,7 @@ export struct StarMapScene {
     return clampItemToEmbedSafeArea(
       x, y, width, height,
       this.fitScale, this.fitOffsetX, this.fitOffsetY,
-      localSceneSize, EMBED_FIT_PADDING_VP
+      localSceneSize, STARMAP_EMBED_FIT_PADDING_VP
     )
   }
 
@@ -2102,23 +2115,10 @@ private refitAfterContentAdded(): void {
     ctx.setLineDash([])
   }
 
-  // ─── 节点颜色 ───
-
-  getNodeColor(node: StarMapNode): string {
-    const kindColors: Record<string, string> = {
-      'Character': '#4A90D9',
-      'Location': '#F39C12',
-      'Event': '#9B59B6',
-      'Theme': '#2ECC71',
-      'Plot': '#E74C3C',
-      'Item': '#1ABC9C',
-      'Organization': '#3498DB',
-      'Custom': '#95A5A6'
-    }
-    return kindColors[node.kind] || '#4A90D9'
-  }
-
   // ─── @Builder：节点组件 ───
+
+  // kind → 颜色的映射不在本地维护：preview 档的缩略图要画同一批圆，
+  // 两边各写一张表就一定会漂，统一读 StarMapVisualTokens.starmapNodeColor（#821 复审第二轮）。
 
   /**
    * 节点组件：长按 → 菜单（连线预备态）→ 继续拖动 → connect。
@@ -2127,8 +2127,8 @@ private refitAfterContentAdded(): void {
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
-      Circle({ width: 56, height: 56 })
-        .fill(this.getNodeColor(node))
+      Circle({ width: STARMAP_NODE_GLYPH_DIAMETER, height: STARMAP_NODE_GLYPH_DIAMETER })
+        .fill(starmapNodeColor(node.kind))
         .stroke(this.isNodeSelected(node.id) ? STARMAP_SELECTED_STROKE_COLOR : 'transparent')
         .strokeWidth(4)
         .shadow({
@@ -2144,12 +2144,15 @@ private refitAfterContentAdded(): void {
         })
 
       Text(node.title)
-        .fontSize(13)
+        .fontSize(STARMAP_NODE_LABEL_FONT_SIZE)
         .fontWeight(this.isNodeSelected(node.id) ? FontWeight.Bold : FontWeight.Normal)
-        .margin({ top: 6 })
-        .maxLines(2)
+        .margin({ top: STARMAP_NODE_LABEL_MARGIN_TOP })
+        .maxLines(STARMAP_NODE_LABEL_MAX_LINES)
         .textAlign(TextAlign.Center)
-        .width(80)
+        .width(STARMAP_NODE_LABEL_WIDTH)
+        // 标题块高度必须固定，否则 1 行 / 2 行会让 Column 的居中排版把整颗圆带着上下移，
+        // preview 档就算照抄公式也算不出同一个圆心（#821 复审第二轮）。
+        .height(STARMAP_NODE_LABEL_BLOCK_HEIGHT)
     }
     .width(160)
     .height(80)
