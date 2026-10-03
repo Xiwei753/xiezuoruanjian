@@ -87,8 +87,8 @@ import {
   buildRecursiveSceneContext, resolveRecursiveHit, convertPointToRoot,
   buildTargetPathForHost, planCrossLayerEdge, describeScenePath,
   embedHitMetricsForScene, describeEmbedInputNodeId, describeSceneInputNodeId,
-  isEmbedInputNodeId, extractEmbedInstanceIdFromInputNodeId,
-  EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH
+  extractEmbedInstanceIdFromInputNodeId,
+  EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH, EmbedHitMetrics
 } from '../platform/StarMapGeometry'
 import {
   PlatformLayoutNode, PlatformPoint,
@@ -746,64 +746,82 @@ export struct StarMapScene {
    * 根 Stack 与子 Stack 都要有：ArkUI 的 onChildTouchTest 只会把**显式设了 .id() 的
    * 命名节点**放进回调参数，父 Scene 想指名把事件发给某个 child Scene，就必须先能
    * 按 id 认出它。不给 id 就只能靠 Stack 的默认命中顺序，嵌套一深就分不清是哪一层。
+   *
+   * 注意它和父层那颗 Embed 内壳的 id **不是同一个字符串**（#818 复审）：
+   *   父层 Embed 内壳：starmap_embed_input_root_<instanceId>
+   *   本 Scene 壳：    starmap_embed_input_root/embed:<instanceId>
+   * 真正需要的是"稳定且在整棵递归树里不重名"，不是两端字符串相同；
+   * 父层指名转发时用的是前者，两者靠各自前缀在同一 scenePath 段里唯一来区分。
    */
   private sceneInputNodeId(): string {
     return describeSceneInputNodeId(this.scenePath)
   }
 
   /**
-   * 子 Scene 的输入节点是否应该继续参加手势竞争（#818 复审）。
+   * 这颗 Embed 的内部区域是否应该继续下探到最深 child Scene（#818 复审）。
    *
    * #373 的统一输入规则在这一层落地：
    * - 1 指命中**标题带 / 圆环** → 不往下走，这一指属于"选中这个子星图"，归父 Scene；
    * - 1 指命中**内部** → 继续交给最深的 child Scene；
    * - 2 指（不论落在哪一层）→ 根 Scene 那唯一一份 PinchGesture 认领，改全局相机。
    *
+   * **坐标口径（这里最容易写错，#818 复审专门盯这一点）**：
+   * 这个回调挂在**单颗 Embed 自己的外层 Stack** 上，它给出的 `children` 是
+   * Stack 里面那些命名子节点（也就是包住 child Scene 的那根 innerContent Column）。
+   * ArkUI 对 TouchTestInfo 的定义是：
+   * - `x / y` —— 触点相对**这个子组件**的左上角；
+   * - `parentX / parentY` —— 触点相对**父组件**的左上角，而父组件就是这颗已经
+   *   `.position(...)` 过的 Embed Stack。
+   *
+   * 所以这里**只能用 `child.x / child.y`**，它们已经是相对 Embed 壳内部的坐标。
+   * 之前那版又减了一遍 `getEmbedScreenX/Y()`（父 Scene 里的 Embed 原点），
+   * 等于把原点扣了两次：Embed 摆在父 Scene 的 (300,200)、手指点在圆心时，
+   * parentX/parentY 是 (100,100)，再减一次就变成 (-200,-100)，圆命中直接失败，
+   * 于是大部分子星图位置上 FORWARD_COMPETITION 根本走不到（#818 复审）。
+   *
+   * 圆半径同样直接取 `child.rect`：这个矩形就是这块 innerContent 的实际大小，
+   * 不需要再拿 `DEFAULT_EMBED_DIAMETER * viewportScaleValue()` 反推。
+   *
    * 标题带与圆环的判定必须和 resolveRecursiveHit 完全一致，所以同样调
    * embedHitMetricsForScene，不在这里再抄一份 24 / 12。
    *
-   * @param children 触摸测试命中的子节点信息（ArkUI 只收命名节点）
-   * @returns 转发策略：命中内部就 FORWARD_COMPETITION，其余交给系统默认
+   * @param child 触摸测试命中的那一个 Embed 内壳节点（ArkUI 只收命名节点）
+   * @returns 命中内部就 true（可以下探），标题带 / 圆环 / 圆外都 false
    */
-  private shouldForwardTouchToChild(
-    children: TouchTestInfo[],
-    parentX: number,
-    parentY: number
-  ): string | null {
-    if (children === undefined || children === null || children.length === 0) {
-      return null
+  private shouldForwardTouchToChild(child: TouchTestInfo): boolean {
+    if (child === undefined || child === null || child.rect === undefined || child.rect === null) {
+      return false
     }
-    const radius: number = DEFAULT_EMBED_DIAMETER * this.viewportScaleValue() / 2
-    const metrics = embedHitMetricsForScene(1, radius)
-    for (const child of children) {
-      if (child === undefined || child === null) {
-        continue
-      }
-      const instanceId: string | null = extractEmbedInstanceIdFromInputNodeId(this.scenePath, child.id)
-      if (instanceId === null) {
-        continue
-      }
-      // parentX/parentY 是相对**本 Scene 组件**原点的，换算到 Embed 壳自己的局部坐标
-      const originX: number = this.getEmbedScreenX(instanceId)
-      const originY: number = this.getEmbedScreenY(instanceId)
-      const localX: number = parentX - originX
-      const localY: number = parentY - originY
-      const dx: number = localX - radius
-      const dy: number = localY - radius
-      if (Math.sqrt(dx * dx + dy * dy) > radius) {
-        continue
-      }
-      if (localY <= metrics.titleHitHeight) {
-        // 标题带 = 选中这个子星图，不下沉
-        return null
-      }
-      if (Math.sqrt(dx * dx + dy * dy) >= radius - metrics.borderHitWidth) {
-        // 圆环 = 选中这个子星图，不下沉
-        return null
-      }
-      return child.id
+    const rectWidth: number = child.rect.width
+    const rectHeight: number = child.rect.height
+    if (!Number.isFinite(rectWidth) || !Number.isFinite(rectHeight) ||
+      rectWidth <= 0 || rectHeight <= 0) {
+      return false
     }
-    return null
+    const radius: number = Math.min(rectWidth, rectHeight) / 2
+    // x / y 已经相对这个子组件左上角，直接就是 Embed 壳内部的局部坐标
+    const localX: number = child.x
+    const localY: number = child.y
+    if (!Number.isFinite(localX) || !Number.isFinite(localY)) {
+      return false
+    }
+    const metrics: EmbedHitMetrics = embedHitMetricsForScene(1, radius)
+    const dx: number = localX - radius
+    const dy: number = localY - radius
+    const dist: number = Math.sqrt(dx * dx + dy * dy)
+    if (dist > radius) {
+      // 圆外：事件落回父星图
+      return false
+    }
+    if (localY <= metrics.titleHitHeight) {
+      // 标题带 = 选中这个子星图，不下沉
+      return false
+    }
+    if (dist >= radius - metrics.borderHitWidth) {
+      // 圆环 = 选中这个子星图，不下沉
+      return false
+    }
+    return true
   }
 
   /**
@@ -822,14 +840,17 @@ export struct StarMapScene {
       return { strategy: TouchTestStrategy.DEFAULT }
     }
     for (const child of children) {
-      if (child === undefined || child === null || !isEmbedInputNodeId(child.id)) {
+      if (child === undefined || child === null) {
         continue
       }
-      const forwarded: string | null = this.shouldForwardTouchToChild(
-        children, child.parentX, child.parentY
-      )
-      if (forwarded !== null) {
-        return { strategy: TouchTestStrategy.FORWARD_COMPETITION, id: forwarded }
+      // instanceId 只用来确认"这是当前 Scene 自己的 Embed 内壳节点"，
+      // 不拿它去算坐标：坐标一律用 child.x / child.y（相对子组件原点）。
+      const instanceId: string | null = extractEmbedInstanceIdFromInputNodeId(this.scenePath, child.id)
+      if (instanceId === null) {
+        continue
+      }
+      if (this.shouldForwardTouchToChild(child)) {
+        return { strategy: TouchTestStrategy.FORWARD_COMPETITION, id: child.id }
       }
     }
     return { strategy: TouchTestStrategy.DEFAULT }
@@ -2460,9 +2481,11 @@ private refitAfterContentAdded(): void {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.handleSceneAreaChange(newArea)
     })
-    // 本 Scene 自己的稳定输入节点 id（#818 复审）：父层的 onChildTouchTest
-    // 在这一层里指名转发时，用的是"父层那颗 Embed 内壳"的 id（embedInputNodeId），
-    // 这里是同一棵树的另一端——给出 child 自己的名字，便于按 id 认人而不是靠命中顺序。
+    // 本 Scene 自己的稳定输入节点 id（#818 复审）：它是递归链的"子端"名字。
+    // 注意和父层那颗 Embed 内壳的 id 不是同一个字符串：父层指名转发用的是
+    // embedInputNodeId（starmap_embed_input_<scenePath>_<instanceId>），
+    // 这里给的是本 Scene 壳自己的名字（starmap_embed_input_<scenePath>）。
+    // 需要的只是"稳定 + 全树不重名"，不是两端字符串相同。
     .id(this.sceneInputNodeId())
   }
 

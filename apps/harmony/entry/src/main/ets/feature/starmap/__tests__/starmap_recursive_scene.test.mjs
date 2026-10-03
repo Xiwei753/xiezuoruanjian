@@ -3005,44 +3005,126 @@ console.log('35. 输入节点 id 与 onChildTouchTest：命中的子图继续参
   assert(isEmbedInputNodeId(describeSceneInputNodeId(PATH_A)),
     'Scene 自己的输入节点 id 也用同一前缀，递归链首尾一致')
 
-  // routeChildTouchTest 的镜像：内接正文转发，标题 / 边框不转发
+  // routeChildTouchTest 的镜像（#818 复审修正版）：
+  // onChildTouchTest 挂在单颗 Embed 自己的外层 Stack 上，父组件就是那颗已经
+  // .position() 过的 Embed Stack，所以坐标一律取 child.x / child.y（相对子组件原点），
+  // 半径取 child.rect。再减一次 getEmbedScreenX/Y 就是把原点扣两遍。
   const FORWARD_COMPETITION = 1
   const DEFAULT = 0
-  const shouldForwardTouchToChild = (children, parentX, parentY) => {
-    const radius = DEFAULT_EMBED_DIAMETER / 2
+  const mkTouchInfo = (nodeId, x, y, width = DEFAULT_EMBED_DIAMETER, height = DEFAULT_EMBED_DIAMETER) => ({
+    id: nodeId, x, y, rect: { x: 0, y: 0, width, height }
+  })
+  const shouldForwardTouchToChild = (child) => {
+    if (child === undefined || child === null || child.rect === undefined || child.rect === null) return false
+    const rectWidth = child.rect.width
+    const rectHeight = child.rect.height
+    if (!Number.isFinite(rectWidth) || !Number.isFinite(rectHeight) || rectWidth <= 0 || rectHeight <= 0) return false
+    const radius = Math.min(rectWidth, rectHeight) / 2
+    const localX = child.x
+    const localY = child.y
+    if (!Number.isFinite(localX) || !Number.isFinite(localY)) return false
     const metrics = embedHitMetricsForScene(1, radius)
-    for (const child of children) {
-      if (!isEmbedInputNodeId(child.id)) continue
-      const dx = parentX - radius
-      const dy = parentY - radius
-      if (Math.sqrt(dx * dx + dy * dy) > radius) continue
-      if (parentY <= metrics.titleHitHeight) continue
-      if (Math.sqrt(dx * dx + dy * dy) >= radius - metrics.borderHitWidth) continue
-      return child.id
-    }
-    return null
+    const dx = localX - radius
+    const dy = localY - radius
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    if (dist > radius) return false
+    if (localY <= metrics.titleHitHeight) return false
+    if (dist >= radius - metrics.borderHitWidth) return false
+    return true
   }
-  const routeChildTouchTest = (children, parentX, parentY) => {
-    const id = shouldForwardTouchToChild(children, parentX, parentY)
-    return id !== null ? { strategy: FORWARD_COMPETITION, id } : { strategy: DEFAULT }
+  const routeChildTouchTest = (children, scenePath) => {
+    if (children === undefined || children === null || children.length === 0) {
+      return { strategy: DEFAULT }
+    }
+    for (const child of children) {
+      if (child === undefined || child === null) continue
+      // instanceId 只用来确认"这是当前 Scene 自己的 Embed 内壳节点"，不参与算坐标
+      const instanceId = extractEmbedInstanceIdFromInputNodeId(scenePath, child.id)
+      if (instanceId === null) continue
+      if (shouldForwardTouchToChild(child)) return { strategy: FORWARD_COMPETITION, id: child.id }
+    }
+    return { strategy: DEFAULT }
   }
 
   const id = describeEmbedInputNodeId(PATH_A, 'emb-a1')
-  const children = [{ id: id, parentX: 100, parentY: 120 }]
-  const inner = routeChildTouchTest(children, 100, 120)
+  const at = (x, y) => [mkTouchInfo(id, x, y)]
+  const inner = routeChildTouchTest(at(100, 120), PATH_A)
   assert(inner.strategy === FORWARD_COMPETITION && inner.id === id,
     '点在子星图内部：FORWARD_COMPETITION 转给命中的 child，子层单指手势继续能赢')
-  const title = routeChildTouchTest(children, 100, 10)
+  const title = routeChildTouchTest(at(100, 10), PATH_A)
   assert(title.strategy === DEFAULT,
     '点在标题带：不转发给 child，交给 onTouchIntercept Block（这一步是"选中这个子星图"）')
-  const border = routeChildTouchTest(children, 100, 100 - (100 - 5))
+  const border = routeChildTouchTest(at(100, 100 - (100 - 5)), PATH_A)
   assert(border.strategy === DEFAULT,
     '点在圆环：不转发给 child，同样只选中这个子星图')
-  const outside = routeChildTouchTest(children, 500, 500)
+  const outside = routeChildTouchTest(at(500, 500), PATH_A)
   assert(outside.strategy === DEFAULT,
     '点在圆外：不转发，事件落回父星图')
-  assert(routeChildTouchTest([{ id: 'some_other_component', parentX: 100, parentY: 120 }], 100, 120).strategy === DEFAULT,
+  assert(routeChildTouchTest([mkTouchInfo('some_other_component', 100, 120)], PATH_A).strategy === DEFAULT,
     '命中的是非 Embed 输入节点：不转发，别人的组件不归这条链管')
+
+  // ── 回归：#818 复审点名的"原点扣两遍" ──
+  // ArkUI 里 TouchTestInfo.x/y 已经是相对**子组件**左上角的。真实场景里 child.x/y
+  // 与 Embed 在父 Scene 里的位置完全无关——它只管自己壳内部。
+  // 下面这个用例在旧写法（parentX/parentY 再减一次 getEmbedScreenX/Y）下必然失败：
+  // Embed 摆在父 Scene 的 (300,200)，手指点在圆心 → 旧写法算出 (-200,-100) → 圆外 → 不转发。
+  assert(near(shouldForwardTouchToChild(mkTouchInfo(id, 100, 120)), true),
+    '坐标只看 child.x/y：Embed 摆在父 Scene (300,200)、手指点在圆心时照样判定为"内部"')
+  const legacyBug = (() => {
+    // 老写法：把 child.x 当成父组件坐标，再减一次 Embed 原点 (300,200)
+    const localX = 100 - 300
+    const localY = 120 - 200
+    const radius = DEFAULT_EMBED_DIAMETER / 2
+    return Math.sqrt((localX - radius) ** 2 + (localY - radius) ** 2) > radius
+  })()
+  assert(legacyBug === true,
+    '对照：老写法在这里算出 (-200,-100) 落在圆外 → FORWARD_COMPETITION 永远走不到（真机症状来源）')
+  assert(routeChildTouchTest(at(100, 120), PATH_A).strategy === FORWARD_COMPETITION,
+    '无论 Embed 摆在父 Scene 的哪个位置，内部命中都会转发')
+  assert(routeChildTouchTest(at(100, 8), PATH_A).strategy === DEFAULT,
+    '无论 Embed 摆在父 Scene 的哪个位置，标题带命中都不会下沉')
+  // 半径来自 child.rect，不是写死 DEFAULT_EMBED_DIAMETER：缩放后 rect 变小，
+  // 屏幕侧热区仍要跟着换算，不能拿常量当半径。
+  const scaled = mkTouchInfo(id, 50, 30, 100, 100)
+  assert(shouldForwardTouchToChild(scaled) === true,
+    '半径取自 child.rect：缩到 100 之后圆心附近仍是内部')
+  assert(shouldForwardTouchToChild(mkTouchInfo(id, 50, 2, 100, 100)) === false,
+    '半径取自 child.rect：同一个 y=2 在 100 直径下是标题带（热区 24 > 半径 50 的一半区间）')
+  assert(shouldForwardTouchToChild(mkTouchInfo(id, 10, 60, 100, 100)) === false,
+    '半径取自 child.rect：贴左边 10vp 已进圆环带（12vp），不当作内部下沉')
+  assert(shouldForwardTouchToChild({ id, x: 10, y: 10, rect: { x: 0, y: 0, width: 0, height: 0 } }) === false,
+    'rect 还没量出来（宽高 0）时不转发，不去算半径')
+  assert(shouldForwardTouchToChild({ id, x: NaN, y: 10, rect: { x: 0, y: 0, width: 200, height: 200 } }) === false,
+    '坐标非有限数时不转发')
+  assert(routeChildTouchTest([], PATH_A).strategy === DEFAULT,
+    'children 为空 → DEFAULT，不去猜')
+
+  // 结构守卫（#818 复审）：触摸测试这一段不能再碰 parentX/parentY 或 Embed 原点。
+  // 这两样都出现在"把原点扣两遍"的旧写法里，是 FORWARD_COMPETITION 走不到的根因。
+  const ttSource = readStarmapSource('ui/StarMapScene.ets')
+  const predStart = ttSource.indexOf('private shouldForwardTouchToChild(')
+  const routeStart = ttSource.indexOf('private routeChildTouchTest(')
+  assert(predStart >= 0 && routeStart > predStart,
+    'shouldForwardTouchToChild 在 routeChildTouchTest 之前，两个都在')
+  const predBody = ttSource.slice(predStart, routeStart)
+  assert(!predBody.includes('parentX') && !predBody.includes('parentY'),
+    'shouldForwardTouchToChild 不再用 parentX/parentY（那是相对父组件，也就是这颗已 position 过的 Embed Stack）')
+  assert(!predBody.includes('getEmbedScreenX(') && !predBody.includes('getEmbedScreenY('),
+    'shouldForwardTouchToChild 不再减 Embed 原点（child.x/y 已经是壳内部坐标，原点只会被扣两遍）')
+  assert(/child\.rect\.width/.test(predBody) && /child\.rect\.height/.test(predBody) &&
+    /Math\.min\(rectWidth, rectHeight\)\s*\/\s*2/.test(predBody),
+  '半径取自 child.rect，不写死 DEFAULT_EMBED_DIAMETER')
+  assert(predBody.includes('const localX: number = child.x') && predBody.includes('const localY: number = child.y'),
+    '判定坐标就是 child.x / child.y')
+  const routeBody = ttSource.slice(routeStart, routeStart + 1600)
+  assert(routeBody.includes('extractEmbedInstanceIdFromInputNodeId(this.scenePath, child.id)'),
+    'routeChildTouchTest 仍靠 instanceId 确认"这是当前 Scene 的 Embed 内壳节点"')
+  assert(routeBody.includes('TouchTestStrategy.FORWARD_COMPETITION'),
+    '命中的 Embed 内壳走 FORWARD_COMPETITION（根的两指链不被截断，child 单指仍在竞争）')
+  assert(!/shouldForwardTouchToChild\(\s*children\s*,/.test(routeBody),
+    'shouldForwardTouchToChild 只收一个 TouchTestInfo，不再传整组 children + 父坐标')
+  assert(!/shouldForwardTouchToChild\([^)]*parentX/.test(ttSource),
+    '全文件不再有 shouldForwardTouchToChild(..., parentX) 这种调用')
 
   // 结构守卫：onTouchIntercept 不许再把屏幕规格乘上累计比例。
   // 只看 onTouchIntercept 这一段：title Row 的**视觉**高度乘 scale 是对的，
