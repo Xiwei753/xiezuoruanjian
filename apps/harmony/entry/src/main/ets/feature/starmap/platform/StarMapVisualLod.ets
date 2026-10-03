@@ -21,6 +21,12 @@
 // 视口小或相机缩得小 → 圆投影小 → 内部可用尺寸不够 → 折叠；
 // 视口大或相机放大 → 展开。同一个设备改窗口大小会就地重算。
 //
+// 视觉焦点只是"显示参考根"，两组滞回常量都在这一层：
+// - 覆盖率：进入 ≥ 0.70 / 退出 < 0.55
+// - 位置：圆心进入要落在 30%~70%，保持在 20%~80%
+// 两组都只为防抖，不是设备分类。退出必须同时看位置，否则用户把相机拖走之后，
+// 一条已经不在视野里的焦点链会被继续强制展开。
+//
 // 所有函数都是纯函数：不读 Core、不碰 ArkUI、不做 per-frame UniFFI 调用。
 // LOD 是高频显示计算，全部在本地一次算完。
 //
@@ -72,8 +78,21 @@ export const FOCUS_ENTER_COVERAGE: number = 0.70
 /** 退出视觉焦点所需的覆盖率阈值（滞回下沿）。 */
 export const FOCUS_EXIT_COVERAGE: number = 0.55
 
-/** 视口中心区域半宽（归一化）：候选圆心落在这个框里才算"当前看的就是它"。 */
-export const FOCUS_CENTER_REGION_RATIO: number = 0.30
+/**
+ * 进入视觉焦点的位置窗口（归一化，滞回上沿）：圆心要落在 30% ~ 70% 之间。
+ *
+ * 免得屏幕边缘那颗大圆刚过覆盖率阈值就抢走焦点。
+ */
+export const FOCUS_CENTER_ENTER_RATIO: number = 0.30
+
+/**
+ * 保持视觉焦点的位置窗口（归一化，滞回下沿）：圆心还在 20% ~ 80% 之间就继续挂着。
+ *
+ * 和进入窗口分开构成**位置滞回**：手指刚碰边（0.29 / 0.71）不退出，
+ * 真的把对象拖出视野（< 0.20 / > 0.80）才退出。
+ * 和覆盖率的 0.70 / 0.55 一样是显示常量，不进 Core、不按设备分支。
+ */
+export const FOCUS_CENTER_EXIT_RATIO: number = 0.20
 
 /** 焦点判定用的候选 Embed（调用方负责把 Embed 屏幕中心换算成视口内比例）。 */
 export interface FocusCandidate {
@@ -178,12 +197,27 @@ export function projectEmbedMetrics(
 
 // ─── 视觉焦点 ───
 
-/** 候选圆心是否落在视口中心区域内。 */
-function inCenterRegion(candidate: FocusCandidate): boolean {
-  return candidate.centerRatioX >= FOCUS_CENTER_REGION_RATIO &&
-    candidate.centerRatioX <= 1 - FOCUS_CENTER_REGION_RATIO &&
-    candidate.centerRatioY >= FOCUS_CENTER_REGION_RATIO &&
-    candidate.centerRatioY <= 1 - FOCUS_CENTER_REGION_RATIO
+/** 候选圆心是否落在**进入**窗口（30% ~ 70%）内——新候选进焦点要看这个。 */
+function inCenterEnterRegion(candidate: FocusCandidate): boolean {
+  return inCenterWindow(candidate, FOCUS_CENTER_ENTER_RATIO)
+}
+
+/**
+ * 候选圆心是否还在**保持**窗口（20% ~ 80%）内——已持有的焦点要看这个。
+ *
+ * 比进入窗口宽，这就是位置滞回：手指稍微拖一下不会把焦点抖掉，
+ * 真的把整颗圆拖出视野才会退。
+ */
+function inCenterExitRegion(candidate: FocusCandidate): boolean {
+  return inCenterWindow(candidate, FOCUS_CENTER_EXIT_RATIO)
+}
+
+/** 归一化视口里的一个居中窗口判定（ratio 越小框越大）。 */
+function inCenterWindow(candidate: FocusCandidate, ratio: number): boolean {
+  return candidate.centerRatioX >= ratio &&
+    candidate.centerRatioX <= 1 - ratio &&
+    candidate.centerRatioY >= ratio &&
+    candidate.centerRatioY <= 1 - ratio
 }
 
 /** scenePath 描述的层级深度（'root' 是 0，'root/embed:a' 是 1，逐层 +1）。 */
@@ -287,12 +321,16 @@ export function resolveEmbedLodForScene(
  * 从候选里挑出"当前视觉焦点应该是谁"。
  *
  * 规则（#820）：
- * 1. 圆心不在视口中心区域的一律不看 —— 免得屏幕边缘那颗大圆抢走焦点；
- * 2. 中心区域里多个候选时先取层级最深的那一个（用户往里钻得越深，越深那层是焦点），
+ * 1. 圆心不在**进入窗口**（30% ~ 70%）的一律不看 —— 免得屏幕边缘那颗大圆抢走焦点；
+ * 2. 窗口里多个候选时先取层级最深的那一个（用户往里钻得越深，越深那层是焦点），
  *    同层再按覆盖率从大到小；
- * 3. 一个都不在中心区域 → 返回 null（焦点保持不变）。
+ * 3. 一个都不在窗口内 → 返回 null（焦点保持不变）。
  *
- * @param candidates 候选 Embed 列表
+ * **调用方必须先按覆盖率过滤再传进来**：这里只做"位置 + 深度 + 同层大小"的排序，
+ * 不做覆盖率判断。先在这里选出最深的再回头查覆盖率，会出现"一颗不够大的深层候选
+ * 把合法父候选整批否决"的情况（#820 复核）。
+ *
+ * @param candidates 候选 Embed 列表（通常已过滤到 coverage ≥ FOCUS_ENTER_COVERAGE）
  * @returns 该被提升为焦点的候选，或 null
  */
 export function resolveFocusCandidate(candidates: FocusCandidate[]): FocusCandidate | null {
@@ -300,7 +338,7 @@ export function resolveFocusCandidate(candidates: FocusCandidate[]): FocusCandid
   let bestDepth: number = -1
   let bestCoverage: number = -1
   for (const candidate of candidates) {
-    if (!inCenterRegion(candidate)) {
+    if (!inCenterEnterRegion(candidate)) {
       continue
     }
     const depth: number = scenePathDepthOf(candidate.scenePath)
@@ -319,27 +357,52 @@ export function shouldPromoteFocus(coverage: number): boolean {
   return Number.isFinite(coverage) && coverage >= FOCUS_ENTER_COVERAGE
 }
 
-/** 是否应当退出视觉焦点（覆盖率掉到滞回下沿之下）。 */
-export function shouldDemoteFocus(coverage: number): boolean {
-  return !Number.isFinite(coverage) || coverage < FOCUS_EXIT_COVERAGE
+/**
+ * 是否应当退出视觉焦点。
+ *
+ * 两个条件各管一件事，缺一不可：
+ * - `coverage < 0.55`：太小了，不值得继续当参考根；
+ * - 圆心已经离开**保持窗口**（20% ~ 80%）：用户把相机拖走了，它根本不在看的东西里。
+ *
+ * 只看 coverage 会让"被拖出视口但仍然很大"的焦点永久赖着：
+ * 那条已经看不见的链会被继续强制 expanded，LOD 参考根和用户实际在看的区域脱节。
+ *
+ * @param candidate 当前焦点对应的完整候选（含覆盖率与圆心位置）
+ * @returns true 表示应当退出焦点（退回父层）
+ */
+export function shouldDemoteFocus(candidate: FocusCandidate): boolean {
+  return !Number.isFinite(candidate.coverage) ||
+    candidate.coverage < FOCUS_EXIT_COVERAGE ||
+    !inCenterExitRegion(candidate)
 }
 
-/** 在候选里找出某个 scenePath 的覆盖率；找不到时返回 0。 */
-function coverageOfScenePath(scenePath: string, candidates: FocusCandidate[]): number {
+/** 在候选里找出某个 scenePath 对应的**完整**候选；找不到时返回 null。 */
+export function findFocusCandidate(
+  scenePath: string,
+  candidates: FocusCandidate[]
+): FocusCandidate | null {
   for (const candidate of candidates) {
     if (candidate.scenePath === scenePath) {
-      return candidate.coverage
+      return candidate
     }
   }
-  return 0
+  return null
 }
 
 /**
  * 一次性解出新的 focusScenePath（纯函数，不写状态）。
  *
- * 滞回（hysteresis）就在这里：进入用 FOCUS_ENTER_COVERAGE（0.70），
- * 退出用 FOCUS_EXIT_COVERAGE（0.55），中间那段保持不动。
- * 没有滞回的话，捏合停在 0.69 附近焦点会一帧一层地来回抖。
+ * 两层滞回都在这里：
+ * - **覆盖率**：进入 ≥ 0.70，退出 < 0.55。捏合停在 0.69 附近不会一帧一层地抖。
+ * - **位置**：进入要落在 30% ~ 70%，保持窗口是 20% ~ 80%。手指碰边不退出，
+ *   真的把对象拖出视野才退出。
+ *
+ * 顺序很重要：**先按覆盖率过滤出"有资格进焦点"的候选，再在里面比深度**。
+ * 反过来（先选最深的、再查它够不够 70%）会让一颗很小的深层候选把合法的父候选
+ * 整批否决：a 占 85%、里面那颗 b 只有 40% 时，焦点会一直卡在 root（#820 复核）。
+ *
+ * 退出同样要看两件事：覆盖率太小，**或者**圆心已经被拖出保持窗口。
+ * 只看 coverage 的话，一条已经不在视野里的焦点链会被继续强制展开。
  *
  * 焦点只改变"显示参考根"：不改 Core、不新建页面、不换相机、不落盘。
  *
@@ -351,16 +414,22 @@ export function resolveFocusScenePath(
   currentFocusScenePath: string,
   candidates: FocusCandidate[]
 ): string {
-  const winner: FocusCandidate | null = resolveFocusCandidate(candidates)
-  if (winner !== null && shouldPromoteFocus(winner.coverage)) {
+  const promotable: FocusCandidate[] = []
+  for (const candidate of candidates) {
+    if (shouldPromoteFocus(candidate.coverage)) {
+      promotable.push(candidate)
+    }
+  }
+  const winner: FocusCandidate | null = resolveFocusCandidate(promotable)
+  if (winner !== null) {
     return winner.scenePath
   }
   if (currentFocusScenePath === 'root') {
     return 'root'
   }
-  const currentCoverage: number = coverageOfScenePath(currentFocusScenePath, candidates)
-  if (shouldDemoteFocus(currentCoverage)) {
-    // 当前焦点已经不够大（或这轮根本没看见它）→ 退回父层视觉焦点
+  const current: FocusCandidate | null = findFocusCandidate(currentFocusScenePath, candidates)
+  if (current === null || shouldDemoteFocus(current)) {
+    // 当前焦点不够大、或者已经被拖出保持窗口（也包括这轮根本没看见它）→ 退回父层
     return parentScenePathOf(currentFocusScenePath)
   }
   return currentFocusScenePath

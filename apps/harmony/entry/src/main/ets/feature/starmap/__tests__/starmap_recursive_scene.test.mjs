@@ -3222,7 +3222,8 @@ const DEFAULT_NODE_RADIUS = 16
 const EXPANDED_MIN_INNER_USABLE_VP = DEFAULT_NODE_WIDTH
 const FOCUS_ENTER_COVERAGE = 0.70
 const FOCUS_EXIT_COVERAGE = 0.55
-const FOCUS_CENTER_REGION_RATIO = 0.30
+const FOCUS_CENTER_ENTER_RATIO = 0.30
+const FOCUS_CENTER_EXIT_RATIO = 0.20
 
 function embedDisplayBoundsForLod(lod) {
   if (lod === 'expanded') {
@@ -3285,19 +3286,23 @@ function resolveEmbedLodForScene(metrics, embedScenePath, focusScenePath, ancest
   return resolveEmbedLod(metrics)
 }
 
-function inCenterRegion(candidate) {
-  return candidate.centerRatioX >= FOCUS_CENTER_REGION_RATIO &&
-    candidate.centerRatioX <= 1 - FOCUS_CENTER_REGION_RATIO &&
-    candidate.centerRatioY >= FOCUS_CENTER_REGION_RATIO &&
-    candidate.centerRatioY <= 1 - FOCUS_CENTER_REGION_RATIO
+function inCenterWindow(candidate, ratio) {
+  return candidate.centerRatioX >= ratio &&
+    candidate.centerRatioX <= 1 - ratio &&
+    candidate.centerRatioY >= ratio &&
+    candidate.centerRatioY <= 1 - ratio
 }
+
+function inCenterEnterRegion(candidate) { return inCenterWindow(candidate, FOCUS_CENTER_ENTER_RATIO) }
+function inCenterExitRegion(candidate) { return inCenterWindow(candidate, FOCUS_CENTER_EXIT_RATIO) }
+function inCenterRegion(candidate) { return inCenterEnterRegion(candidate) }
 
 function resolveFocusCandidate(candidates) {
   let best = null
   let bestDepth = -1
   let bestCoverage = -1
   for (const candidate of candidates) {
-    if (!inCenterRegion(candidate)) { continue }
+    if (!inCenterEnterRegion(candidate)) { continue }
     const depth = scenePathDepthOf(candidate.scenePath)
     if (best === null || depth > bestDepth ||
       (depth === bestDepth && candidate.coverage > bestCoverage)) {
@@ -3313,23 +3318,31 @@ function shouldPromoteFocus(coverage) {
   return Number.isFinite(coverage) && coverage >= FOCUS_ENTER_COVERAGE
 }
 
-function shouldDemoteFocus(coverage) {
-  return !Number.isFinite(coverage) || coverage < FOCUS_EXIT_COVERAGE
+function shouldDemoteFocus(candidate) {
+  return !Number.isFinite(candidate.coverage) ||
+    candidate.coverage < FOCUS_EXIT_COVERAGE ||
+    !inCenterExitRegion(candidate)
 }
 
-function coverageOfScenePath(scenePath, candidates) {
+function findFocusCandidate(scenePath, candidates) {
   for (const candidate of candidates) {
-    if (candidate.scenePath === scenePath) { return candidate.coverage }
+    if (candidate.scenePath === scenePath) { return candidate }
   }
-  return 0
+  return null
 }
 
 function resolveFocusScenePath(currentFocusScenePath, candidates) {
-  const winner = resolveFocusCandidate(candidates)
-  if (winner !== null && shouldPromoteFocus(winner.coverage)) { return winner.scenePath }
+  const promotable = []
+  for (const candidate of candidates) {
+    if (shouldPromoteFocus(candidate.coverage)) { promotable.push(candidate) }
+  }
+  const winner = resolveFocusCandidate(promotable)
+  if (winner !== null) { return winner.scenePath }
   if (currentFocusScenePath === 'root') { return 'root' }
-  const currentCoverage = coverageOfScenePath(currentFocusScenePath, candidates)
-  if (shouldDemoteFocus(currentCoverage)) { return parentScenePathOf(currentFocusScenePath) }
+  const current = findFocusCandidate(currentFocusScenePath, candidates)
+  if (current === null || shouldDemoteFocus(current)) {
+    return parentScenePathOf(currentFocusScenePath)
+  }
   return currentFocusScenePath
 }
 
@@ -3536,8 +3549,38 @@ console.log('37d. 视觉焦点：中心区域优先、再比深度、滞回不�
 
   assert(shouldPromoteFocus(FOCUS_ENTER_COVERAGE) && !shouldPromoteFocus(0.69),
     '进入焦点要过 0.70')
-  assert(shouldDemoteFocus(0.54) && !shouldDemoteFocus(FOCUS_EXIT_COVERAGE),
+  const cand = (scenePath, coverage, centerRatioX = 0.5, centerRatioY = 0.5) =>
+    ({ scenePath, coverage, centerRatioX, centerRatioY })
+  assert(shouldDemoteFocus(cand('x', 0.54)) && !shouldDemoteFocus(cand('x', FOCUS_EXIT_COVERAGE)),
     '退出焦点要掉到 0.55 之下')
+  assert(!shouldDemoteFocus(cand('x', 0.80, 0.5, 0.5)), '够大且还在中央 → 不退出')
+  assert(shouldDemoteFocus(cand('x', 0.80, 1.2, 0.5)),
+    '够大但整颗都被拖出视口（centerRatioX=1.2）→ 也要退出')
+  assert(!shouldDemoteFocus(cand('x', 0.80, 0.25, 0.5)),
+    '圆心 0.25 还在 20%~80% 保持窗口里 → 不退出（位置滞回）')
+
+  // 筛选顺序：先过 70% 进入门槛，再在里面比深度。
+  // 反过来（先选最深再查覆盖率）会让一颗很小的深层候选把合法父候选整批否决。
+  const parentBig = cand('root/embed:a', 0.85, 0.5, 0.5)
+  const childTiny = cand('root/embed:a/embed:b', 0.40, 0.5, 0.5)
+  assert(resolveFocusScenePath('root', [parentBig, childTiny]) === 'root/embed:a',
+    '父候选 0.85 + 深层候选 0.40 → focus 进入父候选（不能被不够大的深层候选挡死）')
+  assert(resolveFocusScenePath('root', [parentBig, cand('root/embed:a/embed:b', 0.75, 0.5, 0.5)]) ===
+    'root/embed:a/embed:b',
+    '父 0.85 + 深层 0.75（都过 70%）→ 焦点才进入更深的那个')
+  assert(resolveFocusScenePath('root', [cand('root/embed:a', 0.85, 0.5, 0.5),
+    cand('root/embed:a/embed:b', 0.40, 0.25, 0.5)]) === 'root/embed:a',
+    '深层候选圆心在 0.25（进入窗口外）本来就不参选，父候选照常进焦点')
+  assert(resolveFocusScenePath('root', [cand('root/embed:a', 0.72, 0.25, 0.5)]) === 'root',
+    '非焦点候选圆心 0.25 没进 30%~70% 进入窗口 → 不能新进入焦点')
+
+  // 拖出视野的焦点必须退出（只看 coverage 会让它永久赖着）
+  assert(resolveFocusScenePath('root/embed:a', [cand('root/embed:a', 0.80, 1.2, 0.5)]) === 'root',
+    '当前 focus coverage=0.80 但 centerRatioX=1.2 → 退回父层')
+  assert(resolveFocusScenePath('root/embed:a', [cand('root/embed:a', 0.80, 0.25, 0.5)]) === 'root/embed:a',
+    '当前 focus coverage=0.80、centerRatioX=0.25 → 保持（还在 exit 区间里）')
+  assert(resolveFocusScenePath('root/embed:a', [cand('root/embed:a', 0.80, 0.5, 0.5)]) === 'root/embed:a',
+    '当前 focus 又大又在中央 → 保持')
 
   // 滞回窗口：0.55 ~ 0.70 之间不动，捏合停在里面不会一帧一层地抖
   assert(resolveFocusScenePath('root/embed:a', [
@@ -3803,6 +3846,29 @@ console.log('37g. 只有展开态才实例化 child Scene；LOD 不写回 Core �
   }
   assert(!/deviceType|isTablet|isPhone|orientation|landscape/.test(lodSource),
     'LOD 里没有设备型号 / 横竖屏分支，层数只能是视口算出来的结果')
+
+  // 焦点状态机：先过滤 70% 再比深度；退出同时看覆盖率和位置
+  assert(lodSource.includes('FOCUS_CENTER_ENTER_RATIO: number = 0.30') &&
+    lodSource.includes('FOCUS_CENTER_EXIT_RATIO: number = 0.20'),
+    '位置滞回分进入窗口(30%)和保持窗口(20%)两个常量')
+  const focusPathBody = lodSource.slice(lodSource.indexOf('export function resolveFocusScenePath'))
+  assert(focusPathBody.indexOf('shouldPromoteFocus(candidate.coverage)') <
+    focusPathBody.indexOf('resolveFocusCandidate(promotable)'),
+    '先按覆盖率过滤出 promotable，再交给 resolveFocusCandidate 比深度')
+  assert(focusPathBody.includes('const promotable: FocusCandidate[] = []'),
+    'resolveFocusScenePath 里有独立的 promotable 过滤步骤')
+  assert(!/resolveFocusCandidate\(candidates\)[\s\S]{0,200}shouldPromoteFocus\(winner\.coverage\)/.test(focusPathBody),
+    '不再保留"先选最深的、再查它够不够 70% 然后否决整批候选"这条路径')
+  assert(focusPathBody.includes('shouldDemoteFocus(current)') &&
+    focusPathBody.includes('findFocusCandidate(currentFocusScenePath, candidates)'),
+    '退出判定拿的是当前焦点的完整候选（含圆心位置），不是一个孤立的 coverage 数字')
+  assert(lodSource.includes('export function shouldDemoteFocus(candidate: FocusCandidate): boolean') &&
+    lodSource.includes('!inCenterExitRegion(candidate)'),
+    'shouldDemoteFocus 同时看 coverage 下沿和位置保持窗口')
+  assert(/export function shouldDemoteFocus\(coverage: number\)/.test(lodSource) === false,
+    'shouldDemoteFocus 不再只接一个 coverage 数字（那样看不到位置）')
+  assert(lodSource.includes('!Number.isFinite(candidate.coverage)'),
+    '非有限 coverage 仍按退出处理（不返回 NaN 焦点）')
 
   const viewportSource = readStarmapSource('platform/StarMapViewport.ets')
   assert(viewportSource.includes('export function projectLocalLengthToScreen(localLength: number, ownerEffectiveScale: number): number'),
