@@ -873,8 +873,8 @@ Item {
     // 子 Scene 不再拥有自己的滚轮缩放入口；鼠标哪怕停在第三层子星图内部，
     // 最终变化的也只是根 Scene 的 zoomLevel/panX/panY，整棵递归树一起缩放。
     // Qt 的 WheelHandler 真正决定是否挡住后续 handler 的是 blocking；
-    // 根层唯一处理，直接用默认阻塞语义。声明支持 TouchPad 时必须同时读
-    // pixelDelta（触控板平滑滚动只有 pixelDelta，angleDelta 为 0）。
+    // 根层唯一处理，直接用默认阻塞语义。pixelDelta 可作为高分辨率触控板
+    // 滚动的补充/回退（angleDelta 始终提供，pixelDelta 仅高分辨率设备额外给出）。
     WheelHandler {
         id: sceneWheel
         target: null
