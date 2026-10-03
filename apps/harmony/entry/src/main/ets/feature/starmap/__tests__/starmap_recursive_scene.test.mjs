@@ -3206,7 +3206,7 @@ const sceneSource = readStarmapSource('ui/StarMapScene.ets')
   const clampUsesSafeSide = viewportSource.includes('const safeSize: number = computeEmbedInnerContentSafeSide(localSceneSize, paddingVp)')
   assert(clampUsesSafeSide,
     'clampItemToEmbedSafeArea 直接调 computeEmbedInnerContentSafeSide，不另写一遍公式')
-  const fitUsesSafeSide = /computeEmbedInnerContentSafeSide\(\s*Math\.min\(localWidth, localHeight\),\s*EMBED_FIT_PADDING_VP\s*\)/.test(sceneSource)
+  const fitUsesSafeSide = /computeEmbedInnerContentSafeSide\(\s*Math\.min\(localWidth, localHeight\),\s*STARMAP_EMBED_FIT_PADDING_VP\s*\)/.test(sceneSource)
   assert(fitUsesSafeSide, 'fitView 用的也是同一份可用区')
   assert(sceneSource.includes('clampItemToEmbedSafeArea('),
     '移动 / 新建节点与子星图共用这份安全区')
@@ -4227,6 +4227,68 @@ console.log('38c. 视口 resize 不改焦点；焦点只跟着相机走')
   assert(layoutSource821.includes('x: embed.position.x') && layoutSource821.includes('y: embed.position.y') &&
     !layoutSource821.includes('authoredCenterX'),
     '布局矩形的位置就是 authored position（不再以中心为锚派生）')
+}
+
+console.log('')
+console.log('39. preview 和 interactive 共用同一份视觉真相（#821 复审第二轮）')
+{
+  const tokensSrc = readStarmapSource('ui/StarMapVisualTokens.ets')
+  const sceneSrc39 = readStarmapSource('ui/StarMapScene.ets')
+  const previewSrc39 = readStarmapSource('ui/StarMapEmbedPreview.ets')
+
+  // 1. 视觉常量集中在一个文件里，两层都从它读
+  for (const token of ['STARMAP_NODE_GLYPH_DIAMETER', 'STARMAP_NODE_LABEL_FONT_SIZE',
+    'STARMAP_NODE_LABEL_WIDTH', 'STARMAP_NODE_LABEL_MARGIN_TOP', 'STARMAP_EMBED_FIT_PADDING_VP',
+    'STARMAP_NODE_GLYPH_CENTER_X', 'STARMAP_NODE_GLYPH_CENTER_Y']) {
+    assert(tokensSrc.includes(`export const ${token}`), `${token} 集中在 StarMapVisualTokens`)
+  }
+  assert(tokensSrc.includes('export function starmapNodeColor(') &&
+    tokensSrc.includes("'Character': '#4A90D9'"),
+    'kind → 颜色的映射只有一份（starmapNodeColor）')
+  assert(sceneSrc39.includes("from './StarMapVisualTokens'") &&
+    previewSrc39.includes("from './StarMapVisualTokens'"),
+    'interactive 层和 preview 层都读同一份视觉真相')
+
+  // 2. 圆心是显式共享常量，不是 preview 猜排版
+  assert(tokensSrc.includes('STARMAP_NODE_LABEL_BLOCK_HEIGHT') &&
+    tokensSrc.includes('STARMAP_NODE_LABEL_LINE_HEIGHT'),
+    '标题块高度固定（否则 1 行 / 2 行会让圆心在两层里算出不同结果）')
+  assert(sceneSrc39.includes('.height(STARMAP_NODE_LABEL_BLOCK_HEIGHT)'),
+    'interactive 的标题块用固定高度，和 token 公式同源')
+  assert(previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_X') &&
+    previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_Y') &&
+    previewSrc39.includes('STARMAP_NODE_GLYPH_RADIUS'),
+    'preview 的圆心直接读共享常量，不按 160×80 矩形猜')
+
+  // 3. preview 不再把普通节点画成灰圆角矩形，也不再另造一套颜色
+  // 断言只看真正的代码行：注释里会解释"以前是什么样"，默认 themeConfig 字面量
+  // 里也会出现所有颜色键，两者都不能当成"还在用"。
+  const previewCode39 = previewSrc39.split('\n')
+    .filter((line) => !line.trimStart().startsWith('//')).join('\n')
+  const previewDrawCode = previewCode39.slice(previewCode39.indexOf('@State'))
+  assert(!previewDrawCode.includes('surfaceContainerHigh') && !previewCode39.includes('quadraticCurveTo'),
+    'preview 不再把节点画成"节点卡"圆角矩形（#821 要的是视觉缩小，不是换对象外观）')
+  assert(previewCode39.includes('ctx.fillStyle = starmapNodeColor(node.kind)'),
+    'preview 的节点颜色和 interactive 同一张表')
+  assert(!sceneSrc39.includes('getNodeColor(') && !sceneSrc39.includes("'Location': '#F39C12'"),
+    'interactive 侧不再留一份本地颜色表')
+  assert(previewCode39.includes('this.themeConfig.colors.surfaceContainer') &&
+    previewCode39.includes('this.themeConfig.colors.outlineVariant'),
+    '子 Embed 外壳的底色 / 描边和 interactive 层一致')
+  assert(!previewDrawCode.includes('primaryContainer'),
+    'preview 不再给子 Embed 造第二套预览皮肤')
+
+  // 4. fit 留白同一个数
+  assert(!previewSrc39.includes('PREVIEW_PADDING_VP') && !sceneSrc39.includes('EMBED_FIT_PADDING_VP: number'),
+    '两层都不再本地定义 fit 留白（曾经是 preview 6 / interactive 8）')
+  assert(previewSrc39.includes('computeEmbedInnerContentSafeSide(PREVIEW_CANVAS_SIZE, STARMAP_EMBED_FIT_PADDING_VP)') &&
+    sceneSrc39.includes('STARMAP_EMBED_FIT_PADDING_VP'),
+    'preview 和 interactive 的 local fit 留白是同一个常量')
+
+  // 5. 掉文字可以，掉形状不行：文字阈值独立于形状
+  assert(previewSrc39.includes('STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP') &&
+    previewSrc39.includes('const labelReadable: boolean ='),
+    'preview 的"写不写标题"是一个独立阈值（只省文字，不改形状和颜色）')
 }
 
 console.log('')
