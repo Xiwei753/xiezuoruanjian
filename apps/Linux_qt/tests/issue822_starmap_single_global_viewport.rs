@@ -1478,7 +1478,8 @@ fn edge_hit_threshold_is_screen_relative() {
         "命中阈值必须是屏幕像素常量"
     );
     assert!(
-        content.contains("return _edgeHitScreenPx / Math.max(effectiveScale, 1e-6)"),
+        content.contains("var scale = Math.max(effectiveScale, 1e-6)")
+            && content.contains("_edgeHitScreenPx / scale"),
         "阈值必须除以 effectiveScale 折算到本层 world 单位"
     );
     assert!(
@@ -1494,35 +1495,109 @@ fn edge_hit_threshold_is_screen_relative() {
     );
 }
 
-/// 拉线预览起点 = 源形状朝当前鼠标方向的边界交点，与正式边同一套边界语义，
-/// 否则松手瞬间端点会从圆心跳到圆周。
+/// 拉线预览与正式边共用同一套可见端点：同层时是源对象边界；
+/// 悬停合法 target 时先做 prospective LCA 规划，再用宿主可见形状
+/// （深路径只投影到第一层 Embed 圆周）算预览起止点，松手不跳变。
 #[test]
-fn connect_preview_origin_uses_shape_boundary() {
+fn connect_preview_uses_host_visible_endpoints() {
     let content = strip_line_comments(&read_src(CONTENT));
     let boundary = function_window(&content, "function boundaryPointLocal(", 1600);
     assert!(
         boundary.contains("var radius = Math.min(width, height) / 2")
             && boundary.contains("var tMin = Math.max(txMin, tyMin)")
             && boundary.contains("var t = tMin >= 0 ? tMin : tMax"),
-        "预览起点必须按矩形/圆周求交（与 Rust line_rect_entry / line_circle_entry 同语义），\
+        "预览边界必须按矩形/圆周求交（与 Rust line_rect_entry / line_circle_entry 同语义），\
          实际窗口:\n{boundary}"
     );
-    let refresh = function_window(&content, "function refreshConnectPreviewOrigin(", 1000);
+
+    // 宿主可见投影：segments 空 + node → 本层 Node；第一段容器段 → 本层圆，
+    // 段身份映射（含旧 portal 归一）由 Controller 统一持有。
+    let shape = function_window(&content, "function visibleEndpointShapeForHostPath(", 1400);
     assert!(
-        refresh.contains("boundaryPointLocal(item.x, item.y, item.width, item.height,")
-            && refresh.contains("ic.connectFromSceneX = scenePoint.x")
-            && refresh.contains("ic.connectFromSceneY = scenePoint.y"),
-        "预览起点必须写回 connectFromSceneX/Y（scene 坐标），实际窗口:\n{refresh}"
+        shape.contains("graphController.uiInstanceIdOfPathSegment(segments[0])")
+            && shape.contains("graphController.getNode(path.target.nodeId)")
+            && shape.contains("var embed = graphController.getEmbed(instanceId)")
+            && shape.contains("isEmbed: true"),
+        "宿主可见端点必须按路径第一段投影，实际窗口:\n{shape}"
     );
+    let controller = strip_line_comments(&read_src(CONTROLLER));
+    assert!(
+        controller.contains("function uiInstanceIdOfPathSegment(segment)")
+            && controller.contains("\"legacy-portal:\" + segment.nodeId"),
+        "旧 portal 的 UI instanceId 映射必须由 Controller 统一持有（Content 不得自行判断）"
+    );
+
+    // 悬停合法 target：prospective plan → 宿主 Content → 两端可见形状 → 贴边界。
+    let refresh = function_window(&content, "function refreshConnectPreview(", 2800);
+    assert!(
+        refresh.contains("StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)")
+            && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
+            && refresh.contains("host.visibleEndpointShapeForHostPath(plan.from)")
+            && refresh.contains("host.visibleEndpointShapeForHostPath(plan.to)"),
+        "预览必须先做 prospective LCA 规划再用宿主可见形状，实际窗口:\n{refresh}"
+    );
+    assert!(
+        refresh.contains("ic.connectPreviewEndX = endScene.x")
+            && refresh.contains("ic.connectPreviewEndY = endScene.y"),
+        "悬停合法 target 时预览终点也要贴到目标的正式边界，实际窗口:\n{refresh}"
+    );
+    assert!(
+        refresh.contains("ic.connectPreviewEndX = ic.connectMouseX")
+            && refresh.contains("var boundary = boundaryPointLocal(item.x, item.y, item.width, item.height,"),
+        "没有合法 target 时必须退回“源对象边界 → 当前鼠标”，实际窗口:\n{refresh}"
+    );
+
     let delta = slice_between(
         &content,
         "function onSceneDragDelta(",
         "function releaseOwnerGesture(",
     );
     assert_eq!(
-        count_occurrences(&delta, "refreshConnectPreviewOrigin()"),
+        count_occurrences(&delta, "refreshConnectPreview()"),
         2,
-        "contextPending 转 connect 与 connect 拖动都必须刷新预览起点，实际片段:\n{delta}"
+        "contextPending 转 connect 与 connect 拖动都必须刷新预览端点，实际片段:\n{delta}"
+    );
+
+    // 控制器持有预览端点字段；Canvas 画到它。
+    let controller = read_src(INTERACTION);
+    assert!(
+        controller.contains("property real connectPreviewEndX: 0")
+            && controller.contains("property real connectPreviewEndY: 0"),
+        "预览端点必须由共享状态机持有，实际源码缺少"
+    );
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        canvas.contains("ctx.lineTo(interaction.connectPreviewEndX, interaction.connectPreviewEndY)"),
+        "预览线必须画到 connectPreviewEnd，实际源码缺少"
+    );
+}
+
+/// 边命中范围与可见线宽同源：缩小时至少 10 屏幕像素，放大时至少覆盖线本体。
+#[test]
+fn edge_hit_threshold_covers_visible_line_width() {
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        content.contains("readonly property real _edgeLineWorldWidth: 2"),
+        "边线宽必须是单一 world 常量（绘制与命中共用）"
+    );
+    let threshold = function_window(&content, "function _edgeHitLocalThreshold(", 400);
+    assert!(
+        threshold.contains("var scale = Math.max(effectiveScale, 1e-6)")
+            && threshold.contains("return Math.max(_edgeHitScreenPx / scale, _edgeLineWorldWidth / 2)"),
+        "命中阈值必须同时覆盖屏幕像素下限与真实线宽，实际窗口:\n{threshold}"
+    );
+
+    // 绘制不许再手写 lineWidth = 2。
+    assert!(
+        !content.contains("ctx.lineWidth = 2")
+            && count_occurrences(&content, "ctx.lineWidth = content._edgeLineWorldWidth") == 2,
+        "edgeCanvas / previewCanvas 必须统一用 _edgeLineWorldWidth，实际源码不符"
+    );
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        !canvas.contains("ctx.lineWidth = 2")
+            && canvas.contains("ctx.lineWidth = rootContent ? rootContent._edgeLineWorldWidth : 2"),
+        "连线预览线宽必须跟同一份 world 线宽常量，实际源码不符"
     );
 }
 

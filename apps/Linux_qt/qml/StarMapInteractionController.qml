@@ -97,6 +97,11 @@ QtObject {
     property real connectFromSceneY: 0
     property real connectMouseX: 0
     property real connectMouseY: 0
+    // 预览线实际画出来的端点（scene 坐标）：悬停在合法 target 上时贴到目标的
+    // 宿主可见边界，松手时正式边与预览不再跳变。connectMouseX/Y 保持原始鼠标
+    // 位置，松手命中仍用它。没有合法 target 时等于 connectMouse。
+    property real connectPreviewEndX: 0
+    property real connectPreviewEndY: 0
 
     // move 模式目标（归属层局部坐标）
     property string moveScenePathKey: ""
@@ -167,6 +172,8 @@ QtObject {
         connectFromSceneY = centerSceneY
         connectMouseX = centerSceneX
         connectMouseY = centerSceneY
+        connectPreviewEndX = centerSceneX
+        connectPreviewEndY = centerSceneY
         return true
     }
 
@@ -215,6 +222,8 @@ QtObject {
         connectFromPath = null
         connectFromScenePathKey = ""
         connectFromNodeId = ""
+        connectPreviewEndX = 0
+        connectPreviewEndY = 0
     }
 
     // ── contextPending（触屏长按预备态）──
@@ -233,6 +242,8 @@ QtObject {
         connectFromSceneY = centerSceneY
         connectMouseX = centerSceneX
         connectMouseY = centerSceneY
+        connectPreviewEndX = centerSceneX
+        connectPreviewEndY = centerSceneY
         pressDragX = 0
         pressDragY = 0
         pressDragDistance = 0
@@ -325,6 +336,8 @@ QtObject {
         connectFromPath = null
         connectFromScenePathKey = ""
         connectFromNodeId = ""
+        connectPreviewEndX = 0
+        connectPreviewEndY = 0
         moveScenePathKey = ""
         pressedNodeId = ""
         pressedEmbedId = ""

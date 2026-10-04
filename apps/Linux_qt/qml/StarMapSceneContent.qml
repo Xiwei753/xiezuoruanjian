@@ -169,13 +169,20 @@ Item {
     readonly property int _newNodeWidth: 150
     readonly property int _newNodeHeight: 60
 
+    // 边线宽的 world 单位常量：Canvas 绘制与命中阈值共用同一份。
+    readonly property real _edgeLineWorldWidth: 2
     // 边命中阈值的屏幕口径：10 屏幕像素。
     // 相机允许 1e-4~1e5 之后，固定 world 阈值在屏幕上会差几个数量级，
     // 所以每次命中都用 effectiveScale 折算成本层 world 单位。
     readonly property real _edgeHitScreenPx: 10
 
+    // 命中范围必须同时满足两条：
+    // - 缩小时至少还有 10 屏幕像素（好点中）；
+    // - 放大时至少覆盖真实可见的线宽本身（Canvas 的 lineWidth 是 world 单位，
+    //   会跟着 effectiveScale 一起放大，不能在"肉眼很粗的线里"点不中）。
     function _edgeHitLocalThreshold() {
-        return _edgeHitScreenPx / Math.max(effectiveScale, 1e-6)
+        var scale = Math.max(effectiveScale, 1e-6)
+        return Math.max(_edgeHitScreenPx / scale, _edgeLineWorldWidth / 2)
     }
 
     // 源形状朝目标点的边界交点（本层 authored 坐标）。
@@ -221,11 +228,83 @@ Item {
         return { x: cx + t * ux, y: cy + t * uy }
     }
 
-    // connect 预览起点：源形状朝当前鼠标方向的边界交点（scene 坐标）。
-    function refreshConnectPreviewOrigin() {
+    // 宿主可见端点形状：把"相对宿主 Scene 的路径"投影成宿主本层真正看得见的
+    // 那个对象（与 Rust resolve_edge_endpoint_anchor 的可见投影语义一致）：
+    // - segments 为空 + node → 本层 Node 矩形；
+    // - 第一段 enterEmbed/enterPortal → Controller 归一的本层 Embed 正圆
+    //   （深路径只投影到第一层容器）。
+    // 段身份映射由 Controller 持有，Content 只按本层几何投影。
+    // 返回宿主局部坐标的 { x, y, width, height, isEmbed }；解析不出返回 null。
+    function visibleEndpointShapeForHostPath(path) {
+        if (!path || !path.target)
+            return null
+        var segments = path.segments || []
+        if (segments.length === 0) {
+            if (path.target.type !== "node" || !path.target.nodeId)
+                return null
+            var node = graphController.getNode(path.target.nodeId)
+            if (!node)
+                return null
+            return { x: node.x, y: node.y, width: node.width, height: node.height, isEmbed: false }
+        }
+        var instanceId = graphController.uiInstanceIdOfPathSegment(segments[0])
+        if (instanceId === "")
+            return null
+        var embed = graphController.getEmbed(instanceId)
+        if (!embed)
+            return null
+        return { x: embed.x, y: embed.y, width: embed.width, height: embed.height, isEmbed: true }
+    }
+
+    // connect 预览线与正式边共用同一套可见端点：
+    // - 鼠标悬停在合法 target 上时，先做 prospective LCA 规划，再用宿主
+    //   "看得见的那两个形状"（深路径投影到第一层 Embed 圆周）算预览起止点，
+    //   松手时正式边与预览不发生任何跳变；
+    // - 没有合法 target 时退回"源对象边界 → 当前鼠标"。
+    function refreshConnectPreview() {
         var ic = interactionController
         if (!ic || ic.pointerMode !== "connect" || ic.connectFromKind === "")
             return
+        // 默认：预览终点就是原始鼠标位置（松手命中仍用 connectMouseX/Y）。
+        ic.connectPreviewEndX = ic.connectMouseX
+        ic.connectPreviewEndY = ic.connectMouseY
+
+        var hit = rootContent
+                ? rootContent.hitTargetAtScene(ic.connectMouseX, ic.connectMouseY)
+                : null
+        if (hit && (hit.kind === "node" || hit.kind === "embed")) {
+            var plan = StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)
+            if (plan) {
+                var host = rootContent
+                        ? rootContent.findContentByPathSegments(plan.hostSegments)
+                        : null
+                if (host) {
+                    var fromShape = host.visibleEndpointShapeForHostPath(plan.from)
+                    var toShape = host.visibleEndpointShapeForHostPath(plan.to)
+                    if (fromShape && toShape) {
+                        var fromCenter = { x: fromShape.x + fromShape.width / 2,
+                                           y: fromShape.y + fromShape.height / 2 }
+                        var toCenter = { x: toShape.x + toShape.width / 2,
+                                         y: toShape.y + toShape.height / 2 }
+                        var startLocal = host.boundaryPointLocal(
+                            fromShape.x, fromShape.y, fromShape.width, fromShape.height,
+                            fromShape.isEmbed, toCenter.x, toCenter.y)
+                        var endLocal = host.boundaryPointLocal(
+                            toShape.x, toShape.y, toShape.width, toShape.height,
+                            toShape.isEmbed, fromCenter.x, fromCenter.y)
+                        var startScene = host.localToScene(startLocal.x, startLocal.y)
+                        var endScene = host.localToScene(endLocal.x, endLocal.y)
+                        ic.connectFromSceneX = startScene.x
+                        ic.connectFromSceneY = startScene.y
+                        ic.connectPreviewEndX = endScene.x
+                        ic.connectPreviewEndY = endScene.y
+                        return
+                    }
+                }
+            }
+        }
+
+        // 退回：源对象边界朝当前鼠标方向。
         var item = ic.connectFromKind === "node"
                 ? graphController.getNode(ic.connectFromId)
                 : graphController.getEmbed(ic.connectFromId)
@@ -772,8 +851,8 @@ Item {
             ic.noteDragDelta(dxQtScene, dyQtScene)
             if (ic.pressDragDistance > ic.moveThreshold)
                 ic.contextPendingToConnect()
-            // 转入 connect 后预览起点也要立刻贴到源形状边界，不从中心出发。
-            refreshConnectPreviewOrigin()
+            // 转入 connect 后预览端点立刻按"宿主可见形状"重算。
+            refreshConnectPreview()
             return true
         }
         // connect：预览线终点是 scene 坐标，只能累加 root-world 增量；
@@ -781,8 +860,8 @@ Item {
         var connectDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
         ic.updateConnect(ic.connectMouseX + connectDelta.x,
                          ic.connectMouseY + connectDelta.y)
-        // 起点 = 源形状朝当前鼠标方向的边界交点（正式边同一套边界语义）。
-        refreshConnectPreviewOrigin()
+        // 预览起止点与正式边共用同一套可见端点（悬停合法 target 时贴到目标边界）。
+        refreshConnectPreview()
         return true
     }
 
@@ -1063,7 +1142,8 @@ Item {
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.clearRect(0, 0, width, height)
-                ctx.lineWidth = 2
+                // 线宽常量与命中阈值同源：命中至少覆盖真实可见的线本体。
+                ctx.lineWidth = content._edgeLineWorldWidth
                 var renders = graphController.edgeRenders
                 for (var i = 0; i < renders.length; i++) {
                     var r = renders[i]
@@ -1139,7 +1219,7 @@ Item {
                 }
 
                 var renders = graphController.edgeRenders
-                ctx.lineWidth = 2
+                ctx.lineWidth = content._edgeLineWorldWidth
                 ctx.strokeStyle = content._border
                 for (var i = 0; i < renders.length; i++) {
                     var r = renders[i]

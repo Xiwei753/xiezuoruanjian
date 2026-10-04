@@ -279,6 +279,19 @@ QtObject {
         }
     }
 
+    // 路径段 → 本层 UI instanceId（embedPathSegment 的逆）：旧 portal 归一身份
+    // 只在 Controller 定义一处，Content 不得自行判断。返回 "" 表示该段在当前层
+    // 没有可见对象（或段形状非法）。
+    function uiInstanceIdOfPathSegment(segment) {
+        if (!segment)
+            return ""
+        if (segment.type === "enterEmbed")
+            return segment.instanceId || ""
+        if (segment.type === "enterPortal" && segment.nodeId)
+            return "legacy-portal:" + segment.nodeId
+        return ""
+    }
+
     // Issue #822 评论 5972215936：Embed 是正圆，命中先做圆内判定：
     // 圆外哪怕还在外接矩形里，也必须继续判为空白 / 下面的对象。
     // 圆内再分：顶部标题带、圆周边框 → chrome；其余圆内区域 → childContent。

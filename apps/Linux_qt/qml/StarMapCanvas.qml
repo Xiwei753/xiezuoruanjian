@@ -748,6 +748,8 @@ Item {
             function onConnectMouseYChanged() { connectPreview.requestPaint() }
             function onConnectFromSceneXChanged() { connectPreview.requestPaint() }
             function onConnectFromSceneYChanged() { connectPreview.requestPaint() }
+            function onConnectPreviewEndXChanged() { connectPreview.requestPaint() }
+            function onConnectPreviewEndYChanged() { connectPreview.requestPaint() }
             function onPointerModeChanged() { connectPreview.requestPaint() }
         }
 
@@ -762,10 +764,12 @@ Item {
             ctx.translate(panX, panY)
             ctx.scale(zoomLevel, zoomLevel)
             ctx.beginPath()
+            // 预览起点/终点都取"与正式边同源"的可见端点（悬停合法目标时贴边界）。
             ctx.moveTo(interaction.connectFromSceneX, interaction.connectFromSceneY)
-            ctx.lineTo(interaction.connectMouseX, interaction.connectMouseY)
+            ctx.lineTo(interaction.connectPreviewEndX, interaction.connectPreviewEndY)
             ctx.strokeStyle = _accent
-            ctx.lineWidth = 2
+            // 线宽与命中阈值共用同一份 world 线宽常量。
+            ctx.lineWidth = rootContent ? rootContent._edgeLineWorldWidth : 2
             ctx.stroke()
             ctx.restore()
         }
