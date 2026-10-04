@@ -143,6 +143,14 @@ Item {
                                               starmapId, itemKind, itemId, fj)
     }
 
+    // Issue #822 评论 5977325046：双指缩放期间，整棵树的触屏单指业务全部让位。
+    // PinchHandler 的 exclusive grab 和共享状态机的 pointerMode 是两层状态：
+    // passive grab 在缩放期间仍会把事件送到单指 TapHandler / DragHandler，
+    // 所以两边都要看，晚到的单指回调一律忽略。
+    function pinchOwnsTouchGesture() {
+        return canvasPinch.active || interaction.pointerMode === "pinch"
+    }
+
     // Issue #822: 统一命中判断入口 —— 递归命中测试，从根层内容开始往下钻。
     // 空白点击、拖动画布、pointer_press、右键菜单全部共用。
     function hitTargetAtScreen(sx, sy) {
@@ -372,6 +380,9 @@ Item {
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
         onSingleTapped: function(eventPoint) {
+            // pinch 接管期间拒绝迟到的单指点选。
+            if (canvasArea.pinchOwnsTouchGesture())
+                return
             _touchInputActive = true
             var hit = hitTargetAtScreen(eventPoint.position.x, eventPoint.position.y)
             if (!hit)
@@ -393,6 +404,9 @@ Item {
         // TapHandler.longPressed 信号无参数，用 point.position 拿当前点。
         // 长按前先递归判命中：命中对象的长按归 delegate，这里不弹背景菜单。
         onLongPressed: {
+            // pinch 接管期间拒绝迟到的空白长按菜单。
+            if (canvasArea.pinchOwnsTouchGesture())
+                return
             _touchInputActive = true
             var px = bgTouchLeftTap.point.position.x
             var py = bgTouchLeftTap.point.position.y
@@ -482,10 +496,10 @@ Item {
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
-            // Issue #822 评论 5977278030：双指缩放优先。pinch 期间单指拖动
-            // 不再驱动任何业务状态，也不再 pan（pinch 自己负责相机）。
+            // Issue #822 评论 5977278030 / 5977325046：双指缩放优先。pinch 期间
+            // 单指拖动不再驱动任何业务状态，也不再 pan（pinch 自己负责相机）。
             // 先更新 lastTx/lastTy 再返回，缩放结束后不会攒出一个大 delta。
-            if (canvasPinch.active || interaction.pointerMode === "pinch")
+            if (canvasArea.pinchOwnsTouchGesture())
                 return
             var mode = interaction.pointerMode
             if (mode === "connect" || mode === "contextPending" || mode === "move") {

@@ -1757,11 +1757,22 @@ fn pinch_takes_over_the_shared_state_machine() {
         pinch.contains("interaction.endPinch()"),
         "Pinch 结束必须复位 pinch 状态，实际窗口:\n{pinch}"
     );
+
+    // 单指业务在 pinch 期间必须整体让位：grab 与 pointerMode 两层都要看。
+    let helper = function_window(&canvas, "function pinchOwnsTouchGesture()", 200);
+    assert!(
+        helper.contains("canvasPinch.active || interaction.pointerMode === \"pinch\""),
+        "必须有一个同时看 grab 与共享状态机的触屏让位判定，实际窗口:\n{helper}"
+    );
     let drag = slice_between(&canvas, "id: bgTouchDrag", "id: canvasPinch");
     assert!(
-        drag.contains("if (canvasPinch.active || interaction.pointerMode === \"pinch\")")
-            && drag.contains("return"),
+        drag.contains("if (canvasArea.pinchOwnsTouchGesture())") && drag.contains("return"),
         "pinch 期间单指拖动必须直接忽略（先更新 lastT 再返回），实际窗口:\n{drag}"
+    );
+    let touch_tap = slice_between(&canvas, "id: bgTouchLeftTap", "id: backgroundRightTap");
+    assert!(
+        count_occurrences(&touch_tap, "if (canvasArea.pinchOwnsTouchGesture())") == 2,
+        "pinch 期间必须拒绝迟到的触屏点选与空白长按菜单，实际窗口:\n{touch_tap}"
     );
 
     let content = strip_line_comments(&read_src(CONTENT));
@@ -1769,6 +1780,12 @@ fn pinch_takes_over_the_shared_state_machine() {
     assert!(
         long_press.contains("if (ic.pointerMode === \"pinch\")") && long_press.contains("return"),
         "晚到的长按回调必须拒绝 pinch 状态，实际窗口:\n{long_press}"
+    );
+    let begin_edit = function_window(&content, "function beginInlineEdit(", 300);
+    assert!(
+        begin_edit.contains("interactionController.pointerMode === \"pinch\"")
+            && begin_edit.contains("return"),
+        "晚到的双击进入编辑必须拒绝 pinch 状态，实际窗口:\n{begin_edit}"
     );
     let release = function_window(&content, "function releaseOwnerGesture(", 800);
     for mode in ["\"connect\"", "\"move\"", "\"contextPending\"", "\"pressPending\""] {
@@ -1780,5 +1797,30 @@ fn pinch_takes_over_the_shared_state_machine() {
     assert!(
         !release.contains("\"pinch\""),
         "releaseOwnerGesture 不得处理 pinch（缩放结束由 endPinch 复位），实际窗口:\n{release}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 15. 单击选中：delegate 只上抛点击信号，归属层负责选中与边界日志
+// ─────────────────────────────────────────────────────────────────────────
+
+/// #822 重构后 Node 的 singleClicked / Embed 的 clicked 一度无人接：单击节点
+/// 或子星图不产生任何选中。点击语义必须回到归属层（delegate 不直接碰 controller）。
+#[test]
+fn node_and_embed_single_click_wire_to_selection() {
+    let content = strip_line_comments(&read_src(CONTENT));
+    let node_block = slice_between(&content, "delegate: StarMapNode {", "Repeater {");
+    assert!(
+        node_block.contains("onSingleClicked:")
+            && node_block.contains("content.selectNode(nodeData.id)")
+            && node_block.contains("content.logInteraction(\"selection_changed\", \"node\", nodeData.id, {})"),
+        "节点单击必须选中并记 selection_changed，实际片段:\n{node_block}"
+    );
+    let embed_block = slice_between(&content, "delegate: StarMapEmbed {", "onLeftReleased:");
+    assert!(
+        embed_block.contains("onClicked: function(instId)")
+            && embed_block.contains("content.selectEmbed(instId)")
+            && embed_block.contains("content.logInteraction(\"selection_changed\", \"embed\", instId, {})"),
+        "Embed 单击必须选中并记 selection_changed，实际片段:\n{embed_block}"
     );
 }

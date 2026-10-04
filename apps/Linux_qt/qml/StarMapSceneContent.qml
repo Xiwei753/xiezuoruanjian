@@ -953,6 +953,9 @@ Item {
     // 提交后回写本层 GraphController，不再经过外部 Inspector Popup。
     // ---------------------------------------------------------------------------
     function beginInlineEdit(nodeId) {
+        // Issue #822 评论 5977325046：pinch 接管期间拒绝迟到的双击进入编辑。
+        if (interactionController && interactionController.pointerMode === "pinch")
+            return
         var it = nodeItemOf(nodeId)
         if (it)
             it.beginEdit()
@@ -1276,6 +1279,13 @@ Item {
                         content.onItemPressed("node", nodeData.id, content.nodePath(nodeData.id), qx, qy)
                     }
 
+                    // 单击选中：TapHandler 的点击语义只上抛信号，归属层负责选中和边界日志
+                    // （鼠标 / 触屏两个 TapHandler 共用，device 由 pointer_press 边界日志给出）。
+                    onSingleClicked: {
+                        content.selectNode(nodeData.id)
+                        content.logInteraction("selection_changed", "node", nodeData.id, {})
+                    }
+
                     onTouchLongPressed: {
                         content.onItemTouchLongPressed("node", nodeData.id, content.nodePath(nodeData.id))
                     }
@@ -1344,6 +1354,13 @@ Item {
                     onItemPressed: function(qx, qy) {
                         content.onItemPressed("embed", embedData.instanceId,
                                               content.embedPath(embedData.instanceId), qx, qy)
+                    }
+
+                    // 单击选中：Embed chrome 的 TapHandler 只上抛 clicked，
+                    // 归属层负责选中和边界日志（鼠标 / 触屏共用）。
+                    onClicked: function(instId) {
+                        content.selectEmbed(instId)
+                        content.logInteraction("selection_changed", "embed", instId, {})
                     }
 
                     onTouchLongPressed: {
