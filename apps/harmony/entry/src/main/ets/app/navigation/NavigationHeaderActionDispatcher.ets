@@ -9,6 +9,7 @@ import { ActionRole } from '../../corebridge/dto/PlatformDtos'
 import { Routes } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
+import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
 
 const TAG = 'NavigationHeaderActionDispatcher'
 const DOMAIN = 0x0000
@@ -45,8 +46,16 @@ export class NavigationHeaderActionDispatcher {
     })
   }
 
-  /** 设置 — 从当前活动 NavPathStack 进入 Routes.Settings */
+  /** 设置 — 宽屏开悬浮层，窄屏进 Routes.Settings 路由页 */
+  // Issue #825：宽屏（WorkspaceLayoutMode.Workbench）设置要悬浮在打开前页面之上，
+  // 不再压一条路由，所以走 SettingsOverlayController；
+  // 窄屏保持原来的 pushPath(Routes.Settings) 行为，不留第二套入口。
   private navigateToSettings(): void {
+    if (SettingsOverlayController.getInstance().isOverlayLayout()) {
+      SettingsOverlayController.getInstance().open()
+      return
+    }
+
     const navPathStack = this.navCoordinator.getNavPathStack()
     if (!navPathStack) {
       hilog.warn(DOMAIN, TAG, 'navPathStack is null; cannot navigate to settings')

@@ -25,11 +25,23 @@ import QtQuick.Layouts
 Dialog {
     id: root
     modal: true
-    width: 640
-    height: Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
+    // Issue #825：宽屏 Workbench 用大号悬浮面板（顶部搜索 + 两列分组），
+    // 窄屏保持原来的 640 宽对话框。两边都是 Dialog + Overlay.overlay，
+    // 悬浮在打开设置前的那一页之上，不改成路由页。
+    readonly property bool widePanel: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
+    readonly property int widePanelMaxWidth: 1120
+    width: root.widePanel
+           ? Math.max(720, Math.min(root.widePanelMaxWidth, (parent ? parent.width : 1120) - dt.sp64))
+           : 640
+    height: root.widePanel
+            ? Math.max(520, Math.min(880, (parent ? parent.height : 800) - dt.sp64))
+            : Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
     parent: Overlay.overlay
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)
+    property var layoutPlan: null
+    // 宽屏顶部搜索关键词。只做分组过滤，不改任何设置读取/保存路径。
+    property string searchText: ""
     property var theme: null
     property var settingsBackendRef: null
     property var workspaceBackendRef: null
@@ -71,6 +83,13 @@ Dialog {
         if (settingsBackendRef) settingsBackendRef.flush_pending_settings_save()
         root.settingsDirty = false
         root.settingsChanged()
+    }
+    // Issue #825：宽屏顶部搜索按分组标题过滤当前浮层里的设置分组。
+    // 空搜索词时全部显示；命中与否只影响可见性，不动 backend。
+    function sectionVisible(title) {
+        var q = root.searchText.trim().toLowerCase()
+        if (q.length === 0) return true
+        return String(title).toLowerCase().indexOf(q) !== -1
     }
     function setSwitchValue(control, key, value) {
         control.checked = value
@@ -159,6 +178,8 @@ Dialog {
         // 启动时 load_local_settings 已由 internal_open_data_root 完成，
         // 每开一次窗口重新加载会顺带触发一次主题切换。
         if (syncBackendRef) syncBackendRef.load_sync_config()
+        // Issue #825：每次打开都清掉宽屏搜索词，避免上一次过滤结果留在浮层里。
+        root.searchText = ""
         updateValues()
     }
     onClosed: {
@@ -184,13 +205,34 @@ Dialog {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 64
+        height: root.widePanel ? 72 : 64
         color: "transparent"
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: dt.sp24
             anchors.rightMargin: dt.sp16
-            AppText { dt: root.dt; text: qsTr("设置"); color: dt.textPrimary; font.pointSize: dt.subtitlePt; font.family: dt.fontFamily; font.weight: Font.Bold; Layout.fillWidth: true }
+            spacing: dt.sp16
+            AppText {
+                dt: root.dt
+                text: qsTr("设置")
+                color: dt.textPrimary
+                font.pointSize: dt.subtitlePt
+                font.family: dt.fontFamily
+                font.weight: Font.Bold
+                Layout.fillWidth: !root.widePanel
+                Layout.leftMargin: root.widePanel ? dt.sp8 : 0
+            }
+            // Issue #825：宽屏顶部搜索。窄屏保持原来的窄对话框布局，不加搜索框。
+            AppTextField {
+                id: settingsSearchField
+                dt: root.dt
+                visible: root.widePanel
+                Layout.fillWidth: true
+                Layout.maximumWidth: 420
+                Layout.alignment: Qt.AlignVCenter
+                placeholder: qsTr("搜索设置分组")
+                onTextChanged: root.searchText = text
+            }
             ToolbarButton { text: qsTr("关闭"); dt: root.dt; onClicked: root.close() }
         }
     }
@@ -214,15 +256,21 @@ Dialog {
         contentWidth: availableWidth
         contentHeight: settingsColumn.implicitHeight
 
-        ColumnLayout {
+        // Issue #825：窄屏 columns=1 等价于原来的纵向 ColumnLayout；
+        // 宽屏 Workbench 改成两列排设置分组。分组仍然各自展开在当前浮层里，
+        // 不跳路由、不重建设置内容。
+        GridLayout {
             id: settingsColumn
             width: settingsScroll.availableWidth
-            spacing: dt.cardGap
+            columns: root.widePanel ? 2 : 1
+            columnSpacing: dt.sp16
+            rowSpacing: dt.cardGap
 
             // ── 1. 外观 (appearance) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("外观")
+                visible: root.sectionVisible(qsTr("外观"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -354,6 +402,7 @@ Dialog {
             SettingsSection {
                 dt: root.dt
                 title: qsTr("编辑器和动画")
+                visible: root.sectionVisible(qsTr("编辑器和动画"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -471,6 +520,7 @@ Dialog {
             SettingsSection {
                 dt: root.dt
                 title: qsTr("保存和同步")
+                visible: root.sectionVisible(qsTr("保存和同步"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -523,7 +573,8 @@ Dialog {
                 dt: root.dt
                 title: qsTr("AI")
                 Layout.fillWidth: true
-                visible: root.settingsBackendRef ? root.settingsBackendRef.ai_available : false
+                visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
+                         && root.sectionVisible(qsTr("AI"))
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("启用 AI 功能")
@@ -538,6 +589,7 @@ Dialog {
             SettingsSection {
                 dt: root.dt
                 title: qsTr("诊断与日志")
+                visible: root.sectionVisible(qsTr("诊断与日志"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -691,6 +743,7 @@ Dialog {
             SettingsSection {
                 dt: root.dt
                 title: qsTr("关于")
+                visible: root.sectionVisible(qsTr("关于"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt

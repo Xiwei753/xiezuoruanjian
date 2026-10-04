@@ -23,10 +23,12 @@ import { WritingScreen } from '../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../feature/starmap/ui/StarMapScreen'
 import { StarMapListScreen } from '../../feature/starmap/ui/StarMapListScreen'
 import { SettingsScreen } from '../../feature/settings/ui/SettingsScreen'
+import { SettingsOverlayHost } from '../../feature/settings/ui/SettingsOverlayHost'
 import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
+import { DesignTokens } from '../../ui/theme/DesignTokens'
 import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
@@ -43,6 +45,22 @@ const TAB_STATS: number = 2   // 统计
 const NORMAL_BAR_HEIGHT: number = 56
 // 隐藏底栏时的高度（vp）
 const HIDDEN_BAR_HEIGHT: number = 0
+
+// Issue #825：宽屏左侧一级导航项。和底部 Tabs 用同一组 tab 索引，
+// 只决定“摆在哪里”，不新增第四套路由栈，也不新增 Core 枚举。
+interface WideRailEntry {
+  index: number
+  label: string
+}
+
+const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
+  { index: TAB_HOME, label: '作品' },
+  { index: TAB_STARMAP, label: '星图' },
+  { index: TAB_STATS, label: '统计' }
+]
+
+// 宽屏左侧一级导航的固定宽度（vp）
+const WIDE_RAIL_WIDTH: number = 200
 
 // Issue #767：工厂函数，在字段初始化时创建已经带根路由的 NavPathStack。
 // 避免 aboutToAppear() 里 pushPath 导致 "State variable has changed during render" 错误。
@@ -287,35 +305,64 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
-  // 宽屏骨架：一级导航改到左侧，三个 NavPathStack 继续沿用原来的 owner。
-  // 这里只决定“摆在哪里”，不新增 Core 枚举，也不复制页面业务状态。
+  // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。
   @Builder
   WidePrimaryRail() {
-    Column({ space: 8 }) {
+    Column({ space: 4 }) {
       Text('素笺')
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
+        .fontColor($r('sys.color.font_primary'))
         .width('100%')
-        .margin({ bottom: 12 })
+        .textAlign(TextAlign.Start)
+        .margin({ left: 12, bottom: 8 })
 
-      Button('作品')
+      Column()
         .width('100%')
-        .height(44)
-        .onClick(() => { this.currentTab = TAB_HOME })
-      Button('星图')
-        .width('100%')
-        .height(44)
-        .onClick(() => { this.currentTab = TAB_STARMAP })
-      Button('统计')
-        .width('100%')
-        .height(44)
-        .onClick(() => { this.currentTab = TAB_STATS })
+        .height(1)
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .margin({ bottom: 8 })
+
+      ForEach(WIDE_RAIL_ENTRIES, (entry: WideRailEntry) => {
+        this.WideRailItem(entry)
+      }, (entry: WideRailEntry) => `${entry.index}`)
 
       Blank()
     }
-    .width(168)
+    .width(WIDE_RAIL_WIDTH)
     .height('100%')
     .padding({ left: 12, right: 12, top: 16, bottom: 16 })
+    .backgroundColor($r('sys.color.background_secondary'))
+  }
+
+  // 宽屏左侧一级导航单项：选中时加粗 + 左侧强调条，与底部 Tabs 保持同一套语义。
+  @Builder
+  WideRailItem(entry: WideRailEntry) {
+    Row() {
+      Column()
+        .width(3)
+        .height(20)
+        .borderRadius(DesignTokens.radiusXs)
+        .backgroundColor($r('sys.color.ohos_id_color_emphasize'))
+        .opacity(this.currentTab === entry.index ? 1 : 0)
+        .margin({ right: 12 })
+
+      Text(entry.label)
+        .fontSize(16)
+        .fontWeight(this.currentTab === entry.index ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor($r('sys.color.font_primary'))
+        .textAlign(TextAlign.Start)
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 12, right: 12 })
+    .alignItems(VerticalAlign.Center)
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.currentTab === entry.index ? $r('sys.color.comp_background_gray') : Color.Transparent)
+    .onClick(() => {
+      this.currentTab = entry.index
+    })
   }
 
   @Builder
@@ -344,6 +391,8 @@ export struct PrimaryTabShell {
     }
   }
 
+  // 宽屏壳：一级导航在左，内容在右。写进 Writing 这类
+  // showPrimaryNavigation=false 的页面时左栏整体消失，内容占满。
   @Builder
   WidePrimaryShell() {
     Row() {
@@ -352,6 +401,11 @@ export struct PrimaryTabShell {
       }
       Stack() {
         this.WideCurrentNavigation()
+
+        // Issue #825：宽屏设置悬浮在三个 tab 的当前页面之上，
+        // 背景就是打开设置前的页面。关闭只隐藏悬浮层，
+        // 下面的页面和原 NavPathStack 保持原位置。
+        SettingsOverlayHost()
       }
       .layoutWeight(1)
       .height('100%')

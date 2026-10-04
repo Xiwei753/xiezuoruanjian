@@ -30,6 +30,9 @@ export struct HdsWritingDestinationApi23 {
   @Param scroller: Scroller = new Scroller()
   // Issue #784 评论5857397503：接收 ScreenRole，异步加载 ScreenPolicy 获取 ActionSlot[]。
   @Param screenRole: ScreenRole = ScreenRole.Writing
+  // Issue #825：宽屏时动作搬进页面自己的右侧工具区，页头动作胶囊关掉，
+  // 保证同步/搜索/设置只有一个入口。
+  @Param showActionCapsule: boolean = true
   @Local headerActions: ActionSlot[] = []
 
   async aboutToAppear() {
@@ -47,7 +50,8 @@ export struct HdsWritingDestinationApi23 {
     HeaderTitleBarStack({
       title: this.title,
       headerActions: this.headerActions,
-      showBackButton: true
+      showBackButton: true,
+      showActionCapsule: this.showActionCapsule
     })
   }
 

@@ -1181,13 +1181,15 @@ Rectangle {
                     }
                 }
 
-                // Right drawer button (when closed)
+                // Right drawer button (when closed).
+                // 宽屏 Workbench 由贴边悬浮把手接管收起/展开，这里不再重复画一个，
+                // 避免同一入口出现两份。窄屏保持原来的右侧箭头按钮。
                 Rectangle {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: 36
-                    visible: !root.drawerOpen
+                    visible: !root.drawerOpen && !root.wideWorkbench
                     color: "transparent"
 
                     ColumnLayout {
@@ -1364,61 +1366,84 @@ Rectangle {
     }
 
 
-    // 宽屏折叠把手骨架。后续只填样式和持久化，不改编辑器 session owner。
+    // 宽屏折叠把手：贴边窄悬浮把手，收起后只剩把手本身，
+    // 空 pane 由 SplitView 忽略不可见子项自然让出宽度，不留空占位。
+    // 把手只改 Qt UI 布局，不进入 Core 编辑事务——编辑会话不受影响。
     Rectangle {
+        id: leftPaneHandle
         visible: root.wideWorkbench
         z: 50
-        width: 28
-        height: 72
+        width: 18
+        height: 64
         radius: dt.radiusPill
-        color: leftPaneHandleHover.containsMouse ? dt.surfaceVariant : dt.surface
-        border.color: dt.border
+        color: leftPaneHandleHover.containsMouse || leftPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
+        border.color: leftPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
         border.width: 1
-        x: root.leftPaneCollapsed ? 0 : Math.max(0, sidebarRect.width - width / 2)
+        x: root.leftPaneCollapsed
+           ? dt.sp4
+           : Math.max(0, Math.min(root.width - width - dt.sp4, sidebarRect.width - width / 2))
         y: Math.round((root.height - height) / 2)
+
+        Behavior on color { ColorAnimation { duration: dt.animFast } }
+        Behavior on border.color { ColorAnimation { duration: dt.animFast } }
 
         AppText {
             dt: root.dt
             anchors.centerIn: parent
             text: root.leftPaneCollapsed ? "›" : "‹"
             color: dt.textSecondary
-            font.pointSize: dt.fontLgPt
+            font.pointSize: dt.fontMdPt
         }
+
         MouseArea {
             id: leftPaneHandleHover
             anchors.fill: parent
+            anchors.margins: -dt.sp6
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.leftPaneCollapsed = !root.leftPaneCollapsed
+            onClicked: {
+                root.leftPaneCollapsed = !root.leftPaneCollapsed
+                // 收起后把手贴到左边缘，留出 sp4 边距；不需要动编辑会话。
+                if (root.leftPaneCollapsed) root.requestEditorFocus()
+            }
         }
     }
 
     Rectangle {
+        id: rightPaneHandle
         visible: root.wideWorkbench
         z: 50
-        width: 28
-        height: 72
+        width: 18
+        height: 64
         radius: dt.radiusPill
-        color: rightPaneHandleHover.containsMouse ? dt.surfaceVariant : dt.surface
-        border.color: dt.border
+        color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
+        border.color: rightPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
         border.width: 1
         anchors.right: parent.right
+        anchors.rightMargin: dt.sp4
         anchors.verticalCenter: parent.verticalCenter
+
+        Behavior on color { ColorAnimation { duration: dt.animFast } }
+        Behavior on border.color { ColorAnimation { duration: dt.animFast } }
 
         AppText {
             dt: root.dt
             anchors.centerIn: parent
             text: root.drawerOpen ? "›" : "‹"
             color: dt.textSecondary
-            font.pointSize: dt.fontLgPt
+            font.pointSize: dt.fontMdPt
         }
+
         MouseArea {
             id: rightPaneHandleHover
             anchors.fill: parent
+            anchors.margins: -dt.sp6
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.drawerOpen = !root.drawerOpen
+            onClicked: {
+                root.drawerOpen = !root.drawerOpen
+                if (!root.drawerOpen) root.requestEditorFocus()
+            }
         }
     }
-
 }

@@ -879,6 +879,10 @@ ApplicationWindow {
         active: false
         sourceComponent: SettingsDialog {
             theme: designTokens
+            // Issue #825：设置面板消费 Core 的 WorkspaceLayoutMode。
+            // Workbench → 大号悬浮面板（顶部搜索 + 两列分组）；
+            // SinglePane → 原来的窄对话框。两种形态都还是同一个 Dialog。
+            layoutPlan: window.layoutPlan
             settingsBackendRef: settingsBackend
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend

@@ -34,10 +34,18 @@ import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/H
 import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
+
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
 // NavDestination 原生标题栏（hideTitleBar(false) + title）承载。
+
+// Issue #825：宽屏左右 pane 的固定宽度和贴边把手尺寸（vp）。
+const LEFT_PANE_WIDTH_VP: number = 320
+const RIGHT_PANE_WIDTH_VP: number = 300
+const PANE_HANDLE_WIDTH_VP: number = 18
+const PANE_HANDLE_HEIGHT_VP: number = 64
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -968,6 +976,18 @@ export struct WritingScreen {
     return $r('app.media.ic_settings')
   }
 
+  // Issue #825：ActionRole → 中文标签，用于右侧工具区条目。
+  // 与 NavigationHeaderActionMenu 的 Sync/Search/Settings 标签保持同一套文案。
+  private getHeaderActionLabel(role: ActionRole): string {
+    if (role === ActionRole.Sync) {
+      return '同步'
+    }
+    if (role === ActionRole.Search) {
+      return '搜索'
+    }
+    return '设置'
+  }
+
   async clearContent() {
     AlertDialog.show({
       title: $r('app.string.confirm_clear'),
@@ -1018,53 +1038,51 @@ export struct WritingScreen {
   @Builder
   NavContent() {
     if (this.adaptiveState.isTwoPane) {
-      // Issue #629 评论14 第1项：宽屏双栏布局。
+      // Issue #629 评论14 第1项：宽屏三栏布局。
       // 左侧：ChapterTreePane（纯目录 UI，不持有编辑会话）。
-      // 右侧：当前 WritingScreen 的编辑会话（同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
-      // 屏幕宽度变化只改布局，不换 TextEditSession owner。
-      Row() {
-        // 左侧目录面板；收起后只保留一个窄把手。
-        if (!this.leftPaneCollapsed) {
-          ChapterTreePane({
-            volumeTrees: this.volumeTrees,
-            expandedVolumes: this.expandedVolumes,
-            selectedChapterId: this.chapterId,
-            onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
-            onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
-              this.switchChapter(chapterId, chapterTitle, volumeId)
-            },
-            onCreateVolume: (): void => { this.createVolume() },
-            onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
-            onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
-            onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
-          })
-            .width(320)
-            .height('100%')
-        }
+      // 中央：当前 WritingScreen 的唯一编辑会话
+      //       （同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
+      // 右侧：真实工具区，入口来自 Core ScreenPolicy 的 HeaderTrailing actionSlots。
+      // 屏幕宽度变化只改布局（isTwoPane 为 false 时回单栏），不换 TextEditSession owner。
+      Stack() {
+        Row() {
+          // 左侧可收起目录栏；收起后整块不占宽度，只留贴边把手。
+          if (!this.leftPaneCollapsed) {
+            ChapterTreePane({
+              volumeTrees: this.volumeTrees,
+              expandedVolumes: this.expandedVolumes,
+              selectedChapterId: this.chapterId,
+              onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
+              onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
+                this.switchChapter(chapterId, chapterTitle, volumeId)
+              },
+              onCreateVolume: (): void => { this.createVolume() },
+              onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
+              onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
+              onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
+            })
+              .width(LEFT_PANE_WIDTH_VP)
+              .height('100%')
+          }
 
-        Button(this.leftPaneCollapsed ? '›' : '‹')
-          .width(28)
-          .height(72)
-          .onClick(() => { this.leftPaneCollapsed = !this.leftPaneCollapsed })
+          // 中央纸面限宽居中，可用空间随左右 pane 展开/收起变化，编辑会话不变。
+          Column() {
+            this.EditorPane()
+          }
+          .layoutWeight(1)
+          .height('100%')
 
-        // 中央编辑区仍然是当前 WritingScreen 的唯一编辑会话 owner。
-        Column() {
-          this.EditorPane()
+          // 右侧可收起工具区。
+          if (!this.rightPaneCollapsed) {
+            this.RightToolPane()
+          }
         }
-        .layoutWeight(1)
+        .width('100%')
         .height('100%')
 
-        Button(this.rightPaneCollapsed ? '‹' : '›')
-          .width(28)
-          .height(72)
-          .onClick(() => { this.rightPaneCollapsed = !this.rightPaneCollapsed })
-
-        // 右侧工具 pane 先留骨架，后续议题再接同步/搜索/AI 等真实内容。
-        if (!this.rightPaneCollapsed) {
-          Column() {}
-            .width(300)
-            .height('100%')
-        }
+        // Issue #825：把手叠在左右分隔边缘上，不占正文宽度。
+        this.LeftPaneHandle()
+        this.RightPaneHandle()
       }
       .width('100%')
       .height('100%')
@@ -1072,6 +1090,101 @@ export struct WritingScreen {
       // Issue #629 评论9 第3项：窄屏单栏布局。
       this.EditorPane()
     }
+  }
+
+  // Issue #825：左把手贴在“目录栏 | 编辑区”分隔边缘上。
+  // 收起后贴到窗口左缘，展开时压在目录栏右缘，不从正文宽度里扣出 28px。
+  @Builder
+  LeftPaneHandle() {
+    Stack({ alignContent: Alignment.Start }) {
+      Button(this.leftPaneCollapsed ? '›' : '‹', { type: ButtonType.Normal })
+        .width(PANE_HANDLE_WIDTH_VP)
+        .height(PANE_HANDLE_HEIGHT_VP)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_primary'))
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .borderRadius(DesignTokens.radiusPill)
+        .onClick(() => { this.leftPaneCollapsed = !this.leftPaneCollapsed })
+    }
+    .width(PANE_HANDLE_WIDTH_VP)
+    .height('100%')
+    .offset({
+      x: this.leftPaneCollapsed ? 0 : LEFT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2,
+      y: 0
+    })
+  }
+
+  // Issue #825：右把手贴在“编辑区 | 工具区”分隔边缘上，收起后贴到窗口右缘。
+  @Builder
+  RightPaneHandle() {
+    Stack({ alignContent: Alignment.End }) {
+      Button(this.rightPaneCollapsed ? '‹' : '›', { type: ButtonType.Normal })
+        .width(PANE_HANDLE_WIDTH_VP)
+        .height(PANE_HANDLE_HEIGHT_VP)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_primary'))
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .borderRadius(DesignTokens.radiusPill)
+        .onClick(() => { this.rightPaneCollapsed = !this.rightPaneCollapsed })
+    }
+    .width(PANE_HANDLE_WIDTH_VP)
+    .height('100%')
+    .offset({
+      x: this.rightPaneCollapsed ? 0 : -(RIGHT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2),
+      y: 0
+    })
+  }
+
+  // Issue #825：右侧工具区。
+  // 入口全部来自 Core ScreenPolicy 的 HeaderTrailing actionSlots（同步/搜索/设置），
+  // 点击统一走 NavigationHeaderActionDispatcher；这里不造第二份工具状态，也不写占位假功能。
+  // 宽屏时页头不再重复画这些动作（API23+ 走 showActionCapsule=false，
+  // API<23 的自定义标题 Row 直接不渲染），所以只有一个入口。
+  @Builder
+  RightToolPane() {
+    Column({ space: 8 }) {
+      Text('工具')
+        .fontSize(13)
+        .fontColor($r('sys.color.font_primary'))
+        .width('100%')
+        .textAlign(TextAlign.Start)
+        .margin({ left: 12, top: 4, bottom: 4 })
+
+      ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
+        this.RightToolEntry(slot)
+      }, (slot: ActionSlot) => slot.role)
+    }
+    .width(RIGHT_PANE_WIDTH_VP)
+    .height('100%')
+    .padding({ top: 8, bottom: 8 })
+    .backgroundColor($r('sys.color.background_secondary'))
+  }
+
+  @Builder
+  RightToolEntry(slot: ActionSlot) {
+    Row() {
+      Image(this.getHeaderActionIcon(slot.role))
+        .width(20)
+        .height(20)
+        .fillColor($r('sys.color.icon_primary'))
+
+      Text(this.getHeaderActionLabel(slot.role))
+        .fontSize(15)
+        .fontColor($r('sys.color.font_primary'))
+        .margin({ left: 12 })
+
+      Blank()
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 12, right: 12 })
+    .margin({ left: 8, right: 8 })
+    .alignItems(VerticalAlign.Center)
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .onClick(() => {
+      NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+    })
   }
 
   build() {
@@ -1089,7 +1202,9 @@ export struct WritingScreen {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
         },
         scroller: this.editorScroller,
-        screenRole: ScreenRole.Writing
+        screenRole: ScreenRole.Writing,
+        // Issue #825：宽屏动作搬进右侧工具区，页头胶囊关掉，避免两个入口。
+        showActionCapsule: !this.adaptiveState.isTwoPane
       }) {
         this.NavContent()
       }
@@ -1117,21 +1232,25 @@ export struct WritingScreen {
             // Issue #784 评论5857856673 问题2：右侧渲染 HeaderTrailing 动作按钮。
             // 动作来源是 Core ScreenPolicy（this.headerActions），通过 sortedHeaderTrailingActions
             // 排序后 ForEach 渲染，统一调用 NavigationHeaderActionDispatcher.dispatchAction。
+            // Issue #825：宽屏时这些动作搬进右侧工具区（RightToolPane），
+            // 页头不再重复画一遍，宽屏下只有一个入口。
             Blank()
 
-            ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
-              Button({ type: ButtonType.Circle, stateEffect: true }) {
-                Image(this.getHeaderActionIcon(slot.role))
-                  .width(24)
-                  .height(24)
-                  .fillColor($r('sys.color.icon_primary'))
-              }
-              .width(40)
-              .height(40)
-              .onClick(() => {
-                NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
-              })
-            }, (slot: ActionSlot) => slot.role)
+            if (!this.adaptiveState.isTwoPane) {
+              ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
+                Button({ type: ButtonType.Circle, stateEffect: true }) {
+                  Image(this.getHeaderActionIcon(slot.role))
+                    .width(24)
+                    .height(24)
+                    .fillColor($r('sys.color.icon_primary'))
+                }
+                .width(40)
+                .height(40)
+                .onClick(() => {
+                  NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+                })
+              }, (slot: ActionSlot) => slot.role)
+            }
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
