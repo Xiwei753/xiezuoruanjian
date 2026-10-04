@@ -10,13 +10,16 @@
 // - .onBackPressed 只调用 onSystemBack 并消费本次系统返回（return true）。
 //
 // Issue #784 评论5857397503：移除硬编码的三个 menu item（同步/搜索/设置），
-// 改为通过 ScreenPolicyBridge 异步加载 ActionSlot[]，交给 HeaderTitleBarStack
-// 自绘标题 + 页头动作胶囊。
+// 改为由 ScreenPolicy 解析出的 ActionSlot[] 交给 HeaderTitleBarStack 自绘标题 +
+// 页头动作胶囊。
+//
+// Issue #825 复核第2项：ActionSlot[] 不再由本壳层自己解析 ScreenPolicy，
+// 改由 WritingScreen 统一解析后透传进来。同一份数组同时喂给窄屏标题栏胶囊和
+// 宽屏右侧工具区，避免宽屏关掉胶囊后工具区拿不到任何动作。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
-import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
-import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
+import { ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
 
 @ComponentV2
 export struct HdsWritingDestinationApi23 {
@@ -28,19 +31,11 @@ export struct HdsWritingDestinationApi23 {
   @Param onShown: (() => void) | null = null
   // Issue #778 任务8：接收父级传入的 scroller，绑定到 HdsNavDestination 做沉浸联动。
   @Param scroller: Scroller = new Scroller()
-  // Issue #784 评论5857397503：接收 ScreenRole，异步加载 ScreenPolicy 获取 ActionSlot[]。
-  @Param screenRole: ScreenRole = ScreenRole.Writing
+  // Issue #784 评论5857397503：ScreenPolicy 解析结果由 WritingScreen 统一持有并透传。
+  @Param headerActions: ActionSlot[] = []
   // Issue #825：宽屏时动作搬进页面自己的右侧工具区，页头动作胶囊关掉，
   // 保证同步/搜索/设置只有一个入口。
   @Param showActionCapsule: boolean = true
-  @Local headerActions: ActionSlot[] = []
-
-  async aboutToAppear() {
-    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(this.screenRole)
-    if (policy !== null) {
-      this.headerActions = policy.actionSlots
-    }
-  }
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。
   // 直接在箭头函数体里写 HeaderTitleBarStack({...}) 会被当普通函数调用，运行时崩：

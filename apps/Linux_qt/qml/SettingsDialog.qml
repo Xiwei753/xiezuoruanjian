@@ -30,11 +30,14 @@ Dialog {
     // 悬浮在打开设置前的那一页之上，不改成路由页。
     readonly property bool widePanel: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
     readonly property int widePanelMaxWidth: 1120
+    // Issue #825 复核第4项：Workbench 从 600vp 宽就成立，之前 Math.max(720, ...) 的下限
+    // 会让 700vp 窗口里弹出比窗口还宽的面板。下限改成窄对话框的 640 收窄档，
+    // 实际宽度一律先减掉两侧留白再夹到 [640, widePanelMaxWidth]。
     width: root.widePanel
-           ? Math.max(720, Math.min(root.widePanelMaxWidth, (parent ? parent.width : 1120) - dt.sp64))
+           ? Math.max(400, Math.min(root.widePanelMaxWidth, (parent ? parent.width : 1120) - dt.sp64))
            : 640
     height: root.widePanel
-            ? Math.max(520, Math.min(880, (parent ? parent.height : 800) - dt.sp64))
+            ? Math.max(420, Math.min(880, (parent ? parent.height : 800) - dt.sp64))
             : Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
     parent: Overlay.overlay
     x: Math.round((parent.width - width) / 2)

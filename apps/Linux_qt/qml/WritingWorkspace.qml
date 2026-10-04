@@ -1419,12 +1419,16 @@ Rectangle {
         color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
         border.color: rightPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
         border.width: 1
-        anchors.right: parent.right
-        anchors.rightMargin: dt.sp4
-        anchors.verticalCenter: parent.verticalCenter
-
         Behavior on color { ColorAnimation { duration: dt.animFast } }
         Behavior on border.color { ColorAnimation { duration: dt.animFast } }
+
+        // Issue #825 复核第5项：右把手贴在“正文 | 工具区”分隔边缘上（RightDrawer 展开时
+        // 用它的左边缘），只有收起时才退回窗口右缘。之前固定 anchors.right，
+        // 展开时把手会跳到窗口最右边而不是分隔线上。
+        x: root.drawerOpen
+           ? Math.max(0, Math.min(root.width - width - dt.sp4, rightDrawerRect.x - width / 2))
+           : root.width - width - dt.sp4
+        y: Math.round((root.height - height) / 2)
 
         AppText {
             dt: root.dt

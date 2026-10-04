@@ -11,7 +11,10 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 @ComponentV2
 export struct SettingsOverlayHost {
-  private controller: SettingsOverlayController = SettingsOverlayController.getInstance()
+  // Issue #825 复核第3项：必须用 @Local 持有 controller，@Local 才能把
+  // SettingsOverlayController 的 @Trace visible 接进本组件的 V2 状态树；
+  // 用普通成员变量的话 visible 变化不会触发重渲染，悬浮层永远不显示。
+  @Local controller: SettingsOverlayController = SettingsOverlayController.getInstance()
 
   build() {
     // 不可见时不占任何布局：整个组件直接不渲染，避免影响下面页面的尺寸分配。

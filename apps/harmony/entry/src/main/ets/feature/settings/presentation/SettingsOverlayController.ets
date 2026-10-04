@@ -23,6 +23,11 @@ export class SettingsOverlayController {
   }
 
   // 当前窗口是否用悬浮设置。窄屏仍然走 Routes.Settings 路由页。
+  // Issue #825 复核第4点：这个判定与 SettingsOverlayHost 的挂载位置必须一致。
+  // 宿主挂在 PrimaryTabShell 壳的最外层（与一级导航放左还是放下无关），
+  // 所以这里继续按 Core 的 workspace_layout_mode 判 Workbench：
+  // 600–839vp 这一档 Core 已经给 Workbench（但一级导航仍是 Bottom），
+  // 那一档窗口里设置同样走悬浮层。
   isOverlayLayout(): boolean {
     const state = AdaptiveContext.getInstance().getCurrentState()
     return state.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench

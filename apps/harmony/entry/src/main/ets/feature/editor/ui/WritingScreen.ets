@@ -28,7 +28,7 @@ import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, ActionSlot, ActionRole } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, ActionRole, WorkspaceLayoutMode } from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
 import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
@@ -122,9 +122,12 @@ export struct WritingScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @State useHdsNav: boolean = false
-  // Issue #784 评论5857397503 第4点：API < 23 时通过 ScreenPolicy 加载 HeaderTrailing 动作，
-  // 传入 NavDestination .menus() 渲染右上角操作项。
+  // Issue #784 评论5857397503 第4点 / Issue #825 复核第2项：headerActions 由 WritingScreen
+  // 唯一持有（不再分 API 等级各解析一次），窄屏页头胶囊与宽屏右侧工具区读同一份数组。
   @State headerActions: ActionSlot[] = []
+  // Issue #825 复核第1项：窗口由窄变宽时，adaptive observer 第一次进入 Workbench
+  // 也要触发一次目录树加载，不能只在 aboutToAppear 加载。
+  private wideWorkbenchTreeLoaded: boolean = false
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -176,13 +179,10 @@ export struct WritingScreen {
     hilog.info(0x0000, 'WritingScreen', 'route name=Writing')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
-    // Issue #784 评论5857397503 第4点：API < 23 时加载 ScreenPolicy 的 HeaderTrailing 动作。
-    if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.Writing)
-      if (policy !== null) {
-        this.headerActions = policy.actionSlots
-      }
-    }
+    // Issue #784 评论5857397503 第4点 + Issue #825 复核第2点：ScreenPolicy 的 HeaderTrailing
+    // 动作统一在 WritingScreen 解析一次，与 API 等级无关。API23+ 的壳层只透传，
+    // 宽屏右侧工具区也读同一份数组（否则宽屏关掉页头胶囊后工具区会一个动作都没有）。
+    this.resolveHeaderActions()
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -194,9 +194,7 @@ export struct WritingScreen {
       this.continuationParams = params
       this.loadWritingContent()
       // Issue #629 评论14 第1项：宽屏双栏模式下加载项目树（供 ChapterTreePane）。
-      if (this.adaptiveState.isTwoPane) {
-        this.loadProjectTree()
-      }
+      this.ensureWorkbenchProjectTree()
     }
 
     const self = this
@@ -234,6 +232,9 @@ export struct WritingScreen {
 
     this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
       self.adaptiveState = state
+      // Issue #825 复核第1项：窗口从窄变宽时第一次进入 Workbench 也要补一次目录树，
+      // 否则 aboutToAppear 当时是窄屏、目录树永远为空。
+      self.ensureWorkbenchProjectTree()
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
@@ -646,9 +647,34 @@ export struct WritingScreen {
   // Issue #767 评论 5828146609 第 2 节：shareToSystem() 已删除。
   // 普通"系统分享"按钮不再存在；碰一碰/隔空传送仍走 startShareLifecycle/stopShareLifecycle。
 
+  // Issue #825 复核第1项：宽屏工作台只看 Core 下发的 WorkspaceLayoutMode.Workbench。
+  // AdaptiveState.isTwoPane 只在 ShellMode.TwoPane 时为 true，而 1200vp 以上的真实大屏
+  // Core 给的是 ShellMode.ThreePane，用 isTwoPane 当宽屏标志会让大屏退回单栏。
+  private get isWideWorkbench(): boolean {
+    return this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench
+  }
+
+  // Issue #825 复核第2项：ScreenPolicy 的 HeaderTrailing 动作只在这里解析一次。
+  private async resolveHeaderActions(): Promise<void> {
+    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.Writing)
+    if (policy !== null) {
+      this.headerActions = policy.actionSlots
+    }
+  }
+
+  // Issue #825 复核第1项：进入宽屏工作台后只加载一次目录树。
+  // aboutToAppear（当时可能还是窄屏）与 adaptive observer（窗口变宽）都走这里。
+  private ensureWorkbenchProjectTree(): void {
+    if (!this.isWideWorkbench || this.wideWorkbenchTreeLoaded) {
+      return
+    }
+    this.wideWorkbenchTreeLoaded = true
+    this.loadProjectTree()
+  }
+
   // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
   private async loadProjectTree(): Promise<void> {
-    if (!this.projectId || this.adaptiveState.isTwoPane === false) {
+    if (!this.projectId || !this.isWideWorkbench) {
       return
     }
     this.isTreeLoading = true
@@ -1037,13 +1063,13 @@ export struct WritingScreen {
   // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
   @Builder
   NavContent() {
-    if (this.adaptiveState.isTwoPane) {
+    if (this.isWideWorkbench) {
       // Issue #629 评论14 第1项：宽屏三栏布局。
       // 左侧：ChapterTreePane（纯目录 UI，不持有编辑会话）。
       // 中央：当前 WritingScreen 的唯一编辑会话
       //       （同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
       // 右侧：真实工具区，入口来自 Core ScreenPolicy 的 HeaderTrailing actionSlots。
-      // 屏幕宽度变化只改布局（isTwoPane 为 false 时回单栏），不换 TextEditSession owner。
+      // 屏幕宽度变化只改布局（离开 Workbench 时回单栏），不换 TextEditSession owner。
       Stack() {
         Row() {
           // 左侧可收起目录栏；收起后整块不占宽度，只留贴边把手。
@@ -1080,9 +1106,8 @@ export struct WritingScreen {
         .width('100%')
         .height('100%')
 
-        // Issue #825：把手叠在左右分隔边缘上，不占正文宽度。
-        this.LeftPaneHandle()
-        this.RightPaneHandle()
+        // Issue #825 复核第5项：整屏覆盖层排把手，不占正文宽度。
+        this.PaneHandleLayer()
       }
       .width('100%')
       .height('100%')
@@ -1092,11 +1117,22 @@ export struct WritingScreen {
     }
   }
 
-  // Issue #825：左把手贴在“目录栏 | 编辑区”分隔边缘上。
-  // 收起后贴到窗口左缘，展开时压在目录栏右缘，不从正文宽度里扣出 28px。
+  // Issue #825 复核第5项：把手走整屏覆盖层，按“窗口左缘 / 分隔边缘 / 窗口右缘”显式排位。
+  // 之前是把窄 Stack 塞进外层 Stack 再用 offset 猜坐标，而 Stack 的 offset 是相对自身对齐点算的，
+  // 收起态会落到屏幕中间。这里用一段带占位宽度的整屏 Row 从左往右排：
+  // 左把手前占 (目录栏宽 - 半把手)，右把手前占 (工具区宽 - 半把手)，
+  // 中间 layoutWeight 的 Blank 吃掉剩余空间，位置由布局算出来而不是猜出来。
+  // 覆盖层自身不参与命中测试（HitTestMode.Transparent），只有两个 Button 可点，
+  // 正文、目录树和工具区的触摸照常落到下层。
   @Builder
-  LeftPaneHandle() {
-    Stack({ alignContent: Alignment.Start }) {
+  PaneHandleLayer() {
+    Row() {
+      if (!this.leftPaneCollapsed) {
+        Blank()
+          .width(LEFT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
+          .hitTestBehavior(HitTestMode.None)
+      }
+
       Button(this.leftPaneCollapsed ? '›' : '‹', { type: ButtonType.Normal })
         .width(PANE_HANDLE_WIDTH_VP)
         .height(PANE_HANDLE_HEIGHT_VP)
@@ -1105,19 +1141,17 @@ export struct WritingScreen {
         .backgroundColor($r('sys.color.comp_background_gray'))
         .borderRadius(DesignTokens.radiusPill)
         .onClick(() => { this.leftPaneCollapsed = !this.leftPaneCollapsed })
-    }
-    .width(PANE_HANDLE_WIDTH_VP)
-    .height('100%')
-    .offset({
-      x: this.leftPaneCollapsed ? 0 : LEFT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2,
-      y: 0
-    })
-  }
 
-  // Issue #825：右把手贴在“编辑区 | 工具区”分隔边缘上，收起后贴到窗口右缘。
-  @Builder
-  RightPaneHandle() {
-    Stack({ alignContent: Alignment.End }) {
+      Blank()
+        .layoutWeight(1)
+        .hitTestBehavior(HitTestMode.None)
+
+      if (!this.rightPaneCollapsed) {
+        Blank()
+          .width(RIGHT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
+          .hitTestBehavior(HitTestMode.None)
+      }
+
       Button(this.rightPaneCollapsed ? '‹' : '›', { type: ButtonType.Normal })
         .width(PANE_HANDLE_WIDTH_VP)
         .height(PANE_HANDLE_HEIGHT_VP)
@@ -1127,12 +1161,10 @@ export struct WritingScreen {
         .borderRadius(DesignTokens.radiusPill)
         .onClick(() => { this.rightPaneCollapsed = !this.rightPaneCollapsed })
     }
-    .width(PANE_HANDLE_WIDTH_VP)
+    .width('100%')
     .height('100%')
-    .offset({
-      x: this.rightPaneCollapsed ? 0 : -(RIGHT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2),
-      y: 0
-    })
+    .alignItems(VerticalAlign.Center)
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 
   // Issue #825：右侧工具区。
@@ -1202,9 +1234,10 @@ export struct WritingScreen {
           NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Writing, 0)
         },
         scroller: this.editorScroller,
-        screenRole: ScreenRole.Writing,
+        // Issue #825 复核第2项：动作数组由本页面统一解析后透传，壳层不再自己解析一遍。
+        headerActions: this.headerActions,
         // Issue #825：宽屏动作搬进右侧工具区，页头胶囊关掉，避免两个入口。
-        showActionCapsule: !this.adaptiveState.isTwoPane
+        showActionCapsule: !this.isWideWorkbench
       }) {
         this.NavContent()
       }
@@ -1236,7 +1269,7 @@ export struct WritingScreen {
             // 页头不再重复画一遍，宽屏下只有一个入口。
             Blank()
 
-            if (!this.adaptiveState.isTwoPane) {
+            if (!this.isWideWorkbench) {
               ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
                 Button({ type: ButtonType.Circle, stateEffect: true }) {
                   Image(this.getHeaderActionIcon(slot.role))

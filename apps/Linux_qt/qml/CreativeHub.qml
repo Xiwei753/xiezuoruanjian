@@ -30,8 +30,11 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
     property var layoutPlan: null
-    // 宽屏骨架：Core 只给 Workbench 语义，具体左侧一级导航由 Qt UI 层呈现。
-    readonly property bool wideShell: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
+    // Issue #825 复核第4项：一级导航放左侧还是放顶部，只看 Core 下发的
+    // primaryNavigationPlacement（LinuxQtLayoutPlanDto 从 Core 的
+    // primary_navigation_placement 直通）。Core 在 600–839vp 宽度下已经是
+    // Workbench 但仍给 Bottom，用 workspaceLayoutMode 判会把中等窗口错抬成侧栏。
+    readonly property bool wideShell: layoutPlan && layoutPlan.primaryNavigationPlacement === "Side"
 
     signal openProject(string projectId, string projectTitle)
     signal createProject()

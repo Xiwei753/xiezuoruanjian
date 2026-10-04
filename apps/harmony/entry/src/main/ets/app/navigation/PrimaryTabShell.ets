@@ -29,7 +29,7 @@ import { NavigationTransactionCoordinator } from './NavigationTransactionCoordin
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { ScreenRole, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
@@ -305,6 +305,14 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
+  // Issue #825 复核第4项：一级导航放左还是放下只看 Core 下发的
+  // primary_navigation_placement。Core 在 600–839vp（Medium）宽度下给的是 Bottom，
+  // 即使 workspaceLayoutMode 已经是 Workbench；用 sizeClass 或 Workbench 判都会把
+  // 中等窗口错抬成侧边栏。
+  private get isSidePrimaryNavigation(): boolean {
+    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side
+  }
+
   // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。
   @Builder
   WidePrimaryRail() {
@@ -401,11 +409,6 @@ export struct PrimaryTabShell {
       }
       Stack() {
         this.WideCurrentNavigation()
-
-        // Issue #825：宽屏设置悬浮在三个 tab 的当前页面之上，
-        // 背景就是打开设置前的页面。关闭只隐藏悬浮层，
-        // 下面的页面和原 NavPathStack 保持原位置。
-        SettingsOverlayHost()
       }
       .layoutWeight(1)
       .height('100%')
@@ -415,74 +418,83 @@ export struct PrimaryTabShell {
   }
 
   build() {
-    // Issue #768：API23+ 分流到 HdsPrimaryTabsApi23（使用 HdsTabs 悬浮页签）。
-    // API < 23 保持普通 Tabs + BottomTabBarStyle 实现。
-    if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-      // 平板/桌面宽屏先进入左侧导航骨架；具体视觉、收起态和设置浮层由后续议题填充。
-      this.WidePrimaryShell()
-    } else if (this.useHdsTabs) {
-      HdsPrimaryTabsApi23({
-        currentTab: $currentTab,
-        homeStack: this.homeStack,
-        starMapStack: this.starMapStack,
-        statsStack: this.statsStack,
-        safeBottomVp: this.adaptiveState.safeBottomVp,
-        currentShowPrimaryNav: this.currentShowPrimaryNav,
-        currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked
-      })
-    } else {
-      Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
-        // 作品 tab（TAB_HOME=0）
-        TabContent() {
-          Navigation(this.homeStack) {
-            // 内容由 homeStack 驱动
+    // Issue #825 复核第4点：设置浮层挂在整个壳的最上层，与一级导航放左还是放下无关。
+    // Core 在 600–839vp（Medium）已经是 Workbench 但一级导航仍给 Bottom，
+    // 那一档窗口里设置同样走悬浮层，不能因为走底部 Tabs 就没地方挂浮层。
+    // 浮层背景永远是打开设置前的那一页，关闭只隐藏浮层，
+    // 下面的页面和原 NavPathStack 保持原位置。
+    Stack() {
+      if (this.isSidePrimaryNavigation) {
+        this.WidePrimaryShell()
+      } else if (this.useHdsTabs) {
+        HdsPrimaryTabsApi23({
+            currentTab: $currentTab,
+            homeStack: this.homeStack,
+            starMapStack: this.starMapStack,
+            statsStack: this.statsStack,
+            safeBottomVp: this.adaptiveState.safeBottomVp,
+            currentShowPrimaryNav: this.currentShowPrimaryNav,
+            currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked
+          })
+      } else {
+        Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
+          // 作品 tab（TAB_HOME=0）
+          TabContent() {
+            Navigation(this.homeStack) {
+              // 内容由 homeStack 驱动
+            }
+            .navDestination(this.HomePageMap)
+            .mode(NavigationMode.Stack)
+            .hideTitleBar(true)
           }
-          .navDestination(this.HomePageMap)
-          .mode(NavigationMode.Stack)
-          .hideTitleBar(true)
-        }
-        .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_text'), '作品'))
+          .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_text'), '作品'))
 
-        // 星图 tab（TAB_STARMAP=1）
-        TabContent() {
-          Navigation(this.starMapStack) {
-            // 内容由 starMapStack 驱动
+          // 星图 tab（TAB_STARMAP=1）
+          TabContent() {
+            Navigation(this.starMapStack) {
+              // 内容由 starMapStack 驱动
+            }
+            .navDestination(this.StarMapPageMap)
+            .mode(NavigationMode.Stack)
+            .hideTitleBar(true)
           }
-          .navDestination(this.StarMapPageMap)
-          .mode(NavigationMode.Stack)
-          .hideTitleBar(true)
-        }
-        .tabBar(new BottomTabBarStyle($r('app.media.ic_star'), '星图'))
+          .tabBar(new BottomTabBarStyle($r('app.media.ic_star'), '星图'))
 
-        // 统计 tab（TAB_STATS=2）
-        TabContent() {
-          Navigation(this.statsStack) {
-            // 内容由 statsStack 驱动
+          // 统计 tab（TAB_STATS=2）
+          TabContent() {
+            Navigation(this.statsStack) {
+              // 内容由 statsStack 驱动
+            }
+            .navDestination(this.StatsPageMap)
+            .mode(NavigationMode.Stack)
+            .hideTitleBar(true)
           }
-          .navDestination(this.StatsPageMap)
-          .mode(NavigationMode.Stack)
-          .hideTitleBar(true)
+          .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
         }
-        .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
+        .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
+        // Issue #774 评论5847638284 第2项：scrollable 用交互锁而非视觉显示，
+        // 避免 @Watch 触发底栏 hide→show 动画。
+        // 再取与手势锁：手指按在主操作悬浮按钮上时，一级页签的横向滑动要停掉，
+        // 否则按住 + 号左右拖动会把整页拖走（实机复现过）。
+        .scrollable(this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked)
+        .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
+          // Issue #774 评论5847638284 第2项：用交互锁判断，而非视觉显示。
+          if (!this.currentPrimaryNavInteractive || this.primaryTabGestureLocked) {
+            return false
+          }
+          return true
+        })
+        .onChange((index: number) => {
+          this.onTabChange(index)
+        })
+        .width('100%')
+        .height('100%')
       }
-      .barHeight(this.currentShowPrimaryNav ? NORMAL_BAR_HEIGHT : HIDDEN_BAR_HEIGHT)
-      // Issue #774 评论5847638284 第2项：scrollable 用交互锁而非视觉显示，
-      // 避免 @Watch 触发底栏 hide→show 动画。
-      // 再取与手势锁：手指按在主操作悬浮按钮上时，一级页签的横向滑动要停掉，
-      // 否则按住 + 号左右拖动会把整页拖走（实机复现过）。
-      .scrollable(this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked)
-      .onContentWillChange((currentIndex: number, comingIndex: number): boolean => {
-        // Issue #774 评论5847638284 第2项：用交互锁判断，而非视觉显示。
-        if (!this.currentPrimaryNavInteractive || this.primaryTabGestureLocked) {
-          return false
-        }
-        return true
-      })
-      .onChange((index: number) => {
-        this.onTabChange(index)
-      })
-      .width('100%')
-      .height('100%')
+
+      // Issue #825 复核第4点：宽屏设置悬浮在当前页面之上（见 build 顶部注释）。
+      SettingsOverlayHost()
     }
+    .width('100%')
+    .height('100%')
   }
 }

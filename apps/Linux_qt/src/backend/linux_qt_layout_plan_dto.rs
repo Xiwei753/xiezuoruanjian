@@ -12,13 +12,19 @@
 //!   `from_contract` 接收它作为参数，由调用方从 `ScreenPolicy` 传入。
 
 use serde::Serialize;
-use writer_core::presentation::layout::{LayoutContract, ShellMode, WorkspaceLayoutMode};
+use writer_core::presentation::layout::{
+    LayoutContract, PrimaryNavigationPlacement, ShellMode, WorkspaceLayoutMode,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinuxQtLayoutPlanDto {
     pub shell_mode: String,
     pub workspace_layout_mode: String,
+    /// Issue #825 复核第4项：Core 的 `primary_navigation_placement` 直通。
+    /// QML 用它决定一级导航放左侧还是放顶部，不用 `workspace_layout_mode` 猜
+    /// （Core 在 600–839vp 宽度下已经是 Workbench，但一级导航仍给 Bottom）。
+    pub primary_navigation_placement: String,
     pub show_primary_navigation: bool,
     /// 编辑纸面最大宽度（vp）。0 表示不限制（QML 自行回退）。
     pub content_max_width_vp: f32,
@@ -65,6 +71,11 @@ impl LinuxQtLayoutPlanDto {
                 WorkspaceLayoutMode::Workbench => "Workbench".to_string(),
             },
             show_primary_navigation,
+            // Issue #825 复核第4项：Core 已经决定一级导航放哪，Qt 只做名字映射。
+            primary_navigation_placement: match contract.primary_navigation_placement {
+                PrimaryNavigationPlacement::Bottom => "Bottom".to_string(),
+                PrimaryNavigationPlacement::Side => "Side".to_string(),
+            },
             content_max_width_vp: paper_max_width_vp,
             content_padding_vp: Self::content_padding_vp(contract),
         }
@@ -105,14 +116,33 @@ mod tests {
 
         assert!(json.contains("\"shellMode\""));
         assert!(json.contains("\"workspaceLayoutMode\""));
+        assert!(json.contains("\"primaryNavigationPlacement\""));
         assert!(json.contains("\"contentMaxWidthVp\""));
         assert!(json.contains("\"contentPaddingVp\""));
         assert!(json.contains("\"showPrimaryNavigation\""));
 
         assert!(!json.contains("\"shell_mode\""));
         assert!(!json.contains("\"content_max_width_vp\""));
+        assert!(!json.contains("\"primary_navigation_placement\""));
         assert!(!json.contains("\"navigationPresentation\""));
         assert!(!json.contains("\"pagePaddingDp\""));
+    }
+
+    #[test]
+    fn test_primary_navigation_placement_follows_core_contract() {
+        // Issue #825 复核第4项：600–839vp（Medium）Core 给 Bottom —— 即使已经是 Workbench，
+        // QML 也不能因此把一级导航抬成左侧栏。
+        let medium = LinuxQtLayoutPlanDto::from_contract(&contract_for(700.0, 600.0), 700.0, true);
+        assert_eq!(medium.workspace_layout_mode, "Workbench");
+        assert_eq!(medium.primary_navigation_placement, "Bottom");
+
+        // ≥840vp（Wide）起 Core 给 Side。
+        let wide = LinuxQtLayoutPlanDto::from_contract(&contract_for(1000.0, 800.0), 1000.0, true);
+        assert_eq!(wide.primary_navigation_placement, "Side");
+
+        let large = LinuxQtLayoutPlanDto::from_contract(&contract_for(1400.0, 900.0), 1400.0, true);
+        assert_eq!(large.shell_mode, "ThreePane");
+        assert_eq!(large.primary_navigation_placement, "Side");
     }
 
     #[test]
