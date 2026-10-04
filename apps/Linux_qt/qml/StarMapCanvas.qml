@@ -9,8 +9,10 @@
 //   panX / panY / zoomLevel 只在这里存在，WheelHandler / PinchHandler /
 //   触屏 +/- 按钮也只在这里。鼠标停在任意深度的节点、子星图、孙星图上，
 //   滚轮和捏合都调同一个 zoomAround()，只改根 zoomLevel/panX/panY。
-//   子星图"看起来更大/更小"是纯视觉 LOD，由 StarMapEmbed.visualScale
-//   根据父层传来的 globalZoom/depth/屏幕投影尺寸决定，绝不反写全局相机。
+//   子星图"看起来更大/更小"是 Deep Zoom 显示档位：每层内容做 local fit，
+//   ownerEffectiveScale = globalZoom × 祖先 local fit，再用投影覆盖率决定
+//   子内容是完整交互 / 轻量 preview / 只留外壳。档位绝不反写全局相机，
+//   也不改 Embed 的 world 几何（见 StarMapEmbed / docs/starmap_viewport.md）。
 //
 //   递归的是"内容"不是"视口"：根层内容由 StarMapSceneContent 渲染，
 //   子星图内容在 Embed 内部懒加载下一层 StarMapSceneContent。
@@ -74,6 +76,14 @@ Item {
     property real panY: 0
     property real zoomLevel: 1.0
 
+    // Issue #822 评论 5972215936: 相机范围只保留数值安全边界，不设产品硬天花板。
+    // 与 docs/starmap_viewport.md 的 CAMERA_SCALE_MIN/MAX、ZOOM_FACTOR 同一口径：
+    // 乘法步进保证各档手感一致，Deep Zoom 的 coverage 档位由用户能到的真实比例决定
+    // （0.35~2.5 的旧硬上限会让 1080 高窗口里的子星图永远停在 preview）。
+    readonly property real _cameraScaleMin: 1e-4
+    readonly property real _cameraScaleMax: 1e5
+    readonly property real _zoomFactor: 1.2
+
     function applyPan(nextX, nextY) {
         panX = nextX
         panY = nextY
@@ -88,8 +98,9 @@ Item {
 
     // Issue #822: 滚轮和捏合共用同一个缩放入口，只改根 zoomLevel/panX/panY。
     // 鼠标停在节点/子星图/孙星图上都不影响：整棵树一起缩放。
+    // 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），不再有产品缩放上限。
     function zoomAround(screenX, screenY, nextZoom) {
-        var target = Math.max(0.35, Math.min(2.5, nextZoom))
+        var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, nextZoom))
         var oldZoom = zoomLevel
         if (target === oldZoom)
             return
@@ -130,6 +141,14 @@ Item {
         var fj = fields ? JSON.stringify(fields) : ""
         starmapBackendRef.record_interaction(event, scenePathKey === undefined ? "root" : scenePathKey,
                                               starmapId, itemKind, itemId, fj)
+    }
+
+    // Issue #822 评论 5977325046：双指缩放期间，整棵树的触屏单指业务全部让位。
+    // PinchHandler 的 exclusive grab 和共享状态机的 pointerMode 是两层状态：
+    // passive grab 在缩放期间仍会把事件送到单指 TapHandler / DragHandler，
+    // 所以两边都要看，晚到的单指回调一律忽略。
+    function pinchOwnsTouchGesture() {
+        return canvasPinch.active || interaction.pointerMode === "pinch"
     }
 
     // Issue #822: 统一命中判断入口 —— 递归命中测试，从根层内容开始往下钻。
@@ -227,35 +246,41 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // 根层内容：整棵递归树的入口。
-    // 相机作用在这一个 Item 上（x/y/scale），子层内容全部在它的局部坐标里。
+    // 相机层 + 根层内容：整棵递归树的入口。
+    // 相机平移/缩放只存在于 cameraLayer 这一张 Item 上（x/y/scale），
+    // rootContent 只用 anchors.fill 占满相机层，绝不自己再拿 x/y 当平移 ——
+    // 一个 Item 上不能同时有 anchors 和相机两套几何来源。
     // ---------------------------------------------------------------------------
-    StarMapSceneContent {
-        id: rootContent
-        anchors.fill: parent
-        dt: canvasArea.dt
-        rootStarmapId: canvasArea.starmapId
-        pathSegments: []
-        // Issue #822: 根层显式传 "root"，不再由默认值冒名顶替。
-        scenePathKey: "root"
-        starmapBackendRef: canvasArea.starmapBackendRef
-        selectionController: canvasArea.selectionController
-        interactionController: canvasArea.sharedInteraction
-        globalZoom: canvasArea.zoomLevel
-        depth: 0
-        rootContent: rootContent
-        viewportRect: canvasArea.viewportSceneRect
-        menuHost: canvasArea
-
-        // 相机变换只发生在这里这一张 Item 上。
+    Item {
+        id: cameraLayer
         x: canvasArea.panX
         y: canvasArea.panY
+        width: canvasArea.width
+        height: canvasArea.height
         scale: canvasArea.zoomLevel
         transformOrigin: Item.TopLeft
 
-        onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
-        onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
-        onSelectionCleared: canvasArea.selectionCleared()
+        StarMapSceneContent {
+            id: rootContent
+            anchors.fill: parent
+            dt: canvasArea.dt
+            rootStarmapId: canvasArea.starmapId
+            pathSegments: []
+            // Issue #822: 根层显式传 "root"，不再由默认值冒名顶替。
+            scenePathKey: "root"
+            starmapBackendRef: canvasArea.starmapBackendRef
+            selectionController: canvasArea.selectionController
+            interactionController: canvasArea.sharedInteraction
+            globalZoom: canvasArea.zoomLevel
+            depth: 0
+            rootContent: rootContent
+            rootViewportRect: canvasArea.viewportSceneRect
+            menuHost: canvasArea
+
+            onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
+            onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
+            onSelectionCleared: canvasArea.selectionCleared()
+        }
     }
 
     // Issue #822: 整棵递归树共享的选中状态控制器，由 Workspace 创建并传入。
@@ -275,7 +300,17 @@ Item {
                 ctx.clearRect(0, 0, width, height)
                 ctx.fillStyle = _textMuted
 
-                var gridSpacing = 50 * zoomLevel
+                // 网格自身做 LOD：相机放开到 1e-4 后，50 * zoomLevel 会掉到亚像素，
+                // 双重循环按 1/zoom² 爆炸。按 5 倍档抬 world 间距，屏幕上实际画出来的
+                // 间距永远 >= 16px，循环次数只跟屏幕尺寸有关。
+                if (!(zoomLevel > 0))
+                    return
+                var worldSpacing = 50
+                var gridSpacing = worldSpacing * zoomLevel
+                while (gridSpacing < 16) {
+                    worldSpacing *= 5
+                    gridSpacing = worldSpacing * zoomLevel
+                }
                 var startX = (panX % gridSpacing)
                 var startY = (panY % gridSpacing)
 
@@ -344,7 +379,15 @@ Item {
         id: bgTouchLeftTap
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
+        // Issue #822 评论 5977714294：Pinch 激活期间直接禁用，让 passive grab 的
+        // tap 识别当场取消。回调里的 guard 只是双保险 —— 只靠它挡不住
+        // "Pinch 先变 inactive → 状态机复位 → 同一个 release 再判 singleTapped"
+        // 这个时序（那时两个条件都已经回到 false）。
+        enabled: !canvasArea.pinchOwnsTouchGesture()
         onSingleTapped: function(eventPoint) {
+            // pinch 接管期间拒绝迟到的单指点选。
+            if (canvasArea.pinchOwnsTouchGesture())
+                return
             _touchInputActive = true
             var hit = hitTargetAtScreen(eventPoint.position.x, eventPoint.position.y)
             if (!hit)
@@ -366,6 +409,9 @@ Item {
         // TapHandler.longPressed 信号无参数，用 point.position 拿当前点。
         // 长按前先递归判命中：命中对象的长按归 delegate，这里不弹背景菜单。
         onLongPressed: {
+            // pinch 接管期间拒绝迟到的空白长按菜单。
+            if (canvasArea.pinchOwnsTouchGesture())
+                return
             _touchInputActive = true
             var px = bgTouchLeftTap.point.position.x
             var py = bgTouchLeftTap.point.position.y
@@ -422,6 +468,12 @@ Item {
                     "sceneY": sy
                 }, hit.scenePathKey)
                 edgeContextMenu.popup(px, py)
+            } else if (hit.kind === "childContent") {
+                // preview / shell / 未加载的子星图内部当前不可编辑：
+                // 保持无业务菜单，绝不弹父层的"新建"菜单——那会在看起来点了
+                // 子星图内部的地方往父图创建东西。放大到 interactive 后，
+                // 递归命中自然会给出子层自己的 empty/node/embed。
+                return
             } else {
                 openBlankMenu(sx, sy, hit, px, py)
             }
@@ -449,6 +501,11 @@ Item {
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
+            // Issue #822 评论 5977278030 / 5977325046：双指缩放优先。pinch 期间
+            // 单指拖动不再驱动任何业务状态，也不再 pan（pinch 自己负责相机）。
+            // 先更新 lastTx/lastTy 再返回，缩放结束后不会攒出一个大 delta。
+            if (canvasArea.pinchOwnsTouchGesture())
+                return
             var mode = interaction.pointerMode
             if (mode === "connect" || mode === "contextPending" || mode === "move") {
                 // 归属层自己换算 scene→局部坐标，这里只交原始 scene 位移。
@@ -467,32 +524,33 @@ Item {
 
     // Issue #822: 捏合缩放只有这一处，作用在全局相机上。
     // 不再有"捏合归某个子星图"的判断：整棵树只有一个视口。
+    // 捏合比例相对手势起点，统一交给 zoomAround 做数值夹取 + 以中心缩放，
+    // 不再自己维护第二套 0.35/2.5 夹取和 pan 公式。
+    //
+    // Issue #822 评论 5977278030：双指缩放优先。PinchHandler 的 grab 和我们自己的
+    // interaction.pointerMode 是两层状态，Qt 只负责前者——激活时先把单指留下的
+    // 瞬时现场（长按计时、connect 预览、move 目标）整体清掉再进 pinch，
+    // 结束时再整体复位，长按/连线绝不会跨过缩放继续执行。
     PinchHandler {
         id: canvasPinch
         acceptedDevices: PointerDevice.TouchScreen
         target: null
         property real _pinchStartZoom: 1.0
-        property real _pinchStartPanX: 0
-        property real _pinchStartPanY: 0
         onActiveChanged: {
             if (active) {
+                canvasArea.resetInteraction()
+                canvasArea.hideTouchPreview()
+                interaction.beginPinch()
                 _pinchStartZoom = zoomLevel
-                _pinchStartPanX = panX
-                _pinchStartPanY = panY
                 _touchInputActive = true
+            } else {
+                interaction.endPinch()
             }
         }
         onActiveScaleChanged: {
-            var rawZoom = _pinchStartZoom * activeScale
-            var target = Math.max(0.35, Math.min(2.5, rawZoom))
             var cx = centroid.position.x
             var cy = centroid.position.y
-            if (target === zoomLevel)
-                return
-            zoomLevel = target
-            // 以手势中心缩放
-            applyPan(cx - (cx - _pinchStartPanX) * (zoomLevel / _pinchStartZoom),
-                     cy - (cy - _pinchStartPanY) * (zoomLevel / _pinchStartZoom))
+            zoomAround(cx, cy, _pinchStartZoom * activeScale)
         }
     }
 
@@ -504,14 +562,6 @@ Item {
         onActiveChanged: {
             if (active)
                 canvasArea.logPointerPress("left", "mouse", point)
-        }
-    }
-    PointHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        acceptedButtons: Qt.MiddleButton
-        onActiveChanged: {
-            if (active)
-                canvasArea.logPointerPress("middle", "mouse", point)
         }
     }
     PointHandler {
@@ -535,13 +585,15 @@ Item {
     }
 
     // Issue #817 评论 5949494799: 背景 pan 拖动改为 press-time 手势归属 + 拖动阈值。
-    // 按下时先用递归命中判断：node/embed/childContent 时 mouse.accepted = false
-    // 让事件穿透给对应对象或子层内容；只有 empty/edge 才可能平移画布。
-    // 中键直接平移。
+    // 按下时先用递归命中判断：只有 node/embed 才 mouse.accepted = false
+    // 让事件穿透给对应对象；childContent（无交互 delegate）与 empty/edge 一样
+    // 走全局 pan，不能在小尺寸子图内部留死区。
+    // Issue #822 评论 5977879544：鼠标入口只有既定那套（左键单击选中、左键拖空白
+    // pan、左键长按节点/子星图连线、右键菜单、滚轮缩放），中键历史 pan 分支已删除。
     MouseArea {
         id: bgDragArea
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+        acceptedButtons: Qt.LeftButton
         hoverEnabled: true
 
         property string pressHitKind: ""
@@ -565,40 +617,20 @@ Item {
             _touchInputActive = false
             var hit = hitTargetAtScreen(mouse.x, mouse.y)
 
-            if (mouse.button === Qt.LeftButton) {
-                // 命中 node/embed/childContent 时不接受事件，
-                // 让对应对象/子层内容处理；本层不进入 pan。
-                if (hit && (hit.kind === "node" || hit.kind === "embed" || hit.kind === "childContent")) {
-                    mouse.accepted = false
-                    return
-                }
-                pressHitKind = hit ? hit.kind : "empty"
-                pressX = mouse.x
-                pressY = mouse.y
-                lastX = mouse.x
-                lastY = mouse.y
-                panStarted = false
+            // 鼠标只有一个手势入口（左键，见 acceptedButtons）：
+            // 只有真正可交互的对象（node/embed）才放弃事件，让 delegate 处理。
+            // childContent（子内容没加载 / preview / shell）没有可交互 delegate，
+            // 继续走全局 pan：小尺寸子图不能拖动就是死区，和"只有一台全局相机"冲突。
+            if (hit && (hit.kind === "node" || hit.kind === "embed")) {
+                mouse.accepted = false
                 return
             }
-
-            // 中键直接进入 pan（不依赖长按/阈值）
-            if (mouse.button === Qt.MiddleButton) {
-                if (!interaction.beginPan())
-                    return
-
-                pressHitKind = "empty"
-                panStarted = true
-                lastX = mouse.x
-                lastY = mouse.y
-                _panBeginX = panX
-                _panBeginY = panY
-                logInteraction("pan_begin", "empty", "", {
-                    "startPanX": panX,
-                    "startPanY": panY,
-                    "button": "middle",
-                    "device": "mouse"
-                })
-            }
+            pressHitKind = "empty"
+            pressX = mouse.x
+            pressY = mouse.y
+            lastX = mouse.x
+            lastY = mouse.y
+            panStarted = false
         }
 
         onPositionChanged: function(mouse) {
@@ -628,7 +660,7 @@ Item {
                 return
             }
 
-            // panStarted（中键直接 true，或左键已超阈值）：继续 pan
+            // panStarted（左键已超阈值）：继续 pan
             if (panStarted && interaction.pointerMode === "pan") {
                 var dx = mouse.x - lastX
                 var dy = mouse.y - lastY
@@ -683,7 +715,9 @@ Item {
                 return
 
             var oldZoom = zoomLevel
-            var newZoom = Math.max(0.35, Math.min(2.5, oldZoom + delta * 0.1))
+            // 乘法步进：每格滚轮 ×/÷ _zoomFactor，各档手感一致、不设产品上限，
+            // 只由 zoomAround 夹数值安全范围（docs/starmap_viewport.md）。
+            var newZoom = oldZoom * Math.pow(_zoomFactor, delta)
             if (newZoom === oldZoom)
                 return
 
@@ -720,6 +754,8 @@ Item {
             function onConnectMouseYChanged() { connectPreview.requestPaint() }
             function onConnectFromSceneXChanged() { connectPreview.requestPaint() }
             function onConnectFromSceneYChanged() { connectPreview.requestPaint() }
+            function onConnectPreviewEndXChanged() { connectPreview.requestPaint() }
+            function onConnectPreviewEndYChanged() { connectPreview.requestPaint() }
             function onPointerModeChanged() { connectPreview.requestPaint() }
         }
 
@@ -734,10 +770,12 @@ Item {
             ctx.translate(panX, panY)
             ctx.scale(zoomLevel, zoomLevel)
             ctx.beginPath()
+            // 预览起点/终点都取"与正式边同源"的可见端点（悬停合法目标时贴边界）。
             ctx.moveTo(interaction.connectFromSceneX, interaction.connectFromSceneY)
-            ctx.lineTo(interaction.connectMouseX, interaction.connectMouseY)
+            ctx.lineTo(interaction.connectPreviewEndX, interaction.connectPreviewEndY)
             ctx.strokeStyle = _accent
-            ctx.lineWidth = 2
+            // 线宽与命中阈值共用同一份 world 线宽常量。
+            ctx.lineWidth = rootContent ? rootContent._edgeLineWorldWidth : 2
             ctx.stroke()
             ctx.restore()
         }
@@ -756,13 +794,16 @@ Item {
         AppButton {
             dt: canvasArea.dt
             text: qsTr("+")
-            onClicked: zoomAround(width / 2, height / 2, zoomLevel + 0.15)
+            // 缩放锚点是画布中心：按钮自己的 width/height 不是画布尺寸。
+            onClicked: zoomAround(canvasArea.width / 2, canvasArea.height / 2,
+                                  zoomLevel * _zoomFactor)
         }
 
         AppButton {
             dt: canvasArea.dt
             text: qsTr("−")
-            onClicked: zoomAround(width / 2, height / 2, zoomLevel - 0.15)
+            onClicked: zoomAround(canvasArea.width / 2, canvasArea.height / 2,
+                                  zoomLevel / _zoomFactor)
         }
     }
 

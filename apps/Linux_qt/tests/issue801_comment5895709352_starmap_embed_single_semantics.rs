@@ -183,15 +183,17 @@ fn no_starmap_drill_down_entry_remains() {
 #[test]
 fn edge_layout_still_covers_normalized_legacy_portal_nodes() {
     let src = strip_line_comments(&read_src(GRAPH_CONTROLLER));
+    // 评论 5977278030：边锚点 layout 的拼装收敛到 nodeLayoutEntries，
+    // computeEdgeRenders 与候选边预览共用同一份（旧 portal 归一条目也只在这里补）。
     let compute = slice_between(
         &src,
-        "function computeEdgeRenders(moveOverride)",
-        "function hitTestEdge",
+        "function nodeLayoutEntries(moveOverride)",
+        "function embedLayoutEntries(moveOverride)",
     );
 
     assert!(
         compute.contains("if (!pn.portal || !pn.portal.destinationStarmapId) continue"),
-        "computeEdgeRenders 必须识别归一的旧 portal 节点，实际窗口:\n{compute}"
+        "nodeLayoutEntries 必须识别归一的旧 portal 节点，实际窗口:\n{compute}"
     );
     assert!(
         compute.contains("getEmbed(\"legacy-portal:\" + pn.id)"),
@@ -200,6 +202,16 @@ fn edge_layout_still_covers_normalized_legacy_portal_nodes() {
     assert!(
         compute.contains("nodePos.push({ id: pn.id"),
         "旧 portal 节点几何必须补进边锚点 layout，实际窗口:\n{compute}"
+    );
+    let renders = slice_between(
+        &src,
+        "function computeEdgeRenders(moveOverride)",
+        "function computeProspectiveEdgeRender(",
+    );
+    assert!(
+        renders.contains("nodeLayoutEntries(moveOverride)")
+            && renders.contains("embedLayoutEntries(moveOverride)"),
+        "computeEdgeRenders 必须复用 nodeLayoutEntries/embedLayoutEntries，实际窗口:\n{renders}"
     );
 }
 

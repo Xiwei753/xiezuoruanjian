@@ -40,13 +40,14 @@ QtObject {
     //   Canvas 在开始交互时设置此属性，用于区分鼠标和触屏行为
     property string pointerSource: ""
 
-    // 交互状态机：idle / pressPending / pan / connect / move / contextPending
+    // 交互状态机：idle / pressPending / pan / connect / move / contextPending / pinch
     //   idle           — 无活跃手势
     //   pressPending   — 已按下但还没决定是 move 还是 connect（按下仲裁中）
-    //   pan            — 背景拖动或中键拖动，平移全局相机
+    //   pan            — 左键拖动空白/低 LOD 子内容区（超拖动阈值后），平移全局相机
     //   connect        — 长按节点/Embed 后拖动，拉线预览
     //   move           — 超过拖动阈值后移动节点/Embed
     //   contextPending — 触屏长按后等待：不移动弹菜单，移动超阈值转 connect
+    //   pinch          — 双指缩放接管：单指业务状态已全部清空，缩放期间不再有业务
     property string pointerMode: "idle"
 
     // Issue #822：拖动阈值与长按阈值。
@@ -55,7 +56,8 @@ QtObject {
     readonly property real dragThreshold: 8.0
     property real longPressInterval: 800
 
-    // 触屏长按后移动超过此阈值才从 contextPending 转 connect
+    // 触屏长按后移动超过此阈值才从 contextPending 转 connect。
+    // 单位是原始 Qt scene 像素，和 dragThreshold 同一口径。
     readonly property real moveThreshold: 10.0
 
     // ── pressPending：按下归属（完整 targetPath + 归属层 pathKey）──
@@ -66,6 +68,11 @@ QtObject {
     property var pressTargetPath: null
     property real pressSceneX: 0
     property real pressSceneY: 0
+    // 按下后累计的屏幕位移分量（原始 Qt scene 像素，不做任何 world/fit 换算）。
+    // pressDragDistance 是"离按下点的直线距离" = |(pressDragX, pressDragY)|；
+    // 不是每次增量的长度累加 —— 连续两次同方向 5px 必须算 10px 而不是 ~7px。
+    property real pressDragX: 0
+    property real pressDragY: 0
     property real pressDragDistance: 0
 
     // 长按计时开关：Timer 必须挂在 Item 下（QtObject 没有默认属性），
@@ -91,6 +98,11 @@ QtObject {
     property real connectFromSceneY: 0
     property real connectMouseX: 0
     property real connectMouseY: 0
+    // 预览线实际画出来的端点（scene 坐标）：悬停在合法 target 上时贴到目标的
+    // 宿主可见边界，松手时正式边与预览不再跳变。connectMouseX/Y 保持原始鼠标
+    // 位置，松手命中仍用它。没有合法 target 时等于 connectMouse。
+    property real connectPreviewEndX: 0
+    property real connectPreviewEndY: 0
 
     // move 模式目标（归属层局部坐标）
     property string moveScenePathKey: ""
@@ -112,17 +124,22 @@ QtObject {
         pressTargetPath = targetPath
         pressSceneX = sceneX
         pressSceneY = sceneY
+        pressDragX = 0
+        pressDragY = 0
         pressDragDistance = 0
         pressTimerActive = true
         return true
     }
 
-    // 累计按下后的位移（scene 像素）。是否超阈值由归属层判断后调用提升。
+    // 累计按下后的位移。dx/dy 必须是原始 Qt scene 像素：阈值 8px 是屏幕口径，
+    // 换算成 world 单位后再判断会随全局缩放放大/缩小。
+    // 是否超阈值由归属层判断后调用提升。
     function noteDragDelta(dx, dy) {
-        if (pointerMode !== "pressPending")
+        if (pointerMode !== "pressPending" && pointerMode !== "contextPending")
             return
-        pressDragDistance = Math.sqrt(
-            pressDragDistance * pressDragDistance + dx * dx + dy * dy)
+        pressDragX += dx
+        pressDragY += dy
+        pressDragDistance = Math.hypot(pressDragX, pressDragY)
     }
 
     // pressPending -> move：先超过拖动阈值。
@@ -156,6 +173,8 @@ QtObject {
         connectFromSceneY = centerSceneY
         connectMouseX = centerSceneX
         connectMouseY = centerSceneY
+        connectPreviewEndX = centerSceneX
+        connectPreviewEndY = centerSceneY
         return true
     }
 
@@ -169,6 +188,8 @@ QtObject {
         pressKind = ""
         pressId = ""
         pressTargetPath = null
+        pressDragX = 0
+        pressDragY = 0
         pressDragDistance = 0
     }
 
@@ -186,6 +207,22 @@ QtObject {
     }
     function endPan() { if (pointerMode === "pan") pointerMode = "idle" }
 
+    // ── pinch（双指缩放优先）──
+    // Issue #822 评论 5977278030：passive grab 在别的 handler 拿到 exclusive grab
+    // 之后仍会收到移动和 release，所以只靠 Qt 的 grab 层级清不掉我们自己的
+    // pointerMode —— 长按/连线状态会跨过缩放继续执行。
+    // 双指一旦激活就整体接管：先清单指留下的瞬时现场再进 pinch；
+    // 缩放结束后整体复位。releaseOwnerGesture() 对 pinch 不做任何事。
+    function beginPinch() {
+        reset()
+        pointerMode = "pinch"
+        pointerSource = "touch"
+    }
+    function endPinch() {
+        if (pointerMode === "pinch")
+            reset()
+    }
+
     // ── connect ──
     // connect 阶段的移动只更新全局预览线终点（scene 坐标）。
     function updateConnect(sx, sy) {
@@ -202,6 +239,8 @@ QtObject {
         connectFromPath = null
         connectFromScenePathKey = ""
         connectFromNodeId = ""
+        connectPreviewEndX = 0
+        connectPreviewEndY = 0
     }
 
     // ── contextPending（触屏长按预备态）──
@@ -220,6 +259,11 @@ QtObject {
         connectFromSceneY = centerSceneY
         connectMouseX = centerSceneX
         connectMouseY = centerSceneY
+        connectPreviewEndX = centerSceneX
+        connectPreviewEndY = centerSceneY
+        pressDragX = 0
+        pressDragY = 0
+        pressDragDistance = 0
         return true
     }
 
@@ -244,6 +288,9 @@ QtObject {
         connectFromPath = null
         connectFromScenePathKey = ""
         connectFromNodeId = ""
+        pressDragX = 0
+        pressDragY = 0
+        pressDragDistance = 0
         return { kind: kind, id: id }
     }
 
@@ -298,12 +345,16 @@ QtObject {
         pressKind = ""
         pressId = ""
         pressTargetPath = null
+        pressDragX = 0
+        pressDragY = 0
         pressDragDistance = 0
         connectFromKind = ""
         connectFromId = ""
         connectFromPath = null
         connectFromScenePathKey = ""
         connectFromNodeId = ""
+        connectPreviewEndX = 0
+        connectPreviewEndY = 0
         moveScenePathKey = ""
         pressedNodeId = ""
         pressedEmbedId = ""

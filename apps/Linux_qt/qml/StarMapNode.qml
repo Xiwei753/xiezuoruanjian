@@ -51,6 +51,11 @@ Item {
     // Issue #822：内联编辑状态。编辑中节点手势全部让位给文本输入。
     property bool editing: false
 
+    // Issue #822 评论 5977714294：Pinch 接管期间由归属层直接禁用触屏 TapHandler。
+    // TapHandler 是 passive grab，回调发生时 pinch 可能已结束；只有在 pinch 激活
+    // 期间把 enabled 置 false，才能让这一轮 tap 识别当场取消，单/双/长按一起失效。
+    property bool touchGestureBlocked: false
+
     // Issue #793 评论 5885482530: wobble 改纯视觉偏移，不影响命中框。
     // 用 index 错开 phase，避免所有节点同步晃
     property int wobbleIndex: 0
@@ -112,13 +117,9 @@ Item {
             root.titleCommitted(next)
     }
 
-    // DragHandler 的 activeTranslation 是 Qt scene 坐标增量，
-    // 换算成同一坐标系的增量再上抛，归属层统一做 scene→局部换算。
-    function sceneDelta(dx, dy) {
-        var origin = root.mapFromItem(null, 0, 0)
-        var point = root.mapFromItem(null, dx, dy)
-        return { x: point.x - origin.x, y: point.y - origin.y }
-    }
+    // 注意：DragHandler.activeTranslation 是 Qt scene 坐标增量。
+    // 这里只上抛原始增量，Qt scene → 本层 local 的换算由归属层
+    // StarMapSceneContent 统一做一次，delegate 不再各自换算。
 
     // ---------------------------------------------------------------------------
     // 内部视觉卡片：只有它承载 transform 偏移，根 Item 几何保持稳定
@@ -220,8 +221,10 @@ Item {
             if (pressed) {
                 // Issue #801 评论 5894981235: 鼠标按下即通知归属层切回鼠标模式。
                 root.mouseInteracted()
-                root.itemPressed(nodeMouseTap.point.pressPosition.x,
-                                  nodeMouseTap.point.pressPosition.y)
+                // 传真正的 QQuickWindow 坐标：pressPosition 是相对 Handler parent
+                // 的局部坐标，scenePressPosition 才是 scene 坐标。
+                root.itemPressed(nodeMouseTap.point.scenePressPosition.x,
+                                  nodeMouseTap.point.scenePressPosition.y)
             }
         }
 
@@ -233,7 +236,7 @@ Item {
         id: nodeTouchTap
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
-        enabled: !root.editing
+        enabled: !root.editing && !root.touchGestureBlocked
 
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()
@@ -263,11 +266,11 @@ Item {
         }
 
         onActiveTranslationChanged: {
-            var d = root.sceneDelta(activeTranslation.x - lastTx,
-                                    activeTranslation.y - lastTy)
+            var dx = activeTranslation.x - lastTx
+            var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
-            root.moveDelta(d.x, d.y)
+            root.moveDelta(dx, dy)
         }
     }
 

@@ -11,14 +11,17 @@
 //!
 //! 锁住的结构：
 //! 1. `applyPan` 不再用 `Math.min(0, ...)` clamp — pan 两个方向都不设边界。
-//! 2. 旧的 `container`（width/height = canvas/zoomLevel）不再存在；相机只作用在
-//!    根层 `StarMapSceneContent` 一张 Item 上，`anchors.fill: parent` 恒定覆盖视口。
+//! 2. 旧的 `container`（width/height = canvas/zoomLevel）不再存在；相机
+//!    x/y/scale 全部集中在 `cameraLayer` 一张 Item 上，根层内容只用
+//!    `anchors.fill` 占满它，不再让 anchors 和相机两套几何来源抢同一个 Item。
 //! 3. `worldToScreenX/Y` 和 `screenToWorldX/Y` 统一坐标换算入口存在。
 //! 4. Node/Embed delegate 画在本层局部坐标里（相机在祖先 Content 上），
 //!    不再逐个 delegate 做 `worldToScreen` 换算。
 //! 5. transient move 起点用模型里的世界坐标（nodeData.x/y、embedData.x/y），
 //!    且只经共享状态机的 `beginPress` / `pressPendingToMove` 提升。
-//! 6. Node/Embed 不再用 `root.parent.scale` 猜缩放，改用 `mapFromItem` 差分。
+//! 6. Node/Embed 的 DragHandler 只上抛原始 `activeTranslation` 增量
+//!    （Qt scene 坐标），Qt scene → 本层 local 的换算只在
+//!    `StarMapSceneContent.qtSceneDeltaToLocal` 做一次，不再双重换算。
 //! 7. 背景交互统一走 `screenToWorld*`，不再各处分散手写 `(x - panX) / zoomLevel`。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -45,6 +48,18 @@ fn strip_line_comments(source: &str) -> String {
         .join("\n")
 }
 
+/// 取 `start`（含）到 `end`（不含）之间的源码片段；缺任一 marker 直接失败。
+fn slice_between(src: &str, start: &str, end: &str) -> String {
+    let s = src
+        .find(start)
+        .unwrap_or_else(|| panic!("missing marker `{start}`"));
+    let e = src[s..]
+        .find(end)
+        .map(|i| s + i)
+        .unwrap_or_else(|| panic!("missing marker `{end}`"));
+    src[s..e].to_string()
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 1. applyPan 不再 clamp
 // ─────────────────────────────────────────────────────────────────────────
@@ -69,7 +84,7 @@ fn canvas_apply_pan_does_not_clamp_with_math_min() {
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn canvas_mounts_camera_on_root_content_item_only() {
+fn canvas_mounts_camera_on_camera_layer_only() {
     let src = strip_line_comments(&read_src(CANVAS));
 
     // 旧的 container（x: panX, y: panY, scale: zoomLevel, width/height = canvas/zoomLevel）
@@ -79,19 +94,34 @@ fn canvas_mounts_camera_on_root_content_item_only() {
         "不得再使用旧的 container（x: panX, y: panY, scale: zoomLevel, width/height=canvas/zoomLevel）"
     );
 
-    // 相机 transform 挂在根层 StarMapSceneContent 上，且只有这一处。
+    // 相机只有一套几何真相：x/y/scale 全在 cameraLayer 上，且只有这一处。
     assert!(
-        src.contains("x: canvasArea.panX")
+        src.contains("id: cameraLayer")
+            && src.contains("x: canvasArea.panX")
             && src.contains("y: canvasArea.panY")
             && src.contains("scale: canvasArea.zoomLevel")
             && src.contains("transformOrigin: Item.TopLeft"),
-        "相机变换必须作用在根层 StarMapSceneContent 这张 Item 上"
+        "相机变换必须集中在 cameraLayer 这一张 Item 上"
     );
     assert_eq!(
         count_occurrences(&src, "scale: canvasArea.zoomLevel"),
         1,
         "整棵递归树只能有一处相机 scale：子层不得再建第二个带相机的 Canvas"
     );
+
+    // 根内容只用 anchors.fill 占满相机层，不能自己再拿 x/y 当相机平移：
+    // 一个 Item 上不允许 anchors 和相机两套几何来源同时控制位置。
+    let root_block = slice_between(&src, "id: rootContent", "property var selectionController: null");
+    assert!(
+        root_block.contains("anchors.fill: parent"),
+        "根层内容必须 anchors.fill 占满相机层，实际片段:\n{root_block}"
+    );
+    for forbidden in ["x: canvasArea.panX", "y: canvasArea.panY", "scale: canvasArea.zoomLevel"] {
+        assert!(
+            !root_block.contains(forbidden),
+            "根层内容不得再自己持有 {forbidden}，实际片段:\n{root_block}"
+        );
+    }
 
     // delegate 已经搬去内容层，根 Canvas 不再自己铺一层 sceneLayer。
     assert!(
@@ -197,56 +227,60 @@ fn content_begin_move_uses_model_world_coordinates() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 6. Node/Embed 不再用 root.parent.scale 猜缩放
+// 6. Node/Embed 只上抛原始 Qt scene 增量，换算只在 Content 做一次
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Node/Embed 都不得再用 `root.parent.scale` 反推缩放：根层 Content 自身的
-/// `scale` 就是全局 zoom，再乘一次会双重缩放。位移换算改用 `mapFromItem`
-/// 差分，让 Qt 自己算完祖先链上的累积变换。
+/// Node/Embed 都不再自己维护 `sceneDelta()` 矩阵：DragHandler 的
+/// `activeTranslation` 是 Qt scene 坐标增量，delegate 原样上抛，
+/// 由 `StarMapSceneContent.qtSceneDeltaToLocal` 统一换算一次。
+/// 旧实现 delegate 先换算一次、归属层又按"原始 Qt scene delta"换算第二次，
+/// 全局 zoom=2 时拖动会只剩 1/4。
 #[test]
-fn node_does_not_use_parent_scale() {
+fn node_does_not_self_convert_drag_delta() {
     let src = read_src(NODE);
+    let stripped = strip_line_comments(&src);
     assert!(
-        !src.contains("root.parent.scale"),
-        "StarMapNode 不得再用 root.parent.scale 猜缩放（会与根层 Content 的 scale 双重缩放）"
+        !stripped.contains("root.parent.scale"),
+        "StarMapNode 不得再用 root.parent.scale 猜缩放（会与相机双重缩放）"
     );
     assert!(
-        !src.contains("canvasZoomLevel"),
+        !stripped.contains("canvasZoomLevel"),
         "StarMapNode 不得再保留 canvasZoomLevel：全局缩放已由祖先 transform 承担"
     );
-    let scene_delta = function_window(&src, "function sceneDelta(", 400);
     assert!(
-        scene_delta.contains("root.mapFromItem(null, 0, 0)")
-            && scene_delta.contains("root.mapFromItem(null, dx, dy)")
-            && scene_delta.contains("point.x - origin.x"),
-        "Node 的位移换算必须用 mapFromItem 差分（mapFromItem 只能映射点，\
-         用自身原点做差顺带抵消 wobble 视觉偏移），实际窗口:\n{scene_delta}"
+        !stripped.contains("function sceneDelta(") && !stripped.contains("mapFromItem("),
+        "Node 不得再自己换算位移：Qt scene → 本层 local 只允许在归属层做一次"
+    );
+    let drag = function_window(&stripped, "onActiveTranslationChanged:", 500);
+    assert!(
+        drag.contains("var dx = activeTranslation.x - lastTx")
+            && drag.contains("var dy = activeTranslation.y - lastTy")
+            && drag.contains("root.moveDelta(dx, dy)"),
+        "Node 的 DragHandler 必须只上抛原始 activeTranslation 增量，实际窗口:\n{drag}"
     );
 }
 
 #[test]
-fn embed_does_not_use_parent_scale() {
+fn embed_does_not_self_convert_drag_delta() {
     let src = read_src(EMBED);
+    let stripped = strip_line_comments(&src);
     assert!(
-        !src.contains("root.parent.scale"),
-        "StarMapEmbed 不得再用 root.parent.scale 猜缩放（会与根层 Content 的 scale 双重缩放）"
+        !stripped.contains("root.parent.scale"),
+        "StarMapEmbed 不得再用 root.parent.scale 猜缩放（会与相机双重缩放）"
     );
     assert!(
-        !src.contains("canvasZoomLevel"),
-        "StarMapEmbed 不得再保留 canvasZoomLevel：全局缩放已由祖先 transform 承担"
+        !stripped.contains("canvasZoomLevel") && !stripped.contains("function sceneDelta("),
+        "StarMapEmbed 不得再自己维护位移换算：Qt scene → 本层 local 只允许在归属层做一次"
     );
-    let scene_delta = function_window(&src, "function sceneDelta(", 400);
-    assert!(
-        scene_delta.contains("root.mapFromItem(null, 0, 0)")
-            && scene_delta.contains("root.mapFromItem(null, dx, dy)")
-            && scene_delta.contains("point.x - origin.x"),
-        "Embed 的位移换算必须用 mapFromItem 差分，实际窗口:\n{scene_delta}"
-    );
-    // 5 处 DragHandler 都要走同一个 sceneDelta。
+    // 整颗 Embed 只有一层 chrome 输入层的一个 DragHandler，原样上抛。
     assert_eq!(
-        count_occurrences(&strip_line_comments(&src), "root.sceneDelta("),
-        5,
-        "标题 + 四条边框共 5 个 DragHandler，必须统一用 root.sceneDelta 换算后再上抛"
+        count_occurrences(&stripped, "root.moveDelta(dx, dy)"),
+        1,
+        "chrome 输入层必须只上抛原始 activeTranslation 增量"
+    );
+    assert!(
+        !stripped.contains("root.moveDelta(d.x, d.y)"),
+        "不再有经 sceneDelta 换算后再上抛的旧路径"
     );
 }
 
@@ -275,35 +309,56 @@ fn canvas_background_interaction_uses_screen_to_world() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 8. Embed 有独立尺寸常量（不再复用 node 150×60）
+// 8. Embed 是正圆（world 几何恒定，直径 200，不再复用 node 150×60）
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn embed_has_independent_size_constants() {
+fn embed_shell_is_a_circle() {
     let src = read_src(EMBED);
     assert!(
-        src.contains("_embedDefaultWidth") && src.contains("_embedDefaultHeight"),
-        "StarMapEmbed 必须有独立尺寸常量 _embedDefaultWidth/_embedDefaultHeight，不再复用 node 150×60"
+        !src.contains("_embedDefaultWidth") && !src.contains("_embedDefaultHeight"),
+        "StarMapEmbed 不得再有 240×220 的矩形尺寸常量"
+    );
+    let shell = function_window(&src, "id: visualEmbed", 400);
+    assert!(
+        shell.contains("radius: width / 2"),
+        "Embed 外壳必须是正圆（radius = width / 2），实际窗口:\n{shell}"
+    );
+    // contentViewport 铺满整个圆盒（评论 5972557963：不再用更小的矩形制造死区），
+    // 子内容布局由安全区约束。
+    let viewport = function_window(&src, "id: contentViewport", 200);
+    assert!(
+        viewport.contains("anchors.fill: parent"),
+        "contentViewport 必须铺满圆盒，实际窗口:\n{viewport}"
+    );
+    assert!(
+        src.contains("function contentUsableSideNow()")
+            && src.contains("d * (1 / Math.SQRT2) - _chromeHeight - _borderSlop"),
+        "Embed 必须给子内容提供内接正方形扣交互壳的可用边长（函数现算，避免创建期旧值）"
     );
 }
 
 #[test]
-fn controller_uses_embed_independent_size_constants() {
+fn controller_uses_embed_diameter_constant() {
     let src = read_src("qml/StarMapGraphController.qml");
     assert!(
-        src.contains("_embedDefaultWidth") && src.contains("_embedDefaultHeight"),
-        "GraphController 必须有 Embed 独立尺寸常量 _embedDefaultWidth/_embedDefaultHeight"
+        src.contains("readonly property int _embedDiameter: 200"),
+        "GraphController 必须有 Embed 直径常量 _embedDiameter: 200（DEFAULT_EMBED_DIAMETER）"
     );
-    // buildModels 里 Embed 的 width/height 必须用独立常量。
-    // 旧 portal Node 归一到 Embed 和正常 Embed 两处都用 _embedDefaultWidth。
-    let embed_const_count = src.matches("width: _embedDefaultWidth").count();
+    assert!(
+        !src.contains("_embedDefaultWidth") && !src.contains("_embedDefaultHeight"),
+        "GraphController 不得再保留 240×220 的矩形尺寸常量"
+    );
+    // buildModels 里 Embed 的 width/height 必须用直径常量。
+    // 旧 portal Node 归一到 Embed 和正常 Embed 两处都用 _embedDiameter。
+    let embed_const_count = src.matches("width: _embedDiameter").count();
     assert!(
         embed_const_count >= 2,
-        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 width: _embedDefaultWidth，实际 {embed_const_count} 处"
+        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 width: _embedDiameter，实际 {embed_const_count} 处"
     );
-    let embed_height_const_count = src.matches("height: _embedDefaultHeight").count();
+    let embed_height_const_count = src.matches("height: _embedDiameter").count();
     assert!(
         embed_height_const_count >= 2,
-        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 height: _embedDefaultHeight，实际 {embed_height_const_count} 处"
+        "GraphController buildModels 里 Embed（含旧 portal 归一）必须用 height: _embedDiameter，实际 {embed_height_const_count} 处"
     );
 }
