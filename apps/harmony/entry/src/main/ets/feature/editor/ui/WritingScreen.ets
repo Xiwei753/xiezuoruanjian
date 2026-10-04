@@ -105,6 +105,9 @@ export struct WritingScreen {
   @State volumeTrees: VolumeTree[] = []
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
+  // 宽屏骨架：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态。
+  @State leftPaneCollapsed: boolean = false
+  @State rightPaneCollapsed: boolean = true
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
   // 强类型 EditorViewportState，不用裸 object（Issue #629 评论 5 第 8 节）。
   @State currentViewport: EditorViewportState | null = null
@@ -1020,29 +1023,48 @@ export struct WritingScreen {
       // 右侧：当前 WritingScreen 的编辑会话（同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
       // 屏幕宽度变化只改布局，不换 TextEditSession owner。
       Row() {
-        // 左侧目录面板
-        ChapterTreePane({
-          volumeTrees: this.volumeTrees,
-          expandedVolumes: this.expandedVolumes,
-          selectedChapterId: this.chapterId,
-          onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
-          onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
-            this.switchChapter(chapterId, chapterTitle, volumeId)
-          },
-          onCreateVolume: (): void => { this.createVolume() },
-          onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
-          onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
-          onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
-        })
-          .width(320)
-          .height('100%')
+        // 左侧目录面板；收起后只保留一个窄把手。
+        if (!this.leftPaneCollapsed) {
+          ChapterTreePane({
+            volumeTrees: this.volumeTrees,
+            expandedVolumes: this.expandedVolumes,
+            selectedChapterId: this.chapterId,
+            onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
+            onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
+              this.switchChapter(chapterId, chapterTitle, volumeId)
+            },
+            onCreateVolume: (): void => { this.createVolume() },
+            onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
+            onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
+            onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
+          })
+            .width(320)
+            .height('100%')
+        }
 
-        // 分割线
-        Column() {}
-          .width(0.5)
-          .height('100%')
-        // 右侧编辑区域（同一个 WritingScreen 编辑会话）
-        this.EditorPane()
+        Button(this.leftPaneCollapsed ? '›' : '‹')
+          .width(28)
+          .height(72)
+          .onClick(() => { this.leftPaneCollapsed = !this.leftPaneCollapsed })
+
+        // 中央编辑区仍然是当前 WritingScreen 的唯一编辑会话 owner。
+        Column() {
+          this.EditorPane()
+        }
+        .layoutWeight(1)
+        .height('100%')
+
+        Button(this.rightPaneCollapsed ? '‹' : '›')
+          .width(28)
+          .height(72)
+          .onClick(() => { this.rightPaneCollapsed = !this.rightPaneCollapsed })
+
+        // 右侧工具 pane 先留骨架，后续议题再接同步/搜索/AI 等真实内容。
+        if (!this.rightPaneCollapsed) {
+          Column() {}
+            .width(300)
+            .height('100%')
+        }
       }
       .width('100%')
       .height('100%')
