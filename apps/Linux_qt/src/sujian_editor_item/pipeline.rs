@@ -1103,23 +1103,30 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout = layout;
     }
 
-    /// Issue #826 评论 6 阻塞 2: 为当前活跃的遮罩前沿 / Reflow 层准备行纹理。
+    /// Issue #826 评论 7：为当前活跃的遮罩前沿 / Reflow 层准备行纹理。
     ///
-    /// 三类消费方，各自从不同 snapshot 取图，**不能**再用「有没有 base snapshot」
-    /// 决定整个函数是否提前返回：
+    /// 三类消费方，各自从不同 snapshot 取图，且**纹理需求完全不同**：
     ///
-    /// 1. Delete / Replace 的旧正文 overlay：glyph 取自 `frontier.base_snapshot`
-    ///    的**旧**行图（`active_edit_frontier_base_snapshot()` 只在需要旧 overlay
-    ///    时才返回 Some）。
-    /// 2. Reflow 正在移动的 glyph：取自 `frontier.target_snapshot` 的**最新**行图。
+    /// 1. `FrontierMask`（吐字遮罩）：**不需要任何动画纹理**。它只是把还没露出的
+    ///    新字从 canonical 静态层裁掉，动画层不画那一块。所以它既不进准备流程，
+    ///    也不参与 missing 判定——一次 Reflow 资源问题不能杀掉本来完全独立的吐字。
+    /// 2. Delete / Replace 的旧正文 overlay：glyph 取自 `frontier.base_snapshot` 的
+    ///    **旧**行图（`active_edit_frontier_base_snapshot()` 只在需要旧 overlay 时
+    ///    才返回 Some）。
+    /// 3. Reflow 正在移动的 glyph：取自 `frontier.target_snapshot` 的**最新**行图。
     ///    `ReflowSpan.snapshot_id` 明确是新行的 id，两边 ID 带 revision，本来就不是
-    ///    同一批；只塞旧图会让 Reflow 的 `get_line` miss、动画层直接 skip glyph，
-    ///    后半段文字瞬移到 canonical 最终位置。
-    /// 3. 纯 Insert 的 `FrontierMask`：不需要任何动画纹理，**不参与 missing 判定**。
-    ///    吐字遮罩只裁 canonical 里的新字，动画层不画那一块。
+    ///    同一批。
     ///
-    /// 仍缺纹理的（只可能是上面 1 / 2 需要动画纹理的）才把动画收成 canonical 终态，
-    /// 不留半开遮罩。
+    /// Issue #826 评论 7 阻塞 1：**缺纹理不再一刀切收掉整个 coordinator**。
+    /// 这里只负责「把能准备的准备好 + 记正式诊断」，逐层容错由渲染层负责：
+    /// - FrontierMask：永远继续（不依赖纹理）；
+    /// - Reflow span 纹理 miss：该 span 的 ReflowTarget clip 不进静态裁剪，
+    ///   canonical 最终位置直接显示，动画层也 skip 该 glyph；
+    /// - 旧 overlay 纹理 miss：该旧 glyph 不画，canonical 删除结果直接显示；
+    /// - 其余有纹理的 span / overlay 继续正常动画。
+    ///
+    /// Issue #826 评论 7 性能问题：准备范围收窄到**真正 active 的 line ids**，
+    /// 不再把整份 base snapshot 的可见行 QImage 全部 clone 回缓存。
     pub fn prepare_frontier_textures(&mut self) {
         let mut insert_line_image = |cache: &mut TextureCache, line: &PreparedLineSnapshot| {
             let Some(image) = line.image.as_ref() else {
@@ -1130,17 +1137,20 @@ impl LinuxEditorPipeline {
             }
         };
 
-        // 1. Delete / Replace 的旧正文 overlay 行纹理。
+        // 1. Delete / Replace 的旧正文 overlay：只准备 old_range 覆盖的旧行。
+        let overlay_ids = self.animation_coordinator.active_old_overlay_snapshot_ids();
         if let Some(base) = self
             .animation_coordinator
             .active_edit_frontier_base_snapshot()
         {
             for line in &base.line_snapshots {
-                insert_line_image(&mut self.texture_cache, line);
+                if overlay_ids.contains(&line.id) {
+                    insert_line_image(&mut self.texture_cache, line);
+                }
             }
         }
 
-        // 2. Reflow 正在移动的 glyph：最新 target 行的纹理。
+        // 2. Reflow 正在移动的 glyph：只准备活跃 span 引用到的最新行。
         let reflow_ids = self.animation_coordinator.active_reflow_snapshot_ids();
         if !reflow_ids.is_empty() {
             if let Some(target) = self
@@ -1155,37 +1165,26 @@ impl LinuxEditorPipeline {
             }
         }
 
-        // 需要动画纹理的消费方才算 missing；FrontierMask 不算。
-        let mut missing = 0usize;
-        for id in reflow_ids.iter().copied() {
-            if !self.texture_cache.contains_line(&id) {
-                missing += 1;
-            }
+        // 3. 缺失只记正式诊断，不收口整个动画。逐层容错见文档注释。
+        let missing_reflow: Vec<LineSnapshotId> = reflow_ids
+            .iter()
+            .copied()
+            .filter(|id| !self.texture_cache.contains_line(id))
+            .collect();
+        let missing_overlay: Vec<LineSnapshotId> = overlay_ids
+            .iter()
+            .copied()
+            .filter(|id| !self.texture_cache.contains_line(id))
+            .collect();
+        if missing_reflow.is_empty() && missing_overlay.is_empty() {
+            return;
         }
-        if missing == 0 {
-            if let Some(base) = self
-                .animation_coordinator
-                .active_edit_frontier_base_snapshot()
-            {
-                missing = base
-                    .line_snapshots
-                    .iter()
-                    .filter(|line| line.image.is_some())
-                    .filter(|line| !self.texture_cache.contains_line(&line.id))
-                    .count();
-            }
-        }
-
-        if missing > 0 {
-            super::editor_animation_debug_log(&format!(
-                "prepare_frontier_textures: {} active line textures missing, snap to canonical",
-                missing
-            ));
-            self.animation_coordinator
-                .finish_edit_frontier_to_canonical();
-            let remaining = self.animation_coordinator.collect_active_snapshot_ids();
-            self.texture_cache.retain_active_snapshot_ids(&remaining);
-        }
+        record_missing_layer_texture("reflow", &missing_reflow, "editor.anim.frontier");
+        record_missing_layer_texture("delete_overlay", &missing_overlay, "editor.anim.frontier");
+        super::editor_animation_debug_log(&format!(
+            "prepare_frontier_textures: reflow_missing={:?} overlay_missing={:?} (逐层容错，不收口)",
+            missing_reflow, missing_overlay
+        ));
     }
 
     pub fn prepare_edit_motion(
@@ -1748,19 +1747,6 @@ impl LinuxEditorPipeline {
             // - `OffsetMap` 用来在 old/new 坐标之间映射同一段**未改**文字，供
             //   Reflow 层做位置插值（changed range 会被 ReflowState 排除）。
             let edit_now = Instant::now();
-            let old_caret_rect = motion.old_cursor_rect.clone().unwrap_or(CursorRect {
-                x: old_caret.x,
-                top: old_caret.y,
-                bottom: old_caret.y + old_caret.h,
-                baseline_y: old_caret.baseline_y,
-            });
-            let new_caret_rect = motion.new_cursor_rect.clone().unwrap_or(CursorRect {
-                x: new_caret.x,
-                top: new_caret.y,
-                bottom: new_caret.y + new_caret.h,
-                baseline_y: new_caret.baseline_y,
-            });
-
             if text_animation_enabled {
                 self.animation_coordinator
                     .begin_or_extend_edit_frontier(EditFrontierRequest {
@@ -1769,8 +1755,6 @@ impl LinuxEditorPipeline {
                         target_snapshot: new_snap.clone(),
                         deleted_ranges: motion.deleted_ranges.clone(),
                         inserted_ranges: motion.inserted_ranges.clone(),
-                        start_frontier: old_caret_rect,
-                        target_frontier: new_caret_rect,
                         offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
                         base_text: motion.old_text.clone(),
                         target_text: motion.new_text.clone(),
@@ -1833,6 +1817,40 @@ impl LinuxEditorPipeline {
 
         visual_outcome
     }
+}
+
+/// Issue #826 评论 7 阻塞 1：记录某一视觉层缺行纹理的正式诊断事件。
+///
+/// 只是**记**缺纹理，不再连带把整个 coordinator 收成 canonical 终态——三个视觉层
+/// 必须故障隔离：Reflow 的资源问题不能杀掉本来完全可工作的吐字遮罩。
+fn record_missing_layer_texture(layer: &str, missing: &[LineSnapshotId], event: &str) {
+    if missing.is_empty() {
+        return;
+    }
+    let ids: Vec<String> = missing.iter().map(|id| format!("{id:?}")).collect();
+    let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    fields.insert("layer".to_string(), serde_json::json!(layer));
+    fields.insert(
+        "missing_count".to_string(),
+        serde_json::json!(missing.len()),
+    );
+    fields.insert("snapshot_ids".to_string(), serde_json::json!(ids));
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Info,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: event.to_string(),
+        target: "editor.anim".to_string(),
+        message: Some(format!(
+            "Issue #826 评论 7: 视觉层 {} 有 {} 行纹理缺失，该层降级为 canonical 直接显示",
+            layer,
+            missing.len()
+        )),
+        fields,
+    });
 }
 
 fn make_cursor_rect_from_caret_doc(

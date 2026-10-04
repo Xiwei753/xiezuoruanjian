@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use crate::sujian_editor_item::animation::coordinator::EditFrontierRequest;
 use crate::sujian_editor_item::animation::LinuxEditorAnimationCoordinator;
-use crate::sujian_editor_item::edit_motion::{CursorRect, PreparedEditMotion};
+use crate::sujian_editor_item::edit_motion::PreparedEditMotion;
 use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use writer_core::editor::OffsetMap;
@@ -68,21 +68,10 @@ impl LinuxEditorAnimationCoordinator {
             target_snapshot: new_snapshot,
             deleted_ranges: motion.deleted_ranges.clone(),
             inserted_ranges: motion.inserted_ranges.clone(),
-            start_frontier: caret_or_zero(motion.old_cursor_rect),
-            target_frontier: caret_or_zero(motion.new_cursor_rect),
             offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
             base_text: motion.old_text.clone(),
             target_text: motion.new_text.clone(),
             now,
         });
     }
-}
-
-fn caret_or_zero(rect: Option<CursorRect>) -> CursorRect {
-    rect.unwrap_or(CursorRect {
-        x: 0.0,
-        top: 0.0,
-        bottom: 0.0,
-        baseline_y: 0.0,
-    })
 }

@@ -46,10 +46,6 @@ pub(crate) struct EditFrontierRequest {
     pub deleted_ranges: Vec<(usize, usize)>,
     /// 最新正文坐标系里新增的全部范围。
     pub inserted_ranges: Vec<(usize, usize)>,
-    /// 前沿起点：本轮改动开始前的位置。
-    pub start_frontier: CursorRect,
-    /// 前沿最新目标：本轮改动结束后的位置。
-    pub target_frontier: CursorRect,
     /// old → new 的偏移映射（Reflow 层用）。
     pub offset_map: OffsetMap,
     /// Issue #826 评论 3 问题 1/2：`base_snapshot` 对应的正文纯文本。
@@ -158,7 +154,6 @@ impl LinuxEditorAnimationCoordinator {
                             request.target_snapshot.clone(),
                             request.target_text.clone(),
                             range,
-                            request.target_frontier,
                             &request.offset_map,
                             request.now,
                         );
@@ -175,7 +170,6 @@ impl LinuxEditorAnimationCoordinator {
                             request.target_snapshot.clone(),
                             request.target_text.clone(),
                             range,
-                            request.target_frontier,
                             &base_to_current,
                             request.now,
                         );
@@ -191,8 +185,6 @@ impl LinuxEditorAnimationCoordinator {
                         request.target_snapshot.clone(),
                         request.target_text.clone(),
                         range,
-                        request.start_frontier,
-                        request.target_frontier,
                         request.now,
                         duration_ms,
                     )
@@ -205,8 +197,6 @@ impl LinuxEditorAnimationCoordinator {
                         request.target_snapshot.clone(),
                         request.target_text.clone(),
                         range,
-                        request.start_frontier,
-                        request.target_frontier,
                         request.now,
                         duration_ms,
                     )
@@ -221,8 +211,6 @@ impl LinuxEditorAnimationCoordinator {
                         request.target_text.clone(),
                         old_range,
                         new_range,
-                        request.start_frontier,
-                        request.target_frontier,
                         request.now,
                         duration_ms,
                     )
@@ -420,6 +408,30 @@ impl LinuxEditorAnimationCoordinator {
             .as_ref()
             .filter(|frontier| frontier.kind.needs_old_overlay())
             .map(|frontier| &frontier.base_snapshot)
+    }
+
+    /// 当前活跃的旧正文 overlay 引用的行纹理。
+    ///
+    /// Issue #826 评论 7 性能问题：只有 `old_range` 真正覆盖到的旧行需要纹理，
+    /// 不再把整份 base snapshot 的可见行 QImage 全部 clone 回缓存。
+    /// 纯吐字（Insert）没有旧 overlay，返回空。
+    pub(crate) fn active_old_overlay_snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        let Some(frontier) = self
+            .active_edit_frontier
+            .as_ref()
+            .filter(|f| f.kind.needs_old_overlay())
+        else {
+            return Vec::new();
+        };
+        let Some(old_range) = frontier.old_range else {
+            return Vec::new();
+        };
+        frontier
+            .base_snapshot
+            .lines_in_byte_range(old_range.0, old_range.1)
+            .iter()
+            .map(|line| line.id)
+            .collect()
     }
 
     /// 当前前沿种类（光标 blink 抑制等诊断用）。
@@ -634,13 +646,22 @@ fn record_frontier_diagnostic(
     let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
         std::collections::BTreeMap::new();
     fields.insert("frontier_kind".to_string(), serde_json::json!(kind.label()));
+    // Issue #826 评论 7：前沿不再有二维起点/目标，改为记录两条视觉路径的段数。
     fields.insert(
-        "start_frontier".to_string(),
-        serde_json::json!([request.start_frontier.x, request.start_frontier.top]),
+        "reveal_segments".to_string(),
+        serde_json::json!(frontier.map(|f| f.reveal_path.segments.len()).unwrap_or(0)),
     );
     fields.insert(
-        "target_frontier".to_string(),
-        serde_json::json!([request.target_frontier.x, request.target_frontier.top]),
+        "conceal_segments".to_string(),
+        serde_json::json!(frontier.map(|f| f.conceal_path.segments.len()).unwrap_or(0)),
+    );
+    fields.insert(
+        "reveal_length".to_string(),
+        serde_json::json!(frontier.map(|f| f.reveal_path.total_length).unwrap_or(0.0)),
+    );
+    fields.insert(
+        "conceal_length".to_string(),
+        serde_json::json!(frontier.map(|f| f.conceal_path.total_length).unwrap_or(0.0)),
     );
     fields.insert(
         "inserted_ranges".to_string(),
@@ -675,12 +696,10 @@ fn record_frontier_diagnostic(
         fields,
     });
     editor_animation_debug_log(&format!(
-        "anim_frontier: kind={} start=({:.1},{:.1}) target=({:.1},{:.1}) inserted={:?} deleted={:?}",
+        "anim_frontier: kind={} reveal_len={:.1} conceal_len={:.1} inserted={:?} deleted={:?}",
         kind.label(),
-        request.start_frontier.x,
-        request.start_frontier.top,
-        request.target_frontier.x,
-        request.target_frontier.top,
+        frontier.map(|f| f.reveal_path.total_length).unwrap_or(0.0),
+        frontier.map(|f| f.conceal_path.total_length).unwrap_or(0.0),
         request.inserted_ranges,
         request.deleted_ranges,
     ));

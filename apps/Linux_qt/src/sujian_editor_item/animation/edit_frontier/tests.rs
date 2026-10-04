@@ -1,7 +1,7 @@
 //! Issue #826: 遮罩前沿单元测试。
 //!
 //! 覆盖：前沿采样 / extend 不产生第二个对象 / 跨 revision 范围累计 /
-//! 吐字裁剪矩形 / 吞字 overlay 首帧可见。
+//! 视觉路径（跨自动换行）/ 吐字裁剪矩形 / 吞字 overlay 首帧可见。
 
 use std::time::{Duration, Instant};
 
@@ -9,19 +9,11 @@ use writer_core::editor::OffsetMap;
 
 use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::edit_frontier::{
-    EditFrontierKind, EditFrontierState, FrontierRect,
+    EditFrontierKind, EditFrontierState, FrontierPath, FrontierRect,
 };
-use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
-
-fn rect(x: f64, top: f64, bottom: f64) -> CursorRect {
-    CursorRect {
-        x,
-        top,
-        bottom,
-        baseline_y: bottom,
-    }
-}
+use crate::sujian_editor_item::layout_snapshot::{
+    EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
+};
 
 fn instant_at(base: Instant, ms: u64) -> Instant {
     base + Duration::from_millis(ms)
@@ -37,18 +29,36 @@ fn empty_snapshot() -> EditorLayoutSnapshot {
     )
 }
 
+fn shaping() -> ShapingIdentity {
+    ShapingIdentity {
+        text_content_hash: 1,
+        raw_font_fingerprint: String::from("test-font"),
+        glyph_indexes_hash: 1,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 1,
+    }
+}
+
+fn cluster(byte_start: usize, byte_end: usize, x: f64) -> LineClusterSnapshot {
+    LineClusterSnapshot {
+        byte_start,
+        byte_end,
+        source_rect: SourceRect {
+            x,
+            y: 0.0,
+            w: 10.0,
+            h: 20.0,
+        },
+        shaping_identity: shaping(),
+    }
+}
+
 #[test]
 fn frontier_sample_progresses_from_zero_to_one() {
     let now = Instant::now();
-    let state = EditFrontierState::begin_insert(
-        empty_snapshot(),
-        String::from("a"),
-        (0, 1),
-        rect(0.0, 0.0, 20.0),
-        rect(100.0, 0.0, 20.0),
-        now,
-        100,
-    );
+    let state =
+        EditFrontierState::begin_insert(empty_snapshot(), String::from("a"), (0, 1), now, 100);
     assert_eq!(state.sample(now).progress, 0.0);
     assert_eq!(state.sample(instant_at(now, 100)).progress, 1.0);
     let mid = state.sample(instant_at(now, 50)).progress;
@@ -58,15 +68,8 @@ fn frontier_sample_progresses_from_zero_to_one() {
 #[test]
 fn frontier_is_finished_only_after_full_duration() {
     let now = Instant::now();
-    let state = EditFrontierState::begin_insert(
-        empty_snapshot(),
-        String::from("a"),
-        (0, 1),
-        rect(0.0, 0.0, 20.0),
-        rect(100.0, 0.0, 20.0),
-        now,
-        160,
-    );
+    let state =
+        EditFrontierState::begin_insert(empty_snapshot(), String::from("a"), (0, 1), now, 160);
     assert!(!state.is_finished(instant_at(now, 80)));
     assert!(state.is_finished(instant_at(now, 160)));
     assert!(state.is_finished(instant_at(now, 500)));
@@ -86,8 +89,6 @@ fn delete_overlay_is_visible_on_the_first_frame() {
         empty_snapshot(),
         String::from("ABCEF"),
         (3, 4),
-        rect(30.0, 0.0, 20.0),
-        rect(30.0, 0.0, 20.0),
         now,
         160,
     );
@@ -113,15 +114,8 @@ fn delete_overlay_is_visible_on_the_first_frame() {
 #[test]
 fn extend_insert_accumulates_new_range_across_revisions() {
     let now = Instant::now();
-    let mut state = EditFrontierState::begin_insert(
-        empty_snapshot(),
-        String::from("a"),
-        (1, 2),
-        rect(10.0, 0.0, 20.0),
-        rect(20.0, 0.0, 20.0),
-        now,
-        160,
-    );
+    let mut state =
+        EditFrontierState::begin_insert(empty_snapshot(), String::from("a"), (1, 2), now, 160);
     assert_eq!(state.new_range, Some((1, 2)));
 
     // 第一笔：先在半程采样，再扩展。正文 "a" -> "ab"（在位置 1 插入 b）。
@@ -131,7 +125,6 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         empty_snapshot(),
         String::from("ab"),
         (1, 2),
-        rect(20.0, 0.0, 20.0),
         &prev_target_to_new,
         half,
     );
@@ -145,7 +138,6 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         empty_snapshot(),
         String::from("abc"),
         (2, 3),
-        rect(30.0, 0.0, 20.0),
         &prev_target_to_new,
         half,
     );
@@ -171,8 +163,6 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         empty_snapshot(),
         String::from("ABCEF"),
         (3, 4),
-        rect(30.0, 0.0, 20.0),
-        rect(30.0, 0.0, 20.0),
         now,
         160,
     );
@@ -186,7 +176,6 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         empty_snapshot(),
         String::from("ABCE"),
         (3, 4),
-        rect(30.0, 0.0, 20.0),
         &base_to_current,
         instant_at(now, 80),
     );
@@ -232,4 +221,134 @@ fn degenerate_frontier_rect_is_detected() {
         h: 10.0
     }
     .is_degenerate());
+}
+
+/// Issue #826 评论 7 阻塞 2（核心）：跨自动换行输入时，遮罩必须从下一行左侧开始打开。
+///
+/// 旧实现把前沿当成屏幕上斜穿的两点连线（`start_frontier` x=500 第一行 →
+/// `target_frontier` x=50 第二行）。当 y 刚进入第二行时 x 还有 200~300，
+/// 而新字 cluster 在 x=40~50，于是 `glyph_right <= frontier.x` 成立 →
+/// 判定新字「已在之前」→ 整块突然出现。新模型改成按视觉顺序的文本路径，
+/// 走完第一行后前沿自然从下一行 x_start 重新开始。
+#[test]
+fn wrap_around_insert_reveals_from_the_next_line_left_edge() {
+    let now = Instant::now();
+    // target：换行后第一行已有 ABCDE，新字 X 在第二行行首。
+    // stub_for_tests: visual_x = 首 cluster 的 x = 0，dpr = 1，
+    // 所以 doc x = cluster.x，doc y = visual_line_top。
+    let target = EditorLayoutSnapshot::new(
+        LayoutSnapshot::empty_for_tests(),
+        vec![
+            PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+            PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(1, 2, 40.0)]),
+        ],
+        None,
+        None,
+        CaretAffinity::Downstream,
+    );
+    let state = EditFrontierState::begin_insert(target, String::from("a\nb"), (1, 2), now, 160);
+
+    // progress = 0：遮罩在路径起点，第二行的 X 尚未打开，必须整块被遮。
+    let start = state.sample(now);
+    let rects = state.hidden_new_text_rects(&start);
+    assert_eq!(
+        rects.len(),
+        1,
+        "progress=0 时第二行的新字必须整块被遮住，实际 {} 块",
+        rects.len()
+    );
+    assert!(
+        rects[0].x >= 40.0,
+        "遮罩必须从第二行新字自己的位置开始（x >= 40），实际 {}",
+        rects[0].x
+    );
+
+    // progress 接近 1：X 必须被完整打开（不再遮）。
+    let end = state.sample(instant_at(now, 160));
+    assert!(
+        state.hidden_new_text_rects(&end).is_empty(),
+        "动画结束时遮罩必须完全打开"
+    );
+}
+
+/// Issue #826 评论 7：视觉路径按视觉顺序分段，跨行时每行各占一段。
+#[test]
+fn frontier_path_segments_follow_visual_order() {
+    let snapshot = EditorLayoutSnapshot::new(
+        LayoutSnapshot::empty_for_tests(),
+        vec![
+            // 第一行：新字在行尾很靠右的位置（doc x = 200 + visual_x 0）。
+            PreparedLineSnapshot::stub_for_tests(
+                0,
+                0.0,
+                0,
+                vec![cluster(0, 1, 0.0), cluster(1, 2, 200.0)],
+            ),
+            // 第二行：新字在行首（doc x = 0）。
+            PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
+        ],
+        None,
+        None,
+        CaretAffinity::Downstream,
+    );
+    let path = FrontierPath::build(&snapshot, (1, 3));
+    assert!(!path.segments.is_empty(), "有 cluster 就必须建出路径段");
+    assert_eq!(
+        path.segments.len(),
+        2,
+        "跨两行必须两段，实际 {} 段",
+        path.segments.len()
+    );
+    // 第一段在第一行，第二段在下一行 —— 不能斜穿屏幕。
+    assert!((path.segments[0].y - 0.0).abs() < 1e-9);
+    assert!((path.segments[1].y - 20.0).abs() < 1e-9);
+    assert!(
+        path.segments[1].x_start < path.segments[0].x_start,
+        "下一行的路径必须从自己的左侧开始，而不是延续上一行的 x（实际 {} vs {}）",
+        path.segments[1].x_start,
+        path.segments[0].x_start
+    );
+
+    // distance=0 时 reveal 边界都在各段 x_start（什么都没打开）。
+    let b0 = path.reveal_boundaries(0.0);
+    assert_eq!(b0.len(), 2);
+    assert!((b0[0] - path.segments[0].x_start).abs() < 1e-9);
+    assert!((b0[1] - path.segments[1].x_start).abs() < 1e-9);
+
+    // distance 超过第一段长度时，第一段全开、第二段还没开始。
+    let first_len = path.segments[0].x_end - path.segments[0].x_start;
+    let b1 = path.reveal_boundaries(first_len);
+    assert!((b1[0] - path.segments[0].x_end).abs() < 1e-9);
+    assert!((b1[1] - path.segments[1].x_start).abs() < 1e-9);
+
+    // conceal 反向：distance=0 时边界都在 x_end（旧字完整可见）。
+    let c0 = path.conceal_boundaries(0.0);
+    assert!((c0[0] - path.segments[0].x_end).abs() < 1e-9);
+}
+
+/// Issue #826 评论 7：换行符没有 glyph，路径里不产生段（后半段交给 Reflow）。
+#[test]
+fn newline_only_insert_produces_no_frontier_segment() {
+    let now = Instant::now();
+    // target "a\nb"：换行符本身没有 cluster，只留两行的可见字。
+    let target = EditorLayoutSnapshot::new(
+        LayoutSnapshot::empty_for_tests(),
+        vec![
+            PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+            PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
+        ],
+        None,
+        None,
+        CaretAffinity::Downstream,
+    );
+    // inserted range 只覆盖换行符所在字节 [1,2)，那一行没有 cluster。
+    let state = EditFrontierState::begin_insert(target, String::from("a\nb"), (1, 2), now, 160);
+    assert!(
+        state.reveal_path.segments.is_empty(),
+        "只有换行符被插入时不应产生 FrontierMask，改由 Reflow 承担位置变化"
+    );
+    assert!(
+        state.hidden_new_text_rects(&state.sample(now)).is_empty(),
+        "没有可见新字就不该有遮罩矩形"
+    );
 }

@@ -14,7 +14,7 @@ use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::coordinator::{
     EditFrontierRequest, LinuxEditorAnimationCoordinator,
 };
-use crate::sujian_editor_item::edit_motion::{CursorRect, EditorAnimationKind};
+use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
 use crate::sujian_editor_item::layout_snapshot::{
@@ -60,15 +60,6 @@ fn snapshot(lines: Vec<PreparedLineSnapshot>) -> EditorLayoutSnapshot {
         None,
         CaretAffinity::Downstream,
     )
-}
-
-fn caret_rect(x: f64) -> CursorRect {
-    CursorRect {
-        x,
-        top: 0.0,
-        bottom: 20.0,
-        baseline_y: 16.0,
-    }
 }
 
 fn cursor_state() -> CursorRenderState {
@@ -138,8 +129,6 @@ fn insert_frontier_clips_new_text_without_overlay() {
         target_snapshot: target,
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
-        start_frontier: caret_rect(10.0),
-        target_frontier: caret_rect(20.0),
         offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
         base_text: String::new(),
         target_text: String::new(),
@@ -193,8 +182,6 @@ fn delete_frontier_draws_old_overlay_only() {
         target_snapshot: target,
         deleted_ranges: vec![(0, 1)],
         inserted_ranges: Vec::new(),
-        start_frontier: caret_rect(10.0),
-        target_frontier: caret_rect(0.0),
         offset_map: OffsetMap::from_single_edit(2, (0, 1), 0),
         base_text: String::new(),
         target_text: String::new(),
@@ -264,8 +251,6 @@ fn consecutive_insert_keeps_one_frontier_object() {
             target_snapshot: target,
             deleted_ranges: Vec::new(),
             inserted_ranges: vec![(0, 1)],
-            start_frontier: caret_rect(x - 10.0),
-            target_frontier: caret_rect(x),
             offset_map: OffsetMap::from_single_edit(0, (0, 0), 1),
             base_text: String::new(),
             target_text: String::new(),
@@ -301,8 +286,6 @@ fn finished_frontier_releases_text_animation() {
         target_snapshot: target,
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(0, 1)],
-        start_frontier: caret_rect(0.0),
-        target_frontier: caret_rect(10.0),
         offset_map: OffsetMap::from_single_edit(0, (0, 0), 1),
         base_text: String::new(),
         target_text: String::new(),
@@ -335,8 +318,6 @@ fn finish_edit_frontier_snaps_to_canonical() {
         target_snapshot: target,
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
-        start_frontier: caret_rect(10.0),
-        target_frontier: caret_rect(20.0),
         offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
         base_text: String::new(),
         target_text: String::new(),
@@ -534,8 +515,6 @@ fn insert_frontier_mask_needs_no_animation_texture() {
         target_snapshot: target,
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
-        start_frontier: caret_rect(10.0),
-        target_frontier: caret_rect(20.0),
         offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
         base_text: String::from("a"),
         target_text: String::from("ab"),
@@ -591,8 +570,6 @@ fn frontier_mask_covers_only_inserted_cluster() {
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
         // 前沿起点在行首，progress=0 时新字还没露出，FrontierMask 必须遮住它。
-        start_frontier: caret_rect(0.0),
-        target_frontier: caret_rect(100.0),
         offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
         base_text: String::from("ab"),
         target_text: String::from("axb"),
@@ -656,8 +633,6 @@ fn reflow_target_clip_and_moving_glyph_coexist() {
         target_snapshot: target,
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
-        start_frontier: caret_rect(50.0),
-        target_frontier: caret_rect(50.0),
         offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
         base_text: String::from("ab"),
         target_text: String::from("a\nb"),
@@ -691,5 +666,82 @@ fn clip_texture_requirement_depends_on_kind() {
         reflow_clip(0.0, 0.0, 10.0, 20.0, LineSnapshotId::new(0, 0, 0))
             .requires_animation_texture(),
         "ReflowTarget 依赖动画纹理"
+    );
+}
+
+/// Issue #826 评论 7 阻塞 1：某个 Reflow span 的 target 纹理缺失时，
+/// 不能把整个 coordinator（连同与它完全无关的 FrontierMask）一起收掉。
+///
+/// 场景 `A|B -> AX|B`：X 的 FrontierMask 不需要任何动画纹理；
+/// 若 B 的 Reflow 行纹理暂时拿不到，只有 B 的 ReflowTarget clip 应该被放弃。
+/// 这里从 coordinator 侧验证：只有旧 overlay（Delete/Replace）才依赖 base 行，
+/// 纯 Insert 前沿不声明任何动画纹理需求，Reflow 的 id 集合独立于前沿范围。
+#[test]
+fn insert_frontier_declares_no_old_overlay_textures() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 50.0)],
+    )]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: target.clone(),
+        target_snapshot: target,
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
+        base_text: String::from("a"),
+        target_text: String::from("ab"),
+        now,
+    });
+
+    // 纯 Insert 没有旧 overlay，所以没有任何旧行纹理需求 ——
+    // 这正是 `prepare_frontier_textures` 不再一刀切收口的前提。
+    assert!(
+        coord.active_old_overlay_snapshot_ids().is_empty(),
+        "纯 Insert 前沿不应声明任何旧 overlay 纹理需求"
+    );
+    assert!(
+        coord.has_active_edit_frontier(),
+        "纹理需求为空时前沿必须保持活跃"
+    );
+
+    // 换成 Delete：此时才应该声明 base 行纹理。
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 50.0)],
+    )]);
+    let after = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0)],
+    )]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: base,
+        target_snapshot: after,
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(2, (1, 2), 0),
+        base_text: String::from("ab"),
+        target_text: String::from("a"),
+        now,
+    });
+    let overlay_ids = coord.active_old_overlay_snapshot_ids();
+    assert!(
+        !overlay_ids.is_empty(),
+        "Delete 前沿必须声明 old overlay 需要的 base 行纹理"
+    );
+    assert_eq!(
+        overlay_ids.len(),
+        1,
+        "只应声明 old_range 覆盖的行，而不是整份 base snapshot 的所有可见行"
     );
 }
