@@ -18,6 +18,9 @@ import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { SujianEditor } from './SujianEditor'
 import { WritingWorkbenchToolbar } from './WritingWorkbenchToolbar'
+// Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播，
+// 让宽屏设置浮层的改动实时回流到本页（对齐 Linux 的 settingsBackend.onSettings_changed）。
+import { LocalSettingsStore } from '../../../feature/settings/presentation/LocalSettingsStore'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
@@ -159,6 +162,17 @@ export struct WritingScreen {
   // 保证只有最后一次请求能写 workbenchPlan，旧响应不能把布局改回旧尺寸。
   private workbenchPlanGeneration: number = 0
 
+  // Issue #825 复核8第 3 点：顶栏字号 / 行距的"编辑中草稿值"。
+  // 步进器的下一步必须从草稿算，而不是从"最后一次已落盘值"算——
+  // 否则连点三次「+」时三次都从同一个旧值出发，pending 最后仍只 +1 步。
+  private editorFormatDraftFontSize: number = 0
+  private editorFormatDraftLineSpacing: number = 0
+
+  // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播。
+  // 宽屏设置浮层盖在本页之上，用户在里面改完字号/主题后这里必须跟着重建排版，
+  // 和 Linux 的 settingsBackend.onSettings_changed 同一语义。
+  private unsubscribeLocalSettings: (() => void) | null = null
+
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
@@ -286,6 +300,12 @@ export struct WritingScreen {
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
+
+    // Issue #825 复核8第 3 点：订阅 LocalSettings 落盘广播，
+    // 让宽屏设置浮层里的改动能实时回流到本页（重建排版 + 重配自动保存）。
+    this.unsubscribeLocalSettings = LocalSettingsStore.getInstance().subscribe(
+      (latest: LocalSettings): void => { this.applyPublishedSettings(latest) }
+    )
 
     // Issue #629 评论 5 第 7 节：碰一碰/隔空传送由页面拥有生命周期。
     // 进入前台（aboutToAppear）注册 startTapSharing/startAirTransferSharing；
@@ -504,6 +524,11 @@ export struct WritingScreen {
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
+    // Issue #825 复核8第 3 点：退订 LocalSettings 广播（成对，不留悬挂回调）。
+    if (this.unsubscribeLocalSettings) {
+      this.unsubscribeLocalSettings()
+      this.unsubscribeLocalSettings = null
+    }
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
@@ -707,16 +732,27 @@ export struct WritingScreen {
   // 目录栏 / 工具 pane 的展开状态只作为 WorkbenchVisibility 输入，不落 Core 持久化，
   // 也不影响编辑会话——所以每次重算只改布局，EditorSessionCoordinator 始终是同一个。
   private async refreshWorkbenchPlan(): Promise<void> {
-    await this.requestWorkbenchPlan(!this.leftPaneCollapsed, !this.rightPaneCollapsed)
+    // Issue #825 复核8第 1 点：只有"窗口尺寸 / 普通折叠变化"这条状态路径
+    // 才写正式 plan。展开请求走 resolveWorkbenchCandidate（纯候选），不碰这里。
+    const plan = await this.resolveWorkbenchCandidate(!this.leftPaneCollapsed, !this.rightPaneCollapsed)
+    if (plan !== null) {
+      this.workbenchPlan = plan
+    }
   }
 
-  // Issue #825 复核7第 1 点：resolve 必须真正被 await。
-  // 之前这个函数只是启动 resolveWorkbenchLayout(...).then(...) 就返回，
-  // 于是调用方的 `await this.refreshWorkbenchPlan()` 立刻结束，读到的还是
-  // 上一份 plan——pane 请求因此在"旧 plan 是 Workbench"时直接 return，
-  // 锁死路径原样复现。现在返回本次的 plan（不可用时为 null），
-  // 让调用方判断"这一份"，而不是判断 this.workbenchPlan 这份旧状态。
-  private async requestWorkbenchPlan(chapterVisible: boolean, toolVisible: boolean):
+  // 纯候选：只问一次 Core 并返回这一次的 plan，不写 this.workbenchPlan。
+  //
+  // Issue #825 复核7第 1 点：resolve 必须真正被 await。之前那个函数只是启动
+  // resolveWorkbenchLayout(...).then(...) 就返回，于是调用方的 await 立刻结束，
+  // 读到的还是上一份 plan——pane 请求在"旧 plan 是 Workbench"时直接 return，
+  // 锁死路径原样复现。
+  //
+  // Issue #825 复核8第 1 点：它此前还会顺手把 plan 写进 this.workbenchPlan，
+  // 于是"算候选一（SinglePane）→ 算候选二（Workbench）"的过程中页面会先真的
+  // 退成单栏再跳回来；两个候选都失败时左右 @State 没改，但正式 plan 已经停在
+  // 失败的 SinglePane，页面还是变了。候选就是候选，正式 plan 由 refreshWorkbenchPlan
+  // 或展开请求最终确认时一次性写入。
+  private async resolveWorkbenchCandidate(chapterVisible: boolean, toolVisible: boolean):
     Promise<WorkbenchLayoutPlan | null> {
     const visibility: WorkbenchVisibility = {
       chapterNavigationVisible: chapterVisible,
@@ -726,7 +762,7 @@ export struct WritingScreen {
     const heightVp: number = this.adaptiveState.heightVp
     // Issue #825 复核第 4 项：resolve 是异步的，快速拖窗口 / 连点折叠会让多次请求
     // 在途，旧请求可能晚回来把最新 plan 覆盖成旧尺寸。这里用递增的 generation
-    // 标记"只有最后一次请求可以写状态"，并把本次的尺寸与可见性一起快照进闭包，
+    // 标记"只有最后一次请求的结果算数"，并把本次的尺寸与可见性一起快照进闭包，
     // 避免回调里再读可能已经变了的 adaptiveState。
     const generation = ++this.workbenchPlanGeneration
     let plan: WorkbenchLayoutPlan | null = null
@@ -736,11 +772,8 @@ export struct WritingScreen {
       return null
     }
     if (generation !== this.workbenchPlanGeneration) {
-      // 已经有更新的请求在途（或已经离开宽屏），丢弃这次的旧结果。
+      // 已经有更新的请求在途（或已经离开宽屏），这次的旧结果作废。
       return null
-    }
-    if (plan !== null) {
-      this.workbenchPlan = plan
     }
     return plan
   }
@@ -762,35 +795,46 @@ export struct WritingScreen {
   // 现在一个 @State 都不改就先把候选组合问一遍，哪一组是 Workbench 就整体提交；
   // 两组都不行就什么都不改，不留"已展开但看不见"的端侧状态，也没有中间态闪烁。
   private async requestToolPaneOpen(toolKey: string, allowCollapseLeft: boolean): Promise<void> {
+    // 目标状态初始就是"当前左栏状态"，不是 false：
+    // 候选一是「保持当前左栏状态」，命中时要提交的必须是它本身，
+    // 只有走候选二（左栏让位）才强制改成 true。
+    // 用"有没有走第二候选"反推全部状态，会在用户本来就收着左栏时
+    // 反而把左栏重新打开，提交出来的 UI 状态和刚拿到的 Core plan 也对不上。
+    let targetLeftCollapsed: boolean = this.leftPaneCollapsed
     let plan: WorkbenchLayoutPlan | null =
-      await this.requestWorkbenchPlan(!this.leftPaneCollapsed, true)
-    let collapseLeft = false
+      await this.resolveWorkbenchCandidate(!this.leftPaneCollapsed, true)
     if (!isWorkbenchMode(plan) && allowCollapseLeft) {
-      plan = await this.requestWorkbenchPlan(false, true)
-      collapseLeft = true
+      plan = await this.resolveWorkbenchCandidate(false, true)
+      targetLeftCollapsed = true
     }
     if (!isWorkbenchMode(plan)) {
       return
     }
-    this.leftPaneCollapsed = collapseLeft
+    this.leftPaneCollapsed = targetLeftCollapsed
     this.rightPaneCollapsed = false
     this.selectedToolKey = toolKey
+    if (plan !== null) {
+      this.workbenchPlan = plan
+    }
   }
 
   // 左目录栏的展开请求，逻辑与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
   private async requestChapterNavigationOpen(): Promise<void> {
+    let targetRightCollapsed: boolean = this.rightPaneCollapsed
     let plan: WorkbenchLayoutPlan | null =
-      await this.requestWorkbenchPlan(true, !this.rightPaneCollapsed)
-    let collapseRight = false
+      await this.resolveWorkbenchCandidate(true, !this.rightPaneCollapsed)
     if (!isWorkbenchMode(plan)) {
-      plan = await this.requestWorkbenchPlan(true, false)
-      collapseRight = true
+      plan = await this.resolveWorkbenchCandidate(true, false)
+      targetRightCollapsed = true
     }
     if (!isWorkbenchMode(plan)) {
       return
     }
-    this.rightPaneCollapsed = collapseRight
+    this.rightPaneCollapsed = targetRightCollapsed
     this.leftPaneCollapsed = false
+    if (plan !== null) {
+      this.workbenchPlan = plan
+    }
   }
 
   // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（由 onPaneCollapsedChanged 重算）。
@@ -1003,40 +1047,61 @@ export struct WritingScreen {
     try {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
-        this.settings = result.data
-        // Issue #768 评论5838296806：设置真相变化后，如果 coordinator 已有 snapshot，
-        // 同步重建 editorSnapshot，保证 StyledString 与设置真相一致。
-        const existingSnap = this.coordinator.getSnapshot()
-        if (existingSnap !== null) {
-          this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
-            existingSnap,
-            this.settings.editorFontSize,
-            this.settings.editorLineSpacingMultiplier,
-            this.settings.autoIndentEnabled,
-            this.settings.autoIndentWidth
-          )
-        }
-        // Issue #705：Core 的 themeMode 已废弃，运行时恒为 null；
-        // 主题真相是 appearanceMode（与 SettingsScreen 同一读法）。
-        const appearanceMode = result.data.appearanceMode || result.data.themeMode || 'system'
-        this.themeAdapter.updateFromSettings({
-          theme: appearanceMode as ThemeMode,
-          fontSize: result.data.editorFontSize,
-          fontFamily: 'HarmonyOS Sans',
-          lineHeight: result.data.editorLineSpacingMultiplier
-        } as ThemeUpdateParams)
-
-        if (this.autoSaveObserver) {
-          this.lifecycle.removeObserver(this.autoSaveObserver)
-          this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.performBackgroundSave(),
-            this.settings.autoSaveDelayMs
-          )
-          this.lifecycle.addObserver(this.autoSaveObserver)
-        }
+        this.applyPublishedSettings(result.data)
       }
     } catch (err) {
       // Ignore settings load error
+    }
+  }
+
+  // 把一份"已经是真相"的 LocalSettings 应用到本页：重建正文排版、同步主题、
+  // 按新的自动保存间隔重配 observer，并让顶栏草稿对齐。
+  //
+  // Issue #825 复核8第 3 点：进页面（loadSettings）和设置浮层保存成功后的
+  // LocalSettingsStore 广播共用这一份实现，两边不再各写一套，
+  // 否则浮层改了字号、底下写作页还按旧排版渲染。
+  private applyPublishedSettings(settings: LocalSettings): void {
+    this.settings = settings
+    // Issue #825 复核8第 3 点：外部设置更新时，顶栏草稿回到真实值，
+    // 步进器下一次点击从真实值继续算。
+    //
+    // 但如果队列里还有用户点出来的目标（保存途中又连点了步进器），
+    // 这里不能把草稿拽回刚落盘的旧值——否则顶栏会闪回旧字号，
+    // 下一次点击又会从旧值继续算，把用户点的目标改掉。
+    // pending 目标由 applyEditorFormat 的队列自己收尾，这里不动。
+    if (!this.hasPendingEditorFormat) {
+      this.editorFormatDraftFontSize = settings.editorFontSize
+      this.editorFormatDraftLineSpacing = settings.editorLineSpacingMultiplier
+    }
+    // Issue #768 评论5838296806：设置真相变化后，如果 coordinator 已有 snapshot，
+    // 同步重建 editorSnapshot，保证 StyledString 与设置真相一致。
+    const existingSnap = this.coordinator.getSnapshot()
+    if (existingSnap !== null) {
+      this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
+        existingSnap,
+        this.settings.editorFontSize,
+        this.settings.editorLineSpacingMultiplier,
+        this.settings.autoIndentEnabled,
+        this.settings.autoIndentWidth
+      )
+    }
+    // Issue #705：Core 的 themeMode 已废弃，运行时恒为 null；
+    // 主题真相是 appearanceMode（与 SettingsScreen 同一读法）。
+    const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
+    this.themeAdapter.updateFromSettings({
+      theme: appearanceMode as ThemeMode,
+      fontSize: this.settings.editorFontSize,
+      fontFamily: 'HarmonyOS Sans',
+      lineHeight: this.settings.editorLineSpacingMultiplier
+    } as ThemeUpdateParams)
+
+    if (this.autoSaveObserver) {
+      this.lifecycle.removeObserver(this.autoSaveObserver)
+      this.autoSaveObserver = new AutoSaveLifecycleObserver(
+        (): Promise<void> => this.performBackgroundSave(),
+        this.settings.autoSaveDelayMs
+      )
+      this.lifecycle.addObserver(this.autoSaveObserver)
     }
   }
 
@@ -1259,17 +1324,15 @@ export struct WritingScreen {
           leadingWidthVp: this.toolbarBoundsVp(WorkbenchRole.ToolbarLeading),
           trailingWidthVp: this.toolbarBoundsVp(WorkbenchRole.ToolbarTrailing),
           headerActions: this.headerActions,
-          fontSizePt: this.settings.editorFontSize,
-          lineSpacing: this.settings.editorLineSpacingMultiplier,
+          // Issue #825 复核8第 3 点：步进器显示并基于"编辑中草稿"，
+          // 不是最后一次已落盘值——否则连点三次「+」都从同一个旧值出发，只 +1 步。
+          fontSizePt: this.editorFormatDraftFontSize,
+          lineSpacing: this.editorFormatDraftLineSpacing,
           onBack: () => { this.handleTitleBack() },
           onUndo: () => { this.applyUndo() },
           onRedo: () => { this.applyRedo() },
-          onFontSizeChange: (value: number) => {
-            this.applyEditorFormat(value, this.settings.editorLineSpacingMultiplier)
-          },
-          onLineSpacingChange: (value: number) => {
-            this.applyEditorFormat(this.settings.editorFontSize, value)
-          }
+          onFontSizeChange: (value: number) => { this.changeEditorFontSize(value) },
+          onLineSpacingChange: (value: number) => { this.changeEditorLineSpacing(value) }
         })
           .width('100%')
 
@@ -1391,12 +1454,13 @@ export struct WritingScreen {
   }
 
   // 单次落盘：先取最新设置真相，只覆盖字号 / 行距，存成功才回写内存状态。
-  // 失败时什么都不改——既不用"这次请求的 previous 值"回滚，
-  // 也不会盖掉上一次已经成功的新值。
+  // 失败时不用"这次请求的 previous 值"回滚——那会把上一次已经成功的新值盖掉，
+  // 改为按最新磁盘值决定要不要把顶栏草稿回正（见 realignDraftToPersisted）。
   private async saveEditorFormatOnce(fontSizePt: number, lineSpacingMultiplier: number): Promise<void> {
     try {
       const latest = await this.bridge.getLocalSettings()
       if (!latest.success || !latest.data) {
+        this.realignDraftToPersisted()
         return
       }
       // ArkTS 不允许对象展开（arkts-no-spread），所以就地覆盖这两个字段。
@@ -1404,40 +1468,40 @@ export struct WritingScreen {
       latest.data.editorLineSpacingMultiplier = lineSpacingMultiplier
       const saved = await this.bridge.saveLocalSettings(latest.data)
       if (!saved.success) {
+        this.realignDraftToPersisted()
         return
       }
-      // 保存成功：把"实际落盘的那份最新设置"写回内存状态，
+      // 保存成功：把"实际落盘的那份最新设置"应用回本页（重建排版 + 主题 + 自动保存）。
       // 用户在悬浮设置里改过的其它字段也一并带进来，不再是进页面时的旧值。
-      this.settings = latest.data
-      const existingSnap = this.coordinator.getSnapshot()
-      if (existingSnap !== null) {
-        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
-          existingSnap,
-          this.settings.editorFontSize,
-          this.settings.editorLineSpacingMultiplier,
-          this.settings.autoIndentEnabled,
-          this.settings.autoIndentWidth
-        )
-      }
-      // 与 SettingsViewModel 保存后的处理保持一致：主题也要跟着最新设置走。
-      const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
-      this.themeAdapter.updateFromSettings({
-        theme: appearanceMode as ThemeMode,
-        fontSize: this.settings.editorFontSize,
-        fontFamily: 'HarmonyOS Sans',
-        lineHeight: this.settings.editorLineSpacingMultiplier
-      } as ThemeUpdateParams)
-      if (this.autoSaveObserver) {
-        this.lifecycle.removeObserver(this.autoSaveObserver)
-        this.autoSaveObserver = new AutoSaveLifecycleObserver(
-          (): Promise<void> => this.performBackgroundSave(),
-          this.settings.autoSaveDelayMs
-        )
-        this.lifecycle.addObserver(this.autoSaveObserver)
-      }
+      // 草稿不动：它本来就是这次保存的来源值，若期间又点过，队列里还有下一次。
+      this.applyPublishedSettings(latest.data)
     } catch (err) {
-      // 保存失败：保持当前排版，不做"看起来改了"的假更新。
+      this.realignDraftToPersisted()
     }
+  }
+
+  // 保存失败时把顶栏草稿按最新已知磁盘真相回正。
+  // 但如果用户在这期间又点过（队列里还有 pending 目标），草稿必须保持那个目标，
+  // 否则旧请求的失败会覆盖后续点击想去的值。
+  private realignDraftToPersisted(): void {
+    if (this.hasPendingEditorFormat) {
+      return
+    }
+    this.editorFormatDraftFontSize = this.settings.editorFontSize
+    this.editorFormatDraftLineSpacing = this.settings.editorLineSpacingMultiplier
+  }
+
+  // 顶栏步进器的落点：先同步草稿，再把草稿目标塞进 pending 队列。
+  // 连点时草稿是累加的（16 → 17 → 18 → 19），不会像原来那样
+  // 三次都从同一个"最后一次已落盘值"算出同一个 17。
+  private changeEditorFontSize(fontSizePt: number): void {
+    this.editorFormatDraftFontSize = fontSizePt
+    this.applyEditorFormat(this.editorFormatDraftFontSize, this.editorFormatDraftLineSpacing)
+  }
+
+  private changeEditorLineSpacing(lineSpacingMultiplier: number): void {
+    this.editorFormatDraftLineSpacing = lineSpacingMultiplier
+    this.applyEditorFormat(this.editorFormatDraftFontSize, this.editorFormatDraftLineSpacing)
   }
 
   // Issue #825 复核第 2 项：选中工具时同时请求展开 ToolPane

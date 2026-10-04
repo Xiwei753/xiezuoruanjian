@@ -16,6 +16,7 @@ import { HarmonyThemeAdapter, ThemeUpdateParams } from '../../../ui/theme/Harmon
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { getAppContext } from '../../../app/AppContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
+import { LocalSettingsStore } from './LocalSettingsStore'
 import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
@@ -230,6 +231,11 @@ export class SettingsViewModel {
       const result = await this.bridge.saveLocalSettings(this.settings)
       if (result.success) {
         this.saveMessage = 'saved'
+        // Issue #825 复核8第 3 点：把刚落盘的那份设置广播出去。
+        // 宽屏下设置浮层盖在写作页上，两边各持一份 settings 会长期互不认知：
+        // 用户在这里改了字号/主题，底下活着的 WritingScreen 仍按旧排版渲染。
+        // 广播时机是"保存成功之后"，和 Linux 的 settingsBackend.onSettings_changed 同语义。
+        LocalSettingsStore.getInstance().publish(this.settings)
         const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,

@@ -148,33 +148,38 @@ Rectangle {
     // 现在一个属性都不改就先把候选组合问一遍，哪一组是 Workbench 就整体提交；
     // 两组都不行就什么都不改，不留"已展开但看不见"的端侧状态，也没有中间态闪烁。
     function requestToolPaneOpen(toolKey, allowCollapseLeft) {
+        // 目标状态初始就是"当前左栏状态"，不是 false：
+        // 候选一是「保持当前左栏状态」，命中时要提交的就是它本身。
+        // 用"有没有走第二候选"反推全部状态，会在用户本来就收着左栏时
+        // 反而把左栏重新打开，提交出来的 UI 状态和刚拿到的 Core plan 也对不上。
+        // 只有走候选二（左栏让位）才强制改成 true。
+        var targetLeftCollapsed = root.leftPaneCollapsed;
         // 候选一：保持当前左栏状态，展开右 pane。
         var plan = resolveWorkbenchCandidate(!root.leftPaneCollapsed, true);
-        var collapseLeft = false;
         if (!isWorkbenchPlan(plan) && allowCollapseLeft === true) {
             // 候选二：左栏让位，右 pane 展开。
             plan = resolveWorkbenchCandidate(false, true);
-            collapseLeft = true;
+            targetLeftCollapsed = true;
         }
         if (!isWorkbenchPlan(plan)) return;
         // 一次性提交最终组合。
-        root.leftPaneCollapsed = collapseLeft;
+        root.leftPaneCollapsed = targetLeftCollapsed;
         root.drawerTool = toolKey || "stats";
         root.workbenchPlan = plan;
     }
 
     // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
     function requestChapterNavigationOpen() {
+        var targetDrawerTool = root.drawerTool;
         // 候选一：保持当前右 pane 状态，展开左目录栏。
         var plan = resolveWorkbenchCandidate(true, root.drawerOpen);
-        var collapseRight = false;
         if (!isWorkbenchPlan(plan)) {
             // 候选二：右 pane 让位，左目录栏展开。
             plan = resolveWorkbenchCandidate(true, false);
-            collapseRight = true;
+            targetDrawerTool = "";
         }
         if (!isWorkbenchPlan(plan)) return;
-        root.drawerTool = collapseRight ? "" : root.drawerTool;
+        root.drawerTool = targetDrawerTool;
         root.leftPaneCollapsed = false;
         root.workbenchPlan = plan;
     }
