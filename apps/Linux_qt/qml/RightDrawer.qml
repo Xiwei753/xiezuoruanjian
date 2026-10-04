@@ -7,7 +7,7 @@
 // 约束：
 //   - Issue #825：工具的选择/展开收起归最右竖向 rail，本组件只渲染内容；
 //     顶部横向 tab 条已删除（工具入口只有 rail 一处，避免第二套导航）。
-//   - 顶部 TopWritingToolbar 的同步 / 搜索 / 设置仍留在顶栏，不搬到这里。
+//   - 顶部工具条带 ToolbarTrailing 的同步 / 搜索 / 设置不搬到这里。
 //   - 内容全部复用现有真实组件，不新造第二份工具状态。
 // =============================================================================
 
@@ -41,11 +41,9 @@ Rectangle {
     property var editorBackendRef: null
     property bool isOpen: false
     // Issue #825：当前工具 key（"" 表示 pane 收起）。
-    // 取值与 WritingToolRail 的 toolKey 完全一致：starmap / ai / stats / conflict。
+    // 取值与 WritingToolRail 的 toolKey 完全一致：stats / conflict。
     // 由 WritingWorkspace 单向注入，本组件不自己改。
     property string selectedTool: ""
-    property bool aiCapable: false
-    property bool aiEnabled: false
     // Issue #757 评论 5818193510 第 5 点：冲突侧栏支持。
     // syncBackendRef + workspaceProjectId 透传给 SyncConflictPanel。
     // hasConflicts 控制 rail 上「冲突」入口显隐。
@@ -66,10 +64,8 @@ Rectangle {
     // Issue #825：工具 key → 标题 + 是否可用。
     // 可用性与入口都由 rail 表达，这里只用于标题文字，不再自行决定显隐。
     function toolTitle(toolKey) {
-        if (toolKey === "ai") return qsTr("AI 助手")
-        if (toolKey === "stats") return qsTr("统计")
         if (toolKey === "conflict") return qsTr("冲突")
-        return qsTr("星图")
+        return qsTr("统计")
     }
 
     color: "transparent"
@@ -155,80 +151,12 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // 星图 — 施工占位（内容仍由现有星图工作区承载，这里只给入口）
-                Rectangle {
-                    visible: root.selectedTool === "starmap"
-                    anchors.fill: parent
-                    color: "transparent"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: _sp16
-
-                        AppText {
-                            text: "🗌"
-                            dt: root.dt
-                            font.pointSize: dt.fontEmojiSmPt
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                        AppText {
-                            text: qsTr("星图正在施工")
-                            dt: root.dt
-                            color: _textPrimary
-                            font.pointSize: _fontLg
-                            font.weight: Font.DemiBold
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                        AppText {
-                            text: qsTr("星图功能将在后续版本实现")
-                            dt: root.dt
-                            color: _textMuted
-                            font.pointSize: _fontSm
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                    }
-                }
-
                 // 统计 — 复用现有 StatsPreviewPage
                 StatsPreviewPage {
                     dt: root.dt
                     editorBackendRef: root.editorBackendRef
                     visible: root.selectedTool === "stats"
                     anchors.fill: parent
-                }
-
-                // AI — 施工占位（只在 aiCapable && aiEnabled 时由 rail 提供入口）
-                Rectangle {
-                    visible: root.selectedTool === "ai" && root.aiCapable && root.aiEnabled
-                    anchors.fill: parent
-                    color: "transparent"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: _sp16
-
-                        AppText {
-                            text: "🤖"
-                            dt: root.dt
-                            font.pointSize: dt.fontEmojiSmPt
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                        AppText {
-                            text: qsTr("AI 助手")
-                            dt: root.dt
-                            color: _textPrimary
-                            font.pointSize: _fontLg
-                            font.weight: Font.DemiBold
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                        AppText {
-                            text: qsTr("AI 功能将在后续版本实现")
-                            dt: root.dt
-                            color: _textMuted
-                            font.pointSize: _fontSm
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                    }
                 }
 
                 // Issue #757 评论 5818193510 第 5 点：冲突 — 复用现有 SyncConflictPanel。

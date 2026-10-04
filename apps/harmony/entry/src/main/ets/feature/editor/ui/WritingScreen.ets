@@ -17,6 +17,7 @@ import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { SujianEditor } from './SujianEditor'
+import { WritingWorkbenchToolbar } from './WritingWorkbenchToolbar'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
@@ -61,6 +62,8 @@ import { WritingToolRail } from './WritingToolRail'
 const FALLBACK_CHAPTER_NAV_WIDTH_VP: number = 320
 const FALLBACK_TOOL_PANE_WIDTH_VP: number = 240
 const FALLBACK_TOOL_RAIL_WIDTH_VP: number = 56
+// plan 还没回来时的工具条带高度占位；plan 一到就被 Core 的 ToolbarCenter bounds 覆盖。
+const FALLBACK_TOOLBAR_HEIGHT_VP: number = 64
 // 贴边折叠把手的尺寸（vp）。把手不是 Core 角色，只是 pane 边界上的 UI 装饰。
 const PANE_HANDLE_WIDTH_VP: number = 18
 const PANE_HANDLE_HEIGHT_VP: number = 64
@@ -152,6 +155,9 @@ export struct WritingScreen {
   // Issue #825 复核第1项：窗口由窄变宽时，adaptive observer 第一次进入 Workbench
   // 也要触发一次目录树加载，不能只在 aboutToAppear 加载。
   private wideWorkbenchTreeLoaded: boolean = false
+  // Issue #825 复核第 4 项：resolve_workbench_layout 是异步的，用递增 generation
+  // 保证只有最后一次请求能写 workbenchPlan，旧响应不能把布局改回旧尺寸。
+  private workbenchPlanGeneration: number = 0
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -262,7 +268,14 @@ export struct WritingScreen {
       // 否则 aboutToAppear 当时是窄屏、目录树永远为空。
       self.ensureWorkbenchProjectTree()
       // Issue #825 复核第 2 项：窗口尺寸变了就重新向 Core 要七角色 bounds。
-      self.refreshWorkbenchPlan()
+      if (self.isWideWorkbench) {
+        self.refreshWorkbenchPlan()
+      } else {
+        // 复核第 4 项：离开宽屏时递增 generation 并清 plan，让在途的旧请求
+        // 回来之后也匹配不上，不能复活已经作废的工作台布局。
+        self.workbenchPlanGeneration++
+        self.workbenchPlan = null
+      }
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
@@ -698,9 +711,20 @@ export struct WritingScreen {
       chapterNavigationVisible: !this.leftPaneCollapsed,
       toolPaneVisible: !this.rightPaneCollapsed
     }
+    const widthVp: number = this.adaptiveState.widthVp
+    const heightVp: number = this.adaptiveState.heightVp
+    // Issue #825 复核第 4 项：resolve 是异步的，快速拖窗口 / 连点折叠会让多次请求
+    // 在途，旧请求可能晚回来把最新 plan 覆盖成旧尺寸。这里用递增的 generation
+    // 标记"只有最后一次请求可以写状态"，并把本次的尺寸与可见性一起快照进闭包，
+    // 避免回调里再读可能已经变了的 adaptiveState。
+    const generation = ++this.workbenchPlanGeneration
     getWorkbenchLayoutBridge()
-      .resolveWorkbenchLayout(this.adaptiveState.widthVp, this.adaptiveState.heightVp, visibility)
+      .resolveWorkbenchLayout(widthVp, heightVp, visibility)
       .then((plan: WorkbenchLayoutPlan | null): void => {
+        if (generation !== this.workbenchPlanGeneration) {
+          // 已经有更新的请求在途（或已经离开宽屏），丢弃这次的旧结果。
+          return
+        }
         if (plan !== null) {
           this.workbenchPlan = plan
         }
@@ -736,6 +760,24 @@ export struct WritingScreen {
       return FALLBACK_TOOL_RAIL_WIDTH_VP
     }
     return Math.max(0, bounds.rightDp - bounds.leftDp)
+  }
+
+  // 顶部工具条带三个角色的 bounds。Core 在 SinglePane 下不给工具条带，
+  // 这里返回 -1，由 WritingWorkbenchToolbar 按 Core metrics 的默认段宽兜底。
+  private toolbarBoundsVp(role: WorkbenchRole): number {
+    const bounds = workbenchBounds(this.workbenchPlan, role)
+    if (bounds === null) {
+      return -1
+    }
+    return Math.max(0, bounds.rightDp - bounds.leftDp)
+  }
+
+  private toolbarHeightVp(): number {
+    const bounds = workbenchBounds(this.workbenchPlan, WorkbenchRole.ToolbarCenter)
+    if (bounds === null) {
+      return FALLBACK_TOOLBAR_HEIGHT_VP
+    }
+    return Math.max(0, bounds.bottomDp - bounds.topDp)
   }
 
   // Core 决定的最终产品模式；SinglePane 时页面回单栏，不摆七角色。
@@ -1133,10 +1175,28 @@ export struct WritingScreen {
   @Builder
   NavContent() {
     if (this.isWideWorkbench && this.hasWorkbenchPlan) {
-      // Issue #825 复核第 1/2 项：宽屏按 Core 七角色摆，不再自己决定几栏：
-      //   ChapterNavigation | Editor | ToolPane | ToolRail（+ 顶部三段 Toolbar 由页头壳层承载）。
-      // 各角色宽度全部来自 resolve_workbench_layout 的 bounds；plan 说 SinglePane 时回单栏。
+      // Issue #825 复核第 1/2/3 项：宽屏按 Core 七角色摆，不再自己决定几栏。
+      // 顶部一整条工具带（ToolbarLeading | ToolbarCenter | ToolbarTrailing），
+      // 下面才是 ChapterNavigation | Editor | ToolPane | ToolRail。
+      // 高度与各段宽度全部来自 resolve_workbench_layout 的 bounds；plan 说 SinglePane 时回单栏。
       // 屏幕宽度变化只改布局，不换 TextEditSession owner（同一个 coordinator/dispatcher/IME/save）。
+      Column() {
+        // 复核第 3 项：宽屏不再用 HDS 标题栏当工具条带的替身，按 Core 的
+        // Toolbar* bounds 自己画一条；窄屏继续走壳层标题栏（见 build 的分支）。
+        WritingWorkbenchToolbar({
+          toolbarHeightVp: this.toolbarHeightVp(),
+          leadingWidthVp: this.toolbarBoundsVp(WorkbenchRole.ToolbarLeading),
+          trailingWidthVp: this.toolbarBoundsVp(WorkbenchRole.ToolbarTrailing),
+          chapterTitle: this.chapterTitle,
+          headerActions: this.headerActions,
+          fontSizePt: this.settings.editorFontSize,
+          lineSpacing: this.settings.editorLineSpacingMultiplier,
+          onBack: () => { this.handleTitleBack() },
+          onUndo: () => { this.applyUndo() },
+          onRedo: () => { this.applyRedo() }
+        })
+          .width('100%')
+
       Stack() {
         Row() {
           // ChapterNavigation：可收起目录栏。收起后整块不占宽度，只留贴边把手。
@@ -1187,12 +1247,25 @@ export struct WritingScreen {
         // Issue #825 复核第5项：整屏覆盖层排把手，不占正文宽度。
         this.PaneHandleLayer()
       }
+        .width('100%')
+        .layoutWeight(1)
+      }
       .width('100%')
       .height('100%')
     } else {
       // Issue #629 评论9 第3项：窄屏单栏布局（或 Core 判定 SinglePane）。
       this.EditorPane()
     }
+  }
+
+  // Issue #825 复核第 3 项：撤销/重做走唯一的 EditorSessionCoordinator，
+  // 与输入法快捷键、dispatcher 是同一条编辑事务路径，栈空时 coordinator 自己 no-op。
+  private applyUndo(): void {
+    this.coordinator.undo().catch(() => {})
+  }
+
+  private applyRedo(): void {
+    this.coordinator.redo().catch(() => {})
   }
 
   // Issue #825 复核第 2 项：选中工具时同时展开 ToolPane（rail 负责“选工具 + 展开/收起”）。
@@ -1304,13 +1377,21 @@ export struct WritingScreen {
         // Issue #825 复核第2项：动作数组由本页面统一解析后透传，壳层不再自己解析一遍。
         // Issue #825 复核第1项：同步 / 搜索 / 设置属于 Core 的 ToolbarTrailing 角色，
         // 宽屏也继续显示在顶部，不再搬进右侧 ToolPane（那里只放选中工具的内容）。
-        headerActions: this.headerActions
+        headerActions: this.headerActions,
+        // Issue #825 复核第 3 项：宽屏由 WritingWorkbenchToolbar 按 Core 的
+        // Toolbar* bounds 画工具条带，HDS 标题栏（只有章节标题 + HeaderTrailing、
+        // 高度也不等于 Core 的 toolbar bounds）必须让位，否则工具条带会重复一份。
+        showTitleBar: !this.isWideWorkbench
       }) {
         this.NavContent()
       }
     } else {
       NavDestination() {
         Column() {
+          // Issue #825 复核第 3 项：宽屏这条自绘标题行让位给 WritingWorkbenchToolbar
+          // （返回归 ToolbarLeading，HeaderTrailing 归 ToolbarTrailing），
+          // 否则同一条带会出现两套返回与两套尾部动作。
+          if (!this.isWideWorkbench) {
           // Issue #783 评论5856245403：自定义标题行 — 圆形返回按钮 + 标题。
           // 标题栏返回走 handleTitleBack（始终退出页面），
           // 系统返回手势走 onBackPressed → handleSystemBack（IME 打开时先收键盘）。
@@ -1352,6 +1433,7 @@ export struct WritingScreen {
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          }
 
           Stack() {
             this.NavContent()

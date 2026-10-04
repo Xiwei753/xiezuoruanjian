@@ -34,6 +34,11 @@ export struct HdsWritingDestinationApi23 {
   @Param scroller: Scroller = new Scroller()
   // Issue #784 评论5857397503：ScreenPolicy 解析结果由 WritingScreen 统一持有并透传。
   @Param headerActions: ActionSlot[] = []
+  // Issue #825 复核第 3 项：宽屏由 WritingWorkbenchToolbar 按 Core 的 Toolbar* bounds
+  // 画整条工具条带（返回归 ToolbarLeading、HeaderTrailing 归 ToolbarTrailing），
+  // HDS 标题栏必须整条让位——它只有章节标题 + 尾部胶囊，高度也不等于 Core 的
+  // toolbar bounds，两者并存就会出现两套返回、两套尾部动作和两条工具条带。
+  @Param showTitleBar: boolean = true
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。
   // 直接在箭头函数体里写 HeaderTitleBarStack({...}) 会被当普通函数调用，运行时崩：
@@ -51,7 +56,7 @@ export struct HdsWritingDestinationApi23 {
     HdsNavDestination() {
       this.contentBuilder()
     }
-    .hideTitleBar(false)
+    .hideTitleBar(!this.showTitleBar)
     .titleBar({
       enableComponentSafeArea: true,
       // 窗口开了 setWindowLayoutFullScreen 之后，标题栏必须显式继续避让顶部状态栏，

@@ -6,9 +6,9 @@
 // 职责：只做两件事 —— 选哪个工具、展开/收起右边的工具 pane
 // 约束（Issue #825）：
 //   - 工具内容在 WritingWorkspace 里的 RightDrawer（ToolPane），rail 不持有内容状态；
-//   - 顶部工具条的 同步 / 搜索 / 设置 仍在 TopWritingToolbar，不搬到这里；
-//   - 工具列表按真实能力给入口（AI 需要 aiCapable && aiEnabled，冲突需要 hasConflicts），
-//     不摆没有内容的占位按钮；
+//   - 顶部工具条带的 ToolbarTrailing 同步 / 搜索 / 设置不搬到这里；
+//   - 工具列表只列真实有内容的工具（统计常驻、冲突需要 hasConflicts），
+//     不摆"正在施工"的占位按钮；
 //   - 只发信号，由 WritingWorkspace 单向写 selectedTool，避免双向写 binding。
 // =============================================================================
 
@@ -34,8 +34,6 @@ Rectangle {
 
     // Core 给 ToolRail 的宽度（由 WritingWorkspace 从 workbench plan 注入）。
     property real railWidth: 56
-    property bool aiCapable: false
-    property bool aiEnabled: false
     property bool hasConflicts: false
     // 当前选中的工具 key（"" = 工具 pane 收起）。单向输入，由 WritingWorkspace 写。
     property string selectedTool: ""
@@ -44,14 +42,13 @@ Rectangle {
 
     // 工具入口：key 与 RightDrawer 的 selectedTool 取值一致。
     // 星图 / 统计 常驻；AI 需要能力开关；冲突需要确实有未解决冲突。
+    // Issue #825 复核4 附注：rail 只列真实有内容的工具。
+    // 星图 / AI 在 ToolPane 里仍是"正在施工"占位，就不在宽屏新壳里当正式入口摆出来；
+    // 等它们接到真实内容时再加回这个列表。
     readonly property var tools: {
         var list = [
-            { key: "starmap", label: qsTr("星图"), glyph: "🗌" },
             { key: "stats", label: qsTr("统计"), glyph: "📊" }
         ]
-        if (root.aiCapable && root.aiEnabled) {
-            list.push({ key: "ai", label: qsTr("AI"), glyph: "🤖" })
-        }
         if (root.hasConflicts) {
             list.push({ key: "conflict", label: qsTr("冲突"), glyph: "⚠" })
         }

@@ -1,13 +1,14 @@
 // =============================================================================
-// TopWritingToolbar.qml — 写作工具栏
+// WritingFormatGroup.qml — 工作台工具栏 Center 组（字号 / 行距 / 段落 / 一键排版）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：字号/行距/首行缩进控制、一键排版
-// 约束：
-//   - 只发出信号，不直接修改 backend
-//   - 所有设置变更通过 signal 传递给 EditorController
-//   - 使用 DesignTokens 统一样式，禁止硬编码颜色/间距
+// 职责：Core 七角色里的 ToolbarCenter 内容——字号 / 行距 / 首行缩进 / 一键排版 + 保存状态
+// 约束（Issue #825）：
+//   - 由 WritingWorkbenchToolbar 挂在工具条带的中间组里，本组件自己不画工具条外框；
+//   - 只发出信号，不直接修改 backend，所有设置变更交给 EditorController；
+//   - 同步 / 搜索 / 设置 不在这里，归 ToolbarTrailing 的 GlobalTopActions；
+//   - 使用 DesignTokens 统一样式，禁止硬编码颜色 / 间距。
 // =============================================================================
 
 import QtQuick
@@ -21,8 +22,6 @@ Rectangle {
     property real currentLineSpacing: 1.5
     property bool firstLineIndent: false
     property string saveStatus: ""
-    property string currentProjectId: ""
-    property var appState: ({})
     readonly property int minFontSize: 10
     readonly property int maxFontSize: 72
 
@@ -30,10 +29,6 @@ Rectangle {
     signal lineSpacingChanged(real spacing)
     signal firstLineIndentToggled()
     signal formatOneClick()
-    signal openSettings()
-    // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
-    signal requestSync()
-    signal requestSearch()
 
     function syncFontSizeInput() {
         if (fontSizeInput) {
@@ -66,13 +61,14 @@ Rectangle {
 
     onCurrentFontSizeChanged: root.syncFontSizeInput()
 
-    color: dt.surface
-    height: 48
+    // Issue #825：本组件只提供 Center 组内容，工具条带背景/高度由
+    // WritingWorkbenchToolbar 统一画，这里保持透明。
+    color: "transparent"
+
+    implicitHeight: 48
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: dt.sp16
-        anchors.rightMargin: dt.sp16
         spacing: dt.sp4
 
         // Font button (triggers popover)
@@ -262,14 +258,6 @@ Rectangle {
             visible: text !== ""
         }
 
-        // Issue #790 评论 5875963057: 右端公共入口收口到 GlobalTopActions
-        GlobalTopActions {
-            dt: root.dt
-            appState: root.appState
-            onRequestSync: root.requestSync()
-            onRequestSearch: root.requestSearch()
-            onOpenSettings: root.openSettings()
-        }
     }
 
     // === Font Size Popover ===

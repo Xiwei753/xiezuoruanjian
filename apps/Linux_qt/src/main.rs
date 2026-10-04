@@ -160,9 +160,17 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
     "qml/WritingTreeController.qml" as "WritingTreeController.qml",
     "qml/EditorController.qml" as "EditorController.qml",
-    "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
+    // Issue #825 复核4 第3项：工具条带拆成 ToolbarLeading/Center/Trailing 三组，
+    // TopWritingToolbar 被 WritingWorkbenchToolbar + WritingFormatGroup 取代，
+    // 这里同步换掉 qrc 登记，不留第二个入口。
+    "qml/WritingWorkbenchToolbar.qml" as "WritingWorkbenchToolbar.qml",
+    "qml/WritingFormatGroup.qml" as "WritingFormatGroup.qml",
+    "qml/ToolbarIconButton.qml" as "ToolbarIconButton.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
+    // Issue #825 复核4 第1项：工作台最右竖向工具栏（Core 的 ToolRail 角色）。
+    // qrc 是显式列表，漏登记开发目录里可能碰巧能找到，打包后就变成组件不存在。
+    "qml/WritingToolRail.qml" as "WritingToolRail.qml",
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
     "qml/SyncConflictPanel.qml" as "SyncConflictPanel.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",

@@ -26,8 +26,13 @@
 // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
 // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
 //
-// 组成：
-//   WorkspaceTree (侧栏) + SujianEditorItem (编辑区) + TopWritingToolbar (工具栏)
+// 组成（Issue #825 按 Core 七角色组织）：
+//   WritingWorkbenchToolbar：上方一条贯通工具条带
+//     （ToolbarLeading 返回/作品名/撤销/重做 | ToolbarCenter 字号/行距/段落/排版 |
+//       ToolbarTrailing 同步/搜索/设置）
+//   下方内容区 SplitView：
+//     ChapterNavigation (章节树) | Editor (SujianEditorItem) |
+//     ToolPane (工具内容) | ToolRail (最右竖向工具栏)
 // =============================================================================
 
 import QtQuick
@@ -58,8 +63,6 @@ Rectangle {
     // 七角色 bounds 与最终模式都由 Core 决定，QML 只按 bounds 量/摆。
     property var workbenchPlan: null
     readonly property bool coreWorkbench: !!(workbenchPlan && workbenchPlan.mode === "Workbench")
-    property bool aiCapable: false
-    property bool aiEnabled: false
     // 关于 LayoutPlan 和布局策略
     // layoutPlan 是外部注入的布局策略（由上层根据屏幕尺寸和设置决定）
     // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
@@ -89,20 +92,40 @@ Rectangle {
     readonly property real toolPaneWidth: root.roleWidth("ToolPane", -1)
     readonly property real toolRailWidth: root.roleWidth("ToolRail", -1)
 
+    // ── Issue #825 复核第3项：工具条带的三个分组 bounds 也吃 Core ──
+    // Core 的 plan 里 ToolbarLeading / ToolbarCenter / ToolbarTrailing 在同一条顶部带子上，
+    // toolbarHeight 取这条带子的高度。Core 判 SinglePane 时不给这些 bounds（返回 -1），
+    // 此时 WritingWorkbenchToolbar 按内容自适应，保证窄窗口仍排得下。
+    readonly property real toolbarHeight: {
+        var b = root.roleBounds("ToolbarCenter")
+        return b ? Math.max(0, b.bottomDp - b.topDp) : -1
+    }
+    readonly property real toolbarLeadingWidth: root.roleWidth("ToolbarLeading", -1)
+    readonly property real toolbarTrailingWidth: root.roleWidth("ToolbarTrailing", -1)
+
     // 宽屏下 Core 已经把七角色尺寸算好：pre/min/max 三者取同一个值，
     // 让 SplitView 只负责"可见子项参与剩余空间分配"，不再被用户拖拽改宽度。
     // 非宽屏仍保留原来的可拖拽区间（最小 180 / 最大 420）。
-    // 三个宽度任一缺失（Core 明确退回 SinglePane 或 plan 异常）时整组回落到旧布局，
-    // 不用 0/负宽度去喂 SplitView。
+    // 注意：可收起角色（ChapterNavigation / ToolPane）收起时 Core 给的宽度就是 0，
+    // 0 是合法宽度不是 plan 无效，所以这里只校验 Editor / ToolRail 的宽度，
+    // 另外确认四个角色在 placements 里确实存在。
     readonly property bool coreSized: root.coreWorkbench
-                                   && root.chapterNavWidth > 0
+                                   && root.hasContentRole("ChapterNavigation")
+                                   && root.hasContentRole("Editor")
+                                   && root.hasContentRole("ToolPane")
+                                   && root.hasContentRole("ToolRail")
                                    && root.editorWidth > 0
-                                   && root.toolPaneWidth > 0
                                    && root.toolRailWidth > 0
-    // Issue #825：最右工具 rail 与两个折叠把手只在 Core 判定 Workbench 时出现。
+    // Issue #825：最右工具 rail 与两个折叠把手在 Core 判定 Workbench 时始终出现，
+    // 不跟工具 pane 是否展开绑定——Core 的 ToolRail 恒有宽度，
+    // 工具 pane 收起后 rail 仍是唯一能把它再拉出来的入口。
     // Core 明确退回 SinglePane（窗口放不下七角色）时，Qt 不自己挤一个 rail 出来，
     // 收起/展开工具 pane 回到正文区里那个箭头按钮。
     readonly property bool toolRailVisible: root.coreSized
+
+    function hasContentRole(role) {
+        return root.roleBounds(role) !== null
+    }
 
     function refreshWorkbenchPlan() {
         if (!root.wideWorkbench) {
@@ -363,990 +386,956 @@ Rectangle {
 
     color: dt.bg
 
-    SplitView {
+    // Issue #825 复核第3项：Core 的 plan 明确是「最上面一整条 Toolbar，下面才是
+    // ChapterNavigation | Editor | ToolPane | ToolRail」。这里由 WritingWorkbenchToolbar
+    // 把这个结构落成真实的 QML 树：SplitView 整体只占内容区，不再自己从窗口顶端开始。
+    WritingWorkbenchToolbar {
+        id: workbenchToolbar
         anchors.fill: parent
-        orientation: Qt.Horizontal
 
-        handle: Rectangle {
-            // Issue #825：Core 的 bounds 已经把四个角色的宽度切干净了，
-            // 宽屏下不再额外插入 SplitView 把手宽度，否则正文会比 Core 给的窄。
-            implicitWidth: root.coreSized ? 0 : 4
-            color: SplitHandle.hovered || SplitHandle.pressed ? dt.primary : dt.border
-            Behavior on color { ColorAnimation { duration: 120 } }
+        // Core 的 ToolbarLeading / ToolbarTrailing bounds（-1 = Core 没给，按内容自适应）
+        toolbarHeight: root.toolbarHeight
+        leadingWidth: root.toolbarLeadingWidth
+        trailingWidth: root.toolbarTrailingWidth
+
+        projectTitle: root.projectTitle
+        appState: root.appState
+
+        // Center 组（WritingFormatGroup）入参
+        currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
+        currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+        firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
+        saveStatus: editorController.saveStatus
+
+        onBackRequested: root.backToProjects()
+        // 撤销 / 重做走 SujianEditorItem 的真实实现，和键盘 Ctrl+Z/Ctrl+Y 同一条路径。
+        onUndoRequested: sujianEditor.undo()
+        onRedoRequested: sujianEditor.redo()
+        onFontSizeChanged: function(size) {
+            if (settingsBackend) {
+                settingsBackend.setting_font_size = size;
+                settingsBackend.debounced_save_local_settings();
+            }
         }
+        onLineSpacingChanged: function(spacing) {
+            if (settingsBackend) {
+                settingsBackend.setting_line_spacing = spacing;
+                settingsBackend.debounced_save_local_settings();
+            }
+        }
+        onFirstLineIndentToggled: {
+            if (settingsBackend) {
+                settingsBackend.setting_auto_indent_enabled = !settingsBackend.setting_auto_indent_enabled;
+                settingsBackend.debounced_save_local_settings();
+            }
+        }
+        onFormatOneClick: editorController.formatText()
+        onRequestSync: root.requestSync()
+        onRequestSearch: root.requestSearch()
+        onOpenSettings: root.openSettings()
 
-        // Left sidebar: volume/chapter tree
-        Rectangle {
-            id: sidebarRect
-            visible: !root.leftPaneCollapsed
-            // Issue #825：宽屏下章节导航宽度直接取 Core 的 ChapterNavigation bounds；
-            // 非宽屏保留原来的「设置项 + 可拖拽区间」。
-            SplitView.preferredWidth: root.coreSized
-                                       ? root.chapterNavWidth
-                                       : (settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240)
-            SplitView.minimumWidth: root.coreSized ? root.chapterNavWidth : 180
-            SplitView.maximumWidth: root.coreSized ? root.chapterNavWidth : 420
-            color: dt.sidebar
-            border.color: dt.border
-            border.width: 1
+        SplitView {
+            anchors.fill: parent
+            orientation: Qt.Horizontal
 
-            Timer {
-                id: sidebarDebounceTimer
-                interval: 300
-                repeat: false
-                onTriggered: {
-                    if (settingsBackend && sidebarRect.width > 0 && Math.abs(settingsBackend.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
-                        settingsBackend.setting_desktop_sidebar_width = sidebarRect.width;
-                        settingsBackend.debounced_save_local_settings();
+            handle: Rectangle {
+                // Issue #825：Core 的 bounds 已经把四个角色的宽度切干净了，
+                // 宽屏下不再额外插入 SplitView 把手宽度，否则正文会比 Core 给的窄。
+                implicitWidth: root.coreSized ? 0 : 4
+                color: SplitHandle.hovered || SplitHandle.pressed ? dt.primary : dt.border
+                Behavior on color { ColorAnimation { duration: 120 } }
+            }
+
+            // Left sidebar: volume/chapter tree
+            Rectangle {
+                id: sidebarRect
+                visible: !root.leftPaneCollapsed
+                // Issue #825：宽屏下章节导航宽度直接取 Core 的 ChapterNavigation bounds；
+                // 非宽屏保留原来的「设置项 + 可拖拽区间」。
+                SplitView.preferredWidth: root.coreSized
+                                           ? root.chapterNavWidth
+                                           : (settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240)
+                SplitView.minimumWidth: root.coreSized ? root.chapterNavWidth : 180
+                SplitView.maximumWidth: root.coreSized ? root.chapterNavWidth : 420
+                color: dt.sidebar
+                border.color: dt.border
+                border.width: 1
+
+                Timer {
+                    id: sidebarDebounceTimer
+                    interval: 300
+                    repeat: false
+                    onTriggered: {
+                        if (settingsBackend && sidebarRect.width > 0 && Math.abs(settingsBackend.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
+                            settingsBackend.setting_desktop_sidebar_width = sidebarRect.width;
+                            settingsBackend.debounced_save_local_settings();
+                        }
                     }
                 }
-            }
 
-            onWidthChanged: {
-                // Issue #825：宽屏下宽度归 Core 所有，不再回写用户设置项，
-                // 否则下一次单栏布局会被 Core 的工作台宽度污染。
-                if (width > 0 && !root.coreSized) {
-                    sidebarDebounceTimer.restart();
-                }
-            }
-
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 0
-
-                // Back button + project title
-                Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 48
-                        color: "transparent"
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: dt.sp12
-                            anchors.rightMargin: dt.sp8
-                            spacing: dt.sp8
-
-                            Rectangle {
-                                width: 28; height: 28
-                                radius: dt.radiusPill
-                                color: backHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                                AppText {
-                                    dt: root.dt
-                                    anchors.centerIn: parent
-                                    text: "\u2190"
-                                    color: dt.textSecondary
-                                    font.pointSize: dt.fontLgPt
-                                }
-
-                                MouseArea {
-                                    id: backHover
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.backToProjects()
-                                }
-                            }
-
-                            AppText {
-                                dt: root.dt
-                                text: root.projectTitle || qsTr("作品")
-                                color: dt.textPrimary
-                                font.pointSize: dt.fontMdPt
-                                font.family: dt.fontFamily
-                                font.weight: Font.DemiBold
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
-                        }
+                onWidthChanged: {
+                    // Issue #825：宽屏下宽度归 Core 所有，不再回写用户设置项，
+                    // 否则下一次单栏布局会被 Core 的工作台宽度污染。
+                    if (width > 0 && !root.coreSized) {
+                        sidebarDebounceTimer.restart();
+                    }
                 }
 
-                // Divider
-                Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
 
-                // Tree list
-                ScrollView {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
-                        Component.onCompleted: {
-                            if (contentItem) contentItem.acceptedButtons = Qt.NoButton
-                        }
 
-                        ListView {
-                            id: treeListView
-                            model: ListModel { id: treeModel }
-                            delegate: Item {
-                                width: treeListView.width
-                                height: model.itemType === "volume" ? 36 : 32
+                    // Tree list
+                    ScrollView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+                            Component.onCompleted: {
+                                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+                            }
 
-                                Rectangle {
-                                    id: delegateBg
-                                    anchors.fill: parent
-                                    anchors.leftMargin: dt.sp8
-                                    anchors.rightMargin: dt.sp8
-                                    radius: dt.radiusPill
-                                    color: {
-                                        if (isSelected) return dt.primaryContainer;
-                                        if (delegateHover.containsMouse) return dt.surfaceVariant;
-                                        return "transparent";
-                                    }
+                            ListView {
+                                id: treeListView
+                                model: ListModel { id: treeModel }
+                                delegate: Item {
+                                    width: treeListView.width
+                                    height: model.itemType === "volume" ? 36 : 32
 
-                                    property bool isSelected: model.itemId === editorController.chapterId
-
-                                    RowLayout {
+                                    Rectangle {
+                                        id: delegateBg
                                         anchors.fill: parent
-                                        anchors.leftMargin: model.itemType === "chapter" ? dt.sp32 : dt.sp12
-                                        spacing: dt.sp6
-
-                                        Rectangle {
-                                            width: 6; height: 6
-                                            radius: model.itemType === "volume" ? 0 : 3
-                                            color: delegateBg.isSelected ? dt.selectedText : dt.textSecondary
-                                            Layout.alignment: Qt.AlignVCenter
-                                            opacity: 0.6
+                                        anchors.leftMargin: dt.sp8
+                                        anchors.rightMargin: dt.sp8
+                                        radius: dt.radiusPill
+                                        color: {
+                                            if (isSelected) return dt.primaryContainer;
+                                            if (delegateHover.containsMouse) return dt.surfaceVariant;
+                                            return "transparent";
                                         }
 
-                                        AppText {
-                                            dt: root.dt
-                                            text: model.itemTitle || ""
-                                            color: {
-                                                if (delegateBg.isSelected) return dt.onPrimaryContainer;
-                                                return dt.textPrimary;
+                                        property bool isSelected: model.itemId === editorController.chapterId
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: model.itemType === "chapter" ? dt.sp32 : dt.sp12
+                                            spacing: dt.sp6
+
+                                            Rectangle {
+                                                width: 6; height: 6
+                                                radius: model.itemType === "volume" ? 0 : 3
+                                                color: delegateBg.isSelected ? dt.selectedText : dt.textSecondary
+                                                Layout.alignment: Qt.AlignVCenter
+                                                opacity: 0.6
                                             }
-                                            font.pointSize: dt.labelPt
-                                            font.family: dt.fontFamily
-                                            font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
-                                            Layout.fillWidth: true
-                                            elide: Text.ElideRight
-                                        }
-
-                                        // "⋯" menu button — visible for both volume and chapter
-                                        Rectangle {
-                                            z: 10
-                                            width: 24; height: 24
-                                            radius: 12
-                                            color: menuBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
-                                            Layout.alignment: Qt.AlignVCenter
 
                                             AppText {
                                                 dt: root.dt
-                                                anchors.centerIn: parent
-                                                text: "⋯"
-                                                color: dt.textSecondary
-                                                font.pointSize: dt.fontMdPt
+                                                text: model.itemTitle || ""
+                                                color: {
+                                                    if (delegateBg.isSelected) return dt.onPrimaryContainer;
+                                                    return dt.textPrimary;
+                                                }
+                                                font.pointSize: dt.labelPt
+                                                font.family: dt.fontFamily
+                                                font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
                                             }
 
-                                            MouseArea {
-                                                id: menuBtnHover
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: {
+                                            // "⋯" menu button — visible for both volume and chapter
+                                            Rectangle {
+                                                z: 10
+                                                width: 24; height: 24
+                                                radius: 12
+                                                color: menuBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
+                                                Layout.alignment: Qt.AlignVCenter
+
+                                                AppText {
+                                                    dt: root.dt
+                                                    anchors.centerIn: parent
+                                                    text: "⋯"
+                                                    color: dt.textSecondary
+                                                    font.pointSize: dt.fontMdPt
+                                                }
+
+                                                MouseArea {
+                                                    id: menuBtnHover
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: {
+                                                        treeContextMenu.itemType = model.itemType;
+                                                        treeContextMenu.itemId = model.itemId;
+                                                        treeContextMenu.itemTitle = model.itemTitle;
+                                                        treeContextMenu.itemProjectId = model.itemProjectId || "";
+                                                        treeContextMenu.itemVolumeId = model.itemVolumeId || "";
+                                                        treeContextMenu.popup(menuBtnHover, 0, menuBtnHover.height);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: delegateHover
+                                            anchors.left: parent.left
+                                            anchors.top: parent.top
+                                            anchors.bottom: parent.bottom
+                                            anchors.right: parent.right
+                                            anchors.rightMargin: 32
+                                            hoverEnabled: true
+                                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: function(mouse) {
+                                                if (mouse.button === Qt.LeftButton) {
+                                                    if (model.itemType === "chapter") {
+                                                         root.openChapter(model.itemProjectId || root.workspaceProjectId, model.itemVolumeId, model.itemId, model.itemTitle);
+                                                    }
+                                                } else if (mouse.button === Qt.RightButton) {
                                                     treeContextMenu.itemType = model.itemType;
                                                     treeContextMenu.itemId = model.itemId;
                                                     treeContextMenu.itemTitle = model.itemTitle;
                                                     treeContextMenu.itemProjectId = model.itemProjectId || "";
                                                     treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                    treeContextMenu.popup(menuBtnHover, 0, menuBtnHover.height);
+                                                    treeContextMenu.popup(delegateHover, mouse.x, mouse.y);
                                                 }
                                             }
                                         }
-                                    }
 
-                                    MouseArea {
-                                        id: delegateHover
-                                        anchors.left: parent.left
-                                        anchors.top: parent.top
-                                        anchors.bottom: parent.bottom
-                                        anchors.right: parent.right
-                                        anchors.rightMargin: 32
-                                        hoverEnabled: true
-                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: function(mouse) {
-                                            if (mouse.button === Qt.LeftButton) {
-                                                if (model.itemType === "chapter") {
-                                                     root.openChapter(model.itemProjectId || root.workspaceProjectId, model.itemVolumeId, model.itemId, model.itemTitle);
-                                                }
-                                            } else if (mouse.button === Qt.RightButton) {
+                                        // 长按弹出菜单（触屏支持）
+                                        TapHandler {
+                                            onLongPressed: {
                                                 treeContextMenu.itemType = model.itemType;
                                                 treeContextMenu.itemId = model.itemId;
                                                 treeContextMenu.itemTitle = model.itemTitle;
                                                 treeContextMenu.itemProjectId = model.itemProjectId || "";
                                                 treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                treeContextMenu.popup(delegateHover, mouse.x, mouse.y);
+                                                treeContextMenu.popup(delegateBg, point.position.x, point.position.y);
+                                            }
+                                        }
+
+                                        // "+" button for volumes (create chapter)
+                                        Rectangle {
+                                            visible: model.itemType === "volume"
+                                            width: 20; height: 20
+                                            radius: 10
+                                            color: addChapterHover.containsMouse ? dt.primaryContainer : "transparent"
+                                            anchors {
+                                                right: parent.right
+                                                rightMargin: dt.sp8
+                                            }
+                                            anchors.verticalCenter: parent.verticalCenter
+
+                                            AppText {
+                                                dt: root.dt
+                                                anchors.centerIn: parent
+                                                text: "+"
+                                                color: dt.primary
+                                                font.pointSize: dt.fontSmPt
+                                                font.weight: Font.Bold
+                                            }
+
+                                            MouseArea {
+                                                id: addChapterHover
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.createChapterRequested(model.itemProjectId || "", model.itemId)
                                             }
                                         }
                                     }
-
-                                    // 长按弹出菜单（触屏支持）
-                                    TapHandler {
-                                        onLongPressed: {
-                                            treeContextMenu.itemType = model.itemType;
-                                            treeContextMenu.itemId = model.itemId;
-                                            treeContextMenu.itemTitle = model.itemTitle;
-                                            treeContextMenu.itemProjectId = model.itemProjectId || "";
-                                            treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                            treeContextMenu.popup(delegateBg, point.position.x, point.position.y);
-                                        }
-                                    }
-
-                                    // "+" button for volumes (create chapter)
-                                    Rectangle {
-                                        visible: model.itemType === "volume"
-                                        width: 20; height: 20
-                                        radius: 10
-                                        color: addChapterHover.containsMouse ? dt.primaryContainer : "transparent"
-                                        anchors {
-                                            right: parent.right
-                                            rightMargin: dt.sp8
-                                        }
-                                        anchors.verticalCenter: parent.verticalCenter
-
-                                        AppText {
-                                            dt: root.dt
-                                            anchors.centerIn: parent
-                                            text: "+"
-                                            color: dt.primary
-                                            font.pointSize: dt.fontSmPt
-                                            font.weight: Font.Bold
-                                        }
-
-                                        MouseArea {
-                                            id: addChapterHover
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: root.createChapterRequested(model.itemProjectId || "", model.itemId)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // "+" button for project (create volume)
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 36
-                        Layout.leftMargin: dt.sp8
-                        Layout.rightMargin: dt.sp8
-                        radius: dt.radiusPill
-                        color: addVolumeHover.containsMouse ? dt.primaryContainer : "transparent"
-
-                        RowLayout {
-                            anchors.centerIn: parent
-                            spacing: dt.sp4
-                            AppText {
-                                dt: root.dt
-                                text: "+"
-                                color: dt.primary
-                                font.pointSize: dt.fontMdPt
-                                font.weight: Font.Bold
-                            }
-                            AppText {
-                                dt: root.dt
-                                text: qsTr("新卷")
-                                color: dt.primary
-                                font.pointSize: dt.labelPt
-                                font.family: dt.fontFamily
-                            }
-                        }
-
-                        MouseArea {
-                            id: addVolumeHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.createVolumeRequested(root.workspaceProjectId)
-                        }
-                    }
-
-                    // Tree context menu
-                    Menu {
-                        id: treeContextMenu
-                        property string itemType: ""
-                        property string itemId: ""
-                        property string itemTitle: ""
-                        property string itemProjectId: ""
-                        property string itemVolumeId: ""
-                        background: Rectangle {
-                            color: dt.surface
-                            border.color: dt.border
-                            radius: dt.radiusMd
-                            border.width: 1
-                        }
-
-                        MenuItem {
-                            id: createVolumeMenuItem
-                            text: qsTr("新建卷")
-                            visible: treeContextMenu.itemType === "project"
-                            contentItem: AppText {
-                                dt: root.dt
-                                text: createVolumeMenuItem.text
-                                color: dt.textPrimary
-                                font.pointSize: dt.labelPt
-                                font.family: dt.fontFamily
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: createVolumeMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                            }
-                            onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
-                        }
-                        MenuItem {
-                            id: createChapterMenuItem
-                            text: qsTr("新建章节")
-                            visible: treeContextMenu.itemType === "volume"
-                            contentItem: AppText {
-                                dt: root.dt
-                                text: createChapterMenuItem.text
-                                color: dt.textPrimary
-                                font.pointSize: dt.labelPt
-                                font.family: dt.fontFamily
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: createChapterMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                            }
-                            onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
-                        }
-                        MenuSeparator {
-                            visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                        }
-                        MenuItem {
-                            id: renameMenuItem
-                            text: qsTr("重命名")
-                            visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                            contentItem: AppText {
-                                dt: root.dt
-                                text: renameMenuItem.text
-                                color: dt.textPrimary
-                                font.pointSize: dt.labelPt
-                                font.family: dt.fontFamily
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: renameMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                            }
-                            onTriggered: root.renameItemRequested({
-                                type: treeContextMenu.itemType,
-                                id: treeContextMenu.itemId,
-                                projectId: treeContextMenu.itemProjectId,
-                                volumeId: treeContextMenu.itemVolumeId,
-                                title: treeContextMenu.itemTitle
-                            })
-                        }
-                        MenuItem {
-                            id: deleteMenuItem
-                text: qsTr("删除")
-                            visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                            contentItem: AppText {
-                                dt: root.dt
-                                text: deleteMenuItem.text
-                                color: dt.error
-                                font.pointSize: dt.labelPt
-                                font.family: dt.fontFamily
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: deleteMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                            }
-                            onTriggered: root.deleteItemRequested({
-                                type: treeContextMenu.itemType,
-                                id: treeContextMenu.itemId,
-                                projectId: treeContextMenu.itemProjectId,
-                                volumeId: treeContextMenu.itemVolumeId,
-                                title: treeContextMenu.itemTitle
-                            })
-                        }
-                    }
-                }
-            }
-
-        // Middle Area: Toolbar + Editor
-        ColumnLayout {
-            SplitView.fillWidth: true
-            // Issue #825：宽屏下正文宽度取 Core 的 Editor bounds；
-            // 非宽屏保留原来的「800 首选 / 480 最小」。
-            SplitView.preferredWidth: root.coreSized ? root.editorWidth : 800
-            SplitView.minimumWidth: root.coreSized ? root.editorWidth : 480
-            spacing: 0
-
-            // Top toolbar
-            TopWritingToolbar {
-                Layout.fillWidth: true
-                dt: root.dt
-                currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
-                currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-                firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
-                saveStatus: editorController.saveStatus
-                appState: root.appState
-                onFontSizeChanged: function(size) {
-                    if (settingsBackend) {
-                        settingsBackend.setting_font_size = size;
-                        settingsBackend.debounced_save_local_settings();
-                    }
-                }
-                onLineSpacingChanged: function(spacing) {
-                    if (settingsBackend) {
-                        settingsBackend.setting_line_spacing = spacing;
-                        settingsBackend.debounced_save_local_settings();
-                    }
-                }
-                onFirstLineIndentToggled: {
-                    if (settingsBackend) {
-                        settingsBackend.setting_auto_indent_enabled = !settingsBackend.setting_auto_indent_enabled;
-                        settingsBackend.debounced_save_local_settings();
-                    }
-                }
-                onFormatOneClick: editorController.formatText()
-                onOpenSettings: root.openSettings()
-                onRequestSync: root.requestSync()
-                onRequestSearch: root.requestSearch()
-            }
-
-            // Editor Container Area
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: dt.bg
-
-                // Centered paper container
-                Item {
-                    anchors.fill: parent
-                    anchors.leftMargin: dt.sp8
-                    anchors.rightMargin: dt.sp8
-                    anchors.topMargin: dt.sp8
-                    anchors.bottomMargin: dt.sp8
-
-                    // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
-                    // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
-                    // 编辑区组件（SujianEditorItem）跟随 paperBg 宽度
-                    // 编辑器交互由 EditorController + SujianEditorItem 直接管理
-                    Rectangle {
-                        id: paperBg
-                        width: {
-                            // 用户拖拽宽度优先；未拖过才用布局策略默认宽度
-                            var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
-                                    ? root.layoutPlan.contentMaxWidthVp
-                                    : 820
-                            // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                            var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
-                                    ? settingsBackend.setting_desktop_editor_width
-                                    : 0
-                            var targetW = userW > 0 ? userW : planW
-                            return Math.max(480, Math.min(parent.width, targetW))
-                        }
-                        height: parent.height
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        color: dt.editorBackground
-                        radius: dt.radiusMd
-                        border.color: dt.border
-                        border.width: 1
-                    }
-
-                    // Left drag resize handle
-                    MouseArea {
-                        id: leftResizeHandle
-                        width: dt.sp8
-                        anchors.left: paperBg.left
-                        anchors.leftMargin: -(width / 2)
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        cursorShape: Qt.SizeHorCursor
-                        hoverEnabled: true
-
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 2
-                            height: parent.height
-                            color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
-                            opacity: parent.pressed ? 0.9 : 0.4
-                            Behavior on color { ColorAnimation { duration: 120 } }
-                        }
-
-                        property real startX: 0
-                        property real startWidth: 0
-
-                        onPressed: function(mouse) {
-                            startX = mouse.x;
-                            startWidth = paperBg.width;
-                        }
-
-                        onPositionChanged: function(mouse) {
-                            if (pressed && settingsBackend) {
-                                var dx = mouse.x - startX;
-                                var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
-                                // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                                settingsBackend.setting_desktop_editor_width = newWidth;
-                                settingsBackend.debounced_save_local_settings();
-                            }
-                        }
-                    }
-
-                    // Right drag resize handle
-                    MouseArea {
-                        id: rightResizeHandle
-                        width: dt.sp8
-                        anchors.right: paperBg.right
-                        anchors.rightMargin: -(width / 2)
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        cursorShape: Qt.SizeHorCursor
-                        hoverEnabled: true
-
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 2
-                            height: parent.height
-                            color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
-                            opacity: parent.pressed ? 0.9 : 0.4
-                            Behavior on color { ColorAnimation { duration: 120 } }
-                        }
-
-                        property real startX: 0
-                        property real startWidth: 0
-
-                        onPressed: function(mouse) {
-                            startX = mouse.x;
-                            startWidth = paperBg.width;
-                        }
-
-                        onPositionChanged: function(mouse) {
-                            if (pressed && settingsBackend) {
-                                var dx = mouse.x - startX;
-                                var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
-                                // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                                settingsBackend.setting_desktop_editor_width = newWidth;
-                                settingsBackend.debounced_save_local_settings();
-                            }
-                        }
-                    }
-
-                    ScrollView {
-                        id: editorScroll
-                        // Issue #695 评论 5693346400: editorIsScrolling 把
-                        // desktopWheelHandler.active 算进去，这样直接修改 contentY
-                        // 时现有的滚动期间动画暂停逻辑仍然有效。
-                        readonly property bool editorIsScrolling: ScrollBar.vertical.active || desktopWheelHandler.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
-                        property bool editorAnimationSuppressed: false
-                        anchors.fill: paperBg
-                        anchors.margins: dt.sp20
-                        clip: true
-                        contentWidth: availableWidth
-                        contentHeight: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
-
-                        function clampScroll() {
-                            if (contentItem) {
-                                var maxScroll = Math.max(0, contentHeight - height);
-                                // Only clamp if contentY exceeds the valid range.
-                                // Do NOT force contentY to 0 when contentHeight is still updating.
-                                if (maxScroll > 0 && contentItem.contentY > maxScroll) {
-                                    contentItem.contentY = maxScroll;
                                 }
                             }
                         }
 
-                        // Issue #724 评论 5751268664 缺口2: 光标自动跟随滚动。
-                        // 语义同 QPlainTextEdit::ensureCursorVisible()（centerOnScroll=false）：
-                        // 只滚刚好够让 caret 回到可视区，不每打一字就强制居中。
-                        // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
-                        // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
-                        // Scene Graph 和 IME 继续使用同一滚动位置。
-                        // Issue #727 评论 5757225958 问题2: 删除对已删除 Rust 方法
-                        // set_auto_follow_anchor_with_target 的调用，也删除
-                        // visual_cursor_rect_y / visual_cursor_rect_height 这套只为
-                        // anchor 服务的旧接口。ensureCursorVisible() 只根据 viewport
-                        // cursor_rect_y 算 targetY，最后只做 flick.contentY = targetY。
-
-                        function ensureCursorVisible() {
-                            const flick = contentItem
-                            if (!flick)
-                                return
-
-                            const margin = Math.max(dt.sp12, sujianEditor.cursor_rect_height * 0.5)
-                            const top = sujianEditor.cursor_rect_y
-                            const bottom = top + sujianEditor.cursor_rect_height
-                            const visibleBottom = availableHeight - margin
-
-                            let nextY = flick.contentY
-                            if (top < margin) {
-                                nextY += top - margin
-                            } else if (bottom > visibleBottom) {
-                                nextY += bottom - visibleBottom
-                            } else {
-                                return
-                            }
-
-                            const maxY = Math.max(0, contentHeight - height)
-                            // Issue #727 评论 5757225958 问题2: 只算出完整目标 targetY，
-                            // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。
-                            // 否则直接赋值 flick.contentY，不再调用已删除的
-                            // set_auto_follow_anchor_with_target。
-                            const targetY = Math.max(0, Math.min(maxY, nextY))
-                            if (Math.abs(targetY - flick.contentY) < 0.5)
-                                return
-                            flick.contentY = targetY
-                        }
-
-                        function scheduleEnsureCursorVisible() {
-                            Qt.callLater(ensureCursorVisible)
-                        }
-
-                        onContentHeightChanged: clampScroll()
-                        onHeightChanged: clampScroll()
-                        Component.onCompleted: {
-                            // Issue #695: Qt 6.9+ 建议桌面 Flickable 设 acceptedButtons: Qt.NoButton，
-                            // 鼠标按住拖动不当触屏甩动；触屏 flick 不受 mouse-button 限制。
-                            // 让 Qt 原生处理 wheel/scrollbar，ScrollView/Flickable 继续持有 contentY。
-                            if (contentItem) {
-                                contentItem.acceptedButtons = Qt.NoButton;
-                            }
-                        }
-                        onEditorIsScrollingChanged: {
-                            // Issue #724 评论 5752140048 问题 2: 滚动停止时恢复 false，
-                            // 触发 Rust set_is_scrolling(false) → resume_all()。
-                            // anchor 生命周期和 editorAnimationSuppressed 是两件事，
-                            // 不要为了删 anchor timer 顺手把滚动动画抑制状态恢复也删掉。
-                            editorAnimationSuppressed = editorIsScrolling
-                        }
-
-                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                        ScrollBar.vertical: ScrollBar {
-                            policy: ScrollBar.AsNeeded
-                            parent: editorScroll
-                            anchors.top: editorScroll.top
-                            anchors.bottom: editorScroll.bottom
-                            anchors.right: editorScroll.right
-                        }
-
-                        Item {
-                            id: editorCanvas
-                            readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + dt.sp16 * 2, editorScroll.availableHeight)
-                            width: editorScroll.availableWidth
-                            height: editorScroll.availableHeight
-                            implicitHeight: Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
-
-                            // NOTE: SujianEditorItem is a "viewport renderer" - it must be
-                            // a FIXED overlay on paperBg, NOT inside the Flickable contentItem.
-                            // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
-                            // scroll_y is passed to the Rust renderer for viewport clipping.
-                        }
-                    }
-
-                    // SujianEditorItem: viewport renderer - fixed overlay on paperBg,
-                    // NOT inside Flickable. scroll_y passes contentY to Rust renderer
-                    // for viewport clipping. Flickable only holds a transparent spacer
-                    // for scrollbar / contentHeight.
-                    //
-                    // 关于渲染：LayoutPlan 只控制布局策略（如最大宽度和padding），
-                    // 不控制 SujianEditorItem 的渲染细节，渲染由 QML layout 自动处理
-                    //
-                    // 具体分工：
-                    //   - LayoutPlan 策略（contentMaxWidthVp, shellMode, contentPaddingVp）
-                    //     通过 paperBg 宽度和 SujianEditorItem 的 Q_PROPERTY 传递
-                    //   - 编辑器参数（font_pixel_size, line_spacing, text_indent,
-                    //     cursor_color, scroll_y 等）由 settingsBackend 和 EditorController
-                    //     直接管理，不走 LayoutPlan
-                    //   - 编辑区尺寸跟随 paperBg 宽度和 QML layout 自动调整
-                    //     不需要 SujianEditorItem 的 geometry_changed 依赖 LayoutPlan
-                    //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
-                    // Issue #677 评论 5653315696 约束:
-                    //   - 写作区只拿 DesignTokens 已经算好的最终颜色（editorText、
-                    //     textPrimary、primary、selectedText 等），不在写作区里
-                    //     解释主题 JSON。主题 JSON 的 snake_case key 解析只在
-                    //     DesignTokens.qml 里完成。
-                    //   - text_color 最终来自 dt.editorText → dt.textPrimary →
-                    //     on_surface（Core DTO snake_case 字段）。
-                    //   - QML 的 loading/scrolling 状态（is_loading、is_scrolling）
-                    //     只用于动画抑制等，不能决定 Scene Graph 根节点和正文层是否
-                    //     存在。visible: true 固定不受 loading/scrolling 影响；
-                    //     update_paint_node 通过 ensure_editor_root 在第一帧创建根
-                    //     节点，不再因 root 为空整帧跳过。
-                    SujianEditorItem {
-                        id: sujianEditor
-                        // Issue #693 评论 5689819383: SujianEditorItem 是 ScrollView
-                        // 外的固定 overlay，editorScroll.clip 裁不到这个 sibling。
-                        // 自定义 Scene Graph 默认不裁剪，会画到 item 边界外盖住顶栏。
-                        // 打开 clip 把自身绘制和子节点限制在 bounding rect 内。
-                        // 参考 https://doc.qt.io/qt-6/qquickitem.html#clip-prop
-                        clip: true
-                        x: editorScroll.x
-                        y: editorScroll.y
-                        width: editorScroll.availableWidth
-                        height: editorScroll.availableHeight
-                        visible: true
-                        focus: true
-                        editor_enabled: editorController.chapterId !== ""
-                        font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : 16
-                        font_family: "serif"
-                        line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-                        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled)
-                            ? Math.max(0, (settingsBackend.setting_font_size || 16) * settingsBackend.setting_auto_indent_width)
-                            : 0
-                        padding: dt.sp16
-                        // Issue #710 评论 5731145076: text_color 只绑定 dt.editorText，
-                        // 不再有 fallback 到 dt.textPrimaryHex 的第二套逻辑（已删除）。
-                        // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
-                        // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
-                        // Issue #736 评论 5777408243 问题2: 直接绑定 DesignTokens 的 hex 字符串属性，
-                        // 不再经 QML color → toString() 转换，避免 QString → QML color → toString() → QString 绕一圈。
-                        // 写作区和普通 QML 控件共用同一份最终 color token。
-                        text_color: dt.editorTextHex
-                        selection_color: dt.primaryHex
-                        selected_text_color: dt.selectedTextHex
-                        cursor_color: dt.primaryHex
-                        smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                        // Issue #785: cursor duration 始终独立，不再因协同绑到 typing duration。
-                        cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
-                        typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
-                        typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
-                        // Issue #756 / Issue #785: 协同动画显式模式开关。
-                        // Issue #819 评论 5967250411 问题 6：协同 = 一条 caret 运动轨迹 +
-                        // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。CaretTrack unit
-                        // 没有独立时间线，逐帧边界来自同一笔 cursor track 的当前帧。
-                        coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
-                        scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
-                        viewport_height: sujianEditor.height
-                        is_scrolling: editorScroll.editorAnimationSuppressed
-                        is_loading: editorController.isLoadingChapter
-                        is_applying_format: editorController.isApplyingFormat
-                        // Issue #721: 不再把保存 guard (settingsSaveGuardActive) 传成
-                        // 编辑器视觉抑制状态。主题切换不再触发 applyCurrentSettings()，
-                        // 正文/选区/光标颜色已通过 text_color/selection_color/
-                        // selected_text_color/cursor_color 绑定自动下发，Rust 侧各自
-                        // 走 color_only_changed() -> request_scene_rebuild()，不会清空动画。
-
-                        // Issue #693 评论 5689819383: 光标自动跟随滚动。
-                        // 只在真正的编辑/selection 变化时调度，不监听 scroll_y 或
-                        // 每次 cursor_rect_changed，避免用户手动滚离光标被立刻拽回。
-                        // Rust 侧先发信号再 update_cursor_visual_position()，故用
-                        // Qt.callLater() 等本轮 caret target 算完再读 cursor_rect_y。
-                        // 同一轮即使排了两次 callLater，第二次看到 caret 已可见会直接返回。
-                        onCursor_position_changed: editorScroll.scheduleEnsureCursorVisible()
-                        onText_changed: editorScroll.scheduleEnsureCursorVisible()
-
-                        onWidthChanged: {
-                            Qt.callLater(sujianEditor.flush_content_height)
-                        }
-
-                        Component.onCompleted: {
-                            sujianEditor.verify_animation_signal_meta_object()
-                        }
-
-                        onExplicit_clear_requested: editorController.markPotentialExplicitClear()
-
-                        onContext_menu_requested: function(cx, cy) {
-                            // 将局部坐标映射为全局坐标后弹出菜单
-                            var globalPos = sujianEditor.mapToGlobal(cx, cy)
-                            editorContextMenu.popup(globalPos.x, globalPos.y)
-                        }
-
-                        TapHandler {
-                            acceptedButtons: Qt.RightButton
-                            onTapped: function(eventPoint) {
-                                sujianEditor.click_at(eventPoint.position.x, eventPoint.position.y, false)
-                                editorContextMenu.popup()
-                            }
-                        }
-
-                        // Issue #819 评论 5967250411 问题 4：左键长按选词改用
-                        // Rust property 驱动的 Timer，不再用 TapHandler 接管 pointer event。
-                        //
-                        // 设计：
-                        // - qquickitem_impl mouse_event 是左键 pointer event 的唯一 owner。
-                        //   左键 Press 时 Rust 设 long_press_timer_active = true + 记录 x/y；
-                        //   Release / Move 超阈值时设 false。
-                        // - QML Timer.running 绑定 sujianEditor.long_press_timer_active，
-                        //   到点时调 sujianEditor.activate_pointer_long_press(x, y)。
-                        // - Timer 不接管 pointer grab，不处理 MouseMove/Release。
-                        // - release/cancel 的 selection gesture 结束只由 qquickitem_impl
-                        //   mouse_event 做一次，不再从 QML 结束选择手势。
-                        // - 左键长按只负责选择，不弹菜单（菜单只由右键 TapHandler 触发）。
-                        //
-                        // 旧 leftButtonLongPressHandler (TapHandler) 已删除：它和
-                        // qquickitem_impl mouse_event 双 owner，且 TapHandler onPressedChanged
-                        // / onCanceled 结束选择手势与 mouse_event release
-                        // 重复结束手势。Issue #815 评论 6042062633 修改 1 恢复的鼠标左键
-                        // 长按选词语义保留（Timer 到点调 activate_pointer_long_press）。
-                        Timer {
-                            id: leftButtonLongPressTimer
-                            // Timer.running 绑定 Rust property，由 mouse_event 控制启停。
-                            running: sujianEditor.long_press_timer_active
-                            interval: 800
-                            repeat: false
-                            // Timer 到点时调 activate_pointer_long_press，
-                            // 不接管 pointer grab，不处理 MouseMove/Release。
-                            onTriggered: {
-                                sujianEditor.activate_pointer_long_press(
-                                    sujianEditor.long_press_pending_x,
-                                    sujianEditor.long_press_pending_y)
-                            }
-                        }
-
-                        // Cursor is now rendered in SujianEditorItem Scene Graph (child[3])
-                    }
-
-                    // 编辑器上下文菜单
-                    EditorContextMenu {
-                        id: editorContextMenu
-                        editorItem: sujianEditor
-                        dt: root.dt
-                    }
-
-                    // Issue #690 评论 5675007226 步骤 4: 光标闪烁改用低频 Timer，
-                    // 不再用 FrameAnimation 每帧回调。正文位置动画已由 RenderPlan 同帧计算，
-                    // 不再需要 QML 每帧推进。空闲闪烁只需要低频定时触发 blink，
-                    // 并且每次切换显式 request_frame_update()。
-                    Timer {
-                        id: cursorBlinkTimer
-                        interval: 265
-                        repeat: true
-                        running: sujianEditor.editor_enabled
-                                 && sujianEditor.focus
-                        onTriggered: {
-                            sujianEditor.tick_cursor_animation()
-                        }
-                    }
-
-                    // Animation overlay removed — text animation is now handled in
-                    // SujianEditorItem Scene Graph (child[1]) via ActiveVisualTransactionQueue
-
-                    // 文字动画唯一主路径：Rust Coordinator → Scene Graph (child[1])
-                    // 不再使用 QML overlay 路线
-
-                    // Issue #695 评论 5693346400: 桌面滚轮事件直译器
-                    // 用 WheelHandler 拦截 wheel 事件并直接修改 contentY，阻止
-                    // Qt 6.10 QQuickFlickable::wheelEvent() 自带的 wheel acceleration。
-                    // 放在 editorScroll/sujianEditor 之后声明（z 更高），wheel 事件
-                    // 先到本组件；不拦截鼠标点击/拖拽（Item 默认不处理鼠标事件）。
-                    DesktopWheelScrollHandler {
-                        id: desktopWheelHandler
-                        targetFlickable: editorScroll.contentItem
-                        // 每格滚动距离 = wheelScrollLines × 当前行高
-                        // 行高 = 字体大小 × 行距倍数
-                        lineSpacingPx: (settingsBackend ? settingsBackend.setting_font_size : 16) * (settingsBackend ? settingsBackend.setting_line_spacing : 1.5)
-                        anchors.fill: editorScroll
-                    }
-
-                }
-
-                // Empty state
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    spacing: dt.sp12
-                    visible: !editorController.chapterId
-
-                    Rectangle {
-                        width: 32; height: 32
-                        radius: 16
-                        color: dt.textSecondary
-                        opacity: 0.1
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    AppText {
-                        dt: root.dt
-                        text: qsTr("请选择或新建章节")
-                        color: dt.textSecondary
-                        font.pointSize: dt.fontLgPt
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                }
-
-                // Right drawer button (when closed).
-                // 宽屏 Workbench 由最右竖向 WritingToolRail + 贴边悬浮把手接管收起/展开，
-                // 这里不再重复画一个，避免同一入口出现两份。窄屏保持原来的右侧箭头按钮。
-                Rectangle {
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    width: 36
-                    visible: !root.drawerOpen && !root.toolRailVisible
-                    color: "transparent"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: dt.sp8
-
+                        // "+" button for project (create volume)
                         Rectangle {
-                            width: 28; height: 28
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 36
+                            Layout.leftMargin: dt.sp8
+                            Layout.rightMargin: dt.sp8
                             radius: dt.radiusPill
-                            color: drawerBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
+                            color: addVolumeHover.containsMouse ? dt.primaryContainer : "transparent"
 
-                            AppText {
-                                dt: root.dt
+                            RowLayout {
                                 anchors.centerIn: parent
-                                text: "\u25C0" // Left arrow to indicate it opens from the right
-                                color: dt.textMuted
-                                font.pointSize: dt.fontXsPt
+                                spacing: dt.sp4
+                                AppText {
+                                    dt: root.dt
+                                    text: "+"
+                                    color: dt.primary
+                                    font.pointSize: dt.fontMdPt
+                                    font.weight: Font.Bold
+                                }
+                                AppText {
+                                    dt: root.dt
+                                    text: qsTr("新卷")
+                                    color: dt.primary
+                                    font.pointSize: dt.labelPt
+                                    font.family: dt.fontFamily
+                                }
                             }
 
                             MouseArea {
-                                id: drawerBtnHover
+                                id: addVolumeHover
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.drawerTool = "starmap"
+                                onClicked: root.createVolumeRequested(root.workspaceProjectId)
+                            }
+                        }
+
+                        // Tree context menu
+                        Menu {
+                            id: treeContextMenu
+                            property string itemType: ""
+                            property string itemId: ""
+                            property string itemTitle: ""
+                            property string itemProjectId: ""
+                            property string itemVolumeId: ""
+                            background: Rectangle {
+                                color: dt.surface
+                                border.color: dt.border
+                                radius: dt.radiusMd
+                                border.width: 1
+                            }
+
+                            MenuItem {
+                                id: createVolumeMenuItem
+                                text: qsTr("新建卷")
+                                visible: treeContextMenu.itemType === "project"
+                                contentItem: AppText {
+                                    dt: root.dt
+                                    text: createVolumeMenuItem.text
+                                    color: dt.textPrimary
+                                    font.pointSize: dt.labelPt
+                                    font.family: dt.fontFamily
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Rectangle {
+                                    color: createVolumeMenuItem.highlighted ? dt.surfaceVariant : "transparent"
+                                }
+                                onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
+                            }
+                            MenuItem {
+                                id: createChapterMenuItem
+                                text: qsTr("新建章节")
+                                visible: treeContextMenu.itemType === "volume"
+                                contentItem: AppText {
+                                    dt: root.dt
+                                    text: createChapterMenuItem.text
+                                    color: dt.textPrimary
+                                    font.pointSize: dt.labelPt
+                                    font.family: dt.fontFamily
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Rectangle {
+                                    color: createChapterMenuItem.highlighted ? dt.surfaceVariant : "transparent"
+                                }
+                                onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
+                            }
+                            MenuSeparator {
+                                visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
+                            }
+                            MenuItem {
+                                id: renameMenuItem
+                                text: qsTr("重命名")
+                                visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
+                                contentItem: AppText {
+                                    dt: root.dt
+                                    text: renameMenuItem.text
+                                    color: dt.textPrimary
+                                    font.pointSize: dt.labelPt
+                                    font.family: dt.fontFamily
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Rectangle {
+                                    color: renameMenuItem.highlighted ? dt.surfaceVariant : "transparent"
+                                }
+                                onTriggered: root.renameItemRequested({
+                                    type: treeContextMenu.itemType,
+                                    id: treeContextMenu.itemId,
+                                    projectId: treeContextMenu.itemProjectId,
+                                    volumeId: treeContextMenu.itemVolumeId,
+                                    title: treeContextMenu.itemTitle
+                                })
+                            }
+                            MenuItem {
+                                id: deleteMenuItem
+                    text: qsTr("删除")
+                                visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
+                                contentItem: AppText {
+                                    dt: root.dt
+                                    text: deleteMenuItem.text
+                                    color: dt.error
+                                    font.pointSize: dt.labelPt
+                                    font.family: dt.fontFamily
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Rectangle {
+                                    color: deleteMenuItem.highlighted ? dt.surfaceVariant : "transparent"
+                                }
+                                onTriggered: root.deleteItemRequested({
+                                    type: treeContextMenu.itemType,
+                                    id: treeContextMenu.itemId,
+                                    projectId: treeContextMenu.itemProjectId,
+                                    volumeId: treeContextMenu.itemVolumeId,
+                                    title: treeContextMenu.itemTitle
+                                })
+                            }
+                        }
+                    }
+                }
+
+            // Middle Area: Toolbar + Editor
+            ColumnLayout {
+                SplitView.fillWidth: true
+                // Issue #825：宽屏下正文宽度取 Core 的 Editor bounds；
+                // 非宽屏保留原来的「800 首选 / 480 最小」。
+                SplitView.preferredWidth: root.coreSized ? root.editorWidth : 800
+                SplitView.minimumWidth: root.coreSized ? root.editorWidth : 480
+                spacing: 0
+
+                // Editor Container Area
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: dt.bg
+
+                    // Centered paper container
+                    Item {
+                        anchors.fill: parent
+                        anchors.leftMargin: dt.sp8
+                        anchors.rightMargin: dt.sp8
+                        anchors.topMargin: dt.sp8
+                        anchors.bottomMargin: dt.sp8
+
+                        // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
+                        // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
+                        // 编辑区组件（SujianEditorItem）跟随 paperBg 宽度
+                        // 编辑器交互由 EditorController + SujianEditorItem 直接管理
+                        Rectangle {
+                            id: paperBg
+                            width: {
+                                // 用户拖拽宽度优先；未拖过才用布局策略默认宽度
+                                var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
+                                        ? root.layoutPlan.contentMaxWidthVp
+                                        : 820
+                                // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                                var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
+                                        ? settingsBackend.setting_desktop_editor_width
+                                        : 0
+                                var targetW = userW > 0 ? userW : planW
+                                return Math.max(480, Math.min(parent.width, targetW))
+                            }
+                            height: parent.height
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            color: dt.editorBackground
+                            radius: dt.radiusMd
+                            border.color: dt.border
+                            border.width: 1
+                        }
+
+                        // Left drag resize handle
+                        MouseArea {
+                            id: leftResizeHandle
+                            width: dt.sp8
+                            anchors.left: paperBg.left
+                            anchors.leftMargin: -(width / 2)
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            cursorShape: Qt.SizeHorCursor
+                            hoverEnabled: true
+
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 2
+                                height: parent.height
+                                color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
+                                opacity: parent.pressed ? 0.9 : 0.4
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                            }
+
+                            property real startX: 0
+                            property real startWidth: 0
+
+                            onPressed: function(mouse) {
+                                startX = mouse.x;
+                                startWidth = paperBg.width;
+                            }
+
+                            onPositionChanged: function(mouse) {
+                                if (pressed && settingsBackend) {
+                                    var dx = mouse.x - startX;
+                                    var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
+                                    // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                                    settingsBackend.setting_desktop_editor_width = newWidth;
+                                    settingsBackend.debounced_save_local_settings();
+                                }
+                            }
+                        }
+
+                        // Right drag resize handle
+                        MouseArea {
+                            id: rightResizeHandle
+                            width: dt.sp8
+                            anchors.right: paperBg.right
+                            anchors.rightMargin: -(width / 2)
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            cursorShape: Qt.SizeHorCursor
+                            hoverEnabled: true
+
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 2
+                                height: parent.height
+                                color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
+                                opacity: parent.pressed ? 0.9 : 0.4
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                            }
+
+                            property real startX: 0
+                            property real startWidth: 0
+
+                            onPressed: function(mouse) {
+                                startX = mouse.x;
+                                startWidth = paperBg.width;
+                            }
+
+                            onPositionChanged: function(mouse) {
+                                if (pressed && settingsBackend) {
+                                    var dx = mouse.x - startX;
+                                    var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
+                                    // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
+                                    settingsBackend.setting_desktop_editor_width = newWidth;
+                                    settingsBackend.debounced_save_local_settings();
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            id: editorScroll
+                            // Issue #695 评论 5693346400: editorIsScrolling 把
+                            // desktopWheelHandler.active 算进去，这样直接修改 contentY
+                            // 时现有的滚动期间动画暂停逻辑仍然有效。
+                            readonly property bool editorIsScrolling: ScrollBar.vertical.active || desktopWheelHandler.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
+                            property bool editorAnimationSuppressed: false
+                            anchors.fill: paperBg
+                            anchors.margins: dt.sp20
+                            clip: true
+                            contentWidth: availableWidth
+                            contentHeight: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
+
+                            function clampScroll() {
+                                if (contentItem) {
+                                    var maxScroll = Math.max(0, contentHeight - height);
+                                    // Only clamp if contentY exceeds the valid range.
+                                    // Do NOT force contentY to 0 when contentHeight is still updating.
+                                    if (maxScroll > 0 && contentItem.contentY > maxScroll) {
+                                        contentItem.contentY = maxScroll;
+                                    }
+                                }
+                            }
+
+                            // Issue #724 评论 5751268664 缺口2: 光标自动跟随滚动。
+                            // 语义同 QPlainTextEdit::ensureCursorVisible()（centerOnScroll=false）：
+                            // 只滚刚好够让 caret 回到可视区，不每打一字就强制居中。
+                            // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
+                            // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
+                            // Scene Graph 和 IME 继续使用同一滚动位置。
+                            // Issue #727 评论 5757225958 问题2: 删除对已删除 Rust 方法
+                            // set_auto_follow_anchor_with_target 的调用，也删除
+                            // visual_cursor_rect_y / visual_cursor_rect_height 这套只为
+                            // anchor 服务的旧接口。ensureCursorVisible() 只根据 viewport
+                            // cursor_rect_y 算 targetY，最后只做 flick.contentY = targetY。
+
+                            function ensureCursorVisible() {
+                                const flick = contentItem
+                                if (!flick)
+                                    return
+
+                                const margin = Math.max(dt.sp12, sujianEditor.cursor_rect_height * 0.5)
+                                const top = sujianEditor.cursor_rect_y
+                                const bottom = top + sujianEditor.cursor_rect_height
+                                const visibleBottom = availableHeight - margin
+
+                                let nextY = flick.contentY
+                                if (top < margin) {
+                                    nextY += top - margin
+                                } else if (bottom > visibleBottom) {
+                                    nextY += bottom - visibleBottom
+                                } else {
+                                    return
+                                }
+
+                                const maxY = Math.max(0, contentHeight - height)
+                                // Issue #727 评论 5757225958 问题2: 只算出完整目标 targetY，
+                                // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。
+                                // 否则直接赋值 flick.contentY，不再调用已删除的
+                                // set_auto_follow_anchor_with_target。
+                                const targetY = Math.max(0, Math.min(maxY, nextY))
+                                if (Math.abs(targetY - flick.contentY) < 0.5)
+                                    return
+                                flick.contentY = targetY
+                            }
+
+                            function scheduleEnsureCursorVisible() {
+                                Qt.callLater(ensureCursorVisible)
+                            }
+
+                            onContentHeightChanged: clampScroll()
+                            onHeightChanged: clampScroll()
+                            Component.onCompleted: {
+                                // Issue #695: Qt 6.9+ 建议桌面 Flickable 设 acceptedButtons: Qt.NoButton，
+                                // 鼠标按住拖动不当触屏甩动；触屏 flick 不受 mouse-button 限制。
+                                // 让 Qt 原生处理 wheel/scrollbar，ScrollView/Flickable 继续持有 contentY。
+                                if (contentItem) {
+                                    contentItem.acceptedButtons = Qt.NoButton;
+                                }
+                            }
+                            onEditorIsScrollingChanged: {
+                                // Issue #724 评论 5752140048 问题 2: 滚动停止时恢复 false，
+                                // 触发 Rust set_is_scrolling(false) → resume_all()。
+                                // anchor 生命周期和 editorAnimationSuppressed 是两件事，
+                                // 不要为了删 anchor timer 顺手把滚动动画抑制状态恢复也删掉。
+                                editorAnimationSuppressed = editorIsScrolling
+                            }
+
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
+                                parent: editorScroll
+                                anchors.top: editorScroll.top
+                                anchors.bottom: editorScroll.bottom
+                                anchors.right: editorScroll.right
+                            }
+
+                            Item {
+                                id: editorCanvas
+                                readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + dt.sp16 * 2, editorScroll.availableHeight)
+                                width: editorScroll.availableWidth
+                                height: editorScroll.availableHeight
+                                implicitHeight: Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
+
+                                // NOTE: SujianEditorItem is a "viewport renderer" - it must be
+                                // a FIXED overlay on paperBg, NOT inside the Flickable contentItem.
+                                // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
+                                // scroll_y is passed to the Rust renderer for viewport clipping.
+                            }
+                        }
+
+                        // SujianEditorItem: viewport renderer - fixed overlay on paperBg,
+                        // NOT inside Flickable. scroll_y passes contentY to Rust renderer
+                        // for viewport clipping. Flickable only holds a transparent spacer
+                        // for scrollbar / contentHeight.
+                        //
+                        // 关于渲染：LayoutPlan 只控制布局策略（如最大宽度和padding），
+                        // 不控制 SujianEditorItem 的渲染细节，渲染由 QML layout 自动处理
+                        //
+                        // 具体分工：
+                        //   - LayoutPlan 策略（contentMaxWidthVp, shellMode, contentPaddingVp）
+                        //     通过 paperBg 宽度和 SujianEditorItem 的 Q_PROPERTY 传递
+                        //   - 编辑器参数（font_pixel_size, line_spacing, text_indent,
+                        //     cursor_color, scroll_y 等）由 settingsBackend 和 EditorController
+                        //     直接管理，不走 LayoutPlan
+                        //   - 编辑区尺寸跟随 paperBg 宽度和 QML layout 自动调整
+                        //     不需要 SujianEditorItem 的 geometry_changed 依赖 LayoutPlan
+                        //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
+                        // Issue #677 评论 5653315696 约束:
+                        //   - 写作区只拿 DesignTokens 已经算好的最终颜色（editorText、
+                        //     textPrimary、primary、selectedText 等），不在写作区里
+                        //     解释主题 JSON。主题 JSON 的 snake_case key 解析只在
+                        //     DesignTokens.qml 里完成。
+                        //   - text_color 最终来自 dt.editorText → dt.textPrimary →
+                        //     on_surface（Core DTO snake_case 字段）。
+                        //   - QML 的 loading/scrolling 状态（is_loading、is_scrolling）
+                        //     只用于动画抑制等，不能决定 Scene Graph 根节点和正文层是否
+                        //     存在。visible: true 固定不受 loading/scrolling 影响；
+                        //     update_paint_node 通过 ensure_editor_root 在第一帧创建根
+                        //     节点，不再因 root 为空整帧跳过。
+                        SujianEditorItem {
+                            id: sujianEditor
+                            // Issue #693 评论 5689819383: SujianEditorItem 是 ScrollView
+                            // 外的固定 overlay，editorScroll.clip 裁不到这个 sibling。
+                            // 自定义 Scene Graph 默认不裁剪，会画到 item 边界外盖住顶栏。
+                            // 打开 clip 把自身绘制和子节点限制在 bounding rect 内。
+                            // 参考 https://doc.qt.io/qt-6/qquickitem.html#clip-prop
+                            clip: true
+                            x: editorScroll.x
+                            y: editorScroll.y
+                            width: editorScroll.availableWidth
+                            height: editorScroll.availableHeight
+                            visible: true
+                            focus: true
+                            editor_enabled: editorController.chapterId !== ""
+                            font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : 16
+                            font_family: "serif"
+                            line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+                            text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled)
+                                ? Math.max(0, (settingsBackend.setting_font_size || 16) * settingsBackend.setting_auto_indent_width)
+                                : 0
+                            padding: dt.sp16
+                            // Issue #710 评论 5731145076: text_color 只绑定 dt.editorText，
+                            // 不再有 fallback 到 dt.textPrimaryHex 的第二套逻辑（已删除）。
+                            // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
+                            // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
+                            // Issue #736 评论 5777408243 问题2: 直接绑定 DesignTokens 的 hex 字符串属性，
+                            // 不再经 QML color → toString() 转换，避免 QString → QML color → toString() → QString 绕一圈。
+                            // 写作区和普通 QML 控件共用同一份最终 color token。
+                            text_color: dt.editorTextHex
+                            selection_color: dt.primaryHex
+                            selected_text_color: dt.selectedTextHex
+                            cursor_color: dt.primaryHex
+                            smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
+                            // Issue #785: cursor duration 始终独立，不再因协同绑到 typing duration。
+                            cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
+                            typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
+                            typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
+                            // Issue #756 / Issue #785: 协同动画显式模式开关。
+                            // Issue #819 评论 5967250411 问题 6：协同 = 一条 caret 运动轨迹 +
+                            // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。CaretTrack unit
+                            // 没有独立时间线，逐帧边界来自同一笔 cursor track 的当前帧。
+                            coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
+                            scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
+                            viewport_height: sujianEditor.height
+                            is_scrolling: editorScroll.editorAnimationSuppressed
+                            is_loading: editorController.isLoadingChapter
+                            is_applying_format: editorController.isApplyingFormat
+                            // Issue #721: 不再把保存 guard (settingsSaveGuardActive) 传成
+                            // 编辑器视觉抑制状态。主题切换不再触发 applyCurrentSettings()，
+                            // 正文/选区/光标颜色已通过 text_color/selection_color/
+                            // selected_text_color/cursor_color 绑定自动下发，Rust 侧各自
+                            // 走 color_only_changed() -> request_scene_rebuild()，不会清空动画。
+
+                            // Issue #693 评论 5689819383: 光标自动跟随滚动。
+                            // 只在真正的编辑/selection 变化时调度，不监听 scroll_y 或
+                            // 每次 cursor_rect_changed，避免用户手动滚离光标被立刻拽回。
+                            // Rust 侧先发信号再 update_cursor_visual_position()，故用
+                            // Qt.callLater() 等本轮 caret target 算完再读 cursor_rect_y。
+                            // 同一轮即使排了两次 callLater，第二次看到 caret 已可见会直接返回。
+                            onCursor_position_changed: editorScroll.scheduleEnsureCursorVisible()
+                            onText_changed: editorScroll.scheduleEnsureCursorVisible()
+
+                            onWidthChanged: {
+                                Qt.callLater(sujianEditor.flush_content_height)
+                            }
+
+                            Component.onCompleted: {
+                                sujianEditor.verify_animation_signal_meta_object()
+                            }
+
+                            onExplicit_clear_requested: editorController.markPotentialExplicitClear()
+
+                            onContext_menu_requested: function(cx, cy) {
+                                // 将局部坐标映射为全局坐标后弹出菜单
+                                var globalPos = sujianEditor.mapToGlobal(cx, cy)
+                                editorContextMenu.popup(globalPos.x, globalPos.y)
+                            }
+
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: function(eventPoint) {
+                                    sujianEditor.click_at(eventPoint.position.x, eventPoint.position.y, false)
+                                    editorContextMenu.popup()
+                                }
+                            }
+
+                            // Issue #819 评论 5967250411 问题 4：左键长按选词改用
+                            // Rust property 驱动的 Timer，不再用 TapHandler 接管 pointer event。
+                            //
+                            // 设计：
+                            // - qquickitem_impl mouse_event 是左键 pointer event 的唯一 owner。
+                            //   左键 Press 时 Rust 设 long_press_timer_active = true + 记录 x/y；
+                            //   Release / Move 超阈值时设 false。
+                            // - QML Timer.running 绑定 sujianEditor.long_press_timer_active，
+                            //   到点时调 sujianEditor.activate_pointer_long_press(x, y)。
+                            // - Timer 不接管 pointer grab，不处理 MouseMove/Release。
+                            // - release/cancel 的 selection gesture 结束只由 qquickitem_impl
+                            //   mouse_event 做一次，不再从 QML 结束选择手势。
+                            // - 左键长按只负责选择，不弹菜单（菜单只由右键 TapHandler 触发）。
+                            //
+                            // 旧 leftButtonLongPressHandler (TapHandler) 已删除：它和
+                            // qquickitem_impl mouse_event 双 owner，且 TapHandler onPressedChanged
+                            // / onCanceled 结束选择手势与 mouse_event release
+                            // 重复结束手势。Issue #815 评论 6042062633 修改 1 恢复的鼠标左键
+                            // 长按选词语义保留（Timer 到点调 activate_pointer_long_press）。
+                            Timer {
+                                id: leftButtonLongPressTimer
+                                // Timer.running 绑定 Rust property，由 mouse_event 控制启停。
+                                running: sujianEditor.long_press_timer_active
+                                interval: 800
+                                repeat: false
+                                // Timer 到点时调 activate_pointer_long_press，
+                                // 不接管 pointer grab，不处理 MouseMove/Release。
+                                onTriggered: {
+                                    sujianEditor.activate_pointer_long_press(
+                                        sujianEditor.long_press_pending_x,
+                                        sujianEditor.long_press_pending_y)
+                                }
+                            }
+
+                            // Cursor is now rendered in SujianEditorItem Scene Graph (child[3])
+                        }
+
+                        // 编辑器上下文菜单
+                        EditorContextMenu {
+                            id: editorContextMenu
+                            editorItem: sujianEditor
+                            dt: root.dt
+                        }
+
+                        // Issue #690 评论 5675007226 步骤 4: 光标闪烁改用低频 Timer，
+                        // 不再用 FrameAnimation 每帧回调。正文位置动画已由 RenderPlan 同帧计算，
+                        // 不再需要 QML 每帧推进。空闲闪烁只需要低频定时触发 blink，
+                        // 并且每次切换显式 request_frame_update()。
+                        Timer {
+                            id: cursorBlinkTimer
+                            interval: 265
+                            repeat: true
+                            running: sujianEditor.editor_enabled
+                                     && sujianEditor.focus
+                            onTriggered: {
+                                sujianEditor.tick_cursor_animation()
+                            }
+                        }
+
+                        // Animation overlay removed — text animation is now handled in
+                        // SujianEditorItem Scene Graph (child[1]) via ActiveVisualTransactionQueue
+
+                        // 文字动画唯一主路径：Rust Coordinator → Scene Graph (child[1])
+                        // 不再使用 QML overlay 路线
+
+                        // Issue #695 评论 5693346400: 桌面滚轮事件直译器
+                        // 用 WheelHandler 拦截 wheel 事件并直接修改 contentY，阻止
+                        // Qt 6.10 QQuickFlickable::wheelEvent() 自带的 wheel acceleration。
+                        // 放在 editorScroll/sujianEditor 之后声明（z 更高），wheel 事件
+                        // 先到本组件；不拦截鼠标点击/拖拽（Item 默认不处理鼠标事件）。
+                        DesktopWheelScrollHandler {
+                            id: desktopWheelHandler
+                            targetFlickable: editorScroll.contentItem
+                            // 每格滚动距离 = wheelScrollLines × 当前行高
+                            // 行高 = 字体大小 × 行距倍数
+                            lineSpacingPx: (settingsBackend ? settingsBackend.setting_font_size : 16) * (settingsBackend ? settingsBackend.setting_line_spacing : 1.5)
+                            anchors.fill: editorScroll
+                        }
+
+                    }
+
+                    // Empty state
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: dt.sp12
+                        visible: !editorController.chapterId
+
+                        Rectangle {
+                            width: 32; height: 32
+                            radius: 16
+                            color: dt.textSecondary
+                            opacity: 0.1
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        AppText {
+                            dt: root.dt
+                            text: qsTr("请选择或新建章节")
+                            color: dt.textSecondary
+                            font.pointSize: dt.fontLgPt
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+
+                    // Right drawer button (when closed).
+                    // 宽屏 Workbench 由最右竖向 WritingToolRail + 贴边悬浮把手接管收起/展开，
+                    // 这里不再重复画一个，避免同一入口出现两份。窄屏保持原来的右侧箭头按钮。
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 36
+                        visible: !root.drawerOpen && !root.toolRailVisible
+                        color: "transparent"
+
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: dt.sp8
+
+                            Rectangle {
+                                width: 28; height: 28
+                                radius: dt.radiusPill
+                                color: drawerBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
+
+                                AppText {
+                                    dt: root.dt
+                                    anchors.centerIn: parent
+                                    text: "\u25C0" // Left arrow to indicate it opens from the right
+                                    color: dt.textMuted
+                                    font.pointSize: dt.fontXsPt
+                                }
+
+                                MouseArea {
+                                    id: drawerBtnHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.drawerTool = "stats"
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Issue #825：工具 pane（Core 的 ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
-        RightDrawer {
-            id: rightDrawerRect
-            // 宽屏宽度取 Core 的 ToolPane bounds；非宽屏保留原来的可拖拽区间。
-            SplitView.preferredWidth: root.coreSized ? root.toolPaneWidth : 320
-            SplitView.minimumWidth: root.coreSized ? root.toolPaneWidth : 240
-            SplitView.maximumWidth: root.coreSized ? root.toolPaneWidth : 480
-            visible: root.drawerOpen
-            dt: root.dt
-            editorBackendRef: root.editorBackendRef
-            isOpen: root.drawerOpen
-            selectedTool: root.drawerTool
-            aiCapable: root.aiCapable
-            aiEnabled: root.aiEnabled
-            // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
-            syncBackendRef: root.syncBackendRef
-            workspaceProjectId: root.workspaceProjectId
-            hasConflicts: root.hasConflicts
-            // Issue #770 评论 5842877986: 透传完整冲突快照给 RightDrawer，
-            // 不再让 RightDrawer/SyncConflictPanel 各自查一份。
-            syncConflicts: root.syncConflicts
-            // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
-            // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
-            requestedConflictPath: root.conflictPath
-            onCloseRequested: root.drawerTool = ""
-            onConflictToolRequested: {
-                // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
-                root.drawerTool = "conflict";
-                root.refreshConflictList();
+            // Issue #825：工具 pane（Core 的 ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
+            RightDrawer {
+                id: rightDrawerRect
+                // 宽屏宽度取 Core 的 ToolPane bounds；非宽屏保留原来的可拖拽区间。
+                SplitView.preferredWidth: root.coreSized ? root.toolPaneWidth : 320
+                SplitView.minimumWidth: root.coreSized ? root.toolPaneWidth : 240
+                SplitView.maximumWidth: root.coreSized ? root.toolPaneWidth : 480
+                visible: root.drawerOpen
+                dt: root.dt
+                editorBackendRef: root.editorBackendRef
+                isOpen: root.drawerOpen
+                selectedTool: root.drawerTool
+                // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
+                syncBackendRef: root.syncBackendRef
+                workspaceProjectId: root.workspaceProjectId
+                hasConflicts: root.hasConflicts
+                // Issue #770 评论 5842877986: 透传完整冲突快照给 RightDrawer，
+                // 不再让 RightDrawer/SyncConflictPanel 各自查一份。
+                syncConflicts: root.syncConflicts
+                // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
+                // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
+                requestedConflictPath: root.conflictPath
+                onCloseRequested: root.drawerTool = ""
+                onConflictToolRequested: {
+                    // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
+                    root.drawerTool = "conflict";
+                    root.refreshConflictList();
+                }
             }
-        }
 
-        // Issue #825：最右竖向工具 rail（Core 的 ToolRail 角色）。
-        // 只负责「选哪个工具 + 展开/收起 ToolPane」，工具内容在右边的 ToolPane 里。
-        // 顶部工具条上的同步/搜索/设置仍然留在 TopWritingToolbar，不搬到这里。
-        WritingToolRail {
-            id: toolRailRect
-            visible: root.toolRailVisible
-            SplitView.preferredWidth: root.coreSized ? root.toolRailWidth : 56
-            SplitView.minimumWidth: root.coreSized ? root.toolRailWidth : 56
-            SplitView.maximumWidth: root.coreSized ? root.toolRailWidth : 56
-            dt: root.dt
-            aiCapable: root.aiCapable
-            aiEnabled: root.aiEnabled
-            hasConflicts: root.hasConflicts
-            selectedTool: root.drawerTool
-            onToolRequested: function(toolKey) { root.drawerTool = toolKey; }
-            onToolPaneToggled: {
-                root.drawerTool = root.drawerOpen ? "" : "starmap";
-                if (root.drawerOpen) root.requestEditorFocus();
+            // Issue #825：最右竖向工具 rail（Core 的 ToolRail 角色）。
+            // 只负责「选哪个工具 + 展开/收起 ToolPane」，工具内容在右边的 ToolPane 里。
+            // 顶部工具条带 ToolbarTrailing 的同步/搜索/设置不搬到这里。
+            WritingToolRail {
+                id: toolRailRect
+                visible: root.toolRailVisible
+                SplitView.preferredWidth: root.coreSized ? root.toolRailWidth : 56
+                SplitView.minimumWidth: root.coreSized ? root.toolRailWidth : 56
+                SplitView.maximumWidth: root.coreSized ? root.toolRailWidth : 56
+                dt: root.dt
+                hasConflicts: root.hasConflicts
+                selectedTool: root.drawerTool
+                // Issue #825 复核4 第2项：rail 内部的按钮宽度也吃 Core 的 ToolRail bounds，
+                // 不能容器用 Core 宽度、组件内部还按默认 56 画。
+                railWidth: root.coreSized ? root.toolRailWidth : 56
+                onToolRequested: function(toolKey) { root.drawerTool = toolKey; }
+                onToolPaneToggled: {
+                    root.drawerTool = root.drawerOpen ? "" : "starmap";
+                    if (root.drawerOpen) root.requestEditorFocus();
+                }
             }
         }
     }
