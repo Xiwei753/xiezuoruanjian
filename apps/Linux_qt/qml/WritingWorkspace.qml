@@ -48,6 +48,9 @@ Rectangle {
     property var tree: []
     property string projectTitle: ""
     property bool drawerOpen: false
+    // 宽屏骨架：左右面板只改变 Qt UI 布局，不进入 Core 编辑事务。
+    property bool leftPaneCollapsed: false
+    readonly property bool wideWorkbench: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
     property int drawerTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
@@ -308,6 +311,7 @@ Rectangle {
         // Left sidebar: volume/chapter tree
         Rectangle {
             id: sidebarRect
+            visible: !root.leftPaneCollapsed
             SplitView.preferredWidth: settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
@@ -1356,6 +1360,64 @@ Rectangle {
         target: root.syncBackendRef
         function onSync_conflicts_changed() {
             root.refreshConflictList();
+        }
+    }
+
+
+    // 宽屏折叠把手骨架。后续只填样式和持久化，不改编辑器 session owner。
+    Rectangle {
+        visible: root.wideWorkbench
+        z: 50
+        width: 28
+        height: 72
+        radius: dt.radiusPill
+        color: leftPaneHandleHover.containsMouse ? dt.surfaceVariant : dt.surface
+        border.color: dt.border
+        border.width: 1
+        x: root.leftPaneCollapsed ? 0 : Math.max(0, sidebarRect.width - width / 2)
+        y: Math.round((root.height - height) / 2)
+
+        AppText {
+            dt: root.dt
+            anchors.centerIn: parent
+            text: root.leftPaneCollapsed ? "›" : "‹"
+            color: dt.textSecondary
+            font.pointSize: dt.fontLgPt
+        }
+        MouseArea {
+            id: leftPaneHandleHover
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.leftPaneCollapsed = !root.leftPaneCollapsed
+        }
+    }
+
+    Rectangle {
+        visible: root.wideWorkbench
+        z: 50
+        width: 28
+        height: 72
+        radius: dt.radiusPill
+        color: rightPaneHandleHover.containsMouse ? dt.surfaceVariant : dt.surface
+        border.color: dt.border
+        border.width: 1
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+
+        AppText {
+            dt: root.dt
+            anchors.centerIn: parent
+            text: root.drawerOpen ? "›" : "‹"
+            color: dt.textSecondary
+            font.pointSize: dt.fontLgPt
+        }
+        MouseArea {
+            id: rightPaneHandleHover
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.drawerOpen = !root.drawerOpen
         }
     }
 
