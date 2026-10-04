@@ -299,11 +299,22 @@ export struct WritingScreen {
 
     // Issue #629 评论6 Part G：退后台用 performBackgroundSave（flush+idle+save），
     // 不只 saveChapter，避免最后几个字还在 dispatcher 队列里就 save 丢输入。
+    // Issue #825 复核10：observer 只创建一次，之后靠 reconfigure() 改开关/延迟。
+    // 早先每次设置变化都 remove + new，而 removeObserver 不会停旧定时器，
+    // 旧 interval 会按旧延迟继续跑，新 observer 又不会补发 onForeground。
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
       (): Promise<void> => this.performBackgroundSave(),
-      this.settings.autoSaveDelayMs
+      this.settings.autoSaveDelayMs,
+      this.settings.autoSaveEnabled
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
+    // 页面出现时通常已经在前台，addObserver 不会补发 onForeground，
+    // 所以按当前真实前后台状态显式起一次（或确认该关着）。
+    this.autoSaveObserver.reconfigure(
+      this.settings.autoSaveEnabled,
+      this.settings.autoSaveDelayMs,
+      this.lifecycle.isForeground()
+    )
 
     // Issue #825 复核8第 3 点：订阅 LocalSettings 落盘广播，
     // 让宽屏设置浮层里的改动能实时回流到本页（重建排版 + 重配自动保存）。
@@ -519,7 +530,11 @@ export struct WritingScreen {
     this.stopShareLifecycle()
 
     if (this.autoSaveObserver) {
+      // Issue #825 复核10：removeObserver 只从 Set 里删引用，不会停定时器，
+      // 所以移除前先显式 stopAutoSave()，保证页面离开后不留 interval。
+      this.autoSaveObserver.stopAutoSave()
       this.lifecycle.removeObserver(this.autoSaveObserver)
+      this.autoSaveObserver = null
     }
     if (this.shareLifecycleObserver) {
       this.lifecycle.removeObserver(this.shareLifecycleObserver)
@@ -1097,14 +1112,13 @@ export struct WritingScreen {
       lineHeight: this.settings.editorLineSpacingMultiplier
     } as ThemeUpdateParams)
 
-    if (this.autoSaveObserver) {
-      this.lifecycle.removeObserver(this.autoSaveObserver)
-      this.autoSaveObserver = new AutoSaveLifecycleObserver(
-        (): Promise<void> => this.performBackgroundSave(),
-        this.settings.autoSaveDelayMs
-      )
-      this.lifecycle.addObserver(this.autoSaveObserver)
-    }
+    // Issue #825 复核10：设置真相变了就地重配同一个 observer，
+    // 不再 remove + new（remove 不会停旧定时器，会叠 interval）。
+    this.autoSaveObserver?.reconfigure(
+      this.settings.autoSaveEnabled,
+      this.settings.autoSaveDelayMs,
+      this.lifecycle.isForeground()
+    )
   }
 
   // Issue #629 评论 5308748920 问题3：手动/自动保存入口。
@@ -1479,9 +1493,13 @@ export struct WritingScreen {
       // 之前拿到的其他持有者共享同一份引用。
       const persisted = await this.bridge.getLocalSettings()
       if (persisted.success && persisted.data) {
+        // Issue #825 复核10：本页已经订阅 LocalSettingsStore，publish 会同步回调
+        // applyPublishedSettings 一次，所以这里只广播、不再直接调用，
+        // 否则 snapshot/主题/自动保存会重建两遍。
         LocalSettingsStore.getInstance().publish(persisted.data)
-        this.applyPublishedSettings(persisted.data)
       } else {
+        // 重新读取失败：没有可广播的 persisted 快照，直接用刚保存的那份兜底，
+        // 但不 publish（不把可能还被别人持有的对象当成「最近一次落盘」）。
         this.applyPublishedSettings(latest.data)
       }
       // 草稿不动：它本来就是这次保存的来源值，若期间又点过，队列里还有下一次。

@@ -120,17 +120,48 @@ export class HarmonyLifecycle {
   }
 }
 
+// Issue #825 复核10：定时自动保存的开关与间隔现在能被就地重配。
+//
+// 之前这里只有一个 intervalMs，且 onForeground 无条件 startAutoSave()：
+// 页面侧只能靠「removeObserver + new 一个」来改延迟，而 removeObserver 只是
+// 从 Set 里删引用，不会调旧 observer 的 stopAutoSave()——旧定时器继续按旧间隔
+// 跑，新 observer 又因为 addObserver 不会补发 onForeground 而当场不启动，
+// 下一次前后台切换后新旧 interval 还有机会叠在一起。
+//
+// 所以这里改成可重配对象：enabled 决定定时保存开不开，reconfigure() 先停再按
+// 新参数决定要不要立刻重启。退后台那次安全保存与这个开关是两件事，仍然无条件执行，
+// 避免把「定时自动保存开关」和「退后台保护正文」混在一起。
 export class AutoSaveLifecycleObserver implements LifecycleObserver {
   private saveCallback: () => Promise<void>
   private intervalId: number = -1
   private intervalMs: number
+  private enabled: boolean
 
-  constructor(saveCallback: () => Promise<void>, intervalMs: number = 30000) {
+  constructor(saveCallback: () => Promise<void>, intervalMs: number = 30000, enabled: boolean = true) {
     this.saveCallback = saveCallback
     this.intervalMs = intervalMs
+    this.enabled = enabled
+  }
+
+  /**
+   * 按最新设置重配定时自动保存。
+   * @param enabled 设置里的自动保存开关
+   * @param intervalMs 最新的自动保存间隔
+   * @param isForeground 调用方当前的真实前后台状态（observer 自己收不到「已在前台」）
+   */
+  reconfigure(enabled: boolean, intervalMs: number, isForeground: boolean): void {
+    this.stopAutoSave()
+    this.enabled = enabled
+    this.intervalMs = intervalMs
+    if (enabled && isForeground) {
+      this.startAutoSave()
+    }
   }
 
   onForeground(): void {
+    if (!this.enabled) {
+      return
+    }
     this.startAutoSave()
   }
 
