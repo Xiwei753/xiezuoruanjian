@@ -185,3 +185,166 @@ fn local_edge_to_normalized_portal_node_is_dropped_without_layout_geometry() {
          这就是 QML computeEdgeRenders() 必须补几何的原因"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 评论 5976758184: 正式边端点 = 形状真实边界交点（Node 矩形 / Embed 圆周），
+// 不再靠固定 42px 内缩猜边界。
+// ─────────────────────────────────────────────────────────────────────
+
+/// 圆求交：从圆心朝目标方向，交点必须落在圆周上。
+#[test]
+fn boundary_point_on_circle_is_on_the_circumference() {
+    let embed = EndpointShape {
+        x: 0.0,
+        y: 0.0,
+        width: 200.0,
+        height: 200.0,
+        is_embed: true,
+    };
+    let right = endpoint_boundary_point(&embed, (100.0, 100.0), (1.0, 0.0));
+    assert!(
+        (right.0 - 200.0).abs() < 0.01 && (right.1 - 100.0).abs() < 0.01,
+        "右侧圆周交点: {:?}",
+        right
+    );
+    let diag = endpoint_boundary_point(&embed, (100.0, 100.0), (0.6, 0.8));
+    assert!(
+        (diag.0 - 160.0).abs() < 0.01 && (diag.1 - 180.0).abs() < 0.01,
+        "斜向圆周交点: {:?}",
+        diag
+    );
+    // 偏移线（双向边）：交点仍在圆周上。
+    let shifted = endpoint_boundary_point(&embed, (100.0, 112.0), (1.0, 0.0));
+    let d = ((shifted.0 - 100.0).powi(2) + (shifted.1 - 100.0).powi(2)).sqrt();
+    assert!((d - 100.0).abs() < 0.01, "偏移线交点必须贴圆周, d={}", d);
+}
+
+/// 矩形求交：从矩形中心朝目标方向，交点落在矩形边上。
+#[test]
+fn boundary_point_on_rect_is_on_the_rect_edge() {
+    let node = EndpointShape {
+        x: 0.0,
+        y: 0.0,
+        width: 150.0,
+        height: 60.0,
+        is_embed: false,
+    };
+    let right = endpoint_boundary_point(&node, (75.0, 30.0), (1.0, 0.0));
+    assert!(
+        (right.0 - 150.0).abs() < 0.01 && (right.1 - 30.0).abs() < 0.01,
+        "右侧矩形边: {:?}",
+        right
+    );
+    let up = endpoint_boundary_point(&node, (75.0, 30.0), (0.0, -1.0));
+    assert!(
+        (up.0 - 75.0).abs() < 0.01 && up.1.abs() < 0.01,
+        "上侧矩形边: {:?}",
+        up
+    );
+}
+
+/// 端到端：本地 Node → 深路径 Embed 端点。起点在矩形边、终点贴在圆周上，
+/// 固定 42px 内缩的旧行为（x ≈ 458）会扎进 200 圆内 58px。
+#[test]
+fn edge_to_embed_endpoint_lands_on_circle_boundary() {
+    use writer_core::starmap::types::reference::StarMapPathSegment;
+
+    let graph = StarMapGraph {
+        starmap_id: "map_1".to_string(),
+        nodes: vec![node("note_1", 0.0)],
+        edges: vec![StarMapEdge {
+            id: "edge_1".to_string(),
+            from: StarMapTargetPath {
+                starmap_id: "map_1".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "note_1".to_string(),
+                },
+            },
+            to: StarMapTargetPath {
+                starmap_id: "map_1".to_string(),
+                segments: vec![StarMapPathSegment::EnterEmbed {
+                    instance_id: "e1".to_string(),
+                }],
+                target: StarMapTargetDetail::Node {
+                    node_id: "child_note".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        }],
+        ..StarMapGraph::default()
+    };
+    let layout = layout_with(&[("note_1", 0.0)]);
+    let embed_rects = vec![StarMapEmbedSceneRect {
+        instance_id: "e1".to_string(),
+        x: 400.0,
+        y: 0.0,
+        width: 200.0,
+        height: 200.0,
+    }];
+    let batch = compute_edge_renders_from_paths(
+        &graph.edges,
+        &graph,
+        &layout,
+        &embed_rects,
+        &EdgeRenderParams::default(),
+    );
+    assert!(batch.diagnostics.is_empty(), "{:?}", batch.diagnostics);
+    assert_eq!(batch.renders.len(), 1);
+    let r = &batch.renders[0];
+    assert!(
+        (r.start_x - 150.0).abs() < 0.01,
+        "起点必须落在 note 右边界, start_x={}",
+        r.start_x
+    );
+    let d = ((r.end_x - 500.0).powi(2) + (r.end_y - 100.0).powi(2)).sqrt();
+    assert!(
+        (d - 100.0).abs() < 0.05,
+        "终点必须贴在 200 正圆的圆周上, d={} (end=({},{}))",
+        d,
+        r.end_x,
+        r.end_y
+    );
+    assert!(
+        r.end_x < 420.0,
+        "终点不能深入圆内（旧 42px 内缩会停在 ~458）, end_x={}",
+        r.end_x
+    );
+}
+
+/// 旧 Portal 端点（本地路径 + 归一显示几何）：可见身份是正圆，
+/// 端点同样必须贴在圆周上。
+#[test]
+fn portal_endpoint_uses_normalized_circle_when_available() {
+    let graph = graph_with_legacy_portal_node();
+    let layout = layout_with(&[("note_1", 0.0), ("portal_1", 400.0)]);
+    let embed_rects = vec![StarMapEmbedSceneRect {
+        instance_id: "legacy-portal:portal_1".to_string(),
+        x: 400.0,
+        y: 0.0,
+        width: 200.0,
+        height: 200.0,
+    }];
+    let batch = compute_edge_renders_from_paths(
+        &graph.edges,
+        &graph,
+        &layout,
+        &embed_rects,
+        &EdgeRenderParams::default(),
+    );
+    assert!(batch.diagnostics.is_empty(), "{:?}", batch.diagnostics);
+    assert_eq!(batch.renders.len(), 1);
+    let r = &batch.renders[0];
+    let d = ((r.end_x - 500.0).powi(2) + (r.end_y - 100.0).powi(2)).sqrt();
+    assert!(
+        (d - 100.0).abs() < 0.05,
+        "portal 端点的可见边界是圆周, d={} (end=({},{}))",
+        d,
+        r.end_x,
+        r.end_y
+    );
+}

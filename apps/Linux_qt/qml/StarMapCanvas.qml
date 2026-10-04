@@ -449,6 +449,12 @@ Item {
                     "sceneY": sy
                 }, hit.scenePathKey)
                 edgeContextMenu.popup(px, py)
+            } else if (hit.kind === "childContent") {
+                // preview / shell / 未加载的子星图内部当前不可编辑：
+                // 保持无业务菜单，绝不弹父层的"新建"菜单——那会在看起来点了
+                // 子星图内部的地方往父图创建东西。放大到 interactive 后，
+                // 递归命中自然会给出子层自己的 empty/node/embed。
+                return
             } else {
                 openBlankMenu(sx, sy, hit, px, py)
             }
@@ -553,8 +559,9 @@ Item {
     }
 
     // Issue #817 评论 5949494799: 背景 pan 拖动改为 press-time 手势归属 + 拖动阈值。
-    // 按下时先用递归命中判断：node/embed/childContent 时 mouse.accepted = false
-    // 让事件穿透给对应对象或子层内容；只有 empty/edge 才可能平移画布。
+    // 按下时先用递归命中判断：只有 node/embed 才 mouse.accepted = false
+    // 让事件穿透给对应对象；childContent（无交互 delegate）与 empty/edge 一样
+    // 走全局 pan，不能在小尺寸子图内部留死区。
     // 中键直接平移。
     MouseArea {
         id: bgDragArea
@@ -584,13 +591,14 @@ Item {
             var hit = hitTargetAtScreen(mouse.x, mouse.y)
 
             if (mouse.button === Qt.LeftButton) {
-                // 命中 node/embed/childContent 时不接受事件，
-                // 让对应对象/子层内容处理；本层不进入 pan。
-                if (hit && (hit.kind === "node" || hit.kind === "embed" || hit.kind === "childContent")) {
+                // 只有真正可交互的对象（node/embed）才放弃事件，让 delegate 处理。
+                // childContent（子内容没加载 / preview / shell）没有可交互 delegate，
+                // 继续走全局 pan：小尺寸子图不能拖动就是死区，和"只有一台全局相机"冲突。
+                if (hit && (hit.kind === "node" || hit.kind === "embed")) {
                     mouse.accepted = false
                     return
                 }
-                pressHitKind = hit ? hit.kind : "empty"
+                pressHitKind = "empty"
                 pressX = mouse.x
                 pressY = mouse.y
                 lastX = mouse.x

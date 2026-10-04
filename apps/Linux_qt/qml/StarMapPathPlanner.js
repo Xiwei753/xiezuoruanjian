@@ -58,7 +58,7 @@ function commonScenePathPrefix(a, b) {
 }
 
 // 把"相对根星图的绝对路径"解析成它真正属于哪个 Scene（scenePath）里的对象。
-// 解析不出（段形状非法 / Portal 端点不是 enterEmbed 容器）时返回 null。
+// 解析不出（段形状非法 / 末段不是容器段）时返回 null。
 function resolveItemRef(path) {
     if (!path || !path.target)
         return null
@@ -71,15 +71,23 @@ function resolveItemRef(path) {
             itemId: path.target.nodeId
         }
     }
-    // Embed 端点：最后一段就是被引用的那个 Embed 自身，它属于上一段到达的 Scene。
+    // Embed-like 端点：最后一段就是被引用的那个容器自身
+    // （正式 Embed = enterEmbed{instanceId}，旧 Portal = enterPortal{nodeId}），
+    // 它属于上一段到达的 Scene。terminalSegment 原样保留，
+    // 重建相对宿主的路径时不再无条件改写成 enterEmbed。
     var segments = path.segments || []
     var last = segments.length > 0 ? segments[segments.length - 1] : null
-    if (!last || last.type !== "enterEmbed" || !last.instanceId)
+    if (!last || (last.type !== "enterEmbed" && last.type !== "enterPortal"))
+        return null
+    if (last.type === "enterEmbed" && !last.instanceId)
+        return null
+    if (last.type === "enterPortal" && !last.nodeId)
         return null
     return {
         scenePath: cloneSegments(segments.slice(0, segments.length - 1)),
         kind: "embed",
-        itemId: last.instanceId
+        itemId: uiInstanceIdOfSegment(last),
+        terminalSegment: cloneSegment(last)
     }
 }
 
@@ -88,7 +96,10 @@ function resolveItemRef(path) {
 function buildTargetPathForHost(hostSegments, itemRef) {
     var segments = cloneSegments(itemRef.scenePath.slice(hostSegments.length))
     if (itemRef.kind === "embed") {
-        segments.push({ type: "enterEmbed", instanceId: itemRef.itemId, nodeId: null })
+        // Embed-like 端点直接沿用原来的 terminal segment：
+        // 正式 Embed 是 enterEmbed，旧 Portal 是 enterPortal{nodeId}。
+        // 渲染递归路径与 LCA 建边路径因此始终是同一份路径真相。
+        segments.push(cloneSegment(itemRef.terminalSegment))
         return { starmapId: "", segments: segments, target: { type: "starmap" } }
     }
     return {

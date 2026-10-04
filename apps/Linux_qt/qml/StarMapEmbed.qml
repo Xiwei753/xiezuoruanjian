@@ -173,9 +173,11 @@ Item {
     readonly property bool childContentWanted:
         childContentActivated && childContentDetail !== "shell"
         && targetStarmapId.length > 0 && rootStarmapId.length > 0
-    readonly property var childContentPathSegments: parentPathSegments.concat([
-        { type: "enterEmbed", instanceId: instanceId, nodeId: null }
-    ])
+    // 递归加载用的路径段由归属层 Controller 的 embedPathSegment() 分流后传入：
+    // 正式 Embed 是 enterEmbed{instanceId}，旧 portal 归一的是 enterPortal{nodeId}。
+    // Embed 不再自己重新猜路径（那样旧 portal 会拿不存在的 instanceId 去解析）。
+    property var pathSegment
+    readonly property var childContentPathSegments: parentPathSegments.concat([pathSegment])
     readonly property string childContentPathKey: parentPathKey + "/embed_" + instanceId
 
     // setSource 是命令式的，需要一个内部状态避免重复请求同一份子内容。

@@ -169,6 +169,77 @@ Item {
     readonly property int _newNodeWidth: 150
     readonly property int _newNodeHeight: 60
 
+    // 边命中阈值的屏幕口径：10 屏幕像素。
+    // 相机允许 1e-4~1e5 之后，固定 world 阈值在屏幕上会差几个数量级，
+    // 所以每次命中都用 effectiveScale 折算成本层 world 单位。
+    readonly property real _edgeHitScreenPx: 10
+
+    function _edgeHitLocalThreshold() {
+        return _edgeHitScreenPx / Math.max(effectiveScale, 1e-6)
+    }
+
+    // 源形状朝目标点的边界交点（本层 authored 坐标）。
+    // 与 Rust edge_render 的 line_rect_entry / line_circle_entry 是同一套语义：
+    // 普通节点取矩形边，Embed（含旧 portal 归一）取圆周。
+    // 拉线预览必须和正式边用同一语义，否则松手瞬间端点会从圆心跳到圆周。
+    function boundaryPointLocal(x, y, width, height, isEmbed, tx, ty) {
+        var cx = x + width / 2
+        var cy = y + height / 2
+        var dx = tx - cx
+        var dy = ty - cy
+        var len = Math.sqrt(dx * dx + dy * dy)
+        if (len < 1e-6 || !(width > 0) || !(height > 0))
+            return { x: cx, y: cy }
+        var ux = dx / len
+        var uy = dy / len
+        if (isEmbed) {
+            var radius = Math.min(width, height) / 2
+            return { x: cx + ux * radius, y: cy + uy * radius }
+        }
+        // 线 × 矩形：slab 裁剪取进入点（与 Rust line_rect_entry 同一算法）。
+        var txMin = -Infinity
+        var txMax = Infinity
+        if (Math.abs(ux) > 1e-6) {
+            var ax = (x - cx) / ux
+            var bx = (x + width - cx) / ux
+            txMin = Math.min(ax, bx)
+            txMax = Math.max(ax, bx)
+        }
+        var tyMin = -Infinity
+        var tyMax = Infinity
+        if (Math.abs(uy) > 1e-6) {
+            var ay = (y - cy) / uy
+            var by = (y + height - cy) / uy
+            tyMin = Math.min(ay, by)
+            tyMax = Math.max(ay, by)
+        }
+        var tMin = Math.max(txMin, tyMin)
+        var tMax = Math.min(txMax, tyMax)
+        if (tMax < Math.max(tMin, 0))
+            return { x: cx, y: cy }
+        var t = tMin >= 0 ? tMin : tMax
+        return { x: cx + t * ux, y: cy + t * uy }
+    }
+
+    // connect 预览起点：源形状朝当前鼠标方向的边界交点（scene 坐标）。
+    function refreshConnectPreviewOrigin() {
+        var ic = interactionController
+        if (!ic || ic.pointerMode !== "connect" || ic.connectFromKind === "")
+            return
+        var item = ic.connectFromKind === "node"
+                ? graphController.getNode(ic.connectFromId)
+                : graphController.getEmbed(ic.connectFromId)
+        if (!item)
+            return
+        var target = sceneToLocal(ic.connectMouseX, ic.connectMouseY)
+        var boundary = boundaryPointLocal(item.x, item.y, item.width, item.height,
+                                          ic.connectFromKind === "embed",
+                                          target.x, target.y)
+        var scenePoint = localToScene(boundary.x, boundary.y)
+        ic.connectFromSceneX = scenePoint.x
+        ic.connectFromSceneY = scenePoint.y
+    }
+
     readonly property var contentBounds: {
         var minX = 0
         var minY = 0
@@ -479,7 +550,7 @@ Item {
             }
         }
 
-        var edge = graphController.hitTestEdge(p.x, p.y)
+        var edge = graphController.hitTestEdge(p.x, p.y, _edgeHitLocalThreshold())
         if (edge) {
             return {
                 owner: content,
@@ -701,6 +772,8 @@ Item {
             ic.noteDragDelta(dxQtScene, dyQtScene)
             if (ic.pressDragDistance > ic.moveThreshold)
                 ic.contextPendingToConnect()
+            // 转入 connect 后预览起点也要立刻贴到源形状边界，不从中心出发。
+            refreshConnectPreviewOrigin()
             return true
         }
         // connect：预览线终点是 scene 坐标，只能累加 root-world 增量；
@@ -708,6 +781,8 @@ Item {
         var connectDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
         ic.updateConnect(ic.connectMouseX + connectDelta.x,
                          ic.connectMouseY + connectDelta.y)
+        // 起点 = 源形状朝当前鼠标方向的边界交点（正式边同一套边界语义）。
+        refreshConnectPreviewOrigin()
         return true
     }
 
@@ -1190,6 +1265,9 @@ Item {
                     starmapBackendRef: content.starmapBackendRef
                     parentPathKey: content.scenePathKey
                     contentDepth: content.depth + 1
+                    // 递归加载路径段由 Controller 统一分流：正式 Embed → enterEmbed，
+                    // 旧 portal 归一 → enterPortal{nodeId}。Embed 不再自己猜路径。
+                    pathSegment: graphController.embedPathSegment(embedData.instanceId)
                     selectionController: content.selectionController
                     interactionController: content.interactionController
                     rootContent: content.rootContent

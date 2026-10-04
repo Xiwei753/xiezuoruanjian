@@ -851,11 +851,13 @@ fn path_planner_ports_harmony_lca_rules() {
             "StarMapPathPlanner.js 缺 {expected}：宿主必须是两端 Scene 的最近公共祖先"
         );
     }
-    // Embed 端点必须带最后一段 enterEmbed；node 端点不退化成 nodeId-only。
+    // Embed-like 端点必须保留原来的 terminal segment（enterEmbed 或旧 portal 的
+    // enterPortal），重建相对宿主的路径时不再无条件改写成 enterEmbed。
     assert!(
-        planner.contains("last.type !== \"enterEmbed\"")
-            && planner.contains("segments.push({ type: \"enterEmbed\", instanceId: itemRef.itemId, nodeId: null })"),
-        "Embed 端点必须按 enterEmbed 段重建相对宿主的路径"
+        planner.contains("last.type !== \"enterEmbed\" && last.type !== \"enterPortal\"")
+            && planner.contains("terminalSegment: cloneSegment(last)")
+            && planner.contains("segments.push(cloneSegment(itemRef.terminalSegment))"),
+        "Embed-like 端点必须沿用原始 terminal segment，实际源码缺少"
     );
 
     // 新资源必须进 qrc 和 rerun-if-changed 清单。
@@ -1418,5 +1420,161 @@ fn content_safe_area_is_shared_by_fit_move_and_create() {
         embed.contains("function syncChildUsableSide()")
             && embed.contains("childContentLoader.item.contentUsableSide = contentUsableSideNow()"),
         "Embed 必须在子内容挂上后同步安全区，实际源码缺少"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 15. 边几何 / 屏幕命中 / 低 LOD 输入 / 旧 Portal 递归（评论 5976758184）
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 正式边端点必须由形状真实边界求交得到：Node 取矩形边、Embed 取圆周，
+/// 不再靠固定 42px 内缩猜边界（200 正圆上会扎进圆内 ~58px）。
+#[test]
+fn edge_render_uses_real_shape_boundaries() {
+    let src = read_src("src/starmap_view/edge_render.rs");
+    assert!(
+        !src.contains("DEFAULT_ARROW_PADDING") && !src.contains("arrow_padding"),
+        "固定 42px 内缩常量必须删除，不能再作为端点定位依据"
+    );
+    assert!(
+        src.contains("pub fn endpoint_boundary_point(")
+            && src.contains("fn line_circle_entry(")
+            && src.contains("fn line_rect_entry("),
+        "端点必须按形状（矩形 / 圆周）与连线求交"
+    );
+    let render = slice_between(
+        &src,
+        "fn compute_renders_from_resolved(",
+        "fn coords_eq(",
+    );
+    assert!(
+        render.contains("endpoint_boundary_point(&edge.from,")
+            && render.contains("endpoint_boundary_point(&edge.to,")
+            && render.contains("start_x: sx")
+            && render.contains("end_x: ex"),
+        "start/end 必须直接取真实边界交点，实际片段:\n{render}"
+    );
+    // 旧 Portal 在 UI 归一到正圆 Embed：可见边界也必须走圆周。
+    assert!(
+        src.contains("legacy-portal:{}")
+            && src.contains("is_embed: true")
+            && src.contains(".map(|n| n.portal.is_some())"),
+        "旧 Portal 端点的可见身份是正圆 Embed，必须按圆求交"
+    );
+    // UI 命中路径不得再吃固定 world 阈值。
+    let bridge = read_src("src/starmap_view/bridge.rs");
+    assert!(
+        bridge.contains("hit_test_edge_renders_with_threshold(x, y, &renders, threshold)"),
+        "bridge 的边命中必须走带 threshold 的入口"
+    );
+}
+
+/// 边命中阈值必须按屏幕像素折算到本层 world 单位（相机 1e-4~1e5 后不能再固定）。
+#[test]
+fn edge_hit_threshold_is_screen_relative() {
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        content.contains("readonly property real _edgeHitScreenPx: 10"),
+        "命中阈值必须是屏幕像素常量"
+    );
+    assert!(
+        content.contains("return _edgeHitScreenPx / Math.max(effectiveScale, 1e-6)"),
+        "阈值必须除以 effectiveScale 折算到本层 world 单位"
+    );
+    assert!(
+        content.contains("graphController.hitTestEdge(p.x, p.y, _edgeHitLocalThreshold())"),
+        "递归命中必须把折算后的阈值传给 hitTestEdge"
+    );
+
+    let controller = strip_line_comments(&read_src(CONTROLLER));
+    assert!(
+        controller.contains("function hitTestEdge(wx, wy, threshold)")
+            && controller.contains("hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy, threshold)"),
+        "GraphController 必须把 threshold 透传给后端"
+    );
+}
+
+/// 拉线预览起点 = 源形状朝当前鼠标方向的边界交点，与正式边同一套边界语义，
+/// 否则松手瞬间端点会从圆心跳到圆周。
+#[test]
+fn connect_preview_origin_uses_shape_boundary() {
+    let content = strip_line_comments(&read_src(CONTENT));
+    let boundary = function_window(&content, "function boundaryPointLocal(", 1600);
+    assert!(
+        boundary.contains("var radius = Math.min(width, height) / 2")
+            && boundary.contains("var tMin = Math.max(txMin, tyMin)")
+            && boundary.contains("var t = tMin >= 0 ? tMin : tMax"),
+        "预览起点必须按矩形/圆周求交（与 Rust line_rect_entry / line_circle_entry 同语义），\
+         实际窗口:\n{boundary}"
+    );
+    let refresh = function_window(&content, "function refreshConnectPreviewOrigin(", 1000);
+    assert!(
+        refresh.contains("boundaryPointLocal(item.x, item.y, item.width, item.height,")
+            && refresh.contains("ic.connectFromSceneX = scenePoint.x")
+            && refresh.contains("ic.connectFromSceneY = scenePoint.y"),
+        "预览起点必须写回 connectFromSceneX/Y（scene 坐标），实际窗口:\n{refresh}"
+    );
+    let delta = slice_between(
+        &content,
+        "function onSceneDragDelta(",
+        "function releaseOwnerGesture(",
+    );
+    assert_eq!(
+        count_occurrences(&delta, "refreshConnectPreviewOrigin()"),
+        2,
+        "contextPending 转 connect 与 connect 拖动都必须刷新预览起点，实际片段:\n{delta}"
+    );
+}
+
+/// preview / shell 子图内部不能是死区：左拖继续全局 pan，右键不弹父层新建菜单。
+#[test]
+fn low_lod_child_content_is_not_a_dead_zone() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let bg = function_window(&canvas, "id: bgDragArea", 6000);
+    assert!(
+        bg.contains("hit.kind === \"node\" || hit.kind === \"embed\"")
+            && !bg.contains("hit.kind === \"childContent\""),
+        "bgDragArea 只对 node/embed 放弃事件，childContent 继续 pan，实际窗口:\n{bg}"
+    );
+    let right = function_window(&canvas, "id: backgroundRightTap", 2600);
+    let child_idx = right
+        .find("hit.kind === \"childContent\"")
+        .expect("backgroundRightTap 必须有 childContent 分支");
+    let blank_idx = right
+        .find("openBlankMenu(sx, sy, hit, px, py)")
+        .expect("backgroundRightTap 必须保留空白菜单入口");
+    assert!(
+        child_idx < blank_idx,
+        "childContent 分支必须排在 openBlankMenu 之前，低 LOD 内部不得弹父层菜单，\
+         实际窗口:\n{right}"
+    );
+}
+
+/// 旧 Portal 的递归加载路径与 LCA 建边路径必须同源：
+/// 都由 Controller 的 embedPathSegment() 分流（enterEmbed / enterPortal）。
+#[test]
+fn legacy_portal_recurse_and_edge_paths_share_one_truth() {
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        content.contains("pathSegment: graphController.embedPathSegment(embedData.instanceId)"),
+        "Embed delegate 的递归路径段必须由 Controller 分流后传入"
+    );
+    let embed = strip_line_comments(&read_src(EMBED));
+    assert!(
+        embed.contains("property var pathSegment")
+            && embed.contains("readonly property var childContentPathSegments: parentPathSegments.concat([pathSegment])"),
+        "Embed 必须用归属层传入的 pathSegment 拼子内容路径"
+    );
+    assert!(
+        !embed.contains("{ type: \"enterEmbed\", instanceId: instanceId, nodeId: null }"),
+        "Embed 不得再自己猜 enterEmbed 段（旧 portal 会拿不存在的 instanceId 解析）"
+    );
+
+    let planner = read_src("qml/StarMapPathPlanner.js");
+    assert!(
+        planner.contains("last.type !== \"enterEmbed\" && last.type !== \"enterPortal\"")
+            && planner.contains("terminalSegment: cloneSegment(last)")
+            && planner.contains("segments.push(cloneSegment(itemRef.terminalSegment))"),
+        "planner 必须保留 Embed-like 端点的原始 terminal segment（含旧 portal）"
     );
 }

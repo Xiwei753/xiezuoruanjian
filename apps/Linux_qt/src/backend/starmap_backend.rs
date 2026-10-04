@@ -179,9 +179,9 @@ pub struct StarMapBackend {
         fn(&self, graph_json: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject
     ),
     hit_test_edge_renders_json:
-        qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
+        qt_method!(fn(&self, renders_json: QString, x: f64, y: f64, threshold: f64) -> QString),
     hit_test_edge_renders:
-        qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QJsonObject),
+        qt_method!(fn(&self, renders_json: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
     hit_test_nodes: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject),
     add_starmap_hyperlink:
@@ -401,9 +401,21 @@ impl StarMapBackend {
             .into(),
         }
     }
-    fn hit_test_edge_renders_json(&self, renders_json: QString, x: f64, y: f64) -> QString {
+    fn hit_test_edge_renders_json(
+        &self,
+        renders_json: QString,
+        x: f64,
+        y: f64,
+        threshold: f64,
+    ) -> QString {
         let rj = renders_json.to_string();
-        crate::starmap_view::bridge::hit_test_edge_renders_json(&rj, x as f32, y as f32).into()
+        crate::starmap_view::bridge::hit_test_edge_renders_json(
+            &rj,
+            x as f32,
+            y as f32,
+            threshold as f32,
+        )
+        .into()
     }
     fn hit_test_nodes_json(&self, nodes_json: QString, x: f64, y: f64) -> QString {
         let nj = nodes_json.to_string();
@@ -420,9 +432,15 @@ impl StarMapBackend {
             .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
-    fn hit_test_edge_renders(&self, renders_json: QString, x: f64, y: f64) -> QJsonObject {
+    fn hit_test_edge_renders(
+        &self,
+        renders_json: QString,
+        x: f64,
+        y: f64,
+        threshold: f64,
+    ) -> QJsonObject {
         let raw = self
-            .hit_test_edge_renders_json(renders_json, x, y)
+            .hit_test_edge_renders_json(renders_json, x, y, threshold)
             .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }

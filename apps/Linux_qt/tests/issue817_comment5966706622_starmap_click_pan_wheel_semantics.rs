@@ -19,9 +19,9 @@
 //!    导致单击延迟的组合，不禁止 `exclusiveSignals` 的其他合法用法，也不全文件
 //!    禁止 `exclusiveSignals`。Embed 守卫只围绕真正的选中回调
 //!    `onSingleTapped: root.clicked(root.instanceId)` 收窄，不误伤右键菜单 handler。
-//! 2. `bgDragArea` 命中 childContent 时不进入 pan（`mouse.accepted = false` 放行），
-//!    pan 超过系统 dragThreshold 才开始，`onCanceled` / `resetInteraction` 会清
-//!    `pressHitKind` / `panStarted` 等本地状态。
+//! 2. `bgDragArea` 命中 node/embed 时放行给 delegate；childContent（未加载 /
+//!    preview / shell）与 empty 一样进入全局 pan，超系统 dragThreshold 才开始，
+//!    `onCanceled` / `resetInteraction` 会清 `pressHitKind` / `panStarted` 等本地状态。
 //! 3. `sceneWheel` 只在根 Scene 启用（`pathKey === "root"`）并 `blocking`，不按
 //!    childContent 分发、不用 `event.accepted` 二次分流；`bgDragArea` 不再自己
 //!    处理 wheel。不限制 Canvas 里 WheelHandler 的总数——以后新增不同用途的
@@ -154,9 +154,10 @@ fn embed_chrome_selection_tap_handlers_not_readd_single_tap_double_tap() {
 // 2. bgDragArea 命中 childContent 不进 pan、pan 超阈值才开始、cancel/reset 清状态
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `bgDragArea` 在按下时按 `hitPointerAtScreen` 固定手势归属：命中
-/// node/embedChrome/childContent 时 `mouse.accepted = false` 放行给对象/子 Scene，
-/// 不进入 pan；只有 empty 归属才在左键移动超过系统 dragThreshold 后 beginPan。
+/// `bgDragArea` 在按下时按递归命中固定手势归属：只有真正可交互的
+/// node/embed 才 `mouse.accepted = false` 放行给 delegate；childContent
+/// （子内容未加载 / preview / shell，没有可交互 delegate）与 empty/edge 一样
+/// 进入全局 pan，不能在小尺寸子图内部留死区。
 /// `onCanceled` 与 `resetInteraction` 都清 `pressHitKind` / `panStarted` 等本地状态，
 /// 避免脏状态继续拖动画布。
 #[test]
@@ -164,10 +165,12 @@ fn bg_drag_area_pan_gating_and_local_state_reset() {
     let src = read_src(CANVAS);
     let bg = function_window(&src, "id: bgDragArea", 6000);
 
-    // 命中 childContent 时不进入 pan：放行给子 Scene。
+    // 只有 node/embed 放行；childContent 不得再出现在放弃条件里。
     assert!(
-        bg.contains("hit.kind === \"childContent\"") && bg.contains("mouse.accepted = false"),
-        "bgDragArea 命中 childContent 时必须 mouse.accepted = false 放行，不进入 pan，实际窗口:\n{bg}"
+        bg.contains("hit.kind === \"node\" || hit.kind === \"embed\"")
+            && !bg.contains("hit.kind === \"childContent\""),
+        "bgDragArea 只对 node/embed 放弃事件；childContent（无交互 delegate）必须继续 pan，\
+         实际窗口:\n{bg}"
     );
 
     // pan 超过系统 dragThreshold 才开始：不得自写像素常量。

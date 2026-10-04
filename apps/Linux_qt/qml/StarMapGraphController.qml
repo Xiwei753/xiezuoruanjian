@@ -699,11 +699,14 @@ QtObject {
         }
     }
 
-    function hitTestEdge(wx, wy) {
+    // `threshold` 由归属层按屏幕像素折算（屏幕像素 ÷ effectiveScale），
+    // 不再吃固定的 world 阈值：相机允许 1e-4~1e5 后，world 阈值在屏幕上的
+    // 手感会差几个数量级。
+    function hitTestEdge(wx, wy, threshold) {
         if (!ensureBackend()) return null;
         if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders(null);
         if (!edgeRenders || edgeRenders.length === 0) return null;
-        var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy), "");
+        var res = normalizeBackendResult(starmapBackendRef.hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy, threshold), "");
         if (res.success && res.data) {
             for (var i = 0; i < edgesModel.length; i++) {
                 if (edgesModel[i].id === res.data) return edgesModel[i];
