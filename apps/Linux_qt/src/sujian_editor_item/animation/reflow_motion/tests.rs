@@ -239,7 +239,20 @@ fn retarget_continues_from_current_screen_position() {
         vec![cluster(0, 1, 100.0)],
     )]);
     let prev_target_to_new = OffsetMap::build("Xa", "XYa");
-    let retargeted = state.retarget(half, &next_snapshot, &prev_target_to_new, &[(2, 3)], 100);
+    // 本次编辑的 old_snapshot 是上一帧的 "Xa" 版（doc x=100），old_to_new 是
+    // "Xa" -> "XYa"。
+    let cur_old_snapshot = mid_snapshot.clone();
+    let old_to_new = OffsetMap::build("Xa", "XYa");
+    let retargeted = state.retarget(
+        half,
+        &cur_old_snapshot,
+        &old_to_new,
+        &next_snapshot,
+        &prev_target_to_new,
+        &[],
+        &[(2, 3)],
+        100,
+    );
 
     assert_eq!(retargeted.spans.len(), 1, "retarget 后必须保留这一段");
     // 起点必须就是刚才屏幕上的位置，而不是 canonical 的 100。
@@ -260,4 +273,105 @@ fn retarget_continues_from_current_screen_position() {
         (first[0].dest_rect.x - mid_x).abs() < 1e-9,
         "retarget 后第一帧必须原地不动（不能跳到 canonical）"
     );
+}
+
+/// Issue #826 评论 4 问题 2：这次新进入 Reflow 的字不能瞬移。
+///
+/// 场景：第一笔输入行还没满，`b` 没动 -> 不在 previous.spans。
+/// 第二笔刚好把行撑满，`b` 第一次掉到下一行。
+/// 它在上一份 Reflow 里根本不存在，retarget 必须退到「本次 base_snapshot 的
+/// old rect -> 最新 new rect」建立新 span，而不是 `continue` 跳过。
+#[test]
+fn retarget_creates_span_for_text_that_newly_enters_reflow() {
+    let now = Instant::now();
+    // 正文从 "ab" 变成 "aXYb"（在 byte 1 插入 XY），b 被挤到第二行。
+    // 编辑前：b 在第一行末尾，doc x = 300。
+    let old_snapshot = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 150.0)],
+    )]);
+    // 编辑后：b 在第二行行首，doc y = 20。
+    let new_snapshot = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        // "aXYb" 里 b 在 byte 3（byte 0=a, 1=X, 2=Y, 3=b）。
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(3, 4, 0.0)]),
+    ]);
+    // 上一份 Reflow：一个 span 都没有（b 上一笔没动）。
+    let previous = ReflowState {
+        spans: Vec::new(),
+        started_at: now,
+        duration_ms: 100,
+        target_text: String::from("ab"),
+    };
+    let old_to_new = OffsetMap::build("ab", "aXYb");
+    let prev_target_to_new = OffsetMap::build("ab", "aXYb");
+    // excluded：插入的 XY 在 old 侧是零长度插入点 (1,1)，在 new 侧是 (1,3)。
+    // b 的 (1,2) / (2,3) 不该被排除 —— 它正是这次要重排的字。
+    let retargeted = previous.retarget(
+        now,
+        &old_snapshot,
+        &old_to_new,
+        &new_snapshot,
+        &prev_target_to_new,
+        &[(1, 1)],
+        &[(1, 3)],
+        100,
+    );
+
+    assert_eq!(
+        retargeted.spans.len(),
+        1,
+        "本次新掉行的 b 必须建立 span，不能瞬移"
+    );
+    // 起点 = 本次 base_snapshot 里的 old rect（第一行末尾，doc y=0）。
+    assert!(
+        (retargeted.spans[0].old_rect.y - 0.0).abs() < 1e-9,
+        "起点应取本次 base_snapshot 的 old rect，实际 y={}",
+        retargeted.spans[0].old_rect.y
+    );
+    // 目标 = 最新 canonical（第二行，doc y=20）。
+    assert!(
+        (retargeted.spans[0].new_rect.y - 20.0).abs() < 1e-9,
+        "目标应取最新 canonical 位置，实际 y={}",
+        retargeted.spans[0].new_rect.y
+    );
+}
+
+/// Issue #826 评论 4 问题 3：Reflow 接管期间要输出 canonical 目标位置的 exclusion clip。
+#[test]
+fn target_clip_rects_cover_canonical_destination() {
+    let now = Instant::now();
+    let old_snapshot = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0)],
+    )]);
+    let new_snapshot = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 50.0)],
+    )]);
+    let state = ReflowState::build(
+        &old_snapshot,
+        &new_snapshot,
+        &OffsetMap::from_single_edit(1, (1, 1), 1),
+        &[],
+        &[(1, 2)],
+        now,
+        100,
+    );
+    let clips = state.target_clip_rects();
+    assert_eq!(clips.len(), 1, "每个 active span 要有一条 exclusion clip");
+    // clip 必须覆盖 canonical 的最终位置（doc x=100），不是起点。
+    assert!(
+        (clips[0].0 - 100.0).abs() < 1e-9,
+        "exclusion clip 必须覆盖 canonical 目标位置，实际 x={}",
+        clips[0].0
+    );
+    assert!((clips[0].1 - 0.0).abs() < 1e-9);
+    assert!(clips[0].2 > 0.0 && clips[0].3 > 0.0);
 }

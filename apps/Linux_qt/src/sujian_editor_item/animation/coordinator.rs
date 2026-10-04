@@ -272,12 +272,23 @@ impl LinuxEditorAnimationCoordinator {
         let mut next = match self.active_reflow.as_ref() {
             Some(previous) if !previous.is_finished(request.now) => {
                 // 上一份 Reflow 的 new 坐标系 = 上一次 target 文本。
+                // Issue #826 评论 4 问题 1：retarget 遍历的是 request.target_snapshot，
+                // 所以这个 OffsetMap 的 new 侧必须是 **request.target_text**，
+                // 不是 request.base_text。
+                //
+                // 例子：上一帧正文 `ABCDEF`，这次在前面插入 `X` 得到 `XABCDEF`。
+                // retarget 遍历 `XABCDEF` 的 byte range，必须通过
+                // `ABCDEF -> XABCDEF` 把最新坐标映回上一帧 target；
+                // 构成 `ABCDEF -> ABCDEF` 会让插入点之后的 cluster 映错或映不到。
                 let prev_target_to_new =
-                    OffsetMap::build(previous.target_text(), &request.base_text);
+                    OffsetMap::build(previous.target_text(), &request.target_text);
                 previous.retarget(
                     request.now,
+                    &request.base_snapshot,
+                    &request.offset_map,
                     &request.target_snapshot,
                     &prev_target_to_new,
+                    &excluded_old,
                     &excluded_new,
                     duration_ms,
                 )
@@ -430,6 +441,16 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
         ids
+    }
+
+    /// Issue #826 评论 4 问题 3：Reflow 接管期间要从静态正文层挖掉的 canonical 目标位置。
+    ///
+    /// 动画层画"正在移动的那一份"，静态层不能同时再画一份最终位置，否则重影。
+    pub(crate) fn reflow_target_clip_rects(&self) -> Vec<(f64, f64, f64, f64, LineSnapshotId)> {
+        self.active_reflow
+            .as_ref()
+            .map(ReflowState::target_clip_rects)
+            .unwrap_or_default()
     }
 
     /// 当前活跃 Reflow 在**新文本**坐标系里涉及的 byte 范围。

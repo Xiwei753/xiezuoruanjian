@@ -95,24 +95,27 @@ impl ReflowState {
             target_text: String::new(),
         }
     }
-
-    /// Issue #826 评论 3 问题 3：把正在播的 Reflow 重新指向最新 canonical 目标。
+    /// Issue #826 评论 4 问题 2：`retarget` 不能只保留"上一帧已经在 Reflow 的字"。
     ///
-    /// 不能直接 `build` 一份新的：那样屏幕上会出现「A→B 半路 → 瞬间跳到 B →
-    /// 再 B→C」。正确做法是永远只有一份 ReflowState，只从「当前屏幕 → 最新目标」：
-    /// 1. 先 `sample(now)` 得到每段未改文字**此刻真实画在屏幕上**的 `dest_rect`；
-    /// 2. 用 `prev_target_to_new`（上一次 target 文本 → 最新 target 文本）把最新
-    ///    layout 里的 cluster 映回 self 的 new 坐标系，再按 `new_range` 找到对应 span；
-    /// 3. 新 span 的 `old_rect` 直接取刚采样的屏幕位置，`new_rect` 取最新 canonical；
-    /// 4. `started_at` 重置为 `now`。
+    /// 对最新 new layout 的每个 unchanged cluster，分两种情况：
     ///
-    /// `screen_rect` 传 `None` 时（还没建立 span，或采样不到）该 cluster 不进 Reflow。
-    /// 匹配不上就宁可不动，也不凭空跳。
+    /// - **A. 上一份 Reflow 里已经有这个 cluster**（上一笔已经在动它）：
+    ///   起点取 `previous.sample(now).dest_rect`，即当前屏幕上的真实位置。
+    /// - **B. 上一份 Reflow 里没有，但这次 old -> new 几何变了**（这次新进入 Reflow
+    ///   的字，典型场景：第一笔没撑满行所以 `HIJ` 没动，第二笔刚好撑满行让 `HIJ`
+    ///   第一次掉到下一行）：退到"本次 `base_snapshot` 里的 old rect -> 最新 new rect"
+    ///   建立新 span。绝不能 `continue` 跳过 —— 那会让 canonical 直接瞬移，没有重排动画。
+    ///
+    /// 这里仍然只有一份 `ReflowState`，不是重新引入历史 carried。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn retarget(
         &self,
         now: Instant,
+        old_snapshot: &EditorLayoutSnapshot,
+        old_to_new: &OffsetMap,
         new_snapshot: &EditorLayoutSnapshot,
         prev_target_to_new: &OffsetMap,
+        excluded_old: &[(usize, usize)],
         excluded_new: &[(usize, usize)],
         duration_ms: u64,
     ) -> Self {
@@ -129,30 +132,63 @@ impl ReflowState {
                 if overlaps_any(new_start, new_end, excluded_new) {
                     continue;
                 }
-                // 最新坐标 → self 的 new 坐标（self.target_text 坐标系）。
-                let Some(prev_range) = prev_target_to_new.map_new_range_to_old(new_start, new_end)
-                else {
-                    continue;
-                };
-                let Some(index) = self
-                    .spans
-                    .iter()
-                    .position(|span| span.new_range == prev_range)
-                else {
-                    // 这一段不是上一次 Reflow 管的（或者从没被 Reflow 管过），
-                    // 不在本次 retarget 里凭空生成。
-                    continue;
-                };
-                let Some(screen_rect) = sampled.get(index).map(|frame| frame.dest_rect.clone())
-                else {
-                    continue;
-                };
                 let new_rect = new_line.source_rect_to_document_rect(&cluster.source_rect);
+
+                // A. 上一份 Reflow 已经在动这个 cluster：起点 = 当前屏幕真实位置。
+                let carried = prev_target_to_new
+                    .map_new_range_to_old(new_start, new_end)
+                    .and_then(|prev_range| {
+                        self.spans
+                            .iter()
+                            .position(|span| span.new_range == prev_range)
+                    })
+                    .and_then(|index| {
+                        sampled
+                            .get(index)
+                            .map(|frame| (self.spans[index].old_range, frame.dest_rect.clone()))
+                    });
+                if let Some((old_range, old_rect)) = carried {
+                    spans.push(ReflowSpan {
+                        old_range,
+                        new_range: (new_start, new_end),
+                        old_rect,
+                        new_rect,
+                        snapshot_id: new_line.id,
+                        source_rect: cluster.source_rect.clone(),
+                    });
+                    continue;
+                }
+
+                // B. 这次新进入 Reflow 的字：起点取本次 base_snapshot 里的 old rect。
+                let Some((old_start, old_end)) =
+                    old_to_new.map_new_range_to_old(new_start, new_end)
+                else {
+                    continue;
+                };
+                if overlaps_any(old_start, old_end, excluded_old) {
+                    continue;
+                }
+                let Some(old_line) = find_line_for_cluster(old_snapshot, old_start, old_end) else {
+                    continue;
+                };
+                let Some(old_cluster) = find_cluster(old_line, old_start, old_end) else {
+                    continue;
+                };
+                if !old_cluster
+                    .shaping_identity
+                    .is_same_shaping(&cluster.shaping_identity)
+                {
+                    continue;
+                }
+                let old_rect = old_line.source_rect_to_document_rect(&old_cluster.source_rect);
+                if same_rect(&old_rect, &new_rect) {
+                    // 几何没变，本来就不需要 Reflow。
+                    continue;
+                }
                 spans.push(ReflowSpan {
-                    old_range: self.spans[index].old_range,
+                    old_range: (old_start, old_end),
                     new_range: (new_start, new_end),
-                    // 起点 = 当前屏幕上的真实位置，不再是上一笔的 canonical 起点。
-                    old_rect: screen_rect,
+                    old_rect,
                     new_rect,
                     snapshot_id: new_line.id,
                     source_rect: cluster.source_rect.clone(),
@@ -165,6 +201,29 @@ impl ReflowState {
             duration_ms: duration_ms.max(1),
             target_text: String::new(),
         }
+    }
+
+    /// Issue #826 评论 4 问题 3：Reflow 接管期间必须从静态正文层挖掉的目标位置。
+    ///
+    /// 动画层正在画"正在移动的那一份"，但最新 canonical 静态层的**最终位置**同时
+    /// 也画了一份同样的字 -> 双影。所以每个 active span 用它的 `new_rect`（canonical
+    /// 目标位置）+ `snapshot_id` 生成一条静态层 exclusion clip。
+    ///
+    /// 返回 `(x, y, w, h, snapshot_id)`，与
+    /// `hidden_canonical_rects_for` 同一形状，方便 render plan 合并。
+    pub(crate) fn target_clip_rects(&self) -> Vec<(f64, f64, f64, f64, LineSnapshotId)> {
+        self.spans
+            .iter()
+            .map(|span| {
+                (
+                    span.new_rect.x,
+                    span.new_rect.y,
+                    span.new_rect.w,
+                    span.new_rect.h,
+                    span.snapshot_id,
+                )
+            })
+            .collect()
     }
 
     /// 本 state 的 new 坐标系对应的正文纯文本。

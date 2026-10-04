@@ -197,11 +197,24 @@ fn delete_frontier_draws_old_overlay_only() {
         now,
     });
 
-    let plan = build(&coord, now);
+    // Issue #826 评论 4 问题 3：吞字本身不裁 canonical（正文本来就该是删完的结果）。
+    // clip 只可能来自 Reflow 层 —— 删除会让未改的字移动，Reflow 接管期间必须把
+    // 它们在 canonical 的最终位置挖掉，否则重影。
+    let frontier_hidden = coord
+        .sample_edit_frontier(now)
+        .map(|sample| coord.hidden_canonical_rects_for(&sample))
+        .unwrap_or_default();
     assert!(
-        plan.clip_rects.is_empty(),
-        "吞字不裁 canonical（正文本来就该是删完的结果），实际 {} 个",
-        plan.clip_rects.len()
+        frontier_hidden.is_empty(),
+        "吞字前沿不应裁 canonical，实际 {} 个",
+        frontier_hidden.len()
+    );
+    let expected_reflow_clips = coord.reflow_target_clip_rects().len();
+    let plan = build(&coord, now);
+    assert_eq!(
+        plan.clip_rects.len(),
+        expected_reflow_clips,
+        "clip 只能来自 Reflow 目标位置"
     );
     assert!(
         !plan.text_animation.glyphs.is_empty(),
